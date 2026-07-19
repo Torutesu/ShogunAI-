@@ -256,3 +256,55 @@
     transform: none;
   }
 }
+
+/* --- Design-studio custom cursor (desktop / fine-pointer only) --- */
+@media (pointer: fine) {
+  html.has-cursor,
+  html.has-cursor a,
+  html.has-cursor button,
+  html.has-cursor [role='button'],
+  html.has-cursor input,
+  html.has-cursor textarea,
+  html.has-cursor select,
+  html.has-cursor label,
+  html.has-cursor summary {
+    cursor: none;
+  }
+}
+.cursor-dot,
+.cursor-ring {
+  position: fixed;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+  z-index: 9999;
+  border-radius: 9999px;
+  opacity: 0;
+  will-change: transform;
+  mix-blend-mode: difference;
+}
+.cursor-dot {
+  width: 7px;
+  height: 7px;
+  background: #ffffff;
+  transition: opacity 0.25s var(--ease-out-soft);
+}
+.cursor-ring {
+  width: 34px;
+  height: 34px;
+  border: 1.5px solid #ffffff;
+  transition:
+    width 0.22s var(--ease-out-soft),
+    height 0.22s var(--ease-out-soft),
+    background-color 0.22s var(--ease-out-soft),
+    opacity 0.25s var(--ease-out-soft);
+}
+.cursor-ring.is-hover {
+  width: 56px;
+  height: 56px;
+  background: rgba(255, 255, 255, 0.12);
+}
+.cursor-ring.is-down {
+  width: 26px;
+  height: 26px;
+}

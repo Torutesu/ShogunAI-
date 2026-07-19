@@ -301,6 +301,39 @@ const en = {
     ],
     cta: 'Read our privacy approach →',
   },
+  campaign: {
+    text: 'Up to $500,000 in ShogunAI for early believers — earned by action, not chance.',
+    cta: 'See the rules',
+  },
+  rules: {
+    title: 'Early-access rewards — official rules',
+    updated: 'Last updated July 19, 2026',
+    intro:
+      'These rules govern the ShogunAI early-access rewards program. No purchase is necessary and this is not a prize draw — every reward is earned by a specific action.',
+    sections: [
+      {
+        h: 'No purchase necessary',
+        p: 'Joining the waitlist and earning rewards is free and requires no purchase. Rewards are granted for completing defined actions, never by chance.',
+      },
+      {
+        h: 'How rewards are earned',
+        p: 'You earn points for actions: inviting friends who complete their profile (+100 each), completing your own profile (+20), and optional X actions — following (+10) and a quote-post with a comment and #ad disclosure (+30). Rewards are replacement, not additive — you hold the highest tier you reach: 300 pts = 1 month, 1,000 = 3 months, 3,000 = 6 months; the top 10 by points get 1 year of ShogunAI Pro.',
+      },
+      {
+        h: 'Value and cap',
+        p: 'The headline figure is a maximum. Values are stated in ShogunAI Pro annual-rate terms in USD; the actual value depends on participation and exchange rate. Total rewards across the campaign are capped at USD $500,000.',
+      },
+      {
+        h: 'Disclosure',
+        p: 'A quote-post earns points only if it includes your own comment and a paid-promotion disclosure (#ad in English, #PR in Japanese), consistent with FTC and Japanese 景表法 requirements.',
+      },
+      {
+        h: 'Eligibility & fair play',
+        p: 'One reward track per person and one set of social points per X handle. Burner/duplicate accounts, repeat posting, and follow-then-unfollow farming are not eligible; follows may be re-verified near reward time. Void where prohibited.',
+      },
+      { h: 'Contact', p: 'Questions? Reach us at hello@shogunai.com.' },
+    ] as { h: string; p: string }[],
+  },
 };
 
 export type Dictionary = typeof en;
@@ -601,6 +634,39 @@ const ja: Dictionary = {
     ],
     cta: 'プライバシーの考え方を読む →',
   },
+  campaign: {
+    text: '早期に信じてくれた人へ、最大 $500,000 相当の ShogunAI を還元 — 抽選ではなく、行動で。',
+    cta: 'ルールを見る',
+  },
+  rules: {
+    title: 'アーリーアクセス特典 — 公式ルール',
+    updated: '最終更新: 2026年7月19日',
+    intro:
+      'ShogunAI アーリーアクセス特典プログラムのルールです。購入は不要で、抽選ではありません。すべての特典は所定の行動によって獲得します。',
+    sections: [
+      {
+        h: '購入不要',
+        p: 'ウェイトリスト登録も特典獲得も無料で、購入は不要です。特典は所定の行動の達成に対して付与され、抽選では付与されません。',
+      },
+      {
+        h: '特典の獲得方法',
+        p: 'ポイントは行動で貯まります: 友達を招待しその人がプロフィールを完了（各+100）、自分のプロフィール完了（+20）、任意のX行動 — フォロー（+10）、コメント＋#PR開示を含む引用ポスト（+30）。特典は加算ではなく置換で、到達した最上位のみ有効: 300pt=1ヶ月、1,000=3ヶ月、3,000=6ヶ月、ポイント上位10人は ShogunAI Pro 1年分。',
+      },
+      {
+        h: '金額と上限',
+        p: '表示額は最大値です。特典価値は ShogunAI Pro 年額基準・USDで表示し、実際の価値は参加規模と為替により変動します。キャンペーン全体の特典総額は USD $500,000 を上限とします。',
+      },
+      {
+        h: '開示',
+        p: '引用ポストは、自分のコメントと有料タイアップ開示（英語 #ad／日本語 #PR）を含む場合のみポイント対象です。FTC および日本の景表法の要件に準拠します。',
+      },
+      {
+        h: '参加資格・フェアプレー',
+        p: '特典トラックは1人1つ、ソーシャル加点は1つのXハンドルにつき1セットです。捨てアカウント・重複アカウント、繰り返し投稿、フォロー後即解除のポイント稼ぎは対象外。フォローは特典確定時に再確認する場合があります。禁止地域では無効。',
+      },
+      { h: 'お問い合わせ', p: 'ご質問は hello@shogunai.com まで。' },
+    ],
+  },
 };
 
 const es: Dictionary = {
@@ -871,6 +937,39 @@ const es: Dictionary = {
     ],
     cta: 'Lee nuestro enfoque de privacidad →',
   },
+  campaign: {
+    text: 'Hasta $500,000 en ShogunAI para quienes creyeron temprano — se gana por acción, no por azar.',
+    cta: 'Ver las reglas',
+  },
+  rules: {
+    title: 'Recompensas de acceso anticipado — reglas oficiales',
+    updated: 'Última actualización: 19 de julio de 2026',
+    intro:
+      'Estas reglas rigen el programa de recompensas de acceso anticipado de ShogunAI. No es necesaria ninguna compra y no es un sorteo: cada recompensa se gana con una acción concreta.',
+    sections: [
+      {
+        h: 'Sin compra necesaria',
+        p: 'Unirse a la lista y ganar recompensas es gratis y no requiere compra. Las recompensas se otorgan por completar acciones definidas, nunca por azar.',
+      },
+      {
+        h: 'Cómo se ganan',
+        p: 'Ganas puntos por acciones: invitar a amigos que completen su perfil (+100 cada uno), completar tu perfil (+20) y acciones opcionales en X — seguir (+10) y una cita con comentario y divulgación #ad (+30). Las recompensas son de reemplazo, no acumulativas: 300 pts = 1 mes, 1.000 = 3 meses, 3.000 = 6 meses; el top 10 por puntos obtiene 1 año de ShogunAI Pro.',
+      },
+      {
+        h: 'Valor y tope',
+        p: 'La cifra destacada es un máximo. Los valores se indican en tarifa anual de ShogunAI Pro en USD; el valor real depende de la participación y del tipo de cambio. El total de recompensas de la campaña tiene un tope de USD $500,000.',
+      },
+      {
+        h: 'Divulgación',
+        p: 'Una cita gana puntos solo si incluye tu propio comentario y una divulgación de promoción pagada (#ad en inglés, #PR en japonés), conforme a la FTC y a la ley japonesa 景表法.',
+      },
+      {
+        h: 'Elegibilidad y juego limpio',
+        p: 'Una vía de recompensa por persona y un conjunto de puntos sociales por handle de X. Cuentas desechables/duplicadas, publicaciones repetidas y seguir-dejar de seguir para farmear no son elegibles; los seguimientos pueden reverificarse. Nulo donde esté prohibido.',
+      },
+      { h: 'Contacto', p: '¿Preguntas? Escríbenos a hello@shogunai.com.' },
+    ],
+  },
 };
 
 const de: Dictionary = {
@@ -1140,6 +1239,39 @@ const de: Dictionary = {
       { title: 'Eigene Keys', body: 'Deine Modelle, deine Daten, deine Kontrolle (BYOK).' },
     ],
     cta: 'Unser Datenschutz-Ansatz →',
+  },
+  campaign: {
+    text: 'Bis zu $500.000 in ShogunAI für frühe Unterstützer — verdient durch Handeln, nicht durch Zufall.',
+    cta: 'Regeln ansehen',
+  },
+  rules: {
+    title: 'Early-Access-Belohnungen — offizielle Regeln',
+    updated: 'Zuletzt aktualisiert am 19. Juli 2026',
+    intro:
+      'Diese Regeln gelten für das ShogunAI-Early-Access-Belohnungsprogramm. Kein Kauf erforderlich und kein Gewinnspiel — jede Belohnung wird durch eine konkrete Handlung verdient.',
+    sections: [
+      {
+        h: 'Kein Kauf erforderlich',
+        p: 'Die Anmeldung zur Warteliste und das Verdienen von Belohnungen ist kostenlos und erfordert keinen Kauf. Belohnungen gibt es für definierte Handlungen, nie durch Zufall.',
+      },
+      {
+        h: 'Wie Belohnungen verdient werden',
+        p: 'Punkte gibt es für Handlungen: Freunde einladen, die ihr Profil abschließen (+100 je), eigenes Profil abschließen (+20) und optionale X-Aktionen — Folgen (+10) und ein Quote-Post mit Kommentar und #ad-Kennzeichnung (+30). Belohnungen sind ersetzend, nicht additiv: 300 Pkt = 1 Monat, 1.000 = 3 Monate, 3.000 = 6 Monate; die Top 10 nach Punkten erhalten 1 Jahr ShogunAI Pro.',
+      },
+      {
+        h: 'Wert und Obergrenze',
+        p: 'Die genannte Zahl ist ein Maximum. Werte sind in ShogunAI-Pro-Jahresrate in USD angegeben; der tatsächliche Wert hängt von Teilnahme und Wechselkurs ab. Die Gesamtbelohnungen der Kampagne sind auf USD $500.000 begrenzt.',
+      },
+      {
+        h: 'Kennzeichnung',
+        p: 'Ein Quote-Post erhält nur Punkte mit eigenem Kommentar und Werbe-Kennzeichnung (#ad auf Englisch, #PR auf Japanisch), im Einklang mit FTC und dem japanischen 景表法.',
+      },
+      {
+        h: 'Teilnahme & Fairplay',
+        p: 'Eine Belohnungsspur pro Person und ein Satz Social-Punkte pro X-Handle. Wegwerf-/Doppelkonten, wiederholtes Posten und Folgen-dann-Entfolgen zum Farmen sind ausgeschlossen; Follows können erneut geprüft werden. Ungültig, wo verboten.',
+      },
+      { h: 'Kontakt', p: 'Fragen? Schreib uns an hello@shogunai.com.' },
+    ],
   },
 };
 

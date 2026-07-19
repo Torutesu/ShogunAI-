@@ -20,7 +20,8 @@ export async function generateMetadata({
   params: Promise<{ slug: string }>;
 }): Promise<Metadata> {
   const { slug } = await params;
-  const post = getPost(slug);
+  const { locale } = await getI18n();
+  const post = getPost(slug, locale);
   if (!post) return {};
   return {
     title: post.title,
@@ -32,9 +33,9 @@ export async function generateMetadata({
 
 export default async function BlogPost({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
-  const post = getPost(slug);
-  if (!post) notFound();
   const { t, locale } = await getI18n();
+  const post = getPost(slug, locale);
+  if (!post) notFound();
 
   const articleSchema = {
     '@context': 'https://schema.org',

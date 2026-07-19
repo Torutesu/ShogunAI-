@@ -2,6 +2,7 @@ import { GeistMono } from 'geist/font/mono';
 import { GeistSans } from 'geist/font/sans';
 import type { Metadata } from 'next';
 import { Inter } from 'next/font/google';
+import { CustomCursor } from '@/components/CustomCursor';
 import { LogoDefs } from '@/components/Logo';
 import { ThemeScript } from '@/components/ThemeToggle';
 import { JsonLd, organizationSchema, softwareApplicationSchema, websiteSchema } from '@/components/seo/JsonLd';
@@ -52,6 +53,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
         <JsonLd data={softwareApplicationSchema} />
         <JsonLd data={websiteSchema} />
         <LogoDefs />
+        <CustomCursor />
         {children}
       </body>
     </html>

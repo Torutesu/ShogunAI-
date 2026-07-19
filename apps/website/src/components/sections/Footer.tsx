@@ -25,6 +25,7 @@ export async function Footer() {
       links: [
         { href: '/privacy', label: t.footer.legal.privacy },
         { href: '/terms', label: t.footer.legal.terms },
+        { href: '/rules', label: t.campaign.cta },
       ],
     },
   ];

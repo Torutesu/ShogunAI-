@@ -1,0 +1,20 @@
+name: Sync X snapshots (social points)
+
+# Pulls follower/quote snapshots via the twscrape bridge and awards social
+# points idempotently (spec §3.6). See apps/website/scripts/twscrape-bridge.md.
+# Requires secrets: WORKER_URL (e.g. https://shogunai-website.x.workers.dev),
+# ADMIN_TOKEN.
+on:
+  schedule:
+    - cron: '0 */6 * * *' # every 6 hours
+  workflow_dispatch: {}
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger X sync
+        run: |
+          curl -fsS -X POST \
+            "${{ secrets.WORKER_URL }}/api/admin/sync-x?key=${{ secrets.ADMIN_TOKEN }}" \
+            | tee /dev/stderr

@@ -87,7 +87,7 @@ function PostCard({
 
 export default async function BlogIndex() {
   const { locale, t } = await getI18n();
-  const posts = getAllPosts();
+  const posts = getAllPosts(locale);
   const [featured, ...rest] = posts;
 
   return (

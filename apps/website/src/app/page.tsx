@@ -1,4 +1,5 @@
 import { Action } from '@/components/sections/Action';
+import { Campaign } from '@/components/sections/Campaign';
 import { CTA } from '@/components/sections/CTA';
 import { FAQ } from '@/components/sections/FAQ';
 import { Footer } from '@/components/sections/Footer';
@@ -52,6 +53,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ r
 
   return (
     <>
+      <Campaign t={t} />
       <Nav />
       <main id="top">
         <Hero t={t} refCode={ref} invite={invite} joined={joined} />
