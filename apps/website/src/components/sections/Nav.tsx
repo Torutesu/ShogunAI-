@@ -81,7 +81,10 @@ export async function Nav() {
                   {l.label}
                 </a>
               ))}
-              <a href="/#get-started" className="mt-1 block rounded-lg bg-ink px-3 py-2 text-center text-sm font-medium text-on-ink">
+              <a
+                href="/#get-started"
+                className="mt-1 block rounded-lg bg-accent px-3 py-2.5 text-center text-sm font-semibold text-white shadow-[0_2px_10px_rgba(0,166,244,0.28)]"
+              >
                 {t.nav.getStarted}
               </a>
             </div>
