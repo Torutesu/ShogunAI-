@@ -13,7 +13,8 @@ pub use mac::install;
 
 #[cfg(target_os = "macos")]
 mod mac {
-    use tauri::{Runtime, WebviewWindow};
+    // `Manager` is required in scope: the tauri_panel! expansion calls `window.app_handle()`.
+    use tauri::{Manager, WebviewWindow};
     use tauri_nspanel::{tauri_panel, CollectionBehavior, PanelLevel, StyleMask, WebviewWindowExt};
 
     // Declares an NSPanel subclass. Key-window behaviour is set here; level / collection
@@ -29,7 +30,8 @@ mod mac {
     }
 
     /// Convert `window` into an NSPanel and apply the spec §3.1.2 attributes.
-    pub fn install<R: Runtime>(window: &WebviewWindow<R>) -> tauri::Result<()> {
+    /// Concrete over the default (`Wry`) runtime — the macro impls `FromWindow<Wry>`.
+    pub fn install(window: &WebviewWindow) -> tauri::Result<()> {
         let panel = window.to_panel::<NotchPanel>()?;
         panel.set_level(PanelLevel::Status.value());
         panel.set_collection_behavior(

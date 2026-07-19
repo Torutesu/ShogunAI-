@@ -35,16 +35,15 @@ mod mac {
         let screen = NSScreen::mainScreen(mtm)?;
         let f = screen.frame();
         let vf = screen.visibleFrame();
-        // SAFETY: safeAreaInsets / auxiliary*Area are generated as `unsafe fn`; they are
-        // valid on any NSScreen and return by value.
-        let notch_inset = unsafe { screen.safeAreaInsets() }.top;
+        // These NSScreen accessors are safe fns in objc2-app-kit 0.3.2.
+        let notch_inset = screen.safeAreaInsets().top;
 
         let screen_rect = Rect::new(f.origin.x, f.origin.y, f.size.width, f.size.height);
         let menubar_h = (f.origin.y + f.size.height) - (vf.origin.y + vf.size.height);
 
         let (is_notch, notch_w, notch_h) = if notch_inset > 0.0 {
-            let l = unsafe { screen.auxiliaryTopLeftArea() };
-            let r = unsafe { screen.auxiliaryTopRightArea() };
+            let l = screen.auxiliaryTopLeftArea();
+            let r = screen.auxiliaryTopRightArea();
             (true, f.size.width - l.size.width - r.size.width, notch_inset)
         } else {
             // Pseudo-notch: 180pt wide, menubar-tall (fallback 24pt), spec §3.2.2.

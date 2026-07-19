@@ -37,12 +37,11 @@ objc2-foundation = { version = "0.3", features = [
     "NSString", "NSArray", "NSGeometry", "NSNotification",
 ] }
 tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2.1" }
-# --- Wired in later increments (T-07 hover, T-11 AX) ---
-# objc2-core-graphics = { version = "0.3", features = ["CGEvent", "CGEventTypes"] }
-# objc2-core-foundation = { version = "0.3", features = ["CFRunLoop", "CFMachPort"] }
+objc2-core-graphics = { version = "0.3", features = ["CGEvent", "CGEventTypes"] }
+objc2-core-foundation = { version = "0.3", features = ["CFRunLoop", "CFMachPort", "CFBase"] }
+# --- Wired in a later increment (T-11 AX) ---
 # accessibility-sys = "0.2"
 # core-foundation = "0.10"
-# block2 = "0.6"
 
 [lints]
 workspace = true

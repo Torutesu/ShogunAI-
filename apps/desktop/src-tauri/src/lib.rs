@@ -46,9 +46,15 @@ pub fn run() {
                         eprintln!("[spike] panel install failed: {e}");
                     }
                 }
+
+                // T-07: install the listen-only mouse tap. The consumer drains raw samples;
+                // on-device it normalises to NS and feeds HoverTracker → StateMachine.
+                let (tx, rx) = std::sync::mpsc::channel::<hover::MouseSample>();
+                hover::start(tx);
+                std::thread::spawn(move || while rx.recv().is_ok() {});
             }
-            // on-device (T-07+): hover CGEventTap, axcache AXObserver, display watch,
-            // harness JSONL writer thread.
+            // on-device (T-08+): state-machine timers driving the panel, axcache AXObserver,
+            // display watch, harness JSONL writer thread.
             Ok(())
         })
         .run(tauri::generate_context!())
