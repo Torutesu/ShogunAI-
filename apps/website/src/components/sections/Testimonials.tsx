@@ -88,7 +88,7 @@ export function Testimonials({ t }: { t: Dictionary }) {
       <div className="container-x">
         <Reveal className="mx-auto mb-12 max-w-[48ch] text-center">
           <p className="text-xs font-semibold uppercase tracking-[0.08em] text-accent">{t.testimonials.eyebrow}</p>
-          <h2 className="mt-3.5 font-display text-[clamp(30px,4vw,44px)] font-semibold leading-[1.1] tracking-[-0.015em] text-balance">
+          <h2 className="mt-3.5 font-display text-[clamp(24px,5.5vw,44px)] font-semibold leading-[1.1] tracking-[-0.015em] text-balance">
             {t.testimonials.title}
           </h2>
           <p className="mt-4 text-[15px] leading-relaxed text-muted">{t.testimonials.sub}</p>

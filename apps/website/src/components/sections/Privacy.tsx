@@ -11,7 +11,7 @@ export function Privacy({ t }: { t: Dictionary }) {
       <div className="container-x grid items-center gap-12 lg:grid-cols-[0.9fr_1.1fr]">
         <Reveal>
           <p className="text-xs font-semibold uppercase tracking-[0.08em] text-accent">{t.privacy.eyebrow}</p>
-          <h2 className="mt-3.5 font-display text-[clamp(28px,3.6vw,42px)] font-semibold leading-[1.1] tracking-[-0.015em] text-balance">
+          <h2 className="mt-3.5 font-display text-[clamp(24px,5vw,42px)] font-semibold leading-[1.1] tracking-[-0.015em] text-balance">
             {t.privacy.title}
           </h2>
           <p className="mt-4 max-w-[46ch] text-[15px] leading-relaxed text-muted">{t.privacy.body}</p>

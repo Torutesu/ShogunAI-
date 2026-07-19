@@ -26,7 +26,7 @@ export function Memory({ t }: { t: Dictionary }) {
       <div className="container-x grid items-center gap-16 md:grid-cols-2">
         <Reveal>
           <p className="text-xs font-semibold uppercase tracking-[0.08em] text-accent">{m.eyebrow}</p>
-          <h2 className="mt-4 font-display text-[clamp(30px,4vw,44px)] font-semibold leading-[1.1] tracking-[-0.015em] text-balance">
+          <h2 className="mt-4 font-display text-[clamp(24px,5.5vw,44px)] font-semibold leading-[1.1] tracking-[-0.015em] text-balance">
             {m.title}
           </h2>
           <p className="mt-5 text-[17px] leading-relaxed text-muted">{m.body}</p>

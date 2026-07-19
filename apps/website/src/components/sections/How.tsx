@@ -8,7 +8,7 @@ export function How({ t }: { t: Dictionary }) {
       <div className="container-x">
         <Reveal className="mx-auto mb-12 max-w-[44ch] text-center">
           <p className="text-xs font-semibold uppercase tracking-[0.08em] text-accent">{t.how.eyebrow}</p>
-          <h2 className="mt-3.5 font-display text-[clamp(30px,4vw,44px)] font-semibold leading-[1.1] tracking-[-0.015em] text-balance">
+          <h2 className="mt-3.5 font-display text-[clamp(24px,5.5vw,44px)] font-semibold leading-[1.1] tracking-[-0.015em] text-balance">
             {t.how.title}
           </h2>
         </Reveal>

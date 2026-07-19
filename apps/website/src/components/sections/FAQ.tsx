@@ -20,7 +20,7 @@ export function FAQ({ t }: { t: Dictionary }) {
       <div className="container-x">
         <Reveal className="mx-auto mb-12 max-w-[40ch] text-center">
           <p className="text-xs font-semibold uppercase tracking-[0.08em] text-accent">{t.faq.eyebrow}</p>
-          <h2 className="mt-3.5 font-display text-[clamp(30px,4vw,46px)] font-semibold leading-[1.08] tracking-[-0.02em] text-balance">
+          <h2 className="mt-3.5 font-display text-[clamp(24px,5.5vw,46px)] font-semibold leading-[1.08] tracking-[-0.02em] text-balance">
             {t.faq.title}
           </h2>
         </Reveal>

@@ -113,7 +113,7 @@ function Onboarding({ code, onDone }: { code: string; onDone: () => void }) {
     <div className="mx-auto grid max-w-2xl gap-6">
       <div className="text-center">
         <Badge dot>You’re on the waitlist</Badge>
-        <h1 className="mt-4 font-display text-[clamp(30px,4vw,44px)] font-semibold tracking-[-0.02em]">
+        <h1 className="mt-4 font-display text-[clamp(26px,6vw,44px)] font-semibold tracking-[-0.02em]">
           Thanks for signing up
         </h1>
         <p className="mx-auto mt-3 max-w-[48ch] text-[17px] leading-relaxed text-muted">
@@ -188,7 +188,7 @@ function Tracking({ data, code }: { data: Status; code: string }) {
     <div className="mx-auto grid max-w-3xl gap-6">
       <div className="text-center">
         <Badge dot>Your spot is secured</Badge>
-        <h1 className="mt-4 font-display text-[clamp(30px,4vw,44px)] font-semibold tracking-[-0.02em]">
+        <h1 className="mt-4 font-display text-[clamp(26px,6vw,44px)] font-semibold tracking-[-0.02em]">
           You’re in{data.nickname ? `, ${data.nickname}` : ''}
         </h1>
         <p className="mx-auto mt-3 max-w-[48ch] text-[17px] leading-relaxed text-muted">

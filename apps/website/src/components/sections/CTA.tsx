@@ -13,7 +13,7 @@ export function CTA({ t, refCode }: { t: Dictionary; refCode?: string }) {
               className="pointer-events-none absolute inset-0 bg-[radial-gradient(80%_120%_at_50%_-30%,rgba(151,229,255,0.6),transparent_60%)]"
             />
             <div className="relative mx-auto max-w-[40ch]">
-              <h2 className="font-display text-[clamp(30px,4vw,44px)] font-semibold leading-[1.1] tracking-[-0.015em] text-balance">
+              <h2 className="font-display text-[clamp(24px,5.5vw,44px)] font-semibold leading-[1.1] tracking-[-0.015em] text-balance">
                 {t.cta.title}
               </h2>
               <p className="mt-3.5 text-[17px] text-muted">{t.cta.sub}</p>

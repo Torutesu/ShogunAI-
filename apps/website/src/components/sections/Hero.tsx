@@ -45,7 +45,7 @@ export function Hero({
         </Reveal>
 
         <Reveal delay={0.05}>
-          <h1 className="mx-auto mt-6 max-w-[16ch] font-display text-[clamp(40px,6.4vw,72px)] font-semibold leading-[1.03] tracking-[-0.03em] text-balance">
+          <h1 className="mx-auto mt-6 max-w-[16ch] font-display text-[clamp(30px,7vw,72px)] font-semibold leading-[1.05] tracking-[-0.03em] text-balance">
             {t.hero.lineA}
             <br />
             {t.hero.lineB}

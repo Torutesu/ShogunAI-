@@ -100,7 +100,7 @@ export function Pricing({ pricing }: { pricing: Pricing }) {
       <div className="container-x">
         <Reveal className="mx-auto mb-8 max-w-[44ch] text-center">
           <p className="text-xs font-semibold uppercase tracking-[0.08em] text-accent">{pricing.eyebrow}</p>
-          <h2 className="mt-3.5 font-display text-[clamp(30px,4vw,44px)] font-semibold leading-[1.1] tracking-[-0.015em] text-balance">
+          <h2 className="mt-3.5 font-display text-[clamp(24px,5.5vw,44px)] font-semibold leading-[1.1] tracking-[-0.015em] text-balance">
             {pricing.title}
           </h2>
           <p className="mt-4 text-[17px] text-muted">{pricing.sub}</p>
