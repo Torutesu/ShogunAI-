@@ -14,7 +14,7 @@ const en = {
     testimonials: 'Voices',
     faq: 'FAQ',
     blog: 'Blog',
-    getStarted: 'Get started',
+    getStarted: 'Get early access',
     langLabel: 'Language',
   },
   hero: {
@@ -260,7 +260,7 @@ const ja: Dictionary = {
     testimonials: 'ユーザーの声',
     faq: 'FAQ',
     blog: 'ブログ',
-    getStarted: 'はじめる',
+    getStarted: 'アーリーアクセス',
     langLabel: '言語',
   },
   hero: {
@@ -503,7 +503,7 @@ const es: Dictionary = {
     testimonials: 'Voces',
     faq: 'FAQ',
     blog: 'Blog',
-    getStarted: 'Empezar',
+    getStarted: 'Acceso anticipado',
     langLabel: 'Idioma',
   },
   hero: {
@@ -718,7 +718,7 @@ const de: Dictionary = {
     testimonials: 'Stimmen',
     faq: 'FAQ',
     blog: 'Blog',
-    getStarted: 'Loslegen',
+    getStarted: 'Früher Zugang',
     langLabel: 'Sprache',
   },
   hero: {
