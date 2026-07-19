@@ -64,10 +64,63 @@ const MARKS: Record<string, React.ReactNode> = {
       <path d="M3 6.5 12 13l9-6.5" strokeLinejoin="round" />
     </svg>
   ),
+
+  /* --- Y Combinator companies --- */
+  Airbnb: (
+    <svg viewBox="0 0 24 24" fill="currentColor" className="size-[22px]">
+      <path d="M12 2c-1.3 0-2.2 1-3 2.6-2 3.7-5 9.6-5 12.3A5.1 5.1 0 0 0 12 21a5.1 5.1 0 0 0 8-4.1c0-2.7-3-8.6-5-12.3C14.2 3 13.3 2 12 2Zm0 2.4c.5 0 .9.5 1.6 1.9.4.8.8 1.6.8 2.4A2.4 2.4 0 0 1 12 11a2.4 2.4 0 0 1-2.4-2.3c0-.8.4-1.6.8-2.4.7-1.4 1.1-1.9 1.6-1.9Zm0 8.5a2.4 2.4 0 0 1 2 3.7l-2 3-2-3a2.4 2.4 0 0 1 2-3.7Z" />
+    </svg>
+  ),
+  Coinbase: (
+    <svg viewBox="0 0 24 24" fill="currentColor" fillRule="evenodd" className="size-[22px]">
+      <path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm-1.6 7a1.4 1.4 0 0 0-1.4 1.4v3.2a1.4 1.4 0 0 0 1.4 1.4h3.2a1.4 1.4 0 0 0 1.4-1.4v-3.2a1.4 1.4 0 0 0-1.4-1.4z" />
+    </svg>
+  ),
+  Dropbox: (
+    <svg viewBox="0 0 24 24" fill="currentColor" className="size-[22px]">
+      <path d="M7 2 1 6l6 4 6-4-6-4Zm10 0-6 4 6 4 6-4-6-4ZM1 14l6 4 6-4-6-4-6 4Zm16-4-6 4 6 4 6-4-6-4ZM7 19.2l6-4 6 4-6 3.8-6-3.8Z" />
+    </svg>
+  ),
+  DoorDash: (
+    <svg viewBox="0 0 24 24" fill="currentColor" className="size-[22px]">
+      <path d="M2 8.5h13.2a4.75 4.75 0 0 1 0 9.5H7.5l3-3h4.7a1.75 1.75 0 0 0 0-3.5H5l-3-3Z" />
+    </svg>
+  ),
+  Reddit: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7} className="size-[22px]">
+      <circle cx="17.6" cy="5.4" r="1.5" />
+      <path d="M13 8.4 14 4l3.6.9" strokeLinejoin="round" />
+      <ellipse cx="12" cy="14" rx="8" ry="5.4" />
+      <circle cx="9" cy="13.8" r="1.15" fill="currentColor" stroke="none" />
+      <circle cx="15" cy="13.8" r="1.15" fill="currentColor" stroke="none" />
+      <path d="M9.4 16.4c1.5 1.1 3.7 1.1 5.2 0" />
+    </svg>
+  ),
+  Twitch: (
+    <svg viewBox="0 0 24 24" fill="currentColor" className="size-[22px]">
+      <path d="M4 3 3 6.5V19h4v2.5L9.5 19H13l6-6V3H4Zm13.5 9.5-2.5 2.5h-3.5L9 17v-2.5H6.5V5h11v7.5ZM15 7v4h-1.5V7H15Zm-4 0v4H9.5V7H11Z" />
+    </svg>
+  ),
+  Instacart: (
+    <svg viewBox="0 0 24 24" fill="currentColor" className="size-[22px]">
+      <path d="M14.5 3a2.6 2.6 0 0 0-2.3 1.4 3 3 0 0 1 1.9 1.8 2.6 2.6 0 0 1 2.4.3A2.6 2.6 0 0 0 14.5 3Zm-2.2 4.7c-1.4-1.4-3.7-.5-5.8 1.6-2.6 2.6-5.6 7.9-4.3 9.2s6.6-1.7 9.2-4.3c2.1-2.1 3-4.4 1.6-5.8l3.3-3.3-.9-.9-3.4 3.5Z" />
+    </svg>
+  ),
+  Docker: (
+    <svg viewBox="0 0 24 24" fill="currentColor" className="size-[22px]">
+      <path d="M3 10h2.6v2.6H3zM6 10h2.6v2.6H6zM9 10h2.6v2.6H9zM6 7h2.6v2.6H6zM9 7h2.6v2.6H9zM12 7h2.6v2.6H12zM12 10h2.6v2.6H12z" />
+      <path d="M1.5 13.5h19c-.4 2.2-2.3 4.8-6 5.4-4 .7-9.5.2-11.5-2.5-.9-1.2-1.4-1.9-1.5-2.9Z" />
+    </svg>
+  ),
+  GitLab: (
+    <svg viewBox="0 0 24 24" fill="currentColor" className="size-[22px]">
+      <path d="m12 21 3.6-11.1H8.4L12 21Zm0 0L3.2 10.4 12 21Zm0 0 8.8-10.6L12 21ZM3.2 10.4 1.7 15c-.1.4 0 .8.4 1L12 21 3.2 10.4Zm0 0L4.8 5c.1-.3.5-.3.6 0l1.6 5.4H3.2Zm17.6 0L12 21l9.9-5c.4-.2.5-.6.4-1l-1.5-4.6Zm0 0h-3.8l1.6-5.4c.1-.3.5-.3.6 0l1.6 5.4Z" />
+    </svg>
+  ),
 };
 
-const ROW_A = ['Slack', 'Notion', 'Linear', 'GitHub', 'Figma'];
-const ROW_B = ['Stripe', 'Vercel', 'Zoom', 'Loom', 'Gmail'];
+const ROW_A = ['Slack', 'Notion', 'Linear', 'GitHub', 'Figma', 'Airbnb', 'Coinbase', 'Dropbox', 'Instacart'];
+const ROW_B = ['Stripe', 'Vercel', 'Zoom', 'Loom', 'Gmail', 'DoorDash', 'Reddit', 'Docker', 'GitLab'];
 
 function Track({ items, reverse }: { items: string[]; reverse?: boolean }) {
   const doubled = [...items, ...items];
