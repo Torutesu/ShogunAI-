@@ -1,4 +1,10 @@
 node_modules/
+.turbo/
+dist/
+.next/
+out/
+build/
 *.log
 .DS_Store
-assets/preview-*.png
+.env
+.env.local

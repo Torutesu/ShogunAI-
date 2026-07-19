@@ -12,7 +12,6 @@ export async function Nav() {
     { href: '/#memory', label: t.nav.memory },
     { href: '/#action', label: t.nav.action },
     { href: '/#testimonials', label: t.nav.testimonials },
-    { href: '/#faq', label: t.nav.faq },
   ];
   const primary = [
     { href: '/#how', label: t.nav.how },

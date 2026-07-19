@@ -1,0 +1,6 @@
+{
+  "name": "@shogun-ai/desktop",
+  "version": "0.0.0",
+  "private": true,
+  "description": "ShogunAI macOS app (Memory + Execution layers). Scaffold — not yet implemented."
+}

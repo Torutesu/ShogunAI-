@@ -1,36 +1,50 @@
-# ShogunAI — Landing Page & UI
+# ShogunAI
 
-Marketing landing page and product UI shell for **ShogunAI** — the AI that
-remembers your day and acts on it.
-
-## Design
-
-The visual language is adapted from the **Aside Skyglass** design system:
-bright, airy, and optimistic, with a sky-and-cloud backdrop, crisp typography,
-and restrained rounded (pill) controls.
-
-- **Colors** — near-black `#090B0C` for text/controls, sky-blue accent `#00A6F4`
-  for links and emphasis, white surfaces, and soft sky tints for atmosphere.
-- **Typography** — Space Grotesk for display headlines, Geist for UI/body copy.
-- **Shape** — full-radius pills for buttons, inputs, and chips; `8px` cards.
-- **Depth** — layering and 1px borders over heavy shadows.
-
-Tokens live in [`assets/tokens.css`](assets/tokens.css); page layout in
-[`assets/page.css`](assets/page.css).
+Monorepo for **ShogunAI** — the operating system for the AI-native individual.
+Memory that captures your day. Execution that acts on it.
 
 ## Structure
 
-| File | Purpose |
-| --- | --- |
-| `index.html` | Landing page (hero, memory, action, how-it-works, pricing, CTA) |
-| `assets/tokens.css` | Design tokens: colors, type scale, buttons, chips, cards |
-| `assets/page.css` | Page-specific layout and responsive rules |
+```
+shogun-ai/
+├── apps/
+│   ├── website/     # Marketing site + blog + waitlist/referral engine (Next.js 16)
+│   ├── desktop/     # macOS app — Memory + Execution layers (scaffold)
+│   └── api/         # Standalone API (scaffold; API currently lives in website)
+├── packages/
+│   ├── ui/          # Shared UI primitives (scaffold)
+│   ├── types/       # Shared domain types
+│   ├── utils/       # Shared framework-agnostic utilities
+│   ├── config/      # Shared tsconfig base
+│   └── shared/      # Shared domain logic (referral engine target)
+├── pnpm-workspace.yaml
+├── turbo.json
+└── package.json
+```
 
-## Run locally
-
-It's a static site — open `index.html` directly, or serve it:
+## Getting started
 
 ```bash
-python3 -m http.server 8000
-# then open http://localhost:8000
+pnpm install
+pnpm dev            # turbo run dev across apps
+pnpm build          # turbo run build
+pnpm web:dev        # just the website
 ```
+
+The website needs a PostgreSQL `DATABASE_URL` (see `apps/website/.env.example`).
+
+## Apps
+
+- **website** — the live site: bright "Aside Skyglass" theme with light/dark
+  toggle, four languages (EN/JA/ES/DE), MDX blog, SEO/LLM tooling, and a
+  portable referral/waitlist engine (Drizzle + Postgres). See
+  `apps/website/README.md`.
+- **desktop** / **api** — scaffolds for the macOS app and an optional
+  standalone API.
+
+## Packages
+
+Shared code lives under `packages/*` and is consumed via `@shogun-ai/*`
+workspace imports. They start as skeletons; app code migrates in incrementally
+(the pure referral engine in `apps/website/src/lib/referral.ts` is the first
+candidate for `@shogun-ai/shared`).
