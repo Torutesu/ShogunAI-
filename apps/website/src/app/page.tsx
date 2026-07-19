@@ -65,7 +65,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ r
         <Stats t={t} />
         <Testimonials t={t} />
         <Privacy t={t} />
-        <Pricing t={t} />
+        <Pricing pricing={t.pricing} />
         <FAQ t={t} />
         <CTA t={t} refCode={ref} />
       </main>
