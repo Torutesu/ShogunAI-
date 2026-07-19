@@ -1,10 +1,49 @@
-//! NSPanel creation, attributes, frame, and `ignoresMouseEvents` (spec §3.1).
+//! NSPanel creation, attributes, and `ignoresMouseEvents` (spec §3.1).
 //!
-//! on-device (T-05): swap the Tauri WebviewWindow to an NSPanel via tauri-nspanel v2.1
-//! (research item 1: `object_setClass`, `to_panel()`), then apply spec §3.1.2 attributes:
-//! styleMask `.borderless | .nonactivatingPanel`, level 25 (fallback 101 — but 101 blocks
-//! IME per tauri-nspanel #104, so drop to 25 while the search field is key, spec §3.5),
-//! collectionBehavior `.canJoinAllSpaces | .fullScreenAuxiliary | .stationary | .ignoresCycle`,
-//! and the Expanded-sized fixed frame (spec §3.1.3). `ignoresMouseEvents` is toggled
-//! true in Idle/HoverIntent/Collapsing and false in Expanded.
+//! Swaps the Tauri "notch" WebviewWindow to an NSPanel via tauri-nspanel v2.1 and applies
+//! the spec §3.1.2 attributes: styleMask `.borderless | .nonactivatingPanel`, level 25
+//! (Status — above the menu bar; 101 blocks IME per tauri-nspanel #104, so keep 25 while the
+//! search field is key, spec §3.5), collectionBehavior `.canJoinAllSpaces |
+//! .fullScreenAuxiliary | .stationary | .ignoresCycle`. `ignoresMouseEvents` is toggled by
+//! the state machine adapter (true in Idle/HoverIntent/Collapsing, false in Expanded).
 #![allow(dead_code, unused_imports)]
+
+#[cfg(target_os = "macos")]
+pub use mac::install;
+
+#[cfg(target_os = "macos")]
+mod mac {
+    use tauri::{Runtime, WebviewWindow};
+    use tauri_nspanel::{tauri_panel, CollectionBehavior, PanelLevel, StyleMask, WebviewWindowExt};
+
+    // Declares an NSPanel subclass. Key-window behaviour is set here; level / collection
+    // behaviour / style mask are applied at install time below.
+    tauri_panel! {
+        panel!(NotchPanel {
+            config: {
+                can_become_main_window: false,
+                can_become_key_window: true,
+                is_floating_panel: true
+            }
+        })
+    }
+
+    /// Convert `window` into an NSPanel and apply the spec §3.1.2 attributes.
+    pub fn install<R: Runtime>(window: &WebviewWindow<R>) -> tauri::Result<()> {
+        let panel = window.to_panel::<NotchPanel>()?;
+        panel.set_level(PanelLevel::Status.value());
+        panel.set_collection_behavior(
+            CollectionBehavior::new()
+                .can_join_all_spaces()
+                .stationary()
+                .full_screen_auxiliary()
+                .ignores_cycle()
+                .value(),
+        );
+        panel.set_style_mask(StyleMask::new().nonactivating_panel().borderless().value());
+        panel.set_becomes_key_only_if_needed(true);
+        panel.set_floating_panel(true);
+        panel.show();
+        Ok(())
+    }
+}

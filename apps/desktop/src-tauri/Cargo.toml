@@ -36,8 +36,8 @@ objc2-app-kit = { version = "0.3", features = [
 objc2-foundation = { version = "0.3", features = [
     "NSString", "NSArray", "NSGeometry", "NSNotification",
 ] }
-# --- Wired in later increments (T-05 panel, T-07 hover, T-11 AX) ---
-# tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2.1" }
+tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2.1" }
+# --- Wired in later increments (T-07 hover, T-11 AX) ---
 # objc2-core-graphics = { version = "0.3", features = ["CGEvent", "CGEventTypes"] }
 # objc2-core-foundation = { version = "0.3", features = ["CFRunLoop", "CFMachPort"] }
 # accessibility-sys = "0.2"

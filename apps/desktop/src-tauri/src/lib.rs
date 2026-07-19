@@ -16,24 +16,39 @@ mod ipc;
 mod panel;
 mod statemachine;
 
-/// Tauri entry point. On-device (T-05) this: creates the WebviewWindow, swaps it to an
-/// NSPanel (`tauri-nspanel` v2.1, research item 1), applies the spec §3.1.2 attributes,
-/// and starts the hover / axcache / display subsystems. Kept minimal until then.
+/// Tauri entry point. Registers the nspanel plugin, then in setup: reads the notch
+/// geometry (T-06) and swaps the "notch" window into an NSPanel with the spec §3.1.2
+/// attributes (T-05). Hover / axcache / display subsystems are wired in later increments.
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(target_os = "macos")]
+    let builder = builder.plugin(tauri_nspanel::init());
+
+    builder
         .setup(|_app| {
-            // T-06: read the real notch/pseudo geometry on the main thread and log it.
-            // on-device (T-05+): panel::install(app)?; hover::start(...); axcache::start(...);
-            // display::start(...); harness JSONL writer thread.
             #[cfg(target_os = "macos")]
-            if let Some(mtm) = objc2::MainThreadMarker::new() {
-                if let Some(g) = geometry::read_primary(mtm) {
-                    eprintln!(
-                        "[spike] geometry: notch={} notch_w={:.1} notch_h={:.1} menubar_h={:.1} screen={:.0}x{:.0}",
-                        g.is_notch, g.notch_w, g.notch_h, g.menubar_h, g.screen.w, g.screen.h
-                    );
+            {
+                use tauri::Manager;
+
+                // T-06: read the real notch/pseudo geometry on the main thread and log it.
+                if let Some(mtm) = objc2::MainThreadMarker::new() {
+                    if let Some(g) = geometry::read_primary(mtm) {
+                        eprintln!(
+                            "[spike] geometry: notch={} notch_w={:.1} notch_h={:.1} menubar_h={:.1} screen={:.0}x{:.0}",
+                            g.is_notch, g.notch_w, g.notch_h, g.menubar_h, g.screen.w, g.screen.h
+                        );
+                    }
+                }
+
+                // T-05: swap the notch window into an NSPanel with the spec §3.1.2 attributes.
+                if let Some(win) = _app.get_webview_window("notch") {
+                    if let Err(e) = panel::install(&win) {
+                        eprintln!("[spike] panel install failed: {e}");
+                    }
                 }
             }
+            // on-device (T-07+): hover CGEventTap, axcache AXObserver, display watch,
+            // harness JSONL writer thread.
             Ok(())
         })
         .run(tauri::generate_context!())
