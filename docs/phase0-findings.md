@@ -17,7 +17,28 @@ every item to be non-open.
 | A2 | ホバー監視方式 | **最初からCGEventTap（listen-only, `kCGEventMouseMoved`）**。`addGlobalMonitorForEvents` は「他アプリに配信されたイベントのコピー」のみ受け、メニュー追跡中・他アプリfullscreen上で mouseMoved を取りこぼす一次報告あり。S-6実測を待たずtap前提で組む（手戻り最小、spec §3.4.1のフォールバックを既定に繰り上げ） | H |
 | A3 | 必要権限 | **Accessibility 単一カテゴリ**（`kTCCServiceAccessibility`）。CGEventTap・グローバルkeyDown・AXUIElement すべて相乗り。非サンドボックス運用なら Input Monitoring 不要の見込み | M〜H |
 
-案A採用の帰結として `apps/desktop/src-tauri/Cargo.toml` の macOS依存（tauri-nspanel/objc2系）はコメントで用意済み。On-device の T-05 で有効化する。
+案A採用の帰結として `apps/desktop/src-tauri/Cargo.toml` の macOS依存（tauri-nspanel/objc2系）を有効化済み。
+
+## macOS アダプタのコンパイル検証（Apple Silicon CI, macos-14）
+
+`.github/workflows/phase0-ci.yml` の macOS ジョブで、実機ランナー上のビルドを CI として回した。以下は**コンパイル green を確認済み**（実行時の挙動・4つの問いの実測は依然オンデバイス）。ビルド過程で判明した一次資料の誤りも修正済み。
+
+| アダプタ | 実装 | CI |
+|---|---|---|
+| geometry (T-06) | NSScreen frame/visibleFrame/safeAreaInsets + auxiliaryTopLeft/RightArea → spike_core::regions | green |
+| cpu (T-04/§4.2.3) | proc_pid_rusage + mach_timebase_info 変換 | green |
+| panel (T-05) | tauri-nspanel v2.1 `tauri_panel!`＋`to_panel::<NotchPanel>()`、level/collectionBehavior/styleMask 設定 | green |
+| hover (T-07) | listen-only CGEventTap（CFRunLoop スレッド）で生サンプル転送 | green |
+| axcache (T-11) | AXUIElement を `AxNode` 実装（Clone=CFRetain/Drop=CFRelease、create-rule/get-rule 厳密化）、snapshot→walk | green |
+| display (T-12) | NSWorkspace frontmostApplication().processIdentifier() | green |
+
+**ビルドで判明した一次資料の誤り（修正済み）**:
+- objc2 の版: core クレート = **0.6.x**、framework クレート（app-kit/foundation/core-graphics/core-foundation）= **0.3.x** の混成（当初 0.3 系で誤認）。
+- `tauri_panel!` は snake_case config（`can_become_key_window` 等）＋`to_panel` は**具体ランタイム Wry** に対して呼ぶ（generic R では `FromWindow<R>` 未充足）。マクロ展開は `tauri::Manager` をスコープに要求。
+- `NSScreen::safeAreaInsets/auxiliaryTop*Area` は objc2-app-kit 0.3.2 では **safe fn**（当初 unsafe と誤認）。
+- **cpu の単位バグ**: `ri_user_time/ri_system_time` は Apple Silicon で ns ではなく **mach ティック**（osquery#7459）。mach_timebase_info で変換するよう修正。**Q3-B 判定前に Activity Monitor と実機照合が必須**。
+
+**オンデバイス残作業（コンパイルではなく挙動）**: 状態機械タイマー→パネル駆動、hover生サンプル→NS正規化→HoverTracker→StateMachine 統合、AXObserver/NSWorkspace 通知購読、ハーネス JSONL writer スレッド起動、検索入力時の動的 key window（#104 の level 25/101 切替）、そして S-11/S-12/S-13 の実測と4つの問いの Go/No-Go 判定。
 
 ## 付録B 15項目
 
