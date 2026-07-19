@@ -1,0 +1,19 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "shogunai-website",
+  "main": ".open-next/worker.js",
+  "compatibility_date": "2025-03-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+  "observability": {
+    "enabled": true
+  }
+  // Secrets (set in the Cloudflare dashboard or `wrangler secret put`):
+  //   DATABASE_URL        — Supabase connection string (session pooler)
+  //   WAITLIST_LIVE_COUNT — "true" only on production to add real signups
+  // For lower DB latency from Workers, bind Cloudflare Hyperdrive to Supabase
+  // and point DATABASE_URL at the Hyperdrive connection string. See DEPLOY.md.
+}
