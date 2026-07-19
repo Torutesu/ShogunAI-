@@ -1,6 +1,6 @@
 'use client';
 
-import { Check, Copy, Loader2, Share2, Star, Trophy } from 'lucide-react';
+import { ArrowRight, Check, Copy, Gift, Loader2, Share2, Star, Trophy } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -8,6 +8,7 @@ import { Card } from '@/components/ui/card';
 
 type Status = {
   status: string;
+  nickname: string | null;
   refCode: string;
   shareUrl: string;
   qualifiedReferrals: number;
@@ -29,43 +30,9 @@ const TIERS = [
   { threshold: 30, label: '6 months free' },
 ];
 
-/** Circular progress ring — visualizes queue percentile. */
-function RankRing({ position, total }: { position: number | null; total: number | null }) {
-  const pct = position && total && total > 0 ? Math.max(0, Math.min(1, 1 - position / total)) : 0;
-  const topPct = position && total ? Math.max(1, Math.round((position / total) * 100)) : null;
-  const r = 54;
-  const c = 2 * Math.PI * r;
-  return (
-    <div className="relative grid size-[150px] place-items-center">
-      <svg viewBox="0 0 130 130" className="size-[150px] -rotate-90">
-        <circle cx="65" cy="65" r={r} fill="none" stroke="var(--color-border)" strokeWidth="10" />
-        <circle
-          cx="65"
-          cy="65"
-          r={r}
-          fill="none"
-          stroke="var(--color-accent)"
-          strokeWidth="10"
-          strokeLinecap="round"
-          strokeDasharray={c}
-          strokeDashoffset={c * (1 - pct)}
-          className="[transition:stroke-dashoffset_1s_var(--ease-out-soft)]"
-        />
-      </svg>
-      <div className="absolute text-center">
-        <div className="font-display text-[32px] font-semibold leading-none tabular-nums">
-          {position ? `#${position.toLocaleString()}` : '—'}
-        </div>
-        {topPct && <div className="mt-1 text-xs text-muted">Top {topPct}%</div>}
-      </div>
-    </div>
-  );
-}
-
 export function StatusDashboard({ code }: { code: string }) {
   const [data, setData] = useState<Status | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -81,17 +48,6 @@ export function StatusDashboard({ code }: { code: string }) {
   useEffect(() => {
     load();
   }, [load]);
-
-  async function copyShare() {
-    if (!data) return;
-    try {
-      await navigator.clipboard.writeText(data.shareUrl);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      /* clipboard unavailable */
-    }
-  }
 
   if (error === 'not_found')
     return (
@@ -111,34 +67,111 @@ export function StatusDashboard({ code }: { code: string }) {
       </div>
     );
 
+  return data.profileComplete ? (
+    <Tracking data={data} />
+  ) : (
+    <Onboarding code={code} onDone={load} />
+  );
+}
+
+/* ---------- Step 1: thank-you + program + rewards + form ---------- */
+function Onboarding({ code, onDone }: { code: string; onDone: () => void }) {
+  return (
+    <div className="mx-auto grid max-w-2xl gap-6">
+      <div className="text-center">
+        <Badge dot>You’re on the waitlist</Badge>
+        <h1 className="mt-4 font-display text-[clamp(30px,4vw,44px)] font-semibold tracking-[-0.02em]">
+          Thanks for signing up
+        </h1>
+        <p className="mx-auto mt-3 max-w-[46ch] text-[17px] leading-relaxed text-muted">
+          You’re on the list for ShogunAI. Want to skip ahead? We run a referral program — invite friends,
+          climb the line, and earn months of ShogunAI free.
+        </p>
+      </div>
+
+      {/* Program + rewards pitch */}
+      <Card>
+        <div className="mb-1 flex items-center gap-2">
+          <Gift className="size-4 text-accent" />
+          <p className="text-xs font-semibold uppercase tracking-[0.08em] text-accent">How the referral program works</p>
+        </div>
+        <p className="text-sm text-muted">
+          Every friend who joins with your link and completes their profile counts as one referral. The more
+          you refer, the more you unlock — rewards replace each other, so you always hold your best one.
+        </p>
+        <div className="mt-4 grid gap-2.5">
+          {TIERS.map((t) => (
+            <Rung key={t.threshold} badge={String(t.threshold)} label={t.label} meta={`${t.threshold} referrals`} />
+          ))}
+          <Rung
+            badge={<Star className="size-3.5" />}
+            label="Top 10 referrers — 1 year free"
+            meta="leaderboard"
+          />
+        </div>
+      </Card>
+
+      {/* Interested? → form that issues the link */}
+      <ProfileForm code={code} onDone={onDone} />
+    </div>
+  );
+}
+
+/* ---------- Step 2: your link + tracking + gamification ---------- */
+function Tracking({ data }: { data: Status }) {
+  const [copied, setCopied] = useState(false);
   const count = data.qualifiedReferrals;
   const next = data.nextTier;
   const tierProgress = next ? Math.min(1, count / next.threshold) : 1;
 
+  async function copyShare() {
+    try {
+      await navigator.clipboard.writeText(data.shareUrl);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* clipboard unavailable */
+    }
+  }
+
   return (
     <div className="mx-auto grid max-w-3xl gap-6">
-      {/* Intro */}
       <div className="text-center">
-        <Badge dot>{data.profileComplete ? 'Your spot is secured' : 'You’re on the waitlist'}</Badge>
+        <Badge dot>Your spot is secured</Badge>
         <h1 className="mt-4 font-display text-[clamp(30px,4vw,44px)] font-semibold tracking-[-0.02em]">
-          The ShogunAI referral program
+          You’re in{data.nickname ? `, ${data.nickname}` : ''}
         </h1>
-        <p className="mx-auto mt-3 max-w-[48ch] text-[17px] leading-relaxed text-muted">
-          Every friend who joins with your link and completes their profile moves you up the line. Refer more,
-          climb faster, unlock free months — and top the leaderboard.
+        <p className="mx-auto mt-3 max-w-[46ch] text-[17px] leading-relaxed text-muted">
+          Share your link below. Every qualified referral moves you up the line and up the leaderboard.
         </p>
       </div>
 
-      {/* Rank hero — your position + referrals, visual */}
+      {/* Your referral link */}
+      <Card>
+        <div className="mb-1 flex items-center gap-2">
+          <Share2 className="size-4 text-accent" />
+          <p className="text-xs font-semibold uppercase tracking-[0.08em] text-accent">Your referral link</p>
+        </div>
+        <p className="text-sm text-muted">A referral counts once your invite completes their profile.</p>
+        <div className="mt-4 flex flex-wrap gap-2.5">
+          <span className="flex min-w-[220px] flex-1 items-center overflow-hidden text-ellipsis whitespace-nowrap rounded-full border border-border bg-cloud px-4 font-mono text-[13px] leading-[44px] text-ink">
+            {data.shareUrl}
+          </span>
+          <Button onClick={copyShare}>
+            {copied ? <Check className="size-4" /> : <Copy className="size-4" />}
+            {copied ? 'Copied' : 'Copy link'}
+          </Button>
+        </div>
+      </Card>
+
+      {/* Rank + referrals — the gamification */}
       <Card className="grid items-center gap-6 sm:grid-cols-[auto_1fr]">
         <RankRing position={data.position} total={data.totalWaiting} />
         <div className="grid gap-4">
           <div className="flex items-baseline justify-between">
             <div>
               <div className="text-xs font-semibold uppercase tracking-[0.08em] text-accent">Your position</div>
-              <div className="text-sm text-muted">
-                of {data.totalWaiting?.toLocaleString() ?? '—'} on the waitlist
-              </div>
+              <div className="text-sm text-muted">of {data.totalWaiting?.toLocaleString() ?? '—'} on the waitlist</div>
             </div>
             {data.leaderboardRank && (
               <span className="inline-flex items-center gap-1.5 rounded-full bg-sky-soft px-3 py-1 text-sm font-semibold text-accent-strong">
@@ -167,44 +200,24 @@ export function StatusDashboard({ code }: { code: string }) {
         </div>
       </Card>
 
-      {/* Share */}
-      <Card>
-        <div className="mb-1 flex items-center gap-2">
-          <Share2 className="size-4 text-accent" />
-          <p className="text-xs font-semibold uppercase tracking-[0.08em] text-accent">Your invite link</p>
-        </div>
-        <p className="text-sm text-muted">
-          A referral counts once your invite completes their profile. Rewards replace each other; they don’t stack.
-        </p>
-        <div className="mt-4 flex flex-wrap gap-2.5">
-          <span className="flex min-w-[220px] flex-1 items-center overflow-hidden text-ellipsis whitespace-nowrap rounded-full border border-border bg-cloud px-4 font-mono text-[13px] leading-[44px] text-ink">
-            {data.shareUrl}
-          </span>
-          <Button onClick={copyShare}>
-            {copied ? <Check className="size-4" /> : <Copy className="size-4" />}
-            {copied ? 'Copied' : 'Copy link'}
-          </Button>
-        </div>
-      </Card>
-
-      {/* Reward ladder */}
+      {/* Reward ladder — progress */}
       <Card>
         <p className="text-xs font-semibold uppercase tracking-[0.08em] text-accent">Rewards</p>
         <h2 className="mb-3.5 mt-2.5 font-display text-2xl font-semibold">
           {data.tier ? `You’ve unlocked ${data.tier.label}` : 'Refer 3 to unlock your first reward'}
         </h2>
         <div className="grid gap-2.5">
-          {TIERS.map((tItem) => {
-            const done = count >= tItem.threshold;
-            const isNext = !done && next?.threshold === tItem.threshold;
+          {TIERS.map((t) => {
+            const done = count >= t.threshold;
+            const isNext = !done && next?.threshold === t.threshold;
             return (
               <Rung
-                key={tItem.threshold}
+                key={t.threshold}
                 done={done}
                 next={isNext}
-                badge={done ? '✓' : String(tItem.threshold)}
-                label={tItem.label}
-                meta={done ? 'unlocked' : `${tItem.threshold - count} more`}
+                badge={done ? '✓' : String(t.threshold)}
+                label={t.label}
+                meta={done ? 'unlocked' : `${t.threshold - count} more`}
               />
             );
           })}
@@ -217,15 +230,45 @@ export function StatusDashboard({ code }: { code: string }) {
         </div>
       </Card>
 
-      {/* Deep onboarding */}
-      {!data.profileComplete && <ProfileForm code={code} onDone={load} />}
-
       {/* Leaderboard by nickname */}
       <Card>
         <p className="text-xs font-semibold uppercase tracking-[0.08em] text-accent">Leaderboard</p>
         <h2 className="mb-3.5 mt-2.5 font-display text-2xl font-semibold">Top referrers</h2>
         <LeaderboardInline meRefCode={data.refCode} />
       </Card>
+    </div>
+  );
+}
+
+/* ---------- shared bits ---------- */
+function RankRing({ position, total }: { position: number | null; total: number | null }) {
+  const pct = position && total && total > 0 ? Math.max(0, Math.min(1, 1 - position / total)) : 0;
+  const topPct = position && total ? Math.max(1, Math.round((position / total) * 100)) : null;
+  const r = 54;
+  const c = 2 * Math.PI * r;
+  return (
+    <div className="relative grid size-[150px] place-items-center">
+      <svg viewBox="0 0 130 130" className="size-[150px] -rotate-90">
+        <circle cx="65" cy="65" r={r} fill="none" stroke="var(--color-border)" strokeWidth="10" />
+        <circle
+          cx="65"
+          cy="65"
+          r={r}
+          fill="none"
+          stroke="var(--color-accent)"
+          strokeWidth="10"
+          strokeLinecap="round"
+          strokeDasharray={c}
+          strokeDashoffset={c * (1 - pct)}
+          className="[transition:stroke-dashoffset_1s_var(--ease-out-soft)]"
+        />
+      </svg>
+      <div className="absolute text-center">
+        <div className="font-display text-[32px] font-semibold leading-none tabular-nums">
+          {position ? `#${position.toLocaleString()}` : '—'}
+        </div>
+        {topPct && <div className="mt-1 text-xs text-muted">Top {topPct}%</div>}
+      </div>
     </div>
   );
 }
@@ -301,10 +344,10 @@ function ProfileForm({ code, onDone }: { code: string; onDone: () => void }) {
 
   return (
     <Card>
-      <p className="text-xs font-semibold uppercase tracking-[0.08em] text-accent">Secure your spot</p>
-      <h2 className="mb-1 mt-2.5 font-display text-2xl font-semibold">Tell us about you</h2>
+      <p className="text-xs font-semibold uppercase tracking-[0.08em] text-accent">Interested? Join the program</p>
+      <h2 className="mb-1 mt-2.5 font-display text-2xl font-semibold">Answer 4 quick questions</h2>
       <p className="text-sm text-muted">
-        Completing this moves you up the line — and sets the nickname you’ll use on the leaderboard.
+        We’ll generate your personal referral link and add you to the leaderboard under your nickname.
       </p>
       <form onSubmit={onSubmit} className="mt-4 grid gap-4">
         <label className="grid gap-1.5 text-sm font-medium text-ink">
@@ -324,7 +367,8 @@ function ProfileForm({ code, onDone }: { code: string; onDone: () => void }) {
           <input name="a3" maxLength={200} required placeholder="The workflow you’d love gone" className={field} />
         </label>
         <Button type="submit" disabled={state === 'loading'}>
-          {state === 'loading' ? <Loader2 className="size-4 animate-spin" /> : 'Secure my spot'}
+          {state === 'loading' ? <Loader2 className="size-4 animate-spin" /> : 'Get my referral link'}
+          {state !== 'loading' && <ArrowRight className="size-4" />}
         </Button>
         {msg && <p className="text-sm text-danger">{msg}</p>}
       </form>

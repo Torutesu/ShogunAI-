@@ -36,6 +36,7 @@ export async function GET(req: Request) {
   const body = {
     ok: true as const,
     status: row.status,
+    nickname: row.nickname,
     refCode: row.refCode, // public — needed to build the share link
     shareUrl: shareUrl(APP_ORIGIN, row.refCode),
     qualifiedReferrals: count,
