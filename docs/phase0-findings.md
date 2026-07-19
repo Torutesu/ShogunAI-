@@ -38,7 +38,23 @@ every item to be non-open.
 - `NSScreen::safeAreaInsets/auxiliaryTop*Area` は objc2-app-kit 0.3.2 では **safe fn**（当初 unsafe と誤認）。
 - **cpu の単位バグ**: `ri_user_time/ri_system_time` は Apple Silicon で ns ではなく **mach ティック**（osquery#7459）。mach_timebase_info で変換するよう修正。**Q3-B 判定前に Activity Monitor と実機照合が必須**。
 
-**オンデバイス残作業（コンパイルではなく挙動）**: 状態機械タイマー→パネル駆動、hover生サンプル→NS正規化→HoverTracker→StateMachine 統合、AXObserver/NSWorkspace 通知購読、ハーネス JSONL writer スレッド起動、検索入力時の動的 key window（#104 の level 25/101 切替）、そして S-11/S-12/S-13 の実測と4つの問いの Go/No-Go 判定。
+## 統合レイヤ（挙動配線）— 純ロジックはテスト済み・macOSグルーはコンパイル検証済み
+
+| 配線 | 実装場所 | 検証 |
+|---|---|---|
+| hover生サンプル→CG/NS正規化→HoverTracker→StateMachine 統合 | `spike_core::engine::NotchEngine`（純, 3統合テスト） | Linux green |
+| 状態遷移→出力（webview state / ignoresMouse / timer / expand-commit / top-band） | 同上（`EngineOutput`） | Linux green |
+| ハーネス JSONL writer（非ブロッキング record＋1秒 file flusher） | `spike_harness::recorder::Recorder`（2テスト） | Linux green |
+| エンジンループ＋世代キャンセル式ワンショットタイマー＋出力適用（panel `set_ignores_mouse_events`＝run_on_main_thread、webview `emit("state")`） | `apps/desktop/src-tauri/src/integrate.rs`（macOS） | **Apple Silicon CI green** |
+
+これで「イベント駆動→状態遷移→UIレンダリング＋計測記録」の統合が、純ロジックは単体テスト、macOS配線はコンパイルまで検証された。
+
+**真にオンデバイスでしか完了しない残作業（挙動観測・実測・ハードウェア依存）**:
+- 実行して観測: パネルの実表示/展開アニメ、`ignoresMouseEvents` 切替の体感、常駐安定性。
+- webview `painted` 往復による**展開レイテンシ実測**（t1−t0＋クロックオフセット）。現状はエンジンが t0（expand-commit）を記録するのみ。
+- **AXObserver/NSWorkspace 通知購読**（フォーカス変化でAX walkを起動）。`axcache::snapshot` はコンパイル済み、イベント購読（block2 の `addObserverForName…` セレクタは要実機確認）はオンデバイスで追加。
+- 検索入力時の動的 key window（#104 の level 25/101 切替）。
+- **S-11/S-12/S-13 の実測**と**4つの問いの Go/No-Go 判定**（物理ノッチMac＋人間の判断）。
 
 ## 付録B 15項目
 
