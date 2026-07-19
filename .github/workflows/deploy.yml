@@ -1,13 +1,22 @@
-name: Deploy website (Cloudflare) — manual fallback
+name: Deploy website (Cloudflare)
 
-# NOTE: push-to-deploy is handled by Cloudflare's own Git integration
-# (Workers Builds), which auto-builds every push to the connected branch with
-#   Build:  pnpm --filter @shogun-ai/website cf:build
-#   Deploy: pnpm --filter @shogun-ai/website exec wrangler deploy
-# This workflow is a MANUAL fallback (Actions → Run workflow) for when you want
-# to deploy from CI instead. Requires secrets CLOUDFLARE_API_TOKEN,
-# CLOUDFLARE_ACCOUNT_ID. Leave it manual so it can't double-deploy with CF.
+# Deterministic push-to-deploy via GitHub Actions (more reliable for this
+# monorepo than the Cloudflare dashboard's build settings). On every push to
+# the branch it: installs → migrates the DB (if DATABASE_URL is set) →
+# builds the OpenNext Worker → deploys to Cloudflare.
+#
+# One-time setup — add these repo secrets (Settings → Secrets → Actions):
+#   CLOUDFLARE_API_TOKEN   (required)  "Edit Cloudflare Workers" token
+#   CLOUDFLARE_ACCOUNT_ID  (required)  your account id
+#   DATABASE_URL           (optional)  Supabase URL — enables auto-migrate
 on:
+  push:
+    branches: [main, claude/shogunai-ui-lp-lisvsd]
+    paths:
+      - 'apps/website/**'
+      - 'packages/**'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/deploy.yml'
   workflow_dispatch: {}
 
 concurrency:
@@ -27,8 +36,20 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+
+      - name: Migrate database (idempotent, if configured)
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          if [ -n "$DATABASE_URL" ]; then
+            pnpm --filter @shogun-ai/website db:migrate
+          else
+            echo "DATABASE_URL not set — skipping migrate"
+          fi
+
       - name: Build OpenNext worker
         run: pnpm --filter @shogun-ai/website cf:build
+
       - name: Deploy to Cloudflare
         run: pnpm --filter @shogun-ai/website exec wrangler deploy
         env:
