@@ -2702,6 +2702,7 @@ version = "0.0.0"
 dependencies = [
  "serde",
  "serde_json",
+ "spike-core",
  "spike-harness",
  "tauri",
  "tauri-build",
@@ -2788,6 +2789,10 @@ dependencies = [
  "libc",
  "system-deps",
 ]
+
+[[package]]
+name = "spike-core"
+version = "0.0.0"
 
 [[package]]
 name = "spike-harness"

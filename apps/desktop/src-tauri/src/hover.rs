@@ -1,10 +1,11 @@
-//! Hover detection (spec §3.4). Event-driven; polling is forbidden.
+//! Hover adapter (spec §3.4). Event-driven; polling forbidden.
 //!
-//! on-device (T-07): per research item 2, implement with a listen-only CGEventTap
-//! (`kCGEventMouseMoved`, `kCGEventTapOptionListenOnly`) from the start rather than
-//! NSEvent global monitor — the global monitor drops mouseMoved during menu tracking and
-//! over other apps' fullscreen. Apply the early-reject (top 40pt band), 16ms coalesce, and
-//! velocity estimate here; emit intent to `statemachine` over a channel. No allocation or
-//! log I/O in the handler (Q3 CPU budget, spec §3.4.1). Requires Accessibility permission
-//! (research item 3 — single TCC category covers tap + keyDown + AX).
+//! The judgement lives in `spike_core::hover::HoverTracker` (early-reject, 16ms coalesce,
+//! velocity/fast-dwell, menu/drag suppression — unit-tested on Linux). on-device (T-07)
+//! this module runs a listen-only CGEventTap (`kCGEventMouseMoved`, research item 2),
+//! normalises each point to NS, calls `HoverTracker::on_move/on_button_*`, and forwards the
+//! emitted `HoverSignal`s to `statemachine` over a channel. No allocation/log I/O in the
+//! tap callback (Q3 CPU budget). Requires Accessibility permission (research item 3).
 #![allow(dead_code)]
+
+pub use spike_core::hover::{HoverParams, HoverSignal, HoverTracker};

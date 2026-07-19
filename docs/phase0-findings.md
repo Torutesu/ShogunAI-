@@ -47,10 +47,23 @@ every item to be non-open.
 | AppKit/CoreGraphics | objc2 / objc2-app-kit / objc2-core-graphics | 0.3.2 | madsmtm保守、Xcode 16.4 SDK生成、MSRV 1.71 |
 | Accessibility | accessibility-sys もしくは axuielement | 0.1 系 / doom-fish版 | `AXUIElementSetMessagingTimeout` / `kAXFocusedWindowChangedNotification` の網羅は実機確認 |
 
+## 純ロジックのLinux先行実装（`crates/spike-core`）
+
+Q2（展開）/Q4（誤発火）の挙動はプラットフォーム非依存の決定ロジックなので、macOS実機を待たず先行実装し単体テストで固めた。macOS層は薄いアダプタ（OSイベントを流し込み、Effectを適用するだけ）に縮小される。
+
+| モジュール | 内容 | テスト |
+|---|---|---|
+| `geometry` | Rect/Regions、idle_rect、R_enter/R_stay/R_exp導出、CG↔NS座標正規化（involution） | 6件 |
+| `hover` | early-reject、16msコアレス、速度推定/fast-dwell、メニュー/ドラッグ抑制 → HoverSignal | 7件 |
+| `statemachine` | T1〜T6の決定的遷移、タイマー注入、Effect（Transition/Timer/SetIgnoresMouse/MarkExpandCommit） | 11件 |
+| `axcache` | BFS walk policy（深さ8/300要素/32KB/SecureTextField subtree skip/cancel→partial） | 7件 |
+
+**注（dev-instructions §5.7との整合）**: 同§は「spike-harness以外は使い捨て・製品基礎の作り込み禁止」。本クレートは *4つの問いに答えるために正しい状態機械とヒット領域計算が必須で、かつそれをテストする*（macOSクレートはLinuxでテスト不可）ためだけに設けた、テスト可能化のための意図的な逸脱。製品コアではなくスパイクロジック。Go判定後の本実装で再利用/破棄は自由。**大きな意思決定ではないが逸脱として明示** — 不要ならこのクレートは破棄可。
+
 ## この環境（Linux）で検証済みのこと
 
-- `crates/spike-harness`: `cargo test`（27件green）, `cargo clippy --all-targets`（deny下でclean）, release build成功。
-- 计測ハーネス核（slo定数, クロックオフセット推定, JSONLスキーマ, リングバッファ, パーセンタイル, CPUメーターの差分算術, テキストdigest）はプラットフォーム非依存で単体テスト済み。
+- `crates/spike-harness`: `cargo test`（27件green）, clippy（deny下clean）, release build成功。計測核（slo定数/クロックオフセット/JSONLスキーマ/リングバッファ/パーセンタイル/CPU差分算術/digest）を単体テスト。
+- `crates/spike-core`: `cargo test`（31件green）, clippy clean。上表の挙動ロジック。
 - `report` バイナリ: 合成JSONLで層別p50/p95/p99・4問別verdict出力をE2E確認。
 - `apps/desktop` frontend: `tsc --noEmit` clean, `vite build` 成功。
-- **未検証（要macOS）**: Tauri/AppKitビルド全般、cpu.rs のmacOSリーダー（task_info/proc_pid_rusage）、`pnpm tauri dev`、すべての実測（S-11/S-12/S-13、4つの問い本体）。
+- **未検証（要macOS）**: Tauri/AppKitビルド全般、cpu.rs のmacOSリーダー（task_info/proc_pid_rusage）、`pnpm tauri dev`、CGEventTap/AXUIElement/NSPanelアダプタ、すべての実測（S-11/S-12/S-13、4つの問い本体）。

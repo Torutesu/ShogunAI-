@@ -19,8 +19,8 @@ on:
       - "Cargo.toml"
 
 jobs:
-  harness:
-    name: spike-harness (clippy + test)
+  rust:
+    name: pure crates (clippy + test)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -28,10 +28,12 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
+      # spike-harness + spike-core are platform-independent; the macOS shell
+      # (shogun-desktop-spike) only builds on-device, so it is excluded here.
       - name: clippy (warnings deny via workspace lints)
-        run: cargo clippy -p spike-harness --all-targets
+        run: cargo clippy --workspace --exclude shogun-desktop-spike --all-targets
       - name: test
-        run: cargo test -p spike-harness
+        run: cargo test --workspace --exclude shogun-desktop-spike
       - name: release build (SLO code path)
         run: cargo build -p spike-harness --release
 
