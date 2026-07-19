@@ -250,7 +250,6 @@ const en = {
   authority: {
     label: 'Backed & recognized',
     items: [
-      { tone: 'yc', mark: 'Y', top: 'Backed by', brand: 'Y Combinator' },
       { tone: 'ph', mark: 'P', top: 'Coming soon on', brand: 'Product Hunt' },
       { tone: 'award', mark: '★', top: 'Winner', brand: 'YC RFS Hackathon 2026' },
     ] as { tone: string; mark: string; top: string; brand: string }[],
@@ -551,7 +550,6 @@ const ja: Dictionary = {
   authority: {
     label: '評価と実績',
     items: [
-      { tone: 'yc', mark: 'Y', top: 'Backed by', brand: 'Y Combinator' },
       { tone: 'ph', mark: 'P', top: 'まもなく公開', brand: 'Product Hunt' },
       { tone: 'award', mark: '★', top: '優勝', brand: 'YC RFS Hackathon 2026' },
     ],
@@ -822,7 +820,6 @@ const es: Dictionary = {
   authority: {
     label: 'Respaldado y reconocido',
     items: [
-      { tone: 'yc', mark: 'Y', top: 'Respaldado por', brand: 'Y Combinator' },
       { tone: 'ph', mark: 'P', top: 'Muy pronto en', brand: 'Product Hunt' },
       { tone: 'award', mark: '★', top: 'Ganador', brand: 'YC RFS Hackathon 2026' },
     ],
@@ -1093,7 +1090,6 @@ const de: Dictionary = {
   authority: {
     label: 'Unterstützt & ausgezeichnet',
     items: [
-      { tone: 'yc', mark: 'Y', top: 'Unterstützt von', brand: 'Y Combinator' },
       { tone: 'ph', mark: 'P', top: 'Bald auf', brand: 'Product Hunt' },
       { tone: 'award', mark: '★', top: 'Gewinner', brand: 'YC RFS Hackathon 2026' },
     ],
