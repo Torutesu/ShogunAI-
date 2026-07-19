@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img" aria-label="ShogunAI">
+  <defs>
+    <linearGradient id="bg" x1="0.12" y1="0.06" x2="0.88" y2="0.94">
+      <stop offset="0" stop-color="#38bdf8" />
+      <stop offset="0.5" stop-color="#0aa5f4" />
+      <stop offset="1" stop-color="#0b74d6" />
+    </linearGradient>
+  </defs>
+  <rect width="100" height="100" rx="24" fill="url(#bg)" />
+  <path
+    d="M64 27 L38 38 L62 57 L36 73"
+    fill="none"
+    stroke="#ffffff"
+    stroke-width="11"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+</svg>
