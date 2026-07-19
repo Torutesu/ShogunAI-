@@ -1,11 +1,13 @@
-name: Deploy website (Cloudflare)
+name: Deploy website (Cloudflare) — manual fallback
 
-# Push-to-deploy: builds the OpenNext Worker and deploys it to Cloudflare.
-# Requires repo secrets: CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID.
+# NOTE: push-to-deploy is handled by Cloudflare's own Git integration
+# (Workers Builds), which auto-builds every push to the connected branch with
+#   Build:  pnpm --filter @shogun-ai/website cf:build
+#   Deploy: pnpm --filter @shogun-ai/website exec wrangler deploy
+# This workflow is a MANUAL fallback (Actions → Run workflow) for when you want
+# to deploy from CI instead. Requires secrets CLOUDFLARE_API_TOKEN,
+# CLOUDFLARE_ACCOUNT_ID. Leave it manual so it can't double-deploy with CF.
 on:
-  push:
-    branches: [main, claude/shogunai-ui-lp-lisvsd]
-    paths: ['apps/website/**', 'packages/**', 'pnpm-lock.yaml', '.github/workflows/deploy.yml']
   workflow_dispatch: {}
 
 concurrency:

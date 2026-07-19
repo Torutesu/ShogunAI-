@@ -284,14 +284,14 @@
   mix-blend-mode: difference;
 }
 .cursor-dot {
-  width: 7px;
-  height: 7px;
+  width: 6px;
+  height: 6px;
   background: #ffffff;
   transition: opacity 0.25s var(--ease-out-soft);
 }
 .cursor-ring {
-  width: 34px;
-  height: 34px;
+  width: 26px;
+  height: 26px;
   border: 1.5px solid #ffffff;
   transition:
     width 0.22s var(--ease-out-soft),
@@ -300,11 +300,11 @@
     opacity 0.25s var(--ease-out-soft);
 }
 .cursor-ring.is-hover {
-  width: 56px;
-  height: 56px;
+  width: 42px;
+  height: 42px;
   background: rgba(255, 255, 255, 0.12);
 }
 .cursor-ring.is-down {
-  width: 26px;
-  height: 26px;
+  width: 20px;
+  height: 20px;
 }
