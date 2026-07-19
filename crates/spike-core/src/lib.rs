@@ -10,6 +10,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 pub mod axcache;
+pub mod engine;
 pub mod geometry;
 pub mod hover;
 pub mod statemachine;

@@ -17,6 +17,7 @@ pub mod clock;
 pub mod cpu;
 pub mod digest;
 pub mod record;
+pub mod recorder;
 pub mod slo;
 pub mod stats;
 pub mod writer;
