@@ -104,8 +104,30 @@ pub fn read_process_cpu_ns() -> std::io::Result<u64> {
     if rc != 0 {
         return Err(std::io::Error::last_os_error());
     }
-    // ri_user_time / ri_system_time are already in nanoseconds on macOS.
-    Ok(info.ri_user_time.saturating_add(info.ri_system_time))
+    // IMPORTANT (research / osquery#7459): on Apple Silicon `ri_user_time` and
+    // `ri_system_time` are `mach_absolute_time` TICKS, not nanoseconds — treating them as
+    // ns yields a constant-factor-wrong CPU%. Convert with mach_timebase_info
+    // (ns = ticks * numer / denom). `mach_timebase_info` is a stable libSystem symbol; we
+    // declare it directly to avoid crate-symbol drift.
+    // MUST be validated on-device against Activity Monitor before trusting Q3-B (spec §4.2.3).
+    #[repr(C)]
+    #[derive(Default)]
+    struct MachTimebaseInfo {
+        numer: u32,
+        denom: u32,
+    }
+    extern "C" {
+        fn mach_timebase_info(info: *mut MachTimebaseInfo) -> c_int;
+    }
+    let mut tb = MachTimebaseInfo::default();
+    // SAFETY: `tb` is a valid, correctly sized out-parameter for mach_timebase_info.
+    let tb_rc = unsafe { mach_timebase_info(&mut tb) };
+    let ticks = info.ri_user_time.saturating_add(info.ri_system_time) as u128;
+    if tb_rc != 0 || tb.numer == 0 || tb.denom == 0 {
+        // Fall back to raw ticks (still monotonic) if the timebase is unavailable.
+        return Ok(ticks as u64);
+    }
+    Ok((ticks * tb.numer as u128 / tb.denom as u128) as u64)
 }
 
 #[cfg(test)]

@@ -32,7 +32,6 @@
     }
   },
   "bundle": {
-    "active": false,
-    "comment": "Phase 0 runs via `tauri dev` / unsigned release only; no bundling/notarization (spec §2.2)."
+    "active": false
   }
 }
