@@ -24,9 +24,9 @@ export function LanguageMenu({ current, label }: { current: Locale; label: strin
         type="button"
         aria-label={label}
         aria-haspopup="menu"
-        className="flex size-9 items-center justify-center rounded-full border border-border text-muted transition-colors hover:text-ink group-focus-within:text-ink"
+        className="flex size-9 items-center justify-center rounded-full border border-border text-muted transition-colors hover:border-ink/25 hover:text-ink group-focus-within:text-ink"
       >
-        <Globe className="size-4" />
+        <Globe className="size-4 transition-transform duration-500 group-hover:rotate-[24deg]" />
       </button>
       {/* pt-2 bridges the gap so hover doesn't drop */}
       <div className="invisible absolute right-0 top-full z-50 pt-2 opacity-0 transition-all duration-150 group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100">

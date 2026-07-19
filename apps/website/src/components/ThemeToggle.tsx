@@ -34,9 +34,13 @@ export function ThemeToggle() {
       type="button"
       onClick={toggle}
       aria-label="Toggle color theme"
-      className="flex size-9 items-center justify-center rounded-full border border-border text-muted transition-colors hover:text-ink"
+      className="group flex size-9 items-center justify-center rounded-full border border-border text-muted transition-colors hover:border-ink/25 hover:text-ink"
     >
-      {theme === 'dark' ? <Sun className="size-4" /> : <Moon className="size-4" />}
+      {theme === 'dark' ? (
+        <Sun className="size-4 transition-transform duration-500 group-hover:rotate-90" />
+      ) : (
+        <Moon className="size-4 transition-transform duration-500 group-hover:-rotate-12" />
+      )}
     </button>
   );
 }

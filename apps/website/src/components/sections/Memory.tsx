@@ -31,8 +31,8 @@ export function Memory({ t }: { t: Dictionary }) {
           </h2>
           <p className="mt-5 text-[17px] leading-relaxed text-muted">{m.body}</p>
           <Ticks items={m.points} />
-          <a href="#how" className="inline-flex items-center gap-1.5 text-[15px] font-medium text-accent hover:text-accent-strong">
-            {m.cta} <ArrowRight className="size-4" />
+          <a href="#how" className="group inline-flex items-center gap-1.5 text-[15px] font-medium text-accent hover:text-accent-strong">
+            {m.cta} <ArrowRight className="size-4 transition-transform duration-300 group-hover:translate-x-1" />
           </a>
         </Reveal>
 
