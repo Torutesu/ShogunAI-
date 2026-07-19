@@ -53,9 +53,18 @@ pub fn run() {
                 hover::start(tx);
                 std::thread::spawn(move || while rx.recv().is_ok() {});
 
-                // T-11: check Accessibility trust (prompts if needed). The AX cache walk
-                // (axcache::snapshot) runs on focus events once display wiring lands.
+                // T-11/T-12: check Accessibility trust, then snapshot the frontmost app's
+                // focused window through the tested walk policy (on-device this runs on every
+                // focus-change event, not once at startup).
                 eprintln!("[spike] accessibility trusted: {}", axcache::ax_trusted());
+                if let Some(pid) = display::frontmost_pid() {
+                    if let Some(r) = axcache::snapshot(pid, 250) {
+                        eprintln!(
+                            "[spike] ax snapshot: {} bytes, {} elements, depth {}, partial={}",
+                            r.text_bytes, r.elements_visited, r.depth_reached, r.partial
+                        );
+                    }
+                }
             }
             // on-device (T-08+): state-machine timers driving the panel, axcache AXObserver,
             // display watch, harness JSONL writer thread.
