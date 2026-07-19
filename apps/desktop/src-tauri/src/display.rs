@@ -6,4 +6,4 @@
 //! collapse on `willSleepNotification`; health-check 1000ms after wake. Pseudo-notch
 //! fullscreen visibility follows spec §3.8. Fullscreen-space detection has no public API
 //! (research item 12) — fall back to menubar-visibility change, note SPI option in findings.
-#![allow(dead_code)]
+#![allow(dead_code, unused_imports)]

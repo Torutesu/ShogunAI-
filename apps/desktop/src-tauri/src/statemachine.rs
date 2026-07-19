@@ -6,6 +6,6 @@
 //! `panel`, `Transition` via `ipc` (the webview `state` event), and `MarkExpandCommit` as
 //! the Q2 `t0` into the harness. Inputs come from `hover` (HoverSignal→Input) and from
 //! timer expiries. on-device (T-08).
-#![allow(dead_code)]
+#![allow(dead_code, unused_imports)]
 
 pub use spike_core::statemachine::{Effect, Input, Params, State, StateMachine, Timer};

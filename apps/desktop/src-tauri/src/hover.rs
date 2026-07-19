@@ -6,6 +6,6 @@
 //! normalises each point to NS, calls `HoverTracker::on_move/on_button_*`, and forwards the
 //! emitted `HoverSignal`s to `statemachine` over a channel. No allocation/log I/O in the
 //! tap callback (Q3 CPU budget). Requires Accessibility permission (research item 3).
-#![allow(dead_code)]
+#![allow(dead_code, unused_imports)]
 
 pub use spike_core::hover::{HoverParams, HoverSignal, HoverTracker};

@@ -7,4 +7,4 @@
 //! collectionBehavior `.canJoinAllSpaces | .fullScreenAuxiliary | .stationary | .ignoresCycle`,
 //! and the Expanded-sized fixed frame (spec §3.1.3). `ignoresMouseEvents` is toggled
 //! true in Idle/HoverIntent/Collapsing and false in Expanded.
-#![allow(dead_code)]
+#![allow(dead_code, unused_imports)]

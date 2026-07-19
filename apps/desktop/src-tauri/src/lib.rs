@@ -22,8 +22,18 @@ mod statemachine;
 pub fn run() {
     tauri::Builder::default()
         .setup(|_app| {
-            // on-device (T-05): panel::install(app)?; hover::start(...); axcache::start(...);
+            // T-06: read the real notch/pseudo geometry on the main thread and log it.
+            // on-device (T-05+): panel::install(app)?; hover::start(...); axcache::start(...);
             // display::start(...); harness JSONL writer thread.
+            #[cfg(target_os = "macos")]
+            if let Some(mtm) = objc2::MainThreadMarker::new() {
+                if let Some(g) = geometry::read_primary(mtm) {
+                    eprintln!(
+                        "[spike] geometry: notch={} notch_w={:.1} notch_h={:.1} menubar_h={:.1} screen={:.0}x{:.0}",
+                        g.is_notch, g.notch_w, g.notch_h, g.menubar_h, g.screen.w, g.screen.h
+                    );
+                }
+            }
             Ok(())
         })
         .run(tauri::generate_context!())

@@ -6,6 +6,6 @@
 //! →description; `AXUIElementSetMessagingTimeout` 100ms; 250ms timebox via `should_stop`),
 //! subscribes to NSWorkspace/AXObserver focus events, and updates the `RwLock<ContextCache>`.
 //! The state machine may only READ the cache — it must never trigger a walk (spec §3.10.3).
-#![allow(dead_code)]
+#![allow(dead_code, unused_imports)]
 
 pub use spike_core::axcache::{walk, AxNode, ContextCache, Limits, Role, WalkResult};

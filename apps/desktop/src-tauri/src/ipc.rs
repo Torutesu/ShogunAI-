@@ -5,4 +5,4 @@
 //! `focus_field`, `clock_sync_ack`. The webview's only jobs are class-swap, paint-done
 //! notification, and input forwarding (spec §3.11.2); no timers/state/cache in the webview.
 //! `context.text` is display-only and must never be echoed back or logged by the webview.
-#![allow(dead_code)]
+#![allow(dead_code, unused_imports)]
