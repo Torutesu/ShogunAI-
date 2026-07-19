@@ -68,11 +68,36 @@ export function StatusDashboard({ code }: { code: string }) {
     );
 
   return data.profileComplete ? (
-    <Tracking data={data} />
+    <Tracking data={data} code={code} />
   ) : (
     <Onboarding code={code} onDone={load} />
   );
 }
+
+type Rank = {
+  points: number;
+  rank: number | null;
+  totalWaiting: number | null;
+  joinPosition: number | null;
+  breakdown: Record<string, number>;
+  tier: { points: number; reward: string } | null;
+  nextTier: { points: number; reward: string; remaining: number } | null;
+  isTopReferrer: boolean;
+};
+
+const PTS_TIERS = [
+  { points: 300, reward: '1 month free' },
+  { points: 1000, reward: '3 months free' },
+  { points: 3000, reward: '6 months free' },
+];
+
+// Ways to climb — point values mirror lib/points.ts POINTS.
+const CLIMB: { key: string; label: string; points: number; hint: string }[] = [
+  { key: 'referral', label: 'Invite a friend', points: 100, hint: 'counts once they finish their profile' },
+  { key: 'quote', label: 'Quote-post the launch', points: 30, hint: 'add a comment + #ad' },
+  { key: 'follow_product', label: 'Follow ShogunAI on X', points: 10, hint: 'one-time' },
+  { key: 'follow_founder', label: 'Follow the founder on X', points: 10, hint: 'one-time' },
+];
 
 /* ---------- Step 1: thank-you + program + rewards + form ---------- */
 function Onboarding({ code, onDone }: { code: string; onDone: () => void }) {
@@ -117,12 +142,21 @@ function Onboarding({ code, onDone }: { code: string; onDone: () => void }) {
   );
 }
 
-/* ---------- Step 2: your link + tracking + gamification ---------- */
-function Tracking({ data }: { data: Status }) {
+/* ---------- Step 2: your link + points + rank gamification ---------- */
+function Tracking({ data, code }: { data: Status; code: string }) {
   const [copied, setCopied] = useState(false);
-  const count = data.qualifiedReferrals;
-  const next = data.nextTier;
-  const tierProgress = next ? Math.min(1, count / next.threshold) : 1;
+  const [rank, setRank] = useState<Rank | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    fetch(`/api/waitlist/rank?code=${encodeURIComponent(code)}`)
+      .then((r) => r.json())
+      .then((d) => alive && d.ok && setRank(d))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [code]);
 
   async function copyShare() {
     try {
@@ -134,6 +168,12 @@ function Tracking({ data }: { data: Status }) {
     }
   }
 
+  const points = rank?.points ?? 0;
+  const next = rank?.nextTier ?? null;
+  const prevPts = rank?.tier?.points ?? 0;
+  const segProgress = next ? Math.min(1, (points - prevPts) / (next.points - prevPts)) : 1;
+  const referralCount = Math.round((rank?.breakdown.referral ?? 0) / 100);
+
   return (
     <div className="mx-auto grid max-w-3xl gap-6">
       <div className="text-center">
@@ -141,16 +181,62 @@ function Tracking({ data }: { data: Status }) {
         <h1 className="mt-4 font-display text-[clamp(30px,4vw,44px)] font-semibold tracking-[-0.02em]">
           You’re in{data.nickname ? `, ${data.nickname}` : ''}
         </h1>
-        <p className="mx-auto mt-3 max-w-[46ch] text-[17px] leading-relaxed text-muted">
-          Share your link below. Every qualified referral moves you up the line and up the leaderboard.
+        <p className="mx-auto mt-3 max-w-[48ch] text-[17px] leading-relaxed text-muted">
+          You’re <span className="font-semibold text-ink">#{rank?.rank ?? '—'}</span>
+          {rank?.totalWaiting ? ` of ${rank.totalWaiting.toLocaleString()}` : ''}. Earn points to move up — invite
+          friends to jump, follow &amp; quote to nudge ahead.
         </p>
       </div>
+
+      {/* Points + Rank — the headline gamification */}
+      <Card className="grid items-center gap-6 sm:grid-cols-[auto_1fr]">
+        <RankRing position={rank?.rank ?? null} total={rank?.totalWaiting ?? null} points={points} />
+        <div className="grid gap-4">
+          <div className="flex items-baseline justify-between">
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-[0.08em] text-accent">Your points</div>
+              <div className="font-display text-[34px] font-semibold leading-none tabular-nums">
+                {points.toLocaleString()}
+              </div>
+            </div>
+            {rank?.isTopReferrer && (
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-sky-soft px-3 py-1 text-sm font-semibold text-accent-strong">
+                <Trophy className="size-3.5" /> Top 10
+              </span>
+            )}
+          </div>
+          {/* breakdown chips */}
+          <div className="flex flex-wrap gap-2">
+            {referralCount > 0 && <Chip>{referralCount} referrals · +{referralCount * 100}</Chip>}
+            {rank?.breakdown.form ? <Chip>Profile · +{rank.breakdown.form}</Chip> : null}
+            {rank?.breakdown.follow_product ? <Chip>Follow · +{rank.breakdown.follow_product}</Chip> : null}
+            {rank?.breakdown.follow_founder ? <Chip>Follow founder · +{rank.breakdown.follow_founder}</Chip> : null}
+            {rank?.breakdown.quote ? <Chip>Quote · +{rank.breakdown.quote}</Chip> : null}
+          </div>
+          <div>
+            <div className="mb-1.5 flex items-center justify-between text-sm">
+              <span className="font-medium text-ink">{rank?.tier ? `Unlocked: ${rank.tier.reward}` : 'Next reward'}</span>
+              {next && (
+                <span className="text-muted">
+                  {next.remaining.toLocaleString()} pts to {next.reward}
+                </span>
+              )}
+            </div>
+            <div className="h-2.5 overflow-hidden rounded-full bg-cloud">
+              <div
+                className="h-full rounded-full bg-accent [transition:width_0.8s_var(--ease-out-soft)]"
+                style={{ width: `${segProgress * 100}%` }}
+              />
+            </div>
+          </div>
+        </div>
+      </Card>
 
       {/* Your referral link */}
       <Card>
         <div className="mb-1 flex items-center gap-2">
           <Share2 className="size-4 text-accent" />
-          <p className="text-xs font-semibold uppercase tracking-[0.08em] text-accent">Your referral link</p>
+          <p className="text-xs font-semibold uppercase tracking-[0.08em] text-accent">Your referral link · +100 each</p>
         </div>
         <p className="text-sm text-muted">A referral counts once your invite completes their profile.</p>
         <div className="mt-4 flex flex-wrap gap-2.5">
@@ -164,68 +250,64 @@ function Tracking({ data }: { data: Status }) {
         </div>
       </Card>
 
-      {/* Rank + referrals — the gamification */}
-      <Card className="grid items-center gap-6 sm:grid-cols-[auto_1fr]">
-        <RankRing position={data.position} total={data.totalWaiting} />
-        <div className="grid gap-4">
-          <div className="flex items-baseline justify-between">
-            <div>
-              <div className="text-xs font-semibold uppercase tracking-[0.08em] text-accent">Your position</div>
-              <div className="text-sm text-muted">of {data.totalWaiting?.toLocaleString() ?? '—'} on the waitlist</div>
-            </div>
-            {data.leaderboardRank && (
-              <span className="inline-flex items-center gap-1.5 rounded-full bg-sky-soft px-3 py-1 text-sm font-semibold text-accent-strong">
-                <Trophy className="size-3.5" /> #{data.leaderboardRank}
-              </span>
-            )}
-          </div>
-          <div>
-            <div className="mb-1.5 flex items-center justify-between text-sm">
-              <span className="font-medium text-ink">
-                <span className="font-display text-lg font-semibold tabular-nums">{count}</span> qualified referrals
-              </span>
-              {next && (
-                <span className="text-muted">
-                  {next.remaining} to {next.label}
-                </span>
-              )}
-            </div>
-            <div className="h-2.5 overflow-hidden rounded-full bg-cloud">
+      {/* Ways to climb */}
+      <Card>
+        <p className="text-xs font-semibold uppercase tracking-[0.08em] text-accent">Ways to climb</p>
+        <h2 className="mb-3.5 mt-2.5 font-display text-2xl font-semibold">Every point moves you up</h2>
+        <div className="grid gap-2.5">
+          {CLIMB.map((c) => {
+            const earned = c.key === 'referral' ? referralCount > 0 : (rank?.breakdown[c.key] ?? 0) > 0;
+            return (
               <div
-                className="h-full rounded-full bg-accent [transition:width_0.8s_var(--ease-out-soft)]"
-                style={{ width: `${tierProgress * 100}%` }}
-              />
-            </div>
-          </div>
+                key={c.key}
+                className={`flex items-center gap-3.5 rounded-lg border px-4 py-3 ${
+                  earned ? 'border-[#bfeeff] bg-sky-soft' : 'border-border bg-surface'
+                }`}
+              >
+                <span
+                  className={`flex size-[34px] shrink-0 items-center justify-center rounded-full text-[13px] font-semibold ${
+                    earned ? 'bg-accent text-white' : 'bg-cloud text-accent-strong'
+                  }`}
+                >
+                  {earned ? <Check className="size-4" /> : `+${c.points}`}
+                </span>
+                <span className="min-w-0">
+                  <span className="block font-medium text-ink">{c.label}</span>
+                  <span className="block text-[13px] text-muted">{c.hint}</span>
+                </span>
+                <span className="ml-auto text-[13px] font-semibold tabular-nums text-accent">+{c.points}</span>
+              </div>
+            );
+          })}
         </div>
       </Card>
 
-      {/* Reward ladder — progress */}
+      {/* Reward ladder — in points, replacement not additive */}
       <Card>
         <p className="text-xs font-semibold uppercase tracking-[0.08em] text-accent">Rewards</p>
         <h2 className="mb-3.5 mt-2.5 font-display text-2xl font-semibold">
-          {data.tier ? `You’ve unlocked ${data.tier.label}` : 'Refer 3 to unlock your first reward'}
+          {rank?.tier ? `You’ve unlocked ${rank.tier.reward}` : 'Reach 300 pts for your first reward'}
         </h2>
         <div className="grid gap-2.5">
-          {TIERS.map((t) => {
-            const done = count >= t.threshold;
-            const isNext = !done && next?.threshold === t.threshold;
+          {PTS_TIERS.map((t) => {
+            const done = points >= t.points;
+            const isNext = !done && next?.points === t.points;
             return (
               <Rung
-                key={t.threshold}
+                key={t.points}
                 done={done}
                 next={isNext}
-                badge={done ? '✓' : String(t.threshold)}
-                label={t.label}
-                meta={done ? 'unlocked' : `${t.threshold - count} more`}
+                badge={done ? '✓' : `${t.points / 100}`}
+                label={`${t.reward}`}
+                meta={done ? 'unlocked' : `${(t.points - points).toLocaleString()} pts more`}
               />
             );
           })}
           <Rung
-            done={data.isTopReferrer}
+            done={!!rank?.isTopReferrer}
             badge={<Star className="size-3.5" />}
-            label="Top 10 referrers — 1 year free"
-            meta={data.isTopReferrer ? 'you’re in' : 'compete on the board'}
+            label="Top 10 by points — 1 year free"
+            meta={rank?.isTopReferrer ? 'you’re in' : 'compete on the board'}
           />
         </div>
       </Card>
@@ -240,8 +322,24 @@ function Tracking({ data }: { data: Status }) {
   );
 }
 
+function Chip({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="rounded-full border border-border bg-cloud px-2.5 py-1 text-[12px] font-medium text-muted">
+      {children}
+    </span>
+  );
+}
+
 /* ---------- shared bits ---------- */
-function RankRing({ position, total }: { position: number | null; total: number | null }) {
+function RankRing({
+  position,
+  total,
+  points,
+}: {
+  position: number | null;
+  total: number | null;
+  points?: number;
+}) {
   const pct = position && total && total > 0 ? Math.max(0, Math.min(1, 1 - position / total)) : 0;
   const topPct = position && total ? Math.max(1, Math.round((position / total) * 100)) : null;
   const r = 54;
@@ -267,7 +365,11 @@ function RankRing({ position, total }: { position: number | null; total: number 
         <div className="font-display text-[32px] font-semibold leading-none tabular-nums">
           {position ? `#${position.toLocaleString()}` : '—'}
         </div>
-        {topPct && <div className="mt-1 text-xs text-muted">Top {topPct}%</div>}
+        {points != null ? (
+          <div className="mt-1 text-xs text-muted tabular-nums">{points.toLocaleString()} pts</div>
+        ) : (
+          topPct && <div className="mt-1 text-xs text-muted">Top {topPct}%</div>
+        )}
       </div>
     </div>
   );
@@ -324,6 +426,7 @@ function ProfileForm({ code, onDone }: { code: string; onDone: () => void }) {
           a1: f.get('a1'),
           a2: f.get('a2'),
           a3: f.get('a3'),
+          xHandle: f.get('xHandle'),
         }),
       });
       const d = await res.json();
@@ -365,6 +468,10 @@ function ProfileForm({ code, onDone }: { code: string; onDone: () => void }) {
         <label className="grid gap-1.5 text-sm font-medium text-ink">
           What’s the biggest problem you’d hand to ShogunAI?
           <input name="a3" maxLength={200} required placeholder="The workflow you’d love gone" className={field} />
+        </label>
+        <label className="grid gap-1.5 text-sm font-medium text-ink">
+          X handle <span className="font-normal text-muted">— optional, unlocks follow &amp; quote points</span>
+          <input name="xHandle" maxLength={16} placeholder="@yourhandle" className={field} />
         </label>
         <Button type="submit" disabled={state === 'loading'}>
           {state === 'loading' ? <Loader2 className="size-4 animate-spin" /> : 'Get my referral link'}

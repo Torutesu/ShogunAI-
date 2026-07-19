@@ -34,6 +34,7 @@ export async function POST(req: Request) {
     a1: body.a1,
     a2: body.a2,
     a3: body.a3,
+    xHandle: body.xHandle,
   });
   if (!result) return fail('not_found');
 

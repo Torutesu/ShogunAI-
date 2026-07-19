@@ -83,10 +83,21 @@ export async function addParticipant(
  */
 export async function submitProfile(
   statusToken: string,
-  answers: { nickname?: unknown; a1?: unknown; a2?: unknown; a3?: unknown },
+  answers: { nickname?: unknown; a1?: unknown; a2?: unknown; a3?: unknown; xHandle?: unknown },
 ): Promise<{ row: Participant; justQualified: boolean } | null> {
   const row = await findByStatusToken(statusToken);
   if (!row) return null;
+
+  // Optional X handle (only holders earn social points). Set once; ignore a
+  // unique clash so a taken handle never fails the profile save.
+  const handle = normalizeHandle(answers.xHandle);
+  if (handle && handle !== row.xHandle) {
+    try {
+      await updateParticipant(row.id, { xHandle: handle });
+    } catch {
+      /* handle already taken — leave it unset */
+    }
+  }
 
   const nickname = sanitizeAnswer(answers.nickname)?.slice(0, 40) ?? null;
   const a1 = sanitizeAnswer(answers.a1);
