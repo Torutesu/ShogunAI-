@@ -1,0 +1,106 @@
+/* Spike UI. Idle sits flush under the notch; Expanded is a rounded panel below it.
+   Idle⇄Expanded is a DOM transform/opacity change only — the NSWindow never resizes
+   (spec §3.1.3), which is what keeps the Q2 100ms budget reachable. */
+
+:root {
+  --panel-w: 400px;
+  --panel-h: 180px;
+  --anim-expand: 120ms;
+  --anim-collapse: 160ms;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+  color: #f5f5f7;
+  user-select: none;
+}
+
+.notch {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.notch__idle-shell {
+  width: 180px;
+  height: 24px;
+  background: #000;
+  border-bottom-left-radius: 8px;
+  border-bottom-right-radius: 8px;
+}
+
+/* Expanded panel: pre-mounted, parked collapsed. Never display:none (spec §3.3) so the
+   layout is already computed when the state flips — expansion is transform+opacity only. */
+.notch__expanded {
+  width: var(--panel-w);
+  height: var(--panel-h);
+  margin-top: 0;
+  background: rgba(20, 20, 22, 0.92);
+  border-bottom-left-radius: 16px;
+  border-bottom-right-radius: 16px;
+  transform: scaleY(0.2);
+  transform-origin: top center;
+  opacity: 0;
+  pointer-events: none;
+  will-change: transform, opacity;
+  transition:
+    transform var(--anim-expand) cubic-bezier(0.32, 0.72, 0, 1),
+    opacity var(--anim-expand) ease;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+}
+
+.notch--expanded .notch__expanded {
+  transform: scaleY(1);
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.notch--collapsing .notch__expanded {
+  transition:
+    transform var(--anim-collapse) ease-in,
+    opacity var(--anim-collapse) ease-in;
+}
+
+.notch__actions {
+  display: flex;
+  gap: 8px;
+}
+
+.notch__actions button {
+  flex: 1;
+  padding: 10px;
+  border: none;
+  border-radius: 8px;
+  background: #2c2c2e;
+  color: #f5f5f7;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.notch__actions button:hover {
+  background: #3a3a3c;
+}
+
+.notch__preview {
+  font-size: 12px;
+  color: #a1a1a6;
+}
+
+.notch__preview--empty {
+  opacity: 0.5;
+}

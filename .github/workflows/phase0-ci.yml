@@ -1,0 +1,50 @@
+name: phase0-ci
+
+# Scoped to the Phase 0 spike (spike-harness crate + desktop shell). The macOS/arm64
+# build job is added in T-05 once apps/desktop/src-tauri's macOS deps (tauri-nspanel,
+# objc2) are wired in; until then those paths only build on-device.
+
+on:
+  push:
+    branches: ["**"]
+    paths:
+      - "crates/**"
+      - "apps/desktop/**"
+      - "Cargo.toml"
+      - ".github/workflows/phase0-ci.yml"
+  pull_request:
+    paths:
+      - "crates/**"
+      - "apps/desktop/**"
+      - "Cargo.toml"
+
+jobs:
+  harness:
+    name: spike-harness (clippy + test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: clippy (warnings deny via workspace lints)
+        run: cargo clippy -p spike-harness --all-targets
+      - name: test
+        run: cargo test -p spike-harness
+      - name: release build (SLO code path)
+        run: cargo build -p spike-harness --release
+
+  desktop-frontend:
+    name: desktop frontend (typecheck + build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @shogun-ai/desktop typecheck
+      - run: pnpm --filter @shogun-ai/desktop build:vite

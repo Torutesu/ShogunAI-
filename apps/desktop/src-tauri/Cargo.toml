@@ -1,0 +1,37 @@
+[package]
+name = "shogun-desktop-spike"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "SHOGUN Phase 0 notch-UI spike shell (throwaway; macOS/arm64 only)."
+
+# This crate only builds on macOS/arm64 (Tauri + AppKit). On Linux CI it is a workspace
+# member that resolves but is not built; `cargo test -p spike-harness` stays green.
+
+[lib]
+name = "shogun_desktop_spike_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["macos-private-api"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+spike-harness = { path = "../../../crates/spike-harness" }
+
+# --- Added on-device in T-01/T-05 (research: tauri-nspanel v2.1, objc2 0.3.2) ---
+# NSPanel-ification and AppKit access are macOS-only; kept out of the Linux resolution
+# graph until the on-device session wires them in. See docs/phase0-findings.md items 1,4,6.
+# [target.'cfg(target_os = "macos")'.dependencies]
+# tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2.1" }
+# objc2 = "0.3"
+# objc2-app-kit = "0.3"
+# objc2-core-graphics = "0.3"
+# accessibility-sys = "0.1"
+
+[lints]
+workspace = true

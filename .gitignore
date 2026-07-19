@@ -8,3 +8,10 @@ build/
 .DS_Store
 .env
 .env.local
+
+# Rust / Cargo (Phase 0 spike)
+/target/
+**/target/
+# Spike metrics output (JSONL); never commit captured/derived data
+/apps/desktop/src-tauri/gen/
+*.jsonl

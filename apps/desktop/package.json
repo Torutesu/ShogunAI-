@@ -2,5 +2,27 @@
   "name": "@shogun-ai/desktop",
   "version": "0.0.0",
   "private": true,
-  "description": "ShogunAI macOS app (Memory + Execution layers). Scaffold — not yet implemented."
+  "description": "ShogunAI macOS app — Phase 0 notch-UI spike shell (Tauri v2 + React/TS).",
+  "type": "module",
+  "scripts": {
+    "dev:vite": "vite",
+    "build:vite": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "tauri build"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "typescript": "^5.6.3",
+    "vite": "^6.0.3"
+  }
 }
