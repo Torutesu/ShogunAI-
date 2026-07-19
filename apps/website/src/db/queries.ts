@@ -13,6 +13,12 @@ export async function findByEmail(email: string): Promise<Participant | undefine
   return row;
 }
 
+/** Total number of people on the waitlist. Used for the live scarcity counter. */
+export async function countParticipants(): Promise<number> {
+  const [row] = await db.select({ n: sql<number>`count(*)::int` }).from(participants);
+  return row?.n ?? 0;
+}
+
 export async function findByRefCode(refCode: string): Promise<Participant | undefined> {
   const [row] = await db.select().from(participants).where(eq(participants.refCode, refCode)).limit(1);
   return row;

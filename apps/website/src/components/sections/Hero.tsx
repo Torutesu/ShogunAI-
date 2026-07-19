@@ -8,7 +8,19 @@ import type { Dictionary } from '@/i18n/dictionaries';
 
 type Invite = { inviter: string; tier: { label: string } | null } | null;
 
-export function Hero({ t, refCode, invite }: { t: Dictionary; refCode?: string; invite: Invite }) {
+const WAITLIST_GOAL = 10000;
+
+export function Hero({
+  t,
+  refCode,
+  invite,
+  joined = 900,
+}: {
+  t: Dictionary;
+  refCode?: string;
+  invite: Invite;
+  joined?: number;
+}) {
   return (
     <section className="relative overflow-hidden pt-14 isolate">
       {/* Sky backdrop + drifting orbs */}
@@ -49,8 +61,12 @@ export function Hero({ t, refCode, invite }: { t: Dictionary; refCode?: string; 
           <p className="mt-4 text-xs text-muted">{t.hero.note}</p>
         </Reveal>
 
+        <Reveal delay={0.18}>
+          <Scarcity t={t} joined={joined} />
+        </Reveal>
+
         <Reveal delay={0.2}>
-          <Badges />
+          <Badges t={t} />
         </Reveal>
 
         <Reveal delay={0.25} y={28}>
@@ -60,6 +76,49 @@ export function Hero({ t, refCode, invite }: { t: Dictionary; refCode?: string; 
         </Reveal>
       </div>
     </section>
+  );
+}
+
+function Scarcity({ t, joined }: { t: Dictionary; joined: number }) {
+  const pct = Math.min(100, Math.round((joined / WAITLIST_GOAL) * 100));
+  const dots = ['#00a6f4', '#f0b232', '#eb459e', '#23a55a', '#5865F2'];
+  return (
+    <div className="mx-auto mt-8 max-w-[420px]">
+      <div className="mb-2.5 flex items-center justify-center gap-2">
+        <span className="inline-flex items-center gap-1.5 rounded-full border border-[#bfeeff] bg-sky-soft px-2.5 py-1 text-[11px] font-semibold text-accent-strong">
+          <span className="relative flex size-1.5">
+            <span className="absolute inline-flex size-full animate-ping rounded-full bg-accent opacity-70" />
+            <span className="relative inline-flex size-1.5 rounded-full bg-accent" />
+          </span>
+          {t.scarcity.limited}
+        </span>
+      </div>
+      <div className="flex items-center justify-center gap-2.5">
+        <div className="flex -space-x-2">
+          {dots.map((c, i) => (
+            <span
+              key={i}
+              className="size-6 rounded-full border-2 border-bg"
+              style={{ background: c }}
+              aria-hidden="true"
+            />
+          ))}
+        </div>
+        <p className="text-sm text-muted">
+          <CountUp value={joined} className="font-display text-[15px] font-semibold tabular-nums text-ink" />{' '}
+          {t.scarcity.joinedSuffix}
+        </p>
+      </div>
+      <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-border">
+        <div
+          className="h-full rounded-full bg-gradient-to-r from-accent to-accent-strong transition-[width] duration-700 ease-out"
+          style={{ width: `${Math.max(pct, 3)}%` }}
+        />
+      </div>
+      <p className="mt-2 text-[11px] text-faint">
+        {pct}% {t.scarcity.goalLabel}
+      </p>
+    </div>
   );
 }
 

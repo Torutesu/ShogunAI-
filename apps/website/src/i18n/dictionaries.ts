@@ -57,6 +57,7 @@ const en = {
       ['How do referrals qualify?', 'A referral counts once your invite completes their profile — the anti-spam filter. Rewards replace each other; they don’t stack.'],
       ['Can I bring my own keys?', 'Yes. BYOK is supported, so you stay in control of models and data.'],
       ['How is it different from meeting recorders?', 'It’s not one tool for one moment — it’s your whole day, and it acts on it.'],
+      ['Where is my data stored?', 'On your machine. Memory is captured and stored locally by default — there’s no cloud copy unless you explicitly enable one.'],
     ] as [string, string][],
   },
   memory: {
@@ -246,6 +247,61 @@ const en = {
       { h: 'Contact', p: 'Questions? Reach us at hello@shogunai.com.' },
     ],
   },
+  authority: {
+    label: 'Backed & recognized',
+    items: [
+      { tone: 'yc', mark: 'Y', top: 'Backed by', brand: 'Y Combinator' },
+      { tone: 'ph', mark: 'P', top: 'Coming soon on', brand: 'Product Hunt' },
+      { tone: 'award', mark: '★', top: 'Winner', brand: 'YC RFS Hackathon 2026' },
+    ] as { tone: string; mark: string; top: string; brand: string }[],
+  },
+  scarcity: {
+    limited: 'First 10,000 only',
+    joinedSuffix: 'builders already joined',
+    goalLabel: 'of 10,000 early-access spots claimed',
+  },
+  usecases: {
+    eyebrow: 'Use cases',
+    title: 'One memory. Every way you work.',
+    sub: 'The same quiet memory, put to work for how you actually operate.',
+    items: [
+      {
+        persona: 'For founders',
+        title: 'Never lose an investor thread',
+        body: 'Ask what an investor wanted and get the answer pulled from last week’s call — with the follow-up already drafted.',
+        chip: 'Recall + draft',
+        q: 'What did Accel ask for on our last call?',
+        a: 'The Q3 cohort data and a revised model. Follow-up email drafted — review & send.',
+      },
+      {
+        persona: 'For engineers',
+        title: 'Standups write themselves',
+        body: 'Your update comes from what you actually shipped — PRs, commits, decisions — not what you half-remember.',
+        chip: 'Auto standup',
+        q: 'Write my standup for today.',
+        a: 'Yesterday: merged the auth refactor, fixed 3 flaky tests. Today: ship the rate-limiter. Blockers: none.',
+      },
+      {
+        persona: 'For operators',
+        title: 'Walk into every 1:1 prepared',
+        body: 'It surfaces what you discussed last time and the threads still open — so nothing slips between meetings.',
+        chip: 'Meeting prep',
+        q: 'Prep me for my 1:1 with Sam.',
+        a: 'Last time you agreed to revisit pricing tiers. Still open: hiring-plan sign-off, Q3 OKRs.',
+      },
+    ] as { persona: string; title: string; body: string; chip: string; q: string; a: string }[],
+  },
+  privacy: {
+    eyebrow: 'Privacy',
+    title: 'Your day never leaves your machine.',
+    body: 'ShogunAI is local-first by design. Memory is captured and stored on your device — not our servers. Bring your own model keys, and decide what is ever shared.',
+    points: [
+      { title: 'Local-first', body: 'Capture and storage happen on-device by default.' },
+      { title: 'Private by default', body: 'No cloud copy of your memory unless you turn it on.' },
+      { title: 'Bring your own keys', body: 'Your models, your data, your control — BYOK supported.' },
+    ],
+    cta: 'Read our privacy approach →',
+  },
 };
 
 export type Dictionary = typeof en;
@@ -303,6 +359,7 @@ const ja: Dictionary = {
       ['紹介の「有効」とは?', '招待した相手がプロフィールを完了すると1紹介に。スパム対策です。特典は置換式で、加算されません。'],
       ['BYOK は可能?', 'はい。自分の鍵を使えるので、モデルとデータの主導権はあなたに。'],
       ['会議レコーダーとの違いは?', '一瞬のための1ツールではなく、一日全部。そしてそれに基づいて行動します。'],
+      ['データはどこに保存される?', 'あなたのデバイス上です。メモリは既定でローカルに取得・保存され、明示的に有効化しない限りクラウドに複製されません。'],
     ] as [string, string][],
   },
   memory: {
@@ -491,6 +548,61 @@ const ja: Dictionary = {
       { h: 'お問い合わせ', p: 'ご質問は hello@shogunai.com まで。' },
     ],
   },
+  authority: {
+    label: '評価と実績',
+    items: [
+      { tone: 'yc', mark: 'Y', top: 'Backed by', brand: 'Y Combinator' },
+      { tone: 'ph', mark: 'P', top: 'まもなく公開', brand: 'Product Hunt' },
+      { tone: 'award', mark: '★', top: '優勝', brand: 'YC RFS Hackathon 2026' },
+    ],
+  },
+  scarcity: {
+    limited: '先着1万人限定',
+    joinedSuffix: '人が参加中',
+    goalLabel: '／ アーリーアクセス枠1万人',
+  },
+  usecases: {
+    eyebrow: 'ユースケース',
+    title: 'ひとつのメモリ、あらゆる働き方に。',
+    sub: '静かに貯まる同じメモリが、あなたの実際の働き方に合わせて動きます。',
+    items: [
+      {
+        persona: '創業者向け',
+        title: '投資家とのやり取りを取りこぼさない',
+        body: '「あの投資家は何を求めていた？」と聞けば、先週の通話から答えを引き出し、フォローアップの下書きまで用意します。',
+        chip: 'リコール＋下書き',
+        q: '前回のAccelとの通話、何を求められてた？',
+        a: 'Q3のコホートデータと修正版モデルです。フォローアップのメール下書きを用意しました。確認して送信を。',
+      },
+      {
+        persona: 'エンジニア向け',
+        title: 'スタンドアップが自動で書ける',
+        body: '「覚えている内容」ではなく、実際に出したPR・コミット・決定から、あなたの進捗報告を作ります。',
+        chip: '自動スタンドアップ',
+        q: '今日のスタンドアップを書いて。',
+        a: '昨日: 認証リファクタをマージ、不安定なテスト3件を修正。今日: レートリミッタを出荷。ブロッカー: なし。',
+      },
+      {
+        persona: 'オペレーター向け',
+        title: 'どの1on1にも準備万端で臨む',
+        body: '前回話した内容と、まだ開いたままのスレッドを先回りで提示。会議の間で抜け落ちるものをなくします。',
+        chip: '会議準備',
+        q: 'Samとの1on1、準備して。',
+        a: '前回は料金ティアを再検討する約束でした。未対応: 採用計画の承認、Q3のOKR。',
+      },
+    ],
+  },
+  privacy: {
+    eyebrow: 'プライバシー',
+    title: 'あなたの1日は、デバイスの外に出ません。',
+    body: 'ShogunAIは設計からローカルファースト。メモリは私たちのサーバーではなく、あなたのデバイス上で取得・保存されます。モデルキーは持ち込み式、共有する範囲もあなたが決めます。',
+    points: [
+      { title: 'ローカルファースト', body: '取得と保存は既定でデバイス上。' },
+      { title: 'プライベート既定', body: '有効化しない限り、メモリのクラウド複製はありません。' },
+      { title: 'キー持ち込み対応', body: 'モデルもデータもあなたの管理下（BYOK対応）。' },
+    ],
+    cta: 'プライバシーの考え方を読む →',
+  },
 };
 
 const es: Dictionary = {
@@ -546,6 +658,7 @@ const es: Dictionary = {
       ['¿Cómo se validan las referencias?', 'Una referencia cuenta cuando tu invitado completa su perfil — el filtro anti-spam. Las recompensas se reemplazan; no se acumulan.'],
       ['¿Puedo usar mis propias claves?', 'Sí. BYOK es compatible, así mantienes el control de los modelos y los datos.'],
       ['¿En qué se diferencia de los grabadores de reuniones?', 'No es una herramienta para un solo momento — es todo tu día, y actúa sobre él.'],
+      ['¿Dónde se guardan mis datos?', 'En tu equipo. La memoria se captura y almacena localmente por defecto — no hay copia en la nube salvo que la actives explícitamente.'],
     ] as [string, string][],
   },
   memory: {
@@ -706,6 +819,61 @@ const es: Dictionary = {
       { h: 'Contacto', p: '¿Preguntas? Escríbenos a hello@shogunai.com.' },
     ],
   },
+  authority: {
+    label: 'Respaldado y reconocido',
+    items: [
+      { tone: 'yc', mark: 'Y', top: 'Respaldado por', brand: 'Y Combinator' },
+      { tone: 'ph', mark: 'P', top: 'Muy pronto en', brand: 'Product Hunt' },
+      { tone: 'award', mark: '★', top: 'Ganador', brand: 'YC RFS Hackathon 2026' },
+    ],
+  },
+  scarcity: {
+    limited: 'Solo los primeros 10 000',
+    joinedSuffix: 'builders ya se han unido',
+    goalLabel: 'de 10 000 plazas de acceso anticipado',
+  },
+  usecases: {
+    eyebrow: 'Casos de uso',
+    title: 'Una memoria. Todas tus formas de trabajar.',
+    sub: 'La misma memoria silenciosa, al servicio de cómo trabajas de verdad.',
+    items: [
+      {
+        persona: 'Para fundadores',
+        title: 'Nunca pierdas el hilo con un inversor',
+        body: 'Pregunta qué quería un inversor y obtén la respuesta de la llamada de la semana pasada — con el seguimiento ya redactado.',
+        chip: 'Recall + borrador',
+        q: '¿Qué pidió Accel en nuestra última llamada?',
+        a: 'Los datos de la cohorte del Q3 y un modelo revisado. Correo de seguimiento redactado — revisa y envía.',
+      },
+      {
+        persona: 'Para ingenieros',
+        title: 'Los standups se escriben solos',
+        body: 'Tu update sale de lo que realmente entregaste — PRs, commits, decisiones — no de lo que recuerdas a medias.',
+        chip: 'Standup automático',
+        q: 'Escribe mi standup de hoy.',
+        a: 'Ayer: fusioné el refactor de auth, arreglé 3 tests inestables. Hoy: lanzar el rate-limiter. Bloqueos: ninguno.',
+      },
+      {
+        persona: 'Para operadores',
+        title: 'Llega preparado a cada 1:1',
+        body: 'Muestra lo que hablaste la última vez y los hilos aún abiertos — para que nada se pierda entre reuniones.',
+        chip: 'Preparar reunión',
+        q: 'Prepárame para mi 1:1 con Sam.',
+        a: 'La última vez acordaron revisar los niveles de precios. Pendiente: aprobar el plan de contratación, OKR del Q3.',
+      },
+    ],
+  },
+  privacy: {
+    eyebrow: 'Privacidad',
+    title: 'Tu día nunca sale de tu equipo.',
+    body: 'ShogunAI es local-first por diseño. La memoria se captura y guarda en tu dispositivo, no en nuestros servidores. Trae tus propias claves de modelo y decide qué se comparte.',
+    points: [
+      { title: 'Local-first', body: 'La captura y el almacenamiento ocurren en el dispositivo por defecto.' },
+      { title: 'Privado por defecto', body: 'Sin copia en la nube de tu memoria a menos que la actives.' },
+      { title: 'Trae tus claves', body: 'Tus modelos, tus datos, tu control (BYOK).' },
+    ],
+    cta: 'Lee nuestro enfoque de privacidad →',
+  },
 };
 
 const de: Dictionary = {
@@ -761,6 +929,7 @@ const de: Dictionary = {
       ['Wie qualifizieren sich Empfehlungen?', 'Eine Empfehlung zählt, sobald dein Eingeladener sein Profil abschließt — der Anti-Spam-Filter. Belohnungen ersetzen einander; sie stapeln nicht.'],
       ['Kann ich eigene Keys nutzen?', 'Ja. BYOK wird unterstützt, du behältst die Kontrolle über Modelle und Daten.'],
       ['Wie unterscheidet es sich von Meeting-Recordern?', 'Es ist kein Werkzeug für einen Moment — es ist dein ganzer Tag, und es handelt danach.'],
+      ['Wo werden meine Daten gespeichert?', 'Auf deinem Gerät. Das Gedächtnis wird standardmäßig lokal erfasst und gespeichert — es gibt keine Cloud-Kopie, außer du aktivierst sie ausdrücklich.'],
     ] as [string, string][],
   },
   memory: {
@@ -920,6 +1089,61 @@ const de: Dictionary = {
       { h: 'Deine Optionen', p: 'Platzhalter-Abschnitt. Durch echten Inhalt ersetzen.' },
       { h: 'Kontakt', p: 'Fragen? Schreib uns an hello@shogunai.com.' },
     ],
+  },
+  authority: {
+    label: 'Unterstützt & ausgezeichnet',
+    items: [
+      { tone: 'yc', mark: 'Y', top: 'Unterstützt von', brand: 'Y Combinator' },
+      { tone: 'ph', mark: 'P', top: 'Bald auf', brand: 'Product Hunt' },
+      { tone: 'award', mark: '★', top: 'Gewinner', brand: 'YC RFS Hackathon 2026' },
+    ],
+  },
+  scarcity: {
+    limited: 'Nur die ersten 10.000',
+    joinedSuffix: 'Builder sind bereits dabei',
+    goalLabel: 'von 10.000 Early-Access-Plätzen',
+  },
+  usecases: {
+    eyebrow: 'Anwendungsfälle',
+    title: 'Ein Gedächtnis. Für jede Art zu arbeiten.',
+    sub: 'Dasselbe stille Gedächtnis, eingesetzt für die Art, wie du wirklich arbeitest.',
+    items: [
+      {
+        persona: 'Für Gründer',
+        title: 'Verliere nie den Faden zu Investoren',
+        body: 'Frag, was ein Investor wollte, und erhalte die Antwort aus dem Call der letzten Woche — samt bereits entworfenem Follow-up.',
+        chip: 'Recall + Entwurf',
+        q: 'Was wollte Accel in unserem letzten Call?',
+        a: 'Die Q3-Kohortendaten und ein überarbeitetes Modell. Follow-up-Mail entworfen — prüfen & senden.',
+      },
+      {
+        persona: 'Für Engineers',
+        title: 'Standups schreiben sich von selbst',
+        body: 'Dein Update stammt aus dem, was du tatsächlich geliefert hast — PRs, Commits, Entscheidungen — nicht aus vager Erinnerung.',
+        chip: 'Auto-Standup',
+        q: 'Schreib mein Standup für heute.',
+        a: 'Gestern: Auth-Refactor gemergt, 3 instabile Tests gefixt. Heute: Rate-Limiter ausliefern. Blocker: keine.',
+      },
+      {
+        persona: 'Für Operators',
+        title: 'Komm zu jedem 1:1 vorbereitet',
+        body: 'Es zeigt, was ihr zuletzt besprochen habt und welche Fäden noch offen sind — damit nichts zwischen Meetings verloren geht.',
+        chip: 'Meeting-Prep',
+        q: 'Bereite mich auf mein 1:1 mit Sam vor.',
+        a: 'Zuletzt wolltet ihr die Preis-Tiers überprüfen. Offen: Freigabe des Hiring-Plans, Q3-OKRs.',
+      },
+    ],
+  },
+  privacy: {
+    eyebrow: 'Datenschutz',
+    title: 'Dein Tag verlässt nie dein Gerät.',
+    body: 'ShogunAI ist von Grund auf local-first. Das Gedächtnis wird auf deinem Gerät erfasst und gespeichert — nicht auf unseren Servern. Bring deine eigenen Modell-Keys mit und entscheide, was je geteilt wird.',
+    points: [
+      { title: 'Local-first', body: 'Erfassung und Speicherung erfolgen standardmäßig auf dem Gerät.' },
+      { title: 'Privat per Voreinstellung', body: 'Keine Cloud-Kopie deines Gedächtnisses, außer du aktivierst sie.' },
+      { title: 'Eigene Keys', body: 'Deine Modelle, deine Daten, deine Kontrolle (BYOK).' },
+    ],
+    cta: 'Unser Datenschutz-Ansatz →',
   },
 };
 
