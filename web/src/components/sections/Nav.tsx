@@ -1,18 +1,23 @@
-import { Menu } from 'lucide-react';
+import { ChevronDown, Menu } from 'lucide-react';
 import { Logo } from '@/components/Logo';
-import { LocaleToggle } from '@/components/LocaleToggle';
+import { LanguageMenu } from '@/components/LanguageMenu';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { Button } from '@/components/ui/button';
 import { getI18n } from '@/i18n/server';
 
 export async function Nav() {
   const { locale, t } = await getI18n();
-  const links = [
+
+  const features = [
     { href: '/#memory', label: t.nav.memory },
     { href: '/#action', label: t.nav.action },
     { href: '/#testimonials', label: t.nav.testimonials },
     { href: '/#faq', label: t.nav.faq },
+  ];
+  const primary = [
+    { href: '/#how', label: t.nav.how },
     { href: '/#pricing', label: t.nav.pricing },
+    { href: '/blog', label: t.nav.blog },
   ];
 
   return (
@@ -24,7 +29,31 @@ export async function Nav() {
         </a>
 
         <nav aria-label="Primary" className="hidden items-center gap-7 md:flex">
-          {links.map((l) => (
+          {/* Features dropdown */}
+          <div className="group relative">
+            <button
+              type="button"
+              className="flex items-center gap-1 text-sm font-medium text-muted transition-colors hover:text-ink group-focus-within:text-ink"
+            >
+              {t.nav.features}
+              <ChevronDown className="size-3.5 transition-transform group-hover:rotate-180" />
+            </button>
+            <div className="invisible absolute left-1/2 top-full z-50 -translate-x-1/2 pt-3 opacity-0 transition-all duration-150 group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100">
+              <div className="min-w-[180px] rounded-2xl border border-border bg-surface p-2 shadow-[var(--shadow-float)]">
+                {features.map((f) => (
+                  <a
+                    key={f.href}
+                    href={f.href}
+                    className="block rounded-lg px-3 py-2 text-sm font-medium text-muted transition-colors hover:bg-cloud hover:text-ink"
+                  >
+                    {f.label}
+                  </a>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {primary.map((l) => (
             <a
               key={l.href}
               href={l.href}
@@ -37,10 +66,7 @@ export async function Nav() {
 
         <div className="flex items-center gap-2.5">
           <ThemeToggle />
-          <LocaleToggle locale={locale} label={t.nav.langLabel} />
-          <Button asChild variant="secondary" size="sm" className="hidden sm:inline-flex">
-            <a href="/#get-started">{t.nav.signIn}</a>
-          </Button>
+          <LanguageMenu current={locale} label={t.nav.langLabel} />
           <Button asChild size="sm" className="hidden sm:inline-flex">
             <a href="/#get-started">{t.nav.getStarted}</a>
           </Button>
@@ -51,12 +77,12 @@ export async function Nav() {
               <Menu className="size-5" aria-label="Menu" />
             </summary>
             <div className="absolute right-0 top-11 w-52 rounded-xl border border-border bg-surface p-2 shadow-[var(--shadow-float)]">
-              {links.map((l) => (
+              {[...features, ...primary].map((l) => (
                 <a key={l.href} href={l.href} className="block rounded-lg px-3 py-2 text-sm font-medium text-ink hover:bg-cloud">
                   {l.label}
                 </a>
               ))}
-              <a href="/#get-started" className="mt-1 block rounded-lg bg-ink px-3 py-2 text-center text-sm font-medium text-cloud">
+              <a href="/#get-started" className="mt-1 block rounded-lg bg-ink px-3 py-2 text-center text-sm font-medium text-on-ink">
                 {t.nav.getStarted}
               </a>
             </div>
