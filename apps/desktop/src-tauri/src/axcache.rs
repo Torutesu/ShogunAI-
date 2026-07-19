@@ -12,7 +12,7 @@
 pub use spike_core::axcache::{walk, AxNode, ContextCache, Limits, Role, WalkResult};
 
 #[cfg(target_os = "macos")]
-pub use mac::{ax_trusted, snapshot};
+pub use mac::{ax_call_count, ax_trusted, snapshot};
 
 #[cfg(target_os = "macos")]
 mod mac {
@@ -31,6 +31,17 @@ mod mac {
     use core_foundation_sys::string::{CFStringGetTypeID, CFStringRef};
 
     use spike_core::axcache::{walk, AxNode, Limits, Role, WalkResult};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// Total AX attribute-copy calls since launch. The harness heartbeat records this and
+    /// the "no collect-on-press" proof asserts it doesn't grow during Expanded spans
+    /// except via focus events (spec §3.10.3).
+    static AX_CALLS: AtomicU64 = AtomicU64::new(0);
+
+    /// Read the cumulative AX call counter.
+    pub fn ax_call_count() -> u64 {
+        AX_CALLS.load(Ordering::Relaxed)
+    }
 
     /// A retained AXUIElement. Clone = CFRetain, Drop = CFRelease.
     pub struct AxElement(AXUIElementRef);
@@ -54,6 +65,7 @@ mod mac {
 
     /// Copy a string attribute (None if absent or not a CFString).
     unsafe fn copy_string(el: AXUIElementRef, name: &str) -> Option<String> {
+        AX_CALLS.fetch_add(1, Ordering::Relaxed);
         let cf_name = CFString::new(name);
         let mut value: CFTypeRef = std::ptr::null();
         // SAFETY: valid element + attribute name; out-pointer is a CFTypeRef slot.
@@ -73,7 +85,11 @@ mod mac {
     }
 
     /// Copy an element-valued attribute (create rule → owned AxElement).
+    /// The returned element gets the 100ms messaging timeout — the timeout is
+    /// per-element, so setting it only on the app element leaves children at the ~6s
+    /// default and one hung node can blow the 300ms cache budget (review #7).
     unsafe fn copy_element(el: AXUIElementRef, name: &str) -> Option<AxElement> {
+        AX_CALLS.fetch_add(1, Ordering::Relaxed);
         let cf_name = CFString::new(name);
         let mut value: CFTypeRef = std::ptr::null();
         // SAFETY: as above.
@@ -81,11 +97,16 @@ mod mac {
         if err != kAXErrorSuccess || value.is_null() {
             return None;
         }
-        Some(AxElement(value as AXUIElementRef))
+        let el = value as AXUIElementRef;
+        // SAFETY: valid element; 0.1s per-message timeout (spec §3.10.2).
+        unsafe { AXUIElementSetMessagingTimeout(el, 0.1) };
+        Some(AxElement(el))
     }
 
-    /// Copy the children array as owned AxElements (each retained).
+    /// Copy the children array as owned AxElements (each retained, each with the 100ms
+    /// messaging timeout — see copy_element).
     unsafe fn copy_children(el: AXUIElementRef) -> Vec<AxElement> {
+        AX_CALLS.fetch_add(1, Ordering::Relaxed);
         let cf_name = CFString::new(kAXChildrenAttribute);
         let mut value: CFTypeRef = std::ptr::null();
         // SAFETY: as above.
@@ -107,6 +128,7 @@ mod mac {
                 if !child.is_null() {
                     // Array holds borrowed refs (get rule) — retain to own.
                     CFRetain(child as CFTypeRef);
+                    AXUIElementSetMessagingTimeout(child, 0.1);
                     out.push(AxElement(child));
                 }
             }

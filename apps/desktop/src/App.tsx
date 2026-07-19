@@ -4,7 +4,8 @@ import { invoke } from "@tauri-apps/api/core";
 
 // Mirror of the closed IPC contract (spec §3.11.2). The webview does exactly three things:
 // class-swap on `state`, paint-done notification (rAF×2 → `painted`), and input forwarding
-// (`interact`). No timers, no state machine, no cache here (data centre of gravity is Rust).
+// (`interact` / `collapse_request` / `anim_done` / `clock_sync_ack`). No timers, no state
+// machine, no cache here (data centre of gravity is Rust).
 
 type UiState = "idle" | "hoverintent" | "expanded" | "collapsing";
 
@@ -19,6 +20,11 @@ interface ContextPayload {
   text: string;
   captured_at_ms: number;
   partial: boolean;
+}
+
+interface ClockSyncPayload {
+  seq: number;
+  rust_mono_ns: number;
 }
 
 /**
@@ -57,17 +63,51 @@ export function App(): JSX.Element {
       }),
     );
 
+    // Clock-sync round trip (spec §4.1): answer each ping with performance.now() so Rust
+    // can estimate the JS↔Rust offset from the minimum-RTT sample.
+    unlisteners.push(
+      listen<ClockSyncPayload>("clock_sync", (e) => {
+        void invoke("clock_sync_ack", { seq: e.payload.seq, jsPerfMs: performance.now() });
+      }),
+    );
+
+    // Esc → T4b collapse (delivered only while the panel is key; harmless otherwise).
+    const onKeyDown = (e: KeyboardEvent): void => {
+      if (e.key === "Escape" && stateRef.current === "expanded") {
+        void invoke("collapse_request", { reason: "esc" });
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+
     return () => {
+      window.removeEventListener("keydown", onKeyDown);
       unlisteners.forEach((p) => void p.then((off) => off()));
     };
   }, []);
 
   // Dummy Expanded content: three static action buttons + a context preview fed by the
   // real AX cache (spec §2.1 item 6). Buttons forward interactions for the Q4 tally.
+  // A click on the transparent margin (outside the visible panel) is T4c.
   return (
-    <div className={`notch notch--${uiState}`}>
+    <div
+      className={`notch notch--${uiState}`}
+      onClick={(e) => {
+        if (e.target === e.currentTarget && stateRef.current === "expanded") {
+          void invoke("collapse_request", { reason: "outside_click" });
+        }
+      }}
+    >
       <div className="notch__idle-shell" />
-      <div className="notch__expanded">
+      <div
+        className="notch__expanded"
+        onTransitionEnd={(e) => {
+          // T6: report collapse-animation completion (property filter keeps the two
+          // transition properties from double-firing — transform is the driver).
+          if (e.propertyName === "transform" && stateRef.current === "collapsing") {
+            void invoke("anim_done", { state: "collapsing" });
+          }
+        }}
+      >
         <div className="notch__actions">
           <button type="button" onClick={() => void invoke("interact", { kind: "click" })}>
             Action 1

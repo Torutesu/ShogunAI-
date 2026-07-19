@@ -1,24 +1,32 @@
 //! Hover adapter (spec §3.4). Event-driven; polling forbidden.
 //!
-//! The judgement lives in `spike_core::hover::HoverTracker` (early-reject, 16ms coalesce,
-//! velocity/fast-dwell, menu/drag suppression — unit-tested on Linux). This adapter runs a
-//! listen-only CGEventTap (`kCGEventMouseMoved`, research item 2) on a dedicated CFRunLoop
-//! thread and forwards raw pointer samples. on-device (T-07): the consumer normalises each
-//! point to NS (`geometry::cg_to_ns`), feeds `HoverTracker`, and routes the emitted
-//! `HoverSignal`s to `statemachine`. No allocation/log I/O in the tap callback (Q3 CPU).
-//! Requires Accessibility permission (research item 3).
+//! The judgement lives in `spike_core::hover::HoverTracker` (unit-tested on Linux). This
+//! adapter runs a listen-only CGEventTap on a dedicated CFRunLoop thread and forwards
+//! [`TapEvent`]s. Design points (review findings #1/#3/#8 + spec §3.4.1):
+//! - Mask covers MouseMoved AND LeftMouseDown/Up/Dragged so drag/menu suppression and the
+//!   ButtonDown cancel actually receive their inputs.
+//! - Early reject happens IN the tap callback: moves outside the top band are dropped
+//!   (with one edge sample sent on band exit so the tracker sees the leave), keeping the
+//!   per-mouse-event cost near zero during ordinary use (Q3 CPU budget).
+//! - `TapDisabledByTimeout`/`ByUserInput` are handled: the tap is re-enabled and the
+//!   incident is surfaced as `TapEvent::Status` (a dead tap must never be silent).
+//! - Missing Accessibility permission retries every 3s instead of parking forever, so
+//!   granting permission recovers without an app restart.
 #![allow(dead_code, unused_imports)]
 
 pub use spike_core::hover::{HoverParams, HoverSignal, HoverTracker};
 
 #[cfg(target_os = "macos")]
-pub use mac::{start, MouseSample};
+pub use mac::{start, TapEvent};
 
 #[cfg(target_os = "macos")]
 mod mac {
+    use std::cell::Cell;
     use std::ffi::c_void;
     use std::ptr::NonNull;
+    use std::sync::atomic::{AtomicPtr, Ordering};
     use std::sync::mpsc::Sender;
+    use std::time::Duration;
 
     use objc2_core_foundation::{kCFRunLoopCommonModes, CFMachPort, CFRunLoop};
     use objc2_core_graphics::{
@@ -26,53 +34,120 @@ mod mac {
         CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement, CGEventTapProxy, CGEventType,
     };
 
-    /// A raw pointer sample from the tap, in CGEvent (top-left origin) coordinates.
+    /// Top band in CG coordinates (y grows downward from the primary display's top edge).
+    /// Mirrors spike_core's 40pt early-reject band (spec §3.4.1).
+    const TOP_BAND_CG: f64 = 40.0;
+
+    /// Events forwarded from the tap, in CGEvent (top-left origin) coordinates.
     #[derive(Clone, Copy, Debug)]
-    pub struct MouseSample {
-        pub x: f64,
-        pub y: f64,
+    pub enum TapEvent {
+        /// Pointer move (or drag) inside the top band — plus one edge sample on band exit.
+        Moved { x: f64, y: f64, buttons: u32 },
+        /// Left button down (anywhere — menubar suppression needs global downs).
+        Down { x: f64, y: f64 },
+        /// Left button up.
+        Up,
+        /// Tap lifecycle: false = system disabled it (recorded, then re-enabled), true =
+        /// tap (re-)armed. Also false while Accessibility permission is missing.
+        Status { active: bool },
     }
 
-    // Called by the system on the tap thread. `user` is the leaked Sender pointer.
+    /// Callback context. Single-threaded (the tap's run loop), so Cells suffice; the tap
+    /// port is stashed post-creation for re-enabling from inside the callback.
+    struct TapCtx {
+        tx: Sender<TapEvent>,
+        tap_port: AtomicPtr<c_void>,
+        in_band: Cell<bool>,
+        buttons: Cell<u32>,
+    }
+
     unsafe extern "C-unwind" fn tap_cb(
         _proxy: CGEventTapProxy,
-        _etype: CGEventType,
+        etype: CGEventType,
         event: NonNull<CGEvent>,
         user: *mut c_void,
     ) -> *mut CGEvent {
-        if !user.is_null() {
-            // SAFETY: `user` is the Box<Sender> pointer leaked in `start`, alive for the loop.
-            let tx = unsafe { &*(user as *const Sender<MouseSample>) };
+        if user.is_null() {
+            return event.as_ptr();
+        }
+        // SAFETY: `user` is the Box<TapCtx> leaked in `start`, alive for the run loop.
+        let ctx = unsafe { &*(user as *const TapCtx) };
+
+        // System disabled the tap (slow callback / user input): surface + re-enable.
+        if etype == CGEventType::TapDisabledByTimeout || etype == CGEventType::TapDisabledByUserInput {
+            let _ = ctx.tx.send(TapEvent::Status { active: false });
+            let port = ctx.tap_port.load(Ordering::Acquire) as *const CFMachPort;
+            if !port.is_null() {
+                // SAFETY: port is the CFMachPort stored right after creation, retained for
+                // the lifetime of the run loop below.
+                unsafe { CGEventTapEnable(&*port, true) };
+                let _ = ctx.tx.send(TapEvent::Status { active: true });
+            }
+            return event.as_ptr();
+        }
+
+        if etype == CGEventType::LeftMouseDown {
             let loc = unsafe { CGEventGetLocation(Some(event.as_ref())) };
-            let _ = tx.send(MouseSample { x: loc.x, y: loc.y });
+            ctx.buttons.set(1);
+            let _ = ctx.tx.send(TapEvent::Down { x: loc.x, y: loc.y });
+        } else if etype == CGEventType::LeftMouseUp {
+            ctx.buttons.set(0);
+            let _ = ctx.tx.send(TapEvent::Up);
+        } else if etype == CGEventType::MouseMoved || etype == CGEventType::LeftMouseDragged {
+            let loc = unsafe { CGEventGetLocation(Some(event.as_ref())) };
+            let inside = loc.y <= TOP_BAND_CG;
+            // Early reject: below the band AND already known-outside → zero further work.
+            // One edge sample passes on band exit so HoverTracker sees the leave.
+            if inside || ctx.in_band.get() {
+                ctx.in_band.set(inside);
+                let _ = ctx.tx.send(TapEvent::Moved { x: loc.x, y: loc.y, buttons: ctx.buttons.get() });
+            }
         }
         event.as_ptr()
     }
 
-    /// Install a listen-only mouse-move CGEventTap on a dedicated CFRunLoop thread, forwarding
-    /// raw samples to `tx`. Returns immediately; the thread runs the loop. If Accessibility
-    /// permission is missing, tap creation returns None and the thread logs and exits.
-    pub fn start(tx: Sender<MouseSample>) {
+    /// Install the tap on a dedicated CFRunLoop thread, forwarding events to `tx`.
+    /// Retries every 3s while Accessibility permission is missing (recovers without a
+    /// restart once granted). Returns immediately.
+    pub fn start(tx: Sender<TapEvent>) {
         std::thread::spawn(move || {
-            // Leak a stable pointer to the Sender for user_info (lives for the run loop).
-            let user = Box::into_raw(Box::new(tx)) as *mut c_void;
-            // SAFETY: standard CGEventTap install sequence; pointers valid for the loop.
+            let ctx = Box::into_raw(Box::new(TapCtx {
+                tx,
+                tap_port: AtomicPtr::new(std::ptr::null_mut()),
+                in_band: Cell::new(false),
+                buttons: Cell::new(0),
+            }));
+            // SAFETY: standard CGEventTap install; ctx outlives the run loop (leaked).
             unsafe {
-                let mask: CGEventMask = 1u64 << (CGEventType::MouseMoved.0 as u64);
-                let tap = match CGEventTapCreate(
-                    CGEventTapLocation::HIDEventTap,
-                    CGEventTapPlacement::HeadInsertEventTap,
-                    CGEventTapOptions::ListenOnly,
-                    mask,
-                    Some(tap_cb),
-                    user,
-                ) {
-                    Some(t) => t,
-                    None => {
-                        eprintln!("[spike] CGEventTap create failed — grant Accessibility permission");
-                        return;
+                let mask: CGEventMask = (1u64 << (CGEventType::MouseMoved.0 as u64))
+                    | (1u64 << (CGEventType::LeftMouseDown.0 as u64))
+                    | (1u64 << (CGEventType::LeftMouseUp.0 as u64))
+                    | (1u64 << (CGEventType::LeftMouseDragged.0 as u64));
+                let mut warned = false;
+                let tap = loop {
+                    match CGEventTapCreate(
+                        CGEventTapLocation::HIDEventTap,
+                        CGEventTapPlacement::HeadInsertEventTap,
+                        CGEventTapOptions::ListenOnly,
+                        mask,
+                        Some(tap_cb),
+                        ctx as *mut c_void,
+                    ) {
+                        Some(t) => break t,
+                        None => {
+                            if !warned {
+                                eprintln!("[spike] CGEventTap create failed — grant Accessibility permission (retrying every 3s)");
+                                let _ = (*ctx).tx.send(TapEvent::Status { active: false });
+                                warned = true;
+                            }
+                            std::thread::sleep(Duration::from_secs(3));
+                        }
                     }
                 };
+                // Stash the port for in-callback re-enabling. `tap` (CFRetained) stays
+                // alive on this stack frame for the whole run loop.
+                (*ctx).tap_port.store(&*tap as *const CFMachPort as *mut c_void, Ordering::Release);
+
                 let Some(source) = CFMachPort::new_run_loop_source(None, Some(&tap), 0) else {
                     return;
                 };
@@ -81,6 +156,7 @@ mod mac {
                 };
                 rl.add_source(Some(&source), kCFRunLoopCommonModes);
                 CGEventTapEnable(&tap, true);
+                let _ = (*ctx).tx.send(TapEvent::Status { active: true });
                 CFRunLoop::run();
             }
         });

@@ -19,7 +19,8 @@ mod mac {
     use objc2::MainThreadMarker;
     use objc2_app_kit::NSScreen;
 
-    /// The primary display's notch/pseudo geometry, resolved into spike_core regions.
+    /// The panel-target screen's notch/pseudo geometry, resolved into spike_core regions,
+    /// plus the CG-conversion constant taken from the true primary display.
     pub struct ScreenGeometry {
         pub is_notch: bool,
         pub screen: Rect,
@@ -27,12 +28,24 @@ mod mac {
         pub notch_h: f64,
         pub menubar_h: f64,
         pub regions: Regions,
+        /// Height of `NSScreen.screens[0]` — the primary display that anchors the CG
+        /// global coordinate space. This, NOT the panel screen's height, is the
+        /// `cg_to_ns` flip constant (review #5: mainScreen follows the key window and
+        /// diverges from the primary on multi-display setups).
+        pub primary_height: f64,
+        /// Number of attached displays (recorded with each expand-latency sample).
+        pub display_count: u32,
     }
 
     /// Read the main screen (must be called on the main thread — pass the `MainThreadMarker`
     /// from Tauri's setup). Returns `None` if there is no main screen.
     pub fn read_primary(mtm: MainThreadMarker) -> Option<ScreenGeometry> {
-        let screen = NSScreen::mainScreen(mtm)?;
+        // Primary display = screens[0] (menubar owner, CG coordinate anchor). The panel
+        // itself also targets the primary — the spike's display policy (spec §3.7.1)
+        // prefers the internal/primary screen; per-display selection is on-device D-06.
+        let screens = NSScreen::screens(mtm);
+        let display_count = screens.len() as u32;
+        let screen = screens.firstObject().or_else(|| NSScreen::mainScreen(mtm))?;
         let f = screen.frame();
         let vf = screen.visibleFrame();
         // These NSScreen accessors are safe fns in objc2-app-kit 0.3.2.
@@ -59,6 +72,8 @@ mod mac {
             notch_h,
             menubar_h,
             regions: regs,
+            primary_height: f.size.height,
+            display_count,
         })
     }
 }

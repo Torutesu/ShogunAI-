@@ -4,10 +4,15 @@
 # Deliberately does NOT run `caffeinate` — sleep/wake is part of Q1 (spec §4.5).
 set -euo pipefail
 
+# Run from the repo root regardless of invocation cwd.
+cd "$(dirname "$0")/.."
+
 OUT_DIR="${SHOGUN_SPIKE_METRICS:-$HOME/Library/Application Support/dev.shogun.spike/metrics}"
 mkdir -p "$OUT_DIR"
 EXT_LOG="$OUT_DIR/$(date +%Y%m%d)-cpu_external.jsonl"
 
+echo "[soak] frontend build (tauri beforeBuildCommand is NOT run by bare cargo)…"
+pnpm --filter @shogun-ai/desktop build:vite
 echo "[soak] release build…"
 cargo build -p shogun-desktop-spike --release  # on-device: builds the Tauri shell
 APP_BIN="target/release/shogun-desktop-spike"
