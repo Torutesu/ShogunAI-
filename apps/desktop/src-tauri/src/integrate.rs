@@ -472,18 +472,26 @@ pub mod mac {
         if state != "expanded" {
             return;
         }
+        // Consume the commit FIRST, unconditionally. Each expand-commit must pair with
+        // exactly ONE paint: a T5 revive (Collapsing→Expanded, statemachine §3.3) re-emits
+        // `state=expanded` — and thus a `painted` — WITHOUT a fresh MarkExpandCommit, and
+        // dev StrictMode can double-fire. Consuming here (before the offset gate) also means
+        // an early expand whose paint lands before the clock offset is calibrated clears its
+        // t0 instead of leaving it armed to be mis-paired with a LATER paint — that
+        // cross-pairing produced a ~298s outlier and, after the first fix, a ~1.66s warm-up
+        // outlier. swap→0 makes any second/late paint see t0==0 and drop.
+        let t0 = shared.last_commit_ns.swap(0, Ordering::SeqCst);
+        if t0 == 0 {
+            return;
+        }
         let t1_js_ns = (t1_perf_ms * 1e6) as u64;
         let Some(t1_ns) = shared.offset.lock().ok().and_then(|o| o.js_to_rust_ns(t1_js_ns)) else {
-            return; // offset not calibrated yet — drop rather than record a biased value
+            // Offset not calibrated yet — the commit is already consumed above, so this
+            // early sample is simply dropped (an unbiased latency needs the offset) rather
+            // than left to bias a later paint.
+            return;
         };
-        // Consume the commit so each expand-commit pairs with exactly ONE paint. A T5
-        // revive (Collapsing→Expanded, statemachine §3.3) re-emits `state=expanded` — and
-        // therefore a `painted` — WITHOUT a fresh MarkExpandCommit; dev StrictMode can also
-        // double-fire the paint. Without consuming, those extra paints reuse a stale t0 and
-        // inject a multi-second outlier that dominates p95 (observed: a 298s sample from an
-        // hours-old commit). swap→0 makes any second paint see t0==0 and drop.
-        let t0 = shared.last_commit_ns.swap(0, Ordering::SeqCst);
-        if t0 == 0 || t1_ns <= t0 {
+        if t1_ns <= t0 {
             return;
         }
         let latency_ms = (t1_ns - t0) as f64 / 1e6;
