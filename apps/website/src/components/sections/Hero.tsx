@@ -50,7 +50,7 @@ export function Hero({ t, refCode, invite }: { t: Dictionary; refCode?: string; 
         </Reveal>
 
         <Reveal delay={0.2}>
-          <Badges t={t} />
+          <Badges />
         </Reveal>
 
         <Reveal delay={0.25} y={28}>

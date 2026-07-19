@@ -60,11 +60,12 @@ export async function addParticipant(
  */
 export async function submitProfile(
   statusToken: string,
-  answers: { a1?: unknown; a2?: unknown; a3?: unknown },
+  answers: { nickname?: unknown; a1?: unknown; a2?: unknown; a3?: unknown },
 ): Promise<{ row: Participant; justQualified: boolean } | null> {
   const row = await findByStatusToken(statusToken);
   if (!row) return null;
 
+  const nickname = sanitizeAnswer(answers.nickname)?.slice(0, 40) ?? null;
   const a1 = sanitizeAnswer(answers.a1);
   const a2 = sanitizeAnswer(answers.a2);
   const a3 = sanitizeAnswer(answers.a3);
@@ -78,6 +79,7 @@ export async function submitProfile(
   const justQualified = complete && !row.qualifiedAt; // fires exactly once
 
   await updateParticipant(row.id, {
+    ...(nickname && { nickname }),
     ...(a1 && { answer1: a1 }),
     ...(a2 && { answer2: a2 }),
     ...(a3 && { answer3: a3 }),

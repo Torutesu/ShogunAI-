@@ -29,7 +29,12 @@ export async function POST(req: Request) {
   // it can never be used as a bearer (two-token split, §6.1).
   if (!isValidStatusToken(token)) return fail('bad_request');
 
-  const result = await submitProfile(token, { a1: body.a1, a2: body.a2, a3: body.a3 });
+  const result = await submitProfile(token, {
+    nickname: body.nickname,
+    a1: body.a1,
+    a2: body.a2,
+    a3: body.a3,
+  });
   if (!result) return fail('not_found');
 
   const qualified = result.justQualified || !!result.row.qualifiedAt;

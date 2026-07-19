@@ -1,14 +1,19 @@
 import { leaderboard } from '@/db/queries';
-import { maskEmail } from '@/lib/referral';
 import { NextResponse } from 'next/server';
 
 export const runtime = 'nodejs';
 
 const MAX_LIMIT = 50;
 
+/** Public handle: the chosen nickname, or an anonymous, stable fallback. */
+function handleFor(nickname: string | null, refCode: string): string {
+  if (nickname && nickname.trim()) return nickname.trim();
+  return `shogun-${refCode.slice(0, 4).toLowerCase()}`;
+}
+
 /**
  * GET /api/waitlist/leaderboard?limit=N
- * Public. Emails are masked in app code; raw email/tokens never leave the DB.
+ * Public. Ranks by nickname (never email). Raw email/tokens never leave the DB.
  */
 export async function GET(req: Request) {
   const raw = Number(new URL(req.url).searchParams.get('limit') ?? '10');
@@ -17,7 +22,8 @@ export async function GET(req: Request) {
   const rows = await leaderboard(limit);
   const board = rows.map((r, i) => ({
     rank: i + 1,
-    maskedEmail: maskEmail(r.email),
+    name: handleFor(r.nickname, r.refCode),
+    refCode: r.refCode,
     count: r.qualified,
   }));
 

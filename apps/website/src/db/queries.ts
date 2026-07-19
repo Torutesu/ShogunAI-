@@ -97,9 +97,14 @@ export async function queuePosition(
 /** Top-N leaderboard. Clamp `limit` to a sane max in the caller. */
 export async function leaderboard(
   limit: number,
-): Promise<Array<{ email: string; refCode: string; qualified: number }>> {
-  const rows = await db.execute<{ email: string; ref_code: string; qualified: number }>(sql`
-    SELECT p.email, p.ref_code, r.qualified
+): Promise<Array<{ email: string; nickname: string | null; refCode: string; qualified: number }>> {
+  const rows = await db.execute<{
+    email: string;
+    nickname: string | null;
+    ref_code: string;
+    qualified: number;
+  }>(sql`
+    SELECT p.email, p.nickname, p.ref_code, r.qualified
     FROM participants p
     JOIN (
       SELECT referred_by, count(*)::int AS qualified
@@ -110,7 +115,12 @@ export async function leaderboard(
     ORDER BY r.qualified DESC, p.created_at ASC
     LIMIT ${limit}
   `);
-  return rows.map((r) => ({ email: r.email, refCode: r.ref_code, qualified: Number(r.qualified) }));
+  return rows.map((r) => ({
+    email: r.email,
+    nickname: r.nickname,
+    refCode: r.ref_code,
+    qualified: Number(r.qualified),
+  }));
 }
 
 /**

@@ -23,7 +23,10 @@ export const participants = pgTable(
     // salted hash of the signup IP — used only for referral-fraud checks at reward time
     ipHash: text('ip_hash'),
 
-    // qualifying action = a short 3-question profile (adapt freely)
+    // public handle used on the leaderboard (never the email)
+    nickname: text('nickname'),
+
+    // qualifying action = a short profile: answer1=why, answer2=company, answer3=challenge
     answer1: text('answer_1'),
     answer2: text('answer_2'),
     answer3: text('answer_3'),

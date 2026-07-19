@@ -1,6 +1,6 @@
 'use client';
 
-import { Check, Copy, Loader2, Star } from 'lucide-react';
+import { Check, Copy, Loader2, Share2, Star, Trophy } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -21,11 +21,46 @@ type Status = {
   isTopReferrer: boolean;
 };
 
+type LbRow = { rank: number; name: string; refCode: string; count: number };
+
 const TIERS = [
   { threshold: 3, label: '1 month free' },
   { threshold: 10, label: '3 months free' },
   { threshold: 30, label: '6 months free' },
 ];
+
+/** Circular progress ring — visualizes queue percentile. */
+function RankRing({ position, total }: { position: number | null; total: number | null }) {
+  const pct = position && total && total > 0 ? Math.max(0, Math.min(1, 1 - position / total)) : 0;
+  const topPct = position && total ? Math.max(1, Math.round((position / total) * 100)) : null;
+  const r = 54;
+  const c = 2 * Math.PI * r;
+  return (
+    <div className="relative grid size-[150px] place-items-center">
+      <svg viewBox="0 0 130 130" className="size-[150px] -rotate-90">
+        <circle cx="65" cy="65" r={r} fill="none" stroke="var(--color-border)" strokeWidth="10" />
+        <circle
+          cx="65"
+          cy="65"
+          r={r}
+          fill="none"
+          stroke="var(--color-accent)"
+          strokeWidth="10"
+          strokeLinecap="round"
+          strokeDasharray={c}
+          strokeDashoffset={c * (1 - pct)}
+          className="[transition:stroke-dashoffset_1s_var(--ease-out-soft)]"
+        />
+      </svg>
+      <div className="absolute text-center">
+        <div className="font-display text-[32px] font-semibold leading-none tabular-nums">
+          {position ? `#${position.toLocaleString()}` : '—'}
+        </div>
+        {topPct && <div className="mt-1 text-xs text-muted">Top {topPct}%</div>}
+      </div>
+    </div>
+  );
+}
 
 export function StatusDashboard({ code }: { code: string }) {
   const [data, setData] = useState<Status | null>(null);
@@ -36,10 +71,7 @@ export function StatusDashboard({ code }: { code: string }) {
     try {
       const res = await fetch(`/api/waitlist/status?code=${encodeURIComponent(code)}`);
       const d = await res.json();
-      if (!res.ok || !d.ok) {
-        setError(d?.error === 'not_found' ? 'not_found' : 'bad');
-        return;
-      }
+      if (!res.ok || !d.ok) return setError(d?.error === 'not_found' ? 'not_found' : 'bad');
       setData(d);
     } catch {
       setError('network');
@@ -61,21 +93,17 @@ export function StatusDashboard({ code }: { code: string }) {
     }
   }
 
-  if (error === 'not_found') {
+  if (error === 'not_found')
     return (
       <Card className="mx-auto grid max-w-md gap-4 text-center">
         <h1 className="font-display text-2xl font-semibold">We couldn’t find that page</h1>
-        <p className="text-muted">This status link is invalid or expired. Check the URL from your welcome email.</p>
+        <p className="text-muted">This link is invalid or expired. Check the URL from your welcome email.</p>
         <Button asChild className="justify-self-center">
           <a href="/">Back to home</a>
         </Button>
       </Card>
     );
-  }
-  if (error)
-    return (
-      <Card className="mx-auto max-w-md text-center text-muted">Something went wrong. Please refresh.</Card>
-    );
+  if (error) return <Card className="mx-auto max-w-md text-center text-muted">Something went wrong. Please refresh.</Card>;
   if (!data)
     return (
       <div className="grid place-items-center py-16">
@@ -84,26 +112,67 @@ export function StatusDashboard({ code }: { code: string }) {
     );
 
   const count = data.qualifiedReferrals;
+  const next = data.nextTier;
+  const tierProgress = next ? Math.min(1, count / next.threshold) : 1;
 
   return (
     <div className="mx-auto grid max-w-3xl gap-6">
+      {/* Intro */}
       <div className="text-center">
-        <Badge dot>{data.profileComplete ? 'Your spot is secured' : 'You’re on the list'}</Badge>
-        <h1 className="mt-4 font-display text-[clamp(30px,4vw,44px)] font-semibold tracking-[-0.015em]">
-          Welcome to ShogunAI
+        <Badge dot>{data.profileComplete ? 'Your spot is secured' : 'You’re on the waitlist'}</Badge>
+        <h1 className="mt-4 font-display text-[clamp(30px,4vw,44px)] font-semibold tracking-[-0.02em]">
+          The ShogunAI referral program
         </h1>
-        <p className="mt-2 text-[17px] text-muted">Refer friends and answer a few questions to move up the line.</p>
+        <p className="mx-auto mt-3 max-w-[48ch] text-[17px] leading-relaxed text-muted">
+          Every friend who joins with your link and completes their profile moves you up the line. Refer more,
+          climb faster, unlock free months — and top the leaderboard.
+        </p>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-3">
-        <Stat v={data.position ?? '—'} k={`your position${data.totalWaiting ? ` of ${data.totalWaiting}` : ''}`} />
-        <Stat v={count} k="qualified referrals" />
-        <Stat v={data.leaderboardRank ? `#${data.leaderboardRank}` : '—'} k="leaderboard rank" />
-      </div>
+      {/* Rank hero — your position + referrals, visual */}
+      <Card className="grid items-center gap-6 sm:grid-cols-[auto_1fr]">
+        <RankRing position={data.position} total={data.totalWaiting} />
+        <div className="grid gap-4">
+          <div className="flex items-baseline justify-between">
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-[0.08em] text-accent">Your position</div>
+              <div className="text-sm text-muted">
+                of {data.totalWaiting?.toLocaleString() ?? '—'} on the waitlist
+              </div>
+            </div>
+            {data.leaderboardRank && (
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-sky-soft px-3 py-1 text-sm font-semibold text-accent-strong">
+                <Trophy className="size-3.5" /> #{data.leaderboardRank}
+              </span>
+            )}
+          </div>
+          <div>
+            <div className="mb-1.5 flex items-center justify-between text-sm">
+              <span className="font-medium text-ink">
+                <span className="font-display text-lg font-semibold tabular-nums">{count}</span> qualified referrals
+              </span>
+              {next && (
+                <span className="text-muted">
+                  {next.remaining} to {next.label}
+                </span>
+              )}
+            </div>
+            <div className="h-2.5 overflow-hidden rounded-full bg-cloud">
+              <div
+                className="h-full rounded-full bg-accent [transition:width_0.8s_var(--ease-out-soft)]"
+                style={{ width: `${tierProgress * 100}%` }}
+              />
+            </div>
+          </div>
+        </div>
+      </Card>
 
+      {/* Share */}
       <Card>
-        <p className="text-xs font-semibold uppercase tracking-[0.08em] text-accent">Your invite link</p>
-        <h2 className="mb-1 mt-2.5 font-display text-2xl font-semibold">Skip the line — bring people in</h2>
+        <div className="mb-1 flex items-center gap-2">
+          <Share2 className="size-4 text-accent" />
+          <p className="text-xs font-semibold uppercase tracking-[0.08em] text-accent">Your invite link</p>
+        </div>
         <p className="text-sm text-muted">
           A referral counts once your invite completes their profile. Rewards replace each other; they don’t stack.
         </p>
@@ -118,6 +187,7 @@ export function StatusDashboard({ code }: { code: string }) {
         </div>
       </Card>
 
+      {/* Reward ladder */}
       <Card>
         <p className="text-xs font-semibold uppercase tracking-[0.08em] text-accent">Rewards</p>
         <h2 className="mb-3.5 mt-2.5 font-display text-2xl font-semibold">
@@ -126,7 +196,7 @@ export function StatusDashboard({ code }: { code: string }) {
         <div className="grid gap-2.5">
           {TIERS.map((tItem) => {
             const done = count >= tItem.threshold;
-            const isNext = !done && data.nextTier?.threshold === tItem.threshold;
+            const isNext = !done && next?.threshold === tItem.threshold;
             return (
               <Rung
                 key={tItem.threshold}
@@ -147,23 +217,16 @@ export function StatusDashboard({ code }: { code: string }) {
         </div>
       </Card>
 
-      {!data.profileComplete && <ProfileForm code={code} onDone={load} answered={data.answered} />}
+      {/* Deep onboarding */}
+      {!data.profileComplete && <ProfileForm code={code} onDone={load} />}
 
+      {/* Leaderboard by nickname */}
       <Card>
         <p className="text-xs font-semibold uppercase tracking-[0.08em] text-accent">Leaderboard</p>
         <h2 className="mb-3.5 mt-2.5 font-display text-2xl font-semibold">Top referrers</h2>
-        <LeaderboardInline />
+        <LeaderboardInline meRefCode={data.refCode} />
       </Card>
     </div>
-  );
-}
-
-function Stat({ v, k }: { v: string | number; k: string }) {
-  return (
-    <Card className="text-center">
-      <div className="font-display text-[40px] font-semibold tabular-nums tracking-[-0.02em]">{v}</div>
-      <div className="mt-1 text-[13px] text-muted">{k}</div>
-    </Card>
   );
 }
 
@@ -199,7 +262,7 @@ function Rung({
   );
 }
 
-function ProfileForm({ code, onDone, answered }: { code: string; onDone: () => void; answered: number }) {
+function ProfileForm({ code, onDone }: { code: string; onDone: () => void }) {
   const [state, setState] = useState<'idle' | 'loading'>('idle');
   const [msg, setMsg] = useState('');
 
@@ -212,7 +275,13 @@ function ProfileForm({ code, onDone, answered }: { code: string; onDone: () => v
       const res = await fetch('/api/waitlist/profile', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code, a1: f.get('a1'), a2: f.get('a2'), a3: f.get('a3') }),
+        body: JSON.stringify({
+          code,
+          nickname: f.get('nickname'),
+          a1: f.get('a1'),
+          a2: f.get('a2'),
+          a3: f.get('a3'),
+        }),
       });
       const d = await res.json();
       if (!res.ok || !d.ok) {
@@ -227,36 +296,35 @@ function ProfileForm({ code, onDone, answered }: { code: string; onDone: () => v
     }
   }
 
-  const field = 'h-11 rounded-lg border border-border bg-surface px-4 text-[15px] text-ink focus:border-accent focus:outline-none focus:ring-4 focus:ring-accent/15';
+  const field =
+    'h-11 rounded-lg border border-border bg-surface px-4 text-[15px] text-ink focus:border-accent focus:outline-none focus:ring-4 focus:ring-accent/15';
 
   return (
     <Card>
       <p className="text-xs font-semibold uppercase tracking-[0.08em] text-accent">Secure your spot</p>
-      <h2 className="mb-1 mt-2.5 font-display text-2xl font-semibold">Tell us who you are</h2>
-      <p className="text-sm text-muted">Answering all three completes your profile and moves you up the line. ({answered}/3 done)</p>
-      <form onSubmit={onSubmit} className="mt-2 grid gap-4">
+      <h2 className="mb-1 mt-2.5 font-display text-2xl font-semibold">Tell us about you</h2>
+      <p className="text-sm text-muted">
+        Completing this moves you up the line — and sets the nickname you’ll use on the leaderboard.
+      </p>
+      <form onSubmit={onSubmit} className="mt-4 grid gap-4">
         <label className="grid gap-1.5 text-sm font-medium text-ink">
-          What do you do?
-          <select name="a1" defaultValue="" required className={field}>
-            <option value="" disabled>Choose one…</option>
-            <option>Founder</option>
-            <option>Builder / Engineer</option>
-            <option>Researcher</option>
-            <option>Operator</option>
-            <option>Creator</option>
-            <option>Other</option>
-          </select>
+          Leaderboard nickname
+          <input name="nickname" maxLength={40} required placeholder="e.g. shogun_sam" className={field} />
         </label>
         <label className="grid gap-1.5 text-sm font-medium text-ink">
-          Where do you spend most of your day?
-          <input name="a2" maxLength={200} placeholder="e.g. code, meetings, writing, research" required className={field} />
+          Why did you sign up?
+          <input name="a1" maxLength={200} required placeholder="What made ShogunAI click for you" className={field} />
         </label>
         <label className="grid gap-1.5 text-sm font-medium text-ink">
-          What would you hand off to an AI first?
-          <input name="a3" maxLength={200} placeholder="e.g. follow-ups, note-taking, scheduling" required className={field} />
+          Where do you work?
+          <input name="a2" maxLength={120} required placeholder="Company / what you do" className={field} />
+        </label>
+        <label className="grid gap-1.5 text-sm font-medium text-ink">
+          What’s the biggest problem you’d hand to ShogunAI?
+          <input name="a3" maxLength={200} required placeholder="The workflow you’d love gone" className={field} />
         </label>
         <Button type="submit" disabled={state === 'loading'}>
-          {state === 'loading' ? <Loader2 className="size-4 animate-spin" /> : 'Complete profile'}
+          {state === 'loading' ? <Loader2 className="size-4 animate-spin" /> : 'Secure my spot'}
         </Button>
         {msg && <p className="text-sm text-danger">{msg}</p>}
       </form>
@@ -264,8 +332,8 @@ function ProfileForm({ code, onDone, answered }: { code: string; onDone: () => v
   );
 }
 
-function LeaderboardInline() {
-  const [board, setBoard] = useState<{ rank: number; maskedEmail: string; count: number }[] | null>(null);
+function LeaderboardInline({ meRefCode }: { meRefCode: string }) {
+  const [board, setBoard] = useState<LbRow[] | null>(null);
   useEffect(() => {
     let alive = true;
     fetch('/api/waitlist/leaderboard?limit=10')
@@ -284,14 +352,31 @@ function LeaderboardInline() {
     );
   if (!board.length) return <p className="text-sm text-muted">No qualified referrals yet. Be the first.</p>;
   return (
-    <div className="grid">
-      {board.map((e) => (
-        <div key={e.rank} className="grid grid-cols-[40px_1fr_auto] items-center gap-3 border-b border-border px-2 py-3">
-          <span className="font-mono text-[13px] tabular-nums text-muted">#{e.rank}</span>
-          <span className="text-sm text-ink">{e.maskedEmail}</span>
-          <span className="font-semibold tabular-nums text-accent">{e.count}</span>
-        </div>
-      ))}
+    <div className="grid gap-1">
+      {board.map((e) => {
+        const me = e.refCode === meRefCode;
+        return (
+          <div
+            key={e.rank}
+            className={`grid grid-cols-[32px_1fr_auto] items-center gap-3 rounded-lg px-2.5 py-2.5 ${
+              me ? 'bg-sky-soft' : ''
+            }`}
+          >
+            <span
+              className={`flex size-7 items-center justify-center rounded-full text-[12px] font-semibold tabular-nums ${
+                e.rank <= 3 ? 'bg-accent text-white' : 'bg-cloud text-muted'
+              }`}
+            >
+              {e.rank}
+            </span>
+            <span className="truncate text-sm font-medium text-ink">
+              {e.name}
+              {me && <span className="ml-2 text-xs font-normal text-accent">you</span>}
+            </span>
+            <span className="font-semibold tabular-nums text-accent">{e.count}</span>
+          </div>
+        );
+      })}
     </div>
   );
 }

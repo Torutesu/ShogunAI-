@@ -25,11 +25,14 @@ async function main() {
       referred_by    text,
       qualified_at   timestamptz,
       ip_hash        text,
+      nickname       text,
       answer_1       text,
       answer_2       text,
       answer_3       text
     )
   `;
+  // Additive for existing databases.
+  await sql`ALTER TABLE participants ADD COLUMN IF NOT EXISTS nickname text`;
   await sql`CREATE INDEX IF NOT EXISTS participants_ref_code_idx     ON participants (ref_code)`;
   await sql`CREATE INDEX IF NOT EXISTS participants_status_token_idx ON participants (status_token)`;
   await sql`CREATE INDEX IF NOT EXISTS participants_referred_by_idx  ON participants (referred_by)`;

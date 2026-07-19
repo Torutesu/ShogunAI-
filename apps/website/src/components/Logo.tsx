@@ -14,6 +14,36 @@ export function Logo({ size = 26, className }: { size?: number; className?: stri
   );
 }
 
+/**
+ * Animated mark: the ribbon draws itself in on mount, then a subtle idle
+ * shimmer. Inlines the path (rather than <use>) so the stroke can animate.
+ */
+export function AnimatedLogo({ size = 26, className }: { size?: number; className?: string }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 100 100" className={className} role="img" aria-label="ShogunAI">
+      <path
+        d="M66 20 L34 34 L66 60 L34 80"
+        fill="none"
+        stroke="url(#s-grad)"
+        strokeWidth="26"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        className="logo-draw"
+      />
+      <path
+        d="M66 20 L34 34 L66 60 L34 80"
+        fill="none"
+        stroke="url(#s-fold)"
+        strokeWidth="26"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        opacity="0.5"
+        className="logo-draw"
+      />
+    </svg>
+  );
+}
+
 /** Hidden gradient/symbol definitions — render once near the root. */
 export function LogoDefs() {
   return (

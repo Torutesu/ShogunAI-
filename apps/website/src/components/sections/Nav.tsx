@@ -1,5 +1,5 @@
 import { ChevronDown, Menu } from 'lucide-react';
-import { Logo } from '@/components/Logo';
+import { AnimatedLogo } from '@/components/Logo';
 import { LanguageMenu } from '@/components/LanguageMenu';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { Button } from '@/components/ui/button';
@@ -22,8 +22,8 @@ export async function Nav() {
   return (
     <header className="sticky top-0 z-50 border-b border-border bg-surface/70 backdrop-blur-xl backdrop-saturate-150">
       <div className="container-x flex h-16 items-center justify-between">
-        <a href="/#top" aria-label="ShogunAI home" className="flex items-center gap-2.5">
-          <Logo size={26} />
+        <a href="/#top" aria-label="ShogunAI home" className="group/brand flex items-center gap-2.5">
+          <AnimatedLogo size={26} className="brand-logo" />
           <span className="font-display text-lg font-semibold tracking-tight">ShogunAI</span>
         </a>
 
