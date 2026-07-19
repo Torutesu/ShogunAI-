@@ -9,8 +9,8 @@ export async function Nav() {
   const links = [
     { href: '/#memory', label: t.nav.memory },
     { href: '/#action', label: t.nav.action },
-    { href: '/#how', label: t.nav.how },
     { href: '/#testimonials', label: t.nav.testimonials },
+    { href: '/#faq', label: t.nav.faq },
     { href: '/#pricing', label: t.nav.pricing },
   ];
 

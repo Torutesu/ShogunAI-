@@ -61,3 +61,70 @@
   margin-inline: auto;
   padding-inline: 24px;
 }
+
+/* --- Animations --- */
+@keyframes drift {
+  to {
+    transform: translate3d(40px, 50px, 0) scale(1.15);
+  }
+}
+@keyframes floaty {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-10px);
+  }
+}
+@keyframes marquee {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+@keyframes marquee-rev {
+  from {
+    transform: translateX(-50%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+.orb {
+  position: absolute;
+  border-radius: 9999px;
+  filter: blur(48px);
+  opacity: 0.55;
+  mix-blend-mode: multiply;
+  animation: drift 18s var(--ease-out-soft) infinite alternate;
+}
+.animate-floaty {
+  animation: floaty 7s ease-in-out infinite;
+}
+.marquee-track {
+  display: flex;
+  width: max-content;
+  animation: marquee 32s linear infinite;
+}
+.marquee-track.rev {
+  animation-name: marquee-rev;
+}
+.marquee-mask {
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
+  mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
+}
+.group\/mq:hover .marquee-track {
+  animation-play-state: paused;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .orb,
+  .animate-floaty,
+  .marquee-track {
+    animation: none;
+  }
+}
