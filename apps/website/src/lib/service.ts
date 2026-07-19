@@ -6,6 +6,7 @@ import {
   findByRefCode,
   findByStatusToken,
   insertParticipant,
+  nextJoinPosition,
   updateParticipant,
 } from '@/db/queries';
 import {
@@ -14,6 +15,7 @@ import {
   isValidRefCode,
   sanitizeAnswer,
 } from './referral';
+import { award, normalizeHandle } from './points';
 
 /**
  * Signup with referral attribution (REFERRAL_ENGINE.md §4.1).
@@ -24,6 +26,7 @@ export async function addParticipant(
   email: string,
   ref?: string,
   ipHash?: string,
+  xHandle?: unknown,
 ): Promise<{ row: Participant; duplicate: boolean }> {
   const normalized = email.trim().toLowerCase();
 
@@ -43,13 +46,33 @@ export async function addParticipant(
     if (referrer && referrer.email !== normalized) referredBy = ref; // no self-referral
   }
 
-  const row = await insertParticipant({
-    email: normalized,
-    refCode: generateRefCode(),
-    statusToken: generateStatusToken(),
-    referredBy,
-    ipHash: ipHash ?? null,
-  });
+  // X handle is optional; only holders are eligible for social points. A
+  // duplicate handle (unique) must not break the entry, so drop it on clash.
+  const handle = normalizeHandle(xHandle);
+  const position = await nextJoinPosition();
+
+  let row: Participant;
+  try {
+    row = await insertParticipant({
+      email: normalized,
+      refCode: generateRefCode(),
+      statusToken: generateStatusToken(),
+      referredBy,
+      ipHash: ipHash ?? null,
+      joinPosition: position,
+      xHandle: handle,
+    });
+  } catch {
+    // Most likely the x_handle unique clashed — retry without it.
+    row = await insertParticipant({
+      email: normalized,
+      refCode: generateRefCode(),
+      statusToken: generateStatusToken(),
+      referredBy,
+      ipHash: ipHash ?? null,
+      joinPosition: position,
+    });
+  }
   return { row, duplicate: false };
 }
 
@@ -86,8 +109,19 @@ export async function submitProfile(
     ...(justQualified && { qualifiedAt: new Date() }),
   });
 
-  // → if justQualified && row.referredBy: the referrer's count just moved.
-  //   Fire milestone email / realtime update here (off the request path).
+  // On the one-shot transition to a complete profile:
+  //   • the entry earns the +20 form award, and
+  //   • any referrer's invite becomes "settled" → +100 (spec §3.3). Keyed by
+  //     this entry's id, so a burner can't be re-counted for the same inviter.
+  if (justQualified) {
+    await award(row.id, 'form');
+    if (row.referredBy) {
+      const referrer = await findByRefCode(row.referredBy);
+      if (referrer && referrer.id !== row.id) {
+        await award(referrer.id, 'referral', row.id);
+      }
+    }
+  }
 
   return {
     row: { ...row, ...merged, answer1: merged.a1, answer2: merged.a2, answer3: merged.a3 },

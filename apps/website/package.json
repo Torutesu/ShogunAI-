@@ -15,6 +15,7 @@
     "db:migrate": "tsx src/db/migrate.ts",
     "test": "tsx --test tests/*.test.ts",
     "e2e": "tsx tests/e2e.ts",
+    "e2e:points": "tsx tests/points.e2e.ts",
     "cf:build": "opennextjs-cloudflare build",
     "cf:preview": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
     "cf:deploy": "opennextjs-cloudflare build && opennextjs-cloudflare deploy"

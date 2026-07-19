@@ -27,7 +27,7 @@ function ok(label: string, cond: boolean) {
 
 async function main() {
   // Fresh slate for deterministic assertions.
-  await db.execute(sql`TRUNCATE participants, rate_limits`);
+  await db.execute(sql`TRUNCATE participants, rate_limits CASCADE`);
 
   // --- 1. Signup with no referral ---
   const a = await addParticipant('alice@example.com', undefined, hashIp('1.1.1.1'));

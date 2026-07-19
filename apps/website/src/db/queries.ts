@@ -19,6 +19,14 @@ export async function countParticipants(): Promise<number> {
   return row?.n ?? 0;
 }
 
+/** Next 1-based signup position. (Waitlist scale — a small race here is benign.) */
+export async function nextJoinPosition(): Promise<number> {
+  const [row] = await db
+    .select({ n: sql<number>`COALESCE(MAX(${participants.joinPosition}), 0)::int + 1` })
+    .from(participants);
+  return row?.n ?? 1;
+}
+
 export async function findByRefCode(refCode: string): Promise<Participant | undefined> {
   const [row] = await db.select().from(participants).where(eq(participants.refCode, refCode)).limit(1);
   return row;

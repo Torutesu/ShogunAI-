@@ -37,7 +37,7 @@ export async function POST(req: Request) {
   const ref = typeof body.ref === 'string' ? body.ref : undefined;
 
   try {
-    const { row } = await addParticipant(body.email, ref, hashIp(ip));
+    const { row } = await addParticipant(body.email, ref, hashIp(ip), body.xHandle);
     return ok({ refCode: row.refCode, statusUrl: statusUrl(APP_ORIGIN, row.statusToken!) });
   } catch (e) {
     console.error('signup error:', e);
