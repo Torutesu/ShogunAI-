@@ -12,6 +12,7 @@ mod axcache;
 mod display;
 mod geometry;
 mod hover;
+mod integrate;
 mod ipc;
 mod panel;
 mod statemachine;
@@ -29,16 +30,7 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             {
                 use tauri::Manager;
-
-                // T-06: read the real notch/pseudo geometry on the main thread and log it.
-                if let Some(mtm) = objc2::MainThreadMarker::new() {
-                    if let Some(g) = geometry::read_primary(mtm) {
-                        eprintln!(
-                            "[spike] geometry: notch={} notch_w={:.1} notch_h={:.1} menubar_h={:.1} screen={:.0}x{:.0}",
-                            g.is_notch, g.notch_w, g.notch_h, g.menubar_h, g.screen.w, g.screen.h
-                        );
-                    }
-                }
+                let handle = _app.handle().clone();
 
                 // T-05: swap the notch window into an NSPanel with the spec §3.1.2 attributes.
                 if let Some(win) = _app.get_webview_window("notch") {
@@ -47,11 +39,20 @@ pub fn run() {
                     }
                 }
 
-                // T-07: install the listen-only mouse tap. The consumer drains raw samples;
-                // on-device it normalises to NS and feeds HoverTracker → StateMachine.
-                let (tx, rx) = std::sync::mpsc::channel::<hover::MouseSample>();
-                hover::start(tx);
-                std::thread::spawn(move || while rx.recv().is_ok() {});
+                // T-06/07/08: read the real geometry, install the mouse tap, and run the
+                // integrated engine (hover → state machine → panel/webview/harness).
+                if let Some(mtm) = objc2::MainThreadMarker::new() {
+                    if let Some(g) = geometry::read_primary(mtm) {
+                        eprintln!(
+                            "[spike] geometry: notch={} notch_w={:.1} notch_h={:.1} menubar_h={:.1} screen={:.0}x{:.0}",
+                            g.is_notch, g.notch_w, g.notch_h, g.menubar_h, g.screen.w, g.screen.h
+                        );
+                        let (tx, rx) = std::sync::mpsc::channel::<hover::MouseSample>();
+                        hover::start(tx);
+                        let menubar_min_y = g.screen.max_y() - g.menubar_h;
+                        integrate::start(handle, g.regions, menubar_min_y, g.screen.h, rx);
+                    }
+                }
 
                 // T-11/T-12: check Accessibility trust, then snapshot the frontmost app's
                 // focused window through the tested walk policy (on-device this runs on every
@@ -66,8 +67,9 @@ pub fn run() {
                     }
                 }
             }
-            // on-device (T-08+): state-machine timers driving the panel, axcache AXObserver,
-            // display watch, harness JSONL writer thread.
+            // on-device refinement: AXObserver/NSWorkspace focus subscriptions feeding the
+            // cache, the webview `painted` round-trip for full expand-latency, dynamic
+            // key-window/IME level switch, and the 24h soak run.
             Ok(())
         })
         .run(tauri::generate_context!())
