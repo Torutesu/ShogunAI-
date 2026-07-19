@@ -44,6 +44,10 @@ pub const FALSE_POSITIVE_RATE_MAX: f64 = 0.02;
 /// Q1: self-heals tolerated over a 24h soak before failing (spec §6.1).
 pub const SELF_HEAL_MAX_24H: u32 = 2;
 
+/// Q1: heartbeats are emitted every 60s; a gap beyond this is a record blackout
+/// (process death or hang suspicion) that the report must surface (spec §4.5).
+pub const SOAK_HEARTBEAT_GAP_MS: u64 = 180_000;
+
 /// A pass/fail verdict against a threshold, carried into the report.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum Verdict {

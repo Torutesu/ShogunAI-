@@ -87,6 +87,25 @@ fn pct_line(label: &str, values: &[f64], threshold: f64) -> String {
     }
 }
 
+/// Heartbeat blackouts: consecutive `soak.heartbeat` timestamps more than
+/// `threshold_ms` apart (spec §4.5 — silence must never be reported as success).
+/// Returns `(gap_start_ms, gap_end_ms, gap_seconds)`.
+fn heartbeat_gaps(records: &[Value], threshold_ms: u64) -> Vec<(u64, u64, u64)> {
+    let mut ts: Vec<u64> = of_type(records, "soak.heartbeat")
+        .iter()
+        .filter_map(|r| r["ts"].as_u64())
+        .collect();
+    ts.sort_unstable();
+    let mut gaps = Vec::new();
+    for w in ts.windows(2) {
+        let d = w[1] - w[0];
+        if d > threshold_ms {
+            gaps.push((w[0], w[1], d / 1000));
+        }
+    }
+    gaps
+}
+
 /// Split expand-latency values into the four (mode × fullscreen) layers (spec §4.3).
 fn layer_expand(records: &[Value]) -> Vec<(String, Vec<f64>)> {
     let rows = of_type(records, "metric.expand_latency");
@@ -230,8 +249,20 @@ fn render_report(records: &[Value], inputs: &[String]) -> String {
         hb.len(),
         slo::SELF_HEAL_MAX_24H
     ));
+    let gaps = heartbeat_gaps(records, slo::SOAK_HEARTBEAT_GAP_MS);
+    if gaps.is_empty() {
+        s.push_str(&format!(
+            "- Record blackouts (>{}s heartbeat gap): none\n",
+            slo::SOAK_HEARTBEAT_GAP_MS / 1000
+        ));
+    } else {
+        s.push_str(&format!("- Record blackouts (>{}s gap): {}\n", slo::SOAK_HEARTBEAT_GAP_MS / 1000, gaps.len()));
+        for (start, end, secs) in &gaps {
+            s.push_str(&format!("  - {start} → {end} ({secs}s silence — process death or hang suspicion)\n"));
+        }
+    }
     s.push_str(
-        "- NOTE: heartbeat-gap detection (≥180s silence) and 2s-visibility-loss checks require the on-device soak; this generator reports counts, the soak script flags gaps.\n\n",
+        "- NOTE: 2s-visibility-loss detection runs in the on-device soak's health check; this generator flags heartbeat blackouts and counts panel events.\n\n",
     );
 
     s.push_str("---\n\n_Go/No-Go is a human decision (docs/phase0-dev-instructions.md §1). This report is the primary evidence, not the verdict._\n");
@@ -261,6 +292,27 @@ mod tests {
         assert!(md.contains("NO DATA"));
         assert!(md.contains("Q2"));
         assert!(md.contains("Q4"));
+    }
+
+    #[test]
+    fn heartbeat_gaps_flags_blackouts() {
+        let recs = vec![
+            json!({"type":"soak.heartbeat","ts":0u64,"payload":{}}),
+            json!({"type":"soak.heartbeat","ts":60_000u64,"payload":{}}),
+            // 5-minute silence here (300s > 180s threshold).
+            json!({"type":"soak.heartbeat","ts":360_000u64,"payload":{}}),
+        ];
+        let gaps = heartbeat_gaps(&recs, 180_000);
+        assert_eq!(gaps.len(), 1);
+        assert_eq!(gaps[0], (60_000, 360_000, 300));
+    }
+
+    #[test]
+    fn heartbeat_gaps_none_when_regular() {
+        let recs: Vec<Value> = (0..10)
+            .map(|i| json!({"type":"soak.heartbeat","ts": (i * 60_000) as u64,"payload":{}}))
+            .collect();
+        assert!(heartbeat_gaps(&recs, 180_000).is_empty());
     }
 
     #[test]
