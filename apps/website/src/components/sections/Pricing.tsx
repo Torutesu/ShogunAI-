@@ -61,7 +61,7 @@ export function Pricing({ t }: { t: Dictionary }) {
         </Reveal>
         <div className="mx-auto grid max-w-[780px] gap-6 md:grid-cols-2">
           <Reveal>
-            <Plan plan={t.pricing.free} />
+            <Plan plan={t.pricing.standard} />
           </Reveal>
           <Reveal delay={0.08}>
             <Plan plan={t.pricing.pro} featured />

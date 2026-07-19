@@ -1,9 +1,15 @@
 import type { Dictionary } from '@/i18n/dictionaries';
 
 /**
- * Authority credentials shown below the hero form — two equally-sized compact
- * lockups on one wrapping row: the real "Winner of YC RFS Hackathon 2026 ·
- * Presented by Transpose" award, and Product Hunt "coming soon". Theme-aware.
+ * Authority credentials below the hero form.
+ * Centerpiece: the real "Winner of YC RFS Hackathon 2026 · Presented by
+ * Transpose" badge, reproduced faithfully as a theme-aware vector at a
+ * moderate size (matches the supplied light/dark artwork). Product Hunt
+ * "coming soon" sits beneath it.
+ *
+ * To use the exact supplied raster instead, drop it at
+ * `public/badges/yc-hackathon-light.png` (+ `-dark.png`) and swap the inner
+ * markup for two <img> tags gated by the theme.
  */
 function TransposeMark({ className }: { className?: string }) {
   return (
@@ -23,39 +29,43 @@ function TransposeMark({ className }: { className?: string }) {
   );
 }
 
-const lockup =
-  'group/lk lift flex items-center gap-2.5 rounded-xl border border-border bg-surface/80 px-3.5 py-2 shadow-[var(--shadow-card)] backdrop-blur hover:border-accent/40';
-const mark =
-  'flex size-7 shrink-0 items-center justify-center rounded-md text-[13px] font-bold text-white transition-transform duration-300 group-hover/lk:scale-110';
+function HackathonBadge() {
+  return (
+    <div className="lift inline-flex items-center gap-3.5 rounded-2xl border border-border bg-surface px-4 py-2.5 shadow-[var(--shadow-card)] sm:gap-4 sm:px-5 sm:py-3">
+      <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-[#f5610f] font-display text-[22px] font-bold leading-none text-white sm:size-10 sm:text-[24px]">
+        Y
+      </span>
+      <span className="text-left leading-tight">
+        <span className="block text-[11px] font-medium text-muted sm:text-xs">Winner of</span>
+        <span className="block font-display text-[15px] font-semibold tracking-[-0.01em] text-ink sm:text-base">
+          YC RFS Hackathon 2026
+        </span>
+      </span>
+      <span aria-hidden="true" className="hidden h-8 w-px self-center bg-border sm:block" />
+      <span className="hidden text-left leading-tight sm:block">
+        <span className="block text-[11px] font-medium text-muted sm:text-xs">Presented by</span>
+        <span className="flex items-center gap-1.5 text-ink">
+          <TransposeMark className="size-4" />
+          <span className="font-display text-[15px] font-semibold tracking-[-0.01em] sm:text-base">Transpose</span>
+        </span>
+      </span>
+    </div>
+  );
+}
 
 export function Badges({ t }: { t: Dictionary }) {
   const ph = t.authority.items.find((b) => b.tone === 'ph');
   return (
-    <div className="mt-9 flex flex-wrap items-center justify-center gap-3">
-      {/* YC RFS Hackathon — same scale as the Product Hunt lockup */}
-      <div className={lockup}>
-        <span className={`${mark} bg-[#f5610f]`}>Y</span>
-        <span className="text-left leading-tight">
-          <span className="block text-[10px] font-medium uppercase tracking-wide text-muted">Winner of</span>
-          <span className="block text-sm font-semibold text-ink">YC RFS Hackathon 2026</span>
-        </span>
-        <span aria-hidden="true" className="mx-0.5 hidden h-7 w-px self-center bg-border sm:block" />
-        <span className="hidden text-left leading-tight sm:block">
-          <span className="block text-[10px] font-medium uppercase tracking-wide text-muted">Presented by</span>
-          <span className="flex items-center gap-1 text-ink">
-            <TransposeMark className="size-3.5" />
-            <span className="text-sm font-semibold">Transpose</span>
-          </span>
-        </span>
-      </div>
-
-      {/* Product Hunt — coming soon */}
+    <div className="mt-9 flex flex-col items-center gap-3.5">
+      <HackathonBadge />
       {ph && (
-        <div className={lockup}>
-          <span className={`${mark} bg-[#da552f]`}>{ph.mark}</span>
+        <div className="group/lk lift flex items-center gap-2.5 rounded-xl border border-border bg-surface/80 px-3 py-1.5 shadow-[var(--shadow-card)] backdrop-blur hover:border-accent/40">
+          <span className="flex size-6 items-center justify-center rounded-md bg-[#da552f] text-[11px] font-bold text-white transition-transform duration-300 group-hover/lk:scale-110">
+            {ph.mark}
+          </span>
           <span className="text-left leading-tight">
-            <span className="block text-[10px] font-medium uppercase tracking-wide text-muted">{ph.top}</span>
-            <span className="block text-sm font-semibold text-ink">{ph.brand}</span>
+            <span className="block text-[9px] font-medium uppercase tracking-wide text-muted">{ph.top}</span>
+            <span className="block text-[13px] font-semibold text-ink">{ph.brand}</span>
           </span>
         </div>
       )}
