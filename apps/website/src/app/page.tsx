@@ -19,14 +19,18 @@ import { getI18n } from '@/i18n/server';
 
 export const dynamic = 'force-dynamic';
 
-// Marketing seed for the scarcity counter; real signups are added on top.
-const WAITLIST_SEED = 900;
+// Baseline for the "468+" scarcity counter. Real signups are added ON TOP of
+// this — but only in production with WAITLIST_LIVE_COUNT enabled. In dev /
+// preview / verification the counter always reads exactly the base, so test
+// signups never leak into the public number.
+const WAITLIST_BASE = 468;
 
 async function joinedCount(): Promise<number> {
+  if (process.env.WAITLIST_LIVE_COUNT !== 'true') return WAITLIST_BASE;
   try {
-    return WAITLIST_SEED + (await countParticipants());
+    return WAITLIST_BASE + (await countParticipants());
   } catch {
-    return WAITLIST_SEED; // DB not ready — show the seed
+    return WAITLIST_BASE; // DB not ready — show the base
   }
 }
 

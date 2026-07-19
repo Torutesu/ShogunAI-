@@ -14,7 +14,7 @@ export function Hero({
   t,
   refCode,
   invite,
-  joined = 900,
+  joined = 468,
 }: {
   t: Dictionary;
   refCode?: string;
@@ -81,7 +81,6 @@ export function Hero({
 
 function Scarcity({ t, joined }: { t: Dictionary; joined: number }) {
   const pct = Math.min(100, Math.round((joined / WAITLIST_GOAL) * 100));
-  const dots = ['#00a6f4', '#f0b232', '#eb459e', '#23a55a', '#5865F2'];
   return (
     <div className="mx-auto mt-8 max-w-[420px]">
       <div className="mb-2.5 flex items-center justify-center gap-2">
@@ -94,18 +93,11 @@ function Scarcity({ t, joined }: { t: Dictionary; joined: number }) {
         </span>
       </div>
       <div className="flex items-center justify-center gap-2.5">
-        <div className="flex -space-x-2">
-          {dots.map((c, i) => (
-            <span
-              key={i}
-              className="size-6 rounded-full border-2 border-bg"
-              style={{ background: c }}
-              aria-hidden="true"
-            />
-          ))}
-        </div>
+        <AvatarStack />
         <p className="text-sm text-muted">
-          <CountUp value={joined} className="font-display text-[15px] font-semibold tabular-nums text-ink" />{' '}
+          <span className="font-display text-[15px] font-semibold tabular-nums text-ink">
+            <CountUp value={joined} />+
+          </span>{' '}
           {t.scarcity.joinedSuffix}
         </p>
       </div>
@@ -118,6 +110,42 @@ function Scarcity({ t, joined }: { t: Dictionary; joined: number }) {
       <p className="mt-2 text-[11px] text-faint">
         {pct}% {t.scarcity.goalLabel}
       </p>
+    </div>
+  );
+}
+
+/**
+ * Social-proof avatar stack. Drop real photos / X avatars into
+ * `public/avatars/` and set `src` below — items with no `src` fall back to a
+ * tasteful monogram tile (never the old flat dots).
+ */
+type Face = { name: string; src?: string; tint: string };
+const FACES: Face[] = [
+  { name: 'Mika', tint: 'linear-gradient(135deg,#00a6f4,#0089cf)' },
+  { name: 'Devin', tint: 'linear-gradient(135deg,#f0b232,#e08a00)' },
+  { name: 'Alex', tint: 'linear-gradient(135deg,#eb459e,#b12e73)' },
+  { name: 'Kenji', tint: 'linear-gradient(135deg,#23a55a,#158043)' },
+  { name: 'Sara', tint: 'linear-gradient(135deg,#5865F2,#3b45c0)' },
+];
+
+function AvatarStack() {
+  return (
+    <div className="flex -space-x-2.5">
+      {FACES.map((f) => (
+        <span
+          key={f.name}
+          title={f.name}
+          className="grid size-8 place-items-center overflow-hidden rounded-full border-2 border-bg text-[11px] font-semibold text-white shadow-[0_1px_3px_rgba(9,11,12,0.18)] ring-1 ring-black/5"
+          style={f.src ? undefined : { backgroundImage: f.tint }}
+        >
+          {f.src ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={f.src} alt={f.name} className="size-full object-cover" />
+          ) : (
+            f.name.charAt(0)
+          )}
+        </span>
+      ))}
     </div>
   );
 }
