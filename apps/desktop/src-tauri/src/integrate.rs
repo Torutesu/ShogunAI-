@@ -28,8 +28,8 @@ pub mod mac {
     use spike_harness::clock::{OffsetEstimator, SyncSample};
     use spike_harness::cpu::{read_process_usage, CpuMeter, CPU_METHOD};
     use spike_harness::record::{
-        Body, CpuSample, ExpandLatency, ExpandSession, Heartbeat, Interactions, Mode,
-        StateTransition,
+        Body, CacheTrigger, CacheUpdate, CpuSample, ExpandLatency, ExpandSession, Heartbeat,
+        Interactions, Mode, StateTransition,
     };
     use spike_harness::recorder::Recorder;
     use spike_harness::stats::MovingAverage;
@@ -53,6 +53,18 @@ pub mod mac {
     struct ClockSyncPayload {
         seq: u32,
         rust_mono_ns: u64,
+    }
+
+    /// The `context` event payload (spec §3.11.2). `text` is the live captured context for
+    /// on-screen display only — it never enters a record (the harness stores digests). The
+    /// window title is not fetched; `title_masked` carries the non-sensitive app name.
+    #[derive(Clone, serde::Serialize)]
+    struct ContextPayload {
+        bundle_id: String,
+        title_masked: String,
+        text: String,
+        captured_at_ms: u64,
+        partial: bool,
     }
 
     /// Events into the engine loop.
@@ -86,6 +98,9 @@ pub mod mac {
         collapse_reason: Mutex<&'static str>,
         cpu_1min: Mutex<Option<f64>>,
         engine_state: Mutex<&'static str>,
+        /// Latest pre-assembled context (spec §3.10.2 step 6). Re-emitted to the webview on
+        /// Expanded so a freshly-opened panel shows the current context immediately.
+        last_context: Mutex<Option<ContextPayload>>,
         is_notch: bool,
         display_count: u32,
     }
@@ -209,6 +224,7 @@ pub mod mac {
             collapse_reason: Mutex::new("timeout"),
             cpu_1min: Mutex::new(None),
             engine_state: Mutex::new("idle"),
+            last_context: Mutex::new(None),
             is_notch: geo.is_notch,
             display_count: geo.display_count,
         });
@@ -228,6 +244,7 @@ pub mod mac {
         spawn_clock_sync(&app, &shared);
         spawn_cpu_sampler(&shared);
         spawn_heartbeat(&app, &shared);
+        spawn_focus_watcher(&app, &shared);
         spawn_engine_loop(app, shared.clone(), ev_tx, ev_rx, geo);
         shared
     }
@@ -316,6 +333,14 @@ pub mod mac {
                                     scrolls: 0,
                                     manual_false_positive: false,
                                 });
+                            }
+                        }
+                        // Push the pre-assembled context so the panel shows it on open. This
+                        // is a READ of the existing cache — it never triggers a walk (spec
+                        // §3.10.3 "no collect-on-press"); the walk only runs on focus change.
+                        if let Ok(g) = shared.last_context.lock() {
+                            if let Some(ctx) = g.as_ref() {
+                                let _ = app.emit("context", ctx.clone());
                             }
                         }
                     }
@@ -448,6 +473,64 @@ pub mod mac {
                     uptime_s,
                 }));
             });
+        });
+    }
+
+    /// Focus-driven context cache (spec §3.10). Polls the frontmost app; on change it runs
+    /// the bounded AX snapshot, emits the `context` event (live text for on-screen display),
+    /// and records the Q3-A `metric.cache_update` (digest only — never the text, CLAUDE.md).
+    ///
+    /// This is the spike's pre-assembly path: the walk runs ONLY here, on focus change —
+    /// never from the state machine or a press (spec §3.10.3). Event-driven
+    /// NSWorkspace/AXObserver subscription is the on-device refinement (runbook D-03/D-05);
+    /// polling keeps detection off the AX path, and t0/t1 bracket only the walk so the
+    /// poll-detection lag never inflates the measured latency.
+    fn spawn_focus_watcher(app: &AppHandle, shared: &Arc<Shared>) {
+        let app = app.clone();
+        let shared = shared.clone();
+        std::thread::spawn(move || {
+            let mut last_pid: Option<i32> = None;
+            loop {
+                std::thread::sleep(Duration::from_millis(400));
+                let Some(front) = crate::display::frontmost_app() else { continue };
+                if Some(front.pid) == last_pid {
+                    continue; // same app still frontmost — nothing to re-assemble
+                }
+                last_pid = Some(front.pid);
+                // Bracket ONLY the walk (spec §4.2.2): the poll cadence is not measured.
+                let t0 = shared.clock.elapsed_ns();
+                let Some(result) = crate::axcache::snapshot(front.pid, 300) else { continue };
+                let t1 = shared.clock.elapsed_ns();
+                let latency_ms = t1.saturating_sub(t0) as f64 / 1e6;
+                // Diagnostics carry bundle + counts ONLY — never the captured text.
+                eprintln!(
+                    "[spike] cache_update bundle={} bytes={} elems={} depth={} partial={} {:.1}ms",
+                    front.bundle_id, result.text_bytes, result.elements_visited,
+                    result.depth_reached, result.partial, latency_ms
+                );
+                let payload = ContextPayload {
+                    bundle_id: front.bundle_id.clone(),
+                    title_masked: front.name.clone(),
+                    text: result.text.clone(),
+                    captured_at_ms: now_epoch_ms(),
+                    partial: result.partial,
+                };
+                if let Ok(mut g) = shared.last_context.lock() {
+                    *g = Some(payload.clone());
+                }
+                let _ = app.emit("context", payload);
+                shared.recorder.record(Body::CacheUpdate(CacheUpdate::from_text(
+                    latency_ms,
+                    CacheTrigger::AppSwitch,
+                    front.bundle_id,
+                    &result.text,
+                    result.elements_visited,
+                    result.depth_reached,
+                    result.partial,
+                    result.truncated,
+                    false,
+                )));
+            }
         });
     }
 

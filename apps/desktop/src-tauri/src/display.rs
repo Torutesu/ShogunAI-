@@ -10,11 +10,19 @@
 #![allow(dead_code, unused_imports)]
 
 #[cfg(target_os = "macos")]
-pub use mac::frontmost_pid;
+pub use mac::{frontmost_app, frontmost_pid, FrontApp};
 
 #[cfg(target_os = "macos")]
 mod mac {
     use objc2_app_kit::NSWorkspace;
+
+    /// Frontmost-app identity for the context cache (spec §3.10.1): pid + bundle id +
+    /// localized name. Bundle id / name are best-effort (empty when the app exposes none).
+    pub struct FrontApp {
+        pub pid: i32,
+        pub bundle_id: String,
+        pub name: String,
+    }
 
     /// PID of the frontmost application, if any. This is the focus signal that drives the
     /// context-cache walk (spec §3.10.1); on-device it is complemented by the
@@ -24,5 +32,15 @@ mod mac {
         let ws = NSWorkspace::sharedWorkspace();
         let app = ws.frontmostApplication()?;
         Some(app.processIdentifier())
+    }
+
+    /// Frontmost app with its bundle id and localized name — the focus-watcher's input.
+    pub fn frontmost_app() -> Option<FrontApp> {
+        let ws = NSWorkspace::sharedWorkspace();
+        let app = ws.frontmostApplication()?;
+        // NSString → Rust String via Display (lossy UTF-8); default to empty when absent.
+        let bundle_id = app.bundleIdentifier().map(|s| s.to_string()).unwrap_or_default();
+        let name = app.localizedName().map(|s| s.to_string()).unwrap_or_default();
+        Some(FrontApp { pid: app.processIdentifier(), bundle_id, name })
     }
 }

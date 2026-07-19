@@ -99,6 +99,22 @@ body,
 .notch__preview {
   font-size: 12px;
   color: #a1a1a6;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.notch__preview-app {
+  color: #f5f5f7;
+  font-weight: 600;
+}
+
+.notch__preview-text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
 }
 
 .notch__preview--empty {

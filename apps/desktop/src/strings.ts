@@ -8,6 +8,8 @@ export const STRINGS = {
     action3: "Action 3",
     partialSuffix: " (partial)",
     noContext: "no context",
+    noText: "no readable text",
+    charsCaptured: "chars",
   },
 } as const;
 

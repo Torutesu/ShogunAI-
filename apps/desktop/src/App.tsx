@@ -124,10 +124,17 @@ export function App(): JSX.Element {
         </div>
         <div className="notch__preview">
           {ctx ? (
-            <span>
-              {ctx.bundle_id}
-              {ctx.partial ? t.partialSuffix : ""}
-            </span>
+            <>
+              <div className="notch__preview-app">
+                {ctx.bundle_id || ctx.title_masked || "—"}
+                {ctx.partial ? t.partialSuffix : ""}
+              </div>
+              <div className="notch__preview-text">
+                {ctx.text
+                  ? `${ctx.text.length} ${t.charsCaptured} · ${ctx.text.replace(/\s+/g, " ").slice(0, 80)}`
+                  : t.noText}
+              </div>
+            </>
           ) : (
             <span className="notch__preview--empty">{t.noContext}</span>
           )}
