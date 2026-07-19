@@ -43,7 +43,6 @@ pub fn run() {
                 // webview from Rust; webview liveness is checked via the boot-ping
                 // command from JS instead (cmd interact kind=boot in the log).
             }
-            }
             Ok(())
         })
         .run(tauri::generate_context!())
