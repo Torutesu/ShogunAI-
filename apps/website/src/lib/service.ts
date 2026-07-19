@@ -27,8 +27,10 @@ export async function addParticipant(
   ref?: string,
   ipHash?: string,
   xHandle?: unknown,
+  plan?: unknown,
 ): Promise<{ row: Participant; duplicate: boolean }> {
   const normalized = email.trim().toLowerCase();
+  const planIntent = typeof plan === 'string' ? plan.trim().slice(0, 40) || null : null;
 
   const existing = await findByEmail(normalized);
   if (existing) {
@@ -61,6 +63,7 @@ export async function addParticipant(
       ipHash: ipHash ?? null,
       joinPosition: position,
       xHandle: handle,
+      plan: planIntent,
     });
   } catch {
     // Most likely the x_handle unique clashed — retry without it.

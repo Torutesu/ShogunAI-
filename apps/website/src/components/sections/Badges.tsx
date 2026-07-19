@@ -59,13 +59,15 @@ export function Badges({ t }: { t: Dictionary }) {
     <div className="mt-9 flex flex-col items-center gap-3.5">
       <HackathonBadge />
       {ph && (
-        <div className="group/lk lift flex items-center gap-2.5 rounded-xl border border-border bg-surface/80 px-3 py-1.5 shadow-[var(--shadow-card)] backdrop-blur hover:border-accent/40">
-          <span className="flex size-6 items-center justify-center rounded-md bg-[#da552f] text-[11px] font-bold text-white transition-transform duration-300 group-hover/lk:scale-110">
+        <div className="group/lk lift flex items-center gap-3.5 rounded-2xl border border-border bg-surface px-4 py-2.5 shadow-[var(--shadow-card)] hover:border-accent/40 sm:gap-4 sm:px-5 sm:py-3">
+          <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-[#da552f] font-display text-[22px] font-bold leading-none text-white transition-transform duration-300 group-hover/lk:scale-105 sm:size-10 sm:text-[24px]">
             {ph.mark}
           </span>
           <span className="text-left leading-tight">
-            <span className="block text-[9px] font-medium uppercase tracking-wide text-muted">{ph.top}</span>
-            <span className="block text-[13px] font-semibold text-ink">{ph.brand}</span>
+            <span className="block text-[11px] font-medium text-muted sm:text-xs">{ph.top}</span>
+            <span className="block font-display text-[15px] font-semibold tracking-[-0.01em] text-ink sm:text-base">
+              {ph.brand}
+            </span>
           </span>
         </div>
       )}

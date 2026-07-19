@@ -39,6 +39,9 @@ export const participants = pgTable(
     joinPosition: integer('join_position'), // 1-based signup order
     xHandle: text('x_handle'), // OPTIONAL. lowercased, no @. only holders get social points
 
+    // which plan the user intended when they signed up (e.g. "Pro · annual"); analytics only
+    plan: text('plan'),
+
     // qualifying action = a short profile: answer1=why, answer2=company, answer3=challenge
     answer1: text('answer_1'),
     answer2: text('answer_2'),

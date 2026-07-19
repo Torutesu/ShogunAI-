@@ -28,17 +28,29 @@ export function WaitlistForm({ refCode, labels }: { refCode?: string; labels: Wa
     setState('loading');
     setMsg('');
     const honeypot = (e.currentTarget.elements.namedItem('company_url') as HTMLInputElement)?.value ?? '';
+    // Plan the visitor picked in the pricing section, if any (analytics only).
+    let plan: string | null = null;
+    try {
+      plan = window.localStorage.getItem('shogun_plan_intent');
+    } catch {
+      /* storage unavailable */
+    }
     try {
       const res = await fetch('/api/waitlist/signup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, ref: refCode, company_url: honeypot }),
+        body: JSON.stringify({ email, ref: refCode, company_url: honeypot, plan }),
       });
       const data = await res.json();
       if (!res.ok || !data.ok) {
         setState('error');
         setMsg(data?.error === 'rate_limited' ? labels.errRate : labels.errBadEmail);
         return;
+      }
+      try {
+        window.localStorage.removeItem('shogun_plan_intent');
+      } catch {
+        /* ignore */
       }
       if (data.statusUrl) {
         window.location.href = data.statusUrl;

@@ -35,6 +35,7 @@ async function main() {
   await sql`ALTER TABLE participants ADD COLUMN IF NOT EXISTS nickname text`;
   await sql`ALTER TABLE participants ADD COLUMN IF NOT EXISTS join_position integer`;
   await sql`ALTER TABLE participants ADD COLUMN IF NOT EXISTS x_handle text`;
+  await sql`ALTER TABLE participants ADD COLUMN IF NOT EXISTS plan text`;
   await sql`CREATE INDEX IF NOT EXISTS participants_ref_code_idx     ON participants (ref_code)`;
   await sql`CREATE INDEX IF NOT EXISTS participants_status_token_idx ON participants (status_token)`;
   await sql`CREATE INDEX IF NOT EXISTS participants_referred_by_idx  ON participants (referred_by)`;

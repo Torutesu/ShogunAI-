@@ -74,8 +74,20 @@ function Plan({ plan, annual, b, featured }: { plan: PlanData; annual: boolean; 
           </li>
         ))}
       </ul>
-      <Button asChild variant={featured ? 'primary' : 'secondary'} className="mt-auto w-full">
-        <a href="#get-started">{plan.cta}</a>
+      <Button
+        variant={featured ? 'primary' : 'secondary'}
+        className="mt-auto w-full"
+        onClick={() => {
+          // Remember which plan the visitor picked so the waitlist signup can record it.
+          try {
+            window.localStorage.setItem('shogun_plan_intent', `${plan.name} · ${annual ? 'annual' : 'monthly'}`);
+          } catch {
+            /* storage unavailable */
+          }
+          document.getElementById('get-started')?.scrollIntoView({ behavior: 'smooth' });
+        }}
+      >
+        {plan.cta}
       </Button>
     </Card>
   );

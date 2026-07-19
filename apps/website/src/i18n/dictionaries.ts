@@ -167,7 +167,7 @@ const en = {
       annual: '$49',
       monthly: '$62',
       points: ['Passive memory capture', 'Natural-language recall', 'Core tool connections', 'Everyday execution'],
-      cta: 'Start 7-day trial',
+      cta: 'Get early access',
     },
     pro: {
       badge: 'Most popular',
@@ -175,7 +175,7 @@ const en = {
       annual: '$99',
       monthly: '$124',
       points: ['Everything in Standard', 'Unlimited memory & recall', 'All tools & autonomous actions', 'Priority support'],
-      cta: 'Start 7-day trial',
+      cta: 'Get early access',
     },
   },
   cta: {
@@ -507,7 +507,7 @@ const ja: Dictionary = {
       annual: '$49',
       monthly: '$62',
       points: ['受動的なメモリ記録', '自然言語での呼び出し', '主要ツール連携', '日々の実行'],
-      cta: '7日間トライアル',
+      cta: 'アーリーアクセス',
     },
     pro: {
       badge: '人気',
@@ -515,7 +515,7 @@ const ja: Dictionary = {
       annual: '$99',
       monthly: '$124',
       points: ['Standard の全機能', '無制限のメモリと呼び出し', '全ツールと自律実行', '優先サポート'],
-      cta: '7日間トライアル',
+      cta: 'アーリーアクセス',
     },
   },
   cta: {
@@ -816,7 +816,7 @@ const es: Dictionary = {
       annual: '$49',
       monthly: '$62',
       points: ['Captura pasiva de memoria', 'Recuperación en lenguaje natural', 'Conexiones de herramientas clave', 'Ejecución diaria'],
-      cta: 'Prueba de 7 días',
+      cta: 'Acceso anticipado',
     },
     pro: {
       badge: 'Más popular',
@@ -824,7 +824,7 @@ const es: Dictionary = {
       annual: '$99',
       monthly: '$124',
       points: ['Todo lo de Standard', 'Memoria y recuperación ilimitadas', 'Todas las herramientas y acciones autónomas', 'Soporte prioritario'],
-      cta: 'Prueba de 7 días',
+      cta: 'Acceso anticipado',
     },
   },
   cta: {
@@ -1125,7 +1125,7 @@ const de: Dictionary = {
       annual: '$49',
       monthly: '$62',
       points: ['Passive Gedächtnis-Erfassung', 'Abruf in natürlicher Sprache', 'Kern-Tool-Anbindungen', 'Tägliche Ausführung'],
-      cta: '7-Tage-Test starten',
+      cta: 'Früher Zugang',
     },
     pro: {
       badge: 'Am beliebtesten',
@@ -1133,7 +1133,7 @@ const de: Dictionary = {
       annual: '$99',
       monthly: '$124',
       points: ['Alles aus Standard', 'Unbegrenztes Gedächtnis & Abruf', 'Alle Tools & autonome Aktionen', 'Priorisierter Support'],
-      cta: '7-Tage-Test starten',
+      cta: 'Früher Zugang',
     },
   },
   cta: {
