@@ -13,7 +13,7 @@ function Track({ items, reverse }: { items: string[]; reverse?: boolean }) {
       {doubled.map((name, i) => (
         <span
           key={`${name}-${i}`}
-          className="mx-8 shrink-0 font-display text-xl font-medium tracking-tight text-[#b6bec4] transition-colors hover:text-muted"
+          className="mx-8 shrink-0 font-display text-xl font-medium tracking-tight text-faint transition-colors hover:text-muted"
           aria-hidden={i >= items.length}
         >
           {name}

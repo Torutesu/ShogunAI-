@@ -3,7 +3,8 @@ import { GeistSans } from 'geist/font/sans';
 import type { Metadata } from 'next';
 import { Inter } from 'next/font/google';
 import { LogoDefs } from '@/components/Logo';
-import { JsonLd, organizationSchema, softwareApplicationSchema } from '@/components/seo/JsonLd';
+import { ThemeScript } from '@/components/ThemeToggle';
+import { JsonLd, organizationSchema, softwareApplicationSchema, websiteSchema } from '@/components/seo/JsonLd';
 import { getLocale } from '@/i18n/server';
 import { siteConfig } from '@/lib/site';
 import './globals.css';
@@ -38,10 +39,18 @@ export const metadata: Metadata = {
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
   const locale = await getLocale();
   return (
-    <html lang={locale} className={`${GeistSans.variable} ${GeistMono.variable} ${inter.variable}`}>
-      <body className="min-h-dvh bg-surface font-sans text-ink antialiased">
+    <html
+      lang={locale}
+      suppressHydrationWarning
+      className={`${GeistSans.variable} ${GeistMono.variable} ${inter.variable}`}
+    >
+      <head>
+        <ThemeScript />
+      </head>
+      <body className="min-h-dvh bg-bg font-sans text-ink antialiased">
         <JsonLd data={organizationSchema} />
         <JsonLd data={softwareApplicationSchema} />
+        <JsonLd data={websiteSchema} />
         <LogoDefs />
         {children}
       </body>

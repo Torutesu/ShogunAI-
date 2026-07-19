@@ -37,7 +37,7 @@ export function Memory({ t }: { t: Dictionary }) {
         </Reveal>
 
         <Reveal delay={0.1} y={24}>
-          <Card className="p-5">
+          <Card className="lift p-5">
             <div className="mb-4 flex items-center justify-between">
               <Badge dot>{m.recallChip}</Badge>
               <span className="text-xs text-muted">0.2s</span>

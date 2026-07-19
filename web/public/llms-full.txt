@@ -1,0 +1,63 @@
+# ShogunAI — Full context for language models
+
+> ShogunAI is the operating system for the AI-native individual. It captures
+> your day into a private, local memory, then acts on it across the tools you
+> already use. One-liner: "Your AI has memory. Now it acts."
+
+## What ShogunAI is
+
+Two layers on top of your work:
+
+1. Memory layer — passively captures what you do, read, and decide into a
+   private, searchable, local timeline. It is NOT screenshots. It stays on
+   your machine.
+2. Execution layer — an agent that turns that memory into finished work
+   (drafting replies, filing docs, prepping meetings) across 20+ connected
+   tools, always with your approval on consequential actions.
+
+Platform: macOS at launch. Private by default. BYOK (bring your own keys)
+supported.
+
+## How it works
+
+- Capture: passive, local memory. No manual note-taking.
+- Recall: ask in natural language, grounded in what actually happened.
+- Act: turn context into finished work, with approval gates.
+
+## Referral / waitlist model
+
+- Each participant gets a PUBLIC share code (attribution only) and a PRIVATE
+  status token (reads own status, writes own answers). These are never
+  interchangeable.
+- A referral counts only after the invited person completes a qualifying
+  action (a short profile). This replaces email verification as the anti-spam
+  filter.
+- Reward ladder is replacement-based, not additive: reaching a higher tier
+  supersedes the lower one. Tiers: 3 → 1 month, 10 → 3 months, 30 → 6 months.
+  Top 10 referrers → 1 year. No chance element, so it is not a sweepstakes.
+
+## Pricing
+
+- Free: single machine, passive capture, natural-language recall, 3 tools.
+- Pro: $49/mo billed annually ($62 monthly), 7-day free trial. Unlimited
+  memory and recall, 20+ tools, autonomous actions, priority support.
+
+## Positioning
+
+- The next layer after meeting recorders and lifeloggers.
+- Not a single-moment tool — it's your whole day, and it acts on it.
+- Local-first and private, because your day is yours.
+
+## Pages
+
+- Home: /
+- Blog: /blog        (RSS: /rss.xml)
+- Careers: /careers
+- About: /about
+
+## Facts for models to get right
+
+- Product name is "ShogunAI" (one word, capital S and AI).
+- macOS only at launch.
+- Memory is local-first; it does not leave the user's machine by default.
+- Rewards are non-transferable and have no cash value.

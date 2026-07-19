@@ -14,7 +14,7 @@ export function Hero({ t, refCode, invite }: { t: Dictionary; refCode?: string; 
       {/* Sky backdrop + drifting orbs */}
       <div
         aria-hidden="true"
-        className="pointer-events-none absolute inset-0 -z-20 bg-[radial-gradient(120%_80%_at_50%_-10%,var(--color-sky-soft)_0%,var(--color-cloud)_45%,#fff_75%)]"
+        className="pointer-events-none absolute inset-0 -z-20 bg-[radial-gradient(120%_80%_at_50%_-10%,var(--color-sky-soft)_0%,var(--color-cloud)_45%,var(--color-bg)_75%)]"
       />
       <span aria-hidden="true" className="orb -left-24 -top-28 -z-10 size-[520px] bg-[#8fe3ff]" />
       <span aria-hidden="true" className="orb -right-28 -top-10 -z-10 size-[460px] bg-[#bfeaff] [animation-delay:-6s]" />
@@ -71,7 +71,7 @@ function HeroMock({ t }: { t: Dictionary }) {
         <span className="size-2.5 rounded-full bg-[#e0e4e7]" />
         <span className="size-2.5 rounded-full bg-[#e0e4e7]" />
         <span className="size-2.5 rounded-full bg-[#e0e4e7]" />
-        <div className="ml-3 flex h-[26px] max-w-[320px] flex-1 items-center gap-2 rounded-full border border-border bg-white px-3 text-xs text-muted">
+        <div className="ml-3 flex h-[26px] max-w-[320px] flex-1 items-center gap-2 rounded-full border border-border bg-surface px-3 text-xs text-muted">
           <span className="text-accent">◈</span> app.shogunai.com
         </div>
       </div>
@@ -80,7 +80,7 @@ function HeroMock({ t }: { t: Dictionary }) {
           <div className="mb-3 flex items-center gap-2 font-display text-sm font-semibold">
             <Logo size={18} /> ShogunAI
           </div>
-          <div className="rounded-lg bg-white px-2.5 py-2 text-[13px] font-medium text-ink shadow-[var(--shadow-card)]">
+          <div className="rounded-lg bg-surface px-2.5 py-2 text-[13px] font-medium text-ink shadow-[var(--shadow-card)]">
             {h.mockNav[0]}
           </div>
           {h.mockNav.slice(1, 3).map((x) => (
@@ -105,7 +105,7 @@ function HeroMock({ t }: { t: Dictionary }) {
           {[h.mockRow1, h.mockRow2, h.mockRow3].map((row, i) => (
             <div
               key={row}
-              className="mb-2 flex items-center justify-between rounded-lg border border-border bg-white px-3.5 py-3"
+              className="mb-2 flex items-center justify-between rounded-lg border border-border bg-surface px-3.5 py-3"
             >
               <span className="text-[13px] font-medium text-ink">
                 <span className="mr-2 font-bold text-accent">✓</span>
@@ -122,7 +122,7 @@ function HeroMock({ t }: { t: Dictionary }) {
 
 function Tile({ k, n, s, accent }: { k: string; n: number; s: string; accent?: boolean }) {
   return (
-    <div className={`rounded-lg border p-3.5 ${accent ? 'border-[#bfeeff] bg-sky-soft' : 'border-border bg-white'}`}>
+    <div className={`rounded-lg border p-3.5 ${accent ? 'border-[#bfeeff] bg-sky-soft' : 'border-border bg-surface'}`}>
       <div className="text-[11px] font-semibold uppercase tracking-[0.04em] text-muted">{k}</div>
       <CountUp value={n} className="mt-1.5 block font-display text-[26px] font-semibold tabular-nums" />
       <div className={`mt-0.5 text-xs ${accent ? 'text-accent-strong' : 'text-muted'}`}>{s}</div>

@@ -46,7 +46,7 @@ export function Badges({ t }: { t: Dictionary }) {
 
 function Lockup({ mark, top, brand }: { mark: React.ReactNode; top: string; brand: string }) {
   return (
-    <div className="flex items-center gap-2.5 rounded-xl border border-border bg-surface/80 px-3.5 py-2 shadow-[var(--shadow-card)] backdrop-blur">
+    <div className="lift flex items-center gap-2.5 rounded-xl border border-border bg-surface/80 px-3.5 py-2 shadow-[var(--shadow-card)] backdrop-blur hover:border-accent/40">
       {mark}
       <span className="text-left leading-tight">
         <span className="block text-[10px] font-medium uppercase tracking-wide text-muted">{top}</span>

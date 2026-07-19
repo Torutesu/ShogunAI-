@@ -23,7 +23,7 @@ export default async function CareersPage() {
           <h2 className="mb-6 font-display text-2xl font-semibold">{t.careers.perksTitle}</h2>
           <div className="grid gap-6 md:grid-cols-3">
             {t.careers.perks.map((p) => (
-              <Card key={p.title} className="h-full">
+              <Card key={p.title} className="lift h-full">
                 <h3 className="font-display text-lg font-semibold">{p.title}</h3>
                 <p className="mt-2 text-sm leading-relaxed text-muted">{p.body}</p>
               </Card>

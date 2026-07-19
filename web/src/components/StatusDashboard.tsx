@@ -183,7 +183,7 @@ function Rung({
   return (
     <div
       className={`flex items-center gap-3.5 rounded-lg border px-4 py-3.5 ${
-        done ? 'border-[#bfeeff] bg-sky-soft' : next ? 'border-accent ring-4 ring-accent/10' : 'border-border bg-white'
+        done ? 'border-[#bfeeff] bg-sky-soft' : next ? 'border-accent ring-4 ring-accent/10' : 'border-border bg-surface'
       }`}
     >
       <span
@@ -227,7 +227,7 @@ function ProfileForm({ code, onDone, answered }: { code: string; onDone: () => v
     }
   }
 
-  const field = 'h-11 rounded-lg border border-border bg-white px-4 text-[15px] text-ink focus:border-accent focus:outline-none focus:ring-4 focus:ring-accent/15';
+  const field = 'h-11 rounded-lg border border-border bg-surface px-4 text-[15px] text-ink focus:border-accent focus:outline-none focus:ring-4 focus:ring-accent/15';
 
   return (
     <Card>

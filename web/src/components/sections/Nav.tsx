@@ -1,6 +1,7 @@
 import { Menu } from 'lucide-react';
 import { Logo } from '@/components/Logo';
 import { LocaleToggle } from '@/components/LocaleToggle';
+import { ThemeToggle } from '@/components/ThemeToggle';
 import { Button } from '@/components/ui/button';
 import { getI18n } from '@/i18n/server';
 
@@ -24,13 +25,18 @@ export async function Nav() {
 
         <nav aria-label="Primary" className="hidden items-center gap-7 md:flex">
           {links.map((l) => (
-            <a key={l.href} href={l.href} className="text-sm font-medium text-muted transition-colors hover:text-ink">
+            <a
+              key={l.href}
+              href={l.href}
+              className="relative text-sm font-medium text-muted transition-colors after:absolute after:-bottom-1.5 after:left-0 after:h-px after:w-0 after:bg-ink after:transition-all after:duration-300 after:content-[''] hover:text-ink hover:after:w-full"
+            >
               {l.label}
             </a>
           ))}
         </nav>
 
         <div className="flex items-center gap-2.5">
+          <ThemeToggle />
           <LocaleToggle locale={locale} label={t.nav.langLabel} />
           <Button asChild variant="secondary" size="sm" className="hidden sm:inline-flex">
             <a href="/#get-started">{t.nav.signIn}</a>

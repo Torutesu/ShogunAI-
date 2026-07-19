@@ -18,7 +18,7 @@ type PlanData = {
 function Plan({ plan, featured }: { plan: PlanData; featured?: boolean }) {
   return (
     <Card
-      className={`relative flex flex-col p-7 ${featured ? 'border-accent shadow-[0_12px_40px_rgba(0,166,244,0.14)]' : ''}`}
+      className={`lift relative flex flex-col p-7 ${featured ? 'border-accent shadow-[0_12px_40px_rgba(0,166,244,0.14)]' : ''}`}
     >
       {plan.badge && (
         <Badge dot className="absolute -top-3.5 left-7 bg-sky">

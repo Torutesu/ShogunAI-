@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { Reveal } from '@/components/animations/Reveal';
 import { PageHeader, PageShell } from '@/components/PageShell';
 import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
@@ -10,7 +11,10 @@ export const dynamic = 'force-dynamic';
 export const metadata: Metadata = {
   title: 'Blog',
   description: 'Field notes from building an OS for the AI-native individual.',
-  alternates: { canonical: '/blog' },
+  alternates: {
+    canonical: '/blog',
+    types: { 'application/rss+xml': '/rss.xml' },
+  },
 };
 
 function formatDate(iso: string, locale: string) {
@@ -47,9 +51,10 @@ export default async function BlogIndex() {
           </div>
 
           <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
-            {posts.map((p) => (
-              <a key={p.slug} href={`/blog/${p.slug}`} className="group">
-                <Card className="flex h-full flex-col transition-shadow group-hover:shadow-[var(--shadow-float)]">
+            {posts.map((p, i) => (
+              <Reveal key={p.slug} delay={(i % 3) * 0.06}>
+                <a href={`/blog/${p.slug}`} className="group block h-full">
+                  <Card className="lift flex h-full flex-col">
                   <div className="mb-3 flex items-center gap-2">
                     <Badge>{p.category}</Badge>
                     <span className="text-xs text-muted">
@@ -62,8 +67,9 @@ export default async function BlogIndex() {
                     <span>{formatDate(p.date, locale)}</span>
                     <span className="font-medium text-accent">{t.blog.readMore}</span>
                   </div>
-                </Card>
-              </a>
+                  </Card>
+                </a>
+              </Reveal>
             ))}
           </div>
         </div>

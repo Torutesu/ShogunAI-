@@ -20,6 +20,15 @@ export const organizationSchema = {
   sameAs: ['https://twitter.com/shogunai', 'https://www.linkedin.com/company/shogunai'],
 };
 
+export const websiteSchema = {
+  '@context': 'https://schema.org',
+  '@type': 'WebSite',
+  name: siteConfig.name,
+  url: siteConfig.url,
+  inLanguage: ['en', 'ja'],
+  publisher: { '@type': 'Organization', name: siteConfig.name },
+};
+
 export const softwareApplicationSchema = {
   '@context': 'https://schema.org',
   '@type': 'SoftwareApplication',

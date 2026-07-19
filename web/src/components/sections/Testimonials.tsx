@@ -29,7 +29,7 @@ function LinkedInIcon({ className }: { className?: string }) {
 
 function DiscordCard({ item }: { item: Item }) {
   return (
-    <figure className="overflow-hidden rounded-xl border border-[#1e1f22] bg-[#313338] shadow-[var(--shadow-float)]">
+    <figure className="lift overflow-hidden rounded-xl border border-[#1e1f22] bg-[#313338] shadow-[var(--shadow-float)]">
       <div className="flex items-center gap-2 border-b border-black/20 bg-[#2b2d31] px-4 py-2 text-[#b5bac1]">
         <DiscordIcon className="h-3.5 w-auto text-[#5865F2]" />
         <span className="text-xs font-semibold">Discord</span>
@@ -56,7 +56,7 @@ function DiscordCard({ item }: { item: Item }) {
 
 function LinkedInCard({ item }: { item: Item }) {
   return (
-    <figure className="overflow-hidden rounded-xl border border-border bg-surface shadow-[var(--shadow-card)]">
+    <figure className="lift overflow-hidden rounded-xl border border-border bg-surface shadow-[var(--shadow-card)]">
       <div className="flex items-center gap-2 border-b border-border bg-cloud px-4 py-2 text-[#0a66c2]">
         <LinkedInIcon className="h-3.5 w-auto" />
         <span className="text-xs font-semibold text-ink">LinkedIn</span>

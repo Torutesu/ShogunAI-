@@ -25,7 +25,7 @@ export default async function AboutPage() {
           <h2 className="mt-14 font-display text-2xl font-semibold">{t.about.valuesTitle}</h2>
           <div className="mt-6 grid gap-6 sm:grid-cols-3">
             {t.about.values.map((v) => (
-              <Card key={v.title} className="h-full">
+              <Card key={v.title} className="lift h-full">
                 <h3 className="font-display text-lg font-semibold">{v.title}</h3>
                 <p className="mt-2 text-sm leading-relaxed text-muted">{v.body}</p>
               </Card>

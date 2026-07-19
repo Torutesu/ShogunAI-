@@ -15,7 +15,7 @@ export function How({ t }: { t: Dictionary }) {
         <div className="grid gap-6 md:grid-cols-3">
           {t.how.steps.map((s, i) => (
             <Reveal key={s.title} delay={i * 0.08}>
-              <Card className="h-full">
+              <Card className="lift h-full">
                 <div className="mb-3.5 font-mono text-sm text-accent">{String(i + 1).padStart(2, '0')}</div>
                 <h3 className="font-display text-2xl font-semibold">{s.title}</h3>
                 <p className="mt-2.5 text-sm leading-relaxed text-muted">{s.body}</p>

@@ -8,7 +8,7 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        primary: 'bg-ink text-cloud hover:bg-ink-soft hover:shadow-[var(--shadow-float)]',
+        primary: 'bg-ink text-on-ink hover:opacity-90 hover:shadow-[var(--shadow-float)]',
         secondary: 'border border-border bg-transparent text-ink hover:bg-cloud',
         tertiary: 'rounded-none px-0 text-accent hover:text-accent-strong',
         ghost: 'bg-transparent text-ink hover:bg-cloud',
