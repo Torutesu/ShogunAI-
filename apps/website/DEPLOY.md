@@ -1,5 +1,8 @@
 # Deploying the ShogunAI website to Cloudflare
 
+> **Automated:** pushing to the branch runs `.github/workflows/deploy.yml`
+> (install → migrate → build → deploy). The manual steps below are a fallback.
+
 The site is Next.js 16 (App Router, SSR + Node.js-runtime API routes) talking to
 **Supabase Postgres** via `postgres.js`. Cloudflare can't run Next SSR natively, so
 we use the **OpenNext Cloudflare adapter** (`@opennextjs/cloudflare`) to build a
