@@ -95,7 +95,7 @@ Q2（展開）/Q4（誤発火）の挙動はプラットフォーム非依存の
 | `statemachine` | T1〜T6の決定的遷移、タイマー注入、Effect（Transition/Timer/SetIgnoresMouse/MarkExpandCommit） | 11件 |
 | `axcache` | BFS walk policy（深さ8/300要素/32KB/SecureTextField subtree skip/cancel→partial） | 7件 |
 
-**注（dev-instructions §5.7との整合）**: 同§は「spike-harness以外は使い捨て・製品基礎の作り込み禁止」。本クレートは *4つの問いに答えるために正しい状態機械とヒット領域計算が必須で、かつそれをテストする*（macOSクレートはLinuxでテスト不可）ためだけに設けた、テスト可能化のための意図的な逸脱。製品コアではなくスパイクロジック。Go判定後の本実装で再利用/破棄は自由。**大きな意思決定ではないが逸脱として明示** — 不要ならこのクレートは破棄可。
+**注（dev-instructions §5.7との整合・確定）**: 同§は「spike-harness以外は使い捨て・製品基礎の作り込み禁止」。本クレートは *4つの問いに答えるために正しい状態機械とヒット領域計算が必須で、かつそれをテストする*（macOSクレートはLinuxでテスト不可）ため設けた、テスト可能化のための意図的な逸脱。**扱いは「残す」で確定**（dev-instructions §8.1 に正式化）: `spike-harness` と同じく Phase 0 から持ち越す資産とし、逸脱の許容範囲は spike-core（純ロジック＋テストのみ）に限定する。`apps/desktop/src-tauri` は引き続き使い捨て。
 
 ## この環境（Linux）で検証済みのこと
 

@@ -10,6 +10,7 @@
 2. `docs/notch-ui-prototype-spec.md` — スパイクの完全仕様。パラメータ・状態遷移・計測点はすべてここの数値に従う
 3. 本書
 4. `docs/requirements-v1.0.md` — 参照のみ。**Phase 0 では要件v1.0の機能を実装しない**（スコープは仕様書§2が全て）
+5. `docs/phase0-on-device-runbook.md` — **実機（ノッチ搭載Mac）での仕上げ・実測に入る段階で必読**。Linux+CI で完了できない挙動配線・計測タスク（D-01〜D-08）と Go/No-Go 手順を、既存コードとの接続点付きで手順化
 
 ## 1. ゴールと非ゴール
 
@@ -113,3 +114,12 @@
 
 - Go判定時: Phase 1 着手。`crates/spike-harness` を `crates/` 配下の正式クレートとして残し、`apps/desktop/src*` の扱い（破棄 or legacy/ 移動）を判定と同時に決定（仕様書§2.3）。Phase 1 の実装順序は `docs/requirements-v1.0.md` の開発フェーズ定義に従う
 - No-Go判定時: `docs/palette-ui-spec.md` を新規作成（仕様書§7の転換パス）。本仕様書・レポート・findingsは判断記録として凍結
+
+### 8.1 `crates/spike-core` の扱い（確定: 残す）
+
+- **決定**: `crates/spike-core`（geometry / hover判定 / 状態機械 / AX walk policy / NotchEngine統合）を、`spike-harness` と同じく **Phase 0 から持ち越す資産**として残す。`apps/desktop/src*`（使い捨て対象）とは扱いを分ける。
+- **根拠**: (1) Q2（展開）・Q4（誤発火）の正しさは状態機械とヒット領域計算の正しさに依存し、それを67の単体テストで担保済み。破棄するとオンデバイスで全ロジックを再実装＋無テストになり、担保が消える。(2) macOSアダプタを「OSイベントを流し込み Effect を適用するだけ」の薄い層に保つ設計の要。(3) Go後のPhase 1本実装で、状態機械・geometry・walk policy はそのまま製品ロジックとして流用可能。
+- **dev-instructions §5.7 との関係**: 同§「spike-harness以外は使い捨て・製品基礎の作り込み禁止」からの**意図的な逸脱を正式に承認**する。逸脱を許容する範囲は spike-core に限る（純ロジック＋テストのみ。macOS依存・DB・LLM・ネットワークを持ち込まない）。`apps/desktop/src-tauri`（FFIアダプタ・グルー）は引き続き使い捨て前提。
+- **Go/No-Go 別の後始末**:
+  - Go: `crates/spike-core` を Phase 1 の該当クレート（`shogun-fusion` 等）へ吸収 or リネームして継続。テストは維持。
+  - No-Go（パレット方式へ転換）: geometry の一部（h_mb 取得）と Recorder/slo は流用、状態機械は HoverIntent を除いた縮退版へ改変（仕様書§7.2 の流用表に準拠）。engine/hover のホバー判定は廃棄。
