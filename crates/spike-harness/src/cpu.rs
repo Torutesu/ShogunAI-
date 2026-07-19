@@ -55,6 +55,8 @@ pub struct ProcessUsage {
 /// are `mach_absolute_time` TICKS, not ns; converted here via `mach_timebase_info`.
 /// MUST be validated against Activity Monitor on-device before trusting Q3-B (spec §4.2.3).
 #[cfg(target_os = "macos")]
+#[allow(deprecated)] // libc marks mach_timebase_info deprecated in favour of mach2; we
+// deliberately use one FFI source (libc) for the whole reader rather than a second crate.
 pub fn read_process_usage() -> std::io::Result<ProcessUsage> {
     // SAFETY: rusage_info_v4 is POD; zeroed is a valid initial value for an out-param.
     let mut info: libc::rusage_info_v4 = unsafe { std::mem::zeroed() };

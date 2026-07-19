@@ -379,15 +379,20 @@ pub mod mac {
         let app = app.clone();
         let shared = shared.clone();
         std::thread::spawn(move || {
-            // Give the webview a moment to attach its listeners.
-            std::thread::sleep(Duration::from_millis(1500));
-            for seq in 0..5u32 {
-                let send_ns = shared.clock.elapsed_ns();
-                if let Ok(mut m) = shared.sync_sent.lock() {
-                    m.insert(seq, send_ns);
+            // Three rounds so a slow webview (cold VM) still calibrates: listeners may not
+            // be attached for the first round; the min-RTT estimator just keeps the best.
+            let mut seq = 0u32;
+            for round_delay_ms in [1500u64, 4500, 6000] {
+                std::thread::sleep(Duration::from_millis(round_delay_ms));
+                for _ in 0..5u32 {
+                    let send_ns = shared.clock.elapsed_ns();
+                    if let Ok(mut m) = shared.sync_sent.lock() {
+                        m.insert(seq, send_ns);
+                    }
+                    let _ = app.emit("clock_sync", ClockSyncPayload { seq, rust_mono_ns: send_ns });
+                    seq += 1;
+                    std::thread::sleep(Duration::from_millis(200));
                 }
-                let _ = app.emit("clock_sync", ClockSyncPayload { seq, rust_mono_ns: send_ns });
-                std::thread::sleep(Duration::from_millis(200));
             }
         });
     }
