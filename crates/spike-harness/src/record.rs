@@ -181,6 +181,14 @@ pub enum Body {
     AnimTimeout { state: String },
     #[serde(rename = "event.panel_recovered")]
     PanelRecovered { method: String, recover_ms: u64 },
+    /// Q2 t0 marker: the dwell-expiry expand commit (spec §4.2.1). `t0_mono_ns` is on the
+    /// shared harness clock so `painted` round-trips can compute t1−t0 on one timeline.
+    #[serde(rename = "event.expand_commit")]
+    ExpandCommit { t0_mono_ns: u64 },
+    /// CGEventTap lifecycle: false when the system disabled the tap (timeout/user input),
+    /// true when (re-)enabled. Silence-proofing for Q1/Q4 (a dead tap must be visible).
+    #[serde(rename = "event.tap_status")]
+    TapStatus { active: bool },
 }
 
 /// One JSONL line. `ts` = epoch ms, `mono` = ns since process start.

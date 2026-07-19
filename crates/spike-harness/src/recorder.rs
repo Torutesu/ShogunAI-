@@ -22,7 +22,20 @@ pub struct Recorder {
 impl Recorder {
     /// `cap` is the ring-buffer capacity (spec §4.1 uses 8192).
     pub fn new(cap: usize) -> Self {
-        Self { clock: MonoClock::new(), buf: Arc::new(Mutex::new(RingBuffer::new(cap))) }
+        Self::with_clock(cap, MonoClock::new())
+    }
+
+    /// Build with a caller-supplied clock so every subsystem (engine t0 markers, record
+    /// `mono` stamps, offset estimation) shares ONE monotonic timeline — three independent
+    /// `MonoClock::new()` epochs would bias Q2 latency math by their creation skew.
+    pub fn with_clock(cap: usize, clock: MonoClock) -> Self {
+        Self { clock, buf: Arc::new(Mutex::new(RingBuffer::new(cap))) }
+    }
+
+    /// The shared clock (Copy) for stamping externally-computed timestamps on the same
+    /// timeline as this recorder's `mono` field.
+    pub fn clock(&self) -> MonoClock {
+        self.clock
     }
 
     /// Stamp and enqueue a record. Never blocks on I/O; drops the oldest on overflow.
@@ -49,17 +62,45 @@ impl Recorder {
         flush_to(&recs, w)
     }
 
-    /// Spawn the background flusher: append pending records to `path` every `interval`.
-    /// Runs for the process lifetime (the spike never stops it).
-    pub fn spawn_file_flusher(&self, path: PathBuf, interval: Duration) -> std::thread::JoinHandle<()> {
+    /// Spawn the background flusher: append pending records to `dir/YYYYMMDD.jsonl`
+    /// (UTC daily rotation, spec §4.4 — a 24h soak spans at most 2 files) every
+    /// `interval`. Skips the file open entirely when nothing was recorded (no idle
+    /// syscall churn during the Q3 CPU soak). Runs for the process lifetime.
+    pub fn spawn_file_flusher(&self, dir: PathBuf, interval: Duration) -> std::thread::JoinHandle<()> {
         let me = self.clone();
         std::thread::spawn(move || loop {
             std::thread::sleep(interval);
+            let recs = me.drain();
+            if recs.is_empty() {
+                continue;
+            }
+            let path = dir.join(format!("{}.jsonl", yyyymmdd_utc(now_epoch_ms())));
             if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
-                let _ = me.flush_to(&mut f);
+                // A failed write drops this batch; the loss is visible as a mono-stamp gap
+                // plus the dropped() counter never explains it — accepted for the spike,
+                // noted in the report's error margin section.
+                let _ = flush_to(&recs, &mut f);
             }
         })
     }
+}
+
+/// `YYYYMMDD` (UTC) for an epoch-milliseconds timestamp. Civil-from-days algorithm
+/// (Howard Hinnant) — no chrono dependency.
+pub fn yyyymmdd_utc(epoch_ms: u64) -> u32 {
+    let days = (epoch_ms / 86_400_000) as i64;
+    // Shift epoch from 1970-01-01 to 0000-03-01 era.
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097); // day of era [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365; // year of era
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // day of year (Mar-based)
+    let mp = (5 * doy + 2) / 153; // month index Mar=0
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    (y as u32) * 10_000 + (m as u32) * 100 + d as u32
 }
 
 #[cfg(test)]
@@ -105,5 +146,19 @@ mod tests {
         a.record(expand(1.0));
         b.record(expand(2.0));
         assert_eq!(b.drain().len(), 2); // both writes land in one buffer
+    }
+
+    #[test]
+    fn yyyymmdd_known_dates() {
+        assert_eq!(yyyymmdd_utc(0), 19_700_101); // epoch
+        assert_eq!(yyyymmdd_utc(86_400_000 - 1), 19_700_101); // last ms of day 0
+        assert_eq!(yyyymmdd_utc(86_400_000), 19_700_102);
+        // 2000-02-29 (leap): days since epoch = 11016.
+        assert_eq!(yyyymmdd_utc(11_016 * 86_400_000), 20_000_229);
+        // 2026-07-19: days since epoch = 20653.
+        assert_eq!(yyyymmdd_utc(20_653 * 86_400_000), 20_260_719);
+        // 2023-12-31 → 2024-01-01 rollover: 2024-01-01 is day 19723.
+        assert_eq!(yyyymmdd_utc(19_723 * 86_400_000 - 1), 20_231_231);
+        assert_eq!(yyyymmdd_utc(19_723 * 86_400_000), 20_240_101);
     }
 }

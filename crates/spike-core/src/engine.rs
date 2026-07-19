@@ -28,6 +28,8 @@ pub enum EngineInput {
     AnimDone,
     /// Esc while the panel is key (T4b).
     Esc,
+    /// Click in the transparent margin of the panel (T4c).
+    OutsideClick,
     /// Force collapse (display change / sleep, T4d).
     ForceCollapse,
 }
@@ -135,6 +137,7 @@ impl NotchEngine {
             }
             EngineInput::AnimDone => self.apply_sm(Input::AnimDone, &mut out),
             EngineInput::Esc => self.apply_sm(Input::Esc, &mut out),
+            EngineInput::OutsideClick => self.apply_sm(Input::OutsideClick, &mut out),
             EngineInput::ForceCollapse => self.apply_sm(Input::ForceCollapse, &mut out),
         }
         out

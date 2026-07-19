@@ -141,6 +141,33 @@ fn render_report(records: &[Value], inputs: &[String]) -> String {
     );
     s.push_str("- Clock-offset / rAF calibration error is annotated per spec §4.1; see harness notes.\n\n");
 
+    // Data completeness first: a verdict over missing streams is not a verdict (spec §4.5).
+    s.push_str("## Data completeness\n\n| stream | records | status |\n|---|---|---|\n");
+    let mut missing = 0;
+    for ty in [
+        "metric.expand_latency",
+        "metric.cache_update",
+        "metric.cpu_sample",
+        "event.expand_session",
+        "counter.top_band_entry",
+        "soak.heartbeat",
+    ] {
+        let n = of_type(records, ty).len();
+        let status = if n == 0 {
+            missing += 1;
+            "MISSING"
+        } else {
+            "ok"
+        };
+        s.push_str(&format!("| {ty} | {n} | {status} |\n"));
+    }
+    if missing > 0 {
+        s.push_str(&format!(
+            "\n**{missing} required stream(s) MISSING — the corresponding questions are unmeasured; do not treat their sections below as verdicts.**\n"
+        ));
+    }
+    s.push('\n');
+
     // --- Q2 expand latency ---
     s.push_str("## Q2 — Expand latency (SLO p95 ≤ 100ms)\n\n");
     s.push_str("| layer | n | p50 | p95 | p99 | max | verdict |\n|---|---|---|---|---|---|---|\n");
@@ -224,9 +251,11 @@ fn render_report(records: &[Value], inputs: &[String]) -> String {
         .filter_map(|r| r["payload"]["count"].as_u64())
         .sum();
     let fp_rate = if top_band == 0 { 0.0 } else { fp as f64 / top_band as f64 };
-    let mark = if fp as u32 <= slo::FALSE_POSITIVE_MAX_FREEWORK
-        && fp_rate <= slo::FALSE_POSITIVE_RATE_MAX
-    {
+    // Silence must never read as success (spec §4.5): zero sessions AND zero top-band
+    // entries means the tally pipeline never ran — that is missing data, not a pass.
+    let mark = if sessions.is_empty() && top_band == 0 {
+        "NO DATA (no expand sessions or top-band entries recorded — Q4 unmeasured)"
+    } else if fp as u32 <= slo::FALSE_POSITIVE_MAX_FREEWORK && fp_rate <= slo::FALSE_POSITIVE_RATE_MAX {
         "PASS"
     } else {
         "FAIL"
@@ -250,7 +279,14 @@ fn render_report(records: &[Value], inputs: &[String]) -> String {
         slo::SELF_HEAL_MAX_24H
     ));
     let gaps = heartbeat_gaps(records, slo::SOAK_HEARTBEAT_GAP_MS);
-    if gaps.is_empty() {
+    if hb.len() < 2 {
+        // Gap detection needs a heartbeat stream; with 0–1 beats, silence would otherwise
+        // render as a clean line (spec §4.5: 沈黙をもって合格にしない).
+        s.push_str(&format!(
+            "- Record blackouts: NO DATA ({} heartbeats — residency is UNMEASURED, not clean)\n",
+            hb.len()
+        ));
+    } else if gaps.is_empty() {
         s.push_str(&format!(
             "- Record blackouts (>{}s heartbeat gap): none\n",
             slo::SOAK_HEARTBEAT_GAP_MS / 1000
@@ -292,6 +328,31 @@ mod tests {
         assert!(md.contains("NO DATA"));
         assert!(md.contains("Q2"));
         assert!(md.contains("Q4"));
+    }
+
+    #[test]
+    fn empty_run_is_never_a_pass() {
+        // Silence must not render as success (spec §4.5).
+        let md = render_report(&[], &["none".into()]);
+        // Q4 with zero sessions/entries must be NO DATA, not PASS.
+        assert!(md.contains("Q4 unmeasured"));
+        // Q1 with zero heartbeats must say UNMEASURED, never "blackouts: none".
+        assert!(md.contains("UNMEASURED"));
+        assert!(!md.contains("blackouts (>180s heartbeat gap): none"));
+        // Completeness table flags every required stream.
+        assert!(md.contains("MISSING"));
+        assert!(md.contains("required stream(s) MISSING"));
+    }
+
+    #[test]
+    fn populated_streams_show_ok() {
+        let recs = vec![
+            json!({"type":"soak.heartbeat","ts":0u64,"payload":{}}),
+            json!({"type":"soak.heartbeat","ts":60_000u64,"payload":{}}),
+        ];
+        let md = render_report(&recs, &["t".into()]);
+        assert!(md.contains("| soak.heartbeat | 2 | ok |"));
+        assert!(md.contains("blackouts (>180s heartbeat gap): none"));
     }
 
     #[test]

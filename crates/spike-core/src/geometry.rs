@@ -102,9 +102,17 @@ pub fn idle_rect(screen: Rect, notch_w: f64, notch_h: f64) -> Rect {
     Rect::new(screen.mid_x() - notch_w / 2.0, screen.max_y() - notch_h, notch_w, notch_h)
 }
 
+/// Overshoot added above the screen's top edge for hit regions anchored there.
+/// `Rect::contains` is half-open (max-exclusive); a cursor pinned against the top of the
+/// display sits at exactly `ns.y == screen.max_y()` (CG pins at y=0), which a flush-top
+/// rect would exclude — the primary "flick to the notch" gesture would never enter
+/// R_enter. Extending 1pt beyond the screen is unreachable by any other pointer position,
+/// so it only admits the pinned case.
+pub const TOP_EDGE_OVERSHOOT: f64 = 1.0;
+
 /// Build the three regions from the Idle rect and the screen (spec §3.4.2).
 pub fn regions(screen: Rect, idle: Rect, p: GeometryParams) -> Regions {
-    let r_enter = idle.expand(p.enter_lr, p.enter_lr, p.enter_bottom, 0.0);
+    let r_enter = idle.expand(p.enter_lr, p.enter_lr, p.enter_bottom, TOP_EDGE_OVERSHOOT);
     let r_stay = r_enter.inset_all(p.stay_hysteresis);
     let expanded =
         Rect::new(screen.mid_x() - p.expanded_w / 2.0, screen.max_y() - p.expanded_h, p.expanded_w, p.expanded_h);
@@ -141,15 +149,30 @@ mod tests {
     }
 
     #[test]
-    fn r_enter_expands_sides_and_bottom_not_top() {
+    fn r_enter_expands_sides_bottom_and_top_overshoot() {
         let s = internal_screen();
         let idle = idle_rect(s, 200.0, 32.0);
         let r = regions(s, idle, GeometryParams::default());
-        // left/right +8, bottom +4, top unchanged.
+        // left/right +8, bottom +4, top +TOP_EDGE_OVERSHOOT (pinned-cursor admission).
         assert_eq!(r.r_enter.x, idle.x - 8.0);
         assert_eq!(r.r_enter.max_x(), idle.max_x() + 8.0);
         assert_eq!(r.r_enter.y, idle.y - 4.0);
-        assert_eq!(r.r_enter.max_y(), idle.max_y()); // top not grown (screen edge)
+        assert_eq!(r.r_enter.max_y(), idle.max_y() + TOP_EDGE_OVERSHOOT);
+    }
+
+    #[test]
+    fn pinned_cursor_at_top_edge_is_inside_r_enter() {
+        // CG pins the cursor at y=0 against the top of the display; cg_to_ns maps that to
+        // exactly ns.y == screen.max_y(). The half-open contains() would exclude a flush
+        // rect — the overshoot must admit it.
+        let s = internal_screen();
+        let idle = idle_rect(s, 200.0, 32.0);
+        let r = regions(s, idle, GeometryParams::default());
+        let pinned = cg_to_ns(Point::new(s.mid_x(), 0.0), s.max_y());
+        assert_eq!(pinned.y, s.max_y());
+        assert!(r.r_enter.contains(pinned));
+        assert!(r.r_stay.contains(pinned));
+        assert!(r.r_exp.contains(pinned));
     }
 
     #[test]

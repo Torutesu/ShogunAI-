@@ -7,7 +7,8 @@
 //! verified on-device (T-04 on-device completion).
 
 /// Method tag recorded on every CPU sample so a run uses exactly one (spec §4.2.3).
-pub const CPU_METHOD: &str = "task_info";
+/// Must match the actual reader below (`proc_pid_rusage`, RUSAGE_INFO_V4).
+pub const CPU_METHOD: &str = "proc_pid_rusage";
 
 /// Computes instantaneous CPU% from successive (cpu_time, wall_time) readings.
 #[derive(Debug, Default)]
@@ -37,97 +38,55 @@ impl CpuMeter {
     }
 }
 
-/// macOS reader: total CPU time (user+system, all threads incl. finished) in ns.
-///
-/// Uses `proc_pid_rusage(RUSAGE_INFO_V4)` which already aggregates finished and live
-/// threads; simpler and less error-prone than combining `MACH_TASK_BASIC_INFO` with
-/// `TASK_THREAD_TIMES_INFO`. Requires on-device verification (T-04).
+/// Point-in-time process usage (macOS): CPU time in ns and resident set size.
 #[cfg(target_os = "macos")]
-pub fn read_process_cpu_ns() -> std::io::Result<u64> {
-    use std::os::raw::c_int;
-    // rusage_info_v4 layout (sys/resource.h). We only read the two cpu-time fields.
-    #[repr(C)]
-    #[derive(Default)]
-    struct RUsageInfoV4 {
-        ri_uuid: [u8; 16],
-        ri_user_time: u64,
-        ri_system_time: u64,
-        ri_pkg_idle_wkups: u64,
-        ri_interrupt_wkups: u64,
-        ri_pageins: u64,
-        ri_wired_size: u64,
-        ri_resident_size: u64,
-        ri_phys_footprint: u64,
-        ri_proc_start_abstime: u64,
-        ri_proc_exit_abstime: u64,
-        ri_child_user_time: u64,
-        ri_child_system_time: u64,
-        ri_child_pkg_idle_wkups: u64,
-        ri_child_interrupt_wkups: u64,
-        ri_child_pageins: u64,
-        ri_child_elapsed_abstime: u64,
-        ri_diskio_bytesread: u64,
-        ri_diskio_byteswritten: u64,
-        ri_cpu_time_qos_default: u64,
-        ri_cpu_time_qos_maintenance: u64,
-        ri_cpu_time_qos_background: u64,
-        ri_cpu_time_qos_utility: u64,
-        ri_cpu_time_qos_legacy: u64,
-        ri_cpu_time_qos_user_initiated: u64,
-        ri_cpu_time_qos_user_interactive: u64,
-        ri_billed_system_time: u64,
-        ri_serviced_system_time: u64,
-        ri_logical_writes: u64,
-        ri_lifetime_max_phys_footprint: u64,
-        ri_instructions: u64,
-        ri_cycles: u64,
-        ri_billed_energy: u64,
-        ri_serviced_energy: u64,
-        ri_interval_max_phys_footprint: u64,
-        ri_runnable_time: u64,
-        ri_flags: u64,
-    }
-    const RUSAGE_INFO_V4: c_int = 4;
-    extern "C" {
-        fn proc_pid_rusage(pid: c_int, flavor: c_int, buffer: *mut std::ffi::c_void) -> c_int;
-    }
-    let mut info = RUsageInfoV4::default();
-    // SAFETY: `info` is a correctly sized, zero-initialized rusage_info_v4 buffer, and
-    // the pid is our own. The call fills the POD struct or returns non-zero on error.
+#[derive(Debug, Clone, Copy)]
+pub struct ProcessUsage {
+    /// Total CPU time (user+system, all threads incl. finished), nanoseconds.
+    pub cpu_ns: u64,
+    /// Resident set size in bytes (`ri_resident_size`).
+    pub rss_bytes: u64,
+}
+
+/// macOS reader via `libc::proc_pid_rusage(RUSAGE_INFO_V4)` — libc owns the struct
+/// layout, so there is no hand-rolled 40-field mirror to drift out of sync.
+///
+/// IMPORTANT (research / osquery#7459): on Apple Silicon `ri_user_time`/`ri_system_time`
+/// are `mach_absolute_time` TICKS, not ns; converted here via `mach_timebase_info`.
+/// MUST be validated against Activity Monitor on-device before trusting Q3-B (spec §4.2.3).
+#[cfg(target_os = "macos")]
+pub fn read_process_usage() -> std::io::Result<ProcessUsage> {
+    // SAFETY: rusage_info_v4 is POD; zeroed is a valid initial value for an out-param.
+    let mut info: libc::rusage_info_v4 = unsafe { std::mem::zeroed() };
+    // SAFETY: pid is our own; buffer points at a correctly sized rusage_info_v4, passed
+    // as the `rusage_info_t*` (void**-shaped) parameter per the Apple prototype.
     let rc = unsafe {
-        proc_pid_rusage(
-            std::process::id() as c_int,
-            RUSAGE_INFO_V4,
-            &mut info as *mut _ as *mut std::ffi::c_void,
+        libc::proc_pid_rusage(
+            std::process::id() as libc::c_int,
+            libc::RUSAGE_INFO_V4,
+            &mut info as *mut libc::rusage_info_v4 as *mut libc::rusage_info_t,
         )
     };
     if rc != 0 {
         return Err(std::io::Error::last_os_error());
     }
-    // IMPORTANT (research / osquery#7459): on Apple Silicon `ri_user_time` and
-    // `ri_system_time` are `mach_absolute_time` TICKS, not nanoseconds — treating them as
-    // ns yields a constant-factor-wrong CPU%. Convert with mach_timebase_info
-    // (ns = ticks * numer / denom). `mach_timebase_info` is a stable libSystem symbol; we
-    // declare it directly to avoid crate-symbol drift.
-    // MUST be validated on-device against Activity Monitor before trusting Q3-B (spec §4.2.3).
-    #[repr(C)]
-    #[derive(Default)]
-    struct MachTimebaseInfo {
-        numer: u32,
-        denom: u32,
-    }
-    extern "C" {
-        fn mach_timebase_info(info: *mut MachTimebaseInfo) -> c_int;
-    }
-    let mut tb = MachTimebaseInfo::default();
-    // SAFETY: `tb` is a valid, correctly sized out-parameter for mach_timebase_info.
-    let tb_rc = unsafe { mach_timebase_info(&mut tb) };
+    let mut tb = libc::mach_timebase_info { numer: 0, denom: 0 };
+    // SAFETY: valid out-param for mach_timebase_info.
+    let tb_rc = unsafe { libc::mach_timebase_info(&mut tb) };
     let ticks = info.ri_user_time.saturating_add(info.ri_system_time) as u128;
-    if tb_rc != 0 || tb.numer == 0 || tb.denom == 0 {
+    let cpu_ns = if tb_rc != 0 || tb.numer == 0 || tb.denom == 0 {
         // Fall back to raw ticks (still monotonic) if the timebase is unavailable.
-        return Ok(ticks as u64);
-    }
-    Ok((ticks * tb.numer as u128 / tb.denom as u128) as u64)
+        ticks as u64
+    } else {
+        (ticks * tb.numer as u128 / tb.denom as u128) as u64
+    };
+    Ok(ProcessUsage { cpu_ns, rss_bytes: info.ri_resident_size })
+}
+
+/// Back-compat: CPU time only.
+#[cfg(target_os = "macos")]
+pub fn read_process_cpu_ns() -> std::io::Result<u64> {
+    read_process_usage().map(|u| u.cpu_ns)
 }
 
 #[cfg(test)]
