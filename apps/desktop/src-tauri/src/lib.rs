@@ -29,9 +29,33 @@ pub fn run() {
     ]);
 
     builder
+        .on_page_load(|webview, payload| {
+            // Diagnostic: proves whether the webview ever loads the frontend.
+            eprintln!("[spike] page_load {:?} url={}", payload.event(), payload.url());
+            let _ = webview.eval(
+                "window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke('interact',{kind:'eval-alive'})",
+            );
+        })
         .setup(|_app| {
             #[cfg(target_os = "macos")]
             setup_macos(_app);
+            #[cfg(target_os = "macos")]
+            {
+                // Delayed probe: is the JS engine alive / bridge injected 10s in?
+                use tauri::Manager;
+                let h = _app.handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_secs(10));
+                    if let Some(w) = h.get_webview_window("notch") {
+                        eprintln!("[spike] probe url={:?}", w.url());
+                        let _ = w.eval(
+                            "window.__TAURI_INTERNALS__ ? window.__TAURI_INTERNALS__.invoke('interact',{kind:'eval-alive'}) : void 0",
+                        );
+                    } else {
+                        eprintln!("[spike] probe: no notch window");
+                    }
+                });
+            }
             Ok(())
         })
         .run(tauri::generate_context!())
