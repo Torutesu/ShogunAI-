@@ -104,3 +104,20 @@ Q2（展開）/Q4（誤発火）の挙動はプラットフォーム非依存の
 - `report` バイナリ: 合成JSONLで層別p50/p95/p99・4問別verdict出力をE2E確認。
 - `apps/desktop` frontend: `tsc --noEmit` clean, `vite build` 成功。
 - **未検証（要macOS）**: Tauri/AppKitビルド全般、cpu.rs のmacOSリーダー（task_info/proc_pid_rusage）、`pnpm tauri dev`、CGEventTap/AXUIElement/NSPanelアダプタ、すべての実測（S-11/S-12/S-13、4つの問い本体）。
+
+
+## 準実機セッション(GitHub Actions macos-14ランナー、擬似ノッチ・仮想ディスプレイ) — 2026-07-19
+
+`phase0-smoke.yml` で release ビルドを Apple Silicon 実機ランナー上で7回実行(TCC DB直接付与+Swift製CGEventPost注入)。物理ノッチ・人間なしのため正式なS-11/12/13の代替ではないが、初の「動かして測る」証拠。
+
+**実証できたこと(runs #2/#3/#7、各150秒・221レコード)**:
+- 起動〜常駐150秒: クラッシュ0、heartbeat 2回、パネル自己修復0。メニューバーに前面アプリとして常駐(スクリーンショット確認)
+- **Q3-B(アイドルCPU)**: 1分平均 最大 0.32〜0.39%、全サンプル5%以内 → SLO(5%)に対し1桁以上の余裕で PASS 圏。RSS 65MB
+- hover→engine→panel ループ: 注入25サイクル中 22回の Expanded セッションが発生・記録(expand_commit/state_transition/top_band_entry/tap_status すべて発行)
+- 計測パイプライン: JSONL日付ローテーション、report生成、空データガード(MISSING表示)が実データで機能
+
+**発見した問題と結論**:
+1. **wry 0.55.1 panic**: `WebviewWindow::eval()`/`url()` を(NSPanel化有無に関わらずこの構成で)呼ぶと `wkwebview/mod.rs:1349` unwrap-None で main スレッド即死(runs #4/#5)。`.on_page_load` も同様。**Rust側からのwebviewプローブ禁止**をlib.rsに明記。上流Issue要確認。
+2. **webviewサイレント(未解決)**: webview→Rust コマンドが boot ping 含め0件。SPIKE_NO_PANEL=1(swapなし)でも同じ(run #7)→ **NSPanel swapは無罪**。capabilities(core:default)付与でも変化なし。残る仮説はヘッドレスCI環境でのWKWebViewコンテンツロード/JS実行/IPCブリッジ注入の不成立。**実機D-01でdevtools(またはSafari Web Inspector)を開けば数分で確定する類** — CI経由での深追いはeval panicにより手段が尽きた。
+   - 影響: expand_latency(Q2のt1)とinteract集計はCI上で取得不可。**Q2実測とQ4の正確な集計は物理Mac必須のまま**。
+3. Q4のFP率73%はwebview沈黙の帰結(全収束がAnimTimeout・interactions=0で自動FP判定)であり、ホバー判定の欠陥ではない(台本注入は操作ゼロのため定義上FPになる)。
