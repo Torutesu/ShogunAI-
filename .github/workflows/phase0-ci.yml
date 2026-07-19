@@ -50,3 +50,25 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @shogun-ai/desktop typecheck
       - run: pnpm --filter @shogun-ai/desktop build:vite
+
+  macos-build:
+    name: macOS shell (compile on Apple Silicon)
+    # macos-14 is arm64 (Apple Silicon). Compile-only verification of the Tauri/AppKit
+    # shell — the four-question MEASUREMENTS still require a physical notch Mac + human.
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # tauri's generate_context! needs the frontend dist to exist at compile time.
+      - run: pnpm --filter @shogun-ai/desktop build:vite
+      - name: clippy the macOS shell (warnings deny via workspace lints)
+        run: cargo clippy -p shogun-desktop-spike --all-targets
