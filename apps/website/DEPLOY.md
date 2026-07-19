@@ -31,12 +31,36 @@ DATABASE_URL=postgres://...supabase-session-pooler...:6543/postgres
 # WAITLIST_LIVE_COUNT is intentionally left unset locally, so the counter shows "468+".
 ```
 
+## Cloudflare build & deploy commands (monorepo — important)
+
+This is a pnpm **workspace**. Cloudflare installs from the repo root, so the build and
+deploy commands must explicitly target `apps/website`, otherwise `wrangler deploy`
+runs at the workspace root and fails with *"application detection logic has been run
+in the root of a workspace."*
+
+Set these in the Cloudflare dashboard (Workers & Pages → your project → Settings →
+Build):
+
+| Setting | Value |
+| --- | --- |
+| **Build command** | `pnpm --filter @shogun-ai/website cf:build` |
+| **Deploy command** | `pnpm --filter @shogun-ai/website exec wrangler deploy` |
+| **Root directory** | leave as repo root (the `--filter` handles the rest) |
+
+> Do **not** use `pnpm run build` (that only runs `next build`, so `.open-next/worker.js`
+> is never produced) and do **not** use a bare `npx wrangler deploy` from the root.
+>
+> Alternative: set **Root directory = `apps/website`**, then build `pnpm cf:build` and
+> deploy `npx wrangler deploy`. Both approaches are equivalent.
+
+Both commands were validated locally: `cf:build` produces `.open-next/worker.js`, and
+`wrangler deploy --dry-run` packages a ~2.5 MB (gzip) Worker with the `ASSETS` binding.
+
 ## Preview environments per branch (what you asked for)
 
-Connect this repo in the Cloudflare dashboard → **Workers & Pages → Create → Workers
-→ Connect to Git**. Point it at `apps/website` with build command `pnpm cf:build` and
-deploy command `wrangler deploy`. Cloudflare then builds **every branch/PR** and gives
-each a **preview URL** — so you can review changes live before promoting to production.
+Once connected via **Workers & Pages → Create → Workers → Connect to Git** with the
+commands above, Cloudflare builds **every branch/PR** and gives each a **preview URL** —
+so you can review changes live before promoting to production.
 
 The LP renders fine in preview **without a database**: `page.tsx` and the invite
 lookup are wrapped in try/catch and degrade gracefully, and the "468+" counter is
