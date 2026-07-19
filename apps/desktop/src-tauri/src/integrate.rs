@@ -6,13 +6,19 @@
 //! tap_status). All timestamps share ONE `MonoClock` (the recorder's) so Q2 math has a
 //! single timeline. Decision logic stays in `spike_core::engine` (unit-tested); behaviour
 //! is validated on-device.
+//!
+//! CLOSED IPC message set (spec §3.11.2 — do not add messages without a spec change):
+//! Rust→webview events: `state`, `geometry`, `context`, `fs_mode`, `clock_sync`.
+//! webview→Rust commands: `painted`, `anim_done`, `interact`, `collapse_request`,
+//! `focus_field`, `clock_sync_ack`. All emits and all #[tauri::command] fns live in THIS
+//! file so the contract has a single enforcement point.
 #![allow(dead_code, unused_imports)]
 
 #[cfg(target_os = "macos")]
 pub use mac::{start, Shared, StartGeometry};
 
 #[cfg(target_os = "macos")]
-mod mac {
+pub mod mac {
     use crate::axcache;
     use crate::geometry::Regions;
     use crate::hover::TapEvent;

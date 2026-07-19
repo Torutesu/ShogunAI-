@@ -30,8 +30,8 @@ mod mac {
 
     use objc2_core_foundation::{kCFRunLoopCommonModes, CFMachPort, CFRunLoop};
     use objc2_core_graphics::{
-        CGEvent, CGEventGetLocation, CGEventMask, CGEventTapCreate, CGEventTapEnable,
-        CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement, CGEventTapProxy, CGEventType,
+        CGEvent, CGEventMask, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement,
+        CGEventTapProxy, CGEventType,
     };
 
     /// Top band in CG coordinates (y grows downward from the primary display's top edge).
@@ -80,21 +80,21 @@ mod mac {
             if !port.is_null() {
                 // SAFETY: port is the CFMachPort stored right after creation, retained for
                 // the lifetime of the run loop below.
-                unsafe { CGEventTapEnable(&*port, true) };
+                unsafe { CGEvent::tap_enable(&*port, true) };
                 let _ = ctx.tx.send(TapEvent::Status { active: true });
             }
             return event.as_ptr();
         }
 
         if etype == CGEventType::LeftMouseDown {
-            let loc = unsafe { CGEventGetLocation(Some(event.as_ref())) };
+            let loc = unsafe { CGEvent::location(Some(event.as_ref())) };
             ctx.buttons.set(1);
             let _ = ctx.tx.send(TapEvent::Down { x: loc.x, y: loc.y });
         } else if etype == CGEventType::LeftMouseUp {
             ctx.buttons.set(0);
             let _ = ctx.tx.send(TapEvent::Up);
         } else if etype == CGEventType::MouseMoved || etype == CGEventType::LeftMouseDragged {
-            let loc = unsafe { CGEventGetLocation(Some(event.as_ref())) };
+            let loc = unsafe { CGEvent::location(Some(event.as_ref())) };
             let inside = loc.y <= TOP_BAND_CG;
             // Early reject: below the band AND already known-outside → zero further work.
             // One edge sample passes on band exit so HoverTracker sees the leave.
@@ -125,7 +125,7 @@ mod mac {
                     | (1u64 << (CGEventType::LeftMouseDragged.0 as u64));
                 let mut warned = false;
                 let tap = loop {
-                    match CGEventTapCreate(
+                    match CGEvent::tap_create(
                         CGEventTapLocation::HIDEventTap,
                         CGEventTapPlacement::HeadInsertEventTap,
                         CGEventTapOptions::ListenOnly,
@@ -155,7 +155,7 @@ mod mac {
                     return;
                 };
                 rl.add_source(Some(&source), kCFRunLoopCommonModes);
-                CGEventTapEnable(&tap, true);
+                CGEvent::tap_enable(&tap, true);
                 let _ = (*ctx).tx.send(TapEvent::Status { active: true });
                 CFRunLoop::run();
             }

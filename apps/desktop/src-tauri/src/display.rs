@@ -20,12 +20,9 @@ mod mac {
     /// context-cache walk (spec §3.10.1); on-device it is complemented by the
     /// `didActivateApplication` notification for event-driven updates.
     pub fn frontmost_pid() -> Option<i32> {
-        // SAFETY: sharedWorkspace / frontmostApplication / processIdentifier are generated
-        // as unsafe fns; valid to call on the main thread at any time.
-        unsafe {
-            let ws = NSWorkspace::sharedWorkspace();
-            let app = ws.frontmostApplication()?;
-            Some(app.processIdentifier())
-        }
+        // These NSWorkspace accessors are safe fns in objc2-app-kit 0.3.2.
+        let ws = NSWorkspace::sharedWorkspace();
+        let app = ws.frontmostApplication()?;
+        Some(app.processIdentifier())
     }
 }

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
+import { t } from "./strings";
 
 // Mirror of the closed IPC contract (spec §3.11.2). The webview does exactly three things:
 // class-swap on `state`, paint-done notification (rAF×2 → `painted`), and input forwarding
@@ -110,23 +111,23 @@ export function App(): JSX.Element {
       >
         <div className="notch__actions">
           <button type="button" onClick={() => void invoke("interact", { kind: "click" })}>
-            Action 1
+            {t.action1}
           </button>
           <button type="button" onClick={() => void invoke("interact", { kind: "click" })}>
-            Action 2
+            {t.action2}
           </button>
           <button type="button" onClick={() => void invoke("interact", { kind: "click" })}>
-            Action 3
+            {t.action3}
           </button>
         </div>
         <div className="notch__preview">
           {ctx ? (
             <span>
               {ctx.bundle_id}
-              {ctx.partial ? " (partial)" : ""}
+              {ctx.partial ? t.partialSuffix : ""}
             </span>
           ) : (
-            <span className="notch__preview--empty">no context</span>
+            <span className="notch__preview--empty">{t.noContext}</span>
           )}
         </div>
       </div>

@@ -11,9 +11,7 @@ mod display;
 mod geometry;
 mod hover;
 mod integrate;
-mod ipc;
 mod panel;
-mod statemachine;
 
 /// Tauri entry point. Registers the nspanel plugin and the webview→Rust command half of
 /// the closed IPC contract (spec §3.11.2), then in setup: NSPanel swap (T-05), geometry
@@ -22,12 +20,12 @@ pub fn run() {
     let builder = tauri::Builder::default();
     #[cfg(target_os = "macos")]
     let builder = builder.plugin(tauri_nspanel::init()).invoke_handler(tauri::generate_handler![
-        integrate::painted,
-        integrate::interact,
-        integrate::anim_done,
-        integrate::collapse_request,
-        integrate::clock_sync_ack,
-        integrate::focus_field,
+        integrate::mac::painted,
+        integrate::mac::interact,
+        integrate::mac::anim_done,
+        integrate::mac::collapse_request,
+        integrate::mac::clock_sync_ack,
+        integrate::mac::focus_field,
     ]);
 
     builder
@@ -37,7 +35,13 @@ pub fn run() {
             Ok(())
         })
         .run(tauri::generate_context!())
-        .expect("error while running the SHOGUN spike shell");
+        .unwrap_or_else(|e| {
+            // Startup failure: report and exit without a panic (CLAUDE.md: no
+            // unwrap/expect outside tests; errors must not take the process down
+            // via panic paths).
+            eprintln!("[spike] fatal: failed to run the shell: {e}");
+            std::process::exit(1);
+        });
 }
 
 /// macOS wiring, flat with early returns (each step logs its own failure — a missing
