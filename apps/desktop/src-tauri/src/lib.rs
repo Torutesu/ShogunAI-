@@ -28,14 +28,10 @@ pub fn run() {
         integrate::mac::focus_field,
     ]);
 
+    // NOTE: do NOT add .on_page_load here — with the NSPanel-swapped window it trips a
+    // wry 0.55.1 unwrap-None panic (wkwebview/mod.rs:1349) and kills the app at startup
+    // (observed on the smoke runner). Diagnostics use the delayed eval probe instead.
     builder
-        .on_page_load(|webview, payload| {
-            // Diagnostic: proves whether the webview ever loads the frontend.
-            eprintln!("[spike] page_load {:?} url={}", payload.event(), payload.url());
-            let _ = webview.eval(
-                "window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke('interact',{kind:'eval-alive'})",
-            );
-        })
         .setup(|_app| {
             #[cfg(target_os = "macos")]
             setup_macos(_app);
@@ -45,15 +41,22 @@ pub fn run() {
                 use tauri::Manager;
                 let h = _app.handle().clone();
                 std::thread::spawn(move || {
+                    // JS-engine probe, IPC-independent: eval writes readyState+bridge
+                    // presence into location.hash; url() reads it back. Separately, an
+                    // invoke probe tests the bridge end-to-end (cmd interact eval-alive).
                     std::thread::sleep(std::time::Duration::from_secs(10));
-                    if let Some(w) = h.get_webview_window("notch") {
-                        eprintln!("[spike] probe url={:?}", w.url());
-                        let _ = w.eval(
-                            "window.__TAURI_INTERNALS__ ? window.__TAURI_INTERNALS__.invoke('interact',{kind:'eval-alive'}) : void 0",
-                        );
-                    } else {
+                    let Some(w) = h.get_webview_window("notch") else {
                         eprintln!("[spike] probe: no notch window");
-                    }
+                        return;
+                    };
+                    let _ = w.eval(
+                        "location.hash='alive-'+document.readyState+'-bridge'+((!!window.__TAURI_INTERNALS__)?1:0)",
+                    );
+                    let _ = w.eval(
+                        "window.__TAURI_INTERNALS__ ? window.__TAURI_INTERNALS__.invoke('interact',{kind:'eval-alive'}) : void 0",
+                    );
+                    std::thread::sleep(std::time::Duration::from_secs(2));
+                    eprintln!("[spike] probe url={:?}", w.url());
                 });
             }
             Ok(())
