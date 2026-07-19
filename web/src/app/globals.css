@@ -1,0 +1,90 @@
+/* Extra styles for interactive waitlist + status dashboard.
+   Base tokens live in tokens.css; LP layout in page-lp.css. */
+
+.brand__mark { display: block; }
+
+/* --- Inline waitlist form (hero) --- */
+.wl-form { display: flex; gap: 10px; justify-content: center; margin: 32px auto 0; max-width: 480px; flex-wrap: wrap; }
+.wl-form__input {
+  flex: 1; min-width: 220px; height: 44px; padding: 0 18px;
+  border-radius: var(--radius-full); border: 1px solid var(--color-border);
+  background: #fff; font-family: var(--font-body); font-size: 15px; color: var(--color-primary);
+}
+.wl-form__input:focus { outline: none; border-color: var(--color-tertiary); box-shadow: 0 0 0 3px rgba(0,166,244,.15); }
+.wl-form__hp { position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden; }
+.wl-msg { margin-top: 14px; font-size: 14px; min-height: 20px; }
+.wl-msg--err { color: var(--color-error); }
+.wl-msg--ok { color: #0089cf; }
+
+.invite-banner {
+  display: inline-flex; align-items: center; gap: 8px; margin-bottom: 8px;
+}
+
+/* --- Status dashboard --- */
+.dash { max-width: 760px; margin: 0 auto; }
+.dash__head { text-align: center; margin-bottom: 32px; }
+.dash__pos {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 24px;
+}
+.dash__stat { text-align: center; padding: 24px 16px; }
+.dash__stat-v { font-family: var(--font-display); font-weight: 600; font-size: 40px; letter-spacing: -.02em; color: var(--color-primary); font-variant-numeric: tabular-nums; }
+.dash__stat-k { font-size: 13px; color: var(--color-secondary); margin-top: 4px; }
+
+.share {
+  display: flex; gap: 10px; margin: 16px 0 0; flex-wrap: wrap;
+}
+.share__url {
+  flex: 1; min-width: 220px; height: 44px; padding: 0 16px; display: flex; align-items: center;
+  border-radius: var(--radius-full); border: 1px solid var(--color-border); background: var(--color-cloud);
+  font-family: var(--font-mono); font-size: 13px; color: var(--color-primary);
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+
+/* Ladder */
+.ladder { display: grid; gap: 10px; margin-top: 8px; }
+.rung {
+  display: flex; align-items: center; gap: 14px; padding: 14px 16px;
+  border: 1px solid var(--color-border); border-radius: var(--radius-md); background: #fff;
+}
+.rung--done { background: var(--color-sky-soft); border-color: #bfeeff; }
+.rung--next { border-color: var(--color-tertiary); box-shadow: 0 0 0 3px rgba(0,166,244,.1); }
+.rung__badge {
+  width: 34px; height: 34px; flex: none; border-radius: var(--radius-full);
+  display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 13px;
+  background: var(--color-cloud); color: var(--color-secondary); font-variant-numeric: tabular-nums;
+}
+.rung--done .rung__badge { background: var(--color-tertiary); color: #fff; }
+.rung__label { font-weight: 500; color: var(--color-primary); }
+.rung__meta { margin-left: auto; font-size: 13px; color: var(--color-secondary); }
+
+/* Profile form */
+.profile { display: grid; gap: 16px; margin-top: 8px; }
+.profile__q { display: grid; gap: 6px; }
+.profile__q label { font-size: 14px; font-weight: 500; color: var(--color-primary); }
+.profile__q input, .profile__q select {
+  height: 44px; padding: 0 16px; border-radius: var(--radius-md);
+  border: 1px solid var(--color-border); background: #fff; font-family: var(--font-body);
+  font-size: 15px; color: var(--color-primary);
+}
+.profile__q input:focus, .profile__q select:focus { outline: none; border-color: var(--color-tertiary); box-shadow: 0 0 0 3px rgba(0,166,244,.15); }
+
+/* Leaderboard */
+.lb { display: grid; gap: 2px; }
+.lb__row {
+  display: grid; grid-template-columns: 40px 1fr auto; align-items: center; gap: 12px;
+  padding: 12px 8px; border-bottom: 1px solid var(--color-border);
+}
+.lb__rank { font-family: var(--font-mono); font-size: 13px; color: var(--color-secondary); font-variant-numeric: tabular-nums; }
+.lb__email { font-size: 14px; color: var(--color-primary); }
+.lb__count { font-weight: 600; color: var(--color-tertiary); font-variant-numeric: tabular-nums; }
+.lb__row--me { background: var(--color-sky-soft); border-radius: var(--radius-sm); }
+
+.center { text-align: center; }
+.stack { display: grid; gap: 24px; }
+.spinner { display:inline-block; width:16px; height:16px; border:2px solid var(--color-border); border-top-color: var(--color-tertiary); border-radius:50%; animation: spin .7s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
+
+@media (max-width: 620px) {
+  .dash__pos { grid-template-columns: 1fr; }
+}
