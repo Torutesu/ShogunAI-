@@ -468,6 +468,7 @@ pub mod mac {
     /// the shared clock (JS time converted via the min-RTT offset).
     #[tauri::command]
     pub fn painted(state: String, t1_perf_ms: f64, shared: tauri::State<'_, Arc<Shared>>) {
+        eprintln!("[spike] cmd painted state={state} t1={t1_perf_ms:.1}");
         if state != "expanded" {
             return;
         }
@@ -495,6 +496,7 @@ pub mod mac {
     /// Interaction tally for the live Expanded session (Q4 auto-false-positive input).
     #[tauri::command]
     pub fn interact(kind: String, shared: tauri::State<'_, Arc<Shared>>) {
+        eprintln!("[spike] cmd interact kind={kind}");
         if let Ok(mut sess) = shared.session.lock() {
             if let Some(d) = sess.as_mut() {
                 match kind.as_str() {
@@ -510,6 +512,7 @@ pub mod mac {
     /// transitionend from the webview (T6) — the normal collapse completion.
     #[tauri::command]
     pub fn anim_done(_state: String, shared: tauri::State<'_, Arc<Shared>>) {
+        eprintln!("[spike] cmd anim_done");
         shared.send(Ev::Input(EngineInput::AnimDone));
     }
 
@@ -532,6 +535,7 @@ pub mod mac {
     /// Clock-sync ack: feeds the min-RTT offset estimator (spec §4.1).
     #[tauri::command]
     pub fn clock_sync_ack(seq: u32, js_perf_ms: f64, shared: tauri::State<'_, Arc<Shared>>) {
+        eprintln!("[spike] cmd clock_sync_ack seq={seq}");
         let recv_ns = shared.clock.elapsed_ns();
         let Some(send_ns) = shared.sync_sent.lock().ok().and_then(|mut m| m.remove(&seq)) else {
             return;

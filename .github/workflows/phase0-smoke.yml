@@ -159,6 +159,18 @@ jobs:
           cargo run -q -p spike-harness --release --bin report -- "$M"/*.jsonl -o /tmp/report.md || true
           cat /tmp/report.md || true
 
+      - name: Screenshot thumbnail (base64 for remote inspection)
+        if: always()
+        run: |
+          if [ -f /tmp/expanded.png ]; then
+            sips -s format jpeg -s formatOptions 40 -Z 640 /tmp/expanded.png --out /tmp/thumb.jpg >/dev/null || true
+            echo "==THUMB_BEGIN=="
+            base64 -i /tmp/thumb.jpg | fold -w 120
+            echo "==THUMB_END=="
+          else
+            echo "no expanded.png"
+          fi
+
       - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v4

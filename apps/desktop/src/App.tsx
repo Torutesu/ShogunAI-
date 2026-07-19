@@ -47,6 +47,8 @@ export function App(): JSX.Element {
   const stateRef = useRef<UiState>("idle");
 
   useEffect(() => {
+    // Webview-alive ping: proves the frontend booted and invoke reaches Rust.
+    void invoke("interact", { kind: "boot" });
     const unlisteners: Array<Promise<() => void>> = [];
 
     unlisteners.push(
