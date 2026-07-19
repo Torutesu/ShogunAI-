@@ -1,0 +1,170 @@
+name: phase0-smoke
+
+# On-runner smoke session (runbook D-01 approximation): launch the spike on a real
+# Apple Silicon mac (macos-14 runner, virtual display, NO notch -> pseudo-notch mode),
+# grant Accessibility via the TCC db (runners have SIP disabled + passwordless sudo),
+# inject synthetic mouse moves at the pseudo-notch, let the measurement streams run,
+# then print the generated report + stream counts into the log and upload artifacts.
+#
+# This validates launch/residency/wiring and produces the first real JSONL. It is NOT
+# the formal S-11/S-12/S-13 measurement (no physical notch, no human, headless VM).
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["claude/shogunai-requirements-prep-nm2tf4"]
+    paths: [".github/workflows/phase0-smoke.yml"]
+
+jobs:
+  smoke:
+    name: on-runner smoke (Apple Silicon, pseudo-notch)
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Build (frontend + release shell)
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --filter @shogun-ai/desktop build:vite
+          cargo build -p shogun-desktop-spike --release
+
+      - name: Environment diagnostics
+        run: |
+          sw_vers
+          uname -m
+          csrutil status || true
+          echo "display:"
+          system_profiler SPDisplaysDataType | head -30 || true
+
+      - name: Build mouse-injection helper (CGEvent post)
+        run: |
+          cat > /tmp/inject.swift <<'EOF'
+          import CoreGraphics
+          import Foundation
+          let args = CommandLine.arguments
+          if args.count >= 2 && args[1] == "geom" {
+              let b = CGDisplayBounds(CGMainDisplayID())
+              print("\(Int(b.width)) \(Int(b.height))")
+              exit(0)
+          }
+          guard args.count >= 4, let x = Double(args[2]), let y = Double(args[3]) else {
+              FileHandle.standardError.write("usage: inject move X Y\n".data(using: .utf8)!)
+              exit(2)
+          }
+          let pt = CGPoint(x: x, y: y)
+          let ev = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved,
+                           mouseCursorPosition: pt, mouseButton: .left)
+          ev?.post(tap: .cghidEventTap)
+          EOF
+          swiftc -O /tmp/inject.swift -o /tmp/inject
+          /tmp/inject geom
+
+      - name: Grant Accessibility + ScreenCapture via TCC db
+        run: |
+          BIN="$GITHUB_WORKSPACE/target/release/shogun-desktop-spike"
+          cat > /tmp/tcc_grant.py <<'EOF'
+          import sqlite3, sys, time, os
+          db_path, client = sys.argv[1], sys.argv[2]
+          services = ["kTCCServiceAccessibility", "kTCCServicePostEvent", "kTCCServiceListenEvent", "kTCCServiceScreenCapture"]
+          con = sqlite3.connect(db_path)
+          cols = [r[1] for r in con.execute("PRAGMA table_info(access)").fetchall()]
+          print("access columns:", cols)
+          now = int(time.time())
+          defaults = {
+              "service": None, "client": client, "client_type": 1, "auth_value": 2,
+              "auth_reason": 4, "auth_version": 1, "csreq": None, "policy_id": None,
+              "indirect_object_identifier_type": None, "indirect_object_identifier": "UNUSED",
+              "indirect_object_code_identity": None, "flags": 0, "last_modified": now,
+              "pid": None, "pid_version": None, "boot_uuid": "UNUSED", "last_reminded": 0,
+          }
+          for svc in services:
+              row = []
+              for c in cols:
+                  if c == "service":
+                      row.append(svc)
+                  else:
+                      row.append(defaults.get(c))
+              q = "INSERT OR REPLACE INTO access ({}) VALUES ({})".format(
+                  ",".join(cols), ",".join(["?"] * len(cols)))
+              try:
+                  con.execute(q, row)
+                  print("granted", svc, "->", client)
+              except Exception as e:
+                  print("FAILED", svc, e)
+          con.commit()
+          EOF
+          # System db holds Accessibility/PostEvent; user db holds ListenEvent on some versions.
+          sudo python3 /tmp/tcc_grant.py "/Library/Application Support/com.apple.TCC/TCC.db" "$BIN" || true
+          sudo python3 /tmp/tcc_grant.py "/Library/Application Support/com.apple.TCC/TCC.db" "/tmp/inject" || true
+          python3 /tmp/tcc_grant.py "$HOME/Library/Application Support/com.apple.TCC/TCC.db" "$BIN" || true
+          python3 /tmp/tcc_grant.py "$HOME/Library/Application Support/com.apple.TCC/TCC.db" "/tmp/inject" || true
+          sudo pkill -9 tccd || true
+          sleep 2
+
+      - name: Launch spike + inject hover cycles + capture
+        run: |
+          BIN="$GITHUB_WORKSPACE/target/release/shogun-desktop-spike"
+          "$BIN" > /tmp/app.log 2>&1 &
+          APP_PID=$!
+          echo "app pid: $APP_PID"
+          sleep 15
+          # Screen geometry -> pseudo-notch centre (top centre of the primary display).
+          read W H < <(/tmp/inject geom)
+          CX=$((W / 2)); TOP=2; PARK=$((H / 2))
+          echo "screen ${W}x${H}, notch target (${CX}, ${TOP})"
+          # 25 hover cycles: park -> approach (2 intermediate samples) -> dwell -> park.
+          for i in $(seq 1 25); do
+            /tmp/inject move "$CX" "$PARK"; sleep 0.05
+            /tmp/inject move "$CX" 30;     sleep 0.03
+            /tmp/inject move "$CX" 12;     sleep 0.03
+            /tmp/inject move "$CX" "$TOP"; sleep 0.30
+            /tmp/inject move "$CX" "$PARK"; sleep 0.55
+          done
+          # One long hover for the screenshot while Expanded.
+          /tmp/inject move "$CX" "$TOP"; sleep 0.4
+          screencapture -x /tmp/expanded.png || true
+          /tmp/inject move "$CX" "$PARK"
+          # Let heartbeat (60s) + cpu samples (5s) accumulate: total runtime ~150s.
+          sleep 110
+          screencapture -x /tmp/idle.png || true
+          kill "$APP_PID" || true
+          sleep 2
+          echo "---- app stderr ----"
+          cat /tmp/app.log || true
+
+      - name: Report + stream counts
+        run: |
+          M="$HOME/Library/Application Support/dev.shogun.spike/metrics"
+          echo "---- metrics dir ----"; ls -la "$M" || true
+          echo "---- stream counts ----"
+          for t in metric.expand_latency metric.cpu_sample metric.cache_update event.expand_session event.expand_commit event.state_transition event.tap_status counter.top_band_entry soak.heartbeat; do
+            n=$(cat "$M"/*.jsonl 2>/dev/null | grep -c "\"type\":\"$t\"" || true)
+            echo "$t: $n"
+          done
+          echo "---- first/last records ----"
+          head -3 "$M"/*.jsonl 2>/dev/null || true
+          tail -3 "$M"/*.jsonl 2>/dev/null || true
+          echo "---- report ----"
+          cargo run -q -p spike-harness --release --bin report -- "$M"/*.jsonl -o /tmp/report.md || true
+          cat /tmp/report.md || true
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase0-smoke
+          path: |
+            /tmp/app.log
+            /tmp/report.md
+            /tmp/expanded.png
+            /tmp/idle.png
+            ~/Library/Application Support/dev.shogun.spike/metrics/*.jsonl
+          if-no-files-found: warn
