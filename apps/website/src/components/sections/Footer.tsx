@@ -23,9 +23,8 @@ export async function Footer() {
     {
       title: t.footer.legal.title,
       links: [
-        { href: '#', label: t.footer.legal.privacy },
-        { href: '#', label: t.footer.legal.terms },
-        { href: '#', label: t.footer.legal.security },
+        { href: '/privacy', label: t.footer.legal.privacy },
+        { href: '/terms', label: t.footer.legal.terms },
       ],
     },
   ];

@@ -189,7 +189,7 @@ const en = {
     tagline: 'Memory that captures your day. Execution that acts on it.',
     product: { title: 'Product', memory: 'Memory', action: 'Action', pricing: 'Pricing' },
     company: { title: 'Company', about: 'About', blog: 'Blog', careers: 'Careers' },
-    legal: { title: 'Legal', privacy: 'Privacy', terms: 'Terms', security: 'Security' },
+    legal: { title: 'Legal', privacy: 'Privacy Policy', terms: 'Terms of Service' },
     rights: '© 2026 ShogunAI. All rights reserved.',
     madeFor: 'Made for the AI-native individual.',
   },
@@ -233,6 +233,18 @@ const en = {
     ],
     teamTitle: 'Team',
     teamNote: 'Team members will be listed here.',
+  },
+  legalPage: {
+    updated: 'Last updated July 19, 2026',
+    privacyTitle: 'Privacy Policy',
+    termsTitle: 'Terms of Service',
+    intro: 'Placeholder legal text — a frame to be replaced with the real policy.',
+    sections: [
+      { h: 'Overview', p: 'Placeholder section. Replace with real content.' },
+      { h: 'What this covers', p: 'Placeholder section. Replace with real content.' },
+      { h: 'Your choices', p: 'Placeholder section. Replace with real content.' },
+      { h: 'Contact', p: 'Questions? Reach us at hello@shogunai.com.' },
+    ],
   },
 };
 
@@ -423,7 +435,7 @@ const ja: Dictionary = {
     tagline: '一日を記憶するメモリ。それを実行する行動。',
     product: { title: 'プロダクト', memory: 'メモリ', action: '実行', pricing: '料金' },
     company: { title: '会社', about: '会社概要', blog: 'ブログ', careers: '採用' },
-    legal: { title: '法務', privacy: 'プライバシー', terms: '利用規約', security: 'セキュリティ' },
+    legal: { title: '法務', privacy: 'プライバシーポリシー', terms: '利用規約' },
     rights: '© 2026 ShogunAI. All rights reserved.',
     madeFor: 'AI ネイティブな個人のために。',
   },
@@ -466,6 +478,18 @@ const ja: Dictionary = {
     ],
     teamTitle: 'チーム',
     teamNote: 'メンバーはここに掲載します。',
+  },
+  legalPage: {
+    updated: '最終更新：2026年7月19日',
+    privacyTitle: 'プライバシーポリシー',
+    termsTitle: '利用規約',
+    intro: 'これはプレースホルダーの法的文書です。実際のポリシーに差し替えてください。',
+    sections: [
+      { h: '概要', p: 'プレースホルダーのセクション。実内容に差し替えてください。' },
+      { h: '対象範囲', p: 'プレースホルダーのセクション。実内容に差し替えてください。' },
+      { h: 'あなたの選択', p: 'プレースホルダーのセクション。実内容に差し替えてください。' },
+      { h: 'お問い合わせ', p: 'ご質問は hello@shogunai.com まで。' },
+    ],
   },
 };
 
@@ -626,7 +650,7 @@ const es: Dictionary = {
     tagline: 'Memoria que captura tu día. Ejecución que actúa sobre él.',
     product: { title: 'Producto', memory: 'Memoria', action: 'Acción', pricing: 'Precios' },
     company: { title: 'Empresa', about: 'Nosotros', blog: 'Blog', careers: 'Empleo' },
-    legal: { title: 'Legal', privacy: 'Privacidad', terms: 'Términos', security: 'Seguridad' },
+    legal: { title: 'Legal', privacy: 'Política de Privacidad', terms: 'Términos del Servicio' },
     rights: '© 2026 ShogunAI. Todos los derechos reservados.',
     madeFor: 'Hecho para el individuo AI-native.',
   },
@@ -669,6 +693,18 @@ const es: Dictionary = {
     ],
     teamTitle: 'Equipo',
     teamNote: 'Los miembros del equipo se listarán aquí.',
+  },
+  legalPage: {
+    updated: 'Última actualización: 19 de julio de 2026',
+    privacyTitle: 'Política de Privacidad',
+    termsTitle: 'Términos del Servicio',
+    intro: 'Texto legal de ejemplo — un marco para reemplazar con la política real.',
+    sections: [
+      { h: 'Resumen', p: 'Sección de ejemplo. Reemplázala con contenido real.' },
+      { h: 'Qué cubre', p: 'Sección de ejemplo. Reemplázala con contenido real.' },
+      { h: 'Tus opciones', p: 'Sección de ejemplo. Reemplázala con contenido real.' },
+      { h: 'Contacto', p: '¿Preguntas? Escríbenos a hello@shogunai.com.' },
+    ],
   },
 };
 
@@ -829,7 +865,7 @@ const de: Dictionary = {
     tagline: 'Gedächtnis, das deinen Tag erfasst. Ausführung, die danach handelt.',
     product: { title: 'Produkt', memory: 'Memory', action: 'Aktion', pricing: 'Preise' },
     company: { title: 'Unternehmen', about: 'Über uns', blog: 'Blog', careers: 'Karriere' },
-    legal: { title: 'Rechtliches', privacy: 'Datenschutz', terms: 'AGB', security: 'Sicherheit' },
+    legal: { title: 'Rechtliches', privacy: 'Datenschutzerklärung', terms: 'Nutzungsbedingungen' },
     rights: '© 2026 ShogunAI. Alle Rechte vorbehalten.',
     madeFor: 'Gemacht für den AI-native Einzelnen.',
   },
@@ -872,6 +908,18 @@ const de: Dictionary = {
     ],
     teamTitle: 'Team',
     teamNote: 'Teammitglieder werden hier gelistet.',
+  },
+  legalPage: {
+    updated: 'Zuletzt aktualisiert: 19. Juli 2026',
+    privacyTitle: 'Datenschutzerklärung',
+    termsTitle: 'Nutzungsbedingungen',
+    intro: 'Platzhalter-Rechtstext — ein Rahmen, der durch die echte Richtlinie ersetzt wird.',
+    sections: [
+      { h: 'Überblick', p: 'Platzhalter-Abschnitt. Durch echten Inhalt ersetzen.' },
+      { h: 'Was das abdeckt', p: 'Platzhalter-Abschnitt. Durch echten Inhalt ersetzen.' },
+      { h: 'Deine Optionen', p: 'Platzhalter-Abschnitt. Durch echten Inhalt ersetzen.' },
+      { h: 'Kontakt', p: 'Fragen? Schreib uns an hello@shogunai.com.' },
+    ],
   },
 };
 
