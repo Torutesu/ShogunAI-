@@ -13,7 +13,10 @@ on:
   workflow_dispatch:
   push:
     branches: ["claude/shogunai-requirements-prep-nm2tf4"]
-    paths: [".github/workflows/phase0-smoke.yml"]
+    paths:
+      - ".github/workflows/phase0-smoke.yml"
+      - "apps/desktop/**"
+      - "crates/**"
 
 jobs:
   smoke:
