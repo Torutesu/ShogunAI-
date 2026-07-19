@@ -52,6 +52,10 @@ pub fn run() {
                 let (tx, rx) = std::sync::mpsc::channel::<hover::MouseSample>();
                 hover::start(tx);
                 std::thread::spawn(move || while rx.recv().is_ok() {});
+
+                // T-11: check Accessibility trust (prompts if needed). The AX cache walk
+                // (axcache::snapshot) runs on focus events once display wiring lands.
+                eprintln!("[spike] accessibility trusted: {}", axcache::ax_trusted());
             }
             // on-device (T-08+): state-machine timers driving the panel, axcache AXObserver,
             // display watch, harness JSONL writer thread.
