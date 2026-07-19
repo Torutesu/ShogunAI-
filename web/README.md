@@ -1,8 +1,41 @@
 # ShogunAI — Web app + Referral Engine
 
-Next.js (App Router) + Drizzle ORM + PostgreSQL. Hosts the ShogunAI landing
-page (Aside Skyglass style) and a portable **referral / "skip the line"**
-waitlist engine implemented per `REFERRAL_ENGINE.md`.
+Next.js 16 (App Router, RSC) + React 19 + TypeScript. Hosts the ShogunAI
+landing page and a portable **referral / "skip the line"** waitlist engine
+implemented per `REFERRAL_ENGINE.md`.
+
+## Stack
+
+- **UI**: Tailwind CSS v4 (`@theme` tokens), shadcn-style primitives on Radix,
+  Motion (`motion/react`), Lucide icons, `next/font` (Geist + Inter).
+- **Design**: bright "Aside Skyglass" light theme — sky-blue accent `#00A6F4`,
+  near-black ink, pill controls, restrained shadows.
+- **i18n**: English (default) + Japanese, cookie-based locale with an in-nav
+  toggle. All copy lives in `src/i18n/dictionaries.ts` (content separated from
+  layout).
+- **Content**: MDX blog content collection under `content/blog/` (gray-matter
+  + next-mdx-remote). `/blog`, `/careers`, `/about` are wired frames.
+- **SEO/LLM**: Metadata API, dynamic metadata, `sitemap.xml`, `robots.txt`,
+  JSON-LD (Organization / SoftwareApplication / Article / Breadcrumb), OG +
+  Twitter cards, dynamic OG image (`opengraph-image`), `public/llms.txt`.
+- **Backend**: Drizzle ORM + PostgreSQL (referral engine, unchanged).
+
+## Structure
+
+```
+src/
+  app/            routes, api/, sitemap.ts, robots.ts, opengraph-image.tsx
+  components/
+    ui/           button, card, badge, input (shadcn-style)
+    sections/     Nav, Hero, Trust, Memory, Action, How, Stats,
+                  Testimonials, Pricing, CTA, Footer
+    animations/   Reveal (scroll-triggered motion)
+    seo/          JsonLd + schema builders
+  i18n/           config, dictionaries (en/ja), server helpers
+  lib/            referral, service, http, rate-limit, waitlist-auth, blog, site
+  db/             schema, queries, migrate
+content/blog/     *.mdx posts
+```
 
 ## What's here
 

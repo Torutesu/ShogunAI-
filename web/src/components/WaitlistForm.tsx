@@ -1,23 +1,33 @@
 'use client';
 
+import { Loader2 } from 'lucide-react';
 import { useState } from 'react';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+
+export type WaitlistLabels = {
+  placeholder: string;
+  submit: string;
+  errBadEmail: string;
+  errRate: string;
+  errNetwork: string;
+  okListed: string;
+};
 
 /**
- * Hero waitlist form. POSTs to /api/waitlist/signup and, on success,
- * redirects the browser to the private status URL (duplicates included).
+ * Waitlist form. POSTs to /api/waitlist/signup and, on success, redirects
+ * to the private status URL (duplicates included).
  */
-export function WaitlistForm({ refCode }: { refCode?: string }) {
+export function WaitlistForm({ refCode, labels }: { refCode?: string; labels: WaitlistLabels }) {
   const [email, setEmail] = useState('');
   const [state, setState] = useState<'idle' | 'loading' | 'error'>('idle');
   const [msg, setMsg] = useState('');
 
-  async function onSubmit(e: React.FormEvent) {
+  async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setState('loading');
     setMsg('');
-    const form = e.currentTarget as HTMLFormElement;
-    const honeypot = (form.elements.namedItem('company_url') as HTMLInputElement)?.value ?? '';
-
+    const honeypot = (e.currentTarget.elements.namedItem('company_url') as HTMLInputElement)?.value ?? '';
     try {
       const res = await fetch('/api/waitlist/signup', {
         method: 'POST',
@@ -27,46 +37,46 @@ export function WaitlistForm({ refCode }: { refCode?: string }) {
       const data = await res.json();
       if (!res.ok || !data.ok) {
         setState('error');
-        setMsg(
-          data?.error === 'rate_limited'
-            ? 'Too many attempts. Try again in a minute.'
-            : 'That email looks off. Check it and try again.',
-        );
+        setMsg(data?.error === 'rate_limited' ? labels.errRate : labels.errBadEmail);
         return;
       }
       if (data.statusUrl) {
         window.location.href = data.statusUrl;
       } else {
         setState('idle');
-        setMsg('You’re on the list.');
+        setMsg(labels.okListed);
       }
     } catch {
       setState('error');
-      setMsg('Network hiccup. Try again.');
+      setMsg(labels.errNetwork);
     }
   }
 
   return (
-    <form className="wl-form" onSubmit={onSubmit} noValidate>
-      <input
-        className="wl-form__input"
+    <form onSubmit={onSubmit} noValidate className="mx-auto mt-8 flex max-w-lg flex-wrap justify-center gap-2.5">
+      <Input
         type="email"
         name="email"
-        placeholder="you@work.com"
-        aria-label="Email address"
         required
         value={email}
         onChange={(e) => setEmail(e.target.value)}
+        placeholder={labels.placeholder}
+        aria-label="Email address"
+        className="min-w-[220px] flex-1"
       />
-      {/* Honeypot — hidden from real users */}
-      <input className="wl-form__hp" type="text" name="company_url" tabIndex={-1} autoComplete="off" aria-hidden="true" />
-      <button className="btn btn-primary" type="submit" disabled={state === 'loading'}>
-        {state === 'loading' ? <span className="spinner" /> : 'Get early access'}
-      </button>
+      <input
+        type="text"
+        name="company_url"
+        tabIndex={-1}
+        autoComplete="off"
+        aria-hidden="true"
+        className="absolute left-[-9999px] size-px overflow-hidden"
+      />
+      <Button type="submit" disabled={state === 'loading'} className="min-w-[150px]">
+        {state === 'loading' ? <Loader2 className="size-4 animate-spin" /> : labels.submit}
+      </Button>
       {msg && (
-        <div className={`wl-msg ${state === 'error' ? 'wl-msg--err' : 'wl-msg--ok'}`} style={{ flexBasis: '100%' }}>
-          {msg}
-        </div>
+        <p className={`basis-full text-sm ${state === 'error' ? 'text-danger' : 'text-accent-strong'}`}>{msg}</p>
       )}
     </form>
   );

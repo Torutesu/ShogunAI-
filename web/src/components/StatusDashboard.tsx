@@ -1,6 +1,10 @@
 'use client';
 
+import { Check, Copy, Loader2, Star } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
 
 type Status = {
   status: string;
@@ -17,7 +21,6 @@ type Status = {
   isTopReferrer: boolean;
 };
 
-// Mirror of REFERRAL_TIERS for rendering the ladder.
 const TIERS = [
   { threshold: 3, label: '1 month free' },
   { threshold: 10, label: '3 months free' },
@@ -60,88 +63,138 @@ export function StatusDashboard({ code }: { code: string }) {
 
   if (error === 'not_found') {
     return (
-      <div className="card center stack">
-        <h1 className="t-h2">We couldn’t find that page</h1>
-        <p className="muted">This status link is invalid or expired. Check the URL from your welcome email.</p>
-        <a className="btn btn-primary" href="/" style={{ justifySelf: 'center' }}>Back to home</a>
-      </div>
+      <Card className="mx-auto grid max-w-md gap-4 text-center">
+        <h1 className="font-display text-2xl font-semibold">We couldn’t find that page</h1>
+        <p className="text-muted">This status link is invalid or expired. Check the URL from your welcome email.</p>
+        <Button asChild className="justify-self-center">
+          <a href="/">Back to home</a>
+        </Button>
+      </Card>
     );
   }
-  if (error) return <div className="card center"><p className="muted">Something went wrong. Please refresh.</p></div>;
-  if (!data) return <div className="center" style={{ padding: 60 }}><span className="spinner" /></div>;
+  if (error)
+    return (
+      <Card className="mx-auto max-w-md text-center text-muted">Something went wrong. Please refresh.</Card>
+    );
+  if (!data)
+    return (
+      <div className="grid place-items-center py-16">
+        <Loader2 className="size-5 animate-spin text-accent" />
+      </div>
+    );
 
   const count = data.qualifiedReferrals;
 
   return (
-    <div className="dash stack">
-      <div className="dash__head">
-        <span className="chip"><span className="dot" />{data.profileComplete ? 'Your spot is secured' : 'You’re on the list'}</span>
-        <h1 className="t-h1" style={{ margin: '16px 0 8px' }}>Welcome to ShogunAI</h1>
-        <p className="muted t-body-lg">Refer friends and answer a few questions to move up the line.</p>
+    <div className="mx-auto grid max-w-3xl gap-6">
+      <div className="text-center">
+        <Badge dot>{data.profileComplete ? 'Your spot is secured' : 'You’re on the list'}</Badge>
+        <h1 className="mt-4 font-display text-[clamp(30px,4vw,44px)] font-semibold tracking-[-0.015em]">
+          Welcome to ShogunAI
+        </h1>
+        <p className="mt-2 text-[17px] text-muted">Refer friends and answer a few questions to move up the line.</p>
       </div>
 
-      <div className="dash__pos">
-        <div className="card dash__stat">
-          <div className="dash__stat-v">{data.position ?? '—'}</div>
-          <div className="dash__stat-k">your position{data.totalWaiting ? ` of ${data.totalWaiting}` : ''}</div>
-        </div>
-        <div className="card dash__stat">
-          <div className="dash__stat-v">{count}</div>
-          <div className="dash__stat-k">qualified referrals</div>
-        </div>
-        <div className="card dash__stat">
-          <div className="dash__stat-v">{data.leaderboardRank ? `#${data.leaderboardRank}` : '—'}</div>
-          <div className="dash__stat-k">leaderboard rank</div>
-        </div>
+      <div className="grid gap-4 sm:grid-cols-3">
+        <Stat v={data.position ?? '—'} k={`your position${data.totalWaiting ? ` of ${data.totalWaiting}` : ''}`} />
+        <Stat v={count} k="qualified referrals" />
+        <Stat v={data.leaderboardRank ? `#${data.leaderboardRank}` : '—'} k="leaderboard rank" />
       </div>
 
-      {/* Share */}
-      <div className="card">
-        <span className="eyebrow">Your invite link</span>
-        <h2 className="t-h3" style={{ margin: '10px 0 4px' }}>Skip the line — bring people in</h2>
-        <p className="muted t-body">A referral counts once your invite completes their profile. Rewards replace each other; they don’t stack.</p>
-        <div className="share">
-          <span className="share__url" title={data.shareUrl}>{data.shareUrl}</span>
-          <button className="btn btn-primary" onClick={copyShare}>{copied ? 'Copied ✓' : 'Copy link'}</button>
+      <Card>
+        <p className="text-xs font-semibold uppercase tracking-[0.08em] text-accent">Your invite link</p>
+        <h2 className="mb-1 mt-2.5 font-display text-2xl font-semibold">Skip the line — bring people in</h2>
+        <p className="text-sm text-muted">
+          A referral counts once your invite completes their profile. Rewards replace each other; they don’t stack.
+        </p>
+        <div className="mt-4 flex flex-wrap gap-2.5">
+          <span className="flex min-w-[220px] flex-1 items-center overflow-hidden text-ellipsis whitespace-nowrap rounded-full border border-border bg-cloud px-4 font-mono text-[13px] leading-[44px] text-ink">
+            {data.shareUrl}
+          </span>
+          <Button onClick={copyShare}>
+            {copied ? <Check className="size-4" /> : <Copy className="size-4" />}
+            {copied ? 'Copied' : 'Copy link'}
+          </Button>
         </div>
-      </div>
+      </Card>
 
-      {/* Reward ladder */}
-      <div className="card">
-        <span className="eyebrow">Rewards</span>
-        <h2 className="t-h3" style={{ margin: '10px 0 14px' }}>
+      <Card>
+        <p className="text-xs font-semibold uppercase tracking-[0.08em] text-accent">Rewards</p>
+        <h2 className="mb-3.5 mt-2.5 font-display text-2xl font-semibold">
           {data.tier ? `You’ve unlocked ${data.tier.label}` : 'Refer 3 to unlock your first reward'}
         </h2>
-        <div className="ladder">
-          {TIERS.map((t) => {
-            const done = count >= t.threshold;
-            const isNext = !done && data.nextTier?.threshold === t.threshold;
+        <div className="grid gap-2.5">
+          {TIERS.map((tItem) => {
+            const done = count >= tItem.threshold;
+            const isNext = !done && data.nextTier?.threshold === tItem.threshold;
             return (
-              <div key={t.threshold} className={`rung ${done ? 'rung--done' : ''} ${isNext ? 'rung--next' : ''}`}>
-                <span className="rung__badge">{done ? '✓' : t.threshold}</span>
-                <span className="rung__label">{t.label}</span>
-                <span className="rung__meta">
-                  {done ? 'unlocked' : `${t.threshold - count} more`}
-                </span>
-              </div>
+              <Rung
+                key={tItem.threshold}
+                done={done}
+                next={isNext}
+                badge={done ? '✓' : String(tItem.threshold)}
+                label={tItem.label}
+                meta={done ? 'unlocked' : `${tItem.threshold - count} more`}
+              />
             );
           })}
-          <div className={`rung ${data.isTopReferrer ? 'rung--done' : ''}`}>
-            <span className="rung__badge">★</span>
-            <span className="rung__label">Top 10 referrers — 1 year free</span>
-            <span className="rung__meta">{data.isTopReferrer ? 'you’re in' : 'compete on the board'}</span>
-          </div>
+          <Rung
+            done={data.isTopReferrer}
+            badge={<Star className="size-3.5" />}
+            label="Top 10 referrers — 1 year free"
+            meta={data.isTopReferrer ? 'you’re in' : 'compete on the board'}
+          />
         </div>
-      </div>
+      </Card>
 
-      {/* Qualifying profile */}
       {!data.profileComplete && <ProfileForm code={code} onDone={load} answered={data.answered} />}
 
-      <div className="card">
-        <span className="eyebrow">Leaderboard</span>
-        <h2 className="t-h3" style={{ margin: '10px 0 14px' }}>Top referrers</h2>
-        <LeaderboardInline meRefCode={data.refCode} />
-      </div>
+      <Card>
+        <p className="text-xs font-semibold uppercase tracking-[0.08em] text-accent">Leaderboard</p>
+        <h2 className="mb-3.5 mt-2.5 font-display text-2xl font-semibold">Top referrers</h2>
+        <LeaderboardInline />
+      </Card>
+    </div>
+  );
+}
+
+function Stat({ v, k }: { v: string | number; k: string }) {
+  return (
+    <Card className="text-center">
+      <div className="font-display text-[40px] font-semibold tabular-nums tracking-[-0.02em]">{v}</div>
+      <div className="mt-1 text-[13px] text-muted">{k}</div>
+    </Card>
+  );
+}
+
+function Rung({
+  done,
+  next,
+  badge,
+  label,
+  meta,
+}: {
+  done?: boolean;
+  next?: boolean;
+  badge: React.ReactNode;
+  label: string;
+  meta: string;
+}) {
+  return (
+    <div
+      className={`flex items-center gap-3.5 rounded-lg border px-4 py-3.5 ${
+        done ? 'border-[#bfeeff] bg-sky-soft' : next ? 'border-accent ring-4 ring-accent/10' : 'border-border bg-white'
+      }`}
+    >
+      <span
+        className={`flex size-[34px] shrink-0 items-center justify-center rounded-full text-[13px] font-semibold tabular-nums ${
+          done ? 'bg-accent text-white' : 'bg-cloud text-muted'
+        }`}
+      >
+        {badge}
+      </span>
+      <span className="font-medium text-ink">{label}</span>
+      <span className="ml-auto text-[13px] text-muted">{meta}</span>
     </div>
   );
 }
@@ -174,39 +227,44 @@ function ProfileForm({ code, onDone, answered }: { code: string; onDone: () => v
     }
   }
 
+  const field = 'h-11 rounded-lg border border-border bg-white px-4 text-[15px] text-ink focus:border-accent focus:outline-none focus:ring-4 focus:ring-accent/15';
+
   return (
-    <div className="card">
-      <span className="eyebrow">Secure your spot</span>
-      <h2 className="t-h3" style={{ margin: '10px 0 4px' }}>Tell us who you are</h2>
-      <p className="muted t-body">Answering all three completes your profile and moves you up the line. ({answered}/3 done)</p>
-      <form className="profile" onSubmit={onSubmit}>
-        <div className="profile__q">
-          <label htmlFor="a1">What do you do?</label>
-          <select id="a1" name="a1" defaultValue="" required>
+    <Card>
+      <p className="text-xs font-semibold uppercase tracking-[0.08em] text-accent">Secure your spot</p>
+      <h2 className="mb-1 mt-2.5 font-display text-2xl font-semibold">Tell us who you are</h2>
+      <p className="text-sm text-muted">Answering all three completes your profile and moves you up the line. ({answered}/3 done)</p>
+      <form onSubmit={onSubmit} className="mt-2 grid gap-4">
+        <label className="grid gap-1.5 text-sm font-medium text-ink">
+          What do you do?
+          <select name="a1" defaultValue="" required className={field}>
             <option value="" disabled>Choose one…</option>
-            <option>Founder</option><option>Builder / Engineer</option><option>Researcher</option>
-            <option>Operator</option><option>Creator</option><option>Other</option>
+            <option>Founder</option>
+            <option>Builder / Engineer</option>
+            <option>Researcher</option>
+            <option>Operator</option>
+            <option>Creator</option>
+            <option>Other</option>
           </select>
-        </div>
-        <div className="profile__q">
-          <label htmlFor="a2">Where do you spend most of your day?</label>
-          <input id="a2" name="a2" maxLength={200} placeholder="e.g. code, meetings, writing, research" required />
-        </div>
-        <div className="profile__q">
-          <label htmlFor="a3">What would you hand off to an AI first?</label>
-          <input id="a3" name="a3" maxLength={200} placeholder="e.g. follow-ups, note-taking, scheduling" required />
-        </div>
-        <button className="btn btn-primary" type="submit" disabled={state === 'loading'}>
-          {state === 'loading' ? <span className="spinner" /> : 'Complete profile'}
-        </button>
-        {msg && <div className="wl-msg wl-msg--err">{msg}</div>}
+        </label>
+        <label className="grid gap-1.5 text-sm font-medium text-ink">
+          Where do you spend most of your day?
+          <input name="a2" maxLength={200} placeholder="e.g. code, meetings, writing, research" required className={field} />
+        </label>
+        <label className="grid gap-1.5 text-sm font-medium text-ink">
+          What would you hand off to an AI first?
+          <input name="a3" maxLength={200} placeholder="e.g. follow-ups, note-taking, scheduling" required className={field} />
+        </label>
+        <Button type="submit" disabled={state === 'loading'}>
+          {state === 'loading' ? <Loader2 className="size-4 animate-spin" /> : 'Complete profile'}
+        </Button>
+        {msg && <p className="text-sm text-danger">{msg}</p>}
       </form>
-    </div>
+    </Card>
   );
 }
 
-// Inline leaderboard fetch (kept local so the dashboard is one client bundle).
-function LeaderboardInline({ meRefCode }: { meRefCode?: string }) {
+function LeaderboardInline() {
   const [board, setBoard] = useState<{ rank: number; maskedEmail: string; count: number }[] | null>(null);
   useEffect(() => {
     let alive = true;
@@ -214,17 +272,24 @@ function LeaderboardInline({ meRefCode }: { meRefCode?: string }) {
       .then((r) => r.json())
       .then((d) => alive && d.ok && setBoard(d.board))
       .catch(() => alive && setBoard([]));
-    return () => { alive = false; };
+    return () => {
+      alive = false;
+    };
   }, []);
-  if (board === null) return <div className="center"><span className="spinner" /></div>;
-  if (!board.length) return <p className="muted t-body">No qualified referrals yet. Be the first.</p>;
+  if (board === null)
+    return (
+      <div className="grid place-items-center py-4">
+        <Loader2 className="size-4 animate-spin text-accent" />
+      </div>
+    );
+  if (!board.length) return <p className="text-sm text-muted">No qualified referrals yet. Be the first.</p>;
   return (
-    <div className="lb">
+    <div className="grid">
       {board.map((e) => (
-        <div key={e.rank} className="lb__row">
-          <span className="lb__rank">#{e.rank}</span>
-          <span className="lb__email">{e.maskedEmail}</span>
-          <span className="lb__count">{e.count}</span>
+        <div key={e.rank} className="grid grid-cols-[40px_1fr_auto] items-center gap-3 border-b border-border px-2 py-3">
+          <span className="font-mono text-[13px] tabular-nums text-muted">#{e.rank}</span>
+          <span className="text-sm text-ink">{e.maskedEmail}</span>
+          <span className="font-semibold tabular-nums text-accent">{e.count}</span>
         </div>
       ))}
     </div>

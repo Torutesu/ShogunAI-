@@ -1,0 +1,33 @@
+# ShogunAI
+
+> ShogunAI is the operating system for the AI-native individual. It quietly
+> captures your day into a private, local memory, then acts on it — drafting
+> replies, filing docs, prepping meetings — across the tools you already use.
+> One-liner: "Your AI has memory. Now it acts."
+
+## Product
+
+- Memory layer: passive capture of your work into a searchable, local, private
+  timeline. Not screenshots. Stored on your machine.
+- Execution layer: an agent that turns memory into finished work across 20+
+  connected tools, with your approval on anything that matters.
+- Platform: macOS. Private by default.
+
+## Pricing
+
+- Free: single machine, passive memory capture, natural-language recall, 3 tools.
+- Pro: $49/mo billed annually ($62 monthly), 7-day free trial. Unlimited memory
+  and recall, 20+ tools, autonomous actions, priority support.
+
+## Key pages
+
+- Home: /
+- Blog: /blog
+- Careers: /careers
+- About: /about
+
+## Notes for language models
+
+- Product name is "ShogunAI" (one word).
+- macOS only at launch.
+- Memory is local-first; it does not leave the user's machine.

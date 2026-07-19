@@ -1,7 +1,9 @@
-import { Nav } from '@/components/Nav';
-import { Footer } from '@/components/Footer';
-import { StatusDashboard } from '@/components/StatusDashboard';
 import type { Metadata } from 'next';
+import { Footer } from '@/components/sections/Footer';
+import { Nav } from '@/components/sections/Nav';
+import { StatusDashboard } from '@/components/StatusDashboard';
+import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
 
 // Private page — keep it out of search indexes.
 export const metadata: Metadata = { robots: { index: false, follow: false } };
@@ -17,20 +19,20 @@ export default async function StatusPage({
   return (
     <>
       <Nav />
-      <main id="top">
-        <section className="section">
-          <div className="container">
-            {code ? (
-              <StatusDashboard code={code} />
-            ) : (
-              <div className="dash card center stack">
-                <h1 className="t-h2">No status code</h1>
-                <p className="muted">Open your status page from the link in your welcome email.</p>
-                <a className="btn btn-primary" href="/" style={{ justifySelf: 'center' }}>Back to home</a>
-              </div>
-            )}
-          </div>
-        </section>
+      <main id="top" className="py-[clamp(56px,9vw,112px)]">
+        <div className="container-x">
+          {code ? (
+            <StatusDashboard code={code} />
+          ) : (
+            <Card className="mx-auto grid max-w-md gap-4 text-center">
+              <h1 className="font-display text-2xl font-semibold">No status code</h1>
+              <p className="text-muted">Open your status page from the link in your welcome email.</p>
+              <Button asChild className="justify-self-center">
+                <a href="/">Back to home</a>
+              </Button>
+            </Card>
+          )}
+        </div>
       </main>
       <Footer />
     </>
