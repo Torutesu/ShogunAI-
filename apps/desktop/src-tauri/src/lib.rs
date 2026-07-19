@@ -37,27 +37,12 @@ pub fn run() {
             setup_macos(_app);
             #[cfg(target_os = "macos")]
             {
-                // Delayed probe: is the JS engine alive / bridge injected 10s in?
-                use tauri::Manager;
-                let h = _app.handle().clone();
-                std::thread::spawn(move || {
-                    // JS-engine probe, IPC-independent: eval writes readyState+bridge
-                    // presence into location.hash; url() reads it back. Separately, an
-                    // invoke probe tests the bridge end-to-end (cmd interact eval-alive).
-                    std::thread::sleep(std::time::Duration::from_secs(10));
-                    let Some(w) = h.get_webview_window("notch") else {
-                        eprintln!("[spike] probe: no notch window");
-                        return;
-                    };
-                    let _ = w.eval(
-                        "location.hash='alive-'+document.readyState+'-bridge'+((!!window.__TAURI_INTERNALS__)?1:0)",
-                    );
-                    let _ = w.eval(
-                        "window.__TAURI_INTERNALS__ ? window.__TAURI_INTERNALS__.invoke('interact',{kind:'eval-alive'}) : void 0",
-                    );
-                    std::thread::sleep(std::time::Duration::from_secs(2));
-                    eprintln!("[spike] probe url={:?}", w.url());
-                });
+                // KNOWN WRY PITFALL (runs #4/#5): calling WebviewWindow::eval() or url()
+                // on the NSPanel-swapped window panics wry 0.55.1 (wkwebview/mod.rs:1349
+                // unwrap-None) and kills the main thread ~immediately. Do not probe the
+                // webview from Rust; webview liveness is checked via the boot-ping
+                // command from JS instead (cmd interact kind=boot in the log).
+            }
             }
             Ok(())
         })
@@ -78,13 +63,19 @@ fn setup_macos(app: &tauri::App) {
     use tauri::Manager;
 
     // T-05: swap the notch window into an NSPanel with the spec §3.1.2 attributes.
-    match app.get_webview_window("notch") {
-        Some(win) => {
-            if let Err(e) = panel::install(&win) {
-                eprintln!("[spike] panel install failed: {e}");
+    // SPIKE_NO_PANEL=1 skips the swap — diagnostic flag to isolate whether the swap
+    // itself breaks the webview (silent-webview investigation, smoke runs #2/#3).
+    if std::env::var("SPIKE_NO_PANEL").is_ok() {
+        eprintln!("[spike] SPIKE_NO_PANEL set — NSPanel swap skipped");
+    } else {
+        match app.get_webview_window("notch") {
+            Some(win) => {
+                if let Err(e) = panel::install(&win) {
+                    eprintln!("[spike] panel install failed: {e}");
+                }
             }
+            None => eprintln!("[spike] no 'notch' window — panel not installed"),
         }
-        None => eprintln!("[spike] no 'notch' window — panel not installed"),
     }
 
     // T-06: geometry (panel screen + CG conversion constants).

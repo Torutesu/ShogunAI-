@@ -115,7 +115,7 @@ jobs:
       - name: Launch spike + inject hover cycles + capture
         run: |
           BIN="$GITHUB_WORKSPACE/target/release/shogun-desktop-spike"
-          "$BIN" > /tmp/app.log 2>&1 &
+          SPIKE_NO_PANEL="${SPIKE_NO_PANEL:-1}" "$BIN" > /tmp/app.log 2>&1 &
           APP_PID=$!
           echo "app pid: $APP_PID"
           sleep 15
