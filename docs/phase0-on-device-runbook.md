@@ -53,6 +53,10 @@ pnpm --filter @shogun-ai/desktop dev           # tauri dev（debugビルド、�
 
 ## 3. オンデバイスで完了させる実装タスク
 
+> **2026-07-19 レビュー修正後の状態**: コードレビュー(10所見)のP0修正により、本書の一部は既に実装済み・CI(Apple Silicon)コンパイル済みになった。
+> - **実装済み**: D-02の配線(painted→共有クロック+min-RTTオフセットで`metric.expand_latency`記録、`clock_sync`5往復)、D-07の自動判定側(`event.expand_session` + close_reason + auto-FP)、cpu_sample(5s/1分平均/RSS)、heartbeat(60s/パネル可視/AXカウンタ)、tapの無効化復旧+権限リトライ(`event.tap_status`)、ボタン系マスク+tap内早期リジェクト、タイマーの受信時世代照合、`screens[0]`基準のprimary_height、AX要素ごと100msタイムアウト、reportの空データガード、JSONL日付ローテーション、soak.shのfrontendビルド。
+> - **残り(真にオンデバイス)**: D-01(目視)、D-02の較正(rAF×2スロー撮影)とR_enter進入時刻→total_perceived、D-03/D-05(フォーカス購読→`metric.cache_update`発行 — 唯一まだ発行されない必須ストリーム)、D-04(key解放+level切替)、D-06(ディスプレイ変化/ヘルスチェック)、D-07の⌃⌥⌘F手動マーク、D-08(CPU単位のActivity Monitor照合)、S-11/12/13実測。
+
 各タスク: **目的 / 接続点（既存コードのどこに何を足すか）/ 受け入れ基準 / findings対応**。D-02・D-03 は「4つの問い」を測るために必須。D-04〜D-08 は完成度・網羅性。
 
 ### D-01 パネル常駐・展開の目視（Q1サニティ）
