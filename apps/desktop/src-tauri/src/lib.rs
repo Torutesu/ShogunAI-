@@ -91,6 +91,22 @@ fn setup_macos(app: &tauri::App) {
         g.is_notch, g.notch_w, g.notch_h, g.menubar_h, g.screen.w, g.screen.h, g.primary_height, g.display_count
     );
 
+    // Pin the panel to the top-centre of the primary display so the idle shell sits flush
+    // under the notch and the Expanded panel drops straight down from it. An un-positioned
+    // Tauri window is centred on screen (observed: the panel appeared mid-screen), which
+    // contradicts the notch-anchored layout (spec §3.1.3). x is centred on the screen
+    // width; y=0 puts the window top at the screen top (the panel level is Status, so it
+    // draws over the menu-bar band).
+    if let Some(win) = app.get_webview_window("notch") {
+        let scale = win.scale_factor().unwrap_or(1.0);
+        let win_w = win.outer_size().map(|s| s.width as f64 / scale).unwrap_or(432.0);
+        let x = ((g.screen.w - win_w) / 2.0).max(0.0);
+        match win.set_position(tauri::LogicalPosition::new(x, 0.0)) {
+            Ok(()) => eprintln!("[spike] panel positioned at top-centre x={x:.0} y=0"),
+            Err(e) => eprintln!("[spike] set_position failed: {e}"),
+        }
+    }
+
     // T-07/T-08: mouse tap → integrated engine + measurement streams.
     let (tx, rx) = std::sync::mpsc::channel::<hover::TapEvent>();
     hover::start(tx);

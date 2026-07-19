@@ -476,11 +476,25 @@ pub mod mac {
         let Some(t1_ns) = shared.offset.lock().ok().and_then(|o| o.js_to_rust_ns(t1_js_ns)) else {
             return; // offset not calibrated yet — drop rather than record a biased value
         };
-        let t0 = shared.last_commit_ns.load(Ordering::SeqCst);
+        // Consume the commit so each expand-commit pairs with exactly ONE paint. A T5
+        // revive (Collapsing→Expanded, statemachine §3.3) re-emits `state=expanded` — and
+        // therefore a `painted` — WITHOUT a fresh MarkExpandCommit; dev StrictMode can also
+        // double-fire the paint. Without consuming, those extra paints reuse a stale t0 and
+        // inject a multi-second outlier that dominates p95 (observed: a 298s sample from an
+        // hours-old commit). swap→0 makes any second paint see t0==0 and drop.
+        let t0 = shared.last_commit_ns.swap(0, Ordering::SeqCst);
         if t0 == 0 || t1_ns <= t0 {
             return;
         }
         let latency_ms = (t1_ns - t0) as f64 / 1e6;
+        // A real expand is bounded by the dwell+paint budget; a seconds-range value is an
+        // orphaned pair (stalled webview), not a latency sample — drop it so the SLO tail
+        // stays honest. The ceiling is 50× the 100ms SLO, so a genuine regression is still
+        // recorded as a FAIL rather than hidden.
+        if latency_ms > 5000.0 {
+            eprintln!("[spike] dropping implausible expand latency {latency_ms:.0}ms (orphaned pair)");
+            return;
+        }
         shared.recorder.record(Body::ExpandLatency(ExpandLatency {
             latency_ms,
             // Perceived total and enter-offset need the R_enter entry timestamp —
