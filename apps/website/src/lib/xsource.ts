@@ -81,6 +81,46 @@ export const twscrapeSource: XSource = {
   },
 };
 
+/**
+ * HTTP-bridge source. Point this at a tiny service that runs twscrape (reuse
+ * the LEADSHOGUN twscrape+Supabase setup) and returns JSON. Contract:
+ *   GET {base}/followers?account=<h>       -> { handles: string[] }
+ *   GET {base}/quotes?tweet_id=<id>        -> { quotes: [{authorHandle, quoteTweetId, text}] }
+ * Auth via a shared bearer (X_BRIDGE_TOKEN). Swapping to the official X API
+ * later means writing another XSource — nothing downstream changes.
+ */
+export function httpXSource(baseUrl = process.env.X_BRIDGE_URL ?? ''): XSource {
+  const token = process.env.X_BRIDGE_TOKEN ?? '';
+  const headers: Record<string, string> = token ? { authorization: `Bearer ${token}` } : {};
+  if (!baseUrl) {
+    return {
+      async fetchFollowers() {
+        throw new Error('X_BRIDGE_URL not set — configure the twscrape bridge.');
+      },
+      async fetchQuotes() {
+        throw new Error('X_BRIDGE_URL not set — configure the twscrape bridge.');
+      },
+    };
+  }
+  const base = baseUrl.replace(/\/$/, '');
+  return {
+    async fetchFollowers(account: string) {
+      const res = await fetch(`${base}/followers?account=${encodeURIComponent(account)}`, { headers });
+      if (!res.ok) throw new Error(`bridge followers ${account}: ${res.status}`);
+      const data = (await res.json()) as { handles?: string[] };
+      return Array.isArray(data.handles) ? data.handles : [];
+    },
+    async fetchQuotes(tweetId: string) {
+      const res = await fetch(`${base}/quotes?tweet_id=${encodeURIComponent(tweetId)}`, { headers });
+      if (!res.ok) throw new Error(`bridge quotes ${tweetId}: ${res.status}`);
+      const data = (await res.json()) as {
+        quotes?: Array<{ authorHandle: string; quoteTweetId: string; text: string }>;
+      };
+      return Array.isArray(data.quotes) ? data.quotes : [];
+    },
+  };
+}
+
 /** Latest snapshot age per account — for the admin dashboard / freshness checks. */
 export async function snapshotFreshness() {
   const rows = await db.execute(sql`

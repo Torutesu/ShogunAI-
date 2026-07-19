@@ -94,10 +94,18 @@ const PTS_TIERS = [
 // Ways to climb — point values mirror lib/points.ts POINTS.
 const CLIMB: { key: string; label: string; points: number; hint: string }[] = [
   { key: 'referral', label: 'Invite a friend', points: 100, hint: 'counts once they finish their profile' },
-  { key: 'quote', label: 'Quote-post the launch', points: 30, hint: 'add a comment + #ad' },
+  { key: 'quote', label: 'Quote-post the launch', points: 30, hint: 'must add a comment + #ad (paid-promotion disclosure)' },
   { key: 'follow_product', label: 'Follow ShogunAI on X', points: 10, hint: 'one-time' },
   { key: 'follow_founder', label: 'Follow the founder on X', points: 10, hint: 'one-time' },
 ];
+
+// Legal fine print (spec §5): action-based (not a sweepstakes), capped value.
+const LEGAL =
+  'Rewards are earned by action — no purchase necessary and no prize draw. Amounts shown are the maximum, in Pro annual-rate terms; the actual value varies with participation and exchange rate. Up to $500,000 total across the campaign.';
+
+function FinePrint() {
+  return <p className="mt-3 text-[11px] leading-relaxed text-faint">{LEGAL}</p>;
+}
 
 /* ---------- Step 1: thank-you + program + rewards + form ---------- */
 function Onboarding({ code, onDone }: { code: string; onDone: () => void }) {
@@ -108,9 +116,10 @@ function Onboarding({ code, onDone }: { code: string; onDone: () => void }) {
         <h1 className="mt-4 font-display text-[clamp(30px,4vw,44px)] font-semibold tracking-[-0.02em]">
           Thanks for signing up
         </h1>
-        <p className="mx-auto mt-3 max-w-[46ch] text-[17px] leading-relaxed text-muted">
+        <p className="mx-auto mt-3 max-w-[48ch] text-[17px] leading-relaxed text-muted">
           You’re on the list for ShogunAI. Want to skip ahead? We run a referral program — invite friends,
-          climb the line, and earn months of ShogunAI free.
+          climb the line, and earn months of ShogunAI free. Up to <span className="font-semibold text-ink">$500,000</span>{' '}
+          in ShogunAI (max) is set aside for early believers — earned by action, not chance.
         </p>
       </div>
 
@@ -134,6 +143,7 @@ function Onboarding({ code, onDone }: { code: string; onDone: () => void }) {
             meta="leaderboard"
           />
         </div>
+        <FinePrint />
       </Card>
 
       {/* Interested? → form that issues the link */}
@@ -310,6 +320,7 @@ function Tracking({ data, code }: { data: Status; code: string }) {
             meta={rank?.isTopReferrer ? 'you’re in' : 'compete on the board'}
           />
         </div>
+        <FinePrint />
       </Card>
 
       {/* Leaderboard by nickname */}
