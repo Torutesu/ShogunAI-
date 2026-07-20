@@ -3185,6 +3185,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "shogun-mcp"
+version = "0.1.0"
+dependencies = [
+ "shogun-agents",
+]
+
+[[package]]
 name = "shogun-memory"
 version = "0.1.0"
 dependencies = [
