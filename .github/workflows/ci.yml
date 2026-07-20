@@ -40,13 +40,18 @@ jobs:
         run: cargo clippy -p shogun-core --features net --all-targets
       - name: test
         run: cargo test --workspace --exclude shogun-desktop-spike
-      # FR-TR-03: only the single traced egress (shogun-core) may depend on an HTTP client, so no
-      # component can send off-device without a traceability record. Self-test the detector, then
-      # check the real dependency tree.
-      - name: HTTP egress guard (FR-TR-03)
+      # Invariant guards (each self-tests its detector, then checks the real tree/source):
+      # - FR-TR-03: only the single traced egress (shogun-core) may depend on an HTTP client.
+      # - invariant 7: Secret::expose() only in allowlisted files (no raw-secret leak to log/DB).
+      # - schema: migrations stay additive (memory lives for years; no DROP/RENAME/ALTER COLUMN).
+      - name: invariant guards (egress / secrets / migrations)
         run: |
           python3 scripts/check-http-egress.py --self-test
           python3 scripts/check-http-egress.py
+          python3 scripts/check-secret-exposure.py --self-test
+          python3 scripts/check-secret-exposure.py
+          python3 scripts/check-migrations.py --self-test
+          python3 scripts/check-migrations.py
       - name: release build (SLO code path)
         run: cargo build -p spike-harness --release
 
