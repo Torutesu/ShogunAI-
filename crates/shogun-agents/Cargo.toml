@@ -1,0 +1,17 @@
+[package]
+name = "shogun-agents"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "SHOGUN agent execution: L1/L2/L3 permission model (L1 has no external send) + preset agents."
+
+# Platform-independent so the permission model — the invariant-4 guarantee that L1 auto-run can
+# never be an external send — is unit-testable on Linux. The execution engine's OS effects live
+# in the desktop app; the classification and gating live here.
+
+[dependencies]
+
+[lints]
+workspace = true

@@ -8,6 +8,7 @@ members = [
     "crates/shogun-core",
     "crates/shogun-memory",
     "crates/shogun-fusion",
+    "crates/shogun-agents",
     "crates/spike-harness",
     "apps/desktop/src-tauri",
 ]
