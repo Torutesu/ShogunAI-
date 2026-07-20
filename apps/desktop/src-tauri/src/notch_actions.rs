@@ -8,9 +8,6 @@
 //! action label + rationale (already confidence-gated) cross the boundary.
 #![allow(dead_code)]
 
-#[cfg(target_os = "macos")]
-pub use mac::notch_actions;
-
 /// A flattened action candidate for the webview (serde-friendly; the domain types aren't
 /// `Serialize`, so we project here).
 #[derive(serde::Serialize, Clone)]
@@ -24,7 +21,7 @@ pub struct ActionView {
 }
 
 #[cfg(target_os = "macos")]
-mod mac {
+pub mod mac {
     use shogun_core::daemon::Db;
     use shogun_fusion::assemble::{ActionCandidate, ScreenContext};
     use shogun_fusion::{Action, Level, LocalAction};

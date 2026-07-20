@@ -31,6 +31,8 @@ shogun-core = { path = "../../../crates/shogun-core" }
 # The memory DB is only wired in on-device (capture_source persists through it). Enabling `db`
 # here (not in the base [dependencies]) keeps rusqlite out of the Linux resolution graph.
 shogun-core = { path = "../../../crates/shogun-core", features = ["db"] }
+# shogun-fusion for the notch context-action command (ScreenContext / ActionCandidate / Level).
+shogun-fusion = { path = "../../../crates/shogun-fusion" }
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", features = [
     "NSResponder", "NSWindow", "NSView", "NSPanel", "NSScreen",

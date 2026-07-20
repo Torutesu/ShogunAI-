@@ -31,7 +31,7 @@ pub fn run() {
         integrate::mac::collapse_request,
         integrate::mac::clock_sync_ack,
         integrate::mac::focus_field,
-        notch_actions::notch_actions,
+        notch_actions::mac::notch_actions,
     ]);
 
     // NOTE: do NOT add .on_page_load here — with the NSPanel-swapped window it trips a
