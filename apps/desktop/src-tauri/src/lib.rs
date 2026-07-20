@@ -22,7 +22,10 @@ mod panel;
 pub fn run() {
     let builder = tauri::Builder::default();
     #[cfg(target_os = "macos")]
-    let builder = builder.plugin(tauri_nspanel::init()).invoke_handler(tauri::generate_handler![
+    let builder = builder
+        .plugin(tauri_nspanel::init())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .invoke_handler(tauri::generate_handler![
         integrate::mac::painted,
         integrate::mac::interact,
         integrate::mac::promote,
@@ -133,6 +136,10 @@ fn setup_macos(app: &tauri::App) {
     );
     app.manage(shared);
 
+    // ⌘⇧Space: open the panel directly (statemachine §3.3 Hotkey→Expanded) without depending on
+    // hover. Registered here so a flaky CGEventTap can't leave the panel unreachable.
+    register_expand_shortcut(app);
+
     // T-11/T-12 sanity: Accessibility trust + one focused-window walk through the tested
     // policy. Event-driven focus subscription is on-device work (runbook D-03/D-05).
     eprintln!("[spike] accessibility trusted: {}", axcache::ax_trusted());
@@ -158,6 +165,28 @@ fn setup_macos(app: &tauri::App) {
             eprintln!("[spike] capture source started (poll {}ms)", capture_source::DEFAULT_POLL_MS);
         }
         Err(e) => eprintln!("[spike] memory DB unavailable — capture source not started: {e}"),
+    }
+}
+
+/// Register the ⌘⇧Space global shortcut → feed a Hotkey input to the engine (Idle→Expanded direct,
+/// statemachine §3.3). Errors are logged, not fatal — the app still runs (hover remains available).
+#[cfg(target_os = "macos")]
+fn register_expand_shortcut(app: &tauri::App) {
+    use std::sync::Arc;
+    use tauri::Manager;
+    use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
+
+    let expand = Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::Space);
+    let res = app.global_shortcut().on_shortcut(expand, move |app, _sc, event| {
+        if event.state() == ShortcutState::Pressed {
+            if let Some(shared) = app.try_state::<Arc<integrate::mac::Shared>>() {
+                shared.trigger_hotkey();
+            }
+        }
+    });
+    match res {
+        Ok(()) => eprintln!("[spike] ⌘⇧Space registered — press it to open the panel"),
+        Err(e) => eprintln!("[spike] global shortcut registration failed: {e}"),
     }
 }
 

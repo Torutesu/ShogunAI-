@@ -115,6 +115,11 @@ pub mod mac {
                 let _ = tx.send(ev);
             }
         }
+        /// Feed a Hotkey input to the engine (⌘⇧Space direct-expand, statemachine §3.3). Public so
+        /// the global-shortcut handler can open the panel without depending on hover.
+        pub fn trigger_hotkey(&self) {
+            self.send(Ev::Input(EngineInput::Hotkey));
+        }
         fn set_reason(&self, r: &'static str) {
             if let Ok(mut g) = self.collapse_reason.lock() {
                 *g = r;
