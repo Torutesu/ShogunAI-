@@ -74,6 +74,32 @@ pub fn insert_or_touch(conn: &Connection, ev: &NewEvent<'_>) -> Result<(i64, boo
     }
 }
 
+/// One event's id and content, for the Dream Cycle consolidation pass (which classifies a day's
+/// events). Content is included because consolidation reads it; callers that only need metadata
+/// use the state reads instead.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EventText {
+    pub id: i64,
+    pub content: String,
+}
+
+/// List events whose `ts` is in `[from_ts, to_ts)`, oldest first — the day's window a Dream Cycle
+/// consolidation job consumes (FR-DC-03). The half-open range matches the `job_runs` input range so
+/// re-running a job over the same window is deterministic.
+pub fn events_in_range(
+    conn: &Connection,
+    from_ts: i64,
+    to_ts: i64,
+) -> Result<Vec<EventText>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT id, content FROM event_log WHERE ts >= ?1 AND ts < ?2 ORDER BY ts, id",
+    )?;
+    let rows = stmt.query_map(params![from_ts, to_ts], |r| {
+        Ok(EventText { id: r.get(0)?, content: r.get(1)? })
+    })?;
+    rows.collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -131,5 +157,16 @@ mod tests {
         assert!(!touched, "a different source must not touch the capture row");
         let count: i64 = conn.query_row("SELECT count(*) FROM event_log", [], |r| r.get(0)).unwrap();
         assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn events_in_range_is_half_open_and_ordered() {
+        let conn = crate::open_in_memory().unwrap();
+        insert(&conn, &ev("a", "ha", 10, 0)).unwrap();
+        insert(&conn, &ev("b", "hb", 20, 0)).unwrap();
+        insert(&conn, &ev("c", "hc", 30, 0)).unwrap();
+        // [10, 30): includes 10 and 20, excludes 30
+        let got = events_in_range(&conn, 10, 30).unwrap();
+        assert_eq!(got.iter().map(|e| e.content.as_str()).collect::<Vec<_>>(), vec!["a", "b"]);
     }
 }

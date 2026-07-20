@@ -16,3 +16,7 @@ pub mod plan;
 /// the `db` feature.
 #[cfg(feature = "db")]
 pub mod run;
+/// The concrete job effects behind the `DreamJobRunner` seam (consolidation, state maintenance,
+/// cold demotion, brief). Needs the DB handle → `db` feature.
+#[cfg(feature = "db")]
+pub mod jobs;

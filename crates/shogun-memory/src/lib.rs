@@ -23,6 +23,7 @@ pub mod hot;
 pub mod jobs;
 pub mod maintenance;
 pub mod quantize;
+pub mod recompute;
 pub mod search;
 pub mod state;
 pub mod traceability;

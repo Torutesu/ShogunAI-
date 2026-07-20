@@ -163,6 +163,70 @@ impl Db {
         state::insert_open_loop(&mut g, l, provenance).ok()
     }
 
+    // -------------------------------------------------------------- Dream Cycle job effects
+    // Concrete effects the nightly cycle drives through the `DreamJobRunner` seam (dreamcycle::jobs).
+    // Each swallows storage errors into a safe default so a hiccup fails the *job* (leaving the cycle
+    // resumable) rather than crashing the daemon.
+
+    /// Events in `[from_ts, to_ts)` — the window a Consolidation job classifies (FR-DC-03).
+    pub fn events_in_range(&self, from_ts: i64, to_ts: i64) -> Vec<event_log::EventText> {
+        self.conn.lock().ok().and_then(|c| event_log::events_in_range(&c, from_ts, to_ts).ok()).unwrap_or_default()
+    }
+
+    /// Descriptions already present in `commitments` + `open_loops`, for consolidation dedup — so a
+    /// re-run over the same range (crash-resume, FR-DC-04) doesn't add the same candidate twice.
+    pub fn existing_state_descriptions(&self) -> std::collections::HashSet<String> {
+        let mut set = std::collections::HashSet::new();
+        if let Ok(c) = self.conn.lock() {
+            if let Ok(rows) = state::list_commitments(&c) {
+                set.extend(rows.into_iter().map(|r| r.description));
+            }
+            if let Ok(rows) = state::list_open_loops(&c) {
+                set.extend(rows.into_iter().map(|r| r.description));
+            }
+        }
+        set
+    }
+
+    /// Persist extracted candidates linked to `event_id` (FR-ST-02). Returns the new row ids.
+    pub fn persist_candidates(&self, event_id: i64, candidates: &[shogun_memory::extract::Candidate]) -> Vec<i64> {
+        let now = self.now_ms();
+        self.conn
+            .lock()
+            .ok()
+            .and_then(|mut g| shogun_memory::extract::persist_candidates(&mut g, event_id, candidates, now).ok())
+            .unwrap_or_default()
+    }
+
+    /// Recompute overdue status + open-loop staleness from `now` (FR-ST-21). Returns
+    /// `(commitments_flagged, loops_touched)`; `(0,0)` on a lock/write failure.
+    pub fn recompute_overdue_and_staleness(&self, now_ms: i64) -> (usize, usize) {
+        self.conn
+            .lock()
+            .ok()
+            .and_then(|mut g| shogun_memory::recompute::recompute_overdue_and_staleness(&mut g, now_ms).ok())
+            .unwrap_or((0, 0))
+    }
+
+    /// Age-decay state-row confidence (FR-ST-21). Returns the number of rows changed.
+    pub fn decay_confidence(&self, now_ms: i64, half_life_ms: i64) -> usize {
+        self.conn
+            .lock()
+            .ok()
+            .and_then(|mut g| shogun_memory::recompute::decay_confidence(&mut g, now_ms, half_life_ms).ok())
+            .unwrap_or(0)
+    }
+
+    /// Demote Warm embeddings older than `cutoff_ms` to the int8 Cold tier (FR-MEM-04). Returns the
+    /// number moved.
+    pub fn demote_cold(&self, cutoff_ms: i64) -> usize {
+        self.conn
+            .lock()
+            .ok()
+            .and_then(|mut g| shogun_memory::cold::demote_older_than(&mut g, cutoff_ms).ok())
+            .unwrap_or(0)
+    }
+
     // -------------------------------------------------------------- state reads → Fusion supply
     // The daemon reads state rows and maps them into Fusion's input types, so Context Fusion and
     // the Morning Brief run on real DB data. The confidence gate lives in Fusion (FR-ST-20); the
