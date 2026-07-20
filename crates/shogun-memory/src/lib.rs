@@ -14,6 +14,9 @@ use std::path::Path;
 
 use rusqlite::Connection;
 
+pub mod event_log;
+pub mod state;
+
 /// refinery embeds the `src/migrations/V*.sql` files at compile time; `migrations::runner()`
 /// applies any not yet recorded in the `refinery_schema_history` table.
 mod embedded {
@@ -30,6 +33,9 @@ pub enum MemoryError {
     Migration(#[from] refinery::Error),
     #[error("integrity check failed: {0}")]
     Integrity(String),
+    /// A state row was asked to be inserted with no provenance (FR-ST-02 forbids it).
+    #[error("state row insert requires at least one provenance event (FR-ST-02)")]
+    EmptyProvenance,
 }
 
 /// Apply the crash-safety pragmas (NFR-REL-01). `wal` is skipped for in-memory databases,
