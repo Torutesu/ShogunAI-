@@ -14,10 +14,12 @@ use std::path::Path;
 
 use rusqlite::Connection;
 
+pub mod embed;
 pub mod event_log;
 pub mod hot;
 pub mod search;
 pub mod state;
+pub mod vector;
 
 /// refinery embeds the `src/migrations/V*.sql` files at compile time; `migrations::runner()`
 /// applies any not yet recorded in the `refinery_schema_history` table.
@@ -65,6 +67,7 @@ fn migrate_and_check(conn: &mut Connection) -> Result<(), MemoryError> {
 /// Open (creating if needed) the database at `path` in WAL mode, apply pragmas, migrate to the
 /// latest schema, and run an integrity check. This is the product entry point.
 pub fn open(path: impl AsRef<Path>) -> Result<Connection, MemoryError> {
+    vector::register_extension();
     let mut conn = Connection::open(path)?;
     apply_pragmas(&conn, true)?;
     migrate_and_check(&mut conn)?;
@@ -73,6 +76,7 @@ pub fn open(path: impl AsRef<Path>) -> Result<Connection, MemoryError> {
 
 /// Open an in-memory database, migrated to the latest schema — for tests and ephemeral use.
 pub fn open_in_memory() -> Result<Connection, MemoryError> {
+    vector::register_extension();
     let mut conn = Connection::open_in_memory()?;
     apply_pragmas(&conn, false)?;
     migrate_and_check(&mut conn)?;
@@ -116,7 +120,7 @@ mod tests {
         ] {
             assert!(tables.iter().any(|t| t == expected), "missing table {expected}");
         }
-        assert_eq!(schema_version(&conn).unwrap(), Some(1));
+        assert_eq!(schema_version(&conn).unwrap(), Some(2));
     }
 
     #[test]
@@ -128,12 +132,12 @@ mod tests {
 
         {
             let conn = open(&path).unwrap();
-            assert_eq!(schema_version(&conn).unwrap(), Some(1));
+            assert_eq!(schema_version(&conn).unwrap(), Some(2));
         }
         {
             // Reopen: migrate_and_check runs again, finds nothing new, and passes quick_check.
             let conn = open(&path).unwrap();
-            assert_eq!(schema_version(&conn).unwrap(), Some(1));
+            assert_eq!(schema_version(&conn).unwrap(), Some(2));
             let mode: String = conn.query_row("PRAGMA journal_mode", [], |r| r.get(0)).unwrap();
             assert_eq!(mode.to_lowercase(), "wal");
         }

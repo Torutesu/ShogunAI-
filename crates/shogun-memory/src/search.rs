@@ -92,12 +92,28 @@ pub fn hydrate(conn: &Connection, ranked: &[(i64, f64)]) -> Result<Vec<SearchHit
     Ok(hits)
 }
 
-/// Hybrid search entry point (FR-MEM-20). Today it fuses the FTS list with itself (a no-op
-/// fusion that preserves FTS order); when the Warm vector list lands (WP2.5) it becomes the
-/// second list into the same RRF call.
+/// FTS-only search — the lexical half alone. Kept for callers without an embedder.
 pub fn search(conn: &Connection, query: &str, limit: usize) -> Result<Vec<SearchHit>, rusqlite::Error> {
+    search_hybrid(conn, query, None, limit)
+}
+
+/// Hybrid search (FR-MEM-20): fuse the FTS lexical list with the Warm-layer vector list via RRF.
+/// The caller supplies the query embedding (so shogun-memory stays decoupled from the model);
+/// pass `None` to run FTS-only. Both lists rank the same event ids, so the vector half simply
+/// becomes a second input to the same fusion. Un-embedded events (no `event_vec` row yet,
+/// FR-MEM-22) still appear via the FTS list.
+pub fn search_hybrid(
+    conn: &Connection,
+    query: &str,
+    query_embedding: Option<&[f32]>,
+    limit: usize,
+) -> Result<Vec<SearchHit>, rusqlite::Error> {
     let fts = fts_search(conn, query, limit)?;
-    let ranked = reciprocal_rank_fusion(&[&fts], 60.0);
+    let vec = match query_embedding {
+        Some(emb) => crate::vector::knn(conn, emb, limit)?,
+        None => Vec::new(),
+    };
+    let ranked = reciprocal_rank_fusion(&[&fts, &vec], 60.0);
     let capped: Vec<(i64, f64)> = ranked.into_iter().take(limit).collect();
     hydrate(conn, &capped)
 }
@@ -186,5 +202,26 @@ mod tests {
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].source, "gmail"); // FR-MEM-23 attribution
         assert!(hits[0].content.contains("quarterly"));
+    }
+
+    #[test]
+    fn hybrid_search_finds_semantic_match_fts_would_miss() {
+        use crate::embed::{Embedder, MockEmbedder, E5_SMALL_DIM};
+        let conn = crate::open_in_memory().unwrap();
+        let m = MockEmbedder::new(E5_SMALL_DIM);
+
+        // A doc that shares tokens with the query but NOT the exact FTS term.
+        let id = add(&conn, "the budget review meeting is on friday", "gmail", "h1");
+        let v = m.embed_passages(&["the budget review meeting is on friday"]).unwrap()[0].clone();
+        crate::vector::upsert(&conn, id, &v).unwrap();
+
+        // Query term "standup" isn't in the doc (FTS finds nothing), but the embedding overlaps
+        // on "review"/"meeting" so the vector list surfaces it — hybrid fusion returns it.
+        let q = m.embed_query("review meeting standup").unwrap();
+        let fts_only = search(&conn, "standup", 10).unwrap();
+        assert!(fts_only.is_empty(), "FTS alone should miss it");
+        let hybrid = search_hybrid(&conn, "standup", Some(&q), 10).unwrap();
+        assert_eq!(hybrid.len(), 1, "the vector half should surface the semantic match");
+        assert_eq!(hybrid[0].event_id, id);
     }
 }
