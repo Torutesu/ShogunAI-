@@ -594,11 +594,14 @@ pub mod mac {
         let latency_ms = t1.saturating_sub(t0) as f64 / 1e6;
         let (_, digest) = spike_harness::digest::text_digest(&result.text);
         let unchanged = last_digest.as_deref() == Some(digest.as_str());
-        // Diagnostics carry bundle + counts ONLY — never the captured text.
-        eprintln!(
-            "[spike] cache_update bundle={bundle_id} bytes={} elems={} depth={} partial={} unchanged={unchanged} {latency_ms:.1}ms",
-            result.text_bytes, result.elements_visited, result.depth_reached, result.partial
-        );
+        // Diagnostics carry bundle + counts ONLY — never the captured text. Skip the log for an
+        // unchanged periodic re-walk (same tab, no edit) so the console stays readable.
+        if !unchanged {
+            eprintln!(
+                "[spike] cache_update bundle={bundle_id} bytes={} elems={} depth={} partial={} {latency_ms:.1}ms",
+                result.text_bytes, result.elements_visited, result.depth_reached, result.partial
+            );
+        }
         if unchanged {
             return Some(result);
         }

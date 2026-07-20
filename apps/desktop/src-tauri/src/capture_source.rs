@@ -65,13 +65,16 @@ mod mac {
             CaptureOutcome::Empty => {}
             CaptureOutcome::Captured { text, .. } => {
                 match db.ingest_capture(Some(&front.bundle_id), title.as_deref(), text, dwell_ms) {
-                    Some((id, touched, cands)) => eprintln!(
+                    // Only log the interesting cases (a new event, or candidates extracted) — the
+                    // dominant "touched, +0" re-reads would otherwise bury the console.
+                    Some((id, touched, cands)) if !touched || !cands.is_empty() => eprintln!(
                         "[capture] {} {} bytes → event {id} {} (+{} candidate(s))",
                         front.bundle_id,
                         text.len(),
                         if touched { "touched" } else { "new" },
                         cands.len(),
                     ),
+                    Some(_) => {}
                     None => eprintln!("[capture] {} — DB write skipped", front.bundle_id),
                 }
             }
