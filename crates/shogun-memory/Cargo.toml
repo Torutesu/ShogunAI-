@@ -1,0 +1,21 @@
+[package]
+name = "shogun-memory"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "SHOGUN memory: SQLite schema, versioned migrations, event log, state tables, search."
+
+# Platform-independent (bundled SQLite) so the schema, migrations, and repository logic are
+# testable on Linux CI. Data centre of gravity is Rust (AR-04); the webview never touches this.
+
+[dependencies]
+rusqlite = { version = "0.31", features = ["bundled"] }
+refinery = { version = "0.8", features = ["rusqlite"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+
+[lints]
+workspace = true

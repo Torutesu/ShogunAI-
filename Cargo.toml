@@ -6,6 +6,7 @@
 resolver = "2"
 members = [
     "crates/shogun-core",
+    "crates/shogun-memory",
     "crates/spike-harness",
     "apps/desktop/src-tauri",
 ]
