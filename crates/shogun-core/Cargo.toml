@@ -18,9 +18,21 @@ description = "SHOGUN core: pure, platform-independent behavioural logic (notch 
 name = "shogun_core"
 path = "src/lib.rs"
 
+[features]
+default = []
+# `net` pulls in the real HTTPS transport (reqwest). It is OFF by default so the pure-logic CI
+# job (and every Linux unit test of request-building / parsing / traceability) compiles without
+# reqwest; the macOS shell enables it.
+net = ["dep:reqwest"]
+
 [dependencies]
 tokio = { version = "1", features = ["sync"] }
 thiserror = "1"
+serde_json = "1"
+twox-hash = "1"
+# Real HTTPS transport, feature-gated. rustls only (no system OpenSSL); certificate verification
+# is never disabled (NFR-SEC-04).
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"], optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "macros"] }

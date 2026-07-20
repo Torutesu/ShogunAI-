@@ -34,6 +34,10 @@ jobs:
       # (shogun-desktop-spike) only builds on-device, so it is excluded here.
       - name: clippy (warnings deny via workspace lints)
         run: cargo clippy --workspace --exclude shogun-desktop-spike --all-targets
+      # The real HTTPS transport (shogun-core feature `net` → reqwest/rustls) is off by default so
+      # the line above stays reqwest-free; verify it compiles+lints on its own.
+      - name: clippy shogun-core net transport
+        run: cargo clippy -p shogun-core --features net --all-targets
       - name: test
         run: cargo test --workspace --exclude shogun-desktop-spike
       - name: release build (SLO code path)

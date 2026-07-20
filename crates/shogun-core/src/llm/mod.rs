@@ -12,9 +12,22 @@
 //! check to forget.
 //!
 //! Secrets never reach a log: [`Secret`] redacts under `Debug`/`Display`, and the raw value is
-//! only reachable through [`Secret::expose`] (NFR-SEC-01/02, G7). The provider abstraction is a
-//! trait with one Anthropic implementation planned (ADR-002); this module defines the lanes and
-//! the mock, not the network client.
+//! only reachable through [`Secret::expose`] (NFR-SEC-01/02, G7).
+//!
+//! ## Layers
+//! - This file defines the **lanes** ([`SelectKkKey`]/[`ByokKey`], [`BatchClient`]/[`AgentClient`])
+//!   and the offline **mocks**.
+//! - [`transport`] is the HTTP seam ([`HttpTransport`]) so the network clients are testable with
+//!   no socket; [`traceability`] is the send-log seam ([`TraceabilitySink`]) that records only a
+//!   digest + byte-length of every outbound chunk (AR-11 / G8, never the text).
+//! - [`anthropic`] is the real Anthropic REST layer: pure request builders + response parsers
+//!   (Linux-testable) plus thin async clients that wire transport + sink together. The
+//!   Batch-lane client takes a [`SelectKkKey`] and the Agent-lane client a [`ByokKey`], so
+//!   invariant 5 stays compile-enforced end-to-end.
+
+pub mod anthropic;
+pub mod traceability;
+pub mod transport;
 
 use std::fmt;
 
@@ -124,6 +137,10 @@ pub enum LlmError {
     Provider(String),
     #[error("not configured (missing key)")]
     NotConfigured,
+    #[error("transport: {0}")]
+    Transport(#[from] transport::TransportError),
+    #[error("malformed response: {0}")]
+    Parse(String),
 }
 
 // ---- mocks (tests / offline) -------------------------------------------------------------
