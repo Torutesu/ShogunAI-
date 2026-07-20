@@ -10,6 +10,8 @@ export async function Footer() {
         { href: '/#memory', label: t.footer.product.memory },
         { href: '/#action', label: t.footer.product.action },
         { href: '/#pricing', label: t.footer.product.pricing },
+        // Campaign, not legal — the rewards program lives with the product.
+        { href: '/rules', label: t.campaign.cta },
       ],
     },
     {
@@ -25,7 +27,6 @@ export async function Footer() {
       links: [
         { href: '/privacy', label: t.footer.legal.privacy },
         { href: '/terms', label: t.footer.legal.terms },
-        { href: '/rules', label: t.campaign.cta },
       ],
     },
   ];

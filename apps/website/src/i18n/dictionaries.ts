@@ -312,6 +312,7 @@ const en = {
     cta: 'See the rules',
   },
   rules: {
+    eyebrow: 'Rewards program',
     title: 'Early-access rewards — official rules',
     updated: 'Last updated July 19, 2026',
     intro:
@@ -651,6 +652,7 @@ const ja: Dictionary = {
     cta: 'ルールを見る',
   },
   rules: {
+    eyebrow: '特典プログラム',
     title: 'アーリーアクセス特典 — 公式ルール',
     updated: '最終更新: 2026年7月19日',
     intro:
@@ -960,6 +962,7 @@ const es: Dictionary = {
     cta: 'Ver las reglas',
   },
   rules: {
+    eyebrow: 'Programa de recompensas',
     title: 'Recompensas de acceso anticipado — reglas oficiales',
     updated: 'Última actualización: 19 de julio de 2026',
     intro:
@@ -1269,6 +1272,7 @@ const de: Dictionary = {
     cta: 'Regeln ansehen',
   },
   rules: {
+    eyebrow: 'Belohnungsprogramm',
     title: 'Early-Access-Belohnungen — offizielle Regeln',
     updated: 'Zuletzt aktualisiert am 19. Juli 2026',
     intro:

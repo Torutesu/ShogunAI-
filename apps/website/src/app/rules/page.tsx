@@ -15,7 +15,7 @@ export default async function RulesPage() {
   const r = t.rules;
   return (
     <PageShell>
-      <PageHeader eyebrow={t.footer.legal.title} title={r.title} sub={r.updated} />
+      <PageHeader eyebrow={r.eyebrow} title={r.title} sub={r.updated} />
       <section className="py-[clamp(40px,6vw,72px)]">
         <div className="container-x max-w-[720px]">
           <p className="text-[17px] leading-relaxed text-muted">{r.intro}</p>
