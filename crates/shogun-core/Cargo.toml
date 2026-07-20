@@ -27,7 +27,7 @@ net = ["dep:reqwest"]
 # `db` pulls in the storage + fusion layers for the daemon's wiring (DB-backed traceability sink,
 # capture writes, state reads → Fusion supply). OFF by default so the pure-logic tests stay
 # rusqlite-free; the daemon (and its CI step) enable it.
-db = ["dep:shogun-memory", "dep:rusqlite", "dep:shogun-fusion"]
+db = ["dep:shogun-memory", "dep:rusqlite", "dep:shogun-fusion", "dep:shogun-mcp"]
 
 [dependencies]
 tokio = { version = "1", features = ["sync"] }
@@ -41,6 +41,8 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 # as shogun-memory so the bundled SQLite compiles once.
 shogun-memory = { path = "../shogun-memory", optional = true }
 shogun-fusion = { path = "../shogun-fusion", optional = true }
+# The daemon implements the Memory API's data backend (dependency-inverted: the trait lives in mcp).
+shogun-mcp = { path = "../shogun-mcp", optional = true }
 rusqlite = { version = "0.31", features = ["bundled"], optional = true }
 
 [dev-dependencies]

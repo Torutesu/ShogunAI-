@@ -30,6 +30,10 @@ pub mod capture;
 /// first shogun-core → shogun-memory edge).
 #[cfg(feature = "db")]
 pub mod daemon;
+/// The daemon's Memory API data backend — implements shogun-mcp's `MemoryBackend` over `Db`
+/// (feature `db`).
+#[cfg(feature = "db")]
+pub mod db_backend;
 /// DB-backed traceability sink — the daemon's `TraceabilitySink` → `traceability_log` adapter
 /// (feature `db`).
 #[cfg(feature = "db")]
