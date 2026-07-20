@@ -176,8 +176,12 @@ fn register_expand_shortcut(app: &tauri::App) {
     use tauri::Manager;
     use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
-    let expand = Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::Space);
+    // ⌘⇧J: ⌘⇧Space collides with the input-method source switcher on JP keyboards, so the OS
+    // consumes it before the handler runs. J is uncontended.
+    let expand = Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::KeyJ);
     let res = app.global_shortcut().on_shortcut(expand, move |app, _sc, event| {
+        // Diagnostic: log every delivery so we can tell the handler fired even if state differs.
+        eprintln!("[spike] shortcut fired: {:?}", event.state());
         if event.state() == ShortcutState::Pressed {
             if let Some(shared) = app.try_state::<Arc<integrate::mac::Shared>>() {
                 shared.trigger_hotkey();
@@ -185,7 +189,7 @@ fn register_expand_shortcut(app: &tauri::App) {
         }
     });
     match res {
-        Ok(()) => eprintln!("[spike] ⌘⇧Space registered — press it to open the panel"),
+        Ok(()) => eprintln!("[spike] ⌘⇧J registered — press it to open the panel"),
         Err(e) => eprintln!("[spike] global shortcut registration failed: {e}"),
     }
 }
