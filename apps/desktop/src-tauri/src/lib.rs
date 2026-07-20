@@ -186,6 +186,9 @@ fn register_expand_shortcut(app: &tauri::App) {
             if let Some(shared) = app.try_state::<Arc<integrate::mac::Shared>>() {
                 shared.trigger_hotkey();
             }
+            // Also run the UI-independent core self-test so the product path is verifiable even if
+            // the spike's webview panel doesn't render.
+            notch_exec::mac::self_test(app);
         }
     });
     match res {

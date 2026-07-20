@@ -136,6 +136,32 @@ pub mod mac {
         }
     }
 
+    /// On-device self-test of the product core, independent of the (fragile) panel rendering:
+    /// assemble the current context actions, log them, and submit the top one to the engine. Proves
+    /// capture → memory → fusion → action → execution end-to-end from a keypress.
+    pub fn self_test(app: &tauri::AppHandle) {
+        use tauri::Manager;
+        let Some(db) = app.try_state::<Db>() else {
+            eprintln!("[selftest] no Db in state");
+            return;
+        };
+        let cache = db.context_actions(current_screen(), None);
+        eprintln!("[selftest] {} context action(s) for the current screen:", cache.actions.len());
+        for (i, a) in cache.actions.iter().enumerate() {
+            eprintln!("[selftest]   [{i}] {} {}", level_str(a.level), label_of(&a.action));
+        }
+        match (cache.actions.first(), app.try_state::<NotchEngine>()) {
+            (Some(first), Some(engine)) => {
+                if let Ok(mut eng) = engine.lock() {
+                    let sub = eng.submit(first.action.clone(), now_ms());
+                    eprintln!("[selftest] submitted top action → {:?}", sub.disposition);
+                }
+            }
+            (None, _) => eprintln!("[selftest] no gated actions yet (capture more promise/loop text)"),
+            _ => {}
+        }
+    }
+
     /// Tauri command: confirm a pending L2 action by id (from `run_notch_action`'s `"confirm:<id>"`).
     /// Returns `"executed"`, `"expired"`, `"failed"`, `"cancelled"`, or `"unknown"`.
     #[tauri::command]
