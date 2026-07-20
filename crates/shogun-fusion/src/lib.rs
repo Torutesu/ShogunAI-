@@ -12,3 +12,8 @@
 pub mod assemble;
 pub mod brief;
 pub mod confidence;
+
+/// Re-export the permission types that appear in this crate's public API ([`assemble::ActionCandidate`]
+/// carries an [`Action`] and a [`Level`]), so consumers can name them without a direct dependency on
+/// shogun-agents.
+pub use shogun_agents::permission::{Action, Level, LocalAction};

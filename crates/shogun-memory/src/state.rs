@@ -343,10 +343,12 @@ pub fn list_commitments(conn: &Connection) -> Result<Vec<CommitmentRow>, rusqlit
     rows.collect()
 }
 
-/// An open loop read back for Fusion / Morning Brief.
+/// An open loop read back for Fusion / Morning Brief. `kind` is the loop category
+/// (`reply_needed` / `waiting_on_them` / …) that Context Fusion maps to an action.
 #[derive(Debug, Clone, PartialEq)]
 pub struct OpenLoopRow {
     pub id: i64,
+    pub kind: String,
     pub description: String,
     pub staleness_days: i64,
     pub status: String,
@@ -357,7 +359,7 @@ pub struct OpenLoopRow {
 /// List open loops with their source event, stalest first (Brief takes the top-N).
 pub fn list_open_loops(conn: &Connection) -> Result<Vec<OpenLoopRow>, rusqlite::Error> {
     let mut stmt = conn.prepare(
-        "SELECT id, description, staleness_days, status, confidence,
+        "SELECT id, kind, description, staleness_days, status, confidence,
                 (SELECT MIN(event_id) FROM state_provenance
                    WHERE state_table = 'open_loops' AND state_id = open_loops.id)
          FROM open_loops
@@ -366,11 +368,12 @@ pub fn list_open_loops(conn: &Connection) -> Result<Vec<OpenLoopRow>, rusqlite::
     let rows = stmt.query_map([], |r| {
         Ok(OpenLoopRow {
             id: r.get(0)?,
-            description: r.get(1)?,
-            staleness_days: r.get(2)?,
-            status: r.get(3)?,
-            confidence: r.get(4)?,
-            first_event_id: r.get(5)?,
+            kind: r.get(1)?,
+            description: r.get(2)?,
+            staleness_days: r.get(3)?,
+            status: r.get(4)?,
+            confidence: r.get(5)?,
+            first_event_id: r.get(6)?,
         })
     })?;
     rows.collect()

@@ -298,6 +298,68 @@ impl Db {
             .unwrap_or(0)
     }
 
+    // -------------------------------------------------------------- Context Fusion → Notch actions
+    // The product core (§6.1, "press a button, work is done"): map the current state rows into
+    // Fusion input, assemble the ranked action candidates for the focused screen, and hand them to
+    // the Notch panel. Pure ranking + the confidence gate live in shogun-fusion (FR-ST-20); the
+    // daemon supplies the rows and scores screen relevance.
+
+    /// Assemble the context-action candidates for the current screen (§6.1, SLO-02: ≤4 actions).
+    /// Reads commitments / open loops / people / projects, maps them to Fusion candidates (scoring
+    /// relevance by overlap with the focused screen), and returns the confidence-gated, ranked
+    /// [`ContextCache`]. Low-confidence state never becomes an action (FR-ST-20).
+    pub fn context_actions(
+        &self,
+        screen: shogun_fusion::assemble::ScreenContext,
+        intent_hint: Option<String>,
+    ) -> shogun_fusion::assemble::ContextCache {
+        use shogun_fusion::assemble::{assemble, Intent, StateCandidate, StateKind};
+
+        let mut states: Vec<StateCandidate> = Vec::new();
+        let rel = |subject: &str, summary: &str| screen_relevance(&screen, subject, summary);
+
+        for c in self.conn.lock().ok().and_then(|c| state::list_commitments(&c).ok()).unwrap_or_default() {
+            let summary = c.description.clone();
+            states.push(StateCandidate {
+                kind: StateKind::CommitmentMine,
+                relevance: rel(&summary, &summary),
+                subject: summary.clone(),
+                summary,
+                confidence: c.confidence,
+            });
+        }
+        for l in self.conn.lock().ok().and_then(|c| state::list_open_loops(&c).ok()).unwrap_or_default() {
+            let summary = l.description.clone();
+            states.push(StateCandidate {
+                kind: open_loop_state_kind(&l.kind),
+                relevance: rel(&summary, &summary),
+                subject: summary.clone(),
+                summary,
+                confidence: l.confidence,
+            });
+        }
+        for p in self.people() {
+            states.push(StateCandidate {
+                kind: StateKind::Person,
+                relevance: rel(&p.display_name, &p.display_name),
+                subject: p.display_name.clone(),
+                summary: p.display_name,
+                confidence: p.confidence,
+            });
+        }
+        for p in self.projects() {
+            states.push(StateCandidate {
+                kind: StateKind::Project,
+                relevance: rel(&p.name, &p.name),
+                subject: p.name.clone(),
+                summary: p.name,
+                confidence: p.confidence,
+            });
+        }
+
+        assemble(screen, &states, "", &Intent { hint: intent_hint })
+    }
+
     // -------------------------------------------------------------- state reads → Fusion supply
     // The daemon reads state rows and maps them into Fusion's input types, so Context Fusion and
     // the Morning Brief run on real DB data. The confidence gate lives in Fusion (FR-ST-20); the
@@ -489,6 +551,36 @@ fn parse_job_state(s: &str) -> Option<JobState> {
     })
 }
 
+/// Map an open-loop `kind` string to the Fusion [`StateKind`](shogun_fusion::assemble::StateKind)
+/// that selects its action (reply → draft, waiting/other → surface).
+fn open_loop_state_kind(kind: &str) -> shogun_fusion::assemble::StateKind {
+    use shogun_fusion::assemble::StateKind;
+    match kind {
+        "reply_needed" => StateKind::OpenLoopReplyNeeded,
+        "waiting_on_them" => StateKind::OpenLoopWaiting,
+        _ => StateKind::OpenLoopOther,
+    }
+}
+
+/// Score a state candidate's relevance to the focused screen (0.0..=1.0): a hit when any salient
+/// term, or the window title, overlaps the subject/summary; a small baseline otherwise so unrelated
+/// state can still surface when nothing matches. Cheap (substring, lowercased) — runs per focus.
+fn screen_relevance(screen: &shogun_fusion::assemble::ScreenContext, subject: &str, summary: &str) -> f64 {
+    let hay = format!("{} {}", subject.to_lowercase(), summary.to_lowercase());
+    let title = screen.window_title.to_lowercase();
+    let title_hit = !title.is_empty()
+        && title.split_whitespace().any(|w| w.len() >= 4 && hay.contains(w));
+    let salient_hit = screen.salient.iter().any(|s| {
+        let s = s.to_lowercase();
+        !s.is_empty() && hay.contains(&s)
+    });
+    if salient_hit || title_hit {
+        1.0
+    } else {
+        0.4
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -522,6 +614,53 @@ mod tests {
         let (id2, touched2) = db.capture(&ev("hello", "h", 200)).unwrap();
         assert!(touched2, "same content_hash must touch, not append");
         assert_eq!(id1, id2);
+    }
+
+    #[test]
+    fn context_actions_ranks_gated_candidates_for_the_screen() {
+        use shogun_fusion::assemble::ScreenContext;
+        let db = Db::open_in_memory(clock(1)).unwrap();
+        let e = db.capture(&ev("evidence", "h1", 1)).unwrap().0;
+        // a high-confidence reply-needed loop mentioning "roadmap", and a low-confidence one
+        db.insert_open_loop(
+            &shogun_memory::state::NewOpenLoop {
+                kind: shogun_memory::state::OpenLoopKind::ReplyNeeded,
+                description: "reply about the roadmap",
+                counterparty_id: None,
+                project_id: None,
+                opened_at: 1,
+                confidence: 0.9,
+                now: 1,
+            },
+            &[shogun_memory::state::Provenance::new(e)],
+        )
+        .unwrap();
+        db.insert_open_loop(
+            &shogun_memory::state::NewOpenLoop {
+                kind: shogun_memory::state::OpenLoopKind::Other,
+                description: "vague low-confidence thing",
+                counterparty_id: None,
+                project_id: None,
+                opened_at: 1,
+                confidence: 0.2, // below the gate — must not become an action (FR-ST-20)
+                now: 1,
+            },
+            &[shogun_memory::state::Provenance::new(e)],
+        )
+        .unwrap();
+
+        let screen = ScreenContext {
+            app_bundle_id: "com.apple.Mail".into(),
+            window_title: "roadmap thread".into(),
+            salient: vec!["roadmap".into()],
+        };
+        let cache = db.context_actions(screen, None);
+        // the low-confidence loop is gated out; the reply-needed one is present as an action
+        assert!(!cache.actions.is_empty());
+        assert!(cache.actions.iter().all(|a| a.level != shogun_fusion::Level::L3),
+            "v1 context actions are local (L1/L2) — no external sends (invariant 4)");
+        assert!(cache.facts.iter().any(|f| f.contains("roadmap")), "gated fact present");
+        assert!(!cache.facts.iter().any(|f| f.contains("vague")), "low-confidence fact excluded");
     }
 
     #[test]
