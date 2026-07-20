@@ -20,3 +20,7 @@ pub mod run;
 /// cold demotion, brief). Needs the DB handle → `db` feature.
 #[cfg(feature = "db")]
 pub mod jobs;
+/// Scheduling glue: input-window math + the DB-driven driver between the macOS timer and the run
+/// loop. Needs the DB handle → `db` feature.
+#[cfg(feature = "db")]
+pub mod schedule;

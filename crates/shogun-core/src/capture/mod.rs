@@ -7,4 +7,5 @@
 
 pub mod dedup;
 pub mod exclusion;
+pub mod pipeline;
 pub mod walk_policy;

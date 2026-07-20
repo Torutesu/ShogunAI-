@@ -59,9 +59,32 @@ pub fn list_by_cycle(conn: &Connection, cycle_id: &str) -> Result<Vec<JobRunRow>
     rows.collect()
 }
 
+/// The end (`input_to_ts`) of the most recent **completed** consolidation, i.e. the high-water mark
+/// of events already consolidated (FR-DC-04). The next cycle consumes `[this, now)`, so no event is
+/// classified twice and none is skipped. `None` if no consolidation has ever completed (first run).
+/// Scoped to the `consolidation` job because it is the one that reads the event window.
+pub fn last_consolidated_to(conn: &Connection) -> Result<Option<i64>, rusqlite::Error> {
+    conn.query_row(
+        "SELECT MAX(input_to_ts) FROM job_runs WHERE kind = 'consolidation' AND state = 'done'",
+        [],
+        |r| r.get::<_, Option<i64>>(0),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn last_consolidated_to_is_the_high_water_mark() {
+        let conn = crate::open_in_memory().unwrap();
+        assert_eq!(last_consolidated_to(&conn).unwrap(), None, "no completed cycle yet");
+        upsert(&conn, "c1", "consolidation", "done", 0, 100, 1).unwrap();
+        upsert(&conn, "c2", "consolidation", "done", 100, 250, 2).unwrap();
+        // a running (not done) later cycle must not count
+        upsert(&conn, "c3", "consolidation", "running", 250, 400, 3).unwrap();
+        assert_eq!(last_consolidated_to(&conn).unwrap(), Some(250));
+    }
 
     #[test]
     fn upsert_is_idempotent_on_cycle_and_kind() {

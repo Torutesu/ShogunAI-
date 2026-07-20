@@ -112,6 +112,42 @@ impl Db {
         self.conn.lock().ok().and_then(|c| event_log::recent_capture_bodies(&c, limit).ok()).unwrap_or_default()
     }
 
+    /// Ingest a window capture end-to-end (the real capture path, FR-CAP-01/03 + WP2.7): near-dup
+    /// collapse decides the hash, the event is inserted-or-touched, and on a *new* insert the
+    /// first-stage local-rule extraction runs over the text. `dwell_ms` accumulates on a touch.
+    /// Source is `capture`. Returns `(id, touched, candidate_ids)`; `None` only on a lock failure.
+    pub fn ingest_capture(
+        &self,
+        bundle_id: Option<&str>,
+        window_title: Option<&str>,
+        text: &str,
+        dwell_ms: i64,
+    ) -> Option<(i64, bool, Vec<i64>)> {
+        let ev = NewEvent {
+            ts: self.now_ms(),
+            source: "capture",
+            kind: "text",
+            app_bundle_id: bundle_id,
+            window_title,
+            content: text,
+            content_hash: "", // ignored — capture_collapsed decides it
+            dwell_ms,
+            display_id: None,
+            window_bounds: None,
+        };
+        let (id, touched) = self.capture_collapsed(&ev)?;
+        if touched {
+            return Some((id, touched, Vec::new()));
+        }
+        let candidates = shogun_memory::extract::extract(text);
+        let now = self.now_ms();
+        let ids = {
+            let mut g = self.conn.lock().ok()?;
+            shogun_memory::extract::persist_candidates(&mut g, id, &candidates, now).unwrap_or_default()
+        };
+        Some((id, touched, ids))
+    }
+
     /// Append a user note to the event log (`memory.append_note`, L1). Source `user`, kind `note`;
     /// content-hashed for dedup like any event. Returns the row id (or `None` on write failure).
     pub fn append_note(&self, text: &str) -> Option<i64> {
@@ -244,6 +280,12 @@ impl Db {
             .ok()
             .and_then(|mut g| shogun_memory::recompute::decay_confidence(&mut g, now_ms, half_life_ms).ok())
             .unwrap_or(0)
+    }
+
+    /// The high-water mark of already-consolidated events (max `input_to_ts` of completed
+    /// consolidations) — the scheduler's next window starts here (FR-DC-04). `None` before any cycle.
+    pub fn last_consolidated_to(&self) -> Option<i64> {
+        self.conn.lock().ok().and_then(|c| shogun_memory::jobs::last_consolidated_to(&c).ok()).flatten()
     }
 
     /// Demote Warm embeddings older than `cutoff_ms` to the int8 Cold tier (FR-MEM-04). Returns the
@@ -480,6 +522,29 @@ mod tests {
         let (id2, touched2) = db.capture(&ev("hello", "h", 200)).unwrap();
         assert!(touched2, "same content_hash must touch, not append");
         assert_eq!(id1, id2);
+    }
+
+    #[test]
+    fn ingest_capture_collapses_and_extracts() {
+        let db = Db::open_in_memory(clock(1000)).unwrap();
+        // a realistic-length window body (the 98% near-dup rule is calibrated for real captures,
+        // not one-liners): filler around the actionable sentences.
+        let filler = "Weekly sync notes. Attendees reviewed the roadmap and open items. ".repeat(3);
+        let base = format!("{filler}I'll send the deck. Waiting on legal. {filler}");
+        // first ingest: new event + extraction of the promise/open-loop candidates
+        let (id1, t1, cands1) =
+            db.ingest_capture(Some("com.apple.Mail"), Some("Inbox"), &base, 5).unwrap();
+        assert!(!t1);
+        assert_eq!(cands1.len(), 2, "one commitment + one open loop extracted");
+        // near-duplicate re-read (one appended char on a long body): collapses (touch), no re-extract
+        let typed = format!("{base}x");
+        let (id2, t2, cands2) =
+            db.ingest_capture(Some("com.apple.Mail"), Some("Inbox"), &typed, 3).unwrap();
+        assert!(t2, "a near-duplicate body must dedup-touch");
+        assert_eq!(id1, id2);
+        assert!(cands2.is_empty(), "touch must not re-extract");
+        // still exactly one commitment
+        assert_eq!(db.commitments_due(1000).len(), 1);
     }
 
     #[test]
