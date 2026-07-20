@@ -5,5 +5,6 @@
 //!   cancellation/timebox hook. Pure over an abstract `AxNode`; the macOS adapter implements
 //!   `AxNode` over `AXUIElement`.
 
+pub mod dedup;
 pub mod exclusion;
 pub mod walk_policy;

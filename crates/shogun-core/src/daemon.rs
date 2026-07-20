@@ -20,8 +20,14 @@ use shogun_memory::MemoryError;
 use shogun_fusion::brief::{assemble_brief, assemble_degraded, CalendarLine, CommitmentDue, MorningBrief, OpenLoopItem};
 use shogun_fusion::assemble::ActionCandidate;
 
+use crate::capture::dedup::{decide_hash, Recent};
 use crate::db_sink::DbTraceabilitySink;
 use crate::dreamcycle::plan::{remaining, CycleKind, JobKind, JobRun, JobState};
+
+/// How many recent capture bodies the near-dup collapse (FR-CAP-03) compares against. Bounds the
+/// per-capture comparison cost; window re-reads are near each other in the log, so a small window
+/// catches them.
+const RECENT_DEDUP_WINDOW: usize = 8;
 
 /// The shared connection handle. `Connection` is `Send` but not `Sync`, so it lives behind a
 /// `Mutex`; the `Arc` lets every daemon component share the one handle.
@@ -80,13 +86,36 @@ impl Db {
         Some((id, touched, ids))
     }
 
-    /// Append a user note to the event log (`memory.append_note`, L1). Source `user`, kind `note`;
-    /// content-hashed for dedup like any event. Returns the row id (or `None` on write failure).
-    pub fn append_note(&self, text: &str) -> Option<i64> {
+    /// The canonical content hash (xxhash64, hex) used across capture and notes.
+    fn content_hash(text: &str) -> String {
         use std::hash::Hasher;
         let mut h = twox_hash::XxHash64::with_seed(0);
         h.write(text.as_bytes());
-        let hash = format!("{:016x}", h.finish());
+        format!("{:016x}", h.finish())
+    }
+
+    /// Capture a window body with near-duplicate collapse (FR-CAP-03): if `ev.content` is ≥98%
+    /// similar to a recent capture body, reuse that body's hash so the event log dedup-touches
+    /// instead of appending a near-identical row; otherwise a fresh hash makes a new event. The
+    /// `content_hash` on the passed `ev` is ignored — this method decides it. Returns `(id, touched)`.
+    pub fn capture_collapsed(&self, ev: &NewEvent<'_>) -> Option<(i64, bool)> {
+        let recents = self.recent_capture_bodies(RECENT_DEDUP_WINDOW);
+        let recent_refs: Vec<Recent<'_>> =
+            recents.iter().map(|(h, c)| Recent { content_hash: h, content: c }).collect();
+        let decision = decide_hash(ev.content, &recent_refs, Self::content_hash);
+        let collapsed = NewEvent { content_hash: decision.hash(), ..ev.clone() };
+        self.capture(&collapsed)
+    }
+
+    /// Recent capture bodies `(hash, content)` newest-first, for the near-dup collapse.
+    fn recent_capture_bodies(&self, limit: usize) -> Vec<(String, String)> {
+        self.conn.lock().ok().and_then(|c| event_log::recent_capture_bodies(&c, limit).ok()).unwrap_or_default()
+    }
+
+    /// Append a user note to the event log (`memory.append_note`, L1). Source `user`, kind `note`;
+    /// content-hashed for dedup like any event. Returns the row id (or `None` on write failure).
+    pub fn append_note(&self, text: &str) -> Option<i64> {
+        let hash = Self::content_hash(text);
         let ev = NewEvent {
             ts: self.now_ms(),
             source: "user",
@@ -451,6 +480,30 @@ mod tests {
         let (id2, touched2) = db.capture(&ev("hello", "h", 200)).unwrap();
         assert!(touched2, "same content_hash must touch, not append");
         assert_eq!(id1, id2);
+    }
+
+    #[test]
+    fn capture_collapsed_touches_near_duplicate_bodies() {
+        let db = Db::open_in_memory(clock(1)).unwrap();
+        let base: String = "sprint board: ticket triage, blockers, owner assignments ".repeat(10);
+        // first capture creates a row (fresh hash, incoming hash ignored)
+        let (id1, t1) = db.capture_collapsed(&ev(&base, "ignored-incoming-hash", 100)).unwrap();
+        assert!(!t1);
+        // one keystroke later: ≥98% similar → collapses onto the same row (dedup-touch)
+        let typed = format!("{base}!");
+        let (id2, t2) = db.capture_collapsed(&ev(&typed, "another-ignored-hash", 200)).unwrap();
+        assert!(t2, "a near-duplicate body must dedup-touch, not append");
+        assert_eq!(id1, id2);
+        // an unrelated body makes a new event
+        let (id3, t3) = db.capture_collapsed(&ev("completely unrelated capture", "x", 300)).unwrap();
+        assert!(!t3);
+        assert_ne!(id3, id1);
+
+        let n: i64 = {
+            let c = db.conn.lock().unwrap();
+            c.query_row("SELECT count(*) FROM event_log", [], |r| r.get(0)).unwrap()
+        };
+        assert_eq!(n, 2, "two distinct events: the collapsed body + the unrelated one");
     }
 
     #[test]

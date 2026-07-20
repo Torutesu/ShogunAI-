@@ -74,6 +74,21 @@ pub fn insert_or_touch(conn: &Connection, ev: &NewEvent<'_>) -> Result<(i64, boo
     }
 }
 
+/// The most recent capture bodies `(content_hash, content)`, newest first, for the near-duplicate
+/// collapse (FR-CAP-03). Scoped to `source = 'capture'` (only re-read window bodies collapse; user
+/// notes and integration events are distinct). `limit` bounds the comparison cost.
+pub fn recent_capture_bodies(
+    conn: &Connection,
+    limit: usize,
+) -> Result<Vec<(String, String)>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT content_hash, content FROM event_log
+         WHERE source = 'capture' ORDER BY id DESC LIMIT ?1",
+    )?;
+    let rows = stmt.query_map(params![limit as i64], |r| Ok((r.get(0)?, r.get(1)?)))?;
+    rows.collect()
+}
+
 /// One event's id and content, for the Dream Cycle consolidation pass (which classifies a day's
 /// events). Content is included because consolidation reads it; callers that only need metadata
 /// use the state reads instead.
@@ -157,6 +172,21 @@ mod tests {
         assert!(!touched, "a different source must not touch the capture row");
         let count: i64 = conn.query_row("SELECT count(*) FROM event_log", [], |r| r.get(0)).unwrap();
         assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn recent_capture_bodies_is_newest_first_and_capture_scoped() {
+        let conn = crate::open_in_memory().unwrap();
+        insert(&conn, &ev("first", "h1", 1, 0)).unwrap();
+        insert(&conn, &ev("second", "h2", 2, 0)).unwrap();
+        // a non-capture event must be excluded
+        let mut note = ev("a note", "h3", 3, 0);
+        note.source = "user";
+        insert(&conn, &note).unwrap();
+
+        let got = recent_capture_bodies(&conn, 8).unwrap();
+        assert_eq!(got.iter().map(|(_, c)| c.as_str()).collect::<Vec<_>>(), vec!["second", "first"]);
+        assert_eq!(got[0].0, "h2");
     }
 
     #[test]
