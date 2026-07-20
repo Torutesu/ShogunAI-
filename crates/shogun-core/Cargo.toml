@@ -7,17 +7,22 @@ license.workspace = true
 publish = false
 description = "SHOGUN core: pure, platform-independent behavioural logic (notch UI + capture policy)."
 
-# Kept deliberately dependency-free and macOS-free so the notch state machine, hit-region
-# geometry, hover judgement, and the capture walk policy are exhaustively unit-testable on
-# Linux CI. The macOS shell (apps/desktop/src-tauri) is a thin adapter that sources OS events
-# and applies the emitted effects. Carried forward from the Phase 0 spike (`spike-core`),
-# reorganised into product modules (`notch`, `capture`); see docs/phase1-implementation-plan.md
-# WP1.1. Designed to make no process-boundary assumptions (AR-03) so shogun-core can later
-# host a daemon split without an architecture change.
+# The daemon-side core (spec §5.1): notch behaviour + capture policy + SLO metrics + the
+# internal event bus. The `notch` / `capture` / `metrics` modules stay macOS-free and
+# dependency-light so they are exhaustively unit-testable on Linux CI (carried forward from the
+# Phase 0 spike). The `bus` module adds tokio for the async broadcast; it too runs under Linux
+# tests. Makes no process-boundary assumptions (AR-03) so a later daemon split is an
+# architecture no-op.
 
 [lib]
 name = "shogun_core"
 path = "src/lib.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["sync"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros"] }
 
 [lints]
 workspace = true

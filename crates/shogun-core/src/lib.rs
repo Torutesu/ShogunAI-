@@ -11,6 +11,8 @@
 //! - [`capture`] — the context-capture policy: the bounded accessibility-tree walk.
 //! - [`metrics`] — the always-on SLO histograms (NFR-SLO-00): fixed-bucket latency/percent
 //!   tracking with pass/fail against each SLO budget.
+//! - [`bus`] — the internal event bus (§5.3, AR-06/07): a non-blocking broadcast with
+//!   backpressure-by-drop and a drop metric.
 //!
 //! This crate makes no process-boundary assumptions (AR-03): it is a library the Tauri
 //! backend hosts today and a future daemon could host unchanged.
@@ -18,6 +20,7 @@
 //! CLAUDE.md forbids `unwrap()`/`expect()` outside tests; test modules are exempted below.
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
+pub mod bus;
 pub mod capture;
 pub mod metrics;
 pub mod notch;
