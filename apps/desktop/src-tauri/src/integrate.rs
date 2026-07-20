@@ -476,66 +476,92 @@ pub mod mac {
         });
     }
 
-    /// Focus-driven context cache (spec §3.10). Polls the frontmost app; on change it runs
-    /// the bounded AX snapshot, emits the `context` event (live text for on-screen display),
-    /// and records the Q3-A `metric.cache_update` (digest only — never the text, CLAUDE.md).
+    /// Focus-driven context cache (spec §3.10). Polls the frontmost app every 400ms (cheap —
+    /// NSWorkspace only, no AX call) and runs the bounded AX walk on TWO triggers: (1) the
+    /// pid changed (app switch, immediate) or (2) a ~2s content-refresh tick elapsed. (2) is
+    /// required because switching a BROWSER TAB does not change the frontmost pid — a
+    /// pid-only check goes stale the moment the user changes tabs without switching apps.
+    /// This periodic re-walk is the spike's "always pre-assemble" cadence (CLAUDE.md: 押し
+    /// てから収集禁止); event-driven AXFocusedWindowChanged/AXTitleChanged/
+    /// AXFocusedUIElementChanged subscription is the on-device refinement (runbook D-03/D-05)
+    /// that replaces this poll with instant, no-op-when-idle updates.
     ///
-    /// This is the spike's pre-assembly path: the walk runs ONLY here, on focus change —
-    /// never from the state machine or a press (spec §3.10.3). Event-driven
-    /// NSWorkspace/AXObserver subscription is the on-device refinement (runbook D-03/D-05);
-    /// polling keeps detection off the AX path, and t0/t1 bracket only the walk so the
-    /// poll-detection lag never inflates the measured latency.
+    /// Every walk is deduped by content digest (`walk_and_publish`) so an unchanged tab
+    /// re-checked every 2s does not spam the `context` event or the `metric.cache_update`
+    /// stream — only genuine changes publish. The walk runs ONLY here, on this schedule —
+    /// never from the state machine or a press (spec §3.10.3); t0/t1 bracket only the walk
+    /// itself, so poll cadence and dedup checks never inflate the measured Q3-A latency.
     fn spawn_focus_watcher(app: &AppHandle, shared: &Arc<Shared>) {
         let app = app.clone();
         let shared = shared.clone();
         std::thread::spawn(move || {
+            const POLL: Duration = Duration::from_millis(400);
+            const REFRESH_TICKS: u32 = 5; // ~2000ms content-refresh cadence
             let mut last_pid: Option<i32> = None;
+            let mut last_digest: Option<String> = None;
+            let mut ticks_since_refresh: u32 = 0;
             loop {
-                std::thread::sleep(Duration::from_millis(400));
+                std::thread::sleep(POLL);
+                ticks_since_refresh += 1;
                 let Some(front) = crate::display::frontmost_app() else { continue };
-                if Some(front.pid) == last_pid {
-                    continue; // same app still frontmost — nothing to re-assemble
+                let pid_changed = Some(front.pid) != last_pid;
+                if !pid_changed && ticks_since_refresh < REFRESH_TICKS {
+                    continue;
                 }
                 last_pid = Some(front.pid);
+                ticks_since_refresh = 0;
+                let trigger = if pid_changed { CacheTrigger::AppSwitch } else { CacheTrigger::WindowSwitch };
 
-                let empty_ok_walk = walk_and_publish(&app, &shared, front.pid, &front.bundle_id, &front.name)
-                    .is_some_and(|r| r.text_bytes == 0 && !r.partial && !r.truncated);
+                let empty_ok_walk =
+                    walk_and_publish(&app, &shared, front.pid, &front.bundle_id, &front.name, trigger, &mut last_digest)
+                        .is_some_and(|r| r.text_bytes == 0 && !r.partial && !r.truncated);
                 // Many browsers (Chrome/Safari/etc.) build their AX tree lazily on first
-                // query, so the switch-triggered snapshot can land before it exists —
-                // walk succeeds but finds nothing (empty text, not partial/truncated, so
+                // query, so a snapshot right after switching TO the app can land before it
+                // exists — the walk succeeds but finds nothing (not partial/truncated, so
                 // it isn't a budget issue). Retry once, same pid, after the tree has had
                 // time to build. A genuinely textless app (e.g. a blank canvas) just
                 // republishes empty again — one extra bounded walk, not a poll loop.
                 if empty_ok_walk {
                     std::thread::sleep(Duration::from_millis(500));
                     if crate::display::frontmost_app().map(|f| f.pid) == Some(front.pid) {
-                        walk_and_publish(&app, &shared, front.pid, &front.bundle_id, &front.name);
+                        walk_and_publish(&app, &shared, front.pid, &front.bundle_id, &front.name, trigger, &mut last_digest);
                     }
                 }
             }
         });
     }
 
-    /// One bounded AX walk of `pid`'s focused window, published as the `context` event and
-    /// recorded as `metric.cache_update` (spec §3.10/§4.2.2). Returns the raw walk result so
-    /// the caller can decide whether a retry is warranted (see `spawn_focus_watcher`).
+    /// One bounded AX walk of `pid`'s focused window. Publishes the `context` event and
+    /// records `metric.cache_update` (spec §3.10/§4.2.2) ONLY when the captured text's digest
+    /// differs from the last published one — an unchanged periodic re-walk (same tab, no
+    /// content change) is silently absorbed rather than re-emitted. Returns the raw walk
+    /// result regardless, so the caller's empty-retry check (see `spawn_focus_watcher`) still
+    /// sees genuine emptiness even on a deduped call.
     fn walk_and_publish(
         app: &AppHandle,
         shared: &Arc<Shared>,
         pid: i32,
         bundle_id: &str,
         name: &str,
+        trigger: CacheTrigger,
+        last_digest: &mut Option<String>,
     ) -> Option<spike_core::axcache::WalkResult> {
         // Bracket ONLY the walk (spec §4.2.2): poll cadence / retry wait is not measured.
         let t0 = shared.clock.elapsed_ns();
         let result = crate::axcache::snapshot(pid, 300)?;
         let t1 = shared.clock.elapsed_ns();
         let latency_ms = t1.saturating_sub(t0) as f64 / 1e6;
+        let (_, digest) = spike_harness::digest::text_digest(&result.text);
+        let unchanged = last_digest.as_deref() == Some(digest.as_str());
         // Diagnostics carry bundle + counts ONLY — never the captured text.
         eprintln!(
-            "[spike] cache_update bundle={bundle_id} bytes={} elems={} depth={} partial={} {latency_ms:.1}ms",
+            "[spike] cache_update bundle={bundle_id} bytes={} elems={} depth={} partial={} unchanged={unchanged} {latency_ms:.1}ms",
             result.text_bytes, result.elements_visited, result.depth_reached, result.partial
         );
+        if unchanged {
+            return Some(result);
+        }
+        *last_digest = Some(digest);
         let payload = ContextPayload {
             bundle_id: bundle_id.to_string(),
             title_masked: name.to_string(),
@@ -549,7 +575,7 @@ pub mod mac {
         let _ = app.emit("context", payload);
         shared.recorder.record(Body::CacheUpdate(CacheUpdate::from_text(
             latency_ms,
-            CacheTrigger::AppSwitch,
+            trigger,
             bundle_id,
             &result.text,
             result.elements_visited,
