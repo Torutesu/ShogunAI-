@@ -68,6 +68,7 @@ export function App(): JSX.Element {
   const [uiState, setUiState] = useState<UiState>("idle");
   const [ctx, setCtx] = useState<ContextPayload | null>(null);
   const [actions, setActions] = useState<ActionView[]>([]);
+  const [pendingConfirm, setPendingConfirm] = useState<{ index: number; id: number } | null>(null);
   const stateRef = useRef<UiState>("idle");
 
   useEffect(() => {
@@ -131,6 +132,24 @@ export function App(): JSX.Element {
     };
   }, [uiState]);
 
+  // Run a context action (§6.6.2): L1 executes immediately; L2 returns "confirm:<id>" and the
+  // button turns into a one-tap confirm (a second tap on the same button confirms).
+  const runAction = (index: number): void => {
+    if (pendingConfirm?.index === index) {
+      void invoke<string>("confirm_notch_action", { id: pendingConfirm.id }).finally(() =>
+        setPendingConfirm(null),
+      );
+      return;
+    }
+    void invoke<string>("run_notch_action", { index }).then((res) => {
+      if (res.startsWith("confirm:")) {
+        setPendingConfirm({ index, id: Number(res.slice("confirm:".length)) });
+      } else {
+        setPendingConfirm(null);
+      }
+    });
+  };
+
   const openState = uiState === "hover" || uiState === "expanded";
 
   return (
@@ -170,10 +189,11 @@ export function App(): JSX.Element {
                     type="button"
                     className={`notch__action notch__action--${a.level.toLowerCase()}`}
                     title={a.rationale}
-                    onClick={() => void invoke("interact", { kind: "click" })}
+                    onClick={() => void runAction(i)}
                   >
                     <span className="notch__action-level">{a.level}</span>
                     {a.label}
+                    {pendingConfirm?.index === i ? <span className="notch__action-confirm"> · tap to confirm</span> : null}
                   </button>
                 ))
               : [t.action1, t.action2, t.action3, t.action4].map((label, i) => (

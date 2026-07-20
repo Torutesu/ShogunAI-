@@ -33,6 +33,8 @@ shogun-core = { path = "../../../crates/shogun-core" }
 shogun-core = { path = "../../../crates/shogun-core", features = ["db"] }
 # shogun-fusion for the notch context-action command (ScreenContext / ActionCandidate / Level).
 shogun-fusion = { path = "../../../crates/shogun-fusion" }
+# shogun-agents for L1/L2/L3-gated execution of a clicked context action.
+shogun-agents = { path = "../../../crates/shogun-agents" }
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", features = [
     "NSResponder", "NSWindow", "NSView", "NSPanel", "NSScreen",
