@@ -9,6 +9,7 @@
 //! desktop adapter.
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
+pub mod approval;
 pub mod engine;
 pub mod permission;
 pub mod presets;
