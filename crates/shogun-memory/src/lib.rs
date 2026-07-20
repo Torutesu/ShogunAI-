@@ -19,6 +19,7 @@ pub mod embed_job;
 pub mod event_log;
 pub mod hot;
 pub mod jobs;
+pub mod maintenance;
 pub mod search;
 pub mod state;
 pub mod traceability;

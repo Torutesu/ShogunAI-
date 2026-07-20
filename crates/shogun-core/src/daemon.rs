@@ -100,6 +100,19 @@ impl Db {
         (self.clock)()
     }
 
+    /// Export all user data as JSON (FR-SET-07). Local only — never a network send. `None` on a
+    /// read failure.
+    pub fn export_json(&self) -> Option<String> {
+        self.conn.lock().ok().and_then(|c| shogun_memory::maintenance::export_json(&c).ok())
+    }
+
+    /// Delete all user data, keeping the schema (FR-SET-07). Returns the per-table deletion report,
+    /// or `None` on failure (the transaction leaves the DB untouched).
+    pub fn delete_all(&self) -> Option<shogun_memory::maintenance::DeleteReport> {
+        let mut g = self.conn.lock().ok()?;
+        shogun_memory::maintenance::delete_all(&mut g).ok()
+    }
+
     // -------------------------------------------------------------- state writes (deliberate)
     // Unlike capture, state writes are low-frequency and deliberate (Dream Cycle consolidation,
     // API propose). They return the new id or `None` on failure so the caller (e.g. a Dream Cycle
@@ -366,6 +379,21 @@ mod tests {
         let rows = db.trace_rows(&Filter::default());
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].ts, 7, "the injected clock stamped the row");
+    }
+
+    #[test]
+    fn export_and_delete_all_through_the_handle() {
+        let db = Db::open_in_memory(clock(1)).unwrap();
+        db.capture(&ev("a note", "h1", 10)).unwrap();
+        // export sees the event
+        let json = db.export_json().unwrap();
+        assert!(json.contains("a note"));
+        // delete wipes it, schema survives (a re-capture still works)
+        let report = db.delete_all().unwrap();
+        assert_eq!(report.events, 1);
+        let after: serde_json::Value = serde_json::from_str(&db.export_json().unwrap()).unwrap();
+        assert!(after["event_log"].as_array().unwrap().is_empty());
+        assert!(db.capture(&ev("again", "h2", 20)).is_some());
     }
 
     #[test]
