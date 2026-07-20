@@ -15,6 +15,7 @@ use std::path::Path;
 use rusqlite::Connection;
 
 pub mod event_log;
+pub mod hot;
 pub mod search;
 pub mod state;
 
