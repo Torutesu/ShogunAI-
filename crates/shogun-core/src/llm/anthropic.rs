@@ -435,6 +435,34 @@ impl<T: HttpTransport, S: TraceabilitySink> AnthropicBatchClient<T, S> {
         }
         Ok(parse_batch_results(&resp.body))
     }
+
+    /// Run a batch to completion: submit, then poll until `ended` (up to `max_polls`), then fetch
+    /// results. `sleep` is the delay between polls (injected so tests don't wait and the daemon
+    /// controls the cadence — FR-DC-05: a batch that never ends within budget is an error the
+    /// Dream Cycle carries to the next night, it does not block local features). Traceability is
+    /// recorded by `submit` (one row per item).
+    pub async fn run<F, Fut>(
+        &self,
+        items: &[BatchItem],
+        max_polls: u32,
+        mut sleep: F,
+    ) -> Result<Vec<BatchResult>, LlmError>
+    where
+        F: FnMut() -> Fut,
+        Fut: std::future::Future<Output = ()>,
+    {
+        let handle = self.submit(items).await?;
+        if handle.status.is_ended() {
+            return self.results(&handle.id).await;
+        }
+        for _ in 0..max_polls {
+            sleep().await;
+            if self.poll(&handle.id).await?.status.is_ended() {
+                return self.results(&handle.id).await;
+            }
+        }
+        Err(LlmError::Provider("batch did not end within the poll budget".into()))
+    }
 }
 
 #[cfg(test)]
@@ -620,6 +648,60 @@ mod tests {
         assert_eq!(results[0].text.as_deref(), Some("meeting"));
         // poll/results do not write traceability (only submit does)
         assert!(client.sink_records().is_empty());
+    }
+
+    #[tokio::test]
+    async fn run_submits_polls_until_ended_then_fetches_results() {
+        // create (in_progress) → poll (in_progress) → poll (ended) → results
+        let transport = MockTransport::new([
+            HttpResponse { status: 200, body: r#"{"id":"b","processing_status":"in_progress"}"#.into() },
+            HttpResponse { status: 200, body: r#"{"id":"b","processing_status":"in_progress"}"#.into() },
+            HttpResponse { status: 200, body: r#"{"id":"b","processing_status":"ended"}"#.into() },
+            HttpResponse {
+                status: 200,
+                body: r#"{"custom_id":"1","result":{"type":"succeeded","message":{"content":[{"type":"text","text":"consolidated"}]}}}"#.into(),
+            },
+        ]);
+        let client = AnthropicBatchClient::new(
+            transport,
+            RecordingSink::new(),
+            SelectKkKey::new(Secret::new("kk")),
+            cfg(),
+        );
+        let items = vec![BatchItem { custom_id: "1".into(), purpose: "consolidation".into(), chunk: "today's events".into() }];
+        let results = client.run(&items, 5, || async {}).await.unwrap();
+        assert_eq!(results[0].text.as_deref(), Some("consolidated"));
+        // submit recorded exactly one traceability row for the chunk
+        assert_eq!(client.sink_records().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn run_short_circuits_when_batch_ends_immediately() {
+        let transport = MockTransport::new([
+            HttpResponse { status: 200, body: r#"{"id":"b","processing_status":"ended"}"#.into() },
+            HttpResponse {
+                status: 200,
+                body: r#"{"custom_id":"1","result":{"type":"succeeded","message":{"content":[{"type":"text","text":"done"}]}}}"#.into(),
+            },
+        ]);
+        let client = AnthropicBatchClient::new(transport, RecordingSink::new(), SelectKkKey::new(Secret::new("kk")), cfg());
+        let items = vec![BatchItem { custom_id: "1".into(), purpose: "index".into(), chunk: "c".into() }];
+        let results = client.run(&items, 3, || async {}).await.unwrap();
+        assert_eq!(results[0].text.as_deref(), Some("done"));
+    }
+
+    #[tokio::test]
+    async fn run_errors_when_batch_never_ends_within_budget() {
+        // create + 2 polls, all in_progress; budget of 2 polls is exhausted
+        let transport = MockTransport::new([
+            HttpResponse { status: 200, body: r#"{"id":"b","processing_status":"in_progress"}"#.into() },
+            HttpResponse { status: 200, body: r#"{"id":"b","processing_status":"in_progress"}"#.into() },
+            HttpResponse { status: 200, body: r#"{"id":"b","processing_status":"in_progress"}"#.into() },
+        ]);
+        let client = AnthropicBatchClient::new(transport, RecordingSink::new(), SelectKkKey::new(Secret::new("kk")), cfg());
+        let items = vec![BatchItem { custom_id: "1".into(), purpose: "index".into(), chunk: "c".into() }];
+        let err = client.run(&items, 2, || async {}).await.unwrap_err();
+        assert!(matches!(err, LlmError::Provider(_)));
     }
 
     // small accessors so the tests can read back the mock/sink held by the client
