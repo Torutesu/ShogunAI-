@@ -12,6 +12,7 @@ mod display;
 mod geometry;
 mod hover;
 mod integrate;
+mod notch_actions;
 mod panel;
 
 /// Tauri entry point. Registers the nspanel plugin and the webview→Rust command half of
@@ -30,6 +31,7 @@ pub fn run() {
         integrate::mac::collapse_request,
         integrate::mac::clock_sync_ack,
         integrate::mac::focus_field,
+        notch_actions::notch_actions,
     ]);
 
     // NOTE: do NOT add .on_page_load here — with the NSPanel-swapped window it trips a
@@ -145,6 +147,8 @@ fn setup_macos(app: &tauri::App) {
     // 2). If the DB can't be opened the daemon simply doesn't capture — the shell keeps running.
     match memory_db(app) {
         Ok(db) => {
+            // Share the handle: Tauri state (for the notch_actions command) + the capture poller.
+            app.manage(db.clone());
             let policy = shogun_core::capture::exclusion::ExclusionPolicy::new();
             let _ = capture_source::spawn_capture_poller(db, policy, None);
             eprintln!("[spike] capture source started (poll {}ms)", capture_source::DEFAULT_POLL_MS);

@@ -70,3 +70,29 @@ cargo tauri dev   # if the Tauri CLI is set up, else `cargo run -p shogun-deskto
    (`last_seen_at` advances, `dwell_ms` accumulates) rather than appending.
 
 Paste the console log + the `sqlite3` output back and I'll iterate on anything that's off.
+
+---
+
+## Context actions in the notch panel (§6.1 — product core)
+
+The notch panel now pulls **real context actions** from memory on expand: `Db::context_actions`
+maps the current state (commitments / open loops / people / projects) into ranked, confidence-gated
+candidates for the focused screen, and the React panel renders them as buttons (with an L1/L2/L3
+level badge; low-confidence state is never shown, FR-ST-20).
+
+### Verify
+1. Build + run (`cargo run -p shogun-desktop-spike`). Let the capture source populate some state
+   (type a few promise/open-loop sentences in a normal window, as above), so `commitments` /
+   `open_loops` are non-empty.
+2. Expand the notch panel (hover then click through to Expanded).
+3. The action buttons should now show **real labels** derived from your captured state, e.g.
+   *"Draft reply"* (from a reply-needed loop), *"Remind: …"* (from a commitment), *"Search memory: …"*
+   (from a person/project), each with an `L1`/`L2` badge — instead of the placeholder labels.
+   Hovering a button shows its rationale.
+4. If the panel still shows placeholders, the command returned nothing (no gated state yet) or the
+   DB wasn't managed — check the console for `capture source started` and that state rows exist.
+
+### Not yet wired (next increment)
+Clicking a button currently just reports the interaction — it does **not execute** the action yet.
+Execution (L1 auto-run / L2 one-tap confirm / L3 approval-queue) is the next step; it needs the
+agents `ExecutionEngine` wired into the app. Say the word and I'll add it.

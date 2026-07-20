@@ -56,9 +56,18 @@ function ContextLine({ ctx }: { ctx: ContextPayload | null }): JSX.Element {
   );
 }
 
+// One context-action button, projected by the Rust `notch_actions` command from confidence-gated
+// state (§6.1). `level` gates L1 (auto-eligible) vs L2/L3 (confirm) in the UI (invariant 4).
+interface ActionView {
+  label: string;
+  level: "L1" | "L2" | "L3";
+  rationale: string;
+}
+
 export function App(): JSX.Element {
   const [uiState, setUiState] = useState<UiState>("idle");
   const [ctx, setCtx] = useState<ContextPayload | null>(null);
+  const [actions, setActions] = useState<ActionView[]>([]);
   const stateRef = useRef<UiState>("idle");
 
   useEffect(() => {
@@ -105,6 +114,23 @@ export function App(): JSX.Element {
     };
   }, []);
 
+  // On expand, pull the real context actions for the focused screen (§6.1). Best-effort: if the
+  // command fails or returns none, the panel falls back to the placeholder labels.
+  useEffect(() => {
+    if (uiState !== "expanded") return;
+    let live = true;
+    void invoke<ActionView[]>("notch_actions")
+      .then((a) => {
+        if (live) setActions(a);
+      })
+      .catch(() => {
+        /* command unavailable (e.g. no DB) — keep placeholders */
+      });
+    return () => {
+      live = false;
+    };
+  }, [uiState]);
+
   const openState = uiState === "hover" || uiState === "expanded";
 
   return (
@@ -137,11 +163,24 @@ export function App(): JSX.Element {
         {/* Full level (Expanded): up to four actions, context, and the Full UI entry point. */}
         <div className="notch__full">
           <div className="notch__actions">
-            {[t.action1, t.action2, t.action3, t.action4].map((label, i) => (
-              <button key={i} type="button" onClick={() => void invoke("interact", { kind: "click" })}>
-                {label}
-              </button>
-            ))}
+            {actions.length > 0
+              ? actions.map((a, i) => (
+                  <button
+                    key={i}
+                    type="button"
+                    className={`notch__action notch__action--${a.level.toLowerCase()}`}
+                    title={a.rationale}
+                    onClick={() => void invoke("interact", { kind: "click" })}
+                  >
+                    <span className="notch__action-level">{a.level}</span>
+                    {a.label}
+                  </button>
+                ))
+              : [t.action1, t.action2, t.action3, t.action4].map((label, i) => (
+                  <button key={i} type="button" onClick={() => void invoke("interact", { kind: "click" })}>
+                    {label}
+                  </button>
+                ))}
           </div>
           <div className="notch__full-context">
             <ContextLine ctx={ctx} />
