@@ -15,6 +15,8 @@
 //!   (invariant 5) and secret redaction.
 //! - [`bus`] — the internal event bus (§5.3, AR-06/07): a non-blocking broadcast with
 //!   backpressure-by-drop and a drop metric.
+//! - [`dreamcycle`] — the nightly-batch orchestration logic (§6.7): run-condition gate, resumable
+//!   job plan, and Batch-API failure escalation. Effects stay behind seams; the rules are pure.
 //!
 //! This crate makes no process-boundary assumptions (AR-03): it is a library the Tauri
 //! backend hosts today and a future daemon could host unchanged.
@@ -24,6 +26,7 @@
 
 pub mod bus;
 pub mod capture;
+pub mod dreamcycle;
 pub mod llm;
 pub mod metrics;
 pub mod notch;
