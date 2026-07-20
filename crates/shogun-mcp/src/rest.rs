@@ -10,7 +10,8 @@
 //! Auth (FR-API-03): every tool endpoint requires a valid token — reads included; only the
 //! unauthenticated `/v1/status` discovery endpoint is exempt.
 
-use shogun_agents::permission::Level;
+use shogun_agents::approval::{ApprovalQueue, Origin, Preview, Route};
+use shogun_agents::permission::{Action, Level, LocalAction, SendAction};
 
 use crate::backend::{MemoryBackend, ReadParams};
 use crate::memory_api::{read_inclusion, AuthResult, ReadInclusion, TokenRegistry, Tool};
@@ -201,6 +202,75 @@ pub fn body_for(routed: &Routed) -> String {
 pub fn respond(req: &RestRequest, tokens: &TokenRegistry) -> (u16, String) {
     let routed = route(req, tokens);
     (status_code(&routed), body_for(&routed))
+}
+
+/// A parsed `actions.execute` request: either an on-device action or an external send (with the
+/// L3 preview already built).
+enum ActionSpec {
+    Local(LocalAction),
+    Send(SendAction, Preview),
+}
+
+/// Parse the `actions.execute` JSON body into an action. Only string-parameterised actions are
+/// expressible over the API (`SaveDraft`/`UpdateState` carry `'static` targets and are launched
+/// from the UI, not the wire). Unknown / malformed bodies return `None` (→ 400).
+fn parse_action(body: &str) -> Option<ActionSpec> {
+    let v: serde_json::Value = serde_json::from_str(body).ok()?;
+    let kind = v.get("kind")?.as_str()?;
+    let field = |k: &str| v.get(k).and_then(|x| x.as_str()).map(str::to_string);
+
+    // For a send, the L3 preview shows the full content (FR-AG-03). Gmail send routes via Composio.
+    let send = |action: SendAction, full: String, route: Route| {
+        let preview = Preview::for_send(&action, full, route);
+        ActionSpec::Send(action, preview)
+    };
+
+    Some(match kind {
+        "local_search" => ActionSpec::Local(LocalAction::LocalSearch { query: field("query")? }),
+        "open_app" => ActionSpec::Local(LocalAction::OpenApp { bundle_id: field("bundle_id")? }),
+        "reveal_file" => ActionSpec::Local(LocalAction::RevealFile { path: field("path")? }),
+        "show_notification" => ActionSpec::Local(LocalAction::ShowNotification { text: field("text")? }),
+        "copy_to_clipboard" => ActionSpec::Local(LocalAction::CopyToClipboard { text: field("text")? }),
+        "send_email" => {
+            let to = field("to")?;
+            let full = format!("Subject: {}\n\n{}", field("subject").unwrap_or_default(), field("body").unwrap_or_default());
+            send(SendAction::SendEmail { to }, full, Route::ViaComposio)
+        }
+        "post_message" => {
+            let channel = field("channel")?;
+            send(SendAction::PostMessage { channel }, field("body").unwrap_or_default(), Route::DirectMcp)
+        }
+        "create_calendar_event" => {
+            let title = field("title")?;
+            send(SendAction::CreateCalendarEvent { title: title.clone() }, title, Route::DirectMcp)
+        }
+        "post_comment" => {
+            let target = field("target")?;
+            send(SendAction::PostComment { target }, field("body").unwrap_or_default(), Route::DirectMcp)
+        }
+        _ => return None,
+    })
+}
+
+/// Handle `actions.execute` (auth already enforced by [`route`]). A local action is authorized to
+/// run (200); an external send is enqueued in the shared approval queue and returns pending +
+/// approval id (202, FR-API-04) — it never runs here without a UI confirm.
+pub fn act(body: Option<&str>, now_ms: i64, approvals: &mut ApprovalQueue) -> (u16, String) {
+    let Some(body) = body else {
+        return (400, r#"{"error":"missing_body"}"#.to_string());
+    };
+    match parse_action(body) {
+        None => (400, r#"{"error":"bad_action_request"}"#.to_string()),
+        Some(ActionSpec::Local(action)) => {
+            let level = Action::Local(action).required_level();
+            (200, format!(r#"{{"executed":"local","level":"{}"}}"#, level_label(level)))
+        }
+        Some(ActionSpec::Send(send, preview)) => {
+            let now = u64::try_from(now_ms).unwrap_or(0);
+            let id = approvals.request(send, preview, Origin::AiApi, now);
+            (202, format!(r#"{{"pending":true,"approval_id":{},"level":"L3"}}"#, id.0))
+        }
+    }
 }
 
 /// Minimal JSON string escaping for a label (quotes, backslash, and control chars).
@@ -412,6 +482,42 @@ mod tests {
         assert_eq!(s, 401, "no token still 401 even with a backend");
         let (s, _) = respond_with(&req(Method::Get, "/v1/nope", Some("t")), &tokens, &StubBackend);
         assert_eq!(s, 404);
+    }
+
+    #[test]
+    fn act_local_is_authorized_immediately() {
+        let mut q = ApprovalQueue::new();
+        let (s, b) = act(Some(r#"{"kind":"local_search","query":"budget"}"#), 0, &mut q);
+        assert_eq!(s, 200);
+        assert!(b.contains("\"executed\":\"local\""));
+        assert!(b.contains("\"level\":\"L1\""));
+        assert_eq!(q.pending_len(), 0, "a local action never enqueues an approval");
+    }
+
+    #[test]
+    fn act_send_enqueues_pending_l3_approval() {
+        let mut q = ApprovalQueue::new();
+        let (s, b) = act(
+            Some(r#"{"kind":"send_email","to":"a@b.com","subject":"Hi","body":"hello"}"#),
+            1000,
+            &mut q,
+        );
+        assert_eq!(s, 202);
+        assert!(b.contains("\"pending\":true"));
+        assert!(b.contains("\"approval_id\":"));
+        assert!(b.contains("\"level\":\"L3\""));
+        assert_eq!(q.pending_len(), 1, "the send awaits UI confirmation (FR-API-04)");
+    }
+
+    #[test]
+    fn act_rejects_missing_and_malformed_bodies() {
+        let mut q = ApprovalQueue::new();
+        assert_eq!(act(None, 0, &mut q).0, 400);
+        assert_eq!(act(Some("not json"), 0, &mut q).0, 400);
+        assert_eq!(act(Some(r#"{"kind":"unknown_thing"}"#), 0, &mut q).0, 400);
+        // a send kind missing a required field is also rejected
+        assert_eq!(act(Some(r#"{"kind":"send_email"}"#), 0, &mut q).0, 400);
+        assert_eq!(q.pending_len(), 0);
     }
 
     #[test]

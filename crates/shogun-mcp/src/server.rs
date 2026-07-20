@@ -9,7 +9,7 @@
 //! enabled). The default port is 7464; if it is busy the listener falls back to an ephemeral port
 //! (FR-API-01) whose value the caller reads from [`tokio::net::TcpListener::local_addr`].
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use axum::body::Body;
 use axum::extract::{Request, State};
@@ -17,27 +17,40 @@ use axum::http::header::{AUTHORIZATION, CONTENT_TYPE};
 use axum::response::Response;
 use axum::routing::any;
 use axum::Router;
+use shogun_agents::approval::ApprovalQueue;
 use tokio::net::TcpListener;
 
 use crate::backend::MemoryBackend;
 use crate::memory_api::TokenRegistry;
-use crate::rest::{self, Method, RestRequest};
+use crate::rest::{self, Method, RestRequest, Routed};
 
 /// The default Memory API port (FR-API-01).
 pub const DEFAULT_PORT: u16 = 7464;
 
-/// Shared server state. Clone is cheap (all `Arc`), as axum requires.
+/// An injected millisecond clock (unix ms) — deterministic under test.
+pub type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;
+
+/// Shared server state. Clone is cheap (all `Arc`), as axum requires. The approval queue is the
+/// **same one the Notch UI drains** — an API-requested L3 send and a human L3 are one flow
+/// (invariant 6 / FR-API-04).
 #[derive(Clone)]
 pub struct AppState {
     tokens: Arc<TokenRegistry>,
     backend: Arc<dyn MemoryBackend>,
+    approvals: Arc<Mutex<ApprovalQueue>>,
+    clock: Clock,
 }
 
 impl AppState {
-    /// Build state from a token registry and the data backend (the daemon injects a DB-backed one;
-    /// tests can inject a stub).
-    pub fn new(tokens: Arc<TokenRegistry>, backend: Arc<dyn MemoryBackend>) -> Self {
-        Self { tokens, backend }
+    /// Build state from the token registry, the data backend, the shared approval queue, and a
+    /// clock. The daemon injects a DB-backed backend + its real approval queue; tests inject stubs.
+    pub fn new(
+        tokens: Arc<TokenRegistry>,
+        backend: Arc<dyn MemoryBackend>,
+        approvals: Arc<Mutex<ApprovalQueue>>,
+        clock: Clock,
+    ) -> Self {
+        Self { tokens, backend, approvals, clock }
     }
 }
 
@@ -64,7 +77,7 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
         .find_map(|kv| kv.strip_prefix("q="))
         .map(percent_decode);
 
-    // Read the request body (POST writes). Bounded to 256 KiB; empty on read failure.
+    // Read the request body (POST writes / actions). Bounded to 256 KiB; empty on read failure.
     let body = axum::body::to_bytes(req.into_body(), 256 * 1024)
         .await
         .ok()
@@ -72,13 +85,19 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
         .filter(|s| !s.is_empty());
 
     let (status, resp_body) = match method {
-        Some(method) => rest::respond_with(
-            &RestRequest { method, path, token, include_low, query, body },
-            &state.tokens,
-            state.backend.as_ref(),
-        ),
-        // Any verb other than GET/POST is not used by the Memory API.
         None => (405, r#"{"error":"method_not_allowed"}"#.to_string()),
+        Some(method) => {
+            let rreq = RestRequest { method, path, token, include_low, query, body };
+            match rest::route(&rreq, &state.tokens) {
+                // actions.execute needs the shared approval queue (L3 sends enqueue there).
+                Routed::Action => match state.approvals.lock() {
+                    Ok(mut queue) => rest::act(rreq.body.as_deref(), (state.clock)(), &mut queue),
+                    Err(_) => (500, r#"{"error":"internal"}"#.to_string()),
+                },
+                // reads/writes/status/errors go through the backend renderer.
+                _ => rest::respond_with(&rreq, &state.tokens, state.backend.as_ref()),
+            }
+        }
     };
 
     Response::builder()
@@ -184,7 +203,8 @@ mod tests {
     ) -> std::net::SocketAddr {
         let listener = bind_local(0).await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let state = AppState::new(Arc::new(tokens), backend);
+        let approvals = Arc::new(Mutex::new(ApprovalQueue::new()));
+        let state = AppState::new(Arc::new(tokens), backend, approvals, Arc::new(|| 0));
         tokio::spawn(async move {
             let _ = serve_on(listener, state).await;
         });
@@ -279,6 +299,34 @@ mod tests {
 
         // no token → 401, and the backend is not touched
         let resp = raw_post(addr, "/v1/memory/notes", None, "sneaky").await;
+        assert!(resp.contains("401"), "got: {resp}");
+    }
+
+    #[tokio::test]
+    async fn actions_execute_local_and_send_over_the_socket() {
+        let mut tokens = TokenRegistry::new();
+        tokens.issue("t");
+        let addr = spawn_server(tokens).await;
+
+        // a local action is authorized immediately (200)
+        let resp = raw_post(addr, "/v1/actions/execute", Some("t"), r#"{"kind":"local_search","query":"x"}"#).await;
+        assert!(resp.contains("200"), "got: {resp}");
+        assert!(resp.contains("\"executed\":\"local\""));
+
+        // an external send is pending L3 approval (202 + approval id) — not executed
+        let resp = raw_post(
+            addr,
+            "/v1/actions/execute",
+            Some("t"),
+            r#"{"kind":"send_email","to":"a@b.com","subject":"s","body":"b"}"#,
+        )
+        .await;
+        assert!(resp.contains("202"), "got: {resp}");
+        assert!(resp.contains("\"pending\":true"));
+        assert!(resp.contains("\"approval_id\":"));
+
+        // no token → 401
+        let resp = raw_post(addr, "/v1/actions/execute", None, r#"{"kind":"local_search","query":"x"}"#).await;
         assert!(resp.contains("401"), "got: {resp}");
     }
 }
