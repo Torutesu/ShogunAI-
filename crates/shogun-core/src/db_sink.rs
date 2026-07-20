@@ -10,15 +10,14 @@
 //! never panic or interrupt the user's work (CLAUDE.md crash-resilience). A failed write increments
 //! a dropped counter the daemon surfaces via the Notch indicator; it is never an `unwrap`.
 //!
-//! This is the first `shogun-core → shogun-memory` edge, and it is deliberately behind the `db`
-//! feature so the pure-logic crate stays rusqlite-free by default.
+//! The sink shares the daemon's connection ([`crate::daemon::SharedConn`]) so traceability rows and
+//! capture writes hit the same SQLite handle.
 
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
 
-use rusqlite::Connection;
 use shogun_memory::traceability::{insert, list, Filter, Route as DbRoute, TraceRow};
 
+use crate::daemon::{Clock, SharedConn};
 use crate::llm::traceability::{Route, TraceRecord, TraceabilitySink};
 
 /// Map the LLM-layer route onto the storage-layer route (1:1; the DB CHECK is the shared contract).
@@ -32,23 +31,18 @@ fn map_route(route: Route) -> DbRoute {
     }
 }
 
-/// A [`TraceabilitySink`] that persists every record to `traceability_log`. Owns the daemon's
-/// connection behind a `Mutex` (rusqlite `Connection` is `Send` but not `Sync`) and a clock so the
-/// row's `ts` is injectable (deterministic under test).
-pub struct DbTraceabilitySink<C = fn() -> i64>
-where
-    C: Fn() -> i64 + Send + Sync,
-{
-    conn: Mutex<Connection>,
-    now_ms: C,
+/// A [`TraceabilitySink`] that persists every record to `traceability_log`, sharing the daemon's
+/// connection and clock (so the row's `ts` is injectable and deterministic under test).
+pub struct DbTraceabilitySink {
+    conn: SharedConn,
+    clock: Clock,
     dropped: AtomicU64,
 }
 
-impl<C: Fn() -> i64 + Send + Sync> DbTraceabilitySink<C> {
-    /// Wrap a connection and a clock. The connection should be the daemon's (WAL) handle with the
-    /// migrations already applied.
-    pub fn new(conn: Connection, now_ms: C) -> Self {
-        Self { conn: Mutex::new(conn), now_ms, dropped: AtomicU64::new(0) }
+impl DbTraceabilitySink {
+    /// Build a sink over the daemon's shared connection.
+    pub fn new(conn: SharedConn, clock: Clock) -> Self {
+        Self { conn, clock, dropped: AtomicU64::new(0) }
     }
 
     /// Number of records that failed to persist (surfaced via the indicator, never fatal).
@@ -59,17 +53,13 @@ impl<C: Fn() -> i64 + Send + Sync> DbTraceabilitySink<C> {
     /// Read back rows for the traceability viewer (FR-TR-02) through the same handle. Returns an
     /// empty vec if the lock or query fails (read-only; never panics).
     pub fn rows(&self, filter: &Filter) -> Vec<TraceRow> {
-        self.conn
-            .lock()
-            .ok()
-            .and_then(|c| list(&c, filter).ok())
-            .unwrap_or_default()
+        self.conn.lock().ok().and_then(|c| list(&c, filter).ok()).unwrap_or_default()
     }
 }
 
-impl<C: Fn() -> i64 + Send + Sync> TraceabilitySink for DbTraceabilitySink<C> {
+impl TraceabilitySink for DbTraceabilitySink {
     fn record(&self, rec: TraceRecord) {
-        let ts = (self.now_ms)();
+        let ts = (self.clock)();
         let chunk_bytes = i64::try_from(rec.chunk_bytes).unwrap_or(i64::MAX);
         let mut row = TraceRow::new(ts, map_route(rec.route), rec.purpose, rec.destination, chunk_bytes, rec.chunk_xxh64);
         // Respect the record's own third-party flag (e.g. a Composio-routed send).
@@ -86,23 +76,24 @@ impl<C: Fn() -> i64 + Send + Sync> TraceabilitySink for DbTraceabilitySink<C> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::daemon::Db;
     use crate::llm::traceability::{Route, TraceRecord};
 
-    fn sink() -> DbTraceabilitySink<fn() -> i64> {
-        let conn = shogun_memory::open_in_memory().expect("in-memory db");
-        DbTraceabilitySink::new(conn, || 1_000)
+    fn db() -> Db {
+        Db::open_in_memory(std::sync::Arc::new(|| 1_000)).expect("in-memory db")
     }
 
     #[test]
     fn record_persists_a_row_with_digest_only() {
-        let s = sink();
+        let db = db();
+        let sink = db.traceability_sink();
         // A record carrying obviously-sensitive text; only its digest+length may land in the DB.
         let rec = TraceRecord::for_chunk(Route::BatchApi, "dream_cycle", "api.anthropic.com", "TOP SECRET chunk", false);
         let expected_digest = rec.chunk_xxh64.clone();
         let expected_bytes = rec.chunk_bytes as i64;
-        s.record(rec);
+        sink.record(rec);
 
-        let rows = s.rows(&Filter::default());
+        let rows = sink.rows(&Filter::default());
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].purpose, "dream_cycle");
         assert_eq!(rows[0].route, DbRoute::BatchApi);
@@ -110,33 +101,33 @@ mod tests {
         assert_eq!(rows[0].chunk_xxh64, expected_digest);
         // The sent text appears nowhere in the persisted row.
         assert!(!format!("{:?}", rows[0]).contains("SECRET"));
-        assert_eq!(s.dropped(), 0);
+        assert_eq!(sink.dropped(), 0);
     }
 
     #[test]
     fn composio_record_persists_third_party() {
-        let s = sink();
-        s.record(TraceRecord::for_chunk(Route::Composio, "agent", "gmail.com", "body", true));
-        let rows = s.rows(&Filter::default());
+        let sink = db().traceability_sink();
+        sink.record(TraceRecord::for_chunk(Route::Composio, "agent", "gmail.com", "body", true));
+        let rows = sink.rows(&Filter::default());
         assert_eq!(rows.len(), 1);
         assert!(rows[0].third_party);
     }
 
     #[test]
     fn each_send_records_exactly_one_row() {
-        let s = sink();
+        let sink = db().traceability_sink();
         for i in 0..5 {
-            s.record(TraceRecord::for_chunk(Route::MessagesApi, "agent", "api.anthropic.com", &format!("c{i}"), false));
+            sink.record(TraceRecord::for_chunk(Route::MessagesApi, "agent", "api.anthropic.com", &format!("c{i}"), false));
         }
-        assert_eq!(s.rows(&Filter::default()).len(), 5);
+        assert_eq!(sink.rows(&Filter::default()).len(), 5);
     }
 
     #[test]
     fn filter_reads_back_through_the_same_handle() {
-        let s = sink();
-        s.record(TraceRecord::for_chunk(Route::BatchApi, "indexing", "api.anthropic.com", "a", false));
-        s.record(TraceRecord::for_chunk(Route::Composio, "agent", "gmail.com", "b", true));
-        let composio = s.rows(&Filter { route: Some(DbRoute::Composio), ..Default::default() });
+        let sink = db().traceability_sink();
+        sink.record(TraceRecord::for_chunk(Route::BatchApi, "indexing", "api.anthropic.com", "a", false));
+        sink.record(TraceRecord::for_chunk(Route::Composio, "agent", "gmail.com", "b", true));
+        let composio = sink.rows(&Filter { route: Some(DbRoute::Composio), ..Default::default() });
         assert_eq!(composio.len(), 1);
         assert_eq!(composio[0].destination, "gmail.com");
     }

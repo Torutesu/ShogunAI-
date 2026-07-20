@@ -26,8 +26,12 @@
 
 pub mod bus;
 pub mod capture;
+/// The daemon's shared DB handle — one connection every writer/reader uses (feature `db`; the
+/// first shogun-core → shogun-memory edge).
+#[cfg(feature = "db")]
+pub mod daemon;
 /// DB-backed traceability sink — the daemon's `TraceabilitySink` → `traceability_log` adapter
-/// (feature `db`; the first shogun-core → shogun-memory edge).
+/// (feature `db`).
 #[cfg(feature = "db")]
 pub mod db_sink;
 pub mod dreamcycle;
