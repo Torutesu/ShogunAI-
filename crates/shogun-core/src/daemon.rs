@@ -59,6 +59,27 @@ impl Db {
         self.conn.lock().ok().and_then(|c| event_log::insert_or_touch(&c, ev).ok())
     }
 
+    /// Capture an event, then — only if it was newly inserted (not a dedup-touch) — run the
+    /// first-stage local-rule extraction (WP2.7) over its content and persist any low-confidence
+    /// commitment / open-loop candidates, each linked to this event (FR-ST-02). Extraction is
+    /// skipped on a dedup-touch so repeated identical captures don't multiply candidates.
+    ///
+    /// Returns `(event_id, touched, candidate_ids)`. Extraction failures are swallowed (the
+    /// candidate list comes back empty) so a heuristic hiccup never blocks capture.
+    pub fn capture_and_extract(&self, ev: &NewEvent<'_>) -> Option<(i64, bool, Vec<i64>)> {
+        let (id, touched) = self.capture(ev)?;
+        if touched {
+            return Some((id, touched, Vec::new()));
+        }
+        let candidates = shogun_memory::extract::extract(ev.content);
+        let now = self.now_ms();
+        let ids = {
+            let mut g = self.conn.lock().ok()?;
+            shogun_memory::extract::persist_candidates(&mut g, id, &candidates, now).unwrap_or_default()
+        };
+        Some((id, touched, ids))
+    }
+
     /// Append a user note to the event log (`memory.append_note`, L1). Source `user`, kind `note`;
     /// content-hashed for dedup like any event. Returns the row id (or `None` on write failure).
     pub fn append_note(&self, text: &str) -> Option<i64> {
@@ -366,6 +387,26 @@ mod tests {
         let (id2, touched2) = db.capture(&ev("hello", "h", 200)).unwrap();
         assert!(touched2, "same content_hash must touch, not append");
         assert_eq!(id1, id2);
+    }
+
+    #[test]
+    fn capture_and_extract_persists_low_confidence_candidates_once() {
+        let db = Db::open_in_memory(clock(500)).unwrap();
+        let (_id, touched, ids) =
+            db.capture_and_extract(&ev("I'll send the deck. Waiting on legal.", "h", 100)).unwrap();
+        assert!(!touched);
+        assert_eq!(ids.len(), 2, "one commitment + one open loop");
+        // every extracted candidate is low-confidence (FR-ST-20)
+        for c in db.commitments_due(500) {
+            assert!(c.confidence <= shogun_memory::extract::LOCAL_RULE_MAX_CONFIDENCE);
+        }
+
+        // a dedup-touch of the same content must NOT extract again
+        let (_id2, touched2, ids2) =
+            db.capture_and_extract(&ev("I'll send the deck. Waiting on legal.", "h", 200)).unwrap();
+        assert!(touched2);
+        assert!(ids2.is_empty(), "dedup-touch must not re-extract");
+        assert_eq!(db.commitments_due(500).len(), 1, "still exactly one commitment");
     }
 
     #[test]

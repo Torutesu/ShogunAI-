@@ -17,6 +17,7 @@ use rusqlite::Connection;
 pub mod embed;
 pub mod embed_job;
 pub mod event_log;
+pub mod extract;
 pub mod hot;
 pub mod jobs;
 pub mod maintenance;
