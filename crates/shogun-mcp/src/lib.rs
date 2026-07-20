@@ -14,4 +14,5 @@ pub mod composio;
 pub mod connection;
 pub mod dispatch;
 pub mod memory_api;
+pub mod rest;
 pub mod scope;
