@@ -133,13 +133,15 @@ pub mod mac {
 
     // ---------------------------------------------------------------- timers
 
-    const TIMERS: [Timer; 3] = [Timer::Dwell, Timer::Grace, Timer::CollapseAnim];
+    const TIMERS: [Timer; 4] =
+        [Timer::Dwell, Timer::HoverExit, Timer::ExpandedIdle, Timer::CollapseAnim];
 
     fn tidx(t: Timer) -> usize {
         match t {
             Timer::Dwell => 0,
-            Timer::Grace => 1,
-            Timer::CollapseAnim => 2,
+            Timer::HoverExit => 1,
+            Timer::ExpandedIdle => 2,
+            Timer::CollapseAnim => 3,
         }
     }
 
@@ -154,15 +156,15 @@ pub mod mac {
     /// the engine loop's generation check.
     struct TimerSvc {
         cmd_tx: Sender<ArmCmd>,
-        gens: Arc<[AtomicU64; 3]>,
+        gens: Arc<[AtomicU64; 4]>,
     }
 
     impl TimerSvc {
         fn spawn(ev_tx: Sender<Ev>) -> Self {
             let (cmd_tx, cmd_rx) = channel::<ArmCmd>();
-            let gens: Arc<[AtomicU64; 3]> = Arc::new(Default::default());
+            let gens: Arc<[AtomicU64; 4]> = Arc::new(Default::default());
             std::thread::spawn(move || {
-                let mut slots: [Option<(u64, Instant, Timer)>; 3] = [None, None, None];
+                let mut slots: [Option<(u64, Instant, Timer)>; 4] = [None, None, None, None];
                 loop {
                     let now = Instant::now();
                     // Fire due slots.
@@ -287,7 +289,7 @@ pub mod mac {
                         if !timers.is_current(t, gen) {
                             continue; // stale fire (cancelled/rescheduled since) — drop
                         }
-                        if t == Timer::Grace {
+                        if t == Timer::HoverExit || t == Timer::ExpandedIdle {
                             shared.set_reason("timeout");
                         }
                         if t == Timer::CollapseAnim {
