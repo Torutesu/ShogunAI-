@@ -15,6 +15,7 @@ use std::path::Path;
 use rusqlite::Connection;
 
 pub mod event_log;
+pub mod search;
 pub mod state;
 
 /// refinery embeds the `src/migrations/V*.sql` files at compile time; `migrations::runner()`
