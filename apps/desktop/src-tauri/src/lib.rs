@@ -1,7 +1,7 @@
 //! SHOGUN Phase 0 notch-UI spike shell.
 //!
 //! Throwaway per spec §2.1 (only the harness/core crates are carried forward). Module
-//! boundaries follow spec §3.11.1; decision logic lives in `spike_core` (tested on Linux),
+//! boundaries follow spec §3.11.1; decision logic lives in `shogun_core` (tested on Linux),
 //! measurement plumbing in `spike_harness`, and this crate is the macOS adapter layer.
 //! `axcache` runs on focus events and must never be triggered by the state machine
 //! (the "no collect-on-press" proof, spec §3.10.3).

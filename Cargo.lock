@@ -2742,6 +2742,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
+name = "shogun-core"
+version = "0.1.0"
+
+[[package]]
 name = "shogun-desktop-spike"
 version = "0.0.0"
 dependencies = [
@@ -2755,7 +2759,7 @@ dependencies = [
  "objc2-foundation",
  "serde",
  "serde_json",
- "spike-core",
+ "shogun-core",
  "spike-harness",
  "tauri",
  "tauri-build",
@@ -2843,10 +2847,6 @@ dependencies = [
  "libc",
  "system-deps",
 ]
-
-[[package]]
-name = "spike-core"
-version = "0.0.0"
 
 [[package]]
 name = "spike-harness"

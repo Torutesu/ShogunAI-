@@ -4,9 +4,9 @@
 //! the off-device stand-in for the S-12 expand flow — it exercises the two modules together
 //! rather than in isolation.
 
-use spike_core::geometry::{idle_rect, regions, GeometryParams, Point, Rect};
-use spike_core::hover::{HoverParams, HoverSignal, HoverTracker};
-use spike_core::statemachine::{Effect, Input, Params, State, StateMachine};
+use shogun_core::notch::geometry::{idle_rect, regions, GeometryParams, Point, Rect};
+use shogun_core::notch::hover::{HoverParams, HoverSignal, HoverTracker};
+use shogun_core::notch::statemachine::{Effect, Input, Params, State, StateMachine};
 
 /// The adapter's HoverSignal → Input routing (spec §3.11 boundary). Timer expiries
 /// (DwellExpired/GraceExpired/AnimDone) are injected separately, as on-device.
@@ -20,7 +20,7 @@ fn route(sig: HoverSignal, sm: &mut StateMachine) -> Vec<Effect> {
     }
 }
 
-fn setup() -> (HoverTracker, StateMachine, spike_core::geometry::Regions) {
+fn setup() -> (HoverTracker, StateMachine, shogun_core::notch::geometry::Regions) {
     let screen = Rect::new(0.0, 0.0, 1512.0, 982.0);
     let idle = idle_rect(screen, 200.0, 32.0);
     let regs = regions(screen, idle, GeometryParams::default());

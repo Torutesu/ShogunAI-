@@ -1,6 +1,6 @@
 //! Hover adapter (spec §3.4). Event-driven; polling forbidden.
 //!
-//! The judgement lives in `spike_core::hover::HoverTracker` (unit-tested on Linux). This
+//! The judgement lives in `shogun_core::notch::hover::HoverTracker` (unit-tested on Linux). This
 //! adapter runs a listen-only CGEventTap on a dedicated CFRunLoop thread and forwards
 //! [`TapEvent`]s. Design points (review findings #1/#3/#8 + spec §3.4.1):
 //! - Mask covers MouseMoved AND LeftMouseDown/Up/Dragged so drag/menu suppression and the
@@ -14,7 +14,7 @@
 //!   granting permission recovers without an app restart.
 #![allow(dead_code, unused_imports)]
 
-pub use spike_core::hover::{HoverParams, HoverSignal, HoverTracker};
+pub use shogun_core::notch::hover::{HoverParams, HoverSignal, HoverTracker};
 
 #[cfg(target_os = "macos")]
 pub use mac::{start, TapEvent};
@@ -35,7 +35,7 @@ mod mac {
     };
 
     /// Top band in CG coordinates (y grows downward from the primary display's top edge).
-    /// Mirrors spike_core's 40pt early-reject band (spec §3.4.1).
+    /// Mirrors shogun_core's 40pt early-reject band (spec §3.4.1).
     const TOP_BAND_CG: f64 = 40.0;
 
     /// Events forwarded from the tap, in CGEvent (top-left origin) coordinates.

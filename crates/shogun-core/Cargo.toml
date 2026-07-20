@@ -1,0 +1,23 @@
+[package]
+name = "shogun-core"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "SHOGUN core: pure, platform-independent behavioural logic (notch UI + capture policy)."
+
+# Kept deliberately dependency-free and macOS-free so the notch state machine, hit-region
+# geometry, hover judgement, and the capture walk policy are exhaustively unit-testable on
+# Linux CI. The macOS shell (apps/desktop/src-tauri) is a thin adapter that sources OS events
+# and applies the emitted effects. Carried forward from the Phase 0 spike (`spike-core`),
+# reorganised into product modules (`notch`, `capture`); see docs/phase1-implementation-plan.md
+# WP1.1. Designed to make no process-boundary assumptions (AR-03) so shogun-core can later
+# host a daemon split without an architecture change.
+
+[lib]
+name = "shogun_core"
+path = "src/lib.rs"
+
+[lints]
+workspace = true

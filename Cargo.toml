@@ -5,8 +5,8 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/shogun-core",
     "crates/spike-harness",
-    "crates/spike-core",
     "apps/desktop/src-tauri",
 ]
 

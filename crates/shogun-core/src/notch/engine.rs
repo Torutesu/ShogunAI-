@@ -8,9 +8,9 @@
 //! becomes T5" rule and stale-timer suppression — means the integration is unit-tested off
 //! device; the macOS adapter only sources events and applies outputs.
 
-use crate::geometry::{cg_to_ns, Point, Regions};
-use crate::hover::{HoverParams, HoverSignal, HoverTracker};
-use crate::statemachine::{Effect, Input, Params, State, StateMachine, Timer};
+use crate::notch::geometry::{cg_to_ns, Point, Regions};
+use crate::notch::hover::{HoverParams, HoverSignal, HoverTracker};
+use crate::notch::statemachine::{Effect, Input, Params, State, StateMachine, Timer};
 use std::collections::HashSet;
 
 /// Events fed into the engine by the macOS adapter.
@@ -183,7 +183,7 @@ impl NotchEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geometry::{idle_rect, regions, GeometryParams, Rect};
+    use crate::notch::geometry::{idle_rect, regions, GeometryParams, Rect};
 
     fn engine() -> (NotchEngine, Regions, f64) {
         // Primary display 1512×982, top-left origin at CG y=0 == NS y=982.

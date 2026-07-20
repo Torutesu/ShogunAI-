@@ -4,7 +4,7 @@
 //! command half of the closed IPC contract (§3.11.2), and emits the measurement streams
 //! (expand_latency via `painted`+clock offset, expand_session, cpu_sample, heartbeat,
 //! tap_status). All timestamps share ONE `MonoClock` (the recorder's) so Q2 math has a
-//! single timeline. Decision logic stays in `spike_core::engine` (unit-tested); behaviour
+//! single timeline. Decision logic stays in `shogun_core::notch::engine` (unit-tested); behaviour
 //! is validated on-device.
 //!
 //! CLOSED IPC message set (spec §3.11.2 — do not add messages without a spec change):
@@ -22,9 +22,9 @@ pub mod mac {
     use crate::axcache;
     use crate::geometry::Regions;
     use crate::hover::TapEvent;
-    use spike_core::engine::{EngineInput, EngineOutput, NotchEngine};
-    use spike_core::hover::HoverParams;
-    use spike_core::statemachine::{Params, State, Timer};
+    use shogun_core::notch::engine::{EngineInput, EngineOutput, NotchEngine};
+    use shogun_core::notch::hover::HoverParams;
+    use shogun_core::notch::statemachine::{Params, State, Timer};
     use spike_harness::clock::{OffsetEstimator, SyncSample};
     use spike_harness::cpu::{read_process_usage, CpuMeter, CPU_METHOD};
     use spike_harness::record::{
@@ -545,7 +545,7 @@ pub mod mac {
         name: &str,
         trigger: CacheTrigger,
         last_digest: &mut Option<String>,
-    ) -> Option<spike_core::axcache::WalkResult> {
+    ) -> Option<shogun_core::capture::walk_policy::WalkResult> {
         // Bracket ONLY the walk (spec §4.2.2): poll cadence / retry wait is not measured.
         let t0 = shared.clock.elapsed_ns();
         let result = crate::axcache::snapshot(pid, 300)?;

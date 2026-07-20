@@ -1,14 +1,14 @@
 //! Geometry adapter (spec §3.2, §3.4.7).
 //!
-//! The math lives in `spike_core::geometry` (Rect/Regions/idle_rect/regions/cg_to_ns,
+//! The math lives in `shogun_core::notch::geometry` (Rect/Regions/idle_rect/regions/cg_to_ns,
 //! unit-tested on Linux). This adapter reads the raw macOS screen measurements —
 //! `NSScreen.frame/visibleFrame/safeAreaInsets` and `auxiliaryTopLeftArea/RightArea`
 //! (research item 4: NSRect, empty on non-notch, bottom-left origin) — and feeds them into
-//! `spike_core::geometry::regions(...)`. CGEvent points are normalised with
+//! `shogun_core::notch::geometry::regions(...)`. CGEvent points are normalised with
 //! `cg_to_ns(p, primary_height)` at the boundary (T-07).
 #![allow(dead_code, unused_imports)]
 
-pub use spike_core::geometry::{cg_to_ns, idle_rect, regions, GeometryParams, Point, Rect, Regions};
+pub use shogun_core::notch::geometry::{cg_to_ns, idle_rect, regions, GeometryParams, Point, Rect, Regions};
 
 #[cfg(target_os = "macos")]
 pub use mac::{read_primary, ScreenGeometry};
@@ -19,7 +19,7 @@ mod mac {
     use objc2::MainThreadMarker;
     use objc2_app_kit::NSScreen;
 
-    /// The panel-target screen's notch/pseudo geometry, resolved into spike_core regions,
+    /// The panel-target screen's notch/pseudo geometry, resolved into shogun_core regions,
     /// plus the CG-conversion constant taken from the true primary display.
     pub struct ScreenGeometry {
         pub is_notch: bool,

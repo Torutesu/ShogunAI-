@@ -1,8 +1,10 @@
-name: phase0-ci
+name: ci
 
-# Scoped to the Phase 0 spike (spike-harness crate + desktop shell). The macOS/arm64
-# build job is added in T-05 once apps/desktop/src-tauri's macOS deps (tauri-nspanel,
-# objc2) are wired in; until then those paths only build on-device.
+# Three jobs: (1) pure crates (shogun-core + spike-harness) — platform-independent, tested
+# and clippy-checked on Linux; (2) desktop frontend typecheck/build; (3) the macOS/arm64
+# shell — compile + clippy only (the on-device MEASUREMENTS need a physical notch Mac).
+# Phase 1 (docs/phase1-implementation-plan.md) grows the pure-crate job as shogun-core,
+# shogun-memory, shogun-fusion, etc. come online — all covered by the workspace commands.
 
 on:
   push:
@@ -11,7 +13,7 @@ on:
       - "crates/**"
       - "apps/desktop/**"
       - "Cargo.toml"
-      - ".github/workflows/phase0-ci.yml"
+      - ".github/workflows/ci.yml"
   pull_request:
     paths:
       - "crates/**"
@@ -28,7 +30,7 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      # spike-harness + spike-core are platform-independent; the macOS shell
+      # shogun-core + spike-harness are platform-independent; the macOS shell
       # (shogun-desktop-spike) only builds on-device, so it is excluded here.
       - name: clippy (warnings deny via workspace lints)
         run: cargo clippy --workspace --exclude shogun-desktop-spike --all-targets

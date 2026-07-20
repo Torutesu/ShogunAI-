@@ -1,6 +1,6 @@
 //! Context-cache adapter (spec §3.10). AX calls are confined to THIS module.
 //!
-//! The walk policy lives in `spike_core::axcache` (`walk`, `Limits`, `Role`, `AxNode`,
+//! The walk policy lives in `shogun_core::capture::walk_policy` (`walk`, `Limits`, `Role`, `AxNode`,
 //! `ContextCache` — depth ≤8/≤300/≤32KB/SecureTextField-skip, unit-tested on Linux). This
 //! adapter implements `AxNode` for a retained AXUIElement (value→title→description;
 //! `AXUIElementSetMessagingTimeout` 100ms; 250ms timebox via `should_stop`). on-device
@@ -9,7 +9,7 @@
 //! (spec §3.10.3).
 #![allow(dead_code, unused_imports)]
 
-pub use spike_core::axcache::{walk, AxNode, ContextCache, Limits, Role, WalkResult};
+pub use shogun_core::capture::walk_policy::{walk, AxNode, ContextCache, Limits, Role, WalkResult};
 
 #[cfg(target_os = "macos")]
 pub use mac::{ax_call_count, ax_trusted, snapshot};
@@ -30,7 +30,7 @@ mod mac {
     use core_foundation_sys::base::{CFGetTypeID, CFRelease, CFRetain, CFTypeRef};
     use core_foundation_sys::string::{CFStringGetTypeID, CFStringRef};
 
-    use spike_core::axcache::{walk, AxNode, Limits, Role, WalkResult};
+    use shogun_core::capture::walk_policy::{walk, AxNode, Limits, Role, WalkResult};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     /// Total AX attribute-copy calls since launch. The harness heartbeat records this and

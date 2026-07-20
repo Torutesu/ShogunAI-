@@ -5,7 +5,7 @@
 //! menu/drag suppression, then emits [`HoverSignal`]s for the state machine. No OS calls,
 //! no allocation-per-event beyond the returned signal vec.
 
-use crate::geometry::{Point, Regions};
+use crate::notch::geometry::{Point, Regions};
 use std::collections::VecDeque;
 
 /// Signals emitted toward the state machine (spec §3.3 inputs).
@@ -193,7 +193,7 @@ impl HoverTracker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geometry::{idle_rect, regions, GeometryParams, Rect};
+    use crate::notch::geometry::{idle_rect, regions, GeometryParams, Rect};
 
     fn setup() -> (HoverTracker, Regions, f64) {
         let screen = Rect::new(0.0, 0.0, 1512.0, 982.0);

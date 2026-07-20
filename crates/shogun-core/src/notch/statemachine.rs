@@ -37,7 +37,7 @@ impl State {
     }
 }
 
-/// Inputs into the machine. Hover signals arrive from [`crate::hover`]; timer expiries
+/// Inputs into the machine. Hover signals arrive from [`crate::notch::hover`]; timer expiries
 /// and key/force events arrive from the macOS adapter.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Input {
