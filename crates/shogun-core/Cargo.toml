@@ -55,6 +55,12 @@ name = "shogun-api"
 path = "src/bin/shogun_api.rs"
 required-features = ["daemon-server"]
 
+# The MCP server face — a stdio JSON-RPC loop (no axum; only the storage layer).
+[[bin]]
+name = "shogun-mcp"
+path = "src/bin/shogun_mcp.rs"
+required-features = ["db"]
+
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }
 # For the daemon-server end-to-end test: drive the real server with the CLI's loopback client.

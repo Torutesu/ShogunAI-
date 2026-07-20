@@ -154,23 +154,33 @@ pub fn status_code(routed: &Routed) -> u16 {
     }
 }
 
-/// The stable wire name of a tool (matches the CLI's names).
+/// The stable wire name of a tool (delegates to the shared name).
 fn tool_name(tool: Tool) -> &'static str {
-    match tool {
-        Tool::MemorySearch => "memory.search",
-        Tool::MemoryGetContext => "memory.get_context",
-        Tool::StatePeopleList => "state.people.list",
-        Tool::StatePeopleGet => "state.people.get",
-        Tool::StateProjectsList => "state.projects.list",
-        Tool::StateProjectsGet => "state.projects.get",
-        Tool::StateCommitmentsList => "state.commitments.list",
-        Tool::StateCommitmentsGet => "state.commitments.get",
-        Tool::StateOpenLoopsList => "state.open_loops.list",
-        Tool::StateOpenLoopsGet => "state.open_loops.get",
-        Tool::MemoryAppendNote => "memory.append_note",
-        Tool::StateProposeUpdate => "state.propose_update",
-        Tool::ActionsExecute => "actions.execute",
-    }
+    tool.wire_name()
+}
+
+/// Render backend read items to the API's confidence-gated JSON result (FR-API-06). Shared by the
+/// REST and MCP faces so their read output is identical. Low-confidence items are dropped unless
+/// `include_low`; medium ones are flagged `possibly`.
+pub fn render_reads(tool: Tool, items: &[crate::backend::ReadItem], include_low: bool) -> String {
+    let rendered: Vec<String> = items
+        .iter()
+        .filter_map(|item| match read_inclusion(item.confidence, include_low) {
+            ReadInclusion::Included { possibly } => Some(format!(
+                r#"{{"text":"{}","confidence":{},"possibly":{}}}"#,
+                escape(&item.label),
+                item.confidence,
+                possibly
+            )),
+            ReadInclusion::Excluded => None,
+        })
+        .collect();
+    format!(r#"{{"tool":"{}","results":[{}]}}"#, tool_name(tool), rendered.join(","))
+}
+
+/// Public JSON string escape (quotes, backslash, control chars) — used by the render helpers.
+pub fn escape(s: &str) -> String {
+    json_escape(s)
 }
 
 fn level_label(level: Level) -> &'static str {
@@ -301,20 +311,8 @@ pub fn respond_with<B: MemoryBackend + ?Sized>(
     match route(req, tokens) {
         Routed::Read { tool, id } => {
             let params = ReadParams { id, query: req.query.clone() };
-            let rendered: Vec<String> = backend
-                .read(tool, &params)
-                .into_iter()
-                .filter_map(|item| match read_inclusion(item.confidence, req.include_low) {
-                    ReadInclusion::Included { possibly } => Some(format!(
-                        r#"{{"text":"{}","confidence":{},"possibly":{}}}"#,
-                        json_escape(&item.label),
-                        item.confidence,
-                        possibly
-                    )),
-                    ReadInclusion::Excluded => None,
-                })
-                .collect();
-            (200, format!(r#"{{"tool":"{}","results":[{}]}}"#, tool_name(tool), rendered.join(",")))
+            let items = backend.read(tool, &params);
+            (200, render_reads(tool, &items, req.include_low))
         }
         Routed::Write { tool, level } => {
             match backend.write(tool, req.body.as_deref().unwrap_or("")) {

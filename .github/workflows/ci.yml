@@ -57,6 +57,9 @@ jobs:
         run: |
           cargo clippy -p shogun-core --features daemon-server --all-targets
           cargo test -p shogun-core --features daemon-server --bin shogun-api
+      # The MCP server face's stdio bin (only the storage layer, no axum).
+      - name: shogun-mcp binary (clippy)
+        run: cargo clippy -p shogun-core --features db --bin shogun-mcp
       - name: test
         run: cargo test --workspace --exclude shogun-desktop-spike
       # Invariant guards (each self-tests its detector, then checks the real tree/source):

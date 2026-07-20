@@ -46,6 +46,32 @@ pub const ALL_TOOLS: &[Tool] = &[
     Tool::ActionsExecute,
 ];
 
+impl Tool {
+    /// The stable wire name (the same string the CLI, REST, and MCP faces use).
+    pub fn wire_name(self) -> &'static str {
+        match self {
+            Tool::MemorySearch => "memory.search",
+            Tool::MemoryGetContext => "memory.get_context",
+            Tool::StatePeopleList => "state.people.list",
+            Tool::StatePeopleGet => "state.people.get",
+            Tool::StateProjectsList => "state.projects.list",
+            Tool::StateProjectsGet => "state.projects.get",
+            Tool::StateCommitmentsList => "state.commitments.list",
+            Tool::StateCommitmentsGet => "state.commitments.get",
+            Tool::StateOpenLoopsList => "state.open_loops.list",
+            Tool::StateOpenLoopsGet => "state.open_loops.get",
+            Tool::MemoryAppendNote => "memory.append_note",
+            Tool::StateProposeUpdate => "state.propose_update",
+            Tool::ActionsExecute => "actions.execute",
+        }
+    }
+
+    /// Parse a wire name back to a tool.
+    pub fn from_wire(name: &str) -> Option<Tool> {
+        ALL_TOOLS.iter().copied().find(|t| t.wire_name() == name)
+    }
+}
+
 /// A tool's permission requirement (FR-API-02).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApiLevel {
