@@ -1,6 +1,8 @@
 import { ChevronDown, Menu } from 'lucide-react';
 import { Logo } from '@/components/Logo';
 import { LanguageMenu } from '@/components/LanguageMenu';
+import { SoundInteractions } from '@/components/SoundInteractions';
+import { SoundToggle } from '@/components/SoundToggle';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { Button } from '@/components/ui/button';
 import { getI18n } from '@/i18n/server';
@@ -64,6 +66,8 @@ export async function Nav() {
         </nav>
 
         <div className="flex items-center gap-2.5">
+          <SoundInteractions />
+          <SoundToggle />
           <ThemeToggle />
           <LanguageMenu current={locale} label={t.nav.langLabel} />
           <Button asChild size="sm" className="hidden sm:inline-flex">

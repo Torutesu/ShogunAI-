@@ -4,6 +4,7 @@ import { Loader2 } from 'lucide-react';
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { playSuccess } from '@/lib/sound';
 
 export type WaitlistLabels = {
   placeholder: string;
@@ -52,6 +53,7 @@ export function WaitlistForm({ refCode, labels }: { refCode?: string; labels: Wa
       } catch {
         /* ignore */
       }
+      playSuccess(); // no-op unless the visitor enabled sound
       if (data.statusUrl) {
         window.location.href = data.statusUrl;
       } else {
