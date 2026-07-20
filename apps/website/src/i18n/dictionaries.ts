@@ -314,6 +314,7 @@ const en = {
   rules: {
     eyebrow: 'Rewards program',
     title: 'Early-access rewards — official rules',
+    tagline: 'A special program, limited to the first release',
     updated: 'Last updated July 19, 2026',
     intro:
       'These rules govern the ShogunAI early-access rewards program. No purchase is necessary and this is not a prize draw — every reward is earned by a specific action.',
@@ -654,6 +655,7 @@ const ja: Dictionary = {
   rules: {
     eyebrow: '特典プログラム',
     title: 'アーリーアクセス特典 — 公式ルール',
+    tagline: '第一リリース限定・特別プログラム',
     updated: '最終更新: 2026年7月19日',
     intro:
       'ShogunAI アーリーアクセス特典プログラムのルールです。購入は不要で、抽選ではありません。すべての特典は所定の行動によって獲得します。',
@@ -964,6 +966,7 @@ const es: Dictionary = {
   rules: {
     eyebrow: 'Programa de recompensas',
     title: 'Recompensas de acceso anticipado — reglas oficiales',
+    tagline: 'Un programa especial, limitado al primer lanzamiento',
     updated: 'Última actualización: 19 de julio de 2026',
     intro:
       'Estas reglas rigen el programa de recompensas de acceso anticipado de ShogunAI. No es necesaria ninguna compra y no es un sorteo: cada recompensa se gana con una acción concreta.',
@@ -1274,6 +1277,7 @@ const de: Dictionary = {
   rules: {
     eyebrow: 'Belohnungsprogramm',
     title: 'Early-Access-Belohnungen — offizielle Regeln',
+    tagline: 'Ein Sonderprogramm, limitiert auf den ersten Release',
     updated: 'Zuletzt aktualisiert am 19. Juli 2026',
     intro:
       'Diese Regeln gelten für das ShogunAI-Early-Access-Belohnungsprogramm. Kein Kauf erforderlich und kein Gewinnspiel — jede Belohnung wird durch eine konkrete Handlung verdient.',

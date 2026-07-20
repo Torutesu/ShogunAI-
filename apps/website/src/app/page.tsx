@@ -53,8 +53,12 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ r
 
   return (
     <>
-      <Campaign t={t} />
-      <Nav />
+      {/* Pin the campaign bar + nav together so the $500K offer never scrolls
+          away. Nav's own sticky becomes a no-op inside this pinned group. */}
+      <div className="sticky top-0 z-50">
+        <Campaign t={t} />
+        <Nav />
+      </div>
       <main id="top">
         <Hero t={t} refCode={ref} invite={invite} joined={joined} />
         <Marquee t={t} />

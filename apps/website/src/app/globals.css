@@ -181,6 +181,60 @@
     background-position: 200% 0;
   }
 }
+/* --- Campaign bar: flowing gradient + periodic light sweep + spark pulse --- */
+.campaign-bar {
+  background: linear-gradient(
+    100deg,
+    var(--color-sky-soft) 0%,
+    var(--color-cloud) 25%,
+    var(--color-sky-soft) 50%,
+    var(--color-cloud) 75%,
+    var(--color-sky-soft) 100%
+  );
+  background-size: 200% 100%;
+  animation: campaign-flow 9s linear infinite;
+}
+.campaign-shine {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    100deg,
+    transparent 40%,
+    rgba(255, 255, 255, 0.65) 50%,
+    transparent 60%
+  );
+  transform: translateX(-100%);
+  animation: campaign-shine 5.5s ease-in-out infinite;
+}
+.campaign-spark {
+  animation: campaign-spark 2.4s ease-in-out infinite;
+}
+@keyframes campaign-flow {
+  to {
+    background-position: 200% 0;
+  }
+}
+@keyframes campaign-shine {
+  0% {
+    transform: translateX(-100%);
+  }
+  55%,
+  100% {
+    transform: translateX(100%);
+  }
+}
+@keyframes campaign-spark {
+  0%,
+  100% {
+    opacity: 0.7;
+    transform: scale(1) rotate(0deg);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.25) rotate(12deg);
+  }
+}
 @keyframes logo-pop {
   0% {
     opacity: 0;
@@ -249,8 +303,14 @@
 @media (prefers-reduced-motion: reduce) {
   .orb,
   .animate-floaty,
-  .marquee-track {
+  .marquee-track,
+  .campaign-bar,
+  .campaign-shine,
+  .campaign-spark {
     animation: none;
+  }
+  .campaign-shine {
+    display: none;
   }
   .lift:hover {
     transform: none;
