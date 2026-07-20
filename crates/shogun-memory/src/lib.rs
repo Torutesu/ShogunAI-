@@ -20,6 +20,7 @@ pub mod event_log;
 pub mod hot;
 pub mod search;
 pub mod state;
+pub mod traceability;
 pub mod vector;
 
 /// refinery embeds the `src/migrations/V*.sql` files at compile time; `migrations::runner()`
