@@ -3180,6 +3180,9 @@ dependencies = [
 [[package]]
 name = "shogun-fusion"
 version = "0.1.0"
+dependencies = [
+ "shogun-agents",
+]
 
 [[package]]
 name = "shogun-memory"

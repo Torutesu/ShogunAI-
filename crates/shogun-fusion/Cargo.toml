@@ -12,6 +12,10 @@ description = "SHOGUN Context Fusion: f(state, screen_ctx, intent) → actions, 
 # (FR-ST-20): no agent re-implements it.
 
 [dependencies]
+# Fusion emits action candidates tagged with their L1/L2/L3 level, so it uses the permission
+# model owned by shogun-agents. The dependency is one-way (agents never depends on fusion): the
+# fusion layer proposes candidates, the agent engine executes them.
+shogun-agents = { path = "../shogun-agents" }
 
 [lints]
 workspace = true
