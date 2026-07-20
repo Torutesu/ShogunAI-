@@ -114,17 +114,83 @@ impl<'a, C: Classifier> DbDreamRunner<'a, C> {
 /// High band (≥0.7) reserved for user-confirmed / repeatedly-evidenced state (FR-ST-20/21).
 pub const BATCH_CONFIDENCE: f64 = 0.6;
 
+/// The classification prompt wrapped around one event's captured text. Instructs the model to
+/// return exactly the JSON contract [`parse_batch_classification`] reads — no prose. Sending
+/// processed chunks (the prompt + this event's text) to the Batch lane is the only egress here
+/// (invariant 3: traceability is recorded by `AnthropicBatchClient::submit`).
+pub fn consolidation_prompt(content: &str) -> String {
+    format!(
+        "You extract commitments and open loops from a snippet of a user's captured screen text.\n\
+         Return ONLY a JSON object (no prose, no code fence) of this exact shape:\n\
+         {{\"commitments\":[{{\"direction\":\"mine|theirs\",\"description\":\"...\"}}],\
+         \"open_loops\":[{{\"kind\":\"reply_needed|waiting_on_them|review_pending|decision_pending|follow_up|other\",\"description\":\"...\"}}]}}\n\
+         A commitment is an explicit promise: direction \"mine\" if the user promised, \"theirs\" if \
+         someone promised the user. An open loop is something awaiting action. If there is nothing \
+         actionable, return empty arrays.\n\
+         Text:\n{content}"
+    )
+}
+
 /// Build one Batch item per event: `custom_id` is the event id (so results map back), `purpose`
-/// tags the lane for traceability, `chunk` is the text to classify.
+/// tags the lane for traceability, `chunk` is the classification prompt over the event's text.
 pub fn build_batch_items(events: &[shogun_memory::event_log::EventText]) -> Vec<crate::llm::anthropic::BatchItem> {
     events
         .iter()
         .map(|e| crate::llm::anthropic::BatchItem {
             custom_id: e.id.to_string(),
             purpose: "consolidation".to_string(),
-            chunk: e.content.clone(),
+            chunk: consolidation_prompt(&e.content),
         })
         .collect()
+}
+
+/// Classify a window of events through the **Batch/Select-KK** lane (invariant 5) end-to-end:
+/// build the prompts, run the batch to completion (submit → poll → results), and parse the model's
+/// JSON into per-event candidates at [`BATCH_CONFIDENCE`]. Async — the on-device scheduler awaits
+/// this *before* the sync cycle and feeds the result to a [`PrecomputedClassifier`], so the sync
+/// `DreamJobRunner` never has to bridge async. Generic over the transport, so it is Linux-testable
+/// with a mock (no network). `sleep` is the injected inter-poll delay (FR-DC-05).
+pub async fn classify_via_batch<T, S, F, Fut>(
+    client: &crate::llm::anthropic::AnthropicBatchClient<T, S>,
+    events: &[shogun_memory::event_log::EventText],
+    max_polls: u32,
+    sleep: F,
+) -> Result<Vec<(i64, Vec<Candidate>)>, crate::llm::LlmError>
+where
+    T: crate::llm::transport::HttpTransport,
+    S: crate::llm::traceability::TraceabilitySink,
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
+    if events.is_empty() {
+        return Ok(Vec::new());
+    }
+    let items = build_batch_items(events);
+    let results = client.run(&items, max_polls, sleep).await?;
+    Ok(parse_batch_classification(&results))
+}
+
+/// A [`Classifier`] that returns a *precomputed* classification (built by [`classify_via_batch`] in
+/// an async context) keyed by event id. This is the bridge that keeps the sync cycle sync: the
+/// async Batch call happens first, its result is wrapped here, and Consolidation reads it like any
+/// classifier — no runtime `block_on` inside the sync job.
+pub struct PrecomputedClassifier {
+    by_event: std::collections::HashMap<i64, Vec<Candidate>>,
+}
+
+impl PrecomputedClassifier {
+    pub fn new(classified: Vec<(i64, Vec<Candidate>)>) -> Self {
+        Self { by_event: classified.into_iter().collect() }
+    }
+}
+
+impl Classifier for PrecomputedClassifier {
+    fn classify(&self, events: &[shogun_memory::event_log::EventText]) -> Vec<(i64, Vec<Candidate>)> {
+        events
+            .iter()
+            .filter_map(|e| self.by_event.get(&e.id).map(|c| (e.id, c.clone())))
+            .collect()
+    }
 }
 
 /// Parse Batch results into per-event candidates. Each succeeded result's text is expected to be a
@@ -308,7 +374,7 @@ mod tests {
     }
 
     #[test]
-    fn build_batch_items_maps_id_and_content() {
+    fn build_batch_items_maps_id_and_wraps_content_in_the_prompt() {
         let events = vec![
             EventText { id: 7, content: "hello".into() },
             EventText { id: 9, content: "world".into() },
@@ -317,7 +383,83 @@ mod tests {
         assert_eq!(items.len(), 2);
         assert_eq!(items[0].custom_id, "7");
         assert_eq!(items[0].purpose, "consolidation");
-        assert_eq!(items[1].chunk, "world");
+        // chunk is the classification prompt wrapping the event text
+        assert!(items[1].chunk.contains("world"));
+        assert!(items[1].chunk.contains("commitments"), "prompt asks for the JSON contract");
+    }
+
+    #[test]
+    fn consolidation_prompt_names_the_contract_fields() {
+        let p = consolidation_prompt("some text");
+        for needle in ["commitments", "open_loops", "direction", "mine", "theirs", "some text"] {
+            assert!(p.contains(needle), "prompt missing {needle}");
+        }
+    }
+
+    #[tokio::test]
+    async fn classify_via_batch_runs_the_lane_and_parses_candidates() {
+        use crate::llm::anthropic::{AnthropicBatchClient, AnthropicConfig};
+        use crate::llm::transport::{HttpResponse, MockTransport};
+        use crate::llm::{SelectKkKey, Secret};
+
+        // submit(ended) → results(JSONL with the classification JSON for event 42)
+        let transport = MockTransport::new([
+            HttpResponse { status: 200, body: r#"{"id":"b","processing_status":"ended"}"#.into() },
+            HttpResponse {
+                status: 200,
+                body: r#"{"custom_id":"42","result":{"type":"succeeded","message":{"content":[{"type":"text","text":"{\"commitments\":[{\"direction\":\"mine\",\"description\":\"send the deck\"}],\"open_loops\":[]}"}]}}}"#.into(),
+            },
+        ]);
+        let client = AnthropicBatchClient::new(
+            transport,
+            crate::llm::traceability::RecordingSink::new(),
+            SelectKkKey::new(Secret::new("kk-123456")),
+            AnthropicConfig::new("claude-x"),
+        );
+        let events = vec![EventText { id: 42, content: "I promised the deck".into() }];
+        let classified = classify_via_batch(&client, &events, 3, || async {}).await.unwrap();
+        assert_eq!(classified.len(), 1);
+        let (id, cands) = &classified[0];
+        assert_eq!(*id, 42);
+        assert!(matches!(
+            &cands[0],
+            Candidate::Commitment { direction: shogun_memory::state::CommitmentDirection::Mine, .. }
+        ));
+        assert_eq!(cands[0].confidence(), BATCH_CONFIDENCE);
+    }
+
+    #[tokio::test]
+    async fn classify_via_batch_empty_events_makes_no_call() {
+        use crate::llm::anthropic::{AnthropicBatchClient, AnthropicConfig};
+        use crate::llm::transport::MockTransport;
+        use crate::llm::{SelectKkKey, Secret};
+        // no responses queued — if it tried to call, it would panic/err; empty input must skip.
+        let client = AnthropicBatchClient::new(
+            MockTransport::new([]),
+            crate::llm::traceability::RecordingSink::new(),
+            SelectKkKey::new(Secret::new("kk-123456")),
+            AnthropicConfig::new("claude-x"),
+        );
+        let out = classify_via_batch(&client, &[], 3, || async {}).await.unwrap();
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn precomputed_classifier_returns_by_event_id() {
+        let classified = vec![(
+            7i64,
+            vec![Candidate::Commitment {
+                direction: shogun_memory::state::CommitmentDirection::Mine,
+                description: "x".into(),
+                confidence: BATCH_CONFIDENCE,
+            }],
+        )];
+        let pc = PrecomputedClassifier::new(classified);
+        // an event present in the precomputed map yields its candidates; an absent one yields nothing
+        let present = pc.classify(&[EventText { id: 7, content: "ignored".into() }]);
+        assert_eq!(present.len(), 1);
+        let absent = pc.classify(&[EventText { id: 99, content: "ignored".into() }]);
+        assert!(absent.is_empty());
     }
 
     #[test]
