@@ -80,8 +80,9 @@ pub fn delete_all(conn: &mut Connection) -> Result<DeleteReport, rusqlite::Error
     let open_loops = tx.execute("DELETE FROM open_loops", [])?;
     let people = tx.execute("DELETE FROM people", [])?;
     let projects = tx.execute("DELETE FROM projects", [])?;
-    // embeddings (no FK) + the event log (its AD trigger clears event_fts)
+    // embeddings (Warm vec0 + Cold int8) then the event log (its AD trigger clears event_fts)
     tx.execute("DELETE FROM event_vec", [])?;
+    tx.execute("DELETE FROM cold_embeddings", [])?;
     let events = tx.execute("DELETE FROM event_log", [])?;
     let traceability = tx.execute("DELETE FROM traceability_log", [])?;
     tx.execute("DELETE FROM job_runs", [])?;
@@ -147,7 +148,7 @@ mod tests {
         seed(&mut conn);
         let json = export_json(&conn).unwrap();
         let v: Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(v["schema_version"], 3);
+        assert_eq!(v["schema_version"], 4);
         assert_eq!(v["event_log"].as_array().unwrap().len(), 1);
         assert_eq!(v["event_log"][0]["content"], "Alice asked for the quarterly report");
         assert_eq!(v["people"][0]["display_name"], "Alice");
@@ -169,7 +170,7 @@ mod tests {
             assert_eq!(n, 0, "{table} should be empty after delete_all");
         }
         // ...but the schema (and version) survives, so the app keeps working
-        assert_eq!(crate::schema_version(&conn).unwrap(), Some(3));
+        assert_eq!(crate::schema_version(&conn).unwrap(), Some(4));
         // a fresh insert still works
         seed(&mut conn);
         let n: i64 = conn.query_row("SELECT count(*) FROM people", [], |r| r.get(0)).unwrap();

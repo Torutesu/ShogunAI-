@@ -56,6 +56,23 @@ pub fn delete(conn: &Connection, event_id: i64) -> Result<(), rusqlite::Error> {
     Ok(())
 }
 
+/// Unpack a little-endian f32 byte blob back into a vector.
+fn from_blob(bytes: &[u8]) -> Vec<f32> {
+    bytes
+        .chunks_exact(4)
+        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect()
+}
+
+/// Read back the stored f32 embedding for `event_id` (used by Cold demotion, which re-quantizes it
+/// to int8). `None` if the event has no Warm embedding.
+pub fn get(conn: &Connection, event_id: i64) -> Result<Option<Vec<f32>>, rusqlite::Error> {
+    let blob: Option<Vec<u8>> = conn
+        .query_row("SELECT embedding FROM event_vec WHERE rowid = ?1", params![event_id], |r| r.get(0))
+        .ok();
+    Ok(blob.map(|b| from_blob(&b)))
+}
+
 /// Number of stored embeddings.
 pub fn count(conn: &Connection) -> Result<i64, rusqlite::Error> {
     conn.query_row("SELECT count(*) FROM event_vec", [], |r| r.get(0))
