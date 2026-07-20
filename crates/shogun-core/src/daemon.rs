@@ -21,6 +21,7 @@ use shogun_fusion::brief::{assemble_brief, assemble_degraded, CalendarLine, Comm
 use shogun_fusion::assemble::ActionCandidate;
 
 use crate::db_sink::DbTraceabilitySink;
+use crate::dreamcycle::plan::{remaining, CycleKind, JobKind, JobRun, JobState};
 
 /// The shared connection handle. `Connection` is `Send` but not `Sync`, so it lives behind a
 /// `Mutex`; the `Arc` lets every daemon component share the one handle.
@@ -155,6 +156,108 @@ impl Db {
     pub fn local_morning_brief(&self, calendar: Vec<CalendarLine>, now_ms: i64) -> MorningBrief {
         assemble_degraded(calendar, &self.commitments_due(now_ms))
     }
+
+    // -------------------------------------------------------------- Dream Cycle job ledger (FR-DC-04)
+    // Persist each job's state so a killed cycle resumes by skipping the `done` jobs. The plan
+    // vocabulary (JobKind/JobState) is shogun-core's; storage keeps strings, mapped here.
+
+    /// Record a job's state for a cycle (upsert on `(cycle_id, kind)`). Returns false on a write
+    /// failure so the caller can react. `input_from_ts..input_to_ts` is the range the job consumed.
+    pub fn record_job(
+        &self,
+        cycle_id: &str,
+        kind: JobKind,
+        state: JobState,
+        input_from_ts: i64,
+        input_to_ts: i64,
+    ) -> bool {
+        let now = self.now_ms();
+        self.conn
+            .lock()
+            .ok()
+            .map(|c| {
+                shogun_memory::jobs::upsert(
+                    &c,
+                    cycle_id,
+                    job_kind_str(kind),
+                    job_state_str(state),
+                    input_from_ts,
+                    input_to_ts,
+                    now,
+                )
+                .is_ok()
+            })
+            .unwrap_or(false)
+    }
+
+    /// The persisted job runs for a cycle, as [`JobRun`]s (unrecognised rows are skipped).
+    pub fn cycle_runs(&self, cycle_id: &str) -> Vec<JobRun> {
+        let rows = self
+            .conn
+            .lock()
+            .ok()
+            .and_then(|c| shogun_memory::jobs::list_by_cycle(&c, cycle_id).ok())
+            .unwrap_or_default();
+        rows.into_iter()
+            .filter_map(|r| {
+                Some(JobRun {
+                    kind: parse_job_kind(&r.kind)?,
+                    state: parse_job_state(&r.state)?,
+                    input_from_ts: r.input_from_ts,
+                    input_to_ts: r.input_to_ts,
+                })
+            })
+            .collect()
+    }
+
+    /// The jobs still to run for `cycle`, given what's persisted (FR-DC-04 resume). A killed cycle
+    /// resumes here by skipping the jobs already `done`.
+    pub fn resume(&self, cycle_id: &str, cycle: CycleKind) -> Vec<JobKind> {
+        remaining(cycle, &self.cycle_runs(cycle_id))
+    }
+}
+
+/// Map a [`JobKind`] to its stored string.
+fn job_kind_str(kind: JobKind) -> &'static str {
+    match kind {
+        JobKind::Consolidation => "consolidation",
+        JobKind::Compression => "compression",
+        JobKind::StateUpdate => "state_update",
+        JobKind::ConfidenceRecalc => "confidence_recalc",
+        JobKind::ColdDemotion => "cold_demotion",
+        JobKind::MorningBrief => "morning_brief",
+    }
+}
+
+fn parse_job_kind(s: &str) -> Option<JobKind> {
+    Some(match s {
+        "consolidation" => JobKind::Consolidation,
+        "compression" => JobKind::Compression,
+        "state_update" => JobKind::StateUpdate,
+        "confidence_recalc" => JobKind::ConfidenceRecalc,
+        "cold_demotion" => JobKind::ColdDemotion,
+        "morning_brief" => JobKind::MorningBrief,
+        _ => return None,
+    })
+}
+
+fn job_state_str(state: JobState) -> &'static str {
+    match state {
+        JobState::Pending => "pending",
+        JobState::Running => "running",
+        JobState::Done => "done",
+        JobState::Failed => "failed",
+    }
+}
+
+fn parse_job_state(s: &str) -> Option<JobState> {
+    Some(match s {
+        "pending" => JobState::Pending,
+        "running" => JobState::Running,
+        "done" => JobState::Done,
+        "failed" => JobState::Failed,
+        _ => return None,
+    })
 }
 
 #[cfg(test)]
@@ -272,5 +375,35 @@ mod tests {
         assert!(brief.degraded);
         assert_eq!(brief.commitments_due.len(), 1);
         assert_eq!(brief.commitments_due[0].text, "overdue one");
+    }
+
+    #[test]
+    fn dream_cycle_resume_skips_done_jobs_from_the_db() {
+        let db = Db::open_in_memory(clock(1)).unwrap();
+        let cycle = "20260720";
+        // first two jobs completed, the third was interrupted mid-run
+        assert!(db.record_job(cycle, JobKind::Consolidation, JobState::Done, 0, 100));
+        assert!(db.record_job(cycle, JobKind::Compression, JobState::Done, 0, 100));
+        assert!(db.record_job(cycle, JobKind::StateUpdate, JobState::Running, 0, 100));
+
+        // resume the full cycle: done jobs are skipped, the running one is rescheduled
+        let todo = db.resume(cycle, CycleKind::Full);
+        assert_eq!(todo.first(), Some(&JobKind::StateUpdate));
+        assert_eq!(todo.len(), 4); // StateUpdate, ConfidenceRecalc, ColdDemotion, MorningBrief
+        assert!(!todo.contains(&JobKind::Consolidation));
+    }
+
+    #[test]
+    fn record_job_upsert_advances_state_for_resume() {
+        let db = Db::open_in_memory(clock(1)).unwrap();
+        let cycle = "night";
+        db.record_job(cycle, JobKind::Consolidation, JobState::Running, 0, 100);
+        // still to-do while running
+        assert!(db.resume(cycle, CycleKind::Full).contains(&JobKind::Consolidation));
+        // mark done → dropped from the resume set
+        db.record_job(cycle, JobKind::Consolidation, JobState::Done, 0, 100);
+        assert!(!db.resume(cycle, CycleKind::Full).contains(&JobKind::Consolidation));
+        // one row, not two (idempotent upsert)
+        assert_eq!(db.cycle_runs(cycle).len(), 1);
     }
 }
