@@ -140,6 +140,56 @@ pub fn status_code(routed: &Routed) -> u16 {
     }
 }
 
+/// The stable wire name of a tool (matches the CLI's names).
+fn tool_name(tool: Tool) -> &'static str {
+    match tool {
+        Tool::MemorySearch => "memory.search",
+        Tool::MemoryGetContext => "memory.get_context",
+        Tool::StatePeopleList => "state.people.list",
+        Tool::StatePeopleGet => "state.people.get",
+        Tool::StateProjectsList => "state.projects.list",
+        Tool::StateProjectsGet => "state.projects.get",
+        Tool::StateCommitmentsList => "state.commitments.list",
+        Tool::StateCommitmentsGet => "state.commitments.get",
+        Tool::StateOpenLoopsList => "state.open_loops.list",
+        Tool::StateOpenLoopsGet => "state.open_loops.get",
+        Tool::MemoryAppendNote => "memory.append_note",
+        Tool::StateProposeUpdate => "state.propose_update",
+        Tool::ActionsExecute => "actions.execute",
+    }
+}
+
+fn level_label(level: Level) -> &'static str {
+    match level {
+        Level::L1 => "L1",
+        Level::L2 => "L2",
+        Level::L3 => "L3",
+    }
+}
+
+/// The JSON body for a routing decision. Tool responses stub the data (`results: []`) until the
+/// server's backend is wired; the auth/routing envelope is real. Hand-built JSON (no serde dep).
+pub fn body_for(routed: &Routed) -> String {
+    match routed {
+        Routed::Unauthorized => r#"{"error":"unauthorized"}"#.to_string(),
+        Routed::NotFound => r#"{"error":"not_found"}"#.to_string(),
+        Routed::MethodNotAllowed => r#"{"error":"method_not_allowed"}"#.to_string(),
+        Routed::Status => r#"{"status":"ok","service":"shogun-memory-api"}"#.to_string(),
+        Routed::Read { tool } => format!(r#"{{"tool":"{}","results":[]}}"#, tool_name(*tool)),
+        Routed::Write { tool, level } => {
+            format!(r#"{{"tool":"{}","level":"{}","accepted":true}}"#, tool_name(*tool), level_label(*level))
+        }
+        Routed::Action => r#"{"tool":"actions.execute","status":"routed"}"#.to_string(),
+    }
+}
+
+/// Route + render: the full pure request handler. The server calls this and writes `(status, body)`
+/// to the socket. `body` is `application/json`.
+pub fn respond(req: &RestRequest, tokens: &TokenRegistry) -> (u16, String) {
+    let routed = route(req, tokens);
+    (status_code(&routed), body_for(&routed))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -223,6 +273,28 @@ mod tests {
             route(&req(Method::Get, "/v1/state/projects/", Some("t")), &reg()),
             Routed::Read { tool: Tool::StateProjectsList }
         );
+    }
+
+    #[test]
+    fn respond_renders_status_and_json_body() {
+        let tokens = reg();
+        // unauthenticated status
+        let (s, b) = respond(&req(Method::Get, "/v1/status", None), &tokens);
+        assert_eq!(s, 200);
+        assert!(b.contains("shogun-memory-api"));
+        // authed read → 200 with tool + empty results
+        let (s, b) = respond(&req(Method::Get, "/v1/memory/search", Some("t")), &tokens);
+        assert_eq!(s, 200);
+        assert!(b.contains("\"tool\":\"memory.search\""));
+        assert!(b.contains("\"results\":[]"));
+        // missing token → 401
+        let (s, b) = respond(&req(Method::Get, "/v1/memory/search", None), &tokens);
+        assert_eq!(s, 401);
+        assert!(b.contains("unauthorized"));
+        // write → 202 with level
+        let (s, b) = respond(&req(Method::Post, "/v1/memory/notes", Some("t")), &tokens);
+        assert_eq!(s, 202);
+        assert!(b.contains("\"level\":\"L1\""));
     }
 
     #[test]

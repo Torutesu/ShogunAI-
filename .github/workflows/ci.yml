@@ -44,6 +44,13 @@ jobs:
         run: |
           cargo clippy -p shogun-core --features db --all-targets
           cargo test -p shogun-core --features db
+      # The REST listener (shogun-mcp feature `server` → axum) is off by default so the pure
+      # routing layer tests without a runtime; verify the axum adapter compiles, lints, and its
+      # over-the-socket tests pass.
+      - name: shogun-mcp REST server (clippy + test)
+        run: |
+          cargo clippy -p shogun-mcp --features server --all-targets
+          cargo test -p shogun-mcp --features server
       - name: test
         run: cargo test --workspace --exclude shogun-desktop-spike
       # Invariant guards (each self-tests its detector, then checks the real tree/source):

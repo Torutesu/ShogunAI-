@@ -16,3 +16,6 @@ pub mod dispatch;
 pub mod memory_api;
 pub mod rest;
 pub mod scope;
+/// The REST listener (feature `server`): a localhost-bound axum adapter over [`rest`].
+#[cfg(feature = "server")]
+pub mod server;

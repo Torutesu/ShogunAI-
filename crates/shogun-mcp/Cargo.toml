@@ -12,11 +12,21 @@ description = "SHOGUN first-layer MCP integration: the per-service permission sc
 # The MCP client transport / OAuth (Keychain) lives in the desktop adapter; the scope policy lives
 # here. One-way dependency: mcp → agents (for the shared L1/L2/L3 Level vocabulary).
 
+[features]
+default = []
+# `server` pulls in the axum listener for the REST face. OFF by default so the pure routing layer
+# (rest::route / rest::respond) tests without a runtime; the daemon enables it. axum is a server
+# framework (inbound), not an HTTP client — it does not violate the FR-TR-03 egress rule.
+server = ["dep:axum", "dep:tokio"]
+
 [dependencies]
 shogun-agents = { path = "../shogun-agents" }
 # The Memory API applies the same confidence rule as UI reads (FR-API-06); reuse the single
 # implementation in shogun-fusion rather than re-deriving the bands. One-way: mcp → fusion.
 shogun-fusion = { path = "../shogun-fusion" }
+# REST server (feature `server`): localhost-bound axum listener over the pure routing layer.
+axum = { version = "0.8", optional = true }
+tokio = { version = "1", optional = true, features = ["rt-multi-thread", "net", "macros", "io-util"] }
 
 [lints]
 workspace = true
