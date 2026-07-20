@@ -56,8 +56,25 @@ mod mac {
             start.elapsed().as_millis() as u64 > WALK_BUDGET_MS
         });
 
-        if let CaptureOutcome::Captured { text, .. } = &outcome {
-            db.ingest_capture(Some(&front.bundle_id), title.as_deref(), text, dwell_ms);
+        // Observability for on-device verification (FR-CAP-05 exclusion / FR-CAP-03 collapse).
+        // Never logs captured text (only its length) — telemetry must not contain user content.
+        match &outcome {
+            CaptureOutcome::Excluded(reason) => {
+                eprintln!("[capture] excluded {} ({:?}) — no walk", front.bundle_id, reason);
+            }
+            CaptureOutcome::Empty => {}
+            CaptureOutcome::Captured { text, .. } => {
+                match db.ingest_capture(Some(&front.bundle_id), title.as_deref(), text, dwell_ms) {
+                    Some((id, touched, cands)) => eprintln!(
+                        "[capture] {} {} bytes → event {id} {} (+{} candidate(s))",
+                        front.bundle_id,
+                        text.len(),
+                        if touched { "touched" } else { "new" },
+                        cands.len(),
+                    ),
+                    None => eprintln!("[capture] {} — DB write skipped", front.bundle_id),
+                }
+            }
         }
         Some(outcome)
     }
