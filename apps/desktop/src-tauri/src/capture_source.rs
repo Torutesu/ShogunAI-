@@ -11,7 +11,11 @@
 //! layered on later to reduce latency without changing this composition.
 //!
 //! Invariant 2: AX text only — no screenshot, no image, ever.
-#![allow(dead_code)]
+//!
+//! `capture_once` is part of the public surface (the main-thread-timer driver alternative in the
+//! runbook uses it directly); it is `allow(unused_imports)` because the default driver only calls
+//! `spawn_capture_poller`.
+#![allow(dead_code, unused_imports)]
 
 #[cfg(target_os = "macos")]
 pub use mac::{capture_once, spawn_capture_poller};

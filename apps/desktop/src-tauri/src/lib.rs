@@ -161,6 +161,7 @@ fn memory_db(app: &tauri::App) -> Result<shogun_core::daemon::Db, String> {
     let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let path = dir.join("memory.db");
+    eprintln!("[spike] memory DB: {}", path.display());
     let clock = std::sync::Arc::new(|| {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
