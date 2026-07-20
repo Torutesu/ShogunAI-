@@ -11,6 +11,8 @@
 //! - [`capture`] — the context-capture policy: the bounded accessibility-tree walk.
 //! - [`metrics`] — the always-on SLO histograms (NFR-SLO-00): fixed-bucket latency/percent
 //!   tracking with pass/fail against each SLO budget.
+//! - [`llm`] — the two model-access lanes (Batch / Agent) with compile-time key separation
+//!   (invariant 5) and secret redaction.
 //! - [`bus`] — the internal event bus (§5.3, AR-06/07): a non-blocking broadcast with
 //!   backpressure-by-drop and a drop metric.
 //!
@@ -22,5 +24,6 @@
 
 pub mod bus;
 pub mod capture;
+pub mod llm;
 pub mod metrics;
 pub mod notch;
