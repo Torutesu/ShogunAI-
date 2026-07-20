@@ -1,0 +1,17 @@
+[package]
+name = "shogun-fusion"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "SHOGUN Context Fusion: f(state, screen_ctx, intent) → actions, with the confidence-band prompt rules."
+
+# Platform-independent so the fusion rules (confidence banding, prompt assembly) are
+# unit-testable on Linux. The one place the confidence→prompt-treatment rule is implemented
+# (FR-ST-20): no agent re-implements it.
+
+[dependencies]
+
+[lints]
+workspace = true

@@ -2892,6 +2892,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "shogun-fusion"
+version = "0.1.0"
+
+[[package]]
 name = "shogun-memory"
 version = "0.1.0"
 dependencies = [
