@@ -40,6 +40,13 @@ jobs:
         run: cargo clippy -p shogun-core --features net --all-targets
       - name: test
         run: cargo test --workspace --exclude shogun-desktop-spike
+      # FR-TR-03: only the single traced egress (shogun-core) may depend on an HTTP client, so no
+      # component can send off-device without a traceability record. Self-test the detector, then
+      # check the real dependency tree.
+      - name: HTTP egress guard (FR-TR-03)
+        run: |
+          python3 scripts/check-http-egress.py --self-test
+          python3 scripts/check-http-egress.py
       - name: release build (SLO code path)
         run: cargo build -p spike-harness --release
 
