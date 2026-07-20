@@ -26,6 +26,10 @@
 
 pub mod bus;
 pub mod capture;
+/// DB-backed traceability sink — the daemon's `TraceabilitySink` → `traceability_log` adapter
+/// (feature `db`; the first shogun-core → shogun-memory edge).
+#[cfg(feature = "db")]
+pub mod db_sink;
 pub mod dreamcycle;
 pub mod llm;
 pub mod metrics;

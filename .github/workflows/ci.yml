@@ -38,6 +38,12 @@ jobs:
       # the line above stays reqwest-free; verify it compiles+lints on its own.
       - name: clippy shogun-core net transport
         run: cargo clippy -p shogun-core --features net --all-targets
+      # The DB-backed traceability sink (feature `db` → shogun-memory/rusqlite) is off by default
+      # so the line above stays rusqlite-free; verify it compiles, lints, and its tests pass.
+      - name: shogun-core db sink (clippy + test)
+        run: |
+          cargo clippy -p shogun-core --features db --all-targets
+          cargo test -p shogun-core --features db
       - name: test
         run: cargo test --workspace --exclude shogun-desktop-spike
       # Invariant guards (each self-tests its detector, then checks the real tree/source):
