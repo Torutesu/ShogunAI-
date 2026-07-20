@@ -12,7 +12,7 @@
 pub use shogun_core::capture::walk_policy::{walk, AxNode, ContextCache, Limits, Role, WalkResult};
 
 #[cfg(target_os = "macos")]
-pub use mac::{ax_call_count, ax_trusted, snapshot};
+pub use mac::{ax_call_count, ax_trusted, focused_window, snapshot, AxElement};
 
 #[cfg(target_os = "macos")]
 mod mac {
@@ -150,6 +150,16 @@ mod mac {
         }
     }
 
+    impl AxElement {
+        /// The window/element title (kAXTitleAttribute), best-effort. Used by the capture source
+        /// for the exclusion gate (private-browsing title markers, FR-CAP-05) and the event's
+        /// `window_title`.
+        pub fn title(&self) -> Option<String> {
+            // SAFETY: self.0 is a live element.
+            unsafe { copy_string(self.0, kAXTitleAttribute) }
+        }
+    }
+
     impl AxNode for AxElement {
         fn role(&self) -> Role {
             // SAFETY: self.0 is a live element.
@@ -181,9 +191,11 @@ mod mac {
         unsafe { AXIsProcessTrustedWithOptions(opts.as_concrete_TypeRef()) }
     }
 
-    /// Snapshot the focused window of `pid` into a WalkResult, bounded by `budget_ms`
-    /// (spec §3.10.2). Sets a 100ms per-message AX timeout.
-    pub fn snapshot(pid: i32, budget_ms: u64) -> Option<WalkResult> {
+    /// The focused-window element of `pid` (create rule → owned `AxElement`), with the 100ms
+    /// per-message timeout set on both the app and window elements. `None` if the app has no
+    /// focused window. Shared by the notch context cache ([`snapshot`]) and the memory capture
+    /// source (`capture_source`).
+    pub fn focused_window(pid: i32) -> Option<AxElement> {
         // SAFETY: create the app element (+1 create rule); AxElement owns it.
         let app = unsafe { AXUIElementCreateApplication(pid) };
         if app.is_null() {
@@ -192,7 +204,14 @@ mod mac {
         let _app_owned = AxElement(app);
         // SAFETY: valid element; 0.1s messaging timeout.
         unsafe { AXUIElementSetMessagingTimeout(app, 0.1) };
-        let focused = unsafe { copy_element(app, kAXFocusedWindowAttribute) }?;
+        // SAFETY: valid app element.
+        unsafe { copy_element(app, kAXFocusedWindowAttribute) }
+    }
+
+    /// Snapshot the focused window of `pid` into a WalkResult, bounded by `budget_ms`
+    /// (spec §3.10.2). Sets a 100ms per-message AX timeout.
+    pub fn snapshot(pid: i32, budget_ms: u64) -> Option<WalkResult> {
+        let focused = focused_window(pid)?;
         let start = std::time::Instant::now();
         Some(walk(&focused, Limits::default(), || {
             start.elapsed().as_millis() as u64 > budget_ms

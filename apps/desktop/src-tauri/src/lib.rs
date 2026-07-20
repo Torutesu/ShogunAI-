@@ -7,6 +7,7 @@
 //! (the "no collect-on-press" proof, spec §3.10.3).
 
 mod axcache;
+mod capture_source;
 mod display;
 mod geometry;
 mod hover;
@@ -138,4 +139,33 @@ fn setup_macos(app: &tauri::App) {
             );
         }
     }
+
+    // WP2.2: start the memory capture source. Open the on-device DB under the app-data dir and
+    // poll the focus into memory (exclusion → walk → collapse → extract). AX text only (invariant
+    // 2). If the DB can't be opened the daemon simply doesn't capture — the shell keeps running.
+    match memory_db(app) {
+        Ok(db) => {
+            let policy = shogun_core::capture::exclusion::ExclusionPolicy::new();
+            let _ = capture_source::spawn_capture_poller(db, policy, None);
+            eprintln!("[spike] capture source started (poll {}ms)", capture_source::DEFAULT_POLL_MS);
+        }
+        Err(e) => eprintln!("[spike] memory DB unavailable — capture source not started: {e}"),
+    }
+}
+
+/// Open (creating if needed) the on-device memory DB under the app-data dir, with a real
+/// wall-clock. macOS-only; the DB is owned by the Rust core (CLAUDE.md invariant 1).
+#[cfg(target_os = "macos")]
+fn memory_db(app: &tauri::App) -> Result<shogun_core::daemon::Db, String> {
+    use tauri::Manager;
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = dir.join("memory.db");
+    let clock = std::sync::Arc::new(|| {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0)
+    });
+    shogun_core::daemon::Db::open(path, clock).map_err(|e| e.to_string())
 }

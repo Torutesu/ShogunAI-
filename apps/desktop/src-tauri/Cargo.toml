@@ -28,6 +28,9 @@ shogun-core = { path = "../../../crates/shogun-core" }
 # (objc2-app-kit / objc2-foundation are already in the tree via tauri/wry). Only builds on
 # macOS; excluded from the Linux resolution/build graph by the target cfg.
 [target.'cfg(target_os = "macos")'.dependencies]
+# The memory DB is only wired in on-device (capture_source persists through it). Enabling `db`
+# here (not in the base [dependencies]) keeps rusqlite out of the Linux resolution graph.
+shogun-core = { path = "../../../crates/shogun-core", features = ["db"] }
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", features = [
     "NSResponder", "NSWindow", "NSView", "NSPanel", "NSScreen",
