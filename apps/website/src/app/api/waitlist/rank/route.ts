@@ -1,5 +1,7 @@
 import { findByStatusToken } from '@/db/queries';
 import { fail } from '@/lib/http';
+import { rateLimit } from '@/lib/rate-limit';
+import { clientIp } from '@/lib/waitlist-auth';
 import { isValidStatusToken } from '@/lib/referral';
 import {
   TOP_REFERRER_COUNT,
@@ -19,6 +21,9 @@ export const runtime = 'nodejs';
  * No email / IP / handle leaves here. noindex.
  */
 export async function GET(req: Request) {
+  const rl = await rateLimit('rank', clientIp(req), { limit: 60, windowSec: 60 });
+  if (!rl.allowed) return fail('rate_limited');
+
   const code = new URL(req.url).searchParams.get('code') ?? '';
   if (!isValidStatusToken(code)) return fail('bad_request');
 

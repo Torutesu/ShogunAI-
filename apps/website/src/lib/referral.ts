@@ -53,12 +53,27 @@ export function maskEmail(email: string): string {
   return `${visible}***@***${tld ? '.' + tld : ''}`;
 }
 
-// --- Free-text guard: trims, rejects empties/non-strings, caps length. ---
+// --- Free-text guard: trims, strips control chars, caps length. ---
 export const MAX_ANSWER_LENGTH = 1000;
 export function sanitizeAnswer(value: unknown): string | null {
   if (typeof value !== 'string') return null;
-  const trimmed = value.trim();
+  // Control characters (incl. NUL, CR/LF, ESC) have no place in form answers
+  // and can corrupt logs/CSV exports downstream.
+  // eslint-disable-next-line no-control-regex
+  const trimmed = value.replace(/[\u0000-\u001f\u007f]/g, ' ').trim();
   return trimmed ? trimmed.slice(0, MAX_ANSWER_LENGTH) : null;
+}
+
+/**
+ * Public-display name guard (leaderboard). React escapes on render, but the
+ * nickname also flows into JSON consumed by third parties — strip markup
+ * delimiters outright as defense in depth.
+ */
+export function sanitizeNickname(value: unknown): string | null {
+  const s = sanitizeAnswer(value);
+  if (!s) return null;
+  const cleaned = s.replace(/[<>]/g, '').trim();
+  return cleaned ? cleaned.slice(0, 40) : null;
 }
 
 // --- Strict email validation (spec §6.3). Rejects markup/formula/header chars. ---

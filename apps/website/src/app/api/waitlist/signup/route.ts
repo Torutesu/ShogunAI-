@@ -37,7 +37,12 @@ export async function POST(req: Request) {
   const ref = typeof body.ref === 'string' ? body.ref : undefined;
 
   try {
-    const { row } = await addParticipant(body.email, ref, hashIp(ip), body.xHandle, body.plan);
+    const { row, duplicate } = await addParticipant(body.email, ref, hashIp(ip), body.xHandle, body.plan);
+    // SECURITY: never hand out the private status token for an EXISTING row —
+    // otherwise anyone who knows a victim's email could take over their entry
+    // (rewrite answers/nickname/handle). Only the creator of a brand-new row
+    // gets the URL; returning users must reuse their original link.
+    if (duplicate) return ok({ refCode: null, statusUrl: null, existing: true });
     return ok({ refCode: row.refCode, statusUrl: statusUrl(APP_ORIGIN, row.statusToken!) });
   } catch (e) {
     console.error('signup error:', e);

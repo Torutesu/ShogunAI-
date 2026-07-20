@@ -89,6 +89,19 @@ async function main() {
   const written2 = await computeSocialAwards();
   ok('social worker is idempotent on re-run', written2 === 0);
 
+  // --- 3b. Anti-farming: x_handle is SET-ONCE; quote award is once per entry ---
+  // A tries to switch its handle to 'dave' (another quoter) — must be ignored.
+  await submitProfile(a.row.statusToken!, { xHandle: 'dave' });
+  const aAfter = await (await import('../src/db/queries.ts')).findByEmail('a@ex.com');
+  ok('x_handle cannot be changed once set (no handle-cycling)', aAfter?.xHandle === 'alice');
+
+  // Even with a fresh quote snapshot under a different tweet id, A gets no 2nd +30.
+  await ingestQuotes(X_CONFIG.launchTweetId || 'launch', [
+    { authorHandle: 'alice', quoteTweetId: 'q9', text: 'still love this thing #ad' },
+  ]);
+  await computeSocialAwards();
+  ok('quote award is capped at one per entry', (await pointsBreakdown(a.row.id)).quote === 30);
+
   // --- 4. Ranking: SUM(points) desc, join_position asc ---
   const rankA = await rankOf(a.row.id); // 250 → #1
   ok('A is rank #1', rankA?.rank === 1);

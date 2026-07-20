@@ -166,7 +166,11 @@ export async function computeSocialAwards(): Promise<number> {
 
     const q = quotes.get(handle);
     if (q && q.text.trim().length >= MIN_COMMENT_LEN && AD_DISCLOSURE.test(q.text)) {
-      if (await award(e.id, 'quote', q.quoteTweetId)) written++;
+      // sourceRef intentionally '' → the +30 quote award is once per ENTRY
+      // (spec: one quote action), never once per tweet — otherwise cycling
+      // handles/quotes could farm +30 repeatedly. Provenance stays in the
+      // x_quote_snapshot table.
+      if (await award(e.id, 'quote')) written++;
     }
   }
   return written;

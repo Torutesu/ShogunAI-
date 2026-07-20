@@ -14,6 +14,7 @@ import {
   generateStatusToken,
   isValidRefCode,
   sanitizeAnswer,
+  sanitizeNickname,
 } from './referral';
 import { award, normalizeHandle } from './points';
 
@@ -91,10 +92,11 @@ export async function submitProfile(
   const row = await findByStatusToken(statusToken);
   if (!row) return null;
 
-  // Optional X handle (only holders earn social points). Set once; ignore a
-  // unique clash so a taken handle never fails the profile save.
+  // Optional X handle (only holders earn social points). STRICTLY set-once:
+  // allowing changes would let an entry cycle through other people's handles
+  // to harvest their social points. A unique clash never fails the save.
   const handle = normalizeHandle(answers.xHandle);
-  if (handle && handle !== row.xHandle) {
+  if (handle && !row.xHandle) {
     try {
       await updateParticipant(row.id, { xHandle: handle });
     } catch {
@@ -102,7 +104,7 @@ export async function submitProfile(
     }
   }
 
-  const nickname = sanitizeAnswer(answers.nickname)?.slice(0, 40) ?? null;
+  const nickname = sanitizeNickname(answers.nickname);
   const a1 = sanitizeAnswer(answers.a1);
   const a2 = sanitizeAnswer(answers.a2);
   const a3 = sanitizeAnswer(answers.a3);
@@ -115,13 +117,16 @@ export async function submitProfile(
   const complete = !!(merged.a1 && merged.a2 && merged.a3);
   const justQualified = complete && !row.qualifiedAt; // fires exactly once
 
-  await updateParticipant(row.id, {
+  const patch = {
     ...(nickname && { nickname }),
     ...(a1 && { answer1: a1 }),
     ...(a2 && { answer2: a2 }),
     ...(a3 && { answer3: a3 }),
     ...(justQualified && { qualifiedAt: new Date() }),
-  });
+  };
+  // An empty patch (e.g. a body with no recognized fields) must be a no-op,
+  // not a 500 — drizzle's .set({}) throws.
+  if (Object.keys(patch).length > 0) await updateParticipant(row.id, patch);
 
   // On the one-shot transition to a complete profile:
   //   • the entry earns the +20 form award, and

@@ -6,6 +6,18 @@ import { createHash } from 'node:crypto';
  * salted IP hash for referral-fraud detection. No PII stored in the clear.
  */
 
+// One-time production misconfiguration warnings (module scope = logged once
+// per instance). Neither is fatal — the system degrades safely — but both
+// weaken abuse protection, so make the gap visible in logs.
+if (process.env.NODE_ENV === 'production') {
+  if (!process.env.WAITLIST_IP_SALT) {
+    console.warn('[waitlist] WAITLIST_IP_SALT is not set — IP hashes use the dev salt (crackable offline).');
+  }
+  if (!(process.env.WAITLIST_ALLOWED_ORIGINS ?? '').trim()) {
+    console.warn('[waitlist] WAITLIST_ALLOWED_ORIGINS is not set — signup accepts any Origin.');
+  }
+}
+
 function allowedOrigins(): string[] {
   return (process.env.WAITLIST_ALLOWED_ORIGINS ?? '')
     .split(',')

@@ -1,5 +1,7 @@
 import { findByStatusToken } from '@/db/queries';
 import { fail } from '@/lib/http';
+import { rateLimit } from '@/lib/rate-limit';
+import { clientIp } from '@/lib/waitlist-auth';
 import {
   TOP_REFERRER_COUNT,
   currentTier,
@@ -21,6 +23,9 @@ const APP_ORIGIN = process.env.NEXT_PUBLIC_APP_ORIGIN ?? 'http://localhost:3000'
  * Response minimization (§6.7): NO email / IP / UA. noindex header.
  */
 export async function GET(req: Request) {
+  const rl = await rateLimit('status', clientIp(req), { limit: 60, windowSec: 60 });
+  if (!rl.allowed) return fail('rate_limited');
+
   const code = new URL(req.url).searchParams.get('code') ?? '';
   if (!isValidStatusToken(code)) return fail('bad_request');
 
