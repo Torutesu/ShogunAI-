@@ -111,6 +111,202 @@ pub fn insert_person(
     })
 }
 
+/// Project status (§6.4.3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProjectStatus {
+    Active,
+    Waiting,
+    Paused,
+    Done,
+}
+
+impl ProjectStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ProjectStatus::Active => "active",
+            ProjectStatus::Waiting => "waiting",
+            ProjectStatus::Paused => "paused",
+            ProjectStatus::Done => "done",
+        }
+    }
+}
+
+/// A new project (§6.4.3).
+#[derive(Debug, Clone)]
+pub struct NewProject<'a> {
+    pub name: &'a str,
+    pub status: ProjectStatus,
+    pub summary: Option<&'a str>,
+    pub participants_json: Option<&'a str>,
+    pub sources_json: Option<&'a str>,
+    pub confidence: f64,
+    pub now: i64,
+}
+
+/// Insert a project with provenance (FR-ST-02).
+pub fn insert_project(
+    conn: &mut Connection,
+    project: &NewProject<'_>,
+    provenance: &[Provenance],
+) -> Result<i64, MemoryError> {
+    insert_with_provenance(conn, StateTable::Projects, provenance, |tx| {
+        tx.execute(
+            "INSERT INTO projects
+               (name, status, summary, participants, sources,
+                confidence, created_at, updated_at, last_evidence_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, ?7)",
+            params![
+                project.name,
+                project.status.as_str(),
+                project.summary,
+                project.participants_json,
+                project.sources_json,
+                project.confidence,
+                project.now,
+            ],
+        )?;
+        Ok(tx.last_insert_rowid())
+    })
+}
+
+/// Commitment direction and status (§6.4.4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommitmentDirection {
+    Mine,
+    Theirs,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommitmentStatus {
+    Open,
+    Done,
+    Overdue,
+    Cancelled,
+}
+
+impl CommitmentDirection {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CommitmentDirection::Mine => "mine",
+            CommitmentDirection::Theirs => "theirs",
+        }
+    }
+}
+
+impl CommitmentStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CommitmentStatus::Open => "open",
+            CommitmentStatus::Done => "done",
+            CommitmentStatus::Overdue => "overdue",
+            CommitmentStatus::Cancelled => "cancelled",
+        }
+    }
+}
+
+/// A new commitment (§6.4.4). Only for explicit-promise evidence (FR-ST-11).
+#[derive(Debug, Clone)]
+pub struct NewCommitment<'a> {
+    pub direction: CommitmentDirection,
+    pub counterparty_id: Option<i64>,
+    pub description: &'a str,
+    pub due_at: Option<i64>,
+    pub status: CommitmentStatus,
+    pub project_id: Option<i64>,
+    pub confidence: f64,
+    pub now: i64,
+}
+
+/// Insert a commitment with provenance (FR-ST-02).
+pub fn insert_commitment(
+    conn: &mut Connection,
+    c: &NewCommitment<'_>,
+    provenance: &[Provenance],
+) -> Result<i64, MemoryError> {
+    insert_with_provenance(conn, StateTable::Commitments, provenance, |tx| {
+        tx.execute(
+            "INSERT INTO commitments
+               (direction, counterparty_id, description, due_at, status, project_id,
+                confidence, created_at, updated_at, last_evidence_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, ?8)",
+            params![
+                c.direction.as_str(),
+                c.counterparty_id,
+                c.description,
+                c.due_at,
+                c.status.as_str(),
+                c.project_id,
+                c.confidence,
+                c.now,
+            ],
+        )?;
+        Ok(tx.last_insert_rowid())
+    })
+}
+
+/// Open-loop kind and status (§6.4.5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpenLoopKind {
+    ReplyNeeded,
+    WaitingOnThem,
+    ReviewPending,
+    DecisionPending,
+    FollowUp,
+    Other,
+}
+
+impl OpenLoopKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            OpenLoopKind::ReplyNeeded => "reply_needed",
+            OpenLoopKind::WaitingOnThem => "waiting_on_them",
+            OpenLoopKind::ReviewPending => "review_pending",
+            OpenLoopKind::DecisionPending => "decision_pending",
+            OpenLoopKind::FollowUp => "follow_up",
+            OpenLoopKind::Other => "other",
+        }
+    }
+}
+
+/// A new open loop (§6.4.5). `open` status; close is a later state change with its own
+/// provenance (FR-ST-13).
+#[derive(Debug, Clone)]
+pub struct NewOpenLoop<'a> {
+    pub kind: OpenLoopKind,
+    pub description: &'a str,
+    pub counterparty_id: Option<i64>,
+    pub project_id: Option<i64>,
+    pub opened_at: i64,
+    pub confidence: f64,
+    pub now: i64,
+}
+
+/// Insert an open loop with provenance (FR-ST-02), status `open`.
+pub fn insert_open_loop(
+    conn: &mut Connection,
+    l: &NewOpenLoop<'_>,
+    provenance: &[Provenance],
+) -> Result<i64, MemoryError> {
+    insert_with_provenance(conn, StateTable::OpenLoops, provenance, |tx| {
+        tx.execute(
+            "INSERT INTO open_loops
+               (kind, description, counterparty_id, project_id, opened_at, staleness_days,
+                status, confidence, created_at, updated_at, last_evidence_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, 0, 'open', ?6, ?7, ?7, ?7)",
+            params![
+                l.kind.as_str(),
+                l.description,
+                l.counterparty_id,
+                l.project_id,
+                l.opened_at,
+                l.confidence,
+                l.now,
+            ],
+        )?;
+        Ok(tx.last_insert_rowid())
+    })
+}
+
 /// Count provenance links for a state row (test / diagnostics helper).
 pub fn provenance_count(conn: &Connection, table: StateTable, state_id: i64) -> Result<i64, rusqlite::Error> {
     conn.query_row(
@@ -202,5 +398,97 @@ mod tests {
         assert!(res.is_err());
         let people: i64 = conn.query_row("SELECT count(*) FROM people", [], |r| r.get(0)).unwrap();
         assert_eq!(people, 0);
+    }
+
+    #[test]
+    fn insert_project_with_provenance() {
+        let mut conn = crate::open_in_memory().unwrap();
+        let e = seed_event(&conn, "h1");
+        let p = NewProject {
+            name: "Roadmap",
+            status: ProjectStatus::Active,
+            summary: Some("Q3 planning"),
+            participants_json: None,
+            sources_json: None,
+            confidence: 0.9,
+            now: 100,
+        };
+        let id = insert_project(&mut conn, &p, &[Provenance::new(e)]).unwrap();
+        assert_eq!(provenance_count(&conn, StateTable::Projects, id).unwrap(), 1);
+        let status: String = conn.query_row("SELECT status FROM projects WHERE id=?1", [id], |r| r.get(0)).unwrap();
+        assert_eq!(status, "active");
+    }
+
+    #[test]
+    fn insert_commitment_links_counterparty_and_project() {
+        let mut conn = crate::open_in_memory().unwrap();
+        let e = seed_event(&conn, "h1");
+        let person_id = insert_person(&mut conn, &person("Frank", 0.9), &[Provenance::new(e)]).unwrap();
+        let e2 = seed_event(&conn, "h2");
+        let proj = NewProject {
+            name: "P",
+            status: ProjectStatus::Active,
+            summary: None,
+            participants_json: None,
+            sources_json: None,
+            confidence: 0.9,
+            now: 100,
+        };
+        let project_id = insert_project(&mut conn, &proj, &[Provenance::new(e2)]).unwrap();
+        let e3 = seed_event(&conn, "h3");
+        let c = NewCommitment {
+            direction: CommitmentDirection::Mine,
+            counterparty_id: Some(person_id),
+            description: "Send the report by Friday",
+            due_at: Some(1_700_000_000_000),
+            status: CommitmentStatus::Open,
+            project_id: Some(project_id),
+            confidence: 0.85,
+            now: 100,
+        };
+        let id = insert_commitment(&mut conn, &c, &[Provenance::new(e3)]).unwrap();
+        assert_eq!(provenance_count(&conn, StateTable::Commitments, id).unwrap(), 1);
+    }
+
+    #[test]
+    fn commitment_with_dangling_counterparty_is_rejected() {
+        let mut conn = crate::open_in_memory().unwrap();
+        let e = seed_event(&conn, "h1");
+        let c = NewCommitment {
+            direction: CommitmentDirection::Theirs,
+            counterparty_id: Some(999), // no such person
+            description: "x",
+            due_at: None,
+            status: CommitmentStatus::Open,
+            project_id: None,
+            confidence: 0.8,
+            now: 100,
+        };
+        let res = insert_commitment(&mut conn, &c, &[Provenance::new(e)]);
+        assert!(res.is_err(), "FK to a missing person must reject the commitment");
+        let n: i64 = conn.query_row("SELECT count(*) FROM commitments", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn insert_open_loop_defaults_to_open() {
+        let mut conn = crate::open_in_memory().unwrap();
+        let e = seed_event(&conn, "h1");
+        let l = NewOpenLoop {
+            kind: OpenLoopKind::ReplyNeeded,
+            description: "Reply to Alice",
+            counterparty_id: None,
+            project_id: None,
+            opened_at: 50,
+            confidence: 0.7,
+            now: 100,
+        };
+        let id = insert_open_loop(&mut conn, &l, &[Provenance::new(e)]).unwrap();
+        let (status, kind): (String, String) = conn
+            .query_row("SELECT status, kind FROM open_loops WHERE id=?1", [id], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap();
+        assert_eq!(status, "open");
+        assert_eq!(kind, "reply_needed");
+        assert_eq!(provenance_count(&conn, StateTable::OpenLoops, id).unwrap(), 1);
     }
 }
