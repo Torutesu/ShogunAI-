@@ -149,6 +149,34 @@ export async function distinctQualifiedIpHashes(refCode: string): Promise<number
   return row?.n ?? 0;
 }
 
+/**
+ * Referral-farming suspects: referrers whose qualified invites cluster onto
+ * few distinct signup-IP hashes (many quals, one person). Surfaced in the
+ * admin dashboard so rewards can be reviewed before they're granted — the
+ * points ledger itself stays honest; this is the human gate on top of it.
+ */
+export async function referralFarmingSuspects(
+  minQualified = 3,
+): Promise<Array<{ refCode: string; qualified: number; distinctIps: number }>> {
+  const rows = await db.execute<{ ref_code: string; qualified: number; distinct_ips: number }>(sql`
+    SELECT referred_by AS ref_code,
+           count(*)::int AS qualified,
+           count(DISTINCT ip_hash)::int AS distinct_ips
+    FROM participants
+    WHERE referred_by IS NOT NULL AND qualified_at IS NOT NULL
+    GROUP BY referred_by
+    HAVING count(*) >= ${minQualified}
+       AND count(DISTINCT ip_hash) * 2 <= count(*)
+    ORDER BY count(*) DESC
+    LIMIT 50
+  `);
+  return rows.map((r) => ({
+    refCode: r.ref_code,
+    qualified: Number(r.qualified),
+    distinctIps: Number(r.distinct_ips),
+  }));
+}
+
 /** Rank on the leaderboard (1-based) or null if not yet on the board. */
 export async function leaderboardRank(refCode: string): Promise<number | null> {
   const rows = await db.execute<{ rank: number }>(sql`

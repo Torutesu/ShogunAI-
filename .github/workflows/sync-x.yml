@@ -14,7 +14,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Trigger X sync
+        env:
+          ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+          WORKER_URL: ${{ secrets.WORKER_URL }}
         run: |
+          # Token goes in a header, not the URL — a query-string secret can be
+          # captured by edge/CDN access logs. -f fails the job on non-2xx.
           curl -fsS -X POST \
-            "${{ secrets.WORKER_URL }}/api/admin/sync-x?key=${{ secrets.ADMIN_TOKEN }}" \
+            -H "x-admin-token: ${ADMIN_TOKEN}" \
+            "${WORKER_URL}/api/admin/sync-x" \
             | tee /dev/stderr

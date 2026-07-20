@@ -123,6 +123,16 @@ export function nextTierFor(points: number) {
  * Social awards from the latest snapshots (spec §3.1 batch-pull design).
  * Runs over every entry that submitted an x_handle. Idempotent.
  * Returns the number of new awards written.
+ *
+ * KNOWN LIMITATION (self-attested handle): x_handle is not ownership-verified,
+ * so these +10/+10/+30 awards are ADVISORY until a reward is actually granted.
+ * Two consequences the operator must gate on manually (or via future X OAuth):
+ *   1. A user can claim a big account that already follows/quoted and collect
+ *      points they didn't earn.
+ *   2. Because x_handle is unique + set-once, squatting someone's handle blocks
+ *      the real owner from ever earning their social points.
+ * The unique constraint + set-once rule cap the blast radius (one claim each,
+ * no cycling); true attribution requires OAuth, tracked as a product decision.
  */
 export async function computeSocialAwards(): Promise<number> {
   const entries = await db

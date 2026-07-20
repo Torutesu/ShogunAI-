@@ -6,7 +6,7 @@ import { NextResponse } from 'next/server';
 
 export const runtime = 'nodejs';
 
-/** GET /api/admin/stats?key=<ADMIN_TOKEN> — internal metrics. noindex. */
+/** GET /api/admin/stats — internal metrics. Auth: x-admin-token header. noindex. */
 export async function GET(req: Request) {
   if (!isAdmin(req)) return fail('forbidden');
   const [stats, freshness] = await Promise.all([adminStats(), snapshotFreshness()]);

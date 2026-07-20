@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import { db } from '@/db';
+import { referralFarmingSuspects } from '@/db/queries';
 import { TIERS, TOP_REFERRER_COUNT, pointsLeaderboard } from './points';
 
 /**
@@ -27,6 +28,7 @@ export type AdminStats = {
   estLiabilityUsd: number;
   capUsd: number;
   top: Array<{ id: string; nickname: string | null; ref_code: string | null; points: number }>;
+  farmingSuspects: Array<{ refCode: string; qualified: number; distinctIps: number }>;
 };
 
 export async function adminStats(): Promise<AdminStats> {
@@ -68,5 +70,6 @@ export async function adminStats(): Promise<AdminStats> {
     estLiabilityUsd: Math.min(liability, CAMPAIGN_CAP_USD),
     capUsd: CAMPAIGN_CAP_USD,
     top: await pointsLeaderboard(20),
+    farmingSuspects: await referralFarmingSuspects(),
   };
 }

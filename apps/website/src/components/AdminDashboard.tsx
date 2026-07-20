@@ -14,6 +14,7 @@ type Stats = {
   estLiabilityUsd: number;
   capUsd: number;
   top: Array<{ id: string; nickname: string | null; ref_code: string | null; points: number }>;
+  farmingSuspects: Array<{ refCode: string; qualified: number; distinctIps: number }>;
   snapshots: Array<{ account: string; latest: string }>;
 };
 
@@ -37,7 +38,9 @@ export function AdminDashboard() {
   const load = useCallback(async (k: string) => {
     setError(null);
     try {
-      const res = await fetch(`/api/admin/stats?key=${encodeURIComponent(k)}`);
+      // Send the token in a header, never the URL — a query-string token
+      // leaks into server access logs and browser history.
+      const res = await fetch('/api/admin/stats', { headers: { 'x-admin-token': k } });
       const d = await res.json();
       if (!res.ok || !d.ok) return setError(res.status === 403 ? 'Wrong key.' : 'Failed to load.');
       setStats(d);
@@ -53,7 +56,7 @@ export function AdminDashboard() {
   async function sync() {
     setSyncing(true);
     try {
-      await fetch(`/api/admin/sync-x?key=${encodeURIComponent(key)}`, { method: 'POST' });
+      await fetch('/api/admin/sync-x', { method: 'POST', headers: { 'x-admin-token': key } });
       await load(key);
     } finally {
       setSyncing(false);
@@ -159,6 +162,30 @@ export function AdminDashboard() {
                 </div>
               ))}
             </div>
+          </Card>
+
+          <Card className={stats.farmingSuspects.length ? 'border-danger/40' : ''}>
+            <h2 className="mb-1 font-display text-lg font-semibold">Referral-farming review</h2>
+            <p className="mb-3 text-xs text-muted">
+              Referrers whose qualified invites cluster on few signup IPs. Review before granting rewards.
+            </p>
+            {stats.farmingSuspects.length === 0 ? (
+              <p className="text-sm text-muted">No suspicious clustering.</p>
+            ) : (
+              <div className="grid gap-1">
+                {stats.farmingSuspects.map((s) => (
+                  <div
+                    key={s.refCode}
+                    className="grid grid-cols-[1fr_auto] items-center gap-3 rounded-lg px-2.5 py-2"
+                  >
+                    <span className="truncate font-mono text-[13px] text-ink">{s.refCode}</span>
+                    <span className="text-sm text-danger">
+                      {s.qualified} quals / {s.distinctIps} IP{s.distinctIps === 1 ? '' : 's'}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
           </Card>
         </>
       )}

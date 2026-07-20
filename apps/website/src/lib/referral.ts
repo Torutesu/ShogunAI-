@@ -88,7 +88,7 @@ export function isValidEmail(value: unknown): value is string {
  * dangerous lead char with a single quote so spreadsheets treat them as text.
  */
 export function csvSafeCell(value: string): string {
-  return /^[=+\-@\t\r]/.test(value) ? `'${value}` : value;
+  return /^[=+\-@\t\r\n]/.test(value) ? `'${value}` : value;
 }
 
 /**

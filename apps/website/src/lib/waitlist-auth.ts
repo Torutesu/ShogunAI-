@@ -41,18 +41,25 @@ export function isAuthorizedOrigin(req: Request): boolean {
 }
 
 /**
- * Client IP. Behind Cloudflare read CF-Connecting-IP (unspoofable at the
- * edge); never trust the first X-Forwarded-For hop, which the client sets.
- * Falls back to the last XFF hop (closest proxy) then to a sentinel.
+ * Client IP for rate limiting + fraud hashing. A client-settable value here
+ * defeats BOTH controls, so we only read a header the edge is trusted to
+ * overwrite:
+ *   - On Cloudflare (our deploy target) `cf-connecting-ip` is set by the edge
+ *     and any client-supplied copy is discarded — authoritative there.
+ *   - On another platform, set WAITLIST_TRUSTED_IP_HEADER to the single header
+ *     that platform guarantees (e.g. `x-real-ip`); we read exactly that.
+ * We deliberately DO NOT parse X-Forwarded-For by default: without knowing the
+ * proxy depth, no XFF hop is trustworthy, and picking one invites spoofing.
  */
 export function clientIp(req: Request): string {
+  const configured = process.env.WAITLIST_TRUSTED_IP_HEADER?.trim().toLowerCase();
+  if (configured) {
+    // Single-value trusted header only — take the first token defensively.
+    const v = req.headers.get(configured);
+    if (v) return v.split(',')[0].trim();
+  }
   const cf = req.headers.get('cf-connecting-ip');
   if (cf) return cf.trim();
-  const xff = req.headers.get('x-forwarded-for');
-  if (xff) {
-    const hops = xff.split(',').map((s) => s.trim()).filter(Boolean);
-    if (hops.length) return hops[hops.length - 1];
-  }
   return req.headers.get('x-real-ip')?.trim() || '0.0.0.0';
 }
 

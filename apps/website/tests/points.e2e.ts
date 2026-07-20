@@ -116,6 +116,21 @@ async function main() {
   const first = await award(d.row.id, 'form');
   ok('award() returns false when the row already exists', first === false);
 
+  // --- 5. Farming visibility: same-IP burner cluster is surfaced to admin ---
+  const { referralFarmingSuspects } = await import('../src/db/queries.ts');
+  const f = await addParticipant('f@ex.com', undefined, 'shared-ip');
+  const g1 = await addParticipant('g1@ex.com', f.row.refCode!, 'shared-ip');
+  const g2 = await addParticipant('g2@ex.com', f.row.refCode!, 'shared-ip');
+  const g3 = await addParticipant('g3@ex.com', f.row.refCode!, 'shared-ip');
+  await complete(g1.row.statusToken!, 'g1');
+  await complete(g2.row.statusToken!, 'g2');
+  await complete(g3.row.statusToken!, 'g3');
+  const suspects = await referralFarmingSuspects();
+  const flagged = suspects.find((s) => s.refCode === f.row.refCode);
+  ok('farming suspect flagged (3 quals, 1 distinct IP)', !!flagged && flagged.qualified === 3 && flagged.distinctIps === 1);
+  // A's two referrals came from distinct IPs → NOT flagged.
+  ok('distinct-IP referrer is not flagged', !suspects.some((s) => s.refCode === a.row.refCode));
+
   console.log(`\n✅ points e2e: ${passed} assertions passed`);
   await client.end();
 }
