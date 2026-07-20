@@ -3146,6 +3146,14 @@ name = "shogun-agents"
 version = "0.1.0"
 
 [[package]]
+name = "shogun-cli"
+version = "0.1.0"
+dependencies = [
+ "shogun-agents",
+ "shogun-mcp",
+]
+
+[[package]]
 name = "shogun-core"
 version = "0.1.0"
 dependencies = [

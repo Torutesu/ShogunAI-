@@ -1,0 +1,28 @@
+[package]
+name = "shogun-cli"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "SHOGUN CLI: the `shogun` command — the terminal/script face of the Memory API (§6.11, one of MCP/CLI/REST)."
+
+# The CLI is one of the three symmetric Memory API faces (FR-API-01). Argument parsing and the
+# command → tool/level resolution are dependency-light pure logic (unit-testable on Linux); the
+# binary is a thin runner over that. One-way deps: cli → mcp (tool table + dispatcher), cli →
+# agents (the L1/L2/L3 Level vocabulary).
+
+[lib]
+name = "shogun_cli"
+path = "src/lib.rs"
+
+[[bin]]
+name = "shogun"
+path = "src/main.rs"
+
+[dependencies]
+shogun-mcp = { path = "../shogun-mcp" }
+shogun-agents = { path = "../shogun-agents" }
+
+[lints]
+workspace = true
