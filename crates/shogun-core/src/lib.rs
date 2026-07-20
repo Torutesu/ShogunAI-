@@ -9,6 +9,8 @@
 //! - [`notch`] — the notch UI: screen geometry / hit regions, hover judgement, the state
 //!   machine, and the integrated engine that wires them together.
 //! - [`capture`] — the context-capture policy: the bounded accessibility-tree walk.
+//! - [`metrics`] — the always-on SLO histograms (NFR-SLO-00): fixed-bucket latency/percent
+//!   tracking with pass/fail against each SLO budget.
 //!
 //! This crate makes no process-boundary assumptions (AR-03): it is a library the Tauri
 //! backend hosts today and a future daemon could host unchanged.
@@ -17,4 +19,5 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 pub mod capture;
+pub mod metrics;
 pub mod notch;
