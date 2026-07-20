@@ -376,6 +376,101 @@ pub fn list_open_loops(conn: &Connection) -> Result<Vec<OpenLoopRow>, rusqlite::
     rows.collect()
 }
 
+/// A person read back for Fusion / the Memory API.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PersonRow {
+    pub id: i64,
+    pub display_name: String,
+    pub confidence: f64,
+    pub first_event_id: Option<i64>,
+}
+
+/// List all people with their source event, most-recently-updated first.
+pub fn list_people(conn: &Connection) -> Result<Vec<PersonRow>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT id, display_name, confidence,
+                (SELECT MIN(event_id) FROM state_provenance
+                   WHERE state_table = 'people' AND state_id = people.id)
+         FROM people ORDER BY updated_at DESC, id",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok(PersonRow { id: r.get(0)?, display_name: r.get(1)?, confidence: r.get(2)?, first_event_id: r.get(3)? })
+    })?;
+    rows.collect()
+}
+
+/// Fetch one person by id.
+pub fn get_person(conn: &Connection, id: i64) -> Result<Option<PersonRow>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT id, display_name, confidence,
+                (SELECT MIN(event_id) FROM state_provenance WHERE state_table = 'people' AND state_id = people.id)
+         FROM people WHERE id = ?1",
+    )?;
+    let mut rows = stmt.query_map([id], |r| {
+        Ok(PersonRow { id: r.get(0)?, display_name: r.get(1)?, confidence: r.get(2)?, first_event_id: r.get(3)? })
+    })?;
+    rows.next().transpose()
+}
+
+/// A project read back for Fusion / the Memory API.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProjectRow {
+    pub id: i64,
+    pub name: String,
+    pub status: String,
+    pub confidence: f64,
+    pub first_event_id: Option<i64>,
+}
+
+/// List all projects with their source event, most-recently-active first.
+pub fn list_projects(conn: &Connection) -> Result<Vec<ProjectRow>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT id, name, status, confidence,
+                (SELECT MIN(event_id) FROM state_provenance
+                   WHERE state_table = 'projects' AND state_id = projects.id)
+         FROM projects ORDER BY (last_activity_at IS NULL), last_activity_at DESC, id",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok(ProjectRow {
+            id: r.get(0)?,
+            name: r.get(1)?,
+            status: r.get(2)?,
+            confidence: r.get(3)?,
+            first_event_id: r.get(4)?,
+        })
+    })?;
+    rows.collect()
+}
+
+/// Fetch one project by id.
+pub fn get_project(conn: &Connection, id: i64) -> Result<Option<ProjectRow>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT id, name, status, confidence,
+                (SELECT MIN(event_id) FROM state_provenance WHERE state_table = 'projects' AND state_id = projects.id)
+         FROM projects WHERE id = ?1",
+    )?;
+    let mut rows = stmt.query_map([id], |r| {
+        Ok(ProjectRow {
+            id: r.get(0)?,
+            name: r.get(1)?,
+            status: r.get(2)?,
+            confidence: r.get(3)?,
+            first_event_id: r.get(4)?,
+        })
+    })?;
+    rows.next().transpose()
+}
+
+/// Fetch one commitment by id.
+pub fn get_commitment(conn: &Connection, id: i64) -> Result<Option<CommitmentRow>, rusqlite::Error> {
+    Ok(list_commitments(conn)?.into_iter().find(|c| c.id == id))
+}
+
+/// Fetch one open loop by id.
+pub fn get_open_loop(conn: &Connection, id: i64) -> Result<Option<OpenLoopRow>, rusqlite::Error> {
+    Ok(list_open_loops(conn)?.into_iter().find(|o| o.id == id))
+}
+
 /// Count provenance links for a state row (test / diagnostics helper).
 pub fn provenance_count(conn: &Connection, table: StateTable, state_id: i64) -> Result<i64, rusqlite::Error> {
     conn.query_row(

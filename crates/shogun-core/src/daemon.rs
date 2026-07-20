@@ -126,6 +126,44 @@ impl Db {
             .collect()
     }
 
+    /// People rows (Memory API `state.people.list`).
+    pub fn people(&self) -> Vec<state::PersonRow> {
+        self.conn.lock().ok().and_then(|c| state::list_people(&c).ok()).unwrap_or_default()
+    }
+
+    /// One person by id (`state.people.get`).
+    pub fn person(&self, id: i64) -> Option<state::PersonRow> {
+        self.conn.lock().ok().and_then(|c| state::get_person(&c, id).ok()).flatten()
+    }
+
+    /// Project rows (`state.projects.list`).
+    pub fn projects(&self) -> Vec<state::ProjectRow> {
+        self.conn.lock().ok().and_then(|c| state::list_projects(&c).ok()).unwrap_or_default()
+    }
+
+    /// One project by id (`state.projects.get`).
+    pub fn project(&self, id: i64) -> Option<state::ProjectRow> {
+        self.conn.lock().ok().and_then(|c| state::get_project(&c, id).ok()).flatten()
+    }
+
+    /// One commitment by id (`state.commitments.get`).
+    pub fn commitment(&self, id: i64) -> Option<state::CommitmentRow> {
+        self.conn.lock().ok().and_then(|c| state::get_commitment(&c, id).ok()).flatten()
+    }
+
+    /// One open loop by id (`state.open_loops.get`).
+    pub fn open_loop(&self, id: i64) -> Option<state::OpenLoopRow> {
+        self.conn.lock().ok().and_then(|c| state::get_open_loop(&c, id).ok()).flatten()
+    }
+
+    /// Hybrid/FTS search over the event log (`memory.search`). Empty on an empty query or failure.
+    pub fn search(&self, query: &str, limit: usize) -> Vec<shogun_memory::search::SearchHit> {
+        if query.trim().is_empty() {
+            return Vec::new();
+        }
+        self.conn.lock().ok().and_then(|c| shogun_memory::search::search(&c, query, limit).ok()).unwrap_or_default()
+    }
+
     /// Open loops as Fusion/Brief input (stalest first; the Brief caps the count).
     pub fn open_loops(&self) -> Vec<OpenLoopItem> {
         let rows = self.conn.lock().ok().and_then(|c| state::list_open_loops(&c).ok()).unwrap_or_default();

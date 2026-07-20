@@ -12,7 +12,7 @@
 
 use shogun_agents::permission::Level;
 
-use crate::backend::MemoryBackend;
+use crate::backend::{MemoryBackend, ReadParams};
 use crate::memory_api::{read_inclusion, AuthResult, ReadInclusion, TokenRegistry, Tool};
 
 /// The HTTP methods the Memory API uses.
@@ -30,6 +30,8 @@ pub struct RestRequest {
     pub token: Option<String>,
     /// `?include_low` — include <0.5 confidence read results (FR-API-06 opt-in).
     pub include_low: bool,
+    /// `?q=` — the search query (for `memory.search`).
+    pub query: Option<String>,
 }
 
 /// The routing decision. The server turns this into an HTTP response, running the backend for the
@@ -42,8 +44,8 @@ pub enum Routed {
     NotFound,
     /// 405 — path exists but not for this method.
     MethodNotAllowed,
-    /// A read tool (200 after the backend read). `include_low` from the `?include_low` query.
-    Read { tool: Tool },
+    /// A read tool (200 after the backend read). `id` is set for a `get`-by-id path.
+    Read { tool: Tool, id: Option<i64> },
     /// A write tool (202 accepted): append_note = L1, propose_update = L2.
     Write { tool: Tool, level: Level },
     /// `actions.execute` (200 local / 202 pending for an L3 send — decided by the backend body).
@@ -81,8 +83,12 @@ fn resolve(method: Method, path: &str) -> Result<Routed, RouteMiss> {
 
     match segs.as_slice() {
         ["v1", "status"] => method_is(method, Method::Get, Routed::Status),
-        ["v1", "memory", "search"] => method_is(method, Method::Get, Routed::Read { tool: Tool::MemorySearch }),
-        ["v1", "memory", "context"] => method_is(method, Method::Get, Routed::Read { tool: Tool::MemoryGetContext }),
+        ["v1", "memory", "search"] => {
+            method_is(method, Method::Get, Routed::Read { tool: Tool::MemorySearch, id: None })
+        }
+        ["v1", "memory", "context"] => {
+            method_is(method, Method::Get, Routed::Read { tool: Tool::MemoryGetContext, id: None })
+        }
         ["v1", "memory", "notes"] => {
             method_is(method, Method::Post, Routed::Write { tool: Tool::MemoryAppendNote, level: Level::L1 })
         }
@@ -92,13 +98,15 @@ fn resolve(method: Method, path: &str) -> Result<Routed, RouteMiss> {
         ["v1", "actions", "execute"] => method_is(method, Method::Post, Routed::Action),
         // state list: /v1/state/<noun>
         ["v1", "state", noun] => match state_tool(noun, false) {
-            Some(tool) => method_is(method, Method::Get, Routed::Read { tool }),
+            Some(tool) => method_is(method, Method::Get, Routed::Read { tool, id: None }),
             None => Err(RouteMiss::NotFound),
         },
         // state get: /v1/state/<noun>/<id>
-        ["v1", "state", noun, id] if id.parse::<i64>().is_ok() => match state_tool(noun, true) {
-            Some(tool) => method_is(method, Method::Get, Routed::Read { tool }),
-            None => Err(RouteMiss::NotFound),
+        ["v1", "state", noun, id] => match (state_tool(noun, true), id.parse::<i64>()) {
+            (Some(tool), Ok(parsed)) => {
+                method_is(method, Method::Get, Routed::Read { tool, id: Some(parsed) })
+            }
+            _ => Err(RouteMiss::NotFound),
         },
         _ => Err(RouteMiss::NotFound),
     }
@@ -178,7 +186,7 @@ pub fn body_for(routed: &Routed) -> String {
         Routed::NotFound => r#"{"error":"not_found"}"#.to_string(),
         Routed::MethodNotAllowed => r#"{"error":"method_not_allowed"}"#.to_string(),
         Routed::Status => r#"{"status":"ok","service":"shogun-memory-api"}"#.to_string(),
-        Routed::Read { tool } => format!(r#"{{"tool":"{}","results":[]}}"#, tool_name(*tool)),
+        Routed::Read { tool, .. } => format!(r#"{{"tool":"{}","results":[]}}"#, tool_name(*tool)),
         Routed::Write { tool, level } => {
             format!(r#"{{"tool":"{}","level":"{}","accepted":true}}"#, tool_name(*tool), level_label(*level))
         }
@@ -219,9 +227,10 @@ pub fn respond_with<B: MemoryBackend + ?Sized>(
     backend: &B,
 ) -> (u16, String) {
     match route(req, tokens) {
-        Routed::Read { tool } => {
+        Routed::Read { tool, id } => {
+            let params = ReadParams { id, query: req.query.clone() };
             let rendered: Vec<String> = backend
-                .read_list(tool)
+                .read(tool, &params)
                 .into_iter()
                 .filter_map(|item| match read_inclusion(item.confidence, req.include_low) {
                     ReadInclusion::Included { possibly } => Some(format!(
@@ -250,7 +259,7 @@ mod tests {
         r
     }
     fn req(method: Method, path: &str, token: Option<&str>) -> RestRequest {
-        RestRequest { method, path: path.into(), token: token.map(str::to_string), include_low: false }
+        RestRequest { method, path: path.into(), token: token.map(str::to_string), include_low: false, query: None }
     }
 
     #[test]
@@ -287,16 +296,16 @@ mod tests {
     fn read_endpoints_resolve_to_read_tools() {
         assert_eq!(
             route(&req(Method::Get, "/v1/memory/search", Some("t")), &reg()),
-            Routed::Read { tool: Tool::MemorySearch }
+            Routed::Read { tool: Tool::MemorySearch, id: None }
         );
         assert_eq!(
             route(&req(Method::Get, "/v1/state/commitments", Some("t")), &reg()),
-            Routed::Read { tool: Tool::StateCommitmentsList }
+            Routed::Read { tool: Tool::StateCommitmentsList, id: None }
         );
         // trailing id selects the get variant
         assert_eq!(
             route(&req(Method::Get, "/v1/state/people/42", Some("t")), &reg()),
-            Routed::Read { tool: Tool::StatePeopleGet }
+            Routed::Read { tool: Tool::StatePeopleGet, id: Some(42) }
         );
     }
 
@@ -320,7 +329,7 @@ mod tests {
     fn trailing_slash_is_tolerated() {
         assert_eq!(
             route(&req(Method::Get, "/v1/state/projects/", Some("t")), &reg()),
-            Routed::Read { tool: Tool::StateProjectsList }
+            Routed::Read { tool: Tool::StateProjectsList, id: None }
         );
     }
 
@@ -352,7 +361,7 @@ mod tests {
 
         struct Fake;
         impl MemoryBackend for Fake {
-            fn read_list(&self, _tool: Tool) -> Vec<ReadItem> {
+            fn read(&self, _tool: Tool, _params: &crate::backend::ReadParams) -> Vec<ReadItem> {
                 vec![
                     ReadItem::new("high", 0.9),   // included, not possibly
                     ReadItem::new("medium", 0.6), // included, possibly
@@ -394,7 +403,7 @@ mod tests {
     #[test]
     fn resolved_read_tool_is_actually_a_read() {
         // guard against a routing table that points a read path at a write tool
-        if let Routed::Read { tool } = route(&req(Method::Get, "/v1/state/open_loops", Some("t")), &reg()) {
+        if let Routed::Read { tool, .. } = route(&req(Method::Get, "/v1/state/open_loops", Some("t")), &reg()) {
             assert_eq!(tool_level(tool), ApiLevel::Read);
         } else {
             panic!("expected a read");

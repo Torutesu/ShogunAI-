@@ -56,15 +56,17 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
     };
     let path = req.uri().path().to_string();
     let token = rest::bearer(req.headers().get(AUTHORIZATION).and_then(|v| v.to_str().ok()));
-    // `?include_low` opt-in (FR-API-06).
-    let include_low = req
-        .uri()
-        .query()
-        .is_some_and(|q| q.split('&').any(|kv| kv == "include_low" || kv.starts_with("include_low=")));
+    // Parse the query string: `?include_low` (FR-API-06 opt-in) and `?q=<search>`.
+    let raw_query = req.uri().query().unwrap_or("");
+    let include_low = raw_query.split('&').any(|kv| kv == "include_low" || kv.starts_with("include_low="));
+    let query = raw_query
+        .split('&')
+        .find_map(|kv| kv.strip_prefix("q="))
+        .map(percent_decode);
 
     let (status, body) = match method {
         Some(method) => rest::respond_with(
-            &RestRequest { method, path, token, include_low },
+            &RestRequest { method, path, token, include_low, query },
             &state.tokens,
             state.backend.as_ref(),
         ),
@@ -77,6 +79,40 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
         .header(CONTENT_TYPE, "application/json")
         .body(Body::from(body))
         .unwrap_or_default()
+}
+
+/// Minimal `application/x-www-form-urlencoded` value decode: `+` → space, `%XX` → byte. Unknown
+/// escapes pass through. Enough for a search query param (no dep).
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            b'%' if i + 2 < bytes.len() => {
+                let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).ok();
+                match hex.and_then(|h| u8::from_str_radix(h, 16).ok()) {
+                    Some(byte) => {
+                        out.push(byte);
+                        i += 3;
+                    }
+                    None => {
+                        out.push(bytes[i]);
+                        i += 1;
+                    }
+                }
+            }
+            b => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// Bind the localhost listener on `port`, falling back to an ephemeral port if it is busy
@@ -176,7 +212,7 @@ mod tests {
 
         struct Fake;
         impl MemoryBackend for Fake {
-            fn read_list(&self, _tool: Tool) -> Vec<ReadItem> {
+            fn read(&self, _tool: Tool, _params: &crate::backend::ReadParams) -> Vec<ReadItem> {
                 vec![ReadItem::new("ship the report", 0.9)]
             }
         }

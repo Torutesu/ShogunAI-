@@ -22,19 +22,27 @@ impl ReadItem {
     }
 }
 
+/// Parameters a read tool may need: a `get`-by-id, or a `search` query.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ReadParams {
+    /// The id for a `get` variant (`/state/people/42`).
+    pub id: Option<i64>,
+    /// The query for `search` (`?q=...`).
+    pub query: Option<String>,
+}
+
 /// The data source behind the Memory API's read tools. Implemented by the daemon over its DB.
 pub trait MemoryBackend: Send + Sync {
-    /// Rows for a read/list tool. `get`/`search` variants that need an id/query return their
-    /// matches; the daemon impl decides. Rows are unfiltered — the server applies the confidence
-    /// gate.
-    fn read_list(&self, tool: Tool) -> Vec<ReadItem>;
+    /// Rows for a read tool, given its parameters. Rows are unfiltered — the server applies the
+    /// confidence gate (FR-API-06).
+    fn read(&self, tool: Tool, params: &ReadParams) -> Vec<ReadItem>;
 }
 
 /// A backend that returns nothing — the server is runnable/testable before the DB is wired.
 pub struct StubBackend;
 
 impl MemoryBackend for StubBackend {
-    fn read_list(&self, _tool: Tool) -> Vec<ReadItem> {
+    fn read(&self, _tool: Tool, _params: &ReadParams) -> Vec<ReadItem> {
         Vec::new()
     }
 }
@@ -45,6 +53,6 @@ mod tests {
 
     #[test]
     fn stub_returns_empty() {
-        assert!(StubBackend.read_list(Tool::StatePeopleList).is_empty());
+        assert!(StubBackend.read(Tool::StatePeopleList, &ReadParams::default()).is_empty());
     }
 }
