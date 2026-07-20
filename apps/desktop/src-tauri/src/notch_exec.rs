@@ -148,7 +148,7 @@ pub mod mac {
         let cache = db.context_actions(current_screen(), None);
         eprintln!("[selftest] {} context action(s) for the current screen:", cache.actions.len());
         for (i, a) in cache.actions.iter().enumerate() {
-            eprintln!("[selftest]   [{i}] {} {}", level_str(a.level), label_of(&a.action));
+            eprintln!("[selftest]   [{i}] {:?} {:?} — {}", a.level, a.action, a.rationale);
         }
         match (cache.actions.first(), app.try_state::<NotchEngine>()) {
             (Some(first), Some(engine)) => {
