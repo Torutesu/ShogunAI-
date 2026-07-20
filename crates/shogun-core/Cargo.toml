@@ -28,6 +28,9 @@ net = ["dep:reqwest"]
 # capture writes, state reads → Fusion supply). OFF by default so the pure-logic tests stay
 # rusqlite-free; the daemon (and its CI step) enable it.
 db = ["dep:shogun-memory", "dep:rusqlite", "dep:shogun-fusion", "dep:shogun-mcp"]
+# `daemon-server` builds the runnable `shogun-api` binary: it composes the DB, the DB-backed
+# Memory API backend, the shared approval queue, and the axum REST listener into one process.
+daemon-server = ["db", "shogun-mcp/server", "dep:shogun-agents", "tokio/rt-multi-thread", "tokio/macros"]
 
 [dependencies]
 tokio = { version = "1", features = ["sync"] }
@@ -43,7 +46,14 @@ shogun-memory = { path = "../shogun-memory", optional = true }
 shogun-fusion = { path = "../shogun-fusion", optional = true }
 # The daemon implements the Memory API's data backend (dependency-inverted: the trait lives in mcp).
 shogun-mcp = { path = "../shogun-mcp", optional = true }
+# The `shogun-api` binary composes the shared approval queue (agents) into the server state.
+shogun-agents = { path = "../shogun-agents", optional = true }
 rusqlite = { version = "0.31", features = ["bundled"], optional = true }
+
+[[bin]]
+name = "shogun-api"
+path = "src/bin/shogun_api.rs"
+required-features = ["daemon-server"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "macros"] }

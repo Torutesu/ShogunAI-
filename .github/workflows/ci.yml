@@ -51,6 +51,9 @@ jobs:
         run: |
           cargo clippy -p shogun-mcp --features server --all-targets
           cargo test -p shogun-mcp --features server
+      # The runnable `shogun-api` composition root (DB + backend + approval queue + axum).
+      - name: shogun-api binary (clippy)
+        run: cargo clippy -p shogun-core --features daemon-server --bin shogun-api
       - name: test
         run: cargo test --workspace --exclude shogun-desktop-spike
       # Invariant guards (each self-tests its detector, then checks the real tree/source):
