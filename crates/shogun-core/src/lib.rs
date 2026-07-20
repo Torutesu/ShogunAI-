@@ -30,3 +30,4 @@ pub mod dreamcycle;
 pub mod llm;
 pub mod metrics;
 pub mod notch;
+pub mod traceview;

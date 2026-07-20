@@ -14,6 +14,9 @@ description = "SHOGUN first-layer MCP integration: the per-service permission sc
 
 [dependencies]
 shogun-agents = { path = "../shogun-agents" }
+# The Memory API applies the same confidence rule as UI reads (FR-API-06); reuse the single
+# implementation in shogun-fusion rather than re-deriving the bands. One-way: mcp → fusion.
+shogun-fusion = { path = "../shogun-fusion" }
 
 [lints]
 workspace = true

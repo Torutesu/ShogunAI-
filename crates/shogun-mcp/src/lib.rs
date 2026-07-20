@@ -11,4 +11,6 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 pub mod composio;
+pub mod connection;
+pub mod memory_api;
 pub mod scope;

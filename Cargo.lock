@@ -3189,6 +3189,7 @@ name = "shogun-mcp"
 version = "0.1.0"
 dependencies = [
  "shogun-agents",
+ "shogun-fusion",
 ]
 
 [[package]]
