@@ -10,4 +10,5 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 pub mod assemble;
+pub mod brief;
 pub mod confidence;
