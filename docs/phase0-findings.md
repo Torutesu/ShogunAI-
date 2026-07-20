@@ -121,3 +121,32 @@ Q2（展開）/Q4（誤発火）の挙動はプラットフォーム非依存の
 2. **webviewサイレント(未解決)**: webview→Rust コマンドが boot ping 含め0件。SPIKE_NO_PANEL=1(swapなし)でも同じ(run #7)→ **NSPanel swapは無罪**。capabilities(core:default)付与でも変化なし。残る仮説はヘッドレスCI環境でのWKWebViewコンテンツロード/JS実行/IPCブリッジ注入の不成立。**実機D-01でdevtools(またはSafari Web Inspector)を開けば数分で確定する類** — CI経由での深追いはeval panicにより手段が尽きた。
    - 影響: expand_latency(Q2のt1)とinteract集計はCI上で取得不可。**Q2実測とQ4の正確な集計は物理Mac必須のまま**。
 3. Q4のFP率73%はwebview沈黙の帰結(全収束がAnimTimeout・interactions=0で自動FP判定)であり、ホバー判定の欠陥ではない(台本注入は操作ゼロのため定義上FPになる)。
+
+## 物理ノッチ実機セッション（TorunoMacBook-Pro-8、ノッチ搭載・2画面）— 2026-07-19/20
+
+ユーザー実機で `pnpm dev` により起動。geometry: notch=true notch_w=220 notch_h=38 menubar_h=39 screen=1800x1169 displays=2。
+
+**確定した事実**:
+1. **CIのwebviewサイレントは環境固有と確定**: 実機では boot ping / clock_sync_ack / painted / anim_done / interact が全て正常発火。コード欠陥ではなくヘッドレスVMのWKWebView問題（上記「未解決」を実機で解消）。
+2. **Q2（展開レイテンシ）: p50 12.3ms / p95 18.1ms → PASS**（SLO 100msの約1/5）。n=15のクリーンなrun。
+3. **Q3-B（アイドルCPU）: 1分平均 max 0.92%・全サンプル5%以内 → PASS**。
+4. **Q4（誤発火）: 人間マーク0件・体感誤発火なし → PASS**。dwell gateがtop-band進入の通過(素通り)を正しく拒否（18進入→16展開、40進入→30展開等の比で機能確認）。
+5. **Q3-A（cache更新）: p50 29.5〜80.4ms / p95 179.2〜246.9ms → PASS**（SLO 300ms）。フォーカス配線実装後、実データで2 run連続合格。
+6. **Q1（常駐）: 未計測のまま**。全runが数分以内でheartbeat（60s周期）が0〜1件。長時間ソーク（≥15分、望ましくは24h）は**Phase 1に持ち越し**（M2完了条件の24h連続稼働で回収する。ユーザー判断で後回し決定）。
+
+**実機で発見し修正した問題（コミット順）**:
+- `e95f09b` パネル位置未指定→画面中央に出現（Tauriデフォルト）。プライマリ上端中央に固定。
+- `e95f09b` Q2外れ値298179ms: T5 revive（Collapsing→Expanded）がExpandCommitなしにpaintedを発火し、古いt0と誤ペア。painted側でcommitをswap(0)消費し1commit=1paintに。
+- `1e34181` Q2外れ値1658ms（暖機）: クロックオフセット校正前のpaintがt0を残し後続と誤ペア。commit消費をoffsetゲート前に移動。
+- `e95f09b` Q4のauto-FP定義がダミースパイクで構造的過剰カウント（押す価値のあるボタンが無い→意図的な覗きが全部FP扱い）。判定入力を人間マークに変更、autoは参考値に格下げ、dwell gate拒否数を表示。
+- `c99b098` コンテキスト未配線（「読めてない」報告）→ フォーカス監視スレッド+AX walk+contextイベント+metric.cache_update実装。
+- `83b8f05` ブラウザのAXツリー遅延構築で切替直後のwalkが空→同一pidのまま500ms後に1回だけ再試行。
+- `4ce369e` **タブ切替が検知されない**（pid不変のため）→ 約2秒周期の内容再walk+digestデデュープ追加。イベント駆動AX購読（AXFocusedUIElementChanged等）への置換はPhase 1で実施。
+
+**既知の残課題（Phase 1へ）**:
+- Q1長時間ソーク未実施（上記6）。anim_timeout 2〜3件/runの原因確認もソーク時に。
+- 外部ディスプレイ: パネルはプライマリのみ（設計通りだが製品ではFR-NU §6.1.2で対応必須）。
+- Q2暖機直後の1サンプル外れ値（4607ms、再ビルド直後のrunでn=3中1件）: コールドスタートの初回描画と推定。長時間runで再発監視。
+- 2秒ポーリングはスパイク限定の暫定。製品はAX通知駆動+500msデバウンス（FR-CAP-02）。
+
+**Phase 0 総括**: 4つの問いのうちQ2/Q3/Q4は物理ノッチ実機でSLO合格を確認。Q1のみ長時間データ未取得だが、150秒×7回(CI)+実機複数runでクラッシュ0・自己修復0。**ユーザー判断: ノッチ方式でGo、Phase 1本実装へ**（2026-07-20）。
