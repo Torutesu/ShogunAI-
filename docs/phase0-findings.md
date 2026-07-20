@@ -150,3 +150,23 @@ Q2（展開）/Q4（誤発火）の挙動はプラットフォーム非依存の
 - 2秒ポーリングはスパイク限定の暫定。製品はAX通知駆動+500msデバウンス（FR-CAP-02）。
 
 **Phase 0 総括**: 4つの問いのうちQ2/Q3/Q4は物理ノッチ実機でSLO合格を確認。Q1のみ長時間データ未取得だが、150秒×7回(CI)+実機複数runでクラッシュ0・自己修復0。**ユーザー判断: ノッチ方式でGo、Phase 1本実装へ**（2026-07-20）。
+
+## Phase 1 純ロジック — 実機 macOS/arm64 ビルド・テスト検証（TorunoMacBook-Pro-8）— 2026-07-20
+
+GitHub Actions の macOS ランナーが停止しているため、Phase 1 で追加した全クレート（M3純ロジック全WP＋M4主要部）の macOS 側検証を**物理 Apple Silicon 実機で実施**。この実機ランが停止中 CI（macos-14 ジョブ）と等価の検証になる。ブランチ `claude/shogunai-requirements-prep-nm2tf4` @ `4302c86`。
+
+**確定した事実（全パス）**:
+1. **全crate テスト green（合計288、0 failed）** — `cargo test --workspace --exclude shogun-desktop-spike`:
+   shogun-agents 28 / shogun-core 120 / hover_to_state 3 / shogun-fusion 22 / shogun-mcp 29 / **invariant4（横断結合）4** / shogun-memory 46 / spike-harness 27 / report 9。`search_scale` は想定どおり ignored（ベンチ）。Linux と完全一致。
+2. **clippy clean** — `cargo clippy --workspace --exclude shogun-desktop-spike --all-targets` が警告ゼロで `Finished`（workspace lints の deny 下）。
+3. **rusqlite + sqlite-vec が macOS ネイティブビルド成功** — libsqlite3-sys 0.28 バンドル含め、メモリ層が実機でコンパイル・全テスト通過。
+4. **ネットワーク層（`net` feature）が macOS でビルド成功** — `cargo clippy -p shogun-core --features net --all-targets` が reqwest 0.12.28 + rustls 0.23 + hyper + ring をコンパイルして `Finished`。**これまで踏めていなかった実HTTPS経路（Anthropic Batch/Messages）が実機ビルド可能と確認**（証明書検証を無効化しない rustls 構成）。
+5. **不変条件ガード3種すべて pass**（実機の python3 3.11 で）:
+   - HTTP出口検査（FR-TR-03）: `only ['shogun-core'] depend on an HTTP client`
+   - secret露出検査（不変条件7）: `.expose() only in [anthropic.rs, mod.rs]`
+   - スキーマ後方互換検査: `2 file(s), all additive`
+   各ガードの `--self-test` も実機で pass（検出器が違反を捕捉することを確認）。
+
+**含意**: Phase 1 の純ロジック本体（Fusion assemble/brief・L1/L2実行エンジン・プリセット7種・L3承認・Dream Cycle・トレーサビリティ閲覧・Memory API対称・接続状態・MCP許可範囲表・Composioゲート）が、**実機 macOS/arm64 でビルド・テスト・lint・不変条件ガードすべて通過**。CI の macOS ランナー復旧を待たずに、Phase 1 純ロジックの macOS 妥当性が確定した。
+
+**ノッチUX手動確認（ステップ4）**: <!-- 実機ステップ4の 4-1〜4-6 結果をここに追記 -->
