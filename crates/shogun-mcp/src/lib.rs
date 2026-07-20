@@ -10,6 +10,7 @@
 //! OAuth-to-Keychain live in the desktop adapter.
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
+pub mod backend;
 pub mod composio;
 pub mod connection;
 pub mod dispatch;

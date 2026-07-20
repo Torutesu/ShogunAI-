@@ -19,21 +19,25 @@ use axum::routing::any;
 use axum::Router;
 use tokio::net::TcpListener;
 
+use crate::backend::MemoryBackend;
 use crate::memory_api::TokenRegistry;
 use crate::rest::{self, Method, RestRequest};
 
 /// The default Memory API port (FR-API-01).
 pub const DEFAULT_PORT: u16 = 7464;
 
-/// Shared server state. Clone is cheap (an `Arc`), as axum requires.
+/// Shared server state. Clone is cheap (all `Arc`), as axum requires.
 #[derive(Clone)]
 pub struct AppState {
     tokens: Arc<TokenRegistry>,
+    backend: Arc<dyn MemoryBackend>,
 }
 
 impl AppState {
-    pub fn new(tokens: Arc<TokenRegistry>) -> Self {
-        Self { tokens }
+    /// Build state from a token registry and the data backend (the daemon injects a DB-backed one;
+    /// tests can inject a stub).
+    pub fn new(tokens: Arc<TokenRegistry>, backend: Arc<dyn MemoryBackend>) -> Self {
+        Self { tokens, backend }
     }
 }
 
@@ -52,9 +56,18 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
     };
     let path = req.uri().path().to_string();
     let token = rest::bearer(req.headers().get(AUTHORIZATION).and_then(|v| v.to_str().ok()));
+    // `?include_low` opt-in (FR-API-06).
+    let include_low = req
+        .uri()
+        .query()
+        .is_some_and(|q| q.split('&').any(|kv| kv == "include_low" || kv.starts_with("include_low=")));
 
     let (status, body) = match method {
-        Some(method) => rest::respond(&RestRequest { method, path, token }, &state.tokens),
+        Some(method) => rest::respond_with(
+            &RestRequest { method, path, token, include_low },
+            &state.tokens,
+            state.backend.as_ref(),
+        ),
         // Any verb other than GET/POST is not used by the Memory API.
         None => (405, r#"{"error":"method_not_allowed"}"#.to_string()),
     };
@@ -106,9 +119,16 @@ mod tests {
     }
 
     async fn spawn_server(tokens: TokenRegistry) -> std::net::SocketAddr {
+        spawn_server_with(tokens, Arc::new(crate::backend::StubBackend)).await
+    }
+
+    async fn spawn_server_with(
+        tokens: TokenRegistry,
+        backend: Arc<dyn crate::backend::MemoryBackend>,
+    ) -> std::net::SocketAddr {
         let listener = bind_local(0).await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let state = AppState::new(Arc::new(tokens));
+        let state = AppState::new(Arc::new(tokens), backend);
         tokio::spawn(async move {
             let _ = serve_on(listener, state).await;
         });
@@ -147,5 +167,24 @@ mod tests {
         let addr = spawn_server(TokenRegistry::new()).await;
         let resp = raw_get(addr, "/v1/bogus", Some("t")).await;
         assert!(resp.contains("404"), "expected 404, got: {resp}");
+    }
+
+    #[tokio::test]
+    async fn backend_data_flows_through_the_socket() {
+        use crate::backend::{MemoryBackend, ReadItem};
+        use crate::memory_api::Tool;
+
+        struct Fake;
+        impl MemoryBackend for Fake {
+            fn read_list(&self, _tool: Tool) -> Vec<ReadItem> {
+                vec![ReadItem::new("ship the report", 0.9)]
+            }
+        }
+        let mut tokens = TokenRegistry::new();
+        tokens.issue("t");
+        let addr = spawn_server_with(tokens, Arc::new(Fake)).await;
+        let resp = raw_get(addr, "/v1/state/commitments", Some("t")).await;
+        assert!(resp.contains("200"), "got: {resp}");
+        assert!(resp.contains("ship the report"), "real backend data missing: {resp}");
     }
 }
