@@ -497,41 +497,68 @@ pub mod mac {
                     continue; // same app still frontmost — nothing to re-assemble
                 }
                 last_pid = Some(front.pid);
-                // Bracket ONLY the walk (spec §4.2.2): the poll cadence is not measured.
-                let t0 = shared.clock.elapsed_ns();
-                let Some(result) = crate::axcache::snapshot(front.pid, 300) else { continue };
-                let t1 = shared.clock.elapsed_ns();
-                let latency_ms = t1.saturating_sub(t0) as f64 / 1e6;
-                // Diagnostics carry bundle + counts ONLY — never the captured text.
-                eprintln!(
-                    "[spike] cache_update bundle={} bytes={} elems={} depth={} partial={} {:.1}ms",
-                    front.bundle_id, result.text_bytes, result.elements_visited,
-                    result.depth_reached, result.partial, latency_ms
-                );
-                let payload = ContextPayload {
-                    bundle_id: front.bundle_id.clone(),
-                    title_masked: front.name.clone(),
-                    text: result.text.clone(),
-                    captured_at_ms: now_epoch_ms(),
-                    partial: result.partial,
-                };
-                if let Ok(mut g) = shared.last_context.lock() {
-                    *g = Some(payload.clone());
+
+                let empty_ok_walk = walk_and_publish(&app, &shared, front.pid, &front.bundle_id, &front.name)
+                    .is_some_and(|r| r.text_bytes == 0 && !r.partial && !r.truncated);
+                // Many browsers (Chrome/Safari/etc.) build their AX tree lazily on first
+                // query, so the switch-triggered snapshot can land before it exists —
+                // walk succeeds but finds nothing (empty text, not partial/truncated, so
+                // it isn't a budget issue). Retry once, same pid, after the tree has had
+                // time to build. A genuinely textless app (e.g. a blank canvas) just
+                // republishes empty again — one extra bounded walk, not a poll loop.
+                if empty_ok_walk {
+                    std::thread::sleep(Duration::from_millis(500));
+                    if crate::display::frontmost_app().map(|f| f.pid) == Some(front.pid) {
+                        walk_and_publish(&app, &shared, front.pid, &front.bundle_id, &front.name);
+                    }
                 }
-                let _ = app.emit("context", payload);
-                shared.recorder.record(Body::CacheUpdate(CacheUpdate::from_text(
-                    latency_ms,
-                    CacheTrigger::AppSwitch,
-                    front.bundle_id,
-                    &result.text,
-                    result.elements_visited,
-                    result.depth_reached,
-                    result.partial,
-                    result.truncated,
-                    false,
-                )));
             }
         });
+    }
+
+    /// One bounded AX walk of `pid`'s focused window, published as the `context` event and
+    /// recorded as `metric.cache_update` (spec §3.10/§4.2.2). Returns the raw walk result so
+    /// the caller can decide whether a retry is warranted (see `spawn_focus_watcher`).
+    fn walk_and_publish(
+        app: &AppHandle,
+        shared: &Arc<Shared>,
+        pid: i32,
+        bundle_id: &str,
+        name: &str,
+    ) -> Option<spike_core::axcache::WalkResult> {
+        // Bracket ONLY the walk (spec §4.2.2): poll cadence / retry wait is not measured.
+        let t0 = shared.clock.elapsed_ns();
+        let result = crate::axcache::snapshot(pid, 300)?;
+        let t1 = shared.clock.elapsed_ns();
+        let latency_ms = t1.saturating_sub(t0) as f64 / 1e6;
+        // Diagnostics carry bundle + counts ONLY — never the captured text.
+        eprintln!(
+            "[spike] cache_update bundle={bundle_id} bytes={} elems={} depth={} partial={} {latency_ms:.1}ms",
+            result.text_bytes, result.elements_visited, result.depth_reached, result.partial
+        );
+        let payload = ContextPayload {
+            bundle_id: bundle_id.to_string(),
+            title_masked: name.to_string(),
+            text: result.text.clone(),
+            captured_at_ms: now_epoch_ms(),
+            partial: result.partial,
+        };
+        if let Ok(mut g) = shared.last_context.lock() {
+            *g = Some(payload.clone());
+        }
+        let _ = app.emit("context", payload);
+        shared.recorder.record(Body::CacheUpdate(CacheUpdate::from_text(
+            latency_ms,
+            CacheTrigger::AppSwitch,
+            bundle_id,
+            &result.text,
+            result.elements_visited,
+            result.depth_reached,
+            result.partial,
+            result.truncated,
+            false,
+        )));
+        Some(result)
     }
 
     fn metrics_dir() -> PathBuf {
