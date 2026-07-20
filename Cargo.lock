@@ -3160,6 +3160,7 @@ dependencies = [
  "reqwest 0.12.28",
  "rusqlite",
  "serde_json",
+ "shogun-fusion",
  "shogun-memory",
  "thiserror 1.0.69",
  "tokio",

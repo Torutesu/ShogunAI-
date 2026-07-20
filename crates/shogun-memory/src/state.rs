@@ -307,6 +307,75 @@ pub fn insert_open_loop(
     })
 }
 
+// ---------------------------------------------------------------- reads (Fusion / Brief supply)
+
+/// A commitment read back for Fusion / Morning Brief. `first_event_id` is the earliest provenance
+/// event (the source link, FR-ST-02) — `None` only if somehow unlinked.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CommitmentRow {
+    pub id: i64,
+    pub description: String,
+    pub due_at: Option<i64>,
+    pub status: String,
+    pub confidence: f64,
+    pub first_event_id: Option<i64>,
+}
+
+/// List all commitments with their source event, ordered by due time (soonest first, undated last).
+pub fn list_commitments(conn: &Connection) -> Result<Vec<CommitmentRow>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT id, description, due_at, status, confidence,
+                (SELECT MIN(event_id) FROM state_provenance
+                   WHERE state_table = 'commitments' AND state_id = commitments.id)
+         FROM commitments
+         ORDER BY (due_at IS NULL), due_at, id",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok(CommitmentRow {
+            id: r.get(0)?,
+            description: r.get(1)?,
+            due_at: r.get(2)?,
+            status: r.get(3)?,
+            confidence: r.get(4)?,
+            first_event_id: r.get(5)?,
+        })
+    })?;
+    rows.collect()
+}
+
+/// An open loop read back for Fusion / Morning Brief.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OpenLoopRow {
+    pub id: i64,
+    pub description: String,
+    pub staleness_days: i64,
+    pub status: String,
+    pub confidence: f64,
+    pub first_event_id: Option<i64>,
+}
+
+/// List open loops with their source event, stalest first (Brief takes the top-N).
+pub fn list_open_loops(conn: &Connection) -> Result<Vec<OpenLoopRow>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT id, description, staleness_days, status, confidence,
+                (SELECT MIN(event_id) FROM state_provenance
+                   WHERE state_table = 'open_loops' AND state_id = open_loops.id)
+         FROM open_loops
+         ORDER BY staleness_days DESC, id",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok(OpenLoopRow {
+            id: r.get(0)?,
+            description: r.get(1)?,
+            staleness_days: r.get(2)?,
+            status: r.get(3)?,
+            confidence: r.get(4)?,
+            first_event_id: r.get(5)?,
+        })
+    })?;
+    rows.collect()
+}
+
 /// Count provenance links for a state row (test / diagnostics helper).
 pub fn provenance_count(conn: &Connection, table: StateTable, state_id: i64) -> Result<i64, rusqlite::Error> {
     conn.query_row(
@@ -373,6 +442,74 @@ mod tests {
         )
         .unwrap();
         assert_eq!(provenance_count(&conn, StateTable::People, id).unwrap(), 2);
+    }
+
+    #[test]
+    fn list_commitments_returns_rows_with_source_event_due_ordered() {
+        let mut conn = crate::open_in_memory().unwrap();
+        let e = seed_event(&conn, "h1");
+        // two commitments, one due later, one due sooner
+        insert_commitment(
+            &mut conn,
+            &NewCommitment {
+                direction: CommitmentDirection::Mine,
+                counterparty_id: None,
+                description: "later",
+                due_at: Some(500),
+                status: CommitmentStatus::Open,
+                project_id: None,
+                confidence: 0.9,
+                now: 1,
+            },
+            &[Provenance::new(e)],
+        )
+        .unwrap();
+        insert_commitment(
+            &mut conn,
+            &NewCommitment {
+                direction: CommitmentDirection::Mine,
+                counterparty_id: None,
+                description: "sooner",
+                due_at: Some(100),
+                status: CommitmentStatus::Overdue,
+                project_id: None,
+                confidence: 0.7,
+                now: 1,
+            },
+            &[Provenance::new(e)],
+        )
+        .unwrap();
+
+        let rows = list_commitments(&conn).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].description, "sooner", "soonest due first");
+        assert_eq!(rows[0].first_event_id, Some(e));
+        assert_eq!(rows[0].status, "overdue");
+    }
+
+    #[test]
+    fn list_open_loops_is_stalest_first() {
+        let mut conn = crate::open_in_memory().unwrap();
+        let e = seed_event(&conn, "h1");
+        let loop_of = |desc: &'static str| NewOpenLoop {
+            kind: OpenLoopKind::ReplyNeeded,
+            description: desc,
+            counterparty_id: None,
+            project_id: None,
+            opened_at: 1,
+            confidence: 0.9,
+            now: 1,
+        };
+        let fresh = insert_open_loop(&mut conn, &loop_of("fresh"), &[Provenance::new(e)]).unwrap();
+        let stale = insert_open_loop(&mut conn, &loop_of("stale"), &[Provenance::new(e)]).unwrap();
+        conn.execute("UPDATE open_loops SET staleness_days = 9 WHERE id = ?1", [stale]).unwrap();
+        conn.execute("UPDATE open_loops SET staleness_days = 1 WHERE id = ?1", [fresh]).unwrap();
+
+        let rows = list_open_loops(&conn).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].description, "stale");
+        assert_eq!(rows[0].staleness_days, 9);
+        assert_eq!(rows[0].first_event_id, Some(e));
     }
 
     #[test]

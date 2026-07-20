@@ -24,9 +24,10 @@ default = []
 # job (and every Linux unit test of request-building / parsing / traceability) compiles without
 # reqwest; the macOS shell enables it.
 net = ["dep:reqwest"]
-# `db` pulls in the storage layer for the daemon's DB-backed traceability sink. OFF by default so
-# the pure-logic tests stay rusqlite-free; the daemon (and its CI step) enable it.
-db = ["dep:shogun-memory", "dep:rusqlite"]
+# `db` pulls in the storage + fusion layers for the daemon's wiring (DB-backed traceability sink,
+# capture writes, state reads → Fusion supply). OFF by default so the pure-logic tests stay
+# rusqlite-free; the daemon (and its CI step) enable it.
+db = ["dep:shogun-memory", "dep:rusqlite", "dep:shogun-fusion"]
 
 [dependencies]
 tokio = { version = "1", features = ["sync"] }
@@ -39,6 +40,7 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 # Storage layer + its rusqlite handle, feature-gated (see the `db` feature). Same rusqlite version
 # as shogun-memory so the bundled SQLite compiles once.
 shogun-memory = { path = "../shogun-memory", optional = true }
+shogun-fusion = { path = "../shogun-fusion", optional = true }
 rusqlite = { version = "0.31", features = ["bundled"], optional = true }
 
 [dev-dependencies]

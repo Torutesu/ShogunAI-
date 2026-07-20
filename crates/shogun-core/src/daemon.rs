@@ -14,8 +14,11 @@ use std::sync::{Arc, Mutex};
 
 use rusqlite::Connection;
 use shogun_memory::event_log::{self, NewEvent};
+use shogun_memory::state::{self, NewCommitment, NewOpenLoop, NewPerson, NewProject, Provenance};
 use shogun_memory::traceability::{Filter, TraceRow};
 use shogun_memory::MemoryError;
+use shogun_fusion::brief::{assemble_brief, assemble_degraded, CalendarLine, CommitmentDue, MorningBrief, OpenLoopItem};
+use shogun_fusion::assemble::ActionCandidate;
 
 use crate::db_sink::DbTraceabilitySink;
 
@@ -72,6 +75,85 @@ impl Db {
     /// The current time via the injected clock.
     pub fn now_ms(&self) -> i64 {
         (self.clock)()
+    }
+
+    // -------------------------------------------------------------- state writes (deliberate)
+    // Unlike capture, state writes are low-frequency and deliberate (Dream Cycle consolidation,
+    // API propose). They return the new id or `None` on failure so the caller (e.g. a Dream Cycle
+    // job) can mark itself failed rather than silently continuing.
+
+    /// Insert a person with provenance (FR-ST-02).
+    pub fn insert_person(&self, p: &NewPerson<'_>, provenance: &[Provenance]) -> Option<i64> {
+        let mut g = self.conn.lock().ok()?;
+        state::insert_person(&mut g, p, provenance).ok()
+    }
+
+    /// Insert a project with provenance.
+    pub fn insert_project(&self, p: &NewProject<'_>, provenance: &[Provenance]) -> Option<i64> {
+        let mut g = self.conn.lock().ok()?;
+        state::insert_project(&mut g, p, provenance).ok()
+    }
+
+    /// Insert a commitment with provenance.
+    pub fn insert_commitment(&self, c: &NewCommitment<'_>, provenance: &[Provenance]) -> Option<i64> {
+        let mut g = self.conn.lock().ok()?;
+        state::insert_commitment(&mut g, c, provenance).ok()
+    }
+
+    /// Insert an open loop with provenance.
+    pub fn insert_open_loop(&self, l: &NewOpenLoop<'_>, provenance: &[Provenance]) -> Option<i64> {
+        let mut g = self.conn.lock().ok()?;
+        state::insert_open_loop(&mut g, l, provenance).ok()
+    }
+
+    // -------------------------------------------------------------- state reads → Fusion supply
+    // The daemon reads state rows and maps them into Fusion's input types, so Context Fusion and
+    // the Morning Brief run on real DB data. The confidence gate lives in Fusion (FR-ST-20); the
+    // daemon only supplies the rows.
+
+    /// Commitments as Fusion/Brief input. `overdue` is derived from the status or a past due time.
+    pub fn commitments_due(&self, now_ms: i64) -> Vec<CommitmentDue> {
+        let rows = self.conn.lock().ok().and_then(|c| state::list_commitments(&c).ok()).unwrap_or_default();
+        rows.into_iter()
+            .map(|r| CommitmentDue {
+                overdue: r.status == "overdue" || r.due_at.is_some_and(|d| d < now_ms),
+                description: r.description,
+                due_at_ms: r.due_at,
+                confidence: r.confidence,
+                provenance_event_id: r.first_event_id.unwrap_or(0),
+            })
+            .collect()
+    }
+
+    /// Open loops as Fusion/Brief input (stalest first; the Brief caps the count).
+    pub fn open_loops(&self) -> Vec<OpenLoopItem> {
+        let rows = self.conn.lock().ok().and_then(|c| state::list_open_loops(&c).ok()).unwrap_or_default();
+        rows.into_iter()
+            .map(|r| OpenLoopItem {
+                description: r.description,
+                staleness_days: u32::try_from(r.staleness_days).unwrap_or(0),
+                confidence: r.confidence,
+                provenance_event_id: r.first_event_id.unwrap_or(0),
+            })
+            .collect()
+    }
+
+    /// Assemble a full Morning Brief from DB state plus the supplied calendar / prose / suggestions
+    /// (§6.8). The section rules + confidence gate are Fusion's; the daemon supplies the state.
+    pub fn morning_brief(
+        &self,
+        calendar: Vec<CalendarLine>,
+        what_happened: Vec<String>,
+        suggested: Vec<ActionCandidate>,
+        now_ms: i64,
+    ) -> MorningBrief {
+        assemble_brief(calendar, &self.commitments_due(now_ms), &self.open_loops(), what_happened, suggested)
+    }
+
+    /// The local-only degraded Brief (FR-MB-04): calendar + overdue commitments from the DB, no
+    /// prose — used when the Batch-API generation is unavailable.
+    pub fn local_morning_brief(&self, calendar: Vec<CalendarLine>, now_ms: i64) -> MorningBrief {
+        assemble_degraded(calendar, &self.commitments_due(now_ms))
     }
 }
 
@@ -131,5 +213,64 @@ mod tests {
             .record(TraceRecord::for_chunk(Route::MessagesApi, "agent", "api.anthropic.com", "chunk", false));
         // both writes landed on the one connection
         assert_eq!(db.trace_rows(&Filter::default()).len(), 1);
+    }
+
+    #[test]
+    fn state_write_then_fusion_supply_roundtrip() {
+        use shogun_memory::state::{CommitmentDirection, CommitmentStatus, NewCommitment};
+
+        let db = Db::open_in_memory(clock(1)).unwrap();
+        // a captured event is the provenance for the commitment
+        let (event_id, _) = db.capture(&ev("Alice asked for the report", "h1", 5)).unwrap();
+
+        let id = db
+            .insert_commitment(
+                &NewCommitment {
+                    direction: CommitmentDirection::Mine,
+                    counterparty_id: None,
+                    description: "send the report",
+                    due_at: Some(50),
+                    status: CommitmentStatus::Open,
+                    project_id: None,
+                    confidence: 0.9,
+                    now: 5,
+                },
+                &[Provenance::new(event_id)],
+            )
+            .expect("commitment insert");
+        assert!(id > 0);
+
+        // now supply it to Fusion — at now=100 the due=50 commitment reads as overdue
+        let due = db.commitments_due(100);
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].description, "send the report");
+        assert!(due[0].overdue, "due 50 < now 100 → overdue");
+        assert_eq!(due[0].provenance_event_id, event_id);
+    }
+
+    #[test]
+    fn local_brief_from_db_carries_overdue_commitments_only() {
+        use shogun_memory::state::{CommitmentDirection, CommitmentStatus, NewCommitment};
+
+        let db = Db::open_in_memory(clock(1)).unwrap();
+        let (e, _) = db.capture(&ev("x", "h1", 1)).unwrap();
+        let mk = |desc: &'static str, due: i64, status| NewCommitment {
+            direction: CommitmentDirection::Mine,
+            counterparty_id: None,
+            description: desc,
+            due_at: Some(due),
+            status,
+            project_id: None,
+            confidence: 0.9,
+            now: 1,
+        };
+        db.insert_commitment(&mk("overdue one", 10, CommitmentStatus::Overdue), &[Provenance::new(e)]).unwrap();
+        db.insert_commitment(&mk("future one", 9999, CommitmentStatus::Open), &[Provenance::new(e)]).unwrap();
+
+        // degraded/local brief keeps only overdue commitments (FR-MB-04)
+        let brief = db.local_morning_brief(Vec::new(), 100);
+        assert!(brief.degraded);
+        assert_eq!(brief.commitments_due.len(), 1);
+        assert_eq!(brief.commitments_due[0].text, "overdue one");
     }
 }
