@@ -12,3 +12,7 @@
 pub mod gate;
 pub mod health;
 pub mod plan;
+/// The nightly execution loop (gate → resume → run jobs). Needs the DB handle, so it is behind
+/// the `db` feature.
+#[cfg(feature = "db")]
+pub mod run;
