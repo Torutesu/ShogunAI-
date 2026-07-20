@@ -59,6 +59,28 @@ impl Db {
         self.conn.lock().ok().and_then(|c| event_log::insert_or_touch(&c, ev).ok())
     }
 
+    /// Append a user note to the event log (`memory.append_note`, L1). Source `user`, kind `note`;
+    /// content-hashed for dedup like any event. Returns the row id (or `None` on write failure).
+    pub fn append_note(&self, text: &str) -> Option<i64> {
+        use std::hash::Hasher;
+        let mut h = twox_hash::XxHash64::with_seed(0);
+        h.write(text.as_bytes());
+        let hash = format!("{:016x}", h.finish());
+        let ev = NewEvent {
+            ts: self.now_ms(),
+            source: "user",
+            kind: "note",
+            app_bundle_id: None,
+            window_title: None,
+            content: text,
+            content_hash: &hash,
+            dwell_ms: 0,
+            display_id: None,
+            window_bounds: None,
+        };
+        self.capture(&ev).map(|(id, _)| id)
+    }
+
     /// A traceability sink that writes through this same handle (the LLM egress records here).
     pub fn traceability_sink(&self) -> DbTraceabilitySink {
         DbTraceabilitySink::new(self.conn.clone(), self.clock.clone())

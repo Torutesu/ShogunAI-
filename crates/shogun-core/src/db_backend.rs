@@ -5,7 +5,7 @@
 //! the daemon — the API layer never depends on the core. The confidence gate stays in the API
 //! layer (FR-API-06); this backend only supplies rows.
 
-use shogun_mcp::backend::{MemoryBackend, ReadItem, ReadParams};
+use shogun_mcp::backend::{MemoryBackend, ReadItem, ReadParams, WriteResult};
 use shogun_mcp::memory_api::Tool;
 
 use crate::daemon::Db;
@@ -77,6 +77,21 @@ impl MemoryBackend for DbBackend {
 
             // Not a read tool (write / action) — never routed here.
             Tool::MemoryAppendNote | Tool::StateProposeUpdate | Tool::ActionsExecute => Vec::new(),
+        }
+    }
+
+    fn write(&self, tool: Tool, body: &str) -> WriteResult {
+        match tool {
+            // Persist the note to the event log (L1, reversible).
+            Tool::MemoryAppendNote => match self.db.append_note(body) {
+                Some(id) => Ok(Some(id)),
+                None => Err("append_note failed".to_string()),
+            },
+            // A proposed state change is accepted here and surfaces in the Notch for L2 confirm; a
+            // proposals table is future work, so nothing is persisted yet.
+            Tool::StateProposeUpdate => Ok(None),
+            // Not a write tool.
+            _ => Err("not a write tool".to_string()),
         }
     }
 }
@@ -193,6 +208,51 @@ mod tests {
     }
 
     #[test]
+    fn append_note_persists_to_the_event_log() {
+        let db = Db::open_in_memory(Arc::new(|| 555)).unwrap();
+        let backend = DbBackend::new(db.clone());
+        let id = match backend.write(Tool::MemoryAppendNote, "remember to call Alice") {
+            Ok(Some(id)) => id,
+            other => panic!("expected a persisted note id, got {other:?}"),
+        };
+        assert!(id > 0);
+        // it's a searchable user note in the event log
+        let hits = backend.read(Tool::MemorySearch, &ReadParams { id: None, query: Some("Alice".into()) });
+        assert_eq!(hits.len(), 1);
+        assert!(hits[0].label.contains("call Alice"));
+    }
+
+    #[test]
+    fn propose_is_accepted_without_persistence_and_non_writes_error() {
+        let backend = DbBackend::new(seed());
+        assert_eq!(backend.write(Tool::StateProposeUpdate, "{}"), Ok(None));
+        assert!(backend.write(Tool::MemorySearch, "x").is_err());
+    }
+
+    #[test]
+    fn full_stack_note_write_through_rest_respond_with() {
+        use shogun_mcp::memory_api::TokenRegistry;
+        use shogun_mcp::rest::{respond_with, Method, RestRequest};
+
+        let backend = DbBackend::new(Db::open_in_memory(Arc::new(|| 1)).unwrap());
+        let mut tokens = TokenRegistry::new();
+        tokens.issue("t");
+        let req = RestRequest {
+            method: Method::Post,
+            path: "/v1/memory/notes".into(),
+            token: Some("t".into()),
+            include_low: false,
+            query: None,
+            body: Some("ship v1 on friday".into()),
+        };
+        let (status, body) = respond_with(&req, &tokens, &backend);
+        assert_eq!(status, 202);
+        assert!(body.contains("memory.append_note"));
+        assert!(body.contains("\"level\":\"L1\""));
+        assert!(body.contains("\"id\":"), "persisted note id missing: {body}");
+    }
+
+    #[test]
     fn full_stack_db_backend_through_rest_respond_with() {
         use shogun_mcp::memory_api::TokenRegistry;
         use shogun_mcp::rest::{respond_with, Method, RestRequest};
@@ -206,6 +266,7 @@ mod tests {
             token: Some("t".into()),
             include_low: false,
             query: None,
+            body: None,
         };
         let (status, body) = respond_with(&req, &tokens, &backend);
         assert_eq!(status, 200);

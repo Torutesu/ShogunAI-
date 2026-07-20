@@ -32,6 +32,8 @@ pub struct RestRequest {
     pub include_low: bool,
     /// `?q=` — the search query (for `memory.search`).
     pub query: Option<String>,
+    /// The request body (POST writes, e.g. the note text).
+    pub body: Option<String>,
 }
 
 /// The routing decision. The server turns this into an HTTP response, running the backend for the
@@ -244,6 +246,24 @@ pub fn respond_with<B: MemoryBackend + ?Sized>(
                 .collect();
             (200, format!(r#"{{"tool":"{}","results":[{}]}}"#, tool_name(tool), rendered.join(",")))
         }
+        Routed::Write { tool, level } => {
+            match backend.write(tool, req.body.as_deref().unwrap_or("")) {
+                Ok(Some(id)) => (
+                    202,
+                    format!(
+                        r#"{{"tool":"{}","level":"{}","id":{},"accepted":true}}"#,
+                        tool_name(tool),
+                        level_label(level),
+                        id
+                    ),
+                ),
+                Ok(None) => (
+                    202,
+                    format!(r#"{{"tool":"{}","level":"{}","accepted":true}}"#, tool_name(tool), level_label(level)),
+                ),
+                Err(e) => (500, format!(r#"{{"error":"{}"}}"#, json_escape(&e))),
+            }
+        }
         other => (status_code(&other), body_for(&other)),
     }
 }
@@ -259,7 +279,7 @@ mod tests {
         r
     }
     fn req(method: Method, path: &str, token: Option<&str>) -> RestRequest {
-        RestRequest { method, path: path.into(), token: token.map(str::to_string), include_low: false, query: None }
+        RestRequest { method, path: path.into(), token: token.map(str::to_string), include_low: false, query: None, body: None }
     }
 
     #[test]

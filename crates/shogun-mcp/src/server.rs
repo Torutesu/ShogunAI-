@@ -64,9 +64,16 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
         .find_map(|kv| kv.strip_prefix("q="))
         .map(percent_decode);
 
-    let (status, body) = match method {
+    // Read the request body (POST writes). Bounded to 256 KiB; empty on read failure.
+    let body = axum::body::to_bytes(req.into_body(), 256 * 1024)
+        .await
+        .ok()
+        .map(|b| String::from_utf8_lossy(&b).into_owned())
+        .filter(|s| !s.is_empty());
+
+    let (status, resp_body) = match method {
         Some(method) => rest::respond_with(
-            &RestRequest { method, path, token, include_low, query },
+            &RestRequest { method, path, token, include_low, query, body },
             &state.tokens,
             state.backend.as_ref(),
         ),
@@ -77,7 +84,7 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
     Response::builder()
         .status(status)
         .header(CONTENT_TYPE, "application/json")
-        .body(Body::from(body))
+        .body(Body::from(resp_body))
         .unwrap_or_default()
 }
 
@@ -154,6 +161,19 @@ mod tests {
         String::from_utf8_lossy(&buf).into_owned()
     }
 
+    async fn raw_post(addr: std::net::SocketAddr, path: &str, auth: Option<&str>, body: &str) -> String {
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let auth_line = auth.map(|t| format!("Authorization: Bearer {t}\r\n")).unwrap_or_default();
+        let request = format!(
+            "POST {path} HTTP/1.1\r\nHost: localhost\r\n{auth_line}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let mut buf = Vec::new();
+        stream.read_to_end(&mut buf).await.unwrap();
+        String::from_utf8_lossy(&buf).into_owned()
+    }
+
     async fn spawn_server(tokens: TokenRegistry) -> std::net::SocketAddr {
         spawn_server_with(tokens, Arc::new(crate::backend::StubBackend)).await
     }
@@ -222,5 +242,43 @@ mod tests {
         let resp = raw_get(addr, "/v1/state/commitments", Some("t")).await;
         assert!(resp.contains("200"), "got: {resp}");
         assert!(resp.contains("ship the report"), "real backend data missing: {resp}");
+    }
+
+    #[tokio::test]
+    async fn post_note_reaches_the_backend_write_over_the_socket() {
+        use crate::backend::{MemoryBackend, ReadItem, ReadParams, WriteResult};
+        use crate::memory_api::Tool;
+        use std::sync::Mutex;
+
+        // a backend that records the note body it was asked to write
+        struct Recorder {
+            last: Mutex<Option<String>>,
+        }
+        impl MemoryBackend for Recorder {
+            fn read(&self, _t: Tool, _p: &ReadParams) -> Vec<ReadItem> {
+                Vec::new()
+            }
+            fn write(&self, tool: Tool, body: &str) -> WriteResult {
+                if tool == Tool::MemoryAppendNote {
+                    *self.last.lock().unwrap() = Some(body.to_string());
+                    Ok(Some(7))
+                } else {
+                    Ok(None)
+                }
+            }
+        }
+        let mut tokens = TokenRegistry::new();
+        tokens.issue("t");
+        let backend = Arc::new(Recorder { last: Mutex::new(None) });
+        let addr = spawn_server_with(tokens, backend.clone()).await;
+
+        let resp = raw_post(addr, "/v1/memory/notes", Some("t"), "buy milk").await;
+        assert!(resp.contains("202"), "got: {resp}");
+        assert!(resp.contains("\"id\":7"));
+        assert_eq!(backend.last.lock().unwrap().as_deref(), Some("buy milk"));
+
+        // no token → 401, and the backend is not touched
+        let resp = raw_post(addr, "/v1/memory/notes", None, "sneaky").await;
+        assert!(resp.contains("401"), "got: {resp}");
     }
 }

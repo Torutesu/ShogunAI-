@@ -31,11 +31,22 @@ pub struct ReadParams {
     pub query: Option<String>,
 }
 
-/// The data source behind the Memory API's read tools. Implemented by the daemon over its DB.
+/// The result of a write tool (append_note = L1, propose_update = L2). `Some(id)` when a row was
+/// written (a note), `None` when the write is accepted but not persisted here (a proposal awaits
+/// Notch confirmation).
+pub type WriteResult = Result<Option<i64>, String>;
+
+/// The data source behind the Memory API. Implemented by the daemon over its DB.
 pub trait MemoryBackend: Send + Sync {
     /// Rows for a read tool, given its parameters. Rows are unfiltered — the server applies the
     /// confidence gate (FR-API-06).
     fn read(&self, tool: Tool, params: &ReadParams) -> Vec<ReadItem>;
+
+    /// Perform a write tool with the request `body` (e.g. the note text). The default is a no-op
+    /// "accepted" so a read-only backend still compiles.
+    fn write(&self, _tool: Tool, _body: &str) -> WriteResult {
+        Ok(None)
+    }
 }
 
 /// A backend that returns nothing — the server is runnable/testable before the DB is wired.
