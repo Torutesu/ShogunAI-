@@ -1,87 +1,103 @@
-//! End-to-end integration of the spike's behavioural core: a realistic mouse trajectory
-//! is pushed through `HoverTracker`, its signals are routed into `StateMachine` (the same
-//! mapping the macOS adapter performs), and the resulting state path is asserted. This is
-//! the off-device stand-in for the S-12 expand flow — it exercises the two modules together
-//! rather than in isolation.
+//! End-to-end integration of the behavioural core: a realistic mouse trajectory is pushed
+//! through the whole `NotchEngine` (HoverTracker → state-aware routing → StateMachine), the
+//! same path the macOS adapter drives, and the resulting state sequence is asserted. This is
+//! the off-device stand-in for the expand flow — it exercises the modules together under the
+//! two-level open model (spec §6.1.1) rather than in isolation.
 
-use shogun_core::notch::geometry::{idle_rect, regions, GeometryParams, Point, Rect};
-use shogun_core::notch::hover::{HoverParams, HoverSignal, HoverTracker};
-use shogun_core::notch::statemachine::{Effect, Input, Params, State, StateMachine};
+use shogun_core::notch::engine::{EngineInput, EngineOutput, NotchEngine};
+use shogun_core::notch::geometry::{idle_rect, regions, GeometryParams, Rect, Regions};
+use shogun_core::notch::hover::HoverParams;
+use shogun_core::notch::statemachine::{Params, State, Timer};
 
-/// The adapter's HoverSignal → Input routing (spec §3.11 boundary). Timer expiries
-/// (DwellExpired/GraceExpired/AnimDone) are injected separately, as on-device.
-fn route(sig: HoverSignal, sm: &mut StateMachine) -> Vec<Effect> {
-    match sig {
-        HoverSignal::EnterEnter { fast } => sm.step(Input::HoverEnter { fast }),
-        HoverSignal::ExitStay => sm.step(Input::HoverExitStay),
-        HoverSignal::ExitExp => sm.step(Input::ExpExit),
-        HoverSignal::ReenterExp => sm.step(Input::ExpReenter),
-        HoverSignal::TopBandEntry => vec![], // denominator counter only
-    }
-}
-
-fn setup() -> (HoverTracker, StateMachine, shogun_core::notch::geometry::Regions) {
+fn engine() -> (NotchEngine, Regions, f64) {
     let screen = Rect::new(0.0, 0.0, 1512.0, 982.0);
     let idle = idle_rect(screen, 200.0, 32.0);
     let regs = regions(screen, idle, GeometryParams::default());
     let menubar_min_y = screen.max_y() - 24.0;
+    let primary_h = 982.0;
     (
-        HoverTracker::new(regs, menubar_min_y, HoverParams::default()),
-        StateMachine::new(Params::default()),
+        NotchEngine::new(regs, menubar_min_y, primary_h, HoverParams::default(), Params::default()),
         regs,
+        primary_h,
     )
 }
 
-fn feed(h: &mut HoverTracker, sm: &mut StateMachine, p: Point, t: u64) -> Vec<Effect> {
-    h.on_move(p, t, 0).into_iter().flat_map(|sig| route(sig, sm)).collect()
+/// NS→CG (top-left) conversion the adapter feeds the engine.
+fn cg(ns_x: f64, ns_y: f64, primary_h: f64) -> (f64, f64) {
+    (ns_x, primary_h - ns_y)
+}
+
+fn move_to(e: &mut NotchEngine, ns_x: f64, ns_y: f64, primary_h: f64, t_ms: u64) -> Vec<EngineOutput> {
+    let (x, y) = cg(ns_x, ns_y, primary_h);
+    e.on_input(EngineInput::MouseCg { x, y, t_ms, buttons: 0 })
 }
 
 #[test]
-fn full_expand_then_collapse_cycle() {
-    let (mut h, mut sm, regs) = setup();
-    let center = Point::new(regs.r_enter.mid_x(), regs.r_enter.y + regs.r_enter.h / 2.0);
-    let below = Point::new(center.x, regs.top_band_min_y - 50.0);
+fn full_preview_expand_then_collapse_cycle() {
+    let (mut e, regs, h) = engine();
+    let cx = regs.r_enter.mid_x();
+    let cy = regs.r_enter.y + regs.r_enter.h / 2.0;
+    let below_y = regs.top_band_min_y - 50.0;
 
-    // 1) Mouse well below the notch — no state change.
-    feed(&mut h, &mut sm, below, 0);
-    assert_eq!(sm.state(), State::Idle);
+    // 1) Below the notch — Idle.
+    move_to(&mut e, cx, below_y, h, 0);
+    assert_eq!(e.state(), State::Idle);
 
-    // 2) Move onto the notch (slowly): HoverEnter → HoverIntent, dwell timer armed.
-    feed(&mut h, &mut sm, center, 500);
-    assert_eq!(sm.state(), State::HoverIntent);
+    // 2) Onto the notch → HoverIntent (dwell armed).
+    move_to(&mut e, cx, cy, h, 500);
+    assert_eq!(e.state(), State::HoverIntent);
 
-    // 3) Dwell fires (adapter timer) → Expanded, with the Q2 t0 marker exactly once.
-    let fx = sm.step(Input::DwellExpired);
-    assert_eq!(sm.state(), State::Expanded);
-    assert_eq!(fx.iter().filter(|e| matches!(e, Effect::MarkExpandCommit)).count(), 1);
-    assert!(fx.contains(&Effect::SetIgnoresMouse(false)));
+    // 3) Dwell fires → Hover(preview) with the preview commit exactly once.
+    let out = e.on_input(EngineInput::TimerFired(Timer::Dwell));
+    assert_eq!(e.state(), State::Hover);
+    assert_eq!(out.iter().filter(|o| matches!(o, EngineOutput::PreviewCommit)).count(), 1);
+    assert!(out.contains(&EngineOutput::SetIgnoresMouse(false)));
 
-    // 4) Move out past R_exp → grace armed; grace fires → Collapsing.
-    feed(&mut h, &mut sm, below, 1000);
-    assert_eq!(sm.state(), State::Expanded); // still expanded during grace
-    let fx = sm.step(Input::GraceExpired);
-    assert_eq!(sm.state(), State::Collapsing);
-    assert!(fx.contains(&Effect::SetIgnoresMouse(true)));
+    // 4) Click promotes the preview to the full panel (SLO-01 commit).
+    let out = e.on_input(EngineInput::Click);
+    assert_eq!(e.state(), State::Expanded);
+    assert!(out.contains(&EngineOutput::ExpandCommit));
 
-    // 5) Collapse animation completes → Idle.
-    sm.step(Input::AnimDone);
-    assert_eq!(sm.state(), State::Idle);
+    // 5) Esc → Collapsing; anim done → Idle.
+    let out = e.on_input(EngineInput::Esc);
+    assert_eq!(e.state(), State::Collapsing);
+    assert!(out.contains(&EngineOutput::SetIgnoresMouse(true)));
+    e.on_input(EngineInput::AnimDone);
+    assert_eq!(e.state(), State::Idle);
 }
 
 #[test]
-fn horizontal_flyby_does_not_expand() {
-    // Sweeping across the menubar (not stopping on the notch) must not reach Expanded:
-    // the dwell timer would be cancelled by the exit before it fires. Here we model that
-    // the adapter never delivers DwellExpired because ExitStay arrives first.
-    let (mut h, mut sm, regs) = setup();
-    let left = Point::new(regs.r_stay.x - 60.0, regs.r_enter.y + 2.0);
-    let center = Point::new(regs.r_enter.mid_x(), regs.r_enter.y + regs.r_enter.h / 2.0);
-    let right = Point::new(regs.r_stay.max_x() + 60.0, regs.r_enter.y + 2.0);
+fn preview_then_leave_collapses_without_click() {
+    let (mut e, regs, h) = engine();
+    let cx = regs.r_enter.mid_x();
+    let cy = regs.r_enter.y + regs.r_enter.h / 2.0;
+    let below_y = regs.top_band_min_y - 50.0;
 
-    feed(&mut h, &mut sm, left, 0);
-    feed(&mut h, &mut sm, center, 20); // enters → HoverIntent (dwell armed, 100ms)
-    assert_eq!(sm.state(), State::HoverIntent);
-    // Before 100ms elapses, the mouse has already left R_stay:
-    feed(&mut h, &mut sm, right, 60);
-    assert_eq!(sm.state(), State::Idle); // ExitStay cancelled the dwell
+    move_to(&mut e, cx, cy, h, 500);
+    e.on_input(EngineInput::TimerFired(Timer::Dwell));
+    assert_eq!(e.state(), State::Hover);
+
+    // Leave the outer region → HoverExit grace; grace fires → Collapsing.
+    move_to(&mut e, cx, below_y, h, 1000);
+    assert_eq!(e.state(), State::Hover); // still previewing during the grace
+    e.on_input(EngineInput::TimerFired(Timer::HoverExit));
+    assert_eq!(e.state(), State::Collapsing);
+}
+
+#[test]
+fn horizontal_flyby_does_not_open_preview() {
+    // Sweeping across the menubar (not stopping on the notch) must not reach Hover: the
+    // dwell is cancelled by the exit before it fires. We model that the adapter never
+    // delivers DwellExpired because ExitStay arrives first.
+    let (mut e, regs, h) = engine();
+    let left = (regs.r_stay.x - 60.0, regs.r_enter.y + 2.0);
+    let center = (regs.r_enter.mid_x(), regs.r_enter.y + regs.r_enter.h / 2.0);
+    let right = (regs.r_stay.max_x() + 60.0, regs.r_enter.y + 2.0);
+
+    move_to(&mut e, left.0, left.1, h, 0);
+    move_to(&mut e, center.0, center.1, h, 20); // enters → HoverIntent
+    assert_eq!(e.state(), State::HoverIntent);
+    // Before the dwell elapses, the mouse has already left R_stay:
+    move_to(&mut e, right.0, right.1, h, 60);
+    assert_eq!(e.state(), State::Idle); // ExitStay cancelled the dwell
 }

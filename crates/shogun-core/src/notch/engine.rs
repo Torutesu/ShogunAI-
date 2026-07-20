@@ -24,13 +24,25 @@ pub enum EngineInput {
     ButtonUp { t_ms: u64 },
     /// A scheduled timer fired.
     TimerFired(Timer),
-    /// The webview reported the collapse animation done (T6).
+    /// Click on the preview/panel (from the webview) → open the full panel.
+    Click,
+    /// Global hotkey (⌘⇧Space) → open the full panel directly.
+    Hotkey,
+    /// An interaction inside Expanded (from the webview) — resets the idle timeout.
+    Interaction,
+    /// "Open Full UI" chosen from Expanded.
+    OpenFullUi,
+    /// The webview reported the collapse animation done.
     AnimDone,
-    /// Esc while the panel is key (T4b).
+    /// Esc while the panel is key.
     Esc,
-    /// Click in the transparent margin of the panel (T4c).
+    /// Click in the transparent margin of the panel.
     OutsideClick,
-    /// Force collapse (display change / sleep, T4d).
+    /// Focused app entered fullscreen (FR-NU-08).
+    EnterFullscreen,
+    /// Focused app left fullscreen.
+    ExitFullscreen,
+    /// Force collapse (display change / sleep).
     ForceCollapse,
 }
 
@@ -45,8 +57,12 @@ pub enum EngineOutput {
     ScheduleTimer { timer: Timer, ms: u64 },
     /// Cancel a pending timer (the adapter must actually stop the underlying timer).
     CancelTimer(Timer),
-    /// Q2 `t0`: record the expand-commit instant to the harness.
+    /// `t0` for the preview-open latency (Idle→Hover) — the Phase 0 Q2 measurement.
+    PreviewCommit,
+    /// `t0` for the full-expand latency (→Expanded) — NFR-SLO-01.
     ExpandCommit,
+    /// Open the separate Full UI window.
+    OpenFullUi,
     /// Q4 denominator: the pointer entered the top band.
     TopBandEntry,
 }
@@ -65,7 +81,8 @@ pub struct NotchEngine {
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum TimerKey {
     Dwell,
-    Grace,
+    HoverExit,
+    ExpandedIdle,
     CollapseAnim,
 }
 
@@ -73,7 +90,8 @@ impl From<Timer> for TimerKey {
     fn from(t: Timer) -> Self {
         match t {
             Timer::Dwell => TimerKey::Dwell,
-            Timer::Grace => TimerKey::Grace,
+            Timer::HoverExit => TimerKey::HoverExit,
+            Timer::ExpandedIdle => TimerKey::ExpandedIdle,
             Timer::CollapseAnim => TimerKey::CollapseAnim,
         }
     }
@@ -129,35 +147,63 @@ impl NotchEngine {
                 if self.active_timers.remove(&TimerKey::from(t)) {
                     let sm_input = match t {
                         Timer::Dwell => Input::DwellExpired,
-                        Timer::Grace => Input::GraceExpired,
+                        Timer::HoverExit => Input::HoverExitExpired,
+                        Timer::ExpandedIdle => Input::ExpandedIdleExpired,
                         Timer::CollapseAnim => Input::AnimTimeout,
                     };
                     self.apply_sm(sm_input, &mut out);
                 }
             }
+            EngineInput::Click => self.apply_sm(Input::Click, &mut out),
+            EngineInput::Hotkey => self.apply_sm(Input::Hotkey, &mut out),
+            EngineInput::Interaction => self.apply_sm(Input::Interaction, &mut out),
+            EngineInput::OpenFullUi => self.apply_sm(Input::OpenFullUi, &mut out),
             EngineInput::AnimDone => self.apply_sm(Input::AnimDone, &mut out),
             EngineInput::Esc => self.apply_sm(Input::Esc, &mut out),
             EngineInput::OutsideClick => self.apply_sm(Input::OutsideClick, &mut out),
+            EngineInput::EnterFullscreen => self.apply_sm(Input::EnterFullscreen, &mut out),
+            EngineInput::ExitFullscreen => self.apply_sm(Input::ExitFullscreen, &mut out),
             EngineInput::ForceCollapse => self.apply_sm(Input::ForceCollapse, &mut out),
         }
         out
     }
 
+    /// Route a hover signal to the state machine, interpreting the region boundaries per the
+    /// current state (spec §6.1.1): the dwell (HoverIntent) is cancelled on leaving the inner
+    /// R_stay, while the preview (Hover) uses the larger R_exp boundary for its leave-grace so
+    /// small movements don't collapse it.
     fn route_hover(&mut self, sig: HoverSignal, out: &mut Vec<EngineOutput>) {
+        let st = self.sm.state();
         match sig {
             HoverSignal::TopBandEntry => out.push(EngineOutput::TopBandEntry),
             HoverSignal::EnterEnter { fast } => {
-                // Re-entering R_enter during Collapsing revives Expanded (T5); otherwise T1.
-                let input = if self.sm.state() == State::Collapsing {
-                    Input::ReenterEnter
-                } else {
-                    Input::HoverEnter { fast }
+                // Re-entering R_enter during Collapsing revives the preview (T5); while the
+                // preview is up it just cancels any pending leave-grace; otherwise it's the
+                // Idle→dwell trigger.
+                let input = match st {
+                    State::Collapsing => Input::ReenterEnter,
+                    State::Hover => Input::HoverReenter,
+                    _ => Input::HoverEnter { fast },
                 };
                 self.apply_sm(input, out);
             }
-            HoverSignal::ExitStay => self.apply_sm(Input::HoverExitStay, out),
-            HoverSignal::ExitExp => self.apply_sm(Input::ExpExit, out),
-            HoverSignal::ReenterExp => self.apply_sm(Input::ExpReenter, out),
+            // Leaving the inner region cancels a pending dwell; ignored once the preview is up.
+            HoverSignal::ExitStay => {
+                if st == State::HoverIntent {
+                    self.apply_sm(Input::HoverExitStay, out);
+                }
+            }
+            // Leaving / re-entering the outer region arms / disarms the preview leave-grace.
+            HoverSignal::ExitExp => {
+                if st == State::Hover {
+                    self.apply_sm(Input::HoverExitStay, out);
+                }
+            }
+            HoverSignal::ReenterExp => {
+                if st == State::Hover {
+                    self.apply_sm(Input::HoverReenter, out);
+                }
+            }
         }
     }
 
@@ -166,7 +212,9 @@ impl NotchEngine {
             match effect {
                 Effect::Transition(s) => out.push(EngineOutput::WebviewState(s)),
                 Effect::SetIgnoresMouse(b) => out.push(EngineOutput::SetIgnoresMouse(b)),
+                Effect::MarkPreviewCommit => out.push(EngineOutput::PreviewCommit),
                 Effect::MarkExpandCommit => out.push(EngineOutput::ExpandCommit),
+                Effect::OpenFullUi => out.push(EngineOutput::OpenFullUi),
                 Effect::StartTimer { timer, ms } => {
                     self.active_timers.insert(TimerKey::from(timer));
                     out.push(EngineOutput::ScheduleTimer { timer, ms });
@@ -203,20 +251,47 @@ mod tests {
         (ns_x, primary_h - ns_y)
     }
 
-    #[test]
-    fn mouse_into_notch_schedules_dwell_then_expands() {
-        let (mut e, regs, h) = engine();
+    /// Move the pointer into R_enter (top band + dwell arm).
+    fn enter_notch(e: &mut NotchEngine, regs: &Regions, h: f64, t_ms: u64) -> Vec<EngineOutput> {
         let cx = regs.r_enter.mid_x();
         let cy = regs.r_enter.y + regs.r_enter.h / 2.0;
         let (gx, gy) = cg(cx, cy, h);
+        e.on_input(EngineInput::MouseCg { x: gx, y: gy, t_ms, buttons: 0 })
+    }
 
-        let out = e.on_input(EngineInput::MouseCg { x: gx, y: gy, t_ms: 100, buttons: 0 });
+    #[test]
+    fn mouse_into_notch_schedules_dwell_then_opens_preview() {
+        let (mut e, regs, h) = engine();
+        let out = enter_notch(&mut e, &regs, h, 100);
         assert!(out.contains(&EngineOutput::TopBandEntry));
         assert!(out.contains(&EngineOutput::WebviewState(State::HoverIntent)));
         assert!(out.iter().any(|o| matches!(o, EngineOutput::ScheduleTimer { timer: Timer::Dwell, .. })));
 
-        // Dwell fires → Expanded + ExpandCommit + passthrough off.
+        // Dwell fires → Hover(preview) + PreviewCommit + passthrough off (NOT ExpandCommit).
         let out = e.on_input(EngineInput::TimerFired(Timer::Dwell));
+        assert!(out.contains(&EngineOutput::PreviewCommit));
+        assert!(out.contains(&EngineOutput::WebviewState(State::Hover)));
+        assert!(out.contains(&EngineOutput::SetIgnoresMouse(false)));
+        assert!(!out.contains(&EngineOutput::ExpandCommit));
+        assert_eq!(e.state(), State::Hover);
+    }
+
+    #[test]
+    fn click_promotes_preview_to_expanded() {
+        let (mut e, regs, h) = engine();
+        enter_notch(&mut e, &regs, h, 100);
+        e.on_input(EngineInput::TimerFired(Timer::Dwell)); // Hover
+        let out = e.on_input(EngineInput::Click);
+        assert!(out.contains(&EngineOutput::ExpandCommit));
+        assert!(out.contains(&EngineOutput::WebviewState(State::Expanded)));
+        assert!(out.iter().any(|o| matches!(o, EngineOutput::ScheduleTimer { timer: Timer::ExpandedIdle, .. })));
+        assert_eq!(e.state(), State::Expanded);
+    }
+
+    #[test]
+    fn hotkey_opens_expanded_directly_from_idle() {
+        let (mut e, _regs, _h) = engine();
+        let out = e.on_input(EngineInput::Hotkey);
         assert!(out.contains(&EngineOutput::ExpandCommit));
         assert!(out.contains(&EngineOutput::WebviewState(State::Expanded)));
         assert!(out.contains(&EngineOutput::SetIgnoresMouse(false)));
@@ -224,46 +299,62 @@ mod tests {
     }
 
     #[test]
-    fn stale_grace_fire_after_cancel_is_dropped() {
+    fn stale_hover_exit_fire_after_cancel_is_dropped() {
         let (mut e, regs, h) = engine();
-        let cx = regs.r_enter.mid_x();
-        let cy = regs.r_enter.y + regs.r_enter.h / 2.0;
-        let (gx, gy) = cg(cx, cy, h);
-        e.on_input(EngineInput::MouseCg { x: gx, y: gy, t_ms: 100, buttons: 0 });
-        e.on_input(EngineInput::TimerFired(Timer::Dwell)); // Expanded
+        enter_notch(&mut e, &regs, h, 100);
+        e.on_input(EngineInput::TimerFired(Timer::Dwell)); // Hover(preview)
 
-        // Leave R_exp → grace scheduled.
-        let (bx, by) = cg(cx, regs.top_band_min_y - 50.0, h); // below band → exits
+        // Leave R_exp (below band) → HoverExit grace scheduled.
+        let cx = regs.r_enter.mid_x();
+        let (bx, by) = cg(cx, regs.top_band_min_y - 50.0, h);
         let out = e.on_input(EngineInput::MouseCg { x: bx, y: by, t_ms: 200, buttons: 0 });
-        assert!(out.iter().any(|o| matches!(o, EngineOutput::ScheduleTimer { timer: Timer::Grace, .. })));
+        assert!(out.iter().any(|o| matches!(o, EngineOutput::ScheduleTimer { timer: Timer::HoverExit, .. })));
 
         // Re-enter R_exp → grace cancelled.
-        let out = e.on_input(EngineInput::MouseCg { x: gx, y: gy, t_ms: 250, buttons: 0 });
-        assert!(out.contains(&EngineOutput::CancelTimer(Timer::Grace)));
+        let out = enter_notch(&mut e, &regs, h, 250);
+        assert!(out.contains(&EngineOutput::CancelTimer(Timer::HoverExit)));
 
-        // A stale Grace fire now must be ignored (still Expanded).
-        let out = e.on_input(EngineInput::TimerFired(Timer::Grace));
+        // A stale HoverExit fire now must be ignored (still Hover).
+        let out = e.on_input(EngineInput::TimerFired(Timer::HoverExit));
         assert!(out.is_empty());
-        assert_eq!(e.state(), State::Expanded);
+        assert_eq!(e.state(), State::Hover);
     }
 
     #[test]
-    fn reenter_during_collapsing_revives_expanded() {
+    fn reenter_during_collapsing_revives_preview() {
         let (mut e, regs, h) = engine();
+        enter_notch(&mut e, &regs, h, 100);
+        e.on_input(EngineInput::TimerFired(Timer::Dwell)); // Hover
+        // Leave R_exp + grace expiry → Collapsing.
         let cx = regs.r_enter.mid_x();
-        let cy = regs.r_enter.y + regs.r_enter.h / 2.0;
-        let (gx, gy) = cg(cx, cy, h);
-        e.on_input(EngineInput::MouseCg { x: gx, y: gy, t_ms: 100, buttons: 0 });
-        e.on_input(EngineInput::TimerFired(Timer::Dwell));
-        // Exit + grace expiry → Collapsing.
         let (bx, by) = cg(cx, regs.top_band_min_y - 50.0, h);
         e.on_input(EngineInput::MouseCg { x: bx, y: by, t_ms: 200, buttons: 0 });
-        e.on_input(EngineInput::TimerFired(Timer::Grace));
+        e.on_input(EngineInput::TimerFired(Timer::HoverExit));
         assert_eq!(e.state(), State::Collapsing);
 
-        // Re-enter R_enter → EnterEnter routed as ReenterEnter → Expanded.
-        let out = e.on_input(EngineInput::MouseCg { x: gx, y: gy, t_ms: 300, buttons: 0 });
-        assert!(out.contains(&EngineOutput::WebviewState(State::Expanded)));
-        assert_eq!(e.state(), State::Expanded);
+        // Re-enter R_enter → EnterEnter routed as ReenterEnter → Hover(preview).
+        let out = enter_notch(&mut e, &regs, h, 300);
+        assert!(out.contains(&EngineOutput::WebviewState(State::Hover)));
+        assert_eq!(e.state(), State::Hover);
+    }
+
+    #[test]
+    fn fullscreen_hides_and_restores() {
+        let (mut e, _regs, _h) = engine();
+        e.on_input(EngineInput::Hotkey); // Expanded
+        let out = e.on_input(EngineInput::EnterFullscreen);
+        assert!(out.contains(&EngineOutput::WebviewState(State::Hidden)));
+        assert_eq!(e.state(), State::Hidden);
+        let out = e.on_input(EngineInput::ExitFullscreen);
+        assert!(out.contains(&EngineOutput::WebviewState(State::Idle)));
+    }
+
+    #[test]
+    fn open_full_ui_emits_output() {
+        let (mut e, _regs, _h) = engine();
+        e.on_input(EngineInput::Hotkey); // Expanded
+        let out = e.on_input(EngineInput::OpenFullUi);
+        assert!(out.contains(&EngineOutput::OpenFullUi));
+        assert_eq!(e.state(), State::Collapsing);
     }
 }

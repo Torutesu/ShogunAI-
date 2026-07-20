@@ -76,13 +76,17 @@ pub mod mac {
         Input(EngineInput),
     }
 
-    /// An open Expanded session (spec §4.2.4).
+    /// An open preview/expanded session (spec §4.2.4). Opened when the preview (Hover) first
+    /// appears — that is the automatic open the Q4 false-positive rate is about. `promoted`
+    /// records whether the user then deliberately opened the full panel (click / hotkey),
+    /// which by definition rules the session out as a hover false positive.
     struct SessionDraft {
         opened_at_ms: u64,
         opened_mono_ns: u64,
         clicks: u32,
         keys: u32,
         scrolls: u32,
+        promoted: bool,
         manual_false_positive: bool,
     }
 
@@ -321,8 +325,10 @@ pub mod mac {
                     *g = s.tag();
                 }
                 match s {
-                    State::Expanded => {
-                        // Open a session unless one is live (a T5 revive continues it).
+                    State::Hover => {
+                        // The preview is the AUTOMATIC open (dwell-triggered) the Q4
+                        // false-positive rate is about — open the session here unless one is
+                        // live (a T5 revive continues it).
                         if let Ok(mut sess) = shared.session.lock() {
                             if sess.is_none() {
                                 *sess = Some(SessionDraft {
@@ -331,18 +337,21 @@ pub mod mac {
                                     clicks: 0,
                                     keys: 0,
                                     scrolls: 0,
+                                    promoted: false,
                                     manual_false_positive: false,
                                 });
                             }
                         }
-                        // Push the pre-assembled context so the panel shows it on open. This
-                        // is a READ of the existing cache — it never triggers a walk (spec
-                        // §3.10.3 "no collect-on-press"); the walk only runs on focus change.
-                        if let Ok(g) = shared.last_context.lock() {
-                            if let Some(ctx) = g.as_ref() {
-                                let _ = app.emit("context", ctx.clone());
+                        emit_cached_context(app, shared);
+                    }
+                    State::Expanded => {
+                        // Deliberate promotion to the full panel — not a false positive.
+                        if let Ok(mut sess) = shared.session.lock() {
+                            if let Some(d) = sess.as_mut() {
+                                d.promoted = true;
                             }
                         }
+                        emit_cached_context(app, shared);
                     }
                     State::Idle => close_session(shared),
                     _ => {}
@@ -359,10 +368,22 @@ pub mod mac {
             }
             EngineOutput::ScheduleTimer { timer, ms } => timers.schedule(timer, ms),
             EngineOutput::CancelTimer(timer) => timers.cancel(timer),
-            EngineOutput::ExpandCommit => {
+            EngineOutput::PreviewCommit => {
+                // `t0` for the preview-open latency (Idle→Hover) — the Phase 0 Q2 metric
+                // (the visible panel open). The webview reports its paint against this.
                 let t0 = shared.clock.elapsed_ns();
                 shared.last_commit_ns.store(t0, Ordering::SeqCst);
                 shared.recorder.record(Body::ExpandCommit { t0_mono_ns: t0 });
+            }
+            EngineOutput::ExpandCommit => {
+                // `t0` for the full-expand latency (→Expanded), i.e. NFR-SLO-01. The dedicated
+                // SLO-01 histogram is WP1.4; for now record the marker for traceability.
+                let t0 = shared.clock.elapsed_ns();
+                shared.recorder.record(Body::ExpandCommit { t0_mono_ns: t0 });
+            }
+            EngineOutput::OpenFullUi => {
+                // The separate Full UI window is a later work package (§6.15); log the intent.
+                eprintln!("[spike] OpenFullUi requested (Full UI window not yet implemented)");
             }
             EngineOutput::TopBandEntry => {
                 shared.recorder.record(Body::TopBandEntry { count: 1 });
@@ -370,14 +391,27 @@ pub mod mac {
         }
     }
 
-    /// Close the live session (Expanded → Idle) into an `event.expand_session` record.
+    /// Push the pre-assembled context to the webview. This is a READ of the existing cache —
+    /// it never triggers a walk (spec §3.10.3 "no collect-on-press"); the walk only runs on
+    /// focus change in the focus watcher.
+    fn emit_cached_context(app: &AppHandle, shared: &Shared) {
+        if let Ok(g) = shared.last_context.lock() {
+            if let Some(ctx) = g.as_ref() {
+                let _ = app.emit("context", ctx.clone());
+            }
+        }
+    }
+
+    /// Close the live session (preview/Expanded → Idle) into an `event.expand_session` record.
     fn close_session(shared: &Shared) {
         let Some(d) = shared.session.lock().ok().and_then(|mut s| s.take()) else {
             return;
         };
         let duration_ms = (shared.clock.elapsed_ns().saturating_sub(d.opened_mono_ns)) / 1_000_000;
         let interactions = Interactions { clicks: d.clicks, keys: d.keys, scrolls: d.scrolls };
-        let auto_fp = d.clicks + d.keys + d.scrolls == 0 && duration_ms < 1500;
+        // A promoted session (the user clicked/hotkeyed to the full panel) is a deliberate
+        // open, never a false positive — regardless of duration or later interaction.
+        let auto_fp = !d.promoted && d.clicks + d.keys + d.scrolls == 0 && duration_ms < 1500;
         let reason = shared.collapse_reason.lock().map(|g| *g).unwrap_or("timeout");
         use spike_harness::record::CloseReason;
         let close_reason = match reason {
@@ -600,12 +634,14 @@ pub mod mac {
     // The webview→Rust half of the closed IPC contract (spec §3.11.2). Registered in
     // lib.rs via generate_handler; payload keys arrive camelCase and map to snake_case.
 
-    /// rAF×2 paint-completion: the Q2 `t1`. Latency = t1 − last expand commit, both on
-    /// the shared clock (JS time converted via the min-RTT offset).
+    /// rAF×2 paint-completion: the Q2 `t1`. Latency = t1 − last preview commit, both on the
+    /// shared clock (JS time converted via the min-RTT offset). Measures the preview open
+    /// (Idle→Hover) — the visible panel appearance the Phase 0 p95 refers to. The dedicated
+    /// full-expand (SLO-01) and preview vs expand split are WP1.4.
     #[tauri::command]
     pub fn painted(state: String, t1_perf_ms: f64, shared: tauri::State<'_, Arc<Shared>>) {
         eprintln!("[spike] cmd painted state={state} t1={t1_perf_ms:.1}");
-        if state != "expanded" {
+        if state != "hover" {
             return;
         }
         // Consume the commit FIRST, unconditionally. Each expand-commit must pair with
@@ -651,7 +687,8 @@ pub mod mac {
         }));
     }
 
-    /// Interaction tally for the live Expanded session (Q4 auto-false-positive input).
+    /// Interaction tally for the live session (Q4 input) plus the Expanded idle-timer reset.
+    /// `boot` is the webview-alive ping (no tally, no engine input).
     #[tauri::command]
     pub fn interact(kind: String, shared: tauri::State<'_, Arc<Shared>>) {
         eprintln!("[spike] cmd interact kind={kind}");
@@ -665,6 +702,33 @@ pub mod mac {
                 }
             }
         }
+        // A real interaction inside Expanded resets the 20s idle timeout (state machine
+        // ignores it in other states). `boot` must not count as interaction.
+        if kind != "boot" {
+            shared.send(Ev::Input(EngineInput::Interaction));
+        }
+    }
+
+    /// Click on the preview → promote to the full Expanded panel (Hover→Expanded).
+    #[tauri::command]
+    pub fn promote(shared: tauri::State<'_, Arc<Shared>>) {
+        eprintln!("[spike] cmd promote (preview → expanded)");
+        shared.send(Ev::Input(EngineInput::Click));
+    }
+
+    /// Global-hotkey open (⌘⇧Space). Fed from the webview today; a Rust-side NSEvent global
+    /// monitor for the true system-wide hotkey is a later adapter step.
+    #[tauri::command]
+    pub fn hotkey(shared: tauri::State<'_, Arc<Shared>>) {
+        eprintln!("[spike] cmd hotkey");
+        shared.send(Ev::Input(EngineInput::Hotkey));
+    }
+
+    /// "Open Full UI" chosen from the Expanded panel.
+    #[tauri::command]
+    pub fn open_full_ui(shared: tauri::State<'_, Arc<Shared>>) {
+        eprintln!("[spike] cmd open_full_ui");
+        shared.send(Ev::Input(EngineInput::OpenFullUi));
     }
 
     /// transitionend from the webview (T6) — the normal collapse completion.

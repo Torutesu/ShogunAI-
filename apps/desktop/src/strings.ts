@@ -6,6 +6,8 @@ export const STRINGS = {
     action1: "Action 1",
     action2: "Action 2",
     action3: "Action 3",
+    action4: "Action 4",
+    openFullUi: "Open Full UI",
     partialSuffix: " (partial)",
     noContext: "no context",
     noText: "no readable text",

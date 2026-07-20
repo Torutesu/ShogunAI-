@@ -3,12 +3,13 @@ import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { t } from "./strings";
 
-// Mirror of the closed IPC contract (spec §3.11.2). The webview does exactly three things:
-// class-swap on `state`, paint-done notification (rAF×2 → `painted`), and input forwarding
-// (`interact` / `collapse_request` / `anim_done` / `clock_sync_ack`). No timers, no state
-// machine, no cache here (data centre of gravity is Rust).
+// Mirror of the closed IPC contract (spec §3.11.2 / §6.1.1). The webview only: class-swaps on
+// `state`, reports paint-done (rAF×2 → `painted`), and forwards input (`promote` / `interact` /
+// `open_full_ui` / `collapse_request` / `anim_done` / `clock_sync_ack`). No timers, no state
+// machine, no cache here (data centre of gravity is Rust). Two open levels per FR-NU-01:
+// Hover = preview (1 action + status line), Expanded = full panel (≤4 actions + Full UI).
 
-type UiState = "idle" | "hoverintent" | "expanded" | "collapsing";
+type UiState = "idle" | "hoverintent" | "hover" | "expanded" | "collapsing" | "hidden";
 
 interface StatePayload {
   state: UiState;
@@ -29,9 +30,9 @@ interface ClockSyncPayload {
 }
 
 /**
- * Notify Rust that the Expanded frame has actually been presented. Two nested rAFs
- * approximate "after the next frame is composited" — this is the `t1` of the Q2 expand
- * latency measurement (spec §4.2.1). The rAF-vs-composite gap is calibrated on-device.
+ * Notify Rust that the preview frame has actually been presented. Two nested rAFs approximate
+ * "after the next frame is composited" — this is the `t1` of the preview-open latency (the
+ * Phase 0 Q2 measurement, spec §4.2.1). The rAF-vs-composite gap is calibrated on-device.
  */
 function notifyPainted(state: UiState): void {
   requestAnimationFrame(() => {
@@ -39,6 +40,20 @@ function notifyPainted(state: UiState): void {
       void invoke("painted", { state, t1PerfMs: performance.now() });
     });
   });
+}
+
+function ContextLine({ ctx }: { ctx: ContextPayload | null }): JSX.Element {
+  if (!ctx) return <span className="notch__preview--empty">{t.noContext}</span>;
+  const snippet = ctx.text ? `${ctx.text.length} ${t.charsCaptured} · ${ctx.text.replace(/\s+/g, " ").slice(0, 80)}` : t.noText;
+  return (
+    <span className="notch__ctx">
+      <span className="notch__ctx-app">
+        {ctx.bundle_id || ctx.title_masked || "—"}
+        {ctx.partial ? t.partialSuffix : ""}
+      </span>
+      <span className="notch__ctx-text">{snippet}</span>
+    </span>
+  );
 }
 
 export function App(): JSX.Element {
@@ -56,7 +71,8 @@ export function App(): JSX.Element {
         const next = e.payload.state;
         stateRef.current = next;
         setUiState(next);
-        if (next === "expanded") notifyPainted(next);
+        // The preview (Hover) is the visible open the Phase 0 latency measures.
+        if (next === "hover") notifyPainted(next);
       }),
     );
 
@@ -74,9 +90,10 @@ export function App(): JSX.Element {
       }),
     );
 
-    // Esc → T4b collapse (delivered only while the panel is key; harmless otherwise).
+    // Esc collapses an open preview/panel (delivered only while the panel is key).
     const onKeyDown = (e: KeyboardEvent): void => {
-      if (e.key === "Escape" && stateRef.current === "expanded") {
+      const s = stateRef.current;
+      if (e.key === "Escape" && (s === "hover" || s === "expanded")) {
         void invoke("collapse_request", { reason: "esc" });
       }
     };
@@ -88,56 +105,50 @@ export function App(): JSX.Element {
     };
   }, []);
 
-  // Dummy Expanded content: three static action buttons + a context preview fed by the
-  // real AX cache (spec §2.1 item 6). Buttons forward interactions for the Q4 tally.
-  // A click on the transparent margin (outside the visible panel) is T4c.
+  const openState = uiState === "hover" || uiState === "expanded";
+
   return (
     <div
       className={`notch notch--${uiState}`}
       onClick={(e) => {
-        if (e.target === e.currentTarget && stateRef.current === "expanded") {
+        // A click on the transparent margin (outside the visible panel) collapses it.
+        if (e.target === e.currentTarget && openState) {
           void invoke("collapse_request", { reason: "outside_click" });
         }
       }}
     >
       <div className="notch__idle-shell" />
       <div
-        className="notch__expanded"
+        className="notch__panel"
         onTransitionEnd={(e) => {
-          // T6: report collapse-animation completion (property filter keeps the two
-          // transition properties from double-firing — transform is the driver).
+          // Report collapse-animation completion (transform is the driver; the property
+          // filter keeps the two animated properties from double-firing).
           if (e.propertyName === "transform" && stateRef.current === "collapsing") {
             void invoke("anim_done", { state: "collapsing" });
           }
         }}
       >
-        <div className="notch__actions">
-          <button type="button" onClick={() => void invoke("interact", { kind: "click" })}>
-            {t.action1}
+        {/* Preview level (Hover): one action + one context line. Clicking promotes to full. */}
+        <button className="notch__preview" type="button" onClick={() => void invoke("promote")}>
+          <span className="notch__preview-action">{t.action1}</span>
+          <ContextLine ctx={ctx} />
+        </button>
+
+        {/* Full level (Expanded): up to four actions, context, and the Full UI entry point. */}
+        <div className="notch__full">
+          <div className="notch__actions">
+            {[t.action1, t.action2, t.action3, t.action4].map((label, i) => (
+              <button key={i} type="button" onClick={() => void invoke("interact", { kind: "click" })}>
+                {label}
+              </button>
+            ))}
+          </div>
+          <div className="notch__full-context">
+            <ContextLine ctx={ctx} />
+          </div>
+          <button className="notch__fullui" type="button" onClick={() => void invoke("open_full_ui")}>
+            {t.openFullUi}
           </button>
-          <button type="button" onClick={() => void invoke("interact", { kind: "click" })}>
-            {t.action2}
-          </button>
-          <button type="button" onClick={() => void invoke("interact", { kind: "click" })}>
-            {t.action3}
-          </button>
-        </div>
-        <div className="notch__preview">
-          {ctx ? (
-            <>
-              <div className="notch__preview-app">
-                {ctx.bundle_id || ctx.title_masked || "—"}
-                {ctx.partial ? t.partialSuffix : ""}
-              </div>
-              <div className="notch__preview-text">
-                {ctx.text
-                  ? `${ctx.text.length} ${t.charsCaptured} · ${ctx.text.replace(/\s+/g, " ").slice(0, 80)}`
-                  : t.noText}
-              </div>
-            </>
-          ) : (
-            <span className="notch__preview--empty">{t.noContext}</span>
-          )}
         </div>
       </div>
     </div>

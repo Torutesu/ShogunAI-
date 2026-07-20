@@ -22,6 +22,9 @@ pub fn run() {
     let builder = builder.plugin(tauri_nspanel::init()).invoke_handler(tauri::generate_handler![
         integrate::mac::painted,
         integrate::mac::interact,
+        integrate::mac::promote,
+        integrate::mac::hotkey,
+        integrate::mac::open_full_ui,
         integrate::mac::anim_done,
         integrate::mac::collapse_request,
         integrate::mac::clock_sync_ack,
