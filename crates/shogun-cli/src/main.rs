@@ -1,18 +1,19 @@
-//! The `shogun` binary — a thin runner over the pure CLI logic in the `shogun_cli` library.
+//! The `shogun` binary — parses argv and calls the local Memory API server over loopback.
 //!
-//! It parses argv, and either prints help, prints a parse error (exit 2), or resolves the command
-//! to its Memory API call and prints that. Actually dispatching the call round-trips to the running
-//! daemon's REST endpoint (`127.0.0.1:7464`); that transport is wired when the REST face lands, so
-//! today the binary reports the resolution rather than executing it.
+//! Config via env: `SHOGUN_API_PORT` (default 7464), `SHOGUN_API_TOKEN` (used when `--token` is not
+//! given). The token is sent as a `Bearer` header; without one, tool calls get 401 (as the daemon
+//! requires, FR-API-03). Exit code mirrors the outcome: 0 success, 1 an HTTP error status, 2 a
+//! parse error, 3 the daemon is unreachable.
 
 use std::process::ExitCode;
 
-use shogun_cli::command::Command;
+use shogun_cli::command::{self, Command};
 use shogun_cli::parse::parse;
-use shogun_cli::{command, plan};
+use shogun_cli::{http, wire};
+
+const DEFAULT_PORT: u16 = 7464;
 
 fn main() -> ExitCode {
-    // Skip the program name.
     let args: Vec<String> = std::env::args().skip(1).collect();
 
     let invocation = match parse(&args) {
@@ -28,7 +29,27 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    // Until the REST face is wired, report the resolved call rather than executing it.
-    println!("{}", plan::describe(&invocation));
-    ExitCode::SUCCESS
+    let Some(call) = wire::to_call(&invocation.command, invocation.include_low) else {
+        println!("{}", command::USAGE);
+        return ExitCode::SUCCESS;
+    };
+
+    let port = std::env::var("SHOGUN_API_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(DEFAULT_PORT);
+    let token = invocation.token.or_else(|| std::env::var("SHOGUN_API_TOKEN").ok().filter(|t| !t.is_empty()));
+
+    match http::request(port, call.method, &call.path, token.as_deref(), call.body.as_deref()) {
+        Ok(resp) => {
+            println!("{}", resp.body);
+            if resp.status < 400 {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            }
+        }
+        Err(e) => {
+            eprintln!("could not reach the daemon on 127.0.0.1:{port}: {e}");
+            eprintln!("(is `shogun-api` running?  start it with: cargo run -p shogun-core --features daemon-server --bin shogun-api)");
+            ExitCode::from(3)
+        }
+    }
 }

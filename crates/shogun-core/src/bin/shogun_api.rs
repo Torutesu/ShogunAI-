@@ -56,3 +56,73 @@ async fn main() -> std::io::Result<()> {
     println!("shogun-memory-api listening on http://{addr}  (db: {db_path})");
     serve_on(listener, state).await
 }
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use super::*;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    /// Boot the real server on a background thread (own runtime) and return its port. Uses an
+    /// in-memory DB seeded with nothing; the token `dev` is issued.
+    fn boot_server() -> u16 {
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+            rt.block_on(async move {
+                let db = Db::open_in_memory(wall_clock()).unwrap();
+                let backend = Arc::new(DbBackend::new(db));
+                let mut tokens = TokenRegistry::new();
+                tokens.issue("dev");
+                let approvals = Arc::new(Mutex::new(ApprovalQueue::new()));
+                let state = AppState::new(Arc::new(tokens), backend, approvals, wall_clock());
+                let listener = bind_local(0).await.unwrap();
+                let port = listener.local_addr().unwrap().port();
+                tx.send(port).unwrap();
+                let _ = serve_on(listener, state).await;
+            });
+        });
+        let port = rx.recv().unwrap();
+        // give the listener a moment to start accepting
+        std::thread::sleep(Duration::from_millis(300));
+        port
+    }
+
+    #[test]
+    fn cli_client_drives_the_real_server_end_to_end() {
+        use shogun_cli::http::request;
+        let port = boot_server();
+
+        // status is open
+        let r = request(port, "GET", "/v1/status", None, None).unwrap();
+        assert_eq!(r.status, 200);
+        assert!(r.body.contains("shogun-memory-api"));
+
+        // a tool call without a token is 401 (FR-API-03)
+        let r = request(port, "GET", "/v1/state/people", None, None).unwrap();
+        assert_eq!(r.status, 401);
+
+        // write a note, then search it back — the full write→persist→read loop over the socket
+        let r = request(port, "POST", "/v1/memory/notes", Some("dev"), Some("call Bob about the roadmap")).unwrap();
+        assert_eq!(r.status, 202);
+        assert!(r.body.contains("\"id\":"));
+
+        let r = request(port, "GET", "/v1/memory/search?q=roadmap", Some("dev"), None).unwrap();
+        assert_eq!(r.status, 200);
+        assert!(r.body.contains("call Bob about the roadmap"), "search body: {}", r.body);
+
+        // an external send routes to L3 pending approval, never runs (FR-API-04)
+        let r = request(
+            port,
+            "POST",
+            "/v1/actions/execute",
+            Some("dev"),
+            Some(r#"{"kind":"send_email","to":"a@b.com","subject":"s","body":"b"}"#),
+        )
+        .unwrap();
+        assert_eq!(r.status, 202);
+        assert!(r.body.contains("\"pending\":true"));
+        assert!(r.body.contains("\"approval_id\":"));
+    }
+}

@@ -8,5 +8,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 pub mod command;
+pub mod http;
 pub mod parse;
 pub mod plan;
+pub mod wire;

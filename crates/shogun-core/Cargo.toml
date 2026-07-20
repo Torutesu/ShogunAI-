@@ -56,7 +56,9 @@ path = "src/bin/shogun_api.rs"
 required-features = ["daemon-server"]
 
 [dev-dependencies]
-tokio = { version = "1", features = ["rt", "macros"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }
+# For the daemon-server end-to-end test: drive the real server with the CLI's loopback client.
+shogun-cli = { path = "../shogun-cli" }
 
 [lints]
 workspace = true

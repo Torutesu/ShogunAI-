@@ -3237,6 +3237,7 @@ dependencies = [
  "rusqlite",
  "serde_json",
  "shogun-agents",
+ "shogun-cli",
  "shogun-fusion",
  "shogun-mcp",
  "shogun-memory",

@@ -123,7 +123,8 @@ fn parse_command(positionals: &[String], no_screen: bool) -> Result<Command, Cli
             Ok(Command::Propose { description })
         }
         "run" => {
-            let agent = rest.first().cloned().ok_or(CliError::MissingArgument("<agent>"))?;
+            // The remaining args form the action JSON spec (e.g. '{"kind":"local_search",...}').
+            let agent = join(rest).ok_or(CliError::MissingArgument("<action-json>"))?;
             Ok(Command::Run { agent })
         }
         "api" => match rest.first().map(String::as_str) {
@@ -242,8 +243,11 @@ mod tests {
     }
 
     #[test]
-    fn run_needs_an_agent() {
-        assert_eq!(parse(&v(&["run", "reply-drafter"])).unwrap().command, Command::Run { agent: "reply-drafter".into() });
-        assert_eq!(parse(&v(&["run"])), Err(CliError::MissingArgument("<agent>")));
+    fn run_takes_the_action_json() {
+        assert_eq!(
+            parse(&v(&["run", r#"{"kind":"local_search","query":"x"}"#])).unwrap().command,
+            Command::Run { agent: r#"{"kind":"local_search","query":"x"}"#.into() }
+        );
+        assert_eq!(parse(&v(&["run"])), Err(CliError::MissingArgument("<action-json>")));
     }
 }
