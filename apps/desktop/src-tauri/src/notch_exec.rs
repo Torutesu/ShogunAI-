@@ -3,7 +3,7 @@
 //! one-tap confirm, L3 is refused (v1 has no send path, invariant 4 — context actions never carry an
 //! L3 anyway). The gating logic is the Linux-tested engine; this module supplies the macOS effector
 //! (the real local effects) and the reporting observer, and the Tauri commands the panel calls.
-#![allow(dead_code)]
+#![allow(dead_code, unused_imports)]
 
 #[cfg(target_os = "macos")]
 pub use mac::NotchEngine;
