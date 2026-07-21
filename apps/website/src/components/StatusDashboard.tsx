@@ -31,11 +31,12 @@ const TIERS = [
   { threshold: 30, label: '6 months free' },
 ];
 
-export function StatusDashboard({ code }: { code: string }) {
-  const [data, setData] = useState<Status | null>(null);
+export function StatusDashboard({ code, demo = false }: { code: string; demo?: boolean }) {
+  const [data, setData] = useState<Status | null>(demo ? DEMO_STATUS : null);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
+    if (demo) return; // demo mode uses static sample data — no API call
     try {
       const res = await fetch(`/api/waitlist/status?code=${encodeURIComponent(code)}`);
       const d = await res.json();
@@ -44,7 +45,7 @@ export function StatusDashboard({ code }: { code: string }) {
     } catch {
       setError('network');
     }
-  }, [code]);
+  }, [code, demo]);
 
   useEffect(() => {
     load();
@@ -69,11 +70,45 @@ export function StatusDashboard({ code }: { code: string }) {
     );
 
   return data.profileComplete ? (
-    <Tracking data={data} code={code} />
+    <Tracking data={data} code={code} demo={demo} />
   ) : (
     <Onboarding code={code} onDone={load} />
   );
 }
+
+/* Sample data for ?demo=1 — lets the design render with no DB / private link. */
+const DEMO_STATUS: Status = {
+  status: 'pending',
+  nickname: 'demo_builder',
+  refCode: 'demo1234',
+  shareUrl: 'https://shogunai.com/?ref=demo1234',
+  qualifiedReferrals: 4,
+  position: 128,
+  totalWaiting: 4820,
+  answered: 4,
+  profileComplete: true,
+  tier: { reward: 1, label: '1 month free', threshold: 3 },
+  nextTier: { reward: 3, label: '3 months free', threshold: 10, remaining: 6 },
+  leaderboardRank: 12,
+  isTopReferrer: false,
+};
+const DEMO_RANK: Rank = {
+  points: 420,
+  rank: 128,
+  totalWaiting: 4820,
+  joinPosition: 512,
+  breakdown: { referral: 400, form: 20 },
+  tier: { points: 300, reward: '1 month free' },
+  nextTier: { points: 1000, reward: '3 months free', remaining: 580 },
+  isTopReferrer: false,
+};
+const DEMO_BOARD: LbRow[] = [
+  { rank: 1, name: 'ava.builds', refCode: 'ava00001', count: 37 },
+  { rank: 2, name: 'kenji_x', refCode: 'kenji002', count: 29 },
+  { rank: 3, name: 'sofia.dev', refCode: 'sofia003', count: 24 },
+  { rank: 4, name: 'demo_builder', refCode: 'demo1234', count: 4 },
+  { rank: 5, name: 'marco', refCode: 'marco005', count: 3 },
+];
 
 type Rank = {
   points: number;
@@ -154,11 +189,12 @@ function Onboarding({ code, onDone }: { code: string; onDone: () => void }) {
 }
 
 /* ---------- Step 2: clean, share-first referral page ---------- */
-function Tracking({ data, code }: { data: Status; code: string }) {
+function Tracking({ data, code, demo }: { data: Status; code: string; demo?: boolean }) {
   const [copied, setCopied] = useState(false);
-  const [rank, setRank] = useState<Rank | null>(null);
+  const [rank, setRank] = useState<Rank | null>(demo ? DEMO_RANK : null);
 
   useEffect(() => {
+    if (demo) return; // demo mode uses static sample data
     let alive = true;
     fetch(`/api/waitlist/rank?code=${encodeURIComponent(code)}`)
       .then((r) => r.json())
@@ -167,7 +203,7 @@ function Tracking({ data, code }: { data: Status; code: string }) {
     return () => {
       alive = false;
     };
-  }, [code]);
+  }, [code, demo]);
 
   async function copyShare() {
     try {
@@ -310,7 +346,7 @@ function Tracking({ data, code }: { data: Status; code: string }) {
       <section>
         <SectionLabel>Leaderboard</SectionLabel>
         <h2 className="mb-3.5 mt-1.5 font-display text-xl font-semibold">Top referrers</h2>
-        <LeaderboardInline meRefCode={data.refCode} />
+        <LeaderboardInline meRefCode={data.refCode} demo={demo} />
       </section>
     </div>
   );
@@ -593,9 +629,10 @@ function ProfileForm({ code, onDone }: { code: string; onDone: () => void }) {
   );
 }
 
-function LeaderboardInline({ meRefCode }: { meRefCode: string }) {
-  const [board, setBoard] = useState<LbRow[] | null>(null);
+function LeaderboardInline({ meRefCode, demo }: { meRefCode: string; demo?: boolean }) {
+  const [board, setBoard] = useState<LbRow[] | null>(demo ? DEMO_BOARD : null);
   useEffect(() => {
+    if (demo) return; // demo mode uses static sample data
     let alive = true;
     fetch('/api/waitlist/leaderboard?limit=10')
       .then((r) => r.json())
@@ -604,7 +641,7 @@ function LeaderboardInline({ meRefCode }: { meRefCode: string }) {
     return () => {
       alive = false;
     };
-  }, []);
+  }, [demo]);
   if (board === null)
     return (
       <div className="grid place-items-center py-4">

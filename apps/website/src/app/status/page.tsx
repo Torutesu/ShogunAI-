@@ -12,16 +12,21 @@ export const dynamic = 'force-dynamic';
 export default async function StatusPage({
   searchParams,
 }: {
-  searchParams: Promise<{ code?: string }>;
+  searchParams: Promise<{ code?: string; demo?: string }>;
 }) {
-  const { code } = await searchParams;
+  const { code, demo } = await searchParams;
+  // ?demo=1 renders the page with sample data — no DB / private link needed,
+  // so the design is viewable in any environment while the backend is wired up.
+  const isDemo = demo === '1' || demo === 'true';
 
   return (
     <>
       <Nav />
       <main id="top" className="py-[clamp(56px,9vw,112px)]">
         <div className="container-x">
-          {code ? (
+          {isDemo ? (
+            <StatusDashboard code="demo" demo />
+          ) : code ? (
             <StatusDashboard code={code} />
           ) : (
             <Card className="mx-auto grid max-w-md gap-4 text-center">
