@@ -197,6 +197,13 @@ pub enum Authorization {
 
 /// Authorize an operation by name against a service's scope table. The only entry point the
 /// execution engine should use for MCP operations — an unknown name is denied, never defaulted.
+/// Look up an operation's row (class + gating) in a service's scope table, if present. The
+/// composed integration gate ([`crate::service_gate`]) uses this to apply the amber read/write
+/// rule and the draft-stop rule on top of the raw authorization.
+pub fn lookup(service: Service, op_name: &str) -> Option<ScopedOp> {
+    scope(service).ops.iter().copied().find(|o| o.name == op_name)
+}
+
 pub fn authorize(service: Service, op_name: &str) -> Authorization {
     match scope(service).ops.iter().find(|o| o.name == op_name) {
         None => Authorization::DeniedUnknownOp,
