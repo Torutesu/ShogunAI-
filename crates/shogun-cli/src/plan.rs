@@ -52,6 +52,7 @@ pub fn describe(inv: &Invocation) -> String {
         }
         None => match inv.command {
             Command::ApiStatus => "local: report the running REST port".to_string(),
+            Command::Metrics => "GET /v1/metrics: in-product SLO snapshot".to_string(),
             Command::Help => "local: help".to_string(),
             // Every other command maps to a tool.
             _ => "local".to_string(),

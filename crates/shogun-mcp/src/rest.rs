@@ -55,6 +55,11 @@ pub enum Routed {
     Action,
     /// The unauthenticated status/discovery endpoint (200).
     Status,
+    /// In-product SLO metrics (200) — `shogun metrics` / Advanced UI (NFR-SLO-00). Open like
+    /// `/v1/status`: it exposes only aggregate latency-vs-budget health, never capture content, and
+    /// the listener is localhost-bound (NFR-SEC-03). The server fills the body from its injected
+    /// metrics source.
+    Metrics,
 }
 
 /// Extract the `Bearer` token from an `Authorization` header value, if present and well-formed.
@@ -86,6 +91,7 @@ fn resolve(method: Method, path: &str) -> Result<Routed, RouteMiss> {
 
     match segs.as_slice() {
         ["v1", "status"] => method_is(method, Method::Get, Routed::Status),
+        ["v1", "metrics"] => method_is(method, Method::Get, Routed::Metrics),
         ["v1", "memory", "search"] => {
             method_is(method, Method::Get, Routed::Read { tool: Tool::MemorySearch, id: None })
         }
@@ -128,13 +134,15 @@ fn method_is(actual: Method, expected: Method, ok: Routed) -> Result<Routed, Rou
     }
 }
 
-/// Route a request: resolve the endpoint, then apply auth. `/v1/status` is exempt; every tool
+/// Route a request: resolve the endpoint, then apply auth. `/v1/status` and `/v1/metrics` are the
+/// two unauthenticated endpoints (localhost-bound health/discovery, no capture content); every tool
 /// endpoint requires a valid token (FR-API-03).
 pub fn route(req: &RestRequest, tokens: &TokenRegistry) -> Routed {
     match resolve(req.method, &req.path) {
         Err(RouteMiss::NotFound) => Routed::NotFound,
         Err(RouteMiss::MethodNotAllowed) => Routed::MethodNotAllowed,
-        Ok(Routed::Status) => Routed::Status, // unauthenticated discovery
+        Ok(Routed::Status) => Routed::Status,   // unauthenticated discovery
+        Ok(Routed::Metrics) => Routed::Metrics, // unauthenticated health (NFR-SLO-00)
         Ok(resolved) => match tokens.authenticate(req.token.as_deref()) {
             AuthResult::Granted => resolved,
             _ => Routed::Unauthorized,
@@ -148,7 +156,7 @@ pub fn status_code(routed: &Routed) -> u16 {
         Routed::Unauthorized => 401,
         Routed::NotFound => 404,
         Routed::MethodNotAllowed => 405,
-        Routed::Read { .. } | Routed::Status => 200,
+        Routed::Read { .. } | Routed::Status | Routed::Metrics => 200,
         // A write is accepted (L2 still confirms in the Notch); an action may be pending.
         Routed::Write { .. } | Routed::Action => 202,
     }
@@ -199,6 +207,8 @@ pub fn body_for(routed: &Routed) -> String {
         Routed::NotFound => r#"{"error":"not_found"}"#.to_string(),
         Routed::MethodNotAllowed => r#"{"error":"method_not_allowed"}"#.to_string(),
         Routed::Status => r#"{"status":"ok","service":"shogun-memory-api"}"#.to_string(),
+        // The server overrides this with live metrics; the placeholder keeps the layer pure.
+        Routed::Metrics => r#"{"metrics":[]}"#.to_string(),
         Routed::Read { tool, .. } => format!(r#"{{"tool":"{}","results":[]}}"#, tool_name(*tool)),
         Routed::Write { tool, level } => {
             format!(r#"{{"tool":"{}","level":"{}","accepted":true}}"#, tool_name(*tool), level_label(*level))
@@ -378,6 +388,15 @@ mod tests {
     fn status_is_unauthenticated() {
         assert_eq!(route(&req(Method::Get, "/v1/status", None), &reg()), Routed::Status);
         assert_eq!(status_code(&Routed::Status), 200);
+    }
+
+    #[test]
+    fn metrics_is_unauthenticated_and_get_only() {
+        // health endpoint: open like status (NFR-SLO-00), no capture content, localhost-bound.
+        assert_eq!(route(&req(Method::Get, "/v1/metrics", None), &reg()), Routed::Metrics);
+        assert_eq!(status_code(&Routed::Metrics), 200);
+        // still GET-only
+        assert_eq!(route(&req(Method::Post, "/v1/metrics", Some("t")), &reg()), Routed::MethodNotAllowed);
     }
 
     #[test]

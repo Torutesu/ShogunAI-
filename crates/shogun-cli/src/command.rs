@@ -34,6 +34,8 @@ pub enum Command {
     Run { agent: String },
     /// `shogun api status` → report the running REST port (FR-API-01).
     ApiStatus,
+    /// `shogun metrics` → the in-product SLO snapshot (NFR-SLO-00).
+    Metrics,
     /// `shogun help` / no args.
     Help,
 }
@@ -56,7 +58,7 @@ impl Command {
             Command::Note { .. } => Tool::MemoryAppendNote,
             Command::Propose { .. } => Tool::StateProposeUpdate,
             Command::Run { .. } => Tool::ActionsExecute,
-            Command::ApiStatus | Command::Help => return None,
+            Command::ApiStatus | Command::Metrics | Command::Help => return None,
         })
     }
 }
@@ -79,6 +81,7 @@ COMMANDS:
     propose <description>     Propose a state change        (L2)
     run <agent>               Launch a preset agent         (level follows action)
     api status                Show the running REST port
+    metrics                   In-product SLO snapshot
     help                      This help
 
 GLOBAL FLAGS:

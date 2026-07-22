@@ -30,6 +30,13 @@ pub const DEFAULT_PORT: u16 = 7464;
 /// An injected millisecond clock (unix ms) — deterministic under test.
 pub type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;
 
+/// Live in-product SLO metrics source (NFR-SLO-00). The daemon implements it over its `SloRegistry`;
+/// the server serves its JSON at `GET /v1/metrics` (`shogun metrics` / the Advanced UI).
+pub trait MetricsSource: Send + Sync {
+    /// The current SLO snapshot as JSON (the `{"metrics":[...]}` shape).
+    fn snapshot_json(&self) -> String;
+}
+
 /// Shared server state. Clone is cheap (all `Arc`), as axum requires. The approval queue is the
 /// **same one the Notch UI drains** — an API-requested L3 send and a human L3 are one flow
 /// (invariant 6 / FR-API-04).
@@ -39,6 +46,7 @@ pub struct AppState {
     backend: Arc<dyn MemoryBackend>,
     approvals: Arc<Mutex<ApprovalQueue>>,
     clock: Clock,
+    metrics: Option<Arc<dyn MetricsSource>>,
 }
 
 impl AppState {
@@ -50,7 +58,14 @@ impl AppState {
         approvals: Arc<Mutex<ApprovalQueue>>,
         clock: Clock,
     ) -> Self {
-        Self { tokens, backend, approvals, clock }
+        Self { tokens, backend, approvals, clock, metrics: None }
+    }
+
+    /// Attach the live SLO metrics source served at `GET /v1/metrics`. Without it, the endpoint
+    /// returns an empty (all-unmeasured) snapshot.
+    pub fn with_metrics(mut self, metrics: Arc<dyn MetricsSource>) -> Self {
+        self.metrics = Some(metrics);
+        self
     }
 }
 
@@ -94,6 +109,11 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
                     Ok(mut queue) => rest::act(rreq.body.as_deref(), (state.clock)(), &mut queue),
                     Err(_) => (500, r#"{"error":"internal"}"#.to_string()),
                 },
+                // metrics come from the injected live source (empty snapshot if none).
+                Routed::Metrics => (
+                    200,
+                    state.metrics.as_ref().map(|m| m.snapshot_json()).unwrap_or_else(|| r#"{"metrics":[]}"#.to_string()),
+                ),
                 // reads/writes/status/errors go through the backend renderer.
                 _ => rest::respond_with(&rreq, &state.tokens, state.backend.as_ref()),
             }

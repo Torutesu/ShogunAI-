@@ -19,8 +19,28 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use shogun_agents::approval::ApprovalQueue;
 use shogun_core::daemon::{Clock, Db};
 use shogun_core::db_backend::DbBackend;
+use shogun_core::metrics::{render_snapshots_json, SloRegistry};
 use shogun_mcp::memory_api::TokenRegistry;
-use shogun_mcp::server::{bind_local, serve_on, AppState, DEFAULT_PORT};
+use shogun_mcp::server::{bind_local, serve_on, AppState, MetricsSource, DEFAULT_PORT};
+
+/// The live SLO metrics source served at `GET /v1/metrics` (NFR-SLO-00). Wraps the shared
+/// registry the runtime records into; here it starts empty, so every SLO reads as unmeasured until
+/// the notch runtime populates it (silence ≠ success, spec §4.5).
+struct RegistryMetrics(Arc<Mutex<SloRegistry>>);
+
+impl MetricsSource for RegistryMetrics {
+    fn snapshot_json(&self) -> String {
+        self.0
+            .lock()
+            .map(|r| render_snapshots_json(&r.snapshot_all()))
+            .unwrap_or_else(|_| r#"{"metrics":[]}"#.to_string())
+    }
+}
+
+/// Build an empty metrics source for the API process.
+fn metrics_source() -> Arc<dyn MetricsSource> {
+    Arc::new(RegistryMetrics(Arc::new(Mutex::new(SloRegistry::new()))))
+}
 
 /// A real wall-clock in unix ms (never panics; 0 before the epoch).
 fn wall_clock() -> Clock {
@@ -49,7 +69,7 @@ async fn main() -> std::io::Result<()> {
     }
 
     let approvals = Arc::new(Mutex::new(ApprovalQueue::new()));
-    let state = AppState::new(Arc::new(tokens), backend, approvals, clock);
+    let state = AppState::new(Arc::new(tokens), backend, approvals, clock).with_metrics(metrics_source());
 
     let listener = bind_local(port).await?;
     let addr = listener.local_addr()?;
@@ -76,7 +96,8 @@ mod tests {
                 let mut tokens = TokenRegistry::new();
                 tokens.issue("dev");
                 let approvals = Arc::new(Mutex::new(ApprovalQueue::new()));
-                let state = AppState::new(Arc::new(tokens), backend, approvals, wall_clock());
+                let state =
+                    AppState::new(Arc::new(tokens), backend, approvals, wall_clock()).with_metrics(metrics_source());
                 let listener = bind_local(0).await.unwrap();
                 let port = listener.local_addr().unwrap().port();
                 tx.send(port).unwrap();
@@ -111,6 +132,14 @@ mod tests {
         let r = request(port, "GET", "/v1/memory/search?q=roadmap", Some("dev"), None).unwrap();
         assert_eq!(r.status, 200);
         assert!(r.body.contains("call Bob about the roadmap"), "search body: {}", r.body);
+
+        // the in-product SLO snapshot is served, open like status (NFR-SLO-00); empty registry ⇒
+        // every SLO reads unmeasured, never a false green (spec §4.5).
+        let r = request(port, "GET", "/v1/metrics", None, None).unwrap();
+        assert_eq!(r.status, 200);
+        assert!(r.body.contains("\"metrics\":"), "metrics body: {}", r.body);
+        assert!(r.body.contains("NFR-SLO-01"), "metrics body: {}", r.body);
+        assert!(r.body.contains("\"measured\":false"), "unmeasured SLOs must not read as pass: {}", r.body);
 
         // an external send routes to L3 pending approval, never runs (FR-API-04)
         let r = request(

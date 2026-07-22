@@ -272,6 +272,38 @@ impl SloRegistry {
     }
 }
 
+/// Render SLO snapshots as the JSON both `shogun metrics` and the Advanced UI read (NFR-SLO-00).
+/// Hand-rolled (no serde dep in this ungated module). An unmeasured SLO reports `measured:false`
+/// and `pass:false` — silence is never success (spec §4.5).
+pub fn render_snapshots_json(snapshots: &[SloSnapshot]) -> String {
+    let items: Vec<String> = snapshots
+        .iter()
+        .map(|s| {
+            format!(
+                r#"{{"slo":"{}","count":{},"p50":{},"p95":{},"budget_p95":{},"pass":{},"measured":{},"p95_overflowed":{}}}"#,
+                s.slo.id(),
+                s.count,
+                num(s.p50),
+                num(s.p95),
+                num(s.budget_p95),
+                s.pass,
+                s.measured,
+                s.p95_overflowed,
+            )
+        })
+        .collect();
+    format!(r#"{{"metrics":[{}]}}"#, items.join(","))
+}
+
+/// Format an f64 as a finite JSON number (non-finite → 0 so the payload is always valid JSON).
+fn num(v: f64) -> String {
+    if v.is_finite() {
+        format!("{v}")
+    } else {
+        "0".to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -394,5 +426,19 @@ mod tests {
         // Budgets match the CLAUDE.md / §7.1 table.
         assert_eq!(Slo::Expand.budget_p95(), 100.0);
         assert_eq!(Slo::IdleCpu.budget_p95(), 5.0);
+    }
+
+    #[test]
+    fn render_json_marks_measured_and_unmeasured() {
+        let mut reg = SloRegistry::new();
+        // one measured SLO (a fast expand), the rest unmeasured
+        reg.record(Slo::Expand, 40.0);
+        let json = render_snapshots_json(&reg.snapshot_all());
+        assert!(json.starts_with(r#"{"metrics":["#));
+        // the measured Expand SLO reports NFR-SLO-01, a sample, and passes (40 ≤ 100)
+        assert!(json.contains(r#""slo":"NFR-SLO-01","count":1"#), "{json}");
+        assert!(json.contains(r#""measured":true,"p95_overflowed":false"#));
+        // an unmeasured SLO is measured:false and pass:false (silence ≠ success)
+        assert!(json.contains(r#""slo":"NFR-SLO-04","count":0,"p50":0,"p95":0,"budget_p95":500,"pass":false,"measured":false"#), "{json}");
     }
 }
