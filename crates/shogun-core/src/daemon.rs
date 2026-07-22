@@ -148,6 +148,45 @@ impl Db {
         Some((id, touched, ids))
     }
 
+    /// Ingest a batch of synced integration items into the event log (WP4.2, §6.9:
+    /// `integration.synced` → event log → search/Fusion). Each record is appended under its own
+    /// `source` tag (`gmail` / `gcal` / …) so a synced email is a first-class event next to a
+    /// captured window (FR-INT-05); the item's own timestamp is preserved. Dedup is per-source
+    /// (FR-CAP-03): re-syncing the same item touches `last_seen_at` rather than duplicating it.
+    ///
+    /// The caller ([`crate::service_gate`]) has already authorized the sync; this method only
+    /// persists. Returns `(processed, newly_inserted)` — `newly_inserted` is what a
+    /// `IntegrationSynced` bus event should report as the count. `(0, 0)` on a lock failure.
+    pub fn ingest_integration(&self, items: &[shogun_mcp::sync::IngestItem]) -> (usize, usize) {
+        let Ok(conn) = self.conn.lock() else {
+            return (0, 0);
+        };
+        let mut processed = 0;
+        let mut newly_inserted = 0;
+        for it in items {
+            let hash = Self::content_hash(&it.body);
+            let ev = NewEvent {
+                ts: it.ts_ms,
+                source: it.source,
+                kind: it.kind,
+                app_bundle_id: None,
+                window_title: (!it.title.is_empty()).then_some(it.title.as_str()),
+                content: &it.body,
+                content_hash: &hash,
+                dwell_ms: 0,
+                display_id: None,
+                window_bounds: None,
+            };
+            if let Ok((_, touched)) = event_log::insert_or_touch(&conn, &ev) {
+                processed += 1;
+                if !touched {
+                    newly_inserted += 1;
+                }
+            }
+        }
+        (processed, newly_inserted)
+    }
+
     /// Append a user note to the event log (`memory.append_note`, L1). Source `user`, kind `note`;
     /// content-hashed for dedup like any event. Returns the row id (or `None` on write failure).
     pub fn append_note(&self, text: &str) -> Option<i64> {
@@ -604,6 +643,56 @@ mod tests {
             display_id: Some(1),
             window_bounds: None,
         }
+    }
+
+    #[test]
+    fn ingested_integration_items_are_searchable_and_source_tagged() {
+        use shogun_mcp::sync::IngestItem;
+        let db = Db::open_in_memory(clock(1)).unwrap();
+        let items = vec![
+            IngestItem {
+                source: "gmail",
+                kind: "email",
+                title: "Roadmap".into(),
+                body: "Let's ship the quarterly deck on Friday".into(),
+                ts_ms: 100,
+            },
+            IngestItem {
+                source: "gcal",
+                kind: "calendar_event",
+                title: "Standup".into(),
+                body: "Daily standup with the platform team".into(),
+                ts_ms: 200,
+            },
+        ];
+        let (processed, new) = db.ingest_integration(&items);
+        assert_eq!((processed, new), (2, 2), "both items are fresh inserts");
+
+        // the synced email is now first-class memory: it comes back from hybrid search, tagged gmail…
+        let hits = db.search("quarterly deck", 10);
+        let email = hits.iter().find(|h| h.content.contains("quarterly deck")).expect("synced email searchable");
+        assert_eq!(email.source, "gmail", "the hit carries its integration source (FR-INT-05)");
+        // …and the calendar event too.
+        let hits = db.search("standup", 10);
+        assert!(hits.iter().any(|h| h.source == "gcal"), "synced calendar event must be searchable");
+    }
+
+    #[test]
+    fn re_syncing_the_same_item_touches_not_duplicates() {
+        use shogun_mcp::sync::IngestItem;
+        let db = Db::open_in_memory(clock(1)).unwrap();
+        let item = IngestItem {
+            source: "gmail",
+            kind: "email",
+            title: "Invoice".into(),
+            body: "Payment is due next week".into(),
+            ts_ms: 100,
+        };
+        let (_, new1) = db.ingest_integration(std::slice::from_ref(&item));
+        assert_eq!(new1, 1);
+        // re-sync the identical item (same source + content) → dedup touch, no new row
+        let (processed2, new2) = db.ingest_integration(std::slice::from_ref(&item));
+        assert_eq!((processed2, new2), (1, 0), "an unchanged re-sync must not duplicate the event");
     }
 
     #[test]

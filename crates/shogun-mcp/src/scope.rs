@@ -47,6 +47,20 @@ impl Service {
     pub fn is_released(self, highest_released: Wave) -> bool {
         self.wave() <= highest_released
     }
+
+    /// The `event_log.source` discriminator for items ingested from this service (§6.9, the source
+    /// column values). Synced integration items land in the log tagged with this, so search and
+    /// Context Fusion can tell an email from a captured window (FR-INT-05).
+    pub fn source_str(self) -> &'static str {
+        match self {
+            Service::Gmail => "gmail",
+            Service::GoogleCalendar => "gcal",
+            Service::Slack => "slack",
+            Service::Notion => "notion",
+            Service::GitHub => "github",
+            Service::Linear => "linear",
+        }
+    }
 }
 
 /// What an operation does — this fixes the gating it is allowed to have.
@@ -310,6 +324,18 @@ mod tests {
                 "{service:?} must have a read operation"
             );
         }
+    }
+
+    #[test]
+    fn source_strings_are_distinct_and_stable() {
+        // every service maps to a distinct event_log.source tag (FR-INT-05).
+        let tags: Vec<&str> = ALL_SERVICES.iter().map(|s| s.source_str()).collect();
+        let mut uniq = tags.clone();
+        uniq.sort_unstable();
+        uniq.dedup();
+        assert_eq!(uniq.len(), tags.len(), "source tags must be unique: {tags:?}");
+        assert_eq!(Service::Gmail.source_str(), "gmail");
+        assert_eq!(Service::GoogleCalendar.source_str(), "gcal");
     }
 
     #[test]
