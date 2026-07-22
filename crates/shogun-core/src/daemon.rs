@@ -29,6 +29,16 @@ use crate::dreamcycle::plan::{remaining, CycleKind, JobKind, JobRun, JobState};
 /// catches them.
 const RECENT_DEDUP_WINDOW: usize = 8;
 
+/// The outcome of ingesting a batch of synced integration items ([`Db::ingest_integration`]):
+/// how many were processed, how many were genuinely new (the `IntegrationSynced` bus count), and
+/// how many low-confidence state candidates the new items yielded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct IngestSummary {
+    pub processed: usize,
+    pub newly_inserted: usize,
+    pub candidates: usize,
+}
+
 /// The shared connection handle. `Connection` is `Send` but not `Sync`, so it lives behind a
 /// `Mutex`; the `Arc` lets every daemon component share the one handle.
 pub type SharedConn = Arc<Mutex<Connection>>;
@@ -154,15 +164,21 @@ impl Db {
     /// captured window (FR-INT-05); the item's own timestamp is preserved. Dedup is per-source
     /// (FR-CAP-03): re-syncing the same item touches `last_seen_at` rather than duplicating it.
     ///
+    /// On a **new** insert (not a dedup-touch) the first-stage local-rule extraction (WP2.7) runs
+    /// over the item body, so a commitment or open-loop stated in an email/message flows into the
+    /// state tables just as one captured on screen does — each candidate is low-confidence
+    /// (≤ [`shogun_memory::extract::LOCAL_RULE_MAX_CONFIDENCE`]) and linked to the ingested event
+    /// (FR-ST-02). Extraction is skipped on a touch so a re-sync never multiplies candidates.
+    ///
     /// The caller ([`crate::service_gate`]) has already authorized the sync; this method only
-    /// persists. Returns `(processed, newly_inserted)` — `newly_inserted` is what a
-    /// `IntegrationSynced` bus event should report as the count. `(0, 0)` on a lock failure.
-    pub fn ingest_integration(&self, items: &[shogun_mcp::sync::IngestItem]) -> (usize, usize) {
-        let Ok(conn) = self.conn.lock() else {
-            return (0, 0);
+    /// persists. `newly_inserted` is what an `IntegrationSynced` bus event should report as the
+    /// count. Returns a zeroed summary on a lock failure (never panics).
+    pub fn ingest_integration(&self, items: &[shogun_mcp::sync::IngestItem]) -> IngestSummary {
+        let now = self.now_ms();
+        let Ok(mut guard) = self.conn.lock() else {
+            return IngestSummary::default();
         };
-        let mut processed = 0;
-        let mut newly_inserted = 0;
+        let mut summary = IngestSummary::default();
         for it in items {
             let hash = Self::content_hash(&it.body);
             let ev = NewEvent {
@@ -177,14 +193,23 @@ impl Db {
                 display_id: None,
                 window_bounds: None,
             };
-            if let Ok((_, touched)) = event_log::insert_or_touch(&conn, &ev) {
-                processed += 1;
-                if !touched {
-                    newly_inserted += 1;
-                }
+            let Ok((id, touched)) = event_log::insert_or_touch(&guard, &ev) else {
+                continue;
+            };
+            summary.processed += 1;
+            if touched {
+                continue;
+            }
+            summary.newly_inserted += 1;
+            // A newly-ingested item is extracted for commitments / open loops, linked to it.
+            let candidates = shogun_memory::extract::extract(&it.body);
+            if !candidates.is_empty() {
+                let ids = shogun_memory::extract::persist_candidates(&mut guard, id, &candidates, now)
+                    .unwrap_or_default();
+                summary.candidates += ids.len();
             }
         }
-        (processed, newly_inserted)
+        summary
     }
 
     /// Append a user note to the event log (`memory.append_note`, L1). Source `user`, kind `note`;
@@ -717,8 +742,8 @@ mod tests {
                 ts_ms: 200,
             },
         ];
-        let (processed, new) = db.ingest_integration(&items);
-        assert_eq!((processed, new), (2, 2), "both items are fresh inserts");
+        let summary = db.ingest_integration(&items);
+        assert_eq!((summary.processed, summary.newly_inserted), (2, 2), "both items are fresh inserts");
 
         // the synced email is now first-class memory: it comes back from hybrid search, tagged gmail…
         let hits = db.search("quarterly deck", 10);
@@ -727,6 +752,32 @@ mod tests {
         // …and the calendar event too.
         let hits = db.search("standup", 10);
         assert!(hits.iter().any(|h| h.source == "gcal"), "synced calendar event must be searchable");
+    }
+
+    #[test]
+    fn ingested_email_commitment_reaches_the_state_tables() {
+        use shogun_mcp::sync::IngestItem;
+        let db = Db::open_in_memory(clock(1)).unwrap();
+        // an email in which the user states a commitment — the same heuristic that fires on captured
+        // text should fire here, feeding the state tables at low confidence (WP2.7 / FR-ST-02).
+        let items = vec![IngestItem {
+            source: "gmail",
+            kind: "email",
+            title: "Re: deck".into(),
+            body: "Thanks — I'll send the final deck by Friday.".into(),
+            ts_ms: 100,
+        }];
+        let summary = db.ingest_integration(&items);
+        assert_eq!(summary.newly_inserted, 1);
+        assert!(summary.candidates >= 1, "the email commitment should yield a candidate");
+
+        // it lands as a low-confidence commitment, linked back to the ingested email.
+        let commitments = db.commitments_due(1_000);
+        assert!(!commitments.is_empty(), "the email commitment reached the state table");
+        assert!(
+            commitments.iter().all(|c| c.confidence <= shogun_memory::extract::LOCAL_RULE_MAX_CONFIDENCE),
+            "an extracted email commitment is low-confidence, never asserted as fact (FR-ST-20)"
+        );
     }
 
     #[test]
@@ -740,11 +791,15 @@ mod tests {
             body: "Payment is due next week".into(),
             ts_ms: 100,
         };
-        let (_, new1) = db.ingest_integration(std::slice::from_ref(&item));
-        assert_eq!(new1, 1);
-        // re-sync the identical item (same source + content) → dedup touch, no new row
-        let (processed2, new2) = db.ingest_integration(std::slice::from_ref(&item));
-        assert_eq!((processed2, new2), (1, 0), "an unchanged re-sync must not duplicate the event");
+        let first = db.ingest_integration(std::slice::from_ref(&item));
+        assert_eq!(first.newly_inserted, 1);
+        // re-sync the identical item (same source + content) → dedup touch, no new row, no re-extract
+        let second = db.ingest_integration(std::slice::from_ref(&item));
+        assert_eq!(
+            (second.processed, second.newly_inserted, second.candidates),
+            (1, 0, 0),
+            "an unchanged re-sync must not duplicate the event or re-extract"
+        );
     }
 
     #[test]
