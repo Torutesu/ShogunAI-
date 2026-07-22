@@ -211,6 +211,19 @@ impl Db {
         DbTraceabilitySink::new(self.conn.clone(), self.clock.clone())
     }
 
+    /// Execute a confirmed L3 send (WP4.3, §6.14): perform the send over `transport` and, on a
+    /// successful egress, persist a traceability row through this handle — no send reaches the wire
+    /// without a trace (invariant 3 / FR-TR-03). A failed send traces nothing (nothing left the
+    /// device). The DB write is the same digest-only row every egress records (no body text, G8).
+    #[cfg(feature = "daemon-server")]
+    pub fn execute_confirmed_send<T: crate::send_exec::SendTransport + ?Sized>(
+        &self,
+        confirmed: &shogun_agents::approval::ConfirmedSend,
+        transport: &T,
+    ) -> crate::send_exec::SendExecOutcome {
+        crate::send_exec::execute_send(confirmed, transport, &self.traceability_sink())
+    }
+
     /// Read traceability rows for the viewer (FR-TR-02). Empty on any read failure.
     pub fn trace_rows(&self, filter: &Filter) -> Vec<TraceRow> {
         self.conn
@@ -643,6 +656,45 @@ mod tests {
             display_id: Some(1),
             window_bounds: None,
         }
+    }
+
+    #[cfg(feature = "daemon-server")]
+    #[test]
+    fn confirmed_send_persists_a_trace_row_only_on_success() {
+        use crate::send_exec::{SendExecOutcome, SendTransport};
+        use shogun_agents::approval::{ConfirmedSend, Preview, Route as ApprovalRoute};
+        use shogun_agents::permission::SendAction;
+
+        struct Transport {
+            ok: bool,
+        }
+        impl SendTransport for Transport {
+            fn send(&self, _a: &SendAction, _body: &str) -> Result<(), String> {
+                if self.ok {
+                    Ok(())
+                } else {
+                    Err("not connected".into())
+                }
+            }
+        }
+
+        let db = Db::open_in_memory(clock(1)).unwrap();
+        let action = SendAction::SendEmail { to: "alice@example.com".into() };
+        let body = "TOP SECRET send body";
+        let cs = ConfirmedSend { action: action.clone(), preview: Preview::for_send(&action, body, ApprovalRoute::ViaComposio) };
+
+        // a failed send traces nothing (nothing egressed)
+        assert_eq!(db.execute_confirmed_send(&cs, &Transport { ok: false }), SendExecOutcome::Failed("not connected".into()));
+        assert!(db.trace_rows(&Filter::default()).is_empty(), "a failed send must not write a trace");
+
+        // a successful send writes exactly one digest-only, third-party row
+        assert_eq!(db.execute_confirmed_send(&cs, &Transport { ok: true }), SendExecOutcome::Sent);
+        let rows = db.trace_rows(&Filter::default());
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].destination, "alice@example.com");
+        assert!(rows[0].third_party, "a Composio send is disclosed third-party");
+        assert_eq!(rows[0].chunk_bytes, body.len() as i64);
+        assert!(!format!("{:?}", rows[0]).contains("SECRET"), "sent body must never reach the trace row");
     }
 
     #[test]

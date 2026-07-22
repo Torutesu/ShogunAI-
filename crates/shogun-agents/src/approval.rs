@@ -101,11 +101,21 @@ pub enum ConfirmIntent {
     EnterKey,
 }
 
+/// A confirmed send, ready to execute. Carries the action *and* its [`Preview`] so the executor
+/// has the egress details it needs to record traceability (route, destination, and the full body
+/// to digest) without re-deriving them — the trace and the send can never disagree (invariant 3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfirmedSend {
+    pub action: SendAction,
+    pub preview: Preview,
+}
+
 /// The result of a confirm/reject/poll interaction.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Decision {
-    /// Confirmed and removed from the queue — the caller may now execute the send.
-    Confirmed(SendAction),
+    /// Confirmed and removed from the queue — the caller may now execute the send. Carries the
+    /// action and its preview (see [`ConfirmedSend`]).
+    Confirmed(ConfirmedSend),
     /// Rejected (with cause) and removed.
     Rejected(RejectCause),
     /// Still awaiting confirmation.
@@ -181,7 +191,7 @@ impl ApprovalQueue {
             return Decision::Rejected(RejectCause::TimedOut);
         }
         let p = self.pending.remove(idx);
-        Decision::Confirmed(p.action)
+        Decision::Confirmed(ConfirmedSend { action: p.action, preview: p.preview })
     }
 
     /// Explicitly reject a pending request.
@@ -273,7 +283,8 @@ mod tests {
         let mut q = ApprovalQueue::new();
         let id = q.request(email(), preview(), Origin::Human, 0);
         let decision = q.confirm(id, ConfirmIntent::DedicatedButton, 1000);
-        assert_eq!(decision, Decision::Confirmed(email()));
+        // the confirmed decision carries both the action and its preview (for traceability)
+        assert_eq!(decision, Decision::Confirmed(ConfirmedSend { action: email(), preview: preview() }));
         // removed from the queue after resolution
         assert_eq!(q.pending_len(), 0);
         assert_eq!(q.poll(id), Decision::Unknown);
@@ -299,10 +310,10 @@ mod tests {
         assert_eq!(expired, vec![a]);
         assert_eq!(q.pending_len(), 1);
         // b still confirmable
-        assert_eq!(
+        assert!(matches!(
             q.confirm(b, ConfirmIntent::DedicatedButton, APPROVAL_TIMEOUT_MS + 2),
-            Decision::Confirmed(email())
-        );
+            Decision::Confirmed(ConfirmedSend { action, .. }) if action == email()
+        ));
     }
 
     #[test]

@@ -265,10 +265,10 @@ mod tests {
         assert_eq!(approvals.poll(id), Decision::StillPending);
         assert_eq!(approvals.pending_len(), 1);
         // Only a UI confirm (dedicated button) completes it — the same flow as a human L3.
-        assert_eq!(
+        assert!(matches!(
             approvals.confirm(id, ConfirmIntent::DedicatedButton, 1000),
-            Decision::Confirmed(send)
-        );
+            Decision::Confirmed(cs) if cs.action == send
+        ));
     }
 
     #[test]

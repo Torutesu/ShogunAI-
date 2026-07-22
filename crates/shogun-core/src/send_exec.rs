@@ -1,0 +1,178 @@
+//! Post-approval L3 send execution with mandatory traceability (WP4.3, §6.14 / invariant 3).
+//!
+//! This is the write-path counterpart to [`crate::daemon::Db::ingest_integration`] (the read path):
+//! once the [`ApprovalQueue`](shogun_agents::approval::ApprovalQueue) hands back a
+//! [`ConfirmedSend`], the send actually leaves the device here — and **exactly when it does, a
+//! traceability record is written**. The recording is structural, not a matter of discipline:
+//!
+//! - The record is built from the [`ConfirmedSend`]'s own preview, so the traced route/destination
+//!   and the digested body can never disagree with what was sent.
+//! - The record is written **only on a successful egress** (transport `Ok`). If the send fails
+//!   (not connected, token expired), nothing left the device, so nothing is traced — symmetric with
+//!   the read path, which traces nothing because a read carries no user data off-device.
+//! - [`TraceRecord`] has no text field, so the sent body is digested and dropped; the body never
+//!   reaches storage (G8).
+//!
+//! The transport is a seam ([`SendTransport`]): the real remote-MCP / Composio client needs OAuth
+//! tokens (Category C) and lands later, but the whole record-on-send guarantee is exercised here on
+//! Linux with a fake transport.
+
+use shogun_agents::approval::{ConfirmedSend, Route as ApprovalRoute};
+use shogun_agents::permission::SendAction;
+
+use crate::llm::traceability::{Route, TraceRecord, TraceabilitySink};
+
+/// The seam that actually performs an external send. The real implementation is a remote-MCP /
+/// Composio client (Category C — needs connected OAuth tokens); tests inject a fake. It is handed
+/// the send action and the full body; it must return a non-sensitive error string on failure (no
+/// body text in the error).
+pub trait SendTransport {
+    fn send(&self, action: &SendAction, body: &str) -> Result<(), String>;
+}
+
+/// The outcome of executing a confirmed send.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SendExecOutcome {
+    /// The send left the device and a traceability record was written.
+    Sent,
+    /// The transport failed; nothing left the device and nothing was traced. Carries the
+    /// non-sensitive error string.
+    Failed(String),
+}
+
+/// Map the approval-layer route onto the traceability route. A direct send goes over the service's
+/// official MCP; a Composio-relayed send is the third-party route (surfaced as such in the viewer).
+fn trace_route(route: ApprovalRoute) -> Route {
+    match route {
+        ApprovalRoute::DirectMcp => Route::Mcp,
+        ApprovalRoute::ViaComposio => Route::Composio,
+    }
+}
+
+/// A stable machine purpose string for a send, stored in the traceability log (FR-TR-01).
+fn purpose_for(action: &SendAction) -> &'static str {
+    match action {
+        SendAction::SendEmail { .. } => "integration.send_email",
+        SendAction::PostMessage { .. } => "integration.post_message",
+        SendAction::CreateCalendarEvent { .. } => "integration.create_calendar_event",
+        SendAction::PostComment { .. } => "integration.post_comment",
+    }
+}
+
+/// Build the traceability record for a confirmed send — pure, digests the body and drops it. The
+/// route, destination, and third-party flag all come from the confirmed preview so the trace
+/// describes exactly what will be sent.
+pub fn trace_for_send(confirmed: &ConfirmedSend) -> TraceRecord {
+    let preview = &confirmed.preview;
+    let route = trace_route(preview.route);
+    TraceRecord::for_chunk(
+        route,
+        purpose_for(&confirmed.action),
+        preview.destination.clone(),
+        &preview.full_body,
+        preview.route == ApprovalRoute::ViaComposio,
+    )
+}
+
+/// Execute a confirmed L3 send: attempt the transport, and on success record traceability to
+/// `sink` before returning [`SendExecOutcome::Sent`]. On failure nothing is traced (nothing
+/// egressed). This is the single point through which a first-layer send reaches the wire, so every
+/// send that leaves the device leaves a trace (invariant 3 / FR-TR-03).
+pub fn execute_send<T: SendTransport + ?Sized, S: TraceabilitySink + ?Sized>(
+    confirmed: &ConfirmedSend,
+    transport: &T,
+    sink: &S,
+) -> SendExecOutcome {
+    match transport.send(&confirmed.action, &confirmed.preview.full_body) {
+        Ok(()) => {
+            sink.record(trace_for_send(confirmed));
+            SendExecOutcome::Sent
+        }
+        Err(e) => SendExecOutcome::Failed(e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::llm::traceability::{digest, RecordingSink};
+    use shogun_agents::approval::{Preview, Route as ApprovalRoute};
+
+    fn email_send() -> SendAction {
+        SendAction::SendEmail { to: "alice@example.com".into() }
+    }
+
+    fn confirmed(route: ApprovalRoute, body: &str) -> ConfirmedSend {
+        let action = email_send();
+        let preview = Preview::for_send(&action, body, route);
+        ConfirmedSend { action, preview }
+    }
+
+    /// A transport that succeeds, or fails with a fixed error.
+    struct Fake {
+        ok: bool,
+    }
+    impl SendTransport for Fake {
+        fn send(&self, _action: &SendAction, _body: &str) -> Result<(), String> {
+            if self.ok {
+                Ok(())
+            } else {
+                Err("not connected".into())
+            }
+        }
+    }
+
+    #[test]
+    fn successful_send_records_exactly_one_trace_with_digest_only() {
+        let sink = RecordingSink::new();
+        let body = "Hi Alice — shipping the roadmap Friday.";
+        let cs = confirmed(ApprovalRoute::DirectMcp, body);
+
+        let outcome = execute_send(&cs, &Fake { ok: true }, &sink);
+        assert_eq!(outcome, SendExecOutcome::Sent);
+
+        let recs = sink.records();
+        assert_eq!(recs.len(), 1, "a send that reached the wire writes exactly one trace");
+        let rec = &recs[0];
+        assert_eq!(rec.route, Route::Mcp);
+        assert_eq!(rec.purpose, "integration.send_email");
+        assert_eq!(rec.destination, "alice@example.com");
+        assert_eq!(rec.chunk_bytes, body.len());
+        assert_eq!(rec.chunk_xxh64, digest(body));
+        assert!(!rec.third_party, "a direct MCP send is not third-party");
+        // the body text never appears in the record
+        assert!(!format!("{rec:?}").contains("roadmap"), "sent body must never appear in the trace");
+    }
+
+    #[test]
+    fn composio_send_is_traced_third_party() {
+        let sink = RecordingSink::new();
+        let cs = confirmed(ApprovalRoute::ViaComposio, "body");
+        assert_eq!(execute_send(&cs, &Fake { ok: true }, &sink), SendExecOutcome::Sent);
+        let recs = sink.records();
+        assert_eq!(recs[0].route, Route::Composio);
+        assert!(recs[0].third_party, "a Composio-relayed send is disclosed third-party (FR-C2-04)");
+    }
+
+    #[test]
+    fn failed_send_traces_nothing() {
+        let sink = RecordingSink::new();
+        let cs = confirmed(ApprovalRoute::DirectMcp, "body that never left");
+        let outcome = execute_send(&cs, &Fake { ok: false }, &sink);
+        assert_eq!(outcome, SendExecOutcome::Failed("not connected".into()));
+        assert!(sink.records().is_empty(), "nothing egressed, so nothing is traced");
+    }
+
+    #[test]
+    fn purpose_is_per_action() {
+        let cal = ConfirmedSend {
+            action: SendAction::CreateCalendarEvent { title: "Sync".into() },
+            preview: Preview::for_send(
+                &SendAction::CreateCalendarEvent { title: "Sync".into() },
+                "Sync 3pm",
+                ApprovalRoute::DirectMcp,
+            ),
+        };
+        assert_eq!(trace_for_send(&cal).purpose, "integration.create_calendar_event");
+    }
+}

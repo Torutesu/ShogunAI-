@@ -42,4 +42,8 @@ pub mod dreamcycle;
 pub mod llm;
 pub mod metrics;
 pub mod notch;
+/// Post-approval L3 send execution + mandatory traceability (needs the approval types from
+/// shogun-agents, present under `daemon-server`).
+#[cfg(feature = "daemon-server")]
+pub mod send_exec;
 pub mod traceview;
