@@ -172,7 +172,33 @@ pub fn assemble(
         actions.push(cand);
     }
 
+    // FR-CF-04: never present an empty panel. When no state is relevant (an unknown contact, a
+    // brand-new context), fall back to the always-available generic actions so the Notch still has
+    // something to do rather than showing nothing.
+    if actions.is_empty() {
+        actions = generic_actions(&screen);
+    }
+
     ContextCache { screen, facts, hot_summary: hot_summary.into(), actions }
+}
+
+/// The generic, always-available actions (FR-CF-04): Save note / Search memory / Extract tasks.
+/// All are device-local (L1), so the fallback panel can never contain a send. The memory search is
+/// seeded from the screen so it is one tap from useful even with no state.
+fn generic_actions(screen: &ScreenContext) -> Vec<ActionCandidate> {
+    // Seed the search with the most salient term, else the window title (both device-local).
+    let query =
+        screen.salient.first().cloned().filter(|s| !s.is_empty()).unwrap_or_else(|| screen.window_title.clone());
+    let tag = |action: LocalAction, rationale: &str| {
+        let action = Action::Local(action);
+        let level = action.required_level();
+        ActionCandidate { action, level, rationale: rationale.to_string() }
+    };
+    vec![
+        tag(LocalAction::SaveDraft { target: "note" }, "Save a note"),
+        tag(LocalAction::LocalSearch { query }, "Search memory"),
+        tag(LocalAction::SaveDraft { target: "tasks" }, "Extract tasks"),
+    ]
 }
 
 #[cfg(test)]
@@ -282,7 +308,31 @@ mod tests {
         let cache = assemble(screen(), &[], "3 unread threads", &Intent::default());
         assert_eq!(cache.screen.app_bundle_id, "com.apple.mail");
         assert_eq!(cache.hot_summary, "3 unread threads");
-        assert!(cache.actions.is_empty());
         assert!(cache.facts.is_empty());
+    }
+
+    #[test]
+    fn no_state_falls_back_to_generic_actions_never_empty() {
+        // FR-CF-04: an unknown context must still offer Save note / Search memory / Extract tasks.
+        let cache = assemble(screen(), &[], "hot", &Intent::default());
+        assert!(!cache.actions.is_empty(), "the panel must never be empty (FR-CF-04)");
+        let rationales: Vec<&str> = cache.actions.iter().map(|a| a.rationale.as_str()).collect();
+        assert_eq!(rationales, vec!["Save a note", "Search memory", "Extract tasks"]);
+        // every fallback is device-local — never a send.
+        assert!(cache.actions.iter().all(|a| !a.action.is_external_send()));
+        assert!(cache.actions.iter().all(|a| a.level == Level::L1));
+        // the memory search is seeded from the screen's salient term.
+        assert!(cache
+            .actions
+            .iter()
+            .any(|a| a.action == Action::Local(LocalAction::LocalSearch { query: "roadmap".into() })));
+    }
+
+    #[test]
+    fn low_confidence_only_still_falls_back_not_empty() {
+        // All state is Low (excluded from actions) → still not empty (FR-CF-04 + FR-ST-20).
+        let cache = assemble(screen(), &[person("Bob", 0.3, 0.9)], "hot", &Intent::default());
+        assert!(!cache.actions.is_empty());
+        assert_eq!(cache.actions[0].rationale, "Save a note");
     }
 }

@@ -109,6 +109,12 @@ pub fn insert(conn: &Connection, row: &TraceRow) -> Result<i64, rusqlite::Error>
     Ok(conn.last_insert_rowid())
 }
 
+/// Count traceability rows written at or after `ts` — the number of outbound chunks a Dream Cycle
+/// sent during a run (FR-DC-06), given the run's start time.
+pub fn count_since(conn: &Connection, ts: i64) -> Result<i64, rusqlite::Error> {
+    conn.query_row("SELECT count(*) FROM traceability_log WHERE ts >= ?1", params![ts], |r| r.get(0))
+}
+
 /// A read-back filter for the viewer (FR-TR-02). `None` fields don't constrain; `destination` is a
 /// case-insensitive substring (SQL `LIKE`).
 #[derive(Debug, Clone, Default)]

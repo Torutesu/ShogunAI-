@@ -36,6 +36,27 @@ impl CycleReport {
     }
 }
 
+/// The run-result summary the Full UI shows (FR-DC-06): what one Dream Cycle did — how many events
+/// it processed, how many state records changed, how many chunks it sent, and how long it took.
+/// Assembled from DB deltas by [`Db::summarize_dream_run`](crate::daemon::Db::summarize_dream_run),
+/// so it reflects the real effect rather than a self-reported count.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DreamRunSummary {
+    pub cycle: CycleKind,
+    /// Jobs that completed this run.
+    pub jobs_completed: usize,
+    /// Events in the cycle's input window (`processed`).
+    pub events_processed: i64,
+    /// State rows inserted/updated during the run (across all four state tables).
+    pub state_changes: i64,
+    /// Traceability rows written during the run — the outbound chunk count (AR-11 / FR-DC-06).
+    pub chunks_sent: i64,
+    /// Wall-clock duration of the run.
+    pub duration_ms: i64,
+    /// Whether the whole sequence completed (a failed cycle is resumable — FR-DC-04).
+    pub completed_fully: bool,
+}
+
 /// Run (or resume) a cycle: execute the still-to-do jobs in order, persisting each transition.
 /// Stops at the first failure, leaving the cycle resumable.
 pub fn run_cycle<R: DreamJobRunner>(

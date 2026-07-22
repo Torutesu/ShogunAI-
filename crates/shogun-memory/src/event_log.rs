@@ -115,6 +115,16 @@ pub fn events_in_range(
     rows.collect()
 }
 
+/// Count events in `[from_ts, to_ts)` — the size of a Dream Cycle input window (FR-DC-06), without
+/// materializing the rows.
+pub fn count_in_range(conn: &Connection, from_ts: i64, to_ts: i64) -> Result<i64, rusqlite::Error> {
+    conn.query_row(
+        "SELECT count(*) FROM event_log WHERE ts >= ?1 AND ts < ?2",
+        params![from_ts, to_ts],
+        |r| r.get(0),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

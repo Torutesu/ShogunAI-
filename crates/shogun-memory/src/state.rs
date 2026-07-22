@@ -30,6 +30,23 @@ impl StateTable {
     }
 }
 
+/// Every state table, for exhaustive iteration.
+pub const ALL_STATE_TABLES: [StateTable; 4] =
+    [StateTable::People, StateTable::Projects, StateTable::Commitments, StateTable::OpenLoops];
+
+/// Count state rows inserted or updated at or after `ts`, summed across all four state tables — the
+/// number of state records a Dream Cycle changed during a run (FR-DC-06), given the run's start
+/// time. `updated_at` is set on both insert and every mutation (recompute, consolidation).
+pub fn count_changed_since(conn: &Connection, ts: i64) -> Result<i64, rusqlite::Error> {
+    let mut total = 0i64;
+    for table in ALL_STATE_TABLES {
+        // The table name is from a fixed enum (never user input) — safe to inline.
+        let sql = format!("SELECT count(*) FROM {} WHERE updated_at >= ?1", table.as_str());
+        total += conn.query_row(&sql, params![ts], |r| r.get::<_, i64>(0))?;
+    }
+    Ok(total)
+}
+
 /// One provenance link: the event that evidences a state row, with a weight (FR-ST-02).
 #[derive(Debug, Clone, Copy)]
 pub struct Provenance {

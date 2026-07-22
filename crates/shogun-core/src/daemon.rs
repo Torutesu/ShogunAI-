@@ -583,6 +583,43 @@ impl Db {
     pub fn resume(&self, cycle_id: &str, cycle: CycleKind) -> Vec<JobKind> {
         remaining(cycle, &self.cycle_runs(cycle_id))
     }
+
+    /// Assemble the Dream Cycle run summary (FR-DC-06) from DB deltas. Everything a run changed —
+    /// state rows and traceability chunks — carries a timestamp at or after `run_started_ms`, so a
+    /// single "since run start" count captures the run's real effect without a before/after
+    /// snapshot. `events_processed` is the size of the input window the cycle consolidated. The
+    /// summary is what the Full UI renders. Zeroed counts on a lock failure (never panics).
+    pub fn summarize_dream_run(
+        &self,
+        cycle: CycleKind,
+        report: &crate::dreamcycle::run::CycleReport,
+        input_from_ts: i64,
+        input_to_ts: i64,
+        run_started_ms: i64,
+        run_ended_ms: i64,
+    ) -> crate::dreamcycle::run::DreamRunSummary {
+        let (events_processed, state_changes, chunks_sent) = self
+            .conn
+            .lock()
+            .ok()
+            .map(|c| {
+                (
+                    event_log::count_in_range(&c, input_from_ts, input_to_ts).unwrap_or(0),
+                    state::count_changed_since(&c, run_started_ms).unwrap_or(0),
+                    shogun_memory::traceability::count_since(&c, run_started_ms).unwrap_or(0),
+                )
+            })
+            .unwrap_or((0, 0, 0));
+        crate::dreamcycle::run::DreamRunSummary {
+            cycle,
+            jobs_completed: report.completed.len(),
+            events_processed,
+            state_changes,
+            chunks_sent,
+            duration_ms: run_ended_ms.saturating_sub(run_started_ms),
+            completed_fully: report.is_complete(),
+        }
+    }
 }
 
 /// Map a [`JobKind`] to its stored string.
@@ -752,6 +789,51 @@ mod tests {
         // …and the calendar event too.
         let hits = db.search("standup", 10);
         assert!(hits.iter().any(|h| h.source == "gcal"), "synced calendar event must be searchable");
+    }
+
+    #[test]
+    fn dream_run_summary_reflects_events_state_and_chunks() {
+        use crate::dreamcycle::plan::JobKind;
+        use crate::dreamcycle::run::CycleReport;
+        use crate::llm::traceability::{Route, TraceRecord};
+
+        // clock at 1000 so run-start filtering (>= 1000) is meaningful.
+        let db = Db::open_in_memory(clock(1_000)).unwrap();
+        // three events in the input window [10, 40)
+        let mut first_event = 0;
+        for (i, ts) in [10, 20, 30].into_iter().enumerate() {
+            let (id, _) = db.capture(&ev("body", &format!("h{i}"), ts)).unwrap();
+            if i == 0 {
+                first_event = id;
+            }
+        }
+        // a state change and two sent chunks happen "during the run" (updated_at/ts >= 1000 via clock)
+        db.insert_open_loop(
+            &shogun_memory::state::NewOpenLoop {
+                kind: shogun_memory::state::OpenLoopKind::WaitingOnThem,
+                description: "waiting on legal",
+                counterparty_id: None,
+                project_id: None,
+                opened_at: 1_000,
+                confidence: 0.9,
+                now: 1_000,
+            },
+            &[shogun_memory::state::Provenance::new(first_event)],
+        )
+        .expect("open loop inserts with provenance");
+        let sink = db.traceability_sink();
+        sink.record(TraceRecord::for_chunk(Route::BatchApi, "consolidation", "api", "c1", false));
+        sink.record(TraceRecord::for_chunk(Route::BatchApi, "consolidation", "api", "c2", false));
+
+        let report = CycleReport { completed: vec![JobKind::Consolidation, JobKind::StateUpdate], failed: None };
+        let summary = db.summarize_dream_run(CycleKind::Full, &report, 10, 40, 1_000, 1_250);
+
+        assert_eq!(summary.events_processed, 3, "three events in the input window");
+        assert!(summary.state_changes >= 1, "the open loop counts as a state change");
+        assert_eq!(summary.chunks_sent, 2, "two traceability rows written during the run");
+        assert_eq!(summary.jobs_completed, 2);
+        assert_eq!(summary.duration_ms, 250);
+        assert!(summary.completed_fully);
     }
 
     #[test]
