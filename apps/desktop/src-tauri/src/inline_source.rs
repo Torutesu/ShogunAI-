@@ -199,4 +199,96 @@ pub mod mac {
         run_inline_at_cursor(db.inner().clone());
         "started"
     }
+
+    // ---- live status / state / chat (the product window's real data) -----------------------
+
+    /// A live snapshot of what SHOGUN sees and knows — for the window header.
+    #[derive(serde::Serialize)]
+    pub struct Status {
+        /// The app SHOGUN is currently reading (frontmost bundle id).
+        pub app: String,
+        pub commitments: usize,
+        pub open_loops: usize,
+        /// Whether a BYOK key is in the Keychain (live generation vs. echo).
+        pub has_key: bool,
+    }
+
+    #[tauri::command]
+    pub fn shogun_status(db: tauri::State<'_, Db>) -> Status {
+        let app = crate::display::frontmost_app().map(|f| f.bundle_id).unwrap_or_default();
+        Status {
+            app,
+            commitments: db.commitments_due(db.now_ms()).len(),
+            open_loops: db.open_loops().len(),
+            has_key: keychain_byok().is_some(),
+        }
+    }
+
+    /// One state row for the "What I know" panel.
+    #[derive(serde::Serialize)]
+    pub struct StateItem {
+        pub text: String,
+        pub meta: String,
+    }
+    #[derive(serde::Serialize)]
+    pub struct StateView {
+        pub commitments: Vec<StateItem>,
+        pub open_loops: Vec<StateItem>,
+    }
+
+    #[tauri::command]
+    pub fn shogun_state(db: tauri::State<'_, Db>) -> StateView {
+        let now = db.now_ms();
+        let commitments = db
+            .commitments_due(now)
+            .into_iter()
+            .map(|c| StateItem {
+                meta: if c.overdue { "overdue".into() } else { format!("{:.0}% sure", c.confidence * 100.0) },
+                text: c.description,
+            })
+            .collect();
+        let open_loops = db
+            .open_loops()
+            .into_iter()
+            .map(|l| StateItem { meta: format!("{}d waiting", l.staleness_days), text: l.description })
+            .collect();
+        StateView { commitments, open_loops }
+    }
+
+    /// Build the chat prompt: the user's message grounded in confidence-gated memory (FR-ST-20).
+    fn build_chat_prompt(message: &str, memory: &[String]) -> String {
+        let mut p = String::from(
+            "You are SHOGUN, the user's private work assistant on their Mac. Answer grounded in what \
+             you remember about their work. Be concise, concrete, and useful — no filler.\n",
+        );
+        let facts: Vec<&str> = memory.iter().map(|m| m.trim()).filter(|m| !m.is_empty()).collect();
+        if !facts.is_empty() {
+            p.push_str("\nWhat you remember about their work:\n");
+            for m in facts {
+                p.push_str("- ");
+                p.push_str(m);
+                p.push('\n');
+            }
+        }
+        p.push_str("\nUser: ");
+        p.push_str(message);
+        p.push_str("\nSHOGUN:");
+        p
+    }
+
+    fn chat_blocking(db: &Db, message: &str) -> Result<String, String> {
+        let memory = db.inline_memory(8);
+        let agent = build_agent(db);
+        agent.complete(&build_chat_prompt(message, &memory)).map_err(|e| e.to_string())
+    }
+
+    /// Chat with SHOGUN, grounded in memory, on the BYOK Agent lane. Runs the blocking generation on
+    /// a blocking thread so it never touches a tokio worker. Records one egress trace (invariant 3).
+    #[tauri::command]
+    pub async fn shogun_chat(message: String, db: tauri::State<'_, Db>) -> Result<String, String> {
+        let db = db.inner().clone();
+        tokio::task::spawn_blocking(move || chat_blocking(&db, &message))
+            .await
+            .map_err(|e| e.to_string())?
+    }
 }
