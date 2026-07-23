@@ -39,6 +39,7 @@ pub mod db_backend;
 #[cfg(feature = "db")]
 pub mod db_sink;
 pub mod dreamcycle;
+pub mod inline;
 pub mod llm;
 pub mod metrics;
 pub mod notch;

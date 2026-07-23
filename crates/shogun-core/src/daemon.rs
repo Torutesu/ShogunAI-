@@ -231,6 +231,24 @@ impl Db {
         self.capture(&ev).map(|(id, _)| id)
     }
 
+    /// Confidence-gated memory lines for the inline draft prompt ([`crate::inline::compose_inline`]):
+    /// the commitments the user owes and the open loops in play, passed through the FR-ST-20 gate
+    /// (High stated as fact, Medium prefixed `possibly:`, Low dropped) so a low-confidence guess is
+    /// never handed to the model as a fact. Capped at `limit` lines.
+    pub fn inline_memory(&self, limit: usize) -> Vec<String> {
+        let mut pairs: Vec<(String, f64)> = Vec::new();
+        for c in self.commitments_due(self.now_ms()) {
+            pairs.push((format!("you committed: {}", c.description), c.confidence));
+        }
+        for l in self.open_loops() {
+            pairs.push((format!("open loop: {}", l.description), l.confidence));
+        }
+        let refs: Vec<(&str, f64)> = pairs.iter().map(|(s, c)| (s.as_str(), *c)).collect();
+        let mut facts = shogun_fusion::confidence::assemble_facts(&refs);
+        facts.truncate(limit);
+        facts
+    }
+
     /// A traceability sink that writes through this same handle (the LLM egress records here).
     pub fn traceability_sink(&self) -> DbTraceabilitySink {
         DbTraceabilitySink::new(self.conn.clone(), self.clock.clone())
@@ -834,6 +852,49 @@ mod tests {
         assert_eq!(summary.jobs_completed, 2);
         assert_eq!(summary.duration_ms, 250);
         assert!(summary.completed_fully);
+    }
+
+    #[test]
+    fn inline_memory_gates_low_confidence_out() {
+        let db = Db::open_in_memory(clock(1)).unwrap();
+        let e = db.capture(&ev("evidence", "h1", 1)).unwrap().0;
+        let prov = [shogun_memory::state::Provenance::new(e)];
+        // a high-confidence commitment (stated as fact) and a low-confidence one (dropped)
+        db.insert_commitment(
+            &shogun_memory::state::NewCommitment {
+                direction: shogun_memory::state::CommitmentDirection::Mine,
+                counterparty_id: None,
+                description: "send Alice the deck",
+                due_at: None,
+                status: shogun_memory::state::CommitmentStatus::Open,
+                project_id: None,
+                confidence: 0.9,
+                now: 1,
+            },
+            &prov,
+        )
+        .expect("high commitment");
+        db.insert_commitment(
+            &shogun_memory::state::NewCommitment {
+                direction: shogun_memory::state::CommitmentDirection::Mine,
+                counterparty_id: None,
+                description: "maybe ping the vendor",
+                due_at: None,
+                status: shogun_memory::state::CommitmentStatus::Open,
+                project_id: None,
+                confidence: 0.3,
+                now: 1,
+            },
+            &prov,
+        )
+        .expect("low commitment");
+
+        let mem = db.inline_memory(10);
+        assert!(mem.iter().any(|m| m.contains("send Alice the deck")), "high-confidence fact is included: {mem:?}");
+        assert!(
+            !mem.iter().any(|m| m.contains("maybe ping the vendor")),
+            "low-confidence guess must not be handed to the model as fact (FR-ST-20): {mem:?}"
+        );
     }
 
     #[test]
