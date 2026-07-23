@@ -8,6 +8,7 @@
 
 mod axcache;
 mod capture_source;
+mod connectors;
 mod display;
 mod geometry;
 mod hover;
@@ -43,6 +44,9 @@ pub fn run() {
         inline_source::mac::shogun_status,
         inline_source::mac::shogun_state,
         inline_source::mac::shogun_chat,
+        connectors::mac::connectors_list,
+        connectors::mac::connect_service,
+        connectors::mac::disconnect_service,
     ]);
 
     // NOTE: do NOT add .on_page_load here — with the NSPanel-swapped window it trips a
@@ -175,8 +179,21 @@ fn setup_macos(app: &tauri::App) {
             app.manage(db.clone());
             app.manage(notch_exec::mac::new_engine(db.clone()));
             let policy = shogun_core::capture::exclusion::ExclusionPolicy::new();
-            let _ = capture_source::spawn_capture_poller(db, policy, None);
+            let _ = capture_source::spawn_capture_poller(db.clone(), policy, None);
             eprintln!("[spike] capture source started (poll {}ms)", capture_source::DEFAULT_POLL_MS);
+
+            // First-layer connectors (§6.9). Build the auto-refreshing runtime and start the
+            // 15-min read-sync poller. Missing Google creds (env) is not fatal — the app runs
+            // without connectors until the user sets them up.
+            match connectors::mac::build_runtime(true /* draft-stop default ON */) {
+                Ok(rt) => {
+                    let shared = std::sync::Arc::new(std::sync::Mutex::new(rt));
+                    connectors::mac::spawn_sync_poller(shared.clone(), db.clone());
+                    app.manage(connectors::mac::ConnectorState(shared));
+                    eprintln!("[spike] connector runtime started (read-sync poller live)");
+                }
+                Err(e) => eprintln!("[spike] connectors not started: {e}"),
+            }
         }
         Err(e) => eprintln!("[spike] memory DB unavailable — capture source not started: {e}"),
     }

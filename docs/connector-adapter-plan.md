@@ -26,9 +26,12 @@ OAuthブラウザフロー、ライブMCP接続）はmacOSビルドが必要で�
 | `RemoteMcpTransport` が `IntegrationTransport` + `WriteExecutor` を実装（read_sync + execute書き込み） | ✅ 純ロジック検証済 |
 | **OAuth 2.1 + PKCE（`oauth.rs`）**: PKCE導出・authorize URL・token交換/refreshフォーム・レスポンス解析・redirect解析 | ✅ 純ロジック実装・テスト済 |
 | **daemon配線骨格（`runtime.rs`）**: `ConnectorRuntime`（sync_service / services_due / poll_tick / execute_write）+ `IngestSink` seam | ✅ 純ロジック実装・テスト済（32テスト） |
-| `live` フィーチャ: reqwest JSON-RPCクライアント + macOS Keychain + OAuthループバックフロー(`oauth_flow.rs`) | ⚠️ コンパイル可・**実接続はmacOS+実トークンが必要で未検証** |
-| daemonへの実結線（core→integrations依存追加、`Db`が`IngestSink`実装、tokio 15分interval、承認キュー→execute_write） | ⛔ 未着手（macOS、下記スニペット参照） |
-| 接続管理UI | ⛔ 未着手（WP-E） |
+| **トークンライフサイクル（`token.rs`）**: TokenStore seam・シリアライズ・`TokenManager`（期限切れ検知→自動リフレッシュ→保存） | ✅ 純ロジック実装・テスト済 |
+| **接続状態一覧（`runtime.rs::statuses`）**: 各サービスのconnected/amber/disconnected/coming_soon + 鮮度 + endpoint有無 | ✅ 実装・テスト済 |
+| `live`: reqwest JSON-RPC・OAuthループバック(`oauth_flow.rs`)・**Keychain TokenStore**・**自動リフレッシュProvider**(`ManagedTokenProvider`) | ⚠️ コンパイル可・**実接続はmacOS+実トークンで未検証** |
+| **core実結線**: `Db` が `IngestSink` 実装（`db`フィーチャで依存追加） | ✅ Linuxでビルド確認済 |
+| **デスクトップ実結線（`connectors.rs`）**: Tauriコマンド `connect_service`/`disconnect_service`/`connectors_list`、runtime所有、15分ポーラー、lib.rs登録 | ⚠️ macOS専用・**Linuxでコンパイル不可のため未検証**（ラフ実装） |
+| **接続管理UI（`Connections.tsx`）**: サービス一覧＋Connect/Disconnect＋状態表示 | ⚠️ ラフ実装・**未実行**（見た目は後で。Full UI/設定ウィンドウにマウント想定） |
 
 **この環境（Linux）で検証できたのはここまで。** 純ロジック（マッピング・PKCE・ゲート・状態遷移）は
 全部テスト付き。実I/O（ネットワーク・Keychain・ブラウザ）はmacOSビルドが必要で継ぎ目まで用意済み。

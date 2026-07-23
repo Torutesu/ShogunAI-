@@ -87,31 +87,86 @@ fn redact(msg: &str) -> String {
     }
 }
 
-/// The macOS Keychain token source (invariant 7). One generic-password entry per service under the
-/// SHOGUN service name; the account is the service's `source_str` (e.g. `gmail`). OAuth refresh is
-/// the connection layer's job — this only reads the current access token.
+/// The macOS Keychain token store (invariant 7): one generic-password entry per service holding the
+/// serialized [`crate::oauth::TokenSet`] (access + refresh + expiry). Keyed `"<source>-tokenset"`
+/// under the SHOGUN Keychain service (e.g. `com.selectkk.shogun`). Read + written by
+/// [`crate::token::TokenManager`]; nothing else touches tokens.
 #[cfg(target_os = "macos")]
-pub struct KeychainTokenProvider {
+pub struct KeychainTokenStore {
     keychain_service: String,
 }
 
 #[cfg(target_os = "macos")]
-impl KeychainTokenProvider {
-    /// `keychain_service` is the Keychain "service" field, e.g. `com.selectkk.shogun`.
+impl KeychainTokenStore {
     pub fn new(keychain_service: impl Into<String>) -> Self {
         Self { keychain_service: keychain_service.into() }
+    }
+    fn account(service: Service) -> String {
+        format!("{}-tokenset", service.source_str())
     }
 }
 
 #[cfg(target_os = "macos")]
-impl TokenProvider for KeychainTokenProvider {
+impl crate::token::TokenStore for KeychainTokenStore {
+    fn load(&self, service: Service) -> Option<crate::oauth::TokenSet> {
+        let bytes = security_framework::passwords::get_generic_password(
+            &self.keychain_service,
+            &Self::account(service),
+        )
+        .ok()?;
+        let blob = String::from_utf8(bytes).ok()?;
+        crate::token::deserialize(&blob).ok()
+    }
+    fn save(&self, service: Service, tokens: &crate::oauth::TokenSet) -> Result<(), String> {
+        let blob = crate::token::serialize(tokens)?;
+        security_framework::passwords::set_generic_password(
+            &self.keychain_service,
+            &Self::account(service),
+            blob.as_bytes(),
+        )
+        .map_err(|_| format!("keychain write failed for {}", service.source_str()))
+    }
+    fn delete(&self, service: Service) -> Result<(), String> {
+        security_framework::passwords::delete_generic_password(
+            &self.keychain_service,
+            &Self::account(service),
+        )
+        .map_err(|_| format!("keychain delete failed for {}", service.source_str()))
+    }
+}
+
+/// Wall-clock unix-ms — the default clock for [`ManagedTokenProvider`].
+pub fn system_now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// A [`TokenProvider`] that always returns a *valid* access token, refreshing via
+/// [`crate::token::TokenManager`] when the stored one is near expiry. This is what
+/// [`HttpMcpRpc`] uses, so a first-layer MCP call an hour after connecting still succeeds.
+pub struct ManagedTokenProvider<X: crate::oauth::TokenExchange, S: crate::token::TokenStore> {
+    cfg: crate::oauth::AuthConfig,
+    exchange: X,
+    store: S,
+    clock: fn() -> i64,
+}
+
+impl<X: crate::oauth::TokenExchange, S: crate::token::TokenStore> ManagedTokenProvider<X, S> {
+    /// Uses the wall clock. Pass a per-service `AuthConfig` (all Google services share endpoints;
+    /// only the client id/secret differ if you register separate clients).
+    pub fn new(cfg: crate::oauth::AuthConfig, exchange: X, store: S) -> Self {
+        Self { cfg, exchange, store, clock: system_now_ms }
+    }
+}
+
+impl<X: crate::oauth::TokenExchange, S: crate::token::TokenStore> TokenProvider
+    for ManagedTokenProvider<X, S>
+{
     fn access_token(&self, service: Service) -> Result<String, String> {
-        // Account key format: "<source>-access" (e.g. "gmail-access").
-        let account = format!("{}-access", service.source_str());
-        let bytes =
-            security_framework::passwords::get_generic_password(&self.keychain_service, &account)
-                .map_err(|_| format!("no keychain token for {}", service.source_str()))?;
-        String::from_utf8(bytes).map_err(|_| "keychain token was not utf-8".to_string())
+        let mgr = crate::token::TokenManager::new(&self.cfg, &self.exchange, &self.store);
+        mgr.valid_access_token(service, (self.clock)()).map_err(|e| format!("{e:?}"))
     }
 }
 

@@ -145,6 +145,14 @@ struct RawTokenResponse {
     refresh_token: Option<String>,
 }
 
+/// The token-endpoint POST seam — a form POST returning the JSON body. The real impl is a `reqwest`
+/// client ([`crate::oauth_flow::HttpTokenExchange`], feature `live`); tests and the token manager
+/// inject a fake. Defined here (pure) so both the interactive flow and [`crate::token`] share it.
+pub trait TokenExchange {
+    /// POST `form` (application/x-www-form-urlencoded) to `token_endpoint`, returning the JSON body.
+    fn post_form(&self, token_endpoint: &str, form: &[(String, String)]) -> Result<String, String>;
+}
+
 /// A parsed token set with an absolute expiry (unix ms). `refresh_token` may be absent on a refresh
 /// response (the existing one stays valid).
 #[derive(Debug, Clone, PartialEq, Eq)]

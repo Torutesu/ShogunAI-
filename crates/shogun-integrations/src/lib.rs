@@ -21,6 +21,7 @@ pub mod oauth;
 pub mod result;
 pub mod rpc;
 pub mod runtime;
+pub mod token;
 pub mod toolmap;
 pub mod transport;
 
@@ -29,6 +30,8 @@ pub mod live;
 #[cfg(feature = "live")]
 pub mod oauth_flow;
 
+pub use oauth::{AuthConfig, Pkce, TokenExchange, TokenSet};
 pub use rpc::{McpRpc, StaticTokenProvider, TokenProvider};
-pub use runtime::{ConnectorRuntime, IngestSink, SyncReport};
+pub use runtime::{ConnUi, ConnectorRuntime, IngestSink, ServiceStatus, SyncReport};
+pub use token::{MemoryTokenStore, TokenError, TokenManager, TokenStore};
 pub use transport::{RemoteMcpTransport, WriteExecutor};

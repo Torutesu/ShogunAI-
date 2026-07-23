@@ -42,6 +42,10 @@ tokio = { version = "1", features = ["rt", "rt-multi-thread"] }
 shogun-fusion = { path = "../../../crates/shogun-fusion" }
 # shogun-agents for L1/L2/L3-gated execution of a clicked context action.
 shogun-agents = { path = "../../../crates/shogun-agents" }
+# First-layer connectors: OAuth+PKCE flow, Keychain token store, MCP transport, sync runtime.
+# `live` for the effectful side (reqwest + Keychain). shogun-mcp for scope::from_source.
+shogun-integrations = { path = "../../../crates/shogun-integrations", features = ["live"] }
+shogun-mcp = { path = "../../../crates/shogun-mcp" }
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", features = [
     "NSResponder", "NSWindow", "NSView", "NSPanel", "NSScreen",

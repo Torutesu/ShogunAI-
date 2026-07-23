@@ -9,7 +9,7 @@
 use std::io::{Read, Write};
 use std::net::TcpListener;
 
-use crate::oauth::{self, AuthConfig, Pkce, TokenSet};
+use crate::oauth::{self, AuthConfig, Pkce, TokenExchange, TokenSet};
 
 /// Fresh 32-byte CSPRNG entropy for a PKCE verifier.
 fn entropy() -> Result<[u8; 32], String> {
@@ -78,14 +78,7 @@ fn accept_redirect(listener: &TcpListener) -> Result<(String, String), String> {
     parsed
 }
 
-/// The token-endpoint POST seam — the real impl is a `reqwest` form POST; tests inject a fake so the
-/// flow orchestration can be checked without network.
-pub trait TokenExchange {
-    /// POST `form` (application/x-www-form-urlencoded) to `token_endpoint`, returning the JSON body.
-    fn post_form(&self, token_endpoint: &str, form: &[(String, String)]) -> Result<String, String>;
-}
-
-/// A blocking `reqwest` token exchange.
+/// A blocking `reqwest` token exchange (implements [`crate::oauth::TokenExchange`]).
 pub struct HttpTokenExchange {
     client: reqwest::blocking::Client,
 }

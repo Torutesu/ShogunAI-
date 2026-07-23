@@ -205,6 +205,12 @@ pub fn scope(service: Service) -> ServiceScope {
     ServiceScope { service, ops }
 }
 
+/// Resolve a service from its `source_str` id (`gmail` / `gcal` / `gdrive` / …) — the inverse of
+/// [`Service::source_str`]. Used by the UI/command layer to turn a string id back into a service.
+pub fn from_source(source: &str) -> Option<Service> {
+    ALL_SERVICES.iter().copied().find(|s| s.source_str() == source)
+}
+
 /// Every service, for exhaustive iteration in tests / settings.
 pub const ALL_SERVICES: &[Service] = &[
     Service::Gmail,
@@ -346,6 +352,15 @@ mod tests {
                 "{service:?} must have a read operation"
             );
         }
+    }
+
+    #[test]
+    fn from_source_is_the_inverse_of_source_str() {
+        for &s in ALL_SERVICES {
+            assert_eq!(from_source(s.source_str()), Some(s));
+        }
+        assert_eq!(from_source("gdrive"), Some(Service::GoogleDrive));
+        assert_eq!(from_source("nope"), None);
     }
 
     #[test]

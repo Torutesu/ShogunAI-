@@ -37,6 +37,33 @@ pub struct SyncReport {
     pub inserted: usize,
 }
 
+/// A service's connection state as the UI shows it (serializable for the Tauri command).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConnUi {
+    Connected,
+    /// Amber — token expired/revoked; cached reads still serve, writes are blocked.
+    NeedsReauth,
+    Disconnected,
+    /// The service's wave is not rolled out yet (FR-INT-03) — shown as "Coming soon".
+    ComingSoon,
+}
+
+/// One row for the connections screen.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ServiceStatus {
+    /// The service (Rust-side; not serialized — the UI keys off `source`).
+    #[serde(skip)]
+    pub service: Service,
+    /// Stable id the UI uses (`gmail` / `gcal` / `gdrive` / …).
+    pub source: &'static str,
+    pub state: ConnUi,
+    /// Absolute unix-ms of the last successful sync, if any.
+    pub last_sync_ms: Option<i64>,
+    /// Whether a first-layer official MCP endpoint exists for this service today.
+    pub has_endpoint: bool,
+}
+
 /// Owns per-service connection state and drives sync/write over a transport. Generic over the
 /// transport so the daemon uses the live [`crate::RemoteMcpTransport`] and tests use a fake.
 pub struct ConnectorRuntime<T> {
@@ -73,6 +100,34 @@ impl<T> ConnectorRuntime<T> {
     /// Disconnect a service (FR-INT-07): the token is deleted by the caller; this clears state.
     pub fn disconnect(&mut self, service: Service, delete_events: bool) -> DisconnectOutcome {
         self.registry.disconnect(service, delete_events)
+    }
+
+    /// A UI-facing status for every service: connection state, freshness, wave availability, and
+    /// whether a first-layer MCP endpoint exists yet. This is what the connections screen renders.
+    pub fn statuses(&self, now_ms: i64) -> Vec<ServiceStatus> {
+        ALL_SERVICES
+            .iter()
+            .copied()
+            .map(|service| {
+                let released = service.is_released(self.highest_released);
+                let state = if !released {
+                    ConnUi::ComingSoon
+                } else {
+                    match self.registry.state(service) {
+                        ConnState::Connected { .. } => ConnUi::Connected,
+                        ConnState::NeedsReauth { .. } => ConnUi::NeedsReauth,
+                        ConnState::Disconnected => ConnUi::Disconnected,
+                    }
+                };
+                ServiceStatus {
+                    service,
+                    source: service.source_str(),
+                    state,
+                    last_sync_ms: self.registry.freshness_ms(service, now_ms).map(|f| now_ms - f),
+                    has_endpoint: crate::endpoints::has_endpoint(service),
+                }
+            })
+            .collect()
     }
 
     fn ctx(&self, service: Service) -> OpContext {
@@ -189,6 +244,24 @@ mod tests {
 
     fn item(body: &str) -> FetchedItem {
         FetchedItem { external_id: "x".into(), title: "t".into(), body: body.into(), ts_ms: 1 }
+    }
+
+    #[test]
+    fn statuses_report_coming_soon_connected_and_endpoint_availability() {
+        let mut rt = runtime(vec![], None);
+        rt.mark_connected(Service::Gmail, 1_000);
+        let statuses = rt.statuses(2_000);
+        let gmail = statuses.iter().find(|s| s.source == "gmail").unwrap();
+        assert_eq!(gmail.state, ConnUi::Connected);
+        assert!(gmail.has_endpoint);
+        assert_eq!(gmail.last_sync_ms, Some(1_000));
+        // Slack is Wave 2 → coming soon at Wave 1, and has no Google endpoint.
+        let slack = statuses.iter().find(|s| s.source == "slack").unwrap();
+        assert_eq!(slack.state, ConnUi::ComingSoon);
+        assert!(!slack.has_endpoint);
+        // Calendar released but not connected → disconnected.
+        let cal = statuses.iter().find(|s| s.source == "gcal").unwrap();
+        assert_eq!(cal.state, ConnUi::Disconnected);
     }
 
     fn runtime(items: Vec<FetchedItem>, err: Option<String>) -> ConnectorRuntime<FakeTransport> {
