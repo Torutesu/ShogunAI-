@@ -169,6 +169,15 @@ body {
   gap: 8px;
   padding: 11px 10px 11px 14px;
   border-bottom: 1px solid var(--line);
+  cursor: grab;
+}
+.head:active {
+  cursor: grabbing;
+}
+/* interactive children must not show the grab cursor */
+.head .chip,
+.head .icon {
+  cursor: pointer;
 }
 .live {
   display: inline-flex;

@@ -43,9 +43,9 @@ const IN_TAURI =
   typeof window !== "undefined" && ("__TAURI_INTERNALS__" in window || "__TAURI__" in window);
 
 // Window heights (width stays fixed so the Rust top-centre pin holds). Collapsed = just the handle.
-const W = 400;
-const H_OPEN = 560;
-const H_HANDLE = 56;
+const W = 380;
+const H_OPEN = 440;
+const H_HANDLE = 52;
 
 const MOCK_STATUS: Status = { app: "com.apple.mail", commitments: 2, open_loops: 1, has_key: false };
 const MOCK_STATE: StateView = {
@@ -187,8 +187,8 @@ export function App(): JSX.Element {
           <Settings appearance={appearance} setAppearance={setAppearance} hasKey={!!status?.has_key} onDone={() => setShowSettings(false)} />
         ) : (
           <>
-            <header className="head">
-              <span className="live">
+            <header className="head" data-tauri-drag-region>
+              <span className="live" data-tauri-drag-region>
                 <span className="live__dot" />
                 {t.reading} <b>{live}</b>
               </span>
