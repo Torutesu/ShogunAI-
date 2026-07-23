@@ -365,13 +365,12 @@ pub mod mac {
                 }
                 *prev_state = s;
             }
-            EngineOutput::SetIgnoresMouse(b) => {
-                let app2 = app.clone();
-                let _ = app.run_on_main_thread(move || {
-                    if let Ok(panel) = app2.get_webview_panel("notch") {
-                        panel.set_ignores_mouse_events(b);
-                    }
-                });
+            EngineOutput::SetIgnoresMouse(_b) => {
+                // No-op by design: the product UI is an always-visible, always-interactive panel
+                // (not the hover-driven click-through idle from the Phase-0 spike). Letting the
+                // engine toggle ignoresMouseEvents here would make the panel click-through the
+                // moment hover returned to Idle, breaking chat/buttons. Interactivity is owned by
+                // panel::install (set_ignores_mouse_events(false)).
             }
             EngineOutput::ScheduleTimer { timer, ms } => timers.schedule(timer, ms),
             EngineOutput::CancelTimer(timer) => timers.cancel(timer),

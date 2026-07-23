@@ -45,10 +45,10 @@ mod mac {
         panel.set_style_mask(StyleMask::new().nonactivating_panel().borderless().value());
         panel.set_becomes_key_only_if_needed(true);
         panel.set_floating_panel(true);
-        // Idle default (spec §3.1.2): the transparent panel is click-through until the engine
-        // opens it (Hover/Expanded → SetIgnoresMouse(false)). Without this, the 400×520 idle
-        // frame would swallow clicks meant for the app behind it even though nothing is drawn.
-        panel.set_ignores_mouse_events(true);
+        // The panel hosts the always-visible product UI, so it must take clicks (chat, buttons).
+        // Keep it interactive — the window resizes to fit (open vs handle), so it only covers a
+        // small top-centre strip when collapsed rather than swallowing the whole screen.
+        panel.set_ignores_mouse_events(false);
         panel.show();
         Ok(())
     }

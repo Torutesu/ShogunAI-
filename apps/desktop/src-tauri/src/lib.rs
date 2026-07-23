@@ -86,47 +86,26 @@ fn setup_macos(app: &tauri::App) {
     // full-screen apps. Global shortcuts, capture, and the webview are unaffected.
     set_accessory_activation();
 
-    // RENDERING REALITY (on-device, this machine): swapping the window to an NSPanel blanks the
-    // wry webview (nothing draws — ⌘⇧J and hover both dead because there is no visible surface),
-    // while the plain window renders fine. So the DEFAULT is a plain, visible, INTERACTIVE window
-    // that actually shows the product and takes clicks. The NSPanel path (all-spaces / over the
-    // menu bar) is gated behind `SHOGUN_NOTCH=1` for on-device debugging of the blank-webview
-    // issue — it is NOT the default until it renders. The core (capture, memory, ⌃⌥G draft) is
-    // unaffected either way.
-    if std::env::var("SHOGUN_NOTCH").is_ok() {
-        match app.get_webview_window("notch") {
-            Some(win) => match panel::install(&win) {
-                Ok(()) => eprintln!("[shell] NSPanel installed (experimental — SHOGUN_NOTCH=1)"),
-                Err(e) => eprintln!("[shell] panel install failed: {e}"),
-            },
-            None => eprintln!("[spike] no 'notch' window — panel not installed"),
-        }
-    } else {
-        eprintln!("[shell] plain visible window (product surface). Set SHOGUN_NOTCH=1 to try the NSPanel.");
+    // ALL-SPACES REALITY (on-device): a plain activating window ignores canJoinAllSpaces even when
+    // it's set and reads back correctly (273) — it stays on its launch Space, off other desktops,
+    // under full-screen apps. The only combination that actually follows every Space is a
+    // NONACTIVATING NSPanel (canJoinAllSpaces + fullScreenAuxiliary, Status level) under the
+    // Accessory activation policy set above. The panel renders the webview fine here (proven on
+    // device). So the NSPanel is the DEFAULT; `SHOGUN_NO_NOTCH=1` falls back to the plain window
+    // (renders + interactive, but does NOT follow Spaces) for debugging.
+    if std::env::var("SHOGUN_NO_NOTCH").is_ok() {
+        eprintln!("[shell] plain window mode (SHOGUN_NO_NOTCH=1) — renders but won't follow Spaces");
         if let Some(win) = app.get_webview_window("notch") {
             let _ = win.show();
-            // All-spaces / background float WITHOUT the NSPanel swap that blanks the webview. Tauri's
-            // set_visible_on_all_workspaces only sets canJoinAllSpaces and proved insufficient on
-            // device (didn't follow spaces / show over full-screen). Set the NSWindow's
-            // collectionBehavior and level DIRECTLY instead — same recipe the NSPanel uses, but on
-            // the plain window that actually renders, so no class swap and no blank webview.
             float_on_all_spaces(&win);
-            // Re-apply after startup settles: tao/wry can reset collectionBehavior when the window
-            // is shown/resized (the webview also resizes itself on mount), which would wipe our
-            // all-spaces flag right after we set it. Re-assert a few times so it sticks; the
-            // readback log tells us whether it was being clobbered.
-            {
-                let handle = app.handle().clone();
-                let win2 = win.clone();
-                std::thread::spawn(move || {
-                    for ms in [400u64, 1200, 3000] {
-                        std::thread::sleep(std::time::Duration::from_millis(ms));
-                        let w = win2.clone();
-                        let _ = handle.run_on_main_thread(move || float_on_all_spaces(&w));
-                    }
-                });
-            }
-            eprintln!("[shell] window shown (all-spaces, floating)");
+        }
+    } else {
+        match app.get_webview_window("notch") {
+            Some(win) => match panel::install(&win) {
+                Ok(()) => eprintln!("[shell] NSPanel installed (nonactivating, all-spaces overlay)"),
+                Err(e) => eprintln!("[shell] panel install failed: {e} — try SHOGUN_NO_NOTCH=1"),
+            },
+            None => eprintln!("[spike] no 'notch' window — panel not installed"),
         }
     }
 

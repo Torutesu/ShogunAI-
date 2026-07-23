@@ -249,6 +249,11 @@ export function App(): JSX.Element {
                 className="composer__input"
                 placeholder={t.ask}
                 value={input}
+                onFocus={() => {
+                  // A nonactivating NSPanel won't take keystrokes until it's made key. Ask Rust to
+                  // makeKeyAndOrderFront so typing works (no-op on the plain-window fallback).
+                  if (IN_TAURI) void invoke("focus_field", { focused: true }).catch(() => undefined);
+                }}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && !e.shiftKey) {
