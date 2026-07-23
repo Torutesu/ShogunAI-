@@ -108,7 +108,22 @@ fn setup_macos(app: &tauri::App) {
         let _ = win.set_always_on_top(true);
         // Best-effort all-spaces; even where the OS ignores it, drag + ⌃⌥N summon cover cross-space.
         let _ = win.set_visible_on_all_workspaces(true);
-        eprintln!("[shell] plain window — draggable, always-on-top, quittable (Cmd+Q / Dock / ⚙→Quit)");
+        // set_always_on_top only reaches NSFloatingWindowLevel (observed level=5), which sits UNDER
+        // the menu bar — the panel's top edge tucks away and it reads as "not showing". Raise to
+        // Status (25, same as the old NSPanel that WAS clearly visible) and order it front now.
+        if let Ok(p) = win.ns_window() {
+            if !p.is_null() {
+                use objc2::msg_send;
+                use objc2::runtime::AnyObject;
+                let ptr = p as *mut AnyObject;
+                // SAFETY: live NSWindow on the main thread; scalar arg, void return.
+                unsafe {
+                    let _: () = msg_send![ptr, setLevel: 25isize];
+                    let _: () = msg_send![ptr, orderFrontRegardless];
+                }
+            }
+        }
+        eprintln!("[shell] plain window — draggable, always-on-top(level 25), quittable (Cmd+Q / Dock / ⚙→Quit)");
     } else {
         eprintln!("[spike] no 'notch' window — window not shown");
     }

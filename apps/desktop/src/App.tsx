@@ -196,8 +196,8 @@ export function App(): JSX.Element {
           <Settings appearance={appearance} setAppearance={setAppearance} hasKey={!!status?.has_key} onDone={() => setShowSettings(false)} />
         ) : (
           <>
-            <header className="head" data-tauri-drag-region onMouseDown={beginDrag}>
-              <span className="live" data-tauri-drag-region>
+            <header className="head" onMouseDown={beginDrag}>
+              <span className="live">
                 <span className="live__dot" />
                 {t.reading} <b>{live}</b>
               </span>
