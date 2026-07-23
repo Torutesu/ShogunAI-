@@ -3,13 +3,21 @@ import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 
+// Report webview-side failures to the terminal via Rust — a silent catch made real errors
+// (missing window-API permissions) look like "the button does nothing".
+function uiLog(msg: string): void {
+  if (IN_TAURI) void invoke("ui_log", { msg }).catch(() => undefined);
+}
+
 // Explicit window drag on mouse-down. data-tauri-drag-region proved unreliable on device, so call
 // startDragging() directly. Ignore drags that start on an interactive control (button/input).
 function beginDrag(e: React.MouseEvent): void {
   if (!IN_TAURI || e.button !== 0) return;
   const el = e.target as HTMLElement;
   if (el.closest("button, input, a, [data-no-drag]")) return;
-  void getCurrentWindow().startDragging().catch(() => undefined);
+  void getCurrentWindow()
+    .startDragging()
+    .catch((err) => uiLog(`startDragging failed: ${err}`));
 }
 import { t } from "./strings";
 
@@ -75,8 +83,9 @@ async function sizeWindow(open: boolean): Promise<void> {
   if (!IN_TAURI) return;
   try {
     await getCurrentWindow().setSize(new LogicalSize(W, open ? H_OPEN : H_HANDLE));
-  } catch {
-    /* resize is a nicety; a failure must not break the UI */
+  } catch (err) {
+    // resize failure must not break the UI, but it must be VISIBLE in the log
+    uiLog(`setSize failed: ${err}`);
   }
 }
 
@@ -213,6 +222,16 @@ export function App(): JSX.Element {
                 <button className="icon" type="button" title="Minimize" onClick={collapse}>
                   ▁
                 </button>
+                <button
+                  className="icon icon--close"
+                  type="button"
+                  title={t.quit}
+                  onClick={() => {
+                    if (IN_TAURI) void invoke("quit_app").catch((err) => uiLog(`quit failed: ${err}`));
+                  }}
+                >
+                  ✕
+                </button>
               </div>
             </header>
 
@@ -340,17 +359,6 @@ function Settings(props: {
           <div className={`set__hint${hasKey ? " is-ok" : ""}`}>{hasKey ? t.keyPresent : t.keyAbsent}</div>
         </section>
 
-        <section className="set">
-          <button
-            className="quit"
-            type="button"
-            onClick={() => {
-              if (IN_TAURI) void invoke("quit_app").catch(() => undefined);
-            }}
-          >
-            {t.quit}
-          </button>
-        </section>
       </div>
     </div>
   );

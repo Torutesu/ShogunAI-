@@ -44,6 +44,7 @@ pub fn run() {
         inline_source::mac::shogun_state,
         inline_source::mac::shogun_chat,
         inline_source::mac::quit_app,
+        inline_source::mac::ui_log,
     ]);
 
     // NOTE: do NOT add .on_page_load here — with the NSPanel-swapped window it trips a
@@ -105,25 +106,13 @@ fn setup_macos(app: &tauri::App) {
         }
     } else if let Some(win) = app.get_webview_window("notch") {
         let _ = win.show();
-        let _ = win.set_always_on_top(true);
-        // Best-effort all-spaces; even where the OS ignores it, drag + ⌃⌥N summon cover cross-space.
-        let _ = win.set_visible_on_all_workspaces(true);
-        // set_always_on_top only reaches NSFloatingWindowLevel (observed level=5), which sits UNDER
-        // the menu bar — the panel's top edge tucks away and it reads as "not showing". Raise to
-        // Status (25, same as the old NSPanel that WAS clearly visible) and order it front now.
-        if let Ok(p) = win.ns_window() {
-            if !p.is_null() {
-                use objc2::msg_send;
-                use objc2::runtime::AnyObject;
-                let ptr = p as *mut AnyObject;
-                // SAFETY: live NSWindow on the main thread; scalar arg, void return.
-                unsafe {
-                    let _: () = msg_send![ptr, setLevel: 25isize];
-                    let _: () = msg_send![ptr, orderFrontRegardless];
-                }
-            }
-        }
-        eprintln!("[shell] plain window — draggable, always-on-top(level 25), quittable (Cmd+Q / Dock / ⚙→Quit)");
+        // THE product requirement: overlay OVER other apps' windows and full-screen Spaces. The
+        // plain-window run logged behavior=1 level=5 — no fullScreenAuxiliary, floating-level only —
+        // which shows on an empty desktop but never over apps/full-screen. Exactly the reported
+        // symptom. float_on_all_spaces applies behavior 273 (canJoinAllSpaces | stationary |
+        // fullScreenAuxiliary) + level 25 (Status) + orderFrontRegardless, and logs the readback.
+        float_on_all_spaces(&win);
+        eprintln!("[shell] plain window — drag(header), close(✕ / ⌃⌥Q / Cmd+Q), overlay 273/25");
     } else {
         eprintln!("[spike] no 'notch' window — window not shown");
     }

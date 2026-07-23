@@ -233,6 +233,14 @@ pub mod mac {
         std::process::exit(0);
     }
 
+    /// Webview-side error channel. Silent `.catch(() => {})` swallowed real failures (the missing
+    /// window-API permissions looked like "buttons do nothing") — UI errors must reach the
+    /// terminal log. Never carries captured content, only UI diagnostics.
+    #[tauri::command]
+    pub fn ui_log(msg: String) {
+        eprintln!("[ui] {msg}");
+    }
+
     /// One state row for the "What I know" panel.
     #[derive(serde::Serialize)]
     pub struct StateItem {

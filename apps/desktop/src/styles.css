@@ -476,22 +476,8 @@ body {
   color: var(--ink);
   font-weight: 600;
 }
-.quit {
-  width: 100%;
-  border: 1px solid var(--line-strong);
-  background: transparent;
+.icon--close:hover {
   color: var(--warn);
-  font: inherit;
-  font-family: var(--sys);
-  font-size: 13px;
-  font-weight: 600;
-  padding: 10px 0;
-  border-radius: 10px;
-  cursor: pointer;
-  transition: background var(--sp);
-}
-.quit:hover {
-  background: color-mix(in srgb, var(--warn) 12%, transparent);
 }
 
 kbd {
