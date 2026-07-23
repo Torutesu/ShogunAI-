@@ -520,6 +520,36 @@ fn build_panel_window(handle: &tauri::AppHandle) {
     }
 }
 
+/// The overlay's NSPanel subclass: `canBecomeKeyWindow` → YES. A borderless window's default is
+/// NO, which silently made every text field in the overlay untypeable (chat, shortcut recording,
+/// key entry) — clicks landed but the panel never took keystrokes. Registered once; falls back to
+/// plain NSPanel if registration fails (typing degraded, overlay still shows).
+#[cfg(target_os = "macos")]
+fn overlay_panel_class() -> &'static objc2::runtime::AnyClass {
+    use objc2::runtime::{AnyClass, AnyObject, Bool, ClassBuilder, Sel};
+    use objc2::{class, sel};
+    use std::sync::OnceLock;
+    static CLS: OnceLock<&'static AnyClass> = OnceLock::new();
+    CLS.get_or_init(|| {
+        extern "C" fn yes(_this: &AnyObject, _sel: Sel) -> Bool {
+            Bool::YES
+        }
+        match ClassBuilder::new(c"ShogunOverlayPanel", class!(NSPanel)) {
+            Some(mut b) => {
+                // SAFETY: the method signature matches the ObjC declaration (BOOL, no args).
+                unsafe {
+                    b.add_method(sel!(canBecomeKeyWindow), yes as extern "C" fn(&AnyObject, Sel) -> Bool);
+                }
+                b.register()
+            }
+            None => {
+                eprintln!("[shell] overlay panel class registration failed — typing may not work");
+                class!(NSPanel)
+            }
+        }
+    })
+}
+
 /// (main thread) Create a genuine NSPanel (`nonactivatingPanel` styleMask from init) and move the
 /// tao window's contentView — which contains the WKWebView — into it. The tao window stays alive
 /// and hidden (it owns the wry/IPC plumbing); the panel is what the user sees. This is the
@@ -546,7 +576,7 @@ fn adopt_native_panel(win: &tauri::WebviewWindow) {
     // content view alive across the reparent.
     unsafe {
         let frame: NSRect = msg_send![tao, frame];
-        let alloc: *mut AnyObject = msg_send![class!(NSPanel), alloc];
+        let alloc: *mut AnyObject = msg_send![overlay_panel_class(), alloc];
         // styleMask: borderless (0) | nonactivatingPanel (1<<7); backing: NSBackingStoreBuffered.
         let style: usize = 1 << 7;
         let panel: *mut AnyObject =
