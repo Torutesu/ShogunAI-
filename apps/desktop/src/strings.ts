@@ -32,7 +32,7 @@ export const STRINGS = {
     stayOpenHint: "Keep the panel open until you close it.",
     autoHideHint: "Slide back to the notch when you move away.",
     draftShortcut: "Draft at cursor",
-    summonShortcut: "Bring to this desktop",
+    summonShortcut: "Show / hide overlay",
     quitShortcut: "Quit",
     shortcuts: "Shortcuts",
     change: "Change",

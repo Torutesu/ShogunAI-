@@ -21,7 +21,7 @@
         "resizable": false,
         "alwaysOnTop": true,
         "visibleOnAllWorkspaces": true,
-        "shadow": false,
+        "shadow": true,
         "width": 640,
         "height": 300,
         "visible": true,

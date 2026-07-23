@@ -33,7 +33,9 @@ mod mac {
     /// Concrete over the default (`Wry`) runtime — the macro impls `FromWindow<Wry>`.
     pub fn install(window: &WebviewWindow) -> tauri::Result<()> {
         let panel = window.to_panel::<NotchPanel>()?;
-        panel.set_level(PanelLevel::Status.value());
+        // Overlay spec: `.floating` — above normal app windows, below system UI. (Status/25 was
+        // used earlier; the reference overlay apps run at floating.)
+        panel.set_level(PanelLevel::Floating.value());
         panel.set_collection_behavior(
             CollectionBehavior::new()
                 .can_join_all_spaces()

@@ -150,7 +150,15 @@ export function App(): JSX.Element {
         void invoke("clock_sync_ack", { seq: e.payload.seq, jsPerfMs: performance.now() }),
       ),
     );
-    return () => offs.forEach((p) => void p.then((off) => off()));
+    // Overlay spec: Escape closes the overlay (it stays hidden until summoned again).
+    const onEsc = (e: KeyboardEvent): void => {
+      if (e.key === "Escape") void invoke("hide_panel").catch(() => undefined);
+    };
+    window.addEventListener("keydown", onEsc);
+    return () => {
+      window.removeEventListener("keydown", onEsc);
+      offs.forEach((p) => void p.then((off) => off()));
+    };
   }, []);
 
   useEffect(() => {

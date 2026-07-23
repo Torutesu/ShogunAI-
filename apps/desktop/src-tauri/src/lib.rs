@@ -23,6 +23,17 @@ mod panel;
 static PANEL_BEHAVIOR: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new((1 << 0) | (1 << 4) | (1 << 8));
 
+/// NSFloatingWindowLevel (3) — the overlay spec's `.floating`: above every normal app window,
+/// below system UI. (Earlier builds used Status/25.)
+#[cfg(target_os = "macos")]
+const OVERLAY_LEVEL: isize = 3;
+
+/// True while the USER hid the overlay (toggle shortcut / Esc / tray). The auto-residency
+/// machinery (watchers, heal, respawn) must respect this — a deliberately hidden panel stays
+/// hidden until summoned again.
+#[cfg(target_os = "macos")]
+static USER_HIDDEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// Tauri entry point. Registers the nspanel plugin and the webview→Rust command half of
 /// the closed IPC contract (spec §3.11.2), then in setup: NSPanel swap (T-05), geometry
 /// read (T-06), mouse tap (T-07), and the integrated engine + measurement streams (T-08+).
@@ -53,6 +64,7 @@ pub fn run() {
         inline_source::mac::ui_log,
         shortcuts::get_shortcuts,
         shortcuts::set_shortcut,
+        shortcuts::hide_panel,
     ]);
 
     // NOTE: do NOT add .on_page_load here — with the NSPanel-swapped window it trips a
@@ -132,6 +144,44 @@ fn setup_macos(app: &tauri::App) {
     watch_space_changes(app);
     spawn_panel_state_logger(app);
 
+    // Menu-bar residency (overlay spec): a ⚔ tray item with Show/Hide + Quit. Combined with the
+    // Accessory policy there is no Dock icon — SHOGUN lives in the menu bar like other overlays.
+    {
+        use tauri::menu::{Menu, MenuItem};
+        use tauri::tray::TrayIconBuilder;
+        let items = (
+            MenuItem::with_id(app, "toggle", "Show / Hide", true, None::<&str>),
+            MenuItem::with_id(app, "quit", "Quit SHOGUN", true, None::<&str>),
+        );
+        if let (Ok(toggle_i), Ok(quit_i)) = items {
+            match Menu::with_items(app, &[&toggle_i, &quit_i]) {
+                Ok(menu) => {
+                    let mut b = TrayIconBuilder::with_id("shogun-tray").menu(&menu).title("⚔");
+                    if let Some(icon) = app.default_window_icon() {
+                        b = b.icon(icon.clone());
+                    }
+                    let built = b
+                        .on_menu_event(|app, event| match event.id.as_ref() {
+                            "toggle" => toggle_panel(app),
+                            "quit" => {
+                                eprintln!("[shell] tray quit — exiting");
+                                std::process::exit(0);
+                            }
+                            _ => {}
+                        })
+                        .build(app);
+                    match built {
+                        Ok(_tray) => eprintln!("[shell] menu-bar tray installed (⚔)"),
+                        Err(e) => eprintln!("[shell] tray install failed: {e}"),
+                    }
+                }
+                Err(e) => eprintln!("[shell] tray menu build failed: {e}"),
+            }
+        } else {
+            eprintln!("[shell] tray menu items failed to build");
+        }
+    }
+
     // T-06: geometry (panel screen + CG conversion constants).
     let Some(mtm) = objc2::MainThreadMarker::new() else {
         eprintln!("[spike] setup not on main thread — engine not started");
@@ -155,7 +205,7 @@ fn setup_macos(app: &tauri::App) {
             if !p.is_null() {
                 // SAFETY: live NSWindow on the main thread (setup).
                 unsafe { pin_top_centre(p as *mut objc2::runtime::AnyObject) };
-                eprintln!("[shell] panel pinned into the notch band (true screen top)");
+                eprintln!("[shell] panel docked bottom-right (visibleFrame)");
             }
         }
     }
@@ -254,21 +304,82 @@ unsafe fn reposition_to_cursor_screen(ptr: *mut objc2::runtime::AnyObject) {
             && mouse.y >= f.origin.y
             && mouse.y <= f.origin.y + f.size.height;
         if inside {
-            // Anchor to visibleFrame (excludes the menu-bar/notch band and the Dock): the panel
-            // sits just BELOW the notch, fully readable — per feedback, not tucked into it.
+            // Overlay spec: dock at the BOTTOM-RIGHT of the cursor's display, inside visibleFrame
+            // (never overlapping the menu bar/notch or the Dock).
             let vf: NSRect = msg_send![s, visibleFrame];
             let w: NSRect = msg_send![ptr, frame];
-            let x = vf.origin.x + ((vf.size.width - w.size.width) / 2.0).max(0.0);
-            let top = NSPoint { x, y: vf.origin.y + vf.size.height };
-            let _: () = msg_send![ptr, setFrameTopLeftPoint: top];
+            const MARGIN: f64 = 16.0;
+            let x = vf.origin.x + (vf.size.width - w.size.width - MARGIN).max(0.0);
+            let y = vf.origin.y + MARGIN;
+            let origin = NSPoint { x, y };
+            let _: () = msg_send![ptr, setFrameOrigin: origin];
             break;
         }
     }
 }
 
-/// (main thread) Pin the window to the top-centre of ITS screen, just BELOW the menu-bar/notch
-/// band (visibleFrame top). Feedback: tucking into the notch band hid the header — readable
-/// beats flush.
+/// Toggle the overlay (spec: one shortcut/tray click shows it here if hidden or elsewhere, hides
+/// it if it's visible on this Space). All NSWindow access on the main thread.
+#[cfg(target_os = "macos")]
+fn toggle_panel(handle: &tauri::AppHandle) {
+    let h = handle.clone();
+    let _ = handle.run_on_main_thread(move || {
+        use objc2::msg_send;
+        use objc2::runtime::AnyObject;
+        use tauri::Manager;
+        let visible_here = h
+            .get_webview_window("notch")
+            .and_then(|win| win.ns_window().ok())
+            .map(|p| {
+                if p.is_null() {
+                    return false;
+                }
+                let ptr = p as *mut AnyObject;
+                // SAFETY: main thread, live NSWindow, read-only getters.
+                unsafe {
+                    let v: bool = msg_send![ptr, isVisible];
+                    let a: bool = msg_send![ptr, isOnActiveSpace];
+                    v && a
+                }
+            })
+            .unwrap_or(false);
+        if visible_here {
+            set_panel_hidden(&h);
+        } else {
+            summon_to_active_space(&h);
+            eprintln!("[shell] toggle → shown");
+        }
+    });
+}
+
+/// Hide the overlay until the user summons it again (toggle shortcut / Esc / tray). Sets
+/// USER_HIDDEN first so the residency watchers don't instantly re-show it.
+#[cfg(target_os = "macos")]
+fn set_panel_hidden(handle: &tauri::AppHandle) {
+    USER_HIDDEN.store(true, std::sync::atomic::Ordering::Relaxed);
+    let h = handle.clone();
+    let _ = handle.run_on_main_thread(move || {
+        use objc2::msg_send;
+        use objc2::runtime::AnyObject;
+        use tauri::Manager;
+        if let Some(win) = h.get_webview_window("notch") {
+            if let Ok(p) = win.ns_window() {
+                if !p.is_null() {
+                    let ptr = p as *mut AnyObject;
+                    let nil: *mut AnyObject = std::ptr::null_mut();
+                    // SAFETY: main thread, live NSWindow.
+                    unsafe {
+                        let _: () = msg_send![ptr, orderOut: nil];
+                    }
+                }
+            }
+        }
+        eprintln!("[shell] toggle → hidden (summon shortcut or ⚔ tray to show)");
+    });
+}
+
+/// (main thread) Dock the window at the BOTTOM-RIGHT of ITS screen inside visibleFrame (overlay
+/// spec: a right-edge resident that never overlaps the menu bar/notch or the Dock).
 ///
 /// SAFETY: caller guarantees `ptr` is the live NSWindow and we're on the main thread.
 #[cfg(target_os = "macos")]
@@ -285,9 +396,11 @@ unsafe fn pin_top_centre(ptr: *mut objc2::runtime::AnyObject) {
     }
     let vf: NSRect = msg_send![screen, visibleFrame];
     let w: NSRect = msg_send![ptr, frame];
-    let x = vf.origin.x + ((vf.size.width - w.size.width) / 2.0).max(0.0);
-    let top = NSPoint { x, y: vf.origin.y + vf.size.height };
-    let _: () = msg_send![ptr, setFrameTopLeftPoint: top];
+    const MARGIN: f64 = 16.0;
+    let x = vf.origin.x + (vf.size.width - w.size.width - MARGIN).max(0.0);
+    let y = vf.origin.y + MARGIN;
+    let origin = NSPoint { x, y };
+    let _: () = msg_send![ptr, setFrameOrigin: origin];
 }
 
 /// Re-assert the overlay and re-show the panel on the active Space. Order matters: flags FIRST
@@ -307,6 +420,11 @@ fn reassert_panel(handle: &tauri::AppHandle, why: &'static str, defer: bool) {
     use objc2::msg_send;
     use objc2::runtime::AnyObject;
     use tauri::Manager;
+    // Overlay spec: a panel the USER hid (toggle / Esc / tray) stays hidden — residency must not
+    // fight a deliberate hide.
+    if USER_HIDDEN.load(std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
     // Healthy path: assert flags, touch nothing else.
     if let Some(win) = handle.get_webview_window("notch") {
         if let Ok(p) = win.ns_window() {
@@ -316,7 +434,7 @@ fn reassert_panel(handle: &tauri::AppHandle, why: &'static str, defer: bool) {
                 unsafe {
                     let want = PANEL_BEHAVIOR.load(std::sync::atomic::Ordering::Relaxed);
                     let _: () = msg_send![ptr, setCollectionBehavior: want];
-                    let _: () = msg_send![ptr, setLevel: 25isize];
+                    let _: () = msg_send![ptr, setLevel: OVERLAY_LEVEL];
                     let visible: bool = msg_send![ptr, isVisible];
                     let on_active: bool = msg_send![ptr, isOnActiveSpace];
                     if visible && on_active {
@@ -409,7 +527,7 @@ fn build_panel_window(handle: &tauri::AppHandle) {
         .decorations(false)
         .resizable(false)
         .always_on_top(true)
-        .shadow(false)
+        .shadow(true)
         .inner_size(640.0, 300.0)
         .visible(true)
         .focused(false);
@@ -440,6 +558,7 @@ fn summon_to_active_space(app: &tauri::AppHandle) {
     use objc2::msg_send;
     use objc2::runtime::AnyObject;
     use tauri::Manager;
+    USER_HIDDEN.store(false, std::sync::atomic::Ordering::Relaxed);
     let Some(win) = app.get_webview_window("notch") else { return };
     let _ = app.run_on_main_thread(move || {
         let Ok(p) = win.ns_window() else { return };
@@ -546,10 +665,10 @@ fn spawn_panel_state_logger(app: &tauri::App) {
                 // silently demoting the overlay. Re-assert only when wrong; a pure property write
                 // with no re-ordering, so it cannot flicker or steal focus.
                 let want = PANEL_BEHAVIOR.load(std::sync::atomic::Ordering::Relaxed);
-                if level != 25 || behavior & want != want {
+                if level != OVERLAY_LEVEL || behavior & want != want {
                     let _: () = msg_send![ptr, setCollectionBehavior: want];
-                    let _: () = msg_send![ptr, setLevel: 25isize];
-                    eprintln!("[panelstate] healed: level {level}→25 behavior {behavior}→{want}");
+                    let _: () = msg_send![ptr, setLevel: OVERLAY_LEVEL];
+                    eprintln!("[panelstate] healed: level {level}→{OVERLAY_LEVEL} behavior {behavior}→{want}");
                 }
                 format!(
                     "visible={visible} drawn={drawn} onActiveSpace={on_active} behavior={behavior} level={level} alpha={alpha:.2} appActive={app_active} origin=({:.0},{:.0})",
@@ -593,9 +712,7 @@ fn float_on_all_spaces(win: &tauri::WebviewWindow) {
     // (273); the plain-window fallback wants moveToActiveSpace (274) since a Regular window is
     // refused entry to other apps' Spaces anyway.
     let behavior: usize = PANEL_BEHAVIOR.load(std::sync::atomic::Ordering::Relaxed);
-    // NSStatusWindowLevel (25): floats above ordinary and full-screen windows. Matches panel.rs;
-    // 25 is IME-safe (101 is the level that blocks input methods, tauri-nspanel #104).
-    let level: isize = 25;
+    let level: isize = OVERLAY_LEVEL;
 
     // SAFETY: `ptr` is the live NSWindow owned by Tauri; we message it synchronously on the main
     // thread. The setters take a scalar (NSUInteger / NSInteger) and return void; the getters
@@ -610,6 +727,8 @@ fn float_on_all_spaces(win: &tauri::WebviewWindow) {
         // that canJoinAllSpaces was ignored — the panel was being auto-hidden. Must be NO for an
         // always-visible overlay.
         let _: () = msg_send![ptr, setHidesOnDeactivate: false];
+        // Overlay spec: drag the panel by grabbing anywhere on its background.
+        let _: () = msg_send![ptr, setMovableByWindowBackground: true];
         // Accessory (background) apps do NOT auto-show their windows — orderFrontRegardless forces
         // the window visible even while the app is inactive.
         let _: () = msg_send![ptr, orderFrontRegardless];
@@ -738,7 +857,7 @@ mod shortcuts {
 
     fn dispatch(app: &tauri::AppHandle, action: &str) {
         match action {
-            "summon" => crate::summon_to_active_space(app),
+            "summon" => crate::toggle_panel(app),
             "draft" => {
                 if let Some(db) = app.try_state::<shogun_core::daemon::Db>() {
                     crate::inline_source::mac::run_inline_at_cursor(db.inner().clone());
@@ -756,6 +875,12 @@ mod shortcuts {
     #[tauri::command]
     pub fn get_shortcuts(store: tauri::State<'_, Store>) -> Bindings {
         store.0.lock().map(|g| g.clone()).unwrap_or_default()
+    }
+
+    /// Hide the overlay (Esc in the webview). Stays hidden until summoned again.
+    #[tauri::command]
+    pub fn hide_panel(app: tauri::AppHandle) {
+        crate::set_panel_hidden(&app);
     }
 
     /// Rebind `action` to `combo` live: register the new combo first (validates + detects
