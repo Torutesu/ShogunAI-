@@ -520,6 +520,39 @@ kbd {
   font-weight: 700;
 }
 
+/* Settings — BYOK key entry (saved straight to the Keychain) */
+.keyrow {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+.keyrow__input {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  font-size: 12px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--fill-strong);
+  color: var(--ink);
+  outline: none;
+}
+.keyrow__btn {
+  font: inherit;
+  font-size: 12px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--fill-strong);
+  color: var(--ink);
+  cursor: pointer;
+}
+.keyrow__btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 @media (prefers-reduced-motion: reduce) {
   * {
     transition: none !important;

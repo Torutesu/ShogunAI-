@@ -151,6 +151,33 @@ pub mod mac {
             .and_then(|bytes| String::from_utf8(bytes).ok())
     }
 
+    /// Save the BYOK key to the Keychain (Settings → "Your key"). Overwrites any existing key.
+    /// The key itself is NEVER logged (invariant 7) — only the fact that one was stored.
+    #[tauri::command]
+    pub fn set_byok_key(key: String) -> Result<(), String> {
+        let key = key.trim();
+        if key.is_empty() {
+            return Err("key is empty".into());
+        }
+        security_framework::passwords::set_generic_password(
+            KEYCHAIN_SERVICE,
+            KEYCHAIN_ACCOUNT,
+            key.as_bytes(),
+        )
+        .map_err(|e| e.to_string())?;
+        eprintln!("[inline] BYOK key saved to Keychain");
+        Ok(())
+    }
+
+    /// Remove the BYOK key from the Keychain — chat and drafts fall back to the echo mock.
+    #[tauri::command]
+    pub fn clear_byok_key() -> Result<(), String> {
+        security_framework::passwords::delete_generic_password(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT)
+            .map_err(|e| e.to_string())?;
+        eprintln!("[inline] BYOK key removed from Keychain");
+        Ok(())
+    }
+
     /// Build the Agent client for this run. Falls back to the mock (with a clear log) whenever the
     /// key is absent or the transport/runtime can't be built — the AX path stays testable.
     fn build_agent(db: &Db) -> InlineAgent {

@@ -42,6 +42,10 @@ export const STRINGS = {
     key: "Your key",
     keyPresent: "Connected — answers and drafts are yours.",
     keyAbsent: "Not set — SHOGUN will echo until you add a key.",
+    keyPlaceholder: "Paste your Anthropic API key…",
+    keySave: "Save",
+    keyRemove: "Remove",
+    keySaved: "Saved to your Keychain — answers are live.",
     quit: "Quit SHOGUN",
     done: "Done",
     // errors

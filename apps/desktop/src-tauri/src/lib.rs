@@ -15,7 +15,6 @@ mod inline_source;
 mod integrate;
 mod notch_actions;
 mod notch_exec;
-mod panel;
 
 /// The collectionBehavior the overlay wants, selected at setup (NSPanel mode = canJoinAllSpaces +
 /// fullScreenAuxiliary = 257; plain-window fallback = moveToActiveSpace 274) and re-asserted by
@@ -60,9 +59,9 @@ pub(crate) fn overlay_ptr(handle: &tauri::AppHandle) -> Option<*mut objc2::runti
     }
 }
 
-/// Tauri entry point. Registers the nspanel plugin and the webview→Rust command half of
-/// the closed IPC contract (spec §3.11.2), then in setup: NSPanel swap (T-05), geometry
-/// read (T-06), mouse tap (T-07), and the integrated engine + measurement streams (T-08+).
+/// Tauri entry point. Registers the webview→Rust command half of the closed IPC contract
+/// (spec §3.11.2), then in setup: the native overlay NSPanel, geometry read, mouse tap, and the
+/// integrated engine + measurement streams.
 pub fn run() {
     // ROOT-CAUSE FIX (overlay): become an Accessory (background) app BEFORE AppKit creates any
     // window. The reference overlays that float over every app/Space are Accessory/LSUIElement
@@ -77,7 +76,6 @@ pub fn run() {
     let builder = tauri::Builder::default();
     #[cfg(target_os = "macos")]
     let builder = builder
-        .plugin(tauri_nspanel::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
         integrate::mac::painted,
@@ -98,6 +96,8 @@ pub fn run() {
         inline_source::mac::shogun_chat,
         inline_source::mac::quit_app,
         inline_source::mac::ui_log,
+        inline_source::mac::set_byok_key,
+        inline_source::mac::clear_byok_key,
         shortcuts::get_shortcuts,
         shortcuts::set_shortcut,
         shortcuts::hide_panel,
@@ -105,21 +105,13 @@ pub fn run() {
         start_panel_drag,
     ]);
 
-    // NOTE: do NOT add .on_page_load here — with the NSPanel-swapped window it trips a
-    // wry 0.55.1 unwrap-None panic (wkwebview/mod.rs:1349) and kills the app at startup
-    // (observed on the smoke runner). Diagnostics use the delayed eval probe instead.
+    // NOTE: the visible surface is a NATIVE NSPanel hosting the webview's content view
+    // (adopt_native_panel). Do not drive the webview from Rust via eval()/on_page_load — wry
+    // 0.55.1 panics on the reparented setup; the webview talks to Rust via commands instead.
     builder
         .setup(|_app| {
             #[cfg(target_os = "macos")]
             setup_macos(_app);
-            #[cfg(target_os = "macos")]
-            {
-                // KNOWN WRY PITFALL (runs #4/#5): calling WebviewWindow::eval() or url()
-                // on the NSPanel-swapped window panics wry 0.55.1 (wkwebview/mod.rs:1349
-                // unwrap-None) and kills the main thread ~immediately. Do not probe the
-                // webview from Rust; webview liveness is checked via the boot-ping
-                // command from JS instead (cmd interact kind=boot in the log).
-            }
             Ok(())
         })
         .run(tauri::generate_context!())
@@ -167,14 +159,13 @@ fn setup_macos(app: &tauri::App) {
     // the last structural difference between SHOGUN and overlays that float everywhere.
     match app.get_webview_window("notch") {
         Some(win) => {
-            // Safety net: if a config-declared window ever reappears, still apply the recipe.
+            // Safety net: if a config-declared window ever reappears, adopt it the same way.
             if std::env::var("SHOGUN_NO_NOTCH").is_err() {
-                match panel::install(&win) {
-                    Ok(()) => eprintln!("[shell] NSPanel installed on pre-existing window"),
-                    Err(e) => eprintln!("[shell] panel install failed: {e}"),
-                }
+                adopt_native_panel(&win);
+            } else {
+                let _ = win.show();
+                float_on_all_spaces(&win);
             }
-            float_on_all_spaces(&win);
         }
         None => build_panel_window(app.handle()),
     }
@@ -437,7 +428,7 @@ unsafe fn pin_top_centre(ptr: *mut objc2::runtime::AnyObject) {
 static REASSERT_AT: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
 
 #[cfg(target_os = "macos")]
-fn reassert_panel(handle: &tauri::AppHandle, why: &'static str, defer: bool) {
+fn reassert_panel(handle: &tauri::AppHandle, why: &'static str) {
     use objc2::msg_send;
     use objc2::runtime::AnyObject;
     // Overlay spec: a panel the USER hid (toggle / Esc / tray) stays hidden — residency must not
@@ -445,111 +436,50 @@ fn reassert_panel(handle: &tauri::AppHandle, why: &'static str, defer: bool) {
     if USER_HIDDEN.load(std::sync::atomic::Ordering::Relaxed) {
         return;
     }
-    // ON-DEVICE GROUND TRUTH: the ⌥J summon path (orderOut → orderFrontRegardless) re-attaches
-    // the panel to the current Space 100% of the time, everywhere. The automatic recovery was
-    // failing because it did LESS than summon (a bare orderFrontRegardless) and did it LATER
-    // (450ms defer + a debounce that swallowed most events). So the automatic path now does
-    // exactly what summon does, immediately — plus a `moveToActiveSpace` flip: canJoinAllSpaces
-    // is provably not honored reliably for this window, so for the duration of the re-order the
-    // collectionBehavior becomes moveToActiveSpace (1<<1) + fullScreenAuxiliary — the API whose
-    // documented contract is "move this window to the active Space when ordered front" — then
-    // flips back so the panel keeps floating over full-screen apps.
-    let nspanel_mode = PANEL_BEHAVIOR.load(std::sync::atomic::Ordering::Relaxed) & 1 != 0;
-    if let Some(ptr) = overlay_ptr(handle) {
-        // SAFETY: all call sites run on the main thread (workspace notifications and the
-        // state-logger's run_on_main_thread closure); live NSWindow/NSPanel; pure AppKit
-        // property and ordering calls — no wry/tauri teardown involved.
-        unsafe {
-            let want = PANEL_BEHAVIOR.load(std::sync::atomic::Ordering::Relaxed);
-            let _: () = msg_send![ptr, setCollectionBehavior: want];
-            let _: () = msg_send![ptr, setLevel: OVERLAY_LEVEL];
-            let visible: bool = msg_send![ptr, isVisible];
-            let on_active: bool = msg_send![ptr, isOnActiveSpace];
-            if visible && on_active {
-                return; // genuinely on screen here — leave it alone
-            }
-            // Debounce lightly: one app switch fires several notifications back-to-back;
-            // one re-order per burst is enough (and avoids fighting the Space animation).
-            {
-                let mut g = match REASSERT_AT.lock() {
-                    Ok(g) => g,
-                    Err(_) => return,
-                };
-                if let Some(t) = *g {
-                    if t.elapsed() < std::time::Duration::from_millis(300) {
-                        return;
-                    }
+    let Some(ptr) = overlay_ptr(handle) else { return };
+    // SAFETY: all call sites run on the main thread (workspace notifications and the
+    // state-logger's run_on_main_thread closure); live NSWindow/NSPanel; pure AppKit
+    // property and ordering calls.
+    unsafe {
+        let want = PANEL_BEHAVIOR.load(std::sync::atomic::Ordering::Relaxed);
+        let _: () = msg_send![ptr, setCollectionBehavior: want];
+        let _: () = msg_send![ptr, setLevel: OVERLAY_LEVEL];
+        let visible: bool = msg_send![ptr, isVisible];
+        let on_active: bool = msg_send![ptr, isOnActiveSpace];
+        if visible && on_active {
+            return; // genuinely on screen here — leave it alone
+        }
+        // Debounce lightly: one app switch fires several notifications back-to-back;
+        // one re-order per burst is enough (and avoids fighting the Space animation).
+        {
+            let mut g = match REASSERT_AT.lock() {
+                Ok(g) => g,
+                Err(_) => return,
+            };
+            if let Some(t) = *g {
+                if t.elapsed() < std::time::Duration::from_millis(300) {
+                    return;
                 }
-                *g = Some(std::time::Instant::now());
             }
-            if nspanel_mode {
-                // The proven summon sequence: reposition to the cursor's display, then a full
-                // re-order. With a NATIVE panel this should rarely fire at all.
-                eprintln!("[shell] {why}: re-summoning panel to the cursor's display/space");
-                reposition_to_cursor_screen(ptr);
-                let nil: *mut AnyObject = std::ptr::null_mut();
-                let _: () = msg_send![ptr, orderOut: nil];
-                let _: () = msg_send![ptr, orderFrontRegardless];
-                return;
-            }
+            *g = Some(std::time::Instant::now());
         }
-    }
-    if !nspanel_mode {
-        // Plain-window fallback (SHOGUN_NO_NOTCH=1): the window is NOT class-swapped, so destroy
-        // is safe, and a Regular plain window truly cannot join another Space — respawn it here.
-        // (NEVER destroy/respawn the NSPanel-swapped window: tauri's destroy() throws an ObjC
-        // exception through Rust — fatal abort, observed on-device.)
-        let _ = defer;
-        eprintln!("[shell] {why}: panel not on this space — respawning it here (plain-window mode)");
-        respawn_panel(handle);
+        // The proven summon sequence: reposition to the cursor's display, then a full
+        // re-order. With the native panel this rarely fires at all.
+        eprintln!("[shell] {why}: re-summoning panel to the cursor's display/space");
+        reposition_to_cursor_screen(ptr);
+        let nil: *mut AnyObject = std::ptr::null_mut();
+        let _: () = msg_send![ptr, orderOut: nil];
+        let _: () = msg_send![ptr, orderFrontRegardless];
     }
 }
 
-/// Destroy the space-locked panel window and create a fresh one — which macOS guarantees is born
-/// on the CURRENTLY ACTIVE Space. TWO separate main-thread ticks: destroying synchronously inside
-/// the workspace-notification callback threw an ObjC exception through Rust (fatal abort), and the
-/// "notch" label stays taken until the teardown settles — so destroy on one tick, poll until the
-/// label frees, then build on a later tick.
-#[cfg(target_os = "macos")]
-fn respawn_panel(handle: &tauri::AppHandle) {
-    use tauri::Manager;
-    let h = handle.clone();
-    std::thread::spawn(move || {
-        // Tick 1: destroy the old window (its own main-loop turn, NOT the notification callback).
-        let h2 = h.clone();
-        let _ = h.run_on_main_thread(move || {
-            if let Some(win) = h2.get_webview_window("notch") {
-                let _ = win.destroy();
-            }
-        });
-        // Wait for the label to actually free (teardown is asynchronous).
-        for _ in 0..15 {
-            std::thread::sleep(std::time::Duration::from_millis(120));
-            let (tx, rx) = std::sync::mpsc::channel::<bool>();
-            let h2 = h.clone();
-            let posted = h.run_on_main_thread(move || {
-                let _ = tx.send(h2.get_webview_window("notch").is_none());
-            });
-            if posted.is_err() {
-                return; // app shutting down
-            }
-            if rx.recv_timeout(std::time::Duration::from_millis(500)).unwrap_or(false) {
-                break;
-            }
-        }
-        // Tick 2: build the fresh window on the (now-)active Space.
-        let h2 = h.clone();
-        let _ = h.run_on_main_thread(move || build_panel_window(&h2));
-    });
-}
-
-/// (main thread) Build the fresh "notch" window and re-apply the overlay recipe. Skips politely if
-/// the label is somehow still taken (next reassert retries).
+/// (main thread) Build the "notch" window and adopt it into the native overlay panel. Skips
+/// politely if the label is somehow already taken.
 #[cfg(target_os = "macos")]
 fn build_panel_window(handle: &tauri::AppHandle) {
     use tauri::Manager;
     if handle.get_webview_window("notch").is_some() {
-        eprintln!("[shell] respawn: old window still present — will retry on the next event");
+        eprintln!("[shell] build: window already present — skipping");
         return;
     }
     // ORDER MATTERS: the window is built HIDDEN, converted to an NSPanel, and only THEN shown.
@@ -768,7 +698,7 @@ fn watch_space_changes(app: &tauri::App) {
             let handle = app.handle().clone();
             let name = NSString::from_str(name_str);
             let block = block2::RcBlock::new(move |_notif: *mut AnyObject| {
-                reassert_panel(&handle, why, true);
+                reassert_panel(&handle, why);
             });
             let nil_obj: *mut AnyObject = std::ptr::null_mut();
             let _obs: *mut AnyObject =
@@ -792,6 +722,9 @@ fn spawn_panel_state_logger(app: &tauri::App) {
     let handle = app.handle().clone();
     let last: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
     let stuck: Arc<Mutex<u32>> = Arc::new(Mutex::new(0));
+    // Diagnostics are opt-in now that the overlay works — the 1s loop itself stays (it drives the
+    // self-heal and the heartbeat recovery), but state lines print only with SHOGUN_DEBUG_PANEL=1.
+    let debug = std::env::var("SHOGUN_DEBUG_PANEL").is_ok();
     std::thread::spawn(move || loop {
         std::thread::sleep(std::time::Duration::from_millis(1000));
         let h = handle.clone();
@@ -832,10 +765,12 @@ fn spawn_panel_state_logger(app: &tauri::App) {
                     visible && on_active,
                 )
             };
-            if let Ok(mut g) = last.lock() {
-                if *g != s {
-                    eprintln!("[panelstate] {s}");
-                    *g = s;
+            if debug {
+                if let Ok(mut g) = last.lock() {
+                    if *g != s {
+                        eprintln!("[panelstate] {s}");
+                        *g = s;
+                    }
                 }
             }
             // HEARTBEAT with EXPONENTIAL BACKOFF: a panel that stays off the active Space gets
@@ -858,7 +793,7 @@ fn spawn_panel_state_logger(app: &tauri::App) {
                 }
             };
             if fire {
-                reassert_panel(&h, "heartbeat", false);
+                reassert_panel(&h, "heartbeat");
             }
         });
         if posted.is_err() {

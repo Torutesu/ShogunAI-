@@ -51,7 +51,6 @@ objc2-app-kit = { version = "0.3", features = [
 objc2-foundation = { version = "0.3", features = [
     "NSString", "NSArray", "NSGeometry", "NSNotification",
 ] }
-tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2.1" }
 objc2-core-graphics = { version = "0.3", features = ["CGEvent", "CGEventTypes"] }
 objc2-core-foundation = { version = "0.3", features = ["CFRunLoop", "CFMachPort", "CFBase"] }
 accessibility-sys = "0.2"

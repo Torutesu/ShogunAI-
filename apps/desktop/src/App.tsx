@@ -384,6 +384,40 @@ function Settings(props: {
   const [binds, setBinds] = useState<Record<string, string>>(DEFAULT_BINDS);
   const [recording, setRecording] = useState<string | null>(null);
   const [keyErr, setKeyErr] = useState("");
+  // BYOK key entry: the key goes straight to the macOS Keychain via Rust (never a file/DB/log).
+  const [keyInput, setKeyInput] = useState("");
+  const [keyState, setKeyState] = useState<boolean>(hasKey);
+  const [keyMsg, setKeyMsg] = useState("");
+  useEffect(() => setKeyState(hasKey), [hasKey]);
+
+  const saveKey = (): void => {
+    const k = keyInput.trim();
+    if (!k) return;
+    if (!IN_TAURI) {
+      setKeyState(true);
+      setKeyInput("");
+      return;
+    }
+    void invoke("set_byok_key", { key: k })
+      .then(() => {
+        setKeyState(true);
+        setKeyInput("");
+        setKeyMsg(t.keySaved);
+      })
+      .catch((e) => setKeyMsg(String(e)));
+  };
+  const removeKey = (): void => {
+    if (!IN_TAURI) {
+      setKeyState(false);
+      return;
+    }
+    void invoke("clear_byok_key")
+      .then(() => {
+        setKeyState(false);
+        setKeyMsg("");
+      })
+      .catch((e) => setKeyMsg(String(e)));
+  };
 
   const refresh = useCallback((): void => {
     if (!IN_TAURI) return;
@@ -492,7 +526,33 @@ function Settings(props: {
         </section>
         <section className="set">
           <div className="set__label">{t.key}</div>
-          <div className={`set__hint${hasKey ? " is-ok" : ""}`}>{hasKey ? t.keyPresent : t.keyAbsent}</div>
+          <div className={`set__hint${keyState ? " is-ok" : ""}`}>{keyState ? t.keyPresent : t.keyAbsent}</div>
+          <div className="keyrow">
+            <input
+              className="keyrow__input"
+              type="password"
+              placeholder={t.keyPlaceholder}
+              value={keyInput}
+              autoComplete="off"
+              onChange={(e) => setKeyInput(e.target.value)}
+              onFocus={() => {
+                // The nonactivating panel must become key before it takes keystrokes.
+                if (IN_TAURI) void invoke("focus_field", { focused: true }).catch(() => undefined);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") saveKey();
+              }}
+            />
+            <button className="keyrow__btn" type="button" onClick={saveKey} disabled={!keyInput.trim()}>
+              {t.keySave}
+            </button>
+            {keyState ? (
+              <button className="keyrow__btn" type="button" onClick={removeKey}>
+                {t.keyRemove}
+              </button>
+            ) : null}
+          </div>
+          {keyMsg ? <div className="set__hint">{keyMsg}</div> : null}
         </section>
       </div>
     </div>

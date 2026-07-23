@@ -41,7 +41,6 @@ pub mod mac {
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
     use tauri::{AppHandle, Emitter, Manager};
-    use tauri_nspanel::ManagerExt;
 
     #[derive(Clone, serde::Serialize)]
     struct StatePayload {
@@ -501,7 +500,16 @@ pub mod mac {
             let recorder = shared.recorder.clone();
             let app2 = app.clone();
             let _ = app.run_on_main_thread(move || {
-                let visible = app2.get_webview_panel("notch").map(|p| p.is_visible()).unwrap_or(false);
+                let visible = crate::overlay_ptr(&app2)
+                    .map(|ptr| {
+                        use objc2::msg_send;
+                        // SAFETY: main thread, live NSWindow/NSPanel, read-only getter.
+                        unsafe {
+                            let v: bool = msg_send![ptr, isVisible];
+                            v
+                        }
+                    })
+                    .unwrap_or(false);
                 recorder.record(Body::Heartbeat(Heartbeat {
                     panel_visible: visible,
                     // Frame verification is the on-device health check (runbook D-06).
