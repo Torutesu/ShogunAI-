@@ -15,9 +15,13 @@ function beginDrag(e: React.MouseEvent): void {
   if (!IN_TAURI || e.button !== 0) return;
   const el = e.target as HTMLElement;
   if (el.closest("button, input, a, [data-no-drag]")) return;
-  void getCurrentWindow()
-    .startDragging()
-    .catch((err) => uiLog(`startDragging failed: ${err}`));
+  // The visible surface is a NATIVE NSPanel hosting this webview — drag IT. The tao window is a
+  // hidden shell, so getCurrentWindow().startDragging() would grab the wrong window.
+  void invoke("start_panel_drag").catch(() =>
+    getCurrentWindow()
+      .startDragging()
+      .catch((err) => uiLog(`startDragging failed: ${err}`)),
+  );
 }
 import { t } from "./strings";
 
@@ -81,11 +85,18 @@ function appName(bundle: string): string {
 
 async function sizeWindow(open: boolean): Promise<void> {
   if (!IN_TAURI) return;
+  const h = open ? H_OPEN : H_HANDLE;
   try {
-    await getCurrentWindow().setSize(new LogicalSize(W, open ? H_OPEN : H_HANDLE));
-  } catch (err) {
-    // resize failure must not break the UI, but it must be VISIBLE in the log
-    uiLog(`setSize failed: ${err}`);
+    // Resize the NATIVE panel (top edge anchored). Falls back to the tao window when the native
+    // panel isn't in play (plain-window mode).
+    await invoke("set_panel_size", { width: W, height: h });
+  } catch {
+    try {
+      await getCurrentWindow().setSize(new LogicalSize(W, h));
+    } catch (err) {
+      // resize failure must not break the UI, but it must be VISIBLE in the log
+      uiLog(`setSize failed: ${err}`);
+    }
   }
 }
 

@@ -790,8 +790,17 @@ pub mod mac {
         }
         let app2 = app.clone();
         let _ = app.run_on_main_thread(move || {
-            if let Ok(panel) = app2.get_webview_panel("notch") {
-                panel.make_key_and_order_front();
+            // The visible surface is the NATIVE NSPanel (or the fallback window) — make IT key so
+            // typing reaches the webview. A nonactivating panel becomes key without activating
+            // the app, so the frontmost app keeps focus otherwise.
+            if let Some(ptr) = crate::overlay_ptr(&app2) {
+                use objc2::msg_send;
+                use objc2::runtime::AnyObject;
+                let nil: *mut AnyObject = std::ptr::null_mut();
+                // SAFETY: main thread, live NSWindow/NSPanel.
+                unsafe {
+                    let _: () = msg_send![ptr, makeKeyAndOrderFront: nil];
+                }
             }
         });
     }

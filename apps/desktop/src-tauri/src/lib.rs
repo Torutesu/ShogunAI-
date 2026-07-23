@@ -36,6 +36,30 @@ const OVERLAY_LEVEL: isize = 3;
 #[cfg(target_os = "macos")]
 static USER_HIDDEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// The NATIVE NSPanel that actually hosts the webview content on screen. The tauri/tao window
+/// stays alive but permanently hidden (it owns the wry webview plumbing); its contentView is
+/// reparented into this panel at startup. Every ordering/visibility/space operation targets THIS
+/// pointer. Set once on the main thread during setup; never freed (app lifetime).
+#[cfg(target_os = "macos")]
+static NATIVE_PANEL: std::sync::atomic::AtomicPtr<objc2::runtime::AnyObject> =
+    std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+
+/// The NSWindow every overlay operation should target: the native NSPanel when it exists,
+/// otherwise the tao window (plain-window fallback / pre-adoption).
+#[cfg(target_os = "macos")]
+pub(crate) fn overlay_ptr(handle: &tauri::AppHandle) -> Option<*mut objc2::runtime::AnyObject> {
+    use tauri::Manager;
+    let p = NATIVE_PANEL.load(std::sync::atomic::Ordering::Acquire);
+    if !p.is_null() {
+        return Some(p);
+    }
+    let win = handle.get_webview_window("notch")?;
+    match win.ns_window() {
+        Ok(p) if !p.is_null() => Some(p as *mut objc2::runtime::AnyObject),
+        _ => None,
+    }
+}
+
 /// Tauri entry point. Registers the nspanel plugin and the webview→Rust command half of
 /// the closed IPC contract (spec §3.11.2), then in setup: NSPanel swap (T-05), geometry
 /// read (T-06), mouse tap (T-07), and the integrated engine + measurement streams (T-08+).
@@ -77,6 +101,8 @@ pub fn run() {
         shortcuts::get_shortcuts,
         shortcuts::set_shortcut,
         shortcuts::hide_panel,
+        set_panel_size,
+        start_panel_drag,
     ]);
 
     // NOTE: do NOT add .on_page_load here — with the NSPanel-swapped window it trips a
@@ -214,14 +240,10 @@ fn setup_macos(app: &tauri::App) {
     // (observed: the top edge sat 39pt down — "under the notch" never actually happened), so set
     // the frame directly on the NSWindow: top-centre of its screen, top edge at the true screen
     // top. Level 25 draws over the menu-bar band, i.e. real notch residency.
-    if let Some(win) = app.get_webview_window("notch") {
-        if let Ok(p) = win.ns_window() {
-            if !p.is_null() {
-                // SAFETY: live NSWindow on the main thread (setup).
-                unsafe { pin_top_centre(p as *mut objc2::runtime::AnyObject) };
-                eprintln!("[shell] panel docked top-centre under the notch (visibleFrame top)");
-            }
-        }
+    if let Some(ptr) = overlay_ptr(app.handle()) {
+        // SAFETY: live NSWindow/NSPanel on the main thread (setup).
+        unsafe { pin_top_centre(ptr) };
+        eprintln!("[shell] panel docked top-centre under the notch (visibleFrame top)");
     }
 
     // T-07/T-08: mouse tap → integrated engine + measurement streams.
@@ -339,17 +361,9 @@ fn toggle_panel(handle: &tauri::AppHandle) {
     let h = handle.clone();
     let _ = handle.run_on_main_thread(move || {
         use objc2::msg_send;
-        use objc2::runtime::AnyObject;
-        use tauri::Manager;
-        let visible_here = h
-            .get_webview_window("notch")
-            .and_then(|win| win.ns_window().ok())
-            .map(|p| {
-                if p.is_null() {
-                    return false;
-                }
-                let ptr = p as *mut AnyObject;
-                // SAFETY: main thread, live NSWindow, read-only getters.
+        let visible_here = overlay_ptr(&h)
+            .map(|ptr| {
+                // SAFETY: main thread, live NSWindow/NSPanel, read-only getters.
                 unsafe {
                     let v: bool = msg_send![ptr, isVisible];
                     let a: bool = msg_send![ptr, isOnActiveSpace];
@@ -375,17 +389,11 @@ fn set_panel_hidden(handle: &tauri::AppHandle) {
     let _ = handle.run_on_main_thread(move || {
         use objc2::msg_send;
         use objc2::runtime::AnyObject;
-        use tauri::Manager;
-        if let Some(win) = h.get_webview_window("notch") {
-            if let Ok(p) = win.ns_window() {
-                if !p.is_null() {
-                    let ptr = p as *mut AnyObject;
-                    let nil: *mut AnyObject = std::ptr::null_mut();
-                    // SAFETY: main thread, live NSWindow.
-                    unsafe {
-                        let _: () = msg_send![ptr, orderOut: nil];
-                    }
-                }
+        if let Some(ptr) = overlay_ptr(&h) {
+            let nil: *mut AnyObject = std::ptr::null_mut();
+            // SAFETY: main thread, live NSWindow/NSPanel.
+            unsafe {
+                let _: () = msg_send![ptr, orderOut: nil];
             }
         }
         eprintln!("[shell] toggle → hidden (summon shortcut or ⚔ tray to show)");
@@ -432,7 +440,6 @@ static REASSERT_AT: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mu
 fn reassert_panel(handle: &tauri::AppHandle, why: &'static str, defer: bool) {
     use objc2::msg_send;
     use objc2::runtime::AnyObject;
-    use tauri::Manager;
     // Overlay spec: a panel the USER hid (toggle / Esc / tray) stays hidden — residency must not
     // fight a deliberate hide.
     if USER_HIDDEN.load(std::sync::atomic::Ordering::Relaxed) {
@@ -448,53 +455,42 @@ fn reassert_panel(handle: &tauri::AppHandle, why: &'static str, defer: bool) {
     // documented contract is "move this window to the active Space when ordered front" — then
     // flips back so the panel keeps floating over full-screen apps.
     let nspanel_mode = PANEL_BEHAVIOR.load(std::sync::atomic::Ordering::Relaxed) & 1 != 0;
-    if let Some(win) = handle.get_webview_window("notch") {
-        if let Ok(p) = win.ns_window() {
-            if !p.is_null() {
-                let ptr = p as *mut AnyObject;
-                // SAFETY: all call sites run on the main thread (workspace notifications and the
-                // state-logger's run_on_main_thread closure); live NSWindow; pure AppKit property
-                // and ordering calls — no wry/tauri teardown involved.
-                unsafe {
-                    let want = PANEL_BEHAVIOR.load(std::sync::atomic::Ordering::Relaxed);
-                    let _: () = msg_send![ptr, setCollectionBehavior: want];
-                    let _: () = msg_send![ptr, setLevel: OVERLAY_LEVEL];
-                    let visible: bool = msg_send![ptr, isVisible];
-                    let on_active: bool = msg_send![ptr, isOnActiveSpace];
-                    if visible && on_active {
-                        return; // genuinely on screen here — leave it alone
-                    }
-                    // Debounce lightly: one app switch fires several notifications back-to-back;
-                    // one re-order per burst is enough (and avoids fighting the Space animation).
-                    {
-                        let mut g = match REASSERT_AT.lock() {
-                            Ok(g) => g,
-                            Err(_) => return,
-                        };
-                        if let Some(t) = *g {
-                            if t.elapsed() < std::time::Duration::from_millis(300) {
-                                return;
-                            }
-                        }
-                        *g = Some(std::time::Instant::now());
-                    }
-                    if nspanel_mode {
-                        // EXACTLY the ⌥J summon sequence — the only recovery proven 100% on this
-                        // machine. The two on-device lessons: (a) reposition to the CURSOR's
-                        // display first — with two displays ("separate Spaces"), re-ordering on a
-                        // display whose Space is inactive does nothing, and this was the entire
-                        // difference between summon (works) and the old re-show (didn't);
-                        // (b) NO collectionBehavior flip around the re-order — the window server
-                        // applies property changes asynchronously, so flip→orderFront→restore in
-                        // one tick nullifies the flip before it ever acts.
-                        eprintln!("[shell] {why}: re-summoning panel to the cursor's display/space");
-                        reposition_to_cursor_screen(ptr);
-                        let nil: *mut AnyObject = std::ptr::null_mut();
-                        let _: () = msg_send![ptr, orderOut: nil];
-                        let _: () = msg_send![ptr, orderFrontRegardless];
+    if let Some(ptr) = overlay_ptr(handle) {
+        // SAFETY: all call sites run on the main thread (workspace notifications and the
+        // state-logger's run_on_main_thread closure); live NSWindow/NSPanel; pure AppKit
+        // property and ordering calls — no wry/tauri teardown involved.
+        unsafe {
+            let want = PANEL_BEHAVIOR.load(std::sync::atomic::Ordering::Relaxed);
+            let _: () = msg_send![ptr, setCollectionBehavior: want];
+            let _: () = msg_send![ptr, setLevel: OVERLAY_LEVEL];
+            let visible: bool = msg_send![ptr, isVisible];
+            let on_active: bool = msg_send![ptr, isOnActiveSpace];
+            if visible && on_active {
+                return; // genuinely on screen here — leave it alone
+            }
+            // Debounce lightly: one app switch fires several notifications back-to-back;
+            // one re-order per burst is enough (and avoids fighting the Space animation).
+            {
+                let mut g = match REASSERT_AT.lock() {
+                    Ok(g) => g,
+                    Err(_) => return,
+                };
+                if let Some(t) = *g {
+                    if t.elapsed() < std::time::Duration::from_millis(300) {
                         return;
                     }
                 }
+                *g = Some(std::time::Instant::now());
+            }
+            if nspanel_mode {
+                // The proven summon sequence: reposition to the cursor's display, then a full
+                // re-order. With a NATIVE panel this should rarely fire at all.
+                eprintln!("[shell] {why}: re-summoning panel to the cursor's display/space");
+                reposition_to_cursor_screen(ptr);
+                let nil: *mut AnyObject = std::ptr::null_mut();
+                let _: () = msg_send![ptr, orderOut: nil];
+                let _: () = msg_send![ptr, orderFrontRegardless];
+                return;
             }
         }
     }
@@ -575,22 +571,147 @@ fn build_panel_window(handle: &tauri::AppHandle) {
     match builder.build() {
         Ok(win) => {
             if std::env::var("SHOGUN_NO_NOTCH").is_err() {
-                match panel::install(&win) {
-                    Ok(()) => eprintln!("[shell] NSPanel installed — FULL overlay recipe (Accessory-born window)"),
-                    Err(e) => eprintln!("[shell] panel install failed: {e}"),
-                }
+                // The REAL overlay architecture: a genuine NSPanel created as a panel from
+                // birth, hosting the webview's content view. No class swap, no post-hoc
+                // styleMask — the window server sees a true nonactivating panel, the same
+                // structure the overlays that work on this machine use.
+                adopt_native_panel(&win);
+            } else {
+                let _ = win.show();
+                float_on_all_spaces(&win);
             }
-            float_on_all_spaces(&win);
-            if let Ok(p) = win.ns_window() {
-                if !p.is_null() {
-                    // SAFETY: freshly built NSWindow, main thread.
-                    unsafe { reposition_to_cursor_screen(p as *mut objc2::runtime::AnyObject) };
-                }
+            if let Some(ptr) = overlay_ptr(handle) {
+                // SAFETY: main thread (setup / respawn tick), live window/panel.
+                unsafe { reposition_to_cursor_screen(ptr) };
             }
             eprintln!("[shell] panel window built on the active space");
         }
         Err(e) => eprintln!("[shell] panel window build failed: {e}"),
     }
+}
+
+/// (main thread) Create a genuine NSPanel (`nonactivatingPanel` styleMask from init) and move the
+/// tao window's contentView — which contains the WKWebView — into it. The tao window stays alive
+/// and hidden (it owns the wry/IPC plumbing); the panel is what the user sees. This is the
+/// structural fix after every flag/ordering/class-swap approach failed on this machine: the
+/// window server classifies a window at creation, so only a window BORN as a panel gets true
+/// panel Space behavior (all Spaces, over full-screen apps, no focus steal).
+#[cfg(target_os = "macos")]
+fn adopt_native_panel(win: &tauri::WebviewWindow) {
+    use objc2::runtime::AnyObject;
+    use objc2::{class, msg_send};
+    use objc2_foundation::NSRect;
+
+    let tao = match win.ns_window() {
+        Ok(p) if !p.is_null() => p as *mut AnyObject,
+        _ => {
+            eprintln!("[shell] adopt: tao ns_window unavailable — falling back to plain window");
+            let _ = win.show();
+            float_on_all_spaces(win);
+            return;
+        }
+    };
+    // SAFETY: main thread; `tao` is the live (hidden) NSWindow owned by tauri. The panel is
+    // created here and intentionally leaked (app lifetime). Manual retain/release pairs keep the
+    // content view alive across the reparent.
+    unsafe {
+        let frame: NSRect = msg_send![tao, frame];
+        let alloc: *mut AnyObject = msg_send![class!(NSPanel), alloc];
+        // styleMask: borderless (0) | nonactivatingPanel (1<<7); backing: NSBackingStoreBuffered.
+        let style: usize = 1 << 7;
+        let panel: *mut AnyObject =
+            msg_send![alloc, initWithContentRect: frame, styleMask: style, backing: 2usize, defer: false];
+        if panel.is_null() {
+            eprintln!("[shell] adopt: NSPanel init failed — falling back to plain window");
+            let _ = win.show();
+            float_on_all_spaces(win);
+            return;
+        }
+        // Move the webview: retain the content view, give tao an empty placeholder so two
+        // windows never share a view, then hand it to the panel.
+        let cv: *mut AnyObject = msg_send![tao, contentView];
+        let _: () = msg_send![cv, retain];
+        let placeholder: *mut AnyObject = msg_send![class!(NSView), new];
+        let _: () = msg_send![tao, setContentView: placeholder];
+        let _: () = msg_send![placeholder, release];
+        let _: () = msg_send![panel, setContentView: cv];
+        let _: () = msg_send![cv, release];
+
+        let _: () = msg_send![panel, setReleasedWhenClosed: false];
+        let _: () = msg_send![panel, setOpaque: false];
+        let clear: *mut AnyObject = msg_send![class!(NSColor), clearColor];
+        let _: () = msg_send![panel, setBackgroundColor: clear];
+        let _: () = msg_send![panel, setHasShadow: true];
+        let _: () = msg_send![panel, setLevel: OVERLAY_LEVEL];
+        let want = PANEL_BEHAVIOR.load(std::sync::atomic::Ordering::Relaxed);
+        let _: () = msg_send![panel, setCollectionBehavior: want];
+        let _: () = msg_send![panel, setHidesOnDeactivate: false];
+        let _: () = msg_send![panel, setCanHide: false];
+        let _: () = msg_send![panel, setMovableByWindowBackground: true];
+        let _: () = msg_send![panel, setFloatingPanel: true];
+        let _: () = msg_send![panel, setBecomesKeyOnlyIfNeeded: true];
+        let _: () = msg_send![panel, setWorksWhenModal: true];
+        let _: () = msg_send![panel, setAcceptsMouseMovedEvents: true];
+
+        NATIVE_PANEL.store(panel, std::sync::atomic::Ordering::Release);
+        reposition_to_cursor_screen(panel);
+        let _: () = msg_send![panel, orderFrontRegardless];
+
+        let got: usize = msg_send![panel, collectionBehavior];
+        let lvl: isize = msg_send![panel, level];
+        let mask: usize = msg_send![panel, styleMask];
+        eprintln!(
+            "[shell] NATIVE NSPanel hosting the webview — behavior={got} level={lvl} styleMask={mask} (born a panel, no swap)"
+        );
+    }
+}
+
+/// Resize the visible overlay (native panel or fallback window) keeping the TOP edge anchored —
+/// the webview's minimize/expand control. AppKit frames are bottom-left origin, so the y origin
+/// shifts by the height delta.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+fn set_panel_size(app: tauri::AppHandle, width: f64, height: f64) {
+    let h = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        use objc2::msg_send;
+        use objc2_foundation::{NSPoint, NSRect, NSSize};
+        let Some(ptr) = overlay_ptr(&h) else { return };
+        // SAFETY: main thread, live NSWindow/NSPanel.
+        unsafe {
+            let f: NSRect = msg_send![ptr, frame];
+            let r = NSRect {
+                origin: NSPoint { x: f.origin.x, y: f.origin.y + f.size.height - height },
+                size: NSSize { width, height },
+            };
+            let _: () = msg_send![ptr, setFrame: r, display: true];
+        }
+    });
+}
+
+/// Begin a native window drag of the overlay from the webview's header mouse-down. The tao
+/// `startDragging` targets the hidden tao window, so the webview calls this instead — it hands
+/// the in-flight mouse event to the native panel.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+fn start_panel_drag(app: tauri::AppHandle) {
+    let h = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        use objc2::runtime::AnyObject;
+        use objc2::{class, msg_send};
+        let Some(ptr) = overlay_ptr(&h) else { return };
+        // SAFETY: main thread; standard AppKit calls.
+        unsafe {
+            let ns_app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+            if ns_app.is_null() {
+                return;
+            }
+            let ev: *mut AnyObject = msg_send![ns_app, currentEvent];
+            if !ev.is_null() {
+                let _: () = msg_send![ptr, performWindowDragWithEvent: ev];
+            }
+        }
+    });
 }
 
 /// Bring the panel to where the user actually is — the ⌃⌥N "summon" action. Reposition to the
@@ -599,23 +720,18 @@ fn build_panel_window(handle: &tauri::AppHandle) {
 fn summon_to_active_space(app: &tauri::AppHandle) {
     use objc2::msg_send;
     use objc2::runtime::AnyObject;
-    use tauri::Manager;
     USER_HIDDEN.store(false, std::sync::atomic::Ordering::Relaxed);
-    let Some(win) = app.get_webview_window("notch") else { return };
+    let h = app.clone();
     let _ = app.run_on_main_thread(move || {
-        let Ok(p) = win.ns_window() else { return };
-        if p.is_null() {
-            return;
-        }
-        let ptr = p as *mut AnyObject;
-        // SAFETY: live NSWindow, on the main thread.
+        let Some(ptr) = overlay_ptr(&h) else { return };
+        // SAFETY: live NSWindow/NSPanel, on the main thread.
         unsafe {
             reposition_to_cursor_screen(ptr);
             let nil: *mut AnyObject = std::ptr::null_mut();
             let _: () = msg_send![ptr, orderOut: nil];
             let _: () = msg_send![ptr, orderFrontRegardless];
         }
-        eprintln!("[shell] ⌃⌥N — summoned panel to the cursor's screen/space");
+        eprintln!("[shell] summon — panel to the cursor's screen/space");
     });
     // Also tell the webview to EXPAND (un-minimize): ⌃⌥N is the guaranteed re-open path after the
     // panel was collapsed to the handle.
@@ -672,7 +788,6 @@ fn spawn_panel_state_logger(app: &tauri::App) {
     use objc2::runtime::AnyObject;
     use objc2_foundation::NSRect;
     use std::sync::{Arc, Mutex};
-    use tauri::Manager;
 
     let handle = app.handle().clone();
     let last: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
@@ -683,12 +798,7 @@ fn spawn_panel_state_logger(app: &tauri::App) {
         let last = last.clone();
         let stuck = stuck.clone();
         let posted = handle.run_on_main_thread(move || {
-            let Some(win) = h.get_webview_window("notch") else { return };
-            let Ok(p) = win.ns_window() else { return };
-            if p.is_null() {
-                return;
-            }
-            let ptr = p as *mut AnyObject;
+            let Some(ptr) = overlay_ptr(&h) else { return };
             // SAFETY: getters + conditional property writes on the live NSWindow, main thread.
             let (s, healthy) = unsafe {
                 use objc2::class;
