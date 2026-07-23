@@ -265,6 +265,10 @@ fn setup_macos(app: &tauri::App) {
     // hover. Registered here so a flaky CGEventTap can't leave the panel unreachable.
     register_expand_shortcut(app);
 
+    // The product's signature trigger: TAP the Option key alone → draft at the cursor. A bare
+    // modifier can't be a global shortcut, so this is an NSEvent global monitor.
+    watch_option_tap(app);
+
     // T-11/T-12 sanity: Accessibility trust + one focused-window walk through the tested
     // policy. Event-driven focus subscription is on-device work (runbook D-03/D-05).
     eprintln!("[spike] accessibility trusted: {}", axcache::ax_trusted());
@@ -902,6 +906,90 @@ fn float_on_all_spaces(win: &tauri::WebviewWindow) {
     }
 }
 
+/// TAP ⌥ (Option) alone → draft at the cursor. Semantics of a "tap": Option goes down with no
+/// other modifier, no other key is pressed while it is held, and it is released within 500ms.
+/// That keeps every normal Option use intact — ⌥J summon, ⌥-arrow word nav, ⌥+letter special
+/// characters — because any keyDown while Option is held disarms the tap. Uses NSEvent GLOBAL
+/// monitors (Accessibility permission, already required for capture); global monitors only see
+/// other apps' events, which is exactly the draft target (the focused field over there).
+#[cfg(target_os = "macos")]
+fn watch_option_tap(app: &tauri::App) {
+    use objc2::runtime::AnyObject;
+    use objc2::{class, msg_send};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+    /// Armed between "Option went down alone" and "released / disqualified".
+    static ARMED: AtomicBool = AtomicBool::new(false);
+    static DOWN_AT_MS: AtomicU64 = AtomicU64::new(0);
+
+    const MASK_KEY_DOWN: usize = 1 << 10; // NSEventMaskKeyDown
+    const MASK_FLAGS_CHANGED: usize = 1 << 12; // NSEventMaskFlagsChanged
+    const FLAG_OPTION: usize = 1 << 19; // NSEventModifierFlagOption
+    // shift | control | command | fn — any of these joining the chord disqualifies the tap.
+    const FLAG_OTHERS: usize = (1 << 17) | (1 << 18) | (1 << 20) | (1 << 23);
+    const MAX_TAP_MS: u64 = 500;
+
+    fn now_ms() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0)
+    }
+
+    // SAFETY: main thread (setup); monitors and blocks are intentionally leaked (app lifetime).
+    unsafe {
+        // Any real keypress while Option is held = a combo, not a tap.
+        let key_block = block2::RcBlock::new(move |_ev: *mut AnyObject| {
+            ARMED.store(false, Ordering::Relaxed);
+        });
+        let key_mon: *mut AnyObject = msg_send![
+            class!(NSEvent),
+            addGlobalMonitorForEventsMatchingMask: MASK_KEY_DOWN,
+            handler: &*key_block
+        ];
+        std::mem::forget(key_block);
+
+        let handle = app.handle().clone();
+        let flags_block = block2::RcBlock::new(move |ev: *mut AnyObject| {
+            if ev.is_null() {
+                return;
+            }
+            let flags: usize = msg_send![ev, modifierFlags];
+            let option_down = flags & FLAG_OPTION != 0;
+            let others_down = flags & FLAG_OTHERS != 0;
+            if option_down && !others_down {
+                ARMED.store(true, Ordering::Relaxed);
+                DOWN_AT_MS.store(now_ms(), Ordering::Relaxed);
+            } else if option_down && others_down {
+                ARMED.store(false, Ordering::Relaxed);
+            } else {
+                // Option released (or was never the chord) — fire on a clean, short tap.
+                let was_armed = ARMED.swap(false, Ordering::Relaxed);
+                let held = now_ms().saturating_sub(DOWN_AT_MS.load(Ordering::Relaxed));
+                if was_armed && held <= MAX_TAP_MS {
+                    eprintln!("[shell] ⌥ tap — draft at cursor");
+                    use tauri::Manager;
+                    if let Some(db) = handle.try_state::<shogun_core::daemon::Db>() {
+                        inline_source::mac::run_inline_at_cursor(db.inner().clone());
+                    }
+                }
+            }
+        });
+        let flags_mon: *mut AnyObject = msg_send![
+            class!(NSEvent),
+            addGlobalMonitorForEventsMatchingMask: MASK_FLAGS_CHANGED,
+            handler: &*flags_block
+        ];
+        std::mem::forget(flags_block);
+
+        if key_mon.is_null() || flags_mon.is_null() {
+            eprintln!("[shell] ⌥-tap monitor failed to install (accessibility permission?)");
+        } else {
+            eprintln!("[shell] ⌥ tap-to-draft installed (tap Option alone, <0.5s, no other keys)");
+        }
+    }
+}
+
 /// Register the ⌘⇧Space global shortcut → feed a Hotkey input to the engine (Idle→Expanded direct,
 /// statemachine §3.3). Errors are logged, not fatal — the app still runs (hover remains available).
 #[cfg(target_os = "macos")]
@@ -962,8 +1050,10 @@ mod shortcuts {
     fn defaults() -> Bindings {
         let mut m = HashMap::new();
         m.insert("summon".into(), "Control+Alt+KeyN".into());
-        // Draft is the product's signature move — one hand, Option+G (the "Option-key draft").
-        m.insert("draft".into(), "Alt+KeyG".into());
+        // The PRIMARY draft trigger is tapping ⌥ alone (watch_option_tap — a bare modifier can't
+        // be a global shortcut). This binding is the explicit, rebindable alternative; ⌃⌥G rather
+        // than ⌥G so no character-producing keystroke (⌥G = ©) is swallowed system-wide.
+        m.insert("draft".into(), "Control+Alt+KeyG".into());
         m.insert("quit".into(), "Control+Alt+KeyQ".into());
         m
     }
@@ -982,8 +1072,9 @@ mod shortcuts {
         binds: Bindings,
     }
 
-    /// The current on-disk version. v2 = the ⌥G draft default.
-    const SHORTCUTS_VERSION: u32 = 2;
+    /// The current on-disk version. v2 = the (short-lived) ⌥G draft default; v3 = draft back to
+    /// ⌃⌥G because the primary trigger became the ⌥ tap and ⌥G swallowed the © keystroke.
+    const SHORTCUTS_VERSION: u32 = 3;
 
     /// Load persisted bindings, filling any missing action with its default.
     pub fn load(app: &tauri::AppHandle) -> Bindings {
@@ -1014,12 +1105,13 @@ mod shortcuts {
                 }
             }
         }
-        // v1→v2 migration: the draft default changed ⌃⌥G → ⌥G. Runs ONCE — save() below stamps
-        // the new version, so a user who later deliberately re-records ⌃⌥G keeps it.
+        // One-shot migrations (save() below stamps the current version, so a value the user later
+        // re-records deliberately is never touched again).
+        // v3: the v2 default ⌥G is retired (the ⌥ tap is the primary trigger; ⌥G stole ©).
+        if version < 3 && binds.get("draft").map(String::as_str) == Some("Alt+KeyG") {
+            binds.insert("draft".into(), "Control+Alt+KeyG".into());
+        }
         if version < SHORTCUTS_VERSION {
-            if binds.get("draft").map(String::as_str) == Some("Control+Alt+KeyG") {
-                binds.insert("draft".into(), "Alt+KeyG".into());
-            }
             save(app, &binds);
         }
         binds

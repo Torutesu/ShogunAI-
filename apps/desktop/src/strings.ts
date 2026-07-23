@@ -15,11 +15,11 @@ export const STRINGS = {
     openPanel: "Open SHOGUN (⌃⌥N)",
     // welcome (expanded, empty thread)
     welcomeTitle: "What can I take off your plate?",
-    welcomeSub: "Ask about your work, or press ⌥G in any app to draft where your cursor is.",
+    welcomeSub: "Ask about your work, or tap ⌥ (Option) in any app to draft where your cursor is.",
     noKey: "No key yet — add one in settings for real answers.",
     // composer
     ask: "Ask SHOGUN…",
-    draftTitle: "Draft where your cursor is (⌥G)",
+    draftTitle: "Draft where your cursor is (tap ⌥)",
     // settings
     settings: "Settings",
     appearance: "Appearance",
@@ -41,7 +41,7 @@ export const STRINGS = {
     shortcutHint: "Click a shortcut to change it. Saved instantly, works everywhere.",
     model: "Model",
     modelPlaceholder: "Model id (blank = default)",
-    modelHint: "Chat and ⌥G drafts run on this provider with your own key. Each provider keeps its own key below.",
+    modelHint: "Chat and ⌥-tap drafts run on this provider with your own key. Each provider keeps its own key below.",
     key: "Your key",
     keyPresent: "Connected — answers and drafts are yours.",
     keyAbsent: "Not set — SHOGUN will echo until you add a key.",

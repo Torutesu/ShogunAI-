@@ -352,7 +352,7 @@ export function App(): JSX.Element {
 
 const DEFAULT_BINDS: Record<string, string> = {
   summon: "Control+Alt+KeyN",
-  draft: "Alt+KeyG",
+  draft: "Control+Alt+KeyG",
   quit: "Control+Alt+KeyQ",
 };
 const PROVIDERS: Array<{ id: string; label: string }> = [
