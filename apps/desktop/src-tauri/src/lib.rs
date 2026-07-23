@@ -265,9 +265,14 @@ fn float_on_all_spaces(win: &tauri::WebviewWindow) {
     unsafe {
         let _: () = msg_send![ptr, setCollectionBehavior: behavior];
         let _: () = msg_send![ptr, setLevel: level];
+        // Accessory (background) apps do NOT auto-show their windows — the panel vanished the
+        // moment we set the Accessory policy. orderFrontRegardless forces the window visible even
+        // while the app is inactive; combined with canJoinAllSpaces it's the standard always-on
+        // overlay recipe. Re-run on each re-apply so it stays put.
+        let _: () = msg_send![ptr, orderFrontRegardless];
         let got: usize = msg_send![ptr, collectionBehavior];
         let lvl: isize = msg_send![ptr, level];
-        eprintln!("[shell] NSWindow collectionBehavior set={behavior} readback={got} level={lvl}");
+        eprintln!("[shell] NSWindow collectionBehavior set={behavior} readback={got} level={lvl}, ordered front");
     }
 }
 
