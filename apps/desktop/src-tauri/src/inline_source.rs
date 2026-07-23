@@ -86,16 +86,15 @@ pub mod mac {
         fn read(&self) -> Option<CursorContext> {
             // SAFETY: focused_element returns a live +1 element we release before returning.
             let el = unsafe { focused_element() }?;
-            let before = unsafe { copy_string(el, kAXValueAttribute) }.unwrap_or_default();
+            // The presence of the AXValue ATTRIBUTE is the "this is a text-carrying field" signal —
+            // Some("") is a focused EMPTY field (the most common draft target: a fresh reply, a
+            // blank doc) and must produce a context. Only an element with no value attribute at
+            // all (a button, an icon) yields None.
+            let value = unsafe { copy_string(el, kAXValueAttribute) };
             let field_label = unsafe { copy_string(el, kAXTitleAttribute) }.unwrap_or_default();
             unsafe { CFRelease(el as CFTypeRef) };
             let app = crate::display::frontmost_app().map(|f| f.bundle_id).unwrap_or_default();
-            let ctx = CursorContext { app, field_label, before, after: String::new() };
-            if ctx.is_empty() {
-                None
-            } else {
-                Some(ctx)
-            }
+            value.map(|before| CursorContext { app, field_label, before, after: String::new() })
         }
     }
 

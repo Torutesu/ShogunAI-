@@ -94,11 +94,16 @@ pub fn build_prompt(ctx: &CursorContext, memory: &[String]) -> String {
         }
     }
 
-    p.push_str("\nText before the cursor:\n");
-    p.push_str(&ctx.before);
-    if !ctx.after.trim().is_empty() {
-        p.push_str("\n\nText after the cursor:\n");
-        p.push_str(&ctx.after);
+    if ctx.before.trim().is_empty() && ctx.after.trim().is_empty() {
+        // Drafting into an EMPTY field — the most common real case (a fresh reply, a blank doc).
+        p.push_str("\nThe field is currently empty — write the opening that best fits the app, the field, and what the user is working on.");
+    } else {
+        p.push_str("\nText before the cursor:\n");
+        p.push_str(&ctx.before);
+        if !ctx.after.trim().is_empty() {
+            p.push_str("\n\nText after the cursor:\n");
+            p.push_str(&ctx.after);
+        }
     }
     p
 }
@@ -116,9 +121,9 @@ where
     let Some(ctx) = reader.read() else {
         return InlineOutcome::NoContext;
     };
-    if ctx.is_empty() {
-        return InlineOutcome::NoContext;
-    }
+    // NOTE: an EMPTY context is still a context — a focused empty field ("write the first line of
+    // this reply") is the most common draft. The reader returning Some already means a real,
+    // writable field is focused; only reader None is NoContext.
     let prompt = build_prompt(&ctx, memory);
     let text = match agent.complete(&prompt) {
         Ok(t) => t,
@@ -219,10 +224,14 @@ mod tests {
     }
 
     #[test]
-    fn empty_context_does_nothing() {
-        let empty = CursorContext { app: String::new(), field_label: String::new(), before: "   ".into(), after: String::new() };
-        let out = compose_inline(&FixedReader(Some(empty)), &agent(), &inserter(true), &[]);
-        assert_eq!(out, InlineOutcome::NoContext);
+    fn empty_field_still_drafts() {
+        // A focused-but-empty field is the most common draft ("write the first line"). The reader
+        // returning Some means a writable field is focused — generation must proceed.
+        let empty = CursorContext { app: "Mail".into(), field_label: String::new(), before: "   ".into(), after: String::new() };
+        let ins = inserter(true);
+        let out = compose_inline(&FixedReader(Some(empty)), &agent(), &ins, &[]);
+        assert!(matches!(out, InlineOutcome::Inserted { chars } if chars > 0));
+        assert!(ins.last.borrow().contains("currently empty"), "the prompt says the field is empty");
     }
 
     #[test]
