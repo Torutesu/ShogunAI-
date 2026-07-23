@@ -78,38 +78,9 @@ fn accept_redirect(listener: &TcpListener) -> Result<(String, String), String> {
     parsed
 }
 
-/// A blocking `reqwest` token exchange (implements [`crate::oauth::TokenExchange`]).
-pub struct HttpTokenExchange {
-    client: reqwest::blocking::Client,
-}
-
-impl HttpTokenExchange {
-    pub fn new() -> Result<Self, String> {
-        let client = reqwest::blocking::Client::builder()
-            .user_agent("shogun/1.0")
-            .build()
-            .map_err(|e| format!("http client init failed: {e}"))?;
-        Ok(Self { client })
-    }
-}
-
-impl TokenExchange for HttpTokenExchange {
-    fn post_form(&self, token_endpoint: &str, form: &[(String, String)]) -> Result<String, String> {
-        let resp = self
-            .client
-            .post(token_endpoint)
-            .form(form)
-            .send()
-            .map_err(|e| format!("token exchange failed: {e}"))?;
-        let status = resp.status();
-        let body = resp.text().map_err(|e| format!("token read failed: {e}"))?;
-        if !status.is_success() {
-            // Status only — the body can echo the code/verifier, so it is not surfaced.
-            return Err(format!("token endpoint http {status}"));
-        }
-        Ok(body)
-    }
-}
+// The concrete `reqwest` token exchange (HttpTokenExchange) lives in shogun-core — the single
+// allowlisted HTTP-egress crate (FR-TR-03). This module stays HTTP-client-free: it only orchestrates
+// the loopback flow over the injected `TokenExchange` seam.
 
 #[cfg(test)]
 mod tests {

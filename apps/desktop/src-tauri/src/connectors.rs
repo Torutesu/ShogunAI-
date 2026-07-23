@@ -21,13 +21,13 @@ pub mod mac {
     use std::time::Duration;
 
     use shogun_core::daemon::Db;
+    // The reqwest clients live in shogun-core (the single allowlisted HTTP egress, FR-TR-03).
+    use shogun_core::mcp_http::{HttpMcpRpc, HttpTokenExchange};
     use shogun_integrations::keychain::KeychainTokenStore;
-    use shogun_integrations::live::HttpMcpRpc;
     use shogun_integrations::oauth::AuthConfig;
-    use shogun_integrations::token::ManagedTokenProvider;
-    use shogun_integrations::oauth_flow::{run_loopback_flow, HttpTokenExchange};
+    use shogun_integrations::oauth_flow::run_loopback_flow;
     use shogun_integrations::runtime::{ConnectorRuntime, DEFAULT_SYNC_INTERVAL_MS};
-    use shogun_integrations::token::TokenStore;
+    use shogun_integrations::token::{ManagedTokenProvider, TokenStore};
     use shogun_integrations::RemoteMcpTransport;
     use shogun_mcp::scope::{from_source, Wave};
 

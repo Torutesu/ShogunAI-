@@ -1,21 +1,23 @@
-//! The effectful network transport (feature `live`): a blocking HTTPS JSON-RPC client for the MCP
-//! Streamable-HTTP transport. The macOS Keychain token store lives in [`crate::keychain`] (it needs
-//! no network, so it is not behind this feature); the auto-refresh [`crate::token::ManagedTokenProvider`]
-//! is pure.
+//! The concrete HTTPS clients for first-layer connectors (feature `net`).
 //!
-//! This is the only module that links a TLS stack, so it is off by default — the pure CI (endpoints
-//! / toolmap / result / transport-over-fake) never pulls reqwest, mirroring shogun-core's `net`.
+//! These live in shogun-core because it is the single crate allowlisted to hold an HTTP client
+//! (FR-TR-03 / invariant 3: external egress goes through one place). shogun-integrations stays
+//! HTTP-client-free — it defines the seams ([`shogun_integrations::McpRpc`],
+//! [`shogun_integrations::oauth::TokenExchange`]) and the pure logic; this module supplies the
+//! reqwest implementations the daemon wires in.
 //!
-//! NOTE: the actual request/response round-trip cannot be exercised on Linux CI (it needs live
-//! Google OAuth tokens and network). The request construction below follows the MCP Streamable-HTTP
-//! spec (JSON-RPC 2.0 `tools/call` over POST with a Bearer token); confirm the per-tool argument
-//! and result schemas against live responses when wiring this into the daemon on macOS.
+//! Two blocking clients (the seams are synchronous):
+//! - [`HttpMcpRpc`] — MCP `tools/call` over the Streamable-HTTP transport (JSON-RPC 2.0, Bearer).
+//! - [`HttpTokenExchange`] — the OAuth token endpoint form POST.
+//!
+//! Errors are content-free (a request/response body can echo a token or user data, so it is never
+//! surfaced or logged).
 
 use serde_json::{json, Value};
+use shogun_integrations::endpoints;
+use shogun_integrations::oauth::TokenExchange;
+use shogun_integrations::rpc::{McpRpc, TokenProvider};
 use shogun_mcp::scope::Service;
-
-use crate::endpoints;
-use crate::rpc::{McpRpc, TokenProvider};
 
 /// A blocking HTTPS client that speaks MCP `tools/call` to Google's official remote MCP servers.
 pub struct HttpMcpRpc<P: TokenProvider> {
@@ -40,8 +42,7 @@ impl<P: TokenProvider> McpRpc for HttpMcpRpc<P> {
             .ok_or_else(|| format!("{} has no official MCP endpoint", service.source_str()))?;
         let token = self.tokens.access_token(service)?;
 
-        // JSON-RPC 2.0 tools/call over the MCP Streamable-HTTP transport. `id` is fixed at 1: one
-        // request per call, no batching.
+        // JSON-RPC 2.0 tools/call over the MCP Streamable-HTTP transport. One request per call.
         let body = json!({
             "jsonrpc": "2.0",
             "id": 1,
@@ -66,7 +67,6 @@ impl<P: TokenProvider> McpRpc for HttpMcpRpc<P> {
         }
         let envelope: Value =
             serde_json::from_str(&text).map_err(|_| "mcp response was not valid json".to_string())?;
-        // A JSON-RPC error is a protocol failure (distinct from a tool `isError`, handled in result).
         if let Some(err) = envelope.get("error") {
             let code = err.get("code").and_then(Value::as_i64).unwrap_or(0);
             return Err(format!("mcp json-rpc error {code}"));
@@ -78,8 +78,41 @@ impl<P: TokenProvider> McpRpc for HttpMcpRpc<P> {
     }
 }
 
-/// Strip anything that could carry a token/URL query from an error string before it is returned for
-/// logging (defense in depth — reqwest errors can embed the URL).
+/// A blocking `reqwest` OAuth token exchange (implements [`shogun_integrations::oauth::TokenExchange`]).
+pub struct HttpTokenExchange {
+    client: reqwest::blocking::Client,
+}
+
+impl HttpTokenExchange {
+    pub fn new() -> Result<Self, String> {
+        let client = reqwest::blocking::Client::builder()
+            .user_agent("shogun/1.0")
+            .build()
+            .map_err(|e| format!("http client init failed: {e}"))?;
+        Ok(Self { client })
+    }
+}
+
+impl TokenExchange for HttpTokenExchange {
+    fn post_form(&self, token_endpoint: &str, form: &[(String, String)]) -> Result<String, String> {
+        let resp = self
+            .client
+            .post(token_endpoint)
+            .form(form)
+            .send()
+            .map_err(|e| format!("token exchange failed: {}", redact(&e.to_string())))?;
+        let status = resp.status();
+        let body = resp.text().map_err(|e| format!("token read failed: {}", redact(&e.to_string())))?;
+        if !status.is_success() {
+            // Status only — the body can echo the code/verifier, so it is not surfaced.
+            return Err(format!("token endpoint http {status}"));
+        }
+        Ok(body)
+    }
+}
+
+/// Strip anything after a `?` from an error string before returning it for logging (defense in
+/// depth — reqwest errors can embed the URL with a query).
 fn redact(msg: &str) -> String {
     match msg.find('?') {
         Some(i) => format!("{}…", &msg[..i]),

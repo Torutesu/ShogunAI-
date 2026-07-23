@@ -5,15 +5,15 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish = false
-description = "SHOGUN first-layer connector adapter: maps the shogun-mcp scope table onto Google Workspace official remote MCP servers and carries the effectful transport (behind the `live` feature)."
+description = "SHOGUN first-layer connector adapter: maps the shogun-mcp scope table onto Google Workspace official remote MCP servers, with pure seams for the effectful transport."
 
-# The pure layer — endpoint/scope tables, our-op→MCP-tool mapping, and MCP result normalization —
-# compiles and tests on Linux with no network. The real HTTPS JSON-RPC client (reqwest) and the
-# macOS Keychain token source live behind the `live` feature, exactly like shogun-core's `net`
-# feature, so the pure-logic CI never pulls in a TLS stack.
+# This crate is HTTP-client-free (FR-TR-03: the single traced egress is shogun-core). It carries the
+# pure layer — endpoint/scope tables, op→tool mapping, result normalization, token lifecycle, the
+# OAuth flow orchestration — plus seams (McpRpc / TokenExchange). The concrete reqwest impls live in
+# shogun-core. `live` enables the interactive OAuth loopback flow (needs OS randomness, no network).
 [features]
 default = []
-live = ["dep:reqwest", "dep:getrandom"]
+live = ["dep:getrandom"]
 
 [dependencies]
 # The scope table + the IntegrationTransport seam this crate implements. One-way: integrations → mcp.
@@ -26,9 +26,6 @@ base64 = "0.22"
 url = "2"
 # CSPRNG for the PKCE verifier — only needed by the effectful auth flow, so it rides the `live` flag.
 getrandom = { version = "0.3", optional = true }
-# `live`: a blocking HTTPS JSON-RPC client for the MCP Streamable-HTTP transport. rustls (no OpenSSL),
-# matching shogun-core. Off by default.
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "blocking", "json"], optional = true }
 
 # The macOS Keychain token source (invariant 7: secrets never in a file/DB/log). macOS-only and
 # gated in code by `#[cfg(target_os = "macos")]`; other targets use the env/static token providers

@@ -8,7 +8,7 @@
 //! - `result` — MCP `tools/call` reply → normalized `FetchedItem` (pure).
 //! - `rpc` — the `McpRpc` / `TokenProvider` seams (pure traits).
 //! - `transport` — `RemoteMcpTransport` implements `IntegrationTransport`, composing the above.
-//! - `live` — feature `live`: the blocking HTTPS JSON-RPC client + macOS Keychain (only effectful module).
+//! - `oauth_flow` — feature `live`: the interactive OAuth loopback flow (browser + loopback socket) over the `TokenExchange` seam. No HTTP client — the concrete reqwest impls live in shogun-core (the single traced egress, FR-TR-03).
 //!
 //! Scope notes (product decision 2026-07-23):
 //! - Google Docs / Sheets have no dedicated official MCP server — their content is read via Drive's `read_file_content`, and there is no first-layer write path for them.
@@ -28,8 +28,6 @@ pub mod transport;
 /// macOS Keychain token store — no network, so not behind `live`.
 #[cfg(target_os = "macos")]
 pub mod keychain;
-#[cfg(feature = "live")]
-pub mod live;
 #[cfg(feature = "live")]
 pub mod oauth_flow;
 

@@ -137,7 +137,7 @@ impl TraceFilter {
 /// Build the viewer list: entries passing `filter`, most-recent first (FR-TR-02 時系列一覧).
 pub fn view<'a>(entries: &'a [TraceEntry], filter: &TraceFilter) -> Vec<&'a TraceEntry> {
     let mut out: Vec<&TraceEntry> = entries.iter().filter(|e| filter.matches(e)).collect();
-    out.sort_by(|a, b| b.ts.cmp(&a.ts));
+    out.sort_by_key(|e| std::cmp::Reverse(e.ts));
     out
 }
 
