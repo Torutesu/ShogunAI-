@@ -27,15 +27,121 @@ pub mod mac {
     use shogun_core::db_sink::DbTraceabilitySink;
     use shogun_core::inline::{compose_inline, CursorContext, CursorReader, InlineOutcome, TextInserter};
     use shogun_core::llm::anthropic::{AnthropicAgentClient, AnthropicConfig};
+    use shogun_core::llm::openai_compat::{
+        OpenAiCompatAgentClient, OpenAiCompatConfig, OPENAI_BASE_URL, OPENROUTER_BASE_URL,
+    };
     use shogun_core::llm::transport::ReqwestTransport;
     use shogun_core::llm::{AgentClient, ByokKey, LlmError, MockAgentClient, Secret};
 
-    /// The Keychain service + account the BYOK key lives under (invariant 7).
+    /// The Keychain service the BYOK keys live under (invariant 7).
     const KEYCHAIN_SERVICE: &str = "com.selectkk.shogun";
-    const KEYCHAIN_ACCOUNT: &str = "anthropic-byok";
-    /// The Agent-lane model for inline drafts — latency-sensitive (SLO-03), so a fast model; the
-    /// user can change it in Settings. Not the batch/indexing model (that lane is Select KK).
-    const DRAFT_MODEL: &str = "claude-sonnet-5";
+
+    // ---- Agent-lane provider settings (provider + model; NON-secret, so a JSON file is fine —
+    // ---- the KEY always stays in the Keychain, one account per provider) ----------------------
+
+    /// Providers the Agent lane can run on. The Batch lane (indexing / Dream Cycle) is untouched
+    /// by this choice — it stays on the Select KK lane (invariant 5).
+    const PROVIDERS: [&str; 3] = ["anthropic", "openrouter", "openai"];
+
+    #[derive(Clone, serde::Serialize, serde::Deserialize)]
+    pub struct LlmSettings {
+        pub provider: String,
+        /// Model id in the provider's own naming. Empty = the provider's default.
+        pub model: String,
+    }
+
+    impl Default for LlmSettings {
+        fn default() -> Self {
+            Self { provider: "anthropic".into(), model: String::new() }
+        }
+    }
+
+    /// The provider's default model when the user hasn't set one.
+    fn default_model(provider: &str) -> &'static str {
+        match provider {
+            "openrouter" => "anthropic/claude-sonnet-4.5",
+            "openai" => "gpt-4o-mini",
+            _ => "claude-sonnet-5",
+        }
+    }
+
+    /// One Keychain account per provider, so switching providers never overwrites another key.
+    fn keychain_account(provider: &str) -> &'static str {
+        match provider {
+            "openrouter" => "openrouter-byok",
+            "openai" => "openai-byok",
+            _ => "anthropic-byok",
+        }
+    }
+
+    static LLM_SETTINGS: std::sync::Mutex<Option<LlmSettings>> = std::sync::Mutex::new(None);
+
+    fn settings_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+        use tauri::Manager;
+        app.path().app_data_dir().ok().map(|d| d.join("llm.json"))
+    }
+
+    /// Load persisted provider settings into the in-memory copy. Called once at setup.
+    pub fn init_llm_settings(app: &tauri::AppHandle) {
+        let mut s = LlmSettings::default();
+        if let Some(p) = settings_path(app) {
+            if let Ok(text) = std::fs::read_to_string(p) {
+                if let Ok(saved) = serde_json::from_str::<LlmSettings>(&text) {
+                    if PROVIDERS.contains(&saved.provider.as_str()) {
+                        s = saved;
+                    }
+                }
+            }
+        }
+        eprintln!("[inline] agent provider = {} model = {}", s.provider, effective_model(&s));
+        if let Ok(mut g) = LLM_SETTINGS.lock() {
+            *g = Some(s);
+        }
+    }
+
+    fn current_settings() -> LlmSettings {
+        LLM_SETTINGS.lock().ok().and_then(|g| g.clone()).unwrap_or_default()
+    }
+
+    fn effective_model(s: &LlmSettings) -> String {
+        let m = s.model.trim();
+        if m.is_empty() { default_model(&s.provider).to_string() } else { m.to_string() }
+    }
+
+    /// Current provider settings for the Settings UI (model echoes the effective default when
+    /// unset, so the placeholder the user sees is what will actually run).
+    #[tauri::command]
+    pub fn get_llm_settings() -> LlmSettings {
+        current_settings()
+    }
+
+    /// Change provider/model. The key is NOT touched — each provider keeps its own Keychain
+    /// account, entered separately in Settings.
+    #[tauri::command]
+    pub fn set_llm_settings(provider: String, model: String, app: tauri::AppHandle) -> Result<(), String> {
+        if !PROVIDERS.contains(&provider.as_str()) {
+            return Err(format!("unknown provider: {provider}"));
+        }
+        let s = LlmSettings { provider, model: model.trim().to_string() };
+        if let Some(p) = settings_path(&app) {
+            if let Some(dir) = p.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+            match serde_json::to_string_pretty(&s) {
+                Ok(json) => {
+                    if let Err(e) = std::fs::write(&p, json) {
+                        return Err(format!("save failed: {e}"));
+                    }
+                }
+                Err(e) => return Err(e.to_string()),
+            }
+        }
+        eprintln!("[inline] agent provider → {} model → {}", s.provider, effective_model(&s));
+        if let Ok(mut g) = LLM_SETTINGS.lock() {
+            *g = Some(s);
+        }
+        Ok(())
+    }
 
     // ---- AX helpers -------------------------------------------------------------------------
 
@@ -122,13 +228,18 @@ pub mod mac {
 
     // ---- BYOK Agent-lane client (Keychain → real, else mock) --------------------------------
 
-    /// The Agent-lane client for inline drafts. Real when a BYOK key is in the Keychain; otherwise a
-    /// mock that echoes the prompt (so the AX read→insert loop is testable on device without a key).
+    /// The Agent-lane client for inline drafts and chat. Real when the ACTIVE provider has a key
+    /// in the Keychain; otherwise a mock that echoes the prompt (so the AX read→insert loop is
+    /// testable on device without a key).
     enum InlineAgent {
         Mock(MockAgentClient),
-        Real {
+        Anthropic {
             rt: tokio::runtime::Runtime,
             client: AnthropicAgentClient<ReqwestTransport, DbTraceabilitySink>,
+        },
+        OpenAiCompat {
+            rt: tokio::runtime::Runtime,
+            client: OpenAiCompatAgentClient<ReqwestTransport, DbTraceabilitySink>,
         },
     }
 
@@ -138,62 +249,86 @@ pub mod mac {
                 InlineAgent::Mock(m) => m.complete(prompt),
                 // block_on is safe here: the whole inline flow runs on a dedicated std thread
                 // (never a tokio worker), so there is no runtime already driving this thread.
-                InlineAgent::Real { rt, client } => rt.block_on(client.complete(prompt)),
+                InlineAgent::Anthropic { rt, client } => rt.block_on(client.complete(prompt)),
+                InlineAgent::OpenAiCompat { rt, client } => rt.block_on(client.complete(prompt)),
             }
         }
     }
 
-    /// Read the BYOK key from the Keychain (invariant 7 — never a file/env/DB/log). `None` if unset.
-    fn keychain_byok() -> Option<String> {
-        security_framework::passwords::get_generic_password(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT)
+    /// Read the ACTIVE provider's BYOK key from the Keychain (invariant 7 — never a
+    /// file/env/DB/log). `None` if unset.
+    fn keychain_byok(provider: &str) -> Option<String> {
+        security_framework::passwords::get_generic_password(KEYCHAIN_SERVICE, keychain_account(provider))
             .ok()
             .and_then(|bytes| String::from_utf8(bytes).ok())
     }
 
-    /// Save the BYOK key to the Keychain (Settings → "Your key"). Overwrites any existing key.
-    /// The key itself is NEVER logged (invariant 7) — only the fact that one was stored.
+    /// Save the BYOK key for the ACTIVE provider (Settings → "Your key"). Overwrites any existing
+    /// key for that provider. The key itself is NEVER logged (invariant 7).
     #[tauri::command]
     pub fn set_byok_key(key: String) -> Result<(), String> {
         let key = key.trim();
         if key.is_empty() {
             return Err("key is empty".into());
         }
+        let provider = current_settings().provider;
         security_framework::passwords::set_generic_password(
             KEYCHAIN_SERVICE,
-            KEYCHAIN_ACCOUNT,
+            keychain_account(&provider),
             key.as_bytes(),
         )
         .map_err(|e| e.to_string())?;
-        eprintln!("[inline] BYOK key saved to Keychain");
+        eprintln!("[inline] BYOK key saved to Keychain (provider: {provider})");
         Ok(())
     }
 
-    /// Remove the BYOK key from the Keychain — chat and drafts fall back to the echo mock.
+    /// Remove the ACTIVE provider's BYOK key — chat and drafts fall back to the echo mock.
     #[tauri::command]
     pub fn clear_byok_key() -> Result<(), String> {
-        security_framework::passwords::delete_generic_password(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT)
+        let provider = current_settings().provider;
+        security_framework::passwords::delete_generic_password(KEYCHAIN_SERVICE, keychain_account(&provider))
             .map_err(|e| e.to_string())?;
-        eprintln!("[inline] BYOK key removed from Keychain");
+        eprintln!("[inline] BYOK key removed from Keychain (provider: {provider})");
         Ok(())
     }
 
-    /// Build the Agent client for this run. Falls back to the mock (with a clear log) whenever the
-    /// key is absent or the transport/runtime can't be built — the AX path stays testable.
+    /// Build the Agent client for this run from the current provider settings. Falls back to the
+    /// mock (with a clear log) whenever the key is absent or the transport/runtime can't be built.
     fn build_agent(db: &Db) -> InlineAgent {
-        let Some(key) = keychain_byok() else {
-            eprintln!("[inline] no BYOK key in Keychain — using echo mock (AX path still runs)");
+        let s = current_settings();
+        let Some(key) = keychain_byok(&s.provider) else {
+            eprintln!(
+                "[inline] no key in Keychain for provider '{}' — using echo mock (AX path still runs)",
+                s.provider
+            );
             return InlineAgent::Mock(MockAgentClient::new(ByokKey::new(Secret::new("mock"))));
         };
+        let model = effective_model(&s);
         match (ReqwestTransport::new(), tokio::runtime::Builder::new_current_thread().enable_all().build()) {
             (Ok(transport), Ok(rt)) => {
-                let client = AnthropicAgentClient::new(
-                    transport,
-                    db.traceability_sink(),
-                    ByokKey::new(Secret::new(key)),
-                    AnthropicConfig::new(DRAFT_MODEL),
-                );
-                eprintln!("[inline] BYOK key found — using the live Agent lane");
-                InlineAgent::Real { rt, client }
+                let byok = ByokKey::new(Secret::new(key));
+                eprintln!("[inline] live Agent lane — provider {} model {model}", s.provider);
+                match s.provider.as_str() {
+                    "openrouter" | "openai" => {
+                        let base = if s.provider == "openrouter" { OPENROUTER_BASE_URL } else { OPENAI_BASE_URL };
+                        let client = OpenAiCompatAgentClient::new(
+                            transport,
+                            db.traceability_sink(),
+                            byok,
+                            OpenAiCompatConfig::new(base, model),
+                        );
+                        InlineAgent::OpenAiCompat { rt, client }
+                    }
+                    _ => {
+                        let client = AnthropicAgentClient::new(
+                            transport,
+                            db.traceability_sink(),
+                            byok,
+                            AnthropicConfig::new(model),
+                        );
+                        InlineAgent::Anthropic { rt, client }
+                    }
+                }
             }
             _ => {
                 eprintln!("[inline] transport/runtime unavailable — using echo mock");
@@ -246,7 +381,7 @@ pub mod mac {
             app,
             commitments: db.commitments_due(db.now_ms()).len(),
             open_loops: db.open_loops().len(),
-            has_key: keychain_byok().is_some(),
+            has_key: keychain_byok(&current_settings().provider).is_some(),
         }
     }
 

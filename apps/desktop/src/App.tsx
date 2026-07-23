@@ -352,9 +352,14 @@ export function App(): JSX.Element {
 
 const DEFAULT_BINDS: Record<string, string> = {
   summon: "Control+Alt+KeyN",
-  draft: "Control+Alt+KeyG",
+  draft: "Alt+KeyG",
   quit: "Control+Alt+KeyQ",
 };
+const PROVIDERS: Array<{ id: string; label: string }> = [
+  { id: "anthropic", label: "Claude API" },
+  { id: "openrouter", label: "OpenRouter" },
+  { id: "openai", label: "OpenAI" },
+];
 const SHORTCUT_ROWS: Array<{ action: string; label: string }> = [
   { action: "summon", label: t.summonShortcut },
   { action: "draft", label: t.draftShortcut },
@@ -389,6 +394,24 @@ function Settings(props: {
   const [keyState, setKeyState] = useState<boolean>(hasKey);
   const [keyMsg, setKeyMsg] = useState("");
   useEffect(() => setKeyState(hasKey), [hasKey]);
+  // Agent-lane provider + model (non-secret; the key above is per-provider in the Keychain).
+  const [provider, setProvider] = useState("anthropic");
+  const [model, setModel] = useState("");
+  useEffect(() => {
+    if (!IN_TAURI) return;
+    void invoke<{ provider: string; model: string }>("get_llm_settings")
+      .then((s) => {
+        setProvider(s.provider);
+        setModel(s.model);
+      })
+      .catch(() => undefined);
+  }, []);
+  const applyLlm = (p: string, m: string): void => {
+    setProvider(p);
+    setModel(m);
+    setKeyMsg("");
+    if (IN_TAURI) void invoke("set_llm_settings", { provider: p, model: m }).catch((e) => setKeyMsg(String(e)));
+  };
 
   const saveKey = (): void => {
     const k = keyInput.trim();
@@ -523,6 +546,38 @@ function Settings(props: {
           ))}
           {keyErr ? <div className="set__hint is-err">{keyErr}</div> : null}
           <div className="set__hint">{t.shortcutHint}</div>
+        </section>
+        <section className="set">
+          <div className="set__label">{t.model}</div>
+          <div className="seg">
+            {PROVIDERS.map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                className={`seg__opt${provider === p.id ? " is-on" : ""}`}
+                onClick={() => applyLlm(p.id, model)}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+          <div className="keyrow">
+            <input
+              className="keyrow__input"
+              placeholder={t.modelPlaceholder}
+              value={model}
+              autoComplete="off"
+              onFocus={() => {
+                if (IN_TAURI) void invoke("focus_field", { focused: true }).catch(() => undefined);
+              }}
+              onChange={(e) => setModel(e.target.value)}
+              onBlur={() => applyLlm(provider, model)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") applyLlm(provider, model);
+              }}
+            />
+          </div>
+          <div className="set__hint">{t.modelHint}</div>
         </section>
         <section className="set">
           <div className="set__label">{t.key}</div>

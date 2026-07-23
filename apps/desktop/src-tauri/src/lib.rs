@@ -98,6 +98,8 @@ pub fn run() {
         inline_source::mac::ui_log,
         inline_source::mac::set_byok_key,
         inline_source::mac::clear_byok_key,
+        inline_source::mac::get_llm_settings,
+        inline_source::mac::set_llm_settings,
         shortcuts::get_shortcuts,
         shortcuts::set_shortcut,
         shortcuts::hide_panel,
@@ -236,6 +238,9 @@ fn setup_macos(app: &tauri::App) {
         unsafe { pin_top_centre(ptr) };
         eprintln!("[shell] panel docked top-centre under the notch (visibleFrame top)");
     }
+
+    // Agent-lane provider settings (provider + model; key stays in the Keychain).
+    inline_source::mac::init_llm_settings(app.handle());
 
     // T-07/T-08: mouse tap → integrated engine + measurement streams.
     let (tx, rx) = std::sync::mpsc::channel::<hover::TapEvent>();
@@ -955,7 +960,8 @@ mod shortcuts {
     fn defaults() -> Bindings {
         let mut m = HashMap::new();
         m.insert("summon".into(), "Control+Alt+KeyN".into());
-        m.insert("draft".into(), "Control+Alt+KeyG".into());
+        // Draft is the product's signature move — one hand, Option+G (the "Option-key draft").
+        m.insert("draft".into(), "Alt+KeyG".into());
         m.insert("quit".into(), "Control+Alt+KeyQ".into());
         m
     }
@@ -977,6 +983,11 @@ mod shortcuts {
                     }
                 }
             }
+        }
+        // Migration: the draft default changed ⌃⌥G → ⌥G. A saved binding equal to the OLD default
+        // was never a deliberate choice (defaults get persisted on first save), so move it.
+        if binds.get("draft").map(String::as_str) == Some("Control+Alt+KeyG") {
+            binds.insert("draft".into(), "Alt+KeyG".into());
         }
         binds
     }

@@ -26,6 +26,7 @@
 //!   invariant 5 stays compile-enforced end-to-end.
 
 pub mod anthropic;
+pub mod openai_compat;
 pub mod traceability;
 pub mod transport;
 
