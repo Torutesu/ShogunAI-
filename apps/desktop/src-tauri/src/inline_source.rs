@@ -224,11 +224,13 @@ pub mod mac {
         }
     }
 
-    /// Quit the app. As an accessory (no Dock icon, no menu bar item) there is otherwise no way to
-    /// close SHOGUN except `pkill`, so the Settings pane exposes this.
+    /// Quit the app immediately. `app.exit` can hang if a window is mid-operation, so go straight to
+    /// process exit — the user pressing Quit wants it gone now. Cmd+Q / Dock quit also work now that
+    /// the default window is a normal (Regular) app.
     #[tauri::command]
-    pub fn quit_app(app: tauri::AppHandle) {
-        app.exit(0);
+    pub fn quit_app() {
+        eprintln!("[shell] quit_app — exiting");
+        std::process::exit(0);
     }
 
     /// One state row for the "What I know" panel.

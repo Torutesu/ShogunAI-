@@ -79,39 +79,30 @@ pub fn run() {
 fn setup_macos(app: &tauri::App) {
     use tauri::Manager;
 
-    // Make SHOGUN an accessory app FIRST. collectionBehavior=canJoinAllSpaces is set and reads
-    // back correctly, yet the window still doesn't follow Spaces — because a Regular activation
-    // policy (Dock icon, normal app) has its windows swept away on Space switch even with
-    // canJoinAllSpaces. Accessory (LSUIElement) is the recipe every notch/menu-bar overlay uses:
-    // no Dock icon, windows behave like system UI and actually join every Space + sit over
-    // full-screen apps. Global shortcuts, capture, and the webview are unaffected.
-    set_accessory_activation();
-
-    // ALL-SPACES REALITY (on-device): a plain activating window ignores canJoinAllSpaces even when
-    // it's set and reads back correctly (273) — it stays on its launch Space, off other desktops,
-    // under full-screen apps. The only combination that actually follows every Space is a
-    // NONACTIVATING NSPanel (canJoinAllSpaces + fullScreenAuxiliary, Status level) under the
-    // Accessory activation policy set above. The panel renders the webview fine here (proven on
-    // device). So the NSPanel is the DEFAULT; `SHOGUN_NO_NOTCH=1` falls back to the plain window
-    // (renders + interactive, but does NOT follow Spaces) for debugging.
-    if std::env::var("SHOGUN_NO_NOTCH").is_ok() {
-        eprintln!("[shell] plain window mode (SHOGUN_NO_NOTCH=1) — renders but won't follow Spaces");
+    // DEFAULT = a plain, normal, always-on-top window. Hard lesson from on-device: the
+    // nonactivating NSPanel broke everything the user actually needs — it can't be dragged
+    // (startDragging is a no-op on a nonactivating panel), fought Quit, and never followed Spaces
+    // here anyway. A normal window renders, DRAGS (data-tauri-drag-region), QUITS (Cmd+Q / Dock /
+    // button), floats above other apps (always-on-top = background presence), and can be pulled to
+    // any Space/display with ⌃⌥N. The NSPanel overlay is opt-in only (`SHOGUN_NOTCH=1`) for future
+    // work once its drag/quit/space issues are solved.
+    if std::env::var("SHOGUN_NOTCH").is_ok() {
+        set_accessory_activation();
         if let Some(win) = app.get_webview_window("notch") {
-            let _ = win.show();
+            match panel::install(&win) {
+                Ok(()) => eprintln!("[shell] NSPanel installed (experimental — SHOGUN_NOTCH=1)"),
+                Err(e) => eprintln!("[shell] panel install failed: {e}"),
+            }
             float_on_all_spaces(&win);
         }
     } else if let Some(win) = app.get_webview_window("notch") {
-        match panel::install(&win) {
-            Ok(()) => eprintln!("[shell] NSPanel installed (nonactivating, all-spaces overlay)"),
-            Err(e) => eprintln!("[shell] panel install failed: {e} — try SHOGUN_NO_NOTCH=1"),
-        }
-        // Best-effort: set canJoinAllSpaces so the panel shows everywhere on setups that honor it.
-        // On setups that don't (e.g. a window manager overriding it), the ⌃⌥Space "summon" shortcut
-        // pulls the panel to the current Space on demand — reliable and flicker-free (the auto-follow
-        // ticker was removed: it destabilised the panel and never worked here anyway).
-        float_on_all_spaces(&win);
+        let _ = win.show();
+        let _ = win.set_always_on_top(true);
+        // Best-effort all-spaces; even where the OS ignores it, drag + ⌃⌥N summon cover cross-space.
+        let _ = win.set_visible_on_all_workspaces(true);
+        eprintln!("[shell] plain window — draggable, always-on-top, quittable (Cmd+Q / Dock / ⚙→Quit)");
     } else {
-        eprintln!("[spike] no 'notch' window — panel not installed");
+        eprintln!("[spike] no 'notch' window — window not shown");
     }
 
     // Audit fixes: event-driven Space follow (re-show on every desktop/full-screen switch) and the
@@ -499,10 +490,10 @@ fn register_expand_shortcut(app: &tauri::App) {
     // ⌃⌥Q → quit. An accessory app has no Dock icon / menu, so this is an always-available way to
     // close SHOGUN from anywhere (the Settings pane also has a Quit button).
     let quit = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyQ);
-    let res = app.global_shortcut().on_shortcut(quit, move |app, _sc, event| {
+    let res = app.global_shortcut().on_shortcut(quit, move |_app, _sc, event| {
         if event.state() == ShortcutState::Pressed {
             eprintln!("[shell] ⌃⌥Q — quitting");
-            app.exit(0);
+            std::process::exit(0);
         }
     });
     match res {
