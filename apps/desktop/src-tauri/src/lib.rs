@@ -99,14 +99,21 @@ fn setup_macos(app: &tauri::App) {
             let _ = win.show();
             float_on_all_spaces(&win);
         }
-    } else {
-        match app.get_webview_window("notch") {
-            Some(win) => match panel::install(&win) {
-                Ok(()) => eprintln!("[shell] NSPanel installed (nonactivating, all-spaces overlay)"),
-                Err(e) => eprintln!("[shell] panel install failed: {e} — try SHOGUN_NO_NOTCH=1"),
-            },
-            None => eprintln!("[spike] no 'notch' window — panel not installed"),
+    } else if let Some(win) = app.get_webview_window("notch") {
+        match panel::install(&win) {
+            Ok(()) => eprintln!("[shell] NSPanel installed (nonactivating, all-spaces overlay)"),
+            Err(e) => eprintln!("[shell] panel install failed: {e} — try SHOGUN_NO_NOTCH=1"),
         }
+        // Explicitly (re)assert collectionBehavior + level + orderFront and log the readback, so we
+        // can confirm the values actually landed on the panel window (not just trust panel.rs).
+        float_on_all_spaces(&win);
+        // canJoinAllSpaces isn't honored on device even when set — so ACTIVELY keep the panel on
+        // whatever Space becomes active: orderFrontRegardless pulls the window onto the current
+        // Space. A light ticker re-asserts it so switching desktops / going full-screen shows the
+        // panel within a fraction of a second regardless of whether the OS honors canJoinAllSpaces.
+        keep_on_active_space(app, win.clone());
+    } else {
+        eprintln!("[spike] no 'notch' window — panel not installed");
     }
 
     // T-06: geometry (panel screen + CG conversion constants).
@@ -207,6 +214,36 @@ fn set_accessory_activation() {
         let ok: bool = msg_send![ns_app, setActivationPolicy: 1isize];
         eprintln!("[shell] activation policy = Accessory (no Dock icon, all-spaces overlay) ok={ok}");
     }
+}
+
+/// Keep the panel on whatever Space is active. canJoinAllSpaces isn't honored on device (confirmed
+/// set but ignored), so instead of relying on the OS to mirror the window everywhere, we pull it
+/// onto the current Space with `orderFrontRegardless` on a light ticker. Switching desktops or going
+/// full-screen then shows the panel within ~half a second. Nonactivating orderFront doesn't steal
+/// focus, so typing/other apps are unaffected.
+#[cfg(target_os = "macos")]
+fn keep_on_active_space(app: &tauri::App, win: tauri::WebviewWindow) {
+    use objc2::msg_send;
+    use objc2::runtime::AnyObject;
+    let handle = app.handle().clone();
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        let w = win.clone();
+        let posted = handle.run_on_main_thread(move || {
+            if let Ok(p) = w.ns_window() {
+                if !p.is_null() {
+                    let ptr = p as *mut AnyObject;
+                    // SAFETY: live NSWindow, messaged on the main thread; returns void.
+                    unsafe {
+                        let _: () = msg_send![ptr, orderFrontRegardless];
+                    }
+                }
+            }
+        });
+        if posted.is_err() {
+            break; // app is shutting down
+        }
+    });
 }
 
 /// Make the plain (rendering) window float on every Space and over full-screen apps by setting its
