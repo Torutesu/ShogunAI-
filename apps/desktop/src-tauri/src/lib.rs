@@ -537,8 +537,11 @@ fn overlay_panel_class() -> &'static objc2::runtime::AnyClass {
         match ClassBuilder::new(c"ShogunOverlayPanel", class!(NSPanel)) {
             Some(mut b) => {
                 // SAFETY: the method signature matches the ObjC declaration (BOOL, no args).
+                // The `fn(_, _) -> _` cast lets the compiler pick the concrete lifetime objc2's
+                // MethodImplementation impl needs (a fully spelled-out cast is "not general
+                // enough" — objc2's documented workaround).
                 unsafe {
-                    b.add_method(sel!(canBecomeKeyWindow), yes as extern "C" fn(&AnyObject, Sel) -> Bool);
+                    b.add_method(sel!(canBecomeKeyWindow), yes as extern "C" fn(_, _) -> _);
                 }
                 b.register()
             }
