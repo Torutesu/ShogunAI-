@@ -64,14 +64,39 @@ interface ActionView {
   rationale: string;
 }
 
+// Browser-preview mode: when the app is opened in a plain browser (`pnpm dev:vite` → localhost:1420)
+// there is no Tauri runtime, so `invoke`/`listen` would reject. In that case we render the panel in
+// its Expanded state with representative mock data — so the UI can be seen and iterated without the
+// (fragile, macOS-only) NSPanel. On device, `IN_TAURI` is true and nothing here runs.
+const IN_TAURI = typeof window !== "undefined" && ("__TAURI_INTERNALS__" in window || "__TAURI__" in window);
+
+const MOCK_CTX: ContextPayload = {
+  bundle_id: "com.apple.mail",
+  title_masked: "Inbox — Q3 roadmap",
+  text: "Thanks — I'll send the final deck by Friday. Still waiting on legal to sign off before we share it externally.",
+  captured_at_ms: 0,
+  partial: false,
+};
+
+// Representative of a real `notch_actions` result: state-derived actions (L1/L2) plus the FR-CF-04
+// generic fallbacks, so the panel shows the level tags and the four-button cap.
+const MOCK_ACTIONS: ActionView[] = [
+  { label: "Draft reply", level: "L1", rationale: "reply needed — Q3 roadmap thread" },
+  { label: "Nudge: legal sign-off", level: "L2", rationale: "waiting on legal to reply" },
+  { label: "Search memory", level: "L1", rationale: "Search memory" },
+  { label: "Save a note", level: "L1", rationale: "Save a note" },
+];
+
 export function App(): JSX.Element {
-  const [uiState, setUiState] = useState<UiState>("idle");
-  const [ctx, setCtx] = useState<ContextPayload | null>(null);
-  const [actions, setActions] = useState<ActionView[]>([]);
+  const [uiState, setUiState] = useState<UiState>(IN_TAURI ? "idle" : "expanded");
+  const [ctx, setCtx] = useState<ContextPayload | null>(IN_TAURI ? null : MOCK_CTX);
+  const [actions, setActions] = useState<ActionView[]>(IN_TAURI ? [] : MOCK_ACTIONS);
   const [pendingConfirm, setPendingConfirm] = useState<{ index: number; id: number } | null>(null);
-  const stateRef = useRef<UiState>("idle");
+  const stateRef = useRef<UiState>(IN_TAURI ? "idle" : "expanded");
 
   useEffect(() => {
+    // In browser-preview there is no Tauri runtime — skip all IPC and keep the mocked panel.
+    if (!IN_TAURI) return;
     // Webview-alive ping: proves the frontend booted and invoke reaches Rust.
     void invoke("interact", { kind: "boot" });
     const unlisteners: Array<Promise<() => void>> = [];
@@ -118,6 +143,7 @@ export function App(): JSX.Element {
   // On expand, pull the real context actions for the focused screen (§6.1). Best-effort: if the
   // command fails or returns none, the panel falls back to the placeholder labels.
   useEffect(() => {
+    if (!IN_TAURI) return;
     if (uiState !== "expanded") return;
     let live = true;
     void invoke<ActionView[]>("notch_actions")
@@ -135,6 +161,16 @@ export function App(): JSX.Element {
   // Run a context action (§6.6.2): L1 executes immediately; L2 returns "confirm:<id>" and the
   // button turns into a one-tap confirm (a second tap on the same button confirms).
   const runAction = (index: number): void => {
+    // Browser-preview: no engine — just demonstrate the L2 confirm toggle locally.
+    if (!IN_TAURI) {
+      const a = actions[index];
+      if (a && a.level !== "L1" && pendingConfirm?.index !== index) {
+        setPendingConfirm({ index, id: -1 });
+      } else {
+        setPendingConfirm(null);
+      }
+      return;
+    }
     if (pendingConfirm?.index === index) {
       void invoke<string>("confirm_notch_action", { id: pendingConfirm.id }).finally(() =>
         setPendingConfirm(null),
@@ -192,8 +228,10 @@ export function App(): JSX.Element {
                     onClick={() => void runAction(i)}
                   >
                     <span className="notch__action-level">{a.level}</span>
-                    {a.label}
-                    {pendingConfirm?.index === i ? <span className="notch__action-confirm"> · tap to confirm</span> : null}
+                    <span className="notch__action-label">{a.label}</span>
+                    {pendingConfirm?.index === i ? (
+                      <span className="notch__action-confirm">tap to confirm</span>
+                    ) : null}
                   </button>
                 ))
               : [t.action1, t.action2, t.action3, t.action4].map((label, i) => (
