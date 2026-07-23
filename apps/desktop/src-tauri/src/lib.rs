@@ -43,6 +43,7 @@ pub fn run() {
         inline_source::mac::shogun_status,
         inline_source::mac::shogun_state,
         inline_source::mac::shogun_chat,
+        inline_source::mac::quit_app,
     ]);
 
     // NOTE: do NOT add .on_page_load here — with the NSPanel-swapped window it trips a

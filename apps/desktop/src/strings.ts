@@ -34,6 +34,7 @@ export const STRINGS = {
     key: "Your key",
     keyPresent: "Connected — answers and drafts are yours.",
     keyAbsent: "Not set — SHOGUN will echo until you add a key.",
+    quit: "Quit SHOGUN",
     done: "Done",
     // errors
     noAnswer: "(no response)",

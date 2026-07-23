@@ -224,6 +224,13 @@ pub mod mac {
         }
     }
 
+    /// Quit the app. As an accessory (no Dock icon, no menu bar item) there is otherwise no way to
+    /// close SHOGUN except `pkill`, so the Settings pane exposes this.
+    #[tauri::command]
+    pub fn quit_app(app: tauri::AppHandle) {
+        app.exit(0);
+    }
+
     /// One state row for the "What I know" panel.
     #[derive(serde::Serialize)]
     pub struct StateItem {

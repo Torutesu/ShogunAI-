@@ -311,6 +311,18 @@ function Settings(props: {
           <div className="set__label">{t.key}</div>
           <div className={`set__hint${hasKey ? " is-ok" : ""}`}>{hasKey ? t.keyPresent : t.keyAbsent}</div>
         </section>
+
+        <section className="set">
+          <button
+            className="quit"
+            type="button"
+            onClick={() => {
+              if (IN_TAURI) void invoke("quit_app").catch(() => undefined);
+            }}
+          >
+            {t.quit}
+          </button>
+        </section>
       </div>
     </div>
   );
