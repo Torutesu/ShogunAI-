@@ -336,7 +336,9 @@ fn reassert_panel(handle: &tauri::AppHandle, why: &'static str, defer: bool) {
             Err(_) => return,
         };
         if let Some(t) = *g {
-            if t.elapsed() < std::time::Duration::from_millis(1500) {
+            // A respawn spans destroy → label-free wait → build (~2s worst case); overlapping
+            // respawns would race on the label. One at a time.
+            if t.elapsed() < std::time::Duration::from_millis(2500) {
                 return;
             }
         }
@@ -355,13 +357,51 @@ fn reassert_panel(handle: &tauri::AppHandle, why: &'static str, defer: bool) {
 }
 
 /// Destroy the space-locked panel window and create a fresh one — which macOS guarantees is born
-/// on the CURRENTLY ACTIVE Space. The webview reloads; chat/minimize state survives via
-/// localStorage (same origin). Runs on the main thread.
+/// on the CURRENTLY ACTIVE Space. TWO separate main-thread ticks: destroying synchronously inside
+/// the workspace-notification callback threw an ObjC exception through Rust (fatal abort), and the
+/// "notch" label stays taken until the teardown settles — so destroy on one tick, poll until the
+/// label frees, then build on a later tick.
 #[cfg(target_os = "macos")]
 fn respawn_panel(handle: &tauri::AppHandle) {
     use tauri::Manager;
-    if let Some(win) = handle.get_webview_window("notch") {
-        let _ = win.destroy();
+    let h = handle.clone();
+    std::thread::spawn(move || {
+        // Tick 1: destroy the old window (its own main-loop turn, NOT the notification callback).
+        let h2 = h.clone();
+        let _ = h.run_on_main_thread(move || {
+            if let Some(win) = h2.get_webview_window("notch") {
+                let _ = win.destroy();
+            }
+        });
+        // Wait for the label to actually free (teardown is asynchronous).
+        for _ in 0..15 {
+            std::thread::sleep(std::time::Duration::from_millis(120));
+            let (tx, rx) = std::sync::mpsc::channel::<bool>();
+            let h2 = h.clone();
+            let posted = h.run_on_main_thread(move || {
+                let _ = tx.send(h2.get_webview_window("notch").is_none());
+            });
+            if posted.is_err() {
+                return; // app shutting down
+            }
+            if rx.recv_timeout(std::time::Duration::from_millis(500)).unwrap_or(false) {
+                break;
+            }
+        }
+        // Tick 2: build the fresh window on the (now-)active Space.
+        let h2 = h.clone();
+        let _ = h.run_on_main_thread(move || build_panel_window(&h2));
+    });
+}
+
+/// (main thread) Build the fresh "notch" window and re-apply the overlay recipe. Skips politely if
+/// the label is somehow still taken (next reassert retries).
+#[cfg(target_os = "macos")]
+fn build_panel_window(handle: &tauri::AppHandle) {
+    use tauri::Manager;
+    if handle.get_webview_window("notch").is_some() {
+        eprintln!("[shell] respawn: old window still present — will retry on the next event");
+        return;
     }
     let builder = tauri::WebviewWindowBuilder::new(handle, "notch", tauri::WebviewUrl::default())
         .title("SHOGUN")
