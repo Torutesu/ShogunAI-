@@ -444,34 +444,63 @@ fn reassert_panel(handle: &tauri::AppHandle, why: &'static str, defer: bool) {
             }
         }
     }
-    // PLAN B (final): ordering/flags can NOT move a space-locked window on this machine — proven
-    // across canJoinAllSpaces, moveToActiveSpace, NSPanel, accessory, bundled. But macOS
-    // guarantees a NEWLY CREATED window is born on the ACTIVE Space. So rebuild the window here.
-    // Debounced hard (webview rebuild is heavy; a settling respawn must not trigger another).
+    // During the Space-switch animation `isOnActiveSpace` transiently reads false even for a
+    // panel that WILL be on the new Space (canJoinAllSpaces re-attaches after the transition).
+    // Acting on that transient reading was the respawn-abort trigger. Never act inside the
+    // notification tick — re-check after the transition settles.
+    if defer {
+        let h = handle.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(450));
+            let h2 = h.clone();
+            let _ = h.run_on_main_thread(move || reassert_panel(&h2, why, false));
+        });
+        return;
+    }
+    // Debounce the corrective action (one at a time; a settling correction must not re-trigger).
     {
         let mut g = match REASSERT_AT.lock() {
             Ok(g) => g,
             Err(_) => return,
         };
         if let Some(t) = *g {
-            // A respawn spans destroy → label-free wait → build (~2s worst case); overlapping
-            // respawns would race on the label. One at a time.
             if t.elapsed() < std::time::Duration::from_millis(2500) {
                 return;
             }
         }
         *g = Some(std::time::Instant::now());
     }
-    eprintln!("[shell] {why}: panel not on this space — respawning it here");
-    respawn_panel(handle);
-    if defer {
-        let h = handle.clone();
-        std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(700));
-            let h2 = h.clone();
-            let _ = h.run_on_main_thread(move || reassert_panel(&h2, "settle-check", false));
-        });
+    // NSPanel mode (behavior bit 0 = canJoinAllSpaces): NEVER destroy/respawn. tauri's
+    // `win.destroy()` on the class-swapped panel throws an ObjC exception through Rust —
+    // "fatal runtime error: Rust cannot catch foreign exceptions, aborting" — even on its own
+    // main-thread tick (observed on-device, dfea1fd run). And the final log proved the panel
+    // genuinely reaches drawn=true onActiveSpace=true with the full recipe, so a soft re-show
+    // is all the nudge it ever needs.
+    let nspanel_mode = PANEL_BEHAVIOR.load(std::sync::atomic::Ordering::Relaxed) & 1 != 0;
+    if nspanel_mode {
+        eprintln!("[shell] {why}: panel not on this space — soft re-show (no respawn in NSPanel mode)");
+        if let Some(win) = handle.get_webview_window("notch") {
+            if let Ok(p) = win.ns_window() {
+                if !p.is_null() {
+                    let ptr = p as *mut AnyObject;
+                    // SAFETY: main thread (run_on_main_thread hop above when deferred; workspace
+                    // notifications post on the main thread otherwise), live NSWindow. Pure
+                    // AppKit ordering calls — no wry/tauri teardown involved.
+                    unsafe {
+                        reposition_to_cursor_screen(ptr);
+                        let nil: *mut AnyObject = std::ptr::null_mut();
+                        let _: () = msg_send![ptr, orderOut: nil];
+                        let _: () = msg_send![ptr, orderFrontRegardless];
+                    }
+                }
+            }
+        }
+        return;
     }
+    // Plain-window fallback (SHOGUN_NO_NOTCH=1): the window is NOT class-swapped, so destroy is
+    // safe, and a Regular plain window truly cannot join another Space — respawn is the only move.
+    eprintln!("[shell] {why}: panel not on this space — respawning it here (plain-window mode)");
+    respawn_panel(handle);
 }
 
 /// Destroy the space-locked panel window and create a fresh one — which macOS guarantees is born
