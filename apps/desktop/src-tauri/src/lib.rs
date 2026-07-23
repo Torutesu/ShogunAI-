@@ -17,11 +17,13 @@ mod notch_actions;
 mod notch_exec;
 mod panel;
 
-/// The collectionBehavior the overlay wants, selected at setup (NSPanel mode = canJoinAllSpaces
-/// 273; plain-window fallback = moveToActiveSpace 274) and re-asserted by every heal/reassert path.
+/// The collectionBehavior the overlay wants, selected at setup (NSPanel mode = canJoinAllSpaces +
+/// fullScreenAuxiliary = 257; plain-window fallback = moveToActiveSpace 274) and re-asserted by
+/// every heal/reassert path. `stationary` (1<<4) was dropped: it is a suspect for the panel not
+/// tracking Space switches on this machine, and the reference overlays run without it.
 #[cfg(target_os = "macos")]
 static PANEL_BEHAVIOR: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new((1 << 0) | (1 << 4) | (1 << 8));
+    std::sync::atomic::AtomicUsize::new((1 << 0) | (1 << 8));
 
 /// NSFloatingWindowLevel (3) — the overlay spec's `.floating`: above every normal app window,
 /// below system UI. (Earlier builds used Status/25.)
@@ -125,7 +127,7 @@ fn setup_macos(app: &tauri::App) {
             eprintln!("[shell] plain window fallback (SHOGUN_NO_NOTCH=1) — desktop-space only");
         }
     } else {
-        PANEL_BEHAVIOR.store((1 << 0) | (1 << 4) | (1 << 8), Ordering::Relaxed); // 273 join-all-spaces
+        PANEL_BEHAVIOR.store((1 << 0) | (1 << 8), Ordering::Relaxed); // 257 join-all + fsAux
         set_accessory_activation();
         match app.get_webview_window("notch") {
             Some(win) => {
@@ -424,15 +426,23 @@ fn reassert_panel(handle: &tauri::AppHandle, why: &'static str, defer: bool) {
     if USER_HIDDEN.load(std::sync::atomic::Ordering::Relaxed) {
         return;
     }
-    // Assert flags + an IMMEDIATE cheap nudge. `orderFrontRegardless` on an already-front panel
-    // is a no-op (no flicker, no focus change, no reposition), and on an evicted panel it re-adds
-    // it to the current Space right away — the user-visible dropout on app switch was the 450ms
-    // defer + 2.5s debounce before any corrective ordering happened at all.
+    // ON-DEVICE GROUND TRUTH: the ⌥J summon path (orderOut → orderFrontRegardless) re-attaches
+    // the panel to the current Space 100% of the time, everywhere. The automatic recovery was
+    // failing because it did LESS than summon (a bare orderFrontRegardless) and did it LATER
+    // (450ms defer + a debounce that swallowed most events). So the automatic path now does
+    // exactly what summon does, immediately — plus a `moveToActiveSpace` flip: canJoinAllSpaces
+    // is provably not honored reliably for this window, so for the duration of the re-order the
+    // collectionBehavior becomes moveToActiveSpace (1<<1) + fullScreenAuxiliary — the API whose
+    // documented contract is "move this window to the active Space when ordered front" — then
+    // flips back so the panel keeps floating over full-screen apps.
+    let nspanel_mode = PANEL_BEHAVIOR.load(std::sync::atomic::Ordering::Relaxed) & 1 != 0;
     if let Some(win) = handle.get_webview_window("notch") {
         if let Ok(p) = win.ns_window() {
             if !p.is_null() {
                 let ptr = p as *mut AnyObject;
-                // SAFETY: workspace notifications post on the main thread; live NSWindow.
+                // SAFETY: all call sites run on the main thread (workspace notifications and the
+                // state-logger's run_on_main_thread closure); live NSWindow; pure AppKit property
+                // and ordering calls — no wry/tauri teardown involved.
                 unsafe {
                     let want = PANEL_BEHAVIOR.load(std::sync::atomic::Ordering::Relaxed);
                     let _: () = msg_send![ptr, setCollectionBehavior: want];
@@ -442,69 +452,43 @@ fn reassert_panel(handle: &tauri::AppHandle, why: &'static str, defer: bool) {
                     if visible && on_active {
                         return; // genuinely on screen here — leave it alone
                     }
-                    if visible {
-                        let _: () = msg_send![ptr, orderFrontRegardless];
+                    // Debounce lightly: one app switch fires several notifications back-to-back;
+                    // one re-order per burst is enough (and avoids fighting the Space animation).
+                    {
+                        let mut g = match REASSERT_AT.lock() {
+                            Ok(g) => g,
+                            Err(_) => return,
+                        };
+                        if let Some(t) = *g {
+                            if t.elapsed() < std::time::Duration::from_millis(300) {
+                                return;
+                            }
+                        }
+                        *g = Some(std::time::Instant::now());
                     }
-                }
-            }
-        }
-    }
-    // During the Space-switch animation `isOnActiveSpace` transiently reads false even for a
-    // panel that WILL be on the new Space (canJoinAllSpaces re-attaches after the transition).
-    // Acting harder on that transient reading was the respawn-abort trigger. Re-check after the
-    // transition settles before escalating.
-    if defer {
-        let h = handle.clone();
-        std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(450));
-            let h2 = h.clone();
-            let _ = h.run_on_main_thread(move || reassert_panel(&h2, why, false));
-        });
-        return;
-    }
-    // Debounce the stronger correction (one at a time; a settling correction must not re-trigger).
-    {
-        let mut g = match REASSERT_AT.lock() {
-            Ok(g) => g,
-            Err(_) => return,
-        };
-        if let Some(t) = *g {
-            if t.elapsed() < std::time::Duration::from_millis(1500) {
-                return;
-            }
-        }
-        *g = Some(std::time::Instant::now());
-    }
-    // NSPanel mode (behavior bit 0 = canJoinAllSpaces): NEVER destroy/respawn. tauri's
-    // `win.destroy()` on the class-swapped panel throws an ObjC exception through Rust —
-    // "fatal runtime error: Rust cannot catch foreign exceptions, aborting" — even on its own
-    // main-thread tick (observed on-device, dfea1fd run). The full recipe genuinely reaches
-    // drawn=true onActiveSpace=true, so an orderOut/orderFront cycle is the strongest move we
-    // ever need. Position is NOT touched — a re-show must not undo the user's drag.
-    let nspanel_mode = PANEL_BEHAVIOR.load(std::sync::atomic::Ordering::Relaxed) & 1 != 0;
-    if nspanel_mode {
-        eprintln!("[shell] {why}: panel not on this space — soft re-show (no respawn in NSPanel mode)");
-        if let Some(win) = handle.get_webview_window("notch") {
-            if let Ok(p) = win.ns_window() {
-                if !p.is_null() {
-                    let ptr = p as *mut AnyObject;
-                    // SAFETY: main thread (run_on_main_thread hop above when deferred; workspace
-                    // notifications post on the main thread otherwise), live NSWindow. Pure
-                    // AppKit ordering calls — no wry/tauri teardown involved.
-                    unsafe {
+                    if nspanel_mode {
+                        eprintln!("[shell] {why}: rejoining active space (moveToActiveSpace flip + re-order)");
+                        let move_flip: usize = (1 << 1) | (1 << 8);
+                        let _: () = msg_send![ptr, setCollectionBehavior: move_flip];
                         let nil: *mut AnyObject = std::ptr::null_mut();
                         let _: () = msg_send![ptr, orderOut: nil];
                         let _: () = msg_send![ptr, orderFrontRegardless];
+                        let _: () = msg_send![ptr, setCollectionBehavior: want];
+                        return;
                     }
                 }
             }
         }
-        return;
     }
-    // Plain-window fallback (SHOGUN_NO_NOTCH=1): the window is NOT class-swapped, so destroy is
-    // safe, and a Regular plain window truly cannot join another Space — respawn is the only move.
-    eprintln!("[shell] {why}: panel not on this space — respawning it here (plain-window mode)");
-    respawn_panel(handle);
+    if !nspanel_mode {
+        // Plain-window fallback (SHOGUN_NO_NOTCH=1): the window is NOT class-swapped, so destroy
+        // is safe, and a Regular plain window truly cannot join another Space — respawn it here.
+        // (NEVER destroy/respawn the NSPanel-swapped window: tauri's destroy() throws an ObjC
+        // exception through Rust — fatal abort, observed on-device.)
+        let _ = defer;
+        eprintln!("[shell] {why}: panel not on this space — respawning it here (plain-window mode)");
+        respawn_panel(handle);
+    }
 }
 
 /// Destroy the space-locked panel window and create a fresh one — which macOS guarantees is born
@@ -703,16 +687,6 @@ fn spawn_panel_state_logger(app: &tauri::App) {
                     let _: () = msg_send![ptr, setLevel: OVERLAY_LEVEL];
                     eprintln!("[panelstate] healed: level {level}→{OVERLAY_LEVEL} behavior {behavior}→{want}");
                 }
-                // HEARTBEAT: a visible panel that fell off the active Space gets re-ordered every
-                // tick (worst-case 1s recovery even if a workspace notification was missed).
-                // orderFrontRegardless never steals focus or moves the window; skipped while the
-                // user deliberately hid the panel.
-                if visible
-                    && !on_active
-                    && !USER_HIDDEN.load(std::sync::atomic::Ordering::Relaxed)
-                {
-                    let _: () = msg_send![ptr, orderFrontRegardless];
-                }
                 format!(
                     "visible={visible} drawn={drawn} onActiveSpace={on_active} behavior={behavior} level={level} alpha={alpha:.2} appActive={app_active} origin=({:.0},{:.0})",
                     frame.origin.x, frame.origin.y
@@ -724,6 +698,10 @@ fn spawn_panel_state_logger(app: &tauri::App) {
                     *g = s;
                 }
             }
+            // HEARTBEAT: a visible panel that fell off the active Space gets the full
+            // summon-strength recovery every tick (worst-case ~1s even if a workspace
+            // notification was missed). reassert_panel no-ops when healthy or USER_HIDDEN.
+            reassert_panel(&h, "heartbeat", false);
         });
         if posted.is_err() {
             break; // app shutting down
@@ -770,6 +748,8 @@ fn float_on_all_spaces(win: &tauri::WebviewWindow) {
         // that canJoinAllSpaces was ignored — the panel was being auto-hidden. Must be NO for an
         // always-visible overlay.
         let _: () = msg_send![ptr, setHidesOnDeactivate: false];
+        // Belt-and-braces: never let the window server hide this window as part of app-hide.
+        let _: () = msg_send![ptr, setCanHide: false];
         // Overlay spec: drag the panel by grabbing anywhere on its background.
         let _: () = msg_send![ptr, setMovableByWindowBackground: true];
         // Accessory (background) apps do NOT auto-show their windows — orderFrontRegardless forces
