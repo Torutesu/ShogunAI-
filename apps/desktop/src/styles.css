@@ -450,6 +450,31 @@ body {
   gap: 4px;
   flex: none;
 }
+.keys__btn {
+  border: none;
+  background: transparent;
+  padding: 2px;
+  border-radius: 7px;
+  cursor: pointer;
+  transition: background var(--sp);
+}
+.keys__btn:hover {
+  background: var(--fill);
+}
+.keys__rec {
+  border: 1px dashed var(--accent);
+  background: var(--fill);
+  color: var(--accent);
+  font: inherit;
+  font-family: var(--sys);
+  font-size: 11.5px;
+  padding: 4px 10px;
+  border-radius: 7px;
+  cursor: text;
+}
+.set__hint.is-err {
+  color: var(--warn);
+}
 .seg {
   display: flex;
   gap: 4px;

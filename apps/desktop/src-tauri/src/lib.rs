@@ -45,6 +45,8 @@ pub fn run() {
         inline_source::mac::shogun_chat,
         inline_source::mac::quit_app,
         inline_source::mac::ui_log,
+        shortcuts::get_shortcuts,
+        shortcuts::set_shortcut,
     ]);
 
     // NOTE: do NOT add .on_page_load here — with the NSPanel-swapped window it trips a
@@ -136,20 +138,17 @@ fn setup_macos(app: &tauri::App) {
         g.is_notch, g.notch_w, g.notch_h, g.menubar_h, g.screen.w, g.screen.h, g.primary_height, g.display_count
     );
 
-    // Pin the panel to the top-centre of the primary display so the idle shell sits flush
-    // under the notch and the Expanded panel drops straight down from it. An un-positioned
-    // Tauri window is centred on screen (observed: the panel appeared mid-screen), which
-    // contradicts the notch-anchored layout (spec §3.1.3). x is centred on the screen
-    // width; y=0 puts the window top at the screen top (the panel level is Status, so it
-    // draws over the menu-bar band).
-    // Pin the panel to the top-centre of the primary display so it hangs from the notch.
+    // Pin the panel INTO the notch band. Tauri's set_position is clamped below the menu bar
+    // (observed: the top edge sat 39pt down — "under the notch" never actually happened), so set
+    // the frame directly on the NSWindow: top-centre of its screen, top edge at the true screen
+    // top. Level 25 draws over the menu-bar band, i.e. real notch residency.
     if let Some(win) = app.get_webview_window("notch") {
-        let scale = win.scale_factor().unwrap_or(1.0);
-        let win_w = win.outer_size().map(|s| s.width as f64 / scale).unwrap_or(400.0);
-        let x = ((g.screen.w - win_w) / 2.0).max(0.0);
-        match win.set_position(tauri::LogicalPosition::new(x, 0.0)) {
-            Ok(()) => eprintln!("[shell] panel pinned top-centre x={x:.0} y=0"),
-            Err(e) => eprintln!("[shell] set_position failed: {e}"),
+        if let Ok(p) = win.ns_window() {
+            if !p.is_null() {
+                // SAFETY: live NSWindow on the main thread (setup).
+                unsafe { pin_top_centre(p as *mut objc2::runtime::AnyObject) };
+                eprintln!("[shell] panel pinned into the notch band (true screen top)");
+            }
         }
     }
 
@@ -254,6 +253,30 @@ unsafe fn reposition_to_cursor_screen(ptr: *mut objc2::runtime::AnyObject) {
             break;
         }
     }
+}
+
+/// (main thread) Pin the window to the top-centre of ITS screen with the top edge at the TRUE
+/// screen top (over the menu-bar band — level 25 draws above it). Tauri's set_position clamps
+/// below the menu bar, which is why the panel never actually sat in the notch.
+///
+/// SAFETY: caller guarantees `ptr` is the live NSWindow and we're on the main thread.
+#[cfg(target_os = "macos")]
+unsafe fn pin_top_centre(ptr: *mut objc2::runtime::AnyObject) {
+    use objc2::runtime::AnyObject;
+    use objc2::{class, msg_send};
+    use objc2_foundation::{NSPoint, NSRect};
+    let mut screen: *mut AnyObject = msg_send![ptr, screen];
+    if screen.is_null() {
+        screen = msg_send![class!(NSScreen), mainScreen];
+    }
+    if screen.is_null() {
+        return;
+    }
+    let f: NSRect = msg_send![screen, frame];
+    let w: NSRect = msg_send![ptr, frame];
+    let x = f.origin.x + ((f.size.width - w.size.width) / 2.0).max(0.0);
+    let top = NSPoint { x, y: f.origin.y + f.size.height };
+    let _: () = msg_send![ptr, setFrameTopLeftPoint: top];
 }
 
 /// Bring the panel to where the user actually is — the ⌃⌥N "summon" action. Reposition to the
@@ -482,49 +505,142 @@ fn register_expand_shortcut(app: &tauri::App) {
         Err(e) => eprintln!("[spike] global shortcut registration failed: {e}"),
     }
 
-    // ⌃⌥G → draft at the cursor (inline). The product trigger is a bare Option tap (rebindable in
-    // Settings), which needs a CGEventTap on flagsChanged — an on-device refinement; a concrete
-    // combo is used here so the read→generate→insert loop is testable now.
-    use shogun_core::daemon::Db;
-    let draft = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyG);
-    let res = app.global_shortcut().on_shortcut(draft, move |app, _sc, event| {
-        if event.state() == ShortcutState::Pressed {
-            if let Some(db) = app.try_state::<Db>() {
-                inline_source::mac::run_inline_at_cursor(db.inner().clone());
+    // Product shortcuts (summon / draft / quit) are USER-REBINDABLE: load persisted bindings
+    // (defaults: ⌃⌥N / ⌃⌥G / ⌃⌥Q) and register each; the Settings pane rebids them live via the
+    // set_shortcut command.
+    let handle = app.handle().clone();
+    let binds = shortcuts::load(&handle);
+    for (action, combo) in binds.iter() {
+        match shortcuts::register_action(&handle, action, combo) {
+            Ok(()) => eprintln!("[shell] shortcut {action} = {combo}"),
+            Err(e) => eprintln!("[shell] shortcut {action} ({combo}) failed: {e}"),
+        }
+    }
+    app.manage(shortcuts::Store(std::sync::Mutex::new(binds)));
+}
+
+/// User-rebindable global shortcuts. Bindings persist in app_data/shortcuts.json (combo strings
+/// only — no secrets, Keychain not required) and are re-registered live on change. Combo format is
+/// the plugin's string form, e.g. "Control+Alt+KeyN" (the key part is a `KeyboardEvent.code`).
+#[cfg(target_os = "macos")]
+mod shortcuts {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    use tauri::Manager;
+    use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+
+    pub type Bindings = HashMap<String, String>;
+    pub struct Store(pub Mutex<Bindings>);
+
+    const ACTIONS: [&str; 3] = ["summon", "draft", "quit"];
+
+    fn defaults() -> Bindings {
+        let mut m = HashMap::new();
+        m.insert("summon".into(), "Control+Alt+KeyN".into());
+        m.insert("draft".into(), "Control+Alt+KeyG".into());
+        m.insert("quit".into(), "Control+Alt+KeyQ".into());
+        m
+    }
+
+    fn config_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+        app.path().app_data_dir().ok().map(|d| d.join("shortcuts.json"))
+    }
+
+    /// Load persisted bindings, filling any missing action with its default.
+    pub fn load(app: &tauri::AppHandle) -> Bindings {
+        let mut binds = defaults();
+        if let Some(p) = config_path(app) {
+            if let Ok(text) = std::fs::read_to_string(p) {
+                if let Ok(saved) = serde_json::from_str::<Bindings>(&text) {
+                    for (k, v) in saved {
+                        if ACTIONS.contains(&k.as_str()) {
+                            binds.insert(k, v);
+                        }
+                    }
+                }
             }
         }
-    });
-    match res {
-        Ok(()) => eprintln!("[spike] ⌃⌥G registered — press it to draft at the cursor"),
-        Err(e) => eprintln!("[spike] inline shortcut registration failed: {e}"),
+        binds
     }
 
-    // ⌃⌥N → summon the panel to the desktop/display you're currently on. ⌃⌥Space was the wrong
-    // key: it collides with macOS's "select next input source" default (same trap as ⌘⇧Space,
-    // audit cause #4) so the OS consumed it before our handler. N (notch) is uncontended.
-    let summon = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyN);
-    let res = app.global_shortcut().on_shortcut(summon, move |app, _sc, event| {
-        if event.state() == ShortcutState::Pressed {
-            summon_to_active_space(app);
+    fn save(app: &tauri::AppHandle, binds: &Bindings) {
+        let Some(p) = config_path(app) else { return };
+        if let Some(dir) = p.parent() {
+            let _ = std::fs::create_dir_all(dir);
         }
-    });
-    match res {
-        Ok(()) => eprintln!("[spike] ⌃⌥N registered — press it to summon the panel to this desktop"),
-        Err(e) => eprintln!("[spike] summon shortcut registration failed: {e}"),
+        match serde_json::to_string_pretty(binds) {
+            Ok(json) => {
+                if let Err(e) = std::fs::write(&p, json) {
+                    eprintln!("[shell] shortcuts save failed: {e}");
+                }
+            }
+            Err(e) => eprintln!("[shell] shortcuts serialize failed: {e}"),
+        }
     }
 
-    // ⌃⌥Q → quit. An accessory app has no Dock icon / menu, so this is an always-available way to
-    // close SHOGUN from anywhere (the Settings pane also has a Quit button).
-    let quit = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyQ);
-    let res = app.global_shortcut().on_shortcut(quit, move |_app, _sc, event| {
-        if event.state() == ShortcutState::Pressed {
-            eprintln!("[shell] ⌃⌥Q — quitting");
-            std::process::exit(0);
+    /// Register `combo` for `action`. The combo string parses via the plugin (invalid combos and
+    /// already-taken combos surface as Err — nothing changes in that case).
+    pub fn register_action(app: &tauri::AppHandle, action: &str, combo: &str) -> Result<(), String> {
+        let act = action.to_string();
+        app.global_shortcut()
+            .on_shortcut(combo, move |app, _sc, event| {
+                if event.state() == ShortcutState::Pressed {
+                    dispatch(app, &act);
+                }
+            })
+            .map_err(|e| e.to_string())
+    }
+
+    fn dispatch(app: &tauri::AppHandle, action: &str) {
+        match action {
+            "summon" => crate::summon_to_active_space(app),
+            "draft" => {
+                if let Some(db) = app.try_state::<shogun_core::daemon::Db>() {
+                    crate::inline_source::mac::run_inline_at_cursor(db.inner().clone());
+                }
+            }
+            "quit" => {
+                eprintln!("[shell] quit shortcut — exiting");
+                std::process::exit(0);
+            }
+            _ => {}
         }
-    });
-    match res {
-        Ok(()) => eprintln!("[spike] ⌃⌥Q registered — press it to quit SHOGUN"),
-        Err(e) => eprintln!("[spike] quit shortcut registration failed: {e}"),
+    }
+
+    /// Current bindings for the Settings UI.
+    #[tauri::command]
+    pub fn get_shortcuts(store: tauri::State<'_, Store>) -> Bindings {
+        store.0.lock().map(|g| g.clone()).unwrap_or_default()
+    }
+
+    /// Rebind `action` to `combo` live: register the new combo first (validates + detects
+    /// conflicts), then unregister the old one and persist. On any error nothing changes.
+    #[tauri::command]
+    pub fn set_shortcut(
+        action: String,
+        combo: String,
+        app: tauri::AppHandle,
+        store: tauri::State<'_, Store>,
+    ) -> Result<(), String> {
+        if !ACTIONS.contains(&action.as_str()) {
+            return Err(format!("unknown action: {action}"));
+        }
+        let old = store.0.lock().ok().and_then(|g| g.get(&action).cloned());
+        if old.as_deref() == Some(combo.as_str()) {
+            return Ok(());
+        }
+        register_action(&app, &action, &combo)?;
+        if let Some(old) = old {
+            if let Err(e) = app.global_shortcut().unregister(old.as_str()) {
+                eprintln!("[shell] old shortcut unregister failed ({old}): {e}");
+            }
+        }
+        if let Ok(mut g) = store.0.lock() {
+            g.insert(action.clone(), combo.clone());
+            save(&app, &g);
+        }
+        eprintln!("[shell] shortcut {action} → {combo}");
+        Ok(())
     }
 }
 
