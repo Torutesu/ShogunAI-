@@ -246,18 +246,21 @@ unsafe fn reposition_to_cursor_screen(ptr: *mut objc2::runtime::AnyObject) {
             && mouse.y >= f.origin.y
             && mouse.y <= f.origin.y + f.size.height;
         if inside {
+            // Anchor to visibleFrame (excludes the menu-bar/notch band and the Dock): the panel
+            // sits just BELOW the notch, fully readable — per feedback, not tucked into it.
+            let vf: NSRect = msg_send![s, visibleFrame];
             let w: NSRect = msg_send![ptr, frame];
-            let x = f.origin.x + ((f.size.width - w.size.width) / 2.0).max(0.0);
-            let top = NSPoint { x, y: f.origin.y + f.size.height };
+            let x = vf.origin.x + ((vf.size.width - w.size.width) / 2.0).max(0.0);
+            let top = NSPoint { x, y: vf.origin.y + vf.size.height };
             let _: () = msg_send![ptr, setFrameTopLeftPoint: top];
             break;
         }
     }
 }
 
-/// (main thread) Pin the window to the top-centre of ITS screen with the top edge at the TRUE
-/// screen top (over the menu-bar band — level 25 draws above it). Tauri's set_position clamps
-/// below the menu bar, which is why the panel never actually sat in the notch.
+/// (main thread) Pin the window to the top-centre of ITS screen, just BELOW the menu-bar/notch
+/// band (visibleFrame top). Feedback: tucking into the notch band hid the header — readable
+/// beats flush.
 ///
 /// SAFETY: caller guarantees `ptr` is the live NSWindow and we're on the main thread.
 #[cfg(target_os = "macos")]
@@ -272,11 +275,44 @@ unsafe fn pin_top_centre(ptr: *mut objc2::runtime::AnyObject) {
     if screen.is_null() {
         return;
     }
-    let f: NSRect = msg_send![screen, frame];
+    let vf: NSRect = msg_send![screen, visibleFrame];
     let w: NSRect = msg_send![ptr, frame];
-    let x = f.origin.x + ((f.size.width - w.size.width) / 2.0).max(0.0);
-    let top = NSPoint { x, y: f.origin.y + f.size.height };
+    let x = vf.origin.x + ((vf.size.width - w.size.width) / 2.0).max(0.0);
+    let top = NSPoint { x, y: vf.origin.y + vf.size.height };
     let _: () = msg_send![ptr, setFrameTopLeftPoint: top];
+}
+
+/// Re-assert the overlay and re-show the panel on the active Space. Order matters: flags FIRST
+/// (a tao demotion to behavior=1 excludes the window from full-screen Spaces, so re-ordering
+/// before restoring flags silently fails — the earlier bug), then reposition + re-order only when
+/// the panel isn't visible on the active Space (a visible panel is left alone, so a dragged
+/// position survives).
+#[cfg(target_os = "macos")]
+fn reassert_panel(handle: &tauri::AppHandle, why: &str) {
+    use objc2::msg_send;
+    use objc2::runtime::AnyObject;
+    use tauri::Manager;
+    let Some(win) = handle.get_webview_window("notch") else { return };
+    let Ok(p) = win.ns_window() else { return };
+    if p.is_null() {
+        return;
+    }
+    let ptr = p as *mut AnyObject;
+    // SAFETY: workspace notifications post on the main thread; live NSWindow.
+    unsafe {
+        const WANT: usize = (1 << 0) | (1 << 4) | (1 << 8); // canJoinAllSpaces|stationary|fsAux
+        let _: () = msg_send![ptr, setCollectionBehavior: WANT];
+        let _: () = msg_send![ptr, setLevel: 25isize];
+        let visible: bool = msg_send![ptr, isVisible];
+        let on_active: bool = msg_send![ptr, isOnActiveSpace];
+        if !visible || !on_active {
+            reposition_to_cursor_screen(ptr);
+            let nil: *mut AnyObject = std::ptr::null_mut();
+            let _: () = msg_send![ptr, orderOut: nil];
+            let _: () = msg_send![ptr, orderFrontRegardless];
+            eprintln!("[shell] {why}: panel re-shown (was visible={visible} onActive={on_active})");
+        }
+    }
 }
 
 /// Bring the panel to where the user actually is — the ⌃⌥N "summon" action. Reposition to the
@@ -308,56 +344,43 @@ fn summon_to_active_space(app: &tauri::AppHandle) {
     let _ = app.emit("summon", ());
 }
 
-/// Event-driven Space + display follow (audit causes #2/#3): subscribe to
-/// `NSWorkspaceActiveSpaceDidChangeNotification` (fires on every desktop/full-screen switch) and on
-/// each fire (a) reposition the panel to the cursor's display and (b) if it isn't visible on the
-/// now-active Space, re-order it front. Event-driven → no ticker, no flicker while you work.
+/// Event-driven residency: re-assert the panel on BOTH desktop/full-screen switches
+/// (`NSWorkspaceActiveSpaceDidChange`) AND app activations (`NSWorkspaceDidActivateApplication` —
+/// clicking another app fires this WITHOUT a space change, and it was exactly the uncovered
+/// moment where the panel vanished). Both paths run `reassert_panel`: flags first, then re-show.
 #[cfg(target_os = "macos")]
 fn watch_space_changes(app: &tauri::App) {
     use objc2::runtime::AnyObject;
     use objc2::{class, msg_send};
     use objc2_foundation::NSString;
-    use tauri::Manager;
 
-    let handle = app.handle().clone();
-    // SAFETY: main thread (setup). The observer and block are intentionally leaked — they must
-    // live for the whole app lifetime.
+    // SAFETY: main thread (setup). Observers and blocks are intentionally leaked (app lifetime).
     unsafe {
         let workspace: *mut AnyObject = msg_send![class!(NSWorkspace), sharedWorkspace];
         if workspace.is_null() {
-            eprintln!("[shell] NSWorkspace nil — space watcher not installed");
+            eprintln!("[shell] NSWorkspace nil — watchers not installed");
             return;
         }
         let nc: *mut AnyObject = msg_send![workspace, notificationCenter];
         if nc.is_null() {
-            eprintln!("[shell] workspace notificationCenter nil — space watcher not installed");
+            eprintln!("[shell] workspace notificationCenter nil — watchers not installed");
             return;
         }
-        let name = NSString::from_str("NSWorkspaceActiveSpaceDidChangeNotification");
-        let block = block2::RcBlock::new(move |_notif: *mut AnyObject| {
-            // Space-change notifications arrive on the main thread; message the window directly.
-            let Some(win) = handle.get_webview_window("notch") else { return };
-            let Ok(p) = win.ns_window() else { return };
-            if p.is_null() {
-                return;
-            }
-            let ptr = p as *mut AnyObject;
-            // Follow to the cursor's display first (cheap, no flicker), then re-show only if needed.
-            reposition_to_cursor_screen(ptr);
-            let visible: bool = msg_send![ptr, isVisible];
-            let on_active: bool = msg_send![ptr, isOnActiveSpace];
-            if !visible || !on_active {
-                let nil: *mut AnyObject = std::ptr::null_mut();
-                let _: () = msg_send![ptr, orderOut: nil];
-                let _: () = msg_send![ptr, orderFrontRegardless];
-                eprintln!("[shell] space changed — panel moved to cursor screen + re-shown (was visible={visible} onActive={on_active})");
-            }
-        });
-        let nil_obj: *mut AnyObject = std::ptr::null_mut();
-        let _observer: *mut AnyObject =
-            msg_send![nc, addObserverForName: &*name, object: nil_obj, queue: nil_obj, usingBlock: &*block];
-        std::mem::forget(block);
-        eprintln!("[shell] space-change watcher installed");
+        for (name_str, why) in [
+            ("NSWorkspaceActiveSpaceDidChangeNotification", "space-changed"),
+            ("NSWorkspaceDidActivateApplicationNotification", "app-activated"),
+        ] {
+            let handle = app.handle().clone();
+            let name = NSString::from_str(name_str);
+            let block = block2::RcBlock::new(move |_notif: *mut AnyObject| {
+                reassert_panel(&handle, why);
+            });
+            let nil_obj: *mut AnyObject = std::ptr::null_mut();
+            let _obs: *mut AnyObject =
+                msg_send![nc, addObserverForName: &*name, object: nil_obj, queue: nil_obj, usingBlock: &*block];
+            std::mem::forget(block);
+        }
+        eprintln!("[shell] space + app-activation watchers installed");
     }
 }
 

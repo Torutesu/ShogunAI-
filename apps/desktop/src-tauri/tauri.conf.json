@@ -22,8 +22,8 @@
         "alwaysOnTop": true,
         "visibleOnAllWorkspaces": true,
         "shadow": false,
-        "width": 380,
-        "height": 440,
+        "width": 640,
+        "height": 300,
         "visible": true,
         "focus": false
       }

@@ -59,10 +59,10 @@ interface StateView {
 const IN_TAURI =
   typeof window !== "undefined" && ("__TAURI_INTERNALS__" in window || "__TAURI__" in window);
 
-// Window heights (width stays fixed so the Rust top-centre pin holds). Collapsed = just the handle.
-const W = 380;
-const H_OPEN = 440;
-const H_HANDLE = 52;
+// Window size (wide bar per feedback — 横長). Collapsed = just the handle strip.
+const W = 640;
+const H_OPEN = 300;
+const H_HANDLE = 44;
 
 const MOCK_STATUS: Status = { app: "com.apple.mail", commitments: 2, open_loops: 1, has_key: false };
 const MOCK_STATE: StateView = {
@@ -351,36 +351,45 @@ function Settings(props: {
   }, []);
   useEffect(refresh, [refresh]);
 
-  const recordKey = (action: string) => (e: React.KeyboardEvent): void => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (e.key === "Escape") {
+  // Capture the new combo at the WINDOW level (capture phase). Relying on the recording button's
+  // own focus proved fragile on device — clicks landed but keystrokes never did, so rebinding
+  // looked broken. A window listener catches keys no matter where focus sits inside the panel.
+  useEffect(() => {
+    if (!recording) return;
+    const action = recording;
+    const onKey = (e: KeyboardEvent): void => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.key === "Escape") {
+        setRecording(null);
+        setKeyErr("");
+        return;
+      }
+      if (["Control", "Alt", "Shift", "Meta"].includes(e.key)) return; // modifier alone: keep waiting
+      const mods = [
+        e.ctrlKey && "Control",
+        e.altKey && "Alt",
+        e.shiftKey && "Shift",
+        e.metaKey && "Super",
+      ].filter(Boolean) as string[];
+      if (mods.length === 0) {
+        setKeyErr(t.needModifier);
+        return;
+      }
+      const combo = [...mods, e.code].join("+");
       setRecording(null);
       setKeyErr("");
-      return;
-    }
-    if (["Control", "Alt", "Shift", "Meta"].includes(e.key)) return; // modifier alone: keep waiting
-    const mods = [
-      e.ctrlKey && "Control",
-      e.altKey && "Alt",
-      e.shiftKey && "Shift",
-      e.metaKey && "Super",
-    ].filter(Boolean) as string[];
-    if (mods.length === 0) {
-      setKeyErr(t.needModifier);
-      return;
-    }
-    const combo = [...mods, e.code].join("+");
-    setRecording(null);
-    setKeyErr("");
-    if (!IN_TAURI) {
-      setBinds((b) => ({ ...b, [action]: combo }));
-      return;
-    }
-    void invoke("set_shortcut", { action, combo })
-      .then(refresh)
-      .catch((err) => setKeyErr(String(err)));
-  };
+      if (!IN_TAURI) {
+        setBinds((b) => ({ ...b, [action]: combo }));
+        return;
+      }
+      void invoke("set_shortcut", { action, combo })
+        .then(refresh)
+        .catch((err) => setKeyErr(String(err)));
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [recording, refresh]);
 
   return (
     <div className="settings">
@@ -407,7 +416,14 @@ function Settings(props: {
             <div key={action} className="keys">
               <span className="keys__name">{label}</span>
               {recording === action ? (
-                <button className="keys__rec" type="button" autoFocus onKeyDown={recordKey(action)} onBlur={() => setRecording(null)}>
+                <button
+                  className="keys__rec"
+                  type="button"
+                  onClick={() => {
+                    setRecording(null);
+                    setKeyErr("");
+                  }}
+                >
                   {t.recordHint}
                 </button>
               ) : (
