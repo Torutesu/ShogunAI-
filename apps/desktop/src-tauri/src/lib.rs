@@ -467,13 +467,19 @@ fn reassert_panel(handle: &tauri::AppHandle, why: &'static str, defer: bool) {
                         *g = Some(std::time::Instant::now());
                     }
                     if nspanel_mode {
-                        eprintln!("[shell] {why}: rejoining active space (moveToActiveSpace flip + re-order)");
-                        let move_flip: usize = (1 << 1) | (1 << 8);
-                        let _: () = msg_send![ptr, setCollectionBehavior: move_flip];
+                        // EXACTLY the ⌥J summon sequence — the only recovery proven 100% on this
+                        // machine. The two on-device lessons: (a) reposition to the CURSOR's
+                        // display first — with two displays ("separate Spaces"), re-ordering on a
+                        // display whose Space is inactive does nothing, and this was the entire
+                        // difference between summon (works) and the old re-show (didn't);
+                        // (b) NO collectionBehavior flip around the re-order — the window server
+                        // applies property changes asynchronously, so flip→orderFront→restore in
+                        // one tick nullifies the flip before it ever acts.
+                        eprintln!("[shell] {why}: re-summoning panel to the cursor's display/space");
+                        reposition_to_cursor_screen(ptr);
                         let nil: *mut AnyObject = std::ptr::null_mut();
                         let _: () = msg_send![ptr, orderOut: nil];
                         let _: () = msg_send![ptr, orderFrontRegardless];
-                        let _: () = msg_send![ptr, setCollectionBehavior: want];
                         return;
                     }
                 }
@@ -651,10 +657,12 @@ fn spawn_panel_state_logger(app: &tauri::App) {
 
     let handle = app.handle().clone();
     let last: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
+    let stuck: Arc<Mutex<u32>> = Arc::new(Mutex::new(0));
     std::thread::spawn(move || loop {
         std::thread::sleep(std::time::Duration::from_millis(1000));
         let h = handle.clone();
         let last = last.clone();
+        let stuck = stuck.clone();
         let posted = handle.run_on_main_thread(move || {
             let Some(win) = h.get_webview_window("notch") else { return };
             let Ok(p) = win.ns_window() else { return };
@@ -663,7 +671,7 @@ fn spawn_panel_state_logger(app: &tauri::App) {
             }
             let ptr = p as *mut AnyObject;
             // SAFETY: getters + conditional property writes on the live NSWindow, main thread.
-            let s = unsafe {
+            let (s, healthy) = unsafe {
                 use objc2::class;
                 let visible: bool = msg_send![ptr, isVisible];
                 let on_active: bool = msg_send![ptr, isOnActiveSpace];
@@ -687,9 +695,12 @@ fn spawn_panel_state_logger(app: &tauri::App) {
                     let _: () = msg_send![ptr, setLevel: OVERLAY_LEVEL];
                     eprintln!("[panelstate] healed: level {level}→{OVERLAY_LEVEL} behavior {behavior}→{want}");
                 }
-                format!(
-                    "visible={visible} drawn={drawn} onActiveSpace={on_active} behavior={behavior} level={level} alpha={alpha:.2} appActive={app_active} origin=({:.0},{:.0})",
-                    frame.origin.x, frame.origin.y
+                (
+                    format!(
+                        "visible={visible} drawn={drawn} onActiveSpace={on_active} behavior={behavior} level={level} alpha={alpha:.2} appActive={app_active} origin=({:.0},{:.0})",
+                        frame.origin.x, frame.origin.y
+                    ),
+                    visible && on_active,
                 )
             };
             if let Ok(mut g) = last.lock() {
@@ -698,10 +709,28 @@ fn spawn_panel_state_logger(app: &tauri::App) {
                     *g = s;
                 }
             }
-            // HEARTBEAT: a visible panel that fell off the active Space gets the full
-            // summon-strength recovery every tick (worst-case ~1s even if a workspace
-            // notification was missed). reassert_panel no-ops when healthy or USER_HIDDEN.
-            reassert_panel(&h, "heartbeat", false);
+            // HEARTBEAT with EXPONENTIAL BACKOFF: a panel that stays off the active Space gets
+            // the summon-strength recovery at ticks 2, 4, 8, 16… (capped: every 30s) of a stuck
+            // streak — NOT every second. The e448c79 run proved a 1Hz orderOut/orderFront loop is
+            // self-defeating (constant blinking, occlusion never settles). Healthy → counter
+            // resets and the heartbeat stays silent.
+            let fire = {
+                let mut g = match stuck.lock() {
+                    Ok(g) => g,
+                    Err(_) => return,
+                };
+                if healthy || USER_HIDDEN.load(std::sync::atomic::Ordering::Relaxed) {
+                    *g = 0;
+                    false
+                } else {
+                    *g = g.saturating_add(1);
+                    let n = *g;
+                    n == 2 || n == 4 || n == 8 || n == 16 || (n > 16 && n % 30 == 0)
+                }
+            };
+            if fire {
+                reassert_panel(&h, "heartbeat", false);
+            }
         });
         if posted.is_err() {
             break; // app shutting down
