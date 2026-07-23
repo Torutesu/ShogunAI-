@@ -31,7 +31,11 @@ OAuthブラウザフロー、ライブMCP接続）はmacOSビルドが必要で�
 | `live`: reqwest JSON-RPC・OAuthループバック(`oauth_flow.rs`)・**Keychain TokenStore**・**自動リフレッシュProvider**(`ManagedTokenProvider`) | ⚠️ コンパイル可・**実接続はmacOS+実トークンで未検証** |
 | **core実結線**: `Db` が `IngestSink` 実装（`db`フィーチャで依存追加） | ✅ Linuxでビルド確認済 |
 | **デスクトップ実結線（`connectors.rs`）**: Tauriコマンド `connect_service`/`disconnect_service`/`connectors_list`、runtime所有、15分ポーラー、lib.rs登録 | ⚠️ macOS専用・**Linuxでコンパイル不可のため未検証**（ラフ実装） |
-| **接続管理UI（`Connections.tsx`）**: サービス一覧＋Connect/Disconnect＋状態表示 | ⚠️ ラフ実装・**未実行**（見た目は後で。Full UI/設定ウィンドウにマウント想定） |
+| **接続管理UI（`Connections.tsx`）**: サービス一覧＋Connect/Disconnect＋状態表示 | ✅ 設定ウィンドウにマウント済み・CI frontend green（見た目は後回しのラフ） |
+| **async connect** + `open_settings` + settingsウィンドウ + capabilities | ✅ CI macOS green |
+| **Wave 2 Slack（OPEN-03解決）**: 公式MCP `mcp.slack.com/mcp` 実在確認 → endpoints/toolmap/oauth(Slackネスト形式トークン対応・`AuthConfig::slack`) | ✅ 純ロジック実装・テスト済（ツール名は暫定 — wire-up時に `tools/list` と突合。Wave解放はFR-INT-03のゲート判断） |
+
+OAuthクライアント登録の人間側手順は `docs/oauth-client-setup.md` に分離。
 
 **この環境（Linux）で検証できたのはここまで。** 純ロジック（マッピング・PKCE・ゲート・状態遷移）は
 全部テスト付き。実I/O（ネットワーク・Keychain・ブラウザ）はmacOSビルドが必要で継ぎ目まで用意済み。

@@ -33,7 +33,16 @@ pub fn tool_for(service: Service, op_name: &str) -> Option<&'static str> {
         (Service::GoogleDrive, "read_on_demand") => Some("read_file_content"),
         (Service::GoogleDrive, "file_create") => Some("create_file"),
 
-        // Anything else (unknown op, or a non-Google service) has no Google MCP tool.
+        // ---- Slack (mcp.slack.com, Wave 2) ---------------------------------------------------
+        // PROVISIONAL names from Slack's documented capability list (search / send / react);
+        // confirm against the live server's tools/list at Wave-2 wire-up before first use.
+        (Service::Slack, "read_sync") => Some("search_messages"),
+        (Service::Slack, "post_message") => Some("send_message"),
+        (Service::Slack, "reaction") => Some("add_reaction"),
+        // draft_local / copy_to_clipboard are DEVICE-LOCAL by design (FR-INT-30) — never MCP.
+        (Service::Slack, "draft_local" | "copy_to_clipboard") => None,
+
+        // Anything else (unknown op, or a service without an MCP endpoint) has no tool.
         _ => None,
     }
 }
@@ -46,11 +55,15 @@ pub fn read_sync_tool(service: Service) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shogun_mcp::scope::{self, Gating};
+    use shogun_mcp::scope::{self, Gating, OpClass};
+
+    /// Every service with an official MCP endpoint today (Waves 1–2).
+    const MAPPED: [Service; 4] =
+        [Service::Gmail, Service::GoogleCalendar, Service::GoogleDrive, Service::Slack];
 
     #[test]
-    fn every_google_read_sync_has_a_tool() {
-        for s in [Service::Gmail, Service::GoogleCalendar, Service::GoogleDrive] {
+    fn every_mapped_service_read_sync_has_a_tool() {
+        for s in MAPPED {
             assert!(read_sync_tool(s).is_some(), "{s:?} read_sync must map to a tool");
         }
     }
@@ -62,25 +75,32 @@ mod tests {
     }
 
     #[test]
-    fn non_google_services_map_to_no_tool() {
-        assert_eq!(tool_for(Service::Slack, "read_sync"), None);
-        assert_eq!(tool_for(Service::Notion, "read_sync"), None);
+    fn device_local_slack_ops_have_no_mcp_tool() {
+        // FR-INT-30: the local draft and the clipboard fallback never leave the device.
+        assert_eq!(tool_for(Service::Slack, "draft_local"), None);
+        assert_eq!(tool_for(Service::Slack, "copy_to_clipboard"), None);
     }
 
     #[test]
-    fn every_implemented_google_op_except_send_maps_to_a_tool() {
-        // For each Google service, every scope-table op that is implemented (not NotImplemented and
-        // not the Composio-only send) must have a Google MCP tool — no implemented op is left
-        // unroutable.
-        for s in [Service::Gmail, Service::GoogleCalendar, Service::GoogleDrive] {
+    fn unmapped_wave3_services_map_to_no_tool() {
+        assert_eq!(tool_for(Service::Notion, "read_sync"), None);
+        assert_eq!(tool_for(Service::GitHub, "read_sync"), None);
+        assert_eq!(tool_for(Service::Linear, "read_sync"), None);
+    }
+
+    #[test]
+    fn every_routable_op_on_a_mapped_service_has_a_tool() {
+        // For each service with an endpoint, every scope-table op that goes over MCP (implemented,
+        // not the Composio-only send, not device-local) must map to a tool — nothing routable is
+        // left unroutable, and nothing device-local grows a network path.
+        for s in MAPPED {
             for op in scope::scope(s).ops {
-                let unroutable = matches!(op.gating, Gating::NotImplemented | Gating::ComposioOnly);
-                if unroutable {
-                    continue;
-                }
-                assert!(
+                let over_mcp = !matches!(op.gating, Gating::NotImplemented | Gating::ComposioOnly)
+                    && op.class != OpClass::DraftLocal;
+                assert_eq!(
                     tool_for(s, op.name).is_some(),
-                    "{s:?}::{} is implemented but maps to no MCP tool",
+                    over_mcp,
+                    "{s:?}::{} routing does not match its class/gating",
                     op.name
                 );
             }

@@ -20,6 +20,11 @@ use sha2::{Digest, Sha256};
 pub const GOOGLE_AUTH_ENDPOINT: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 pub const GOOGLE_TOKEN_ENDPOINT: &str = "https://oauth2.googleapis.com/token";
 
+/// Slack's user-token OAuth endpoints (Wave 2; Slack does not support Dynamic Client Registration,
+/// so a fixed Slack-app client id/secret is used — same confidential-client shape as Google).
+pub const SLACK_AUTH_ENDPOINT: &str = "https://slack.com/oauth/v2_user/authorize";
+pub const SLACK_TOKEN_ENDPOINT: &str = "https://slack.com/api/oauth.v2.user.access";
+
 /// The OAuth client configuration for one connection. `client_secret` is `None` for pure-PKCE
 /// clients; Google "Desktop app" clients still send a (non-confidential) secret, so it is optional.
 #[derive(Debug, Clone)]
@@ -45,6 +50,21 @@ impl AuthConfig {
             redirect_uri: redirect_uri.into(),
             auth_endpoint: GOOGLE_AUTH_ENDPOINT.to_string(),
             token_endpoint: GOOGLE_TOKEN_ENDPOINT.to_string(),
+        }
+    }
+
+    /// A Slack-endpoints config (Wave 2). Slack requires the client secret (confidential client).
+    pub fn slack(
+        client_id: impl Into<String>,
+        client_secret: impl Into<String>,
+        redirect_uri: impl Into<String>,
+    ) -> Self {
+        Self {
+            client_id: client_id.into(),
+            client_secret: Some(client_secret.into()),
+            redirect_uri: redirect_uri.into(),
+            auth_endpoint: SLACK_AUTH_ENDPOINT.to_string(),
+            token_endpoint: SLACK_TOKEN_ENDPOINT.to_string(),
         }
     }
 }
@@ -140,7 +160,17 @@ pub fn parse_redirect(request_line: &str) -> Result<(String, String), String> {
 
 #[derive(Debug, Deserialize)]
 struct RawTokenResponse {
-    access_token: String,
+    // Standard OAuth shape (Google): top-level fields.
+    access_token: Option<String>,
+    expires_in: Option<i64>,
+    refresh_token: Option<String>,
+    // Slack `oauth.v2.user.access` shape: the user token nests under `authed_user`.
+    authed_user: Option<RawAuthedUser>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawAuthedUser {
+    access_token: Option<String>,
     expires_in: Option<i64>,
     refresh_token: Option<String>,
 }
@@ -170,7 +200,9 @@ impl TokenSet {
 }
 
 /// Parse a token-endpoint JSON response into a [`TokenSet`], computing the absolute expiry from
-/// `now_ms + expires_in`. `prior_refresh` carries forward a refresh token the response omitted.
+/// `now_ms + expires_in`. Accepts both the standard flat OAuth shape (Google) and Slack's
+/// `authed_user`-nested user-token shape. `prior_refresh` carries forward a refresh token the
+/// response omitted.
 pub fn parse_token_response(
     body: &str,
     now_ms: i64,
@@ -178,11 +210,21 @@ pub fn parse_token_response(
 ) -> Result<TokenSet, String> {
     let raw: RawTokenResponse =
         serde_json::from_str(body).map_err(|_| "token response was not valid json".to_string())?;
+    // Prefer the flat shape; fall back to the nested Slack user token.
+    let nested = raw.authed_user;
+    let (access, expires_in, refresh) = match (raw.access_token, nested) {
+        (Some(at), _) => (at, raw.expires_in, raw.refresh_token),
+        (None, Some(u)) => match u.access_token {
+            Some(at) => (at, u.expires_in, u.refresh_token),
+            None => return Err("token response had no access token".to_string()),
+        },
+        (None, None) => return Err("token response had no access token".to_string()),
+    };
     // Default to a conservative 60 min if the server omitted expires_in.
-    let ttl_ms = raw.expires_in.unwrap_or(3600).saturating_mul(1000);
+    let ttl_ms = expires_in.unwrap_or(3600).saturating_mul(1000);
     Ok(TokenSet {
-        access_token: raw.access_token,
-        refresh_token: raw.refresh_token.or(prior_refresh),
+        access_token: access,
+        refresh_token: refresh.or(prior_refresh),
         expires_at_ms: now_ms.saturating_add(ttl_ms),
     })
 }
@@ -277,5 +319,29 @@ mod tests {
         let body = r#"{"access_token":"new","expires_in":3600}"#;
         let ts = parse_token_response(body, 0, Some("old-refresh".into())).unwrap();
         assert_eq!(ts.refresh_token.as_deref(), Some("old-refresh"));
+    }
+
+    #[test]
+    fn slack_nested_authed_user_token_is_parsed() {
+        // Slack oauth.v2.user.access nests the user token under authed_user.
+        let body = r#"{"ok":true,"app_id":"A1","authed_user":{"id":"U1","access_token":"xoxp-1","refresh_token":"xoxe-1","expires_in":43200}}"#;
+        let ts = parse_token_response(body, 1_000, None).unwrap();
+        assert_eq!(ts.access_token, "xoxp-1");
+        assert_eq!(ts.refresh_token.as_deref(), Some("xoxe-1"));
+        assert_eq!(ts.expires_at_ms, 1_000 + 43_200_000);
+    }
+
+    #[test]
+    fn response_with_no_token_anywhere_is_an_error() {
+        assert!(parse_token_response(r#"{"ok":false,"error":"invalid_code"}"#, 0, None).is_err());
+        assert!(parse_token_response(r#"{"authed_user":{"id":"U1"}}"#, 0, None).is_err());
+    }
+
+    #[test]
+    fn slack_config_uses_slack_endpoints_and_requires_secret() {
+        let c = AuthConfig::slack("cid", "csec", "http://127.0.0.1:1/callback");
+        assert_eq!(c.auth_endpoint, SLACK_AUTH_ENDPOINT);
+        assert_eq!(c.token_endpoint, SLACK_TOKEN_ENDPOINT);
+        assert_eq!(c.client_secret.as_deref(), Some("csec"));
     }
 }

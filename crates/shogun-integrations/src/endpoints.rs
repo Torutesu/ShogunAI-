@@ -1,16 +1,17 @@
-//! Service → Google Workspace official remote MCP endpoint + OAuth scopes.
+//! Service → official first-party remote MCP endpoint + OAuth scopes.
 //!
-//! First-layer connections go **directly** to Google's own first-party MCP servers (§6.9,
-//! FR-INT-01/02): user→Google OAuth, no third party in the data path (unlike Composio, the second
-//! layer). Only the services Google actually ships a remote MCP server for are mappable here.
+//! First-layer connections go **directly** to each vendor's own first-party MCP server (§6.9,
+//! FR-INT-01/02): user→service OAuth, no third party in the data path (unlike Composio, the second
+//! layer). Only services that actually ship an official remote MCP server are mappable here.
 //!
-//! Coverage (Google Workspace Developer Preview, verified 2026-07):
-//! - Gmail   → `gmailmcp.googleapis.com`
-//! - Calendar→ `calendarmcp.googleapis.com`
-//! - Drive → `drivemcp.googleapis.com` (also the read path for Google Docs/Sheets content, which have no dedicated MCP server of their own)
+//! Coverage (verified 2026-07):
+//! - Gmail   → `gmailmcp.googleapis.com` (Google Workspace Developer Preview)
+//! - Calendar→ `calendarmcp.googleapis.com` (same)
+//! - Drive → `drivemcp.googleapis.com` (same; also the read path for Google Docs/Sheets content, which have no dedicated MCP server of their own)
+//! - Slack → `mcp.slack.com` (Wave 2; OPEN-03 resolved — Slack ships an official remote MCP, JSON-RPC 2.0 over Streamable HTTP, workspace-admin approved)
 //!
-//! Slack / Notion / GitHub / Linear are later waves and are not Google endpoints — [`endpoint`]
-//! returns `None` for them (and for any service without an official remote MCP server).
+//! Notion / GitHub / Linear are Wave 3 and unverified — [`endpoint`] returns `None` for them (and
+//! for any service without an official remote MCP server).
 
 use shogun_mcp::scope::Service;
 
@@ -54,15 +55,23 @@ const DRIVE: McpEndpoint = McpEndpoint {
     ],
 };
 
-/// The official remote MCP endpoint for a service, if Google ships one. `None` means the service is
-/// not reachable over first-layer MCP (a non-Google service, or one without an MCP server).
+const SLACK: McpEndpoint = McpEndpoint {
+    url: "https://mcp.slack.com/mcp",
+    // User-token scopes for the Wave-2 op set (read_sync / post_message / reaction). Per-tool
+    // scopes are Slack-documented; confirm the final set against the Slack app config at wire-up.
+    scopes: &["search:read.public", "chat:write", "reactions:write"],
+};
+
+/// The official remote MCP endpoint for a service, if the vendor ships one. `None` means the
+/// service is not reachable over first-layer MCP today.
 pub fn endpoint(service: Service) -> Option<McpEndpoint> {
     match service {
         Service::Gmail => Some(GMAIL),
         Service::GoogleCalendar => Some(CALENDAR),
         Service::GoogleDrive => Some(DRIVE),
-        // Later waves / non-Google — no Google MCP endpoint.
-        Service::Slack | Service::Notion | Service::GitHub | Service::Linear => None,
+        Service::Slack => Some(SLACK),
+        // Wave 3 — official remote MCP availability unverified; add when confirmed.
+        Service::Notion | Service::GitHub | Service::Linear => None,
     }
 }
 
@@ -76,19 +85,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn google_workspace_services_have_endpoints() {
-        for s in [Service::Gmail, Service::GoogleCalendar, Service::GoogleDrive] {
-            let ep = endpoint(s).expect("google service has an endpoint");
+    fn wave1_and_wave2_services_have_https_endpoints_with_scopes() {
+        for s in [Service::Gmail, Service::GoogleCalendar, Service::GoogleDrive, Service::Slack] {
+            let ep = endpoint(s).expect("service has an endpoint");
             assert!(ep.url.starts_with("https://"), "{s:?} url must be https");
-            assert!(ep.url.ends_with("/mcp/v1"), "{s:?} url must be the mcp/v1 path");
             assert!(!ep.scopes.is_empty(), "{s:?} must request scopes");
         }
+        // Google servers share the /mcp/v1 path; Slack's is /mcp.
+        assert!(endpoint(Service::Gmail).unwrap().url.ends_with("/mcp/v1"));
+        assert_eq!(endpoint(Service::Slack).unwrap().url, "https://mcp.slack.com/mcp");
     }
 
     #[test]
-    fn non_google_services_have_no_endpoint() {
-        for s in [Service::Slack, Service::Notion, Service::GitHub, Service::Linear] {
-            assert!(endpoint(s).is_none(), "{s:?} is not a Google MCP endpoint");
+    fn wave3_services_have_no_endpoint_yet() {
+        for s in [Service::Notion, Service::GitHub, Service::Linear] {
+            assert!(endpoint(s).is_none(), "{s:?} has no verified official MCP endpoint");
             assert!(!has_endpoint(s));
         }
     }
