@@ -75,6 +75,7 @@ fn item_kind(service: Service) -> &'static str {
     match service {
         Service::Gmail => "email",
         Service::GoogleCalendar => "calendar_event",
+        Service::GoogleDrive => "file",
         Service::Slack => "message",
         Service::Notion => "page",
         Service::GitHub => "issue",

@@ -8,6 +8,31 @@
 - **重要**: コネクタの「設計」は既に完了している。本書は設計ではなく、
   既に空いている継ぎ目（trait）を実装で埋めるための計画である。
 
+## 実装状況（2026-07-23 更新 / 対象: Google Workspace 経由の第1層）
+
+スコープ判断: **公式リモートMCPが実在するのは Gmail / Calendar / Drive のみ**（Google
+Workspace Developer Preview で確認）。**Docs / Sheets には専用MCPサーバーが無い**ため、
+その中身はDriveの `read_file_content` 経由で読む（独立サービスにしない）。Gmail MCPには
+`send` ツールが無く scope も `gmail.compose` 止まり＝送信は第2層Composioのまま（要件通り）。
+
+この環境（Linux）で**検証できる純ロジックは実装・テスト済み**。実I/O（Keychain=macOS専用、
+OAuthブラウザフロー、ライブMCP接続）はmacOSビルドが必要で、継ぎ目まで用意した:
+
+| 内容 | 状態 |
+|---|---|
+| `shogun-mcp/scope.rs` に `GoogleDrive` サービス追加（Wave 1、read/read_on_demand/file_create=L3） | ✅ 実装・テスト済 |
+| `shogun-mcp/sync.rs` にDriveの `item_kind`（file） | ✅ |
+| 新規 `crates/shogun-integrations`（純層: endpoints / toolmap / result正規化 / rpc seam / transport） | ✅ 実装・テスト済（19テスト、clippyクリーン） |
+| `RemoteMcpTransport` が `IntegrationTransport` を実装（read_sync + execute書き込み） | ✅ 純ロジック検証済 |
+| `live` フィーチャ: reqwest JSON-RPCクライアント + macOS Keychain token source | ⚠️ コンパイル可・**実接続はmacOS+実トークンが必要で未検証** |
+| OAuth 2.1 + PKCEフロー（ブラウザ認可→トークン取得） | ⛔ 未着手（WP-B、macOS） |
+| daemon配線（15分ポーリング、event log追記、承認済み書き込み実行） | ⛔ 未着手（WP-C/WP-F、macOS） |
+| 接続管理UI | ⛔ 未着手（WP-E） |
+
+**次にmacOS環境でやること**: `live` の実接続確認（Google OAuthクライアントID/secret登録が前提、
+Developer Preview）→ OAuth+PKCEフロー（WP-B）→ daemonがtransportを所有してポーリング&
+書き込み実行（WP-C/WP-F）。`result.rs` のフィールドマッピングは実レスポンスで要確認（tolerant実装済）。
+
 ---
 
 ## 0. 現状の正確な地図（設計と実装のどこまで出来ているか）
