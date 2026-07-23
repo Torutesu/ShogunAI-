@@ -97,15 +97,12 @@ fn setup_macos(app: &tauri::App) {
         eprintln!("[shell] plain visible window (product surface). Set SHOGUN_NOTCH=1 to try the NSPanel.");
         if let Some(win) = app.get_webview_window("notch") {
             let _ = win.show();
-            // All-spaces / background float WITHOUT the NSPanel swap that blanks the webview: set
-            // the NSWindow collectionBehavior to canJoinAllSpaces (+ fullScreenAuxiliary) and a
-            // floating level. The plain window renders AND now follows the user across every space
-            // and over full-screen apps — the "どの画面でも見れる" requirement, minus the blank.
-            match win.set_visible_on_all_workspaces(true) {
-                Ok(()) => eprintln!("[shell] window set visible on all workspaces"),
-                Err(e) => eprintln!("[shell] set_visible_on_all_workspaces failed: {e}"),
-            }
-            let _ = win.set_always_on_top(true);
+            // All-spaces / background float WITHOUT the NSPanel swap that blanks the webview. Tauri's
+            // set_visible_on_all_workspaces only sets canJoinAllSpaces and proved insufficient on
+            // device (didn't follow spaces / show over full-screen). Set the NSWindow's
+            // collectionBehavior and level DIRECTLY instead — same recipe the NSPanel uses, but on
+            // the plain window that actually renders, so no class swap and no blank webview.
+            float_on_all_spaces(&win);
             eprintln!("[shell] window shown (all-spaces, floating)");
         }
     }
@@ -188,6 +185,43 @@ fn setup_macos(app: &tauri::App) {
         }
         Err(e) => eprintln!("[spike] memory DB unavailable — capture source not started: {e}"),
     }
+}
+
+/// Make the plain (rendering) window float on every Space and over full-screen apps by setting its
+/// NSWindow `collectionBehavior` + level directly — the same recipe the NSPanel uses, minus the
+/// window-class swap that blanks the wry webview on device. Runs on the main thread (setup).
+#[cfg(target_os = "macos")]
+fn float_on_all_spaces(win: &tauri::WebviewWindow) {
+    use objc2::msg_send;
+    use objc2::runtime::AnyObject;
+
+    let ptr = match win.ns_window() {
+        Ok(p) if !p.is_null() => p as *mut AnyObject,
+        Ok(_) => {
+            eprintln!("[shell] ns_window null — cannot set all-spaces behavior");
+            return;
+        }
+        Err(e) => {
+            eprintln!("[shell] ns_window unavailable: {e} — cannot set all-spaces behavior");
+            return;
+        }
+    };
+
+    // NSWindowCollectionBehavior bits: CanJoinAllSpaces (1<<0) | Stationary (1<<4) |
+    // FullScreenAuxiliary (1<<8). CanJoinAllSpaces makes it follow every Space; FullScreenAuxiliary
+    // lets it draw over other apps' full-screen spaces; Stationary keeps it put during Exposé.
+    let behavior: usize = (1 << 0) | (1 << 4) | (1 << 8);
+    // NSStatusWindowLevel (25): floats above ordinary and full-screen windows. Matches panel.rs;
+    // 25 is IME-safe (101 is the level that blocks input methods, tauri-nspanel #104).
+    let level: isize = 25;
+
+    // SAFETY: `ptr` is the live NSWindow owned by Tauri; we message it synchronously on the main
+    // thread. Both selectors take a scalar (NSUInteger / NSInteger) and return void.
+    unsafe {
+        let _: () = msg_send![ptr, setCollectionBehavior: behavior];
+        let _: () = msg_send![ptr, setLevel: level];
+    }
+    eprintln!("[shell] NSWindow set: collectionBehavior=all-spaces+fullscreen-aux, level=status(25)");
 }
 
 /// Register the ⌘⇧Space global shortcut → feed a Hotkey input to the engine (Idle→Expanded direct,
