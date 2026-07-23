@@ -93,13 +93,10 @@ fn setup_macos(app: &tauri::App) {
         }
     } else {
         eprintln!("[shell] normal window mode (set SHOGUN_NOTCH=1 for the notch overlay)");
-        // Launched from a terminal the window can open behind or unfocused — force it to show,
-        // centre, and take focus. (The app already shows as a normal window in ⌘Tab.)
+        // Show the panel (positioned under the notch just below).
         if let Some(win) = app.get_webview_window("notch") {
             let _ = win.show();
-            let _ = win.set_focus();
-            let _ = win.center();
-            eprintln!("[shell] window shown + focused");
+            eprintln!("[shell] notch panel shown");
         }
     }
 
@@ -123,15 +120,14 @@ fn setup_macos(app: &tauri::App) {
     // contradicts the notch-anchored layout (spec §3.1.3). x is centred on the screen
     // width; y=0 puts the window top at the screen top (the panel level is Status, so it
     // draws over the menu-bar band).
-    if std::env::var("SHOGUN_NOTCH").is_ok() {
-        if let Some(win) = app.get_webview_window("notch") {
-            let scale = win.scale_factor().unwrap_or(1.0);
-            let win_w = win.outer_size().map(|s| s.width as f64 / scale).unwrap_or(432.0);
-            let x = ((g.screen.w - win_w) / 2.0).max(0.0);
-            match win.set_position(tauri::LogicalPosition::new(x, 0.0)) {
-                Ok(()) => eprintln!("[spike] panel positioned at top-centre x={x:.0} y=0"),
-                Err(e) => eprintln!("[spike] set_position failed: {e}"),
-            }
+    // Pin the panel to the top-centre of the primary display so it hangs from the notch.
+    if let Some(win) = app.get_webview_window("notch") {
+        let scale = win.scale_factor().unwrap_or(1.0);
+        let win_w = win.outer_size().map(|s| s.width as f64 / scale).unwrap_or(400.0);
+        let x = ((g.screen.w - win_w) / 2.0).max(0.0);
+        match win.set_position(tauri::LogicalPosition::new(x, 0.0)) {
+            Ok(()) => eprintln!("[shell] panel pinned top-centre x={x:.0} y=0"),
+            Err(e) => eprintln!("[shell] set_position failed: {e}"),
         }
     }
 

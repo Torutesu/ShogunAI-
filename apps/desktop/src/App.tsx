@@ -1,12 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
-// SHOGUN product window. Real, live, wired to the backend:
-//  - shogun_status : what SHOGUN is reading + how much it knows (polled)
-//  - shogun_state  : the commitments / open loops it tracks (polled)
-//  - shogun_chat   : ask it anything, grounded in memory, on the BYOK Agent lane
-//  - inline_at_cursor : the ⌃⌥G draft-at-cursor
-// In a plain browser (no Tauri) it runs on mock data so the design iterates without a Mac.
+// SHOGUN notch panel — a translucent glass panel that hangs from the notch. Chat-first, live,
+// wired to the backend (shogun_status / shogun_state / shogun_chat / inline_at_cursor). In a plain
+// browser (no Tauri) it runs on mock data so the design iterates without a Mac.
 
 const IN_TAURI = typeof window !== "undefined" && ("__TAURI_INTERNALS__" in window || "__TAURI__" in window);
 
@@ -36,7 +33,6 @@ const MOCK_STATE: StateView = {
   open_loops: [{ text: "Waiting on legal sign-off", meta: "3d waiting" }],
 };
 
-/** A friendly app name from a bundle id ("com.apple.mail" → "Mail"). */
 function appName(bundle: string): string {
   if (!bundle) return "your screen";
   const seg = bundle.split(".").pop() || bundle;
@@ -50,7 +46,7 @@ export function App(): JSX.Element {
   const [input, setInput] = useState("");
   const [thinking, setThinking] = useState(false);
   const [appearance, setAppearance] = useState<Appearance>("dark");
-  const [draftNote, setDraftNote] = useState("");
+  const [showState, setShowState] = useState(false);
   const threadRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -59,7 +55,6 @@ export function App(): JSX.Element {
     else el.setAttribute("data-appearance", appearance);
   }, [appearance]);
 
-  // live polling
   useEffect(() => {
     if (!IN_TAURI) return;
     let live = true;
@@ -90,7 +85,7 @@ export function App(): JSX.Element {
       setThinking(false);
     };
     if (!IN_TAURI) {
-      setTimeout(() => finish("Here's what I'd do, grounded in your open loops — but connect a key to get real answers."), 900);
+      setTimeout(() => finish("I'd start with the overdue deck for Alice — want me to draft it at your cursor?"), 800);
       return;
     }
     void invoke<string>("shogun_chat", { message: q })
@@ -99,110 +94,97 @@ export function App(): JSX.Element {
   };
 
   const draftAtCursor = (): void => {
-    setDraftNote("Put your cursor in any app, then press ⌃⌥G — the draft appears right there.");
     if (IN_TAURI) void invoke("inline_at_cursor").catch(() => undefined);
   };
 
+  const totalState = state.commitments.length + state.open_loops.length;
   const live = appName(status?.app || "");
 
   return (
-    <div className="app">
-      <header className="bar">
-        <div className="brand">
-          <span className="brand__mark">⚔</span>
-          <span className="brand__name">SHOGUN</span>
-          <span className="live" title="SHOGUN is reading the focused app">
-            <span className="live__dot" /> reading {live}
+    <div className="wrap">
+      <div className="tongue" />
+      <div className="panel">
+        <header className="head">
+          <span className="live">
+            <span className="live__dot" />
+            reading <b>{live}</b>
           </span>
-        </div>
-        <div className="seg" role="group" aria-label="Appearance">
-          {(["auto", "light", "dark"] as Appearance[]).map((a) => (
-            <button key={a} type="button" aria-pressed={appearance === a} onClick={() => setAppearance(a)}>
-              {a[0].toUpperCase() + a.slice(1)}
+          <div className="head__right">
+            {totalState > 0 ? (
+              <button className="chip" type="button" onClick={() => setShowState((v) => !v)} aria-pressed={showState}>
+                {state.commitments.length} due · {state.open_loops.length} waiting
+              </button>
+            ) : null}
+            <button
+              className="icon"
+              type="button"
+              title="Theme"
+              onClick={() => setAppearance((a) => (a === "dark" ? "light" : a === "light" ? "auto" : "dark"))}
+            >
+              {appearance === "dark" ? "◐" : appearance === "light" ? "◑" : "◒"}
             </button>
-          ))}
-        </div>
-      </header>
+          </div>
+        </header>
 
-      <div className="body">
-        <main className="chat">
-          <div className="thread" ref={threadRef}>
-            {msgs.length === 0 ? (
-              <div className="welcome">
-                <h1>What can I take off your plate?</h1>
-                <p>
-                  Ask me anything about your work — I answer from what's on your screen and what I remember. Or put
-                  your cursor in any app and press <kbd>⌃</kbd><kbd>⌥</kbd><kbd>G</kbd> to draft right there.
-                </p>
-                {!status?.has_key && IN_TAURI ? (
-                  <p className="hintkey">No key yet — I'll echo for now. Add your key to get real answers.</p>
-                ) : null}
+        {showState ? (
+          <div className="state">
+            {state.commitments.map((c, i) => (
+              <div key={`c${i}`} className="state__row">
+                <span className="state__text">{c.text}</span>
+                <span className={`state__meta ${c.meta === "overdue" ? "is-over" : ""}`}>{c.meta}</span>
               </div>
-            ) : (
-              msgs.map((m, i) => (
-                <div key={i} className={`msg msg--${m.role}`}>
-                  {m.text}
-                </div>
-              ))
-            )}
-            {thinking ? <div className="msg msg--shogun msg--thinking">…</div> : null}
+            ))}
+            {state.open_loops.map((l, i) => (
+              <div key={`l${i}`} className="state__row">
+                <span className="state__text">{l.text}</span>
+                <span className="state__meta">{l.meta}</span>
+              </div>
+            ))}
           </div>
+        ) : null}
 
-          {draftNote ? <div className="draftnote">{draftNote}</div> : null}
+        <div className="thread" ref={threadRef}>
+          {msgs.length === 0 ? (
+            <div className="welcome">
+              <div className="welcome__t">What can I take off your plate?</div>
+              <div className="welcome__s">
+                Ask about your work, or press <kbd>⌃</kbd><kbd>⌥</kbd><kbd>G</kbd> in any app to draft at your cursor.
+              </div>
+              {IN_TAURI && status && !status.has_key ? (
+                <div className="welcome__key">No key yet — I'll echo. Add a key for real answers.</div>
+              ) : null}
+            </div>
+          ) : (
+            msgs.map((m, i) => (
+              <div key={i} className={`msg msg--${m.role}`}>
+                {m.text}
+              </div>
+            ))
+          )}
+          {thinking ? <div className="msg msg--shogun msg--think">…</div> : null}
+        </div>
 
-          <div className="composer">
-            <button className="composer__draft" type="button" onClick={draftAtCursor} title="Draft at your cursor (⌃⌥G)">
-              ✎ Draft at cursor
-            </button>
-            <input
-              className="composer__input"
-              placeholder="Ask SHOGUN, or tell it what to do…"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  send();
-                }
-              }}
-            />
-            <button className="composer__send" type="button" onClick={send} disabled={!input.trim() || thinking}>
-              ↑
-            </button>
-          </div>
-        </main>
-
-        <aside className="side">
-          <div className="side__group">
-            <div className="side__h">Commitments</div>
-            {state.commitments.length ? (
-              state.commitments.map((c, i) => (
-                <div key={i} className="item">
-                  <div className="item__text">{c.text}</div>
-                  <div className={`item__meta ${c.meta === "overdue" ? "is-over" : ""}`}>{c.meta}</div>
-                </div>
-              ))
-            ) : (
-              <div className="item item--empty">Nothing due.</div>
-            )}
-          </div>
-          <div className="side__group">
-            <div className="side__h">Open loops</div>
-            {state.open_loops.length ? (
-              state.open_loops.map((l, i) => (
-                <div key={i} className="item">
-                  <div className="item__text">{l.text}</div>
-                  <div className="item__meta">{l.meta}</div>
-                </div>
-              ))
-            ) : (
-              <div className="item item--empty">Nothing waiting.</div>
-            )}
-          </div>
-        </aside>
+        <div className="composer">
+          <button className="composer__draft" type="button" onClick={draftAtCursor} title="Draft at your cursor (⌃⌥G)">
+            ✎
+          </button>
+          <input
+            className="composer__input"
+            placeholder="Ask SHOGUN…"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                send();
+              }
+            }}
+          />
+          <button className="composer__send" type="button" onClick={send} disabled={!input.trim() || thinking}>
+            ↑
+          </button>
+        </div>
       </div>
-
-      <footer className="foot">Everything stays on this Mac. SHOGUN drafts — you send, in your own app.</footer>
     </div>
   );
 }

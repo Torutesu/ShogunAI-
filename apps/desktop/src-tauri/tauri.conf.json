@@ -16,17 +16,15 @@
       {
         "label": "notch",
         "title": "SHOGUN",
-        "transparent": false,
-        "decorations": true,
-        "resizable": true,
-        "alwaysOnTop": false,
-        "shadow": true,
-        "width": 820,
-        "height": 600,
-        "minWidth": 480,
-        "minHeight": 420,
+        "transparent": true,
+        "decorations": false,
+        "resizable": false,
+        "alwaysOnTop": true,
+        "shadow": false,
+        "width": 400,
+        "height": 520,
         "visible": true,
-        "focus": true
+        "focus": false
       }
     ],
     "security": {
