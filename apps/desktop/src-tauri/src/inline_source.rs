@@ -129,7 +129,9 @@ pub mod mac {
         Mock(MockAgentClient),
         Real {
             rt: tokio::runtime::Runtime,
-            client: AnthropicAgentClient<ReqwestTransport, DbTraceabilitySink>,
+            // Boxed: this variant is far larger than `Mock`, so box the client to keep the enum
+            // small (clippy::large_enum_variant). `Box<T>` derefs, so `.complete()` is unchanged.
+            client: Box<AnthropicAgentClient<ReqwestTransport, DbTraceabilitySink>>,
         },
     }
 
@@ -167,7 +169,7 @@ pub mod mac {
                     AnthropicConfig::new(DRAFT_MODEL),
                 );
                 eprintln!("[inline] BYOK key found — using the live Agent lane");
-                InlineAgent::Real { rt, client }
+                InlineAgent::Real { rt, client: Box::new(client) }
             }
             _ => {
                 eprintln!("[inline] transport/runtime unavailable — using echo mock");

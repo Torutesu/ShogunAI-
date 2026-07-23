@@ -12,9 +12,6 @@
 #![allow(dead_code)]
 
 #[cfg(target_os = "macos")]
-pub use mac::{spawn_sync_poller, ConnectorState};
-
-#[cfg(target_os = "macos")]
 pub mod mac {
     use std::net::TcpListener;
     use std::sync::{Arc, Mutex};
