@@ -295,6 +295,13 @@ unsafe fn pin_top_centre(ptr: *mut objc2::runtime::AnyObject) {
 /// before restoring flags silently fails — the earlier bug), then reposition + re-order only when
 /// the panel isn't visible on the active Space (a visible panel is left alone, so a dragged
 /// position survives).
+/// Debounce for the re-show cycle. On-device evidence: one app switch fires app-activated +
+/// space-changed + two deferreds — four orderOut→orderFront cycles back-to-back, each yanking the
+/// panel across displays after it had ALREADY joined the new Space (drawn=true flipped back to
+/// false every time). We were DoS-ing our own panel; the recipe itself works.
+#[cfg(target_os = "macos")]
+static REASSERT_AT: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+
 #[cfg(target_os = "macos")]
 fn reassert_panel(handle: &tauri::AppHandle, why: &'static str, defer: bool) {
     use objc2::msg_send;
@@ -314,23 +321,37 @@ fn reassert_panel(handle: &tauri::AppHandle, why: &'static str, defer: bool) {
         let _: () = msg_send![ptr, setAlphaValue: 1.0f64];
         let visible: bool = msg_send![ptr, isVisible];
         let on_active: bool = msg_send![ptr, isOnActiveSpace];
-        if !visible || !on_active {
-            reposition_to_cursor_screen(ptr);
-            let nil: *mut AnyObject = std::ptr::null_mut();
-            let _: () = msg_send![ptr, orderOut: nil];
-            eprintln!("[shell] {why}: panel re-shown (was visible={visible} onActive={on_active})");
+        // Healthy → flags asserted above are enough. NO ordering: an orderFront on a joined panel
+        // was part of the churn that knocked it back off the Space.
+        if visible && on_active {
+            return;
         }
-        // ALWAYS re-order front (nonactivating; steals no focus). Even when state reads fine, the
-        // system may be mid-transition — ordering is cheap and guarantees z-position in our level.
+        // Debounce the destructive part: a re-show cycle needs a moment to settle before the
+        // next event judges it (isOnActiveSpace reads stale immediately after ordering).
+        {
+            let mut g = match REASSERT_AT.lock() {
+                Ok(g) => g,
+                Err(_) => return,
+            };
+            if let Some(t) = *g {
+                if t.elapsed() < std::time::Duration::from_millis(300) {
+                    return; // a cycle just ran; let it settle
+                }
+            }
+            *g = Some(std::time::Instant::now());
+        }
+        // Re-show IN PLACE (no display hop — chasing the cursor's screen here bounced the panel
+        // between displays on every event; explicit ⌥J summon still repositions).
+        let nil: *mut AnyObject = std::ptr::null_mut();
+        let _: () = msg_send![ptr, orderOut: nil];
         let _: () = msg_send![ptr, orderFrontRegardless];
+        eprintln!("[shell] {why}: panel re-shown (was visible={visible} onActive={on_active})");
     }
-    // RACE GUARD: tao's own focus handlers can run AFTER this notification and undo the flags we
-    // just set — our fix then loses by ordering, not by correctness. Re-run once ~350ms later so
-    // the last word is ours. One shot, no recursion.
+    // One settle-check ~400ms later (post-debounce) in case the cycle lost a race with tao.
     if defer {
         let h = handle.clone();
         std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(350));
+            std::thread::sleep(std::time::Duration::from_millis(400));
             let h2 = h.clone();
             let _ = h.run_on_main_thread(move || reassert_panel(&h2, "deferred", false));
         });
