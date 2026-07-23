@@ -218,10 +218,11 @@ fn set_accessory_activation() {
 }
 
 /// Keep the panel on whatever Space is active. canJoinAllSpaces isn't honored on device (confirmed
-/// set but ignored), so instead of relying on the OS to mirror the window everywhere, we pull it
-/// onto the current Space with `orderFrontRegardless` on a light ticker. Switching desktops or going
-/// full-screen then shows the panel within ~half a second. Nonactivating orderFront doesn't steal
-/// focus, so typing/other apps are unaffected.
+/// set but ignored — even bundled, likely a window manager), so a 400ms ticker checks
+/// `isOnActiveSpace` and, only when the panel is NOT on the current Space, re-assigns it there
+/// (orderOut clears the old assignment, orderFrontRegardless re-adds it to the active Space).
+/// Skipping the no-op case means no flicker while you use it; it only moves when you switch
+/// desktops / go full-screen. Nonactivating orderFront doesn't steal focus.
 #[cfg(target_os = "macos")]
 fn keep_on_active_space(app: &tauri::App, win: tauri::WebviewWindow) {
     use objc2::msg_send;
@@ -234,9 +235,21 @@ fn keep_on_active_space(app: &tauri::App, win: tauri::WebviewWindow) {
             if let Ok(p) = w.ns_window() {
                 if !p.is_null() {
                     let ptr = p as *mut AnyObject;
-                    // SAFETY: live NSWindow, messaged on the main thread; returns void.
+                    // SAFETY: live NSWindow, messaged on the main thread.
                     unsafe {
-                        let _: () = msg_send![ptr, orderFrontRegardless];
+                        // Only act when the panel is NOT on the Space the user is looking at. Asking
+                        // the OS to keep it everywhere (canJoinAllSpaces) is ignored on this machine,
+                        // so instead we detect "not here" and pull it here: orderOut clears the stale
+                        // Space assignment, orderFrontRegardless re-adds the window to the CURRENTLY
+                        // active Space. Because we skip this when it's already on the active Space,
+                        // there's no flicker while you're using it — it only moves when you switch
+                        // desktops / go full-screen. Works regardless of window managers.
+                        let on_active: bool = msg_send![ptr, isOnActiveSpace];
+                        if !on_active {
+                            let nil: *mut AnyObject = std::ptr::null_mut();
+                            let _: () = msg_send![ptr, orderOut: nil];
+                            let _: () = msg_send![ptr, orderFrontRegardless];
+                        }
                     }
                 }
             }
