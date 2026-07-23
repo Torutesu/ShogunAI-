@@ -79,6 +79,14 @@ pub fn run() {
 fn setup_macos(app: &tauri::App) {
     use tauri::Manager;
 
+    // Loud identity banner: if more than one SHOGUN is alive (e.g. a stale bundled "SHOGUN
+    // Spike.app" left running from an earlier `open`), the visible panel may be the OLD process
+    // while shortcuts hit the new one — which looks exactly like "quit button dead, drag dead".
+    // The PID makes that unambiguous in the log.
+    eprintln!("========================================================");
+    eprintln!("[shell] SHOGUN starting — pid {} — build: plain-window/drag/quit", std::process::id());
+    eprintln!("========================================================");
+
     // DEFAULT = a plain, normal, always-on-top window. Hard lesson from on-device: the
     // nonactivating NSPanel broke everything the user actually needs — it can't be dragged
     // (startDragging is a no-op on a nonactivating panel), fought Quit, and never followed Spaces

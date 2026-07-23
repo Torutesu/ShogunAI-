@@ -2,6 +2,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
+
+// Explicit window drag on mouse-down. data-tauri-drag-region proved unreliable on device, so call
+// startDragging() directly. Ignore drags that start on an interactive control (button/input).
+function beginDrag(e: React.MouseEvent): void {
+  if (!IN_TAURI || e.button !== 0) return;
+  const el = e.target as HTMLElement;
+  if (el.closest("button, input, a, [data-no-drag]")) return;
+  void getCurrentWindow().startDragging().catch(() => undefined);
+}
 import { t } from "./strings";
 
 // SHOGUN panel. A visible, interactive window that hangs from the notch. Opening/closing is driven
@@ -187,7 +196,7 @@ export function App(): JSX.Element {
           <Settings appearance={appearance} setAppearance={setAppearance} hasKey={!!status?.has_key} onDone={() => setShowSettings(false)} />
         ) : (
           <>
-            <header className="head" data-tauri-drag-region>
+            <header className="head" data-tauri-drag-region onMouseDown={beginDrag}>
               <span className="live" data-tauri-drag-region>
                 <span className="live__dot" />
                 {t.reading} <b>{live}</b>
