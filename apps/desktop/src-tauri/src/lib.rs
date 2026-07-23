@@ -78,24 +78,27 @@ pub fn run() {
 fn setup_macos(app: &tauri::App) {
     use tauri::Manager;
 
-    // The notch NSPanel is the product surface: an all-spaces, over-the-menu-bar, nonactivating
-    // panel that hovers from the notch and stays visible in the background on every space/screen
-    // (spec §3.1.2). It is the DEFAULT. `SHOGUN_NO_NOTCH=1` falls back to a plain window (a
-    // debugging escape hatch when the NSPanel swap misbehaves on a given machine); the core
-    // (capture, memory, ⌥ draft-at-cursor) is unaffected either way.
-    if std::env::var("SHOGUN_NO_NOTCH").is_ok() {
-        eprintln!("[shell] plain window mode (unset SHOGUN_NO_NOTCH for the notch panel)");
-        if let Some(win) = app.get_webview_window("notch") {
-            let _ = win.show();
-            eprintln!("[shell] window shown");
-        }
-    } else {
+    // RENDERING REALITY (on-device, this machine): swapping the window to an NSPanel blanks the
+    // wry webview (nothing draws — ⌘⇧J and hover both dead because there is no visible surface),
+    // while the plain window renders fine. So the DEFAULT is a plain, visible, INTERACTIVE window
+    // that actually shows the product and takes clicks. The NSPanel path (all-spaces / over the
+    // menu bar) is gated behind `SHOGUN_NOTCH=1` for on-device debugging of the blank-webview
+    // issue — it is NOT the default until it renders. The core (capture, memory, ⌃⌥G draft) is
+    // unaffected either way.
+    if std::env::var("SHOGUN_NOTCH").is_ok() {
         match app.get_webview_window("notch") {
             Some(win) => match panel::install(&win) {
-                Ok(()) => eprintln!("[shell] notch panel installed (all-spaces, over menu bar, hover-reveal)"),
-                Err(e) => eprintln!("[shell] panel install failed: {e} — falling back to a plain window"),
+                Ok(()) => eprintln!("[shell] NSPanel installed (experimental — SHOGUN_NOTCH=1)"),
+                Err(e) => eprintln!("[shell] panel install failed: {e}"),
             },
             None => eprintln!("[spike] no 'notch' window — panel not installed"),
+        }
+    } else {
+        eprintln!("[shell] plain visible window (product surface). Set SHOGUN_NOTCH=1 to try the NSPanel.");
+        if let Some(win) = app.get_webview_window("notch") {
+            let _ = win.show();
+            let _ = win.set_focus();
+            eprintln!("[shell] window shown");
         }
     }
 
