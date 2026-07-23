@@ -103,6 +103,21 @@ fn setup_macos(app: &tauri::App) {
             // collectionBehavior and level DIRECTLY instead — same recipe the NSPanel uses, but on
             // the plain window that actually renders, so no class swap and no blank webview.
             float_on_all_spaces(&win);
+            // Re-apply after startup settles: tao/wry can reset collectionBehavior when the window
+            // is shown/resized (the webview also resizes itself on mount), which would wipe our
+            // all-spaces flag right after we set it. Re-assert a few times so it sticks; the
+            // readback log tells us whether it was being clobbered.
+            {
+                let handle = app.handle().clone();
+                let win2 = win.clone();
+                std::thread::spawn(move || {
+                    for ms in [400u64, 1200, 3000] {
+                        std::thread::sleep(std::time::Duration::from_millis(ms));
+                        let w = win2.clone();
+                        let _ = handle.run_on_main_thread(move || float_on_all_spaces(&w));
+                    }
+                });
+            }
             eprintln!("[shell] window shown (all-spaces, floating)");
         }
     }
@@ -216,12 +231,16 @@ fn float_on_all_spaces(win: &tauri::WebviewWindow) {
     let level: isize = 25;
 
     // SAFETY: `ptr` is the live NSWindow owned by Tauri; we message it synchronously on the main
-    // thread. Both selectors take a scalar (NSUInteger / NSInteger) and return void.
+    // thread. The setters take a scalar (NSUInteger / NSInteger) and return void; the getters
+    // return the same scalar so we can confirm the value actually stuck (tao/wry may re-apply its
+    // own collectionBehavior during startup and silently clobber ours).
     unsafe {
         let _: () = msg_send![ptr, setCollectionBehavior: behavior];
         let _: () = msg_send![ptr, setLevel: level];
+        let got: usize = msg_send![ptr, collectionBehavior];
+        let lvl: isize = msg_send![ptr, level];
+        eprintln!("[shell] NSWindow collectionBehavior set={behavior} readback={got} level={lvl}");
     }
-    eprintln!("[shell] NSWindow set: collectionBehavior=all-spaces+fullscreen-aux, level=status(25)");
 }
 
 /// Register the ⌘⇧Space global shortcut → feed a Hotkey input to the engine (Idle→Expanded direct,
