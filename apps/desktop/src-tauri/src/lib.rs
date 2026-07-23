@@ -556,6 +556,12 @@ fn build_panel_window(handle: &tauri::AppHandle) {
         eprintln!("[shell] respawn: old window still present — will retry on the next event");
         return;
     }
+    // ORDER MATTERS: the window is built HIDDEN, converted to an NSPanel, and only THEN shown.
+    // The window server classifies a window on its FIRST show — a window first shown as a
+    // regular window keeps regular-window Space behavior even after the NSPanel class swap
+    // (observed: even a fresh Accessory-born window stayed off the active Space when it was
+    // shown before the swap). Panels shown as panels from the start are what the reference
+    // overlays do.
     let builder = tauri::WebviewWindowBuilder::new(handle, "notch", tauri::WebviewUrl::default())
         .title("SHOGUN")
         .transparent(true)
@@ -564,7 +570,7 @@ fn build_panel_window(handle: &tauri::AppHandle) {
         .always_on_top(true)
         .shadow(true)
         .inner_size(640.0, 300.0)
-        .visible(true)
+        .visible(false)
         .focused(false);
     match builder.build() {
         Ok(win) => {
@@ -800,8 +806,13 @@ fn float_on_all_spaces(win: &tauri::WebviewWindow) {
         let got: usize = msg_send![ptr, collectionBehavior];
         let lvl: isize = msg_send![ptr, level];
         let hides: bool = msg_send![ptr, hidesOnDeactivate];
+        // Diagnostics: styleMask bit 7 (1<<7=128) = nonactivatingPanel; the class must be the
+        // swapped NotchPanel for the window server to treat this as a true panel.
+        let mask: usize = msg_send![ptr, styleMask];
+        let cls: *const objc2::runtime::AnyClass = msg_send![ptr, class];
+        let cls_name = if cls.is_null() { "?" } else { (*cls).name().to_str().unwrap_or("?") };
         eprintln!(
-            "[shell] NSWindow behavior set={behavior} readback={got} level={lvl} hidesOnDeactivate={hides}, ordered front"
+            "[shell] NSWindow behavior set={behavior} readback={got} level={lvl} hidesOnDeactivate={hides} styleMask={mask} class={cls_name}, ordered front"
         );
     }
 }
