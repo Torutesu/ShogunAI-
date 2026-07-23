@@ -266,10 +266,13 @@ fn float_on_all_spaces(win: &tauri::WebviewWindow) {
         }
     };
 
-    // NSWindowCollectionBehavior bits: CanJoinAllSpaces (1<<0) | Stationary (1<<4) |
-    // FullScreenAuxiliary (1<<8). CanJoinAllSpaces makes it follow every Space; FullScreenAuxiliary
-    // lets it draw over other apps' full-screen spaces; Stationary keeps it put during Exposé.
-    let behavior: usize = (1 << 0) | (1 << 4) | (1 << 8);
+    // NSWindowCollectionBehavior bits. CanJoinAllSpaces (1<<0) is IGNORED on this machine (set,
+    // reads back, but the window never appears on other Spaces). Use MoveToActiveSpace (1<<1)
+    // instead: when the window is ordered front it RELOCATES to the currently-active Space — which,
+    // paired with the 400ms orderFrontRegardless ticker, makes the panel jump to whatever desktop
+    // you switch to. FullScreenAuxiliary (1<<8) lets it draw over other apps' full-screen spaces.
+    // (CanJoinAllSpaces and MoveToActiveSpace are mutually exclusive — use only MoveToActiveSpace.)
+    let behavior: usize = (1 << 1) | (1 << 8);
     // NSStatusWindowLevel (25): floats above ordinary and full-screen windows. Matches panel.rs;
     // 25 is IME-safe (101 is the level that blocks input methods, tauri-nspanel #104).
     let level: isize = 25;
