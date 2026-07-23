@@ -47,6 +47,7 @@ pub fn run() {
         connectors::mac::connectors_list,
         connectors::mac::connect_service,
         connectors::mac::disconnect_service,
+        connectors::mac::open_settings,
     ]);
 
     // NOTE: do NOT add .on_page_load here — with the NSPanel-swapped window it trips a

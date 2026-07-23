@@ -26,7 +26,7 @@ pub mod mac {
     use shogun_integrations::runtime::{ConnectorRuntime, DEFAULT_SYNC_INTERVAL_MS};
     use shogun_integrations::token::{ManagedTokenProvider, TokenStore};
     use shogun_integrations::RemoteMcpTransport;
-    use shogun_mcp::scope::{from_source, Wave};
+    use shogun_mcp::scope::{from_source, Service, Wave};
 
     /// Same Keychain "service" field as the BYOK key (inline_source.rs) — one SHOGUN namespace.
     const KEYCHAIN_SERVICE: &str = "com.selectkk.shogun";
@@ -89,17 +89,31 @@ pub mod mac {
     /// Connect a service: run the loopback OAuth+PKCE flow, persist the token to the Keychain, and
     /// mark it connected. `service` is the source id (`gmail` / `gcal` / `gdrive`).
     ///
-    /// NOTE (rough): this is a synchronous command, so it blocks its thread while the user completes
-    /// consent in the browser. For production, make it `async` and run the flow via
-    /// `tauri::async_runtime::spawn_blocking` (cloning the `Arc`/`Db` out of `State` first) so the UI
-    /// stays responsive during the wait.
+    /// Async: the blocking flow (which waits for the user to finish consent in the browser) runs on a
+    /// blocking thread via `spawn_blocking`, so the UI stays responsive. `State` isn't `Send`, so the
+    /// `Arc`/`Db` handles are cloned out before the work moves onto that thread.
     #[tauri::command]
-    pub fn connect_service(
+    pub async fn connect_service(
         service: String,
         state: tauri::State<'_, ConnectorState>,
         db: tauri::State<'_, Db>,
     ) -> Result<(), String> {
         let svc = from_source(&service).ok_or_else(|| format!("unknown service: {service}"))?;
+        let runtime = state.0.clone();
+        let db = (*db).clone();
+        tauri::async_runtime::spawn_blocking(move || connect_blocking(svc, &service, &runtime, &db))
+            .await
+            .map_err(|e| format!("connect task failed: {e}"))?
+    }
+
+    /// The blocking half of [`connect_service`]: bind the loopback listener, run the OAuth flow, save
+    /// the token, and mark the service connected. Runs off the UI thread.
+    fn connect_blocking(
+        svc: Service,
+        service: &str,
+        runtime: &Arc<Mutex<ConnectorRuntime<Transport>>>,
+        db: &Db,
+    ) -> Result<(), String> {
         let scopes = shogun_integrations::endpoints::endpoint(svc)
             .ok_or_else(|| format!("{service} has no first-layer MCP endpoint"))?
             .scopes;
@@ -115,8 +129,18 @@ pub mod mac {
 
         // Persist to the Keychain (invariant 7) and flip the connection state to Connected.
         KeychainTokenStore::new(KEYCHAIN_SERVICE).save(svc, &tokens)?;
-        state.0.lock().map_err(|_| "runtime lock poisoned".to_string())?.mark_connected(svc, db.now_ms());
+        runtime.lock().map_err(|_| "runtime lock poisoned".to_string())?.mark_connected(svc, db.now_ms());
         eprintln!("[connectors] connected {service}");
+        Ok(())
+    }
+
+    /// Show the Settings window (which renders the connections screen). Created hidden at launch.
+    #[tauri::command]
+    pub fn open_settings(app: tauri::AppHandle) -> Result<(), String> {
+        use tauri::Manager;
+        let win = app.get_webview_window("settings").ok_or("no settings window")?;
+        win.show().map_err(|e| e.to_string())?;
+        win.set_focus().map_err(|e| e.to_string())?;
         Ok(())
     }
 

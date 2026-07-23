@@ -25,6 +25,14 @@
         "height": 560,
         "visible": true,
         "focus": false
+      },
+      {
+        "label": "settings",
+        "title": "SHOGUN Settings",
+        "width": 560,
+        "height": 640,
+        "resizable": true,
+        "visible": false
       }
     ],
     "security": {
