@@ -17,21 +17,21 @@ function DemoCard({ item, i }: { item: Item; i: number }) {
         <h3 className="font-display text-lg font-semibold leading-snug tracking-[-0.01em]">{item.title}</h3>
         <p className="mt-2 text-sm leading-relaxed text-muted">{item.body}</p>
 
-        {/* Animated mini exchange */}
+        {/* Animated mini exchange — bubbles pop in one after the other */}
         <div className="mt-5 space-y-2.5 rounded-lg border border-border bg-cloud p-3.5">
-          <div className="flex justify-end">
+          <Reveal delay={i * 0.08 + 0.25} y={8} className="flex justify-end">
             <p className="max-w-[85%] rounded-2xl rounded-br-sm bg-ink px-3 py-2 text-[13px] leading-snug text-on-ink">
               {item.q}
             </p>
-          </div>
-          <div className="flex items-start gap-2">
+          </Reveal>
+          <Reveal delay={i * 0.08 + 0.45} y={8} className="flex items-start gap-2">
             <span className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full bg-sky-soft">
               <Logo size={13} />
             </span>
             <p className="max-w-[85%] rounded-2xl rounded-tl-sm border border-border bg-surface px-3 py-2 text-[13px] leading-snug text-ink">
               {item.a}
             </p>
-          </div>
+          </Reveal>
         </div>
       </figure>
     </Reveal>
@@ -50,7 +50,9 @@ export function UseCases({ t }: { t: Dictionary }) {
           <p className="mt-4 text-[15px] leading-relaxed text-muted">{t.usecases.sub}</p>
         </Reveal>
 
-        <div className="grid gap-5 md:grid-cols-3">
+        {/* 3-up only from lg; below that a centered single column keeps the
+            chat mocks readable instead of squeezing three ~230px cards. */}
+        <div className="mx-auto grid max-w-[560px] gap-5 lg:max-w-none lg:grid-cols-3">
           {t.usecases.items.map((item, i) => (
             <DemoCard key={item.title} item={item} i={i} />
           ))}

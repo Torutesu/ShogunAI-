@@ -13,9 +13,9 @@ export function Action({ t }: { t: Dictionary }) {
   ];
   return (
     <section id="action" className="scroll-mt-20 bg-cloud py-[clamp(56px,9vw,112px)]">
-      <div className="container-x grid items-center gap-16 md:grid-cols-2">
-        <Reveal delay={0.1} y={24} className="order-2 md:order-1">
-          <div className="grid gap-2">
+      <div className="container-x grid items-center gap-12 lg:grid-cols-2 lg:gap-16">
+        <Reveal delay={0.1} y={24} className="order-2 lg:order-1">
+          <div className="mx-auto grid w-full max-w-[560px] gap-2 lg:max-w-none">
             {steps.map((s, i) => (
               <div key={s.k}>
                 <Card className={s.accent ? 'border-[#bfeeff] bg-sky-soft' : ''}>
@@ -28,7 +28,7 @@ export function Action({ t }: { t: Dictionary }) {
           </div>
         </Reveal>
 
-        <Reveal className="order-1 md:order-2">
+        <Reveal className="order-1 lg:order-2">
           <p className="text-xs font-semibold uppercase tracking-[0.08em] text-accent">{a.eyebrow}</p>
           <h2 className="mt-4 font-display text-[clamp(24px,5.5vw,44px)] font-semibold leading-[1.1] tracking-[-0.015em] text-balance">
             {a.title}

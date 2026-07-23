@@ -1,6 +1,7 @@
-import { ChevronDown, Menu } from 'lucide-react';
+import { ChevronDown } from 'lucide-react';
 import { Logo } from '@/components/Logo';
 import { LanguageMenu } from '@/components/LanguageMenu';
+import { MobileMenu } from '@/components/MobileMenu';
 import { SoundInteractions } from '@/components/SoundInteractions';
 import { SoundToggle } from '@/components/SoundToggle';
 import { ThemeToggle } from '@/components/ThemeToggle';
@@ -23,13 +24,15 @@ export async function Nav() {
 
   return (
     <header className="sticky top-0 z-50 border-b border-border bg-surface/70 backdrop-blur-xl backdrop-saturate-150">
-      <div className="container-x flex h-16 items-center justify-between">
-        <a href="/#top" aria-label="ShogunAI home" className="group/brand flex items-center gap-2.5">
+      <div className="container-x flex h-16 items-center justify-between gap-4">
+        <a href="/#top" aria-label="ShogunAI home" className="group/brand flex shrink-0 items-center gap-2.5">
           <Logo size={26} className="brand-logo" />
           <span className="font-display text-lg font-semibold tracking-tight">ShogunAI</span>
         </a>
 
-        <nav aria-label="Primary" className="hidden items-center gap-7 md:flex">
+        {/* Full nav needs ~1024px to breathe — below lg it wraps and crowds
+            the icon cluster, so the mobile menu takes over until then. */}
+        <nav aria-label="Primary" className="hidden items-center gap-6 lg:flex xl:gap-8">
           {/* Features dropdown */}
           <div className="group relative">
             <button
@@ -65,7 +68,7 @@ export async function Nav() {
           ))}
         </nav>
 
-        <div className="flex items-center gap-2.5">
+        <div className="flex shrink-0 items-center gap-1.5 sm:gap-2.5">
           <SoundInteractions />
           <SoundToggle />
           <ThemeToggle />
@@ -74,25 +77,10 @@ export async function Nav() {
             <a href="/#get-started">{t.nav.getStarted}</a>
           </Button>
 
-          {/* Mobile menu — JS-free disclosure */}
-          <details className="group relative md:hidden">
-            <summary className="flex size-9 cursor-pointer list-none items-center justify-center rounded-full border border-border text-ink [&::-webkit-details-marker]:hidden">
-              <Menu className="size-5" aria-label="Menu" />
-            </summary>
-            <div className="absolute right-0 top-11 w-52 rounded-xl border border-border bg-surface p-2 shadow-[var(--shadow-float)]">
-              {[...features, ...primary].map((l) => (
-                <a key={l.href} href={l.href} className="block rounded-lg px-3 py-2 text-sm font-medium text-ink hover:bg-cloud">
-                  {l.label}
-                </a>
-              ))}
-              <a
-                href="/#get-started"
-                className="mt-1 block rounded-lg bg-accent px-3 py-2.5 text-center text-sm font-semibold text-white shadow-[0_2px_10px_rgba(0,166,244,0.28)]"
-              >
-                {t.nav.getStarted}
-              </a>
-            </div>
-          </details>
+          <MobileMenu
+            items={[...features, ...primary]}
+            cta={{ href: '/#get-started', label: t.nav.getStarted }}
+          />
         </div>
       </div>
     </header>

@@ -56,7 +56,7 @@ function HackathonBadge() {
 export function Badges({ t }: { t: Dictionary }) {
   const ph = t.authority.items.find((b) => b.tone === 'ph');
   return (
-    <div className="mt-9 flex flex-col items-center gap-3.5">
+    <div className="mt-9 flex flex-col items-center justify-center gap-3.5 md:flex-row">
       <HackathonBadge />
       {ph && (
         <div className="group/lk lift flex items-center gap-3.5 rounded-2xl border border-border bg-surface px-4 py-2.5 shadow-[var(--shadow-card)] hover:border-accent/40 sm:gap-4 sm:px-5 sm:py-3">

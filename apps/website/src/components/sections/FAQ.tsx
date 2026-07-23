@@ -35,7 +35,7 @@ export function FAQ({ t }: { t: Dictionary }) {
                     <Plus className="size-3.5" strokeWidth={3} />
                   </span>
                 </summary>
-                <p className="pb-[18px] text-[15px] leading-relaxed text-muted">{a}</p>
+                <p className="faq-a pb-[18px] text-[15px] leading-relaxed text-muted">{a}</p>
               </details>
             </Reveal>
           ))}

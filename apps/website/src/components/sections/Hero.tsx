@@ -22,7 +22,7 @@ export function Hero({
   joined?: number;
 }) {
   return (
-    <section className="relative overflow-hidden pt-14 isolate">
+    <section className="relative overflow-hidden pt-8 isolate sm:pt-14">
       {/* Sky backdrop + drifting orbs */}
       <div
         aria-hidden="true"
@@ -32,7 +32,7 @@ export function Hero({
       <span aria-hidden="true" className="orb -right-28 -top-10 -z-10 size-[460px] bg-[#bfeaff] [animation-delay:-6s]" />
       <span aria-hidden="true" className="orb left-[35%] top-56 -z-10 size-[420px] bg-[#d9f6ff] [animation-delay:-11s]" />
 
-      <div className="container-x pt-10 text-center">
+      <div className="container-x pt-6 text-center sm:pt-10">
         <Reveal>
           {invite ? (
             <Badge dot>
@@ -153,7 +153,7 @@ function AvatarStack() {
 function HeroMock({ t }: { t: Dictionary }) {
   const h = t.hero;
   return (
-    <div className="mx-auto mt-14 max-w-[960px] overflow-hidden rounded-xl border border-border bg-surface text-left shadow-[0_24px_70px_rgba(9,11,12,0.12)]">
+    <div className="mx-auto mt-12 max-w-[960px] overflow-hidden rounded-xl border border-border bg-surface text-left shadow-[0_24px_70px_rgba(9,11,12,0.12)] sm:mt-16">
       <div className="flex h-11 items-center gap-2 border-b border-border bg-cloud px-4">
         <span className="size-2.5 rounded-full bg-[#e0e4e7]" />
         <span className="size-2.5 rounded-full bg-[#e0e4e7]" />
@@ -190,8 +190,10 @@ function HeroMock({ t }: { t: Dictionary }) {
             <Tile k={h.mockActed} n={9} s={h.mockActedSub} accent />
           </div>
           {[h.mockRow1, h.mockRow2, h.mockRow3].map((row, i) => (
-            <div
+            <Reveal
               key={row}
+              delay={0.4 + i * 0.15}
+              y={10}
               className="mb-2 flex items-center justify-between rounded-lg border border-border bg-surface px-3.5 py-3"
             >
               <span className="text-[13px] font-medium text-ink">
@@ -199,7 +201,7 @@ function HeroMock({ t }: { t: Dictionary }) {
                 {row}
               </span>
               <span className="text-[11px] text-faint">{['2m', '18m', '1h'][i]}</span>
-            </div>
+            </Reveal>
           ))}
         </div>
       </div>

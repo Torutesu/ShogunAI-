@@ -86,11 +86,16 @@ export function WaitlistForm({ refCode, labels }: { refCode?: string; labels: Wa
         aria-hidden="true"
         className="absolute left-[-9999px] size-px overflow-hidden"
       />
-      <Button type="submit" disabled={state === 'loading'} className="min-w-[150px]">
+      <Button type="submit" disabled={state === 'loading'} className="w-full sm:w-auto sm:min-w-[150px]">
         {state === 'loading' ? <Loader2 className="size-4 animate-spin" /> : labels.submit}
       </Button>
       {msg && (
-        <p className={`basis-full text-sm ${state === 'error' ? 'text-danger' : 'text-accent-strong'}`}>{msg}</p>
+        <p
+          aria-live="polite"
+          className={`basis-full text-center text-sm ${state === 'error' ? 'text-danger' : 'text-accent-strong'}`}
+        >
+          {msg}
+        </p>
       )}
     </form>
   );
