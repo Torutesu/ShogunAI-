@@ -300,7 +300,11 @@ fn reassert_panel(handle: &tauri::AppHandle, why: &'static str, defer: bool) {
     let ptr = p as *mut AnyObject;
     // SAFETY: workspace notifications post on the main thread; live NSWindow.
     unsafe {
-        const WANT: usize = (1 << 0) | (1 << 4) | (1 << 8); // canJoinAllSpaces|stationary|fsAux
+        // PROVEN on device ([panelstate]): canJoinAllSpaces is ignored by this window server —
+        // onActiveSpace stays false and drawn=false no matter how often we re-order. Strategy
+        // change: MoveToActiveSpace (1<<1) RELOCATES the window to the current Space whenever it
+        // is made visible — and our orderOut→orderFront cycle below is exactly that trigger.
+        const WANT: usize = (1 << 1) | (1 << 4) | (1 << 8); // moveToActiveSpace|stationary|fsAux
         let _: () = msg_send![ptr, setCollectionBehavior: WANT];
         let _: () = msg_send![ptr, setLevel: 25isize];
         let _: () = msg_send![ptr, setAlphaValue: 1.0f64];
@@ -441,7 +445,7 @@ fn spawn_panel_state_logger(app: &tauri::App) {
                 // SELF-HEAL: tao re-applies its own stored window flags on focus/resize events,
                 // silently demoting the overlay. Re-assert only when wrong; a pure property write
                 // with no re-ordering, so it cannot flicker or steal focus.
-                const WANT_BEHAVIOR: usize = (1 << 0) | (1 << 4) | (1 << 8); // 273
+                const WANT_BEHAVIOR: usize = (1 << 1) | (1 << 4) | (1 << 8); // 274 moveToActiveSpace
                 if level != 25 || behavior & WANT_BEHAVIOR != WANT_BEHAVIOR {
                     let _: () = msg_send![ptr, setCollectionBehavior: WANT_BEHAVIOR];
                     let _: () = msg_send![ptr, setLevel: 25isize];
@@ -485,13 +489,13 @@ fn float_on_all_spaces(win: &tauri::WebviewWindow) {
         }
     };
 
-    // NSWindowCollectionBehavior bits: CanJoinAllSpaces (1<<0) | Stationary (1<<4) |
-    // FullScreenAuxiliary (1<<8) = 273. CanJoinAllSpaces keeps the window on EVERY Space without
-    // needing activation — the right choice for a nonactivating panel. (MoveToActiveSpace was wrong:
-    // it only relocates on window *activation*, which a nonactivating panel never does.) The dev
-    // tests where CanJoinAllSpaces "didn't work" were all UNBUNDLED; the bundled accessory app is
-    // the first real test of this recipe.
-    let behavior: usize = (1 << 0) | (1 << 4) | (1 << 8);
+    // NSWindowCollectionBehavior bits: MoveToActiveSpace (1<<1) | Stationary (1<<4) |
+    // FullScreenAuxiliary (1<<8) = 274. PROVEN on device: canJoinAllSpaces (1<<0) is ignored by
+    // this window server — [panelstate] showed onActiveSpace stuck false and drawn=false no matter
+    // how often the window was re-ordered. MoveToActiveSpace relocates the window to the current
+    // Space whenever it is made visible; reassert_panel's orderOut→orderFront cycle is that
+    // trigger on every space-change/app-activation event.
+    let behavior: usize = (1 << 1) | (1 << 4) | (1 << 8);
     // NSStatusWindowLevel (25): floats above ordinary and full-screen windows. Matches panel.rs;
     // 25 is IME-safe (101 is the level that blocks input methods, tauri-nspanel #104).
     let level: isize = 25;
