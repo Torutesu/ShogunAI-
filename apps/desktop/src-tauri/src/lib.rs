@@ -114,6 +114,11 @@ fn setup_macos(app: &tauri::App) {
         eprintln!("[spike] no 'notch' window — panel not installed");
     }
 
+    // Audit fixes: event-driven Space follow (re-show on every desktop/full-screen switch) and the
+    // ground-truth [panelstate] diagnostics stream.
+    watch_space_changes(app);
+    spawn_panel_state_logger(app);
+
     // T-06: geometry (panel screen + CG conversion constants).
     let Some(mtm) = objc2::MainThreadMarker::new() else {
         eprintln!("[spike] setup not on main thread — engine not started");
@@ -214,27 +219,160 @@ fn set_accessory_activation() {
     }
 }
 
-/// Bring the panel to the Space the user is currently on — the ⌃⌥Space "summon" action. One-shot
-/// (no ticker, no flicker): orderOut clears the panel's stale Space assignment, orderFrontRegardless
-/// re-adds it to the CURRENTLY active Space. Works even when canJoinAllSpaces is overridden by a
-/// window manager, because it actively moves the window rather than asking the OS to mirror it.
+/// Bring the panel to where the user actually is — the ⌃⌥N "summon" action. Two steps, one shot
+/// (no ticker, no flicker):
+/// 1. Move the window to the DISPLAY the mouse cursor is on, pinned top-centre (a window physically
+///    exists on one display only — with 2 displays the panel was structurally invisible on the
+///    other one, audit cause #3).
+/// 2. orderOut + orderFrontRegardless — clears any stale Space assignment and re-adds the window to
+///    the CURRENTLY active Space, which works even when canJoinAllSpaces is overridden.
 #[cfg(target_os = "macos")]
 fn summon_to_active_space(app: &tauri::AppHandle) {
-    use objc2::msg_send;
     use objc2::runtime::AnyObject;
+    use objc2::{class, msg_send};
+    use objc2_foundation::{NSPoint, NSRect};
     use tauri::Manager;
     let Some(win) = app.get_webview_window("notch") else { return };
     let _ = app.run_on_main_thread(move || {
-        if let Ok(p) = win.ns_window() {
-            if !p.is_null() {
-                let ptr = p as *mut AnyObject;
-                // SAFETY: live NSWindow, messaged on the main thread.
-                unsafe {
-                    let nil: *mut AnyObject = std::ptr::null_mut();
-                    let _: () = msg_send![ptr, orderOut: nil];
-                    let _: () = msg_send![ptr, orderFrontRegardless];
+        let Ok(p) = win.ns_window() else { return };
+        if p.is_null() {
+            return;
+        }
+        let ptr = p as *mut AnyObject;
+        // SAFETY: live NSWindow + AppKit class methods, all on the main thread.
+        unsafe {
+            // Find the screen under the mouse (Cocoa global coords, bottom-left origin).
+            let mouse: NSPoint = msg_send![class!(NSEvent), mouseLocation];
+            let screens: *mut AnyObject = msg_send![class!(NSScreen), screens];
+            let count: usize = if screens.is_null() { 0 } else { msg_send![screens, count] };
+            let mut target: Option<NSRect> = None;
+            for i in 0..count {
+                let s: *mut AnyObject = msg_send![screens, objectAtIndex: i];
+                if s.is_null() {
+                    continue;
+                }
+                let f: NSRect = msg_send![s, frame];
+                let inside = mouse.x >= f.origin.x
+                    && mouse.x <= f.origin.x + f.size.width
+                    && mouse.y >= f.origin.y
+                    && mouse.y <= f.origin.y + f.size.height;
+                if inside {
+                    target = Some(f);
+                    break;
                 }
             }
+            if let Some(f) = target {
+                let w: NSRect = msg_send![ptr, frame];
+                let x = f.origin.x + ((f.size.width - w.size.width) / 2.0).max(0.0);
+                let top = NSPoint { x, y: f.origin.y + f.size.height };
+                let _: () = msg_send![ptr, setFrameTopLeftPoint: top];
+            }
+            let nil: *mut AnyObject = std::ptr::null_mut();
+            let _: () = msg_send![ptr, orderOut: nil];
+            let _: () = msg_send![ptr, orderFrontRegardless];
+        }
+        eprintln!("[shell] summoned panel to the active screen/space");
+    });
+}
+
+/// Event-driven Space follow (audit cause #2): macOS posts
+/// `NSWorkspaceActiveSpaceDidChangeNotification` on every desktop/full-screen switch, but nothing
+/// subscribed to it — so there was no reliable moment to re-show the panel. Subscribe and, if the
+/// panel is not visible on the newly-active Space, re-order it front (nonactivating: steals no
+/// focus). Event-driven, so there's no ticker and no flicker while you work.
+#[cfg(target_os = "macos")]
+fn watch_space_changes(app: &tauri::App) {
+    use objc2::runtime::AnyObject;
+    use objc2::{class, msg_send};
+    use objc2_foundation::NSString;
+    use tauri::Manager;
+
+    let handle = app.handle().clone();
+    // SAFETY: main thread (setup). The observer and block are intentionally leaked — they must
+    // live for the whole app lifetime.
+    unsafe {
+        let workspace: *mut AnyObject = msg_send![class!(NSWorkspace), sharedWorkspace];
+        if workspace.is_null() {
+            eprintln!("[shell] NSWorkspace nil — space watcher not installed");
+            return;
+        }
+        let nc: *mut AnyObject = msg_send![workspace, notificationCenter];
+        if nc.is_null() {
+            eprintln!("[shell] workspace notificationCenter nil — space watcher not installed");
+            return;
+        }
+        let name = NSString::from_str("NSWorkspaceActiveSpaceDidChangeNotification");
+        let block = block2::RcBlock::new(move |_notif: *mut AnyObject| {
+            // Space-change notifications arrive on the main thread; message the window directly.
+            let Some(win) = handle.get_webview_window("notch") else { return };
+            let Ok(p) = win.ns_window() else { return };
+            if p.is_null() {
+                return;
+            }
+            let ptr = p as *mut AnyObject;
+            let visible: bool = msg_send![ptr, isVisible];
+            let on_active: bool = msg_send![ptr, isOnActiveSpace];
+            if !visible || !on_active {
+                let nil: *mut AnyObject = std::ptr::null_mut();
+                let _: () = msg_send![ptr, orderOut: nil];
+                let _: () = msg_send![ptr, orderFrontRegardless];
+                eprintln!("[shell] space changed — panel re-shown (was visible={visible} onActive={on_active})");
+            }
+        });
+        let nil_obj: *mut AnyObject = std::ptr::null_mut();
+        let _observer: *mut AnyObject =
+            msg_send![nc, addObserverForName: &*name, object: nil_obj, queue: nil_obj, usingBlock: &*block];
+        std::mem::forget(block);
+        eprintln!("[shell] space-change watcher installed");
+    }
+}
+
+/// Ground-truth diagnostics (1s, logs only on change): visibility, Space membership, behavior,
+/// level, hidesOnDeactivate, and frame origin. `[panelstate]` lines make the next on-device run
+/// tell us definitively WHY the panel isn't where the user expects — no more guessing.
+#[cfg(target_os = "macos")]
+fn spawn_panel_state_logger(app: &tauri::App) {
+    use objc2::msg_send;
+    use objc2::runtime::AnyObject;
+    use objc2_foundation::NSRect;
+    use std::sync::{Arc, Mutex};
+    use tauri::Manager;
+
+    let handle = app.handle().clone();
+    let last: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_millis(1000));
+        let h = handle.clone();
+        let last = last.clone();
+        let posted = handle.run_on_main_thread(move || {
+            let Some(win) = h.get_webview_window("notch") else { return };
+            let Ok(p) = win.ns_window() else { return };
+            if p.is_null() {
+                return;
+            }
+            let ptr = p as *mut AnyObject;
+            // SAFETY: read-only getters on the live NSWindow, on the main thread.
+            let s = unsafe {
+                let visible: bool = msg_send![ptr, isVisible];
+                let on_active: bool = msg_send![ptr, isOnActiveSpace];
+                let behavior: usize = msg_send![ptr, collectionBehavior];
+                let level: isize = msg_send![ptr, level];
+                let hides: bool = msg_send![ptr, hidesOnDeactivate];
+                let frame: NSRect = msg_send![ptr, frame];
+                format!(
+                    "visible={visible} onActiveSpace={on_active} behavior={behavior} level={level} hidesOnDeactivate={hides} origin=({:.0},{:.0})",
+                    frame.origin.x, frame.origin.y
+                )
+            };
+            if let Ok(mut g) = last.lock() {
+                if *g != s {
+                    eprintln!("[panelstate] {s}");
+                    *g = s;
+                }
+            }
+        });
+        if posted.is_err() {
+            break; // app shutting down
         }
     });
 }
@@ -277,14 +415,21 @@ fn float_on_all_spaces(win: &tauri::WebviewWindow) {
     unsafe {
         let _: () = msg_send![ptr, setCollectionBehavior: behavior];
         let _: () = msg_send![ptr, setLevel: level];
-        // Accessory (background) apps do NOT auto-show their windows — the panel vanished the
-        // moment we set the Accessory policy. orderFrontRegardless forces the window visible even
-        // while the app is inactive; combined with canJoinAllSpaces it's the standard always-on
-        // overlay recipe. Re-run on each re-apply so it stays put.
+        // ROOT-CAUSE FIX (audit): NSPanel defaults to hidesOnDeactivate=YES — the moment the app
+        // deactivates (you click any other app / another screen), macOS orders the panel OUT.
+        // That's why the panel "worked on this screen but never appeared anywhere else": it wasn't
+        // that canJoinAllSpaces was ignored — the panel was being auto-hidden. Must be NO for an
+        // always-visible overlay.
+        let _: () = msg_send![ptr, setHidesOnDeactivate: false];
+        // Accessory (background) apps do NOT auto-show their windows — orderFrontRegardless forces
+        // the window visible even while the app is inactive.
         let _: () = msg_send![ptr, orderFrontRegardless];
         let got: usize = msg_send![ptr, collectionBehavior];
         let lvl: isize = msg_send![ptr, level];
-        eprintln!("[shell] NSWindow collectionBehavior set={behavior} readback={got} level={lvl}, ordered front");
+        let hides: bool = msg_send![ptr, hidesOnDeactivate];
+        eprintln!(
+            "[shell] NSWindow behavior set={behavior} readback={got} level={lvl} hidesOnDeactivate={hides}, ordered front"
+        );
     }
 }
 
@@ -333,17 +478,17 @@ fn register_expand_shortcut(app: &tauri::App) {
         Err(e) => eprintln!("[spike] inline shortcut registration failed: {e}"),
     }
 
-    // ⌃⌥Space → summon the panel to the Space/desktop you're currently on. This is the reliable,
-    // environment-independent replacement for auto all-spaces: press it from any desktop or a
-    // full-screen app and the panel jumps to you.
-    let summon = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::Space);
+    // ⌃⌥N → summon the panel to the desktop/display you're currently on. ⌃⌥Space was the wrong
+    // key: it collides with macOS's "select next input source" default (same trap as ⌘⇧Space,
+    // audit cause #4) so the OS consumed it before our handler. N (notch) is uncontended.
+    let summon = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyN);
     let res = app.global_shortcut().on_shortcut(summon, move |app, _sc, event| {
         if event.state() == ShortcutState::Pressed {
             summon_to_active_space(app);
         }
     });
     match res {
-        Ok(()) => eprintln!("[spike] ⌃⌥Space registered — press it to summon the panel to this desktop"),
+        Ok(()) => eprintln!("[spike] ⌃⌥N registered — press it to summon the panel to this desktop"),
         Err(e) => eprintln!("[spike] summon shortcut registration failed: {e}"),
     }
 

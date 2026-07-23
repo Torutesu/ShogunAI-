@@ -43,6 +43,7 @@ shogun-fusion = { path = "../../../crates/shogun-fusion" }
 # shogun-agents for L1/L2/L3-gated execution of a clicked context action.
 shogun-agents = { path = "../../../crates/shogun-agents" }
 objc2 = "0.6"
+block2 = "0.6" # ObjC blocks for NSWorkspace notification observers (space-change watcher)
 objc2-app-kit = { version = "0.3", features = [
     "NSResponder", "NSWindow", "NSView", "NSPanel", "NSScreen",
     "NSWorkspace", "NSRunningApplication", "libc",

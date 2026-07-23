@@ -306,7 +306,7 @@ function Settings(props: {
             <span className="keys__combo">
               <kbd>⌃</kbd>
               <kbd>⌥</kbd>
-              <kbd>Space</kbd>
+              <kbd>N</kbd>
             </span>
           </div>
           <div className="keys">
