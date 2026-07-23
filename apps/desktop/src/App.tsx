@@ -1,253 +1,142 @@
 import { useEffect, useRef, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
-import { t } from "./strings";
 
-// Mirror of the closed IPC contract (spec §3.11.2 / §6.1.1). The webview only: class-swaps on
-// `state`, reports paint-done (rAF×2 → `painted`), and forwards input (`promote` / `interact` /
-// `open_full_ui` / `collapse_request` / `anim_done` / `clock_sync_ack`). No timers, no state
-// machine, no cache here (data centre of gravity is Rust). Two open levels per FR-NU-01:
-// Hover = preview (1 action + status line), Expanded = full panel (≤4 actions + Full UI).
+// The product window (M1 shell start). A normal, visible, decorated window — not the fragile notch
+// overlay. It drives the real backend: `inline_at_cursor` (⌃⌥G draft-at-cursor) and `notch_actions`
+// (context actions from memory). When opened in a plain browser (no Tauri) it renders with mock data
+// so the design can be iterated without a Mac.
 
-type UiState = "idle" | "hoverintent" | "hover" | "expanded" | "collapsing" | "hidden";
+const IN_TAURI = typeof window !== "undefined" && ("__TAURI_INTERNALS__" in window || "__TAURI__" in window);
 
-interface StatePayload {
-  state: UiState;
-  t0_mono_ns: number;
-}
-
-interface ContextPayload {
-  bundle_id: string;
-  title_masked: string;
-  text: string;
-  captured_at_ms: number;
-  partial: boolean;
-}
-
-interface ClockSyncPayload {
-  seq: number;
-  rust_mono_ns: number;
-}
-
-/**
- * Notify Rust that the preview frame has actually been presented. Two nested rAFs approximate
- * "after the next frame is composited" — this is the `t1` of the preview-open latency (the
- * Phase 0 Q2 measurement, spec §4.2.1). The rAF-vs-composite gap is calibrated on-device.
- */
-function notifyPainted(state: UiState): void {
-  requestAnimationFrame(() => {
-    requestAnimationFrame(() => {
-      void invoke("painted", { state, t1PerfMs: performance.now() });
-    });
-  });
-}
-
-function ContextLine({ ctx }: { ctx: ContextPayload | null }): JSX.Element {
-  if (!ctx) return <span className="notch__preview--empty">{t.noContext}</span>;
-  const snippet = ctx.text ? `${ctx.text.length} ${t.charsCaptured} · ${ctx.text.replace(/\s+/g, " ").slice(0, 80)}` : t.noText;
-  return (
-    <span className="notch__ctx">
-      <span className="notch__ctx-app">
-        {ctx.bundle_id || ctx.title_masked || "—"}
-        {ctx.partial ? t.partialSuffix : ""}
-      </span>
-      <span className="notch__ctx-text">{snippet}</span>
-    </span>
-  );
-}
-
-// One context-action button, projected by the Rust `notch_actions` command from confidence-gated
-// state (§6.1). `level` gates L1 (auto-eligible) vs L2/L3 (confirm) in the UI (invariant 4).
 interface ActionView {
   label: string;
   level: "L1" | "L2" | "L3";
   rationale: string;
 }
 
-// Browser-preview mode: when the app is opened in a plain browser (`pnpm dev:vite` → localhost:1420)
-// there is no Tauri runtime, so `invoke`/`listen` would reject. In that case we render the panel in
-// its Expanded state with representative mock data — so the UI can be seen and iterated without the
-// (fragile, macOS-only) NSPanel. On device, `IN_TAURI` is true and nothing here runs.
-const IN_TAURI = typeof window !== "undefined" && ("__TAURI_INTERNALS__" in window || "__TAURI__" in window);
-
-const MOCK_CTX: ContextPayload = {
-  bundle_id: "com.apple.mail",
-  title_masked: "Inbox — Q3 roadmap",
-  text: "Thanks — I'll send the final deck by Friday. Still waiting on legal to sign off before we share it externally.",
-  captured_at_ms: 0,
-  partial: false,
-};
-
-// Representative of a real `notch_actions` result: state-derived actions (L1/L2) plus the FR-CF-04
-// generic fallbacks, so the panel shows the level tags and the four-button cap.
 const MOCK_ACTIONS: ActionView[] = [
-  { label: "Draft reply", level: "L1", rationale: "reply needed — Q3 roadmap thread" },
+  { label: "Draft reply", level: "L1", rationale: "reply-needed loop · Q3 roadmap thread" },
   { label: "Nudge: legal sign-off", level: "L2", rationale: "waiting on legal to reply" },
   { label: "Search memory", level: "L1", rationale: "Search memory" },
-  { label: "Save a note", level: "L1", rationale: "Save a note" },
 ];
 
+type Appearance = "auto" | "light" | "dark";
+
 export function App(): JSX.Element {
-  const [uiState, setUiState] = useState<UiState>(IN_TAURI ? "idle" : "expanded");
-  const [ctx, setCtx] = useState<ContextPayload | null>(IN_TAURI ? null : MOCK_CTX);
   const [actions, setActions] = useState<ActionView[]>(IN_TAURI ? [] : MOCK_ACTIONS);
-  const [pendingConfirm, setPendingConfirm] = useState<{ index: number; id: number } | null>(null);
-  const stateRef = useRef<UiState>(IN_TAURI ? "idle" : "expanded");
+  const [draftStatus, setDraftStatus] = useState<string>("");
+  const [appearance, setAppearance] = useState<Appearance>("dark");
+  const busy = useRef(false);
 
+  // Apply the theme to <html> (dark is the default look; light/auto set the attribute).
   useEffect(() => {
-    // In browser-preview there is no Tauri runtime — skip all IPC and keep the mocked panel.
+    const el = document.documentElement;
+    if (appearance === "dark") el.removeAttribute("data-appearance");
+    else el.setAttribute("data-appearance", appearance);
+  }, [appearance]);
+
+  // Pull the current context actions from memory, and refresh periodically.
+  useEffect(() => {
     if (!IN_TAURI) return;
-    // Webview-alive ping: proves the frontend booted and invoke reaches Rust.
-    void invoke("interact", { kind: "boot" });
-    const unlisteners: Array<Promise<() => void>> = [];
-
-    unlisteners.push(
-      listen<StatePayload>("state", (e) => {
-        const next = e.payload.state;
-        stateRef.current = next;
-        setUiState(next);
-        // The preview (Hover) is the visible open the Phase 0 latency measures.
-        if (next === "hover") notifyPainted(next);
-      }),
-    );
-
-    unlisteners.push(
-      listen<ContextPayload>("context", (e) => {
-        setCtx(e.payload);
-      }),
-    );
-
-    // Clock-sync round trip (spec §4.1): answer each ping with performance.now() so Rust
-    // can estimate the JS↔Rust offset from the minimum-RTT sample.
-    unlisteners.push(
-      listen<ClockSyncPayload>("clock_sync", (e) => {
-        void invoke("clock_sync_ack", { seq: e.payload.seq, jsPerfMs: performance.now() });
-      }),
-    );
-
-    // Esc collapses an open preview/panel (delivered only while the panel is key).
-    const onKeyDown = (e: KeyboardEvent): void => {
-      const s = stateRef.current;
-      if (e.key === "Escape" && (s === "hover" || s === "expanded")) {
-        void invoke("collapse_request", { reason: "esc" });
-      }
+    let live = true;
+    const pull = (): void => {
+      void invoke<ActionView[]>("notch_actions")
+        .then((a) => {
+          if (live && Array.isArray(a)) setActions(a);
+        })
+        .catch(() => {
+          /* backend not ready — keep what we have */
+        });
     };
-    window.addEventListener("keydown", onKeyDown);
-
+    pull();
+    const id = setInterval(pull, 3000);
     return () => {
-      window.removeEventListener("keydown", onKeyDown);
-      unlisteners.forEach((p) => void p.then((off) => off()));
+      live = false;
+      clearInterval(id);
     };
   }, []);
 
-  // On expand, pull the real context actions for the focused screen (§6.1). Best-effort: if the
-  // command fails or returns none, the panel falls back to the placeholder labels.
-  useEffect(() => {
-    if (!IN_TAURI) return;
-    if (uiState !== "expanded") return;
-    let live = true;
-    void invoke<ActionView[]>("notch_actions")
-      .then((a) => {
-        if (live) setActions(a);
-      })
-      .catch(() => {
-        /* command unavailable (e.g. no DB) — keep placeholders */
-      });
-    return () => {
-      live = false;
-    };
-  }, [uiState]);
-
-  // Run a context action (§6.6.2): L1 executes immediately; L2 returns "confirm:<id>" and the
-  // button turns into a one-tap confirm (a second tap on the same button confirms).
-  const runAction = (index: number): void => {
-    // Browser-preview: no engine — just demonstrate the L2 confirm toggle locally.
+  const draftAtCursor = (): void => {
+    if (busy.current) return;
+    busy.current = true;
+    setDraftStatus("Working — put your cursor in the app you want to write in…");
     if (!IN_TAURI) {
-      const a = actions[index];
-      if (a && a.level !== "L1" && pendingConfirm?.index !== index) {
-        setPendingConfirm({ index, id: -1 });
-      } else {
-        setPendingConfirm(null);
-      }
+      setTimeout(() => {
+        setDraftStatus("Inserted at your cursor (preview).");
+        busy.current = false;
+      }, 900);
       return;
     }
-    if (pendingConfirm?.index === index) {
-      void invoke<string>("confirm_notch_action", { id: pendingConfirm.id }).finally(() =>
-        setPendingConfirm(null),
-      );
-      return;
-    }
-    void invoke<string>("run_notch_action", { index }).then((res) => {
-      if (res.startsWith("confirm:")) {
-        setPendingConfirm({ index, id: Number(res.slice("confirm:".length)) });
-      } else {
-        setPendingConfirm(null);
-      }
-    });
+    void invoke<string>("inline_at_cursor")
+      .then(() => setDraftStatus("Started — the draft appears where your cursor is. (⌘Z to undo.)"))
+      .catch((e) => setDraftStatus(`Couldn't start: ${e}`))
+      .finally(() => {
+        busy.current = false;
+      });
   };
 
-  const openState = uiState === "hover" || uiState === "expanded";
+  const runAction = (index: number): void => {
+    if (!IN_TAURI) return;
+    void invoke<string>("run_notch_action", { index }).catch(() => undefined);
+  };
 
   return (
-    <div
-      className={`notch notch--${uiState}`}
-      onClick={(e) => {
-        // A click on the transparent margin (outside the visible panel) collapses it.
-        if (e.target === e.currentTarget && openState) {
-          void invoke("collapse_request", { reason: "outside_click" });
-        }
-      }}
-    >
-      <div className="notch__idle-shell" />
-      <div
-        className="notch__panel"
-        onTransitionEnd={(e) => {
-          // Report collapse-animation completion (transform is the driver; the property
-          // filter keeps the two animated properties from double-firing).
-          if (e.propertyName === "transform" && stateRef.current === "collapsing") {
-            void invoke("anim_done", { state: "collapsing" });
-          }
-        }}
-      >
-        {/* Preview level (Hover): one action + one context line. Clicking promotes to full. */}
-        <button className="notch__preview" type="button" onClick={() => void invoke("promote")}>
-          <span className="notch__preview-action">{t.action1}</span>
-          <ContextLine ctx={ctx} />
-        </button>
-
-        {/* Full level (Expanded): up to four actions, context, and the Full UI entry point. */}
-        <div className="notch__full">
-          <div className="notch__actions">
-            {actions.length > 0
-              ? actions.map((a, i) => (
-                  <button
-                    key={i}
-                    type="button"
-                    className={`notch__action notch__action--${a.level.toLowerCase()}`}
-                    title={a.rationale}
-                    onClick={() => void runAction(i)}
-                  >
-                    <span className="notch__action-level">{a.level}</span>
-                    <span className="notch__action-label">{a.label}</span>
-                    {pendingConfirm?.index === i ? (
-                      <span className="notch__action-confirm">tap to confirm</span>
-                    ) : null}
-                  </button>
-                ))
-              : [t.action1, t.action2, t.action3, t.action4].map((label, i) => (
-                  <button key={i} type="button" onClick={() => void invoke("interact", { kind: "click" })}>
-                    {label}
-                  </button>
-                ))}
-          </div>
-          <div className="notch__full-context">
-            <ContextLine ctx={ctx} />
-          </div>
-          <button className="notch__fullui" type="button" onClick={() => void invoke("open_full_ui")}>
-            {t.openFullUi}
-          </button>
+    <div className="app">
+      <header className="bar">
+        <div className="brand">
+          <span className="brand__mark">⚔</span>
+          <span className="brand__name">SHOGUN</span>
+          <span className="live" title="Reading the screen">
+            <span className="live__dot" /> reading
+          </span>
         </div>
-      </div>
+        <div className="seg" role="group" aria-label="Appearance">
+          {(["auto", "light", "dark"] as Appearance[]).map((a) => (
+            <button key={a} type="button" aria-pressed={appearance === a} onClick={() => setAppearance(a)}>
+              {a[0].toUpperCase() + a.slice(1)}
+            </button>
+          ))}
+        </div>
+      </header>
+
+      <main className="main">
+        <section className="hero">
+          <h1 className="hero__title">Write anywhere, from your cursor.</h1>
+          <p className="hero__sub">
+            Put your cursor in any app — an email, a message, a doc — and SHOGUN writes the best
+            continuation right there, from what's on your screen and what it remembers.
+          </p>
+          <div className="cta">
+            <button className="btn btn--primary" type="button" onClick={draftAtCursor}>
+              Draft at cursor
+            </button>
+            <span className="cta__hint">
+              or press <kbd>⌃</kbd> <kbd>⌥</kbd> <kbd>G</kbd> anywhere
+            </span>
+          </div>
+          {draftStatus ? <div className="status">{draftStatus}</div> : null}
+        </section>
+
+        <section className="panel">
+          <div className="panel__h">Suggested from your memory</div>
+          {actions.length > 0 ? (
+            <div className="rows">
+              {actions.map((a, i) => (
+                <button key={i} className="row" type="button" title={a.rationale} onClick={() => runAction(i)}>
+                  <span className="row__label">{a.label}</span>
+                  <span className="row__why">{a.rationale}</span>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="empty">Nothing pressing right now. Keep working — SHOGUN is watching for what matters.</div>
+          )}
+        </section>
+      </main>
+
+      <footer className="foot">
+        <span>Drafts stay on this Mac. SHOGUN never sends — you do, in your own app.</span>
+      </footer>
     </div>
   );
 }

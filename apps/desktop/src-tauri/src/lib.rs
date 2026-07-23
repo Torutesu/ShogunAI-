@@ -75,12 +75,11 @@ pub fn run() {
 fn setup_macos(app: &tauri::App) {
     use tauri::Manager;
 
-    // T-05: swap the notch window into an NSPanel with the spec §3.1.2 attributes.
-    // SPIKE_NO_PANEL=1 skips the swap — diagnostic flag to isolate whether the swap
-    // itself breaks the webview (silent-webview investigation, smoke runs #2/#3).
-    if std::env::var("SPIKE_NO_PANEL").is_ok() {
-        eprintln!("[spike] SPIKE_NO_PANEL set — NSPanel swap skipped");
-    } else {
+    // The notch NSPanel overlay is the fragile Phase-0 rendering path. It is now OPT-IN
+    // (`SHOGUN_NOTCH=1`); by default the window stays a normal, visible, decorated window so the
+    // product UI is actually usable while the real notch shell is built (M1). The core (capture,
+    // memory, ⌃⌥G draft-at-cursor) is unaffected either way.
+    if std::env::var("SHOGUN_NOTCH").is_ok() {
         match app.get_webview_window("notch") {
             Some(win) => {
                 if let Err(e) = panel::install(&win) {
@@ -89,6 +88,8 @@ fn setup_macos(app: &tauri::App) {
             }
             None => eprintln!("[spike] no 'notch' window — panel not installed"),
         }
+    } else {
+        eprintln!("[shell] normal window mode (set SHOGUN_NOTCH=1 for the notch overlay)");
     }
 
     // T-06: geometry (panel screen + CG conversion constants).
@@ -111,13 +112,15 @@ fn setup_macos(app: &tauri::App) {
     // contradicts the notch-anchored layout (spec §3.1.3). x is centred on the screen
     // width; y=0 puts the window top at the screen top (the panel level is Status, so it
     // draws over the menu-bar band).
-    if let Some(win) = app.get_webview_window("notch") {
-        let scale = win.scale_factor().unwrap_or(1.0);
-        let win_w = win.outer_size().map(|s| s.width as f64 / scale).unwrap_or(432.0);
-        let x = ((g.screen.w - win_w) / 2.0).max(0.0);
-        match win.set_position(tauri::LogicalPosition::new(x, 0.0)) {
-            Ok(()) => eprintln!("[spike] panel positioned at top-centre x={x:.0} y=0"),
-            Err(e) => eprintln!("[spike] set_position failed: {e}"),
+    if std::env::var("SHOGUN_NOTCH").is_ok() {
+        if let Some(win) = app.get_webview_window("notch") {
+            let scale = win.scale_factor().unwrap_or(1.0);
+            let win_w = win.outer_size().map(|s| s.width as f64 / scale).unwrap_or(432.0);
+            let x = ((g.screen.w - win_w) / 2.0).max(0.0);
+            match win.set_position(tauri::LogicalPosition::new(x, 0.0)) {
+                Ok(()) => eprintln!("[spike] panel positioned at top-centre x={x:.0} y=0"),
+                Err(e) => eprintln!("[spike] set_position failed: {e}"),
+            }
         }
     }
 
