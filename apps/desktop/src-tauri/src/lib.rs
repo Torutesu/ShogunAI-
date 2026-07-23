@@ -17,6 +17,12 @@ mod notch_actions;
 mod notch_exec;
 mod panel;
 
+/// The collectionBehavior the overlay wants, selected at setup (NSPanel mode = canJoinAllSpaces
+/// 273; plain-window fallback = moveToActiveSpace 274) and re-asserted by every heal/reassert path.
+#[cfg(target_os = "macos")]
+static PANEL_BEHAVIOR: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new((1 << 0) | (1 << 4) | (1 << 8));
+
 /// Tauri entry point. Registers the nspanel plugin and the webview→Rust command half of
 /// the closed IPC contract (spec §3.11.2), then in setup: NSPanel swap (T-05), geometry
 /// read (T-06), mouse tap (T-07), and the integrated engine + measurement streams (T-08+).
@@ -90,33 +96,35 @@ fn setup_macos(app: &tauri::App) {
     eprintln!("[shell] SHOGUN starting — pid {} — build: plain-window/drag/quit", std::process::id());
     eprintln!("========================================================");
 
-    // DEFAULT = a plain, normal, always-on-top window. Hard lesson from on-device: the
-    // nonactivating NSPanel broke everything the user actually needs — it can't be dragged
-    // (startDragging is a no-op on a nonactivating panel), fought Quit, and never followed Spaces
-    // here anyway. A normal window renders, DRAGS (data-tauri-drag-region), QUITS (Cmd+Q / Dock /
-    // button), floats above other apps (always-on-top = background presence), and can be pulled to
-    // any Space/display with ⌃⌥N. The NSPanel overlay is opt-in only (`SHOGUN_NOTCH=1`) for future
-    // work once its drag/quit/space issues are solved.
-    if std::env::var("SHOGUN_NOTCH").is_ok() {
-        set_accessory_activation();
+    // PROVEN by [panelstate]: a Regular app's plain window is REFUSED entry to other apps'
+    // Spaces — onActiveSpace/drawn stayed false through hundreds of re-orders with both
+    // canJoinAllSpaces (273) and moveToActiveSpace (274). That's an OS wall, not a flag problem.
+    // The sanctioned way through it is the FULL overlay recipe: nonactivating NSPanel + Accessory
+    // activation + canJoinAllSpaces/fsAux + hidesOnDeactivate=false. We never ran that combination
+    // complete — the hidesOnDeactivate fix landed only after the NSPanel default was abandoned, so
+    // every earlier NSPanel test self-hid on deactivate. Default = the full recipe;
+    // SHOGUN_NO_NOTCH=1 keeps the plain window as a fallback.
+    use std::sync::atomic::Ordering;
+    if std::env::var("SHOGUN_NO_NOTCH").is_ok() {
+        PANEL_BEHAVIOR.store((1 << 1) | (1 << 4) | (1 << 8), Ordering::Relaxed); // 274 move-to-active
         if let Some(win) = app.get_webview_window("notch") {
-            match panel::install(&win) {
-                Ok(()) => eprintln!("[shell] NSPanel installed (experimental — SHOGUN_NOTCH=1)"),
-                Err(e) => eprintln!("[shell] panel install failed: {e}"),
-            }
+            let _ = win.show();
             float_on_all_spaces(&win);
+            eprintln!("[shell] plain window fallback (SHOGUN_NO_NOTCH=1) — desktop-space only");
         }
-    } else if let Some(win) = app.get_webview_window("notch") {
-        let _ = win.show();
-        // THE product requirement: overlay OVER other apps' windows and full-screen Spaces. The
-        // plain-window run logged behavior=1 level=5 — no fullScreenAuxiliary, floating-level only —
-        // which shows on an empty desktop but never over apps/full-screen. Exactly the reported
-        // symptom. float_on_all_spaces applies behavior 273 (canJoinAllSpaces | stationary |
-        // fullScreenAuxiliary) + level 25 (Status) + orderFrontRegardless, and logs the readback.
-        float_on_all_spaces(&win);
-        eprintln!("[shell] plain window — drag(header), close(✕ / ⌃⌥Q / Cmd+Q), overlay 273/25");
     } else {
-        eprintln!("[spike] no 'notch' window — window not shown");
+        PANEL_BEHAVIOR.store((1 << 0) | (1 << 4) | (1 << 8), Ordering::Relaxed); // 273 join-all-spaces
+        set_accessory_activation();
+        match app.get_webview_window("notch") {
+            Some(win) => {
+                match panel::install(&win) {
+                    Ok(()) => eprintln!("[shell] NSPanel installed — FULL overlay recipe (accessory + nonactivating + joinAll + hides=false)"),
+                    Err(e) => eprintln!("[shell] panel install failed: {e} — try SHOGUN_NO_NOTCH=1"),
+                }
+                float_on_all_spaces(&win); // asserts joinAll/level 25/hidesOnDeactivate=false + orders front
+            }
+            None => eprintln!("[spike] no 'notch' window — panel not installed"),
+        }
     }
 
     // Audit fixes: event-driven Space follow (re-show on every desktop/full-screen switch) and the
@@ -300,12 +308,8 @@ fn reassert_panel(handle: &tauri::AppHandle, why: &'static str, defer: bool) {
     let ptr = p as *mut AnyObject;
     // SAFETY: workspace notifications post on the main thread; live NSWindow.
     unsafe {
-        // PROVEN on device ([panelstate]): canJoinAllSpaces is ignored by this window server —
-        // onActiveSpace stays false and drawn=false no matter how often we re-order. Strategy
-        // change: MoveToActiveSpace (1<<1) RELOCATES the window to the current Space whenever it
-        // is made visible — and our orderOut→orderFront cycle below is exactly that trigger.
-        const WANT: usize = (1 << 1) | (1 << 4) | (1 << 8); // moveToActiveSpace|stationary|fsAux
-        let _: () = msg_send![ptr, setCollectionBehavior: WANT];
+        let want = PANEL_BEHAVIOR.load(std::sync::atomic::Ordering::Relaxed);
+        let _: () = msg_send![ptr, setCollectionBehavior: want];
         let _: () = msg_send![ptr, setLevel: 25isize];
         let _: () = msg_send![ptr, setAlphaValue: 1.0f64];
         let visible: bool = msg_send![ptr, isVisible];
@@ -445,11 +449,11 @@ fn spawn_panel_state_logger(app: &tauri::App) {
                 // SELF-HEAL: tao re-applies its own stored window flags on focus/resize events,
                 // silently demoting the overlay. Re-assert only when wrong; a pure property write
                 // with no re-ordering, so it cannot flicker or steal focus.
-                const WANT_BEHAVIOR: usize = (1 << 1) | (1 << 4) | (1 << 8); // 274 moveToActiveSpace
-                if level != 25 || behavior & WANT_BEHAVIOR != WANT_BEHAVIOR {
-                    let _: () = msg_send![ptr, setCollectionBehavior: WANT_BEHAVIOR];
+                let want = PANEL_BEHAVIOR.load(std::sync::atomic::Ordering::Relaxed);
+                if level != 25 || behavior & want != want {
+                    let _: () = msg_send![ptr, setCollectionBehavior: want];
                     let _: () = msg_send![ptr, setLevel: 25isize];
-                    eprintln!("[panelstate] healed: level {level}→25 behavior {behavior}→{WANT_BEHAVIOR}");
+                    eprintln!("[panelstate] healed: level {level}→25 behavior {behavior}→{want}");
                 }
                 format!(
                     "visible={visible} drawn={drawn} onActiveSpace={on_active} behavior={behavior} level={level} alpha={alpha:.2} appActive={app_active} origin=({:.0},{:.0})",
@@ -489,13 +493,10 @@ fn float_on_all_spaces(win: &tauri::WebviewWindow) {
         }
     };
 
-    // NSWindowCollectionBehavior bits: MoveToActiveSpace (1<<1) | Stationary (1<<4) |
-    // FullScreenAuxiliary (1<<8) = 274. PROVEN on device: canJoinAllSpaces (1<<0) is ignored by
-    // this window server — [panelstate] showed onActiveSpace stuck false and drawn=false no matter
-    // how often the window was re-ordered. MoveToActiveSpace relocates the window to the current
-    // Space whenever it is made visible; reassert_panel's orderOut→orderFront cycle is that
-    // trigger on every space-change/app-activation event.
-    let behavior: usize = (1 << 1) | (1 << 4) | (1 << 8);
+    // Behavior is mode-dependent (PANEL_BEHAVIOR): NSPanel overlay mode wants canJoinAllSpaces
+    // (273); the plain-window fallback wants moveToActiveSpace (274) since a Regular window is
+    // refused entry to other apps' Spaces anyway.
+    let behavior: usize = PANEL_BEHAVIOR.load(std::sync::atomic::Ordering::Relaxed);
     // NSStatusWindowLevel (25): floats above ordinary and full-screen windows. Matches panel.rs;
     // 25 is IME-safe (101 is the level that blocks input methods, tauri-nspanel #104).
     let level: isize = 25;
