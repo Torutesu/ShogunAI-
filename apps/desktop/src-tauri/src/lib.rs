@@ -40,6 +40,16 @@ static USER_HIDDEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBoo
 /// the closed IPC contract (spec §3.11.2), then in setup: NSPanel swap (T-05), geometry
 /// read (T-06), mouse tap (T-07), and the integrated engine + measurement streams (T-08+).
 pub fn run() {
+    // ROOT-CAUSE FIX (overlay): become an Accessory (background) app BEFORE AppKit creates any
+    // window. The reference overlays that float over every app/Space are Accessory/LSUIElement
+    // from process start; SHOGUN used to create its window as a Regular app and flip the policy
+    // afterwards — and a window born under Regular policy keeps its original Space binding, which
+    // is why canJoinAllSpaces read back correctly yet was never honored. The window itself is no
+    // longer declared in tauri.conf.json: it is built in setup, after this line has run.
+    #[cfg(target_os = "macos")]
+    if std::env::var("SHOGUN_NO_NOTCH").is_err() {
+        set_accessory_activation();
+    }
     let builder = tauri::Builder::default();
     #[cfg(target_os = "macos")]
     let builder = builder
@@ -121,24 +131,26 @@ fn setup_macos(app: &tauri::App) {
     use std::sync::atomic::Ordering;
     if std::env::var("SHOGUN_NO_NOTCH").is_ok() {
         PANEL_BEHAVIOR.store((1 << 1) | (1 << 4) | (1 << 8), Ordering::Relaxed); // 274 move-to-active
-        if let Some(win) = app.get_webview_window("notch") {
-            let _ = win.show();
-            float_on_all_spaces(&win);
-            eprintln!("[shell] plain window fallback (SHOGUN_NO_NOTCH=1) — desktop-space only");
-        }
+        eprintln!("[shell] plain window fallback (SHOGUN_NO_NOTCH=1) — desktop-space only");
     } else {
         PANEL_BEHAVIOR.store((1 << 0) | (1 << 8), Ordering::Relaxed); // 257 join-all + fsAux
-        set_accessory_activation();
-        match app.get_webview_window("notch") {
-            Some(win) => {
+    }
+    // The window is NOT declared in tauri.conf.json — it is built HERE, after the process became
+    // an Accessory app at the very top of run(). A window created while the app was still Regular
+    // keeps its original Space binding forever (canJoinAllSpaces reads back but is ignored) —
+    // the last structural difference between SHOGUN and overlays that float everywhere.
+    match app.get_webview_window("notch") {
+        Some(win) => {
+            // Safety net: if a config-declared window ever reappears, still apply the recipe.
+            if std::env::var("SHOGUN_NO_NOTCH").is_err() {
                 match panel::install(&win) {
-                    Ok(()) => eprintln!("[shell] NSPanel installed — FULL overlay recipe (accessory + nonactivating + joinAll + hides=false)"),
-                    Err(e) => eprintln!("[shell] panel install failed: {e} — try SHOGUN_NO_NOTCH=1"),
+                    Ok(()) => eprintln!("[shell] NSPanel installed on pre-existing window"),
+                    Err(e) => eprintln!("[shell] panel install failed: {e}"),
                 }
-                float_on_all_spaces(&win); // asserts joinAll/level 25/hidesOnDeactivate=false + orders front
             }
-            None => eprintln!("[spike] no 'notch' window — panel not installed"),
+            float_on_all_spaces(&win);
         }
+        None => build_panel_window(app.handle()),
     }
 
     // Audit fixes: event-driven Space follow (re-show on every desktop/full-screen switch) and the
@@ -557,8 +569,9 @@ fn build_panel_window(handle: &tauri::AppHandle) {
     match builder.build() {
         Ok(win) => {
             if std::env::var("SHOGUN_NO_NOTCH").is_err() {
-                if let Err(e) = panel::install(&win) {
-                    eprintln!("[shell] respawn: panel install failed: {e}");
+                match panel::install(&win) {
+                    Ok(()) => eprintln!("[shell] NSPanel installed — FULL overlay recipe (Accessory-born window)"),
+                    Err(e) => eprintln!("[shell] panel install failed: {e}"),
                 }
             }
             float_on_all_spaces(&win);
@@ -568,9 +581,9 @@ fn build_panel_window(handle: &tauri::AppHandle) {
                     unsafe { reposition_to_cursor_screen(p as *mut objc2::runtime::AnyObject) };
                 }
             }
-            eprintln!("[shell] respawned panel on the active space");
+            eprintln!("[shell] panel window built on the active space");
         }
-        Err(e) => eprintln!("[shell] respawn failed: {e}"),
+        Err(e) => eprintln!("[shell] panel window build failed: {e}"),
     }
 }
 
