@@ -123,6 +123,46 @@ cargo run -p shogun-cli -- --token dev metrics
 
 ---
 
+## 6.5 インライン下書き（カーソル位置に生成）— ⌃⌥G
+
+`compose_inline`（画面文脈＋記憶→BYOK生成→カーソル挿入）を実機で試す経路。純ロジックはLinuxテスト済み、AX読取/挿入とBYOK配線がここで初めて実機コンパイルされる（`apps/desktop/src-tauri/src/inline_source.rs`、`shogun-core` は `db,net` フィーチャ）。
+
+### まず鍵なしで AX 経路を確認（エコー）
+
+BYOK鍵がKeychainに無い状態では**エコーmock**が動くので、「読取→プロンプト組み立て→カーソル挿入」の配線だけを先に検証できる:
+
+1. メールやエディタの**テキスト欄にカーソルを置く**（何か入力しておく）
+2. **⌃⌥G** を押す
+3. ログ（別タブ `tail -f /tmp/shogun.log`）:
+```
+[inline] no BYOK key in Keychain — using echo mock (AX path still runs)
+[inline] inserted N chars at the cursor
+```
+→ カーソル位置に `draft: You are writing directly...`（プロンプトのエコー）が挿入されれば、**AX読取・挿入が実機で通った**証明。
+
+### 実生成にする（BYOK鍵をKeychainへ）
+
+鍵は**Keychainのみ**（不変条件7、環境変数・ファイル禁止）。ターミナルで登録:
+
+```
+security add-generic-password -s com.selectkk.shogun -a anthropic-byok -w
+```
+（`-w` の後、対話でAnthropic APIキーを貼る。履歴に残さないため引数で渡さない）
+
+再度 ⌃⌥G を押すと:
+```
+[inline] BYOK key found — using the live Agent lane
+[inline] inserted N chars at the cursor
+```
+→ カーソル位置に**実際に生成された文章**が挿入される。トレーサビリティ行（digestのみ）も1件記録される。
+
+### 既知の未実装・オンデバイス調整点
+
+- **トリガーは暫定 ⌃⌥G**。製品仕様の「Optionキー単体」は `flagsChanged` を見る CGEventTap が必要（既存hoverのtap基盤の延長）。まず ⌃⌥G で疎通確認。
+- **カーソル位置**: v1はフィールド全文を「カーソル前」として扱い末尾に挿入する。`kAXSelectedTextRangeAttribute` での正確なキャレット分割は実機調整項目。
+- **モデル**: 下書きは低レイテンシ優先で `claude-sonnet-5` 既定（Settingsで変更可の想定）。
+- AXシンボル（`AXUIElementCreateSystemWide` / `kAXSelectedTextAttribute` / `AXUIElementSetAttributeValue`）が `accessibility-sys 0.2` で名前差異があればビルドエラーを貼って調整。
+
 ## 7. 詰まったら
 
 | 症状 | 対処 |

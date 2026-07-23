@@ -11,6 +11,7 @@ mod capture_source;
 mod display;
 mod geometry;
 mod hover;
+mod inline_source;
 mod integrate;
 mod notch_actions;
 mod notch_exec;
@@ -38,6 +39,7 @@ pub fn run() {
         notch_actions::mac::notch_actions,
         notch_exec::mac::run_notch_action,
         notch_exec::mac::confirm_notch_action,
+        inline_source::mac::inline_at_cursor,
     ]);
 
     // NOTE: do NOT add .on_page_load here — with the NSPanel-swapped window it trips a
@@ -194,6 +196,23 @@ fn register_expand_shortcut(app: &tauri::App) {
     match res {
         Ok(()) => eprintln!("[spike] ⌘⇧J registered — press it to open the panel"),
         Err(e) => eprintln!("[spike] global shortcut registration failed: {e}"),
+    }
+
+    // ⌃⌥G → draft at the cursor (inline). The product trigger is a bare Option tap (rebindable in
+    // Settings), which needs a CGEventTap on flagsChanged — an on-device refinement; a concrete
+    // combo is used here so the read→generate→insert loop is testable now.
+    use shogun_core::daemon::Db;
+    let draft = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyG);
+    let res = app.global_shortcut().on_shortcut(draft, move |app, _sc, event| {
+        if event.state() == ShortcutState::Pressed {
+            if let Some(db) = app.try_state::<Db>() {
+                inline_source::mac::run_inline_at_cursor(db.inner().clone());
+            }
+        }
+    });
+    match res {
+        Ok(()) => eprintln!("[spike] ⌃⌥G registered — press it to draft at the cursor"),
+        Err(e) => eprintln!("[spike] inline shortcut registration failed: {e}"),
     }
 }
 

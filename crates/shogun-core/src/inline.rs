@@ -13,11 +13,12 @@
 //!   the Batch lane. There is no way to reach this with a Select KK key (the type won't construct one).
 //! - **No L1 send (4):** inserting at the caret is a device-local write — it never leaves the device,
 //!   so there is no L3 send in this flow. The user sends from their own app, if they choose to.
-//! - **Traceability (3) / no captured text in logs (G8):** the prompt that egresses (the surrounding
-//!   text + memory) records exactly one [`TraceRecord`] — digest + byte length only, never the text.
+//! - **Traceability (3) / no captured text in logs (G8):** the egress is the `AgentClient` call, and
+//!   the client records the trace at that point — the real [`AnthropicAgentClient`](crate::llm::anthropic)
+//!   writes exactly one digest-only row per completion. This module orchestrates; it does not trace,
+//!   so there is a single trace at the true egress point, never a double.
 //! - **AX text only (2):** the context is text read from the field; no screenshot is ever involved.
 
-use crate::llm::traceability::{Route, TraceRecord, TraceabilitySink};
 use crate::llm::AgentClient;
 
 /// The text around the caret in the focused field, plus which app/field it is. AX text only.
@@ -103,25 +104,14 @@ pub fn build_prompt(ctx: &CursorContext, memory: &[String]) -> String {
 }
 
 /// The full composition: read the caret context, and if there is one, build the prompt, generate on
-/// the BYOK Agent lane, record the egress trace, then insert at the caret. Any failing step stops
-/// the flow without inserting. `destination` labels the trace (e.g. the model host).
-///
-/// Ordering matters for invariant 3: the trace is recorded **after** a successful `complete` (the
-/// chunk has provably egressed) and **before** the insert — so a chunk that reached the wire always
-/// leaves a trace, even if the local insert then fails.
-pub fn compose_inline<R, A, I, S>(
-    reader: &R,
-    agent: &A,
-    inserter: &I,
-    sink: &S,
-    memory: &[String],
-    destination: &str,
-) -> InlineOutcome
+/// the BYOK Agent lane, then insert at the caret. Any failing step stops the flow without inserting.
+/// Traceability is the `AgentClient`'s responsibility (it records the egress at the point the chunk
+/// leaves the device), so this orchestration never traces — one trace, at the true egress.
+pub fn compose_inline<R, A, I>(reader: &R, agent: &A, inserter: &I, memory: &[String]) -> InlineOutcome
 where
     R: CursorReader + ?Sized,
     A: AgentClient + ?Sized,
     I: TextInserter + ?Sized,
-    S: TraceabilitySink + ?Sized,
 {
     let Some(ctx) = reader.read() else {
         return InlineOutcome::NoContext;
@@ -134,7 +124,6 @@ where
         Ok(t) => t,
         Err(e) => return InlineOutcome::GenerationFailed(e.to_string()),
     };
-    sink.record(TraceRecord::for_chunk(Route::MessagesApi, "inline_draft", destination, &prompt, false));
     match inserter.insert(&text) {
         Ok(()) => InlineOutcome::Inserted { chars: text.chars().count() },
         Err(e) => InlineOutcome::InsertFailed(e),
@@ -144,7 +133,6 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::llm::traceability::{digest, RecordingSink};
     use crate::llm::{AgentClient, ByokKey, LlmError, MockAgentClient, Secret};
 
     fn ctx() -> CursorContext {
@@ -212,67 +200,42 @@ mod tests {
     }
 
     #[test]
-    fn happy_path_inserts_and_records_one_digest_only_trace() {
-        let sink = RecordingSink::new();
+    fn happy_path_generates_and_inserts_at_the_caret() {
         let ins = inserter(true);
-        let out = compose_inline(&FixedReader(Some(ctx())), &agent(), &ins, &sink, &["memo".into()], "api.anthropic.com");
+        let out = compose_inline(&FixedReader(Some(ctx())), &agent(), &ins, &["memo".into()]);
         // the mock echoes "draft: <prompt>", which is what gets inserted
         assert!(matches!(out, InlineOutcome::Inserted { chars } if chars > 0));
         assert!(ins.last.borrow().starts_with("draft: "), "generated text was inserted at the caret");
-        // exactly one egress trace, on the BYOK Agent lane (MessagesApi), digest of the prompt only
-        let recs = sink.records();
-        assert_eq!(recs.len(), 1);
-        assert_eq!(recs[0].route, Route::MessagesApi);
-        assert_eq!(recs[0].purpose, "inline_draft");
-        let prompt = build_prompt(&ctx(), &["memo".into()]);
-        assert_eq!(recs[0].chunk_xxh64, digest(&prompt));
-        assert_eq!(recs[0].chunk_bytes, prompt.len());
-    }
-
-    #[test]
-    fn trace_never_contains_the_field_text() {
-        let sink = RecordingSink::new();
-        let mut c = ctx();
-        c.before = "SECRET-DIARY-ENTRY do not leak".into();
-        let out = compose_inline(&FixedReader(Some(c)), &agent(), &inserter(true), &sink, &[], "host");
-        assert!(matches!(out, InlineOutcome::Inserted { .. }));
-        let dumped = format!("{:?}", sink.records()[0]);
-        assert!(!dumped.contains("SECRET-DIARY-ENTRY"), "the field text must never reach the trace record");
+        // and the memory fact reached the prompt that was generated from
+        assert!(ins.last.borrow().contains("- memo"), "confidence-gated memory grounds the draft");
     }
 
     #[test]
     fn no_field_focused_does_nothing() {
-        let sink = RecordingSink::new();
-        let out = compose_inline(&FixedReader(None), &agent(), &inserter(true), &sink, &[], "host");
+        let ins = inserter(true);
+        let out = compose_inline(&FixedReader(None), &agent(), &ins, &[]);
         assert_eq!(out, InlineOutcome::NoContext);
-        assert!(sink.records().is_empty(), "no egress when there's no field");
+        assert!(ins.last.borrow().is_empty(), "nothing generated or inserted when there's no field");
     }
 
     #[test]
     fn empty_context_does_nothing() {
         let empty = CursorContext { app: String::new(), field_label: String::new(), before: "   ".into(), after: String::new() };
-        let sink = RecordingSink::new();
-        let out = compose_inline(&FixedReader(Some(empty)), &agent(), &inserter(true), &sink, &[], "host");
+        let out = compose_inline(&FixedReader(Some(empty)), &agent(), &inserter(true), &[]);
         assert_eq!(out, InlineOutcome::NoContext);
-        assert!(sink.records().is_empty());
     }
 
     #[test]
-    fn generation_failure_inserts_nothing_and_traces_nothing() {
-        let sink = RecordingSink::new();
+    fn generation_failure_inserts_nothing() {
         let ins = inserter(true);
-        let out = compose_inline(&FixedReader(Some(ctx())), &FailAgent, &ins, &sink, &[], "host");
+        let out = compose_inline(&FixedReader(Some(ctx())), &FailAgent, &ins, &[]);
         assert!(matches!(out, InlineOutcome::GenerationFailed(_)));
-        assert!(sink.records().is_empty(), "a failed generation egressed no usable chunk to trace");
         assert!(ins.last.borrow().is_empty(), "nothing was inserted");
     }
 
     #[test]
-    fn insert_failure_still_traces_the_egress() {
-        // generation succeeded (the chunk reached the wire) but the caret write failed → trace stands.
-        let sink = RecordingSink::new();
-        let out = compose_inline(&FixedReader(Some(ctx())), &agent(), &inserter(false), &sink, &[], "host");
+    fn insert_failure_is_reported() {
+        let out = compose_inline(&FixedReader(Some(ctx())), &agent(), &inserter(false), &[]);
         assert!(matches!(out, InlineOutcome::InsertFailed(_)));
-        assert_eq!(sink.records().len(), 1, "the egress that reached the wire is still traced");
     }
 }

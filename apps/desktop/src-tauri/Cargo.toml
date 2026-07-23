@@ -32,7 +32,12 @@ shogun-core = { path = "../../../crates/shogun-core" }
 [target.'cfg(target_os = "macos")'.dependencies]
 # The memory DB is only wired in on-device (capture_source persists through it). Enabling `db`
 # here (not in the base [dependencies]) keeps rusqlite out of the Linux resolution graph.
-shogun-core = { path = "../../../crates/shogun-core", features = ["db"] }
+# `net` adds the real HTTPS transport so the inline draft can call the BYOK Agent lane on device.
+shogun-core = { path = "../../../crates/shogun-core", features = ["db", "net"] }
+# BYOK key read from the macOS Keychain (invariant 7 — secrets never in a file/DB/log).
+security-framework = "3"
+# A dedicated runtime to block the (async) Agent-lane call on the inline trigger thread.
+tokio = { version = "1", features = ["rt", "rt-multi-thread"] }
 # shogun-fusion for the notch context-action command (ScreenContext / ActionCandidate / Level).
 shogun-fusion = { path = "../../../crates/shogun-fusion" }
 # shogun-agents for L1/L2/L3-gated execution of a clicked context action.
