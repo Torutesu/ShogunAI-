@@ -307,54 +307,89 @@ fn reassert_panel(handle: &tauri::AppHandle, why: &'static str, defer: bool) {
     use objc2::msg_send;
     use objc2::runtime::AnyObject;
     use tauri::Manager;
-    let Some(win) = handle.get_webview_window("notch") else { return };
-    let Ok(p) = win.ns_window() else { return };
-    if p.is_null() {
-        return;
-    }
-    let ptr = p as *mut AnyObject;
-    // SAFETY: workspace notifications post on the main thread; live NSWindow.
-    unsafe {
-        let want = PANEL_BEHAVIOR.load(std::sync::atomic::Ordering::Relaxed);
-        let _: () = msg_send![ptr, setCollectionBehavior: want];
-        let _: () = msg_send![ptr, setLevel: 25isize];
-        let _: () = msg_send![ptr, setAlphaValue: 1.0f64];
-        let visible: bool = msg_send![ptr, isVisible];
-        let on_active: bool = msg_send![ptr, isOnActiveSpace];
-        // Healthy → flags asserted above are enough. NO ordering: an orderFront on a joined panel
-        // was part of the churn that knocked it back off the Space.
-        if visible && on_active {
-            return;
-        }
-        // Debounce the destructive part: a re-show cycle needs a moment to settle before the
-        // next event judges it (isOnActiveSpace reads stale immediately after ordering).
-        {
-            let mut g = match REASSERT_AT.lock() {
-                Ok(g) => g,
-                Err(_) => return,
-            };
-            if let Some(t) = *g {
-                if t.elapsed() < std::time::Duration::from_millis(300) {
-                    return; // a cycle just ran; let it settle
+    // Healthy path: assert flags, touch nothing else.
+    if let Some(win) = handle.get_webview_window("notch") {
+        if let Ok(p) = win.ns_window() {
+            if !p.is_null() {
+                let ptr = p as *mut AnyObject;
+                // SAFETY: workspace notifications post on the main thread; live NSWindow.
+                unsafe {
+                    let want = PANEL_BEHAVIOR.load(std::sync::atomic::Ordering::Relaxed);
+                    let _: () = msg_send![ptr, setCollectionBehavior: want];
+                    let _: () = msg_send![ptr, setLevel: 25isize];
+                    let visible: bool = msg_send![ptr, isVisible];
+                    let on_active: bool = msg_send![ptr, isOnActiveSpace];
+                    if visible && on_active {
+                        return; // genuinely on screen here — leave it alone
+                    }
                 }
             }
-            *g = Some(std::time::Instant::now());
         }
-        // Re-show IN PLACE (no display hop — chasing the cursor's screen here bounced the panel
-        // between displays on every event; explicit ⌥J summon still repositions).
-        let nil: *mut AnyObject = std::ptr::null_mut();
-        let _: () = msg_send![ptr, orderOut: nil];
-        let _: () = msg_send![ptr, orderFrontRegardless];
-        eprintln!("[shell] {why}: panel re-shown (was visible={visible} onActive={on_active})");
     }
-    // One settle-check ~400ms later (post-debounce) in case the cycle lost a race with tao.
+    // PLAN B (final): ordering/flags can NOT move a space-locked window on this machine — proven
+    // across canJoinAllSpaces, moveToActiveSpace, NSPanel, accessory, bundled. But macOS
+    // guarantees a NEWLY CREATED window is born on the ACTIVE Space. So rebuild the window here.
+    // Debounced hard (webview rebuild is heavy; a settling respawn must not trigger another).
+    {
+        let mut g = match REASSERT_AT.lock() {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+        if let Some(t) = *g {
+            if t.elapsed() < std::time::Duration::from_millis(1500) {
+                return;
+            }
+        }
+        *g = Some(std::time::Instant::now());
+    }
+    eprintln!("[shell] {why}: panel not on this space — respawning it here");
+    respawn_panel(handle);
     if defer {
         let h = handle.clone();
         std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(400));
+            std::thread::sleep(std::time::Duration::from_millis(700));
             let h2 = h.clone();
-            let _ = h.run_on_main_thread(move || reassert_panel(&h2, "deferred", false));
+            let _ = h.run_on_main_thread(move || reassert_panel(&h2, "settle-check", false));
         });
+    }
+}
+
+/// Destroy the space-locked panel window and create a fresh one — which macOS guarantees is born
+/// on the CURRENTLY ACTIVE Space. The webview reloads; chat/minimize state survives via
+/// localStorage (same origin). Runs on the main thread.
+#[cfg(target_os = "macos")]
+fn respawn_panel(handle: &tauri::AppHandle) {
+    use tauri::Manager;
+    if let Some(win) = handle.get_webview_window("notch") {
+        let _ = win.destroy();
+    }
+    let builder = tauri::WebviewWindowBuilder::new(handle, "notch", tauri::WebviewUrl::default())
+        .title("SHOGUN")
+        .transparent(true)
+        .decorations(false)
+        .resizable(false)
+        .always_on_top(true)
+        .shadow(false)
+        .inner_size(640.0, 300.0)
+        .visible(true)
+        .focused(false);
+    match builder.build() {
+        Ok(win) => {
+            if std::env::var("SHOGUN_NO_NOTCH").is_err() {
+                if let Err(e) = panel::install(&win) {
+                    eprintln!("[shell] respawn: panel install failed: {e}");
+                }
+            }
+            float_on_all_spaces(&win);
+            if let Ok(p) = win.ns_window() {
+                if !p.is_null() {
+                    // SAFETY: freshly built NSWindow, main thread.
+                    unsafe { reposition_to_cursor_screen(p as *mut objc2::runtime::AnyObject) };
+                }
+            }
+            eprintln!("[shell] respawned panel on the active space");
+        }
+        Err(e) => eprintln!("[shell] respawn failed: {e}"),
     }
 }
 

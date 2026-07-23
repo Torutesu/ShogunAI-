@@ -89,15 +89,38 @@ async function sizeWindow(open: boolean): Promise<void> {
   }
 }
 
+// The Rust side RESPAWNS the whole window to move it onto the active Space (the only reliable way
+// on this machine), which reloads the webview — so UI state lives in localStorage to survive it.
+function loadJson<T>(key: string, fallback: T): T {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as T) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+function saveJson(key: string, value: unknown): void {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    /* best-effort */
+  }
+}
+
 export function App(): JSX.Element {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState<boolean>(() => loadJson("shogun.open", true));
   const [status, setStatus] = useState<Status | null>(IN_TAURI ? null : MOCK_STATUS);
   const [state, setState] = useState<StateView>(IN_TAURI ? { commitments: [], open_loops: [] } : MOCK_STATE);
   const [ctxApp, setCtxApp] = useState<string>("");
-  const [msgs, setMsgs] = useState<Msg[]>([]);
+  const [msgs, setMsgs] = useState<Msg[]>(() => loadJson<Msg[]>("shogun.msgs", []));
   const [input, setInput] = useState("");
   const [thinking, setThinking] = useState(false);
-  const [appearance, setAppearance] = useState<Appearance>("auto");
+  const [appearance, setAppearance] = useState<Appearance>(() => loadJson<Appearance>("shogun.appearance", "auto"));
+
+  // Persist across window respawns (the Rust side rebuilds the window to change Spaces).
+  useEffect(() => saveJson("shogun.open", open), [open]);
+  useEffect(() => saveJson("shogun.msgs", msgs.slice(-50)), [msgs]);
+  useEffect(() => saveJson("shogun.appearance", appearance), [appearance]);
   const [showState, setShowState] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const threadRef = useRef<HTMLDivElement>(null);
