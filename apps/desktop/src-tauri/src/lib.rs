@@ -279,6 +279,10 @@ fn summon_to_active_space(app: &tauri::AppHandle) {
         }
         eprintln!("[shell] ⌃⌥N — summoned panel to the cursor's screen/space");
     });
+    // Also tell the webview to EXPAND (un-minimize): ⌃⌥N is the guaranteed re-open path after the
+    // panel was collapsed to the handle.
+    use tauri::Emitter;
+    let _ = app.emit("summon", ());
 }
 
 /// Event-driven Space + display follow (audit causes #2/#3): subscribe to
@@ -358,7 +362,7 @@ fn spawn_panel_state_logger(app: &tauri::App) {
                 return;
             }
             let ptr = p as *mut AnyObject;
-            // SAFETY: read-only getters on the live NSWindow, on the main thread.
+            // SAFETY: getters + conditional property writes on the live NSWindow, main thread.
             let s = unsafe {
                 let visible: bool = msg_send![ptr, isVisible];
                 let on_active: bool = msg_send![ptr, isOnActiveSpace];
@@ -366,6 +370,16 @@ fn spawn_panel_state_logger(app: &tauri::App) {
                 let level: isize = msg_send![ptr, level];
                 let hides: bool = msg_send![ptr, hidesOnDeactivate];
                 let frame: NSRect = msg_send![ptr, frame];
+                // SELF-HEAL: tao re-applies its own stored window flags on focus/resize events,
+                // silently demoting the overlay (observed: level 25→5, behavior 273→1 — at which
+                // point the panel no longer draws over other apps). Re-assert only when wrong; a
+                // pure property write with no re-ordering, so it cannot flicker or steal focus.
+                const WANT_BEHAVIOR: usize = (1 << 0) | (1 << 4) | (1 << 8); // 273
+                if level != 25 || behavior & WANT_BEHAVIOR != WANT_BEHAVIOR {
+                    let _: () = msg_send![ptr, setCollectionBehavior: WANT_BEHAVIOR];
+                    let _: () = msg_send![ptr, setLevel: 25isize];
+                    eprintln!("[panelstate] healed: level {level}→25 behavior {behavior}→{WANT_BEHAVIOR}");
+                }
                 format!(
                     "visible={visible} onActiveSpace={on_active} behavior={behavior} level={level} hidesOnDeactivate={hides} origin=({:.0},{:.0})",
                     frame.origin.x, frame.origin.y

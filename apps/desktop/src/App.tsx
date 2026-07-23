@@ -115,6 +115,13 @@ export function App(): JSX.Element {
     void invoke("interact", { kind: "boot" });
     const offs: Array<Promise<() => void>> = [];
     offs.push(listen<ContextPayload>("context", (e) => setCtxApp(e.payload.bundle_id || e.payload.title_masked || "")));
+    // ⌃⌥N summon: Rust moved the window to this screen — also expand from the minimized handle.
+    offs.push(
+      listen("summon", () => {
+        setOpen(true);
+        void sizeWindow(true);
+      }),
+    );
     offs.push(
       listen<ClockSyncPayload>("clock_sync", (e) =>
         void invoke("clock_sync_ack", { seq: e.payload.seq, jsPerfMs: performance.now() }),
@@ -182,7 +189,7 @@ export function App(): JSX.Element {
   if (!open) {
     return (
       <div className="stage stage--handle">
-        <button className="handle" type="button" onClick={expand} title={t.settings}>
+        <button className="handle" type="button" onClick={expand} title={t.openPanel}>
           <span className="handle__mark">⚔</span>
           <span className="handle__live">
             <span className="live__dot" />

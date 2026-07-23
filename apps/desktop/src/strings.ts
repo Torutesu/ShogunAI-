@@ -12,6 +12,7 @@ export const STRINGS = {
     waiting: "waiting",
     // peek (hover preview)
     peekHint: "click to open",
+    openPanel: "Open SHOGUN (⌃⌥N)",
     // welcome (expanded, empty thread)
     welcomeTitle: "What can I take off your plate?",
     welcomeSub: "Ask about your work, or press ⌃⌥G in any app to draft where your cursor is.",
