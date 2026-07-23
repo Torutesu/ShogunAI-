@@ -23,7 +23,9 @@ export function Memory({ t }: { t: Dictionary }) {
   const m = t.memory;
   return (
     <section id="memory" className="scroll-mt-20 py-[clamp(56px,9vw,112px)]">
-      <div className="container-x grid items-center gap-16 md:grid-cols-2">
+      {/* Two columns only from lg — at md the copy and the recall card both
+          end up too narrow to breathe. */}
+      <div className="container-x grid items-center gap-12 lg:grid-cols-2 lg:gap-16">
         <Reveal>
           <p className="text-xs font-semibold uppercase tracking-[0.08em] text-accent">{m.eyebrow}</p>
           <h2 className="mt-4 font-display text-[clamp(24px,5.5vw,44px)] font-semibold leading-[1.1] tracking-[-0.015em] text-balance">
@@ -37,7 +39,7 @@ export function Memory({ t }: { t: Dictionary }) {
         </Reveal>
 
         <Reveal delay={0.1} y={24}>
-          <Card className="lift p-5">
+          <Card className="lift mx-auto w-full max-w-[560px] p-5 lg:max-w-none">
             <div className="mb-4 flex items-center justify-between">
               <Badge dot>{m.recallChip}</Badge>
               <span className="text-xs text-muted">0.2s</span>

@@ -23,7 +23,9 @@ export function Privacy({ t }: { t: Dictionary }) {
           </Link>
         </Reveal>
 
-        <div className="grid gap-4 sm:grid-cols-3 lg:grid-cols-1">
+        {/* Full-width stacked cards below lg — three ~220px columns at tablet
+            truncate the copy. */}
+        <div className="grid gap-4">
           {t.privacy.points.map((p, i) => {
             const Icon = ICONS[i] ?? Lock;
             return (

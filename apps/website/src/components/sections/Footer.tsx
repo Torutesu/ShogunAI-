@@ -32,8 +32,8 @@ export async function Footer() {
   ];
 
   return (
-    <footer className="border-t border-border pt-14">
-      <div className="container-x grid gap-10 pb-10 md:grid-cols-[1.4fr_2fr]">
+    <footer className="border-t border-border pt-12 sm:pt-16">
+      <div className="container-x grid gap-10 pb-12 md:grid-cols-[1.4fr_2fr] md:gap-14">
         <div>
           <a href="/#top" className="flex items-center gap-2.5">
             <Logo size={22} />
@@ -54,7 +54,7 @@ export async function Footer() {
           ))}
         </div>
       </div>
-      <div className="container-x flex flex-wrap items-center justify-between gap-3 border-t border-border py-[22px] pb-10">
+      <div className="container-x flex flex-wrap items-center justify-between gap-3 border-t border-border py-6">
         <span className="text-xs text-muted">{t.footer.rights}</span>
         <span className="text-xs text-muted">{t.footer.madeFor}</span>
       </div>

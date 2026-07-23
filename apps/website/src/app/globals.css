@@ -103,6 +103,10 @@
   html {
     scroll-behavior: smooth;
     color-scheme: light dark;
+    /* Guard against any full-bleed element (marquee tracks, orbs) widening
+       the page — `clip` avoids creating a scroll container, so sticky
+       positioning inside keeps working. */
+    overflow-x: clip;
   }
   body {
     background: var(--bg);
@@ -110,6 +114,7 @@
     font-family: var(--font-sans);
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
+    overflow-x: clip;
     transition: background-color 0.3s var(--ease-out-soft), color 0.3s var(--ease-out-soft);
   }
   ::selection {
@@ -276,10 +281,12 @@
 .orb {
   position: absolute;
   border-radius: 9999px;
-  filter: blur(48px);
+  /* Heavier blur so orbs read as soft light, not hard grey discs (esp. dark) */
+  filter: blur(80px);
   opacity: var(--orb-opacity);
   mix-blend-mode: var(--orb-blend);
   animation: drift 18s var(--ease-out-soft) infinite alternate;
+  will-change: transform;
 }
 .animate-floaty {
   animation: floaty 7s ease-in-out infinite;
@@ -293,11 +300,44 @@
   animation-name: marquee-rev;
 }
 .marquee-mask {
+  /* Clip the max-content tracks — without this the page gains ~1300px of
+     horizontal scroll and every section looks off-center. */
+  overflow-x: clip;
   -webkit-mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
   mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
 }
 .group\/mq:hover .marquee-track {
   animation-play-state: paused;
+}
+
+/* --- FAQ: fade-slide the answer when a <details> opens --- */
+@keyframes faq-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+details[open] .faq-a {
+  animation: faq-in 0.35s var(--ease-out-soft) both;
+}
+
+/* --- Pricing: micro pop when the billing period swaps the price --- */
+@keyframes price-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.price-swap {
+  animation: price-in 0.3s var(--ease-out-soft) both;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -306,7 +346,9 @@
   .marquee-track,
   .campaign-bar,
   .campaign-shine,
-  .campaign-spark {
+  .campaign-spark,
+  details[open] .faq-a,
+  .price-swap {
     animation: none;
   }
   .campaign-shine {

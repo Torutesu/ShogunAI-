@@ -24,8 +24,9 @@ function BillingToggle({
     <div className="mx-auto mb-10 flex w-fit items-center gap-1 rounded-full border border-border bg-cloud p-1">
       <button
         type="button"
+        aria-pressed={!annual}
         onClick={() => onChange(false)}
-        className={`rounded-full px-4 py-1.5 text-sm font-medium transition-colors ${
+        className={`rounded-full px-4 py-1.5 text-sm font-medium transition-all duration-200 ${
           !annual ? 'bg-surface text-ink shadow-[var(--shadow-card)]' : 'text-muted hover:text-ink'
         }`}
       >
@@ -33,8 +34,9 @@ function BillingToggle({
       </button>
       <button
         type="button"
+        aria-pressed={annual}
         onClick={() => onChange(true)}
-        className={`flex items-center gap-1.5 rounded-full px-4 py-1.5 text-sm font-medium transition-colors ${
+        className={`flex items-center gap-1.5 rounded-full px-4 py-1.5 text-sm font-medium transition-all duration-200 ${
           annual ? 'bg-surface text-ink shadow-[var(--shadow-card)]' : 'text-muted hover:text-ink'
         }`}
       >
@@ -60,7 +62,10 @@ function Plan({ plan, annual, b, featured }: { plan: PlanData; annual: boolean; 
       )}
       <div className="font-display text-lg font-semibold">{plan.name}</div>
       <div className="my-2 flex items-baseline gap-1.5">
-        <span className="font-display text-[40px] font-semibold tracking-[-0.02em] tabular-nums">{price}</span>
+        {/* key remount pops the new price in when the billing period flips */}
+        <span key={price} className="price-swap font-display text-[40px] font-semibold tracking-[-0.02em] tabular-nums">
+          {price}
+        </span>
         <span className="text-muted">{b.perMonth}</span>
       </div>
       <p className="text-sm text-muted">{annual ? b.annualNote : b.monthlyNote}</p>
