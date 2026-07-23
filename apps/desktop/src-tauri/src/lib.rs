@@ -205,7 +205,7 @@ fn setup_macos(app: &tauri::App) {
             if !p.is_null() {
                 // SAFETY: live NSWindow on the main thread (setup).
                 unsafe { pin_top_centre(p as *mut objc2::runtime::AnyObject) };
-                eprintln!("[shell] panel docked bottom-right (visibleFrame)");
+                eprintln!("[shell] panel docked top-centre under the notch (visibleFrame top)");
             }
         }
     }
@@ -304,13 +304,13 @@ unsafe fn reposition_to_cursor_screen(ptr: *mut objc2::runtime::AnyObject) {
             && mouse.y >= f.origin.y
             && mouse.y <= f.origin.y + f.size.height;
         if inside {
-            // Overlay spec: dock at the BOTTOM-RIGHT of the cursor's display, inside visibleFrame
-            // (never overlapping the menu bar/notch or the Dock).
+            // Dock at the TOP-CENTRE of the cursor's display, just under the menu bar/notch
+            // (visibleFrame top). The product is a notch UI — the panel lives under the notch,
+            // never overlapping it.
             let vf: NSRect = msg_send![s, visibleFrame];
             let w: NSRect = msg_send![ptr, frame];
-            const MARGIN: f64 = 16.0;
-            let x = vf.origin.x + (vf.size.width - w.size.width - MARGIN).max(0.0);
-            let y = vf.origin.y + MARGIN;
+            let x = vf.origin.x + ((vf.size.width - w.size.width) / 2.0).max(0.0);
+            let y = vf.origin.y + (vf.size.height - w.size.height).max(0.0);
             let origin = NSPoint { x, y };
             let _: () = msg_send![ptr, setFrameOrigin: origin];
             break;
@@ -378,8 +378,8 @@ fn set_panel_hidden(handle: &tauri::AppHandle) {
     });
 }
 
-/// (main thread) Dock the window at the BOTTOM-RIGHT of ITS screen inside visibleFrame (overlay
-/// spec: a right-edge resident that never overlaps the menu bar/notch or the Dock).
+/// (main thread) Dock the window at the TOP-CENTRE of ITS screen, just under the menu bar/notch
+/// (visibleFrame top — never overlapping the notch).
 ///
 /// SAFETY: caller guarantees `ptr` is the live NSWindow and we're on the main thread.
 #[cfg(target_os = "macos")]
@@ -396,9 +396,8 @@ unsafe fn pin_top_centre(ptr: *mut objc2::runtime::AnyObject) {
     }
     let vf: NSRect = msg_send![screen, visibleFrame];
     let w: NSRect = msg_send![ptr, frame];
-    const MARGIN: f64 = 16.0;
-    let x = vf.origin.x + (vf.size.width - w.size.width - MARGIN).max(0.0);
-    let y = vf.origin.y + MARGIN;
+    let x = vf.origin.x + ((vf.size.width - w.size.width) / 2.0).max(0.0);
+    let y = vf.origin.y + (vf.size.height - w.size.height).max(0.0);
     let origin = NSPoint { x, y };
     let _: () = msg_send![ptr, setFrameOrigin: origin];
 }
@@ -425,7 +424,10 @@ fn reassert_panel(handle: &tauri::AppHandle, why: &'static str, defer: bool) {
     if USER_HIDDEN.load(std::sync::atomic::Ordering::Relaxed) {
         return;
     }
-    // Healthy path: assert flags, touch nothing else.
+    // Assert flags + an IMMEDIATE cheap nudge. `orderFrontRegardless` on an already-front panel
+    // is a no-op (no flicker, no focus change, no reposition), and on an evicted panel it re-adds
+    // it to the current Space right away — the user-visible dropout on app switch was the 450ms
+    // defer + 2.5s debounce before any corrective ordering happened at all.
     if let Some(win) = handle.get_webview_window("notch") {
         if let Ok(p) = win.ns_window() {
             if !p.is_null() {
@@ -440,14 +442,17 @@ fn reassert_panel(handle: &tauri::AppHandle, why: &'static str, defer: bool) {
                     if visible && on_active {
                         return; // genuinely on screen here — leave it alone
                     }
+                    if visible {
+                        let _: () = msg_send![ptr, orderFrontRegardless];
+                    }
                 }
             }
         }
     }
     // During the Space-switch animation `isOnActiveSpace` transiently reads false even for a
     // panel that WILL be on the new Space (canJoinAllSpaces re-attaches after the transition).
-    // Acting on that transient reading was the respawn-abort trigger. Never act inside the
-    // notification tick — re-check after the transition settles.
+    // Acting harder on that transient reading was the respawn-abort trigger. Re-check after the
+    // transition settles before escalating.
     if defer {
         let h = handle.clone();
         std::thread::spawn(move || {
@@ -457,14 +462,14 @@ fn reassert_panel(handle: &tauri::AppHandle, why: &'static str, defer: bool) {
         });
         return;
     }
-    // Debounce the corrective action (one at a time; a settling correction must not re-trigger).
+    // Debounce the stronger correction (one at a time; a settling correction must not re-trigger).
     {
         let mut g = match REASSERT_AT.lock() {
             Ok(g) => g,
             Err(_) => return,
         };
         if let Some(t) = *g {
-            if t.elapsed() < std::time::Duration::from_millis(2500) {
+            if t.elapsed() < std::time::Duration::from_millis(1500) {
                 return;
             }
         }
@@ -473,9 +478,9 @@ fn reassert_panel(handle: &tauri::AppHandle, why: &'static str, defer: bool) {
     // NSPanel mode (behavior bit 0 = canJoinAllSpaces): NEVER destroy/respawn. tauri's
     // `win.destroy()` on the class-swapped panel throws an ObjC exception through Rust —
     // "fatal runtime error: Rust cannot catch foreign exceptions, aborting" — even on its own
-    // main-thread tick (observed on-device, dfea1fd run). And the final log proved the panel
-    // genuinely reaches drawn=true onActiveSpace=true with the full recipe, so a soft re-show
-    // is all the nudge it ever needs.
+    // main-thread tick (observed on-device, dfea1fd run). The full recipe genuinely reaches
+    // drawn=true onActiveSpace=true, so an orderOut/orderFront cycle is the strongest move we
+    // ever need. Position is NOT touched — a re-show must not undo the user's drag.
     let nspanel_mode = PANEL_BEHAVIOR.load(std::sync::atomic::Ordering::Relaxed) & 1 != 0;
     if nspanel_mode {
         eprintln!("[shell] {why}: panel not on this space — soft re-show (no respawn in NSPanel mode)");
@@ -487,7 +492,6 @@ fn reassert_panel(handle: &tauri::AppHandle, why: &'static str, defer: bool) {
                     // notifications post on the main thread otherwise), live NSWindow. Pure
                     // AppKit ordering calls — no wry/tauri teardown involved.
                     unsafe {
-                        reposition_to_cursor_screen(ptr);
                         let nil: *mut AnyObject = std::ptr::null_mut();
                         let _: () = msg_send![ptr, orderOut: nil];
                         let _: () = msg_send![ptr, orderFrontRegardless];
@@ -698,6 +702,16 @@ fn spawn_panel_state_logger(app: &tauri::App) {
                     let _: () = msg_send![ptr, setCollectionBehavior: want];
                     let _: () = msg_send![ptr, setLevel: OVERLAY_LEVEL];
                     eprintln!("[panelstate] healed: level {level}→{OVERLAY_LEVEL} behavior {behavior}→{want}");
+                }
+                // HEARTBEAT: a visible panel that fell off the active Space gets re-ordered every
+                // tick (worst-case 1s recovery even if a workspace notification was missed).
+                // orderFrontRegardless never steals focus or moves the window; skipped while the
+                // user deliberately hid the panel.
+                if visible
+                    && !on_active
+                    && !USER_HIDDEN.load(std::sync::atomic::Ordering::Relaxed)
+                {
+                    let _: () = msg_send![ptr, orderFrontRegardless];
                 }
                 format!(
                     "visible={visible} drawn={drawn} onActiveSpace={on_active} behavior={behavior} level={level} alpha={alpha:.2} appActive={app_active} origin=({:.0},{:.0})",
