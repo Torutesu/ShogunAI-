@@ -90,9 +90,8 @@ fn setup_macos(app: &tauri::App) {
         }
     } else {
         eprintln!("[shell] normal window mode (set SHOGUN_NOTCH=1 for the notch overlay)");
-        // Behave as a normal front-most app (Dock icon + a visible, focused window), not a hidden
-        // agent. Launched from a terminal the window can open behind — force it to show + front.
-        let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
+        // Launched from a terminal the window can open behind or unfocused — force it to show,
+        // centre, and take focus. (The app already shows as a normal window in ⌘Tab.)
         if let Some(win) = app.get_webview_window("notch") {
             let _ = win.show();
             let _ = win.set_focus();
