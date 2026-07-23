@@ -300,11 +300,30 @@ function Settings(props: {
           </div>
         </section>
         <section className="set">
-          <div className="set__label">{t.draftShortcut}</div>
-          <div className="set__row">
-            <kbd>⌃</kbd>
-            <kbd>⌥</kbd>
-            <kbd>G</kbd>
+          <div className="set__label">{t.shortcuts}</div>
+          <div className="keys">
+            <span className="keys__name">{t.summonShortcut}</span>
+            <span className="keys__combo">
+              <kbd>⌃</kbd>
+              <kbd>⌥</kbd>
+              <kbd>Space</kbd>
+            </span>
+          </div>
+          <div className="keys">
+            <span className="keys__name">{t.draftShortcut}</span>
+            <span className="keys__combo">
+              <kbd>⌃</kbd>
+              <kbd>⌥</kbd>
+              <kbd>G</kbd>
+            </span>
+          </div>
+          <div className="keys">
+            <span className="keys__name">{t.quitShortcut}</span>
+            <span className="keys__combo">
+              <kbd>⌃</kbd>
+              <kbd>⌥</kbd>
+              <kbd>Q</kbd>
+            </span>
           </div>
         </section>
         <section className="set">

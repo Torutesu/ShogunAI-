@@ -105,14 +105,11 @@ fn setup_macos(app: &tauri::App) {
             Ok(()) => eprintln!("[shell] NSPanel installed (nonactivating, all-spaces overlay)"),
             Err(e) => eprintln!("[shell] panel install failed: {e} — try SHOGUN_NO_NOTCH=1"),
         }
-        // Explicitly (re)assert collectionBehavior + level + orderFront and log the readback, so we
-        // can confirm the values actually landed on the panel window (not just trust panel.rs).
+        // Best-effort: set canJoinAllSpaces so the panel shows everywhere on setups that honor it.
+        // On setups that don't (e.g. a window manager overriding it), the ⌃⌥Space "summon" shortcut
+        // pulls the panel to the current Space on demand — reliable and flicker-free (the auto-follow
+        // ticker was removed: it destabilised the panel and never worked here anyway).
         float_on_all_spaces(&win);
-        // canJoinAllSpaces isn't honored on device even when set — so ACTIVELY keep the panel on
-        // whatever Space becomes active: orderFrontRegardless pulls the window onto the current
-        // Space. A light ticker re-asserts it so switching desktops / going full-screen shows the
-        // panel within a fraction of a second regardless of whether the OS honors canJoinAllSpaces.
-        keep_on_active_space(app, win.clone());
     } else {
         eprintln!("[spike] no 'notch' window — panel not installed");
     }
@@ -217,45 +214,27 @@ fn set_accessory_activation() {
     }
 }
 
-/// Keep the panel on whatever Space is active. canJoinAllSpaces isn't honored on device (confirmed
-/// set but ignored — even bundled, likely a window manager), so a 400ms ticker checks
-/// `isOnActiveSpace` and, only when the panel is NOT on the current Space, re-assigns it there
-/// (orderOut clears the old assignment, orderFrontRegardless re-adds it to the active Space).
-/// Skipping the no-op case means no flicker while you use it; it only moves when you switch
-/// desktops / go full-screen. Nonactivating orderFront doesn't steal focus.
+/// Bring the panel to the Space the user is currently on — the ⌃⌥Space "summon" action. One-shot
+/// (no ticker, no flicker): orderOut clears the panel's stale Space assignment, orderFrontRegardless
+/// re-adds it to the CURRENTLY active Space. Works even when canJoinAllSpaces is overridden by a
+/// window manager, because it actively moves the window rather than asking the OS to mirror it.
 #[cfg(target_os = "macos")]
-fn keep_on_active_space(app: &tauri::App, win: tauri::WebviewWindow) {
+fn summon_to_active_space(app: &tauri::AppHandle) {
     use objc2::msg_send;
     use objc2::runtime::AnyObject;
-    let handle = app.handle().clone();
-    std::thread::spawn(move || loop {
-        std::thread::sleep(std::time::Duration::from_millis(400));
-        let w = win.clone();
-        let posted = handle.run_on_main_thread(move || {
-            if let Ok(p) = w.ns_window() {
-                if !p.is_null() {
-                    let ptr = p as *mut AnyObject;
-                    // SAFETY: live NSWindow, messaged on the main thread.
-                    unsafe {
-                        // Only act when the panel is NOT on the Space the user is looking at. Asking
-                        // the OS to keep it everywhere (canJoinAllSpaces) is ignored on this machine,
-                        // so instead we detect "not here" and pull it here: orderOut clears the stale
-                        // Space assignment, orderFrontRegardless re-adds the window to the CURRENTLY
-                        // active Space. Because we skip this when it's already on the active Space,
-                        // there's no flicker while you're using it — it only moves when you switch
-                        // desktops / go full-screen. Works regardless of window managers.
-                        let on_active: bool = msg_send![ptr, isOnActiveSpace];
-                        if !on_active {
-                            let nil: *mut AnyObject = std::ptr::null_mut();
-                            let _: () = msg_send![ptr, orderOut: nil];
-                            let _: () = msg_send![ptr, orderFrontRegardless];
-                        }
-                    }
+    use tauri::Manager;
+    let Some(win) = app.get_webview_window("notch") else { return };
+    let _ = app.run_on_main_thread(move || {
+        if let Ok(p) = win.ns_window() {
+            if !p.is_null() {
+                let ptr = p as *mut AnyObject;
+                // SAFETY: live NSWindow, messaged on the main thread.
+                unsafe {
+                    let nil: *mut AnyObject = std::ptr::null_mut();
+                    let _: () = msg_send![ptr, orderOut: nil];
+                    let _: () = msg_send![ptr, orderFrontRegardless];
                 }
             }
-        });
-        if posted.is_err() {
-            break; // app is shutting down
         }
     });
 }
@@ -352,6 +331,34 @@ fn register_expand_shortcut(app: &tauri::App) {
     match res {
         Ok(()) => eprintln!("[spike] ⌃⌥G registered — press it to draft at the cursor"),
         Err(e) => eprintln!("[spike] inline shortcut registration failed: {e}"),
+    }
+
+    // ⌃⌥Space → summon the panel to the Space/desktop you're currently on. This is the reliable,
+    // environment-independent replacement for auto all-spaces: press it from any desktop or a
+    // full-screen app and the panel jumps to you.
+    let summon = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::Space);
+    let res = app.global_shortcut().on_shortcut(summon, move |app, _sc, event| {
+        if event.state() == ShortcutState::Pressed {
+            summon_to_active_space(app);
+        }
+    });
+    match res {
+        Ok(()) => eprintln!("[spike] ⌃⌥Space registered — press it to summon the panel to this desktop"),
+        Err(e) => eprintln!("[spike] summon shortcut registration failed: {e}"),
+    }
+
+    // ⌃⌥Q → quit. An accessory app has no Dock icon / menu, so this is an always-available way to
+    // close SHOGUN from anywhere (the Settings pane also has a Quit button).
+    let quit = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyQ);
+    let res = app.global_shortcut().on_shortcut(quit, move |app, _sc, event| {
+        if event.state() == ShortcutState::Pressed {
+            eprintln!("[shell] ⌃⌥Q — quitting");
+            app.exit(0);
+        }
+    });
+    match res {
+        Ok(()) => eprintln!("[spike] ⌃⌥Q registered — press it to quit SHOGUN"),
+        Err(e) => eprintln!("[spike] quit shortcut registration failed: {e}"),
     }
 }
 
