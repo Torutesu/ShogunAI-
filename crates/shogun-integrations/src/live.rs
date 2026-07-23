@@ -1,10 +1,10 @@
-//! The effectful transport (feature `live`): a blocking HTTPS JSON-RPC client for the MCP
-//! Streamable-HTTP transport, plus the macOS Keychain token source.
+//! The effectful network transport (feature `live`): a blocking HTTPS JSON-RPC client for the MCP
+//! Streamable-HTTP transport. The macOS Keychain token store lives in [`crate::keychain`] (it needs
+//! no network, so it is not behind this feature); the auto-refresh [`crate::token::ManagedTokenProvider`]
+//! is pure.
 //!
-//! This is the ONLY module that touches the network or secrets. It is off by default so the pure
-//! CI (endpoints / toolmap / result / transport-over-fake) never links a TLS stack — mirroring
-//! shogun-core's `net` feature. It compiles under `--features live` on any target; the macOS
-//! Keychain provider is additionally `#[cfg(target_os = "macos")]`.
+//! This is the only module that links a TLS stack, so it is off by default — the pure CI (endpoints
+//! / toolmap / result / transport-over-fake) never pulls reqwest, mirroring shogun-core's `net`.
 //!
 //! NOTE: the actual request/response round-trip cannot be exercised on Linux CI (it needs live
 //! Google OAuth tokens and network). The request construction below follows the MCP Streamable-HTTP
@@ -84,89 +84,6 @@ fn redact(msg: &str) -> String {
     match msg.find('?') {
         Some(i) => format!("{}…", &msg[..i]),
         None => msg.to_string(),
-    }
-}
-
-/// The macOS Keychain token store (invariant 7): one generic-password entry per service holding the
-/// serialized [`crate::oauth::TokenSet`] (access + refresh + expiry). Keyed `"<source>-tokenset"`
-/// under the SHOGUN Keychain service (e.g. `com.selectkk.shogun`). Read + written by
-/// [`crate::token::TokenManager`]; nothing else touches tokens.
-#[cfg(target_os = "macos")]
-pub struct KeychainTokenStore {
-    keychain_service: String,
-}
-
-#[cfg(target_os = "macos")]
-impl KeychainTokenStore {
-    pub fn new(keychain_service: impl Into<String>) -> Self {
-        Self { keychain_service: keychain_service.into() }
-    }
-    fn account(service: Service) -> String {
-        format!("{}-tokenset", service.source_str())
-    }
-}
-
-#[cfg(target_os = "macos")]
-impl crate::token::TokenStore for KeychainTokenStore {
-    fn load(&self, service: Service) -> Option<crate::oauth::TokenSet> {
-        let bytes = security_framework::passwords::get_generic_password(
-            &self.keychain_service,
-            &Self::account(service),
-        )
-        .ok()?;
-        let blob = String::from_utf8(bytes).ok()?;
-        crate::token::deserialize(&blob).ok()
-    }
-    fn save(&self, service: Service, tokens: &crate::oauth::TokenSet) -> Result<(), String> {
-        let blob = crate::token::serialize(tokens)?;
-        security_framework::passwords::set_generic_password(
-            &self.keychain_service,
-            &Self::account(service),
-            blob.as_bytes(),
-        )
-        .map_err(|_| format!("keychain write failed for {}", service.source_str()))
-    }
-    fn delete(&self, service: Service) -> Result<(), String> {
-        security_framework::passwords::delete_generic_password(
-            &self.keychain_service,
-            &Self::account(service),
-        )
-        .map_err(|_| format!("keychain delete failed for {}", service.source_str()))
-    }
-}
-
-/// Wall-clock unix-ms — the default clock for [`ManagedTokenProvider`].
-pub fn system_now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
-}
-
-/// A [`TokenProvider`] that always returns a *valid* access token, refreshing via
-/// [`crate::token::TokenManager`] when the stored one is near expiry. This is what
-/// [`HttpMcpRpc`] uses, so a first-layer MCP call an hour after connecting still succeeds.
-pub struct ManagedTokenProvider<X: crate::oauth::TokenExchange, S: crate::token::TokenStore> {
-    cfg: crate::oauth::AuthConfig,
-    exchange: X,
-    store: S,
-    clock: fn() -> i64,
-}
-
-impl<X: crate::oauth::TokenExchange, S: crate::token::TokenStore> ManagedTokenProvider<X, S> {
-    /// Uses the wall clock. Pass a per-service `AuthConfig` (all Google services share endpoints;
-    /// only the client id/secret differ if you register separate clients).
-    pub fn new(cfg: crate::oauth::AuthConfig, exchange: X, store: S) -> Self {
-        Self { cfg, exchange, store, clock: system_now_ms }
-    }
-}
-
-impl<X: crate::oauth::TokenExchange, S: crate::token::TokenStore> TokenProvider
-    for ManagedTokenProvider<X, S>
-{
-    fn access_token(&self, service: Service) -> Result<String, String> {
-        let mgr = crate::token::TokenManager::new(&self.cfg, &self.exchange, &self.store);
-        mgr.valid_access_token(service, (self.clock)()).map_err(|e| format!("{e:?}"))
     }
 }
 

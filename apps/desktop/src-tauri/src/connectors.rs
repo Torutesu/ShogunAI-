@@ -21,8 +21,10 @@ pub mod mac {
     use std::time::Duration;
 
     use shogun_core::daemon::Db;
-    use shogun_integrations::live::{HttpMcpRpc, KeychainTokenStore, ManagedTokenProvider};
+    use shogun_integrations::keychain::KeychainTokenStore;
+    use shogun_integrations::live::HttpMcpRpc;
     use shogun_integrations::oauth::AuthConfig;
+    use shogun_integrations::token::ManagedTokenProvider;
     use shogun_integrations::oauth_flow::{run_loopback_flow, HttpTokenExchange};
     use shogun_integrations::runtime::{ConnectorRuntime, DEFAULT_SYNC_INTERVAL_MS};
     use shogun_integrations::token::TokenStore;
@@ -75,19 +77,25 @@ pub mod mac {
 
     // ------------------------------------------------------------- commands
 
-    /// List every service's connection status for the connections screen.
+    /// List every service's connection status for the connections screen. The return type derives
+    /// `Serialize` in shogun-integrations, so Tauri serializes it directly (no serde_json here).
     #[tauri::command]
     pub fn connectors_list(
         state: tauri::State<'_, ConnectorState>,
         db: tauri::State<'_, Db>,
-    ) -> Result<serde_json::Value, String> {
+    ) -> Result<Vec<shogun_integrations::ServiceStatus>, String> {
         let now = db.now_ms();
         let rt = state.0.lock().map_err(|_| "runtime lock poisoned".to_string())?;
-        serde_json::to_value(rt.statuses(now)).map_err(|e| e.to_string())
+        Ok(rt.statuses(now))
     }
 
     /// Connect a service: run the loopback OAuth+PKCE flow, persist the token to the Keychain, and
     /// mark it connected. `service` is the source id (`gmail` / `gcal` / `gdrive`).
+    ///
+    /// NOTE (rough): this is a synchronous command, so it blocks its thread while the user completes
+    /// consent in the browser. For production, make it `async` and run the flow via
+    /// `tauri::async_runtime::spawn_blocking` (cloning the `Arc`/`Db` out of `State` first) so the UI
+    /// stays responsive during the wait.
     #[tauri::command]
     pub fn connect_service(
         service: String,

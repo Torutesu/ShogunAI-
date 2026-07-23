@@ -25,6 +25,9 @@ pub mod token;
 pub mod toolmap;
 pub mod transport;
 
+/// macOS Keychain token store — no network, so not behind `live`.
+#[cfg(target_os = "macos")]
+pub mod keychain;
 #[cfg(feature = "live")]
 pub mod live;
 #[cfg(feature = "live")]
@@ -33,5 +36,8 @@ pub mod oauth_flow;
 pub use oauth::{AuthConfig, Pkce, TokenExchange, TokenSet};
 pub use rpc::{McpRpc, StaticTokenProvider, TokenProvider};
 pub use runtime::{ConnUi, ConnectorRuntime, IngestSink, ServiceStatus, SyncReport};
-pub use token::{MemoryTokenStore, TokenError, TokenManager, TokenStore};
+pub use token::{ManagedTokenProvider, MemoryTokenStore, TokenError, TokenManager, TokenStore};
 pub use transport::{RemoteMcpTransport, WriteExecutor};
+
+#[cfg(target_os = "macos")]
+pub use keychain::KeychainTokenStore;

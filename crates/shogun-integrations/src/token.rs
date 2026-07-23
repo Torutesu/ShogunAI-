@@ -98,6 +98,47 @@ impl<'a, X: TokenExchange, S: TokenStore> TokenManager<'a, X, S> {
     }
 }
 
+/// Wall-clock unix-ms — the default clock for [`ManagedTokenProvider`].
+pub fn system_now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// A [`crate::rpc::TokenProvider`] that always returns a *valid* access token, refreshing via
+/// [`TokenManager`] when the stored one is near expiry. This is what the live MCP client
+/// ([`crate::live::HttpMcpRpc`]) uses, so a first-layer call an hour after connecting still succeeds.
+/// Pure (no network of its own) — the refresh network call goes through the injected
+/// [`TokenExchange`].
+pub struct ManagedTokenProvider<X: TokenExchange, S: TokenStore> {
+    cfg: AuthConfig,
+    exchange: X,
+    store: S,
+    clock: fn() -> i64,
+}
+
+impl<X: TokenExchange, S: TokenStore> ManagedTokenProvider<X, S> {
+    /// Uses the wall clock. All Google services share endpoints, so one `AuthConfig` (one OAuth
+    /// client) serves every service; only the client id/secret differ if you register separate ones.
+    pub fn new(cfg: AuthConfig, exchange: X, store: S) -> Self {
+        Self { cfg, exchange, store, clock: system_now_ms }
+    }
+
+    /// Override the clock (tests).
+    pub fn with_clock(mut self, clock: fn() -> i64) -> Self {
+        self.clock = clock;
+        self
+    }
+}
+
+impl<X: TokenExchange, S: TokenStore> crate::rpc::TokenProvider for ManagedTokenProvider<X, S> {
+    fn access_token(&self, service: Service) -> Result<String, String> {
+        let mgr = TokenManager::new(&self.cfg, &self.exchange, &self.store);
+        mgr.valid_access_token(service, (self.clock)()).map_err(|e| format!("{e:?}"))
+    }
+}
+
 /// An in-memory token store for tests and dev (never used in production — production is the Keychain).
 #[derive(Default)]
 pub struct MemoryTokenStore {
@@ -211,6 +252,26 @@ mod tests {
         let cfg = cfg();
         let mgr = TokenManager::new(&cfg, &ex, &store);
         assert_eq!(mgr.valid_access_token(Service::Gmail, 0), Err(TokenError::NotConnected));
+    }
+
+    fn clock_2000() -> i64 {
+        2_000
+    }
+
+    #[test]
+    fn managed_provider_serves_a_valid_token_via_the_provider_trait() {
+        use crate::rpc::TokenProvider;
+        let store = MemoryTokenStore::new();
+        // stored token is expired at now=2000 → the provider refreshes transparently
+        store.save(Service::Gmail, &token("old", Some("rt"), 1_000)).unwrap();
+        let ex = CountingExchange {
+            calls: RefCell::new(0),
+            reply: Ok(r#"{"access_token":"fresh","expires_in":3600}"#.to_string()),
+        };
+        let provider = ManagedTokenProvider::new(cfg(), ex, store).with_clock(clock_2000);
+        assert_eq!(provider.access_token(Service::Gmail).unwrap(), "fresh");
+        // an unconnected service surfaces an error string
+        assert!(provider.access_token(Service::GoogleCalendar).is_err());
     }
 
     #[test]
