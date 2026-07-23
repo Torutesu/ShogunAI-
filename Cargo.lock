@@ -3331,6 +3331,7 @@ name = "shogun-desktop-spike"
 version = "0.0.0"
 dependencies = [
  "accessibility-sys",
+ "block2",
  "core-foundation",
  "core-foundation-sys",
  "objc2",
