@@ -78,6 +78,14 @@ pub fn run() {
 fn setup_macos(app: &tauri::App) {
     use tauri::Manager;
 
+    // Make SHOGUN an accessory app FIRST. collectionBehavior=canJoinAllSpaces is set and reads
+    // back correctly, yet the window still doesn't follow Spaces — because a Regular activation
+    // policy (Dock icon, normal app) has its windows swept away on Space switch even with
+    // canJoinAllSpaces. Accessory (LSUIElement) is the recipe every notch/menu-bar overlay uses:
+    // no Dock icon, windows behave like system UI and actually join every Space + sit over
+    // full-screen apps. Global shortcuts, capture, and the webview are unaffected.
+    set_accessory_activation();
+
     // RENDERING REALITY (on-device, this machine): swapping the window to an NSPanel blanks the
     // wry webview (nothing draws — ⌘⇧J and hover both dead because there is no visible surface),
     // while the plain window renders fine. So the DEFAULT is a plain, visible, INTERACTIVE window
@@ -199,6 +207,26 @@ fn setup_macos(app: &tauri::App) {
             eprintln!("[spike] capture source started (poll {}ms)", capture_source::DEFAULT_POLL_MS);
         }
         Err(e) => eprintln!("[spike] memory DB unavailable — capture source not started: {e}"),
+    }
+}
+
+/// Set the app's activation policy to Accessory (NSApplicationActivationPolicyAccessory = 1): no
+/// Dock icon, background overlay. Required for the notch window to actually follow every Space and
+/// draw over full-screen apps — a Regular-policy app ignores that even with canJoinAllSpaces set.
+/// Runs on the main thread (setup).
+#[cfg(target_os = "macos")]
+fn set_accessory_activation() {
+    use objc2::runtime::AnyObject;
+    use objc2::{class, msg_send};
+    // SAFETY: standard AppKit calls on the shared NSApplication, on the main thread.
+    unsafe {
+        let ns_app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+        if ns_app.is_null() {
+            eprintln!("[shell] NSApplication nil — activation policy unchanged");
+            return;
+        }
+        let ok: bool = msg_send![ns_app, setActivationPolicy: 1isize];
+        eprintln!("[shell] activation policy = Accessory (no Dock icon, all-spaces overlay) ok={ok}");
     }
 }
 
