@@ -20,6 +20,7 @@
         "decorations": false,
         "resizable": false,
         "alwaysOnTop": true,
+        "visibleOnAllWorkspaces": true,
         "shadow": false,
         "width": 400,
         "height": 560,

@@ -97,8 +97,16 @@ fn setup_macos(app: &tauri::App) {
         eprintln!("[shell] plain visible window (product surface). Set SHOGUN_NOTCH=1 to try the NSPanel.");
         if let Some(win) = app.get_webview_window("notch") {
             let _ = win.show();
-            let _ = win.set_focus();
-            eprintln!("[shell] window shown");
+            // All-spaces / background float WITHOUT the NSPanel swap that blanks the webview: set
+            // the NSWindow collectionBehavior to canJoinAllSpaces (+ fullScreenAuxiliary) and a
+            // floating level. The plain window renders AND now follows the user across every space
+            // and over full-screen apps — the "どの画面でも見れる" requirement, minus the blank.
+            match win.set_visible_on_all_workspaces(true) {
+                Ok(()) => eprintln!("[shell] window set visible on all workspaces"),
+                Err(e) => eprintln!("[shell] set_visible_on_all_workspaces failed: {e}"),
+            }
+            let _ = win.set_always_on_top(true);
+            eprintln!("[shell] window shown (all-spaces, floating)");
         }
     }
 
