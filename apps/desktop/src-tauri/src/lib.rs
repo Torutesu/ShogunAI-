@@ -172,6 +172,11 @@ fn setup_macos(app: &tauri::App) {
         None => build_panel_window(app.handle()),
     }
 
+    // Agent-lane provider settings (provider + model; key stays in the Keychain). MUST load
+    // before any fallible early-return below (geometry etc.) — a skipped load silently reverts
+    // every chat/draft to the default provider.
+    inline_source::mac::init_llm_settings(app.handle());
+
     // Audit fixes: event-driven Space follow (re-show on every desktop/full-screen switch) and the
     // ground-truth [panelstate] diagnostics stream.
     watch_space_changes(app);
@@ -238,9 +243,6 @@ fn setup_macos(app: &tauri::App) {
         unsafe { pin_top_centre(ptr) };
         eprintln!("[shell] panel docked top-centre under the notch (visibleFrame top)");
     }
-
-    // Agent-lane provider settings (provider + model; key stays in the Keychain).
-    inline_source::mac::init_llm_settings(app.handle());
 
     // T-07/T-08: mouse tap → integrated engine + measurement streams.
     let (tx, rx) = std::sync::mpsc::channel::<hover::TapEvent>();
@@ -970,12 +972,40 @@ mod shortcuts {
         app.path().app_data_dir().ok().map(|d| d.join("shortcuts.json"))
     }
 
+    /// On-disk format. `version` lets a default-change migration run ONCE instead of forever —
+    /// version 1 was the bare Bindings map (still parsed for backward compat).
+    #[derive(serde::Serialize, serde::Deserialize, Default)]
+    struct ShortcutsFile {
+        #[serde(default)]
+        version: u32,
+        #[serde(default)]
+        binds: Bindings,
+    }
+
+    /// The current on-disk version. v2 = the ⌥G draft default.
+    const SHORTCUTS_VERSION: u32 = 2;
+
     /// Load persisted bindings, filling any missing action with its default.
     pub fn load(app: &tauri::AppHandle) -> Bindings {
         let mut binds = defaults();
+        let mut version = 0u32;
         if let Some(p) = config_path(app) {
             if let Ok(text) = std::fs::read_to_string(p) {
-                if let Ok(saved) = serde_json::from_str::<Bindings>(&text) {
+                let mut saved: Option<Bindings> = None;
+                if let Ok(file) = serde_json::from_str::<ShortcutsFile>(&text) {
+                    if !file.binds.is_empty() {
+                        version = file.version;
+                        saved = Some(file.binds);
+                    }
+                }
+                if saved.is_none() {
+                    // Legacy v1: a bare Bindings map.
+                    if let Ok(flat) = serde_json::from_str::<Bindings>(&text) {
+                        version = 1;
+                        saved = Some(flat);
+                    }
+                }
+                if let Some(saved) = saved {
                     for (k, v) in saved {
                         if ACTIONS.contains(&k.as_str()) {
                             binds.insert(k, v);
@@ -984,10 +1014,13 @@ mod shortcuts {
                 }
             }
         }
-        // Migration: the draft default changed ⌃⌥G → ⌥G. A saved binding equal to the OLD default
-        // was never a deliberate choice (defaults get persisted on first save), so move it.
-        if binds.get("draft").map(String::as_str) == Some("Control+Alt+KeyG") {
-            binds.insert("draft".into(), "Alt+KeyG".into());
+        // v1→v2 migration: the draft default changed ⌃⌥G → ⌥G. Runs ONCE — save() below stamps
+        // the new version, so a user who later deliberately re-records ⌃⌥G keeps it.
+        if version < SHORTCUTS_VERSION {
+            if binds.get("draft").map(String::as_str) == Some("Control+Alt+KeyG") {
+                binds.insert("draft".into(), "Alt+KeyG".into());
+            }
+            save(app, &binds);
         }
         binds
     }
@@ -997,7 +1030,8 @@ mod shortcuts {
         if let Some(dir) = p.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-        match serde_json::to_string_pretty(binds) {
+        let file = ShortcutsFile { version: SHORTCUTS_VERSION, binds: binds.clone() };
+        match serde_json::to_string_pretty(&file) {
             Ok(json) => {
                 if let Err(e) = std::fs::write(&p, json) {
                     eprintln!("[shell] shortcuts save failed: {e}");

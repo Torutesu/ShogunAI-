@@ -263,15 +263,19 @@ pub mod mac {
             .and_then(|bytes| String::from_utf8(bytes).ok())
     }
 
-    /// Save the BYOK key for the ACTIVE provider (Settings → "Your key"). Overwrites any existing
-    /// key for that provider. The key itself is NEVER logged (invariant 7).
+    /// Save the BYOK key for `provider` (Settings → "Your key"). The provider comes EXPLICITLY
+    /// from the UI — reading the backend's "current" provider here raced the async provider
+    /// switch and could file a key under the wrong Keychain account. Overwrites any existing key
+    /// for that provider. The key itself is NEVER logged (invariant 7).
     #[tauri::command]
-    pub fn set_byok_key(key: String) -> Result<(), String> {
+    pub fn set_byok_key(provider: String, key: String) -> Result<(), String> {
+        if !PROVIDERS.contains(&provider.as_str()) {
+            return Err(format!("unknown provider: {provider}"));
+        }
         let key = key.trim();
         if key.is_empty() {
             return Err("key is empty".into());
         }
-        let provider = current_settings().provider;
         security_framework::passwords::set_generic_password(
             KEYCHAIN_SERVICE,
             keychain_account(&provider),
@@ -282,10 +286,12 @@ pub mod mac {
         Ok(())
     }
 
-    /// Remove the ACTIVE provider's BYOK key — chat and drafts fall back to the echo mock.
+    /// Remove `provider`'s BYOK key — chat and drafts fall back to the echo mock.
     #[tauri::command]
-    pub fn clear_byok_key() -> Result<(), String> {
-        let provider = current_settings().provider;
+    pub fn clear_byok_key(provider: String) -> Result<(), String> {
+        if !PROVIDERS.contains(&provider.as_str()) {
+            return Err(format!("unknown provider: {provider}"));
+        }
         security_framework::passwords::delete_generic_password(KEYCHAIN_SERVICE, keychain_account(&provider))
             .map_err(|e| e.to_string())?;
         eprintln!("[inline] BYOK key removed from Keychain (provider: {provider})");

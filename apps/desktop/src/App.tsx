@@ -407,10 +407,18 @@ function Settings(props: {
       .catch(() => undefined);
   }, []);
   const applyLlm = (p: string, m: string): void => {
+    const prev = { provider, model };
     setProvider(p);
     setModel(m);
     setKeyMsg("");
-    if (IN_TAURI) void invoke("set_llm_settings", { provider: p, model: m }).catch((e) => setKeyMsg(String(e)));
+    if (IN_TAURI)
+      void invoke("set_llm_settings", { provider: p, model: m }).catch((e) => {
+        // Roll the UI back — an optimistic provider the backend never accepted would send the
+        // next key save to the wrong Keychain account.
+        setProvider(prev.provider);
+        setModel(prev.model);
+        setKeyMsg(String(e));
+      });
   };
 
   const saveKey = (): void => {
@@ -421,7 +429,9 @@ function Settings(props: {
       setKeyInput("");
       return;
     }
-    void invoke("set_byok_key", { key: k })
+    // The provider is passed EXPLICITLY so the key always lands in the account the user sees
+    // selected — never the backend's possibly-lagging idea of the current provider.
+    void invoke("set_byok_key", { provider, key: k })
       .then(() => {
         setKeyState(true);
         setKeyInput("");
@@ -434,7 +444,7 @@ function Settings(props: {
       setKeyState(false);
       return;
     }
-    void invoke("clear_byok_key")
+    void invoke("clear_byok_key", { provider })
       .then(() => {
         setKeyState(false);
         setKeyMsg("");
@@ -555,7 +565,11 @@ function Settings(props: {
                 key={p.id}
                 type="button"
                 className={`seg__opt${provider === p.id ? " is-on" : ""}`}
-                onClick={() => applyLlm(p.id, model)}
+                onClick={() => {
+                  // Model ids are provider-specific — carrying one across providers sends an
+                  // invalid model to the new provider. Blank = the provider's default.
+                  if (p.id !== provider) applyLlm(p.id, "");
+                }}
               >
                 {p.label}
               </button>
@@ -586,7 +600,7 @@ function Settings(props: {
             <input
               className="keyrow__input"
               type="password"
-              placeholder={t.keyPlaceholder}
+              placeholder={t.keyPlaceholders[provider] ?? t.keyPlaceholders.anthropic}
               value={keyInput}
               autoComplete="off"
               onChange={(e) => setKeyInput(e.target.value)}

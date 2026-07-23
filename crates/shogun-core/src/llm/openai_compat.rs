@@ -121,14 +121,11 @@ impl<T: HttpTransport, S: TraceabilitySink> OpenAiCompatAgentClient<T, S> {
         Self { transport, sink, key, cfg }
     }
 
-    /// Send `prompt` and return the assistant text. Records the send to traceability on success.
+    /// Send `prompt` and return the assistant text. The traceability row is recorded at the TRUE
+    /// egress point — before the request goes out — so a prompt that left the device but got a
+    /// 401/timeout back is still traced (invariant 3: every send site logs, success or not).
     pub async fn complete(&self, prompt: &str) -> Result<String, LlmError> {
         let req = build_chat_request(&self.cfg, self.key.secret(), prompt)?;
-        let resp = self.transport.send(req).await?;
-        if !resp.is_success() {
-            return Err(LlmError::Provider(format!("chat/completions HTTP {}", resp.status)));
-        }
-        let text = parse_chat_response(&resp.body)?;
         self.sink.record(TraceRecord::for_chunk(
             Route::MessagesApi,
             "agent",
@@ -136,7 +133,11 @@ impl<T: HttpTransport, S: TraceabilitySink> OpenAiCompatAgentClient<T, S> {
             prompt,
             false,
         ));
-        Ok(text)
+        let resp = self.transport.send(req).await?;
+        if !resp.is_success() {
+            return Err(LlmError::Provider(format!("chat/completions HTTP {}", resp.status)));
+        }
+        parse_chat_response(&resp.body)
     }
 }
 
@@ -208,7 +209,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn non_2xx_is_a_provider_error_and_traces_nothing() {
+    async fn non_2xx_is_a_provider_error_but_the_egress_is_still_traced() {
         let transport = MockTransport::new([HttpResponse { status: 401, body: String::new() }]);
         let sink = RecordingSink::new();
         let client = OpenAiCompatAgentClient::new(
@@ -219,6 +220,7 @@ mod tests {
         );
         let err = client.complete("p").await.unwrap_err();
         assert!(matches!(err, LlmError::Provider(m) if m.contains("401")));
-        assert!(client.sink.records().is_empty());
+        // the prompt STILL left the device — invariant 3 traces the send, success or not
+        assert_eq!(client.sink.records().len(), 1);
     }
 }

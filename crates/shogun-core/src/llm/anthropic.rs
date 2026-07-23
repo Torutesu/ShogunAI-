@@ -360,14 +360,11 @@ impl<T: HttpTransport, S: TraceabilitySink> AnthropicAgentClient<T, S> {
         Self { transport, sink, key, cfg }
     }
 
-    /// Send `prompt` and return the assistant text. Records the send to traceability on success.
+    /// Send `prompt` and return the assistant text. The traceability row is recorded at the TRUE
+    /// egress point — before the request goes out — so a prompt that left the device but got a
+    /// 401/timeout back is still traced (invariant 3: every send site logs, success or not).
     pub async fn complete(&self, prompt: &str) -> Result<String, LlmError> {
         let req = build_messages_request(&self.cfg, self.key.secret(), prompt, true)?;
-        let resp = self.transport.send(req).await?;
-        if !resp.is_success() {
-            return Err(LlmError::Provider(format!("messages HTTP {}", resp.status)));
-        }
-        let text = parse_completion_body(&resp.body)?;
         self.sink.record(TraceRecord::for_chunk(
             Route::MessagesApi,
             "agent",
@@ -375,7 +372,11 @@ impl<T: HttpTransport, S: TraceabilitySink> AnthropicAgentClient<T, S> {
             prompt,
             false,
         ));
-        Ok(text)
+        let resp = self.transport.send(req).await?;
+        if !resp.is_success() {
+            return Err(LlmError::Provider(format!("messages HTTP {}", resp.status)));
+        }
+        parse_completion_body(&resp.body)
     }
 }
 
@@ -395,14 +396,11 @@ impl<T: HttpTransport, S: TraceabilitySink> AnthropicBatchClient<T, S> {
         Self { transport, sink, key, cfg }
     }
 
-    /// Create a batch from `items`. Records one traceability row per item on success.
+    /// Create a batch from `items`. One traceability row per item, recorded at the TRUE egress
+    /// point — before the request goes out — so chunks that left the device are traced even when
+    /// the provider rejects the batch (invariant 3).
     pub async fn submit(&self, items: &[BatchItem]) -> Result<BatchHandle, LlmError> {
         let req = build_batch_create_request(&self.cfg, self.key.secret(), items)?;
-        let resp = self.transport.send(req).await?;
-        if !resp.is_success() {
-            return Err(LlmError::Provider(format!("batch create HTTP {}", resp.status)));
-        }
-        let handle = parse_batch_handle(&resp.body)?;
         let dest = self.cfg.destination();
         for it in items {
             self.sink.record(TraceRecord::for_chunk(
@@ -413,7 +411,11 @@ impl<T: HttpTransport, S: TraceabilitySink> AnthropicBatchClient<T, S> {
                 false,
             ));
         }
-        Ok(handle)
+        let resp = self.transport.send(req).await?;
+        if !resp.is_success() {
+            return Err(LlmError::Provider(format!("batch create HTTP {}", resp.status)));
+        }
+        parse_batch_handle(&resp.body)
     }
 
     /// Poll a batch's status. Callers loop this on their own cadence until [`BatchStatus::is_ended`].
@@ -601,8 +603,9 @@ mod tests {
         );
         let err = client.complete("x").await.unwrap_err();
         assert!(matches!(err, LlmError::Provider(_)));
-        // a failed send records nothing
-        assert!(client.sink_records().is_empty());
+        // the prompt STILL left the device — the egress is traced even on provider failure
+        // (invariant 3: send sites always log)
+        assert_eq!(client.sink_records().len(), 1);
     }
 
     #[tokio::test]
