@@ -219,18 +219,46 @@ fn set_accessory_activation() {
     }
 }
 
-/// Bring the panel to where the user actually is — the ⌃⌥N "summon" action. Two steps, one shot
-/// (no ticker, no flicker):
-/// 1. Move the window to the DISPLAY the mouse cursor is on, pinned top-centre (a window physically
-///    exists on one display only — with 2 displays the panel was structurally invisible on the
-///    other one, audit cause #3).
-/// 2. orderOut + orderFrontRegardless — clears any stale Space assignment and re-adds the window to
-///    the CURRENTLY active Space, which works even when canJoinAllSpaces is overridden.
+/// (main thread) Move the panel to the DISPLAY the mouse cursor is on, pinned top-centre. A window
+/// physically lives on ONE display; with 2 displays the panel was stuck on the built-in one and
+/// structurally invisible on the other (audit cause #3 — `origin` never changed in [panelstate]).
+/// This is a pure reposition (no order in/out), so it never flickers or steals focus.
+///
+/// SAFETY: caller guarantees `ptr` is the live NSWindow and we're on the main thread.
 #[cfg(target_os = "macos")]
-fn summon_to_active_space(app: &tauri::AppHandle) {
+unsafe fn reposition_to_cursor_screen(ptr: *mut objc2::runtime::AnyObject) {
     use objc2::runtime::AnyObject;
     use objc2::{class, msg_send};
     use objc2_foundation::{NSPoint, NSRect};
+    let mouse: NSPoint = msg_send![class!(NSEvent), mouseLocation];
+    let screens: *mut AnyObject = msg_send![class!(NSScreen), screens];
+    let count: usize = if screens.is_null() { 0 } else { msg_send![screens, count] };
+    for i in 0..count {
+        let s: *mut AnyObject = msg_send![screens, objectAtIndex: i];
+        if s.is_null() {
+            continue;
+        }
+        let f: NSRect = msg_send![s, frame];
+        let inside = mouse.x >= f.origin.x
+            && mouse.x <= f.origin.x + f.size.width
+            && mouse.y >= f.origin.y
+            && mouse.y <= f.origin.y + f.size.height;
+        if inside {
+            let w: NSRect = msg_send![ptr, frame];
+            let x = f.origin.x + ((f.size.width - w.size.width) / 2.0).max(0.0);
+            let top = NSPoint { x, y: f.origin.y + f.size.height };
+            let _: () = msg_send![ptr, setFrameTopLeftPoint: top];
+            break;
+        }
+    }
+}
+
+/// Bring the panel to where the user actually is — the ⌃⌥N "summon" action. Reposition to the
+/// cursor's display, then orderOut+orderFrontRegardless re-adds it to the current Space.
+#[cfg(target_os = "macos")]
+fn summon_to_active_space(app: &tauri::AppHandle) {
+    use objc2::msg_send;
+    use objc2::runtime::AnyObject;
     use tauri::Manager;
     let Some(win) = app.get_webview_window("notch") else { return };
     let _ = app.run_on_main_thread(move || {
@@ -239,47 +267,21 @@ fn summon_to_active_space(app: &tauri::AppHandle) {
             return;
         }
         let ptr = p as *mut AnyObject;
-        // SAFETY: live NSWindow + AppKit class methods, all on the main thread.
+        // SAFETY: live NSWindow, on the main thread.
         unsafe {
-            // Find the screen under the mouse (Cocoa global coords, bottom-left origin).
-            let mouse: NSPoint = msg_send![class!(NSEvent), mouseLocation];
-            let screens: *mut AnyObject = msg_send![class!(NSScreen), screens];
-            let count: usize = if screens.is_null() { 0 } else { msg_send![screens, count] };
-            let mut target: Option<NSRect> = None;
-            for i in 0..count {
-                let s: *mut AnyObject = msg_send![screens, objectAtIndex: i];
-                if s.is_null() {
-                    continue;
-                }
-                let f: NSRect = msg_send![s, frame];
-                let inside = mouse.x >= f.origin.x
-                    && mouse.x <= f.origin.x + f.size.width
-                    && mouse.y >= f.origin.y
-                    && mouse.y <= f.origin.y + f.size.height;
-                if inside {
-                    target = Some(f);
-                    break;
-                }
-            }
-            if let Some(f) = target {
-                let w: NSRect = msg_send![ptr, frame];
-                let x = f.origin.x + ((f.size.width - w.size.width) / 2.0).max(0.0);
-                let top = NSPoint { x, y: f.origin.y + f.size.height };
-                let _: () = msg_send![ptr, setFrameTopLeftPoint: top];
-            }
+            reposition_to_cursor_screen(ptr);
             let nil: *mut AnyObject = std::ptr::null_mut();
             let _: () = msg_send![ptr, orderOut: nil];
             let _: () = msg_send![ptr, orderFrontRegardless];
         }
-        eprintln!("[shell] summoned panel to the active screen/space");
+        eprintln!("[shell] ⌃⌥N — summoned panel to the cursor's screen/space");
     });
 }
 
-/// Event-driven Space follow (audit cause #2): macOS posts
-/// `NSWorkspaceActiveSpaceDidChangeNotification` on every desktop/full-screen switch, but nothing
-/// subscribed to it — so there was no reliable moment to re-show the panel. Subscribe and, if the
-/// panel is not visible on the newly-active Space, re-order it front (nonactivating: steals no
-/// focus). Event-driven, so there's no ticker and no flicker while you work.
+/// Event-driven Space + display follow (audit causes #2/#3): subscribe to
+/// `NSWorkspaceActiveSpaceDidChangeNotification` (fires on every desktop/full-screen switch) and on
+/// each fire (a) reposition the panel to the cursor's display and (b) if it isn't visible on the
+/// now-active Space, re-order it front. Event-driven → no ticker, no flicker while you work.
 #[cfg(target_os = "macos")]
 fn watch_space_changes(app: &tauri::App) {
     use objc2::runtime::AnyObject;
@@ -310,13 +312,15 @@ fn watch_space_changes(app: &tauri::App) {
                 return;
             }
             let ptr = p as *mut AnyObject;
+            // Follow to the cursor's display first (cheap, no flicker), then re-show only if needed.
+            reposition_to_cursor_screen(ptr);
             let visible: bool = msg_send![ptr, isVisible];
             let on_active: bool = msg_send![ptr, isOnActiveSpace];
             if !visible || !on_active {
                 let nil: *mut AnyObject = std::ptr::null_mut();
                 let _: () = msg_send![ptr, orderOut: nil];
                 let _: () = msg_send![ptr, orderFrontRegardless];
-                eprintln!("[shell] space changed — panel re-shown (was visible={visible} onActive={on_active})");
+                eprintln!("[shell] space changed — panel moved to cursor screen + re-shown (was visible={visible} onActive={on_active})");
             }
         });
         let nil_obj: *mut AnyObject = std::ptr::null_mut();
