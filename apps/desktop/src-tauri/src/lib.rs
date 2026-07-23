@@ -288,7 +288,7 @@ unsafe fn pin_top_centre(ptr: *mut objc2::runtime::AnyObject) {
 /// the panel isn't visible on the active Space (a visible panel is left alone, so a dragged
 /// position survives).
 #[cfg(target_os = "macos")]
-fn reassert_panel(handle: &tauri::AppHandle, why: &str) {
+fn reassert_panel(handle: &tauri::AppHandle, why: &'static str, defer: bool) {
     use objc2::msg_send;
     use objc2::runtime::AnyObject;
     use tauri::Manager;
@@ -303,15 +303,29 @@ fn reassert_panel(handle: &tauri::AppHandle, why: &str) {
         const WANT: usize = (1 << 0) | (1 << 4) | (1 << 8); // canJoinAllSpaces|stationary|fsAux
         let _: () = msg_send![ptr, setCollectionBehavior: WANT];
         let _: () = msg_send![ptr, setLevel: 25isize];
+        let _: () = msg_send![ptr, setAlphaValue: 1.0f64];
         let visible: bool = msg_send![ptr, isVisible];
         let on_active: bool = msg_send![ptr, isOnActiveSpace];
         if !visible || !on_active {
             reposition_to_cursor_screen(ptr);
             let nil: *mut AnyObject = std::ptr::null_mut();
             let _: () = msg_send![ptr, orderOut: nil];
-            let _: () = msg_send![ptr, orderFrontRegardless];
             eprintln!("[shell] {why}: panel re-shown (was visible={visible} onActive={on_active})");
         }
+        // ALWAYS re-order front (nonactivating; steals no focus). Even when state reads fine, the
+        // system may be mid-transition — ordering is cheap and guarantees z-position in our level.
+        let _: () = msg_send![ptr, orderFrontRegardless];
+    }
+    // RACE GUARD: tao's own focus handlers can run AFTER this notification and undo the flags we
+    // just set — our fix then loses by ordering, not by correctness. Re-run once ~350ms later so
+    // the last word is ours. One shot, no recursion.
+    if defer {
+        let h = handle.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(350));
+            let h2 = h.clone();
+            let _ = h.run_on_main_thread(move || reassert_panel(&h2, "deferred", false));
+        });
     }
 }
 
@@ -373,7 +387,7 @@ fn watch_space_changes(app: &tauri::App) {
             let handle = app.handle().clone();
             let name = NSString::from_str(name_str);
             let block = block2::RcBlock::new(move |_notif: *mut AnyObject| {
-                reassert_panel(&handle, why);
+                reassert_panel(&handle, why, true);
             });
             let nil_obj: *mut AnyObject = std::ptr::null_mut();
             let _obs: *mut AnyObject =
@@ -410,16 +424,23 @@ fn spawn_panel_state_logger(app: &tauri::App) {
             let ptr = p as *mut AnyObject;
             // SAFETY: getters + conditional property writes on the live NSWindow, main thread.
             let s = unsafe {
+                use objc2::class;
                 let visible: bool = msg_send![ptr, isVisible];
                 let on_active: bool = msg_send![ptr, isOnActiveSpace];
                 let behavior: usize = msg_send![ptr, collectionBehavior];
                 let level: isize = msg_send![ptr, level];
-                let hides: bool = msg_send![ptr, hidesOnDeactivate];
                 let frame: NSRect = msg_send![ptr, frame];
+                // The compositor's OWN verdict: bit 1 of occlusionState = actually drawn on screen.
+                // visible=true + occluded=true is the smoking gun for "window fine, pixels absent".
+                let occ: usize = msg_send![ptr, occlusionState];
+                let drawn = occ & (1 << 1) != 0;
+                let alpha: f64 = msg_send![ptr, alphaValue];
+                let ns_app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+                let app_active: bool =
+                    if ns_app.is_null() { false } else { msg_send![ns_app, isActive] };
                 // SELF-HEAL: tao re-applies its own stored window flags on focus/resize events,
-                // silently demoting the overlay (observed: level 25→5, behavior 273→1 — at which
-                // point the panel no longer draws over other apps). Re-assert only when wrong; a
-                // pure property write with no re-ordering, so it cannot flicker or steal focus.
+                // silently demoting the overlay. Re-assert only when wrong; a pure property write
+                // with no re-ordering, so it cannot flicker or steal focus.
                 const WANT_BEHAVIOR: usize = (1 << 0) | (1 << 4) | (1 << 8); // 273
                 if level != 25 || behavior & WANT_BEHAVIOR != WANT_BEHAVIOR {
                     let _: () = msg_send![ptr, setCollectionBehavior: WANT_BEHAVIOR];
@@ -427,7 +448,7 @@ fn spawn_panel_state_logger(app: &tauri::App) {
                     eprintln!("[panelstate] healed: level {level}→25 behavior {behavior}→{WANT_BEHAVIOR}");
                 }
                 format!(
-                    "visible={visible} onActiveSpace={on_active} behavior={behavior} level={level} hidesOnDeactivate={hides} origin=({:.0},{:.0})",
+                    "visible={visible} drawn={drawn} onActiveSpace={on_active} behavior={behavior} level={level} alpha={alpha:.2} appActive={app_active} origin=({:.0},{:.0})",
                     frame.origin.x, frame.origin.y
                 )
             };
