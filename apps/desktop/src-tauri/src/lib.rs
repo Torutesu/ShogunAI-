@@ -78,25 +78,24 @@ pub fn run() {
 fn setup_macos(app: &tauri::App) {
     use tauri::Manager;
 
-    // The notch NSPanel overlay is the fragile Phase-0 rendering path. It is now OPT-IN
-    // (`SHOGUN_NOTCH=1`); by default the window stays a normal, visible, decorated window so the
-    // product UI is actually usable while the real notch shell is built (M1). The core (capture,
-    // memory, ⌃⌥G draft-at-cursor) is unaffected either way.
-    if std::env::var("SHOGUN_NOTCH").is_ok() {
-        match app.get_webview_window("notch") {
-            Some(win) => {
-                if let Err(e) = panel::install(&win) {
-                    eprintln!("[spike] panel install failed: {e}");
-                }
-            }
-            None => eprintln!("[spike] no 'notch' window — panel not installed"),
-        }
-    } else {
-        eprintln!("[shell] normal window mode (set SHOGUN_NOTCH=1 for the notch overlay)");
-        // Show the panel (positioned under the notch just below).
+    // The notch NSPanel is the product surface: an all-spaces, over-the-menu-bar, nonactivating
+    // panel that hovers from the notch and stays visible in the background on every space/screen
+    // (spec §3.1.2). It is the DEFAULT. `SHOGUN_NO_NOTCH=1` falls back to a plain window (a
+    // debugging escape hatch when the NSPanel swap misbehaves on a given machine); the core
+    // (capture, memory, ⌥ draft-at-cursor) is unaffected either way.
+    if std::env::var("SHOGUN_NO_NOTCH").is_ok() {
+        eprintln!("[shell] plain window mode (unset SHOGUN_NO_NOTCH for the notch panel)");
         if let Some(win) = app.get_webview_window("notch") {
             let _ = win.show();
-            eprintln!("[shell] notch panel shown");
+            eprintln!("[shell] window shown");
+        }
+    } else {
+        match app.get_webview_window("notch") {
+            Some(win) => match panel::install(&win) {
+                Ok(()) => eprintln!("[shell] notch panel installed (all-spaces, over menu bar, hover-reveal)"),
+                Err(e) => eprintln!("[shell] panel install failed: {e} — falling back to a plain window"),
+            },
+            None => eprintln!("[spike] no 'notch' window — panel not installed"),
         }
     }
 

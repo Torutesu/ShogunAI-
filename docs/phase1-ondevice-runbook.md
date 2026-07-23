@@ -42,25 +42,30 @@
 
 ## 2. ビルドと起動
 
+**必ず `pnpm tauri dev` で起動する**（`cargo run` はビルド時に埋め込んだ古いフロントを表示するため、UI 変更が反映されない）。`tauri dev` は live devUrl（localhost:1420）を読むので、フロントは即反映・ホットリロードされる（Rust 変更のみ再起動が必要）。
+
 ```
 git checkout -- Cargo.lock
 git pull origin claude/shogunai-requirements-prep-nm2tf4
-cargo run -p shogun-desktop-spike 2>/tmp/shogun.log
+cd apps/desktop            # tauri スクリプトはここにある（リポジトリ直下ではない）
+pnpm install               # 初回のみ
+pnpm tauri dev 2>/tmp/shogun.log
 ```
 
 起動ログで確認する行（別タブで `tail -f /tmp/shogun.log`）:
 
-- `[spike] memory DB: …/com.selectkk…/memory.db` — DB パス（後で CLI から同じ DB を叩く）
-- `[spike] ⌘⇧J registered — press it to open the panel` — ショートカット登録成功
-- `[spike] SPIKE_NO_PANEL set — …`（付けた場合のみ）
+- `[shell] notch panel installed (all-spaces, over menu bar, hover-reveal)` — NSPanel 化成功（これが出ればノッチ表示）
+- `[spike] memory DB: …/dev.shogun.spike/memory.db` — DB パス（後で CLI から同じ DB を叩く）
+- `[spike] ⌘⇧J registered` / `[spike] ⌃⌥G registered` — ショートカット登録成功
+- `[shell] panel install failed: …` が出たら NSPanel 化に失敗（プレーンウィンドウにフォールバック）
 
 ### パネル描画を切り離して確認したいとき
 
 ```
-SPIKE_NO_PANEL=1 cargo run -p shogun-desktop-spike 2>/tmp/shogun.log
+SHOGUN_NO_NOTCH=1 pnpm tauri dev 2>/tmp/shogun.log
 ```
 
-NSPanel swap をスキップするので、**描画が壊れてもコア（capture/memory/fusion/実行）は ⌘⇧J で検証できる**。前回の「ノッチが展開できない」はこのフラグで回避して先へ進む。
+NSPanel swap をスキップして**通常ウィンドウ**で起動する。描画が壊れてもコア（capture/memory/fusion/実行）は ⌘⇧J で検証できる。
 
 ---
 
@@ -106,13 +111,23 @@ cargo run -p shogun-cli -- --token dev metrics
 
 ---
 
-## 5. パネル描画そのものを見るとき（任意・脆い）
+## 5. ノッチパネルの実機確認（製品 UI）
 
-`SPIKE_NO_PANEL` を外して起動 → ⌘⇧J で Expanded。描画が出れば:
-- Idle シェル → Hover プレビュー（1アクション＋コンテキスト行）→ Expanded（最大4アクション＋Full UI）。
-- アクションボタン: L1 は即実行、L2 は「tap to confirm」で二度押し。
+`pnpm tauri dev` で起動（NSPanel はデフォルト有効）。ノッチ直下に細い tongue が出るので、**そこにマウスを重ねる**と:
 
-描画が出ない/固まる場合は**深追いしない**。これは M1 で製品shellに置き換える対象。§3・§4 のコア確認が通っていれば実機ゲートとしては十分。原因切り分けは `docs/phase0-on-device-runbook.md` の wry/NSPanel 節を参照。
+- **Idle**（折り畳み）: tongue のみ。パネルは透明・クリックスルー（背後のアプリを操作できる）。
+- **Hover**（ノッチにホバー）: peek カード（`reading {App}` ＋ due/waiting カウント）がスッと降りてくる。
+- **Expanded**（peek をクリック）: フルパネル（チャット・state リスト・composer・設定）。
+- ヘッダーの ◇/◆ で **ピン留め**（look-away でも閉じない）、⚙ で **設定**（外観 Dark/Light/Auto・挙動・キー状態）。
+- **どのスペース/画面に移動してもバックグラウンドに残る**（canJoinAllSpaces＋Status level）。全画面アプリの上にも出る。
+
+確認ポイント:
+- ノッチにホバー → peek が降りる（`[spike] cmd painted state=hover` がログに出る）。
+- Expanded で `Ask SHOGUN…` に入力 → 応答（BYOK 未設定なら echo、設定済みなら実応答）。
+- 別アプリで **⌃⌥G** → カーソル位置にドラフト挿入。
+- 別スペース/全画面に切り替え → パネルが残っていること。
+
+描画が出ない/固まる場合は `SHOGUN_NO_NOTCH=1` で通常ウィンドウにフォールバックし、§3・§4 のコア確認（⌘⇧J self-test）で前に進む。原因切り分けは `docs/phase0-on-device-runbook.md` の wry/NSPanel 節。
 
 ---
 
