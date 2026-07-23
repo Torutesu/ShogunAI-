@@ -22,16 +22,52 @@ OAuthブラウザフロー、ライブMCP接続）はmacOSビルドが必要で�
 |---|---|
 | `shogun-mcp/scope.rs` に `GoogleDrive` サービス追加（Wave 1、read/read_on_demand/file_create=L3） | ✅ 実装・テスト済 |
 | `shogun-mcp/sync.rs` にDriveの `item_kind`（file） | ✅ |
-| 新規 `crates/shogun-integrations`（純層: endpoints / toolmap / result正規化 / rpc seam / transport） | ✅ 実装・テスト済（19テスト、clippyクリーン） |
-| `RemoteMcpTransport` が `IntegrationTransport` を実装（read_sync + execute書き込み） | ✅ 純ロジック検証済 |
-| `live` フィーチャ: reqwest JSON-RPCクライアント + macOS Keychain token source | ⚠️ コンパイル可・**実接続はmacOS+実トークンが必要で未検証** |
-| OAuth 2.1 + PKCEフロー（ブラウザ認可→トークン取得） | ⛔ 未着手（WP-B、macOS） |
-| daemon配線（15分ポーリング、event log追記、承認済み書き込み実行） | ⛔ 未着手（WP-C/WP-F、macOS） |
+| 新規 `crates/shogun-integrations`（純層: endpoints / toolmap / result正規化 / rpc seam / transport） | ✅ 実装・テスト済（clippyクリーン） |
+| `RemoteMcpTransport` が `IntegrationTransport` + `WriteExecutor` を実装（read_sync + execute書き込み） | ✅ 純ロジック検証済 |
+| **OAuth 2.1 + PKCE（`oauth.rs`）**: PKCE導出・authorize URL・token交換/refreshフォーム・レスポンス解析・redirect解析 | ✅ 純ロジック実装・テスト済 |
+| **daemon配線骨格（`runtime.rs`）**: `ConnectorRuntime`（sync_service / services_due / poll_tick / execute_write）+ `IngestSink` seam | ✅ 純ロジック実装・テスト済（32テスト） |
+| `live` フィーチャ: reqwest JSON-RPCクライアント + macOS Keychain + OAuthループバックフロー(`oauth_flow.rs`) | ⚠️ コンパイル可・**実接続はmacOS+実トークンが必要で未検証** |
+| daemonへの実結線（core→integrations依存追加、`Db`が`IngestSink`実装、tokio 15分interval、承認キュー→execute_write） | ⛔ 未着手（macOS、下記スニペット参照） |
 | 接続管理UI | ⛔ 未着手（WP-E） |
 
-**次にmacOS環境でやること**: `live` の実接続確認（Google OAuthクライアントID/secret登録が前提、
-Developer Preview）→ OAuth+PKCEフロー（WP-B）→ daemonがtransportを所有してポーリング&
-書き込み実行（WP-C/WP-F）。`result.rs` のフィールドマッピングは実レスポンスで要確認（tolerant実装済）。
+**この環境（Linux）で検証できたのはここまで。** 純ロジック（マッピング・PKCE・ゲート・状態遷移）は
+全部テスト付き。実I/O（ネットワーク・Keychain・ブラウザ）はmacOSビルドが必要で継ぎ目まで用意済み。
+
+### daemon実結線（macOSで書く具体コード）
+
+```rust
+// 1) crates/shogun-core/Cargo.toml の `db` feature に依存追加:
+//    shogun-integrations = { path = "../shogun-integrations", features = ["live"] }
+
+// 2) Db を IngestSink に（既存 Db::ingest_integration を使うだけ）:
+impl shogun_integrations::IngestSink for Db {
+    fn ingest(&self, items: &[shogun_mcp::sync::IngestItem]) -> usize {
+        self.ingest_integration(items).newly_inserted
+    }
+}
+
+// 3) 起動時: transport を組んで ConnectorRuntime を daemon が所有:
+let rpc = shogun_integrations::live::HttpMcpRpc::new(
+    shogun_integrations::live::KeychainTokenProvider::new("com.selectkk.shogun"));
+let transport = shogun_integrations::RemoteMcpTransport::new(rpc?);
+let mut runtime = shogun_integrations::ConnectorRuntime::new(transport, Wave::One, draft_stop);
+
+// 4) 15分ごとの tokio interval が poll_tick を回す（FR-INT-04）:
+let mut tick = tokio::time::interval(Duration::from_secs(15 * 60));
+loop {
+    tick.tick().await;
+    for (svc, res) in runtime.poll_tick(now_ms(), DEFAULT_SYNC_INTERVAL_MS, &db) {
+        // res: Ok(SyncReport{inserted}) を IntegrationSynced としてバスへ / Err はインジケータ色
+    }
+}
+
+// 5) 承認キュー(shogun-agents)で confirm 済みの L2/L3 書き込み → execute_write:
+//    runtime.execute_write(service, op_name, args_json, &transport)  // 二重ゲート込み
+```
+
+**次にmacOS環境でやること**: OAuthクライアントID/secret登録（Developer Preview前提）→
+`oauth_flow::run_loopback_flow` を設定画面の「Connect」から呼んでトークンをKeychainへ→
+上記4/5をdaemonに結線→`result.rs`のフィールドマッピングを実レスポンスで確認（tolerant実装済）。
 
 ---
 

@@ -1,0 +1,271 @@
+//! The daemon-side wiring skeleton: [`ConnectorRuntime`] ties the connection state
+//! ([`shogun_mcp::connection`]), the gate ([`shogun_mcp::service_gate`]), the sync ingest
+//! ([`shogun_mcp::sync`]), and the transport ([`crate::transport`]) into the two things the daemon
+//! actually drives: **poll a read-sync** and **execute a confirmed write**.
+//!
+//! Data gravity stays in the core (invariant 1): the runtime never touches the DB. It hands synced
+//! items to an [`IngestSink`] the daemon implements over its `Db` (mirrors the `MemoryBackend`
+//! seam). The 15-minute scheduler (FR-INT-04) is the daemon's tokio loop calling [`ConnectorRuntime::poll_tick`];
+//! this crate stays runtime-free and Linux-testable.
+//!
+//! Policy is never re-decided ad hoc: reads go through [`shogun_mcp::sync::collect_sync`] (which
+//! calls the gate) and writes re-check [`shogun_mcp::service_gate::authorize_op`] before running
+//! (the WP-F "double gate").
+
+use serde_json::Value;
+use shogun_mcp::connection::{ConnEvent, ConnState, ConnectionRegistry, DisconnectOutcome};
+use shogun_mcp::scope::{Service, Wave, ALL_SERVICES};
+use shogun_mcp::service_gate::{authorize_op, OpContext, OpDecision};
+use shogun_mcp::sync::{collect_sync, IngestItem, IntegrationTransport, SyncFailure};
+
+use crate::transport::WriteExecutor;
+
+/// The default first-layer poll cadence (FR-INT-04: 15-minute read-sync).
+pub const DEFAULT_SYNC_INTERVAL_MS: i64 = 15 * 60 * 1000;
+
+/// Persists synced items into the event log. Implemented by the daemon over its `Db`
+/// (`Db::ingest_integration`); returns the count of *newly inserted* items (what an
+/// `IntegrationSynced` bus event reports).
+pub trait IngestSink {
+    fn ingest(&self, items: &[IngestItem]) -> usize;
+}
+
+/// The result of one read-sync.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SyncReport {
+    pub fetched: usize,
+    pub inserted: usize,
+}
+
+/// Owns per-service connection state and drives sync/write over a transport. Generic over the
+/// transport so the daemon uses the live [`crate::RemoteMcpTransport`] and tests use a fake.
+pub struct ConnectorRuntime<T> {
+    transport: T,
+    registry: ConnectionRegistry,
+    highest_released: Wave,
+    draft_stop: bool,
+}
+
+impl<T> ConnectorRuntime<T> {
+    pub fn new(transport: T, highest_released: Wave, draft_stop: bool) -> Self {
+        Self { transport, registry: ConnectionRegistry::new(), highest_released, draft_stop }
+    }
+
+    pub fn registry(&self) -> &ConnectionRegistry {
+        &self.registry
+    }
+
+    /// Set the global Gmail draft-stop flag (§6.10) — flows into the gate context.
+    pub fn set_draft_stop(&mut self, on: bool) {
+        self.draft_stop = on;
+    }
+
+    /// Record a completed OAuth connection for a service (drives it out of `Disconnected`).
+    pub fn mark_connected(&mut self, service: Service, now_ms: i64) {
+        self.registry.apply(service, ConnEvent::Connected { ts: now_ms });
+    }
+
+    /// Record that a service's token expired / was revoked (amber).
+    pub fn mark_token_expired(&mut self, service: Service) {
+        self.registry.apply(service, ConnEvent::TokenExpired);
+    }
+
+    /// Disconnect a service (FR-INT-07): the token is deleted by the caller; this clears state.
+    pub fn disconnect(&mut self, service: Service, delete_events: bool) -> DisconnectOutcome {
+        self.registry.disconnect(service, delete_events)
+    }
+
+    fn ctx(&self, service: Service) -> OpContext {
+        OpContext {
+            highest_released: self.highest_released,
+            conn: self.registry.state(service),
+            draft_stop: self.draft_stop,
+        }
+    }
+}
+
+impl<T: IntegrationTransport> ConnectorRuntime<T> {
+    /// Run one read-sync for a service: gate → fetch → ingest. On success, mark the service synced;
+    /// on a transport failure, turn it amber (needs-reauth) without touching other services
+    /// (FR-INT-06). A gate denial (unreleased / disconnected) changes no state.
+    pub fn sync_service<S: IngestSink>(
+        &mut self,
+        service: Service,
+        now_ms: i64,
+        sink: &S,
+    ) -> Result<SyncReport, SyncFailure> {
+        let ctx = self.ctx(service);
+        match collect_sync(service, &ctx, &self.transport) {
+            Ok(items) => {
+                let inserted = sink.ingest(&items);
+                self.registry.apply(service, ConnEvent::Synced { ts: now_ms });
+                Ok(SyncReport { fetched: items.len(), inserted })
+            }
+            Err(SyncFailure::Transport(e)) => {
+                // A live fetch failure means the token/connection is bad → amber (FR-INT-06).
+                self.registry.apply(service, ConnEvent::ConnectFailed);
+                Err(SyncFailure::Transport(e))
+            }
+            // Denied (unreleased wave / disconnected / unknown op): no state change.
+            Err(other) => Err(other),
+        }
+    }
+
+    /// Services whose read-sync is due now: released, connected-or-amber, and either never synced or
+    /// staler than `interval_ms`. The scheduler basis for [`Self::poll_tick`].
+    pub fn services_due(&self, now_ms: i64, interval_ms: i64) -> Vec<Service> {
+        ALL_SERVICES
+            .iter()
+            .copied()
+            .filter(|&s| s.is_released(self.highest_released))
+            .filter(|&s| matches!(self.registry.state(s), ConnState::Connected { .. } | ConnState::NeedsReauth { .. }))
+            .filter(|&s| self.registry.freshness_ms(s, now_ms).map_or(true, |f| f >= interval_ms))
+            .collect()
+    }
+
+    /// Sync every due service once. This is the body the daemon's 15-minute tokio interval calls;
+    /// it returns each service's outcome so the daemon can log/emit per service.
+    pub fn poll_tick<S: IngestSink>(
+        &mut self,
+        now_ms: i64,
+        interval_ms: i64,
+        sink: &S,
+    ) -> Vec<(Service, Result<SyncReport, SyncFailure>)> {
+        self.services_due(now_ms, interval_ms)
+            .into_iter()
+            .map(|s| (s, self.sync_service(s, now_ms, sink)))
+            .collect()
+    }
+
+    /// Execute a first-layer write that has already passed L2/L3 confirmation upstream (the approval
+    /// queue in `shogun-agents`). Re-checks the gate as defense in depth (WP-F double gate) before
+    /// touching the service; a Composio-routed op (Gmail send) is refused here — it is the second
+    /// layer, not first-layer MCP.
+    pub fn execute_write<W: WriteExecutor>(
+        &self,
+        service: Service,
+        op_name: &str,
+        arguments: Value,
+        exec: &W,
+    ) -> Result<Value, String> {
+        match authorize_op(service, op_name, &self.ctx(service)) {
+            OpDecision::RequiresLevel(_) => exec.execute(service, op_name, arguments),
+            OpDecision::RequiresComposio => {
+                Err(format!("{}::{op_name} is second-layer (Composio), not first-layer MCP", service.source_str()))
+            }
+            other => Err(format!("write not authorized: {other:?}")),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::RefCell;
+    use shogun_mcp::sync::FetchedItem;
+
+    /// A transport yielding a fixed fetch or an error.
+    struct FakeTransport {
+        items: Vec<FetchedItem>,
+        err: Option<String>,
+    }
+    impl IntegrationTransport for FakeTransport {
+        fn read_sync(&self, _service: Service) -> Result<Vec<FetchedItem>, String> {
+            match &self.err {
+                Some(e) => Err(e.clone()),
+                None => Ok(self.items.clone()),
+            }
+        }
+    }
+
+    /// Counts ingested items.
+    struct CountingSink(RefCell<usize>);
+    impl IngestSink for CountingSink {
+        fn ingest(&self, items: &[IngestItem]) -> usize {
+            *self.0.borrow_mut() += items.len();
+            items.len()
+        }
+    }
+
+    fn item(body: &str) -> FetchedItem {
+        FetchedItem { external_id: "x".into(), title: "t".into(), body: body.into(), ts_ms: 1 }
+    }
+
+    fn runtime(items: Vec<FetchedItem>, err: Option<String>) -> ConnectorRuntime<FakeTransport> {
+        // Wave 1 released, draft-stop on (irrelevant to reads).
+        ConnectorRuntime::new(FakeTransport { items, err }, Wave::One, true)
+    }
+
+    #[test]
+    fn sync_ingests_and_marks_synced() {
+        let mut rt = runtime(vec![item("hello"), item("world")], None);
+        rt.mark_connected(Service::Gmail, 100);
+        let sink = CountingSink(RefCell::new(0));
+        let report = rt.sync_service(Service::Gmail, 200, &sink).unwrap();
+        assert_eq!(report, SyncReport { fetched: 2, inserted: 2 });
+        assert_eq!(*sink.0.borrow(), 2);
+        // freshness now reflects the sync at t=200
+        assert_eq!(rt.registry().freshness_ms(Service::Gmail, 250), Some(50));
+    }
+
+    #[test]
+    fn transport_failure_turns_service_amber_only() {
+        let mut rt = runtime(vec![], Some("token refresh failed".into()));
+        rt.mark_connected(Service::Gmail, 100);
+        rt.mark_connected(Service::GoogleCalendar, 100);
+        let sink = CountingSink(RefCell::new(0));
+        assert!(rt.sync_service(Service::Gmail, 200, &sink).is_err());
+        assert!(rt.registry().state(Service::Gmail).is_amber());
+        // isolation: calendar is untouched (FR-INT-06)
+        assert!(!rt.registry().state(Service::GoogleCalendar).is_amber());
+        assert_eq!(*sink.0.borrow(), 0, "nothing ingested on failure");
+    }
+
+    #[test]
+    fn disconnected_service_is_denied_without_state_change() {
+        let mut rt = runtime(vec![item("x")], None);
+        // never connected
+        let sink = CountingSink(RefCell::new(0));
+        let err = rt.sync_service(Service::Gmail, 200, &sink).unwrap_err();
+        assert!(matches!(err, SyncFailure::Denied(_)));
+        assert_eq!(rt.registry().state(Service::Gmail), ConnState::Disconnected);
+    }
+
+    #[test]
+    fn services_due_respects_release_connection_and_interval() {
+        let mut rt = runtime(vec![], None);
+        // Slack is Wave 2 — never due at Wave 1 even if we pretend it connected.
+        rt.mark_connected(Service::Gmail, 1_000);
+        rt.mark_connected(Service::GoogleCalendar, 1_000);
+        // Within the interval of the last sync → not due.
+        assert!(rt.services_due(2_000, DEFAULT_SYNC_INTERVAL_MS).is_empty());
+        // After the interval elapses, both Google services are due; Slack (unreleased) is not.
+        let due = rt.services_due(1_000 + DEFAULT_SYNC_INTERVAL_MS + 1, DEFAULT_SYNC_INTERVAL_MS);
+        assert!(due.contains(&Service::Gmail) && due.contains(&Service::GoogleCalendar));
+        assert!(!due.contains(&Service::Slack));
+    }
+
+    struct FakeExec(RefCell<Option<(Service, String)>>);
+    impl WriteExecutor for FakeExec {
+        fn execute(&self, service: Service, op_name: &str, _args: Value) -> Result<Value, String> {
+            *self.0.borrow_mut() = Some((service, op_name.to_string()));
+            Ok(serde_json::json!({ "ok": true }))
+        }
+    }
+
+    #[test]
+    fn execute_write_runs_authorized_op_and_refuses_composio_send() {
+        let mut rt = runtime(vec![], None);
+        rt.set_draft_stop(false); // so Gmail send resolves to Composio, not DraftStop
+        rt.mark_connected(Service::Gmail, 1_000);
+        rt.mark_connected(Service::GoogleCalendar, 1_000);
+        let exec = FakeExec(RefCell::new(None));
+        // An L3 calendar create is authorized → executes.
+        rt.execute_write(Service::GoogleCalendar, "event_create", serde_json::json!({}), &exec).unwrap();
+        // execute_write forwards the scope op name; the transport maps it to the MCP tool.
+        assert_eq!(exec.0.borrow().as_ref().unwrap(), &(Service::GoogleCalendar, "event_create".to_string()));
+        // Gmail send is Composio → refused at the first layer.
+        let err = rt.execute_write(Service::Gmail, "send", serde_json::json!({}), &exec).unwrap_err();
+        assert!(err.contains("Composio"));
+    }
+}

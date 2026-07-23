@@ -17,13 +17,18 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 pub mod endpoints;
+pub mod oauth;
 pub mod result;
 pub mod rpc;
+pub mod runtime;
 pub mod toolmap;
 pub mod transport;
 
 #[cfg(feature = "live")]
 pub mod live;
+#[cfg(feature = "live")]
+pub mod oauth_flow;
 
 pub use rpc::{McpRpc, StaticTokenProvider, TokenProvider};
-pub use transport::RemoteMcpTransport;
+pub use runtime::{ConnectorRuntime, IngestSink, SyncReport};
+pub use transport::{RemoteMcpTransport, WriteExecutor};

@@ -47,6 +47,20 @@ impl<R: McpRpc> RemoteMcpTransport<R> {
     }
 }
 
+/// The write half of the transport, as a seam so the runtime's confirmed-write path
+/// ([`crate::runtime::ConnectorRuntime::execute_write`]) is testable without a live RPC.
+pub trait WriteExecutor {
+    /// Execute an already-authorized, already-confirmed first-layer write op. Maps the scope op to
+    /// its Google MCP tool and calls it.
+    fn execute(&self, service: Service, op_name: &str, arguments: Value) -> Result<Value, String>;
+}
+
+impl<R: McpRpc> WriteExecutor for RemoteMcpTransport<R> {
+    fn execute(&self, service: Service, op_name: &str, arguments: Value) -> Result<Value, String> {
+        RemoteMcpTransport::execute(self, service, op_name, arguments)
+    }
+}
+
 impl<R: McpRpc> IntegrationTransport for RemoteMcpTransport<R> {
     fn read_sync(&self, service: Service) -> Result<Vec<FetchedItem>, String> {
         let tool = toolmap::read_sync_tool(service)
