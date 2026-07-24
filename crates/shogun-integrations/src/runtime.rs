@@ -16,7 +16,7 @@ use serde_json::Value;
 use shogun_mcp::connection::{ConnEvent, ConnState, ConnectionRegistry, DisconnectOutcome};
 use shogun_mcp::scope::{Service, Wave, ALL_SERVICES};
 use shogun_mcp::service_gate::{authorize_op, OpContext, OpDecision};
-use shogun_mcp::sync::{collect_sync, IngestItem, IntegrationTransport, SyncFailure};
+use shogun_mcp::sync::{collect_on_demand, collect_sync, IngestItem, IntegrationTransport, SyncFailure};
 
 use crate::transport::WriteExecutor;
 
@@ -166,6 +166,31 @@ impl<T: IntegrationTransport> ConnectorRuntime<T> {
         }
     }
 
+    /// Fetch a specific item on demand (§6.9 `read_on_demand`, L2) and ingest it — e.g. the Gmail
+    /// thread the user just opened. Unlike a background sync this does not touch the poll schedule
+    /// (it is a targeted fetch, not a full refresh); on a transport failure the service still goes
+    /// amber (a real connection problem). Denied for a service without a `read_on_demand` op or when
+    /// the gate refuses.
+    pub fn fetch_on_demand<S: IngestSink>(
+        &mut self,
+        service: Service,
+        query: &str,
+        sink: &S,
+    ) -> Result<SyncReport, SyncFailure> {
+        let ctx = self.ctx(service);
+        match collect_on_demand(service, query, &ctx, &self.transport) {
+            Ok(items) => {
+                let inserted = sink.ingest(&items);
+                Ok(SyncReport { fetched: items.len(), inserted })
+            }
+            Err(SyncFailure::Transport(e)) => {
+                self.registry.apply(service, ConnEvent::ConnectFailed);
+                Err(SyncFailure::Transport(e))
+            }
+            Err(other) => Err(other),
+        }
+    }
+
     /// Services whose read-sync is due now: released, connected-or-amber, and either never synced or
     /// staler than `interval_ms`. The scheduler basis for [`Self::poll_tick`].
     pub fn services_due(&self, now_ms: i64, interval_ms: i64) -> Vec<Service> {
@@ -246,6 +271,12 @@ mod tests {
                 None => Ok(self.items.clone()),
             }
         }
+        fn fetch_on_demand(&self, _service: Service, _query: &str) -> Result<Vec<FetchedItem>, String> {
+            match &self.err {
+                Some(e) => Err(e.clone()),
+                None => Ok(self.items.clone()),
+            }
+        }
     }
 
     /// Counts ingested items.
@@ -297,6 +328,28 @@ mod tests {
         assert_eq!(*sink.0.borrow(), 2);
         // freshness now reflects the sync at t=200
         assert_eq!(rt.registry().freshness_ms(Service::Gmail, 250), Some(50));
+    }
+
+    #[test]
+    fn on_demand_fetch_ingests_without_touching_the_poll_schedule() {
+        let mut rt = runtime(vec![item("thread body")], None);
+        rt.mark_connected(Service::Gmail, 1_000);
+        let before = rt.registry().freshness_ms(Service::Gmail, 5_000);
+        let sink = CountingSink(RefCell::new(0));
+        let report = rt.fetch_on_demand(Service::Gmail, "thread-9", &sink).unwrap();
+        assert_eq!(report.inserted, 1);
+        assert_eq!(*sink.0.borrow(), 1);
+        // last-sync (freshness basis) is unchanged — on-demand is not a background sync.
+        assert_eq!(rt.registry().freshness_ms(Service::Gmail, 5_000), before);
+    }
+
+    #[test]
+    fn on_demand_transport_failure_turns_service_amber() {
+        let mut rt = runtime(vec![], Some("token expired".into()));
+        rt.mark_connected(Service::Gmail, 1_000);
+        let sink = CountingSink(RefCell::new(0));
+        assert!(rt.fetch_on_demand(Service::Gmail, "q", &sink).is_err());
+        assert!(rt.registry().state(Service::Gmail).is_amber());
     }
 
     #[test]

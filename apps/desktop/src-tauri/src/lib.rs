@@ -48,6 +48,7 @@ pub fn run() {
         connectors::mac::connectors_list,
         connectors::mac::connect_service,
         connectors::mac::disconnect_service,
+        connectors::mac::fetch_on_demand,
         connectors::mac::open_settings,
         approvals::mac::submit_send,
         approvals::mac::list_approvals,

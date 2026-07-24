@@ -158,6 +158,25 @@ pub mod mac {
         Ok(())
     }
 
+    /// On-demand read of a specific item (§6.9 read_on_demand, L2): fetch it now and ingest into
+    /// memory — e.g. the Gmail thread the user just opened. `query` is the item id/search string.
+    /// The neutral primitive: the caller (a focus watcher, or a UI button) decides when to invoke
+    /// it. Returns how many new items were ingested.
+    #[tauri::command]
+    pub fn fetch_on_demand(
+        service: String,
+        query: String,
+        state: tauri::State<'_, ConnectorState>,
+        db: tauri::State<'_, Db>,
+    ) -> Result<u64, String> {
+        let svc = from_source(&service).ok_or_else(|| format!("unknown service: {service}"))?;
+        let mut rt = state.0.lock().map_err(|_| "runtime lock poisoned".to_string())?;
+        match rt.fetch_on_demand(svc, &query, &*db) {
+            Ok(report) => Ok(report.inserted as u64),
+            Err(e) => Err(format!("{e:?}")),
+        }
+    }
+
     /// Show the Settings window (which renders the connections screen). Created hidden at launch.
     #[tauri::command]
     pub fn open_settings(app: tauri::AppHandle) -> Result<(), String> {

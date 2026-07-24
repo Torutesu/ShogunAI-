@@ -71,6 +71,17 @@ impl<R: McpRpc> IntegrationTransport for RemoteMcpTransport<R> {
         let result = self.rpc.call_tool(service, tool, args)?;
         crate::result::parse_items(&result)
     }
+
+    fn fetch_on_demand(&self, service: Service, query: &str) -> Result<Vec<FetchedItem>, String> {
+        let tool = toolmap::tool_for(service, "read_on_demand")
+            .ok_or_else(|| format!("{} has no read_on_demand MCP tool", service.source_str()))?;
+        // `id` carries the thread/file id (or search string). The exact per-tool arg name
+        // (thread_id / file_id / query) is confirmed against live tools/list at wire-up — same
+        // caveat as read_sync's page arg.
+        let args = json!({ "id": query });
+        let result = self.rpc.call_tool(service, tool, args)?;
+        crate::result::parse_items(&result)
+    }
 }
 
 #[cfg(test)]
@@ -125,6 +136,23 @@ mod tests {
     fn transport_error_propagates() {
         let t = RemoteMcpTransport::new(FakeRpc::err("network down"));
         assert_eq!(t.read_sync(Service::GoogleCalendar).unwrap_err(), "network down");
+    }
+
+    #[test]
+    fn fetch_on_demand_calls_the_read_on_demand_tool() {
+        let reply = json!({ "structuredContent": [ { "id": "t", "subject": "s", "body": "thread text" } ] });
+        let t = RemoteMcpTransport::new(FakeRpc::ok(reply));
+        let items = t.fetch_on_demand(Service::Gmail, "thread-9").unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].body, "thread text");
+        assert_eq!(t.rpc.last.borrow().as_ref().unwrap(), &(Service::Gmail, "get_thread".to_string()));
+    }
+
+    #[test]
+    fn fetch_on_demand_errors_when_service_has_no_such_tool() {
+        let t = RemoteMcpTransport::new(FakeRpc::ok(json!({})));
+        assert!(t.fetch_on_demand(Service::GoogleCalendar, "x").is_err());
+        assert!(t.rpc.last.borrow().is_none());
     }
 
     #[test]

@@ -42,9 +42,13 @@ OAuthクライアント登録の人間側手順は `docs/oauth-client-setup.md` 
 
 | **item B 承認キュー→送信実行の実アプリ結線**: `exec`フィーチャ（送信パスをaxum抜きでdesktopへ）、`ApprovalQueueState`、Tauriコマンド `submit_send`/`list_approvals`/`confirm_send`/`reject_send`、`RoutedSendTransport`結線（Composio失敗時ドラフト退避含む）、L3確認UI（`Approvals.tsx`、全文表示・専用ボタン確認）、設定ウィンドウに統合 | ✅ 結線済み（CI macOSで検証） |
 
+| **item C オンデマンド読み取り**: `IntegrationTransport::fetch_on_demand` シーム + `collect_on_demand`（read_on_demand L2ゲート）+ `RemoteMcpTransport`実装 + `ConnectorRuntime::fetch_on_demand`（ポール schedule非干渉、失敗時amber）+ desktop `fetch_on_demand` コマンド | ✅ エグゼキュータ実装・テスト済（トリガー=auto/tapはcaller判断として中立化。Gmail/Driveのみ対象） |
+
 **残るライブ前提（人間側）**: Composio APIキー(Keychain `composio-api-key`) + connected account
 の `SHOGUN_COMPOSIO_USER_ID`。送信の**プロデューサ（エージェントがsendを提案してキューへ）**は
-別機能で、現状は `submit_send` コマンドが入口（UI/手動/将来のエージェント共通）。
+別機能で、現状は `submit_send` コマンドが入口（UI/手動/将来のエージェント共通）。オンデマンド取得の
+**フォーカス連動トリガー**（自動 or 明示タップ）はUX判断として未確定 — `fetch_on_demand` コマンドが
+中立の入口。
 
 **この環境（Linux）で検証できたのはここまで。** 純ロジック（マッピング・PKCE・ゲート・状態遷移）は
 全部テスト付き。実I/O（ネットワーク・Keychain・ブラウザ）はmacOSビルドが必要で継ぎ目まで用意済み。
