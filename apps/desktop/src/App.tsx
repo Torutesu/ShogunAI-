@@ -71,7 +71,7 @@ const IN_TAURI =
 const W = 640;
 const H_OPEN = 300;
 const H_HANDLE = 44;
-const H_SETTINGS = 640; // taller default so every setting group fits; clamped to the screen below
+const H_SETTINGS = 520; // taller default so setting groups fit; body scrolls; clamped to screen
 const MIN_W = 460;
 const MIN_H = 240;
 
