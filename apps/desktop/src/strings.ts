@@ -97,6 +97,7 @@ export const STRINGS = {
     memoryCleared: "Cleared.",
     cancel: "Cancel",
     // errors
+    sources: "Sources",
     noAnswer: "(no response)",
     answerFailed: "Couldn't answer",
   },

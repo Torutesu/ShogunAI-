@@ -218,6 +218,27 @@ pub fn recent(
     rows.collect()
 }
 
+/// The most recent events in one thread, oldest first — the conversation itself, as a reply
+/// would need to read it. `limit` bounds the tail taken; the ordering is restored after the
+/// newest-first cut so the caller gets it in reading order.
+pub fn recent_events(
+    conn: &rusqlite::Connection,
+    thread_key: &str,
+    limit: usize,
+) -> Result<Vec<(i64, i64, String)>, rusqlite::Error> {
+    use rusqlite::params;
+    let mut stmt = conn.prepare(
+        "SELECT id, ts, content FROM event_log
+          WHERE thread_key = ?1 ORDER BY ts DESC, id DESC LIMIT ?2",
+    )?;
+    let rows = stmt.query_map(params![thread_key, limit as i64], |r| {
+        Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?))
+    })?;
+    let mut out = rows.collect::<Result<Vec<_>, _>>()?;
+    out.reverse();
+    Ok(out)
+}
+
 /// Open loops currently attached to each thread, via the events that evidence them.
 pub fn open_loop_counts(
     conn: &rusqlite::Connection,

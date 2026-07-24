@@ -92,15 +92,47 @@ mod mac {
         db: Db,
         policy: ExclusionPolicy,
         interval: Option<Duration>,
+        reply_cache: Option<shogun_core::daemon::ReplyContextCache>,
     ) -> std::thread::JoinHandle<()> {
         let interval = interval.unwrap_or(Duration::from_millis(DEFAULT_POLL_MS));
         let dwell_ms = interval.as_millis() as i64;
-        std::thread::spawn(move || loop {
-            if ax_trusted() {
-                // errors are swallowed inside ingest; a None just means no focus this tick
-                let _ = capture_once(&db, &policy, dwell_ms);
+        std::thread::spawn(move || {
+            let mut warm_for: Option<String> = None;
+            loop {
+                if ax_trusted() {
+                    // errors are swallowed inside ingest; a None just means no focus this tick
+                    let _ = capture_once(&db, &policy, dwell_ms);
+
+                    // Pre-assemble the reply context for whatever the user is now looking at, so
+                    // pressing the draft button only starts generation (SLO: offer in 150ms —
+                    // collecting on the press is what that budget forbids). Rebuilt only when the
+                    // focused thread actually changes, so a steady poll costs nothing.
+                    if let Some(cache) = reply_cache.as_ref() {
+                        if let Some(key) = focused_thread_key() {
+                            if warm_for.as_deref() != Some(key.as_str()) {
+                                let ctx = db.build_reply_context(&key);
+                                eprintln!(
+                                    "[capture] reply context warmed for {} in {}ms ({} turn(s))",
+                                    key,
+                                    ctx.build_ms,
+                                    ctx.turns.len()
+                                );
+                                cache.put(ctx);
+                                warm_for = Some(key);
+                            }
+                        }
+                    }
+                }
+                std::thread::sleep(interval);
             }
-            std::thread::sleep(interval);
         })
+    }
+
+    /// The thread key of the currently focused window, matching what the capture writer derives
+    /// for the same focus — so the warmed context is keyed exactly as the events are.
+    pub fn focused_thread_key() -> Option<String> {
+        let front = frontmost_app()?;
+        let title = focused_window(front.pid)?.title();
+        shogun_memory::thread::thread_key("capture", None, Some(&front.bundle_id), title.as_deref())
     }
 }

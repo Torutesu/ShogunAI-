@@ -71,6 +71,63 @@ pub struct ContextPack {
     pub evidence: Vec<Evidence>,
 }
 
+/// How much of a thread a reply context carries. Enough to answer in the conversation's own
+/// terms, bounded so assembly stays inside the pre-press budget.
+const REPLY_TURNS: usize = 12;
+const REPLY_TURN_CHARS: usize = 800;
+const REPLY_RELATED: usize = 4;
+const REPLY_RELATED_CHARS: usize = 300;
+
+/// Everything a one-press reply needs, assembled before the press ([`Db::build_reply_context`]).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ReplyContext {
+    pub thread_key: String,
+    pub title: Option<String>,
+    /// The thread's own recent events, oldest first.
+    pub turns: Vec<Evidence>,
+    /// Confidence-gated state facts (what is owed, what is waiting).
+    pub facts: Vec<String>,
+    /// Earlier threads that resemble this one.
+    pub related: Vec<Evidence>,
+    /// How long assembly took, in ms — the SLO measurement, carried with the data it describes.
+    pub build_ms: u64,
+}
+
+/// The pre-assembled reply context, kept warm so a press only starts generation.
+///
+/// The whole point is that reading it costs nothing: the focus path writes, the button reads.
+/// A miss (focus moved to a thread that has not been built yet) returns `None` rather than
+/// building inline — building on the press is exactly what the SLO forbids, and a caller that
+/// silently fell back to it would hide the regression.
+#[derive(Clone, Default)]
+pub struct ReplyContextCache {
+    inner: Arc<Mutex<Option<ReplyContext>>>,
+}
+
+impl ReplyContextCache {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Replace the warm pack (called off the focus path).
+    pub fn put(&self, ctx: ReplyContext) {
+        if let Ok(mut g) = self.inner.lock() {
+            *g = Some(ctx);
+        }
+    }
+
+    /// The warm pack for `thread_key`, if that is the one currently held.
+    pub fn get(&self, thread_key: &str) -> Option<ReplyContext> {
+        let g = self.inner.lock().ok()?;
+        g.as_ref().filter(|c| c.thread_key == thread_key).cloned()
+    }
+
+    /// The warm pack, whatever thread it is for.
+    pub fn current(&self) -> Option<ReplyContext> {
+        self.inner.lock().ok().and_then(|g| g.clone())
+    }
+}
+
 /// One candidate answer to "which thread is this question about".
 #[derive(Debug, Clone, PartialEq)]
 pub struct ThreadCandidate {
@@ -399,6 +456,69 @@ impl Db {
             }
         }
         summary
+    }
+
+    /// Build the reply context for a thread — everything a one-press draft needs, assembled
+    /// **before** the press.
+    ///
+    /// The SLO is 150ms to offer the action and 1s to first token, which rules out collecting
+    /// context on the press (CLAUDE.md: the cache is pre-assembled, never gathered on demand).
+    /// The caller runs this off the focus path and holds the result; pressing the button then
+    /// only starts generation.
+    ///
+    /// `build_ms` is carried on the pack so the assembly cost is measurable in place rather than
+    /// inferred — the SLO is an acceptance criterion, so the measurement ships with the code.
+    pub fn build_reply_context(&self, thread_key: &str) -> ReplyContext {
+        let started = std::time::Instant::now();
+        let facts = self.inline_memory(6);
+        let (title, turns) = {
+            let Ok(conn) = self.conn.lock() else {
+                return ReplyContext { thread_key: thread_key.to_string(), ..Default::default() };
+            };
+            let title = shogun_memory::thread::recent(&conn, 50)
+                .ok()
+                .and_then(|rows| rows.into_iter().find(|t| t.thread_key == thread_key))
+                .and_then(|t| t.title);
+            let turns = shogun_memory::thread::recent_events(&conn, thread_key, REPLY_TURNS)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|(event_id, ts, content)| Evidence {
+                    event_id,
+                    ts,
+                    source: String::new(),
+                    title: None,
+                    // The thread's own text is what a reply is grounded in, so it is kept whole
+                    // up to a generous cap rather than excerpted around a query — there is no
+                    // query yet.
+                    excerpt: shogun_memory::search::excerpt(&content, "", REPLY_TURN_CHARS),
+                })
+                .collect::<Vec<_>>();
+            (title, turns)
+        };
+        // Past threads that resemble this one, so a reply can recall what was said before.
+        let related = match title.as_deref().filter(|t| !t.is_empty()) {
+            Some(t) => self
+                .search(t, REPLY_RELATED)
+                .into_iter()
+                .filter(|h| h.window_title.as_deref() != title.as_deref())
+                .map(|h| Evidence {
+                    event_id: h.event_id,
+                    ts: h.ts,
+                    source: h.source,
+                    title: h.window_title,
+                    excerpt: shogun_memory::search::excerpt(&h.content, t, REPLY_RELATED_CHARS),
+                })
+                .collect(),
+            None => Vec::new(),
+        };
+        ReplyContext {
+            thread_key: thread_key.to_string(),
+            title,
+            turns,
+            facts,
+            related,
+            build_ms: started.elapsed().as_millis() as u64,
+        }
     }
 
     /// Resolve what a referring question ("how's that going?") is about.
@@ -1126,6 +1246,61 @@ mod tests {
         assert_eq!(summary.jobs_completed, 2);
         assert_eq!(summary.duration_ms, 250);
         assert!(summary.completed_fully);
+    }
+
+    /// The reply context must carry the thread's own words, the state facts, and be measurable.
+    #[test]
+    fn a_reply_context_carries_the_thread_and_reports_its_build_cost() {
+        let db = Db::open_in_memory(clock(10_000)).unwrap();
+        db.capture(&NewEvent {
+            window_title: Some("Q3 pricing"),
+            ..ev("Alice asked for the renewal terms", "h1", 100)
+        })
+        .unwrap();
+        db.capture(&NewEvent {
+            window_title: Some("Q3 pricing"),
+            ..ev("we settled at 12k for the year", "h2", 200)
+        })
+        .unwrap();
+        let key = shogun_memory::thread::thread_key(
+            "capture",
+            None,
+            Some("com.apple.Safari"),
+            Some("Q3 pricing"),
+        )
+        .unwrap();
+
+        let ctx = db.build_reply_context(&key);
+        assert_eq!(ctx.title.as_deref(), Some("Q3 pricing"));
+        assert_eq!(ctx.turns.len(), 2, "the whole conversation, not just the last line");
+        // Oldest first — a reply reads the thread in order.
+        assert!(ctx.turns[0].excerpt.contains("renewal terms"));
+        assert!(ctx.turns[1].excerpt.contains("12k"));
+        // The SLO measurement ships with the data it describes.
+        assert!(ctx.build_ms < 1_000, "assembly should be fast: {}ms", ctx.build_ms);
+    }
+
+    /// A press must read a warm pack, never build one — building on the press is what the SLO
+    /// forbids, so a miss is reported rather than silently papered over.
+    #[test]
+    fn the_cache_serves_the_current_thread_and_reports_a_miss_honestly() {
+        let db = Db::open_in_memory(clock(10_000)).unwrap();
+        db.capture(&NewEvent { window_title: Some("Alpha"), ..ev("alpha notes", "h1", 100) })
+            .unwrap();
+        let key =
+            shogun_memory::thread::thread_key("capture", None, Some("com.apple.Safari"), Some("Alpha"))
+                .unwrap();
+
+        let cache = ReplyContextCache::new();
+        assert!(cache.get(&key).is_none(), "cold cache is a miss, not an inline build");
+
+        cache.put(db.build_reply_context(&key));
+        assert!(cache.get(&key).is_some(), "warm for the built thread");
+        assert!(
+            cache.get("capture:com.apple.Safari:beta").is_none(),
+            "a different thread is a miss — never serve the wrong thread's context"
+        );
+        assert_eq!(cache.current().map(|c| c.thread_key), Some(key));
     }
 
     /// "How's that going?" with one obvious candidate resolves to it.

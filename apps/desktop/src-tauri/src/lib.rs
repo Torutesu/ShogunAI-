@@ -308,7 +308,16 @@ fn setup_macos(app: &tauri::App) {
             app.manage(db.clone());
             app.manage(notch_exec::mac::new_engine(db.clone()));
             let policy = shogun_core::capture::exclusion::ExclusionPolicy::new();
-            let _ = capture_source::spawn_capture_poller(db.clone(), policy, None);
+            // The reply-context cache is filled by the capture poller (focus path) and read by
+            // the draft command, so a press never collects context.
+            let reply_cache = shogun_core::daemon::ReplyContextCache::new();
+            app.manage(reply_cache.clone());
+            let _ = capture_source::spawn_capture_poller(
+                db.clone(),
+                policy,
+                None,
+                Some(reply_cache),
+            );
             eprintln!("[spike] capture source started (poll {}ms)", capture_source::DEFAULT_POLL_MS);
 
             // AI coding-tool transcripts (opt-in): a large share of the work happens there, and

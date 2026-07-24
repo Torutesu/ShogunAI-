@@ -32,7 +32,9 @@ import { t } from "./strings";
 // owns only presentation. All-spaces/background float (NSPanel) is a separate, gated path.
 
 type Appearance = "auto" | "light" | "dark";
-type Msg = { role: "me" | "shogun"; text: string };
+type Citation = { event_id: number; source: string; title: string | null };
+type Msg = { role: "me" | "shogun"; text: string; citations?: Citation[] };
+type ChatAnswer = { text: string; citations: Citation[] };
 
 interface ContextPayload {
   bundle_id: string;
@@ -333,8 +335,8 @@ export function App(): JSX.Element {
     setInput("");
     setMsgs((m) => [...m, { role: "me", text: q }]);
     setThinking(true);
-    const finish = (text: string): void => {
-      setMsgs((m) => [...m, { role: "shogun", text }]);
+    const finish = (text: string, citations?: Citation[]): void => {
+      setMsgs((m) => [...m, { role: "shogun", text, citations }]);
       setThinking(false);
     };
     if (!IN_TAURI) {
@@ -347,8 +349,8 @@ export function App(): JSX.Element {
       finish(t.noKey);
       return;
     }
-    void invoke<string>("shogun_chat", { message: q })
-      .then((r) => finish(r || t.noAnswer))
+    void invoke<ChatAnswer>("shogun_chat", { message: q })
+      .then((r) => finish(r?.text || t.noAnswer, r?.citations))
       .catch((e) => finish(`${t.answerFailed}: ${e}`));
   }, [input, thinking, status]);
 
@@ -483,6 +485,18 @@ export function App(): JSX.Element {
                 msgs.map((m, i) => (
                   <div key={i} className={`msg msg--${m.role}`}>
                     {m.text}
+                    {/* What the answer was grounded in — so the user can check SHOGUN rather
+                        than take its word. */}
+                    {m.citations && m.citations.length > 0 ? (
+                      <div className="cites">
+                        <span className="cites__label">{t.sources}</span>
+                        {m.citations.slice(0, 4).map((c) => (
+                          <span key={c.event_id} className="cite" title={c.title ?? c.source}>
+                            {c.title?.trim() || c.source}
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
                   </div>
                 ))
               )}

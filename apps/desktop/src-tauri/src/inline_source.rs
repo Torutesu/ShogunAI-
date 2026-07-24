@@ -540,7 +540,23 @@ pub mod mac {
         p
     }
 
-    fn chat_blocking(db: &Db, message: &str) -> Result<String, String> {
+    /// One source behind an answer, for the citation line under it.
+    #[derive(serde::Serialize)]
+    pub struct Citation {
+        pub event_id: i64,
+        pub source: String,
+        pub title: Option<String>,
+    }
+
+    /// A chat answer plus what it was grounded in. Showing the sources is what lets the user
+    /// check SHOGUN rather than take its word — the answer is only as good as its evidence.
+    #[derive(serde::Serialize)]
+    pub struct ChatAnswer {
+        pub text: String,
+        pub citations: Vec<Citation>,
+    }
+
+    fn chat_blocking(db: &Db, message: &str) -> Result<ChatAnswer, String> {
         use shogun_memory::thread::Referent;
 
         // A question that refers to something without naming it ("how's that going?") can't be
@@ -559,7 +575,10 @@ pub mod mac {
                         .filter_map(|c| c.title.clone())
                         .collect();
                     if !options.is_empty() {
-                        return Ok(format!("Which one — {}?", options.join(", or ")));
+                        return Ok(ChatAnswer {
+                            text: format!("Which one — {}?", options.join(", or ")),
+                            citations: Vec::new(),
+                        });
                     }
                 }
                 Referent::Resolved => {
@@ -581,15 +600,32 @@ pub mod mac {
         // that in the thread dumps SHOGUN's entire internal prompt at the user. Say what is
         // actually wrong instead. (The UI also pre-empts this from `has_key`; this is the backstop.)
         if !agent.is_live() {
-            return Ok("No key yet — add your provider key in Settings to get real answers.".to_string());
+            return Ok(ChatAnswer {
+                text: "No key yet — add your provider key in Settings to get real answers."
+                    .to_string(),
+                citations: Vec::new(),
+            });
         }
-        agent.complete(&build_chat_prompt(message, &ctx)).map_err(|e| e.to_string())
+        let text = agent.complete(&build_chat_prompt(message, &ctx)).map_err(|e| e.to_string())?;
+        let citations = ctx
+            .evidence
+            .iter()
+            .map(|e| Citation {
+                event_id: e.event_id,
+                source: e.source.clone(),
+                title: e.title.clone(),
+            })
+            .collect();
+        Ok(ChatAnswer { text, citations })
     }
 
     /// Chat with SHOGUN, grounded in memory, on the BYOK Agent lane. Runs the blocking generation on
     /// a blocking thread so it never touches a tokio worker. Records one egress trace (invariant 3).
     #[tauri::command]
-    pub async fn shogun_chat(message: String, db: tauri::State<'_, Db>) -> Result<String, String> {
+    pub async fn shogun_chat(
+        message: String,
+        db: tauri::State<'_, Db>,
+    ) -> Result<ChatAnswer, String> {
         let db = db.inner().clone();
         tokio::task::spawn_blocking(move || chat_blocking(&db, &message))
             .await
