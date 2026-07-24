@@ -109,9 +109,8 @@ pub fn run() {
         shortcuts::hide_panel,
         set_panel_size,
         start_panel_drag,
-        // First-layer connectors + the L3 send/approval queue (rendered in the Settings panel's
-        // Connections section). `open_settings` is intentionally omitted — the panel hosts its own
-        // settings, there is no separate settings window.
+        // First-layer connectors + the L3 send/approval queue, both rendered as sections of the
+        // in-panel Settings view (there is no separate settings window).
         connectors::mac::connectors_list,
         connectors::mac::connect_service,
         connectors::mac::disconnect_service,

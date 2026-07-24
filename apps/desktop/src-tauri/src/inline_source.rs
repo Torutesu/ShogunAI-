@@ -254,6 +254,16 @@ pub mod mac {
         },
     }
 
+    impl InlineAgent {
+        /// True when a real provider client is behind this agent (a key was found in the Keychain).
+        /// The mock echoes its prompt back, which is useful for proving the inline AX insert path
+        /// but must never be surfaced as a chat answer — that would print SHOGUN's whole internal
+        /// prompt into the user's thread.
+        pub(crate) fn is_live(&self) -> bool {
+            !matches!(self, InlineAgent::Mock(_))
+        }
+    }
+
     impl AgentClient for InlineAgent {
         fn complete(&self, prompt: &str) -> Result<String, LlmError> {
             match self {
@@ -508,6 +518,12 @@ pub mod mac {
     fn chat_blocking(db: &Db, message: &str) -> Result<String, String> {
         let memory = db.inline_memory(8);
         let agent = build_agent(db);
+        // Without a key the agent is the echo mock, whose "answer" is the prompt itself — printing
+        // that in the thread dumps SHOGUN's entire internal prompt at the user. Say what is
+        // actually wrong instead. (The UI also pre-empts this from `has_key`; this is the backstop.)
+        if !agent.is_live() {
+            return Ok("No key yet — add your provider key in Settings to get real answers.".to_string());
+        }
         agent.complete(&build_chat_prompt(message, &memory)).map_err(|e| e.to_string())
     }
 

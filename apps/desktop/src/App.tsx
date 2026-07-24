@@ -74,6 +74,10 @@ const H_HANDLE = 44;
 const H_SETTINGS = 520; // taller default so setting groups fit; body scrolls; clamped to screen
 const MIN_W = 460;
 const MIN_H = 240;
+// Collapsed fallback, used only until the pill has been measured. The window is transparent, so
+// any part of it that ISN'T the pill would still swallow clicks meant for the app underneath —
+// the collapsed window is therefore shrunk to the pill's real bounds (see the measuring effect).
+const W_HANDLE_FALLBACK = 260;
 
 interface Size {
   w: number;
@@ -186,7 +190,9 @@ export function App(): JSX.Element {
     (opts?: { open?: boolean; settings?: boolean }): void => {
       const isOpen = opts?.open ?? open;
       const isSettings = opts?.settings ?? showSettings;
-      if (!isOpen) void applyPanelSize(chatSize.w, H_HANDLE);
+      // Collapsed: a provisional pill-sized window; the measuring effect below tightens it to the
+      // pill's real bounds so the transparent remainder never eats clicks.
+      if (!isOpen) void applyPanelSize(W_HANDLE_FALLBACK, H_HANDLE);
       else if (isSettings) void applyPanelSize(setSize.w, setSize.h);
       else void applyPanelSize(chatSize.w, chatSize.h);
     },
@@ -228,6 +234,8 @@ export function App(): JSX.Element {
   // Active agent provider, shown on the composer's model pill (mirrors Settings → Model).
   const [provider, setProvider] = useState<string>("anthropic");
   const threadRef = useRef<HTMLDivElement>(null);
+  // Measured to size the collapsed window to the pill (see the measuring effect below).
+  const handleRef = useRef<HTMLButtonElement>(null);
 
   const refreshLlm = useCallback((): void => {
     if (!IN_TAURI) return;
@@ -333,10 +341,16 @@ export function App(): JSX.Element {
       setTimeout(() => finish("I'd start with the overdue deck for Alice — want me to draft it at your cursor?"), 700);
       return;
     }
+    // No key means the backend would answer from the echo mock, so say so directly rather than
+    // round-tripping for a non-answer.
+    if (status && !status.has_key) {
+      finish(t.noKey);
+      return;
+    }
     void invoke<string>("shogun_chat", { message: q })
       .then((r) => finish(r || t.noAnswer))
       .catch((e) => finish(`${t.answerFailed}: ${e}`));
-  }, [input, thinking]);
+  }, [input, thinking, status]);
 
   const draftAtCursor = (): void => {
     if (IN_TAURI) void invoke("inline_at_cursor").catch(() => undefined);
@@ -346,11 +360,25 @@ export function App(): JSX.Element {
   const live = appName(ctxApp || status?.app || "");
   const providerLabel = PROVIDERS.find((p) => p.id === provider)?.label ?? t.model;
 
+  // Collapsed: shrink the window to the pill's real bounds. The panel is transparent, so every
+  // pixel of window that isn't the pill would still intercept clicks aimed at the app underneath
+  // (an invisible dead zone across the top-left of the screen). Re-measured whenever the pill's
+  // content — and therefore its width — changes.
+  useEffect(() => {
+    if (open) return;
+    const el = handleRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    if (r.width < 1 || r.height < 1) return;
+    // +1 guards against a fractional layout width being truncated into a clipped pill.
+    void applyPanelSize(Math.ceil(r.width) + 1, Math.ceil(r.height) + 1);
+  }, [open, live, state.commitments.length, state.open_loops.length]);
+
   // Collapsed: a clear, clickable handle hanging from the notch.
   if (!open) {
     return (
       <div className="stage stage--handle">
-        <button className="handle" type="button" onClick={expand} title={t.openPanel}>
+        <button className="handle" ref={handleRef} type="button" onClick={expand} title={t.openPanel}>
           <span className="handle__live">
             <span className="live__dot" />
             {t.reading} <b>{live}</b>
@@ -685,6 +713,106 @@ function ConnectionsSection(): JSX.Element {
   );
 }
 
+// L3 confirmation queue (§6.6 / FR-AG-03, invariant 4). Every action that leaves the device stops
+// here until the user presses the dedicated Confirm button — Enter alone must never confirm, and
+// the FULL body is shown, never a summary. The queue itself lives in Rust (invariant 1).
+interface ApprovalView {
+  id: number;
+  op_type: string;
+  destination: string;
+  full_body: string;
+  route: string; // "direct" | "composio"
+}
+
+function ApprovalsSection(): JSX.Element | null {
+  const [rows, setRows] = useState<ApprovalView[]>([]);
+  const [busy, setBusy] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback((): void => {
+    if (!IN_TAURI) return;
+    void invoke<ApprovalView[]>("list_approvals")
+      .then((r) => {
+        setRows(r);
+        setError(null);
+      })
+      // A missing queue (connector runtime not started) must not paint an error banner over the
+      // settings — the section simply stays empty.
+      .catch(() => setRows([]));
+  }, []);
+
+  useEffect(() => {
+    refresh();
+    // Producers (agents) enqueue in the background, so poll while the panel is open.
+    const id = setInterval(refresh, 5000);
+    return () => clearInterval(id);
+  }, [refresh]);
+
+  const act = useCallback(
+    (cmd: "confirm_send" | "reject_send", id: number): void => {
+      setBusy(id);
+      setError(null);
+      void invoke<string>(cmd, { id })
+        .then((outcome) => {
+          if (typeof outcome === "string" && outcome.startsWith("failed:")) setError(outcome);
+        })
+        .catch((e) => setError(String(e)))
+        .finally(() => {
+          setBusy(null);
+          refresh();
+        });
+    },
+    [refresh],
+  );
+
+  // Nothing pending and nothing to report: stay out of the way.
+  if (rows.length === 0 && !error) return null;
+
+  return (
+    <section className="set">
+      <div className="set__label">{t.approvals}</div>
+      <div className="set__hint">{t.approvalsHint}</div>
+      {error ? <div className="set__hint is-err">{error}</div> : null}
+      {rows.length === 0 ? (
+        <div className="set__hint">{t.approvalsEmpty}</div>
+      ) : (
+        <div className="apprs">
+          {rows.map((r) => (
+            <div key={r.id} className="appr">
+              <div className="appr__top">
+                <span className="appr__op">{r.op_type}</span>
+                <span className="appr__route">
+                  {r.destination} · {r.route === "composio" ? t.approvalsVia : t.approvalsDirect}
+                </span>
+              </div>
+              {/* FR-AG-03: the full body, never a summary. */}
+              <pre className="appr__body">{r.full_body}</pre>
+              <div className="appr__acts">
+                <button
+                  className="keyrow__btn keyrow__btn--go"
+                  type="button"
+                  disabled={busy === r.id}
+                  onClick={() => act("confirm_send", r.id)}
+                >
+                  {busy === r.id ? "…" : t.approvalsConfirm}
+                </button>
+                <button
+                  className="keyrow__btn"
+                  type="button"
+                  disabled={busy === r.id}
+                  onClick={() => act("reject_send", r.id)}
+                >
+                  {t.approvalsReject}
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
 // Draft is not here: it fires on a bare ⌥ (Option) tap, which can't be a global shortcut and so
 // isn't rebindable. Settings shows it as a fixed row.
 const DEFAULT_BINDS: Record<string, string> = {
@@ -863,6 +991,7 @@ function Settings(props: {
         </button>
       </header>
       <div className="settings__body">
+        <ApprovalsSection />
         <ConnectionsSection />
         <section className="set">
           <div className="set__label" id="seg-appearance">{t.appearance}</div>

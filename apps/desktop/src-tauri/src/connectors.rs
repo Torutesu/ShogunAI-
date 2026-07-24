@@ -192,16 +192,6 @@ pub mod mac {
         }
     }
 
-    /// Show the Settings window (which renders the connections screen). Created hidden at launch.
-    #[tauri::command]
-    pub fn open_settings(app: tauri::AppHandle) -> Result<(), String> {
-        use tauri::Manager;
-        let win = app.get_webview_window("settings").ok_or("no settings window")?;
-        win.show().map_err(|e| e.to_string())?;
-        win.set_focus().map_err(|e| e.to_string())?;
-        Ok(())
-    }
-
     /// Disconnect a service (FR-INT-07): delete the Keychain token and stop syncing. Ingested events
     /// are kept by default (the user can wipe them from the memory settings).
     #[tauri::command]

@@ -477,7 +477,9 @@ body {
    (left) and draft/send tools (right). */
 .composer {
   flex: none;
-  padding: 8px 10px 10px;
+  /* The bottom padding clears the corner resize grip: without it the grip sits on top of the send
+     button's corner and a click there starts a resize instead of sending. */
+  padding: 8px 10px 18px;
   border-top: 1px solid var(--line);
 }
 .composer__card {
@@ -823,6 +825,69 @@ kbd {
   border-color: transparent;
 }
 
+/* approvals (Settings → Approvals) — pending L3 confirmations, full body shown */
+.apprs {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 8px;
+}
+.appr {
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  padding: 9px 10px;
+  background: var(--fill);
+}
+.appr__top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.appr__op {
+  font-size: var(--fs-md);
+  font-weight: 660;
+  color: var(--ink);
+}
+.appr__route {
+  font-size: var(--fs-xs);
+  color: var(--faint);
+  text-align: right;
+  min-width: 0;
+}
+.appr__body {
+  margin: 7px 0;
+  padding: 8px 9px;
+  max-height: 160px;
+  overflow: auto;
+  border-radius: var(--r-xs);
+  background: var(--fill-strong);
+  color: var(--ink);
+  font-family: var(--sys);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  /* the body is the thing being approved — let the user select and check it */
+  user-select: text;
+  -webkit-user-select: text;
+}
+.appr__acts {
+  display: flex;
+  gap: 6px;
+}
+/* the confirming action carries the accent; reject stays neutral */
+.keyrow__btn--go {
+  background: var(--accent);
+  border-color: transparent;
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+.keyrow__btn--go:hover:not(:disabled) {
+  background: var(--accent);
+  filter: brightness(1.07);
+}
+
 /* connections list (Settings → Connections) — one row per first-layer service */
 .conns {
   display: flex;
@@ -866,10 +931,10 @@ kbd {
    diagonal ticks in the bottom-right corner; drives set_panel_size from a pointer drag. */
 .resizer {
   position: absolute;
-  right: 4px;
-  bottom: 4px;
-  width: 16px;
-  height: 16px;
+  right: 3px;
+  bottom: 3px;
+  width: 14px;
+  height: 14px;
   z-index: 6;
   cursor: nwse-resize;
   touch-action: none;
