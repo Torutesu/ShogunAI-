@@ -246,20 +246,16 @@ body {
 .head .icon {
   cursor: pointer;
 }
-.live {
-  display: inline-flex;
+.head__left {
+  display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: var(--fs-sm);
-  color: var(--muted);
+  gap: 9px;
   min-width: 0;
 }
-.live b {
-  color: var(--ink);
-  font-weight: 600;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.brand {
+  font-size: 14px;
+  color: var(--accent);
+  flex: none;
 }
 .head__right {
   display: flex;
@@ -482,64 +478,130 @@ body {
   }
 }
 
-/* composer */
+/* composer — a rounded input card: source chip on top, field, then a bar with the model pill
+   (left) and draft/send tools (right). */
 .composer {
   flex: none;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 11px 12px 13px;
+  padding: 10px 12px 12px;
   border-top: 1px solid var(--line);
 }
-.composer__draft {
-  flex: none;
-  width: 40px;
-  height: 40px;
-  border: 1px solid var(--line-strong);
+.composer__card {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
   background: var(--fill);
-  color: var(--ink);
-  border-radius: var(--r-md);
-  font-size: 15px;
-  cursor: pointer;
-  transition: background var(--sp), transform var(--sp);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-lg);
+  padding: 11px 12px 10px;
+  transition: border-color var(--sp), box-shadow var(--sp);
 }
-.composer__draft:hover {
-  background: var(--fill-strong);
+.composer__card:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line-strong));
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
-.composer__draft:active {
-  transform: scale(0.94);
-}
-.composer__input {
-  flex: 1;
+.composer__src {
+  display: flex;
   min-width: 0;
+}
+.srcchip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  max-width: 100%;
+  font-size: var(--fs-xs);
+  color: var(--muted);
   background: var(--fill-strong);
   border: 1px solid var(--line);
-  border-radius: var(--r-md);
-  padding: 11px 14px;
+  border-radius: var(--r-pill);
+  padding: 4px 11px;
+}
+.srcchip b {
+  color: var(--ink);
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.composer__input {
+  width: 100%;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  padding: 2px 2px 0;
   color: var(--ink);
   font: inherit;
   font-family: var(--sys);
-  font-size: var(--fs-lg);
+  font-size: var(--fs-xl);
   outline: none;
-  transition: border-color var(--sp), background var(--sp);
-}
-.composer__input:hover {
-  border-color: var(--line-strong);
 }
 .composer__input::placeholder {
   color: var(--faint);
 }
-.composer__send {
-  flex: none;
-  width: 40px;
-  height: 40px;
+.composer__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.composer__model {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   border: none;
-  border-radius: var(--r-md);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-family: var(--sys);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  border-radius: var(--r-sm);
+  padding: 5px 9px;
+  cursor: pointer;
+  transition: background var(--sp), color var(--sp);
+}
+.composer__model:hover {
+  background: var(--fill-strong);
+  color: var(--ink);
+}
+.composer__caret {
+  color: var(--faint);
+  font-size: 11px;
+}
+.composer__tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+.composer__draft {
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--line-strong);
+  background: transparent;
+  color: var(--muted);
+  border-radius: var(--r-sm);
+  font-size: 15px;
+  cursor: pointer;
+  transition: background var(--sp), color var(--sp), transform var(--sp);
+}
+.composer__draft:hover {
+  background: var(--fill-strong);
+  color: var(--ink);
+}
+.composer__draft:active {
+  transform: scale(0.92);
+}
+.composer__send {
+  width: 34px;
+  height: 34px;
+  border: none;
+  border-radius: 50%;
   background: linear-gradient(135deg, var(--accent), var(--accent-2));
   color: var(--accent-ink);
   font-size: 16px;
   cursor: pointer;
-  box-shadow: 0 4px 14px var(--accent-soft);
+  box-shadow: 0 4px 13px var(--accent-soft);
   transition: filter var(--sp), transform var(--sp), box-shadow var(--sp);
 }
 .composer__send:disabled {
@@ -551,7 +613,7 @@ body {
   filter: brightness(1.07);
 }
 .composer__send:not(:disabled):active {
-  transform: scale(0.94);
+  transform: scale(0.92);
 }
 
 /* settings */
@@ -758,8 +820,8 @@ kbd {
   margin-top: 8px;
 }
 
-/* Inputs keep outline:none for the resting look; restore a clear ring on keyboard focus. */
-.composer__input:focus-visible,
+/* Keyrow inputs keep outline:none at rest; restore a clear ring on keyboard focus. The composer
+   input rings via its card's :focus-within, so it isn't listed here. */
 .keyrow__input:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;

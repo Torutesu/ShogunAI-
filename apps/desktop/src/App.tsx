@@ -138,7 +138,17 @@ export function App(): JSX.Element {
   useEffect(() => saveJson("shogun.appearance", appearance), [appearance]);
   const [showState, setShowState] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  // Active agent provider, shown on the composer's model pill (mirrors Settings → Model).
+  const [provider, setProvider] = useState<string>("anthropic");
   const threadRef = useRef<HTMLDivElement>(null);
+
+  const refreshLlm = useCallback((): void => {
+    if (!IN_TAURI) return;
+    void invoke<{ provider: string; model: string }>("get_llm_settings")
+      .then((s) => setProvider(s.provider))
+      .catch(() => undefined);
+  }, []);
+  useEffect(refreshLlm, [refreshLlm]);
 
   useEffect(() => {
     // Always stamp the attribute so the theme is deterministic — styles.css carries an explicit
@@ -239,6 +249,7 @@ export function App(): JSX.Element {
 
   const totalState = state.commitments.length + state.open_loops.length;
   const live = appName(ctxApp || status?.app || "");
+  const providerLabel = PROVIDERS.find((p) => p.id === provider)?.label ?? t.model;
 
   // Collapsed: a clear, clickable handle hanging from the notch.
   if (!open) {
@@ -273,22 +284,24 @@ export function App(): JSX.Element {
             setAppearance={setAppearance}
             hasKey={!!status?.has_key}
             stateCount={state.commitments.length + state.open_loops.length}
-            onDone={() => setShowSettings(false)}
+            onDone={() => {
+              setShowSettings(false);
+              refreshLlm();
+            }}
             onCleared={refreshState}
           />
         ) : (
           <>
             <header className="head" onMouseDown={beginDrag}>
-              <span className="live">
-                <span className="live__dot" />
-                {t.reading} <b>{live}</b>
-              </span>
-              <div className="head__right">
+              <div className="head__left">
+                <span className="brand" aria-hidden="true">⚔</span>
                 {totalState > 0 ? (
                   <button className="chip" type="button" onClick={() => setShowState((v) => !v)} aria-pressed={showState}>
                     {state.commitments.length} {t.due} · {state.open_loops.length} {t.waiting}
                   </button>
                 ) : null}
+              </div>
+              <div className="head__right">
                 <button className="icon" type="button" title={t.settings} aria-label={t.settings} onClick={() => setShowSettings(true)}>
                   ⚙︎
                 </button>
@@ -355,36 +368,64 @@ export function App(): JSX.Element {
             </div>
 
             <div className="composer">
-              <button className="composer__draft" type="button" onClick={draftAtCursor} title={t.draftTitle}>
-                ✎
-              </button>
-              <input
-                className="composer__input"
-                placeholder={t.ask}
-                value={input}
-                onFocus={() => {
-                  // A nonactivating NSPanel won't take keystrokes until it's made key. Ask Rust to
-                  // makeKeyAndOrderFront so typing works (no-op on the plain-window fallback).
-                  if (IN_TAURI) void invoke("focus_field", { focused: true }).catch(() => undefined);
-                }}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault();
-                    send();
-                  }
-                }}
-              />
-              <button
-                className="composer__send"
-                type="button"
-                title={t.send}
-                aria-label={t.send}
-                onClick={send}
-                disabled={!input.trim() || thinking}
-              >
-                ↑
-              </button>
+              <div className="composer__card">
+                {/* Source chip: the app SHOGUN is reading — app NAME only, never window titles or
+                    paths (no usernames leak into the UI). */}
+                <div className="composer__src">
+                  <span className="srcchip" title={`${t.reading} ${live}`}>
+                    <span className="live__dot" />
+                    {t.reading} <b>{live}</b>
+                  </span>
+                </div>
+                <input
+                  className="composer__input"
+                  placeholder={t.ask}
+                  value={input}
+                  onFocus={() => {
+                    // A nonactivating NSPanel won't take keystrokes until it's made key. Ask Rust to
+                    // makeKeyAndOrderFront so typing works (no-op on the plain-window fallback).
+                    if (IN_TAURI) void invoke("focus_field", { focused: true }).catch(() => undefined);
+                  }}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      send();
+                    }
+                  }}
+                />
+                <div className="composer__bar">
+                  <button
+                    className="composer__model"
+                    type="button"
+                    title={t.model}
+                    onClick={() => setShowSettings(true)}
+                  >
+                    {providerLabel} <span className="composer__caret" aria-hidden="true">⌄</span>
+                  </button>
+                  <div className="composer__tools">
+                    <button
+                      className="composer__draft"
+                      type="button"
+                      onClick={draftAtCursor}
+                      title={t.draftTitle}
+                      aria-label={t.draftTitle}
+                    >
+                      ✎
+                    </button>
+                    <button
+                      className="composer__send"
+                      type="button"
+                      title={t.send}
+                      aria-label={t.send}
+                      onClick={send}
+                      disabled={!input.trim() || thinking}
+                    >
+                      ↑
+                    </button>
+                  </div>
+                </div>
+              </div>
             </div>
           </>
         )}
