@@ -113,7 +113,7 @@ fn top_open_loops(open_loops: &[OpenLoopItem]) -> Vec<BriefItem> {
         .iter()
         .filter_map(|o| to_item(&o.description, o.confidence, o.provenance_event_id).map(|i| (o, i)))
         .collect();
-    kept.sort_by(|(a, _), (b, _)| b.staleness_days.cmp(&a.staleness_days));
+    kept.sort_by_key(|(b, _)| std::cmp::Reverse(b.staleness_days));
     kept.into_iter().take(OPEN_LOOPS_MAX).map(|(_, i)| i).collect()
 }
 

@@ -33,7 +33,9 @@ shogun-core = { path = "../../../crates/shogun-core" }
 # The memory DB is only wired in on-device (capture_source persists through it). Enabling `db`
 # here (not in the base [dependencies]) keeps rusqlite out of the Linux resolution graph.
 # `net` adds the real HTTPS transport so the inline draft can call the BYOK Agent lane on device.
-shogun-core = { path = "../../../crates/shogun-core", features = ["db", "net"] }
+# `exec` (= db + net + agents) brings the send-execution path (send_exec + the HTTP clients) into
+# the app without the standalone axum server, for the L3 approval → send wiring.
+shogun-core = { path = "../../../crates/shogun-core", features = ["db", "net", "exec"] }
 # BYOK key read from the macOS Keychain (invariant 7 — secrets never in a file/DB/log).
 security-framework = "3"
 # A dedicated runtime to block the (async) Agent-lane call on the inline trigger thread.
@@ -42,6 +44,10 @@ tokio = { version = "1", features = ["rt", "rt-multi-thread"] }
 shogun-fusion = { path = "../../../crates/shogun-fusion" }
 # shogun-agents for L1/L2/L3-gated execution of a clicked context action.
 shogun-agents = { path = "../../../crates/shogun-agents" }
+# First-layer connectors: OAuth+PKCE flow, Keychain token store, MCP transport, sync runtime.
+# `live` for the effectful side (reqwest + Keychain). shogun-mcp for scope::from_source.
+shogun-integrations = { path = "../../../crates/shogun-integrations", features = ["live"] }
+shogun-mcp = { path = "../../../crates/shogun-mcp" }
 objc2 = "0.6"
 block2 = "0.6" # ObjC blocks for NSWorkspace notification observers (space-change watcher)
 objc2-app-kit = { version = "0.3", features = [

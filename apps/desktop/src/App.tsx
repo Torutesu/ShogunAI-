@@ -578,6 +578,113 @@ function ResizeGrip(props: {
   );
 }
 
+// First-layer connections (§6.9). Connect / disconnect a service and show its sync state. Talks to
+// the Rust connector commands (connectors_list / connect_service / disconnect_service); the data
+// layer stays in Rust (invariant 1) — this is presentation only.
+type ConnState = "connected" | "needs_reauth" | "disconnected" | "coming_soon";
+interface ServiceStatus {
+  source: string; // "gmail" | "gcal" | "gdrive" | "slack" | "notion" | "github" | "linear"
+  state: ConnState;
+  last_sync_ms: number | null;
+  has_endpoint: boolean;
+}
+const CONN_LABELS: Record<string, string> = {
+  gmail: "Gmail",
+  gcal: "Google Calendar",
+  gdrive: "Google Drive",
+  slack: "Slack",
+  notion: "Notion",
+  github: "GitHub",
+  linear: "Linear",
+};
+const CONN_STATE_LABEL: Record<ConnState, string> = {
+  connected: "Connected",
+  needs_reauth: "Needs reauth",
+  disconnected: "Not connected",
+  coming_soon: "Coming soon",
+};
+
+function ConnectionsSection(): JSX.Element {
+  const [rows, setRows] = useState<ServiceStatus[]>([]);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback((): void => {
+    if (!IN_TAURI) return;
+    void invoke<ServiceStatus[]>("connectors_list")
+      .then((r) => {
+        setRows(r);
+        setError(null);
+      })
+      .catch((e) => setError(String(e)));
+  }, []);
+  useEffect(refresh, [refresh]);
+
+  const act = useCallback(
+    (cmd: "connect_service" | "disconnect_service", source: string): void => {
+      setBusy(source);
+      setError(null);
+      void invoke(cmd, { service: source })
+        .then(refresh)
+        .catch((e) => setError(String(e)))
+        .finally(() => setBusy(null));
+    },
+    [refresh],
+  );
+
+  return (
+    <section className="set">
+      <div className="set__label">{t.connections}</div>
+      <div className="set__hint">{t.connectionsHint}</div>
+      {error ? <div className="set__hint is-err">{error}</div> : null}
+      {rows.length === 0 ? (
+        <div className="set__hint">{t.connectionsEmpty}</div>
+      ) : (
+        <div className="conns">
+          {rows.map((r) => {
+            const label = CONN_LABELS[r.source] ?? r.source;
+            const canConnect = r.has_endpoint && r.state !== "coming_soon";
+            const connected = r.state === "connected" || r.state === "needs_reauth";
+            const stateMod =
+              r.state === "connected" ? " is-ok" : r.state === "needs_reauth" ? " is-warn" : "";
+            return (
+              <div key={r.source} className="conn">
+                <div className="conn__meta">
+                  <span className="conn__name">{label}</span>
+                  <span className={`conn__state${stateMod}`}>
+                    {CONN_STATE_LABEL[r.state]}
+                    {r.last_sync_ms ? ` · ${new Date(r.last_sync_ms).toLocaleTimeString()}` : ""}
+                  </span>
+                </div>
+                {connected ? (
+                  <button
+                    className="keyrow__btn"
+                    type="button"
+                    disabled={busy === r.source}
+                    onClick={() => act("disconnect_service", r.source)}
+                  >
+                    {busy === r.source ? "…" : t.disconnect}
+                  </button>
+                ) : (
+                  <button
+                    className="keyrow__btn"
+                    type="button"
+                    disabled={!canConnect || busy === r.source}
+                    onClick={() => act("connect_service", r.source)}
+                    title={canConnect ? "" : t.connectionsUnavailable}
+                  >
+                    {busy === r.source ? t.connecting : t.connect}
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
+}
+
 // Draft is not here: it fires on a bare ⌥ (Option) tap, which can't be a global shortcut and so
 // isn't rebindable. Settings shows it as a fixed row.
 const DEFAULT_BINDS: Record<string, string> = {
@@ -756,6 +863,7 @@ function Settings(props: {
         </button>
       </header>
       <div className="settings__body">
+        <ConnectionsSection />
         <section className="set">
           <div className="set__label" id="seg-appearance">{t.appearance}</div>
           <div className="seg" role="radiogroup" aria-labelledby="seg-appearance">

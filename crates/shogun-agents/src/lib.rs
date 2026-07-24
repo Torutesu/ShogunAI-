@@ -13,3 +13,4 @@ pub mod approval;
 pub mod engine;
 pub mod permission;
 pub mod presets;
+pub mod producer;

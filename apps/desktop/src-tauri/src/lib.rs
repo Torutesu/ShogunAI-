@@ -6,8 +6,10 @@
 //! `axcache` runs on focus events and must never be triggered by the state machine
 //! (the "no collect-on-press" proof, spec §3.10.3).
 
+mod approvals;
 mod axcache;
 mod capture_source;
+mod connectors;
 mod display;
 mod geometry;
 mod hover;
@@ -107,6 +109,18 @@ pub fn run() {
         shortcuts::hide_panel,
         set_panel_size,
         start_panel_drag,
+        // First-layer connectors + the L3 send/approval queue (rendered in the Settings panel's
+        // Connections section). `open_settings` is intentionally omitted — the panel hosts its own
+        // settings, there is no separate settings window.
+        connectors::mac::connectors_list,
+        connectors::mac::connect_service,
+        connectors::mac::disconnect_service,
+        connectors::mac::fetch_on_demand,
+        approvals::mac::submit_send,
+        approvals::mac::draft_reply,
+        approvals::mac::list_approvals,
+        approvals::mac::confirm_send,
+        approvals::mac::reject_send,
     ]);
 
     // NOTE: the visible surface is a NATIVE NSPanel hosting the webview's content view
@@ -292,8 +306,23 @@ fn setup_macos(app: &tauri::App) {
             app.manage(db.clone());
             app.manage(notch_exec::mac::new_engine(db.clone()));
             let policy = shogun_core::capture::exclusion::ExclusionPolicy::new();
-            let _ = capture_source::spawn_capture_poller(db, policy, None);
+            let _ = capture_source::spawn_capture_poller(db.clone(), policy, None);
             eprintln!("[spike] capture source started (poll {}ms)", capture_source::DEFAULT_POLL_MS);
+
+            // First-layer connectors (§6.9). Build the auto-refreshing runtime and start the
+            // 15-min read-sync poller. Missing Google creds (env) is not fatal — the app runs
+            // without connectors until the user sets them up.
+            match connectors::mac::build_runtime(true /* draft-stop default ON */) {
+                Ok(rt) => {
+                    let shared = std::sync::Arc::new(std::sync::Mutex::new(rt));
+                    connectors::mac::spawn_sync_poller(shared.clone(), db.clone());
+                    app.manage(connectors::mac::ConnectorState(shared));
+                    // The shared L3 approval queue (producers enqueue sends; the UI confirms them).
+                    app.manage(approvals::mac::ApprovalQueueState::default());
+                    eprintln!("[spike] connector runtime started (read-sync poller live)");
+                }
+                Err(e) => eprintln!("[spike] connectors not started: {e}"),
+            }
         }
         Err(e) => eprintln!("[spike] memory DB unavailable — capture source not started: {e}"),
     }
@@ -1219,6 +1248,22 @@ mod shortcuts {
         }
         eprintln!("[shell] shortcut {action} → {combo}");
         Ok(())
+    }
+
+    // ⌘⇧, (Comma) → open the Settings window (Connections + Approvals). The window is created
+    // hidden; without this there is no way to reach the settings UI in the running app.
+    let settings = Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::Comma);
+    let res = app.global_shortcut().on_shortcut(settings, move |app, _sc, event| {
+        if event.state() == ShortcutState::Pressed {
+            if let Some(win) = app.get_webview_window("settings") {
+                let _ = win.show();
+                let _ = win.set_focus();
+            }
+        }
+    });
+    match res {
+        Ok(()) => eprintln!("[spike] ⌘⇧, registered — press it to open Settings"),
+        Err(e) => eprintln!("[spike] settings shortcut registration failed: {e}"),
     }
 }
 

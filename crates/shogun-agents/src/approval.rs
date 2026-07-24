@@ -235,6 +235,12 @@ impl ApprovalQueue {
     pub fn pending_len(&self) -> usize {
         self.pending.len()
     }
+
+    /// The ids of all pending approvals, oldest first — for a UI that lists the L3 confirm queue
+    /// (each id resolves to its [`Preview`] via [`Self::preview`]).
+    pub fn pending_ids(&self) -> Vec<ApprovalId> {
+        self.pending.iter().map(|p| p.id).collect()
+    }
 }
 
 #[cfg(test)]
@@ -247,6 +253,16 @@ mod tests {
 
     fn preview() -> Preview {
         Preview::for_send(&email(), "Hi Alice, shipping Friday.", Route::ViaComposio)
+    }
+
+    #[test]
+    fn pending_ids_lists_requests_oldest_first() {
+        let mut q = ApprovalQueue::new();
+        let a = q.request(email(), preview(), Origin::Human, 0);
+        let b = q.request(email(), preview(), Origin::Human, 1);
+        assert_eq!(q.pending_ids(), vec![a, b]);
+        q.confirm(a, ConfirmIntent::DedicatedButton, 2);
+        assert_eq!(q.pending_ids(), vec![b]);
     }
 
     #[test]

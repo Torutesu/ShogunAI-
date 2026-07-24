@@ -23,14 +23,18 @@ default = []
 # `net` pulls in the real HTTPS transport (reqwest). It is OFF by default so the pure-logic CI
 # job (and every Linux unit test of request-building / parsing / traceability) compiles without
 # reqwest; the macOS shell enables it.
-net = ["dep:reqwest"]
+net = ["dep:reqwest", "dep:shogun-integrations", "dep:shogun-mcp"]
 # `db` pulls in the storage + fusion layers for the daemon's wiring (DB-backed traceability sink,
 # capture writes, state reads → Fusion supply). OFF by default so the pure-logic tests stay
 # rusqlite-free; the daemon (and its CI step) enable it.
-db = ["dep:shogun-memory", "dep:rusqlite", "dep:shogun-fusion", "dep:shogun-mcp"]
+db = ["dep:shogun-memory", "dep:rusqlite", "dep:shogun-fusion", "dep:shogun-mcp", "dep:shogun-integrations"]
 # `daemon-server` builds the runnable `shogun-api` binary: it composes the DB, the DB-backed
 # Memory API backend, the shared approval queue, and the axum REST listener into one process.
-daemon-server = ["db", "shogun-mcp/server", "dep:shogun-agents", "tokio/rt-multi-thread", "tokio/macros"]
+# `exec` is the connector execution path WITHOUT the standalone axum server: the send-execution
+# transports (send_exec) + the HTTP clients (net) + the approval vocabulary (agents). The desktop
+# enables this; the daemon-server bundle builds on it and adds axum.
+exec = ["db", "net", "dep:shogun-agents"]
+daemon-server = ["exec", "shogun-mcp/server", "tokio/rt-multi-thread", "tokio/macros"]
 
 [dependencies]
 tokio = { version = "1", features = ["sync"] }
@@ -39,13 +43,17 @@ serde_json = "1"
 twox-hash = "1"
 # Real HTTPS transport, feature-gated. rustls only (no system OpenSSL); certificate verification
 # is never disabled (NFR-SEC-04).
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"], optional = true }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "blocking", "json"], optional = true }
 # Storage layer + its rusqlite handle, feature-gated (see the `db` feature). Same rusqlite version
 # as shogun-memory so the bundled SQLite compiles once.
 shogun-memory = { path = "../shogun-memory", optional = true }
 shogun-fusion = { path = "../shogun-fusion", optional = true }
 # The daemon implements the Memory API's data backend (dependency-inverted: the trait lives in mcp).
 shogun-mcp = { path = "../shogun-mcp", optional = true }
+# The first-layer connector adapter. The daemon implements its `IngestSink` (over `Db`) and owns the
+# `ConnectorRuntime`; the effectful transport/OAuth/Keychain need `live`. (integrations → mcp only,
+# so no cycle.)
+shogun-integrations = { path = "../shogun-integrations", features = ["live"], optional = true }
 # The `shogun-api` binary composes the shared approval queue (agents) into the server state.
 shogun-agents = { path = "../shogun-agents", optional = true }
 rusqlite = { version = "0.31", features = ["bundled"], optional = true }

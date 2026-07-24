@@ -39,6 +39,16 @@ pub struct IngestSummary {
     pub candidates: usize,
 }
 
+/// The first-layer connector runtime ([`shogun_integrations::ConnectorRuntime`]) hands each synced
+/// batch to this sink; the daemon persists it into the event log via [`Db::ingest_integration`].
+/// `newly_inserted` is what an `IntegrationSynced` bus event reports (§6.9). This keeps data gravity
+/// in the core (invariant 1) — the connector crate never touches the DB.
+impl shogun_integrations::IngestSink for Db {
+    fn ingest(&self, items: &[shogun_mcp::sync::IngestItem]) -> usize {
+        self.ingest_integration(items).newly_inserted
+    }
+}
+
 /// The shared connection handle. `Connection` is `Send` but not `Sync`, so it lives behind a
 /// `Mutex`; the `Arc` lets every daemon component share the one handle.
 pub type SharedConn = Arc<Mutex<Connection>>;

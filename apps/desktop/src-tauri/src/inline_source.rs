@@ -240,8 +240,9 @@ pub mod mac {
 
     /// The Agent-lane client for inline drafts and chat. Real when the ACTIVE provider has a key
     /// in the Keychain; otherwise a mock that echoes the prompt (so the AX read→insert loop is
-    /// testable on device without a key).
-    enum InlineAgent {
+    /// testable on device without a key). `pub(crate)` so the send producers (`crate::approvals`,
+    /// e.g. Reply Drafter) draft through the SAME BYOK Agent-lane client (invariant 5).
+    pub(crate) enum InlineAgent {
         Mock(MockAgentClient),
         Anthropic {
             rt: tokio::runtime::Runtime,
@@ -312,7 +313,9 @@ pub mod mac {
 
     /// Build the Agent client for this run from the current provider settings. Falls back to the
     /// mock (with a clear log) whenever the key is absent or the transport/runtime can't be built.
-    fn build_agent(db: &Db) -> InlineAgent {
+    /// `pub(crate)` so the send producers (`crate::approvals`) share the one BYOK Agent-lane client
+    /// construction (invariant 5) rather than re-deriving it.
+    pub(crate) fn build_agent(db: &Db) -> InlineAgent {
         let s = current_settings();
         let Some(key) = keychain_byok(&s.provider) else {
             eprintln!(

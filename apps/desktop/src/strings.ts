@@ -22,6 +22,14 @@ export const STRINGS = {
     draftTitle: "Draft where your cursor is (tap ⌥)",
     // settings
     settings: "Settings",
+    // connections (first-layer integrations)
+    connections: "Connections",
+    connectionsHint: "First-layer integrations connect directly to each service. Data stays on your device.",
+    connectionsEmpty: "Loading services…",
+    connectionsUnavailable: "Not available yet",
+    connect: "Connect",
+    connecting: "Connecting…",
+    disconnect: "Disconnect",
     appearance: "Appearance",
     dark: "Dark",
     light: "Light",

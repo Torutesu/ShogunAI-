@@ -1,0 +1,40 @@
+[package]
+name = "shogun-integrations"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "SHOGUN first-layer connector adapter: maps the shogun-mcp scope table onto Google Workspace official remote MCP servers, with pure seams for the effectful transport."
+
+# This crate is HTTP-client-free (FR-TR-03: the single traced egress is shogun-core). It carries the
+# pure layer — endpoint/scope tables, op→tool mapping, result normalization, token lifecycle, the
+# OAuth flow orchestration — plus seams (McpRpc / TokenExchange). The concrete reqwest impls live in
+# shogun-core. `live` enables the interactive OAuth loopback flow (needs OS randomness, no network).
+[features]
+default = []
+live = ["dep:getrandom"]
+
+[dependencies]
+# The scope table + the IntegrationTransport seam this crate implements. One-way: integrations → mcp.
+shogun-mcp = { path = "../shogun-mcp" }
+# SendAction — the approval queue's vocabulary — for the confirmed-send routing bridge. mcp already
+# depends on agents, so this adds no new edge direction (integrations → agents, no cycle).
+shogun-agents = { path = "../shogun-agents" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# PKCE (S256): base64url(sha256(verifier)) + safe URL query building. Pure, no network — always on.
+sha2 = "0.10"
+base64 = "0.22"
+url = "2"
+# CSPRNG for the PKCE verifier — only needed by the effectful auth flow, so it rides the `live` flag.
+getrandom = { version = "0.3", optional = true }
+
+# The macOS Keychain token source (invariant 7: secrets never in a file/DB/log). macOS-only and
+# gated in code by `#[cfg(target_os = "macos")]`; other targets use the env/static token providers
+# for dev + integration. Not tied to the `live` feature — it is just a token source, no network.
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "3"
+
+[lints]
+workspace = true

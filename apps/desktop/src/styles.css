@@ -819,6 +819,45 @@ kbd {
   border-color: transparent;
 }
 
+/* connections list (Settings → Connections) — one row per first-layer service */
+.conns {
+  display: flex;
+  flex-direction: column;
+  margin-top: 8px;
+}
+.conn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 0;
+  border-top: 1px solid var(--line);
+}
+.conn:first-child {
+  border-top: none;
+}
+.conn__meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.conn__name {
+  font-size: var(--fs-md);
+  color: var(--ink);
+  font-weight: 600;
+}
+.conn__state {
+  font-size: var(--fs-xs);
+  color: var(--faint);
+}
+.conn__state.is-ok {
+  color: var(--live);
+}
+.conn__state.is-warn {
+  color: var(--warn);
+}
+
 /* corner resize grip — the only way to stretch the borderless panel (no OS resize edges). Two
    diagonal ticks in the bottom-right corner; drives set_panel_size from a pointer drag. */
 .resizer {

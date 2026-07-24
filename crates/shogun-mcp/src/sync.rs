@@ -68,6 +68,15 @@ pub enum SyncFailure {
 pub trait IntegrationTransport {
     /// Fetch the recent items for a `read_sync`. Returns a non-sensitive error string on failure.
     fn read_sync(&self, service: Service) -> Result<Vec<FetchedItem>, String>;
+
+    /// Fetch a specific item on demand (§6.9 `read_on_demand`, e.g. the Gmail thread currently on
+    /// screen). `query` identifies it — a thread/message id, a file id, or a search string. The
+    /// default is "not supported" (fakes / read-sync-only transports); the real remote-MCP
+    /// transport overrides it. Kept a seam so the whole on-demand composition is Linux-testable.
+    fn fetch_on_demand(&self, service: Service, query: &str) -> Result<Vec<FetchedItem>, String> {
+        let _ = (service, query);
+        Err("on-demand fetch not supported by this transport".to_string())
+    }
 }
 
 /// The `event_log.kind` a service's items are tagged with.
@@ -75,6 +84,7 @@ fn item_kind(service: Service) -> &'static str {
     match service {
         Service::Gmail => "email",
         Service::GoogleCalendar => "calendar_event",
+        Service::GoogleDrive => "file",
         Service::Slack => "message",
         Service::Notion => "page",
         Service::GitHub => "issue",
@@ -124,6 +134,32 @@ pub fn collect_sync<T: IntegrationTransport + ?Sized>(
     Ok(fetched.into_iter().filter_map(|it| normalize(service, it)).collect())
 }
 
+/// The op name an on-demand fetch gates on (the `read_on_demand` row; only Gmail + Drive have it).
+pub const READ_ON_DEMAND: &str = "read_on_demand";
+
+/// The on-demand fetch composition (§6.9 `read_on_demand`, L2): gate → fetch a specific item via the
+/// transport → normalize. Same shape as [`collect_sync`] but for a targeted fetch rather than the
+/// background poll. Denied for a service without a `read_on_demand` op (Slack/Calendar), or when the
+/// gate refuses (unreleased / disconnected / amber-write). Does no DB I/O.
+pub fn collect_on_demand<T: IntegrationTransport + ?Sized>(
+    service: Service,
+    query: &str,
+    ctx: &OpContext,
+    transport: &T,
+) -> Result<Vec<IngestItem>, SyncFailure> {
+    // read_on_demand is gated L2 (a read the user's focus context requested); any non-allowed
+    // decision refuses the fetch.
+    match authorize_op(service, READ_ON_DEMAND, ctx) {
+        OpDecision::RequiresLevel(_) => {}
+        OpDecision::Denied(reason) => return Err(SyncFailure::Denied(reason)),
+        // read_on_demand is an L2 op in every table that has it; anything else is a gate bug —
+        // refuse rather than fetch under the wrong gating.
+        _ => return Err(SyncFailure::Denied(DenyReason::UnknownOp)),
+    }
+    let fetched = transport.fetch_on_demand(service, query).map_err(SyncFailure::Transport)?;
+    Ok(fetched.into_iter().filter_map(|it| normalize(service, it)).collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -150,6 +186,12 @@ mod tests {
     }
     impl IntegrationTransport for Fake {
         fn read_sync(&self, _service: Service) -> Result<Vec<FetchedItem>, String> {
+            match &self.err {
+                Some(e) => Err(e.clone()),
+                None => Ok(self.items.clone()),
+            }
+        }
+        fn fetch_on_demand(&self, _service: Service, _query: &str) -> Result<Vec<FetchedItem>, String> {
             match &self.err {
                 Some(e) => Err(e.clone()),
                 None => Ok(self.items.clone()),
@@ -213,6 +255,31 @@ mod tests {
         let out = collect_sync(Service::Gmail, &ctx(Wave::One, connected()), &fake).unwrap();
         assert_eq!(out.len(), 1, "the whitespace-only body is dropped");
         assert_eq!(out[0].body, "real body");
+    }
+
+    #[test]
+    fn on_demand_fetch_ingests_for_a_service_with_read_on_demand() {
+        // Gmail has a read_on_demand (L2) row; a connected, released Gmail fetches on demand.
+        let fake = Fake { items: vec![item("t1", "Thread", "the thread body", 7)], err: None };
+        let out = collect_on_demand(Service::Gmail, "thread-123", &ctx(Wave::One, connected()), &fake).unwrap();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].source, "gmail");
+        assert_eq!(out[0].body, "the thread body");
+    }
+
+    #[test]
+    fn on_demand_denied_for_a_service_without_that_op() {
+        // Calendar has no read_on_demand row → denied (unknown op), no fetch.
+        let fake = Fake { items: vec![item("e", "t", "b", 1)], err: None };
+        let err = collect_on_demand(Service::GoogleCalendar, "q", &ctx(Wave::One, connected()), &fake).unwrap_err();
+        assert_eq!(err, SyncFailure::Denied(DenyReason::UnknownOp));
+    }
+
+    #[test]
+    fn on_demand_denied_when_disconnected() {
+        let fake = Fake { items: vec![item("t", "t", "b", 1)], err: None };
+        let err = collect_on_demand(Service::Gmail, "q", &ctx(Wave::One, ConnState::Disconnected), &fake).unwrap_err();
+        assert_eq!(err, SyncFailure::Denied(DenyReason::NotConnected));
     }
 
     #[test]

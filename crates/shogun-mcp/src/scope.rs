@@ -12,11 +12,18 @@
 
 use shogun_agents::permission::Level;
 
-/// The six first-layer services (§6.9.2), grouped into rollout waves (FR-INT-03).
+/// The first-layer services (§6.9.2), grouped into rollout waves (FR-INT-03).
+///
+/// `GoogleDrive` was added to the Wave-1 Google Workspace batch by product decision (2026-07-23):
+/// Google ships an official first-party remote MCP server for it (`drivemcp.googleapis.com`), so it
+/// fits the first-layer "direct official MCP, no third party" model. Google Docs/Sheets have **no**
+/// dedicated MCP server, so they are not separate services — their content is read through Drive's
+/// `read_file_content` (see [`crate::sync`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Service {
     Gmail,
     GoogleCalendar,
+    GoogleDrive,
     Slack,
     Notion,
     GitHub,
@@ -36,7 +43,7 @@ impl Service {
     /// The wave this service ships in.
     pub fn wave(self) -> Wave {
         match self {
-            Service::Gmail | Service::GoogleCalendar => Wave::One,
+            Service::Gmail | Service::GoogleCalendar | Service::GoogleDrive => Wave::One,
             Service::Slack => Wave::Two,
             Service::Notion | Service::GitHub | Service::Linear => Wave::Three,
         }
@@ -55,6 +62,7 @@ impl Service {
         match self {
             Service::Gmail => "gmail",
             Service::GoogleCalendar => "gcal",
+            Service::GoogleDrive => "gdrive",
             Service::Slack => "slack",
             Service::Notion => "notion",
             Service::GitHub => "github",
@@ -137,6 +145,18 @@ const GOOGLE_CALENDAR: &[ScopedOp] = &[
     op("event_update_delete", ExternalSend, Level(Level::L3)),
 ];
 
+// ---- Google Drive (Wave 1) -----------------------------------------------------------------
+// Official MCP: drivemcp.googleapis.com (tools: list_recent_files, search_files, read_file_content,
+// get_file_metadata, create_file, copy_file). `read_on_demand` also serves Google Docs/Sheets
+// content (read_file_content), which have no dedicated MCP server of their own. A create writes
+// content out to the service, so — like a Notion page create — it is an ExternalSend at L3.
+const GOOGLE_DRIVE: &[ScopedOp] = &[
+    op("read_sync", Read, Background),
+    op("read_on_demand", Read, Level(Level::L2)),
+    op("file_create", ExternalSend, Level(Level::L3)),
+    op("delete", ExternalSend, NotImplemented),
+];
+
 // ---- Slack (Wave 2) ------------------------------------------------------------------------
 const SLACK: &[ScopedOp] = &[
     op("read_sync", Read, Background),
@@ -176,6 +196,7 @@ pub fn scope(service: Service) -> ServiceScope {
     let ops = match service {
         Service::Gmail => GMAIL,
         Service::GoogleCalendar => GOOGLE_CALENDAR,
+        Service::GoogleDrive => GOOGLE_DRIVE,
         Service::Slack => SLACK,
         Service::Notion => NOTION,
         Service::GitHub => GITHUB,
@@ -184,10 +205,17 @@ pub fn scope(service: Service) -> ServiceScope {
     ServiceScope { service, ops }
 }
 
+/// Resolve a service from its `source_str` id (`gmail` / `gcal` / `gdrive` / …) — the inverse of
+/// [`Service::source_str`]. Used by the UI/command layer to turn a string id back into a service.
+pub fn from_source(source: &str) -> Option<Service> {
+    ALL_SERVICES.iter().copied().find(|s| s.source_str() == source)
+}
+
 /// Every service, for exhaustive iteration in tests / settings.
 pub const ALL_SERVICES: &[Service] = &[
     Service::Gmail,
     Service::GoogleCalendar,
+    Service::GoogleDrive,
     Service::Slack,
     Service::Notion,
     Service::GitHub,
@@ -327,6 +355,15 @@ mod tests {
     }
 
     #[test]
+    fn from_source_is_the_inverse_of_source_str() {
+        for &s in ALL_SERVICES {
+            assert_eq!(from_source(s.source_str()), Some(s));
+        }
+        assert_eq!(from_source("gdrive"), Some(Service::GoogleDrive));
+        assert_eq!(from_source("nope"), None);
+    }
+
+    #[test]
     fn source_strings_are_distinct_and_stable() {
         // every service maps to a distinct event_log.source tag (FR-INT-05).
         let tags: Vec<&str> = ALL_SERVICES.iter().map(|s| s.source_str()).collect();
@@ -339,10 +376,25 @@ mod tests {
     }
 
     #[test]
+    fn google_drive_is_wave_one_with_read_and_l3_create() {
+        // Drive ships in the Wave-1 Google Workspace batch.
+        assert_eq!(Service::GoogleDrive.wave(), Wave::One);
+        assert!(Service::GoogleDrive.is_released(Wave::One));
+        // read syncs in the background; on-demand read (Docs/Sheets content) is L2.
+        assert_eq!(authorize(Service::GoogleDrive, "read_sync"), Authorization::Background);
+        assert_eq!(authorize(Service::GoogleDrive, "read_on_demand"), Authorization::RequiresLevel(Level::L2));
+        // a create writes content out → L3 (consistent with a Notion page create).
+        assert_eq!(authorize(Service::GoogleDrive, "file_create"), Authorization::RequiresLevel(Level::L3));
+        assert_eq!(authorize(Service::GoogleDrive, "delete"), Authorization::DeniedNotImplemented);
+        assert_eq!(Service::GoogleDrive.source_str(), "gdrive");
+    }
+
+    #[test]
     fn wave_rollout_gates_unreleased_services() {
-        // At Wave 1, only Gmail + Calendar are released.
+        // At Wave 1, only the Google Workspace batch (Gmail + Calendar + Drive) is released.
         assert!(Service::Gmail.is_released(Wave::One));
         assert!(Service::GoogleCalendar.is_released(Wave::One));
+        assert!(Service::GoogleDrive.is_released(Wave::One));
         assert!(!Service::Slack.is_released(Wave::One));
         assert!(!Service::Notion.is_released(Wave::One));
         // At Wave 2, Slack joins; Wave-3 services still gated.
