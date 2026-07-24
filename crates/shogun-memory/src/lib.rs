@@ -27,6 +27,7 @@ pub mod quantize;
 pub mod recompute;
 pub mod search;
 pub mod state;
+pub mod thread;
 pub mod traceability;
 pub mod vector;
 
@@ -129,7 +130,7 @@ mod tests {
         ] {
             assert!(tables.iter().any(|t| t == expected), "missing table {expected}");
         }
-        assert_eq!(schema_version(&conn).unwrap(), Some(4));
+        assert_eq!(schema_version(&conn).unwrap(), Some(5));
     }
 
     #[test]
@@ -141,12 +142,12 @@ mod tests {
 
         {
             let conn = open(&path).unwrap();
-            assert_eq!(schema_version(&conn).unwrap(), Some(4));
+            assert_eq!(schema_version(&conn).unwrap(), Some(5));
         }
         {
             // Reopen: migrate_and_check runs again, finds nothing new, and passes quick_check.
             let conn = open(&path).unwrap();
-            assert_eq!(schema_version(&conn).unwrap(), Some(4));
+            assert_eq!(schema_version(&conn).unwrap(), Some(5));
             let mode: String = conn.query_row("PRAGMA journal_mode", [], |r| r.get(0)).unwrap();
             assert_eq!(mode.to_lowercase(), "wal");
         }

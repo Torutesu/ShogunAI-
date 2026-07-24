@@ -58,18 +58,21 @@ struct Segment<'a> {
 }
 
 /// Split text into segments on newlines and sentence terminators, recording whether each ended in
-/// `?`. Empty / whitespace-only segments are dropped.
+/// a question mark. Empty / whitespace-only segments are dropped.
+///
+/// Iterates chars, not bytes, so the full-width terminators (`。！？`) can be recognised without
+/// ever slicing mid-codepoint. The ASCII set is unchanged, so English text segments exactly as
+/// before.
 fn segments(text: &str) -> Vec<Segment<'_>> {
     let mut out = Vec::new();
-    let bytes = text.as_bytes();
     let mut start = 0usize;
-    for (i, &b) in bytes.iter().enumerate() {
-        if matches!(b, b'\n' | b'.' | b'!' | b'?') {
+    for (i, c) in text.char_indices() {
+        if matches!(c, '\n' | '.' | '!' | '?' | '。' | '！' | '？') {
             let slice = text[start..i].trim();
             if !slice.is_empty() {
-                out.push(Segment { text: slice, is_question: b == b'?' });
+                out.push(Segment { text: slice, is_question: c == '?' || c == '？' });
             }
-            start = i + 1;
+            start = i + c.len_utf8();
         }
     }
     // trailing segment with no terminator
@@ -93,38 +96,106 @@ fn clip(s: &str) -> String {
     s[..end].to_string()
 }
 
-/// First-person promise cues → my commitment (FR-ST-11: explicit promise).
-const MINE_CUES: &[&str] =
-    &["i'll ", "i will ", "i'm going to ", "let me ", "i can send", "i'll send", "i'll get back",
-      "i'll follow up", "i'll circle back", "i'll take care of", "i'll handle", "i shall "];
+/// The languages the local rules have cue sets for.
+///
+/// **English is canonical.** It is the accuracy priority: it gets the tuning effort and is the
+/// primary evaluation target. Other languages are additive — see [`cues_for`] for the structural
+/// reason adding one cannot move English precision or recall.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Lang {
+    En,
+    Ja,
+}
 
-/// Second/third-person promise cues → their commitment to me.
-const THEIRS_CUES: &[&str] =
-    &["will get back to you", "will send you", "you'll get", "he'll ", "she'll ", "they'll ",
-      "will follow up with you", "promised to"];
+/// One language's cues, grouped by what they signal. Keeping these as data (rather than inline
+/// literals in [`extract`]) is what lets a language be added without touching the matching logic.
+pub struct CueSet {
+    pub mine: &'static [&'static str],
+    pub theirs: &'static [&'static str],
+    pub waiting: &'static [&'static str],
+    pub review: &'static [&'static str],
+    pub decision: &'static [&'static str],
+    pub followup: &'static [&'static str],
+    pub reply: &'static [&'static str],
+}
 
-/// Waiting-on-them cues.
-const WAITING_CUES: &[&str] =
-    &["waiting on", "waiting for", "waiting to hear", "blocked on", "pending from", "still waiting"];
+/// English — the canonical set (FR-ST-11: explicit promise only, never inferred intent).
+static EN: CueSet = CueSet {
+    mine: &["i'll ", "i will ", "i'm going to ", "let me ", "i can send", "i'll send", "i'll get back",
+            "i'll follow up", "i'll circle back", "i'll take care of", "i'll handle", "i shall "],
+    theirs: &["will get back to you", "will send you", "you'll get", "he'll ", "she'll ", "they'll ",
+              "will follow up with you", "promised to"],
+    waiting: &["waiting on", "waiting for", "waiting to hear", "blocked on", "pending from",
+               "still waiting"],
+    review: &["please review", "ptal", "take a look", "can you review", "needs review",
+              "review needed", "could you review"],
+    decision: &["need to decide", "decision needed", "let's decide", "we need to choose",
+                "to be decided", "still deciding", "tbd"],
+    followup: &["follow up", "circle back", "check back", "loop back", "get back to them",
+                "ping again"],
+    reply: &["can you", "could you", "would you", "will you", "did you", "have you",
+             "any chance you", "would it be possible"],
+};
 
-/// Review-pending cues.
-const REVIEW_CUES: &[&str] =
-    &["please review", "ptal", "take a look", "can you review", "needs review", "review needed",
-      "could you review"];
+/// Japanese — secondary. Deliberately restricted to explicit, unambiguous forms: a loose cue here
+/// buys recall at the cost of precision, and the same low-confidence ceiling applies either way.
+static JA: CueSet = CueSet {
+    mine: &["します", "送ります", "対応します", "確認します", "やっておきます", "しておきます",
+            "させていただきます", "お送りします", "共有します"],
+    theirs: &["してくれる", "送ってくれる", "対応してくれる", "いただけるとのこと", "してもらえる"],
+    waiting: &["待ち", "待っています", "待機", "ブロックされ", "返事待ち", "返信待ち"],
+    review: &["レビュー", "ご確認", "確認お願い", "見てください", "ご review"],
+    decision: &["未定", "検討中", "決める必要", "要検討", "決めないと"],
+    followup: &["フォローアップ", "再度連絡", "後で確認", "改めて連絡"],
+    reply: &["ますか", "できますか", "いただけますか", "でしょうか", "もらえますか"],
+};
 
-/// Decision-pending cues.
-const DECISION_CUES: &[&str] =
-    &["need to decide", "decision needed", "let's decide", "we need to choose", "to be decided",
-      "still deciding", "tbd"];
+/// The cue sets a segment is scored against, English first.
+///
+/// **English is always applied**, whatever else the segment contains. Routing a segment to one
+/// language instead would silently drop the English reading of mixed text — "I'll send 資料" is an
+/// explicit English promise that must still extract. English is checked first, so it also wins
+/// ties.
+///
+/// Adding a language still cannot degrade English, but the guarantee is now lexical rather than
+/// routing-based: every non-English cue is written in its own script, so it cannot substring-match
+/// English text. `japanese_cues_can_never_fire_on_english_text` holds that line.
+fn active_cues(segment: &str) -> impl Iterator<Item = &'static CueSet> {
+    let has_cjk = segment.chars().any(is_cjk);
+    std::iter::once(&EN).chain(has_cjk.then_some(&JA))
+}
 
-/// Follow-up cues.
-const FOLLOWUP_CUES: &[&str] =
-    &["follow up", "circle back", "check back", "loop back", "get back to them", "ping again"];
+/// True when any active cue set matches, in English-first order. `pick` selects the group.
+fn cue_hit(lower: &str, segment: &str, pick: fn(&CueSet) -> &'static [&'static str]) -> bool {
+    active_cues(segment).any(|set| contains_any(lower, pick(set)))
+}
 
-/// Question-shaped reply cues (only meaningful when the segment ended in `?`).
-const REPLY_CUES: &[&str] =
-    &["can you", "could you", "would you", "will you", "did you", "have you", "any chance you",
-      "would it be possible"];
+/// The segment's dominant language — reporting only (which script the text is mostly in).
+/// Extraction does not route on this; see [`active_cues`].
+pub fn lang_of(segment: &str) -> Lang {
+    if segment.chars().any(is_cjk) {
+        Lang::Ja
+    } else {
+        Lang::En
+    }
+}
+
+fn is_cjk(c: char) -> bool {
+    matches!(c as u32,
+        0x3040..=0x309F   // hiragana
+        | 0x30A0..=0x30FF // katakana
+        | 0x4E00..=0x9FFF // CJK unified ideographs
+        | 0xFF66..=0xFF9F // halfwidth katakana
+    )
+}
+
+/// The cue set for a language.
+pub fn cues_for(lang: Lang) -> &'static CueSet {
+    match lang {
+        Lang::En => &EN,
+        Lang::Ja => &JA,
+    }
+}
 
 fn contains_any(haystack: &str, cues: &[&str]) -> bool {
     cues.iter().any(|c| haystack.contains(c))
@@ -139,7 +210,7 @@ pub fn extract(text: &str) -> Vec<Candidate> {
         let lower = seg.text.to_lowercase();
 
         // Commitments take precedence (an explicit promise is the strongest signal).
-        if contains_any(&lower, MINE_CUES) {
+        if cue_hit(&lower, seg.text, |c| c.mine) {
             out.push(Candidate::Commitment {
                 direction: CommitmentDirection::Mine,
                 description: clip(seg.text),
@@ -147,7 +218,7 @@ pub fn extract(text: &str) -> Vec<Candidate> {
             });
             continue;
         }
-        if contains_any(&lower, THEIRS_CUES) {
+        if cue_hit(&lower, seg.text, |c| c.theirs) {
             out.push(Candidate::Commitment {
                 direction: CommitmentDirection::Theirs,
                 description: clip(seg.text),
@@ -157,15 +228,15 @@ pub fn extract(text: &str) -> Vec<Candidate> {
         }
 
         // Open loops: waiting → review → decision → follow-up → question-reply. First match wins.
-        let kind = if contains_any(&lower, WAITING_CUES) {
+        let kind = if cue_hit(&lower, seg.text, |c| c.waiting) {
             Some((OpenLoopKind::WaitingOnThem, 0.35))
-        } else if contains_any(&lower, REVIEW_CUES) {
+        } else if cue_hit(&lower, seg.text, |c| c.review) {
             Some((OpenLoopKind::ReviewPending, 0.35))
-        } else if contains_any(&lower, DECISION_CUES) {
+        } else if cue_hit(&lower, seg.text, |c| c.decision) {
             Some((OpenLoopKind::DecisionPending, 0.3))
-        } else if contains_any(&lower, FOLLOWUP_CUES) {
+        } else if cue_hit(&lower, seg.text, |c| c.followup) {
             Some((OpenLoopKind::FollowUp, 0.3))
-        } else if seg.is_question && contains_any(&lower, REPLY_CUES) {
+        } else if seg.is_question && cue_hit(&lower, seg.text, |c| c.reply) {
             Some((OpenLoopKind::ReplyNeeded, 0.3))
         } else {
             None
@@ -222,6 +293,110 @@ pub fn persist_candidates(
         ids.push(id);
     }
     Ok(ids)
+}
+
+/// Language-policy tests: English is the priority, and adding a language must not move it.
+#[cfg(test)]
+mod lang_tests {
+    use super::*;
+
+    #[test]
+    fn english_segments_are_scored_against_english() {
+        assert_eq!(lang_of("I'll send the deck tomorrow"), Lang::En);
+        assert_eq!(lang_of("waiting on legal"), Lang::En);
+        // Anything unrecognised also falls to English — English stays the default.
+        assert_eq!(lang_of("¿algo mas?"), Lang::En);
+        assert_eq!(lang_of(""), Lang::En);
+    }
+
+    #[test]
+    fn japanese_segments_are_detected_across_the_scripts() {
+        assert_eq!(lang_of("資料を送ります"), Lang::Ja); // kanji + hiragana
+        assert_eq!(lang_of("レビューお願い"), Lang::Ja); // katakana
+        assert_eq!(lang_of("ｱｲｳ"), Lang::Ja); // halfwidth katakana
+    }
+
+    /// The guarantee behind "Japanese must not degrade English": every Japanese cue is written in
+    /// its own script, so none of them can substring-match English text. This fails the moment a
+    /// cue with Latin characters is added to a non-English set (`"ご review"` would be caught by
+    /// the second assertion).
+    #[test]
+    fn japanese_cues_can_never_fire_on_english_text() {
+        let ja = cues_for(Lang::Ja);
+        let english_corpus = "I'll send the deck. Waiting on legal. Please review this. \
+                              We need to decide the vendor. Can you take a look? Follow up Monday. \
+                              Nothing here should match a Japanese cue.";
+        for seg in segments(english_corpus) {
+            let lower = seg.text.to_lowercase();
+            for group in [ja.mine, ja.theirs, ja.waiting, ja.review, ja.decision, ja.followup, ja.reply] {
+                assert!(!contains_any(&lower, group), "a JA cue matched English text: {}", seg.text);
+            }
+        }
+        // The property that makes the above true, asserted directly: every JA cue carries CJK.
+        for group in [ja.mine, ja.theirs, ja.waiting, ja.review, ja.decision, ja.followup, ja.reply] {
+            for cue in group {
+                assert!(
+                    cue.chars().any(is_cjk),
+                    "a non-English cue without CJK could match English text: {cue:?}"
+                );
+            }
+        }
+    }
+
+    /// English cues apply to every segment, so an English promise still extracts when the sentence
+    /// also contains Japanese. Routing by dominant script used to drop this.
+    #[test]
+    fn english_cues_still_fire_on_a_mixed_script_segment() {
+        let out = extract("I'll send 資料 tomorrow");
+        assert!(
+            matches!(out.first(), Some(Candidate::Commitment { direction: CommitmentDirection::Mine, .. })),
+            "mixed-script English promise must still extract: {out:?}"
+        );
+    }
+
+    /// English extraction is byte-identical whether or not Japanese text sits next to it.
+    #[test]
+    fn adding_japanese_text_does_not_change_english_extraction() {
+        let english = "I'll send the deck. Waiting on legal.";
+        let mixed = "I'll send the deck. 資料は明日送ります。Waiting on legal.";
+        let only_en = extract(english);
+        let from_mixed: Vec<_> = extract(mixed)
+            .into_iter()
+            .filter(|c| match c {
+                Candidate::Commitment { description, .. } | Candidate::OpenLoop { description, .. } => {
+                    lang_of(description) == Lang::En
+                }
+            })
+            .collect();
+        assert_eq!(only_en, from_mixed, "English results must be unaffected by neighbouring JA text");
+    }
+
+    #[test]
+    fn japanese_promise_and_waiting_are_extracted() {
+        let out = extract("資料を送ります。先方の返事待ちです。");
+        assert!(
+            out.iter().any(|c| matches!(c, Candidate::Commitment { direction: CommitmentDirection::Mine, .. })),
+            "explicit JA promise → my commitment: {out:?}"
+        );
+        assert!(
+            out.iter().any(|c| matches!(c, Candidate::OpenLoop { kind: OpenLoopKind::WaitingOnThem, .. })),
+            "JA waiting cue → open loop: {out:?}"
+        );
+    }
+
+    #[test]
+    fn full_width_terminators_segment_japanese() {
+        let segs = segments("一つ目です。二つ目ですか？三つ目！");
+        assert_eq!(segs.len(), 3, "full-width terminators split: {:?}", segs.iter().map(|s| s.text).collect::<Vec<_>>());
+        assert!(segs[1].is_question, "？ marks a question");
+    }
+
+    #[test]
+    fn japanese_candidates_are_low_confidence_too() {
+        for c in extract("資料を送ります。返信待ちです。") {
+            assert!(c.confidence() <= LOCAL_RULE_MAX_CONFIDENCE, "JA must respect the same ceiling");
+        }
+    }
 }
 
 #[cfg(test)]

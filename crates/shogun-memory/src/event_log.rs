@@ -26,12 +26,19 @@ pub struct NewEvent<'a> {
 
 /// Append a new event row unconditionally. Returns the new row id. `last_seen_at` starts equal
 /// to `ts`.
+///
+/// The `thread_key` is **derived here** rather than passed in, so every writer — capture, the
+/// connectors, and anything added later — is grouped into threads without having to remember to
+/// do it. Sources that carry their own conversation id (Gmail thread id, an AI session id) will
+/// supply it once `NewEvent` carries one; until then the derivation falls back to the app plus a
+/// normalised window title, which is all a screen capture has anyway.
 pub fn insert(conn: &Connection, ev: &NewEvent<'_>) -> Result<i64, rusqlite::Error> {
+    let thread_key = crate::thread::thread_key(ev.source, None, ev.app_bundle_id, ev.window_title);
     conn.execute(
         "INSERT INTO event_log
            (ts, source, kind, app_bundle_id, window_title, content, content_hash,
-            last_seen_at, dwell_ms, display_id, window_bounds)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?1, ?8, ?9, ?10)",
+            last_seen_at, dwell_ms, display_id, window_bounds, thread_key)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?1, ?8, ?9, ?10, ?11)",
         params![
             ev.ts,
             ev.source,
@@ -43,6 +50,7 @@ pub fn insert(conn: &Connection, ev: &NewEvent<'_>) -> Result<i64, rusqlite::Err
             ev.dwell_ms,
             ev.display_id,
             ev.window_bounds,
+            thread_key,
         ],
     )?;
     Ok(conn.last_insert_rowid())
