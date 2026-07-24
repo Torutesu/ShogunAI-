@@ -250,14 +250,13 @@ fn setup_macos(app: &tauri::App) {
         g.is_notch, g.notch_w, g.notch_h, g.menubar_h, g.screen.w, g.screen.h, g.primary_height, g.display_count
     );
 
-    // Pin the panel INTO the notch band. Tauri's set_position is clamped below the menu bar
-    // (observed: the top edge sat 39pt down — "under the notch" never actually happened), so set
-    // the frame directly on the NSWindow: top-centre of its screen, top edge at the true screen
-    // top. Level 25 draws over the menu-bar band, i.e. real notch residency.
+    // Pin the panel to the screen's TOP-LEFT corner. Tauri's set_position is clamped below the
+    // menu bar, so set the frame directly on the NSWindow: top-left of its screen, top edge under
+    // the menu bar. Level 25 draws over the menu-bar band.
     if let Some(ptr) = overlay_ptr(app.handle()) {
         // SAFETY: live NSWindow/NSPanel on the main thread (setup).
-        unsafe { pin_top_centre(ptr) };
-        eprintln!("[shell] panel docked top-centre under the notch (visibleFrame top)");
+        unsafe { pin_top_left(ptr) };
+        eprintln!("[shell] panel docked top-left (visibleFrame top-left corner)");
     }
 
     // T-07/T-08: mouse tap → integrated engine + measurement streams.
@@ -348,7 +347,7 @@ fn set_accessory_activation() {
     }
 }
 
-/// (main thread) Move the panel to the DISPLAY the mouse cursor is on, pinned top-centre. A window
+/// (main thread) Move the panel to the DISPLAY the mouse cursor is on, pinned top-left. A window
 /// physically lives on ONE display; with 2 displays the panel was stuck on the built-in one and
 /// structurally invisible on the other (audit cause #3 — `origin` never changed in [panelstate]).
 /// This is a pure reposition (no order in/out), so it never flickers or steals focus.
@@ -373,12 +372,11 @@ unsafe fn reposition_to_cursor_screen(ptr: *mut objc2::runtime::AnyObject) {
             && mouse.y >= f.origin.y
             && mouse.y <= f.origin.y + f.size.height;
         if inside {
-            // Dock at the TOP-CENTRE of the cursor's display, just under the menu bar/notch
-            // (visibleFrame top). The product is a notch UI — the panel lives under the notch,
-            // never overlapping it.
+            // Dock at the TOP-LEFT of the cursor's display, top edge under the menu bar
+            // (visibleFrame top-left corner).
             let vf: NSRect = msg_send![s, visibleFrame];
             let w: NSRect = msg_send![ptr, frame];
-            let x = vf.origin.x + ((vf.size.width - w.size.width) / 2.0).max(0.0);
+            let x = vf.origin.x;
             let y = vf.origin.y + (vf.size.height - w.size.height).max(0.0);
             let origin = NSPoint { x, y };
             let _: () = msg_send![ptr, setFrameOrigin: origin];
@@ -433,12 +431,12 @@ fn set_panel_hidden(handle: &tauri::AppHandle) {
     });
 }
 
-/// (main thread) Dock the window at the TOP-CENTRE of ITS screen, just under the menu bar/notch
-/// (visibleFrame top — never overlapping the notch).
+/// (main thread) Dock the window at the TOP-LEFT of ITS screen, just under the menu bar
+/// (visibleFrame top-left corner).
 ///
 /// SAFETY: caller guarantees `ptr` is the live NSWindow and we're on the main thread.
 #[cfg(target_os = "macos")]
-unsafe fn pin_top_centre(ptr: *mut objc2::runtime::AnyObject) {
+unsafe fn pin_top_left(ptr: *mut objc2::runtime::AnyObject) {
     use objc2::runtime::AnyObject;
     use objc2::{class, msg_send};
     use objc2_foundation::{NSPoint, NSRect};
@@ -451,7 +449,7 @@ unsafe fn pin_top_centre(ptr: *mut objc2::runtime::AnyObject) {
     }
     let vf: NSRect = msg_send![screen, visibleFrame];
     let w: NSRect = msg_send![ptr, frame];
-    let x = vf.origin.x + ((vf.size.width - w.size.width) / 2.0).max(0.0);
+    let x = vf.origin.x;
     let y = vf.origin.y + (vf.size.height - w.size.height).max(0.0);
     let origin = NSPoint { x, y };
     let _: () = msg_send![ptr, setFrameOrigin: origin];
