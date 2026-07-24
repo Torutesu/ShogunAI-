@@ -18,6 +18,9 @@ live = ["dep:getrandom"]
 [dependencies]
 # The scope table + the IntegrationTransport seam this crate implements. One-way: integrations → mcp.
 shogun-mcp = { path = "../shogun-mcp" }
+# SendAction — the approval queue's vocabulary — for the confirmed-send routing bridge. mcp already
+# depends on agents, so this adds no new edge direction (integrations → agents, no cycle).
+shogun-agents = { path = "../shogun-agents" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # PKCE (S256): base64url(sha256(verifier)) + safe URL query building. Pure, no network — always on.

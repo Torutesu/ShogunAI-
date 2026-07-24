@@ -106,23 +106,34 @@ pub fn system_now_ms() -> i64 {
         .unwrap_or(0)
 }
 
+/// Picks the [`AuthConfig`] (OAuth client + endpoints) used to refresh a service's token. Vendors
+/// differ — Google services share one config, Slack has its own token endpoint — so refresh must
+/// never cross vendors. `None` = no client registered for that service (its refresh fails cleanly).
+pub type ConfigSelector = Box<dyn Fn(Service) -> Option<AuthConfig> + Send + Sync>;
+
 /// A [`crate::rpc::TokenProvider`] that always returns a *valid* access token, refreshing via
 /// [`TokenManager`] when the stored one is near expiry. This is what the live MCP client
-/// ([`crate::live::HttpMcpRpc`]) uses, so a first-layer call an hour after connecting still succeeds.
-/// Pure (no network of its own) — the refresh network call goes through the injected
+/// (`shogun-core::mcp_http::HttpMcpRpc`) uses, so a first-layer call an hour after connecting still
+/// succeeds. Pure (no network of its own) — the refresh network call goes through the injected
 /// [`TokenExchange`].
 pub struct ManagedTokenProvider<X: TokenExchange, S: TokenStore> {
-    cfg: AuthConfig,
+    config_for: ConfigSelector,
     exchange: X,
     store: S,
     clock: fn() -> i64,
 }
 
 impl<X: TokenExchange, S: TokenStore> ManagedTokenProvider<X, S> {
-    /// Uses the wall clock. All Google services share endpoints, so one `AuthConfig` (one OAuth
-    /// client) serves every service; only the client id/secret differ if you register separate ones.
+    /// One config for every service (fine while only Google services are released — they share
+    /// endpoints and one OAuth client). Uses the wall clock.
     pub fn new(cfg: AuthConfig, exchange: X, store: S) -> Self {
-        Self { cfg, exchange, store, clock: system_now_ms }
+        Self::with_config_selector(Box::new(move |_| Some(cfg.clone())), exchange, store)
+    }
+
+    /// Per-service config selection — required once services from more than one vendor are
+    /// connectable (e.g. Google + Slack), so a Slack refresh never posts to Google's endpoint.
+    pub fn with_config_selector(config_for: ConfigSelector, exchange: X, store: S) -> Self {
+        Self { config_for, exchange, store, clock: system_now_ms }
     }
 
     /// Override the clock (tests).
@@ -134,7 +145,9 @@ impl<X: TokenExchange, S: TokenStore> ManagedTokenProvider<X, S> {
 
 impl<X: TokenExchange, S: TokenStore> crate::rpc::TokenProvider for ManagedTokenProvider<X, S> {
     fn access_token(&self, service: Service) -> Result<String, String> {
-        let mgr = TokenManager::new(&self.cfg, &self.exchange, &self.store);
+        let cfg = (self.config_for)(service)
+            .ok_or_else(|| format!("no oauth client configured for {}", service.source_str()))?;
+        let mgr = TokenManager::new(&cfg, &self.exchange, &self.store);
         mgr.valid_access_token(service, (self.clock)()).map_err(|e| format!("{e:?}"))
     }
 }
@@ -272,6 +285,30 @@ mod tests {
         assert_eq!(provider.access_token(Service::Gmail).unwrap(), "fresh");
         // an unconnected service surfaces an error string
         assert!(provider.access_token(Service::GoogleCalendar).is_err());
+    }
+
+    #[test]
+    fn config_selector_scopes_refresh_to_the_right_vendor() {
+        use crate::rpc::TokenProvider;
+        let store = MemoryTokenStore::new();
+        store.save(Service::Gmail, &token("g", Some("r"), 9_999_999)).unwrap();
+        store.save(Service::Slack, &token("s", Some("r"), 9_999_999)).unwrap();
+        let ex = CountingExchange { calls: RefCell::new(0), reply: Ok(String::new()) };
+        // Only Google services have a config; Slack has none registered.
+        let selector: super::ConfigSelector = Box::new(|svc| match svc {
+            Service::Gmail | Service::GoogleCalendar | Service::GoogleDrive => {
+                Some(AuthConfig::google("cid", None, "http://127.0.0.1:0/cb"))
+            }
+            _ => None,
+        });
+        let provider =
+            ManagedTokenProvider::with_config_selector(selector, ex, store).with_clock(clock_2000);
+        // Gmail's token is valid → served.
+        assert_eq!(provider.access_token(Service::Gmail).unwrap(), "g");
+        // Slack has a stored token but no oauth client → a clean, explicit error (not a
+        // cross-vendor refresh against Google's endpoint).
+        let err = provider.access_token(Service::Slack).unwrap_err();
+        assert!(err.contains("no oauth client"), "got: {err}");
     }
 
     #[test]

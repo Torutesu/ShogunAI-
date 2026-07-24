@@ -37,20 +37,41 @@ pub mod mac {
     /// The runtime owned by the app (behind a Mutex; the poller and the commands share it).
     pub struct ConnectorState(pub Arc<Mutex<ConnectorRuntime<Transport>>>);
 
-    /// Read the Google OAuth client from the env. `redirect_uri` is filled per-connect (loopback
-    /// port); refresh does not use it, so a placeholder is fine for the long-lived provider config.
-    fn auth_config(redirect_uri: &str) -> Result<AuthConfig, String> {
-        let client_id = std::env::var("SHOGUN_GOOGLE_CLIENT_ID")
-            .map_err(|_| "SHOGUN_GOOGLE_CLIENT_ID not set".to_string())?;
-        let client_secret = std::env::var("SHOGUN_GOOGLE_CLIENT_SECRET").ok();
-        Ok(AuthConfig::google(client_id, client_secret, redirect_uri))
+    /// The OAuth client for one service, from the env — Google and Slack are different vendors
+    /// with different endpoints and different registered apps, so the config MUST be per-service
+    /// (a Slack refresh posting to Google's token endpoint would fail confusingly). `redirect_uri`
+    /// is filled per-connect (loopback port); refresh does not use it.
+    fn auth_config_for(svc: Service, redirect_uri: &str) -> Result<AuthConfig, String> {
+        match svc {
+            Service::Gmail | Service::GoogleCalendar | Service::GoogleDrive => {
+                let id = std::env::var("SHOGUN_GOOGLE_CLIENT_ID")
+                    .map_err(|_| "SHOGUN_GOOGLE_CLIENT_ID not set".to_string())?;
+                let secret = std::env::var("SHOGUN_GOOGLE_CLIENT_SECRET").ok();
+                Ok(AuthConfig::google(id, secret, redirect_uri))
+            }
+            Service::Slack => {
+                let id = std::env::var("SHOGUN_SLACK_CLIENT_ID")
+                    .map_err(|_| "SHOGUN_SLACK_CLIENT_ID not set".to_string())?;
+                let secret = std::env::var("SHOGUN_SLACK_CLIENT_SECRET")
+                    .map_err(|_| "SHOGUN_SLACK_CLIENT_SECRET not set".to_string())?;
+                Ok(AuthConfig::slack(id, secret, redirect_uri))
+            }
+            other => Err(format!("{} has no OAuth client configured (Wave 3)", other.source_str())),
+        }
     }
 
     /// Build the runtime with a Keychain-backed, auto-refreshing transport. Wave::One is the current
-    /// rollout (Gmail + Calendar + Drive); `draft_stop` comes from settings (default on).
+    /// rollout (Gmail + Calendar + Drive); `draft_stop` comes from settings (default on). The token
+    /// provider selects the refresh config per service, so a future Wave-2 Slack token refreshes
+    /// against Slack's endpoint, never Google's.
     pub fn build_runtime(draft_stop: bool) -> Result<ConnectorRuntime<Transport>, String> {
-        let cfg = auth_config("http://127.0.0.1/callback")?; // placeholder; refresh ignores it
-        let provider = ManagedTokenProvider::new(cfg, HttpTokenExchange::new()?, KeychainTokenStore::new(KEYCHAIN_SERVICE));
+        let selector: shogun_integrations::token::ConfigSelector =
+            Box::new(|svc| auth_config_for(svc, "http://127.0.0.1/callback").ok());
+        let provider = ManagedTokenProvider::with_config_selector(
+            selector,
+            HttpTokenExchange::new()?,
+            KeychainTokenStore::new(KEYCHAIN_SERVICE),
+        );
         let transport = RemoteMcpTransport::new(HttpMcpRpc::new(provider)?);
         Ok(ConnectorRuntime::new(transport, Wave::One, draft_stop))
     }
@@ -122,7 +143,7 @@ pub mod mac {
         let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| format!("loopback bind failed: {e}"))?;
         let port = listener.local_addr().map_err(|e| e.to_string())?.port();
         let redirect = format!("http://127.0.0.1:{port}/callback");
-        let cfg = auth_config(&redirect)?;
+        let cfg = auth_config_for(svc, &redirect)?;
 
         let exchange = HttpTokenExchange::new()?;
         let tokens = run_loopback_flow(&cfg, scopes, &listener, db.now_ms(), &exchange)?;

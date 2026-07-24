@@ -92,6 +92,45 @@ pub fn execute_send<T: SendTransport + ?Sized, S: TraceabilitySink + ?Sized>(
     }
 }
 
+/// The first-layer [`SendTransport`]: routes a confirmed send through the connector runtime
+/// (WP-F). Routing is `shogun_integrations::send_bridge` (which service + scope op performs this
+/// action); execution is [`ConnectorRuntime::execute_write`], which re-applies the service gate —
+/// so even a confirmed send is refused if the service is unreleased / disconnected (double gate).
+/// An email send is refused here outright: it is the second layer's (Composio, §6.10), never MCP.
+pub struct FirstLayerSendTransport<'a, T, W> {
+    runtime: &'a std::sync::Mutex<shogun_integrations::ConnectorRuntime<T>>,
+    exec: &'a W,
+}
+
+impl<'a, T, W> FirstLayerSendTransport<'a, T, W> {
+    pub fn new(
+        runtime: &'a std::sync::Mutex<shogun_integrations::ConnectorRuntime<T>>,
+        exec: &'a W,
+    ) -> Self {
+        Self { runtime, exec }
+    }
+}
+
+impl<T, W> SendTransport for FirstLayerSendTransport<'_, T, W>
+where
+    T: shogun_mcp::sync::IntegrationTransport,
+    W: shogun_integrations::WriteExecutor,
+{
+    fn send(&self, action: &SendAction, body: &str) -> Result<(), String> {
+        use shogun_integrations::send_bridge::{args_for_send, route_send, SendRoute};
+        match route_send(action) {
+            SendRoute::Composio => {
+                Err("email send is second-layer (Composio, opt-in) — not first-layer MCP".to_string())
+            }
+            SendRoute::FirstLayer { service, op } => {
+                let args = args_for_send(action, body);
+                let rt = self.runtime.lock().map_err(|_| "runtime lock poisoned".to_string())?;
+                rt.execute_write(service, op, args, self.exec).map(|_| ())
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -174,5 +213,91 @@ mod tests {
             ),
         };
         assert_eq!(trace_for_send(&cal).purpose, "integration.create_calendar_event");
+    }
+
+    // ---- FirstLayerSendTransport (WP-F) -------------------------------------------------------
+
+    use shogun_integrations::{ConnectorRuntime, WriteExecutor};
+    use shogun_mcp::scope::{Service, Wave};
+    use shogun_mcp::sync::{FetchedItem, IntegrationTransport};
+    use std::cell::RefCell;
+    use std::sync::Mutex;
+
+    /// A fake that satisfies both seams: no-op reads, and records the executed write.
+    struct FakeMcp {
+        executed: RefCell<Option<(Service, String, serde_json::Value)>>,
+    }
+    impl IntegrationTransport for FakeMcp {
+        fn read_sync(&self, _s: Service) -> Result<Vec<FetchedItem>, String> {
+            Ok(vec![])
+        }
+    }
+    impl WriteExecutor for FakeMcp {
+        fn execute(&self, s: Service, op: &str, args: serde_json::Value) -> Result<serde_json::Value, String> {
+            *self.executed.borrow_mut() = Some((s, op.to_string(), args));
+            Ok(serde_json::json!({ "ok": true }))
+        }
+    }
+
+    fn runtime_at(wave: Wave, connect: &[Service]) -> Mutex<ConnectorRuntime<FakeMcp>> {
+        let mut rt = ConnectorRuntime::new(FakeMcp { executed: RefCell::new(None) }, wave, true);
+        for &s in connect {
+            rt.mark_connected(s, 1_000);
+        }
+        Mutex::new(rt)
+    }
+
+    #[test]
+    fn confirmed_calendar_send_executes_the_mapped_op_and_traces() {
+        let rt = runtime_at(Wave::One, &[Service::GoogleCalendar]);
+        let exec = FakeMcp { executed: RefCell::new(None) };
+        let transport = FirstLayerSendTransport::new(&rt, &exec);
+
+        let action = SendAction::CreateCalendarEvent { title: "Sync".into() };
+        let preview = Preview::for_send(&action, "agenda body", ApprovalRoute::DirectMcp);
+        let sink = RecordingSink::new();
+        let out = execute_send(&ConfirmedSend { action, preview }, &transport, &sink);
+
+        assert_eq!(out, SendExecOutcome::Sent);
+        // The scope op (not the raw tool) was dispatched with the confirmed content.
+        let (svc, op, args) = exec.executed.borrow().clone().unwrap();
+        assert_eq!((svc, op.as_str()), (Service::GoogleCalendar, "event_create"));
+        assert_eq!(args["summary"], "Sync");
+        assert_eq!(args["description"], "agenda body");
+        // Exactly one trace, direct-MCP route.
+        assert_eq!(sink.records().len(), 1);
+    }
+
+    #[test]
+    fn email_send_is_refused_as_second_layer_and_traces_nothing() {
+        let rt = runtime_at(Wave::One, &[Service::Gmail]);
+        let exec = FakeMcp { executed: RefCell::new(None) };
+        let transport = FirstLayerSendTransport::new(&rt, &exec);
+
+        let cs = confirmed(ApprovalRoute::DirectMcp, "body");
+        let sink = RecordingSink::new();
+        let out = execute_send(&cs, &transport, &sink);
+
+        assert!(matches!(out, SendExecOutcome::Failed(ref e) if e.contains("Composio")));
+        assert!(exec.executed.borrow().is_none(), "no first-layer write may run for an email send");
+        assert!(sink.records().is_empty(), "nothing egressed → nothing traced");
+    }
+
+    #[test]
+    fn unreleased_wave_refuses_even_a_confirmed_send_double_gate() {
+        // Slack post confirmed, but Slack is Wave 2 and only Wave 1 is released — the runtime's
+        // gate refuses it even post-approval (WP-F double gate).
+        let rt = runtime_at(Wave::One, &[Service::Slack]);
+        let exec = FakeMcp { executed: RefCell::new(None) };
+        let transport = FirstLayerSendTransport::new(&rt, &exec);
+
+        let action = SendAction::PostMessage { channel: "#general".into() };
+        let preview = Preview::for_send(&action, "hello", ApprovalRoute::DirectMcp);
+        let sink = RecordingSink::new();
+        let out = execute_send(&ConfirmedSend { action, preview }, &transport, &sink);
+
+        assert!(matches!(out, SendExecOutcome::Failed(_)));
+        assert!(exec.executed.borrow().is_none());
+        assert!(sink.records().is_empty());
     }
 }

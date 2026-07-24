@@ -21,6 +21,7 @@ pub mod oauth;
 pub mod result;
 pub mod rpc;
 pub mod runtime;
+pub mod send_bridge;
 pub mod token;
 pub mod toolmap;
 pub mod transport;
@@ -34,6 +35,7 @@ pub mod oauth_flow;
 pub use oauth::{AuthConfig, Pkce, TokenExchange, TokenSet};
 pub use rpc::{McpRpc, StaticTokenProvider, TokenProvider};
 pub use runtime::{ConnUi, ConnectorRuntime, IngestSink, ServiceStatus, SyncReport};
+pub use send_bridge::{args_for_send, route_send, SendRoute};
 pub use token::{ManagedTokenProvider, MemoryTokenStore, TokenError, TokenManager, TokenStore};
 pub use transport::{RemoteMcpTransport, WriteExecutor};
 
