@@ -254,9 +254,12 @@ ASRは後から前段に差すのが正しい順序（参照解決は音声/テ�
 - [ ] `threads` テーブル + salience 計算
 
 ### Phase R3 — 埋め込み（意味検索）
-- [ ] `ort` + `tokenizers` 依存追加、multilingual-e5-small をバンドル
-- [ ] `Embedder` の実装 + 非同期embed job をdesktopで起動
-- [ ] `search_hybrid` に query embedding を渡す
+- [x] `search_hybrid` に query embedding を渡す配線（`Db::with_embedder` / `Db::embed_pending`）
+      — モデル無しでは字面検索に degrade、モデルを載せた瞬間にハイブリッドになる
+- [ ] **残: `ort` + `tokenizers` 依存追加と multilingual-e5-small の実搭載**
+      モデル本体（数百MB）は**gitに入れない**。ビルド/パッケージ時に取得して .app に同梱する
+      （CLAUDE.md「ローカルONNXモデル同梱」）。`Embedder` を実装して `with_embedder` に渡せば
+      他の変更は不要
 
 ### Phase R4 — AIツール履歴の取り込み
 - [ ] `ai_session` ソース + Claude Codeセッション(jsonl)リーダー

@@ -83,12 +83,35 @@ pub type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;
 pub struct Db {
     conn: SharedConn,
     clock: Clock,
+    /// The local embedding model, when one is loaded. `None` means search runs lexical-only:
+    /// every result still comes back via FTS, just without the semantic half (FR-MEM-22 — an
+    /// un-embedded event is never invisible).
+    embedder: Option<Arc<dyn shogun_memory::embed::Embedder>>,
 }
 
 impl Db {
     /// Wrap an already-open, migrated connection.
     pub fn new(conn: Connection, clock: Clock) -> Self {
-        Self { conn: Arc::new(Mutex::new(conn)), clock }
+        Self { conn: Arc::new(Mutex::new(conn)), clock, embedder: None }
+    }
+
+    /// Attach the local embedding model, turning search from lexical-only into hybrid.
+    ///
+    /// Taken as a handle rather than constructed here so this crate stays free of the model
+    /// runtime: the desktop loads the bundled model and hands it over, and tests inject a
+    /// deterministic one.
+    pub fn with_embedder(mut self, embedder: Arc<dyn shogun_memory::embed::Embedder>) -> Self {
+        self.embedder = Some(embedder);
+        self
+    }
+
+    /// Embed events that do not have a vector yet (FR-MEM-22: embedding is off the write path,
+    /// so a slow model never delays a capture). No-op without a model. Returns how many were
+    /// embedded.
+    pub fn embed_pending(&self, limit: usize) -> usize {
+        let Some(e) = self.embedder.as_deref() else { return 0 };
+        let Ok(mut conn) = self.conn.lock() else { return 0 };
+        shogun_memory::embed_job::embed_all_pending(&mut conn, e, limit).unwrap_or(0)
     }
 
     /// Open the on-disk database (runs migrations) and wrap it.
@@ -676,7 +699,19 @@ impl Db {
         if query.trim().is_empty() {
             return Vec::new();
         }
-        self.conn.lock().ok().and_then(|c| shogun_memory::search::search(&c, query, limit).ok()).unwrap_or_default()
+        // With a model loaded this is hybrid (lexical + semantic, fused by RRF); without one it
+        // degrades to lexical, which still answers — it just cannot match a paraphrase.
+        let query_vec = self
+            .embedder
+            .as_deref()
+            .and_then(|e| e.embed_query(query).ok());
+        self.conn
+            .lock()
+            .ok()
+            .and_then(|c| {
+                shogun_memory::search::search_hybrid(&c, query, query_vec.as_deref(), limit).ok()
+            })
+            .unwrap_or_default()
     }
 
     /// Open loops as Fusion/Brief input (stalest first; the Brief caps the count). Closed loops
@@ -1021,6 +1056,77 @@ mod tests {
         assert_eq!(summary.jobs_completed, 2);
         assert_eq!(summary.duration_ms, 250);
         assert!(summary.completed_fully);
+    }
+
+    /// The point of the semantic half: a question that shares no words with the answer still
+    /// finds it. Lexical search cannot do this, so the same query is run both ways and the
+    /// difference is the assertion.
+    #[test]
+    fn a_loaded_model_finds_an_answer_that_shares_no_words_with_the_question() {
+        use shogun_memory::embed::{Embedder, EmbedError};
+
+        /// A stand-in for the real model: it maps a fixed topic vocabulary onto the same vector,
+        /// which is exactly the property (paraphrase → nearby vector) the real model provides.
+        struct TopicEmbedder;
+        impl TopicEmbedder {
+            fn vector(text: &str) -> Vec<f32> {
+                let t = text.to_lowercase();
+                let pricing = ["pricing", "cost", "how much", "renewal fee"]
+                    .iter()
+                    .any(|w| t.contains(w));
+                // Must match the store's fixed width (the vec0 table is E5-sized).
+                let mut v = vec![0.0f32; shogun_memory::embed::E5_SMALL_DIM];
+                if pricing {
+                    v[0] = 1.0;
+                } else {
+                    v[1] = 1.0;
+                }
+                v
+            }
+        }
+        impl Embedder for TopicEmbedder {
+            fn dim(&self) -> usize {
+                shogun_memory::embed::E5_SMALL_DIM
+            }
+            fn embed_passages(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, EmbedError> {
+                Ok(texts.iter().map(|t| Self::vector(t)).collect())
+            }
+            fn embed_query(&self, text: &str) -> Result<Vec<f32>, EmbedError> {
+                Ok(Self::vector(text))
+            }
+        }
+
+        let plain = Db::open_in_memory(clock(1000)).unwrap();
+        plain.capture(&ev("The renewal fee lands at 12k", "h1", 1)).unwrap();
+        plain.capture(&ev("Standup notes: nothing blocking", "h2", 2)).unwrap();
+
+        // Lexical only: "cost" appears nowhere, so there is nothing to match.
+        let lexical = plain.assemble_context("what was the cost?", 5, 200);
+        assert!(
+            !lexical.evidence.iter().any(|e| e.excerpt.contains("12k")),
+            "precondition: lexical search cannot find this"
+        );
+
+        // Same store, now with a model attached and the backlog embedded.
+        let db = plain.with_embedder(std::sync::Arc::new(TopicEmbedder));
+        assert_eq!(db.embed_pending(100), 2, "the backlog is embedded off the write path");
+
+        let hybrid = db.assemble_context("what was the cost?", 5, 200);
+        assert!(
+            hybrid.evidence.iter().any(|e| e.excerpt.contains("12k")),
+            "the semantic half must find the paraphrase: {:?}",
+            hybrid.evidence
+        );
+    }
+
+    /// Without a model nothing regresses — search stays lexical rather than returning nothing.
+    #[test]
+    fn search_still_works_with_no_model_loaded() {
+        let db = Db::open_in_memory(clock(1000)).unwrap();
+        db.capture(&ev("vendor pricing settled at 12k", "h1", 1)).unwrap();
+        assert_eq!(db.embed_pending(100), 0, "no model, nothing embedded");
+        let pack = db.assemble_context("vendor pricing", 5, 200);
+        assert!(pack.evidence.iter().any(|e| e.excerpt.contains("12k")));
     }
 
     #[test]
