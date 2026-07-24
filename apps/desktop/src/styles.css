@@ -177,6 +177,7 @@ body {
 
 /* open panel */
 .panel {
+  position: relative;
   flex: 1;
   min-height: 0;
   display: flex;
@@ -816,6 +817,27 @@ kbd {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
   border-color: transparent;
+}
+
+/* corner resize grip — the only way to stretch the borderless panel (no OS resize edges). Two
+   diagonal ticks in the bottom-right corner; drives set_panel_size from a pointer drag. */
+.resizer {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 16px;
+  height: 16px;
+  z-index: 6;
+  cursor: nwse-resize;
+  touch-action: none;
+  opacity: 0.5;
+  background-image:
+    linear-gradient(135deg, transparent 44%, var(--faint) 44%, var(--faint) 56%, transparent 56%),
+    linear-gradient(135deg, transparent 68%, var(--faint) 68%, var(--faint) 80%, transparent 80%);
+  transition: opacity var(--sp);
+}
+.resizer:hover {
+  opacity: 0.95;
 }
 
 @media (prefers-reduced-motion: reduce) {

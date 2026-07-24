@@ -64,10 +64,38 @@ interface StateView {
 const IN_TAURI =
   typeof window !== "undefined" && ("__TAURI_INTERNALS__" in window || "__TAURI__" in window);
 
-// Window size (wide bar per feedback — 横長). Collapsed = just the handle strip.
+// Window sizing. Collapsed = just the handle strip. Open (chat) starts as a wide short bar; the
+// Settings view opens much taller so its stacked sections fit without feeling clipped. Both open
+// views are user-resizable via the corner grip, and each remembers its own size across the
+// Rust-driven respawns.
 const W = 640;
 const H_OPEN = 300;
 const H_HANDLE = 44;
+const H_SETTINGS = 640; // taller default so every setting group fits; clamped to the screen below
+const MIN_W = 460;
+const MIN_H = 240;
+
+interface Size {
+  w: number;
+  h: number;
+}
+
+// Keep the panel inside the visible screen — it hangs from the top (notch), so cap it to the work
+// area. availWidth/Height already exclude the Dock and menu bar; leave a small margin.
+function maxSize(): Size {
+  if (typeof window === "undefined") return { w: 1200, h: 800 };
+  return {
+    w: Math.max(MIN_W, Math.round(window.screen.availWidth - 40)),
+    h: Math.max(MIN_H, Math.round(window.screen.availHeight - 40)),
+  };
+}
+function clampSize(w: number, h: number): Size {
+  const m = maxSize();
+  return {
+    w: Math.min(Math.max(Math.round(w), MIN_W), m.w),
+    h: Math.min(Math.max(Math.round(h), MIN_H), m.h),
+  };
+}
 
 const MOCK_STATUS: Status = { app: "com.apple.mail", commitments: 2, open_loops: 1, has_key: false };
 const MOCK_STATE: StateView = {
@@ -84,16 +112,15 @@ function appName(bundle: string): string {
   return seg.charAt(0).toUpperCase() + seg.slice(1);
 }
 
-async function sizeWindow(open: boolean): Promise<void> {
+async function applyPanelSize(w: number, h: number): Promise<void> {
   if (!IN_TAURI) return;
-  const h = open ? H_OPEN : H_HANDLE;
   try {
     // Resize the NATIVE panel (top edge anchored). Falls back to the tao window when the native
     // panel isn't in play (plain-window mode).
-    await invoke("set_panel_size", { width: W, height: h });
+    await invoke("set_panel_size", { width: w, height: h });
   } catch {
     try {
-      await getCurrentWindow().setSize(new LogicalSize(W, h));
+      await getCurrentWindow().setSize(new LogicalSize(w, h));
     } catch (err) {
       // resize failure must not break the UI, but it must be VISIBLE in the log
       uiLog(`setSize failed: ${err}`);
@@ -138,6 +165,66 @@ export function App(): JSX.Element {
   useEffect(() => saveJson("shogun.appearance", appearance), [appearance]);
   const [showState, setShowState] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+
+  // Open-view sizes are user-resizable (corner grip) and persist across the Rust-driven respawns.
+  // Chat and Settings keep INDEPENDENT sizes — chat wants short+wide, Settings wants tall enough
+  // for its stacked groups.
+  const [chatSize, setChatSize] = useState<Size>(() => {
+    const s = loadJson<Size>("shogun.size.chat", { w: W, h: H_OPEN });
+    return clampSize(s.w, s.h);
+  });
+  const [setSize, setSetSize] = useState<Size>(() => {
+    const s = loadJson<Size>("shogun.size.settings", { w: W, h: H_SETTINGS });
+    return clampSize(s.w, s.h);
+  });
+  useEffect(() => saveJson("shogun.size.chat", chatSize), [chatSize]);
+  useEffect(() => saveJson("shogun.size.settings", setSize), [setSize]);
+
+  // Size the window to match the current view (handle / chat / settings). Pass explicit flags when
+  // a state setter in the same handler hasn't committed yet (React batches updates).
+  const sizeForView = useCallback(
+    (opts?: { open?: boolean; settings?: boolean }): void => {
+      const isOpen = opts?.open ?? open;
+      const isSettings = opts?.settings ?? showSettings;
+      if (!isOpen) void applyPanelSize(chatSize.w, H_HANDLE);
+      else if (isSettings) void applyPanelSize(setSize.w, setSize.h);
+      else void applyPanelSize(chatSize.w, chatSize.h);
+    },
+    [open, showSettings, chatSize, setSize],
+  );
+  // The boot/summon listeners live in a run-once effect; a ref keeps them calling the LATEST sizer
+  // instead of a stale closure captured at mount.
+  const sizeForViewRef = useRef(sizeForView);
+  sizeForViewRef.current = sizeForView;
+
+  // Live resize from the corner grip. During the drag we only resize the native panel (the webview
+  // reflows via CSS — no React state churn), rAF-throttled so we don't flood the IPC bridge. The
+  // per-view size is committed to state (and persisted) once on release.
+  const liveSize = useRef<Size | null>(null);
+  const raf = useRef<number | null>(null);
+  const onResizeLive = useCallback((w: number, h: number): void => {
+    const s = clampSize(w, h);
+    liveSize.current = s;
+    if (raf.current == null) {
+      raf.current = requestAnimationFrame(() => {
+        raf.current = null;
+        const cur = liveSize.current;
+        if (cur) void applyPanelSize(cur.w, cur.h);
+      });
+    }
+  }, []);
+  const onResizeCommit = useCallback((): void => {
+    if (raf.current != null) {
+      cancelAnimationFrame(raf.current);
+      raf.current = null;
+    }
+    const s = liveSize.current;
+    liveSize.current = null;
+    if (!s) return;
+    void applyPanelSize(s.w, s.h);
+    if (showSettings) setSetSize(s);
+    else setChatSize(s);
+  }, [showSettings]);
   // Active agent provider, shown on the composer's model pill (mirrors Settings → Model).
   const [provider, setProvider] = useState<string>("anthropic");
   const threadRef = useRef<HTMLDivElement>(null);
@@ -159,7 +246,7 @@ export function App(): JSX.Element {
   // Start at the open size and prove the webview is alive.
   useEffect(() => {
     if (!IN_TAURI) return;
-    void sizeWindow(true);
+    sizeForViewRef.current({ open: true, settings: false });
     void invoke("interact", { kind: "boot" });
     const offs: Array<Promise<() => void>> = [];
     offs.push(listen<ContextPayload>("context", (e) => setCtxApp(e.payload.bundle_id || e.payload.title_masked || "")));
@@ -167,7 +254,7 @@ export function App(): JSX.Element {
     offs.push(
       listen("summon", () => {
         setOpen(true);
-        void sizeWindow(true);
+        sizeForViewRef.current({ open: true });
       }),
     );
     offs.push(
@@ -217,11 +304,19 @@ export function App(): JSX.Element {
   const collapse = (): void => {
     setShowSettings(false);
     setOpen(false);
-    void sizeWindow(false);
+    sizeForView({ open: false });
   };
   const expand = (): void => {
     setOpen(true);
-    void sizeWindow(true);
+    sizeForView({ open: true });
+  };
+  const openSettings = (): void => {
+    setShowSettings(true);
+    sizeForView({ open: true, settings: true });
+  };
+  const closeSettings = (): void => {
+    setShowSettings(false);
+    sizeForView({ open: true, settings: false });
   };
 
   const send = useCallback((): void => {
@@ -284,7 +379,7 @@ export function App(): JSX.Element {
             hasKey={!!status?.has_key}
             stateCount={state.commitments.length + state.open_loops.length}
             onDone={() => {
-              setShowSettings(false);
+              closeSettings();
               refreshLlm();
             }}
             onCleared={refreshState}
@@ -300,7 +395,7 @@ export function App(): JSX.Element {
                 ) : null}
               </div>
               <div className="head__right">
-                <button className="icon" type="button" title={t.settings} aria-label={t.settings} onClick={() => setShowSettings(true)}>
+                <button className="icon" type="button" title={t.settings} aria-label={t.settings} onClick={openSettings}>
                   ⚙︎
                 </button>
                 <button className="icon" type="button" title={t.minimize} aria-label={t.minimize} onClick={collapse}>
@@ -397,7 +492,7 @@ export function App(): JSX.Element {
                     className="composer__model"
                     type="button"
                     title={t.model}
-                    onClick={() => setShowSettings(true)}
+                    onClick={openSettings}
                   >
                     {providerLabel} <span className="composer__caret" aria-hidden="true">⌄</span>
                   </button>
@@ -427,8 +522,59 @@ export function App(): JSX.Element {
             </div>
           </>
         )}
+        <ResizeGrip
+          current={() => (showSettings ? setSize : chatSize)}
+          onResize={onResizeLive}
+          onCommit={onResizeCommit}
+        />
       </div>
     </div>
+  );
+}
+
+// Corner grip that lets the user stretch the open panel. The native panel is a borderless NSPanel
+// (no OS resize edges), so we drive `set_panel_size` from a pointer drag — the panel's top-left is
+// anchored, so it grows down/right, which reads naturally for a window that hangs from the notch.
+function ResizeGrip(props: {
+  current: () => Size;
+  onResize: (w: number, h: number) => void;
+  onCommit: () => void;
+}): JSX.Element {
+  const { current, onResize, onCommit } = props;
+  const start = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
+  const onDown = (e: React.PointerEvent): void => {
+    e.preventDefault();
+    e.stopPropagation();
+    const s = current();
+    start.current = { x: e.clientX, y: e.clientY, w: s.w, h: s.h };
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  };
+  const onMove = (e: React.PointerEvent): void => {
+    const s = start.current;
+    if (!s) return;
+    onResize(s.w + (e.clientX - s.x), s.h + (e.clientY - s.y));
+  };
+  const onUp = (e: React.PointerEvent): void => {
+    if (!start.current) return;
+    start.current = null;
+    onCommit();
+    try {
+      (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+    } catch {
+      /* pointer may already be released */
+    }
+  };
+  return (
+    <div
+      className="resizer"
+      data-no-drag
+      title={t.resizeHint}
+      aria-hidden="true"
+      onPointerDown={onDown}
+      onPointerMove={onMove}
+      onPointerUp={onUp}
+      onPointerCancel={onUp}
+    />
   );
 }
 

@@ -58,6 +58,7 @@ export const STRINGS = {
     quit: "Quit SHOGUN",
     quitTitle: "Quit SHOGUN",
     minimize: "Minimize to the notch",
+    resizeHint: "Drag to resize",
     send: "Send",
     settingsTitle: "Settings",
     done: "Done",
