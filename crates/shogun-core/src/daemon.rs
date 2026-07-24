@@ -291,6 +291,63 @@ impl Db {
         facts
     }
 
+    /// Ingest turns recovered from an AI coding-tool session log (Phase R4).
+    ///
+    /// Each turn becomes an `ai_session` event, keyed by the tool's own session id so the whole
+    /// conversation is one thread — which is exactly the grouping a later "what did we decide
+    /// about X" needs. Re-importing a log is safe: the content hash is per turn, so already-seen
+    /// turns touch their existing row instead of duplicating (a session log is append-only and
+    /// gets re-read as it grows).
+    ///
+    /// Turns are extracted for commitments and open loops like any other source — a promise made
+    /// while pairing with a tool is still a promise.
+    pub fn ingest_ai_session(
+        &self,
+        turns: &[shogun_memory::ai_session::SessionTurn],
+    ) -> IngestSummary {
+        let now = self.now_ms();
+        let Ok(mut guard) = self.conn.lock() else {
+            return IngestSummary::default();
+        };
+        let mut summary = IngestSummary::default();
+        for t in turns {
+            // The session id is the thread; hashing it with the turn keeps two identical messages
+            // in different sessions distinct.
+            let hash = Self::content_hash(&format!("{}:{}:{}", t.session_id, t.ts_ms, t.text));
+            let title = format!("{} · {}", t.role.as_str(), t.cwd.as_deref().unwrap_or("session"));
+            let ev = NewEvent {
+                ts: t.ts_ms,
+                source: "ai_session",
+                kind: "message",
+                app_bundle_id: None,
+                window_title: Some(&title),
+                content: &t.text,
+                content_hash: &hash,
+                dwell_ms: 0,
+                display_id: None,
+                window_bounds: None,
+            };
+            // The session id is the thread — passed explicitly so both sides of the conversation
+            // land in one thread regardless of what the per-turn title says.
+            let Ok((id, touched)) =
+                event_log::insert_or_touch_with_thread(&guard, &ev, Some(&t.session_id))
+            else {
+                continue;
+            };
+            summary.processed += 1;
+            if touched {
+                continue;
+            }
+            summary.newly_inserted += 1;
+            let candidates = shogun_memory::extract::extract(&t.text);
+            if !candidates.is_empty() {
+                summary.candidates += candidates.len();
+                let _ = shogun_memory::extract::persist_candidates(&mut guard, id, &candidates, now);
+            }
+        }
+        summary
+    }
+
     /// Assemble the grounded context for one question (Phase R1 of the context-layer plan).
     ///
     /// [`Self::inline_memory`] alone answers "what does SHOGUN track about me" but not "what
@@ -964,6 +1021,88 @@ mod tests {
         assert_eq!(summary.jobs_completed, 2);
         assert_eq!(summary.duration_ms, 250);
         assert!(summary.completed_fully);
+    }
+
+    #[test]
+    fn ai_session_turns_become_searchable_threaded_memory() {
+        use shogun_memory::ai_session::{Role, SessionTurn};
+        let db = Db::open_in_memory(clock(1000)).unwrap();
+        let turns = vec![
+            SessionTurn {
+                session_id: "sess-1".into(),
+                role: Role::User,
+                ts_ms: 10,
+                text: "why did we drop the vendor migration?".into(),
+                cwd: Some("/proj".into()),
+            },
+            SessionTurn {
+                session_id: "sess-1".into(),
+                role: Role::Assistant,
+                ts_ms: 20,
+                text: "Because the vendor migration needed downtime we could not take.".into(),
+                cwd: Some("/proj".into()),
+            },
+        ];
+        let s = db.ingest_ai_session(&turns);
+        assert_eq!(s.newly_inserted, 2);
+
+        // The whole point: this is now answerable context.
+        let pack = db.assemble_context("vendor migration", 5, 200);
+        assert!(
+            pack.evidence.iter().any(|e| e.excerpt.contains("downtime")),
+            "the session answer must be retrievable: {:?}",
+            pack.evidence
+        );
+        assert!(pack.evidence.iter().all(|e| e.source == "ai_session"));
+
+        // Both turns share the session's thread, so the conversation stays one unit.
+        let keys: Vec<Option<String>> = {
+            let c = db.conn.lock().unwrap();
+            let mut st = c.prepare("SELECT thread_key FROM event_log ORDER BY id").unwrap();
+            st.query_map([], |r| r.get(0)).unwrap().collect::<Result<_, _>>().unwrap()
+        };
+        assert_eq!(keys.len(), 2);
+        assert!(keys[0].is_some() && keys[0] == keys[1], "one session is one thread: {keys:?}");
+    }
+
+    /// A session log is append-only and gets re-read as it grows, so importing it twice must not
+    /// double the memory.
+    #[test]
+    fn re_importing_a_session_log_does_not_duplicate_turns() {
+        use shogun_memory::ai_session::{Role, SessionTurn};
+        let db = Db::open_in_memory(clock(1000)).unwrap();
+        let turns = vec![SessionTurn {
+            session_id: "sess-1".into(),
+            role: Role::User,
+            ts_ms: 10,
+            text: "ship it on Friday".into(),
+            cwd: None,
+        }];
+        assert_eq!(db.ingest_ai_session(&turns).newly_inserted, 1);
+        let second = db.ingest_ai_session(&turns);
+        assert_eq!(second.newly_inserted, 0, "already-seen turns must not be re-inserted");
+        assert_eq!(second.processed, 1);
+    }
+
+    /// Credentials pasted into a session must not survive into the database.
+    #[test]
+    fn secrets_in_an_ingested_turn_are_masked_before_storage() {
+        use shogun_memory::ai_session::{Role, SessionTurn};
+        let db = Db::open_in_memory(clock(1000)).unwrap();
+        db.ingest_ai_session(&[SessionTurn {
+            session_id: "s".into(),
+            role: Role::User,
+            ts_ms: 10,
+            text: "deploy with ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345 please".into(),
+            cwd: None,
+        }]);
+        let stored: String = {
+            let c = db.conn.lock().unwrap();
+            c.query_row("SELECT content FROM event_log", [], |r| r.get(0)).unwrap()
+        };
+        assert!(!stored.contains("ghp_ABCDEF"), "the token must not be stored: {stored}");
+        assert!(stored.contains("[redacted]"));
+        assert!(stored.contains("deploy with"), "surrounding text is preserved: {stored}");
     }
 
     /// The R1 gap: a question about something in the event log has to reach that event. Before

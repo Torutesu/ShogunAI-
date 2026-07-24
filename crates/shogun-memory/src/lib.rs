@@ -14,6 +14,7 @@ use std::path::Path;
 
 use rusqlite::Connection;
 
+pub mod ai_session;
 pub mod cold;
 pub mod embed;
 pub mod embed_job;
@@ -24,6 +25,7 @@ pub mod identity;
 pub mod jobs;
 pub mod maintenance;
 pub mod quantize;
+pub mod redact;
 pub mod recompute;
 pub mod search;
 pub mod state;

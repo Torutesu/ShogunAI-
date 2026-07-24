@@ -27,13 +27,28 @@ pub struct NewEvent<'a> {
 /// Append a new event row unconditionally. Returns the new row id. `last_seen_at` starts equal
 /// to `ts`.
 ///
-/// The `thread_key` is **derived here** rather than passed in, so every writer — capture, the
-/// connectors, and anything added later — is grouped into threads without having to remember to
-/// do it. Sources that carry their own conversation id (Gmail thread id, an AI session id) will
-/// supply it once `NewEvent` carries one; until then the derivation falls back to the app plus a
-/// normalised window title, which is all a screen capture has anyway.
+/// The `thread_key` is **derived** rather than passed in, so every writer is grouped into threads
+/// without having to remember to do it; a screen capture has nothing but its app and window title
+/// to group on anyway. A source that knows its own conversation id calls
+/// [`insert_with_thread`] instead.
 pub fn insert(conn: &Connection, ev: &NewEvent<'_>) -> Result<i64, rusqlite::Error> {
-    let thread_key = crate::thread::thread_key(ev.source, None, ev.app_bundle_id, ev.window_title);
+    insert_with_thread(conn, ev, None)
+}
+
+/// [`insert`], for a source that knows its own conversation id (an AI session id, a Gmail thread
+/// id, an issue URL). That id is what the thread is really keyed on; without it the derivation
+/// falls back to app + window title, which splits one conversation whenever the title varies —
+/// an AI session's user and assistant turns would land in different threads, for instance.
+pub fn insert_with_thread(
+    conn: &Connection,
+    ev: &NewEvent<'_>,
+    native_thread_id: Option<&str>,
+) -> Result<i64, rusqlite::Error> {
+    let thread_key =
+        crate::thread::thread_key(ev.source, native_thread_id, ev.app_bundle_id, ev.window_title);
+    // Mask credentials before the row exists. Doing it here — rather than at each call site —
+    // means no writer can forget, and the database never holds an unmasked copy to leak later.
+    let content = crate::redact::redact(ev.content);
     conn.execute(
         "INSERT INTO event_log
            (ts, source, kind, app_bundle_id, window_title, content, content_hash,
@@ -45,7 +60,7 @@ pub fn insert(conn: &Connection, ev: &NewEvent<'_>) -> Result<i64, rusqlite::Err
             ev.kind,
             ev.app_bundle_id,
             ev.window_title,
-            ev.content,
+            content.as_ref(),
             ev.content_hash,
             ev.dwell_ms,
             ev.display_id,
@@ -63,6 +78,15 @@ pub fn insert(conn: &Connection, ev: &NewEvent<'_>) -> Result<i64, rusqlite::Err
 /// Matching is scoped to the same `source` so an identical string captured from two different
 /// integrations stays as two distinct rows.
 pub fn insert_or_touch(conn: &Connection, ev: &NewEvent<'_>) -> Result<(i64, bool), rusqlite::Error> {
+    insert_or_touch_with_thread(conn, ev, None)
+}
+
+/// [`insert_or_touch`], carrying the source's own conversation id — see [`insert_with_thread`].
+pub fn insert_or_touch_with_thread(
+    conn: &Connection,
+    ev: &NewEvent<'_>,
+    native_thread_id: Option<&str>,
+) -> Result<(i64, bool), rusqlite::Error> {
     let existing: Option<i64> = conn
         .query_row(
             "SELECT id FROM event_log WHERE content_hash = ?1 AND source = ?2 ORDER BY id DESC LIMIT 1",
@@ -78,7 +102,7 @@ pub fn insert_or_touch(conn: &Connection, ev: &NewEvent<'_>) -> Result<(i64, boo
         )?;
         Ok((id, true))
     } else {
-        Ok((insert(conn, ev)?, false))
+        Ok((insert_with_thread(conn, ev, native_thread_id)?, false))
     }
 }
 
