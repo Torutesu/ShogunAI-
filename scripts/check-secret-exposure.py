@@ -17,8 +17,9 @@ import sys
 
 # Files permitted to call Secret::expose(). Anything else must never touch the raw secret.
 ALLOWLIST = {
-    "crates/shogun-core/src/llm/anthropic.rs",  # builds the x-api-key header (the traced egress)
-    "crates/shogun-core/src/llm/mod.rs",        # defines expose() + its unit tests
+    "crates/shogun-core/src/llm/anthropic.rs",     # builds the x-api-key header (the traced egress)
+    "crates/shogun-core/src/llm/openai_compat.rs",  # builds the Authorization: Bearer header (OpenAI/OpenRouter egress)
+    "crates/shogun-core/src/llm/mod.rs",           # defines expose() + its unit tests
     # Future: the Keychain store module, when added, goes here with a decision record.
 }
 
