@@ -144,6 +144,20 @@ pub fn prepare_send(_cap: SendCapability<'_>, mail: GmailSend) -> (SendAction, P
     (action, preview)
 }
 
+/// Split a confirmed Gmail send's full preview body back into `(subject, body)` — the inverse of the
+/// `format!("Subject: {subject}\n\n{body}")` in [`prepare_send`]. The executor needs the parts
+/// separately because Composio's `GMAIL_SEND_EMAIL` takes `subject` and `body` as distinct fields.
+/// Kept next to `prepare_send` so the two never drift. A body that doesn't match the shape falls
+/// back to an empty subject + the whole text (never loses content).
+pub fn parse_gmail_full_body(full: &str) -> (String, String) {
+    if let Some(rest) = full.strip_prefix("Subject: ") {
+        if let Some((subject, body)) = rest.split_once("\n\n") {
+            return (subject.to_string(), body.to_string());
+        }
+    }
+    (String::new(), full.to_string())
+}
+
 /// The outcome of attempting a Composio send.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SendResult {
@@ -225,6 +239,27 @@ mod tests {
         // value so this checks the constant we actually expose, not a literal.
         let badge = COMPOSIO_THIRD_PARTY;
         assert!(badge, "Composio entries must carry the third-party badge");
+    }
+
+    #[test]
+    fn parse_gmail_full_body_inverts_prepare_send() {
+        let mut sender = ComposioSender::new(full_consent());
+        sender.set_draft_stop(false);
+        let cap = sender.send_capability().unwrap();
+        let (_action, preview) = prepare_send(
+            cap,
+            GmailSend { to: "b@e.com".into(), subject: "Ship date".into(), body: "Friday.\n\nThanks".into() },
+        );
+        let (subject, body) = parse_gmail_full_body(&preview.full_body);
+        assert_eq!(subject, "Ship date");
+        assert_eq!(body, "Friday.\n\nThanks");
+    }
+
+    #[test]
+    fn parse_gmail_full_body_falls_back_without_losing_content() {
+        let (subject, body) = parse_gmail_full_body("no subject header here");
+        assert_eq!(subject, "");
+        assert_eq!(body, "no subject header here");
     }
 
     #[test]

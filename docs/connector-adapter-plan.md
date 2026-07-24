@@ -35,7 +35,15 @@ OAuthブラウザフロー、ライブMCP接続）はmacOSビルドが必要で�
 | **async connect** + `open_settings` + settingsウィンドウ + capabilities | ✅ CI macOS green |
 | **Wave 2 Slack（OPEN-03解決）**: 公式MCP `mcp.slack.com/mcp` 実在確認 → endpoints/toolmap/oauth(Slackネスト形式トークン対応・`AuthConfig::slack`) | ✅ 純ロジック実装・テスト済（ツール名は暫定 — wire-up時に `tools/list` と突合。Wave解放はFR-INT-03のゲート判断） |
 
+| **WP-F 確認済み送信の実行**: `send_bridge`（ルーティング）+ `FirstLayerSendTransport`（第1層、二重ゲート） | ✅ 実装・テスト済 |
+| **WP-D Composio Gmail送信**: `ComposioApi`シーム（integrations純）+ `HttpComposioApi`（core net、`/api/v3/tools/execute/{tool}`・x-api-key）+ `ComposioSendTransport` + `RoutedSendTransport`（email→Composio、他→第1層、Composio失敗時はFR-C2-05ドラフト退避） | ✅ 実装・テスト済（実HTTPはライブキーで未検証） |
+
 OAuthクライアント登録の人間側手順は `docs/oauth-client-setup.md` に分離。
+
+**未配線（item B）**: 送信実行トランスポート（`daemon-server`）とHTTPクライアント（`net`）は
+`net+daemon-server`ビルドで共存確認済みだが、**実アプリ（desktop, 現状 db+net）には承認キューの
+ドレイン＋送信実行が未結線**。ライブ送信にはこの結線 + Composio APIキー(Keychain) + connected
+accountのuser_idが必要。
 
 **この環境（Linux）で検証できたのはここまで。** 純ロジック（マッピング・PKCE・ゲート・状態遷移）は
 全部テスト付き。実I/O（ネットワーク・Keychain・ブラウザ）はmacOSビルドが必要で継ぎ目まで用意済み。

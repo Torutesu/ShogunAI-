@@ -41,6 +41,9 @@ pub mod db_sink;
 pub mod dreamcycle;
 pub mod inline;
 pub mod llm;
+/// The second-layer (Composio) Gmail-send executor + its HTTP client (allowlisted egress, FR-TR-03).
+#[cfg(feature = "net")]
+pub mod composio_send;
 /// Concrete HTTPS clients for first-layer connectors (the allowlisted egress, FR-TR-03).
 #[cfg(feature = "net")]
 pub mod mcp_http;

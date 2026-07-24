@@ -16,6 +16,7 @@
 //! - Policy is not decided in this crate — the daemon gates every op through `service_gate::authorize_op` before calling the transport.
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
+pub mod composio;
 pub mod endpoints;
 pub mod oauth;
 pub mod result;
@@ -32,6 +33,7 @@ pub mod keychain;
 #[cfg(feature = "live")]
 pub mod oauth_flow;
 
+pub use composio::ComposioApi;
 pub use oauth::{AuthConfig, Pkce, TokenExchange, TokenSet};
 pub use rpc::{McpRpc, StaticTokenProvider, TokenProvider};
 pub use runtime::{ConnUi, ConnectorRuntime, IngestSink, ServiceStatus, SyncReport};
