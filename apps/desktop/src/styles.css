@@ -252,11 +252,6 @@ body {
   gap: 9px;
   min-width: 0;
 }
-.brand {
-  font-size: 14px;
-  color: var(--accent);
-  flex: none;
-}
 .head__right {
   display: flex;
   align-items: center;

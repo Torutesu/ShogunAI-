@@ -294,7 +294,6 @@ export function App(): JSX.Element {
           <>
             <header className="head" onMouseDown={beginDrag}>
               <div className="head__left">
-                <span className="brand" aria-hidden="true">⚔</span>
                 {totalState > 0 ? (
                   <button className="chip" type="button" onClick={() => setShowState((v) => !v)} aria-pressed={showState}>
                     {state.commitments.length} {t.due} · {state.open_loops.length} {t.waiting}
