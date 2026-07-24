@@ -23,7 +23,7 @@ pub mod mac {
     use core_foundation_sys::base::{CFGetTypeID, CFRelease, CFTypeRef};
     use core_foundation_sys::string::{CFStringGetTypeID, CFStringRef};
 
-    use shogun_core::daemon::Db;
+    use shogun_core::daemon::{ContextPack, Db};
     use shogun_core::db_sink::DbTraceabilitySink;
     use shogun_core::inline::{compose_inline, CursorContext, CursorReader, InlineOutcome, TextInserter};
     use shogun_core::llm::anthropic::{AnthropicAgentClient, AnthropicConfig};
@@ -494,18 +494,43 @@ pub mod mac {
         ok
     }
 
-    /// Build the chat prompt: the user's message grounded in confidence-gated memory (FR-ST-20).
-    fn build_chat_prompt(message: &str, memory: &[String]) -> String {
+    /// How much retrieved evidence the chat prompt carries. Six excerpts of ~600 chars keeps the
+    /// grounded half well under a page of context while covering a thread's worth of hits.
+    const CHAT_EVIDENCE_HITS: usize = 6;
+    const CHAT_EVIDENCE_CHARS: usize = 600;
+
+    /// Build the chat prompt: the user's message grounded in confidence-gated state facts
+    /// (FR-ST-20) AND the evidence retrieved for that message (Phase R1). Evidence is dated and
+    /// attributed so the model answers from what was actually seen, and can say which item it
+    /// used rather than asserting from nowhere.
+    fn build_chat_prompt(message: &str, ctx: &ContextPack) -> String {
         let mut p = String::from(
             "You are SHOGUN, the user's private work assistant on their Mac. Answer grounded in what \
-             you remember about their work. Be concise, concrete, and useful — no filler.\n",
+             you remember about their work. Be concise, concrete, and useful — no filler.\n\
+             Prefer the retrieved evidence over your own assumptions. Cite the item you used when it \
+             matters (e.g. \"per the Gmail thread\"). If the evidence does not answer the question, \
+             say what you do know and what is missing — never invent specifics.\n",
         );
-        let facts: Vec<&str> = memory.iter().map(|m| m.trim()).filter(|m| !m.is_empty()).collect();
+        let facts: Vec<&str> = ctx.facts.iter().map(|m| m.trim()).filter(|m| !m.is_empty()).collect();
         if !facts.is_empty() {
             p.push_str("\nWhat you remember about their work:\n");
             for m in facts {
                 p.push_str("- ");
                 p.push_str(m);
+                p.push('\n');
+            }
+        }
+        if !ctx.evidence.is_empty() {
+            p.push_str("\nRetrieved from their history (most relevant first):\n");
+            for e in &ctx.evidence {
+                p.push_str("- [");
+                p.push_str(&e.source);
+                if let Some(t) = e.title.as_deref().filter(|t| !t.is_empty()) {
+                    p.push_str(" · ");
+                    p.push_str(t);
+                }
+                p.push_str("] ");
+                p.push_str(&e.excerpt);
                 p.push('\n');
             }
         }
@@ -516,7 +541,9 @@ pub mod mac {
     }
 
     fn chat_blocking(db: &Db, message: &str) -> Result<String, String> {
-        let memory = db.inline_memory(8);
+        // Retrieval + state facts: the question decides what history comes along, so "what
+        // happened with X" can actually be answered from the event log.
+        let ctx = db.assemble_context(message, CHAT_EVIDENCE_HITS, CHAT_EVIDENCE_CHARS);
         let agent = build_agent(db);
         // Without a key the agent is the echo mock, whose "answer" is the prompt itself — printing
         // that in the thread dumps SHOGUN's entire internal prompt at the user. Say what is
@@ -524,7 +551,7 @@ pub mod mac {
         if !agent.is_live() {
             return Ok("No key yet — add your provider key in Settings to get real answers.".to_string());
         }
-        agent.complete(&build_chat_prompt(message, &memory)).map_err(|e| e.to_string())
+        agent.complete(&build_chat_prompt(message, &ctx)).map_err(|e| e.to_string())
     }
 
     /// Chat with SHOGUN, grounded in memory, on the BYOK Agent lane. Runs the blocking generation on

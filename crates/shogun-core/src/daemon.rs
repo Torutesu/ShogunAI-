@@ -49,6 +49,28 @@ impl shogun_integrations::IngestSink for Db {
     }
 }
 
+/// One retrieved piece of evidence behind an answer ([`Db::assemble_context`]). Carries its
+/// `event_id` so a generated answer can cite what it was grounded in (provenance is the whole
+/// point of the state/event split) and its `source` so mail is distinguishable from a captured
+/// window (FR-MEM-23).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Evidence {
+    pub event_id: i64,
+    pub ts: i64,
+    pub source: String,
+    pub title: Option<String>,
+    pub excerpt: String,
+}
+
+/// The grounded context for one question: confidence-gated state facts plus the retrieved
+/// evidence that mentions it. Facts say what SHOGUN believes; evidence says what was actually
+/// seen, and only evidence can answer "what happened with X".
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ContextPack {
+    pub facts: Vec<String>,
+    pub evidence: Vec<Evidence>,
+}
+
 /// The shared connection handle. `Connection` is `Send` but not `Sync`, so it lives behind a
 /// `Mutex`; the `Arc` lets every daemon component share the one handle.
 pub type SharedConn = Arc<Mutex<Connection>>;
@@ -257,6 +279,34 @@ impl Db {
         let mut facts = shogun_fusion::confidence::assemble_facts(&refs);
         facts.truncate(limit);
         facts
+    }
+
+    /// Assemble the grounded context for one question (Phase R1 of the context-layer plan).
+    ///
+    /// [`Self::inline_memory`] alone answers "what does SHOGUN track about me" but not "what
+    /// happened with X" — it never looks at the event log, so mail, messages and captured
+    /// windows could not reach an answer. This adds the retrieval half: the question is run
+    /// through hybrid search and the best-matching events come back as dated, attributed
+    /// evidence next to the state facts.
+    ///
+    /// `max_hits` caps the evidence lines and `excerpt_chars` caps each one, so a single huge
+    /// window capture cannot eat the whole prompt. Search is FTS-only until the embedding model
+    /// lands (`search_hybrid` takes the vector half then, with no change here).
+    pub fn assemble_context(&self, query: &str, max_hits: usize, excerpt_chars: usize) -> ContextPack {
+        let facts = self.inline_memory(8);
+        let evidence = self
+            .search(query, max_hits)
+            .into_iter()
+            .map(|h| Evidence {
+                event_id: h.event_id,
+                ts: h.ts,
+                source: h.source,
+                title: h.window_title,
+                excerpt: shogun_memory::search::excerpt(&h.content, query, excerpt_chars),
+            })
+            .filter(|e| !e.excerpt.is_empty())
+            .collect();
+        ContextPack { facts, evidence }
     }
 
     /// A traceability sink that writes through this same handle (the LLM egress records here).
@@ -904,6 +954,68 @@ mod tests {
         assert_eq!(summary.jobs_completed, 2);
         assert_eq!(summary.duration_ms, 250);
         assert!(summary.completed_fully);
+    }
+
+    /// The R1 gap: a question about something in the event log has to reach that event. Before
+    /// `assemble_context` the prompt only ever carried state facts, so this content was
+    /// unreachable no matter what the user asked.
+    #[test]
+    fn assemble_context_retrieves_the_event_that_answers_the_question() {
+        let db = Db::open_in_memory(clock(1000)).unwrap();
+        db.capture(&ev("Vendor pricing settled at 12k for the renewal", "h1", 1)).unwrap();
+        db.capture(&ev("Standup notes: nothing blocking today", "h2", 2)).unwrap();
+
+        let pack = db.assemble_context("vendor pricing", 5, 200);
+        assert!(
+            pack.evidence.iter().any(|e| e.excerpt.contains("12k")),
+            "the answering event must be retrieved: {:?}",
+            pack.evidence
+        );
+        // Attribution rides along so an answer can cite it.
+        let hit = pack.evidence.iter().find(|e| e.excerpt.contains("12k")).unwrap();
+        assert_eq!(hit.source, "capture");
+        assert!(hit.event_id > 0);
+    }
+
+    #[test]
+    fn assemble_context_caps_a_huge_capture_to_the_excerpt_budget() {
+        let db = Db::open_in_memory(clock(1000)).unwrap();
+        let huge = format!("{}decision: ship on Friday{}", "filler ".repeat(500), " tail".repeat(500));
+        db.capture(&ev(&huge, "h1", 1)).unwrap();
+
+        let pack = db.assemble_context("decision", 5, 120);
+        let e = pack.evidence.first().expect("retrieved");
+        assert!(e.excerpt.contains("decision: ship on Friday"), "match kept: {}", e.excerpt);
+        assert!(e.excerpt.chars().count() <= 122, "budget held: {}", e.excerpt.chars().count());
+    }
+
+    /// An empty/garbage question must degrade to the state facts, never error or return junk.
+    #[test]
+    fn assemble_context_without_a_match_still_returns_state_facts() {
+        let db = Db::open_in_memory(clock(1000)).unwrap();
+        let e = db.capture(&ev("unrelated", "h1", 1)).unwrap().0;
+        db.insert_commitment(
+            &shogun_memory::state::NewCommitment {
+                direction: shogun_memory::state::CommitmentDirection::Mine,
+                counterparty_id: None,
+                description: "send Alice the deck",
+                due_at: None,
+                status: shogun_memory::state::CommitmentStatus::Open,
+                project_id: None,
+                confidence: 0.9,
+                now: 1,
+            },
+            &[shogun_memory::state::Provenance::new(e)],
+        )
+        .expect("commitment");
+
+        let pack = db.assemble_context("", 5, 200);
+        assert!(pack.evidence.is_empty(), "empty query retrieves nothing");
+        assert!(
+            pack.facts.iter().any(|f| f.contains("send Alice the deck")),
+            "state facts still ground the answer: {:?}",
+            pack.facts
+        );
     }
 
     #[test]

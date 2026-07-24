@@ -23,6 +23,62 @@ pub struct SearchHit {
     pub score: f64,
 }
 
+/// A relevance-centred excerpt of `content`, at most `max_chars` characters.
+///
+/// A single captured window can be thousands of characters, so handing the model its first N
+/// wastes the budget on whatever happened to be at the top of the window — usually chrome, not
+/// the part that matched. This centres the window on the earliest occurrence of a query token
+/// instead, and falls back to the head when nothing matches (an FTS trigram hit can land on a
+/// substring no whole token covers).
+///
+/// Char-boundary safe: it slices by `char`, never by byte, so multi-byte text is never cut in
+/// half. Matching is ASCII-case-insensitive — that covers the English path (the accuracy
+/// priority) and is a no-op for scripts without case, so no text is mishandled either way.
+pub fn excerpt(content: &str, query: &str, max_chars: usize) -> String {
+    let chars: Vec<char> = content.chars().collect();
+    if max_chars == 0 {
+        return String::new();
+    }
+    if chars.len() <= max_chars {
+        return content.trim().to_string();
+    }
+    // Earliest position among the query's tokens; short tokens are skipped as too noisy.
+    let hit = query
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|t| t.chars().count() >= 2)
+        .filter_map(|t| find_ci(&chars, t))
+        .min();
+
+    // Keep a little of the run-up so the match reads in context rather than starting mid-thought.
+    let lead = max_chars / 3;
+    let mut start = hit.unwrap_or(0).saturating_sub(lead);
+    let mut end = start + max_chars;
+    if end > chars.len() {
+        end = chars.len();
+        start = end.saturating_sub(max_chars);
+    }
+    let mut out = String::new();
+    if start > 0 {
+        out.push('…');
+    }
+    out.push_str(chars[start..end].iter().collect::<String>().trim());
+    if end < chars.len() {
+        out.push('…');
+    }
+    out
+}
+
+/// Char-index of `needle` in `hay`, ASCII-case-insensitively. Works in char space so the index
+/// it returns can be used to slice `hay` directly.
+fn find_ci(hay: &[char], needle: &str) -> Option<usize> {
+    let n: Vec<char> = needle.chars().map(|c| c.to_ascii_lowercase()).collect();
+    if n.is_empty() || n.len() > hay.len() {
+        return None;
+    }
+    (0..=hay.len() - n.len())
+        .find(|&i| hay[i..i + n.len()].iter().map(|c| c.to_ascii_lowercase()).eq(n.iter().copied()))
+}
+
 /// Reciprocal Rank Fusion over several ranked id lists (each best-first, 1-based rank). The
 /// score of an id is `Σ_lists 1/(k + rank)`; `k` damps the influence of low ranks (60 is the
 /// canonical default). Ids are returned sorted by descending score; ties break by smaller id
@@ -116,6 +172,54 @@ pub fn search_hybrid(
     let ranked = reciprocal_rank_fusion(&[&fts, &vec], 60.0);
     let capped: Vec<(i64, f64)> = ranked.into_iter().take(limit).collect();
     hydrate(conn, &capped)
+}
+
+#[cfg(test)]
+mod excerpt_tests {
+    use super::excerpt;
+
+    #[test]
+    fn short_content_is_returned_whole() {
+        assert_eq!(excerpt("  send Alice the deck  ", "deck", 100), "send Alice the deck");
+    }
+
+    #[test]
+    fn window_centres_on_the_match_not_the_head() {
+        // The interesting sentence is buried at the end of a long window capture.
+        let content = format!("{}NEEDLE pricing decision{}", "chrome ".repeat(200), " x".repeat(200));
+        let got = excerpt(&content, "needle", 80);
+        assert!(got.contains("NEEDLE pricing decision"), "match must survive the cut: {got}");
+        assert!(got.chars().count() <= 82, "budget respected (plus ellipses): {got}");
+    }
+
+    #[test]
+    fn falls_back_to_the_head_when_nothing_matches() {
+        let content = "alpha ".repeat(100);
+        let got = excerpt(&content, "zzz", 40);
+        assert!(got.starts_with("alpha"), "no match → head window: {got}");
+        assert!(got.ends_with('…'));
+    }
+
+    #[test]
+    fn never_splits_a_multi_byte_char() {
+        // Pure multi-byte content: slicing by byte here would panic or produce invalid UTF-8.
+        let content = "あ".repeat(500);
+        let got = excerpt(&content, "あ", 50);
+        assert!(got.chars().all(|c| c == 'あ' || c == '…'));
+        assert!(got.chars().filter(|&c| c == 'あ').count() <= 50);
+    }
+
+    #[test]
+    fn matching_is_case_insensitive_for_the_english_path() {
+        let content = format!("{}Quarterly Deck review{}", "z ".repeat(200), " y".repeat(200));
+        let got = excerpt(&content, "QUARTERLY", 60);
+        assert!(got.contains("Quarterly Deck"), "case-insensitive hit expected: {got}");
+    }
+
+    #[test]
+    fn zero_budget_yields_nothing() {
+        assert_eq!(excerpt("anything at all", "any", 0), "");
+    }
 }
 
 #[cfg(test)]
