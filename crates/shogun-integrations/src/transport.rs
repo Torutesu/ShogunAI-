@@ -124,15 +124,6 @@ mod tests {
     }
 
     #[test]
-    fn read_sync_on_an_unmapped_service_errors_before_any_call() {
-        // Notion is Wave 3 with no verified MCP endpoint/toolmap yet.
-        let t = RemoteMcpTransport::new(FakeRpc::ok(json!({})));
-        let err = t.read_sync(Service::Notion).unwrap_err();
-        assert!(err.contains("read_sync"));
-        assert!(t.rpc.last.borrow().is_none(), "no RPC should be made for an unmapped service");
-    }
-
-    #[test]
     fn transport_error_propagates() {
         let t = RemoteMcpTransport::new(FakeRpc::err("network down"));
         assert_eq!(t.read_sync(Service::GoogleCalendar).unwrap_err(), "network down");

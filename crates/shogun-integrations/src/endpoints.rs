@@ -62,6 +62,22 @@ const SLACK: McpEndpoint = McpEndpoint {
     scopes: &["search:read.public", "chat:write", "reactions:write"],
 };
 
+// ---- Wave 3 official remote MCP servers (verified 2026-07) ---------------------------------------
+// Endpoints are confirmed; the exact OAuth scope strings are provisional (each vendor's least-
+// privilege set) — confirm against each server's auth config at wire-up.
+const NOTION: McpEndpoint = McpEndpoint {
+    url: "https://mcp.notion.com/mcp",
+    scopes: &["read_content", "update_content", "insert_content"],
+};
+const GITHUB: McpEndpoint = McpEndpoint {
+    url: "https://api.githubcopilot.com/mcp/",
+    scopes: &["repo", "read:org", "notifications"],
+};
+const LINEAR: McpEndpoint = McpEndpoint {
+    url: "https://mcp.linear.app/mcp",
+    scopes: &["read", "write"],
+};
+
 /// The official remote MCP endpoint for a service, if the vendor ships one. `None` means the
 /// service is not reachable over first-layer MCP today.
 pub fn endpoint(service: Service) -> Option<McpEndpoint> {
@@ -70,8 +86,9 @@ pub fn endpoint(service: Service) -> Option<McpEndpoint> {
         Service::GoogleCalendar => Some(CALENDAR),
         Service::GoogleDrive => Some(DRIVE),
         Service::Slack => Some(SLACK),
-        // Wave 3 — official remote MCP availability unverified; add when confirmed.
-        Service::Notion | Service::GitHub | Service::Linear => None,
+        Service::Notion => Some(NOTION),
+        Service::GitHub => Some(GITHUB),
+        Service::Linear => Some(LINEAR),
     }
 }
 
@@ -85,23 +102,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn wave1_and_wave2_services_have_https_endpoints_with_scopes() {
-        for s in [Service::Gmail, Service::GoogleCalendar, Service::GoogleDrive, Service::Slack] {
-            let ep = endpoint(s).expect("service has an endpoint");
+    fn every_first_layer_service_has_an_https_endpoint_with_scopes() {
+        // All six first-layer services now ship an official remote MCP server (Waves 1-3).
+        for s in shogun_mcp::scope::ALL_SERVICES {
+            let ep = endpoint(*s).unwrap_or_else(|| panic!("{s:?} must have an endpoint"));
             assert!(ep.url.starts_with("https://"), "{s:?} url must be https");
             assert!(!ep.scopes.is_empty(), "{s:?} must request scopes");
+            assert!(has_endpoint(*s));
         }
-        // Google servers share the /mcp/v1 path; Slack's is /mcp.
+        // Google servers share the /mcp/v1 path; the others are vendor-specific.
         assert!(endpoint(Service::Gmail).unwrap().url.ends_with("/mcp/v1"));
         assert_eq!(endpoint(Service::Slack).unwrap().url, "https://mcp.slack.com/mcp");
-    }
-
-    #[test]
-    fn wave3_services_have_no_endpoint_yet() {
-        for s in [Service::Notion, Service::GitHub, Service::Linear] {
-            assert!(endpoint(s).is_none(), "{s:?} has no verified official MCP endpoint");
-            assert!(!has_endpoint(s));
-        }
+        assert_eq!(endpoint(Service::GitHub).unwrap().url, "https://api.githubcopilot.com/mcp/");
     }
 
     #[test]

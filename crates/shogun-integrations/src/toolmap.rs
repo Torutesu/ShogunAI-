@@ -42,7 +42,25 @@ pub fn tool_for(service: Service, op_name: &str) -> Option<&'static str> {
         // draft_local / copy_to_clipboard are DEVICE-LOCAL by design (FR-INT-30) — never MCP.
         (Service::Slack, "draft_local" | "copy_to_clipboard") => None,
 
-        // Anything else (unknown op, or a service without an MCP endpoint) has no tool.
+        // ---- Notion (mcp.notion.com, Wave 3) — PROVISIONAL names, confirm at wire-up -----------
+        (Service::Notion, "read_sync") => Some("search"),
+        (Service::Notion, "page_or_row_create") => Some("create-pages"),
+        (Service::Notion, "page_update") => Some("update-page"),
+
+        // ---- GitHub (api.githubcopilot.com, Wave 3) — PROVISIONAL --------------------------------
+        (Service::GitHub, "read_sync") => Some("search_issues"),
+        (Service::GitHub, "issue_create_or_comment") => Some("add_issue_comment"),
+        // comment_draft is DEVICE-LOCAL (L2) — a local draft, never an MCP call.
+        (Service::GitHub, "comment_draft") => None,
+
+        // ---- Linear (mcp.linear.app, Wave 3) — PROVISIONAL --------------------------------------
+        (Service::Linear, "read_sync") => Some("list_issues"),
+        (Service::Linear, "issue_create_update_comment") => Some("create_comment"),
+        (Service::Linear, "status_change") => Some("update_issue"),
+        // issue_draft is DEVICE-LOCAL (L2).
+        (Service::Linear, "issue_draft") => None,
+
+        // Anything else (unknown op, not-implemented row, or device-local) has no tool.
         _ => None,
     }
 }
@@ -57,9 +75,16 @@ mod tests {
     use super::*;
     use shogun_mcp::scope::{self, Gating, OpClass};
 
-    /// Every service with an official MCP endpoint today (Waves 1–2).
-    const MAPPED: [Service; 4] =
-        [Service::Gmail, Service::GoogleCalendar, Service::GoogleDrive, Service::Slack];
+    /// Every first-layer service — all now ship an official MCP endpoint (Waves 1–3).
+    const MAPPED: [Service; 7] = [
+        Service::Gmail,
+        Service::GoogleCalendar,
+        Service::GoogleDrive,
+        Service::Slack,
+        Service::Notion,
+        Service::GitHub,
+        Service::Linear,
+    ];
 
     #[test]
     fn every_mapped_service_read_sync_has_a_tool() {
@@ -82,10 +107,12 @@ mod tests {
     }
 
     #[test]
-    fn unmapped_wave3_services_map_to_no_tool() {
-        assert_eq!(tool_for(Service::Notion, "read_sync"), None);
-        assert_eq!(tool_for(Service::GitHub, "read_sync"), None);
-        assert_eq!(tool_for(Service::Linear, "read_sync"), None);
+    fn device_local_wave3_drafts_have_no_mcp_tool() {
+        // GitHub comment_draft and Linear issue_draft are device-local (L2) — never MCP.
+        assert_eq!(tool_for(Service::GitHub, "comment_draft"), None);
+        assert_eq!(tool_for(Service::Linear, "issue_draft"), None);
+        // Not-implemented rows are unroutable too.
+        assert_eq!(tool_for(Service::Notion, "delete"), None);
     }
 
     #[test]

@@ -305,9 +305,11 @@ mod tests {
         let slack = statuses.iter().find(|s| s.source == "slack").unwrap();
         assert_eq!(slack.state, ConnUi::ComingSoon);
         assert!(slack.has_endpoint);
-        // Wave-3 services have no verified endpoint yet.
+        // All first-layer services now have an official endpoint (Waves 1-3); Notion is Wave 3, so
+        // still "coming soon" at Wave 1 but its endpoint exists.
         let notion = statuses.iter().find(|s| s.source == "notion").unwrap();
-        assert!(!notion.has_endpoint);
+        assert_eq!(notion.state, ConnUi::ComingSoon);
+        assert!(notion.has_endpoint);
         // Calendar released but not connected → disconnected.
         let cal = statuses.iter().find(|s| s.source == "gcal").unwrap();
         assert_eq!(cal.state, ConnUi::Disconnected);

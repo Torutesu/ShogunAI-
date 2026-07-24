@@ -34,6 +34,7 @@ OAuthブラウザフロー、ライブMCP接続）はmacOSビルドが必要で�
 | **接続管理UI（`Connections.tsx`）**: サービス一覧＋Connect/Disconnect＋状態表示 | ✅ 設定ウィンドウにマウント済み・CI frontend green（見た目は後回しのラフ） |
 | **async connect** + `open_settings` + settingsウィンドウ + capabilities | ✅ CI macOS green |
 | **Wave 2 Slack（OPEN-03解決）**: 公式MCP `mcp.slack.com/mcp` 実在確認 → endpoints/toolmap/oauth(Slackネスト形式トークン対応・`AuthConfig::slack`) | ✅ 純ロジック実装・テスト済（ツール名は暫定 — wire-up時に `tools/list` と突合。Wave解放はFR-INT-03のゲート判断） |
+| **Wave 3 Notion/GitHub/Linear**: 公式リモートMCP実在確認（`mcp.notion.com/mcp`, `api.githubcopilot.com/mcp/`, `mcp.linear.app/mcp`）→ endpoints + toolmap（暫定名）。第1層6サービス全部が endpoint を持つ状態 | ✅ endpoints/toolmap実装・テスト済（OAuth AuthConfig各社版とconnect結線はWave解放時。ツール名は`tools/list`と突合） |
 
 | **WP-F 確認済み送信の実行**: `send_bridge`（ルーティング）+ `FirstLayerSendTransport`（第1層、二重ゲート） | ✅ 実装・テスト済 |
 | **WP-D Composio Gmail送信**: `ComposioApi`シーム（integrations純）+ `HttpComposioApi`（core net、`/api/v3/tools/execute/{tool}`・x-api-key）+ `ComposioSendTransport` + `RoutedSendTransport`（email→Composio、他→第1層、Composio失敗時はFR-C2-05ドラフト退避） | ✅ 実装・テスト済（実HTTPはライブキーで未検証） |
