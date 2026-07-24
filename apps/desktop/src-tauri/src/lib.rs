@@ -1249,22 +1249,6 @@ mod shortcuts {
         eprintln!("[shell] shortcut {action} → {combo}");
         Ok(())
     }
-
-    // ⌘⇧, (Comma) → open the Settings window (Connections + Approvals). The window is created
-    // hidden; without this there is no way to reach the settings UI in the running app.
-    let settings = Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::Comma);
-    let res = app.global_shortcut().on_shortcut(settings, move |app, _sc, event| {
-        if event.state() == ShortcutState::Pressed {
-            if let Some(win) = app.get_webview_window("settings") {
-                let _ = win.show();
-                let _ = win.set_focus();
-            }
-        }
-    });
-    match res {
-        Ok(()) => eprintln!("[spike] ⌘⇧, registered — press it to open Settings"),
-        Err(e) => eprintln!("[spike] settings shortcut registration failed: {e}"),
-    }
 }
 
 /// Open (creating if needed) the on-device memory DB under the app-data dir, with a real
