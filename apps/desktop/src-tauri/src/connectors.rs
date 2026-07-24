@@ -148,6 +148,21 @@ pub mod mac {
         let redirect = format!("http://127.0.0.1:{port}/callback");
         let cfg = auth_config_for(svc, &redirect)?;
 
+        // Diagnostic: the client_id is a PUBLIC value (it appears in the browser's authorize URL),
+        // never a secret — logging it lets the user verify the env var has no typo/whitespace when
+        // Google returns "invalid_client / OAuth client was not found". The client SECRET is never
+        // logged (invariant 7).
+        eprintln!(
+            "[connectors] {service}: authorizing with client_id=[{}] (len {}), redirect={redirect}",
+            cfg.client_id,
+            cfg.client_id.len()
+        );
+        if !cfg.client_id.ends_with(".apps.googleusercontent.com") {
+            eprintln!(
+                "[connectors] ⚠️ client_id does not end with .apps.googleusercontent.com — check SHOGUN_GOOGLE_CLIENT_ID (wrong value or Client Secret pasted by mistake?)"
+            );
+        }
+
         let exchange = HttpTokenExchange::new()?;
         let tokens = run_loopback_flow(&cfg, scopes, &listener, db.now_ms(), &exchange)?;
 
