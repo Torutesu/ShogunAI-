@@ -256,7 +256,6 @@ export function App(): JSX.Element {
     return (
       <div className="stage stage--handle">
         <button className="handle" type="button" onClick={expand} title={t.openPanel}>
-          <span className="handle__mark">⚔</span>
           <span className="handle__live">
             <span className="live__dot" />
             {t.reading} <b>{live}</b>
