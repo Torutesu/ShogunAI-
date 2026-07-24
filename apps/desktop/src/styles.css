@@ -234,7 +234,9 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 9px 10px 9px 14px;
+  /* Left padding kept tight so the live-source chip lands close to where the collapsed pill sits,
+     i.e. the indicator barely moves when the panel opens. */
+  padding: 9px 10px;
   border-bottom: 1px solid var(--line);
   cursor: grab;
 }
@@ -495,10 +497,6 @@ body {
 .composer__card:focus-within {
   border-color: color-mix(in srgb, var(--accent) 55%, var(--line-strong));
   box-shadow: 0 0 0 3px var(--accent-soft);
-}
-.composer__src {
-  display: flex;
-  min-width: 0;
 }
 .srcchip {
   display: inline-flex;

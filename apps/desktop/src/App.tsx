@@ -416,6 +416,13 @@ export function App(): JSX.Element {
           <>
             <header className="head" onMouseDown={beginDrag}>
               <div className="head__left">
+                {/* The live source sits top-left, in the same spot the collapsed pill occupies, so
+                    opening the panel doesn't make the indicator jump to the bottom. App NAME only —
+                    never window titles or paths (no usernames leak into the UI). */}
+                <span className="srcchip" title={`${t.reading} ${live}`}>
+                  <span className="live__dot" />
+                  {t.reading} <b>{live}</b>
+                </span>
                 {totalState > 0 ? (
                   <button className="chip" type="button" onClick={() => setShowState((v) => !v)} aria-pressed={showState}>
                     {state.commitments.length} {t.due} · {state.open_loops.length} {t.waiting}
@@ -490,14 +497,8 @@ export function App(): JSX.Element {
 
             <div className="composer">
               <div className="composer__card">
-                {/* Source chip: the app SHOGUN is reading — app NAME only, never window titles or
-                    paths (no usernames leak into the UI). */}
-                <div className="composer__src">
-                  <span className="srcchip" title={`${t.reading} ${live}`}>
-                    <span className="live__dot" />
-                    {t.reading} <b>{live}</b>
-                  </span>
-                </div>
+                {/* The live-source chip lives in the header (top-left), not here — see the note
+                    there. The composer is just the field plus its action bar. */}
                 <input
                   className="composer__input"
                   placeholder={t.ask}
