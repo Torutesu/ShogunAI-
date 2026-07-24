@@ -84,6 +84,109 @@ pub fn open(path: impl AsRef<Path>) -> Result<Connection, MemoryError> {
     Ok(conn)
 }
 
+/// A 256-bit database encryption key.
+///
+/// The key never appears in a `Debug` render, so it cannot reach a log through a derived
+/// `{:?}` on some enclosing struct. It is passed in rather than read here: this crate is
+/// Linux-testable and must not know about the Keychain (the key's only permitted home,
+/// invariant 7) — the desktop layer reads it and hands it over.
+#[derive(Clone)]
+pub struct DbKey([u8; 32]);
+
+impl DbKey {
+    pub fn new(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+
+    /// Parse the 64-char hex form used to store the key in the Keychain.
+    pub fn from_hex(s: &str) -> Option<Self> {
+        let s = s.trim();
+        if s.len() != 64 || !s.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return None;
+        }
+        let mut out = [0u8; 32];
+        for (i, byte) in out.iter_mut().enumerate() {
+            *byte = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).ok()?;
+        }
+        Some(Self(out))
+    }
+
+    /// The hex form, for storing in the Keychain.
+    pub fn to_hex(&self) -> String {
+        self.0.iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    /// The SQLCipher `PRAGMA key` argument. Raw-key form (`x'…'`) so SQLCipher uses these bytes
+    /// directly instead of running a passphrase KDF, and so the value can never need quoting or
+    /// escaping — it is hex digits between fixed delimiters.
+    fn pragma_value(&self) -> String {
+        format!("\"x'{}'\"", self.to_hex())
+    }
+}
+
+impl std::fmt::Debug for DbKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("DbKey(***redacted***)")
+    }
+}
+
+/// Apply the encryption key. Must run before any other statement on the connection — SQLCipher
+/// reads the header on first access, and a key set afterwards is rejected.
+fn apply_key(conn: &Connection, key: &DbKey) -> Result<(), MemoryError> {
+    conn.execute_batch(&format!("PRAGMA key = {};", key.pragma_value()))?;
+    Ok(())
+}
+
+/// Open (creating if needed) an **encrypted** database at `path` (FR-SEC: memory at rest).
+///
+/// Same contract as [`open`] otherwise. A wrong key surfaces as an integrity error from the first
+/// read, not as silent garbage: SQLCipher cannot decrypt the header and the migration runner's
+/// first query fails.
+pub fn open_encrypted(path: impl AsRef<Path>, key: &DbKey) -> Result<Connection, MemoryError> {
+    vector::register_extension();
+    let mut conn = Connection::open(path)?;
+    apply_key(&conn, key)?;
+    apply_pragmas(&conn, true)?;
+    migrate_and_check(&mut conn)?;
+    Ok(conn)
+}
+
+/// Convert an existing plaintext database into an encrypted one at `dest`, via SQLCipher's
+/// `sqlcipher_export`. The source is left untouched, so a failure loses nothing and the caller
+/// decides when to swap the files.
+///
+/// This is the upgrade path for installs created before encryption: a plaintext database cannot
+/// simply be given a key, its pages have to be rewritten.
+pub fn encrypt_existing(
+    plaintext: impl AsRef<Path>,
+    dest: impl AsRef<Path>,
+    key: &DbKey,
+) -> Result<(), MemoryError> {
+    vector::register_extension();
+    let conn = Connection::open(plaintext)?;
+    let dest = dest.as_ref().to_string_lossy().replace('\'', "''");
+    conn.execute_batch(&format!(
+        "ATTACH DATABASE '{dest}' AS encrypted KEY {};
+         SELECT sqlcipher_export('encrypted');
+         DETACH DATABASE encrypted;",
+        key.pragma_value()
+    ))?;
+    Ok(())
+}
+
+/// Whether the file at `path` is an unencrypted SQLite database — i.e. still needs
+/// [`encrypt_existing`]. A plaintext database starts with SQLite's magic header; an encrypted one
+/// starts with random salt, so the check is a 16-byte read and never opens the database.
+pub fn is_plaintext_db(path: impl AsRef<Path>) -> bool {
+    use std::io::Read;
+    let Ok(mut f) = std::fs::File::open(path) else { return false };
+    let mut head = [0u8; 16];
+    if f.read_exact(&mut head).is_err() {
+        return false;
+    }
+    &head == b"SQLite format 3\0"
+}
+
 /// Open an in-memory database, migrated to the latest schema — for tests and ephemeral use.
 pub fn open_in_memory() -> Result<Connection, MemoryError> {
     vector::register_extension();
@@ -101,6 +204,101 @@ pub fn schema_version(conn: &Connection) -> Result<Option<u32>, rusqlite::Error>
         [],
         |r| r.get::<_, Option<u32>>(0),
     )
+}
+
+/// Encryption at rest. These tests assert the property that matters — the file on disk is not
+/// readable without the key — rather than just that the API returns Ok.
+#[cfg(test)]
+mod encryption_tests {
+    use super::*;
+
+    fn key(seed: u8) -> DbKey {
+        DbKey::new([seed; 32])
+    }
+
+    fn temp(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("shogun_enc_{}_{}.db", std::process::id(), name))
+    }
+
+    #[test]
+    fn hex_round_trips_and_rejects_malformed_keys() {
+        let k = key(0xab);
+        assert_eq!(k.to_hex().len(), 64);
+        assert_eq!(DbKey::from_hex(&k.to_hex()).unwrap().to_hex(), k.to_hex());
+        assert!(DbKey::from_hex("too short").is_none());
+        assert!(DbKey::from_hex(&"z".repeat(64)).is_none(), "non-hex rejected");
+    }
+
+    #[test]
+    fn the_key_never_renders_in_debug_output() {
+        let rendered = format!("{:?}", key(0xff));
+        assert!(!rendered.contains("ff"), "key bytes must not reach a log: {rendered}");
+        assert_eq!(rendered, "DbKey(***redacted***)");
+    }
+
+    #[test]
+    fn an_encrypted_database_is_not_readable_without_the_key() {
+        let path = temp("locked");
+        let _ = std::fs::remove_file(&path);
+        {
+            let conn = open_encrypted(&path, &key(1)).expect("create encrypted");
+            conn.execute(
+                "INSERT INTO event_log (ts, source, kind, content, content_hash, last_seen_at, dwell_ms)
+                 VALUES (1, 'capture', 'text', 'the quarterly numbers', 'h1', 1, 0)",
+                [],
+            )
+            .unwrap();
+        }
+
+        // The bytes on disk must not be a plaintext SQLite file, and must not contain the content.
+        assert!(!is_plaintext_db(&path), "an encrypted DB must not carry the SQLite header");
+        let raw = std::fs::read(&path).unwrap();
+        assert!(
+            !raw.windows(21).any(|w| w == b"the quarterly numbers"),
+            "captured content must not be readable in the file"
+        );
+
+        // Wrong key: refused, not silently empty.
+        assert!(open_encrypted(&path, &key(2)).is_err(), "a wrong key must fail loudly");
+        // Right key: the row is there.
+        let conn = open_encrypted(&path, &key(1)).expect("reopen with the right key");
+        let n: i64 = conn.query_row("SELECT count(*) FROM event_log", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 1);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn an_existing_plaintext_database_can_be_migrated_without_losing_data() {
+        let plain = temp("plain");
+        let enc = temp("converted");
+        let _ = std::fs::remove_file(&plain);
+        let _ = std::fs::remove_file(&enc);
+        {
+            let conn = open(&plain).expect("create plaintext");
+            conn.execute(
+                "INSERT INTO event_log (ts, source, kind, content, content_hash, last_seen_at, dwell_ms)
+                 VALUES (1, 'capture', 'text', 'pre-existing memory', 'h1', 1, 0)",
+                [],
+            )
+            .unwrap();
+        }
+        assert!(is_plaintext_db(&plain), "the old format is detectable");
+
+        encrypt_existing(&plain, &enc, &key(7)).expect("convert");
+
+        // Converted copy: same data, now encrypted. The source is untouched, so a failed upgrade
+        // never destroys the user's memory.
+        assert!(!is_plaintext_db(&enc));
+        assert!(is_plaintext_db(&plain), "source left intact");
+        let conn = open_encrypted(&enc, &key(7)).expect("open converted");
+        let content: String =
+            conn.query_row("SELECT content FROM event_log", [], |r| r.get(0)).unwrap();
+        assert_eq!(content, "pre-existing memory");
+        assert_eq!(schema_version(&conn).unwrap(), Some(5), "schema carried over");
+
+        let _ = std::fs::remove_file(&plain);
+        let _ = std::fs::remove_file(&enc);
+    }
 }
 
 #[cfg(test)]

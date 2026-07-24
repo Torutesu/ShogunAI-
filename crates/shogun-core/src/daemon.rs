@@ -96,6 +96,16 @@ impl Db {
         Ok(Self::new(shogun_memory::open(path)?, clock))
     }
 
+    /// Open the encrypted on-device database (memory at rest). The key comes from the caller —
+    /// the macOS layer reads it from the Keychain, its only permitted home (invariant 7).
+    pub fn open_encrypted(
+        path: impl AsRef<std::path::Path>,
+        key: &shogun_memory::DbKey,
+        clock: Clock,
+    ) -> Result<Self, MemoryError> {
+        Ok(Self::new(shogun_memory::open_encrypted(path, key)?, clock))
+    }
+
     /// Open a fresh in-memory database (migrations applied) — for tests and ephemeral use.
     pub fn open_in_memory(clock: Clock) -> Result<Self, MemoryError> {
         Ok(Self::new(shogun_memory::open_in_memory()?, clock))

@@ -38,6 +38,10 @@ shogun-core = { path = "../../../crates/shogun-core" }
 shogun-core = { path = "../../../crates/shogun-core", features = ["db", "net", "exec"] }
 # BYOK key read from the macOS Keychain (invariant 7 — secrets never in a file/DB/log).
 security-framework = "3"
+# The DB encryption key type + the plaintext→encrypted upgrade path (memory at rest).
+shogun-memory = { path = "../../../crates/shogun-memory" }
+# OS CSPRNG for minting that key on first run — never a derived or guessable value.
+getrandom = "0.2"
 # A dedicated runtime to block the (async) Agent-lane call on the inline trigger thread.
 tokio = { version = "1", features = ["rt", "rt-multi-thread"] }
 # shogun-fusion for the notch context-action command (ScreenContext / ActionCandidate / Level).

@@ -56,7 +56,7 @@ shogun-mcp = { path = "../shogun-mcp", optional = true }
 shogun-integrations = { path = "../shogun-integrations", features = ["live"], optional = true }
 # The `shogun-api` binary composes the shared approval queue (agents) into the server state.
 shogun-agents = { path = "../shogun-agents", optional = true }
-rusqlite = { version = "0.31", features = ["bundled"], optional = true }
+rusqlite = { version = "0.31", features = ["bundled-sqlcipher-vendored-openssl"], optional = true }
 
 [[bin]]
 name = "shogun-api"

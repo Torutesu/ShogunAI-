@@ -11,7 +11,7 @@ description = "SHOGUN memory: SQLite schema, versioned migrations, event log, st
 # testable on Linux CI. Data centre of gravity is Rust (AR-04); the webview never touches this.
 
 [dependencies]
-rusqlite = { version = "0.31", features = ["bundled"] }
+rusqlite = { version = "0.31", features = ["bundled-sqlcipher-vendored-openssl"] }
 sqlite-vec = "0.1"
 zerocopy = "0.7"
 refinery = { version = "0.8", features = ["rusqlite"] }

@@ -1250,8 +1250,48 @@ mod shortcuts {
     }
 }
 
+/// The Keychain account holding the database encryption key (service is the shared SHOGUN one).
+#[cfg(target_os = "macos")]
+const DB_KEY_ACCOUNT: &str = "memory-db-key";
+
+/// Read the database key from the Keychain, generating and storing one on first run.
+///
+/// The key lives in the Keychain and nowhere else (invariant 7) — never a file, never a log, and
+/// it is not derived from anything guessable. If the Keychain hands back something malformed we
+/// refuse rather than silently minting a new key, because a new key would make the existing
+/// memory permanently unreadable.
+#[cfg(target_os = "macos")]
+fn db_key() -> Result<shogun_memory::DbKey, String> {
+    const SERVICE: &str = "com.selectkk.shogun";
+    match security_framework::passwords::get_generic_password(SERVICE, DB_KEY_ACCOUNT) {
+        Ok(bytes) => {
+            let hex = String::from_utf8(bytes).map_err(|_| "db key is not valid text".to_string())?;
+            shogun_memory::DbKey::from_hex(&hex)
+                .ok_or_else(|| "db key in the Keychain is malformed — refusing to replace it".into())
+        }
+        Err(_) => {
+            // First run: mint a key from the OS CSPRNG.
+            let mut raw = [0u8; 32];
+            getrandom::getrandom(&mut raw).map_err(|e| format!("key generation failed: {e}"))?;
+            let key = shogun_memory::DbKey::new(raw);
+            security_framework::passwords::set_generic_password(
+                SERVICE,
+                DB_KEY_ACCOUNT,
+                key.to_hex().as_bytes(),
+            )
+            .map_err(|e| format!("could not store the db key: {e}"))?;
+            eprintln!("[spike] memory DB key created and stored in the Keychain");
+            Ok(key)
+        }
+    }
+}
+
 /// Open (creating if needed) the on-device memory DB under the app-data dir, with a real
 /// wall-clock. macOS-only; the DB is owned by the Rust core (CLAUDE.md invariant 1).
+///
+/// The database is encrypted at rest. An install that predates encryption still has a plaintext
+/// file, so it is converted in place first: the converted copy is written alongside, and only
+/// swapped in once it is complete — a failure mid-way leaves the original memory intact.
 #[cfg(target_os = "macos")]
 fn memory_db(app: &tauri::App) -> Result<shogun_core::daemon::Db, String> {
     use tauri::Manager;
@@ -1259,11 +1299,35 @@ fn memory_db(app: &tauri::App) -> Result<shogun_core::daemon::Db, String> {
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let path = dir.join("memory.db");
     eprintln!("[spike] memory DB: {}", path.display());
+    let key = db_key()?;
+
+    if shogun_memory::is_plaintext_db(&path) {
+        eprintln!("[spike] existing plaintext memory DB found — encrypting it");
+        let converted = dir.join("memory.db.encrypting");
+        let _ = std::fs::remove_file(&converted);
+        shogun_memory::encrypt_existing(&path, &converted, &key)
+            .map_err(|e| format!("encrypting the existing DB failed: {e}"))?;
+        // Keep the plaintext original until the swap succeeds, then remove it.
+        let backup = dir.join("memory.db.plaintext-backup");
+        std::fs::rename(&path, &backup).map_err(|e| format!("backup failed: {e}"))?;
+        match std::fs::rename(&converted, &path) {
+            Ok(()) => {
+                let _ = std::fs::remove_file(&backup);
+                eprintln!("[spike] memory DB encrypted in place");
+            }
+            Err(e) => {
+                // Put the original back — the user's memory must survive a failed upgrade.
+                let _ = std::fs::rename(&backup, &path);
+                return Err(format!("swapping in the encrypted DB failed: {e}"));
+            }
+        }
+    }
+
     let clock = std::sync::Arc::new(|| {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as i64)
             .unwrap_or(0)
     });
-    shogun_core::daemon::Db::open(path, clock).map_err(|e| e.to_string())
+    shogun_core::daemon::Db::open_encrypted(path, &key, clock).map_err(|e| e.to_string())
 }
