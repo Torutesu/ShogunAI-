@@ -590,6 +590,19 @@ kbd {
   opacity: 0.4;
   cursor: default;
 }
+.keyrow__btn--danger {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 40%, var(--line));
+}
+.keyrow__btn--danger:not(:disabled):hover {
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+}
+.confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+}
 
 @media (prefers-reduced-motion: reduce) {
   * {

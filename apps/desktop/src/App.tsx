@@ -261,7 +261,14 @@ export function App(): JSX.Element {
     <div className="stage">
       <div className="panel">
         {showSettings ? (
-          <Settings appearance={appearance} setAppearance={setAppearance} hasKey={!!status?.has_key} onDone={() => setShowSettings(false)} onCleared={refreshState} />
+          <Settings
+            appearance={appearance}
+            setAppearance={setAppearance}
+            hasKey={!!status?.has_key}
+            stateCount={state.commitments.length + state.open_loops.length}
+            onDone={() => setShowSettings(false)}
+            onCleared={refreshState}
+          />
         ) : (
           <>
             <header className="head" onMouseDown={beginDrag}>
@@ -398,16 +405,24 @@ function Settings(props: {
   appearance: Appearance;
   setAppearance: (a: Appearance) => void;
   hasKey: boolean;
+  stateCount: number;
   onDone: () => void;
   onCleared: () => void;
 }): JSX.Element {
-  const { appearance, setAppearance, hasKey, onDone, onCleared } = props;
+  const { appearance, setAppearance, hasKey, stateCount, onDone, onCleared } = props;
+  // Clearing extracted state is destructive and context is foundational, so it is a deliberate
+  // two-step: reveal a typed confirmation, and only a matching "CLEAR" enables the delete.
+  const [confirming, setConfirming] = useState(false);
+  const [confirmText, setConfirmText] = useState("");
   const [cleared, setCleared] = useState(false);
+  const canClear = confirmText.trim().toUpperCase() === "CLEAR";
   const clearMemory = (): void => {
-    if (!IN_TAURI) return;
+    if (!IN_TAURI || !canClear) return;
     void invoke("clear_memory")
       .then(() => {
         setCleared(true);
+        setConfirming(false);
+        setConfirmText("");
         onCleared();
       })
       .catch(() => undefined);
@@ -652,12 +667,59 @@ function Settings(props: {
         <section className="set">
           <div className="set__label">{t.memory}</div>
           <div className="set__hint">{t.memoryHint}</div>
-          <div className="keyrow">
-            <button className="keyrow__btn" type="button" onClick={clearMemory}>
-              {t.memoryClear}
-            </button>
-            {cleared ? <span className="set__hint is-ok">{t.memoryCleared}</span> : null}
-          </div>
+          {!confirming ? (
+            <div className="keyrow">
+              <button
+                className="keyrow__btn keyrow__btn--danger"
+                type="button"
+                onClick={() => {
+                  setConfirming(true);
+                  setCleared(false);
+                }}
+                disabled={stateCount === 0}
+              >
+                {stateCount > 0 ? `${t.memoryClear} (${stateCount})` : t.memoryClear}
+              </button>
+              {cleared ? <span className="set__hint is-ok">{t.memoryCleared}</span> : null}
+            </div>
+          ) : (
+            <div className="confirm">
+              <div className="set__hint is-err">{t.memoryConfirm.replace("{n}", String(stateCount))}</div>
+              <div className="keyrow">
+                <input
+                  className="keyrow__input"
+                  placeholder={t.memoryConfirmPlaceholder}
+                  value={confirmText}
+                  autoFocus
+                  autoComplete="off"
+                  onFocus={() => {
+                    if (IN_TAURI) void invoke("focus_field", { focused: true }).catch(() => undefined);
+                  }}
+                  onChange={(e) => setConfirmText(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && canClear) clearMemory();
+                    if (e.key === "Escape") {
+                      setConfirming(false);
+                      setConfirmText("");
+                    }
+                  }}
+                />
+                <button
+                  className="keyrow__btn"
+                  type="button"
+                  onClick={() => {
+                    setConfirming(false);
+                    setConfirmText("");
+                  }}
+                >
+                  {t.cancel}
+                </button>
+                <button className="keyrow__btn keyrow__btn--danger" type="button" onClick={clearMemory} disabled={!canClear}>
+                  {t.memoryClearConfirm}
+                </button>
+              </div>
+            </div>
+          )}
         </section>
       </div>
     </div>

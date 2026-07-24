@@ -59,11 +59,15 @@ export const STRINGS = {
     // state rows
     resolveHint: "Click to mark done",
     stateEmpty: "Nothing tracked yet.",
-    // memory reset
+    // memory reset (deliberate, typed confirmation — context is foundational)
     memory: "Memory",
-    memoryHint: "Clears what SHOGUN has extracted (commitments and open loops). Your history isn't touched.",
+    memoryHint: "Removes the commitments and open loops SHOGUN extracted. Your captured history stays. This can't be undone.",
     memoryClear: "Clear extracted state",
+    memoryConfirm: "Permanently delete {n} extracted items? Type CLEAR to confirm.",
+    memoryConfirmPlaceholder: "Type CLEAR",
+    memoryClearConfirm: "Delete",
     memoryCleared: "Cleared.",
+    cancel: "Cancel",
     // errors
     noAnswer: "(no response)",
     answerFailed: "Couldn't answer",
