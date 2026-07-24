@@ -87,7 +87,7 @@
 
 ### 4-3. 接続（第1層 読み取り）
 
-- [ ] 設定ウィンドウを開く（`open_settings` コマンド／将来はメニュー導線）
+- [ ] 設定ウィンドウを開く: **⌘⇧,（カンマ）** グローバルショートカット（`open_settings` コマンドも同等）
 - [ ] Connections で **Gmail** の Connect → ブラウザ認可 →「SHOGUN is connected」表示
 - [ ] Keychainにトークンが入ったか:
       `security find-generic-password -s com.selectkk.shogun -a gmail-tokenset`
