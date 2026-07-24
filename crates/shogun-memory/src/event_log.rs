@@ -68,7 +68,13 @@ pub fn insert_with_thread(
             thread_key,
         ],
     )?;
-    Ok(conn.last_insert_rowid())
+    let id = conn.last_insert_rowid();
+    // Keep the thread index in step with the log. Failing to index must not fail the write —
+    // the event is the durable record; a thread row can be rebuilt from it.
+    if let Some(key) = thread_key.as_deref() {
+        let _ = crate::thread::upsert_from_event(conn, key, ev.source, ev.window_title, ev.ts);
+    }
+    Ok(id)
 }
 
 /// Insert the event, or — if the most recent event from the same source already has this

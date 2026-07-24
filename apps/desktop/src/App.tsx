@@ -633,6 +633,59 @@ const CONN_STATE_LABEL: Record<ConnState, string> = {
   coming_soon: "Coming soon",
 };
 
+// AI coding-tool transcripts. Opt-in: a session log is a transcript of the user's work, so
+// nothing is read until they say so.
+function AiSessionsSection(): JSX.Element {
+  const [on, setOn] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!IN_TAURI) return;
+    void invoke<boolean>("get_ai_session_import").then(setOn).catch(() => undefined);
+  }, []);
+
+  const toggle = (next: boolean): void => {
+    if (!IN_TAURI) {
+      setOn(next);
+      return;
+    }
+    setBusy(true);
+    void invoke<boolean>("set_ai_session_import", { enabled: next })
+      .then(setOn)
+      .catch(() => undefined)
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <section className="set">
+      <div className="set__label" id="seg-ai-sessions">{t.aiSessions}</div>
+      <div className="seg" role="radiogroup" aria-labelledby="seg-ai-sessions">
+        <button
+          type="button"
+          role="radio"
+          aria-checked={on}
+          disabled={busy}
+          className={`seg__opt${on ? " is-on" : ""}`}
+          onClick={() => toggle(true)}
+        >
+          {t.aiSessionsOn}
+        </button>
+        <button
+          type="button"
+          role="radio"
+          aria-checked={!on}
+          disabled={busy}
+          className={`seg__opt${!on ? " is-on" : ""}`}
+          onClick={() => toggle(false)}
+        >
+          {t.aiSessionsOff}
+        </button>
+      </div>
+      <div className="set__hint">{t.aiSessionsHint}</div>
+    </section>
+  );
+}
+
 function ConnectionsSection(): JSX.Element {
   const [rows, setRows] = useState<ServiceStatus[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
@@ -994,6 +1047,7 @@ function Settings(props: {
       <div className="settings__body">
         <ApprovalsSection />
         <ConnectionsSection />
+        <AiSessionsSection />
         <section className="set">
           <div className="set__label" id="seg-appearance">{t.appearance}</div>
           <div className="seg" role="radiogroup" aria-labelledby="seg-appearance">

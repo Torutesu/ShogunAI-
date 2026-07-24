@@ -71,6 +71,36 @@ pub struct ContextPack {
     pub evidence: Vec<Evidence>,
 }
 
+/// One candidate answer to "which thread is this question about".
+#[derive(Debug, Clone, PartialEq)]
+pub struct ThreadCandidate {
+    pub thread_key: String,
+    pub title: Option<String>,
+    pub score: f64,
+}
+
+/// The outcome of resolving a referring question ([`Db::resolve_referent`]). `candidates` is
+/// best-first and is what the UI offers when the verdict is `Ambiguous`.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ReferentOutcome {
+    pub verdict: shogun_memory::thread::Referent,
+    pub candidates: Vec<ThreadCandidate>,
+}
+
+/// Fraction of the thread title's words that appear in the question — the lexical agreement term
+/// of salience. Words of one or two characters are skipped as too common to carry signal.
+fn title_overlap(question_lower: &str, title_lower: &str) -> f64 {
+    let words: Vec<&str> = title_lower
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| w.chars().count() > 2)
+        .collect();
+    if words.is_empty() {
+        return 0.0;
+    }
+    let hits = words.iter().filter(|w| question_lower.contains(**w)).count();
+    hits as f64 / words.len() as f64
+}
+
 /// The shared connection handle. `Connection` is `Send` but not `Sync`, so it lives behind a
 /// `Mutex`; the `Arc` lets every daemon component share the one handle.
 pub type SharedConn = Arc<Mutex<Connection>>;
@@ -369,6 +399,46 @@ impl Db {
             }
         }
         summary
+    }
+
+    /// Resolve what a referring question ("how's that going?") is about.
+    ///
+    /// Ranks the recently-active threads by [`shogun_memory::thread::salience`] and classifies the
+    /// result. When two threads are close the answer is [`Referent::Ambiguous`] and the caller must
+    /// ask rather than pick: answering confidently about the wrong piece of someone's work is a
+    /// worse failure than one clarifying question.
+    ///
+    /// `on_screen` is the thread the user is currently looking at, when known — the strongest
+    /// single signal for what "that" means.
+    pub fn resolve_referent(&self, query: &str, on_screen: Option<&str>) -> ReferentOutcome {
+        use shogun_memory::thread;
+        let now = self.now_ms();
+        let Ok(conn) = self.conn.lock() else {
+            return ReferentOutcome::default();
+        };
+        let Ok(threads) = thread::recent(&conn, 20) else {
+            return ReferentOutcome::default();
+        };
+        let loops = thread::open_loop_counts(&conn).unwrap_or_default();
+        // Lexical agreement between the question and the thread's own title.
+        let q = query.to_lowercase();
+        let mut scored: Vec<ThreadCandidate> = threads
+            .into_iter()
+            .map(|t| {
+                let title = t.title.clone().unwrap_or_default();
+                let lexical = title_overlap(&q, &title.to_lowercase());
+                let score = thread::salience(thread::Salience {
+                    age_ms: now - t.last_activity_at,
+                    open_loops: loops.get(&t.thread_key).copied().unwrap_or(0),
+                    on_screen: on_screen == Some(t.thread_key.as_str()),
+                    lexical_match: lexical,
+                });
+                ThreadCandidate { thread_key: t.thread_key, title: t.title, score }
+            })
+            .collect();
+        scored.sort_by(|a, b| b.score.total_cmp(&a.score));
+        let scores: Vec<f64> = scored.iter().map(|c| c.score).collect();
+        ReferentOutcome { verdict: thread::resolve(&scores), candidates: scored }
     }
 
     /// Assemble the grounded context for one question (Phase R1 of the context-layer plan).
@@ -1056,6 +1126,92 @@ mod tests {
         assert_eq!(summary.jobs_completed, 2);
         assert_eq!(summary.duration_ms, 250);
         assert!(summary.completed_fully);
+    }
+
+    /// "How's that going?" with one obvious candidate resolves to it.
+    #[test]
+    fn a_referring_question_resolves_when_one_thread_clearly_dominates() {
+        use shogun_memory::thread::Referent;
+        let now = 10_000_000_000;
+        let db = Db::open_in_memory(clock(now)).unwrap();
+        // One thread touched just now, one a week ago.
+        db.capture(&NewEvent {
+            window_title: Some("Q3 pricing"),
+            ..ev("vendor pricing settled at 12k", "h1", now - 1_000)
+        })
+        .unwrap();
+        db.capture(&NewEvent {
+            window_title: Some("Old holiday plans"),
+            ..ev("beach or mountains", "h2", now - 7 * 24 * 3_600_000)
+        })
+        .unwrap();
+
+        let out = db.resolve_referent("how's that going?", None);
+        assert_eq!(out.verdict, Referent::Resolved, "candidates: {:?}", out.candidates);
+        assert!(
+            out.candidates[0].title.as_deref() == Some("Q3 pricing"),
+            "the live thread wins: {:?}",
+            out.candidates
+        );
+    }
+
+    /// Two equally-plausible threads must produce a question, not a guess. This is the behaviour
+    /// that keeps a confident wrong answer about someone's work from ever being given.
+    #[test]
+    fn two_equally_live_threads_are_ambiguous_rather_than_guessed() {
+        use shogun_memory::thread::Referent;
+        let now = 10_000_000_000;
+        let db = Db::open_in_memory(clock(now)).unwrap();
+        db.capture(&NewEvent { window_title: Some("Alpha"), ..ev("alpha notes", "h1", now - 1_000) })
+            .unwrap();
+        db.capture(&NewEvent { window_title: Some("Beta"), ..ev("beta notes", "h2", now - 1_100) })
+            .unwrap();
+
+        let out = db.resolve_referent("any update on that?", None);
+        assert_eq!(out.verdict, Referent::Ambiguous, "candidates: {:?}", out.candidates);
+        assert!(out.candidates.len() >= 2, "the UI needs something to offer");
+    }
+
+    /// Naming the thread in the question breaks the tie without needing to ask.
+    #[test]
+    fn the_users_own_words_break_a_tie() {
+        use shogun_memory::thread::Referent;
+        let now = 10_000_000_000;
+        let db = Db::open_in_memory(clock(now)).unwrap();
+        db.capture(&NewEvent { window_title: Some("Alpha"), ..ev("alpha notes", "h1", now - 1_000) })
+            .unwrap();
+        db.capture(&NewEvent { window_title: Some("Beta"), ..ev("beta notes", "h2", now - 1_100) })
+            .unwrap();
+
+        let out = db.resolve_referent("any update on that alpha thing?", None);
+        assert_eq!(out.verdict, Referent::Resolved);
+        assert_eq!(out.candidates[0].title.as_deref(), Some("Alpha"));
+    }
+
+    /// What the user is looking at is a strong signal for what "that" means.
+    #[test]
+    fn the_thread_on_screen_wins_a_tie() {
+        use shogun_memory::thread::Referent;
+        let now = 10_000_000_000;
+        let db = Db::open_in_memory(clock(now)).unwrap();
+        db.capture(&NewEvent { window_title: Some("Alpha"), ..ev("alpha notes", "h1", now - 1_000) })
+            .unwrap();
+        db.capture(&NewEvent { window_title: Some("Beta"), ..ev("beta notes", "h2", now - 1_100) })
+            .unwrap();
+        let beta_key =
+            shogun_memory::thread::thread_key("capture", None, Some("com.apple.Safari"), Some("Beta"))
+                .unwrap();
+
+        let out = db.resolve_referent("any update on that?", Some(&beta_key));
+        assert_eq!(out.verdict, Referent::Resolved);
+        assert_eq!(out.candidates[0].title.as_deref(), Some("Beta"));
+    }
+
+    #[test]
+    fn an_empty_memory_has_no_referent_to_offer() {
+        use shogun_memory::thread::Referent;
+        let db = Db::open_in_memory(clock(1000)).unwrap();
+        assert_eq!(db.resolve_referent("how's that going?", None).verdict, Referent::None);
     }
 
     /// The point of the semantic half: a question that shares no words with the answer still

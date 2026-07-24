@@ -6,6 +6,7 @@
 //! `axcache` runs on focus events and must never be triggered by the state machine
 //! (the "no collect-on-press" proof, spec §3.10.3).
 
+mod ai_sessions;
 mod approvals;
 mod axcache;
 mod capture_source;
@@ -120,6 +121,8 @@ pub fn run() {
         approvals::mac::list_approvals,
         approvals::mac::confirm_send,
         approvals::mac::reject_send,
+        ai_sessions::mac::get_ai_session_import,
+        ai_sessions::mac::set_ai_session_import,
     ]);
 
     // NOTE: the visible surface is a NATIVE NSPanel hosting the webview's content view
@@ -307,6 +310,10 @@ fn setup_macos(app: &tauri::App) {
             let policy = shogun_core::capture::exclusion::ExclusionPolicy::new();
             let _ = capture_source::spawn_capture_poller(db.clone(), policy, None);
             eprintln!("[spike] capture source started (poll {}ms)", capture_source::DEFAULT_POLL_MS);
+
+            // AI coding-tool transcripts (opt-in): a large share of the work happens there, and
+            // the tools' own session logs carry role/time/session id that screen capture cannot.
+            ai_sessions::mac::spawn_importer(app.handle().clone(), db.clone());
 
             // First-layer connectors (§6.9). Build the auto-refreshing runtime and start the
             // 15-min read-sync poller. Missing Google creds (env) is not fatal — the app runs

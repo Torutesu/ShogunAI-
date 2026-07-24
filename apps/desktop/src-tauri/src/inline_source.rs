@@ -541,9 +541,41 @@ pub mod mac {
     }
 
     fn chat_blocking(db: &Db, message: &str) -> Result<String, String> {
+        use shogun_memory::thread::Referent;
+
+        // A question that refers to something without naming it ("how's that going?") can't be
+        // answered by search — the words that would match aren't in it. Resolve which thread it
+        // means first, and if two are equally plausible, ask instead of guessing: a confident
+        // answer about the wrong piece of the user's work is the failure that loses their trust.
+        let mut query = message.to_string();
+        if shogun_memory::thread::is_referring(message) {
+            let outcome = db.resolve_referent(message, None);
+            match outcome.verdict {
+                Referent::Ambiguous => {
+                    let options: Vec<String> = outcome
+                        .candidates
+                        .iter()
+                        .take(3)
+                        .filter_map(|c| c.title.clone())
+                        .collect();
+                    if !options.is_empty() {
+                        return Ok(format!("Which one — {}?", options.join(", or ")));
+                    }
+                }
+                Referent::Resolved => {
+                    // Fold the resolved thread's own words into the query so retrieval has
+                    // something to match on.
+                    if let Some(t) = outcome.candidates.first().and_then(|c| c.title.as_deref()) {
+                        query = format!("{message} {t}");
+                    }
+                }
+                Referent::None => {}
+            }
+        }
+
         // Retrieval + state facts: the question decides what history comes along, so "what
         // happened with X" can actually be answered from the event log.
-        let ctx = db.assemble_context(message, CHAT_EVIDENCE_HITS, CHAT_EVIDENCE_CHARS);
+        let ctx = db.assemble_context(&query, CHAT_EVIDENCE_HITS, CHAT_EVIDENCE_CHARS);
         let agent = build_agent(db);
         // Without a key the agent is the echo mock, whose "answer" is the prompt itself — printing
         // that in the thread dumps SHOGUN's entire internal prompt at the user. Say what is

@@ -30,6 +30,12 @@ export const STRINGS = {
     connect: "Connect",
     connecting: "Connecting…",
     disconnect: "Disconnect",
+    // AI coding-tool transcripts (opt-in source)
+    aiSessions: "AI sessions",
+    aiSessionsHint:
+      "Read your local AI coding-tool transcripts so SHOGUN remembers what you worked on and decided there. Stays on your device.",
+    aiSessionsOn: "Importing",
+    aiSessionsOff: "Off",
     // approvals (L3 confirmation queue — anything leaving the device)
     approvals: "Approvals",
     approvalsHint: "Anything that leaves your device waits here for your explicit confirmation.",

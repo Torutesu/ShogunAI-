@@ -98,13 +98,14 @@ pub fn salience(s: Salience) -> f64 {
 /// Answering the wrong thread is worse than asking which one — a confident wrong answer about
 /// someone's work destroys trust, while one clarifying question costs a second. So the decision is
 /// the *margin* between the top two, not the top score: two plausible threads means ask.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Referent {
     /// One clear winner — answer from it.
     Resolved,
     /// Several plausible candidates — ask which, do not guess.
     Ambiguous,
     /// Nothing worth pointing at.
+    #[default]
     None,
 }
 
@@ -127,6 +128,110 @@ pub fn resolve(scores_desc: &[f64]) -> Referent {
             }
         }
     }
+}
+
+/// Does this question refer to something without naming it ("how's that going?")?
+///
+/// A named question ("what did Alice say about pricing?") is answered by search; a referring one
+/// has to be resolved to a thread first, and getting that wrong means confidently answering about
+/// the wrong piece of work. The cues are deliberately narrow — a false positive sends a
+/// perfectly answerable question down the disambiguation path.
+///
+/// English leads, as everywhere; the Japanese forms are additive and, being in their own script,
+/// cannot fire on English text.
+pub fn is_referring(query: &str) -> bool {
+    let q = query.trim().to_lowercase();
+    const EN: &[&str] = &[
+        "that thing", "that one", "that project", "that issue", "that ticket",
+        "the thing we", "the one we", "what we discussed", "what we talked about",
+        "how's that", "how is that", "where are we on that", "any update on that",
+        "status of that", "that other",
+    ];
+    const JA: &[&str] = &["あの件", "その件", "例の", "さっきの", "先ほどの", "この件"];
+    EN.iter().chain(JA.iter()).any(|c| q.contains(c))
+}
+
+// ------------------------------------------------------------------ persistence
+
+/// A thread row as stored.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ThreadRow {
+    pub id: i64,
+    pub thread_key: String,
+    pub source: String,
+    pub title: Option<String>,
+    pub last_activity_at: i64,
+    pub event_count: i64,
+}
+
+/// Record that an event belongs to a thread, creating the thread on first sight and extending its
+/// activity window otherwise.
+///
+/// The title is only set when the thread has none: the first title seen is usually the cleanest,
+/// and later captures of the same window often carry noisier variants.
+pub fn upsert_from_event(
+    conn: &rusqlite::Connection,
+    thread_key: &str,
+    source: &str,
+    title: Option<&str>,
+    ts: i64,
+) -> Result<i64, rusqlite::Error> {
+    use rusqlite::params;
+    conn.execute(
+        "INSERT INTO threads
+           (thread_key, source, title, first_activity_at, last_activity_at, event_count,
+            salience, confidence, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?4, 1, 0.0, 0.5, ?4, ?4)
+         ON CONFLICT(thread_key) DO UPDATE SET
+           last_activity_at = max(last_activity_at, excluded.last_activity_at),
+           first_activity_at = min(first_activity_at, excluded.first_activity_at),
+           event_count = event_count + 1,
+           title = COALESCE(title, excluded.title),
+           updated_at = excluded.updated_at",
+        params![thread_key, source, title, ts],
+    )?;
+    conn.query_row("SELECT id FROM threads WHERE thread_key = ?1", params![thread_key], |r| r.get(0))
+}
+
+/// The most recently active threads — the candidate pool a referring question is resolved against.
+/// Bounded because salience is dominated by recency: a thread untouched for weeks is not what
+/// "that thing" means.
+pub fn recent(
+    conn: &rusqlite::Connection,
+    limit: usize,
+) -> Result<Vec<ThreadRow>, rusqlite::Error> {
+    use rusqlite::params;
+    let mut stmt = conn.prepare(
+        "SELECT id, thread_key, source, title, last_activity_at, event_count
+           FROM threads ORDER BY last_activity_at DESC LIMIT ?1",
+    )?;
+    let rows = stmt.query_map(params![limit as i64], |r| {
+        Ok(ThreadRow {
+            id: r.get(0)?,
+            thread_key: r.get(1)?,
+            source: r.get(2)?,
+            title: r.get(3)?,
+            last_activity_at: r.get(4)?,
+            event_count: r.get(5)?,
+        })
+    })?;
+    rows.collect()
+}
+
+/// Open loops currently attached to each thread, via the events that evidence them.
+pub fn open_loop_counts(
+    conn: &rusqlite::Connection,
+) -> Result<std::collections::HashMap<String, usize>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT e.thread_key, count(DISTINCT l.id)
+           FROM open_loops l
+           JOIN state_provenance p ON p.state_id = l.id AND p.state_table = 'open_loops'
+           JOIN event_log e ON e.id = p.event_id
+          WHERE l.status = 'open' AND e.thread_key IS NOT NULL
+          GROUP BY e.thread_key",
+    )?;
+    let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as usize)))?;
+    rows.collect::<Result<Vec<_>, _>>().map(|v| v.into_iter().collect())
 }
 
 #[cfg(test)]
@@ -216,5 +321,69 @@ mod tests {
     fn a_weak_top_candidate_is_not_a_referent() {
         assert_eq!(resolve(&[0.10]), Referent::None);
         assert_eq!(resolve(&[]), Referent::None);
+    }
+
+    #[test]
+    fn referring_questions_are_recognised_in_both_languages() {
+        for q in [
+            "how's that going?",
+            "any update on that?",
+            "what we discussed yesterday",
+            "あの件どうなってる?",
+            "その件の進捗は",
+        ] {
+            assert!(is_referring(q), "should be referring: {q}");
+        }
+    }
+
+    #[test]
+    fn named_questions_are_not_sent_down_the_disambiguation_path() {
+        // These are answerable directly; treating them as referring would make SHOGUN ask a
+        // pointless clarifying question.
+        for q in [
+            "what did Alice say about pricing?",
+            "when is the vendor renewal due?",
+            "send the deck",
+            "資料の期限は?",
+        ] {
+            assert!(!is_referring(q), "should not be referring: {q}");
+        }
+    }
+
+    fn conn() -> rusqlite::Connection {
+        crate::open_in_memory().unwrap()
+    }
+
+    #[test]
+    fn a_thread_is_created_once_then_extended() {
+        let c = conn();
+        let a = upsert_from_event(&c, "gmail:1", "gmail", Some("Q3 pricing"), 100).unwrap();
+        let b = upsert_from_event(&c, "gmail:1", "gmail", Some("(2) Q3 pricing"), 300).unwrap();
+        assert_eq!(a, b, "same key is one thread");
+
+        let rows = recent(&c, 10).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].event_count, 2);
+        assert_eq!(rows[0].last_activity_at, 300, "activity window extends");
+        assert_eq!(rows[0].title.as_deref(), Some("Q3 pricing"), "the first title is kept");
+    }
+
+    #[test]
+    fn an_out_of_order_event_does_not_rewind_the_activity_window() {
+        let c = conn();
+        upsert_from_event(&c, "gmail:1", "gmail", None, 500).unwrap();
+        upsert_from_event(&c, "gmail:1", "gmail", None, 100).unwrap();
+        let rows = recent(&c, 10).unwrap();
+        assert_eq!(rows[0].last_activity_at, 500, "a late-arriving older event must not rewind it");
+    }
+
+    #[test]
+    fn recent_threads_come_back_newest_first() {
+        let c = conn();
+        upsert_from_event(&c, "a", "capture", None, 100).unwrap();
+        upsert_from_event(&c, "b", "capture", None, 300).unwrap();
+        upsert_from_event(&c, "c", "capture", None, 200).unwrap();
+        let keys: Vec<String> = recent(&c, 10).unwrap().into_iter().map(|t| t.thread_key).collect();
+        assert_eq!(keys, vec!["b", "c", "a"]);
     }
 }
