@@ -33,7 +33,9 @@ shogun-core = { path = "../../../crates/shogun-core" }
 # The memory DB is only wired in on-device (capture_source persists through it). Enabling `db`
 # here (not in the base [dependencies]) keeps rusqlite out of the Linux resolution graph.
 # `net` adds the real HTTPS transport so the inline draft can call the BYOK Agent lane on device.
-shogun-core = { path = "../../../crates/shogun-core", features = ["db", "net"] }
+# `exec` (= db + net + agents) brings the send-execution path (send_exec + the HTTP clients) into
+# the app without the standalone axum server, for the L3 approval → send wiring.
+shogun-core = { path = "../../../crates/shogun-core", features = ["db", "net", "exec"] }
 # BYOK key read from the macOS Keychain (invariant 7 — secrets never in a file/DB/log).
 security-framework = "3"
 # A dedicated runtime to block the (async) Agent-lane call on the inline trigger thread.

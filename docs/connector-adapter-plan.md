@@ -40,10 +40,11 @@ OAuthブラウザフロー、ライブMCP接続）はmacOSビルドが必要で�
 
 OAuthクライアント登録の人間側手順は `docs/oauth-client-setup.md` に分離。
 
-**未配線（item B）**: 送信実行トランスポート（`daemon-server`）とHTTPクライアント（`net`）は
-`net+daemon-server`ビルドで共存確認済みだが、**実アプリ（desktop, 現状 db+net）には承認キューの
-ドレイン＋送信実行が未結線**。ライブ送信にはこの結線 + Composio APIキー(Keychain) + connected
-accountのuser_idが必要。
+| **item B 承認キュー→送信実行の実アプリ結線**: `exec`フィーチャ（送信パスをaxum抜きでdesktopへ）、`ApprovalQueueState`、Tauriコマンド `submit_send`/`list_approvals`/`confirm_send`/`reject_send`、`RoutedSendTransport`結線（Composio失敗時ドラフト退避含む）、L3確認UI（`Approvals.tsx`、全文表示・専用ボタン確認）、設定ウィンドウに統合 | ✅ 結線済み（CI macOSで検証） |
+
+**残るライブ前提（人間側）**: Composio APIキー(Keychain `composio-api-key`) + connected account
+の `SHOGUN_COMPOSIO_USER_ID`。送信の**プロデューサ（エージェントがsendを提案してキューへ）**は
+別機能で、現状は `submit_send` コマンドが入口（UI/手動/将来のエージェント共通）。
 
 **この環境（Linux）で検証できたのはここまで。** 純ロジック（マッピング・PKCE・ゲート・状態遷移）は
 全部テスト付き。実I/O（ネットワーク・Keychain・ブラウザ）はmacOSビルドが必要で継ぎ目まで用意済み。

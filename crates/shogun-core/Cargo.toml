@@ -30,7 +30,11 @@ net = ["dep:reqwest", "dep:shogun-integrations", "dep:shogun-mcp"]
 db = ["dep:shogun-memory", "dep:rusqlite", "dep:shogun-fusion", "dep:shogun-mcp", "dep:shogun-integrations"]
 # `daemon-server` builds the runnable `shogun-api` binary: it composes the DB, the DB-backed
 # Memory API backend, the shared approval queue, and the axum REST listener into one process.
-daemon-server = ["db", "shogun-mcp/server", "dep:shogun-agents", "tokio/rt-multi-thread", "tokio/macros"]
+# `exec` is the connector execution path WITHOUT the standalone axum server: the send-execution
+# transports (send_exec) + the HTTP clients (net) + the approval vocabulary (agents). The desktop
+# enables this; the daemon-server bundle builds on it and adds axum.
+exec = ["db", "net", "dep:shogun-agents"]
+daemon-server = ["exec", "shogun-mcp/server", "tokio/rt-multi-thread", "tokio/macros"]
 
 [dependencies]
 tokio = { version = "1", features = ["sync"] }

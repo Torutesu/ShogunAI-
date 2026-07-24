@@ -2,7 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { App } from "./App";
-import { Connections } from "./Connections";
+import { Settings } from "./Settings";
 import "./styles.css";
 
 // Both windows load this same bundle; pick what to render by the Tauri window label. The `settings`
@@ -19,6 +19,6 @@ function isSettingsWindow(): boolean {
 const root = document.getElementById("root");
 if (root) {
   ReactDOM.createRoot(root).render(
-    <React.StrictMode>{isSettingsWindow() ? <Connections /> : <App />}</React.StrictMode>,
+    <React.StrictMode>{isSettingsWindow() ? <Settings /> : <App />}</React.StrictMode>,
   );
 }

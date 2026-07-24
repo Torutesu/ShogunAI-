@@ -32,10 +32,13 @@ pub mod mac {
     const KEYCHAIN_SERVICE: &str = "com.selectkk.shogun";
 
     /// The concrete transport stack: HTTPS MCP calls whose token is auto-refreshed from the Keychain.
-    type Provider = ManagedTokenProvider<HttpTokenExchange, KeychainTokenStore>;
-    type Transport = RemoteMcpTransport<HttpMcpRpc<Provider>>;
+    pub type Provider = ManagedTokenProvider<HttpTokenExchange, KeychainTokenStore>;
+    pub type Transport = RemoteMcpTransport<HttpMcpRpc<Provider>>;
+    /// The concrete connector runtime (shared by the poller, the connector commands, and the
+    /// approval-queue send executor).
+    pub type Runtime = ConnectorRuntime<Transport>;
     /// The runtime owned by the app (behind a Mutex; the poller and the commands share it).
-    pub struct ConnectorState(pub Arc<Mutex<ConnectorRuntime<Transport>>>);
+    pub struct ConnectorState(pub Arc<Mutex<Runtime>>);
 
     /// The OAuth client for one service, from the env — Google and Slack are different vendors
     /// with different endpoints and different registered apps, so the config MUST be per-service

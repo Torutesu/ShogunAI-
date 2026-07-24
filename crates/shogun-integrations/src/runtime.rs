@@ -213,6 +213,21 @@ impl<T: IntegrationTransport> ConnectorRuntime<T> {
     }
 }
 
+impl<T: IntegrationTransport + WriteExecutor> ConnectorRuntime<T> {
+    /// The normal write path: gate + execute using the runtime's **own** transport as the executor
+    /// (the live `RemoteMcpTransport` is a [`WriteExecutor`]). [`Self::execute_write`] keeps a
+    /// separate-executor form for tests; production wiring uses this so it never has to hand the
+    /// runtime its own transport from outside.
+    pub fn execute_write_owned(
+        &self,
+        service: Service,
+        op_name: &str,
+        arguments: Value,
+    ) -> Result<Value, String> {
+        self.execute_write(service, op_name, arguments, &self.transport)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

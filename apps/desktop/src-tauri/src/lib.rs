@@ -6,6 +6,7 @@
 //! `axcache` runs on focus events and must never be triggered by the state machine
 //! (the "no collect-on-press" proof, spec §3.10.3).
 
+mod approvals;
 mod axcache;
 mod capture_source;
 mod connectors;
@@ -48,6 +49,10 @@ pub fn run() {
         connectors::mac::connect_service,
         connectors::mac::disconnect_service,
         connectors::mac::open_settings,
+        approvals::mac::submit_send,
+        approvals::mac::list_approvals,
+        approvals::mac::confirm_send,
+        approvals::mac::reject_send,
     ]);
 
     // NOTE: do NOT add .on_page_load here — with the NSPanel-swapped window it trips a
@@ -191,6 +196,8 @@ fn setup_macos(app: &tauri::App) {
                     let shared = std::sync::Arc::new(std::sync::Mutex::new(rt));
                     connectors::mac::spawn_sync_poller(shared.clone(), db.clone());
                     app.manage(connectors::mac::ConnectorState(shared));
+                    // The shared L3 approval queue (producers enqueue sends; the UI confirms them).
+                    app.manage(approvals::mac::ApprovalQueueState::default());
                     eprintln!("[spike] connector runtime started (read-sync poller live)");
                 }
                 Err(e) => eprintln!("[spike] connectors not started: {e}"),
