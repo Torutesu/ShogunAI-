@@ -1,78 +1,93 @@
 /* SHOGUN panel — a translucent glass panel that hangs from the notch. The window is resized to
-   fit (handle vs open), so this file just styles the two surfaces. Theme-aware; dark default. */
+   fit (handle vs open), so this file just styles the two surfaces. Theme-aware; dark default.
+   Design language: soft glass, generous corner radii, layered rounded cards. */
 :root {
-  --glass: rgba(22, 25, 31, 0.82);
-  --glass-2: rgba(30, 34, 41, 0.82);
-  --line: rgba(255, 255, 255, 0.1);
-  --line-strong: rgba(255, 255, 255, 0.18);
+  --glass: rgba(21, 24, 31, 0.85);
+  --glass-2: rgba(31, 35, 43, 0.85);
+  --line: rgba(255, 255, 255, 0.09);
+  --line-strong: rgba(255, 255, 255, 0.16);
   --ink: #eef1f5;
   --muted: #9aa3af;
   --faint: #8b95a3;
   --accent: #6ea8fe;
-  --accent-ink: #071119;
+  --accent-2: #8f7dfb;
+  --accent-ink: #06101c;
+  --accent-soft: color-mix(in srgb, var(--accent) 26%, transparent);
   --live: #30d158;
   --warn: #ff9f0a;
-  --fill: rgba(255, 255, 255, 0.07);
-  --fill-strong: rgba(255, 255, 255, 0.13);
+  --fill: rgba(255, 255, 255, 0.06);
+  --fill-strong: rgba(255, 255, 255, 0.12);
+  --card: rgba(255, 255, 255, 0.045);
   --sys: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --sp: 150ms cubic-bezier(0.32, 0.72, 0, 1);
-  /* type scale (5 steps), radii, spacing — kill the half-pixel accretion */
+  --sp: 160ms cubic-bezier(0.32, 0.72, 0, 1);
+  /* type scale */
   --fs-xs: 11px;
   --fs-sm: 12px;
   --fs-md: 13px;
   --fs-lg: 14px;
   --fs-xl: 15px;
-  --r-sm: 8px;
-  --r-md: 10px;
+  /* rounder-everywhere radius scale */
+  --r-xs: 8px;
+  --r-sm: 12px;
+  --r-md: 16px;
+  --r-lg: 20px;
+  --r-xl: 26px;
   --r-pill: 999px;
 }
 /* Bare :root doubles as the JS-not-ready bootstrap default AND explicit dark, so keep them in
    sync in one place (App.tsx always sets data-appearance now, but the bootstrap default must
    still be dark to avoid a light flash). */
 :root[data-appearance="dark"] {
-  --glass: rgba(22, 25, 31, 0.82);
-  --glass-2: rgba(30, 34, 41, 0.82);
-  --line: rgba(255, 255, 255, 0.1);
-  --line-strong: rgba(255, 255, 255, 0.18);
+  --glass: rgba(21, 24, 31, 0.85);
+  --glass-2: rgba(31, 35, 43, 0.85);
+  --line: rgba(255, 255, 255, 0.09);
+  --line-strong: rgba(255, 255, 255, 0.16);
   --ink: #eef1f5;
   --muted: #9aa3af;
   --faint: #8b95a3;
   --accent: #6ea8fe;
+  --accent-2: #8f7dfb;
+  --accent-ink: #06101c;
   --live: #30d158;
   --warn: #ff9f0a;
-  --fill: rgba(255, 255, 255, 0.07);
-  --fill-strong: rgba(255, 255, 255, 0.13);
+  --fill: rgba(255, 255, 255, 0.06);
+  --fill-strong: rgba(255, 255, 255, 0.12);
+  --card: rgba(255, 255, 255, 0.045);
 }
 :root[data-appearance="light"] {
-  --glass: rgba(250, 251, 253, 0.9);
-  --glass-2: rgba(255, 255, 255, 0.9);
-  --line: rgba(0, 0, 0, 0.1);
-  --line-strong: rgba(0, 0, 0, 0.17);
+  --glass: rgba(249, 250, 252, 0.92);
+  --glass-2: rgba(255, 255, 255, 0.92);
+  --line: rgba(0, 0, 0, 0.09);
+  --line-strong: rgba(0, 0, 0, 0.16);
   --ink: #1b1d22;
   --muted: #5c616a;
   --faint: #6b7280;
   --accent: #2f6fed;
+  --accent-2: #6a53e6;
   --accent-ink: #ffffff;
   --live: #1f9e3c;
   --warn: #a4560a;
-  --fill: rgba(0, 0, 0, 0.05);
-  --fill-strong: rgba(0, 0, 0, 0.1);
+  --fill: rgba(0, 0, 0, 0.045);
+  --fill-strong: rgba(0, 0, 0, 0.09);
+  --card: rgba(0, 0, 0, 0.035);
 }
 @media (prefers-color-scheme: light) {
   :root[data-appearance="auto"] {
-    --glass: rgba(250, 251, 253, 0.9);
-    --glass-2: rgba(255, 255, 255, 0.9);
-    --line: rgba(0, 0, 0, 0.1);
-    --line-strong: rgba(0, 0, 0, 0.17);
+    --glass: rgba(249, 250, 252, 0.92);
+    --glass-2: rgba(255, 255, 255, 0.92);
+    --line: rgba(0, 0, 0, 0.09);
+    --line-strong: rgba(0, 0, 0, 0.16);
     --ink: #1b1d22;
     --muted: #5c616a;
     --faint: #6b7280;
     --accent: #2f6fed;
+    --accent-2: #6a53e6;
     --accent-ink: #ffffff;
     --live: #1f9e3c;
     --warn: #a4560a;
-    --fill: rgba(0, 0, 0, 0.05);
-    --fill-strong: rgba(0, 0, 0, 0.1);
+    --fill: rgba(0, 0, 0, 0.045);
+    --fill-strong: rgba(0, 0, 0, 0.09);
+    --card: rgba(0, 0, 0, 0.035);
   }
 }
 
@@ -96,7 +111,7 @@ body {
 }
 :focus-visible {
   outline: 2px solid var(--accent);
-  outline-offset: 1px;
+  outline-offset: 2px;
 }
 
 .stage {
@@ -116,13 +131,13 @@ body {
   gap: 10px;
   width: 100%;
   height: 100%;
-  padding: 0 16px;
+  padding: 0 18px;
   background: var(--glass);
   -webkit-backdrop-filter: blur(30px) saturate(1.7);
   backdrop-filter: blur(30px) saturate(1.7);
   border: 1px solid var(--line);
   border-top: none;
-  border-radius: 0 0 16px 16px;
+  border-radius: 0 0 var(--r-lg) var(--r-lg);
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.44);
   color: var(--ink);
   font: inherit;
@@ -142,8 +157,8 @@ body {
 .handle__live {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
-  font-size: 12.5px;
+  gap: 8px;
+  font-size: var(--fs-sm);
   color: var(--muted);
   min-width: 0;
   flex: 1;
@@ -157,8 +172,12 @@ body {
 }
 .handle__count {
   flex: none;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--muted);
+  background: var(--fill);
+  border: 1px solid var(--line);
+  border-radius: var(--r-pill);
+  padding: 3px 9px;
 }
 
 /* open panel */
@@ -168,12 +187,12 @@ body {
   display: flex;
   flex-direction: column;
   background: var(--glass);
-  -webkit-backdrop-filter: blur(36px) saturate(1.8);
-  backdrop-filter: blur(36px) saturate(1.8);
+  -webkit-backdrop-filter: blur(38px) saturate(1.8);
+  backdrop-filter: blur(38px) saturate(1.8);
   border: 1px solid var(--line);
   border-top: none;
-  border-radius: 0 0 20px 20px;
-  box-shadow: 0 26px 64px rgba(0, 0, 0, 0.52), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  border-radius: 0 0 var(--r-xl) var(--r-xl);
+  box-shadow: 0 28px 66px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.06);
   overflow: hidden;
   transform-origin: top center;
   animation: panel-unfurl 200ms cubic-bezier(0.32, 0.72, 0, 1);
@@ -215,7 +234,7 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 11px 10px 11px 14px;
+  padding: 12px 12px 12px 16px;
   border-bottom: 1px solid var(--line);
   cursor: grab;
 }
@@ -230,8 +249,8 @@ body {
 .live {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
-  font-size: 12.5px;
+  gap: 8px;
+  font-size: var(--fs-sm);
   color: var(--muted);
   min-width: 0;
 }
@@ -254,25 +273,31 @@ body {
   color: var(--muted);
   font: inherit;
   font-family: var(--sys);
-  font-size: 11px;
-  border-radius: 999px;
-  padding: 4px 10px;
+  font-size: var(--fs-xs);
+  border-radius: var(--r-pill);
+  padding: 5px 12px;
   cursor: pointer;
   white-space: nowrap;
+  transition: background var(--sp), color var(--sp), border-color var(--sp);
+}
+.chip:hover {
+  background: var(--fill-strong);
+  color: var(--ink);
 }
 .chip[aria-pressed="true"] {
   color: var(--ink);
   border-color: var(--line-strong);
+  background: var(--fill-strong);
 }
 .icon {
   display: grid;
   place-items: center;
-  width: 27px;
-  height: 27px;
+  width: 30px;
+  height: 30px;
   border: none;
   background: transparent;
   color: var(--muted);
-  border-radius: 7px;
+  border-radius: var(--r-sm);
   font-size: 13px;
   cursor: pointer;
   transition: background var(--sp), color var(--sp);
@@ -285,9 +310,9 @@ body {
 /* state list */
 .state {
   flex: none;
-  max-height: 84px;
+  max-height: 92px;
   overflow-y: auto;
-  padding: 4px 14px 8px;
+  padding: 6px 10px 8px;
   border-bottom: 1px solid var(--line);
 }
 .state__row {
@@ -295,28 +320,29 @@ body {
   align-items: baseline;
   justify-content: space-between;
   gap: 8px;
-  padding: 6px 6px;
+  padding: 8px 8px;
   width: 100%;
   text-align: left;
   background: none;
   border: none;
-  border-radius: 8px;
+  border-radius: var(--r-sm);
   cursor: pointer;
   color: inherit;
   font: inherit;
+  transition: background var(--sp);
 }
 .state__row:hover {
   background: var(--fill);
 }
 .state__check {
   flex: none;
-  width: 15px;
-  height: 15px;
+  width: 16px;
+  height: 16px;
   align-self: center;
   display: inline-grid;
   place-items: center;
   border-radius: 50%;
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-strong);
   color: var(--faint);
   opacity: 0.5;
   font-size: 10px;
@@ -329,7 +355,7 @@ body {
   background: var(--fill-strong);
 }
 .state__text {
-  font-size: 12.5px;
+  font-size: var(--fs-md);
   color: var(--ink);
   min-width: 0;
   flex: 1;
@@ -338,12 +364,12 @@ body {
   white-space: nowrap;
 }
 .state__empty {
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--faint);
-  padding: 8px 6px;
+  padding: 8px 8px;
 }
 .state__meta {
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
   color: var(--faint);
   flex: none;
 }
@@ -357,7 +383,7 @@ body {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 10px 14px;
+  padding: 12px 14px;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -367,28 +393,32 @@ body {
   max-width: 46ch;
 }
 .welcome__t {
-  font-size: 15px;
+  font-size: var(--fs-xl);
   font-weight: 640;
   letter-spacing: -0.01em;
   text-wrap: balance;
 }
 .welcome__s {
-  margin-top: 5px;
-  font-size: 12px;
-  line-height: 1.5;
+  margin-top: 6px;
+  font-size: var(--fs-sm);
+  line-height: 1.55;
   color: var(--muted);
 }
 .welcome__key {
-  margin-top: 10px;
-  font-size: 11.5px;
+  margin-top: 12px;
+  font-size: var(--fs-sm);
   color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warn) 30%, var(--line));
+  border-radius: var(--r-sm);
+  padding: 8px 11px;
 }
 .msg {
-  max-width: 88%;
-  padding: 8px 11px;
-  border-radius: 13px;
-  font-size: 13px;
-  line-height: 1.5;
+  max-width: 86%;
+  padding: 9px 13px;
+  border-radius: var(--r-lg);
+  font-size: var(--fs-md);
+  line-height: 1.55;
   white-space: pre-wrap;
   /* Answers are worth copying — let the user select message text (the rest of the panel chrome
      stays user-select:none from body). */
@@ -410,7 +440,7 @@ body {
   align-self: flex-end;
   background: var(--accent);
   color: var(--accent-ink);
-  border-bottom-right-radius: 4px;
+  border-bottom-right-radius: var(--r-xs);
   font-weight: 500;
 }
 .msg--shogun {
@@ -418,13 +448,13 @@ body {
   background: var(--fill);
   color: var(--ink);
   border: 1px solid var(--line);
-  border-bottom-left-radius: 4px;
+  border-bottom-left-radius: var(--r-xs);
 }
 .msg--think {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 12px 12px;
+  padding: 13px 14px;
 }
 .think__dot {
   width: 5px;
@@ -457,59 +487,71 @@ body {
   flex: none;
   display: flex;
   align-items: center;
-  gap: 7px;
-  padding: 10px 12px 12px;
+  gap: 8px;
+  padding: 11px 12px 13px;
   border-top: 1px solid var(--line);
 }
 .composer__draft {
   flex: none;
-  width: 36px;
-  height: 36px;
+  width: 40px;
+  height: 40px;
   border: 1px solid var(--line-strong);
   background: var(--fill);
   color: var(--ink);
-  border-radius: 10px;
+  border-radius: var(--r-md);
   font-size: 15px;
   cursor: pointer;
-  transition: background var(--sp);
+  transition: background var(--sp), transform var(--sp);
 }
 .composer__draft:hover {
   background: var(--fill-strong);
 }
+.composer__draft:active {
+  transform: scale(0.94);
+}
 .composer__input {
   flex: 1;
   min-width: 0;
-  background: var(--fill);
-  border: 1px solid var(--line-strong);
-  border-radius: 10px;
-  padding: 9px 12px;
+  background: var(--fill-strong);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  padding: 11px 14px;
   color: var(--ink);
   font: inherit;
   font-family: var(--sys);
-  font-size: 13.5px;
+  font-size: var(--fs-lg);
   outline: none;
+  transition: border-color var(--sp), background var(--sp);
+}
+.composer__input:hover {
+  border-color: var(--line-strong);
 }
 .composer__input::placeholder {
   color: var(--faint);
 }
 .composer__send {
   flex: none;
-  width: 36px;
-  height: 36px;
+  width: 40px;
+  height: 40px;
   border: none;
-  border-radius: 10px;
-  background: var(--accent);
+  border-radius: var(--r-md);
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
   color: var(--accent-ink);
   font-size: 16px;
   cursor: pointer;
-  transition: filter var(--sp);
+  box-shadow: 0 4px 14px var(--accent-soft);
+  transition: filter var(--sp), transform var(--sp), box-shadow var(--sp);
 }
 .composer__send:disabled {
   opacity: 0.4;
   cursor: default;
+  box-shadow: none;
 }
 .composer__send:not(:disabled):hover {
-  filter: brightness(1.06);
+  filter: brightness(1.07);
+}
+.composer__send:not(:disabled):active {
+  transform: scale(0.94);
 }
 
 /* settings */
@@ -524,11 +566,11 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 12px 12px 15px;
+  padding: 12px 12px 12px 16px;
   border-bottom: 1px solid var(--line);
 }
 .settings__title {
-  font-size: 14px;
+  font-size: var(--fs-lg);
   font-weight: 640;
   letter-spacing: -0.01em;
 }
@@ -536,25 +578,28 @@ body {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 6px 15px 16px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
+/* each setting group is a soft rounded card — grouping + roundness in one move */
 .set {
-  padding: 14px 0;
-  border-bottom: 1px solid var(--line);
-}
-.set:last-child {
-  border-bottom: none;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  padding: 13px 14px;
 }
 .set__label {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--faint);
-  margin-bottom: 9px;
+  margin-bottom: 10px;
 }
 .set__hint {
   margin-top: 8px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   line-height: 1.5;
   color: var(--muted);
 }
@@ -573,7 +618,7 @@ body {
   padding: 5px 0;
 }
 .keys__name {
-  font-size: 12.5px;
+  font-size: var(--fs-md);
   color: var(--ink);
 }
 .keys__combo {
@@ -590,13 +635,13 @@ body {
 .keys__btn {
   border: none;
   background: transparent;
-  padding: 2px;
-  border-radius: 7px;
+  padding: 3px;
+  border-radius: var(--r-xs);
   cursor: pointer;
   transition: background var(--sp);
 }
 .keys__btn:hover {
-  background: var(--fill);
+  background: var(--fill-strong);
 }
 .keys__rec {
   border: 1px dashed var(--accent);
@@ -604,9 +649,9 @@ body {
   color: var(--accent);
   font: inherit;
   font-family: var(--sys);
-  font-size: 11.5px;
-  padding: 4px 10px;
-  border-radius: 7px;
+  font-size: var(--fs-sm);
+  padding: 5px 11px;
+  border-radius: var(--r-sm);
   cursor: text;
 }
 .set__hint.is-err {
@@ -617,8 +662,8 @@ body {
   gap: 4px;
   background: var(--fill);
   border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 3px;
+  border-radius: var(--r-md);
+  padding: 4px;
 }
 .seg__opt {
   flex: 1;
@@ -627,11 +672,14 @@ body {
   color: var(--muted);
   font: inherit;
   font-family: var(--sys);
-  font-size: 12.5px;
-  padding: 7px 0;
-  border-radius: 7px;
+  font-size: var(--fs-sm);
+  padding: 8px 0;
+  border-radius: var(--r-sm);
   cursor: pointer;
   transition: background var(--sp), color var(--sp);
+}
+.seg__opt:hover {
+  color: var(--ink);
 }
 .seg__opt.is-on {
   background: var(--fill-strong);
@@ -645,14 +693,14 @@ body {
 kbd {
   display: inline-grid;
   place-items: center;
-  min-width: 22px;
-  height: 22px;
-  padding: 0 5px;
-  border-radius: 5px;
+  min-width: 23px;
+  height: 23px;
+  padding: 0 6px;
+  border-radius: var(--r-xs);
   background: var(--fill-strong);
   border: 1px solid var(--line);
   font-family: var(--sys);
-  font-size: 11.5px;
+  font-size: var(--fs-sm);
   font-weight: 700;
 }
 
@@ -660,29 +708,37 @@ kbd {
 .keyrow {
   display: flex;
   gap: 6px;
-  margin-top: 6px;
+  margin-top: 8px;
 }
 .keyrow__input {
   flex: 1;
   min-width: 0;
   font: inherit;
-  font-size: 12px;
-  padding: 6px 8px;
-  border-radius: 8px;
+  font-size: var(--fs-sm);
+  padding: 8px 11px;
+  border-radius: var(--r-sm);
   border: 1px solid var(--line);
   background: var(--fill-strong);
   color: var(--ink);
   outline: none;
+  transition: border-color var(--sp);
+}
+.keyrow__input:hover {
+  border-color: var(--line-strong);
 }
 .keyrow__btn {
   font: inherit;
-  font-size: 12px;
-  padding: 6px 10px;
-  border-radius: 8px;
+  font-size: var(--fs-sm);
+  padding: 8px 13px;
+  border-radius: var(--r-sm);
   border: 1px solid var(--line);
   background: var(--fill-strong);
   color: var(--ink);
   cursor: pointer;
+  transition: background var(--sp);
+}
+.keyrow__btn:hover:not(:disabled) {
+  background: var(--fill);
 }
 .keyrow__btn:disabled {
   opacity: 0.4;
@@ -699,7 +755,7 @@ kbd {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  margin-top: 6px;
+  margin-top: 8px;
 }
 
 /* Inputs keep outline:none for the resting look; restore a clear ring on keyboard focus. */
