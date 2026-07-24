@@ -408,9 +408,11 @@ pub mod mac {
         eprintln!("[ui] {msg}");
     }
 
-    /// One state row for the "What I know" panel.
+    /// One state row for the "What I know" panel. Carries the row `id` so the UI can resolve it
+    /// (mark a commitment done / close an open loop) with a click.
     #[derive(serde::Serialize)]
     pub struct StateItem {
+        pub id: i64,
         pub text: String,
         pub meta: String,
     }
@@ -423,20 +425,48 @@ pub mod mac {
     #[tauri::command]
     pub fn shogun_state(db: tauri::State<'_, Db>) -> StateView {
         let now = db.now_ms();
+        // Read the rows WITH ids and hide already-resolved ones (done / cancelled / closed) so a
+        // click-to-resolve makes the row disappear.
         let commitments = db
-            .commitments_due(now)
+            .commitment_rows()
             .into_iter()
-            .map(|c| StateItem {
-                meta: if c.overdue { "overdue".into() } else { format!("{:.0}% sure", c.confidence * 100.0) },
-                text: c.description,
+            .filter(|c| c.status != "done" && c.status != "cancelled")
+            .map(|c| {
+                let overdue = c.status == "overdue" || c.due_at.is_some_and(|d| d < now);
+                StateItem {
+                    id: c.id,
+                    meta: if overdue { "overdue".into() } else { format!("{:.0}% sure", c.confidence * 100.0) },
+                    text: c.description,
+                }
             })
             .collect();
         let open_loops = db
-            .open_loops()
+            .open_loop_rows()
             .into_iter()
-            .map(|l| StateItem { meta: format!("{}d waiting", l.staleness_days), text: l.description })
+            .filter(|l| l.status != "closed")
+            .map(|l| StateItem { id: l.id, meta: format!("{}d waiting", l.staleness_days), text: l.description })
             .collect();
         StateView { commitments, open_loops }
+    }
+
+    /// Resolve a state row the user clicked: `kind` is "commitment" (→ done) or "open_loop"
+    /// (→ closed). Idempotent; unknown ids are a no-op.
+    #[tauri::command]
+    pub fn resolve_state_item(kind: String, id: i64, db: tauri::State<'_, Db>) -> bool {
+        match kind.as_str() {
+            "commitment" => db.resolve_commitment(id),
+            "open_loop" => db.resolve_open_loop(id),
+            _ => false,
+        }
+    }
+
+    /// Clear all extracted state (commitments + open loops). The event log, people, and projects
+    /// are untouched. The reset for when low-confidence extraction has accumulated noise.
+    #[tauri::command]
+    pub fn clear_memory(db: tauri::State<'_, Db>) -> bool {
+        let ok = db.clear_state();
+        eprintln!("[shell] clear_memory — extracted state cleared: {ok}");
+        ok
     }
 
     /// Build the chat prompt: the user's message grounded in confidence-gated memory (FR-ST-20).

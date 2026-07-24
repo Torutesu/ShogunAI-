@@ -56,6 +56,14 @@ export const STRINGS = {
     keySaved: "Saved to your Keychain — answers are live.",
     quit: "Quit SHOGUN",
     done: "Done",
+    // state rows
+    resolveHint: "Click to mark done",
+    stateEmpty: "Nothing tracked yet.",
+    // memory reset
+    memory: "Memory",
+    memoryHint: "Clears what SHOGUN has extracted (commitments and open loops). Your history isn't touched.",
+    memoryClear: "Clear extracted state",
+    memoryCleared: "Cleared.",
     // errors
     noAnswer: "(no response)",
     answerFailed: "Couldn't answer",

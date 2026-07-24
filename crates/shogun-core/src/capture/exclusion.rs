@@ -21,6 +21,9 @@ pub enum ExclusionReason {
     AuthDialog,
     /// A known browser in a private/incognito window.
     PrivateBrowsing,
+    /// A terminal / dev console (default-excluded): capturing shell scrollback produced junk
+    /// commitments from prompt lines rather than real work context.
+    Terminal,
     /// A user-added app (by bundle id).
     UserApp,
     /// A user-added title/URL substring pattern.
@@ -41,6 +44,21 @@ const PASSWORD_MANAGERS: &[&str] = &[
 
 /// The macOS auth agent (non-removable default).
 const AUTH_AGENTS: &[&str] = &["com.apple.SecurityAgent"];
+
+/// Terminals / dev consoles excluded by default. Shell scrollback (prompts, pasted commands, the
+/// user typing test phrases like "I'll send the deck") is not work context — capturing it filled
+/// the state tables with low-confidence junk commitments. Excluded up front so the memory stays
+/// about the user's actual work.
+const TERMINALS: &[&str] = &[
+    "com.apple.Terminal",
+    "com.googlecode.iterm2",
+    "dev.warp.Warp-Stable",
+    "io.alacritty",
+    "net.kovidgoyal.kitty",
+    "com.github.wez.wezterm",
+    "co.zeit.hyper",
+    "org.tabby",
+];
 
 /// Known browsers whose private windows we can detect by title marker.
 const KNOWN_BROWSERS: &[&str] = &[
@@ -103,6 +121,9 @@ impl ExclusionPolicy {
         if AUTH_AGENTS.contains(&bundle_id) {
             return Some(ExclusionReason::AuthDialog);
         }
+        if TERMINALS.contains(&bundle_id) {
+            return Some(ExclusionReason::Terminal);
+        }
         if self.user_bundles.contains(bundle_id) {
             return Some(ExclusionReason::UserApp);
         }
@@ -136,6 +157,16 @@ mod tests {
         for pm in PASSWORD_MANAGERS {
             assert_eq!(p.is_excluded(pm, None), Some(ExclusionReason::PasswordManager), "{pm}");
         }
+    }
+
+    #[test]
+    fn terminals_are_excluded_by_default() {
+        let p = ExclusionPolicy::new();
+        for term in TERMINALS {
+            assert_eq!(p.is_excluded(term, None), Some(ExclusionReason::Terminal), "{term}");
+        }
+        // a non-terminal app is still captured
+        assert_eq!(p.is_excluded("com.apple.mail", None), None);
     }
 
     #[test]

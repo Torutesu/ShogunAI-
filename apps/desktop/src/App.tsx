@@ -52,6 +52,7 @@ interface Status {
   has_key: boolean;
 }
 interface StateItem {
+  id: number;
   text: string;
   meta: string;
 }
@@ -71,10 +72,10 @@ const H_HANDLE = 44;
 const MOCK_STATUS: Status = { app: "com.apple.mail", commitments: 2, open_loops: 1, has_key: false };
 const MOCK_STATE: StateView = {
   commitments: [
-    { text: "Send Alice the Q3 deck", meta: "overdue" },
-    { text: "Reply to the vendor about pricing", meta: "70% sure" },
+    { id: 1, text: "Send Alice the Q3 deck", meta: "overdue" },
+    { id: 2, text: "Reply to the vendor about pricing", meta: "70% sure" },
   ],
-  open_loops: [{ text: "Waiting on legal sign-off", meta: "3d waiting" }],
+  open_loops: [{ id: 1, text: "Waiting on legal sign-off", meta: "3d waiting" }],
 };
 
 function appName(bundle: string): string {
@@ -172,20 +173,29 @@ export function App(): JSX.Element {
     };
   }, []);
 
+  const refreshState = useCallback((): void => {
+    if (!IN_TAURI) return;
+    void invoke<Status>("shogun_status").then((s) => setStatus(s)).catch(() => undefined);
+    void invoke<StateView>("shogun_state").then((s) => s && setState(s)).catch(() => undefined);
+  }, []);
+
   useEffect(() => {
     if (!IN_TAURI) return;
-    let live = true;
-    const pull = (): void => {
-      void invoke<Status>("shogun_status").then((s) => live && setStatus(s)).catch(() => undefined);
-      void invoke<StateView>("shogun_state").then((s) => live && s && setState(s)).catch(() => undefined);
-    };
-    pull();
-    const id = setInterval(pull, 3000);
-    return () => {
-      live = false;
-      clearInterval(id);
-    };
-  }, []);
+    refreshState();
+    const id = setInterval(refreshState, 3000);
+    return () => clearInterval(id);
+  }, [refreshState]);
+
+  // Click a state row to resolve it (commitment → done, open loop → closed); refresh immediately.
+  const resolveItem = (kind: "commitment" | "open_loop", id: number): void => {
+    if (!IN_TAURI) return;
+    // Optimistic: drop it from the list now so the click feels instant.
+    setState((s) => ({
+      commitments: kind === "commitment" ? s.commitments.filter((c) => c.id !== id) : s.commitments,
+      open_loops: kind === "open_loop" ? s.open_loops.filter((l) => l.id !== id) : s.open_loops,
+    }));
+    void invoke("resolve_state_item", { kind, id }).then(refreshState).catch(() => refreshState());
+  };
 
   useEffect(() => {
     threadRef.current?.scrollTo({ top: threadRef.current.scrollHeight, behavior: "smooth" });
@@ -251,7 +261,7 @@ export function App(): JSX.Element {
     <div className="stage">
       <div className="panel">
         {showSettings ? (
-          <Settings appearance={appearance} setAppearance={setAppearance} hasKey={!!status?.has_key} onDone={() => setShowSettings(false)} />
+          <Settings appearance={appearance} setAppearance={setAppearance} hasKey={!!status?.has_key} onDone={() => setShowSettings(false)} onCleared={refreshState} />
         ) : (
           <>
             <header className="head" onMouseDown={beginDrag}>
@@ -286,18 +296,23 @@ export function App(): JSX.Element {
 
             {showState ? (
               <div className="state">
-                {state.commitments.map((c, i) => (
-                  <div key={`c${i}`} className="state__row">
+                {state.commitments.map((c) => (
+                  <button key={`c${c.id}`} type="button" className="state__row" onClick={() => resolveItem("commitment", c.id)} title={t.resolveHint}>
+                    <span className="state__check">✓</span>
                     <span className="state__text">{c.text}</span>
                     <span className={`state__meta ${c.meta === "overdue" ? "is-over" : ""}`}>{c.meta}</span>
-                  </div>
+                  </button>
                 ))}
-                {state.open_loops.map((l, i) => (
-                  <div key={`l${i}`} className="state__row">
+                {state.open_loops.map((l) => (
+                  <button key={`l${l.id}`} type="button" className="state__row" onClick={() => resolveItem("open_loop", l.id)} title={t.resolveHint}>
+                    <span className="state__check">✓</span>
                     <span className="state__text">{l.text}</span>
                     <span className="state__meta">{l.meta}</span>
-                  </div>
+                  </button>
                 ))}
+                {state.commitments.length + state.open_loops.length === 0 ? (
+                  <div className="state__empty">{t.stateEmpty}</div>
+                ) : null}
               </div>
             ) : null}
 
@@ -384,8 +399,19 @@ function Settings(props: {
   setAppearance: (a: Appearance) => void;
   hasKey: boolean;
   onDone: () => void;
+  onCleared: () => void;
 }): JSX.Element {
-  const { appearance, setAppearance, hasKey, onDone } = props;
+  const { appearance, setAppearance, hasKey, onDone, onCleared } = props;
+  const [cleared, setCleared] = useState(false);
+  const clearMemory = (): void => {
+    if (!IN_TAURI) return;
+    void invoke("clear_memory")
+      .then(() => {
+        setCleared(true);
+        onCleared();
+      })
+      .catch(() => undefined);
+  };
   const [binds, setBinds] = useState<Record<string, string>>(DEFAULT_BINDS);
   const [recording, setRecording] = useState<string | null>(null);
   const [keyErr, setKeyErr] = useState("");
@@ -622,6 +648,16 @@ function Settings(props: {
             ) : null}
           </div>
           {keyMsg ? <div className="set__hint">{keyMsg}</div> : null}
+        </section>
+        <section className="set">
+          <div className="set__label">{t.memory}</div>
+          <div className="set__hint">{t.memoryHint}</div>
+          <div className="keyrow">
+            <button className="keyrow__btn" type="button" onClick={clearMemory}>
+              {t.memoryClear}
+            </button>
+            {cleared ? <span className="set__hint is-ok">{t.memoryCleared}</span> : null}
+          </div>
         </section>
       </div>
     </div>

@@ -499,6 +499,42 @@ impl Db {
         self.conn.lock().ok().and_then(|c| state::get_commitment(&c, id).ok()).flatten()
     }
 
+    /// All commitment rows with ids (panel list — the UI needs the id to resolve a row).
+    pub fn commitment_rows(&self) -> Vec<state::CommitmentRow> {
+        self.conn.lock().ok().and_then(|c| state::list_commitments(&c).ok()).unwrap_or_default()
+    }
+
+    /// All open-loop rows with ids (panel list).
+    pub fn open_loop_rows(&self) -> Vec<state::OpenLoopRow> {
+        self.conn.lock().ok().and_then(|c| state::list_open_loops(&c).ok()).unwrap_or_default()
+    }
+
+    /// Mark a commitment done (user resolved it from the panel). `true` if a row changed.
+    pub fn resolve_commitment(&self, id: i64) -> bool {
+        let now = self.now_ms();
+        self.conn
+            .lock()
+            .ok()
+            .and_then(|c| state::set_commitment_status(&c, id, state::CommitmentStatus::Done, now).ok())
+            .is_some_and(|n| n > 0)
+    }
+
+    /// Close an open loop (user resolved it from the panel). `true` if a row changed.
+    pub fn resolve_open_loop(&self, id: i64) -> bool {
+        let now = self.now_ms();
+        self.conn
+            .lock()
+            .ok()
+            .and_then(|c| state::close_open_loop(&c, id, now).ok())
+            .is_some_and(|n| n > 0)
+    }
+
+    /// Delete all extracted state (commitments + open loops + their provenance). Event log,
+    /// people, and projects are untouched. `true` on success.
+    pub fn clear_state(&self) -> bool {
+        self.conn.lock().ok().and_then(|mut c| state::clear_state(&mut c).ok()).is_some()
+    }
+
     /// One open loop by id (`state.open_loops.get`).
     pub fn open_loop(&self, id: i64) -> Option<state::OpenLoopRow> {
         self.conn.lock().ok().and_then(|c| state::get_open_loop(&c, id).ok()).flatten()

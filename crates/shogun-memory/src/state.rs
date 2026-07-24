@@ -324,6 +324,44 @@ pub fn insert_open_loop(
     })
 }
 
+// ---------------------------------------------------------------- state mutations (user actions)
+
+/// Set a commitment's status (e.g. `Done` when the user resolves it from the panel). Bumps
+/// `updated_at`. Returns the number of rows changed (0 if the id is unknown).
+pub fn set_commitment_status(
+    conn: &Connection,
+    id: i64,
+    status: CommitmentStatus,
+    now: i64,
+) -> Result<usize, rusqlite::Error> {
+    conn.execute(
+        "UPDATE commitments SET status = ?1, updated_at = ?2 WHERE id = ?3",
+        params![status.as_str(), now, id],
+    )
+}
+
+/// Close an open loop (the user resolved it). Bumps `updated_at`. Returns rows changed.
+pub fn close_open_loop(conn: &Connection, id: i64, now: i64) -> Result<usize, rusqlite::Error> {
+    conn.execute(
+        "UPDATE open_loops SET status = 'closed', updated_at = ?1 WHERE id = ?2",
+        params![now, id],
+    )
+}
+
+/// Delete ALL extracted state — commitments, open loops, and their provenance links — leaving the
+/// event log, people, and projects intact. The "clear extracted state" reset when the low-
+/// confidence local-rule extraction has accumulated noise. Runs in one transaction.
+pub fn clear_state(conn: &mut Connection) -> Result<(), rusqlite::Error> {
+    let tx = conn.transaction()?;
+    tx.execute(
+        "DELETE FROM state_provenance WHERE state_table IN ('commitments', 'open_loops')",
+        [],
+    )?;
+    tx.execute("DELETE FROM commitments", [])?;
+    tx.execute("DELETE FROM open_loops", [])?;
+    tx.commit()
+}
+
 // ---------------------------------------------------------------- reads (Fusion / Brief supply)
 
 /// A commitment read back for Fusion / Morning Brief. `first_event_id` is the earliest provenance
