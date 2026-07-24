@@ -581,6 +581,12 @@ body {
   gap: 4px;
   flex: none;
 }
+/* Draft's ⌥-tap trigger is fixed, not rebindable — show it dimmer and non-interactive. */
+.keys__combo--fixed {
+  padding: 2px;
+  opacity: 0.8;
+  cursor: default;
+}
 .keys__btn {
   border: none;
   background: transparent;

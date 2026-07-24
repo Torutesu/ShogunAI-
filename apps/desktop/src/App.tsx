@@ -120,7 +120,10 @@ function saveJson(key: string, value: unknown): void {
 }
 
 export function App(): JSX.Element {
-  const [open, setOpen] = useState<boolean>(() => loadJson("shogun.open", true));
+  // Always launch EXPANDED so the chat is visible immediately. (A stale collapsed flag in
+  // localStorage used to leave the window at open-size while rendering only the handle — a big
+  // empty panel showing just "reading …".) Minimize still collapses within the session.
+  const [open, setOpen] = useState<boolean>(true);
   const [status, setStatus] = useState<Status | null>(IN_TAURI ? null : MOCK_STATUS);
   const [state, setState] = useState<StateView>(IN_TAURI ? { commitments: [], open_loops: [] } : MOCK_STATE);
   const [ctxApp, setCtxApp] = useState<string>("");
@@ -390,9 +393,10 @@ export function App(): JSX.Element {
   );
 }
 
+// Draft is not here: it fires on a bare ⌥ (Option) tap, which can't be a global shortcut and so
+// isn't rebindable. Settings shows it as a fixed row.
 const DEFAULT_BINDS: Record<string, string> = {
   summon: "Control+Alt+KeyN",
-  draft: "Control+Alt+KeyG",
   quit: "Control+Alt+KeyQ",
 };
 const PROVIDERS: Array<{ id: string; label: string }> = [
@@ -402,7 +406,6 @@ const PROVIDERS: Array<{ id: string; label: string }> = [
 ];
 const SHORTCUT_ROWS: Array<{ action: string; label: string }> = [
   { action: "summon", label: t.summonShortcut },
-  { action: "draft", label: t.draftShortcut },
   { action: "quit", label: t.quitShortcut },
 ];
 
@@ -587,6 +590,14 @@ function Settings(props: {
         </section>
         <section className="set">
           <div className="set__label">{t.shortcuts}</div>
+          {/* Draft is a fixed ⌥-tap trigger (a bare modifier can't be a global shortcut), shown
+              here so it's discoverable but not presented as rebindable. */}
+          <div className="keys">
+            <span className="keys__name">{t.draftShortcut}</span>
+            <span className="keys__combo keys__combo--fixed" title={t.draftFixedHint}>
+              <kbd>⌥</kbd>
+            </span>
+          </div>
           {SHORTCUT_ROWS.map(({ action, label }) => (
             <div key={action} className="keys">
               <span className="keys__name">{label}</span>

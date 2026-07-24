@@ -1043,9 +1043,9 @@ fn register_expand_shortcut(app: &tauri::App) {
         Err(e) => eprintln!("[spike] global shortcut registration failed: {e}"),
     }
 
-    // Product shortcuts (summon / draft / quit) are USER-REBINDABLE: load persisted bindings
-    // (defaults: ⌃⌥N / ⌃⌥G / ⌃⌥Q) and register each; the Settings pane rebids them live via the
-    // set_shortcut command.
+    // Product shortcuts (summon / quit) are USER-REBINDABLE: load persisted bindings
+    // (defaults: ⌃⌥N / ⌃⌥Q) and register each; the Settings pane rebinds them live via the
+    // set_shortcut command. Draft is not here — it fires on a bare ⌥ tap (watch_option_tap).
     let handle = app.handle().clone();
     let binds = shortcuts::load(&handle);
     for (action, combo) in binds.iter() {
@@ -1070,15 +1070,15 @@ mod shortcuts {
     pub type Bindings = HashMap<String, String>;
     pub struct Store(pub Mutex<Bindings>);
 
-    const ACTIONS: [&str; 3] = ["summon", "draft", "quit"];
+    // Draft is intentionally NOT here: its ONLY trigger is tapping ⌥ alone (watch_option_tap). A
+    // bare modifier can't be a global shortcut, and the previous ⌃⌥G "alternative" only confused
+    // (it showed as rerebindable in Settings but the real trigger was the ⌥ tap). Summon and quit
+    // stay user-rebindable.
+    const ACTIONS: [&str; 2] = ["summon", "quit"];
 
     fn defaults() -> Bindings {
         let mut m = HashMap::new();
         m.insert("summon".into(), "Control+Alt+KeyN".into());
-        // The PRIMARY draft trigger is tapping ⌥ alone (watch_option_tap — a bare modifier can't
-        // be a global shortcut). This binding is the explicit, rebindable alternative; ⌃⌥G rather
-        // than ⌥G so no character-producing keystroke (⌥G = ©) is swallowed system-wide.
-        m.insert("draft".into(), "Control+Alt+KeyG".into());
         m.insert("quit".into(), "Control+Alt+KeyQ".into());
         m
     }
@@ -1098,8 +1098,9 @@ mod shortcuts {
     }
 
     /// The current on-disk version. v2 = the (short-lived) ⌥G draft default; v3 = draft back to
-    /// ⌃⌥G because the primary trigger became the ⌥ tap and ⌥G swallowed the © keystroke.
-    const SHORTCUTS_VERSION: u32 = 3;
+    /// ⌃⌥G; v4 = draft removed entirely (the ⌥ tap is the sole trigger). A v4 load drops any
+    /// persisted "draft" binding from disk (ACTIONS no longer contains it, so it's ignored anyway).
+    const SHORTCUTS_VERSION: u32 = 4;
 
     /// Load persisted bindings, filling any missing action with its default.
     pub fn load(app: &tauri::AppHandle) -> Bindings {
@@ -1130,12 +1131,8 @@ mod shortcuts {
                 }
             }
         }
-        // One-shot migrations (save() below stamps the current version, so a value the user later
-        // re-records deliberately is never touched again).
-        // v3: the v2 default ⌥G is retired (the ⌥ tap is the primary trigger; ⌥G stole ©).
-        if version < 3 && binds.get("draft").map(String::as_str) == Some("Alt+KeyG") {
-            binds.insert("draft".into(), "Control+Alt+KeyG".into());
-        }
+        // One-shot version bump: save() below stamps the current version and writes only ACTIONS
+        // entries, so any legacy "draft" binding on disk is dropped (draft is now ⌥-tap only).
         if version < SHORTCUTS_VERSION {
             save(app, &binds);
         }
@@ -1174,11 +1171,6 @@ mod shortcuts {
     fn dispatch(app: &tauri::AppHandle, action: &str) {
         match action {
             "summon" => crate::toggle_panel(app),
-            "draft" => {
-                if let Some(db) = app.try_state::<shogun_core::daemon::Db>() {
-                    crate::inline_source::mac::run_inline_at_cursor(db.inner().clone());
-                }
-            }
             "quit" => {
                 eprintln!("[shell] quit shortcut — exiting");
                 std::process::exit(0);

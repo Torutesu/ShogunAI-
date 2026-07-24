@@ -32,6 +32,7 @@ export const STRINGS = {
     stayOpenHint: "Keep the panel open until you close it.",
     autoHideHint: "Slide back to the notch when you move away.",
     draftShortcut: "Draft at cursor",
+    draftFixedHint: "Tap ⌥ (Option) alone — always on, not rebindable.",
     summonShortcut: "Show / hide overlay",
     quitShortcut: "Quit",
     shortcuts: "Shortcuts",
