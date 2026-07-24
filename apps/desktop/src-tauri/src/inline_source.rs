@@ -125,7 +125,8 @@ pub mod mac {
 
     /// The Agent-lane client for inline drafts. Real when a BYOK key is in the Keychain; otherwise a
     /// mock that echoes the prompt (so the AX read→insert loop is testable on device without a key).
-    enum InlineAgent {
+    /// `pub(crate)` + the `AgentClient` impl so other producers can draft through the same lane.
+    pub(crate) enum InlineAgent {
         Mock(MockAgentClient),
         Real {
             rt: tokio::runtime::Runtime,
@@ -155,7 +156,9 @@ pub mod mac {
 
     /// Build the Agent client for this run. Falls back to the mock (with a clear log) whenever the
     /// key is absent or the transport/runtime can't be built — the AX path stays testable.
-    fn build_agent(db: &Db) -> InlineAgent {
+    /// `pub(crate)` so the agent producers (e.g. Reply Drafter, `crate::approvals`) share the one
+    /// BYOK Agent-lane client construction (invariant 5) rather than re-deriving it.
+    pub(crate) fn build_agent(db: &Db) -> InlineAgent {
         let Some(key) = keychain_byok() else {
             eprintln!("[inline] no BYOK key in Keychain — using echo mock (AX path still runs)");
             return InlineAgent::Mock(MockAgentClient::new(ByokKey::new(Secret::new("mock"))));

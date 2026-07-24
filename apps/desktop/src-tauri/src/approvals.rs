@@ -18,10 +18,9 @@ pub mod mac {
     use std::sync::Mutex;
 
     use serde_json::json;
-    use shogun_agents::approval::{
-        ApprovalId, ApprovalQueue, ConfirmIntent, Decision, Origin, Preview, Route,
-    };
+    use shogun_agents::approval::{ApprovalId, ApprovalQueue, ConfirmIntent, Decision, Origin};
     use shogun_agents::permission::SendAction;
+    use shogun_agents::producer::{propose, ProposedSend};
     use shogun_core::composio_send::HttpComposioApi;
     use shogun_core::daemon::Db;
     use shogun_core::send_exec::{
@@ -53,30 +52,28 @@ pub mod mac {
         pub route: &'static str,
     }
 
-    fn route_str(route: Route) -> &'static str {
+    fn route_str(route: shogun_agents::approval::Route) -> &'static str {
         match route {
-            Route::DirectMcp => "direct",
-            Route::ViaComposio => "composio",
+            shogun_agents::approval::Route::DirectMcp => "direct",
+            shogun_agents::approval::Route::ViaComposio => "composio",
         }
     }
 
-    /// Build a [`SendAction`] + [`Preview`] from UI/agent input. Email routes ViaComposio (§6.10);
-    /// everything else is a direct first-layer send. Email `full_body` matches the
-    /// `prepare_send` "Subject: …\n\n…" shape so the executor can split it back.
-    fn build_send(kind: &str, destination: &str, subject: &str, body: &str) -> Result<(SendAction, Preview), String> {
-        let (action, full, route) = match kind {
-            "email" => (
-                SendAction::SendEmail { to: destination.to_string() },
-                format!("Subject: {subject}\n\n{body}"),
-                Route::ViaComposio,
-            ),
-            "slack" => (SendAction::PostMessage { channel: destination.to_string() }, body.to_string(), Route::DirectMcp),
-            "calendar" => (SendAction::CreateCalendarEvent { title: destination.to_string() }, body.to_string(), Route::DirectMcp),
-            "github" => (SendAction::PostComment { target: destination.to_string() }, body.to_string(), Route::DirectMcp),
+    /// Build a [`ProposedSend`] from UI/agent input. Email → Composio (§6.10); everything else →
+    /// direct first-layer. The action/preview/route construction is centralized in
+    /// `shogun_agents::producer`.
+    fn proposed(kind: &str, destination: &str, subject: &str, body: &str) -> Result<ProposedSend, String> {
+        Ok(match kind {
+            "email" => ProposedSend::Email {
+                to: destination.to_string(),
+                subject: subject.to_string(),
+                body: body.to_string(),
+            },
+            "slack" => ProposedSend::SlackPost { channel: destination.to_string(), body: body.to_string() },
+            "calendar" => ProposedSend::CalendarEvent { title: destination.to_string(), body: body.to_string() },
+            "github" => ProposedSend::IssueComment { target: destination.to_string(), body: body.to_string() },
             other => return Err(format!("unknown send kind: {other}")),
-        };
-        let preview = Preview::for_send(&action, full, route);
-        Ok((action, preview))
+        })
     }
 
     /// Enqueue a send for L3 confirmation. Returns the pending id. The producer is normally an agent
@@ -90,10 +87,40 @@ pub mod mac {
         state: tauri::State<'_, ApprovalQueueState>,
         db: tauri::State<'_, Db>,
     ) -> Result<u64, String> {
-        let (action, preview) = build_send(&kind, &destination, &subject, &body)?;
+        let proposal = proposed(&kind, &destination, &subject, &body)?;
         let now = db.now_ms().max(0) as u64;
         let mut q = state.0.lock().map_err(|_| "approval queue poisoned".to_string())?;
-        Ok(q.request(action, preview, Origin::Human, now).0)
+        Ok(propose(&mut q, &proposal, Origin::Human, now).0)
+    }
+
+    /// Reply Drafter (FR-AG-10) and the other draft-then-send agents: draft the body on the BYOK
+    /// Agent lane (invariant 5) from the given context, then enqueue it as an L3 proposal. `kind`
+    /// selects the send type (email/slack/calendar/github); `destination` is the recipient/channel/
+    /// title/target; `context` is the thread/screen text the draft is grounded in. Returns the
+    /// pending approval id. The human still confirms before anything sends (FR-AG-03).
+    #[tauri::command]
+    pub fn draft_reply(
+        kind: String,
+        destination: String,
+        subject: String,
+        context: String,
+        state: tauri::State<'_, ApprovalQueueState>,
+        db: tauri::State<'_, Db>,
+    ) -> Result<u64, String> {
+        use shogun_core::llm::AgentClient;
+        let prompt = format!(
+            "You are drafting a concise, professional {kind} reply. Use the context below; write \
+             only the reply body, no preamble.\n\n--- context ---\n{context}"
+        );
+        // Draft through the same BYOK Agent-lane client as inline drafts (invariant 5). Traceability
+        // is recorded by the client at the egress point.
+        let agent = crate::inline_source::mac::build_agent(&db);
+        let body = agent.complete(&prompt).map_err(|e| format!("draft failed: {e:?}"))?;
+
+        let proposal = proposed(&kind, &destination, &subject, &body)?;
+        let now = db.now_ms().max(0) as u64;
+        let mut q = state.0.lock().map_err(|_| "approval queue poisoned".to_string())?;
+        Ok(propose(&mut q, &proposal, Origin::Human, now).0)
     }
 
     /// List pending L3 confirmations (expiring any past the 10-minute window first).

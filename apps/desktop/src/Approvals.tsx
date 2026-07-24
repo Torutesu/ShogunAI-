@@ -12,6 +12,65 @@ interface ApprovalView {
   route: string; // "direct" | "composio"
 }
 
+// Rough draft-then-send form (the Reply Drafter producer entry). A real agent proposes these from
+// context; this manual form makes the producer → approve → send loop exercisable.
+function DraftForm({ onDrafted }: { onDrafted: () => void }): JSX.Element {
+  const [kind, setKind] = useState("email");
+  const [destination, setDestination] = useState("");
+  const [subject, setSubject] = useState("");
+  const [context, setContext] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const draft = () => {
+    setBusy(true);
+    setError(null);
+    void invoke<number>("draft_reply", { kind, destination, subject, context })
+      .then(onDrafted)
+      .catch((e) => setError(String(e)))
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <div style={{ padding: 12, border: "1px solid rgba(0,0,0,0.1)", borderRadius: 8, marginBottom: 16 }}>
+      <div style={{ fontWeight: 600, marginBottom: 6 }}>Draft a reply</div>
+      {error && <div style={{ color: "#b00", fontSize: 12, marginBottom: 6 }}>{error}</div>}
+      <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+        <select value={kind} onChange={(e) => setKind(e.target.value)}>
+          <option value="email">Email</option>
+          <option value="slack">Slack</option>
+          <option value="calendar">Calendar</option>
+          <option value="github">GitHub</option>
+        </select>
+        <input
+          placeholder={kind === "email" ? "to" : kind === "slack" ? "#channel" : "target"}
+          value={destination}
+          onChange={(e) => setDestination(e.target.value)}
+          style={{ flex: 1 }}
+        />
+      </div>
+      {kind === "email" && (
+        <input
+          placeholder="subject"
+          value={subject}
+          onChange={(e) => setSubject(e.target.value)}
+          style={{ width: "100%", marginBottom: 6 }}
+        />
+      )}
+      <textarea
+        placeholder="context (thread / notes the draft should be grounded in)"
+        value={context}
+        onChange={(e) => setContext(e.target.value)}
+        rows={3}
+        style={{ width: "100%", marginBottom: 6 }}
+      />
+      <button disabled={busy || !destination} onClick={draft}>
+        {busy ? "Drafting…" : "Draft & queue for approval"}
+      </button>
+    </div>
+  );
+}
+
 export function Approvals(): JSX.Element {
   const [rows, setRows] = useState<ApprovalView[]>([]);
   const [busy, setBusy] = useState<number | null>(null);
@@ -53,6 +112,7 @@ export function Approvals(): JSX.Element {
         Actions that leave your device wait here for explicit confirmation.
       </p>
       {error && <div style={{ color: "#b00", fontSize: 13, margin: "8px 0" }}>{error}</div>}
+      <DraftForm onDrafted={refresh} />
       {rows.length === 0 && <div style={{ opacity: 0.5, fontSize: 13 }}>Nothing to confirm.</div>}
       <ul style={{ listStyle: "none", padding: 0 }}>
         {rows.map((r) => (

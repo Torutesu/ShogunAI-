@@ -46,10 +46,10 @@ OAuthクライアント登録の人間側手順は `docs/oauth-client-setup.md` 
 | **item C オンデマンド読み取り**: `IntegrationTransport::fetch_on_demand` シーム + `collect_on_demand`（read_on_demand L2ゲート）+ `RemoteMcpTransport`実装 + `ConnectorRuntime::fetch_on_demand`（ポール schedule非干渉、失敗時amber）+ desktop `fetch_on_demand` コマンド | ✅ エグゼキュータ実装・テスト済（トリガー=auto/tapはcaller判断として中立化。Gmail/Driveのみ対象） |
 
 **残るライブ前提（人間側）**: Composio APIキー(Keychain `composio-api-key`) + connected account
-の `SHOGUN_COMPOSIO_USER_ID`。送信の**プロデューサ（エージェントがsendを提案してキューへ）**は
-別機能で、現状は `submit_send` コマンドが入口（UI/手動/将来のエージェント共通）。オンデマンド取得の
-**フォーカス連動トリガー**（自動 or 明示タップ）はUX判断として未確定 — `fetch_on_demand` コマンドが
-中立の入口。
+の `SHOGUN_COMPOSIO_USER_ID`。オンデマンド取得の**フォーカス連動トリガー**（自動 or 明示タップ）は
+UX判断として未確定 — `fetch_on_demand` コマンドが中立の入口。
+
+| **エージェント層 送信プロデューサ（FR-AG-10 Reply Drafter 等）**: `shogun-agents::producer`（`ProposedSend`→L3キュー投入、純・テスト済）+ desktop `draft_reply` コマンド（BYOK Agentレーンで本文ドラフト→propose→承認待ち）+ Approvals UI にドラフトフォーム | ✅ 実装済（producerはLinuxテスト済、draft_replyはCI macOS検証） |
 
 **この環境（Linux）で検証できたのはここまで。** 純ロジック（マッピング・PKCE・ゲート・状態遷移）は
 全部テスト付き。実I/O（ネットワーク・Keychain・ブラウザ）はmacOSビルドが必要で継ぎ目まで用意済み。

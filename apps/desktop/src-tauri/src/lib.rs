@@ -51,6 +51,7 @@ pub fn run() {
         connectors::mac::fetch_on_demand,
         connectors::mac::open_settings,
         approvals::mac::submit_send,
+        approvals::mac::draft_reply,
         approvals::mac::list_approvals,
         approvals::mac::confirm_send,
         approvals::mac::reject_send,
