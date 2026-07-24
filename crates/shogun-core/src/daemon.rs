@@ -461,9 +461,13 @@ impl Db {
     // daemon only supplies the rows.
 
     /// Commitments as Fusion/Brief input. `overdue` is derived from the status or a past due time.
+    /// Resolved rows (`done`/`cancelled`) are excluded so a commitment the user marked done from
+    /// the panel stops feeding drafts, chat memory, counts, and the Morning Brief — not just the
+    /// panel view.
     pub fn commitments_due(&self, now_ms: i64) -> Vec<CommitmentDue> {
         let rows = self.conn.lock().ok().and_then(|c| state::list_commitments(&c).ok()).unwrap_or_default();
         rows.into_iter()
+            .filter(|r| r.status != "done" && r.status != "cancelled")
             .map(|r| CommitmentDue {
                 overdue: r.status == "overdue" || r.due_at.is_some_and(|d| d < now_ms),
                 description: r.description,
@@ -548,10 +552,12 @@ impl Db {
         self.conn.lock().ok().and_then(|c| shogun_memory::search::search(&c, query, limit).ok()).unwrap_or_default()
     }
 
-    /// Open loops as Fusion/Brief input (stalest first; the Brief caps the count).
+    /// Open loops as Fusion/Brief input (stalest first; the Brief caps the count). Closed loops
+    /// are excluded so resolving one from the panel removes it everywhere (memory, counts, Brief).
     pub fn open_loops(&self) -> Vec<OpenLoopItem> {
         let rows = self.conn.lock().ok().and_then(|c| state::list_open_loops(&c).ok()).unwrap_or_default();
         rows.into_iter()
+            .filter(|r| r.status != "closed")
             .map(|r| OpenLoopItem {
                 description: r.description,
                 staleness_days: u32::try_from(r.staleness_days).unwrap_or(0),

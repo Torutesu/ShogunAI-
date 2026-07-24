@@ -55,6 +55,10 @@ export const STRINGS = {
     keyRemove: "Remove",
     keySaved: "Saved to your Keychain — answers are live.",
     quit: "Quit SHOGUN",
+    quitTitle: "Quit SHOGUN",
+    minimize: "Minimize to the notch",
+    send: "Send",
+    settingsTitle: "Settings",
     done: "Done",
     // state rows
     resolveHint: "Click to mark done",

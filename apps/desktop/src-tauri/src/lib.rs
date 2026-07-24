@@ -918,38 +918,51 @@ fn float_on_all_spaces(win: &tauri::WebviewWindow) {
 fn watch_option_tap(app: &tauri::App) {
     use objc2::runtime::AnyObject;
     use objc2::{class, msg_send};
-    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Mutex;
+    use std::time::Instant;
 
-    /// Armed between "Option went down alone" and "released / disqualified".
+    // State machine for a clean "Option tap":
+    //   ARMED   — Option is held after a genuine up→down with no other input.
+    //   POISONED— some other key/modifier/mouse happened during THIS hold; the tap is dead until
+    //             Option is fully released (so releasing the disqualifier can't re-arm).
+    //   OPT_PREV— was Option already down last flagsChanged (to arm only on the real down edge).
+    //   DOWN_AT — monotonic start of the hold (Instant, immune to wall-clock steps).
     static ARMED: AtomicBool = AtomicBool::new(false);
-    static DOWN_AT_MS: AtomicU64 = AtomicU64::new(0);
+    static POISONED: AtomicBool = AtomicBool::new(false);
+    static OPT_PREV: AtomicBool = AtomicBool::new(false);
+    static DOWN_AT: Mutex<Option<Instant>> = Mutex::new(None);
 
     const MASK_KEY_DOWN: usize = 1 << 10; // NSEventMaskKeyDown
     const MASK_FLAGS_CHANGED: usize = 1 << 12; // NSEventMaskFlagsChanged
+    // Any mouse/scroll/gesture during the hold also disqualifies (⌥-click, ⌥-drag, ⌥-scroll).
+    const MASK_MOUSE: usize = (1 << 1) | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 5) | (1 << 6)
+        | (1 << 22) | (1 << 25) | (1 << 26) | (1 << 27) | (1 << 29) | (1 << 30) | (1 << 31);
     const FLAG_OPTION: usize = 1 << 19; // NSEventModifierFlagOption
     // shift | control | command | fn — any of these joining the chord disqualifies the tap.
     const FLAG_OTHERS: usize = (1 << 17) | (1 << 18) | (1 << 20) | (1 << 23);
-    const MAX_TAP_MS: u64 = 500;
+    const MAX_TAP_MS: u128 = 500;
 
-    fn now_ms() -> u64 {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0)
+    /// Any non-Option input during the hold kills the tap until Option is released.
+    fn poison() {
+        POISONED.store(true, Ordering::Relaxed);
+        ARMED.store(false, Ordering::Relaxed);
     }
 
     // SAFETY: main thread (setup); monitors and blocks are intentionally leaked (app lifetime).
     unsafe {
-        // Any real keypress while Option is held = a combo, not a tap.
-        let key_block = block2::RcBlock::new(move |_ev: *mut AnyObject| {
-            ARMED.store(false, Ordering::Relaxed);
-        });
+        let disarm_block = block2::RcBlock::new(move |_ev: *mut AnyObject| poison());
         let key_mon: *mut AnyObject = msg_send![
             class!(NSEvent),
             addGlobalMonitorForEventsMatchingMask: MASK_KEY_DOWN,
-            handler: &*key_block
+            handler: &*disarm_block
         ];
-        std::mem::forget(key_block);
+        let mouse_mon: *mut AnyObject = msg_send![
+            class!(NSEvent),
+            addGlobalMonitorForEventsMatchingMask: MASK_MOUSE,
+            handler: &*disarm_block
+        ];
+        std::mem::forget(disarm_block);
 
         let handle = app.handle().clone();
         let flags_block = block2::RcBlock::new(move |ev: *mut AnyObject| {
@@ -959,16 +972,26 @@ fn watch_option_tap(app: &tauri::App) {
             let flags: usize = msg_send![ev, modifierFlags];
             let option_down = flags & FLAG_OPTION != 0;
             let others_down = flags & FLAG_OTHERS != 0;
-            if option_down && !others_down {
+            let opt_prev = OPT_PREV.swap(option_down, Ordering::Relaxed);
+
+            if others_down {
+                // A second modifier is part of this chord — poison for the rest of the hold.
+                poison();
+                return;
+            }
+            if option_down && !opt_prev {
+                // Genuine Option DOWN edge with nothing else held: start a fresh, clean hold.
+                POISONED.store(false, Ordering::Relaxed);
                 ARMED.store(true, Ordering::Relaxed);
-                DOWN_AT_MS.store(now_ms(), Ordering::Relaxed);
-            } else if option_down && others_down {
-                ARMED.store(false, Ordering::Relaxed);
-            } else {
-                // Option released (or was never the chord) — fire on a clean, short tap.
-                let was_armed = ARMED.swap(false, Ordering::Relaxed);
-                let held = now_ms().saturating_sub(DOWN_AT_MS.load(Ordering::Relaxed));
-                if was_armed && held <= MAX_TAP_MS {
+                if let Ok(mut g) = DOWN_AT.lock() {
+                    *g = Some(Instant::now());
+                }
+            } else if !option_down && opt_prev {
+                // Option UP edge — fire only on a clean, short, un-poisoned tap.
+                let armed = ARMED.swap(false, Ordering::Relaxed);
+                let poisoned = POISONED.swap(false, Ordering::Relaxed);
+                let held = DOWN_AT.lock().ok().and_then(|g| *g).map(|t| t.elapsed().as_millis());
+                if armed && !poisoned && held.is_some_and(|h| h <= MAX_TAP_MS) {
                     eprintln!("[shell] ⌥ tap — draft at cursor");
                     use tauri::Manager;
                     if let Some(db) = handle.try_state::<shogun_core::daemon::Db>() {
@@ -984,10 +1007,10 @@ fn watch_option_tap(app: &tauri::App) {
         ];
         std::mem::forget(flags_block);
 
-        if key_mon.is_null() || flags_mon.is_null() {
+        if key_mon.is_null() || mouse_mon.is_null() || flags_mon.is_null() {
             eprintln!("[shell] ⌥-tap monitor failed to install (accessibility permission?)");
         } else {
-            eprintln!("[shell] ⌥ tap-to-draft installed (tap Option alone, <0.5s, no other keys)");
+            eprintln!("[shell] ⌥ tap-to-draft installed (tap Option alone, <0.5s, no other input)");
         }
     }
 }

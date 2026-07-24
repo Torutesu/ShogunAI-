@@ -75,6 +75,14 @@ pub mod mac {
     }
 
     static LLM_SETTINGS: std::sync::Mutex<Option<LlmSettings>> = std::sync::Mutex::new(None);
+    /// Cached "does the active provider have a key" — the 3s status poll must not hit the Keychain
+    /// every tick. Refreshed on init and on every key/provider change.
+    static HAS_KEY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+    fn refresh_has_key() {
+        let present = keychain_byok(&current_settings().provider).is_some();
+        HAS_KEY.store(present, std::sync::atomic::Ordering::Relaxed);
+    }
 
     fn settings_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
         use tauri::Manager;
@@ -97,6 +105,7 @@ pub mod mac {
         if let Ok(mut g) = LLM_SETTINGS.lock() {
             *g = Some(s);
         }
+        refresh_has_key();
     }
 
     fn current_settings() -> LlmSettings {
@@ -140,6 +149,7 @@ pub mod mac {
         if let Ok(mut g) = LLM_SETTINGS.lock() {
             *g = Some(s);
         }
+        refresh_has_key();
         Ok(())
     }
 
@@ -283,6 +293,7 @@ pub mod mac {
         )
         .map_err(|e| e.to_string())?;
         eprintln!("[inline] BYOK key saved to Keychain (provider: {provider})");
+        refresh_has_key();
         Ok(())
     }
 
@@ -295,6 +306,7 @@ pub mod mac {
         security_framework::passwords::delete_generic_password(KEYCHAIN_SERVICE, keychain_account(&provider))
             .map_err(|e| e.to_string())?;
         eprintln!("[inline] BYOK key removed from Keychain (provider: {provider})");
+        refresh_has_key();
         Ok(())
     }
 
@@ -387,7 +399,7 @@ pub mod mac {
             app,
             commitments: db.commitments_due(db.now_ms()).len(),
             open_loops: db.open_loops().len(),
-            has_key: keychain_byok(&current_settings().provider).is_some(),
+            has_key: HAS_KEY.load(std::sync::atomic::Ordering::Relaxed),
         }
     }
 

@@ -138,9 +138,9 @@ export function App(): JSX.Element {
   const threadRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const el = document.documentElement;
-    if (appearance === "dark") el.removeAttribute("data-appearance");
-    else el.setAttribute("data-appearance", appearance);
+    // Always stamp the attribute so the theme is deterministic — styles.css carries an explicit
+    // [data-appearance="dark"] block, so we no longer lean on bare :root defaults for dark.
+    document.documentElement.setAttribute("data-appearance", appearance);
   }, [appearance]);
 
   // Start at the open size and prove the webview is alive.
@@ -247,9 +247,13 @@ export function App(): JSX.Element {
             <span className="live__dot" />
             {t.reading} <b>{live}</b>
           </span>
-          {totalState > 0 ? (
+          {state.commitments.length > 0 ? (
             <span className="handle__count">
               {state.commitments.length} {t.due}
+            </span>
+          ) : state.open_loops.length > 0 ? (
+            <span className="handle__count">
+              {state.open_loops.length} {t.waiting}
             </span>
           ) : null}
         </button>
@@ -282,16 +286,17 @@ export function App(): JSX.Element {
                     {state.commitments.length} {t.due} · {state.open_loops.length} {t.waiting}
                   </button>
                 ) : null}
-                <button className="icon" type="button" title={t.settings} onClick={() => setShowSettings(true)}>
-                  ⚙
+                <button className="icon" type="button" title={t.settings} aria-label={t.settings} onClick={() => setShowSettings(true)}>
+                  ⚙︎
                 </button>
-                <button className="icon" type="button" title="Minimize" onClick={collapse}>
+                <button className="icon" type="button" title={t.minimize} aria-label={t.minimize} onClick={collapse}>
                   ▁
                 </button>
                 <button
                   className="icon icon--close"
                   type="button"
-                  title={t.quit}
+                  title={t.quitTitle}
+                  aria-label={t.quitTitle}
                   onClick={() => {
                     if (IN_TAURI) void invoke("quit_app").catch((err) => uiLog(`quit failed: ${err}`));
                   }}
@@ -337,7 +342,13 @@ export function App(): JSX.Element {
                   </div>
                 ))
               )}
-              {thinking ? <div className="msg msg--shogun msg--think">…</div> : null}
+              {thinking ? (
+                <div className="msg msg--shogun msg--think" aria-live="polite" aria-label="Thinking">
+                  <span className="think__dot" />
+                  <span className="think__dot" />
+                  <span className="think__dot" />
+                </div>
+              ) : null}
             </div>
 
             <div className="composer">
@@ -361,7 +372,14 @@ export function App(): JSX.Element {
                   }
                 }}
               />
-              <button className="composer__send" type="button" onClick={send} disabled={!input.trim() || thinking}>
+              <button
+                className="composer__send"
+                type="button"
+                title={t.send}
+                aria-label={t.send}
+                onClick={send}
+                disabled={!input.trim() || thinking}
+              >
                 ↑
               </button>
             </div>
@@ -551,10 +569,17 @@ function Settings(props: {
       </header>
       <div className="settings__body">
         <section className="set">
-          <div className="set__label">{t.appearance}</div>
-          <div className="seg">
+          <div className="set__label" id="seg-appearance">{t.appearance}</div>
+          <div className="seg" role="radiogroup" aria-labelledby="seg-appearance">
             {(["dark", "light", "auto"] as Appearance[]).map((a) => (
-              <button key={a} type="button" className={`seg__opt${appearance === a ? " is-on" : ""}`} onClick={() => setAppearance(a)}>
+              <button
+                key={a}
+                type="button"
+                role="radio"
+                aria-checked={appearance === a}
+                className={`seg__opt${appearance === a ? " is-on" : ""}`}
+                onClick={() => setAppearance(a)}
+              >
                 {a === "dark" ? t.dark : a === "light" ? t.light : t.auto}
               </button>
             ))}
@@ -599,12 +624,14 @@ function Settings(props: {
           <div className="set__hint">{t.shortcutHint}</div>
         </section>
         <section className="set">
-          <div className="set__label">{t.model}</div>
-          <div className="seg">
+          <div className="set__label" id="seg-provider">{t.model}</div>
+          <div className="seg" role="radiogroup" aria-labelledby="seg-provider">
             {PROVIDERS.map((p) => (
               <button
                 key={p.id}
                 type="button"
+                role="radio"
+                aria-checked={provider === p.id}
                 className={`seg__opt${provider === p.id ? " is-on" : ""}`}
                 onClick={() => {
                   // Model ids are provider-specific — carrying one across providers sends an
