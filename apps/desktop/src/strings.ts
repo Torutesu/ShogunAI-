@@ -36,6 +36,16 @@ export const STRINGS = {
       "Read your local AI coding-tool transcripts so SHOGUN remembers what you worked on and decided there. Stays on your device.",
     aiSessionsOn: "Importing",
     aiSessionsOff: "Off",
+    // capture exclusions (what SHOGUN must not read)
+    exclusions: "What SHOGUN reads",
+    exclusionsHint:
+      "Turn off any app you'd rather SHOGUN didn't read. Password managers, terminals and private browsing are always off and can't be turned on.",
+    exclusionsEmpty: "Nothing captured yet.",
+    exclusionsAlways: "always off",
+    exclusionsReading: "Reading",
+    exclusionsOff: "Off",
+    exclusionsTurnOff: "Turn off",
+    exclusionsTurnOn: "Turn on",
     // approvals (L3 confirmation queue — anything leaving the device)
     approvals: "Approvals",
     approvalsHint: "Anything that leaves your device waits here for your explicit confirmation.",

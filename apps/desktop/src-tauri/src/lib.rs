@@ -12,6 +12,7 @@ mod axcache;
 mod capture_source;
 mod connectors;
 mod display;
+mod exclusions;
 mod geometry;
 mod hover;
 mod inline_source;
@@ -123,6 +124,8 @@ pub fn run() {
         approvals::mac::reject_send,
         ai_sessions::mac::get_ai_session_import,
         ai_sessions::mac::set_ai_session_import,
+        exclusions::mac::list_exclusions,
+        exclusions::mac::set_app_excluded,
     ]);
 
     // NOTE: the visible surface is a NATIVE NSPanel hosting the webview's content view
@@ -307,7 +310,12 @@ fn setup_macos(app: &tauri::App) {
             // Share the handle: Tauri state (notch_actions / execution) + the capture poller.
             app.manage(db.clone());
             app.manage(notch_exec::mac::new_engine(db.clone()));
-            let policy = shogun_core::capture::exclusion::ExclusionPolicy::new();
+            // The user's own exclusions, layered on the non-removable defaults, shared with the
+            // poller so a change in Settings applies on the next tick.
+            let policy: exclusions::mac::SharedPolicy = std::sync::Arc::new(std::sync::Mutex::new(
+                exclusions::mac::load(app.handle()),
+            ));
+            app.manage(policy.clone());
             // The reply-context cache is filled by the capture poller (focus path) and read by
             // the draft command, so a press never collects context.
             let reply_cache = shogun_core::daemon::ReplyContextCache::new();

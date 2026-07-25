@@ -84,13 +84,14 @@ mod mac {
 
     /// Spawn the capture poller: every `interval` (default [`DEFAULT_POLL_MS`]), if the process is
     /// Accessibility-trusted, capture the current focus into memory. The `Db` handle is cloned into
-    /// the thread (it is `Arc`-backed and `Send`); the policy is moved in. Returns the thread handle;
-    /// dropping it detaches the poller (it runs for the process lifetime).
+    /// the thread (it is `Arc`-backed and `Send`); the policy is shared with the settings commands
+    /// so a change applies on the next tick. Returns the thread handle; dropping it detaches the
+    /// poller (it runs for the process lifetime).
     ///
     /// AX elements never leave this thread, so the `!Send` `AxElement` is safe here.
     pub fn spawn_capture_poller(
         db: Db,
-        policy: ExclusionPolicy,
+        policy: std::sync::Arc<std::sync::Mutex<ExclusionPolicy>>,
         interval: Option<Duration>,
         reply_cache: Option<shogun_core::daemon::ReplyContextCache>,
     ) -> std::thread::JoinHandle<()> {
@@ -100,8 +101,17 @@ mod mac {
             let mut warm_for: Option<String> = None;
             loop {
                 if ax_trusted() {
+                    // Re-read the policy each tick: excluding an app is usually a reaction to
+                    // what is on screen right now, so it must take effect now, not next launch.
+                    // A poisoned lock means capture stops rather than ignoring exclusions.
+                    let Ok(current) = policy.lock() else {
+                        eprintln!("[capture] exclusion policy unreadable — pausing capture");
+                        std::thread::sleep(interval);
+                        continue;
+                    };
                     // errors are swallowed inside ingest; a None just means no focus this tick
-                    let _ = capture_once(&db, &policy, dwell_ms);
+                    let _ = capture_once(&db, &current, dwell_ms);
+                    drop(current);
 
                     // Pre-assemble the reply context for whatever the user is now looking at, so
                     // pressing the draft button only starts generation (SLO: offer in 150ms —

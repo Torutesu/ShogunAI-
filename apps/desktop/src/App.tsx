@@ -647,6 +647,80 @@ const CONN_STATE_LABEL: Record<ConnState, string> = {
   coming_soon: "Coming soon",
 };
 
+// What SHOGUN is allowed to read. A product that reads the screen has to let the user say
+// "not that one", and say it about apps they recognise rather than bundle identifiers.
+interface ExclusionRow {
+  bundle_id: string;
+  excluded: boolean;
+  locked: boolean;
+  events: number;
+}
+
+function appLabel(bundleId: string): string {
+  const seg = bundleId.split(".").pop() || bundleId;
+  return seg.charAt(0).toUpperCase() + seg.slice(1);
+}
+
+function ExclusionsSection(): JSX.Element | null {
+  const [rows, setRows] = useState<ExclusionRow[]>([]);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback((): void => {
+    if (!IN_TAURI) return;
+    void invoke<ExclusionRow[]>("list_exclusions").then(setRows).catch(() => undefined);
+  }, []);
+  useEffect(refresh, [refresh]);
+
+  const toggle = (row: ExclusionRow): void => {
+    if (row.locked) return;
+    setBusy(row.bundle_id);
+    setError(null);
+    void invoke("set_app_excluded", { bundleId: row.bundle_id, excluded: !row.excluded })
+      .then(refresh)
+      .catch((e) => setError(String(e)))
+      .finally(() => setBusy(null));
+  };
+
+  return (
+    <section className="set">
+      <div className="set__label">{t.exclusions}</div>
+      <div className="set__hint">{t.exclusionsHint}</div>
+      {error ? <div className="set__hint is-err">{error}</div> : null}
+      {rows.length === 0 ? (
+        <div className="set__hint">{t.exclusionsEmpty}</div>
+      ) : (
+        <div className="conns">
+          {rows.map((r) => (
+            <div key={r.bundle_id} className="conn">
+              <div className="conn__meta">
+                {/* Two apps can share a last path segment, so the identifier stays reachable. */}
+                <span className="conn__name" title={r.bundle_id}>{appLabel(r.bundle_id)}</span>
+                <span className={`conn__state${r.excluded ? "" : " is-ok"}`}>
+                  {r.locked
+                    ? t.exclusionsAlways
+                    : r.excluded
+                      ? t.exclusionsOff
+                      : `${t.exclusionsReading}${r.events > 0 ? ` · ${r.events}` : ""}`}
+                </span>
+              </div>
+              <button
+                className="keyrow__btn"
+                type="button"
+                disabled={r.locked || busy === r.bundle_id}
+                title={r.locked ? t.exclusionsHint : undefined}
+                onClick={() => toggle(r)}
+              >
+                {busy === r.bundle_id ? "…" : r.excluded ? t.exclusionsTurnOn : t.exclusionsTurnOff}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
 // AI coding-tool transcripts. Opt-in: a session log is a transcript of the user's work, so
 // nothing is read until they say so.
 function AiSessionsSection(): JSX.Element {
@@ -1062,6 +1136,7 @@ function Settings(props: {
         <ApprovalsSection />
         <ConnectionsSection />
         <AiSessionsSection />
+        <ExclusionsSection />
         <section className="set">
           <div className="set__label" id="seg-appearance">{t.appearance}</div>
           <div className="seg" role="radiogroup" aria-labelledby="seg-appearance">

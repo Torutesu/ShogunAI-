@@ -4,7 +4,8 @@
 //! Pure decision logic over `(bundle_id, window_title)`: the macOS capture layer calls
 //! [`ExclusionPolicy::is_excluded`] on every focus change and simply does not emit a
 //! `capture.text` event while the answer is `Some`. Defaults (password managers, the macOS
-//! auth agent) are non-removable (FR-CAP-06); users may add apps and title/URL patterns.
+//! auth agent, terminals) are non-removable (FR-CAP-06); users may add apps and title/URL
+//! patterns.
 //!
 //! Private-browsing detection is heuristic and deliberately conservative: only known browsers
 //! with a recognised private-mode title marker are excluded; an unknown browser is captured
@@ -93,7 +94,11 @@ impl ExclusionPolicy {
     /// Add a user app exclusion by bundle id. No-op if it is already a default (those are
     /// always on anyway).
     pub fn add_app(&mut self, bundle_id: impl Into<String>) {
-        self.user_bundles.insert(bundle_id.into());
+        let bundle_id = bundle_id.into();
+        if is_default_excluded(&bundle_id) {
+            return;
+        }
+        self.user_bundles.insert(bundle_id);
     }
 
     /// Remove a user app exclusion. Defaults cannot be removed (FR-CAP-06) — attempting to
@@ -103,6 +108,12 @@ impl ExclusionPolicy {
             return false;
         }
         self.user_bundles.remove(bundle_id)
+    }
+
+    /// The user's own app exclusions, sorted. Defaults are not included — they are always on and
+    /// cannot be removed, so the settings UI shows them separately.
+    pub fn user_apps(&self) -> Vec<&str> {
+        self.user_bundles.iter().map(String::as_str).collect()
     }
 
     /// Add a title/URL substring pattern (matched case-insensitively against the window title).
@@ -143,8 +154,14 @@ impl ExclusionPolicy {
 }
 
 /// True if `bundle_id` is one of the non-removable defaults.
+///
+/// Terminals count: [`ExclusionPolicy::is_excluded`] skips them before it ever looks at the user's
+/// list, so reporting them as removable would let the settings UI say "reading" about an app that
+/// is never captured.
 pub fn is_default_excluded(bundle_id: &str) -> bool {
-    PASSWORD_MANAGERS.contains(&bundle_id) || AUTH_AGENTS.contains(&bundle_id)
+    PASSWORD_MANAGERS.contains(&bundle_id)
+        || AUTH_AGENTS.contains(&bundle_id)
+        || TERMINALS.contains(&bundle_id)
 }
 
 #[cfg(test)]
@@ -173,6 +190,30 @@ mod tests {
     fn auth_agent_is_excluded() {
         let p = ExclusionPolicy::new();
         assert_eq!(p.is_excluded("com.apple.SecurityAgent", None), Some(ExclusionReason::AuthDialog));
+    }
+
+    /// The settings UI decides which rows to lock from `is_default_excluded`, and persists only
+    /// `user_apps()`. If either drifted from what `is_excluded` actually does, the UI would tell
+    /// the user SHOGUN reads an app it never reads — or silently lose an exclusion on restart.
+    #[test]
+    fn what_the_settings_ui_can_offer_matches_what_capture_does() {
+        let mut p = ExclusionPolicy::new();
+        assert!(p.user_apps().is_empty(), "defaults are not the user's own list");
+
+        p.add_app("com.acme.chat");
+        assert_eq!(p.user_apps(), vec!["com.acme.chat"]);
+        assert_eq!(p.is_excluded("com.acme.chat", None), Some(ExclusionReason::UserApp));
+        assert!(p.remove_app("com.acme.chat"));
+        assert_eq!(p.is_excluded("com.acme.chat", None), None);
+
+        // Anything the policy refuses to stop excluding must report itself as locked, so the UI
+        // never offers a switch that would do nothing.
+        for locked in PASSWORD_MANAGERS.iter().chain(AUTH_AGENTS).chain(TERMINALS) {
+            assert!(is_default_excluded(locked), "{locked}");
+            p.add_app(*locked);
+            assert!(!p.remove_app(locked), "{locked} must not be removable");
+            assert!(p.is_excluded(locked, None).is_some(), "{locked} stays excluded");
+        }
     }
 
     #[test]
