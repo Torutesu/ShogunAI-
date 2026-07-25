@@ -6,6 +6,8 @@
   "type": "module",
   "scripts": {
     "dev:vite": "vite",
+    "preview:dev": "vite --open /preview.html",
+    "preview:build": "node ../../scripts/build-preview.mjs",
     "build:vite": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
     "tauri": "tauri",

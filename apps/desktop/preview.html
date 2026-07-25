@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SHOGUN — panel preview</title>
+    <script>
+      // App.tsx decides "am I inside Tauri?" from this object at module scope. The real bridge is
+      // installed by src/preview/bridge.ts; this placeholder only guarantees the flag is already
+      // true no matter how the bundler orders module evaluation.
+      window.__TAURI_INTERNALS__ = window.__TAURI_INTERNALS__ || {};
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/preview/main.tsx"></script>
+  </body>
+</html>

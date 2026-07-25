@@ -387,10 +387,14 @@ export function App(): JSX.Element {
     if (open) return;
     const el = handleRef.current;
     if (!el) return;
-    const r = el.getBoundingClientRect();
-    if (r.width < 1 || r.height < 1) return;
+    // offsetWidth/Height, NOT getBoundingClientRect: the latter reports the RENDERED box, so any
+    // CSS transform on an ancestor (the browser preview scales its stage to fit) would feed back a
+    // shrunken width and clip the pill's own text. Layout metrics are what the window wants.
+    const w = el.offsetWidth;
+    const h = el.offsetHeight;
+    if (w < 1 || h < 1) return;
     // +1 guards against a fractional layout width being truncated into a clipped pill.
-    void applyPanelSize(Math.ceil(r.width) + 1, Math.ceil(r.height) + 1);
+    void applyPanelSize(w + 1, h + 1);
   }, [open, live, state.commitments.length, state.open_loops.length]);
 
   // Collapsed: a clear, clickable handle hanging from the notch.
