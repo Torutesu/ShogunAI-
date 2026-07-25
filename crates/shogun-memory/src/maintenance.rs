@@ -153,7 +153,7 @@ mod tests {
         seed(&mut conn);
         let json = export_json(&conn).unwrap();
         let v: Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(v["schema_version"], 5);
+        assert_eq!(v["schema_version"], 6);
         assert_eq!(v["event_log"].as_array().unwrap().len(), 1);
         assert_eq!(v["event_log"][0]["content"], "Alice asked for the quarterly report");
         assert_eq!(v["people"][0]["display_name"], "Alice");
@@ -175,7 +175,7 @@ mod tests {
             assert_eq!(n, 0, "{table} should be empty after delete_all");
         }
         // ...but the schema (and version) survives, so the app keeps working
-        assert_eq!(crate::schema_version(&conn).unwrap(), Some(5));
+        assert_eq!(crate::schema_version(&conn).unwrap(), Some(6));
         // a fresh insert still works
         seed(&mut conn);
         let n: i64 = conn.query_row("SELECT count(*) FROM people", [], |r| r.get(0)).unwrap();

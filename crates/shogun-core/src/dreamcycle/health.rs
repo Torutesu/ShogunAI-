@@ -39,6 +39,17 @@ pub fn record_outcome(consecutive_failed_days: u32, batch_succeeded: bool) -> u3
     }
 }
 
+/// The consecutive-failure count implied by a run of nightly outcomes, newest first.
+///
+/// The counter in [`record_outcome`] is the incremental form, for a daemon that folds one night at
+/// a time. This is the same number recomputed from the ledger, which is what the app actually has
+/// after a restart: nothing persists the running count, but every night's outcome is in `job_runs`.
+/// Counting only the unbroken run of failures at the front is what makes a single good night reset
+/// the indicator, exactly as `record_outcome(_, true)` does.
+pub fn consecutive_failures(newest_first: &[bool]) -> u32 {
+    newest_first.iter().take_while(|ok| !**ok).count() as u32
+}
+
 /// FR-DC-05 guarantee, made explicit: local features are never blocked by Dream Cycle health.
 /// Always false — there is no failure count that disables local capture/search/Fusion.
 pub fn local_features_blocked(_consecutive_failed_days: u32) -> bool {
@@ -85,6 +96,36 @@ mod tests {
     #[test]
     fn counter_saturates_without_overflow() {
         assert_eq!(record_outcome(u32::MAX, false), u32::MAX);
+    }
+
+    #[test]
+    fn consecutive_failures_matches_the_incremental_counter() {
+        // Two bad nights then a good one: the good night at the front resets, exactly as
+        // record_outcome does when folded in the same order.
+        assert_eq!(consecutive_failures(&[]), 0);
+        assert_eq!(consecutive_failures(&[true, false, false]), 0);
+        assert_eq!(consecutive_failures(&[false, true, false]), 1);
+        assert_eq!(consecutive_failures(&[false, false, false]), 3);
+        assert_eq!(indicator(consecutive_failures(&[false, false, false])), Indicator::Red);
+        assert_eq!(indicator(consecutive_failures(&[false, true])), Indicator::Amber);
+    }
+
+    /// The recomputed count and the folded count must agree, or a restart would change the colour.
+    #[test]
+    fn recomputing_from_the_ledger_agrees_with_folding_night_by_night() {
+        for nights in [
+            vec![true, true, false],
+            vec![false, false, true],
+            vec![false, false, false],
+            vec![true],
+        ] {
+            let mut folded = 0;
+            for ok in &nights {
+                folded = record_outcome(folded, *ok);
+            }
+            let newest_first: Vec<bool> = nights.iter().rev().copied().collect();
+            assert_eq!(consecutive_failures(&newest_first), folded, "{nights:?}");
+        }
     }
 
     #[test]

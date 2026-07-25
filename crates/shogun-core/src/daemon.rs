@@ -22,7 +22,7 @@ use shogun_fusion::assemble::ActionCandidate;
 
 use crate::capture::dedup::{decide_hash, Recent};
 use crate::db_sink::DbTraceabilitySink;
-use crate::dreamcycle::plan::{remaining, CycleKind, JobKind, JobRun, JobState};
+use crate::dreamcycle::plan::{remaining, CycleKind, JobKind, JobRun, JobState, DEGRADED_SEQUENCE};
 
 /// How many recent capture bodies the near-dup collapse (FR-CAP-03) compares against. Bounds the
 /// per-capture comparison cost; window re-reads are near each other in the log, so a small window
@@ -808,8 +808,11 @@ impl Db {
     /// a decayed row back up on the strength of repeated evidence), then recompute overdue and
     /// staleness so the surfaced state is current.
     pub fn run_local_maintenance(&self, now_ms: i64, half_life_ms: i64) -> LocalMaintenance {
-        let decayed = self.decay_confidence(now_ms, half_life_ms);
+        // Corroborate first: it raises the *base*, and the decay pass that follows is what turns a
+        // base into the visible, age-correct confidence. The other order would leave a newly
+        // corroborated row showing last pass's number until the next hour.
         let corroborated = self.corroborate();
+        let decayed = self.decay_confidence(now_ms, half_life_ms);
         let (overdue, stale) = self.recompute_overdue_and_staleness(now_ms);
         LocalMaintenance { decayed, corroborated, overdue, stale }
     }
@@ -1104,6 +1107,99 @@ impl Db {
     /// resumes here by skipping the jobs already `done`.
     pub fn resume(&self, cycle_id: &str, cycle: CycleKind) -> Vec<JobKind> {
         remaining(cycle, &self.cycle_runs(cycle_id))
+    }
+
+    /// The most recent `limit` nights, newest first, reconstructed from the job ledger (FR-DC-04).
+    /// This is what survives a relaunch: no run reports itself, the ledger is the record.
+    pub fn recent_cycles(&self, limit: usize) -> Vec<crate::dreamcycle::run::CycleOutcome> {
+        let cycles = self
+            .conn
+            .lock()
+            .ok()
+            .and_then(|c| shogun_memory::jobs::recent_cycles(&c, limit).ok())
+            .unwrap_or_default();
+
+        cycles
+            .into_iter()
+            .map(|c| {
+                let runs: Vec<JobRun> = c
+                    .rows
+                    .iter()
+                    .filter_map(|r| {
+                        Some(JobRun {
+                            kind: parse_job_kind(&r.kind)?,
+                            state: parse_job_state(&r.state)?,
+                            input_from_ts: r.input_from_ts,
+                            input_to_ts: r.input_to_ts,
+                        })
+                    })
+                    .collect();
+                let kind = if runs.iter().any(|r| !DEGRADED_SEQUENCE.contains(&r.kind)) {
+                    CycleKind::Full
+                } else {
+                    CycleKind::Degraded
+                };
+                crate::dreamcycle::run::CycleOutcome {
+                    cycle_id: c.cycle_id,
+                    kind,
+                    succeeded: crate::dreamcycle::plan::is_complete(kind, &runs),
+                    jobs_done: runs.iter().filter(|r| r.state == JobState::Done).count(),
+                    jobs_failed: runs.iter().filter(|r| r.state == JobState::Failed).count(),
+                    // The window is the cycle's, not a job's — every job of a cycle carries it.
+                    input_from_ts: runs.iter().map(|r| r.input_from_ts).min().unwrap_or(0),
+                    input_to_ts: runs.iter().map(|r| r.input_to_ts).max().unwrap_or(0),
+                    started_at: c.started_at,
+                    ended_at: c.ended_at,
+                }
+            })
+            .collect()
+    }
+
+    /// The Dream Cycle status for the Full UI (FR-DC-06) and the gate: the last night's outcome, the
+    /// failure indicator (FR-DC-05), and whether tonight's full cycle is already done.
+    ///
+    /// `nights` bounds how far back the indicator looks — it only ever counts the unbroken run of
+    /// failures at the front, so a short window is enough and keeps the query cheap.
+    pub fn dream_status(&self, tonight_cycle_id: &str, nights: usize) -> crate::dreamcycle::run::DreamStatus {
+        let recent = self.recent_cycles(nights.max(1));
+        // Only full cycles carry Batch work, so only they can fail the Batch lane. A degraded
+        // catch-up night is not evidence either way and must not reset an amber indicator.
+        let outcomes: Vec<bool> = recent
+            .iter()
+            .filter(|c| c.kind == CycleKind::Full)
+            .map(|c| c.succeeded)
+            .collect();
+        let full_run_done_today = recent
+            .iter()
+            .any(|c| c.cycle_id == tonight_cycle_id && c.kind == CycleKind::Full && c.succeeded);
+
+        let last = recent.into_iter().next();
+        let (events_processed, state_changes, chunks_sent) = match &last {
+            Some(c) => self
+                .conn
+                .lock()
+                .ok()
+                .map(|conn| {
+                    (
+                        event_log::count_in_range(&conn, c.input_from_ts, c.input_to_ts).unwrap_or(0),
+                        state::count_changed_since(&conn, c.started_at).unwrap_or(0),
+                        shogun_memory::traceability::count_since(&conn, c.started_at).unwrap_or(0),
+                    )
+                })
+                .unwrap_or((0, 0, 0)),
+            None => (0, 0, 0),
+        };
+
+        crate::dreamcycle::run::DreamStatus {
+            last,
+            indicator: crate::dreamcycle::health::indicator(
+                crate::dreamcycle::health::consecutive_failures(&outcomes),
+            ),
+            events_processed,
+            state_changes,
+            chunks_sent,
+            full_run_done_today,
+        }
     }
 
     /// Assemble the Dream Cycle run summary (FR-DC-06) from DB deltas. Everything a run changed —
@@ -2120,6 +2216,90 @@ mod tests {
         assert_eq!(todo.first(), Some(&JobKind::StateUpdate));
         assert_eq!(todo.len(), 4); // StateUpdate, ConfidenceRecalc, ColdDemotion, MorningBrief
         assert!(!todo.contains(&JobKind::Consolidation));
+    }
+
+    /// A clock the test can advance, so ledger rows land at distinct instants the way real ones do.
+    fn ticking_clock() -> (Clock, Arc<std::sync::atomic::AtomicI64>) {
+        let t = Arc::new(std::sync::atomic::AtomicI64::new(1_000));
+        let handle = t.clone();
+        (Arc::new(move || t.load(std::sync::atomic::Ordering::Relaxed)), handle)
+    }
+
+    /// FR-DC-06: the status view is rebuilt from the ledger, so it must show the same thing after a
+    /// relaunch as it did live — nothing here is reported by the run that produced it.
+    #[test]
+    fn dream_status_reports_the_last_night_from_the_ledger() {
+        let (clock, now) = ticking_clock();
+        let db = Db::open_in_memory(clock).unwrap();
+        let set = |t: i64| now.store(t, std::sync::atomic::Ordering::Relaxed);
+
+        // an older night that completed fully
+        for kind in crate::dreamcycle::plan::FULL_SEQUENCE {
+            set(1_000);
+            db.record_job("20260723", *kind, JobState::Done, 0, 100);
+        }
+        // last night: consolidation reached the Batch lane and failed
+        set(9_000);
+        db.record_job("20260724", JobKind::Consolidation, JobState::Failed, 100, 200);
+
+        let status = db.dream_status("20260724", 7);
+        let last = status.last.expect("a night has run");
+        assert_eq!(last.cycle_id, "20260724");
+        assert_eq!(last.kind, CycleKind::Full);
+        assert!(!last.succeeded);
+        assert_eq!(last.jobs_failed, 1);
+        assert_eq!((last.input_from_ts, last.input_to_ts), (100, 200));
+        // one failed night after a good one → amber, not red
+        assert_eq!(status.indicator, crate::dreamcycle::health::Indicator::Amber);
+        assert!(!status.full_run_done_today, "a failed cycle has not run today");
+    }
+
+    #[test]
+    fn a_completed_night_clears_the_indicator_and_marks_today_done() {
+        let (clock, now) = ticking_clock();
+        let db = Db::open_in_memory(clock).unwrap();
+        let set = |t: i64| now.store(t, std::sync::atomic::Ordering::Relaxed);
+
+        set(1_000);
+        db.record_job("20260723", JobKind::Consolidation, JobState::Failed, 0, 100);
+        set(9_000);
+        for kind in crate::dreamcycle::plan::FULL_SEQUENCE {
+            db.record_job("20260724", *kind, JobState::Done, 100, 200);
+        }
+
+        let status = db.dream_status("20260724", 7);
+        assert_eq!(status.indicator, crate::dreamcycle::health::Indicator::Normal);
+        assert!(status.full_run_done_today, "tonight's full cycle completed");
+    }
+
+    /// A degraded catch-up does no Batch work, so it is not evidence about the Batch lane either
+    /// way — it must not clear an amber indicator the failed full cycles earned.
+    #[test]
+    fn a_degraded_catch_up_does_not_clear_the_indicator() {
+        let (clock, now) = ticking_clock();
+        let db = Db::open_in_memory(clock).unwrap();
+        let set = |t: i64| now.store(t, std::sync::atomic::Ordering::Relaxed);
+
+        set(1_000);
+        db.record_job("20260723", JobKind::Consolidation, JobState::Failed, 0, 100);
+        set(5_000);
+        for kind in DEGRADED_SEQUENCE {
+            db.record_job("20260724", *kind, JobState::Done, 100, 200);
+        }
+
+        let status = db.dream_status("20260724", 7);
+        assert_eq!(status.last.map(|c| c.kind), Some(CycleKind::Degraded));
+        assert_eq!(status.indicator, crate::dreamcycle::health::Indicator::Amber);
+        assert!(!status.full_run_done_today, "a catch-up is not the night's full cycle");
+    }
+
+    #[test]
+    fn dream_status_on_a_fresh_install_is_empty_and_normal() {
+        let db = Db::open_in_memory(clock(1)).unwrap();
+        let status = db.dream_status("20260724", 7);
+        assert!(status.last.is_none());
+        assert_eq!(status.indicator, crate::dreamcycle::health::Indicator::Normal);
+        assert!(!status.full_run_done_today);
     }
 
     #[test]

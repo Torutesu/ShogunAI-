@@ -299,7 +299,7 @@ mod encryption_tests {
         let content: String =
             conn.query_row("SELECT content FROM event_log", [], |r| r.get(0)).unwrap();
         assert_eq!(content, "pre-existing memory");
-        assert_eq!(schema_version(&conn).unwrap(), Some(5), "schema carried over");
+        assert_eq!(schema_version(&conn).unwrap(), Some(6), "schema carried over");
 
         let _ = std::fs::remove_file(&plain);
         let _ = std::fs::remove_file(&enc);
@@ -333,7 +333,7 @@ mod tests {
         ] {
             assert!(tables.iter().any(|t| t == expected), "missing table {expected}");
         }
-        assert_eq!(schema_version(&conn).unwrap(), Some(5));
+        assert_eq!(schema_version(&conn).unwrap(), Some(6));
     }
 
     #[test]
@@ -345,12 +345,12 @@ mod tests {
 
         {
             let conn = open(&path).unwrap();
-            assert_eq!(schema_version(&conn).unwrap(), Some(5));
+            assert_eq!(schema_version(&conn).unwrap(), Some(6));
         }
         {
             // Reopen: migrate_and_check runs again, finds nothing new, and passes quick_check.
             let conn = open(&path).unwrap();
-            assert_eq!(schema_version(&conn).unwrap(), Some(5));
+            assert_eq!(schema_version(&conn).unwrap(), Some(6));
             let mode: String = conn.query_row("PRAGMA journal_mode", [], |r| r.get(0)).unwrap();
             assert_eq!(mode.to_lowercase(), "wal");
         }

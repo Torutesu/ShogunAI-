@@ -12,6 +12,7 @@ mod axcache;
 mod capture_source;
 mod connectors;
 mod display;
+mod dream;
 mod exclusions;
 mod geometry;
 mod hover;
@@ -126,6 +127,8 @@ pub fn run() {
         ai_sessions::mac::set_ai_session_import,
         exclusions::mac::list_exclusions,
         exclusions::mac::set_app_excluded,
+        dream::mac::dream_status,
+        dream::mac::run_dream_now,
     ]);
 
     // NOTE: the visible surface is a NATIVE NSPanel hosting the webview's content view
@@ -338,6 +341,11 @@ fn setup_macos(app: &tauri::App) {
 
             // Local state maintenance (the model-free half of the Dream Cycle).
             spawn_maintenance_job(db.clone());
+
+            // The Dream Cycle itself (§6.7): the nightly gate + consolidation. Everything it
+            // decides is in shogun-core; this starts the driver that reads idle/power/clock and
+            // actually ticks it. Without a Select KK key it runs the local-rule lane — no network.
+            let _ = dream::mac::spawn_dream_driver(db.clone());
 
             // First-layer connectors (§6.9). Build the auto-refreshing runtime and start the
             // 15-min read-sync poller. Missing Google creds (env) is not fatal — the app runs

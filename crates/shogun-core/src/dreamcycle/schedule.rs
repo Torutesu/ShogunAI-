@@ -26,6 +26,83 @@ pub fn input_range(last_consolidated_to: Option<i64>, now_ms: i64, default_lookb
 /// Default first-run lookback if no cycle has ever completed: one day.
 pub const DEFAULT_LOOKBACK_MS: i64 = 24 * 60 * 60 * 1000;
 
+// ------------------------------------------------------------------------- the nightly window
+// The window is local wall-clock (FR-DC-01: default 02:00–06:00 local). The adapter can read the
+// clock and the zone offset but must not own the calendar math, so all of it is here and tested.
+
+/// Default nightly window (FR-DC-01), local hours: `[START, END)`.
+pub const DEFAULT_WINDOW_START_HOUR: u32 = 2;
+pub const DEFAULT_WINDOW_END_HOUR: u32 = 6;
+
+/// Local wall-clock date and hour, derived from a UTC instant plus the zone's offset. The adapter
+/// supplies both (macOS `localtime_r` gives them together); everything downstream is pure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LocalTime {
+    /// `YYYYMMDD`, local.
+    pub yyyymmdd: u32,
+    /// Local hour, 0..=23.
+    pub hour: u32,
+}
+
+/// Local date/hour for a UTC instant. `gmt_offset_secs` is seconds east of UTC (`-25200` for
+/// UTC-7); the adapter reads it from the OS, so DST is already folded in.
+pub fn local_time(unix_secs: i64, gmt_offset_secs: i32) -> LocalTime {
+    let local = unix_secs + gmt_offset_secs as i64;
+    LocalTime {
+        yyyymmdd: yyyymmdd_from_days(local.div_euclid(86_400)),
+        hour: (local.rem_euclid(86_400) / 3_600) as u32,
+    }
+}
+
+/// Where the local hour sits relative to the nightly window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WindowPosition {
+    /// Inside the window: a satisfied gate runs the full cycle.
+    pub within: bool,
+    /// The window passed without a full run: the next idle runs the degraded catch-up.
+    pub elapsed: bool,
+}
+
+/// Position of `hour` relative to `[start, end)`, handling a window that wraps midnight (a user who
+/// sets 22:00–04:00). Before the window, both flags are false — there is nothing to do yet.
+pub fn window_position(hour: u32, start_hour: u32, end_hour: u32) -> WindowPosition {
+    if start_hour <= end_hour {
+        WindowPosition { within: hour >= start_hour && hour < end_hour, elapsed: hour >= end_hour }
+    } else {
+        // Wrapping: the window is [start, 24) ∪ [0, end). "Elapsed" is the daytime gap between them.
+        let within = hour >= start_hour || hour < end_hour;
+        WindowPosition { within, elapsed: !within && hour >= end_hour }
+    }
+}
+
+/// The cycle id (`YYYYMMDD`) for the *night* this instant belongs to — the ledger key that makes
+/// "a full cycle already ran tonight" answerable (FR-DC-01, FR-DC-04).
+///
+/// With a window that wraps midnight, 01:00 belongs to the night that started the previous evening,
+/// so it must not get a fresh id — otherwise the cycle would restart halfway through.
+pub fn cycle_id(unix_secs: i64, gmt_offset_secs: i32, start_hour: u32, end_hour: u32) -> String {
+    let local = local_time(unix_secs, gmt_offset_secs);
+    let belongs_to_previous_day = start_hour > end_hour && local.hour < end_hour;
+    let at = if belongs_to_previous_day { unix_secs - 86_400 } else { unix_secs };
+    format!("{:08}", local_time(at, gmt_offset_secs).yyyymmdd)
+}
+
+/// `YYYYMMDD` for a count of days since the epoch (civil-from-days, Howard Hinnant) — no date
+/// dependency, and correct across leap years and century rules.
+fn yyyymmdd_from_days(days: i64) -> u32 {
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    (y.max(0) as u32) * 10_000 + (m as u32) * 100 + d as u32
+}
+
 /// Drives one scheduled evaluation against the real DB. Holds the shared handle and the injected
 /// classifier (invariant 5: only a Batch/Select-KK classifier may touch a model; the Linux build
 /// injects the local-rule one).
@@ -123,6 +200,64 @@ mod tests {
     fn input_range_never_inverts_under_clock_skew() {
         // last consolidated is (impossibly) in the future → clamp to an empty [now, now) range
         assert_eq!(input_range(Some(2_000), 1_000, 400), (1_000, 1_000));
+    }
+
+    #[test]
+    fn local_time_shifts_by_the_zone_offset() {
+        // 2026-07-25T01:30:00Z
+        let utc = 1_784_943_000;
+        assert_eq!(local_time(utc, 0), LocalTime { yyyymmdd: 20_260_725, hour: 1 });
+        // UTC+9: same instant is 10:30 on the 25th
+        assert_eq!(local_time(utc, 9 * 3600), LocalTime { yyyymmdd: 20_260_725, hour: 10 });
+        // UTC-7: still the 24th, 18:30 — the date must roll back, not just the hour
+        assert_eq!(local_time(utc, -7 * 3600), LocalTime { yyyymmdd: 20_260_724, hour: 18 });
+    }
+
+    #[test]
+    fn civil_dates_survive_leap_days_and_century_rules() {
+        // 2024-02-29 (leap), 2000-02-29 (400-year rule), 1900-03-01 (100-year rule: no Feb 29)
+        assert_eq!(local_time(1_709_208_000, 0).yyyymmdd, 20_240_229);
+        assert_eq!(local_time(951_825_600, 0).yyyymmdd, 20_000_229);
+        assert_eq!(local_time(-2_203_848_000, 0).yyyymmdd, 19_000_301);
+    }
+
+    #[test]
+    fn the_default_window_is_two_to_six_local() {
+        let at = |h| window_position(h, DEFAULT_WINDOW_START_HOUR, DEFAULT_WINDOW_END_HOUR);
+        // before: nothing to do yet
+        assert_eq!(at(1), WindowPosition { within: false, elapsed: false });
+        // inside: end hour is exclusive
+        assert!(at(2).within && at(5).within);
+        assert!(!at(6).within);
+        // after: the catch-up case
+        assert_eq!(at(6), WindowPosition { within: false, elapsed: true });
+        assert!(at(23).elapsed);
+    }
+
+    #[test]
+    fn a_window_that_wraps_midnight_stays_one_window() {
+        // 22:00–04:00
+        let at = |h| window_position(h, 22, 4);
+        assert!(at(22).within && at(23).within && at(0).within && at(3).within);
+        assert!(!at(4).within, "end hour is exclusive on the far side of midnight too");
+        // the daytime gap is the elapsed case; the pre-window evening is not
+        assert!(at(4).elapsed && at(12).elapsed);
+        assert!(!at(0).elapsed, "inside the window is never also elapsed");
+    }
+
+    #[test]
+    fn a_wrapping_window_keeps_one_cycle_id_across_midnight() {
+        // 23:30 local and 01:30 local the next morning are the same night (window 22:00–04:00),
+        // so they must share a ledger key — otherwise the cycle restarts halfway through.
+        let evening = 1_784_935_800; // 2026-07-24T23:30:00Z
+        let small_hours = 1_784_943_200; // 2026-07-25T01:33:20Z
+        assert_eq!(cycle_id(evening, 0, 22, 4), "20260724");
+        assert_eq!(cycle_id(small_hours, 0, 22, 4), "20260724");
+        // with the default (non-wrapping) window, the small hours are simply that day's night
+        assert_eq!(
+            cycle_id(small_hours, 0, DEFAULT_WINDOW_START_HOUR, DEFAULT_WINDOW_END_HOUR),
+            "20260725"
+        );
     }
 
     #[test]

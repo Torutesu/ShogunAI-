@@ -57,6 +57,51 @@ pub struct DreamRunSummary {
     pub completed_fully: bool,
 }
 
+/// What one night in the job ledger amounts to. Reconstructed from `job_runs` rather than reported
+/// by the run that produced it, so it survives a restart and a crash mid-cycle (FR-DC-04/06).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CycleOutcome {
+    pub cycle_id: String,
+    /// Which sequence the night ran. Inferred from the jobs recorded: anything outside the degraded
+    /// pair means a full cycle. Consolidation is job #1, so a full cycle is recognisable from its
+    /// very first record — a partially-run full cycle is never mistaken for a degraded one.
+    pub kind: CycleKind,
+    /// Every job in the sequence reached `done`.
+    pub succeeded: bool,
+    pub jobs_done: usize,
+    pub jobs_failed: usize,
+    /// The event-time range the cycle consumed.
+    pub input_from_ts: i64,
+    pub input_to_ts: i64,
+    /// Wall-clock bracket of the run (first and last ledger write).
+    pub started_at: i64,
+    pub ended_at: i64,
+}
+
+impl CycleOutcome {
+    pub fn duration_ms(&self) -> i64 {
+        self.ended_at.saturating_sub(self.started_at)
+    }
+}
+
+/// The Dream Cycle status the Full UI shows (FR-DC-06) plus the indicator (FR-DC-05). Everything is
+/// derived from the ledger and the DB, so the view is the same after a relaunch as it was live.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DreamStatus {
+    /// The most recent night, if any has ever run.
+    pub last: Option<CycleOutcome>,
+    /// Amber/red escalation over consecutive failed nights (FR-DC-05).
+    pub indicator: super::health::Indicator,
+    /// Events in the last cycle's input window.
+    pub events_processed: i64,
+    /// State rows inserted/updated during the last run.
+    pub state_changes: i64,
+    /// Traceability rows written during the last run — the outbound chunk count (AR-11).
+    pub chunks_sent: i64,
+    /// A full cycle has already completed for tonight's cycle id (feeds the gate).
+    pub full_run_done_today: bool,
+}
+
 /// Run (or resume) a cycle: execute the still-to-do jobs in order, persisting each transition.
 /// Stops at the first failure, leaving the cycle resumable.
 pub fn run_cycle<R: DreamJobRunner>(

@@ -721,6 +721,88 @@ function ExclusionsSection(): JSX.Element | null {
   );
 }
 
+// The nightly cycle's result (FR-DC-06). Shown because the work happens while nobody is watching:
+// without this, "did anything happen last night" is unanswerable, and a run that has been quietly
+// failing for a week looks exactly like one that never had anything to do.
+interface DreamStatus {
+  indicator: "normal" | "amber" | "red";
+  batch_lane: boolean;
+  last_kind: "full" | "degraded" | null;
+  last_cycle_id: string | null;
+  last_succeeded: boolean;
+  last_ended_at: number;
+  jobs_done: number;
+  jobs_failed: number;
+  duration_ms: number;
+  events_processed: number;
+  state_changes: number;
+  chunks_sent: number;
+  done_tonight: boolean;
+}
+
+/** `20260724` → a date the reader recognises. */
+function cycleDate(id: string | null): string {
+  if (!id) return "";
+  const m = /^(\d{4})(\d{2})(\d{2})/.exec(id);
+  return m ? `${m[1]}-${m[2]}-${m[3]}` : id;
+}
+
+function DreamSection(): JSX.Element {
+  const [status, setStatus] = useState<DreamStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback((): void => {
+    if (!IN_TAURI) return;
+    void invoke<DreamStatus>("dream_status").then(setStatus).catch(() => undefined);
+  }, []);
+  useEffect(refresh, [refresh]);
+
+  const runNow = (): void => {
+    setBusy(true);
+    setError(null);
+    void invoke("run_dream_now")
+      .then(refresh)
+      .catch((e) => setError(String(e)))
+      .finally(() => setBusy(false));
+  };
+
+  // The headline is the state worth acting on, not a job count.
+  const headline = ((): { text: string; cls: string } => {
+    if (!status || !status.last_cycle_id) return { text: t.dreamNever, cls: "" };
+    if (status.indicator === "red") return { text: t.dreamAttention, cls: " is-warn" };
+    if (status.indicator === "amber" || !status.last_succeeded) {
+      return { text: t.dreamCarried, cls: " is-warn" };
+    }
+    return { text: `${t.dreamOk} ${cycleDate(status.last_cycle_id)}`, cls: " is-ok" };
+  })();
+
+  return (
+    <section className="set">
+      <div className="set__label">{t.dream}</div>
+      <div className="set__hint">{t.dreamHint}</div>
+      {error ? <div className="set__hint is-err">{error}</div> : null}
+      <div className="conn">
+        <div className="conn__meta">
+          <span className={`conn__state${headline.cls}`}>{headline.text}</span>
+          {status?.last_cycle_id ? (
+            <span className="conn__state">
+              {status.events_processed} {t.dreamEvents} · {status.state_changes} {t.dreamChanges}
+              {status.chunks_sent > 0 ? ` · ${status.chunks_sent} ${t.dreamChunks}` : ""}
+            </span>
+          ) : null}
+          {status && !status.batch_lane ? (
+            <span className="conn__state">{t.dreamLocal}</span>
+          ) : null}
+        </div>
+        <button className="keyrow__btn" type="button" disabled={busy} onClick={runNow}>
+          {busy ? t.dreamRunning : t.dreamRunNow}
+        </button>
+      </div>
+    </section>
+  );
+}
+
 // AI coding-tool transcripts. Opt-in: a session log is a transcript of the user's work, so
 // nothing is read until they say so.
 function AiSessionsSection(): JSX.Element {
@@ -1137,6 +1219,7 @@ function Settings(props: {
         <ConnectionsSection />
         <AiSessionsSection />
         <ExclusionsSection />
+        <DreamSection />
         <section className="set">
           <div className="set__label" id="seg-appearance">{t.appearance}</div>
           <div className="seg" role="radiogroup" aria-labelledby="seg-appearance">

@@ -59,6 +59,66 @@ pub fn list_by_cycle(conn: &Connection, cycle_id: &str) -> Result<Vec<JobRunRow>
     rows.collect()
 }
 
+/// One cycle's rows, as returned by [`recent_cycles`] — the row set plus when the cycle started and
+/// last moved, which is what a "last run" view needs and `list_by_cycle` cannot give.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CycleRows {
+    pub cycle_id: String,
+    pub rows: Vec<JobRunRow>,
+    /// Earliest `updated_at` across the cycle's rows — when the run began.
+    pub started_at: i64,
+    /// Latest `updated_at` — when it last made progress.
+    pub ended_at: i64,
+}
+
+/// The most recent `limit` cycles, newest first, each with all of its job rows.
+///
+/// Ordered by when the cycle last moved rather than by `cycle_id`, so a resumed older cycle sorts
+/// where it actually ran — the health indicator counts *nights as they happened*, and a cycle id is
+/// a date string, not a clock.
+pub fn recent_cycles(conn: &Connection, limit: usize) -> Result<Vec<CycleRows>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT cycle_id, kind, state, input_from_ts, input_to_ts, updated_at FROM job_runs
+          WHERE cycle_id IN (
+              SELECT cycle_id FROM job_runs GROUP BY cycle_id ORDER BY MAX(updated_at) DESC LIMIT ?1
+          )
+          ORDER BY updated_at DESC",
+    )?;
+    let rows = stmt.query_map([limit as i64], |r| {
+        Ok((
+            JobRunRow {
+                cycle_id: r.get(0)?,
+                kind: r.get(1)?,
+                state: r.get(2)?,
+                input_from_ts: r.get(3)?,
+                input_to_ts: r.get(4)?,
+            },
+            r.get::<_, i64>(5)?,
+        ))
+    })?;
+
+    // Rows arrive newest-first and grouped only by the IN filter, so fold them into cycles while
+    // preserving first-seen order — that order is the newest-first order the caller needs.
+    let mut out: Vec<CycleRows> = Vec::new();
+    for row in rows {
+        let (row, updated_at) = row?;
+        match out.iter_mut().find(|c| c.cycle_id == row.cycle_id) {
+            Some(c) => {
+                c.started_at = c.started_at.min(updated_at);
+                c.ended_at = c.ended_at.max(updated_at);
+                c.rows.push(row);
+            }
+            None => out.push(CycleRows {
+                cycle_id: row.cycle_id.clone(),
+                rows: vec![row],
+                started_at: updated_at,
+                ended_at: updated_at,
+            }),
+        }
+    }
+    Ok(out)
+}
+
 /// The end (`input_to_ts`) of the most recent **completed** consolidation, i.e. the high-water mark
 /// of events already consolidated (FR-DC-04). The next cycle consumes `[this, now)`, so no event is
 /// classified twice and none is skipped. `None` if no consolidation has ever completed (first run).
@@ -104,6 +164,37 @@ mod tests {
         upsert(&conn, "night-b", "consolidation", "done", 0, 1, 1).unwrap();
         assert_eq!(list_by_cycle(&conn, "night-a").unwrap().len(), 2);
         assert_eq!(list_by_cycle(&conn, "night-b").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn recent_cycles_groups_by_cycle_newest_first() {
+        let conn = crate::open_in_memory().unwrap();
+        upsert(&conn, "20260720", "consolidation", "done", 0, 100, 1_000).unwrap();
+        upsert(&conn, "20260720", "compression", "done", 0, 100, 1_500).unwrap();
+        upsert(&conn, "20260721", "consolidation", "failed", 100, 200, 5_000).unwrap();
+
+        let cycles = recent_cycles(&conn, 10).unwrap();
+        assert_eq!(cycles.len(), 2);
+        assert_eq!(cycles[0].cycle_id, "20260721", "the night that ran most recently comes first");
+        assert_eq!(cycles[1].cycle_id, "20260720");
+        assert_eq!(cycles[1].rows.len(), 2);
+        // start/end bracket the cycle's rows, so a run's duration is readable from the ledger
+        assert_eq!((cycles[1].started_at, cycles[1].ended_at), (1_000, 1_500));
+    }
+
+    /// The limit counts cycles, not rows — a six-job night must not crowd out the previous ones.
+    #[test]
+    fn recent_cycles_limit_counts_cycles_not_rows() {
+        let conn = crate::open_in_memory().unwrap();
+        for (i, cycle) in ["c1", "c2", "c3"].iter().enumerate() {
+            for kind in ["consolidation", "compression", "state_update"] {
+                upsert(&conn, cycle, kind, "done", 0, 1, 1_000 + i as i64 * 100).unwrap();
+            }
+        }
+        let cycles = recent_cycles(&conn, 2).unwrap();
+        assert_eq!(cycles.len(), 2);
+        assert_eq!(cycles[0].cycle_id, "c3");
+        assert_eq!(cycles[0].rows.len(), 3, "every row of a kept cycle is returned");
     }
 
     #[test]

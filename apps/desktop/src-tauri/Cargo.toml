@@ -45,8 +45,9 @@ security-framework = "3"
 shogun-memory = { path = "../../../crates/shogun-memory", features = ["onnx"] }
 # OS CSPRNG for minting that key on first run — never a derived or guessable value.
 getrandom = "0.2"
-# A dedicated runtime to block the (async) Agent-lane call on the inline trigger thread.
-tokio = { version = "1", features = ["rt", "rt-multi-thread"] }
+# A dedicated runtime to block the (async) Agent-lane call on the inline trigger thread. `time`
+# is the Dream Cycle's inter-poll delay while a nightly batch is in flight.
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "time"] }
 # shogun-fusion for the notch context-action command (ScreenContext / ActionCandidate / Level).
 shogun-fusion = { path = "../../../crates/shogun-fusion" }
 # shogun-agents for L1/L2/L3-gated execution of a clicked context action.
@@ -67,6 +68,9 @@ objc2-foundation = { version = "0.3", features = [
 objc2-core-graphics = { version = "0.3", features = ["CGEvent", "CGEventTypes"] }
 objc2-core-foundation = { version = "0.3", features = ["CFRunLoop", "CFMachPort", "CFBase"] }
 accessibility-sys = "0.2"
+# localtime_r for the zone offset: the Dream Cycle window is local wall-clock, and only the OS
+# knows the offset actually in effect (DST included).
+libc = "0.2"
 core-foundation = "0.10"
 core-foundation-sys = "0.8"
 

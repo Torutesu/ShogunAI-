@@ -112,8 +112,8 @@ pub fn insert_person(
         tx.execute(
             "INSERT INTO people
                (display_name, aliases, emails, handles, relationship_summary,
-                confidence, created_at, updated_at, last_evidence_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, ?7)",
+                confidence, base_confidence, created_at, updated_at, last_evidence_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7, ?7, ?7)",
             params![
                 person.display_name,
                 person.aliases_json,
@@ -170,8 +170,8 @@ pub fn insert_project(
         tx.execute(
             "INSERT INTO projects
                (name, status, summary, participants, sources,
-                confidence, created_at, updated_at, last_evidence_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, ?7)",
+                confidence, base_confidence, created_at, updated_at, last_evidence_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?7, ?7, ?7)",
             params![
                 project.name,
                 project.status.as_str(),
@@ -244,8 +244,8 @@ pub fn insert_commitment(
         tx.execute(
             "INSERT INTO commitments
                (direction, counterparty_id, description, due_at, status, project_id,
-                confidence, created_at, updated_at, last_evidence_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, ?8)",
+                confidence, base_confidence, created_at, updated_at, last_evidence_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, ?8, ?8, ?8)",
             params![
                 c.direction.as_str(),
                 c.counterparty_id,
@@ -308,8 +308,8 @@ pub fn insert_open_loop(
         tx.execute(
             "INSERT INTO open_loops
                (kind, description, counterparty_id, project_id, opened_at, staleness_days,
-                status, confidence, created_at, updated_at, last_evidence_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, 0, 'open', ?6, ?7, ?7, ?7)",
+                status, confidence, base_confidence, created_at, updated_at, last_evidence_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, 0, 'open', ?6, ?6, ?7, ?7, ?7)",
             params![
                 l.kind.as_str(),
                 l.description,
