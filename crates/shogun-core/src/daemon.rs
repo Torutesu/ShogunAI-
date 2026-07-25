@@ -756,6 +756,28 @@ impl Db {
             .unwrap_or(0)
     }
 
+    /// Record a person identity seen in an event, merging it into the right person
+    /// ([`shogun_memory::identity::observe`]).
+    ///
+    /// The rule this enforces is do-not-mis-merge: only an exact channel identity (same address,
+    /// or same handle on the same platform) merges automatically. A name collision is kept
+    /// separate and reported, because fusing two real people is disruptive to undo while a missed
+    /// merge is easy to fix later.
+    ///
+    /// Nothing calls this automatically yet — the connectors are what will supply senders and
+    /// participants, and they are not live. It is exercised by tests and reachable from the
+    /// Memory API in the meantime.
+    pub fn observe_identity(
+        &self,
+        incoming: &shogun_memory::identity::Identity,
+        seen_name: Option<&str>,
+        event_id: i64,
+    ) -> Option<shogun_memory::identity::Observed> {
+        let now = self.now_ms();
+        let mut guard = self.conn.lock().ok()?;
+        shogun_memory::identity::observe(&mut guard, incoming, seen_name, event_id, now).ok()
+    }
+
     /// The maintenance that needs no model call.
     ///
     /// The full Dream Cycle also classifies the day's events through the Batch lane, which needs

@@ -183,3 +183,267 @@ mod tests {
         assert_eq!(resolve(&Identity::new(Channel::Slack, "z"), Some("   "), &people), Resolution::New);
     }
 }
+
+// ------------------------------------------------------------------ persistence
+
+use rusqlite::{params, Connection};
+
+impl Channel {
+    /// The stored tag for a handle. Handles are persisted as `"<channel>:<value>"` so a Slack
+    /// `alice` and a GitHub `alice` stay distinguishable — storing bare handles would let them
+    /// collide into one person, which is exactly the mis-merge this module exists to prevent.
+    pub fn tag(self) -> &'static str {
+        match self {
+            Channel::Email => "email",
+            Channel::Slack => "slack",
+            Channel::GitHub => "github",
+            Channel::Linear => "linear",
+            Channel::Notion => "notion",
+        }
+    }
+
+    pub fn from_tag(s: &str) -> Option<Self> {
+        match s {
+            "email" => Some(Channel::Email),
+            "slack" => Some(Channel::Slack),
+            "github" => Some(Channel::GitHub),
+            "linear" => Some(Channel::Linear),
+            "notion" => Some(Channel::Notion),
+            _ => None,
+        }
+    }
+}
+
+fn parse_json_array(raw: Option<String>) -> Vec<String> {
+    raw.and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok()).unwrap_or_default()
+}
+
+/// Project every `people` row into the identity fingerprint [`resolve`] compares against.
+pub fn known_people(conn: &Connection) -> Result<Vec<PersonIdentities>, rusqlite::Error> {
+    let mut stmt = conn.prepare("SELECT id, display_name, emails, handles FROM people ORDER BY id")?;
+    let rows = stmt.query_map([], |r| {
+        let id: i64 = r.get(0)?;
+        let display_name: String = r.get(1)?;
+        let mut identities: Vec<Identity> = parse_json_array(r.get(2)?)
+            .into_iter()
+            .map(|e| Identity::new(Channel::Email, e))
+            .collect();
+        for h in parse_json_array(r.get(3)?) {
+            if let Some((tag, value)) = h.split_once(':') {
+                if let Some(ch) = Channel::from_tag(tag) {
+                    identities.push(Identity::new(ch, value));
+                }
+            }
+        }
+        Ok(PersonIdentities { person_id: id, display_name, identities })
+    })?;
+    rows.collect()
+}
+
+/// Attach an identity to an existing person, if they do not already carry it.
+fn attach(
+    conn: &Connection,
+    person_id: i64,
+    incoming: &Identity,
+    now_ms: i64,
+) -> Result<(), rusqlite::Error> {
+    let column = if incoming.channel == Channel::Email { "emails" } else { "handles" };
+    let stored = if incoming.channel == Channel::Email {
+        incoming.value.trim().to_string()
+    } else {
+        format!("{}:{}", incoming.channel.tag(), incoming.value.trim())
+    };
+    let raw: Option<String> = conn.query_row(
+        &format!("SELECT {column} FROM people WHERE id = ?1"),
+        params![person_id],
+        |r| r.get(0),
+    )?;
+    let mut values = parse_json_array(raw);
+    if values.iter().any(|v| v.eq_ignore_ascii_case(&stored)) {
+        return Ok(()); // already known
+    }
+    values.push(stored);
+    let json = serde_json::to_string(&values).unwrap_or_else(|_| "[]".into());
+    conn.execute(
+        &format!("UPDATE people SET {column} = ?1, updated_at = ?2, last_evidence_at = ?2 WHERE id = ?3"),
+        params![json, now_ms, person_id],
+    )?;
+    Ok(())
+}
+
+/// The effect of observing one identity.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Observed {
+    /// Merged into an existing person (exact channel-identity match).
+    Merged { person_id: i64 },
+    /// A weak name-only overlap: recorded as a NEW person, with the possible match reported so it
+    /// can be offered for confirmation. Never merged automatically — un-fusing two real people is
+    /// disruptive, while a missed merge is easy to fix later.
+    NewWithPossibleMatch { person_id: i64, possible: i64 },
+    /// Nothing resembled it; a new person.
+    New { person_id: i64 },
+}
+
+/// Observe an identity seen in an event, merging it into the right person or creating one.
+///
+/// `event_id` becomes the new person's provenance (FR-ST-02 requires every state row to have
+/// some), and `seen_name` is the display name it appeared under.
+pub fn observe(
+    conn: &mut Connection,
+    incoming: &Identity,
+    seen_name: Option<&str>,
+    event_id: i64,
+    now_ms: i64,
+) -> Result<Observed, crate::MemoryError> {
+    let people = known_people(conn)?;
+    let resolution = resolve(incoming, seen_name, &people);
+    match resolution {
+        Resolution::Match { person_id, .. } => {
+            attach(conn, person_id, incoming, now_ms)?;
+            Ok(Observed::Merged { person_id })
+        }
+        Resolution::Possible { person_id: possible, .. } => {
+            let id = create(conn, incoming, seen_name, event_id, now_ms)?;
+            Ok(Observed::NewWithPossibleMatch { person_id: id, possible })
+        }
+        Resolution::New => {
+            let id = create(conn, incoming, seen_name, event_id, now_ms)?;
+            Ok(Observed::New { person_id: id })
+        }
+    }
+}
+
+fn create(
+    conn: &mut Connection,
+    incoming: &Identity,
+    seen_name: Option<&str>,
+    event_id: i64,
+    now_ms: i64,
+) -> Result<i64, crate::MemoryError> {
+    let name = seen_name.map(str::trim).filter(|s| !s.is_empty()).unwrap_or(&incoming.value);
+    let id = crate::state::insert_person(
+        conn,
+        &crate::state::NewPerson {
+            display_name: name,
+            // A person known only from one sighting is a weak record, and says so.
+            confidence: 0.4,
+            now: now_ms,
+            ..Default::default()
+        },
+        &[crate::state::Provenance::new(event_id)],
+    )?;
+    attach(conn, id, incoming, now_ms)?;
+    Ok(id)
+}
+
+#[cfg(test)]
+mod persistence_tests {
+    use super::*;
+
+    fn seed_event(conn: &Connection) -> i64 {
+        crate::event_log::insert(
+            conn,
+            &crate::event_log::NewEvent {
+                ts: 1,
+                source: "gmail",
+                kind: "email",
+                app_bundle_id: None,
+                window_title: Some("thread"),
+                content: "hello",
+                content_hash: "h1",
+                dwell_ms: 0,
+                display_id: None,
+                window_bounds: None,
+            },
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn the_same_address_seen_twice_is_one_person() {
+        let mut conn = crate::open_in_memory().unwrap();
+        let e = seed_event(&conn);
+        let alice = Identity::new(Channel::Email, "alice@example.com");
+        let first = observe(&mut conn, &alice, Some("Alice"), e, 1).unwrap();
+        let second =
+            observe(&mut conn, &Identity::new(Channel::Email, "ALICE@example.com"), None, e, 2)
+                .unwrap();
+        let Observed::New { person_id } = first else { panic!("first sighting is new: {first:?}") };
+        assert_eq!(second, Observed::Merged { person_id }, "case must not fork the person");
+
+        let n: i64 = conn.query_row("SELECT count(*) FROM people", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 1);
+    }
+
+    /// The point of cross-channel resolution: one person, several systems.
+    #[test]
+    fn a_person_accumulates_identities_across_channels() {
+        let mut conn = crate::open_in_memory().unwrap();
+        let e = seed_event(&conn);
+        let alice = Identity::new(Channel::Email, "alice@example.com");
+        let Observed::New { person_id } = observe(&mut conn, &alice, Some("Alice"), e, 1).unwrap()
+        else {
+            panic!("new")
+        };
+        // Her Slack handle is not yet known, so it arrives as its own record…
+        observe(&mut conn, &Identity::new(Channel::Slack, "alice"), Some("Alice"), e, 2).unwrap();
+        // …but once the Slack handle is attached to her, seeing it again resolves to her.
+        attach(&conn, person_id, &Identity::new(Channel::Slack, "alice"), 3).unwrap();
+        let again = observe(&mut conn, &Identity::new(Channel::Slack, "alice"), None, e, 4).unwrap();
+        assert_eq!(again, Observed::Merged { person_id });
+    }
+
+    /// A Slack `alice` and a GitHub `alice` are not the same identity — storing bare handles would
+    /// fuse two people, which is the failure this module is built to avoid.
+    #[test]
+    fn the_same_handle_on_different_platforms_stays_separate() {
+        let mut conn = crate::open_in_memory().unwrap();
+        let e = seed_event(&conn);
+        let a = observe(&mut conn, &Identity::new(Channel::Slack, "alice"), Some("A"), e, 1).unwrap();
+        let b = observe(&mut conn, &Identity::new(Channel::GitHub, "alice"), Some("B"), e, 2).unwrap();
+        let (Observed::New { person_id: pa }, Observed::New { person_id: pb }) = (a, b) else {
+            panic!("both should be new people")
+        };
+        assert_ne!(pa, pb, "different platforms must not fuse");
+    }
+
+    /// A name collision is reported, never acted on.
+    #[test]
+    fn a_name_only_overlap_is_offered_not_merged() {
+        let mut conn = crate::open_in_memory().unwrap();
+        let e = seed_event(&conn);
+        let Observed::New { person_id: first } =
+            observe(&mut conn, &Identity::new(Channel::Email, "alice@a.com"), Some("Alice"), e, 1)
+                .unwrap()
+        else {
+            panic!("new")
+        };
+        // A different address, same display name: plausibly the same person, plausibly not.
+        let second =
+            observe(&mut conn, &Identity::new(Channel::Email, "alice@b.com"), Some("Alice"), e, 2)
+                .unwrap();
+        match second {
+            Observed::NewWithPossibleMatch { person_id, possible } => {
+                assert_ne!(person_id, first, "kept separate");
+                assert_eq!(possible, first, "and the overlap is reported for confirmation");
+            }
+            other => panic!("a name collision must not auto-merge: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn attaching_a_known_identity_twice_does_not_duplicate_it() {
+        let mut conn = crate::open_in_memory().unwrap();
+        let e = seed_event(&conn);
+        let alice = Identity::new(Channel::Email, "alice@example.com");
+        let Observed::New { person_id } = observe(&mut conn, &alice, Some("Alice"), e, 1).unwrap()
+        else {
+            panic!("new")
+        };
+        attach(&conn, person_id, &alice, 2).unwrap();
+        let raw: Option<String> = conn
+            .query_row("SELECT emails FROM people WHERE id = ?1", [person_id], |r| r.get(0))
+            .unwrap();
+        assert_eq!(parse_json_array(raw).len(), 1, "no duplicate entry");
+    }
+}
