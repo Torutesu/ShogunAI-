@@ -324,6 +324,10 @@ fn setup_macos(app: &tauri::App) {
             // the tools' own session logs carry role/time/session id that screen capture cannot.
             ai_sessions::mac::spawn_importer(app.handle().clone(), db.clone());
 
+            // Embed the backlog in the background (FR-MEM-22: never on the write path, so a slow
+            // model cannot delay a capture). A no-op when no model is loaded.
+            spawn_embed_job(db.clone());
+
             // First-layer connectors (§6.9). Build the auto-refreshing runtime and start the
             // 15-min read-sync poller. Missing Google creds (env) is not fatal — the app runs
             // without connectors until the user sets them up.
@@ -1345,5 +1349,69 @@ fn memory_db(app: &tauri::App) -> Result<shogun_core::daemon::Db, String> {
             .map(|d| d.as_millis() as i64)
             .unwrap_or(0)
     });
-    shogun_core::daemon::Db::open_encrypted(path, &key, clock).map_err(|e| e.to_string())
+    let db = shogun_core::daemon::Db::open_encrypted(path, &key, clock).map_err(|e| e.to_string())?;
+    Ok(attach_embedder(db, embedding_model_paths(app)))
 }
+
+/// Drain the embedding backlog on a slow loop.
+///
+/// Deliberately unhurried and small-batched: this competes with the capture daemon and the UI for
+/// cores, and the idle-CPU budget is 5%. Falling behind is fine — an un-embedded event is still
+/// found by full-text search (FR-MEM-22), it just isn't matchable by paraphrase yet.
+#[cfg(target_os = "macos")]
+fn spawn_embed_job(db: shogun_core::daemon::Db) {
+    std::thread::spawn(move || loop {
+        let n = db.embed_pending(32);
+        if n > 0 {
+            eprintln!("[embed] embedded {n} event(s)");
+            // More waiting: come back promptly but still yield between batches.
+            std::thread::sleep(std::time::Duration::from_secs(2));
+        } else {
+            std::thread::sleep(std::time::Duration::from_secs(60));
+        }
+    });
+}
+
+/// Where the bundled embedding model lives. Inside the packaged app it sits in the resource
+/// directory; in a dev checkout the env vars point at whatever
+/// `scripts/fetch-embedding-model.sh` downloaded.
+#[cfg(target_os = "macos")]
+fn embedding_model_paths(app: &tauri::App) -> Option<(std::path::PathBuf, std::path::PathBuf)> {
+    use tauri::Manager;
+    if let (Ok(m), Ok(t)) =
+        (std::env::var("SHOGUN_EMBED_MODEL"), std::env::var("SHOGUN_EMBED_TOKENIZER"))
+    {
+        return Some((m.into(), t.into()));
+    }
+    let dir = app.path().resource_dir().ok()?.join("models/multilingual-e5-small");
+    let (m, t) = (dir.join("model.onnx"), dir.join("tokenizer.json"));
+    (m.exists() && t.exists()).then_some((m, t))
+}
+
+/// Attach the local embedding model if it is present, turning search from lexical into hybrid.
+///
+/// Absence is normal, not an error: the model is fetched separately and the product is fully
+/// usable without it — every result still comes back through full-text search, it just cannot
+/// match a paraphrase. A load FAILURE is different and is logged loudly, because that means the
+/// model is there but unusable.
+#[cfg(target_os = "macos")]
+fn attach_embedder(
+    db: shogun_core::daemon::Db,
+    paths: Option<(std::path::PathBuf, std::path::PathBuf)>,
+) -> shogun_core::daemon::Db {
+    let Some((model, tokenizer)) = paths else {
+        eprintln!("[embed] no local model — search stays lexical (hybrid needs the bundled model)");
+        return db;
+    };
+    match shogun_memory::embed_onnx::OnnxEmbedder::load(&model, &tokenizer) {
+        Ok(e) => {
+            eprintln!("[embed] local model loaded — hybrid search enabled");
+            db.with_embedder(std::sync::Arc::new(e))
+        }
+        Err(e) => {
+            eprintln!("[embed] model present but failed to load ({e}) — search stays lexical");
+            db
+        }
+    }
+}
+

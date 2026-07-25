@@ -17,7 +17,16 @@ zerocopy = "0.7"
 refinery = { version = "0.8", features = ["rusqlite"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+ort = { version = "=2.0.0-rc.10", default-features = false, features = ["load-dynamic", "ndarray"], optional = true }
+tokenizers = { version = "0.20", default-features = false, features = ["onig"], optional = true }
 thiserror = "1"
 
 [lints]
 workspace = true
+
+[features]
+# The real ONNX-backed embedder. OFF by default: it pulls a heavy runtime, and the pure-logic
+# tests (and Linux CI) must stay fast and model-free. `load-dynamic` resolves libonnxruntime at
+# RUNTIME rather than downloading a binary during the build, so the build never needs the network
+# and the shared library can simply ship inside the .app.
+onnx = ["dep:ort", "dep:tokenizers"]

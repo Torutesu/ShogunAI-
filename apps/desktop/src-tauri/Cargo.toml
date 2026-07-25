@@ -39,7 +39,10 @@ shogun-core = { path = "../../../crates/shogun-core", features = ["db", "net", "
 # BYOK key read from the macOS Keychain (invariant 7 — secrets never in a file/DB/log).
 security-framework = "3"
 # The DB encryption key type + the plaintext→encrypted upgrade path (memory at rest).
-shogun-memory = { path = "../../../crates/shogun-memory" }
+# `onnx` brings the local embedding model, which turns search from lexical into hybrid. The model
+# files themselves are fetched separately (scripts/fetch-embedding-model.sh) and the app degrades
+# to lexical search when they are absent.
+shogun-memory = { path = "../../../crates/shogun-memory", features = ["onnx"] }
 # OS CSPRNG for minting that key on first run — never a derived or guessable value.
 getrandom = "0.2"
 # A dedicated runtime to block the (async) Agent-lane call on the inline trigger thread.

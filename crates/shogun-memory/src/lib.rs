@@ -18,6 +18,9 @@ pub mod ai_session;
 pub mod cold;
 pub mod embed;
 pub mod embed_job;
+/// The real ONNX embedder — see the crate feature note.
+#[cfg(feature = "onnx")]
+pub mod embed_onnx;
 pub mod event_log;
 pub mod extract;
 pub mod hot;
