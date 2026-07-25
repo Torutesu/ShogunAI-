@@ -98,24 +98,101 @@ pub fn reciprocal_rank_fusion(lists: &[&[i64]], k: f64) -> Vec<(i64, f64)> {
     out
 }
 
-/// Quote a user query as a single FTS5 string token (phrase), escaping embedded double quotes.
-/// This keeps arbitrary user input from being parsed as FTS5 operators.
-fn fts_quote(query: &str) -> String {
-    format!("\"{}\"", query.replace('"', "\"\""))
+/// Longest sequence of terms sent to FTS. A pathological paste should not turn into a thousand-
+/// clause MATCH; the leading terms carry the question anyway.
+const MAX_FTS_TERMS: usize = 24;
+
+/// Build the FTS5 MATCH expression for a user's question.
+///
+/// Quoting matters twice over. Unquoted, a question containing `-`, `*`, `OR` or `NEAR` is parsed
+/// as FTS operators and errors or silently means something else. But quoting the *whole* question
+/// makes it a single phrase, which only matches text containing those words contiguously — and a
+/// question almost never appears verbatim in the answer ("vendor renewal pricing" does not occur
+/// in "the vendor renewal discussion continued; pricing was raised"). That returned nothing for
+/// essentially every multi-word question.
+///
+/// So each term is quoted separately and combined with OR: any term can match, and bm25 ranks a
+/// document that matches more — and rarer — terms higher, which is the behaviour a question wants.
+///
+/// The index uses a trigram tokenizer, so a term shorter than three characters cannot match
+/// anything and is dropped. For CJK, which has no spaces to split on, a long run is expanded into
+/// its overlapping trigrams — that is how a trigram index is queried for those scripts, and it is
+/// the same OR-of-terms shape.
+///
+/// Returns `None` when nothing usable is left, which the caller treats as "no results" rather than
+/// running an empty MATCH.
+fn fts_query(query: &str) -> Option<String> {
+    let mut terms: Vec<String> = Vec::new();
+    for raw in query.split(|c: char| !c.is_alphanumeric()) {
+        if terms.len() >= MAX_FTS_TERMS {
+            break;
+        }
+        let chars: Vec<char> = raw.chars().collect();
+        if chars.len() < 3 {
+            continue;
+        }
+        if chars.iter().any(|c| is_cjk(*c)) {
+            // No word boundaries to rely on: match on the run's trigrams.
+            for w in chars.windows(3) {
+                if terms.len() >= MAX_FTS_TERMS {
+                    break;
+                }
+                terms.push(quote(&w.iter().collect::<String>()));
+            }
+        } else if is_stopword(raw) {
+            // Keep going — a stopword contributes no signal but its presence still means the
+            // question had words in it.
+        } else {
+            terms.push(quote(raw));
+        }
+    }
+    if terms.is_empty() {
+        // A question made only of function words has nothing to retrieve on. Returning None is
+        // honest: matching every document via "the" would fill the result budget with noise and
+        // push out anything real.
+        return None;
+    }
+    Some(terms.join(" OR "))
+}
+
+/// English function words, which match nearly every document and so only crowd out real hits.
+///
+/// bm25 already scores them near zero, but scoring is not the problem — the result *limit* is:
+/// a handful of slots filled by documents that merely contain "the" are slots a real match
+/// cannot have. Kept deliberately small and closed-class; anything with topical meaning stays.
+fn is_stopword(term: &str) -> bool {
+    const STOPWORDS: &[&str] = &[
+        "the", "and", "for", "are", "was", "were", "you", "your", "our", "their", "his", "her",
+        "its", "that", "this", "these", "those", "with", "from", "into", "about", "what", "when",
+        "where", "which", "who", "whom", "how", "why", "did", "does", "done", "have", "has", "had",
+        "can", "could", "would", "should", "will", "shall", "may", "might", "not", "but", "any",
+        "all", "some", "there", "here", "then", "than", "them", "they", "she", "him", "get", "got",
+    ];
+    let lower = term.to_ascii_lowercase();
+    STOPWORDS.contains(&lower.as_str())
+}
+
+fn quote(term: &str) -> String {
+    format!("\"{}\"", term.replace('"', "\"\""))
+}
+
+fn is_cjk(c: char) -> bool {
+    matches!(c as u32,
+        0x3040..=0x309F | 0x30A0..=0x30FF | 0x4E00..=0x9FFF | 0xFF66..=0xFF9F
+    )
 }
 
 /// Full-text search over the event log, best-match first, capped at `limit`. Returns event
 /// ids ordered by bm25 relevance (SQLite's bm25 is more-negative-is-better, so ascending).
 pub fn fts_search(conn: &Connection, query: &str, limit: usize) -> Result<Vec<i64>, rusqlite::Error> {
-    let trimmed = query.trim();
-    if trimmed.is_empty() {
+    let Some(expr) = fts_query(query) else {
         return Ok(Vec::new());
-    }
+    };
     let mut stmt = conn.prepare(
         "SELECT rowid FROM event_fts WHERE event_fts MATCH ?1 ORDER BY bm25(event_fts) LIMIT ?2",
     )?;
     let ids = stmt
-        .query_map(params![fts_quote(trimmed), limit as i64], |r| r.get::<_, i64>(0))?
+        .query_map(params![expr, limit as i64], |r| r.get::<_, i64>(0))?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(ids)
 }
@@ -327,5 +404,78 @@ mod tests {
         let hybrid = search_hybrid(&conn, "standup", Some(&q), 10).unwrap();
         assert_eq!(hybrid.len(), 1, "the vector half should surface the semantic match");
         assert_eq!(hybrid[0].event_id, id);
+    }
+}
+
+/// The retrieval bug this file exists to prevent a repeat of: a question is not a phrase.
+#[cfg(test)]
+mod fts_query_tests {
+    use super::*;
+    use crate::event_log::{insert, NewEvent};
+
+    fn seeded() -> Connection {
+        let conn = crate::open_in_memory().unwrap();
+        insert(
+            &conn,
+            &NewEvent {
+                ts: 1,
+                source: "capture",
+                kind: "text",
+                app_bundle_id: Some("com.apple.Safari"),
+                window_title: Some("notes"),
+                content: "The vendor renewal discussion continued; pricing was raised again.",
+                content_hash: "h1",
+                dwell_ms: 0,
+                display_id: None,
+                window_bounds: None,
+            },
+        )
+        .unwrap();
+        conn
+    }
+
+    #[test]
+    fn a_multi_word_question_matches_without_being_contiguous() {
+        // These words all appear, but never as this phrase — the whole-query-quoted version
+        // returned nothing here, which silently emptied retrieval for most real questions.
+        let conn = seeded();
+        assert_eq!(fts_search(&conn, "vendor renewal pricing", 10).unwrap().len(), 1);
+        assert_eq!(fts_search(&conn, "what did we decide about pricing?", 10).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn fts_operators_in_a_question_are_treated_as_text() {
+        // Unquoted, these would parse as FTS5 syntax and error or silently mean something else.
+        let conn = seeded();
+        for q in ["pricing OR vendor", "vendor NEAR renewal", "pricing - vendor", "vendor*"] {
+            assert!(fts_search(&conn, q, 10).is_ok(), "must not be a syntax error: {q}");
+        }
+        // A quote in the question must not break out of the quoting.
+        assert!(fts_search(&conn, "he said \"pricing\" twice", 10).is_ok());
+    }
+
+    #[test]
+    fn terms_too_short_for_the_trigram_index_are_dropped() {
+        // "is"/"it" cannot match a trigram index; only the usable term survives.
+        assert_eq!(fts_query("is it pricing"), Some("\"pricing\"".to_string()));
+        // Function words carry no signal and would match nearly every document.
+        assert_eq!(fts_query("what was the pricing"), Some("\"pricing\"".to_string()));
+        // Nothing usable at all → no query, rather than an empty MATCH.
+        assert_eq!(fts_query("is it"), None);
+        assert_eq!(fts_query("what was that"), None, "all function words → nothing to retrieve on");
+        assert_eq!(fts_query("   "), None);
+    }
+
+    #[test]
+    fn cjk_runs_are_expanded_into_trigrams() {
+        // No spaces to split on, so the run becomes its overlapping trigrams.
+        assert_eq!(fts_query("資料の期限"), Some("\"資料の\" OR \"料の期\" OR \"の期限\"".to_string()));
+    }
+
+    #[test]
+    fn a_pathological_query_is_capped() {
+        let huge = (0..500).map(|i| format!("term{i}")).collect::<Vec<_>>().join(" ");
+        let expr = fts_query(&huge).unwrap();
+        assert_eq!(expr.matches(" OR ").count(), MAX_FTS_TERMS - 1, "term count is bounded");
     }
 }
