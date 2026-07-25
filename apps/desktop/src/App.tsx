@@ -24,6 +24,7 @@ function beginDrag(e: React.MouseEvent): void {
   );
 }
 import { t } from "./strings";
+import { SERVICE_ICONS } from "./serviceIcons";
 
 // SHOGUN panel. A visible, interactive window that hangs from the notch. Opening/closing is driven
 // by direct clicks in the webview (reliable — no dependency on the CGEventTap hover path or a global
@@ -52,6 +53,9 @@ interface Status {
   commitments: number;
   open_loops: number;
   has_key: boolean;
+  /// The provider refused the key. Without this a ⌥-tap that 401s inserts nothing and looks
+  /// exactly like a shortcut that does not work.
+  key_rejected: boolean;
 }
 interface StateItem {
   id: number;
@@ -103,7 +107,13 @@ function clampSize(w: number, h: number): Size {
   };
 }
 
-const MOCK_STATUS: Status = { app: "com.apple.mail", commitments: 2, open_loops: 1, has_key: false };
+const MOCK_STATUS: Status = {
+  app: "com.apple.mail",
+  commitments: 2,
+  open_loops: 1,
+  has_key: false,
+  key_rejected: false,
+};
 const MOCK_STATE: StateView = {
   commitments: [
     { id: 1, text: "Send Alice the Q3 deck", meta: "overdue" },
@@ -414,6 +424,7 @@ export function App(): JSX.Element {
             appearance={appearance}
             setAppearance={setAppearance}
             hasKey={!!status?.has_key}
+            keyRejected={!!status?.key_rejected}
             stateCount={state.commitments.length + state.open_loops.length}
             onDone={() => {
               closeSettings();
@@ -647,18 +658,43 @@ const CONN_LABELS: Record<string, string> = {
   github: "GitHub",
   linear: "Linear",
 };
-// A colour and an initial per service, so the list is scannable at a glance instead of a column
-// of similar-length words. Deliberately not the vendors' logos: an approximated trademark drawn
-// from memory is worse than an honest mark, and this has to render offline with no remote assets.
-const CONN_MARK: Record<string, { tint: string; glyph: string }> = {
-  gmail: { tint: "#ea4335", glyph: "M" },
-  gcal: { tint: "#4285f4", glyph: "C" },
-  gdrive: { tint: "#0f9d58", glyph: "D" },
-  slack: { tint: "#7c3aed", glyph: "S" },
-  notion: { tint: "#9aa3af", glyph: "N" },
-  github: { tint: "#8b95a3", glyph: "G" },
-  linear: { tint: "#5e6ad2", glyph: "L" },
+// Brand marks, inlined from simple-icons at build time (see scripts/generate-service-icons.mjs).
+// Services that project has removed on trademark request — Slack, OpenAI — fall back to a lettered
+// disc in the service's own colour rather than an approximated logo.
+const CONN_FALLBACK_TINT: Record<string, string> = {
+  slack: "#611f69",
+  openai: "#74aa9c",
 };
+
+/// Perceived luminance of a #rrggbb colour, 0..1 (Rec. 709 coefficients).
+function luminance(hex: string): number {
+  const n = parseInt(hex.slice(1), 16);
+  const [r, g, b] = [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  return (0.2126 * r + 0.7152 * g + 0.0587 * b) / 255;
+}
+
+/// A service's mark: the real logo where we have one, a lettered disc where we don't.
+///
+/// Brand colours are used as-is except at the extremes — Notion and GitHub are near-black, which
+/// disappears on the dark panel — where the mark falls back to the foreground colour so it stays
+/// legible in whichever theme is showing.
+function ServiceMark(props: { source: string; label: string }): JSX.Element {
+  const icon = SERVICE_ICONS[props.source];
+  const raw = icon?.hex ?? CONN_FALLBACK_TINT[props.source] ?? "";
+  const lum = raw ? luminance(raw) : 0.5;
+  const tint = !raw || lum < 0.16 || lum > 0.9 ? "var(--ink)" : raw;
+  return (
+    <span className="conn__mark" style={{ "--tint": tint } as React.CSSProperties} aria-hidden="true">
+      {icon ? (
+        <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" role="presentation">
+          <path d={icon.path} />
+        </svg>
+      ) : (
+        props.label.charAt(0)
+      )}
+    </span>
+  );
+}
 
 const CONN_STATE_LABEL: Record<ConnState, string> = {
   connected: "Connected",
@@ -847,13 +883,7 @@ function ConnectionsSection(): JSX.Element {
               r.state === "connected" ? " is-ok" : r.state === "needs_reauth" ? " is-warn" : "";
             return (
               <div key={r.source} className="conn">
-                <span
-                  className="conn__mark"
-                  style={{ "--tint": (CONN_MARK[r.source]?.tint ?? "var(--faint)") } as React.CSSProperties}
-                  aria-hidden="true"
-                >
-                  {CONN_MARK[r.source]?.glyph ?? label.charAt(0)}
-                </span>
+                <ServiceMark source={r.source} label={label} />
                 <div className="conn__meta">
                   <span className="conn__name">{label}</span>
                   <span className={`conn__state${stateMod}`}>
@@ -1000,6 +1030,7 @@ const PROVIDERS: Array<{ id: string; label: string }> = [
   { id: "anthropic", label: "Claude API" },
   { id: "openrouter", label: "OpenRouter" },
   { id: "openai", label: "OpenAI" },
+  { id: "gemini", label: "Gemini" },
 ];
 const SHORTCUT_ROWS: Array<{ action: string; label: string }> = [
   { action: "summon", label: t.summonShortcut },
@@ -1023,11 +1054,13 @@ function Settings(props: {
   appearance: Appearance;
   setAppearance: (a: Appearance) => void;
   hasKey: boolean;
+  /// The provider refused this key — shown in the key section, since that is where the fix is.
+  keyRejected: boolean;
   stateCount: number;
   onDone: () => void;
   onCleared: () => void;
 }): JSX.Element {
-  const { appearance, setAppearance, hasKey, stateCount, onDone, onCleared } = props;
+  const { appearance, setAppearance, hasKey, keyRejected, stateCount, onDone, onCleared } = props;
   // Clearing extracted state is destructive and context is foundational, so it is a deliberate
   // two-step: reveal a typed confirmation, and only a matching "CLEAR" enables the delete.
   const [confirming, setConfirming] = useState(false);
@@ -1275,7 +1308,12 @@ function Settings(props: {
         </section>
         <section className="set">
           <div className="set__label">{t.key}</div>
-          <div className={`set__hint${keyState ? " is-ok" : ""}`}>{keyState ? t.keyPresent : t.keyAbsent}</div>
+          <div
+            className={`set__hint${keyRejected ? " is-err" : keyState ? " is-ok" : ""}`}
+          >
+            {keyRejected ? t.keyRejected : keyState ? t.keyPresent : t.keyAbsent}
+          </div>
+          <div className="set__hint">{t.keyScope}</div>
           <div className="keyrow">
             <input
               className="keyrow__input"

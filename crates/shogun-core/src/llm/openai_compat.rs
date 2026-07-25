@@ -21,6 +21,10 @@ use super::{ByokKey, LlmError, Secret};
 pub const OPENROUTER_BASE_URL: &str = "https://openrouter.ai/api/v1";
 /// OpenAI's base URL.
 pub const OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
+/// Gemini's OpenAI-compatible surface. Google ships one, so the Agent lane reaches Gemini through
+/// this client rather than a fourth provider implementation (ADR-002: one abstraction, not one
+/// client per vendor).
+pub const GEMINI_BASE_URL: &str = "https://generativelanguage.googleapis.com/v1beta/openai";
 
 /// Connection + model settings. Like [`super::anthropic::AnthropicConfig`], the model id is a
 /// configurable string the caller supplies — never guessed here.
@@ -135,7 +139,7 @@ impl<T: HttpTransport, S: TraceabilitySink> OpenAiCompatAgentClient<T, S> {
         ));
         let resp = self.transport.send(req).await?;
         if !resp.is_success() {
-            return Err(LlmError::Provider(format!("chat/completions HTTP {}", resp.status)));
+            return Err(super::status_error("chat/completions", resp.status));
         }
         parse_chat_response(&resp.body)
     }
@@ -208,19 +212,24 @@ mod tests {
         assert_eq!(recs[0].chunk_bytes, "prompt text".len());
     }
 
+    /// A rejected key and a broken provider have to be distinguishable — one is worth telling the
+    /// user about and pointless to retry, the other is the opposite. Either way the prompt already
+    /// left the device, so invariant 3 still traces it.
     #[tokio::test]
-    async fn non_2xx_is_a_provider_error_but_the_egress_is_still_traced() {
-        let transport = MockTransport::new([HttpResponse { status: 401, body: String::new() }]);
-        let sink = RecordingSink::new();
-        let client = OpenAiCompatAgentClient::new(
-            transport,
-            sink,
-            ByokKey::new(Secret::new("bad")),
-            cfg(),
-        );
-        let err = client.complete("p").await.unwrap_err();
-        assert!(matches!(err, LlmError::Provider(m) if m.contains("401")));
-        // the prompt STILL left the device — invariant 3 traces the send, success or not
-        assert_eq!(client.sink.records().len(), 1);
+    async fn a_rejected_key_is_distinct_from_a_provider_failure_and_both_are_traced() {
+        let call = |status: u16| async move {
+            let client = OpenAiCompatAgentClient::new(
+                MockTransport::new([HttpResponse { status, body: String::new() }]),
+                RecordingSink::new(),
+                ByokKey::new(Secret::new("bad")),
+                cfg(),
+            );
+            let err = client.complete("p").await.unwrap_err();
+            assert_eq!(client.sink.records().len(), 1, "the send is traced whatever comes back");
+            err
+        };
+        assert!(matches!(call(401).await, LlmError::Unauthorized(401)));
+        assert!(matches!(call(403).await, LlmError::Unauthorized(403)));
+        assert!(matches!(call(500).await, LlmError::Provider(m) if m.contains("500")));
     }
 }

@@ -149,6 +149,16 @@ pub enum LlmError {
     Parse(String),
 }
 
+/// Turn a failed HTTP status into the right error. 401/403 means the credential is wrong, not that
+/// the provider is having a bad moment, and callers have to act differently: a rejected key is
+/// worth telling the user about and pointless to retry, while a 5xx is the opposite.
+pub fn status_error(step: &str, status: u16) -> LlmError {
+    match status {
+        401 | 403 => LlmError::Unauthorized(status),
+        _ => LlmError::Provider(format!("{step} HTTP {status}")),
+    }
+}
+
 // ---- mocks (tests / offline) -------------------------------------------------------------
 
 /// A Batch client that echoes a canned label — for tests and offline development. Holds a

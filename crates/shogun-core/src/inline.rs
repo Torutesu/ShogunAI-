@@ -62,6 +62,10 @@ pub enum InlineOutcome {
     NoContext,
     /// Generation failed on the Agent lane — nothing egressed a usable result, nothing inserted.
     GenerationFailed(String),
+    /// The provider refused the key. Separate from [`GenerationFailed`] because it is the one
+    /// failure the user can act on, and because nothing is inserted either way — a rejected key
+    /// and a broken shortcut are the same experience unless something says which it was.
+    KeyRejected,
     /// Generation succeeded (and was traced) but writing at the caret failed.
     InsertFailed(String),
 }
@@ -127,6 +131,7 @@ where
     let prompt = build_prompt(&ctx, memory);
     let text = match agent.complete(&prompt) {
         Ok(t) => t,
+        Err(crate::llm::LlmError::Unauthorized(_)) => return InlineOutcome::KeyRejected,
         Err(e) => return InlineOutcome::GenerationFailed(e.to_string()),
     };
     match inserter.insert(&text) {

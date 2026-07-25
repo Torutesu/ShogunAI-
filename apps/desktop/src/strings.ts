@@ -81,11 +81,15 @@ export const STRINGS = {
     key: "Your key",
     keyPresent: "Connected — answers and drafts are yours.",
     keyAbsent: "Not set — SHOGUN will echo until you add a key.",
+    keyRejected: "This key was rejected. Check it, or pick another provider.",
+    // Each provider keeps its own key; only the one selected above is ever used.
+    keyScope: "Kept per provider — switching doesn't remove the others.",
     /// Per-provider placeholder — the key section follows the provider picked above it.
     keyPlaceholders: {
       anthropic: "Paste your Anthropic API key…",
       openrouter: "Paste your OpenRouter API key…",
       openai: "Paste your OpenAI API key…",
+      gemini: "Paste your Gemini API key…",
     } as Record<string, string>,
     keySave: "Save",
     keyRemove: "Remove",

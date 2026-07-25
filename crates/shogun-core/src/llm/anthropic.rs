@@ -374,21 +374,17 @@ impl<T: HttpTransport, S: TraceabilitySink> AnthropicAgentClient<T, S> {
         ));
         let resp = self.transport.send(req).await?;
         if !resp.is_success() {
-            return Err(LlmError::Provider(format!("messages HTTP {}", resp.status)));
+            return Err(crate::llm::status_error("messages", resp.status));
         }
         parse_completion_body(&resp.body)
     }
 }
 
-/// Classify a failed Batch-lane HTTP status. 401/403 means the credential is wrong, not that the
-/// provider is having a bad night — and the Dream Cycle has to tell those apart, because it runs
-/// unattended: a rejected key retried every night looks exactly like a service outage from the
-/// outside, and the user is never told the one thing they could fix.
+/// A failed Batch-lane status. The Dream Cycle runs unattended, so telling a rejected key from an
+/// outage matters more here than anywhere: retried every night, they look identical from outside,
+/// and the user is never told the one thing they could fix.
 fn batch_status_error(step: &str, status: u16) -> LlmError {
-    match status {
-        401 | 403 => LlmError::Unauthorized(status),
-        _ => LlmError::Provider(format!("batch {step} HTTP {status}")),
-    }
+    crate::llm::status_error(&format!("batch {step}"), status)
 }
 
 /// Batch-lane client (indexing / classification / Dream Cycle / Morning Brief). Constructed with

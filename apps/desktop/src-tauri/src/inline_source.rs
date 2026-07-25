@@ -28,7 +28,8 @@ pub mod mac {
     use shogun_core::inline::{compose_inline, CursorContext, CursorReader, InlineOutcome, TextInserter};
     use shogun_core::llm::anthropic::{AnthropicAgentClient, AnthropicConfig};
     use shogun_core::llm::openai_compat::{
-        OpenAiCompatAgentClient, OpenAiCompatConfig, OPENAI_BASE_URL, OPENROUTER_BASE_URL,
+        OpenAiCompatAgentClient, OpenAiCompatConfig, GEMINI_BASE_URL, OPENAI_BASE_URL,
+        OPENROUTER_BASE_URL,
     };
     use shogun_core::llm::transport::ReqwestTransport;
     use shogun_core::llm::{AgentClient, ByokKey, LlmError, MockAgentClient, Secret};
@@ -41,7 +42,7 @@ pub mod mac {
 
     /// Providers the Agent lane can run on. The Batch lane (indexing / Dream Cycle) is untouched
     /// by this choice — it stays on the Select KK lane (invariant 5).
-    const PROVIDERS: [&str; 3] = ["anthropic", "openrouter", "openai"];
+    const PROVIDERS: [&str; 4] = ["anthropic", "openrouter", "openai", "gemini"];
 
     #[derive(Clone, serde::Serialize, serde::Deserialize)]
     pub struct LlmSettings {
@@ -61,6 +62,7 @@ pub mod mac {
         match provider {
             "openrouter" => "anthropic/claude-sonnet-4.5",
             "openai" => "gpt-4o-mini",
+            "gemini" => "gemini-2.5-flash",
             _ => "claude-sonnet-5",
         }
     }
@@ -70,6 +72,7 @@ pub mod mac {
         match provider {
             "openrouter" => "openrouter-byok",
             "openai" => "openai-byok",
+            "gemini" => "gemini-byok",
             _ => "anthropic-byok",
         }
     }
@@ -79,9 +82,24 @@ pub mod mac {
     /// every tick. Refreshed on init and on every key/provider change.
     static HAS_KEY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+    /// The active provider rejected its key (HTTP 401/403). Sticky until the key or the provider
+    /// changes, because the failure is silent everywhere else: a ⌥-tap that 401s inserts nothing,
+    /// which is indistinguishable from the shortcut not working — pressing it five more times is
+    /// the reasonable response, and that is exactly what happens.
+    static KEY_REJECTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+    /// Record that the provider refused the key. Called from every Agent-lane failure path.
+    pub fn note_key_rejected() {
+        if !KEY_REJECTED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            eprintln!("[inline] provider rejected the key — settings will say so");
+        }
+    }
+
     fn refresh_has_key() {
         let present = keychain_byok(&current_settings().provider).is_some();
         HAS_KEY.store(present, std::sync::atomic::Ordering::Relaxed);
+        // A new key, or a different provider, deserves a fresh verdict.
+        KEY_REJECTED.store(false, std::sync::atomic::Ordering::Relaxed);
     }
 
     fn settings_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
@@ -340,8 +358,12 @@ pub mod mac {
                 let byok = ByokKey::new(Secret::new(key));
                 eprintln!("[inline] live Agent lane — provider {} model {model}", s.provider);
                 match s.provider.as_str() {
-                    "openrouter" | "openai" => {
-                        let base = if s.provider == "openrouter" { OPENROUTER_BASE_URL } else { OPENAI_BASE_URL };
+                    "openrouter" | "openai" | "gemini" => {
+                        let base = match s.provider.as_str() {
+                            "openrouter" => OPENROUTER_BASE_URL,
+                            "gemini" => GEMINI_BASE_URL,
+                            _ => OPENAI_BASE_URL,
+                        };
                         let client = OpenAiCompatAgentClient::new(
                             transport,
                             db.traceability_sink(),
@@ -400,6 +422,9 @@ pub mod mac {
             let outcome = compose_inline(&AxCursorReader, &agent, &AxTextInserter, &memory);
             match &outcome {
                 InlineOutcome::Inserted { chars } => eprintln!("[inline] inserted {chars} chars at the cursor"),
+                // Nothing gets inserted on a rejected key, so without this the tap is silent and
+                // the reasonable next move is to press it again. Latch it for the status poll.
+                InlineOutcome::KeyRejected => note_key_rejected(),
                 other => eprintln!("[inline] {other:?}"),
             }
         });
@@ -426,6 +451,8 @@ pub mod mac {
         pub open_loops: usize,
         /// Whether a BYOK key is in the Keychain (live generation vs. echo).
         pub has_key: bool,
+        /// The provider refused the key — the UI says so rather than leaving ⌥-tap silently dead.
+        pub key_rejected: bool,
     }
 
     #[tauri::command]
@@ -436,6 +463,7 @@ pub mod mac {
             commitments: db.commitments_due(db.now_ms()).len(),
             open_loops: db.open_loops().len(),
             has_key: HAS_KEY.load(std::sync::atomic::Ordering::Relaxed),
+            key_rejected: KEY_REJECTED.load(std::sync::atomic::Ordering::Relaxed),
         }
     }
 
@@ -629,7 +657,14 @@ pub mod mac {
                 citations: Vec::new(),
             });
         }
-        let text = agent.complete(&build_chat_prompt(message, &ctx)).map_err(|e| e.to_string())?;
+        let text = agent.complete(&build_chat_prompt(message, &ctx)).map_err(|e| {
+            // Same latch as the ⌥-tap path: chat surfaces the error text, but Settings is where
+            // the fix is, and it needs to know the key is the problem.
+            if matches!(e, LlmError::Unauthorized(_)) {
+                note_key_rejected();
+            }
+            e.to_string()
+        })?;
         let citations = ctx
             .evidence
             .iter()
