@@ -59,6 +59,15 @@ export interface PanelBox {
   left: number;
 }
 
+export interface OnboardingScenario {
+  completed: boolean;
+  step: string;
+  plan: "standard" | "pro" | null;
+  /** What the machine would answer for Accessibility — the branch the flow is judged on. */
+  axGranted: boolean;
+  draftStop: boolean;
+}
+
 export interface Scenario {
   /** Bundle id of the app SHOGUN is "reading" — pushed to the App as a `context` event. */
   foreground: string;
@@ -76,6 +85,7 @@ export interface Scenario {
   /** Simulated IPC round-trip, so the UI is judged with the latency it will really have. */
   latencyMs: number;
   panel: PanelBox;
+  onboarding: OnboardingScenario;
 }
 
 /** 14" MacBook Pro logical points — the panel is laid out at its true size, never a rough scale. */
@@ -142,7 +152,9 @@ export const INITIAL: Scenario = {
   model: "",
   shortcuts: { summon: "Control+Alt+KeyN", quit: "Control+Alt+KeyQ" },
   latencyMs: 60,
-  panel: { w: 560, h: 300, left: Math.round((DESK_W - 560) / 2) },
+  panel: { w: 600, h: 400, left: Math.round((DESK_W - 600) / 2) },
+  // Default: already onboarded, so the preview opens on the panel. The rail restarts first run.
+  onboarding: { completed: true, step: "welcome", plan: null, axGranted: false, draftStop: true },
 };
 
 type Listener = () => void;
@@ -294,6 +306,43 @@ function handle(cmd: string, args: Record<string, unknown>): unknown {
         dream: { ...s.dream, indicator: "normal", last_succeeded: true, last_ended_at: Date.now() },
       });
       return null;
+    // ── onboarding ──────────────────────────────────────────────────────
+    case "onboarding_state":
+      return { completed: s.onboarding.completed, step: s.onboarding.step, plan: s.onboarding.plan };
+    case "set_onboarding_state":
+      store.set({
+        onboarding: {
+          ...s.onboarding,
+          step: String(args.step),
+          plan: (args.plan as "standard" | "pro" | null) ?? null,
+          completed: Boolean(args.completed),
+        },
+      });
+      return null;
+    case "ax_permission":
+      return s.onboarding.axGranted;
+    case "request_ax_permission":
+      // On device this opens System Settings and the user grants it there. Here it is the wait
+      // itself that needs reviewing, so the grant lands a beat later rather than instantly.
+      setTimeout(
+        () => store.set((cur) => ({ onboarding: { ...cur.onboarding, axGranted: true } })),
+        2200,
+      );
+      return null;
+    case "exclusion_categories":
+      return [
+        { id: "password_managers", count: 6 },
+        { id: "auth_dialog", count: 1 },
+        { id: "terminals", count: 5 },
+        { id: "private_browsing", count: 4 },
+        { id: "sensitive_titles", count: 3 },
+      ];
+    case "get_draft_stop":
+      return s.onboarding.draftStop;
+    case "set_draft_stop":
+      store.set({ onboarding: { ...s.onboarding, draftStop: Boolean(args.enabled) } });
+      return null;
+
     case "get_ai_session_import":
       return s.aiSessions;
     case "set_ai_session_import":
@@ -387,6 +436,13 @@ declare global {
 
 // Side effect, deliberately at module scope — see the header note about `IN_TAURI`.
 window.__TAURI_INTERNALS__ = Object.assign(window.__TAURI_INTERNALS__ ?? {}, internals);
+// Unlisten does NOT go through invoke — it calls this object. Without it every unmounted listener
+// threw, which is invisible until something in the preview remounts the App.
+window.__TAURI_EVENT_PLUGIN_INTERNALS__ = {
+  unregisterListener: (_event, id) => {
+    subs.delete(id);
+  },
+};
 
 // The App's appearance defaults to "auto", which follows the BROWSER's colour scheme — so a
 // reviewer on a light desktop would open the preview and judge the light theme by accident.

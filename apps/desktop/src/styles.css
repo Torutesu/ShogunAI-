@@ -1176,6 +1176,336 @@ kbd {
   opacity: 0.5;
 }
 
+/* ── onboarding ───────────────────────────────────────────────────────────
+   First run, in the panel. Same tokens as everything else — the flow is not a separate world, it
+   is this product being explained. One column, one idea per step, and a footer whose primary
+   action is always in the same place so six steps feel like one motion. */
+.ob {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.ob__head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  padding: var(--s-4) var(--s-5);
+}
+.ob__mark {
+  font-size: var(--fs-lg);
+  line-height: 1;
+  color: var(--ink);
+  flex: none;
+}
+/* progress as segments, not a bar: six discrete steps, and you can see there are six */
+.ob__prog {
+  flex: 1;
+  display: flex;
+  gap: 3px;
+  min-width: 0;
+}
+.ob__seg {
+  flex: 1;
+  height: 3px;
+  border-radius: var(--r-pill);
+  background: var(--surface-2);
+  transition: background var(--sp);
+}
+.ob__seg.is-done {
+  background: var(--ink-2);
+}
+.ob__count {
+  flex: none;
+  font-size: var(--fs-xs);
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+.ob__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--s-3) var(--s-6) var(--s-5);
+  animation: ob-in 220ms cubic-bezier(0.32, 0.72, 0, 1);
+  /* A step that overflows should say so. Content that ends above the fold is unaffected, so this
+     costs the short steps nothing. */
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 20px), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 20px), transparent);
+}
+@keyframes ob-in {
+  from {
+    opacity: 0;
+    transform: translateX(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+.ob__foot {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3);
+  padding: var(--s-4) var(--s-5) var(--s-6);
+  border-top: 1px solid var(--line);
+}
+.ob__acts {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+.ob__ghost {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-1);
+  border: none;
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: var(--fs-md);
+  padding: 8px 12px;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  transition: background var(--sp), color var(--sp);
+}
+.ob__ghost:hover {
+  background: var(--surface);
+  color: var(--ink);
+}
+.ob__go {
+  border: none;
+  background: var(--solid);
+  color: var(--solid-ink);
+  font: inherit;
+  font-size: var(--fs-md);
+  font-weight: 600;
+  padding: 9px 20px;
+  border-radius: var(--r-pill);
+  cursor: pointer;
+  transition: background var(--sp), transform var(--sp);
+}
+.ob__go:hover {
+  background: var(--solid-hover);
+}
+.ob__go:active {
+  transform: scale(0.98);
+}
+
+.obs {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+}
+.obs__title {
+  font-size: 21px;
+  font-weight: 620;
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+  max-width: 24ch;
+  text-wrap: balance;
+}
+.obs__lede {
+  font-size: var(--fs-lg);
+  line-height: 1.55;
+  color: var(--ink-2);
+  max-width: 54ch;
+  margin-top: calc(var(--s-2) * -1);
+}
+.obs__points {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+}
+.obs__points li {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  font-size: var(--fs-md);
+  color: var(--ink);
+}
+.obs__points svg {
+  color: var(--live);
+}
+.obs__note {
+  font-size: var(--fs-sm);
+  color: var(--ink-3);
+}
+.obs__aside {
+  padding: var(--s-4);
+  border-radius: var(--r-md);
+  background: var(--surface);
+}
+
+/* a stated fact — the shape used wherever onboarding makes a promise */
+.obs__facts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+}
+.fact {
+  padding: var(--s-4);
+  border-radius: var(--r-md);
+  background: var(--surface);
+}
+.fact__head {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  color: var(--ink-2);
+}
+.fact__t {
+  font-size: var(--fs-md);
+  font-weight: 600;
+  color: var(--ink);
+}
+.fact__b {
+  margin-top: 3px;
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  color: var(--ink-2);
+  max-width: 56ch;
+}
+
+/* never read — a fact of the build, so it is shown, never offered */
+.never {
+  padding: var(--s-4);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+}
+.never__head {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  color: var(--live);
+}
+.never__title {
+  font-size: var(--fs-md);
+  font-weight: 600;
+  color: var(--ink);
+}
+.never__list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  margin-top: var(--s-3);
+}
+.never__item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--s-2);
+  font-size: var(--fs-sm);
+  color: var(--ink);
+  background: var(--surface);
+  border-radius: var(--r-pill);
+  padding: 5px 12px;
+}
+.never__item b {
+  font-weight: 500;
+  color: var(--ink-3);
+  font-size: var(--fs-xs);
+}
+.never__note {
+  margin-top: var(--s-3);
+  font-size: var(--fs-sm);
+  color: var(--ink-3);
+}
+
+/* permission — one card whose whole job is to change state in front of you */
+.perm {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--s-3);
+  padding: var(--s-5);
+  border-radius: var(--r-md);
+  border: 1px solid var(--line);
+  background: var(--surface);
+  transition: background var(--sp), border-color var(--sp);
+}
+.perm.is-on {
+  border-color: color-mix(in srgb, var(--live) 40%, transparent);
+  background: color-mix(in srgb, var(--live) 9%, transparent);
+}
+.perm__state {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  color: var(--live);
+}
+.perm__proof {
+  font-size: var(--fs-md);
+  color: var(--ink-2);
+}
+.perm__wait {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  font-size: var(--fs-sm);
+  color: var(--ink-3);
+}
+
+/* plans — two cards, picked not sold */
+.plans {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--s-3);
+}
+.plan {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-areas: "tick name" ". body";
+  gap: 2px var(--s-2);
+  text-align: left;
+  padding: var(--s-4);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  cursor: pointer;
+  transition: border-color var(--sp), background var(--sp);
+}
+.plan:hover {
+  border-color: var(--line-2);
+}
+.plan.is-on {
+  border-color: transparent;
+  background: var(--surface-2);
+  box-shadow: inset 0 0 0 1.5px var(--ink);
+}
+.plan__tick {
+  grid-area: tick;
+  display: grid;
+  place-items: center;
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  border: 1.5px solid var(--line-2);
+  color: transparent;
+}
+.plan.is-on .plan__tick {
+  border-color: transparent;
+  background: var(--solid);
+  color: var(--solid-ink);
+}
+.plan__name {
+  grid-area: name;
+  font-size: var(--fs-lg);
+  font-weight: 600;
+}
+.plan__body {
+  grid-area: body;
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  color: var(--ink-2);
+}
+
 /* ── corner grip ──────────────────────────────────────────────────────────
    The only way to stretch a borderless panel. Two ticks, invisible until wanted. */
 .resizer {

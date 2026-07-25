@@ -48,13 +48,28 @@ const cssCode = readFileSync(join(assetsDir, css[0]), "utf8");
 // `</script>` inside the bundle (it appears inside a string) would close the tag early.
 const safeJs = jsCode.replace(/<\/script>/g, "<\\/script>");
 
+// Every insertion goes through a REPLACER FUNCTION, never a replacement string: `$&`, `$1` and
+// friends are special in a replacement string, and minified React contains `$&&` — which silently
+// expanded into the matched text and produced a bundle that failed to parse.
 const inlined = html
-  .replace(/<script type="module" crossorigin src="[^"]+"><\/script>/, "")
-  .replace(/<link rel="stylesheet" crossorigin href="[^"]+">/, `<style>${cssCode}</style>`)
-  .replace("</body>", `<script type="module">${safeJs}</script></body>`);
+  .replace(/<script type="module" crossorigin src="[^"]+"><\/script>/, () => "")
+  .replace(/<link rel="stylesheet" crossorigin href="[^"]+">/, () => `<style>${cssCode}</style>`)
+  .replace("</body>", () => `<script type="module">${safeJs}</script></body>`);
 
 if (inlined.includes("/assets/")) {
   throw new Error("an asset reference survived inlining — the built HTML changed shape");
+}
+// Parse what we are about to ship. Corruption introduced by the inlining above is invisible in
+// the file and fatal in the browser — a blank page with one console error — so the module is
+// syntax-checked here rather than discovered on open.
+const check = join(DIST, ".syntax-check.mjs");
+writeFileSync(check, safeJs);
+try {
+  execFileSync(process.execPath, ["--check", check], { stdio: "pipe" });
+} catch (err) {
+  throw new Error(`the inlined bundle does not parse:\n${err.stderr?.toString().slice(0, 800)}`);
+} finally {
+  rmSync(check, { force: true });
 }
 
 const bootstrap = /<script>[\s\S]*?<\/script>/.exec(html)?.[0] ?? "";

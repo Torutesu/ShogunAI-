@@ -156,7 +156,10 @@ export function Stage(): JSX.Element {
             className="pv__panelhost"
             style={{ top: mode === "notch" ? NOTCH_H : 26, left: panelLeft, width: s.panel.w, height: s.panel.h }}
           >
-            <App />
+            {/* The App reads onboarding state once, on mount — the way it does on device, where
+                nothing changes it behind the app's back. The rail DOES change it behind its back,
+                so the key remounts the App when it moves. */}
+            <App key={`ob:${s.onboarding.completed}:${s.onboarding.step}`} />
           </div>
         </div>
 
@@ -235,6 +238,62 @@ export function Stage(): JSX.Element {
               {scale < 1
                 ? " Below 100% the corner grip drags in scaled pixels — resize at 100% to judge real sizes."
                 : ""}
+            </p>
+          </Group>
+
+          <Group title="First run">
+            <Row>
+              <button
+                className="pv__btn"
+                type="button"
+                onClick={() =>
+                  store.set((cur) => ({
+                    onboarding: { ...cur.onboarding, completed: false, step: "welcome", plan: null },
+                  }))
+                }
+              >
+                Restart onboarding
+              </button>
+              <button
+                className="pv__btn"
+                type="button"
+                onClick={() =>
+                  store.set((cur) => ({ onboarding: { ...cur.onboarding, completed: true } }))
+                }
+              >
+                Skip to panel
+              </button>
+            </Row>
+            <div className="pv__list">
+              {["welcome", "reads", "permission", "plan", "connect", "ready"].map((st) => (
+                <button
+                  key={st}
+                  type="button"
+                  className={`pv__opt${
+                    !s.onboarding.completed && s.onboarding.step === st ? " is-on" : ""
+                  }`}
+                  onClick={() =>
+                    store.set((cur) => ({
+                      onboarding: { ...cur.onboarding, completed: false, step: st },
+                    }))
+                  }
+                >
+                  {st}
+                </button>
+              ))}
+            </div>
+            <Row>
+              <Toggle
+                label="Accessibility granted"
+                on={s.onboarding.axGranted}
+                onChange={(on) =>
+                  store.set((cur) => ({ onboarding: { ...cur.onboarding, axGranted: on } }))
+                }
+              />
+            </Row>
+            <p className="pv__hint">
+              The permission step polls the machine, so flipping this mid-step shows the moment it
+              turns green. "Open System Settings" grants it after a beat, the way the real one does.
             </p>
           </Group>
 

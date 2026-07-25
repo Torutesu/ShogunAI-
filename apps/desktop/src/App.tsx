@@ -2,12 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
-
-// Report webview-side failures to the terminal via Rust — a silent catch made real errors
-// (missing window-API permissions) look like "the button does nothing".
-function uiLog(msg: string): void {
-  if (IN_TAURI) void invoke("ui_log", { msg }).catch(() => undefined);
-}
+import { IN_TAURI, uiLog } from "./tauri";
 
 // Explicit window drag on mouse-down. data-tauri-drag-region proved unreliable on device, so call
 // startDragging() directly. Ignore drags that start on an interactive control (button/input).
@@ -24,8 +19,11 @@ function beginDrag(e: React.MouseEvent): void {
   );
 }
 import { t } from "./strings";
-import { SERVICE_ICONS } from "./serviceIcons";
 import { Icon } from "./icons";
+import { ConnectionsList } from "./connections";
+import { Onboarding } from "./onboarding/Onboarding";
+import { getOnboardingState } from "./onboarding/ipc";
+import type { OnboardingState } from "./onboarding/ipc";
 
 // SHOGUN panel. A visible, interactive window that hangs from the notch. Opening/closing is driven
 // by direct clicks in the webview (reliable — no dependency on the CGEventTap hover path or a global
@@ -68,9 +66,6 @@ interface StateView {
   open_loops: StateItem[];
 }
 
-const IN_TAURI =
-  typeof window !== "undefined" && ("__TAURI_INTERNALS__" in window || "__TAURI__" in window);
-
 // Window sizing. Collapsed = just the handle strip. Open (chat) starts as a wide short bar; the
 // Settings view opens much taller so its stacked sections fit without feeling clipped. Both open
 // views are user-resizable via the corner grip, and each remembers its own size across the
@@ -79,6 +74,10 @@ const W = 600;
 const H_OPEN = 400;
 const H_HANDLE = 44;
 const H_SETTINGS = 620; // taller default so setting groups fit; body scrolls; clamped to screen
+// First run gets its own geometry: it is read, not glanced at, and a step that scrolls on the
+// first screen someone ever sees reads as "this is going to be long".
+const W_ONBOARD = 660;
+const H_ONBOARD = 600;
 const MIN_W = 480;
 const MIN_H = 280;
 // Collapsed fallback, used only until the pill has been measured. The window is transparent, so
@@ -189,6 +188,15 @@ export function App(): JSX.Element {
   useEffect(() => saveJson("shogun.appearance", appearance), [appearance]);
   const [showState, setShowState] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  // `null` until the core answers — rendering the panel first and swapping to onboarding a beat
+  // later would make first launch flash the thing you have not been introduced to yet.
+  const [onboarding, setOnboarding] = useState<OnboardingState | null>(null);
+  useEffect(() => {
+    void getOnboardingState().then((s) => {
+      setOnboarding(s);
+      if (!s.completed) void applyPanelSize(W_ONBOARD, H_ONBOARD);
+    });
+  }, []);
 
   // Open-view sizes are user-resizable (corner grip) and persist across the Rust-driven respawns.
   // Chat and Settings keep INDEPENDENT sizes — chat wants short+wide, Settings wants tall enough
@@ -399,6 +407,29 @@ export function App(): JSX.Element {
     // +1 guards against a fractional layout width being truncated into a clipped pill.
     void applyPanelSize(w + 1, h + 1);
   }, [open, live, state.commitments.length, state.open_loops.length]);
+
+  // First run owns the panel until it is finished. It comes before the collapsed branch on
+  // purpose: minimising away from the introduction, and then having to find your way back to it,
+  // is not a state worth supporting.
+  if (onboarding && !onboarding.completed) {
+    return (
+      <div className="stage">
+        <div className="panel">
+          <Onboarding
+            state={onboarding}
+            liveApp={live}
+            onChange={setOnboarding}
+            onDone={() => {
+              setOpen(true);
+              setShowSettings(false);
+              sizeForView({ open: true, settings: false });
+              refreshState();
+            }}
+          />
+        </div>
+      </div>
+    );
+  }
 
   // Collapsed: a clear, clickable handle hanging from the notch.
   if (!open) {
@@ -672,72 +703,6 @@ function ResizeGrip(props: {
   );
 }
 
-// First-layer connections (§6.9). Connect / disconnect a service and show its sync state. Talks to
-// the Rust connector commands (connectors_list / connect_service / disconnect_service); the data
-// layer stays in Rust (invariant 1) — this is presentation only.
-type ConnState = "connected" | "needs_reauth" | "disconnected" | "coming_soon";
-interface ServiceStatus {
-  source: string; // "gmail" | "gcal" | "gdrive" | "slack" | "notion" | "github" | "linear"
-  state: ConnState;
-  last_sync_ms: number | null;
-  has_endpoint: boolean;
-}
-const CONN_LABELS: Record<string, string> = {
-  gmail: "Gmail",
-  gcal: "Google Calendar",
-  gdrive: "Google Drive",
-  slack: "Slack",
-  notion: "Notion",
-  github: "GitHub",
-  linear: "Linear",
-};
-// Brand marks, inlined from simple-icons at build time (see scripts/generate-service-icons.mjs).
-// Services that project has removed on trademark request — Slack, OpenAI — fall back to a lettered
-// disc in the service's own colour rather than an approximated logo.
-const CONN_FALLBACK_TINT: Record<string, string> = {
-  slack: "#611f69",
-  openai: "#74aa9c",
-};
-
-/// Perceived luminance of a #rrggbb colour, 0..1 (Rec. 709 coefficients).
-function luminance(hex: string): number {
-  const n = parseInt(hex.slice(1), 16);
-  const [r, g, b] = [(n >> 16) & 255, (n >> 8) & 255, n & 255];
-  return (0.2126 * r + 0.7152 * g + 0.0587 * b) / 255;
-}
-
-/// A service's mark: the real logo where we have one, a lettered disc where we don't.
-///
-/// Brand colours are used as-is except at the extremes — Notion and GitHub are near-black, which
-/// disappears on the dark panel — where the mark falls back to the foreground colour so it stays
-/// legible in whichever theme is showing.
-function ServiceMark(props: { source: string; label: string }): JSX.Element {
-  const icon = SERVICE_ICONS[props.source];
-  const raw = icon?.hex ?? CONN_FALLBACK_TINT[props.source] ?? "";
-  const lum = raw ? luminance(raw) : 0.5;
-  // The tile is white on BOTH themes (a service's logo belongs on its own ground), so only a mark
-  // that would vanish against white is re-tinted — the near-black marks stay near-black.
-  const tint = !raw || lum > 0.9 ? "#1d1d1f" : raw;
-  return (
-    <span className="conn__mark" style={{ "--tint": tint } as React.CSSProperties} aria-hidden="true">
-      {icon ? (
-        <svg viewBox="0 0 24 24" width="19" height="19" fill="currentColor" role="presentation">
-          <path d={icon.path} />
-        </svg>
-      ) : (
-        props.label.charAt(0)
-      )}
-    </span>
-  );
-}
-
-const CONN_STATE_LABEL: Record<ConnState, string> = {
-  connected: "Connected",
-  needs_reauth: "Needs reauth",
-  disconnected: "Not connected",
-  coming_soon: "Coming soon",
-};
-
 // The nightly cycle's result (FR-DC-06). Shown because the work happens while nobody is watching:
 // without this, "did anything happen last night" is unanswerable, and a run that has been quietly
 // failing for a week looks exactly like one that never had anything to do.
@@ -865,111 +830,6 @@ function AiSessionsSection(): JSX.Element {
   );
 }
 
-function ConnectionsSection(): JSX.Element {
-  const [rows, setRows] = useState<ServiceStatus[]>([]);
-  const [busy, setBusy] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  const refresh = useCallback((): void => {
-    if (!IN_TAURI) return;
-    void invoke<ServiceStatus[]>("connectors_list")
-      .then((r) => {
-        setRows(r);
-        setError(null);
-      })
-      .catch((e) => setError(String(e)));
-  }, []);
-  useEffect(refresh, [refresh]);
-
-  const act = useCallback(
-    (cmd: "connect_service" | "disconnect_service", source: string): void => {
-      setBusy(source);
-      setError(null);
-      void invoke(cmd, { service: source })
-        .then(refresh)
-        .catch((e) => setError(String(e)))
-        .finally(() => setBusy(null));
-    },
-    [refresh],
-  );
-
-  return (
-    <section className="set">
-      <div className="set__label">{t.connections}</div>
-      <div className="set__hint">{t.connectionsHint}</div>
-      {error ? <div className="set__hint is-err">{error}</div> : null}
-      {rows.length === 0 ? (
-        <div className="set__hint">{t.connectionsEmpty}</div>
-      ) : (
-        <div className="conns">
-          {rows.map((r) => {
-            const label = CONN_LABELS[r.source] ?? r.source;
-            const canConnect = r.has_endpoint && r.state !== "coming_soon";
-            const connected = r.state === "connected" || r.state === "needs_reauth";
-            const stateMod =
-              r.state === "connected" ? " is-ok" : r.state === "needs_reauth" ? " is-warn" : "";
-            // A disconnected service says what it would DO for you; a connected one says where it
-            // stands. The second line is never blank, and never repeats the name.
-            const line = connected
-              ? `${CONN_STATE_LABEL[r.state]}${
-                  r.last_sync_ms ? ` · ${new Date(r.last_sync_ms).toLocaleTimeString()}` : ""
-                }`
-              : r.state === "coming_soon"
-                ? t.connectionsUnavailable
-                : (t.connectionBlurbs[r.source] ?? CONN_STATE_LABEL[r.state]);
-            return (
-              <div key={r.source} className={`conn${r.state === "coming_soon" ? " is-soon" : ""}`}>
-                <ServiceMark source={r.source} label={label} />
-                <div className="conn__meta">
-                  <span className="conn__name">{label}</span>
-                  <span className={`conn__state${connected ? stateMod : ""}`}>{line}</span>
-                </div>
-                {/* One control per row, and it says what the row needs: a tick you can click to
-                    disconnect, a warning you can click to sign in again, a plus to connect. A
-                    service that isn't available yet gets no control at all — a permanently
-                    disabled button is just noise. */}
-                {r.state === "connected" ? (
-                  <button
-                    className="conn__act conn__act--on"
-                    type="button"
-                    title={t.disconnect}
-                    aria-label={`${t.disconnect} ${label}`}
-                    disabled={busy === r.source}
-                    onClick={() => act("disconnect_service", r.source)}
-                  >
-                    <Icon name="check" size={16} />
-                  </button>
-                ) : r.state === "needs_reauth" ? (
-                  <button
-                    className="conn__act conn__act--warn"
-                    type="button"
-                    title={t.reconnect}
-                    aria-label={`${t.reconnect} ${label}`}
-                    disabled={busy === r.source}
-                    onClick={() => act("connect_service", r.source)}
-                  >
-                    <Icon name="arrow" size={16} />
-                  </button>
-                ) : canConnect ? (
-                  <button
-                    className="conn__act"
-                    type="button"
-                    title={t.connect}
-                    aria-label={`${t.connect} ${label}`}
-                    disabled={busy === r.source}
-                    onClick={() => act("connect_service", r.source)}
-                  >
-                    <Icon name="plus" size={16} />
-                  </button>
-                ) : null}
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </section>
-  );
-}
 
 // L3 confirmation queue (§6.6 / FR-AG-03, invariant 4). Every action that leaves the device stops
 // here until the user presses the dedicated Confirm button — Enter alone must never confirm, and
@@ -1253,7 +1113,11 @@ function Settings(props: {
       </header>
       <div className="settings__body">
         <ApprovalsSection />
-        <ConnectionsSection />
+        <section className="set">
+          <div className="set__label">{t.connections}</div>
+          <div className="set__hint">{t.connectionsHint}</div>
+          <ConnectionsList />
+        </section>
         <AiSessionsSection />
         <DreamSection />
         <section className="set">

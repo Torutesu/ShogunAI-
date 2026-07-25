@@ -5,6 +5,18 @@ The ShogunAI macOS app. **Currently the Phase 0 spike** (throwaway; see
 is to answer the four questions (residency, 100ms expand, 300ms cache + 5% CPU, hover
 false-positives). Only `crates/spike-harness` is carried into the real implementation.
 
+## First run
+
+`src/onboarding/` is the six-step first-run flow, and it runs **in the panel** — the first thing
+someone learns about this product is where it lives. Design and the reasoning behind the order:
+`docs/onboarding-design.md`.
+
+The flow's contract with the core is `src/onboarding/ipc.ts`, and the commands it names are **not
+implemented in `src-tauri` yet**. A build whose core does not answer `onboarding_state` reports
+COMPLETED rather than first-run: the flow's only exit is a command that persists completion, so
+showing it before the core can remember would trap the user in it on every launch. Until then,
+first run is reachable from the browser preview's rail.
+
 ## Design language
 
 The panel is an **elevated object floating over someone's desktop**, not a dense HUD. The rules
