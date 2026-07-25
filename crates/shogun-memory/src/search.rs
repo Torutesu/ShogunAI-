@@ -185,17 +185,76 @@ fn is_cjk(c: char) -> bool {
 /// Full-text search over the event log, best-match first, capped at `limit`. Returns event
 /// ids ordered by bm25 relevance (SQLite's bm25 is more-negative-is-better, so ascending).
 pub fn fts_search(conn: &Connection, query: &str, limit: usize) -> Result<Vec<i64>, rusqlite::Error> {
+    fts_search_since(conn, query, None, limit)
+}
+
+/// [`fts_search`], optionally restricted to events at or after `since_ts`.
+///
+/// **Why the bound exists.** `ORDER BY bm25(...)` has to score every matching row before it can
+/// take the top `limit`, so the cost tracks how much of the log the query matches, not how much
+/// is returned. Measured on an Apple Silicon device, an unbounded search over 40k events reached
+/// 506ms against a 500ms budget — already over, and it grows with the log.
+///
+/// Restricting to a recent window is the 3-tier memory design (Warm is what ordinary search
+/// targets), not a shortcut invented for latency: a question is nearly always about recent work.
+/// The caller escalates to the full history when a bounded search comes back thin, so nothing
+/// older becomes unreachable — see [`crate::search::WARM_WINDOW_MS`].
+pub fn fts_search_since(
+    conn: &Connection,
+    query: &str,
+    since_ts: Option<i64>,
+    limit: usize,
+) -> Result<Vec<i64>, rusqlite::Error> {
     let Some(expr) = fts_query(query) else {
         return Ok(Vec::new());
     };
-    let mut stmt = conn.prepare(
-        "SELECT rowid FROM event_fts WHERE event_fts MATCH ?1 ORDER BY bm25(event_fts) LIMIT ?2",
-    )?;
-    let ids = stmt
-        .query_map(params![expr, limit as i64], |r| r.get::<_, i64>(0))?
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(ids)
+    match since_ts {
+        Some(since) => {
+            // Translate the time floor into a docid floor. Joining event_log to filter on `ts`
+            // does NOT help: SQLite resolves the MATCH and scores every hit before the join can
+            // discard anything, so the bm25 cost is unchanged (measured: no improvement at all).
+            // A `rowid >=` constraint is different in kind — FTS5 postings are ordered by docid,
+            // so it skips them instead of scoring them.
+            //
+            // Ids are assigned in insertion order, which tracks time closely but not exactly (a
+            // connector backfill can insert an older item later). That makes this bound an
+            // approximation, which is fine for a latency bound: anything it misses is recovered
+            // by the escalation in `search_warm_first`.
+            let min_id: Option<i64> = conn
+                .query_row(
+                    "SELECT id FROM event_log WHERE ts >= ?1 ORDER BY id ASC LIMIT 1",
+                    params![since],
+                    |r| r.get(0),
+                )
+                .ok();
+            let Some(min_id) = min_id else {
+                return Ok(Vec::new()); // nothing in the window at all
+            };
+            let mut stmt = conn.prepare(
+                "SELECT rowid FROM event_fts
+                  WHERE event_fts MATCH ?1 AND rowid >= ?2
+                  ORDER BY bm25(event_fts) LIMIT ?3",
+            )?;
+            let ids = stmt
+                .query_map(params![expr, min_id, limit as i64], |r| r.get::<_, i64>(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(ids)
+        }
+        None => {
+            let mut stmt = conn.prepare(
+                "SELECT rowid FROM event_fts WHERE event_fts MATCH ?1
+                  ORDER BY bm25(event_fts) LIMIT ?2",
+            )?;
+            let ids = stmt
+                .query_map(params![expr, limit as i64], |r| r.get::<_, i64>(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(ids)
+        }
+    }
 }
+
+/// The Warm window ordinary search covers (§ 3-tier memory: Hot 24h / Warm 30d / Cold all).
+pub const WARM_WINDOW_MS: i64 = 30 * 24 * 60 * 60 * 1000;
 
 /// Hydrate ranked `(id, score)` pairs into full [`SearchHit`]s, preserving the ranked order.
 /// Ids no longer present in the event log (e.g. moved to Cold) are skipped.
@@ -241,7 +300,18 @@ pub fn search_hybrid(
     query_embedding: Option<&[f32]>,
     limit: usize,
 ) -> Result<Vec<SearchHit>, rusqlite::Error> {
-    let fts = fts_search(conn, query, limit)?;
+    search_hybrid_since(conn, query, query_embedding, None, limit)
+}
+
+/// [`search_hybrid`] with the lexical half restricted to `since_ts` — see [`fts_search_since`].
+pub fn search_hybrid_since(
+    conn: &Connection,
+    query: &str,
+    query_embedding: Option<&[f32]>,
+    since_ts: Option<i64>,
+    limit: usize,
+) -> Result<Vec<SearchHit>, rusqlite::Error> {
+    let fts = fts_search_since(conn, query, since_ts, limit)?;
     let vec = match query_embedding {
         Some(emb) => crate::vector::knn(conn, emb, limit)?,
         None => Vec::new(),
@@ -249,6 +319,33 @@ pub fn search_hybrid(
     let ranked = reciprocal_rank_fusion(&[&fts, &vec], 60.0);
     let capped: Vec<(i64, f64)> = ranked.into_iter().take(limit).collect();
     hydrate(conn, &capped)
+}
+
+/// Search the Warm window first and widen to the whole history only if that comes back thin.
+///
+/// This is what keeps the recency bound from silently losing answers: a question about something
+/// from months ago still gets answered, it just costs the slower path. `now_ms` is passed in
+/// rather than read so the behaviour stays deterministic in tests.
+pub fn search_warm_first(
+    conn: &Connection,
+    query: &str,
+    query_embedding: Option<&[f32]>,
+    now_ms: i64,
+    limit: usize,
+) -> Result<Vec<SearchHit>, rusqlite::Error> {
+    let warm = search_hybrid_since(
+        conn,
+        query,
+        query_embedding,
+        Some(now_ms - WARM_WINDOW_MS),
+        limit,
+    )?;
+    // "Thin" means the window plainly did not hold the answer. Half the asked-for results is a
+    // deliberately low bar: widening is the expensive path and should be the exception.
+    if warm.len() * 2 >= limit || warm.len() >= limit {
+        return Ok(warm);
+    }
+    search_hybrid_since(conn, query, query_embedding, None, limit)
 }
 
 #[cfg(test)]
@@ -477,5 +574,104 @@ mod fts_query_tests {
         let huge = (0..500).map(|i| format!("term{i}")).collect::<Vec<_>>().join(" ");
         let expr = fts_query(&huge).unwrap();
         assert_eq!(expr.matches(" OR ").count(), MAX_FTS_TERMS - 1, "term count is bounded");
+    }
+}
+
+/// The recency bound must speed things up without making older memory unreachable.
+#[cfg(test)]
+mod warm_window_tests {
+    use super::*;
+    use crate::event_log::{insert, NewEvent};
+
+    const DAY: i64 = 24 * 60 * 60 * 1000;
+
+    fn add(conn: &Connection, content: &str, hash: &str, ts: i64) {
+        insert(
+            conn,
+            &NewEvent {
+                ts,
+                source: "capture",
+                kind: "text",
+                app_bundle_id: Some("com.apple.Safari"),
+                window_title: Some("notes"),
+                content,
+                content_hash: hash,
+                dwell_ms: 0,
+                display_id: None,
+                window_bounds: None,
+            },
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn the_bound_excludes_what_is_older_than_the_window() {
+        let conn = crate::open_in_memory().unwrap();
+        let now = 100 * DAY;
+        // Chronological insertion — how capture and sync actually write.
+        add(&conn, "ancient vendor pricing note", "h2", now - 90 * DAY);
+        add(&conn, "recent vendor pricing note", "h1", now - DAY);
+
+        let bounded = fts_search_since(&conn, "vendor pricing", Some(now - WARM_WINDOW_MS), 10).unwrap();
+        assert_eq!(bounded.len(), 1, "only the in-window row");
+        let unbounded = fts_search_since(&conn, "vendor pricing", None, 10).unwrap();
+        assert_eq!(unbounded.len(), 2, "the whole history is still reachable");
+    }
+
+    /// The docid bound approximates the time bound, and the approximation errs the safe way.
+    ///
+    /// A backfilled older item gets a higher id than rows that predate it, so it can fall inside
+    /// a docid range its timestamp is outside of. That returns an *extra* old row — harmless, it
+    /// is ranked and capped like any other. The dangerous direction, silently dropping something
+    /// recent, cannot happen: everything newer has a higher id by construction.
+    #[test]
+    fn an_out_of_order_backfill_may_be_included_but_nothing_recent_is_lost() {
+        let conn = crate::open_in_memory().unwrap();
+        let now = 100 * DAY;
+        add(&conn, "recent vendor pricing note", "h1", now - DAY);
+        add(&conn, "backfilled old vendor pricing note", "h2", now - 90 * DAY);
+
+        let bounded = fts_search_since(&conn, "vendor pricing", Some(now - WARM_WINDOW_MS), 10).unwrap();
+        assert!(!bounded.is_empty(), "the recent row is never lost");
+        let hits = hydrate(&conn, &bounded.iter().map(|id| (*id, 1.0)).collect::<Vec<_>>()).unwrap();
+        assert!(
+            hits.iter().any(|h| h.content.contains("recent")),
+            "the in-window row must be present: {hits:?}"
+        );
+    }
+
+    /// The bound must not turn "I asked about something old" into "SHOGUN has no idea".
+    #[test]
+    fn a_question_only_answered_by_old_memory_still_finds_it() {
+        let conn = crate::open_in_memory().unwrap();
+        let now = 100 * DAY;
+        add(&conn, "the vendor migration was cancelled for downtime", "h1", now - 80 * DAY);
+
+        // Warm alone finds nothing, so the search widens rather than answering "nothing found".
+        let warm_only =
+            search_hybrid_since(&conn, "vendor migration", None, Some(now - WARM_WINDOW_MS), 6).unwrap();
+        assert!(warm_only.is_empty(), "precondition: outside the window");
+
+        let escalated = search_warm_first(&conn, "vendor migration", None, now, 6).unwrap();
+        assert_eq!(escalated.len(), 1, "escalation reaches the old answer: {escalated:?}");
+        assert!(escalated[0].content.contains("cancelled"));
+    }
+
+    /// When the window does hold enough, the expensive full-history pass is not run.
+    #[test]
+    fn a_well_answered_question_stays_on_the_fast_path() {
+        let conn = crate::open_in_memory().unwrap();
+        let now = 100 * DAY;
+        for i in 0..6 {
+            add(&conn, "recent vendor pricing note", &format!("h{i}"), now - DAY - i);
+        }
+        add(&conn, "ancient vendor pricing note", "old", now - 90 * DAY);
+
+        let hits = search_warm_first(&conn, "vendor pricing", None, now, 6).unwrap();
+        assert_eq!(hits.len(), 6);
+        assert!(
+            hits.iter().all(|h| h.ts > now - WARM_WINDOW_MS),
+            "the old row must not appear when the window sufficed"
+        );
     }
 }

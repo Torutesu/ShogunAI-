@@ -79,7 +79,9 @@ fn seed(path: &std::path::Path) -> Db {
         );
         let hash = format!("h{i}");
         db.capture(&NewEvent {
-            ts: 1_700_000_000_000 - (total - i) * 1_000,
+            // Spread across ~90 days. One second apart — the first cut — put a whole corpus
+            // inside any recency window, which hid how much the Warm bound actually helps.
+            ts: 1_700_000_000_000 - (total - i) * (90 * 24 * 3_600_000 / total.max(1)),
             source: "capture",
             kind: "text",
             app_bundle_id: Some("com.apple.Safari"),

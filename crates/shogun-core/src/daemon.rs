@@ -895,11 +895,16 @@ impl Db {
             .embedder
             .as_deref()
             .and_then(|e| e.embed_query(query).ok());
+        // Warm window first, widening to the full history only when that comes back thin — an
+        // unbounded bm25 ranking costs in proportion to how much of the log matches, which on
+        // device already reached the 500ms search budget at 40k events.
+        let now = self.now_ms();
         self.conn
             .lock()
             .ok()
             .and_then(|c| {
-                shogun_memory::search::search_hybrid(&c, query, query_vec.as_deref(), limit).ok()
+                shogun_memory::search::search_warm_first(&c, query, query_vec.as_deref(), now, limit)
+                    .ok()
             })
             .unwrap_or_default()
     }
