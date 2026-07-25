@@ -118,12 +118,19 @@ function appName(bundle: string): string {
   return seg.charAt(0).toUpperCase() + seg.slice(1);
 }
 
-async function applyPanelSize(w: number, h: number): Promise<void> {
+/// How a resize should hold the panel in place.
+/// - `center` (default): the panel hangs from the notch, so switching views must not walk it
+///   sideways by half of every size change.
+/// - `left`: the corner grip is a bottom-right drag, so the top-left has to stay put or the
+///   pointer drifts away from the corner it grabbed.
+type Anchor = "center" | "left";
+
+async function applyPanelSize(w: number, h: number, anchor: Anchor = "center"): Promise<void> {
   if (!IN_TAURI) return;
   try {
     // Resize the NATIVE panel (top edge anchored). Falls back to the tao window when the native
     // panel isn't in play (plain-window mode).
-    await invoke("set_panel_size", { width: w, height: h });
+    await invoke("set_panel_size", { width: w, height: h, anchor });
   } catch {
     try {
       await getCurrentWindow().setSize(new LogicalSize(w, h));
@@ -217,7 +224,7 @@ export function App(): JSX.Element {
       raf.current = requestAnimationFrame(() => {
         raf.current = null;
         const cur = liveSize.current;
-        if (cur) void applyPanelSize(cur.w, cur.h);
+        if (cur) void applyPanelSize(cur.w, cur.h, "left");
       });
     }
   }, []);
@@ -229,7 +236,7 @@ export function App(): JSX.Element {
     const s = liveSize.current;
     liveSize.current = null;
     if (!s) return;
-    void applyPanelSize(s.w, s.h);
+    void applyPanelSize(s.w, s.h, "left");
     if (showSettings) setSetSize(s);
     else setChatSize(s);
   }, [showSettings]);

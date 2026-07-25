@@ -510,6 +510,13 @@ unsafe fn pin_top_centre(ptr: *mut objc2::runtime::AnyObject) {
     let y = vf.origin.y + (vf.size.height - w.size.height).max(0.0);
     let origin = NSPoint { x, y };
     let _: () = msg_send![ptr, setFrameOrigin: origin];
+    // Where it actually landed, and on which screen. With more than one display "I can't see it"
+    // is usually "it is on the other one", and that is not answerable without the coordinates.
+    eprintln!(
+        "[shell] panel frame {:.0},{:.0} {:.0}x{:.0} on screen {:.0},{:.0} {:.0}x{:.0}",
+        x, y, w.size.width, w.size.height,
+        vf.origin.x, vf.origin.y, vf.size.width, vf.size.height
+    );
 }
 
 /// Re-assert the overlay and re-show the panel on the active Space. Order matters: flags FIRST
@@ -731,20 +738,48 @@ fn adopt_native_panel(win: &tauri::WebviewWindow) {
 /// shifts by the height delta.
 #[cfg(target_os = "macos")]
 #[tauri::command]
-fn set_panel_size(app: tauri::AppHandle, width: f64, height: f64) {
+fn set_panel_size(app: tauri::AppHandle, width: f64, height: f64, anchor: Option<String>) {
+    // "left" keeps the top-left corner put (the bottom-right resize grip); anything else — and the
+    // default — keeps the panel's centre, which is what a notch-hung panel needs.
+    let keep_left = anchor.as_deref() == Some("left");
+    let anchor_label = if keep_left { "left" } else { "center" };
     let h = app.clone();
     let _ = app.run_on_main_thread(move || {
         use objc2::msg_send;
         use objc2_foundation::{NSPoint, NSRect, NSSize};
+        use objc2::runtime::AnyObject;
         let Some(ptr) = overlay_ptr(&h) else { return };
         // SAFETY: main thread, live NSWindow/NSPanel.
         unsafe {
             let f: NSRect = msg_send![ptr, frame];
+            // Keep the panel where it *looks* like it is. Anchoring the left edge moves the panel
+            // sideways by half of every size change: the window is born 640 wide and centred under
+            // the notch, then the webview collapses it to the ~260pt pill — which left the pill
+            // 190pt to the left of the notch it is supposed to hang from, far enough that it read
+            // as "the UI never appeared". The notch is the screen's centre, and a dragged panel's
+            // centre is where the user put it, so the centre is the thing that has to hold.
+            let mut x = if keep_left {
+                f.origin.x
+            } else {
+                f.origin.x + f.size.width / 2.0 - width / 2.0
+            };
+            // An expansion near a screen edge slides inward rather than hanging off it.
+            let screen: *mut AnyObject = msg_send![ptr, screen];
+            if !screen.is_null() {
+                let vf: NSRect = msg_send![screen, visibleFrame];
+                let max_x = vf.origin.x + (vf.size.width - width).max(0.0);
+                x = x.clamp(vf.origin.x, max_x);
+            }
             let r = NSRect {
-                origin: NSPoint { x: f.origin.x, y: f.origin.y + f.size.height - height },
+                // Top edge anchored: the panel hangs from the notch, so it grows downward.
+                origin: NSPoint { x, y: f.origin.y + f.size.height - height },
                 size: NSSize { width, height },
             };
             let _: () = msg_send![ptr, setFrame: r, display: true];
+            eprintln!(
+                "[shell] panel resized to {:.0}x{:.0} at {:.0},{:.0} (anchor {})",
+                width, height, r.origin.x, r.origin.y, anchor_label
+            );
         }
     });
 }
