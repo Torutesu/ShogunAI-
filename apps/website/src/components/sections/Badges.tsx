@@ -1,13 +1,16 @@
 import Image from 'next/image';
 import type { Dictionary } from '@/i18n/dictionaries';
+import { logoUrl } from '@/lib/logo-dev';
 
-const BRANDFETCH_CLIENT_ID = process.env.NEXT_PUBLIC_BRANDFETCH_CLIENT_ID?.trim() ?? '';
-const BRAND_LOGOS = [
-  { name: 'OpenAI', domain: 'openai.com', width: 116 },
-  { name: 'Anthropic', domain: 'anthropic.com', width: 140 },
-  { name: 'NVIDIA', domain: 'nvidia.com', width: 132 },
-  { name: 'Notion', domain: 'notion.so', width: 112 },
-  { name: 'Vercel', domain: 'vercel.com', width: 118 },
+/* Ecosystem strip — the tools ShogunAI plugs into. Distinct from the trust-bar
+   marquee, which is about who the product is for. Both draw from Logo.dev so
+   there is one logo source in the LP. */
+const ECOSYSTEM = [
+  { name: 'OpenAI', domain: 'openai.com' },
+  { name: 'Anthropic', domain: 'anthropic.com' },
+  { name: 'NVIDIA', domain: 'nvidia.com' },
+  { name: 'Notion', domain: 'notion.so' },
+  { name: 'Vercel', domain: 'vercel.com' },
 ] as const;
 
 function AwardBanner({
@@ -60,33 +63,25 @@ function ProductHuntBadge({ top, brand, mark }: { top: string; brand: string; ma
   );
 }
 
-function brandfetchLogoUrl(domain: string) {
-  if (!BRANDFETCH_CLIENT_ID) return null;
-  return `https://cdn.brandfetch.io/${domain}/theme/dark/logo.svg?c=${encodeURIComponent(BRANDFETCH_CLIENT_ID)}`;
-}
-
-function BrandfetchLogoStrip() {
-  if (!BRANDFETCH_CLIENT_ID) return null;
-
+function EcosystemLogoStrip() {
   return (
     <div className="col-span-full mt-1 rounded-[24px] border border-white/50 bg-white/42 px-4 py-4 shadow-[0_18px_50px_rgba(0,67,101,0.08)] backdrop-blur-md sm:px-5">
       <p className="text-center text-[11px] font-semibold uppercase tracking-[0.12em] text-[#2b6173]">Works with the tools you already use</p>
       <div className="mt-4 flex flex-wrap items-center justify-center gap-x-7 gap-y-4 sm:gap-x-9">
-        {BRAND_LOGOS.map((logo) => {
-          const src = brandfetchLogoUrl(logo.domain);
-          if (!src) return null;
-          return (
+        {ECOSYSTEM.map((brand) => (
+          <span key={brand.domain} className="group/mark inline-flex items-center gap-2.5 text-[15px] font-semibold tracking-tight text-[#2b6173]">
             <img
-              key={logo.domain}
-              src={src}
-              alt={`${logo.name} logo`}
-              width={logo.width}
-              height={32}
+              src={logoUrl(brand.domain, { size: 64, format: 'png' })}
+              alt=""
+              width={26}
+              height={26}
               loading="lazy"
-              className="h-7 w-auto opacity-78 grayscale transition duration-300 hover:opacity-100 hover:grayscale-0"
+              decoding="async"
+              className="brand-mark size-[26px] rounded-[6px] object-contain"
             />
-          );
-        })}
+            {brand.name}
+          </span>
+        ))}
       </div>
     </div>
   );
@@ -113,7 +108,7 @@ export function Badges({ t }: { t: Dictionary }) {
         sizes="(max-width: 1024px) 92vw, 360px"
       />
       {ph ? <ProductHuntBadge top={ph.top} brand={ph.brand} mark={ph.mark} /> : <div />}
-      <BrandfetchLogoStrip />
+      <EcosystemLogoStrip />
     </div>
   );
 }
