@@ -238,31 +238,51 @@ fn recall_at_k_over_the_eval_set() {
         eprintln!("  not retrieved at all: {misses:?}");
     }
 
-    // Loose floors: these catch a broken pipeline (an index that stopped being written, a fusion
-    // that lost one half), not a quality regression. Tightening them to just under the measured
-    // value is the point of running this — see the note below.
+    // Floors set from the measured baseline below, with room for the set to grow. They are here to
+    // catch a regression — half the fusion going dark, an index that stopped being written, a
+    // tokenizer swap that quietly changed the vectors — not to certify quality.
+    //
+    // Measured 2026-07-25, Apple Silicon, multilingual-e5-small:
+    //
+    //   mode      recall@1  recall@3  recall@5  recall@10   MRR
+    //   lexical      0.57      0.71      0.93      0.93     0.685
+    //   hybrid       0.79      0.93      1.00      1.00     0.875
+    //
+    // The hybrid floors sit one query below perfect (13/14 = 0.93) so that adding a genuinely hard
+    // question is a measurement, not a build break; a *second* one failing is a real signal.
+    let (recall5_floor, mrr_floor, mode_note) = if model.is_some() {
+        (0.90, 0.80, "hybrid")
+    } else {
+        // A device with no model gets this path, so it has to keep working on its own.
+        (0.85, 0.60, "lexical")
+    };
     assert!(
-        metrics.recall_at(10) >= 0.5,
-        "recall@10 {:.2} — over half the questions cannot reach their answer in {LIMIT} results; \
-         retrieval is broken, not merely imprecise",
-        metrics.recall_at(10)
+        metrics.recall_at(5) >= recall5_floor,
+        "{mode_note} recall@5 {:.2} below floor {recall5_floor:.2} — answers are no longer \
+         reaching the reading model, which is what this layer owes (§9)",
+        metrics.recall_at(5)
     );
-    assert!(metrics.mrr() > 0.0, "no query retrieved its answer at all");
+    assert!(
+        metrics.mrr() >= mrr_floor,
+        "{mode_note} MRR {:.3} below floor {mrr_floor:.2} — answers are being retrieved but \
+         pushed down the list",
+        metrics.mrr()
+    );
 }
 
 // ---------------------------------------------------------------------------------------------
-// Setting the real floors
+// What the first measurement settled (docs/context-layer-audit-and-plan.md §9)
 //
-// The first run on a machine with the model establishes the baseline; the floors above are
-// intentionally too loose to catch anything but a break. Once both modes have been measured:
+// The embedding model earns its several hundred MB: it is the difference between 0.93 and 1.00
+// recall@5, and it is the only thing that reaches "what did we decide about the vendor pricing?",
+// whose answer ("we agreed to 12k for the year") shares no term with the question. Lexical search
+// missed that one entirely; hybrid puts it at rank 4.
 //
-//   * raise recall@5 and recall@10 to just under the hybrid numbers,
-//   * keep the lexical-only run as a separate expectation (it is what a device without the model
-//     gets, and it must not silently rot),
-//   * treat the hybrid-minus-lexical gap as the embedding model's contribution — that is the
-//     number to check before spending several hundred MB and CPU on a reranker
-//     (docs/context-layer-audit-and-plan.md §9).
+// It also settled the reranker question: **not now.** A reranker reorders what retrieval already
+// found, and at recall@5 = 1.00 there is nothing left to recover — every answer already reaches the
+// reading model, which is the contract in §9. It would buy rank-1 accuracy (0.79 → higher), which
+// this architecture does not need, at the cost of another model on the idle-CPU budget.
 //
-// recall@k is the primary metric because of the contract in §9: this layer must get the answer in
-// front of the reading model, not rank it first. MRR is reported alongside because a corpus where
-// every answer sits at rank 9 would satisfy recall@10 while being useless in practice.
+// Caveat worth keeping in view: 14 queries over 35 documents. recall@5 = 1.00 on a set this size is
+// evidence to defer the reranker, not proof it will never be needed. The set should grow — ideally
+// from questions people actually ask — and this decision should be re-read when it does.
