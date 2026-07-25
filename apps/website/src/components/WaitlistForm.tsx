@@ -67,7 +67,11 @@ export function WaitlistForm({ refCode, labels }: { refCode?: string; labels: Wa
   }
 
   return (
-    <form onSubmit={onSubmit} noValidate className="mx-auto mt-8 flex max-w-lg flex-wrap justify-center gap-2.5">
+    <form
+      onSubmit={onSubmit}
+      noValidate
+      className="mx-auto mt-8 flex w-full max-w-xl flex-wrap justify-center gap-3 rounded-[28px] border border-border/80 bg-surface/88 p-3 shadow-[0_18px_60px_rgba(9,11,12,0.08)] backdrop-blur xl:mx-0 xl:justify-start"
+    >
       <Input
         type="email"
         name="email"
@@ -86,7 +90,7 @@ export function WaitlistForm({ refCode, labels }: { refCode?: string; labels: Wa
         aria-hidden="true"
         className="absolute left-[-9999px] size-px overflow-hidden"
       />
-      <Button type="submit" disabled={state === 'loading'} className="w-full sm:w-auto sm:min-w-[150px]">
+      <Button type="submit" disabled={state === 'loading'} className="w-full sm:w-auto sm:min-w-[170px]">
         {state === 'loading' ? <Loader2 className="size-4 animate-spin" /> : labels.submit}
       </Button>
       {msg && (

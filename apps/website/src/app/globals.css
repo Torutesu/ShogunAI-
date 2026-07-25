@@ -23,6 +23,7 @@
   --orb-blend: multiply;
   --orb-opacity: 0.55;
   --hairline: rgba(9, 11, 12, 0.06);
+  --gridline: rgba(9, 11, 12, 0.04);
 }
 
 :root[data-theme='dark'] {
@@ -44,6 +45,7 @@
   --orb-blend: screen;
   --orb-opacity: 0.4;
   --hairline: rgba(255, 255, 255, 0.06);
+  --gridline: rgba(255, 255, 255, 0.05);
 }
 
 /* System preference when the user hasn't explicitly chosen */
@@ -97,6 +99,7 @@
   --shadow-float: 0 12px 40px var(--hairline), 0 2px 8px var(--hairline);
 
   --ease-out-soft: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-out-strong: cubic-bezier(0.23, 1, 0.32, 1);
 }
 
 @layer base {
@@ -150,6 +153,197 @@
   box-shadow: var(--shadow-float);
 }
 
+/* The hero art is a bright sky in both themes: the cloud field, the glass
+   chips and the `.hero-accent` headline gradient are all hardcoded light. Let
+   the text tokens flip with the theme and the headline disappears into the
+   clouds — so pin them to their light values for the width of the shell, the
+   same way `--band` pins an always-dark section. */
+.hero-shell {
+  --bg: #ffffff;
+  --surface: #ffffff;
+  --cloud: #f7fdff;
+  --ink: #090b0c;
+  --on-ink: #fafafa;
+  --muted: #5f6b73;
+  --faint: #9aa3a9;
+  --border: #e5e7eb;
+  --sky: #97e5ff;
+  --sky-soft: #d8f6ff;
+  --accent: #00a6f4;
+  --accent-strong: #0089cf;
+  --hairline: rgba(9, 11, 12, 0.06);
+  --gridline: rgba(9, 11, 12, 0.04);
+  /* Components that reach for the `--color-*` layer directly (Button's primary
+     gradient is `var(--color-ink)`) resolve it at :root, so pinning the base
+     tokens alone misses them. Re-derive the alias layer in this scope too. */
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-cloud: var(--cloud);
+  --color-ink: var(--ink);
+  --color-on-ink: var(--on-ink);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-border: var(--border);
+  --color-sky: var(--sky);
+  --color-sky-soft: var(--sky-soft);
+  --color-accent: var(--accent);
+  --color-accent-strong: var(--accent-strong);
+  /* The headline and other unclassed text inherit `color` from <body>, which
+     is resolved at :root — re-declare it here or the token pin above never
+     reaches them. */
+  color: var(--ink);
+}
+
+.hero-shell::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.08) 0%, rgba(255, 255, 255, 0.22) 52%, rgba(255, 255, 255, 0.42) 100%),
+    radial-gradient(circle at top, rgba(255, 255, 255, 0.24), transparent 42%);
+  mask-image: linear-gradient(180deg, black, black 68%, transparent 100%);
+}
+
+.hero-haze {
+  background:
+    radial-gradient(40% 30% at 50% 18%, rgba(255, 255, 255, 0.22), transparent 70%),
+    radial-gradient(55% 44% at 15% 42%, rgba(255, 255, 255, 0.12), transparent 72%),
+    radial-gradient(52% 40% at 84% 34%, rgba(255, 255, 255, 0.14), transparent 72%);
+}
+
+.hero-grid {
+  background-image:
+    linear-gradient(to right, var(--gridline) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--gridline) 1px, transparent 1px);
+  background-size: 32px 32px;
+  opacity: 0.28;
+  mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.22), transparent 90%);
+}
+
+.hero-accent {
+  background: linear-gradient(135deg, #0b1316 0%, #16343f 35%, #0f7db4 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.hero-device {
+  transform-origin: center top;
+}
+
+.hero-cloud {
+  position: absolute;
+  z-index: -10;
+  pointer-events: none;
+  border-radius: 999px;
+  background:
+    radial-gradient(circle at 50% 55%, rgba(255, 255, 255, 0.96) 0%, rgba(250, 255, 255, 0.92) 40%, rgba(255, 255, 255, 0.55) 66%, rgba(255, 255, 255, 0) 100%);
+  filter: blur(24px);
+  opacity: 0.95;
+}
+
+.hero-cloud::before,
+.hero-cloud::after {
+  content: '';
+  position: absolute;
+  border-radius: 999px;
+  background: inherit;
+}
+
+.hero-cloud--left {
+  top: 4.5rem;
+  left: 3%;
+  height: 11rem;
+  width: 18rem;
+  animation: cloud-drift 26s ease-in-out infinite;
+}
+
+.hero-cloud--left::before {
+  left: 12%;
+  top: -24%;
+  height: 6.8rem;
+  width: 7.6rem;
+}
+
+.hero-cloud--left::after {
+  right: 14%;
+  top: -15%;
+  height: 8rem;
+  width: 8.5rem;
+}
+
+.hero-cloud--right {
+  top: 1.25rem;
+  right: -1%;
+  height: 21rem;
+  width: 29rem;
+  filter: blur(30px);
+  animation: cloud-drift 34s ease-in-out infinite reverse;
+}
+
+.hero-cloud--right::before {
+  left: 16%;
+  top: -22%;
+  height: 12rem;
+  width: 12rem;
+}
+
+.hero-cloud--right::after {
+  right: 11%;
+  top: -16%;
+  height: 13.2rem;
+  width: 12.5rem;
+}
+
+.hero-cloud--bottom {
+  bottom: 9rem;
+  left: 34%;
+  height: 14rem;
+  width: 24rem;
+  opacity: 0.82;
+  filter: blur(28px);
+  animation: cloud-drift 30s ease-in-out infinite;
+}
+
+.hero-cloud--bottom::before {
+  left: 8%;
+  top: -26%;
+  height: 8.6rem;
+  width: 9.2rem;
+}
+
+.hero-cloud--bottom::after {
+  right: 10%;
+  top: -14%;
+  height: 7.4rem;
+  width: 8rem;
+}
+
+.hero-cloud--far {
+  right: -4%;
+  bottom: 8%;
+  height: 10rem;
+  width: 18rem;
+  opacity: 0.74;
+  filter: blur(26px);
+  animation: cloud-drift 38s ease-in-out infinite reverse;
+}
+
+.hero-cloud--far::before {
+  left: 10%;
+  top: -18%;
+  height: 6rem;
+  width: 7rem;
+}
+
+.hero-cloud--far::after {
+  right: 14%;
+  top: -10%;
+  height: 5.6rem;
+  width: 6.8rem;
+}
+
 /* --- Animations --- */
 @keyframes drift {
   to {
@@ -163,6 +357,15 @@
   }
   50% {
     transform: translateY(-10px);
+  }
+}
+@keyframes cloud-drift {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+  50% {
+    transform: translate3d(16px, -8px, 0);
   }
 }
 @keyframes marquee {
