@@ -70,10 +70,10 @@ const IN_TAURI =
 // Settings view opens much taller so its stacked sections fit without feeling clipped. Both open
 // views are user-resizable via the corner grip, and each remembers its own size across the
 // Rust-driven respawns.
-const W = 640;
+const W = 560;
 const H_OPEN = 300;
 const H_HANDLE = 44;
-const H_SETTINGS = 520; // taller default so setting groups fit; body scrolls; clamped to screen
+const H_SETTINGS = 460; // taller default so setting groups fit; body scrolls; clamped to screen
 const MIN_W = 460;
 const MIN_H = 240;
 // Collapsed fallback, used only until the pill has been measured. The window is transparent, so
@@ -647,86 +647,25 @@ const CONN_LABELS: Record<string, string> = {
   github: "GitHub",
   linear: "Linear",
 };
+// A colour and an initial per service, so the list is scannable at a glance instead of a column
+// of similar-length words. Deliberately not the vendors' logos: an approximated trademark drawn
+// from memory is worse than an honest mark, and this has to render offline with no remote assets.
+const CONN_MARK: Record<string, { tint: string; glyph: string }> = {
+  gmail: { tint: "#ea4335", glyph: "M" },
+  gcal: { tint: "#4285f4", glyph: "C" },
+  gdrive: { tint: "#0f9d58", glyph: "D" },
+  slack: { tint: "#7c3aed", glyph: "S" },
+  notion: { tint: "#9aa3af", glyph: "N" },
+  github: { tint: "#8b95a3", glyph: "G" },
+  linear: { tint: "#5e6ad2", glyph: "L" },
+};
+
 const CONN_STATE_LABEL: Record<ConnState, string> = {
   connected: "Connected",
   needs_reauth: "Needs reauth",
   disconnected: "Not connected",
   coming_soon: "Coming soon",
 };
-
-// What SHOGUN is allowed to read. A product that reads the screen has to let the user say
-// "not that one", and say it about apps they recognise rather than bundle identifiers.
-interface ExclusionRow {
-  bundle_id: string;
-  excluded: boolean;
-  locked: boolean;
-  events: number;
-}
-
-function appLabel(bundleId: string): string {
-  const seg = bundleId.split(".").pop() || bundleId;
-  return seg.charAt(0).toUpperCase() + seg.slice(1);
-}
-
-function ExclusionsSection(): JSX.Element | null {
-  const [rows, setRows] = useState<ExclusionRow[]>([]);
-  const [busy, setBusy] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  const refresh = useCallback((): void => {
-    if (!IN_TAURI) return;
-    void invoke<ExclusionRow[]>("list_exclusions").then(setRows).catch(() => undefined);
-  }, []);
-  useEffect(refresh, [refresh]);
-
-  const toggle = (row: ExclusionRow): void => {
-    if (row.locked) return;
-    setBusy(row.bundle_id);
-    setError(null);
-    void invoke("set_app_excluded", { bundleId: row.bundle_id, excluded: !row.excluded })
-      .then(refresh)
-      .catch((e) => setError(String(e)))
-      .finally(() => setBusy(null));
-  };
-
-  return (
-    <section className="set">
-      <div className="set__label">{t.exclusions}</div>
-      <div className="set__hint">{t.exclusionsHint}</div>
-      {error ? <div className="set__hint is-err">{error}</div> : null}
-      {rows.length === 0 ? (
-        <div className="set__hint">{t.exclusionsEmpty}</div>
-      ) : (
-        <div className="conns">
-          {rows.map((r) => (
-            <div key={r.bundle_id} className="conn">
-              <div className="conn__meta">
-                {/* Two apps can share a last path segment, so the identifier stays reachable. */}
-                <span className="conn__name" title={r.bundle_id}>{appLabel(r.bundle_id)}</span>
-                <span className={`conn__state${r.excluded ? "" : " is-ok"}`}>
-                  {r.locked
-                    ? t.exclusionsAlways
-                    : r.excluded
-                      ? t.exclusionsOff
-                      : `${t.exclusionsReading}${r.events > 0 ? ` · ${r.events}` : ""}`}
-                </span>
-              </div>
-              <button
-                className="keyrow__btn"
-                type="button"
-                disabled={r.locked || busy === r.bundle_id}
-                title={r.locked ? t.exclusionsHint : undefined}
-                onClick={() => toggle(r)}
-              >
-                {busy === r.bundle_id ? "…" : r.excluded ? t.exclusionsTurnOn : t.exclusionsTurnOff}
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-    </section>
-  );
-}
 
 // The nightly cycle's result (FR-DC-06). Shown because the work happens while nobody is watching:
 // without this, "did anything happen last night" is unanswerable, and a run that has been quietly
@@ -908,6 +847,13 @@ function ConnectionsSection(): JSX.Element {
               r.state === "connected" ? " is-ok" : r.state === "needs_reauth" ? " is-warn" : "";
             return (
               <div key={r.source} className="conn">
+                <span
+                  className="conn__mark"
+                  style={{ "--tint": (CONN_MARK[r.source]?.tint ?? "var(--faint)") } as React.CSSProperties}
+                  aria-hidden="true"
+                >
+                  {CONN_MARK[r.source]?.glyph ?? label.charAt(0)}
+                </span>
                 <div className="conn__meta">
                   <span className="conn__name">{label}</span>
                   <span className={`conn__state${stateMod}`}>
@@ -1225,7 +1171,6 @@ function Settings(props: {
         <ApprovalsSection />
         <ConnectionsSection />
         <AiSessionsSection />
-        <ExclusionsSection />
         <DreamSection />
         <section className="set">
           <div className="set__label" id="seg-appearance">{t.appearance}</div>

@@ -125,8 +125,6 @@ pub fn run() {
         approvals::mac::reject_send,
         ai_sessions::mac::get_ai_session_import,
         ai_sessions::mac::set_ai_session_import,
-        exclusions::mac::list_exclusions,
-        exclusions::mac::set_app_excluded,
         dream::mac::dream_status,
         dream::mac::run_dream_now,
     ]);
@@ -275,7 +273,6 @@ fn setup_macos(app: &tauri::App) {
     let exclusion_policy: exclusions::mac::SharedPolicy =
         std::sync::Arc::new(std::sync::Mutex::new(exclusions::mac::load(app.handle())));
     exclusions::mac::install(exclusion_policy.clone());
-    app.manage(exclusion_policy.clone());
 
     // T-07/T-08: mouse tap → integrated engine + measurement streams.
     let (tx, rx) = std::sync::mpsc::channel::<hover::TapEvent>();

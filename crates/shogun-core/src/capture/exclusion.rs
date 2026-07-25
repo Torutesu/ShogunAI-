@@ -111,7 +111,7 @@ impl ExclusionPolicy {
     }
 
     /// The user's own app exclusions, sorted. Defaults are not included — they are always on and
-    /// cannot be removed, so the settings UI shows them separately.
+    /// cannot be removed, so they are not part of anything a user could edit.
     pub fn user_apps(&self) -> Vec<&str> {
         self.user_bundles.iter().map(String::as_str).collect()
     }
@@ -156,8 +156,7 @@ impl ExclusionPolicy {
 /// True if `bundle_id` is one of the non-removable defaults.
 ///
 /// Terminals count: [`ExclusionPolicy::is_excluded`] skips them before it ever looks at the user's
-/// list, so reporting them as removable would let the settings UI say "reading" about an app that
-/// is never captured.
+/// list, so reporting them as removable would describe a policy the daemon does not enforce.
 pub fn is_default_excluded(bundle_id: &str) -> bool {
     PASSWORD_MANAGERS.contains(&bundle_id)
         || AUTH_AGENTS.contains(&bundle_id)
@@ -192,11 +191,11 @@ mod tests {
         assert_eq!(p.is_excluded("com.apple.SecurityAgent", None), Some(ExclusionReason::AuthDialog));
     }
 
-    /// The settings UI decides which rows to lock from `is_default_excluded`, and persists only
-    /// `user_apps()`. If either drifted from what `is_excluded` actually does, the UI would tell
-    /// the user SHOGUN reads an app it never reads — or silently lose an exclusion on restart.
+    /// `is_default_excluded` and `user_apps` describe the policy to the outside; `is_excluded` is
+    /// what capture obeys. If they drift, anything reading the first two — a settings screen, a
+    /// diagnostic, the stored exclusion file — describes a policy the daemon does not enforce.
     #[test]
-    fn what_the_settings_ui_can_offer_matches_what_capture_does() {
+    fn what_the_policy_reports_matches_what_it_enforces() {
         let mut p = ExclusionPolicy::new();
         assert!(p.user_apps().is_empty(), "defaults are not the user's own list");
 
@@ -206,8 +205,8 @@ mod tests {
         assert!(p.remove_app("com.acme.chat"));
         assert_eq!(p.is_excluded("com.acme.chat", None), None);
 
-        // Anything the policy refuses to stop excluding must report itself as locked, so the UI
-        // never offers a switch that would do nothing.
+        // Anything the policy refuses to stop excluding must report itself as a default, so
+        // nothing offers a switch that would do nothing.
         for locked in PASSWORD_MANAGERS.iter().chain(AUTH_AGENTS).chain(TERMINALS) {
             assert!(is_default_excluded(locked), "{locked}");
             p.add_app(*locked);

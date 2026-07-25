@@ -756,24 +756,6 @@ impl Db {
             .unwrap_or(0)
     }
 
-    /// The apps SHOGUN has actually captured from, most-seen first.
-    ///
-    /// The exclusion UI offers these rather than asking for bundle identifiers: a person can
-    /// recognise "the app I was just in", not `com.acme.thing`.
-    pub fn captured_apps(&self, limit: usize) -> Vec<(String, i64)> {
-        let Ok(conn) = self.conn.lock() else { return Vec::new() };
-        let Ok(mut stmt) = conn.prepare(
-            "SELECT app_bundle_id, count(*) FROM event_log
-              WHERE source = 'capture' AND app_bundle_id IS NOT NULL AND app_bundle_id <> ''
-              GROUP BY app_bundle_id ORDER BY count(*) DESC LIMIT ?1",
-        ) else {
-            return Vec::new();
-        };
-        stmt.query_map([limit as i64], |r| Ok((r.get(0)?, r.get(1)?)))
-            .map(|rows| rows.filter_map(Result::ok).collect())
-            .unwrap_or_default()
-    }
-
     /// Record a person identity seen in an event, merging it into the right person
     /// ([`shogun_memory::identity::observe`]).
     ///

@@ -15,11 +15,11 @@ export const STRINGS = {
     openPanel: "Open SHOGUN (⌃⌥N)",
     // welcome (expanded, empty thread)
     welcomeTitle: "What can I take off your plate?",
-    welcomeSub: "Ask about your work, or tap ⌥ (Option) in any app to draft where your cursor is.",
+    welcomeSub: "Ask about your work, or tap ⌥ (Option) in any app to draft where you're typing.",
     noKey: "No key yet — add one in settings for real answers.",
     // composer
     ask: "Ask SHOGUN…",
-    draftTitle: "Draft where your cursor is (tap ⌥)",
+    draftTitle: "Draft where you're typing (tap ⌥)",
     // settings
     settings: "Settings",
     // connections (first-layer integrations)
@@ -36,16 +36,6 @@ export const STRINGS = {
       "Read your local AI coding-tool transcripts so SHOGUN remembers what you worked on and decided there. Stays on your device.",
     aiSessionsOn: "Importing",
     aiSessionsOff: "Off",
-    // capture exclusions (what SHOGUN must not read)
-    exclusions: "What SHOGUN reads",
-    exclusionsHint:
-      "Turn off any app you'd rather SHOGUN didn't read. Password managers, terminals and private browsing are always off and can't be turned on.",
-    exclusionsEmpty: "Nothing captured yet.",
-    exclusionsAlways: "always off",
-    exclusionsReading: "Reading",
-    exclusionsOff: "Off",
-    exclusionsTurnOff: "Turn off",
-    exclusionsTurnOn: "Turn on",
     // nightly cycle — what SHOGUN works out while you're away
     dream: "Nightly review",
     dreamHint: "While your Mac is idle overnight, SHOGUN works through the day and updates what it's tracking.",
@@ -76,7 +66,7 @@ export const STRINGS = {
     autoHide: "Auto-hide",
     stayOpenHint: "Keep the panel open until you close it.",
     autoHideHint: "Slide back to the notch when you move away.",
-    draftShortcut: "Draft at cursor",
+    draftShortcut: "Draft with SHOGUN",
     draftFixedHint: "Tap ⌥ (Option) alone — always on, not rebindable.",
     summonShortcut: "Show / hide overlay",
     quitShortcut: "Quit",
