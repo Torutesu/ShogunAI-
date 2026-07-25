@@ -17,6 +17,12 @@ export const STRINGS = {
     welcomeTitle: "What can I take off your plate?",
     welcomeSub: "Ask about your work, or tap ⌥ (Option) in any app to draft where you're typing.",
     noKey: "No key yet — add one in settings for real answers.",
+    /// Openers for an empty thread. These are prompts the user could have typed, offered because
+    /// a blank panel is the worst moment to have to invent one — never invented facts, and the
+    /// second only appears when something really is waiting. `{app}` is the app being read.
+    suggestFirst: "What should I do first?",
+    suggestWaiting: "What am I waiting on?",
+    suggestCatchUp: "Catch me up on {app}",
     // composer
     ask: "Ask SHOGUN…",
     draftTitle: "Draft where you're typing (tap ⌥)",
@@ -30,12 +36,23 @@ export const STRINGS = {
     connect: "Connect",
     connecting: "Connecting…",
     disconnect: "Disconnect",
+    reconnect: "Sign in again",
+    /// Second line of a service row before it is connected — what connecting it would buy you.
+    /// Once connected the row shows its sync state instead, so these read as an offer, not a
+    /// description of something already happening.
+    connectionBlurbs: {
+      gmail: "Read threads and draft replies. Sending always waits for you.",
+      gcal: "Know what your day looks like before you ask.",
+      gdrive: "Find the document you were about to look for.",
+      slack: "Follow the threads you owe an answer to.",
+      notion: "Keep your notes and pages in the picture.",
+      github: "Track the reviews and issues waiting on you.",
+      linear: "See the issues assigned to you in context.",
+    } as Record<string, string>,
     // AI coding-tool transcripts (opt-in source)
     aiSessions: "AI sessions",
     aiSessionsHint:
-      "Read your local AI coding-tool transcripts so SHOGUN remembers what you worked on and decided there. Stays on your device.",
-    aiSessionsOn: "Importing",
-    aiSessionsOff: "Off",
+      "Read your local AI coding-tool transcripts, so what you worked on and decided there is remembered. Stays on your device.",
     // nightly cycle — what SHOGUN works out while you're away
     dream: "Nightly review",
     dreamHint: "While your Mac is idle overnight, SHOGUN works through the day and updates what it's tracking.",

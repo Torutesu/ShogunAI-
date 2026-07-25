@@ -25,6 +25,7 @@ function beginDrag(e: React.MouseEvent): void {
 }
 import { t } from "./strings";
 import { SERVICE_ICONS } from "./serviceIcons";
+import { Icon } from "./icons";
 
 // SHOGUN panel. A visible, interactive window that hangs from the notch. Opening/closing is driven
 // by direct clicks in the webview (reliable — no dependency on the CGEventTap hover path or a global
@@ -74,12 +75,12 @@ const IN_TAURI =
 // Settings view opens much taller so its stacked sections fit without feeling clipped. Both open
 // views are user-resizable via the corner grip, and each remembers its own size across the
 // Rust-driven respawns.
-const W = 560;
-const H_OPEN = 300;
+const W = 600;
+const H_OPEN = 400;
 const H_HANDLE = 44;
-const H_SETTINGS = 460; // taller default so setting groups fit; body scrolls; clamped to screen
-const MIN_W = 460;
-const MIN_H = 240;
+const H_SETTINGS = 620; // taller default so setting groups fit; body scrolls; clamped to screen
+const MIN_W = 480;
+const MIN_H = 280;
 // Collapsed fallback, used only until the pill has been measured. The window is transparent, so
 // any part of it that ISN'T the pill would still swallow clicks meant for the app underneath —
 // the collapsed window is therefore shrunk to the pill's real bounds (see the measuring effect).
@@ -346,10 +347,12 @@ export function App(): JSX.Element {
     sizeForView({ open: true, settings: false });
   };
 
-  const send = useCallback((): void => {
-    const q = input.trim();
+  /// `text` lets a suggestion send itself without going through the field first — the message the
+  /// user sees in the thread is still exactly what was sent.
+  const send = useCallback((text?: string): void => {
+    const q = (text ?? input).trim();
     if (!q || thinking) return;
-    setInput("");
+    if (text === undefined) setInput("");
     setMsgs((m) => [...m, { role: "me", text: q }]);
     setThinking(true);
     const finish = (text: string, citations?: Citation[]): void => {
@@ -455,10 +458,10 @@ export function App(): JSX.Element {
               </div>
               <div className="head__right">
                 <button className="icon" type="button" title={t.settings} aria-label={t.settings} onClick={openSettings}>
-                  ⚙︎
+                  <Icon name="settings" />
                 </button>
                 <button className="icon" type="button" title={t.minimize} aria-label={t.minimize} onClick={collapse}>
-                  ▁
+                  <Icon name="minimize" />
                 </button>
                 <button
                   className="icon icon--close"
@@ -469,7 +472,7 @@ export function App(): JSX.Element {
                     if (IN_TAURI) void invoke("quit_app").catch((err) => uiLog(`quit failed: ${err}`));
                   }}
                 >
-                  ✕
+                  <Icon name="close" />
                 </button>
               </div>
             </header>
@@ -478,14 +481,18 @@ export function App(): JSX.Element {
               <div className="state">
                 {state.commitments.map((c) => (
                   <button key={`c${c.id}`} type="button" className="state__row" onClick={() => resolveItem("commitment", c.id)} title={t.resolveHint}>
-                    <span className="state__check">✓</span>
+                    <span className="state__check">
+                      <Icon name="check" size={12} />
+                    </span>
                     <span className="state__text">{c.text}</span>
                     <span className={`state__meta ${c.meta === "overdue" ? "is-over" : ""}`}>{c.meta}</span>
                   </button>
                 ))}
                 {state.open_loops.map((l) => (
                   <button key={`l${l.id}`} type="button" className="state__row" onClick={() => resolveItem("open_loop", l.id)} title={t.resolveHint}>
-                    <span className="state__check">✓</span>
+                    <span className="state__check">
+                      <Icon name="check" size={12} />
+                    </span>
                     <span className="state__text">{l.text}</span>
                     <span className="state__meta">{l.meta}</span>
                   </button>
@@ -501,6 +508,25 @@ export function App(): JSX.Element {
                 <div className="welcome">
                   <div className="welcome__t">{t.welcomeTitle}</div>
                   <div className="welcome__s">{t.welcomeSub}</div>
+                  {/* A blank panel is the worst moment to have to invent a question, so it opens
+                      with two or three you could have asked — drawn from what is actually tracked
+                      and what is actually on screen, never invented. */}
+                  <div className="suggest">
+                    {[
+                      t.suggestFirst,
+                      state.open_loops.length > 0 ? t.suggestWaiting : null,
+                      t.suggestCatchUp.replace("{app}", live),
+                    ]
+                      .filter((s): s is string => !!s)
+                      .map((s) => (
+                        <button key={s} className="suggest__row" type="button" onClick={() => send(s)}>
+                          <span className="suggest__text">{s}</span>
+                          <span className="suggest__go">
+                            <Icon name="arrow" size={15} />
+                          </span>
+                        </button>
+                      ))}
+                  </div>
                   {IN_TAURI && status && !status.has_key ? <div className="welcome__key">{t.noKey}</div> : null}
                 </div>
               ) : (
@@ -559,7 +585,10 @@ export function App(): JSX.Element {
                     title={t.model}
                     onClick={openSettings}
                   >
-                    {providerLabel} <span className="composer__caret" aria-hidden="true">⌄</span>
+                    {providerLabel}
+                    <span className="composer__caret">
+                      <Icon name="chevron" size={15} />
+                    </span>
                   </button>
                   <div className="composer__tools">
                     <button
@@ -569,17 +598,17 @@ export function App(): JSX.Element {
                       title={t.draftTitle}
                       aria-label={t.draftTitle}
                     >
-                      ✎
+                      <Icon name="draft" size={18} />
                     </button>
                     <button
                       className="composer__send"
                       type="button"
                       title={t.send}
                       aria-label={t.send}
-                      onClick={send}
+                      onClick={() => send()}
                       disabled={!input.trim() || thinking}
                     >
-                      ↑
+                      <Icon name="send" size={18} />
                     </button>
                   </div>
                 </div>
@@ -686,11 +715,13 @@ function ServiceMark(props: { source: string; label: string }): JSX.Element {
   const icon = SERVICE_ICONS[props.source];
   const raw = icon?.hex ?? CONN_FALLBACK_TINT[props.source] ?? "";
   const lum = raw ? luminance(raw) : 0.5;
-  const tint = !raw || lum < 0.16 || lum > 0.9 ? "var(--ink)" : raw;
+  // The tile is white on BOTH themes (a service's logo belongs on its own ground), so only a mark
+  // that would vanish against white is re-tinted — the near-black marks stay near-black.
+  const tint = !raw || lum > 0.9 ? "#1d1d1f" : raw;
   return (
     <span className="conn__mark" style={{ "--tint": tint } as React.CSSProperties} aria-hidden="true">
       {icon ? (
-        <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" role="presentation">
+        <svg viewBox="0 0 24 24" width="19" height="19" fill="currentColor" role="presentation">
           <path d={icon.path} />
         </svg>
       ) : (
@@ -768,18 +799,16 @@ function DreamSection(): JSX.Element {
       <div className="set__label">{t.dream}</div>
       <div className="set__hint">{t.dreamHint}</div>
       {error ? <div className="set__hint is-err">{error}</div> : null}
-      <div className="conn">
-        <div className="conn__meta">
-          <span className={`conn__state${headline.cls}`}>{headline.text}</span>
+      <div className="swrow">
+        <div>
+          <div className={`set__hint${headline.cls}`}>{headline.text}</div>
           {status?.last_cycle_id ? (
-            <span className="conn__state">
+            <div className="set__hint">
               {status.events_processed} {t.dreamEvents} · {status.state_changes} {t.dreamChanges}
               {status.chunks_sent > 0 ? ` · ${status.chunks_sent} ${t.dreamChunks}` : ""}
-            </span>
+            </div>
           ) : null}
-          {status && !status.batch_lane ? (
-            <span className="conn__state">{t.dreamLocal}</span>
-          ) : null}
+          {status && !status.batch_lane ? <div className="set__hint">{t.dreamLocal}</div> : null}
         </div>
         <button className="keyrow__btn" type="button" disabled={busy} onClick={runNow}>
           {busy ? t.dreamRunning : t.dreamRunNow}
@@ -812,32 +841,26 @@ function AiSessionsSection(): JSX.Element {
       .finally(() => setBusy(false));
   };
 
+  // On or off — a two-option segmented control was dressing a switch up as a choice.
   return (
     <section className="set">
-      <div className="set__label" id="seg-ai-sessions">{t.aiSessions}</div>
-      <div className="seg" role="radiogroup" aria-labelledby="seg-ai-sessions">
+      <div className="swrow">
+        <div>
+          <div className="set__label" id="sw-ai-sessions">
+            {t.aiSessions}
+          </div>
+          <div className="set__hint">{t.aiSessionsHint}</div>
+        </div>
         <button
           type="button"
-          role="radio"
+          role="switch"
+          className="sw"
           aria-checked={on}
+          aria-labelledby="sw-ai-sessions"
           disabled={busy}
-          className={`seg__opt${on ? " is-on" : ""}`}
-          onClick={() => toggle(true)}
-        >
-          {t.aiSessionsOn}
-        </button>
-        <button
-          type="button"
-          role="radio"
-          aria-checked={!on}
-          disabled={busy}
-          className={`seg__opt${!on ? " is-on" : ""}`}
-          onClick={() => toggle(false)}
-        >
-          {t.aiSessionsOff}
-        </button>
+          onClick={() => toggle(!on)}
+        />
       </div>
-      <div className="set__hint">{t.aiSessionsHint}</div>
     </section>
   );
 }
@@ -885,36 +908,60 @@ function ConnectionsSection(): JSX.Element {
             const connected = r.state === "connected" || r.state === "needs_reauth";
             const stateMod =
               r.state === "connected" ? " is-ok" : r.state === "needs_reauth" ? " is-warn" : "";
+            // A disconnected service says what it would DO for you; a connected one says where it
+            // stands. The second line is never blank, and never repeats the name.
+            const line = connected
+              ? `${CONN_STATE_LABEL[r.state]}${
+                  r.last_sync_ms ? ` · ${new Date(r.last_sync_ms).toLocaleTimeString()}` : ""
+                }`
+              : r.state === "coming_soon"
+                ? t.connectionsUnavailable
+                : (t.connectionBlurbs[r.source] ?? CONN_STATE_LABEL[r.state]);
             return (
-              <div key={r.source} className="conn">
+              <div key={r.source} className={`conn${r.state === "coming_soon" ? " is-soon" : ""}`}>
                 <ServiceMark source={r.source} label={label} />
                 <div className="conn__meta">
                   <span className="conn__name">{label}</span>
-                  <span className={`conn__state${stateMod}`}>
-                    {CONN_STATE_LABEL[r.state]}
-                    {r.last_sync_ms ? ` · ${new Date(r.last_sync_ms).toLocaleTimeString()}` : ""}
-                  </span>
+                  <span className={`conn__state${connected ? stateMod : ""}`}>{line}</span>
                 </div>
-                {connected ? (
+                {/* One control per row, and it says what the row needs: a tick you can click to
+                    disconnect, a warning you can click to sign in again, a plus to connect. A
+                    service that isn't available yet gets no control at all — a permanently
+                    disabled button is just noise. */}
+                {r.state === "connected" ? (
                   <button
-                    className="keyrow__btn"
+                    className="conn__act conn__act--on"
                     type="button"
+                    title={t.disconnect}
+                    aria-label={`${t.disconnect} ${label}`}
                     disabled={busy === r.source}
                     onClick={() => act("disconnect_service", r.source)}
                   >
-                    {busy === r.source ? "…" : t.disconnect}
+                    <Icon name="check" size={16} />
                   </button>
-                ) : (
+                ) : r.state === "needs_reauth" ? (
                   <button
-                    className="keyrow__btn"
+                    className="conn__act conn__act--warn"
                     type="button"
-                    disabled={!canConnect || busy === r.source}
+                    title={t.reconnect}
+                    aria-label={`${t.reconnect} ${label}`}
+                    disabled={busy === r.source}
                     onClick={() => act("connect_service", r.source)}
-                    title={canConnect ? "" : t.connectionsUnavailable}
                   >
-                    {busy === r.source ? t.connecting : t.connect}
+                    <Icon name="arrow" size={16} />
                   </button>
-                )}
+                ) : canConnect ? (
+                  <button
+                    className="conn__act"
+                    type="button"
+                    title={t.connect}
+                    aria-label={`${t.connect} ${label}`}
+                    disabled={busy === r.source}
+                    onClick={() => act("connect_service", r.source)}
+                  >
+                    <Icon name="plus" size={16} />
+                  </button>
+                ) : null}
               </div>
             );
           })}
@@ -1334,7 +1381,12 @@ function Settings(props: {
                 if (e.key === "Enter") saveKey();
               }}
             />
-            <button className="keyrow__btn" type="button" onClick={saveKey} disabled={!keyInput.trim()}>
+            <button
+              className="keyrow__btn keyrow__btn--go"
+              type="button"
+              onClick={saveKey}
+              disabled={!keyInput.trim()}
+            >
               {t.keySave}
             </button>
             {keyState ? (

@@ -5,6 +5,25 @@ The ShogunAI macOS app. **Currently the Phase 0 spike** (throwaway; see
 is to answer the four questions (residency, 100ms expand, 300ms cache + 5% CPU, hover
 false-positives). Only `crates/spike-harness` is carried into the real implementation.
 
+## Design language
+
+The panel is an **elevated object floating over someone's desktop**, not a dense HUD. The rules
+are enforced in `src/styles.css` (tokens) and `src/icons.tsx` (one icon weight):
+
+- **Two grounds, one system.** Dark glass is the default because the panel hangs over an unknown
+  wallpaper; the light theme is the same layout on a near-white ground and gets equal care. Every
+  component is written once against tokens — never inside a theme block.
+- **Colour is spent twice only**: the solid primary action (which inverts the ground — white on
+  dark, near-black on light) and semantic state (live / warn / danger). Selection is a neutral
+  fill, never the accent. Nothing else is tinted.
+- **Hairlines, then space, then shadow** — in that order — to separate things.
+- **Rows are 44–52pt.** This is a surface you consult, not a spreadsheet you scan.
+- **Service marks sit on white tiles** on both themes: a logo belongs on its own ground, and only
+  marks that would vanish against white are re-tinted.
+- **One control per row, and it states the row's need**: a tick you can click to disconnect, an
+  amber arrow to sign in again, a plus to connect. Nothing gets a permanently disabled button.
+- **Copy lives in `src/strings.ts`**, never in markup (i18n seam; brand rules in CLAUDE.md).
+
 ## Browser preview (design work without a Mac)
 
 The panel's look — spacing, glass, type, the states Settings can be in — is judged in a
