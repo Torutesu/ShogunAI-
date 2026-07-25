@@ -9,7 +9,7 @@ SHOGUNのモノレポ。本ファイルはmacOSアプリ本体(`crates/` + `apps
 ## 絶対不変条件（違反するコードは書かない）
 
 1. **データの重心はRustコアに置く。** DB・キャプチャ・context cache・SLO責務はRustプロセスが単独所有。webview側にデータ層のロジックを置かない
-2. **スクリーンショット・画像データは一切保存しない。** キャプチャはAccessibility API経由のテキストのみ
+2. **画像・音声データを一切保存しない。** 画面キャプチャはAccessibility API経由のテキストのみ。会議の音声は**オンデバイスでのみ処理し、波形はRAMから出さない**（ディスク・一時ファイル・クラウドのいずれにも書かない）。永続化するのは文字起こしテキストとそのprovenanceのみ。スクリーンショット・録画・音声ファイルを生成するコードを書かない
 3. **生データはデバイス外に出さない。** クラウドに出るのは処理用チャンクのみ。送信箇所には必ずトレーサビリティログを実装
 4. **L1（自動実行）に外部送信系アクションを絶対に含めない。** 送信・投稿・カレンダー作成は必ずL3（明示確認）
 5. **キーの分離**: インデックス・分類・Dream Cycle・Morning Brief = Select KKキー（Batch API）／エージェント推論・チャット・ドラフト = ユーザーBYOK。逆転させない
@@ -81,7 +81,8 @@ docs/               # 要件・仕様・判断記録
 
 - **Phase 0（今ここ）**: ノッチUIスパイク。`docs/notch-ui-prototype-spec.md` に完全準拠、実装手順は `docs/phase0-dev-instructions.md`。4つの問い（常駐安定性・展開100ms・cache300ms+CPU5%・ホバー誤発火）に答えるまで本実装を始めない。No-Go時はメニューバー＋パレット方式へ転換
 - **Phase 1（v1）**: Notch UI本実装 → キャプチャ＋メモリ＋state tables → Context Fusion＋L1/L2エージェント → 第1層MCP連携（Wave 1: Gmail+Google Calendar → Wave 2: Slack → Wave 3: Notion+GitHub+Linear）→ 課金＋トライアル
-- v1に含めない: 音声/会議（v1.5）、ナレッジグラフ/同期/メタメモリ（v2）、Computer Use/visionOS（Phase 3）。頼まれてもv1スコープに足さず、docs/requirements-v1.0.md のスコープ表を根拠に確認を取る
+- 会議ノート（検知＋オンデバイスASR＋Recap）はv1へ前倒し（Issue #7 / `docs/meeting-notes-ui-design.md`）。ただし**音声ファイル・録音の保存は恒久的に対象外**（不変条件2）。実装順はM1〜M5（同書§7）
+- v1に含めない: ナレッジグラフ/同期/メタメモリ（v2）、Computer Use/visionOS（Phase 3）。頼まれてもv1スコープに足さず、docs/requirements-v1.0.md のスコープ表を根拠に確認を取る
 
 ## 連携実装ルール
 

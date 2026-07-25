@@ -8,6 +8,13 @@
 - 先行文書: `docs/context-architecture-design.md`（取得〜文脈化の全体設計）/ `docs/context-layer-audit-and-plan.md`（検索・抽出の監査）
 - 本書は実コードの読解に基づく**設計・判断記録**であり、実装の完了報告ではない
 
+> **後続の決定により一部が上書きされている（2026-07-26、Issue #7）。**
+> 本書 §0-2 / §2 / §3.6 は「音声は v1 では書けない（v1.5）」を前提にしているが、
+> `docs/meeting-notes-ui-design.md` で **音声レーンを v1 に前倒しする決定**が下され、
+> 不変条件2・NFR-PRV-01・スコープ表は改訂済み（音声はRAM内処理のみ・テキストだけ永続化、
+> 録音ファイルの保存は恒久的に対象外）。正式要件は `docs/requirements-v1.0.md` §6.16（FR-MT群）。
+> 本書のうち **§3.1〜§3.5（session の器・検知・calendar_occurrences・3フェーズ）と §4（Context Dashboard）は有効**。
+
 ---
 
 ## 0. 結論（先に要点）
