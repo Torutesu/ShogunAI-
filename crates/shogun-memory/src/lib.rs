@@ -31,6 +31,7 @@ pub mod quantize;
 pub mod redact;
 pub mod recompute;
 pub mod search;
+pub mod session;
 pub mod state;
 pub mod thread;
 pub mod traceability;
@@ -201,6 +202,11 @@ pub fn open_in_memory() -> Result<Connection, MemoryError> {
     Ok(conn)
 }
 
+/// The highest migration bundled in `src/migrations`. Tests assert against this rather than a
+/// literal so that adding a migration updates one place, not five — and so a *drop* in version
+/// (a migration file lost in a merge) still fails loudly.
+pub const LATEST_SCHEMA_VERSION: u32 = 7;
+
 /// The schema version the migrations bring the database to (max applied version), or `None`
 /// if no migrations are recorded.
 pub fn schema_version(conn: &Connection) -> Result<Option<u32>, rusqlite::Error> {
@@ -299,7 +305,7 @@ mod encryption_tests {
         let content: String =
             conn.query_row("SELECT content FROM event_log", [], |r| r.get(0)).unwrap();
         assert_eq!(content, "pre-existing memory");
-        assert_eq!(schema_version(&conn).unwrap(), Some(6), "schema carried over");
+        assert_eq!(schema_version(&conn).unwrap(), Some(LATEST_SCHEMA_VERSION), "schema carried over");
 
         let _ = std::fs::remove_file(&plain);
         let _ = std::fs::remove_file(&enc);
@@ -333,7 +339,7 @@ mod tests {
         ] {
             assert!(tables.iter().any(|t| t == expected), "missing table {expected}");
         }
-        assert_eq!(schema_version(&conn).unwrap(), Some(6));
+        assert_eq!(schema_version(&conn).unwrap(), Some(LATEST_SCHEMA_VERSION));
     }
 
     #[test]
@@ -345,12 +351,12 @@ mod tests {
 
         {
             let conn = open(&path).unwrap();
-            assert_eq!(schema_version(&conn).unwrap(), Some(6));
+            assert_eq!(schema_version(&conn).unwrap(), Some(LATEST_SCHEMA_VERSION));
         }
         {
             // Reopen: migrate_and_check runs again, finds nothing new, and passes quick_check.
             let conn = open(&path).unwrap();
-            assert_eq!(schema_version(&conn).unwrap(), Some(6));
+            assert_eq!(schema_version(&conn).unwrap(), Some(LATEST_SCHEMA_VERSION));
             let mode: String = conn.query_row("PRAGMA journal_mode", [], |r| r.get(0)).unwrap();
             assert_eq!(mode.to_lowercase(), "wal");
         }

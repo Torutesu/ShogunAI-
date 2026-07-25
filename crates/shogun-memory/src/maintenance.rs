@@ -66,6 +66,7 @@ pub struct DeleteReport {
     pub commitments: usize,
     pub open_loops: usize,
     pub threads: usize,
+    pub sessions: usize,
     pub traceability: usize,
 }
 
@@ -88,6 +89,9 @@ pub fn delete_all(conn: &mut Connection) -> Result<DeleteReport, rusqlite::Error
     tx.execute("DELETE FROM event_vec", [])?;
     tx.execute("DELETE FROM cold_embeddings", [])?;
     let events = tx.execute("DELETE FROM event_log", [])?;
+    // Sessions hold the meeting's title, summary and decisions — user data, and referenced by
+    // event_log, so they go after it (FR-SET-07, FR-MT-05).
+    let sessions = tx.execute("DELETE FROM sessions", [])?;
     let traceability = tx.execute("DELETE FROM traceability_log", [])?;
     tx.execute("DELETE FROM job_runs", [])?;
     tx.commit()?;
@@ -99,6 +103,7 @@ pub fn delete_all(conn: &mut Connection) -> Result<DeleteReport, rusqlite::Error
         commitments,
         open_loops,
         threads,
+        sessions,
         traceability,
     })
 }
@@ -153,7 +158,7 @@ mod tests {
         seed(&mut conn);
         let json = export_json(&conn).unwrap();
         let v: Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(v["schema_version"], 6);
+        assert_eq!(v["schema_version"], crate::LATEST_SCHEMA_VERSION);
         assert_eq!(v["event_log"].as_array().unwrap().len(), 1);
         assert_eq!(v["event_log"][0]["content"], "Alice asked for the quarterly report");
         assert_eq!(v["people"][0]["display_name"], "Alice");
@@ -175,11 +180,39 @@ mod tests {
             assert_eq!(n, 0, "{table} should be empty after delete_all");
         }
         // ...but the schema (and version) survives, so the app keeps working
-        assert_eq!(crate::schema_version(&conn).unwrap(), Some(6));
+        assert_eq!(crate::schema_version(&conn).unwrap(), Some(crate::LATEST_SCHEMA_VERSION));
         // a fresh insert still works
         seed(&mut conn);
         let n: i64 = conn.query_row("SELECT count(*) FROM people", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn delete_all_wipes_meeting_sessions() {
+        // A session carries the meeting's title, summary and decisions — user data by any
+        // reading. "Delete everything" that leaves the record of who met about what would be a
+        // privacy failure, not a missed table (FR-SET-07).
+        let mut conn = crate::open_in_memory().unwrap();
+        let id = crate::session::open(
+            &conn,
+            &crate::session::NewSession {
+                kind: "meeting",
+                started_at: 1_000,
+                title: Some("Weekly sync"),
+                app_bundle_id: Some("us.zoom.xos"),
+                calendar_occurrence_id: None,
+                confidence: 0.6,
+                provenance: "{}",
+            },
+        )
+        .unwrap();
+        crate::session::close(&conn, id, 2_000).unwrap();
+
+        delete_all(&mut conn).unwrap();
+
+        let n: i64 =
+            conn.query_row("SELECT count(*) FROM sessions", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 0, "sessions must not survive delete_all");
     }
 
     #[test]
