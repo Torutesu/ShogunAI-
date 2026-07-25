@@ -344,22 +344,71 @@ mod tests {
         let e = OnnxEmbedder::load(model, tok).expect("load");
         assert_eq!(e.dim(), E5_SMALL_DIM);
 
-        let q = e.embed_query("what did we decide about the vendor pricing?").unwrap();
-        let passages = e
-            .embed_passages(&[
-                "The vendor renewal was settled at 12k for the year.",
-                "Lunch options near the office on Thursday.",
-            ])
-            .unwrap();
-        let related = crate::embed::cosine_similarity(&q, &passages[0]);
-        let unrelated = crate::embed::cosine_similarity(&q, &passages[1]);
-        eprintln!("related={related:.4} unrelated={unrelated:.4}");
-        assert!(
-            related > unrelated,
-            "the model must rank the answering passage higher: {related} vs {unrelated}"
-        );
-        // Unit length, as the vector store assumes.
-        let len = q.iter().map(|x| x * x).sum::<f32>().sqrt();
-        assert!((len - 1.0).abs() < 1e-3, "query vector must be normalised: {len}");
+        // A ranking check, not one pairwise comparison. e5 similarities sit in a narrow band —
+        // everything plausible scores 0.7–0.9 — so a single pair clearing by a hair proves little.
+        // What retrieval actually needs is that the answering passage ranks *first* among credible
+        // alternatives, which is also all that is used downstream: `vector::knn` returns ranks and
+        // RRF fuses ranks, never absolute scores.
+        //
+        // The distractors are deliberately on-topic. Anyone can beat "lunch on Thursday"; the
+        // failure that matters is picking the wrong passage about the same subject.
+        let cases: &[(&str, &[&str])] = &[
+            (
+                "what did we decide about the vendor pricing?",
+                &[
+                    "The vendor renewal was settled at 12k for the year.", // answers it
+                    "We should ask the vendor for updated pricing next quarter.",
+                    "The vendor sent over their new product catalogue.",
+                ],
+            ),
+            (
+                "who is reviewing the migration PR?",
+                &[
+                    "Priya picked up the review on the migration PR.", // answers it
+                    "The migration PR is still waiting on CI to go green.",
+                    "We opened a PR for the migration this morning.",
+                ],
+            ),
+            (
+                "when is the security audit happening?",
+                &[
+                    "The security audit is booked for the week of the 14th.", // answers it
+                    "The security audit will need two engineers on call.",
+                    "Last year's security audit turned up three findings.",
+                ],
+            ),
+            // Japanese is supported, though English accuracy is the priority — a regression that
+            // broke multilingual handling entirely should still be visible here.
+            (
+                "請求書の支払いはいつ?",
+                &[
+                    "請求書は今月末に支払う予定です。", // answers it
+                    "請求書のフォーマットを変更しました。",
+                    "請求書がまだ届いていません。",
+                ],
+            ),
+        ];
+
+        for (query, passages) in cases {
+            let q = e.embed_query(query).unwrap();
+            let vecs = e.embed_passages(passages).unwrap();
+            let scores: Vec<f32> =
+                vecs.iter().map(|p| crate::embed::cosine_similarity(&q, p)).collect();
+            let best = scores
+                .iter()
+                .enumerate()
+                .max_by(|a, b| a.1.total_cmp(b.1))
+                .map(|(i, _)| i)
+                .unwrap();
+            let margin = scores[0] - scores.iter().skip(1).copied().fold(f32::MIN, f32::max);
+            eprintln!("{query}\n  scores={scores:?} margin={margin:+.4}");
+            assert_eq!(
+                best, 0,
+                "the answering passage must rank first for {query:?}: {scores:?}"
+            );
+            // Unit length, as the vector store assumes.
+            let len = q.iter().map(|x| x * x).sum::<f32>().sqrt();
+            assert!((len - 1.0).abs() < 1e-3, "query vector must be normalised: {len}");
+        }
     }
 }
