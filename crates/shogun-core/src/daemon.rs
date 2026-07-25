@@ -156,6 +156,15 @@ impl ReplyContextCache {
     }
 }
 
+/// What one local maintenance pass changed ([`Db::run_local_maintenance`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct LocalMaintenance {
+    pub decayed: usize,
+    pub corroborated: usize,
+    pub overdue: usize,
+    pub stale: usize,
+}
+
 /// One candidate answer to "which thread is this question about".
 #[derive(Debug, Clone, PartialEq)]
 pub struct ThreadCandidate {
@@ -737,6 +746,34 @@ impl Db {
     }
 
     /// Age-decay state-row confidence (FR-ST-21). Returns the number of rows changed.
+    /// Raise confidence for state rows with several independent evidence events
+    /// ([`shogun_memory::recompute::corroborate`]). Part of the local maintenance pass.
+    pub fn corroborate(&self) -> usize {
+        self.conn
+            .lock()
+            .ok()
+            .and_then(|mut g| shogun_memory::recompute::corroborate(&mut g).ok())
+            .unwrap_or(0)
+    }
+
+    /// The maintenance that needs no model call.
+    ///
+    /// The full Dream Cycle also classifies the day's events through the Batch lane, which needs
+    /// the Select KK key (invariant 5) — that half is not wired yet. These passes are the part
+    /// that can run today, and they matter on their own: without them a locally-extracted
+    /// commitment stays below the Low/Medium boundary forever and the user never sees anything
+    /// from their own captured work, and nothing ever goes overdue.
+    ///
+    /// Order matters. Decay first (it reads `last_evidence_at`), then corroborate (which may lift
+    /// a decayed row back up on the strength of repeated evidence), then recompute overdue and
+    /// staleness so the surfaced state is current.
+    pub fn run_local_maintenance(&self, now_ms: i64, half_life_ms: i64) -> LocalMaintenance {
+        let decayed = self.decay_confidence(now_ms, half_life_ms);
+        let corroborated = self.corroborate();
+        let (overdue, stale) = self.recompute_overdue_and_staleness(now_ms);
+        LocalMaintenance { decayed, corroborated, overdue, stale }
+    }
+
     pub fn decay_confidence(&self, now_ms: i64, half_life_ms: i64) -> usize {
         self.conn
             .lock()
@@ -1311,6 +1348,52 @@ mod tests {
         assert!(ctx.turns[1].excerpt.contains("12k"));
         // The SLO measurement ships with the data it describes.
         assert!(ctx.build_ms < 1_000, "assembly should be fast: {}ms", ctx.build_ms);
+    }
+
+    /// The gap this closes: a locally-extracted commitment is emitted below the Low/Medium
+    /// boundary and is therefore excluded from every generation. Until the model pass exists,
+    /// repeated evidence is the only honest way it can become visible at all.
+    #[test]
+    fn local_maintenance_makes_a_repeatedly_seen_commitment_reach_the_user() {
+        let db = Db::open_in_memory(clock(1_000_000)).unwrap();
+        let events: Vec<i64> = (0..4)
+            .map(|i| db.capture(&ev("I'll send the deck", &format!("h{i}"), 100 + i)).unwrap().0)
+            .collect();
+        let prov: Vec<_> =
+            events.iter().map(|e| shogun_memory::state::Provenance::new(*e)).collect();
+        db.insert_commitment(
+            &shogun_memory::state::NewCommitment {
+                direction: shogun_memory::state::CommitmentDirection::Mine,
+                counterparty_id: None,
+                description: "send the deck",
+                due_at: None,
+                status: shogun_memory::state::CommitmentStatus::Open,
+                project_id: None,
+                confidence: 0.35, // what the local rules assign: Low, so invisible
+                now: 100,
+            },
+            &prov,
+        )
+        .unwrap();
+
+        // Precondition: the confidence gate excludes it, so the user sees nothing.
+        assert!(
+            !db.inline_memory(8).iter().any(|f| f.contains("send the deck")),
+            "precondition: a Low-confidence commitment is excluded"
+        );
+
+        let report = db.run_local_maintenance(1_000_000, 30 * 24 * 3_600_000);
+        assert!(report.corroborated >= 1, "the repeatedly-evidenced row was raised: {report:?}");
+
+        // Now it reaches the user — and, being corroborated rather than verified, it is offered
+        // weakly rather than asserted.
+        let facts = db.inline_memory(8);
+        let line = facts.iter().find(|f| f.contains("send the deck"));
+        assert!(line.is_some(), "must now be visible: {facts:?}");
+        assert!(
+            line.unwrap().contains(shogun_fusion::confidence::POSSIBLY_PREFIX),
+            "corroboration alone must not let it be stated as fact: {line:?}"
+        );
     }
 
     /// A reply is written *into* a conversation, so the thread's own words must lead the prompt —

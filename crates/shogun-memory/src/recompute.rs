@@ -199,3 +199,193 @@ mod tests {
         assert!((c - 0.9).abs() < 1e-9);
     }
 }
+
+/// Confidence a corroborated row may reach, and no more.
+///
+/// The local rules cap a single-sighting candidate at [`crate::extract::LOCAL_RULE_MAX_CONFIDENCE`]
+/// (0.4, i.e. Low — excluded from generations entirely). Repeated *independent* evidence is real
+/// signal that it was not a one-off misread, so it should count for something. But nothing here has
+/// verified what the sentence means: the promotion therefore tops out just under High, so a
+/// corroborated row can be offered as "possibly …" and can never be stated as fact. Only the model
+/// pass (Batch classification) may lift a row into High.
+const CORROBORATION_CEILING: f64 = 0.75;
+
+/// Shapes how fast corroboration accumulates. Larger = slower. Tuned so a second sighting is a
+/// clear step up and a tenth is a marginal one.
+const CORROBORATION_SHAPE: f64 = 2.0;
+
+/// Raise confidence for state rows backed by several independent events (FR-ST-21).
+///
+/// Without this, every locally-extracted commitment stays below the Low/Medium boundary forever —
+/// the second stage that was meant to promote them is the model pass, and until that runs the user
+/// sees nothing at all from their own captured work. Corroboration is the part of that judgement
+/// that can be made locally and honestly: the same promise seen in four separate events is not a
+/// parsing accident.
+///
+/// Only ever raises, never lowers (decay is [`decay_confidence`]'s job), and is idempotent — the
+/// target is computed from the evidence count, not accumulated.
+///
+/// Returns the number of rows raised.
+pub fn corroborate(conn: &mut Connection) -> Result<usize, rusqlite::Error> {
+    let mut raised = 0usize;
+    let tx = conn.transaction()?;
+    for table in CONFIDENCE_TABLES {
+        // Distinct events behind each row, via the provenance join.
+        let sql = format!(
+            "SELECT s.id, s.confidence, count(DISTINCT p.event_id)
+               FROM {table} s
+               JOIN state_provenance p
+                 ON p.state_table = '{table}' AND p.state_id = s.id
+              GROUP BY s.id
+             HAVING count(DISTINCT p.event_id) > 1"
+        );
+        let mut stmt = tx.prepare(&sql)?;
+        let rows: Vec<(i64, f64, i64)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(stmt);
+        for (id, confidence, evidence) in rows {
+            let target = corroborated_confidence(evidence as f64);
+            if target > confidence {
+                tx.execute(
+                    &format!("UPDATE {table} SET confidence = ?1 WHERE id = ?2"),
+                    params![target, id],
+                )?;
+                raised += 1;
+            }
+        }
+    }
+    tx.commit()?;
+    Ok(raised)
+}
+
+/// The confidence `evidence_count` independent sightings justify, with diminishing returns and a
+/// hard ceiling below High. Pure, so the curve is testable on its own.
+pub fn corroborated_confidence(evidence_count: f64) -> f64 {
+    if evidence_count <= 1.0 {
+        return 0.0; // a single sighting is not corroboration
+    }
+    // Asymptotic rather than linear: each additional sighting adds less than the one before, and
+    // the ceiling is approached but never reached. More evidence should always help a little and
+    // never harden into certainty — that judgement needs the model pass.
+    let extra = evidence_count - 1.0;
+    let scale = extra / (extra + CORROBORATION_SHAPE);
+    0.5 + scale * (CORROBORATION_CEILING - 0.5)
+}
+
+#[cfg(test)]
+mod corroboration_tests {
+    use super::*;
+    use crate::state::{insert_commitment, CommitmentDirection, CommitmentStatus, NewCommitment, Provenance};
+
+    #[test]
+    fn one_sighting_is_not_corroboration() {
+        assert_eq!(corroborated_confidence(1.0), 0.0);
+        assert_eq!(corroborated_confidence(0.0), 0.0);
+    }
+
+    #[test]
+    fn more_independent_evidence_means_more_confidence_with_diminishing_returns() {
+        let two = corroborated_confidence(2.0);
+        let three = corroborated_confidence(3.0);
+        let four = corroborated_confidence(4.0);
+        assert!(two < three && three < four, "{two} {three} {four}");
+        assert!(four - three < three - two, "returns must diminish");
+    }
+
+    /// The invariant this whole mechanism rests on: corroboration alone can make a row *offerable*
+    /// ("possibly …") but never *assertable*. Only a model pass may reach High.
+    #[test]
+    fn corroboration_can_never_reach_the_high_band() {
+        for n in [2.0, 4.0, 10.0, 1000.0] {
+            let c = corroborated_confidence(n);
+            assert!(c < 0.8, "{n} sightings reached High ({c}) — that must need a model");
+            assert!(c >= 0.5, "corroborated rows must at least be offerable: {c}");
+        }
+    }
+
+    fn seed(conn: &mut Connection, evidence: usize) -> i64 {
+        let events: Vec<i64> = (0..evidence)
+            .map(|i| {
+                crate::event_log::insert(
+                    conn,
+                    &crate::event_log::NewEvent {
+                        ts: 1 + i as i64,
+                        source: "capture",
+                        kind: "text",
+                        app_bundle_id: Some("com.apple.Mail"),
+                        window_title: Some("t"),
+                        content: &format!("evidence {i}"),
+                        content_hash: &format!("h{i}"),
+                        dwell_ms: 0,
+                        display_id: None,
+                        window_bounds: None,
+                    },
+                )
+                .unwrap()
+            })
+            .collect();
+        let prov: Vec<Provenance> = events.iter().map(|e| Provenance::new(*e)).collect();
+        insert_commitment(
+            conn,
+            &NewCommitment {
+                direction: CommitmentDirection::Mine,
+                counterparty_id: None,
+                description: "send the deck",
+                due_at: None,
+                status: CommitmentStatus::Open,
+                project_id: None,
+                confidence: 0.35, // what a local rule assigns — Low, so currently invisible
+                now: 1,
+            },
+            &prov,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_repeatedly_evidenced_commitment_becomes_visible() {
+        let mut conn = crate::open_in_memory().unwrap();
+        let id = seed(&mut conn, 3);
+        assert_eq!(corroborate(&mut conn).unwrap(), 1);
+        let c: f64 = conn
+            .query_row("SELECT confidence FROM commitments WHERE id = ?1", [id], |r| r.get(0))
+            .unwrap();
+        assert!(c >= 0.5, "must clear the Low band it was stuck below: {c}");
+        assert!(c < 0.8, "but not become assertable: {c}");
+    }
+
+    #[test]
+    fn a_single_sighting_is_left_alone() {
+        let mut conn = crate::open_in_memory().unwrap();
+        let id = seed(&mut conn, 1);
+        assert_eq!(corroborate(&mut conn).unwrap(), 0);
+        let c: f64 = conn
+            .query_row("SELECT confidence FROM commitments WHERE id = ?1", [id], |r| r.get(0))
+            .unwrap();
+        assert!((c - 0.35).abs() < 1e-9, "unchanged: {c}");
+    }
+
+    #[test]
+    fn running_twice_changes_nothing_and_never_lowers() {
+        let mut conn = crate::open_in_memory().unwrap();
+        let id = seed(&mut conn, 4);
+        corroborate(&mut conn).unwrap();
+        let first: f64 = conn
+            .query_row("SELECT confidence FROM commitments WHERE id = ?1", [id], |r| r.get(0))
+            .unwrap();
+        assert_eq!(corroborate(&mut conn).unwrap(), 0, "idempotent");
+        let second: f64 = conn
+            .query_row("SELECT confidence FROM commitments WHERE id = ?1", [id], |r| r.get(0))
+            .unwrap();
+        assert_eq!(first, second);
+
+        // A row already above the corroboration ceiling (model-verified) must not be pulled down.
+        conn.execute("UPDATE commitments SET confidence = 0.95 WHERE id = ?1", [id]).unwrap();
+        corroborate(&mut conn).unwrap();
+        let after: f64 = conn
+            .query_row("SELECT confidence FROM commitments WHERE id = ?1", [id], |r| r.get(0))
+            .unwrap();
+        assert!((after - 0.95).abs() < 1e-9, "corroboration must never lower: {after}");
+    }
+}

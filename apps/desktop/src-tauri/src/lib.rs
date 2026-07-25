@@ -328,6 +328,9 @@ fn setup_macos(app: &tauri::App) {
             // model cannot delay a capture). A no-op when no model is loaded.
             spawn_embed_job(db.clone());
 
+            // Local state maintenance (the model-free half of the Dream Cycle).
+            spawn_maintenance_job(db.clone());
+
             // First-layer connectors (§6.9). Build the auto-refreshing runtime and start the
             // 15-min read-sync poller. Missing Google creds (env) is not fatal — the app runs
             // without connectors until the user sets them up.
@@ -1356,6 +1359,33 @@ fn memory_db(app: &tauri::App) -> Result<shogun_core::daemon::Db, String> {
     });
     let db = shogun_core::daemon::Db::open_encrypted(path, &key, clock).map_err(|e| e.to_string())?;
     Ok(attach_embedder(db, embedding_model_paths(app)))
+}
+
+/// Run the model-free state maintenance periodically.
+///
+/// The full Dream Cycle is nightly and gated on idle/power (§6.7); this is the subset that costs
+/// almost nothing and that state rots without — decay, corroboration, and overdue/staleness. Run
+/// hourly rather than nightly so a commitment does not sit invisible for a day after the evidence
+/// that would corroborate it arrives, and once shortly after launch so a fresh start is current.
+#[cfg(target_os = "macos")]
+fn spawn_maintenance_job(db: shogun_core::daemon::Db) {
+    /// Confidence half-life: a month of silence halves a record's confidence (FR-ST-21).
+    const HALF_LIFE_MS: i64 = 30 * 24 * 60 * 60 * 1000;
+    std::thread::spawn(move || {
+        // Let the app finish starting before touching the DB.
+        std::thread::sleep(std::time::Duration::from_secs(30));
+        loop {
+            let now = db.now_ms();
+            let r = db.run_local_maintenance(now, HALF_LIFE_MS);
+            if r.corroborated > 0 || r.overdue > 0 {
+                eprintln!(
+                    "[maintenance] {} corroborated, {} newly overdue, {} loops aged, {} decayed",
+                    r.corroborated, r.overdue, r.stale, r.decayed
+                );
+            }
+            std::thread::sleep(std::time::Duration::from_secs(60 * 60));
+        }
+    });
 }
 
 /// Drain the embedding backlog on a slow loop.
