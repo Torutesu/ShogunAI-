@@ -120,7 +120,12 @@ pub mod mac {
         use core_foundation::base::TCFType;
         use core_foundation::string::CFString;
         let key = CFString::new(key);
-        let v = core_foundation_sys::dictionary::CFDictionaryGetValue(dict, key.as_CFTypeRef());
+        // SAFETY: `dict` is live by this function's contract; the key is owned locally and stays
+        // alive across the call. The returned value is borrowed from `dict` (get rule) and is
+        // never released here.
+        let v = unsafe {
+            core_foundation_sys::dictionary::CFDictionaryGetValue(dict, key.as_CFTypeRef())
+        };
         if v.is_null() {
             None
         } else {
