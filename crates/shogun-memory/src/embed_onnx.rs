@@ -16,7 +16,7 @@
 //! * **L2 normalisation.** Cosine similarity — and the vector store's distance — assume unit
 //!   vectors.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use ort::session::{builder::GraphOptimizationLevel, Session};
@@ -28,6 +28,77 @@ use crate::embed::{e5_passage, e5_query, EmbedError, Embedder, E5_SMALL_DIM};
 /// Longest input handed to the model. e5-small is trained at 512; anything past that is truncated
 /// by the tokenizer anyway, and a captured window can be far longer.
 const MAX_TOKENS: usize = 512;
+
+// ------------------------------------------------------------------ finding the ONNX Runtime
+// `ort` is built in `load-dynamic` mode: nothing is linked at build time and the runtime library is
+// resolved by `dlopen` at first use. Two problems come with that, and both bite here rather than in
+// ort:
+//
+// 1. A bare `dlopen("libonnxruntime.dylib")` searches /usr/local/lib and /usr/lib — **not**
+//    /opt/homebrew/lib, which is where `brew install onnxruntime` puts it on Apple Silicon. So the
+//    documented setup steps end in a failure to load a model that is perfectly fine.
+// 2. When it cannot find the library, ort **panics** instead of returning an error. A caller that
+//    carefully handles a load failure — like the desktop app, which is supposed to fall back to
+//    lexical search — dies anyway. That breaks the rule that a missing model degrades rather than
+//    interrupts.
+//
+// Resolving the path before ort is touched fixes the first, and refusing up front when there is
+// nothing to resolve fixes the second by keeping the failure a `Result`.
+
+#[cfg(target_os = "macos")]
+const RUNTIME_LIB: &str = "libonnxruntime.dylib";
+#[cfg(not(target_os = "macos"))]
+const RUNTIME_LIB: &str = "libonnxruntime.so";
+
+/// Directories searched when `ORT_DYLIB_PATH` is unset, in order.
+const RUNTIME_DIRS: &[&str] = &[
+    "/opt/homebrew/lib", // Homebrew on Apple Silicon — the one a bare dlopen misses
+    "/usr/local/lib",    // Homebrew on Intel, and manual installs
+    "/opt/local/lib",    // MacPorts
+    "/usr/lib",
+];
+
+/// Decide which runtime library to load. Pure: `exists` is injected so the decision is testable
+/// without a filesystem or an installed runtime.
+///
+/// An explicit `ORT_DYLIB_PATH` always wins — but it is still checked, because a stale value would
+/// otherwise reach ort and panic, which is exactly the failure mode this function exists to remove.
+fn resolve_runtime(
+    explicit: Option<PathBuf>,
+    exists: impl Fn(&Path) -> bool,
+) -> Result<PathBuf, String> {
+    if let Some(p) = explicit {
+        return if exists(&p) {
+            Ok(p)
+        } else {
+            Err(format!("ORT_DYLIB_PATH points at a missing file: {}", p.display()))
+        };
+    }
+    RUNTIME_DIRS
+        .iter()
+        .map(|d| Path::new(d).join(RUNTIME_LIB))
+        .find(|p| exists(p))
+        .ok_or_else(|| {
+            format!(
+                "{RUNTIME_LIB} not found (looked in {}) — install the ONNX Runtime \
+                 (`brew install onnxruntime`) or set ORT_DYLIB_PATH",
+                RUNTIME_DIRS.join(", ")
+            )
+        })
+}
+
+/// Point `ort` at the runtime library, or fail cleanly before it can panic.
+fn ensure_runtime() -> Result<(), EmbedError> {
+    let explicit = std::env::var_os("ORT_DYLIB_PATH").map(PathBuf::from);
+    let already_set = explicit.is_some();
+    let path = resolve_runtime(explicit, |p| p.exists()).map_err(EmbedError::Inference)?;
+    if !already_set {
+        // Set once, at load time, on the thread that is about to build the session — before any
+        // background embedding job exists to read it.
+        std::env::set_var("ORT_DYLIB_PATH", &path);
+    }
+    Ok(())
+}
 
 /// A loaded ONNX embedding model.
 ///
@@ -46,15 +117,24 @@ impl OnnxEmbedder {
     /// the same model, since a mismatched vocabulary produces confident nonsense rather than an
     /// error.
     pub fn load(model: impl AsRef<Path>, tokenizer: impl AsRef<Path>) -> Result<Self, EmbedError> {
+        ensure_runtime()?;
         let tokenizer = Tokenizer::from_file(tokenizer.as_ref())
             .map_err(|e| EmbedError::Inference(format!("tokenizer: {e}")))?;
-        let session = Session::builder()
-            .and_then(|b| b.with_optimization_level(GraphOptimizationLevel::Level3))
-            // One thread: this runs on a background job and must not fight the capture daemon or
-            // the UI for cores (the idle-CPU SLO is 5%).
-            .and_then(|b| b.with_intra_threads(1))
-            .and_then(|b| b.commit_from_file(model.as_ref()))
-            .map_err(|e| EmbedError::Inference(format!("session: {e}")))?;
+        let model = model.as_ref().to_path_buf();
+        // Belt and braces around the one thing that can still abort the process: ort panics on
+        // several load failures (a wrong-architecture library, a corrupt graph) rather than
+        // returning them. Nothing here is reused after a panic — the error is returned and the
+        // caller stays on lexical search — so unwinding out of ort is safe to absorb.
+        let session = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            Session::builder()
+                .and_then(|b| b.with_optimization_level(GraphOptimizationLevel::Level3))
+                // One thread: this runs on a background job and must not fight the capture daemon
+                // or the UI for cores (the idle-CPU SLO is 5%).
+                .and_then(|b| b.with_intra_threads(1))
+                .and_then(|b| b.commit_from_file(&model))
+        }))
+        .map_err(|_| EmbedError::Inference("onnx runtime aborted while loading the model".into()))?
+        .map_err(|e| EmbedError::Inference(format!("session: {e}")))?;
         Ok(Self { session: Mutex::new(session), tokenizer })
     }
 
@@ -213,6 +293,40 @@ mod tests {
     fn a_missing_model_is_an_error_not_a_panic() {
         let err = OnnxEmbedder::load("/nonexistent/model.onnx", "/nonexistent/tokenizer.json");
         assert!(err.is_err());
+    }
+
+    /// Homebrew on Apple Silicon installs to /opt/homebrew/lib, which a bare `dlopen` never
+    /// searches. Missing it is what turns "follow the setup doc" into "model present but failed to
+    /// load", so the search order is worth pinning.
+    #[test]
+    fn the_runtime_is_found_where_homebrew_actually_puts_it() {
+        let at = |dir: &'static str| {
+            let want = Path::new(dir).join(RUNTIME_LIB);
+            resolve_runtime(None, move |p| p == want)
+        };
+        for dir in RUNTIME_DIRS {
+            assert_eq!(at(dir).as_deref(), Ok(Path::new(dir).join(RUNTIME_LIB).as_path()), "{dir}");
+        }
+        assert!(
+            RUNTIME_DIRS.contains(&"/opt/homebrew/lib"),
+            "the Apple Silicon Homebrew prefix is the whole reason this search exists"
+        );
+    }
+
+    /// Nothing installed must be a `Result`, not a panic from inside ort — the app is supposed to
+    /// carry on with lexical search.
+    #[test]
+    fn no_runtime_anywhere_is_a_reported_error() {
+        let err = resolve_runtime(None, |_| false).unwrap_err();
+        assert!(err.contains(RUNTIME_LIB) && err.contains("ORT_DYLIB_PATH"), "{err}");
+    }
+
+    /// An explicit path wins, but a stale one is caught here rather than reaching ort.
+    #[test]
+    fn an_explicit_path_wins_but_is_still_checked() {
+        let chosen = PathBuf::from("/somewhere/else/libonnxruntime.dylib");
+        assert_eq!(resolve_runtime(Some(chosen.clone()), |_| true), Ok(chosen.clone()));
+        assert!(resolve_runtime(Some(chosen), |_| false).is_err());
     }
 
     /// End-to-end against the real model. Ignored: CI has no model, and this must never depend on

@@ -25,17 +25,29 @@ gitignore 済み）。既にあるファイルはスキップするので、再�
 - 開発時: `brew install onnxruntime` が最も手軽
 - 配布時: `.app` の `Frameworks/` に同梱する（**同梱の packaging 手順は未実装**。TODO）
 
-**場所は起動時に自動で探す**ので、通常は環境変数を設定する必要はない。探索順:
+**場所は自動で探す**ので、通常は環境変数を設定する必要はない。探索順:
 
-1. `ORT_DYLIB_PATH`（明示指定が常に最優先）
-2. `.app` 内（`Contents/Frameworks/` → `Contents/Resources/`）
+1. `ORT_DYLIB_PATH`（明示指定が常に最優先。ただし指定先が存在しなければエラーになる）
+2. `.app` 内（`Contents/Frameworks/` → `Contents/Resources/`）※アプリ起動時のみ
 3. `/opt/homebrew/lib/`（Apple Silicon の Homebrew）
-4. `/usr/local/lib/`
+4. `/usr/local/lib/` → `/opt/local/lib/` → `/usr/lib/`
+
+3以降は `OnnxEmbedder::load` の中で探すので、**アプリでもテストでも同じように効く**。
 
 > Apple Silicon の注意: `dlopen` はライブラリ名だけ渡されると `/usr/local/lib` と `/usr/lib` しか
 > 探さず、Homebrew の `/opt/homebrew/lib` は見に行かない。`brew install onnxruntime` しただけでは
-> 見つからないため、上記の探索を入れてある。起動ログの `[embed] onnx runtime: <path>` で
-> どれを使ったか確認できる。
+> 見つからないため、上記の探索を入れてある。
+>
+> さらに `ort` は**ライブラリが見つからないとpanicする**（Resultを返さない）。そのままだと
+> 「モデルが無ければ字面検索に落ちる」という設計が成立せず、配布版で起動時クラッシュになる。
+> ort に触る前に存在確認して `Err` を返すようにしてある。
+
+見つからない場合のエラー文言:
+
+```
+libonnxruntime.dylib not found (looked in /opt/homebrew/lib, /usr/local/lib, /opt/local/lib, /usr/lib)
+ — install the ONNX Runtime (`brew install onnxruntime`) or set ORT_DYLIB_PATH
+```
 
 ## 3. 開発中の起動
 
