@@ -136,6 +136,11 @@ pub trait AgentClient: Send + Sync {
 pub enum LlmError {
     #[error("provider error: {0}")]
     Provider(String),
+    /// The credential itself was rejected (HTTP 401/403). Distinct from [`Provider`] because the
+    /// caller's response has to be different: retrying a rejected key tonight, tomorrow night and
+    /// the night after is not resilience, it is a silent outage. Callers fall back and say so.
+    #[error("credential rejected (HTTP {0})")]
+    Unauthorized(u16),
     #[error("not configured (missing key)")]
     NotConfigured,
     #[error("transport: {0}")]

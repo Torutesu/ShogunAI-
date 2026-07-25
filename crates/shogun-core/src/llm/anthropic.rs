@@ -380,6 +380,17 @@ impl<T: HttpTransport, S: TraceabilitySink> AnthropicAgentClient<T, S> {
     }
 }
 
+/// Classify a failed Batch-lane HTTP status. 401/403 means the credential is wrong, not that the
+/// provider is having a bad night — and the Dream Cycle has to tell those apart, because it runs
+/// unattended: a rejected key retried every night looks exactly like a service outage from the
+/// outside, and the user is never told the one thing they could fix.
+fn batch_status_error(step: &str, status: u16) -> LlmError {
+    match status {
+        401 | 403 => LlmError::Unauthorized(status),
+        _ => LlmError::Provider(format!("batch {step} HTTP {status}")),
+    }
+}
+
 /// Batch-lane client (indexing / classification / Dream Cycle / Morning Brief). Constructed with
 /// a [`SelectKkKey`]. Exposes the three lifecycle steps separately — submit / poll / results — so
 /// the Dream Cycle scheduler owns the poll cadence rather than this layer busy-waiting. Each
@@ -413,7 +424,7 @@ impl<T: HttpTransport, S: TraceabilitySink> AnthropicBatchClient<T, S> {
         }
         let resp = self.transport.send(req).await?;
         if !resp.is_success() {
-            return Err(LlmError::Provider(format!("batch create HTTP {}", resp.status)));
+            return Err(batch_status_error("create", resp.status));
         }
         parse_batch_handle(&resp.body)
     }
@@ -423,7 +434,7 @@ impl<T: HttpTransport, S: TraceabilitySink> AnthropicBatchClient<T, S> {
         let req = build_batch_poll_request(&self.cfg, self.key.secret(), batch_id)?;
         let resp = self.transport.send(req).await?;
         if !resp.is_success() {
-            return Err(LlmError::Provider(format!("batch poll HTTP {}", resp.status)));
+            return Err(batch_status_error("poll", resp.status));
         }
         parse_batch_handle(&resp.body)
     }
@@ -433,7 +444,7 @@ impl<T: HttpTransport, S: TraceabilitySink> AnthropicBatchClient<T, S> {
         let req = build_batch_results_request(&self.cfg, self.key.secret(), batch_id)?;
         let resp = self.transport.send(req).await?;
         if !resp.is_success() {
-            return Err(LlmError::Provider(format!("batch results HTTP {}", resp.status)));
+            return Err(batch_status_error("results", resp.status));
         }
         Ok(parse_batch_results(&resp.body))
     }
@@ -475,6 +486,34 @@ mod tests {
 
     fn cfg() -> AnthropicConfig {
         AnthropicConfig::new("test-model").with_base_url("https://api.anthropic.com")
+    }
+
+    /// A bad key and a bad night must not look the same to the Dream Cycle: it runs unattended, so
+    /// only the first one is worth telling the user about, and only the second is worth retrying.
+    #[tokio::test]
+    async fn a_rejected_key_is_distinguishable_from_a_provider_failure() {
+        use crate::llm::{Secret, SelectKkKey};
+        let client = |status: u16| {
+            AnthropicBatchClient::new(
+                MockTransport::new([HttpResponse { status, body: "{}".into() }]),
+                RecordingSink::new(),
+                SelectKkKey::new(Secret::new("kk-123456")),
+                cfg(),
+            )
+        };
+        let items = [BatchItem {
+            custom_id: "1".into(),
+            purpose: "consolidation".into(),
+            chunk: "x".into(),
+        }];
+        for status in [401u16, 403] {
+            assert!(
+                matches!(client(status).submit(&items).await, Err(LlmError::Unauthorized(s)) if s == status),
+                "HTTP {status} is a credential problem"
+            );
+        }
+        // a server-side failure stays a provider error, which is the retryable kind
+        assert!(matches!(client(503).submit(&items).await, Err(LlmError::Provider(_))));
     }
 
     #[test]

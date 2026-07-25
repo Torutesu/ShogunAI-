@@ -319,6 +319,18 @@ pub mod mac {
             || async { tokio::time::sleep(BATCH_POLL_INTERVAL).await },
         )) {
             Ok(gated) => Ok(gated),
+            // A rejected credential is not a bad night, and treating it as one would retry it
+            // every night forever while the indicator blamed the service. Fall back to the local
+            // lane — which is what a device with no credential at all does — and say why. The
+            // shipping design does the same for a 401 from the relay
+            // (docs/batch-relay-design.md §4.5).
+            Err(shogun_core::llm::LlmError::Unauthorized(status)) => {
+                eprintln!(
+                    "[dream] batch credential rejected (HTTP {status}) — running the local lane. \
+                     Check the SHOGUN/select-kk-batch Keychain entry."
+                );
+                Ok(run_local(db, cond, tonight, now_ms))
+            }
             Err(e) => {
                 // The lane errors *before* the cycle records anything, so without this the ledger
                 // would show no night at all and the indicator would stay green through a week of
