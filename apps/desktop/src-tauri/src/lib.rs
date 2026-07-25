@@ -1374,6 +1374,7 @@ fn memory_db(app: &tauri::App) -> Result<shogun_core::daemon::Db, String> {
             .unwrap_or(0)
     });
     let db = shogun_core::daemon::Db::open_encrypted(path, &key, clock).map_err(|e| e.to_string())?;
+    ensure_ort_dylib(app);
     Ok(attach_embedder(db, embedding_model_paths(app)))
 }
 
@@ -1421,6 +1422,45 @@ fn spawn_embed_job(db: shogun_core::daemon::Db) {
             std::thread::sleep(std::time::Duration::from_secs(60));
         }
     });
+}
+
+/// Point `ort` at the ONNX Runtime shared library before anything tries to load a model.
+///
+/// The crate is built in `load-dynamic` mode, so nothing is linked at build time and the library is
+/// resolved by `dlopen` at first use. Left to itself that is a *bare* `dlopen("libonnxruntime.dylib")`,
+/// which searches `/usr/local/lib` and `/usr/lib` — **not** `/opt/homebrew/lib`, where
+/// `brew install onnxruntime` puts it on Apple Silicon. So the setup doc's own instructions would
+/// otherwise end in "model present but failed to load", with the model itself perfectly fine.
+///
+/// An explicit `ORT_DYLIB_PATH` always wins: someone who set it made a deliberate choice.
+#[cfg(target_os = "macos")]
+fn ensure_ort_dylib(app: &tauri::App) {
+    use tauri::Manager;
+    if std::env::var_os("ORT_DYLIB_PATH").is_some() {
+        return;
+    }
+    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+    if let Ok(res) = app.path().resource_dir() {
+        // Shipped inside the .app: Contents/Frameworks is a sibling of Contents/Resources.
+        candidates.push(res.join("libonnxruntime.dylib"));
+        if let Some(contents) = res.parent() {
+            candidates.push(contents.join("Frameworks/libonnxruntime.dylib"));
+        }
+    }
+    candidates.push("/opt/homebrew/lib/libonnxruntime.dylib".into());
+    candidates.push("/usr/local/lib/libonnxruntime.dylib".into());
+
+    match candidates.into_iter().find(|p| p.exists()) {
+        Some(p) => {
+            // SAFETY-adjacent note: set on the setup thread, before the embed job or any model load
+            // reads it. `ort` resolves the variable once, at first dlopen.
+            std::env::set_var("ORT_DYLIB_PATH", &p);
+            eprintln!("[embed] onnx runtime: {}", p.display());
+        }
+        None => eprintln!(
+            "[embed] no onnx runtime library found — `brew install onnxruntime`, or set ORT_DYLIB_PATH"
+        ),
+    }
 }
 
 /// Where the bundled embedding model lives. Inside the packaged app it sits in the resource

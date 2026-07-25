@@ -23,7 +23,19 @@ gitignore 済み）。既にあるファイルはスキップするので、再�
 ビルドがネットワークに依存しない代わりに、`libonnxruntime.dylib` が実行時に必要。
 
 - 開発時: `brew install onnxruntime` が最も手軽
-- 配布時: `.app` の `Frameworks/` に同梱し、`ORT_DYLIB_PATH` で指す
+- 配布時: `.app` の `Frameworks/` に同梱する（**同梱の packaging 手順は未実装**。TODO）
+
+**場所は起動時に自動で探す**ので、通常は環境変数を設定する必要はない。探索順:
+
+1. `ORT_DYLIB_PATH`（明示指定が常に最優先）
+2. `.app` 内（`Contents/Frameworks/` → `Contents/Resources/`）
+3. `/opt/homebrew/lib/`（Apple Silicon の Homebrew）
+4. `/usr/local/lib/`
+
+> Apple Silicon の注意: `dlopen` はライブラリ名だけ渡されると `/usr/local/lib` と `/usr/lib` しか
+> 探さず、Homebrew の `/opt/homebrew/lib` は見に行かない。`brew install onnxruntime` しただけでは
+> 見つからないため、上記の探索を入れてある。起動ログの `[embed] onnx runtime: <path>` で
+> どれを使ったか確認できる。
 
 ## 3. 開発中の起動
 
