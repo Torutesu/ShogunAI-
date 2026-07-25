@@ -378,6 +378,10 @@ fn setup_macos(app: &tauri::App) {
         }
         Err(e) => eprintln!("[spike] memory DB unavailable — capture source not started: {e}"),
     }
+
+    // Last line of setup, and outside the DB branch: whether the panel is on screen has nothing to
+    // do with whether memory opened, and a failed DB must not swallow the answer.
+    report_panel_health(app.handle());
 }
 
 /// Set the app's activation policy to Accessory (NSApplicationActivationPolicyAccessory = 1): no
@@ -660,6 +664,73 @@ fn overlay_panel_class() -> &'static objc2::runtime::AnyClass {
 /// structural fix after every flag/ordering/class-swap approach failed on this machine: the
 /// window server classifies a window at creation, so only a window BORN as a panel gets true
 /// panel Space behavior (all Spaces, over full-screen apps, no focus steal).
+/// One shot, a couple of seconds after launch: does the panel actually put pixels on screen?
+///
+/// "The UI doesn't appear" has half a dozen causes that look identical from outside the process —
+/// ordered out, zero alpha, on another Space, hosting an empty view, covered by something — and
+/// AppKit will answer all of them in three getters. Printed unconditionally, because a diagnostic
+/// behind an environment variable is a diagnostic that does not get run when it is needed.
+#[cfg(target_os = "macos")]
+fn report_panel_health(app: &tauri::AppHandle) {
+    let h = app.clone();
+    std::thread::spawn(move || {
+        // Late enough that the webview has attached and the compositor has settled.
+        std::thread::sleep(std::time::Duration::from_millis(2500));
+        let h2 = h.clone();
+        let _ = h.run_on_main_thread(move || {
+            use objc2::msg_send;
+            use objc2::runtime::AnyObject;
+            use objc2_foundation::NSRect;
+            let Some(ptr) = overlay_ptr(&h2) else {
+                eprintln!("[shell] health: no overlay window");
+                return;
+            };
+            // SAFETY: main thread, live window; getters only.
+            unsafe {
+                let visible: bool = msg_send![ptr, isVisible];
+                // Bit 1 of occlusionState is the compositor's own verdict: actually drawn.
+                let occ: usize = msg_send![ptr, occlusionState];
+                let drawn = occ & (1 << 1) != 0;
+                let alpha: f64 = msg_send![ptr, alphaValue];
+                let on_active: bool = msg_send![ptr, isOnActiveSpace];
+                let frame: NSRect = msg_send![ptr, frame];
+                let cv: *mut AnyObject = msg_send![ptr, contentView];
+                let subviews: usize = if cv.is_null() {
+                    0
+                } else {
+                    let subs: *mut AnyObject = msg_send![cv, subviews];
+                    if subs.is_null() { 0 } else { msg_send![subs, count] }
+                };
+                eprintln!(
+                    "[shell] health: visible={visible} drawn={drawn} alpha={alpha:.2} \
+                     onActiveSpace={on_active} frame={:.0},{:.0} {:.0}x{:.0} subviews={subviews}",
+                    frame.origin.x, frame.origin.y, frame.size.width, frame.size.height
+                );
+                // Say what it means, so the next line of the log is the diagnosis rather than data.
+                if !visible {
+                    eprintln!("[shell] health: ordered out — nothing is on screen. ⌥J summons it.");
+                } else if subviews == 0 {
+                    eprintln!(
+                        "[shell] health: on screen but hosting an empty view — the webview never \
+                         moved into the panel, so there is nothing to draw."
+                    );
+                } else if alpha < 0.05 {
+                    eprintln!("[shell] health: transparent (alpha {alpha:.2}).");
+                } else if !on_active {
+                    eprintln!("[shell] health: on a different Space — ⌥J brings it to this one.");
+                } else if !drawn {
+                    eprintln!(
+                        "[shell] health: on screen with content, but the compositor is not drawing \
+                         it — something is covering it."
+                    );
+                } else {
+                    eprintln!("[shell] health: drawing normally at the frame above.");
+                }
+            }
+        });
+    });
+}
+
 #[cfg(target_os = "macos")]
 fn adopt_native_panel(win: &tauri::WebviewWindow) {
     use objc2::runtime::AnyObject;
@@ -700,6 +771,21 @@ fn adopt_native_panel(win: &tauri::WebviewWindow) {
         let _: () = msg_send![placeholder, release];
         let _: () = msg_send![panel, setContentView: cv];
         let _: () = msg_send![cv, release];
+
+        // Did the webview actually come with it? The panel can be perfectly placed, sized, ordered
+        // front and still show nothing if the view it hosts is empty — and the webview keeps
+        // running either way, so JS-side signals like `interact kind=boot` prove nothing about
+        // whether any pixels exist. Unconditional: this is the one fact worth a line at every
+        // launch, and it costs two message sends.
+        let cv_frame: NSRect = msg_send![cv, frame];
+        let subs: *mut AnyObject = msg_send![cv, subviews];
+        let n: usize = if subs.is_null() { 0 } else { msg_send![subs, count] };
+        eprintln!(
+            "[shell] adopt: panel content view {:.0}x{:.0} with {n} subview(s){}",
+            cv_frame.size.width,
+            cv_frame.size.height,
+            if n == 0 { " — EMPTY, nothing will be drawn" } else { "" }
+        );
 
         let _: () = msg_send![panel, setReleasedWhenClosed: false];
         let _: () = msg_send![panel, setOpaque: false];
