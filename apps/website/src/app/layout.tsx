@@ -46,6 +46,9 @@ export default async function RootLayout({ children }: { children: React.ReactNo
       className={`${GeistSans.variable} ${GeistMono.variable} ${inter.variable}`}
     >
       <head>
+        {/* Trust-bar logos come from Logo.dev — warm the connection so the
+            first mark isn't waiting on DNS + TLS. */}
+        <link rel="preconnect" href="https://img.logo.dev" crossOrigin="" />
         <ThemeScript />
       </head>
       <body className="min-h-dvh bg-bg font-sans text-ink antialiased">
