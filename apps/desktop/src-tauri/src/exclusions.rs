@@ -18,6 +18,36 @@ pub mod mac {
     /// The policy shared between the settings commands and the capture poller.
     pub type SharedPolicy = Arc<Mutex<ExclusionPolicy>>;
 
+    /// The one policy for the process, reachable from code that cannot be handed Tauri state.
+    ///
+    /// The AX cache warmer runs on its own thread, started before any command exists, and it reads
+    /// the focused window's text just like the capture poller does — so it has to consult the same
+    /// exclusions. Threading the handle through would mean reordering startup around it; a single
+    /// process-wide policy is what this actually is.
+    static POLICY: std::sync::OnceLock<SharedPolicy> = std::sync::OnceLock::new();
+
+    /// Publish the policy. Called once during setup, before the watchers start.
+    pub fn install(policy: SharedPolicy) {
+        let _ = POLICY.set(policy);
+    }
+
+    /// The installed policy, or `None` before setup has published it.
+    ///
+    /// Callers that are about to *read* a window must treat `None` as "do not read". Startup is
+    /// the only window where it is unset, and being briefly blind is the right failure: the
+    /// alternative is reading a password manager because a thread started a few milliseconds early.
+    pub fn shared() -> Option<&'static SharedPolicy> {
+        POLICY.get()
+    }
+
+    /// Whether this focus must not be read at all. Fails closed on a missing or poisoned policy.
+    pub fn is_excluded(bundle_id: &str, window_title: Option<&str>) -> bool {
+        match shared().map(|p| p.lock()) {
+            Some(Ok(policy)) => policy.is_excluded(bundle_id, window_title).is_some(),
+            _ => true,
+        }
+    }
+
     fn store_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
         use tauri::Manager;
         app.path().app_data_dir().ok().map(|d| d.join("exclusions.json"))

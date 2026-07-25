@@ -594,6 +594,26 @@ pub mod mac {
         trigger: CacheTrigger,
         last_digest: &mut Option<String>,
     ) -> Option<shogun_core::capture::walk_policy::WalkResult> {
+        // The exclusion gate applies here too, not only on the DB write path (FR-CAP-05: decided
+        // "before any event is generated"). This walker is a second reader of the same window —
+        // it warms the context cache — so without this an app the user turned off still has its
+        // text read into memory and pushed across to the webview. The text is unused there today,
+        // which is the only reason this was invisible; the moment anything consumes it, an excluded
+        // app is in a prompt.
+        let title = crate::axcache::focused_window(pid).and_then(|w| w.title());
+        if crate::exclusions::mac::is_excluded(bundle_id, title.as_deref()) {
+            // Drop whatever the previous app left behind, so the panel never shows stale context
+            // while the user is looking at something SHOGUN is not allowed to read.
+            if let Ok(mut g) = shared.last_context.lock() {
+                if g.is_some() {
+                    eprintln!("[spike] cache cleared — {bundle_id} is excluded from reading");
+                }
+                *g = None;
+            }
+            *last_digest = None;
+            return None;
+        }
+
         // Bracket ONLY the walk (spec §4.2.2): poll cadence / retry wait is not measured.
         let t0 = shared.clock.elapsed_ns();
         let result = crate::axcache::snapshot(pid, 300)?;

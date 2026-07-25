@@ -268,6 +268,15 @@ fn setup_macos(app: &tauri::App) {
         eprintln!("[shell] panel docked top-centre under the notch (visibleFrame top)");
     }
 
+    // What SHOGUN is allowed to read (FR-CAP-05/06). Built here, before the first thread that
+    // reads a window: both the capture poller and the AX cache warmer consult it, and the warmer
+    // starts inside `integrate::start` below. `exclusions::is_excluded` fails closed until this
+    // runs, so an early thread is blind rather than reading a password manager.
+    let exclusion_policy: exclusions::mac::SharedPolicy =
+        std::sync::Arc::new(std::sync::Mutex::new(exclusions::mac::load(app.handle())));
+    exclusions::mac::install(exclusion_policy.clone());
+    app.manage(exclusion_policy.clone());
+
     // T-07/T-08: mouse tap → integrated engine + measurement streams.
     let (tx, rx) = std::sync::mpsc::channel::<hover::TapEvent>();
     hover::start(tx);
@@ -296,8 +305,14 @@ fn setup_macos(app: &tauri::App) {
     // T-11/T-12 sanity: Accessibility trust + one focused-window walk through the tested
     // policy. Event-driven focus subscription is on-device work (runbook D-03/D-05).
     eprintln!("[spike] accessibility trusted: {}", axcache::ax_trusted());
-    if let Some(pid) = display::frontmost_pid() {
-        if let Some(r) = axcache::snapshot(pid, 250) {
+    // Whatever happens to be focused when SHOGUN launches gets no special exemption — launching
+    // while a password manager is frontmost must not read it.
+    if let Some(front) = display::frontmost_app() {
+        let pid = front.pid;
+        let title = axcache::focused_window(pid).and_then(|w| w.title());
+        if exclusions::mac::is_excluded(&front.bundle_id, title.as_deref()) {
+            eprintln!("[spike] ax snapshot skipped — {} is excluded from reading", front.bundle_id);
+        } else if let Some(r) = axcache::snapshot(pid, 250) {
             eprintln!(
                 "[spike] ax snapshot: {} bytes, {} elements, depth {}, partial={}",
                 r.text_bytes, r.elements_visited, r.depth_reached, r.partial
@@ -313,19 +328,13 @@ fn setup_macos(app: &tauri::App) {
             // Share the handle: Tauri state (notch_actions / execution) + the capture poller.
             app.manage(db.clone());
             app.manage(notch_exec::mac::new_engine(db.clone()));
-            // The user's own exclusions, layered on the non-removable defaults, shared with the
-            // poller so a change in Settings applies on the next tick.
-            let policy: exclusions::mac::SharedPolicy = std::sync::Arc::new(std::sync::Mutex::new(
-                exclusions::mac::load(app.handle()),
-            ));
-            app.manage(policy.clone());
             // The reply-context cache is filled by the capture poller (focus path) and read by
             // the draft command, so a press never collects context.
             let reply_cache = shogun_core::daemon::ReplyContextCache::new();
             app.manage(reply_cache.clone());
             let _ = capture_source::spawn_capture_poller(
                 db.clone(),
-                policy,
+                exclusion_policy,
                 None,
                 Some(reply_cache),
             );
@@ -346,6 +355,14 @@ fn setup_macos(app: &tauri::App) {
             // decides is in shogun-core; this starts the driver that reads idle/power/clock and
             // actually ticks it. Without a Select KK key it runs the local-rule lane — no network.
             let _ = dream::mac::spawn_dream_driver(db.clone());
+            // Say it started. The driver is silent by design once running — the gate skips all
+            // day without logging — so without this line "working" and "never spawned" look
+            // identical for the twenty-odd hours before the window opens.
+            eprintln!(
+                "[dream] nightly driver started (window {:02}:00–{:02}:00 local, idle + power gated)",
+                shogun_core::dreamcycle::schedule::DEFAULT_WINDOW_START_HOUR,
+                shogun_core::dreamcycle::schedule::DEFAULT_WINDOW_END_HOUR,
+            );
 
             // First-layer connectors (§6.9). Build the auto-refreshing runtime and start the
             // 15-min read-sync poller. Missing Google creds (env) is not fatal — the app runs
