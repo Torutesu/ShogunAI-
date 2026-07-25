@@ -263,7 +263,7 @@ fn setup_macos(app: &tauri::App) {
     if let Some(ptr) = overlay_ptr(app.handle()) {
         // SAFETY: live NSWindow/NSPanel on the main thread (setup).
         unsafe { pin_top_centre(ptr) };
-        eprintln!("[shell] panel docked top-centre under the notch (visibleFrame top)");
+        eprintln!("[shell] panel docked top-centre, under the notch on the menu-bar display");
     }
 
     // What SHOGUN is allowed to read (FR-CAP-05/06). Built here, before the first thread that
@@ -498,7 +498,28 @@ unsafe fn pin_top_centre(ptr: *mut objc2::runtime::AnyObject) {
     use objc2::runtime::AnyObject;
     use objc2::{class, msg_send};
     use objc2_foundation::{NSPoint, NSRect};
-    let mut screen: *mut AnyObject = msg_send![ptr, screen];
+
+    // Dock to the MENU-BAR display, not whichever one the pointer happened to be on at launch.
+    //
+    // `NSScreen.screens[0]` is the display that owns the menu bar, and it is the same screen
+    // `geometry::read_primary` measures the notch, the hover bands and the idle rect from. Placing
+    // the panel anywhere else meant the geometry described one display while the panel sat on
+    // another — and, from the outside, meant the overlay appeared on a different screen depending
+    // on where the mouse was when the app started. Looking at the wrong monitor is indistinguishable
+    // from the UI never coming up.
+    //
+    // Following the cursor is still the right behaviour for the deliberate "come here" action; that
+    // is what ⌥J / `summon_to_active_space` does.
+    let screens: *mut AnyObject = msg_send![class!(NSScreen), screens];
+    let count: usize = if screens.is_null() { 0 } else { msg_send![screens, count] };
+    let mut screen: *mut AnyObject = if count > 0 {
+        msg_send![screens, objectAtIndex: 0usize]
+    } else {
+        std::ptr::null_mut()
+    };
+    if screen.is_null() {
+        screen = msg_send![ptr, screen];
+    }
     if screen.is_null() {
         screen = msg_send![class!(NSScreen), mainScreen];
     }
@@ -514,7 +535,7 @@ unsafe fn pin_top_centre(ptr: *mut objc2::runtime::AnyObject) {
     // Where it actually landed, and on which screen. With more than one display "I can't see it"
     // is usually "it is on the other one", and that is not answerable without the coordinates.
     eprintln!(
-        "[shell] panel frame {:.0},{:.0} {:.0}x{:.0} on screen {:.0},{:.0} {:.0}x{:.0}",
+        "[shell] panel docked at {:.0},{:.0} ({:.0}x{:.0}) on the menu-bar display {:.0},{:.0} {:.0}x{:.0}",
         x, y, w.size.width, w.size.height,
         vf.origin.x, vf.origin.y, vf.size.width, vf.size.height
     );
