@@ -312,16 +312,25 @@
   animation-play-state: paused;
 }
 
-/* Logo.dev marks, in brand colour. Most brands come back as an opaque tile
-   rather than a transparent glyph, and those tiles run the full tonal range —
-   Vercel is near-black, Instacart near-white — so neither theme can host them
-   bare. A constant light chip gives every mark the same footing. */
+/* Logo.dev marks. Grey at rest so the row stays quiet, full brand colour on
+   hover — the marquee pauses on hover too, so there's something to aim at.
+   Desaturating in CSS rather than at the CDN keeps it one image per mark and
+   lets the reveal animate.
+
+   The light chip is not decoration: most brands return an opaque tile rather
+   than a transparent glyph, and those tiles run the full tonal range — Vercel
+   and Apple near-black, Instacart near-white — so the dark canvas needs
+   something to sit them on. It disappears against the light one. */
 .brand-mark {
   background: rgba(255, 255, 255, 0.92);
-  opacity: 0.92;
-  transition: opacity 0.22s var(--ease-out-soft);
+  filter: grayscale(1);
+  opacity: 0.65;
+  transition:
+    filter 0.3s var(--ease-out-soft),
+    opacity 0.3s var(--ease-out-soft);
 }
 .group\/mark:hover .brand-mark {
+  filter: grayscale(0);
   opacity: 1;
 }
 

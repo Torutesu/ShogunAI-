@@ -3,8 +3,8 @@ import { logoUrl } from '@/lib/logo-dev';
 
 /* Official brand marks served by Logo.dev, looked up by domain — the most
    stable identifier (name lookups can land on the wrong "Linear" or "Loom").
-   Served in full colour; see `.brand-mark` in globals.css for the chip that
-   carries them against both the light and the dark canvas. */
+   Served in colour and desaturated in CSS, so `.brand-mark` in globals.css can
+   animate the reveal on hover off a single image. */
 type Brand = { name: string; domain: string };
 
 /* Top row: the AI and builder tooling the product lives next to. */
@@ -52,7 +52,7 @@ function Track({ items, reverse }: { items: Brand[]; reverse?: boolean }) {
       {doubled.map((brand, i) => (
         <span
           key={`${brand.name}-${i}`}
-          className="group/mark mx-7 inline-flex shrink-0 items-center gap-2.5 text-[19px] font-semibold tracking-tight text-muted transition-colors hover:text-ink"
+          className="group/mark mx-7 inline-flex shrink-0 items-center gap-2.5 text-[19px] font-semibold tracking-tight text-faint transition-colors hover:text-ink"
           aria-hidden={i >= items.length}
         >
           {/* alt="" — the brand name is right there as text, so announcing the
