@@ -98,7 +98,7 @@ export function Badges({ t }: { t: Dictionary }) {
   return (
     <div className="mt-9 grid w-full max-w-[1120px] grid-cols-1 gap-4 lg:grid-cols-3">
       <AwardBanner
-        src="/badges/yc-rfs-hackathon-2026.png"
+        src="/badges/yc-rfs-hackathon-2026-transparent-v2.png"
         alt="Winner of YC RFS Hackathon 2026, presented by Transpose"
         width={2055}
         height={765}
