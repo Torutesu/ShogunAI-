@@ -22,8 +22,8 @@ export async function Nav() {
   ];
 
   return (
-    <header className="sticky top-0 z-50 border-b border-border bg-surface/70 backdrop-blur-xl backdrop-saturate-150">
-      <div className="container-x flex h-16 items-center justify-between">
+    <header className="sticky top-0 z-50 border-b border-border/70 bg-surface/72 backdrop-blur-2xl backdrop-saturate-150">
+      <div className="container-x flex h-16 items-center justify-between gap-4">
         <a href="/#top" aria-label="ShogunAI home" className="group/brand flex items-center gap-2.5">
           <Logo size={26} className="brand-logo" />
           <span className="font-display text-lg font-semibold tracking-tight">ShogunAI</span>
@@ -70,13 +70,13 @@ export async function Nav() {
           <SoundToggle />
           <ThemeToggle />
           <LanguageMenu current={locale} label={t.nav.langLabel} />
-          <Button asChild size="sm" className="hidden sm:inline-flex">
+          <Button asChild size="sm" className="hidden shadow-none sm:inline-flex">
             <a href="/#get-started">{t.nav.getStarted}</a>
           </Button>
 
           {/* Mobile menu — JS-free disclosure */}
           <details className="group relative md:hidden">
-            <summary className="flex size-9 cursor-pointer list-none items-center justify-center rounded-full border border-border text-ink [&::-webkit-details-marker]:hidden">
+            <summary className="flex size-9 cursor-pointer list-none items-center justify-center rounded-full border border-border bg-surface/90 text-ink [&::-webkit-details-marker]:hidden">
               <Menu className="size-5" aria-label="Menu" />
             </summary>
             <div className="absolute right-0 top-11 w-52 rounded-xl border border-border bg-surface p-2 shadow-[var(--shadow-float)]">

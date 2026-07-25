@@ -8,6 +8,11 @@ The site is Next.js 16 (App Router, SSR + Node.js-runtime API routes) talking to
 we use the **OpenNext Cloudflare adapter** (`@opennextjs/cloudflare`) to build a
 Cloudflare **Worker** with static assets.
 
+This project currently pins production builds to `next build --webpack`. On
+July 22, 2026, local and CI validation showed Turbopack panicking when the
+workspace path contains the non-ASCII folder name `ShogunAIα`; webpack avoids
+that path-encoding bug and is the safer production choice here.
+
 ## One-time setup
 
 1. Install deps (from the repo root):
