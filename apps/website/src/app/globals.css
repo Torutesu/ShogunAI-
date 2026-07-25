@@ -312,26 +312,17 @@
   animation-play-state: paused;
 }
 
-/* Logo.dev marks. Most brands come back as an opaque tile rather than a
-   transparent glyph, and those tiles run the full tonal range — Vercel is
-   near-black, Instacart near-white — so neither theme can host them bare.
-   A constant light chip gives every mark the same footing; the CDN's greyscale
-   plus a dimmed rest state keep the row as quiet as the old inline SVGs. */
+/* Logo.dev marks, in brand colour. Most brands come back as an opaque tile
+   rather than a transparent glyph, and those tiles run the full tonal range —
+   Vercel is near-black, Instacart near-white — so neither theme can host them
+   bare. A constant light chip gives every mark the same footing. */
 .brand-mark {
   background: rgba(255, 255, 255, 0.92);
-  opacity: 0.62;
+  opacity: 0.92;
   transition: opacity 0.22s var(--ease-out-soft);
 }
 .group\/mark:hover .brand-mark {
   opacity: 1;
-}
-:root[data-theme='dark'] .brand-mark {
-  opacity: 0.5;
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) .brand-mark {
-    opacity: 0.5;
-  }
 }
 
 /* --- FAQ: fade-slide the answer when a <details> opens --- */

@@ -3,8 +3,8 @@ import { logoUrl } from '@/lib/logo-dev';
 
 /* Official brand marks served by Logo.dev, looked up by domain — the most
    stable identifier (name lookups can land on the wrong "Linear" or "Loom").
-   Requested greyscale so the row keeps its single-tone trust-bar look; see
-   `.brand-mark` in globals.css for the chip that carries them in both themes. */
+   Served in full colour; see `.brand-mark` in globals.css for the chip that
+   carries them against both the light and the dark canvas. */
 type Brand = { name: string; domain: string };
 
 /* Top row: the AI and builder tooling the product lives next to. */
@@ -52,13 +52,13 @@ function Track({ items, reverse }: { items: Brand[]; reverse?: boolean }) {
       {doubled.map((brand, i) => (
         <span
           key={`${brand.name}-${i}`}
-          className="group/mark mx-7 inline-flex shrink-0 items-center gap-2.5 text-[19px] font-semibold tracking-tight text-faint transition-colors hover:text-muted"
+          className="group/mark mx-7 inline-flex shrink-0 items-center gap-2.5 text-[19px] font-semibold tracking-tight text-muted transition-colors hover:text-ink"
           aria-hidden={i >= items.length}
         >
           {/* alt="" — the brand name is right there as text, so announcing the
               logo too would just double it up for screen readers. */}
           <img
-            src={logoUrl(brand.domain, { size: SOURCE_PX, format: 'png', greyscale: true })}
+            src={logoUrl(brand.domain, { size: SOURCE_PX, format: 'png' })}
             alt=""
             width={22}
             height={22}
