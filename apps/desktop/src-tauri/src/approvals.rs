@@ -11,9 +11,6 @@
 #![allow(dead_code)]
 
 #[cfg(target_os = "macos")]
-pub use mac::ApprovalQueueState;
-
-#[cfg(target_os = "macos")]
 pub mod mac {
     use std::sync::Mutex;
 

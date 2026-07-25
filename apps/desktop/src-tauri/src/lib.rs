@@ -1043,7 +1043,12 @@ fn watch_option_tap(app: &tauri::App) {
                     eprintln!("[shell] ⌥ tap — draft at cursor");
                     use tauri::Manager;
                     if let Some(db) = handle.try_state::<shogun_core::daemon::Db>() {
-                        inline_source::mac::run_inline_at_cursor(db.inner().clone());
+                        // The ⌥-tap is the fastest path in the product: read the pack the focus
+                        // path already built rather than assembling anything now.
+                        let warm = handle
+                            .try_state::<shogun_core::daemon::ReplyContextCache>()
+                            .and_then(|c| c.current());
+                        inline_source::mac::run_inline_at_cursor(db.inner().clone(), warm);
                     }
                 }
             }

@@ -93,6 +93,34 @@ pub struct ReplyContext {
     pub build_ms: u64,
 }
 
+impl ReplyContext {
+    /// Flatten into the memory lines the inline composer takes.
+    ///
+    /// Order is deliberate: the thread's own words first (a reply is written *into* a
+    /// conversation, so that is the primary material), then what is owed or waiting, then
+    /// anything similar from before. `max_lines` bounds the prompt.
+    pub fn as_memory_lines(&self, max_lines: usize) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        if let Some(t) = self.title.as_deref().filter(|t| !t.is_empty()) {
+            out.push(format!("in view: {t}"));
+        }
+        for turn in &self.turns {
+            out.push(turn.excerpt.clone());
+        }
+        out.extend(self.facts.iter().cloned());
+        for r in &self.related {
+            out.push(format!("earlier: {}", r.excerpt));
+        }
+        out.truncate(max_lines);
+        out
+    }
+
+    /// True when there is nothing here worth preferring over the plain state facts.
+    pub fn is_empty(&self) -> bool {
+        self.turns.is_empty() && self.facts.is_empty() && self.related.is_empty()
+    }
+}
+
 /// The pre-assembled reply context, kept warm so a press only starts generation.
 ///
 /// The whole point is that reading it costs nothing: the focus path writes, the button reads.
@@ -1283,6 +1311,40 @@ mod tests {
         assert!(ctx.turns[1].excerpt.contains("12k"));
         // The SLO measurement ships with the data it describes.
         assert!(ctx.build_ms < 1_000, "assembly should be fast: {}ms", ctx.build_ms);
+    }
+
+    /// A reply is written *into* a conversation, so the thread's own words must lead the prompt —
+    /// state facts and older similar threads are supporting material, not the subject.
+    #[test]
+    fn reply_context_flattens_with_the_thread_first() {
+        let db = Db::open_in_memory(clock(10_000)).unwrap();
+        db.capture(&NewEvent {
+            window_title: Some("Q3 pricing"),
+            ..ev("Alice asked for the renewal terms", "h1", 100)
+        })
+        .unwrap();
+        let key = shogun_memory::thread::thread_key(
+            "capture",
+            None,
+            Some("com.apple.Safari"),
+            Some("Q3 pricing"),
+        )
+        .unwrap();
+
+        let lines = db.build_reply_context(&key).as_memory_lines(10);
+        assert!(lines[0].contains("Q3 pricing"), "what's in view is named first: {lines:?}");
+        assert!(
+            lines.iter().any(|l| l.contains("renewal terms")),
+            "the thread's own words are present: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn an_empty_reply_context_is_reported_so_the_caller_can_fall_back() {
+        let db = Db::open_in_memory(clock(10_000)).unwrap();
+        let ctx = db.build_reply_context("capture:nothing:here");
+        assert!(ctx.is_empty(), "nothing warmed for this thread");
+        assert!(ctx.as_memory_lines(10).is_empty());
     }
 
     /// A press must read a warm pack, never build one — building on the press is what the SLO

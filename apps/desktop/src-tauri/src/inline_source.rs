@@ -373,9 +373,29 @@ pub mod mac {
     /// Run the inline draft: on a dedicated thread (so the AX reads/writes and the blocking Agent
     /// call don't touch a tokio worker), read the caret context, gather confidence-gated memory,
     /// generate, and insert at the caret. Fire-and-forget — the outcome is logged (no captured text).
-    pub fn run_inline_at_cursor(db: Db) {
+    /// How many context lines the inline draft carries. Enough for the thread to be recognisable,
+    /// bounded so the prompt stays small on the latency-critical path.
+    const INLINE_CONTEXT_LINES: usize = 14;
+
+    /// Draft at the cursor, preferring the pre-assembled reply context for the thread the user is
+    /// looking at.
+    ///
+    /// `warm` is the pack the focus path built ahead of the press (the 150ms budget forbids
+    /// collecting it here). When there is none — a thread not yet warmed — this falls back to the
+    /// plain state facts rather than building inline, so a miss costs context, never latency.
+    pub fn run_inline_at_cursor(db: Db, warm: Option<shogun_core::daemon::ReplyContext>) {
         std::thread::spawn(move || {
-            let memory = db.inline_memory(6);
+            let memory = match warm {
+                Some(ctx) if !ctx.is_empty() => {
+                    eprintln!(
+                        "[inline] using the warm reply context ({} turn(s), built in {}ms)",
+                        ctx.turns.len(),
+                        ctx.build_ms
+                    );
+                    ctx.as_memory_lines(INLINE_CONTEXT_LINES)
+                }
+                _ => db.inline_memory(6),
+            };
             let agent = build_agent(&db);
             let outcome = compose_inline(&AxCursorReader, &agent, &AxTextInserter, &memory);
             match &outcome {
@@ -387,8 +407,11 @@ pub mod mac {
 
     /// Tauri command: the notch "draft at cursor" action and the shortcut both call this.
     #[tauri::command]
-    pub fn inline_at_cursor(db: tauri::State<'_, Db>) -> &'static str {
-        run_inline_at_cursor(db.inner().clone());
+    pub fn inline_at_cursor(
+        db: tauri::State<'_, Db>,
+        reply: tauri::State<'_, shogun_core::daemon::ReplyContextCache>,
+    ) -> &'static str {
+        run_inline_at_cursor(db.inner().clone(), reply.current());
         "started"
     }
 
