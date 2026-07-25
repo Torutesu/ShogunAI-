@@ -19,9 +19,19 @@ use shogun_core::daemon::Db;
 use shogun_memory::event_log::NewEvent;
 
 /// Realistic-ish volume: a few months of capture at a steady rate, spread over many threads.
-const EVENTS: i64 = 40_000;
+/// Override on the device to see how the numbers move with the log:
+///   SHOGUN_SLO_EVENTS=100000 cargo test … -- --ignored --nocapture
+const DEFAULT_EVENTS: i64 = 40_000;
 const THREADS: i64 = 400;
 const SAMPLES: usize = 60;
+
+fn events() -> i64 {
+    std::env::var("SHOGUN_SLO_EVENTS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(DEFAULT_EVENTS)
+}
 
 fn percentile(sorted_us: &[u128], p: f64) -> u128 {
     if sorted_us.is_empty() {
@@ -55,10 +65,11 @@ fn report(label: &str, mut samples: Vec<u128>, budget_ms: u128) {
 
 /// Seed a WAL-backed database with `EVENTS` events across `THREADS` threads.
 fn seed(path: &std::path::Path) -> Db {
+    let total = events();
     let clock = Arc::new(|| 1_700_000_000_000i64);
     let db = Db::open(path, clock).unwrap();
     let start = Instant::now();
-    for i in 0..EVENTS {
+    for i in 0..total {
         let thread = i % THREADS;
         let title = format!("Thread {thread}");
         let content = format!(
@@ -68,7 +79,7 @@ fn seed(path: &std::path::Path) -> Db {
         );
         let hash = format!("h{i}");
         db.capture(&NewEvent {
-            ts: 1_700_000_000_000 - (EVENTS - i) * 1_000,
+            ts: 1_700_000_000_000 - (total - i) * 1_000,
             source: "capture",
             kind: "text",
             app_bundle_id: Some("com.apple.Safari"),
@@ -82,7 +93,7 @@ fn seed(path: &std::path::Path) -> Db {
         .unwrap();
     }
     println!(
-        "seeded {EVENTS} events across {THREADS} threads in {:.1}s",
+        "seeded {total} events across {THREADS} threads in {:.1}s",
         start.elapsed().as_secs_f64()
     );
     db
