@@ -871,38 +871,67 @@ input {
   cursor: default;
 }
 
-/* shortcut rows */
+/* ── shortcut rows ───────────────────────────────────────────────────────
+   A trigger is modifiers plus a gesture, so it is drawn as keys plus a qualifier. The keys carry
+   BOTH the glyph and the word — ⌃ and ⌥ are the two most confused symbols on the keyboard, and
+   the person reading this screen is usually the one who just failed to trigger something. The
+   gesture is quieter and unboxed, so it never reads as another key to press. */
 .keys {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--s-4);
-  min-height: 38px;
+  min-height: 40px;
 }
 .keys__name {
   font-size: var(--fs-md);
   color: var(--ink);
 }
-.keys__combo {
-  display: flex;
-  gap: var(--s-1);
-  flex: none;
-}
-.keys__combo--fixed {
-  padding: 2px;
-  opacity: 0.75;
-  cursor: default;
-}
 .keys__btn {
   border: none;
   background: transparent;
   padding: 3px;
-  border-radius: var(--r-xs);
+  border-radius: var(--r-sm);
   cursor: pointer;
-  transition: background var(--sp);
+  transition: background var(--sp), box-shadow var(--sp);
 }
 .keys__btn:hover {
   background: var(--surface);
+}
+.keys__btn.is-warn {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warn) 55%, transparent);
+}
+.trig {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-1);
+  flex: none;
+}
+.trig__key {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.trig__glyph {
+  font-style: normal;
+  font-weight: 500;
+  color: var(--ink-3);
+}
+/* The gesture qualifies the keys, so it is not boxed like one — and it holds its width even when
+   there is nothing to say, so a row of chords and a row of gestures end at the same right edge. */
+.trig__gesture {
+  min-width: 26px;
+  text-align: left;
+  font-size: var(--fs-sm);
+  color: var(--ink-3);
+  padding-left: 3px;
+  font-variant-numeric: tabular-nums;
+}
+/* recording: a dashed target, plus the one modifier a webview cannot observe */
+.rec {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
 }
 .keys__rec {
   border: 1px dashed var(--line-2);
@@ -910,22 +939,43 @@ input {
   color: var(--ink-2);
   font: inherit;
   font-size: var(--fs-sm);
-  padding: 5px 12px;
+  padding: 6px 13px;
   border-radius: var(--r-pill);
   cursor: text;
+}
+.rec__fn {
+  border: 1px solid var(--line-2);
+  background: transparent;
+  color: var(--ink-3);
+  font: inherit;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  padding: 5px 11px;
+  border-radius: var(--r-xs);
+  cursor: pointer;
+  transition: background var(--sp), color var(--sp), border-color var(--sp);
+}
+.rec__fn:hover {
+  color: var(--ink);
+}
+.rec__fn.is-on {
+  background: var(--solid);
+  border-color: transparent;
+  color: var(--solid-ink);
 }
 kbd {
   display: inline-grid;
   place-items: center;
-  min-width: 25px;
-  height: 25px;
-  padding: 0 7px;
+  min-width: 26px;
+  height: 26px;
+  padding: 0 9px;
   border-radius: var(--r-xs);
   background: var(--surface-2);
   font-family: var(--sys);
   font-size: var(--fs-sm);
-  font-weight: 600;
+  font-weight: 550;
   color: var(--ink);
+  white-space: nowrap;
 }
 
 /* inputs + buttons */

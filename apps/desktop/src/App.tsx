@@ -21,6 +21,7 @@ function beginDrag(e: React.MouseEvent): void {
 import { t } from "./strings";
 import { Icon } from "./icons";
 import { ConnectionsList } from "./connections";
+import { ShortcutRows } from "./ShortcutRows";
 import { Onboarding } from "./onboarding/Onboarding";
 import { getOnboardingState } from "./onboarding/ipc";
 import type { OnboardingState } from "./onboarding/ipc";
@@ -931,35 +932,12 @@ function ApprovalsSection(): JSX.Element | null {
   );
 }
 
-// Draft is not here: it fires on a bare ⌥ (Option) tap, which can't be a global shortcut and so
-// isn't rebindable. Settings shows it as a fixed row.
-const DEFAULT_BINDS: Record<string, string> = {
-  summon: "Control+Alt+KeyN",
-  quit: "Control+Alt+KeyQ",
-};
 const PROVIDERS: Array<{ id: string; label: string }> = [
   { id: "anthropic", label: "Claude API" },
   { id: "openrouter", label: "OpenRouter" },
   { id: "openai", label: "OpenAI" },
   { id: "gemini", label: "Gemini" },
 ];
-const SHORTCUT_ROWS: Array<{ action: string; label: string }> = [
-  { action: "summon", label: t.summonShortcut },
-  { action: "quit", label: t.quitShortcut },
-];
-
-/** "Control+Alt+KeyN" → ["⌃","⌥","N"] for <kbd> chips. */
-function comboChips(combo: string): string[] {
-  return combo.split("+").map((part) => {
-    if (part === "Control") return "⌃";
-    if (part === "Alt") return "⌥";
-    if (part === "Shift") return "⇧";
-    if (part === "Super") return "⌘";
-    if (part.startsWith("Key")) return part.slice(3);
-    if (part.startsWith("Digit")) return part.slice(5);
-    return part;
-  });
-}
 
 function Settings(props: {
   appearance: Appearance;
@@ -989,9 +967,6 @@ function Settings(props: {
       })
       .catch(() => undefined);
   };
-  const [binds, setBinds] = useState<Record<string, string>>(DEFAULT_BINDS);
-  const [recording, setRecording] = useState<string | null>(null);
-  const [keyErr, setKeyErr] = useState("");
   // BYOK key entry: the key goes straight to the macOS Keychain via Rust (never a file/DB/log).
   const [keyInput, setKeyInput] = useState("");
   const [keyState, setKeyState] = useState<boolean>(hasKey);
@@ -1055,53 +1030,6 @@ function Settings(props: {
       .catch((e) => setKeyMsg(String(e)));
   };
 
-  const refresh = useCallback((): void => {
-    if (!IN_TAURI) return;
-    void invoke<Record<string, string>>("get_shortcuts")
-      .then((b) => setBinds({ ...DEFAULT_BINDS, ...b }))
-      .catch(() => undefined);
-  }, []);
-  useEffect(refresh, [refresh]);
-
-  // Capture the new combo at the WINDOW level (capture phase). Relying on the recording button's
-  // own focus proved fragile on device — clicks landed but keystrokes never did, so rebinding
-  // looked broken. A window listener catches keys no matter where focus sits inside the panel.
-  useEffect(() => {
-    if (!recording) return;
-    const action = recording;
-    const onKey = (e: KeyboardEvent): void => {
-      e.preventDefault();
-      e.stopPropagation();
-      if (e.key === "Escape") {
-        setRecording(null);
-        setKeyErr("");
-        return;
-      }
-      if (["Control", "Alt", "Shift", "Meta"].includes(e.key)) return; // modifier alone: keep waiting
-      const mods = [
-        e.ctrlKey && "Control",
-        e.altKey && "Alt",
-        e.shiftKey && "Shift",
-        e.metaKey && "Super",
-      ].filter(Boolean) as string[];
-      if (mods.length === 0) {
-        setKeyErr(t.needModifier);
-        return;
-      }
-      const combo = [...mods, e.code].join("+");
-      setRecording(null);
-      setKeyErr("");
-      if (!IN_TAURI) {
-        setBinds((b) => ({ ...b, [action]: combo }));
-        return;
-      }
-      void invoke("set_shortcut", { action, combo })
-        .then(refresh)
-        .catch((err) => setKeyErr(String(err)));
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, [recording, refresh]);
 
   return (
     <div className="settings">
@@ -1139,49 +1067,7 @@ function Settings(props: {
         </section>
         <section className="set">
           <div className="set__label">{t.shortcuts}</div>
-          {/* Draft is a fixed ⌥-tap trigger (a bare modifier can't be a global shortcut), shown
-              here so it's discoverable but not presented as rebindable. */}
-          <div className="keys">
-            <span className="keys__name">{t.draftShortcut}</span>
-            <span className="keys__combo keys__combo--fixed" title={t.draftFixedHint}>
-              <kbd>⌥</kbd>
-            </span>
-          </div>
-          {SHORTCUT_ROWS.map(({ action, label }) => (
-            <div key={action} className="keys">
-              <span className="keys__name">{label}</span>
-              {recording === action ? (
-                <button
-                  className="keys__rec"
-                  type="button"
-                  onClick={() => {
-                    setRecording(null);
-                    setKeyErr("");
-                  }}
-                >
-                  {t.recordHint}
-                </button>
-              ) : (
-                <button
-                  className="keys__btn"
-                  type="button"
-                  title={t.change}
-                  onClick={() => {
-                    setRecording(action);
-                    setKeyErr("");
-                  }}
-                >
-                  <span className="keys__combo">
-                    {comboChips(binds[action] ?? "").map((c, i) => (
-                      <kbd key={i}>{c}</kbd>
-                    ))}
-                  </span>
-                </button>
-              )}
-            </div>
-          ))}
-          {keyErr ? <div className="set__hint is-err">{keyErr}</div> : null}
-          <div className="set__hint">{t.shortcutHint}</div>
+          <ShortcutRows />
         </section>
         <section className="set">
           <div className="set__label" id="seg-provider">{t.model}</div>

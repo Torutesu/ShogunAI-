@@ -150,7 +150,9 @@ export const INITIAL: Scenario = {
   aiSessions: true,
   provider: "anthropic",
   model: "",
-  shortcuts: { summon: "Control+Alt+KeyN", quit: "Control+Alt+KeyQ" },
+  // The trigger grammar (src/shortcuts.ts): modifiers plus a gesture, with a letter chord kept
+  // for the one action that should take a moment's aim.
+  shortcuts: { summon: "Control+Alt:double", draft: "Alt:tap", quit: "Control+Alt+KeyQ" },
   latencyMs: 60,
   panel: { w: 600, h: 400, left: Math.round((DESK_W - 600) / 2) },
   // Default: already onboarded, so the preview opens on the panel. The rail restarts first run.

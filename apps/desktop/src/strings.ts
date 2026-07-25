@@ -79,7 +79,6 @@ export const STRINGS = {
     obReadyBody: "Two things worth knowing, and then it's out of your way.",
     obReadyShortcut: "Open SHOGUN from anywhere",
     obReadyDraft: "Draft where you're typing",
-    obReadyDraftKey: "Tap ⌥",
     obReadyTonight: "Tonight",
     obReadyTonightBody:
       "While your Mac is idle, SHOGUN works through the day and updates what it's tracking. Tomorrow it'll know a little. By the weekend it'll know your week.",
@@ -94,7 +93,7 @@ export const STRINGS = {
     waiting: "waiting",
     // peek (hover preview)
     peekHint: "click to open",
-    openPanel: "Open SHOGUN (⌃⌥N)",
+    openPanel: "Open SHOGUN",
     // welcome (expanded, empty thread)
     welcomeTitle: "What can I take off your plate?",
     welcomeSub: "Ask about your work, or tap ⌥ (Option) in any app to draft where you're typing.",
@@ -107,7 +106,7 @@ export const STRINGS = {
     suggestCatchUp: "Catch me up on {app}",
     // composer
     ask: "Ask SHOGUN…",
-    draftTitle: "Draft where you're typing (tap ⌥)",
+    draftTitle: "Draft where you're typing",
     // settings
     settings: "Settings",
     // connections (first-layer integrations)
@@ -165,18 +164,29 @@ export const STRINGS = {
     autoHide: "Auto-hide",
     stayOpenHint: "Keep the panel open until you close it.",
     autoHideHint: "Slide back to the notch when you move away.",
-    draftShortcut: "Draft with SHOGUN",
-    draftFixedHint: "Tap ⌥ (Option) alone — always on, not rebindable.",
-    summonShortcut: "Show / hide overlay",
-    quitShortcut: "Quit",
     shortcuts: "Shortcuts",
+    /// What each trigger does. Written as the thing that happens, not the surface it opens.
+    actionLabel: {
+      summon: "Show SHOGUN",
+      draft: "Draft where you're typing",
+      quit: "Quit",
+    } as Record<string, string>,
+    /// The gesture, in the fewest characters that stay unambiguous. "2×" is read as "twice"
+    /// everywhere; "double-tap" would be as wide as the modifiers it qualifies.
+    gestureHold: "hold",
+    gestureTap: "tap",
+    gestureDouble: "2×",
     change: "Change",
-    recordHint: "Press keys… (Esc to cancel)",
-    needModifier: "Include a modifier (⌃ ⌥ ⇧ ⌘).",
-    shortcutHint: "Click a shortcut to change it. Saved instantly, works everywhere.",
+    recordHint: "Hold, tap, or tap twice… (Esc to cancel)",
+    recordFnHint: "fn can't be detected here — click to include it",
+    shortcutShadowed:
+      "A single tap fires the moment the keys come up, so it takes precedence over the longer gesture on the same keys.",
+    shortcutHint:
+      "Modifiers alone, told apart by the gesture — nothing to memorise, and nothing for another app to collide with.",
+    shortcutReset: "Reset to defaults",
     model: "Model",
     modelPlaceholder: "Model id (blank = default)",
-    modelHint: "Chat and ⌥-tap drafts run on this provider with your own key. Each provider keeps its own key below.",
+    modelHint: "Chat and drafts run on this provider with your own key. Each provider keeps its own key below.",
     key: "Your key",
     keyPresent: "Connected — answers and drafts are yours.",
     keyAbsent: "Not set — SHOGUN will echo until you add a key.",

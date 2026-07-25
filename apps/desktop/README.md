@@ -17,6 +17,15 @@ COMPLETED rather than first-run: the flow's only exit is a command that persists
 showing it before the core can remember would trap the user in it on every launch. Until then,
 first run is reachable from the browser preview's rail.
 
+## Triggers
+
+Shortcuts here are usually **not** letter chords: they are modifiers plus a gesture — hold, tap,
+tap twice. Nothing to memorise, and a modifier set with no key is nobody else's shortcut. The
+⌥-tap that drafts at your cursor stops being an unexplainable special case and becomes `Alt:tap`,
+one sentence in the grammar. Model: `src/shortcuts.ts`. Reasoning and the Rust-side work:
+`docs/shortcut-grammar.md` (the recogniser is not generalised in `src-tauri` yet; stored triggers
+in the legacy `Control+Alt+KeyN` form keep working either way).
+
 ## Design language
 
 The panel is an **elevated object floating over someone's desktop**, not a dense HUD. The rules

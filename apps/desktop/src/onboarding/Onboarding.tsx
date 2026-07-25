@@ -18,6 +18,8 @@ import { IN_TAURI } from "../tauri";
 import { Icon } from "../icons";
 import { count, t } from "../strings";
 import { ConnectionsList } from "../connections";
+import { TriggerChips } from "../ShortcutRows";
+import { DEFAULT_TRIGGERS, parseTrigger } from "../shortcuts";
 import {
   axPermission,
   exclusionCategories,
@@ -389,7 +391,10 @@ function Connect(): JSX.Element {
 }
 
 function Ready(): JSX.Element {
-  const [binds, setBinds] = useState<Record<string, string>>({ summon: "Control+Alt+KeyN" });
+  // The two triggers taught here are read from the live bindings, never printed as literals: a
+  // closing step that promises ⌃⌥ to someone who rebound it in the previous minute is worse than
+  // no closing step.
+  const [binds, setBinds] = useState<Record<string, string>>(DEFAULT_TRIGGERS);
   useEffect(() => {
     if (!IN_TAURI) return;
     void invoke<Record<string, string>>("get_shortcuts")
@@ -397,36 +402,25 @@ function Ready(): JSX.Element {
       .catch(() => undefined);
   }, []);
 
-  const chips = (combo: string): string[] =>
-    combo.split("+").map((part) => {
-      if (part === "Control") return "⌃";
-      if (part === "Alt") return "⌥";
-      if (part === "Shift") return "⇧";
-      if (part === "Super") return "⌘";
-      if (part.startsWith("Key")) return part.slice(3);
-      if (part.startsWith("Digit")) return part.slice(5);
-      return part;
-    });
+  const rows: Array<[string, string]> = [
+    [t.obReadyShortcut, binds.summon ?? DEFAULT_TRIGGERS.summon],
+    [t.obReadyDraft, binds.draft ?? DEFAULT_TRIGGERS.draft],
+  ];
 
   return (
     <section className="obs">
       <h1 className="obs__title">{t.obReadyTitle}</h1>
       <p className="obs__lede">{t.obReadyBody}</p>
 
-      <div className="keys">
-        <span className="keys__name">{t.obReadyShortcut}</span>
-        <span className="keys__combo">
-          {chips(binds.summon ?? "Control+Alt+KeyN").map((c, i) => (
-            <kbd key={i}>{c}</kbd>
-          ))}
-        </span>
-      </div>
-      <div className="keys">
-        <span className="keys__name">{t.obReadyDraft}</span>
-        <span className="keys__combo">
-          <kbd>⌥</kbd>
-        </span>
-      </div>
+      {rows.map(([label, combo]) => {
+        const trigger = parseTrigger(combo);
+        return (
+          <div key={label} className="keys">
+            <span className="keys__name">{label}</span>
+            {trigger ? <TriggerChips trigger={trigger} /> : null}
+          </div>
+        );
+      })}
 
       <div className="fact fact--wide">
         <div className="fact__head">
