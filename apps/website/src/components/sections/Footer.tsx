@@ -56,7 +56,20 @@ export async function Footer() {
       </div>
       <div className="container-x flex flex-wrap items-center justify-between gap-3 border-t border-border py-6">
         <span className="text-xs text-muted">{t.footer.rights}</span>
-        <span className="text-xs text-muted">{t.footer.madeFor}</span>
+        <span className="text-xs text-muted">
+          {t.footer.madeFor}
+          {' · '}
+          {/* Required attribution on Logo.dev's free tier for commercial use.
+              Left untranslated — it's a product name, not copy. */}
+          <a
+            href="https://logo.dev"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline decoration-border underline-offset-2 transition-colors hover:text-ink"
+          >
+            Logos provided by Logo.dev
+          </a>
+        </span>
       </div>
     </footer>
   );
