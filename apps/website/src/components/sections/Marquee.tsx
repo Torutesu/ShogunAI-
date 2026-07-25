@@ -7,28 +7,38 @@ import { logoUrl } from '@/lib/logo-dev';
    `.brand-mark` in globals.css for the chip that carries them in both themes. */
 type Brand = { name: string; domain: string };
 
+/* Top row: the AI and builder tooling the product lives next to. */
 const ROW_A: Brand[] = [
-  { name: 'Slack', domain: 'slack.com' },
-  { name: 'Notion', domain: 'notion.so' },
-  { name: 'Linear', domain: 'linear.app' },
+  { name: 'OpenAI', domain: 'openai.com' },
+  { name: 'Anthropic', domain: 'anthropic.com' },
+  { name: 'Google DeepMind', domain: 'deepmind.google' },
+  { name: 'Cursor', domain: 'cursor.com' },
+  { name: 'Replit', domain: 'replit.com' },
   { name: 'GitHub', domain: 'github.com' },
+  { name: 'Vercel', domain: 'vercel.com' },
+  { name: 'Linear', domain: 'linear.app' },
   { name: 'Figma', domain: 'figma.com' },
-  { name: 'Airbnb', domain: 'airbnb.com' },
-  { name: 'Coinbase', domain: 'coinbase.com' },
-  { name: 'Dropbox', domain: 'dropbox.com' },
-  { name: 'Instacart', domain: 'instacart.com' },
+  { name: 'Stripe', domain: 'stripe.com' },
+  { name: 'Ramp', domain: 'ramp.com' },
+  { name: 'Rippling', domain: 'rippling.com' },
+  { name: 'Airtable', domain: 'airtable.com' },
 ];
 
+/* Bottom row: the data stack and the household names. */
 const ROW_B: Brand[] = [
-  { name: 'Stripe', domain: 'stripe.com' },
-  { name: 'Vercel', domain: 'vercel.com' },
-  { name: 'Zoom', domain: 'zoom.us' },
-  { name: 'Loom', domain: 'loom.com' },
-  { name: 'Gmail', domain: 'gmail.com' },
-  { name: 'DoorDash', domain: 'doordash.com' },
-  { name: 'Reddit', domain: 'reddit.com' },
-  { name: 'Docker', domain: 'docker.com' },
-  { name: 'GitLab', domain: 'gitlab.com' },
+  { name: 'Retool', domain: 'retool.com' },
+  { name: 'PostHog', domain: 'posthog.com' },
+  { name: 'Snowflake', domain: 'snowflake.com' },
+  { name: 'Apple', domain: 'apple.com' },
+  { name: 'NVIDIA', domain: 'nvidia.com' },
+  { name: 'Meta', domain: 'meta.com' },
+  { name: 'Microsoft', domain: 'microsoft.com' },
+  { name: 'Google', domain: 'google.com' },
+  { name: 'Amazon', domain: 'amazon.com' },
+  { name: 'Netflix', domain: 'netflix.com' },
+  { name: 'Airbnb', domain: 'airbnb.com' },
+  { name: 'Shopify', domain: 'shopify.com' },
+  { name: 'Tesla', domain: 'tesla.com' },
 ];
 
 /* Rendered at 22px (see `size-[22px]` below); a 64px source keeps it crisp on

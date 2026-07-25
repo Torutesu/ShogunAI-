@@ -294,7 +294,9 @@
 .marquee-track {
   display: flex;
   width: max-content;
-  animation: marquee 32s linear infinite;
+  /* Duration tracks content width — the row grew from 9 brands to 13, and at
+     the old 32s that read as a 50% speed-up. 48s restores ~42px/s. */
+  animation: marquee 48s linear infinite;
 }
 .marquee-track.rev {
   animation-name: marquee-rev;
