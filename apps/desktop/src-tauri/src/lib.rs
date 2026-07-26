@@ -99,6 +99,7 @@ pub fn run() {
         meeting::mac::meeting_stop,
         meeting::mac::meeting_save_note,
         meeting::mac::meeting_exclude_app,
+        meeting::mac::meeting_include_app,
         meeting::mac::get_meeting_settings,
         meeting::mac::set_meeting_enabled,
         notch_actions::mac::notch_actions,

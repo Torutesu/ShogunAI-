@@ -76,6 +76,8 @@ pub mod mac {
         /// user never sees something meeting-shaped while meeting notes are off (FR-MT-02a).
         pub enabled: bool,
         pub title: Option<String>,
+        /// The app the offer is about — what "never for this app" (FR-MT-02b) would exclude.
+        pub app_bundle_id: Option<String>,
         /// Milliseconds recorded so far. The pill shows this as mm:ss and must keep moving: a
         /// state toggle alone does not answer "is it still going?" (FR-MT-09).
         pub elapsed_ms: i64,
@@ -90,6 +92,7 @@ pub mod mac {
             state: state.tag(),
             enabled: lane.settings.enabled,
             title: lane.title.clone(),
+            app_bundle_id: lane.app_bundle_id.clone(),
             elapsed_ms: if state == State::Recording { since } else { 0 },
             countdown_ms: if state == State::Offered {
                 (Params::default().offer_grace_ms as i64 - since).max(0)
@@ -290,6 +293,7 @@ pub mod mac {
                 state: "idle",
                 enabled: false,
                 title: None,
+                app_bundle_id: None,
                 elapsed_ms: 0,
                 countdown_ms: 0,
             })
@@ -357,6 +361,21 @@ pub mod mac {
             lane.settings.clone()
         };
         eprintln!("[meeting] notes → {}", if enabled { "enabled" } else { "off" });
+        save(&app, &settings)
+    }
+
+    /// Undo tier (b): offer for this app again.
+    ///
+    /// Exclusions have to be reversible from the settings screen. A list the user can add to but
+    /// never remove from turns one impatient tap during a meeting into a permanent blind spot.
+    #[tauri::command]
+    pub fn meeting_include_app(bundle_id: String, app: tauri::AppHandle) -> Result<(), String> {
+        let settings = {
+            let Ok(mut g) = LANE.lock() else { return Err("busy".into()) };
+            let Some(lane) = g.as_mut() else { return Err("not ready".into()) };
+            lane.settings.excluded_apps.remove(&bundle_id);
+            lane.settings.clone()
+        };
         save(&app, &settings)
     }
 

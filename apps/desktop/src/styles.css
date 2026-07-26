@@ -1074,3 +1074,58 @@ kbd {
 .mpill__btn--stop {
   padding-inline: 12px;
 }
+
+/* excluded-app list (FR-MT-02b). Deliberately plain: it is a list of decisions the user already
+   made, and its only job is to let them be taken back. */
+.mexcl {
+  margin-top: 10px;
+}
+.mexcl__label {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+.mexcl__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.mexcl__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  background: var(--fill);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm, 8px);
+}
+.mexcl__id {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-xs);
+}
+.mexcl__rm {
+  flex: none;
+  font: inherit;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 2px 4px;
+}
+.mexcl__rm:hover {
+  color: var(--ink);
+}
+/* The secondary action on the offer: available, not competing with Start. */
+.mpill__btn--quiet {
+  background: none;
+  border-color: transparent;
+  color: var(--muted);
+}

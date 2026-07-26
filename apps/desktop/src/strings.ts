@@ -122,11 +122,15 @@ export const STRINGS = {
     meetingNotNow: "Not now",
     meetingStop: "Stop",
     meetingNotePlaceholder: "Type your notes…",
+    meetingNeverThisApp: "Never for this app",
     // meeting notes — settings (FR-MT-01/02/03)
     meetingSection: "Meeting notes",
     meetingHint: "Offers to take notes when a meeting starts. One tap declines, one tap stops.",
     meetingOn: "On",
     meetingOff: "Off",
+    meetingExcluded: "Never offer for",
+    meetingExcludedEmpty: "No apps excluded",
+    meetingExcludedRemove: "Remove",
     // The disclosure of FR-MT-03. It can be stated this plainly because it is simply what
     // happens: nothing joins the call, and no audio file is ever written.
     meetingDisclosure:

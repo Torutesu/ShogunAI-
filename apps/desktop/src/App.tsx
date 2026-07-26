@@ -55,6 +55,8 @@ interface MeetingView {
   state: "idle" | "offered" | "recording" | "wrapping";
   enabled: boolean;
   title: string | null;
+  /** The app that triggered the offer — what "never for this app" applies to (FR-MT-02b). */
+  app_bundle_id: string | null;
   elapsed_ms: number;
   countdown_ms: number;
 }
@@ -655,6 +657,22 @@ function MeetingPill({ view }: { view: MeetingView }): JSX.Element {
           {t.meetingStarting} {Math.ceil(view.countdown_ms / 1000)}s
         </span>
         <span className="mpill__acts">
+          {/* Tier (b) reachable from the offer itself (FR-MT-08): the moment a user is annoyed
+              by the prompt is the moment they want it gone for good, and making them go and
+              find Settings for that is how a feature gets switched off entirely instead. */}
+          {view.app_bundle_id ? (
+            <button
+              type="button"
+              className="mpill__btn mpill__btn--quiet"
+              onClick={() =>
+                void invoke("meeting_exclude_app", { bundleId: view.app_bundle_id }).catch(
+                  () => undefined,
+                )
+              }
+            >
+              {t.meetingNeverThisApp}
+            </button>
+          ) : null}
           <button
             type="button"
             className="mpill__btn"
@@ -889,13 +907,19 @@ function DreamSection(): JSX.Element {
 function MeetingSection(): JSX.Element {
   const [on, setOn] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [excluded, setExcluded] = useState<string[]>([]);
 
-  useEffect(() => {
+  const load = (): void => {
     if (!IN_TAURI) return;
-    void invoke<{ enabled: boolean }>("get_meeting_settings")
-      .then((s) => setOn(s.enabled))
+    void invoke<{ enabled: boolean; excluded_apps: string[] }>("get_meeting_settings")
+      .then((s) => {
+        setOn(s.enabled);
+        setExcluded(s.excluded_apps ?? []);
+      })
       .catch(() => undefined);
-  }, []);
+  };
+
+  useEffect(load, []);
 
   const toggle = (next: boolean): void => {
     if (!IN_TAURI) {
@@ -905,6 +929,7 @@ function MeetingSection(): JSX.Element {
     setBusy(true);
     setOn(next);
     void invoke("set_meeting_enabled", { enabled: next })
+      .then(load)
       .catch(() => setOn(!next))
       .finally(() => setBusy(false));
   };
@@ -935,6 +960,35 @@ function MeetingSection(): JSX.Element {
         </button>
       </div>
       <div className="set__hint">{t.meetingHint}</div>
+      {/* Tier (b), undoable. An exclusion added by an impatient tap during a meeting would
+          otherwise become a permanent blind spot with no way back (FR-MT-02b). */}
+      {on ? (
+        <div className="mexcl">
+          <div className="mexcl__label">{t.meetingExcluded}</div>
+          {excluded.length === 0 ? (
+            <div className="set__hint">{t.meetingExcludedEmpty}</div>
+          ) : (
+            <ul className="mexcl__list">
+              {excluded.map((id) => (
+                <li key={id} className="mexcl__row">
+                  <span className="mexcl__id">{id}</span>
+                  <button
+                    type="button"
+                    className="mexcl__rm"
+                    onClick={() =>
+                      void invoke("meeting_include_app", { bundleId: id })
+                        .then(load)
+                        .catch(() => undefined)
+                    }
+                  >
+                    {t.meetingExcludedRemove}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      ) : null}
       {/* Kept visible whether the feature is on or off: someone deciding whether to turn it on
           needs this more than someone who already has (FR-MT-03). */}
       <div className="set__hint set__hint--quiet">{t.meetingDisclosure}</div>
