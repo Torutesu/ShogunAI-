@@ -34,9 +34,35 @@ mod mac {
         CGEventTapProxy, CGEventType,
     };
 
-    /// Top band in CG coordinates (y grows downward from the primary display's top edge).
-    /// Mirrors shogun_core's 40pt early-reject band (spec §3.4.1).
+    /// Height of the early-reject band, measured DOWN FROM THE TOP OF WHICHEVER DISPLAY the
+    /// pointer is on. Mirrors shogun_core's 40pt band (spec §3.4.1).
+    ///
+    /// Not an absolute `y <= 40`: CG's origin is the primary display's top-left, so on a second
+    /// monitor placed anywhere but exactly level with the primary, its top edge sits at some other
+    /// global y — an absolute test made the notch unreachable there (⌥J worked, hover didn't).
     const TOP_BAND_CG: f64 = 40.0;
+
+    /// The top edge, in CG coordinates, of the display containing `x, y`.
+    ///
+    /// Uses CoreGraphics rather than NSScreen because this runs on the tap's own CFRunLoop thread,
+    /// where AppKit is not safe to touch. Falls back to 0.0 (the primary display's top) when the
+    /// point is on no known display, which keeps the old behaviour rather than dropping the event.
+    fn display_top_cg(x: f64, y: f64) -> f64 {
+        use objc2_core_graphics::{CGDisplayBounds, CGGetDisplaysWithPoint};
+        let point = objc2_core_foundation::CGPoint { x, y };
+        let mut ids: [u32; 8] = [0; 8];
+        let mut count: u32 = 0;
+        // SAFETY: both are plain C calls; the buffer is sized by `ids.len()` and `count` receives
+        // however many were written, which is what the loop below reads.
+        let ok = unsafe {
+            CGGetDisplaysWithPoint(point, ids.len() as u32, ids.as_mut_ptr(), &mut count)
+        };
+        if ok != objc2_core_graphics::CGError::Success || count == 0 {
+            return 0.0;
+        }
+        let bounds = CGDisplayBounds(ids[0]);
+        bounds.origin.y
+    }
 
     /// Events forwarded from the tap, in CGEvent (top-left origin) coordinates.
     #[derive(Clone, Copy, Debug)]
@@ -95,7 +121,7 @@ mod mac {
             let _ = ctx.tx.send(TapEvent::Up);
         } else if etype == CGEventType::MouseMoved || etype == CGEventType::LeftMouseDragged {
             let loc = unsafe { CGEvent::location(Some(event.as_ref())) };
-            let inside = loc.y <= TOP_BAND_CG;
+            let inside = loc.y - display_top_cg(loc.x, loc.y) <= TOP_BAND_CG;
             // Early reject: below the band AND already known-outside → zero further work.
             // One edge sample passes on band exit so HoverTracker sees the leave.
             if inside || ctx.in_band.get() {
