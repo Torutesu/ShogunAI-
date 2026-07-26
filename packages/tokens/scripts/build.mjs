@@ -74,7 +74,8 @@ export function main() {
   mkdirSync(resolve(PKG, "dist"), { recursive: true });
   writeFileSync(resolve(PKG, "dist/tokens.css"), generateCss(tokens));
   writeFileSync(resolve(PKG, "dist/tokens.ts"), generateTs(tokens));
-  console.log("Wrote dist/tokens.css and dist/tokens.ts");
+  writeFileSync(resolve(PKG, "dist/tokens.web.css"), generateWebCss(tokens));
+  console.log("Wrote dist/tokens.css, dist/tokens.web.css and dist/tokens.ts");
 }
 
 if (fileURLToPath(import.meta.url) === process.argv[1]) {

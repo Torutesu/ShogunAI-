@@ -126,3 +126,10 @@ test("generateWebCss base :root does NOT contain dark bg value", () => {
   const base = css.slice(css.indexOf(":root {"), css.indexOf("}"));
   assert.doesNotMatch(base, /#090b0d/);
 });
+
+test("main also writes dist/tokens.web.css with themed web blocks", () => {
+  main();
+  const css = _read(_resolve(PKG_ROOT, "dist/tokens.web.css"), "utf8");
+  assert.match(css, /:root\s*\{[^}]*--bg:\s*#ffffff/);
+  assert.match(css, /:root\[data-theme='dark'\]\s*\{[^}]*--accent:\s*#38bdf8/);
+});
