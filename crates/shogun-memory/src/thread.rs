@@ -13,7 +13,7 @@
 /// Window titles are noisy in ways that would otherwise split one conversation into many threads:
 /// unread badges (`(3) Inbox`), dirty markers (`• draft.md`), and the trailing app name
 /// (`… — Gmail`). Stripping those makes repeated visits to the same window collapse onto one key.
-fn normalise_window_title(title: &str) -> String {
+pub fn normalise_window_title(title: &str) -> String {
     let mut s = title.trim();
     // Leading unread/notification count: "(3) …"
     if let Some(rest) = s.strip_prefix('(') {
@@ -57,6 +57,39 @@ pub fn thread_key(
     let title = window_title.map(normalise_window_title).filter(|t| !t.is_empty())?;
     let app = app_bundle_id.unwrap_or("unknown");
     Some(format!("{source}:{app}:{title}"))
+}
+
+/// 画面の窓タイトル（件名を含む装飾付き文字列）を、取得済みスレッド候補
+/// `(thread_key, subject)` の中の 1 つに解決する。純関数。
+///
+/// 段階: (1) 正規化件名の完全一致 → (2) 包含（片方が他方を含む）→ (3) 不一致は None。
+/// 件名が短すぎる（正規化後 3 文字未満）ときは包含照合を使わない — 短い共通語で
+/// 他人のスレッドを誤って差し込む害の方が大きいため（設計 §3）。
+pub fn link_on_screen_to_thread(
+    on_screen_title: &str,
+    candidates: &[(String, String)],
+) -> Option<String> {
+    let screen = normalise_window_title(on_screen_title);
+    if screen.chars().count() < 3 {
+        return None;
+    }
+    // (1) 完全一致
+    for (key, subject) in candidates {
+        if normalise_window_title(subject) == screen {
+            return Some(key.clone());
+        }
+    }
+    // (2) 包含（両側とも 3 文字以上のときのみ）
+    for (key, subject) in candidates {
+        let subj = normalise_window_title(subject);
+        if subj.chars().count() < 3 {
+            continue;
+        }
+        if subj.contains(&screen) || screen.contains(&subj) {
+            return Some(key.clone());
+        }
+    }
+    None
 }
 
 /// The inputs to [`salience`], gathered per thread.
@@ -369,6 +402,39 @@ mod tests {
         ] {
             assert!(!is_referring(q), "should not be referring: {q}");
         }
+    }
+
+    #[test]
+    fn linker_exact_match_wins() {
+        let cands = vec![
+            ("gmail:aaa".to_string(), "Q3 pricing".to_string()),
+            ("gmail:bbb".to_string(), "Lunch Friday".to_string()),
+        ];
+        // ブラウザのタブ名は "(3) Q3 pricing — Gmail" のような装飾付き。
+        let got = link_on_screen_to_thread("(3) Q3 pricing — Gmail", &cands);
+        assert_eq!(got.as_deref(), Some("gmail:aaa"));
+    }
+
+    #[test]
+    fn linker_falls_back_to_containment() {
+        let cands = vec![("gmail:aaa".to_string(), "Q3 pricing plan review".to_string())];
+        // 画面側が件名の一部だけ持つケース（片方が他方を含む）。
+        let got = link_on_screen_to_thread("Q3 pricing plan review — Gmail", &cands);
+        assert_eq!(got.as_deref(), Some("gmail:aaa"));
+    }
+
+    #[test]
+    fn linker_refuses_short_or_empty_subjects() {
+        // 短すぎる件名は包含照合を使わない（他人のスレッド誤挿入を防ぐ）。
+        let cands = vec![("gmail:aaa".to_string(), "Re".to_string())];
+        assert_eq!(link_on_screen_to_thread("Re — Gmail", &cands), None);
+        assert_eq!(link_on_screen_to_thread("", &cands), None);
+    }
+
+    #[test]
+    fn linker_no_match_returns_none() {
+        let cands = vec![("gmail:aaa".to_string(), "Completely different".to_string())];
+        assert_eq!(link_on_screen_to_thread("Q3 pricing — Gmail", &cands), None);
     }
 
     fn conn() -> rusqlite::Connection {
