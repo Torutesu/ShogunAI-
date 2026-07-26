@@ -10,7 +10,6 @@ import { Memory } from '@/components/sections/Memory';
 import { Nav } from '@/components/sections/Nav';
 import { Pricing } from '@/components/sections/Pricing';
 import { Privacy } from '@/components/sections/Privacy';
-import { Stats } from '@/components/sections/Stats';
 import { Testimonials } from '@/components/sections/Testimonials';
 import { UseCases } from '@/components/sections/UseCases';
 import { countParticipants, findByRefCode } from '@/db/queries';
@@ -66,7 +65,6 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ r
         <Action t={t} />
         <UseCases t={t} />
         <How t={t} />
-        <Stats t={t} />
         <Testimonials t={t} />
         <Privacy t={t} />
         <Pricing pricing={t.pricing} />

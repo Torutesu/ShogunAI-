@@ -70,7 +70,7 @@ export function WaitlistForm({ refCode, labels }: { refCode?: string; labels: Wa
     <form
       onSubmit={onSubmit}
       noValidate
-      className="mx-auto mt-8 flex w-full max-w-xl flex-wrap justify-center gap-3 rounded-[28px] border border-border/80 bg-surface/88 p-3 shadow-[0_18px_60px_rgba(9,11,12,0.08)] backdrop-blur xl:mx-0 xl:justify-start"
+      className="mx-auto mt-8 flex w-full max-w-xl flex-wrap justify-center gap-3 rounded-[30px] border border-white/65 bg-white/76 p-3 shadow-[0_20px_60px_rgba(12,80,109,0.12)] backdrop-blur-md xl:mx-0 xl:justify-start"
     >
       <Input
         type="email"
@@ -80,7 +80,7 @@ export function WaitlistForm({ refCode, labels }: { refCode?: string; labels: Wa
         onChange={(e) => setEmail(e.target.value)}
         placeholder={labels.placeholder}
         aria-label="Email address"
-        className="min-w-[220px] flex-1"
+        className="min-w-[220px] flex-1 border-white/80 bg-white/92 text-[16px] shadow-[inset_0_1px_0_rgba(255,255,255,0.72)] placeholder:text-[#6f8792]"
       />
       <input
         type="text"
@@ -90,7 +90,11 @@ export function WaitlistForm({ refCode, labels }: { refCode?: string; labels: Wa
         aria-hidden="true"
         className="absolute left-[-9999px] size-px overflow-hidden"
       />
-      <Button type="submit" disabled={state === 'loading'} className="min-w-[170px]">
+      <Button
+        type="submit"
+        disabled={state === 'loading'}
+        className="min-w-[170px] bg-[linear-gradient(135deg,#0f5e7a,#1389af)] text-white shadow-[0_16px_34px_rgba(17,109,140,0.24)] hover:shadow-[0_20px_40px_rgba(17,109,140,0.28)]"
+      >
         {state === 'loading' ? <Loader2 className="size-4 animate-spin" /> : labels.submit}
       </Button>
       {msg && (

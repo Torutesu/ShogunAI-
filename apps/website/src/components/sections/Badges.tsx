@@ -26,8 +26,8 @@ function AwardBanner({
   priority?: boolean;
 }) {
   return (
-    <div className="flex min-h-[116px] items-center justify-center px-2 py-2 sm:min-h-[128px] sm:px-3">
-      <div className="relative flex h-[68px] w-full items-center justify-center sm:h-[80px]">
+    <div className="flex min-h-[142px] items-center justify-center px-2 py-2 sm:min-h-[156px] sm:px-3">
+      <div className="relative flex h-[86px] w-full items-center justify-center sm:h-[98px]">
         <Image
           src={src}
           alt={alt}
@@ -44,14 +44,14 @@ function AwardBanner({
 
 function ProductHuntBadge({ top, brand, mark }: { top: string; brand: string; mark: string }) {
   return (
-    <div className="flex min-h-[116px] items-center justify-center px-2 py-2 sm:min-h-[128px] sm:px-3">
-      <div className="flex h-[68px] w-full items-center justify-center gap-3 rounded-[22px] border border-white/55 bg-white/42 px-5 shadow-[0_18px_50px_rgba(0,67,101,0.08)] backdrop-blur-md sm:h-[80px]">
-        <span className="flex size-11 shrink-0 items-center justify-center rounded-full bg-[#da552f] font-display text-[24px] font-bold leading-none text-white sm:size-12 sm:text-[26px]">
+    <div className="flex min-h-[142px] items-center justify-center px-2 py-2 sm:min-h-[156px] sm:px-3">
+      <div className="flex h-[86px] w-full items-center justify-center gap-4 rounded-[24px] border border-white/55 bg-white/42 px-6 shadow-[0_18px_50px_rgba(0,67,101,0.08)] backdrop-blur-md sm:h-[98px]">
+        <span className="flex size-14 shrink-0 items-center justify-center rounded-full bg-[#da552f] font-display text-[30px] font-bold leading-none text-white sm:size-[60px] sm:text-[32px]">
           {mark}
         </span>
         <span className="text-left leading-tight">
-          <span className="block text-[11px] font-medium text-muted sm:text-xs">{top}</span>
-          <span className="block font-display text-[16px] font-semibold tracking-[-0.01em] text-ink sm:text-[18px]">
+          <span className="block text-[12px] font-medium text-muted sm:text-[13px]">{top}</span>
+          <span className="block font-display text-[20px] font-semibold tracking-[-0.01em] text-ink sm:text-[22px]">
             {brand}
           </span>
         </span>
@@ -96,13 +96,13 @@ export function Badges({ t }: { t: Dictionary }) {
   const ph = t.authority.items.find((b) => b.tone === 'ph');
 
   return (
-    <div className="mt-9 grid w-full max-w-[1120px] grid-cols-1 gap-4 lg:grid-cols-3">
+    <div className="mt-9 grid w-full max-w-[1260px] grid-cols-1 gap-5 lg:grid-cols-3">
       <AwardBanner
         src="/badges/yc-rfs-hackathon-2026-transparent-v2.png"
         alt="Winner of YC RFS Hackathon 2026, presented by Transpose"
         width={2055}
         height={765}
-        sizes="(max-width: 1024px) 92vw, 360px"
+        sizes="(max-width: 1024px) 92vw, 420px"
         priority
       />
       <AwardBanner
@@ -110,7 +110,7 @@ export function Badges({ t }: { t: Dictionary }) {
         alt="NVIDIA Inception Program member badge"
         width={1221}
         height={662}
-        sizes="(max-width: 1024px) 92vw, 360px"
+        sizes="(max-width: 1024px) 92vw, 420px"
       />
       {ph ? <ProductHuntBadge top={ph.top} brand={ph.brand} mark={ph.mark} /> : <div />}
       <BrandfetchLogoStrip />
