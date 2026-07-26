@@ -54,6 +54,8 @@ docs/               # 要件・仕様・判断記録
 - **Standard**: キャプチャ＋メモリ＋検索＋Notch UI＋第1層連携（読み取り）＋Dream Cycle＋Morning Brief。Select KKキーのみで動作（BYOK不要）
 - **Pro**: ＋エージェント実行（L1/L2/L3）＋Memory API（MCP/CLI/REST）＋Composio第2層。BYOK必要
 - プラン判定はRustコア側で行う。webview側のゲーティングだけに頼らない
+- **会議ノート（§6.16 FR-MT群）はトライアル含む全プランで使える。** 使ってみて価値が分かる機能で、トライアル中に体験できなければ課金判断の材料にならない（Memory API経由の参照=FR-MT-22 のみPro）
+- ⚠️ **要解消の分岐**: `design-system/foundation-tokens` ブランチの CLAUDE.md は「Free / $0 プランあり、トライアル後は未課金ならFreeへ降格」と書かれており、本ファイル（Freeプランなし・トライアル後は全員課金）と矛盾する。オーナー判断は**Free廃止・全員課金**（2026-07-26）。マージ時に本ファイルを正とし、LP（`apps/website` の pricing）も併せて更新すること
 
 ## データモデルの原則
 
