@@ -6,4 +6,8 @@
 //! discipline at each call site.
 
 pub mod detect;
+/// Recap reads the stored interval, so it lives behind the same `db` feature as every other
+/// module that touches shogun-memory.
+#[cfg(feature = "db")]
+pub mod recap;
 pub mod statemachine;
