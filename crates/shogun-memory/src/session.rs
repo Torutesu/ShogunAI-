@@ -86,7 +86,7 @@ pub fn active(conn: &Connection) -> Result<Option<Session>, rusqlite::Error> {
     conn.query_row(
         &format!("SELECT {COLS} FROM sessions WHERE ended_at IS NULL ORDER BY started_at DESC LIMIT 1"),
         [],
-        |r| row(r),
+        row,
     )
     .map(Some)
     .or_else(|e| match e {
@@ -111,7 +111,7 @@ pub fn close(conn: &Connection, id: i64, ended_at: i64) -> Result<(), rusqlite::
 
 /// Read one session by id, open or closed.
 pub fn get(conn: &Connection, id: i64) -> Result<Option<Session>, rusqlite::Error> {
-    conn.query_row(&format!("SELECT {COLS} FROM sessions WHERE id = ?1"), [id], |r| row(r))
+    conn.query_row(&format!("SELECT {COLS} FROM sessions WHERE id = ?1"), [id], row)
         .map(Some)
         .or_else(|e| match e {
             rusqlite::Error::QueryReturnedNoRows => Ok(None),

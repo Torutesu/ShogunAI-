@@ -47,6 +47,7 @@ pub mod composio_send;
 /// Concrete HTTPS clients for first-layer connectors (the allowlisted egress, FR-TR-03).
 #[cfg(feature = "net")]
 pub mod mcp_http;
+pub mod meeting;
 pub mod metrics;
 pub mod notch;
 /// Post-approval L3 send execution + mandatory traceability (needs the approval types from
