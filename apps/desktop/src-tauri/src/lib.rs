@@ -15,6 +15,7 @@ mod display;
 mod dream;
 mod exclusions;
 mod fullui;
+mod metrics;
 mod geometry;
 mod hover;
 mod inline_source;
@@ -295,6 +296,8 @@ fn setup_macos(app: &tauri::App) {
         rx,
     );
     app.manage(shared);
+    // Live SLO/grounding samples for the Full UI health pane (in-memory, this run only).
+    app.manage(metrics::SloRegister::default());
 
     // ⌘⇧Space: open the panel directly (statemachine §3.3 Hotkey→Expanded) without depending on
     // hover. Registered here so a flaky CGEventTap can't leave the panel unreachable.

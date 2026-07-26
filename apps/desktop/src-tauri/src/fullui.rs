@@ -274,6 +274,7 @@ pub mod mac {
     pub fn full_ui_view(db: tauri::State<'_, Db>, app: tauri::AppHandle) -> Result<FullUiView, String> {
         use tauri::Manager;
         let now = db.now_ms();
+        let metrics = app.state::<crate::metrics::SloRegister>();
         let connectors = app.try_state::<crate::connectors::mac::ConnectorState>();
         let approvals = app.try_state::<crate::approvals::mac::ApprovalQueueState>();
 
@@ -283,7 +284,7 @@ pub mod mac {
             // shows everything without claiming the user has paid for it.
             plan: "trial",
             today: today(&db, now),
-            health: health(&db),
+            health: health(&db, &metrics, now),
             sources: sources(connectors.as_ref(), &app, now)?,
             memory: memory(&db),
             activity: activity(&db, approvals.as_ref())?,
@@ -321,12 +322,52 @@ pub mod mac {
         }
     }
 
-    fn health(db: &Db) -> HealthView {
+    /// Health over the last 24 hours. Every card here is computed from something the core
+    /// actually recorded; a metric without a source stays absent (see the module header).
+    fn health(db: &Db, metrics: &crate::metrics::SloRegister, now: i64) -> HealthView {
+        const DAY_MS: i64 = 24 * 60 * 60 * 1000;
+        let since = now - DAY_MS;
         let mut cards = Vec::new();
 
-        // Egress is the one health number with a real source today: the nightly cycle records
-        // exactly how many chunks it sent.
+        // Coverage — hours with any capture, not hours of wall time. An idle afternoon should
+        // read as a gap rather than being averaged away by a busy morning.
+        let hours = db.hours_covered(since, now);
+        cards.push(HealthCard {
+            key: "coverage",
+            label: "Coverage",
+            value: format!("{hours}h / 24h captured"),
+            detail: (hours < 24).then(|| {
+                format!("{} hour(s) with nothing recorded.", 24 - hours)
+            }),
+            fix: Some(FixLink { label: "Open capture rules".to_string(), target: "settings" }),
+        });
+
+        // Yield — the funnel from raw events to what is actually being tracked. `state_changes`
+        // is the nightly cycle's own count of what it promoted; `tracked` is what survives now.
         let d = crate::dream::mac::status_view(db);
+        let events = db.events_count(since, now);
+        let tracked = db.commitment_rows().iter().filter(|c| c.status != "done" && c.status != "cancelled").count()
+            + db.open_loop_rows().len();
+        cards.push(HealthCard {
+            key: "yield",
+            label: "Yield",
+            value: format!("{events} → {} → {tracked} tracked", d.state_changes),
+            detail: Some("events → candidates → tracked, over 24h".to_string()),
+            fix: Some(FixLink { label: "Nightly review".to_string(), target: "activity" }),
+        });
+
+        // Grounding — the share of answers that cited a source. Absent until an answer exists,
+        // because a rate over zero answers is undefined rather than 0%.
+        if let Some(pct) = metrics.grounding_pct() {
+            cards.push(HealthCard {
+                key: "grounding",
+                label: "Grounding",
+                value: format!("{pct}% of answers cited a source"),
+                detail: Some("This run.".to_string()),
+                fix: Some(FixLink { label: "Widen the search window".to_string(), target: "settings" }),
+            });
+        }
+
         cards.push(HealthCard {
             key: "egress",
             label: "Egress",
@@ -341,10 +382,19 @@ pub mod mac {
 
         HealthView {
             cards,
-            // Needs the nightly classifier's own tallies; not exposed yet.
+            // Needs the nightly classifier's own confidence tallies; not exposed yet.
             mix: None,
-            // WP1.4.
-            slo: Vec::new(),
+            slo: metrics
+                .rows()
+                .into_iter()
+                .map(|r| SloRow {
+                    name: r.name,
+                    p50: r.p50,
+                    p95: r.p95,
+                    target: r.target,
+                    within_target: r.within_target,
+                })
+                .collect(),
         }
     }
 

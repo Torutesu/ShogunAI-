@@ -683,10 +683,26 @@ pub mod mac {
     pub async fn shogun_chat(
         message: String,
         db: tauri::State<'_, Db>,
+        app: tauri::AppHandle,
     ) -> Result<ChatAnswer, String> {
+        use tauri::Manager;
         let db = db.inner().clone();
-        tokio::task::spawn_blocking(move || chat_blocking(&db, &message))
+        let started = std::time::Instant::now();
+        let answered = tokio::task::spawn_blocking(move || chat_blocking(&db, &message))
             .await
-            .map_err(|e| e.to_string())?
+            .map_err(|e| e.to_string())?;
+
+        // Grounding (spec §D2) is the share of answers that cited a source, so it can only be
+        // counted where answers are produced. Failures aren't counted at all: an answer that never
+        // arrived is not an ungrounded one, and folding errors in would quietly depress the rate.
+        if let Ok(a) = &answered {
+            let m = app.state::<crate::metrics::SloRegister>();
+            m.record_answer(!a.citations.is_empty());
+            // Not first-token latency yet — this path is non-streaming, so it measures the whole
+            // answer. Recorded against the same SLO row because it is strictly worse than the
+            // number the SLO asks for: if this passes, first-token would too.
+            m.record_first_token_ms(started.elapsed().as_secs_f64() * 1000.0);
+        }
+        answered
     }
 }

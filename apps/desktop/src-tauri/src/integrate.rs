@@ -644,6 +644,7 @@ pub mod mac {
             *g = Some(payload.clone());
         }
         let _ = app.emit("context", payload);
+        app.state::<crate::metrics::SloRegister>().record_cache_update_ms(latency_ms);
         shared.recorder.record(Body::CacheUpdate(CacheUpdate::from_text(
             latency_ms,
             trigger,
@@ -676,7 +677,7 @@ pub mod mac {
     /// (Idle→Hover) — the visible panel appearance the Phase 0 p95 refers to. The dedicated
     /// full-expand (SLO-01) and preview vs expand split are WP1.4.
     #[tauri::command]
-    pub fn painted(state: String, t1_perf_ms: f64, shared: tauri::State<'_, Arc<Shared>>) {
+    pub fn painted(state: String, t1_perf_ms: f64, shared: tauri::State<'_, Arc<Shared>>, app: AppHandle) {
         eprintln!("[spike] cmd painted state={state} t1={t1_perf_ms:.1}");
         if state != "hover" {
             return;
@@ -712,6 +713,9 @@ pub mod mac {
             eprintln!("[spike] dropping implausible expand latency {latency_ms:.0}ms (orphaned pair)");
             return;
         }
+        // Same sample, kept in memory for the Full UI's health pane. The recorder above drains to
+        // JSONL for offline analysis; the register summarises while the app runs.
+        tauri::Manager::state::<crate::metrics::SloRegister>(&app).record_expand_ms(latency_ms);
         shared.recorder.record(Body::ExpandLatency(ExpandLatency {
             latency_ms,
             // Perceived total and enter-offset need the R_enter entry timestamp —

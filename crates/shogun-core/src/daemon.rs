@@ -712,6 +712,26 @@ impl Db {
 
     /// Descriptions already present in `commitments` + `open_loops`, for consolidation dedup — so a
     /// re-run over the same range (crash-resume, FR-DC-04) doesn't add the same candidate twice.
+    /// Distinct hours in `[from_ts, to_ts)` that produced at least one event — the Coverage
+    /// numerator (spec §D2). Zero on a read failure so a locked DB degrades to "nothing seen"
+    /// rather than taking the window down.
+    pub fn hours_covered(&self, from_ts: i64, to_ts: i64) -> i64 {
+        self.conn
+            .lock()
+            .ok()
+            .and_then(|c| event_log::hours_covered(&c, from_ts, to_ts).ok())
+            .unwrap_or(0)
+    }
+
+    /// Events recorded in `[from_ts, to_ts)` — the first number in the Yield funnel.
+    pub fn events_count(&self, from_ts: i64, to_ts: i64) -> i64 {
+        self.conn
+            .lock()
+            .ok()
+            .and_then(|c| event_log::count_in_range(&c, from_ts, to_ts).ok())
+            .unwrap_or(0)
+    }
+
     pub fn existing_state_descriptions(&self) -> std::collections::HashSet<String> {
         let mut set = std::collections::HashSet::new();
         if let Ok(c) = self.conn.lock() {
