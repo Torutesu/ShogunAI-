@@ -15,7 +15,7 @@
   - `generateCss(tokens)` — product 用。`:root`（static + dark）/ `:root[data-appearance="dark"|"light"]` / `@media (prefers-color-scheme: light) :root[data-appearance="auto"]`。
   - `generateWebCss(tokens)` — website 用。`:root`（light 基準）/ `:root[data-theme='dark']` / `@media (prefers-color-scheme: dark) :root:not([data-theme='light'])`。
   - `generateTs(tokens)` — 型付き定数 `tokens` と `TokenName`。
-  - `main()` — 検証 → `dist/tokens.css` / `dist/tokens.web.css` / `dist/tokens.ts` を出力。検証失敗で `process.exit(1)`。
+  - `main()` — 検証 → `dist/tokens.css` / `dist/tokens.ts` / `dist/tokens.web.css` を出力。検証失敗で `process.exit(1)`。
 - **配布**: `package.json` の `exports` — `./css`（product CSS）/ `./web.css`（website CSS）/ `./ts`（型）/ `./tokens.json`（正本）。
 - **ビルド**: `dist/` は gitignore。turbo が生成（`build` の `outputs: dist/**`、`dev` は `dependsOn: ["^build"]` で消費側 dev の前に生成）。テスト: `pnpm --filter @shogun-ai/tokens test`（`node --test`）。
 
