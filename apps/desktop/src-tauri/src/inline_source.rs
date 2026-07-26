@@ -242,6 +242,25 @@ pub mod mac {
         Some(el)
     }
 
+    /// Did the field actually change? Re-reads `AXValue` a few times before giving up.
+    ///
+    /// Some apps apply an AX write on their next run-loop turn, so a single immediate read would
+    /// call a working insert a failure. A few short retries cost nothing on the success path (the
+    /// first read almost always wins) and are the difference between a false negative and a true
+    /// one. A field with no readable value cannot be verified either way — treated as landed, so
+    /// this check can only ever downgrade a claim we could disprove, never invent a failure.
+    unsafe fn value_changed(el: AXUIElementRef, before: Option<&str>) -> bool {
+        let Some(before) = before else { return true };
+        for _ in 0..4 {
+            match unsafe { copy_string(el, kAXValueAttribute) } {
+                Some(now) if now != before => return true,
+                None => return true,
+                _ => std::thread::sleep(std::time::Duration::from_millis(30)),
+            }
+        }
+        false
+    }
+
     /// Reads the focused field's text (AX). v1 treats the whole value as the text *before* the caret
     /// (drafting at the end of a field is the common case); precise caret splitting via
     /// `kAXSelectedTextRangeAttribute` is a device refinement. Never a screenshot (invariant 2).
@@ -265,22 +284,37 @@ pub mod mac {
 
     /// Writes text at the caret by setting `AXSelectedText` on the focused element — inserts at the
     /// insertion point (or replaces the selection), exactly like a paste. Device-local (invariant 4).
+    ///
+    /// The write is VERIFIED by reading the field back. `AXUIElementSetAttributeValue` returning
+    /// `kAXErrorSuccess` only means the message was accepted, not that the app applied it: plenty
+    /// of apps (web views in particular) return success and ignore the write. Trusting the return
+    /// code made the product claim "Drafted" while nothing appeared in the document — a success
+    /// report the app had no evidence for.
     pub struct AxTextInserter;
 
     impl TextInserter for AxTextInserter {
         fn insert(&self, text: &str) -> Result<(), String> {
             let el = unsafe { focused_element() }.ok_or_else(|| "no focused field".to_string())?;
+            let before = unsafe { copy_string(el, kAXValueAttribute) };
             let cf_attr = CFString::new(kAXSelectedTextAttribute);
             let cf_text = CFString::new(text);
             // SAFETY: el is a live element; attr + value are valid CFStrings.
             let err = unsafe {
                 AXUIElementSetAttributeValue(el, cf_attr.as_concrete_TypeRef(), cf_text.as_concrete_TypeRef() as CFTypeRef)
             };
+            if err != kAXErrorSuccess {
+                unsafe { CFRelease(el as CFTypeRef) };
+                return Err(format!("AX set selected text failed: {err}"));
+            }
+            let landed = unsafe { value_changed(el, before.as_deref()) };
             unsafe { CFRelease(el as CFTypeRef) };
-            if err == kAXErrorSuccess {
+            if landed {
                 Ok(())
             } else {
-                Err(format!("AX set selected text failed: {err}"))
+                // The bundle id, never the text: which app refuses AX writes is the fact that
+                // makes this fixable, and it is the first thing to know next time.
+                let app = crate::display::frontmost_app().map(|f| f.bundle_id).unwrap_or_default();
+                Err(format!("{app} accepted the write but the field did not change"))
             }
         }
     }
