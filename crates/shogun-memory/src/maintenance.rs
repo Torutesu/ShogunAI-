@@ -67,6 +67,7 @@ pub struct DeleteReport {
     pub open_loops: usize,
     pub threads: usize,
     pub sessions: usize,
+    pub session_notes: usize,
     pub traceability: usize,
 }
 
@@ -89,6 +90,9 @@ pub fn delete_all(conn: &mut Connection) -> Result<DeleteReport, rusqlite::Error
     tx.execute("DELETE FROM event_vec", [])?;
     tx.execute("DELETE FROM cold_embeddings", [])?;
     let events = tx.execute("DELETE FROM event_log", [])?;
+    // Meeting notes are the user's own words — the most personal rows here — and they reference
+    // sessions, so they go before them (FR-MT-10).
+    let session_notes = tx.execute("DELETE FROM session_notes", [])?;
     // Sessions hold the meeting's title, summary and decisions — user data, and referenced by
     // event_log, so they go after it (FR-SET-07, FR-MT-05).
     let sessions = tx.execute("DELETE FROM sessions", [])?;
@@ -104,6 +108,7 @@ pub fn delete_all(conn: &mut Connection) -> Result<DeleteReport, rusqlite::Error
         open_loops,
         threads,
         sessions,
+        session_notes,
         traceability,
     })
 }
@@ -213,6 +218,34 @@ mod tests {
         let n: i64 =
             conn.query_row("SELECT count(*) FROM sessions", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 0, "sessions must not survive delete_all");
+    }
+
+    #[test]
+    fn delete_all_wipes_the_notes_the_user_typed_in_meetings() {
+        // A meeting note is the user writing in their own words — the most personal row in the
+        // database. It must not survive "delete everything", and because it references sessions,
+        // forgetting it also breaks the delete outright under foreign_keys=ON (FR-SET-07).
+        let mut conn = crate::open_in_memory().unwrap();
+        let id = crate::session::open(
+            &conn,
+            &crate::session::NewSession {
+                kind: "meeting",
+                started_at: 1_000,
+                title: Some("1:1"),
+                app_bundle_id: Some("us.zoom.xos"),
+                calendar_occurrence_id: None,
+                confidence: 0.6,
+                provenance: "{}",
+            },
+        )
+        .unwrap();
+        crate::session_notes::save(&conn, id, "salary conversation", 1_200).unwrap();
+
+        delete_all(&mut conn).unwrap();
+
+        let n: i64 =
+            conn.query_row("SELECT count(*) FROM session_notes", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 0, "meeting notes must not survive delete_all");
     }
 
     #[test]

@@ -115,9 +115,115 @@ pub fn decide(signals: &Signals) -> Decision {
     }
 }
 
+/// What the adapter observes about a meeting that is already running.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LiveSignals {
+    /// The meeting app is still frontmost or still running with its window present.
+    pub meeting_app_present: bool,
+    /// End of the linked calendar occurrence (epoch ms), when there is one.
+    pub occurrence_ends_at: Option<i64>,
+    /// When audio was last heard above the silence floor (epoch ms).
+    pub last_sound_at: i64,
+}
+
+/// FR-MT-11: how long past an occurrence's end a meeting is allowed to run on.
+pub const OCCURRENCE_GRACE_MS: i64 = 10 * 60 * 1_000;
+/// FR-MT-11: silence that ends a meeting.
+pub const SILENCE_LIMIT_MS: i64 = 15 * 60 * 1_000;
+
+/// Whether a running meeting should end, and why (FR-MT-11).
+///
+/// This exists so that "it kept recording for six hours because I forgot" cannot happen: the
+/// meeting ends on its own from three independent directions, and none of them requires the user
+/// to remember anything.
+pub fn end_condition(s: &LiveSignals, now: i64) -> Option<super::statemachine::EndReason> {
+    use super::statemachine::EndReason;
+
+    // Ordered by how directly each one says "the meeting is over". The app being gone is an
+    // observation; silence and an expired slot are inferences from absence, and a meeting the
+    // user quit should not be recorded as having died of silence.
+    if !s.meeting_app_present {
+        return Some(EndReason::AppGone);
+    }
+    if let Some(ends_at) = s.occurrence_ends_at {
+        if now - ends_at > OCCURRENCE_GRACE_MS {
+            return Some(EndReason::OccurrenceOver);
+        }
+    }
+    if now - s.last_sound_at > SILENCE_LIMIT_MS {
+        return Some(EndReason::Silence);
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::meeting::statemachine::EndReason;
+
+    fn live(now: i64) -> LiveSignals {
+        LiveSignals { meeting_app_present: true, occurrence_ends_at: None, last_sound_at: now }
+    }
+
+    #[test]
+    fn a_meeting_in_progress_keeps_running() {
+        let now = 1_000_000;
+        assert_eq!(end_condition(&live(now), now), None);
+    }
+
+    #[test]
+    fn the_meeting_app_disappearing_ends_the_meeting() {
+        let now = 1_000_000;
+        let s = LiveSignals { meeting_app_present: false, ..live(now) };
+        assert_eq!(end_condition(&s, now), Some(EndReason::AppGone));
+    }
+
+    #[test]
+    fn silence_past_the_limit_ends_the_meeting() {
+        let now = 1_000_000;
+        let s = LiveSignals { last_sound_at: now - SILENCE_LIMIT_MS - 1, ..live(now) };
+        assert_eq!(end_condition(&s, now), Some(EndReason::Silence));
+    }
+
+    #[test]
+    fn a_quiet_stretch_short_of_the_limit_does_not_end_the_meeting() {
+        // Someone listening to a long presentation is not a meeting that has finished.
+        let now = 1_000_000;
+        let s = LiveSignals { last_sound_at: now - SILENCE_LIMIT_MS + 1, ..live(now) };
+        assert_eq!(end_condition(&s, now), None);
+    }
+
+    #[test]
+    fn a_meeting_running_well_past_its_slot_ends() {
+        let now = 1_000_000;
+        let s = LiveSignals {
+            occurrence_ends_at: Some(now - OCCURRENCE_GRACE_MS - 1),
+            ..live(now)
+        };
+        assert_eq!(end_condition(&s, now), Some(EndReason::OccurrenceOver));
+    }
+
+    #[test]
+    fn a_meeting_that_merely_runs_over_is_left_alone() {
+        // Meetings overrun. Cutting the notes off at the scheduled end would lose exactly the
+        // part people stay behind for, so the grace is generous (10 minutes).
+        let now = 1_000_000;
+        let s = LiveSignals { occurrence_ends_at: Some(now - 60_000), ..live(now) };
+        assert_eq!(end_condition(&s, now), None);
+    }
+
+    #[test]
+    fn the_app_going_away_wins_over_a_slower_condition() {
+        // Both true at once: report the one that actually happened first, so Recap and the health
+        // metrics do not learn "silence" for a meeting the user simply quit.
+        let now = 1_000_000;
+        let s = LiveSignals {
+            meeting_app_present: false,
+            last_sound_at: now - SILENCE_LIMIT_MS - 1,
+            occurrence_ends_at: Some(now - OCCURRENCE_GRACE_MS - 1),
+        };
+        assert_eq!(end_condition(&s, now), Some(EndReason::AppGone));
+    }
 
     fn confidence_of(d: &Decision) -> f64 {
         match d {
