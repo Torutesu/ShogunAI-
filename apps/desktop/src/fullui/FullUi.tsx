@@ -88,6 +88,11 @@ export function FullUi({ view }: { view: FullUiView }): JSX.Element {
   );
 }
 
+/** Says what would be here and what produces it. A blank card reads as a broken screen. */
+function Empty({ children }: { children: string }): JSX.Element {
+  return <div className="fempty">{children}</div>;
+}
+
 function planLabel(plan: FullUiView["plan"]): string {
   return plan === "trial" ? tf.planTrial : tf.planStandard;
 }
@@ -96,6 +101,9 @@ function planLabel(plan: FullUiView["plan"]): string {
 // The pane the spec calls the point of the product: every number carries a way to fix it.
 
 function Health({ v }: { v: HealthView }): JSX.Element {
+  if (v.cards.length === 0 && !v.mix && v.slo.length === 0) {
+    return <div className="fcard"><Empty>{tf.emptyHealth}</Empty></div>;
+  }
   return (
     <div className="hgrid">
       {v.cards.map((c) => (
@@ -181,6 +189,12 @@ function Today({ v }: { v: TodayView }): JSX.Element {
             ))}
           </div>
         ))}
+        {v.actions.length === 0 && !v.never_run && (
+          <div className="brief__sec">
+            <div className="brief__h">{tf.suggested}</div>
+            <Empty>{tf.emptyBriefActions}</Empty>
+          </div>
+        )}
         {v.actions.length > 0 && (
           <div className="brief__sec">
             <div className="brief__h">{tf.suggested}</div>
@@ -210,6 +224,7 @@ function Today({ v }: { v: TodayView }): JSX.Element {
 
       <div className="fcard">
         <div className="fcard__label">{tf.schedule}</div>
+        {v.schedule.length === 0 && <Empty>{tf.emptySchedule}</Empty>}
         {v.schedule.map((s) => (
           <div className="frow" key={s.id}>
             <div className="frow__lead">
@@ -238,6 +253,7 @@ function Sources({ v }: { v: SourcesView }): JSX.Element {
       <div className="fcard">
         <div className="fcard__label">{tf.connectedServices}</div>
         <div className="fcard__sub">{tf.sourcesHint}</div>
+        {v.sources.length === 0 && <Empty>{tf.emptySources}</Empty>}
         {v.sources.map((s) => (
           <div className="frow" key={s.id}>
             <div className="frow__lead">
@@ -288,6 +304,7 @@ function Memory({ v }: { v: MemoryView }): JSX.Element {
       <div className="fcard">
         <div className="fcard__label">{tf.commitments}</div>
         <div className="fcard__sub">{tf.commitmentsHint}</div>
+        {v.commitments.length === 0 && <Empty>{tf.emptyCommitments}</Empty>}
         {v.commitments.map((r) => (
           <div className="frow" key={r.id}>
             <div className="frow__lead" style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
@@ -345,6 +362,12 @@ function confLabel(c: Confidence): string {
 function Activity({ v }: { v: ActivityView }): JSX.Element {
   return (
     <>
+      {v.pending.length === 0 && (
+        <div className="fcard">
+          <div className="fcard__label">{tf.waitingForYou}</div>
+          <Empty>{tf.emptyPending}</Empty>
+        </div>
+      )}
       {v.pending.map((p) => (
         <div className="fcard" key={p.id}>
           <div className="fcard__label">{tf.waitingForYou}</div>
@@ -441,6 +464,7 @@ function Trace({ v }: { v: TraceView }): JSX.Element {
         <span className="c-grow">{tf.colDigest}</span>
         <span className="c-end">{tf.colBytes}</span>
       </div>
+      {v.rows.length === 0 && <Empty>{tf.emptyTrace}</Empty>}
       {v.rows.map((r) => (
         <div className={`trow${r.route === "third_party" ? " trow--flag" : ""}`} key={r.id}>
           <span className="c-time">{r.time}</span>

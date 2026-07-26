@@ -20,6 +20,13 @@ export const STRINGS = {
     // composer
     ask: "Ask ShogunAI…",
     draftTitle: "Draft where you're typing (tap ⌥)",
+    // ⌥-tap feedback. Every one of these used to look the same from the outside — nothing —
+    // which made a rejected key and a broken shortcut indistinguishable.
+    inlineDrafting: "Drafting…",
+    inlineInserted: "Drafted",
+    inlineNoField: "No editable field here",
+    inlineKeyRejected: "Key rejected — check it in settings",
+    inlineFailed: "Couldn't draft",
     // settings
     settings: "Settings",
     // Earlier conversations. Kept out of the way by default: the panel is for asking something
@@ -85,7 +92,7 @@ export const STRINGS = {
     needModifier: "Include a modifier (⌃ ⌥ ⇧ ⌘).",
     shortcutHint: "Click a shortcut to change it. Saved instantly, works everywhere.",
     model: "Model",
-    modelPlaceholder: "Model id (blank = default)",
+    modelFor: "Runs on",
     modelHint: "Chat and ⌥-tap drafts run on this provider with your own key. Each provider keeps its own key below.",
     key: "Your key",
     keyPresent: "Connected — answers and drafts are yours.",
@@ -154,7 +161,7 @@ export const FULL_UI = {
     traceSub: "Every byte that left this device — digest and size only, never content.",
     // health
     confidenceMix: "Confidence mix",
-    slo: "SLO",
+    slo: "Latency & CPU",
     high: "High",
     medium: "Medium",
     low: "Low",
@@ -205,6 +212,16 @@ export const FULL_UI = {
     colAction: "Action",
     colApproved: "Approved by",
     colLeft: "Left device",
+    // Empty states. Each says what would be here and what produces it — a blank card reads as a
+    // broken screen, and "No data" tells the user nothing they can act on.
+    emptySources: "No services connected yet. Connect one and its context starts feeding the panel — read-only, and only what you allow.",
+    emptyCommitments: "Nothing extracted yet. Commitments appear here once the nightly review has worked through a day of captured context.",
+    emptyMerge: "No name collisions to resolve.",
+    emptyPending: "Nothing waiting. Anything that would leave your device queues here first.",
+    emptyTrace: "Nothing has left this device.",
+    emptyBriefActions: "No suggestions yet — they come from the brief once it has run.",
+    emptySchedule: "No calendar connected, so there's nothing scheduled to show.",
+    emptyHealth: "Nothing measured yet. These fill in as capture runs and the nightly review completes.",
     // traceability
     everythingLeft: "Everything that left this device",
     traceHint: "Content is never logged — only a digest and a byte count, so this page can't leak what it records.",

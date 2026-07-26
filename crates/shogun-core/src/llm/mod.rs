@@ -131,6 +131,32 @@ pub trait AgentClient: Send + Sync {
     fn complete(&self, prompt: &str) -> Result<String, LlmError>;
 }
 
+/// Strip anything credential-shaped out of text that is about to be shown or logged.
+///
+/// Provider errors are echoed back to the user, and several APIs quote the offending credential in
+/// the message ("invalid api key: sk-…"). Passing that through would defeat invariant 7 no matter
+/// how careful the call sites are, so redaction happens here — at the boundary every error crosses
+/// — rather than being remembered at each one.
+///
+/// Deliberately eager: a redacted error costs a debugging detail, a leaked key costs the key.
+pub fn redact_secrets(text: &str) -> String {
+    text.split_whitespace()
+        .map(|word| {
+            let core = word.trim_matches(|c: char| !c.is_ascii_alphanumeric());
+            if core.len() >= 24 && core.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.') {
+                return "<redacted>".to_string();
+            }
+            for prefix in ["sk-", "sk_", "AIza", "AQ.", "Bearer", "ghp_", "xoxb-"] {
+                if core.starts_with(prefix) {
+                    return "<redacted>".to_string();
+                }
+            }
+            word.to_string()
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// LLM errors.
 #[derive(Debug, thiserror::Error)]
 pub enum LlmError {
@@ -249,4 +275,37 @@ mod tests {
     // must NOT compile:
     //     MockBatchClient::new(ByokKey::new(Secret::new("x")), "l");
     //     MockAgentClient::new(SelectKkKey::new(Secret::new("x")));
+}
+
+#[cfg(test)]
+mod redaction_tests {
+    use super::redact_secrets;
+
+    #[test]
+    fn credential_shaped_words_are_removed() {
+        // The SHAPE that leaked — a key pasted where a model id belonged, echoed back by the
+        // provider inside its error message. Synthetic on purpose: a test fixture is committed
+        // history, so it must never carry a real credential (the first draft of this test did,
+        // and GitHub's push protection correctly rejected it).
+        let fake = format!("AQ.{}", "x".repeat(48));
+        let msg = format!("invalid model: {fake}");
+        let out = redact_secrets(&msg);
+        assert!(!out.contains(&fake), "key survived redaction: {out}");
+        assert!(out.contains("invalid model"), "the useful part was lost: {out}");
+    }
+
+    #[test]
+    fn known_prefixes_go_even_when_short() {
+        for k in ["sk-abc123", "AIzaSyShort", "ghp_tokenish"] {
+            let out = redact_secrets(&format!("rejected {k} sorry"));
+            assert!(!out.contains(k), "{k} survived: {out}");
+        }
+    }
+
+    #[test]
+    fn ordinary_error_text_is_left_alone() {
+        // Redaction that eats the message helps nobody debug.
+        let msg = "model gemini-2.5-flash is not available in your region";
+        assert_eq!(redact_secrets(msg), msg);
+    }
 }

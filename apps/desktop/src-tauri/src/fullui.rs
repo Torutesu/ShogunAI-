@@ -438,10 +438,38 @@ pub mod mac {
             })
             .collect();
 
+        // What SHOGUN refuses to read. Sourced from the live policy rather than restated here —
+        // a screen claiming "password managers are excluded" while the policy disagreed would be
+        // worse than saying nothing at all.
+        let mut exclusions: Vec<ExclusionRow> = shogun_core::capture::exclusion::default_categories()
+            .into_iter()
+            .map(|(title, n)| ExclusionRow {
+                id: title.to_string(),
+                title: title.to_string(),
+                detail: format!("{n} always excluded — this can't be turned off."),
+                locked: true,
+                enabled: true,
+            })
+            .collect();
+        // Anything the user layered on top of the defaults.
+        if let Some(policy) = crate::exclusions::mac::shared() {
+            if let Ok(p) = policy.lock() {
+                let extra = p.user_apps().len();
+                if extra > 0 {
+                    exclusions.push(ExclusionRow {
+                        id: "user".to_string(),
+                        title: "Your own exclusions".to_string(),
+                        detail: format!("{extra} app(s) from exclusions.json."),
+                        locked: false,
+                        enabled: true,
+                    });
+                }
+            }
+        }
+
         Ok(SourcesView {
             sources,
-            // Exclusion rules live in the capture layer; not readable from here yet.
-            exclusions: Vec::new(),
+            exclusions,
             ai_sessions_on: crate::ai_sessions::mac::get_ai_session_import(app.clone()),
         })
     }

@@ -1355,7 +1355,7 @@ fn watch_option_tap(app: &tauri::App) {
                         let warm = handle
                             .try_state::<shogun_core::daemon::ReplyContextCache>()
                             .and_then(|c| c.current());
-                        inline_source::mac::run_inline_at_cursor(db.inner().clone(), warm);
+                        inline_source::mac::run_inline_at_cursor(db.inner().clone(), warm, handle.clone());
                     }
                 }
             }

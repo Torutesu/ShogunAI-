@@ -97,7 +97,7 @@ pub fn parse_chat_response(body: &str) -> Result<String, LlmError> {
     // Some providers put an application-level error object in a 200 body — surface it.
     if let Some(err) = v.get("error") {
         let msg = err.get("message").and_then(Value::as_str).unwrap_or("unknown provider error");
-        return Err(LlmError::Provider(msg.to_string()));
+        return Err(LlmError::Provider(crate::llm::redact_secrets(msg)));
     }
     v.get("choices")
         .and_then(Value::as_array)

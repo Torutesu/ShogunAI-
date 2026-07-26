@@ -58,6 +58,37 @@ pub mod mac {
     }
 
     /// The provider's default model when the user hasn't set one.
+    /// A model name that is safe to log.
+    ///
+    /// The model field used to be free text, and a user who pasted their API key into it had that
+    /// key written to the log in plaintext — a direct breach of invariant 7 (secrets never reach a
+    /// file, DB or log). The field is a picker now, but the log must not depend on the UI being
+    /// the only writer: anything that doesn't look like one of our model ids is redacted rather
+    /// than printed.
+    fn loggable_model(model: &str) -> String {
+        let known = PROVIDERS.iter().any(|p| default_model(p) == model);
+        let plausible = model.len() <= 48
+            && model
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '/' | ':' | '_'));
+        if known || plausible && !looks_like_secret(model) {
+            model.to_string()
+        } else {
+            "<redacted>".to_string()
+        }
+    }
+
+    /// Heuristics for "this is a credential, not a model id". Deliberately eager: a redacted model
+    /// name costs a debugging detail, a logged key costs the key.
+    fn looks_like_secret(v: &str) -> bool {
+        let v = v.trim();
+        v.len() >= 32
+            || v.starts_with("sk-")
+            || v.starts_with("AQ.")
+            || v.starts_with("AIza")
+            || v.starts_with("sk_")
+    }
+
     fn default_model(provider: &str) -> &'static str {
         match provider {
             "openrouter" => "anthropic/claude-sonnet-4.5",
@@ -119,7 +150,7 @@ pub mod mac {
                 }
             }
         }
-        eprintln!("[inline] agent provider = {} model = {}", s.provider, effective_model(&s));
+        eprintln!("[inline] agent provider = {} model = {}", s.provider, loggable_model(&effective_model(&s)));
         if let Ok(mut g) = LLM_SETTINGS.lock() {
             *g = Some(s);
         }
@@ -163,7 +194,7 @@ pub mod mac {
                 Err(e) => return Err(e.to_string()),
             }
         }
-        eprintln!("[inline] agent provider → {} model → {}", s.provider, effective_model(&s));
+        eprintln!("[inline] agent provider → {} model → {}", s.provider, loggable_model(&effective_model(&s)));
         if let Ok(mut g) = LLM_SETTINGS.lock() {
             *g = Some(s);
         }
@@ -356,7 +387,7 @@ pub mod mac {
         match (ReqwestTransport::new(), tokio::runtime::Builder::new_current_thread().enable_all().build()) {
             (Ok(transport), Ok(rt)) => {
                 let byok = ByokKey::new(Secret::new(key));
-                eprintln!("[inline] live Agent lane — provider {} model {model}", s.provider);
+                eprintln!("[inline] live Agent lane — provider {} model {}", s.provider, loggable_model(&model));
                 match s.provider.as_str() {
                     "openrouter" | "openai" | "gemini" => {
                         let base = match s.provider.as_str() {
@@ -405,7 +436,32 @@ pub mod mac {
     /// `warm` is the pack the focus path built ahead of the press (the 150ms budget forbids
     /// collecting it here). When there is none — a thread not yet warmed — this falls back to the
     /// plain state facts rather than building inline, so a miss costs context, never latency.
-    pub fn run_inline_at_cursor(db: Db, warm: Option<shogun_core::daemon::ReplyContext>) {
+    /// What the notch shows while and after a ⌥-tap. Pushed to the webview so the keystroke is
+    /// acknowledged: without this every outcome — drafting, inserted, no field, rejected key —
+    /// looks identical from the outside, which is to say it looks like the shortcut is broken.
+    #[derive(Clone, serde::Serialize)]
+    pub struct InlineStatus {
+        /// `drafting` | `inserted` | `no_context` | `key_rejected` | `failed`
+        pub phase: &'static str,
+        /// Chars written at the caret, for `inserted`.
+        pub chars: usize,
+        /// A short reason for `failed`; never the generated text or the user's content.
+        pub detail: Option<String>,
+    }
+
+    fn push_inline(app: &tauri::AppHandle, status: InlineStatus) {
+        use tauri::Emitter;
+        let _ = app.emit("inline", status);
+    }
+
+    pub fn run_inline_at_cursor(
+        db: Db,
+        warm: Option<shogun_core::daemon::ReplyContext>,
+        app: tauri::AppHandle,
+    ) {
+        // Emitted before the thread starts so the pill reacts to the press itself, not to the
+        // generation finishing — the whole point is that the tap feels answered immediately.
+        push_inline(&app, InlineStatus { phase: "drafting", chars: 0, detail: None });
         std::thread::spawn(move || {
             let memory = match warm {
                 Some(ctx) if !ctx.is_empty() => {
@@ -421,11 +477,30 @@ pub mod mac {
             let agent = build_agent(&db);
             let outcome = compose_inline(&AxCursorReader, &agent, &AxTextInserter, &memory);
             match &outcome {
-                InlineOutcome::Inserted { chars } => eprintln!("[inline] inserted {chars} chars at the cursor"),
+                InlineOutcome::Inserted { chars } => {
+                    eprintln!("[inline] inserted {chars} chars at the cursor");
+                    push_inline(&app, InlineStatus { phase: "inserted", chars: *chars, detail: None });
+                }
                 // Nothing gets inserted on a rejected key, so without this the tap is silent and
                 // the reasonable next move is to press it again. Latch it for the status poll.
-                InlineOutcome::KeyRejected => note_key_rejected(),
-                other => eprintln!("[inline] {other:?}"),
+                InlineOutcome::KeyRejected => {
+                    note_key_rejected();
+                    push_inline(&app, InlineStatus { phase: "key_rejected", chars: 0, detail: None });
+                }
+                InlineOutcome::NoContext => {
+                    eprintln!("[inline] no editable field under the caret");
+                    push_inline(&app, InlineStatus { phase: "no_context", chars: 0, detail: None });
+                }
+                other => {
+                    eprintln!("[inline] {other:?}");
+                    // The reason, not the content: these carry provider/AX errors, never the
+                    // draft or anything the user typed.
+                    let detail = match other {
+                        InlineOutcome::GenerationFailed(e) | InlineOutcome::InsertFailed(e) => Some(e.clone()),
+                        _ => None,
+                    };
+                    push_inline(&app, InlineStatus { phase: "failed", chars: 0, detail });
+                }
             }
         });
     }
@@ -435,8 +510,9 @@ pub mod mac {
     pub fn inline_at_cursor(
         db: tauri::State<'_, Db>,
         reply: tauri::State<'_, shogun_core::daemon::ReplyContextCache>,
+        app: tauri::AppHandle,
     ) -> &'static str {
-        run_inline_at_cursor(db.inner().clone(), reply.current());
+        run_inline_at_cursor(db.inner().clone(), reply.current(), app);
         "started"
     }
 

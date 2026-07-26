@@ -57,6 +57,13 @@ interface Status {
   /// exactly like a shortcut that does not work.
   key_rejected: boolean;
 }
+/** What the notch is doing about a ⌥-tap, pushed from Rust (see inline_source::InlineStatus). */
+interface InlineStatus {
+  phase: "drafting" | "inserted" | "no_context" | "key_rejected" | "failed";
+  chars: number;
+  detail: string | null;
+}
+
 interface StateItem {
   id: number;
   text: string;
@@ -83,6 +90,9 @@ const HOVER_DWELL_MS = 250;
 /** Grace period after the pointer leaves an unpinned panel. Long enough to cross the gap to a
  *  control that overlaps it, short enough that the panel feels like it follows your attention. */
 const AUTO_COLLAPSE_MS = 400;
+/** How long the pill holds a ⌥-tap outcome before returning to the live source. Long enough to
+ *  read, short enough that it never becomes something you have to dismiss. */
+const INLINE_HOLD_MS = 2200;
 const H_SETTINGS = 460; // taller default so setting groups fit; body scrolls; clamped to screen
 const MIN_W = 460;
 const MIN_H = 240;
@@ -194,6 +204,9 @@ export function App(): JSX.Element {
   useEffect(() => saveJson("shogun.appearance", appearance), [appearance]);
   const [showState, setShowState] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  /// The ⌥-tap's own feedback. The pill shows it briefly and then returns to the live source —
+  /// this is a reply to a keystroke, not a status the user has to dismiss.
+  const [inline, setInline] = useState<InlineStatus | null>(null);
   /// Pinned = the panel stays put. Unpinned = it withdraws as soon as the pointer leaves, which is
   /// the counterpart to opening on hover: the same gesture that summons it also dismisses it, so
   /// a glance costs no clicks at all. Persisted because the panel is respawned by Rust.
@@ -292,6 +305,16 @@ export function App(): JSX.Element {
     void invoke("interact", { kind: "boot" });
     const offs: Array<Promise<() => void>> = [];
     offs.push(listen<ContextPayload>("context", (e) => setCtxApp(e.payload.bundle_id || e.payload.title_masked || "")));
+    offs.push(
+      listen<InlineStatus>("inline", (e) => {
+        setInline(e.payload);
+        // `drafting` holds until the outcome replaces it — a spinner that timed itself out would
+        // claim the draft had finished when it hadn't.
+        if (e.payload.phase !== "drafting") {
+          window.setTimeout(() => setInline(null), INLINE_HOLD_MS);
+        }
+      }),
+    );
     // ⌃⌥N summon: Rust moved the window to this screen — also expand from the minimized handle.
     offs.push(
       listen("summon", () => {
@@ -355,25 +378,27 @@ export function App(): JSX.Element {
       leaveTimer.current = null;
     }
   }, []);
+  // Mirrors of the values the timeout has to consult. Reading them through `setState` updaters
+  // looked like a way to get the latest value without adding deps, but React skips an updater
+  // that returns the same state — which meant the nested collapse never ran and an unpinned panel
+  // stayed open forever. A ref is the honest way to read "now" from inside a timer.
+  const inputRef = useRef(input);
+  inputRef.current = input;
+  const thinkingRef = useRef(thinking);
+  thinkingRef.current = thinking;
+
   const onPanelLeave = useCallback((): void => {
     if (pinned) return;
     cancelAutoCollapse();
     leaveTimer.current = window.setTimeout(() => {
       leaveTimer.current = null;
+      // Never collapse over work in progress: a focused composer, a half-written question, or an
+      // answer still arriving all mean the panel is in use even though the cursor wandered off.
       const composerHasFocus = document.activeElement?.classList.contains("composer__input") ?? false;
-      if (composerHasFocus) return;
-      setInput((cur) => {
-        if (cur.trim().length > 0) return cur;
-        setThinking((busy) => {
-          if (!busy) {
-            setShowSettings(false);
-            setOpen(false);
-            sizeForViewRef.current({ open: false });
-          }
-          return busy;
-        });
-        return cur;
-      });
+      if (composerHasFocus || inputRef.current.trim().length > 0 || thinkingRef.current) return;
+      setShowSettings(false);
+      setOpen(false);
+      sizeForViewRef.current({ open: false });
     }, AUTO_COLLAPSE_MS);
   }, [pinned, cancelAutoCollapse]);
   useEffect(() => cancelAutoCollapse, [cancelAutoCollapse]);
@@ -452,6 +477,22 @@ export function App(): JSX.Element {
   const priorCount = historyMark.current;
   const visibleMsgs = showHistory ? msgs : msgs.slice(priorCount);
 
+  const inlineLine = ((): { text: string; tone: "work" | "ok" | "warn" } | null => {
+    if (!inline) return null;
+    switch (inline.phase) {
+      case "drafting":
+        return { text: t.inlineDrafting, tone: "work" };
+      case "inserted":
+        return { text: t.inlineInserted, tone: "ok" };
+      case "no_context":
+        return { text: t.inlineNoField, tone: "warn" };
+      case "key_rejected":
+        return { text: t.inlineKeyRejected, tone: "warn" };
+      default:
+        return { text: t.inlineFailed, tone: "warn" };
+    }
+  })();
+
   const totalState = state.commitments.length + state.open_loops.length;
   const live = appName(ctxApp || status?.app || "");
   const providerLabel = PROVIDERS.find((p) => p.id === provider)?.label ?? t.model;
@@ -486,10 +527,17 @@ export function App(): JSX.Element {
           onPointerLeave={cancelHoverOpen}
           title={t.openPanel}
         >
+          {inlineLine ? (
+            <span className={`handle__live inline--${inlineLine.tone}`}>
+              <span className={`inline__dot inline__dot--${inlineLine.tone}`} />
+              {inlineLine.text}
+            </span>
+          ) : (
           <span className="handle__live">
             <span className="live__dot" />
             {t.reading} <b>{live}</b>
           </span>
+          )}
           {state.commitments.length > 0 ? (
             <span className="handle__count">
               {state.commitments.length} {t.due}
@@ -527,10 +575,17 @@ export function App(): JSX.Element {
                 {/* The live source sits top-left, in the same spot the collapsed pill occupies, so
                     opening the panel doesn't make the indicator jump to the bottom. App NAME only —
                     never window titles or paths (no usernames leak into the UI). */}
-                <span className="srcchip" title={`${t.reading} ${live}`}>
-                  <span className="live__dot" />
-                  {t.reading} <b>{live}</b>
-                </span>
+                {inlineLine ? (
+                  <span className={`srcchip inline--${inlineLine.tone}`}>
+                    <span className={`inline__dot inline__dot--${inlineLine.tone}`} />
+                    {inlineLine.text}
+                  </span>
+                ) : (
+                  <span className="srcchip" title={`${t.reading} ${live}`}>
+                    <span className="live__dot" />
+                    {t.reading} <b>{live}</b>
+                  </span>
+                )}
                 {totalState > 0 ? (
                   <button className="chip" type="button" onClick={() => setShowState((v) => !v)} aria-pressed={showState}>
                     {state.commitments.length} {t.due} · {state.open_loops.length} {t.waiting}
@@ -548,7 +603,7 @@ export function App(): JSX.Element {
                 >
                   {/* A pin that leans when unpinned — the state is legible without reading the
                       tooltip, which matters for a control that changes how the panel behaves. */}
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                        stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"
                        style={pinned ? undefined : { transform: "rotate(45deg)" }}>
                     <path d="M9 4h6l-1 6 3 3H7l3-3-1-6z" />
@@ -1152,6 +1207,21 @@ const DEFAULT_BINDS: Record<string, string> = {
   summon: "Control+Alt+KeyN",
   quit: "Control+Alt+KeyQ",
 };
+/** The model each provider runs. Mirrors default_model() in inline_source.rs — shown so the user
+ *  can see what will run, not so they can change it. */
+function defaultModelFor(provider: string): string {
+  switch (provider) {
+    case "openrouter":
+      return "anthropic/claude-sonnet-4.5";
+    case "openai":
+      return "gpt-4o-mini";
+    case "gemini":
+      return "gemini-2.5-flash";
+    default:
+      return "claude-sonnet-5";
+  }
+}
+
 const PROVIDERS: Array<{ id: string; label: string }> = [
   { id: "anthropic", label: "Claude API" },
   { id: "openrouter", label: "OpenRouter" },
@@ -1414,22 +1484,12 @@ function Settings(props: {
               </button>
             ))}
           </div>
-          <div className="keyrow">
-            <input
-              className="keyrow__input"
-              placeholder={t.modelPlaceholder}
-              value={model}
-              autoComplete="off"
-              onFocus={() => {
-                if (IN_TAURI) void invoke("focus_field", { focused: true }).catch(() => undefined);
-              }}
-              onChange={(e) => setModel(e.target.value)}
-              onBlur={() => applyLlm(provider, model)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") applyLlm(provider, model);
-              }}
-            />
-          </div>
+          {/* No free-text model field. It sat directly above the key entry and looked identical
+              to it, so a pasted API key landed in the model — which was then sent as the model
+              name and written to the log. The provider already has one right default; picking a
+              model is not a decision this product needs to offer, and the field's only proven use
+              was leaking a credential. */}
+          <div className="set__hint">{t.modelFor} {defaultModelFor(provider)}</div>
           <div className="set__hint">{t.modelHint}</div>
         </section>
         <section className="set">

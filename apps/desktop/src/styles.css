@@ -288,13 +288,13 @@ body {
 .icon {
   display: grid;
   place-items: center;
-  width: 20px;
-  height: 20px;
+  width: 26px;
+  height: 26px;
   border: none;
   background: transparent;
   color: var(--muted);
   border-radius: var(--r-sm);
-  font-size: 10px;
+  font-size: 13px;
   cursor: pointer;
   transition: background var(--sp), color var(--sp);
 }
@@ -687,7 +687,6 @@ body {
 }
 .set__label {
   font-size: var(--fs-xs);
-  text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--faint);
   margin-bottom: 5px;
@@ -1023,7 +1022,6 @@ kbd {
 }
 .cites__label {
   font-size: var(--fs-xs);
-  text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--faint);
 }
@@ -1094,7 +1092,6 @@ kbd {
   font-size: var(--fs-xs);
   font-weight: 600;
   letter-spacing: 0.09em;
-  text-transform: uppercase;
   color: var(--faint);
   padding: 16px 12px 8px;
 }
@@ -1183,7 +1180,6 @@ kbd {
   font-size: var(--fs-xs);
   font-weight: 700;
   letter-spacing: 0.09em;
-  text-transform: uppercase;
   color: var(--accent);
   padding: 16px 18px 2px;
 }
@@ -1252,7 +1248,6 @@ kbd {
   font-size: var(--fs-xs);
   font-weight: 700;
   letter-spacing: 0.09em;
-  text-transform: uppercase;
   color: var(--faint);
 }
 .hcard__v {
@@ -1303,7 +1298,6 @@ kbd {
   font-size: var(--fs-xs);
   font-weight: 600;
   letter-spacing: 0.07em;
-  text-transform: uppercase;
   color: var(--faint);
 }
 .trow {
@@ -1443,7 +1437,6 @@ kbd {
   font-size: var(--fs-xs);
   font-weight: 700;
   letter-spacing: 0.09em;
-  text-transform: uppercase;
   color: var(--accent);
   margin-bottom: 8px;
 }
@@ -1502,4 +1495,37 @@ body.full-window {
   text-align: center;
   font-size: var(--fs-lg);
   color: var(--muted);
+}
+
+/* Empty state: quiet, indented to the card's rhythm, never centred like an error. Nothing has
+   gone wrong — there is simply nothing yet, and the copy says what will fill it. */
+.fempty {
+  padding: 14px 18px 18px;
+  font-size: var(--fs-lg);
+  line-height: 1.6;
+  color: var(--muted);
+  max-width: 68ch;
+}
+
+/* ⌥-tap feedback. The pill answers the keystroke and then goes back to reporting the live source
+   — it is a reply, not a status the user has to dismiss, so it never gets a close affordance. */
+.inline--work {
+  color: var(--muted);
+}
+.inline--ok {
+  color: var(--live);
+}
+.inline--warn {
+  color: var(--warn);
+}
+.inline__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex: none;
+  background: currentColor;
+}
+/* Only the working state pulses: a finished draft shouldn't keep drawing the eye. */
+.inline__dot--work {
+  animation: live-pulse 1s ease-in-out infinite;
 }
