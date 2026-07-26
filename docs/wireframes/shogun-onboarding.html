@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en" translate="no">
+<head>
+<meta charset="utf-8" />
+<meta name="google" content="notranslate" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>SHOGUN — Onboarding</title>
+<link rel="stylesheet" href="shogun-ui.css" />
+<script src="shogun-theme.js"></script>
+<!--
+  SHOGUN first run, on glass: Welcome → Accessibility → Bring your own key → Connect your work
+  → Done. Same surface language as the notch overlay and Settings. Steps animate in; the
+  progress bar fills as you go. Copy is English; the only emoji is ⚔.
+-->
+<style>
+  body{display:flex;align-items:center;justify-content:center;padding:44px}
+
+  .card-win{position:relative;z-index:1;width:660px;border-radius:var(--r-xl);overflow:hidden;
+    display:flex;flex-direction:column;animation:win-in 340ms var(--ease) both}
+
+  .progress{display:flex;gap:6px;padding:22px 36px 0}
+  .bar{height:3px;flex:1;border-radius:var(--r-pill);background:var(--g-4);overflow:hidden}
+  .bar i{display:block;height:100%;width:0;background:var(--accent-hi);
+    transition:width 420ms var(--ease)}
+  .bar.fill i{width:100%}
+
+  .stage{padding:32px 36px 8px;min-height:404px;display:flex;flex-direction:column}
+  .step{display:none;flex-direction:column;flex:1}
+  .step.active{display:flex}
+  .step.active > *{animation:rise 300ms var(--ease) both}
+  .step.active > *:nth-child(2){animation-delay:60ms}
+  .step.active > *:nth-child(3){animation-delay:110ms}
+  .step.active > *:nth-child(4){animation-delay:160ms}
+
+  .icon-tile{width:56px;height:56px;border-radius:16px;display:grid;place-items:center;
+    background:var(--accent-soft);border:1px solid var(--accent-line);margin-bottom:22px}
+  .icon-tile.ok{background:var(--live-soft);border-color:rgba(52,208,88,.34)}
+
+  h1{font-size:26px;font-weight:640;letter-spacing:-.024em;line-height:1.22}
+  .lead{margin-top:10px;font-size:15px;line-height:1.62;color:var(--muted);max-width:52ch}
+  .lead b{color:var(--ink);font-weight:600}
+
+  .brandline{display:flex;align-items:center;gap:12px;margin-bottom:26px}
+  .brandline .name{font-size:14px;font-weight:700;letter-spacing:.2em}
+
+  .panel{margin-top:24px;border:1px solid var(--line);border-radius:var(--r-lg);
+    background:var(--g-2);overflow:hidden}
+  .prow{display:flex;align-items:center;gap:14px;padding:15px 17px}
+  .prow + .prow{border-top:1px solid var(--line)}
+  .prow .meta{flex:1;display:flex;flex-direction:column;gap:2px;min-width:0}
+  .prow .meta .t{font-size:14px;font-weight:600}
+  .prow .meta .d{font-size:13px;color:var(--muted);line-height:1.45}
+  .keyline{display:flex;gap:9px;padding:15px 17px;border-top:1px solid var(--line)}
+  .note{display:flex;align-items:center;gap:8px;padding:0 17px 15px;font-size:12.5px;color:var(--faint)}
+
+  .hints{margin-top:24px;display:flex;flex-direction:column;gap:16px}
+  .hint{display:flex;align-items:center;gap:15px}
+  .hint .txt{font-size:15px;color:var(--muted);line-height:1.5}
+  .hint .txt b{color:var(--ink);font-weight:600}
+
+  .footer{display:flex;align-items:center;gap:10px;padding:18px 36px 28px}
+  .footer .right{display:flex;gap:8px;margin-left:auto}
+  .ghost{background:transparent;border-color:transparent;box-shadow:none;color:var(--muted)}
+  .ghost:hover{background:var(--g-3);color:var(--ink)}
+  .trial{font-size:12.5px;color:var(--faint)}
+</style>
+</head>
+<body>
+<div class="desk"></div>
+
+<div class="card-win glass">
+  <div class="progress">
+    <span class="bar fill"><i></i></span><span class="bar"><i></i></span>
+    <span class="bar"><i></i></span><span class="bar"><i></i></span><span class="bar"><i></i></span>
+  </div>
+
+  <div class="stage">
+
+    <!-- 1 -->
+    <div class="step active" data-step="0">
+      <div class="brandline">
+        <img src="shogun-mark.svg" width="34" height="34" alt="" />
+        <span class="name">SHOGUN</span>
+      </div>
+      <h1>Work, taken off your plate.</h1>
+      <p class="lead">SHOGUN builds a quiet model of your work and acts from the notch — press a button, and the task is done.</p>
+      <div class="panel">
+        <div class="prow">
+          <span class="tile soft">
+            <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7.5 3.2v5.3c0 4.7-3.2 8.4-7.5 10.2-4.3-1.8-7.5-5.5-7.5-10.2V6.2L12 3z"/></svg>
+          </span>
+          <div class="meta"><span class="t">Local-first by design</span><span class="d">Your data stays on this Mac. No images or audio are ever saved.</span></div>
+        </div>
+        <div class="prow">
+          <span class="tile soft">
+            <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12l5 5L20 6"/></svg>
+          </span>
+          <div class="meta"><span class="t">Nothing leaves without your OK</span><span class="d">Anything sent outside waits in an approval queue.</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 2 -->
+    <div class="step" data-step="1">
+      <div class="icon-tile">
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="var(--accent-hi)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7.5 3.2v5.3c0 4.7-3.2 8.4-7.5 10.2-4.3-1.8-7.5-5.5-7.5-10.2V6.2L12 3z"/><path d="M9 11.8l2.2 2.2L15.2 10"/></svg>
+      </div>
+      <h1>Let SHOGUN read your screen</h1>
+      <p class="lead">SHOGUN uses macOS Accessibility to read on-screen <b>text</b> so it can understand what you're working on. It captures text only — never images.</p>
+      <div class="panel">
+        <div class="prow">
+          <div class="meta"><span class="t">Accessibility</span><span class="d">Required to build your context. Granted in System Settings.</span></div>
+          <span class="badge ok"><span class="dot"></span>Granted</span>
+        </div>
+        <div class="prow">
+          <div class="meta"><span class="t">Microphone</span><span class="d">Optional. Only asked for when you turn on meeting notes.</span></div>
+          <span class="badge"><span class="dot"></span>Not requested</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 3 -->
+    <div class="step" data-step="2">
+      <div class="icon-tile">
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="var(--accent-hi)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="8.5" cy="8.5" r="5"/><path d="M12 12l9 9M17.5 17.5l3-3"/></svg>
+      </div>
+      <h1>Bring your own key</h1>
+      <p class="lead">Chat, ⌥-drafts, and agents run on your own provider key. Your 7-day trial includes everything — add a key any time to go live.</p>
+      <div class="panel">
+        <div class="prow">
+          <div class="meta"><span class="t">Provider</span><span class="d">Each provider keeps its own key.</span></div>
+          <div class="seg"><span class="on">Anthropic</span><span>OpenRouter</span><span>OpenAI</span><span>Gemini</span></div>
+        </div>
+        <div class="keyline">
+          <div class="input" style="flex:1">Paste your Anthropic API key…</div>
+          <button class="btn primary">Save</button>
+        </div>
+        <div class="note">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="10" width="16" height="11" rx="2.5"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
+          Stored only in your macOS Keychain.
+        </div>
+      </div>
+    </div>
+
+    <!-- 4 -->
+    <div class="step" data-step="3">
+      <div class="icon-tile">
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="var(--accent-hi)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 7V3M15 7V3M8 7h8v4a4 4 0 0 1-8 0V7zM12 15v6"/></svg>
+      </div>
+      <h1>Connect your work</h1>
+      <p class="lead">Give SHOGUN read access to the tools you already use. It connects directly to each service — nothing is routed through anyone else.</p>
+      <div class="panel">
+        <div class="prow"><span class="tile mail">M</span>
+          <div class="meta"><span class="t">Mail</span><span class="d">Read threads and draft replies.</span></div>
+          <button class="btn primary sm">Connect</button></div>
+        <div class="prow"><span class="tile cal">C</span>
+          <div class="meta"><span class="t">Calendar</span><span class="d">See what's coming and prep for it.</span></div>
+          <button class="btn primary sm">Connect</button></div>
+        <div class="prow"><span class="tile chat">S</span>
+          <div class="meta"><span class="t">Slack</span><span class="d">Not available yet.</span></div>
+          <button class="btn sm" style="opacity:.5">Connect</button></div>
+      </div>
+    </div>
+
+    <!-- 5 -->
+    <div class="step" data-step="4">
+      <div class="icon-tile ok">
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="var(--live)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12l5 5L20 6"/></svg>
+      </div>
+      <h1>You're set</h1>
+      <p class="lead">Two ways to reach SHOGUN from anywhere:</p>
+      <div class="hints">
+        <div class="hint"><span class="kbd" style="min-width:40px;height:40px;font-size:17px;border-radius:12px">⌥</span>
+          <span class="txt">Tap <b>⌥ (Option)</b> in any app to draft right where you're typing.</span></div>
+        <div class="hint">
+          <span class="tile soft" style="width:40px;height:40px;border-radius:12px">
+            <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16M8 5v3a4 4 0 0 0 8 0V5"/></svg>
+          </span>
+          <span class="txt">Rest the cursor on the <b>notch</b> — the panel opens straight away.</span></div>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="footer">
+    <button class="btn ghost" id="back" style="visibility:hidden">Back</button>
+    <span class="trial" id="trial"></span>
+    <div class="right" id="rightbtns"></div>
+  </div>
+</div>
+
+<script>
+  const steps = [
+    { primary:"Get started", skip:null,            trial:"7 days of everything. No card needed." },
+    { primary:"Continue",    skip:null,            trial:"" },
+    { primary:"Continue",    skip:"Skip for now",  trial:"" },
+    { primary:"Continue",    skip:"Do this later", trial:"" },
+    { primary:"Open SHOGUN", skip:null,            trial:"" }
+  ];
+  let i = 0;
+  const stepEls = document.querySelectorAll(".step");
+  const bars    = document.querySelectorAll(".bar");
+  const back    = document.getElementById("back");
+  const right   = document.getElementById("rightbtns");
+  const trial   = document.getElementById("trial");
+
+  function render(){
+    stepEls.forEach(s => s.classList.toggle("active", +s.dataset.step === i));
+    bars.forEach((b, idx) => b.classList.toggle("fill", idx <= i));
+    back.style.visibility = i === 0 ? "hidden" : "visible";
+    trial.textContent = steps[i].trial;
+    right.innerHTML = "";
+    if (steps[i].skip){
+      const s = document.createElement("button");
+      s.className = "btn ghost"; s.textContent = steps[i].skip; s.onclick = next;
+      right.appendChild(s);
+    }
+    const p = document.createElement("button");
+    p.className = "btn primary lg"; p.textContent = steps[i].primary; p.onclick = next;
+    right.appendChild(p);
+  }
+  function next(){ if (i < steps.length - 1){ i++; render(); } }
+  back.onclick = () => { if (i > 0){ i--; render(); } };
+  render();
+
+  document.querySelectorAll(".seg").forEach(seg =>
+    seg.querySelectorAll("span").forEach(opt =>
+      opt.addEventListener("click", () =>
+        seg.querySelectorAll("span").forEach(o => o.classList.toggle("on", o === opt)))));
+</script>
+</body>
+</html>

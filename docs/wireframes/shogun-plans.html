@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en" translate="no">
+<head>
+<meta charset="utf-8" />
+<meta name="google" content="notranslate" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>SHOGUN — Choose a plan</title>
+<link rel="stylesheet" href="shogun-ui.css" />
+<script src="shogun-theme.js"></script>
+<!--
+  Trial-expiry plan picker. Required by docs/requirements-v1.0.md (§246 acceptance scenario and
+  §6.12 FR-BIL-01): when the 7-day trial ends, features lock and the user is shown Standard / Pro
+  with annual *and* monthly prices; paying unlocks within a minute.
+
+  The line that matters most here is "your memory is untouched" — the scenario explicitly requires
+  that local memory survives the lock, so the screen has to say so plainly rather than behave like
+  a punishment. Prices: Standard $49 / $62, Pro $99 / $124 (FR-BIL-01).
+
+  Pro is preselected because the trial was Pro-equivalent — this is the plan they've been using.
+-->
+<style>
+  body{display:flex;align-items:center;justify-content:center;padding:44px}
+  .win{position:relative;z-index:1;width:940px;border-radius:var(--r-xl);overflow:hidden;
+    display:flex;flex-direction:column;animation:win-in 340ms var(--ease) both}
+
+  .head{padding:34px 40px 0;text-align:center}
+  .head .mark{display:flex;justify-content:center;margin-bottom:20px}
+  h1{font-size:27px;font-weight:640;letter-spacing:-.024em;line-height:1.2}
+  .sub{margin:11px auto 0;font-size:15px;line-height:1.6;color:var(--muted);max-width:56ch}
+
+  .safe{display:inline-flex;align-items:center;gap:9px;margin-top:20px;font-size:13px;
+    color:var(--live);background:var(--live-soft);border:1px solid rgba(52,208,88,.28);
+    border-radius:var(--r-pill);padding:8px 16px}
+
+  .billing{display:flex;justify-content:center;margin:26px 0 22px}
+  .save{margin-left:8px;font-size:11px;font-weight:700;color:var(--live);background:var(--live-soft);
+    border-radius:var(--r-pill);padding:2px 8px}
+
+  .plans{display:grid;grid-template-columns:1fr 1fr;gap:16px;padding:0 40px}
+  .plan{position:relative;display:flex;flex-direction:column;background:var(--g-2);
+    border:1px solid var(--line);border-radius:var(--r-lg);padding:24px 24px 22px;
+    transition:border-color var(--sp),transform var(--sp)}
+  .plan:hover{transform:translateY(-2px)}
+  .plan.sel{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent), 0 18px 44px rgba(47,111,237,.20)}
+  .plan .tag{position:absolute;top:-10px;left:24px;font-size:11px;font-weight:700;letter-spacing:.04em;
+    background:var(--accent);color:#fff;border-radius:var(--r-pill);padding:4px 11px}
+  .plan .nm{font-size:16px;font-weight:640}
+  .plan .price{display:flex;align-items:baseline;gap:7px;margin-top:14px}
+  .plan .price .n{font-size:38px;font-weight:660;letter-spacing:-.03em;line-height:1}
+  .plan .price .per{font-size:13px;color:var(--muted)}
+  .plan .alt{margin-top:6px;font-size:12.5px;color:var(--faint)}
+  .plan .why{margin-top:14px;padding-top:16px;border-top:1px solid var(--line);
+    font-size:13px;line-height:1.55;color:var(--muted)}
+
+  .feats{list-style:none;margin-top:16px;display:flex;flex-direction:column;gap:10px;flex:1}
+  .feats li{display:flex;gap:11px;align-items:flex-start;font-size:13.5px;line-height:1.5}
+  .feats svg{flex:none;margin-top:2px;stroke:var(--live)}
+  .feats .dim{color:var(--muted)}
+  .feats .dim svg{stroke:var(--faint)}
+  .key-note{margin-top:14px;display:inline-flex;align-items:center;gap:8px;font-size:12px;
+    color:var(--muted);background:var(--g-3);border:1px solid var(--line);border-radius:10px;padding:8px 11px}
+
+  .foot{display:flex;align-items:center;gap:14px;padding:26px 40px 30px}
+  .foot .note{font-size:12.5px;color:var(--faint);line-height:1.5}
+  .foot .acts{margin-left:auto;display:flex;gap:9px}
+</style>
+</head>
+<body>
+<div class="desk"></div>
+
+<div class="win glass">
+  <div class="head">
+    <div class="mark"><img src="shogun-mark.svg" width="40" height="40" alt="" /></div>
+    <h1>Your trial has ended.</h1>
+    <p class="sub">You've had everything Pro can do for 7 days. Pick the plan that fits how you actually worked.</p>
+    <div class="safe">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7.5 3.2v5.3c0 4.7-3.2 8.4-7.5 10.2-4.3-1.8-7.5-5.5-7.5-10.2V6.2L12 3z"/><path d="M9 11.8l2.2 2.2L15.2 10"/></svg>
+      Nothing was deleted — your memory, history, and connections are exactly where you left them.
+    </div>
+  </div>
+
+  <div class="billing">
+    <div class="seg" data-billing>
+      <span class="on" data-bill="year">Annual <span class="save">2 months free</span></span>
+      <span data-bill="month">Monthly</span>
+    </div>
+  </div>
+
+  <div class="plans">
+    <!-- STANDARD -->
+    <div class="plan" data-plan="standard">
+      <div class="nm">Standard</div>
+      <div class="price"><span class="n" data-price data-year="$49" data-month="$62">$49</span>
+        <span class="per" data-per data-year="/mo, billed annually" data-month="/mo">/mo, billed annually</span></div>
+      <div class="alt" data-alt data-year="$62 if you pay monthly" data-month="Billed every month">$62 if you pay monthly</div>
+
+      <ul class="feats">
+        <li><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12l5 5L20 6"/></svg>Capture, three-layer memory, and local search</li>
+        <li><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12l5 5L20 6"/></svg>The notch panel, with context actions suggested</li>
+        <li><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12l5 5L20 6"/></svg>Integrations, read-only — synced into your context</li>
+        <li><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12l5 5L20 6"/></svg>Nightly review and the morning brief</li>
+        <li class="dim"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round"><path d="M6 12h12"/></svg>Drafting and sending stay locked</li>
+      </ul>
+
+      <div class="key-note">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M13 2L4.5 13.5H11l-1 8.5L19.5 10.5H13z"/></svg>
+        No API key needed — it all runs on ours.
+      </div>
+      <div class="why">Right if SHOGUN's job is to remember and brief you, and you'd rather write the replies yourself.</div>
+    </div>
+
+    <!-- PRO -->
+    <div class="plan sel" data-plan="pro">
+      <span class="tag">What you've been using</span>
+      <div class="nm">Pro</div>
+      <div class="price"><span class="n" data-price data-year="$99" data-month="$124">$99</span>
+        <span class="per" data-per data-year="/mo, billed annually" data-month="/mo">/mo, billed annually</span></div>
+      <div class="alt" data-alt data-year="$124 if you pay monthly" data-month="Billed every month">$124 if you pay monthly</div>
+
+      <ul class="feats">
+        <li><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12l5 5L20 6"/></svg>Everything in Standard</li>
+        <li><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12l5 5L20 6"/></svg>Agents that actually run the action (L1 / L2 / L3)</li>
+        <li><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12l5 5L20 6"/></svg>Drafting where you're typing, with ⌥</li>
+        <li><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12l5 5L20 6"/></svg>Memory API — reach your context from MCP, CLI, or REST</li>
+        <li><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12l5 5L20 6"/></svg>Second-layer integrations, including sending</li>
+      </ul>
+
+      <div class="key-note">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><rect x="4" y="10" width="16" height="11" rx="2.5"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
+        Needs your own provider key — agent work never runs on ours.
+      </div>
+      <div class="why">Right if you want the task finished, not just surfaced.</div>
+    </div>
+  </div>
+
+  <div class="foot">
+    <div class="note">Cancel any time. Offline? SHOGUN keeps working on a grace period —<br>you won't lose access mid-flight.</div>
+    <div class="acts">
+      <button class="btn">Quit</button>
+      <button class="btn primary lg" id="cta">Continue with Pro</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  // billing toggle — swaps annual/monthly figures on both cards
+  const seg = document.querySelector("[data-billing]");
+  let bill = "year";
+  function paint(){
+    document.querySelectorAll("[data-price],[data-per],[data-alt]").forEach(el =>
+      el.textContent = el.dataset[bill]);
+    seg.querySelectorAll("span[data-bill]").forEach(s => s.classList.toggle("on", s.dataset.bill === bill));
+  }
+  seg.querySelectorAll("span[data-bill]").forEach(s =>
+    s.addEventListener("click", () => { bill = s.dataset.bill; paint(); }));
+
+  // plan selection drives the CTA
+  const cta = document.getElementById("cta");
+  document.querySelectorAll(".plan").forEach(p =>
+    p.addEventListener("click", () => {
+      document.querySelectorAll(".plan").forEach(x => x.classList.toggle("sel", x === p));
+      cta.textContent = "Continue with " + (p.dataset.plan === "pro" ? "Pro" : "Standard");
+    }));
+  paint();
+</script>
+</body>
+</html>

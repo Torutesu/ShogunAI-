@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" role="img" aria-label="SHOGUN">
+  <!-- Ribbon "S" mark, rebuilt as vectors from the supplied logo so it scales cleanly in UI.
+       Swap in the original asset once it lives in the repo. -->
+  <defs>
+    <linearGradient id="sgm" x1="700" y1="180" x2="330" y2="820" gradientUnits="userSpaceOnUse">
+      <stop offset="0"   stop-color="#1E90FF"/>
+      <stop offset=".38" stop-color="#0B72F0"/>
+      <stop offset=".62" stop-color="#1487FB"/>
+      <stop offset="1"   stop-color="#4BB0FF"/>
+    </linearGradient>
+  </defs>
+  <path d="M655 252 L372 452 L652 566 L369 766"
+        fill="none" stroke="url(#sgm)" stroke-width="198"
+        stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

@@ -1,0 +1,361 @@
+<!doctype html>
+<html lang="en" translate="no">
+<head>
+<meta charset="utf-8" />
+<meta name="google" content="notranslate" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>SHOGUN — Settings</title>
+<link rel="stylesheet" href="shogun-ui.css" />
+<script src="shogun-theme.js"></script>
+<!--
+  SHOGUN Settings — glass window over the desktop. Composition follows the reference:
+  grouped sidebar, right pane of cards, accent uppercase section labels, rows of
+  title + description + trailing control, an isolated danger zone.
+
+  Contents are the §B sections lifted out of the notch panel, plus Account (plans exist in
+  CLAUDE.md) and Privacy (real Accessibility + microphone permissions). Copy is English;
+  the only emoji is ⚔.
+-->
+<style>
+  body{display:flex;align-items:center;justify-content:center;padding:44px}
+  .win{width:1060px;height:748px}
+
+  .conn{display:flex;align-items:center;gap:14px;padding:14px 18px}
+  .conn + .conn{border-top:1px solid var(--line)}
+  .conn .meta{flex:1;display:flex;flex-direction:column;gap:2px;min-width:0}
+  .conn .meta .n{font-size:14px;font-weight:600}
+  .conn .meta .s{font-size:12.5px;color:var(--muted)}
+  .conn .meta .s.ok{color:var(--live)}
+
+  .stat{display:flex;gap:30px;padding:6px 18px 18px}
+  .stat .k{font-size:24px;font-weight:640;letter-spacing:-.025em}
+  .stat .l{margin-top:3px;font-size:12px;color:var(--muted)}
+
+  .appr{margin:14px 18px 18px;border:1px solid var(--line);border-radius:var(--r-md);background:var(--g-3)}
+  .appr .top{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:15px 16px 0}
+  .appr .op{font-size:14px;font-weight:620}
+  .appr .quote{margin:12px 16px;padding:13px 15px;border-radius:11px;background:var(--g-3);
+    border:1px solid var(--line);font-size:13px;line-height:1.6;color:var(--ink);opacity:.92}
+  .appr .acts{display:flex;gap:8px;padding:0 16px 16px}
+
+  .acct{display:flex;align-items:center;gap:14px;padding:16px 18px}
+  .avatar{width:42px;height:42px;border-radius:50%;display:grid;place-items:center;font-weight:700;
+    font-size:16px;background:linear-gradient(150deg,var(--accent),#7A5CF0);color:#fff}
+  .field{display:flex;flex-direction:column;gap:7px;padding:0 18px 8px}
+  .field:last-child{padding-bottom:18px}
+</style>
+</head>
+<body>
+<div class="desk"></div>
+
+<div class="win glass">
+  <div class="titlebar"><span class="tl r"></span><span class="tl y"></span><span class="tl g"></span></div>
+  <div class="shell">
+
+    <nav class="sidebar">
+      <div class="side-head">
+        <div class="wordmark"><img src="shogun-mark.svg" width="26" height="26" alt="" /><span class="name">SHOGUN</span></div>
+      </div>
+      <button class="nav active" data-tab="account">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4.5 21a7.5 7.5 0 0 1 15 0"/></svg><span>Account</span></button>
+      <button class="nav" data-tab="privacy">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7.5 3.2v5.3c0 4.7-3.2 8.4-7.5 10.2-4.3-1.8-7.5-5.5-7.5-10.2V6.2L12 3z"/></svg><span>Privacy</span></button>
+      <button class="nav" data-tab="appearance">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke-width="1.7"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor" stroke="none"/></svg><span>Appearance</span></button>
+      <button class="nav" data-tab="shortcuts">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="12" rx="2.5"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7.5 14h9"/></svg><span>Shortcuts</span></button>
+
+      <div class="side-group">Context</div>
+      <button class="nav" data-tab="memory">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l9 5-9 5-9-5 9-5z"/><path d="M3 13l9 5 9-5"/></svg><span>Memory</span></button>
+      <button class="nav" data-tab="connections">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 7V3M15 7V3M8 7h8v4a4 4 0 0 1-8 0V7zM12 15v6"/></svg><span>Connections</span></button>
+      <button class="nav" data-tab="aisessions">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M7.5 9.5l3 2.5-3 2.5M13 14.5h4"/></svg><span>AI sessions</span></button>
+
+      <div class="side-group">Agents</div>
+      <button class="nav" data-tab="model">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="8.5" cy="8.5" r="5"/><path d="M12 12l9 9M17.5 17.5l3-3"/></svg><span>Model &amp; Key</span></button>
+      <button class="nav" data-tab="nightly">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg><span>Nightly review</span></button>
+      <button class="nav" data-tab="approvals">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7.5 3.2v5.3c0 4.7-3.2 8.4-7.5 10.2-4.3-1.8-7.5-5.5-7.5-10.2V6.2L12 3z"/><path d="M9 11.8l2.2 2.2L15.2 10"/></svg><span>Approvals</span></button>
+    </nav>
+
+    <section class="content">
+      <div class="content-head">
+        <h1 id="ch-title">Account</h1>
+        <p id="ch-sub">Your plan and sign-in.</p>
+      </div>
+      <div class="content-body">
+
+        <!-- ACCOUNT -->
+        <div class="pane active" data-pane="account">
+          <div class="card">
+            <div class="card-head"><div class="card-label">Account</div></div>
+            <div class="acct" style="border-top:1px solid var(--line)">
+              <span class="avatar">R</span>
+              <div style="flex:1;display:flex;flex-direction:column;gap:2px">
+                <span style="font-size:14px;font-weight:600">Signed in as</span>
+                <span style="font-size:13px;color:var(--muted)">rico@acme.com</span>
+              </div>
+              <button class="btn sm">Sign out</button>
+            </div>
+            <div class="row">
+              <div class="lead"><div class="t">Plan</div><div class="d">Trial — 4 days left. Everything Pro can do is unlocked until then; after that you pick a plan.</div></div>
+              <div class="trail"><span class="badge info"><span class="dot"></span>Trial</span><button class="btn primary sm">Choose a plan</button></div>
+            </div>
+          </div>
+          <!-- Prices and tiers come from docs/requirements-v1.0.md §6.12 (FR-BIL-01), which is
+               the source of truth. There is no free tier — the trial lands on Standard. -->
+          <div class="card">
+            <div class="card-head"><div class="card-label">Plans</div>
+              <div class="card-sub">Standard runs entirely on SHOGUN's own key. Pro adds agents and the Memory API, and needs your key.</div></div>
+            <div class="row">
+              <div class="lead"><div class="t">Standard</div>
+                <div class="d">Capture, memory, search, notch UI, read-only integrations, nightly review, morning brief.</div></div>
+              <div class="trail" style="flex-direction:column;align-items:flex-end;gap:2px">
+                <span style="font-size:15px;font-weight:640">$49<span style="font-size:12px;color:var(--muted);font-weight:500">/mo, billed annually</span></span>
+                <span style="font-size:12px;color:var(--faint)">$62 monthly</span>
+              </div>
+            </div>
+            <div class="row">
+              <div class="lead"><div class="t">Pro</div>
+                <div class="d">Everything in Standard, plus agents (L1/L2/L3), the Memory API, and second-layer integrations. Needs your own key.</div></div>
+              <div class="trail" style="flex-direction:column;align-items:flex-end;gap:2px">
+                <span style="font-size:15px;font-weight:640">$99<span style="font-size:12px;color:var(--muted);font-weight:500">/mo, billed annually</span></span>
+                <span style="font-size:12px;color:var(--faint)">$124 monthly</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- PRIVACY -->
+        <div class="pane" data-pane="privacy">
+          <div class="card">
+            <div class="card-head"><div class="card-label">Permissions</div>
+              <div class="card-sub">What SHOGUN needs from macOS to build your context and take meeting notes.</div></div>
+            <div class="row">
+              <div class="lead"><div class="t">Accessibility</div><div class="d">Required. Lets SHOGUN read on-screen text. Images are never captured or stored.</div></div>
+              <div class="trail"><span class="badge ok"><span class="dot"></span>Granted</span></div>
+            </div>
+            <div class="row">
+              <div class="lead"><div class="t">Microphone</div><div class="d">Only for meeting notes. Audio is processed in memory on this Mac and never written to disk.</div></div>
+              <div class="trail"><span class="badge"><span class="dot"></span>Not requested</span></div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-head"><div class="card-label danger">Danger zone</div>
+              <div class="card-sub">These actions are irreversible. Make sure you have what you need first.</div></div>
+            <div class="row">
+              <div class="lead"><div class="t">Clear extracted state</div><div class="d">Removes commitments and open loops. Your captured history stays.</div></div>
+              <div class="trail"><button class="btn danger sm">Clear</button></div>
+            </div>
+            <div class="row">
+              <div class="lead"><div class="t">Delete all data</div><div class="d">Erases capture, memory, and state from this Mac.</div></div>
+              <div class="trail"><button class="btn danger sm">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13"/></svg>
+                Delete all data</button></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- APPEARANCE -->
+        <div class="pane" data-pane="appearance">
+          <div class="card">
+            <div class="card-head"><div class="card-label">Appearance &amp; overlay</div>
+              <div class="card-sub">Tune how the glass reads, and how it behaves when it's collapsed.</div></div>
+            <div class="row">
+              <div class="lead"><div class="t">Theme</div><div class="d">Dark, light, or match the system.</div></div>
+              <div class="trail"><div class="seg" data-theme-seg>
+                <span data-pref="dark" class="on">Dark</span><span data-pref="light">Light</span><span data-pref="auto">Auto</span>
+              </div></div>
+            </div>
+            <div class="row">
+              <div class="lead"><div class="t">Panel text size</div><div class="d">Scale messages, answers, notes, and composer text.</div></div>
+              <div class="trail"><div class="slider">
+                <span style="font-size:12px;color:var(--faint)">A</span>
+                <div class="track"><div class="fill" style="width:66px"></div><div class="knob" style="left:57px"></div></div>
+                <span style="font-size:17px">A</span><span style="font-size:13px;color:var(--muted);width:38px">100%</span>
+              </div></div>
+            </div>
+            <div class="row">
+              <div class="lead"><div class="t">Open on hover</div><div class="d">Resting the cursor on the pill opens the panel — no click needed.</div></div>
+              <div class="trail"><div class="toggle on" data-toggle><i></i></div></div>
+            </div>
+            <div class="row">
+              <div class="lead"><div class="t">Dim when not focused</div><div class="d">Let the glass fall to its dimmer look while you work elsewhere.</div></div>
+              <div class="trail"><div class="toggle on" data-toggle><i></i></div></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- SHORTCUTS -->
+        <div class="pane" data-pane="shortcuts">
+          <div class="card">
+            <div class="card-head"><div class="card-label">Shortcuts</div>
+              <div class="card-sub">Click a shortcut to change it. Saved instantly, works everywhere.</div></div>
+            <div class="row">
+              <div class="lead"><div class="t">Draft with SHOGUN</div><div class="d">Tap ⌥ (Option) alone — always on, not rebindable.</div></div>
+              <div class="trail"><span class="kbd">⌥</span></div>
+            </div>
+            <div class="row">
+              <div class="lead"><div class="t">Show / hide overlay</div><div class="d">Summon or dismiss the panel from anywhere.</div></div>
+              <div class="trail"><span class="kbd">⌃</span><span class="kbd">⌥</span><span class="kbd">N</span></div>
+            </div>
+            <div class="row">
+              <div class="lead"><div class="t">Quit</div><div class="d">Close SHOGUN entirely.</div></div>
+              <div class="trail"><span class="kbd">⌘</span><span class="kbd">Q</span></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- MEMORY -->
+        <div class="pane" data-pane="memory">
+          <div class="card">
+            <div class="card-head"><div class="card-label">What SHOGUN is tracking</div></div>
+            <div class="stat">
+              <div><div class="k">6</div><div class="l">Commitments</div></div>
+              <div><div class="k">3</div><div class="l">Open loops</div></div>
+              <div><div class="k">41</div><div class="l">People &amp; projects</div></div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="row">
+              <div class="lead"><div class="t">Clear extracted state</div><div class="d">Removes the commitments and open loops SHOGUN extracted. Your captured history stays. This can't be undone.</div></div>
+              <div class="trail"><button class="btn danger sm">Clear</button></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- CONNECTIONS -->
+        <div class="pane" data-pane="connections">
+          <div class="card">
+            <div class="card-head"><div class="card-label">First-layer services</div>
+              <div class="card-sub">Integrations connect directly to each service. Data stays on your device.</div></div>
+            <div class="conn" style="border-top:1px solid var(--line)">
+              <span class="tile mail">M</span>
+              <div class="meta"><span class="n">Mail</span><span class="s ok">Connected · read + draft</span></div>
+              <button class="btn sm">Disconnect</button></div>
+            <div class="conn"><span class="tile cal">C</span>
+              <div class="meta"><span class="n">Calendar</span><span class="s ok">Connected · read</span></div>
+              <button class="btn sm">Disconnect</button></div>
+            <div class="conn"><span class="tile chat">S</span>
+              <div class="meta"><span class="n">Slack</span><span class="s">Not available yet</span></div>
+              <button class="btn sm" style="opacity:.5">Connect</button></div>
+            <div class="conn"><span class="tile notes">N</span>
+              <div class="meta"><span class="n">Notion</span><span class="s">Not connected</span></div>
+              <button class="btn primary sm">Connect</button></div>
+          </div>
+        </div>
+
+        <!-- AI SESSIONS -->
+        <div class="pane" data-pane="aisessions">
+          <div class="card">
+            <div class="card-head"><div class="card-label">AI sessions</div></div>
+            <div class="row">
+              <div class="lead"><div class="t">Import coding-tool transcripts</div><div class="d">Read your local AI coding-tool transcripts so SHOGUN remembers what you worked on and decided there. Stays on your device.</div></div>
+              <div class="trail"><div class="seg"><span class="on">Importing</span><span>Off</span></div></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- MODEL & KEY -->
+        <div class="pane" data-pane="model">
+          <div class="card">
+            <div class="card-head"><div class="card-label">Provider</div></div>
+            <div class="row">
+              <div class="lead"><div class="t">Runs your chat and drafts</div><div class="d">Chat and ⌥-drafts use the provider you pick, with your own key.</div></div>
+              <div class="trail"><div class="seg"><span class="on">Anthropic</span><span>OpenRouter</span><span>OpenAI</span><span>Gemini</span></div></div>
+            </div>
+            <div class="row">
+              <div class="lead"><div class="t">Model id</div><div class="d">Leave blank to use the provider default.</div></div>
+              <div class="trail"><div class="input" style="width:240px">Model id (blank = default)</div></div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-head"><div class="card-label">Your key</div>
+              <div class="card-sub">Kept per provider in your macOS Keychain — switching doesn't remove the others.</div></div>
+            <div class="row">
+              <div class="lead"><div class="t">Anthropic key</div><div class="d">Add a key for real answers instead of an echo.</div></div>
+              <div class="trail"><span class="badge warn"><span class="dot"></span>Not set</span></div>
+            </div>
+            <div class="row">
+              <div class="input" style="flex:1">Paste your Anthropic API key…</div>
+              <div class="trail"><button class="btn primary">Save</button><button class="btn danger">Remove</button></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- NIGHTLY -->
+        <div class="pane" data-pane="nightly">
+          <div class="card">
+            <div class="card-head"><div class="card-label">Nightly review</div>
+              <div class="card-sub">While your Mac is idle overnight, SHOGUN works through the day and updates what it's tracking. Runs on this device only.</div></div>
+            <div class="row">
+              <div class="lead"><div class="t">Last run</div><div class="d">Finished at 2:14 AM, no errors.</div></div>
+              <div class="trail"><span class="badge ok"><span class="dot"></span>2:14 AM</span><button class="btn sm">Run now</button></div>
+            </div>
+            <div class="stat" style="padding-top:16px;border-top:1px solid var(--line)">
+              <div><div class="k">1,204</div><div class="l">Events read</div></div>
+              <div><div class="k">38</div><div class="l">Updates made</div></div>
+              <div><div class="k">9</div><div class="l">Chunks sent</div></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- APPROVALS -->
+        <div class="pane" data-pane="approvals">
+          <div class="card">
+            <div class="card-head"><div class="card-label">Waiting for you</div>
+              <div class="card-sub">Anything that leaves your device waits here for your explicit confirmation.</div></div>
+            <div class="appr">
+              <div class="top"><span class="op">Send email — Alice Reyes</span>
+                <span class="badge warn"><span class="dot"></span>third-party (Composio)</span></div>
+              <div class="quote">Hi Alice — confirming the vendor renewal is settled at 12k for the year. I'll send the revised deck before the launch review.<br><br>— Sent from SHOGUN</div>
+              <div class="acts"><button class="btn primary">Confirm &amp; send</button><button class="btn">Reject</button></div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </section>
+  </div>
+</div>
+
+<script>
+  const meta = {
+    account:["Account","Your plan and sign-in."],
+    privacy:["Privacy","What SHOGUN can access on this Mac — and how to wipe it."],
+    appearance:["Appearance","How the overlay looks and behaves when it hangs from the notch."],
+    shortcuts:["Shortcuts","Reach SHOGUN from any app without breaking your flow."],
+    memory:["Memory","The commitments and open loops SHOGUN has extracted from your work."],
+    connections:["Connections","First-layer integrations connect directly to each service."],
+    aisessions:["AI sessions","An opt-in source: your local AI coding-tool transcripts."],
+    model:["Model & Key","The provider your chat and ⌥-drafts run on, and the key that powers them."],
+    nightly:["Nightly review","What SHOGUN works out while your Mac is idle overnight."],
+    approvals:["Approvals","Everything leaving the device, held for your explicit OK."]
+  };
+  const navs = document.querySelectorAll(".nav"), panes = document.querySelectorAll(".pane");
+  const title = document.getElementById("ch-title"), sub = document.getElementById("ch-sub");
+  const head = document.querySelector(".content-head");
+
+  navs.forEach(n => n.addEventListener("click", () => {
+    const tab = n.dataset.tab;
+    navs.forEach(x => x.classList.toggle("active", x === n));
+    panes.forEach(p => p.classList.toggle("active", p.dataset.pane === tab));
+    title.textContent = meta[tab][0]; sub.textContent = meta[tab][1];
+    head.style.animation = "none"; void head.offsetWidth; head.style.animation = "rise 240ms var(--ease) both";
+    document.querySelector(".content-body").scrollTop = 0;
+  }));
+
+  document.querySelectorAll("[data-toggle]").forEach(t =>
+    t.addEventListener("click", () => t.classList.toggle("on")));
+  document.querySelectorAll(".seg").forEach(seg =>
+    seg.querySelectorAll("span").forEach(opt =>
+      opt.addEventListener("click", () => {
+        seg.querySelectorAll("span").forEach(o => o.classList.toggle("on", o === opt));
+      })));
+</script>
+</body>
+</html>
