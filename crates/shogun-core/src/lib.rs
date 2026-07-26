@@ -47,6 +47,9 @@ pub mod composio_send;
 /// Concrete HTTPS clients for first-layer connectors (the allowlisted egress, FR-TR-03).
 #[cfg(feature = "net")]
 pub mod mcp_http;
+/// Gmail REST v1 transport, implementing McpRpc (MCP-independent, allowlisted egress, FR-TR-03).
+#[cfg(feature = "net")]
+pub mod gmail_rest;
 pub mod gmail_shape;
 pub mod metrics;
 pub mod notch;
