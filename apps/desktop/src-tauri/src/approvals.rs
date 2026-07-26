@@ -211,7 +211,11 @@ pub mod mac {
             return Err("draft fallback only applies to email".into());
         };
         let (subject, mail_body) = shogun_mcp::composio::parse_gmail_full_body(body);
-        let args = json!({ "recipient_email": to, "subject": subject, "body": mail_body });
+        // Key names are the arg contract of `create_draft` → `gmail_shape::draft_request_body`,
+        // which reads `to`/`subject`/`body`. The old official-MCP tool took `recipient_email`; after
+        // the transport swap to GmailRestRpc that name silently produced "draft: missing to" and the
+        // FR-C2-05 fallback never wrote a draft. `gmail_shape::draft_request_body` has a matching test.
+        let args = json!({ "to": to, "subject": subject, "body": mail_body });
         let rt = runtime.lock().map_err(|_| "runtime lock poisoned".to_string())?;
         rt.execute_write_owned(shogun_mcp::scope::Service::Gmail, "draft_create_update", args).map(|_| ())
     }

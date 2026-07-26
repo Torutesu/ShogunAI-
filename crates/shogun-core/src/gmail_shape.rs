@@ -119,6 +119,18 @@ mod tests {
     }
 
     #[test]
+    fn draft_requires_the_to_key_not_recipient_email() {
+        // The arg contract callers must honour: the recipient key is `to`. The draft-fallback in
+        // approvals.rs once passed `recipient_email` (the old official-MCP tool name), which this
+        // function rejects — silently breaking the FR-C2-05 draft save after the GmailRestRpc swap.
+        // This locks the name so that seam can't rot again.
+        let wrong = json!({ "recipient_email": "b@y.com", "subject": "Hi", "body": "x" });
+        assert!(draft_request_body(&wrong).is_err(), "recipient_email must NOT satisfy the contract");
+        let right = json!({ "to": "b@y.com", "subject": "Hi", "body": "x" });
+        assert!(draft_request_body(&right).is_ok(), "`to` is the required key");
+    }
+
+    #[test]
     fn base64_url_matches_known_vector() {
         // "foobar" の base64url(no pad) は "Zm9vYmFy"。
         assert_eq!(base64_url_no_pad(b"foobar"), "Zm9vYmFy");
