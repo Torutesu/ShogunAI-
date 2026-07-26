@@ -64,7 +64,7 @@ export function main() {
   console.log("Wrote dist/tokens.css and dist/tokens.ts");
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (fileURLToPath(import.meta.url) === process.argv[1]) {
   main();
 }
 

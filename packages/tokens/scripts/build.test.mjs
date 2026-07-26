@@ -58,6 +58,9 @@ test("generateCss does NOT repeat static tokens in the light block", () => {
 import { generateTs, main } from "./build.mjs";
 import { readFileSync as _read, existsSync } from "node:fs";
 import { resolve as _resolve } from "node:path";
+import { dirname as _dirname } from "node:path";
+import { fileURLToPath as _ftu } from "node:url";
+const PKG_ROOT = _resolve(_dirname(_ftu(import.meta.url)), "..");
 
 test("generateTs emits a typed const with themed + static values", () => {
   const ts = generateTs(sample);
@@ -69,9 +72,8 @@ test("generateTs emits a typed const with themed + static values", () => {
 
 test("main writes dist/tokens.css and dist/tokens.ts", () => {
   main();
-  const pkg = _resolve(process.cwd());
-  assert.ok(existsSync(_resolve(pkg, "dist/tokens.css")));
-  assert.ok(existsSync(_resolve(pkg, "dist/tokens.ts")));
-  const css = _read(_resolve(pkg, "dist/tokens.css"), "utf8");
+  assert.ok(existsSync(_resolve(PKG_ROOT, "dist/tokens.css")));
+  assert.ok(existsSync(_resolve(PKG_ROOT, "dist/tokens.ts")));
+  const css = _read(_resolve(PKG_ROOT, "dist/tokens.css"), "utf8");
   assert.match(css, /--glass: rgba\(21, 24, 31, 0\.85\)/);
 });
