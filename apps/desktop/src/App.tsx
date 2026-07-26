@@ -490,6 +490,19 @@ export function App(): JSX.Element {
                 ) : null}
               </div>
               <div className="head__right">
+                {/* The panel is for a glance and a keystroke; anything you want to sit and read —
+                    the brief, health, memory, the run log — lives in the Full UI window. */}
+                <button
+                  className="icon"
+                  type="button"
+                  title={t.openFullUi}
+                  aria-label={t.openFullUi}
+                  onClick={() => {
+                    if (IN_TAURI) void invoke("open_full_ui").catch((err) => uiLog(`open_full_ui failed: ${err}`));
+                  }}
+                >
+                  ⤢
+                </button>
                 <button className="icon" type="button" title={t.settings} aria-label={t.settings} onClick={openSettings}>
                   ⚙︎
                 </button>

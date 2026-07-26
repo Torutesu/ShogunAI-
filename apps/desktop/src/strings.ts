@@ -22,6 +22,8 @@ export const STRINGS = {
     draftTitle: "Draft where you're typing (tap ⌥)",
     // settings
     settings: "Settings",
+    // The separate window (spec §D) — where the brief, health, memory and logs live.
+    openFullUi: "Open SHOGUN window",
     // connections (first-layer integrations)
     connections: "Connections",
     connectionsHint: "First-layer integrations connect directly to each service. Data stays on your device.",

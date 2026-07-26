@@ -387,8 +387,8 @@ pub mod mac {
                 shared.recorder.record(Body::ExpandCommit { t0_mono_ns: t0 });
             }
             EngineOutput::OpenFullUi => {
-                // The separate Full UI window is a later work package (§6.15); log the intent.
-                eprintln!("[spike] OpenFullUi requested (Full UI window not yet implemented)");
+                // An ordinary window, not the overlay — see build_full_ui_window for why.
+                crate::build_full_ui_window(app);
             }
             EngineOutput::TopBandEntry => {
                 shared.recorder.record(Body::TopBandEntry { count: 1 });

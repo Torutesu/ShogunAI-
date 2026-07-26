@@ -33,6 +33,9 @@ static PANEL_BEHAVIOR: std::sync::atomic::AtomicUsize =
 /// below system UI. (Earlier builds used Status/25.)
 #[cfg(target_os = "macos")]
 const OVERLAY_LEVEL: isize = 3;
+/// Window label for the Full UI (spec §D). Shared by the builder and the open path so the
+/// "already open → focus it" check can't drift from the label the window was built with.
+pub(crate) const FULL_UI_LABEL: &str = "fullui";
 
 /// True while the USER hid the overlay (toggle shortcut / Esc / tray). The auto-residency
 /// machinery (watchers, heal, respawn) must respect this — a deliberately hidden panel stays
@@ -643,6 +646,41 @@ fn build_panel_window(handle: &tauri::AppHandle) {
             eprintln!("[shell] panel window built on the active space");
         }
         Err(e) => eprintln!("[shell] panel window build failed: {e}"),
+    }
+}
+
+/// The Full UI window (spec §D) — Today, Context Health, Sources, Memory, Activity, Traceability.
+///
+/// Deliberately an ORDINARY window, not the overlay: the notch panel is a nonactivating NSPanel
+/// that floats over everyone's Spaces and must never steal focus, whereas this is a place you sit
+/// and read, so it wants a title bar, focus, resizing, and normal window management. It therefore
+/// skips `adopt_native_panel` entirely and loads its own document (`fullui.html`).
+///
+/// Already open → focus it rather than building a second one.
+pub(crate) fn build_full_ui_window(handle: &tauri::AppHandle) {
+    use tauri::Manager;
+    if let Some(win) = handle.get_webview_window(FULL_UI_LABEL) {
+        // Re-opening from the panel should surface the window you already have.
+        let _ = win.unminimize();
+        let _ = win.show();
+        let _ = win.set_focus();
+        eprintln!("[shell] full UI already open — focused");
+        return;
+    }
+    let builder = tauri::WebviewWindowBuilder::new(
+        handle,
+        FULL_UI_LABEL,
+        tauri::WebviewUrl::App("fullui.html".into()),
+    )
+    .title("SHOGUN")
+    .resizable(true)
+    // Spec §D floor. Below this the sidebar plus a three-card health row stops fitting.
+    .min_inner_size(1040.0, 720.0)
+    .inner_size(1200.0, 820.0)
+    .focused(true);
+    match builder.build() {
+        Ok(_) => eprintln!("[shell] full UI window built"),
+        Err(e) => eprintln!("[shell] full UI window build failed: {e}"),
     }
 }
 
