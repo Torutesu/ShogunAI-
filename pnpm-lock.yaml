@@ -132,6 +132,12 @@ importers:
         specifier: workspace:*
         version: link:../types
 
+  packages/tokens:
+    devDependencies:
+      '@shogun-ai/config':
+        specifier: workspace:*
+        version: link:../config
+
   packages/types: {}
 
   packages/ui:
