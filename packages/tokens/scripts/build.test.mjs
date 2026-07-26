@@ -133,3 +133,13 @@ test("main also writes dist/tokens.web.css with themed web blocks", () => {
   assert.match(css, /:root\s*\{[^}]*--bg:\s*#ffffff/);
   assert.match(css, /:root\[data-theme='dark'\]\s*\{[^}]*--accent:\s*#38bdf8/);
 });
+
+test("generateCss emits the shadow/blur static tokens from real tokens.json", () => {
+  const t = JSON.parse(_read(_resolve(PKG_ROOT, "src/tokens.json"), "utf8"));
+  const css = generateCss(t);
+  const base = css.slice(0, css.indexOf("}")); // base :root block
+  assert.match(base, /--blur:\s*blur\(38px\) saturate\(1\.8\)/);
+  assert.match(base, /--blur-sm:\s*blur\(30px\) saturate\(1\.7\)/);
+  assert.match(base, /--shadow-sm:\s*0 10px 26px rgba\(0, 0, 0, 0\.4\)/);
+  assert.match(base, /--shadow:\s*0 28px 66px rgba\(0, 0, 0, 0\.5\), inset 0 1px 0 rgba\(255, 255, 255, 0\.06\)/);
+});
