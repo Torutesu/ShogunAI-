@@ -84,5 +84,13 @@ export function validate(tokens) {
       }
     }
   }
+  const web = tokens.web?.themed ?? {};
+  for (const [name, byMode] of Object.entries(web)) {
+    for (const mode of MODES) {
+      if (byMode?.[mode] == null) {
+        errors.push(`web token "${name}" is missing mode "${mode}"`);
+      }
+    }
+  }
   return errors;
 }

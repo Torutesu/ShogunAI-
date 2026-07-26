@@ -55,6 +55,24 @@ test("generateCss does NOT repeat static tokens in the light block", () => {
   assert.doesNotMatch(lightBlock.slice(0, lightBlock.indexOf("}")), /--r-sm/);
 });
 
+test("validate passes for well-formed web tokens (incl. non-color values)", () => {
+  const good = {
+    static: {}, themed: {},
+    web: { themed: {
+      bg: { light: "#ffffff", dark: "#090b0d" },
+      "orb-blend": { light: "multiply", dark: "screen" },
+      "orb-opacity": { light: "0.55", dark: "0.4" },
+    } },
+  };
+  assert.deepEqual(validate(good), []);
+});
+
+test("validate flags a web token missing a mode", () => {
+  const bad = { static: {}, themed: {}, web: { themed: { bg: { light: "#ffffff" } } } };
+  const errors = validate(bad);
+  assert.ok(errors.some((e) => e.includes("bg") && e.includes("dark") && e.includes("web")));
+});
+
 import { generateTs, main } from "./build.mjs";
 import { readFileSync as _read, existsSync } from "node:fs";
 import { resolve as _resolve } from "node:path";
