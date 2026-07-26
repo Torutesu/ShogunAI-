@@ -75,11 +75,14 @@ const IN_TAURI =
 // views are user-resizable via the corner grip, and each remembers its own size across the
 // Rust-driven respawns.
 const W = 560;
-const H_OPEN = 300;
+const H_OPEN = 360;
 const H_HANDLE = 44;
 /** How long the cursor must rest on the collapsed pill before it opens. Long enough that crossing
  *  the pill on the way somewhere else doesn't trigger it, short enough to feel immediate. */
 const HOVER_DWELL_MS = 250;
+/** Grace period after the pointer leaves an unpinned panel. Long enough to cross the gap to a
+ *  control that overlaps it, short enough that the panel feels like it follows your attention. */
+const AUTO_COLLAPSE_MS = 400;
 const H_SETTINGS = 460; // taller default so setting groups fit; body scrolls; clamped to screen
 const MIN_W = 460;
 const MIN_H = 240;
@@ -190,6 +193,14 @@ export function App(): JSX.Element {
   useEffect(() => saveJson("shogun.msgs", msgs.slice(-50)), [msgs]);
   useEffect(() => saveJson("shogun.appearance", appearance), [appearance]);
   const [showState, setShowState] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  /// Pinned = the panel stays put. Unpinned = it withdraws as soon as the pointer leaves, which is
+  /// the counterpart to opening on hover: the same gesture that summons it also dismisses it, so
+  /// a glance costs no clicks at all. Persisted because the panel is respawned by Rust.
+  const [pinned, setPinned] = useState<boolean>(() => loadJson<boolean>("shogun.pinned", true));
+  /// Where this session's conversation begins in the persisted store. Captured once at mount, so
+  /// anything above it is history rather than part of what you're doing now.
+  const historyMark = useRef<number | null>(null);
   const [showSettings, setShowSettings] = useState(false);
 
   // Open-view sizes are user-resizable (corner grip) and persist across the Rust-driven respawns.
@@ -203,6 +214,7 @@ export function App(): JSX.Element {
     const s = loadJson<Size>("shogun.size.settings", { w: W, h: H_SETTINGS });
     return clampSize(s.w, s.h);
   });
+  useEffect(() => saveJson("shogun.pinned", pinned), [pinned]);
   useEffect(() => saveJson("shogun.size.chat", chatSize), [chatSize]);
   useEffect(() => saveJson("shogun.size.settings", setSize), [setSize]);
 
@@ -331,6 +343,41 @@ export function App(): JSX.Element {
     threadRef.current?.scrollTo({ top: threadRef.current.scrollHeight, behavior: "smooth" });
   }, [msgs, thinking, open]);
 
+  // Withdraw when the pointer leaves — but only when doing so can't destroy work. Typing in the
+  // composer, a half-written question, or an answer still streaming all mean the panel is in use
+  // even though the cursor wandered off; collapsing then would throw away what the user was
+  // doing. The delay covers the gap between the panel and anything it overlaps, so brushing past
+  // an edge doesn't dismiss it.
+  const leaveTimer = useRef<number | null>(null);
+  const cancelAutoCollapse = useCallback((): void => {
+    if (leaveTimer.current != null) {
+      window.clearTimeout(leaveTimer.current);
+      leaveTimer.current = null;
+    }
+  }, []);
+  const onPanelLeave = useCallback((): void => {
+    if (pinned) return;
+    cancelAutoCollapse();
+    leaveTimer.current = window.setTimeout(() => {
+      leaveTimer.current = null;
+      const composerHasFocus = document.activeElement?.classList.contains("composer__input") ?? false;
+      if (composerHasFocus) return;
+      setInput((cur) => {
+        if (cur.trim().length > 0) return cur;
+        setThinking((busy) => {
+          if (!busy) {
+            setShowSettings(false);
+            setOpen(false);
+            sizeForViewRef.current({ open: false });
+          }
+          return busy;
+        });
+        return cur;
+      });
+    }, AUTO_COLLAPSE_MS);
+  }, [pinned, cancelAutoCollapse]);
+  useEffect(() => cancelAutoCollapse, [cancelAutoCollapse]);
+
   const collapse = (): void => {
     setShowSettings(false);
     setOpen(false);
@@ -400,9 +447,10 @@ export function App(): JSX.Element {
       .catch((e) => finish(`${t.answerFailed}: ${e}`));
   }, [input, thinking, status]);
 
-  const draftAtCursor = (): void => {
-    if (IN_TAURI) void invoke("inline_at_cursor").catch(() => undefined);
-  };
+  // Fix the history boundary on first render, before anything is appended this session.
+  if (historyMark.current === null) historyMark.current = msgs.length;
+  const priorCount = historyMark.current;
+  const visibleMsgs = showHistory ? msgs : msgs.slice(priorCount);
 
   const totalState = state.commitments.length + state.open_loops.length;
   const live = appName(ctxApp || status?.app || "");
@@ -458,7 +506,7 @@ export function App(): JSX.Element {
 
   return (
     <div className="stage">
-      <div className="panel">
+      <div className="panel" onPointerEnter={cancelAutoCollapse} onPointerLeave={onPanelLeave}>
         {showSettings ? (
           <Settings
             appearance={appearance}
@@ -490,6 +538,37 @@ export function App(): JSX.Element {
                 ) : null}
               </div>
               <div className="head__right">
+                <button
+                  className={`icon${pinned ? " icon--on" : ""}`}
+                  type="button"
+                  title={pinned ? t.unpin : t.pin}
+                  aria-label={pinned ? t.unpin : t.pin}
+                  aria-pressed={pinned}
+                  onClick={() => setPinned((v) => !v)}
+                >
+                  {/* A pin that leans when unpinned — the state is legible without reading the
+                      tooltip, which matters for a control that changes how the panel behaves. */}
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                       stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"
+                       style={pinned ? undefined : { transform: "rotate(45deg)" }}>
+                    <path d="M9 4h6l-1 6 3 3H7l3-3-1-6z" />
+                    <path d="M12 13v7" />
+                  </svg>
+                </button>
+                {/* Only offered when there is a backlog to open — an always-present control for an
+                    empty history is a button that does nothing most of the time. */}
+                {priorCount > 0 ? (
+                  <button
+                    className="icon"
+                    type="button"
+                    title={t.history}
+                    aria-label={t.history}
+                    aria-pressed={showHistory}
+                    onClick={() => setShowHistory((v) => !v)}
+                  >
+                    ⏱
+                  </button>
+                ) : null}
                 {/* The panel is for a glance and a keystroke; anything you want to sit and read —
                     the brief, health, memory, the run log — lives in the Full UI window. */}
                 <button
@@ -546,14 +625,14 @@ export function App(): JSX.Element {
             ) : null}
 
             <div className="thread" ref={threadRef}>
-              {msgs.length === 0 ? (
+              {visibleMsgs.length === 0 ? (
                 <div className="welcome">
                   <div className="welcome__t">{t.welcomeTitle}</div>
                   <div className="welcome__s">{t.welcomeSub}</div>
                   {IN_TAURI && status && !status.has_key ? <div className="welcome__key">{t.noKey}</div> : null}
                 </div>
               ) : (
-                msgs.map((m, i) => (
+                visibleMsgs.map((m, i) => (
                   <div key={i} className={`msg msg--${m.role}`}>
                     {m.text}
                     {/* What the answer was grounded in — so the user can check SHOGUN rather
@@ -610,16 +689,10 @@ export function App(): JSX.Element {
                   >
                     {providerLabel} <span className="composer__caret" aria-hidden="true">⌄</span>
                   </button>
+                  {/* No draft button here. Drafting is the ⌥-tap gesture — a button that
+                      duplicates it adds a control without adding a capability, and the composer
+                      is the one place that has to stay uncluttered. */}
                   <div className="composer__tools">
-                    <button
-                      className="composer__draft"
-                      type="button"
-                      onClick={draftAtCursor}
-                      title={t.draftTitle}
-                      aria-label={t.draftTitle}
-                    >
-                      ✎
-                    </button>
                     <button
                       className="composer__send"
                       type="button"

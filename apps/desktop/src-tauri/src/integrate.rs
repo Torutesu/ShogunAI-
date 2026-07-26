@@ -765,10 +765,22 @@ pub mod mac {
         shared.send(Ev::Input(EngineInput::Hotkey));
     }
 
-    /// "Open Full UI" chosen from the Expanded panel.
+    /// "Open Full UI" chosen from the panel.
+    ///
+    /// The window is built here rather than waiting on the state machine's `OpenFullUi` effect.
+    /// That effect only fires from `Expanded`, but the panel's open/closed state is driven by
+    /// direct clicks in the webview (see App.tsx) — the Rust machine tracks the hover lifecycle
+    /// and is usually still Collapsed when this arrives, so routing the window through it meant
+    /// the command was silently swallowed. Opening a separate window is not part of the notch's
+    /// hover/expand lifecycle, so it shouldn't be gated on it.
+    ///
+    /// The input is still sent: when the machine *is* Expanded it collapses the overlay, which is
+    /// the right thing when you've just asked for the big window. `build_full_ui_window` is
+    /// idempotent, so the effect handler running too is harmless (it focuses the existing one).
     #[tauri::command]
-    pub fn open_full_ui(shared: tauri::State<'_, Arc<Shared>>) {
+    pub fn open_full_ui(shared: tauri::State<'_, Arc<Shared>>, app: AppHandle) {
         eprintln!("[spike] cmd open_full_ui");
+        crate::build_full_ui_window(&app);
         shared.send(Ev::Input(EngineInput::OpenFullUi));
     }
 

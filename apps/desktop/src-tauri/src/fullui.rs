@@ -271,8 +271,17 @@ pub mod mac {
     /// common case and blank the whole window, so they are looked up optionally and their sections
     /// simply come back empty.
     #[tauri::command]
-    pub fn full_ui_view(db: tauri::State<'_, Db>, app: tauri::AppHandle) -> Result<FullUiView, String> {
+    pub fn full_ui_view(app: tauri::AppHandle) -> Result<FullUiView, String> {
         use tauri::Manager;
+        // The shell deliberately keeps running when the memory store can't be opened (lib.rs:
+        // "the daemon simply doesn't capture"), so `Db` may legitimately be absent. Declaring it
+        // as a `State` parameter turned that survivable condition into a raw Tauri error in the
+        // window; say what actually happened instead.
+        let Some(db) = app.try_state::<Db>() else {
+            return Err("Capture isn't running — the memory store couldn't be opened, so there's \
+                        nothing to show yet. Check the app log for the reason."
+                .to_string());
+        };
         let now = db.now_ms();
         let metrics = app.state::<crate::metrics::SloRegister>();
         let connectors = app.try_state::<crate::connectors::mac::ConnectorState>();

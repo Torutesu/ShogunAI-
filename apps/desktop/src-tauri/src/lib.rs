@@ -38,6 +38,12 @@ const OVERLAY_LEVEL: isize = 3;
 /// Window label for the Full UI (spec §D). Shared by the builder and the open path so the
 /// "already open → focus it" check can't drift from the label the window was built with.
 pub(crate) const FULL_UI_LABEL: &str = "fullui";
+/// Full UI window size, in LOGICAL points. The minimum is the spec §D floor — below it the
+/// sidebar plus a three-card health row stops fitting.
+const FULL_UI_W: f64 = 1200.0;
+const FULL_UI_H: f64 = 820.0;
+const FULL_UI_MIN_W: f64 = 1040.0;
+const FULL_UI_MIN_H: f64 = 720.0;
 
 /// True while the USER hid the overlay (toggle shortcut / Esc / tray). The auto-residency
 /// machinery (watchers, heal, respawn) must respect this — a deliberately hidden panel stays
@@ -451,8 +457,47 @@ unsafe fn reposition_to_cursor_screen(ptr: *mut objc2::runtime::AnyObject) {
     }
 }
 
-/// Toggle the overlay (spec: one shortcut/tray click shows it here if hidden or elsewhere, hides
-/// it if it's visible on this Space). All NSWindow access on the main thread.
+/// True when the panel is currently sitting on the display the cursor is on.
+///
+/// # Safety
+/// `ptr` must be a live `NSWindow`/`NSPanel`, called on the main thread.
+#[cfg(target_os = "macos")]
+unsafe fn panel_is_on_cursor_screen(ptr: *mut objc2::runtime::AnyObject) -> bool {
+    use objc2::runtime::AnyObject;
+    use objc2::{class, msg_send};
+    use objc2_foundation::{NSPoint, NSRect};
+    let mouse: NSPoint = msg_send![class!(NSEvent), mouseLocation];
+    let w: NSRect = msg_send![ptr, frame];
+    // Compare by the panel's own centre: it hangs from the top of one display, so its midpoint is
+    // unambiguously on that display even when displays are adjacent.
+    let cx = w.origin.x + w.size.width / 2.0;
+    let cy = w.origin.y + w.size.height / 2.0;
+    let screens: *mut AnyObject = msg_send![class!(NSScreen), screens];
+    let count: usize = if screens.is_null() { 0 } else { msg_send![screens, count] };
+    for i in 0..count {
+        let sc: *mut AnyObject = msg_send![screens, objectAtIndex: i];
+        if sc.is_null() {
+            continue;
+        }
+        let f: NSRect = msg_send![sc, frame];
+        let has = |x: f64, y: f64| {
+            x >= f.origin.x && x <= f.origin.x + f.size.width && y >= f.origin.y && y <= f.origin.y + f.size.height
+        };
+        if has(mouse.x, mouse.y) {
+            return has(cx, cy);
+        }
+    }
+    // Cursor on no known screen — treat as "same" so the toggle still hides rather than doing
+    // nothing visible.
+    true
+}
+
+/// Toggle the overlay: hide it when it is already in front of you, otherwise bring it here.
+///
+/// "In front of you" means the cursor's DISPLAY, not merely the active Space. With two monitors
+/// the panel on display 1 is still on the active Space while you are working on display 2, so an
+/// active-Space test made the shortcut hide the panel instead of moving it — the panel could never
+/// be summoned to the second screen. All NSWindow access on the main thread.
 #[cfg(target_os = "macos")]
 fn toggle_panel(handle: &tauri::AppHandle) {
     let h = handle.clone();
@@ -464,7 +509,7 @@ fn toggle_panel(handle: &tauri::AppHandle) {
                 unsafe {
                     let v: bool = msg_send![ptr, isVisible];
                     let a: bool = msg_send![ptr, isOnActiveSpace];
-                    v && a
+                    v && a && panel_is_on_cursor_screen(ptr)
                 }
             })
             .unwrap_or(false);
@@ -680,13 +725,52 @@ pub(crate) fn build_full_ui_window(handle: &tauri::AppHandle) {
     .title("SHOGUN")
     .resizable(true)
     // Spec §D floor. Below this the sidebar plus a three-card health row stops fitting.
-    .min_inner_size(1040.0, 720.0)
-    .inner_size(1200.0, 820.0)
+    .min_inner_size(FULL_UI_MIN_W, FULL_UI_MIN_H)
+    .inner_size(FULL_UI_W, FULL_UI_H)
+    // Glass, like the panel: the webview paints a translucent tint over whatever is behind the
+    // window. Without `transparent` the blur has nothing to show through and the "glass" is just
+    // a dark rectangle.
+    .transparent(true)
+    // Overlay, NOT Transparent. `Transparent` took the traffic lights with it and left the window
+    // with no way to close — the content simply drew over where they had been. `Overlay` keeps
+    // them floating above a transparent title bar, which is what a glass window wants anyway; the
+    // pane reserves room for them so nothing sits underneath.
+    .title_bar_style(tauri::TitleBarStyle::Overlay)
     .focused(true);
     match builder.build() {
-        Ok(_) => eprintln!("[shell] full UI window built"),
+        Ok(win) => {
+            center_on_cursor_screen(&win);
+            eprintln!("[shell] full UI window built");
+        }
         Err(e) => eprintln!("[shell] full UI window build failed: {e}"),
     }
+}
+
+/// Put the window on the display the cursor is on, centred.
+///
+/// Tauri places a new window on the primary monitor, which on a multi-display desk means the Full
+/// UI opens somewhere you aren't looking. The panel already follows the cursor's screen; the
+/// window should too, for the same reason — you asked for it from wherever you were working.
+///
+/// Best-effort: if the cursor or monitor can't be resolved we leave the window where Tauri put it
+/// rather than guessing a position.
+fn center_on_cursor_screen(win: &tauri::WebviewWindow) {
+    let Ok(cursor) = win.cursor_position() else { return };
+    let Ok(Some(mon)) = win.monitor_from_point(cursor.x, cursor.y) else { return };
+
+    // Work in LOGICAL points, and use the size we asked for rather than reading it back.
+    // `outer_size()` right after build returns the pre-scaling size on a Retina display, so
+    // centring against it placed the window half a window-width too far right — far enough to
+    // hang off the edge of the screen.
+    let scale = mon.scale_factor();
+    let mp = mon.position().to_logical::<f64>(scale);
+    let ms = mon.size().to_logical::<f64>(scale);
+
+    // `max(mp.*)` keeps a window larger than the display pinned to the top-left corner instead of
+    // drifting off-screen to the left.
+    let x = (mp.x + (ms.width - FULL_UI_W) / 2.0).max(mp.x);
+    let y = (mp.y + (ms.height - FULL_UI_H) / 2.0).max(mp.y);
+    let _ = win.set_position(tauri::LogicalPosition::new(x, y));
 }
 
 /// The overlay's NSPanel subclass: `canBecomeKeyWindow` → YES. A borderless window's default is
@@ -835,6 +919,11 @@ fn adopt_native_panel(win: &tauri::WebviewWindow) {
         let _: () = msg_send![placeholder, release];
         let _: () = msg_send![panel, setContentView: cv];
         let _: () = msg_send![cv, release];
+
+        // No NSVisualEffectView here on purpose. Vibrancy frosts what is behind the window —
+        // it obscures your work rather than revealing it, which is the opposite of what this
+        // overlay wants. The panel is plain alpha over a transparent NSPanel so the window you
+        // were reading stays legible underneath.
 
         // Did the webview actually come with it? The panel can be perfectly placed, sized, ordered
         // front and still show nothing if the view it hosts is empty — and the webview keeps
@@ -1538,7 +1627,24 @@ fn db_key() -> Result<shogun_memory::DbKey, String> {
 #[cfg(target_os = "macos")]
 fn memory_db(app: &tauri::App) -> Result<shogun_core::daemon::Db, String> {
     use tauri::Manager;
-    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let mut dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    // Every checkout of this app shares one bundle identifier, so every branch would otherwise
+    // share one memory.db. A branch that adds a migration then leaves the file at a schema the
+    // other branch's binary refuses to open — correctly, since it can't know what a future
+    // migration did. `SHOGUN_DATA_SUFFIX` gives a worktree its own store so branches stop
+    // colliding; unset (the shipped app) it changes nothing.
+    if let Ok(suffix) = std::env::var("SHOGUN_DATA_SUFFIX") {
+        let suffix = suffix.trim();
+        if !suffix.is_empty() {
+            // Keep it a single path segment — this comes from a dev's shell, but a stray slash
+            // would silently write outside the app-data dir.
+            let safe: String = suffix.chars().filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_').collect();
+            if !safe.is_empty() {
+                dir = dir.join(format!("dev-{safe}"));
+                eprintln!("[spike] SHOGUN_DATA_SUFFIX set — using an isolated store: {safe}");
+            }
+        }
+    }
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let path = dir.join("memory.db");
     eprintln!("[spike] memory DB: {}", path.display());

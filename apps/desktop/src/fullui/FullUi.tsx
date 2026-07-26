@@ -8,6 +8,7 @@
 // state rather than deciding entitlement for itself.
 
 import { useState } from "react";
+import { Logo } from "../Logo";
 import { tf } from "../strings";
 import type {
   ActivityView,
@@ -48,9 +49,8 @@ export function FullUi({ view }: { view: FullUiView }): JSX.Element {
       <div className="full__body">
         <nav className="side">
           <div className="side__brand">
-            {/* The only emoji the brand allows. */}
-            <span className="side__mark">⚔</span>
-            <span className="side__name">SHOGUN</span>
+            <Logo size={24} />
+            <span className="side__name">ShogunAI</span>
           </div>
           {view.plan !== "pro" && <span className="side__plan">{planLabel(view.plan)}</span>}
           {NAV.map((n) => (

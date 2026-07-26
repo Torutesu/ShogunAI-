@@ -12,18 +12,25 @@ export const STRINGS = {
     waiting: "waiting",
     // peek (hover preview)
     peekHint: "click to open",
-    openPanel: "Open SHOGUN (⌃⌥N)",
+    openPanel: "Open ShogunAI (⌥J)",
     // welcome (expanded, empty thread)
     welcomeTitle: "What can I take off your plate?",
     welcomeSub: "Ask about your work, or tap ⌥ (Option) in any app to draft where you're typing.",
     noKey: "No key yet — add one in settings for real answers.",
     // composer
-    ask: "Ask SHOGUN…",
+    ask: "Ask ShogunAI…",
     draftTitle: "Draft where you're typing (tap ⌥)",
     // settings
     settings: "Settings",
+    // Earlier conversations. Kept out of the way by default: the panel is for asking something
+    // now, not for reading back a transcript.
+    history: "Earlier messages",
+    // Pinning is the counterpart to opening on hover: unpinned, the panel withdraws the moment
+    // your attention does.
+    pin: "Keep open",
+    unpin: "Let it withdraw when I look away",
     // The separate window (spec §D) — where the brief, health, memory and logs live.
-    openFullUi: "Open SHOGUN window",
+    openFullUi: "Open ShogunAI window",
     // connections (first-layer integrations)
     connections: "Connections",
     connectionsHint: "First-layer integrations connect directly to each service. Data stays on your device.",
@@ -35,12 +42,12 @@ export const STRINGS = {
     // AI coding-tool transcripts (opt-in source)
     aiSessions: "AI sessions",
     aiSessionsHint:
-      "Read your local AI coding-tool transcripts so SHOGUN remembers what you worked on and decided there. Stays on your device.",
+      "Read your local AI coding-tool transcripts so ShogunAI remembers what you worked on and decided there. Stays on your device.",
     aiSessionsOn: "Importing",
     aiSessionsOff: "Off",
-    // nightly cycle — what SHOGUN works out while you're away
+    // nightly cycle — what ShogunAI works out while you're away
     dream: "Nightly review",
-    dreamHint: "While your Mac is idle overnight, SHOGUN works through the day and updates what it's tracking.",
+    dreamHint: "While your Mac is idle overnight, ShogunAI works through the day and updates what it's tracking.",
     dreamNever: "Hasn't run yet.",
     dreamLocal: "Running on this device only.",
     dreamOk: "Last run",
@@ -68,7 +75,7 @@ export const STRINGS = {
     autoHide: "Auto-hide",
     stayOpenHint: "Keep the panel open until you close it.",
     autoHideHint: "Slide back to the notch when you move away.",
-    draftShortcut: "Draft with SHOGUN",
+    draftShortcut: "Draft with ShogunAI",
     draftFixedHint: "Tap ⌥ (Option) alone — always on, not rebindable.",
     summonShortcut: "Show / hide overlay",
     quitShortcut: "Quit",
@@ -82,7 +89,7 @@ export const STRINGS = {
     modelHint: "Chat and ⌥-tap drafts run on this provider with your own key. Each provider keeps its own key below.",
     key: "Your key",
     keyPresent: "Connected — answers and drafts are yours.",
-    keyAbsent: "Not set — SHOGUN will echo until you add a key.",
+    keyAbsent: "Not set — ShogunAI will echo until you add a key.",
     keyRejected: "This key was rejected. Check it, or pick another provider.",
     // Each provider keeps its own key; only the one selected above is ever used.
     keyScope: "Kept per provider — switching doesn't remove the others.",
@@ -96,8 +103,8 @@ export const STRINGS = {
     keySave: "Save",
     keyRemove: "Remove",
     keySaved: "Saved to your Keychain — answers are live.",
-    quit: "Quit SHOGUN",
-    quitTitle: "Quit SHOGUN",
+    quit: "Quit ShogunAI",
+    quitTitle: "Quit ShogunAI",
     minimize: "Minimize to the notch",
     resizeHint: "Drag to resize",
     send: "Send",
@@ -108,7 +115,7 @@ export const STRINGS = {
     stateEmpty: "Nothing tracked yet.",
     // memory reset (deliberate, typed confirmation — context is foundational)
     memory: "Memory",
-    memoryHint: "Removes the commitments and open loops SHOGUN extracted. Your captured history stays. This can't be undone.",
+    memoryHint: "Removes the commitments and open loops ShogunAI extracted. Your captured history stays. This can't be undone.",
     memoryClear: "Clear extracted state",
     memoryConfirm: "Permanently delete {n} extracted items? Type CLEAR to confirm.",
     memoryConfirmPlaceholder: "Type CLEAR",
@@ -140,9 +147,9 @@ export const FULL_UI = {
     planStandard: "Standard",
     // pane subtitles
     todaySub: "Your brief, your schedule, and what to do about it.",
-    healthSub: "What SHOGUN can and can't see right now — every number has a way to fix it.",
+    healthSub: "What ShogunAI can and can't see right now — every number has a way to fix it.",
     sourcesSub: "Where context comes from, how fresh it is, and what's excluded.",
-    memorySub: "Everything SHOGUN has extracted, with the evidence behind it.",
+    memorySub: "Everything ShogunAI has extracted, with the evidence behind it.",
     activitySub: "What ran, at what level, and whether anything left.",
     traceSub: "Every byte that left this device — digest and size only, never content.",
     // health
@@ -163,9 +170,9 @@ export const FULL_UI = {
     prep: "Prep",
     // sources
     connectedServices: "Connected services",
-    sourcesHint: "Each one connects directly. Scope is what SHOGUN is allowed to read.",
+    sourcesHint: "Each one connects directly. Scope is what ShogunAI is allowed to read.",
     exclusions: "Capture exclusions",
-    exclusionsHint: "Apps and windows SHOGUN never reads. Excluded time still counts against coverage.",
+    exclusionsHint: "Apps and windows ShogunAI never reads. Excluded time still counts against coverage.",
     alwaysExcluded: "Always excluded",
     healthy: "Healthy",
     needsAttention: "Needs attention",
@@ -175,7 +182,7 @@ export const FULL_UI = {
     off: "Off",
     // memory
     commitments: "Commitments",
-    commitmentsHint: "Every row carries the evidence it came from and how sure SHOGUN is.",
+    commitmentsHint: "Every row carries the evidence it came from and how sure ShogunAI is.",
     possibly: "possibly:",
     why: "Why?",
     needsYourEye: "Needs your eye",

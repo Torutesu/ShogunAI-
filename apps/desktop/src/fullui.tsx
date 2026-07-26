@@ -9,6 +9,7 @@
 import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { FullUi } from "./fullui/FullUi";
 import { SAMPLE_VIEW, SAMPLE_VIEW_STANDARD } from "./fullui/sample";
 import type { FullUiView } from "./fullui/types";
@@ -24,6 +25,18 @@ document.body.classList.add("full-window");
 function Root(): JSX.Element {
   const [view, setView] = useState<FullUiView | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
+
+  // Esc closes the window. The traffic lights are the primary affordance, but this window floats
+  // over your work like the panel does, and reaching for the mouse to dismiss it breaks the same
+  // flow the notch exists to protect. ⌘W keeps working via the standard menu.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || !IN_TAURI) return;
+      void getCurrentWindow().close();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   useEffect(() => {
     if (!IN_TAURI) {
