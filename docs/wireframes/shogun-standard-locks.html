@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="en" translate="no">
+<head>
+<meta charset="utf-8" />
+<meta name="google" content="notranslate" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>SHOGUN — Standard (locked states)</title>
+<link rel="stylesheet" href="shogun-ui.css" />
+<script src="shogun-theme.js"></script>
+<!--
+  How SHOGUN looks on Standard. Every other prototype is implicitly Pro; these are the surfaces
+  that change when the agent engine isn't part of the plan.
+
+  Rules being drawn (docs/requirements-v1.0.md):
+  · FR-CF-05 — Fusion still runs on Standard and still *suggests*. Only execution that needs BYOK
+    is locked, and AT MOST 1 of the 4 action candidates may be shown locked, "so Standard doesn't
+    become an ad surface". Both notch states below keep 3 live actions + 1 locked.
+  · FR-BIL-03 — first-layer integrations are read-only on Standard; drafting and sending are Pro.
+  · FR-BIL-02 — plan boundary == key boundary. Standard runs on SHOGUN's key and needs no BYOK,
+    so the key field itself is the Pro-gated thing in Settings.
+
+  The locked affordance is deliberately quiet: same row, dimmed label, a small lock, and the
+  upgrade line only appears on the one locked item.
+-->
+<style>
+  body{padding:44px;display:flex;flex-direction:column;align-items:center;gap:30px}
+
+  /* .desk is a fixed layer at z-index:0, so anything that isn't itself a stacking context
+     (plain headings, captions) would paint underneath it. Lift the lanes above it. */
+  .lane{position:relative;z-index:1;width:1180px;display:flex;flex-direction:column;gap:14px}
+  .lane-head{display:flex;align-items:baseline;gap:12px}
+  .lane-head h2{font-size:15px;font-weight:640;letter-spacing:-.01em}
+  .lane-head .rule{font-size:12.5px;color:var(--faint)}
+  .pair{display:grid;grid-template-columns:1fr 1fr;gap:20px;align-items:start}
+  .cap{display:flex;align-items:center;gap:9px;margin-bottom:9px;font-size:12.5px;color:var(--muted)}
+  .cap .pin{font-size:11px;font-weight:700;letter-spacing:.05em;padding:3px 9px;border-radius:var(--r-pill)}
+  .cap .pin.pro{color:var(--accent-hi);background:var(--accent-soft);border:1px solid var(--accent-line)}
+  .cap .pin.std{color:var(--muted);background:var(--g-3);border:1px solid var(--line)}
+
+  /* ——— notch panel ——— */
+  .panel{border-radius:20px;overflow:hidden;display:flex;flex-direction:column}
+  .p-head{display:flex;align-items:center;gap:8px;padding:12px 14px;border-bottom:1px solid var(--line)}
+  .pill{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--line);background:var(--g-3);
+    color:var(--muted);font-size:11.5px;border-radius:var(--r-pill);padding:5px 12px;white-space:nowrap}
+  .pill b{color:var(--ink);font-weight:600}
+  .live-dot{width:7px;height:7px;border-radius:50%;background:var(--live);
+    box-shadow:0 0 9px rgba(52,208,88,.55);flex:none}
+  .p-body{display:flex;flex-direction:column;gap:14px;padding:16px 20px}
+  .ask{align-self:flex-end;max-width:80%;background:var(--accent);color:#fff;font-size:14px;font-weight:550;
+    padding:11px 18px;border-radius:var(--r-pill)}
+  .answer{font-size:16px;line-height:1.55;letter-spacing:-.006em}
+
+  .acts{display:flex;align-items:center;gap:13px;flex-wrap:wrap}
+  .act{display:inline-flex;align-items:center;gap:8px;font-size:13.5px;color:var(--muted)}
+  .act svg{stroke:currentColor;flex:none}
+  .act.locked{color:var(--faint)}
+  .act.locked svg{stroke:var(--faint)}
+  .sep{width:3px;height:3px;border-radius:50%;background:var(--faint);flex:none}
+  .upsell{margin-top:2px;display:inline-flex;align-items:center;gap:8px;font-size:12.5px;color:var(--accent-hi);
+    background:var(--accent-soft);border:1px solid var(--accent-line);border-radius:11px;padding:8px 13px}
+  .upsell b{font-weight:600}
+
+  .composer{padding:0 20px 18px}
+  .cc{border:1px solid var(--line);background:var(--g-3);border-radius:16px;padding:13px 14px 11px;
+    display:flex;flex-direction:column;gap:11px}
+  .cc .field{font-size:14px;color:var(--faint)}
+  .cc .bar{display:flex;align-items:center;gap:10px}
+  .mode{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;color:var(--muted);
+    border:1px solid var(--line);border-radius:var(--r-pill);padding:6px 13px}
+  .mode.off{opacity:.55}
+  .send{margin-left:auto;width:38px;height:38px;border-radius:50%;display:grid;place-items:center;
+    background:var(--accent)}
+  .send.off{background:var(--g-4)}
+
+  /* ——— settings fragment ——— */
+  .frag{border-radius:var(--r-lg);overflow:hidden}
+  .f-head{padding:16px 18px 2px}
+  .locked-note{display:flex;gap:12px;align-items:flex-start;padding:14px 18px;border-top:1px solid var(--line)}
+  .locked-note .ico{flex:none;width:34px;height:34px;border-radius:10px;display:grid;place-items:center;
+    background:var(--accent-soft);border:1px solid var(--accent-line)}
+  .locked-note .tx{flex:1;font-size:13px;line-height:1.55;color:var(--muted)}
+  .locked-note .tx b{color:var(--ink);font-weight:600;display:block;font-size:14px;margin-bottom:3px}
+  .dimmed{opacity:.45;pointer-events:none}
+</style>
+</head>
+<body>
+<div class="desk"></div>
+
+<!-- ══ notch: answer ══ -->
+<div class="lane">
+  <div class="lane-head">
+    <h2>Notch — answer with actions</h2>
+    <span class="rule">FR-CF-05 · Fusion still suggests on Standard; at most 1 of 4 actions may show locked</span>
+  </div>
+  <div class="pair">
+
+    <div>
+      <div class="cap"><span class="pin pro">Pro</span>All four actions run.</div>
+      <div class="panel glass">
+        <div class="p-head"><span class="pill"><span class="live-dot"></span>reading <b>Mail</b></span><span class="pill">3 due · 2 waiting</span></div>
+        <div class="p-body">
+          <div class="ask">What's still open on the renewal?</div>
+          <div class="answer">Alice still owes the pricing sign-off, and you owe her the revised deck.</div>
+          <div class="acts">
+            <span class="act"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3z"/></svg>Draft it</span>
+            <span class="sep"></span>
+            <span class="act"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12l5 5L20 6"/></svg>Track both</span>
+            <span class="sep"></span>
+            <span class="act"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H8l-4 4V5a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2z"/></svg>Follow-ups</span>
+            <span class="sep"></span>
+            <span class="act"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5"/></svg>Sources</span>
+          </div>
+        </div>
+        <div class="composer"><div class="cc">
+          <div class="field">Ask about your screen or work, or ⌘↵ to draft</div>
+          <div class="bar"><span class="mode">Anthropic</span>
+            <span class="send"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="6 11 12 5 18 11"/></svg></span>
+          </div>
+        </div></div>
+      </div>
+    </div>
+
+    <div>
+      <div class="cap"><span class="pin std">Standard</span>Same answer, same suggestions — only the draft is held back.</div>
+      <div class="panel glass">
+        <div class="p-head"><span class="pill"><span class="live-dot"></span>reading <b>Mail</b></span><span class="pill">3 due · 2 waiting</span></div>
+        <div class="p-body">
+          <div class="ask">What's still open on the renewal?</div>
+          <div class="answer">Alice still owes the pricing sign-off, and you owe her the revised deck.</div>
+          <div class="acts">
+            <span class="act locked"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="1.9" stroke-linecap="round"><rect x="4.5" y="10.5" width="15" height="10" rx="2.5"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/></svg>Draft it</span>
+            <span class="sep"></span>
+            <span class="act"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12l5 5L20 6"/></svg>Track both</span>
+            <span class="sep"></span>
+            <span class="act"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H8l-4 4V5a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2z"/></svg>Follow-ups</span>
+            <span class="sep"></span>
+            <span class="act"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5"/></svg>Sources</span>
+          </div>
+          <div class="upsell">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><rect x="4.5" y="10.5" width="15" height="10" rx="2.5"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/></svg>
+            <span>Drafting runs on your own key — <b>available on Pro</b></span>
+          </div>
+        </div>
+        <div class="composer"><div class="cc">
+          <div class="field">Ask about your screen or work</div>
+          <div class="bar"><span class="mode off">No key — runs on ours</span>
+            <span class="send"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="6 11 12 5 18 11"/></svg></span>
+          </div>
+        </div></div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ══ settings: model & key ══ -->
+<div class="lane">
+  <div class="lane-head">
+    <h2>Settings — Model &amp; Key</h2>
+    <span class="rule">FR-BIL-02 · plan boundary = key boundary: Standard needs no key, so the field itself is the Pro thing</span>
+  </div>
+  <div class="pair">
+
+    <div>
+      <div class="cap"><span class="pin pro">Pro</span>You bring the key; agent work runs on it.</div>
+      <div class="frag card">
+        <div class="f-head"><div class="card-label">Your key</div>
+          <div class="card-sub">Kept per provider in your macOS Keychain.</div></div>
+        <div class="row" style="border-top:1px solid var(--line)">
+          <div class="lead"><div class="t">Provider</div><div class="d">Chat, ⌥-drafts, and agents run here.</div></div>
+          <div class="trail"><div class="seg"><span class="on">Anthropic</span><span>OpenAI</span><span>Gemini</span></div></div>
+        </div>
+        <div class="row">
+          <div class="input" style="flex:1">Paste your Anthropic API key…</div>
+          <div class="trail"><button class="btn primary sm">Save</button></div>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="cap"><span class="pin std">Standard</span>Nothing to configure — and we say why, not just "locked".</div>
+      <div class="frag card">
+        <div class="f-head"><div class="card-label">Your key</div>
+          <div class="card-sub">Standard runs entirely on SHOGUN's key. There's nothing you need to add.</div></div>
+        <div class="locked-note">
+          <span class="ico">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent-hi)" stroke-width="1.8" stroke-linecap="round"><rect x="4.5" y="10.5" width="15" height="10" rx="2.5"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/></svg>
+          </span>
+          <span class="tx"><b>Your own key is a Pro feature</b>
+            Agent reasoning, chat, and ⌥-drafts never run on our key — that's why they come with Pro, and why Pro asks for yours.</span>
+          <button class="btn primary sm">See Pro</button>
+        </div>
+        <div class="row dimmed">
+          <div class="lead"><div class="t">Provider</div><div class="d">Chat, ⌥-drafts, and agents run here.</div></div>
+          <div class="trail"><div class="seg"><span class="on">Anthropic</span><span>OpenAI</span><span>Gemini</span></div></div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ══ settings: connections ══ -->
+<div class="lane">
+  <div class="lane-head">
+    <h2>Settings — Connections</h2>
+    <span class="rule">FR-BIL-03 · on Standard, integrations sync context but can't write</span>
+  </div>
+  <div class="pair">
+
+    <div>
+      <div class="cap"><span class="pin pro">Pro</span>Read and write.</div>
+      <div class="frag card">
+        <div class="row" style="padding:15px 18px">
+          <div class="lead" style="flex-direction:row;align-items:center;gap:13px">
+            <span class="tile mail">M</span>
+            <div style="display:flex;flex-direction:column;gap:2px">
+              <span class="t">Mail</span><span class="d">Connected · read + draft + send</span></div>
+          </div>
+          <div class="trail"><button class="btn sm">Manage</button></div>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="cap"><span class="pin std">Standard</span>Still connected, still feeding context — just read-only.</div>
+      <div class="frag card">
+        <div class="row" style="padding:15px 18px">
+          <div class="lead" style="flex-direction:row;align-items:center;gap:13px">
+            <span class="tile mail">M</span>
+            <div style="display:flex;flex-direction:column;gap:2px">
+              <span class="t">Mail</span><span class="d">Connected · read-only</span></div>
+          </div>
+          <div class="trail">
+            <span class="badge"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="4.5" y="10.5" width="15" height="10" rx="2.5"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/></svg>Sending on Pro</span>
+            <button class="btn sm">Manage</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+</body>
+</html>

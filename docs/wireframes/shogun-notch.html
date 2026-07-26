@@ -1,0 +1,391 @@
+<!doctype html>
+<html lang="en" translate="no">
+<head>
+<meta charset="utf-8" />
+<meta name="google" content="notranslate" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>SHOGUN — Notch UI (glass)</title>
+<script src="shogun-theme.js"></script>
+<!--
+  SHOGUN overlay: translucent glass hanging from the notch, over whatever you're working on.
+
+  Two deliberate changes from docs/wireframe-spec.md, made on request:
+  1. HOVER OPENS. §A2's hover "peek" (a preview you had to click to confirm) is gone — dwelling
+     on the pill expands the panel directly. Try it: hover the collapsed pill below. Phase 0
+     lists hover misfire as an open risk, so the real build needs a dwell threshold (~250ms)
+     plus a cursor-velocity check before this is safe.
+  2. The panel is dark glass rather than the light window chrome. Overlays sit on top of your
+     work and should let it show through; the Settings / Onboarding windows stay light.
+
+  Answer text runs slightly above the §0 14px ceiling — this surface is meant to be read at a
+  glance mid-call, and the reference sets it larger.
+-->
+<style>
+  @import url("shogun-ui.css");
+
+  :root{
+    /* glass overlay tokens — the panel is a surface over your screen, not a window */
+    --g-tint:rgba(16,18,24,.58);
+    --g-tint-2:rgba(16,18,24,.72);
+    --g-line:rgba(255,255,255,.13);
+    --g-line-2:rgba(255,255,255,.20);
+    --g-ink:#FFFFFF;
+    --g-muted:rgba(255,255,255,.68);
+    --g-faint:rgba(255,255,255,.45);
+    --g-fill:rgba(255,255,255,.08);
+    --g-fill-2:rgba(255,255,255,.14);
+    --g-accent:#2F6FED;
+    --g-accent-hi:#3B82F6;
+    --g-live:#34D058;
+    --g-warn:#FFB020;
+    --blur:blur(44px) saturate(180%);
+  }
+  /* light appearance — the overlay becomes a bright frosted sheet over your work */
+  html[data-theme="light"]{
+    --g-tint:rgba(255,255,255,.76);
+    --g-tint-2:rgba(255,255,255,.86);
+    --g-line:rgba(16,24,40,.10);
+    --g-line-2:rgba(16,24,40,.17);
+    --g-ink:#1B1D22;
+    --g-muted:rgba(27,29,34,.68);
+    --g-faint:rgba(27,29,34,.45);
+    --g-fill:rgba(16,24,40,.045);
+    --g-fill-2:rgba(16,24,40,.085);
+    --g-accent:#2F6FED;
+    --g-accent-hi:#1B5FE0;
+    --g-live:#1F9E3C;
+    --g-warn:#A4560A;
+  }
+  html[data-theme="light"] .glass{box-shadow:0 28px 70px rgba(16,24,40,.20), inset 0 1px 0 rgba(255,255,255,.75)}
+  html[data-theme="light"] .menubar{background:rgba(255,255,255,.58);color:#1B1D22}
+  html[data-theme="light"] .menubar .l .m{color:rgba(27,29,34,.6)}
+  html[data-theme="light"] .switcher{background:rgba(255,255,255,.78)}
+  html[data-theme="light"] .switcher button.on{background:#16181D;color:#fff}
+  html[data-theme="light"] .caption{color:rgba(27,29,34,.5)}
+  html[data-theme="light"] .tip{color:#1B5FE0;background:rgba(47,111,237,.10);border-color:rgba(47,111,237,.28)}
+  html[data-theme="light"] .ask{color:#fff}
+  html[data-theme="light"] .send svg{stroke:#fff}
+  html[data-theme="light"] .stop span{background:var(--g-ink) !important}
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:var(--sys);-webkit-font-smoothing:antialiased;min-height:100vh}
+  button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
+
+  /* the desktop behind the glass is just a blurred wallpaper (.desk in shogun-ui.css) —
+     no mocked-up app content, so nothing competes with the overlay */
+  .screen{position:relative;min-height:100vh;overflow:hidden}
+
+  /* menu bar + notch */
+  .menubar{position:relative;height:30px;display:flex;align-items:center;justify-content:space-between;
+    padding:0 18px;background:rgba(10,12,16,.42);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);
+    font-size:13px;color:var(--g-ink);z-index:5}
+  .menubar .l{display:flex;gap:18px;align-items:center}
+  .menubar .l .app{display:flex;align-items:center;gap:7px;font-weight:700}
+  .menubar .l .m{color:var(--g-muted)}
+  .menubar .r{display:flex;gap:15px;align-items:center}
+  .clock{font-variant-numeric:tabular-nums}
+  .notch{position:absolute;top:0;left:50%;transform:translateX(-50%);width:210px;height:30px;
+    background:#000;border-radius:0 0 13px 13px;z-index:6}
+
+  /* ——— hang zone: hover here opens ——— */
+  .hang{position:absolute;top:30px;left:50%;transform:translateX(-50%);z-index:8;display:flex;justify-content:center}
+
+  .glass{background:var(--g-tint);backdrop-filter:var(--blur);-webkit-backdrop-filter:var(--blur);
+    border:1px solid var(--g-line);border-top:none;color:var(--g-ink);
+    box-shadow:0 30px 80px rgba(0,0,0,.46), inset 0 1px 0 rgba(255,255,255,.10)}
+
+  /* collapsed pill */
+  .handle{display:inline-flex;align-items:center;gap:10px;padding:8px 15px;border-radius:0 0 16px 16px;
+    transition:background 180ms cubic-bezier(.32,.72,0,1)}
+  .handle .live{display:flex;align-items:center;gap:9px;font-size:12.5px;color:var(--g-muted)}
+  .handle .live b{color:var(--g-ink);font-weight:600}
+  .count{font-size:11px;color:var(--g-muted);background:var(--g-fill);border:1px solid var(--g-line);
+    border-radius:999px;padding:3px 10px}
+  .live-dot{width:7px;height:7px;border-radius:50%;background:var(--g-live);
+    box-shadow:0 0 10px rgba(52,208,88,.7);flex:none}
+
+  /* panel */
+  .panel{width:620px;border-radius:0 0 26px 26px;overflow:hidden;display:flex;flex-direction:column}
+
+  .head{flex:none;display:flex;align-items:center;justify-content:space-between;gap:8px;
+    padding:12px 14px;border-bottom:1px solid var(--g-line)}
+  .head .left{display:flex;align-items:center;gap:8px;min-width:0}
+  .pill{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--g-line);
+    background:var(--g-fill);color:var(--g-muted);font-size:11.5px;border-radius:999px;
+    padding:5px 12px;white-space:nowrap}
+  .pill b{color:var(--g-ink);font-weight:600}
+  .icn{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;color:var(--g-faint)}
+  .icn:hover{background:var(--g-fill);color:var(--g-ink)}
+
+  /* conversation */
+  .body{flex:1;min-height:0;overflow:hidden;display:flex;flex-direction:column;gap:14px;padding:16px 20px}
+  .ask{align-self:flex-end;max-width:80%;background:var(--g-accent);color:#fff;font-size:14px;
+    font-weight:550;padding:11px 18px;border-radius:999px;box-shadow:0 6px 18px rgba(47,111,237,.4)}
+  .answer{font-size:16px;line-height:1.55;color:var(--g-ink);letter-spacing:-.006em}
+  .answer .q{color:var(--g-ink)}
+
+  .welcome .t{font-size:19px;font-weight:600;letter-spacing:-.018em}
+  .welcome .s{margin-top:8px;font-size:13.5px;line-height:1.6;color:var(--g-muted);max-width:52ch}
+  .warnline{margin-top:16px;display:inline-flex;align-items:center;gap:9px;font-size:12.5px;
+    color:var(--g-warn);background:rgba(255,176,32,.12);border:1px solid rgba(255,176,32,.28);
+    border-radius:12px;padding:9px 13px}
+
+  /* quick actions — SHOGUN's own verbs, not a generic assistant menu */
+  .acts{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:2px 0 0}
+  .act{display:inline-flex;align-items:center;gap:8px;font-size:13.5px;color:var(--g-muted);
+    padding:5px 2px;border-radius:8px;transition:color 160ms}
+  .act:hover{color:var(--g-ink)}
+  .act svg{stroke:currentColor;flex:none}
+  .sep{width:3px;height:3px;border-radius:50%;background:var(--g-faint);flex:none}
+
+  /* state rows */
+  .list{flex:1;min-height:0;display:flex;flex-direction:column;gap:1px}
+  .srow{display:flex;align-items:center;gap:12px;padding:10px 8px;border-radius:10px}
+  .srow:hover{background:var(--g-fill)}
+  .check{flex:none;width:17px;height:17px;display:grid;place-items:center;border-radius:50%;
+    border:1.5px solid var(--g-line-2);color:transparent;font-size:10px}
+  .srow .txt{flex:1;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .meta{flex:none;font-size:11.5px;color:var(--g-faint)}
+  .meta.over{color:var(--g-warn);font-weight:600}
+
+  /* composer */
+  .composer{flex:none;padding:0 20px 18px}
+  .cc{border:1px solid var(--g-line);background:var(--g-fill);border-radius:18px;padding:14px 15px 12px;
+    display:flex;flex-direction:column;gap:12px}
+  .cc .field{display:flex;align-items:center;gap:10px;font-size:14.5px;color:var(--g-faint);flex-wrap:wrap}
+  .kb{display:inline-grid;place-items:center;min-width:28px;height:26px;padding:0 8px;border-radius:8px;
+    background:var(--g-fill-2);border:1px solid var(--g-line);color:var(--g-muted);font-size:12px}
+  .cc .bar{display:flex;align-items:center;gap:10px}
+  .mode{display:inline-flex;align-items:center;gap:7px;font-size:13px;color:var(--g-muted);
+    border:1px solid var(--g-line);border-radius:999px;padding:6px 14px}
+  .mode:hover{background:var(--g-fill-2);color:var(--g-ink)}
+  .more{color:var(--g-faint);font-size:16px;letter-spacing:.08em;padding:0 4px}
+  .send{margin-left:auto;width:42px;height:42px;border-radius:50%;display:grid;place-items:center;
+    background:var(--g-accent);box-shadow:0 8px 22px rgba(47,111,237,.45)}
+  .send:hover{background:var(--g-accent-hi)}
+
+  /* meeting */
+  .mhead{flex:none;display:flex;align-items:center;gap:12px;padding:12px 14px 12px 18px;
+    border-bottom:1px solid var(--g-line)}
+  .stop{display:inline-flex;align-items:center;gap:8px;margin-left:auto;font-size:13px;
+    border:1px solid var(--g-line-2);border-radius:10px;padding:7px 14px;background:var(--g-fill)}
+  .stop:hover{background:var(--g-fill-2)}
+  .notes{flex:1;min-height:0;display:flex;flex-direction:column;gap:14px;padding:22px 24px}
+  .nline{display:flex;gap:12px;align-items:baseline}
+  .nline .dash{color:var(--g-faint);font-size:15px}
+  .nline .b{font-size:15px;line-height:1.45}
+  .caret{width:2px;height:19px;background:var(--g-accent-hi);display:inline-block;border-radius:1px}
+  .mfoot{flex:none;display:flex;align-items:center;justify-content:space-between;padding:13px 18px;
+    border-top:1px solid var(--g-line);font-size:12px;color:var(--g-faint)}
+
+  /* ——— hover-to-open: the real interaction, animated ———
+     Both layers stay in the DOM and cross-fade, so the panel can actually unfurl from the
+     notch (transform-origin: top center) instead of snapping in on a display switch. */
+  .stack{position:relative;display:flex;justify-content:center}
+  .stack .collapsed{transition:opacity 140ms var(--ease), transform 200ms var(--ease)}
+  .stack .opened{position:absolute;top:0;left:50%;opacity:0;pointer-events:none;
+    transform:translateX(-50%) translateY(-10px) scale(.97);transform-origin:top center;
+    transition:opacity 200ms var(--ease), transform 260ms var(--ease)}
+  .stack:hover .collapsed,.stack.pinned .collapsed{opacity:0;transform:translateY(-6px) scale(.97)}
+  .stack:hover .opened,.stack.pinned .opened{opacity:1;pointer-events:auto;
+    transform:translateX(-50%) translateY(0) scale(1)}
+
+  /* content settles in just behind the panel */
+  .stack:hover .body > *,.stack.pinned .body > *{animation:rise 300ms var(--ease) both}
+  .stack:hover .body > *:nth-child(2),.stack.pinned .body > *:nth-child(2){animation-delay:60ms}
+  .stack:hover .body > *:nth-child(3),.stack.pinned .body > *:nth-child(3){animation-delay:110ms}
+  .srow{animation:rise 260ms var(--ease) both}
+  .srow:nth-child(2){animation-delay:40ms}
+  .srow:nth-child(3){animation-delay:80ms}
+  .srow:nth-child(4){animation-delay:120ms}
+  .ask{animation:pop 260ms var(--ease) both}
+  .live-dot{animation:pulse 2.4s ease-in-out infinite}
+
+  /* switcher */
+  .switcher{position:fixed;bottom:26px;left:50%;transform:translateX(-50%);display:flex;gap:3px;z-index:20;
+    background:rgba(16,18,24,.66);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);
+    border:1px solid var(--g-line);border-radius:999px;padding:5px;box-shadow:0 20px 50px rgba(0,0,0,.5)}
+  .switcher button{font-size:13px;color:var(--g-muted);padding:8px 16px;border-radius:999px}
+  .switcher button:hover{color:#fff}
+  .switcher button.on{background:#fff;color:#0C0E13;font-weight:600}
+  .caption{position:fixed;bottom:78px;left:50%;transform:translateX(-50%);font-size:12px;
+    color:var(--g-faint);z-index:20}
+  .tip{position:fixed;bottom:104px;left:50%;transform:translateX(-50%);font-size:12.5px;
+    color:var(--g-ink);background:rgba(47,111,237,.22);border:1px solid rgba(47,111,237,.45);
+    border-radius:999px;padding:6px 15px;z-index:20}
+</style>
+</head>
+<body>
+<div class="desk"></div>
+<div class="screen">
+  <div class="menubar">
+    <div class="l">
+      <span class="app"><img src="shogun-mark.svg" width="15" height="15" alt="" />SHOGUN</span>
+      <span class="m">File</span><span class="m">Edit</span><span class="m">View</span>
+    </div>
+    <div class="r">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M5 13a10 10 0 0 1 14 0M8.5 16.5a5 5 0 0 1 7 0M12 20h.01"/></svg>
+      <span class="clock">9:41</span>
+    </div>
+  </div>
+  <div class="notch"></div>
+
+  <div class="hang">
+    <div class="stack" id="stack">
+
+      <!-- collapsed: hovering this opens the panel -->
+      <div class="collapsed">
+        <button class="handle glass" aria-label="Open SHOGUN">
+          <span class="live-dot"></span>
+          <span class="live">reading <b>Mail</b></span>
+          <span class="count">3 due</span><span class="count">2 waiting</span>
+        </button>
+      </div>
+
+      <!-- opened -->
+      <div class="opened">
+
+        <!-- ANSWER -->
+        <div class="state active" data-state="answer">
+          <div class="panel glass" style="height:400px">
+            <div class="head">
+              <div class="left"><span class="pill"><span class="live-dot"></span>reading <b>Mail</b></span><span class="pill">3 due · 2 waiting</span></div>
+              <span class="icn"><svg width="16" height="16" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" fill="none"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg></span>
+            </div>
+            <div class="body">
+              <div class="ask">What's still open on the renewal?</div>
+              <div class="answer"><span class="q">Alice still owes the pricing sign-off, and you owe her the revised deck. The renewal itself is agreed at 12k for the year.</span></div>
+              <div class="acts">
+                <button class="act"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3z"/></svg>Draft it</button>
+                <span class="sep"></span>
+                <button class="act"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12l5 5L20 6"/></svg>Track both</button>
+                <span class="sep"></span>
+                <button class="act"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H8l-4 4V5a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2z"/></svg>Follow-ups</button>
+                <span class="sep"></span>
+                <button class="act"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5"/></svg>Sources</button>
+              </div>
+            </div>
+            <div class="composer"><div class="cc">
+              <div class="field">Ask about your screen or work, or <span class="kb">⌘</span><span class="kb">↵</span> to draft</div>
+              <div class="bar">
+                <button class="mode"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L4.5 13.5H11l-1 8.5L19.5 10.5H13z"/></svg>Anthropic</button>
+                <span class="more">•••</span>
+                <button class="send"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="6 11 12 5 18 11"/></svg></button>
+              </div>
+            </div></div>
+          </div>
+        </div>
+
+        <!-- WELCOME -->
+        <div class="state" data-state="welcome">
+          <div class="panel glass" style="height:340px">
+            <div class="head">
+              <div class="left"><span class="pill"><span class="live-dot"></span>reading <b>Mail</b></span><span class="pill">3 due · 2 waiting</span></div>
+              <span class="icn"><svg width="16" height="16" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" fill="none"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg></span>
+            </div>
+            <div class="body" style="justify-content:center">
+              <div class="welcome">
+                <div class="t">What can I take off your plate?</div>
+                <div class="s">Ask about your work, or tap ⌥ (Option) in any app to draft where you're typing.</div>
+                <div class="warnline">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16.4h.01"/></svg>
+                  No key yet — add one in settings for real answers.
+                </div>
+              </div>
+            </div>
+            <div class="composer"><div class="cc">
+              <div class="field">Ask about your screen or work, or <span class="kb">⌘</span><span class="kb">↵</span> to draft</div>
+              <div class="bar">
+                <button class="mode"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L4.5 13.5H11l-1 8.5L19.5 10.5H13z"/></svg>Anthropic</button>
+                <span class="more">•••</span>
+                <button class="send"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="6 11 12 5 18 11"/></svg></button>
+              </div>
+            </div></div>
+          </div>
+        </div>
+
+        <!-- TRACKED -->
+        <div class="state" data-state="tracked">
+          <div class="panel glass" style="height:360px">
+            <div class="head">
+              <div class="left"><span class="pill"><span class="live-dot"></span>reading <b>Mail</b></span><span class="pill">3 due · 2 waiting</span></div>
+              <span class="icn"><svg width="16" height="16" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" fill="none"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg></span>
+            </div>
+            <div class="body">
+              <div class="list">
+                <div class="srow"><span class="check">✓</span><span class="txt">Send the revised deck to Alice</span><span class="meta over">due today</span></div>
+                <div class="srow"><span class="check">✓</span><span class="txt">Reply to the vendor on renewal terms</span><span class="meta">waiting · 3d</span></div>
+                <div class="srow"><span class="check">✓</span><span class="txt">Confirm the launch date with the team</span><span class="meta">due Fri</span></div>
+                <div class="srow"><span class="check" style="opacity:.45">✓</span><span class="txt" style="color:var(--g-muted)"><span style="color:var(--g-faint)">possibly:</span> review Q3 numbers before the board call</span><span class="meta"></span></div>
+              </div>
+            </div>
+            <div class="composer"><div class="cc">
+              <div class="field">Ask about your screen or work, or <span class="kb">⌘</span><span class="kb">↵</span> to draft</div>
+              <div class="bar">
+                <button class="mode"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L4.5 13.5H11l-1 8.5L19.5 10.5H13z"/></svg>Anthropic</button>
+                <span class="more">•••</span>
+                <button class="send"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="6 11 12 5 18 11"/></svg></button>
+              </div>
+            </div></div>
+          </div>
+        </div>
+
+        <!-- MEETING -->
+        <div class="state" data-state="meeting">
+          <div class="panel glass" style="height:360px">
+            <div class="mhead">
+              <span class="live-dot"></span><b style="font-size:14px">Notes</b>
+              <span style="font-size:14px;color:var(--g-muted);font-variant-numeric:tabular-nums">12:04</span>
+              <span style="font-size:14px">Weekly sync</span>
+              <button class="stop"><span style="width:9px;height:9px;border-radius:2px;background:currentColor;display:inline-block"></span>Stop</button>
+            </div>
+            <div class="notes">
+              <div class="nline"><span class="dash">–</span><span class="b">pricing decision pending</span></div>
+              <div class="nline"><span class="dash">–</span><span class="b">Alice takes the vendor thread</span></div>
+              <div class="nline"><span class="dash">–</span><span class="caret"></span><span class="b" style="color:var(--g-faint)">Type your notes…</span></div>
+            </div>
+            <div class="mfoot"><span>Listening · 3 participants · processed on this Mac</span><span>Not now ⌄</span></div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <div class="tip" id="tip">Hover the pill under the notch — it opens straight away</div>
+  <div class="caption" id="cap">Idle — collapsed pill</div>
+  <div class="switcher" id="sw">
+    <button class="on" data-go="idle"    data-cap="Idle — collapsed pill (hover to open)">Idle</button>
+    <button data-go="welcome" data-cap="Open — welcome (empty thread)">Welcome</button>
+    <button data-go="answer"  data-cap="Open — answer, with actions on the answer">Answer</button>
+    <button data-go="tracked" data-cap="Open — what SHOGUN is tracking">Tracked</button>
+    <button data-go="meeting" data-cap="Meeting notes — in-meeting panel">Meeting</button>
+  </div>
+</div>
+
+<script>
+  const stack  = document.getElementById("stack");
+  const states = document.querySelectorAll(".state");
+  const btns   = document.querySelectorAll("#sw button");
+  const cap    = document.getElementById("cap");
+  const tip    = document.getElementById("tip");
+
+  function show(name){
+    states.forEach(s => s.style.display = (s.dataset.state === name) ? "block" : "none");
+  }
+  show("answer"); // what hover reveals by default
+
+  btns.forEach(b => b.addEventListener("click", () => {
+    btns.forEach(x => x.classList.toggle("on", x === b));
+    cap.textContent = b.dataset.cap;
+    if (b.dataset.go === "idle"){
+      stack.classList.remove("pinned");         // back to hover-to-open
+      tip.style.opacity = "1";
+    } else {
+      show(b.dataset.go);
+      stack.classList.add("pinned");            // hold this state open
+      tip.style.opacity = "0";
+    }
+  }));
+</script>
+</body>
+</html>
