@@ -120,6 +120,96 @@ export const STRINGS = {
   },
 } as const;
 
+/** Full UI (the separate window, spec §D). Kept in its own catalog so the dense notch panel and
+ *  the roomier window can diverge in wording without stepping on each other. English only in v1;
+ *  same i18n seam as STRINGS above. */
+export const FULL_UI = {
+  en: {
+    // navigation
+    navToday: "Today",
+    navHealth: "Context Health",
+    navSources: "Sources",
+    navMemory: "Memory",
+    navActivity: "Activity",
+    navTrace: "Traceability",
+    groupContext: "Where it comes from",
+    groupDid: "What it did",
+    planTrial: "Trial",
+    planStandard: "Standard",
+    // pane subtitles
+    todaySub: "Your brief, your schedule, and what to do about it.",
+    healthSub: "What SHOGUN can and can't see right now — every number has a way to fix it.",
+    sourcesSub: "Where context comes from, how fresh it is, and what's excluded.",
+    memorySub: "Everything SHOGUN has extracted, with the evidence behind it.",
+    activitySub: "What ran, at what level, and whether anything left.",
+    traceSub: "Every byte that left this device — digest and size only, never content.",
+    // health
+    confidenceMix: "Confidence mix",
+    slo: "SLO",
+    high: "High",
+    medium: "Medium",
+    low: "Low",
+    notOnThisPlan: "— not on this plan",
+    // today
+    morningBrief: "Morning brief",
+    briefDegraded: "The nightly review didn't finish, so this is your calendar and overdue commitments only.",
+    suggested: "Suggested actions",
+    lockedNeedsKey: "Drafting runs on your own key — that comes with Pro.",
+    schedule: "Schedule",
+    prep: "Prep",
+    // sources
+    connectedServices: "Connected services",
+    sourcesHint: "Each one connects directly. Scope is what SHOGUN is allowed to read.",
+    exclusions: "Capture exclusions",
+    exclusionsHint: "Apps and windows SHOGUN never reads. Excluded time still counts against coverage.",
+    alwaysExcluded: "Always excluded",
+    healthy: "Healthy",
+    needsAttention: "Needs attention",
+    thirdParty: "third-party",
+    direct: "Direct",
+    on: "On",
+    off: "Off",
+    // memory
+    commitments: "Commitments",
+    commitmentsHint: "Every row carries the evidence it came from and how sure SHOGUN is.",
+    possibly: "possibly:",
+    why: "Why?",
+    needsYourEye: "Needs your eye",
+    mergeHint: "These look like the same person, but not confidently enough to merge on their own.",
+    keepSeparate: "Keep separate",
+    merge: "Merge",
+    // activity
+    waitingForYou: "Waiting for you",
+    review: "Review",
+    runHistory: "Run history",
+    noRunsExplained:
+      "Nothing has run. Agents are what carry an action out, and they come with Pro — so there's no history here rather than an empty one.",
+    lastNightly: "Last nightly cycle",
+    finishedAt: "Finished",
+    eventsRead: "events read",
+    updates: "updates",
+    chunksSent: "chunks sent",
+    runNow: "Run now",
+    colTime: "Time",
+    colAction: "Action",
+    colApproved: "Approved by",
+    colLeft: "Left device",
+    // traceability
+    everythingLeft: "Everything that left this device",
+    traceHint: "Content is never logged — only a digest and a byte count, so this page can't leak what it records.",
+    colRoute: "Route",
+    colPurpose: "Purpose",
+    colDestination: "Destination",
+    colDigest: "Digest",
+    colBytes: "Bytes",
+    noThirdParty: "No third-party routes",
+    noThirdPartyHint: "Nothing was handed to another service to send on your behalf.",
+  },
+} as const;
+
+/** Active Full UI locale (v1: English fixed), mirroring `t` above. */
+export const tf = FULL_UI.en;
+
 export type Locale = keyof typeof STRINGS;
 
 /** Active locale (v1: English fixed; a settings-driven value in Phase 1). */
