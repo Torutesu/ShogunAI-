@@ -30,5 +30,10 @@ SHOGUN デザインシステムの **Foundation（トークン基盤）**。`src
 ## テーマ切替
 生成CSSは `:root[data-appearance="dark"|"light"|"auto"]` セレクタで切替（`:root` は `<html>` 要素）。属性は `<html>`（`document.documentElement`）に付与する。`auto` は OS 設定（`prefers-color-scheme`）に追従。
 
-## website について
-`apps/website` は別語彙（`--bg`/`--surface`/`--cloud`、`data-theme`）を使う。対応表は `src/tokens.json` の `$website_mapping`（ドキュメントのみ）にあり、移行は別ブランチで行う。
+## website セット（web）
+`apps/website` は独自パレット（"Skyglass"、light 基準、`data-theme` 切替）を使う。その生トークンは `src/tokens.json` の `web.themed` を正本とし、`dist/tokens.web.css` を生成する。
+
+- 使い方（CSS）: `@import '@shogun-ai/tokens/web.css';`（`@import 'tailwindcss';` の直後）。
+- ブロック構造: `:root`（light 基準）/ `:root[data-theme='dark']` / `@media (prefers-color-scheme: dark) { :root:not([data-theme='light']) }`。
+- web トークンには非色値（`--orb-blend`, `--orb-opacity`）を含むため、`validate` は web についてはモード存在のみ検証する。
+- product（desktop）セットとは別パレット。統一はしない（2テーマ共存）。
