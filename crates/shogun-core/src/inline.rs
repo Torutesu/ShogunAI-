@@ -89,6 +89,13 @@ pub fn build_prompt(ctx: &CursorContext, memory: &[String]) -> String {
     }
     p.push_str(". Continue the text at the cursor in the user's own voice. ");
     p.push_str("Output only the text to insert at the cursor — no preamble, no quotation marks, no sign-off unless the context clearly calls for one.\n");
+    // The output is pasted at the caret sight-unseen, so anything that is not draftable text is a
+    // defect: a clarifying question ("what is the subject?") or a meta-note ("I need more context")
+    // lands in the user's document as if it were the draft. A capable model, given thin context,
+    // will reach for exactly those — so the ban has to be explicit and the fallback stated: commit
+    // to the most plausible draft instead of asking. Underspecified is the normal case here, not an
+    // error to report.
+    p.push_str("Never ask a question, request more detail, or explain yourself. If the context is thin, write the most plausible draft you can from what is given and commit to it. Your entire reply is inserted verbatim at the cursor.\n");
 
     let facts: Vec<&str> = memory.iter().map(|m| m.trim()).filter(|m| !m.is_empty()).collect();
     if !facts.is_empty() {
@@ -193,6 +200,7 @@ mod tests {
         let p = build_prompt(&ctx(), &["you owe Alice the deck (Fri)".into(), "legal sign-off pending".into()]);
         assert!(p.contains("Mail — Re: Q3 roadmap"), "app + field label grounds the prompt: {p}");
         assert!(p.contains("Output only the text to insert"), "asks for insertion text only");
+        assert!(p.contains("Never ask a question"), "forbids the meta-question failure mode");
         assert!(p.contains("- you owe Alice the deck (Fri)"), "memory facts are included");
         assert!(p.contains("Hi Alice,"), "the text before the cursor is included");
     }
