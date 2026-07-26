@@ -17,6 +17,7 @@
     "e2e": "tsx tests/e2e.ts"
   },
   "dependencies": {
+    "@shogun-ai/tokens": "workspace:*",
     "@radix-ui/react-slot": "^1.1.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",

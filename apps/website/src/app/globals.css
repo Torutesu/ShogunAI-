@@ -1,74 +1,10 @@
 @import 'tailwindcss';
+@import '@shogun-ai/tokens/web.css';
 
 /* =====================================================================
    ShogunAI — Aside Skyglass, theme-aware (light + dark + system).
    Semantic tokens flip per theme; components style through the tokens.
    ===================================================================== */
-:root {
-  --bg: #ffffff;
-  --surface: #ffffff;
-  --cloud: #f7fdff; /* subtle fill */
-  --ink: #090b0c; /* primary text + strong controls */
-  --on-ink: #fafafa; /* text on ink-colored surfaces */
-  --muted: #5f6b73;
-  --faint: #9aa3a9;
-  --border: #e5e7eb;
-  --sky: #97e5ff;
-  --sky-soft: #d8f6ff; /* accent tint fill */
-  --accent: #00a6f4;
-  --accent-strong: #0089cf;
-  --danger: #ef4444;
-  --band: #090b0c; /* always-dark section */
-  --band-ink: #ffffff;
-  --orb-blend: multiply;
-  --orb-opacity: 0.55;
-  --hairline: rgba(9, 11, 12, 0.06);
-}
-
-:root[data-theme='dark'] {
-  --bg: #090b0d;
-  --surface: #14181b;
-  --cloud: #10151a;
-  --ink: #eef2f4;
-  --on-ink: #090b0d;
-  --muted: #97a3ac;
-  --faint: #6b7780;
-  --border: #262d33;
-  --sky: #2a7ba3;
-  --sky-soft: #103245;
-  --accent: #38bdf8;
-  --accent-strong: #7dd3fc;
-  --danger: #f87171;
-  --band: #05070a;
-  --band-ink: #ffffff;
-  --orb-blend: screen;
-  --orb-opacity: 0.4;
-  --hairline: rgba(255, 255, 255, 0.06);
-}
-
-/* System preference when the user hasn't explicitly chosen */
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) {
-    --bg: #090b0d;
-    --surface: #14181b;
-    --cloud: #10151a;
-    --ink: #eef2f4;
-    --on-ink: #090b0d;
-    --muted: #97a3ac;
-    --faint: #6b7780;
-    --border: #262d33;
-    --sky: #2a7ba3;
-    --sky-soft: #103245;
-    --accent: #38bdf8;
-    --accent-strong: #7dd3fc;
-    --danger: #f87171;
-    --band: #05070a;
-    --band-ink: #ffffff;
-    --orb-blend: screen;
-    --orb-opacity: 0.4;
-    --hairline: rgba(255, 255, 255, 0.06);
-  }
-}
 
 @theme inline {
   --color-bg: var(--bg);
