@@ -10,4 +10,5 @@ pub mod detect;
 /// module that touches shogun-memory.
 #[cfg(feature = "db")]
 pub mod recap;
+pub mod settings;
 pub mod statemachine;
