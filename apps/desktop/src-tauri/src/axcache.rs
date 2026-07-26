@@ -254,16 +254,22 @@ mod mac {
         if let Some(url) = unsafe { copy_url(window.0, kAXDocumentAttribute) } {
             return Some(url);
         }
-        // Chromium: descend to the AXWebArea. Depth is bounded (window → group(s) → web area);
-        // this runs once per detection tick, so it must not become a tree walk.
-        find_web_area_url(&window, 4)
+        // Chromium: descend to the AXWebArea.
+        //
+        // Bounded by a node budget rather than by depth alone. A depth cap of 4 was enough for a
+        // plain browser window and silently returned nothing in a browser with a sidebar and
+        // split panes — the web area simply sits further down, and "no URL" is indistinguishable
+        // from "not a meeting". The budget keeps the cost bounded without assuming a layout.
+        let mut budget = 400u32;
+        find_web_area_url(&window, 10, &mut budget)
     }
 
-    /// Depth-limited search for a web area's `AXURL`.
-    fn find_web_area_url(el: &AxElement, depth: u8) -> Option<String> {
-        if depth == 0 {
+    /// Search for a web area's `AXURL`, bounded by depth *and* a shared node budget.
+    fn find_web_area_url(el: &AxElement, depth: u8, budget: &mut u32) -> Option<String> {
+        if depth == 0 || *budget == 0 {
             return None;
         }
+        *budget -= 1;
         // SAFETY: `el` is live for the duration of the call.
         if let Some(role) = unsafe { copy_string(el.0, kAXRoleAttribute) } {
             if role == "AXWebArea" {
@@ -275,7 +281,7 @@ mod mac {
         }
         // SAFETY: `el` is live for the duration of the call.
         for child in unsafe { copy_children(el.0) } {
-            if let Some(url) = find_web_area_url(&child, depth - 1) {
+            if let Some(url) = find_web_area_url(&child, depth - 1, budget) {
                 return Some(url);
             }
         }

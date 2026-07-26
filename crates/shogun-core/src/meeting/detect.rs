@@ -79,16 +79,23 @@ fn host_of(url: &str) -> Option<String> {
 
 /// How much each signal contributes. ② and ③ are the ones that can open an interval; ① only
 /// corroborates, so it carries weight but cannot reach the threshold on its own.
-const W_APP: f64 = 0.35;
-const W_CONTROLS: f64 = 0.30;
-const W_MIC: f64 = 0.15;
-const W_OCCURRENCE: f64 = 0.15;
+const W_MIC: f64 = 0.40;
+const W_APP: f64 = 0.30;
+const W_CONTROLS: f64 = 0.15;
+const W_OCCURRENCE: f64 = 0.10;
 
 /// Combine the signals of one tick into a decision.
+///
+/// The opener is **sustained microphone use** (`mic_in_use` here means [`MicWatch`] has been
+/// answering yes, not that the device opened this instant). That is what "a meeting is
+/// happening" actually means: a URL is the same in the lobby, in the call and after everyone has
+/// left, and a bundle-id table only knows the apps someone remembered to list. A meeting app or
+/// a meeting page in front corroborates and raises the confidence — and either can still open an
+/// interval on its own, so a call on a machine whose microphone is not the default input is not
+/// invisible.
 pub fn decide(signals: &Signals) -> Decision {
-    // ② or ③ — an observation that the user is *in* a meeting. Without one of these there is
-    // nothing to offer, however full the calendar is.
-    let observed = signals.meeting_app_frontmost || signals.meeting_controls_visible;
+    let observed =
+        signals.mic_in_use || signals.meeting_app_frontmost || signals.meeting_controls_visible;
     if !observed {
         return Decision::Ignore;
     }
@@ -96,9 +103,9 @@ pub fn decide(signals: &Signals) -> Decision {
     let mut confidence = 0.0;
     let mut fired: Vec<&str> = Vec::new();
     for (on, weight, name) in [
+        (signals.mic_in_use, W_MIC, "mic_sustained"),
         (signals.meeting_app_frontmost, W_APP, "meeting_app_frontmost"),
         (signals.meeting_controls_visible, W_CONTROLS, "meeting_controls_visible"),
-        (signals.mic_in_use, W_MIC, "mic_in_use"),
         (signals.occurrence_now, W_OCCURRENCE, "occurrence_now"),
     ] {
         if on {
@@ -115,6 +122,43 @@ pub fn decide(signals: &Signals) -> Decision {
     }
 }
 
+
+/// How long the microphone must stay in use before it counts as a meeting rather than a moment
+/// of dictation. Issue #7 asks for a sustained signal; ten seconds separates "hey Siri" and a
+/// voice memo from a call without making the offer feel late.
+pub const MIC_SUSTAIN_MS: i64 = 10_000;
+
+/// Turns "the microphone is open right now" into "a call is happening".
+///
+/// The single most useful meeting signal is not which page is open — a Meet URL is the same in
+/// the lobby, in the call and after everyone has left — it is whether anyone is actually
+/// talking through the machine. That is app-agnostic: it catches a call in an app nobody thought
+/// to add to a bundle-id table.
+///
+/// It reads *whether the device is in use* and nothing else. No audio is sampled (FR-MT-04).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct MicWatch {
+    since_ms: Option<i64>,
+}
+
+impl MicWatch {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Feed one observation. Returns whether the microphone has been continuously in use for
+    /// [`MIC_SUSTAIN_MS`].
+    pub fn observe(&mut self, in_use: bool, now: i64) -> bool {
+        if !in_use {
+            self.since_ms = None;
+            return false;
+        }
+        let since = *self.since_ms.get_or_insert(now);
+        // `saturating_sub` so a clock that jumps backwards restarts the wait instead of
+        // reporting a meeting that has been running for negative time.
+        now.saturating_sub(since) >= MIC_SUSTAIN_MS
+    }
+}
 
 /// What the adapter observes about a meeting that is already running.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -306,18 +350,18 @@ mod tests {
         let Decision::Offer { provenance, .. } = d else { panic!("expected an offer") };
 
         assert!(provenance.contains("meeting_app_frontmost"));
-        assert!(provenance.contains("mic_in_use"));
+        assert!(provenance.contains("mic_sustained"));
         assert!(!provenance.contains("occurrence_now"), "a signal that did not fire is not evidence");
         serde_json::from_str::<serde_json::Value>(&provenance).expect("provenance must be JSON");
     }
 
     #[test]
-    fn the_microphone_alone_is_not_a_meeting() {
-        // Dictation, a voice memo, a phone call in the browser: the mic being open says someone
-        // is speaking, not that a meeting is happening. Offering on this alone would make the
-        // panel appear whenever the user talks to their computer.
+    fn a_sustained_microphone_is_a_meeting_on_its_own() {
+        // The signal that makes this app-agnostic. A call in an app nobody put in the bundle-id
+        // table is still a call, and `mic_in_use` here means MicWatch has been saying yes for
+        // MIC_SUSTAIN_MS — the brief bursts that are dictation never reach this point.
         let d = decide(&Signals { mic_in_use: true, ..Default::default() });
-        assert_eq!(d, Decision::Ignore);
+        assert!(matches!(d, Decision::Offer { .. }));
     }
 
     #[test]
@@ -345,4 +389,46 @@ mod tests {
         assert!(!is_meeting_url("https://example.test/?u=meet.google.com"));
     }
 
+
+    #[test]
+    fn a_brief_burst_of_microphone_use_is_not_a_meeting() {
+        // Dictation, a voice memo, "hey" into a chat app. Offering to take notes on those is how
+        // the panel becomes something the user learns to dismiss without reading.
+        let mut w = MicWatch::new();
+        assert!(!w.observe(true, 0));
+        assert!(!w.observe(true, 5_000));
+        assert!(!w.observe(false, 6_000));
+        assert!(!w.observe(true, 7_000), "the clock restarts when the mic closes");
+    }
+
+    #[test]
+    fn sustained_microphone_use_is_a_meeting() {
+        let mut w = MicWatch::new();
+        w.observe(true, 0);
+        assert!(!w.observe(true, MIC_SUSTAIN_MS - 1));
+        assert!(w.observe(true, MIC_SUSTAIN_MS));
+    }
+
+    #[test]
+    fn the_signal_stays_true_while_the_call_continues() {
+        // It has to keep answering yes: the detector asks once a second, and a meeting that
+        // "became true and then went quiet" would close the interval mid-call.
+        let mut w = MicWatch::new();
+        w.observe(true, 0);
+        for t in 0..30 {
+            let now = MIC_SUSTAIN_MS + t * 1_000;
+            assert!(w.observe(true, now), "second {t} of the call reported no meeting");
+        }
+    }
+
+    #[test]
+    fn hanging_up_and_calling_again_needs_the_full_sustain_again() {
+        let mut w = MicWatch::new();
+        w.observe(true, 0);
+        assert!(w.observe(true, MIC_SUSTAIN_MS));
+
+        w.observe(false, MIC_SUSTAIN_MS + 1_000);
+
+        assert!(!w.observe(true, MIC_SUSTAIN_MS + 2_000), "a new call starts its own clock");
+    }
 }

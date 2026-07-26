@@ -20,7 +20,7 @@ pub mod mac {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use serde::Serialize;
-    use shogun_core::meeting::detect::{self, Decision, LiveSignals, Signals};
+    use shogun_core::meeting::detect::{self, Decision, LiveSignals, MicWatch, Signals};
 use shogun_core::meeting::gate::OfferGate;
     use shogun_core::meeting::settings::{OfferContext, Settings};
     use shogun_core::meeting::statemachine::{Effect, Input, Machine, Params, State};
@@ -48,6 +48,8 @@ use shogun_core::meeting::gate::OfferGate;
         /// What the user has already declined, and until when (FR-MT-02c). Deliberately not in
         /// `settings`: a decline changes no settings and must not outlive the process.
         gate: OfferGate,
+        /// Turns "the microphone is open" into "a call is happening" (FR-MT-04 signal ②).
+        mic: MicWatch,
     }
 
     impl Lane {
@@ -63,6 +65,7 @@ use shogun_core::meeting::gate::OfferGate;
                 provenance: "{}".to_string(),
                 since_ms: 0,
                 gate: OfferGate::new(),
+                mic: MicWatch::new(),
             }
         }
     }
@@ -137,6 +140,11 @@ use shogun_core::meeting::gate::OfferGate;
             if closed > 0 {
                 eprintln!("[meeting] closed {closed} interval(s) left open by a previous run");
             }
+        }
+        // Built here because `init` runs in Tauri's setup, on the main thread.
+        match build_overlay(app) {
+            Some(_) => eprintln!("[meeting] overlay window ready (hidden)"),
+            None => eprintln!("[meeting] overlay window unavailable — the panel will not appear"),
         }
         eprintln!(
             "[meeting] notes {}",
@@ -235,10 +243,15 @@ use shogun_core::meeting::gate::OfferGate;
         bundle_id: &str,
         window_title: Option<&str>,
         page_url: Option<&str>,
+        mic_open: bool,
     ) {
         let now = now_ms();
         let Ok(mut g) = LANE.lock() else { return };
         let Some(lane) = g.as_mut() else { return };
+
+        // Fed every tick, including while a meeting is already running: the watch measures a
+        // continuous stretch, so skipping observations would make it forget the call is ongoing.
+        let mic_sustained = lane.mic.observe(mic_open, now);
 
         if !lane.settings.enabled {
             return;
@@ -267,9 +280,11 @@ use shogun_core::meeting::gate::OfferGate;
         // probes that do not exist yet; claiming them here would inflate the confidence stored
         // against the interval beyond what was actually observed.
         let signals = Signals {
-            // A known meeting app, or a browser whose current page *is* a meeting. The URL is
-            // read rather than the title inferred from: a page can call itself anything, and a
-            // document titled "… - Google Meet" must not raise an offer to take notes on it.
+            // The opener: people have been talking through this machine for a sustained stretch.
+            mic_in_use: mic_sustained,
+            // Corroboration: a known meeting app, or a browser on a meeting page. Either can
+            // still open an interval alone, so a call whose audio does not run through the
+            // default input device is not invisible.
             meeting_app_frontmost: detect::is_meeting_app(bundle_id)
                 || page_url.is_some_and(detect::is_meeting_url),
             ..Default::default()
@@ -381,6 +396,15 @@ use shogun_core::meeting::gate::OfferGate;
         BROWSER_BUNDLE_IDS.contains(&bundle_id)
     }
 
+    /// The lane's current state, for the diagnostic line. Never blocks: a state read that waited
+    /// on the lock would make the log the thing that hides the problem.
+    fn state_tag() -> &'static str {
+        match LANE.try_lock() {
+            Ok(g) => g.as_ref().map_or("none", |l| l.machine.state().tag()),
+            Err(_) => "busy",
+        }
+    }
+
     /// One-second driver: reads the frontmost app, offers when it is a meeting, and keeps the
     /// pill's clock moving.
     ///
@@ -421,10 +445,13 @@ use shogun_core::meeting::gate::OfferGate;
                             .to_string()
                     });
                     let line = format!(
-                        "{} browser={} host={}",
+                        "{} state={} mic={} browser={} host={} title={:?}",
                         front.bundle_id,
+                        state_tag(),
+                        crate::mic::input_in_use(),
                         is_browser(&front.bundle_id),
-                        host.as_deref().unwrap_or("-")
+                        host.as_deref().unwrap_or("-"),
+                        title.chars().take(40).collect::<String>()
                     );
                     if let Ok(mut g) = LAST.lock() {
                         if *g != line {
@@ -433,7 +460,13 @@ use shogun_core::meeting::gate::OfferGate;
                         }
                     }
                 }
-                on_focus(&app, &front.bundle_id, Some(&title), url.as_deref());
+                on_focus(
+                    &app,
+                    &front.bundle_id,
+                    Some(&title),
+                    url.as_deref(),
+                    crate::mic::input_in_use(),
+                );
             }
             tick(&app);
         })
@@ -454,16 +487,23 @@ use shogun_core::meeting::gate::OfferGate;
     /// Distance from the top-right corner of the visible screen.
     const MARGIN: f64 = 16.0;
 
-    /// Build the overlay window if it does not exist yet. Hidden until a meeting is detected.
-    fn ensure_window(app: &tauri::AppHandle) -> Option<tauri::WebviewWindow> {
+    /// Build the overlay window, hidden. **Setup only — this must run on the main thread.**
+    ///
+    /// Creating a window is an AppKit call, and AppKit is main-thread-only: building it lazily
+    /// from the detection thread the first time a meeting appeared took the whole app down at
+    /// exactly the moment it was supposed to start working. The window is therefore made once at
+    /// launch and merely shown and hidden afterwards, which is safe from any thread.
+    pub fn build_overlay(app: &tauri::AppHandle) -> Option<tauri::WebviewWindow> {
         if let Some(win) = app.get_webview_window(WINDOW_LABEL) {
             return Some(win);
         }
         let win = tauri::WebviewWindowBuilder::new(
             app,
             WINDOW_LABEL,
-            // Same bundle, different route: the webview branches on its own window label.
-            tauri::WebviewUrl::App("index.html".into()),
+            // Same entry point as the notch window. `App("index.html")` resolved to a URL the
+            // dev server did not serve, so the window existed with a webview that never ran any
+            // JavaScript — shown, sized, positioned, and completely blank.
+            tauri::WebviewUrl::default(),
         )
         .title("SHOGUN — meeting")
         .transparent(true)
@@ -479,6 +519,9 @@ use shogun_core::meeting::gate::OfferGate;
         .map_err(|e| eprintln!("[meeting] overlay window build failed: {e}"))
         .ok()?;
         crate::float_on_all_spaces(&win);
+        // What the webview was actually pointed at. A window whose webview never runs any
+        // JavaScript looks exactly like a window that was never created.
+        eprintln!("[meeting] overlay url = {:?}", win.url().map(|u| u.to_string()));
         Some(win)
     }
 
@@ -487,29 +530,67 @@ use shogun_core::meeting::gate::OfferGate;
     /// Only on first show: after that the user may have dragged it somewhere they prefer, and
     /// moving it back each time would undo that every meeting.
     fn park_top_right(win: &tauri::WebviewWindow, size: (f64, f64)) {
-        let Ok(Some(monitor)) = win.current_monitor() else { return };
+        // `current_monitor` on a window that has never been shown can answer None, so fall back
+        // to the primary screen rather than skipping placement and leaving the panel wherever
+        // the window server first put it.
+        let monitor = match win.current_monitor() {
+            Ok(Some(m)) => m,
+            _ => match win.primary_monitor() {
+                Ok(Some(m)) => m,
+                _ => {
+                    eprintln!("[meeting] no monitor to park the overlay on");
+                    return;
+                }
+            },
+        };
         let scale = monitor.scale_factor();
         let area = monitor.size().to_logical::<f64>(scale);
         let origin = monitor.position().to_logical::<f64>(scale);
         let x = origin.x + area.width - size.0 - MARGIN;
         // Below the menu bar, so the overlay never fights the notch for the same pixels.
         let y = origin.y + MARGIN + 28.0;
+        eprintln!(
+            "[meeting] park target=({x:.0},{y:.0}) screen={:?}@{:?} scale={scale}",
+            (area.width, area.height),
+            (origin.x, origin.y)
+        );
         let _ = win.set_position(tauri::LogicalPosition::new(x, y));
     }
 
     /// Show, hide and resize the overlay to match the lane's state.
     fn sync_window(app: &tauri::AppHandle, state: State, enabled: bool) {
+        // `PARKED` records only whether the overlay has been placed yet — the user may drag it
+        // afterwards and it must not jump back. Showing is attempted on *every* tick it should
+        // be visible: `show()` is idempotent, and treating "we showed it once" as "it is on
+        // screen" is what left an invisible window in the one state that has to be seen.
+        static PARKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        use std::sync::atomic::Ordering;
+
         let visible = enabled && !matches!(state, State::Idle);
-        let Some(win) = ensure_window(app) else { return };
+        // Never builds: the window exists from launch (see `build_overlay`). If it is missing,
+        // something failed at setup and the right answer is to do nothing rather than to try
+        // creating an AppKit window from this thread.
+        let Some(win) = app.get_webview_window(WINDOW_LABEL) else { return };
         if !visible {
             let _ = win.hide();
             return;
         }
         let size = if state == State::Wrapping { RECAP_SIZE } else { BAR_SIZE };
         let _ = win.set_size(tauri::LogicalSize::new(size.0, size.1));
-        if !win.is_visible().unwrap_or(false) {
+        if !PARKED.swap(true, Ordering::SeqCst) {
             park_top_right(&win, size);
-            let _ = win.show();
+        }
+        let shown = win.show();
+        let _ = win.set_always_on_top(true);
+        // Logged on change only, so a running meeting does not print once a second.
+        static LAST: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if !LAST.swap(true, Ordering::SeqCst) {
+            eprintln!(
+                "[meeting] overlay show ok={} pos={:?} size={:?}",
+                shown.is_ok(),
+                win.outer_position().ok(),
+                (size.0, size.1)
+            );
         }
     }
 

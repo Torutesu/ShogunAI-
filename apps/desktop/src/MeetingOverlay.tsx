@@ -54,6 +54,14 @@ export function MeetingOverlay(): JSX.Element | null {
     void invoke<Recap | null>("meeting_recap").then(setRecap).catch(() => undefined);
   }, [view?.state]);
 
+  // Why nothing is on screen, when nothing is on screen. The window can be shown and still look
+  // empty, and from the outside that is indistinguishable from the window never appearing.
+  useEffect(() => {
+    call("ui_log", {
+      msg: `overlay render view=${view ? `${view.state}/enabled=${view.enabled}` : "null"}`,
+    });
+  }, [view?.state, view?.enabled]);
+
   if (!view || !view.enabled || view.state === "idle") return null;
 
   const name = view.title?.trim() || t.meetingUntitled;

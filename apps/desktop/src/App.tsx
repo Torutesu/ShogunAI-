@@ -61,14 +61,6 @@ interface MeetingView {
   countdown_ms: number;
 }
 
-/** mm:ss. The elapsed time has to be visible and moving: a state toggle alone does not answer
- *  "is this still going?", which is the question the pill exists to answer (FR-MT-09). */
-function clock(ms: number): string {
-  const total = Math.max(0, Math.floor(ms / 1000));
-  const m = Math.floor(total / 60);
-  const sec = total % 60;
-  return `${m}:${String(sec).padStart(2, "0")}`;
-}
 interface Status {
   app: string;
   commitments: number;
@@ -426,19 +418,6 @@ export function App(): JSX.Element {
 
   // Collapsed: a clear, clickable handle hanging from the notch.
   if (!open) {
-    // A meeting in progress outranks the ordinary handle. It stays visible in every state the
-    // handle would be — including fullscreen, the one exception to FR-NU-08 — because a lane
-    // that listens has to be the easiest thing on screen to see and to stop (FR-MT-09).
-    const inMeeting = meeting?.enabled && (meeting.state === "offered" || meeting.state === "recording");
-    if (inMeeting && meeting) {
-      return (
-        <div className="stage stage--handle">
-          <div ref={pillRef}>
-            <MeetingPill view={meeting} />
-          </div>
-        </div>
-      );
-    }
     return (
       <div className="stage stage--handle">
         <button className="handle" ref={handleRef} type="button" onClick={expand} title={t.openPanel}>
@@ -460,16 +439,8 @@ export function App(): JSX.Element {
     );
   }
 
-  const meetingLive =
-    meeting?.enabled && (meeting.state === "offered" || meeting.state === "recording")
-      ? meeting
-      : null;
-
   return (
     <div className="stage">
-      {/* The pill stays put when the panel is open. Expanding SHOGUN must not be a way to lose
-          sight of a meeting in progress — or of the button that stops it (FR-MT-09). */}
-      {meetingLive ? <MeetingPill view={meetingLive} /> : null}
       <div className="panel">
         {showSettings ? (
           <Settings
@@ -484,10 +455,6 @@ export function App(): JSX.Element {
             }}
             onCleared={refreshState}
           />
-        ) : meetingLive?.state === "recording" ? (
-          /* During a meeting the panel is the note and nothing else. Chat, state rows and the
-             composer would all be invitations to do something other than be in the meeting. */
-          <MeetingNote />
         ) : (
           <>
             <header className="head" onMouseDown={beginDrag}>
@@ -658,129 +625,6 @@ export function App(): JSX.Element {
  *  it must never do is be missable: this is the surface that makes "it was listening and I never
  *  knew" impossible. Hence no confirmation on Stop, an always-moving clock, and a live dot rather
  *  than a red record lamp — nothing is being recorded, and the lamp would say otherwise. */
-/** The meeting note (FR-MT-10).
- *
- *  While a meeting runs, the expanded panel is a place to type — the note is the only thing on
- *  screen. No live transcript: watching text scroll past pulls attention out of the meeting, and
- *  correcting it would be work the user did not ask for.
- *
- *  Saves on a debounce and on unmount, because a meeting ends without warning and an unsaved
- *  note is the one thing here that cannot be reconstructed. */
-function MeetingNote(): JSX.Element {
-  const [body, setBody] = useState("");
-  const [status, setStatus] = useState<"idle" | "saved" | "failed">("idle");
-  const latest = useRef("");
-
-  const save = (text: string): void => {
-    if (!IN_TAURI) return;
-    void invoke("meeting_save_note", { body: text })
-      .then(() => setStatus("saved"))
-      .catch(() => setStatus("failed"));
-  };
-
-  useEffect(() => {
-    latest.current = body;
-  }, [body]);
-
-  useEffect(() => {
-    if (!body) return;
-    const id = window.setTimeout(() => save(body), 800);
-    return () => window.clearTimeout(id);
-  }, [body]);
-
-  // The meeting can end at any moment; flush whatever is in the box on the way out.
-  useEffect(
-    () => () => {
-      if (latest.current) save(latest.current);
-    },
-    [],
-  );
-
-  return (
-    <div className="mnote">
-      <textarea
-        className="mnote__area"
-        value={body}
-        placeholder={t.meetingNotePlaceholder}
-        onChange={(e) => {
-          setBody(e.target.value);
-          setStatus("idle");
-        }}
-        onFocus={() => void invoke("focus_field", { focused: true }).catch(() => undefined)}
-        onBlur={() => void invoke("focus_field", { focused: false }).catch(() => undefined)}
-      />
-      <div className="mnote__status">
-        {status === "saved" ? t.meetingNotesSaved : status === "failed" ? t.meetingNotesFailed : ""}
-      </div>
-    </div>
-  );
-}
-
-function MeetingPill({ view }: { view: MeetingView }): JSX.Element {
-  const title = view.title?.trim() || t.meetingUntitled;
-
-  if (view.state === "offered") {
-    return (
-      <div className="mpill mpill--offer">
-        <span className="mpill__title">{title}</span>
-        <span className="mpill__count">
-          {t.meetingStarting} {Math.ceil(view.countdown_ms / 1000)}s
-        </span>
-        <span className="mpill__acts">
-          {/* Tier (b) reachable from the offer itself (FR-MT-08): the moment a user is annoyed
-              by the prompt is the moment they want it gone for good, and making them go and
-              find Settings for that is how a feature gets switched off entirely instead. */}
-          {view.app_bundle_id ? (
-            <button
-              type="button"
-              className="mpill__btn mpill__btn--quiet"
-              onClick={() =>
-                void invoke("meeting_exclude_app", { bundleId: view.app_bundle_id }).catch(
-                  () => undefined,
-                )
-              }
-            >
-              {t.meetingNeverThisApp}
-            </button>
-          ) : null}
-          <button
-            type="button"
-            className="mpill__btn"
-            onClick={() => void invoke("meeting_not_now").catch(() => undefined)}
-          >
-            {t.meetingNotNow}
-          </button>
-          <button
-            type="button"
-            className="mpill__btn mpill__btn--go"
-            onClick={() => void invoke("meeting_start").catch(() => undefined)}
-          >
-            {t.meetingStart}
-          </button>
-        </span>
-      </div>
-    );
-  }
-
-  return (
-    <div className="mpill">
-      {/* No live dot here. A pulsing indicator reads as "it is listening", and at this stage
-          nothing is: SHOGUN is holding a note open beside the meeting. The dot returns when
-          there is something live to point at (MT3). */}
-      <span className="mpill__label">{t.meetingNotes}</span>
-      <span className="mpill__time">{clock(view.elapsed_ms)}</span>
-      <span className="mpill__title">{title}</span>
-      <button
-        type="button"
-        className="mpill__btn mpill__btn--stop"
-        onClick={() => void invoke("meeting_stop").catch(() => undefined)}
-      >
-        {t.meetingStop}
-      </button>
-    </div>
-  );
-}
-
 function ResizeGrip(props: {
   current: () => Size;
   onResize: (w: number, h: number) => void;
