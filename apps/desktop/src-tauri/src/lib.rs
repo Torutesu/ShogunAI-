@@ -1038,6 +1038,11 @@ fn set_panel_size(app: tauri::AppHandle, width: f64, height: f64, anchor: Option
                 size: NSSize { width, height },
             };
             let _: () = msg_send![ptr, setFrame: r, display: true];
+            // The window is transparent, so macOS derives its shadow from the rendered alpha mask
+            // — and caches it. Without this the shadow keeps the shape the panel had at its
+            // previous size, which shows up as a hard edge sitting away from the glass (most
+            // visible collapsing the tall panel back to the pill).
+            let _: () = msg_send![ptr, invalidateShadow];
             eprintln!(
                 "[shell] panel resized to {:.0}x{:.0} at {:.0},{:.0} (anchor {})",
                 width, height, r.origin.x, r.origin.y, anchor_label
