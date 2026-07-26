@@ -28,7 +28,7 @@ SHOGUN デザインシステムの **Foundation（トークン基盤）**。`src
 本 Foundation では未定義（desktop 正本に無いため）。将来のブランチで wireframe（`docs/wireframes/shogun-ui.css`）の shadow/blur を統合する。
 
 ## テーマ切替
-`html[data-appearance="dark"|"light"|"auto"]`。`auto` は OS 設定（`prefers-color-scheme`）に追従。
+生成CSSは `:root[data-appearance="dark"|"light"|"auto"]` セレクタで切替（`:root` は `<html>` 要素）。属性は `<html>`（`document.documentElement`）に付与する。`auto` は OS 設定（`prefers-color-scheme`）に追従。
 
 ## website について
 `apps/website` は別語彙（`--bg`/`--surface`/`--cloud`、`data-theme`）を使う。対応表は `src/tokens.json` の `$website_mapping`（ドキュメントのみ）にあり、移行は別ブランチで行う。
