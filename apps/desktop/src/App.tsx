@@ -66,7 +66,7 @@ interface StatePayload {
 }
 
 interface InlineStatus {
-  phase: "drafting" | "inserted" | "no_context" | "key_rejected" | "failed";
+  phase: "drafting" | "inserted" | "no_context" | "no_key" | "key_rejected" | "failed";
   chars: number;
   detail: string | null;
 }
@@ -526,6 +526,10 @@ export function App(): JSX.Element {
         return { text: t.inlineNoField, tone: "warn" };
       case "key_rejected":
         return { text: t.inlineKeyRejected, tone: "warn" };
+      // Nothing was written at the caret, so this has to read as a setup step rather than a
+      // failure — the tap did nothing, and the reason is one field away in settings.
+      case "no_key":
+        return { text: t.inlineNoKey, tone: "warn" };
       default:
         return { text: t.inlineFailed, tone: "warn" };
     }

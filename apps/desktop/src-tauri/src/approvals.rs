@@ -111,7 +111,8 @@ pub mod mac {
         );
         // Draft through the same BYOK Agent-lane client as inline drafts (invariant 5). Traceability
         // is recorded by the client at the egress point.
-        let agent = crate::inline_source::mac::build_agent(&db);
+        let agent = crate::inline_source::mac::build_agent(&db)
+            .ok_or_else(|| "No key yet — add your provider key in Settings to draft replies.".to_string())?;
         let body = agent.complete(&prompt).map_err(|e| format!("draft failed: {e:?}"))?;
 
         let proposal = proposed(&kind, &destination, &subject, &body)?;

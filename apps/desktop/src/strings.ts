@@ -26,6 +26,7 @@ export const STRINGS = {
     inlineInserted: "Drafted",
     inlineNoField: "No editable field here",
     inlineKeyRejected: "Key rejected — check it in settings",
+    inlineNoKey: "Add a key in settings to draft",
     inlineFailed: "Couldn't draft",
     // settings
     settings: "Settings",

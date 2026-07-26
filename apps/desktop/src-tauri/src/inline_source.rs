@@ -285,12 +285,13 @@ pub mod mac {
         }
     }
 
-    // ---- BYOK Agent-lane client (Keychain → real, else mock) --------------------------------
+    // ---- BYOK Agent-lane client (Keychain → real, else nothing) -----------------------------
 
     /// The Agent-lane client for inline drafts and chat. Real when the ACTIVE provider has a key
-    /// in the Keychain; otherwise a mock that echoes the prompt (so the AX read→insert loop is
-    /// testable on device without a key). `pub(crate)` so the send producers (`crate::approvals`,
-    /// e.g. Reply Drafter) draft through the SAME BYOK Agent-lane client (invariant 5).
+    /// in the Keychain; the echo `Mock` exists only for exercising the AX read→insert loop on
+    /// device and is reachable solely via `SHOGUN_MOCK_AGENT=1`, never by a user with no key.
+    /// `pub(crate)` so the send producers (`crate::approvals`, e.g. Reply Drafter) draft through
+    /// the SAME BYOK Agent-lane client (invariant 5).
     pub(crate) enum InlineAgent {
         Mock(MockAgentClient),
         Anthropic {
@@ -357,7 +358,7 @@ pub mod mac {
         Ok(())
     }
 
-    /// Remove `provider`'s BYOK key — chat and drafts fall back to the echo mock.
+    /// Remove `provider`'s BYOK key — chat and drafts stop until a new one is added.
     #[tauri::command]
     pub fn clear_byok_key(provider: String) -> Result<(), String> {
         if !PROVIDERS.contains(&provider.as_str()) {
@@ -370,18 +371,33 @@ pub mod mac {
         Ok(())
     }
 
-    /// Build the Agent client for this run from the current provider settings. Falls back to the
-    /// mock (with a clear log) whenever the key is absent or the transport/runtime can't be built.
-    /// `pub(crate)` so the send producers (`crate::approvals`) share the one BYOK Agent-lane client
-    /// construction (invariant 5) rather than re-deriving it.
-    pub(crate) fn build_agent(db: &Db) -> InlineAgent {
+    /// Opt-in echo mock, for exercising the AX read→insert loop on device without a key.
+    ///
+    /// Off unless `SHOGUN_MOCK_AGENT=1`. It used to be the automatic fallback whenever a key was
+    /// missing, which meant a user with no key got the mock's echo written into their own document
+    /// and reported as a successful draft. A development aid must never be the default path a real
+    /// user falls down.
+    fn mock_agent_enabled() -> bool {
+        std::env::var("SHOGUN_MOCK_AGENT").is_ok_and(|v| v == "1")
+    }
+
+    /// Build the Agent client for this run from the current provider settings, or `None` when
+    /// there is no usable one — no key for the active provider, or no transport/runtime.
+    ///
+    /// `None` means callers MUST NOT produce output. Returning an `Option` rather than a silent
+    /// mock is the point: the caret sits in the user's own document, and the type now forces every
+    /// call site to decide what to do about a missing key instead of inheriting a default that
+    /// writes. `pub(crate)` so the send producers (`crate::approvals`) share the one BYOK
+    /// Agent-lane client construction (invariant 5) rather than re-deriving it.
+    pub(crate) fn build_agent(db: &Db) -> Option<InlineAgent> {
         let s = current_settings();
         let Some(key) = keychain_byok(&s.provider) else {
-            eprintln!(
-                "[inline] no key in Keychain for provider '{}' — using echo mock (AX path still runs)",
-                s.provider
-            );
-            return InlineAgent::Mock(MockAgentClient::new(ByokKey::new(Secret::new("mock"))));
+            if mock_agent_enabled() {
+                eprintln!("[inline] SHOGUN_MOCK_AGENT=1 — echo mock (AX path still runs)");
+                return Some(InlineAgent::Mock(MockAgentClient::new(ByokKey::new(Secret::new("mock")))));
+            }
+            eprintln!("[inline] no key in Keychain for provider '{}' — not drafting", s.provider);
+            return None;
         };
         let model = effective_model(&s);
         match (ReqwestTransport::new(), tokio::runtime::Builder::new_current_thread().enable_all().build()) {
@@ -401,7 +417,7 @@ pub mod mac {
                             byok,
                             OpenAiCompatConfig::new(base, model),
                         );
-                        InlineAgent::OpenAiCompat { rt, client }
+                        Some(InlineAgent::OpenAiCompat { rt, client })
                     }
                     _ => {
                         let client = AnthropicAgentClient::new(
@@ -410,13 +426,16 @@ pub mod mac {
                             byok,
                             AnthropicConfig::new(model),
                         );
-                        InlineAgent::Anthropic { rt, client }
+                        Some(InlineAgent::Anthropic { rt, client })
                     }
                 }
             }
+            // A key is present but we cannot build a client to use it. Falling back to the
+            // echo mock here would write mock output into the document of a user who HAS paid the
+            // setup cost — the most confusing version of this bug. Draft nothing.
             _ => {
-                eprintln!("[inline] transport/runtime unavailable — using echo mock");
-                InlineAgent::Mock(MockAgentClient::new(ByokKey::new(Secret::new("mock"))))
+                eprintln!("[inline] transport/runtime unavailable — not drafting");
+                None
             }
         }
     }
@@ -474,7 +493,12 @@ pub mod mac {
                 }
                 _ => db.inline_memory(6),
             };
-            let agent = build_agent(&db);
+            // No key means no draft AND no write. The caret sits in the user's own document;
+            // putting anything there that they did not ask for is worse than doing nothing.
+            let Some(agent) = build_agent(&db) else {
+                push_inline(&app, InlineStatus { phase: "no_key", chars: 0, detail: None });
+                return;
+            };
             let outcome = compose_inline(&AxCursorReader, &agent, &AxTextInserter, &memory);
             match &outcome {
                 InlineOutcome::Inserted { chars } => {
@@ -722,16 +746,19 @@ pub mod mac {
         // Retrieval + state facts: the question decides what history comes along, so "what
         // happened with X" can actually be answered from the event log.
         let ctx = db.assemble_context(&query, CHAT_EVIDENCE_HITS, CHAT_EVIDENCE_CHARS);
-        let agent = build_agent(db);
-        // Without a key the agent is the echo mock, whose "answer" is the prompt itself — printing
-        // that in the thread dumps SHOGUN's entire internal prompt at the user. Say what is
-        // actually wrong instead. (The UI also pre-empts this from `has_key`; this is the backstop.)
-        if !agent.is_live() {
-            return Ok(ChatAnswer {
+        // Without a key there is nothing to answer with; with the dev mock the "answer" is the
+        // prompt itself, and printing that dumps SHOGUN's entire internal prompt at the user. Say
+        // what is actually wrong instead. (The UI also pre-empts this from `has_key`.)
+        let no_key = || {
+            Ok(ChatAnswer {
                 text: "No key yet — add your provider key in Settings to get real answers."
                     .to_string(),
                 citations: Vec::new(),
-            });
+            })
+        };
+        let Some(agent) = build_agent(db) else { return no_key() };
+        if !agent.is_live() {
+            return no_key();
         }
         let text = agent.complete(&build_chat_prompt(message, &ctx)).map_err(|e| {
             // Same latch as the ⌥-tap path: chat surfaces the error text, but Settings is where
