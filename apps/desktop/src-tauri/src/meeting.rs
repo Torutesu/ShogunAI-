@@ -192,7 +192,9 @@ use shogun_core::meeting::gate::OfferGate;
     }
 
     fn emit(app: &tauri::AppHandle, lane: &Lane, now: i64) {
-        let _ = app.emit("meeting", view(lane, now));
+        let v = view(lane, now);
+        sync_window(app, lane.machine.state(), lane.settings.enabled);
+        let _ = app.emit("meeting", v);
     }
 
     /// The database, when it is up. Meeting notes must not be the reason the app fails to start,
@@ -220,7 +222,7 @@ use shogun_core::meeting::gate::OfferGate;
         let now = now_ms();
         let Ok(mut g) = LANE.lock() else { return };
         let Some(lane) = g.as_mut() else { return };
-        let effects = lane.machine.step_completing_wrap(input);
+        let effects = lane.machine.step(input);
         apply(app, lane, &effects, now);
     }
 
@@ -279,7 +281,7 @@ use shogun_core::meeting::gate::OfferGate;
             lane.app_bundle_id = Some(bundle_id.to_string());
             lane.confidence = confidence;
             lane.provenance = provenance;
-            let effects = lane.machine.step_completing_wrap(Input::MeetingDetected);
+            let effects = lane.machine.step(Input::MeetingDetected);
             apply(app, lane, &effects, now);
         }
     }
@@ -335,7 +337,16 @@ use shogun_core::meeting::gate::OfferGate;
                         None => Next::Emit,
                     }
                 }
-                State::Wrapping => Next::Emit,
+                State::Wrapping => {
+                    // The Recap is on screen. It is dismissed by the user, but a Recap nobody
+                    // closes must not leave the lane deaf to the next meeting (Machine::
+                    // RECAP_DISMISS_MS).
+                    if now.saturating_sub(lane.since_ms) > Machine::RECAP_DISMISS_MS {
+                        Next::Step(Input::Wrapped)
+                    } else {
+                        Next::Emit
+                    }
+                }
             }
         };
 
@@ -360,6 +371,7 @@ use shogun_core::meeting::gate::OfferGate;
         "com.google.Chrome.canary",
         "com.apple.Safari",
         "company.thebrowser.Browser", // Arc
+        "company.thebrowser.dia",     // Dia
         "com.microsoft.edgemac",
         "com.brave.Browser",
         "org.mozilla.firefox",
@@ -391,10 +403,128 @@ use shogun_core::meeting::gate::OfferGate;
                 let url = is_browser(&front.bundle_id)
                     .then(|| crate::axcache::browser_url(front.pid))
                     .flatten();
+                // Diagnostic while the browser table is confirmed on real machines: which app
+                // was seen, and whether a URL could be read at all. Printed only on change so a
+                // steady desktop stays quiet.
+                //
+                // **Host only, never the full URL.** A path and query string carry session ids,
+                // document names and search terms — user content, which must not reach a log
+                // (CLAUDE.md). The host is all this diagnostic needs, and it is also the only
+                // part detection looks at.
+                {
+                    use std::sync::Mutex;
+                    static LAST: Mutex<String> = Mutex::new(String::new());
+                    let host = url.as_deref().map(|u| {
+                        u.split_once("://")
+                            .map(|(_, rest)| rest.split(['/', '?', '#']).next().unwrap_or(""))
+                            .unwrap_or("")
+                            .to_string()
+                    });
+                    let line = format!(
+                        "{} browser={} host={}",
+                        front.bundle_id,
+                        is_browser(&front.bundle_id),
+                        host.as_deref().unwrap_or("-")
+                    );
+                    if let Ok(mut g) = LAST.lock() {
+                        if *g != line {
+                            eprintln!("[meeting] saw {line}");
+                            *g = line;
+                        }
+                    }
+                }
                 on_focus(&app, &front.bundle_id, Some(&title), url.as_deref());
             }
             tick(&app);
         })
+    }
+
+    // ── The floating overlay ────────────────────────────────────────────────────────────────
+    //
+    // A window of its own rather than the notch (Issue #7: "画面右上に小さなフローティング
+    // ウィンドウ…ドラッグで位置変更可能"). During a meeting the user's eyes are on the meeting
+    // window, and the notch sits at the very top of the screen outside that field of view —
+    // "always visible, always one tap to stop" only holds if it appears near what they are
+    // looking at.
+
+    const WINDOW_LABEL: &str = "meeting";
+    /// Offered and Recording are one compact bar; Recap needs room for the card.
+    const BAR_SIZE: (f64, f64) = (400.0, 88.0);
+    const RECAP_SIZE: (f64, f64) = (400.0, 280.0);
+    /// Distance from the top-right corner of the visible screen.
+    const MARGIN: f64 = 16.0;
+
+    /// Build the overlay window if it does not exist yet. Hidden until a meeting is detected.
+    fn ensure_window(app: &tauri::AppHandle) -> Option<tauri::WebviewWindow> {
+        if let Some(win) = app.get_webview_window(WINDOW_LABEL) {
+            return Some(win);
+        }
+        let win = tauri::WebviewWindowBuilder::new(
+            app,
+            WINDOW_LABEL,
+            // Same bundle, different route: the webview branches on its own window label.
+            tauri::WebviewUrl::App("index.html".into()),
+        )
+        .title("SHOGUN — meeting")
+        .transparent(true)
+        .decorations(false)
+        .resizable(false)
+        .always_on_top(true)
+        .shadow(false)
+        .skip_taskbar(true)
+        .inner_size(BAR_SIZE.0, BAR_SIZE.1)
+        .visible(false)
+        .focused(false)
+        .build()
+        .map_err(|e| eprintln!("[meeting] overlay window build failed: {e}"))
+        .ok()?;
+        crate::float_on_all_spaces(&win);
+        Some(win)
+    }
+
+    /// Park the overlay at the top-right of the screen the cursor is on.
+    ///
+    /// Only on first show: after that the user may have dragged it somewhere they prefer, and
+    /// moving it back each time would undo that every meeting.
+    fn park_top_right(win: &tauri::WebviewWindow, size: (f64, f64)) {
+        let Ok(Some(monitor)) = win.current_monitor() else { return };
+        let scale = monitor.scale_factor();
+        let area = monitor.size().to_logical::<f64>(scale);
+        let origin = monitor.position().to_logical::<f64>(scale);
+        let x = origin.x + area.width - size.0 - MARGIN;
+        // Below the menu bar, so the overlay never fights the notch for the same pixels.
+        let y = origin.y + MARGIN + 28.0;
+        let _ = win.set_position(tauri::LogicalPosition::new(x, y));
+    }
+
+    /// Show, hide and resize the overlay to match the lane's state.
+    fn sync_window(app: &tauri::AppHandle, state: State, enabled: bool) {
+        let visible = enabled && !matches!(state, State::Idle);
+        let Some(win) = ensure_window(app) else { return };
+        if !visible {
+            let _ = win.hide();
+            return;
+        }
+        let size = if state == State::Wrapping { RECAP_SIZE } else { BAR_SIZE };
+        let _ = win.set_size(tauri::LogicalSize::new(size.0, size.1));
+        if !win.is_visible().unwrap_or(false) {
+            park_top_right(&win, size);
+            let _ = win.show();
+        }
+    }
+
+    /// Dismiss the Recap and return the lane to Idle.
+    #[tauri::command]
+    pub fn meeting_wrapped(app: tauri::AppHandle) {
+        step(&app, Input::Wrapped);
+    }
+
+    /// Let the user move the overlay (Issue #7: draggable).
+    #[tauri::command]
+    pub fn meeting_drag(app: tauri::AppHandle) {
+        if let Some(win) = app.get_webview_window(WINDOW_LABEL) {
+            let _ = win.start_dragging();
+        }
     }
 
     /// The pill's current contents (FR-MT-09). Also the webview's first read at boot.
@@ -493,7 +623,7 @@ use shogun_core::meeting::gate::OfferGate;
         let Some(lane) = g.as_mut() else { return Err("not ready".into()) };
         lane.settings = candidate;
         if !enabled {
-            let effects = lane.machine.step_completing_wrap(Input::FeatureDisabled);
+            let effects = lane.machine.step(Input::FeatureDisabled);
             apply(&app, lane, &effects, now);
         } else {
             emit(&app, lane, now);
@@ -536,7 +666,7 @@ use shogun_core::meeting::gate::OfferGate;
         // Excluding from the offer panel also declines whatever prompted it — from Offered that
         // is the pending offer, and from Recording the meeting in progress.
         let input = if lane.machine.state() == State::Recording { Input::Stop } else { Input::NotNow };
-        let effects = lane.machine.step_completing_wrap(input);
+        let effects = lane.machine.step(input);
         apply(&app, lane, &effects, now);
         Ok(())
     }

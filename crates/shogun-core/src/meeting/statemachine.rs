@@ -190,22 +190,15 @@ impl Machine {
         }
     }
 
-    /// [`step`], also completing the wrap when the transition produced one.
+    /// How long the Recap may sit on screen before the lane returns to Idle on its own.
     ///
-    /// `Wrapping` is transient, not a resting state: something has to move the machine out of it
-    /// or the lane is dead — `Idle` is the only state detection will act from. Leaving that to
-    /// each caller meant the one path that forgot (switching the feature off mid-meeting) parked
-    /// the machine in `Wrapping` forever and silently disabled meeting notes until restart. This
-    /// is the entry point adapters should use; it cannot forget.
-    pub fn step_completing_wrap(&mut self, input: Input) -> Vec<Effect> {
-        let mut effects = self.step(input);
-        if effects.contains(&Effect::BuildRecap) {
-            effects.extend(self.step(Input::Wrapped));
-        }
-        effects
-    }
+    /// `Wrapping` is where the Recap is shown, so it cannot be left instantly — but it must not
+    /// be a resting state either: detection only acts from `Idle`, so a machine parked in
+    /// `Wrapping` has quietly stopped noticing meetings. Whoever shows the Recap is expected to
+    /// dismiss it; this deadline is what makes forgetting to survivable rather than fatal.
+    pub const RECAP_DISMISS_MS: i64 = 5 * 60 * 1_000;
 
-    /// Recording → Wrapping. Audio stops first, so that the instant the interval is over the
+    /// Recording → Wrapping. Audio stops first    /// Recording → Wrapping. Audio stops first, so that the instant the interval is over the
     /// microphone is already closed — before any slower work (closing the row, building Recap).
     fn end(&mut self, why: EndReason) -> Vec<Effect> {
         self.state = State::Wrapping;
@@ -357,9 +350,9 @@ mod tests {
     }
 
     #[test]
-    fn every_ending_returns_the_lane_to_idle() {
-        // Detection only acts from Idle, so a machine parked in Wrapping is a machine that has
-        // stopped noticing meetings. Every way a meeting can end must come back.
+    fn every_ending_can_be_dismissed_back_to_idle() {
+        // Detection only acts from Idle, so a machine parked in Wrapping has stopped noticing
+        // meetings. Whichever way a meeting ended, dismissing the Recap must revive the lane.
         for ending in [
             Input::Stop,
             Input::FeatureDisabled,
@@ -368,34 +361,14 @@ mod tests {
             Input::AutoEnd(EndReason::Silence),
         ] {
             let mut m = machine();
-            m.step_completing_wrap(Input::MeetingDetected);
-            m.step_completing_wrap(Input::Start);
+            m.step(Input::MeetingDetected);
+            m.step(Input::Start);
 
-            m.step_completing_wrap(ending);
+            m.step(ending);
+            assert_eq!(m.state(), State::Wrapping, "{ending:?}: the Recap needs a state to live in");
 
-            assert_eq!(m.state(), State::Idle, "{ending:?} left the machine in Wrapping");
+            m.step(Input::Wrapped);
+            assert_eq!(m.state(), State::Idle, "{ending:?} left the lane stuck");
         }
-    }
-
-    #[test]
-    fn completing_the_wrap_still_reports_the_close_and_the_recap() {
-        // Finishing the wrap must not swallow the effects the adapter has to act on.
-        let mut m = machine();
-        m.step_completing_wrap(Input::MeetingDetected);
-        m.step_completing_wrap(Input::Start);
-
-        let fx = m.step_completing_wrap(Input::Stop);
-
-        assert!(fx.contains(&Effect::CloseSession(EndReason::UserStopped)));
-        assert!(fx.contains(&Effect::BuildRecap));
-        assert!(fx.contains(&Effect::StopAudio));
-    }
-
-    #[test]
-    fn a_step_that_does_not_wrap_is_unchanged() {
-        let mut m = machine();
-        let fx = m.step_completing_wrap(Input::MeetingDetected);
-        assert_eq!(m.state(), State::Offered);
-        assert!(fx.contains(&Effect::Transition(State::Offered)));
     }
 }

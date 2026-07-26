@@ -101,6 +101,8 @@ pub fn run() {
         meeting::mac::meeting_recap,
         meeting::mac::meeting_exclude_app,
         meeting::mac::meeting_include_app,
+        meeting::mac::meeting_drag,
+        meeting::mac::meeting_wrapped,
         meeting::mac::get_meeting_settings,
         meeting::mac::set_meeting_enabled,
         notch_actions::mac::notch_actions,
@@ -1091,7 +1093,7 @@ fn spawn_panel_state_logger(app: &tauri::App) {
 /// NSWindow `collectionBehavior` + level directly — the same recipe the NSPanel uses, minus the
 /// window-class swap that blanks the wry webview on device. Runs on the main thread (setup).
 #[cfg(target_os = "macos")]
-fn float_on_all_spaces(win: &tauri::WebviewWindow) {
+pub(crate) fn float_on_all_spaces(win: &tauri::WebviewWindow) {
     use objc2::msg_send;
     use objc2::runtime::AnyObject;
 

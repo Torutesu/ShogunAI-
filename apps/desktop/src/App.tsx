@@ -1483,9 +1483,12 @@ function Settings(props: {
       </header>
       <div className="settings__body">
         <ApprovalsSection />
+        {/* Near the top on purpose. Meeting notes ships off and only ever turns on because
+            someone found this switch — burying an opt-in below six connectors is how a feature
+            stays permanently off (FR-MT-01). */}
+        <MeetingSection />
         <ConnectionsSection />
         <AiSessionsSection />
-            <MeetingSection />
         <DreamSection />
         <section className="set">
           <div className="set__label" id="seg-appearance">{t.appearance}</div>

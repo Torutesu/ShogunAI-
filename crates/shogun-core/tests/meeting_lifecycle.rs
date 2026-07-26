@@ -61,7 +61,7 @@ fn on_focus(
     };
     match detect::decide(&signals) {
         Decision::Offer { confidence, .. } => {
-            (machine.step_completing_wrap(Input::MeetingDetected), Some(confidence))
+            (machine.step(Input::MeetingDetected), Some(confidence))
         }
         Decision::Ignore => (Vec::new(), None),
     }
@@ -154,7 +154,7 @@ fn a_meeting_the_user_ignores_is_noted_and_comes_back_as_a_recap() {
     assert!(confidence.is_some_and(|c| c > 0.0 && c < 1.0), "detection is never certain");
     assert_eq!(session, None, "no interval exists until the offer is answered or expires");
 
-    run(&db, &mut session, &mut Mic::default(), &m.step_completing_wrap(Input::GraceExpired));
+    run(&db, &mut session, &mut Mic::default(), &m.step(Input::GraceExpired));
     assert_eq!(m.state(), State::Recording);
     let id = session.expect("the interval opens when recording starts");
 
@@ -168,7 +168,7 @@ fn a_meeting_the_user_ignores_is_noted_and_comes_back_as_a_recap() {
     };
     let why = detect::end_condition(&live, 1_000).expect("the app disappearing ends the meeting");
     assert_eq!(why, EndReason::AppGone);
-    run(&db, &mut session, &mut Mic::default(), &m.step_completing_wrap(Input::AutoEnd(why)));
+    run(&db, &mut session, &mut Mic::default(), &m.step(Input::AutoEnd(why)));
 
     let recap = db.meeting_recap(id).expect("a finished meeting always has a recap");
     assert_eq!(recap.title, "Weekly sync");
@@ -185,7 +185,7 @@ fn declining_the_offer_leaves_no_trace_of_the_meeting() {
     let mut session = None;
 
     run(&db, &mut session, &mut Mic::default(), &on_focus(&enabled(), &mut m, &mut OfferGate::new(), "us.zoom.xos", None, 1_000).0);
-    run(&db, &mut session, &mut Mic::default(), &m.step_completing_wrap(Input::NotNow));
+    run(&db, &mut session, &mut Mic::default(), &m.step(Input::NotNow));
 
     assert_eq!(m.state(), State::Idle);
     assert_eq!(session, None);
@@ -216,13 +216,13 @@ fn every_route_that_opens_the_microphone_also_closes_it() {
         run(&db, &mut session, &mut mic, &on_focus(&settings, &mut m, &mut OfferGate::new(), "us.zoom.xos", None, 1_000).0);
         assert!(!mic.ever_opened, "{ending:?}: the offer must not open the microphone");
 
-        run(&db, &mut session, &mut mic, &m.step_completing_wrap(Input::Start));
+        run(&db, &mut session, &mut mic, &m.step(Input::Start));
         assert!(mic.open, "{ending:?}: recording opens it");
 
-        run(&db, &mut session, &mut mic, &m.step_completing_wrap(ending));
+        run(&db, &mut session, &mut mic, &m.step(ending));
         assert!(!mic.open, "{ending:?}: this ending left the microphone open");
 
-        run(&db, &mut session, &mut mic, &m.step_completing_wrap(Input::Wrapped));
+        run(&db, &mut session, &mut mic, &m.step(Input::Wrapped));
         assert!(!mic.open, "{ending:?}: wrapping must not reopen it");
         assert_eq!(m.state(), State::Idle);
         assert_eq!(session, None, "{ending:?}: the interval must be closed");
@@ -238,10 +238,10 @@ fn a_second_meeting_after_the_first_is_offered_again_rather_than_resumed() {
     let mut session = None;
 
     run(&db, &mut session, &mut Mic::default(), &on_focus(&settings, &mut m, &mut OfferGate::new(), "us.zoom.xos", None, 1_000).0);
-    run(&db, &mut session, &mut Mic::default(), &m.step_completing_wrap(Input::Start));
+    run(&db, &mut session, &mut Mic::default(), &m.step(Input::Start));
     let first = session;
-    run(&db, &mut session, &mut Mic::default(), &m.step_completing_wrap(Input::Stop));
-    run(&db, &mut session, &mut Mic::default(), &m.step_completing_wrap(Input::Wrapped));
+    run(&db, &mut session, &mut Mic::default(), &m.step(Input::Stop));
+    run(&db, &mut session, &mut Mic::default(), &m.step(Input::Wrapped));
 
     let (effects, _) = on_focus(&settings, &mut m, &mut OfferGate::new(), "us.zoom.xos", None, 1_000);
 
@@ -259,10 +259,10 @@ fn turning_the_feature_off_mid_meeting_closes_the_interval() {
     let mut session = None;
 
     run(&db, &mut session, &mut Mic::default(), &on_focus(&enabled(), &mut m, &mut OfferGate::new(), "us.zoom.xos", None, 1_000).0);
-    run(&db, &mut session, &mut Mic::default(), &m.step_completing_wrap(Input::Start));
+    run(&db, &mut session, &mut Mic::default(), &m.step(Input::Start));
     let id = session.expect("recording opened an interval");
 
-    run(&db, &mut session, &mut Mic::default(), &m.step_completing_wrap(Input::FeatureDisabled));
+    run(&db, &mut session, &mut Mic::default(), &m.step(Input::FeatureDisabled));
 
     assert_eq!(session, None);
     assert!(
@@ -284,7 +284,7 @@ fn a_decline_is_not_undone_by_the_next_detection_tick() {
 
     run(&db, &mut session, &mut Mic::default(),
         &on_focus(&settings, &mut m, &mut gate, "us.zoom.xos", None, 1_000).0);
-    run(&db, &mut session, &mut Mic::default(), &m.step_completing_wrap(Input::NotNow));
+    run(&db, &mut session, &mut Mic::default(), &m.step(Input::NotNow));
     gate.decline("us.zoom.xos", 1_000);
 
     for tick in 1..=60 {
@@ -297,7 +297,7 @@ fn a_decline_is_not_undone_by_the_next_detection_tick() {
 }
 
 #[test]
-fn wrapping_always_completes_so_the_lane_stays_usable() {
+fn wrapping_is_left_by_dismissal_so_the_lane_stays_usable() {
     // Switching the feature off mid-meeting parked the machine in Wrapping, and nothing sent
     // Wrapped — so `on_focus`'s "only from Idle" guard silently killed the feature until the app
     // was restarted. Every ending must return the lane to Idle.
@@ -313,11 +313,14 @@ fn wrapping_always_completes_so_the_lane_stays_usable() {
 
         run(&db, &mut session, &mut Mic::default(),
             &on_focus(&enabled(), &mut m, &mut OfferGate::new(), "us.zoom.xos", None, 1_000).0);
-        run(&db, &mut session, &mut Mic::default(), &m.step_completing_wrap(Input::Start));
+        run(&db, &mut session, &mut Mic::default(), &m.step(Input::Start));
 
-        let effects = m.step_completing_wrap(ending);
+        let effects = m.step(ending);
         run(&db, &mut session, &mut Mic::default(), &effects);
+        assert_eq!(m.state(), State::Wrapping, "{ending:?}: the Recap needs a state to live in");
 
+        // Dismissed by the user, or by the adapter's deadline — either way it returns.
+        m.step(Input::Wrapped);
         assert_eq!(m.state(), State::Idle, "{ending:?} left the lane stuck");
     }
 }

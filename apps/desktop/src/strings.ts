@@ -116,6 +116,8 @@ export const STRINGS = {
     // meeting notes — the pill (FR-MT-08/09). "Notes", never "Recording": nothing is recorded,
     // and the word would promise a file that will never exist.
     meetingNotes: "Notes",
+    meetingDetected: "Meeting detected",
+    meetingTakeNotes: "Take notes",
     meetingNotesSaved: "Saved",
     meetingNotesFailed: "Couldn't save",
     meetingRecapTitle: "Meeting notes",
