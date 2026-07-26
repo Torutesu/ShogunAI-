@@ -51,8 +51,13 @@ export interface ConfidenceMix {
 }
 
 export interface HealthView {
+  /** Only the cards the core can actually compute today. A metric with no source is omitted
+   *  rather than sent as a zero — a fabricated number here would be worse than a missing one,
+   *  because this pane's whole job is telling you what SHOGUN can and can't see. */
   cards: HealthCard[];
-  mix: ConfidenceMix;
+  /** Null until the nightly classification has run at least once. */
+  mix: ConfidenceMix | null;
+  /** Empty until the SLO histograms are wired (WP1.4). */
   slo: SloRow[];
 }
 
@@ -84,6 +89,8 @@ export interface TodayView {
   /** False when the nightly review didn't finish: the brief degrades to calendar + overdue only,
    *  with no generated prose (spec §D1). */
   generated: boolean;
+  /** True before the first brief has ever been produced — a different thing from a degraded one. */
+  never_run: boolean;
   sections: BriefSection[];
   actions: SuggestedAction[];
   schedule: ScheduleItem[];

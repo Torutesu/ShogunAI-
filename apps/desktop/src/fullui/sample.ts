@@ -41,6 +41,7 @@ export const SAMPLE_VIEW: FullUiView = {
 
   today: {
     generated: true,
+    never_run: false,
     sections: [
       { heading: "Today", bullets: [],
         body: "Three meetings, and the vendor renewal needs to close before the launch review on the 14th. Your afternoon is clear after 3 PM — that's the window for the deck." },

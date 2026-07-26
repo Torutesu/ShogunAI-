@@ -14,6 +14,7 @@ mod connectors;
 mod display;
 mod dream;
 mod exclusions;
+mod fullui;
 mod geometry;
 mod hover;
 mod inline_source;
@@ -117,6 +118,7 @@ pub fn run() {
         start_panel_drag,
         // First-layer connectors + the L3 send/approval queue, both rendered as sections of the
         // in-panel Settings view (there is no separate settings window).
+        fullui::mac::full_ui_view,
         connectors::mac::connectors_list,
         connectors::mac::connect_service,
         connectors::mac::disconnect_service,

@@ -154,6 +154,8 @@ export const FULL_UI = {
     notOnThisPlan: "— not on this plan",
     // today
     morningBrief: "Morning brief",
+    notMeasuredYet: "Not measured yet.",
+    briefNeverRun: "No brief yet — the first one is assembled after a nightly review runs.",
     briefDegraded: "The nightly review didn't finish, so this is your calendar and overdue commitments only.",
     suggested: "Suggested actions",
     lockedNeedsKey: "Drafting runs on your own key — that comes with Pro.",

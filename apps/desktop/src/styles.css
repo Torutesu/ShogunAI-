@@ -1481,3 +1481,14 @@ body.full-window {
 body.full-window:has(:root[data-appearance="light"]) {
   background: #eef1f6;
 }
+
+/* Boot / failure state for the Full UI window, before the core's view arrives. */
+.full-boot {
+  height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 40px;
+  text-align: center;
+  font-size: var(--fs-lg);
+  color: var(--muted);
+}

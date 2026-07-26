@@ -113,22 +113,29 @@ function Health({ v }: { v: HealthView }): JSX.Element {
         </div>
       ))}
 
+      {/* Absent until the nightly classifier has tallied a night. Saying so beats drawing an
+          empty bar that looks like a real 0/0/0 split. */}
       <div className="hcard">
         <div className="hcard__k">{tf.confidenceMix}</div>
-        <div className="hcard__v">
-          <div className="mix">
-            <span style={{ width: `${v.mix.high_pct}%`, background: "var(--live)" }} />
-            <span style={{ width: `${v.mix.medium_pct}%`, background: "var(--accent)" }} />
-            <span style={{ width: `${v.mix.low_pct}%`, background: "var(--faint)" }} />
+        {v.mix ? (
+          <div className="hcard__v">
+            <div className="mix">
+              <span style={{ width: `${v.mix.high_pct}%`, background: "var(--live)" }} />
+              <span style={{ width: `${v.mix.medium_pct}%`, background: "var(--accent)" }} />
+              <span style={{ width: `${v.mix.low_pct}%`, background: "var(--faint)" }} />
+            </div>
+            <span className="frow__d">
+              {tf.high} {v.mix.high_pct}% · {tf.medium} {v.mix.medium_pct}% · {tf.low} {v.mix.low_pct}%
+            </span>
           </div>
-          <span className="frow__d">
-            {tf.high} {v.mix.high_pct}% · {tf.medium} {v.mix.medium_pct}% · {tf.low} {v.mix.low_pct}%
-          </span>
-        </div>
+        ) : (
+          <div className="hcard__v frow__d">{tf.notMeasuredYet}</div>
+        )}
       </div>
 
       <div className="hcard hcard--wide">
         <div className="hcard__k">{tf.slo}</div>
+        {v.slo.length === 0 && <div className="hcard__v frow__d">{tf.notMeasuredYet}</div>}
         <div className="hcard__v" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 26px" }}>
           {v.slo.map((s) => (
             <div key={s.name} style={{ display: "flex", justifyContent: "space-between", fontSize: "var(--fs-md)" }}>
@@ -157,7 +164,11 @@ function Today({ v }: { v: TodayView }): JSX.Element {
     <>
       <div className="fcard">
         <div className="fcard__label">{tf.morningBrief}</div>
-        {!v.generated && <div className="fcard__sub">{tf.briefDegraded}</div>}
+        {v.never_run ? (
+          <div className="fcard__sub">{tf.briefNeverRun}</div>
+        ) : (
+          !v.generated && <div className="fcard__sub">{tf.briefDegraded}</div>
+        )}
         {v.sections.map((s) => (
           <div className="brief__sec" key={s.heading}>
             <div className="brief__h">{s.heading}</div>
