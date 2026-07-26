@@ -242,6 +242,89 @@ pub mod mac {
         Some(el)
     }
 
+    #[link(name = "CoreGraphics", kind = "framework")]
+    extern "C" {
+        // std::ffi::c_void — spelled in full so the extern block needs no import.
+        /// Create rule — the caller releases.
+        fn CGEventCreateKeyboardEvent(source: *const std::ffi::c_void, keycode: u16, key_down: bool) -> *mut std::ffi::c_void;
+        fn CGEventSetFlags(event: *mut std::ffi::c_void, flags: u64);
+        fn CGEventPost(tap: u32, event: *mut std::ffi::c_void);
+    }
+
+    /// Insert `text` by putting it on the pasteboard and synthesising ⌘V, then putting the user's
+    /// clipboard back.
+    ///
+    /// The fallback for apps that accept an AX write and ignore it. Paste is the mechanism the
+    /// user would have reached for, and it works wherever a caret does — the app cannot tell it
+    /// apart from a real ⌘V. Nothing leaves the device (invariant 3): the pasteboard is local and
+    /// the keystroke is synthesised into the app that already has focus.
+    ///
+    /// The clipboard is the user's, not ours, so it is saved and restored. Restoring happens AFTER
+    /// the result is verified — put back too early and the paste races with the restore and lands
+    /// the old contents instead.
+    unsafe fn paste_at_cursor(text: &str, el: AXUIElementRef, before: Option<&str>) -> Result<(), String> {
+        use objc2::runtime::AnyObject;
+        use objc2::{class, msg_send};
+        use objc2_foundation::NSString;
+
+        const KVK_ANSI_V: u16 = 0x09;
+        const FLAG_COMMAND: u64 = 1 << 20;
+        const HID_EVENT_TAP: u32 = 0;
+
+        let pb: *mut AnyObject = unsafe { msg_send![class!(NSPasteboard), generalPasteboard] };
+        if pb.is_null() {
+            return Err("no pasteboard".into());
+        }
+        let utf8 = NSString::from_str("public.utf8-plain-text");
+
+        // Save first: everything after this point can fail, and the user's clipboard must survive.
+        let saved: *mut AnyObject = unsafe { msg_send![pb, stringForType: &*utf8] };
+        let saved: Option<String> = if saved.is_null() {
+            None
+        } else {
+            let s: *const NSString = saved.cast();
+            Some(unsafe { &*s }.to_string())
+        };
+
+        let ours = NSString::from_str(text);
+        let _: isize = unsafe { msg_send![pb, clearContents] };
+        let ok: bool = unsafe { msg_send![pb, setString: &*ours, forType: &*utf8] };
+        if !ok {
+            return Err("could not write the pasteboard".into());
+        }
+
+        let restore = || unsafe {
+            let _: isize = msg_send![pb, clearContents];
+            if let Some(prev) = &saved {
+                let s = NSString::from_str(prev);
+                let _: bool = msg_send![pb, setString: &*s, forType: &*utf8];
+            }
+        };
+
+        // ⌘V as two events. The flag goes on both: an app reading the keyUp without the modifier
+        // can treat the chord as cancelled.
+        for down in [true, false] {
+            let ev = unsafe { CGEventCreateKeyboardEvent(std::ptr::null(), KVK_ANSI_V, down) };
+            if ev.is_null() {
+                restore();
+                return Err("could not synthesise the paste".into());
+            }
+            unsafe {
+                CGEventSetFlags(ev, FLAG_COMMAND);
+                CGEventPost(HID_EVENT_TAP, ev);
+                CFRelease(ev as CFTypeRef);
+            }
+        }
+
+        let landed = unsafe { value_changed(el, before) };
+        restore();
+        if landed {
+            Ok(())
+        } else {
+            Err("the paste did not change the field either".into())
+        }
+    }
+
     /// Did the field actually change? Re-reads `AXValue` a few times before giving up.
     ///
     /// Some apps apply an AX write on their next run-loop turn, so a single immediate read would
@@ -306,15 +389,23 @@ pub mod mac {
                 unsafe { CFRelease(el as CFTypeRef) };
                 return Err(format!("AX set selected text failed: {err}"));
             }
-            let landed = unsafe { value_changed(el, before.as_deref()) };
+            if unsafe { value_changed(el, before.as_deref()) } {
+                unsafe { CFRelease(el as CFTypeRef) };
+                return Ok(());
+            }
+            // The app took the message and ignored it. Measured on device: Chrome and the terminal
+            // both do this, and they are not exotic targets — AXSelectedText is honoured by little
+            // beyond native NSTextView/NSTextField. Fall back to the mechanism that works
+            // everywhere, because it is the one the user would have used: paste.
+            let app = crate::display::frontmost_app().map(|f| f.bundle_id).unwrap_or_default();
+            eprintln!("[inline] {app} ignored the AX write — falling back to paste");
+            let pasted = unsafe { paste_at_cursor(text, el, before.as_deref()) };
             unsafe { CFRelease(el as CFTypeRef) };
-            if landed {
-                Ok(())
-            } else {
-                // The bundle id, never the text: which app refuses AX writes is the fact that
+            match pasted {
+                Ok(()) => Ok(()),
+                // The bundle id, never the text: which app refuses BOTH paths is the fact that
                 // makes this fixable, and it is the first thing to know next time.
-                let app = crate::display::frontmost_app().map(|f| f.bundle_id).unwrap_or_default();
-                Err(format!("{app} accepted the write but the field did not change"))
+                Err(e) => Err(format!("{app}: {e}")),
             }
         }
     }
