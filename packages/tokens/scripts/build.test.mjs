@@ -95,3 +95,34 @@ test("main writes dist/tokens.css and dist/tokens.ts", () => {
   const css = _read(_resolve(PKG_ROOT, "dist/tokens.css"), "utf8");
   assert.match(css, /--glass: rgba\(21, 24, 31, 0\.85\)/);
 });
+
+import { generateWebCss } from "./build.mjs";
+
+const webSample = {
+  web: { themed: {
+    bg:     { light: "#ffffff", dark: "#090b0d" },
+    accent: { light: "#00a6f4", dark: "#38bdf8" },
+  } },
+};
+
+test("generateWebCss emits base :root with light values", () => {
+  const css = generateWebCss(webSample);
+  assert.match(css, /:root\s*\{[^}]*--bg:\s*#ffffff/);
+  assert.match(css, /:root\s*\{[^}]*--accent:\s*#00a6f4/);
+});
+
+test("generateWebCss emits the data-theme=dark block with dark values", () => {
+  const css = generateWebCss(webSample);
+  assert.match(css, /:root\[data-theme='dark'\]\s*\{[^}]*--bg:\s*#090b0d/);
+});
+
+test("generateWebCss emits the system dark media with :root:not([data-theme='light'])", () => {
+  const css = generateWebCss(webSample);
+  assert.match(css, /@media \(prefers-color-scheme: dark\)\s*\{\s*:root:not\(\[data-theme='light'\]\)\s*\{[^}]*--accent:\s*#38bdf8/);
+});
+
+test("generateWebCss base :root does NOT contain dark bg value", () => {
+  const css = generateWebCss(webSample);
+  const base = css.slice(css.indexOf(":root {"), css.indexOf("}"));
+  assert.doesNotMatch(base, /#090b0d/);
+});

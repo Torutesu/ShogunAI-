@@ -38,6 +38,19 @@ export function generateCss(tokens) {
   );
 }
 
+export function generateWebCss(tokens) {
+  const web = tokens.web?.themed ?? {};
+  return (
+    HEADER +
+    `:root {\n${themedBlock(web, "light")}\n}\n` +
+    `:root[data-theme='dark'] {\n${themedBlock(web, "dark")}\n}\n` +
+    `@media (prefers-color-scheme: dark) {\n  :root:not([data-theme='light']) {\n${themedBlock(web, "dark")
+      .split("\n")
+      .map((l) => "  " + l)
+      .join("\n")}\n  }\n}\n`
+  );
+}
+
 export function generateTs(tokens) {
   const json = JSON.stringify(
     { static: tokens.static ?? {}, themed: tokens.themed ?? {} },
