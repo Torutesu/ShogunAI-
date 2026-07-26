@@ -189,7 +189,7 @@ pub mod mac {
                 saw_battery = true;
                 if let Some(v) = cf_get(desc, "Power Source State") {
                     if CFGetTypeID(v) == CFStringGetTypeID() {
-                        on_power = CFString::wrap_under_get_rule(v.cast()).to_string() == "AC Power";
+                        on_power = CFString::wrap_under_get_rule(v.cast()) == "AC Power";
                     }
                 }
                 let num = |name: &str| -> Option<i64> {
