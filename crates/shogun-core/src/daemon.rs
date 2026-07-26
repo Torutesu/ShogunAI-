@@ -456,6 +456,20 @@ impl Db {
         })
     }
 
+    /// Close intervals left open by a previous run (crash, force-quit, power cut).
+    ///
+    /// Returns how many were closed. They are closed at their `started_at`, not at "now": the app
+    /// has no idea when the meeting actually ended, and inventing a duration that spans the time
+    /// the machine was off would be a worse answer than a zero-length interval.
+    pub fn close_abandoned_meetings(&self) -> usize {
+        let Ok(conn) = self.conn.lock() else { return 0 };
+        conn.execute(
+            "UPDATE sessions SET ended_at = started_at, updated_at = ?1 WHERE ended_at IS NULL",
+            [self.now_ms()],
+        )
+        .unwrap_or(0)
+    }
+
     /// The degraded Recap for an interval (FR-MT-19): what can be said locally, with no model and
     /// no network. `None` only when the interval does not exist.
     pub fn meeting_recap(&self, session_id: i64) -> Option<crate::meeting::recap::Recap> {

@@ -116,6 +116,12 @@ export const STRINGS = {
     // meeting notes — the pill (FR-MT-08/09). "Notes", never "Recording": nothing is recorded,
     // and the word would promise a file that will never exist.
     meetingNotes: "Notes",
+    meetingNotesSaved: "Saved",
+    meetingNotesFailed: "Couldn't save",
+    meetingRecapTitle: "Meeting notes",
+    meetingRecapNoNotes: "You didn't write anything this time.",
+    meetingRecapMinutes: "min",
+    meetingRecapDone: "Done",
     meetingUntitled: "Meeting",
     meetingStarting: "Taking notes in",
     meetingStart: "Start",
@@ -125,7 +131,7 @@ export const STRINGS = {
     meetingNeverThisApp: "Never for this app",
     // meeting notes — settings (FR-MT-01/02/03)
     meetingSection: "Meeting notes",
-    meetingHint: "Offers to take notes when a meeting starts. One tap declines, one tap stops.",
+    meetingHint: "Offers a place to write when a meeting starts. One tap declines, one tap stops.",
     meetingOn: "On",
     meetingOff: "Off",
     meetingExcluded: "Never offer for",
@@ -133,8 +139,12 @@ export const STRINGS = {
     meetingExcludedRemove: "Remove",
     // The disclosure of FR-MT-03. It can be stated this plainly because it is simply what
     // happens: nothing joins the call, and no audio file is ever written.
+    // FR-MT-03 requires this to match the implementation exactly. At this stage SHOGUN does not
+    // listen at all — it opens a note next to the meeting — so the copy says that and nothing
+    // more. It gains the transcription sentence when transcription actually exists (MT3), not
+    // before: a disclosure that describes a future build is not a disclosure.
     meetingDisclosure:
-      "Meetings are handled on this Mac. Nothing joins your call and no recording is kept — only the text stays.",
+      "Nothing joins your call and no audio is captured. SHOGUN opens a note beside the meeting; what you write stays on this Mac.",
     // errors
     sources: "Sources",
     noAnswer: "(no response)",

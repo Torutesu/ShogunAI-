@@ -10,7 +10,7 @@
 #![allow(dead_code, unused_imports)]
 
 #[cfg(target_os = "macos")]
-pub use mac::{frontmost_app, frontmost_pid, FrontApp};
+pub use mac::{frontmost_app, frontmost_pid, is_app_running, FrontApp};
 
 #[cfg(target_os = "macos")]
 mod mac {
@@ -32,6 +32,18 @@ mod mac {
         let ws = NSWorkspace::sharedWorkspace();
         let app = ws.frontmostApplication()?;
         Some(app.processIdentifier())
+    }
+
+    /// Whether an app with this bundle id is still running.
+    ///
+    /// The meeting lane needs this and not "is it frontmost": people alt-tab constantly during a
+    /// call, and treating a glance at the browser as the meeting ending would close the interval
+    /// every few seconds. The meeting is over when the app is gone (FR-MT-11).
+    pub fn is_app_running(bundle_id: &str) -> bool {
+        let ws = NSWorkspace::sharedWorkspace();
+        ws.runningApplications().iter().any(|app| {
+            app.bundleIdentifier().is_some_and(|id| id.to_string() == bundle_id)
+        })
     }
 
     /// Frontmost app with its bundle id and localized name — the focus-watcher's input.

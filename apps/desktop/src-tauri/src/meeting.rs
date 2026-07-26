@@ -20,7 +20,8 @@ pub mod mac {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use serde::Serialize;
-    use shogun_core::meeting::detect::{self, Decision, Signals};
+    use shogun_core::meeting::detect::{self, Decision, LiveSignals, Signals};
+use shogun_core::meeting::gate::OfferGate;
     use shogun_core::meeting::settings::{OfferContext, Settings};
     use shogun_core::meeting::statemachine::{Effect, Input, Machine, Params, State};
     use tauri::{Emitter, Manager};
@@ -33,6 +34,9 @@ pub mod mac {
         machine: Machine,
         /// The interval currently open, and what to title it.
         session_id: Option<i64>,
+        /// The interval that just finished — what Recap reads. Kept separately from
+        /// `session_id`, which is cleared the moment the interval closes.
+        last_session_id: Option<i64>,
         title: Option<String>,
         app_bundle_id: Option<String>,
         /// Carried from the detector so the stored interval records what was actually observed,
@@ -41,6 +45,9 @@ pub mod mac {
         provenance: String,
         /// Epoch ms of the transition into the current state — the pill's clock.
         since_ms: i64,
+        /// What the user has already declined, and until when (FR-MT-02c). Deliberately not in
+        /// `settings`: a decline changes no settings and must not outlive the process.
+        gate: OfferGate,
     }
 
     impl Lane {
@@ -49,11 +56,13 @@ pub mod mac {
                 settings: Settings::default(),
                 machine: Machine::new(Params::default()),
                 session_id: None,
+                last_session_id: None,
                 title: None,
                 app_bundle_id: None,
                 confidence: 0.0,
                 provenance: "{}".to_string(),
                 since_ms: 0,
+                gate: OfferGate::new(),
             }
         }
     }
@@ -120,6 +129,15 @@ pub mod mac {
                 }
             }
         }
+        // An interval left open by a crash, a force-quit or a power cut would otherwise stay
+        // `ended_at IS NULL` forever, and `active()` assumes at most one open row. Close it at
+        // its last known moment rather than pretending it is still running.
+        if let Some(db) = app.try_state::<shogun_core::daemon::Db>() {
+            let closed = db.close_abandoned_meetings();
+            if closed > 0 {
+                eprintln!("[meeting] closed {closed} interval(s) left open by a previous run");
+            }
+        }
         eprintln!(
             "[meeting] notes {}",
             if lane.settings.enabled { "enabled" } else { "off (default)" }
@@ -149,8 +167,14 @@ pub mod mac {
                 }
                 Effect::CloseSession(why) => {
                     if let Some(id) = lane.session_id.take() {
-                        close_session(app, id);
-                        eprintln!("[meeting] session {id} closed ({why:?})");
+                        lane.last_session_id = Some(id);
+                        if close_session(app, id) {
+                            eprintln!("[meeting] session {id} closed ({why:?})");
+                        } else {
+                            // The row stays open. Say so — a silent failure here leaves an
+                            // interval that never ends, and nothing else would ever mention it.
+                            eprintln!("[meeting] session {id} could not be closed ({why:?})");
+                        }
                     }
                 }
                 // MT3. Not silently ignored: until the audio lane exists, the honest behaviour is
@@ -159,6 +183,8 @@ pub mod mac {
                 // The tick loop drives the countdown and the silence watchdog, so the machine's
                 // timer requests need no separate scheduler here.
                 Effect::StartTimer { .. } | Effect::CancelTimer(_) => {}
+                // MT2 shows the degraded Recap; `meeting_recap` reads it from the closed
+                // interval, so nothing to do here beyond having closed the session above.
                 Effect::BuildRecap => {}
             }
         }
@@ -186,21 +212,19 @@ pub mod mac {
         .inspect(|id| eprintln!("[meeting] session {id} opened"))
     }
 
-    fn close_session(app: &tauri::AppHandle, id: i64) {
-        if let Some(db) = db(app) {
-            db.close_meeting(id);
-        }
+    fn close_session(app: &tauri::AppHandle, id: i64) -> bool {
+        db(app).is_some_and(|db| db.close_meeting(id))
     }
 
     fn step(app: &tauri::AppHandle, input: Input) {
         let now = now_ms();
         let Ok(mut g) = LANE.lock() else { return };
         let Some(lane) = g.as_mut() else { return };
-        let effects = lane.machine.step(input);
+        let effects = lane.machine.step_completing_wrap(input);
         apply(app, lane, &effects, now);
     }
 
-    /// Called on every focus change with the frontmost app (from the capture poller).
+    /// Called on every focus change with the frontmost app.
     ///
     /// Returns immediately when the feature is off — the detector does not run, so nothing
     /// observes a meeting while meeting notes are disabled (FR-MT-02a).
@@ -212,7 +236,17 @@ pub mod mac {
         if !lane.settings.enabled {
             return;
         }
+        // Switching apps ends the cooldown on the one left behind: coming back later is a new
+        // meeting and deserves to be asked about again.
+        lane.gate.observe_front(bundle_id);
         if lane.machine.state() != State::Idle {
+            return;
+        }
+        // The user already said no to this app recently. Without this the decline lasts exactly
+        // one tick: the machine returns to Idle, the meeting app is still in front, and the offer
+        // comes straight back — "Not now" would buy one second and Stop would be followed by a
+        // fresh offer that starts again ten seconds later (FR-MT-02c).
+        if !lane.gate.may_offer(bundle_id, now) {
             return;
         }
         if !lane.settings.may_offer(&OfferContext {
@@ -222,46 +256,91 @@ pub mod mac {
             return;
         }
 
-        // MT1 sees one signal: a known meeting app in front. The microphone-in-use and
-        // AX-controls signals (FR-MT-04 (2)/(3)) need native probes that do not exist yet, and
-        // guessing them would inflate the confidence stored against the interval.
+        // Signal (2) only. The microphone-in-use and AX-controls signals of FR-MT-04 need native
+        // probes that do not exist yet; claiming them here would inflate the confidence stored
+        // against the interval beyond what was actually observed.
         let signals = Signals {
-            meeting_app_frontmost: detect::is_meeting_app(bundle_id),
+            meeting_app_frontmost: detect::is_meeting_app(bundle_id)
+                || window_title.is_some_and(detect::title_looks_like_meeting),
             ..Default::default()
         };
         if let Decision::Offer { confidence, provenance } = detect::decide(&signals) {
+            // The window title, not the app name: "Weekly sync" is what the user calls the
+            // meeting, and `zoom.us` on every row would make the whole timeline look identical.
             lane.title = window_title.map(str::to_string);
             lane.app_bundle_id = Some(bundle_id.to_string());
             lane.confidence = confidence;
             lane.provenance = provenance;
-            let effects = lane.machine.step(Input::MeetingDetected);
+            let effects = lane.machine.step_completing_wrap(Input::MeetingDetected);
             apply(app, lane, &effects, now);
         }
     }
 
-    /// One-second tick: advances the offer countdown and the pill's clock.
+    /// One-second tick: advances the offer countdown, ends meetings that are over, and keeps the
+    /// pill's clock moving.
     pub fn tick(app: &tauri::AppHandle) {
         let now = now_ms();
-        let expired = {
+        enum Next {
+            Nothing,
+            Emit,
+            Step(Input),
+        }
+
+        // Decide and act under one lock. Reading the state, releasing, and stepping later leaves
+        // a window in which the user's "Not now" lands in between — and a late GraceExpired then
+        // matches the *new* Offered, starting a meeting the user just declined with no countdown
+        // at all.
+        let next = {
             let Ok(mut g) = LANE.lock() else { return };
             let Some(lane) = g.as_mut() else { return };
             match lane.machine.state() {
-                State::Idle => return,
+                State::Idle => Next::Nothing,
                 State::Offered => {
-                    now.saturating_sub(lane.since_ms) >= Params::default().offer_grace_ms as i64
+                    // `checked_sub`-style guard: a clock that jumped backwards (NTP, wake from
+                    // sleep) would otherwise freeze the countdown until real time caught up.
+                    let elapsed = now.saturating_sub(lane.since_ms);
+                    if !(0..Params::default().offer_grace_ms as i64).contains(&elapsed) {
+                        Next::Step(Input::GraceExpired)
+                    } else {
+                        Next::Emit
+                    }
                 }
-                _ => false,
+                State::Recording => {
+                    // FR-MT-11. Without this the interval never closes on its own: the user quits
+                    // the meeting app and the pill keeps counting until they think to press Stop.
+                    //
+                    // `last_sound_at` is pinned to `now` because there is no audio lane yet, so
+                    // the silence condition cannot fire and must not pretend to. It becomes real
+                    // in MT3.
+                    let present = lane
+                        .app_bundle_id
+                        .as_deref()
+                        // `map_or(true, ..)`: `is_none_or` needs Rust 1.82, MSRV here is 1.80.
+                        .map_or(true, crate::display::is_app_running);
+                    let live = LiveSignals {
+                        meeting_app_present: present,
+                        occurrence_ends_at: None,
+                        last_sound_at: now,
+                    };
+                    match detect::end_condition(&live, now) {
+                        Some(why) => Next::Step(Input::AutoEnd(why)),
+                        None => Next::Emit,
+                    }
+                }
+                State::Wrapping => Next::Emit,
             }
         };
-        if expired {
-            step(app, Input::GraceExpired);
-            return;
-        }
-        // Recording: re-emit so the elapsed time on the pill keeps moving.
-        if let Ok(g) = LANE.lock() {
-            if let Some(lane) = g.as_ref() {
-                emit(app, lane, now);
+
+        match next {
+            Next::Nothing => {}
+            Next::Emit => {
+                if let Ok(g) = LANE.lock() {
+                    if let Some(lane) = g.as_ref() {
+                        emit(app, lane, now);
+                    }
+                }
             }
+            Next::Step(input) => step(app, input),
         }
     }
 
@@ -276,7 +355,13 @@ pub mod mac {
         std::thread::spawn(move || loop {
             std::thread::sleep(std::time::Duration::from_secs(1));
             if let Some(front) = crate::display::frontmost_app() {
-                on_focus(&app, &front.bundle_id, Some(&front.name));
+                // The window title is what names the meeting; the app name is the fallback when
+                // Accessibility has nothing (permission not granted, or a window with no title).
+                let title = crate::axcache::focused_window(front.pid)
+                    .and_then(|w| w.title())
+                    .filter(|t| !t.trim().is_empty())
+                    .unwrap_or_else(|| front.name.clone());
+                on_focus(&app, &front.bundle_id, Some(&title));
             }
             tick(&app);
         })
@@ -315,8 +400,6 @@ pub mod mac {
     #[tauri::command]
     pub fn meeting_stop(app: tauri::AppHandle) {
         step(&app, Input::Stop);
-        // MT2 has no Recap window yet; close the lifecycle so the next meeting is offered.
-        step(&app, Input::Wrapped);
     }
 
     /// Save the note typed during the meeting (FR-MT-10). Silently does nothing when no interval
@@ -327,8 +410,24 @@ pub mod mac {
         let id = LANE.lock().ok().and_then(|g| g.as_ref().and_then(|l| l.session_id));
         let Some(id) = id else { return Ok(()) };
         let db = db(&app).ok_or("no database")?;
-        db.save_meeting_note(id, &body);
-        Ok(())
+        // Report the failure. Swallowing it would tell the webview the note is safe while the
+        // text the user typed is gone — the one piece of a meeting record that cannot be
+        // regenerated (FR-MT-10).
+        if db.save_meeting_note(id, &body) {
+            Ok(())
+        } else {
+            Err("could not save the note".into())
+        }
+    }
+
+    /// The Recap for the most recently finished meeting (FR-MT-19), if there is one.
+    ///
+    /// Degraded by construction in MT2: assembled locally from the interval, the user's note and
+    /// what was captured, with no model and no network.
+    #[tauri::command]
+    pub fn meeting_recap(app: tauri::AppHandle) -> Option<shogun_core::meeting::recap::Recap> {
+        let id = LANE.lock().ok().and_then(|g| g.as_ref().and_then(|l| l.last_session_id))?;
+        db(&app).and_then(|db| db.meeting_recap(id))
     }
 
     /// Current settings for the Settings UI.
@@ -345,23 +444,32 @@ pub mod mac {
     /// Switching off while a meeting is running ends it on the spot, through the same path as
     /// Stop — so the off switch reaches a meeting already in progress rather than only preventing
     /// the next one.
+    ///
+    /// **Persist first, then apply.** The other order lets a failed write leave the backend
+    /// enabled while the settings screen (which rolls its toggle back on error) reads "Off" — the
+    /// exact "off but something is running" state FR-MT-02a exists to forbid. It also means a
+    /// user's "off" that failed to reach disk cannot come back as "on" after a restart.
     #[tauri::command]
     pub fn set_meeting_enabled(enabled: bool, app: tauri::AppHandle) -> Result<(), String> {
         let now = now_ms();
-        let settings = {
-            let Ok(mut g) = LANE.lock() else { return Err("busy".into()) };
-            let Some(lane) = g.as_mut() else { return Err("not ready".into()) };
-            lane.settings.enabled = enabled;
-            if !enabled {
-                let effects = lane.machine.step(Input::FeatureDisabled);
-                apply(&app, lane, &effects, now);
-            } else {
-                emit(&app, lane, now);
-            }
-            lane.settings.clone()
+        let candidate = {
+            let Ok(g) = LANE.lock() else { return Err("busy".into()) };
+            let Some(lane) = g.as_ref() else { return Err("not ready".into()) };
+            Settings { enabled, ..lane.settings.clone() }
         };
+        save(&app, &candidate)?;
+
+        let Ok(mut g) = LANE.lock() else { return Err("busy".into()) };
+        let Some(lane) = g.as_mut() else { return Err("not ready".into()) };
+        lane.settings = candidate;
+        if !enabled {
+            let effects = lane.machine.step_completing_wrap(Input::FeatureDisabled);
+            apply(&app, lane, &effects, now);
+        } else {
+            emit(&app, lane, now);
+        }
         eprintln!("[meeting] notes → {}", if enabled { "enabled" } else { "off" });
-        save(&app, &settings)
+        Ok(())
     }
 
     /// Undo tier (b): offer for this app again.
@@ -383,15 +491,23 @@ pub mod mac {
     #[tauri::command]
     pub fn meeting_exclude_app(bundle_id: String, app: tauri::AppHandle) -> Result<(), String> {
         let now = now_ms();
-        let settings = {
-            let Ok(mut g) = LANE.lock() else { return Err("busy".into()) };
-            let Some(lane) = g.as_mut() else { return Err("not ready".into()) };
-            lane.settings.exclude_app(&bundle_id);
-            // Excluding from the offer panel also declines the meeting that prompted it.
-            let effects = lane.machine.step(Input::NotNow);
-            apply(&app, lane, &effects, now);
-            lane.settings.clone()
+        let candidate = {
+            let Ok(g) = LANE.lock() else { return Err("busy".into()) };
+            let Some(lane) = g.as_ref() else { return Err("not ready".into()) };
+            let mut next = lane.settings.clone();
+            next.exclude_app(&bundle_id);
+            next
         };
-        save(&app, &settings)
+        save(&app, &candidate)?;
+
+        let Ok(mut g) = LANE.lock() else { return Err("busy".into()) };
+        let Some(lane) = g.as_mut() else { return Err("not ready".into()) };
+        lane.settings = candidate;
+        // Excluding from the offer panel also declines whatever prompted it — from Offered that
+        // is the pending offer, and from Recording the meeting in progress.
+        let input = if lane.machine.state() == State::Recording { Input::Stop } else { Input::NotNow };
+        let effects = lane.machine.step_completing_wrap(input);
+        apply(&app, lane, &effects, now);
+        Ok(())
     }
 }

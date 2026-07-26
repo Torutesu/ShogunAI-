@@ -1129,3 +1129,36 @@ kbd {
   border-color: transparent;
   color: var(--muted);
 }
+
+/* meeting note (FR-MT-10) — during a meeting the panel is a place to type and nothing else. */
+.mnote {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 14px 16px 10px;
+}
+.mnote__area {
+  flex: 1;
+  min-height: 0;
+  resize: none;
+  border: none;
+  outline: none;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  font-family: var(--sys);
+  font-size: var(--fs-sm);
+  line-height: 1.55;
+}
+.mnote__area::placeholder {
+  color: var(--muted);
+}
+/* Quiet by design: saving is not an achievement to celebrate, it is a fact to be able to check. */
+.mnote__status {
+  flex: none;
+  height: 14px;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  text-align: right;
+}

@@ -12,7 +12,7 @@
 use shogun_memory::session::Session;
 
 /// The degraded Recap: assembled locally, no model, no network (L1).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct Recap {
     /// Meeting title, or a stated fallback — never an empty string.
     pub title: String,

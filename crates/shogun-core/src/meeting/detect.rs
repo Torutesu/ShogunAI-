@@ -115,6 +115,20 @@ pub fn decide(signals: &Signals) -> Decision {
     }
 }
 
+/// Whether a window title indicates a meeting in a browser (FR-MT-04).
+///
+/// The URL would be the honest signal, and [`is_meeting_url`] is ready for it — but reading the
+/// active tab's URL needs an Accessibility walk per browser, which does not exist yet. The window
+/// title is what is available now, and Google Meet is required for v1, so this is the bridge
+/// until the URL probe lands.
+pub fn title_looks_like_meeting(title: &str) -> bool {
+    let t = title.trim();
+    // Anchored, not `contains`: "Notes on the meeting" and "meet the team" are documents about
+    // meetings, and offering to take notes on them would train the user to dismiss the panel.
+    // Meet titles are either `Meet - <code>` or `<name> - Google Meet`.
+    t.starts_with("Meet - ") || t.ends_with(" - Google Meet") || t.ends_with(" – Google Meet")
+}
+
 /// What the adapter observes about a meeting that is already running.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LiveSignals {
@@ -342,5 +356,22 @@ mod tests {
         assert!(!is_meeting_url("https://meet.google.com.evil.test/x"));
         assert!(!is_meeting_url("https://notmeet.google.com/x"));
         assert!(!is_meeting_url("https://example.test/?u=meet.google.com"));
+    }
+
+    #[test]
+    fn a_google_meet_window_title_is_recognised() {
+        // Meet names its window after the call, with the product name appended.
+        assert!(title_looks_like_meeting("Meet - abc-defg-hij"));
+        assert!(title_looks_like_meeting("Weekly sync - Google Meet"));
+    }
+
+    #[test]
+    fn an_ordinary_window_title_is_not_a_meeting() {
+        // The cost of a false positive here is an offer to take notes on someone's banking tab,
+        // so the match has to be narrow — "meeting" appearing in a document title is not enough.
+        assert!(!title_looks_like_meeting("Inbox (312) - Gmail"));
+        assert!(!title_looks_like_meeting("Notes on the meeting - Docs"));
+        assert!(!title_looks_like_meeting("meet the team - Blog"));
+        assert!(!title_looks_like_meeting(""));
     }
 }

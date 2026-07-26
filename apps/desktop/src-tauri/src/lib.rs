@@ -98,6 +98,7 @@ pub fn run() {
         meeting::mac::meeting_not_now,
         meeting::mac::meeting_stop,
         meeting::mac::meeting_save_note,
+        meeting::mac::meeting_recap,
         meeting::mac::meeting_exclude_app,
         meeting::mac::meeting_include_app,
         meeting::mac::get_meeting_settings,
