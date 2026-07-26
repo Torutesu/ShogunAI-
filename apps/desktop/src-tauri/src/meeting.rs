@@ -484,8 +484,10 @@ use shogun_core::meeting::gate::OfferGate;
     /// Offered and Recording are one compact bar; Recap needs room for the card.
     const BAR_SIZE: (f64, f64) = (400.0, 88.0);
     const RECAP_SIZE: (f64, f64) = (400.0, 280.0);
-    /// Distance from the top-right corner of the visible screen.
+    /// Distance from the top-right corner of the visible screen, in logical pixels.
     const MARGIN: f64 = 16.0;
+    /// Menu-bar height to clear, in logical pixels.
+    const MENUBAR_H: f64 = 28.0;
 
     /// Build the overlay window, hidden. **Setup only — this must run on the main thread.**
     ///
@@ -528,11 +530,15 @@ use shogun_core::meeting::gate::OfferGate;
     /// Park the overlay at the top-right of the screen the cursor is on.
     ///
     /// Only on first show: after that the user may have dragged it somewhere they prefer, and
-    /// moving it back each time would undo that every meeting.
+    /// moving it back each meeting would undo that every time.
+    ///
+    /// Computed and set entirely in **physical** pixels. Mixing the two coordinate systems is
+    /// how the panel ended up in the middle of the screen: the monitor answers in physical
+    /// pixels, the window size is given in logical ones, and subtracting one from the other on a
+    /// Retina display is off by exactly the scale factor.
     fn park_top_right(win: &tauri::WebviewWindow, size: (f64, f64)) {
         // `current_monitor` on a window that has never been shown can answer None, so fall back
-        // to the primary screen rather than skipping placement and leaving the panel wherever
-        // the window server first put it.
+        // to the primary screen rather than leaving the panel wherever the window server put it.
         let monitor = match win.current_monitor() {
             Ok(Some(m)) => m,
             _ => match win.primary_monitor() {
@@ -544,17 +550,20 @@ use shogun_core::meeting::gate::OfferGate;
             },
         };
         let scale = monitor.scale_factor();
-        let area = monitor.size().to_logical::<f64>(scale);
-        let origin = monitor.position().to_logical::<f64>(scale);
-        let x = origin.x + area.width - size.0 - MARGIN;
+        let screen = monitor.size();
+        let origin = monitor.position();
+        let w = (size.0 * scale).round() as i32;
+        let margin = (MARGIN * scale).round() as i32;
         // Below the menu bar, so the overlay never fights the notch for the same pixels.
-        let y = origin.y + MARGIN + 28.0;
+        let top = ((MARGIN + MENUBAR_H) * scale).round() as i32;
+
+        let x = origin.x + screen.width as i32 - w - margin;
+        let y = origin.y + top;
         eprintln!(
-            "[meeting] park target=({x:.0},{y:.0}) screen={:?}@{:?} scale={scale}",
-            (area.width, area.height),
-            (origin.x, origin.y)
+            "[meeting] park to ({x},{y}) physical — screen {}x{} at ({},{}) scale {scale}",
+            screen.width, screen.height, origin.x, origin.y
         );
-        let _ = win.set_position(tauri::LogicalPosition::new(x, y));
+        let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
     }
 
     /// Show, hide and resize the overlay to match the lane's state.

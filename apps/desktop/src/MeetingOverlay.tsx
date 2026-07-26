@@ -41,10 +41,24 @@ export function MeetingOverlay(): JSX.Element | null {
   const [recap, setRecap] = useState<Recap | null>(null);
   const [note, setNote] = useState("");
 
+  // Polled, with the push event as an accelerator rather than the source of truth.
+  //
+  // Relying on the event alone left this window holding the state it happened to see when it
+  // mounted: it rendered "idle", never heard another word, and stayed blank while a meeting ran
+  // — a transparent window with nothing in it is indistinguishable from no window at all. A
+  // status call a second is nothing next to a surface that has to be right whenever the user
+  // looks at it.
   useEffect(() => {
+    const read = (): void => {
+      void invoke<MeetingView>("meeting_status").then(setView).catch(() => undefined);
+    };
+    read();
+    const timer = window.setInterval(read, 1000);
     const off = listen<MeetingView>("meeting", (e) => setView(e.payload));
-    void invoke<MeetingView>("meeting_status").then(setView).catch(() => undefined);
-    return () => void off.then((f) => f());
+    return () => {
+      window.clearInterval(timer);
+      void off.then((f) => f());
+    };
   }, []);
 
   // The Recap is read once the interval has closed — it is assembled from the stored session,
