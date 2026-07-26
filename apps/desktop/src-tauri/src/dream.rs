@@ -329,7 +329,7 @@ pub mod mac {
             // lane — which is what a device with no credential at all does — and say why. The
             // shipping design does the same for a 401 from the relay
             // (docs/batch-relay-design.md §4.5).
-            Err(shogun_core::llm::LlmError::Unauthorized(status)) => {
+            Err(shogun_core::llm::LlmError::Unauthorized(status, _)) => {
                 eprintln!(
                     "[dream] batch credential rejected (HTTP {status}) — running the local lane. \
                      Check the SHOGUN/select-kk-batch Keychain entry."

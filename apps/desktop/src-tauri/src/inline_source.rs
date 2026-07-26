@@ -460,7 +460,7 @@ pub mod mac {
     /// looks identical from the outside, which is to say it looks like the shortcut is broken.
     #[derive(Clone, serde::Serialize)]
     pub struct InlineStatus {
-        /// `drafting` | `inserted` | `no_context` | `key_rejected` | `failed`
+        /// `drafting` | `inserted` | `no_context` | `no_key` | `key_rejected` | `failed`
         pub phase: &'static str,
         /// Chars written at the caret, for `inserted`.
         pub chars: usize,
@@ -507,9 +507,10 @@ pub mod mac {
                 }
                 // Nothing gets inserted on a rejected key, so without this the tap is silent and
                 // the reasonable next move is to press it again. Latch it for the status poll.
-                InlineOutcome::KeyRejected => {
+                InlineOutcome::KeyRejected(why) => {
+                    eprintln!("[inline] {why}");
                     note_key_rejected();
-                    push_inline(&app, InlineStatus { phase: "key_rejected", chars: 0, detail: None });
+                    push_inline(&app, InlineStatus { phase: "key_rejected", chars: 0, detail: Some(why.clone()) });
                 }
                 InlineOutcome::NoContext => {
                     eprintln!("[inline] no editable field under the caret");
@@ -763,7 +764,7 @@ pub mod mac {
         let text = agent.complete(&build_chat_prompt(message, &ctx)).map_err(|e| {
             // Same latch as the ⌥-tap path: chat surfaces the error text, but Settings is where
             // the fix is, and it needs to know the key is the problem.
-            if matches!(e, LlmError::Unauthorized(_)) {
+            if matches!(e, LlmError::Unauthorized(..)) {
                 note_key_rejected();
             }
             e.to_string()

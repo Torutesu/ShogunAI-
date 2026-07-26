@@ -374,7 +374,7 @@ impl<T: HttpTransport, S: TraceabilitySink> AnthropicAgentClient<T, S> {
         ));
         let resp = self.transport.send(req).await?;
         if !resp.is_success() {
-            return Err(crate::llm::status_error("messages", resp.status));
+            return Err(crate::llm::status_error("messages", resp.status, &resp.body));
         }
         parse_completion_body(&resp.body)
     }
@@ -383,8 +383,8 @@ impl<T: HttpTransport, S: TraceabilitySink> AnthropicAgentClient<T, S> {
 /// A failed Batch-lane status. The Dream Cycle runs unattended, so telling a rejected key from an
 /// outage matters more here than anywhere: retried every night, they look identical from outside,
 /// and the user is never told the one thing they could fix.
-fn batch_status_error(step: &str, status: u16) -> LlmError {
-    crate::llm::status_error(&format!("batch {step}"), status)
+fn batch_status_error(step: &str, status: u16, body: &str) -> LlmError {
+    crate::llm::status_error(&format!("batch {step}"), status, body)
 }
 
 /// Batch-lane client (indexing / classification / Dream Cycle / Morning Brief). Constructed with
@@ -420,7 +420,7 @@ impl<T: HttpTransport, S: TraceabilitySink> AnthropicBatchClient<T, S> {
         }
         let resp = self.transport.send(req).await?;
         if !resp.is_success() {
-            return Err(batch_status_error("create", resp.status));
+            return Err(batch_status_error("create", resp.status, &resp.body));
         }
         parse_batch_handle(&resp.body)
     }
@@ -430,7 +430,7 @@ impl<T: HttpTransport, S: TraceabilitySink> AnthropicBatchClient<T, S> {
         let req = build_batch_poll_request(&self.cfg, self.key.secret(), batch_id)?;
         let resp = self.transport.send(req).await?;
         if !resp.is_success() {
-            return Err(batch_status_error("poll", resp.status));
+            return Err(batch_status_error("poll", resp.status, &resp.body));
         }
         parse_batch_handle(&resp.body)
     }
@@ -440,7 +440,7 @@ impl<T: HttpTransport, S: TraceabilitySink> AnthropicBatchClient<T, S> {
         let req = build_batch_results_request(&self.cfg, self.key.secret(), batch_id)?;
         let resp = self.transport.send(req).await?;
         if !resp.is_success() {
-            return Err(batch_status_error("results", resp.status));
+            return Err(batch_status_error("results", resp.status, &resp.body));
         }
         Ok(parse_batch_results(&resp.body))
     }
@@ -504,7 +504,7 @@ mod tests {
         }];
         for status in [401u16, 403] {
             assert!(
-                matches!(client(status).submit(&items).await, Err(LlmError::Unauthorized(s)) if s == status),
+                matches!(client(status).submit(&items).await, Err(LlmError::Unauthorized(s, _)) if s == status),
                 "HTTP {status} is a credential problem"
             );
         }

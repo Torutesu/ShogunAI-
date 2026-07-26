@@ -139,7 +139,7 @@ impl<T: HttpTransport, S: TraceabilitySink> OpenAiCompatAgentClient<T, S> {
         ));
         let resp = self.transport.send(req).await?;
         if !resp.is_success() {
-            return Err(super::status_error("chat/completions", resp.status));
+            return Err(super::status_error("chat/completions", resp.status, &resp.body));
         }
         parse_chat_response(&resp.body)
     }
@@ -228,8 +228,8 @@ mod tests {
             assert_eq!(client.sink.records().len(), 1, "the send is traced whatever comes back");
             err
         };
-        assert!(matches!(call(401).await, LlmError::Unauthorized(401)));
-        assert!(matches!(call(403).await, LlmError::Unauthorized(403)));
+        assert!(matches!(call(401).await, LlmError::Unauthorized(401, _)));
+        assert!(matches!(call(403).await, LlmError::Unauthorized(403, _)));
         assert!(matches!(call(500).await, LlmError::Provider(m) if m.contains("500")));
     }
 }

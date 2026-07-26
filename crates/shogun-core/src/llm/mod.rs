@@ -165,8 +165,14 @@ pub enum LlmError {
     /// The credential itself was rejected (HTTP 401/403). Distinct from [`Provider`] because the
     /// caller's response has to be different: retrying a rejected key tonight, tomorrow night and
     /// the night after is not resilience, it is a silent outage. Callers fall back and say so.
-    #[error("credential rejected (HTTP {0})")]
-    Unauthorized(u16),
+    ///
+    /// Carries the provider's own explanation (redacted), because 401 and 403 are not the same
+    /// problem and the fix differs: 401 is usually a wrong or revoked key, while 403 is a real key
+    /// that is not allowed to make this call — API not enabled on the project, key restricted to
+    /// other referrers/IPs, region unsupported. "Credential rejected" alone sends the user to
+    /// re-paste a key that was never the problem.
+    #[error("credential rejected (HTTP {0}){}", if .1.is_empty() { String::new() } else { format!(": {}", .1) })]
+    Unauthorized(u16, String),
     #[error("not configured (missing key)")]
     NotConfigured,
     #[error("transport: {0}")]
@@ -178,10 +184,28 @@ pub enum LlmError {
 /// Turn a failed HTTP status into the right error. 401/403 means the credential is wrong, not that
 /// the provider is having a bad moment, and callers have to act differently: a rejected key is
 /// worth telling the user about and pointless to retry, while a 5xx is the opposite.
-pub fn status_error(step: &str, status: u16) -> LlmError {
+pub fn status_error(step: &str, status: u16, body: &str) -> LlmError {
     match status {
-        401 | 403 => LlmError::Unauthorized(status),
+        401 | 403 => LlmError::Unauthorized(status, redact_secrets(&first_line(body))),
         _ => LlmError::Provider(format!("{step} HTTP {status}")),
+    }
+}
+
+/// The provider's explanation, trimmed to something a one-line pill can hold.
+///
+/// Error bodies are JSON several hundred characters long; the useful sentence is the `message`
+/// field. Pulled out crudely on purpose — a parser here would need every provider's error shape,
+/// and getting a truncated sentence in front of the user beats getting nothing.
+fn first_line(body: &str) -> String {
+    const MAX: usize = 180;
+    let msg = body
+        .split_once("\"message\"")
+        .map(|(_, rest)| rest.trim_start_matches([':', ' ', '"']))
+        .unwrap_or(body);
+    let msg = msg.split('"').next().unwrap_or(msg).trim();
+    match msg.char_indices().nth(MAX) {
+        Some((i, _)) => format!("{}…", &msg[..i]),
+        None => msg.to_string(),
     }
 }
 
@@ -300,6 +324,33 @@ mod redaction_tests {
             let out = redact_secrets(&format!("rejected {k} sorry"));
             assert!(!out.contains(k), "{k} survived: {out}");
         }
+    }
+
+    #[test]
+    fn a_403_carries_the_providers_reason() {
+        // The reason a 403 is worth surfacing: the key is fine, the call is not allowed. Telling
+        // the user "credential rejected" here sends them to re-paste a working key.
+        let body = r#"{"error":{"code":403,"message":"Generative Language API has not been used in project 12345 before or it is disabled.","status":"PERMISSION_DENIED"}}"#;
+        let e = super::status_error("chat/completions", 403, body);
+        let shown = e.to_string();
+        assert!(shown.contains("has not been used in project"), "reason was dropped: {shown}");
+        assert!(shown.contains("403"), "status was dropped: {shown}");
+    }
+
+    #[test]
+    fn a_reason_containing_a_credential_is_still_redacted() {
+        // Some providers quote the offending key back inside the error body. It must not survive
+        // into a UI string or a log just because it arrived on the 401/403 path.
+        let fake = format!("AQ.{}", "x".repeat(48));
+        let body = format!(r#"{{"error":{{"message":"API key not valid: {fake}"}}}}"#);
+        let shown = super::status_error("chat/completions", 401, &body).to_string();
+        assert!(!shown.contains(&fake), "key survived into the error: {shown}");
+    }
+
+    #[test]
+    fn a_body_with_no_message_field_does_not_panic() {
+        assert!(super::status_error("x", 403, "").to_string().contains("403"));
+        assert!(super::status_error("x", 403, "not json at all").to_string().contains("403"));
     }
 
     #[test]
