@@ -118,9 +118,16 @@ mod mac {
                     // collecting on the press is what that budget forbids). Rebuilt only when the
                     // focused thread actually changes, so a steady poll costs nothing.
                     if let Some(cache) = reply_cache.as_ref() {
-                        if let Some(key) = focused_thread_key() {
+                        if let Some((key, win_title)) = focused_thread_key_and_title() {
                             if warm_for.as_deref() != Some(key.as_str()) {
-                                let ctx = db.build_reply_context(&key);
+                                // Use the fusion path: if the on-screen window maps to a fetched
+                                // Gmail thread, the context comes from the full email body
+                                // (PayloadSource::Fetched); otherwise it falls back to the
+                                // captured on-screen fragment (PayloadSource::OnScreenOnly).
+                                let ctx = db.build_reply_context_for_screen(
+                                    &key,
+                                    win_title.as_deref().unwrap_or(""),
+                                );
                                 eprintln!(
                                     "[capture] reply context warmed for {} in {}ms ({} turn(s))",
                                     key,
@@ -141,8 +148,15 @@ mod mac {
     /// The thread key of the currently focused window, matching what the capture writer derives
     /// for the same focus — so the warmed context is keyed exactly as the events are.
     pub fn focused_thread_key() -> Option<String> {
+        focused_thread_key_and_title().map(|(key, _)| key)
+    }
+
+    /// Like [`focused_thread_key`] but also returns the raw window title. Used by the fusion path
+    /// so `build_reply_context_for_screen` can match the on-screen title against Gmail threads.
+    fn focused_thread_key_and_title() -> Option<(String, Option<String>)> {
         let front = frontmost_app()?;
         let title = focused_window(front.pid)?.title();
-        shogun_memory::thread::thread_key("capture", None, Some(&front.bundle_id), title.as_deref())
+        let key = shogun_memory::thread::thread_key("capture", None, Some(&front.bundle_id), title.as_deref())?;
+        Some((key, title))
     }
 }
