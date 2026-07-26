@@ -54,3 +54,24 @@ test("generateCss does NOT repeat static tokens in the light block", () => {
   const lightBlock = css.slice(css.indexOf('[data-appearance="light"]'));
   assert.doesNotMatch(lightBlock.slice(0, lightBlock.indexOf("}")), /--r-sm/);
 });
+
+import { generateTs, main } from "./build.mjs";
+import { readFileSync as _read, existsSync } from "node:fs";
+import { resolve as _resolve } from "node:path";
+
+test("generateTs emits a typed const with themed + static values", () => {
+  const ts = generateTs(sample);
+  assert.match(ts, /export const tokens = \{/);
+  assert.match(ts, /as const/);
+  assert.match(ts, /"accent"/);
+  assert.match(ts, /export type TokenName/);
+});
+
+test("main writes dist/tokens.css and dist/tokens.ts", () => {
+  main();
+  const pkg = _resolve(process.cwd());
+  assert.ok(existsSync(_resolve(pkg, "dist/tokens.css")));
+  assert.ok(existsSync(_resolve(pkg, "dist/tokens.ts")));
+  const css = _read(_resolve(pkg, "dist/tokens.css"), "utf8");
+  assert.match(css, /--glass: rgba\(21, 24, 31, 0\.85\)/);
+});
