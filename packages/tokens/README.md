@@ -24,8 +24,13 @@ SHOGUN デザインシステムの **Foundation（トークン基盤）**。`src
 ### Motion
 `--sp: 160ms cubic-bezier(0.32, 0.72, 0, 1)`
 
-### Shadow / Spacing
-本 Foundation では未定義（desktop 正本に無いため）。将来のブランチで wireframe（`docs/wireframes/shogun-ui.css`）の shadow/blur を統合する。
+### Shadow / Blur（static）
+`--shadow: 0 28px 66px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.06)`（展開パネル）/ `--shadow-sm: 0 10px 26px rgba(0, 0, 0, 0.4)`（小サーフェス）
+`--blur: blur(38px) saturate(1.8)`（展開パネル）/ `--blur-sm: blur(30px) saturate(1.7)`（小サーフェス）
+値は desktop 実値。light/dark 非依存のため static（base `:root` のみ）。`--blur*` は `backdrop-filter` 用。
+
+### Spacing
+本 Foundation では未定義（desktop 正本に汎用 spacing スケールが無いため）。必要になれば後続ブランチで追加する。
 
 ## テーマ切替
 生成CSSは `:root[data-appearance="dark"|"light"|"auto"]` セレクタで切替（`:root` は `<html>` 要素）。属性は `<html>`（`document.documentElement`）に付与する。`auto` は OS 設定（`prefers-color-scheme`）に追従。
