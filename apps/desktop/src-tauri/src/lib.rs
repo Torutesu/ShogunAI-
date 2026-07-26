@@ -18,6 +18,7 @@ mod geometry;
 mod hover;
 mod inline_source;
 mod integrate;
+mod meeting;
 mod notch_actions;
 mod notch_exec;
 
@@ -92,6 +93,14 @@ pub fn run() {
         integrate::mac::collapse_request,
         integrate::mac::clock_sync_ack,
         integrate::mac::focus_field,
+        meeting::mac::meeting_status,
+        meeting::mac::meeting_start,
+        meeting::mac::meeting_not_now,
+        meeting::mac::meeting_stop,
+        meeting::mac::meeting_save_note,
+        meeting::mac::meeting_exclude_app,
+        meeting::mac::get_meeting_settings,
+        meeting::mac::set_meeting_enabled,
         notch_actions::mac::notch_actions,
         notch_exec::mac::run_notch_action,
         notch_exec::mac::confirm_notch_action,
@@ -352,6 +361,11 @@ fn setup_macos(app: &tauri::App) {
             // decides is in shogun-core; this starts the driver that reads idle/power/clock and
             // actually ticks it. Without a Select KK key it runs the local-rule lane — no network.
             let _ = dream::mac::spawn_dream_driver(db.clone());
+
+            // Meeting notes (§6.16). Settings load first — the default is off (FR-MT-01), so a
+            // fresh install starts the driver with a detector that declines to look at anything.
+            meeting::mac::init(&app.handle().clone());
+            meeting::mac::spawn_meeting_driver(app.handle().clone());
             // Say it started. The driver is silent by design once running — the gate skips all
             // day without logging — so without this line "working" and "never spawned" look
             // identical for the twenty-odd hours before the window opens.

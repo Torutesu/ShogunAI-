@@ -420,6 +420,60 @@ impl Db {
         self.capture(&ev).map(|(id, _)| id)
     }
 
+    /// Open a meeting interval (FR-MT-05). The macOS adapter has no database access of its own —
+    /// every write goes through `Db`, keeping the data tier in the core (invariant 1).
+    pub fn open_meeting(&self, title: Option<&str>, app_bundle_id: Option<&str>, confidence: f64, provenance: &str) -> Option<i64> {
+        let conn = self.conn.lock().ok()?;
+        shogun_memory::session::open(
+            &conn,
+            &shogun_memory::session::NewSession {
+                kind: "meeting",
+                started_at: self.now_ms(),
+                title,
+                app_bundle_id,
+                calendar_occurrence_id: None,
+                confidence,
+                provenance,
+            },
+        )
+        .ok()
+    }
+
+    /// Close a meeting interval. Idempotent — the first close wins (FR-MT-11).
+    pub fn close_meeting(&self, id: i64) -> bool {
+        let now = self.now_ms();
+        self.conn
+            .lock()
+            .ok()
+            .is_some_and(|conn| shogun_memory::session::close(&conn, id, now).is_ok())
+    }
+
+    /// Save the note typed during a meeting (FR-MT-10).
+    pub fn save_meeting_note(&self, session_id: i64, body: &str) -> bool {
+        let now = self.now_ms();
+        self.conn.lock().ok().is_some_and(|conn| {
+            shogun_memory::session_notes::save(&conn, session_id, body, now).is_ok()
+        })
+    }
+
+    /// The degraded Recap for an interval (FR-MT-19): what can be said locally, with no model and
+    /// no network. `None` only when the interval does not exist.
+    pub fn meeting_recap(&self, session_id: i64) -> Option<crate::meeting::recap::Recap> {
+        let conn = self.conn.lock().ok()?;
+        let session = shogun_memory::session::get(&conn, session_id).ok().flatten()?;
+        let notes = shogun_memory::session_notes::get(&conn, session_id).ok().flatten();
+        // How much this Recap had to work with. Counted rather than estimated — it is the honest
+        // answer to "is anything actually being captured in meetings?" (context health).
+        let captured: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM event_log WHERE session_id = ?1",
+                [session_id],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        Some(crate::meeting::recap::degraded(&session, notes, captured as usize))
+    }
+
     /// Confidence-gated memory lines for the inline draft prompt ([`crate::inline::compose_inline`]):
     /// the commitments the user owes and the open loops in play, passed through the FR-ST-20 gate
     /// (High stated as fact, Medium prefixed `possibly:`, Low dropped) so a low-confidence guess is
@@ -2296,5 +2350,48 @@ mod tests {
         assert!(!db.resume(cycle, CycleKind::Full).contains(&JobKind::Consolidation));
         // one row, not two (idempotent upsert)
         assert_eq!(db.cycle_runs(cycle).len(), 1);
+    }
+
+    #[test]
+    fn a_meeting_interval_opens_and_closes_through_the_db() {
+        let db = Db::open_in_memory(clock(5_000)).unwrap();
+        let id = db.open_meeting(Some("Weekly sync"), Some("us.zoom.xos"), 0.35, "{}").unwrap();
+
+        assert!(db.close_meeting(id));
+
+        let recap = db.meeting_recap(id).expect("a closed interval has a recap");
+        assert_eq!(recap.title, "Weekly sync");
+    }
+
+    #[test]
+    fn a_meeting_recap_carries_the_note_the_user_typed() {
+        let db = Db::open_in_memory(clock(5_000)).unwrap();
+        let id = db.open_meeting(Some("1:1"), None, 0.35, "{}").unwrap();
+
+        assert!(db.save_meeting_note(id, "- discussed the roadmap"));
+        db.close_meeting(id);
+
+        assert_eq!(
+            db.meeting_recap(id).unwrap().notes.as_deref(),
+            Some("- discussed the roadmap")
+        );
+    }
+
+    #[test]
+    fn a_recap_for_an_interval_that_never_existed_is_none() {
+        let db = Db::open_in_memory(clock(5_000)).unwrap();
+        assert!(db.meeting_recap(9_999).is_none());
+    }
+
+    #[test]
+    fn a_meeting_with_no_note_still_has_a_recap() {
+        // FR-MT-19: never an empty panel, even for a meeting where nobody typed anything.
+        let db = Db::open_in_memory(clock(5_000)).unwrap();
+        let id = db.open_meeting(None, Some("us.zoom.xos"), 0.35, "{}").unwrap();
+        db.close_meeting(id);
+
+        let recap = db.meeting_recap(id).unwrap();
+        assert_eq!(recap.title, crate::meeting::recap::UNTITLED);
+        assert_eq!(recap.notes, None);
     }
 }

@@ -17,7 +17,12 @@
 use std::collections::BTreeSet;
 
 /// Meeting-notes settings as persisted.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Every field defaults, so a file written before this feature existed — or a half-written one —
+/// reads as the shipped default rather than failing to parse. The default being *off* is what
+/// makes that safe: failing to read settings can never turn listening on (FR-MT-01).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct Settings {
     /// Tier (a). `false` is the shipped default (FR-MT-01).
     pub enabled: bool,
@@ -28,9 +33,12 @@ pub struct Settings {
     pub excluded_occurrences: BTreeSet<String>,
 }
 
+// Written out rather than derived, though it is derivable. `#[derive(Default)]` would leave the
+// most important property of this type — that it ships off — resting on the reader knowing that
+// `bool` defaults to `false`. This default is a promise to the user (FR-MT-01), so it is stated.
+#[allow(clippy::derivable_impls)]
 impl Default for Settings {
     fn default() -> Self {
-        // Off. Stated here rather than assumed, because this default is a promise (FR-MT-01).
         Self {
             enabled: false,
             excluded_apps: BTreeSet::new(),
@@ -145,5 +153,38 @@ mod tests {
         s.exclude_app("us.zoom.xos");
         s.exclude_app("us.zoom.xos");
         assert_eq!(s.excluded_apps.len(), 1);
+    }
+
+    #[test]
+    fn settings_survive_a_save_and_load_round_trip() {
+        let mut s = Settings { enabled: true, ..Default::default() };
+        s.exclude_app("us.zoom.xos");
+        s.excluded_occurrences.insert("evt-1on1".into());
+
+        let restored: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+
+        assert_eq!(restored, s);
+    }
+
+    #[test]
+    fn a_settings_file_that_predates_this_feature_reads_as_off() {
+        // The upgrade path. An install from before meeting notes existed has no such key, and the
+        // one behaviour that would be indefensible is for the update itself to switch listening
+        // on (FR-MT-01). Absent means off, and it is asserted rather than assumed.
+        let restored: Settings = serde_json::from_str("{}").unwrap();
+
+        assert!(!restored.enabled);
+        assert!(restored.excluded_apps.is_empty());
+    }
+
+    #[test]
+    fn a_corrupt_or_partial_file_does_not_silently_enable_listening() {
+        // A half-written file (power loss mid-save) must fail closed. Anything that cannot be
+        // read as settings falls back to the default, which is off.
+        let restored: Settings =
+            serde_json::from_str(r#"{"excluded_apps":["us.zoom.xos"]}"#).unwrap();
+
+        assert!(!restored.enabled);
+        assert_eq!(restored.excluded_apps.len(), 1);
     }
 }

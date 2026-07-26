@@ -113,6 +113,24 @@ export const STRINGS = {
     memoryClearConfirm: "Delete",
     memoryCleared: "Cleared.",
     cancel: "Cancel",
+    // meeting notes — the pill (FR-MT-08/09). "Notes", never "Recording": nothing is recorded,
+    // and the word would promise a file that will never exist.
+    meetingNotes: "Notes",
+    meetingUntitled: "Meeting",
+    meetingStarting: "Taking notes in",
+    meetingStart: "Start",
+    meetingNotNow: "Not now",
+    meetingStop: "Stop",
+    meetingNotePlaceholder: "Type your notes…",
+    // meeting notes — settings (FR-MT-01/02/03)
+    meetingSection: "Meeting notes",
+    meetingHint: "Offers to take notes when a meeting starts. One tap declines, one tap stops.",
+    meetingOn: "On",
+    meetingOff: "Off",
+    // The disclosure of FR-MT-03. It can be stated this plainly because it is simply what
+    // happens: nothing joins the call, and no audio file is ever written.
+    meetingDisclosure:
+      "Meetings are handled on this Mac. Nothing joins your call and no recording is kept — only the text stays.",
     // errors
     sources: "Sources",
     noAnswer: "(no response)",

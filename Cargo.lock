@@ -3671,6 +3671,7 @@ version = "0.1.0"
 dependencies = [
  "reqwest 0.12.28",
  "rusqlite",
+ "serde",
  "serde_json",
  "shogun-agents",
  "shogun-cli",

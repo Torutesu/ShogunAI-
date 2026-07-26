@@ -48,6 +48,25 @@ interface ClockSyncPayload {
   seq: number;
   rust_mono_ns: number;
 }
+
+/** The pill's contents, pushed from Rust on every meeting transition and once a second while
+ *  recording (FR-MT-09). Assembled in the core — the webview only draws it (invariant 1). */
+interface MeetingView {
+  state: "idle" | "offered" | "recording" | "wrapping";
+  enabled: boolean;
+  title: string | null;
+  elapsed_ms: number;
+  countdown_ms: number;
+}
+
+/** mm:ss. The elapsed time has to be visible and moving: a state toggle alone does not answer
+ *  "is this still going?", which is the question the pill exists to answer (FR-MT-09). */
+function clock(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const m = Math.floor(total / 60);
+  const sec = total % 60;
+  return `${m}:${String(sec).padStart(2, "0")}`;
+}
 interface Status {
   app: string;
   commitments: number;
@@ -270,6 +289,10 @@ export function App(): JSX.Element {
     document.documentElement.setAttribute("data-appearance", appearance);
   }, [appearance]);
 
+  const [meeting, setMeeting] = useState<MeetingView | null>(null);
+  // The pill replaces the handle, so it needs its own ref for the collapsed-size measurement.
+  const pillRef = useRef<HTMLDivElement>(null);
+
   // Start at the open size and prove the webview is alive.
   useEffect(() => {
     if (!IN_TAURI) return;
@@ -277,6 +300,10 @@ export function App(): JSX.Element {
     void invoke("interact", { kind: "boot" });
     const offs: Array<Promise<() => void>> = [];
     offs.push(listen<ContextPayload>("context", (e) => setCtxApp(e.payload.bundle_id || e.payload.title_masked || "")));
+    // The pill is push-driven: Rust owns the lifecycle, the webview never decides that a meeting
+    // has started (FR-MT-07). The first read covers a webview reload mid-meeting.
+    offs.push(listen<MeetingView>("meeting", (e) => setMeeting(e.payload)));
+    void invoke<MeetingView>("meeting_status").then(setMeeting).catch(() => undefined);
     // ⌃⌥N summon: Rust moved the window to this screen — also expand from the minimized handle.
     offs.push(
       listen("summon", () => {
@@ -385,16 +412,31 @@ export function App(): JSX.Element {
   // content — and therefore its width — changes.
   useEffect(() => {
     if (open) return;
-    const el = handleRef.current;
+    // Whichever of the two is on screen: the ordinary handle, or the meeting pill standing in
+    // for it.
+    const el = handleRef.current ?? pillRef.current;
     if (!el) return;
     const r = el.getBoundingClientRect();
     if (r.width < 1 || r.height < 1) return;
     // +1 guards against a fractional layout width being truncated into a clipped pill.
     void applyPanelSize(Math.ceil(r.width) + 1, Math.ceil(r.height) + 1);
-  }, [open, live, state.commitments.length, state.open_loops.length]);
+  }, [open, live, state.commitments.length, state.open_loops.length, meeting?.state, meeting?.title, meeting?.elapsed_ms]);
 
   // Collapsed: a clear, clickable handle hanging from the notch.
   if (!open) {
+    // A meeting in progress outranks the ordinary handle. It stays visible in every state the
+    // handle would be — including fullscreen, the one exception to FR-NU-08 — because a lane
+    // that listens has to be the easiest thing on screen to see and to stop (FR-MT-09).
+    const inMeeting = meeting?.enabled && (meeting.state === "offered" || meeting.state === "recording");
+    if (inMeeting && meeting) {
+      return (
+        <div className="stage stage--handle">
+          <div ref={pillRef}>
+            <MeetingPill view={meeting} />
+          </div>
+        </div>
+      );
+    }
     return (
       <div className="stage stage--handle">
         <button className="handle" ref={handleRef} type="button" onClick={expand} title={t.openPanel}>
@@ -596,6 +638,59 @@ export function App(): JSX.Element {
 // Corner grip that lets the user stretch the open panel. The native panel is a borderless NSPanel
 // (no OS resize edges), so we drive `set_panel_size` from a pointer drag — the panel's top-left is
 // anchored, so it grows down/right, which reads naturally for a window that hangs from the notch.
+/** The meeting pill (FR-MT-08/09).
+ *
+ *  Replaces the ordinary handle while a meeting is offered or being noted, because the one thing
+ *  it must never do is be missable: this is the surface that makes "it was listening and I never
+ *  knew" impossible. Hence no confirmation on Stop, an always-moving clock, and a live dot rather
+ *  than a red record lamp — nothing is being recorded, and the lamp would say otherwise. */
+function MeetingPill({ view }: { view: MeetingView }): JSX.Element {
+  const title = view.title?.trim() || t.meetingUntitled;
+
+  if (view.state === "offered") {
+    return (
+      <div className="mpill mpill--offer">
+        <span className="mpill__title">{title}</span>
+        <span className="mpill__count">
+          {t.meetingStarting} {Math.ceil(view.countdown_ms / 1000)}s
+        </span>
+        <span className="mpill__acts">
+          <button
+            type="button"
+            className="mpill__btn"
+            onClick={() => void invoke("meeting_not_now").catch(() => undefined)}
+          >
+            {t.meetingNotNow}
+          </button>
+          <button
+            type="button"
+            className="mpill__btn mpill__btn--go"
+            onClick={() => void invoke("meeting_start").catch(() => undefined)}
+          >
+            {t.meetingStart}
+          </button>
+        </span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mpill">
+      <span className="live__dot" />
+      <span className="mpill__label">{t.meetingNotes}</span>
+      <span className="mpill__time">{clock(view.elapsed_ms)}</span>
+      <span className="mpill__title">{title}</span>
+      <button
+        type="button"
+        className="mpill__btn mpill__btn--stop"
+        onClick={() => void invoke("meeting_stop").catch(() => undefined)}
+      >
+        {t.meetingStop}
+      </button>
+    </div>
+  );
+}
+
 function ResizeGrip(props: {
   current: () => Size;
   onResize: (w: number, h: number) => void;
@@ -787,6 +882,66 @@ function DreamSection(): JSX.Element {
 
 // AI coding-tool transcripts. Opt-in: a session log is a transcript of the user's work, so
 // nothing is read until they say so.
+/** Meeting notes: tier (a) of the three ways to say no, plus the disclosure (FR-MT-01/02/03).
+ *
+ *  Off is the shipped default and the initial render, so a settings screen that fails to reach
+ *  the backend shows "Off" rather than briefly claiming the feature is on. */
+function MeetingSection(): JSX.Element {
+  const [on, setOn] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!IN_TAURI) return;
+    void invoke<{ enabled: boolean }>("get_meeting_settings")
+      .then((s) => setOn(s.enabled))
+      .catch(() => undefined);
+  }, []);
+
+  const toggle = (next: boolean): void => {
+    if (!IN_TAURI) {
+      setOn(next);
+      return;
+    }
+    setBusy(true);
+    setOn(next);
+    void invoke("set_meeting_enabled", { enabled: next })
+      .catch(() => setOn(!next))
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <section className="set">
+      <div className="set__label" id="seg-meeting">{t.meetingSection}</div>
+      <div className="seg" role="radiogroup" aria-labelledby="seg-meeting">
+        <button
+          type="button"
+          role="radio"
+          aria-checked={on}
+          disabled={busy}
+          className={`seg__opt${on ? " is-on" : ""}`}
+          onClick={() => toggle(true)}
+        >
+          {t.meetingOn}
+        </button>
+        <button
+          type="button"
+          role="radio"
+          aria-checked={!on}
+          disabled={busy}
+          className={`seg__opt${!on ? " is-on" : ""}`}
+          onClick={() => toggle(false)}
+        >
+          {t.meetingOff}
+        </button>
+      </div>
+      <div className="set__hint">{t.meetingHint}</div>
+      {/* Kept visible whether the feature is on or off: someone deciding whether to turn it on
+          needs this more than someone who already has (FR-MT-03). */}
+      <div className="set__hint set__hint--quiet">{t.meetingDisclosure}</div>
+    </section>
+  );
+}
+
 function AiSessionsSection(): JSX.Element {
   const [on, setOn] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -1204,6 +1359,7 @@ function Settings(props: {
         <ApprovalsSection />
         <ConnectionsSection />
         <AiSessionsSection />
+            <MeetingSection />
         <DreamSection />
         <section className="set">
           <div className="set__label" id="seg-appearance">{t.appearance}</div>

@@ -1002,3 +1002,75 @@ kbd {
   border-radius: var(--r-pill);
   padding: 2px 8px;
 }
+
+/* meeting pill (FR-MT-08/09) — stands in for the handle while a meeting is offered or noted.
+   Same glass, same notch-hung shape: it is the handle in another mode, not a second surface
+   competing with it. The live dot is green, never a red record lamp — nothing is being
+   recorded, and the lamp would promise a file that will never exist. */
+.mpill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px 6px 12px;
+  max-width: 460px;
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(30px) saturate(1.7);
+  backdrop-filter: blur(30px) saturate(1.7);
+  border: 1px solid var(--line);
+  border-top: none;
+  border-radius: 0 0 var(--r-md) var(--r-md);
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.4);
+  color: var(--ink);
+  font-family: var(--sys);
+  font-size: var(--fs-sm);
+}
+.mpill__label {
+  color: var(--muted);
+  flex: none;
+}
+/* Tabular figures so the seconds tick without the row reflowing under them. */
+.mpill__time {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  flex: none;
+}
+.mpill__title {
+  color: var(--muted);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mpill__count {
+  flex: none;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.mpill__acts {
+  display: inline-flex;
+  gap: 6px;
+  flex: none;
+}
+.mpill__btn {
+  flex: none;
+  font: inherit;
+  font-size: var(--fs-xs);
+  color: var(--ink);
+  background: var(--fill);
+  border: 1px solid var(--line);
+  border-radius: var(--r-pill);
+  padding: 4px 10px;
+  cursor: pointer;
+  transition: background var(--sp);
+}
+.mpill__btn:hover {
+  background: var(--fill-strong);
+}
+.mpill__btn--go {
+  background: var(--fill-strong);
+  font-weight: 600;
+}
+/* Stopping must never be the harder button to hit. */
+.mpill__btn--stop {
+  padding-inline: 12px;
+}
