@@ -181,7 +181,9 @@ pub mod mac {
 
         // Build the routed transport: Composio for email, first-layer MCP for the rest, with the
         // FR-C2-05 draft fallback (save a Gmail draft if Composio fails).
-        let composio_key = composio_api_key().unwrap_or_default();
+        let composio_key = composio_api_key()
+            .filter(|k| !k.trim().is_empty())
+            .ok_or_else(|| "Composio key not set — add it in settings to send".to_string())?;
         let composio_user = std::env::var("SHOGUN_COMPOSIO_USER_ID").unwrap_or_default();
         let composio = ComposioSendTransport::new(HttpComposioApi::new(composio_key)?, composio_user);
         let runtime = connectors.0.clone();
