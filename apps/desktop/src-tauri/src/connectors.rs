@@ -19,7 +19,7 @@ pub mod mac {
 
     use shogun_core::daemon::Db;
     // The reqwest clients live in shogun-core (the single allowlisted HTTP egress, FR-TR-03).
-    use shogun_core::mcp_http::{HttpMcpRpc, HttpTokenExchange};
+    use shogun_core::mcp_http::HttpTokenExchange;
     use shogun_integrations::keychain::KeychainTokenStore;
     use shogun_integrations::oauth::AuthConfig;
     use shogun_integrations::oauth_flow::run_loopback_flow;
@@ -33,7 +33,8 @@ pub mod mac {
 
     /// The concrete transport stack: HTTPS MCP calls whose token is auto-refreshed from the Keychain.
     pub type Provider = ManagedTokenProvider<HttpTokenExchange, KeychainTokenStore>;
-    pub type Transport = RemoteMcpTransport<HttpMcpRpc<Provider>>;
+    // 公式 MCP (Developer Preview) に依存せず、Gmail REST を直接叩く（設計 §2）。
+    pub type Transport = RemoteMcpTransport<shogun_core::gmail_rest::GmailRestRpc<Provider>>;
     /// The concrete connector runtime (shared by the poller, the connector commands, and the
     /// approval-queue send executor).
     pub type Runtime = ConnectorRuntime<Transport>;
@@ -75,7 +76,9 @@ pub mod mac {
             HttpTokenExchange::new()?,
             KeychainTokenStore::new(KEYCHAIN_SERVICE),
         );
-        let transport = RemoteMcpTransport::new(HttpMcpRpc::new(provider)?);
+        let transport = RemoteMcpTransport::new(
+            shogun_core::gmail_rest::GmailRestRpc::new(provider)?,
+        );
         Ok(ConnectorRuntime::new(transport, Wave::One, draft_stop))
     }
 
