@@ -58,6 +58,13 @@ interface Status {
   key_rejected: boolean;
 }
 /** What the notch is doing about a ⌥-tap, pushed from Rust (see inline_source::InlineStatus). */
+/** The notch state machine's own view, pushed on every transition (integrate.rs `state` event).
+ *  `hover` is the preview level; `expanded` is the full panel. */
+interface StatePayload {
+  state: string;
+  t0_mono_ns: number;
+}
+
 interface InlineStatus {
   phase: "drafting" | "inserted" | "no_context" | "key_rejected" | "failed";
   chars: number;
@@ -322,6 +329,33 @@ export function App(): JSX.Element {
         sizeForViewRef.current({ open: true });
       }),
     );
+    // The notch's own hover detection finally drives the panel. Until now the tracker ran, emitted
+    // transitions, and nothing listened — opening was click-only, which is why hovering the notch
+    // did nothing while hovering the collapsed pill worked.
+    offs.push(
+      listen<StatePayload>("state", (e) => {
+        const st = e.payload.state;
+        if (st === "hover" || st === "expanded") {
+          // Never fight a user who pinned the panel open, and never re-open one they just closed
+          // by hand — the tracker doesn't know about either.
+          setOpen((cur) => {
+            if (cur) return cur;
+            sizeForViewRef.current({ open: true });
+            return true;
+          });
+        } else if (st === "idle" || st === "hidden") {
+          // Withdraw on the same rule as the pointer-leave path: pinned stays, work in progress
+          // stays, everything else follows your attention.
+          if (pinnedRef.current) return;
+          if (inputRef.current.trim().length > 0 || thinkingRef.current) return;
+          setOpen((cur) => {
+            if (!cur) return cur;
+            sizeForViewRef.current({ open: false });
+            return false;
+          });
+        }
+      }),
+    );
     offs.push(
       listen<ClockSyncPayload>("clock_sync", (e) =>
         void invoke("clock_sync_ack", { seq: e.payload.seq, jsPerfMs: performance.now() }),
@@ -386,6 +420,10 @@ export function App(): JSX.Element {
   inputRef.current = input;
   const thinkingRef = useRef(thinking);
   thinkingRef.current = thinking;
+  // The state listener is registered once, so it needs the latest pin through a ref rather than
+  // a captured value — otherwise an unpinned-at-mount panel would ignore the pin forever.
+  const pinnedRef = useRef(pinned);
+  pinnedRef.current = pinned;
 
   const onPanelLeave = useCallback((): void => {
     if (pinned) return;

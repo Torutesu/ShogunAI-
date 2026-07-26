@@ -133,6 +133,10 @@ pub mod mac {
         pub primary_height: f64,
         pub is_notch: bool,
         pub display_count: u32,
+        /// One entry per attached display: the screen's CG rect plus its own notch regions.
+        /// The engine hit-tests against whichever of these the pointer is inside, so the notch
+        /// works on a second monitor instead of only where the panel happens to live.
+        pub per_display: Vec<(crate::geometry::Rect, Regions, f64)>,
     }
 
     // ---------------------------------------------------------------- timers
@@ -267,6 +271,10 @@ pub mod mac {
         geo: StartGeometry,
     ) {
         std::thread::spawn(move || {
+            let per_display = geo.per_display.clone();
+            // Which entry the engine is currently configured for, so regions are only swapped on
+            // an actual screen change rather than on every mouse move.
+            let mut active_display: Option<usize> = None;
             let mut engine = NotchEngine::new(
                 geo.regions,
                 geo.menubar_min_y,
@@ -283,6 +291,24 @@ pub mod mac {
                         continue;
                     }
                     Ev::Tap(TapEvent::Moved { x, y, buttons }) => {
+                        // Point the engine at the display the pointer is actually on before it
+                        // hit-tests. Cheap: a handful of rect comparisons, and only when the
+                        // screen changes does anything get swapped.
+                        if per_display.len() > 1 {
+                            let ns_y = geo.primary_height - y;
+                            if let Some((i, (_, regs, menubar))) = per_display
+                                .iter()
+                                .enumerate()
+                                .find(|(_, (r, _, _))| {
+                                    x >= r.x && x <= r.x + r.w && ns_y >= r.y && ns_y <= r.y + r.h
+                                })
+                            {
+                                if active_display != Some(i) {
+                                    active_display = Some(i);
+                                    engine.set_regions(*regs, *menubar, geo.primary_height);
+                                }
+                            }
+                        }
                         EngineInput::MouseCg { x, y, t_ms: shared.clock.elapsed_ns() / 1_000_000, buttons }
                     }
                     Ev::Tap(TapEvent::Down { x, y }) => {
@@ -321,6 +347,16 @@ pub mod mac {
     ) {
         match out {
             EngineOutput::WebviewState(s) => {
+                // Loud on purpose while D-06 is being wired: the hover path has never driven the
+                // panel, so "did the tracker even see me?" is the first question every time.
+                eprintln!("[spike] state → {}", s.tag());
+                // Follow the pointer across displays. The panel is placed once at build time and
+                // by ⌥J; without this the hover path opened it on whichever screen it was last
+                // parked on, so the notch on a second monitor appeared dead even though the
+                // tracker saw the hover perfectly well.
+                if matches!(s, State::Hover | State::Expanded) {
+                    crate::move_panel_to_cursor_screen(app);
+                }
                 let _ = app.emit("state", StatePayload { state: s.tag(), t0_mono_ns: shared.clock.elapsed_ns() });
                 shared.recorder.record(Body::StateTransition(StateTransition {
                     from: prev_state.tag().to_string(),

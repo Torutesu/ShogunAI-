@@ -298,6 +298,12 @@ fn setup_macos(app: &tauri::App) {
             primary_height: g.primary_height,
             is_notch: g.is_notch,
             display_count: g.display_count,
+            // Every display's own notch geometry, so hovering the notch on a second monitor is
+            // hit-tested against that monitor rather than against the primary's coordinates.
+            per_display: geometry::mac::read_all(mtm)
+                .into_iter()
+                .map(|d| (d.screen, d.regions, d.screen.max_y() - d.menubar_h))
+                .collect(),
         },
         rx,
     );
@@ -490,6 +496,26 @@ unsafe fn panel_is_on_cursor_screen(ptr: *mut objc2::runtime::AnyObject) -> bool
     // Cursor on no known screen — treat as "same" so the toggle still hides rather than doing
     // nothing visible.
     true
+}
+
+/// Move the panel to the display the cursor is on, if it isn't there already.
+///
+/// Cheap and idempotent: called on every hover-open, so it checks before it moves rather than
+/// re-laying-out the window on each transition.
+#[cfg(target_os = "macos")]
+pub(crate) fn move_panel_to_cursor_screen(app: &tauri::AppHandle) {
+    let h = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let Some(ptr) = overlay_ptr(&h) else { return };
+        // SAFETY: main thread, live NSWindow/NSPanel.
+        unsafe {
+            if panel_is_on_cursor_screen(ptr) {
+                return;
+            }
+            reposition_to_cursor_screen(ptr);
+        }
+        eprintln!("[shell] panel followed the cursor to another display");
+    });
 }
 
 /// Toggle the overlay: hide it when it is already in front of you, otherwise bring it here.
