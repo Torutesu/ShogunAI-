@@ -16,6 +16,9 @@ importers:
 
   apps/desktop:
     dependencies:
+      '@shogun-ai/tokens':
+        specifier: workspace:*
+        version: link:../../packages/tokens
       '@tauri-apps/api':
         specifier: ^2
         version: 2.11.1
