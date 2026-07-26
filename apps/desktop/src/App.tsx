@@ -77,6 +77,9 @@ const IN_TAURI =
 const W = 560;
 const H_OPEN = 300;
 const H_HANDLE = 44;
+/** How long the cursor must rest on the collapsed pill before it opens. Long enough that crossing
+ *  the pill on the way somewhere else doesn't trigger it, short enough to feel immediate. */
+const HOVER_DWELL_MS = 250;
 const H_SETTINGS = 460; // taller default so setting groups fit; body scrolls; clamped to screen
 const MIN_W = 460;
 const MIN_H = 240;
@@ -337,6 +340,32 @@ export function App(): JSX.Element {
     setOpen(true);
     sizeForView({ open: true });
   };
+
+  // Hover-to-open. The pill opens on dwell, not on entry: Phase 0 lists hover misfire as an open
+  // question, and opening the instant the cursor crosses the pill is exactly the failure mode —
+  // the panel would fire while you were on your way to the menu bar. So we wait HOVER_DWELL_MS of
+  // continuous hover and cancel the moment the pointer leaves. A pointer that is merely passing
+  // through is gone long before the timer elapses.
+  //
+  // Deliberately not gated on cursor velocity: dwell alone is measurable in the spike, and adding a
+  // second heuristic would make a No-Go answer harder to attribute. Revisit with the Phase 0 data.
+  const hoverTimer = useRef<number | null>(null);
+  const cancelHoverOpen = useCallback((): void => {
+    if (hoverTimer.current != null) {
+      window.clearTimeout(hoverTimer.current);
+      hoverTimer.current = null;
+    }
+  }, []);
+  const onHandleEnter = useCallback((): void => {
+    cancelHoverOpen();
+    hoverTimer.current = window.setTimeout(() => {
+      hoverTimer.current = null;
+      setOpen(true);
+      sizeForViewRef.current({ open: true });
+    }, HOVER_DWELL_MS);
+  }, [cancelHoverOpen]);
+  // A pending timer must not outlive the component (or a click that opens the panel first).
+  useEffect(() => cancelHoverOpen, [cancelHoverOpen]);
   const openSettings = (): void => {
     setShowSettings(true);
     sizeForView({ open: true, settings: true });
@@ -397,7 +426,18 @@ export function App(): JSX.Element {
   if (!open) {
     return (
       <div className="stage stage--handle">
-        <button className="handle" ref={handleRef} type="button" onClick={expand} title={t.openPanel}>
+        <button
+          className="handle"
+          ref={handleRef}
+          type="button"
+          onClick={() => {
+            cancelHoverOpen();
+            expand();
+          }}
+          onPointerEnter={onHandleEnter}
+          onPointerLeave={cancelHoverOpen}
+          title={t.openPanel}
+        >
           <span className="handle__live">
             <span className="live__dot" />
             {t.reading} <b>{live}</b>
