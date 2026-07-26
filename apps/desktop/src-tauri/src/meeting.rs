@@ -228,7 +228,12 @@ use shogun_core::meeting::gate::OfferGate;
     ///
     /// Returns immediately when the feature is off — the detector does not run, so nothing
     /// observes a meeting while meeting notes are disabled (FR-MT-02a).
-    pub fn on_focus(app: &tauri::AppHandle, bundle_id: &str, window_title: Option<&str>) {
+    pub fn on_focus(
+        app: &tauri::AppHandle,
+        bundle_id: &str,
+        window_title: Option<&str>,
+        page_url: Option<&str>,
+    ) {
         let now = now_ms();
         let Ok(mut g) = LANE.lock() else { return };
         let Some(lane) = g.as_mut() else { return };
@@ -260,8 +265,11 @@ use shogun_core::meeting::gate::OfferGate;
         // probes that do not exist yet; claiming them here would inflate the confidence stored
         // against the interval beyond what was actually observed.
         let signals = Signals {
+            // A known meeting app, or a browser whose current page *is* a meeting. The URL is
+            // read rather than the title inferred from: a page can call itself anything, and a
+            // document titled "… - Google Meet" must not raise an offer to take notes on it.
             meeting_app_frontmost: detect::is_meeting_app(bundle_id)
-                || window_title.is_some_and(detect::title_looks_like_meeting),
+                || page_url.is_some_and(detect::is_meeting_url),
             ..Default::default()
         };
         if let Decision::Offer { confidence, provenance } = detect::decide(&signals) {
@@ -344,6 +352,23 @@ use shogun_core::meeting::gate::OfferGate;
         }
     }
 
+    /// Browsers whose current page is worth asking about (FR-MT-04). A table, so the per-tick
+    /// Accessibility call is only paid where it can produce an answer.
+    const BROWSER_BUNDLE_IDS: &[&str] = &[
+        "com.google.Chrome",
+        "com.google.Chrome.beta",
+        "com.google.Chrome.canary",
+        "com.apple.Safari",
+        "company.thebrowser.Browser", // Arc
+        "com.microsoft.edgemac",
+        "com.brave.Browser",
+        "org.mozilla.firefox",
+    ];
+
+    fn is_browser(bundle_id: &str) -> bool {
+        BROWSER_BUNDLE_IDS.contains(&bundle_id)
+    }
+
     /// One-second driver: reads the frontmost app, offers when it is a meeting, and keeps the
     /// pill's clock moving.
     ///
@@ -361,7 +386,12 @@ use shogun_core::meeting::gate::OfferGate;
                     .and_then(|w| w.title())
                     .filter(|t| !t.trim().is_empty())
                     .unwrap_or_else(|| front.name.clone());
-                on_focus(&app, &front.bundle_id, Some(&title));
+                // Only asked of browsers: every other app would pay an Accessibility round-trip
+                // per second to answer "no".
+                let url = is_browser(&front.bundle_id)
+                    .then(|| crate::axcache::browser_url(front.pid))
+                    .flatten();
+                on_focus(&app, &front.bundle_id, Some(&title), url.as_deref());
             }
             tick(&app);
         })

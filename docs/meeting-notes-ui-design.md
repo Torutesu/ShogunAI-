@@ -309,9 +309,12 @@ UI で示唆しない:
 実機（macOS + 実際の Zoom / Google Meet）での検知・ピル表示は**未確認**。
 ビルド・テスト・clippy は通っているが、`frontmostApplication()` と AX 経由の
 ウィンドウタイトル取得が実環境で意図どおり動くかは実機確認が要る。
-Google Meet の検知は**ウィンドウタイトルの限定一致**による暫定実装で、
-本来の URL 判定（`detect::is_meeting_url`、実装済み）はブラウザごとの AX 経路が
-無いため未配線。
+Google Meet は**アクティブページの URL** で検知する（`axcache::browser_url` →
+`detect::is_meeting_url`）。Safari は window の `AXDocument`、Chromium 系は
+`AXWebArea` の `AXURL` と、ブラウザで露出が違うため両方を試す。どちらも答えない
+ブラウザは**検知されない**——推測するよりそのほうが正しい失敗。
+URL 取得は**ブラウザのバンドルIDに限って**呼ぶ（毎秒の AX 往復を、答えの出ない
+アプリで払わないため）。
 
 ---
 

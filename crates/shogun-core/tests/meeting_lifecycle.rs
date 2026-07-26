@@ -35,6 +35,7 @@ fn on_focus(
     machine: &mut Machine,
     gate: &mut OfferGate,
     bundle_id: &str,
+    page_url: Option<&str>,
     now: i64,
 ) -> (Vec<Effect>, Option<f64>) {
     if !settings.enabled {
@@ -54,7 +55,8 @@ fn on_focus(
         return (Vec::new(), None);
     }
     let signals = Signals {
-        meeting_app_frontmost: detect::is_meeting_app(bundle_id),
+        meeting_app_frontmost: detect::is_meeting_app(bundle_id)
+            || page_url.is_some_and(detect::is_meeting_url),
         ..Default::default()
     };
     match detect::decide(&signals) {
@@ -110,7 +112,7 @@ fn with_the_feature_off_a_meeting_app_produces_nothing_at_all() {
     let mut m = machine();
     let mut session = None;
 
-    let (effects, confidence) = on_focus(&Settings::default(), &mut m, &mut OfferGate::new(), "us.zoom.xos", 1_000);
+    let (effects, confidence) = on_focus(&Settings::default(), &mut m, &mut OfferGate::new(), "us.zoom.xos", None, 1_000);
     let mut mic = Mic::default();
     run(&db, &mut session, &mut mic, &effects);
 
@@ -130,7 +132,7 @@ fn an_excluded_app_produces_nothing_even_with_the_feature_on() {
     let mut m = machine();
     let mut session = None;
 
-    let (effects, _) = on_focus(&settings, &mut m, &mut OfferGate::new(), "us.zoom.xos", 1_000);
+    let (effects, _) = on_focus(&settings, &mut m, &mut OfferGate::new(), "us.zoom.xos", None, 1_000);
     run(&db, &mut session, &mut Mic::default(), &effects);
 
     assert_eq!(m.state(), State::Idle);
@@ -146,7 +148,7 @@ fn a_meeting_the_user_ignores_is_noted_and_comes_back_as_a_recap() {
     let mut m = machine();
     let mut session = None;
 
-    let (offered, confidence) = on_focus(&settings, &mut m, &mut OfferGate::new(), "us.zoom.xos", 1_000);
+    let (offered, confidence) = on_focus(&settings, &mut m, &mut OfferGate::new(), "us.zoom.xos", None, 1_000);
     run(&db, &mut session, &mut Mic::default(), &offered);
     assert_eq!(m.state(), State::Offered, "detection offers; it does not start");
     assert!(confidence.is_some_and(|c| c > 0.0 && c < 1.0), "detection is never certain");
@@ -182,7 +184,7 @@ fn declining_the_offer_leaves_no_trace_of_the_meeting() {
     let mut m = machine();
     let mut session = None;
 
-    run(&db, &mut session, &mut Mic::default(), &on_focus(&enabled(), &mut m, &mut OfferGate::new(), "us.zoom.xos", 1_000).0);
+    run(&db, &mut session, &mut Mic::default(), &on_focus(&enabled(), &mut m, &mut OfferGate::new(), "us.zoom.xos", None, 1_000).0);
     run(&db, &mut session, &mut Mic::default(), &m.step_completing_wrap(Input::NotNow));
 
     assert_eq!(m.state(), State::Idle);
@@ -211,7 +213,7 @@ fn every_route_that_opens_the_microphone_also_closes_it() {
         let mut session = None;
         let mut mic = Mic::default();
 
-        run(&db, &mut session, &mut mic, &on_focus(&settings, &mut m, &mut OfferGate::new(), "us.zoom.xos", 1_000).0);
+        run(&db, &mut session, &mut mic, &on_focus(&settings, &mut m, &mut OfferGate::new(), "us.zoom.xos", None, 1_000).0);
         assert!(!mic.ever_opened, "{ending:?}: the offer must not open the microphone");
 
         run(&db, &mut session, &mut mic, &m.step_completing_wrap(Input::Start));
@@ -235,13 +237,13 @@ fn a_second_meeting_after_the_first_is_offered_again_rather_than_resumed() {
     let mut m = machine();
     let mut session = None;
 
-    run(&db, &mut session, &mut Mic::default(), &on_focus(&settings, &mut m, &mut OfferGate::new(), "us.zoom.xos", 1_000).0);
+    run(&db, &mut session, &mut Mic::default(), &on_focus(&settings, &mut m, &mut OfferGate::new(), "us.zoom.xos", None, 1_000).0);
     run(&db, &mut session, &mut Mic::default(), &m.step_completing_wrap(Input::Start));
     let first = session;
     run(&db, &mut session, &mut Mic::default(), &m.step_completing_wrap(Input::Stop));
     run(&db, &mut session, &mut Mic::default(), &m.step_completing_wrap(Input::Wrapped));
 
-    let (effects, _) = on_focus(&settings, &mut m, &mut OfferGate::new(), "us.zoom.xos", 1_000);
+    let (effects, _) = on_focus(&settings, &mut m, &mut OfferGate::new(), "us.zoom.xos", None, 1_000);
 
     assert_eq!(m.state(), State::Offered);
     assert!(!effects.contains(&Effect::OpenSession), "the second meeting is offered, not opened");
@@ -256,7 +258,7 @@ fn turning_the_feature_off_mid_meeting_closes_the_interval() {
     let mut m = machine();
     let mut session = None;
 
-    run(&db, &mut session, &mut Mic::default(), &on_focus(&enabled(), &mut m, &mut OfferGate::new(), "us.zoom.xos", 1_000).0);
+    run(&db, &mut session, &mut Mic::default(), &on_focus(&enabled(), &mut m, &mut OfferGate::new(), "us.zoom.xos", None, 1_000).0);
     run(&db, &mut session, &mut Mic::default(), &m.step_completing_wrap(Input::Start));
     let id = session.expect("recording opened an interval");
 
@@ -281,13 +283,13 @@ fn a_decline_is_not_undone_by_the_next_detection_tick() {
     let mut session = None;
 
     run(&db, &mut session, &mut Mic::default(),
-        &on_focus(&settings, &mut m, &mut gate, "us.zoom.xos", 1_000).0);
+        &on_focus(&settings, &mut m, &mut gate, "us.zoom.xos", None, 1_000).0);
     run(&db, &mut session, &mut Mic::default(), &m.step_completing_wrap(Input::NotNow));
     gate.decline("us.zoom.xos", 1_000);
 
     for tick in 1..=60 {
         let now = 1_000 + tick * 1_000;
-        let (effects, _) = on_focus(&settings, &mut m, &mut gate, "us.zoom.xos", now);
+        let (effects, _) = on_focus(&settings, &mut m, &mut gate, "us.zoom.xos", None, now);
         assert!(effects.is_empty(), "tick {tick}: the offer came back after a decline");
         assert_eq!(m.state(), State::Idle);
     }
@@ -310,7 +312,7 @@ fn wrapping_always_completes_so_the_lane_stays_usable() {
         let mut session = None;
 
         run(&db, &mut session, &mut Mic::default(),
-            &on_focus(&enabled(), &mut m, &mut OfferGate::new(), "us.zoom.xos", 1_000).0);
+            &on_focus(&enabled(), &mut m, &mut OfferGate::new(), "us.zoom.xos", None, 1_000).0);
         run(&db, &mut session, &mut Mic::default(), &m.step_completing_wrap(Input::Start));
 
         let effects = m.step_completing_wrap(ending);
@@ -335,4 +337,54 @@ fn an_interval_left_open_by_a_crash_is_closed_at_the_next_start() {
         "the abandoned interval must be closed, not left running"
     );
     assert_eq!(db.close_abandoned_meetings(), 0, "a second start finds nothing to close");
+}
+
+#[test]
+fn a_browser_on_a_meet_call_is_offered_like_any_other_meeting() {
+    // Issue #7 requires Google Meet, and Meet is a page rather than an app: without the URL
+    // signal, browser meetings are invisible however well Zoom works.
+    let db = Db::open_in_memory(clock(1_000)).unwrap();
+    let mut m = machine();
+    let mut session = None;
+
+    let (effects, confidence) = on_focus(
+        &enabled(),
+        &mut m,
+        &mut OfferGate::new(),
+        "com.google.Chrome",
+        Some("https://meet.google.com/abc-defg-hij"),
+        1_000,
+    );
+    run(&db, &mut session, &mut Mic::default(), &effects);
+
+    assert_eq!(m.state(), State::Offered);
+    assert!(confidence.is_some());
+}
+
+#[test]
+fn an_ordinary_page_in_the_same_browser_is_not_a_meeting() {
+    // The reason this is a URL check and not a title match: the offer must not appear over
+    // whatever else the user has open, in the very same app that does host meetings.
+    let db = Db::open_in_memory(clock(1_000)).unwrap();
+    let mut m = machine();
+    let mut session = None;
+
+    for url in [
+        "https://mail.google.com/mail/u/0/",
+        // Titles and query strings can both contain the host; only the parsed host counts.
+        "https://example.test/?redirect=meet.google.com",
+        "https://meet.google.com.evil.test/abc",
+    ] {
+        let (effects, _) = on_focus(
+            &enabled(),
+            &mut m,
+            &mut OfferGate::new(),
+            "com.google.Chrome",
+            Some(url),
+            1_000,
+        );
+        run(&db, &mut session, &mut Mic::default(), &effects);
+        assert_eq!(m.state(), State::Idle, "{url} raised an offer");
+    }
+    assert_eq!(session, None);
 }

@@ -12,13 +12,14 @@
 pub use shogun_core::capture::walk_policy::{walk, AxNode, ContextCache, Limits, Role, WalkResult};
 
 #[cfg(target_os = "macos")]
-pub use mac::{ax_call_count, ax_trusted, focused_window, snapshot, AxElement};
+pub use mac::{ax_call_count, ax_trusted, browser_url, focused_window, snapshot, AxElement};
 
 #[cfg(target_os = "macos")]
 mod mac {
     use accessibility_sys::{
-        kAXChildrenAttribute, kAXDescriptionAttribute, kAXErrorSuccess, kAXFocusedWindowAttribute,
-        kAXRoleAttribute, kAXTitleAttribute, kAXTrustedCheckOptionPrompt, kAXValueAttribute,
+        kAXChildrenAttribute, kAXDescriptionAttribute, kAXDocumentAttribute, kAXErrorSuccess,
+        kAXFocusedWindowAttribute, kAXRoleAttribute, kAXTitleAttribute, kAXTrustedCheckOptionPrompt,
+        kAXURLAttribute, kAXValueAttribute,
         AXIsProcessTrustedWithOptions, AXUIElementCopyAttributeValue, AXUIElementCreateApplication,
         AXUIElementRef, AXUIElementSetMessagingTimeout,
     };
@@ -29,6 +30,7 @@ mod mac {
     use core_foundation_sys::array::{CFArrayGetCount, CFArrayGetTypeID, CFArrayGetValueAtIndex, CFArrayRef};
     use core_foundation_sys::base::{CFGetTypeID, CFRelease, CFRetain, CFTypeRef};
     use core_foundation_sys::string::{CFStringGetTypeID, CFStringRef};
+    use core_foundation_sys::url::{CFURLGetTypeID, CFURLRef};
 
     use shogun_core::capture::walk_policy::{walk, AxNode, Limits, Role, WalkResult};
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -206,6 +208,78 @@ mod mac {
         unsafe { AXUIElementSetMessagingTimeout(app, 0.1) };
         // SAFETY: valid app element.
         unsafe { copy_element(app, kAXFocusedWindowAttribute) }
+    }
+
+    /// Copy a URL-valued attribute. Browsers hand back a `CFURL` rather than a `CFString`, so
+    /// [`copy_string`] returns `None` for these and the value has to be converted explicitly.
+    unsafe fn copy_url(el: AXUIElementRef, name: &str) -> Option<String> {
+        AX_CALLS.fetch_add(1, Ordering::Relaxed);
+        let cf_name = CFString::new(name);
+        let mut value: CFTypeRef = std::ptr::null();
+        // SAFETY: valid element + attribute name; out-pointer is a CFTypeRef slot.
+        let err = unsafe { AXUIElementCopyAttributeValue(el, cf_name.as_concrete_TypeRef(), &mut value) };
+        if err != kAXErrorSuccess || value.is_null() {
+            return None;
+        }
+        // SAFETY: value is a +1 CFType (create rule); consumed or released here. Both shapes are
+        // accepted because Safari answers `AXDocument` with a string and Chrome answers `AXURL`
+        // with a CFURL.
+        unsafe {
+            let id = CFGetTypeID(value);
+            if id == CFStringGetTypeID() {
+                Some(CFString::wrap_under_create_rule(value as CFStringRef).to_string())
+            } else if id == CFURLGetTypeID() {
+                let url = core_foundation::url::CFURL::wrap_under_create_rule(value as CFURLRef);
+                Some(url.get_string().to_string())
+            } else {
+                CFRelease(value);
+                None
+            }
+        }
+    }
+
+    /// The URL of the page the browser is showing, if this app is a browser and exposes one.
+    ///
+    /// Meeting detection needs the *address*, not the window title (FR-MT-04): a title is what a
+    /// page chose to call itself, so matching on it means a document named "… - Google Meet" can
+    /// raise an offer to take notes on someone's reading. The URL is the fact.
+    ///
+    /// Two attributes, because browsers disagree: Safari answers `AXDocument` on the window,
+    /// Chromium-based browsers expose `AXURL` on the web area inside it. Both are tried before
+    /// giving up, and a browser that answers neither simply is not detected — which is the right
+    /// failure, since the alternative is guessing.
+    pub fn browser_url(pid: i32) -> Option<String> {
+        let window = focused_window(pid)?;
+        // SAFETY: `window` is a live retained AXUIElement for the duration of this call.
+        if let Some(url) = unsafe { copy_url(window.0, kAXDocumentAttribute) } {
+            return Some(url);
+        }
+        // Chromium: descend to the AXWebArea. Depth is bounded (window → group(s) → web area);
+        // this runs once per detection tick, so it must not become a tree walk.
+        find_web_area_url(&window, 4)
+    }
+
+    /// Depth-limited search for a web area's `AXURL`.
+    fn find_web_area_url(el: &AxElement, depth: u8) -> Option<String> {
+        if depth == 0 {
+            return None;
+        }
+        // SAFETY: `el` is live for the duration of the call.
+        if let Some(role) = unsafe { copy_string(el.0, kAXRoleAttribute) } {
+            if role == "AXWebArea" {
+                // SAFETY: as above.
+                if let Some(url) = unsafe { copy_url(el.0, kAXURLAttribute) } {
+                    return Some(url);
+                }
+            }
+        }
+        // SAFETY: `el` is live for the duration of the call.
+        for child in unsafe { copy_children(el.0) } {
+            if let Some(url) = find_web_area_url(&child, depth - 1) {
+                return Some(url);
+            }
+        }
+        None
     }
 
     /// Snapshot the focused window of `pid` into a WalkResult, bounded by `budget_ms`
