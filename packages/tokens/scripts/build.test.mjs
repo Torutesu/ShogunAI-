@@ -20,5 +20,5 @@ test("validate flags a themed token missing a mode", () => {
 test("validate flags an invalid color value", () => {
   const bad = { static: {}, themed: { accent: { dark: "notacolor", light: "#2f6fed" } } };
   const errors = validate(bad);
-  assert.ok(errors.some((e) => e.includes("accent")));
+  assert.ok(errors.some((e) => e.includes("accent") && e.includes("dark") && e.includes("notacolor")));
 });
