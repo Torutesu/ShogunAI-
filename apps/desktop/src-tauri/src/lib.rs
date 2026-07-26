@@ -8,17 +8,17 @@
 
 mod ai_sessions;
 mod approvals;
-mod axcache;
+pub mod axcache;
 mod capture_source;
 mod connectors;
-mod display;
+pub mod display;
 mod dream;
 mod exclusions;
 mod geometry;
 mod hover;
 mod inline_source;
 mod integrate;
-mod meeting;
+pub mod meeting;
 mod notch_actions;
 mod notch_exec;
 
