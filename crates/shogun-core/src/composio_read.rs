@@ -1,5 +1,5 @@
-//! Composio-based Gmail read transport — an alternative to [`crate::gmail_rest`] that routes
-//! read calls through the Composio tool-execution API instead of direct Gmail REST.
+//! Composio-based Gmail read transport — routes Gmail read and draft calls through the Composio
+//! tool-execution API. This is the single transport for all Gmail operations (reads + drafts).
 //!
 //! This is the second-layer read transport (§6.10). Per the allowlisted-egress rule (FR-TR-03),
 //! the HTTP client stays in shogun-core; the trait seam ([`ComposioApi`]) is in
@@ -44,6 +44,29 @@ impl<A: ComposioApi> ComposioReadRpc<A> {
     pub fn with_page_size(mut self, n: u32) -> Self {
         self.page_size = n;
         self
+    }
+
+    /// Create a Gmail draft via `GMAIL_CREATE_EMAIL_DRAFT`.
+    ///
+    /// Incoming `arguments` are `{to, subject, body}` (the same field names used by
+    /// `save_gmail_draft` / `draft_request_body`). These are mapped to the Composio field names
+    /// `recipient_email`/`subject`/`body` — mirroring `gmail_send_arguments` in shogun-integrations.
+    /// The response body is returned as-is; the caller (`execute_write_owned`) ignores it.
+    fn create_draft(&self, arguments: &Value) -> Result<Value, String> {
+        let to = arguments
+            .get("to")
+            .and_then(Value::as_str)
+            .ok_or("create_draft: missing to")?;
+        let subject = arguments.get("subject").and_then(Value::as_str).unwrap_or("");
+        let body = arguments.get("body").and_then(Value::as_str).unwrap_or("");
+        let args = serde_json::json!({
+            "recipient_email": to,
+            "subject": subject,
+            "body": body,
+        });
+        let resp = self.api.execute("GMAIL_CREATE_EMAIL_DRAFT", &self.user_id, args)?;
+        parse_execute_response(&resp)?;
+        Ok(resp)
     }
 
     /// Fetch the recent thread list via `GMAIL_FETCH_EMAILS`.
@@ -97,6 +120,10 @@ impl<A: ComposioApi> McpRpc for ComposioReadRpc<A> {
         match tool {
             "search_threads" => self.search_threads(),
             "get_thread" => self.get_thread(&arguments),
+            // create_draft is the write tool name used by toolmap::tool_for(Gmail, "draft_create_update").
+            // The transport also handles it here so the single Composio transport serves both the
+            // read-sync path and the draft-create write path (FR-C2-05 fallback).
+            "create_draft" => self.create_draft(&arguments),
             other => Err(format!("ComposioReadRpc has no mapping for tool '{other}'")),
         }
     }
@@ -434,6 +461,79 @@ mod tests {
         });
         let msgs = extract_messages(&resp);
         assert_eq!(msgs.len(), 1);
+    }
+
+    // ── create_draft: routes to GMAIL_CREATE_EMAIL_DRAFT with mapped field names ─
+
+    /// A recording fake that captures the last tool call so we can assert on arg field names.
+    struct RecordingComposio {
+        last_tool: std::cell::RefCell<String>,
+        last_args: std::cell::RefCell<Value>,
+        response: Result<Value, String>,
+    }
+    impl RecordingComposio {
+        fn ok(v: Value) -> Self {
+            Self {
+                last_tool: std::cell::RefCell::new(String::new()),
+                last_args: std::cell::RefCell::new(json!({})),
+                response: Ok(v),
+            }
+        }
+        fn failing(v: Value) -> Self {
+            Self {
+                last_tool: std::cell::RefCell::new(String::new()),
+                last_args: std::cell::RefCell::new(json!({})),
+                response: Ok(v),
+            }
+        }
+    }
+    impl ComposioApi for RecordingComposio {
+        fn execute(&self, tool: &str, _user_id: &str, arguments: Value) -> Result<Value, String> {
+            *self.last_tool.borrow_mut() = tool.to_string();
+            *self.last_args.borrow_mut() = arguments;
+            self.response.clone()
+        }
+    }
+
+    #[test]
+    fn create_draft_calls_gmail_create_email_draft_with_composio_field_names() {
+        let fake = RecordingComposio::ok(json!({ "successful": true, "data": {} }));
+        let rpc = ComposioReadRpc::new(fake, "uid");
+        let result = rpc.call_tool(
+            Service::Gmail,
+            "create_draft",
+            json!({ "to": "alice@example.com", "subject": "Hello", "body": "World" }),
+        );
+        assert!(result.is_ok(), "create_draft should succeed: {result:?}");
+        assert_eq!(*rpc.api.last_tool.borrow(), "GMAIL_CREATE_EMAIL_DRAFT");
+        let args = rpc.api.last_args.borrow();
+        assert_eq!(args["recipient_email"], "alice@example.com", "should use recipient_email");
+        assert_eq!(args["subject"], "Hello");
+        assert_eq!(args["body"], "World");
+    }
+
+    #[test]
+    fn create_draft_missing_to_returns_error() {
+        let fake = RecordingComposio::ok(json!({ "successful": true, "data": {} }));
+        let rpc = ComposioReadRpc::new(fake, "uid");
+        let err = rpc
+            .call_tool(Service::Gmail, "create_draft", json!({ "subject": "S", "body": "B" }))
+            .unwrap_err();
+        assert!(err.contains("missing to"), "expected 'missing to', got: {err}");
+    }
+
+    #[test]
+    fn create_draft_successful_false_returns_error() {
+        let fake = RecordingComposio::failing(json!({ "successful": false }));
+        let rpc = ComposioReadRpc::new(fake, "uid");
+        let err = rpc
+            .call_tool(
+                Service::Gmail,
+                "create_draft",
+                json!({ "to": "b@b.com", "subject": "S", "body": "B" }),
+            )
+            .unwrap_err();
+        assert!(!err.is_empty(), "successful:false must produce a non-empty error");
     }
 
     // ── transport-level API error (api.execute returns Err) ─────────────────────

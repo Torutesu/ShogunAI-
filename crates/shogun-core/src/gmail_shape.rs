@@ -1,6 +1,6 @@
 //! Gmail REST v1 のレスポンスを、共有の正規化 `parse_items` が食う MCP エンベロープ形に畳む
 //! 純関数（設計 §2）。ネットワークに触れないので Linux で単体テストできる。効果のある HTTP は
-//! `gmail_rest`（feature `net`）が担い、この整形を呼ぶ。
+//! `composio_read`（feature `net`）が担い、この整形を呼ぶ。
 //!
 //! エラーは content-free（本文やトークンをログ・表面に出さない）。
 
@@ -374,10 +374,9 @@ mod tests {
 
     #[test]
     fn draft_requires_the_to_key_not_recipient_email() {
-        // The arg contract callers must honour: the recipient key is `to`. The draft-fallback in
-        // approvals.rs once passed `recipient_email` (the old official-MCP tool name), which this
-        // function rejects — silently breaking the FR-C2-05 draft save after the GmailRestRpc swap.
-        // This locks the name so that seam can't rot again.
+        // The arg contract callers must honour: the recipient key is `to`. `ComposioReadRpc`
+        // maps `to`→`recipient_email` internally, so callers always use `to`. This locks the
+        // internal-arg-name so that seam can't rot.
         let wrong = json!({ "recipient_email": "b@y.com", "subject": "Hi", "body": "x" });
         assert!(draft_request_body(&wrong).is_err(), "recipient_email must NOT satisfy the contract");
         let right = json!({ "to": "b@y.com", "subject": "Hi", "body": "x" });

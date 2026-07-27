@@ -386,13 +386,13 @@ fn setup_macos(app: &tauri::App) {
                 shogun_core::dreamcycle::schedule::DEFAULT_WINDOW_END_HOUR,
             );
 
-            // First-layer connectors (§6.9). Build the auto-refreshing runtime and start the
-            // 15-min read-sync poller. Missing Google creds (env) is not fatal — the app runs
-            // without connectors until the user sets them up.
-            match connectors::mac::build_runtime(true /* draft-stop default ON */) {
+            // First-layer connectors (§6.9). Build the Composio-backed runtime and start the
+            // 15-min read-sync poller. Missing Composio creds are not fatal — the app runs
+            // without connectors until the user configures them in Settings.
+            match connectors::mac::build_runtime(app.handle(), true /* draft-stop default ON */) {
                 Ok(rt) => {
                     let shared = std::sync::Arc::new(std::sync::Mutex::new(rt));
-                    connectors::mac::spawn_sync_poller(shared.clone(), db.clone());
+                    connectors::mac::spawn_sync_poller(shared.clone(), db.clone(), app.handle().clone());
                     app.manage(connectors::mac::ConnectorState(shared));
                     // The shared L3 approval queue (producers enqueue sends; the UI confirms them).
                     app.manage(approvals::mac::ApprovalQueueState::default());

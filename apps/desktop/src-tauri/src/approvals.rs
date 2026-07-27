@@ -59,7 +59,7 @@ pub mod mac {
 
     /// Load the Composio policy from `<app-data>/composio.json`. Returns `Default` on any
     /// read/parse failure — the safe-blocked state is always the fallback.
-    fn load_composio_policy(app: &tauri::AppHandle) -> ComposioPolicy {
+    pub(crate) fn load_composio_policy(app: &tauri::AppHandle) -> ComposioPolicy {
         use tauri::Manager;
         let path = match app.path().app_data_dir() {
             Ok(d) => d.join("composio.json"),
@@ -328,29 +328,26 @@ pub mod mac {
             return Err("draft fallback only applies to email".into());
         };
         let (subject, mail_body) = shogun_mcp::composio::parse_gmail_full_body(body);
-        // Key names are the arg contract of `create_draft` → `gmail_shape::draft_request_body`,
-        // which reads `to`/`subject`/`body`. The old official-MCP tool took `recipient_email`; after
-        // the transport swap to GmailRestRpc that name silently produced "draft: missing to" and the
-        // FR-C2-05 fallback never wrote a draft. `gmail_shape::draft_request_body` has a matching test.
+        // Key names are the arg contract of `create_draft` in `ComposioReadRpc`, which maps
+        // `to`/`subject`/`body` to Composio field names (`recipient_email`/`subject`/`body`).
         let args = json!({ "to": to, "subject": subject, "body": mail_body });
         let rt = runtime.lock().map_err(|_| "runtime lock poisoned".to_string())?;
         rt.execute_write_owned(shogun_mcp::scope::Service::Gmail, "draft_create_update", args).map(|_| ())?;
-        // Record traceability only on success: the draft body just left the device to Google via
-        // GmailRestRpc. Route::Mcp = first-layer direct-to-Google; third_party = false (Composio
-        // is the third-party arm; this fallback bypasses it). Chunk is digested and dropped — body
-        // text never reaches storage (G8 / invariant 3).
+        // Record traceability only on success: the draft body just left the device via Composio.
+        // Route::Composio = second-layer (third-party relay); third_party = true. Chunk is digested
+        // and dropped — body text never reaches storage (G8 / invariant 3).
         sink.record(TraceRecord::for_chunk(
-            Route::Mcp,
+            Route::Composio,
             "draft_create",
             "gmail",
             &mail_body,
-            false,
+            true,
         ));
         Ok(())
     }
 
     /// The Composio API key is a plain secret (not a TokenSet) — read it directly from the Keychain.
-    fn composio_api_key() -> Option<String> {
+    pub(crate) fn composio_api_key() -> Option<String> {
         security_framework::passwords::get_generic_password(KEYCHAIN_SERVICE, COMPOSIO_KEY_ACCOUNT)
             .ok()
             .and_then(|b| String::from_utf8(b).ok())
@@ -360,8 +357,16 @@ pub mod mac {
 
     /// Save the Composio API key to the Keychain (invariant 7 — never a file/env/DB/log).
     /// Trims whitespace; rejects empty keys. The key value is NEVER logged.
+    ///
+    /// After a successful save the connector runtime is rebuilt so the new key is picked up
+    /// immediately without restarting the app. A missing or poisoned `ConnectorState` is not fatal
+    /// — the save still succeeds; the runtime will use the new key on next restart.
     #[tauri::command]
-    pub fn set_composio_key(key: String) -> Result<(), String> {
+    pub fn set_composio_key(
+        key: String,
+        connectors: tauri::State<'_, crate::connectors::mac::ConnectorState>,
+        app: tauri::AppHandle,
+    ) -> Result<(), String> {
         let key = key.trim();
         if key.is_empty() {
             return Err("key is empty".into());
@@ -378,6 +383,13 @@ pub mod mac {
         )
         .map_err(|e| e.to_string())?;
         eprintln!("[composio] api key saved to Keychain");
+        // Rebuild the live runtime so the new key is used immediately.
+        let policy = load_composio_policy(&app);
+        if let Err(e) =
+            crate::connectors::mac::rebuild_gmail_runtime(&connectors, &app, policy.draft_stop)
+        {
+            eprintln!("[connectors] runtime rebuild after key save skipped: {e}");
+        }
         Ok(())
     }
 
@@ -441,11 +453,26 @@ pub mod mac {
 
     /// Persist the Composio user ID (non-secret) to the policy JSON file. Preserves all other
     /// policy fields. Trims whitespace; an empty string clears the stored ID (env fallback applies).
+    ///
+    /// After a successful save the connector runtime is rebuilt so the new user_id is picked up
+    /// immediately. A missing or poisoned `ConnectorState` is not fatal — the save still succeeds.
     #[tauri::command]
-    pub fn set_composio_user_id(user_id: String, app: tauri::AppHandle) -> Result<(), String> {
+    pub fn set_composio_user_id(
+        user_id: String,
+        connectors: tauri::State<'_, crate::connectors::mac::ConnectorState>,
+        app: tauri::AppHandle,
+    ) -> Result<(), String> {
         let trimmed = user_id.trim().to_string();
         let policy = load_composio_policy(&app);
-        save_composio_policy(&app, with_user_id(policy, &trimmed))
+        let draft_stop = policy.draft_stop;
+        save_composio_policy(&app, with_user_id(policy, &trimmed))?;
+        // Rebuild the live runtime so the new user_id is used immediately.
+        if let Err(e) =
+            crate::connectors::mac::rebuild_gmail_runtime(&connectors, &app, draft_stop)
+        {
+            eprintln!("[connectors] runtime rebuild after user_id save skipped: {e}");
+        }
+        Ok(())
     }
 
     /// The view model returned to the UI for the Composio settings block.

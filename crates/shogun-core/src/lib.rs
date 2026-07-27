@@ -47,9 +47,6 @@ pub mod composio_send;
 /// Concrete HTTPS clients for first-layer connectors (the allowlisted egress, FR-TR-03).
 #[cfg(feature = "net")]
 pub mod mcp_http;
-/// Gmail REST v1 transport, implementing McpRpc (MCP-independent, allowlisted egress, FR-TR-03).
-#[cfg(feature = "net")]
-pub mod gmail_rest;
 /// Composio-based Gmail read transport — routes read calls through the Composio tool API instead
 /// of direct Gmail REST (second-layer reads, allowlisted egress, FR-TR-03).
 #[cfg(feature = "net")]
