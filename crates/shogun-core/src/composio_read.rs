@@ -5,12 +5,15 @@
 //! the HTTP client stays in shogun-core; the trait seam ([`ComposioApi`]) is in
 //! shogun-integrations so the pure logic compiles without reqwest.
 //!
-//! The Composio tool shapes used here (as of 2026-07; verify on first live call):
-//! - `GMAIL_FETCH_EMAILS` → list of messages with Gmail-native fields.
-//! - `GMAIL_FETCH_MESSAGE_BY_THREAD_ID` → messages for one thread.
+//! The Composio response shape was VERIFIED against a live `GMAIL_FETCH_EMAILS` call (2026-07):
+//! envelope `{ data: { messages: [...] }, successful: bool, error }`; each message carries
+//! `messageId` / `threadId`, a TOP-LEVEL `subject`, the decoded plaintext under `messageText`
+//! (with `preview.body` as a shorter fallback), and an ISO-8601 `messageTimestamp`. Note it does
+//! NOT use the raw Gmail-REST names (`snippet`, `internalDate`) — the mapping in
+//! [`record_from_composio_group`] is Composio-native.
 //!
-//! **Field extraction is isolated in [`extract_messages`]** — the single function to fix if live
-//! Composio responses use different nesting than the documented `data.messages` path.
+//! **Envelope extraction is isolated in [`extract_messages`]** and field mapping in
+//! [`record_from_composio_group`] — patch those two if a future Composio version differs.
 //!
 //! No item content, tokens, or secrets are ever surfaced in error strings (invariant 7).
 
@@ -19,7 +22,7 @@ use shogun_integrations::composio::{parse_execute_response, ComposioApi};
 use shogun_integrations::rpc::McpRpc;
 use shogun_mcp::scope::Service;
 
-use crate::gmail_shape::{envelope, record_from_thread};
+use crate::gmail_shape::{base64_url_decode, envelope};
 
 /// Gmail read transport over the Composio tool-execution API.
 ///
@@ -100,8 +103,9 @@ impl<A: ComposioApi> ComposioReadRpc<A> {
         self.shape_into_envelope(&resp)
     }
 
-    /// Extract messages from the Composio response, group them by threadId, run each group
-    /// through [`record_from_thread`], and return a `structuredContent` envelope.
+    /// Extract messages from the Composio response, group them by threadId, shape each group into
+    /// a normalized record ([`record_from_composio_group`]), and return a `structuredContent`
+    /// envelope for [`parse_items`].
     fn shape_into_envelope(&self, resp: &Value) -> Result<Value, String> {
         let messages = extract_messages(resp);
         let records = group_and_shape(messages);
@@ -170,20 +174,26 @@ fn extract_messages(resp: &Value) -> Vec<Value> {
 
 // ─── grouping + shaping ───────────────────────────────────────────────────────────────────────
 
-/// Group a flat list of Composio messages by `threadId` (falling back to `messageId` / `id`) and
-/// call [`record_from_thread`] on each group to produce the normalized record array.
+/// Cap on a thread's concatenated body (mirrors gmail_shape::thread_body).
+const MAX_BODY_BYTES: usize = 16 * 1024;
+
+/// Group a flat list of Composio messages by `threadId` and shape each group into one
+/// `parse_items`-compatible record `{ threadId, subject, body, ts_ms }`.
 ///
-/// This reuses gmail_shape's multi-message body concatenation: grouping the messages for the
-/// same thread together means `thread_body` joins all of them the same way it does for a
-/// `threads.get(format=full)` response.
+/// VERIFIED against a live `GMAIL_FETCH_EMAILS` response (2026-07): Composio does NOT use the raw
+/// Gmail-REST field names. A message carries `messageId` / `threadId`, a TOP-LEVEL `subject`, the
+/// decoded plaintext under `messageText` (with `preview.body` as a shorter fallback), and an
+/// ISO-8601 `messageTimestamp` — there is no `snippet` and no `internalDate`. Reading it as a
+/// Gmail-REST thread (the earlier approach) produced ts=0 and an empty snippet, so the mapping is
+/// Composio-native here. `parse_items` maps `threadId`→external_id, `subject`→title, `body`→body,
+/// `ts_ms`→timestamp.
 fn group_and_shape(messages: Vec<Value>) -> Vec<Value> {
-    // Preserve insertion order (first-seen wins for ordering).
+    // Preserve first-seen order.
     let mut order: Vec<String> = Vec::new();
     let mut groups: std::collections::HashMap<String, Vec<Value>> =
         std::collections::HashMap::new();
 
     for msg in messages {
-        // Composio docs say `threadId`; fall back to `messageId` then `id`.
         let key = msg
             .get("threadId")
             .or_else(|| msg.get("messageId"))
@@ -204,12 +214,116 @@ fn group_and_shape(messages: Vec<Value>) -> Vec<Value> {
         .into_iter()
         .filter_map(|thread_id| {
             let msgs = groups.remove(&thread_id)?;
-            // Build a synthetic thread object matching what record_from_thread expects:
-            // { id: threadId, messages: [...] }
-            let thread = json!({ "id": thread_id, "messages": msgs });
-            Some(record_from_thread(&thread))
+            Some(record_from_composio_group(&thread_id, &msgs))
         })
         .collect()
+}
+
+/// Shape one thread's Composio messages into a normalized record.
+fn record_from_composio_group(thread_id: &str, msgs: &[Value]) -> Value {
+    // Subject/timestamp come from the latest message in the group.
+    let last = msgs.last();
+    let subject = last
+        .and_then(|m| m.get("subject").and_then(Value::as_str))
+        .or_else(|| last.and_then(|m| m.get("preview").and_then(|p| p.get("subject")).and_then(Value::as_str)))
+        .unwrap_or_default()
+        .to_string();
+    let ts_ms = last
+        .and_then(|m| m.get("messageTimestamp").and_then(Value::as_str))
+        .map(iso8601_to_ms)
+        .unwrap_or(0);
+
+    // Body: join each message's plaintext, capped. Composio gives the decoded text directly.
+    let mut parts: Vec<String> = Vec::new();
+    for m in msgs {
+        let body = composio_message_body(m);
+        if !body.trim().is_empty() {
+            parts.push(body);
+        }
+    }
+    let joined = parts.join("\n\n---\n\n");
+    let body = if joined.len() <= MAX_BODY_BYTES {
+        joined
+    } else {
+        let mut end = MAX_BODY_BYTES;
+        while !joined.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!("{}…", &joined[..end])
+    };
+
+    json!({
+        "threadId": thread_id,
+        "subject": subject,
+        "body": body,
+        "ts_ms": ts_ms,
+    })
+}
+
+/// Extract one Composio message's plaintext body: prefer the pre-decoded `messageText`, then
+/// `preview.body`, then base64url-decode `payload.body.data` (single-part text/plain).
+fn composio_message_body(m: &Value) -> String {
+    if let Some(t) = m.get("messageText").and_then(Value::as_str) {
+        if !t.trim().is_empty() {
+            return t.to_string();
+        }
+    }
+    if let Some(p) = m.get("preview").and_then(|p| p.get("body")).and_then(Value::as_str) {
+        if !p.trim().is_empty() {
+            return p.to_string();
+        }
+    }
+    if let Some(data) = m
+        .get("payload")
+        .and_then(|p| p.get("body"))
+        .and_then(|b| b.get("data"))
+        .and_then(Value::as_str)
+    {
+        if !data.is_empty() {
+            return String::from_utf8_lossy(&base64_url_decode(data)).into_owned();
+        }
+    }
+    String::new()
+}
+
+/// Parse a fixed-format ISO-8601 UTC timestamp (`YYYY-MM-DDTHH:MM:SSZ`, optional fractional
+/// seconds) to unix milliseconds. Returns 0 on any parse failure — no dependency on a date crate.
+fn iso8601_to_ms(s: &str) -> i64 {
+    // Split date and time on 'T'.
+    let (date, time) = match s.split_once('T') {
+        Some(v) => v,
+        None => return 0,
+    };
+    let d: Vec<&str> = date.split('-').collect();
+    if d.len() != 3 {
+        return 0;
+    }
+    // Time: drop trailing 'Z' and any fractional part, then split H:M:S.
+    let time = time.trim_end_matches('Z');
+    let time = time.split('.').next().unwrap_or(time);
+    let t: Vec<&str> = time.split(':').collect();
+    if t.len() != 3 {
+        return 0;
+    }
+    let parse = |x: &str| x.parse::<i64>().ok();
+    let (Some(y), Some(mo), Some(day), Some(h), Some(mi), Some(se)) = (
+        parse(d[0]),
+        parse(d[1]),
+        parse(d[2]),
+        parse(t[0]),
+        parse(t[1]),
+        parse(t[2]),
+    ) else {
+        return 0;
+    };
+    // days_from_civil (Howard Hinnant): days since 1970-01-01.
+    let y = if mo <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let doy = (153 * (if mo > 2 { mo - 3 } else { mo + 9 }) + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146097 + doe - 719468;
+    (days * 86400 + h * 3600 + mi * 60 + se) * 1000
 }
 
 // ─── tests ────────────────────────────────────────────────────────────────────────────────────
@@ -282,53 +396,19 @@ mod tests {
     // ── end-to-end: GMAIL_FETCH_EMAILS shape → parse_items ─────────────────────
 
     #[test]
-    fn fetch_emails_response_shapes_to_fetched_item_with_decoded_body() {
-        // "Hello from Composio" base64url-encoded = "SGVsbG8gZnJvbSBDb21wb3Npbw"
-        let b64 = {
-            use crate::gmail_shape::base64_url_decode;
-            // encode "Hello from Composio" ourselves using the inverse function from gmail_shape
-            // (we test that the round-trip works).
-            fn b64url(s: &[u8]) -> String {
-                const ALPHA: &[u8; 64] =
-                    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-                let mut out = String::new();
-                for chunk in s.chunks(3) {
-                    let b =
-                        [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
-                    let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | (b[2] as u32);
-                    out.push(ALPHA[((n >> 18) & 63) as usize] as char);
-                    out.push(ALPHA[((n >> 12) & 63) as usize] as char);
-                    if chunk.len() > 1 {
-                        out.push(ALPHA[((n >> 6) & 63) as usize] as char);
-                    }
-                    if chunk.len() > 2 {
-                        out.push(ALPHA[(n & 63) as usize] as char);
-                    }
-                }
-                out
-            }
-            let enc = b64url(b"Hello from Composio");
-            // sanity-check decode round-trip
-            assert_eq!(
-                String::from_utf8(base64_url_decode(&enc)).unwrap(),
-                "Hello from Composio"
-            );
-            enc
-        };
-
+    fn fetch_emails_response_shapes_to_fetched_item() {
+        // The VERIFIED live GMAIL_FETCH_EMAILS shape: top-level subject, decoded messageText,
+        // ISO-8601 messageTimestamp — no snippet, no internalDate.
         let composio_resp = json!({
             "data": {
                 "messages": [{
                     "messageId": "m1",
                     "threadId": "t1",
                     "subject": "Test Subject",
-                    "snippet": "short snippet",
-                    "payload": {
-                        "mimeType": "text/plain",
-                        "headers": [{"name": "Subject", "value": "Test Subject"}],
-                        "body": { "data": b64 }
-                    },
-                    "internalDate": "1699900000000"
+                    "messageText": "Hello from Composio",
+                    "messageTimestamp": "2000-01-01T00:00:00Z",
+                    "preview": { "subject": "Test Subject", "body": "Hello from" },
+                    "payload": { "mimeType": "text/plain", "body": { "data": "" } }
                 }]
             },
             "successful": true
@@ -346,59 +426,45 @@ mod tests {
         assert_eq!(item.title, "Test Subject");
         assert!(
             item.body.contains("Hello from Composio"),
-            "decoded body should appear in item.body, got: {:?}",
+            "messageText should appear in item.body, got: {:?}",
             item.body
         );
-        assert_eq!(item.ts_ms, 1699900000000i64);
+        // 2000-01-01T00:00:00Z = 946684800 s = 946684800000 ms.
+        assert_eq!(item.ts_ms, 946_684_800_000i64, "ISO timestamp must parse (not 0)");
+    }
+
+    #[test]
+    fn iso8601_parses_to_unix_ms() {
+        assert_eq!(iso8601_to_ms("1970-01-01T00:00:00Z"), 0);
+        assert_eq!(iso8601_to_ms("1970-01-01T00:00:01Z"), 1000);
+        assert_eq!(iso8601_to_ms("2000-01-01T00:00:00Z"), 946_684_800_000);
+        // fractional seconds tolerated, trailing Z optional
+        assert_eq!(iso8601_to_ms("2000-01-01T00:00:00.123Z"), 946_684_800_000);
+        // malformed → 0 (never panics)
+        assert_eq!(iso8601_to_ms("not-a-date"), 0);
+        assert_eq!(iso8601_to_ms(""), 0);
     }
 
     // ── two messages with the same threadId → single grouped record ─────────────
 
     #[test]
     fn two_messages_same_thread_group_into_one_record_with_both_bodies() {
-        fn b64url(s: &[u8]) -> String {
-            const ALPHA: &[u8; 64] =
-                b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-            let mut out = String::new();
-            for chunk in s.chunks(3) {
-                let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
-                let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | (b[2] as u32);
-                out.push(ALPHA[((n >> 18) & 63) as usize] as char);
-                out.push(ALPHA[((n >> 12) & 63) as usize] as char);
-                if chunk.len() > 1 {
-                    out.push(ALPHA[((n >> 6) & 63) as usize] as char);
-                }
-                if chunk.len() > 2 {
-                    out.push(ALPHA[(n & 63) as usize] as char);
-                }
-            }
-            out
-        }
-
         let composio_resp = json!({
             "data": {
                 "messages": [
                     {
                         "messageId": "m1",
                         "threadId": "thread-abc",
-                        "snippet": "first message",
-                        "payload": {
-                            "mimeType": "text/plain",
-                            "headers": [{"name": "Subject", "value": "Thread Convo"}],
-                            "body": { "data": b64url(b"First message body") }
-                        },
-                        "internalDate": "1699900000000"
+                        "subject": "Thread Convo",
+                        "messageText": "First message body",
+                        "messageTimestamp": "2000-01-01T00:00:00Z"
                     },
                     {
                         "messageId": "m2",
                         "threadId": "thread-abc",
-                        "snippet": "second message",
-                        "payload": {
-                            "mimeType": "text/plain",
-                            "headers": [{"name": "Subject", "value": "Thread Convo"}],
-                            "body": { "data": b64url(b"Second message body") }
-                        },
-                        "internalDate": "1699900100000"
+                        "subject": "Thread Convo",
+                        "messageText": "Second message body",
+                        "messageTimestamp": "2000-01-01T00:01:40Z"
                     }
                 ]
             },
