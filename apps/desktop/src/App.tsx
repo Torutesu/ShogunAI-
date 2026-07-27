@@ -1061,6 +1061,211 @@ function AiSessionsSection(): JSX.Element {
   );
 }
 
+// ---- Composio sending settings (opt-in, FR-C2-02 / FR-C2-03) -----------------------------------
+
+interface ComposioSettingsView {
+  has_key: boolean;
+  key_last4: string;
+  draft_stop: boolean;
+  consent_acknowledged: boolean;
+}
+
+function ComposioSection(): JSX.Element {
+  const [settings, setSettings] = useState<ComposioSettingsView>({
+    has_key: false,
+    key_last4: "",
+    draft_stop: true,
+    consent_acknowledged: false,
+  });
+  const [keyInput, setKeyInput] = useState("");
+  const [err, setErr] = useState("");
+  // Local checkboxes for the consent disclosure flow
+  const [check1, setCheck1] = useState(false);
+  const [check2, setCheck2] = useState(false);
+  const [check3, setCheck3] = useState(false);
+
+  const refreshSettings = useCallback((): void => {
+    if (!IN_TAURI) return;
+    void invoke<ComposioSettingsView>("composio_settings")
+      .then((s) => {
+        setSettings(s);
+        setErr("");
+      })
+      .catch((e) => setErr(String(e)));
+  }, []);
+
+  useEffect(refreshSettings, [refreshSettings]);
+
+  const saveKey = (): void => {
+    const k = keyInput.trim();
+    if (!k) return;
+    if (!IN_TAURI) {
+      setSettings((s) => ({ ...s, has_key: true, key_last4: k.slice(-4) }));
+      setKeyInput("");
+      return;
+    }
+    void invoke("set_composio_key", { key: k })
+      .then(() => {
+        setKeyInput("");
+        refreshSettings();
+      })
+      .catch((e) => setErr(String(e)));
+  };
+
+  const removeKey = (): void => {
+    if (!IN_TAURI) {
+      setSettings((s) => ({ ...s, has_key: false, key_last4: "" }));
+      return;
+    }
+    void invoke("clear_composio_key")
+      .then(refreshSettings)
+      .catch((e) => setErr(String(e)));
+  };
+
+  const grantConsent = (): void => {
+    if (!IN_TAURI) {
+      setSettings((s) => ({ ...s, consent_acknowledged: true }));
+      return;
+    }
+    void invoke("set_composio_policy", {
+      draftStop: settings.draft_stop,
+      consentAcknowledged: true,
+    })
+      .then(refreshSettings)
+      .catch((e) => setErr(String(e)));
+  };
+
+  const revokeConsent = (): void => {
+    if (!IN_TAURI) {
+      setSettings((s) => ({ ...s, consent_acknowledged: false, draft_stop: true }));
+      return;
+    }
+    // Revoking forces draft_stop back ON (invariant: can't have live send without consent).
+    void invoke("set_composio_policy", {
+      draftStop: true,
+      consentAcknowledged: false,
+    })
+      .then(() => {
+        setCheck1(false);
+        setCheck2(false);
+        setCheck3(false);
+        refreshSettings();
+      })
+      .catch((e) => setErr(String(e)));
+  };
+
+  const setDraftStop = (draftStop: boolean): void => {
+    if (!IN_TAURI) {
+      setSettings((s) => ({ ...s, draft_stop: draftStop }));
+      return;
+    }
+    void invoke("set_composio_policy", {
+      draftStop,
+      consentAcknowledged: settings.consent_acknowledged,
+    })
+      .then(refreshSettings)
+      .catch((e) => setErr(String(e)));
+  };
+
+  const allChecked = check1 && check2 && check3;
+
+  return (
+    <section className="set">
+      <div className="set__label">{t.composioTitle}</div>
+      <div className="set__hint">{t.composioHint}</div>
+      {err ? <div className="set__hint is-err">{err}</div> : null}
+
+      {/* API key row */}
+      <div
+        className={`set__hint${settings.has_key ? " is-ok" : ""}`}
+      >
+        {settings.has_key
+          ? `${t.composioKeyPresent} ·· ${settings.key_last4}`
+          : t.composioKeyAbsent}
+      </div>
+      <div className="keyrow">
+        <input
+          className="keyrow__input"
+          type="password"
+          placeholder={t.composioKeyPlaceholder}
+          value={keyInput}
+          autoComplete="off"
+          onChange={(e) => setKeyInput(e.target.value)}
+          onFocus={() => {
+            if (IN_TAURI) void invoke("focus_field", { focused: true }).catch(() => undefined);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") saveKey();
+          }}
+        />
+        <button
+          className="keyrow__btn"
+          type="button"
+          onClick={saveKey}
+          disabled={!keyInput.trim()}
+        >
+          {t.keySave}
+        </button>
+        {settings.has_key ? (
+          <button className="keyrow__btn" type="button" onClick={removeKey}>
+            {t.keyRemove}
+          </button>
+        ) : null}
+      </div>
+
+      {/* Consent flow */}
+      {settings.consent_acknowledged ? (
+        <div className="keyrow" style={{ marginTop: 8 }}>
+          <span className="set__hint is-ok">{t.composioConsentGranted}</span>
+          <button className="keyrow__btn" type="button" onClick={revokeConsent}>
+            {t.composioRevokeConsent}
+          </button>
+        </div>
+      ) : (
+        <div style={{ marginTop: 8 }}>
+          <div className="set__hint">{t.composioConsentTitle}</div>
+          <label className="set__hint" style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <input type="checkbox" checked={check1} onChange={(e) => setCheck1(e.target.checked)} />
+            {t.composioConsentItem1}
+          </label>
+          <label className="set__hint" style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <input type="checkbox" checked={check2} onChange={(e) => setCheck2(e.target.checked)} />
+            {t.composioConsentItem2}
+          </label>
+          <label className="set__hint" style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <input type="checkbox" checked={check3} onChange={(e) => setCheck3(e.target.checked)} />
+            {t.composioConsentItem3}
+          </label>
+          <div className="keyrow" style={{ marginTop: 4 }}>
+            <button
+              className="keyrow__btn"
+              type="button"
+              disabled={!allChecked}
+              onClick={grantConsent}
+            >
+              {t.composioGrantConsent}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Draft-stop toggle — only operable once consent is granted */}
+      <label
+        className="set__hint"
+        style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 8, opacity: settings.consent_acknowledged ? 1 : 0.4 }}
+      >
+        <input
+          type="checkbox"
+          checked={settings.draft_stop}
+          disabled={!settings.consent_acknowledged}
+          onChange={(e) => setDraftStop(e.target.checked)}
+        />
+        {t.composioDraftStop}
+      </label>
+    </section>
+  );
+}
+
 function ConnectionsSection(): JSX.Element {
   const [rows, setRows] = useState<ServiceStatus[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
@@ -1441,6 +1646,7 @@ function Settings(props: {
       <div className="settings__body">
         <ApprovalsSection />
         <ConnectionsSection />
+        <ComposioSection />
         <AiSessionsSection />
         <DreamSection />
         <section className="set">

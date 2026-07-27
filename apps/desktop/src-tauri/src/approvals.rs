@@ -345,6 +345,103 @@ pub mod mac {
             .and_then(|b| String::from_utf8(b).ok())
     }
 
+    // ---- Composio settings commands (UI ↔ Rust) -----------------------------------------------
+
+    /// Save the Composio API key to the Keychain (invariant 7 — never a file/env/DB/log).
+    /// Trims whitespace; rejects empty keys. The key value is NEVER logged.
+    #[tauri::command]
+    pub fn set_composio_key(key: String) -> Result<(), String> {
+        let key = key.trim();
+        if key.is_empty() {
+            return Err("key is empty".into());
+        }
+        security_framework::passwords::set_generic_password(
+            KEYCHAIN_SERVICE,
+            COMPOSIO_KEY_ACCOUNT,
+            key.as_bytes(),
+        )
+        .map_err(|e| e.to_string())?;
+        eprintln!("[composio] api key saved to Keychain");
+        Ok(())
+    }
+
+    /// Remove the Composio API key from the Keychain. Not-found is silently ignored.
+    #[tauri::command]
+    pub fn clear_composio_key() -> Result<(), String> {
+        match security_framework::passwords::delete_generic_password(
+            KEYCHAIN_SERVICE,
+            COMPOSIO_KEY_ACCOUNT,
+        ) {
+            Ok(()) => {}
+            Err(e) if e.code() == -25300 /* errSecItemNotFound */ => {}
+            Err(e) => return Err(e.to_string()),
+        }
+        eprintln!("[composio] api key removed");
+        Ok(())
+    }
+
+    /// Validation helper (pure; testable without I/O).
+    /// Returns `true` when the policy combination is internally consistent.
+    /// The only invalid combination is draft_stop=false AND consent_acknowledged=false:
+    /// live sending may only be enabled once the user has acknowledged the disclosures.
+    fn policy_is_valid(draft_stop: bool, consent: bool) -> bool {
+        consent || draft_stop
+    }
+
+    /// Persist the Composio opt-in policy to `<app-data>/composio.json`.
+    fn save_composio_policy(app: &tauri::AppHandle, policy: ComposioPolicy) -> Result<(), String> {
+        use tauri::Manager;
+        let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("composio.json");
+        let json = serde_json::to_string_pretty(&policy).map_err(|e| e.to_string())?;
+        std::fs::write(&path, json).map_err(|e| format!("save failed: {e}"))
+    }
+
+    /// Update the persisted Composio policy. Enforces the invariant that draft_stop may only be
+    /// turned OFF once consent has been acknowledged (FR-C2-02 / FR-C2-03).
+    #[tauri::command]
+    pub fn set_composio_policy(
+        draft_stop: bool,
+        consent_acknowledged: bool,
+        app: tauri::AppHandle,
+    ) -> Result<(), String> {
+        if !policy_is_valid(draft_stop, consent_acknowledged) {
+            return Err("consent required before enabling sending".into());
+        }
+        let policy = ComposioPolicy { draft_stop, consent_acknowledged };
+        save_composio_policy(&app, policy)
+    }
+
+    /// The view model returned to the UI for the Composio settings block.
+    #[derive(serde::Serialize)]
+    pub struct ComposioSettingsView {
+        /// Whether a Composio API key is stored in the Keychain.
+        pub has_key: bool,
+        /// Last 4 characters of the stored key, or empty string if no key.
+        pub key_last4: String,
+        /// Current draft-stop setting (true = draft only; false = live send allowed).
+        pub draft_stop: bool,
+        /// Whether the user has completed the consent disclosure flow.
+        pub consent_acknowledged: bool,
+    }
+
+    /// Return the current Composio settings for the UI (key presence, last4, and policy flags).
+    /// Secrets are NEVER returned in full — only the last 4 characters (invariant 7).
+    #[tauri::command]
+    pub fn composio_settings(app: tauri::AppHandle) -> ComposioSettingsView {
+        let policy = load_composio_policy(&app);
+        let (has_key, key_last4) = match composio_api_key() {
+            Some(k) if !k.trim().is_empty() => {
+                let k = k.trim();
+                let last4 = if k.len() >= 4 { k[k.len() - 4..].to_string() } else { k.to_string() };
+                (true, last4)
+            }
+            _ => (false, String::new()),
+        };
+        ComposioSettingsView { has_key, key_last4, draft_stop: policy.draft_stop, consent_acknowledged: policy.consent_acknowledged }
+    }
+
     #[cfg(test)]
     mod tests {
         use super::*;
@@ -377,6 +474,32 @@ pub mod mac {
         fn consent_true_draftstop_false_allows_send() {
             let policy = ComposioPolicy { consent_acknowledged: true, draft_stop: false };
             assert!(composio_send_allowed(policy), "consent + draft-stop OFF must allow the send");
+        }
+
+        // ---- policy_is_valid: all 4 combinations ---------------------------------------------
+
+        /// consent=false, draft_stop=false → invalid (only invalid combination).
+        #[test]
+        fn composio_policy_invalid_no_consent_no_draftstop() {
+            assert!(!policy_is_valid(false, false), "draft_stop=false + consent=false must be invalid");
+        }
+
+        /// consent=false, draft_stop=true → valid (draft-stop engaged protects even without consent).
+        #[test]
+        fn composio_policy_valid_draftstop_on_no_consent() {
+            assert!(policy_is_valid(true, false), "draft_stop=true + consent=false must be valid");
+        }
+
+        /// consent=true, draft_stop=true → valid (consent given, draft-stop still on).
+        #[test]
+        fn composio_policy_valid_consent_draftstop_on() {
+            assert!(policy_is_valid(true, true), "draft_stop=true + consent=true must be valid");
+        }
+
+        /// consent=true, draft_stop=false → valid (consent given, live send enabled).
+        #[test]
+        fn composio_policy_valid_consent_draftstop_off() {
+            assert!(policy_is_valid(false, true), "draft_stop=false + consent=true must be valid");
         }
     }
 }
