@@ -125,7 +125,6 @@ export const STRINGS = {
     composioConsentGranted: "Consent granted",
     composioRevokeConsent: "Revoke",
     composioDraftStop: "Draft-only mode (save a draft instead of sending)",
-    composioErr: "Composio settings error",
     quit: "Quit ShogunAI",
     quitTitle: "Quit ShogunAI",
     minimize: "Minimize to the notch",

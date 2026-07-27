@@ -355,6 +355,11 @@ pub mod mac {
         if key.is_empty() {
             return Err("key is empty".into());
         }
+        // A real Composio API key is long; reject an obviously-wrong short paste (also keeps the
+        // last-4 read-back from ever being close to the whole value).
+        if key.chars().count() < 8 {
+            return Err("key looks too short — check you pasted the full Composio API key".into());
+        }
         security_framework::passwords::set_generic_password(
             KEYCHAIN_SERVICE,
             COMPOSIO_KEY_ACCOUNT,
@@ -434,7 +439,10 @@ pub mod mac {
         let (has_key, key_last4) = match composio_api_key() {
             Some(k) if !k.trim().is_empty() => {
                 let k = k.trim();
-                let last4 = if k.len() >= 4 { k[k.len() - 4..].to_string() } else { k.to_string() };
+                // Last 4 chars only, char-safe. A key too short to have 4 chars is masked
+                // entirely rather than echoed — never return the whole secret (invariant 7).
+                let n = k.chars().count();
+                let last4 = if n >= 4 { k.chars().skip(n - 4).collect() } else { "····".to_string() };
                 (true, last4)
             }
             _ => (false, String::new()),
