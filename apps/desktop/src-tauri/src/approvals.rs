@@ -31,6 +31,71 @@ pub mod mac {
     const KEYCHAIN_SERVICE: &str = "com.selectkk.shogun";
     const COMPOSIO_KEY_ACCOUNT: &str = "composio-api-key";
 
+    // ---- Composio policy (non-secret: stored in JSON, NOT the Keychain) --------------------
+
+    /// Persisted opt-in policy for the Composio second-layer send (FR-C2-02 / FR-C2-03).
+    /// Both fields default to the safe-blocked state: no send can happen without the user
+    /// deliberately enabling each gate. Stored at `<app-data>/composio.json`; absent/unreadable →
+    /// `Default` (both gates closed). Secrets (the API key) stay in the Keychain (invariant 7).
+    #[derive(serde::Serialize, serde::Deserialize, Clone, Copy)]
+    pub(crate) struct ComposioPolicy {
+        /// When `true` (default) the send path is blocked even after consent — the user can draft
+        /// only. The gate must be explicitly turned OFF to allow a live send (FR-C2-03).
+        pub draft_stop: bool,
+        /// Whether the user has completed the FR-C2-02 opt-in disclosure screen. `false` by
+        /// default — no send is ever attempted without an explicit acknowledgement.
+        pub consent_acknowledged: bool,
+    }
+
+    impl Default for ComposioPolicy {
+        fn default() -> Self {
+            Self { draft_stop: true, consent_acknowledged: false }
+        }
+    }
+
+    /// Load the Composio policy from `<app-data>/composio.json`. Returns `Default` on any
+    /// read/parse failure — the safe-blocked state is always the fallback.
+    fn load_composio_policy(app: &tauri::AppHandle) -> ComposioPolicy {
+        use tauri::Manager;
+        let path = match app.path().app_data_dir() {
+            Ok(d) => d.join("composio.json"),
+            Err(_) => return ComposioPolicy::default(),
+        };
+        let text = match std::fs::read_to_string(&path) {
+            Ok(t) => t,
+            Err(_) => return ComposioPolicy::default(),
+        };
+        serde_json::from_str::<ComposioPolicy>(&text).unwrap_or_default()
+    }
+
+    /// Decision oracle: is a live Composio send allowed given this policy?
+    ///
+    /// Passes through the full type-safe gate from `shogun_mcp::composio`:
+    ///   1. `consent_acknowledged` must be true — only then is `grant_consent` called.
+    ///   2. `grant_consent(all-ack'd)` must succeed → produces a `ComposioConsent`.
+    ///   3. `ComposioSender::new(consent)` starts with `draft_stop = true`.
+    ///   4. `set_draft_stop(policy.draft_stop)` — the persisted setting is applied.
+    ///   5. `send_capability()` returns `Some` only when draft-stop is OFF.
+    ///
+    /// Pure: no I/O. Tested directly in the unit tests below.
+    pub(crate) fn composio_send_allowed(policy: ComposioPolicy) -> bool {
+        if !policy.consent_acknowledged {
+            return false;
+        }
+        let disclosures = shogun_mcp::composio::Disclosures {
+            via_third_party: true,
+            data_types: true,
+            revocable: true,
+        };
+        let consent = match shogun_mcp::composio::grant_consent(disclosures) {
+            Ok(c) => c,
+            Err(_) => return false,
+        };
+        let mut sender = shogun_mcp::composio::ComposioSender::new(consent);
+        sender.set_draft_stop(policy.draft_stop);
+        sender.send_capability().is_some()
+    }
+
     /// The shared L3 approval queue (the same one an agent enqueues into and the UI drains).
     pub struct ApprovalQueueState(pub Mutex<ApprovalQueue>);
 
@@ -159,12 +224,20 @@ pub mod mac {
 
     /// Confirm a pending send via the dedicated button (FR-AG-03) and execute it. Enter-key intent
     /// must be sent as a separate flag by the UI; this command is the button path.
+    ///
+    /// For Composio (email) sends the gate is consulted BEFORE the send is attempted:
+    ///   - If the persisted `ComposioPolicy` has `consent_acknowledged = false` OR `draft_stop =
+    ///     true`, the send is blocked and a Gmail draft is saved instead (FR-C2-02 / FR-C2-03).
+    ///   - Only when both gates are open (consent ✓, draft-stop OFF) is the Composio key required
+    ///     and the live send attempted.
+    ///   - First-layer sends (Slack/calendar/GitHub) are completely unaffected by this gate.
     #[tauri::command]
     pub fn confirm_send(
         id: u64,
         state: tauri::State<'_, ApprovalQueueState>,
         connectors: tauri::State<'_, ConnectorState>,
         db: tauri::State<'_, Db>,
+        app: tauri::AppHandle,
     ) -> Result<String, String> {
         let now = db.now_ms().max(0) as u64;
         // Confirm + dequeue under the queue lock, then drop it before executing (execution locks the
@@ -180,24 +253,52 @@ pub mod mac {
             }
         };
 
-        // Build the routed transport: Composio for email, first-layer MCP for the rest, with the
-        // FR-C2-05 draft fallback (save a Gmail draft if Composio fails).
-        let composio_key = composio_api_key()
-            .filter(|k| !k.trim().is_empty())
-            .ok_or_else(|| "Composio key not set — add it in settings to send".to_string())?;
-        let composio_user = std::env::var("SHOGUN_COMPOSIO_USER_ID").unwrap_or_default();
-        let composio = ComposioSendTransport::new(HttpComposioApi::new(composio_key)?, composio_user);
-        let runtime = connectors.0.clone();
-        let first_layer = FirstLayerSendTransport::new(&connectors.0);
-        let draft_runtime = runtime.clone();
-        let draft_sink = db.traceability_sink();
-        let routed = RoutedSendTransport::new(
-            composio,
-            first_layer,
-            Box::new(move |action, body| save_gmail_draft(&draft_runtime, &draft_sink, action, body)),
-        );
+        // --- Composio consent + draft-stop gate (FR-C2-02 / FR-C2-03) -------------------------
+        // Only Composio (email) sends are gated — first-layer sends bypass this entirely.
+        use shogun_integrations::send_bridge::{route_send, SendRoute};
+        if matches!(route_send(&confirmed.action), SendRoute::Composio) {
+            let policy = load_composio_policy(&app);
+            if !composio_send_allowed(policy) {
+                // Gate is closed: save a draft instead of sending. Body/recipient are NOT logged
+                // (invariant 7). The draft_fallback is the authoritative path for this so we reuse
+                // it directly.
+                let sink = db.traceability_sink();
+                match save_gmail_draft(&connectors.0, &sink, &confirmed.action, &confirmed.preview.full_body) {
+                    Ok(()) => {
+                        return Ok("draft_saved: composio send is off (opt-in required)".into());
+                    }
+                    Err(e) => {
+                        return Ok(format!("draft_save_failed: composio send is off (opt-in required); draft error: {e}"));
+                    }
+                }
+            }
+            // Gate is open — require the Composio API key before proceeding.
+            let composio_key = composio_api_key()
+                .filter(|k| !k.trim().is_empty())
+                .ok_or_else(|| "Composio key not set — add it in settings to send".to_string())?;
+            let composio_user = std::env::var("SHOGUN_COMPOSIO_USER_ID").unwrap_or_default();
+            let composio = ComposioSendTransport::new(HttpComposioApi::new(composio_key)?, composio_user);
+            let runtime = connectors.0.clone();
+            let first_layer = FirstLayerSendTransport::new(&connectors.0);
+            let draft_runtime = runtime.clone();
+            let draft_sink = db.traceability_sink();
+            let routed = RoutedSendTransport::new(
+                composio,
+                first_layer,
+                Box::new(move |action, body| save_gmail_draft(&draft_runtime, &draft_sink, action, body)),
+            );
+            return match execute_send(&confirmed, &routed, &db.traceability_sink()) {
+                SendExecOutcome::Sent => Ok("sent".into()),
+                SendExecOutcome::Failed(e) => Ok(format!("failed:{e}")),
+            };
+        }
 
-        match execute_send(&confirmed, &routed, &db.traceability_sink()) {
+        // --- First-layer send (Slack / calendar / GitHub): no Composio gate, no Composio key ----
+        // We confirmed above (the `SendRoute::Composio` branch returned early) that this action is
+        // NOT an email send, so `FirstLayerSendTransport` alone is the right executor — no Composio
+        // client or key is needed or consulted.
+        let first_layer = FirstLayerSendTransport::new(&connectors.0);
+        match execute_send(&confirmed, &first_layer, &db.traceability_sink()) {
             SendExecOutcome::Sent => Ok("sent".into()),
             SendExecOutcome::Failed(e) => Ok(format!("failed:{e}")),
         }
@@ -242,5 +343,40 @@ pub mod mac {
         security_framework::passwords::get_generic_password(KEYCHAIN_SERVICE, COMPOSIO_KEY_ACCOUNT)
             .ok()
             .and_then(|b| String::from_utf8(b).ok())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// Default policy: draft_stop = true, consent_acknowledged = false → blocked.
+        #[test]
+        fn default_policy_blocks_send() {
+            let policy = ComposioPolicy::default();
+            assert!(policy.draft_stop, "draft_stop must default ON");
+            assert!(!policy.consent_acknowledged, "consent must default NOT acknowledged");
+            assert!(!composio_send_allowed(policy), "default policy must block the send");
+        }
+
+        /// consent = true, draft_stop = true → still blocked (draft-stop gate).
+        #[test]
+        fn consent_true_draftstop_true_blocks_send() {
+            let policy = ComposioPolicy { consent_acknowledged: true, draft_stop: true };
+            assert!(!composio_send_allowed(policy), "draft-stop ON must block even with consent");
+        }
+
+        /// consent = false, draft_stop = false → blocked (consent gate).
+        #[test]
+        fn consent_false_draftstop_false_blocks_send() {
+            let policy = ComposioPolicy { consent_acknowledged: false, draft_stop: false };
+            assert!(!composio_send_allowed(policy), "no consent must block even when draft-stop is OFF");
+        }
+
+        /// consent = true, draft_stop = false → allowed (both gates open).
+        #[test]
+        fn consent_true_draftstop_false_allows_send() {
+            let policy = ComposioPolicy { consent_acknowledged: true, draft_stop: false };
+            assert!(composio_send_allowed(policy), "consent + draft-stop OFF must allow the send");
+        }
     }
 }
