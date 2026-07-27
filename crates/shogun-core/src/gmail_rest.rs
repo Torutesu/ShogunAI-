@@ -41,7 +41,10 @@ impl<P: TokenProvider> GmailRestRpc<P> {
         serde_json::from_str(&text).map_err(|_| "gmail response was not valid json".to_string())
     }
 
-    /// threads.list → 各 threads.get(format=metadata) → 記録配列 → エンベロープ。
+    /// threads.list → 各 threads.get(format=full) → 記録配列 → エンベロープ。
+    ///
+    /// `format=full` にすることで `payload.parts`/`body.data` が含まれ、
+    /// `record_from_thread` が text/plain 本文を base64url デコードして `body` フィールドに入れる。
     fn search_threads(&self, token: &str) -> Result<Value, String> {
         let list = self.get_json(
             token,
@@ -54,10 +57,8 @@ impl<P: TokenProvider> GmailRestRpc<P> {
             .unwrap_or_default();
         let mut records = Vec::new();
         for id in ids {
-            // metadata フォーマットで Subject/From/Date のみ（本文は引かない＝軽い）。
-            let url = format!(
-                "{GMAIL_BASE}/threads/{id}?format=metadata&metadataHeaders=Subject&metadataHeaders=From"
-            );
+            // format=full で payload.parts/body.data を含む完全なスレッドを取得する。
+            let url = format!("{GMAIL_BASE}/threads/{id}?format=full");
             if let Ok(thread) = self.get_json(token, &url) {
                 records.push(record_from_thread(&thread));
             }
