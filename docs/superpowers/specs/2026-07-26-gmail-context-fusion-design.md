@@ -211,3 +211,27 @@ build_reply_context(on_screen_selector):
   Gemini で 403 になったプロジェクトとは別プロジェクトで作成推奨
 - Composio APIキー（Keychain）+ `SHOGUN_COMPOSIO_USER_ID`。送信検証にのみ必要。読み取り＋融合は
   Composio 無しで検証可能
+
+---
+
+## 追記（2026-07-27）: Gmail を全面 Composio 経由に変更
+
+当初この設計は「MCP 非依存で Gmail REST 直接読み取り、送信のみ Composio」だった。その後ユーザー判断で **Gmail の読み取り・下書き・送信すべてを Composio 経由**にした。
+
+### 動機
+- Google 公式リモート MCP は Developer Preview で実接続できない可能性が高い
+- 認証情報を **Composio APIキー＋user id の1組**に集約し、Google Cloud の OAuth クライアント作成を不要にしたい
+
+### 受容したトレードオフ
+- **受信箱の内容が第三者(Composio)を経由する。** 不変条件3（第三者露出の最小化）の原則に対する明示的・記録済みの例外（CLAUDE.md「連携実装ルール」に明記）
+
+### 実装差分（設計 §2 の置き換え）
+- transport 継ぎ目 `McpRpc` の実装を `GmailRestRpc`（Gmail REST 直＋OAuth）から **`ComposioReadRpc`**（`HttpComposioApi` で Composio ツールを呼ぶ）に差し替え。`GmailRestRpc`/`gmail_rest.rs` は撤去
+- Composio ツール: 読み取り `GMAIL_FETCH_EMAILS` / `GMAIL_FETCH_MESSAGE_BY_THREAD_ID`、下書き `GMAIL_CREATE_EMAIL_DRAFT`、送信 `GMAIL_SEND_EMAIL`（既存）
+- **`gmail_shape`（完全本文抽出・base64urlデコード・MIME walk）はそのまま再利用**。Composio が Gmail ネイティブなメッセージ形（`messageId`/`threadId`/`subject`/`snippet`/`payload`/`internalDate`）を `{data, successful}` で返すため、正規化（`parse_items`）・ingest・融合は無改修
+- 認証情報: APIキーは Keychain、user id は非秘匿として `composio.json`。キー/user id 保存時にコネクタランタイムを再構築
+- **同意を読み取りにも適用**: 同期ポーラーは `consent_acknowledged` が false ならスキップ。送信は L3＋draft-stop 維持
+- **読み取り egress のトレーサビリティ**: 成功時に `Route::Composio, third_party=true`、チャンクは空（第三者境界の記録のみ、内容は残さない）
+
+### 未検証（要 Composio アカウント）
+- Composio の `data` 直下の正確なネスト（`data.messages` 等）とフィールド名は、実接続で最終確認が必要。抽出は `composio_read.rs` の `extract_messages` に隔離済みで、初回ライブコールで直せる
