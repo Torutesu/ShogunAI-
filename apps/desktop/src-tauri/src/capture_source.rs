@@ -145,14 +145,9 @@ mod mac {
         })
     }
 
-    /// The thread key of the currently focused window, matching what the capture writer derives
-    /// for the same focus — so the warmed context is keyed exactly as the events are.
-    pub fn focused_thread_key() -> Option<String> {
-        focused_thread_key_and_title().map(|(key, _)| key)
-    }
-
-    /// Like [`focused_thread_key`] but also returns the raw window title. Used by the fusion path
-    /// so `build_reply_context_for_screen` can match the on-screen title against Gmail threads.
+    /// Returns the thread key of the currently focused window, plus the raw window title. Used by
+    /// the fusion path so `build_reply_context_for_screen` can match the on-screen title against
+    /// Gmail threads.
     fn focused_thread_key_and_title() -> Option<(String, Option<String>)> {
         let front = frontmost_app()?;
         let title = focused_window(front.pid)?.title();

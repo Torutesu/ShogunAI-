@@ -20,6 +20,7 @@ pub mod mac {
     use shogun_agents::producer::{propose, ProposedSend};
     use shogun_core::composio_send::HttpComposioApi;
     use shogun_core::daemon::Db;
+    use shogun_core::llm::traceability::{Route, TraceRecord, TraceabilitySink};
     use shogun_core::send_exec::{
         execute_send, ComposioSendTransport, FirstLayerSendTransport, RoutedSendTransport,
         SendExecOutcome,
@@ -189,10 +190,11 @@ pub mod mac {
         let runtime = connectors.0.clone();
         let first_layer = FirstLayerSendTransport::new(&connectors.0);
         let draft_runtime = runtime.clone();
+        let draft_sink = db.traceability_sink();
         let routed = RoutedSendTransport::new(
             composio,
             first_layer,
-            Box::new(move |action, body| save_gmail_draft(&draft_runtime, action, body)),
+            Box::new(move |action, body| save_gmail_draft(&draft_runtime, &draft_sink, action, body)),
         );
 
         match execute_send(&confirmed, &routed, &db.traceability_sink()) {
@@ -202,8 +204,11 @@ pub mod mac {
     }
 
     /// FR-C2-05 fallback: save a Gmail draft (first-layer L2) when a Composio send fails.
+    /// Records traceability (invariant 3) only on a successful egress; a failed write traces nothing
+    /// (mirrors `execute_send` — nothing left the device, so nothing is recorded).
     fn save_gmail_draft(
         runtime: &std::sync::Arc<Mutex<Runtime>>,
+        sink: &impl TraceabilitySink,
         action: &SendAction,
         body: &str,
     ) -> Result<(), String> {
@@ -217,7 +222,19 @@ pub mod mac {
         // FR-C2-05 fallback never wrote a draft. `gmail_shape::draft_request_body` has a matching test.
         let args = json!({ "to": to, "subject": subject, "body": mail_body });
         let rt = runtime.lock().map_err(|_| "runtime lock poisoned".to_string())?;
-        rt.execute_write_owned(shogun_mcp::scope::Service::Gmail, "draft_create_update", args).map(|_| ())
+        rt.execute_write_owned(shogun_mcp::scope::Service::Gmail, "draft_create_update", args).map(|_| ())?;
+        // Record traceability only on success: the draft body just left the device to Google via
+        // GmailRestRpc. Route::Mcp = first-layer direct-to-Google; third_party = false (Composio
+        // is the third-party arm; this fallback bypasses it). Chunk is digested and dropped — body
+        // text never reaches storage (G8 / invariant 3).
+        sink.record(TraceRecord::for_chunk(
+            Route::Mcp,
+            "draft_create",
+            "gmail",
+            &mail_body,
+            false,
+        ));
+        Ok(())
     }
 
     /// The Composio API key is a plain secret (not a TokenSet) — read it directly from the Keychain.
