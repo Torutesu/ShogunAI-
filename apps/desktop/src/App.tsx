@@ -1068,6 +1068,7 @@ interface ComposioSettingsView {
   key_last4: string;
   draft_stop: boolean;
   consent_acknowledged: boolean;
+  user_id: string;
 }
 
 function ComposioSection(): JSX.Element {
@@ -1076,8 +1077,10 @@ function ComposioSection(): JSX.Element {
     key_last4: "",
     draft_stop: true,
     consent_acknowledged: false,
+    user_id: "",
   });
   const [keyInput, setKeyInput] = useState("");
+  const [userIdInput, setUserIdInput] = useState("");
   const [err, setErr] = useState("");
   // Local checkboxes for the consent disclosure flow
   const [check1, setCheck1] = useState(false);
@@ -1095,6 +1098,20 @@ function ComposioSection(): JSX.Element {
   }, []);
 
   useEffect(refreshSettings, [refreshSettings]);
+
+  // Keep the user ID input field in sync with the stored value.
+  useEffect(() => { setUserIdInput(settings.user_id); }, [settings.user_id]);
+
+  const saveUserId = (): void => {
+    const id = userIdInput.trim();
+    if (!IN_TAURI) {
+      setSettings((s) => ({ ...s, user_id: id }));
+      return;
+    }
+    void invoke("set_composio_user_id", { userId: id })
+      .then(() => refreshSettings())
+      .catch((e) => setErr(String(e)));
+  };
 
   const saveKey = (): void => {
     const k = keyInput.trim();
@@ -1211,6 +1228,33 @@ function ComposioSection(): JSX.Element {
             {t.keyRemove}
           </button>
         ) : null}
+      </div>
+
+      {/* User ID row */}
+      <div className="set__label" style={{ marginTop: 10 }}>{t.composioUserId}</div>
+      <div className="set__hint">{t.composioUserIdHint}</div>
+      <div className="keyrow">
+        <input
+          className="keyrow__input"
+          type="text"
+          placeholder={t.composioUserId}
+          value={userIdInput}
+          autoComplete="off"
+          onChange={(e) => setUserIdInput(e.target.value)}
+          onFocus={() => {
+            if (IN_TAURI) void invoke("focus_field", { focused: true }).catch(() => undefined);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") saveUserId();
+          }}
+        />
+        <button
+          className="keyrow__btn"
+          type="button"
+          onClick={saveUserId}
+        >
+          {t.keySave}
+        </button>
       </div>
 
       {/* Consent flow */}

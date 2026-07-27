@@ -125,6 +125,8 @@ export const STRINGS = {
     composioConsentGranted: "Consent granted",
     composioRevokeConsent: "Revoke",
     composioDraftStop: "Draft-only mode (save a draft instead of sending)",
+    composioUserId: "Composio user ID",
+    composioUserIdHint: "Your Composio account's user identifier for the connected Gmail account.",
     quit: "Quit ShogunAI",
     quitTitle: "Quit ShogunAI",
     minimize: "Minimize to the notch",

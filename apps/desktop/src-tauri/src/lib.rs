@@ -138,6 +138,7 @@ pub fn run() {
         approvals::mac::set_composio_key,
         approvals::mac::clear_composio_key,
         approvals::mac::set_composio_policy,
+        approvals::mac::set_composio_user_id,
         approvals::mac::composio_settings,
         ai_sessions::mac::get_ai_session_import,
         ai_sessions::mac::set_ai_session_import,

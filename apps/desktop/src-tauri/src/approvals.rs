@@ -37,7 +37,7 @@ pub mod mac {
     /// Both fields default to the safe-blocked state: no send can happen without the user
     /// deliberately enabling each gate. Stored at `<app-data>/composio.json`; absent/unreadable →
     /// `Default` (both gates closed). Secrets (the API key) stay in the Keychain (invariant 7).
-    #[derive(serde::Serialize, serde::Deserialize, Clone, Copy)]
+    #[derive(serde::Serialize, serde::Deserialize, Clone)]
     pub(crate) struct ComposioPolicy {
         /// When `true` (default) the send path is blocked even after consent — the user can draft
         /// only. The gate must be explicitly turned OFF to allow a live send (FR-C2-03).
@@ -45,11 +45,15 @@ pub mod mac {
         /// Whether the user has completed the FR-C2-02 opt-in disclosure screen. `false` by
         /// default — no send is ever attempted without an explicit acknowledgement.
         pub consent_acknowledged: bool,
+        /// Composio account user ID for the connected Gmail account. Falls back to the
+        /// `SHOGUN_COMPOSIO_USER_ID` env var when empty. Stored in policy JSON (not a secret).
+        #[serde(default)]
+        pub user_id: String,
     }
 
     impl Default for ComposioPolicy {
         fn default() -> Self {
-            Self { draft_stop: true, consent_acknowledged: false }
+            Self { draft_stop: true, consent_acknowledged: false, user_id: String::new() }
         }
     }
 
@@ -276,7 +280,14 @@ pub mod mac {
             let composio_key = composio_api_key()
                 .filter(|k| !k.trim().is_empty())
                 .ok_or_else(|| "Composio key not set — add it in settings to send".to_string())?;
-            let composio_user = std::env::var("SHOGUN_COMPOSIO_USER_ID").unwrap_or_default();
+            let composio_user = {
+                let p = load_composio_policy(&app);
+                if !p.user_id.trim().is_empty() {
+                    p.user_id
+                } else {
+                    std::env::var("SHOGUN_COMPOSIO_USER_ID").unwrap_or_default()
+                }
+            };
             let composio = ComposioSendTransport::new(HttpComposioApi::new(composio_key)?, composio_user);
             let runtime = connectors.0.clone();
             let first_layer = FirstLayerSendTransport::new(&connectors.0);
@@ -393,6 +404,16 @@ pub mod mac {
         consent || draft_stop
     }
 
+    /// Return a new policy with `user_id` set to `id`, preserving all other fields.
+    fn with_user_id(p: ComposioPolicy, id: &str) -> ComposioPolicy {
+        ComposioPolicy { user_id: id.to_string(), ..p }
+    }
+
+    /// Return a new policy with `draft_stop` and `consent_acknowledged` updated, preserving `user_id`.
+    fn with_flags(p: ComposioPolicy, draft_stop: bool, consent: bool) -> ComposioPolicy {
+        ComposioPolicy { draft_stop, consent_acknowledged: consent, ..p }
+    }
+
     /// Persist the Composio opt-in policy to `<app-data>/composio.json`.
     fn save_composio_policy(app: &tauri::AppHandle, policy: ComposioPolicy) -> Result<(), String> {
         use tauri::Manager;
@@ -404,7 +425,7 @@ pub mod mac {
     }
 
     /// Update the persisted Composio policy. Enforces the invariant that draft_stop may only be
-    /// turned OFF once consent has been acknowledged (FR-C2-02 / FR-C2-03).
+    /// turned OFF once consent has been acknowledged (FR-C2-02 / FR-C2-03). Preserves `user_id`.
     #[tauri::command]
     pub fn set_composio_policy(
         draft_stop: bool,
@@ -414,8 +435,17 @@ pub mod mac {
         if !policy_is_valid(draft_stop, consent_acknowledged) {
             return Err("consent required before enabling sending".into());
         }
-        let policy = ComposioPolicy { draft_stop, consent_acknowledged };
-        save_composio_policy(&app, policy)
+        let existing = load_composio_policy(&app);
+        save_composio_policy(&app, with_flags(existing, draft_stop, consent_acknowledged))
+    }
+
+    /// Persist the Composio user ID (non-secret) to the policy JSON file. Preserves all other
+    /// policy fields. Trims whitespace; an empty string clears the stored ID (env fallback applies).
+    #[tauri::command]
+    pub fn set_composio_user_id(user_id: String, app: tauri::AppHandle) -> Result<(), String> {
+        let trimmed = user_id.trim().to_string();
+        let policy = load_composio_policy(&app);
+        save_composio_policy(&app, with_user_id(policy, &trimmed))
     }
 
     /// The view model returned to the UI for the Composio settings block.
@@ -429,13 +459,16 @@ pub mod mac {
         pub draft_stop: bool,
         /// Whether the user has completed the consent disclosure flow.
         pub consent_acknowledged: bool,
+        /// The stored Composio user ID (non-secret). Empty string if not yet configured.
+        pub user_id: String,
     }
 
-    /// Return the current Composio settings for the UI (key presence, last4, and policy flags).
+    /// Return the current Composio settings for the UI (key presence, last4, policy flags, user ID).
     /// Secrets are NEVER returned in full — only the last 4 characters (invariant 7).
     #[tauri::command]
     pub fn composio_settings(app: tauri::AppHandle) -> ComposioSettingsView {
         let policy = load_composio_policy(&app);
+        let user_id = policy.user_id.clone();
         let (has_key, key_last4) = match composio_api_key() {
             Some(k) if !k.trim().is_empty() => {
                 let k = k.trim();
@@ -447,7 +480,7 @@ pub mod mac {
             }
             _ => (false, String::new()),
         };
-        ComposioSettingsView { has_key, key_last4, draft_stop: policy.draft_stop, consent_acknowledged: policy.consent_acknowledged }
+        ComposioSettingsView { has_key, key_last4, draft_stop: policy.draft_stop, consent_acknowledged: policy.consent_acknowledged, user_id }
     }
 
     #[cfg(test)]
@@ -466,21 +499,21 @@ pub mod mac {
         /// consent = true, draft_stop = true → still blocked (draft-stop gate).
         #[test]
         fn consent_true_draftstop_true_blocks_send() {
-            let policy = ComposioPolicy { consent_acknowledged: true, draft_stop: true };
+            let policy = ComposioPolicy { consent_acknowledged: true, draft_stop: true, user_id: String::new() };
             assert!(!composio_send_allowed(policy), "draft-stop ON must block even with consent");
         }
 
         /// consent = false, draft_stop = false → blocked (consent gate).
         #[test]
         fn consent_false_draftstop_false_blocks_send() {
-            let policy = ComposioPolicy { consent_acknowledged: false, draft_stop: false };
+            let policy = ComposioPolicy { consent_acknowledged: false, draft_stop: false, user_id: String::new() };
             assert!(!composio_send_allowed(policy), "no consent must block even when draft-stop is OFF");
         }
 
         /// consent = true, draft_stop = false → allowed (both gates open).
         #[test]
         fn consent_true_draftstop_false_allows_send() {
-            let policy = ComposioPolicy { consent_acknowledged: true, draft_stop: false };
+            let policy = ComposioPolicy { consent_acknowledged: true, draft_stop: false, user_id: String::new() };
             assert!(composio_send_allowed(policy), "consent + draft-stop OFF must allow the send");
         }
 
@@ -508,6 +541,43 @@ pub mod mac {
         #[test]
         fn composio_policy_valid_consent_draftstop_off() {
             assert!(policy_is_valid(false, true), "draft_stop=false + consent=true must be valid");
+        }
+
+        // ---- user_id field: serde defaults and helper functions -----------------------------
+
+        #[test]
+        fn serde_default_user_id() {
+            let json = r#"{"draft_stop":true,"consent_acknowledged":false}"#;
+            let p: ComposioPolicy = serde_json::from_str(json).expect("deserialize");
+            assert_eq!(p.user_id, "", "user_id should default to empty string");
+        }
+
+        #[test]
+        fn round_trip_all_fields() {
+            let original = ComposioPolicy { draft_stop: false, consent_acknowledged: true, user_id: "test-user-123".to_string() };
+            let json = serde_json::to_string(&original).expect("serialize");
+            let loaded: ComposioPolicy = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(loaded.draft_stop, false);
+            assert_eq!(loaded.consent_acknowledged, true);
+            assert_eq!(loaded.user_id, "test-user-123");
+        }
+
+        #[test]
+        fn with_user_id_preserves_flags() {
+            let p = ComposioPolicy { draft_stop: false, consent_acknowledged: true, user_id: String::new() };
+            let updated = with_user_id(p, "new-user");
+            assert_eq!(updated.user_id, "new-user");
+            assert_eq!(updated.draft_stop, false);
+            assert_eq!(updated.consent_acknowledged, true);
+        }
+
+        #[test]
+        fn with_flags_preserves_user_id() {
+            let p = ComposioPolicy { draft_stop: true, consent_acknowledged: false, user_id: "preserved-user".to_string() };
+            let updated = with_flags(p, false, true);
+            assert_eq!(updated.user_id, "preserved-user");
+            assert_eq!(updated.draft_stop, false);
+            assert_eq!(updated.consent_acknowledged, true);
         }
     }
 }
