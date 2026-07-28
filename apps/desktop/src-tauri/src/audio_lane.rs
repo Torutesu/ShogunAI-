@@ -59,10 +59,15 @@ impl SegmentSink for DbSink {
     }
 }
 
-/// Where the bundled whisper model lives inside the packaged app. Mirrors the e5 embedding model
-/// resolution (`embedding_model_paths` in lib.rs): resource dir in a bundle, absent in a bare dev
-/// checkout — and absence degrades to notes-only rather than erroring.
+/// Where the bundled whisper model lives. Mirrors the e5 embedding model resolution
+/// (`embedding_model_paths` in lib.rs): a dev checkout points `SHOGUN_WHISPER_MODEL` at whatever
+/// `scripts/fetch-whisper-model.sh` downloaded; a packaged app finds it in the resource dir.
+/// Absence degrades to notes-only rather than erroring.
 fn whisper_model_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    if let Ok(m) = std::env::var("SHOGUN_WHISPER_MODEL") {
+        let p = std::path::PathBuf::from(m);
+        return p.exists().then_some(p);
+    }
     let p = app.path().resource_dir().ok()?.join("models/whisper-small.gguf");
     p.exists().then_some(p)
 }
