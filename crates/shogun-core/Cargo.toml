@@ -36,9 +36,8 @@ db = ["dep:shogun-memory", "dep:rusqlite", "dep:shogun-fusion", "dep:shogun-mcp"
 exec = ["db", "net", "dep:shogun-agents"]
 daemon-server = ["exec", "shogun-mcp/server", "tokio/rt-multi-thread", "tokio/macros"]
 # The MT3 audio lane: the real capture + ASR backends. macOS-only heavy deps (whisper.cpp/Metal,
-# cpal, Core Audio via objc2) are wired in a later task; declared now so the pure-logic modules can
-# cfg-gate their FFI submodules without an `unexpected_cfgs` warning while the feature is OFF.
-audio = []
+# cpal, Core Audio via objc2), so OFF by default — the pure-logic audio tests compile without them.
+audio = ["dep:whisper-rs", "dep:cpal", "dep:objc2-foundation"]
 
 [dependencies]
 tokio = { version = "1", features = ["sync"] }
@@ -62,6 +61,13 @@ shogun-integrations = { path = "../shogun-integrations", features = ["live"], op
 # The `shogun-api` binary composes the shared approval queue (agents) into the server state.
 shogun-agents = { path = "../shogun-agents", optional = true }
 rusqlite = { version = "0.31", features = ["bundled-sqlcipher-vendored-openssl"], optional = true }
+# On-device ASR: whisper.cpp with Metal. Fed in-memory f32 PCM (no file path), so invariant 2 holds.
+whisper-rs = { version = "0.16", features = ["metal"], optional = true }
+# Microphone capture.
+cpal = { version = "0.16", optional = true }
+# NSProcessInfo for the macOS version gate on the system audio tap (system_tap.rs). The Core Audio
+# tap FFI itself is wired on device (Task 13); only the version check is compiled in now.
+objc2-foundation = { version = "0.3", optional = true }
 
 [[bin]]
 name = "shogun-api"
