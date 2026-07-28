@@ -42,7 +42,10 @@ fn main() {
             std::process::exit(2);
         }
     };
-    let asr = match Whisper::load(&model) {
+    // English-base, to mirror the shipped default (MeetingLanguage::English, §8): the probe should
+    // reflect how the app actually transcribes, not whisper's raw per-utterance auto-detect. Pass
+    // Some("ja") here if you are probing a Japanese meeting, or None to exercise the Auto path.
+    let asr = match Whisper::load_with_language(&model, Some("en")) {
         Ok(w) => w,
         Err(e) => {
             eprintln!("whisper load failed: {e}");

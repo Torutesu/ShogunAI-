@@ -21,7 +21,7 @@ use shogun_core::audio::capture::{AudioSource, MultiSource};
 use shogun_core::audio::worker::{SegmentSink, Worker};
 use shogun_core::audio::{Speaker, Utterance};
 use shogun_core::daemon::Db;
-use shogun_core::meeting::settings::AsrModel;
+use shogun_core::meeting::settings::{AsrModel, MeetingLanguage};
 use tauri::Manager;
 
 /// A running audio lane. Dropping the handle without `stop` would leak the thread, so the machine
@@ -86,10 +86,19 @@ fn select_model_path(app: &tauri::AppHandle, model: AsrModel) -> Option<std::pat
     whisper_model_path(app)
 }
 
-/// Start listening for meeting `session_id` with the chosen ASR `model`. Returns `None` (notes
-/// only) whenever any piece of the pipeline is unavailable — this is the degraded, not the error,
-/// path (FR-MT-13, OPEN-07/08).
-pub fn start(app: &tauri::AppHandle, session_id: i64, model: AsrModel) -> Option<Handle> {
+/// Start listening for meeting `session_id` with the chosen ASR `model` and `language`. Returns
+/// `None` (notes only) whenever any piece of the pipeline is unavailable — this is the degraded,
+/// not the error, path (FR-MT-13, OPEN-07/08).
+///
+/// `language` fixes the transcription language for the whole session (English-primary policy, §8):
+/// English/Japanese pin whisper; Auto detects once and locks (see whisper.rs). It is threaded in as
+/// its own param, alongside `model`, so the meeting machine's settings decide it.
+pub fn start(
+    app: &tauri::AppHandle,
+    session_id: i64,
+    model: AsrModel,
+    language: MeetingLanguage,
+) -> Option<Handle> {
     // The database the sink writes into. Absent DB means nowhere to store the transcript, so there
     // is no point listening.
     let db = app.try_state::<Db>().map(|s| s.inner().clone());
@@ -105,7 +114,12 @@ pub fn start(app: &tauri::AppHandle, session_id: i64, model: AsrModel) -> Option
         eprintln!("[meeting] no whisper model bundled; notes only");
         return None;
     };
-    let asr = match shogun_core::audio::asr::whisper::Whisper::load(&model_path.to_string_lossy()) {
+    // The language is fixed for the session here: `whisper_code()` gives whisper `Some("en")`/
+    // `Some("ja")` for a chosen language, or `None` for Auto (detect-once-then-lock inside whisper).
+    let asr = match shogun_core::audio::asr::whisper::Whisper::load_with_language(
+        &model_path.to_string_lossy(),
+        language.whisper_code(),
+    ) {
         Ok(w) => w,
         Err(e) => {
             eprintln!("[meeting] whisper model present but failed to load ({e}); notes only");
