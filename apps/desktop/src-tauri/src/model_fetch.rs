@@ -31,13 +31,12 @@ const TURBO_FILE: &str = "ggml-large-v3-turbo.bin";
 
 /// The expected SHA256 of the fetched file, lowercase hex.
 ///
-/// `None` means "skip verification" — used only until the file has been fetched once and its hash
-/// recorded. Skipping is loud (a warning log) rather than silent: an unverified model asset is a
-/// supply-chain gap we want visible, but a *fabricated* hash would make turbo never load, which is
-/// worse. When a real hash is known, set this to `Some("…")` and verification becomes mandatory.
-///
-// TODO(#7): pin SHA once the file is fetched once and hashed.
-const TURBO_SHA256: Option<&str> = None;
+/// `None` would mean "skip verification" (loud warning). Now pinned: the SHA-256 of
+/// `ggml-large-v3-turbo.bin` as fetched from `ggerganov/whisper.cpp` on 2026-07-28. A mismatch
+/// makes `ensure_turbo` reject the download and fall back to the bundled small model, so a
+/// corrupted or swapped asset can never be loaded.
+const TURBO_SHA256: Option<&str> =
+    Some("1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69");
 
 /// Return the path to the turbo model, fetching it once if needed. `None` on any failure — the
 /// caller degrades to the bundled small model.
