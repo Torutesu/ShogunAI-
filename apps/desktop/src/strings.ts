@@ -78,6 +78,17 @@ export const STRINGS = {
     dark: "Dark",
     light: "Light",
     auto: "Auto",
+    // Castle Position (issue #20) — where SHOGUN resides on screen and expands from. "Castle"
+    // because it's where SHOGUN keeps watch from; six resting places, the notch by default.
+    castle: "Castle Position",
+    castleHint:
+      "Where SHOGUN lives on screen. Edges rest as a thin line, corners as a small box; hover to expand from wherever it's anchored.",
+    castleNotch: "Notch",
+    castleLeftEdge: "Left edge",
+    castleRightEdge: "Right edge",
+    castleBottomLeft: "Bottom left",
+    castleBottomCenter: "Bottom",
+    castleBottomRight: "Bottom right",
     behavior: "When you look away",
     stayOpen: "Stay open",
     autoHide: "Auto-hide",
