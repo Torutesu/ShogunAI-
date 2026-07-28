@@ -18,6 +18,10 @@ on:
       - "apps/desktop/**"
       - "crates/**"
 
+concurrency:
+  group: phase0-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   smoke:
     name: on-runner smoke (Apple Silicon, pseudo-notch)
@@ -36,6 +40,8 @@ jobs:
       - name: Build (frontend + release shell)
         run: |
           pnpm install --frozen-lockfile
+          # Generated (gitignored) token CSS the desktop entry imports.
+          pnpm --filter @shogun-ai/tokens build
           pnpm --filter @shogun-ai/desktop build:vite
           cargo build -p shogun-desktop-spike --release
 

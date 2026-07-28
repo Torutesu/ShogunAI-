@@ -7,18 +7,32 @@ name: ci
 # shogun-memory, shogun-fusion, etc. come online — all covered by the workspace commands.
 
 on:
+  # Push only fires on the integration branch(es). Feature branches are validated by the
+  # pull_request event instead — otherwise every commit on an open PR runs the whole matrix
+  # twice (once for push, once for pull_request), which is where most of the CI noise came from.
   push:
-    branches: ["**"]
+    branches:
+      - "claude/shogunai-ui-lp-lisvsd" # current default/integration branch
+      - "main"
+      - "master"
     paths:
       - "crates/**"
       - "apps/desktop/**"
+      - "packages/**"
       - "Cargo.toml"
       - ".github/workflows/ci.yml"
   pull_request:
     paths:
       - "crates/**"
       - "apps/desktop/**"
+      - "packages/**"
       - "Cargo.toml"
+
+# Supersede in-flight runs: a new push/PR-sync cancels the previous run for the same ref, so
+# rapid pushes stop piling expensive (macos-14) jobs on top of each other.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   rust:
@@ -88,6 +102,10 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # @shogun-ai/tokens' dist/ is generated (gitignored), so it does not exist after a clean
+      # checkout. The desktop entry imports `@shogun-ai/tokens/css` (-> dist/tokens.css); without
+      # this build Rollup can't resolve it and the vite build fails on a fresh runner.
+      - run: pnpm --filter @shogun-ai/tokens build
       - run: pnpm --filter @shogun-ai/desktop typecheck
       - run: pnpm --filter @shogun-ai/desktop build:vite
 
@@ -108,6 +126,8 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # Generated (gitignored) token CSS the desktop entry imports — see the desktop-frontend job.
+      - run: pnpm --filter @shogun-ai/tokens build
       # tauri's generate_context! needs the frontend dist to exist at compile time.
       - run: pnpm --filter @shogun-ai/desktop build:vite
       - name: clippy the macOS shell (warnings deny via workspace lints)
