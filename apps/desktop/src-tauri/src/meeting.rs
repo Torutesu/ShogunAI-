@@ -705,6 +705,52 @@ use shogun_core::meeting::gate::OfferGate;
         db(&app).and_then(|db| db.meeting_recap(id))
     }
 
+    /// One suggested next action, as shown in the Recap card. `owner` is who the model thought
+    /// should do it, when the transcript made that clear (never invented). L1/L3 discipline: this
+    /// is a *suggestion* the panel displays, never something the app will do (invariant 4) — the
+    /// card carries no "send"/"do it" affordance.
+    #[derive(Serialize)]
+    pub struct NextActionView {
+        text: String,
+        owner: Option<String>,
+    }
+
+    /// The model-generated minutes for the last finished meeting, shaped for the webview.
+    ///
+    /// The two structured columns are stored as JSON strings; we deserialize each here and, on a
+    /// parse error, fall back to an empty list rather than failing the whole read (a malformed
+    /// column must not blank the card — the degraded Recap is still shown underneath).
+    #[derive(Serialize)]
+    pub struct MinutesView {
+        summary: String,
+        decisions: Vec<String>,
+        next_actions: Vec<NextActionView>,
+    }
+
+    /// The model-generated minutes for the most recently finished meeting (MT4, FR-MT-19), or
+    /// `None` if the Batch lane has not produced them yet.
+    ///
+    /// This is layered on top of [`meeting_recap`], not a replacement: the degraded Recap shows the
+    /// moment the interval closes, and these minutes arrive later (the panel refetches on the
+    /// `meeting_recap` event). Reads the same `last_session_id` as [`meeting_recap`].
+    #[tauri::command]
+    pub fn meeting_recap_minutes(app: tauri::AppHandle) -> Option<MinutesView> {
+        let id = LANE.lock().ok().and_then(|g| g.as_ref().and_then(|l| l.last_session_id))?;
+        let stored = db(&app).and_then(|db| db.meeting_recap_full(id))?;
+        let decisions: Vec<String> =
+            serde_json::from_str(&stored.decisions_json).unwrap_or_default();
+        let next_actions: Vec<shogun_core::meeting::minutes::NextAction> =
+            serde_json::from_str(&stored.next_actions_json).unwrap_or_default();
+        Some(MinutesView {
+            summary: stored.summary,
+            decisions,
+            next_actions: next_actions
+                .into_iter()
+                .map(|a| NextActionView { text: a.text, owner: a.owner })
+                .collect(),
+        })
+    }
+
     /// Current settings for the Settings UI.
     #[tauri::command]
     pub fn get_meeting_settings() -> Settings {

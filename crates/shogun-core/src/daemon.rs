@@ -557,6 +557,18 @@ impl Db {
         Some(crate::meeting::recap::degraded(&session, notes, captured as usize))
     }
 
+    /// The stored (model-generated) minutes for an interval (MT4, FR-MT-19), if they exist yet.
+    ///
+    /// Unlike [`Self::meeting_recap`] (the always-available degraded Recap), this returns `None`
+    /// until the Batch lane has finished and written a row: the minutes land asynchronously after
+    /// the degraded Recap is already on screen, so the panel refetches on the `meeting_recap`
+    /// event. The two structured columns come back as raw JSON strings — the wiring layer
+    /// deserializes them (never panicking on a bad column).
+    pub fn meeting_recap_full(&self, session_id: i64) -> Option<shogun_memory::meeting_recaps::StoredRecap> {
+        let conn = self.conn.lock().ok()?;
+        shogun_memory::meeting_recaps::get(&conn, session_id).ok().flatten()
+    }
+
     /// Confidence-gated memory lines for the inline draft prompt ([`crate::inline::compose_inline`]):
     /// the commitments the user owes and the open loops in play, passed through the FR-ST-20 gate
     /// (High stated as fact, Medium prefixed `possibly:`, Low dropped) so a low-confidence guess is
