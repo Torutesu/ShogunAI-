@@ -1659,3 +1659,54 @@ git commit -m "docs(meeting): MT3完了を進捗表に反映＋V9ロールバッ
 3. `Worker` の複数ソース対応 — Task 13 Step 3 で core を一般化。
 4. VAD 閾値・ハングオーバの実機チューニング。
 5. turbo モデルのフェッチ・ハッシュ検証。
+
+---
+
+# 追補（2026-07-28）: 相手音声の tap FFI と残りオープン事項
+
+MT3 の初回実装で `create_tap_stream` はスタブ（`Err`）のまま出荷したため、現状は mic-only。
+オーナー指示により (1) tap FFI を実装、(3) 残りオープン事項を進める。
+
+## Task 15: Core Audio process tap FFI（相手音声＝Speaker::Other）
+
+**Files:**
+- Modify: `crates/shogun-core/src/audio/capture/system_tap.rs`（`create_tap_stream` を実装）
+- Modify: `crates/shogun-core/Cargo.toml`（`objc2-core-audio` + `objc2-core-audio-types` を `audio` feature に追加）
+
+**アプローチ（macOS 14.4+ / `insidegui/AudioCap` リファレンスに準拠）:**
+1. `CATapDescription`（`init(stereoGlobalTapButExcludeProcesses: [])` 相当＝全システム音、自プロセス除外）を objc2 で生成。private / mute-behavior=unmuted / name を設定。
+2. `AudioHardwareCreateProcessTap(&desc, &mut tap_id)` でタップobjectを作成（`objc2-core-audio`）。
+3. タップUIDを含む集約デバイスを `AudioHardwareCreateAggregateDevice` で作成（sub-device にタップUID）。
+4. 集約デバイスに `AudioDeviceCreateIOProcIDWithBlock` で IOProc を設置し、`AudioDeviceStart`。IOProc 内で受け取った f32 バッファを `resample::to_mono`→`to_16k_mono` して `tx.send()`。IOProc からは重い処理をせずチャネルに流すだけ。
+5. `SystemTap::stop`/`Drop` で `AudioDeviceStop`＋IOProc除去＋`AudioHardwareDestroyAggregateDevice`＋`AudioHardwareDestroyProcessTap`。
+6. TCC 権限拒否や作成失敗は `Ok(None)`（mic-only 縮退）。14.4+ ゲート（`macos_at_least(14,4)`）は維持。
+7. 不変条件2：バッファは RAM のチャネルのみ。ファイル化しない。
+
+**検証:**
+- `cargo build -p shogun-core --features audio` 成功、`--features audio` clippy 無警告。
+- feature OFF の 19 テスト維持。
+- 実機検証（実 Zoom/Meet で Other 行が入るか、TCC プロンプト、デバイスの解放）は**ユーザー環境**で行う（本タスクは compiles-and-links まで）。IOProc のスレッド安全性・`stop` が即座に返ることを実機で確認。
+
+**エスカレーション:** `objc2-core-audio` に必要な関数（`AudioHardwareCreateProcessTap` 等）が無い/シグネチャが違う場合は、`extern "C"` 直接宣言＋`objc2` の `extern_class!` で `CATapDescription` を最小定義して補う。`flexaudio-os-macos` クレートで代替できるなら検討可（ただし依存の重さと RAM-only 制約を確認）。詰まったら BLOCKED で具体エラーを報告。
+
+**Commit:** `feat(core): Core Audio process tap で相手音声を取得 (#7)`
+
+## Task 16: 残りオープン事項
+
+**16a. turbo モデルの初回フェッチ（settings.asr_model == Turbo 時）**
+- Files: `apps/desktop/src-tauri/src/audio_lane.rs`（モデルパス選択）＋新規 `apps/desktop/src-tauri/src/model_fetch.rs`。
+- 設定が Turbo のとき、`app_data_dir()/models/whisper-large-v3-turbo-q5_0.gguf` が無ければ HuggingFace `ggml-org/whisper.cpp`（または ggerganov ミラー）から**ピン留めSHA256付き**でダウンロード→検証→保存。検証失敗は破棄して small にフォールバック。ダウンロードは `net` feature の reqwest blocking を利用（無ければ ureq を検討）。進捗はログのみ。
+- `whisper_model_path` を「Turbo かつ取得済みなら turbo、なければ bundled small」に変更。
+- **不変条件**: モデルは静的アセット（ユーザー音声でない）。Keychain 対象外。
+- Commit: `feat(desktop): turboモデルの初回フェッチとsettings連動 (#7)`
+
+**16b. VAD パラメータの露出＋config化**
+- Files: `crates/shogun-core/src/audio/vad.rs`（`Vad::with_params{rms_floor, hangover_ms, min_ms, max_ms}` を追加、`new()` は既定値でそれを呼ぶ）＋ `meeting/settings.rs`（任意: `vad_sensitivity` を low/med/high で持ち、med=既定）。
+- 既存テストは `new()` 既定で不変。`with_params` の単体テスト追加。
+- Commit: `feat(core): VADパラメータを設定可能にする (#7)`
+
+**16c. confidence 正規化の確認と文書化**
+- 現状は「セグメントの平均トークン確率を [0,1] にクランプ」。whisper-rs 0.16 の `token_probability()` は既に [0,1] なので妥当。special/timestamp トークンを平均から除外できるなら除外し、`whisper.rs` の doc コメントに正規化の定義を明記。式変更が不要なら「as-is で妥当」と設計書§11に追記。
+- Commit: `docs+refactor(core): confidence正規化を明文化 (#7)`
+
+**検証（Task 16 全体）:** 該当クレートの test + clippy 緑、desktop ビルド緑。
