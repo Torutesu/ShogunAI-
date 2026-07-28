@@ -1710,3 +1710,53 @@ MT3 の初回実装で `create_tap_stream` はスタブ（`Err`）のまま出�
 - Commit: `docs+refactor(core): confidence正規化を明文化 (#7)`
 
 **検証（Task 16 全体）:** 該当クレートの test + clippy 緑、desktop ビルド緑。
+
+---
+
+# 追補2（2026-07-28）: MT4 議事録生成（要約＋決定＋Next Action / 生成＋保存まで）
+
+オーナー決定: 中身=要約+決定+Next Action / スコープ=生成+保存まで（UIカードは最小）。
+要約は不変条件5どおり **Select KK Batch**（`llm::AnthropicBatchClient`）。会話チャンク送信は
+既存トレース（`submit` が item 毎に記録）に乗る。Batch は非同期（数分）なので、MT2 の縮退
+Recap を即表示し、本要約が届いたら差し替え。
+
+## Slice 1（決定論・TDD・完全検証可能）
+
+### V10 マイグレーション + リポジトリ
+- `crates/shogun-memory/src/migrations/V10__meeting_recaps.sql`:
+  ```sql
+  CREATE TABLE meeting_recaps (
+    id INTEGER PRIMARY KEY,
+    session_id INTEGER NOT NULL UNIQUE REFERENCES sessions (id),
+    summary TEXT NOT NULL,
+    decisions TEXT NOT NULL,     -- JSON配列（文字列）
+    next_actions TEXT NOT NULL,  -- JSON配列（{text, owner?}）
+    model TEXT NOT NULL,         -- 生成モデル名（provenance）
+    created_at INTEGER NOT NULL
+  ) STRICT;
+  ```
+  session_id UNIQUE（1会議1議事録・upsert）。LATEST_SCHEMA_VERSION を 10 に更新。
+- `crates/shogun-memory/src/meeting_recaps.rs`: `save(conn, session_id, &MeetingMinutes, model, now)` /
+  `get(conn, session_id) -> Option<StoredRecap>`。テキストは redact 通過。in-memory DB でテスト。
+
+### 純ロジック: プロンプト構築とパース
+- `crates/shogun-core/src/meeting/minutes.rs`:
+  - 型 `MeetingMinutes { summary: String, decisions: Vec<String>, next_actions: Vec<NextAction> }`,
+    `NextAction { text: String, owner: Option<String> }`（serde）。
+  - `build_prompt(lines: &[TranscriptLine], notes: Option<&str>, lang: &str) -> String`:
+    transcript（speaker付き）＋notes を与え、**指定言語（既定en）で** JSON を返せと指示。
+    決定事項/Next Action を構造で出させる。送信を伴う action も「提案」に留める旨を明記
+    （不変条件4）。
+  - `parse_minutes(model_output: &str) -> Result<MeetingMinutes, MinutesError>`: モデル出力から
+    JSON を抽出しパース。壊れていれば Err（呼び出し側は縮退Recapのまま）。寛容にパース。
+  - すべて純ロジックで単体テスト（プロンプトに transcript/notes/言語が入る、正常JSON→構造、
+    壊れたJSON→Err、送信系actionが提案化）。
+
+## Slice 2（配線・統合）
+- `traceview.rs` に `Purpose::MeetingRecap` 追加。
+- desktop: `Effect::BuildRecap` で当該 session の `transcript_segments`＋`session_notes` を集め、
+  `minutes::build_prompt` → 既存 `AnthropicBatchClient`（Dream Cycle/Morning Brief と同じ構築経路）
+  の `run(items, max_polls, sleep)` を**バックグラウンドタスク**で実行 → `parse_minutes` →
+  `meeting_recaps::save` → `app.emit("meeting_recap", …)`。失敗は縮退Recapのまま（不変条件・FR-MT-19）。
+- 検証: memory test + core test + desktop build。要約の実LLM実行は鍵が要るので、パースは
+  固定サンプルで単体検証し、実Batchはユーザーの鍵で後日。
