@@ -1,0 +1,146 @@
+//! The MT3 audio lane: the desktop side of capture → VAD → ASR → transcript (FR-MT-13).
+//!
+//! The pipeline itself is pure logic in `shogun_core::audio` and is tested there. This file does
+//! only the parts that cannot be pure: it opens the real macOS backends (mic via cpal, system tap
+//! via Core Audio), owns the polling thread, and drops finished lines into the meeting DB.
+//!
+//! **Degradation is the rule, not the exception.** A missing whisper model, a denied microphone,
+//! or a macOS without the system tap must never take the meeting down: the interval and the user's
+//! notes still record. Every failure here logs `[meeting] … ; notes only` and returns `None`, and
+//! the caller (`meeting.rs`) simply carries no audio handle.
+//!
+//! Invariant 2 holds by construction: the waveform lives only in the `Worker`'s buffers and is
+//! dropped the moment a line is transcribed — this file writes text, never audio.
+
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::thread::JoinHandle;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use shogun_core::audio::capture::{AudioSource, MultiSource};
+use shogun_core::audio::worker::{SegmentSink, Worker};
+use shogun_core::audio::{Speaker, Utterance};
+use shogun_core::daemon::Db;
+use tauri::Manager;
+
+/// A running audio lane. Dropping the handle without `stop` would leak the thread, so the machine
+/// always takes it back through `stop` on `Effect::StopAudio`.
+pub struct Handle {
+    stop: Arc<AtomicBool>,
+    join: Option<JoinHandle<()>>,
+}
+
+fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// Persists finished transcript lines against one meeting interval. Owns a cloned `Db` (Arc-backed,
+/// so the clone shares the same connection) and the interval it is writing to.
+struct DbSink {
+    db: Db,
+    session_id: i64,
+}
+
+impl SegmentSink for DbSink {
+    fn emit(&mut self, u: &Utterance, text: &str, confidence: f64) {
+        // The capture source decides the speaker: mic input is me, the system tap is everyone else.
+        // We never infer, so there is no `Unknown` on this path.
+        let speaker = match u.speaker {
+            Speaker::Me => shogun_memory::transcript_segments::Speaker::Me,
+            Speaker::Other => shogun_memory::transcript_segments::Speaker::Other,
+        };
+        // Best-effort: `append_transcript` swallows write failures so a hiccup drops one line
+        // rather than tearing down capture.
+        self.db.append_transcript(self.session_id, u.started_at, speaker, text, confidence);
+    }
+}
+
+/// Where the bundled whisper model lives inside the packaged app. Mirrors the e5 embedding model
+/// resolution (`embedding_model_paths` in lib.rs): resource dir in a bundle, absent in a bare dev
+/// checkout — and absence degrades to notes-only rather than erroring.
+fn whisper_model_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    let p = app.path().resource_dir().ok()?.join("models/whisper-small.gguf");
+    p.exists().then_some(p)
+}
+
+/// Start listening for meeting `session_id`. Returns `None` (notes only) whenever any piece of the
+/// pipeline is unavailable — this is the degraded, not the error, path (FR-MT-13, OPEN-07/08).
+pub fn start(app: &tauri::AppHandle, session_id: i64) -> Option<Handle> {
+    // The database the sink writes into. Absent DB means nowhere to store the transcript, so there
+    // is no point listening.
+    let db = app.try_state::<Db>().map(|s| s.inner().clone());
+    let Some(db) = db else {
+        eprintln!("[meeting] no database for the audio lane; notes only");
+        return None;
+    };
+
+    // The ASR model. Absent in a dev checkout without the fetch script; a real load failure is the
+    // same outcome here — notes only — but is worth logging distinctly.
+    let Some(model_path) = whisper_model_path(app) else {
+        eprintln!("[meeting] no whisper model bundled; notes only");
+        return None;
+    };
+    let asr = match shogun_core::audio::asr::whisper::Whisper::load(&model_path.to_string_lossy()) {
+        Ok(w) => w,
+        Err(e) => {
+            eprintln!("[meeting] whisper model present but failed to load ({e}); notes only");
+            return None;
+        }
+    };
+
+    // The microphone (speaker = me). Denied permission or no input device → notes only.
+    let mic = match shogun_core::audio::capture::mic::Mic::open() {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("[meeting] microphone unavailable ({e}); notes only");
+            return None;
+        }
+    };
+
+    // The system tap (speaker = other) is best-effort: `Ok(None)` on macOS < 14.4, and any error
+    // is treated the same — mic-only capture rather than no capture. So a call whose participants'
+    // audio we cannot tap still records the user's own side.
+    let mut sources: Vec<Box<dyn AudioSource>> = vec![Box::new(mic)];
+    match shogun_core::audio::capture::system_tap::SystemTap::open() {
+        Ok(Some(tap)) => sources.push(Box::new(tap)),
+        Ok(None) => eprintln!("[meeting] system audio tap unavailable (macOS < 14.4); mic only"),
+        Err(e) => eprintln!("[meeting] system audio tap failed ({e}); mic only"),
+    }
+
+    let source = MultiSource::new(sources);
+    let mut worker = Worker::new(source, asr);
+    let mut sink = DbSink { db, session_id };
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_flag = stop.clone();
+    let join = std::thread::spawn(move || {
+        // Poll-and-park: drain everything available, and only sleep when there was nothing, so a
+        // busy meeting is transcribed promptly while an idle one costs almost no CPU.
+        while !stop_flag.load(Ordering::Relaxed) {
+            if worker.poll(now_ms(), &mut sink) == 0 {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        }
+        // Flush the final utterance on each speaker and release the devices before the buffers go.
+        worker.stop(now_ms(), &mut sink);
+    });
+
+    eprintln!("[meeting] audio lane started for session {session_id}");
+    Some(Handle { stop, join: Some(join) })
+}
+
+/// Stop the lane: signal the thread and wait for it to flush and release the devices. A missing
+/// handle (audio never started, or already stopped) is a no-op.
+pub fn stop(handle: Option<Handle>) {
+    let Some(mut handle) = handle else { return };
+    handle.stop.store(true, Ordering::Relaxed);
+    if let Some(join) = handle.join.take() {
+        // Ignore a poisoned/panicked capture thread: we are tearing down anyway, and a panic there
+        // must not propagate into the meeting machine.
+        let _ = join.join();
+    }
+    eprintln!("[meeting] audio lane stopped");
+}

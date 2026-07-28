@@ -10,9 +10,10 @@
 //! 1. **Off means the detector never runs.** [`on_focus`] returns before touching the machine when
 //!    the feature is disabled, so nothing downstream can observe a meeting while it is off
 //!    (FR-MT-02a).
-//! 2. **Audio has no code path yet.** `Effect::StartAudio` is deliberately not implemented — MT1/
-//!    MT2 ship without listening (FR-MT-13 arrives in MT3), and an unimplemented effect is a
-//!    louder statement than a comment saying "not yet".
+//! 2. **Audio degrades, never crashes.** `Effect::StartAudio` opens the capture lane
+//!    (`audio_lane`) against the interval the machine just opened; when audio is unavailable (no
+//!    model, denied mic, no system tap) the lane returns nothing and the meeting still records the
+//!    interval and the user's notes (FR-MT-13, MT3).
 
 #[cfg(target_os = "macos")]
 pub mod mac {
@@ -50,6 +51,9 @@ use shogun_core::meeting::gate::OfferGate;
         gate: OfferGate,
         /// Turns "the microphone is open" into "a call is happening" (FR-MT-04 signal ②).
         mic: MicWatch,
+        /// The running audio lane (MT3), when one is capturing. `None` while idle, or when audio
+        /// degraded to notes-only. Held here so `StopAudio` can tear the exact same lane down.
+        audio: Option<crate::audio_lane::Handle>,
     }
 
     impl Lane {
@@ -66,6 +70,7 @@ use shogun_core::meeting::gate::OfferGate;
                 since_ms: 0,
                 gate: OfferGate::new(),
                 mic: MicWatch::new(),
+                audio: None,
             }
         }
     }
@@ -185,9 +190,17 @@ use shogun_core::meeting::gate::OfferGate;
                         }
                     }
                 }
-                // MT3. Not silently ignored: until the audio lane exists, the honest behaviour is
-                // to record intervals and notes without listening (FR-MT-13, OPEN-07/08).
-                Effect::StartAudio | Effect::StopAudio => {}
+                // MT3. Open the capture lane against the interval the machine just opened. When
+                // audio degrades (no model, denied mic, no tap), `start` returns None and the
+                // meeting still records notes (FR-MT-13, OPEN-07/08).
+                Effect::StartAudio => {
+                    if let Some(id) = lane.session_id {
+                        lane.audio = crate::audio_lane::start(app, id);
+                    }
+                }
+                Effect::StopAudio => {
+                    crate::audio_lane::stop(lane.audio.take());
+                }
                 // The tick loop drives the countdown and the silence watchdog, so the machine's
                 // timer requests need no separate scheduler here.
                 Effect::StartTimer { .. } | Effect::CancelTimer(_) => {}

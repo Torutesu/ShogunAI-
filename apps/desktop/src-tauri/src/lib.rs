@@ -8,6 +8,7 @@
 
 mod ai_sessions;
 mod approvals;
+mod audio_lane;
 pub mod axcache;
 mod capture_source;
 mod connectors;

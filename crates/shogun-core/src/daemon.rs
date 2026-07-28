@@ -456,6 +456,27 @@ impl Db {
         })
     }
 
+    /// Append one transcribed line to a meeting interval (FR-MT-13). The text is redacted inside the
+    /// memory writer. Best-effort: a write failure drops the line rather than interrupting capture.
+    pub fn append_transcript(
+        &self,
+        session_id: i64,
+        ts: i64,
+        speaker: shogun_memory::transcript_segments::Speaker,
+        text: &str,
+        confidence: f64,
+    ) -> bool {
+        let now = self.now_ms();
+        self.conn.lock().ok().is_some_and(|conn| {
+            shogun_memory::transcript_segments::append(
+                &conn,
+                &shogun_memory::transcript_segments::NewSegment { session_id, ts, speaker, text, confidence },
+                now,
+            )
+            .is_ok()
+        })
+    }
+
     /// Close intervals left open by a previous run (crash, force-quit, power cut).
     ///
     /// Returns how many were closed. They are closed at their `started_at`, not at "now": the app

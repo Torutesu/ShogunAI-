@@ -35,7 +35,7 @@ shogun-core = { path = "../../../crates/shogun-core" }
 # `net` adds the real HTTPS transport so the inline draft can call the BYOK Agent lane on device.
 # `exec` (= db + net + agents) brings the send-execution path (send_exec + the HTTP clients) into
 # the app without the standalone axum server, for the L3 approval → send wiring.
-shogun-core = { path = "../../../crates/shogun-core", features = ["db", "net", "exec"] }
+shogun-core = { path = "../../../crates/shogun-core", features = ["db", "net", "exec", "audio"] }
 # BYOK key read from the macOS Keychain (invariant 7 — secrets never in a file/DB/log).
 security-framework = "3"
 # The DB encryption key type + the plaintext→encrypted upgrade path (memory at rest).
