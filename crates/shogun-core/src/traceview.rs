@@ -30,6 +30,9 @@ pub enum Purpose {
     Chat,
     IntegrationWrite,
     IntegrationRead,
+    /// A meeting Recap generated over the Batch/Select-KK lane (MT4, FR-MT-19): the transcript +
+    /// notes are summarised into minutes. Select KK, like Dream Cycle / Morning Brief (invariant 5).
+    MeetingRecap,
 }
 
 /// The key kind used for the send (FR-TR-01 `key_kind`).

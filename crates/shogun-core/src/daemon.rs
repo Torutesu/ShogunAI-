@@ -456,6 +456,54 @@ impl Db {
         })
     }
 
+    /// Store the model-generated Recap for a meeting interval (MT4, FR-MT-19). Upsert on
+    /// `session_id` (one Recap per interval): a re-run replaces the degraded/previous minutes. The
+    /// summary is redacted inside the memory writer. Best-effort — a write failure leaves the
+    /// existing (degraded) Recap in place rather than interrupting anything.
+    pub fn save_meeting_recap(
+        &self,
+        session_id: i64,
+        summary: &str,
+        decisions_json: &str,
+        next_actions_json: &str,
+        model: &str,
+    ) -> bool {
+        let now = self.now_ms();
+        self.conn.lock().ok().is_some_and(|conn| {
+            shogun_memory::meeting_recaps::save(
+                &conn,
+                session_id,
+                summary,
+                decisions_json,
+                next_actions_json,
+                model,
+                now,
+            )
+            .is_ok()
+        })
+    }
+
+    /// The transcript of a meeting interval as `(speaker, text)` in time order (MT4 input). Drops
+    /// the ts/confidence columns the Recap builder does not need. Empty when the interval has no
+    /// transcript (audio degraded to notes-only) or on a DB error.
+    pub fn transcript_for_recap(&self, session_id: i64) -> Vec<(Option<String>, String)> {
+        self.conn
+            .lock()
+            .ok()
+            .and_then(|conn| shogun_memory::transcript_segments::for_session(&conn, session_id).ok())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(_ts, speaker, text, _confidence)| (speaker, text))
+            .collect()
+    }
+
+    /// The note typed during a meeting interval (FR-MT-10), if any. `None` covers both "no note"
+    /// and a DB error — the Recap builder treats both the same (nothing to add from notes).
+    pub fn meeting_note(&self, session_id: i64) -> Option<String> {
+        let conn = self.conn.lock().ok()?;
+        shogun_memory::session_notes::get(&conn, session_id).ok().flatten()
+    }
+
     /// Append one transcribed line to a meeting interval (FR-MT-13). The text is redacted inside the
     /// memory writer. Best-effort: a write failure drops the line rather than interrupting capture.
     pub fn append_transcript(
