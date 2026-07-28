@@ -133,6 +133,10 @@ pub mod mac {
         pub primary_height: f64,
         pub is_notch: bool,
         pub display_count: u32,
+        /// One entry per attached display: the screen's CG rect plus its own notch regions.
+        /// The engine hit-tests against whichever of these the pointer is inside, so the notch
+        /// works on a second monitor instead of only where the panel happens to live.
+        pub per_display: Vec<(crate::geometry::Rect, Regions, f64)>,
     }
 
     // ---------------------------------------------------------------- timers
@@ -267,6 +271,10 @@ pub mod mac {
         geo: StartGeometry,
     ) {
         std::thread::spawn(move || {
+            let per_display = geo.per_display.clone();
+            // Which entry the engine is currently configured for, so regions are only swapped on
+            // an actual screen change rather than on every mouse move.
+            let mut active_display: Option<usize> = None;
             let mut engine = NotchEngine::new(
                 geo.regions,
                 geo.menubar_min_y,
@@ -283,6 +291,24 @@ pub mod mac {
                         continue;
                     }
                     Ev::Tap(TapEvent::Moved { x, y, buttons }) => {
+                        // Point the engine at the display the pointer is actually on before it
+                        // hit-tests. Cheap: a handful of rect comparisons, and only when the
+                        // screen changes does anything get swapped.
+                        if per_display.len() > 1 {
+                            let ns_y = geo.primary_height - y;
+                            if let Some((i, (_, regs, menubar))) = per_display
+                                .iter()
+                                .enumerate()
+                                .find(|(_, (r, _, _))| {
+                                    x >= r.x && x <= r.x + r.w && ns_y >= r.y && ns_y <= r.y + r.h
+                                })
+                            {
+                                if active_display != Some(i) {
+                                    active_display = Some(i);
+                                    engine.set_regions(*regs, *menubar, geo.primary_height);
+                                }
+                            }
+                        }
                         EngineInput::MouseCg { x, y, t_ms: shared.clock.elapsed_ns() / 1_000_000, buttons }
                     }
                     Ev::Tap(TapEvent::Down { x, y }) => {
@@ -321,6 +347,16 @@ pub mod mac {
     ) {
         match out {
             EngineOutput::WebviewState(s) => {
+                // Loud on purpose while D-06 is being wired: the hover path has never driven the
+                // panel, so "did the tracker even see me?" is the first question every time.
+                eprintln!("[spike] state → {}", s.tag());
+                // Follow the pointer across displays. The panel is placed once at build time and
+                // by ⌥J; without this the hover path opened it on whichever screen it was last
+                // parked on, so the notch on a second monitor appeared dead even though the
+                // tracker saw the hover perfectly well.
+                if matches!(s, State::Hover | State::Expanded) {
+                    crate::move_panel_to_cursor_screen(app);
+                }
                 let _ = app.emit("state", StatePayload { state: s.tag(), t0_mono_ns: shared.clock.elapsed_ns() });
                 shared.recorder.record(Body::StateTransition(StateTransition {
                     from: prev_state.tag().to_string(),
@@ -387,8 +423,8 @@ pub mod mac {
                 shared.recorder.record(Body::ExpandCommit { t0_mono_ns: t0 });
             }
             EngineOutput::OpenFullUi => {
-                // The separate Full UI window is a later work package (§6.15); log the intent.
-                eprintln!("[spike] OpenFullUi requested (Full UI window not yet implemented)");
+                // An ordinary window, not the overlay — see build_full_ui_window for why.
+                crate::build_full_ui_window(app);
             }
             EngineOutput::TopBandEntry => {
                 shared.recorder.record(Body::TopBandEntry { count: 1 });
@@ -644,6 +680,7 @@ pub mod mac {
             *g = Some(payload.clone());
         }
         let _ = app.emit("context", payload);
+        app.state::<crate::metrics::SloRegister>().record_cache_update_ms(latency_ms);
         shared.recorder.record(Body::CacheUpdate(CacheUpdate::from_text(
             latency_ms,
             trigger,
@@ -676,7 +713,7 @@ pub mod mac {
     /// (Idle→Hover) — the visible panel appearance the Phase 0 p95 refers to. The dedicated
     /// full-expand (SLO-01) and preview vs expand split are WP1.4.
     #[tauri::command]
-    pub fn painted(state: String, t1_perf_ms: f64, shared: tauri::State<'_, Arc<Shared>>) {
+    pub fn painted(state: String, t1_perf_ms: f64, shared: tauri::State<'_, Arc<Shared>>, app: AppHandle) {
         eprintln!("[spike] cmd painted state={state} t1={t1_perf_ms:.1}");
         if state != "hover" {
             return;
@@ -712,6 +749,9 @@ pub mod mac {
             eprintln!("[spike] dropping implausible expand latency {latency_ms:.0}ms (orphaned pair)");
             return;
         }
+        // Same sample, kept in memory for the Full UI's health pane. The recorder above drains to
+        // JSONL for offline analysis; the register summarises while the app runs.
+        tauri::Manager::state::<crate::metrics::SloRegister>(&app).record_expand_ms(latency_ms);
         shared.recorder.record(Body::ExpandLatency(ExpandLatency {
             latency_ms,
             // Perceived total and enter-offset need the R_enter entry timestamp —
@@ -761,10 +801,22 @@ pub mod mac {
         shared.send(Ev::Input(EngineInput::Hotkey));
     }
 
-    /// "Open Full UI" chosen from the Expanded panel.
+    /// "Open Full UI" chosen from the panel.
+    ///
+    /// The window is built here rather than waiting on the state machine's `OpenFullUi` effect.
+    /// That effect only fires from `Expanded`, but the panel's open/closed state is driven by
+    /// direct clicks in the webview (see App.tsx) — the Rust machine tracks the hover lifecycle
+    /// and is usually still Collapsed when this arrives, so routing the window through it meant
+    /// the command was silently swallowed. Opening a separate window is not part of the notch's
+    /// hover/expand lifecycle, so it shouldn't be gated on it.
+    ///
+    /// The input is still sent: when the machine *is* Expanded it collapses the overlay, which is
+    /// the right thing when you've just asked for the big window. `build_full_ui_window` is
+    /// idempotent, so the effect handler running too is harmless (it focuses the existing one).
     #[tauri::command]
-    pub fn open_full_ui(shared: tauri::State<'_, Arc<Shared>>) {
+    pub fn open_full_ui(shared: tauri::State<'_, Arc<Shared>>, app: AppHandle) {
         eprintln!("[spike] cmd open_full_ui");
+        crate::build_full_ui_window(&app);
         shared.send(Ev::Input(EngineInput::OpenFullUi));
     }
 

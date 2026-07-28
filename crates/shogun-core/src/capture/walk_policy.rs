@@ -17,6 +17,12 @@ pub enum Role {
     Cell,
     /// Never read; the whole subtree is skipped (password fields).
     SecureTextField,
+    /// A browser/app chrome container — a toolbar or a tab strip. Its subtree is application
+    /// furniture (address bar, bookmarks, tab titles), not the content the user is reading. It is
+    /// traversed LAST, so a scarce element budget is spent on the page body before the chrome.
+    /// Without this a browser walk drains all 300 elements on the toolbar and tab strip and never
+    /// reaches the article/message — measured as `bytes=63` from a full Gmail thread.
+    DeferredChrome,
     /// Any other role — traversed for children but not itself collected.
     Other,
 }
@@ -73,11 +79,18 @@ pub struct WalkResult {
 /// nodes so it can be built incrementally within the depth budget.
 pub fn walk<N: AxNode + Clone>(root: &N, limits: Limits, mut should_stop: impl FnMut() -> bool) -> WalkResult {
     let mut res = WalkResult::default();
-    // Queue of (node, depth). Depth 0 = root.
-    let mut queue: std::collections::VecDeque<(N, u32)> = std::collections::VecDeque::new();
-    queue.push_back((root.clone(), 0));
+    // Two tiers, both (node, depth); depth 0 = root. `main` is the page body; `chrome` holds the
+    // subtrees rooted at a DeferredChrome node (toolbars, tab strips) and is only touched once the
+    // main tier drains. The element budget spans both, so total work is unchanged — but when it
+    // runs out it is the chrome that goes unread, not the content. Order within a tier stays BFS.
+    let mut main: std::collections::VecDeque<(N, u32)> = std::collections::VecDeque::new();
+    let mut chrome: std::collections::VecDeque<(N, u32)> = std::collections::VecDeque::new();
+    main.push_back((root.clone(), 0));
 
-    while let Some((node, depth)) = queue.pop_front() {
+    loop {
+        let Some((node, depth)) = main.pop_front().or_else(|| chrome.pop_front()) else {
+            break;
+        };
         if should_stop() {
             res.partial = true;
             break;
@@ -113,8 +126,12 @@ pub fn walk<N: AxNode + Clone>(root: &N, limits: Limits, mut should_stop: impl F
         }
 
         if depth < limits.max_depth {
+            // A chrome container's whole subtree is deferred; everything else stays on the main
+            // tier. Once a branch is deferred it stays deferred (its children go to `chrome` too),
+            // so the tab strip never jumps ahead of the article just because it is shallower.
+            let target = if role == Role::DeferredChrome { &mut chrome } else { &mut main };
             for child in node.children() {
-                queue.push_back((child, depth + 1));
+                target.push_back((child, depth + 1));
             }
         }
     }
@@ -244,6 +261,40 @@ mod tests {
             n > 5 // stop after a few elements
         });
         assert!(r.partial);
+    }
+
+    #[test]
+    fn chrome_subtree_is_visited_after_content_under_a_tight_budget() {
+        // The browser shape: a wide toolbar/tab strip full of collectable links sits before the
+        // page body in document order. Under a scarce budget a plain BFS would spend it all on the
+        // chrome and never reach the body — the bug this deferral fixes.
+        let chrome_links: Vec<Fake> =
+            (0..20).map(|_| Fake::leaf(Role::Link, "chrome-link")).collect();
+        let tree = Fake::group(vec![
+            Fake { role: Role::DeferredChrome, text: None, children: chrome_links },
+            Fake::group(vec![Fake::leaf(Role::StaticText, "the article body")]),
+        ]);
+        // Budget: root + chrome container + body group + body text = exactly enough for content,
+        // none left for the 20 chrome links now sitting in the deferred tier.
+        let limits = Limits { max_elements: 4, ..Limits::default() };
+        let r = walk(&tree, limits, never_stop);
+        assert!(r.text.contains("the article body"), "content must be reached first: {:?}", r.text);
+        assert!(!r.text.contains("chrome-link"), "chrome must be dropped, not the body: {:?}", r.text);
+        assert!(r.truncated);
+    }
+
+    #[test]
+    fn chrome_is_still_collected_when_the_budget_allows() {
+        // Deferral is about ORDER, not exclusion: with room, the chrome text is still captured.
+        let tree = Fake::group(vec![
+            Fake { role: Role::DeferredChrome, text: None, children: vec![Fake::leaf(Role::Link, "tab title")] },
+            Fake::leaf(Role::StaticText, "body"),
+        ]);
+        let r = walk(&tree, Limits::default(), never_stop);
+        assert!(r.text.contains("body"));
+        assert!(r.text.contains("tab title"));
+        // Body comes before the deferred chrome in the output.
+        assert!(r.text.find("body") < r.text.find("tab title"), "content precedes chrome: {:?}", r.text);
     }
 
     #[test]

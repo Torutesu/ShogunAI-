@@ -163,6 +163,22 @@ pub fn count_in_range(conn: &Connection, from_ts: i64, to_ts: i64) -> Result<i64
     )
 }
 
+/// How many distinct hours in `[from_ts, to_ts)` produced at least one event.
+///
+/// This is the Coverage numerator (spec §D2): "18h / 24h captured" means eighteen of the last
+/// twenty-four hours have something in them, not that eighteen hours of wall time were recorded.
+/// Counting distinct hour buckets is what makes an idle lunch break read as a gap rather than
+/// being averaged away by a busy morning.
+///
+/// Read-only: no schema change, just a grouping over the existing `ts` index.
+pub fn hours_covered(conn: &Connection, from_ts: i64, to_ts: i64) -> Result<i64, rusqlite::Error> {
+    conn.query_row(
+        "SELECT count(DISTINCT ts / 3600000) FROM event_log WHERE ts >= ?1 AND ts < ?2",
+        params![from_ts, to_ts],
+        |r| r.get(0),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -246,5 +262,22 @@ mod tests {
         // [10, 30): includes 10 and 20, excludes 30
         let got = events_in_range(&conn, 10, 30).unwrap();
         assert_eq!(got.iter().map(|e| e.content.as_str()).collect::<Vec<_>>(), vec!["a", "b"]);
+    }
+
+    #[test]
+    fn hours_covered_counts_buckets_not_events() {
+        const H: i64 = 3_600_000;
+        let conn = crate::open_in_memory().unwrap();
+        // A busy hour must not count for more than one, and an empty hour must stay a gap:
+        // three events in hour 0, none in hour 1, one in hour 2 => 2 of 3 hours covered.
+        insert(&conn, &ev("a", "ha", 1, 0)).unwrap();
+        insert(&conn, &ev("b", "hb", 2, 0)).unwrap();
+        insert(&conn, &ev("c", "hc", 3, 0)).unwrap();
+        insert(&conn, &ev("d", "hd", 2 * H + 5, 0)).unwrap();
+
+        assert_eq!(hours_covered(&conn, 0, 3 * H).unwrap(), 2);
+        // Half-open, like every other range query here.
+        assert_eq!(hours_covered(&conn, 0, 2 * H).unwrap(), 1);
+        assert_eq!(hours_covered(&conn, 10 * H, 12 * H).unwrap(), 0);
     }
 }

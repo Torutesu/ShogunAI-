@@ -78,6 +78,16 @@ const REPLY_TURN_CHARS: usize = 800;
 const REPLY_RELATED: usize = 4;
 const REPLY_RELATED_CHARS: usize = 300;
 
+/// ドラフトの本文がどこ由来か。融合の provenance（設計 §3）。
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum PayloadSource {
+    /// 取得した実メール由来（高信頼）。thread_key が provenance（同期スレッドの識別子）。
+    Fetched { thread_key: String },
+    /// 取得データに解決できず、画面キャプチャの断片のみ。
+    #[default]
+    OnScreenOnly,
+}
+
 /// Everything a one-press reply needs, assembled before the press ([`Db::build_reply_context`]).
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct ReplyContext {
@@ -91,6 +101,8 @@ pub struct ReplyContext {
     pub related: Vec<Evidence>,
     /// How long assembly took, in ms — the SLO measurement, carried with the data it describes.
     pub build_ms: u64,
+    /// 本文の出所（融合の provenance）。
+    pub payload_source: PayloadSource,
 }
 
 impl ReplyContext {
@@ -704,6 +716,42 @@ impl Db {
             facts,
             related,
             build_ms: started.elapsed().as_millis() as u64,
+            payload_source: PayloadSource::OnScreenOnly,
+        }
+    }
+
+    /// event log 上の gmail スレッド候補 `(thread_key, title)`。融合リンカの入力。
+    pub fn gmail_thread_candidates(&self, limit: usize) -> Vec<(String, String)> {
+        let Ok(conn) = self.conn.lock() else { return Vec::new() };
+        shogun_memory::thread::recent(&conn, limit)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|t| t.thread_key.starts_with("gmail:"))
+            .filter_map(|t| t.title.map(|title| (t.thread_key, title)))
+            .collect()
+    }
+
+    /// 画面セレクタ（on-screen のタイトル）を使って、取得済み gmail スレッドに解決してから
+    /// 文脈を組む。解決できれば gmail スレッドの turns を使い `Fetched`、できなければ元の
+    /// thread_key で `OnScreenOnly`（設計 §3）。
+    pub fn build_reply_context_for_screen(
+        &self,
+        on_screen_thread_key: &str,
+        on_screen_title: &str,
+    ) -> ReplyContext {
+        let candidates = self.gmail_thread_candidates(50);
+        match shogun_memory::thread::link_on_screen_to_thread(on_screen_title, &candidates) {
+            Some(gmail_key) => {
+                let mut ctx = self.build_reply_context(&gmail_key);
+                // 同期スレッドの識別子（thread_key）を provenance に。
+                ctx.payload_source = PayloadSource::Fetched { thread_key: gmail_key };
+                ctx
+            }
+            None => {
+                let mut ctx = self.build_reply_context(on_screen_thread_key);
+                ctx.payload_source = PayloadSource::OnScreenOnly;
+                ctx
+            }
         }
     }
 
@@ -861,6 +909,26 @@ impl Db {
 
     /// Descriptions already present in `commitments` + `open_loops`, for consolidation dedup — so a
     /// re-run over the same range (crash-resume, FR-DC-04) doesn't add the same candidate twice.
+    /// Distinct hours in `[from_ts, to_ts)` that produced at least one event — the Coverage
+    /// numerator (spec §D2). Zero on a read failure so a locked DB degrades to "nothing seen"
+    /// rather than taking the window down.
+    pub fn hours_covered(&self, from_ts: i64, to_ts: i64) -> i64 {
+        self.conn
+            .lock()
+            .ok()
+            .and_then(|c| event_log::hours_covered(&c, from_ts, to_ts).ok())
+            .unwrap_or(0)
+    }
+
+    /// Events recorded in `[from_ts, to_ts)` — the first number in the Yield funnel.
+    pub fn events_count(&self, from_ts: i64, to_ts: i64) -> i64 {
+        self.conn
+            .lock()
+            .ok()
+            .and_then(|c| event_log::count_in_range(&c, from_ts, to_ts).ok())
+            .unwrap_or(0)
+    }
+
     pub fn existing_state_descriptions(&self) -> std::collections::HashSet<String> {
         let mut set = std::collections::HashSet::new();
         if let Ok(c) = self.conn.lock() {
@@ -2488,5 +2556,36 @@ mod tests {
         let recap = db.meeting_recap(id).unwrap();
         assert_eq!(recap.title, crate::meeting::recap::UNTITLED);
         assert_eq!(recap.notes, None);
+    }
+
+    #[test]
+    fn reply_context_prefers_fetched_gmail_thread_when_screen_matches() {
+        use shogun_mcp::sync::IngestItem;
+        let db = Db::open_in_memory(clock(1)).unwrap();
+        // gmail 同期でスレッドを入れる（thread_key は "gmail:unknown:Q3 pricing" になる）。
+        db.ingest_integration(&[IngestItem {
+            source: "gmail",
+            kind: "email",
+            title: "Q3 pricing".to_string(),
+            body: "Full thread body about pricing".to_string(),
+            ts_ms: 1,
+        }]);
+        // 画面側は capture スレッド（タブ名 "(3) Q3 pricing — Gmail"）。
+        let ctx = db.build_reply_context_for_screen(
+            "capture:com.google.Chrome:Q3 pricing",
+            "(3) Q3 pricing — Gmail",
+        );
+        assert!(matches!(ctx.payload_source, PayloadSource::Fetched { .. }));
+        assert!(ctx.turns.iter().any(|t| t.excerpt.contains("pricing")), "fetched body used");
+    }
+
+    #[test]
+    fn reply_context_is_on_screen_only_without_a_gmail_match() {
+        let db = Db::open_in_memory(clock(1)).unwrap();
+        let ctx = db.build_reply_context_for_screen(
+            "capture:com.apple.Safari:Nothing",
+            "Nothing — Safari",
+        );
+        assert_eq!(ctx.payload_source, PayloadSource::OnScreenOnly);
     }
 }

@@ -58,6 +58,37 @@ pub mod mac {
     }
 
     /// The provider's default model when the user hasn't set one.
+    /// A model name that is safe to log.
+    ///
+    /// The model field used to be free text, and a user who pasted their API key into it had that
+    /// key written to the log in plaintext — a direct breach of invariant 7 (secrets never reach a
+    /// file, DB or log). The field is a picker now, but the log must not depend on the UI being
+    /// the only writer: anything that doesn't look like one of our model ids is redacted rather
+    /// than printed.
+    fn loggable_model(model: &str) -> String {
+        let known = PROVIDERS.iter().any(|p| default_model(p) == model);
+        let plausible = model.len() <= 48
+            && model
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '/' | ':' | '_'));
+        if known || plausible && !looks_like_secret(model) {
+            model.to_string()
+        } else {
+            "<redacted>".to_string()
+        }
+    }
+
+    /// Heuristics for "this is a credential, not a model id". Deliberately eager: a redacted model
+    /// name costs a debugging detail, a logged key costs the key.
+    fn looks_like_secret(v: &str) -> bool {
+        let v = v.trim();
+        v.len() >= 32
+            || v.starts_with("sk-")
+            || v.starts_with("AQ.")
+            || v.starts_with("AIza")
+            || v.starts_with("sk_")
+    }
+
     fn default_model(provider: &str) -> &'static str {
         match provider {
             "openrouter" => "anthropic/claude-sonnet-4.5",
@@ -119,7 +150,7 @@ pub mod mac {
                 }
             }
         }
-        eprintln!("[inline] agent provider = {} model = {}", s.provider, effective_model(&s));
+        eprintln!("[inline] agent provider = {} model = {}", s.provider, loggable_model(&effective_model(&s)));
         if let Ok(mut g) = LLM_SETTINGS.lock() {
             *g = Some(s);
         }
@@ -163,7 +194,7 @@ pub mod mac {
                 Err(e) => return Err(e.to_string()),
             }
         }
-        eprintln!("[inline] agent provider → {} model → {}", s.provider, effective_model(&s));
+        eprintln!("[inline] agent provider → {} model → {}", s.provider, loggable_model(&effective_model(&s)));
         if let Ok(mut g) = LLM_SETTINGS.lock() {
             *g = Some(s);
         }
@@ -211,6 +242,108 @@ pub mod mac {
         Some(el)
     }
 
+    #[link(name = "CoreGraphics", kind = "framework")]
+    extern "C" {
+        // std::ffi::c_void — spelled in full so the extern block needs no import.
+        /// Create rule — the caller releases.
+        fn CGEventCreateKeyboardEvent(source: *const std::ffi::c_void, keycode: u16, key_down: bool) -> *mut std::ffi::c_void;
+        fn CGEventSetFlags(event: *mut std::ffi::c_void, flags: u64);
+        fn CGEventPost(tap: u32, event: *mut std::ffi::c_void);
+    }
+
+    /// Insert `text` by putting it on the pasteboard and synthesising ⌘V, then putting the user's
+    /// clipboard back.
+    ///
+    /// The fallback for apps that accept an AX write and ignore it. Paste is the mechanism the
+    /// user would have reached for, and it works wherever a caret does — the app cannot tell it
+    /// apart from a real ⌘V. Nothing leaves the device (invariant 3): the pasteboard is local and
+    /// the keystroke is synthesised into the app that already has focus.
+    ///
+    /// The clipboard is the user's, not ours, so it is saved and restored. Restoring happens AFTER
+    /// the result is verified — put back too early and the paste races with the restore and lands
+    /// the old contents instead.
+    unsafe fn paste_at_cursor(text: &str, el: AXUIElementRef, before: Option<&str>) -> Result<(), String> {
+        use objc2::runtime::AnyObject;
+        use objc2::{class, msg_send};
+        use objc2_foundation::NSString;
+
+        const KVK_ANSI_V: u16 = 0x09;
+        const FLAG_COMMAND: u64 = 1 << 20;
+        const HID_EVENT_TAP: u32 = 0;
+
+        let pb: *mut AnyObject = unsafe { msg_send![class!(NSPasteboard), generalPasteboard] };
+        if pb.is_null() {
+            return Err("no pasteboard".into());
+        }
+        let utf8 = NSString::from_str("public.utf8-plain-text");
+
+        // Save first: everything after this point can fail, and the user's clipboard must survive.
+        let saved: *mut AnyObject = unsafe { msg_send![pb, stringForType: &*utf8] };
+        let saved: Option<String> = if saved.is_null() {
+            None
+        } else {
+            let s: *const NSString = saved.cast();
+            Some(unsafe { &*s }.to_string())
+        };
+
+        let ours = NSString::from_str(text);
+        let _: isize = unsafe { msg_send![pb, clearContents] };
+        let ok: bool = unsafe { msg_send![pb, setString: &*ours, forType: &*utf8] };
+        if !ok {
+            return Err("could not write the pasteboard".into());
+        }
+
+        let restore = || unsafe {
+            let _: isize = msg_send![pb, clearContents];
+            if let Some(prev) = &saved {
+                let s = NSString::from_str(prev);
+                let _: bool = msg_send![pb, setString: &*s, forType: &*utf8];
+            }
+        };
+
+        // ⌘V as two events. The flag goes on both: an app reading the keyUp without the modifier
+        // can treat the chord as cancelled.
+        for down in [true, false] {
+            let ev = unsafe { CGEventCreateKeyboardEvent(std::ptr::null(), KVK_ANSI_V, down) };
+            if ev.is_null() {
+                restore();
+                return Err("could not synthesise the paste".into());
+            }
+            unsafe {
+                CGEventSetFlags(ev, FLAG_COMMAND);
+                CGEventPost(HID_EVENT_TAP, ev);
+                CFRelease(ev as CFTypeRef);
+            }
+        }
+
+        let landed = unsafe { value_changed(el, before) };
+        restore();
+        if landed {
+            Ok(())
+        } else {
+            Err("the paste did not change the field either".into())
+        }
+    }
+
+    /// Did the field actually change? Re-reads `AXValue` a few times before giving up.
+    ///
+    /// Some apps apply an AX write on their next run-loop turn, so a single immediate read would
+    /// call a working insert a failure. A few short retries cost nothing on the success path (the
+    /// first read almost always wins) and are the difference between a false negative and a true
+    /// one. A field with no readable value cannot be verified either way — treated as landed, so
+    /// this check can only ever downgrade a claim we could disprove, never invent a failure.
+    unsafe fn value_changed(el: AXUIElementRef, before: Option<&str>) -> bool {
+        let Some(before) = before else { return true };
+        for _ in 0..4 {
+            match unsafe { copy_string(el, kAXValueAttribute) } {
+                Some(now) if now != before => return true,
+                None => return true,
+                _ => std::thread::sleep(std::time::Duration::from_millis(30)),
+            }
+        }
+        false
+    }
+
     /// Reads the focused field's text (AX). v1 treats the whole value as the text *before* the caret
     /// (drafting at the end of a field is the common case); precise caret splitting via
     /// `kAXSelectedTextRangeAttribute` is a device refinement. Never a screenshot (invariant 2).
@@ -234,32 +367,56 @@ pub mod mac {
 
     /// Writes text at the caret by setting `AXSelectedText` on the focused element — inserts at the
     /// insertion point (or replaces the selection), exactly like a paste. Device-local (invariant 4).
+    ///
+    /// The write is VERIFIED by reading the field back. `AXUIElementSetAttributeValue` returning
+    /// `kAXErrorSuccess` only means the message was accepted, not that the app applied it: plenty
+    /// of apps (web views in particular) return success and ignore the write. Trusting the return
+    /// code made the product claim "Drafted" while nothing appeared in the document — a success
+    /// report the app had no evidence for.
     pub struct AxTextInserter;
 
     impl TextInserter for AxTextInserter {
         fn insert(&self, text: &str) -> Result<(), String> {
             let el = unsafe { focused_element() }.ok_or_else(|| "no focused field".to_string())?;
+            let before = unsafe { copy_string(el, kAXValueAttribute) };
             let cf_attr = CFString::new(kAXSelectedTextAttribute);
             let cf_text = CFString::new(text);
             // SAFETY: el is a live element; attr + value are valid CFStrings.
             let err = unsafe {
                 AXUIElementSetAttributeValue(el, cf_attr.as_concrete_TypeRef(), cf_text.as_concrete_TypeRef() as CFTypeRef)
             };
+            if err != kAXErrorSuccess {
+                unsafe { CFRelease(el as CFTypeRef) };
+                return Err(format!("AX set selected text failed: {err}"));
+            }
+            if unsafe { value_changed(el, before.as_deref()) } {
+                unsafe { CFRelease(el as CFTypeRef) };
+                return Ok(());
+            }
+            // The app took the message and ignored it. Measured on device: Chrome and the terminal
+            // both do this, and they are not exotic targets — AXSelectedText is honoured by little
+            // beyond native NSTextView/NSTextField. Fall back to the mechanism that works
+            // everywhere, because it is the one the user would have used: paste.
+            let app = crate::display::frontmost_app().map(|f| f.bundle_id).unwrap_or_default();
+            eprintln!("[inline] {app} ignored the AX write — falling back to paste");
+            let pasted = unsafe { paste_at_cursor(text, el, before.as_deref()) };
             unsafe { CFRelease(el as CFTypeRef) };
-            if err == kAXErrorSuccess {
-                Ok(())
-            } else {
-                Err(format!("AX set selected text failed: {err}"))
+            match pasted {
+                Ok(()) => Ok(()),
+                // The bundle id, never the text: which app refuses BOTH paths is the fact that
+                // makes this fixable, and it is the first thing to know next time.
+                Err(e) => Err(format!("{app}: {e}")),
             }
         }
     }
 
-    // ---- BYOK Agent-lane client (Keychain → real, else mock) --------------------------------
+    // ---- BYOK Agent-lane client (Keychain → real, else nothing) -----------------------------
 
     /// The Agent-lane client for inline drafts and chat. Real when the ACTIVE provider has a key
-    /// in the Keychain; otherwise a mock that echoes the prompt (so the AX read→insert loop is
-    /// testable on device without a key). `pub(crate)` so the send producers (`crate::approvals`,
-    /// e.g. Reply Drafter) draft through the SAME BYOK Agent-lane client (invariant 5).
+    /// in the Keychain; the echo `Mock` exists only for exercising the AX read→insert loop on
+    /// device and is reachable solely via `SHOGUN_MOCK_AGENT=1`, never by a user with no key.
+    /// `pub(crate)` so the send producers (`crate::approvals`, e.g. Reply Drafter) draft through
+    /// the SAME BYOK Agent-lane client (invariant 5).
     pub(crate) enum InlineAgent {
         Mock(MockAgentClient),
         Anthropic {
@@ -326,7 +483,7 @@ pub mod mac {
         Ok(())
     }
 
-    /// Remove `provider`'s BYOK key — chat and drafts fall back to the echo mock.
+    /// Remove `provider`'s BYOK key — chat and drafts stop until a new one is added.
     #[tauri::command]
     pub fn clear_byok_key(provider: String) -> Result<(), String> {
         if !PROVIDERS.contains(&provider.as_str()) {
@@ -339,24 +496,39 @@ pub mod mac {
         Ok(())
     }
 
-    /// Build the Agent client for this run from the current provider settings. Falls back to the
-    /// mock (with a clear log) whenever the key is absent or the transport/runtime can't be built.
-    /// `pub(crate)` so the send producers (`crate::approvals`) share the one BYOK Agent-lane client
-    /// construction (invariant 5) rather than re-deriving it.
-    pub(crate) fn build_agent(db: &Db) -> InlineAgent {
+    /// Opt-in echo mock, for exercising the AX read→insert loop on device without a key.
+    ///
+    /// Off unless `SHOGUN_MOCK_AGENT=1`. It used to be the automatic fallback whenever a key was
+    /// missing, which meant a user with no key got the mock's echo written into their own document
+    /// and reported as a successful draft. A development aid must never be the default path a real
+    /// user falls down.
+    fn mock_agent_enabled() -> bool {
+        std::env::var("SHOGUN_MOCK_AGENT").is_ok_and(|v| v == "1")
+    }
+
+    /// Build the Agent client for this run from the current provider settings, or `None` when
+    /// there is no usable one — no key for the active provider, or no transport/runtime.
+    ///
+    /// `None` means callers MUST NOT produce output. Returning an `Option` rather than a silent
+    /// mock is the point: the caret sits in the user's own document, and the type now forces every
+    /// call site to decide what to do about a missing key instead of inheriting a default that
+    /// writes. `pub(crate)` so the send producers (`crate::approvals`) share the one BYOK
+    /// Agent-lane client construction (invariant 5) rather than re-deriving it.
+    pub(crate) fn build_agent(db: &Db) -> Option<InlineAgent> {
         let s = current_settings();
         let Some(key) = keychain_byok(&s.provider) else {
-            eprintln!(
-                "[inline] no key in Keychain for provider '{}' — using echo mock (AX path still runs)",
-                s.provider
-            );
-            return InlineAgent::Mock(MockAgentClient::new(ByokKey::new(Secret::new("mock"))));
+            if mock_agent_enabled() {
+                eprintln!("[inline] SHOGUN_MOCK_AGENT=1 — echo mock (AX path still runs)");
+                return Some(InlineAgent::Mock(MockAgentClient::new(ByokKey::new(Secret::new("mock")))));
+            }
+            eprintln!("[inline] no key in Keychain for provider '{}' — not drafting", s.provider);
+            return None;
         };
         let model = effective_model(&s);
         match (ReqwestTransport::new(), tokio::runtime::Builder::new_current_thread().enable_all().build()) {
             (Ok(transport), Ok(rt)) => {
                 let byok = ByokKey::new(Secret::new(key));
-                eprintln!("[inline] live Agent lane — provider {} model {model}", s.provider);
+                eprintln!("[inline] live Agent lane — provider {} model {}", s.provider, loggable_model(&model));
                 match s.provider.as_str() {
                     "openrouter" | "openai" | "gemini" => {
                         let base = match s.provider.as_str() {
@@ -370,7 +542,7 @@ pub mod mac {
                             byok,
                             OpenAiCompatConfig::new(base, model),
                         );
-                        InlineAgent::OpenAiCompat { rt, client }
+                        Some(InlineAgent::OpenAiCompat { rt, client })
                     }
                     _ => {
                         let client = AnthropicAgentClient::new(
@@ -379,13 +551,16 @@ pub mod mac {
                             byok,
                             AnthropicConfig::new(model),
                         );
-                        InlineAgent::Anthropic { rt, client }
+                        Some(InlineAgent::Anthropic { rt, client })
                     }
                 }
             }
+            // A key is present but we cannot build a client to use it. Falling back to the
+            // echo mock here would write mock output into the document of a user who HAS paid the
+            // setup cost — the most confusing version of this bug. Draft nothing.
             _ => {
-                eprintln!("[inline] transport/runtime unavailable — using echo mock");
-                InlineAgent::Mock(MockAgentClient::new(ByokKey::new(Secret::new("mock"))))
+                eprintln!("[inline] transport/runtime unavailable — not drafting");
+                None
             }
         }
     }
@@ -405,7 +580,32 @@ pub mod mac {
     /// `warm` is the pack the focus path built ahead of the press (the 150ms budget forbids
     /// collecting it here). When there is none — a thread not yet warmed — this falls back to the
     /// plain state facts rather than building inline, so a miss costs context, never latency.
-    pub fn run_inline_at_cursor(db: Db, warm: Option<shogun_core::daemon::ReplyContext>) {
+    /// What the notch shows while and after a ⌥-tap. Pushed to the webview so the keystroke is
+    /// acknowledged: without this every outcome — drafting, inserted, no field, rejected key —
+    /// looks identical from the outside, which is to say it looks like the shortcut is broken.
+    #[derive(Clone, serde::Serialize)]
+    pub struct InlineStatus {
+        /// `drafting` | `inserted` | `no_context` | `no_key` | `key_rejected` | `failed`
+        pub phase: &'static str,
+        /// Chars written at the caret, for `inserted`.
+        pub chars: usize,
+        /// A short reason for `failed`; never the generated text or the user's content.
+        pub detail: Option<String>,
+    }
+
+    fn push_inline(app: &tauri::AppHandle, status: InlineStatus) {
+        use tauri::Emitter;
+        let _ = app.emit("inline", status);
+    }
+
+    pub fn run_inline_at_cursor(
+        db: Db,
+        warm: Option<shogun_core::daemon::ReplyContext>,
+        app: tauri::AppHandle,
+    ) {
+        // Emitted before the thread starts so the pill reacts to the press itself, not to the
+        // generation finishing — the whole point is that the tap feels answered immediately.
+        push_inline(&app, InlineStatus { phase: "drafting", chars: 0, detail: None });
         std::thread::spawn(move || {
             let memory = match warm {
                 Some(ctx) if !ctx.is_empty() => {
@@ -418,14 +618,39 @@ pub mod mac {
                 }
                 _ => db.inline_memory(6),
             };
-            let agent = build_agent(&db);
+            // No key means no draft AND no write. The caret sits in the user's own document;
+            // putting anything there that they did not ask for is worse than doing nothing.
+            let Some(agent) = build_agent(&db) else {
+                push_inline(&app, InlineStatus { phase: "no_key", chars: 0, detail: None });
+                return;
+            };
             let outcome = compose_inline(&AxCursorReader, &agent, &AxTextInserter, &memory);
             match &outcome {
-                InlineOutcome::Inserted { chars } => eprintln!("[inline] inserted {chars} chars at the cursor"),
+                InlineOutcome::Inserted { chars } => {
+                    eprintln!("[inline] inserted {chars} chars at the cursor");
+                    push_inline(&app, InlineStatus { phase: "inserted", chars: *chars, detail: None });
+                }
                 // Nothing gets inserted on a rejected key, so without this the tap is silent and
                 // the reasonable next move is to press it again. Latch it for the status poll.
-                InlineOutcome::KeyRejected => note_key_rejected(),
-                other => eprintln!("[inline] {other:?}"),
+                InlineOutcome::KeyRejected(why) => {
+                    eprintln!("[inline] {why}");
+                    note_key_rejected();
+                    push_inline(&app, InlineStatus { phase: "key_rejected", chars: 0, detail: Some(why.clone()) });
+                }
+                InlineOutcome::NoContext => {
+                    eprintln!("[inline] no editable field under the caret");
+                    push_inline(&app, InlineStatus { phase: "no_context", chars: 0, detail: None });
+                }
+                other => {
+                    eprintln!("[inline] {other:?}");
+                    // The reason, not the content: these carry provider/AX errors, never the
+                    // draft or anything the user typed.
+                    let detail = match other {
+                        InlineOutcome::GenerationFailed(e) | InlineOutcome::InsertFailed(e) => Some(e.clone()),
+                        _ => None,
+                    };
+                    push_inline(&app, InlineStatus { phase: "failed", chars: 0, detail });
+                }
             }
         });
     }
@@ -435,8 +660,9 @@ pub mod mac {
     pub fn inline_at_cursor(
         db: tauri::State<'_, Db>,
         reply: tauri::State<'_, shogun_core::daemon::ReplyContextCache>,
+        app: tauri::AppHandle,
     ) -> &'static str {
-        run_inline_at_cursor(db.inner().clone(), reply.current());
+        run_inline_at_cursor(db.inner().clone(), reply.current(), app);
         "started"
     }
 
@@ -646,21 +872,24 @@ pub mod mac {
         // Retrieval + state facts: the question decides what history comes along, so "what
         // happened with X" can actually be answered from the event log.
         let ctx = db.assemble_context(&query, CHAT_EVIDENCE_HITS, CHAT_EVIDENCE_CHARS);
-        let agent = build_agent(db);
-        // Without a key the agent is the echo mock, whose "answer" is the prompt itself — printing
-        // that in the thread dumps SHOGUN's entire internal prompt at the user. Say what is
-        // actually wrong instead. (The UI also pre-empts this from `has_key`; this is the backstop.)
-        if !agent.is_live() {
-            return Ok(ChatAnswer {
+        // Without a key there is nothing to answer with; with the dev mock the "answer" is the
+        // prompt itself, and printing that dumps SHOGUN's entire internal prompt at the user. Say
+        // what is actually wrong instead. (The UI also pre-empts this from `has_key`.)
+        let no_key = || {
+            Ok(ChatAnswer {
                 text: "No key yet — add your provider key in Settings to get real answers."
                     .to_string(),
                 citations: Vec::new(),
-            });
+            })
+        };
+        let Some(agent) = build_agent(db) else { return no_key() };
+        if !agent.is_live() {
+            return no_key();
         }
         let text = agent.complete(&build_chat_prompt(message, &ctx)).map_err(|e| {
             // Same latch as the ⌥-tap path: chat surfaces the error text, but Settings is where
             // the fix is, and it needs to know the key is the problem.
-            if matches!(e, LlmError::Unauthorized(_)) {
+            if matches!(e, LlmError::Unauthorized(..)) {
                 note_key_rejected();
             }
             e.to_string()
@@ -683,10 +912,26 @@ pub mod mac {
     pub async fn shogun_chat(
         message: String,
         db: tauri::State<'_, Db>,
+        app: tauri::AppHandle,
     ) -> Result<ChatAnswer, String> {
+        use tauri::Manager;
         let db = db.inner().clone();
-        tokio::task::spawn_blocking(move || chat_blocking(&db, &message))
+        let started = std::time::Instant::now();
+        let answered = tokio::task::spawn_blocking(move || chat_blocking(&db, &message))
             .await
-            .map_err(|e| e.to_string())?
+            .map_err(|e| e.to_string())?;
+
+        // Grounding (spec §D2) is the share of answers that cited a source, so it can only be
+        // counted where answers are produced. Failures aren't counted at all: an answer that never
+        // arrived is not an ungrounded one, and folding errors in would quietly depress the rate.
+        if let Ok(a) = &answered {
+            let m = app.state::<crate::metrics::SloRegister>();
+            m.record_answer(!a.citations.is_empty());
+            // Not first-token latency yet — this path is non-streaming, so it measures the whole
+            // answer. Recorded against the same SLO row because it is strictly worse than the
+            // number the SLO asks for: if this passes, first-token would too.
+            m.record_first_token_ms(started.elapsed().as_secs_f64() * 1000.0);
+        }
+        answered
     }
 }

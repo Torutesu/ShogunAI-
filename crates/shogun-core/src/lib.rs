@@ -49,6 +49,11 @@ pub mod composio_send;
 #[cfg(feature = "net")]
 pub mod mcp_http;
 pub mod meeting;
+/// Composio-based Gmail read transport — routes read calls through the Composio tool API instead
+/// of direct Gmail REST (second-layer reads, allowlisted egress, FR-TR-03).
+#[cfg(feature = "net")]
+pub mod composio_read;
+pub mod gmail_shape;
 pub mod metrics;
 pub mod notch;
 /// Post-approval L3 send execution + mandatory traceability (needs the approval types from

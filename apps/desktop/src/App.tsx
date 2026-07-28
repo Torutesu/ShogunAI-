@@ -70,6 +70,20 @@ interface Status {
   /// exactly like a shortcut that does not work.
   key_rejected: boolean;
 }
+/** What the notch is doing about a ⌥-tap, pushed from Rust (see inline_source::InlineStatus). */
+/** The notch state machine's own view, pushed on every transition (integrate.rs `state` event).
+ *  `hover` is the preview level; `expanded` is the full panel. */
+interface StatePayload {
+  state: string;
+  t0_mono_ns: number;
+}
+
+interface InlineStatus {
+  phase: "drafting" | "inserted" | "no_context" | "no_key" | "key_rejected" | "failed";
+  chars: number;
+  detail: string | null;
+}
+
 interface StateItem {
   id: number;
   text: string;
@@ -88,8 +102,17 @@ const IN_TAURI =
 // views are user-resizable via the corner grip, and each remembers its own size across the
 // Rust-driven respawns.
 const W = 560;
-const H_OPEN = 300;
+const H_OPEN = 360;
 const H_HANDLE = 44;
+/** How long the cursor must rest on the collapsed pill before it opens. Long enough that crossing
+ *  the pill on the way somewhere else doesn't trigger it, short enough to feel immediate. */
+const HOVER_DWELL_MS = 250;
+/** Grace period after the pointer leaves an unpinned panel. Long enough to cross the gap to a
+ *  control that overlaps it, short enough that the panel feels like it follows your attention. */
+const AUTO_COLLAPSE_MS = 400;
+/** How long the pill holds a ⌥-tap outcome before returning to the live source. Long enough to
+ *  read, short enough that it never becomes something you have to dismiss. */
+const INLINE_HOLD_MS = 2200;
 const H_SETTINGS = 460; // taller default so setting groups fit; body scrolls; clamped to screen
 const MIN_W = 460;
 const MIN_H = 240;
@@ -200,6 +223,17 @@ export function App(): JSX.Element {
   useEffect(() => saveJson("shogun.msgs", msgs.slice(-50)), [msgs]);
   useEffect(() => saveJson("shogun.appearance", appearance), [appearance]);
   const [showState, setShowState] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  /// The ⌥-tap's own feedback. The pill shows it briefly and then returns to the live source —
+  /// this is a reply to a keystroke, not a status the user has to dismiss.
+  const [inline, setInline] = useState<InlineStatus | null>(null);
+  /// Pinned = the panel stays put. Unpinned = it withdraws as soon as the pointer leaves, which is
+  /// the counterpart to opening on hover: the same gesture that summons it also dismisses it, so
+  /// a glance costs no clicks at all. Persisted because the panel is respawned by Rust.
+  const [pinned, setPinned] = useState<boolean>(() => loadJson<boolean>("shogun.pinned", true));
+  /// Where this session's conversation begins in the persisted store. Captured once at mount, so
+  /// anything above it is history rather than part of what you're doing now.
+  const historyMark = useRef<number | null>(null);
   const [showSettings, setShowSettings] = useState(false);
 
   // Open-view sizes are user-resizable (corner grip) and persist across the Rust-driven respawns.
@@ -213,6 +247,7 @@ export function App(): JSX.Element {
     const s = loadJson<Size>("shogun.size.settings", { w: W, h: H_SETTINGS });
     return clampSize(s.w, s.h);
   });
+  useEffect(() => saveJson("shogun.pinned", pinned), [pinned]);
   useEffect(() => saveJson("shogun.size.chat", chatSize), [chatSize]);
   useEffect(() => saveJson("shogun.size.settings", setSize), [setSize]);
 
@@ -298,11 +333,48 @@ export function App(): JSX.Element {
     // has started (FR-MT-07). The first read covers a webview reload mid-meeting.
     offs.push(listen<MeetingView>("meeting", (e) => setMeeting(e.payload)));
     void invoke<MeetingView>("meeting_status").then(setMeeting).catch(() => undefined);
+    offs.push(
+      listen<InlineStatus>("inline", (e) => {
+        setInline(e.payload);
+        // `drafting` holds until the outcome replaces it — a spinner that timed itself out would
+        // claim the draft had finished when it hadn't.
+        if (e.payload.phase !== "drafting") {
+          window.setTimeout(() => setInline(null), INLINE_HOLD_MS);
+        }
+      }),
+    );
     // ⌃⌥N summon: Rust moved the window to this screen — also expand from the minimized handle.
     offs.push(
       listen("summon", () => {
         setOpen(true);
         sizeForViewRef.current({ open: true });
+      }),
+    );
+    // The notch's own hover detection finally drives the panel. Until now the tracker ran, emitted
+    // transitions, and nothing listened — opening was click-only, which is why hovering the notch
+    // did nothing while hovering the collapsed pill worked.
+    offs.push(
+      listen<StatePayload>("state", (e) => {
+        const st = e.payload.state;
+        if (st === "hover" || st === "expanded") {
+          // Never fight a user who pinned the panel open, and never re-open one they just closed
+          // by hand — the tracker doesn't know about either.
+          setOpen((cur) => {
+            if (cur) return cur;
+            sizeForViewRef.current({ open: true });
+            return true;
+          });
+        } else if (st === "idle" || st === "hidden") {
+          // Withdraw on the same rule as the pointer-leave path: pinned stays, work in progress
+          // stays, everything else follows your attention.
+          if (pinnedRef.current) return;
+          if (inputRef.current.trim().length > 0 || thinkingRef.current) return;
+          setOpen((cur) => {
+            if (!cur) return cur;
+            sizeForViewRef.current({ open: false });
+            return false;
+          });
+        }
       }),
     );
     offs.push(
@@ -349,6 +421,47 @@ export function App(): JSX.Element {
     threadRef.current?.scrollTo({ top: threadRef.current.scrollHeight, behavior: "smooth" });
   }, [msgs, thinking, open]);
 
+  // Withdraw when the pointer leaves — but only when doing so can't destroy work. Typing in the
+  // composer, a half-written question, or an answer still streaming all mean the panel is in use
+  // even though the cursor wandered off; collapsing then would throw away what the user was
+  // doing. The delay covers the gap between the panel and anything it overlaps, so brushing past
+  // an edge doesn't dismiss it.
+  const leaveTimer = useRef<number | null>(null);
+  const cancelAutoCollapse = useCallback((): void => {
+    if (leaveTimer.current != null) {
+      window.clearTimeout(leaveTimer.current);
+      leaveTimer.current = null;
+    }
+  }, []);
+  // Mirrors of the values the timeout has to consult. Reading them through `setState` updaters
+  // looked like a way to get the latest value without adding deps, but React skips an updater
+  // that returns the same state — which meant the nested collapse never ran and an unpinned panel
+  // stayed open forever. A ref is the honest way to read "now" from inside a timer.
+  const inputRef = useRef(input);
+  inputRef.current = input;
+  const thinkingRef = useRef(thinking);
+  thinkingRef.current = thinking;
+  // The state listener is registered once, so it needs the latest pin through a ref rather than
+  // a captured value — otherwise an unpinned-at-mount panel would ignore the pin forever.
+  const pinnedRef = useRef(pinned);
+  pinnedRef.current = pinned;
+
+  const onPanelLeave = useCallback((): void => {
+    if (pinned) return;
+    cancelAutoCollapse();
+    leaveTimer.current = window.setTimeout(() => {
+      leaveTimer.current = null;
+      // Never collapse over work in progress: a focused composer, a half-written question, or an
+      // answer still arriving all mean the panel is in use even though the cursor wandered off.
+      const composerHasFocus = document.activeElement?.classList.contains("composer__input") ?? false;
+      if (composerHasFocus || inputRef.current.trim().length > 0 || thinkingRef.current) return;
+      setShowSettings(false);
+      setOpen(false);
+      sizeForViewRef.current({ open: false });
+    }, AUTO_COLLAPSE_MS);
+  }, [pinned, cancelAutoCollapse]);
+  useEffect(() => cancelAutoCollapse, [cancelAutoCollapse]);
+
   const collapse = (): void => {
     setShowSettings(false);
     setOpen(false);
@@ -358,6 +471,32 @@ export function App(): JSX.Element {
     setOpen(true);
     sizeForView({ open: true });
   };
+
+  // Hover-to-open. The pill opens on dwell, not on entry: Phase 0 lists hover misfire as an open
+  // question, and opening the instant the cursor crosses the pill is exactly the failure mode —
+  // the panel would fire while you were on your way to the menu bar. So we wait HOVER_DWELL_MS of
+  // continuous hover and cancel the moment the pointer leaves. A pointer that is merely passing
+  // through is gone long before the timer elapses.
+  //
+  // Deliberately not gated on cursor velocity: dwell alone is measurable in the spike, and adding a
+  // second heuristic would make a No-Go answer harder to attribute. Revisit with the Phase 0 data.
+  const hoverTimer = useRef<number | null>(null);
+  const cancelHoverOpen = useCallback((): void => {
+    if (hoverTimer.current != null) {
+      window.clearTimeout(hoverTimer.current);
+      hoverTimer.current = null;
+    }
+  }, []);
+  const onHandleEnter = useCallback((): void => {
+    cancelHoverOpen();
+    hoverTimer.current = window.setTimeout(() => {
+      hoverTimer.current = null;
+      setOpen(true);
+      sizeForViewRef.current({ open: true });
+    }, HOVER_DWELL_MS);
+  }, [cancelHoverOpen]);
+  // A pending timer must not outlive the component (or a click that opens the panel first).
+  useEffect(() => cancelHoverOpen, [cancelHoverOpen]);
   const openSettings = (): void => {
     setShowSettings(true);
     sizeForView({ open: true, settings: true });
@@ -392,9 +531,30 @@ export function App(): JSX.Element {
       .catch((e) => finish(`${t.answerFailed}: ${e}`));
   }, [input, thinking, status]);
 
-  const draftAtCursor = (): void => {
-    if (IN_TAURI) void invoke("inline_at_cursor").catch(() => undefined);
-  };
+  // Fix the history boundary on first render, before anything is appended this session.
+  if (historyMark.current === null) historyMark.current = msgs.length;
+  const priorCount = historyMark.current;
+  const visibleMsgs = showHistory ? msgs : msgs.slice(priorCount);
+
+  const inlineLine = ((): { text: string; tone: "work" | "ok" | "warn" } | null => {
+    if (!inline) return null;
+    switch (inline.phase) {
+      case "drafting":
+        return { text: t.inlineDrafting, tone: "work" };
+      case "inserted":
+        return { text: t.inlineInserted, tone: "ok" };
+      case "no_context":
+        return { text: t.inlineNoField, tone: "warn" };
+      case "key_rejected":
+        return { text: t.inlineKeyRejected, tone: "warn" };
+      // Nothing was written at the caret, so this has to read as a setup step rather than a
+      // failure — the tap did nothing, and the reason is one field away in settings.
+      case "no_key":
+        return { text: t.inlineNoKey, tone: "warn" };
+      default:
+        return { text: t.inlineFailed, tone: "warn" };
+    }
+  })();
 
   const totalState = state.commitments.length + state.open_loops.length;
   const live = appName(ctxApp || status?.app || "");
@@ -420,11 +580,29 @@ export function App(): JSX.Element {
   if (!open) {
     return (
       <div className="stage stage--handle">
-        <button className="handle" ref={handleRef} type="button" onClick={expand} title={t.openPanel}>
+        <button
+          className="handle"
+          ref={handleRef}
+          type="button"
+          onClick={() => {
+            cancelHoverOpen();
+            expand();
+          }}
+          onPointerEnter={onHandleEnter}
+          onPointerLeave={cancelHoverOpen}
+          title={t.openPanel}
+        >
+          {inlineLine ? (
+            <span className={`handle__live inline--${inlineLine.tone}`}>
+              <span className={`inline__dot inline__dot--${inlineLine.tone}`} />
+              {inlineLine.text}
+            </span>
+          ) : (
           <span className="handle__live">
             <span className="live__dot" />
             {t.reading} <b>{live}</b>
           </span>
+          )}
           {state.commitments.length > 0 ? (
             <span className="handle__count">
               {state.commitments.length} {t.due}
@@ -441,7 +619,7 @@ export function App(): JSX.Element {
 
   return (
     <div className="stage">
-      <div className="panel">
+      <div className="panel" onPointerEnter={cancelAutoCollapse} onPointerLeave={onPanelLeave}>
         {showSettings ? (
           <Settings
             appearance={appearance}
@@ -462,10 +640,17 @@ export function App(): JSX.Element {
                 {/* The live source sits top-left, in the same spot the collapsed pill occupies, so
                     opening the panel doesn't make the indicator jump to the bottom. App NAME only —
                     never window titles or paths (no usernames leak into the UI). */}
-                <span className="srcchip" title={`${t.reading} ${live}`}>
-                  <span className="live__dot" />
-                  {t.reading} <b>{live}</b>
-                </span>
+                {inlineLine ? (
+                  <span className={`srcchip inline--${inlineLine.tone}`}>
+                    <span className={`inline__dot inline__dot--${inlineLine.tone}`} />
+                    {inlineLine.text}
+                  </span>
+                ) : (
+                  <span className="srcchip" title={`${t.reading} ${live}`}>
+                    <span className="live__dot" />
+                    {t.reading} <b>{live}</b>
+                  </span>
+                )}
                 {totalState > 0 ? (
                   <button className="chip" type="button" onClick={() => setShowState((v) => !v)} aria-pressed={showState}>
                     {state.commitments.length} {t.due} · {state.open_loops.length} {t.waiting}
@@ -473,6 +658,50 @@ export function App(): JSX.Element {
                 ) : null}
               </div>
               <div className="head__right">
+                <button
+                  className={`icon${pinned ? " icon--on" : ""}`}
+                  type="button"
+                  title={pinned ? t.unpin : t.pin}
+                  aria-label={pinned ? t.unpin : t.pin}
+                  aria-pressed={pinned}
+                  onClick={() => setPinned((v) => !v)}
+                >
+                  {/* A pin that leans when unpinned — the state is legible without reading the
+                      tooltip, which matters for a control that changes how the panel behaves. */}
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                       stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"
+                       style={pinned ? undefined : { transform: "rotate(45deg)" }}>
+                    <path d="M9 4h6l-1 6 3 3H7l3-3-1-6z" />
+                    <path d="M12 13v7" />
+                  </svg>
+                </button>
+                {/* Only offered when there is a backlog to open — an always-present control for an
+                    empty history is a button that does nothing most of the time. */}
+                {priorCount > 0 ? (
+                  <button
+                    className="icon"
+                    type="button"
+                    title={t.history}
+                    aria-label={t.history}
+                    aria-pressed={showHistory}
+                    onClick={() => setShowHistory((v) => !v)}
+                  >
+                    ⏱
+                  </button>
+                ) : null}
+                {/* The panel is for a glance and a keystroke; anything you want to sit and read —
+                    the brief, health, memory, the run log — lives in the Full UI window. */}
+                <button
+                  className="icon"
+                  type="button"
+                  title={t.openFullUi}
+                  aria-label={t.openFullUi}
+                  onClick={() => {
+                    if (IN_TAURI) void invoke("open_full_ui").catch((err) => uiLog(`open_full_ui failed: ${err}`));
+                  }}
+                >
+                  ⤢
+                </button>
                 <button className="icon" type="button" title={t.settings} aria-label={t.settings} onClick={openSettings}>
                   ⚙︎
                 </button>
@@ -516,14 +745,14 @@ export function App(): JSX.Element {
             ) : null}
 
             <div className="thread" ref={threadRef}>
-              {msgs.length === 0 ? (
+              {visibleMsgs.length === 0 ? (
                 <div className="welcome">
                   <div className="welcome__t">{t.welcomeTitle}</div>
                   <div className="welcome__s">{t.welcomeSub}</div>
                   {IN_TAURI && status && !status.has_key ? <div className="welcome__key">{t.noKey}</div> : null}
                 </div>
               ) : (
-                msgs.map((m, i) => (
+                visibleMsgs.map((m, i) => (
                   <div key={i} className={`msg msg--${m.role}`}>
                     {m.text}
                     {/* What the answer was grounded in — so the user can check SHOGUN rather
@@ -580,16 +809,10 @@ export function App(): JSX.Element {
                   >
                     {providerLabel} <span className="composer__caret" aria-hidden="true">⌄</span>
                   </button>
+                  {/* No draft button here. Drafting is the ⌥-tap gesture — a button that
+                      duplicates it adds a control without adding a capability, and the composer
+                      is the one place that has to stay uncluttered. */}
                   <div className="composer__tools">
-                    <button
-                      className="composer__draft"
-                      type="button"
-                      onClick={draftAtCursor}
-                      title={t.draftTitle}
-                      aria-label={t.draftTitle}
-                    >
-                      ✎
-                    </button>
                     <button
                       className="composer__send"
                       type="button"
@@ -963,6 +1186,321 @@ function AiSessionsSection(): JSX.Element {
   );
 }
 
+// ---- Composio sending settings (opt-in, FR-C2-02 / FR-C2-03) -----------------------------------
+
+interface ComposioSettingsView {
+  has_key: boolean;
+  key_last4: string;
+  draft_stop: boolean;
+  consent_acknowledged: boolean;
+  user_id: string;
+}
+
+function ComposioSection(): JSX.Element {
+  const [settings, setSettings] = useState<ComposioSettingsView>({
+    has_key: false,
+    key_last4: "",
+    draft_stop: true,
+    consent_acknowledged: false,
+    user_id: "",
+  });
+  const [keyInput, setKeyInput] = useState("");
+  const [userIdInput, setUserIdInput] = useState("");
+  const [err, setErr] = useState("");
+  // Local checkboxes for the consent disclosure flow
+  const [check1, setCheck1] = useState(false);
+  const [check2, setCheck2] = useState(false);
+  const [check3, setCheck3] = useState(false);
+
+  const refreshSettings = useCallback((): void => {
+    if (!IN_TAURI) return;
+    void invoke<ComposioSettingsView>("composio_settings")
+      .then((s) => {
+        setSettings(s);
+        setErr("");
+      })
+      .catch((e) => setErr(String(e)));
+  }, []);
+
+  useEffect(refreshSettings, [refreshSettings]);
+
+  // Keep the user ID input field in sync with the stored value.
+  useEffect(() => { setUserIdInput(settings.user_id); }, [settings.user_id]);
+
+  const saveUserId = (): void => {
+    const id = userIdInput.trim();
+    if (!IN_TAURI) {
+      setSettings((s) => ({ ...s, user_id: id }));
+      return;
+    }
+    void invoke("set_composio_user_id", { userId: id })
+      .then(() => refreshSettings())
+      .catch((e) => setErr(String(e)));
+  };
+
+  const saveKey = (): void => {
+    const k = keyInput.trim();
+    if (!k) return;
+    if (!IN_TAURI) {
+      setSettings((s) => ({ ...s, has_key: true, key_last4: k.slice(-4) }));
+      setKeyInput("");
+      return;
+    }
+    void invoke("set_composio_key", { key: k })
+      .then(() => {
+        setKeyInput("");
+        refreshSettings();
+      })
+      .catch((e) => setErr(String(e)));
+  };
+
+  const removeKey = (): void => {
+    if (!IN_TAURI) {
+      setSettings((s) => ({ ...s, has_key: false, key_last4: "" }));
+      return;
+    }
+    void invoke("clear_composio_key")
+      .then(refreshSettings)
+      .catch((e) => setErr(String(e)));
+  };
+
+  const grantConsent = (): void => {
+    if (!IN_TAURI) {
+      setSettings((s) => ({ ...s, consent_acknowledged: true }));
+      return;
+    }
+    void invoke("set_composio_policy", {
+      draftStop: settings.draft_stop,
+      consentAcknowledged: true,
+    })
+      .then(refreshSettings)
+      .catch((e) => setErr(String(e)));
+  };
+
+  const revokeConsent = (): void => {
+    if (!IN_TAURI) {
+      setSettings((s) => ({ ...s, consent_acknowledged: false, draft_stop: true }));
+      return;
+    }
+    // Revoking forces draft_stop back ON (invariant: can't have live send without consent).
+    void invoke("set_composio_policy", {
+      draftStop: true,
+      consentAcknowledged: false,
+    })
+      .then(() => {
+        setCheck1(false);
+        setCheck2(false);
+        setCheck3(false);
+        refreshSettings();
+      })
+      .catch((e) => setErr(String(e)));
+  };
+
+  const setDraftStop = (draftStop: boolean): void => {
+    if (!IN_TAURI) {
+      setSettings((s) => ({ ...s, draft_stop: draftStop }));
+      return;
+    }
+    void invoke("set_composio_policy", {
+      draftStop,
+      consentAcknowledged: settings.consent_acknowledged,
+    })
+      .then(refreshSettings)
+      .catch((e) => setErr(String(e)));
+  };
+
+  const allChecked = check1 && check2 && check3;
+
+  return (
+    <section className="set">
+      <div className="set__label">{t.composioTitle}</div>
+      <div className="set__hint">{t.composioHint}</div>
+      {err ? <div className="set__hint is-err">{err}</div> : null}
+
+      {/* API key row */}
+      <div
+        className={`set__hint${settings.has_key ? " is-ok" : ""}`}
+      >
+        {settings.has_key
+          ? `${t.composioKeyPresent} ·· ${settings.key_last4}`
+          : t.composioKeyAbsent}
+      </div>
+      <div className="keyrow">
+        <input
+          className="keyrow__input"
+          type="password"
+          placeholder={t.composioKeyPlaceholder}
+          value={keyInput}
+          autoComplete="off"
+          onChange={(e) => setKeyInput(e.target.value)}
+          onFocus={() => {
+            if (IN_TAURI) void invoke("focus_field", { focused: true }).catch(() => undefined);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") saveKey();
+          }}
+        />
+        <button
+          className="keyrow__btn"
+          type="button"
+          onClick={saveKey}
+          disabled={!keyInput.trim()}
+        >
+          {t.keySave}
+        </button>
+        {settings.has_key ? (
+          <button className="keyrow__btn" type="button" onClick={removeKey}>
+            {t.keyRemove}
+          </button>
+        ) : null}
+      </div>
+
+      {/* User ID row */}
+      <div className="set__label" style={{ marginTop: 10 }}>{t.composioUserId}</div>
+      <div className="set__hint">{t.composioUserIdHint}</div>
+      <div className="keyrow">
+        <input
+          className="keyrow__input"
+          type="text"
+          placeholder={t.composioUserId}
+          value={userIdInput}
+          autoComplete="off"
+          onChange={(e) => setUserIdInput(e.target.value)}
+          onFocus={() => {
+            if (IN_TAURI) void invoke("focus_field", { focused: true }).catch(() => undefined);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") saveUserId();
+          }}
+        />
+        <button
+          className="keyrow__btn"
+          type="button"
+          onClick={saveUserId}
+        >
+          {t.keySave}
+        </button>
+      </div>
+
+      {/* Consent flow */}
+      {settings.consent_acknowledged ? (
+        <div className="keyrow" style={{ marginTop: 8 }}>
+          <span className="set__hint is-ok">{t.composioConsentGranted}</span>
+          <button className="keyrow__btn" type="button" onClick={revokeConsent}>
+            {t.composioRevokeConsent}
+          </button>
+        </div>
+      ) : (
+        <div style={{ marginTop: 8 }}>
+          <div className="set__hint">{t.composioConsentTitle}</div>
+          <label className="set__hint" style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <input type="checkbox" checked={check1} onChange={(e) => setCheck1(e.target.checked)} />
+            {t.composioConsentItem1}
+          </label>
+          <label className="set__hint" style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <input type="checkbox" checked={check2} onChange={(e) => setCheck2(e.target.checked)} />
+            {t.composioConsentItem2}
+          </label>
+          <label className="set__hint" style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <input type="checkbox" checked={check3} onChange={(e) => setCheck3(e.target.checked)} />
+            {t.composioConsentItem3}
+          </label>
+          <div className="keyrow" style={{ marginTop: 4 }}>
+            <button
+              className="keyrow__btn"
+              type="button"
+              disabled={!allChecked}
+              onClick={grantConsent}
+            >
+              {t.composioGrantConsent}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Draft-stop toggle — only operable once consent is granted */}
+      <label
+        className="set__hint"
+        style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 8, opacity: settings.consent_acknowledged ? 1 : 0.4 }}
+      >
+        <input
+          type="checkbox"
+          checked={settings.draft_stop}
+          disabled={!settings.consent_acknowledged}
+          onChange={(e) => setDraftStop(e.target.checked)}
+        />
+        {t.composioDraftStop}
+      </label>
+    </section>
+  );
+}
+
+// Castle Position (issue #20): the six resting places SHOGUN can live at, keyed by the wire form
+// the Rust `castle` commands speak. The order is the reading order of the mini-screen diagram.
+type CastlePos =
+  | "notch"
+  | "left_edge"
+  | "right_edge"
+  | "bottom_left"
+  | "bottom_center"
+  | "bottom_right";
+
+const CASTLE_ANCHORS: Array<{ id: CastlePos; label: string; cls: string }> = [
+  { id: "notch", label: t.castleNotch, cls: "castle__spot--notch" },
+  { id: "left_edge", label: t.castleLeftEdge, cls: "castle__spot--left" },
+  { id: "right_edge", label: t.castleRightEdge, cls: "castle__spot--right" },
+  { id: "bottom_left", label: t.castleBottomLeft, cls: "castle__spot--bl" },
+  { id: "bottom_center", label: t.castleBottomCenter, cls: "castle__spot--bc" },
+  { id: "bottom_right", label: t.castleBottomRight, cls: "castle__spot--br" },
+];
+
+// Picker for where the panel resides on screen. A little Mac silhouette with the six anchor points
+// drawn where they actually sit — the selected one glows. Choosing one re-docks the live panel
+// immediately (the Rust side persists it and moves the window).
+function CastlePositionSection(): JSX.Element {
+  const [pos, setPos] = useState<CastlePos>("notch");
+
+  useEffect(() => {
+    if (!IN_TAURI) return;
+    void invoke<string>("get_castle_position")
+      .then((p) => {
+        if (CASTLE_ANCHORS.some((a) => a.id === p)) setPos(p as CastlePos);
+      })
+      .catch(() => undefined);
+  }, []);
+
+  const choose = (next: CastlePos): void => {
+    if (next === pos) return;
+    const prev = pos;
+    setPos(next); // optimistic — the move should feel instant
+    if (IN_TAURI)
+      void invoke("set_castle_position", { position: next }).catch(() => setPos(prev));
+  };
+
+  return (
+    <section className="set">
+      <div className="set__label" id="seg-castle">{t.castle}</div>
+      <div className="castle" role="radiogroup" aria-labelledby="seg-castle">
+        <div className="castle__screen">
+          {CASTLE_ANCHORS.map((a) => (
+            <button
+              key={a.id}
+              type="button"
+              role="radio"
+              aria-checked={pos === a.id}
+              aria-label={a.label}
+              title={a.label}
+              className={`castle__spot ${a.cls}${pos === a.id ? " is-on" : ""}`}
+              onClick={() => choose(a.id)}
+            />
+          ))}
+        </div>
+      </div>
+      <div className="set__hint">{t.castleHint}</div>
+    </section>
+  );
+}
+
 function ConnectionsSection(): JSX.Element {
   const [rows, setRows] = useState<ServiceStatus[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
@@ -1151,6 +1689,21 @@ const DEFAULT_BINDS: Record<string, string> = {
   summon: "Control+Alt+KeyN",
   quit: "Control+Alt+KeyQ",
 };
+/** The model each provider runs. Mirrors default_model() in inline_source.rs — shown so the user
+ *  can see what will run, not so they can change it. */
+function defaultModelFor(provider: string): string {
+  switch (provider) {
+    case "openrouter":
+      return "anthropic/claude-sonnet-4.5";
+    case "openai":
+      return "gpt-4o-mini";
+    case "gemini":
+      return "gemini-2.5-flash";
+    default:
+      return "claude-sonnet-5";
+  }
+}
+
 const PROVIDERS: Array<{ id: string; label: string }> = [
   { id: "anthropic", label: "Claude API" },
   { id: "openrouter", label: "OpenRouter" },
@@ -1332,6 +1885,7 @@ function Settings(props: {
             stays permanently off (FR-MT-01). */}
         <MeetingSection />
         <ConnectionsSection />
+        <ComposioSection />
         <AiSessionsSection />
         <DreamSection />
         <section className="set">
@@ -1351,6 +1905,7 @@ function Settings(props: {
             ))}
           </div>
         </section>
+        <CastlePositionSection />
         <section className="set">
           <div className="set__label">{t.shortcuts}</div>
           {/* Draft is a fixed ⌥-tap trigger (a bare modifier can't be a global shortcut), shown
@@ -1417,22 +1972,12 @@ function Settings(props: {
               </button>
             ))}
           </div>
-          <div className="keyrow">
-            <input
-              className="keyrow__input"
-              placeholder={t.modelPlaceholder}
-              value={model}
-              autoComplete="off"
-              onFocus={() => {
-                if (IN_TAURI) void invoke("focus_field", { focused: true }).catch(() => undefined);
-              }}
-              onChange={(e) => setModel(e.target.value)}
-              onBlur={() => applyLlm(provider, model)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") applyLlm(provider, model);
-              }}
-            />
-          </div>
+          {/* No free-text model field. It sat directly above the key entry and looked identical
+              to it, so a pasted API key landed in the model — which was then sent as the model
+              name and written to the log. The provider already has one right default; picking a
+              model is not a decision this product needs to offer, and the field's only proven use
+              was leaking a credential. */}
+          <div className="set__hint">{t.modelFor} {defaultModelFor(provider)}</div>
           <div className="set__hint">{t.modelHint}</div>
         </section>
         <section className="set">

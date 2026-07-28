@@ -157,6 +157,20 @@ impl ExclusionPolicy {
 ///
 /// Terminals count: [`ExclusionPolicy::is_excluded`] skips them before it ever looks at the user's
 /// list, so reporting them as removable would describe a policy the daemon does not enforce.
+/// The non-removable exclusion categories, with how many apps each covers.
+///
+/// Exposed so the UI can state what is protected without hardcoding a second copy of the list —
+/// a settings screen claiming "password managers are excluded" while the policy disagreed would
+/// be worse than saying nothing.
+pub fn default_categories() -> [(&'static str, usize); 4] {
+    [
+        ("Password managers", PASSWORD_MANAGERS.len()),
+        ("The system authentication agent", AUTH_AGENTS.len()),
+        ("Terminals", TERMINALS.len()),
+        ("Private browsing windows", PRIVATE_TITLE_MARKERS.len()),
+    ]
+}
+
 pub fn is_default_excluded(bundle_id: &str) -> bool {
     PASSWORD_MANAGERS.contains(&bundle_id)
         || AUTH_AGENTS.contains(&bundle_id)

@@ -329,7 +329,7 @@ pub mod mac {
             // lane — which is what a device with no credential at all does — and say why. The
             // shipping design does the same for a 401 from the relay
             // (docs/batch-relay-design.md §4.5).
-            Err(shogun_core::llm::LlmError::Unauthorized(status)) => {
+            Err(shogun_core::llm::LlmError::Unauthorized(status, _)) => {
                 eprintln!(
                     "[dream] batch credential rejected (HTTP {status}) — running the local lane. \
                      Check the SHOGUN/select-kk-batch Keychain entry."
@@ -403,6 +403,12 @@ pub mod mac {
 
     #[tauri::command]
     pub fn dream_status(db: tauri::State<'_, Db>) -> DreamStatusView {
+        status_view(&db)
+    }
+
+    /// The same status, callable with a plain `&Db` so other views (the Full UI window) can read
+    /// it without going through the command layer — and without re-deriving tonight's cycle id.
+    pub fn status_view(db: &Db) -> DreamStatusView {
         let (secs, off) = now_local();
         let tonight = cycle_id(secs, off, DEFAULT_WINDOW_START_HOUR, DEFAULT_WINDOW_END_HOUR);
         let s = db.dream_status(&tonight, HEALTH_WINDOW_NIGHTS);

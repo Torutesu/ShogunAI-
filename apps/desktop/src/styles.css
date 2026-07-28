@@ -2,10 +2,13 @@
    fit (handle vs open), so this file just styles the two surfaces. Theme-aware; dark default.
    Design language: soft glass, generous corner radii, layered rounded cards. */
 :root {
-  --glass: rgba(21, 24, 31, 0.85);
-  --glass-2: rgba(31, 35, 43, 0.85);
-  --line: rgba(255, 255, 255, 0.09);
-  --line-strong: rgba(255, 255, 255, 0.16);
+  /* The panel sits on top of whatever you're working on, so it reads as glass rather than as an
+     opaque sheet: the tint is light enough to let the desktop through and the blur does the work
+     of keeping text legible. Prototyped in docs/wireframes before landing here. */
+  --glass: rgba(18, 21, 28, 0.62);
+  --glass-2: rgba(28, 32, 41, 0.70);
+  --line: rgba(255, 255, 255, 0.11);
+  --line-strong: rgba(255, 255, 255, 0.18);
   --ink: #eef1f5;
   --muted: #9aa3af;
   --faint: #8b95a3;
@@ -39,10 +42,10 @@
    sync in one place (App.tsx always sets data-appearance now, but the bootstrap default must
    still be dark to avoid a light flash). */
 :root[data-appearance="dark"] {
-  --glass: rgba(21, 24, 31, 0.85);
-  --glass-2: rgba(31, 35, 43, 0.85);
-  --line: rgba(255, 255, 255, 0.09);
-  --line-strong: rgba(255, 255, 255, 0.16);
+  --glass: rgba(18, 21, 28, 0.62);
+  --glass-2: rgba(28, 32, 41, 0.70);
+  --line: rgba(255, 255, 255, 0.11);
+  --line-strong: rgba(255, 255, 255, 0.18);
   --ink: #eef1f5;
   --muted: #9aa3af;
   --faint: #8b95a3;
@@ -56,10 +59,10 @@
   --card: rgba(255, 255, 255, 0.045);
 }
 :root[data-appearance="light"] {
-  --glass: rgba(249, 250, 252, 0.92);
-  --glass-2: rgba(255, 255, 255, 0.92);
-  --line: rgba(0, 0, 0, 0.09);
-  --line-strong: rgba(0, 0, 0, 0.16);
+  --glass: rgba(252, 253, 255, 0.82);
+  --glass-2: rgba(255, 255, 255, 0.88);
+  --line: rgba(16, 24, 40, 0.10);
+  --line-strong: rgba(16, 24, 40, 0.17);
   --ink: #1b1d22;
   --muted: #5c616a;
   --faint: #6b7280;
@@ -74,10 +77,10 @@
 }
 @media (prefers-color-scheme: light) {
   :root[data-appearance="auto"] {
-    --glass: rgba(249, 250, 252, 0.92);
-    --glass-2: rgba(255, 255, 255, 0.92);
-    --line: rgba(0, 0, 0, 0.09);
-    --line-strong: rgba(0, 0, 0, 0.16);
+    --glass: rgba(252, 253, 255, 0.82);
+    --glass-2: rgba(255, 255, 255, 0.88);
+    --line: rgba(16, 24, 40, 0.10);
+    --line-strong: rgba(16, 24, 40, 0.17);
     --ink: #1b1d22;
     --muted: #5c616a;
     --faint: #6b7280;
@@ -138,12 +141,13 @@ body {
   height: auto;
   padding: 6px 12px;
   background: var(--glass);
-  -webkit-backdrop-filter: blur(30px) saturate(1.7);
-  backdrop-filter: blur(30px) saturate(1.7);
   border: 1px solid var(--line);
   border-top: none;
   border-radius: 0 0 var(--r-md) var(--r-md);
-  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.4);
+  /* Inset only. The pill fills its window edge to edge, so an outward drop shadow is clipped
+     away everywhere EXCEPT inside the rounded corners — where it pools into dark wedges that read
+     as a square frame around the glass. Lift comes from the NSPanel's own shadow instead. */
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
   color: var(--ink);
   font: inherit;
   font-family: var(--sys);
@@ -188,20 +192,25 @@ body {
   display: flex;
   flex-direction: column;
   background: var(--glass);
-  -webkit-backdrop-filter: blur(38px) saturate(1.8);
-  backdrop-filter: blur(38px) saturate(1.8);
   border: 1px solid var(--line);
   border-top: none;
   border-radius: 0 0 var(--r-xl) var(--r-xl);
-  box-shadow: 0 28px 66px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  /* A hairline inner highlight along the top edge so the glass has a lit rim instead of a flat
+     cut — and nothing outward. The panel is exactly the size of its window, so a drop shadow has
+     nowhere to land: every part of it falls outside the window and is clipped, except the part
+     that lands inside the rounded bottom corners, which fills them with a dark wedge. The result
+     reads as a hard square frame around a panel that is supposed to be rounded glass. The lift
+     off the desktop is the NSPanel's real window shadow (`setHasShadow`), which follows the
+     rendered shape. */
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
   overflow: hidden;
   transform-origin: top center;
-  animation: panel-unfurl 200ms cubic-bezier(0.32, 0.72, 0, 1);
+  animation: panel-unfurl 220ms cubic-bezier(0.32, 0.72, 0, 1);
 }
 @keyframes panel-unfurl {
   from {
     opacity: 0;
-    transform: translateY(-6px) scale(0.99);
+    transform: translateY(-8px) scale(0.985);
   }
   to {
     opacity: 1;
@@ -237,7 +246,7 @@ body {
   gap: 8px;
   /* Left padding kept tight so the live-source chip lands close to where the collapsed pill sits,
      i.e. the indicator barely moves when the panel opens. */
-  padding: 9px 10px;
+  padding: 6px 9px;
   border-bottom: 1px solid var(--line);
   cursor: grab;
 }
@@ -269,7 +278,7 @@ body {
   font-family: var(--sys);
   font-size: var(--fs-xs);
   border-radius: var(--r-pill);
-  padding: 5px 12px;
+  padding: 3px 9px;
   cursor: pointer;
   white-space: nowrap;
   transition: background var(--sp), color var(--sp), border-color var(--sp);
@@ -286,8 +295,8 @@ body {
 .icon {
   display: grid;
   place-items: center;
-  width: 30px;
-  height: 30px;
+  width: 26px;
+  height: 26px;
   border: none;
   background: transparent;
   color: var(--muted);
@@ -300,11 +309,24 @@ body {
   background: var(--fill);
   color: var(--ink);
 }
+/* An active toggle has to read as "on" at a glance — this one changes how the panel behaves, so
+   leaving it to a tooltip would hide the difference between two very different modes. */
+.icon--on {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.icon--on:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.icon svg {
+  transition: transform var(--sp);
+}
 
 /* state list */
 .state {
   flex: none;
-  max-height: 92px;
+  max-height: 108px;
   overflow-y: auto;
   padding: 6px 10px 8px;
   border-bottom: 1px solid var(--line);
@@ -314,7 +336,7 @@ body {
   align-items: baseline;
   justify-content: space-between;
   gap: 8px;
-  padding: 8px 8px;
+  padding: 5px 6px;
   width: 100%;
   text-align: left;
   background: none;
@@ -324,6 +346,28 @@ body {
   color: inherit;
   font: inherit;
   transition: background var(--sp);
+  /* Rows settle in one after another when the list opens, so a long list reads as arriving
+     rather than snapping into place. Capped at 4 — past that the tail feels sluggish. */
+  animation: row-in 240ms cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+.state__row:nth-child(2) {
+  animation-delay: 40ms;
+}
+.state__row:nth-child(3) {
+  animation-delay: 80ms;
+}
+.state__row:nth-child(n + 4) {
+  animation-delay: 120ms;
+}
+@keyframes row-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 .state__row:hover {
   background: var(--fill);
@@ -377,10 +421,10 @@ body {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 12px 14px;
+  padding: 8px 10px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 5px;
 }
 .welcome {
   margin: auto 0;
@@ -409,7 +453,7 @@ body {
 }
 .msg {
   max-width: 86%;
-  padding: 9px 13px;
+  padding: 6px 9px;
   border-radius: var(--r-lg);
   font-size: var(--fs-md);
   line-height: 1.55;
@@ -482,17 +526,17 @@ body {
   flex: none;
   /* The bottom padding clears the corner resize grip: without it the grip sits on top of the send
      button's corner and a click there starts a resize instead of sending. */
-  padding: 8px 10px 18px;
+  padding: 6px 9px 14px;
   border-top: 1px solid var(--line);
 }
 .composer__card {
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: 4px;
   background: var(--fill);
-  border: 1px solid var(--line-strong);
+  border: 1px solid var(--line);
   border-radius: var(--r-md);
-  padding: 9px 11px 8px;
+  padding: 5px 8px 5px;
   transition: border-color var(--sp), box-shadow var(--sp);
 }
 .composer__card:focus-within {
@@ -528,7 +572,7 @@ body {
   color: var(--ink);
   font: inherit;
   font-family: var(--sys);
-  font-size: var(--fs-xl);
+  font-size: var(--fs-lg);
   outline: none;
 }
 .composer__input::placeholder {
@@ -589,15 +633,15 @@ body {
   transform: scale(0.92);
 }
 .composer__send {
-  width: 34px;
-  height: 34px;
+  width: 22px;
+  height: 22px;
   border: none;
   border-radius: 50%;
   background: linear-gradient(135deg, var(--accent), var(--accent-2));
   color: var(--accent-ink);
-  font-size: 16px;
+  font-size: 14px;
   cursor: pointer;
-  box-shadow: 0 4px 13px var(--accent-soft);
+  box-shadow: 0 2px 8px var(--accent-soft);
   transition: filter var(--sp), transform var(--sp), box-shadow var(--sp);
 }
 .composer__send:disabled {
@@ -650,7 +694,6 @@ body {
 }
 .set__label {
   font-size: var(--fs-xs);
-  text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--faint);
   margin-bottom: 5px;
@@ -744,6 +787,102 @@ body {
   color: var(--ink);
   font-weight: 600;
 }
+
+/* Castle Position (issue #20) — a little Mac silhouette whose six anchor points are drawn where
+   they actually sit. Edges are thin lines, corners small boxes; the chosen one glows in accent.
+   The picker matches the panel's glass language: soft fills, generous radii, calm accent. */
+.castle {
+  display: flex;
+  justify-content: center;
+  padding: 4px 0 2px;
+}
+.castle__screen {
+  position: relative;
+  width: 100%;
+  max-width: 244px;
+  aspect-ratio: 16 / 10;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-md);
+  background: var(--fill);
+}
+/* The physical notch bump at the top-centre, so the silhouette reads as a modern Mac. */
+.castle__screen::before {
+  content: "";
+  position: absolute;
+  top: -1px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 40px;
+  height: 5px;
+  background: var(--line-strong);
+  border-radius: 0 0 4px 4px;
+}
+.castle__spot {
+  position: absolute;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  opacity: 0.5;
+  background: color-mix(in srgb, var(--ink) 34%, transparent);
+  border-radius: var(--r-pill);
+  transition: opacity var(--sp), background var(--sp), box-shadow var(--sp);
+}
+.castle__spot:hover {
+  opacity: 0.85;
+}
+.castle__spot.is-on {
+  opacity: 1;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+/* Notch: a short pill riding the top edge, over the drawn notch. */
+.castle__spot--notch {
+  top: 7px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 34px;
+  height: 7px;
+  border-radius: 0 0 5px 5px;
+}
+/* Left / right edges: thin vertical lines, vertically centred. */
+.castle__spot--left {
+  left: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 6px;
+  height: 42px;
+}
+.castle__spot--right {
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 6px;
+  height: 42px;
+}
+/* Bottom-centre: a thin horizontal line hugging the bottom edge. */
+.castle__spot--bc {
+  bottom: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 48px;
+  height: 6px;
+}
+/* Corners: small rounded boxes. */
+.castle__spot--bl {
+  left: 9px;
+  bottom: 9px;
+  width: 22px;
+  height: 16px;
+  border-radius: 5px;
+}
+.castle__spot--br {
+  right: 9px;
+  bottom: 9px;
+  width: 22px;
+  height: 16px;
+  border-radius: 5px;
+}
+
 .icon--close:hover {
   color: var(--warn);
 }
@@ -986,7 +1125,6 @@ kbd {
 }
 .cites__label {
   font-size: var(--fs-xs);
-  text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--faint);
 }
@@ -1415,4 +1553,495 @@ kbd {
   font-size: var(--fs-xs);
   color: var(--muted);
   background: rgba(128, 128, 128, 0.15);
+}
+/* ═══════════════════════════════════════════════════════════════════════════════════════════
+   Full UI — the separate window (spec §D). Shares the tokens above; the panel is a dense
+   overlay capped at 14px type, but this is a window you sit in front of, so headings get room.
+   ═══════════════════════════════════════════════════════════════════════════════════════════ */
+
+.full {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  /* Opaque, unlike the panel. Transparency earns its place on the overlay — you look PAST that
+     one at the work underneath. This is a window you look AT: dense tables, small type, long
+     reading. Anything showing through here is just noise competing with the content. */
+  background: #101319;
+  color: var(--ink);
+  overflow: hidden;
+}
+.full__body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+/* sidebar */
+.side {
+  width: 236px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  /* The traffic lights float over the top-left of a transparent title bar, so the sidebar starts
+     below them — otherwise the brand mark sits underneath the close button. */
+  padding: 44px 12px 18px;
+  border-right: 1px solid var(--line);
+  overflow-y: auto;
+}
+.side__brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 10px 18px;
+}
+.side__mark {
+  font-size: 15px;
+  color: var(--accent);
+}
+.side__name {
+  font-size: var(--fs-xl);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.side__group {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  color: var(--faint);
+  padding: 16px 12px 8px;
+}
+.side__item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 9px 12px;
+  border: none;
+  background: none;
+  border-radius: var(--r-sm);
+  color: var(--muted);
+  font: inherit;
+  font-family: var(--sys);
+  font-size: var(--fs-lg);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--sp), color var(--sp);
+}
+.side__item:hover {
+  background: var(--fill);
+  color: var(--ink);
+}
+.side__item.is-on {
+  background: var(--fill-strong);
+  color: var(--ink);
+  font-weight: 600;
+}
+.side__plan {
+  margin: 2px 10px 0;
+  align-self: flex-start;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--muted);
+  background: var(--fill);
+  border: 1px solid var(--line);
+  border-radius: var(--r-pill);
+  padding: 3px 10px;
+}
+
+/* content */
+.pane {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.pane__head {
+  flex: none;
+  padding: 40px 30px 18px;
+  border-bottom: 1px solid var(--line);
+  animation: row-in 240ms cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+.pane__title {
+  font-size: 21px;
+  font-weight: 620;
+  letter-spacing: -0.018em;
+}
+.pane__sub {
+  margin-top: 5px;
+  font-size: var(--fs-lg);
+  color: var(--muted);
+  line-height: 1.5;
+}
+.pane__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 22px 30px 30px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+/* cards + rows */
+.fcard {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+  animation: row-in 260ms cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+.fcard__label {
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  color: var(--accent);
+  padding: 16px 18px 2px;
+}
+.fcard__sub {
+  padding: 7px 18px 0;
+  font-size: var(--fs-lg);
+  color: var(--muted);
+  line-height: 1.55;
+}
+.frow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 22px;
+  padding: 15px 18px;
+  border-top: 1px solid var(--line);
+}
+.frow__lead {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.frow__t {
+  font-size: var(--fs-xl);
+  font-weight: 550;
+}
+.frow__d {
+  font-size: var(--fs-lg);
+  color: var(--muted);
+  line-height: 1.5;
+}
+.frow__trail {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* health grid — every card carries a way to fix the number it shows */
+.hgrid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+}
+.hcard {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 132px;
+  padding: 16px 17px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  transition: border-color var(--sp), transform var(--sp);
+  animation: row-in 260ms cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+.hcard:hover {
+  border-color: var(--line-strong);
+  transform: translateY(-1px);
+}
+.hcard--wide {
+  grid-column: span 2;
+}
+.hcard__k {
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  color: var(--faint);
+}
+.hcard__v {
+  flex: 1;
+  font-size: var(--fs-xl);
+  line-height: 1.5;
+}
+.hcard__big {
+  font-size: 26px;
+  font-weight: 640;
+  letter-spacing: -0.025em;
+}
+.hcard__fix {
+  align-self: flex-start;
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--accent);
+  font: inherit;
+  font-family: var(--sys);
+  font-size: var(--fs-lg);
+  font-weight: 550;
+  cursor: pointer;
+}
+.hcard__fix:hover {
+  text-decoration: underline;
+}
+
+.mix {
+  display: flex;
+  height: 7px;
+  border-radius: var(--r-pill);
+  overflow: hidden;
+  background: var(--fill-strong);
+  margin-bottom: 9px;
+}
+
+/* tables */
+.thead,
+.trow {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+}
+.thead {
+  padding: 11px 18px;
+  border-bottom: 1px solid var(--line);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  color: var(--faint);
+}
+.trow {
+  padding: 12px 18px;
+  font-size: var(--fs-lg);
+  border-top: 1px solid var(--line);
+}
+.trow:hover {
+  background: var(--fill);
+}
+.trow--flag {
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
+}
+.c-time {
+  width: 74px;
+  flex: none;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.c-grow {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.c-mid {
+  width: 130px;
+  flex: none;
+  color: var(--muted);
+}
+.c-end {
+  width: 96px;
+  flex: none;
+  text-align: right;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.c-digest {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: var(--fs-md);
+  color: var(--faint);
+}
+
+/* small parts */
+.lvl {
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--line);
+}
+.lvl--l1 {
+  color: var(--live);
+  background: color-mix(in srgb, var(--live) 14%, transparent);
+}
+.lvl--l2 {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.lvl--l3 {
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+}
+.pillbadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: var(--fs-md);
+  font-weight: 550;
+  border-radius: var(--r-pill);
+  padding: 5px 12px;
+  border: 1px solid var(--line);
+  background: var(--fill);
+  color: var(--muted);
+}
+.pillbadge__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--faint);
+}
+.pillbadge--ok {
+  color: var(--live);
+  background: color-mix(in srgb, var(--live) 12%, transparent);
+}
+.pillbadge--ok .pillbadge__dot {
+  background: var(--live);
+}
+.pillbadge--warn {
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+}
+.pillbadge--warn .pillbadge__dot {
+  background: var(--warn);
+}
+.fbtn {
+  border: 1px solid var(--line-strong);
+  background: var(--fill);
+  color: var(--ink);
+  font: inherit;
+  font-family: var(--sys);
+  font-size: var(--fs-lg);
+  font-weight: 550;
+  padding: 8px 15px;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  transition: background var(--sp), transform var(--sp);
+}
+.fbtn:hover {
+  background: var(--fill-strong);
+}
+.fbtn:active {
+  transform: scale(0.97);
+}
+.fbtn--go {
+  background: var(--accent);
+  border-color: transparent;
+  color: var(--accent-ink);
+}
+.stat {
+  display: flex;
+  gap: 30px;
+  padding: 6px 18px 18px;
+}
+.stat__k {
+  font-size: 24px;
+  font-weight: 640;
+  letter-spacing: -0.025em;
+}
+.stat__l {
+  margin-top: 3px;
+  font-size: var(--fs-md);
+  color: var(--muted);
+}
+.brief__h {
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  color: var(--accent);
+  margin-bottom: 8px;
+}
+.brief__sec {
+  padding: 14px 18px;
+  border-top: 1px solid var(--line);
+}
+.brief__p {
+  font-size: var(--fs-xl);
+  line-height: 1.62;
+}
+.brief__b {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  font-size: var(--fs-lg);
+  line-height: 1.55;
+  padding: 3px 0;
+}
+.conf {
+  flex: none;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: var(--r-pill);
+}
+.conf--high {
+  color: var(--live);
+  background: color-mix(in srgb, var(--live) 14%, transparent);
+}
+.conf--medium {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.conf--low {
+  color: var(--muted);
+  background: var(--fill-strong);
+}
+
+/* The Full UI is glass too. It was given a solid ground at first, which is exactly what killed
+   the transparency: the blur had nothing to show through. The window itself is transparent (see
+   build_full_ui_window) and `.full` carries the tint + blur, same as the panel. */
+body.full-window {
+  background: transparent;
+}
+:root[data-appearance="light"] .full {
+  background: #f7f8fb;
+}
+
+/* Boot / failure state for the Full UI window, before the core's view arrives. */
+.full-boot {
+  height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 40px;
+  text-align: center;
+  font-size: var(--fs-lg);
+  color: var(--muted);
+}
+
+/* Empty state: quiet, indented to the card's rhythm, never centred like an error. Nothing has
+   gone wrong — there is simply nothing yet, and the copy says what will fill it. */
+.fempty {
+  padding: 14px 18px 18px;
+  font-size: var(--fs-lg);
+  line-height: 1.6;
+  color: var(--muted);
+  max-width: 68ch;
+}
+
+/* ⌥-tap feedback. The pill answers the keystroke and then goes back to reporting the live source
+   — it is a reply, not a status the user has to dismiss, so it never gets a close affordance. */
+.inline--work {
+  color: var(--muted);
+}
+.inline--ok {
+  color: var(--live);
+}
+.inline--warn {
+  color: var(--warn);
+}
+.inline__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex: none;
+  background: currentColor;
+}
+/* Only the working state pulses: a finished draft shouldn't keep drawing the eye. */
+.inline__dot--work {
+  animation: live-pulse 1s ease-in-out infinite;
 }

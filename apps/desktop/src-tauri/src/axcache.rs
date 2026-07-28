@@ -148,6 +148,11 @@ mod mac {
             "AXLink" => Role::Link,
             "AXCell" => Role::Cell,
             "AXSecureTextField" => Role::SecureTextField,
+            // Browser/app chrome: the toolbar (address bar, bookmarks) and the tab strip. Real
+            // content-bearing children (Link, StaticText, Cell) hang under these near the root, so
+            // a plain BFS spends the element budget on them before descending to the page body.
+            // Marking the containers defers their whole subtree to after the content.
+            "AXToolbar" | "AXTabGroup" => Role::DeferredChrome,
             _ => Role::Other,
         }
     }
