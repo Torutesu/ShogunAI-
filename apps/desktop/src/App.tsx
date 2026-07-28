@@ -23,6 +23,16 @@ function beginDrag(e: React.MouseEvent): void {
       .catch((err) => uiLog(`startDragging failed: ${err}`)),
   );
 }
+
+// Collapsed state: let the pill be dragged to a new spot. The whole strip is one button whose
+// click expands the panel, so we can't use beginDrag (it bails on buttons). Native
+// performWindowDragWithEvent handles the distinction for us: a real drag moves the window and
+// swallows the click, while a stationary press returns and falls through to onClick (expand) —
+// so the pill stays click-to-open AND becomes drag-to-move without a manual threshold.
+function beginPillDrag(e: React.MouseEvent): void {
+  if (!IN_TAURI || e.button !== 0) return;
+  void invoke("start_panel_drag").catch((err) => uiLog(`start_panel_drag failed: ${err}`));
+}
 import { t } from "./strings";
 import { SERVICE_ICONS } from "./serviceIcons";
 
@@ -433,7 +443,9 @@ export function App(): JSX.Element {
     if (inMeeting && meeting) {
       return (
         <div className="stage stage--handle">
-          <div ref={pillRef}>
+          {/* Same reposition affordance as the ordinary handle. beginDrag ignores the pill's own
+              buttons (stop / not-now / never), so those still click through. */}
+          <div ref={pillRef} onMouseDown={beginDrag}>
             <MeetingPill view={meeting} />
           </div>
         </div>
@@ -441,7 +453,14 @@ export function App(): JSX.Element {
     }
     return (
       <div className="stage stage--handle">
-        <button className="handle" ref={handleRef} type="button" onClick={expand} title={t.openPanel}>
+        <button
+          className="handle"
+          ref={handleRef}
+          type="button"
+          onClick={expand}
+          onMouseDown={beginPillDrag}
+          title={t.openPanel}
+        >
           <span className="handle__live">
             <span className="live__dot" />
             {t.reading} <b>{live}</b>
