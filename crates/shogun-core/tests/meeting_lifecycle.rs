@@ -14,6 +14,10 @@
 //! closes it again**. The machine already emits StartAudio/StopAudio (the adapter ignores them
 //! until the ASR lane exists), so the balance is checkable now, before there is anything real to
 //! leave running.
+//!
+//! This target exercises the `db`-gated `daemon` module, so it is compiled only under the `db`
+//! feature (mirroring `context_slo.rs`); the pure-logic audio unit tests run without it.
+#![cfg(feature = "db")]
 
 use shogun_core::daemon::{Clock, Db};
 use shogun_core::meeting::detect::{self, Decision, LiveSignals, Signals};
