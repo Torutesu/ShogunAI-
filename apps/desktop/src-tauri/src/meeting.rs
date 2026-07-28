@@ -209,9 +209,16 @@ use shogun_core::meeting::gate::OfferGate;
                 // The tick loop drives the countdown and the silence watchdog, so the machine's
                 // timer requests need no separate scheduler here.
                 Effect::StartTimer { .. } | Effect::CancelTimer(_) => {}
-                // MT2 shows the degraded Recap; `meeting_recap` reads it from the closed
-                // interval, so nothing to do here beyond having closed the session above.
-                Effect::BuildRecap => {}
+                // MT4: kick off the model Recap for the interval that just closed. The degraded
+                // MT2 Recap is already readable from the closed interval, so this is pure upgrade:
+                // `meeting_recap::spawn` runs the Batch on a background thread and emits
+                // `meeting_recap` when the minutes are stored — a failure leaves the degraded Recap
+                // untouched (FR-MT-19). `CloseSession` above moved the id into `last_session_id`.
+                Effect::BuildRecap => {
+                    if let Some(id) = lane.last_session_id {
+                        crate::meeting_recap::spawn(app, id, lane.settings.language);
+                    }
+                }
             }
         }
         emit(app, lane, now);

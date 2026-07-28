@@ -23,6 +23,7 @@ mod hover;
 mod inline_source;
 mod integrate;
 pub mod meeting;
+mod meeting_recap;
 mod mic;
 mod notch_actions;
 mod notch_exec;
