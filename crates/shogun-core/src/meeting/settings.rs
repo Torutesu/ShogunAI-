@@ -16,6 +16,16 @@
 
 use std::collections::BTreeSet;
 
+/// Which on-device ASR model to use. `Small` (bundled default) or `Turbo` (large-v3-turbo,
+/// opt-in high accuracy, fetched on first use). Defaults to Small (§5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum AsrModel {
+    #[default]
+    Small,
+    Turbo,
+}
+
 /// Meeting-notes settings as persisted.
 ///
 /// Every field defaults, so a file written before this feature existed — or a half-written one —
@@ -31,6 +41,9 @@ pub struct Settings {
     /// Tier (b), the calendar half: occurrence external ids that never offer — the recurring 1:1
     /// a user never wants noted (FR-MT-02).
     pub excluded_occurrences: BTreeSet<String>,
+    /// Which on-device ASR model transcribes the meeting. Defaults to Small (§5).
+    #[serde(default)]
+    pub asr_model: AsrModel,
 }
 
 // Written out rather than derived, though it is derivable. `#[derive(Default)]` would leave the
@@ -43,6 +56,7 @@ impl Default for Settings {
             enabled: false,
             excluded_apps: BTreeSet::new(),
             excluded_occurrences: BTreeSet::new(),
+            asr_model: AsrModel::Small,
         }
     }
 }
@@ -186,5 +200,18 @@ mod tests {
 
         assert!(!restored.enabled);
         assert_eq!(restored.excluded_apps.len(), 1);
+    }
+
+    #[test]
+    fn asr_model_defaults_to_small() {
+        assert_eq!(AsrModel::default(), AsrModel::Small);
+    }
+
+    #[test]
+    fn asr_model_round_trips_json() {
+        let json = serde_json::to_string(&AsrModel::Turbo).unwrap();
+        assert_eq!(json, "\"turbo\"");
+        let back: AsrModel = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, AsrModel::Turbo);
     }
 }
