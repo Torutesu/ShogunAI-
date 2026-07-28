@@ -7,6 +7,9 @@
 
 pub mod detect;
 pub mod gate;
+/// Prompt construction and model-output parsing for the generated minutes (MT4). Pure logic,
+/// no network, no feature gate — the wiring layer (slice 2) calls the Batch API.
+pub mod minutes;
 /// Recap reads the stored interval, so it lives behind the same `db` feature as every other
 /// module that touches shogun-memory.
 #[cfg(feature = "db")]
