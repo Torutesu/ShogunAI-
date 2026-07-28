@@ -18,6 +18,7 @@
 //! This target exercises the `db`-gated `daemon` module, so it is compiled only under the `db`
 //! feature (mirroring `context_slo.rs`); the pure-logic audio unit tests run without it.
 #![cfg(feature = "db")]
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use shogun_core::daemon::{Clock, Db};
 use shogun_core::meeting::detect::{self, Decision, LiveSignals, Signals};
