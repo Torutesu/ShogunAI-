@@ -21,6 +21,7 @@ use shogun_core::audio::capture::{AudioSource, MultiSource};
 use shogun_core::audio::worker::{SegmentSink, Worker};
 use shogun_core::audio::{Speaker, Utterance};
 use shogun_core::daemon::Db;
+use shogun_core::meeting::settings::AsrModel;
 use tauri::Manager;
 
 /// A running audio lane. Dropping the handle without `stop` would leak the thread, so the machine
@@ -66,9 +67,24 @@ fn whisper_model_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
     p.exists().then_some(p)
 }
 
-/// Start listening for meeting `session_id`. Returns `None` (notes only) whenever any piece of the
-/// pipeline is unavailable — this is the degraded, not the error, path (FR-MT-13, OPEN-07/08).
-pub fn start(app: &tauri::AppHandle, session_id: i64) -> Option<Handle> {
+/// The whisper model to load for `model`, degrading toward the bundled small model. For `Turbo` we
+/// try the fetched-once large-v3-turbo weights first (`model_fetch::ensure_turbo`), and fall back
+/// to small whenever the fetch is unavailable (offline, hash mismatch) so a Turbo preference never
+/// prevents transcription — it only asks for higher accuracy when it can be had.
+fn select_model_path(app: &tauri::AppHandle, model: AsrModel) -> Option<std::path::PathBuf> {
+    if model == AsrModel::Turbo {
+        if let Some(turbo) = crate::model_fetch::ensure_turbo(app) {
+            return Some(turbo);
+        }
+        eprintln!("[meeting] turbo model unavailable; using bundled small");
+    }
+    whisper_model_path(app)
+}
+
+/// Start listening for meeting `session_id` with the chosen ASR `model`. Returns `None` (notes
+/// only) whenever any piece of the pipeline is unavailable — this is the degraded, not the error,
+/// path (FR-MT-13, OPEN-07/08).
+pub fn start(app: &tauri::AppHandle, session_id: i64, model: AsrModel) -> Option<Handle> {
     // The database the sink writes into. Absent DB means nowhere to store the transcript, so there
     // is no point listening.
     let db = app.try_state::<Db>().map(|s| s.inner().clone());
@@ -78,8 +94,9 @@ pub fn start(app: &tauri::AppHandle, session_id: i64) -> Option<Handle> {
     };
 
     // The ASR model. Absent in a dev checkout without the fetch script; a real load failure is the
-    // same outcome here — notes only — but is worth logging distinctly.
-    let Some(model_path) = whisper_model_path(app) else {
+    // same outcome here — notes only — but is worth logging distinctly. A Turbo preference is
+    // honoured when the fetched model is available, otherwise this resolves the bundled small model.
+    let Some(model_path) = select_model_path(app, model) else {
         eprintln!("[meeting] no whisper model bundled; notes only");
         return None;
     };

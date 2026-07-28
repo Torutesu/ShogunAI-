@@ -195,7 +195,7 @@ use shogun_core::meeting::gate::OfferGate;
                 // meeting still records notes (FR-MT-13, OPEN-07/08).
                 Effect::StartAudio => {
                     if let Some(id) = lane.session_id {
-                        lane.audio = crate::audio_lane::start(app, id);
+                        lane.audio = crate::audio_lane::start(app, id, lane.settings.asr_model);
                     }
                 }
                 Effect::StopAudio => {

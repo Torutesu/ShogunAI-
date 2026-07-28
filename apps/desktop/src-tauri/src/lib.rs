@@ -10,6 +10,9 @@ mod ai_sessions;
 mod approvals;
 mod audio_lane;
 pub mod axcache;
+// Turbo model fetch (reqwest + sha2) is only wired in on-device, matching where those deps live.
+#[cfg(target_os = "macos")]
+mod model_fetch;
 mod capture_source;
 mod connectors;
 pub mod display;
