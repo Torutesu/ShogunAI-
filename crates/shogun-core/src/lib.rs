@@ -24,6 +24,7 @@
 //! CLAUDE.md forbids `unwrap()`/`expect()` outside tests; test modules are exempted below.
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
+pub mod audio;
 pub mod bus;
 pub mod capture;
 /// The daemon's shared DB handle — one connection every writer/reader uses (feature `db`; the
