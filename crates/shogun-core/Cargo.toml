@@ -78,6 +78,9 @@ required-features = ["db"]
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }
 # For the daemon-server end-to-end test: drive the real server with the CLI's loopback client.
 shogun-cli = { path = "../shogun-cli" }
+# The audio worker is sink-agnostic (SegmentSink trait); the crate never depends on shogun-memory
+# in non-test builds. Pulled in only so tests can exercise the DB-backed sink path.
+shogun-memory = { path = "../shogun-memory" }
 
 [lints]
 workspace = true
