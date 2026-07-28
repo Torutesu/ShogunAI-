@@ -124,6 +124,13 @@ export const STRINGS = {
     meetingRecapNoNotes: "You didn't write anything this time.",
     meetingRecapMinutes: "min",
     meetingRecapDone: "Done",
+    // Minutes — the model-generated layer (MT4, FR-MT-19), shown on top of the degraded Recap
+    // once the Batch lane produces it. Next actions are suggestions to confirm, never things the
+    // app will do (invariant 4).
+    meetingMinutesSummary: "Summary",
+    meetingMinutesDecisions: "Decisions",
+    meetingMinutesNextActions: "Next actions",
+    meetingMinutesPending: "Preparing notes…",
     meetingUntitled: "Meeting",
     meetingStarting: "Taking notes in",
     meetingStart: "Start",

@@ -26,6 +26,15 @@ export interface Recap {
   degraded: boolean;
 }
 
+// The model-generated minutes (MT4). They arrive AFTER the degraded Recap is already on screen —
+// the Batch lane is async — so this is layered on top of `Recap`, never a replacement. A next
+// action is a suggestion to confirm, not something the app will do (invariant 4): display only.
+export interface Minutes {
+  summary: string;
+  decisions: string[];
+  next_actions: { text: string; owner: string | null }[];
+}
+
 /** mm:ss. Tabular figures in CSS keep the row from reflowing as the seconds tick. */
 function clock(ms: number): string {
   const total = Math.max(0, Math.floor(ms / 1000));
@@ -39,6 +48,7 @@ const call = (cmd: string, args?: Record<string, unknown>): void => {
 export function MeetingOverlay(): JSX.Element | null {
   const [view, setView] = useState<MeetingView | null>(null);
   const [recap, setRecap] = useState<Recap | null>(null);
+  const [minutes, setMinutes] = useState<Minutes | null>(null);
   const [note, setNote] = useState("");
 
   // Polled, with the push event as an accelerator rather than the source of truth.
@@ -62,10 +72,19 @@ export function MeetingOverlay(): JSX.Element | null {
   }, []);
 
   // The Recap is read once the interval has closed — it is assembled from the stored session,
-  // so there is nothing to show before then.
+  // so there is nothing to show before then. The model-generated minutes are read alongside it,
+  // but they usually are not ready yet (the Batch lane is async): the `meeting_recap` event, fired
+  // when they land, is what triggers the refetch that fills them in on the card already shown.
   useEffect(() => {
     if (view?.state !== "wrapping") return;
     void invoke<Recap | null>("meeting_recap").then(setRecap).catch(() => undefined);
+    void invoke<Minutes | null>("meeting_recap_minutes").then(setMinutes).catch(() => undefined);
+    const off = listen("meeting_recap", () => {
+      void invoke<Minutes | null>("meeting_recap_minutes").then(setMinutes).catch(() => undefined);
+    });
+    return () => {
+      void off.then((f) => f());
+    };
   }, [view?.state]);
 
   // Why nothing is on screen, when nothing is on screen. The window can be shown and still look
@@ -142,6 +161,11 @@ export function MeetingOverlay(): JSX.Element | null {
   // Wrapping: the degraded Recap (FR-MT-19). The summary and the action items arrive with MT4;
   // until then this shows what is actually known, and says so rather than leaving a blank card
   // that reads as "your meeting was lost".
+  const minutesHasContent =
+    minutes != null &&
+    (minutes.summary.trim().length > 0 ||
+      minutes.decisions.length > 0 ||
+      minutes.next_actions.length > 0);
   return (
     <div className="ov ov--recap">
       {grip}
@@ -160,6 +184,42 @@ export function MeetingOverlay(): JSX.Element | null {
           ) : (
             <div className="ov__rempty">{t.meetingRecapNoNotes}</div>
           )}
+          {/* The model-generated minutes, layered on top of the degraded Recap when they arrive.
+              Never blanks the card while absent: the notes above always show. Display only — a
+              next action is a suggestion to confirm, not something this system will do. */}
+          {minutesHasContent ? (
+            <div className="ov__minutes">
+              {minutes?.summary ? (
+                <div className="ov__msec">
+                  <div className="ov__mhead">{t.meetingMinutesSummary}</div>
+                  <p className="ov__msummary">{minutes.summary}</p>
+                </div>
+              ) : null}
+              {minutes && minutes.decisions.length > 0 ? (
+                <div className="ov__msec">
+                  <div className="ov__mhead">{t.meetingMinutesDecisions}</div>
+                  <ul className="ov__mlist">
+                    {minutes.decisions.map((d, i) => (
+                      <li key={i}>{d}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+              {minutes && minutes.next_actions.length > 0 ? (
+                <div className="ov__msec">
+                  <div className="ov__mhead">{t.meetingMinutesNextActions}</div>
+                  <ul className="ov__mlist">
+                    {minutes.next_actions.map((a, i) => (
+                      <li key={i}>
+                        {a.text}
+                        {a.owner ? <span className="ov__mowner">{a.owner}</span> : null}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
         </div>
         <button type="button" className="ov__go ov__go--wide" onClick={() => call("meeting_wrapped")}>
           {t.meetingRecapDone}

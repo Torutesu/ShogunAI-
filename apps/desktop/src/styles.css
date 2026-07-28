@@ -1370,3 +1370,49 @@ kbd {
   font-size: var(--fs-xs);
   color: var(--muted);
 }
+
+/* The model-generated minutes, layered under the notes once they arrive. Kept calm: a hairline
+   above it separates it from the raw notes without a heavy container. */
+.ov__minutes {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--hairline, rgba(128, 128, 128, 0.2));
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.ov__msec {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.ov__mhead {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.ov__msummary {
+  margin: 0;
+  font-size: var(--fs-xs);
+  line-height: 1.6;
+  word-break: break-word;
+}
+.ov__mlist {
+  margin: 0;
+  padding-left: 16px;
+  font-size: var(--fs-xs);
+  line-height: 1.6;
+}
+.ov__mlist li {
+  word-break: break-word;
+}
+.ov__mowner {
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 8px;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  background: rgba(128, 128, 128, 0.15);
+}
