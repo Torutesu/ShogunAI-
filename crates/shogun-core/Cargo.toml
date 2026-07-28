@@ -35,6 +35,10 @@ db = ["dep:shogun-memory", "dep:rusqlite", "dep:shogun-fusion", "dep:shogun-mcp"
 # enables this; the daemon-server bundle builds on it and adds axum.
 exec = ["db", "net", "dep:shogun-agents"]
 daemon-server = ["exec", "shogun-mcp/server", "tokio/rt-multi-thread", "tokio/macros"]
+# The MT3 audio lane: the real capture + ASR backends. macOS-only heavy deps (whisper.cpp/Metal,
+# cpal, Core Audio via objc2) are wired in a later task; declared now so the pure-logic modules can
+# cfg-gate their FFI submodules without an `unexpected_cfgs` warning while the feature is OFF.
+audio = []
 
 [dependencies]
 tokio = { version = "1", features = ["sync"] }
