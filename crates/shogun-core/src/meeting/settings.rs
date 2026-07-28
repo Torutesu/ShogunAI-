@@ -26,6 +26,40 @@ pub enum AsrModel {
     Turbo,
 }
 
+/// Which language the meeting is transcribed in. The policy is English-primary, Japanese
+/// alongside (`docs/context-layer-audit-and-plan.md` §8), so the shipped default is **English**,
+/// not `Auto`: device testing found whisper's per-utterance auto-detection misfires on short
+/// English lines (it read "Ask not what your country can do for you" as Japanese katakana), and a
+/// meeting that is mostly one language is far better served by fixing that language than by letting
+/// detection flip-flop line to line. `Auto` is the escape hatch — it detects once per session and
+/// then locks (see `whisper.rs`), so it is stable within a meeting but still guesses.
+// English is the `#[default]` for the same reason it is spelled out in `Default for Settings`:
+// the English-primary policy (§8). The two must agree — a `#[serde(default)]` on the `language`
+// field needs a `Default` on this enum, and if that disagreed with the Settings default a field
+// deserialized from an absent key would land on a different language than a freshly-defaulted
+// Settings. Both are English, deliberately.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum MeetingLanguage {
+    #[default]
+    English,
+    Japanese,
+    Auto,
+}
+
+impl MeetingLanguage {
+    /// The whisper `set_language` code for a *fixed* language, or `None` for `Auto`. `None` is what
+    /// the whisper backend reads as "detect" — for `Auto` that means detect-once-and-lock; for the
+    /// fixed variants it hands whisper `"en"`/`"ja"` and never detects.
+    pub fn whisper_code(self) -> Option<&'static str> {
+        match self {
+            MeetingLanguage::English => Some("en"),
+            MeetingLanguage::Japanese => Some("ja"),
+            MeetingLanguage::Auto => None,
+        }
+    }
+}
+
 /// Meeting-notes settings as persisted.
 ///
 /// Every field defaults, so a file written before this feature existed — or a half-written one —
@@ -44,11 +78,18 @@ pub struct Settings {
     /// Which on-device ASR model transcribes the meeting. Defaults to Small (§5).
     #[serde(default)]
     pub asr_model: AsrModel,
+    /// Which language the meeting is transcribed in. Defaults to English (English-primary policy,
+    /// `docs/context-layer-audit-and-plan.md` §8), *not* Auto.
+    #[serde(default)]
+    pub language: MeetingLanguage,
 }
 
 // Written out rather than derived, though it is derivable. `#[derive(Default)]` would leave the
 // most important property of this type — that it ships off — resting on the reader knowing that
 // `bool` defaults to `false`. This default is a promise to the user (FR-MT-01), so it is stated.
+// The same reasoning fixes `language` to English here rather than deriving a `Default` on the enum:
+// English-base is a deliberate policy choice, not the alphabetically-first or first-declared
+// variant, so it is spelled out where the whole default is spelled out.
 #[allow(clippy::derivable_impls)]
 impl Default for Settings {
     fn default() -> Self {
@@ -57,6 +98,7 @@ impl Default for Settings {
             excluded_apps: BTreeSet::new(),
             excluded_occurrences: BTreeSet::new(),
             asr_model: AsrModel::Small,
+            language: MeetingLanguage::English,
         }
     }
 }
@@ -213,5 +255,41 @@ mod tests {
         assert_eq!(json, "\"turbo\"");
         let back: AsrModel = serde_json::from_str(&json).unwrap();
         assert_eq!(back, AsrModel::Turbo);
+    }
+
+    #[test]
+    fn language_defaults_to_english() {
+        // The English-primary policy (§8), asserted rather than trusted: a build that flips this to
+        // Auto (reintroducing the per-utterance katakana misfire) fails here, not in a meeting.
+        assert_eq!(Settings::default().language, MeetingLanguage::English);
+    }
+
+    #[test]
+    fn a_settings_file_that_predates_the_language_field_reads_as_english() {
+        // Upgrade path: an install written before `language` existed has no such key and must read
+        // as the shipped English default, not fall through to Auto.
+        let restored: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(restored.language, MeetingLanguage::English);
+    }
+
+    #[test]
+    fn language_round_trips_json() {
+        // The wire form is lowercase, matching AsrModel's style, and every variant survives a trip.
+        assert_eq!(serde_json::to_string(&MeetingLanguage::English).unwrap(), "\"english\"");
+        assert_eq!(serde_json::to_string(&MeetingLanguage::Auto).unwrap(), "\"auto\"");
+        let english: MeetingLanguage = serde_json::from_str("\"english\"").unwrap();
+        assert_eq!(english, MeetingLanguage::English);
+        let auto: MeetingLanguage = serde_json::from_str("\"auto\"").unwrap();
+        assert_eq!(auto, MeetingLanguage::Auto);
+        let japanese: MeetingLanguage = serde_json::from_str("\"japanese\"").unwrap();
+        assert_eq!(japanese, MeetingLanguage::Japanese);
+    }
+
+    #[test]
+    fn language_maps_to_the_right_whisper_code() {
+        // The fixed languages pin whisper to a code; Auto yields None (detect-then-lock downstream).
+        assert_eq!(MeetingLanguage::English.whisper_code(), Some("en"));
+        assert_eq!(MeetingLanguage::Japanese.whisper_code(), Some("ja"));
+        assert_eq!(MeetingLanguage::Auto.whisper_code(), None);
     }
 }
