@@ -37,7 +37,17 @@ exec = ["db", "net", "dep:shogun-agents"]
 daemon-server = ["exec", "shogun-mcp/server", "tokio/rt-multi-thread", "tokio/macros"]
 # The MT3 audio lane: the real capture + ASR backends. macOS-only heavy deps (whisper.cpp/Metal,
 # cpal, Core Audio via objc2), so OFF by default — the pure-logic audio tests compile without them.
-audio = ["dep:whisper-rs", "dep:cpal", "dep:objc2-foundation"]
+audio = [
+    "dep:whisper-rs",
+    "dep:cpal",
+    "dep:objc2-foundation",
+    "dep:objc2",
+    "dep:objc2-core-audio",
+    "dep:objc2-core-audio-types",
+    "dep:objc2-core-foundation",
+    "dep:block2",
+    "dep:dispatch2",
+]
 
 [dependencies]
 tokio = { version = "1", features = ["sync"] }
@@ -65,9 +75,19 @@ rusqlite = { version = "0.31", features = ["bundled-sqlcipher-vendored-openssl"]
 whisper-rs = { version = "0.16", features = ["metal"], optional = true }
 # Microphone capture.
 cpal = { version = "0.16", optional = true }
-# NSProcessInfo for the macOS version gate on the system audio tap (system_tap.rs). The Core Audio
-# tap FFI itself is wired on device (Task 13); only the version check is compiled in now.
+# NSProcessInfo for the macOS version gate, plus NSArray/NSString/NSDictionary/NSNumber/NSUUID used
+# to build the CATapDescription and the aggregate-device description (system_tap.rs).
 objc2-foundation = { version = "0.3", optional = true }
+# macOS 14.4+ Core Audio process tap: CATapDescription, AudioHardwareCreate{ProcessTap,
+# AggregateDevice}, AudioDeviceCreateIOProcIDWithBlock, AudioDeviceStart/Stop. Feeds an in-memory
+# f32 channel only (invariant 2 — no file/temp). objc2-core-foundation supplies the CFDictionary the
+# aggregate-device create call takes; block2/dispatch2 back the IOProc block + its dispatch queue.
+objc2 = { version = "0.6", optional = true }
+objc2-core-audio = { version = "0.3.2", optional = true }
+objc2-core-audio-types = { version = "0.3.2", optional = true }
+objc2-core-foundation = { version = "0.3.2", optional = true }
+block2 = { version = "0.6", optional = true }
+dispatch2 = { version = "0.3", optional = true }
 
 [[bin]]
 name = "shogun-api"
