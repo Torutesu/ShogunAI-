@@ -294,7 +294,7 @@ CREATE TABLE session_notes (            -- ユーザーが会議中に打った�
 |---|---|---|
 | **MT1** | ✅ 完了 | `sessions`(V7) / 検知(`meeting::detect`) / ライフサイクル(`meeting::statemachine`) / Notch の Offered・Recording ピル |
 | **MT2** | ✅ 完了 | `session_notes`(V8) / 自動終了 / 縮退 Recap（`meeting_recap` コマンド + 会議中ノート入力UI） |
-| **MT3** | ⛔ 未着手 | ASR。OPEN-07（モデル選定）/ OPEN-08（Core Audio tap と 14.0〜14.3 の縮退）の決定待ち |
+| **MT3** | 🟢 配線まで到達 | ASR パイプライン（`audio::worker` = capture→VAD→ASR→sink、純ロジックはテスト済み）を desktop に配線。`audio_lane`（`DbSink`＋`MultiSource` で mic+tap）を `Effect::StartAudio/StopAudio` に接続し、`Db::append_transcript`(V9)で文字起こしを永続化。OPEN-07/08 は決定済み（§8-1/2）。**実機の Zoom/Meet キャプチャは未検証**（§7.3） |
 | **MT4** | ⛔ 未着手 | Recap 本体（Batch 要約・候補抽出・`[Track]`）。Select KK 鍵が前提 |
 | **MT5** | 🟡 一部 | (a)全体オフ ✅ / (b)アプリ別除外 ✅ / (c)この会議のみ ✅（10分クールダウン付き）/ **予定単位の除外 ⛔**（FR-MT-06 の `calendar_occurrences` 待ち）/ **オンボーディングのオプトイン ⛔** |
 
@@ -333,10 +333,13 @@ URL 取得は**ブラウザのバンドルIDに限って**呼ぶ（毎秒の AX 
 
 ## 8. 未決事項
 
-1. **ASR モデルの選定** — オンデバイス・ストリーミング・多言語（英語主・日本語併走の方針は
-   `docs/context-layer-audit-and-plan.md` §8 に従う）。サイズとアイドル CPU がトレードオフ。
-2. **システム音声の取得方式** — macOS 14.4+ の Core Audio tap（`CATapDescription`）。
-   TCC 権限の見え方と、非対応環境（14.0〜14.3）での挙動（マイクのみに縮退するか、機能を出さないか）。
+1. ~~**ASR モデルの選定**~~ — **決定（2026-07-28）**: whisper.cpp small を whisper-rs/Metal で
+   オンデバイス実行（`audio::asr::whisper`、`models/whisper-small.gguf` をリソース同梱、不在時は
+   notes-only へ縮退）。多言語（英語主・日本語併走）は `docs/context-layer-audit-and-plan.md` §8 に従う。
+   残課題（実機で継続）: 実機での VAD 閾値チューニング、turbo モデルの取得可否、confidence の正規化。
+2. ~~**システム音声の取得方式**~~ — **決定（2026-07-28）**: macOS 14.4+ の Core Audio tap
+   （`audio::capture::system_tap`）。非対応環境（14.0〜14.3）は `SystemTap::open()==Ok(None)` で
+   **マイクのみに縮退**（機能自体は出す）。`create_tap_stream` の実配線と TCC 権限の見え方は実機で確認。
 3. **話者分離をどこまでやるか** — v1 は「自分 / それ以外」の2値を提案。参加者名への
    割り当ては `calendar_occurrences.attendees` と突き合わせる次段の課題。
 4. **Recap の言語** — 出力言語設定（FR-SET-04）に従う。会議が英語でノートが日本語のとき何を出すか。
