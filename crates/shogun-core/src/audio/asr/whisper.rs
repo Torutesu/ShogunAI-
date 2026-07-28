@@ -48,8 +48,8 @@ impl Transcriber for Whisper {
             if text.is_empty() {
                 continue;
             }
-            // Map the segment's mean token probability into [0,1]. whisper-rs exposes per-token
-            // probabilities; a simple, monotone proxy is their mean, clamped. Kept conservative.
+            // The segment's confidence: the mean over its content tokens of `token_probability()`,
+            // already in [0,1] (see `segment_confidence`).
             let conf = segment_confidence(&segment);
             out.push(Segment { text, confidence: conf });
         }
@@ -57,7 +57,19 @@ impl Transcriber for Whisper {
     }
 }
 
-/// Mean token probability of `segment`, in [0,1]. Falls back to 0.5 when probs are unavailable.
+/// The segment's confidence, defined precisely as: the arithmetic mean, over the segment's content
+/// tokens, of each token's `token_probability()`. whisper-rs 0.16 already returns that probability
+/// in `[0,1]` (it is `whisper_full_get_token_p`, a probability, not a logprob), so no exp/softmax
+/// step is needed; the mean is clamped to `[0,1]` only as a defensive guard against FP drift.
+///
+/// "Content tokens" is the ideal — special/timestamp tokens (`[_BEG_]`, `<|…|>`, EOT/SOT) would
+/// ideally be excluded from the mean. whisper-rs 0.16 does expose the special-token ids on the
+/// *context* (`token_eot`, `token_beg`, …), but a `&WhisperSegment` does not expose its context
+/// (`get_state` is `pub(super)`), so the threshold is not reachable here without restructuring the
+/// transcribe path to thread the context through. In practice this transcribe path sets
+/// `print_timestamps(false)` / no token timestamps, so the tokens iterated are the decoded content
+/// tokens; the mean is therefore accepted as-is. Falls back to 0.5 when no probabilities are
+/// available.
 fn segment_confidence(segment: &whisper_rs::WhisperSegment) -> f64 {
     let tokens = segment.n_tokens();
     if tokens == 0 {

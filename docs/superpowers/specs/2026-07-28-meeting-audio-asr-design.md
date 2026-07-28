@@ -152,6 +152,6 @@ statemachine（`meeting/statemachine.rs`）は変更しない。既存の Effect
 
 1. VAD の実装（クレート vs 自前）と閾値・最小発話長・ハングオーバ。
 2. turbo モデルの取得方式（初回ダウンロード先・ハッシュ検証・保存場所＝Keychain対象外の静的アセット領域）。
-3. whisper confidence の [0,1] 正規化式。
+3. whisper confidence の [0,1] 正規化式。→ **決着（2026-07-28）:** セグメントのトークン `token_probability()`（whisper-rs 0.16 で既に [0,1]）の平均を [0,1] にクランプして採用。special/timestamp トークンは `&WhisperSegment` から context の special-token id が参照できず（`get_state` が `pub(super)`）除外できないため、mean token probability を as-is で採用する。
 4. system tap の TCC 権限の見え方（設計書§8-2）と 14.4未満縮退の UI 文言。
 5. Recap 言語（設計書§8-4）は MT4 スコープだが、transcript の言語混在をどう持つか（segment 単位で言語を持たないか）を確認。
