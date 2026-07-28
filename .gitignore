@@ -16,3 +16,12 @@ build/
 /apps/desktop/src-tauri/gen/
 *.jsonl
 models/
+
+# Local SQLite runtime DBs; never commit — may hold captured/derived user data (不変条件)
+*.db
+*.db-shm
+*.db-wal
+
+# Website build artifacts (OpenNext / Wrangler / Cloudflare)
+.open-next/
+.wrangler/

@@ -14,6 +14,12 @@
 //! closes it again**. The machine already emits StartAudio/StopAudio (the adapter ignores them
 //! until the ASR lane exists), so the balance is checkable now, before there is anything real to
 //! leave running.
+//!
+//! The daemon DB handle this drives lives behind the `db` feature, so the whole test compiles
+//! only under it — matching `context_slo.rs`. Without this guard `cargo clippy --all-targets`
+//! (no `db`) fails to resolve `shogun_core::daemon` (E0432).
+#![cfg(feature = "db")]
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use shogun_core::daemon::{Clock, Db};
 use shogun_core::meeting::detect::{self, Decision, LiveSignals, Signals};
