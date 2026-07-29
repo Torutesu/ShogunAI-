@@ -851,6 +851,17 @@ impl Db {
 
         // 時間予算を超えたらフォールバック（raw をそのまま返す）。
         if started.elapsed().as_millis() as u64 > COMPRESS_BUDGET_MS {
+            // AB を対称化: フォールバック時も "raw" 計測を best-effort で記録する。
+            let pre_tokens: usize = blocks.iter().map(|b| b.tokens).sum();
+            let elapsed_ms = started.elapsed().as_millis() as i64;
+            self.record_compression_metric(
+                query,
+                "raw",
+                pre_tokens as i64,
+                pre_tokens as i64,
+                elapsed_ms,
+                elapsed_ms,
+            );
             return (pack, shogun_fusion::compress::CompressionStats::default(), true);
         }
 
