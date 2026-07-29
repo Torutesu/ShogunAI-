@@ -153,6 +153,8 @@ pub fn run() {
         inline_source::mac::set_llm_settings,
         inline_source::mac::resolve_state_item,
         inline_source::mac::clear_memory,
+        inline_source::mac::delete_data_since,
+        inline_source::mac::delete_all_and_account,
         shortcuts::get_shortcuts,
         shortcuts::set_shortcut,
         shortcuts::hide_panel,

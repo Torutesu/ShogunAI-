@@ -771,6 +771,37 @@ pub mod mac {
         ok
     }
 
+    /// Delete user data captured within the last `range` window (#28). `range` is "1h" or "24h".
+    /// Local and immediate — nothing is sent anywhere. Returns the per-table deletion report.
+    #[tauri::command]
+    pub fn delete_data_since(range: String, db: tauri::State<'_, Db>) -> Result<String, String> {
+        let window_ms: i64 = match range.as_str() {
+            "1h" => 60 * 60 * 1000,
+            "24h" => 24 * 60 * 60 * 1000,
+            other => return Err(format!("unknown range: {other}")),
+        };
+        let cutoff = db.now_ms() - window_ms;
+        let report = db.delete_since(cutoff).ok_or_else(|| "deletion failed".to_string())?;
+        eprintln!("[shell] delete_data_since {range} — events={} people={} commitments={}",
+            report.events, report.people, report.commitments);
+        serde_json::to_string(&report).map_err(|e| e.to_string())
+    }
+
+    /// Delete ALL user data and every stored secret, then clear the account's local state (#28).
+    /// Wipes the memory DB (schema kept) and removes every BYOK Keychain entry.
+    #[tauri::command]
+    pub fn delete_all_and_account(db: tauri::State<'_, Db>) -> Result<String, String> {
+        let report = db.delete_all().ok_or_else(|| "deletion failed".to_string())?;
+        // Remove every provider's BYOK key from the Keychain (best-effort; a missing key is fine).
+        for provider in PROVIDERS {
+            let _ = security_framework::passwords::delete_generic_password(
+                KEYCHAIN_SERVICE, keychain_account(provider));
+        }
+        refresh_has_key();
+        eprintln!("[shell] delete_all_and_account — all user data and BYOK keys removed");
+        serde_json::to_string(&report).map_err(|e| e.to_string())
+    }
+
     /// How much retrieved evidence the chat prompt carries. Six excerpts of ~600 chars keeps the
     /// grounded half well under a page of context while covering a thread's worth of hits.
     const CHAT_EVIDENCE_HITS: usize = 6;

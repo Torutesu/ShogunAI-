@@ -58,7 +58,7 @@ fn rows(
 }
 
 /// How many rows deletion removed, per table.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
 pub struct DeleteReport {
     pub events: usize,
     pub people: usize,
