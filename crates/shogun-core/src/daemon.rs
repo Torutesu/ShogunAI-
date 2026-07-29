@@ -31,6 +31,10 @@ use crate::dreamcycle::plan::{remaining, CycleKind, JobKind, JobRun, JobState, D
 /// catches them.
 const RECENT_DEDUP_WINDOW: usize = 8;
 
+/// `inline_memory` に渡す fact 上限。`assemble_context` と `assemble_context_compressed` の
+/// 両パスで一致させ、fact の一貫性を保つ。
+const FACT_LIMIT: usize = 8;
+
 /// The outcome of ingesting a batch of synced integration items ([`Db::ingest_integration`]):
 /// how many were processed, how many were genuinely new (the `IntegrationSynced` bus count), and
 /// how many low-confidence state candidates the new items yielded.
@@ -832,7 +836,7 @@ impl Db {
     /// window capture cannot eat the whole prompt. Search is FTS-only until the embedding model
     /// lands (`search_hybrid` takes the vector half then, with no change here).
     pub fn assemble_context(&self, query: &str, max_hits: usize, excerpt_chars: usize) -> ContextPack {
-        let facts = self.inline_memory(8);
+        let facts = self.inline_memory(FACT_LIMIT);
         let evidence = self
             .search(query, max_hits)
             .into_iter()
@@ -890,17 +894,21 @@ impl Db {
 
         let out = compress(Candidates { blocks }, config);
         // 圧縮済みブロックから ContextPack を再構成（facts と evidence に振り分け）。
+        // Task 1: evidence の ts/source/title を raw pack から復元するため、
+        // event_id → &Evidence マップを事前に作る。
+        let ev_by_id: std::collections::HashMap<i64, &Evidence> =
+            pack.evidence.iter().map(|e| (e.event_id, e)).collect();
         let mut facts = Vec::new();
         let mut evidence = Vec::new();
         for b in &out.blocks {
             match b.id_ref {
-                shogun_fusion::block::BlockRef::Event(id) => evidence.push(Evidence {
-                    event_id: id,
-                    ts: 0,
-                    source: String::new(),
-                    title: None,
-                    excerpt: b.text.clone(),
-                }),
+                shogun_fusion::block::BlockRef::Event(id) => {
+                    let (ts, source, title) = ev_by_id
+                        .get(&id)
+                        .map(|e| (e.ts, e.source.clone(), e.title.clone()))
+                        .unwrap_or((0, String::new(), None));
+                    evidence.push(Evidence { event_id: id, ts, source, title, excerpt: b.text.clone() });
+                }
                 _ => facts.push(b.text.clone()),
             }
         }
@@ -2868,6 +2876,30 @@ mod tests {
             assert!(stats.post_tokens < stats.pre_tokens, "pre={} post={}", stats.pre_tokens, stats.post_tokens);
         }
         assert!(!pack_c.facts.is_empty() || !pack_c.evidence.is_empty(), "全落ちしない");
+    }
+
+    /// Task 1: 圧縮パスの evidence が raw pack の source/title/ts を保持することを検証。
+    #[test]
+    fn compressed_evidence_preserves_source_and_title() {
+        let db = Db::open_in_memory(clock(10_000)).unwrap();
+        for i in 0..3 {
+            db.capture(&ev("renewal report pricing detail", &format!("h{i}"), 100 + i)).unwrap();
+        }
+        let raw = db.assemble_context("renewal", 6, 600);
+        assert!(raw.evidence.iter().any(|e| !e.source.is_empty()), "raw has source");
+        let cfg = shogun_fusion::compress::CompressionConfig {
+            enabled: true,
+            budget_tokens: 100_000,
+            ..Default::default()
+        };
+        let (pack, _stats, _fell) = db.assemble_context_compressed("renewal", 6, 600, &[], &cfg);
+        // 予算十分＝全採用。各 evidence の source/title/ts が raw と一致（0/空でない）。
+        for e in &pack.evidence {
+            let orig = raw.evidence.iter().find(|o| o.event_id == e.event_id).unwrap();
+            assert_eq!(e.source, orig.source, "source mismatch for event_id={}", e.event_id);
+            assert_eq!(e.title, orig.title, "title mismatch for event_id={}", e.event_id);
+            assert_eq!(e.ts, orig.ts, "ts mismatch for event_id={}", e.event_id);
+        }
     }
 
     #[test]
