@@ -1,6 +1,9 @@
 # Issue #59 からの後続 Issue ドラフト（3本）
 
-> このファイルは GitHub Issue 化するためのドラフト。作成したら各 Issue へのリンクをここに追記し、本文はこのファイルではなく Issue を正とする。
+> このファイルは GitHub Issue 化するためのドラフト。**Issue 化済み — 本文は各 Issue を正とする**：
+> - Issue A → [#80](https://github.com/Torutesu/ShogunAI-/issues/80)
+> - Issue B → [#81](https://github.com/Torutesu/ShogunAI-/issues/81)
+> - Issue C → [#82](https://github.com/Torutesu/ShogunAI-/issues/82)
 
 ---
 
