@@ -1186,6 +1186,69 @@ function AiSessionsSection(): JSX.Element {
   );
 }
 
+interface UserConfigStatus {
+  exists: boolean;
+  path: string;
+  last_updated_ms: number | null;
+  ok: boolean;
+  errors: { section: string; line: number; message: string }[];
+}
+
+function PersonalizationSection(): JSX.Element {
+  const [status, setStatus] = useState<UserConfigStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const refresh = (): void => {
+    if (!IN_TAURI) return;
+    void invoke<UserConfigStatus>("get_user_config_status").then(setStatus).catch(() => undefined);
+  };
+  useEffect(refresh, []);
+
+  return (
+    <section className="set">
+      <div className="set__label">Personalization / Shougun.md</div>
+      <div className="set__hint">Shape ShogunAI with one human-readable Markdown file.</div>
+      {status ? (
+        <>
+          <div className={`set__hint${status.ok ? " is-ok" : " is-err"}`}>
+            {status.exists
+              ? status.ok
+                ? "Parsed successfully"
+                : `Parse error: ${status.errors[0]?.section ?? ""} (line ${status.errors[0]?.line ?? 0})`
+              : "Not created yet"}
+          </div>
+          <div className="set__row">
+            <button
+              className="keyrow__btn"
+              type="button"
+              disabled={!status.exists || busy}
+              onClick={() => void invoke("open_shougun_md").catch((e) => setErr(String(e)))}
+            >
+              Open in Editor
+            </button>
+            <button
+              className="keyrow__btn"
+              type="button"
+              disabled={busy}
+              onClick={() => {
+                setBusy(true);
+                void invoke("regenerate_shougun_md")
+                  .then(refresh)
+                  .catch((e) => setErr(String(e)))
+                  .finally(() => setBusy(false));
+              }}
+            >
+              Regenerate Sample
+            </button>
+          </div>
+          {err ? <div className="set__hint is-err">{err}</div> : null}
+        </>
+      ) : null}
+    </section>
+  );
+}
+
 // ---- Composio sending settings (opt-in, FR-C2-02 / FR-C2-03) -----------------------------------
 
 interface ComposioSettingsView {
@@ -1888,6 +1951,7 @@ function Settings(props: {
         <ComposioSection />
         <AiSessionsSection />
         <DreamSection />
+        <PersonalizationSection />
         <section className="set">
           <div className="set__label" id="seg-appearance">{t.appearance}</div>
           <div className="seg" role="radiogroup" aria-labelledby="seg-appearance">
