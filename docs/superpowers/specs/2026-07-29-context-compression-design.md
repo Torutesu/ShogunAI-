@@ -98,7 +98,9 @@ Issue #63 は「正規化層・スコアリング・4つの圧縮戦略・再展
 
 各ユニットは「何をするか／どう使うか／何に依存するか」が単独で言えることを条件にする。
 
-### 3.1 `shogun-fusion/src/block.rs` — 共通ブロック型と正規化
+> **クレート境界の補正**: `shogun-fusion` は意図的に `shogun-memory` に依存しない純粋クレート（Linux テスト可能）。よって `ContextBlock` 型・スコア・予算・compress は fusion に置き**プリミティブのみ扱う**。SearchHit/ThreadRow/facts → `ContextBlock` の**正規化グルーは daemon（shogun-core）側**に置く（既存の `StateCandidate` と同じ流儀）。
+
+### 3.1 `shogun-fusion/src/block.rs` — 共通ブロック型（純粋）
 ```rust
 /// LLM 送信単位の正規化ブロック。ソース非依存。
 pub struct ContextBlock {
@@ -123,9 +125,9 @@ pub struct ScoreInputs {
     pub confidence: f64,  // 0..=1（state 由来。evidence は 1.0 固定）
 }
 ```
-- **責務**: 既存の `SearchHit` / state facts / `threads.summary` / `sessions.summary` / 構造化データを `ContextBlock` へ正規化する `From`/builder 群。
-- **依存**: `shogun-memory` の型（SearchHit, ThreadRow）、`TokenEstimator`。
-- **純関数**: I/O なし。入力データを渡されて変換するだけ。
+- **責務**: `ContextBlock` / `BlockRef` / `ScoreInputs` / `SourceKind` の**型定義とプリミティブ入力からのコンストラクタ**のみ。SearchHit 等 shogun-memory 型からの変換は daemon 側（§3.6）で行う。
+- **依存**: なし（fusion 内のみ）。`TokenEstimator` はコンストラクタに渡す。
+- **純関数**: I/O なし。
 
 ### 3.2 `shogun-fusion/src/score.rs` — ブロックスコアリング
 ```rust
@@ -193,13 +195,22 @@ pub fn compress(
 - **責務**: 収集済み候補を block 化 → score → fit_to_budget → `CompressedContext`。**LLM を呼ばない**。
 - **依存**: block/score/budget。I/O なし（候補は呼び出し側=daemon が DB から用意して渡す）。
 
-### 3.5 `shogun-core/src/dreamcycle/jobs.rs::run_compression()` — オフライン要約
-- **現 no-op を実装**。当日ウィンドウ `[from_ts, to_ts)` のアクティブ thread / open session を対象に：
-  - Batch API（Select KK）へ要約プロンプトを投げ、結果を `threads.summary` / `sessions.summary` に UPDATE。
-  - provenance: 要約対象の event_id 群を保持（既存 thread↔event の紐づけを利用）。
-- **冪等/再開**: 既存 `job_runs(cycle_id, 'compression')` セマンティクスに乗る。`done` はスキップ。
-- **キー分離**: 必ず Select KK（Batch lane）。BYOK を使わない（不変条件5）。
-- **プライバシー**: traceability_log に chunk 単位で記録、本文は保存しない（既存 egress 経路を使用）。
+### 3.5 `shogun-core/src/dreamcycle/jobs.rs::run_compression()` — オフライン要約（Summarizer seam）
+- **現 no-op を実装**。既存の `Classifier` seam と**同じ流儀**で `Summarizer` seam を導入する：
+  ```rust
+  /// thread/session の event 群を1行要約へ。model を触るのは Batch 実装のみ（不変条件5）。
+  pub trait Summarizer {
+      fn summarize(&self, events: &[shogun_memory::event_log::EventText]) -> Option<String>;
+  }
+  /// ネットワーク不要のローカル抽出的要約（Linux テスト用デフォルト）。
+  pub struct LocalExtractiveSummarizer;
+  ```
+  - デフォルト = `LocalExtractiveSummarizer`（先頭 salient 文の抽出的連結、決定的・ネットワークなし → ランナー全体が Linux テスト可能）。
+  - on-device build は **Batch/Select KK** の抽象要約器を注入（`LocalRuleClassifier`↔Batch 分類器の対称）。
+- 当日ウィンドウ `[from_ts, to_ts)` のアクティブ thread / open session を対象に summarize → `threads.summary` / `sessions.summary` を UPDATE。
+- provenance: 要約対象の event_id 群（既存 thread↔event 紐づけ）を保持。
+- **冪等/再開**: 既存 `job_runs(cycle_id, 'compression')` に乗る。`done` はスキップ。
+- **キー分離/プライバシー**: Batch 実装は必ず Select KK、traceability_log に chunk 記録・本文は保存しない。
 
 ### 3.6 `shogun-core/src/daemon.rs` — 配線と計測
 - `assemble_context()` / `build_reply_context()` に**フラグ分岐**を追加：
@@ -214,7 +225,7 @@ pub fn compress(
 ## 4. データモデル変更
 
 - **要約の保存は新規テーブル不要**。既存の `threads.summary` / `sessions.summary`（現状 NULL）を埋める。
-- 唯一のスキーマ変更 = `crates/shogun-memory/src/migrations/V9__compression_metrics.sql`:
+- 唯一のスキーマ変更 = `crates/shogun-memory/src/migrations/V11__compression_metrics.sql`（V9/V10 は使用済み）:
   ```sql
   CREATE TABLE compression_metrics (
       id INTEGER PRIMARY KEY,
@@ -229,7 +240,7 @@ pub fn compress(
   CREATE INDEX idx_compression_metrics_ts ON compression_metrics(ts);
   ```
   - **本文・キャプチャ内容は一切入れない**（テレメトリ規約 G8）。クエリは `query_hash` のみ。
-  - rollback: `docs/migrations/V9-rollback.md`（`DROP TABLE compression_metrics;`）を添付。
+  - rollback: `docs/migrations/V11-rollback.md`（`DROP TABLE compression_metrics;`）を添付。
 - Issue の Non-Goal（永続ストレージ/ベクトル DB 設計）には抵触しない小テーブル（計測専用）。
 
 ---
@@ -280,5 +291,5 @@ pub fn compress(
 - ✅ キー分離: 要約=Select KK（Batch）、推論=BYOK。逆転させない
 - ✅ 低 confidence を事実として混ぜない（`assemble_facts` ゲート温存）
 - ✅ テレメトリ/ログにキャプチャ本文を含めない（`query_hash` のみ）
-- ✅ 後方互換を破らない（V9 は追加のみ、rollback 添付）
+- ✅ 後方互換を破らない（V11 は追加のみ、rollback 添付）
 - ✅ SLO 計測コードを同梱（context_slo.rs 拡張）
