@@ -624,7 +624,7 @@ pub mod mac {
                 push_inline(&app, InlineStatus { phase: "no_key", chars: 0, detail: None });
                 return;
             };
-            let outcome = compose_inline(&AxCursorReader, &agent, &AxTextInserter, &memory);
+            let outcome = compose_inline(&AxCursorReader, &agent, &AxTextInserter, &memory, "");
             match &outcome {
                 InlineOutcome::Inserted { chars } => {
                     eprintln!("[inline] inserted {chars} chars at the cursor");
