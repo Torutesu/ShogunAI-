@@ -10,7 +10,10 @@
 use crate::daemon::Db;
 
 use super::gate::{decide, RunConditions, RunDecision};
-use super::jobs::{classify_via_batch, Classifier, DbDreamRunner, LocalRuleClassifier, PrecomputedClassifier};
+use super::jobs::{
+    classify_via_batch, Classifier, DbDreamRunner, LocalExtractiveSummarizer, LocalRuleClassifier,
+    PrecomputedClassifier,
+};
 use super::plan::CycleKind;
 use super::run::{decide_and_run, run_cycle, GatedRun};
 
@@ -122,7 +125,10 @@ impl<'a, C: Classifier> DreamScheduler<'a, C> {
     pub fn tick(&self, conditions: &RunConditions, cycle_id: &str, now_ms: i64) -> GatedRun {
         let (from_ts, to_ts) =
             input_range(self.db.last_consolidated_to(), now_ms, DEFAULT_LOOKBACK_MS);
-        let runner = DbDreamRunner::new(self.db, self.classifier, now_ms);
+        // The Compression summariser seam: the Linux/on-device-sync path uses the network-free
+        // local-extractive default (the Batch abstractive summariser is a separate on-device PR).
+        let summarizer = LocalExtractiveSummarizer;
+        let runner = DbDreamRunner::new(self.db, self.classifier, &summarizer, now_ms);
         decide_and_run(self.db, &runner, conditions, cycle_id, from_ts, to_ts)
     }
 }
@@ -157,7 +163,8 @@ where
             let events = db.events_in_range(from_ts, to_ts);
             let classified = classify_via_batch(batch_client, &events, max_polls, sleep).await?;
             let pc = PrecomputedClassifier::new(classified);
-            let runner = DbDreamRunner::new(db, &pc, now_ms);
+            let summarizer = LocalExtractiveSummarizer;
+            let runner = DbDreamRunner::new(db, &pc, &summarizer, now_ms);
             let report = run_cycle(db, &runner, cycle_id, CycleKind::Full, from_ts, to_ts);
             Ok(GatedRun::Ran { cycle: CycleKind::Full, report })
         }
@@ -165,7 +172,8 @@ where
             // No Batch work in a catch-up (FR-DC-01); the classifier is never consulted by the
             // degraded sequence, so the local-rule one is a safe unused placeholder.
             let classifier = LocalRuleClassifier;
-            let runner = DbDreamRunner::new(db, &classifier, now_ms);
+            let summarizer = LocalExtractiveSummarizer;
+            let runner = DbDreamRunner::new(db, &classifier, &summarizer, now_ms);
             let report = run_cycle(db, &runner, cycle_id, CycleKind::Degraded, from_ts, to_ts);
             Ok(GatedRun::Ran { cycle: CycleKind::Degraded, report })
         }

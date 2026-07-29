@@ -272,6 +272,90 @@ pub fn recent_events(
     Ok(out)
 }
 
+/// Threads whose last activity falls in `[from_ts, to_ts]` — the day's window the Dream Cycle
+/// Compression job summarises (FR-DC-03, Issue #63). Inclusive on both ends so a thread whose only
+/// activity lands exactly on a window edge is still summarised. Ordered oldest-active first for
+/// deterministic processing.
+pub fn active_between(
+    conn: &rusqlite::Connection,
+    from_ts: i64,
+    to_ts: i64,
+) -> Result<Vec<ThreadRow>, rusqlite::Error> {
+    use rusqlite::params;
+    let mut stmt = conn.prepare(
+        "SELECT id, thread_key, source, title, last_activity_at, event_count
+           FROM threads
+          WHERE last_activity_at BETWEEN ?1 AND ?2
+          ORDER BY last_activity_at, id",
+    )?;
+    let rows = stmt.query_map(params![from_ts, to_ts], |r| {
+        Ok(ThreadRow {
+            id: r.get(0)?,
+            thread_key: r.get(1)?,
+            source: r.get(2)?,
+            title: r.get(3)?,
+            last_activity_at: r.get(4)?,
+            event_count: r.get(5)?,
+        })
+    })?;
+    rows.collect()
+}
+
+/// Every event body in one thread, oldest first — the material the Compression summariser reads
+/// (Issue #63). Mirrors [`recent_events`] but returns the [`EventText`] shape the summariser seam
+/// consumes and takes the whole thread (no tail limit): a day-summary must see the conversation
+/// entire, not just its most recent turns.
+pub fn event_texts(
+    conn: &rusqlite::Connection,
+    thread_key: &str,
+) -> Result<Vec<crate::event_log::EventText>, rusqlite::Error> {
+    use rusqlite::params;
+    let mut stmt = conn.prepare(
+        "SELECT id, content FROM event_log
+          WHERE thread_key = ?1 ORDER BY ts, id",
+    )?;
+    let rows = stmt.query_map(params![thread_key], |r| {
+        Ok(crate::event_log::EventText { id: r.get(0)?, content: r.get(1)? })
+    })?;
+    rows.collect()
+}
+
+/// Write a thread's day-summary (Issue #63). The summary is generated content, so it is redacted
+/// on write — the same rule every generated text obeys (a summariser could echo a secret that was
+/// in the source events). `updated_at` advances so a re-summarised thread reads as touched.
+pub fn set_summary(
+    conn: &rusqlite::Connection,
+    thread_key: &str,
+    summary: &str,
+    now_ms: i64,
+) -> Result<(), rusqlite::Error> {
+    use rusqlite::params;
+    let redacted = crate::redact::redact(summary);
+    conn.execute(
+        "UPDATE threads SET summary = ?1, updated_at = ?2 WHERE thread_key = ?3",
+        params![redacted.as_ref(), now_ms, thread_key],
+    )?;
+    Ok(())
+}
+
+/// Read back a thread's summary (`None` when unset or the thread is absent) — the Compression
+/// job's effect is verified through this, since [`ThreadRow`] does not carry `summary`.
+pub fn get_summary(
+    conn: &rusqlite::Connection,
+    thread_key: &str,
+) -> Result<Option<String>, rusqlite::Error> {
+    use rusqlite::params;
+    conn.query_row(
+        "SELECT summary FROM threads WHERE thread_key = ?1",
+        params![thread_key],
+        |r| r.get(0),
+    )
+    .or_else(|e| match e {
+        rusqlite::Error::QueryReturnedNoRows => Ok(None),
+        other => Err(other),
+    })
+}
+
 /// Open loops currently attached to each thread, via the events that evidence them.
 pub fn open_loop_counts(
     conn: &rusqlite::Connection,
@@ -472,5 +556,64 @@ mod tests {
         upsert_from_event(&c, "c", "capture", None, 200).unwrap();
         let keys: Vec<String> = recent(&c, 10).unwrap().into_iter().map(|t| t.thread_key).collect();
         assert_eq!(keys, vec!["b", "c", "a"]);
+    }
+
+    fn ev<'a>(content: &'a str, hash: &'a str, ts: i64) -> crate::event_log::NewEvent<'a> {
+        crate::event_log::NewEvent {
+            ts,
+            source: "gmail",
+            kind: "text",
+            app_bundle_id: None,
+            window_title: Some("Q3 pricing"),
+            content,
+            content_hash: hash,
+            dwell_ms: 0,
+            display_id: None,
+            window_bounds: None,
+        }
+    }
+
+    #[test]
+    fn active_between_is_inclusive_and_ordered_and_summary_round_trips() {
+        let c = conn();
+        // Three events across three threads at t=100, 300, 500 (each derives its own thread_key).
+        let mut a = ev("first thread body", "h1", 100);
+        a.window_title = Some("alpha");
+        crate::event_log::insert(&c, &a).unwrap();
+        let mut b = ev("second thread body", "h2", 300);
+        b.window_title = Some("bravo");
+        crate::event_log::insert(&c, &b).unwrap();
+        let mut d = ev("third thread body", "h3", 500);
+        d.window_title = Some("charlie");
+        crate::event_log::insert(&c, &d).unwrap();
+
+        // [100, 300] is inclusive on both ends → alpha and bravo, oldest-active first.
+        let got = active_between(&c, 100, 300).unwrap();
+        assert_eq!(got.len(), 2);
+        assert!(got[0].last_activity_at <= got[1].last_activity_at, "ordered oldest-active first");
+
+        // event_texts returns the thread's bodies for a real thread_key.
+        let alpha_key = got[0].thread_key.clone();
+        let texts = event_texts(&c, &alpha_key).unwrap();
+        assert_eq!(texts.len(), 1);
+        assert_eq!(texts[0].content, "first thread body");
+
+        // set_summary writes it, get_summary reads it back; ThreadRow does not expose it.
+        assert_eq!(get_summary(&c, &alpha_key).unwrap(), None, "unset until written");
+        set_summary(&c, &alpha_key, "a day summary", 9_999).unwrap();
+        assert_eq!(get_summary(&c, &alpha_key).unwrap().as_deref(), Some("a day summary"));
+        // An absent thread yields None, not an error.
+        assert_eq!(get_summary(&c, "no-such-thread").unwrap(), None);
+    }
+
+    #[test]
+    fn set_summary_redacts_generated_text() {
+        let c = conn();
+        let e = ev("body", "h1", 100);
+        crate::event_log::insert(&c, &e).unwrap();
+        let key = active_between(&c, 0, 1_000).unwrap()[0].thread_key.clone();
+        set_summary(&c, &key, "leaked sk-ant-abc123def456 key", 1).unwrap();
+        let stored = get_summary(&c, &key).unwrap().unwrap();
+        assert!(!stored.contains("sk-ant-abc123def456"), "a secret must not survive into the summary");
     }
 }

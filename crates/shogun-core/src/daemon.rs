@@ -19,6 +19,8 @@ use shogun_memory::traceability::{Filter, TraceRow};
 use shogun_memory::MemoryError;
 use shogun_fusion::brief::{assemble_brief, assemble_degraded, CalendarLine, CommitmentDue, MorningBrief, OpenLoopItem};
 use shogun_fusion::assemble::ActionCandidate;
+use shogun_fusion::block::{BlockRef, ContextBlock, ScoreInputs, SourceKind};
+use shogun_fusion::budget::TokenEstimator;
 
 use crate::capture::dedup::{decide_hash, Recent};
 use crate::db_sink::DbTraceabilitySink;
@@ -77,6 +79,9 @@ const REPLY_TURNS: usize = 12;
 const REPLY_TURN_CHARS: usize = 800;
 const REPLY_RELATED: usize = 4;
 const REPLY_RELATED_CHARS: usize = 300;
+
+/// クエリ時のローカル圧縮に許す時間予算。超えたら raw にフォールバック（SLO +300ms 厳守）。
+const COMPRESS_BUDGET_MS: u64 = 50;
 
 /// ドラフトの本文がどこ由来か。融合の provenance（設計 §3）。
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -823,6 +828,103 @@ impl Db {
         ContextPack { facts, evidence }
     }
 
+    /// 圧縮版のコンテキスト組み立て（Issue #63）。`config.enabled` が false のときは
+    /// 呼び出し側が `assemble_context` を使う想定なので、ここは true 前提。ローカル処理のみ
+    /// （LLM を呼ばない）。処理が `COMPRESS_BUDGET_MS` を超えた/失敗したら raw にフォールバック。
+    pub fn assemble_context_compressed(
+        &self,
+        query: &str,
+        max_hits: usize,
+        excerpt_chars: usize,
+        config: &shogun_fusion::compress::CompressionConfig,
+    ) -> (ContextPack, shogun_fusion::compress::CompressionStats, bool) {
+        use shogun_fusion::budget::HeuristicEstimator;
+        use shogun_fusion::compress::{compress, Candidates};
+
+        let started = std::time::Instant::now();
+        // raw と同じ材料を集める。
+        let pack = self.assemble_context(query, max_hits, excerpt_chars);
+        let est = HeuristicEstimator::default();
+
+        let mut blocks = facts_to_blocks(&pack.facts, &est);
+        blocks.extend(evidence_to_blocks(&pack.evidence, 0.7, &est));
+
+        // 時間予算を超えたらフォールバック（raw をそのまま返す）。
+        if started.elapsed().as_millis() as u64 > COMPRESS_BUDGET_MS {
+            // AB を対称化: フォールバック時も "raw" 計測を best-effort で記録する。
+            let pre_tokens: usize = blocks.iter().map(|b| b.tokens).sum();
+            let elapsed_ms = started.elapsed().as_millis() as i64;
+            self.record_compression_metric(
+                query,
+                "raw",
+                pre_tokens as i64,
+                pre_tokens as i64,
+                elapsed_ms,
+                elapsed_ms,
+            );
+            return (pack, shogun_fusion::compress::CompressionStats::default(), true);
+        }
+
+        let out = compress(Candidates { blocks }, config);
+        // 圧縮済みブロックから ContextPack を再構成（facts と evidence に振り分け）。
+        let mut facts = Vec::new();
+        let mut evidence = Vec::new();
+        for b in &out.blocks {
+            match b.id_ref {
+                shogun_fusion::block::BlockRef::Event(id) => evidence.push(Evidence {
+                    event_id: id,
+                    ts: 0,
+                    source: String::new(),
+                    title: None,
+                    excerpt: b.text.clone(),
+                }),
+                _ => facts.push(b.text.clone()),
+            }
+        }
+
+        // 計測を記録（best-effort。本文は保存せず query_hash のみ）。
+        let compress_ms = started.elapsed().as_millis() as i64;
+        self.record_compression_metric(
+            query,
+            "compressed",
+            out.stats.pre_tokens as i64,
+            out.stats.post_tokens as i64,
+            compress_ms,
+            compress_ms,
+        );
+
+        (ContextPack { facts, evidence }, out.stats, false)
+    }
+
+    /// 圧縮計測を 1 行記録する。best-effort（失敗は握りつぶし、作業を止めない）。
+    /// query は xxh64 化して保存（本文は保存しない、テレメトリ規約 G8）。ハッシュは capture /
+    /// traceability と同じ twox-hash（seed 0）で、下位 16 桁の lower-hex に揃える。
+    pub fn record_compression_metric(
+        &self,
+        query: &str,
+        path: &str,
+        pre_tokens: i64,
+        post_tokens: i64,
+        compress_ms: i64,
+        assemble_ms: i64,
+    ) {
+        let query_hash = Self::content_hash(query);
+        if let Ok(conn) = self.conn.lock() {
+            let _ = shogun_memory::compression_metrics::insert(
+                &conn,
+                &shogun_memory::compression_metrics::MetricRow {
+                    ts: self.now_ms(),
+                    query_hash,
+                    path: path.to_string(),
+                    pre_tokens,
+                    post_tokens,
+                    compress_ms,
+                    assemble_ms,
+                },
+            );
+        }
+    }
+
     /// A traceability sink that writes through this same handle (the LLM egress records here).
     pub fn traceability_sink(&self) -> DbTraceabilitySink {
         DbTraceabilitySink::new(self.conn.clone(), self.clock.clone())
@@ -905,6 +1007,42 @@ impl Db {
     /// Events in `[from_ts, to_ts)` — the window a Consolidation job classifies (FR-DC-03).
     pub fn events_in_range(&self, from_ts: i64, to_ts: i64) -> Vec<event_log::EventText> {
         self.conn.lock().ok().and_then(|c| event_log::events_in_range(&c, from_ts, to_ts).ok()).unwrap_or_default()
+    }
+
+    /// Threads whose last activity is in `[from_ts, to_ts]` — the window a Compression job
+    /// summarises (Issue #63). Empty on a lock/read failure so a hiccup fails the job (leaving the
+    /// cycle resumable) rather than crashing the daemon.
+    pub fn active_threads_between(&self, from_ts: i64, to_ts: i64) -> Vec<shogun_memory::thread::ThreadRow> {
+        self.conn
+            .lock()
+            .ok()
+            .and_then(|c| shogun_memory::thread::active_between(&c, from_ts, to_ts).ok())
+            .unwrap_or_default()
+    }
+
+    /// Every event body in one thread, oldest first — the material the Compression summariser reads
+    /// (Issue #63). Empty on a lock/read failure.
+    pub fn thread_event_texts(&self, thread_key: &str) -> Vec<event_log::EventText> {
+        self.conn
+            .lock()
+            .ok()
+            .and_then(|c| shogun_memory::thread::event_texts(&c, thread_key).ok())
+            .unwrap_or_default()
+    }
+
+    /// Write a thread's day-summary (Issue #63). Best-effort: a lock/write failure is swallowed so
+    /// a hiccup fails the job, not the daemon. Uses the daemon clock for `updated_at`.
+    pub fn set_thread_summary(&self, thread_key: &str, summary: &str) {
+        let now = self.now_ms();
+        if let Ok(c) = self.conn.lock() {
+            let _ = shogun_memory::thread::set_summary(&c, thread_key, summary, now);
+        }
+    }
+
+    /// Read back a thread's summary (`None` when unset, absent, or on a read failure) — the
+    /// Compression job's effect is verified through this, since `ThreadRow` does not carry it.
+    pub fn thread_summary(&self, thread_key: &str) -> Option<String> {
+        self.conn.lock().ok().and_then(|c| shogun_memory::thread::get_summary(&c, thread_key).ok().flatten())
     }
 
     /// Descriptions already present in `commitments` + `open_loops`, for consolidation dedup — so a
@@ -1510,6 +1648,43 @@ fn screen_relevance(screen: &shogun_fusion::assemble::ScreenContext, subject: &s
     } else {
         0.4
     }
+}
+
+/// 検索 evidence を圧縮ブロックへ正規化する。evidence は「実際に見たもの」なので
+/// confidence=1.0、relevance は呼び出し側が渡す検索スコア由来の値。
+fn evidence_to_blocks(evidence: &[Evidence], relevance: f64, est: &dyn TokenEstimator) -> Vec<ContextBlock> {
+    evidence
+        .iter()
+        .map(|e| {
+            ContextBlock::new(
+                BlockRef::Event(e.event_id),
+                SourceKind::Evidence,
+                e.excerpt.clone(),
+                ScoreInputs { relevance, freshness: 0.5, task_link: 0.0, confidence: 1.0 },
+                est,
+            )
+        })
+        .collect()
+}
+
+/// confidence ゲートを通した facts を圧縮ブロックへ正規化する。facts は既に
+/// `assemble_facts` を通っている（低 confidence は除外済み）。relevance はやや高めに固定
+/// （state は現在の作業に紐づく前提）、confidence は High 相当として 0.9。
+fn facts_to_blocks(facts: &[String], est: &dyn TokenEstimator) -> Vec<ContextBlock> {
+    facts
+        .iter()
+        .enumerate()
+        .map(|(i, f)| {
+            // provenance is coarse for facts this round — see design §7.
+            ContextBlock::new(
+                BlockRef::State { table: shogun_fusion::block::StateTable::OpenLoops, id: i as i64 },
+                SourceKind::StateFact,
+                f.clone(),
+                ScoreInputs { relevance: 0.6, freshness: 0.6, task_link: 0.6, confidence: 0.9 },
+                est,
+            )
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -2587,5 +2762,63 @@ mod tests {
             "Nothing — Safari",
         );
         assert_eq!(ctx.payload_source, PayloadSource::OnScreenOnly);
+    }
+
+    #[test]
+    fn evidence_to_blocks_preserves_provenance_and_counts_tokens() {
+        use shogun_fusion::block::{BlockRef, SourceKind};
+        use shogun_fusion::budget::HeuristicEstimator;
+        let ev = vec![Evidence {
+            event_id: 7,
+            ts: 100,
+            source: "capture".into(),
+            title: Some("t".into()),
+            excerpt: "a".repeat(40),
+        }];
+        let est = HeuristicEstimator::default();
+        let blocks = evidence_to_blocks(&ev, 0.7, &est);
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].id_ref, BlockRef::Event(7));
+        assert_eq!(blocks[0].source_kind, SourceKind::Evidence);
+        assert!(blocks[0].tokens > 0);
+    }
+
+    #[test]
+    fn record_compression_metric_persists_hash_not_text() {
+        let db = Db::open_in_memory(clock(1_000)).unwrap();
+        db.record_compression_metric("report", "compressed", 100, 30, 5, 20);
+        let conn = db.conn.lock().unwrap();
+        let (qh, path): (String, String) = conn
+            .query_row(
+                "SELECT query_hash, path FROM compression_metrics LIMIT 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_ne!(qh, "report"); // 本文は保存しない
+        assert_eq!(path, "compressed");
+    }
+
+    #[test]
+    fn compressed_context_bounds_tokens_without_falling_back() {
+        // 複数 evidence をヒットさせる小さな入力を seed する。
+        let db = Db::open_in_memory(clock(10_000)).unwrap();
+        for i in 0..6 {
+            db.capture(&ev(
+                "vendor pricing settled at 12k for the renewal report",
+                &format!("h{i}"),
+                100 + i,
+            ))
+            .unwrap();
+        }
+        use shogun_fusion::compress::CompressionConfig;
+        let cfg = CompressionConfig { enabled: true, budget_tokens: 20, ..Default::default() };
+        let (pack_c, stats, fell_back) = db.assemble_context_compressed("pricing report", 6, 600, &cfg);
+        assert!(!fell_back, "50ms 以内に収まるはず");
+        assert!(stats.post_tokens <= 20, "post={}", stats.post_tokens);
+        if stats.pre_tokens > 20 {
+            assert!(stats.post_tokens < stats.pre_tokens, "pre={} post={}", stats.pre_tokens, stats.post_tokens);
+        }
+        assert!(!pack_c.facts.is_empty() || !pack_c.evidence.is_empty(), "全落ちしない");
     }
 }

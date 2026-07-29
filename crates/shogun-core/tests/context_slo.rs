@@ -167,3 +167,90 @@ fn context_assembly_latency() {
     let _ = std::fs::remove_file(path.with_extension("db-wal"));
     let _ = std::fs::remove_file(path.with_extension("db-shm"));
 }
+
+// ---------------------------------------------------------------------------
+// AB / SLO gate tests — run on every `cargo test` (not ignored).
+// These use an in-memory DB seeded with a handful of events so the tests are
+// fast and deterministic; they are not latency measurements (see the ignored
+// test above for that role).
+// ---------------------------------------------------------------------------
+
+/// Seed an in-memory db with several vendor-renewal events that the query
+/// "vendor renewal" will hit, returning the db.
+fn seed_in_memory() -> Db {
+    let clock = Arc::new(|| 1_700_000_000_000i64);
+    let db = Db::open_in_memory(clock).unwrap();
+    // Insert 8 events with overlapping content so the compression has actual
+    // tokens to select from (each body is ~80 chars → ~20 tokens).
+    for i in 0..8i64 {
+        let content = format!(
+            "vendor renewal discussion item {i}: pricing was raised and options compared \
+             for the quarterly report on contract renewal terms."
+        );
+        let hash = format!("seed{i}");
+        db.capture(&NewEvent {
+            ts: 1_700_000_000_000 - (8 - i) * 3_600_000,
+            source: "capture",
+            kind: "text",
+            app_bundle_id: Some("com.apple.Notes"),
+            window_title: Some("Vendor Renewal"),
+            content: &content,
+            content_hash: &hash,
+            dwell_ms: 0,
+            display_id: None,
+            window_bounds: None,
+        })
+        .unwrap();
+    }
+    db
+}
+
+/// Task 10 test 1 — compressed context must stay within the token budget and,
+/// when the budget is tighter than the raw material, must reduce tokens.
+#[test]
+fn compressed_context_stays_within_budget_and_reduces_tokens() {
+    use shogun_fusion::compress::CompressionConfig;
+
+    let db = seed_in_memory();
+    let cfg = CompressionConfig { enabled: true, budget_tokens: 200, ..Default::default() };
+
+    let (pack_c, stats, fell_back) = db.assemble_context_compressed("vendor renewal", 6, 600, &cfg);
+
+    assert!(!fell_back, "local assembly must complete within 50 ms");
+    assert!(stats.post_tokens <= 200, "post_tokens={} must be within budget 200", stats.post_tokens);
+    // When there is more raw material than budget, compression must shrink.
+    if stats.pre_tokens > 200 {
+        assert!(
+            stats.post_tokens < stats.pre_tokens,
+            "pre={} post={} — tokens should be reduced when pre exceeds budget",
+            stats.pre_tokens,
+            stats.post_tokens
+        );
+    }
+    // Compressed pack must not be empty — at least one block must fit.
+    assert!(
+        !pack_c.facts.is_empty() || !pack_c.evidence.is_empty(),
+        "compressed pack must contain at least one item"
+    );
+}
+
+/// Task 10 test 2 — when the budget is effectively unlimited, the compressed
+/// path must pass through the same evidence count as the raw path (nothing
+/// dropped, no duplication).
+#[test]
+fn disabled_or_fallback_matches_raw() {
+    use shogun_fusion::compress::CompressionConfig;
+
+    let db = seed_in_memory();
+    let raw = db.assemble_context("vendor renewal", 6, 600);
+
+    // budget_tokens = 1_000_000 — everything fits, so nothing is dropped.
+    let cfg = CompressionConfig { enabled: true, budget_tokens: 1_000_000, ..Default::default() };
+    let (pack_c, _stats, _fell_back) = db.assemble_context_compressed("vendor renewal", 6, 600, &cfg);
+
+    assert_eq!(
+        pack_c.evidence.len(),
+        raw.evidence.len(),
+        "with unlimited budget the compressed path must pass through the same evidence count as raw"
+    );
+}
