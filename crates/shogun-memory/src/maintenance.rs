@@ -113,6 +113,75 @@ pub fn delete_all(conn: &mut Connection) -> Result<DeleteReport, rusqlite::Error
     })
 }
 
+/// Delete every user row whose occurrence time is at or after `cutoff_ts` (unix ms), and any state
+/// row that loses ALL of its evidence as a result (design decision ③). Runs in a single
+/// transaction. Derived summary text on a surviving state row may still reflect a deleted event
+/// until the next Dream Cycle re-derivation — this is documented, not silently hidden.
+pub fn delete_since(conn: &mut Connection, cutoff_ts: i64) -> Result<DeleteReport, rusqlite::Error> {
+    let tx = conn.transaction()?;
+
+    // Provenance rows that point at events we are about to delete go first (FK: they reference
+    // event_log). This is what can orphan a state row.
+    tx.execute(
+        "DELETE FROM state_provenance WHERE event_id IN (SELECT id FROM event_log WHERE ts >= ?1)",
+        [cutoff_ts],
+    )?;
+
+    // Vectors + cold embeddings for the doomed events (keyed on event id).
+    tx.execute(
+        "DELETE FROM event_vec WHERE rowid IN (SELECT id FROM event_log WHERE ts >= ?1)",
+        [cutoff_ts],
+    )?;
+    tx.execute(
+        "DELETE FROM cold_embeddings WHERE event_id IN (SELECT id FROM event_log WHERE ts >= ?1)",
+        [cutoff_ts],
+    )?;
+
+    // The events themselves (AD trigger clears event_fts).
+    let events = tx.execute("DELETE FROM event_log WHERE ts >= ?1", [cutoff_ts])?;
+
+    // Meeting sessions started in the window, and their notes (notes reference sessions).
+    let session_notes = tx.execute(
+        "DELETE FROM session_notes WHERE session_id IN (SELECT id FROM sessions WHERE started_at >= ?1)",
+        [cutoff_ts],
+    )?;
+    let sessions = tx.execute("DELETE FROM sessions WHERE started_at >= ?1", [cutoff_ts])?;
+
+    // Traceability rows for sends in the window.
+    let traceability = tx.execute("DELETE FROM traceability_log WHERE ts >= ?1", [cutoff_ts])?;
+
+    // Orphan sweep: any state row with no surviving provenance is removed (children first).
+    let commitments = tx.execute(orphan_sql("commitments"), [])?;
+    let open_loops = tx.execute(orphan_sql("open_loops"), [])?;
+    let people = tx.execute(orphan_sql("people"), [])?;
+    let projects = tx.execute(orphan_sql("projects"), [])?;
+
+    tx.commit()?;
+
+    Ok(DeleteReport {
+        events,
+        people,
+        projects,
+        commitments,
+        open_loops,
+        threads: 0,
+        sessions,
+        session_notes,
+        traceability,
+    })
+}
+
+/// DELETE for one state table's rows that have no remaining provenance row.
+fn orphan_sql(table: &'static str) -> &'static str {
+    match table {
+        "commitments" => "DELETE FROM commitments WHERE id NOT IN (SELECT state_id FROM state_provenance WHERE state_table='commitments')",
+        "open_loops" => "DELETE FROM open_loops WHERE id NOT IN (SELECT state_id FROM state_provenance WHERE state_table='open_loops')",
+        "people" => "DELETE FROM people WHERE id NOT IN (SELECT state_id FROM state_provenance WHERE state_table='people')",
+        "projects" => "DELETE FROM projects WHERE id NOT IN (SELECT state_id FROM state_provenance WHERE state_table='projects')",
+        _ => unreachable!("unknown state table"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -256,5 +325,68 @@ mod tests {
         let v: Value = serde_json::from_str(&export_json(&conn).unwrap()).unwrap();
         assert!(v["event_log"].as_array().unwrap().is_empty());
         assert!(v["people"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn delete_since_removes_recent_events_and_keeps_older_ones() {
+        let mut conn = crate::open_in_memory().unwrap();
+        let old = insert_event(&conn, &NewEvent { ts: 1_000, source: "capture", kind: "text",
+            app_bundle_id: None, window_title: None, content: "old note", content_hash: "old",
+            dwell_ms: 0, display_id: None, window_bounds: None }).unwrap();
+        let recent = insert_event(&conn, &NewEvent { ts: 9_000, source: "capture", kind: "text",
+            app_bundle_id: None, window_title: None, content: "recent note", content_hash: "new",
+            dwell_ms: 0, display_id: None, window_bounds: None }).unwrap();
+
+        let report = delete_since(&mut conn, 5_000).unwrap();
+        assert_eq!(report.events, 1, "only the ts>=5000 event is deleted");
+
+        let remaining: Vec<i64> = {
+            let mut stmt = conn.prepare("SELECT id FROM event_log ORDER BY id").unwrap();
+            stmt.query_map([], |r| r.get(0)).unwrap().collect::<Result<_, _>>().unwrap()
+        };
+        assert_eq!(remaining, vec![old], "old survives, recent gone");
+        let _ = recent;
+    }
+
+    #[test]
+    fn delete_since_drops_orphaned_state_but_keeps_still_supported_state() {
+        let mut conn = crate::open_in_memory().unwrap();
+        // A person supported by BOTH an old and a recent event survives; a commitment supported
+        // ONLY by the recent event is orphaned and removed.
+        let old = insert_event(&conn, &NewEvent { ts: 1_000, source: "capture", kind: "text",
+            app_bundle_id: None, window_title: None, content: "met Alice", content_hash: "e-old",
+            dwell_ms: 0, display_id: None, window_bounds: None }).unwrap();
+        let recent = insert_event(&conn, &NewEvent { ts: 9_000, source: "capture", kind: "text",
+            app_bundle_id: None, window_title: None, content: "Alice asked X", content_hash: "e-new",
+            dwell_ms: 0, display_id: None, window_bounds: None }).unwrap();
+        let alice = insert_person(&mut conn, &NewPerson { display_name: "Alice", confidence: 0.9, now: 1, ..Default::default() },
+            &[Provenance::new(old), Provenance::new(recent)]).unwrap();
+        insert_commitment(&mut conn, &NewCommitment { direction: CommitmentDirection::Mine,
+            counterparty_id: Some(alice), description: "do X", due_at: None,
+            status: CommitmentStatus::Open, project_id: None, confidence: 0.8, now: 1 },
+            &[Provenance::new(recent)]).unwrap();
+
+        delete_since(&mut conn, 5_000).unwrap();
+
+        let people: i64 = conn.query_row("SELECT count(*) FROM people", [], |r| r.get(0)).unwrap();
+        let commitments: i64 = conn.query_row("SELECT count(*) FROM commitments", [], |r| r.get(0)).unwrap();
+        assert_eq!(people, 1, "Alice keeps her old evidence, survives");
+        assert_eq!(commitments, 0, "commitment lost all evidence, removed");
+        // provenance pointing at the deleted event is gone; the old one remains.
+        let prov: i64 = conn.query_row("SELECT count(*) FROM state_provenance", [], |r| r.get(0)).unwrap();
+        assert_eq!(prov, 1, "only the old-event provenance row survives");
+    }
+
+    #[test]
+    fn delete_since_keeps_the_schema_and_fts_in_sync() {
+        let mut conn = crate::open_in_memory().unwrap();
+        insert_event(&conn, &NewEvent { ts: 9_000, source: "capture", kind: "text",
+            app_bundle_id: None, window_title: Some("Inbox"), content: "secret meeting", content_hash: "h",
+            dwell_ms: 0, display_id: None, window_bounds: None }).unwrap();
+        delete_since(&mut conn, 5_000).unwrap();
+        // FTS mirror must not still return the deleted row.
+        let hits: i64 = conn.query_row(
+            "SELECT count(*) FROM event_fts WHERE event_fts MATCH 'secret'", [], |r| r.get(0)).unwrap();
+        assert_eq!(hits, 0, "AD trigger cleared the FTS row");
     }
 }
