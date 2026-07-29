@@ -3,7 +3,13 @@
 //!
 //! 送信ロジック本体は `shogun_core::analytics`。ここは OS/設定/配線だけ。
 
+use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Manager};
+use shogun_core::analytics::{AnalyticsConfig, AnalyticsHandle, Props};
+use shogun_core::analytics::reqwest_transport::ReqwestTransport;
 
 /// `analytics.json` の内容（非シークレット）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -27,6 +33,88 @@ pub fn new_distinct_id() -> Result<String, String> {
         b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
         b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]
     ))
+}
+
+/// 呼び出し元（Tauri state）が持つ no-op 安全なラッパ。
+/// `SHOGUN_POSTHOG_KEY` 未設定なら `None` で全 capture が no-op。
+#[derive(Clone)]
+pub struct Analytics(Option<AnalyticsHandle>);
+
+impl Analytics {
+    pub fn capture(&self, event: &str, props: Props) {
+        if let Some(h) = &self.0 {
+            h.capture(event, props);
+        }
+    }
+    pub fn set_opt_out(&self, value: bool) {
+        if let Some(h) = &self.0 {
+            h.set_opt_out(value);
+        }
+    }
+}
+
+fn state_path(app: &AppHandle) -> Option<PathBuf> {
+    app.path().app_data_dir().ok().map(|d| d.join("analytics.json"))
+}
+
+/// `analytics.json` を読む。無ければ distinct_id を採番して保存し返す。
+fn load_or_init_state(app: &AppHandle) -> Result<AnalyticsState, String> {
+    let path = state_path(app).ok_or("no app_data_dir")?;
+    if let Ok(s) = std::fs::read_to_string(&path) {
+        if let Ok(state) = serde_json::from_str::<AnalyticsState>(&s) {
+            return Ok(state);
+        }
+    }
+    let state = AnalyticsState { distinct_id: new_distinct_id()?, opt_out: false };
+    save_state(app, &state);
+    Ok(state)
+}
+
+/// `analytics.json` を書く（ベストエフォート、失敗は握りつぶす）。
+pub fn save_state(app: &AppHandle, state: &AnalyticsState) {
+    let Some(path) = state_path(app) else { return };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(json) = serde_json::to_string(state) {
+        let _ = std::fs::write(&path, json);
+    }
+}
+
+/// 全イベント共通のプロパティ。v1 は os / app_version / plan。
+fn base_props(app: &AppHandle) -> Props {
+    let mut p = Props::new();
+    p.insert("os".into(), serde_json::Value::from(std::env::consts::OS));
+    p.insert("app_version".into(), app.package_info().version.to_string().into());
+    // v1 は課金基盤前のため "trial" 固定（fullui.rs と同じ実態）。
+    p.insert("plan".into(), "trial".into());
+    p
+}
+
+/// 分析を初期化する。`SHOGUN_POSTHOG_KEY` 未設定なら無効（no-op）ラッパを返す。
+pub fn init(app: &AppHandle) -> Analytics {
+    let key = std::env::var("SHOGUN_POSTHOG_KEY").unwrap_or_default();
+    if key.is_empty() {
+        eprintln!("[analytics] SHOGUN_POSTHOG_KEY unset — analytics disabled");
+        return Analytics(None);
+    }
+    let host = std::env::var("SHOGUN_POSTHOG_HOST")
+        .unwrap_or_else(|_| "https://us.i.posthog.com".to_string());
+    let state = match load_or_init_state(app) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("[analytics] state init failed: {e} — analytics disabled");
+            return Analytics(None);
+        }
+    };
+    let Some(transport) = ReqwestTransport::new(&host) else {
+        eprintln!("[analytics] TLS init failed — analytics disabled");
+        return Analytics(None);
+    };
+    let config = AnalyticsConfig { api_key: key, distinct_id: state.distinct_id };
+    let opt_out = Arc::new(AtomicBool::new(state.opt_out));
+    let handle = AnalyticsHandle::spawn_shared(config, base_props(app), opt_out, transport);
+    Analytics(Some(handle))
 }
 
 #[cfg(test)]
