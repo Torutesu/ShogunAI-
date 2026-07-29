@@ -871,7 +871,47 @@ impl Db {
             }
         }
 
+        // 計測を記録（best-effort。本文は保存せず query_hash のみ）。
+        let compress_ms = started.elapsed().as_millis() as i64;
+        self.record_compression_metric(
+            query,
+            "compressed",
+            out.stats.pre_tokens as i64,
+            out.stats.post_tokens as i64,
+            compress_ms,
+            compress_ms,
+        );
+
         (ContextPack { facts, evidence }, out.stats, false)
+    }
+
+    /// 圧縮計測を 1 行記録する。best-effort（失敗は握りつぶし、作業を止めない）。
+    /// query は xxh64 化して保存（本文は保存しない、テレメトリ規約 G8）。ハッシュは capture /
+    /// traceability と同じ twox-hash（seed 0）で、下位 16 桁の lower-hex に揃える。
+    pub fn record_compression_metric(
+        &self,
+        query: &str,
+        path: &str,
+        pre_tokens: i64,
+        post_tokens: i64,
+        compress_ms: i64,
+        assemble_ms: i64,
+    ) {
+        let query_hash = Self::content_hash(query);
+        if let Ok(conn) = self.conn.lock() {
+            let _ = shogun_memory::compression_metrics::insert(
+                &conn,
+                &shogun_memory::compression_metrics::MetricRow {
+                    ts: self.now_ms(),
+                    query_hash,
+                    path: path.to_string(),
+                    pre_tokens,
+                    post_tokens,
+                    compress_ms,
+                    assemble_ms,
+                },
+            );
+        }
     }
 
     /// A traceability sink that writes through this same handle (the LLM egress records here).
@@ -2730,6 +2770,22 @@ mod tests {
         assert_eq!(blocks[0].id_ref, BlockRef::Event(7));
         assert_eq!(blocks[0].source_kind, SourceKind::Evidence);
         assert!(blocks[0].tokens > 0);
+    }
+
+    #[test]
+    fn record_compression_metric_persists_hash_not_text() {
+        let db = Db::open_in_memory(clock(1_000)).unwrap();
+        db.record_compression_metric("report", "compressed", 100, 30, 5, 20);
+        let conn = db.conn.lock().unwrap();
+        let (qh, path): (String, String) = conn
+            .query_row(
+                "SELECT query_hash, path FROM compression_metrics LIMIT 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_ne!(qh, "report"); // 本文は保存しない
+        assert_eq!(path, "compressed");
     }
 
     #[test]
