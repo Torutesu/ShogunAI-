@@ -1736,8 +1736,11 @@ function PrivacySecuritySection(props: {
   hasKey: boolean;
   /// The provider refused this key — surfaced here, since this is where the fix is.
   keyRejected: boolean;
+  /// Called after a "delete everything & account" wipe so the parent re-reads key status —
+  /// that command removes every provider's Keychain key, so `hasKey` would otherwise go stale.
+  onDeleted: () => void;
 }): JSX.Element {
-  const { hasKey, keyRejected } = props;
+  const { hasKey, keyRejected, onDeleted } = props;
   // BYOK key entry: the key goes straight to the macOS Keychain via Rust (never a file/DB/log),
   // and is never read back — so "set" vs "not set" is all the UI can and should show.
   const [keyInput, setKeyInput] = useState("");
@@ -1806,15 +1809,21 @@ function PrivacySecuritySection(props: {
   const [confirming, setConfirming] = useState<null | "1h" | "24h" | "all">(null);
   const [deleteMsg, setDeleteMsg] = useState("");
   const [deleteText, setDeleteText] = useState("");
+  // In-flight guard: the confirm buttons stay disabled until the delete command settles, so a
+  // second click can't fire delete_data_since / delete_all_and_account again mid-flight.
+  const [deleting, setDeleting] = useState(false);
   const canDeleteAll = deleteText.trim().toUpperCase() === "DELETE";
   const runDelete = (which: "1h" | "24h" | "all"): void => {
+    if (deleting) return;
     setDeleteMsg("");
+    setDeleting(true);
     if (!IN_TAURI) {
       setDeleteMsg(t.deleteDone);
       setConfirming(null);
       setDeleteText("");
       // A full wipe removes the key too — reflect that in the mock, matching the real command.
       if (which === "all") setKeyState(false);
+      setDeleting(false);
       return;
     }
     const call =
@@ -1826,9 +1835,15 @@ function PrivacySecuritySection(props: {
         setDeleteMsg(t.deleteDone);
         setConfirming(null);
         setDeleteText("");
-        if (which === "all") setKeyState(false);
+        if (which === "all") {
+          setKeyState(false);
+          // The wipe cleared every provider's Keychain key — have the parent re-read status so
+          // its `hasKey` (and anything gated on it) doesn't stay stale.
+          onDeleted();
+        }
       })
-      .catch((e) => setDeleteMsg(String(e)));
+      .catch((e) => setDeleteMsg(String(e)))
+      .finally(() => setDeleting(false));
   };
 
   return (
@@ -1836,7 +1851,8 @@ function PrivacySecuritySection(props: {
       <div className="set__label">{t.privacyTitle}</div>
 
       {/* LLM API Key card. Provider picker + hidden key entry + set/not-set indicator. */}
-      <div className="seg" role="radiogroup" aria-label={t.model}>
+      <div className="set__label" id="seg-provider">{t.model}</div>
+      <div className="seg" role="radiogroup" aria-labelledby="seg-provider">
         {PROVIDERS.map((p) => (
           <button
             key={p.id}
@@ -1899,7 +1915,7 @@ function PrivacySecuritySection(props: {
         <a
           href="https://shogunai.app/privacy"
           target="_blank"
-          rel="noreferrer"
+          rel="noopener noreferrer"
         >
           {t.policyLink}
         </a>
@@ -1940,7 +1956,7 @@ function PrivacySecuritySection(props: {
               }}
               onChange={(e) => setDeleteText(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter" && canDeleteAll) runDelete("all");
+                if (e.key === "Enter" && canDeleteAll && !deleting) runDelete("all");
                 if (e.key === "Escape") {
                   setConfirming(null);
                   setDeleteText("");
@@ -1961,16 +1977,21 @@ function PrivacySecuritySection(props: {
               className="keyrow__btn keyrow__btn--danger"
               type="button"
               onClick={() => runDelete("all")}
-              disabled={!canDeleteAll}
+              disabled={!canDeleteAll || deleting}
             >
               {t.deleteConfirmBtn}
             </button>
           </div>
         </div>
       ) : (
-        // 1h / 24h — single confirm step (destructive but bounded).
+        // 1h / 24h — single confirm step (destructive but bounded). Name the window being deleted.
         <div className="confirm">
-          <div className="set__hint is-err">{t.deleteConfirm}</div>
+          <div className="set__hint is-err">
+            {t.deleteConfirmRange.replace(
+              "{range}",
+              confirming === "1h" ? t.deleteLast1h : t.deleteLast24h,
+            )}
+          </div>
           <div className="keyrow">
             <button
               className="keyrow__btn"
@@ -1983,6 +2004,7 @@ function PrivacySecuritySection(props: {
               className="keyrow__btn keyrow__btn--danger"
               type="button"
               onClick={() => runDelete(confirming)}
+              disabled={deleting}
             >
               {t.deleteConfirmBtn}
             </button>
@@ -2158,7 +2180,7 @@ function Settings(props: {
           {keyErr ? <div className="set__hint is-err">{keyErr}</div> : null}
           <div className="set__hint">{t.shortcutHint}</div>
         </section>
-        <PrivacySecuritySection hasKey={hasKey} keyRejected={keyRejected} />
+        <PrivacySecuritySection hasKey={hasKey} keyRejected={keyRejected} onDeleted={onCleared} />
         <section className="set">
           <div className="set__label">{t.memory}</div>
           <div className="set__hint">{t.memoryHint}</div>

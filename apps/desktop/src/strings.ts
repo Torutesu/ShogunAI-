@@ -216,7 +216,8 @@ export const STRINGS = {
     deleteLast1h: "Last hour",
     deleteLast24h: "Last 24 hours",
     deleteAll: "Delete everything & account",
-    deleteConfirm: "This can't be undone. Deleted from this device immediately.",
+    // Range-specific confirm — names the window ({range} = "Last hour" / "Last 24 hours").
+    deleteConfirmRange: "Delete {range} from this device? This can't be undone.",
     deleteAllConfirm:
       "This deletes everything and removes your keys. Type DELETE to confirm.",
     deleteAllConfirmPlaceholder: "Type DELETE",
