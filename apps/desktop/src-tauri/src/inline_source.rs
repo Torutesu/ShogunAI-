@@ -787,18 +787,38 @@ pub mod mac {
         serde_json::to_string(&report).map_err(|e| e.to_string())
     }
 
-    /// Delete ALL user data and every stored secret, then clear the account's local state (#28).
-    /// Wipes the memory DB (schema kept) and removes every BYOK Keychain entry.
+    /// Delete ALL user data and every user-held secret, then clear the account's local state (#28).
+    ///
+    /// Wipes the memory DB rows (schema + encrypted DB file are KEPT so the app keeps working) and
+    /// removes, best-effort, every user secret from the Keychain:
+    ///   - all BYOK provider keys (`<provider>-byok`),
+    ///   - all OAuth token sets for connected services (`<source>-tokenset`),
+    ///   - the Composio API key (`composio-api-key`).
+    ///
+    /// The local DB encryption key (`memory-db-key`) is intentionally KEPT: `delete_all` clears the
+    /// rows but leaves the encrypted DB file and schema in place, so deleting its key would brick a
+    /// database the app still needs to open. A missing Keychain entry is a no-op.
     #[tauri::command]
     pub fn delete_all_and_account(db: tauri::State<'_, Db>) -> Result<String, String> {
         let report = db.delete_all().ok_or_else(|| "deletion failed".to_string())?;
-        // Remove every provider's BYOK key from the Keychain (best-effort; a missing key is fine).
+        // BYOK provider keys.
         for provider in PROVIDERS {
             let _ = security_framework::passwords::delete_generic_password(
                 KEYCHAIN_SERVICE, keychain_account(provider));
         }
+        // OAuth token sets for every connectable service (`<source>-tokenset`).
+        let token_store = shogun_integrations::KeychainTokenStore::new(KEYCHAIN_SERVICE);
+        for service in shogun_mcp::scope::ALL_SERVICES {
+            use shogun_integrations::TokenStore;
+            let _ = token_store.delete(*service);
+        }
+        // The Composio API key (reuse the approvals command's not-found-tolerant helper).
+        let _ = crate::approvals::mac::clear_composio_key();
         refresh_has_key();
-        eprintln!("[shell] delete_all_and_account — all user data and BYOK keys removed");
+        eprintln!(
+            "[shell] delete_all_and_account — all user data, BYOK keys, OAuth token sets and the \
+             Composio key removed (DB encryption key kept)"
+        );
         serde_json::to_string(&report).map_err(|e| e.to_string())
     }
 
