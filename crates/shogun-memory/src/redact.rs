@@ -112,6 +112,109 @@ pub fn redact(text: &str) -> std::borrow::Cow<'_, str> {
     std::borrow::Cow::Owned(out)
 }
 
+/// Redact for the **log / error-report path** (design decision ②). In addition to the DB
+/// redactor's issuer-prefix and labelled-value masking, this also masks whole email addresses and
+/// full URLs (query string included). It must NOT be used on capture content bound for the DB:
+/// `people.emails` and captured prose legitimately contain emails, and masking them there would
+/// corrupt the memory the product is built on. Logs are diagnostic, not memory — there, an email
+/// or a URL with a token in the query is pure exposure with no upside.
+pub fn redact_log(text: &str) -> std::borrow::Cow<'_, str> {
+    // First pass: emails and URLs (log-only). Then run the shared secret redactor over the result.
+    let stage1 = mask_emails_and_urls(text);
+    match redact(&stage1) {
+        // The shared redactor found nothing to mask.
+        std::borrow::Cow::Borrowed(_) => match stage1 {
+            // stage1 changed nothing either → borrow the original, no allocation.
+            std::borrow::Cow::Borrowed(_) => std::borrow::Cow::Borrowed(text),
+            // stage1 masked something; keep its owned result.
+            std::borrow::Cow::Owned(s) => std::borrow::Cow::Owned(s),
+        },
+        // The shared redactor produced a new string; that owned result is final.
+        std::borrow::Cow::Owned(s) => std::borrow::Cow::Owned(s),
+    }
+}
+
+/// Mask email addresses and full URLs. Hand-rolled (no regex dep, matching this module's style).
+fn mask_emails_and_urls(text: &str) -> std::borrow::Cow<'_, str> {
+    if !text.contains('@') && !text.contains("://") {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0usize;
+    while i < text.len() {
+        if !text.is_char_boundary(i) {
+            out.push_str(&text[i..i + 1]);
+            i += 1;
+            continue;
+        }
+        let rest = &text[i..];
+        // URL: scheme "://" then a run of URL-ish characters (query included).
+        if let Some(scheme_len) = url_scheme_len(rest) {
+            let url_len = scheme_len + run_len_url(&rest[scheme_len..]);
+            out.push_str(MASK);
+            i += url_len;
+            continue;
+        }
+        // Email: back up over the local part already emitted, then mask local@domain.
+        if let Some(after_at) = rest.strip_prefix('@') {
+            if let Some((local_len, domain_len)) = email_span(&out, after_at) {
+                out.truncate(out.len() - local_len);
+                out.push_str(MASK);
+                i += 1 + domain_len; // consume '@' + domain
+                continue;
+            }
+        }
+        let ch_len = rest.chars().next().map(char::len_utf8).unwrap_or(1);
+        out.push_str(&rest[..ch_len]);
+        i += ch_len;
+    }
+    std::borrow::Cow::Owned(out)
+}
+
+/// Length of a `scheme://` prefix at the start of `s`, or `None`.
+fn url_scheme_len(s: &str) -> Option<usize> {
+    let idx = s.find("://")?;
+    // scheme must be short and alphabetic (http, https, ftp, ...) and immediately at the start.
+    if idx == 0 || idx > 10 || !s[..idx].bytes().all(|b| b.is_ascii_alphabetic()) {
+        return None;
+    }
+    Some(idx + 3)
+}
+
+/// Length of the URL body (host/path/query) after the scheme. Stops at whitespace or quote.
+fn run_len_url(s: &str) -> usize {
+    s.char_indices()
+        .find(|(_, c)| c.is_whitespace() || matches!(c, '"' | '\'' | '<' | '>' | ')'))
+        .map(|(idx, _)| idx)
+        .unwrap_or(s.len())
+}
+
+/// Given the text already emitted (`emitted`) ending in an email local part, and the text after
+/// the `@`, return `(local_part_byte_len, domain_byte_len)` when both sides look like an email.
+fn email_span(emitted: &str, after_at: &str) -> Option<(usize, usize)> {
+    // local part: trailing run of email-local chars in what we've emitted.
+    let local: String = emitted
+        .chars()
+        .rev()
+        .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '%' | '+' | '-'))
+        .collect();
+    if local.is_empty() {
+        return None;
+    }
+    let local_len = local.len();
+    // domain: run of domain chars, must contain at least one dot before a whitespace/end.
+    let domain_len = after_at
+        .char_indices()
+        .find(|(_, c)| !(c.is_ascii_alphanumeric() || matches!(c, '.' | '-')))
+        .map(|(idx, _)| idx)
+        .unwrap_or(after_at.len());
+    let domain = &after_at[..domain_len];
+    if domain_len == 0 || !domain.contains('.') || domain.ends_with('.') {
+        return None;
+    }
+    Some((local_len, domain_len))
+}
+
 /// True when `text` contains anything worth a full scan.
 fn might_contain_secret(text: &str) -> bool {
     if ISSUER_PREFIXES.iter().any(|p| text.contains(p)) {
@@ -240,5 +343,44 @@ mod tests {
         assert!(!got.contains("ghp_ABCDEF"), "{got}");
         assert!(!got.contains("zyxwvutsrqponmlkjihg"), "{got}");
         assert!(got.starts_with("first ") && got.ends_with(" end"), "{got}");
+    }
+
+    fn rl(s: &str) -> String {
+        redact_log(s).into_owned()
+    }
+
+    #[test]
+    fn log_redactor_masks_emails() {
+        assert_eq!(rl("user alice@example.com logged in"), "user [redacted] logged in");
+        assert_eq!(rl("to: bob.smith+tag@sub.example.co.jp done"), "to: [redacted] done");
+    }
+
+    #[test]
+    fn log_redactor_masks_full_urls_including_query() {
+        assert_eq!(
+            rl("GET https://api.example.com/v1/x?token=abc123&u=alice now"),
+            "GET [redacted] now",
+        );
+        assert_eq!(rl("open http://localhost:3000/cb?code=xyz"), "open [redacted]");
+    }
+
+    #[test]
+    fn log_redactor_still_masks_issuer_keys_and_labels() {
+        assert_eq!(rl("key sk-ant-api03-abcdefghijklmnop"), "key [redacted]");
+        assert_eq!(rl("api_key: abcdefghijklmnopqrst"), "api_key: [redacted]");
+    }
+
+    #[test]
+    fn log_redactor_leaves_ordinary_prose_untouched() {
+        let s = "Expanding notch panel in 92ms; cache updated.";
+        assert_eq!(rl(s), s);
+    }
+
+    #[test]
+    fn log_redactor_preserves_multibyte_around_matches() {
+        let got = rl("送信先 alice@example.com へ通知しました");
+        assert!(got.starts_with("送信先 "), "{got}");
+        assert!(got.ends_with(" へ通知しました"), "{got}");
+        assert!(got.contains("[redacted]") && !got.contains("alice@example.com"), "{got}");
     }
 }
