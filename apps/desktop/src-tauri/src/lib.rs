@@ -10,7 +10,8 @@ mod ai_sessions;
 mod approvals;
 mod audio_lane;
 pub mod axcache;
-// Turbo model fetch (reqwest + sha2) is only wired in on-device, matching where those deps live.
+// Turbo model fetch resolves the on-device path and delegates the HTTPS download to shogun-core's
+// traced egress (model_asset). On-device only, matching where the audio lane lives.
 #[cfg(target_os = "macos")]
 mod model_fetch;
 mod capture_source;
@@ -808,14 +809,14 @@ pub(crate) fn build_full_ui_window(handle: &tauri::AppHandle) {
     // Spec §D floor. Below this the sidebar plus a three-card health row stops fitting.
     .min_inner_size(FULL_UI_MIN_W, FULL_UI_MIN_H)
     .inner_size(FULL_UI_W, FULL_UI_H)
-    // Glass, like the panel: the webview paints a translucent tint over whatever is behind the
-    // window. Without `transparent` the blur has nothing to show through and the "glass" is just
-    // a dark rectangle.
+    // The window surface is transparent, but the content is NOT glass: `.full` paints an opaque
+    // ground (styles.css) so nothing shows through — this is a window you look AT (dense tables,
+    // small type), where transparency would just be noise. Transparency stays on so the Overlay
+    // title bar and the window's rounded corners composite cleanly over `.full`, not for a blur.
     .transparent(true)
     // Overlay, NOT Transparent. `Transparent` took the traffic lights with it and left the window
     // with no way to close — the content simply drew over where they had been. `Overlay` keeps
-    // them floating above a transparent title bar, which is what a glass window wants anyway; the
-    // pane reserves room for them so nothing sits underneath.
+    // them floating above the title bar; the pane reserves room for them so nothing sits underneath.
     .title_bar_style(tauri::TitleBarStyle::Overlay)
     .focused(true);
     match builder.build() {

@@ -48,6 +48,10 @@ pub mod composio_send;
 /// Concrete HTTPS clients for first-layer connectors (the allowlisted egress, FR-TR-03).
 #[cfg(feature = "net")]
 pub mod mcp_http;
+/// Static model-asset fetch over the traced egress (FR-TR-03) — the desktop's whisper-turbo
+/// download routed through shogun-core instead of a raw reqwest client in the shell.
+#[cfg(feature = "net")]
+pub mod model_asset;
 pub mod meeting;
 /// Composio-based Gmail read transport — routes read calls through the Composio tool API instead
 /// of direct Gmail REST (second-layer reads, allowlisted egress, FR-TR-03).

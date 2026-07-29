@@ -15,10 +15,8 @@
 //! whisper.cpp / whisper-rs load **ggml `.bin`** models, so the fetched file is the real ggml
 //! `ggml-large-v3-turbo.bin` from HuggingFace `ggerganov/whisper.cpp`, named to match.
 
-use std::io::Read;
 use std::path::PathBuf;
 
-use sha2::{Digest, Sha256};
 use tauri::Manager;
 
 /// The pinned source for the turbo weights. `ggerganov/whisper.cpp` is the canonical ggml model
@@ -55,9 +53,12 @@ pub fn ensure_turbo(app: &tauri::AppHandle) -> Option<PathBuf> {
     // A temp file in the *same* directory so the final rename is atomic (same filesystem) and a
     // crash mid-download never leaves a half-written model at the real path.
     let tmp = models_dir.join(format!("{TURBO_FILE}.part"));
-    match download_and_verify(&tmp, &dest) {
-        Ok(()) => {
-            eprintln!("[meeting] turbo model fetched and verified");
+    eprintln!("[meeting] fetching turbo model (first use); this is a one-time download");
+    // FR-TR-03: the raw HTTP client lives in shogun-core (the one traced egress). The shell only
+    // resolves the on-device path and pins the URL/hash — the download itself goes through core.
+    match shogun_core::model_asset::download_verified(TURBO_URL, &tmp, &dest, TURBO_SHA256) {
+        Ok(bytes) => {
+            eprintln!("[meeting] turbo model fetched and verified ({bytes} bytes)");
             Some(dest)
         }
         Err(e) => {
@@ -68,78 +69,3 @@ pub fn ensure_turbo(app: &tauri::AppHandle) -> Option<PathBuf> {
     }
 }
 
-/// Stream the download to `tmp`, verify its SHA256, then atomically move it to `dest`. Returns an
-/// error string on any failure; the caller removes `tmp`.
-fn download_and_verify(tmp: &PathBuf, dest: &PathBuf) -> Result<(), String> {
-    eprintln!("[meeting] fetching turbo model (first use); this is a one-time download");
-
-    let client = reqwest::blocking::Client::builder()
-        .build()
-        .map_err(|e| format!("http client: {e}"))?;
-    let resp = client
-        .get(TURBO_URL)
-        .send()
-        .map_err(|e| format!("request: {e}"))?;
-    if !resp.status().is_success() {
-        return Err(format!("unexpected status {}", resp.status()));
-    }
-
-    // Stream response → temp file while hashing on the way through, so the file is never held in
-    // RAM in full and we do not re-read it from disk to hash it.
-    let mut file = std::fs::File::create(tmp).map_err(|e| format!("create temp: {e}"))?;
-    let mut hasher = Sha256::new();
-    let mut reader = resp;
-    let mut buf = [0u8; 64 * 1024];
-    let mut total: u64 = 0;
-    loop {
-        let n = reader.read(&mut buf).map_err(|e| format!("read: {e}"))?;
-        if n == 0 {
-            break;
-        }
-        hasher.update(&buf[..n]);
-        use std::io::Write;
-        file.write_all(&buf[..n]).map_err(|e| format!("write: {e}"))?;
-        total += n as u64;
-    }
-    file.sync_all().map_err(|e| format!("sync: {e}"))?;
-    drop(file);
-    eprintln!("[meeting] turbo model downloaded ({total} bytes)");
-
-    let digest = hasher.finalize();
-    let got = hex_lower(&digest);
-    match TURBO_SHA256 {
-        Some(expected) => {
-            if !got.eq_ignore_ascii_case(expected) {
-                return Err(format!("sha256 mismatch: got {got}"));
-            }
-        }
-        None => {
-            eprintln!(
-                "[meeting] WARNING: turbo model SHA256 not pinned; skipping verification (got {got})"
-            );
-        }
-    }
-
-    std::fs::rename(tmp, dest).map_err(|e| format!("rename into place: {e}"))?;
-    Ok(())
-}
-
-/// Lowercase hex of a byte slice. Small and dependency-free (avoids pulling in `hex`).
-fn hex_lower(bytes: &[u8]) -> String {
-    let mut s = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        s.push(char::from_digit((b >> 4) as u32, 16).unwrap_or('0'));
-        s.push(char::from_digit((b & 0xf) as u32, 16).unwrap_or('0'));
-    }
-    s
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn hex_lower_encodes_bytes() {
-        assert_eq!(hex_lower(&[0x00, 0x0f, 0xa5, 0xff]), "000fa5ff");
-    }
-}

@@ -56,13 +56,9 @@ shogun-agents = { path = "../../../crates/shogun-agents" }
 # `live` for the effectful side (reqwest + Keychain). shogun-mcp for scope::from_source.
 shogun-integrations = { path = "../../../crates/shogun-integrations", features = ["live"] }
 shogun-mcp = { path = "../../../crates/shogun-mcp" }
-# The turbo whisper model is fetched once over HTTPS (model_fetch.rs). Blocking client so the
-# fetch runs on its own thread without an async runtime; `std::io::Read` on the response lets us
-# stream a multi-hundred-MB file straight to disk (never fully in RAM). It is a static model asset,
-# not user audio — invariant 2 does not apply. Version-matched to shogun-core's reqwest.
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "blocking"] }
-# SHA256 verification of the fetched model before it is trusted. Version-matched to shogun-integrations.
-sha2 = "0.10"
+# The turbo whisper model is fetched once over HTTPS on first use (model_fetch.rs). The HTTP egress
+# itself lives in shogun-core (`model_asset::download_verified`, feature `net`) — FR-TR-03 keeps the
+# one raw HTTP client in the traced egress crate, so the shell no longer depends on reqwest/sha2.
 objc2 = "0.6"
 block2 = "0.6" # ObjC blocks for NSWorkspace notification observers (space-change watcher)
 objc2-app-kit = { version = "0.3", features = [

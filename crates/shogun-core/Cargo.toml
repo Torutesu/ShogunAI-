@@ -23,7 +23,7 @@ default = []
 # `net` pulls in the real HTTPS transport (reqwest). It is OFF by default so the pure-logic CI
 # job (and every Linux unit test of request-building / parsing / traceability) compiles without
 # reqwest; the macOS shell enables it.
-net = ["dep:reqwest", "dep:shogun-integrations", "dep:shogun-mcp"]
+net = ["dep:reqwest", "dep:sha2", "dep:shogun-integrations", "dep:shogun-mcp"]
 # `db` pulls in the storage + fusion layers for the daemon's wiring (DB-backed traceability sink,
 # capture writes, state reads → Fusion supply). OFF by default so the pure-logic tests stay
 # rusqlite-free; the daemon (and its CI step) enable it.
@@ -58,6 +58,8 @@ twox-hash = "1"
 # Real HTTPS transport, feature-gated. rustls only (no system OpenSSL); certificate verification
 # is never disabled (NFR-SEC-04).
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "blocking", "json"], optional = true }
+# SHA256 verification of fetched static assets (model_asset egress). Feature-gated with `net`.
+sha2 = { version = "0.10", optional = true }
 # Storage layer + its rusqlite handle, feature-gated (see the `db` feature). Same rusqlite version
 # as shogun-memory so the bundled SQLite compiles once.
 shogun-memory = { path = "../shogun-memory", optional = true }
