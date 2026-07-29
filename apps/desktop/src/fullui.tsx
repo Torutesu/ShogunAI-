@@ -18,8 +18,18 @@ import "./styles.css";
 const IN_TAURI = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
 // The panel window is transparent because it floats over the desktop; this one is a real window,
-// so give it a ground to sit on.
-document.documentElement.dataset.appearance = "dark";
+// so give it a ground to sit on. Match the appearance the user chose in the panel's settings —
+// same Tauri origin, so the `shogun.appearance` value the panel persists is shared here. Falls
+// back to "auto" (follow the system) exactly like the panel's bootstrap; never hard-code dark.
+function loadAppearance(): "auto" | "light" | "dark" {
+  try {
+    const v = JSON.parse(localStorage.getItem("shogun.appearance") ?? '"auto"');
+    return v === "light" || v === "dark" ? v : "auto";
+  } catch {
+    return "auto";
+  }
+}
+document.documentElement.dataset.appearance = loadAppearance();
 document.body.classList.add("full-window");
 
 function Root(): JSX.Element {

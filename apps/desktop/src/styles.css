@@ -1992,14 +1992,22 @@ kbd {
   background: var(--fill-strong);
 }
 
-/* The Full UI is glass too. It was given a solid ground at first, which is exactly what killed
-   the transparency: the blur had nothing to show through. The window itself is transparent (see
-   build_full_ui_window) and `.full` carries the tint + blur, same as the panel. */
+/* The Full UI is deliberately OPAQUE, unlike the floating panel (see `.full` above): it is a
+   window you look AT, so anything showing through would just be noise. `body` stays transparent
+   only so the transparent window surface + Overlay title bar + rounded corners composite cleanly;
+   `.full` itself paints the opaque ground below. */
 body.full-window {
   background: transparent;
 }
 :root[data-appearance="light"] .full {
   background: #f7f8fb;
+}
+/* Same light ground when the window follows the system (appearance = auto) and the system is
+   light — otherwise light-mode users on "auto" would get the dark ground from `.full` above. */
+@media (prefers-color-scheme: light) {
+  :root[data-appearance="auto"] .full {
+    background: #f7f8fb;
+  }
 }
 
 /* Boot / failure state for the Full UI window, before the core's view arrives. */
