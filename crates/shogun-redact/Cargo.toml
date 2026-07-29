@@ -1,0 +1,17 @@
+[package]
+name = "shogun-redact"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "SHOGUN secret redaction: pure, dependency-free masking for the DB write path and the log path."
+
+# Deliberately zero-dependency. The redaction logic is hand-rolled (no regex engine) so it is
+# exhaustively testable, adds nothing to the build, and can be shared by any crate — including
+# shogun-core's log path — without dragging in rusqlite/sqlcipher via shogun-memory.
+
+[dependencies]
+
+[lints]
+workspace = true

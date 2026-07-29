@@ -70,7 +70,7 @@ pub fn download_verified(
             }
         }
         None => {
-            eprintln!("[model_asset] WARNING: SHA256 not pinned; skipping verification (got {got})");
+            crate::elog!("[model_asset] WARNING: SHA256 not pinned; skipping verification (got {got})");
         }
     }
 
