@@ -506,6 +506,9 @@ pub mod mac {
                 // (format!/matches!) then runs with the lock already released.
                 let raw: Vec<_> = {
                     let q = a.0.lock().map_err(|_| "approval queue lock poisoned".to_string())?;
+                    // Clone the preview OUT under the lock (Preview: Clone) so `raw` owns its data —
+                    // `preview()` returns a reference into the queue, which cannot outlive the guard
+                    // dropped at the end of this block.
                     q.pending_ids()
                         .into_iter()
                         .filter_map(|id| q.preview(id).map(|p| (id, p.clone())))
