@@ -584,8 +584,8 @@ pub mod mac {
             let original = ComposioPolicy { draft_stop: false, consent_acknowledged: true, user_id: "test-user-123".to_string() };
             let json = serde_json::to_string(&original).expect("serialize");
             let loaded: ComposioPolicy = serde_json::from_str(&json).expect("deserialize");
-            assert_eq!(loaded.draft_stop, false);
-            assert_eq!(loaded.consent_acknowledged, true);
+            assert!(!loaded.draft_stop);
+            assert!(loaded.consent_acknowledged);
             assert_eq!(loaded.user_id, "test-user-123");
         }
 
@@ -594,8 +594,8 @@ pub mod mac {
             let p = ComposioPolicy { draft_stop: false, consent_acknowledged: true, user_id: String::new() };
             let updated = with_user_id(p, "new-user");
             assert_eq!(updated.user_id, "new-user");
-            assert_eq!(updated.draft_stop, false);
-            assert_eq!(updated.consent_acknowledged, true);
+            assert!(!updated.draft_stop);
+            assert!(updated.consent_acknowledged);
         }
 
         #[test]
@@ -603,8 +603,8 @@ pub mod mac {
             let p = ComposioPolicy { draft_stop: true, consent_acknowledged: false, user_id: "preserved-user".to_string() };
             let updated = with_flags(p, false, true);
             assert_eq!(updated.user_id, "preserved-user");
-            assert_eq!(updated.draft_stop, false);
-            assert_eq!(updated.consent_acknowledged, true);
+            assert!(!updated.draft_stop);
+            assert!(updated.consent_acknowledged);
         }
     }
 }
