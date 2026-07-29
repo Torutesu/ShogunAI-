@@ -120,6 +120,108 @@ pub fn regions(screen: Rect, idle: Rect, p: GeometryParams) -> Regions {
     Regions { r_enter, r_stay, r_exp, top_band_min_y: screen.max_y() - p.top_band }
 }
 
+/// Where the user parks SHOGUN's panel — its "castle" (issue #20). The Notch is the default,
+/// top-centre resting place; the other five let the panel live at a screen edge or corner.
+/// The wire form (JSON on disk + the IPC boundary) is the `snake_case` `key`/`from_key` string, so
+/// this stays a plain enum with no serde dependency in the core crate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum CastlePosition {
+    /// Top-centre, hanging from the notch. The default resting place (spec §3.2.1).
+    #[default]
+    Notch,
+    /// Left screen edge, vertically centred.
+    LeftEdge,
+    /// Right screen edge, vertically centred.
+    RightEdge,
+    /// Bottom-left corner.
+    BottomLeft,
+    /// Bottom-centre.
+    BottomCenter,
+    /// Bottom-right corner.
+    BottomRight,
+}
+
+impl CastlePosition {
+    /// The stable wire key (matches the `serde` `snake_case` form) used by the JSON store and the
+    /// UI ↔ Rust IPC. Kept explicit so the boundary never depends on serde quoting.
+    pub fn key(self) -> &'static str {
+        match self {
+            CastlePosition::Notch => "notch",
+            CastlePosition::LeftEdge => "left_edge",
+            CastlePosition::RightEdge => "right_edge",
+            CastlePosition::BottomLeft => "bottom_left",
+            CastlePosition::BottomCenter => "bottom_center",
+            CastlePosition::BottomRight => "bottom_right",
+        }
+    }
+
+    /// Parse a wire key back into a position. Unknown keys yield `None` so callers can fall back to
+    /// the default rather than adopt a bogus placement.
+    pub fn from_key(s: &str) -> Option<Self> {
+        Some(match s {
+            "notch" => CastlePosition::Notch,
+            "left_edge" => CastlePosition::LeftEdge,
+            "right_edge" => CastlePosition::RightEdge,
+            "bottom_left" => CastlePosition::BottomLeft,
+            "bottom_center" => CastlePosition::BottomCenter,
+            "bottom_right" => CastlePosition::BottomRight,
+            _ => return None,
+        })
+    }
+
+    /// Compact `u8` encoding for the lock-free `AtomicU8` the shell reads from the placement fns.
+    /// Paired with `from_u8`; the value is an internal detail, never persisted or sent.
+    pub fn to_u8(self) -> u8 {
+        match self {
+            CastlePosition::Notch => 0,
+            CastlePosition::LeftEdge => 1,
+            CastlePosition::RightEdge => 2,
+            CastlePosition::BottomLeft => 3,
+            CastlePosition::BottomCenter => 4,
+            CastlePosition::BottomRight => 5,
+        }
+    }
+
+    /// Inverse of `to_u8`; any out-of-range byte falls back to the default (`Notch`).
+    pub fn from_u8(v: u8) -> Self {
+        match v {
+            1 => CastlePosition::LeftEdge,
+            2 => CastlePosition::RightEdge,
+            3 => CastlePosition::BottomLeft,
+            4 => CastlePosition::BottomCenter,
+            5 => CastlePosition::BottomRight,
+            _ => CastlePosition::Notch,
+        }
+    }
+}
+
+/// Bottom-left NS origin for a `w`×`h` panel resting at `pos` inside `vis` — the target screen's
+/// **visible frame** (menu bar already excluded). The anchored axis sits flush to the edge; the
+/// free axis is centred. The result is clamped so the panel stays fully on screen, matching the
+/// existing top-centre dock (`pin_top_centre`): a panel switching size grows away from its anchor.
+pub fn castle_origin(vis: Rect, w: f64, h: f64, pos: CastlePosition) -> Point {
+    use CastlePosition::*;
+    let left = vis.x;
+    let centre_x = vis.x + (vis.w - w) / 2.0;
+    let right = vis.max_x() - w;
+    let top = vis.max_y() - h;
+    let middle_y = vis.y + (vis.h - h) / 2.0;
+    let bottom = vis.y;
+    let (x, y) = match pos {
+        Notch => (centre_x, top),
+        LeftEdge => (left, middle_y),
+        RightEdge => (right, middle_y),
+        BottomLeft => (left, bottom),
+        BottomCenter => (centre_x, bottom),
+        BottomRight => (right, bottom),
+    };
+    // Keep the panel on-screen even when it is wider/taller than the free space (clamp collapses to
+    // the edge). `max` guards a degenerate visible frame smaller than the panel.
+    let x = x.clamp(vis.x, (vis.max_x() - w).max(vis.x));
+    let y = y.clamp(vis.y, (vis.max_y() - h).max(vis.y));
+    Point::new(x, y)
+}
+
 /// Convert a CGEvent point (top-left origin, y-down, referenced to the primary display)
 /// to NS coordinates (spec §3.4.7). `primary_height` is `NSScreen.screens[0].frame.height`.
 ///
@@ -210,5 +312,82 @@ mod tests {
         assert!(r.contains(Point::new(0.0, 0.0))); // min inclusive
         assert!(!r.contains(Point::new(10.0, 5.0))); // max exclusive
         assert!(!r.contains(Point::new(5.0, 10.0)));
+    }
+
+    // The screen's visible frame (menu bar excluded): 1512×950, offset 0,0 (bottom-left origin).
+    fn visible() -> Rect {
+        Rect::new(0.0, 0.0, 1512.0, 950.0)
+    }
+
+    #[test]
+    fn castle_key_roundtrips_every_variant() {
+        for p in [
+            CastlePosition::Notch,
+            CastlePosition::LeftEdge,
+            CastlePosition::RightEdge,
+            CastlePosition::BottomLeft,
+            CastlePosition::BottomCenter,
+            CastlePosition::BottomRight,
+        ] {
+            assert_eq!(CastlePosition::from_key(p.key()), Some(p));
+            assert_eq!(CastlePosition::from_u8(p.to_u8()), p);
+        }
+        assert_eq!(CastlePosition::from_key("nonsense"), None);
+        assert_eq!(CastlePosition::from_u8(200), CastlePosition::Notch); // unknown → default
+        assert_eq!(CastlePosition::default(), CastlePosition::Notch);
+    }
+
+    #[test]
+    fn notch_is_top_centre_matching_the_existing_dock() {
+        let v = visible();
+        let (w, h) = (400.0, 180.0);
+        let o = castle_origin(v, w, h, CastlePosition::Notch);
+        // Flush to the visible top, horizontally centred — identical to pin_top_centre's math.
+        assert_eq!(o.y, v.max_y() - h);
+        assert_eq!(o.x, v.x + (v.w - w) / 2.0);
+    }
+
+    #[test]
+    fn edges_flush_to_their_side_and_centre_the_free_axis() {
+        let v = visible();
+        let (w, h) = (400.0, 180.0);
+        let left = castle_origin(v, w, h, CastlePosition::LeftEdge);
+        assert_eq!(left.x, v.x); // flush left
+        assert_eq!(left.y, v.y + (v.h - h) / 2.0); // vertically centred
+        let right = castle_origin(v, w, h, CastlePosition::RightEdge);
+        assert_eq!(right.x, v.max_x() - w); // flush right
+        assert_eq!(right.y, v.y + (v.h - h) / 2.0);
+    }
+
+    #[test]
+    fn bottom_row_flush_to_the_bottom() {
+        let v = visible();
+        let (w, h) = (400.0, 180.0);
+        let bl = castle_origin(v, w, h, CastlePosition::BottomLeft);
+        assert_eq!((bl.x, bl.y), (v.x, v.y)); // bottom-left corner
+        let bc = castle_origin(v, w, h, CastlePosition::BottomCenter);
+        assert_eq!((bc.x, bc.y), (v.x + (v.w - w) / 2.0, v.y));
+        let br = castle_origin(v, w, h, CastlePosition::BottomRight);
+        assert_eq!((br.x, br.y), (v.max_x() - w, v.y)); // bottom-right corner
+    }
+
+    #[test]
+    fn castle_origin_clamps_a_panel_larger_than_the_free_space() {
+        // An oversized panel can't hang off the edge — it collapses to the visible-frame origin.
+        let v = visible();
+        let o = castle_origin(v, v.w + 200.0, v.h + 200.0, CastlePosition::BottomRight);
+        assert_eq!((o.x, o.y), (v.x, v.y));
+    }
+
+    #[test]
+    fn switching_size_at_bottom_centre_keeps_the_bottom_edge_and_centre() {
+        // Collapse (pill) → expand (panel) at the same anchor: the bottom edge stays put and the
+        // panel grows upward, mirroring the notch's grow-downward behaviour.
+        let v = visible();
+        let pill = castle_origin(v, 260.0, 44.0, CastlePosition::BottomCenter);
+        let open = castle_origin(v, 400.0, 180.0, CastlePosition::BottomCenter);
+        assert_eq!(pill.y, v.y);
+        assert_eq!(open.y, v.y); // bottom edge held across the size change
+        assert_eq!(pill.x + 260.0 / 2.0, open.x + 400.0 / 2.0); // centre held
     }
 }

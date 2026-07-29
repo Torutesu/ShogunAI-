@@ -1310,6 +1310,72 @@ function ComposioSection(): JSX.Element {
   );
 }
 
+// Castle Position (issue #20): the six resting places SHOGUN can live at, keyed by the wire form
+// the Rust `castle` commands speak. The order is the reading order of the mini-screen diagram.
+type CastlePos =
+  | "notch"
+  | "left_edge"
+  | "right_edge"
+  | "bottom_left"
+  | "bottom_center"
+  | "bottom_right";
+
+const CASTLE_ANCHORS: Array<{ id: CastlePos; label: string; cls: string }> = [
+  { id: "notch", label: t.castleNotch, cls: "castle__spot--notch" },
+  { id: "left_edge", label: t.castleLeftEdge, cls: "castle__spot--left" },
+  { id: "right_edge", label: t.castleRightEdge, cls: "castle__spot--right" },
+  { id: "bottom_left", label: t.castleBottomLeft, cls: "castle__spot--bl" },
+  { id: "bottom_center", label: t.castleBottomCenter, cls: "castle__spot--bc" },
+  { id: "bottom_right", label: t.castleBottomRight, cls: "castle__spot--br" },
+];
+
+// Picker for where the panel resides on screen. A little Mac silhouette with the six anchor points
+// drawn where they actually sit — the selected one glows. Choosing one re-docks the live panel
+// immediately (the Rust side persists it and moves the window).
+function CastlePositionSection(): JSX.Element {
+  const [pos, setPos] = useState<CastlePos>("notch");
+
+  useEffect(() => {
+    if (!IN_TAURI) return;
+    void invoke<string>("get_castle_position")
+      .then((p) => {
+        if (CASTLE_ANCHORS.some((a) => a.id === p)) setPos(p as CastlePos);
+      })
+      .catch(() => undefined);
+  }, []);
+
+  const choose = (next: CastlePos): void => {
+    if (next === pos) return;
+    const prev = pos;
+    setPos(next); // optimistic — the move should feel instant
+    if (IN_TAURI)
+      void invoke("set_castle_position", { position: next }).catch(() => setPos(prev));
+  };
+
+  return (
+    <section className="set">
+      <div className="set__label" id="seg-castle">{t.castle}</div>
+      <div className="castle" role="radiogroup" aria-labelledby="seg-castle">
+        <div className="castle__screen">
+          {CASTLE_ANCHORS.map((a) => (
+            <button
+              key={a.id}
+              type="button"
+              role="radio"
+              aria-checked={pos === a.id}
+              aria-label={a.label}
+              title={a.label}
+              className={`castle__spot ${a.cls}${pos === a.id ? " is-on" : ""}`}
+              onClick={() => choose(a.id)}
+            />
+          ))}
+        </div>
+      </div>
+      <div className="set__hint">{t.castleHint}</div>
+    </section>
+  );
+}
+
 function ConnectionsSection(): JSX.Element {
   const [rows, setRows] = useState<ServiceStatus[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
@@ -1710,6 +1776,7 @@ function Settings(props: {
             ))}
           </div>
         </section>
+        <CastlePositionSection />
         <section className="set">
           <div className="set__label">{t.shortcuts}</div>
           {/* Draft is a fixed ⌥-tap trigger (a bare modifier can't be a global shortcut), shown

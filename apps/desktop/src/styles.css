@@ -787,6 +787,102 @@ body {
   color: var(--ink);
   font-weight: 600;
 }
+
+/* Castle Position (issue #20) — a little Mac silhouette whose six anchor points are drawn where
+   they actually sit. Edges are thin lines, corners small boxes; the chosen one glows in accent.
+   The picker matches the panel's glass language: soft fills, generous radii, calm accent. */
+.castle {
+  display: flex;
+  justify-content: center;
+  padding: 4px 0 2px;
+}
+.castle__screen {
+  position: relative;
+  width: 100%;
+  max-width: 244px;
+  aspect-ratio: 16 / 10;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-md);
+  background: var(--fill);
+}
+/* The physical notch bump at the top-centre, so the silhouette reads as a modern Mac. */
+.castle__screen::before {
+  content: "";
+  position: absolute;
+  top: -1px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 40px;
+  height: 5px;
+  background: var(--line-strong);
+  border-radius: 0 0 4px 4px;
+}
+.castle__spot {
+  position: absolute;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  opacity: 0.5;
+  background: color-mix(in srgb, var(--ink) 34%, transparent);
+  border-radius: var(--r-pill);
+  transition: opacity var(--sp), background var(--sp), box-shadow var(--sp);
+}
+.castle__spot:hover {
+  opacity: 0.85;
+}
+.castle__spot.is-on {
+  opacity: 1;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+/* Notch: a short pill riding the top edge, over the drawn notch. */
+.castle__spot--notch {
+  top: 7px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 34px;
+  height: 7px;
+  border-radius: 0 0 5px 5px;
+}
+/* Left / right edges: thin vertical lines, vertically centred. */
+.castle__spot--left {
+  left: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 6px;
+  height: 42px;
+}
+.castle__spot--right {
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 6px;
+  height: 42px;
+}
+/* Bottom-centre: a thin horizontal line hugging the bottom edge. */
+.castle__spot--bc {
+  bottom: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 48px;
+  height: 6px;
+}
+/* Corners: small rounded boxes. */
+.castle__spot--bl {
+  left: 9px;
+  bottom: 9px;
+  width: 22px;
+  height: 16px;
+  border-radius: 5px;
+}
+.castle__spot--br {
+  right: 9px;
+  bottom: 9px;
+  width: 22px;
+  height: 16px;
+  border-radius: 5px;
+}
+
 .icon--close:hover {
   color: var(--warn);
 }

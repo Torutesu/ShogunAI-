@@ -51,6 +51,20 @@ const FULL_UI_MIN_H: f64 = 720.0;
 #[cfg(target_os = "macos")]
 static USER_HIDDEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// The user's chosen Castle Position (issue #20) — where the panel resides and expands from —
+/// encoded as `CastlePosition::to_u8`. Kept as a lock-free atomic because every placement path
+/// (`reposition_to_cursor_screen`, `pin_top_centre`, `set_panel_size`) reads it on the main thread
+/// and must not block. Persisted separately to `castle.json` via the `castle` module; the default
+/// (0 = Notch) matches the spike's original top-centre dock.
+#[cfg(target_os = "macos")]
+static CASTLE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// The current Castle Position read from the atomic (default `Notch`).
+#[cfg(target_os = "macos")]
+fn current_castle() -> shogun_core::notch::geometry::CastlePosition {
+    shogun_core::notch::geometry::CastlePosition::from_u8(CASTLE.load(std::sync::atomic::Ordering::Relaxed))
+}
+
 /// The NATIVE NSPanel that actually hosts the webview content on screen. The tauri/tao window
 /// stays alive but permanently hidden (it owns the wry webview plumbing); its contentView is
 /// reparented into this panel at startup. Every ordering/visibility/space operation targets THIS
@@ -121,6 +135,8 @@ pub fn run() {
         shortcuts::get_shortcuts,
         shortcuts::set_shortcut,
         shortcuts::hide_panel,
+        castle::get_castle_position,
+        castle::set_castle_position,
         set_panel_size,
         start_panel_drag,
         // First-layer connectors + the L3 send/approval queue, both rendered as sections of the
@@ -194,6 +210,11 @@ fn setup_macos(app: &tauri::App) {
     } else {
         PANEL_BEHAVIOR.store((1 << 0) | (1 << 8), Ordering::Relaxed); // 257 join-all + fsAux
     }
+    // Castle Position (issue #20): load the user's chosen resting place BEFORE the panel is first
+    // adopted/docked, so it lands at the right spot on launch instead of flashing at the notch and
+    // jumping. Default (Notch) reproduces the historical top-centre dock.
+    castle::init(app.handle());
+
     // The window is NOT declared in tauri.conf.json — it is built HERE, after the process became
     // an Accessory app at the very top of run(). A window created while the app was still Regular
     // keeps its original Space binding forever (canJoinAllSpaces reads back but is ignored) —
@@ -440,6 +461,7 @@ unsafe fn reposition_to_cursor_screen(ptr: *mut objc2::runtime::AnyObject) {
     use objc2::runtime::AnyObject;
     use objc2::{class, msg_send};
     use objc2_foundation::{NSPoint, NSRect};
+    use shogun_core::notch::geometry::{castle_origin, Rect as GRect};
     let mouse: NSPoint = msg_send![class!(NSEvent), mouseLocation];
     let screens: *mut AnyObject = msg_send![class!(NSScreen), screens];
     let count: usize = if screens.is_null() { 0 } else { msg_send![screens, count] };
@@ -454,14 +476,14 @@ unsafe fn reposition_to_cursor_screen(ptr: *mut objc2::runtime::AnyObject) {
             && mouse.y >= f.origin.y
             && mouse.y <= f.origin.y + f.size.height;
         if inside {
-            // Dock at the TOP-CENTRE of the cursor's display, just under the menu bar/notch
-            // (visibleFrame top). The product is a notch UI — the panel hangs from the notch,
-            // never overlapping it.
+            // Dock at the user's Castle Position on the cursor's display (issue #20). The default
+            // (Notch) keeps the historical behaviour: top-centre, just under the menu bar/notch,
+            // never overlapping it. Edge/corner positions rest flush to that edge/corner instead.
             let vf: NSRect = msg_send![s, visibleFrame];
             let w: NSRect = msg_send![ptr, frame];
-            let x = vf.origin.x + ((vf.size.width - w.size.width) / 2.0).max(0.0);
-            let y = vf.origin.y + (vf.size.height - w.size.height).max(0.0);
-            let origin = NSPoint { x, y };
+            let vis = GRect::new(vf.origin.x, vf.origin.y, vf.size.width, vf.size.height);
+            let o = castle_origin(vis, w.size.width, w.size.height, current_castle());
+            let origin = NSPoint { x: o.x, y: o.y };
             let _: () = msg_send![ptr, setFrameOrigin: origin];
             break;
         }
@@ -573,8 +595,9 @@ fn set_panel_hidden(handle: &tauri::AppHandle) {
     });
 }
 
-/// (main thread) Dock the window at the TOP-CENTRE of ITS screen, just under the menu bar/notch
-/// (visibleFrame top — never overlapping the notch).
+/// (main thread) Dock the window at the user's Castle Position on the MENU-BAR display (issue #20).
+/// The default (Notch) is top-centre, just under the menu bar/notch (visibleFrame top — never
+/// overlapping the notch); edge/corner positions rest flush to that edge/corner.
 ///
 /// SAFETY: caller guarantees `ptr` is the live NSWindow and we're on the main thread.
 #[cfg(target_os = "macos")]
@@ -582,6 +605,7 @@ unsafe fn pin_top_centre(ptr: *mut objc2::runtime::AnyObject) {
     use objc2::runtime::AnyObject;
     use objc2::{class, msg_send};
     use objc2_foundation::{NSPoint, NSRect};
+    use shogun_core::notch::geometry::{castle_origin, Rect as GRect};
 
     // Dock to the MENU-BAR display, not whichever one the pointer happened to be on at launch.
     //
@@ -612,15 +636,16 @@ unsafe fn pin_top_centre(ptr: *mut objc2::runtime::AnyObject) {
     }
     let vf: NSRect = msg_send![screen, visibleFrame];
     let w: NSRect = msg_send![ptr, frame];
-    let x = vf.origin.x + ((vf.size.width - w.size.width) / 2.0).max(0.0);
-    let y = vf.origin.y + (vf.size.height - w.size.height).max(0.0);
-    let origin = NSPoint { x, y };
+    let vis = GRect::new(vf.origin.x, vf.origin.y, vf.size.width, vf.size.height);
+    let pos = current_castle();
+    let o = castle_origin(vis, w.size.width, w.size.height, pos);
+    let origin = NSPoint { x: o.x, y: o.y };
     let _: () = msg_send![ptr, setFrameOrigin: origin];
     // Where it actually landed, and on which screen. With more than one display "I can't see it"
     // is usually "it is on the other one", and that is not answerable without the coordinates.
     eprintln!(
-        "[shell] panel docked at {:.0},{:.0} ({:.0}x{:.0}) on the menu-bar display {:.0},{:.0} {:.0}x{:.0}",
-        x, y, w.size.width, w.size.height,
+        "[shell] panel docked ({}) at {:.0},{:.0} ({:.0}x{:.0}) on the menu-bar display {:.0},{:.0} {:.0}x{:.0}",
+        pos.key(), o.x, o.y, w.size.width, w.size.height,
         vf.origin.x, vf.origin.y, vf.size.width, vf.size.height
     );
 }
@@ -1000,48 +1025,53 @@ fn adopt_native_panel(win: &tauri::WebviewWindow) {
     }
 }
 
-/// Resize the visible overlay (native panel or fallback window) keeping the TOP edge anchored —
-/// the webview's minimize/expand control. AppKit frames are bottom-left origin, so the y origin
-/// shifts by the height delta.
+/// Resize the visible overlay (native panel or fallback window) — the webview's minimize/expand
+/// control. AppKit frames are bottom-left origin. The default path re-docks the panel at its
+/// Castle Position (issue #20) with the new size, so it grows AWAY from its anchor (down from the
+/// notch, up from the bottom, right from the left edge …). `anchor: "left"` is the manual
+/// corner-grip drag: it keeps the top-left corner put so the panel grows down/right under the
+/// pointer, wherever the panel currently sits.
 #[cfg(target_os = "macos")]
 #[tauri::command]
 fn set_panel_size(app: tauri::AppHandle, width: f64, height: f64, anchor: Option<String>) {
-    // "left" keeps the top-left corner put (the bottom-right resize grip); anything else — and the
-    // default — keeps the panel's centre, which is what a notch-hung panel needs.
     let keep_left = anchor.as_deref() == Some("left");
-    let anchor_label = if keep_left { "left" } else { "center" };
+    let anchor_label = if keep_left { "left" } else { "castle" };
     let h = app.clone();
     let _ = app.run_on_main_thread(move || {
         use objc2::msg_send;
         use objc2_foundation::{NSPoint, NSRect, NSSize};
         use objc2::runtime::AnyObject;
+        use shogun_core::notch::geometry::{castle_origin, Rect as GRect};
         let Some(ptr) = overlay_ptr(&h) else { return };
         // SAFETY: main thread, live NSWindow/NSPanel.
         unsafe {
             let f: NSRect = msg_send![ptr, frame];
-            // Keep the panel where it *looks* like it is. Anchoring the left edge moves the panel
-            // sideways by half of every size change: the window is born 640 wide and centred under
-            // the notch, then the webview collapses it to the ~260pt pill — which left the pill
-            // 190pt to the left of the notch it is supposed to hang from, far enough that it read
-            // as "the UI never appeared". The notch is the screen's centre, and a dragged panel's
-            // centre is where the user put it, so the centre is the thing that has to hold.
-            let mut x = if keep_left {
-                f.origin.x
-            } else {
-                f.origin.x + f.size.width / 2.0 - width / 2.0
-            };
-            // An expansion near a screen edge slides inward rather than hanging off it.
             let screen: *mut AnyObject = msg_send![ptr, screen];
+            let (mut x, mut y) = if keep_left {
+                // Manual corner-grip resize (bottom-right grip): the top-left has to stay put or the
+                // panel walks out from under the pointer.
+                (f.origin.x, f.origin.y + f.size.height - height)
+            } else if !screen.is_null() {
+                // View switch (handle ↔ chat ↔ settings): re-dock at the Castle Position so a size
+                // change grows away from the anchored edge and the panel never drifts off its
+                // resting place. The notch default reproduces the historical top-centre dock.
+                let vf: NSRect = msg_send![screen, visibleFrame];
+                let vis = GRect::new(vf.origin.x, vf.origin.y, vf.size.width, vf.size.height);
+                let o = castle_origin(vis, width, height, current_castle());
+                (o.x, o.y)
+            } else {
+                // No screen (rare): fall back to holding the panel's centre and top edge.
+                (f.origin.x + f.size.width / 2.0 - width / 2.0, f.origin.y + f.size.height - height)
+            };
+            // Whichever path we took, never hang off a screen edge.
             if !screen.is_null() {
                 let vf: NSRect = msg_send![screen, visibleFrame];
                 let max_x = vf.origin.x + (vf.size.width - width).max(0.0);
+                let max_y = vf.origin.y + (vf.size.height - height).max(0.0);
                 x = x.clamp(vf.origin.x, max_x);
+                y = y.clamp(vf.origin.y, max_y);
             }
-            let r = NSRect {
-                // Top edge anchored: the panel hangs from the notch, so it grows downward.
-                origin: NSPoint { x, y: f.origin.y + f.size.height - height },
-                size: NSSize { width, height },
-            };
+            let r = NSRect { origin: NSPoint { x, y }, size: NSSize { width, height } };
             let _: () = msg_send![ptr, setFrame: r, display: true];
             // The window is transparent, so macOS derives its shadow from the rendered alpha mask
             // — and caches it. Without this the shadow keeps the shape the panel had at its
@@ -1616,6 +1646,99 @@ mod shortcuts {
         eprintln!("[shell] shortcut {action} → {combo}");
         Ok(())
     }
+}
+
+/// Castle Position (issue #20): where the panel resides on screen and expands from. Six choices,
+/// notch (top-centre) by default. The value is Rust-owned (invariant 1), persisted to
+/// `app_data/castle.json`, mirrored into the `CASTLE` atomic for the placement fns, and exposed to
+/// both the UI and any future API symmetrically (invariant 6) through `get`/`set` commands.
+#[cfg(target_os = "macos")]
+mod castle {
+    use super::{current_castle, redock_to_castle, CASTLE};
+    use shogun_core::notch::geometry::CastlePosition;
+    use std::sync::atomic::Ordering;
+    use tauri::Manager;
+
+    fn config_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+        app.path().app_data_dir().ok().map(|d| d.join("castle.json"))
+    }
+
+    /// On-disk form: the stable wire key ("notch", "left_edge", …). A string, not the raw byte, so
+    /// the file stays readable and survives any future re-encoding of the atomic.
+    #[derive(serde::Serialize, serde::Deserialize, Default)]
+    struct CastleFile {
+        #[serde(default)]
+        position: String,
+    }
+
+    /// Load the persisted position into the atomic. Called once at setup. Any failure — missing
+    /// file, unreadable file, unknown key — leaves the default (Notch) in place, which is exactly
+    /// the original top-centre dock, so a bad file can only ever fall back to the known-good spot.
+    pub fn init(app: &tauri::AppHandle) {
+        let pos = config_path(app)
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .and_then(|t| serde_json::from_str::<CastleFile>(&t).ok())
+            .and_then(|f| CastlePosition::from_key(&f.position))
+            .unwrap_or_default();
+        CASTLE.store(pos.to_u8(), Ordering::Relaxed);
+        eprintln!("[shell] castle position {}", pos.key());
+    }
+
+    fn save(app: &tauri::AppHandle, pos: CastlePosition) -> Result<(), String> {
+        let Some(p) = config_path(app) else { return Ok(()) };
+        if let Some(dir) = p.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let json = serde_json::to_string_pretty(&CastleFile { position: pos.key().into() })
+            .map_err(|e| e.to_string())?;
+        std::fs::write(&p, json).map_err(|e| format!("save failed: {e}"))
+    }
+
+    /// The current Castle Position as its wire key, for the Settings UI to preselect.
+    #[tauri::command]
+    pub fn get_castle_position() -> String {
+        current_castle().key().into()
+    }
+
+    /// Move SHOGUN's castle. Persists the choice, updates the atomic, and re-docks the live panel
+    /// immediately so the move is visible the moment it's picked.
+    #[tauri::command]
+    pub fn set_castle_position(app: tauri::AppHandle, position: String) -> Result<(), String> {
+        let pos = CastlePosition::from_key(&position)
+            .ok_or_else(|| format!("unknown castle position: {position}"))?;
+        CASTLE.store(pos.to_u8(), Ordering::Relaxed);
+        save(&app, pos)?;
+        redock_to_castle(&app);
+        eprintln!("[shell] castle position → {}", pos.key());
+        Ok(())
+    }
+}
+
+/// Re-dock the live overlay to the current Castle Position on its present screen. Used when the
+/// user changes the position from Settings so the panel jumps to its new home at once.
+#[cfg(target_os = "macos")]
+fn redock_to_castle(handle: &tauri::AppHandle) {
+    let h = handle.clone();
+    let _ = handle.run_on_main_thread(move || {
+        use objc2::msg_send;
+        use objc2::runtime::AnyObject;
+        use objc2_foundation::{NSPoint, NSRect};
+        use shogun_core::notch::geometry::{castle_origin, Rect as GRect};
+        let Some(ptr) = overlay_ptr(&h) else { return };
+        // SAFETY: main thread, live NSWindow/NSPanel.
+        unsafe {
+            let screen: *mut AnyObject = msg_send![ptr, screen];
+            if screen.is_null() {
+                return;
+            }
+            let vf: NSRect = msg_send![screen, visibleFrame];
+            let w: NSRect = msg_send![ptr, frame];
+            let vis = GRect::new(vf.origin.x, vf.origin.y, vf.size.width, vf.size.height);
+            let o = castle_origin(vis, w.size.width, w.size.height, current_castle());
+            let origin = NSPoint { x: o.x, y: o.y };
+            let _: () = msg_send![ptr, setFrameOrigin: origin];
+        }
+    });
 }
 
 /// The Keychain account holding the database encryption key (service is the shared SHOGUN one).
