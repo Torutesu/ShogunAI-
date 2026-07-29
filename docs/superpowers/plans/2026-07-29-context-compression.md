@@ -1436,3 +1436,9 @@ PR 本文に含める:
 - **不変条件** → Task 12 Step 3
 
 **既知の未カバー（意図的に次周）:** モードトグル UI、デバッグパネル/サイドバー、AB ダッシュボード UI、パーソナライズ学習、アプリ除外設定 UI、Batch 抽象要約器の on-device 配線、カレンダー/ToDo 等 Structured のロスレス変換の実データ実装。いずれも本計画の型・seam・テーブルで拡張点を確保済み。
+
+**実装後レビューで確認された「配線済み vs 休眠」（この一周の実状。次周の起動タスク）:**
+- **本番ルーティング未配線**: `Db::assemble_context_compressed` はテストからのみ到達。`assemble_context`/`build_reply_context`（またはその呼び出し側）に `CompressionConfig.enabled` 分岐を足すまで、実ユーザーのクエリ経路は 100% raw のまま。→ 次周タスク①。
+- **`threads.summary` は「populate されるが consume されない」**: Dream Cycle の Full サイクルは（`enabled` に関係なく）`LocalExtractiveSummarizer` で `threads.summary` を書く。しかしクエリ時 `assemble_context_compressed` は facts/evidence のみをブロック化し、`SourceKind::ThreadSummary` ブロックを生成しない。よって設計 §3.3/§3.4 の中核レバー（予算超過スレッドの raw ターン→要約差し替え）は未接続で、現状は低スコア evidence の**ドロップのみ**。50–80% 削減を実スレッドで出すには、クエリ時に対象 thread の `thread_summary()` を引いて `SourceKind::ThreadSummary` 候補を `Candidates` に加える配線が必要。→ 次周タスク②（`dropped`/refs/stats の受け皿は実装済みなので追加は局所的）。
+- **`sessions.summary` は未 populate**: 今回 `threads.summary` のみ。session 側の対称対応は次周。
+- **facts の provenance は粗い**: `facts_to_blocks` の `BlockRef::State{ id }` は列挙 index のプレースホルダ。fact からの再展開は実 state id を通すまで機能しない（設計 §7）。

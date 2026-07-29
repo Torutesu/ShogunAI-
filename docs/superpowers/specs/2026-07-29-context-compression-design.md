@@ -281,6 +281,11 @@ pub fn compress(
 - アプリ/ウィンドウ除外は候補収集段（daemon）でフィルタする前提の設計互換のみ確保（UI は別 Issue）。
 - 時系列クラスタリング/トピックグルーピングは、v1 では thread/session 単位の要約で近似。より細かいクラスタリングは要約対象の切り方を差し替えるだけで拡張可能。
 
+> **この一周の実装状態（配線済み vs 休眠）** — 実装後レビュー（2026-07-29）で確認。
+> - **配線済み**: fusion 純粋パイプライン（block/score/budget/compress）、daemon の正規化グルー＋`assemble_context_compressed`＋計測、Dream Cycle `Compression` ジョブ（Full サイクルで `threads.summary` を `LocalExtractiveSummarizer` で populate）、V11 計測テーブル＋AB（raw/compressed 両記録）。
+> - **休眠（次周の起動タスク）**: ①本番クエリ経路への `enabled` 分岐配線（現状 `assemble_context_compressed` はテスト到達のみ、既定 off）。②クエリ時の `threads.summary` **consume**（`SourceKind::ThreadSummary` 候補の投入）＝§3.3/§3.4 の差し替えレバー本体。現状はドロップのみ。③`sessions.summary` の populate。④fact provenance の実 state id 化。
+> - マージ安全性: `CompressionConfig.enabled` 既定 false かつ本番未配線のため、既存 raw 経路の挙動は不変。
+
 ---
 
 ## 8. 不変条件チェック（CLAUDE.md 準拠）
