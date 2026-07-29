@@ -28,6 +28,7 @@ mod integrate;
 pub mod meeting;
 mod meeting_recap;
 mod mic;
+mod analytics;
 mod notch_actions;
 mod notch_exec;
 mod onboarding;
