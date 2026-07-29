@@ -87,6 +87,25 @@ const REPLY_RELATED_CHARS: usize = 300;
 /// クエリ時のローカル圧縮に許す時間予算。超えたら raw にフォールバック（SLO +300ms 厳守）。
 const COMPRESS_BUDGET_MS: u64 = 50;
 
+// 圧縮ブロックの relevance/freshness/task_link/confidence 係数（設計 §3.3/§3.4）。
+// 従来は各所にインラインのリテラルで散らばっていた（Issue #63 finding #7）。ここに集約して
+// 由来ごとの相対関係（thread ≥ session ≥ evidence、fact は現在の作業に紐づく前提でやや高め）を
+// 一望できるようにし、thread/session の対称性を型で担保する。数値は従来と同一。
+//
+/// 検索 evidence: relevance は呼び出し側の検索スコア由来なので EVIDENCE_RELEVANCE を上書きする。
+const EVIDENCE_RELEVANCE: f64 = 0.7;
+const EVIDENCE_SCORE: ScoreInputs =
+    ScoreInputs { relevance: EVIDENCE_RELEVANCE, freshness: 0.5, task_link: 0.0, confidence: 1.0 };
+/// retrieved evidence の属する session の保存済み要約。参照先＝関連度高、要約＝confidence 1.0。
+const SESSION_SUMMARY_SCORE: ScoreInputs =
+    ScoreInputs { relevance: 0.85, freshness: 0.7, task_link: 0.5, confidence: 1.0 };
+/// 解決済みスレッドの保存済み要約。session と対称、参照先＝関連度高、要約＝confidence 1.0。
+const THREAD_SUMMARY_SCORE: ScoreInputs =
+    ScoreInputs { relevance: 0.9, freshness: 0.7, task_link: 0.5, confidence: 1.0 };
+/// confidence ゲート済み state fact。現在の作業に紐づく前提でやや高め、confidence は High 相当 0.9。
+const FACT_SCORE: ScoreInputs =
+    ScoreInputs { relevance: 0.6, freshness: 0.6, task_link: 0.6, confidence: 0.9 };
+
 /// ドラフトの本文がどこ由来か。融合の provenance（設計 §3）。
 #[derive(Debug, Clone, PartialEq, Default)]
 pub enum PayloadSource {
@@ -880,9 +899,18 @@ impl Db {
     /// window capture cannot eat the whole prompt. Search is FTS-only until the embedding model
     /// lands (`search_hybrid` takes the vector half then, with no change here).
     pub fn assemble_context(&self, query: &str, max_hits: usize, excerpt_chars: usize) -> ContextPack {
-        let facts = self.inline_memory(FACT_LIMIT);
-        let evidence = self
-            .search(query, max_hits)
+        ContextPack {
+            facts: self.inline_memory(FACT_LIMIT),
+            evidence: self.assemble_evidence(query, max_hits, excerpt_chars),
+        }
+    }
+
+    /// The evidence half of [`Self::assemble_context`]: hybrid-search the query and turn the best
+    /// hits into dated, attributed [`Evidence`], each excerpt capped at `excerpt_chars`. Split out
+    /// so the compressed path can take evidence WITHOUT also loading state facts (which it rebuilds
+    /// from the ref version), instead of running the two state queries twice (Issue #63 finding #2).
+    fn assemble_evidence(&self, query: &str, max_hits: usize, excerpt_chars: usize) -> Vec<Evidence> {
+        self.search(query, max_hits)
             .into_iter()
             .map(|h| Evidence {
                 event_id: h.event_id,
@@ -892,8 +920,7 @@ impl Db {
                 excerpt: shogun_memory::search::excerpt(&h.content, query, excerpt_chars),
             })
             .filter(|e| !e.excerpt.is_empty())
-            .collect();
-        ContextPack { facts, evidence }
+            .collect()
     }
 
     /// 圧縮版のコンテキスト組み立て（Issue #63）。`config.enabled` が false のときは
@@ -911,54 +938,60 @@ impl Db {
         use shogun_fusion::compress::{compress, Candidates};
 
         let started = std::time::Instant::now();
-        // raw と同じ材料を集める。
-        let pack = self.assemble_context(query, max_hits, excerpt_chars);
+        // 支配コストは evidence 検索。まずそれだけ走らせ、直後に予算をチェックする（finding #1）。
+        // fact は各由来で 1 回だけ読む（compressed は ref 版、fallback は文字列版）ので、ここで
+        // assemble_context を呼んで両方を二重ロードすることはしない（finding #2）。
+        let evidence = self.assemble_evidence(query, max_hits, excerpt_chars);
         let est = HeuristicEstimator::default();
 
-        // Task 2: fact ブロックは実 state id 付きの ref 版から組み立てる。
+        // 検索直後の早期フォールバック: 支配コストの直後で予算を超えていたら、要約組み立てや
+        // compress に進まず raw をそのまま返す（この guard こそが実際に総処理時間を縛る）。
+        if started.elapsed().as_millis() as u64 > COMPRESS_BUDGET_MS {
+            return self.raw_fallback(query, evidence, started);
+        }
+
+        // Task 2: fact ブロックは実 state id 付きの ref 版から組み立てる（fallback 用の文字列版とは
+        // 別。ここで二重に読まない）。
         let mut blocks = facts_to_blocks(&self.inline_memory_with_refs(FACT_LIMIT), &est);
-        blocks.extend(evidence_to_blocks(&pack.evidence, 0.7, &est));
+        blocks.extend(evidence_to_blocks(&evidence, EVIDENCE_RELEVANCE, &est));
         // 解決済みスレッドの保存済み要約を候補に加える（差し替えレバー）。
         blocks.extend(self.thread_summaries_to_blocks(thread_keys, &est));
         // 取得 evidence の属する session の保存済み要約を候補に加える（thread と対称・Issue #63）。
-        let evidence_event_ids: Vec<i64> = pack.evidence.iter().map(|e| e.event_id).collect();
-        for sid in self.session_ids_for_events(&evidence_event_ids) {
-            if let Some(s) = self.session_summary(sid) {
-                blocks.push(shogun_fusion::block::ContextBlock::new(
-                    shogun_fusion::block::BlockRef::Session(sid),
-                    shogun_fusion::block::SourceKind::SessionSummary,
-                    s,
-                    // 参照先として retrieved evidence が属する＝関連度は高い。confidence は要約＝1.0。
-                    shogun_fusion::block::ScoreInputs { relevance: 0.85, freshness: 0.7, task_link: 0.5, confidence: 1.0 },
-                    &est,
-                ));
+        // N+1 を避け 1 クエリで一括取得（finding #1）。既に ThreadSummary として消費済みの
+        // thread_key を持つ session は重複になるのでスキップ（finding #3）。
+        let consumed_threads: std::collections::HashSet<&str> =
+            thread_keys.iter().map(String::as_str).collect();
+        let evidence_event_ids: Vec<i64> = evidence.iter().map(|e| e.event_id).collect();
+        let session_ids = self.session_ids_for_events(&evidence_event_ids);
+        for (sid, thread_key, summary) in self.session_summaries_for(&session_ids) {
+            if consumed_threads.contains(thread_key.as_str()) {
+                // 同じ会話が ThreadSummary として既に候補に入っている。重複を避ける。
+                continue;
             }
+            let Some(s) = summary else { continue };
+            blocks.push(shogun_fusion::block::ContextBlock::new(
+                shogun_fusion::block::BlockRef::Session(sid),
+                shogun_fusion::block::SourceKind::SessionSummary,
+                s,
+                // 参照先として retrieved evidence が属する＝関連度は高い。confidence は要約＝1.0。
+                SESSION_SUMMARY_SCORE,
+                &est,
+            ));
         }
 
-        // 時間予算を超えたらフォールバック（raw をそのまま返す）。
+        // 最終 guard: 要約組み立て後・compress 前にもう一度予算をチェック（保険）。
         if started.elapsed().as_millis() as u64 > COMPRESS_BUDGET_MS {
-            // AB を対称化: フォールバック時も "raw" 計測を best-effort で記録する。
-            let pre_tokens: usize = blocks.iter().map(|b| b.tokens).sum();
-            let elapsed_ms = started.elapsed().as_millis() as i64;
-            self.record_compression_metric(
-                query,
-                "raw",
-                pre_tokens as i64,
-                pre_tokens as i64,
-                elapsed_ms,
-                elapsed_ms,
-            );
-            return (pack, shogun_fusion::compress::CompressionStats::default(), true);
+            return self.raw_fallback(query, evidence, started);
         }
 
         let out = compress(Candidates { blocks }, config);
         // 圧縮済みブロックから ContextPack を再構成（facts と evidence に振り分け）。
-        // Task 1: evidence の ts/source/title を raw pack から復元するため、
+        // Task 1: evidence の ts/source/title を検索結果から復元するため、
         // event_id → &Evidence マップを事前に作る。
         let ev_by_id: std::collections::HashMap<i64, &Evidence> =
-            pack.evidence.iter().map(|e| (e.event_id, e)).collect();
-        let mut facts = Vec::new();
-        let mut evidence = Vec::new();
+            evidence.iter().map(|e| (e.event_id, e)).collect();
+        let mut out_facts = Vec::new();
+        let mut out_evidence = Vec::new();
         for b in &out.blocks {
             match b.id_ref {
                 shogun_fusion::block::BlockRef::Event(id) => {
@@ -966,9 +999,9 @@ impl Db {
                         .get(&id)
                         .map(|e| (e.ts, e.source.clone(), e.title.clone()))
                         .unwrap_or((0, String::new(), None));
-                    evidence.push(Evidence { event_id: id, ts, source, title, excerpt: b.text.clone() });
+                    out_evidence.push(Evidence { event_id: id, ts, source, title, excerpt: b.text.clone() });
                 }
-                _ => facts.push(b.text.clone()),
+                _ => out_facts.push(b.text.clone()),
             }
         }
 
@@ -983,7 +1016,39 @@ impl Db {
             compress_ms,
         );
 
-        (ContextPack { facts, evidence }, out.stats, false)
+        (ContextPack { facts: out_facts, evidence: out_evidence }, out.stats, false)
+    }
+
+    /// 予算超過時の raw フォールバック。fact は文字列版を「ここで」1 回だけ読む（compressed 経路の
+    /// ref 版とは別・二重ロード回避、finding #2）。AB を対称化するため "raw" 計測も best-effort で
+    /// 記録する。返り値は `(pack, default_stats, true)`。
+    fn raw_fallback(
+        &self,
+        query: &str,
+        evidence: Vec<Evidence>,
+        started: std::time::Instant,
+    ) -> (ContextPack, shogun_fusion::compress::CompressionStats, bool) {
+        use shogun_fusion::budget::TokenEstimator;
+        let est = shogun_fusion::budget::HeuristicEstimator::default();
+        // fact は文字列版を「ここで」1 回だけ読む（ref 版は読まない・二重ロード回避）。
+        let facts = self.inline_memory(FACT_LIMIT);
+        // pre==post（圧縮していない）。fact テキストと evidence 抜粋のトークン量を best-effort で
+        // 見積もる（block 化と同じ est.count なので概ね一致）。
+        let pre_tokens: usize = facts
+            .iter()
+            .map(|f| est.count(f))
+            .chain(evidence.iter().map(|e| est.count(&e.excerpt)))
+            .sum();
+        let elapsed_ms = started.elapsed().as_millis() as i64;
+        self.record_compression_metric(
+            query,
+            "raw",
+            pre_tokens as i64,
+            pre_tokens as i64,
+            elapsed_ms,
+            elapsed_ms,
+        );
+        (ContextPack { facts, evidence }, shogun_fusion::compress::CompressionStats::default(), true)
     }
 
     /// 解決済みスレッドの保存済み要約を ThreadSummary ブロックにする。要約は raw ターンより
@@ -1003,7 +1068,7 @@ impl Db {
                         SourceKind::ThreadSummary,
                         s,
                         // 参照先として解決済み＝関連度は高い。confidence は要約＝1.0。
-                        ScoreInputs { relevance: 0.9, freshness: 0.7, task_link: 0.5, confidence: 1.0 },
+                        THREAD_SUMMARY_SCORE,
                         est,
                     )
                 })
@@ -1203,6 +1268,18 @@ impl Db {
             .lock()
             .ok()
             .and_then(|c| shogun_memory::session::session_ids_for_events(&c, event_ids).ok())
+            .unwrap_or_default()
+    }
+
+    /// The saved summaries of the given sessions in ONE query (Issue #63) — `(id, thread_key,
+    /// summary)` for the sessions that have a non-null summary, ordered by id. Replaces the
+    /// per-session [`Self::session_summary`] N+1 on the consume path. Empty on a lock/read failure
+    /// or empty input.
+    pub fn session_summaries_for(&self, ids: &[i64]) -> Vec<(i64, String, Option<String>)> {
+        self.conn
+            .lock()
+            .ok()
+            .and_then(|c| shogun_memory::session::summaries_for_sessions(&c, ids).ok())
             .unwrap_or_default()
     }
 
@@ -1821,7 +1898,7 @@ fn evidence_to_blocks(evidence: &[Evidence], relevance: f64, est: &dyn TokenEsti
                 BlockRef::Event(e.event_id),
                 SourceKind::Evidence,
                 e.excerpt.clone(),
-                ScoreInputs { relevance, freshness: 0.5, task_link: 0.0, confidence: 1.0 },
+                ScoreInputs { relevance, ..EVIDENCE_SCORE },
                 est,
             )
         })
@@ -1843,7 +1920,7 @@ fn facts_to_blocks(
                 BlockRef::State { table: *table, id: *id },
                 SourceKind::StateFact,
                 f.clone(),
-                ScoreInputs { relevance: 0.6, freshness: 0.6, task_link: 0.6, confidence: 0.9 },
+                FACT_SCORE,
                 est,
             )
         })
@@ -3158,6 +3235,66 @@ mod tests {
         assert!(
             joined_t.contains("sign-off") || joined_t.contains("12k"),
             "予算逼迫下でも session 要約が生き残るべき: {joined_t}"
+        );
+    }
+
+    #[test]
+    fn session_summary_is_deduped_against_an_already_consumed_thread_summary() {
+        use shogun_fusion::compress::CompressionConfig;
+
+        let db = Db::open_in_memory(clock(10_000)).unwrap();
+
+        // A meeting session whose event matches the query, so its owning session is on the consume
+        // path. Give the session a distinctive summary word so its presence is unambiguous.
+        let sid = db.open_meeting(Some("Vendor sync"), Some("us.zoom.xos"), 0.6, "{}").unwrap();
+        let (ev_id, _) = db
+            .capture(&ev("vendor renewal pricing discussion line", "h0", 100))
+            .unwrap();
+        assert!(db.attach_event_to_meeting(sid, ev_id));
+        db.set_session_summary(sid, "Session recap sessionword only.");
+
+        // The capture created a thread; use its real thread_key so set_thread_summary lands (the
+        // threads UPDATE needs an existing row). The session carries that same thread_key — when it
+        // is passed as a consumed ThreadSummary, the session's summary is redundant and skipped.
+        let tk = db
+            .active_threads_between(0, 10_000)
+            .first()
+            .map(|t| t.thread_key.clone())
+            .expect("capture が thread を作る");
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute("UPDATE sessions SET thread_key = ?1 WHERE id = ?2", rusqlite::params![tk, sid])
+                .unwrap();
+        }
+        // Give that thread a summary so it becomes a ThreadSummary candidate carrying its own word.
+        db.set_thread_summary(&tk, "Thread recap threadword only.");
+
+        let cfg = CompressionConfig { enabled: true, budget_tokens: 100_000, ..Default::default() };
+
+        // thread_key consumed → the session's own summary is NOT re-added (dedup).
+        let (pack, _s, fell) =
+            db.assemble_context_compressed("renewal pricing", 6, 600, std::slice::from_ref(&tk), &cfg);
+        assert!(!fell);
+        let joined = pack.facts.join(" ");
+        assert!(joined.contains("threadword"), "consumed thread summary is present: {joined}");
+        assert!(
+            !joined.contains("sessionword"),
+            "session whose thread_key was consumed must be deduped out: {joined}"
+        );
+
+        // A DIFFERENT thread_key is passed (not the session's) → the session summary IS added.
+        let (pack2, _s2, fell2) = db.assemble_context_compressed(
+            "renewal pricing",
+            6,
+            600,
+            &["mail:some-other-thread".to_string()],
+            &cfg,
+        );
+        assert!(!fell2);
+        let joined2 = pack2.facts.join(" ");
+        assert!(
+            joined2.contains("sessionword"),
+            "an unconsumed session's summary is still added: {joined2}"
         );
     }
 }
