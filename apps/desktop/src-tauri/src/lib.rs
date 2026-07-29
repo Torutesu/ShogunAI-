@@ -182,6 +182,9 @@ pub fn run() {
         ai_sessions::mac::set_ai_session_import,
         dream::mac::dream_status,
         dream::mac::run_dream_now,
+        user_config_watch::get_user_config_status,
+        user_config_watch::open_shougun_md,
+        user_config_watch::regenerate_shougun_md,
     ]);
 
     // NOTE: the visible surface is a NATIVE NSPanel hosting the webview's content view
