@@ -448,7 +448,9 @@ pub mod mac {
         let (secs, off) = now_local();
         let now_ms = secs * 1000;
         let classifier = shogun_core::dreamcycle::jobs::LocalRuleClassifier;
-        let runner = shogun_core::dreamcycle::jobs::DbDreamRunner::new(db, &classifier, now_ms);
+        let summarizer = shogun_core::dreamcycle::jobs::LocalExtractiveSummarizer;
+        let runner =
+            shogun_core::dreamcycle::jobs::DbDreamRunner::new(db, &classifier, &summarizer, now_ms);
         let (from_ts, to_ts) = input_range(db.last_consolidated_to(), now_ms, DEFAULT_LOOKBACK_MS);
         // Its own ledger key, so a manual catch-up never counts as "tonight's full cycle ran" and
         // never marks the night's jobs done on the nightly driver's behalf.
