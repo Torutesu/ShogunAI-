@@ -1,7 +1,7 @@
 # オンボーディング設計 — ダウンロードから「最初の本物の答え」まで
 
 - 文書ID: `docs/onboarding-design.md`
-- ステータス: 設計確定（フロントエンド実装済み / Rust側は §5 が未実装）
+- ステータス: 設計確定・実装済み（フロントエンド＋Rust。§5 の全コマンドが `src-tauri` に入り、実機で初回オンボーディングが表示される。MCP/CLI 対称性は§5参照）
 - 上位文書: `CLAUDE.md`（絶対不変条件・SLO・プラン構成）、`docs/requirements-v1.0.md`
 - 関連: GitHub issue #6（本設計の起点）、`apps/desktop/src/onboarding/`
 
@@ -94,24 +94,22 @@ Settings から再度オンボーディングを開けるようにする（Rust 
 
 ---
 
-## 5. Rust 側の残作業（未実装）
+## 5. Rust 側（実装済み）
 
-フロントエンドは実装済みで、ブラウザプレビューから全ステップが確認できる。以下のコマンドが `src-tauri` に無いため、**実機ではオンボーディングは表示されない**（`onboarding_state` が無い場合は「完了済み」として扱う — 完了を記録できない状態でフローを出すと、毎回の起動でユーザーを閉じ込めるため）。
-
-契約は `apps/desktop/src/onboarding/ipc.ts` に1か所で定義してある。
+以下のコマンドが `src-tauri` に入り、実機で初回オンボーディングが表示される（`onboarding_state` が無い旧ビルドでは `getOnboardingState` が「完了済み」を返すため常にスキップされていた。契約は `apps/desktop/src/onboarding/ipc.ts` に1か所で定義）。すべて TDD（RED→GREEN）で実装。
 
 | コマンド | 返り値 | 実装の置き場所 | 備考 |
 |---|---|---|---|
-| `onboarding_state` | `{ completed, step, plan }` | `lib.rs` の設定ストア（ショートカットと同じ JSON 方式） | 年単位で生きる値ではないので DB ではなくアプリ設定でよい |
-| `set_onboarding_state` | — | 同上 | 部分更新にしない（書き手が1つなので、再開時の自己矛盾を避ける） |
-| `ax_permission` | `bool` | `axcache.rs` | **プロンプトなし**版が必要（既存 `ax_trusted()` はプロンプト付き） |
-| `request_ax_permission` | — | `axcache.rs` | プロンプト付き。既に応答済みなら System Settings の該当ペインを開く |
-| `exclusion_categories` | `[{ id, count }]` | `exclusions.rs` + `shogun-core/capture/exclusion.rs` | 生きたポリシーから数える。id は `password_managers` / `auth_dialog` / `terminals` / `private_browsing` / `sensitive_titles` |
-| `get_draft_stop` / `set_draft_stop` | `bool` | `connectors.rs`（`build_runtime(draft_stop)` が既に読んでいる） | 既定 ON |
+| `onboarding_state` | `{ completed, step, plan, trial_started_at? }` | `lib.rs` `mod onboarding`（`app_data/onboarding.json`、`mod shortcuts` と同じ version 付き JSON 方式） | 年単位で生きる値ではないので DB ではなくアプリ設定 |
+| `set_onboarding_state` | — | 同上 | 全レコード書き込み（書き手が1つ）。`completed` が false→true になった最初の書き込みで `trial_started_at` を刻む（§7 決定）。以後は再走しても刻み直さない |
+| `ax_permission` | `bool` | `axcache.rs` `ax_trusted_silent()` | プロンプトオプションを `false` にした非プロンプト版 |
+| `request_ax_permission` | — | `axcache.rs` | 一度きりのシステムプロンプト＋ System Settings の Accessibility ペインを `open` で開く |
+| `exclusion_categories` | `[{ id, count }]` | `exclusions.rs`（プロセス全体ポリシー）＋ `shogun-core/capture/exclusion.rs` `category_counts()` | 生きたポリシーの const 配列長から数える。未設置時は空にフェイルクローズ。id は `password_managers` / `auth_dialog` / `terminals` / `private_browsing` / `sensitive_titles` |
+| `get_draft_stop` / `set_draft_stop` | `bool` | `connectors.rs`（`app_data/draft-stop`、起動時に `build_runtime` を seed／`set` はライブランタイムにも反映） | **既定 ON**。欠落・空・破損はすべて ON にフェイルセーフ（不変条件4） |
 
 加えて:
 
-- **MCP/CLI 対称性**（不変条件6）: 上記の状態は Memory API からも読めること。オンボーディング完了状態は「このデバイスがどこまで設定されたか」であり、エージェント側も知る必要がある
+- **MCP/CLI 対称性（不変条件6）— 契約を実装、実データ配線は follow-up**: Memory API に `Tool::DeviceOnboardingGet`（wire `device.onboarding.get`、Read）を追加し、MCP `tools/list`・REST `GET /v1/device/onboarding`・CLI `shogun onboarding` の三面で露出（全面ユニットテスト済み）。ただしオンボーディング状態は desktop の app-settings（`onboarding.json`）にあり、実データを供給する `DbBackend`（core DB）はこれを持たないため、当面この面は空を返す（捏造しない）。実データを供給するには状態を共有ストア（core DB 等）に移す必要があり、これは別 issue とする
 - **プラン判定は Rust 側**（CLAUDE.md）。ステップ4の選択は意思表明であって、機能ゲートの根拠にしてはならない
 
 ---
@@ -128,6 +126,6 @@ Settings から再度オンボーディングを開けるようにする（Rust 
 
 ## 7. まだ決めていないこと
 
-- トライアルの起点（初回起動時点 / オンボーディング完了時点）。完了時点にすると、途中で離脱したユーザーのトライアルが始まらない利点と、離脱の検知が必要になる欠点がある
+- ~~トライアルの起点~~ **決定: オンボーディング完了時点**（issue #6 実装時）。`set_onboarding_state` が完了を永続化する最初の書き込みで `trial_started_at` を刻む。途中離脱者のトライアルが始まらない件（離脱検知）は別 issue
 - 接続 0 件のまま完了させるか（現状は許可。「最初の答え」が画面だけを根拠にすることになる）
 - 2台目以降のデバイスでのオンボーディング（同期は v2 スコープなので、v1 は毎回フル）

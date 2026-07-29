@@ -75,6 +75,13 @@ impl MemoryBackend for DbBackend {
                 one(id.and_then(|i| self.db.open_loop(i)), |o| ReadItem::new(o.description, o.confidence))
             }
 
+            // Onboarding / first-run state (issue #6) is owned by the desktop layer's app-settings
+            // (app_data/onboarding.json), not the daemon DB, so this DB-backed face has no row to
+            // supply — an empty result is the honest answer here rather than a fabricated one. The
+            // tool exists on the shared surface so the contract is symmetric (invariant 6); serving
+            // its live value is deferred to a shared-store follow-up.
+            Tool::DeviceOnboardingGet => Vec::new(),
+
             // Not a read tool (write / action) — never routed here.
             Tool::MemoryAppendNote | Tool::StateProposeUpdate | Tool::ActionsExecute => Vec::new(),
         }

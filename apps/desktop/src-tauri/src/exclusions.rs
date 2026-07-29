@@ -41,6 +41,29 @@ pub mod mac {
         POLICY.get()
     }
 
+    /// A category of thing SHOGUN never reads, plus how many rules it currently covers. Mirrors
+    /// `ExclusionCategory` in `apps/desktop/src/onboarding/ipc.ts`.
+    #[derive(serde::Serialize)]
+    pub struct ExclusionCategory {
+        pub id: String,
+        pub count: usize,
+    }
+
+    /// The live exclusion categories for onboarding step 2 (issue #6). Read from the process-wide
+    /// policy so the panel shows what is actually enforced — the UI must never hardcode this list,
+    /// or it would misrepresent today's behaviour. Fails closed to an empty list before the policy
+    /// is installed (startup only): an empty step is honest, a fabricated one is not.
+    #[tauri::command]
+    pub fn exclusion_categories() -> Vec<ExclusionCategory> {
+        let Some(lock) = shared() else { return Vec::new() };
+        let Ok(policy) = lock.lock() else { return Vec::new() };
+        policy
+            .category_counts()
+            .into_iter()
+            .map(|(id, count)| ExclusionCategory { id: id.to_string(), count })
+            .collect()
+    }
+
     /// Whether this focus must not be read at all. Fails closed on a missing or poisoned policy.
     pub fn is_excluded(bundle_id: &str, window_title: Option<&str>) -> bool {
         match shared().map(|p| p.lock()) {

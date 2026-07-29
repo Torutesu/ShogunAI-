@@ -55,6 +55,7 @@ pub fn to_call(command: &Command, include_low: bool) -> Option<HttpCall> {
         Command::Propose { description } => post("/v1/state/proposals", description.clone()),
         // `run` carries the action JSON spec (e.g. '{"kind":"local_search","query":"x"}').
         Command::Run { agent } => post("/v1/actions/execute", agent.clone()),
+        Command::Onboarding => get("/v1/device/onboarding".to_string()),
         Command::ApiStatus => get("/v1/status".to_string()),
         Command::Metrics => get("/v1/metrics".to_string()),
         Command::Help => return None,

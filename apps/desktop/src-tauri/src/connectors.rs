@@ -79,6 +79,80 @@ pub mod mac {
         Ok(ConnectorRuntime::new(transport, Wave::One, draft_stop))
     }
 
+    fn draft_stop_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+        use tauri::Manager;
+        app.path().app_data_dir().ok().map(|d| d.join("draft-stop"))
+    }
+
+    /// Parse the on-disk draft-stop marker. DEFAULT ON: only an explicit "off" disables it —
+    /// absent file, blank, or garbage all stay ON. Invariant 4 requires that nothing sends until
+    /// the user turns draft-stop off AND confirms each send, so every ambiguous input must fail to
+    /// the safe side. Pure so that "safe side" is a test, not a hope.
+    fn parse_draft_stop(contents: Option<&str>) -> bool {
+        contents.map(|s| s.trim() != "off").unwrap_or(true)
+    }
+
+    /// The persisted draft-stop setting, defaulting ON (see [`parse_draft_stop`]). Read at startup
+    /// to seed the runtime and by `get_draft_stop` for the onboarding/settings toggle.
+    pub fn draft_stop_enabled(app: &tauri::AppHandle) -> bool {
+        parse_draft_stop(
+            draft_stop_path(app).and_then(|p| std::fs::read_to_string(p).ok()).as_deref(),
+        )
+    }
+
+    /// Whether Gmail draft-stop is on, for the onboarding "drafts-only" card and Settings.
+    #[tauri::command]
+    pub fn get_draft_stop(app: tauri::AppHandle) -> bool {
+        draft_stop_enabled(&app)
+    }
+
+    /// Turn draft-stop on/off (§6.10, invariant 4). Persists the setting AND updates the live
+    /// runtime so the Composio send gate honours it without a restart.
+    #[tauri::command]
+    pub fn set_draft_stop(
+        enabled: bool,
+        app: tauri::AppHandle,
+        state: tauri::State<'_, ConnectorState>,
+    ) -> Result<(), String> {
+        let path = draft_stop_path(&app).ok_or("no app data dir")?;
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        std::fs::write(&path, if enabled { "on" } else { "off" }).map_err(|e| e.to_string())?;
+        if let Ok(mut rt) = state.0.lock() {
+            rt.set_draft_stop(enabled);
+        }
+        eprintln!("[connectors] draft-stop {}", if enabled { "ON" } else { "OFF" });
+        Ok(())
+    }
+
+    #[cfg(test)]
+    mod draft_stop_tests {
+        use super::parse_draft_stop;
+
+        #[test]
+        fn defaults_on_when_absent() {
+            assert!(parse_draft_stop(None), "no file must mean draft-stop ON (invariant 4)");
+        }
+
+        #[test]
+        fn stays_on_for_blank_or_garbage() {
+            assert!(parse_draft_stop(Some("")));
+            assert!(parse_draft_stop(Some("wat")));
+        }
+
+        #[test]
+        fn only_explicit_off_disables() {
+            assert!(!parse_draft_stop(Some("off")));
+            assert!(!parse_draft_stop(Some(" off\n")));
+        }
+
+        #[test]
+        fn on_marker_stays_on() {
+            assert!(parse_draft_stop(Some("on")));
+        }
+    }
+
     /// The 15-minute read-sync poller (FR-INT-04). Owns clones of the runtime + Db, syncs every due
     /// service, and lets each service fail independently to amber (FR-INT-06).
     pub fn spawn_sync_poller(state: Arc<Mutex<ConnectorRuntime<Transport>>>, db: Db) {

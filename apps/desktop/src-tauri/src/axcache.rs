@@ -12,7 +12,10 @@
 pub use shogun_core::capture::walk_policy::{walk, AxNode, ContextCache, Limits, Role, WalkResult};
 
 #[cfg(target_os = "macos")]
-pub use mac::{ax_call_count, ax_trusted, focused_window, snapshot, AxElement};
+pub use mac::{
+    ax_call_count, ax_trusted, ax_trusted_silent, focused_window, request_ax_permission, snapshot,
+    AxElement,
+};
 
 #[cfg(target_os = "macos")]
 mod mac {
@@ -189,6 +192,30 @@ mod mac {
         let opts = CFDictionary::from_CFType_pairs(&[(key.as_CFType(), CFBoolean::true_value().as_CFType())]);
         // SAFETY: opts is a valid CFDictionary with the documented option key.
         unsafe { AXIsProcessTrustedWithOptions(opts.as_concrete_TypeRef()) }
+    }
+
+    /// Whether this process is trusted for Accessibility, WITHOUT prompting. Onboarding polls this
+    /// every ~1.5s while the permission step is on screen; the prompting variant would reopen the
+    /// system dialog on every poll, so the prompt option is explicitly set to false here.
+    pub fn ax_trusted_silent() -> bool {
+        // SAFETY: kAXTrustedCheckOptionPrompt is a valid immortal CFString (get rule).
+        let key = unsafe { CFString::wrap_under_get_rule(kAXTrustedCheckOptionPrompt) };
+        let opts = CFDictionary::from_CFType_pairs(&[(key.as_CFType(), CFBoolean::false_value().as_CFType())]);
+        // SAFETY: opts is a valid CFDictionary with the documented option key.
+        unsafe { AXIsProcessTrustedWithOptions(opts.as_concrete_TypeRef()) }
+    }
+
+    /// Ask for Accessibility once from the onboarding button. The prompting check shows the system
+    /// dialog only the first time the process ever asks; after the user has answered once it never
+    /// reappears, so we also open System Settings at the Accessibility pane — the only route back
+    /// to granting it. Opening the pane on first run is harmless (the dialog is what the user acts on).
+    pub fn request_ax_permission() {
+        // Fire the one-time native prompt (a no-op once the user has answered).
+        let _ = ax_trusted();
+        // Deep-link to Settings → Privacy & Security → Accessibility.
+        let _ = std::process::Command::new("open")
+            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+            .spawn();
     }
 
     /// The focused-window element of `pid` (create rule → owned `AxElement`), with the 100ms

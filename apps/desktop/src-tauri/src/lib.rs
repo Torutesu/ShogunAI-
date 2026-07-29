@@ -110,6 +110,13 @@ pub fn run() {
         shortcuts::get_shortcuts,
         shortcuts::set_shortcut,
         shortcuts::hide_panel,
+        onboarding::onboarding_state,
+        onboarding::set_onboarding_state,
+        ax_permission,
+        request_ax_permission,
+        exclusions::mac::exclusion_categories,
+        connectors::mac::get_draft_stop,
+        connectors::mac::set_draft_stop,
         set_panel_size,
         start_panel_drag,
         // First-layer connectors + the L3 send/approval queue, both rendered as sections of the
@@ -364,7 +371,7 @@ fn setup_macos(app: &tauri::App) {
             // First-layer connectors (§6.9). Build the auto-refreshing runtime and start the
             // 15-min read-sync poller. Missing Google creds (env) is not fatal — the app runs
             // without connectors until the user sets them up.
-            match connectors::mac::build_runtime(true /* draft-stop default ON */) {
+            match connectors::mac::build_runtime(connectors::mac::draft_stop_enabled(app.handle())) {
                 Ok(rt) => {
                     let shared = std::sync::Arc::new(std::sync::Mutex::new(rt));
                     connectors::mac::spawn_sync_poller(shared.clone(), db.clone());
@@ -838,6 +845,22 @@ fn adopt_native_panel(win: &tauri::WebviewWindow) {
 }
 
 /// Resize the visible overlay (native panel or fallback window) keeping the TOP edge anchored —
+/// Whether SHOGUN is trusted for Accessibility, WITHOUT prompting — the onboarding permission step
+/// polls this (a prompting check would reopen the system dialog on every poll). See `axcache`.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+fn ax_permission() -> bool {
+    axcache::ax_trusted_silent()
+}
+
+/// Ask for Accessibility once from the onboarding button: fire the one-time system prompt and open
+/// System Settings at the Accessibility pane (the only route back after the prompt is answered).
+#[cfg(target_os = "macos")]
+#[tauri::command]
+fn request_ax_permission() {
+    axcache::request_ax_permission();
+}
+
 /// the webview's minimize/expand control. AppKit frames are bottom-left origin, so the y origin
 /// shifts by the height delta.
 #[cfg(target_os = "macos")]
@@ -1283,6 +1306,12 @@ fn register_expand_shortcut(app: &tauri::App) {
         }
     }
     app.manage(shortcuts::Store(std::sync::Mutex::new(binds)));
+
+    // Onboarding state (issue #6): Rust owns "how far this device got set up" (invariant 1),
+    // persisted to app_data/onboarding.json. Load once here so the read command answers from the
+    // managed copy without hitting disk on every panel launch.
+    let onboarding = onboarding::load(&handle);
+    app.manage(onboarding::Store(std::sync::Mutex::new(onboarding)));
 }
 
 /// User-rebindable global shortcuts. Bindings persist in app_data/shortcuts.json (combo strings
@@ -1447,6 +1476,193 @@ mod shortcuts {
         }
         eprintln!("[shell] shortcut {action} → {combo}");
         Ok(())
+    }
+}
+
+/// First-run onboarding state, owned by Rust (invariant 1) and persisted to
+/// `app_data/onboarding.json` — the same JSON-settings shape as `mod shortcuts`, not the DB, since
+/// this is a one-time "how far did this device get set up" value, not year-scale memory.
+///
+/// The flow's single exit is `set_onboarding_state(completed = true)`. A build whose core cannot
+/// answer `onboarding_state` reports COMPLETED (see `getOnboardingState` in ipc.ts): showing the
+/// flow without being able to record its end would trap the user in it on every launch. The state
+/// is exposed to the webview AND, symmetrically (invariant 6), to the agent side via the Memory
+/// API — an agent needs to know how far this device is configured.
+mod onboarding {
+    use std::sync::Mutex;
+    use tauri::Manager;
+
+    /// The six steps, in order. Kept in lockstep with `StepId` in
+    /// `apps/desktop/src/onboarding/ipc.ts` — that file is the contract's single list.
+    const STEPS: [&str; 6] = ["welcome", "reads", "permission", "plan", "connect", "ready"];
+
+    fn first_step() -> String {
+        "welcome".into()
+    }
+
+    /// In-memory copy of the persisted state, managed so the read command answers without touching
+    /// disk on every launch of the panel.
+    pub struct Store(pub Mutex<OnboardingState>);
+
+    #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+    pub struct OnboardingState {
+        /// True once the user finished (or explicitly skipped to the end).
+        #[serde(default)]
+        pub completed: bool,
+        /// Furthest step reached, so a quit mid-flow resumes there.
+        #[serde(default = "first_step")]
+        pub step: String,
+        /// Which plan the user said they wanted. Billing is a separate flow; this only records the
+        /// intent (plan gating itself lives in the Rust core, not here).
+        #[serde(default)]
+        pub plan: Option<String>,
+        /// Unix seconds when the 7-day trial started. Per issue #6 the trial begins at onboarding
+        /// COMPLETION, not first launch — so this is stamped the first time `completed` becomes
+        /// true and never moved again. Re-running onboarding from Settings sets `completed = false`
+        /// but must not restart the clock. Local-only, not a secret, so no Keychain.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub trial_started_at: Option<i64>,
+    }
+
+    impl Default for OnboardingState {
+        fn default() -> Self {
+            Self { completed: false, step: first_step(), plan: None, trial_started_at: None }
+        }
+    }
+
+    /// Fold a whole-record write from the flow into the next persisted state. Pure so the
+    /// trial-start stamp is testable without a real clock — `now_unix` is injected.
+    ///
+    /// The flow has exactly one writer and always sends the whole record, so there is no partial
+    /// update to reconcile; the only derived field is `trial_started_at`, which the caller never
+    /// sends.
+    pub fn apply(
+        prev: &OnboardingState,
+        step: String,
+        plan: Option<String>,
+        completed: bool,
+        now_unix: i64,
+    ) -> OnboardingState {
+        // Once the trial has started it never restarts (reopening from Settings sends
+        // completed=false, and losing the stamp would hand a fresh 7 days); otherwise the first
+        // write that completes onboarding stamps it.
+        let trial_started_at = prev.trial_started_at.or(if completed { Some(now_unix) } else { None });
+        let step = if STEPS.contains(&step.as_str()) { step } else { first_step() };
+        OnboardingState { completed, step, plan, trial_started_at }
+    }
+
+    fn config_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+        app.path().app_data_dir().ok().map(|d| d.join("onboarding.json"))
+    }
+
+    /// On-disk format, versioned like `shortcuts.json` so a future default change can migrate once.
+    #[derive(serde::Serialize, serde::Deserialize, Default)]
+    struct OnboardingFile {
+        #[serde(default)]
+        version: u32,
+        #[serde(default)]
+        state: OnboardingState,
+    }
+
+    const ONBOARDING_VERSION: u32 = 1;
+
+    /// Load persisted state, defaulting to first-run when the file is absent or unreadable. A
+    /// malformed step from disk is normalised back to `welcome` by `apply` on the next write; on
+    /// read we tolerate it rather than reset, so a resumed session lands as close as possible.
+    pub fn load(app: &tauri::AppHandle) -> OnboardingState {
+        let Some(p) = config_path(app) else { return OnboardingState::default() };
+        let Ok(text) = std::fs::read_to_string(p) else { return OnboardingState::default() };
+        serde_json::from_str::<OnboardingFile>(&text).map(|f| f.state).unwrap_or_default()
+    }
+
+    fn save(app: &tauri::AppHandle, state: &OnboardingState) -> Result<(), String> {
+        let p = config_path(app).ok_or_else(|| "no app data dir".to_string())?;
+        if let Some(dir) = p.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        }
+        let file = OnboardingFile { version: ONBOARDING_VERSION, state: state.clone() };
+        let json = serde_json::to_string_pretty(&file).map_err(|e| e.to_string())?;
+        std::fs::write(&p, json).map_err(|e| format!("onboarding save failed: {e}"))
+    }
+
+    fn now_unix() -> i64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0)
+    }
+
+    /// Current onboarding state for the flow (invariant 1: Rust owns it). Reads the managed copy,
+    /// so the panel does not hit disk on every launch.
+    #[tauri::command]
+    pub fn onboarding_state(store: tauri::State<'_, Store>) -> OnboardingState {
+        store.0.lock().map(|g| g.clone()).unwrap_or_default()
+    }
+
+    /// Whole-record write — the flow has one writer, so a partial update would let a resumed
+    /// session disagree with itself. Folds in the derived `trial_started_at`, persists, updates the
+    /// managed copy, and mirrors to the Memory API so the agent side sees the same state
+    /// (invariant 6).
+    #[tauri::command]
+    pub fn set_onboarding_state(
+        step: String,
+        plan: Option<String>,
+        completed: bool,
+        app: tauri::AppHandle,
+        store: tauri::State<'_, Store>,
+    ) -> Result<(), String> {
+        let prev = store.0.lock().map(|g| g.clone()).unwrap_or_default();
+        let next = apply(&prev, step, plan, completed, now_unix());
+        save(&app, &next)?;
+        if let Ok(mut g) = store.0.lock() {
+            *g = next;
+        }
+        // Symmetry to the agent side (invariant 6) is wired in a follow-up step; the persisted
+        // state above is the single source both surfaces read.
+        Ok(())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn done(trial: Option<i64>) -> OnboardingState {
+            OnboardingState { completed: true, step: "ready".into(), plan: None, trial_started_at: trial }
+        }
+
+        #[test]
+        fn stamps_trial_at_first_completion() {
+            let prev = OnboardingState::default();
+            let next = apply(&prev, "ready".into(), Some("pro".into()), true, 1000);
+            assert_eq!(next.trial_started_at, Some(1000));
+        }
+
+        #[test]
+        fn no_trial_before_completion() {
+            let prev = OnboardingState::default();
+            let next = apply(&prev, "plan".into(), None, false, 1000);
+            assert_eq!(next.trial_started_at, None);
+        }
+
+        #[test]
+        fn completion_is_idempotent() {
+            // A second write with completed=true must not re-stamp a later time.
+            let next = apply(&done(Some(1000)), "ready".into(), None, true, 2000);
+            assert_eq!(next.trial_started_at, Some(1000));
+        }
+
+        #[test]
+        fn reopening_from_settings_keeps_the_trial() {
+            // Settings re-runs onboarding by setting completed=false; the clock must not restart.
+            let next = apply(&done(Some(1000)), "welcome".into(), None, false, 2000);
+            assert_eq!(next.trial_started_at, Some(1000));
+        }
+
+        #[test]
+        fn unknown_step_falls_back_to_welcome() {
+            let next = apply(&OnboardingState::default(), "bogus".into(), None, false, 0);
+            assert_eq!(next.step, "welcome");
+        }
     }
 }
 

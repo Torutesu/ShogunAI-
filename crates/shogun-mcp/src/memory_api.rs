@@ -27,6 +27,9 @@ pub enum Tool {
     MemoryAppendNote,
     StateProposeUpdate,
     ActionsExecute,
+    /// The device's onboarding / first-run setup state (issue #6). A read: an agent needs to know
+    /// how far this device is configured, symmetrically with the human UI (invariant 6).
+    DeviceOnboardingGet,
 }
 
 /// Every tool, for exhaustive iteration (settings / tests).
@@ -44,6 +47,7 @@ pub const ALL_TOOLS: &[Tool] = &[
     Tool::MemoryAppendNote,
     Tool::StateProposeUpdate,
     Tool::ActionsExecute,
+    Tool::DeviceOnboardingGet,
 ];
 
 impl Tool {
@@ -63,6 +67,7 @@ impl Tool {
             Tool::MemoryAppendNote => "memory.append_note",
             Tool::StateProposeUpdate => "state.propose_update",
             Tool::ActionsExecute => "actions.execute",
+            Tool::DeviceOnboardingGet => "device.onboarding.get",
         }
     }
 
@@ -95,7 +100,8 @@ pub fn tool_level(tool: Tool) -> ApiLevel {
         | Tool::StateCommitmentsList
         | Tool::StateCommitmentsGet
         | Tool::StateOpenLoopsList
-        | Tool::StateOpenLoopsGet => ApiLevel::Read,
+        | Tool::StateOpenLoopsGet
+        | Tool::DeviceOnboardingGet => ApiLevel::Read,
         // append a user note to the event log — local, reversible.
         Tool::MemoryAppendNote => ApiLevel::Write(Level::L1),
         // propose a state change — one-tap confirm in the Notch.
@@ -191,12 +197,22 @@ mod tests {
     }
 
     #[test]
+    fn onboarding_state_is_a_symmetric_read_tool() {
+        // Invariant 6 (issue #6): the device's onboarding/first-run state is readable from the
+        // agent side, on the same surface as every other read, at Read level.
+        assert_eq!(Tool::from_wire("device.onboarding.get"), Some(Tool::DeviceOnboardingGet));
+        assert_eq!(Tool::DeviceOnboardingGet.wire_name(), "device.onboarding.get");
+        assert_eq!(tool_level(Tool::DeviceOnboardingGet), ApiLevel::Read);
+        assert!(ALL_TOOLS.contains(&Tool::DeviceOnboardingGet));
+    }
+
+    #[test]
     fn every_tool_has_a_defined_level() {
         // FR-API-02: the tool set is fully specified — no tool without a level.
         for &t in ALL_TOOLS {
             let _ = tool_level(t); // exhaustive match means this cannot be undefined
         }
-        assert_eq!(ALL_TOOLS.len(), 13);
+        assert_eq!(ALL_TOOLS.len(), 14);
     }
 
     #[test]
@@ -215,6 +231,7 @@ mod tests {
                         | Tool::StateCommitmentsGet
                         | Tool::StateOpenLoopsList
                         | Tool::StateOpenLoopsGet
+                        | Tool::DeviceOnboardingGet
                 )),
                 ApiLevel::Write(_) => {
                     assert!(matches!(t, Tool::MemoryAppendNote | Tool::StateProposeUpdate))

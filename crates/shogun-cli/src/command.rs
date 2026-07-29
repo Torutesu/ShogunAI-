@@ -32,6 +32,8 @@ pub enum Command {
     Propose { description: String },
     /// `shogun run <agent>` → launch a preset agent (level follows the action).
     Run { agent: String },
+    /// `shogun onboarding` → this device's onboarding / first-run setup state (issue #6).
+    Onboarding,
     /// `shogun api status` → report the running REST port (FR-API-01).
     ApiStatus,
     /// `shogun metrics` → the in-product SLO snapshot (NFR-SLO-00).
@@ -58,6 +60,7 @@ impl Command {
             Command::Note { .. } => Tool::MemoryAppendNote,
             Command::Propose { .. } => Tool::StateProposeUpdate,
             Command::Run { .. } => Tool::ActionsExecute,
+            Command::Onboarding => Tool::DeviceOnboardingGet,
             Command::ApiStatus | Command::Metrics | Command::Help => return None,
         })
     }
@@ -80,6 +83,7 @@ COMMANDS:
     note <text>               Append a user note            (L1)
     propose <description>     Propose a state change        (L2)
     run <agent>               Launch a preset agent         (level follows action)
+    onboarding                This device's first-run setup state
     api status                Show the running REST port
     metrics                   In-product SLO snapshot
     help                      This help
