@@ -50,10 +50,10 @@ ShogunAI のプロダクト成長を継続的に定量モニタリングする�
 
 | プロパティ | 内容 |
 |---|---|
-| `app_version` | Cargo/tauri.conf のバージョン |
-| `os` | 例 `macOS-14.5` |
-| `plan` | `trial` / `standard` / `pro` / `unknown`（`onboarding.json` 由来） |
-| `trial_days_remaining` | trial 時のみ（0–7） |
+| `app_version` | Tauri `package_info().version` |
+| `os` | プラットフォーム文字列（v1は `macos`）。精緻な OS バージョン（例 `macOS-14.5`）は Phase 2 |
+| `plan` | v1 は `trial` 固定（`fullui.rs` の実態に合わせる）。`standard`/`pro`/`unknown` への分岐は課金基盤（v1認証）到来時 |
+| `trial_days_remaining` | 課金基盤到来後に追加（v1スコープ外） |
 
 `country` は v1 では送らない（PostHog GeoIP も privacy 配慮でオフ想定。将来必要なら追加）。
 
@@ -61,9 +61,11 @@ ShogunAI のプロダクト成長を継続的に定量モニタリングする�
 
 | event | 発火点 | 固有プロパティ |
 |---|---|---|
-| `app_opened` | `apps/desktop/src-tauri/src/lib.rs::setup_macos()` 末尾（起動1回/launch にガード） | `cold_start`（bool） |
-| `shogun_query_executed` | `apps/desktop/src-tauri/src/notch_exec.rs::run_notch_action()` の `ExecutionEngine::submit()` 成功時、および inline/full draft 経路 | `query_type`（`local_search`/`save_draft`/`send_action`/`draft_inline`/`draft_full`）, `permission_level`（`L1`/`L2`/`L3`）, `outcome`（`ok`/`error`） |
-| `context_updated` | コネクタ read-sync ポーラー完了時（バス `IntegrationSynced` 購読） | `source`（`gmail`/`google_calendar`/`google_drive`/`slack`）, `sync_status`, `newly_inserted`（件数） |
+| `app_opened` | `apps/desktop/src-tauri/src/lib.rs` の setup 末尾（起動1回/launch にガード） | `cold_start`（bool） |
+| `shogun_query_executed` | `apps/desktop/src-tauri/src/notch_exec.rs::run_notch_action()` の `submit()` 後（submit した時のみ発火）、および inline/full draft 経路 | `query_type`（サーフェス単位：`notch_action`/`draft_inline`/`draft_full`。細かな Action 種別は Phase 2）, `permission_level`（`L1`/`L2`/`L3`）, `outcome`（`ok`/`awaiting_confirm`/`rejected`） |
+| `context_updated` | コネクタ read-sync 完了時（`shogun_core::bus::BusEvent::IntegrationSynced` 購読、または `connectors.rs` の sync 完了点） | `source`（`gmail`/`google_calendar`/`google_drive`/`slack`）, `newly_inserted`（件数） |
+
+**タイムスタンプ**: v1 はイベントを即時送信し PostHog サーバ受信時刻を採用（クライアント側 ISO8601 タイムスタンプ付与は chrono 依存を避けるため Phase 2）。ワーカーのフラッシュ間隔は数秒なので日境界のズレは許容範囲。
 
 DAU のアクティブ定義 = この3イベントの **OR**。
 
