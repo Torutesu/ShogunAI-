@@ -6,3 +6,4 @@ pub mod parse;
 pub use model::{
     Charm, ParseReport, Profile, RawSection, SectionError, ShougunConfig, Style, Workflow,
 };
+pub use parse::parse_shougun;
