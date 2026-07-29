@@ -205,13 +205,45 @@ pub fn session_ids_for_events(
         return Ok(Vec::new());
     }
     let placeholders = vec!["?"; event_ids.len()].join(",");
+    // ORDER BY session_id keeps the consume path deterministic (Issue #63): the same query
+    // retrieving the same events always visits the owning sessions in a stable order.
     let sql = format!(
         "SELECT DISTINCT session_id FROM event_log \
-          WHERE id IN ({placeholders}) AND session_id IS NOT NULL"
+          WHERE id IN ({placeholders}) AND session_id IS NOT NULL \
+          ORDER BY session_id"
     );
     let mut stmt = conn.prepare(&sql)?;
     let params = rusqlite::params_from_iter(event_ids.iter());
     let rows = stmt.query_map(params, |r| r.get::<_, i64>(0))?;
+    rows.collect()
+}
+
+/// The saved summaries of the given sessions, in one query — the batched analogue of calling
+/// [`get_summary`] per id (Issue #63). Returns `(id, thread_key, summary)` for every session in
+/// `ids` that HAS a non-null `summary`; sessions without a summary are simply absent. `thread_key`
+/// is returned so a caller can dedup a session summary against an already-consumed thread summary
+/// of the same conversation. Ordered by `id` for a deterministic consume order. An empty input
+/// yields an empty Vec without ever building an `IN ()`, which is not valid SQL.
+pub fn summaries_for_sessions(
+    conn: &Connection,
+    ids: &[i64],
+) -> Result<Vec<(i64, String, Option<String>)>, rusqlite::Error> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let placeholders = vec!["?"; ids.len()].join(",");
+    // COALESCE the nullable thread_key to '' so a session with no conversation identity still
+    // yields a plain String (empty ⇒ never matches a consumed thread_key, so it is kept).
+    let sql = format!(
+        "SELECT id, COALESCE(thread_key, ''), summary FROM sessions \
+          WHERE id IN ({placeholders}) AND summary IS NOT NULL \
+          ORDER BY id"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let params = rusqlite::params_from_iter(ids.iter());
+    let rows = stmt.query_map(params, |r| {
+        Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?))
+    })?;
     rows.collect()
 }
 
@@ -396,5 +428,39 @@ mod tests {
 
         // An orphan event contributes nothing (session_id IS NULL is filtered).
         assert!(session_ids_for_events(&conn, &[orphan]).unwrap().is_empty());
+
+        // Deterministic: DISTINCT owning sessions come back in session_id order regardless of the
+        // order the event ids are passed in.
+        let ordered = session_ids_for_events(&conn, &[eb1, ea2, ea1]).unwrap();
+        assert_eq!(ordered, vec![a, b], "ORDER BY session_id makes the result stable");
+    }
+
+    #[test]
+    fn summaries_for_sessions_batches_and_returns_thread_key() {
+        let conn = crate::open_in_memory().unwrap();
+        let a = open(&conn, &meeting(100)).unwrap();
+        let b = open(&conn, &meeting(300)).unwrap();
+        let _c = open(&conn, &meeting(500)).unwrap();
+
+        // a has a summary and a thread_key; b has a summary but no thread_key; c has no summary.
+        set_summary(&conn, a, "a summary", 1_000).unwrap();
+        conn.execute("UPDATE sessions SET thread_key = ?1 WHERE id = ?2", params!["mail:t1", a])
+            .unwrap();
+        set_summary(&conn, b, "b summary", 1_000).unwrap();
+
+        // Empty input → empty Vec (no empty IN () built).
+        assert!(summaries_for_sessions(&conn, &[]).unwrap().is_empty());
+
+        // Only sessions WITH a non-null summary come back, ordered by id, each carrying its
+        // thread_key ('' when NULL) and its summary.
+        let got = summaries_for_sessions(&conn, &[b, a, _c]).unwrap();
+        assert_eq!(
+            got,
+            vec![
+                (a, "mail:t1".to_string(), Some("a summary".to_string())),
+                (b, String::new(), Some("b summary".to_string())),
+            ],
+            "batched, ORDER BY id, summary-only, thread_key coalesced to ''"
+        );
     }
 }
