@@ -25,6 +25,7 @@ mod geometry;
 mod hover;
 mod inline_source;
 mod integrate;
+mod user_config_watch;
 pub mod meeting;
 mod meeting_recap;
 mod mic;
@@ -257,6 +258,12 @@ fn setup_macos(app: &tauri::App) {
     // before any fallible early-return below (geometry etc.) — a skipped load silently reverts
     // every chat/draft to the default provider.
     inline_source::mac::init_llm_settings(app.handle());
+
+    // ~/Shougun.md: load on startup (creating a sample if missing) and watch for changes.
+    // The parsed config is held in shared state and feeds directives into the inline generation call.
+    let user_cfg = user_config_watch::UserConfigState::default();
+    user_config_watch::spawn_user_config_watch(user_cfg.clone());
+    app.manage(user_cfg);
 
     // Audit fixes: event-driven Space follow (re-show on every desktop/full-screen switch) and the
     // ground-truth [panelstate] diagnostics stream.
@@ -1447,7 +1454,11 @@ fn watch_option_tap(app: &tauri::App) {
                         let warm = handle
                             .try_state::<shogun_core::daemon::ReplyContextCache>()
                             .and_then(|c| c.current());
-                        inline_source::mac::run_inline_at_cursor(db.inner().clone(), warm, handle.clone());
+                        let directives = handle
+                            .try_state::<user_config_watch::UserConfigState>()
+                            .map(|s| s.directives())
+                            .unwrap_or_default();
+                        inline_source::mac::run_inline_at_cursor(db.inner().clone(), warm, handle.clone(), directives);
                     }
                 }
             }

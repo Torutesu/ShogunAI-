@@ -602,6 +602,7 @@ pub mod mac {
         db: Db,
         warm: Option<shogun_core::daemon::ReplyContext>,
         app: tauri::AppHandle,
+        directives: String,
     ) {
         // Emitted before the thread starts so the pill reacts to the press itself, not to the
         // generation finishing — the whole point is that the tap feels answered immediately.
@@ -624,7 +625,7 @@ pub mod mac {
                 push_inline(&app, InlineStatus { phase: "no_key", chars: 0, detail: None });
                 return;
             };
-            let outcome = compose_inline(&AxCursorReader, &agent, &AxTextInserter, &memory, "");
+            let outcome = compose_inline(&AxCursorReader, &agent, &AxTextInserter, &memory, &directives);
             match &outcome {
                 InlineOutcome::Inserted { chars } => {
                     eprintln!("[inline] inserted {chars} chars at the cursor");
@@ -660,9 +661,10 @@ pub mod mac {
     pub fn inline_at_cursor(
         db: tauri::State<'_, Db>,
         reply: tauri::State<'_, shogun_core::daemon::ReplyContextCache>,
+        user_cfg: tauri::State<'_, crate::user_config_watch::UserConfigState>,
         app: tauri::AppHandle,
     ) -> &'static str {
-        run_inline_at_cursor(db.inner().clone(), reply.current(), app);
+        run_inline_at_cursor(db.inner().clone(), reply.current(), app, user_cfg.directives());
         "started"
     }
 
