@@ -467,6 +467,16 @@ fn setup_macos(app: &tauri::App) {
         Err(e) => eprintln!("[spike] memory DB unavailable — capture source not started: {e}"),
     }
 
+    // --- 匿名プロダクト分析（PostHog, #61）---
+    let analytics_handle = app.handle();
+    let analytics = crate::analytics::init(analytics_handle);
+    {
+        let mut p = shogun_core::analytics::Props::new();
+        p.insert("cold_start".into(), serde_json::Value::Bool(true));
+        analytics.capture("app_opened", p);
+    }
+    app.manage(analytics);
+
     // Last line of setup, and outside the DB branch: whether the panel is on screen has nothing to
     // do with whether memory opened, and a failed DB must not swallow the answer.
     report_panel_health(app.handle());
