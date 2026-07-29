@@ -1804,6 +1804,21 @@ function PrivacySecuritySection(props: {
       .catch((e) => setKeyMsg(String(e)));
   };
 
+  // Anonymous usage (Slice D). Opt-in — read the persisted value once, default OFF. Writing
+  // rolls the local state back on error so the toggle never claims a state the backend rejected.
+  const [analytics, setAnalytics] = useState(false);
+  useEffect(() => {
+    if (!IN_TAURI) return;
+    void invoke<{ analytics_enabled: boolean }>("get_privacy_prefs")
+      .then((p) => setAnalytics(p.analytics_enabled))
+      .catch(() => undefined);
+  }, []);
+  const toggleAnalytics = (next: boolean): void => {
+    setAnalytics(next);
+    if (IN_TAURI)
+      void invoke("set_analytics_enabled", { enabled: next }).catch(() => setAnalytics(!next));
+  };
+
   // Data deletion (A3). 1h/24h are single-tap-then-confirm; "all" wipes everything and the keys,
   // so it mirrors the deliberate typed-confirmation used for clearing extracted state.
   const [confirming, setConfirming] = useState<null | "1h" | "24h" | "all">(null);
@@ -2013,7 +2028,29 @@ function PrivacySecuritySection(props: {
       )}
       {deleteMsg ? <div className="set__hint is-ok">{deleteMsg}</div> : null}
 
-      {/* Anonymous usage toggle — Slice D (not implemented here). */}
+      {/* Anonymous usage card (Slice D). Opt-in: OFF by default, never carries captured content. */}
+      <div className="set__label" id="seg-analytics">{t.analyticsTitle}</div>
+      <div className="seg" role="radiogroup" aria-labelledby="seg-analytics">
+        <button
+          type="button"
+          role="radio"
+          aria-checked={analytics}
+          className={`seg__opt${analytics ? " is-on" : ""}`}
+          onClick={() => toggleAnalytics(true)}
+        >
+          {t.toggleOn}
+        </button>
+        <button
+          type="button"
+          role="radio"
+          aria-checked={!analytics}
+          className={`seg__opt${!analytics ? " is-on" : ""}`}
+          onClick={() => toggleAnalytics(false)}
+        >
+          {t.toggleOff}
+        </button>
+      </div>
+      <div className="set__hint">{t.analyticsNote}</div>
     </section>
   );
 }
