@@ -955,6 +955,24 @@ kbd {
   margin-top: 8px;
 }
 
+/* Privacy & Security data-use badges — small, calm chips stating the policy facts. */
+.badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 6px 0;
+}
+.badge {
+  font-size: 11px;
+  line-height: 1.4;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  background: color-mix(in srgb, var(--ink) 4%, transparent);
+  white-space: nowrap;
+}
+
 /* Keyrow inputs keep outline:none at rest; restore a clear ring on keyboard focus. The composer
    input rings via its card's :focus-within, so it isn't listed here. */
 .keyrow__input:focus-visible {

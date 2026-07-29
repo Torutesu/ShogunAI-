@@ -1728,6 +1728,274 @@ function comboChips(combo: string): string[] {
   });
 }
 
+/** Privacy & Security (issue #28). One place for the LLM key, the data-use policy, and data
+ *  deletion. The BYOK key entry lived inline in `Settings`; it moves here so the key, its
+ *  "encrypted in the Keychain" promise, and the deletion controls all read as one privacy story.
+ *  The key is never shown back in plaintext — settled state is a set/not-set indicator only. */
+function PrivacySecuritySection(props: {
+  hasKey: boolean;
+  /// The provider refused this key — surfaced here, since this is where the fix is.
+  keyRejected: boolean;
+}): JSX.Element {
+  const { hasKey, keyRejected } = props;
+  // BYOK key entry: the key goes straight to the macOS Keychain via Rust (never a file/DB/log),
+  // and is never read back — so "set" vs "not set" is all the UI can and should show.
+  const [keyInput, setKeyInput] = useState("");
+  const [keyState, setKeyState] = useState<boolean>(hasKey);
+  const [keyMsg, setKeyMsg] = useState("");
+  useEffect(() => setKeyState(hasKey), [hasKey]);
+  // Agent-lane provider + model (non-secret; the key is per-provider in the Keychain).
+  const [provider, setProvider] = useState("anthropic");
+  const [model, setModel] = useState("");
+  useEffect(() => {
+    if (!IN_TAURI) return;
+    void invoke<{ provider: string; model: string }>("get_llm_settings")
+      .then((s) => {
+        setProvider(s.provider);
+        setModel(s.model);
+      })
+      .catch(() => undefined);
+  }, []);
+  const applyLlm = (p: string, m: string): void => {
+    const prev = { provider, model };
+    setProvider(p);
+    setModel(m);
+    setKeyMsg("");
+    if (IN_TAURI)
+      void invoke("set_llm_settings", { provider: p, model: m }).catch((e) => {
+        // Roll the UI back — an optimistic provider the backend never accepted would send the
+        // next key save to the wrong Keychain account.
+        setProvider(prev.provider);
+        setModel(prev.model);
+        setKeyMsg(String(e));
+      });
+  };
+  const saveKey = (): void => {
+    const k = keyInput.trim();
+    if (!k) return;
+    if (!IN_TAURI) {
+      setKeyState(true);
+      setKeyInput("");
+      return;
+    }
+    // The provider is passed EXPLICITLY so the key always lands in the account the user sees
+    // selected — never the backend's possibly-lagging idea of the current provider.
+    void invoke("set_byok_key", { provider, key: k })
+      .then(() => {
+        setKeyState(true);
+        setKeyInput("");
+        setKeyMsg(t.keySaved);
+      })
+      .catch((e) => setKeyMsg(String(e)));
+  };
+  const removeKey = (): void => {
+    if (!IN_TAURI) {
+      setKeyState(false);
+      return;
+    }
+    void invoke("clear_byok_key", { provider })
+      .then(() => {
+        setKeyState(false);
+        setKeyMsg("");
+      })
+      .catch((e) => setKeyMsg(String(e)));
+  };
+
+  // Data deletion (A3). 1h/24h are single-tap-then-confirm; "all" wipes everything and the keys,
+  // so it mirrors the deliberate typed-confirmation used for clearing extracted state.
+  const [confirming, setConfirming] = useState<null | "1h" | "24h" | "all">(null);
+  const [deleteMsg, setDeleteMsg] = useState("");
+  const [deleteText, setDeleteText] = useState("");
+  const canDeleteAll = deleteText.trim().toUpperCase() === "DELETE";
+  const runDelete = (which: "1h" | "24h" | "all"): void => {
+    setDeleteMsg("");
+    if (!IN_TAURI) {
+      setDeleteMsg(t.deleteDone);
+      setConfirming(null);
+      setDeleteText("");
+      // A full wipe removes the key too — reflect that in the mock, matching the real command.
+      if (which === "all") setKeyState(false);
+      return;
+    }
+    const call =
+      which === "all"
+        ? invoke("delete_all_and_account")
+        : invoke("delete_data_since", { range: which });
+    void call
+      .then(() => {
+        setDeleteMsg(t.deleteDone);
+        setConfirming(null);
+        setDeleteText("");
+        if (which === "all") setKeyState(false);
+      })
+      .catch((e) => setDeleteMsg(String(e)));
+  };
+
+  return (
+    <section className="set">
+      <div className="set__label">{t.privacyTitle}</div>
+
+      {/* LLM API Key card. Provider picker + hidden key entry + set/not-set indicator. */}
+      <div className="seg" role="radiogroup" aria-label={t.model}>
+        {PROVIDERS.map((p) => (
+          <button
+            key={p.id}
+            type="button"
+            role="radio"
+            aria-checked={provider === p.id}
+            className={`seg__opt${provider === p.id ? " is-on" : ""}`}
+            onClick={() => {
+              // Model ids are provider-specific — blank = the provider's default.
+              if (p.id !== provider) applyLlm(p.id, "");
+            }}
+          >
+            {p.label}
+          </button>
+        ))}
+      </div>
+      <div className="set__hint">
+        {t.modelFor} {defaultModelFor(provider)}
+      </div>
+      <div className="set__hint">{t.modelHint}</div>
+      <div className={`set__hint${keyRejected ? " is-err" : keyState ? " is-ok" : ""}`}>
+        {keyRejected ? t.keyRejected : keyState ? t.keyPresent : t.keyAbsent}
+      </div>
+      <div className="set__hint">{t.keyScope}</div>
+      <div className="keyrow">
+        <input
+          className="keyrow__input"
+          type="password"
+          placeholder={t.keyPlaceholders[provider] ?? t.keyPlaceholders.anthropic}
+          value={keyInput}
+          autoComplete="off"
+          onChange={(e) => setKeyInput(e.target.value)}
+          onFocus={() => {
+            // The nonactivating panel must become key before it takes keystrokes.
+            if (IN_TAURI) void invoke("focus_field", { focused: true }).catch(() => undefined);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") saveKey();
+          }}
+        />
+        <button className="keyrow__btn" type="button" onClick={saveKey} disabled={!keyInput.trim()}>
+          {t.keySave}
+        </button>
+        {keyState ? (
+          <button className="keyrow__btn" type="button" onClick={removeKey}>
+            {t.keyRemove}
+          </button>
+        ) : null}
+      </div>
+      {keyMsg ? <div className="set__hint">{keyMsg}</div> : null}
+      <div className="set__hint">{t.keyEncryptedNote}</div>
+
+      {/* Data-use policy card. */}
+      <div className="badges">
+        <span className="badge">{t.policyNotTrained}</span>
+        <span className="badge">{t.policyLocalFirst}</span>
+        <span className="badge">{t.policyEncrypted}</span>
+      </div>
+      <div className="set__hint">
+        <a
+          href="https://shogunai.app/privacy"
+          target="_blank"
+          rel="noreferrer"
+        >
+          {t.policyLink}
+        </a>
+      </div>
+
+      {/* Data deletion card (A3). Local and immediate. */}
+      <div className="set__label">{t.deleteTitle}</div>
+      <div className="set__hint">{t.deleteHint}</div>
+      {confirming === null ? (
+        <div className="keyrow">
+          <button className="keyrow__btn" type="button" onClick={() => setConfirming("1h")}>
+            {t.deleteLast1h}
+          </button>
+          <button className="keyrow__btn" type="button" onClick={() => setConfirming("24h")}>
+            {t.deleteLast24h}
+          </button>
+          <button
+            className="keyrow__btn keyrow__btn--danger"
+            type="button"
+            onClick={() => setConfirming("all")}
+          >
+            {t.deleteAll}
+          </button>
+        </div>
+      ) : confirming === "all" ? (
+        // "All" wipes everything and the keys — deliberate typed confirmation.
+        <div className="confirm">
+          <div className="set__hint is-err">{t.deleteAllConfirm}</div>
+          <div className="keyrow">
+            <input
+              className="keyrow__input"
+              placeholder={t.deleteAllConfirmPlaceholder}
+              value={deleteText}
+              autoFocus
+              autoComplete="off"
+              onFocus={() => {
+                if (IN_TAURI) void invoke("focus_field", { focused: true }).catch(() => undefined);
+              }}
+              onChange={(e) => setDeleteText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && canDeleteAll) runDelete("all");
+                if (e.key === "Escape") {
+                  setConfirming(null);
+                  setDeleteText("");
+                }
+              }}
+            />
+            <button
+              className="keyrow__btn"
+              type="button"
+              onClick={() => {
+                setConfirming(null);
+                setDeleteText("");
+              }}
+            >
+              {t.cancel}
+            </button>
+            <button
+              className="keyrow__btn keyrow__btn--danger"
+              type="button"
+              onClick={() => runDelete("all")}
+              disabled={!canDeleteAll}
+            >
+              {t.deleteConfirmBtn}
+            </button>
+          </div>
+        </div>
+      ) : (
+        // 1h / 24h — single confirm step (destructive but bounded).
+        <div className="confirm">
+          <div className="set__hint is-err">{t.deleteConfirm}</div>
+          <div className="keyrow">
+            <button
+              className="keyrow__btn"
+              type="button"
+              onClick={() => setConfirming(null)}
+            >
+              {t.cancel}
+            </button>
+            <button
+              className="keyrow__btn keyrow__btn--danger"
+              type="button"
+              onClick={() => runDelete(confirming)}
+            >
+              {t.deleteConfirmBtn}
+            </button>
+          </div>
+        </div>
+      )}
+      {deleteMsg ? <div className="set__hint is-ok">{deleteMsg}</div> : null}
+
+      {/* Anonymous usage toggle — Slice D (not implemented here). */}
+    </section>
+  );
+}
+
 function Settings(props: {
   appearance: Appearance;
   setAppearance: (a: Appearance) => void;
@@ -1759,68 +2027,6 @@ function Settings(props: {
   const [binds, setBinds] = useState<Record<string, string>>(DEFAULT_BINDS);
   const [recording, setRecording] = useState<string | null>(null);
   const [keyErr, setKeyErr] = useState("");
-  // BYOK key entry: the key goes straight to the macOS Keychain via Rust (never a file/DB/log).
-  const [keyInput, setKeyInput] = useState("");
-  const [keyState, setKeyState] = useState<boolean>(hasKey);
-  const [keyMsg, setKeyMsg] = useState("");
-  useEffect(() => setKeyState(hasKey), [hasKey]);
-  // Agent-lane provider + model (non-secret; the key above is per-provider in the Keychain).
-  const [provider, setProvider] = useState("anthropic");
-  const [model, setModel] = useState("");
-  useEffect(() => {
-    if (!IN_TAURI) return;
-    void invoke<{ provider: string; model: string }>("get_llm_settings")
-      .then((s) => {
-        setProvider(s.provider);
-        setModel(s.model);
-      })
-      .catch(() => undefined);
-  }, []);
-  const applyLlm = (p: string, m: string): void => {
-    const prev = { provider, model };
-    setProvider(p);
-    setModel(m);
-    setKeyMsg("");
-    if (IN_TAURI)
-      void invoke("set_llm_settings", { provider: p, model: m }).catch((e) => {
-        // Roll the UI back — an optimistic provider the backend never accepted would send the
-        // next key save to the wrong Keychain account.
-        setProvider(prev.provider);
-        setModel(prev.model);
-        setKeyMsg(String(e));
-      });
-  };
-
-  const saveKey = (): void => {
-    const k = keyInput.trim();
-    if (!k) return;
-    if (!IN_TAURI) {
-      setKeyState(true);
-      setKeyInput("");
-      return;
-    }
-    // The provider is passed EXPLICITLY so the key always lands in the account the user sees
-    // selected — never the backend's possibly-lagging idea of the current provider.
-    void invoke("set_byok_key", { provider, key: k })
-      .then(() => {
-        setKeyState(true);
-        setKeyInput("");
-        setKeyMsg(t.keySaved);
-      })
-      .catch((e) => setKeyMsg(String(e)));
-  };
-  const removeKey = (): void => {
-    if (!IN_TAURI) {
-      setKeyState(false);
-      return;
-    }
-    void invoke("clear_byok_key", { provider })
-      .then(() => {
-        setKeyState(false);
-        setKeyMsg("");
-      })
-      .catch((e) => setKeyMsg(String(e)));
-  };
 
   const refresh = useCallback((): void => {
     if (!IN_TAURI) return;
@@ -1952,69 +2158,7 @@ function Settings(props: {
           {keyErr ? <div className="set__hint is-err">{keyErr}</div> : null}
           <div className="set__hint">{t.shortcutHint}</div>
         </section>
-        <section className="set">
-          <div className="set__label" id="seg-provider">{t.model}</div>
-          <div className="seg" role="radiogroup" aria-labelledby="seg-provider">
-            {PROVIDERS.map((p) => (
-              <button
-                key={p.id}
-                type="button"
-                role="radio"
-                aria-checked={provider === p.id}
-                className={`seg__opt${provider === p.id ? " is-on" : ""}`}
-                onClick={() => {
-                  // Model ids are provider-specific — carrying one across providers sends an
-                  // invalid model to the new provider. Blank = the provider's default.
-                  if (p.id !== provider) applyLlm(p.id, "");
-                }}
-              >
-                {p.label}
-              </button>
-            ))}
-          </div>
-          {/* No free-text model field. It sat directly above the key entry and looked identical
-              to it, so a pasted API key landed in the model — which was then sent as the model
-              name and written to the log. The provider already has one right default; picking a
-              model is not a decision this product needs to offer, and the field's only proven use
-              was leaking a credential. */}
-          <div className="set__hint">{t.modelFor} {defaultModelFor(provider)}</div>
-          <div className="set__hint">{t.modelHint}</div>
-        </section>
-        <section className="set">
-          <div className="set__label">{t.key}</div>
-          <div
-            className={`set__hint${keyRejected ? " is-err" : keyState ? " is-ok" : ""}`}
-          >
-            {keyRejected ? t.keyRejected : keyState ? t.keyPresent : t.keyAbsent}
-          </div>
-          <div className="set__hint">{t.keyScope}</div>
-          <div className="keyrow">
-            <input
-              className="keyrow__input"
-              type="password"
-              placeholder={t.keyPlaceholders[provider] ?? t.keyPlaceholders.anthropic}
-              value={keyInput}
-              autoComplete="off"
-              onChange={(e) => setKeyInput(e.target.value)}
-              onFocus={() => {
-                // The nonactivating panel must become key before it takes keystrokes.
-                if (IN_TAURI) void invoke("focus_field", { focused: true }).catch(() => undefined);
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") saveKey();
-              }}
-            />
-            <button className="keyrow__btn" type="button" onClick={saveKey} disabled={!keyInput.trim()}>
-              {t.keySave}
-            </button>
-            {keyState ? (
-              <button className="keyrow__btn" type="button" onClick={removeKey}>
-                {t.keyRemove}
-              </button>
-            ) : null}
-          </div>
-          {keyMsg ? <div className="set__hint">{keyMsg}</div> : null}
-        </section>
+        <PrivacySecuritySection hasKey={hasKey} keyRejected={keyRejected} />
         <section className="set">
           <div className="set__label">{t.memory}</div>
           <div className="set__hint">{t.memoryHint}</div>
