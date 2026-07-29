@@ -32,6 +32,9 @@ pub fn render_directives(cfg: &ShougunConfig) -> String {
     push_list(&mut out, "Principles to follow:", &cfg.principles);
     push_list(&mut out, "Never do the following:", &cfg.do_not);
 
+    // NOTE: charm.preferred_intro_contexts は「いつ・どう自己紹介を出すか」のタイミング
+    // 設定であり、常時の system-prompt directive ではない。Morning Brief / 紹介文生成
+    // （後続タスク）で参照するため、ここでは意図的に出力しない。
     if !cfg.charm_disabled {
         push_list(&mut out, "The user's strengths (draw on these):", &cfg.charm.core_strengths);
         push_list(&mut out, "How to present the user to others:", &cfg.charm.persona_for_others);

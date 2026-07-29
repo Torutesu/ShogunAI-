@@ -24,7 +24,7 @@ pub(crate) fn split_sections(input: &str) -> Vec<(String, usize, Vec<String>)> {
     out
 }
 
-/// bullet 行 `- text` を取り出す（ネストは 2 スペース以上のインデントで判定）。
+/// bullet 行 `- text` を取り出す（トップレベルの箇条書き用。インデントは無視する）。
 fn bullets(body: &[String]) -> Vec<String> {
     body.iter()
         .filter_map(|l| l.trim().strip_prefix("- ").map(|s| s.trim().to_string()))
@@ -49,31 +49,39 @@ fn csv(s: &str) -> Vec<String> {
     s.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect()
 }
 
-/// `- Key:` の直後にインデントされた bullet を集める（CoreStrengths など）。
+/// `- Key:` の子要素を集める。子は「キー行より深いインデントの bullet」で判定する
+/// （末尾がコロンの項目でも打ち切らない）。`- Key: value` の inline 値も 1 項目として拾う。
 fn sub_bullets(body: &[String], key: &str) -> Vec<String> {
+    let key_lc = key.to_ascii_lowercase();
+    let key_prefix = format!("{key_lc}:");
     let mut out = Vec::new();
-    let mut capturing = false;
+    let mut key_indent: Option<usize> = None;
     for l in body {
+        let indent = l.len() - l.trim_start().len();
         let t = l.trim();
-        let key_line = t.trim_start_matches("- ").trim();
-        if key_line.eq_ignore_ascii_case(&format!("{key}:"))
-            || key_line
-                .to_ascii_lowercase()
-                .starts_with(&format!("{}:", key.to_ascii_lowercase()))
-        {
-            capturing = true;
+        if !t.starts_with("- ") {
             continue;
         }
-        // 新しい `- Key:`（コロン終わりでインデント浅い）が来たら停止
-        let is_new_key = t.starts_with("- ") && key_line.ends_with(':');
-        if capturing && is_new_key {
-            capturing = false;
-        }
-        if capturing {
-            if let Some(v) = t.strip_prefix("- ") {
-                let v = v.trim();
-                if !v.is_empty() {
-                    out.push(v.to_string());
+        let content = t.trim_start_matches("- ").trim();
+        match key_indent {
+            None => {
+                if content.to_ascii_lowercase().starts_with(&key_prefix) {
+                    key_indent = Some(indent);
+                    if let Some((_, v)) = content.split_once(':') {
+                        let v = v.trim();
+                        if !v.is_empty() {
+                            out.push(v.to_string());
+                        }
+                    }
+                }
+            }
+            Some(ki) => {
+                if indent > ki {
+                    if !content.is_empty() {
+                        out.push(content.to_string());
+                    }
+                } else {
+                    break;
                 }
             }
         }
@@ -248,5 +256,29 @@ mod tests {
         let (c, report) = parse_shougun("");
         assert!(report.ok);
         assert_eq!(c, ShougunConfig::default());
+    }
+
+    #[test]
+    fn sub_bullets_keeps_items_after_a_colon_ending_item() {
+        let (c, _) = parse_shougun(
+            "# Charm\n- CoreStrengths:\n  - 強みその1\n  - 末尾がコロン:\n  - 強みその3\n",
+        );
+        assert_eq!(c.charm.core_strengths, vec!["強みその1", "末尾がコロン:", "強みその3"]);
+    }
+
+    #[test]
+    fn sub_bullets_captures_inline_value() {
+        let (c, _) = parse_shougun("# Charm\n- CoreStrengths: 比喩がうまい\n");
+        assert_eq!(c.charm.core_strengths, vec!["比喩がうまい"]);
+        assert!(!c.charm_disabled);
+    }
+
+    #[test]
+    fn multiple_charm_subkeys_are_separated() {
+        let (c, _) = parse_shougun(
+            "# Charm\n- CoreStrengths:\n  - A\n- NGCharmPatterns:\n  - B\n",
+        );
+        assert_eq!(c.charm.core_strengths, vec!["A"]);
+        assert_eq!(c.charm.ng_charm_patterns, vec!["B"]);
     }
 }

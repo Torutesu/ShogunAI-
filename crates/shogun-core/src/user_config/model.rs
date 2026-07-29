@@ -59,10 +59,16 @@ pub struct SectionError {
     pub message: String,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ParseReport {
     pub ok: bool,
     pub section_errors: Vec<SectionError>,
+}
+
+impl Default for ParseReport {
+    fn default() -> Self {
+        Self { ok: true, section_errors: Vec::new() }
+    }
 }
 
 #[cfg(test)]
@@ -75,5 +81,10 @@ mod tests {
         assert!(c.principles.is_empty());
         assert!(!c.charm_disabled);
         assert!(c.unknown_sections.is_empty());
+    }
+
+    #[test]
+    fn parse_report_default_is_ok() {
+        assert!(ParseReport::default().ok);
     }
 }
