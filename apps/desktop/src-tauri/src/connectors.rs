@@ -176,7 +176,20 @@ pub mod mac {
         let svc = from_source(&service).ok_or_else(|| format!("unknown service: {service}"))?;
         let mut rt = state.0.lock().map_err(|_| "runtime lock poisoned".to_string())?;
         match rt.fetch_on_demand(svc, &query, &*db) {
-            Ok(report) => Ok(report.inserted as u64),
+            Ok(report) => {
+                // Same third-party (Composio) read boundary the sync poller records — an on-demand
+                // fetch sends the user_id + query to Composio just as the poller does, so it must be
+                // just as visible in the traceability screen. We record THAT a read happened, never
+                // the query or fetched body (invariant 3 / FR-TR-03; empty chunk = zero bytes).
+                db.traceability_sink().record(TraceRecord::for_chunk(
+                    Route::Composio,
+                    "gmail_read",
+                    svc.source_str(),
+                    "",
+                    true,
+                ));
+                Ok(report.inserted as u64)
+            }
             Err(e) => Err(format!("{e:?}")),
         }
     }
