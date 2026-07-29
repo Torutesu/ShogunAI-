@@ -11,6 +11,14 @@ pub enum ListOrGet {
     Get { id: i64 },
 }
 
+/// The action for `shogun config path|show|validate`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConfigAction {
+    Path,
+    Show,
+    Validate,
+}
+
 /// A parsed CLI command.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
@@ -38,6 +46,8 @@ pub enum Command {
     Metrics,
     /// `shogun help` / no args.
     Help,
+    /// `shogun config path|show|validate`
+    Config { action: ConfigAction },
 }
 
 impl Command {
@@ -58,7 +68,7 @@ impl Command {
             Command::Note { .. } => Tool::MemoryAppendNote,
             Command::Propose { .. } => Tool::StateProposeUpdate,
             Command::Run { .. } => Tool::ActionsExecute,
-            Command::ApiStatus | Command::Metrics | Command::Help => return None,
+            Command::ApiStatus | Command::Metrics | Command::Help | Command::Config { .. } => return None,
         })
     }
 }
@@ -82,6 +92,7 @@ COMMANDS:
     run <agent>               Launch a preset agent         (level follows action)
     api status                Show the running REST port
     metrics                   In-product SLO snapshot
+    config path|show|validate Show the Shougun.md path, parsed config, or validation
     help                      This help
 
 GLOBAL FLAGS:
@@ -123,6 +134,7 @@ mod tests {
     fn local_commands_have_no_tool() {
         assert!(Command::ApiStatus.tool().is_none());
         assert!(Command::Help.tool().is_none());
+        assert!(Command::Config { action: ConfigAction::Path }.tool().is_none());
     }
 
     #[test]

@@ -57,7 +57,7 @@ pub fn to_call(command: &Command, include_low: bool) -> Option<HttpCall> {
         Command::Run { agent } => post("/v1/actions/execute", agent.clone()),
         Command::ApiStatus => get("/v1/status".to_string()),
         Command::Metrics => get("/v1/metrics".to_string()),
-        Command::Help => return None,
+        Command::Help | Command::Config { .. } => return None,
     })
 }
 
