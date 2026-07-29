@@ -91,6 +91,14 @@ fn base_props(app: &AppHandle) -> Props {
     p
 }
 
+/// コネクタ read-sync 完了 → context_updated のプロパティに変換する純関数。
+pub fn context_updated_props(source: &str, count: u64) -> Props {
+    let mut p = Props::new();
+    p.insert("source".into(), serde_json::Value::from(source));
+    p.insert("newly_inserted".into(), serde_json::Value::from(count));
+    p
+}
+
 /// 分析を初期化する。`SHOGUN_POSTHOG_KEY` 未設定なら無効（no-op）ラッパを返す。
 pub fn init(app: &AppHandle) -> Analytics {
     let key = std::env::var("SHOGUN_POSTHOG_KEY").unwrap_or_default();
@@ -120,6 +128,13 @@ pub fn init(app: &AppHandle) -> Analytics {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn context_props_carry_source_and_count() {
+        let p = context_updated_props("gmail", 3);
+        assert_eq!(p["source"], "gmail");
+        assert_eq!(p["newly_inserted"], 3);
+    }
 
     #[test]
     fn distinct_id_is_uuid_v4_shaped() {
