@@ -281,10 +281,12 @@ pub fn compress(
 - アプリ/ウィンドウ除外は候補収集段（daemon）でフィルタする前提の設計互換のみ確保（UI は別 Issue）。
 - 時系列クラスタリング/トピックグルーピングは、v1 では thread/session 単位の要約で近似。より細かいクラスタリングは要約対象の切り方を差し替えるだけで拡張可能。
 
-> **この一周の実装状態（配線済み vs 休眠）** — 実装後レビュー（2026-07-29）で確認。
-> - **配線済み**: fusion 純粋パイプライン（block/score/budget/compress）、daemon の正規化グルー＋`assemble_context_compressed`＋計測、Dream Cycle `Compression` ジョブ（Full サイクルで `threads.summary` を `LocalExtractiveSummarizer` で populate）、V11 計測テーブル＋AB（raw/compressed 両記録）。
-> - **休眠（次周の起動タスク）**: ①本番クエリ経路への `enabled` 分岐配線（現状 `assemble_context_compressed` はテスト到達のみ、既定 off）。②クエリ時の `threads.summary` **consume**（`SourceKind::ThreadSummary` 候補の投入）＝§3.3/§3.4 の差し替えレバー本体。現状はドロップのみ。③`sessions.summary` の populate。④fact provenance の実 state id 化。
-> - マージ安全性: `CompressionConfig.enabled` 既定 false かつ本番未配線のため、既存 raw 経路の挙動は不変。
+> **実装状態（配線済み vs 休眠）** — 更新: 2026-07-29「起動」増分後。
+> - **配線済み（第1周）**: fusion 純粋パイプライン（block/score/budget/compress）、daemon の正規化グルー＋`assemble_context_compressed`＋計測、Dream Cycle `Compression` ジョブ（Full サイクルで `threads.summary` を `LocalExtractiveSummarizer` で populate）、V11 計測テーブル＋AB（raw/compressed 両記録）。
+> - **配線済み（起動増分 2026-07-29）**: ①本番チャット経路（`inline_source.rs::chat_blocking`）を `Db::compression_config()` で圧縮パスへ分岐。②クエリ時の `threads.summary` **consume**（解決済みスレッドの要約を `SourceKind::ThreadSummary` 高 relevance 候補として投入 → 予算逼迫時に raw ターンを押しのける＝§3.3/§3.4 の差し替えレバー本体。テストで substitution を実証）。有効化は env `SHOGUN_COMPRESSION=1`（＋`SHOGUN_COMPRESSION_BUDGET`）で desktop から config 注入、既定 off。
+> - **休眠（次周）**: 設定 UI トグル（現状 env フラグ）、reply ドラフト経路（`build_reply_context`）の圧縮、`sessions.summary` の populate/consume、fact provenance の実 state id 化、圧縮時 citation の source/title 復元、Batch 抽象要約器の on-device 配線、AB ダッシュボード UI、パーソナライズ。
+> - マージ安全性: `SHOGUN_COMPRESSION` 未設定なら `compression_config()` は None、チャットは raw 経路のまま＝既存挙動は不変。
+> - **付随修正**: 起動増分で、マージ済み main の macOS desktop ビルド破損（`dream.rs` の `DbDreamRunner::new` が Summarizer seam マージ時に summarizer 引数を取りこぼしていた）を修復。desktop クレートの `cargo check` を検証フローに追加。
 
 ---
 

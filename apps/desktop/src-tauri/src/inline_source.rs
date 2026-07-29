@@ -968,6 +968,9 @@ pub mod mac {
         // means first, and if two are equally plausible, ask instead of guessing: a confident
         // answer about the wrong piece of the user's work is the failure that loses their trust.
         let mut query = message.to_string();
+        // The resolved thread(s) get their stored summary fed in as candidates when the
+        // compressed path is active — a high-relevance block that survives budget pressure.
+        let mut resolved_threads: Vec<String> = Vec::new();
         if shogun_memory::thread::is_referring(message) {
             let outcome = db.resolve_referent(message, None);
             match outcome.verdict {
@@ -991,6 +994,9 @@ pub mod mac {
                     if let Some(t) = outcome.candidates.first().and_then(|c| c.title.as_deref()) {
                         query = format!("{message} {t}");
                     }
+                    if let Some(c) = outcome.candidates.first() {
+                        resolved_threads.push(c.thread_key.clone());
+                    }
                 }
                 Referent::None => {}
             }
@@ -998,7 +1004,19 @@ pub mod mac {
 
         // Retrieval + state facts: the question decides what history comes along, so "what
         // happened with X" can actually be answered from the event log.
-        let ctx = db.assemble_context(&query, CHAT_EVIDENCE_HITS, CHAT_EVIDENCE_CHARS);
+        let ctx = match db.compression_config() {
+            Some(cfg) if cfg.enabled => {
+                db.assemble_context_compressed(
+                    &query,
+                    CHAT_EVIDENCE_HITS,
+                    CHAT_EVIDENCE_CHARS,
+                    &resolved_threads,
+                    cfg,
+                )
+                .0
+            }
+            _ => db.assemble_context(&query, CHAT_EVIDENCE_HITS, CHAT_EVIDENCE_CHARS),
+        };
         // Without a key there is nothing to answer with; with the dev mock the "answer" is the
         // prompt itself, and printing that dumps SHOGUN's entire internal prompt at the user. Say
         // what is actually wrong instead. (The UI also pre-empts this from `has_key`.)

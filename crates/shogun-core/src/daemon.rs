@@ -228,12 +228,16 @@ pub struct Db {
     /// every result still comes back via FTS, just without the semantic half (FR-MEM-22 — an
     /// un-embedded event is never invisible).
     embedder: Option<Arc<dyn shogun_memory::embed::Embedder>>,
+    /// The compression config, when injected (Issue #63). `None` means the raw context path stays
+    /// in effect — the desktop only supplies an `enabled` config behind a flag, so the default is
+    /// unchanged behaviour.
+    compression_config: Option<shogun_fusion::compress::CompressionConfig>,
 }
 
 impl Db {
     /// Wrap an already-open, migrated connection.
     pub fn new(conn: Connection, clock: Clock) -> Self {
-        Self { conn: Arc::new(Mutex::new(conn)), clock, embedder: None }
+        Self { conn: Arc::new(Mutex::new(conn)), clock, embedder: None, compression_config: None }
     }
 
     /// Attach the local embedding model, turning search from lexical-only into hybrid.
@@ -244,6 +248,22 @@ impl Db {
     pub fn with_embedder(mut self, embedder: Arc<dyn shogun_memory::embed::Embedder>) -> Self {
         self.embedder = Some(embedder);
         self
+    }
+
+    /// Inject the compression config (unset = the raw path stays in effect). Same handoff pattern
+    /// as [`with_embedder`]: the desktop decides whether compression is on (behind a flag) and hands
+    /// the config over.
+    pub fn with_compression_config(
+        mut self,
+        config: shogun_fusion::compress::CompressionConfig,
+    ) -> Self {
+        self.compression_config = Some(config);
+        self
+    }
+
+    /// The current compression config (`None` when unset).
+    pub fn compression_config(&self) -> Option<&shogun_fusion::compress::CompressionConfig> {
+        self.compression_config.as_ref()
     }
 
     /// Embed events that do not have a vector yet (FR-MEM-22: embedding is off the write path,
@@ -836,6 +856,7 @@ impl Db {
         query: &str,
         max_hits: usize,
         excerpt_chars: usize,
+        thread_keys: &[String],
         config: &shogun_fusion::compress::CompressionConfig,
     ) -> (ContextPack, shogun_fusion::compress::CompressionStats, bool) {
         use shogun_fusion::budget::HeuristicEstimator;
@@ -848,6 +869,8 @@ impl Db {
 
         let mut blocks = facts_to_blocks(&pack.facts, &est);
         blocks.extend(evidence_to_blocks(&pack.evidence, 0.7, &est));
+        // 解決済みスレッドの保存済み要約を候補に加える（差し替えレバー）。
+        blocks.extend(self.thread_summaries_to_blocks(thread_keys, &est));
 
         // 時間予算を超えたらフォールバック（raw をそのまま返す）。
         if started.elapsed().as_millis() as u64 > COMPRESS_BUDGET_MS {
@@ -894,6 +917,31 @@ impl Db {
         );
 
         (ContextPack { facts, evidence }, out.stats, false)
+    }
+
+    /// 解決済みスレッドの保存済み要約を ThreadSummary ブロックにする。要約は raw ターンより
+    /// 短くトークン効率が高いので、高 relevance を与えると予算逼迫時に raw を押しのけて残る
+    /// （設計 §3.3/§3.4 の差し替えレバー）。summary 未設定のスレッドはスキップ。
+    fn thread_summaries_to_blocks(
+        &self,
+        thread_keys: &[String],
+        est: &dyn TokenEstimator,
+    ) -> Vec<ContextBlock> {
+        thread_keys
+            .iter()
+            .filter_map(|tk| {
+                self.thread_summary(tk).map(|s| {
+                    ContextBlock::new(
+                        BlockRef::Thread(tk.clone()),
+                        SourceKind::ThreadSummary,
+                        s,
+                        // 参照先として解決済み＝関連度は高い。confidence は要約＝1.0。
+                        ScoreInputs { relevance: 0.9, freshness: 0.7, task_link: 0.5, confidence: 1.0 },
+                        est,
+                    )
+                })
+            })
+            .collect()
     }
 
     /// 圧縮計測を 1 行記録する。best-effort（失敗は握りつぶし、作業を止めない）。
@@ -2820,12 +2868,61 @@ mod tests {
         }
         use shogun_fusion::compress::CompressionConfig;
         let cfg = CompressionConfig { enabled: true, budget_tokens: 20, ..Default::default() };
-        let (pack_c, stats, fell_back) = db.assemble_context_compressed("pricing report", 6, 600, &cfg);
+        let (pack_c, stats, fell_back) = db.assemble_context_compressed("pricing report", 6, 600, &[], &cfg);
         assert!(!fell_back, "50ms 以内に収まるはず");
         assert!(stats.post_tokens <= 20, "post={}", stats.post_tokens);
         if stats.pre_tokens > 20 {
             assert!(stats.post_tokens < stats.pre_tokens, "pre={} post={}", stats.pre_tokens, stats.post_tokens);
         }
         assert!(!pack_c.facts.is_empty() || !pack_c.evidence.is_empty(), "全落ちしない");
+    }
+
+    #[test]
+    fn thread_summary_substitutes_for_raw_turns_under_budget() {
+        use shogun_fusion::compress::CompressionConfig;
+
+        let db = Db::open_in_memory(clock(10_000)).unwrap();
+        // 同一スレッド（同 source/window_title）に長めの生ターンを複数投入。
+        // 各ターンの生テキストには要約には無い語 "detail" を含めておく（差し替えの反証用）。
+        for i in 0..6 {
+            db.capture(&ev(
+                "vendor renewal pricing discussion detail line",
+                &format!("h{i}"),
+                100 + i,
+            ))
+            .unwrap();
+        }
+        // そのスレッドに短い要約を付与（raw ターンより短くトークン効率が高い）。
+        let tk = db
+            .active_threads_between(0, 10_000)
+            .first()
+            .map(|t| t.thread_key.clone())
+            .expect("capture が thread を作るので 1 本はあるはず");
+        db.set_thread_summary(&tk, "Renewal priced at 12k; awaiting sign-off.");
+
+        // 予算逼迫（12 トークン）: 短い要約(~10tok, relevance 0.9)が raw を押しのけて残る想定。
+        let cfg = CompressionConfig { enabled: true, budget_tokens: 12, ..Default::default() };
+        let (pack, stats, fell_back) =
+            db.assemble_context_compressed("renewal pricing", 6, 600, std::slice::from_ref(&tk), &cfg);
+
+        assert!(!fell_back, "ローカル組み立ては 50ms 以内で完了するはず");
+        assert!(stats.post_tokens <= 12, "予算内に収まる: post={}", stats.post_tokens);
+
+        // 要約テキストが採用され（ThreadSummary は fact 側に振り分け）、その語が生き残る。
+        let joined = format!(
+            "{} {}",
+            pack.facts.join(" "),
+            pack.evidence.iter().map(|e| e.excerpt.clone()).collect::<Vec<_>>().join(" ")
+        );
+        assert!(
+            joined.contains("sign-off") || joined.contains("12k"),
+            "要約が生き残るべき: {joined}"
+        );
+        // 差し替えの証明: 予算逼迫下で要約が採用された以上、要約に無い生ターンの語
+        // "detail" は落ちている（要約が raw ターンを押しのけた）。
+        assert!(
+            !joined.contains("detail"),
+            "要約が raw ターンを押しのけるべき（生ターンの語が残っている）: {joined}"
+        );
     }
 }

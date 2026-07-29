@@ -214,7 +214,7 @@ fn compressed_context_stays_within_budget_and_reduces_tokens() {
     let db = seed_in_memory();
     let cfg = CompressionConfig { enabled: true, budget_tokens: 200, ..Default::default() };
 
-    let (pack_c, stats, fell_back) = db.assemble_context_compressed("vendor renewal", 6, 600, &cfg);
+    let (pack_c, stats, fell_back) = db.assemble_context_compressed("vendor renewal", 6, 600, &[], &cfg);
 
     assert!(!fell_back, "local assembly must complete within 50 ms");
     assert!(stats.post_tokens <= 200, "post_tokens={} must be within budget 200", stats.post_tokens);
@@ -246,7 +246,7 @@ fn disabled_or_fallback_matches_raw() {
 
     // budget_tokens = 1_000_000 — everything fits, so nothing is dropped.
     let cfg = CompressionConfig { enabled: true, budget_tokens: 1_000_000, ..Default::default() };
-    let (pack_c, _stats, _fell_back) = db.assemble_context_compressed("vendor renewal", 6, 600, &cfg);
+    let (pack_c, _stats, _fell_back) = db.assemble_context_compressed("vendor renewal", 6, 600, &[], &cfg);
 
     assert_eq!(
         pack_c.evidence.len(),
