@@ -90,11 +90,16 @@ pub fn delete_all(conn: &mut Connection) -> Result<DeleteReport, rusqlite::Error
     tx.execute("DELETE FROM event_vec", [])?;
     tx.execute("DELETE FROM cold_embeddings", [])?;
     let events = tx.execute("DELETE FROM event_log", [])?;
-    // Meeting notes are the user's own words — the most personal rows here — and they reference
-    // sessions, so they go before them (FR-MT-10).
+    // Everything that references sessions with no ON DELETE CASCADE must go before the sessions
+    // themselves, or with foreign_keys=ON the delete FK-fails and rolls back. Meeting notes
+    // (V8, the user's own words — the most personal rows here, FR-MT-10), transcript segments
+    // (V9), and meeting recaps (V10) all reference sessions.
     let session_notes = tx.execute("DELETE FROM session_notes", [])?;
-    // Sessions hold the meeting's title, summary and decisions — user data, and referenced by
-    // event_log, so they go after it (FR-SET-07, FR-MT-05).
+    tx.execute("DELETE FROM transcript_segments", [])?;
+    tx.execute("DELETE FROM meeting_recaps", [])?;
+    // Sessions hold the meeting's title, summary and decisions — user data. event_log also
+    // references sessions, and it was already cleared above, so sessions can go now (FR-SET-07,
+    // FR-MT-05).
     let sessions = tx.execute("DELETE FROM sessions", [])?;
     let traceability = tx.execute("DELETE FROM traceability_log", [])?;
     tx.execute("DELETE FROM job_runs", [])?;
@@ -140,9 +145,27 @@ pub fn delete_since(conn: &mut Connection, cutoff_ts: i64) -> Result<DeleteRepor
     // The events themselves (AD trigger clears event_fts).
     let events = tx.execute("DELETE FROM event_log WHERE ts >= ?1", [cutoff_ts])?;
 
-    // Meeting sessions started in the window, and their notes (notes reference sessions).
+    // Meeting sessions started in the window, and everything that references them, must all go
+    // before `DELETE FROM sessions` — with foreign_keys=ON a lingering child is a hard FK error
+    // that rolls the whole deletion back. Children of sessions with NO ON DELETE CASCADE:
+    // session_notes (V8), transcript_segments (V9), meeting_recaps (V10).
     let session_notes = tx.execute(
         "DELETE FROM session_notes WHERE session_id IN (SELECT id FROM sessions WHERE started_at >= ?1)",
+        [cutoff_ts],
+    )?;
+    tx.execute(
+        "DELETE FROM transcript_segments WHERE session_id IN (SELECT id FROM sessions WHERE started_at >= ?1)",
+        [cutoff_ts],
+    )?;
+    tx.execute(
+        "DELETE FROM meeting_recaps WHERE session_id IN (SELECT id FROM sessions WHERE started_at >= ?1)",
+        [cutoff_ts],
+    )?;
+    // event_log.session_id (V7) also references sessions with no cascade. A surviving event
+    // (ts < cutoff) could still point at a session started in the window; clear that dangling link
+    // so the session delete below cannot FK-fail. The event itself is kept.
+    tx.execute(
+        "UPDATE event_log SET session_id = NULL WHERE session_id IN (SELECT id FROM sessions WHERE started_at >= ?1)",
         [cutoff_ts],
     )?;
     let sessions = tx.execute("DELETE FROM sessions WHERE started_at >= ?1", [cutoff_ts])?;
@@ -164,6 +187,9 @@ pub fn delete_since(conn: &mut Connection, cutoff_ts: i64) -> Result<DeleteRepor
         projects,
         commitments,
         open_loops,
+        // threads is a derived cache (titles/summaries/salience) rebuilt by the Dream Cycle from the
+        // surviving event log; time-range deletion leaves it to be re-derived rather than time-slicing it.
+        // (Not skipped for lack of a timestamp — it has first/last_activity_at.)
         threads: 0,
         sessions,
         session_notes,
@@ -375,6 +401,65 @@ mod tests {
         // provenance pointing at the deleted event is gone; the old one remains.
         let prov: i64 = conn.query_row("SELECT count(*) FROM state_provenance", [], |r| r.get(0)).unwrap();
         assert_eq!(prov, 1, "only the old-event provenance row survives");
+    }
+
+    #[test]
+    fn delete_since_deletes_session_children_before_the_session_so_it_does_not_fk_fail() {
+        // With foreign_keys=ON, a transcript segment or recap left behind when its session is
+        // deleted is a hard FK error that rolls the whole deletion back. Any user who recorded a
+        // meeting would then be unable to delete their recent data at all — the whole point.
+        let mut conn = crate::open_in_memory().unwrap();
+        let sid = crate::session::open(
+            &conn,
+            &crate::session::NewSession {
+                kind: "meeting",
+                started_at: 9_000,
+                title: Some("Recorded sync"),
+                app_bundle_id: Some("us.zoom.xos"),
+                calendar_occurrence_id: None,
+                confidence: 0.6,
+                provenance: "{}",
+            },
+        )
+        .unwrap();
+        crate::transcript_segments::append(
+            &conn,
+            &crate::transcript_segments::NewSegment {
+                session_id: sid,
+                ts: 9_100,
+                speaker: crate::transcript_segments::Speaker::Me,
+                text: "hello team",
+                confidence: 0.9,
+            },
+            9_100,
+        )
+        .unwrap();
+        crate::meeting_recaps::save(&conn, sid, "we agreed X", "[]", "[]", "test-model", 9_200)
+            .unwrap();
+
+        let report = delete_since(&mut conn, 5_000);
+        assert!(report.is_ok(), "delete must not FK-fail with a recorded meeting: {report:?}");
+
+        for table in ["sessions", "transcript_segments", "meeting_recaps"] {
+            let n: i64 = conn
+                .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(n, 0, "{table} must be empty after delete_since");
+        }
+    }
+
+    #[test]
+    fn delete_since_deletes_the_event_exactly_at_the_cutoff() {
+        // The docstring promises "at or after" (>=). An event whose ts equals the cutoff MUST go,
+        // so a future refactor to `>` is caught here.
+        let mut conn = crate::open_in_memory().unwrap();
+        insert_event(&conn, &NewEvent { ts: 5_000, source: "capture", kind: "text",
+            app_bundle_id: None, window_title: None, content: "boundary note", content_hash: "b",
+            dwell_ms: 0, display_id: None, window_bounds: None }).unwrap();
+        let report = delete_since(&mut conn, 5_000).unwrap();
+        assert_eq!(report.events, 1, "ts == cutoff must be deleted (>=, not >)");
+        let n: i64 = conn.query_row("SELECT count(*) FROM event_log", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 0);
     }
 
     #[test]
