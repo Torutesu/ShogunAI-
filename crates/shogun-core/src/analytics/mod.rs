@@ -10,6 +10,9 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::time::Duration;
 
+#[cfg(feature = "net")]
+pub mod reqwest_transport;
+
 /// 1イベントのプロパティ集合。
 pub type Props = serde_json::Map<String, Value>;
 
