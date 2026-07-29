@@ -202,6 +202,82 @@ pub mod mac {
         Ok(())
     }
 
+    // ---- Privacy preferences (opt-in analytics; #28 §9-1, contract point for #62) ------------
+    //
+    // Mirrors the `LlmSettings`/`llm.json` store above: a static Mutex cache, an `init_*` loader
+    // called once at setup, and a path helper under the app-data dir. The KEY difference is intent
+    // — this is a NON-secret user preference, so a JSON file is the right home (secrets stay in the
+    // Keychain, invariant 7). Default is OFF: analytics is opt-IN, never on until the user says so.
+
+    #[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
+    pub struct PrivacyPrefs {
+        /// Anonymous, aggregated usage stats. OFF by default (opt-in) — #28 §9-1. The `bool`
+        /// default (`false`) IS the opt-out default, so `#[derive(Default)]` is load-bearing here:
+        /// a fresh install, or a `privacy.json` that fails to parse, lands on analytics OFF.
+        pub analytics_enabled: bool,
+    }
+
+    static PRIVACY_PREFS: std::sync::Mutex<Option<PrivacyPrefs>> = std::sync::Mutex::new(None);
+
+    fn privacy_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+        use tauri::Manager;
+        app.path().app_data_dir().ok().map(|d| d.join("privacy.json"))
+    }
+
+    /// Load persisted privacy prefs into the in-memory copy. Called once at setup (mirrors
+    /// `init_llm_settings`). A missing or unreadable file leaves the opt-out default in place.
+    pub fn init_privacy_prefs(app: &tauri::AppHandle) {
+        let mut p = PrivacyPrefs::default();
+        if let Some(path) = privacy_path(app) {
+            if let Ok(text) = std::fs::read_to_string(path) {
+                if let Ok(saved) = serde_json::from_str::<PrivacyPrefs>(&text) {
+                    p = saved;
+                }
+            }
+        }
+        eprintln!("[inline] analytics enabled = {}", p.analytics_enabled);
+        if let Ok(mut g) = PRIVACY_PREFS.lock() {
+            *g = Some(p);
+        }
+    }
+
+    /// The one gate every analytics/telemetry send MUST pass through (#28; the contract point for
+    /// the #62 PostHog work). Fails closed: if the cache is unreadable or unset, analytics is OFF.
+    #[allow(dead_code)]
+    pub fn analytics_enabled() -> bool {
+        PRIVACY_PREFS
+            .lock()
+            .ok()
+            .and_then(|g| g.clone())
+            .unwrap_or_default()
+            .analytics_enabled
+    }
+
+    /// Current privacy prefs for the Settings UI. Defaults (analytics OFF) when unset.
+    #[tauri::command]
+    pub fn get_privacy_prefs() -> PrivacyPrefs {
+        PRIVACY_PREFS.lock().ok().and_then(|g| g.clone()).unwrap_or_default()
+    }
+
+    /// Turn anonymous usage stats on or off, persisted to `privacy.json`. The value the user sets
+    /// here is the only thing `analytics_enabled()` (and therefore any future send) reads.
+    #[tauri::command]
+    pub fn set_analytics_enabled(enabled: bool, app: tauri::AppHandle) -> Result<(), String> {
+        let p = PrivacyPrefs { analytics_enabled: enabled };
+        if let Some(path) = privacy_path(&app) {
+            if let Some(dir) = path.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+            let json = serde_json::to_string_pretty(&p).map_err(|e| e.to_string())?;
+            std::fs::write(&path, json).map_err(|e| format!("save failed: {e}"))?;
+        }
+        if let Ok(mut g) = PRIVACY_PREFS.lock() {
+            *g = Some(p);
+        }
+        eprintln!("[inline] analytics_enabled → {enabled}");
+        Ok(())
+    }
+
     // ---- AX helpers -------------------------------------------------------------------------
 
     /// Copy a string attribute off an element (create rule; released here). `None` if absent or not
