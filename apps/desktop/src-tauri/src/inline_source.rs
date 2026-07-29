@@ -572,6 +572,28 @@ pub mod mac {
         Ok(())
     }
 
+    /// Last 4 characters of the ACTIVE provider's BYOK key for the Settings read-back echo, or
+    /// `None` when no key is set. Only the 4-char suffix crosses to the webview — the full key
+    /// stays in Rust and is NEVER returned or logged (invariant 7 / NFR-SEC-02). A key too short
+    /// to have 4 chars is masked entirely rather than echoed.
+    #[tauri::command]
+    pub fn byok_key_last4() -> Option<String> {
+        let provider = current_settings().provider;
+        keychain_byok(&provider).and_then(|k| {
+            let k = k.trim();
+            if k.is_empty() {
+                return None;
+            }
+            // Mask entirely rather than echo a key too short to have a 4-char suffix, so the
+            // full secret is never returned (invariant 7). Otherwise take the last 4 only.
+            if k.chars().count() < 4 {
+                Some("····".to_string())
+            } else {
+                Some(Secret::new(k).last4())
+            }
+        })
+    }
+
     /// Opt-in echo mock, for exercising the AX read→insert loop on device without a key.
     ///
     /// Off unless `SHOGUN_MOCK_AGENT=1`. It used to be the automatic fallback whenever a key was

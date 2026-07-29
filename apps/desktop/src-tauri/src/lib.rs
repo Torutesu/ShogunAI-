@@ -149,6 +149,7 @@ pub fn run() {
         inline_source::mac::ui_log,
         inline_source::mac::set_byok_key,
         inline_source::mac::clear_byok_key,
+        inline_source::mac::byok_key_last4,
         inline_source::mac::get_llm_settings,
         inline_source::mac::set_llm_settings,
         inline_source::mac::resolve_state_item,

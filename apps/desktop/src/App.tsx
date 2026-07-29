@@ -1741,12 +1741,26 @@ function PrivacySecuritySection(props: {
   onDeleted: () => void;
 }): JSX.Element {
   const { hasKey, keyRejected, onDeleted } = props;
-  // BYOK key entry: the key goes straight to the macOS Keychain via Rust (never a file/DB/log),
-  // and is never read back — so "set" vs "not set" is all the UI can and should show.
+  // BYOK key entry: the key goes straight to the macOS Keychain via Rust (never a file/DB/log).
+  // Only the last 4 chars are ever read back (invariant 7 / NFR-SEC-02) — the full key stays in
+  // Rust — so the read-back echoes "Connected ··1234", mirroring the Composio card in this screen.
   const [keyInput, setKeyInput] = useState("");
   const [keyState, setKeyState] = useState<boolean>(hasKey);
+  const [keyLast4, setKeyLast4] = useState("");
   const [keyMsg, setKeyMsg] = useState("");
   useEffect(() => setKeyState(hasKey), [hasKey]);
+  // Fetch the active provider's last-4 for the read-back echo. Re-runs whenever key presence
+  // flips (save/remove/wipe all funnel through `keyState`) so the suffix stays accurate.
+  const refreshLast4 = useCallback((): void => {
+    if (!IN_TAURI) return;
+    void invoke<string | null>("byok_key_last4")
+      .then((l4) => setKeyLast4(l4 ?? ""))
+      .catch(() => setKeyLast4(""));
+  }, []);
+  useEffect(() => {
+    if (keyState) refreshLast4();
+    else setKeyLast4("");
+  }, [keyState, refreshLast4]);
   // Agent-lane provider + model (non-secret; the key is per-provider in the Keychain).
   const [provider, setProvider] = useState("anthropic");
   const [model, setModel] = useState("");
@@ -1893,7 +1907,13 @@ function PrivacySecuritySection(props: {
       </div>
       <div className="set__hint">{t.modelHint}</div>
       <div className={`set__hint${keyRejected ? " is-err" : keyState ? " is-ok" : ""}`}>
-        {keyRejected ? t.keyRejected : keyState ? t.keyPresent : t.keyAbsent}
+        {keyRejected
+          ? t.keyRejected
+          : keyState
+            ? keyLast4
+              ? `${t.keyPresent} ·· ${keyLast4}`
+              : t.keyPresent
+            : t.keyAbsent}
       </div>
       <div className="set__hint">{t.keyScope}</div>
       <div className="keyrow">
