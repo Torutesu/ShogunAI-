@@ -43,6 +43,59 @@ impl Classifier for LocalRuleClassifier {
     }
 }
 
+/// Turns a thread's day of event texts into a one-line summary written to `threads.summary`. Like
+/// [`Classifier`], this is the invariant-5 boundary: only the on-device **Batch/Select-KK**
+/// summariser may touch a model, and it is injected — never referenced here. `None` means "nothing
+/// worth summarising" and the caller leaves the summary unwritten.
+pub trait Summarizer {
+    fn summarize(&self, events: &[shogun_memory::event_log::EventText]) -> Option<String>;
+}
+
+/// The always-available, network-free summariser (the Linux-test default): pull each event's lead
+/// sentence, join them, and cap the whole thing. Extractive and deterministic — no model, no clock,
+/// no RNG — so the runner stays Linux-testable end to end. The on-device build swaps in a Batch
+/// abstractive summariser without changing this file (a separate PR).
+#[derive(Debug, Default, Clone, Copy)]
+pub struct LocalExtractiveSummarizer;
+
+/// Max characters an extractive summary may carry. A summary is always shorter than its input: this
+/// caps the join, and each event contributes only its lead sentence, so the output cannot exceed
+/// the source.
+const EXTRACTIVE_SUMMARY_CHARS: usize = 280;
+
+impl Summarizer for LocalExtractiveSummarizer {
+    fn summarize(&self, events: &[shogun_memory::event_log::EventText]) -> Option<String> {
+        if events.is_empty() {
+            return None;
+        }
+        let mut out = String::new();
+        for e in events {
+            // The lead sentence, up to the first terminator (Latin or CJK).
+            let lead = e
+                .content
+                .split(['.', '!', '?', '。', '！', '？'])
+                .find(|s| !s.trim().is_empty())
+                .unwrap_or("")
+                .trim();
+            if lead.is_empty() {
+                continue;
+            }
+            if !out.is_empty() {
+                out.push_str(" / ");
+            }
+            out.push_str(lead);
+            if out.chars().count() >= EXTRACTIVE_SUMMARY_CHARS {
+                break;
+            }
+        }
+        if out.is_empty() {
+            return None;
+        }
+        // Cut on a char boundary; never split a codepoint.
+        Some(out.chars().take(EXTRACTIVE_SUMMARY_CHARS).collect())
+    }
+}
+
 /// Half-life for nightly confidence decay (FR-ST-21). 30 days: a state row not re-evidenced for a
 /// month loses half its confidence, so stale inferences fade instead of lingering as fact.
 pub const CONFIDENCE_HALF_LIFE_MS: i64 = 30 * 24 * 60 * 60 * 1000;
@@ -50,15 +103,30 @@ pub const CONFIDENCE_HALF_LIFE_MS: i64 = 30 * 24 * 60 * 60 * 1000;
 /// The production runner: holds the shared DB handle and the injected classifier. `now_ms` is
 /// captured once at construction so every job in a cycle recomputes against the same instant
 /// (idempotent re-runs, FR-DC-04).
-pub struct DbDreamRunner<'a, C: Classifier> {
+pub struct DbDreamRunner<'a, C: Classifier, S: Summarizer> {
     db: &'a Db,
     classifier: &'a C,
+    summarizer: &'a S,
     now_ms: i64,
 }
 
-impl<'a, C: Classifier> DbDreamRunner<'a, C> {
-    pub fn new(db: &'a Db, classifier: &'a C, now_ms: i64) -> Self {
-        Self { db, classifier, now_ms }
+impl<'a, C: Classifier, S: Summarizer> DbDreamRunner<'a, C, S> {
+    pub fn new(db: &'a Db, classifier: &'a C, summarizer: &'a S, now_ms: i64) -> Self {
+        Self { db, classifier, summarizer, now_ms }
+    }
+
+    /// Compression (Full only): summarise each thread active in the window and fill
+    /// `threads.summary` (Issue #63). The summariser is the injected seam (local-extractive or the
+    /// on-device Batch one). A thread the summariser has nothing to say about (`None`) is skipped —
+    /// this must never fail the sequence, so every step is fallible-but-recoverable.
+    fn run_compression<Sum: Summarizer>(&self, summarizer: &Sum, from_ts: i64, to_ts: i64) -> Result<(), String> {
+        for t in self.db.active_threads_between(from_ts, to_ts) {
+            let events = self.db.thread_event_texts(&t.thread_key);
+            if let Some(summary) = summarizer.summarize(&events) {
+                self.db.set_thread_summary(&t.thread_key, &summary);
+            }
+        }
+        Ok(())
     }
 
     /// Consolidation (Full only): classify the window's events and persist *new* candidates,
@@ -266,14 +334,14 @@ fn description_of(c: &Candidate) -> String {
     }
 }
 
-impl<C: Classifier> DreamJobRunner for DbDreamRunner<'_, C> {
+impl<C: Classifier, S: Summarizer> DreamJobRunner for DbDreamRunner<'_, C, S> {
     fn run(&self, kind: JobKind, from_ts: i64, to_ts: i64) -> Result<(), String> {
         match kind {
             JobKind::Consolidation => self.consolidate(from_ts, to_ts),
-            // Compression's real effect (LLM day-summary) rides the Batch lane on-device; the
-            // Linux build has no local summariser, so it is a structural no-op that still records
-            // as done (it must never block the sequence).
-            JobKind::Compression => Ok(()),
+            // Compression summarises the window's active threads through the injected summariser
+            // (local-extractive by default, Batch on-device). It must never block the sequence:
+            // threads with nothing to summarise are skipped, not failed.
+            JobKind::Compression => self.run_compression(self.summarizer, from_ts, to_ts),
             JobKind::StateUpdate => self.state_update(),
             JobKind::ConfidenceRecalc => self.confidence_recalc(),
             JobKind::ColdDemotion => self.cold_demotion(),
@@ -306,7 +374,8 @@ mod tests {
         assert!(id > 0);
 
         let clf = LocalRuleClassifier;
-        let runner = DbDreamRunner::new(&db, &clf, now);
+        let sum = LocalExtractiveSummarizer;
+        let runner = DbDreamRunner::new(&db, &clf, &sum, now);
         let report = run_cycle(&db, &runner, "cycle-1", CycleKind::Full, now - 86_400_000, now);
         assert!(report.is_complete(), "full cycle should complete: {report:?}");
 
@@ -323,7 +392,8 @@ mod tests {
         db.capture(&make_ev(now - 1000, "I'll send the report.", "h1")).unwrap();
 
         let clf = LocalRuleClassifier;
-        let runner = DbDreamRunner::new(&db, &clf, now);
+        let sum = LocalExtractiveSummarizer;
+        let runner = DbDreamRunner::new(&db, &clf, &sum, now);
         // run consolidation twice over the same window
         runner.run(JobKind::Consolidation, now - 86_400_000, now).unwrap();
         runner.run(JobKind::Consolidation, now - 86_400_000, now).unwrap();
@@ -351,7 +421,8 @@ mod tests {
         )
         .unwrap();
         let clf = LocalRuleClassifier;
-        let runner = DbDreamRunner::new(&db, &clf, now);
+        let sum = LocalExtractiveSummarizer;
+        let runner = DbDreamRunner::new(&db, &clf, &sum, now);
         runner.run(JobKind::StateUpdate, 0, now).unwrap();
         assert!(db.commitments_due(now)[0].overdue, "past-due open commitment must be overdue");
     }
@@ -368,7 +439,8 @@ mod tests {
             }
         }
         let clf = Boom;
-        let runner = DbDreamRunner::new(&db, &clf, now);
+        let sum = LocalExtractiveSummarizer;
+        let runner = DbDreamRunner::new(&db, &clf, &sum, now);
         let report = run_cycle(&db, &runner, "deg-1", CycleKind::Degraded, 0, now);
         assert!(report.is_complete());
     }
@@ -505,6 +577,65 @@ mod tests {
         assert!(parse_batch_classification(&results).is_empty());
     }
 
+    #[test]
+    fn local_extractive_summarizer_produces_nonempty_summary_shorter_than_input() {
+        let events = vec![
+            EventText { id: 1, content: "決めた: 金曜に出す。残りは月曜。".into() },
+            EventText { id: 2, content: "Next up is the invoice review. Then the deck.".into() },
+        ];
+        let input_len: usize = events.iter().map(|e| e.content.chars().count()).sum();
+        let s = LocalExtractiveSummarizer.summarize(&events).unwrap();
+        assert!(!s.is_empty());
+        // Extractive: the output never exceeds the source (lead sentences only, then capped).
+        assert!(s.chars().count() <= input_len, "summary must be no longer than its input");
+    }
+
+    #[test]
+    fn local_extractive_summarizer_empty_input_is_none() {
+        assert!(LocalExtractiveSummarizer.summarize(&[]).is_none());
+    }
+
+    #[test]
+    fn local_extractive_summarizer_is_deterministic() {
+        let events = vec![EventText { id: 1, content: "same in. same out.".into() }];
+        assert_eq!(
+            LocalExtractiveSummarizer.summarize(&events),
+            LocalExtractiveSummarizer.summarize(&events)
+        );
+    }
+
+    #[test]
+    fn compression_fills_thread_summary() {
+        let now = 100 * 24 * 60 * 60 * 1000;
+        let db = db_at(now);
+        // A titled capture derives a thread_key, so the thread exists and is "active" at `now`.
+        db.capture(&make_ev_titled(now - 1000, "I'll send the report. Waiting on legal.", "h1", "Q3 pricing"))
+            .unwrap();
+        let thread_key = db.active_threads_between(0, now).first().map(|t| t.thread_key.clone());
+        let thread_key = thread_key.expect("a titled capture must create a thread");
+        assert_eq!(db.thread_summary(&thread_key), None, "summary is unset before Compression");
+
+        let clf = LocalRuleClassifier;
+        let sum = LocalExtractiveSummarizer;
+        let runner = DbDreamRunner::new(&db, &clf, &sum, now);
+        runner.run(JobKind::Compression, 0, now + 1).unwrap();
+
+        let summary = db.thread_summary(&thread_key).expect("Compression must fill the summary");
+        assert!(!summary.is_empty());
+        assert!(summary.contains("send the report"), "summary carries the thread's lead sentence");
+    }
+
+    #[test]
+    fn compression_does_not_panic_on_an_empty_window() {
+        let now = 100 * 24 * 60 * 60 * 1000;
+        let db = db_at(now);
+        let clf = LocalRuleClassifier;
+        let sum = LocalExtractiveSummarizer;
+        let runner = DbDreamRunner::new(&db, &clf, &sum, now);
+        // No threads in the window: must complete cleanly, never block the sequence.
+        runner.run(JobKind::Compression, 0, now).unwrap();
+    }
+
     fn make_ev<'a>(ts: i64, content: &'a str, hash: &'a str) -> shogun_memory::event_log::NewEvent<'a> {
         shogun_memory::event_log::NewEvent {
             ts,
@@ -512,6 +643,26 @@ mod tests {
             kind: "text",
             app_bundle_id: None,
             window_title: None,
+            content,
+            content_hash: hash,
+            dwell_ms: 0,
+            display_id: None,
+            window_bounds: None,
+        }
+    }
+
+    fn make_ev_titled<'a>(
+        ts: i64,
+        content: &'a str,
+        hash: &'a str,
+        title: &'a str,
+    ) -> shogun_memory::event_log::NewEvent<'a> {
+        shogun_memory::event_log::NewEvent {
+            ts,
+            source: "capture",
+            kind: "text",
+            app_bundle_id: Some("com.apple.Safari"),
+            window_title: Some(title),
             content,
             content_hash: hash,
             dwell_ms: 0,

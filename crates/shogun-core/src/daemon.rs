@@ -907,6 +907,42 @@ impl Db {
         self.conn.lock().ok().and_then(|c| event_log::events_in_range(&c, from_ts, to_ts).ok()).unwrap_or_default()
     }
 
+    /// Threads whose last activity is in `[from_ts, to_ts]` — the window a Compression job
+    /// summarises (Issue #63). Empty on a lock/read failure so a hiccup fails the job (leaving the
+    /// cycle resumable) rather than crashing the daemon.
+    pub fn active_threads_between(&self, from_ts: i64, to_ts: i64) -> Vec<shogun_memory::thread::ThreadRow> {
+        self.conn
+            .lock()
+            .ok()
+            .and_then(|c| shogun_memory::thread::active_between(&c, from_ts, to_ts).ok())
+            .unwrap_or_default()
+    }
+
+    /// Every event body in one thread, oldest first — the material the Compression summariser reads
+    /// (Issue #63). Empty on a lock/read failure.
+    pub fn thread_event_texts(&self, thread_key: &str) -> Vec<event_log::EventText> {
+        self.conn
+            .lock()
+            .ok()
+            .and_then(|c| shogun_memory::thread::event_texts(&c, thread_key).ok())
+            .unwrap_or_default()
+    }
+
+    /// Write a thread's day-summary (Issue #63). Best-effort: a lock/write failure is swallowed so
+    /// a hiccup fails the job, not the daemon. Uses the daemon clock for `updated_at`.
+    pub fn set_thread_summary(&self, thread_key: &str, summary: &str) {
+        let now = self.now_ms();
+        if let Ok(c) = self.conn.lock() {
+            let _ = shogun_memory::thread::set_summary(&c, thread_key, summary, now);
+        }
+    }
+
+    /// Read back a thread's summary (`None` when unset, absent, or on a read failure) — the
+    /// Compression job's effect is verified through this, since `ThreadRow` does not carry it.
+    pub fn thread_summary(&self, thread_key: &str) -> Option<String> {
+        self.conn.lock().ok().and_then(|c| shogun_memory::thread::get_summary(&c, thread_key).ok().flatten())
+    }
+
     /// Descriptions already present in `commitments` + `open_loops`, for consolidation dedup — so a
     /// re-run over the same range (crash-resume, FR-DC-04) doesn't add the same candidate twice.
     /// Distinct hours in `[from_ts, to_ts)` that produced at least one event — the Coverage
