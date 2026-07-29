@@ -136,6 +136,85 @@ pub fn attach_event(
     Ok(())
 }
 
+/// Sessions whose `started_at` falls in `[from_ts, to_ts]` — the window the Dream Cycle
+/// Compression job summarises (Issue #63), the interval analogue of [`crate::thread::active_between`].
+/// Inclusive on both ends so a session opened exactly on a window edge is still summarised. Ordered
+/// oldest-first for deterministic processing.
+pub fn active_between(
+    conn: &Connection,
+    from_ts: i64,
+    to_ts: i64,
+) -> Result<Vec<i64>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT id FROM sessions WHERE started_at BETWEEN ?1 AND ?2 ORDER BY started_at, id",
+    )?;
+    let rows = stmt.query_map(params![from_ts, to_ts], |r| r.get::<_, i64>(0))?;
+    rows.collect()
+}
+
+/// Every event body attached to one session, oldest first — the material the Compression summariser
+/// reads (Issue #63). Mirrors [`crate::thread::event_texts`] but keys on `event_log.session_id`.
+pub fn event_texts(
+    conn: &Connection,
+    session_id: i64,
+) -> Result<Vec<crate::event_log::EventText>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT id, content FROM event_log WHERE session_id = ?1 ORDER BY ts, id",
+    )?;
+    let rows = stmt.query_map(params![session_id], |r| {
+        Ok(crate::event_log::EventText { id: r.get(0)?, content: r.get(1)? })
+    })?;
+    rows.collect()
+}
+
+/// Write a session's summary (Issue #63). Like [`crate::thread::set_summary`], the summary is
+/// generated content, so it is redacted on write — a summariser could echo a secret that was in the
+/// source events. `updated_at` advances so a re-summarised session reads as touched.
+pub fn set_summary(
+    conn: &Connection,
+    session_id: i64,
+    summary: &str,
+    now_ms: i64,
+) -> Result<(), rusqlite::Error> {
+    let redacted = crate::redact::redact(summary);
+    conn.execute(
+        "UPDATE sessions SET summary = ?1, updated_at = ?2 WHERE id = ?3",
+        params![redacted.as_ref(), now_ms, session_id],
+    )?;
+    Ok(())
+}
+
+/// Read back a session's summary (`None` when unset or the session is absent) — the Compression
+/// job's effect is verified through this, since [`Session`] does not carry `summary`.
+pub fn get_summary(conn: &Connection, session_id: i64) -> Result<Option<String>, rusqlite::Error> {
+    conn.query_row("SELECT summary FROM sessions WHERE id = ?1", [session_id], |r| r.get(0))
+        .or_else(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => Ok(None),
+            other => Err(other),
+        })
+}
+
+/// The DISTINCT sessions owning the given events — the query-time consume path (Issue #63): given
+/// the events retrieved for a query, find which sessions to pull summaries from. An empty input
+/// yields an empty result without ever building an `IN ()`, which is not valid SQL.
+pub fn session_ids_for_events(
+    conn: &Connection,
+    event_ids: &[i64],
+) -> Result<Vec<i64>, rusqlite::Error> {
+    if event_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let placeholders = vec!["?"; event_ids.len()].join(",");
+    let sql = format!(
+        "SELECT DISTINCT session_id FROM event_log \
+          WHERE id IN ({placeholders}) AND session_id IS NOT NULL"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let params = rusqlite::params_from_iter(event_ids.iter());
+    let rows = stmt.query_map(params, |r| r.get::<_, i64>(0))?;
+    rows.collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -223,5 +302,99 @@ mod tests {
             .query_row("SELECT session_id FROM event_log WHERE id = ?1", [ev_id], |r| r.get(0))
             .unwrap();
         assert_eq!(got, Some(id));
+    }
+
+    fn attach_ev(conn: &Connection, session_id: i64, content: &str, hash: &str, ts: i64) -> i64 {
+        let ev = crate::event_log::NewEvent {
+            ts,
+            source: "capture",
+            kind: "text",
+            app_bundle_id: Some("us.zoom.xos"),
+            window_title: Some("Zoom Meeting"),
+            content,
+            content_hash: hash,
+            dwell_ms: 0,
+            display_id: None,
+            window_bounds: None,
+        };
+        let ev_id = crate::event_log::insert(conn, &ev).unwrap();
+        attach_event(conn, session_id, ev_id).unwrap();
+        ev_id
+    }
+
+    #[test]
+    fn active_between_is_inclusive_and_ordered_and_summary_round_trips() {
+        let conn = crate::open_in_memory().unwrap();
+        let a = open(&conn, &meeting(100)).unwrap();
+        let b = open(&conn, &meeting(300)).unwrap();
+        let _c = open(&conn, &meeting(500)).unwrap();
+
+        // [100, 300] is inclusive on both ends → sessions a and b, oldest-first.
+        let got = active_between(&conn, 100, 300).unwrap();
+        assert_eq!(got, vec![a, b], "inclusive on both ends, ordered oldest-first");
+
+        // event_texts returns the session's attached bodies in ts,id order.
+        attach_ev(&conn, a, "first session body", "h1", 110);
+        attach_ev(&conn, a, "second session body", "h2", 120);
+        let texts = event_texts(&conn, a).unwrap();
+        assert_eq!(texts.len(), 2);
+        assert_eq!(texts[0].content, "first session body");
+        assert_eq!(texts[1].content, "second session body");
+
+        // set_summary writes it, get_summary reads it back; Session does not expose it.
+        assert_eq!(get_summary(&conn, a).unwrap(), None, "unset until written");
+        set_summary(&conn, a, "a day summary", 9_999).unwrap();
+        assert_eq!(get_summary(&conn, a).unwrap().as_deref(), Some("a day summary"));
+        // An absent session yields None, not an error.
+        assert_eq!(get_summary(&conn, 99_999).unwrap(), None);
+    }
+
+    #[test]
+    fn set_summary_redacts_generated_text() {
+        let conn = crate::open_in_memory().unwrap();
+        let id = open(&conn, &meeting(100)).unwrap();
+        set_summary(&conn, id, "leaked sk-ant-abc123def456 key", 1).unwrap();
+        let stored = get_summary(&conn, id).unwrap().unwrap();
+        assert!(!stored.contains("sk-ant-abc123def456"), "a secret must not survive into the summary");
+    }
+
+    #[test]
+    fn session_ids_for_events_returns_owning_sessions_and_handles_empty() {
+        let conn = crate::open_in_memory().unwrap();
+        let a = open(&conn, &meeting(100)).unwrap();
+        let b = open(&conn, &meeting(300)).unwrap();
+        let ea1 = attach_ev(&conn, a, "a1", "h1", 110);
+        let ea2 = attach_ev(&conn, a, "a2", "h2", 120);
+        let eb1 = attach_ev(&conn, b, "b1", "h3", 310);
+        // An unattached event: present in the log but owned by no session.
+        let orphan = crate::event_log::insert(
+            &conn,
+            &crate::event_log::NewEvent {
+                ts: 400,
+                source: "capture",
+                kind: "text",
+                app_bundle_id: None,
+                window_title: None,
+                content: "orphan",
+                content_hash: "h4",
+                dwell_ms: 0,
+                display_id: None,
+                window_bounds: None,
+            },
+        )
+        .unwrap();
+
+        // Empty input → empty Vec (no empty IN () built).
+        assert!(session_ids_for_events(&conn, &[]).unwrap().is_empty());
+
+        // Two events of a, one of b → the two DISTINCT owning sessions.
+        let mut got = session_ids_for_events(&conn, &[ea1, ea2, eb1]).unwrap();
+        got.sort_unstable();
+        let mut want = vec![a, b];
+        want.sort_unstable();
+        assert_eq!(got, want, "DISTINCT owning sessions");
+
+        // An orphan event contributes nothing (session_id IS NULL is filtered).
+        assert!(session_ids_for_events(&conn, &[orphan]).unwrap().is_empty());
     }
 }

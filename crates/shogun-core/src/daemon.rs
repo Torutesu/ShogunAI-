@@ -31,6 +31,10 @@ use crate::dreamcycle::plan::{remaining, CycleKind, JobKind, JobRun, JobState, D
 /// catches them.
 const RECENT_DEDUP_WINDOW: usize = 8;
 
+/// `inline_memory` に渡す fact 上限。`assemble_context` と `assemble_context_compressed` の
+/// 両パスで一致させ、fact の一貫性を保つ。
+const FACT_LIMIT: usize = 8;
+
 /// The outcome of ingesting a batch of synced integration items ([`Db::ingest_integration`]):
 /// how many were processed, how many were genuinely new (the `IntegrationSynced` bus count), and
 /// how many low-confidence state candidates the new items yielded.
@@ -476,6 +480,15 @@ impl Db {
         .ok()
     }
 
+    /// Attach an already-recorded event to a session (FR-MT-05). Best-effort: the event is durable
+    /// whether or not it attaches, so a lock/write failure is swallowed. Returns whether it stuck.
+    pub fn attach_event_to_meeting(&self, session_id: i64, event_id: i64) -> bool {
+        self.conn
+            .lock()
+            .ok()
+            .is_some_and(|conn| shogun_memory::session::attach_event(&conn, session_id, event_id).is_ok())
+    }
+
     /// Close a meeting interval. Idempotent — the first close wins (FR-MT-11).
     pub fn close_meeting(&self, id: i64) -> bool {
         let now = self.now_ms();
@@ -611,17 +624,52 @@ impl Db {
     /// (High stated as fact, Medium prefixed `possibly:`, Low dropped) so a low-confidence guess is
     /// never handed to the model as a fact. Capped at `limit` lines.
     pub fn inline_memory(&self, limit: usize) -> Vec<String> {
-        let mut pairs: Vec<(String, f64)> = Vec::new();
-        for c in self.commitments_due(self.now_ms()) {
-            pairs.push((format!("you committed: {}", c.description), c.confidence));
+        self.inline_memory_with_refs(limit).into_iter().map(|(s, _, _)| s).collect()
+    }
+
+    /// `inline_memory` の provenance 付き版: (confidence ゲート済み fact, 由来テーブル, row id)。
+    /// `inline_memory`（文字列版・公開 API）はこれに委譲する（DRY・API 不変）。
+    /// commitments → open_loops の順、同じ confidence gate、同じ truncate。
+    fn inline_memory_with_refs(
+        &self,
+        limit: usize,
+    ) -> Vec<(String, shogun_fusion::block::StateTable, i64)> {
+        use shogun_fusion::block::StateTable;
+        use shogun_fusion::confidence::{treat_fact, Treatment};
+        let Ok(conn) = self.conn.lock() else { return Vec::new() };
+        let commitments = state::list_commitments(&conn).unwrap_or_default();
+        let open_loops = state::list_open_loops(&conn).unwrap_or_default();
+        drop(conn);
+
+        let mut out: Vec<(String, StateTable, i64)> = Vec::new();
+        for c in commitments {
+            // mirror commitments_due: skip done/cancelled rows
+            if c.status == "done" || c.status == "cancelled" {
+                continue;
+            }
+            let text = format!("you committed: {}", c.description);
+            match treat_fact(&text, c.confidence) {
+                Treatment::Fact(s) | Treatment::Possible(s) => {
+                    out.push((s, StateTable::Commitments, c.id));
+                }
+                Treatment::Excluded => {}
+            }
         }
-        for l in self.open_loops() {
-            pairs.push((format!("open loop: {}", l.description), l.confidence));
+        for l in open_loops {
+            // mirror open_loops: skip closed rows
+            if l.status == "closed" {
+                continue;
+            }
+            let text = format!("open loop: {}", l.description);
+            match treat_fact(&text, l.confidence) {
+                Treatment::Fact(s) | Treatment::Possible(s) => {
+                    out.push((s, StateTable::OpenLoops, l.id));
+                }
+                Treatment::Excluded => {}
+            }
         }
-        let refs: Vec<(&str, f64)> = pairs.iter().map(|(s, c)| (s.as_str(), *c)).collect();
-        let mut facts = shogun_fusion::confidence::assemble_facts(&refs);
-        facts.truncate(limit);
-        facts
+        out.truncate(limit);
+        out
     }
 
     /// Ingest turns recovered from an AI coding-tool session log (Phase R4).
@@ -832,7 +880,7 @@ impl Db {
     /// window capture cannot eat the whole prompt. Search is FTS-only until the embedding model
     /// lands (`search_hybrid` takes the vector half then, with no change here).
     pub fn assemble_context(&self, query: &str, max_hits: usize, excerpt_chars: usize) -> ContextPack {
-        let facts = self.inline_memory(8);
+        let facts = self.inline_memory(FACT_LIMIT);
         let evidence = self
             .search(query, max_hits)
             .into_iter()
@@ -867,10 +915,25 @@ impl Db {
         let pack = self.assemble_context(query, max_hits, excerpt_chars);
         let est = HeuristicEstimator::default();
 
-        let mut blocks = facts_to_blocks(&pack.facts, &est);
+        // Task 2: fact ブロックは実 state id 付きの ref 版から組み立てる。
+        let mut blocks = facts_to_blocks(&self.inline_memory_with_refs(FACT_LIMIT), &est);
         blocks.extend(evidence_to_blocks(&pack.evidence, 0.7, &est));
         // 解決済みスレッドの保存済み要約を候補に加える（差し替えレバー）。
         blocks.extend(self.thread_summaries_to_blocks(thread_keys, &est));
+        // 取得 evidence の属する session の保存済み要約を候補に加える（thread と対称・Issue #63）。
+        let evidence_event_ids: Vec<i64> = pack.evidence.iter().map(|e| e.event_id).collect();
+        for sid in self.session_ids_for_events(&evidence_event_ids) {
+            if let Some(s) = self.session_summary(sid) {
+                blocks.push(shogun_fusion::block::ContextBlock::new(
+                    shogun_fusion::block::BlockRef::Session(sid),
+                    shogun_fusion::block::SourceKind::SessionSummary,
+                    s,
+                    // 参照先として retrieved evidence が属する＝関連度は高い。confidence は要約＝1.0。
+                    shogun_fusion::block::ScoreInputs { relevance: 0.85, freshness: 0.7, task_link: 0.5, confidence: 1.0 },
+                    &est,
+                ));
+            }
+        }
 
         // 時間予算を超えたらフォールバック（raw をそのまま返す）。
         if started.elapsed().as_millis() as u64 > COMPRESS_BUDGET_MS {
@@ -890,17 +953,21 @@ impl Db {
 
         let out = compress(Candidates { blocks }, config);
         // 圧縮済みブロックから ContextPack を再構成（facts と evidence に振り分け）。
+        // Task 1: evidence の ts/source/title を raw pack から復元するため、
+        // event_id → &Evidence マップを事前に作る。
+        let ev_by_id: std::collections::HashMap<i64, &Evidence> =
+            pack.evidence.iter().map(|e| (e.event_id, e)).collect();
         let mut facts = Vec::new();
         let mut evidence = Vec::new();
         for b in &out.blocks {
             match b.id_ref {
-                shogun_fusion::block::BlockRef::Event(id) => evidence.push(Evidence {
-                    event_id: id,
-                    ts: 0,
-                    source: String::new(),
-                    title: None,
-                    excerpt: b.text.clone(),
-                }),
+                shogun_fusion::block::BlockRef::Event(id) => {
+                    let (ts, source, title) = ev_by_id
+                        .get(&id)
+                        .map(|e| (e.ts, e.source.clone(), e.title.clone()))
+                        .unwrap_or((0, String::new(), None));
+                    evidence.push(Evidence { event_id: id, ts, source, title, excerpt: b.text.clone() });
+                }
                 _ => facts.push(b.text.clone()),
             }
         }
@@ -1091,6 +1158,52 @@ impl Db {
     /// Compression job's effect is verified through this, since `ThreadRow` does not carry it.
     pub fn thread_summary(&self, thread_key: &str) -> Option<String> {
         self.conn.lock().ok().and_then(|c| shogun_memory::thread::get_summary(&c, thread_key).ok().flatten())
+    }
+
+    /// Sessions whose `started_at` is in `[from_ts, to_ts]` — the window a Compression job
+    /// summarises (Issue #63), the interval analogue of [`Self::active_threads_between`]. Empty on
+    /// a lock/read failure so a hiccup fails the job (leaving the cycle resumable) rather than
+    /// crashing the daemon.
+    pub fn active_sessions_between(&self, from_ts: i64, to_ts: i64) -> Vec<i64> {
+        self.conn
+            .lock()
+            .ok()
+            .and_then(|c| shogun_memory::session::active_between(&c, from_ts, to_ts).ok())
+            .unwrap_or_default()
+    }
+
+    /// Every event body attached to one session, oldest first — the material the Compression
+    /// summariser reads (Issue #63). Empty on a lock/read failure.
+    pub fn session_event_texts(&self, session_id: i64) -> Vec<event_log::EventText> {
+        self.conn
+            .lock()
+            .ok()
+            .and_then(|c| shogun_memory::session::event_texts(&c, session_id).ok())
+            .unwrap_or_default()
+    }
+
+    /// Write a session's day-summary (Issue #63). Best-effort: a lock/write failure is swallowed so
+    /// a hiccup fails the job, not the daemon. Uses the daemon clock for `updated_at`.
+    pub fn set_session_summary(&self, session_id: i64, summary: &str) {
+        let now = self.now_ms();
+        if let Ok(c) = self.conn.lock() {
+            let _ = shogun_memory::session::set_summary(&c, session_id, summary, now);
+        }
+    }
+
+    /// Read back a session's summary (`None` when unset, absent, or on a read failure).
+    pub fn session_summary(&self, session_id: i64) -> Option<String> {
+        self.conn.lock().ok().and_then(|c| shogun_memory::session::get_summary(&c, session_id).ok().flatten())
+    }
+
+    /// The DISTINCT sessions owning the given events — the query-time consume path (Issue #63).
+    /// Empty on a lock/read failure or empty input.
+    pub fn session_ids_for_events(&self, event_ids: &[i64]) -> Vec<i64> {
+        self.conn
+            .lock()
+            .ok()
+            .and_then(|c| shogun_memory::session::session_ids_for_events(&c, event_ids).ok())
+            .unwrap_or_default()
     }
 
     /// Descriptions already present in `commitments` + `open_loops`, for consolidation dedup — so a
@@ -1716,16 +1829,18 @@ fn evidence_to_blocks(evidence: &[Evidence], relevance: f64, est: &dyn TokenEsti
 }
 
 /// confidence ゲートを通した facts を圧縮ブロックへ正規化する。facts は既に
-/// `assemble_facts` を通っている（低 confidence は除外済み）。relevance はやや高めに固定
-/// （state は現在の作業に紐づく前提）、confidence は High 相当として 0.9。
-fn facts_to_blocks(facts: &[String], est: &dyn TokenEstimator) -> Vec<ContextBlock> {
+/// `treat_fact` を通っている（低 confidence は除外済み）。
+/// 各エントリは (表示テキスト, 由来テーブル, 実 row id) のタプル。
+/// relevance はやや高めに固定（state は現在の作業に紐づく前提）、confidence は High 相当として 0.9。
+fn facts_to_blocks(
+    facts: &[(String, shogun_fusion::block::StateTable, i64)],
+    est: &dyn TokenEstimator,
+) -> Vec<ContextBlock> {
     facts
         .iter()
-        .enumerate()
-        .map(|(i, f)| {
-            // provenance is coarse for facts this round — see design §7.
+        .map(|(f, table, id)| {
             ContextBlock::new(
-                BlockRef::State { table: shogun_fusion::block::StateTable::OpenLoops, id: i as i64 },
+                BlockRef::State { table: *table, id: *id },
                 SourceKind::StateFact,
                 f.clone(),
                 ScoreInputs { relevance: 0.6, freshness: 0.6, task_link: 0.6, confidence: 0.9 },
@@ -2870,6 +2985,92 @@ mod tests {
         assert!(!pack_c.facts.is_empty() || !pack_c.evidence.is_empty(), "全落ちしない");
     }
 
+    /// Task 1: 圧縮パスの evidence が raw pack の source/title/ts を保持することを検証。
+    #[test]
+    fn compressed_evidence_preserves_source_and_title() {
+        let db = Db::open_in_memory(clock(10_000)).unwrap();
+        for i in 0..3 {
+            db.capture(&ev("renewal report pricing detail", &format!("h{i}"), 100 + i)).unwrap();
+        }
+        let raw = db.assemble_context("renewal", 6, 600);
+        assert!(raw.evidence.iter().any(|e| !e.source.is_empty()), "raw has source");
+        let cfg = shogun_fusion::compress::CompressionConfig {
+            enabled: true,
+            budget_tokens: 100_000,
+            ..Default::default()
+        };
+        let (pack, _stats, _fell) = db.assemble_context_compressed("renewal", 6, 600, &[], &cfg);
+        // 予算十分＝全採用。各 evidence の source/title/ts が raw と一致（0/空でない）。
+        for e in &pack.evidence {
+            let orig = raw.evidence.iter().find(|o| o.event_id == e.event_id).unwrap();
+            assert_eq!(e.source, orig.source, "source mismatch for event_id={}", e.event_id);
+            assert_eq!(e.title, orig.title, "title mismatch for event_id={}", e.event_id);
+            assert_eq!(e.ts, orig.ts, "ts mismatch for event_id={}", e.event_id);
+        }
+    }
+
+    /// Task 2: `inline_memory_with_refs` が実 state row id と正しいテーブルを返し、
+    /// `inline_memory`（文字列版）と内容が一致することを検証。
+    #[test]
+    fn inline_memory_with_refs_carries_real_ids_and_tables() {
+        use shogun_fusion::block::StateTable;
+        use shogun_memory::state::{
+            CommitmentDirection, CommitmentStatus, NewCommitment, NewOpenLoop, OpenLoopKind,
+            Provenance,
+        };
+
+        let db = Db::open_in_memory(clock(1)).unwrap();
+        let e = db.capture(&ev("evidence for state", "h1", 1)).unwrap().0;
+        let prov = [Provenance::new(e)];
+
+        // 高 confidence の commitment と open_loop を 1 件ずつ挿入。
+        let cid = db
+            .insert_commitment(
+                &NewCommitment {
+                    direction: CommitmentDirection::Mine,
+                    counterparty_id: None,
+                    description: "send the test report",
+                    due_at: None,
+                    status: CommitmentStatus::Open,
+                    project_id: None,
+                    confidence: 0.9,
+                    now: 1,
+                },
+                &prov,
+            )
+            .expect("commitment insert");
+
+        let lid = db
+            .insert_open_loop(
+                &NewOpenLoop {
+                    kind: OpenLoopKind::WaitingOnThem,
+                    description: "waiting on test approval",
+                    counterparty_id: None,
+                    project_id: None,
+                    opened_at: 1,
+                    confidence: 0.9,
+                    now: 1,
+                },
+                &prov,
+            )
+            .expect("open loop insert");
+
+        let refs = db.inline_memory_with_refs(8);
+        assert!(
+            refs.iter().any(|(_, t, id)| *t == StateTable::Commitments && *id == cid),
+            "commitment の実 id が含まれるべき: {refs:?}"
+        );
+        assert!(
+            refs.iter().any(|(_, t, id)| *t == StateTable::OpenLoops && *id == lid),
+            "open_loop の実 id が含まれるべき: {refs:?}"
+        );
+
+        // inline_memory（文字列版）と本文が一致（委譲による不変）。
+        let strs = db.inline_memory(8);
+        let refs_strs: Vec<String> = refs.iter().map(|(s, _, _)| s.clone()).collect();
+        assert_eq!(strs, refs_strs, "inline_memory は inline_memory_with_refs に完全委譲するべき");
+    }
+
     #[test]
     fn thread_summary_substitutes_for_raw_turns_under_budget() {
         use shogun_fusion::compress::CompressionConfig;
@@ -2916,6 +3117,47 @@ mod tests {
         assert!(
             !joined.contains("detail"),
             "要約が raw ターンを押しのけるべき（生ターンの語が残っている）: {joined}"
+        );
+    }
+
+    #[test]
+    fn session_summary_of_retrieved_evidence_reaches_the_compressed_pack() {
+        use shogun_fusion::compress::CompressionConfig;
+
+        let db = Db::open_in_memory(clock(10_000)).unwrap();
+        // A meeting session, with a captured event attached to it that matches the query — so the
+        // event is retrieved as evidence and its owning session's summary is pulled in.
+        let sid = db.open_meeting(Some("Vendor sync"), Some("us.zoom.xos"), 0.6, "{}").unwrap();
+        let (ev_id, _) = db.capture(&ev("vendor renewal pricing discussion detail line", "h0", 100)).unwrap();
+        assert!(db.attach_event_to_meeting(sid, ev_id), "the event must attach to the session");
+        // A short session summary, token-efficient relative to the raw turn — carries a word the raw
+        // excerpt does not ("sign-off") so its arrival is unambiguous.
+        db.set_session_summary(sid, "Renewal priced at 12k; awaiting sign-off.");
+
+        // 十分予算: SessionSummary 由来テキストが pack に出る。
+        let cfg = CompressionConfig { enabled: true, budget_tokens: 100_000, ..Default::default() };
+        let (pack, _stats, fell_back) = db.assemble_context_compressed("renewal pricing", 6, 600, &[], &cfg);
+        assert!(!fell_back);
+        let joined = format!(
+            "{} {}",
+            pack.facts.join(" "),
+            pack.evidence.iter().map(|e| e.excerpt.clone()).collect::<Vec<_>>().join(" ")
+        );
+        assert!(joined.contains("sign-off"), "session の要約が pack に届くべき: {joined}");
+
+        // 予算逼迫: 短い要約(relevance 0.85)が raw ターンを押しのけて残る。
+        let tight = CompressionConfig { enabled: true, budget_tokens: 12, ..Default::default() };
+        let (pack_t, stats_t, fell_t) = db.assemble_context_compressed("renewal pricing", 6, 600, &[], &tight);
+        assert!(!fell_t);
+        assert!(stats_t.post_tokens <= 12, "予算内に収まる: post={}", stats_t.post_tokens);
+        let joined_t = format!(
+            "{} {}",
+            pack_t.facts.join(" "),
+            pack_t.evidence.iter().map(|e| e.excerpt.clone()).collect::<Vec<_>>().join(" ")
+        );
+        assert!(
+            joined_t.contains("sign-off") || joined_t.contains("12k"),
+            "予算逼迫下でも session 要約が生き残るべき: {joined_t}"
         );
     }
 }

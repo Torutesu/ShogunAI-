@@ -126,6 +126,15 @@ impl<'a, C: Classifier, S: Summarizer> DbDreamRunner<'a, C, S> {
                 self.db.set_thread_summary(&t.thread_key, &summary);
             }
         }
+        // Sessions carry the same day-summary treatment, symmetric to threads (Issue #63): a session
+        // active in the window is summarised through the same injected seam and its `summary` filled.
+        // A session the summariser has nothing to say about (`None`) is skipped, never failed.
+        for sid in self.db.active_sessions_between(from_ts, to_ts) {
+            let events = self.db.session_event_texts(sid);
+            if let Some(summary) = summarizer.summarize(&events) {
+                self.db.set_session_summary(sid, &summary);
+            }
+        }
         Ok(())
     }
 
@@ -623,6 +632,27 @@ mod tests {
         let summary = db.thread_summary(&thread_key).expect("Compression must fill the summary");
         assert!(!summary.is_empty());
         assert!(summary.contains("send the report"), "summary carries the thread's lead sentence");
+    }
+
+    #[test]
+    fn compression_fills_session_summary() {
+        let now = 100 * 24 * 60 * 60 * 1000;
+        let db = db_at(now);
+        // A meeting opened at `now` is "active" in a window covering it.
+        let sid = db.open_meeting(Some("Weekly sync"), Some("us.zoom.xos"), 0.6, "{}").unwrap();
+        // An event captured during it, attached to the session.
+        let (ev_id, _) = db.capture(&make_ev(now - 1000, "We decided to ship Friday. Legal to review.", "s1")).unwrap();
+        assert!(db.attach_event_to_meeting(sid, ev_id), "the event must attach");
+        assert_eq!(db.session_summary(sid), None, "summary is unset before Compression");
+
+        let clf = LocalRuleClassifier;
+        let sum = LocalExtractiveSummarizer;
+        let runner = DbDreamRunner::new(&db, &clf, &sum, now);
+        runner.run(JobKind::Compression, 0, now + 1).unwrap();
+
+        let summary = db.session_summary(sid).expect("Compression must fill the session summary");
+        assert!(!summary.is_empty());
+        assert!(summary.contains("ship Friday"), "summary carries the session's lead sentence");
     }
 
     #[test]
