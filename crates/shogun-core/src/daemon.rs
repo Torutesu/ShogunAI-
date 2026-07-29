@@ -615,17 +615,52 @@ impl Db {
     /// (High stated as fact, Medium prefixed `possibly:`, Low dropped) so a low-confidence guess is
     /// never handed to the model as a fact. Capped at `limit` lines.
     pub fn inline_memory(&self, limit: usize) -> Vec<String> {
-        let mut pairs: Vec<(String, f64)> = Vec::new();
-        for c in self.commitments_due(self.now_ms()) {
-            pairs.push((format!("you committed: {}", c.description), c.confidence));
+        self.inline_memory_with_refs(limit).into_iter().map(|(s, _, _)| s).collect()
+    }
+
+    /// `inline_memory` の provenance 付き版: (confidence ゲート済み fact, 由来テーブル, row id)。
+    /// `inline_memory`（文字列版・公開 API）はこれに委譲する（DRY・API 不変）。
+    /// commitments → open_loops の順、同じ confidence gate、同じ truncate。
+    fn inline_memory_with_refs(
+        &self,
+        limit: usize,
+    ) -> Vec<(String, shogun_fusion::block::StateTable, i64)> {
+        use shogun_fusion::block::StateTable;
+        use shogun_fusion::confidence::{treat_fact, Treatment};
+        let Ok(conn) = self.conn.lock() else { return Vec::new() };
+        let commitments = state::list_commitments(&conn).unwrap_or_default();
+        let open_loops = state::list_open_loops(&conn).unwrap_or_default();
+        drop(conn);
+
+        let mut out: Vec<(String, StateTable, i64)> = Vec::new();
+        for c in commitments {
+            // mirror commitments_due: skip done/cancelled rows
+            if c.status == "done" || c.status == "cancelled" {
+                continue;
+            }
+            let text = format!("you committed: {}", c.description);
+            match treat_fact(&text, c.confidence) {
+                Treatment::Fact(s) | Treatment::Possible(s) => {
+                    out.push((s, StateTable::Commitments, c.id));
+                }
+                Treatment::Excluded => {}
+            }
         }
-        for l in self.open_loops() {
-            pairs.push((format!("open loop: {}", l.description), l.confidence));
+        for l in open_loops {
+            // mirror open_loops: skip closed rows
+            if l.status == "closed" {
+                continue;
+            }
+            let text = format!("open loop: {}", l.description);
+            match treat_fact(&text, l.confidence) {
+                Treatment::Fact(s) | Treatment::Possible(s) => {
+                    out.push((s, StateTable::OpenLoops, l.id));
+                }
+                Treatment::Excluded => {}
+            }
         }
-        let refs: Vec<(&str, f64)> = pairs.iter().map(|(s, c)| (s.as_str(), *c)).collect();
-        let mut facts = shogun_fusion::confidence::assemble_facts(&refs);
-        facts.truncate(limit);
-        facts
+        out.truncate(limit);
+        out
     }
 
     /// Ingest turns recovered from an AI coding-tool session log (Phase R4).
@@ -871,7 +906,8 @@ impl Db {
         let pack = self.assemble_context(query, max_hits, excerpt_chars);
         let est = HeuristicEstimator::default();
 
-        let mut blocks = facts_to_blocks(&pack.facts, &est);
+        // Task 2: fact ブロックは実 state id 付きの ref 版から組み立てる。
+        let mut blocks = facts_to_blocks(&self.inline_memory_with_refs(FACT_LIMIT), &est);
         blocks.extend(evidence_to_blocks(&pack.evidence, 0.7, &est));
         // 解決済みスレッドの保存済み要約を候補に加える（差し替えレバー）。
         blocks.extend(self.thread_summaries_to_blocks(thread_keys, &est));
@@ -1724,16 +1760,18 @@ fn evidence_to_blocks(evidence: &[Evidence], relevance: f64, est: &dyn TokenEsti
 }
 
 /// confidence ゲートを通した facts を圧縮ブロックへ正規化する。facts は既に
-/// `assemble_facts` を通っている（低 confidence は除外済み）。relevance はやや高めに固定
-/// （state は現在の作業に紐づく前提）、confidence は High 相当として 0.9。
-fn facts_to_blocks(facts: &[String], est: &dyn TokenEstimator) -> Vec<ContextBlock> {
+/// `treat_fact` を通っている（低 confidence は除外済み）。
+/// 各エントリは (表示テキスト, 由来テーブル, 実 row id) のタプル。
+/// relevance はやや高めに固定（state は現在の作業に紐づく前提）、confidence は High 相当として 0.9。
+fn facts_to_blocks(
+    facts: &[(String, shogun_fusion::block::StateTable, i64)],
+    est: &dyn TokenEstimator,
+) -> Vec<ContextBlock> {
     facts
         .iter()
-        .enumerate()
-        .map(|(i, f)| {
-            // provenance is coarse for facts this round — see design §7.
+        .map(|(f, table, id)| {
             ContextBlock::new(
-                BlockRef::State { table: shogun_fusion::block::StateTable::OpenLoops, id: i as i64 },
+                BlockRef::State { table: *table, id: *id },
                 SourceKind::StateFact,
                 f.clone(),
                 ScoreInputs { relevance: 0.6, freshness: 0.6, task_link: 0.6, confidence: 0.9 },
@@ -2900,6 +2938,68 @@ mod tests {
             assert_eq!(e.title, orig.title, "title mismatch for event_id={}", e.event_id);
             assert_eq!(e.ts, orig.ts, "ts mismatch for event_id={}", e.event_id);
         }
+    }
+
+    /// Task 2: `inline_memory_with_refs` が実 state row id と正しいテーブルを返し、
+    /// `inline_memory`（文字列版）と内容が一致することを検証。
+    #[test]
+    fn inline_memory_with_refs_carries_real_ids_and_tables() {
+        use shogun_fusion::block::StateTable;
+        use shogun_memory::state::{
+            CommitmentDirection, CommitmentStatus, NewCommitment, NewOpenLoop, OpenLoopKind,
+            Provenance,
+        };
+
+        let db = Db::open_in_memory(clock(1)).unwrap();
+        let e = db.capture(&ev("evidence for state", "h1", 1)).unwrap().0;
+        let prov = [Provenance::new(e)];
+
+        // 高 confidence の commitment と open_loop を 1 件ずつ挿入。
+        let cid = db
+            .insert_commitment(
+                &NewCommitment {
+                    direction: CommitmentDirection::Mine,
+                    counterparty_id: None,
+                    description: "send the test report",
+                    due_at: None,
+                    status: CommitmentStatus::Open,
+                    project_id: None,
+                    confidence: 0.9,
+                    now: 1,
+                },
+                &prov,
+            )
+            .expect("commitment insert");
+
+        let lid = db
+            .insert_open_loop(
+                &NewOpenLoop {
+                    kind: OpenLoopKind::WaitingOnThem,
+                    description: "waiting on test approval",
+                    counterparty_id: None,
+                    project_id: None,
+                    opened_at: 1,
+                    confidence: 0.9,
+                    now: 1,
+                },
+                &prov,
+            )
+            .expect("open loop insert");
+
+        let refs = db.inline_memory_with_refs(8);
+        assert!(
+            refs.iter().any(|(_, t, id)| *t == StateTable::Commitments && *id == cid),
+            "commitment の実 id が含まれるべき: {refs:?}"
+        );
+        assert!(
+            refs.iter().any(|(_, t, id)| *t == StateTable::OpenLoops && *id == lid),
+            "open_loop の実 id が含まれるべき: {refs:?}"
+        );
+
+        // inline_memory（文字列版）と本文が一致（委譲による不変）。
+        let strs = db.inline_memory(8);
+        let refs_strs: Vec<String> = refs.iter().map(|(s, _, _)| s.clone()).collect();
+        assert_eq!(strs, refs_strs, "inline_memory は inline_memory_with_refs に完全委譲するべき");
     }
 
     #[test]
