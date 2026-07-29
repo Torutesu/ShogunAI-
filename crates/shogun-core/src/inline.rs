@@ -98,6 +98,9 @@ pub fn build_prompt(ctx: &CursorContext, memory: &[String], directives: &str) ->
     // error to report.
     p.push_str("Never ask a question, request more detail, or explain yourself. If the context is thin, write the most plausible draft you can from what is given and commit to it. Your entire reply is inserted verbatim at the cursor.\n");
 
+    // Directives go AFTER the insert-only / no-preamble constraints on purpose: user
+    // directives flavor voice and content, but must not relax the "insert only the text"
+    // contract stated above. Do not move this block above those constraints.
     if !directives.trim().is_empty() {
         p.push('\n');
         p.push_str(directives.trim());

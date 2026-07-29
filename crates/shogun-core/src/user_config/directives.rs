@@ -22,6 +22,10 @@ fn push_list(out: &mut String, label: &str, items: &[String]) {
 pub fn render_directives(cfg: &ShougunConfig) -> String {
     let mut out = String::new();
 
+    // NOTE: profile.* (role/industry/tools/topics) is parsed but intentionally NOT rendered
+    // here — like preferred_intro_contexts, it is reserved for Morning Brief / discovery
+    // (後続タスク), not the standing system-prompt directive block.
+
     if !cfg.style.tone.trim().is_empty() {
         out.push_str(&format!("Tone: {}\n", cfg.style.tone.trim()));
     }
