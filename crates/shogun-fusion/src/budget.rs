@@ -47,6 +47,43 @@ impl TokenEstimator for HeuristicEstimator {
     }
 }
 
+use crate::block::{BlockRef, ContextBlock};
+
+/// 予算充填の結果。
+#[derive(Debug, Clone, PartialEq)]
+pub struct FitResult {
+    /// 予算内に採用したブロック（入力のスコア順を保つ）。
+    pub kept: Vec<ContextBlock>,
+    /// 落としたブロックの参照（計測・再展開用）。
+    pub dropped: Vec<BlockRef>,
+    pub pre_tokens: usize,
+    pub post_tokens: usize,
+}
+
+/// `scored`（ブロック, スコア）を**スコア降順**に並べ、累積トークンが `budget_tokens` を
+/// 超えない範囲で採用する。超えたブロックは採用せず `dropped` に回す（後続の低スコアで
+/// 予算に収まるものは採用する = best-effort な充填）。
+///
+/// 不変: 返る `post_tokens <= budget_tokens`。高スコアほど優先採用。provenance は保持。
+pub fn fit_to_budget(mut scored: Vec<(ContextBlock, f64)>, budget_tokens: usize) -> FitResult {
+    let pre_tokens: usize = scored.iter().map(|(b, _)| b.tokens).sum();
+    // スコア降順（同点は入力順を保つよう安定ソート）。
+    scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    let mut kept = Vec::new();
+    let mut dropped = Vec::new();
+    let mut used = 0usize;
+    for (block, _score) in scored {
+        if used + block.tokens <= budget_tokens {
+            used += block.tokens;
+            kept.push(block);
+        } else {
+            dropped.push(block.id_ref);
+        }
+    }
+    FitResult { kept, dropped, pre_tokens, post_tokens: used }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -70,5 +107,43 @@ mod tests {
         let latin = est.count(&"a".repeat(30));
         let cjk = est.count(&"あ".repeat(30));
         assert!(cjk > latin, "cjk={cjk} latin={latin}");
+    }
+
+    use crate::block::{BlockRef, ScoreInputs, SourceKind};
+
+    fn blk(id: i64, tokens_text: usize) -> ContextBlock {
+        // tokens は text から算出されるので、ラテン文字を tokens_text*4 個並べて概算調整。
+        let est = HeuristicEstimator::default();
+        ContextBlock::new(
+            BlockRef::Event(id),
+            SourceKind::Evidence,
+            "a".repeat(tokens_text * 4),
+            ScoreInputs { relevance: 0.5, freshness: 0.5, task_link: 0.0, confidence: 1.0 },
+            &est,
+        )
+    }
+
+    #[test]
+    fn never_exceeds_budget() {
+        let scored = vec![(blk(1, 10), 0.9), (blk(2, 10), 0.8), (blk(3, 10), 0.7)];
+        let r = fit_to_budget(scored, 15);
+        assert!(r.post_tokens <= 15, "post={}", r.post_tokens);
+    }
+
+    #[test]
+    fn keeps_higher_score_first() {
+        let scored = vec![(blk(1, 10), 0.2), (blk(2, 10), 0.9)];
+        let r = fit_to_budget(scored, 10);
+        assert_eq!(r.kept.len(), 1);
+        assert_eq!(r.kept[0].id_ref, BlockRef::Event(2)); // 高スコアが残る
+        assert_eq!(r.dropped, vec![BlockRef::Event(1)]);
+    }
+
+    #[test]
+    fn all_fit_when_budget_large() {
+        let scored = vec![(blk(1, 5), 0.5), (blk(2, 5), 0.5)];
+        let r = fit_to_budget(scored, 1000);
+        assert_eq!(r.kept.len(), 2);
+        assert!(r.dropped.is_empty());
     }
 }
