@@ -159,18 +159,11 @@ pub fn envelope(records: Vec<Value>) -> Value {
     json!({ "structuredContent": records })
 }
 
-/// `create_draft` の引数（`{to, subject, body}`）を Gmail `drafts.create` のリクエストボディに
-/// 変換する。Gmail は RFC 2822 の生メールを base64url で `raw` に入れる形。
-pub fn draft_request_body(args: &Value) -> Result<Value, String> {
-    let to = args.get("to").and_then(Value::as_str).ok_or("draft: missing to")?;
-    let subject = args.get("subject").and_then(Value::as_str).unwrap_or("");
-    let body = args.get("body").and_then(Value::as_str).unwrap_or("");
-    let raw_mail = format!("To: {to}\r\nSubject: {subject}\r\n\r\n{body}");
-    let encoded = base64_url_no_pad(raw_mail.as_bytes());
-    Ok(json!({ "message": { "raw": encoded } }))
-}
-
 /// base64url（パディングなし）。RFC 4648 §5。依存を増やさない小実装。
+/// テスト専用ヘルパ: 本番の唯一の利用者だった Gmail REST 版 `draft_request_body` は、draft 作成が
+/// Composio 経由（`composio_read::create_draft`）に一本化されたため削除済み。エンコーダはテストの
+/// フィクスチャ生成にのみ使うので `#[cfg(test)]` に留める。
+#[cfg(test)]
 fn base64_url_no_pad(input: &[u8]) -> String {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
     let mut out = String::new();
@@ -360,28 +353,7 @@ mod tests {
         assert_eq!(rec["snippet"], "short snippet");
     }
 
-    // ── draft / base64_url_no_pad ──────────────────────────────────────────────
-
-    #[test]
-    fn draft_body_encodes_rfc2822_into_raw() {
-        let args = json!({ "to": "b@y.com", "subject": "Hi", "body": "Line one" });
-        let out = draft_request_body(&args).unwrap();
-        let raw = out["message"]["raw"].as_str().unwrap();
-        // base64url をデコードして中身を検証（padding なし）。
-        assert!(!raw.contains('='), "no padding");
-        assert!(!raw.contains('+') && !raw.contains('/'), "url-safe alphabet");
-    }
-
-    #[test]
-    fn draft_requires_the_to_key_not_recipient_email() {
-        // The arg contract callers must honour: the recipient key is `to`. `ComposioReadRpc`
-        // maps `to`→`recipient_email` internally, so callers always use `to`. This locks the
-        // internal-arg-name so that seam can't rot.
-        let wrong = json!({ "recipient_email": "b@y.com", "subject": "Hi", "body": "x" });
-        assert!(draft_request_body(&wrong).is_err(), "recipient_email must NOT satisfy the contract");
-        let right = json!({ "to": "b@y.com", "subject": "Hi", "body": "x" });
-        assert!(draft_request_body(&right).is_ok(), "`to` is the required key");
-    }
+    // ── base64_url_no_pad (test-only encoder helper) ───────────────────────────
 
     #[test]
     fn base64_url_matches_known_vector() {
