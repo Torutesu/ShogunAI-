@@ -128,12 +128,71 @@ LLM が送信/書き込みを提案
 
 第2層は「便利だから広げる」対象ではなく、「公式に能力が無い間の橋」。公式 MCP が送信をサポートしたら第1層へ寄せるのが方針。ドキュメント・UI では常に両者を区別して見せる。
 
-## 5. モデル（Claude）側から見た MCP 利用【骨格 — リリース3で拡充】
+## 5. モデル（Claude）側から見た MCP 利用
 
-- システムプロンプトには「接続済みサービスの一覧 + 各用途 + 呼び出し優先度」をテキストで渡す
-- 優先度ルールの例：会議・予定系の質問 → まず Calendar / ファイル・資料系 → Drive / 連絡・スレッド系 → Gmail
-- 未接続サービスは一覧に載せない（モデルに「繋がっていないものを呼ばせない」）
-- LLM クライアント実装は `crates/shogun-core/src/llm/`（anthropic.rs、キー分離、traceability.rs）
+> 現状、LLM へのツール定義・システムプロンプトへの MCP 一覧の結線は**未実装**（`shogun-core/src/llm/` はクライアントまで、`shogun-agents` は L1/L2 実行エンジンまで）。本節は「結線実装時にそのまま組み込めるテキスト設計」。
+
+### 5-1. システムプロンプトに渡す「接続済みサービス」ブロック
+
+原則：**接続済み（connected）のサービスだけを載せる**。未接続・amber・未リリース Wave のサービスは一覧に出さない — モデルに「繋がっていないものを呼ばせない」が唯一のシンプルな防線。接続状態が変わったら次ターンからブロックを再生成する。
+
+テンプレート（英語、実際の生成はハブ層の接続状態から機械生成）：
+
+```
+## Connected services
+You can pull context from these connected services:
+- calendar: the user's Google Calendar. Events, availability, upcoming meetings. Read-only.
+- mail: the user's Gmail. Threads and messages. Read-only; you may draft replies, but sending always requires the user's explicit approval.
+- drive: the user's Google Drive. Documents and files. Read-only.
+
+Priorities:
+- Questions about schedule, meetings, or availability → check calendar first.
+- Questions about conversations, requests, or follow-ups → check mail first.
+- Questions about documents or materials → check drive first.
+- For meeting prep, combine: calendar (the event) → drive (related files) → mail (related threads).
+
+If a task would clearly benefit from a service that is not listed here, say so briefly instead of guessing (the user can connect it in Settings).
+```
+
+設計上のポイント：
+
+- **サービスは操作名でなく役割で説明する**（「calendar = 予定・空き時間」）。個々のツール名の羅列はツール定義側（5-2）の仕事
+- **書き込み・送信の制約はプロンプトにも書く**（"sending always requires approval"）。ただし防御の本体はプロンプトではなく `scope.rs` + L3 ゲート。プロンプトは期待値合わせ、ゲートが保証
+- **未接続への言及ルール**を1行入れる：「繋げばもっとできる」をモデルが自然に案内できるようにする（`02-user-guide.md` §4 のマイクロコピーと対応）
+
+### 5-2. LLM ツール定義との対応
+
+Anthropic API の `tools` 配列に載せる単位は、**MCP サーバーの生ツールではなくハブ層の操作名**（`toolmap.rs` の左側、例：`list_calendar_events` / `search_mail` / `search_drive_files`）。理由：
+
+1. 実 MCP のツール名は暫定で、サーバー側の都合で変わりうる（`tools/list` 突合待ち）。ハブの操作名を安定インターフェースにする
+2. `scope.rs` の権限表が操作名単位なので、ツール呼び出し → 認可判定が1対1で素直につながる
+3. モデルに見せる面を絞れる（表に無い操作はそもそもツール定義に載らない = 呼べない）
+
+呼び出しの流れ（結線後）：
+
+```
+Claude が tool_use（例: list_calendar_events）
+  → service_gate: Wave 解放済み？ connected？ 権限表にある操作？
+  → OK なら toolmap で実 MCP ツール名に変換 → RemoteMcpTransport → 公式 MCP
+  → result.rs で正規化 → tool_result として Claude に返す
+  → 読み取り以外（書き込み・送信）は即実行せず L1/L2/L3 エンジン（shogun-agents）に流す
+```
+
+### 5-3. 呼び出し優先度の設計方針
+
+- 優先度は**プロンプトの指針**であって、コード側で強制しない（会議準備で Drive から始めても壊れない）。強制するのは認可（gate）だけ
+- 「まず1サービスで答え、足りなければ広げる」を基本にする。3サービス全部を毎回叩くとレイテンシとトークンが無駄になる
+- 組み合わせ（会議準備 = calendar → drive → mail）は代表パターンとしてプロンプトに1例だけ載せる。網羅しない — パターン列挙はモデルを硬直させる
+
+### 5-4. 結線の実装ポイント（後続 Issue の中身）
+
+| 作業 | 場所 |
+|---|---|
+| `tools` 配列の生成（接続状態 → 操作名リスト → JSON Schema） | `shogun-core/src/llm/anthropic.rs` の request builder 拡張 |
+| 「Connected services」ブロックの生成 | ハブ層の接続状態（`connection.rs`）から文字列生成する小関数（新設） |
+| tool_use → gate → transport → tool_result のループ | `shogun-agents` に会話ループを新設 or 既存 engine と接続 |
+| 読み取り以外の tool_use を L1/L2/L3 に流す | `shogun-agents/src/engine.rs`（L3 送信経路は M4 で解放予定の現状に注意） |
+| ツール呼び出しのトレーサビリティ記録 | `shogun-core/src/llm/traceability.rs` の Route に MCP 経路を追加 |
 
 ## 6. 未検証事項（「未実装」ではない）
 
