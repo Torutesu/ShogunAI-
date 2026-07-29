@@ -77,7 +77,6 @@ pub fn redact(text: &str) -> std::borrow::Cow<'_, str> {
     if !might_contain_secret(text) {
         return std::borrow::Cow::Borrowed(text);
     }
-    let bytes = text.as_bytes();
     let mut out = String::with_capacity(text.len());
     let mut i = 0usize;
     while i < text.len() {
@@ -111,7 +110,6 @@ pub fn redact(text: &str) -> std::borrow::Cow<'_, str> {
         let ch_len = rest.chars().next().map(char::len_utf8).unwrap_or(1);
         out.push_str(&rest[..ch_len]);
         i += ch_len;
-        let _ = bytes;
     }
     std::borrow::Cow::Owned(out)
 }
@@ -386,5 +384,46 @@ mod tests {
         assert!(got.starts_with("送信先 "), "{got}");
         assert!(got.ends_with(" へ通知しました"), "{got}");
         assert!(got.contains("[redacted]") && !got.contains("alice@example.com"), "{got}");
+    }
+
+    // --- regression: risky email/URL backtrack edge cases (locked in) ------------------------
+
+    #[test]
+    fn log_redactor_email_backtrack_stops_at_a_prior_mask() {
+        // A masked URL leaves a `[redacted]` whose trailing `]` is NOT an email-local char, so the
+        // following bare `@domain` (no valid local part) must be left alone without corrupting the
+        // earlier mask.
+        assert_eq!(
+            rl("see https://a.com then @example.com"),
+            "see [redacted] then @example.com",
+        );
+    }
+
+    #[test]
+    fn log_redactor_masks_adjacent_emails() {
+        assert_eq!(rl("a@x.com,b@y.com"), "[redacted],[redacted]");
+    }
+
+    #[test]
+    fn log_redactor_leaves_at_without_local_or_domain_without_dot_untouched() {
+        // `@` at string start: no local part → not an email.
+        assert_eq!(rl("@example.com"), "@example.com");
+        // domain has no dot: not an email.
+        assert_eq!(rl("alice@localhost"), "alice@localhost");
+    }
+
+    #[test]
+    fn log_redactor_masks_email_with_issuer_shaped_local_part() {
+        // The local part looks like an issuer key; the whole email region is still masked and the
+        // raw address never survives.
+        let got = rl("sk-ant-foo@example.com");
+        assert_eq!(got, "[redacted]");
+        assert!(!got.contains("sk-ant-foo") && !got.contains("example.com"), "{got}");
+    }
+
+    #[test]
+    fn log_redactor_keeps_a_multibyte_prefix_before_the_local_part() {
+        // The multibyte run before the ASCII local part is preserved; the address is gone.
+        assert_eq!(rl("名前ab@example.com"), "名前[redacted]");
     }
 }
