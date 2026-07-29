@@ -1865,7 +1865,25 @@ fn memory_db(app: &tauri::App) -> Result<shogun_core::daemon::Db, String> {
     });
     let db = shogun_core::daemon::Db::open_encrypted(path, &key, clock).map_err(|e| e.to_string())?;
     ensure_ort_dylib(app);
-    Ok(attach_embedder(db, embedding_model_paths(app)))
+    let db = attach_embedder(db, embedding_model_paths(app));
+    // 圧縮は段階展開: 既定 off。ヘビーユーザー/AB は SHOGUN_COMPRESSION=1 で有効化（設定 UI は次周）。
+    let db = if std::env::var("SHOGUN_COMPRESSION")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("on"))
+        .unwrap_or(false)
+    {
+        let budget = std::env::var("SHOGUN_COMPRESSION_BUDGET")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(2000);
+        db.with_compression_config(shogun_fusion::compress::CompressionConfig {
+            enabled: true,
+            budget_tokens: budget,
+            ..Default::default()
+        })
+    } else {
+        db
+    };
+    Ok(db)
 }
 
 /// Run the model-free state maintenance periodically.
