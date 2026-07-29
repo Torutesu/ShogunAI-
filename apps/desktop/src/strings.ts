@@ -202,6 +202,55 @@ export const STRINGS = {
     sources: "Sources",
     noAnswer: "(no response)",
     answerFailed: "Couldn't answer",
+    // first-run Accessibility permission guide (Issue #46). Reusable shape: every field is copy for
+    // ONE permission, so a future Microphone/Screen guide reuses the same component with its own
+    // block. Brand rules: the only emoji is ⚔, no competitor/stack names, plain language.
+    onboarding: {
+      brand: "SHOGUN",
+      // guide (permission missing)
+      guideTitle: "Let SHOGUN read your screen",
+      guideLead:
+        "SHOGUN builds your work context from on-screen text through macOS Accessibility. It reads text only — never images, never your keystrokes — and the context is built on this Mac.",
+      doTitle: "What this turns on",
+      doItems: [
+        "Draft right where you're typing — tap ⌥ (Option) in any app.",
+        "Open the notch panel and act on what you're looking at.",
+        "Answer from the memory it builds of your work.",
+      ],
+      wontTitle: "What it never does",
+      wontItems: [
+        "Never captures images or screenshots.",
+        "Never logs your keystrokes.",
+        "Never sends your screen off this Mac.",
+      ],
+      stepsTitle: "Grant it in System Settings",
+      steps: [
+        "Open Privacy & Security › Accessibility.",
+        "Find SHOGUN in the list.",
+        "Turn the SHOGUN toggle on.",
+        "Authenticate with your password or Touch ID.",
+      ],
+      cta: "Open Accessibility Settings",
+      ctaAgain: "Open Settings again",
+      skip: "Do this later",
+      skipNote: "Until you grant it, drafting, the notch panel, and memory stay off. You can turn it on any time from Settings.",
+      waiting: "Waiting for permission…",
+      checking: "Checking…",
+      notGranted: "Not granted yet",
+      granted: "Granted",
+      // troubleshooting (shown after the user has opened Settings at least once)
+      troubleTitle: "Don't see SHOGUN, or the toggle won't stick?",
+      troubleItems: [
+        "If SHOGUN isn't in the list, reopen Settings — opening it adds SHOGUN to Accessibility.",
+        "If the toggle is on but nothing works, quit and reopen SHOGUN.",
+        "After reinstalling, remove the old SHOGUN row, then add it again.",
+      ],
+      // success (permission granted)
+      successTitle: "You're set",
+      successLead:
+        "SHOGUN can read your screen now. Reach it two ways: tap ⌥ (Option) in any app, or rest your cursor on the notch.",
+      successCta: "Open SHOGUN",
+    },
   },
 } as const;
 
