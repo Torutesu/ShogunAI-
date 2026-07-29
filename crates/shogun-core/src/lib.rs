@@ -65,3 +65,4 @@ pub mod notch;
 #[cfg(feature = "exec")]
 pub mod send_exec;
 pub mod traceview;
+pub mod user_config;
