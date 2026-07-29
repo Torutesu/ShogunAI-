@@ -190,6 +190,8 @@ pub fn run() {
         onboarding::mac::open_accessibility_settings,
         onboarding::mac::onboarding_finish,
         onboarding::mac::onboarding_event,
+        analytics::analytics_get_opt_out,
+        analytics::analytics_set_opt_out,
     ]);
 
     // NOTE: the visible surface is a NATIVE NSPanel hosting the webview's content view

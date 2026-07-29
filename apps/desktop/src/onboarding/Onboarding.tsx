@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { t } from "../strings";
+import { AnalyticsToggle } from "../AnalyticsToggle";
 
 // Same detection App.tsx uses — the guide renders in a real browser tab during `pnpm dev:vite`
 // (permission always "missing" there so the whole guide is visible), and talks to Rust only inside
@@ -203,6 +204,7 @@ function Success({ onFinish }: { onFinish: () => void }) {
       <h1 className="onb-title">{o.successTitle}</h1>
       <p className="onb-lead">{o.successLead}</p>
       <footer className="onb-foot">
+        <AnalyticsToggle />
         <button className="onb-btn primary lg" onClick={onFinish}>
           {o.successCta}
         </button>

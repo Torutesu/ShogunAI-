@@ -99,6 +99,29 @@ pub fn context_updated_props(source: &str, count: u64) -> Props {
     p
 }
 
+/// 現在の opt_out を返す（フロントのトグル初期値）。
+#[tauri::command]
+pub fn analytics_get_opt_out(app: AppHandle) -> bool {
+    match load_or_init_state(&app) {
+        Ok(s) => s.opt_out,
+        Err(_) => false,
+    }
+}
+
+/// opt_out を設定：`analytics.json` を更新し、稼働中ハンドルにも即時反映。
+#[tauri::command]
+pub fn analytics_set_opt_out(
+    app: AppHandle,
+    analytics: tauri::State<'_, Analytics>,
+    opt_out: bool,
+) -> Result<(), String> {
+    let mut state = load_or_init_state(&app)?;
+    state.opt_out = opt_out;
+    save_state(&app, &state);
+    analytics.set_opt_out(opt_out);
+    Ok(())
+}
+
 /// 分析を初期化する。`SHOGUN_POSTHOG_KEY` 未設定なら無効（no-op）ラッパを返す。
 pub fn init(app: &AppHandle) -> Analytics {
     let key = std::env::var("SHOGUN_POSTHOG_KEY").unwrap_or_default();
@@ -160,5 +183,15 @@ mod tests {
         let s: AnalyticsState = serde_json::from_str(json).unwrap();
         assert_eq!(s.distinct_id, "x");
         assert!(!s.opt_out); // #[serde(default)]
+    }
+
+    #[test]
+    fn state_opt_out_flip_serializes() {
+        let mut s = AnalyticsState { distinct_id: "x".into(), opt_out: false };
+        s.opt_out = true;
+        let json = serde_json::to_string(&s).unwrap();
+        let back: AnalyticsState = serde_json::from_str(&json).unwrap();
+        assert!(back.opt_out);
+        assert_eq!(back.distinct_id, "x");
     }
 }
