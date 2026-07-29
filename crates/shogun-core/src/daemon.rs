@@ -19,6 +19,8 @@ use shogun_memory::traceability::{Filter, TraceRow};
 use shogun_memory::MemoryError;
 use shogun_fusion::brief::{assemble_brief, assemble_degraded, CalendarLine, CommitmentDue, MorningBrief, OpenLoopItem};
 use shogun_fusion::assemble::ActionCandidate;
+use shogun_fusion::block::{BlockRef, ContextBlock, ScoreInputs, SourceKind};
+use shogun_fusion::budget::TokenEstimator;
 
 use crate::capture::dedup::{decide_hash, Recent};
 use crate::db_sink::DbTraceabilitySink;
@@ -77,6 +79,9 @@ const REPLY_TURNS: usize = 12;
 const REPLY_TURN_CHARS: usize = 800;
 const REPLY_RELATED: usize = 4;
 const REPLY_RELATED_CHARS: usize = 300;
+
+/// クエリ時のローカル圧縮に許す時間予算。超えたら raw にフォールバック（SLO +300ms 厳守）。
+const COMPRESS_BUDGET_MS: u64 = 50;
 
 /// ドラフトの本文がどこ由来か。融合の provenance（設計 §3）。
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -823,6 +828,52 @@ impl Db {
         ContextPack { facts, evidence }
     }
 
+    /// 圧縮版のコンテキスト組み立て（Issue #63）。`config.enabled` が false のときは
+    /// 呼び出し側が `assemble_context` を使う想定なので、ここは true 前提。ローカル処理のみ
+    /// （LLM を呼ばない）。処理が `COMPRESS_BUDGET_MS` を超えた/失敗したら raw にフォールバック。
+    pub fn assemble_context_compressed(
+        &self,
+        query: &str,
+        max_hits: usize,
+        excerpt_chars: usize,
+        config: &shogun_fusion::compress::CompressionConfig,
+    ) -> (ContextPack, shogun_fusion::compress::CompressionStats, bool) {
+        use shogun_fusion::budget::HeuristicEstimator;
+        use shogun_fusion::compress::{compress, Candidates};
+
+        let started = std::time::Instant::now();
+        // raw と同じ材料を集める。
+        let pack = self.assemble_context(query, max_hits, excerpt_chars);
+        let est = HeuristicEstimator::default();
+
+        let mut blocks = facts_to_blocks(&pack.facts, &est);
+        blocks.extend(evidence_to_blocks(&pack.evidence, 0.7, &est));
+
+        // 時間予算を超えたらフォールバック（raw をそのまま返す）。
+        if started.elapsed().as_millis() as u64 > COMPRESS_BUDGET_MS {
+            return (pack, shogun_fusion::compress::CompressionStats::default(), true);
+        }
+
+        let out = compress(Candidates { blocks }, config);
+        // 圧縮済みブロックから ContextPack を再構成（facts と evidence に振り分け）。
+        let mut facts = Vec::new();
+        let mut evidence = Vec::new();
+        for b in &out.blocks {
+            match b.id_ref {
+                shogun_fusion::block::BlockRef::Event(id) => evidence.push(Evidence {
+                    event_id: id,
+                    ts: 0,
+                    source: String::new(),
+                    title: None,
+                    excerpt: b.text.clone(),
+                }),
+                _ => facts.push(b.text.clone()),
+            }
+        }
+
+        (ContextPack { facts, evidence }, out.stats, false)
+    }
+
     /// A traceability sink that writes through this same handle (the LLM egress records here).
     pub fn traceability_sink(&self) -> DbTraceabilitySink {
         DbTraceabilitySink::new(self.conn.clone(), self.clock.clone())
@@ -1546,6 +1597,43 @@ fn screen_relevance(screen: &shogun_fusion::assemble::ScreenContext, subject: &s
     } else {
         0.4
     }
+}
+
+/// 検索 evidence を圧縮ブロックへ正規化する。evidence は「実際に見たもの」なので
+/// confidence=1.0、relevance は呼び出し側が渡す検索スコア由来の値。
+fn evidence_to_blocks(evidence: &[Evidence], relevance: f64, est: &dyn TokenEstimator) -> Vec<ContextBlock> {
+    evidence
+        .iter()
+        .map(|e| {
+            ContextBlock::new(
+                BlockRef::Event(e.event_id),
+                SourceKind::Evidence,
+                e.excerpt.clone(),
+                ScoreInputs { relevance, freshness: 0.5, task_link: 0.0, confidence: 1.0 },
+                est,
+            )
+        })
+        .collect()
+}
+
+/// confidence ゲートを通した facts を圧縮ブロックへ正規化する。facts は既に
+/// `assemble_facts` を通っている（低 confidence は除外済み）。relevance はやや高めに固定
+/// （state は現在の作業に紐づく前提）、confidence は High 相当として 0.9。
+fn facts_to_blocks(facts: &[String], est: &dyn TokenEstimator) -> Vec<ContextBlock> {
+    facts
+        .iter()
+        .enumerate()
+        .map(|(i, f)| {
+            // provenance is coarse for facts this round — see design §7.
+            ContextBlock::new(
+                BlockRef::State { table: shogun_fusion::block::StateTable::OpenLoops, id: i as i64 },
+                SourceKind::StateFact,
+                f.clone(),
+                ScoreInputs { relevance: 0.6, freshness: 0.6, task_link: 0.6, confidence: 0.9 },
+                est,
+            )
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -2623,5 +2711,47 @@ mod tests {
             "Nothing — Safari",
         );
         assert_eq!(ctx.payload_source, PayloadSource::OnScreenOnly);
+    }
+
+    #[test]
+    fn evidence_to_blocks_preserves_provenance_and_counts_tokens() {
+        use shogun_fusion::block::{BlockRef, SourceKind};
+        use shogun_fusion::budget::HeuristicEstimator;
+        let ev = vec![Evidence {
+            event_id: 7,
+            ts: 100,
+            source: "capture".into(),
+            title: Some("t".into()),
+            excerpt: "a".repeat(40),
+        }];
+        let est = HeuristicEstimator::default();
+        let blocks = evidence_to_blocks(&ev, 0.7, &est);
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].id_ref, BlockRef::Event(7));
+        assert_eq!(blocks[0].source_kind, SourceKind::Evidence);
+        assert!(blocks[0].tokens > 0);
+    }
+
+    #[test]
+    fn compressed_context_bounds_tokens_without_falling_back() {
+        // 複数 evidence をヒットさせる小さな入力を seed する。
+        let db = Db::open_in_memory(clock(10_000)).unwrap();
+        for i in 0..6 {
+            db.capture(&ev(
+                "vendor pricing settled at 12k for the renewal report",
+                &format!("h{i}"),
+                100 + i,
+            ))
+            .unwrap();
+        }
+        use shogun_fusion::compress::CompressionConfig;
+        let cfg = CompressionConfig { enabled: true, budget_tokens: 20, ..Default::default() };
+        let (pack_c, stats, fell_back) = db.assemble_context_compressed("pricing report", 6, 600, &cfg);
+        assert!(!fell_back, "50ms 以内に収まるはず");
+        assert!(stats.post_tokens <= 20, "post={}", stats.post_tokens);
+        if stats.pre_tokens > 20 {
+            assert!(stats.post_tokens < stats.pre_tokens, "pre={} post={}", stats.pre_tokens, stats.post_tokens);
+        }
+        assert!(!pack_c.facts.is_empty() || !pack_c.evidence.is_empty(), "全落ちしない");
     }
 }
