@@ -508,7 +508,7 @@ pub mod mac {
                     let q = a.0.lock().map_err(|_| "approval queue lock poisoned".to_string())?;
                     q.pending_ids()
                         .into_iter()
-                        .filter_map(|id| q.preview(id).map(|p| (id, p)))
+                        .filter_map(|id| q.preview(id).map(|p| (id, p.clone())))
                         .collect()
                 };
                 raw.into_iter()
