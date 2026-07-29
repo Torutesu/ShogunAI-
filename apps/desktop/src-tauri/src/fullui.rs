@@ -501,10 +501,17 @@ pub mod mac {
         let pending = match approvals {
             None => Vec::new(),
             Some(a) => {
-                let q = a.0.lock().map_err(|_| "approval queue lock poisoned".to_string())?;
-                q.pending_ids()
-                    .into_iter()
-                    .filter_map(|id| q.preview(id).map(|p| (id, p)))
+                // The notch's context-cache path (SLO: 300ms on focus switch) shares this mutex, so
+                // hold it only long enough to copy the raw previews out — the formatting below
+                // (format!/matches!) then runs with the lock already released.
+                let raw: Vec<_> = {
+                    let q = a.0.lock().map_err(|_| "approval queue lock poisoned".to_string())?;
+                    q.pending_ids()
+                        .into_iter()
+                        .filter_map(|id| q.preview(id).map(|p| (id, p)))
+                        .collect()
+                };
+                raw.into_iter()
                     .map(|(id, p)| PendingApproval {
                         id: format!("{id:?}"),
                         title: format!("{} — {}", p.op_type, p.destination),
