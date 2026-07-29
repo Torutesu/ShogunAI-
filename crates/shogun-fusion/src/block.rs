@@ -6,7 +6,7 @@
 use crate::budget::TokenEstimator;
 
 /// 生ログへの参照（再展開・provenance 用）。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum BlockRef {
     /// `event_log.id`
     Event(i64),
@@ -19,7 +19,7 @@ pub enum BlockRef {
 }
 
 /// provenance が指す state テーブル。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum StateTable {
     People,
     Projects,
@@ -28,7 +28,7 @@ pub enum StateTable {
 }
 
 /// ブロックの由来。予算充填時の差し替え判断に使う。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SourceKind {
     StateFact,
     Evidence,
@@ -91,7 +91,7 @@ mod tests {
             ScoreInputs { relevance: 0.5, freshness: 0.5, task_link: 0.0, confidence: 1.0 },
             &est,
         );
-        assert_eq!(b.tokens, est.count(&b.text));
+        assert_eq!(b.tokens, 10); // 40 latin chars / 4 = 10
         assert_eq!(b.id_ref, BlockRef::Event(42));
     }
 }

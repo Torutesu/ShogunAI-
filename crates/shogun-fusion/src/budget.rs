@@ -6,6 +6,7 @@
 
 /// テキストのトークン数を見積もる seam。
 pub trait TokenEstimator {
+    /// テキストの推定トークン数を返す。
     fn count(&self, text: &str) -> usize;
 }
 
@@ -26,6 +27,7 @@ impl Default for HeuristicEstimator {
 }
 
 fn is_cjk(c: char) -> bool {
+    // Korean Hangul (0xAC00..=0xD7A3) は未対応。必要になれば追加。
     matches!(c as u32,
         0x3040..=0x30FF |   // ひらがな・カタカナ
         0x3400..=0x4DBF |   // CJK 拡張A
@@ -52,11 +54,13 @@ use crate::block::{BlockRef, ContextBlock};
 /// 予算充填の結果。
 #[derive(Debug, Clone, PartialEq)]
 pub struct FitResult {
-    /// 予算内に採用したブロック（入力のスコア順を保つ）。
+    /// 予算内に採用したブロック（スコア降順で採用）。
     pub kept: Vec<ContextBlock>,
     /// 落としたブロックの参照（計測・再展開用）。
     pub dropped: Vec<BlockRef>,
+    /// 充填前の全候補の合計トークン数。
     pub pre_tokens: usize,
+    /// 採用後の合計トークン数（`<= budget_tokens`）。
     pub post_tokens: usize,
 }
 
@@ -145,5 +149,16 @@ mod tests {
         let r = fit_to_budget(scored, 1000);
         assert_eq!(r.kept.len(), 2);
         assert!(r.dropped.is_empty());
+    }
+
+    #[test]
+    fn best_effort_skips_oversized_and_takes_smaller() {
+        // A=10tok(0.9), B=7tok(0.8), C=3tok(0.7), budget=13 → A,C 採用 / B drop
+        let scored = vec![(blk(1, 10), 0.9), (blk(2, 7), 0.8), (blk(3, 3), 0.7)];
+        let r = fit_to_budget(scored, 13);
+        assert_eq!(r.kept.len(), 2);
+        assert_eq!(r.kept[0].id_ref, BlockRef::Event(1));
+        assert_eq!(r.kept[1].id_ref, BlockRef::Event(3));
+        assert_eq!(r.dropped, vec![BlockRef::Event(2)]);
     }
 }

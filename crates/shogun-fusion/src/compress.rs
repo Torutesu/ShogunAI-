@@ -88,7 +88,7 @@ pub fn compress(candidates: Candidates, config: &CompressionConfig) -> Compresse
 /// 便宜ヘルパ: 推定器を明示したいときのために公開しておく（daemon が候補生成で使う）。
 // TODO(Task 9): daemon が推定器を実使用した時点で削除する。
 #[allow(dead_code)]
-pub fn _uses_estimator(_est: &dyn TokenEstimator) {}
+pub(crate) fn _uses_estimator(_est: &dyn TokenEstimator) {}
 
 #[cfg(test)]
 mod tests {
