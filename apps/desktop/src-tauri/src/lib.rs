@@ -30,6 +30,7 @@ mod meeting_recap;
 mod mic;
 mod notch_actions;
 mod notch_exec;
+mod onboarding;
 
 /// The collectionBehavior the overlay wants, selected at setup (NSPanel mode = canJoinAllSpaces +
 /// fullScreenAuxiliary = 257; plain-window fallback = moveToActiveSpace 274) and re-asserted by
@@ -181,6 +182,13 @@ pub fn run() {
         ai_sessions::mac::set_ai_session_import,
         dream::mac::dream_status,
         dream::mac::run_dream_now,
+        // First-run Accessibility permission guide (Issue #46). Own webview (onboarding.html),
+        // opened by setup_macos when trust is missing and the user hasn't skipped/completed it.
+        onboarding::mac::accessibility_status,
+        onboarding::mac::onboarding_get,
+        onboarding::mac::open_accessibility_settings,
+        onboarding::mac::onboarding_finish,
+        onboarding::mac::onboarding_event,
     ]);
 
     // NOTE: the visible surface is a NATIVE NSPanel hosting the webview's content view
@@ -369,6 +377,13 @@ fn setup_macos(app: &tauri::App) {
     // T-11/T-12 sanity: Accessibility trust + one focused-window walk through the tested
     // policy. Event-driven focus subscription is on-device work (runbook D-03/D-05).
     eprintln!("[spike] accessibility trusted: {}", axcache::ax_trusted());
+    // Issue #46: on a fresh install (or a re-permission after an update) the app is running but
+    // inert — nothing captures, ⌥-tap and hover taps are refused. Show the branded guide instead of
+    // leaving the user in a silent dead end. Gated on the SILENT trust check + persisted
+    // disposition, so a granted or deliberately-skipped user is never interrupted.
+    if onboarding::mac::should_show_onboarding(app.handle()) {
+        onboarding::mac::build_onboarding_window(app.handle());
+    }
     // Whatever happens to be focused when SHOGUN launches gets no special exemption — launching
     // while a password manager is frontmost must not read it.
     if let Some(front) = display::frontmost_app() {

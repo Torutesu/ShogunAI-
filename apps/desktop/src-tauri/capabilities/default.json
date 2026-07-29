@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Webview access: core IPC plus the window operations the product UI drives. Tauri v2 denies core window APIs unless explicitly allowed — startDragging/setSize were failing SILENTLY with core:default alone (drag and minimize looked dead).",
-  "windows": ["notch"],
+  "windows": ["notch", "onboarding"],
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",

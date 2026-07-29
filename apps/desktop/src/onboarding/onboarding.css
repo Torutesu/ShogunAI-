@@ -1,0 +1,350 @@
+/* First-run Accessibility permission guide (Issue #46). Its own webview window (onboarding.html),
+   a plain opaque window rather than the notch NSPanel, so unlike styles.css this surface paints its
+   own backdrop. Same glass language and design tokens as the overlay; theme-aware (dark default). */
+
+.onb {
+  /* Backdrop base + accent glow, themed. The card floats on this instead of a blurred desktop
+     (the window is opaque), so the gradient stands in for the wallpaper. */
+  --onb-bg: #0b0e13;
+  --onb-glow: color-mix(in srgb, var(--accent) 20%, transparent);
+  --onb-soft: color-mix(in srgb, var(--accent) 12%, transparent);
+  --onb-live-soft: color-mix(in srgb, var(--live) 20%, transparent);
+
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+  background:
+    radial-gradient(120% 90% at 18% 0%, var(--onb-glow), transparent 55%),
+    radial-gradient(120% 90% at 100% 100%, var(--onb-soft), transparent 60%),
+    var(--onb-bg);
+}
+:root[data-appearance="light"] .onb {
+  --onb-bg: #eef1f6;
+}
+@media (prefers-color-scheme: light) {
+  :root[data-appearance="auto"] .onb {
+    --onb-bg: #eef1f6;
+  }
+}
+
+.onb-card {
+  width: 640px;
+  max-width: 100%;
+  background: var(--glass);
+  /* Literal glass blur + elevation (main's styles.css inlines these rather than exposing --blur /
+     --shadow tokens). Matches the full-panel glass values. */
+  -webkit-backdrop-filter: blur(34px) saturate(1.7);
+  backdrop-filter: blur(34px) saturate(1.7);
+  border: 1px solid var(--line);
+  border-radius: var(--r-xl);
+  box-shadow: 0 28px 66px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  overflow: hidden;
+  animation: onb-rise 340ms var(--sp) both;
+}
+
+/* header — brand mark + live permission badge */
+.onb-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 28px;
+  border-bottom: 1px solid var(--line);
+}
+.onb-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  font-size: var(--fs-lg);
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  color: var(--ink);
+}
+.onb-mark {
+  font-size: 15px;
+  letter-spacing: 0;
+}
+.onb-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 11px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--line);
+  background: var(--fill);
+  font-size: var(--fs-sm);
+  color: var(--muted);
+}
+.onb-badge.ok {
+  background: var(--onb-live-soft);
+  border-color: color-mix(in srgb, var(--live) 34%, transparent);
+  color: var(--live);
+}
+.onb-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+.onb-badge.ok .onb-dot {
+  background: var(--live);
+}
+
+/* body */
+.onb-body {
+  padding: 30px 28px 24px;
+  display: flex;
+  flex-direction: column;
+}
+.onb-body > * {
+  animation: onb-rise 300ms var(--sp) both;
+}
+.onb-body > *:nth-child(2) {
+  animation-delay: 50ms;
+}
+.onb-body > *:nth-child(3) {
+  animation-delay: 90ms;
+}
+.onb-body > *:nth-child(4) {
+  animation-delay: 130ms;
+}
+
+.onb-tile {
+  width: 54px;
+  height: 54px;
+  border-radius: var(--r-lg);
+  display: grid;
+  place-items: center;
+  background: var(--onb-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  margin-bottom: 20px;
+}
+.onb-tile.ok {
+  background: var(--onb-live-soft);
+  border-color: color-mix(in srgb, var(--live) 34%, transparent);
+}
+
+.onb-title {
+  font-size: 24px;
+  font-weight: 640;
+  letter-spacing: -0.022em;
+  line-height: 1.22;
+  color: var(--ink);
+}
+.onb-lead {
+  margin-top: 10px;
+  font-size: var(--fs-xl);
+  line-height: 1.6;
+  color: var(--muted);
+  max-width: 54ch;
+}
+
+/* two columns: what it turns on / what it never does */
+.onb-cols {
+  margin-top: 22px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.onb-col {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--card);
+}
+.onb-col-h {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.onb-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  font-size: var(--fs-lg);
+  line-height: 1.45;
+  color: var(--ink);
+}
+.onb-item svg {
+  flex: none;
+  margin-top: 2px;
+}
+
+/* numbered System Settings steps */
+.onb-steps {
+  margin-top: 16px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--card);
+}
+.onb-steps ol {
+  list-style: none;
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+}
+.onb-steps li {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: var(--fs-lg);
+  color: var(--ink);
+}
+.onb-num {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--onb-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  color: var(--accent);
+  font-size: var(--fs-sm);
+  font-weight: 700;
+}
+
+/* troubleshooting (after the user has opened Settings once) */
+.onb-trouble {
+  margin-top: 16px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--fill);
+}
+.onb-waiting {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 12px;
+  font-size: var(--fs-lg);
+  color: var(--muted);
+}
+.onb-spin {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  border: 2px solid var(--line-strong);
+  border-top-color: var(--accent);
+  animation: onb-spin 0.8s linear infinite;
+}
+.onb-trouble ul {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.onb-trouble li {
+  position: relative;
+  padding-left: 15px;
+  font-size: var(--fs-md);
+  line-height: 1.5;
+  color: var(--muted);
+}
+.onb-trouble li::before {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 7px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--faint);
+}
+
+/* footer / actions */
+.onb-foot {
+  margin-top: 24px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.onb-skipwrap {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.onb-skipnote {
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+  color: var(--faint);
+  max-width: 34ch;
+}
+.onb-success .onb-foot {
+  justify-content: flex-start;
+}
+
+.onb-btn {
+  flex: none;
+  margin-left: auto;
+  padding: 10px 18px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--line-strong);
+  background: var(--fill-strong);
+  color: var(--ink);
+  font: inherit;
+  font-family: var(--sys);
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  cursor: pointer;
+  transition: filter 140ms var(--sp), background 140ms var(--sp), transform 90ms var(--sp);
+}
+.onb-btn:hover {
+  filter: brightness(1.08);
+}
+.onb-btn:active {
+  transform: translateY(1px);
+}
+.onb-btn.primary {
+  background: var(--accent);
+  border-color: transparent;
+  color: var(--accent-ink);
+}
+.onb-btn.lg {
+  padding: 12px 22px;
+}
+.onb-btn.ghost {
+  margin-left: 0;
+  background: transparent;
+  border-color: transparent;
+  color: var(--muted);
+}
+.onb-btn.ghost:hover {
+  background: var(--fill);
+  color: var(--ink);
+  filter: none;
+}
+
+@keyframes onb-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes onb-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .onb-card,
+  .onb-body > * {
+    animation: none;
+  }
+  .onb-spin {
+    animation-duration: 1.6s;
+  }
+}

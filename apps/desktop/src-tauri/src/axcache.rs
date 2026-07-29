@@ -12,7 +12,7 @@
 pub use shogun_core::capture::walk_policy::{walk, AxNode, ContextCache, Limits, Role, WalkResult};
 
 #[cfg(target_os = "macos")]
-pub use mac::{ax_call_count, ax_trusted, browser_url, focused_window, snapshot, AxElement};
+pub use mac::{ax_call_count, ax_trusted, ax_trusted_silent, browser_url, focused_window, snapshot, AxElement};
 
 #[cfg(target_os = "macos")]
 mod mac {
@@ -20,8 +20,8 @@ mod mac {
         kAXChildrenAttribute, kAXDescriptionAttribute, kAXDocumentAttribute, kAXErrorSuccess,
         kAXFocusedWindowAttribute, kAXRoleAttribute, kAXTitleAttribute, kAXTrustedCheckOptionPrompt,
         kAXURLAttribute, kAXValueAttribute,
-        AXIsProcessTrustedWithOptions, AXUIElementCopyAttributeValue, AXUIElementCreateApplication,
-        AXUIElementRef, AXUIElementSetMessagingTimeout,
+        AXIsProcessTrusted, AXIsProcessTrustedWithOptions, AXUIElementCopyAttributeValue,
+        AXUIElementCreateApplication, AXUIElementRef, AXUIElementSetMessagingTimeout,
     };
     use core_foundation::base::TCFType;
     use core_foundation::boolean::CFBoolean;
@@ -187,6 +187,14 @@ mod mac {
             // SAFETY: self.0 is a live element.
             unsafe { copy_children(self.0) }
         }
+    }
+
+    /// Whether this process is trusted for Accessibility, WITHOUT the system prompt. Safe to call
+    /// on a poll (the onboarding permission watcher): reads the current TCC state and never puts up
+    /// the "grant in System Settings" alert, so a background loop can't spam the user.
+    pub fn ax_trusted_silent() -> bool {
+        // SAFETY: argless C call, no ownership involved.
+        unsafe { AXIsProcessTrusted() }
     }
 
     /// Whether this process is trusted for Accessibility (prompts the user if not).
