@@ -173,12 +173,19 @@ pub mod mac {
         context: String,
         state: tauri::State<'_, ApprovalQueueState>,
         db: tauri::State<'_, Db>,
+        user_cfg: tauri::State<'_, crate::user_config_watch::UserConfigState>,
     ) -> Result<u64, String> {
         use shogun_core::llm::AgentClient;
-        let prompt = format!(
+        let directives = user_cfg.directives();
+        let base_prompt = format!(
             "You are drafting a concise, professional {kind} reply. Use the context below; write \
              only the reply body, no preamble.\n\n--- context ---\n{context}"
         );
+        let prompt = if directives.trim().is_empty() {
+            base_prompt
+        } else {
+            format!("{}\n{}", directives.trim(), base_prompt)
+        };
         // Draft through the same BYOK Agent-lane client as inline drafts (invariant 5). Traceability
         // is recorded by the client at the egress point.
         let agent = crate::inline_source::mac::build_agent(&db)

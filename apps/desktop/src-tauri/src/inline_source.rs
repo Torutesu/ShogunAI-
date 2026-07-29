@@ -782,8 +782,13 @@ pub mod mac {
     /// (FR-ST-20) AND the evidence retrieved for that message (Phase R1). Evidence is dated and
     /// attributed so the model answers from what was actually seen, and can say which item it
     /// used rather than asserting from nowhere.
-    fn build_chat_prompt(message: &str, ctx: &ContextPack) -> String {
-        let mut p = String::from(
+    fn build_chat_prompt(message: &str, ctx: &ContextPack, directives: &str) -> String {
+        let mut p = String::new();
+        if !directives.trim().is_empty() {
+            p.push_str(directives.trim());
+            p.push('\n');
+        }
+        p.push_str(
             "You are SHOGUN, the user's private work assistant on their Mac. Answer grounded in what \
              you remember about their work. Be concise, concrete, and useful — no filler.\n\
              Prefer the retrieved evidence over your own assumptions. Cite the item you used when it \
@@ -835,7 +840,7 @@ pub mod mac {
         pub citations: Vec<Citation>,
     }
 
-    fn chat_blocking(db: &Db, message: &str) -> Result<ChatAnswer, String> {
+    fn chat_blocking(db: &Db, message: &str, directives: &str) -> Result<ChatAnswer, String> {
         use shogun_memory::thread::Referent;
 
         // A question that refers to something without naming it ("how's that going?") can't be
@@ -888,7 +893,7 @@ pub mod mac {
         if !agent.is_live() {
             return no_key();
         }
-        let text = agent.complete(&build_chat_prompt(message, &ctx)).map_err(|e| {
+        let text = agent.complete(&build_chat_prompt(message, &ctx, directives)).map_err(|e| {
             // Same latch as the ⌥-tap path: chat surfaces the error text, but Settings is where
             // the fix is, and it needs to know the key is the problem.
             if matches!(e, LlmError::Unauthorized(..)) {
@@ -914,12 +919,14 @@ pub mod mac {
     pub async fn shogun_chat(
         message: String,
         db: tauri::State<'_, Db>,
+        user_cfg: tauri::State<'_, crate::user_config_watch::UserConfigState>,
         app: tauri::AppHandle,
     ) -> Result<ChatAnswer, String> {
         use tauri::Manager;
         let db = db.inner().clone();
+        let directives = user_cfg.directives();
         let started = std::time::Instant::now();
-        let answered = tokio::task::spawn_blocking(move || chat_blocking(&db, &message))
+        let answered = tokio::task::spawn_blocking(move || chat_blocking(&db, &message, &directives))
             .await
             .map_err(|e| e.to_string())?;
 
