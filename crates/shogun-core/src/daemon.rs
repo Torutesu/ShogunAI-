@@ -228,12 +228,16 @@ pub struct Db {
     /// every result still comes back via FTS, just without the semantic half (FR-MEM-22 — an
     /// un-embedded event is never invisible).
     embedder: Option<Arc<dyn shogun_memory::embed::Embedder>>,
+    /// The compression config, when injected (Issue #63). `None` means the raw context path stays
+    /// in effect — the desktop only supplies an `enabled` config behind a flag, so the default is
+    /// unchanged behaviour.
+    compression_config: Option<shogun_fusion::compress::CompressionConfig>,
 }
 
 impl Db {
     /// Wrap an already-open, migrated connection.
     pub fn new(conn: Connection, clock: Clock) -> Self {
-        Self { conn: Arc::new(Mutex::new(conn)), clock, embedder: None }
+        Self { conn: Arc::new(Mutex::new(conn)), clock, embedder: None, compression_config: None }
     }
 
     /// Attach the local embedding model, turning search from lexical-only into hybrid.
@@ -244,6 +248,22 @@ impl Db {
     pub fn with_embedder(mut self, embedder: Arc<dyn shogun_memory::embed::Embedder>) -> Self {
         self.embedder = Some(embedder);
         self
+    }
+
+    /// Inject the compression config (unset = the raw path stays in effect). Same handoff pattern
+    /// as [`with_embedder`]: the desktop decides whether compression is on (behind a flag) and hands
+    /// the config over.
+    pub fn with_compression_config(
+        mut self,
+        config: shogun_fusion::compress::CompressionConfig,
+    ) -> Self {
+        self.compression_config = Some(config);
+        self
+    }
+
+    /// The current compression config (`None` when unset).
+    pub fn compression_config(&self) -> Option<&shogun_fusion::compress::CompressionConfig> {
+        self.compression_config.as_ref()
     }
 
     /// Embed events that do not have a vector yet (FR-MEM-22: embedding is off the write path,
