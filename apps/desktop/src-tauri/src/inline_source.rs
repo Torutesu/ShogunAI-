@@ -1061,4 +1061,30 @@ pub mod mac {
         }
         answered
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::{analytics_enabled, PrivacyPrefs, PRIVACY_PREFS};
+
+        /// Analytics is opt-IN: a fresh `PrivacyPrefs` (a new install, or a `privacy.json` that
+        /// fails to parse and falls back to the default) must have stats OFF. The `bool` default
+        /// carries this, so the test guards against anyone changing the field default under it.
+        #[test]
+        fn default_prefs_have_analytics_off() {
+            assert!(!PrivacyPrefs::default().analytics_enabled, "opt-in: default must be OFF");
+        }
+
+        /// Fail-closed: with the cache unset (`None`) — before `init_privacy_prefs` runs, or if the
+        /// lock is poisoned — the gate every send passes through must report OFF, never ON. The
+        /// static starts as `None`; no test in this module ever populates it, so this reads the
+        /// genuine unset path.
+        #[test]
+        fn analytics_gate_is_closed_when_cache_is_unset() {
+            assert!(
+                PRIVACY_PREFS.lock().map(|g| g.is_none()).unwrap_or(true),
+                "precondition: the prefs cache is unset in this test process",
+            );
+            assert!(!analytics_enabled(), "fail-closed: unset cache must gate analytics OFF");
+        }
+    }
 }

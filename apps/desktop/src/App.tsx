@@ -1816,7 +1816,11 @@ function PrivacySecuritySection(props: {
   const toggleAnalytics = (next: boolean): void => {
     setAnalytics(next);
     if (IN_TAURI)
-      void invoke("set_analytics_enabled", { enabled: next }).catch(() => setAnalytics(!next));
+      // Roll back only if the UI still shows the value THIS write set — two rapid toggles whose
+      // writes resolve out of order must not let a stale failure flip a state a later write owns.
+      void invoke("set_analytics_enabled", { enabled: next }).catch(() =>
+        setAnalytics((cur) => (cur === next ? !next : cur)),
+      );
   };
 
   // Data deletion (A3). 1h/24h are single-tap-then-confirm; "all" wipes everything and the keys,
