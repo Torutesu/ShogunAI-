@@ -480,6 +480,15 @@ impl Db {
         .ok()
     }
 
+    /// Attach an already-recorded event to a session (FR-MT-05). Best-effort: the event is durable
+    /// whether or not it attaches, so a lock/write failure is swallowed. Returns whether it stuck.
+    pub fn attach_event_to_meeting(&self, session_id: i64, event_id: i64) -> bool {
+        self.conn
+            .lock()
+            .ok()
+            .is_some_and(|conn| shogun_memory::session::attach_event(&conn, session_id, event_id).is_ok())
+    }
+
     /// Close a meeting interval. Idempotent — the first close wins (FR-MT-11).
     pub fn close_meeting(&self, id: i64) -> bool {
         let now = self.now_ms();
@@ -911,6 +920,20 @@ impl Db {
         blocks.extend(evidence_to_blocks(&pack.evidence, 0.7, &est));
         // 解決済みスレッドの保存済み要約を候補に加える（差し替えレバー）。
         blocks.extend(self.thread_summaries_to_blocks(thread_keys, &est));
+        // 取得 evidence の属する session の保存済み要約を候補に加える（thread と対称・Issue #63）。
+        let evidence_event_ids: Vec<i64> = pack.evidence.iter().map(|e| e.event_id).collect();
+        for sid in self.session_ids_for_events(&evidence_event_ids) {
+            if let Some(s) = self.session_summary(sid) {
+                blocks.push(shogun_fusion::block::ContextBlock::new(
+                    shogun_fusion::block::BlockRef::Session(sid),
+                    shogun_fusion::block::SourceKind::SessionSummary,
+                    s,
+                    // 参照先として retrieved evidence が属する＝関連度は高い。confidence は要約＝1.0。
+                    shogun_fusion::block::ScoreInputs { relevance: 0.85, freshness: 0.7, task_link: 0.5, confidence: 1.0 },
+                    &est,
+                ));
+            }
+        }
 
         // 時間予算を超えたらフォールバック（raw をそのまま返す）。
         if started.elapsed().as_millis() as u64 > COMPRESS_BUDGET_MS {
@@ -1135,6 +1158,52 @@ impl Db {
     /// Compression job's effect is verified through this, since `ThreadRow` does not carry it.
     pub fn thread_summary(&self, thread_key: &str) -> Option<String> {
         self.conn.lock().ok().and_then(|c| shogun_memory::thread::get_summary(&c, thread_key).ok().flatten())
+    }
+
+    /// Sessions whose `started_at` is in `[from_ts, to_ts]` — the window a Compression job
+    /// summarises (Issue #63), the interval analogue of [`Self::active_threads_between`]. Empty on
+    /// a lock/read failure so a hiccup fails the job (leaving the cycle resumable) rather than
+    /// crashing the daemon.
+    pub fn active_sessions_between(&self, from_ts: i64, to_ts: i64) -> Vec<i64> {
+        self.conn
+            .lock()
+            .ok()
+            .and_then(|c| shogun_memory::session::active_between(&c, from_ts, to_ts).ok())
+            .unwrap_or_default()
+    }
+
+    /// Every event body attached to one session, oldest first — the material the Compression
+    /// summariser reads (Issue #63). Empty on a lock/read failure.
+    pub fn session_event_texts(&self, session_id: i64) -> Vec<event_log::EventText> {
+        self.conn
+            .lock()
+            .ok()
+            .and_then(|c| shogun_memory::session::event_texts(&c, session_id).ok())
+            .unwrap_or_default()
+    }
+
+    /// Write a session's day-summary (Issue #63). Best-effort: a lock/write failure is swallowed so
+    /// a hiccup fails the job, not the daemon. Uses the daemon clock for `updated_at`.
+    pub fn set_session_summary(&self, session_id: i64, summary: &str) {
+        let now = self.now_ms();
+        if let Ok(c) = self.conn.lock() {
+            let _ = shogun_memory::session::set_summary(&c, session_id, summary, now);
+        }
+    }
+
+    /// Read back a session's summary (`None` when unset, absent, or on a read failure).
+    pub fn session_summary(&self, session_id: i64) -> Option<String> {
+        self.conn.lock().ok().and_then(|c| shogun_memory::session::get_summary(&c, session_id).ok().flatten())
+    }
+
+    /// The DISTINCT sessions owning the given events — the query-time consume path (Issue #63).
+    /// Empty on a lock/read failure or empty input.
+    pub fn session_ids_for_events(&self, event_ids: &[i64]) -> Vec<i64> {
+        self.conn
+            .lock()
+            .ok()
+            .and_then(|c| shogun_memory::session::session_ids_for_events(&c, event_ids).ok())
+            .unwrap_or_default()
     }
 
     /// Descriptions already present in `commitments` + `open_loops`, for consolidation dedup — so a
@@ -3048,6 +3117,47 @@ mod tests {
         assert!(
             !joined.contains("detail"),
             "要約が raw ターンを押しのけるべき（生ターンの語が残っている）: {joined}"
+        );
+    }
+
+    #[test]
+    fn session_summary_of_retrieved_evidence_reaches_the_compressed_pack() {
+        use shogun_fusion::compress::CompressionConfig;
+
+        let db = Db::open_in_memory(clock(10_000)).unwrap();
+        // A meeting session, with a captured event attached to it that matches the query — so the
+        // event is retrieved as evidence and its owning session's summary is pulled in.
+        let sid = db.open_meeting(Some("Vendor sync"), Some("us.zoom.xos"), 0.6, "{}").unwrap();
+        let (ev_id, _) = db.capture(&ev("vendor renewal pricing discussion detail line", "h0", 100)).unwrap();
+        assert!(db.attach_event_to_meeting(sid, ev_id), "the event must attach to the session");
+        // A short session summary, token-efficient relative to the raw turn — carries a word the raw
+        // excerpt does not ("sign-off") so its arrival is unambiguous.
+        db.set_session_summary(sid, "Renewal priced at 12k; awaiting sign-off.");
+
+        // 十分予算: SessionSummary 由来テキストが pack に出る。
+        let cfg = CompressionConfig { enabled: true, budget_tokens: 100_000, ..Default::default() };
+        let (pack, _stats, fell_back) = db.assemble_context_compressed("renewal pricing", 6, 600, &[], &cfg);
+        assert!(!fell_back);
+        let joined = format!(
+            "{} {}",
+            pack.facts.join(" "),
+            pack.evidence.iter().map(|e| e.excerpt.clone()).collect::<Vec<_>>().join(" ")
+        );
+        assert!(joined.contains("sign-off"), "session の要約が pack に届くべき: {joined}");
+
+        // 予算逼迫: 短い要約(relevance 0.85)が raw ターンを押しのけて残る。
+        let tight = CompressionConfig { enabled: true, budget_tokens: 12, ..Default::default() };
+        let (pack_t, stats_t, fell_t) = db.assemble_context_compressed("renewal pricing", 6, 600, &[], &tight);
+        assert!(!fell_t);
+        assert!(stats_t.post_tokens <= 12, "予算内に収まる: post={}", stats_t.post_tokens);
+        let joined_t = format!(
+            "{} {}",
+            pack_t.facts.join(" "),
+            pack_t.evidence.iter().map(|e| e.excerpt.clone()).collect::<Vec<_>>().join(" ")
+        );
+        assert!(
+            joined_t.contains("sign-off") || joined_t.contains("12k"),
+            "予算逼迫下でも session 要約が生き残るべき: {joined_t}"
         );
     }
 }
