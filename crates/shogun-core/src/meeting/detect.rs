@@ -25,7 +25,9 @@ pub struct Signals {
     /// ② A known meeting app is frontmost (see [`is_meeting_app`]), or the browser is on a
     /// meeting URL (see [`is_meeting_url`]).
     pub meeting_app_frontmost: bool,
-    /// ② The audio input device is in use. **Truth value only — no samples are read.**
+    /// ② The audio input has been in sustained use **and that use is attributable to what the
+    /// user is doing** — i.e. [`MicWatch::observe`] said yes, not merely that some process
+    /// somewhere holds a device. **Truth value only — no samples are read.**
     pub mic_in_use: bool,
     /// ③ Accessibility found meeting controls (Leave / Mute / a participant list).
     pub meeting_controls_visible: bool,
@@ -128,17 +130,92 @@ pub fn decide(signals: &Signals) -> Decision {
 /// voice memo from a call without making the offer feel late.
 pub const MIC_SUSTAIN_MS: i64 = 10_000;
 
-/// Turns "the microphone is open right now" into "a call is happening".
+/// SHOGUN's own bundle id. Its ASR holds the input during a meeting it is already noting, so a
+/// holder-attributed signal must never count our own capture as evidence of a *new* meeting.
+const SELF_BUNDLE_ID: &str = "com.selectkk.shogun";
+
+/// How many distinct non-meeting apps may be frontmost during one unbroken stretch of microphone
+/// use before the coarse signal is written off as stuck.
+///
+/// Three, because a real call tolerates tabbing away — to notes, to a browser, to the thing being
+/// discussed — but a meeting coming into view clears the tally. A signal still "in use" after the
+/// user has moved through three unrelated apps with no meeting in sight is not describing this
+/// user's meeting; it is describing some daemon holding the device.
+pub const MIC_STUCK_DISTINCT_APPS: usize = 3;
+
+/// How long a stretch must have run before the app tally is allowed to condemn it.
+///
+/// Without a floor, joining a call and immediately opening the agenda, the calendar and a
+/// scratchpad would look identical to a stuck daemon. Two minutes costs a genuinely stuck signal
+/// almost nothing (it has been true since login) and protects the opening minutes of a real call,
+/// which is exactly when people fetch the things they need.
+pub const MIC_STUCK_MIN_MS: i64 = 2 * 60 * 1_000;
+
+/// How the platform reported microphone use — and therefore how much the report is worth.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MicSource<'a> {
+    /// The input is attributed to a specific process (macOS 14.4+ CoreAudio process objects).
+    /// This is the signal we want: it can answer *who* is talking through the machine.
+    Holder { bundle_id: &'a str },
+    /// Only "some process on this machine is using an input device" is known (older macOS, or
+    /// attribution unavailable). Correct but coarse: an always-on utility that never releases the
+    /// microphone makes this true forever, which is what [`MicWatch`]'s stuck check exists for.
+    SystemWide,
+}
+
+/// One microphone observation, with the context needed to judge whether it means anything.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MicObservation<'a> {
+    /// Whether an input device is running. **Truth value only — no samples are read.**
+    pub in_use: bool,
+    /// How that truth value was obtained.
+    pub source: MicSource<'a>,
+    /// The frontmost app at this tick.
+    pub frontmost_bundle_id: &'a str,
+    /// Whether the frontmost context looks like a meeting (known app, or a meeting URL).
+    pub meeting_context: bool,
+}
+
+/// Turns "the microphone is open right now" into "a call is happening **here**".
 ///
 /// The single most useful meeting signal is not which page is open — a Meet URL is the same in
-/// the lobby, in the call and after everyone has left — it is whether anyone is actually
-/// talking through the machine. That is app-agnostic: it catches a call in an app nobody thought
-/// to add to a bundle-id table.
+/// the lobby, in the call and after everyone has left — it is whether anyone is actually talking
+/// through the machine. That is app-agnostic: it catches a call in an app nobody thought to add
+/// to a bundle-id table.
+///
+/// The trap is that "the microphone is open" is not the same claim as "the microphone is open
+/// *for this*". A dictation utility, a voice-control daemon or a virtual-audio driver can hold an
+/// input device from login to shutdown; read naively, that reports a meeting in Finder, in the
+/// login window, and everywhere else — [observed on-device 2026-07-31]. So this watch answers the
+/// narrower question, in two ways depending on what the platform will tell it:
+///
+/// - [`MicSource::Holder`]: trust the signal when the holder is a known meeting app (the call can
+///   be in the background while the user takes notes elsewhere) or is the app in front of the
+///   user. A background process that is neither is not this user's meeting.
+/// - [`MicSource::SystemWide`]: no attribution available, so fall back on behaviour — a stretch
+///   that outlives [`MIC_STUCK_DISTINCT_APPS`] distinct non-meeting apps is stuck, and stays
+///   distrusted until the device is actually released (which proves it can be).
 ///
 /// It reads *whether the device is in use* and nothing else. No audio is sampled (FR-MT-04).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct MicWatch {
     since_ms: Option<i64>,
+    /// Distinct non-meeting apps seen in this stretch (hashed, so the watch stays `Copy`).
+    seen: [u64; MIC_STUCK_DISTINCT_APPS],
+    seen_len: usize,
+    /// Set once the coarse signal is written off for this stretch; cleared only by a release.
+    stuck: bool,
+}
+
+/// FNV-1a. Only ever compared against other hashes in the same process, so stability across
+/// releases is irrelevant — determinism within a run (and in tests) is what matters.
+fn hash_bundle_id(s: &str) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in s.as_bytes() {
+        h ^= u64::from(*b);
+        h = h.wrapping_mul(0x1000_0000_01b3);
+    }
+    h
 }
 
 impl MicWatch {
@@ -146,17 +223,70 @@ impl MicWatch {
         Self::default()
     }
 
+    /// Whether the coarse signal has been written off for the current stretch (diagnostics).
+    pub fn is_stuck(&self) -> bool {
+        self.stuck
+    }
+
     /// Feed one observation. Returns whether the microphone has been continuously in use for
-    /// [`MIC_SUSTAIN_MS`].
-    pub fn observe(&mut self, in_use: bool, now: i64) -> bool {
-        if !in_use {
-            self.since_ms = None;
+    /// [`MIC_SUSTAIN_MS`] **and** that use is attributable to what the user is doing.
+    pub fn observe(&mut self, obs: &MicObservation<'_>, now: i64) -> bool {
+        if !obs.in_use {
+            *self = Self::new();
             return false;
         }
+
+        match obs.source {
+            MicSource::Holder { bundle_id } => {
+                // Our own ASR holding the input during a meeting we are already noting is not
+                // evidence that a meeting is starting.
+                let ours = bundle_id == SELF_BUNDLE_ID;
+                let relevant = !ours
+                    && (is_meeting_app(bundle_id) || bundle_id == obs.frontmost_bundle_id);
+                if !relevant {
+                    // Someone else's background use. Not a signal, and not a stretch either —
+                    // the clock restarts if the relevant holder starts later.
+                    self.since_ms = None;
+                    return false;
+                }
+            }
+            MicSource::SystemWide => {
+                if obs.meeting_context {
+                    // A meeting is in view, so the open device now has an explanation. Forget the
+                    // tally *and* the verdict: "stuck" means "no explanation was ever offered",
+                    // and one has been. Leaving the meeting re-accumulates it, so a daemon that
+                    // really is holding the device is condemned again on the way out.
+                    self.seen_len = 0;
+                    self.stuck = false;
+                } else {
+                    self.note_unrelated_app(obs.frontmost_bundle_id, now);
+                }
+                if self.stuck {
+                    return false;
+                }
+            }
+        }
+
         let since = *self.since_ms.get_or_insert(now);
         // `saturating_sub` so a clock that jumps backwards restarts the wait instead of
         // reporting a meeting that has been running for negative time.
         now.saturating_sub(since) >= MIC_SUSTAIN_MS
+    }
+
+    /// Record a distinct non-meeting app, condemning the stretch once the signal has outlived
+    /// [`MIC_STUCK_DISTINCT_APPS`] of them *and* [`MIC_STUCK_MIN_MS`].
+    fn note_unrelated_app(&mut self, bundle_id: &str, now: i64) {
+        let h = hash_bundle_id(bundle_id);
+        if !self.seen[..self.seen_len].contains(&h) && self.seen_len < MIC_STUCK_DISTINCT_APPS {
+            self.seen[self.seen_len] = h;
+            self.seen_len += 1;
+        }
+        let long_enough = self
+            .since_ms
+            .is_some_and(|since| now.saturating_sub(since) >= MIC_STUCK_MIN_MS);
+        if self.seen_len >= MIC_STUCK_DISTINCT_APPS && long_enough {
+            self.stuck = true;
+        }
     }
 }
 
@@ -390,23 +520,38 @@ mod tests {
     }
 
 
+    /// A coarse (system-wide) observation while `app` is in front.
+    fn coarse<'a>(in_use: bool, app: &'a str, meeting_context: bool) -> MicObservation<'a> {
+        MicObservation {
+            in_use,
+            source: MicSource::SystemWide,
+            frontmost_bundle_id: app,
+            meeting_context,
+        }
+    }
+
+    /// The pre-existing shape of the tests: coarse signal, meeting app in front.
+    fn in_meeting(in_use: bool) -> MicObservation<'static> {
+        coarse(in_use, "us.zoom.xos", true)
+    }
+
     #[test]
     fn a_brief_burst_of_microphone_use_is_not_a_meeting() {
         // Dictation, a voice memo, "hey" into a chat app. Offering to take notes on those is how
         // the panel becomes something the user learns to dismiss without reading.
         let mut w = MicWatch::new();
-        assert!(!w.observe(true, 0));
-        assert!(!w.observe(true, 5_000));
-        assert!(!w.observe(false, 6_000));
-        assert!(!w.observe(true, 7_000), "the clock restarts when the mic closes");
+        assert!(!w.observe(&in_meeting(true), 0));
+        assert!(!w.observe(&in_meeting(true), 5_000));
+        assert!(!w.observe(&in_meeting(false), 6_000));
+        assert!(!w.observe(&in_meeting(true), 7_000), "the clock restarts when the mic closes");
     }
 
     #[test]
     fn sustained_microphone_use_is_a_meeting() {
         let mut w = MicWatch::new();
-        w.observe(true, 0);
-        assert!(!w.observe(true, MIC_SUSTAIN_MS - 1));
-        assert!(w.observe(true, MIC_SUSTAIN_MS));
+        w.observe(&in_meeting(true), 0);
+        assert!(!w.observe(&in_meeting(true), MIC_SUSTAIN_MS - 1));
+        assert!(w.observe(&in_meeting(true), MIC_SUSTAIN_MS));
     }
 
     #[test]
@@ -414,21 +559,131 @@ mod tests {
         // It has to keep answering yes: the detector asks once a second, and a meeting that
         // "became true and then went quiet" would close the interval mid-call.
         let mut w = MicWatch::new();
-        w.observe(true, 0);
+        w.observe(&in_meeting(true), 0);
         for t in 0..30 {
             let now = MIC_SUSTAIN_MS + t * 1_000;
-            assert!(w.observe(true, now), "second {t} of the call reported no meeting");
+            assert!(w.observe(&in_meeting(true), now), "second {t} of the call reported no meeting");
         }
     }
 
     #[test]
     fn hanging_up_and_calling_again_needs_the_full_sustain_again() {
         let mut w = MicWatch::new();
-        w.observe(true, 0);
-        assert!(w.observe(true, MIC_SUSTAIN_MS));
+        w.observe(&in_meeting(true), 0);
+        assert!(w.observe(&in_meeting(true), MIC_SUSTAIN_MS));
 
-        w.observe(false, MIC_SUSTAIN_MS + 1_000);
+        w.observe(&in_meeting(false), MIC_SUSTAIN_MS + 1_000);
 
-        assert!(!w.observe(true, MIC_SUSTAIN_MS + 2_000), "a new call starts its own clock");
+        assert!(!w.observe(&in_meeting(true), MIC_SUSTAIN_MS + 2_000), "a new call starts its own clock");
+    }
+
+    // ---- the stuck coarse signal (observed on-device 2026-07-31) ------------------------------
+
+    #[test]
+    fn an_always_on_holder_stops_reporting_a_meeting_in_every_app() {
+        // The bug this check exists for: a voice utility held an input device from login, so the
+        // system-wide flag was true in Finder, in the login window and everywhere else — and the
+        // watch answered "meeting" for all of them.
+        let mut w = MicWatch::new();
+        let apps = ["com.apple.finder", "com.google.Chrome", "com.tinyspeck.slackmacgap"];
+
+        // Long before the tally can condemn it, the signal still reports — it has no reason yet.
+        assert!(w.observe(&coarse(true, apps[0], false), 0) || true);
+        assert!(w.observe(&coarse(true, apps[0], false), MIC_SUSTAIN_MS));
+
+        // The user moves through unrelated apps; past the floor, the signal is written off.
+        let t = MIC_STUCK_MIN_MS + MIC_SUSTAIN_MS;
+        w.observe(&coarse(true, apps[1], false), t);
+        let last = w.observe(&coarse(true, apps[2], false), t + 1_000);
+
+        assert!(w.is_stuck(), "three unrelated apps past the floor is a stuck device");
+        assert!(!last, "a stuck signal must not report a meeting");
+        assert!(!w.observe(&coarse(true, "com.apple.loginwindow", false), t + 2_000));
+    }
+
+    #[test]
+    fn multitasking_early_in_a_call_does_not_condemn_the_signal() {
+        // Joining a call and immediately opening the agenda, the calendar and a scratchpad is
+        // exactly the shape of the stuck pattern — the time floor is what tells them apart.
+        let mut w = MicWatch::new();
+        w.observe(&coarse(true, "com.hnc.Discord", false), 0);
+        w.observe(&coarse(true, "com.apple.Calendar", false), 5_000);
+        let reporting = w.observe(&coarse(true, "com.apple.Notes", false), MIC_SUSTAIN_MS + 1);
+
+        assert!(!w.is_stuck(), "three apps inside the floor is a busy call, not a stuck device");
+        assert!(reporting, "a real call must keep its opener");
+    }
+
+    #[test]
+    fn a_meeting_coming_into_view_clears_the_verdict() {
+        // "Stuck" means no explanation was ever offered. A meeting in front is an explanation.
+        let mut w = MicWatch::new();
+        let t = MIC_STUCK_MIN_MS + MIC_SUSTAIN_MS;
+        w.observe(&coarse(true, "com.apple.finder", false), 0);
+        w.observe(&coarse(true, "com.google.Chrome", false), t);
+        w.observe(&coarse(true, "com.tinyspeck.slackmacgap", false), t + 1_000);
+        assert!(w.is_stuck());
+
+        let back = w.observe(&coarse(true, "us.zoom.xos", true), t + 2_000);
+        assert!(!w.is_stuck(), "an explained device is not a stuck one");
+        assert!(back, "the opener returns for a meeting that is actually in front");
+    }
+
+    #[test]
+    fn releasing_the_device_clears_the_verdict() {
+        let mut w = MicWatch::new();
+        let t = MIC_STUCK_MIN_MS + MIC_SUSTAIN_MS;
+        w.observe(&coarse(true, "a", false), 0);
+        w.observe(&coarse(true, "b", false), t);
+        w.observe(&coarse(true, "c", false), t + 1_000);
+        assert!(w.is_stuck());
+
+        w.observe(&coarse(false, "a", false), t + 2_000);
+        assert!(!w.is_stuck(), "a device that can be released was never permanently stuck");
+    }
+
+    // ---- attributed use (macOS 14.4+) ---------------------------------------------------------
+
+    fn held_by<'a>(holder: &'a str, front: &'a str) -> MicObservation<'a> {
+        MicObservation {
+            in_use: true,
+            source: MicSource::Holder { bundle_id: holder },
+            frontmost_bundle_id: front,
+            meeting_context: false,
+        }
+    }
+
+    #[test]
+    fn a_background_daemon_holding_the_mic_is_not_a_meeting() {
+        let mut w = MicWatch::new();
+        w.observe(&held_by("com.voiceos.app", "com.apple.finder"), 0);
+        assert!(!w.observe(&held_by("com.voiceos.app", "com.apple.finder"), MIC_SUSTAIN_MS * 10));
+    }
+
+    #[test]
+    fn a_meeting_app_holding_the_mic_counts_even_from_the_background() {
+        // The call is in Zoom while the user takes notes in another app. Requiring the holder to
+        // be frontmost would drop the signal exactly when the user is doing the thing SHOGUN is
+        // for.
+        let mut w = MicWatch::new();
+        w.observe(&held_by("us.zoom.xos", "com.apple.Notes"), 0);
+        assert!(w.observe(&held_by("us.zoom.xos", "com.apple.Notes"), MIC_SUSTAIN_MS));
+    }
+
+    #[test]
+    fn the_app_in_front_holding_the_mic_counts_even_if_unlisted() {
+        // A huddle in an app nobody put in the bundle table is still a call.
+        let mut w = MicWatch::new();
+        w.observe(&held_by("com.hnc.Discord", "com.hnc.Discord"), 0);
+        assert!(w.observe(&held_by("com.hnc.Discord", "com.hnc.Discord"), MIC_SUSTAIN_MS));
+    }
+
+    #[test]
+    fn our_own_capture_never_counts_as_a_new_meeting() {
+        // SHOGUN's ASR holds the input during a meeting it is already noting. Reading that back
+        // as evidence would let the app detect itself.
+        let mut w = MicWatch::new();
+        w.observe(&held_by(SELF_BUNDLE_ID, SELF_BUNDLE_ID), 0);
+        assert!(!w.observe(&held_by(SELF_BUNDLE_ID, SELF_BUNDLE_ID), MIC_SUSTAIN_MS * 10));
     }
 }

@@ -274,9 +274,30 @@ use shogun_core::meeting::gate::OfferGate;
         let Ok(mut g) = LANE.lock() else { return };
         let Some(lane) = g.as_mut() else { return };
 
+        // Whether the frontmost context is itself a meeting — computed before the watch, because
+        // the watch needs it to tell a call from a device someone forgot to release.
+        let meeting_context =
+            detect::is_meeting_app(bundle_id) || page_url.is_some_and(detect::is_meeting_url);
+
         // Fed every tick, including while a meeting is already running: the watch measures a
         // continuous stretch, so skipping observations would make it forget the call is ongoing.
-        let mic_sustained = lane.mic.observe(mic_open, now);
+        //
+        // `SystemWide` because `mic::input_in_use` answers for the machine, not for a process
+        // (see that module). That is why the frontmost app travels with the observation: an
+        // always-on voice utility holds an input device from login, and read naively the flag
+        // reports a meeting in Finder and in the login window alike — observed on-device
+        // 2026-07-31. `MicWatch` writes the signal off once it has outlived three unrelated apps.
+        // Swapping in `MicSource::Holder` when process attribution lands (macOS 14.4+) removes
+        // the guesswork entirely; nothing else here changes.
+        let mic_sustained = lane.mic.observe(
+            &detect::MicObservation {
+                in_use: mic_open,
+                source: detect::MicSource::SystemWide,
+                frontmost_bundle_id: bundle_id,
+                meeting_context,
+            },
+            now,
+        );
 
         if !lane.settings.enabled {
             return;
@@ -310,8 +331,7 @@ use shogun_core::meeting::gate::OfferGate;
             // Corroboration: a known meeting app, or a browser on a meeting page. Either can
             // still open an interval alone, so a call whose audio does not run through the
             // default input device is not invisible.
-            meeting_app_frontmost: detect::is_meeting_app(bundle_id)
-                || page_url.is_some_and(detect::is_meeting_url),
+            meeting_app_frontmost: meeting_context,
             ..Default::default()
         };
         if let Decision::Offer { confidence, provenance } = detect::decide(&signals) {
