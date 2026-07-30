@@ -23,6 +23,18 @@ function beginDrag(e: React.MouseEvent): void {
       .catch((err) => uiLog(`startDragging failed: ${err}`)),
   );
 }
+
+// Collapsed state: let the pill be dragged to a new spot (issue #21). The whole strip is one
+// button whose click expands the panel, so we can't use beginDrag (it bails on buttons). Native
+// performWindowDragWithEvent handles the distinction for us: a real drag moves the window and
+// swallows the click, while a stationary press returns and falls through to onClick (expand) —
+// so the pill stays click-to-open AND becomes drag-to-move without a manual threshold. Rust
+// remembers the dropped spot as the resting place until a Castle Position is picked again
+// (docs/fixes/2026-07-30-pill-drag-port-design.md).
+function beginPillDrag(e: React.MouseEvent): void {
+  if (!IN_TAURI || e.button !== 0) return;
+  void invoke("start_panel_drag").catch((err) => uiLog(`start_panel_drag failed: ${err}`));
+}
 import { t } from "./strings";
 import { SERVICE_ICONS } from "./serviceIcons";
 
@@ -587,6 +599,13 @@ export function App(): JSX.Element {
           onClick={() => {
             cancelHoverOpen();
             expand();
+          }}
+          onMouseDown={(e) => {
+            // A drag must never expand the panel: kill the hover-dwell timer the moment the
+            // press starts. The native drag swallows the click on a real move; a stationary
+            // press still expands through onClick above.
+            cancelHoverOpen();
+            beginPillDrag(e);
           }}
           onPointerEnter={onHandleEnter}
           onPointerLeave={cancelHoverOpen}

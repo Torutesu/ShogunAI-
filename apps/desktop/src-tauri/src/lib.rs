@@ -75,6 +75,57 @@ fn current_castle() -> shogun_core::notch::geometry::CastlePosition {
     shogun_core::notch::geometry::CastlePosition::from_u8(CASTLE.load(std::sync::atomic::Ordering::Relaxed))
 }
 
+/// User-dragged override of the Castle Position (issue #21). `Some` after the user drags the
+/// panel (collapsed pill or expanded header); every dock path then resolves through
+/// `resting_origin` instead of `castle_origin`, so summon / reassert / view-switch resizes all
+/// respect the dragged spot. Cleared by `set_castle_position` — picking a castle is the explicit
+/// "go home". Persisted next to the position in `castle.json` so the spot survives restart.
+/// A Mutex (not an atomic) because it is only touched on the main thread and in the rare set
+/// command — never on a latency-critical path without the lock being uncontended.
+#[cfg(target_os = "macos")]
+static DRAG_OVERRIDE: std::sync::Mutex<Option<shogun_core::notch::geometry::DragOffset>> =
+    std::sync::Mutex::new(None);
+
+/// True while OUR code is moving the panel (dock / redock / resize). `setFrameOrigin`/`setFrame:`
+/// post `NSWindowDidMoveNotification` synchronously on the calling (main) thread, and every
+/// programmatic move happens on the main thread, so bracketing them with this flag cleanly
+/// separates them from user drags in the did-move observer (`note_user_move`).
+#[cfg(target_os = "macos")]
+static PROGRAMMATIC_MOVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The drag override, if any (poisoned lock reads as "no override" — never panic in the shell).
+#[cfg(target_os = "macos")]
+fn current_drag_override() -> Option<shogun_core::notch::geometry::DragOffset> {
+    DRAG_OVERRIDE.lock().ok().and_then(|g| *g)
+}
+
+/// Where the panel rests on the screen whose visible frame is `vis`: the user's dragged spot when
+/// one exists (issue #21), else the chosen Castle Position (issue #20). Both are pure functions
+/// with the same on-screen clamp, so a display change can only pull the panel back on screen.
+#[cfg(target_os = "macos")]
+fn resting_origin(
+    vis: shogun_core::notch::geometry::Rect,
+    w: f64,
+    h: f64,
+) -> shogun_core::notch::geometry::Point {
+    use shogun_core::notch::geometry::{castle_origin, drag_origin};
+    match current_drag_override() {
+        Some(off) => drag_origin(vis, w, h, off),
+        None => castle_origin(vis, w, h, current_castle()),
+    }
+}
+
+/// Run `f` with `PROGRAMMATIC_MOVE` raised, so the did-move observer ignores moves we made
+/// ourselves. Main thread only (see `PROGRAMMATIC_MOVE`).
+#[cfg(target_os = "macos")]
+fn with_programmatic_move<R>(f: impl FnOnce() -> R) -> R {
+    use std::sync::atomic::Ordering;
+    PROGRAMMATIC_MOVE.store(true, Ordering::Relaxed);
+    let r = f();
+    PROGRAMMATIC_MOVE.store(false, Ordering::Relaxed);
+    r
+}
+
 /// The NATIVE NSPanel that actually hosts the webview content on screen. The tauri/tao window
 /// stays alive but permanently hidden (it owns the wry webview plumbing); its contentView is
 /// reparented into this panel at startup. Every ordering/visibility/space operation targets THIS
@@ -515,7 +566,7 @@ unsafe fn reposition_to_cursor_screen(ptr: *mut objc2::runtime::AnyObject) {
     use objc2::runtime::AnyObject;
     use objc2::{class, msg_send};
     use objc2_foundation::{NSPoint, NSRect};
-    use shogun_core::notch::geometry::{castle_origin, Rect as GRect};
+    use shogun_core::notch::geometry::Rect as GRect;
     let mouse: NSPoint = msg_send![class!(NSEvent), mouseLocation];
     let screens: *mut AnyObject = msg_send![class!(NSScreen), screens];
     let count: usize = if screens.is_null() { 0 } else { msg_send![screens, count] };
@@ -530,15 +581,22 @@ unsafe fn reposition_to_cursor_screen(ptr: *mut objc2::runtime::AnyObject) {
             && mouse.y >= f.origin.y
             && mouse.y <= f.origin.y + f.size.height;
         if inside {
-            // Dock at the user's Castle Position on the cursor's display (issue #20). The default
-            // (Notch) keeps the historical behaviour: top-centre, just under the menu bar/notch,
-            // never overlapping it. Edge/corner positions rest flush to that edge/corner instead.
+            // Dock at the user's resting place on the cursor's display: the dragged spot when one
+            // exists (issue #21), else the Castle Position (issue #20). The default (Notch) keeps
+            // the historical behaviour: top-centre, just under the menu bar/notch, never
+            // overlapping it. Edge/corner positions rest flush to that edge/corner instead.
             let vf: NSRect = msg_send![s, visibleFrame];
             let w: NSRect = msg_send![ptr, frame];
             let vis = GRect::new(vf.origin.x, vf.origin.y, vf.size.width, vf.size.height);
-            let o = castle_origin(vis, w.size.width, w.size.height, current_castle());
+            let o = resting_origin(vis, w.size.width, w.size.height);
             let origin = NSPoint { x: o.x, y: o.y };
-            let _: () = msg_send![ptr, setFrameOrigin: origin];
+            with_programmatic_move(|| {
+                // SAFETY: same contract as the enclosing fn (main thread, live panel); the
+                // closure needs its own block because it doesn't inherit the unsafe context.
+                unsafe {
+                    let _: () = msg_send![ptr, setFrameOrigin: origin];
+                }
+            });
             break;
         }
     }
@@ -649,9 +707,10 @@ fn set_panel_hidden(handle: &tauri::AppHandle) {
     });
 }
 
-/// (main thread) Dock the window at the user's Castle Position on the MENU-BAR display (issue #20).
-/// The default (Notch) is top-centre, just under the menu bar/notch (visibleFrame top — never
-/// overlapping the notch); edge/corner positions rest flush to that edge/corner.
+/// (main thread) Dock the window at the user's resting place on the MENU-BAR display: the dragged
+/// spot when one exists (issue #21), else the Castle Position (issue #20). The default (Notch) is
+/// top-centre, just under the menu bar/notch (visibleFrame top — never overlapping the notch);
+/// edge/corner positions rest flush to that edge/corner.
 ///
 /// SAFETY: caller guarantees `ptr` is the live NSWindow and we're on the main thread.
 #[cfg(target_os = "macos")]
@@ -659,7 +718,7 @@ unsafe fn pin_top_centre(ptr: *mut objc2::runtime::AnyObject) {
     use objc2::runtime::AnyObject;
     use objc2::{class, msg_send};
     use objc2_foundation::{NSPoint, NSRect};
-    use shogun_core::notch::geometry::{castle_origin, Rect as GRect};
+    use shogun_core::notch::geometry::Rect as GRect;
 
     // Dock to the MENU-BAR display, not whichever one the pointer happened to be on at launch.
     //
@@ -691,15 +750,22 @@ unsafe fn pin_top_centre(ptr: *mut objc2::runtime::AnyObject) {
     let vf: NSRect = msg_send![screen, visibleFrame];
     let w: NSRect = msg_send![ptr, frame];
     let vis = GRect::new(vf.origin.x, vf.origin.y, vf.size.width, vf.size.height);
-    let pos = current_castle();
-    let o = castle_origin(vis, w.size.width, w.size.height, pos);
+    let o = resting_origin(vis, w.size.width, w.size.height);
     let origin = NSPoint { x: o.x, y: o.y };
-    let _: () = msg_send![ptr, setFrameOrigin: origin];
-    // Where it actually landed, and on which screen. With more than one display "I can't see it"
-    // is usually "it is on the other one", and that is not answerable without the coordinates.
+    with_programmatic_move(|| {
+        // SAFETY: same contract as the enclosing fn (main thread, live panel); the closure
+        // needs its own block because it doesn't inherit the unsafe context.
+        unsafe {
+            let _: () = msg_send![ptr, setFrameOrigin: origin];
+        }
+    });
+    // Which anchor, where it actually landed, and on which screen. With more than one display
+    // "I can't see it" is usually "it is on the other one", and that is not answerable without
+    // the coordinates.
+    let anchor = if current_drag_override().is_some() { "drag" } else { current_castle().key() };
     eprintln!(
         "[shell] panel docked ({}) at {:.0},{:.0} ({:.0}x{:.0}) on the menu-bar display {:.0},{:.0} {:.0}x{:.0}",
-        pos.key(), o.x, o.y, w.size.width, w.size.height,
+        anchor, o.x, o.y, w.size.width, w.size.height,
         vf.origin.x, vf.origin.y, vf.size.width, vf.size.height
     );
 }
@@ -1076,26 +1142,101 @@ fn adopt_native_panel(win: &tauri::WebviewWindow) {
         eprintln!(
             "[shell] NATIVE NSPanel hosting the webview — behavior={got} level={lvl} styleMask={mask} (born a panel, no swap)"
         );
+
+        // Drag override capture (issue #21): performWindowDragWithEvent: is fully native — no
+        // command and no webview event fires when the user drops the panel, so the only place the
+        // final position surfaces is the window's own did-move notification.
+        watch_user_moves(panel);
     }
+}
+
+/// Subscribe to `NSWindowDidMoveNotification` for the overlay panel (issue #21). Programmatic
+/// moves are bracketed by `PROGRAMMATIC_MOVE` and ignored; whatever remains is the user dragging
+/// the collapsed pill or the expanded header, which becomes the drag override (memory
+/// immediately, `castle.json` debounced). Observer and block are intentionally leaked — the panel
+/// lives for the app's lifetime.
+///
+/// # Safety
+/// `panel` must be the live overlay NSPanel; called on the main thread during adoption.
+#[cfg(target_os = "macos")]
+unsafe fn watch_user_moves(panel: *mut objc2::runtime::AnyObject) {
+    use objc2::runtime::AnyObject;
+    use objc2::{class, msg_send};
+    use objc2_foundation::NSString;
+
+    let nc: *mut AnyObject = msg_send![class!(NSNotificationCenter), defaultCenter];
+    if nc.is_null() {
+        eprintln!("[shell] NSNotificationCenter nil — drag positions will not be remembered");
+        return;
+    }
+    // The block captures the pointer as a plain address: the panel is app-lifetime (never freed),
+    // and an address keeps the closure trivially 'static.
+    let addr = panel as usize;
+    let name = NSString::from_str("NSWindowDidMoveNotification");
+    let block = block2::RcBlock::new(move |_notif: *mut AnyObject| {
+        note_user_move(addr as *mut AnyObject);
+    });
+    let nil_obj: *mut AnyObject = std::ptr::null_mut();
+    // `object: panel` filters delivery to THIS window's moves only.
+    let _obs: *mut AnyObject =
+        msg_send![nc, addObserverForName: &*name, object: panel, queue: nil_obj, usingBlock: &*block];
+    std::mem::forget(block);
+    eprintln!("[shell] user-move watcher installed (drag override, issue #21)");
+}
+
+/// A did-move that our own code did not cause = the user dragged the panel. Record where it sits
+/// relative to its screen's visible frame as the drag override and schedule the debounced save.
+/// Runs on the main thread (AppKit posts the window's did-move synchronously with the move).
+#[cfg(target_os = "macos")]
+fn note_user_move(ptr: *mut objc2::runtime::AnyObject) {
+    use objc2::msg_send;
+    use objc2::runtime::AnyObject;
+    use objc2_foundation::NSRect;
+    use shogun_core::notch::geometry::{drag_offset, Point as GPoint, Rect as GRect};
+
+    if PROGRAMMATIC_MOVE.load(std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+    // SAFETY: main thread; `ptr` is the live, app-lifetime overlay panel; getters only.
+    let off = unsafe {
+        let screen: *mut AnyObject = msg_send![ptr, screen];
+        if screen.is_null() {
+            // Mid-drag between displays the window can momentarily have no screen — keep the
+            // previous override rather than recording garbage.
+            return;
+        }
+        let vf: NSRect = msg_send![screen, visibleFrame];
+        let f: NSRect = msg_send![ptr, frame];
+        drag_offset(
+            GRect::new(vf.origin.x, vf.origin.y, vf.size.width, vf.size.height),
+            GPoint::new(f.origin.x, f.origin.y),
+            f.size.height,
+        )
+    };
+    if let Ok(mut g) = DRAG_OVERRIDE.lock() {
+        *g = Some(off);
+    }
+    castle::schedule_save();
 }
 
 /// Resize the visible overlay (native panel or fallback window) — the webview's minimize/expand
 /// control. AppKit frames are bottom-left origin. The default path re-docks the panel at its
-/// Castle Position (issue #20) with the new size, so it grows AWAY from its anchor (down from the
-/// notch, up from the bottom, right from the left edge …). `anchor: "left"` is the manual
-/// corner-grip drag: it keeps the top-left corner put so the panel grows down/right under the
-/// pointer, wherever the panel currently sits.
+/// resting place with the new size — the dragged spot when one exists (issue #21, anchored
+/// top-left so it grows down/right from where the pill sits), else the Castle Position
+/// (issue #20), so it grows AWAY from its anchor (down from the notch, up from the bottom, right
+/// from the left edge …). `anchor: "left"` is the manual corner-grip drag: it keeps the top-left
+/// corner put so the panel grows down/right under the pointer, wherever the panel currently sits.
 #[cfg(target_os = "macos")]
 #[tauri::command]
 fn set_panel_size(app: tauri::AppHandle, width: f64, height: f64, anchor: Option<String>) {
     let keep_left = anchor.as_deref() == Some("left");
-    let anchor_label = if keep_left { "left" } else { "castle" };
+    let anchor_label = if keep_left { "left" } else { "rest" };
     let h = app.clone();
     let _ = app.run_on_main_thread(move || {
         use objc2::msg_send;
         use objc2_foundation::{NSPoint, NSRect, NSSize};
         use objc2::runtime::AnyObject;
-        use shogun_core::notch::geometry::{castle_origin, Rect as GRect};
+        use shogun_core::notch::geometry::Rect as GRect;
         let Some(ptr) = overlay_ptr(&h) else { return };
         // SAFETY: main thread, live NSWindow/NSPanel.
         unsafe {
@@ -1106,12 +1247,12 @@ fn set_panel_size(app: tauri::AppHandle, width: f64, height: f64, anchor: Option
                 // panel walks out from under the pointer.
                 (f.origin.x, f.origin.y + f.size.height - height)
             } else if !screen.is_null() {
-                // View switch (handle ↔ chat ↔ settings): re-dock at the Castle Position so a size
+                // View switch (handle ↔ chat ↔ settings): re-dock at the resting place so a size
                 // change grows away from the anchored edge and the panel never drifts off its
                 // resting place. The notch default reproduces the historical top-centre dock.
                 let vf: NSRect = msg_send![screen, visibleFrame];
                 let vis = GRect::new(vf.origin.x, vf.origin.y, vf.size.width, vf.size.height);
-                let o = castle_origin(vis, width, height, current_castle());
+                let o = resting_origin(vis, width, height);
                 (o.x, o.y)
             } else {
                 // No screen (rare): fall back to holding the panel's centre and top edge.
@@ -1126,7 +1267,16 @@ fn set_panel_size(app: tauri::AppHandle, width: f64, height: f64, anchor: Option
                 y = y.clamp(vf.origin.y, max_y);
             }
             let r = NSRect { origin: NSPoint { x, y }, size: NSSize { width, height } };
-            let _: () = msg_send![ptr, setFrame: r, display: true];
+            // Bracketed: a resize repositions the frame origin, which posts the same did-move
+            // notification a user drag does — without the flag every collapse/expand would be
+            // recorded as a drag override.
+            with_programmatic_move(|| {
+                // SAFETY: main thread, live NSWindow/NSPanel (the closure doesn't inherit the
+                // enclosing unsafe block).
+                unsafe {
+                    let _: () = msg_send![ptr, setFrame: r, display: true];
+                }
+            });
             // The window is transparent, so macOS derives its shadow from the rendered alpha mask
             // — and caches it. Without this the shadow keeps the shape the panel had at its
             // previous size, which shows up as a hard edge sitting away from the glass (most
@@ -1706,46 +1856,105 @@ mod shortcuts {
 /// notch (top-centre) by default. The value is Rust-owned (invariant 1), persisted to
 /// `app_data/castle.json`, mirrored into the `CASTLE` atomic for the placement fns, and exposed to
 /// both the UI and any future API symmetrically (invariant 6) through `get`/`set` commands.
+///
+/// The same file also carries the drag override (issue #21) — the user-dragged resting place that
+/// takes precedence over the castle until a castle is picked again (see `DRAG_OVERRIDE` and
+/// `docs/fixes/2026-07-30-pill-drag-port-design.md`).
 #[cfg(target_os = "macos")]
 mod castle {
-    use super::{current_castle, redock_to_castle, CASTLE};
-    use shogun_core::notch::geometry::CastlePosition;
-    use std::sync::atomic::Ordering;
+    use super::{current_castle, current_drag_override, redock_to_castle, CASTLE, DRAG_OVERRIDE};
+    use shogun_core::notch::geometry::{CastlePosition, DragOffset};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::OnceLock;
     use tauri::Manager;
+
+    /// Resolved once in `init` so the did-move observer can persist a dragged spot without an
+    /// `AppHandle` (notification blocks only get the NSNotification).
+    static CONFIG_PATH: OnceLock<std::path::PathBuf> = OnceLock::new();
+
+    /// True while a debounced drag-save is already scheduled (see `schedule_save`).
+    static SAVE_PENDING: AtomicBool = AtomicBool::new(false);
 
     fn config_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
         app.path().app_data_dir().ok().map(|d| d.join("castle.json"))
     }
 
+    /// On-disk form of the drag override: visible-frame offsets (`geometry::DragOffset`).
+    #[derive(serde::Serialize, serde::Deserialize, Clone, Copy)]
+    struct DragFile {
+        dx: f64,
+        dy: f64,
+    }
+
     /// On-disk form: the stable wire key ("notch", "left_edge", …). A string, not the raw byte, so
-    /// the file stays readable and survives any future re-encoding of the atomic.
+    /// the file stays readable and survives any future re-encoding of the atomic. `drag` is the
+    /// user-dragged resting place (issue #21); absent = docked at `position`. Optional and skipped
+    /// when `None`, so files from before the drag port load unchanged and files without an
+    /// override stay byte-identical to the old format.
     #[derive(serde::Serialize, serde::Deserialize, Default)]
     struct CastleFile {
         #[serde(default)]
         position: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        drag: Option<DragFile>,
     }
 
-    /// Load the persisted position into the atomic. Called once at setup. Any failure — missing
-    /// file, unreadable file, unknown key — leaves the default (Notch) in place, which is exactly
-    /// the original top-centre dock, so a bad file can only ever fall back to the known-good spot.
+    /// Load the persisted position (and any drag override) into the runtime state. Called once at
+    /// setup. Any failure — missing file, unreadable file, unknown key — leaves the default
+    /// (Notch, no override) in place, which is exactly the original top-centre dock, so a bad
+    /// file can only ever fall back to the known-good spot.
     pub fn init(app: &tauri::AppHandle) {
-        let pos = config_path(app)
+        if let Some(p) = config_path(app) {
+            let _ = CONFIG_PATH.set(p);
+        }
+        let file = CONFIG_PATH
+            .get()
             .and_then(|p| std::fs::read_to_string(p).ok())
             .and_then(|t| serde_json::from_str::<CastleFile>(&t).ok())
-            .and_then(|f| CastlePosition::from_key(&f.position))
             .unwrap_or_default();
+        let pos = CastlePosition::from_key(&file.position).unwrap_or_default();
         CASTLE.store(pos.to_u8(), Ordering::Relaxed);
-        eprintln!("[shell] castle position {}", pos.key());
+        if let (Some(d), Ok(mut g)) = (file.drag, DRAG_OVERRIDE.lock()) {
+            *g = Some(DragOffset { dx: d.dx, dy: d.dy });
+        }
+        eprintln!(
+            "[shell] castle position {}{}",
+            pos.key(),
+            if file.drag.is_some() { " (drag override active)" } else { "" }
+        );
     }
 
-    fn save(app: &tauri::AppHandle, pos: CastlePosition) -> Result<(), String> {
-        let Some(p) = config_path(app) else { return Ok(()) };
+    /// Write the current position + drag override to `castle.json`. Path-less (pre-init /
+    /// portless environments) degrades to a no-op rather than an error.
+    fn save_now() -> Result<(), String> {
+        let Some(p) = CONFIG_PATH.get() else { return Ok(()) };
         if let Some(dir) = p.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-        let json = serde_json::to_string_pretty(&CastleFile { position: pos.key().into() })
-            .map_err(|e| e.to_string())?;
-        std::fs::write(&p, json).map_err(|e| format!("save failed: {e}"))
+        let file = CastleFile {
+            position: current_castle().key().into(),
+            drag: current_drag_override().map(|o| DragFile { dx: o.dx, dy: o.dy }),
+        };
+        let json = serde_json::to_string_pretty(&file).map_err(|e| e.to_string())?;
+        std::fs::write(p, json).map_err(|e| format!("save failed: {e}"))
+    }
+
+    /// Persist the drag override soon, coalescing the burst of did-move notifications a live drag
+    /// produces into (at most) one write per 400ms — a trailing debounce, so the LAST position
+    /// always gets written: a move that lands after the flag was cleared schedules a fresh save,
+    /// and one that lands before it is read by the pending save. The thread only exists while a
+    /// drag is being persisted; idle cost is zero (no polling).
+    pub(super) fn schedule_save() {
+        if SAVE_PENDING.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        std::thread::spawn(|| {
+            std::thread::sleep(std::time::Duration::from_millis(400));
+            SAVE_PENDING.store(false, Ordering::Release);
+            if let Err(e) = save_now() {
+                eprintln!("[shell] drag override save failed: {e}");
+            }
+        });
     }
 
     /// The current Castle Position as its wire key, for the Settings UI to preselect.
@@ -1755,15 +1964,20 @@ mod castle {
     }
 
     /// Move SHOGUN's castle. Persists the choice, updates the atomic, and re-docks the live panel
-    /// immediately so the move is visible the moment it's picked.
+    /// immediately so the move is visible the moment it's picked. Picking a castle is also the
+    /// explicit "go home" gesture: it CLEARS any drag override (issue #21) — the one way, from UI
+    /// and API alike (invariant 6), to return a dragged panel to a named resting place.
     #[tauri::command]
     pub fn set_castle_position(app: tauri::AppHandle, position: String) -> Result<(), String> {
         let pos = CastlePosition::from_key(&position)
             .ok_or_else(|| format!("unknown castle position: {position}"))?;
+        if let Ok(mut g) = DRAG_OVERRIDE.lock() {
+            *g = None;
+        }
         CASTLE.store(pos.to_u8(), Ordering::Relaxed);
-        save(&app, pos)?;
+        save_now()?;
         redock_to_castle(&app);
-        eprintln!("[shell] castle position → {}", pos.key());
+        eprintln!("[shell] castle position → {} (drag override cleared)", pos.key());
         Ok(())
     }
 }
@@ -1777,7 +1991,7 @@ fn redock_to_castle(handle: &tauri::AppHandle) {
         use objc2::msg_send;
         use objc2::runtime::AnyObject;
         use objc2_foundation::{NSPoint, NSRect};
-        use shogun_core::notch::geometry::{castle_origin, Rect as GRect};
+        use shogun_core::notch::geometry::Rect as GRect;
         let Some(ptr) = overlay_ptr(&h) else { return };
         // SAFETY: main thread, live NSWindow/NSPanel.
         unsafe {
@@ -1788,9 +2002,18 @@ fn redock_to_castle(handle: &tauri::AppHandle) {
             let vf: NSRect = msg_send![screen, visibleFrame];
             let w: NSRect = msg_send![ptr, frame];
             let vis = GRect::new(vf.origin.x, vf.origin.y, vf.size.width, vf.size.height);
-            let o = castle_origin(vis, w.size.width, w.size.height, current_castle());
+            // `resting_origin`, not `castle_origin`: the caller (set_castle_position) clears the
+            // drag override first, so this resolves to the castle — and any future caller that
+            // redocks WITHOUT clearing keeps respecting a dragged spot.
+            let o = resting_origin(vis, w.size.width, w.size.height);
             let origin = NSPoint { x: o.x, y: o.y };
-            let _: () = msg_send![ptr, setFrameOrigin: origin];
+            with_programmatic_move(|| {
+                // SAFETY: main thread, live NSWindow/NSPanel (the closure doesn't inherit the
+                // enclosing unsafe block).
+                unsafe {
+                    let _: () = msg_send![ptr, setFrameOrigin: origin];
+                }
+            });
         }
     });
 }
