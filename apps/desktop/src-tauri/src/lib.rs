@@ -36,6 +36,10 @@ mod onboarding;
 #[cfg(target_os = "macos")]
 mod hold_monitor;
 
+/// push-to-talk のセッション計測（Issue #44）。
+#[cfg(target_os = "macos")]
+mod analytics;
+
 /// push-to-talk の一発ASRレーン（Issue #44）。
 #[cfg(target_os = "macos")]
 mod ptt_lane;
