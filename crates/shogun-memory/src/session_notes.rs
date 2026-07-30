@@ -7,6 +7,14 @@
 //!
 //! One row per session. Typing is continuous, so writes are upserts rather than appends — the
 //! note is a document being edited, not a log.
+//!
+//! # Two layers
+//!
+//! After the meeting, the Batch lane writes the fragments up into something readable
+//! (FR-MTUX-03). That polished text goes to [`save_enhanced`] — a *separate* table — and the
+//! functions here that touch the user's own words ([`save`], [`get`]) never see it. The
+//! separation is the feature: `Original` and `Polished` are both always available, and no
+//! regeneration can destroy the only copy of what the user actually typed.
 
 use rusqlite::{params, Connection};
 
@@ -35,6 +43,42 @@ pub fn save(
 pub fn get(conn: &Connection, session_id: i64) -> Result<Option<String>, rusqlite::Error> {
     conn.query_row(
         "SELECT body FROM session_notes WHERE session_id = ?1",
+        [session_id],
+        |r| r.get(0),
+    )
+    .map(Some)
+    .or_else(|e| match e {
+        rusqlite::Error::QueryReturnedNoRows => Ok(None),
+        other => Err(other),
+    })
+}
+
+/// Write (or replace) the polished write-up for a session (FR-MTUX-03).
+///
+/// Deliberately a different function on a different table from [`save`]: there is no code path
+/// by which enhancing a note can write over the note. A caller that wanted to overwrite the
+/// user's words would have to call [`save`] explicitly and mean it.
+pub fn save_enhanced(
+    conn: &Connection,
+    session_id: i64,
+    body: &str,
+    now: i64,
+) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "INSERT INTO session_notes_enhanced (session_id, body, generated_at)
+         VALUES (?1, ?2, ?3)
+         ON CONFLICT (session_id) DO UPDATE SET body = ?2, generated_at = ?3",
+        params![session_id, body, now],
+    )?;
+    Ok(())
+}
+
+/// The polished write-up for a session, if one has been generated. `None` is the normal state
+/// until the Batch lane runs — and the permanent state when it is unavailable, which is why the
+/// UI must be able to show the original alone.
+pub fn get_enhanced(conn: &Connection, session_id: i64) -> Result<Option<String>, rusqlite::Error> {
+    conn.query_row(
+        "SELECT body FROM session_notes_enhanced WHERE session_id = ?1",
         [session_id],
         |r| r.get(0),
     )
@@ -104,6 +148,48 @@ mod tests {
             })
             .unwrap();
         assert_eq!(n, 1, "a note is one document per session, not an append log");
+    }
+
+    #[test]
+    fn enhancing_a_note_never_touches_what_the_user_wrote() {
+        // The invariant the two-table design exists for (FR-MTUX-03). If this ever fails, the
+        // one artefact in the database that is unambiguously the user's has been edited by a
+        // model — silently, and with no copy left to return to.
+        let conn = crate::open_in_memory().unwrap();
+        let id = session(&conn);
+        save(&conn, id, "- pricing?\n- alice → vendor", 1_500).unwrap();
+
+        save_enhanced(&conn, id, "Pricing is unresolved. Alice owns the vendor thread.", 2_000)
+            .unwrap();
+
+        assert_eq!(get(&conn, id).unwrap().as_deref(), Some("- pricing?\n- alice → vendor"));
+        assert!(get_enhanced(&conn, id).unwrap().unwrap().starts_with("Pricing is unresolved"));
+    }
+
+    #[test]
+    fn a_note_with_no_write_up_yet_has_none() {
+        // The permanent state when the Batch lane is unavailable: the UI must render the
+        // original alone rather than waiting for a polish that is not coming.
+        let conn = crate::open_in_memory().unwrap();
+        let id = session(&conn);
+        save(&conn, id, "raw", 1_500).unwrap();
+        assert_eq!(get_enhanced(&conn, id).unwrap(), None);
+    }
+
+    #[test]
+    fn regenerating_the_write_up_replaces_it_rather_than_accumulating() {
+        let conn = crate::open_in_memory().unwrap();
+        let id = session(&conn);
+        save_enhanced(&conn, id, "first pass", 2_000).unwrap();
+        save_enhanced(&conn, id, "second pass", 3_000).unwrap();
+
+        assert_eq!(get_enhanced(&conn, id).unwrap().as_deref(), Some("second pass"));
+        let n: i64 = conn
+            .query_row("SELECT count(*) FROM session_notes_enhanced WHERE session_id = ?1", [id], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(n, 1);
     }
 
     #[test]

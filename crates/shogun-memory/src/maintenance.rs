@@ -94,6 +94,9 @@ pub fn delete_all(conn: &mut Connection) -> Result<DeleteReport, rusqlite::Error
     // Meeting notes are the user's own words — the most personal rows here — and they reference
     // sessions, so they go before them (FR-MT-10).
     let session_notes = tx.execute("DELETE FROM session_notes", [])?;
+    // The model's write-up of those notes (FR-MTUX-03). Derived, but it is still a record of what
+    // was said in the room, and it references sessions — so it goes with them.
+    tx.execute("DELETE FROM session_notes_enhanced", [])?;
     // Sessions hold the meeting's title, summary and decisions — user data, and referenced by
     // event_log, so they go after it (FR-SET-07, FR-MT-05).
     let sessions = tx.execute("DELETE FROM sessions", [])?;

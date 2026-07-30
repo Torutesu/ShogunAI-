@@ -136,8 +136,11 @@
 **ゴール**: 会議ノートが「仕組み」から「使いたくなるノートプロダクト」になる。実装順は requirements §9.6（本書では§6.22）どおり4フェーズ。
 
 **Phase A — 専用ウィンドウ + co-writing（MTUX-01/03）**
+
+**✅ 実装済み（2026-07-31）**: 清書の器。V13マイグレーション `session_notes_enhanced` ＋ロールバックdoc、`session_notes::{save_enhanced, get_enhanced}`、`delete_all` への追加、`LATEST_SCHEMA_VERSION=13`。**原文を上書きできない構造**（別テーブル・別関数）をテストで固定済み。
+
 1. Recordingピルから開く専用 `WebviewWindow`（Tauri multiwindow。ノッチパネルとは別ウィンドウ・通常のキーフォーカス可）。ユーザーメモ欄（既存 `session_notes` のupsert経路を再利用）＋ `Listening · N participants` 静的1行
-2. 清書の器: additiveマイグレーション **V13** `session_notes_enhanced(session_id UNIQUE, body, generated_at)` ＋ロールバックdoc。原文(`session_notes`)は**絶対に上書きしない**（FR-MTUX-03）
+2. ~~清書の器~~ → **実装済み**。UIは `get_enhanced` が `None` のとき原文のみ表示（Batchレーン未整備時の恒常状態。待ち状態にしない）
 3. 清書ジョブはRecap生成（FR-MT-16のBatchレーン）と同一ジョブに載せる — **KKキー未整備の間は縮退**（enhanced無し・原文のみ表示）。UIは enhanced があれば2層トグル（Original / Polished）
 4. Notch Expandedの簡易メモ（FR-MT-10）はこのウィンドウの縮小ビューであることをコメントに明記し、保存経路を共通化
 
@@ -262,7 +265,8 @@
 |---|---|---|
 | 2026-07-31 | WS5コア: mic信号のstuck判定＋帰属型（テスト32件） | `d0cc24d` |
 | 2026-07-31 | WS2コア: ⌥ダブルタップ検出器（14件）／WS3コア: Db記録API・wireパース | `f61cd06` |
-| 2026-07-31 | WS1コア: `local_day_bounds`（日境界の純ロジック、DST/エポック前テスト） | 本コミット |
+| 2026-07-31 | WS1コア: `local_day_bounds`（日境界の純ロジック、DST/エポック前テスト） | `5c6cdd5` |
+| 2026-07-31 | WS4 Phase Aコア: V13 `session_notes_enhanced`（2層ノートの器） | 本コミット |
 
 **なぜコアだけ先に入っているか**: これらはLinuxセッションで**テストまで検証できる**部分だから。macOSネイティブ配線（NSEventモニタ・CoreAudioプロセスAPI・Tauriコマンド・UI）はビルドできない環境なので、意図的にMac側エージェントに残してある。逆に言えば、残作業は「アダプタを書いて既存の型に渡す」だけに縮んでいる — 判定ロジックを再発明しないこと。
 
