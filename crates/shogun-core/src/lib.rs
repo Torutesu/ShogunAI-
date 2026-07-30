@@ -60,6 +60,8 @@ pub mod composio_read;
 pub mod gmail_shape;
 pub mod metrics;
 pub mod notch;
+/// Push-to-talk 音声対話の純ロジック（Issue #44）。マイクを開く唯一の経路を状態機械が持つ。
+pub mod ptt;
 /// Post-approval L3 send execution + mandatory traceability (needs the approval types from
 /// shogun-agents; available under `exec` — the desktop — and `daemon-server`).
 #[cfg(feature = "exec")]
