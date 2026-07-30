@@ -6,6 +6,10 @@
 //! 落とさずに読む。
 //!
 //! ネットワークには触らない純ロジックなので、feature gate も要らずLinuxでテストできる。
+//!
+//! `data:` 行はそれぞれ独立した完結したJSONとして読む。SSE仕様が認める複数行 `data:` の
+//! 連結は実装していない — Anthropicが実際に送ってくる形に合わせた意図的な割り切りで、
+//! 既存の `parse_sse_text` も同じ読み方をしている。
 
 use serde_json::Value;
 
@@ -25,6 +29,11 @@ impl SseDecoder {
     ///
     /// 行が完成していない部分は内部に持ち越す。チャンクが `"data: {\"ty"` で切れても、次の
     /// push で残りと連結してから解釈されるので、デルタは失われない。
+    ///
+    /// 呼び出し側は有効なUTF-8を渡すこと。ネットワークのバイト列をそのまま `&str` にすると
+    /// マルチバイト文字がチャンク境界で割れるので、途中で切れた文字のバイトを次のチャンクへ
+    /// 持ち越すのはトランスポート側の責任（`llm::transport` の carry バッファ）。ここは
+    /// 「行が途中で切れる」ことだけを引き受ける。
     pub fn push(&mut self, chunk: &str) -> Vec<String> {
         self.pending.push_str(chunk);
         let mut out = Vec::new();
@@ -89,6 +98,17 @@ mod tests {
         let (head, tail) = DELTA_A.split_at(30);
 
         assert!(d.push(head).is_empty(), "行が完成する前に何か返している");
+        assert_eq!(d.push(tail), vec!["Hel".to_string()]);
+    }
+
+    /// JSONは揃っているのに改行がまだ来ていないチャンク。行が完成するまで出さない、という
+    /// 判断がここで効く（byte 30 の分割はJSONの途中なので、この経路を通らない）。
+    #[test]
+    fn a_complete_json_without_its_newline_waits() {
+        let mut d = SseDecoder::new();
+        let (head, tail) = DELTA_A.split_at(DELTA_A.len() - 2);
+
+        assert!(d.push(head).is_empty(), "改行が来る前に出している");
         assert_eq!(d.push(tail), vec!["Hel".to_string()]);
     }
 
