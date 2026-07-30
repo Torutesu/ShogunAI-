@@ -14,6 +14,7 @@ pub fn tool_name(tool: Tool) -> &'static str {
     match tool {
         Tool::MemorySearch => "memory.search",
         Tool::MemoryGetContext => "memory.get_context",
+        Tool::MemoryGetContextPack => "memory.get_context_pack",
         Tool::StatePeopleList => "state.people.list",
         Tool::StatePeopleGet => "state.people.get",
         Tool::StateProjectsList => "state.projects.list",

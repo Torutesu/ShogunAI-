@@ -98,6 +98,10 @@ fn resolve(method: Method, path: &str) -> Result<Routed, RouteMiss> {
         ["v1", "memory", "context"] => {
             method_is(method, Method::Get, Routed::Read { tool: Tool::MemoryGetContext, id: None })
         }
+        // FR-API-08: the grounded context pack (`?q=` carries the task/question).
+        ["v1", "memory", "context_pack"] => {
+            method_is(method, Method::Get, Routed::Read { tool: Tool::MemoryGetContextPack, id: None })
+        }
         ["v1", "memory", "notes"] => {
             method_is(method, Method::Post, Routed::Write { tool: Tool::MemoryAppendNote, level: Level::L1 })
         }

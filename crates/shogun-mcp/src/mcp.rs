@@ -153,6 +153,12 @@ fn tool_descriptor(tool: Tool) -> Value {
     let (desc, props): (&str, Value) = match tool {
         Tool::MemorySearch => ("Hybrid search over memory", json!({ "query": { "type": "string" } })),
         Tool::MemoryGetContext => ("The current context cache", json!({})),
+        Tool::MemoryGetContextPack => (
+            "Grounded context pack for a task/question (FR-API-08): confidence-gated state facts \
+             plus dated, attributed evidence lines with event ids for provenance. Same assembly \
+             as the in-app chat.",
+            json!({ "query": { "type": "string" } }),
+        ),
         Tool::StatePeopleGet
         | Tool::StateProjectsGet
         | Tool::StateCommitmentsGet
@@ -220,11 +226,12 @@ mod tests {
     }
 
     #[test]
-    fn tools_list_has_all_thirteen() {
+    fn tools_list_has_every_tool() {
         let v = call(&server(), r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#);
         let tools = v["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 13);
+        assert_eq!(tools.len(), ALL_TOOLS.len());
         assert!(tools.iter().any(|t| t["name"] == "memory.search"));
+        assert!(tools.iter().any(|t| t["name"] == "memory.get_context_pack"));
         assert!(tools.iter().any(|t| t["name"] == "actions.execute"));
     }
 
