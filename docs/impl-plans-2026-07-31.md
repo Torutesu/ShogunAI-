@@ -145,7 +145,10 @@
 4. Notch Expandedの簡易メモ（FR-MT-10）はこのウィンドウの縮小ビューであることをコメントに明記し、保存経路を共通化
 
 **Phase B — 会議ライブラリ（MTUX-02）**
-1. Full UIに「Meetings」タブ: `sessions` テーブル一覧（日付降順）、検索は既存FTS（transcript_segments/session_notesが対象に入っているか確認、無ければFTS対象に追加）
+
+**✅ 実装済み（2026-07-31、テスト10件）**: 会議テキストの検索索引。`meeting_index::index_session(conn, session_id)` が文字起こしとノートを `event_log`（`source="meeting"`、`kind="transcript"/"note"`、`session_id`紐付け、`ts`=会議開始時刻）に載せる。**FR-MT-14の「既存の検索がそのまま効く」は今まで満たされていなかった**（transcript_segments/session_notesはFTS対象外だった）。再実行は重複せずdedup touch。**Wrapping→Recap遷移時に1回呼ぶこと**が残作業。
+
+1. Full UIに「Meetings」タブ: `sessions` テーブル一覧（日付降順）。検索は既存FTSがそのまま効く（上記索引経由）。**FTSに独自テーブルを足さないこと** — 背骨は`event_log`ひとつ
 2. シリーズビュー: タイトル正規化＋app_bundle_idで繰り返し会議をグルーピングし、前回の決定/[Track]済みcommitmentsを次回セッションのヘッダに表示
 3. 各行 → Recap / 文字起こし / ノート / （WS9後）音声への導線
 
@@ -269,7 +272,8 @@
 | 2026-07-31 | WS2コア: ⌥ダブルタップ検出器（14件）／WS3コア: Db記録API・wireパース | `f61cd06` |
 | 2026-07-31 | WS1コア: `local_day_bounds`（日境界の純ロジック、DST/エポック前テスト） | `5c6cdd5` |
 | 2026-07-31 | WS4 Phase Aコア: V13 `session_notes_enhanced`（2層ノートの器） | `4314562` |
-| 2026-07-31 | WS6/WS9共通: `retention` 保持ポリシー（期限＋予算、13件） | 本コミット |
+| 2026-07-31 | WS6/WS9共通: `retention` 保持ポリシー（期限＋予算、13件） | `2e09beb` |
+| 2026-07-31 | WS4 Phase Bコア: `meeting_index`（会議テキストの検索索引、10件）＋FR-MT-14の未充足を解消 | 本コミット |
 
 **なぜコアだけ先に入っているか**: これらはLinuxセッションで**テストまで検証できる**部分だから。macOSネイティブ配線（NSEventモニタ・CoreAudioプロセスAPI・Tauriコマンド・UI）はビルドできない環境なので、意図的にMac側エージェントに残してある。逆に言えば、残作業は「アダプタを書いて既存の型に渡す」だけに縮んでいる — 判定ロジックを再発明しないこと。
 

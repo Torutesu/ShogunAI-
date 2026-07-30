@@ -29,6 +29,7 @@ pub mod hot;
 pub mod identity;
 pub mod jobs;
 pub mod maintenance;
+pub mod meeting_index;
 pub mod meeting_recaps;
 pub mod quantize;
 pub mod redact;

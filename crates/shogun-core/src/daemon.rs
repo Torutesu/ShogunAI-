@@ -346,11 +346,11 @@ impl Db {
     }
 
     /// The canonical content hash (xxhash64, hex) used across capture and notes.
+    ///
+    /// Delegates to [`shogun_memory::event_log::content_hash`]: the dedup key belongs to the log
+    /// it keys, and a second implementation here would be a second definition of "the same text".
     fn content_hash(text: &str) -> String {
-        use std::hash::Hasher;
-        let mut h = twox_hash::XxHash64::with_seed(0);
-        h.write(text.as_bytes());
-        format!("{:016x}", h.finish())
+        shogun_memory::event_log::content_hash(text)
     }
 
     /// Capture a window body with near-duplicate collapse (FR-CAP-03): if `ev.content` is ≥98%

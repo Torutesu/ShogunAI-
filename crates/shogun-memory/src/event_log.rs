@@ -31,6 +31,18 @@ pub struct NewEvent<'a> {
 /// without having to remember to do it; a screen capture has nothing but its app and window title
 /// to group on anyway. A source that knows its own conversation id calls
 /// [`insert_with_thread`] instead.
+/// The canonical content hash (xxhash64, hex) — the dedup key every writer must agree on.
+///
+/// It lives here rather than in each writer because it *is* the dedup contract: two callers
+/// hashing the same text differently would not collide, and the near-duplicate collapse
+/// (FR-CAP-03) would silently stop collapsing. One function, one definition.
+pub fn content_hash(text: &str) -> String {
+    use std::hash::Hasher;
+    let mut h = twox_hash::XxHash64::with_seed(0);
+    h.write(text.as_bytes());
+    format!("{:016x}", h.finish())
+}
+
 pub fn insert(conn: &Connection, ev: &NewEvent<'_>) -> Result<i64, rusqlite::Error> {
     insert_with_thread(conn, ev, None)
 }
