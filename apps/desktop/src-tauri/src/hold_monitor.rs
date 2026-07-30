@@ -66,15 +66,6 @@ impl HoldKey {
             HoldKey::Fn => 1 << 23,               // NSEventModifierFlagFunction
         }
     }
-
-    /// 和音判定に使う汎用ビット。こちらは左右をまとめた `NSEventModifierFlags` の側。
-    fn generic_flag(self) -> usize {
-        match self {
-            HoldKey::RightCommand => 1 << 20,
-            HoldKey::RightOption => 1 << 19,
-            HoldKey::Fn => 1 << 23,
-        }
-    }
 }
 
 /// 長押しの監視を開始する。アプリのライフタイム中ずっと動き続ける（モニタは意図的にleakする、
@@ -127,10 +118,23 @@ where
     // 押下判定は device-dependent ビットで。左⌘と右⌘は汎用ビットを共有するので、汎用
     // ビットで判定すると左⌘を握ったまま右⌘を離しても「まだ押している」と誤読する。
     let target_down = key.down_flag();
-    // 対象キー以外の修飾キー。長押し中にこれらが加わったら和音であって長押しではない。
-    // マスクは汎用ビット側で組む（device-dependent ビットは含めない）。
-    const ALL_MODIFIERS: usize = (1 << 17) | (1 << 18) | (1 << 19) | (1 << 20) | (1 << 23);
-    let other_modifiers = ALL_MODIFIERS & !key.generic_flag();
+
+    /// 修飾キーが「いま押されているか」を左右込みで見るための全ビット
+    /// （`IOKit/IOLLEvent.h` の device-dependent マスク + Fn）。
+    const ALL_DEVICE_MODIFIERS: usize = 0x0000_0001 // L-Ctrl
+        | 0x0000_0002 // L-Shift
+        | 0x0000_0004 // R-Shift
+        | 0x0000_0008 // L-Cmd
+        | 0x0000_0010 // R-Cmd
+        | 0x0000_0020 // L-Alt
+        | 0x0000_0040 // R-Alt
+        | 0x0000_2000 // R-Ctrl
+        | (1 << 23); // Fn（device ビットが無い唯一の修飾キー）
+
+    // 対象キー以外の修飾キーが押されているかを見るマスク。device ビットで見るので、
+    // 「左⌘を押したまま右⌘」も他が押されていると正しく分かる — 汎用ビットだけでは
+    // 左右が同じビットを共有していて区別できなかった。
+    let foreign_held = ALL_DEVICE_MODIFIERS & !target_down;
 
     // 実機検証用の一時診断（Task 16）。device-dependent ビットが本当に左右を分けるかは
     // ユニットテストでは確かめられない — 実機で `SHOGUN_PTT_DEBUG=1` を立て、この行の
@@ -180,10 +184,15 @@ where
             }
 
             if code != target_code {
-                // 他の修飾キーが動いた = 和音。フラグの値では判定しない: 左⌘と右⌘は同じ
-                // 汎用ビットを共有するので、ビットを見ても「別のキーが動いた」ことは
-                // 分からない。keyCode が違う時点で十分な証拠。
-                poison();
+                if flags & foreign_held != 0 {
+                    // 他の修飾キーが押されている = 和音。長押しは無効。
+                    poison();
+                } else {
+                    // 他の修飾キーが「離れた」だけ。押しっぱなしのものが無くなったので、
+                    // 次の押し下げを受け付けられるよう再武装する。ここで再武装しないと、
+                    // 左⌘を使ったあとの最初の長押しが黙って無視される。
+                    POISONED.store(false, Ordering::Relaxed);
+                }
                 return;
             }
 
@@ -192,7 +201,7 @@ where
 
             if down && !was_down {
                 // 真の押し下げエッジ。他の修飾キーが既に押されているなら和音なので始めない。
-                if flags & other_modifiers != 0 {
+                if flags & foreign_held != 0 {
                     POISONED.store(true, Ordering::Relaxed);
                     return;
                 }
@@ -259,23 +268,20 @@ mod tests {
         assert_ne!(HoldKey::RightCommand.key_code(), 55);
     }
 
-    /// 左⌘と右⌘は汎用の Command ビットを共有するので、押下判定には device-dependent
-    /// ビットを使う。ここを汎用ビットに戻すと、左⌘を押したまま右⌘を離したときに
-    /// 離したことに気づけず、マイクが開いたまま残る。
+    /// 左⌘と右⌘は汎用の Command ビット (1<<20) を共有するので、押下判定には
+    /// device-dependent ビットを使う。ここを汎用ビットに戻すと、左⌘を押したまま右⌘を
+    /// 離したときに離したことに気づけず、マイクが開いたまま残る。
     #[test]
     fn the_down_flag_distinguishes_left_from_right() {
         assert_eq!(HoldKey::RightCommand.down_flag(), 0x0000_0010);
         assert_eq!(HoldKey::RightOption.down_flag(), 0x0000_0040);
-        assert_ne!(
-            HoldKey::RightCommand.down_flag(),
-            HoldKey::RightCommand.generic_flag(),
-            "汎用ビットを押下判定に使っている"
-        );
+        assert_ne!(HoldKey::RightCommand.down_flag(), 1 << 20, "汎用の⌘ビットを押下判定に使っている");
+        assert_ne!(HoldKey::RightOption.down_flag(), 1 << 19, "汎用の⌥ビットを押下判定に使っている");
     }
 
-    /// Fn は1つしか無いので device-dependent ビットが要らない。
+    /// Fn は1つしか無いので device-dependent ビットが存在せず、汎用ビットで一意。
     #[test]
-    fn the_fn_key_uses_its_generic_flag() {
-        assert_eq!(HoldKey::Fn.down_flag(), HoldKey::Fn.generic_flag());
+    fn the_fn_key_has_no_device_bit() {
+        assert_eq!(HoldKey::Fn.down_flag(), 1 << 23);
     }
 }
