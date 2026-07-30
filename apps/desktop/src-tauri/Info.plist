@@ -8,5 +8,10 @@
          but the window-server treats an unbundled dev process differently for Space management. -->
     <key>LSUIElement</key>
     <true/>
+    <!-- マイクの用途。この文字列がそのまま macOS の許可ダイアログに出るので、
+         「何のために使うか」と「保存しないこと」の両方を書く。不変条件2を、
+         コードだけでなくユーザーに見える場所でも約束する。 -->
+    <key>NSMicrophoneUsageDescription</key>
+    <string>SHOGUN listens while you hold the push-to-talk key, and while you record a meeting. Speech is transcribed on your Mac and the audio is never saved.</string>
 </dict>
 </plist>
