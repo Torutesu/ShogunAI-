@@ -7,4 +7,5 @@
 //! BufferSink は文字起こしテキストだけを受けてDBにも書かない。
 
 pub mod buffer_sink;
+pub mod prompt;
 pub mod statemachine;
