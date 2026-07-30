@@ -84,6 +84,6 @@
 | Composio 依存（Gmail の全経路） | 単一障害点かつ第三者リスク。Gmail 公式 MCP が **GA になれば読み取り/ドラフトを第1層へ戻す**方針を明文化済み（CLAUDE.md / `01-architecture.md` §4）。ハブ操作名 IF のおかげで経路の戻しも toolmap 張り替えが中心 |
 | Composio の障害・仕様変更 | Mail のみ amber/エラーに落ち、他サービスは影響を受けない（サービス独立の FSM）。障害時の文言は「SHOGUN ではなく経路の問題」と分かる形に |
 
-## 6. 要オーナー判断（本ドキュメントでは未解決のまま記録する）
+## 6. プラン境界の決定（2026-07-30 解決済み）
 
-- **プラン境界と Gmail 読み取りの整合**：CLAUDE.md のプラン構成は「Standard = 第1層連携（読み取り）」「Pro = ＋Composio 第2層」。Gmail 読み取りが第2層（Composio）へ移った結果、字義どおりに読むと **Standard では Gmail が読めない**ことになり、Standard の価値提案（Wave 1 読み取り一式）と衝突する。「Gmail 読み取りは Standard に含める（Composio のうち読み取りのみ Standard 扱い）」か「Gmail は Pro 専用」かはプラン設計の判断であり、本ドキュメント群では決めない。**オーナー判断が出るまで課金ゲートの実装に着手しないこと**
+- **プラン境界と Gmail 読み取りの整合 → 決定: Gmail 読み取りは Standard に含める。** Gmail 全面 Composio 化後も、読み取り同期は Standard の Wave 1 価値の一部として全課金プランで提供する。Pro の「Composio 第2層」ゲートが意味するのは**送信の解放（draft-stop OFF での実送信）のみ**。読み取りの 3開示 opt-in 同意は全プラン共通で必須（プランと同意は独立の軸）。CLAUDE.md プラン構成にも記録済み。課金ゲート実装はこの境界で行うこと（判定は Rust コア側）

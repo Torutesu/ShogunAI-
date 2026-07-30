@@ -84,6 +84,11 @@ export const STRINGS = {
       "While your Mac is idle, SHOGUN works through the day and updates what it's tracking. Tomorrow it'll know a little. By the weekend it'll know your week.",
     obReadyStart: "Start using SHOGUN",
 
+    // Analytics opt-out toggle (issue #61 / #28 — on by default, metadata only, never content)
+    analyticsToggleLabel: "Share anonymous usage metrics to help improve SHOGUN",
+    analyticsToggleDetail:
+      "Event names and timings only — never your content, screen text, or API keys.",
+
     // ── panel ─────────────────────────────────────────────────────────────────
     // live line
     reading: "reading",
