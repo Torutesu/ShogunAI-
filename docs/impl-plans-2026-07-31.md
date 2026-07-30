@@ -6,6 +6,7 @@
 | 目的 | v1.1決定済み要件の残実装を、**ゴールモードのサブエージェントに1件ずつ委任できる粒度**で計画化する |
 | 上位文書 | `/CLAUDE.md`（絶対不変条件）、`docs/requirements-v1.0.md`（v1.1改版済み） |
 | 使い方 | 各WSの「エージェント投入プロンプト」をコピーしてMac上のエージェントに渡す。エージェントは本書の該当WS節＋参照要件を読んでから着手する |
+| ⚠️ 着手前に | **各WSの「✅ 実装済み」欄を必ず読むこと。** WS1/2/3/5はコア（純ロジック・Db層）が実装・テスト済みで、残りはmacOSネイティブ配線とUIのみ。既存実装を作り直さない |
 
 ## 0. オーケストレーション（先に読む）
 
@@ -47,12 +48,17 @@
 
 **ゴール**: 夕方、Notchインジケータがゴールドになり、開くと今日のoutcome/未解決/明日の先頭/今日のloose endsが見える（FR-EB-01〜03）。
 
-**前提**: バックエンドは実装済み — `Db::evening_wrap(calendar_tomorrow, day_start_ms, now_ms, tomorrow_end_ms)`（`crates/shogun-core/src/daemon.rs`）、組み立ては `crates/shogun-fusion/src/wrap.rs`（`EveningWrap`/`WrapOutcome`）。
+**✅ 実装済み（2026-07-31、テスト付き）**:
+- `Db::evening_wrap(calendar_tomorrow, day_start_ms, now_ms, tomorrow_end_ms)`（`crates/shogun-core/src/daemon.rs`）— 日窓集計とセクション構成
+- `shogun_fusion::wrap`（`EveningWrap`/`WrapOutcome`/`assemble_wrap`）— 順序・上限・confidenceゲート
+- **`shogun_fusion::wrap::local_day_bounds(now_ms, utc_offset_seconds) -> (day_start_ms, tomorrow_end_ms)`** — 現地深夜の算出。**シェル側で日境界を自前計算しないこと**、OSからUTCオフセット秒だけ取ってこの関数に渡す（DST・UTC日跨ぎ・エポック前のテスト済み）
+
+**残り**: Tauriコマンド化、生成トリガのスケジューラ、インジケータ/既読、UI表示、設定、strings.ts。
 
 **対象ファイル**: `apps/desktop/src-tauri/src/`（コマンド追加・スケジューラ）、`apps/desktop/src/App.tsx`（表示）、`apps/desktop/src/strings.ts`（文言）。Morning Briefの既存配線（`morning_brief`系コマンドとその表示）を先にgrepして**同じ形**で作ること。
 
 **実装ステップ**:
-1. Tauriコマンド `shogun_evening_wrap` を追加。シェル側で「現地深夜」「翌日終端」をローカルタイムゾーンから計算（`chrono`等は既存依存を確認。無ければ`time`クレートかlibc localtime。Rust側で計算しwebviewに任せない=不変条件1）。カレンダー行は現状コネクタ未接続なら空Vecで渡す（接続後にGCal同期結果から供給する拡張点をコメントで明示）
+1. Tauriコマンド `shogun_evening_wrap` を追加。日境界は **`local_day_bounds` に現在のUTCオフセット秒を渡すだけ**（OSからのオフセット取得のみ実装。自前で深夜計算しない）。カレンダー行は現状コネクタ未接続なら空Vecで渡す（接続後にGCal同期結果から供給する拡張点をコメントで明示）
 2. 生成トリガ: 常駐スレッドで毎分チェック、既定17:00〜21:00の間に「直近15分ユーザー入力なし」（既存のアイドル検知があれば再利用。無ければ最終capture eventのtsで代用）または設定時刻で1日1回生成。生成済みフラグは日付キーでRAM保持
 3. 提示（FR-EB-03）: 生成完了→インジケータをゴールドに（Morning Brief既読管理のコードを共通化して再利用）。**自動ポップアップ禁止**。既読で白へ
 4. UI: Expanded内の新セクションまたはBriefと同じビューの切替タブ。4セクション表示、各項目に`possibly`マーカーと根拠（provenance_event_id）チップ — Briefの既存コンポーネントを再利用
@@ -72,10 +78,12 @@
 
 **ゴール**: ⌥キー2回タップ（300ms以内、間に他キーなし）で最上位アクションが即時起動する。L1即実行/L2選択済みExpanded/L3確認フロー直行。
 
-**対象ファイル**: `apps/desktop/src-tauri/src/`（グローバルモニタ。既存の`⌘⇧Space`ホットキー実装と`NSEventグローバルモニタ`をgrepして同じ層に追加）、notch状態機械（`App.tsx`側のExpanded遷移）、設定。
+**✅ 実装済み（2026-07-31、テスト14件）**: `shogun_core::notch::optiontap`（`OptionDoubleTap` / `Input::{Flags,Key,Pointer}` / `TAP_MAX_MS=250` / `GAP_MAX_MS=300` / `with_timings` / `reset`）。ホールド・⌥コード・⌥ドラッグ・間隔超過・flagsChanged重複・時計巻き戻しの拒否がすべてテスト済み。**検出器を作り直さないこと。**
+
+**対象ファイル**: `apps/desktop/src-tauri/src/`（NSEventグローバルモニタ。既存のグローバルショートカット登録は `tauri_plugin_global_shortcut` なので、素の⌥は別途 `NSEvent::addGlobalMonitorForEventsMatchingMask` の `flagsChanged`/`keyDown`/`mouseDown` が必要）、notch状態機械、設定。
 
 **実装ステップ**:
-1. 検出器（Rust・純ロジックで分離しユニットテスト可能に）: `flagsChanged`イベント列から「⌥単独down→up→300ms以内にdown→up、間に他modifierやkeyDownなし」を判定する小さな状態機械 `OptionDoubleTap`。閾値は定数（設定で変更可の余地）
+1. ~~検出器~~ → **実装済み**。アダプタは NSEvent を `optiontap::Input` に変換して `observe(input, now_ms)` を呼ぶだけ（`flagsChanged`→`Flags{option_down, other_modifiers}`、`keyDown`→`Key`、`mouseDown/dragged`→`Pointer`）。**キーコードや文字を読まないこと**（NFR-PRV-03。`Input`は型としてそれを持てない）
 2. NSEventグローバルモニタに配線（macOS側。`#[cfg(target_os = "macos")]`）。発火→context cacheの最上位アクションを取得（`Db::context_actions`既存経路。**押下時に組み立てない** — cache読取のみ、AR-08）
 3. レベル分岐: L1=実行して事後表示 / L2=Expandedを開き該当アクションを選択状態に（1操作で確定できるフォーカス）/ L3=既存のL3確認UIへ直行。**⌥経由でもL3省略禁止**（既存の許可テーブルが強制するが、UIショートカットで迂回しないこと）
 4. 誤発火計測（FR-NU-10受け入れ条件）: 発火回数・その後3秒以内にESC/外側クリックで閉じた率（=誤発火プロキシ）をspike-harness系メトリクスに記録し、`shogun metrics`/Advanced画面に出す
@@ -95,12 +103,17 @@
 
 **ゴール**: ユーザーの採択・修正・却下・[Track]確定が実際に `action_feedback` テーブルに落ちる（現状: テーブルとAPIのみ存在、書き手ゼロ）。
 
-**前提**: `shogun_memory::action_feedback::{record, NewFeedback, Surface, Outcome}` 実装済み。`Db`にラッパが無いので追加する。
+**✅ 実装済み（2026-07-31、テスト付き）**:
+- `Db::record_action_feedback(action_kind, surface, outcome, context_app, rank, latency_ms) -> bool`（`daemon.rs`）
+- `Db::action_acceptance_by_kind(since_ts)`（FR-CF-03のランキング入力）
+- `Surface::from_wire` / `Outcome::from_wire`（未知値は既定値に落とさず`None`。コマンド境界のパース用）
 
-**対象ファイル**: `crates/shogun-core/src/daemon.rs`（`Db::record_action_feedback`ラッパ）、`apps/desktop/src-tauri/src/`（Tauriコマンド）、`apps/desktop/src/App.tsx`（決定点からの呼び出し）。
+**残り**: Tauriコマンド化と4決定点からの呼び出し。
+
+**対象ファイル**: `apps/desktop/src-tauri/src/`（Tauriコマンド）、`apps/desktop/src/App.tsx`（決定点からの呼び出し）。
 
 **実装ステップ**:
-1. `Db::record_action_feedback(&self, f: &NewFeedback)` ラッパ＋Tauriコマンド `shogun_action_feedback`（引数: action_kind, surface, outcome, rank, latency_ms。**内容テキストは受け取らない** — シグネチャで拒否）
+1. Tauriコマンド `shogun_action_feedback`（引数: action_kind, surface, outcome, rank, latency_ms を文字列/数値で受け、`from_wire`でパースしてから`Db::record_action_feedback`へ。**内容テキストの引数を作らない** — Db側もシグネチャで拒否している）
 2. 決定点に呼び出しを追加（この4箇所をgrepで特定）:
    - Notchアクションボタンの実行時（accepted, surface=notch, rank=ボタン位置）
    - 提案の明示却下/パネルを開いて3秒以上見てから閉じた場合（dismissed）— 「見ずに閉じた」はノイズなので記録しない
@@ -157,14 +170,16 @@
 
 **症状（2026-07-31実機ログで確認）**: `[meeting] saw <あらゆるアプリ> state=recording mic=true` — Finder/loginwindowですらmic=true。常駐アプリ（VoiceOS等）がマイクを掴み続けているため、**システム全体の「入力デバイス稼働中」を読む現行実装では信号②が常時真**になり、FR-MT-04のconfidenceが常時底上げされている。
 
-**対象ファイル**: `crates/shogun-core/src/meeting/detect.rs`（信号統合の純ロジック）＋desktop側のmic信号サプライヤ（`mic`/`audio`でgrep。おそらく`kAudioDevicePropertyDeviceIsRunningSomewhere`相当を読んでいる）。
+**✅ 実装済み（2026-07-31、テスト32件）**:
+- `detect::MicSource::{Holder{bundle_id}, SystemWide}` と `detect::MicObservation` — 帰属の有無を型で区別
+- `MicWatch::observe(&MicObservation, now)` — Holder経路（既知会議アプリ or 前面アプリのみ信頼、自プロセス除外）と SystemWide経路（stuck判定: 会議コンテキスト無しで3アプリ跨ぎ＋2分下限。会議出現/デバイス解放で回復）
+- desktop `meeting.rs` の呼び出し側を新APIへ更新（前面アプリと会議コンテキストを同梱）
+- `mic.rs` モジュールdocにプロセス帰属の実装手順を記録
 
-**実装ステップ**:
-1. 現行のmic検知の取得方法を特定し、ログで実測（どのAPIで何を読んでいるか）
-2. **本命修正**: macOS 14.4+の CoreAudio プロセスAPI（`kAudioHardwarePropertyProcessObjectList` → 各processオブジェクトの入力稼働状態とPID→bundle id解決）で「**前面の会議候補アプリ自身が**マイクを使っているか」に信号を絞る。取得は真偽のみ・音声ストリームに触れない（FR-MT-04の境界コメント必須）
-3. **フォールバック（14.0〜14.3または取得失敗時）**: システム全体フラグを使うが、「アプリ切替をまたいで30分以上連続trueなら**stuck扱いで信号を無効化**」するヒューリスティックを純ロジック側に実装（これはテスト可能）
-4. detect.rsの統合ロジックに「mic信号の信頼度」を追加し、stuck時は②を落として①③のみで判定
-5. 除外: 自プロセス（SHOGUN自身のASR稼働中）は必ず除外
+**残り（macOS実機作業）**:
+1. **本命修正**: macOS 14.4+の CoreAudio プロセスAPI（`kAudioHardwarePropertyProcessObjectList` → 各processの `kAudioProcessPropertyIsRunningInput` と `kAudioProcessPropertyPID` → bundle id解決）を `mic.rs` に実装し、`MicSource::Holder{bundle_id}` を報告する。取得は真偽のみ・音声ストリームに触れない（既存docコメント参照）
+2. 14.0〜14.3または取得失敗時は現行の `SystemWide` にフォールバック（**分岐だけ書けばよい。判定ロジックは実装済み**）
+3. 実機での前後比較: 修正前はFinder/loginwindowで `mic=true`、修正後はそれらで会議判定が出ないこと
 
 **テスト/受け入れ**: stuckヒューリスティックのユニットテスト（連続true×アプリ切替→無効化、会議アプリ前面での新規true→有効）/ 実機: VoiceOS常駐状態でFinder前面時に `mic=true` が出ないこと / 会議アプリで実際にマイクONにしたときは検知すること。
 
@@ -236,6 +251,20 @@
 
 **エージェント投入プロンプト**:
 > ShogunAI-リポジトリで `docs/impl-plans-2026-07-31.md` の **WS9** を実装して。ブランチ `claude/ws9-audio-retention`。要件は FR-MT-12改定（2026-07-30）と§6.16受け入れ基準。音声はいかなる経路でもデバイス外へ出さない（不変条件3・クラウドASR禁止）。開示文言の切替を実装と同一コミットで行う（FR-MT-03の一致原則）。
+
+---
+
+---
+
+## 付録: 実装ログ
+
+| 日付 | 内容 | コミット |
+|---|---|---|
+| 2026-07-31 | WS5コア: mic信号のstuck判定＋帰属型（テスト32件） | `d0cc24d` |
+| 2026-07-31 | WS2コア: ⌥ダブルタップ検出器（14件）／WS3コア: Db記録API・wireパース | `f61cd06` |
+| 2026-07-31 | WS1コア: `local_day_bounds`（日境界の純ロジック、DST/エポック前テスト） | 本コミット |
+
+**なぜコアだけ先に入っているか**: これらはLinuxセッションで**テストまで検証できる**部分だから。macOSネイティブ配線（NSEventモニタ・CoreAudioプロセスAPI・Tauriコマンド・UI）はビルドできない環境なので、意図的にMac側エージェントに残してある。逆に言えば、残作業は「アダプタを書いて既存の型に渡す」だけに縮んでいる — 判定ロジックを再発明しないこと。
 
 ---
 
