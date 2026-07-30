@@ -6,4 +6,5 @@
 //! 不変条件2の担保もここが要: 波形は `shogun_core::audio` のRAMバッファにしか存在せず、
 //! BufferSink は文字起こしテキストだけを受けてDBにも書かない。
 
+pub mod buffer_sink;
 pub mod statemachine;
