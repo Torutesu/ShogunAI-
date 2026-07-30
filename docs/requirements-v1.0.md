@@ -5,7 +5,7 @@
 | 文書ID | requirements-v1.0 |
 | 対象プロダクト | SHOGUN (ShogunAI) — macOSアプリ |
 | ステータス | Draft for Phase 1（Phase 0 Go判定待ち） |
-| 最終更新 | 2026-07-19 |
+| 最終更新 | 2026-07-30（v1.1改版: コア機能最新化。決定記録は §9.1 / `docs/core-features-v1.1-proposal.md`） |
 | 上位文書 | `/CLAUDE.md`（運用ルール。本書と矛盾する場合はCLAUDE.mdの絶対不変条件が優先） |
 | 関連文書 | `docs/notch-ui-prototype-spec.md`（ノッチUIスパイク仕様）、`docs/phase0-dev-instructions.md`（Phase 0 開発指示書） |
 
@@ -54,6 +54,8 @@ SHOGUNの中核体験は次のループである:
 ```
 
 ユーザーが「AIに文脈を説明する」工程をゼロにする。文脈は常にSHOGUN側がプリアセンブル済みであり（context cache）、「押してから収集」は禁止である。
+
+このループの成果物（ワールドモデル）は、Notchでの提示・実行だけでなく、Memory API（ShogunMCP）を通じてユーザーが使う他のAIにも配布される（§6.11）。「取り込み（キャプチャ・連携・AIセッション）→ ワールドモデル → 提示/実行 or 配布」の二股が、コンテキストレイヤーとしてのSHOGUNの全体像である。
 
 ### 1.4 プロダクト原則（設計判断の優先順位）
 
@@ -110,6 +112,10 @@ CLAUDE.mdの絶対不変条件7項と、本書でそれを具体化した要件�
 | **L3（明示確認）** | 実行内容のプレビュー（送信先・全文）を提示し、明示的な確認操作を要求。送信・投稿・カレンダー作成・削除など外部に不可逆な影響を持つ操作すべて |
 | **Dream Cycle** | 夜間バッチ処理。統合・圧縮・state更新・confidence再計算・Cold層への降格。Select KKキー（Batch API）で実行。§6.7 |
 | **Morning Brief** | Dream Cycleの成果物として毎朝生成される、その日の状態サマリと推奨アクション。§6.8 |
+| **Evening Wrap** | 1日の終わりに生成される、ローカル集計のみの日次サマリ（LLM・egressなし）。§6.17 |
+| **Context Pack** | 検索・state・現在画面・スレッドをトークン予算内で統合した、モデルへ渡すコンテキストの単位。FR-MEM-42 |
+| **ai_session** | AIツールとのやりとり（Claude Code等のローカルセッションファイル）を取り込んだイベントのsource値。§6.19 |
+| **ShogunMCP** | Memory APIのMCPサーバー面の対外名。ユーザーが使う全AIクライアントへのコンテキスト配布面。§6.11 |
 | **Select KKキー** | 運営会社（Select KK）が保有するAnthropic APIキー。インデックス・分類・Dream Cycle・Morning BriefのBatch API処理**のみ**に使う |
 | **BYOK** | Bring Your Own Key。ユーザー自身のAnthropic APIキー。エージェント推論・チャット・ドラフト生成**のみ**に使う。v1はAnthropicのみ対応 |
 | **第1層連携** | 各サービスの**公式リモートMCP**への直接接続。OAuthはユーザー→サービス直接、トークンはKeychain。v1はGmail / Google Calendar / Slack / Notion / GitHub / Linearの6つ |
@@ -146,6 +152,13 @@ CLAUDE.mdの絶対不変条件7項と、本書でそれを具体化した要件�
 | 課金 | Stripe、7日間フルトライアル、Standard / Pro、ライセンス検証、オフライン猶予 |
 | 配布 | Developer ID + notarization、Tauri updater |
 | 言語 | UI英語のみ（i18n-ready構造）、生成物の出力言語はユーザー設定 |
+| スレッド・Context Pack | thread_key / threadsテーブル / salience / assemble_context（§6.3.5） |
+| 参照解決 | 指示詞（「あの件」等）からのスレッド解決チャット（§6.18） |
+| AIセッション取り込み | Claude Code等ローカルセッションファイルの取り込み（`ai_session`、§6.19） |
+| Evening Wrap | 夜のローカル集計サマリ（§6.17） |
+| ⌥ワンアクション | ⌥ダブルタップによる最上位アクション起動（FR-NU-10） |
+| セキュリティ強化 | DB暗号化（SQLCipher）＋書き込み前secretリダクション（NFR-SEC-06/07） |
+| Patterns記録 | 採択・修正履歴のローカル記録のみ（FR-PAT-01。学習・適用はv1.5） |
 
 ### 3.2 v1に含まないもの（時期を含めて明記）
 
@@ -156,6 +169,9 @@ CLAUDE.mdの絶対不変条件7項と、本書でそれを具体化した要件�
 | ナレッジグラフ（エンティティ間グラフ構造） | **v2** | v1のワールドモデルはstate tables 4種で表現する |
 | マルチデバイス同期・クラウドバックアップ | **v2** | ローカルファースト優先。同期はE2E暗号化設計が前提のためv2 |
 | メタメモリ（記憶についての記憶・自己評価） | **v2** | Dream Cycleのconfidence再計算までがv1 |
+| Patterns/Lessonsの学習・適用 | **v1.5** | v1は記録（FR-PAT-01）のみ。学習データの蓄積を先行させる |
+| コンテキストのチーム共有レイヤー | **v2** | 単一ユーザー・ローカルファースト前提を崩すため要件から再設計 |
+| AIツール会話のAXセグメンタ取り込み | **v1.1以降** | v1はローカルセッションファイル＋手動エクスポートのみ（OPEN-13決定） |
 | Computer Use（画面操作の自動実行） | **Phase 3** | v1の実行はMCP経由の構造化操作のみ |
 | visionOS対応 | **Phase 3** | v1はspatial-readyなスキーマ確保に留める |
 | Intel Mac対応 | 将来判断（未決事項 §9） | Apple Siliconのみ公式サポート（付録A ADR-005） |
@@ -434,6 +450,14 @@ CLAUDE.mdのPhase 1定義に従い、以下の順序で実装する。各マイ�
 
 **FR-NU-08（MUST, All）**: フォーカス中アプリがフルスクリーンの間、パネルはHiddenに遷移し自動表示しない。生成された提案はキューに保持し、フルスクリーン解除後にインジケータ色（ゴールド）で存在を示す。グローバルホットキーによる明示呼び出し時のみ、フルスクリーン上にも `.fullScreenAuxiliary` でExpanded表示してよい。
 
+#### 6.1.5 ⌥ワンアクション起動
+
+**FR-NU-10（MUST, All提示 / 実行はレベル・プラン規則に従う）**: ⌥（Option）キーの**ダブルタップ**（既定。設定でキー・発火方式を変更可、無効化可。OPEN-11決定 2026-07-30）で、Context Fusionの最上位アクションを即時起動する。
+- 最上位がL1: 即実行し、Notchに事後表示
+- L2: 該当アクションを選択済み状態でExpandedし、1操作で確定
+- L3: 通常のL3確認フローへ直行する。**⌥経由でもL3の明示確認を省略しない**（不変条件4）
+- 発火からNotch反応まではNFR-SLO-01（100ms）に従う。誤発火率の計測コードを同梱し、Phase 0のホバー誤発火検証と同型の規律で妥当性を確認する
+
 **受け入れ基準（6.1）**: 状態機械の全遷移がUIテストで検証されている。実ノッチ機・非ノッチ機・外部ディスプレイ接続の3構成で FR-NU-04/05 が手動テストされている。NFR-SLO-01の計測コードが同梱されている。
 
 ### 6.2 キャプチャ
@@ -531,6 +555,14 @@ CLAUDE.mdのPhase 1定義に従い、以下の順序で実装する。各マイ�
 **FR-MEM-30（MUST）**: スキーマ変更はrefineryによるバージョン管理マイグレーションのみで行う。手書きの `ALTER TABLE` をアプリコードに埋め込まない。各マイグレーションにはロールバック手順（ドキュメント）を必須添付する。
 
 **FR-MEM-31（MUST）**: **後方互換を破るマイグレーションを書かない**: カラム削除・意味変更・型の非互換変更を禁止。必要なら新カラム追加＋書き込み二重化＋読み取り移行の3段階で行う。アプリのダウングレード時に旧バージョンがDBを開けなくなる変更は、メジャーバージョンアップ＋明示の告知なしに行わない。
+
+#### 6.3.5 スレッドとContext Pack
+
+**FR-MEM-40（MUST, Std）**: event log行は `thread_key`（会話・スレッド識別子）を持ちうる。生成規則: Gmail=threadId / Slack=channel+thread_ts / GitHub=issue URL / AIセッション=session id / キャプチャ=アプリ＋正規化ウィンドウタイトル。マイグレーションはadditive。
+
+**FR-MEM-41（MUST, Std）**: `threads` テーブル（title / summary / participants / project_id / last_activity_at / salience / confidence）をstateとして持つ。summaryはDream Cycleが更新する。salience（直近性・未処理度・現在画面との一致・語句一致の加重）は純関数としてテスト可能にする。
+
+**FR-MEM-42（MUST, Std）**: チャット・ドラフト・Memory APIへ渡すコンテキストは `assemble_context(query, budget)`（ハイブリッド検索＋state facts＋現在画面＋スレッド優先＋トークン予算）で組み立てる（Context Pack）。confidenceゲート（FR-ST-20）通過分のみをモデルに渡す。p95はNFR-SLO-04（500ms）内。
 
 **受け入れ基準（6.3）**: マイグレーションを空DBと「v1初版スキーマのダミーデータ入りDB」の両方に適用するCIテスト。10万イベント投入時の検索p95計測。プロセスkill→再起動でHot層が再構築されevent logに欠損がないこと。
 
@@ -649,6 +681,8 @@ provenanceが空のstateレコードをINSERTするコードパスを作らな�
 **FR-CF-04（MUST, Std）**: screen_ctxに関連stateが見つからない場合（未知の相手・新規文脈）でも、汎用アクション（Save note / Search memory / Extract tasks）を提示し、空のパネルを出さない。
 
 **FR-CF-05（MUST, Std）**: FusionはStandardでも動作する（提示まで）。ただし**実行**がBYOK必須のアクション（ドラフト生成等）はStandardではロック表示（押すとProアップグレード導線）とする。ロック表示はアクション候補4件のうち最大1件までとし、Standardユーザーの体験を広告面にしない。
+
+**FR-CF-06（SHOULD, Std）**: アクション候補の提示・採択・修正・却下、および⌥起動（FR-NU-10）の確定履歴を、学習入力イベントとしてローカルに記録する（FR-PAT-01の入力）。
 
 **エラー時挙動**: cache構築失敗時は前回の有効cacheを使い、インジケータをアンバーにする。300msを超過した場合も提示は行い、超過をメトリクスに記録する。
 
@@ -893,6 +927,14 @@ provenanceが空のstateレコードをINSERTするコードパスを作らな�
 
 **FR-API-06（MUST, Pro）**: API経由の読み取りにもconfidence規則を適用する（レスポンスにconfidence値と `possibly` フラグを含め、0.5未満は既定で除外。明示パラメータ指定時のみ低確度を含めて返す）。
 
+**FR-API-07（MUST）**: 配布経路: MCP / CLI / RESTに加え、主要AIクライアント（Claude Code / Claude Desktop / Cursor / その他MCP対応クライアント）ごとにShogunMCPを1操作で登録できるセットアップレシピを、設定画面とCLI（`shogun mcp install <client>`）に用意する。生成される設定はローカルMCPエンドポイント参照とクライアントトークンのみで、他の秘匿情報を含まない。
+
+**FR-API-08（MUST）**: `memory.get_context_pack` ツール: 外部AIがタスク文字列を渡すと、FR-MEM-42のContext Pack（根拠event id・confidence帯付き）を返す。「お気に入りのAIに構造化して渡す」の実体であり、UIチャットと同一の組み立てロジックを使う（不変条件6）。
+
+**FR-API-09（SHOULD）**: 外部AIクライアントごとの利用状況（クライアント・時刻・ツール名。内容は含まない）をFull UIで可視化する。
+
+**FR-API-10（MUST）**: プラン境界（OPEN-10決定 2026-07-30）: **読み取り系**（search / get_context / get_context_pack / state照会）は**Standard以上**、**書き込み・実行系**（append_note / propose_update / actions.execute）は**Pro**とする。読み取り系はLLM呼び出しを伴わずBYOK不要のため、「プラン境界＝キー境界」（不変条件5・ADR-003）を破らない。本節の各FRの `Pro` 表記は書き込み・実行系についてのみ維持し、読み取り面には本FRを適用する。
+
 **受け入れ基準（6.11）**: UI検索とAPI検索の結果一致テスト。API経由L3操作がUI承認なしに完了しないE2Eテスト。CLI/REST/MCPの3面で同一操作のスモークテスト。
 
 ### 6.12 課金・ライセンス
@@ -906,8 +948,8 @@ provenanceが空のstateレコードをINSERTするコードパスを作らな�
 | プラン | 年払い | 月払い | 内容 |
 |---|---|---|---|
 | **Trial** | 無料・7日間 | — | Pro相当の全機能 |
-| **Standard** | **$49/月**（年一括請求） | **$62/月** | キャプチャ、3層メモリ、state tables、ローカル検索、Notch UI、第1層連携（読み取りコンテキスト統合）、Dream Cycle、Morning Brief |
-| **Pro** | **$99/月**（年一括請求） | **$124/月** | Standardの全て＋エージェント実行エンジン（L1/L2/L3すべて: コンテキストアクション実行、チャット、ドラフト生成）＋Memory API（MCP/CLI/REST）＋Composio第2層 |
+| **Standard** | **$49/月**（年一括請求） | **$62/月** | キャプチャ、3層メモリ、state tables、ローカル検索、Notch UI、第1層連携（読み取りコンテキスト統合）、Dream Cycle、Morning Brief、Evening Wrap、Memory API読み取り面（FR-API-10） |
+| **Pro** | **$99/月**（年一括請求） | **$124/月** | Standardの全て＋エージェント実行エンジン（L1/L2/L3すべて: コンテキストアクション実行、チャット、ドラフト生成）＋Memory API書き込み・実行面（FR-API-10）＋Composio第2層 |
 
 **FR-BIL-02（MUST）**: キー構成とプランの整合（CLAUDE.md不変条件5と完全整合）:
 - **Standard**はSelect KKキー（Batch API: インデックス・分類・Dream Cycle・Morning Brief）**のみ**で全機能が動作し、**BYOK不要**
@@ -1154,6 +1196,55 @@ event_log.session_id  ← additive。区間中のキャプチャ・チャット�
 6. 会議中CPU（FR-MT-21）の計測コードが同梱され、アイドルSLOと別系統で記録される。
 7. 既定OFF（FR-MT-01）であること、およびアップデートで既定が変わらないことのテスト。
 
+### 6.17 Evening Wrap
+
+**目的**: 1日の終わりに「今日何が終わり、何が開いていて、明日何から始めるか」が整理されている。Morning Brief（Batch生成・朝）と対になる**ローカル集計のみ**のサマリ（OPEN-12決定 2026-07-30でv1に含む）。
+
+**FR-EB-01（MUST, Std）**: Evening Wrapは既定17:00〜21:00の「作業終息」検知時（または設定時刻）に生成・提示する。内容:
+
+| セクション | 内容 | 出典 |
+|---|---|---|
+| Today's outcome | 今日クローズしたcommitments / open_loops、実行アクション数 | state tables / 実行履歴 |
+| Still open | 今日動きがあったが未クローズの事項（優先順） | state tables |
+| Tomorrow first | 明日期限のcommitments＋翌日予定の先頭3件 | state tables / Calendar |
+| Loose ends | 今日発生した未処理の新規open_loops | state tables |
+
+**FR-EB-02（MUST, Std）**: LLM生成・egressを伴わない（ローカルデータのみで構成）。優先順位付けはsalience / overdue / stalenessの既存指標で行う。Dream Cycleの前段に位置づけ、「夜のWrapで見た状態が翌朝のBriefで整理されて返る」1日のループを作る。
+
+**FR-EB-03（MUST, Std）**: 提示は割り込まない: インジケータをゴールドにするのみで自動ポップアップしない。既読管理はMorning Briefと同一。
+
+**受け入れ基準（6.17）**: 生成時にegressが発生しないことのテスト。データ欠損時でも空画面を出さない縮退テスト。
+
+### 6.18 参照解決（「あの件どうなってる?」）
+
+**FR-REF-01（MUST, Pro）**: チャット入力の指示詞（「あの件」「例の」「さっきの」等。言語別データとして管理）を検出し、threads（FR-MEM-41）のsalienceランキングで対象スレッドを解決する。一意に絞れない場合は**推測で答えず**、上位2候補の二択で聞き返す。
+
+**FR-REF-02（MUST, Pro）**: 参照解決を経た回答は必ず根拠（provenance: どのメール/メッセージ/セッションか）を出典チップとして表示する。低confidence状態はFR-ST-20の規則で「〜の可能性」として渡す。
+
+**FR-REF-03（MUST, Pro）**: 参照解決はテキスト入力を正とし、音声入力は将来の前段追加とする（解決ロジックは音声/テキスト共通資産）。
+
+**受け入れ基準（6.18）**: 曖昧ケースで断定回答せず聞き返すテスト。出典チップの表示テスト。
+
+### 6.19 AIセッション取り込み
+
+**目的**: AIツールとのやりとりをワールドモデルに統合し、モデル間のコンテキスト断絶を埋める（取り込み側。配布側は§6.11）。
+
+**FR-AIS-01（MUST, Std）**: 新ソース `ai_session` として取り込む。v1の対象は**ローカルセッションファイルを持つツール**（Claude Code: `~/.claude/projects/**/*.jsonl` 等）＋公式エクスポートの手動取り込み。AXによる会話セグメンタはv1で実装しない（OPEN-13決定 2026-07-30）。
+
+**FR-AIS-02（MUST, Std）**: 取り込みは**オプトイン**とし、ツール単位・プロジェクト/ディレクトリ単位の除外設定を用意する。読み取りはローカル処理のみでegressを伴わない。取り込み状況は設定画面に表示する。
+
+**FR-AIS-03（MUST, Std）**: `ai_session` イベントは `thread_key`=セッションIDを持ち、既存の検索・抽出・Fusion・state推定にそのまま乗る（専用経路を作らない。ソース対称の原則）。
+
+**FR-AIS-04（MUST, Std）**: AIセッション由来のstate候補はprovenanceに `source=ai_session` を保持し、根拠表示で「AIツールでのやりとり由来」を区別可能にする。
+
+**受け入れ基準（6.19）**: オプトインなしで取り込みが動かないテスト。除外ディレクトリが取り込まれないテスト。取り込みイベントが既存の検索・抽出経路を通るテスト。
+
+### 6.20 Patterns記録（v1.5シード）
+
+**FR-PAT-01（MUST, Std）**: アクション提案の採択・修正・却下、⌥起動の確定履歴、Recap候補の`[Track]`/破棄を、学習入力イベント（`action_feedback` テーブル。additive）としてローカルに記録する。**この記録はデバイス外に出さない。**
+
+**FR-PAT-02（v1.5・予告）**: 記録からのFusion優先度の個人化・ドラフトの口調学習・定型のL2提案化は、v1.5要件定義で設計する。v1では実装しない（スコープ表 §3.2）。
+
 ---
 
 ## 7. 非機能要件（NFR群）
@@ -1186,6 +1277,10 @@ CLAUDE.mdのSLO表を計測定義付きで詳細化する。**各SLOの計測コ
 **NFR-SEC-04（MUST）**: 外部通信は全てTLS。証明書検証の無効化オプションを作らない。
 
 **NFR-SEC-05（SHOULD）**: SQLiteのDBファイル・モデルファイルはmacOSのユーザーホーム配下（`~/Library/Application Support/com.selectkk.shogun/`）に0600相当の権限で置く。DB全体の暗号化（SQLCipher等）はv1では採用しない（FileVault前提。判断は付録Bに付記）。
+
+**NFR-SEC-06（MUST）**: ローカルDBはSQLCipherで暗号化し、鍵はKeychainに保存する。既存平文DBからの移行マイグレーションとロールバック手順を伴う（監査決定 2026-07-25）。
+
+**NFR-SEC-07（MUST）**: event log書き込み前に、secretパターン（`sk-` / `ghp_` / JWT / クレジットカード番号等）をマスクするリダクション段を通す。マスク規則はテスト可能なデータとして分離する。
 
 ### 7.3 プライバシー原則
 
@@ -1276,6 +1371,15 @@ CLAUDE.mdの確定表を転記し、選定理由を付す。**このスタック
 | OPEN-08 | システム音声の取得方式とmacOS 14.0〜14.3での縮退挙動 | MT3着手前 | Core Audio tap（`CATapDescription`、macOS 14.4+）を前提とし、非対応環境で「マイクのみに縮退」か「機能を出さない」かを決める（FR-MT-13） |
 | OPEN-09 | 話者分離をどこまでやるか | MT3完了後 | v1は「自分 / それ以外」の2値まで（FR-MT-15）。参加者名への割り当ては`calendar_occurrences.attendees`との突合として次段 |
 
+**決定済み（2026-07-30。詳細: `docs/core-features-v1.1-proposal.md` §6）**:
+
+| ID | 論点 | 決定 |
+|---|---|---|
+| OPEN-10 | Memory API読み取りのプラン境界 | **読み取り系をStandardへ開放**（FR-API-10） |
+| OPEN-11 | ⌥ワンアクションの発火方式 | **既定ダブルタップ・設定で変更可**（FR-NU-10。誤発火計測で妥当性確認） |
+| OPEN-12 | Evening Wrapのv1組み込み | **v1に含む**（§6.17） |
+| OPEN-13 | ローカル履歴の無いAIツールの取り込み | **v1はローカルファイル系＋手動エクスポートのみ**（FR-AIS-01。AXセグメンタはv1.1以降） |
+
 ### 9.2 主要リスク
 
 | リスク | 影響 | 緩和策 |
@@ -1314,6 +1418,7 @@ CLAUDE.mdの確定表を転記し、選定理由を付す。**このスタック
 - **決定**: 機能差で差別化する。Standard = 観測系（キャプチャ・メモリ・検索・Notch UI・第1層読み取り統合・Dream Cycle・Morning Brief）、Pro = 実行系（エージェント実行・チャット・ドラフト・Memory API・Composio）。StandardはSelect KKキーのみで動作しBYOK不要、Proの推論はBYOK必須。
 - **理由**: (1) プラン境界とキー境界（不変条件5）が完全一致し、実装・原価・説明が単純になる。(2) クォータ制は「使うほど罰される」体験になりプロダクト原則（実行 > 提案）と矛盾する。(3) BYOK必須層をProに限定することで、Standardのオンボーディングからキー取得の摩擦を排除できる。
 - **帰結**: Standardユーザーは実行系に触れない。FR-CF-05のロック表示（最大1件）でアップグレード動機を作るが、広告的体験にはしない。
+- **2026-07-30改定**: Memory APIの**読み取り面**は観測系としてStandardに含める（FR-API-10、OPEN-10決定）。読み取りはLLM呼び出しを伴わずBYOK不要のため、「プラン境界＝キー境界」の一致は維持される。書き込み・実行面は引き続きPro。
 
 ### ADR-004: ノッチ非搭載環境には「擬似ノッチ」で同型UIを提供する
 
