@@ -271,6 +271,22 @@ impl HttpTransport for ReqwestTransport {
     }
 }
 
+/// `carry` に溜まったバイトのうち、有効なUTF-8として確定した前半を切り出す。切り出せない
+/// （まだ1文字も完成していない）ときは `None` を返し、バイトはそのまま次のチャンクを待つ。
+#[cfg(feature = "net")]
+fn take_valid_utf8(carry: &mut Vec<u8>) -> Option<String> {
+    let valid_to = match std::str::from_utf8(carry) {
+        Ok(_) => carry.len(),
+        Err(e) => e.valid_up_to(),
+    };
+    if valid_to == 0 {
+        return None;
+    }
+    let s = String::from_utf8_lossy(&carry[..valid_to]).into_owned();
+    carry.drain(..valid_to);
+    Some(s)
+}
+
 #[cfg(feature = "net")]
 impl StreamingTransport for ReqwestTransport {
     fn send_streaming(
@@ -293,16 +309,22 @@ impl StreamingTransport for ReqwestTransport {
             }
             let mut resp = rb.send().await.map_err(|e| TransportError::Io(e.to_string()))?;
             let status = resp.status().as_u16();
+            // マルチバイト文字はチャンク境界をまたぐ（日本語の応答ではほぼ毎回起きる）。
+            // 到着したバイトをそのまま lossy 変換すると、境界にかかった1文字は置換文字に
+            // なって二度と戻らない。`take_valid_utf8` で有効な前半だけを送り、途中で切れた
+            // 文字のバイトは次のチャンクの頭と繋ぐために持ち越す。
+            let mut carry: Vec<u8> = Vec::new();
             while let Some(bytes) =
                 resp.chunk().await.map_err(|e| TransportError::Io(e.to_string()))?
             {
-                // 不正なUTF-8で切らない: SSEのテキストは常にUTF-8で、マルチバイト文字が
-                // チャンク境界にかかった分は from_utf8_lossy が置換文字にする。デコーダ側の
-                // 持ち越しバッファと合わせて、実害が出るのは境界にかかった1文字だけ。
-                let s = String::from_utf8_lossy(&bytes).into_owned();
-                if chunks.send(s).is_err() {
-                    break;
+                carry.extend_from_slice(&bytes);
+                if let Some(s) = take_valid_utf8(&mut carry) {
+                    if chunks.send(s).is_err() {
+                        break;
+                    }
                 }
+                // take_valid_utf8 が None を返したときはまだ1文字も完成していない。
+                // 次のチャンクを待つ。
             }
             Ok(status)
         }
@@ -393,5 +415,35 @@ mod tests {
         assert!(!r2.is_success());
         assert_eq!(t.sent().len(), 2);
         assert_eq!(t.sent()[1].url, "https://x/b");
+    }
+
+    /// マルチバイト文字がチャンク境界にかかっても壊れない。日本語の応答では常に起きる。
+    #[cfg(feature = "net")]
+    #[test]
+    fn a_multibyte_character_split_across_chunks_survives() {
+        // "日本" = 6 bytes. 最初のチャンクが1文字目の途中で切れる。
+        let full = "日本".as_bytes();
+        let (head, tail) = full.split_at(4);
+
+        let mut carry = head.to_vec();
+        let first = take_valid_utf8(&mut carry).expect("1文字目は確定しているはず");
+        assert_eq!(first, "日");
+        assert_eq!(carry.len(), 1, "2文字目の途中のバイトが持ち越されていない");
+
+        carry.extend_from_slice(tail);
+        let second = take_valid_utf8(&mut carry).expect("2文字目が確定するはず");
+        assert_eq!(second, "本");
+        assert!(carry.is_empty());
+
+        assert_eq!(format!("{first}{second}"), "日本", "文字が壊れた");
+    }
+
+    /// 1文字も完成していないチャンクでは何も出さず、バイトを捨てもしない。
+    #[cfg(feature = "net")]
+    #[test]
+    fn an_incomplete_first_character_is_held_not_dropped() {
+        let mut carry = "日".as_bytes()[..2].to_vec();
+        assert!(take_valid_utf8(&mut carry).is_none());
+        assert_eq!(carry.len(), 2, "確定前のバイトが捨てられた");
     }
 }
