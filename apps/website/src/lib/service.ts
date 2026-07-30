@@ -34,7 +34,9 @@ export async function addParticipant(
       const refreshed = await findByEmail(normalized);
       return { row: refreshed ?? existing, duplicate: true };
     }
-    return { row: existing, duplicate: true }; // returning users still get a statusUrl
+    // duplicate=true: callers on public routes must NEVER echo this row's
+    // statusToken/statusUrl back — see signupPayload() in referral.ts.
+    return { row: existing, duplicate: true };
   }
 
   let referredBy: string | null = null;
