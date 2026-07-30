@@ -13,11 +13,6 @@
 //! 不変条件2は [`crate::audio_lane`] と同じ理屈で守られる: 波形は `Worker` のバッファにしか
 //! 存在せず、ここが受け取るのは文字起こし後のテキストだけ。
 
-// Task 12 で状態機械に配線されるまでは private かつ未参照のモジュールなので、`pub` な項目も
-// dead-code 判定を素通りしない。`hold_monitor` / `notch_actions` / `approvals` / `connectors`
-// と同じ idiom。配線後は外せる。
-#![allow(dead_code)]
-
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;

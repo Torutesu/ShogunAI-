@@ -4,11 +4,6 @@
 //! マイク・パネル・音・エージェント呼び出しの全てがこのファイルを通るので、
 //! 「マイクを開くコードはどこか」の答えが1箇所に収まる。
 
-// state_tag は今のところログ用で未参照。private モジュールなので `pub` でも dead-code 判定を
-// 素通りしない。`ptt_lane` / `hold_monitor` / `notch_actions` / `approvals` / `connectors` と
-// 同じ idiom。
-#![allow(dead_code)]
-
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -16,7 +11,7 @@ use std::time::Instant;
 use crate::hold_monitor::HoldKey;
 
 use shogun_core::ptt::statemachine::{
-    Effect, Fail, Input, Machine, Panel, Params, Sound, State, Timer,
+    Effect, Fail, Input, Machine, Panel, Params, Sound, Timer,
 };
 use tauri::{Emitter, Manager};
 
@@ -156,11 +151,6 @@ pub fn play_sound(sound: Sound) {
             let _: bool = msg_send![sound, play];
         }
     }
-}
-
-/// 現在の状態タグ。ログとデバッグ用。
-pub fn state_tag(state: State) -> &'static str {
-    state.tag()
 }
 
 /// 失敗理由からユーザーに見せる一文を作る。**英語**（v1規約）。i18n-readyに保つため、
@@ -510,7 +500,7 @@ fn submit(app: &tauri::AppHandle, spoken: String) {
         match sender.join() {
             Ok(Ok(())) => {
                 let total_ms = started.elapsed().as_millis() as u64;
-                crate::analytics::capture_ptt_completed(&app, first_token_ms.unwrap_or(0), total_ms);
+                crate::analytics::capture_ptt_completed(&app, first_token_ms, total_ms);
                 feed(&app, Input::ResponseDone);
             }
             Ok(Err(why)) => feed(&app, Input::Failed(why)),

@@ -22,11 +22,6 @@
 //! そのとき同時に設計しなければならないこと: opt-out の尊重。現状この repo には opt-out の
 //! 仕組み自体が無く、守るべきものが無い状態なので、サンクを足す人が忘れないようここに書く。
 
-// Task 12 で `ptt.rs` から配線されるまでは未参照のモジュールなので、`pub` な関数も dead-code
-// 判定を素通りしない。`ptt_lane` / `hold_monitor` / `notch_actions` / `approvals` と同じ idiom。
-// 配線後は外せる。
-#![allow(dead_code)]
-
 /// push-to-talk のセッションが始まった（マイクが開いた）。
 ///
 /// ここから下の3つが Issue #44 の定量目標の材料になる。**発話も文字起こしも応答も
@@ -37,8 +32,16 @@ pub fn capture_ptt_started(_app: &tauri::AppHandle) {
 }
 
 /// 応答が最後まで届いた。`first_token_ms` が SLO-03（初トークン1s）の実測値。
-pub fn capture_ptt_completed(_app: &tauri::AppHandle, first_token_ms: u64, total_ms: u64) {
-    eprintln!("[analytics] ptt_session_completed first_token_ms={first_token_ms} total_ms={total_ms}");
+///
+/// `None` は「初トークンが1つも来なかった」— パネルが閉じられて受信を打ち切った場合。
+/// これを `0` で潰すと「0msで初トークンが来た」と見分けが付かなくなるので、ログでは
+/// `none` と出す。値そのものが利用者の内容を運ぶことはない（時間だけ）。
+pub fn capture_ptt_completed(_app: &tauri::AppHandle, first_token_ms: Option<u64>, total_ms: u64) {
+    let first_token = match first_token_ms {
+        Some(ms) => ms.to_string(),
+        None => "none".to_string(),
+    };
+    eprintln!("[analytics] ptt_session_completed first_token_ms={first_token} total_ms={total_ms}");
 }
 
 /// セッションが失敗して終わった。`code` は `shogun_core::ptt::statemachine::Fail::code()`

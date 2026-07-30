@@ -11,10 +11,6 @@
 //! 既定は右⌘。macOSが右⌘単独に何も割り当てておらず、⌘Space（Spotlight）とも衝突しない。
 //! ⌥単独は既存のdraftトリガ（`watch_option_tap`）が使っているので選べない。
 //!
-//! `watch` はまだどこからも呼ばれていない（配線はTask 12）。それまでのdead-code警告は、
-//! 配線前のモジュールと同じ扱い（`notch_actions` 等）でモジュール単位に抑止する。
-#![allow(dead_code)]
-
 /// 長押しに使える素の修飾キー。左側のキーは意図的に含めない — 通常のショートカットの
 /// 起点として最も使われるので、長押し判定と取り合いになる。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
