@@ -25,9 +25,10 @@ Connections UI は骨格実装済みだがラフ。`02-user-guide.md` で項目�
 - lead 文は現行を維持: *"Give SHOGUN read access to the tools you already use. It connects directly to each service — nothing is routed through anyone else."*（直結の信頼訴求は必ず残す）
 - 行構成・順序: **Calendar → Mail → Drive**（現行ワイヤーに無い Drive 行を追加）→ 区切り → Slack 等 *"Not available yet"*（disabled, opacity 落とし）
 - 推奨バッジは Calendar / Mail の2つのみ（3つ等価に並べない — 選択負荷対策、`03-product-design.md` §3）
-- Connect → ブラウザ OAuth → 復帰で行が Connected に変化（`oauth_flow.rs` ループバック）
+- Calendar / Drive の Connect → ブラウザ OAuth → 復帰で行が Connected に変化（`oauth_flow.rs` ループバック）
+- **Mail の Connect は Google OAuth ではなく Composio 3開示同意シート**（第三者経由 / データ種別 / 取消可能性。Gmail 全面 Composio 化決定に伴い読み取り同意を接続時に取る。`docs/mcp/02-user-guide.md` §2 改訂版）。同意で Connected 化、拒否は未接続のまま先へ
 - スキップ可能。添え文: *"You can connect these anytime in Settings."*
-- **Composio（Gmail 送信）のオプトインはこのステップに入れない**（初回は読み取り価値に集中。同意は Approvals 文脈で）
+- **送信の解放（draft-stop OFF）はこのステップに入れない**（初回は読み取り価値に集中。送信解放の同意は Approvals 文脈で）
 
 ### 4-2. Settings → Connections パネル（拡充）
 
@@ -46,11 +47,13 @@ Connections UI は骨格実装済みだがラフ。`02-user-guide.md` で項目�
 - **Disconnect は確認ダイアログ必須**: *"Disconnect Calendar? SHOGUN will stop syncing and forget its access."* 実行でトークンを Keychain から削除
 - **Coming soon** は押せないが行として見せる
 
-### 4-3. Composio 設定の別枠化
+### 4-3. Mail 行の Composio 表示（別枠化から変更）
 
-- Gmail 行（第1層）と**視覚的に分離したセクション**にする（第三者経由と直結を混ぜない）
-- 表示: オプトイン状態 / draft-stop トグル（既定 ON、同意後のみ OFF 可）/ *"Sending uses Composio, a third-party service"* の明示
-- 未同意の間、Gmail 送信系機能は同意フロー（3開示）へ誘導
+Gmail 全面 Composio 化に伴い、「第1層の Gmail 行 + 別枠の Composio セクション」構成は廃止し、**Mail 行そのものが Composio 経由の行**になる:
+
+- Mail 行は Calendar / Drive と同じリストに置くが、**視覚的に区別**し常時 *"via Composio, a third-party service"* ラベルを表示（正直表示。直結と誤認させない）
+- 行の詳細に: 同意状態 / draft-stop トグル（既定 ON、同意後のみ OFF 可）/ 同意の取消（取消で同期停止・egress ゼロへ）
+- 未同意の間、Gmail の同期・送信系機能はすべて同意フロー（3開示）へ誘導
 
 ### 4-4. アハ・モーメント（接続直後のサンプル質問）
 

@@ -9,7 +9,7 @@
 
 ## 2. ゴール / Done の定義
 
-1. Wave 1 の3サービス（Calendar / Gmail / Drive）が実機で OAuth 接続・同期でき、`event_log` にデータが着地する
+1. Wave 1 の3サービスが実機で接続・同期でき、`event_log` にデータが着地する（Calendar / Drive = 公式 MCP 直結 + Google OAuth、**Gmail = 全面 Composio 経由 + 3開示同意**）
 2. `toolmap.rs` / `result.rs` の暫定マークが外れている（実 `tools/list`・実レスポンスと突合済み）
 3. Composio Gmail 送信が実エンドポイントで L3 経路ごと検証済み
 4. amber（トークン失効）→ 再認可 → 復帰が実機で確認済み
@@ -18,10 +18,10 @@
 ## 3. スコープ
 
 **In:**
-- GCP OAuth クライアント作成（Testing mode、`docs/oauth-client-setup.md` 手順）
-- Calendar → Gmail → Drive の順の end-to-end 検証
-- Composio Gmail 送信の実検証（オプトイン同意 → L3 承認 → 送信 → トレーサビリティ記録）
-- 検証で見つかった toolmap / result / oauth_flow の修正
+- GCP OAuth クライアント作成（Testing mode、`docs/oauth-client-setup.md` 手順。**Calendar / Drive のみ** — Gmail は Google OAuth 不要）
+- Calendar → Drive の順の第1層 end-to-end 検証
+- **Gmail は全面 Composio 経由で検証**（2026-07 決定。読み取り同期・送信とも。3開示オプトイン → 同期 → L3 承認 → 送信 → トレーサビリティ記録）
+- 検証で見つかった toolmap / result / oauth_flow / Gmail 経路移行（`docs/mcp/04-dev-implementation.md` §2-A0）の修正
 
 **Out（別Issue）:**
 - LLM へのツール定義結線（#81）
@@ -29,7 +29,9 @@
 - Wave 2/3 サービス（Slack / Notion / GitHub / Linear）のライブ検証
 - Google OAuth 本番審査（Testing mode で検証後、別途着手）
 
-## 4. 検証手順仕様（サービス毎の共通シーケンス）
+## 4. 検証手順仕様
+
+### 4-1. 第1層（Calendar / Drive）共通シーケンス
 
 各サービスで以下を順に確認し、結果を checklist に記録する:
 
@@ -42,15 +44,17 @@
 | 5 | トークン失効の強制（GCP側で revoke） | `connection.rs` FSM | `amber` 遷移 → UI に Reconnect 表示 |
 | 6 | 再認可 | 同上 | `connected` 復帰、同期再開、データ欠損なし |
 
-**Gmail 追加項目**: スコープが `gmail.readonly` / `gmail.compose` のみで `gmail.send` を要求していないことを OAuth 同意画面の表示で目視確認する（`endpoints.rs` の宣言と実挙動の一致）。
+### 4-2. Gmail（全面 Composio 経由）検証シーケンス
 
-**Composio 送信の検証シーケンス**:
-1. 未同意状態で送信系を叩く → 型ゲート（`composio.rs`）で拒否されることを確認
-2. オプトイン同意（3開示 UI）→ APIキーは Keychain、user id は設定JSON に着地
-3. draft-stop ON（既定）で送信提案 → 下書き作成で停止することを確認
-4. draft-stop OFF + L3 承認 → `POST /api/v3/tools/execute/GMAIL_SEND_EMAIL` 実行成功
-5. 失敗系: API エラー時に FR-C2-05 ドラフト退避（`RoutedSendTransport`）が動くこと
-6. トレーサビリティ: 読み取り・送信とも「第三者経由」フラグ＋ダイジェストのみが記録され、本文が残らないこと（CLAUDE.md 不変条件3の明示的例外の条件）
+前提: Gmail は読み取り・ドラフト・送信のすべてが Composio 経由（2026-07 決定）。Google OAuth は使わない。コード側の経路移行（`endpoints.rs` の第1層 Gmail エントリ撤去等、`docs/mcp/04-dev-implementation.md` §2-A0）が検証の前提作業。
+
+1. **未同意状態で一切の egress が発生しない**ことを確認（同期・送信とも。ゼロ egress テスト）
+2. オプトイン同意（3開示 UI: 第三者経由 / データ種別 / 取消可能性）→ APIキーは Keychain、user id は設定JSON に着地
+3. 読み取り同期1周 → `event_log` 着地、**読み取り egress のトレーサビリティ**（「第三者経由」フラグ＋ダイジェストのみ、本文なし）を確認
+4. draft-stop ON（既定）で送信提案 → 下書き作成で停止することを確認
+5. draft-stop OFF + L3 承認 → `POST /api/v3/tools/execute/GMAIL_SEND_EMAIL` 実行成功
+6. 失敗系: API エラー時に FR-C2-05 ドラフト退避（`RoutedSendTransport`）が動くこと
+7. 同意取消 → 同期停止・以後 egress ゼロに戻ることを確認
 
 ## 5. 成果物
 

@@ -42,8 +42,11 @@ user message
   → Claude 応答をストリーミング処理
   → tool_use 検出:
       read 系 → service_gate（Wave 解放? connected? 権限表にある?）
-                → toolmap → RemoteMcpTransport → result.rs 正規化
+                → toolmap → transport → result.rs 正規化
                 → tool_result として返却しループ継続
+                ※ Calendar/Drive = RemoteMcpTransport（公式MCP直結）。
+                  Gmail = Composio transport（全面Composio化決定）。mail 系操作は
+                  3開示同意ゲートを通過済みの場合のみツール定義に載せる（未同意 = 未接続扱い）
       write/send 系 → 即実行しない。L1/L2/L3 エンジン（engine.rs）へ提案として流す
                 → tool_result には「queued for approval」等の状態を返す（結果を捏造しない）
   → 最終応答
