@@ -32,6 +32,10 @@ mod notch_actions;
 mod notch_exec;
 mod onboarding;
 
+/// 素の修飾キーの長押し検知（push-to-talk, Issue #44）。
+#[cfg(target_os = "macos")]
+mod hold_monitor;
+
 /// The collectionBehavior the overlay wants, selected at setup (NSPanel mode = canJoinAllSpaces +
 /// fullScreenAuxiliary = 257; plain-window fallback = moveToActiveSpace 274) and re-asserted by
 /// every heal/reassert path. `stationary` (1<<4) was dropped: it is a suspect for the panel not
