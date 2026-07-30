@@ -211,6 +211,8 @@ pub fn run() {
         ptt::ptt_dismiss,
         ptt::ptt_open_full_ui,
         ptt::ptt_open_privacy_settings,
+        ptt::get_ptt_settings,
+        ptt::set_ptt_settings,
     ]);
 
     // NOTE: the visible surface is a NATIVE NSPanel hosting the webview's content view
@@ -493,14 +495,21 @@ fn setup_macos(app: &tauri::App) {
     // （PTTは音声だけで、メモリが開けたかは関係ない）なので、DBブランチの外・main スレッドの
     // setup でここに置く。
     let _ = ptt::build_panel(app.handle());
+    // 設定を先に読む。βフラグは即時に効かせたいので `ENABLED` へ、長押しキーは監視を
+    // 張るときに要るので `watch` へ渡す。壊れた設定は `load_settings` が既定（無効）に落とす。
+    let ptt_settings = ptt::load_settings(app.handle());
+    ptt::ENABLED.store(ptt_settings.enabled, std::sync::atomic::Ordering::Relaxed);
+    let hold_key =
+        hold_monitor::HoldKey::from_key(&ptt_settings.hold_key).unwrap_or_default();
     app.manage(ptt::Session::new());
     // 長押し監視は 1 プロセスに 1 回だけ。`watch` は関数レベルの static を使うので、
-    // 2 回呼ぶと 2 つのキーが同じ HOLDING/WAS_DOWN を踏み合って壊れる。
+    // 2 回呼ぶと 2 つのキーが同じ HOLDING/WAS_DOWN を踏み合って壊れる。無効でも監視は張り、
+    // 押し下げの取捨は `feed` 側で行う（キー変更に再起動が要るのはこのため）。
     {
         let start = app.handle().clone();
         let end = app.handle().clone();
         hold_monitor::watch(
-            hold_monitor::HoldKey::default(),
+            hold_key,
             move || ptt::feed(&start, ptt::mono_input_hold_start()),
             move || ptt::feed(&end, ptt::mono_input_hold_end()),
         );

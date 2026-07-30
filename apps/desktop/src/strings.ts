@@ -198,6 +198,19 @@ export const STRINGS = {
     // before: a disclosure that describes a future build is not a disclosure.
     meetingDisclosure:
       "Nothing joins your call and no audio is captured. SHOGUN opens a note beside the meeting; what you write stays on this Mac.",
+    // push-to-talk — settings (Issue #44). Beta: off by default, opt in here.
+    pttSection: "Push-to-talk",
+    pttBeta: "Beta",
+    pttHint: "Hold a key to speak; release to send. Ships off until you turn it on.",
+    pttOn: "On",
+    pttOff: "Off",
+    pttHoldKey: "Hold key",
+    pttKeyRightCommand: "Right ⌘",
+    pttKeyRightOption: "Right ⌥",
+    pttKeyFn: "Globe fn",
+    // NSEvent monitors can't be unregistered once installed, so a key change only takes
+    // hold after a relaunch. Say so rather than let the old key linger silently.
+    pttRestartNote: "The hold key takes effect after you restart SHOGUN.",
     // errors
     sources: "Sources",
     noAnswer: "(no response)",

@@ -707,9 +707,44 @@ body {
 .set__hint.is-ok {
   color: var(--live);
 }
+/* Label + control on one line (hold-key picker). */
 .set__row {
   display: flex;
-  gap: 4px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+}
+/* Beta badge on a settings label: quiet, so it marks the feature without shouting. */
+.set__beta {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: var(--r-xs);
+  background: var(--fill);
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  letter-spacing: 0.04em;
+  text-transform: none;
+}
+.set__rowlabel {
+  font-size: var(--fs-md);
+  color: var(--ink);
+}
+.set__select {
+  font: inherit;
+  font-family: var(--sys);
+  font-size: var(--fs-sm);
+  color: var(--ink);
+  background: var(--fill);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  padding: 5px 9px;
+  cursor: pointer;
+}
+.set__select:disabled {
+  opacity: 0.6;
+  cursor: default;
 }
 .keys {
   display: flex;

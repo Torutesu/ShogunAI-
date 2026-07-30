@@ -9,9 +9,11 @@
 // 同じ idiom。
 #![allow(dead_code)]
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
+
+use crate::hold_monitor::HoldKey;
 
 use shogun_core::ptt::statemachine::{
     Effect, Fail, Input, Machine, Panel, Params, Sound, State, Timer,
@@ -232,13 +234,103 @@ fn asr_choice() -> (shogun_core::meeting::settings::AsrModel, shogun_core::meeti
     )
 }
 
+/// PTTの設定。秘密は含まないので Keychain は不要。`app_data/ptt.json` に平文で置く。
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct PttSettings {
+    /// β機能なので既定はオフ。設定から明示的に有効化する。
+    #[serde(default)]
+    pub enabled: bool,
+    /// 長押しに使うキーの安定文字列（`HoldKey::key()`）。
+    #[serde(default = "default_hold_key")]
+    pub hold_key: String,
+}
+
+fn default_hold_key() -> String {
+    HoldKey::default().key().to_string()
+}
+
+impl Default for PttSettings {
+    fn default() -> Self {
+        PttSettings { enabled: false, hold_key: default_hold_key() }
+    }
+}
+
+/// βフラグ。長押し監視は常に張るが、無効なら押し下げを捨てる — キー変更の反映には
+/// 再起動が要る代わりに、有効/無効の切り替えは即座に効く。
+pub static ENABLED: AtomicBool = AtomicBool::new(false);
+
+fn settings_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    app.path().app_data_dir().ok().map(|d| d.join("ptt.json"))
+}
+
+/// 設定を読む。読めない・壊れているときは既定に落ちる — **壊れた設定ファイルが
+/// マイクを開いたままにしてはならない**ので、既定は必ず enabled=false 側。
+pub fn load_settings(app: &tauri::AppHandle) -> PttSettings {
+    let Some(path) = settings_path(app) else {
+        return PttSettings::default();
+    };
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return PttSettings::default();
+    };
+    serde_json::from_str(&text).unwrap_or_default()
+}
+
+/// 設定を書く。整形済みJSONで、人が開いて読める形に。
+pub fn save_settings(app: &tauri::AppHandle, settings: &PttSettings) -> Result<(), String> {
+    let path = settings_path(app).ok_or("app_data_dir unavailable")?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let text = serde_json::to_string_pretty(settings).map_err(|e| e.to_string())?;
+    std::fs::write(path, text).map_err(|e| e.to_string())
+}
+
+/// 現在の設定を返す。
+#[tauri::command]
+pub fn get_ptt_settings(app: tauri::AppHandle) -> PttSettings {
+    load_settings(&app)
+}
+
+/// 設定を保存する。`hold_key` が未知なら拒否する — 保存を許すと再起動後に
+/// `from_key` が既定へ黙って落ち、ユーザーが選んだつもりのキーと食い違う。
+/// `enabled` は即座に `ENABLED` へ反映するが、`hold_key` は監視の張り直しに再起動が要る。
+#[tauri::command]
+pub fn set_ptt_settings(app: tauri::AppHandle, settings: PttSettings) -> Result<(), String> {
+    if HoldKey::from_key(&settings.hold_key).is_none() {
+        return Err(format!("unknown hold_key: {}", settings.hold_key));
+    }
+    save_settings(&app, &settings)?;
+    ENABLED.store(settings.enabled, Ordering::Relaxed);
+    // 結果を1行残す（`castle::set_castle_position` と同じ idiom）。`enabled` はこの瞬間から
+    // 効くが `hold_key` は次回起動から、という非対称を明示しておくと、実機で「キーを変えたのに
+    // 効かない」を見たとき原因が設定の未保存でなく再起動待ちだと切り分けられる。
+    eprintln!(
+        "[ptt] settings saved: enabled={} (live), hold_key={} (after restart)",
+        settings.enabled, settings.hold_key
+    );
+    Ok(())
+}
+
 /// 機械に入力を1つ与え、返った副作用を順番に実行する。**全ての入力はここを通る** ので、
 /// 機械のテストが実挙動をそのまま説明する。
 ///
 /// ロックは step の間だけ握って、副作用を回す前に必ず落とす。`StartCapture` の失敗経路は
 /// `feed` を再入するので、機械ロックを握ったまま副作用を回すと自分自身とデッドロックする。
 pub fn feed(app: &tauri::AppHandle, input: Input) {
+    // βで無効なときは `HoldStart` だけを捨てる。**それ以外は必ず通す** — 録音中に設定を
+    // オフにしても、`Cancel` / `HoldEnd` / `MaxHoldExpired` は届いてマイクを閉じねばならない。
+    // この非対称が肝で、全部捨てると押しっぱなしで無効化したときマイクが開きっぱなしになる。
+    if matches!(input, Input::HoldStart { .. }) && !ENABLED.load(Ordering::Relaxed) {
+        return;
+    }
+
     let session = app.state::<Session>();
+
+    // hold→パネルの計測起点。`HoldStart` のときだけ時刻を控え、`ShowPanel(Listening)` が
+    // 出るまでの実測を SLO（パネル展開≤100ms）に記録する。ノッチ展開と同じ種類の窓・同じ問い
+    // なので、専用メトリクスを足さず既存の expand を再利用する。
+    let hold_start = matches!(input, Input::HoldStart { .. }).then(Instant::now);
+
     let effects = {
         let Ok(mut m) = session.machine.lock() else {
             eprintln!("[ptt] machine lock poisoned — dropping input");
@@ -247,8 +339,21 @@ pub fn feed(app: &tauri::AppHandle, input: Input) {
         m.step(input)
         // ここでロックが落ちる。以降の run_effect / feed 再入は機械ロックを持たない。
     };
+
+    let shows_listening = effects
+        .iter()
+        .any(|e| matches!(e, Effect::ShowPanel(Panel::Listening)));
+
     for effect in effects {
         run_effect(app, effect);
+    }
+
+    // `show_panel` は同期なので、効果ループを抜けた時点でパネルは出ている。押下から
+    // ここまでの経過が hold→パネルの実測。setup が manage 前に早期returnし得るので try_state。
+    if let (Some(started), true) = (hold_start, shows_listening) {
+        if let Some(reg) = app.try_state::<crate::metrics::SloRegister>() {
+            reg.record_expand_ms(started.elapsed().as_millis() as f64);
+        }
     }
 }
 

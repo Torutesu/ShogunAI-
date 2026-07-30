@@ -33,6 +33,11 @@ import { SERVICE_ICONS } from "./serviceIcons";
 // owns only presentation. All-spaces/background float (NSPanel) is a separate, gated path.
 
 type Appearance = "auto" | "light" | "dark";
+// Mirrors ptt::PttSettings (Rust). hold_key is a stable string from HoldKey::key():
+// only the three bare modifiers are offered for now — full key combos are gated on the
+// tauri-plugin-global-shortcut Released-event spike (Task 1), which needs a human at the Mac.
+type PttHoldKey = "right_command" | "right_option" | "fn";
+type PttSettings = { enabled: boolean; hold_key: PttHoldKey };
 type Citation = { event_id: number; source: string; title: string | null };
 type Msg = { role: "me" | "shogun"; text: string; citations?: Citation[] };
 type ChatAnswer = { text: string; citations: Citation[] };
@@ -1135,6 +1140,76 @@ function MeetingSection(): JSX.Element {
   );
 }
 
+/** Push-to-talk (Issue #44). Beta: ships off. Enable is immediate; the hold key only
+ *  takes effect after a restart, because the backend's NSEvent monitor is installed once
+ *  at launch and can't be swapped live — so the copy says so rather than lie about it. */
+function PttSection(): JSX.Element {
+  const [settings, setSettings] = useState<PttSettings>({ enabled: false, hold_key: "right_command" });
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!IN_TAURI) return;
+    void invoke<PttSettings>("get_ptt_settings").then(setSettings).catch(() => undefined);
+  }, []);
+
+  // The backend rejects an unknown hold_key, so on failure we roll back to what was loaded
+  // rather than leave the UI claiming a change that didn't persist.
+  const write = (next: PttSettings): void => {
+    const prev = settings;
+    setSettings(next);
+    if (!IN_TAURI) return;
+    setBusy(true);
+    void invoke("set_ptt_settings", { settings: next })
+      .catch(() => setSettings(prev))
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <section className="set">
+      <div className="set__label" id="seg-ptt">
+        {t.pttSection} <span className="set__beta">{t.pttBeta}</span>
+      </div>
+      <div className="seg" role="radiogroup" aria-labelledby="seg-ptt">
+        <button
+          type="button"
+          role="radio"
+          aria-checked={settings.enabled}
+          disabled={busy}
+          className={`seg__opt${settings.enabled ? " is-on" : ""}`}
+          onClick={() => write({ ...settings, enabled: true })}
+        >
+          {t.pttOn}
+        </button>
+        <button
+          type="button"
+          role="radio"
+          aria-checked={!settings.enabled}
+          disabled={busy}
+          className={`seg__opt${!settings.enabled ? " is-on" : ""}`}
+          onClick={() => write({ ...settings, enabled: false })}
+        >
+          {t.pttOff}
+        </button>
+      </div>
+      <div className="set__hint">{t.pttHint}</div>
+      <label className="set__row">
+        <span className="set__rowlabel">{t.pttHoldKey}</span>
+        <select
+          className="set__select"
+          disabled={busy}
+          value={settings.hold_key}
+          onChange={(e) => write({ ...settings, hold_key: e.target.value as PttHoldKey })}
+        >
+          <option value="right_command">{t.pttKeyRightCommand}</option>
+          <option value="right_option">{t.pttKeyRightOption}</option>
+          <option value="fn">{t.pttKeyFn}</option>
+        </select>
+      </label>
+      <div className="set__hint set__hint--quiet">{t.pttRestartNote}</div>
+    </section>
+  );
+}
+
 function AiSessionsSection(): JSX.Element {
   const [on, setOn] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -1884,6 +1959,7 @@ function Settings(props: {
             someone found this switch — burying an opt-in below six connectors is how a feature
             stays permanently off (FR-MT-01). */}
         <MeetingSection />
+        <PttSection />
         <ConnectionsSection />
         <ComposioSection />
         <AiSessionsSection />
