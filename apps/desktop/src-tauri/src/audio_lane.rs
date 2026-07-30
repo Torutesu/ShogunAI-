@@ -63,7 +63,7 @@ impl SegmentSink for DbSink {
 /// (`embedding_model_paths` in lib.rs): a dev checkout points `SHOGUN_WHISPER_MODEL` at whatever
 /// `scripts/fetch-whisper-model.sh` downloaded; a packaged app finds it in the resource dir.
 /// Absence degrades to notes-only rather than erroring.
-fn whisper_model_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+pub(crate) fn whisper_model_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
     if let Ok(m) = std::env::var("SHOGUN_WHISPER_MODEL") {
         let p = std::path::PathBuf::from(m);
         return p.exists().then_some(p);
@@ -76,7 +76,7 @@ fn whisper_model_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
 /// try the fetched-once large-v3-turbo weights first (`model_fetch::ensure_turbo`), and fall back
 /// to small whenever the fetch is unavailable (offline, hash mismatch) so a Turbo preference never
 /// prevents transcription — it only asks for higher accuracy when it can be had.
-fn select_model_path(app: &tauri::AppHandle, model: AsrModel) -> Option<std::path::PathBuf> {
+pub(crate) fn select_model_path(app: &tauri::AppHandle, model: AsrModel) -> Option<std::path::PathBuf> {
     if model == AsrModel::Turbo {
         if let Some(turbo) = crate::model_fetch::ensure_turbo(app) {
             return Some(turbo);
