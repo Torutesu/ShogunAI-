@@ -27,6 +27,8 @@
 
 pub mod anthropic;
 pub mod openai_compat;
+/// チャンク境界をまたぐ増分SSEデコーダ（SLO-03の初トークン計測に必要）。
+pub mod sse;
 pub mod traceability;
 pub mod transport;
 
