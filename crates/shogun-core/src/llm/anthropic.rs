@@ -12,11 +12,12 @@
 //! Linux with a [`MockTransport`]. The invariant-5 key split is preserved end-to-end: the batch
 //! client is constructed with a [`SelectKkKey`], the agent client with a [`ByokKey`].
 //!
-//! **Streaming note (SLO-03):** the transport returns a full response body, so token-by-token
-//! first-token latency is not yet expressible here — [`AnthropicAgentClient::complete`] parses the
-//! whole SSE body and returns the accumulated text. A streaming transport variant is the tracked
-//! follow-up before the 1s-first-token SLO can be measured; the SSE parser ([`parse_sse_text`]) is
-//! already in place for it.
+//! **Streaming (SLO-03):** two agent-lane entry points, one per transport trait.
+//! [`AnthropicAgentClient::complete`] requests `stream: true` but assembles the whole SSE body and
+//! returns the accumulated text (via [`parse_sse_text`]) — first-token latency is not observable on
+//! this path. [`AnthropicAgentClient::complete_streaming`] decodes each chunk in place inside the
+//! transport's receive loop and pushes text deltas as they arrive, which is what makes the
+//! 1s-first-token SLO measurable.
 
 use serde_json::{json, Value};
 
