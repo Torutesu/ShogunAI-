@@ -120,7 +120,12 @@ pub mod mac {
     /// `"executed"` (L1 auto-ran), `"confirm:<id>"` (L2 — call `confirm_notch_action`), `"rejected"`,
     /// or `"unavailable"` / `"no-action"`.
     #[tauri::command]
-    pub fn run_notch_action(index: usize, db: tauri::State<'_, Db>, engine: tauri::State<'_, NotchEngine>) -> String {
+    pub fn run_notch_action(
+        index: usize,
+        db: tauri::State<'_, Db>,
+        engine: tauri::State<'_, NotchEngine>,
+        analytics: tauri::State<'_, crate::analytics::Analytics>,
+    ) -> String {
         let cache = db.context_actions(current_screen(), None);
         let Some(cand) = cache.actions.get(index) else {
             return "no-action".to_string();
@@ -128,7 +133,21 @@ pub mod mac {
         let Ok(mut eng) = engine.lock() else {
             return "unavailable".to_string();
         };
+        let level = format!("{:?}", cand.level);
         let submitted = eng.submit(cand.action.clone(), now_ms());
+
+        // shogun_query_executed（#61）: submit した時のみ発火。
+        let outcome = match &submitted.disposition {
+            Disposition::AutoRan => "ok",
+            Disposition::AwaitingConfirm => "awaiting_confirm",
+            Disposition::Rejected(_) => "rejected",
+        };
+        let mut p = shogun_core::analytics::Props::new();
+        p.insert("query_type".into(), serde_json::Value::from("notch_action"));
+        p.insert("permission_level".into(), serde_json::Value::from(level));
+        p.insert("outcome".into(), serde_json::Value::from(outcome));
+        analytics.capture("shogun_query_executed", p);
+
         match submitted.disposition {
             Disposition::AutoRan => "executed".to_string(),
             Disposition::AwaitingConfirm => format!("confirm:{}", submitted.id.0),
