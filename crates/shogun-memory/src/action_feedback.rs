@@ -22,6 +22,10 @@ pub enum Surface {
     Api,
 }
 
+/// Every surface, so the wire parser and any settings UI stay exhaustive by construction.
+pub const ALL_SURFACES: &[Surface] =
+    &[Surface::Notch, Surface::OptionKey, Surface::Chat, Surface::Recap, Surface::Api];
+
 impl Surface {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -31,6 +35,13 @@ impl Surface {
             Surface::Recap => "recap",
             Surface::Api => "api",
         }
+    }
+
+    /// Parse a wire name (the UI layer speaks strings). Unknown names are rejected rather than
+    /// defaulted: a typo that silently became "notch" would quietly corrupt the very statistics
+    /// this table exists to produce.
+    pub fn from_wire(s: &str) -> Option<Surface> {
+        ALL_SURFACES.iter().copied().find(|v| v.as_str() == s)
     }
 }
 
@@ -46,10 +57,16 @@ pub enum Outcome {
 }
 
 /// Every outcome, for deriving SQL predicates from the enum instead of duplicating the list.
-const ALL_OUTCOMES: &[Outcome] =
+pub const ALL_OUTCOMES: &[Outcome] =
     &[Outcome::Accepted, Outcome::Edited, Outcome::Dismissed, Outcome::Tracked, Outcome::Discarded];
 
 impl Outcome {
+    /// Parse a wire name. Unknown names are rejected — the schema's CHECK would reject them at
+    /// the last moment anyway, and failing at the boundary names the caller instead of the row.
+    pub fn from_wire(s: &str) -> Option<Outcome> {
+        ALL_OUTCOMES.iter().copied().find(|v| v.as_str() == s)
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Outcome::Accepted => "accepted",
@@ -200,6 +217,21 @@ mod tests {
             [],
         );
         assert!(err.is_err());
+    }
+
+    #[test]
+    fn wire_names_round_trip_and_reject_typos() {
+        for &s in ALL_SURFACES {
+            assert_eq!(Surface::from_wire(s.as_str()), Some(s));
+        }
+        for &o in ALL_OUTCOMES {
+            assert_eq!(Outcome::from_wire(o.as_str()), Some(o));
+        }
+        // A typo must not become a valid row: silently defaulting is how a feedback table ends up
+        // reporting adoption that never happened.
+        assert_eq!(Surface::from_wire("Notch"), None);
+        assert_eq!(Outcome::from_wire("accept"), None);
+        assert_eq!(Outcome::from_wire(""), None);
     }
 
     #[test]

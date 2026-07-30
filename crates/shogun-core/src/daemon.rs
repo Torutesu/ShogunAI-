@@ -1625,6 +1625,50 @@ impl Db {
         assemble_degraded(calendar, &self.commitments_due(now_ms))
     }
 
+    /// Record one action decision (FR-PAT-01) — the Patterns layer's only writer.
+    ///
+    /// Takes the already-parsed vocabulary rather than strings, so an unknown surface or outcome
+    /// cannot reach the table: the UI layer parses at its boundary
+    /// ([`shogun_memory::action_feedback::Surface::from_wire`]) and a typo fails there, where the
+    /// caller is named, instead of becoming a row that quietly skews the adoption rate.
+    ///
+    /// There is deliberately no parameter that could carry the action's content or any captured
+    /// text — the privacy shape of this log is enforced by the signature, not by discipline
+    /// (FR-PAT-01: the record never leaves the device).
+    pub fn record_action_feedback(
+        &self,
+        action_kind: &str,
+        surface: shogun_memory::action_feedback::Surface,
+        outcome: shogun_memory::action_feedback::Outcome,
+        context_app: Option<&str>,
+        rank: Option<i64>,
+        latency_ms: Option<i64>,
+    ) -> bool {
+        let f = shogun_memory::action_feedback::NewFeedback {
+            ts: self.now_ms(),
+            action_kind,
+            surface,
+            outcome,
+            context_app,
+            rank,
+            latency_ms,
+        };
+        self.conn
+            .lock()
+            .ok()
+            .and_then(|c| shogun_memory::action_feedback::record(&c, &f).ok())
+            .is_some()
+    }
+
+    /// Adoption rate per action kind since `since_ts` — the FR-CF-03 ranking input.
+    pub fn action_acceptance_by_kind(&self, since_ts: i64) -> Vec<(String, i64, i64)> {
+        self.conn
+            .lock()
+            .ok()
+            .and_then(|c| shogun_memory::action_feedback::acceptance_by_kind(&c, since_ts).ok())
+            .unwrap_or_default()
+    }
+
     /// Assemble the Evening Wrap (§6.17, FR-EB-01/02): the day's outcome, what's still open,
     /// tomorrow's first items, and today's loose ends — **local aggregation only**, no LLM call
     /// and no egress. The caller supplies the window boundaries (`day_start_ms` = local midnight,
@@ -2050,6 +2094,37 @@ mod tests {
             display_id: Some(1),
             window_bounds: None,
         }
+    }
+
+    #[test]
+    fn action_feedback_records_decisions_and_feeds_the_adoption_rate() {
+        use shogun_memory::action_feedback::{Outcome, Surface};
+        let db = Db::open_in_memory(clock(1_000)).unwrap();
+
+        assert!(db.record_action_feedback(
+            "draft_reply",
+            Surface::Notch,
+            Outcome::Accepted,
+            Some("com.apple.mail"),
+            Some(0),
+            Some(850),
+        ));
+        assert!(db.record_action_feedback(
+            "draft_reply",
+            Surface::OptionKey,
+            Outcome::Dismissed,
+            None,
+            None,
+            None,
+        ));
+
+        // The FR-CF-03 supply: 2 decided, 1 adopted.
+        assert_eq!(
+            db.action_acceptance_by_kind(0),
+            vec![("draft_reply".to_string(), 2, 1)]
+        );
+        // Yesterday's window sees nothing of today's decisions.
+        assert!(db.action_acceptance_by_kind(2_000).is_empty());
     }
 
     #[test]
