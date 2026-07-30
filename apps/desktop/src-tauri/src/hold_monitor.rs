@@ -54,12 +54,25 @@ impl HoldKey {
         }
     }
 
-    /// このキーが押されているときに立つ `NSEventModifierFlags` のビット。
-    fn flag(self) -> usize {
+    /// このキーが押されているかを判定するビット。左右を区別する device-dependent マスク
+    /// （`IOKit/IOLLEvent.h`）を使う — 汎用の `NSEventModifierFlagCommand` は左右で共有
+    /// されるので、左⌘を押したまま右⌘を離しても「まだ押されている」と読めてしまい、
+    /// 離したことに気づけない（マイクが開いたまま残る）。
+    fn down_flag(self) -> usize {
         match self {
-            HoldKey::RightCommand => 1 << 20, // NSEventModifierFlagCommand
-            HoldKey::RightOption => 1 << 19,  // NSEventModifierFlagOption
-            HoldKey::Fn => 1 << 23,           // NSEventModifierFlagFunction
+            HoldKey::RightCommand => 0x0000_0010, // NX_DEVICERCMDKEYMASK
+            HoldKey::RightOption => 0x0000_0040,  // NX_DEVICERALTKEYMASK
+            // Fnは1つしか無いので device-dependent ビットが存在せず、汎用ビットで一意。
+            HoldKey::Fn => 1 << 23,               // NSEventModifierFlagFunction
+        }
+    }
+
+    /// 和音判定に使う汎用ビット。こちらは左右をまとめた `NSEventModifierFlags` の側。
+    fn generic_flag(self) -> usize {
+        match self {
+            HoldKey::RightCommand => 1 << 20,
+            HoldKey::RightOption => 1 << 19,
+            HoldKey::Fn => 1 << 23,
         }
     }
 }
@@ -111,10 +124,18 @@ where
         | (1 << 31);
 
     let target_code = key.key_code();
-    let target_flag = key.flag();
+    // 押下判定は device-dependent ビットで。左⌘と右⌘は汎用ビットを共有するので、汎用
+    // ビットで判定すると左⌘を握ったまま右⌘を離しても「まだ押している」と誤読する。
+    let target_down = key.down_flag();
     // 対象キー以外の修飾キー。長押し中にこれらが加わったら和音であって長押しではない。
+    // マスクは汎用ビット側で組む（device-dependent ビットは含めない）。
     const ALL_MODIFIERS: usize = (1 << 17) | (1 << 18) | (1 << 19) | (1 << 20) | (1 << 23);
-    let other_modifiers = ALL_MODIFIERS & !target_flag;
+    let other_modifiers = ALL_MODIFIERS & !key.generic_flag();
+
+    // 実機検証用の一時診断（Task 16）。device-dependent ビットが本当に左右を分けるかは
+    // ユニットテストでは確かめられない — 実機で `SHOGUN_PTT_DEBUG=1` を立て、この行の
+    // hex を見て確認する。既定では読まないので通常コストはゼロ。
+    let debug = std::env::var_os("SHOGUN_PTT_DEBUG").is_some();
 
     let on_start = Arc::new(on_start);
     let on_end = Arc::new(on_end);
@@ -146,7 +167,6 @@ where
             handler: &*disarm_block
         ];
         std::mem::forget(disarm_block);
-        let _ = (key_mon, mouse_mon);
 
         let flags_block = block2::RcBlock::new(move |ev: *mut AnyObject| {
             if ev.is_null() {
@@ -155,15 +175,19 @@ where
             let code: u16 = msg_send![ev, keyCode];
             let flags: usize = msg_send![ev, modifierFlags];
 
-            // 対象キー以外の修飾キーが動いた場合: それが押し下げなら和音なので無効化する。
+            if debug {
+                eprintln!("[ptt] flagsChanged code={code:#06x} flags={flags:#010x}");
+            }
+
             if code != target_code {
-                if flags & other_modifiers != 0 {
-                    poison();
-                }
+                // 他の修飾キーが動いた = 和音。フラグの値では判定しない: 左⌘と右⌘は同じ
+                // 汎用ビットを共有するので、ビットを見ても「別のキーが動いた」ことは
+                // 分からない。keyCode が違う時点で十分な証拠。
+                poison();
                 return;
             }
 
-            let down = flags & target_flag != 0;
+            let down = flags & target_down != 0;
             let was_down = WAS_DOWN.swap(down, Ordering::Relaxed);
 
             if down && !was_down {
@@ -194,10 +218,15 @@ where
             handler: &*flags_block
         ];
         std::mem::forget(flags_block);
-        let _ = flags_mon;
-    }
 
-    eprintln!("[ptt] hold monitor watching {}", key.key());
+        // モニタが張れなければ push-to-talk は静かに死ぬ。Accessibility 権限が拒否された
+        // ときにログに理由が残るよう、`watch_option_tap` と同じく null を確認する。
+        if key_mon.is_null() || mouse_mon.is_null() || flags_mon.is_null() {
+            eprintln!("[ptt] hold monitor failed to install (accessibility permission?)");
+        } else {
+            eprintln!("[ptt] hold monitor watching {}", key.key());
+        }
+    }
 }
 
 #[cfg(test)]
@@ -228,5 +257,25 @@ mod tests {
     fn the_right_command_key_code_is_not_the_left_one() {
         assert_eq!(HoldKey::RightCommand.key_code(), 54);
         assert_ne!(HoldKey::RightCommand.key_code(), 55);
+    }
+
+    /// 左⌘と右⌘は汎用の Command ビットを共有するので、押下判定には device-dependent
+    /// ビットを使う。ここを汎用ビットに戻すと、左⌘を押したまま右⌘を離したときに
+    /// 離したことに気づけず、マイクが開いたまま残る。
+    #[test]
+    fn the_down_flag_distinguishes_left_from_right() {
+        assert_eq!(HoldKey::RightCommand.down_flag(), 0x0000_0010);
+        assert_eq!(HoldKey::RightOption.down_flag(), 0x0000_0040);
+        assert_ne!(
+            HoldKey::RightCommand.down_flag(),
+            HoldKey::RightCommand.generic_flag(),
+            "汎用ビットを押下判定に使っている"
+        );
+    }
+
+    /// Fn は1つしか無いので device-dependent ビットが要らない。
+    #[test]
+    fn the_fn_key_uses_its_generic_flag() {
+        assert_eq!(HoldKey::Fn.down_flag(), HoldKey::Fn.generic_flag());
     }
 }
