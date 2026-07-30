@@ -9,8 +9,8 @@ SHOGUNのモノレポ。本ファイルはmacOSアプリ本体(`crates/` + `apps
 ## 絶対不変条件（違反するコードは書かない）
 
 1. **データの重心はRustコアに置く。** DB・キャプチャ・context cache・SLO責務はRustプロセスが単独所有。webview側にデータ層のロジックを置かない
-2. **画像・音声データを一切保存しない。** 画面キャプチャはAccessibility API経由のテキストのみ。会議の音声は**オンデバイスでのみ処理し、波形はRAMから出さない**（ディスク・一時ファイル・クラウドのいずれにも書かない）。永続化するのは文字起こしテキストとそのprovenanceのみ。スクリーンショット・録画・音声ファイルを生成するコードを書かない
-3. **生データはデバイス外に出さない。** クラウドに出るのは処理用チャンクのみ。送信箇所には必ずトレーサビリティログを実装（唯一の明示的例外＝Gmail の Composio 全面経由。詳細と必須条件は「連携実装ルール」参照）
+2. **画像・音声はデバイスから出さず、期限つきでのみ保存する。**〔2026-07-30 オーナー決定により旧「一切保存しない」から改定。経緯は `docs/core-features-v1.1-proposal.md` §8〕 画面はAccessibility APIテキストに加え、**イベント駆動のキーフレーム画像**を取得できる（**連続録画・動画は生成しない**）。会議音声は**オプトイン（既定OFF）の下でローカル暗号化保存**できる。処理はオンデバイスのみ（クラウドVLM・クラウドASR禁止）。保持は期間上限（**キーフレーム既定7日・音声既定30日**）＋自動削除＋ユーザー即時削除で管理し、除外リスト・一時停止は画像・音声にも同一適用する
+3. **生データはデバイス外に出さない。** クラウドに出るのは処理用チャンク（抽出テキスト）のみ。**画像・音声はいかなる経路でもデバイス外へ送信しない（例外を作らない）**。送信箇所には必ずトレーサビリティログを実装（唯一の明示的例外＝Gmail の Composio 全面経由。詳細と必須条件は「連携実装ルール」参照）
 4. **L1（自動実行）に外部送信系アクションを絶対に含めない。** 送信・投稿・カレンダー作成は必ずL3（明示確認）
 5. **キーの分離**: インデックス・分類・Dream Cycle・Morning Brief = Select KKキー（Batch API）／エージェント推論・チャット・ドラフト = ユーザーBYOK。逆転させない
 6. **人間UIとAI API（MCP/CLI）は完全対称。** 新機能はUIとAPI両方から呼べる形で設計する。AI経由の操作にも同じL1/L2/L3を適用
@@ -23,7 +23,7 @@ SHOGUNのモノレポ。本ファイルはmacOSアプリ本体(`crates/` + `apps
 - **Notchパネル**: NSPanel（objc2）、`.nonactivatingPanel` + `.canJoinAllSpaces` + `.fullScreenAuxiliary`
 - **DB**: SQLite（rusqlite）+ sqlite-vec、WALモード、FTS5 trigram。マイグレーションはバージョン管理必須（refinery）
 - **埋め込み**: ローカルONNX多言語embeddingモデル同梱（クラウドembedding API不使用。オフライン動作・追加限界費用ゼロ）
-- **macOSネイティブ**: AXUIElement / NSWorkspace / NSEventグローバルモニタ / security-framework（Keychain）
+- **macOSネイティブ**: AXUIElement / NSWorkspace / NSEventグローバルモニタ / security-framework（Keychain）/ ScreenCaptureKit（イベント駆動キーフレーム。連続録画禁止）/ Vision framework（オンデバイスOCR）
 - **MCP**: Rust MCP SDK。クライアント（公式リモートMCPへ直接OAuth）とサーバー（Memory API）の両方
 - **第2層連携**: Composio（オプトイン。Gmail送信含む）
 - **BYOK**: v1はAnthropicのみ（プロバイダ抽象化層は用意、実装は1つ）
@@ -51,8 +51,8 @@ docs/               # 要件・仕様・判断記録
 ## プラン構成（要件詳細は docs/requirements-v1.0.md §課金）
 
 - Freeプランなし。7日間フルトライアル（Pro相当）→ Standard / Pro
-- **Standard**: キャプチャ＋メモリ＋検索＋Notch UI＋第1層連携（読み取り）＋Dream Cycle＋Morning Brief。Select KKキーのみで動作（BYOK不要）
-- **Pro**: ＋エージェント実行（L1/L2/L3）＋Memory API（MCP/CLI/REST）＋Composio第2層。BYOK必要
+- **Standard**: キャプチャ＋メモリ＋検索＋Notch UI＋第1層連携（読み取り）＋Dream Cycle＋Morning Brief＋Evening Wrap＋**Memory API読み取り面**（FR-API-10、2026-07-30決定）。Select KKキーのみで動作（BYOK不要）
+- **Pro**: ＋エージェント実行（L1/L2/L3）＋Memory API書き込み・実行面＋Composio第2層。BYOK必要
 - プラン判定はRustコア側で行う。webview側のゲーティングだけに頼らない
 - **会議ノート（§6.16 FR-MT群）はトライアル含む全プランで使える。** 使ってみて価値が分かる機能で、トライアル中に体験できなければ課金判断の材料にならない（Memory API経由の参照=FR-MT-22 のみPro）
 - ⚠️ **要解消の分岐**: `design-system/foundation-tokens` ブランチの CLAUDE.md は「Free / $0 プランあり、トライアル後は未課金ならFreeへ降格」と書かれており、本ファイル（Freeプランなし・トライアル後は全員課金）と矛盾する。オーナー判断は**Free廃止・全員課金**（2026-07-26）。マージ時に本ファイルを正とし、LP（`apps/website` の pricing）も併せて更新すること
@@ -83,7 +83,8 @@ docs/               # 要件・仕様・判断記録
 
 - **Phase 0（今ここ）**: ノッチUIスパイク。`docs/notch-ui-prototype-spec.md` に完全準拠、実装手順は `docs/phase0-dev-instructions.md`。4つの問い（常駐安定性・展開100ms・cache300ms+CPU5%・ホバー誤発火）に答えるまで本実装を始めない。No-Go時はメニューバー＋パレット方式へ転換
 - **Phase 1（v1）**: Notch UI本実装 → キャプチャ＋メモリ＋state tables → Context Fusion＋L1/L2エージェント → 第1層MCP連携（Wave 1: Gmail+Google Calendar → Wave 2: Slack → Wave 3: Notion+GitHub+Linear）→ 課金＋トライアル
-- 会議ノート（検知＋オンデバイスASR＋Recap）はv1へ前倒し（Issue #7 / `docs/meeting-notes-ui-design.md`）。ただし**音声ファイル・録音の保存は恒久的に対象外**（不変条件2）。実装順はM1〜M5（同書§7）
+- 会議ノート（検知＋オンデバイスASR＋Recap）はv1へ前倒し（Issue #7 / `docs/meeting-notes-ui-design.md`）。音声は**オプトイン下でローカル暗号化保存可（既定30日・自動削除。2026-07-30決定、不変条件2改定）**。ただし会議への bot 参加・クラウドASRは引き続き対象外。実装順はM1〜M5（同書§7）
+- 視覚キャプチャ（イベント駆動キーフレーム＋オンデバイスOCR、FR-VIS群）は本実装前に**検証スパイク必須**（CPU/バッテリー実測・抽出精度の前後比較・ストレージ増加率。Phase 0と同型のGo/No-Goゲート）
 - v1に含めない: ナレッジグラフ/同期/メタメモリ（v2）、Computer Use/visionOS（Phase 3）。頼まれてもv1スコープに足さず、docs/requirements-v1.0.md のスコープ表を根拠に確認を取る
 
 ## 連携実装ルール
