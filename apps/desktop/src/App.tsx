@@ -847,7 +847,8 @@ export function App(): JSX.Element {
  *  Replaces the ordinary handle while a meeting is offered or being noted, because the one thing
  *  it must never do is be missable: this is the surface that makes "it was listening and I never
  *  knew" impossible. Hence no confirmation on Stop, an always-moving clock, and a live dot rather
- *  than a red record lamp — nothing is being recorded, and the lamp would say otherwise. */
+ *  than a red record lamp (FR-MT-09: the lamp evokes video capture, which never happens — even
+ *  post-2026-07-30, audio stays a local, expiring file, not a recording being broadcast). */
 function ResizeGrip(props: {
   current: () => Size;
   onResize: (w: number, h: number) => void;

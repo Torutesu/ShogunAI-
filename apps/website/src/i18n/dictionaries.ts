@@ -52,7 +52,7 @@ const en = {
     eyebrow: 'FAQ',
     title: 'Questions, answered.',
     items: [
-      ['Is it private?', 'Yes. Your memory is captured locally and stays on your machine by default. It is not screenshots.'],
+      ['Is it private?', 'Yes. Your memory is captured and stored on your Mac, and images and audio never leave it. You decide what gets captured and how long it stays — exclusions, instant pause, and automatic deletion are built in.'],
       ['macOS only?', 'At launch, yes. ShogunAI uses native macOS capabilities. Other platforms are on the roadmap.'],
       ['How do referrals qualify?', 'A referral counts once your invite completes their profile — the anti-spam filter. Rewards replace each other; they don’t stack.'],
       ['Can I bring my own keys?', 'Yes. BYOK is supported, so you stay in control of models and data.'],
@@ -63,7 +63,7 @@ const en = {
   memory: {
     eyebrow: 'Memory layer',
     title: 'A memory that captures your day — quietly.',
-    body: 'ShogunAI builds context passively as you work. No manual note-taking, no constant screenshots. Just a searchable, private timeline of what you did, read, and decided — ready the moment you need it.',
+    body: 'ShogunAI builds context passively as you work — no manual note-taking, no recording your day wall-to-wall. Just a searchable, private timeline of what you did, read, and decided — ready the moment you need it.',
     points: [
       'Passive capture that stays out of your way',
       'Hybrid search across everything you touched',
@@ -99,7 +99,7 @@ const en = {
     eyebrow: 'How it works',
     title: 'Three steps. Then it fades into the background.',
     steps: [
-      { title: 'Capture', body: 'ShogunAI observes your day passively and builds a private, local memory — no screenshots, no manual logging.' },
+      { title: 'Capture', body: 'ShogunAI observes your day passively and builds a private, local memory — it captures the moments that matter instead of recording everything, and nothing it sees leaves your Mac.' },
       { title: 'Recall', body: 'Ask anything about your work in plain language and get an answer grounded in what actually happened.' },
       { title: 'Act', body: 'Turn that context into finished work across your tools — with your approval on anything that matters.' },
     ],
@@ -353,7 +353,7 @@ const ja: Dictionary = {
     eyebrow: 'FAQ',
     title: 'よくある質問。',
     items: [
-      ['プライベート?', 'はい。記憶はローカルに保存され、既定で端末の外に出ません。スクショではありません。'],
+      ['プライベート?', 'はい。記憶はこのMacの中に保存され、画像と音声が端末の外に出ることはありません。何を記録し、いつまで残すかはあなたが決められます。除外リスト・即時停止・自動削除を備えています。'],
       ['macOS 限定?', 'ローンチ時点では、はい。macOS ネイティブ機能を使います。他プラットフォームは計画中。'],
       ['紹介の「有効」とは?', '招待した相手がプロフィールを完了すると1紹介に。スパム対策です。特典は置換式で、加算されません。'],
       ['BYOK は可能?', 'はい。自分の鍵を使えるので、モデルとデータの主導権はあなたに。'],
@@ -364,7 +364,7 @@ const ja: Dictionary = {
   memory: {
     eyebrow: 'メモリレイヤー',
     title: '一日を静かに記憶するメモリ。',
-    body: 'ShogunAI は働くそばから受動的に文脈を蓄積します。手作業のメモも、頻繁なスクショも不要。やったこと・読んだこと・決めたことを検索可能なプライベートなタイムラインに残し、必要な瞬間に取り出せます。',
+    body: 'ShogunAI は働くそばから受動的に文脈を蓄積します。手作業のメモは不要で、一日中録画し続けることもありません。やったこと・読んだこと・決めたことを検索可能なプライベートなタイムラインに残し、必要な瞬間に取り出せます。',
     points: [
       '邪魔をしない受動的な記録',
       '触れたすべてを横断するハイブリッド検索',
@@ -400,7 +400,7 @@ const ja: Dictionary = {
     eyebrow: '仕組み',
     title: '3ステップ。あとは背景に溶けていく。',
     steps: [
-      { title: '記録', body: '一日を受動的に観測し、プライベートなローカル記憶を構築。スクショも手入力も不要です。' },
+      { title: '記録', body: '一日を受動的に観測し、プライベートなローカル記憶を構築します。すべてを録画するのではなく大事な瞬間だけを拾い、見たものは端末の外に出ません。' },
       { title: '呼び出し', body: '仕事について自然な言葉で尋ねれば、実際に起きたことに基づいた答えが返ります。' },
       { title: '実行', body: 'その文脈を、いつものツール上で完成した仕事に。重要な操作はあなたの承認付きで。' },
     ],
@@ -921,7 +921,7 @@ const de: Dictionary = {
     eyebrow: 'FAQ',
     title: 'Fragen, beantwortet.',
     items: [
-      ['Ist es privat?', 'Ja. Dein Gedächtnis wird lokal erfasst und bleibt standardmäßig auf deinem Gerät. Es sind keine Screenshots.'],
+      ['Ist es privat?', 'Ja. Dein Gedächtnis wird auf deinem Mac erfasst und gespeichert; Bilder und Audio verlassen dein Gerät nie. Du bestimmst, was erfasst wird und wie lange es bleibt — Ausschlüsse, sofortige Pause und automatisches Löschen sind eingebaut.'],
       ['Nur macOS?', 'Zum Start ja. ShogunAI nutzt native macOS-Funktionen. Weitere Plattformen sind auf der Roadmap.'],
       ['Wie qualifizieren sich Empfehlungen?', 'Eine Empfehlung zählt, sobald dein Eingeladener sein Profil abschließt — der Anti-Spam-Filter. Belohnungen ersetzen einander; sie stapeln nicht.'],
       ['Kann ich eigene Keys nutzen?', 'Ja. BYOK wird unterstützt, du behältst die Kontrolle über Modelle und Daten.'],
@@ -968,7 +968,7 @@ const de: Dictionary = {
     eyebrow: 'So funktioniert’s',
     title: 'Drei Schritte. Dann tritt es in den Hintergrund.',
     steps: [
-      { title: 'Erfassen', body: 'ShogunAI beobachtet deinen Tag passiv und baut ein privates, lokales Gedächtnis — keine Screenshots, kein manuelles Loggen.' },
+      { title: 'Erfassen', body: 'ShogunAI beobachtet deinen Tag passiv und baut ein privates, lokales Gedächtnis — es erfasst die Momente, die zählen, statt alles aufzuzeichnen, und nichts davon verlässt deinen Mac.' },
       { title: 'Abrufen', body: 'Frag in natürlicher Sprache alles über deine Arbeit und erhalte eine Antwort, die auf dem beruht, was wirklich passiert ist.' },
       { title: 'Handeln', body: 'Verwandle den Kontext in fertige Arbeit in deinen Tools — mit deiner Freigabe für alles Wichtige.' },
     ],

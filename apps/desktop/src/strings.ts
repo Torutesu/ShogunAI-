@@ -157,8 +157,10 @@ export const STRINGS = {
     memoryClearConfirm: "Delete",
     memoryCleared: "Cleared.",
     cancel: "Cancel",
-    // meeting notes — the pill (FR-MT-08/09). "Notes", never "Recording": nothing is recorded,
-    // and the word would promise a file that will never exist.
+    // meeting notes — the pill (FR-MT-08/09). "Notes", never "Recording": notes are what the
+    // user gets. (Post the 2026-07-30 pivot audio MAY be kept — locally, encrypted, auto-deleted
+    // — so the old "no file will ever exist" rationale is retired; the pill still leads with the
+    // outcome, not the mechanism.)
     meetingNotes: "Notes",
     meetingDetected: "Meeting detected",
     meetingTakeNotes: "Take notes",
@@ -190,12 +192,12 @@ export const STRINGS = {
     meetingExcluded: "Never offer for",
     meetingExcludedEmpty: "No apps excluded",
     meetingExcludedRemove: "Remove",
-    // The disclosure of FR-MT-03. It can be stated this plainly because it is simply what
-    // happens: nothing joins the call, and no audio file is ever written.
-    // FR-MT-03 requires this to match the implementation exactly. At this stage SHOGUN does not
-    // listen at all — it opens a note next to the meeting — so the copy says that and nothing
-    // more. It gains the transcription sentence when transcription actually exists (MT3), not
-    // before: a disclosure that describes a future build is not a disclosure.
+    // The disclosure of FR-MT-03 — it must match the implementation exactly. At this stage
+    // SHOGUN does not listen at all (it opens a note next to the meeting), so the copy says that
+    // and nothing more. When MT3 ships audio under the 2026-07-30 rules (local encrypted file,
+    // default 30-day auto-delete, never leaves the Mac), this string switches to the revised
+    // FR-MT-03 wording in the same change: a disclosure that describes a future build is not a
+    // disclosure, and one that outlives the build is not one either.
     meetingDisclosure:
       "Nothing joins your call and no audio is captured. SHOGUN opens a note beside the meeting; what you write stays on this Mac.",
     // errors
@@ -210,7 +212,7 @@ export const STRINGS = {
       // guide (permission missing)
       guideTitle: "Let SHOGUN read your screen",
       guideLead:
-        "SHOGUN builds your work context from on-screen text through macOS Accessibility. It reads text only — never images, never your keystrokes — and the context is built on this Mac.",
+        "SHOGUN builds your work context from what's on your screen through macOS Accessibility. It never logs your keystrokes, and everything it builds stays on this Mac.",
       doTitle: "What this turns on",
       doItems: [
         "Draft right where you're typing — tap ⌥ (Option) in any app.",
@@ -219,9 +221,9 @@ export const STRINGS = {
       ],
       wontTitle: "What it never does",
       wontItems: [
-        "Never captures images or screenshots.",
-        "Never logs your keystrokes.",
         "Never sends your screen off this Mac.",
+        "Never logs your keystrokes.",
+        "Never watches excluded apps — and pausing stops capture instantly.",
       ],
       stepsTitle: "Grant it in System Settings",
       steps: [
