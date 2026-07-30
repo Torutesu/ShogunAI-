@@ -493,6 +493,18 @@ fn setup_macos(app: &tauri::App) {
     // （PTTは音声だけで、メモリが開けたかは関係ない）なので、DBブランチの外・main スレッドの
     // setup でここに置く。
     let _ = ptt::build_panel(app.handle());
+    app.manage(ptt::Session::new());
+    // 長押し監視は 1 プロセスに 1 回だけ。`watch` は関数レベルの static を使うので、
+    // 2 回呼ぶと 2 つのキーが同じ HOLDING/WAS_DOWN を踏み合って壊れる。
+    {
+        let start = app.handle().clone();
+        let end = app.handle().clone();
+        hold_monitor::watch(
+            hold_monitor::HoldKey::default(),
+            move || ptt::feed(&start, ptt::mono_input_hold_start()),
+            move || ptt::feed(&end, ptt::mono_input_hold_end()),
+        );
+    }
 
     // Last line of setup, and outside the DB branch: whether the panel is on screen has nothing to
     // do with whether memory opened, and a failed DB must not swallow the answer.
