@@ -451,6 +451,44 @@ pub mod mac {
         }
     }
 
+    impl InlineAgent {
+        /// ストリーミングで応答を受け取る。tokioの外にいる同期スレッドから呼ぶための入口で、
+        /// `complete` が `block_on` を使っているのと同じ理由・同じ安全性。
+        ///
+        /// Anthropic以外はストリーミング未対応なので、完成した応答を1チャンクとして流す。
+        /// 応答は出るが初トークンは速くならない — SLOを満たすのは既定のAnthropicだけ、
+        /// という現状をそのまま表す。
+        ///
+        /// エラーは PTT の [`Fail`](shogun_core::ptt::statemachine::Fail) に畳む: `LlmError` に
+        /// `KeyRejected` は無く、鍵の問題は `Unauthorized(401|403, _)` で来るので、それだけを
+        /// `KeyRejected` に写し、他は全て `Network` にする。
+        pub(crate) fn complete_streaming_blocking(
+            &self,
+            prompt: &str,
+            out: std::sync::mpsc::Sender<String>,
+        ) -> Result<(), shogun_core::ptt::statemachine::Fail> {
+            use shogun_core::ptt::statemachine::Fail;
+            let to_fail = |e: LlmError| match e {
+                LlmError::Unauthorized(..) => Fail::KeyRejected,
+                _ => Fail::Network,
+            };
+            match self {
+                // Anthropic だけが本物のストリーミング。デルタはその場で `out` に流れる。
+                InlineAgent::Anthropic { rt, client } => {
+                    rt.block_on(client.complete_streaming(prompt, out)).map_err(to_fail)
+                }
+                // Mock / OpenAI互換はストリーミング未対応。完成応答を1チャンクとして送る。
+                // 受け手が既に消えていても（パネルが閉じた）失敗にはしない — 送信が要らなく
+                // なっただけ。
+                InlineAgent::Mock(_) | InlineAgent::OpenAiCompat { .. } => {
+                    let full = self.complete(prompt).map_err(to_fail)?;
+                    let _ = out.send(full);
+                    Ok(())
+                }
+            }
+        }
+    }
+
     /// Read the ACTIVE provider's BYOK key from the Keychain (invariant 7 — never a
     /// file/env/DB/log). `None` if unset.
     fn keychain_byok(provider: &str) -> Option<String> {

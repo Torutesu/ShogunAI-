@@ -201,6 +201,12 @@ pub fn run() {
         onboarding::mac::open_accessibility_settings,
         onboarding::mac::onboarding_finish,
         onboarding::mac::onboarding_event,
+        // Push-to-talk panel controls (Issue #44). Every one routes through ptt::feed so the
+        // state machine's tests describe the real behaviour.
+        ptt::ptt_cancel,
+        ptt::ptt_dismiss,
+        ptt::ptt_open_full_ui,
+        ptt::ptt_open_privacy_settings,
     ]);
 
     // NOTE: the visible surface is a NATIVE NSPanel hosting the webview's content view
