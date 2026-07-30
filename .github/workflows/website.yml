@@ -1,0 +1,69 @@
+name: website
+
+# The marketing site (apps/website) lives outside the crates/desktop matrix in ci.yml, so it
+# gets its own workflow: typecheck + unit tests (incl. the waitlist security suite from
+# docs/fixes/2026-07-30-waitlist-security-fix.md) always, then the referral-engine E2E
+# against a real postgres:16 service container (schema applied via drizzle-kit push).
+
+on:
+  # Same split as ci.yml: push only fires on the integration branch(es); feature branches
+  # are validated by the pull_request event so each commit runs the workflow once, not twice.
+  push:
+    branches:
+      - "main"
+      - "master"
+      - "claude/shogunai-ui-lp-lisvsd" # legacy default until `main` is promoted
+    paths:
+      - "apps/website/**"
+      - ".github/workflows/website.yml"
+  pull_request:
+    paths:
+      - "apps/website/**"
+      - ".github/workflows/website.yml"
+
+# Supersede in-flight runs: a new push/PR-sync cancels the previous run for the same ref.
+concurrency:
+  group: website-${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  website:
+    name: website (typecheck + unit + e2e)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      # Real Postgres for tests/e2e.ts — credentials mirror the DATABASE_URL fallback in
+      # apps/website/src/db/index.ts and drizzle.config.ts. Throwaway container data only.
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: shogun_waitlist
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/shogun_waitlist
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: typecheck
+        run: pnpm --filter @shogun-ai/website typecheck
+      - name: unit tests (incl. waitlist security suite)
+        run: pnpm --filter @shogun-ai/website test
+      # E2E: apply the drizzle schema to the fresh service container, then drive
+      # signup → attribution → qualification → leaderboard against real Postgres.
+      - name: schema push (drizzle-kit push)
+        run: pnpm --filter @shogun-ai/website db:push
+      - name: e2e (referral engine against real Postgres)
+        run: pnpm --filter @shogun-ai/website e2e
