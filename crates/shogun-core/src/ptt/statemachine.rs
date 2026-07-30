@@ -198,6 +198,9 @@ impl Machine {
             // 手を離すのと上限に達するのは同じ遷移。上限は「離す入力が来ない」場合の保険で
             // あって、別の終わり方ではない。
             (S::Recording, I::HoldEnd { at_ms } | I::MaxHoldExpired { at_ms }) => {
+                // Recording へ入る唯一の腕が hold_started_at を必ず設定するので、ここは常に Some。
+                // 破れたときに黙って誤爆判定に落ちると原因が追えないので、デバッグビルドで露見させる。
+                debug_assert!(self.hold_started_at.is_some(), "Recording 中は hold_started_at が Some");
                 let held = at_ms - self.hold_started_at.unwrap_or(at_ms);
                 self.hold_started_at = None;
                 if held < self.params.min_hold_ms {
@@ -484,5 +487,32 @@ mod tests {
         let fx = m.step(Input::ResponseDone); // Idle で応答完了が来る道理はない
         assert_eq!(m.state(), State::Idle);
         assert!(fx.is_empty());
+    }
+
+    /// 文字起こし中に押し直しても新しい録音が始まり、遅れて届いた前回の文字起こしは
+    /// 何も動かさない。飛行中のASRがあることが、この経路を他の HoldStart と分けている。
+    #[test]
+    fn holding_during_transcribing_starts_a_fresh_recording() {
+        let mut m = machine();
+        m.step(Input::HoldStart { at_ms: 1_000 });
+        m.step(Input::HoldEnd { at_ms: 3_000 }); // → Transcribing
+        let fx = m.step(Input::HoldStart { at_ms: 4_000 });
+
+        assert_eq!(m.state(), State::Recording);
+        assert!(fx.contains(&Effect::StartCapture));
+
+        let stale = m.step(Input::Transcribed("stale".into()));
+        assert!(stale.is_empty(), "録音中に届いた古い Transcribed は無視される");
+    }
+
+    /// 失敗表示を閉じる操作。Idle のままパネルだけを消す。
+    #[test]
+    fn dismissing_from_idle_only_hides_the_panel() {
+        let mut m = machine();
+        m.step(Input::Failed(Fail::MicUnavailable));
+        let fx = m.step(Input::Dismiss);
+
+        assert_eq!(m.state(), State::Idle);
+        assert_eq!(fx, vec![Effect::HidePanel]);
     }
 }
