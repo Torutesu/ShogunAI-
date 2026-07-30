@@ -1,6 +1,6 @@
 import { HttpError, fail, ok, readJsonObject } from '@/lib/http';
 import { rateLimit } from '@/lib/rate-limit';
-import { isValidEmail, statusUrl } from '@/lib/referral';
+import { isValidEmail, signupPayload } from '@/lib/referral';
 import { addParticipant } from '@/lib/service';
 import { clientIp, hashIp, isAuthorizedOrigin, isHoneypotTripped } from '@/lib/waitlist-auth';
 
@@ -12,7 +12,8 @@ const APP_ORIGIN = process.env.NEXT_PUBLIC_APP_ORIGIN ?? 'http://localhost:3000'
  * POST /api/waitlist/signup
  * Create a participant row, accept an optional `ref` code.
  * Auth: origin allowlist (+ rate limit + honeypot) OR webhook secret.
- * Returns { ok, refCode, statusUrl }.
+ * Returns { ok, refCode, statusUrl } — both null for duplicate signups, which
+ * must never echo the existing row's private statusToken (§6.8).
  */
 export async function POST(req: Request) {
   if (!isAuthorizedOrigin(req)) return fail('forbidden');
@@ -37,8 +38,11 @@ export async function POST(req: Request) {
   const ref = typeof body.ref === 'string' ? body.ref : undefined;
 
   try {
-    const { row } = await addParticipant(body.email, ref, hashIp(ip));
-    return ok({ refCode: row.refCode, statusUrl: statusUrl(APP_ORIGIN, row.statusToken!) });
+    const { row, duplicate } = await addParticipant(body.email, ref, hashIp(ip));
+    // Duplicates get the same generic success as the honeypot path: the
+    // owner keeps their original status link (tokens are NOT rotated), and
+    // a third party who knows the email learns nothing they can use.
+    return ok(signupPayload(row, duplicate, APP_ORIGIN));
   } catch (e) {
     console.error('signup error:', e);
     return fail('server_error');
