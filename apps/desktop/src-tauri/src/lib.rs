@@ -40,6 +40,10 @@ mod hold_monitor;
 #[cfg(target_os = "macos")]
 mod ptt_lane;
 
+/// push-to-talk の実行層（Issue #44）。
+#[cfg(target_os = "macos")]
+mod ptt;
+
 /// The collectionBehavior the overlay wants, selected at setup (NSPanel mode = canJoinAllSpaces +
 /// fullScreenAuxiliary = 257; plain-window fallback = moveToActiveSpace 274) and re-asserted by
 /// every heal/reassert path. `stationary` (1<<4) was dropped: it is a suspect for the panel not
@@ -473,6 +477,12 @@ fn setup_macos(app: &tauri::App) {
         }
         Err(e) => eprintln!("[spike] memory DB unavailable — capture source not started: {e}"),
     }
+
+    // PTTパネルは起動時に作る。押した瞬間にAppKitのウィンドウを作りに行くと、
+    // 「押してからパネルが出るまで100ms」というSLOを窓の生成コストで落とす。DBとは無関係
+    // （PTTは音声だけで、メモリが開けたかは関係ない）なので、DBブランチの外・main スレッドの
+    // setup でここに置く。
+    let _ = ptt::build_panel(app.handle());
 
     // Last line of setup, and outside the DB branch: whether the panel is on screen has nothing to
     // do with whether memory opened, and a failed DB must not swallow the answer.
