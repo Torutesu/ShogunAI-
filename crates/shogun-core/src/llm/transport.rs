@@ -271,20 +271,33 @@ impl HttpTransport for ReqwestTransport {
     }
 }
 
-/// `carry` に溜まったバイトのうち、有効なUTF-8として確定した前半を切り出す。切り出せない
-/// （まだ1文字も完成していない）ときは `None` を返し、バイトはそのまま次のチャンクを待つ。
+/// `carry` に溜まったバイトのうち、有効なUTF-8として確定した前半を切り出す。
+///
+/// 途中で切れた文字（`error_len() == None`）は `None` を返して次のチャンクを待つ。一方
+/// **そもそも不正なバイト列は捨てる** — 待っても直らないので、残しておくと carry の先頭に
+/// 居座り、以降のチャンクが永久に出力されなくなる（carry も無限に伸びる）。
 #[cfg(feature = "net")]
 fn take_valid_utf8(carry: &mut Vec<u8>) -> Option<String> {
-    let valid_to = match std::str::from_utf8(carry) {
-        Ok(_) => carry.len(),
-        Err(e) => e.valid_up_to(),
-    };
-    if valid_to == 0 {
-        return None;
+    loop {
+        let (valid_to, invalid_len) = match std::str::from_utf8(carry) {
+            Ok(_) => (carry.len(), None),
+            Err(e) => (e.valid_up_to(), e.error_len()),
+        };
+        if valid_to > 0 {
+            // `carry[..valid_to]` は構築上つねに有効なUTF-8なので、ここで文字は失われない。
+            let s = String::from_utf8_lossy(&carry[..valid_to]).into_owned();
+            carry.drain(..valid_to);
+            return Some(s);
+        }
+        match invalid_len {
+            // 直らないバイト列。捨てて、その後ろに有効な文字が続いていないか見直す。
+            Some(n) => {
+                carry.drain(..n);
+            }
+            // 途中で切れた文字（または carry が空）。次のチャンクを待つ。
+            None => return None,
+        }
     }
-    let s = String::from_utf8_lossy(&carry[..valid_to]).into_owned();
-    carry.drain(..valid_to);
-    Some(s)
 }
 
 #[cfg(feature = "net")]
@@ -326,6 +339,8 @@ impl StreamingTransport for ReqwestTransport {
                 // take_valid_utf8 が None を返したときはまだ1文字も完成していない。
                 // 次のチャンクを待つ。
             }
+            // ストリームが閉じたとき carry に残っているバイトは捨てる。正常な SSE は必ず
+            // 行末で終わるので、ここに文字の途中のバイトが来ることはない。
             Ok(status)
         }
     }
@@ -445,5 +460,30 @@ mod tests {
         let mut carry = "日".as_bytes()[..2].to_vec();
         assert!(take_valid_utf8(&mut carry).is_none());
         assert_eq!(carry.len(), 2, "確定前のバイトが捨てられた");
+    }
+
+    /// 直らない不正バイトは捨てて先へ進む。残すと carry の先頭に居座って、以降の応答が
+    /// 永久に出なくなる（レビューで見つかった livelock）。
+    #[cfg(feature = "net")]
+    #[test]
+    fn an_invalid_byte_is_dropped_rather_than_blocking_the_stream() {
+        let mut carry = vec![0xFF];
+        carry.extend_from_slice("ok".as_bytes());
+
+        assert_eq!(take_valid_utf8(&mut carry).as_deref(), Some("ok"));
+        assert!(carry.is_empty());
+    }
+
+    /// 不正バイトだけが届いた場合も詰まらない: 何も返さないが、バイトは溜め込まない。
+    #[cfg(feature = "net")]
+    #[test]
+    fn a_lone_invalid_byte_does_not_accumulate() {
+        let mut carry = vec![0xFF];
+        assert!(take_valid_utf8(&mut carry).is_none());
+        assert!(carry.is_empty(), "不正バイトが carry に残っている（livelockの条件）");
+
+        // 次のチャンクは普通に読める。
+        carry.extend_from_slice("hi".as_bytes());
+        assert_eq!(take_valid_utf8(&mut carry).as_deref(), Some("hi"));
     }
 }
