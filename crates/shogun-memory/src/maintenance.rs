@@ -69,6 +69,7 @@ pub struct DeleteReport {
     pub sessions: usize,
     pub session_notes: usize,
     pub traceability: usize,
+    pub action_feedback: usize,
 }
 
 /// Delete **all** user data (FR-SET-07), keeping the schema. Runs in a single transaction so a
@@ -97,6 +98,9 @@ pub fn delete_all(conn: &mut Connection) -> Result<DeleteReport, rusqlite::Error
     // event_log, so they go after it (FR-SET-07, FR-MT-05).
     let sessions = tx.execute("DELETE FROM sessions", [])?;
     let traceability = tx.execute("DELETE FROM traceability_log", [])?;
+    // The Patterns learning input is behavioral user data (what they accepted and dismissed) —
+    // "delete everything" includes it (FR-PAT-01 / FR-SET-07).
+    let action_feedback = tx.execute("DELETE FROM action_feedback", [])?;
     tx.execute("DELETE FROM job_runs", [])?;
     tx.commit()?;
 
@@ -110,6 +114,7 @@ pub fn delete_all(conn: &mut Connection) -> Result<DeleteReport, rusqlite::Error
         sessions,
         session_notes,
         traceability,
+        action_feedback,
     })
 }
 
@@ -180,7 +185,7 @@ mod tests {
         assert_eq!(report.commitments, 1);
 
         // every table is empty...
-        for table in ["event_log", "people", "projects", "commitments", "open_loops", "threads", "state_provenance", "traceability_log"] {
+        for table in ["event_log", "people", "projects", "commitments", "open_loops", "threads", "state_provenance", "traceability_log", "action_feedback"] {
             let n: i64 = conn.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0)).unwrap();
             assert_eq!(n, 0, "{table} should be empty after delete_all");
         }
