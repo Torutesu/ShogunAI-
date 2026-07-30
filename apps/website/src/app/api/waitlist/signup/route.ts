@@ -3,6 +3,7 @@ import { rateLimit } from '@/lib/rate-limit';
 import { isValidEmail, statusUrl } from '@/lib/referral';
 import { addParticipant } from '@/lib/service';
 import { clientIp, hashIp, isAuthorizedOrigin, isHoneypotTripped } from '@/lib/waitlist-auth';
+import { getPostHogClient } from '@/lib/posthog-server';
 
 export const runtime = 'nodejs';
 
@@ -38,6 +39,18 @@ export async function POST(req: Request) {
 
   try {
     const { row } = await addParticipant(body.email, ref, hashIp(ip));
+
+    const posthog = getPostHogClient();
+    if (posthog && row.refCode) {
+      posthog.identify({ distinctId: row.refCode });
+      posthog.capture({
+        distinctId: row.refCode,
+        event: 'waitlist_signed_up',
+        properties: { has_ref_code: !!ref },
+      });
+      await posthog.flush();
+    }
+
     return ok({ refCode: row.refCode, statusUrl: statusUrl(APP_ORIGIN, row.statusToken!) });
   } catch (e) {
     console.error('signup error:', e);
