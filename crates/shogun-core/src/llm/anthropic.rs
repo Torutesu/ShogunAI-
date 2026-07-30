@@ -348,18 +348,26 @@ fn parse_completion_body(body: &str) -> Result<String, LlmError> {
 /// Agent-lane client (chat / drafts). Constructed with a [`ByokKey`] — invariant 5 means a
 /// [`SelectKkKey`] cannot be substituted (type error). Every completion records one traceability
 /// row for the prompt chunk that left the device (AR-11), digest-only (G8).
-pub struct AnthropicAgentClient<T: HttpTransport, S: TraceabilitySink> {
+///
+/// The trait bounds live on the impl blocks, not on the struct, so a transport that implements
+/// only [`StreamingTransport`] (and not [`HttpTransport`]) can still back this client for the
+/// streaming path. `new` is defined below without a transport bound so such a client can be
+/// constructed; `complete` requires `T: HttpTransport` and `complete_streaming` requires
+/// `T: StreamingTransport`, each in its own block.
+pub struct AnthropicAgentClient<T, S> {
     transport: T,
     sink: S,
     key: ByokKey,
     cfg: AnthropicConfig,
 }
 
-impl<T: HttpTransport, S: TraceabilitySink> AnthropicAgentClient<T, S> {
+impl<T, S: TraceabilitySink> AnthropicAgentClient<T, S> {
     pub fn new(transport: T, sink: S, key: ByokKey, cfg: AnthropicConfig) -> Self {
         Self { transport, sink, key, cfg }
     }
+}
 
+impl<T: HttpTransport, S: TraceabilitySink> AnthropicAgentClient<T, S> {
     /// Send `prompt` and return the assistant text. The traceability row is recorded at the TRUE
     /// egress point — before the request goes out — so a prompt that left the device but got a
     /// 401/timeout back is still traced (invariant 3: every send site logs, success or not).
@@ -377,6 +385,62 @@ impl<T: HttpTransport, S: TraceabilitySink> AnthropicAgentClient<T, S> {
             return Err(crate::llm::status_error("messages", resp.status, &resp.body));
         }
         parse_completion_body(&resp.body)
+    }
+}
+
+/// ストリーミング経路。`T: StreamingTransport` を要求するので、非ストリーミングの
+/// `complete` とは別の impl ブロックに置く — 片方しか実装していないトランスポートでも、
+/// 使える方のメソッドだけがコンパイルできる。
+impl<T: crate::llm::transport::StreamingTransport, S: TraceabilitySink> AnthropicAgentClient<T, S> {
+    /// プロンプトを送り、テキストデルタを届いた順に `out` へ流す。
+    ///
+    /// 返るのはストリームが終わったときで、テキストそのものは返さない。呼び出し側は `out` を
+    /// 読みながら画面に出す — 完成した文字列を返り値で待つと、このメソッドが存在する理由
+    /// （初トークン1s）が消える。
+    ///
+    /// デコードはチャンクが届いたその場で走る（トランスポートの受信ループから同期コールバックで
+    /// 呼ばれる）。生チャンクをチャネルで受け渡して別スレッドで解く形にすると送信側と受信側を
+    /// 同時に走らせる必要が生じ、ライブラリにランタイムを持ち込むが、その場デコードなら同時実行
+    /// そのものが要らない。ここが「初トークン1s」を満たす唯一の形で、ボディが揃うのを待つ実装
+    /// とはこの一点だけが違う。
+    pub async fn complete_streaming(
+        &self,
+        prompt: &str,
+        out: std::sync::mpsc::Sender<String>,
+    ) -> Result<(), LlmError> {
+        let req = build_messages_request(&self.cfg, self.key.secret(), prompt, true)?;
+        // 送信前に記録する（不変条件3）。ダイジェストのみで本文は残さない。
+        self.sink.record(TraceRecord::for_chunk(
+            Route::MessagesApi,
+            "agent",
+            self.cfg.destination(),
+            prompt,
+            false,
+        ));
+
+        // 届いたチャンクをその場でSSEデコードし、デルタだけを `out` に流す。非2xxのときは
+        // トランスポートが `Failed` を返し、`on_chunk` は一度も呼ばれない — エラー本文が
+        // デルタとして画面に出る経路は構造的に無い。
+        let mut decoder = crate::llm::sse::SseDecoder::new();
+        let outcome = self
+            .transport
+            .send_streaming(req, |chunk| {
+                for delta in decoder.push(chunk) {
+                    // 受け手が消えた = パネルが閉じられた。打ち切って正常終了する。
+                    if out.send(delta).is_err() {
+                        return false;
+                    }
+                }
+                true
+            })
+            .await?;
+
+        match outcome {
+            crate::llm::transport::StreamOutcome::Streamed { .. } => Ok(()),
+            crate::llm::transport::StreamOutcome::Failed { status, body } => {
+                Err(crate::llm::status_error("messages", status, &body))
+            }
+        }
     }
 }
 
@@ -627,6 +691,72 @@ mod tests {
         assert!(!format!("{:?}", sent[0]).contains("byok-xyz"));
     }
 
+    /// ストリーミング経路が、届いた端からテキストを流すこと。
+    #[tokio::test]
+    async fn streaming_completion_emits_deltas_as_they_arrive() {
+        use crate::llm::transport::MockStreamingTransport;
+        use crate::llm::{ByokKey, Secret};
+
+        let sse = vec![
+            "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"Hel\"}}\n\n".to_string(),
+            "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"lo\"}}\n\n".to_string(),
+            "data: [DONE]\n\n".to_string(),
+        ];
+        let client = AnthropicAgentClient::new(
+            MockStreamingTransport::new(200, sse),
+            RecordingSink::new(),
+            ByokKey::new(Secret::new("sk-test")),
+            cfg(),
+        );
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        client.complete_streaming("hi", tx).await.unwrap();
+
+        let got: Vec<String> = rx.into_iter().collect();
+        assert_eq!(got, vec!["Hel".to_string(), "lo".to_string()]);
+    }
+
+    /// 401は「直せる唯一のエラー」なので、ネットワーク不調と区別して返す。
+    #[tokio::test]
+    async fn a_rejected_key_surfaces_as_unauthorized_from_the_streaming_path() {
+        use crate::llm::transport::MockStreamingTransport;
+        use crate::llm::{ByokKey, Secret};
+
+        let client = AnthropicAgentClient::new(
+            MockStreamingTransport::new(401, vec!["{\"error\":\"bad key\"}".to_string()]),
+            RecordingSink::new(),
+            ByokKey::new(Secret::new("sk-bad")),
+            cfg(),
+        );
+
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let err = client.complete_streaming("hi", tx).await.unwrap_err();
+
+        assert!(
+            matches!(err, LlmError::Unauthorized(401, _)),
+            "401 が Unauthorized 以外になった: {err:?}"
+        );
+    }
+
+    /// 失敗しても送信は記録する。デバイスから出た事実は結果によらず残す（不変条件3）。
+    #[tokio::test]
+    async fn streaming_records_egress_even_when_the_request_fails() {
+        use crate::llm::transport::MockStreamingTransport;
+        use crate::llm::{ByokKey, Secret};
+
+        let client = AnthropicAgentClient::new(
+            MockStreamingTransport::new(500, vec![]),
+            RecordingSink::new(),
+            ByokKey::new(Secret::new("sk-test")),
+            cfg(),
+        );
+
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let _ = client.complete_streaming("hi", tx).await;
+
+        assert_eq!(client.sink_records().len(), 1, "送信前のトレースが記録されていない");
+    }
+
     #[tokio::test]
     async fn agent_complete_surfaces_http_error() {
         let transport = MockTransport::new([HttpResponse { status: 429, body: "rate limited".into() }]);
@@ -742,8 +872,10 @@ mod tests {
         assert!(matches!(err, LlmError::Provider(_)));
     }
 
-    // small accessors so the tests can read back the mock/sink held by the client
-    impl<T: HttpTransport, S: TraceabilitySink> AnthropicAgentClient<T, S> {
+    // small accessors so the tests can read back the mock/sink held by the client. No
+    // `T: HttpTransport` bound — a streaming-only transport (MockStreamingTransport) must also be
+    // able to read its sink back; the per-method where-clauses carry the real requirements.
+    impl<T, S: TraceabilitySink> AnthropicAgentClient<T, S> {
         fn sink_records(&self) -> Vec<TraceRecord>
         where
             S: AsRecording,

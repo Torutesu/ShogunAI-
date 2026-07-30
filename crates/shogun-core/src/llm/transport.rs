@@ -113,24 +113,40 @@ pub trait HttpTransport: Send + Sync {
     ) -> impl Future<Output = Result<HttpResponse, TransportError>> + Send;
 }
 
+/// ストリーミング応答の結末。ステータスをボディより先に確定できるので、非2xxのときに
+/// 「エラー本文をデルタとして画面に流してしまう」経路が構造的に存在しない。
+#[derive(Debug)]
+pub enum StreamOutcome {
+    /// 2xx。ボディは到着順に `on_chunk` へ渡し終えた。
+    Streamed { status: u16 },
+    /// 非2xx。`on_chunk` は一度も呼ばず、エラー本文だけを持って返る。
+    Failed { status: u16, body: String },
+}
+
 /// 増分でボディを受け取るトランスポート。
 ///
 /// [`HttpTransport`] と分けてある。全実装に streaming を強いるとモックもBatch lane側も
 /// 巻き添えになるが、増分が要るのはAgent laneのSSEだけで、しかもそこは「最初の一文字までの
 /// 時間」がSLOになっている唯一の経路だから。
 ///
-/// チャンクは `std::sync::mpsc` で渡す。受け手（パネルへ流す側）はtokioの外にいる同期スレッド
-/// なので、非同期チャネルにすると受け手側にランタイムを持ち込むことになる。
+/// チャンクはコールバックで渡す。チャネルにすると送信側と受信側を同時に走らせる必要が生じ、
+/// ライブラリ側にランタイムを持ち込むことになる — が、デコードは「バイトが届いた瞬間に
+/// その場で」やれば済むので、同時実行そのものが要らない。
+///
+/// `on_chunk` が `false` を返したらそこで打ち切る。応答の途中でパネルを閉じるのは正常な
+/// 操作であって、失敗ではない。
 pub trait StreamingTransport: Send + Sync {
-    /// `req` を送り、ボディを届いた順に `chunks` へ流す。返るのはHTTPステータス。
+    /// `req` を送り、ボディを届いた順に `on_chunk` へ渡す。返るのは [`StreamOutcome`]。
     ///
-    /// 受け手が先に落ちた場合はエラーにせず、送信を打ち切って `Ok` で戻る — 応答の途中で
-    /// パネルを閉じるのは正常な操作であって、失敗ではない。
-    fn send_streaming(
+    /// `on_chunk` を値渡しにしているのは、await をまたいで借用しないことでフューチャを `Send`
+    /// に保つため。
+    fn send_streaming<F>(
         &self,
         req: HttpRequest,
-        chunks: std::sync::mpsc::Sender<String>,
-    ) -> impl Future<Output = Result<u16, TransportError>> + Send;
+        on_chunk: F,
+    ) -> impl Future<Output = Result<StreamOutcome, TransportError>> + Send
+    where
+        F: FnMut(&str) -> bool + Send;
 }
 
 /// 決められたチャンクを順に流すだけのテスト用トランスポート。ネットワーク無しで
@@ -147,11 +163,14 @@ impl MockStreamingTransport {
 }
 
 impl StreamingTransport for MockStreamingTransport {
-    fn send_streaming(
+    fn send_streaming<F>(
         &self,
         _req: HttpRequest,
-        chunks: std::sync::mpsc::Sender<String>,
-    ) -> impl Future<Output = Result<u16, TransportError>> + Send {
+        mut on_chunk: F,
+    ) -> impl Future<Output = Result<StreamOutcome, TransportError>> + Send
+    where
+        F: FnMut(&str) -> bool + Send,
+    {
         let queued: Vec<String> = self
             .chunks
             .lock()
@@ -159,13 +178,18 @@ impl StreamingTransport for MockStreamingTransport {
             .unwrap_or_default();
         let status = self.status;
         async move {
+            // 非2xxではチャンクを1つも渡さず、本文だけを組み立てて返す — 実トランスポートと
+            // 同じ振る舞い。エラー本文が回答としてパネルに出る経路を塞ぐ。
+            if !(200..300).contains(&status) {
+                return Ok(StreamOutcome::Failed { status, body: queued.concat() });
+            }
             for c in queued {
-                // 受け手が消えていたら打ち切る。閉じたパネルに向かって流し続けない。
-                if chunks.send(c).is_err() {
+                // コールバックが false を返したら打ち切る。閉じたパネルに向かって流し続けない。
+                if !on_chunk(&c) {
                     break;
                 }
             }
-            Ok(status)
+            Ok(StreamOutcome::Streamed { status })
         }
     }
 }
@@ -302,11 +326,14 @@ fn take_valid_utf8(carry: &mut Vec<u8>) -> Option<String> {
 
 #[cfg(feature = "net")]
 impl StreamingTransport for ReqwestTransport {
-    fn send_streaming(
+    fn send_streaming<F>(
         &self,
         req: HttpRequest,
-        chunks: std::sync::mpsc::Sender<String>,
-    ) -> impl Future<Output = Result<u16, TransportError>> + Send {
+        mut on_chunk: F,
+    ) -> impl Future<Output = Result<StreamOutcome, TransportError>> + Send
+    where
+        F: FnMut(&str) -> bool + Send,
+    {
         let client = self.client.clone();
         async move {
             let method = match req.method {
@@ -322,9 +349,15 @@ impl StreamingTransport for ReqwestTransport {
             }
             let mut resp = rb.send().await.map_err(|e| TransportError::Io(e.to_string()))?;
             let status = resp.status().as_u16();
+            // ステータスはボディより先に確定する。非2xxならチャンクを1つも渡さず、本文を
+            // 集め切って `Failed` で返す — エラー本文がSSEデルタとして画面に出る経路を塞ぐ。
+            if !(200..300).contains(&status) {
+                let body = resp.text().await.map_err(|e| TransportError::Io(e.to_string()))?;
+                return Ok(StreamOutcome::Failed { status, body });
+            }
             // マルチバイト文字はチャンク境界をまたぐ（日本語の応答ではほぼ毎回起きる）。
             // 到着したバイトをそのまま lossy 変換すると、境界にかかった1文字は置換文字に
-            // なって二度と戻らない。`take_valid_utf8` で有効な前半だけを送り、途中で切れた
+            // なって二度と戻らない。`take_valid_utf8` で有効な前半だけを渡し、途中で切れた
             // 文字のバイトは次のチャンクの頭と繋ぐために持ち越す。
             let mut carry: Vec<u8> = Vec::new();
             while let Some(bytes) =
@@ -332,7 +365,8 @@ impl StreamingTransport for ReqwestTransport {
             {
                 carry.extend_from_slice(&bytes);
                 if let Some(s) = take_valid_utf8(&mut carry) {
-                    if chunks.send(s).is_err() {
+                    // 届いたその場でコールバックへ。false なら打ち切る（パネルが閉じた）。
+                    if !on_chunk(&s) {
                         break;
                     }
                 }
@@ -341,7 +375,7 @@ impl StreamingTransport for ReqwestTransport {
             }
             // ストリームが閉じたとき carry に残っているバイトは捨てる。正常な SSE は必ず
             // 行末で終わるので、ここに文字の途中のバイトが来ることはない。
-            Ok(status)
+            Ok(StreamOutcome::Streamed { status })
         }
     }
 }
@@ -381,34 +415,61 @@ mod tests {
         assert!(dumped.contains("2023-06-01"));
     }
 
-    /// ストリーミング用のモックが、渡された順にチャンクを送り出すこと。
+    /// ストリーミング用のモックが、渡された順にチャンクをコールバックへ渡すこと。
     #[tokio::test]
     async fn mock_streaming_transport_delivers_chunks_in_order() {
         let t = MockStreamingTransport::new(200, vec!["one ".into(), "two".into()]);
-        let (tx, rx) = std::sync::mpsc::channel();
         let req =
             HttpRequest::new(Method::Post, "https://api.anthropic.com/v1/messages", vec![], None)
                 .unwrap();
 
-        let status = t.send_streaming(req, tx).await.unwrap();
+        let mut got: Vec<String> = Vec::new();
+        let outcome = t
+            .send_streaming(req, |c| {
+                got.push(c.to_string());
+                true
+            })
+            .await
+            .unwrap();
 
-        assert_eq!(status, 200);
-        let got: Vec<String> = rx.into_iter().collect();
+        assert!(matches!(outcome, StreamOutcome::Streamed { status: 200 }));
         assert_eq!(got, vec!["one ".to_string(), "two".to_string()]);
     }
 
-    /// 受け手が先に消えた（ユーザーがパネルを閉じた）場合、送信側はエラーにせず静かに終わる。
-    /// 応答の途中で閉じるのは正常な操作で、失敗として記録するものではない。
+    /// コールバックが `false` を返す（＝パネルが閉じた）と、その場でストリームを打ち切り、
+    /// エラーにせず `Ok` で戻る。応答の途中で閉じるのは正常な操作で、失敗ではない。
     #[tokio::test]
-    async fn a_dropped_receiver_ends_the_stream_without_an_error() {
+    async fn a_callback_returning_false_stops_the_stream_early() {
         let t = MockStreamingTransport::new(200, vec!["one".into(), "two".into()]);
-        let (tx, rx) = std::sync::mpsc::channel();
-        drop(rx);
         let req =
             HttpRequest::new(Method::Post, "https://api.anthropic.com/v1/messages", vec![], None)
                 .unwrap();
 
-        assert!(t.send_streaming(req, tx).await.is_ok());
+        let mut seen: Vec<String> = Vec::new();
+        let outcome = t
+            .send_streaming(req, |c| {
+                seen.push(c.to_string());
+                // 最初の1つだけ受け取って打ち切る。
+                false
+            })
+            .await
+            .unwrap();
+
+        assert!(matches!(outcome, StreamOutcome::Streamed { status: 200 }));
+        assert_eq!(seen, vec!["one".to_string()], "打ち切り後もチャンクを渡している");
+    }
+
+    /// 非2xxではデルタを1つも流さない。エラー本文が回答としてパネルに出る経路を塞ぐ。
+    #[tokio::test]
+    async fn a_failed_status_streams_no_chunks() {
+        let t = MockStreamingTransport::new(401, vec!["{\"error\":\"bad key\"}".into()]);
+        let req = HttpRequest::new(Method::Post, "https://api.anthropic.com/v1/messages", vec![], None).unwrap();
+        let mut seen = 0usize;
+
+        let outcome = t.send_streaming(req, |_| { seen += 1; true }).await.unwrap();
+
+        assert_eq!(seen, 0, "エラー本文がチャンクとして流れた");
+        assert!(matches!(outcome, StreamOutcome::Failed { status: 401, .. }));
     }
 
     #[tokio::test]
