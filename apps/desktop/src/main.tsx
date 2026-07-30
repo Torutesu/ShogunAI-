@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { App } from "./App";
 import { MeetingOverlay } from "./MeetingOverlay";
+import { PttOverlay } from "./PttOverlay";
 import "./styles.css";
 
 // One bundle, two windows. The meeting overlay is its own small floating panel (Issue #7), so
@@ -25,7 +26,8 @@ const root = document.getElementById("root");
 if (root) {
   const label = currentLabel();
   const meeting = label === "meeting";
-  document.documentElement.setAttribute("data-window", meeting ? "meeting" : "main");
+  const ptt = label === "ptt";
+  document.documentElement.setAttribute("data-window", meeting ? "meeting" : ptt ? "ptt" : "main");
   // Say which root was chosen. A blank overlay and a missing overlay look identical on screen;
   // in the log they do not.
   // Reported to Rust, not just the webview console: a blank overlay and a missing overlay look
@@ -33,11 +35,13 @@ if (root) {
   void import("@tauri-apps/api/core")
     .then(({ invoke }) =>
       invoke("ui_log", {
-        msg: `window label=${label || "(unknown)"} → ${meeting ? "meeting overlay" : "main app"}`,
+        msg: `window label=${label || "(unknown)"} → ${meeting ? "meeting overlay" : ptt ? "ptt panel" : "main app"}`,
       }),
     )
     .catch(() => undefined);
   ReactDOM.createRoot(root).render(
-    <React.StrictMode>{meeting ? <MeetingOverlay /> : <App />}</React.StrictMode>,
+    <React.StrictMode>
+      {meeting ? <MeetingOverlay /> : ptt ? <PttOverlay /> : <App />}
+    </React.StrictMode>,
   );
 }

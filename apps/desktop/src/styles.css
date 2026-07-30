@@ -2053,3 +2053,85 @@ body.full-window {
 .inline__dot--work {
   animation: live-pulse 1s ease-in-out infinite;
 }
+
+/* push-to-talk パネル（Issue #44）。位置は Rust 側が castle 設定で決めるので、
+   ここでは中身の並びだけを持つ。 */
+.ptt-panel {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  padding: 12px 16px;
+  border-radius: 14px;
+  font: inherit;
+  color: var(--ink);
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(30px) saturate(1.7);
+  backdrop-filter: blur(30px) saturate(1.7);
+  border: 1px solid var(--line);
+}
+
+.ptt-row { display: flex; align-items: center; gap: 10px; width: 100%; }
+
+.ptt-mic {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--muted);
+  opacity: 0.4;
+}
+
+/* 録音中であることは、OSのマイクインジケータだけに頼らずパネル自身も示す（プライバシー要件）。
+   background は要素に直接置く（キーフレームではなく）ので、prefers-reduced-motion が
+   animation を止めても赤い点は消えない。 */
+.ptt-mic--live {
+  background: #e5484d;
+  opacity: 1;
+  animation: ptt-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes ptt-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+
+.ptt-hint { margin-left: auto; opacity: 0.5; font-size: var(--fs-sm); }
+.ptt-label { font-size: var(--fs-lg); }
+
+.ptt-answer { display: flex; flex-direction: column; gap: 10px; width: 100%; height: 100%; }
+
+.ptt-text {
+  margin: 0;
+  overflow-y: auto;
+  flex: 1;
+  font-size: var(--fs-lg);
+  line-height: 1.5;
+  color: var(--ink);
+}
+
+.ptt-answer--error .ptt-text {
+  color: var(--warn);
+}
+
+.ptt-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+/* Action buttons inherit the existing panel button aesthetic. */
+.ptt-actions button {
+  font: inherit;
+  font-size: var(--fs-sm);
+  color: var(--muted);
+  background: var(--fill);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  padding: 4px 10px;
+  cursor: pointer;
+  transition: background var(--sp), color var(--sp);
+}
+.ptt-actions button:hover {
+  background: var(--fill-strong);
+  color: var(--ink);
+}
