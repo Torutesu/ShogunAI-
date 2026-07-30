@@ -36,6 +36,7 @@ function beginPillDrag(e: React.MouseEvent): void {
   void invoke("start_panel_drag").catch((err) => uiLog(`start_panel_drag failed: ${err}`));
 }
 import { t } from "./strings";
+import { AnalyticsToggle } from "./AnalyticsToggle";
 import { ConnectionsList } from "./connections";
 import { comboChips, DEFAULT_BINDS } from "./keys";
 
@@ -1940,6 +1941,13 @@ function Settings(props: {
               </div>
             </div>
           )}
+        </section>
+        {/* Privacy — permanent home of the analytics opt-out (issue #99). Onboarding shows the
+            same toggle once; without this section a set-up user had no way to change their mind.
+            Sits with Memory at the bottom: both are data controls, not daily-use settings. */}
+        <section className="set">
+          <div className="set__label">{t.privacy}</div>
+          <AnalyticsToggle />
         </section>
       </div>
     </div>
