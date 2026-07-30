@@ -113,6 +113,63 @@ pub trait HttpTransport: Send + Sync {
     ) -> impl Future<Output = Result<HttpResponse, TransportError>> + Send;
 }
 
+/// 増分でボディを受け取るトランスポート。
+///
+/// [`HttpTransport`] と分けてある。全実装に streaming を強いるとモックもBatch lane側も
+/// 巻き添えになるが、増分が要るのはAgent laneのSSEだけで、しかもそこは「最初の一文字までの
+/// 時間」がSLOになっている唯一の経路だから。
+///
+/// チャンクは `std::sync::mpsc` で渡す。受け手（パネルへ流す側）はtokioの外にいる同期スレッド
+/// なので、非同期チャネルにすると受け手側にランタイムを持ち込むことになる。
+pub trait StreamingTransport: Send + Sync {
+    /// `req` を送り、ボディを届いた順に `chunks` へ流す。返るのはHTTPステータス。
+    ///
+    /// 受け手が先に落ちた場合はエラーにせず、送信を打ち切って `Ok` で戻る — 応答の途中で
+    /// パネルを閉じるのは正常な操作であって、失敗ではない。
+    fn send_streaming(
+        &self,
+        req: HttpRequest,
+        chunks: std::sync::mpsc::Sender<String>,
+    ) -> impl Future<Output = Result<u16, TransportError>> + Send;
+}
+
+/// 決められたチャンクを順に流すだけのテスト用トランスポート。ネットワーク無しで
+/// ストリーミング経路を検証するための土台。
+pub struct MockStreamingTransport {
+    status: u16,
+    chunks: std::sync::Mutex<std::collections::VecDeque<String>>,
+}
+
+impl MockStreamingTransport {
+    pub fn new(status: u16, chunks: Vec<String>) -> Self {
+        Self { status, chunks: std::sync::Mutex::new(chunks.into()) }
+    }
+}
+
+impl StreamingTransport for MockStreamingTransport {
+    fn send_streaming(
+        &self,
+        _req: HttpRequest,
+        chunks: std::sync::mpsc::Sender<String>,
+    ) -> impl Future<Output = Result<u16, TransportError>> + Send {
+        let queued: Vec<String> = self
+            .chunks
+            .lock()
+            .map(|mut q| q.drain(..).collect())
+            .unwrap_or_default();
+        let status = self.status;
+        async move {
+            for c in queued {
+                // 受け手が消えていたら打ち切る。閉じたパネルに向かって流し続けない。
+                if chunks.send(c).is_err() {
+                    break;
+                }
+            }
+            Ok(status)
+        }
+    }
+}
+
 // ---- test double ---------------------------------------------------------------------------
 
 /// A transport that records every request and replays canned responses in order — the offline
@@ -214,6 +271,44 @@ impl HttpTransport for ReqwestTransport {
     }
 }
 
+#[cfg(feature = "net")]
+impl StreamingTransport for ReqwestTransport {
+    fn send_streaming(
+        &self,
+        req: HttpRequest,
+        chunks: std::sync::mpsc::Sender<String>,
+    ) -> impl Future<Output = Result<u16, TransportError>> + Send {
+        let client = self.client.clone();
+        async move {
+            let method = match req.method {
+                Method::Get => reqwest::Method::GET,
+                Method::Post => reqwest::Method::POST,
+            };
+            let mut rb = client.request(method, &req.url);
+            for (k, v) in &req.headers {
+                rb = rb.header(k, v);
+            }
+            if let Some(body) = req.body {
+                rb = rb.body(body);
+            }
+            let mut resp = rb.send().await.map_err(|e| TransportError::Io(e.to_string()))?;
+            let status = resp.status().as_u16();
+            while let Some(bytes) =
+                resp.chunk().await.map_err(|e| TransportError::Io(e.to_string()))?
+            {
+                // 不正なUTF-8で切らない: SSEのテキストは常にUTF-8で、マルチバイト文字が
+                // チャンク境界にかかった分は from_utf8_lossy が置換文字にする。デコーダ側の
+                // 持ち越しバッファと合わせて、実害が出るのは境界にかかった1文字だけ。
+                let s = String::from_utf8_lossy(&bytes).into_owned();
+                if chunks.send(s).is_err() {
+                    break;
+                }
+            }
+            Ok(status)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -247,6 +342,36 @@ mod tests {
         assert!(dumped.contains("***redacted***"));
         // Non-secret headers are still visible for debugging.
         assert!(dumped.contains("2023-06-01"));
+    }
+
+    /// ストリーミング用のモックが、渡された順にチャンクを送り出すこと。
+    #[tokio::test]
+    async fn mock_streaming_transport_delivers_chunks_in_order() {
+        let t = MockStreamingTransport::new(200, vec!["one ".into(), "two".into()]);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let req =
+            HttpRequest::new(Method::Post, "https://api.anthropic.com/v1/messages", vec![], None)
+                .unwrap();
+
+        let status = t.send_streaming(req, tx).await.unwrap();
+
+        assert_eq!(status, 200);
+        let got: Vec<String> = rx.into_iter().collect();
+        assert_eq!(got, vec!["one ".to_string(), "two".to_string()]);
+    }
+
+    /// 受け手が先に消えた（ユーザーがパネルを閉じた）場合、送信側はエラーにせず静かに終わる。
+    /// 応答の途中で閉じるのは正常な操作で、失敗として記録するものではない。
+    #[tokio::test]
+    async fn a_dropped_receiver_ends_the_stream_without_an_error() {
+        let t = MockStreamingTransport::new(200, vec!["one".into(), "two".into()]);
+        let (tx, rx) = std::sync::mpsc::channel();
+        drop(rx);
+        let req =
+            HttpRequest::new(Method::Post, "https://api.anthropic.com/v1/messages", vec![], None)
+                .unwrap();
+
+        assert!(t.send_streaming(req, tx).await.is_ok());
     }
 
     #[tokio::test]
