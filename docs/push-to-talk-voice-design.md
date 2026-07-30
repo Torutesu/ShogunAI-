@@ -144,7 +144,13 @@ Notch本体とは独立した専用ウィンドウ（label: `ptt`）を、`Meeti
 | `ptt_session_cancelled` | 段階（recording/transcribing/responding） |
 | `ptt_session_failed` | 理由コード（mic_denied / no_model / asr_failed / network / key_rejected） |
 
-Issue記載の定量目標（週1回以上の利用率30%、ワーク完了50%）はこのイベント群から算出する。既存のPostHog環境未確定という課題（Issue #61）は本Issueの前提として引き継ぐ。
+Issue記載の定量目標（週1回以上の利用率30%、ワーク完了50%）はこのイベント群から算出する。
+
+⚠️ **訂正（実装中に判明）: PostHog はこのブランチの base である `main` に存在しない。** `analytics.rs` と PostHog クライアントは `feat/posthog-dau-mau-tracking`（Issue #61 / PR #91）にのみあり、本設計の初版はそのブランチ上で行った調査を根拠に「実装済み」と書いていた。誤り。
+
+したがって本Issueのスコープでは、上記3イベントは**ローカルの構造化ログとして出すに留める**（`onboarding.rs::onboarding_event` と同じ既存の流儀）。ここでPostHogクライアントを作るとPR #91と重複・衝突するため作らない。PR #91 がマージされた時点で3関数の本体が実サンクへの送信に変わり、**呼び出し側は変わらない** — その継ぎ目になるよう `&AppHandle` を今から受け取っている。
+
+PR #91 マージ時にあわせて設計が要るもの: **opt-out の尊重**。現状この repo には opt-out の仕組み自体が無い。
 
 ### リリース
 β experimental flag の裏で提供。既定オフで、設定から有効化する。利用率とエラー率を見てから全体公開を判断する。
@@ -188,7 +194,9 @@ M2を最初に潰す。ここの結論次第で設定UIが提示できる選択�
 
 ## 11. 未確定事項
 
-- PostHog本番環境の確定（Issue #61 と共通の課題）
+- PostHog本番環境の確定（Issue #61 / PR #91 と共通の課題）。上記§8の訂正も参照
+- **`.entitlements` ファイルが存在しない。** 会議ノートの Core Audio プロセスタップ（`CATapDescription` / `AudioHardwareCreateProcessTap`）は、署名・notarize されたビルドで entitlement を要求する可能性がある。PTT自身はタップを使わないためスコープ外だが、Task 16 の実機検証で確認する
+- **`NSMicrophoneUsageDescription` の欠落は本Issue以前からの既存バグだった。** `audio_lane.rs` が会議ノートで既にマイクを開いており、キーが無いと macOS TCC がアプリを終了させうる。本Issueの変更が副次的に解消する
 - ASRのウォームアップ戦略: Whisperモデルのロードに時間がかかる場合、初回PTTが遅くなる。M3の実測後に、βフラグ有効時はモデルを事前ロードしておく等の判断をする
 
 ## 12. スコープ外（Issue Non-Goal準拠）
