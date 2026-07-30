@@ -153,6 +153,7 @@ fn tool_descriptor(tool: Tool) -> Value {
     let (desc, props): (&str, Value) = match tool {
         Tool::MemorySearch => ("Hybrid search over memory", json!({ "query": { "type": "string" } })),
         Tool::MemoryGetContext => ("The current context cache", json!({})),
+        Tool::DeviceOnboardingGet => ("This device's onboarding / first-run setup state", json!({})),
         Tool::StatePeopleGet
         | Tool::StateProjectsGet
         | Tool::StateCommitmentsGet
@@ -220,12 +221,14 @@ mod tests {
     }
 
     #[test]
-    fn tools_list_has_all_thirteen() {
+    fn tools_list_exposes_every_tool() {
         let v = call(&server(), r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#);
         let tools = v["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 13);
+        assert_eq!(tools.len(), ALL_TOOLS.len());
         assert!(tools.iter().any(|t| t["name"] == "memory.search"));
         assert!(tools.iter().any(|t| t["name"] == "actions.execute"));
+        // Invariant 6: onboarding state is on the agent-facing surface too (issue #6).
+        assert!(tools.iter().any(|t| t["name"] == "device.onboarding.get"));
     }
 
     #[test]

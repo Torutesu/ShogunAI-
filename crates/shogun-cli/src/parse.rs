@@ -135,6 +135,7 @@ fn parse_command(positionals: &[String], no_screen: bool) -> Result<Command, Cli
             }),
         },
         "metrics" => Ok(Command::Metrics),
+        "onboarding" => Ok(Command::Onboarding),
         other => Err(CliError::UnknownCommand(other.to_string())),
     }
 }

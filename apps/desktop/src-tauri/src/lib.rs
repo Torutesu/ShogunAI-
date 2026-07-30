@@ -234,13 +234,16 @@ pub fn run() {
         ai_sessions::mac::set_ai_session_import,
         dream::mac::dream_status,
         dream::mac::run_dream_now,
-        // First-run Accessibility permission guide (Issue #46). Own webview (onboarding.html),
-        // opened by setup_macos when trust is missing and the user hasn't skipped/completed it.
+        // First-run onboarding flow (issue #6, superseding the #46 AX guide). Own webview
+        // (onboarding.html), opened by setup_macos until the flow has been completed once.
+        // State is Rust-owned (invariant 1); the AX check split (silent poll / prompting button)
+        // and the accessibility-changed watcher are the #46 assets, kept.
         onboarding::mac::accessibility_status,
-        onboarding::mac::onboarding_get,
+        onboarding::mac::onboarding_state,
+        onboarding::mac::set_onboarding_state,
         onboarding::mac::open_accessibility_settings,
-        onboarding::mac::onboarding_finish,
         onboarding::mac::onboarding_event,
+        exclusions::mac::exclusion_categories,
         analytics::analytics_get_opt_out,
         analytics::analytics_set_opt_out,
     ]);
@@ -431,10 +434,13 @@ fn setup_macos(app: &tauri::App) {
     // T-11/T-12 sanity: Accessibility trust + one focused-window walk through the tested
     // policy. Event-driven focus subscription is on-device work (runbook D-03/D-05).
     eprintln!("[spike] accessibility trusted: {}", axcache::ax_trusted());
-    // Issue #46: on a fresh install (or a re-permission after an update) the app is running but
-    // inert — nothing captures, ⌥-tap and hover taps are refused. Show the branded guide instead of
-    // leaving the user in a silent dead end. Gated on the SILENT trust check + persisted
-    // disposition, so a granted or deliberately-skipped user is never interrupted.
+    // Issue #6: first-run onboarding, Rust-owned state (invariant 1). The managed copy is loaded
+    // once here (migrating any legacy #46 disposition file in place) so the read command answers
+    // without hitting disk. The flow shows until it has been completed once; a quit mid-flow
+    // resumes at the persisted step, and a legacy completed/skipped device is never re-trapped.
+    app.manage(onboarding::mac::Store(std::sync::Mutex::new(onboarding::mac::load(
+        app.handle(),
+    ))));
     if onboarding::mac::should_show_onboarding(app.handle()) {
         onboarding::mac::build_onboarding_window(app.handle());
     }
@@ -505,7 +511,13 @@ fn setup_macos(app: &tauri::App) {
             // First-layer connectors (§6.9). Build the Composio-backed runtime and start the
             // 15-min read-sync poller. Missing Composio creds are not fatal — the app runs
             // without connectors until the user configures them in Settings.
-            match connectors::mac::build_runtime(app.handle(), true /* draft-stop default ON */) {
+            // Draft-stop is seeded from the persisted ComposioPolicy (composio.json) — the single
+            // source the settings/onboarding toggle and the L3 send gate read. Absent/unreadable
+            // policy defaults to draft_stop = true (invariant 4 fail-safe, see ComposioPolicy).
+            match connectors::mac::build_runtime(
+                app.handle(),
+                approvals::mac::load_composio_policy(app.handle()).draft_stop,
+            ) {
                 Ok(rt) => {
                     let shared = std::sync::Arc::new(std::sync::Mutex::new(rt));
                     connectors::mac::spawn_sync_poller(shared.clone(), db.clone(), app.handle().clone());

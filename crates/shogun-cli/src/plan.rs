@@ -25,6 +25,7 @@ pub fn tool_name(tool: Tool) -> &'static str {
         Tool::MemoryAppendNote => "memory.append_note",
         Tool::StateProposeUpdate => "state.propose_update",
         Tool::ActionsExecute => "actions.execute",
+        Tool::DeviceOnboardingGet => "device.onboarding.get",
     }
 }
 
