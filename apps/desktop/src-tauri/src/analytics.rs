@@ -12,8 +12,15 @@
 //! 現状の出力先は構造化ログ行（`eprintln!`）。これはこのcrateの既存の計測イディオムに
 //! 揃えたもので、[`crate::onboarding`] の `onboarding_event` と `metrics` の SLO 記録が同じ
 //! 形をとる — 「計測はデバイスから出ない（不変条件3）」を守りつつ、dev/internal ビルドの
-//! ログからファネルを再構成できる。実際のPostHogシンクへの接続は別タスク（本crateには
-//! まだPostHog連携が無い。task-lead へ報告済み）。
+//! ログからファネルを再構成できる。
+//!
+//! 送り先はまだローカルのログだけ。PostHog クライアントは Issue #61 / PR #91
+//! （`feat/posthog-dau-mau-tracking`）にあり、`main` にはまだ入っていない。あちらが
+//! マージされた時点でこの3つの本体が実サンクへの送信に変わる — **呼び出し側は変わらない**
+//! ので、Issue #44 側は今のまま完成している。
+//!
+//! そのとき同時に設計しなければならないこと: opt-out の尊重。現状この repo には opt-out の
+//! 仕組み自体が無く、守るべきものが無い状態なので、サンクを足す人が忘れないようここに書く。
 
 // Task 12 で `ptt.rs` から配線されるまでは未参照のモジュールなので、`pub` な関数も dead-code
 // 判定を素通りしない。`ptt_lane` / `hold_monitor` / `notch_actions` / `approvals` と同じ idiom。
