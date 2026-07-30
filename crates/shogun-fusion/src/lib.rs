@@ -11,6 +11,7 @@
 
 pub mod assemble;
 pub mod brief;
+pub mod wrap;
 pub mod confidence;
 pub mod budget;
 pub mod block;

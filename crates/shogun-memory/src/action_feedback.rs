@@ -127,6 +127,26 @@ pub fn acceptance_by_kind(
     rows.collect()
 }
 
+/// Total decisions and adoptions since `since_ts` — the Evening Wrap's "actions decided /
+/// adopted today" counts (§6.17). Same adoption definition as [`acceptance_by_kind`].
+pub fn counts_since(conn: &Connection, since_ts: i64) -> Result<(i64, i64), rusqlite::Error> {
+    let adopted: Vec<String> = ALL_OUTCOMES
+        .iter()
+        .filter(|o| o.is_adoption())
+        .map(|o| format!("'{}'", o.as_str()))
+        .collect();
+    conn.query_row(
+        &format!(
+            "SELECT count(*),
+                    sum(CASE WHEN outcome IN ({}) THEN 1 ELSE 0 END)
+             FROM action_feedback WHERE ts >= ?1",
+            adopted.join(", ")
+        ),
+        [since_ts],
+        |r| Ok((r.get(0)?, r.get::<_, Option<i64>>(1)?.unwrap_or(0))),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1625,6 +1625,106 @@ impl Db {
         assemble_degraded(calendar, &self.commitments_due(now_ms))
     }
 
+    /// Assemble the Evening Wrap (§6.17, FR-EB-01/02): the day's outcome, what's still open,
+    /// tomorrow's first items, and today's loose ends — **local aggregation only**, no LLM call
+    /// and no egress. The caller supplies the window boundaries (`day_start_ms` = local midnight,
+    /// `tomorrow_end_ms` = end of tomorrow) because timezone math belongs to the shell, and the
+    /// tomorrow calendar lines because calendar data flows in from the connector lane.
+    pub fn evening_wrap(
+        &self,
+        calendar_tomorrow: Vec<CalendarLine>,
+        day_start_ms: i64,
+        now_ms: i64,
+        tomorrow_end_ms: i64,
+    ) -> shogun_fusion::wrap::EveningWrap {
+        use shogun_fusion::wrap::{assemble_wrap, WrapOutcome};
+
+        let (commitments_done, loops_closed, actions) = self
+            .conn
+            .lock()
+            .ok()
+            .map(|c| {
+                (
+                    state::count_commitments_done_since(&c, day_start_ms).unwrap_or(0),
+                    state::count_open_loops_closed_since(&c, day_start_ms).unwrap_or(0),
+                    shogun_memory::action_feedback::counts_since(&c, day_start_ms).unwrap_or((0, 0)),
+                )
+            })
+            .unwrap_or((0, 0, (0, 0)));
+        let outcome = WrapOutcome {
+            commitments_done: u32::try_from(commitments_done).unwrap_or(0),
+            loops_closed: u32::try_from(loops_closed).unwrap_or(0),
+            actions_decided: u32::try_from(actions.0).unwrap_or(0),
+            actions_adopted: u32::try_from(actions.1).unwrap_or(0),
+        };
+
+        let to_due = |r: state::CommitmentRow| CommitmentDue {
+            overdue: r.status == "overdue" || r.due_at.is_some_and(|d| d < now_ms),
+            description: r.description,
+            due_at_ms: r.due_at,
+            confidence: r.confidence,
+            provenance_event_id: r.first_event_id.unwrap_or(0),
+        };
+        let to_loop = |r: state::OpenLoopRow| OpenLoopItem {
+            description: r.description,
+            staleness_days: u32::try_from(r.staleness_days).unwrap_or(0),
+            confidence: r.confidence,
+            provenance_event_id: r.first_event_id.unwrap_or(0),
+        };
+
+        let active_commitments: Vec<CommitmentDue> = self
+            .conn
+            .lock()
+            .ok()
+            .and_then(|c| state::list_commitments_active_since(&c, day_start_ms).ok())
+            .unwrap_or_default()
+            .into_iter()
+            .map(to_due)
+            .collect();
+        let active_loops: Vec<OpenLoopItem> = self
+            .conn
+            .lock()
+            .ok()
+            .and_then(|c| state::list_open_loops_active_since(&c, day_start_ms).ok())
+            .unwrap_or_default()
+            .into_iter()
+            .map(to_loop)
+            .collect();
+        let opened_today: Vec<OpenLoopItem> = self
+            .conn
+            .lock()
+            .ok()
+            .and_then(|c| state::list_open_loops_opened_since(&c, day_start_ms).ok())
+            .unwrap_or_default()
+            .into_iter()
+            .map(to_loop)
+            .collect();
+        // Tomorrow-due: unresolved commitments with a due time after now and inside tomorrow.
+        let tomorrow_commitments: Vec<CommitmentDue> = self
+            .conn
+            .lock()
+            .ok()
+            .and_then(|c| state::list_commitments(&c).ok())
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|r| {
+                r.status != "done"
+                    && r.status != "cancelled"
+                    && r.due_at.is_some_and(|d| d > now_ms && d <= tomorrow_end_ms)
+            })
+            .map(to_due)
+            .collect();
+
+        assemble_wrap(
+            outcome,
+            &active_commitments,
+            &active_loops,
+            calendar_tomorrow,
+            &tomorrow_commitments,
+            &opened_today,
+        )
+    }
+
     // -------------------------------------------------------------- Dream Cycle job ledger (FR-DC-04)
     // Persist each job's state so a killed cycle resumes by skipping the `done` jobs. The plan
     // vocabulary (JobKind/JobState) is shogun-core's; storage keeps strings, mapped here.
@@ -1950,6 +2050,99 @@ mod tests {
             display_id: Some(1),
             window_bounds: None,
         }
+    }
+
+    #[test]
+    fn evening_wrap_aggregates_the_day_locally() {
+        use shogun_memory::state::{CommitmentDirection, CommitmentStatus, OpenLoopKind};
+        // A day: 00:00 = 0ms, "now" = 20:00 (72_000_000ms), tomorrow ends at 48h.
+        let day_start = 0i64;
+        let now = 72_000_000i64;
+        let tomorrow_end = 172_800_000i64;
+        let db = Db::open_in_memory(clock(now)).unwrap();
+        let (e, _) = db.capture(&ev("evidence", "h1", 1)).unwrap();
+        let prov = [Provenance::new(e)];
+
+        // done today (outcome), still-open with today's activity, due-tomorrow, opened-today loop.
+        let done_id = db
+            .insert_commitment(
+                &NewCommitment {
+                    direction: CommitmentDirection::Mine,
+                    counterparty_id: None,
+                    description: "finished today",
+                    due_at: Some(10),
+                    status: CommitmentStatus::Open,
+                    project_id: None,
+                    confidence: 0.9,
+                    now: 100,
+                },
+                &prov,
+            )
+            .unwrap();
+        assert!(db.resolve_commitment(done_id));
+        db.insert_commitment(
+            &NewCommitment {
+                direction: CommitmentDirection::Mine,
+                counterparty_id: None,
+                description: "due tomorrow",
+                due_at: Some(now + 3_600_000),
+                status: CommitmentStatus::Open,
+                project_id: None,
+                confidence: 0.9,
+                now: 200, // updated today → also "still open"
+            },
+            &prov,
+        )
+        .unwrap();
+        db.insert_open_loop(
+            &NewOpenLoop {
+                kind: OpenLoopKind::ReplyNeeded,
+                description: "new loose end",
+                counterparty_id: None,
+                project_id: None,
+                opened_at: 500,
+                confidence: 0.9,
+                now: 500,
+            },
+            &prov,
+        )
+        .unwrap();
+        // one decided+adopted action today (FR-PAT-01 supply)
+        {
+            let conn = db.conn.lock().unwrap();
+            shogun_memory::action_feedback::record(
+                &conn,
+                &shogun_memory::action_feedback::NewFeedback {
+                    ts: 600,
+                    action_kind: "draft_reply",
+                    surface: shogun_memory::action_feedback::Surface::Notch,
+                    outcome: shogun_memory::action_feedback::Outcome::Accepted,
+                    context_app: None,
+                    rank: Some(0),
+                    latency_ms: None,
+                },
+            )
+            .unwrap();
+        }
+
+        let wrap = db.evening_wrap(
+            vec![CalendarLine { start_ms: tomorrow_end - 1000, title: "standup".into(), updated: false }],
+            day_start,
+            now,
+            tomorrow_end,
+        );
+
+        assert_eq!(wrap.outcome.commitments_done, 1);
+        assert_eq!(wrap.outcome.actions_decided, 1);
+        assert_eq!(wrap.outcome.actions_adopted, 1);
+        // the resolved commitment is outcome, not "still open"; the live one appears once.
+        assert!(wrap.still_open.iter().any(|i| i.text == "due tomorrow"));
+        assert!(wrap.still_open.iter().all(|i| i.text != "finished today"));
+        assert_eq!(wrap.tomorrow_commitments.len(), 1);
+        assert_eq!(wrap.tomorrow_commitments[0].text, "due tomorrow");
+        assert_eq!(wrap.tomorrow_calendar.len(), 1);
+        assert_eq!(wrap.loose_ends.len(), 1);
+        assert_eq!(wrap.loose_ends[0].text, "new loose end");
     }
 
     #[cfg(feature = "daemon-server")]
