@@ -32,6 +32,7 @@ pub mod maintenance;
 pub mod meeting_recaps;
 pub mod quantize;
 pub mod redact;
+pub mod retention;
 pub mod recompute;
 pub mod search;
 pub mod session;

@@ -200,7 +200,9 @@
 **マイルストーン**:
 - **M-VIS1 取得**: `crates/shogun-core/src/vis/` 新設（feature `vis`）。`objc2-screen-capture-kit` でSCScreenshotManagerキーフレーム取得。トリガは既存focus watcher＋AXテキスト差分（spikeと同じ）。pHash(dHash)重複破棄は純ロジックで分離（spikeのSwift実装 `spikes/vis-capture/Sources/visspike/main.swift` のdhash関数を移植）
 - **M-VIS2 抽出**: `objc2-vision` VNRecognizeTextRequest → 抽出テキストを `ingest_capture` 既存経路へ（`kind="ocr_text"` をevent_log kindに追加。additive）。NFR-SEC-07リダクション適用
-- **M-VIS3 保持**: V14マイグレーション `keyframes(id, ts, app_bundle_id, rel_path, bytes, phash, created_at)` ＋フレーム本体は `Application Support/.../keyframes/` にChaCha20-Poly1305暗号化（鍵はKeychain・音声保存WS9と鍵管理を共通化）。既定7日・`maintenance` に自動削除ジョブ、即時全削除コマンド、ストレージ別枠上限5GB（NFR-RES-03）
+- **M-VIS3 保持**: V14マイグレーション `keyframes(id, ts, app_bundle_id, rel_path, bytes, phash, created_at)` ＋フレーム本体は `Application Support/.../keyframes/` に暗号化して保存。
+  - **✅ 保持ポリシーは実装済み**: `shogun_memory::retention`（`Policy::keyframes()` = 7日/5GB、`sweep(items, now) -> Sweep{expired, over_budget}`）。期限切れ→予算超過の順、最古から退避、境界包含、時計巻き戻し耐性をテスト済み（13件）。**削除ルールを再実装しないこと** — 行を`retention::Item`に写して`sweep`を呼び、返ったidを消すだけ
+  - **鍵管理の先例**: `shogun_memory::DbKey`（SQLCipher用）と同型にする — 鍵はデスクトップ層がKeychainから読んで**注入**し、crate側はKeychainを知らない（Linuxテスト可能性の維持・不変条件7）。WS9の音声と鍵管理モジュールを共通化する
 - **M-VIS4 権限とガバナンス**: 画面収録TCC要求をオンボーディングへ（FR-VIS-07。拒否時はAXのみへ縮退・1時間ごと再検出）。除外リスト/一時停止/SecureTextField前面時はフレーム取得自体をスキップ（FR-VIS-04。**キャプチャ前段で**）。設定UI（ON/OFF・保持モード・期間・使用量）
 - **M-VIS5 計測**: CPU/メモリ/ストレージの別枠メトリクス（spike-harness系）。バッテリーをContext Healthへ
 
@@ -243,9 +245,9 @@
 **ゴール**: Recording中の音声をセッション単位のローカル暗号化ファイルに保存し、Recapから聞き直せる。30日自動削除。
 
 **実装ステップ**:
-1. V15マイグレーション `session_audio(session_id UNIQUE, rel_path, bytes, created_at, expires_at)` ＋ロールバックdoc
-2. 録音ライタ: 既存の取得バッファ（cpal/Core Audio tap）から分岐してChaCha20-Poly1305ストリーム暗号化で追記書き（鍵はKeychain。WS6と共通の鍵管理モジュールに）。**Recording状態の間のみ**（FR-MT-12）
-3. 保持: 既定30日・`maintenance`削除ジョブ・セッション単位即時削除・設定UI（期間変更・使用量・全削除）— §6.15 Meeting notes欄は要件反映済み
+1. V15マイグレーション `session_audio(session_id UNIQUE, rel_path, bytes, created_at)` ＋ロールバックdoc（`expires_at`は持たない — 保持期間は設定値であり、行に焼き付けると期間変更が既存行に効かなくなる。期限は`retention::Policy`が実行時に判定する）
+2. 録音ライタ: 既存の取得バッファ（cpal/Core Audio tap）から分岐して暗号化ストリームで追記書き。**Recording状態の間のみ**（FR-MT-12）。鍵は`DbKey`と同型に注入（WS6 M-VIS3参照）
+3. 保持: **✅ ポリシーは実装済み** — `retention::Policy::audio()`（30日/5GB）＋`sweep`。残りは`maintenance`から呼ぶ削除ジョブ、セッション単位即時削除、設定UI（期間変更・使用量・全削除）— §6.15 Meeting notes欄は要件反映済み
 4. 再生導線: Recap/ライブラリ（WS4 Phase B）から該当セグメントへのシーク再生（復号ストリーム→再生。transcript_segmentsのtsでリンク）
 5. 開示文言の切替（FR-MT-03改定文言 + `meetingDisclosure` のコメントに記載済みの手順どおり、**この変更と同一コミットで**）
 6. ASR接続: ファイルが残るようになったため、将来の再文字起こしAPI（`retranscribe(session_id)`）の受け口だけ用意（実装はモデル改善時）
@@ -266,7 +268,8 @@
 | 2026-07-31 | WS5コア: mic信号のstuck判定＋帰属型（テスト32件） | `d0cc24d` |
 | 2026-07-31 | WS2コア: ⌥ダブルタップ検出器（14件）／WS3コア: Db記録API・wireパース | `f61cd06` |
 | 2026-07-31 | WS1コア: `local_day_bounds`（日境界の純ロジック、DST/エポック前テスト） | `5c6cdd5` |
-| 2026-07-31 | WS4 Phase Aコア: V13 `session_notes_enhanced`（2層ノートの器） | 本コミット |
+| 2026-07-31 | WS4 Phase Aコア: V13 `session_notes_enhanced`（2層ノートの器） | `4314562` |
+| 2026-07-31 | WS6/WS9共通: `retention` 保持ポリシー（期限＋予算、13件） | 本コミット |
 
 **なぜコアだけ先に入っているか**: これらはLinuxセッションで**テストまで検証できる**部分だから。macOSネイティブ配線（NSEventモニタ・CoreAudioプロセスAPI・Tauriコマンド・UI）はビルドできない環境なので、意図的にMac側エージェントに残してある。逆に言えば、残作業は「アダプタを書いて既存の型に渡す」だけに縮んでいる — 判定ロジックを再発明しないこと。
 
