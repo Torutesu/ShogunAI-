@@ -95,3 +95,19 @@ export function shareUrl(origin: string, refCode: string): string {
 export function statusUrl(origin: string, statusToken: string): string {
   return `${origin.replace(/\/$/, '')}/status?code=${encodeURIComponent(statusToken)}`;
 }
+
+/**
+ * Build the /api/waitlist/signup response payload. A DUPLICATE signup must
+ * return the same generic shape as the honeypot path ({ refCode: null,
+ * statusUrl: null }) — echoing the existing row's PRIVATE statusToken would
+ * hand the account to anyone who knows the email address.
+ * See docs/fixes/2026-07-30-waitlist-security-fix.md.
+ */
+export function signupPayload(
+  row: { refCode: string | null; statusToken: string | null },
+  duplicate: boolean,
+  origin: string,
+): { refCode: string | null; statusUrl: string | null } {
+  if (duplicate || !row.refCode || !row.statusToken) return { refCode: null, statusUrl: null };
+  return { refCode: row.refCode, statusUrl: statusUrl(origin, row.statusToken) };
+}
