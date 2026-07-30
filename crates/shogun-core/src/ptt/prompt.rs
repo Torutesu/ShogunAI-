@@ -25,6 +25,9 @@ const MAX_FACTS: usize = 12;
 ///
 /// 見出しは中身があるときだけ出す。空の "On screen:" が並ぶプロンプトは、モデルに
 /// 「情報が無い」ではなく「情報を探せ」と読ませてしまう。
+///
+/// `spoken` はASR生出力なので trim する。`facts` は呼び出し側が整形済みで届くので
+/// そのまま使う — 非対称だが意図通り。
 pub fn build_prompt(spoken: &str, ctx: &Spoken<'_>) -> String {
     let mut out = String::with_capacity(spoken.len() + 512);
 
@@ -43,17 +46,21 @@ pub fn build_prompt(spoken: &str, ctx: &Spoken<'_>) -> String {
         (None, None) => {}
     }
 
-    let facts: Vec<&String> = ctx.facts.iter().take(MAX_FACTS).collect();
-    if !facts.is_empty() {
+    if !ctx.facts.is_empty() {
         out.push_str("Known about their work:\n");
-        for f in facts {
+        for f in ctx.facts.iter().take(MAX_FACTS) {
             out.push_str("- ");
             out.push_str(f);
             out.push('\n');
         }
     }
 
-    out.push_str("\nThey said: ");
+    // 直前にセクションを書いていたときだけ空行で区切る。何も無いときに区切ると、
+    // プリアンブルとの間に空行が2つ空く（no-context が最も多いケースなので目につく）。
+    if ctx.app.is_some() || ctx.window_title.is_some() || !ctx.facts.is_empty() {
+        out.push('\n');
+    }
+    out.push_str("They said: ");
     out.push_str(spoken.trim());
     out.push('\n');
     out
@@ -70,14 +77,19 @@ mod tests {
     }
 
     /// コンテキストが何も無くても成立する。キャッシュが冷えているのを待たない、という
-    /// 設計判断がここに出る。
+    /// 設計判断がここに出る。空見出しを出さず、プリアンブルと発話の間に余分な空行も出ない。
     #[test]
     fn no_context_still_produces_a_usable_prompt() {
         let out = build_prompt("what time is the standup", &Spoken::default());
 
-        assert!(out.contains("what time is the standup"));
-        assert!(!out.contains("On screen"), "空のコンテキスト見出しを出さない");
-        assert!(!out.contains("Known"), "空の事実見出しを出さない");
+        assert_eq!(
+            out,
+            "You are SHOGUN, answering a question the user just spoke aloud while working. \
+             Keep the answer brief and plain — it is shown in a small panel next to their work, \
+             and may be read aloud. No preamble, no restating the question.\n\n\
+             They said: what time is the standup\n",
+            "no-contextの出力が期待と異なる（空見出し or 余分な空行の可能性）"
+        );
     }
 
     #[test]
@@ -99,6 +111,7 @@ mod tests {
     }
 
     /// 事実が多すぎるとプロンプトが膨らんで初トークンが遅れる。上限で切る。
+    /// MAX_FACTS の境界を直接検証することで、定数の変更を必ず検知できるようにする。
     #[test]
     fn the_fact_list_is_bounded() {
         let facts: Vec<String> = (0..50).map(|i| format!("fact number {i}")).collect();
@@ -106,7 +119,9 @@ mod tests {
         let out = build_prompt("go", &ctx);
 
         assert!(out.contains("fact number 0"));
-        assert!(!out.contains("fact number 20"), "上限を超えた事実が入っている");
+        assert!(out.contains("fact number 11"), "12件目が切れている");
+        assert!(!out.contains("fact number 12"), "13件目が入っている");
+        assert_eq!(out.matches("\n- ").count(), MAX_FACTS, "箇条書きの数が上限と一致しない");
     }
 
     /// 応答は読み上げられる可能性があり、パネルも小さい。短く答えるよう明示する。
