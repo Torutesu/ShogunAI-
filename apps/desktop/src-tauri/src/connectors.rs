@@ -17,6 +17,7 @@ pub mod mac {
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
+    use tauri::Manager;
     use shogun_core::composio_read::ComposioReadRpc;
     use shogun_core::composio_send::HttpComposioApi;
     use shogun_core::daemon::Db;
@@ -116,6 +117,13 @@ pub mod mac {
                                 "",
                                 true,
                             ));
+                            // context_updated（#61）: read-sync 完了を匿名計測。
+                            if let Some(analytics) = app.try_state::<crate::analytics::Analytics>() {
+                                analytics.capture(
+                                    "context_updated",
+                                    crate::analytics::context_updated_props(svc.source_str(), rep.inserted as u64),
+                                );
+                            }
                         }
                         Err(e) => {
                             eprintln!("[connectors] {} sync failed: {e:?}", svc.source_str());

@@ -17,15 +17,29 @@ function allowedOrigins(): string[] {
  * Accept the request if it carries a valid server webhook secret, OR its
  * Origin is on the allowlist. Browser POSTs always send Origin; server
  * callers use the shared secret instead.
+ *
+ * FAIL CLOSED: a missing Origin header is denied, and an empty/unset
+ * allowlist falls back to SAME-ORIGIN only (Origin host === request host) —
+ * never to allow-all. `next dev` posts same-origin from localhost, so local
+ * dev works with no env; production must set WAITLIST_ALLOWED_ORIGINS.
  */
 export function isAuthorizedOrigin(req: Request): boolean {
   const secret = process.env.WAITLIST_WEBHOOK_SECRET;
   if (secret && req.headers.get('x-webhook-secret') === secret) return true;
 
   const origin = req.headers.get('origin');
+  if (!origin) return false; // no Origin and no secret → deny
+
   const allow = allowedOrigins();
-  if (allow.length === 0) return true; // not configured → don't hard-block (dev)
-  return !!origin && allow.includes(origin);
+  if (allow.length > 0) return allow.includes(origin);
+
+  // Not configured → same-origin only. Host-level compare (not scheme) so a
+  // TLS-terminating proxy doesn't break it; explicit allowlist still wins.
+  try {
+    return new URL(origin).host === new URL(req.url).host;
+  } catch {
+    return false;
+  }
 }
 
 /**

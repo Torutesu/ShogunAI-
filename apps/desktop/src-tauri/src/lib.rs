@@ -28,6 +28,7 @@ mod integrate;
 pub mod meeting;
 mod meeting_recap;
 mod mic;
+mod analytics;
 mod notch_actions;
 mod notch_exec;
 mod onboarding;
@@ -35,10 +36,6 @@ mod onboarding;
 /// 素の修飾キーの長押し検知（push-to-talk, Issue #44）。
 #[cfg(target_os = "macos")]
 mod hold_monitor;
-
-/// push-to-talk のセッション計測（Issue #44）。
-#[cfg(target_os = "macos")]
-mod analytics;
 
 /// push-to-talk の一発ASRレーン（Issue #44）。
 #[cfg(target_os = "macos")]
@@ -213,6 +210,8 @@ pub fn run() {
         ptt::ptt_open_privacy_settings,
         ptt::get_ptt_settings,
         ptt::set_ptt_settings,
+        analytics::analytics_get_opt_out,
+        analytics::analytics_set_opt_out,
     ]);
 
     // NOTE: the visible surface is a NATIVE NSPanel hosting the webview's content view
@@ -489,6 +488,18 @@ fn setup_macos(app: &tauri::App) {
         }
         Err(e) => eprintln!("[spike] memory DB unavailable — capture source not started: {e}"),
     }
+
+    // --- 匿名プロダクト分析（PostHog, #61）---
+    // PTT 配線より前に manage する。長押し監視が発火すると capture_ptt_* が try_state で
+    // このハンドルを取りに来るので、先に置いておく（無くても no-op で安全ではあるが取れる方がよい）。
+    let analytics_handle = app.handle();
+    let analytics = crate::analytics::init(analytics_handle);
+    {
+        let mut p = shogun_core::analytics::Props::new();
+        p.insert("cold_start".into(), serde_json::Value::Bool(true));
+        analytics.capture("app_opened", p);
+    }
+    app.manage(analytics);
 
     // PTTパネルは起動時に作る。押した瞬間にAppKitのウィンドウを作りに行くと、
     // 「押してからパネルが出るまで100ms」というSLOを窓の生成コストで落とす。DBとは無関係
