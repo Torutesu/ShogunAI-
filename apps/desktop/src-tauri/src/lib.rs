@@ -18,6 +18,7 @@ mod capture_source;
 mod connectors;
 pub mod display;
 mod dream;
+mod entitlement;
 mod exclusions;
 mod fullui;
 mod metrics;
@@ -238,6 +239,7 @@ pub fn run() {
         // (onboarding.html), opened by setup_macos until the flow has been completed once.
         // State is Rust-owned (invariant 1); the AX check split (silent poll / prompting button)
         // and the accessibility-changed watcher are the #46 assets, kept.
+        entitlement::mac::entitlement_status,
         onboarding::mac::accessibility_status,
         onboarding::mac::onboarding_state,
         onboarding::mac::set_onboarding_state,

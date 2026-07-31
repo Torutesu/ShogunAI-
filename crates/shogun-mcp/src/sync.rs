@@ -173,7 +173,7 @@ mod tests {
         ConnState::NeedsReauth { reason: ReauthReason::TokenExpired, last_sync_ms: 500 }
     }
     fn ctx(highest: Wave, conn: ConnState) -> OpContext {
-        OpContext { highest_released: highest, conn, draft_stop: false }
+        OpContext { highest_released: highest, conn, draft_stop: false, plan: shogun_agents::entitlement::Entitlements::trial_not_started() }
     }
     fn item(id: &str, title: &str, body: &str, ts: i64) -> FetchedItem {
         FetchedItem { external_id: id.into(), title: title.into(), body: body.into(), ts_ms: ts }

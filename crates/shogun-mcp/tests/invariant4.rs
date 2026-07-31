@@ -7,6 +7,7 @@
 //! the preset tables, its own scope table, and the Composio gate together.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use shogun_agents::entitlement::{entitlements, Plan, TRIAL_DURATION_MS};
 use shogun_agents::permission::{Action, Level, LocalAction, SendAction};
 use shogun_agents::presets::{OpKind, PRESETS};
 use shogun_mcp::composio::{grant_consent, ComposioSender, Disclosures, GmailSend};
@@ -85,13 +86,14 @@ fn composio_send_is_l3_and_gated_by_draft_stop() {
         grant_consent(Disclosures { via_third_party: true, data_types: true, revocable: true }).unwrap();
     let mut sender = ComposioSender::new(consent);
 
-    // default draft-stop ON → no send capability exists.
+    let pro = entitlements(Plan::Pro, 0);
+    // default draft-stop ON → no send capability exists, even for Pro.
     assert!(sender.draft_stop());
-    assert!(sender.send_capability().is_none());
+    assert!(sender.send_capability(&pro).is_none());
 
-    // turning it off yields a capability; the prepared action is an L3 send.
+    // turning it off yields a capability (on an entitled plan); the prepared action is an L3 send.
     sender.set_draft_stop(false);
-    let cap = sender.send_capability().expect("capability once draft-stop is off");
+    let cap = sender.send_capability(&pro).expect("capability once draft-stop is off");
     let (action, preview) = shogun_mcp::composio::prepare_send(
         cap,
         GmailSend { to: "z@y.com".into(), subject: "s".into(), body: "b".into() },
@@ -99,4 +101,105 @@ fn composio_send_is_l3_and_gated_by_draft_stop() {
     assert!(matches!(action, SendAction::SendEmail { .. }));
     assert_eq!(Action::Send(action).required_level(), Level::L3);
     assert_eq!(preview.route, shogun_agents::approval::Route::ViaComposio);
+}
+
+/// Issue #97 regression: **no send path bypasses BOTH the entitlement gate and the L3/consent
+/// gates.** Every surface that could emit an external send is checked with a non-entitled plan
+/// (Standard, expired trial) — each one must refuse before any send exists — and then with an
+/// entitled plan, where the L3/consent machinery must still be the only way through.
+#[test]
+fn no_send_path_bypasses_entitlement_or_l3_gates() {
+    let locked_plans = [
+        entitlements(Plan::Standard, 0),
+        entitlements(Plan::Trial { started_at_ms: Some(0) }, TRIAL_DURATION_MS),
+    ];
+    let pro = entitlements(Plan::Pro, 0);
+
+    for locked in &locked_plans {
+        // 1. Execution engine: a send (or anything else) submitted on a locked plan is rejected —
+        //    it never reaches the effector, let alone the network.
+        use shogun_agents::engine::{Disposition, ExecutionEngine, RejectReason};
+        struct NoEffect;
+        impl shogun_agents::engine::LocalEffector for NoEffect {
+            fn run(&self, _a: &Action) -> Result<(), String> {
+                panic!("effector must never run on a locked plan");
+            }
+        }
+        struct NoObs;
+        impl shogun_agents::engine::ExecutionObserver for NoObs {
+            fn on_executed(&self, _i: shogun_agents::engine::ActionId, _a: &Action) {}
+            fn on_rejected(&self, _i: shogun_agents::engine::ActionId, _a: &Action, _r: &RejectReason) {}
+            fn on_cancelled(&self, _i: shogun_agents::engine::ActionId, _a: &Action) {}
+            fn on_expired(&self, _i: shogun_agents::engine::ActionId, _a: &Action) {}
+            fn on_failed(&self, _i: shogun_agents::engine::ActionId, _a: &Action, _e: &str) {}
+        }
+        let mut engine = ExecutionEngine::new(NoEffect, NoObs, 5000);
+        let sub = engine.submit(Action::Send(SendAction::SendEmail { to: "a@b.com".into() }), 0, locked);
+        assert_eq!(sub.disposition, Disposition::Rejected(RejectReason::PlanNotEntitled));
+
+        // 2. Memory API dispatch: a send on a locked plan is denied BEFORE the approval queue.
+        use shogun_agents::approval::{ApprovalQueue, Preview, Route};
+        use shogun_mcp::dispatch::{ActionOutcome, Denied, MemoryApi};
+        use shogun_mcp::memory_api::TokenRegistry;
+        let mut tokens = TokenRegistry::new();
+        tokens.issue("t");
+        let mut approvals = ApprovalQueue::new();
+        let send = SendAction::SendEmail { to: "a@b.com".into() };
+        let preview = Preview::for_send(&send, "body", Route::ViaComposio);
+        {
+            let mut api = MemoryApi::new(&tokens, &mut approvals, *locked);
+            assert_eq!(
+                api.submit_send(Some("t"), send, preview, 0),
+                ActionOutcome::Denied(Denied::PlanNotEntitled)
+            );
+        }
+        assert_eq!(approvals.pending_len(), 0, "nothing may be enqueued on a locked plan");
+
+        // 3. Service gate: every external-send op of every service is plan-denied.
+        use shogun_mcp::connection::ConnState;
+        use shogun_mcp::service_gate::{authorize_op, DenyReason, OpContext, OpDecision};
+        use shogun_mcp::scope::Wave;
+        let ctx = OpContext {
+            highest_released: Wave::Three,
+            conn: ConnState::Connected { last_sync_ms: 0 },
+            draft_stop: false,
+            plan: *locked,
+        };
+        for &service in ALL_SERVICES {
+            for op in shogun_mcp::scope::scope(service).ops {
+                if op.class.is_external_send() {
+                    match authorize_op(service, op.name, &ctx) {
+                        OpDecision::Denied(DenyReason::PlanNotEntitled)
+                        | OpDecision::Denied(DenyReason::NotImplemented) => {}
+                        other => panic!(
+                            "{service:?}::{} allowed as {other:?} on a locked plan",
+                            op.name
+                        ),
+                    }
+                }
+            }
+        }
+
+        // 4. Composio: even with full consent AND draft-stop OFF, a locked plan yields no
+        //    capability — prepare_send is unreachable.
+        let consent = grant_consent(Disclosures { via_third_party: true, data_types: true, revocable: true })
+            .unwrap();
+        let mut sender = ComposioSender::new(consent);
+        sender.set_draft_stop(false);
+        assert!(sender.send_capability(locked).is_none());
+    }
+
+    // And the converse: an entitled plan does NOT dissolve the older gates — consent and
+    // draft-stop still decide, and the prepared send is still L3.
+    let consent = grant_consent(Disclosures { via_third_party: true, data_types: true, revocable: true })
+        .unwrap();
+    let mut sender = ComposioSender::new(consent);
+    assert!(sender.send_capability(&pro).is_none(), "draft-stop ON still blocks Pro");
+    sender.set_draft_stop(false);
+    let cap = sender.send_capability(&pro).expect("Pro + consent + draft-stop OFF");
+    let (action, _preview) = shogun_mcp::composio::prepare_send(
+        cap,
+        GmailSend { to: "z@y.com".into(), subject: "s".into(), body: "b".into() },
+    );
+    assert_eq!(Action::Send(action).required_level(), Level::L3, "entitled send is still L3");
 }

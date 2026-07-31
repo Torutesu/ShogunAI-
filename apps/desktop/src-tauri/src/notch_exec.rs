@@ -125,6 +125,7 @@ pub mod mac {
         db: tauri::State<'_, Db>,
         engine: tauri::State<'_, NotchEngine>,
         analytics: tauri::State<'_, crate::analytics::Analytics>,
+        app: tauri::AppHandle,
     ) -> String {
         let cache = db.context_actions(current_screen(), None);
         let Some(cand) = cache.actions.get(index) else {
@@ -134,7 +135,10 @@ pub mod mac {
             return "unavailable".to_string();
         };
         let level = format!("{:?}", cand.level);
-        let submitted = eng.submit(cand.action.clone(), now_ms());
+        // Plan gate (issue #97): resolved core-side per click; the engine rejects when the plan
+        // has no agent execution (Standard / expired trial).
+        let ent = crate::entitlement::mac::current(&app);
+        let submitted = eng.submit(cand.action.clone(), now_ms(), &ent);
 
         // shogun_query_executed（#61）: submit した時のみ発火。
         let outcome = match &submitted.disposition {
@@ -172,7 +176,8 @@ pub mod mac {
         match (cache.actions.first(), app.try_state::<NotchEngine>()) {
             (Some(first), Some(engine)) => {
                 if let Ok(mut eng) = engine.lock() {
-                    let sub = eng.submit(first.action.clone(), now_ms());
+                    let ent = crate::entitlement::mac::current(app);
+                    let sub = eng.submit(first.action.clone(), now_ms(), &ent);
                     eprintln!("[selftest] submitted top action → {:?}", sub.disposition);
                 }
             }

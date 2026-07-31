@@ -16,6 +16,7 @@
 //! module is the pure gate in front of it, so the policy is exhaustively Linux-testable.
 
 use shogun_agents::approval::{ApprovalId, ApprovalQueue, Origin, Preview};
+use shogun_agents::entitlement::Entitlements;
 use shogun_agents::permission::{Action, Level, LocalAction, SendAction};
 
 use crate::memory_api::{read_inclusion, tool_level, ApiLevel, AuthResult, ReadInclusion, TokenRegistry, Tool};
@@ -29,6 +30,9 @@ pub enum Denied {
     InvalidToken,
     /// The tool passed to a handler is not of that handler's kind (e.g. a write tool to `read`).
     WrongToolKind,
+    /// The current plan does not include the Memory API (issue #97): Standard, or an expired
+    /// trial. Pro / Trial only — enforced in the Rust core, on every face, reads included.
+    PlanNotEntitled,
 }
 
 /// The result of a read call.
@@ -64,20 +68,28 @@ pub enum ActionOutcome {
 pub struct MemoryApi<'a> {
     tokens: &'a TokenRegistry,
     approvals: &'a mut ApprovalQueue,
+    /// The plan entitlements in force for this call (issue #97), resolved by the caller.
+    ent: Entitlements,
 }
 
 impl<'a> MemoryApi<'a> {
-    pub fn new(tokens: &'a TokenRegistry, approvals: &'a mut ApprovalQueue) -> Self {
-        Self { tokens, approvals }
+    pub fn new(tokens: &'a TokenRegistry, approvals: &'a mut ApprovalQueue, ent: Entitlements) -> Self {
+        Self { tokens, approvals, ent }
     }
 
-    /// Auth gate shared by every handler. `Ok(())` only for a valid token.
+    /// Auth + plan gate shared by every handler. `Ok(())` only for a valid token on a plan that
+    /// includes the Memory API (Pro / Trial). The token is checked first (who are you), the plan
+    /// second (what may you do) — reads included in both (FR-API-03 / issue #97).
     fn authed(&self, token: Option<&str>) -> Result<(), Denied> {
         match self.tokens.authenticate(token) {
-            AuthResult::Granted => Ok(()),
-            AuthResult::DeniedNoToken => Err(Denied::NoToken),
-            AuthResult::DeniedInvalidToken => Err(Denied::InvalidToken),
+            AuthResult::Granted => {}
+            AuthResult::DeniedNoToken => return Err(Denied::NoToken),
+            AuthResult::DeniedInvalidToken => return Err(Denied::InvalidToken),
         }
+        if !self.ent.memory_api {
+            return Err(Denied::PlanNotEntitled);
+        }
+        Ok(())
     }
 
     /// Handle a read tool. `item_confidences` are the candidate results' confidences; the gate
@@ -154,6 +166,7 @@ impl<'a> MemoryApi<'a> {
 mod tests {
     use super::*;
     use shogun_agents::approval::{ConfirmIntent, Decision, Route};
+    use shogun_agents::entitlement::{entitlements, Plan, TRIAL_DURATION_MS};
 
     fn reg() -> TokenRegistry {
         let mut r = TokenRegistry::new();
@@ -161,11 +174,16 @@ mod tests {
         r
     }
 
+    /// An entitled plan (active trial) for the auth/level tests.
+    fn ent() -> Entitlements {
+        Entitlements::trial_not_started()
+    }
+
     #[test]
     fn no_token_denies_every_handler_including_reads() {
         let tokens = reg();
         let mut approvals = ApprovalQueue::new();
-        let api = MemoryApi::new(&tokens, &mut approvals);
+        let api = MemoryApi::new(&tokens, &mut approvals, ent());
         assert_eq!(
             api.handle_read(None, Tool::MemorySearch, &[0.9], false),
             ReadOutcome::Denied(Denied::NoToken)
@@ -181,7 +199,7 @@ mod tests {
     fn invalid_token_is_distinguished() {
         let tokens = reg();
         let mut approvals = ApprovalQueue::new();
-        let api = MemoryApi::new(&tokens, &mut approvals);
+        let api = MemoryApi::new(&tokens, &mut approvals, ent());
         assert_eq!(
             api.handle_read(Some("nope"), Tool::MemorySearch, &[0.9], false),
             ReadOutcome::Denied(Denied::InvalidToken)
@@ -192,7 +210,7 @@ mod tests {
     fn read_applies_confidence_rule() {
         let tokens = reg();
         let mut approvals = ApprovalQueue::new();
-        let api = MemoryApi::new(&tokens, &mut approvals);
+        let api = MemoryApi::new(&tokens, &mut approvals, ent());
         // 0.9 High (included, not possibly), 0.6 Medium (included, possibly), 0.3 Low (excluded).
         let out = api.handle_read(Some("client-1"), Tool::StatePeopleList, &[0.9, 0.6, 0.3], false);
         assert_eq!(out, ReadOutcome::Items { included: 2, possibly: 1 });
@@ -205,7 +223,7 @@ mod tests {
     fn read_handler_refuses_a_write_tool() {
         let tokens = reg();
         let mut approvals = ApprovalQueue::new();
-        let api = MemoryApi::new(&tokens, &mut approvals);
+        let api = MemoryApi::new(&tokens, &mut approvals, ent());
         assert_eq!(
             api.handle_read(Some("client-1"), Tool::MemoryAppendNote, &[], false),
             ReadOutcome::Denied(Denied::WrongToolKind)
@@ -216,7 +234,7 @@ mod tests {
     fn writes_carry_their_levels() {
         let tokens = reg();
         let mut approvals = ApprovalQueue::new();
-        let api = MemoryApi::new(&tokens, &mut approvals);
+        let api = MemoryApi::new(&tokens, &mut approvals, ent());
         assert_eq!(
             api.handle_write(Some("client-1"), Tool::MemoryAppendNote),
             WriteOutcome::Accepted { level: Level::L1 }
@@ -236,7 +254,7 @@ mod tests {
     fn local_action_is_authorized_at_its_level() {
         let tokens = reg();
         let mut approvals = ApprovalQueue::new();
-        let api = MemoryApi::new(&tokens, &mut approvals);
+        let api = MemoryApi::new(&tokens, &mut approvals, ent());
         assert_eq!(
             api.execute_local(Some("client-1"), LocalAction::LocalSearch { query: "q".into() }),
             ActionOutcome::Authorized { level: Level::L1 }
@@ -255,7 +273,7 @@ mod tests {
         let preview = Preview::for_send(&send, "body", Route::DirectMcp);
 
         let id = {
-            let mut api = MemoryApi::new(&tokens, &mut approvals);
+            let mut api = MemoryApi::new(&tokens, &mut approvals, ent());
             match api.submit_send(Some("client-1"), send.clone(), preview, 0) {
                 ActionOutcome::PendingApproval(id) => id,
                 other => panic!("expected pending, got {other:?}"),
@@ -272,12 +290,69 @@ mod tests {
     }
 
     #[test]
+    fn standard_and_expired_plans_are_denied_every_handler_even_with_a_valid_token() {
+        // Issue #97: the Memory API is Pro/Trial only — Standard and an expired trial are denied
+        // on all three handler kinds, reads included, with a valid token.
+        let tokens = reg();
+        let expired = entitlements(Plan::Trial { started_at_ms: Some(0) }, TRIAL_DURATION_MS);
+        for plan_ent in [entitlements(Plan::Standard, 0), expired] {
+            let mut approvals = ApprovalQueue::new();
+            {
+                let mut api = MemoryApi::new(&tokens, &mut approvals, plan_ent);
+                assert_eq!(
+                    api.handle_read(Some("client-1"), Tool::MemorySearch, &[0.9], false),
+                    ReadOutcome::Denied(Denied::PlanNotEntitled)
+                );
+                assert_eq!(
+                    api.handle_write(Some("client-1"), Tool::MemoryAppendNote),
+                    WriteOutcome::Denied(Denied::PlanNotEntitled)
+                );
+                assert_eq!(
+                    api.execute_local(Some("client-1"), LocalAction::LocalSearch { query: "x".into() }),
+                    ActionOutcome::Denied(Denied::PlanNotEntitled)
+                );
+                // a send is denied BEFORE the approval queue — nothing is enqueued
+                let send = SendAction::SendEmail { to: "a@b.com".into() };
+                let preview = Preview::for_send(&send, "body", Route::ViaComposio);
+                assert_eq!(
+                    api.submit_send(Some("client-1"), send, preview, 0),
+                    ActionOutcome::Denied(Denied::PlanNotEntitled)
+                );
+            }
+            assert_eq!(approvals.pending_len(), 0);
+        }
+    }
+
+    #[test]
+    fn missing_token_reports_no_token_not_plan_even_when_plan_is_locked() {
+        // Auth is checked before the plan: an unauthenticated caller learns nothing about the plan.
+        let tokens = reg();
+        let mut approvals = ApprovalQueue::new();
+        let api = MemoryApi::new(&tokens, &mut approvals, entitlements(Plan::Standard, 0));
+        assert_eq!(
+            api.handle_read(None, Tool::MemorySearch, &[0.9], false),
+            ReadOutcome::Denied(Denied::NoToken)
+        );
+    }
+
+    #[test]
+    fn pro_plan_is_granted_like_trial() {
+        let tokens = reg();
+        let mut approvals = ApprovalQueue::new();
+        let api = MemoryApi::new(&tokens, &mut approvals, entitlements(Plan::Pro, 0));
+        assert!(matches!(
+            api.handle_read(Some("client-1"), Tool::MemorySearch, &[0.9], false),
+            ReadOutcome::Items { .. }
+        ));
+    }
+
+    #[test]
     fn api_l3_send_requires_auth_before_enqueuing() {
         let tokens = reg();
         let mut approvals = ApprovalQueue::new();
         let send = SendAction::SendEmail { to: "a@b.com".into() };
         let preview = Preview::for_send(&send, "body", Route::DirectMcp);
-        let mut api = MemoryApi::new(&tokens, &mut approvals);
+        let mut api = MemoryApi::new(&tokens, &mut approvals, ent());
         assert_eq!(
             api.submit_send(None, send, preview, 0),
             ActionOutcome::Denied(Denied::NoToken)

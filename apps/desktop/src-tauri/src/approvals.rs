@@ -72,17 +72,22 @@ pub mod mac {
         serde_json::from_str::<ComposioPolicy>(&text).unwrap_or_default()
     }
 
-    /// Decision oracle: is a live Composio send allowed given this policy?
+    /// Decision oracle: is a live Composio send allowed given this policy and the current plan?
     ///
     /// Passes through the full type-safe gate from `shogun_mcp::composio`:
     ///   1. `consent_acknowledged` must be true — only then is `grant_consent` called.
     ///   2. `grant_consent(all-ack'd)` must succeed → produces a `ComposioConsent`.
     ///   3. `ComposioSender::new(consent)` starts with `draft_stop = true`.
     ///   4. `set_draft_stop(policy.draft_stop)` — the persisted setting is applied.
-    ///   5. `send_capability()` returns `Some` only when draft-stop is OFF.
+    ///   5. `send_capability(&ent)` returns `Some` only when draft-stop is OFF **and** the plan
+    ///      holds the Composio send unlock (issue #97: Pro / active trial). The entitlement gate
+    ///      composes with — never replaces — the consent and draft-stop gates.
     ///
     /// Pure: no I/O. Tested directly in the unit tests below.
-    pub(crate) fn composio_send_allowed(policy: ComposioPolicy) -> bool {
+    pub(crate) fn composio_send_allowed(
+        policy: ComposioPolicy,
+        ent: &shogun_agents::entitlement::Entitlements,
+    ) -> bool {
         if !policy.consent_acknowledged {
             return false;
         }
@@ -97,7 +102,7 @@ pub mod mac {
         };
         let mut sender = shogun_mcp::composio::ComposioSender::new(consent);
         sender.set_draft_stop(policy.draft_stop);
-        sender.send_capability().is_some()
+        sender.send_capability(ent).is_some()
     }
 
     /// The shared L3 approval queue (the same one an agent enqueues into and the UI drains).
@@ -229,6 +234,10 @@ pub mod mac {
     /// Confirm a pending send via the dedicated button (FR-AG-03) and execute it. Enter-key intent
     /// must be sent as a separate flag by the UI; this command is the button path.
     ///
+    /// Plan gate (issue #97): executing any L3 send requires `agent_execution` (Pro / active
+    /// trial) — checked first, core-side, before the queue is touched. Returns `plan_required`
+    /// and leaves the item pending when the plan does not cover it.
+    ///
     /// For Composio (email) sends the gate is consulted BEFORE the send is attempted:
     ///   - If the persisted `ComposioPolicy` has `consent_acknowledged = false` OR `draft_stop =
     ///     true`, the send is blocked and a Gmail draft is saved instead (FR-C2-02 / FR-C2-03).
@@ -244,6 +253,19 @@ pub mod mac {
         app: tauri::AppHandle,
     ) -> Result<String, String> {
         let now = db.now_ms().max(0) as u64;
+        // Plan gate FIRST (issue #97), before the confirm dequeues anything: executing any L3 send
+        // is agent execution — Pro / active trial only. Checked core-side on every confirm so a
+        // trial expiring while a send sits in the queue still blocks it. The item stays pending
+        // (it can be confirmed after an upgrade, until the 10-minute window expires it).
+        let ent = crate::entitlement::mac::current(&app);
+        if !ent.agent_execution {
+            return Ok("plan_required".into());
+        }
+        // Keep the runtime's WP-F double gate honest too: it re-checks authorize_op (which now
+        // includes the plan) before any first-layer write executes.
+        if let Ok(mut rt) = connectors.0.lock() {
+            rt.set_plan(ent);
+        }
         // Confirm + dequeue under the queue lock, then drop it before executing (execution locks the
         // connector runtime, a different lock — keep the two lock scopes disjoint).
         let confirmed = {
@@ -262,7 +284,7 @@ pub mod mac {
         use shogun_integrations::send_bridge::{route_send, SendRoute};
         if matches!(route_send(&confirmed.action), SendRoute::Composio) {
             let policy = load_composio_policy(&app);
-            if !composio_send_allowed(policy) {
+            if !composio_send_allowed(policy, &ent) {
                 // Gate is closed: save a draft instead of sending. Body/recipient are NOT logged
                 // (invariant 7). The draft_fallback is the authoritative path for this so we reuse
                 // it directly.
@@ -514,34 +536,52 @@ pub mod mac {
     mod tests {
         use super::*;
 
+        /// A plan holding the Composio send unlock (Pro), so these tests exercise the
+        /// consent/draft-stop gates in isolation.
+        fn pro() -> shogun_agents::entitlement::Entitlements {
+            shogun_agents::entitlement::entitlements(shogun_agents::entitlement::Plan::Pro, 0)
+        }
+
+        /// Issue #97: a plan without the send unlock blocks the send even with consent given and
+        /// draft-stop OFF — the entitlement gate composes with the older gates.
+        #[test]
+        fn plan_without_unlock_blocks_send_despite_open_policy() {
+            use shogun_agents::entitlement::{entitlements, Plan, TRIAL_DURATION_MS};
+            let policy = ComposioPolicy { consent_acknowledged: true, draft_stop: false, user_id: String::new() };
+            let standard = entitlements(Plan::Standard, 0);
+            let expired = entitlements(Plan::Trial { started_at_ms: Some(0) }, TRIAL_DURATION_MS);
+            assert!(!composio_send_allowed(policy.clone(), &standard));
+            assert!(!composio_send_allowed(policy, &expired));
+        }
+
         /// Default policy: draft_stop = true, consent_acknowledged = false → blocked.
         #[test]
         fn default_policy_blocks_send() {
             let policy = ComposioPolicy::default();
             assert!(policy.draft_stop, "draft_stop must default ON");
             assert!(!policy.consent_acknowledged, "consent must default NOT acknowledged");
-            assert!(!composio_send_allowed(policy), "default policy must block the send");
+            assert!(!composio_send_allowed(policy, &pro()), "default policy must block the send");
         }
 
         /// consent = true, draft_stop = true → still blocked (draft-stop gate).
         #[test]
         fn consent_true_draftstop_true_blocks_send() {
             let policy = ComposioPolicy { consent_acknowledged: true, draft_stop: true, user_id: String::new() };
-            assert!(!composio_send_allowed(policy), "draft-stop ON must block even with consent");
+            assert!(!composio_send_allowed(policy, &pro()), "draft-stop ON must block even with consent");
         }
 
         /// consent = false, draft_stop = false → blocked (consent gate).
         #[test]
         fn consent_false_draftstop_false_blocks_send() {
             let policy = ComposioPolicy { consent_acknowledged: false, draft_stop: false, user_id: String::new() };
-            assert!(!composio_send_allowed(policy), "no consent must block even when draft-stop is OFF");
+            assert!(!composio_send_allowed(policy, &pro()), "no consent must block even when draft-stop is OFF");
         }
 
         /// consent = true, draft_stop = false → allowed (both gates open).
         #[test]
         fn consent_true_draftstop_false_allows_send() {
             let policy = ComposioPolicy { consent_acknowledged: true, draft_stop: false, user_id: String::new() };
-            assert!(composio_send_allowed(policy), "consent + draft-stop OFF must allow the send");
+            assert!(composio_send_allowed(policy, &pro()), "consent + draft-stop OFF must allow the send");
         }
 
         // ---- policy_is_valid: all 4 combinations ---------------------------------------------

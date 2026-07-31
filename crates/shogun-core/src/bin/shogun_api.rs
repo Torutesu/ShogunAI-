@@ -69,7 +69,16 @@ async fn main() -> std::io::Result<()> {
     }
 
     let approvals = Arc::new(Mutex::new(ApprovalQueue::new()));
-    let state = AppState::new(Arc::new(tokens), backend, approvals, clock).with_metrics(metrics_source());
+    // Plan gate (issue #97): the trial stamp comes from the desktop app's onboarding.json
+    // (SHOGUN_ONBOARDING_JSON overrides the path); billing is the pre-Stripe stub. Re-resolved on
+    // every request so a trial expiring while the server runs locks the next call.
+    let plan_source = shogun_mcp::plan_source::FilePlanSource::from_env();
+    let plan_clock = clock.clone();
+    let state = AppState::new(Arc::new(tokens), backend, approvals, clock)
+        .with_metrics(metrics_source())
+        .with_entitlements(Arc::new(move || {
+            plan_source.resolve(u64::try_from((plan_clock)()).unwrap_or(0))
+        }));
 
     let listener = bind_local(port).await?;
     let addr = listener.local_addr()?;

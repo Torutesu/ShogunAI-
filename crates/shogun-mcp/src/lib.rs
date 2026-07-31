@@ -10,12 +10,18 @@
 //! OAuth-to-Keychain live in the desktop adapter.
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
+/// Re-export of the plan entitlement vocabulary (issue #97) so downstream crates that reach the
+/// Memory API through shogun-mcp alone (e.g. shogun-core's `db` feature) can name it without a
+/// direct shogun-agents dependency.
+pub use shogun_agents::entitlement;
+
 pub mod backend;
 pub mod composio;
 pub mod connection;
 pub mod dispatch;
 pub mod mcp;
 pub mod memory_api;
+pub mod plan_source;
 pub mod rest;
 pub mod scope;
 pub mod service_gate;

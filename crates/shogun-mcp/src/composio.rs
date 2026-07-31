@@ -11,11 +11,17 @@
 //!    greyed). Only a [`SendCapability`] — obtainable solely when draft-stop is OFF — lets
 //!    [`prepare_send`] be called.
 //!
+//! A third gate composes on top (issue #97, never replacing the two above):
+//! [`ComposioSender::send_capability`] also requires [`Entitlements::composio_send_unlock`]
+//! (Pro / active trial) — the Pro "Composio第2層" boundary means exactly this send unlock, and
+//! nothing about reads (Gmail read stays Standard, 2026-07-30 decision).
+//!
 //! A prepared send is always L3 with a `ViaComposio` route (FR-C2-04), and its traceability entry
 //! always carries the third-party badge ([`COMPOSIO_THIRD_PARTY`]). On Composio failure the send is
 //! never silently rerouted — it is treated as failed and a draft is saved instead (FR-C2-05).
 
 use shogun_agents::approval::{Preview, Route};
+use shogun_agents::entitlement::Entitlements;
 use shogun_agents::permission::SendAction;
 
 /// The disclosures the opt-in consent screen must present and the user must acknowledge (FR-C2-02).
@@ -109,10 +115,11 @@ impl ComposioSender {
         }
     }
 
-    /// A send capability, available only when draft-stop is OFF. `None` while ON — so no send can be
-    /// prepared.
-    pub fn send_capability(&self) -> Option<SendCapability<'_>> {
-        if self.draft_stop {
+    /// A send capability, available only when draft-stop is OFF **and** the plan includes the
+    /// Composio send unlock (issue #97: Pro / active trial). `None` otherwise — so no send can be
+    /// prepared on a Standard plan or an expired trial, no matter the toggles.
+    pub fn send_capability(&self, ent: &Entitlements) -> Option<SendCapability<'_>> {
+        if self.draft_stop || !ent.composio_send_unlock {
             None
         } else {
             Some(SendCapability { _sender: self })
@@ -133,7 +140,8 @@ pub struct GmailSend {
 pub const COMPOSIO_THIRD_PARTY: bool = true;
 
 /// Prepare a Composio Gmail send for L3 approval. Requires a [`SendCapability`] — so this is
-/// unreachable unless consent was granted and draft-stop is OFF. Returns the [`SendAction`] (always
+/// unreachable unless consent was granted, draft-stop is OFF, and the plan holds the send unlock
+/// (issue #97). Returns the [`SendAction`] (always
 /// a send → L3) and the L3 [`Preview`] with a `ViaComposio` route and the full subject+body text
 /// (FR-AG-03 / FR-C2-04). The returned action is meant to be enqueued in the L3 approval queue.
 pub fn prepare_send(_cap: SendCapability<'_>, mail: GmailSend) -> (SendAction, Preview) {
@@ -182,6 +190,11 @@ mod tests {
         grant_consent(Disclosures { via_third_party: true, data_types: true, revocable: true }).unwrap()
     }
 
+    /// A plan holding the Composio send unlock (Pro).
+    fn pro() -> Entitlements {
+        shogun_agents::entitlement::entitlements(shogun_agents::entitlement::Plan::Pro, 0)
+    }
+
     #[test]
     fn consent_requires_every_disclosure() {
         // any missing acknowledgement → no consent
@@ -202,7 +215,7 @@ mod tests {
         assert!(sender.draft_stop(), "draft-stop must default ON (FR-C2-03)");
         assert_eq!(sender.offered_actions(), vec![ComposioAction::SaveDraft]);
         assert!(!sender.offered_actions().contains(&ComposioAction::Send), "Send must be hidden");
-        assert!(sender.send_capability().is_none(), "no send capability while draft-stop ON");
+        assert!(sender.send_capability(&pro()).is_none(), "no send capability while draft-stop ON");
     }
 
     #[test]
@@ -210,14 +223,31 @@ mod tests {
         let mut sender = ComposioSender::new(full_consent());
         sender.set_draft_stop(false);
         assert!(sender.offered_actions().contains(&ComposioAction::Send));
-        assert!(sender.send_capability().is_some());
+        assert!(sender.send_capability(&pro()).is_some());
+    }
+
+    #[test]
+    fn plan_without_send_unlock_blocks_the_capability_even_with_consent_and_draft_stop_off() {
+        // Issue #97: Standard and an expired trial have no composio_send_unlock — the capability
+        // is unobtainable even when both older gates (consent, draft-stop OFF) are open. The
+        // entitlement gate composes with them; it never replaces them.
+        use shogun_agents::entitlement::{entitlements, Plan, TRIAL_DURATION_MS};
+        let mut sender = ComposioSender::new(full_consent());
+        sender.set_draft_stop(false);
+        let standard = entitlements(Plan::Standard, 0);
+        let expired = entitlements(Plan::Trial { started_at_ms: Some(0) }, TRIAL_DURATION_MS);
+        assert!(sender.send_capability(&standard).is_none(), "Standard has no send unlock");
+        assert!(sender.send_capability(&expired).is_none(), "expired trial has no send unlock");
+        // an active trial (Pro-equivalent) does
+        let trial = entitlements(Plan::Trial { started_at_ms: Some(0) }, 1);
+        assert!(sender.send_capability(&trial).is_some());
     }
 
     #[test]
     fn prepared_send_is_l3_via_composio_with_full_text() {
         let mut sender = ComposioSender::new(full_consent());
         sender.set_draft_stop(false);
-        let cap = sender.send_capability().unwrap();
+        let cap = sender.send_capability(&pro()).unwrap();
         let (action, preview) = prepare_send(
             cap,
             GmailSend { to: "bob@example.com".into(), subject: "Ship date".into(), body: "Friday.".into() },
@@ -245,7 +275,7 @@ mod tests {
     fn parse_gmail_full_body_inverts_prepare_send() {
         let mut sender = ComposioSender::new(full_consent());
         sender.set_draft_stop(false);
-        let cap = sender.send_capability().unwrap();
+        let cap = sender.send_capability(&pro()).unwrap();
         let (_action, preview) = prepare_send(
             cap,
             GmailSend { to: "b@e.com".into(), subject: "Ship date".into(), body: "Friday.\n\nThanks".into() },
@@ -270,8 +300,9 @@ mod tests {
     }
 
     // Structural note (FR-C2 acceptance): `prepare_send` takes a `SendCapability`, whose only source
-    // is `ComposioSender::send_capability()` returning `Some` — which happens only when draft-stop is
-    // OFF, on a sender that required a `ComposioConsent` to build, which required full disclosures.
-    // So the send path is unreachable without: consent → draft-stop OFF. None of it is a runtime
-    // flag that could be bypassed; it is the type graph.
+    // is `ComposioSender::send_capability(&Entitlements)` returning `Some` — which happens only when
+    // draft-stop is OFF AND the plan holds the send unlock (#97), on a sender that required a
+    // `ComposioConsent` to build, which required full disclosures. So the send path is unreachable
+    // without: consent → draft-stop OFF → Pro/Trial plan. None of it is a runtime flag that could be
+    // bypassed; it is the type graph.
 }

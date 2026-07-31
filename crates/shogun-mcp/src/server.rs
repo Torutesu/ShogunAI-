@@ -18,6 +18,7 @@ use axum::response::Response;
 use axum::routing::any;
 use axum::Router;
 use shogun_agents::approval::ApprovalQueue;
+use shogun_agents::entitlement::Entitlements;
 use tokio::net::TcpListener;
 
 use crate::backend::MemoryBackend;
@@ -29,6 +30,11 @@ pub const DEFAULT_PORT: u16 = 7464;
 
 /// An injected millisecond clock (unix ms) — deterministic under test.
 pub type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;
+
+/// The plan entitlement provider (issue #97). A closure, not a snapshot: a trial can expire while
+/// the server runs, so it is consulted on every request. The default (see [`AppState::new`]) is
+/// trial-not-started — full access until a trial stamp / billing state is wired in.
+pub type EntitlementProvider = Arc<dyn Fn() -> Entitlements + Send + Sync>;
 
 /// Live in-product SLO metrics source (NFR-SLO-00). The daemon implements it over its `SloRegistry`;
 /// the server serves its JSON at `GET /v1/metrics` (`shogun metrics` / the Advanced UI).
@@ -47,24 +53,41 @@ pub struct AppState {
     approvals: Arc<Mutex<ApprovalQueue>>,
     clock: Clock,
     metrics: Option<Arc<dyn MetricsSource>>,
+    entitlements: EntitlementProvider,
 }
 
 impl AppState {
     /// Build state from the token registry, the data backend, the shared approval queue, and a
     /// clock. The daemon injects a DB-backed backend + its real approval queue; tests inject stubs.
+    /// The plan gate defaults to trial-not-started (full access — the documented pre-onboarding
+    /// default); the composition root attaches the real provider via [`AppState::with_entitlements`].
     pub fn new(
         tokens: Arc<TokenRegistry>,
         backend: Arc<dyn MemoryBackend>,
         approvals: Arc<Mutex<ApprovalQueue>>,
         clock: Clock,
     ) -> Self {
-        Self { tokens, backend, approvals, clock, metrics: None }
+        Self {
+            tokens,
+            backend,
+            approvals,
+            clock,
+            metrics: None,
+            entitlements: Arc::new(Entitlements::trial_not_started),
+        }
     }
 
     /// Attach the live SLO metrics source served at `GET /v1/metrics`. Without it, the endpoint
     /// returns an empty (all-unmeasured) snapshot.
     pub fn with_metrics(mut self, metrics: Arc<dyn MetricsSource>) -> Self {
         self.metrics = Some(metrics);
+        self
+    }
+
+    /// Attach the plan entitlement provider (issue #97) — consulted on every request, so trial
+    /// expiry takes effect without a restart.
+    pub fn with_entitlements(mut self, entitlements: EntitlementProvider) -> Self {
+        self.entitlements = entitlements;
         self
     }
 }
@@ -103,7 +126,10 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
         None => (405, r#"{"error":"method_not_allowed"}"#.to_string()),
         Some(method) => {
             let rreq = RestRequest { method, path, token, include_low, query, body };
-            match rest::route(&rreq, &state.tokens) {
+            // Resolve the plan once per request (issue #97) — the provider re-reads its source, so
+            // a trial expiring while the server runs locks the next request.
+            let ent = (state.entitlements)();
+            match rest::route(&rreq, &state.tokens, &ent) {
                 // actions.execute needs the shared approval queue (L3 sends enqueue there).
                 Routed::Action => match state.approvals.lock() {
                     Ok(mut queue) => rest::act(rreq.body.as_deref(), (state.clock)(), &mut queue),
@@ -115,7 +141,7 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
                     state.metrics.as_ref().map(|m| m.snapshot_json()).unwrap_or_else(|| r#"{"metrics":[]}"#.to_string()),
                 ),
                 // reads/writes/status/errors go through the backend renderer.
-                _ => rest::respond_with(&rreq, &state.tokens, state.backend.as_ref()),
+                _ => rest::respond_with(&rreq, &state.tokens, &ent, state.backend.as_ref()),
             }
         }
     };
@@ -256,6 +282,33 @@ mod tests {
         let resp = raw_get(addr, "/v1/state/people", Some("secret-token")).await;
         assert!(resp.contains("200"), "expected 200, got: {resp}");
         assert!(resp.contains("state.people.list"));
+    }
+
+    #[tokio::test]
+    async fn locked_plan_is_403_over_the_socket() {
+        // Issue #97: a Standard-plan provider turns every tool endpoint into 403 plan_required,
+        // valid token included; /v1/status stays open.
+        use shogun_agents::entitlement::{entitlements, Plan};
+        let mut tokens = TokenRegistry::new();
+        tokens.issue("t");
+        let listener = bind_local(0).await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let approvals = Arc::new(Mutex::new(ApprovalQueue::new()));
+        let state = AppState::new(
+            Arc::new(tokens),
+            Arc::new(crate::backend::StubBackend),
+            approvals,
+            Arc::new(|| 0),
+        )
+        .with_entitlements(Arc::new(|| entitlements(Plan::Standard, 0)));
+        tokio::spawn(async move {
+            let _ = serve_on(listener, state).await;
+        });
+        let resp = raw_get(addr, "/v1/state/people", Some("t")).await;
+        assert!(resp.contains("403"), "expected 403, got: {resp}");
+        assert!(resp.contains("plan_required"));
+        let resp = raw_get(addr, "/v1/status", None).await;
+        assert!(resp.contains("200"), "status must stay open: {resp}");
     }
 
     #[tokio::test]

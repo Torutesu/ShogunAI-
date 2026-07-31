@@ -71,11 +71,21 @@ pub struct ConnectorRuntime<T> {
     registry: ConnectionRegistry,
     highest_released: Wave,
     draft_stop: bool,
+    /// The plan entitlements the gate applies (issue #97). Starts at the documented default
+    /// (trial-not-started = full access until a stamp/billing state is known); the desktop layer
+    /// refreshes it via [`ConnectorRuntime::set_plan`] before each sync tick / write.
+    plan: shogun_agents::entitlement::Entitlements,
 }
 
 impl<T> ConnectorRuntime<T> {
     pub fn new(transport: T, highest_released: Wave, draft_stop: bool) -> Self {
-        Self { transport, registry: ConnectionRegistry::new(), highest_released, draft_stop }
+        Self {
+            transport,
+            registry: ConnectionRegistry::new(),
+            highest_released,
+            draft_stop,
+            plan: shogun_agents::entitlement::Entitlements::trial_not_started(),
+        }
     }
 
     pub fn registry(&self) -> &ConnectionRegistry {
@@ -85,6 +95,13 @@ impl<T> ConnectorRuntime<T> {
     /// Set the global Gmail draft-stop flag (§6.10) — flows into the gate context.
     pub fn set_draft_stop(&mut self, on: bool) {
         self.draft_stop = on;
+    }
+
+    /// Refresh the plan entitlements the gate applies (issue #97). The desktop layer resolves the
+    /// plan (onboarding trial stamp + billing) and pushes it here — the runtime never reads the
+    /// clock or the plan sources itself.
+    pub fn set_plan(&mut self, plan: shogun_agents::entitlement::Entitlements) {
+        self.plan = plan;
     }
 
     /// Record a completed OAuth connection for a service (drives it out of `Disconnected`).
@@ -135,6 +152,7 @@ impl<T> ConnectorRuntime<T> {
             highest_released: self.highest_released,
             conn: self.registry.state(service),
             draft_stop: self.draft_stop,
+            plan: self.plan,
         }
     }
 }

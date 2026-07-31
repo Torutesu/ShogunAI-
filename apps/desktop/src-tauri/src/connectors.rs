@@ -98,6 +98,10 @@ pub mod mac {
 
             let now = db.now_ms();
             if let Ok(mut rt) = state.lock() {
+                // Plan gate (issue #97): refresh the entitlements before each tick so the service
+                // gate sees the current plan — an expired trial stops the read-sync (first-layer
+                // reads are Standard-and-up; expired has no active plan).
+                rt.set_plan(crate::entitlement::mac::current(&app));
                 for (svc, res) in rt.poll_tick(now, DEFAULT_SYNC_INTERVAL_MS, &db) {
                     match res {
                         Ok(rep) => {
@@ -180,9 +184,13 @@ pub mod mac {
         query: String,
         state: tauri::State<'_, ConnectorState>,
         db: tauri::State<'_, Db>,
+        app: tauri::AppHandle,
     ) -> Result<u64, String> {
         let svc = from_source(&service).ok_or_else(|| format!("unknown service: {service}"))?;
         let mut rt = state.0.lock().map_err(|_| "runtime lock poisoned".to_string())?;
+        // Plan gate (issue #97): refresh entitlements so the service gate sees the current plan
+        // (reads are Standard-and-up; an expired trial is denied).
+        rt.set_plan(crate::entitlement::mac::current(&app));
         match rt.fetch_on_demand(svc, &query, &*db) {
             Ok(report) => {
                 // Same third-party (Composio) read boundary the sync poller records — an on-demand
