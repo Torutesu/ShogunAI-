@@ -185,10 +185,12 @@ pub fn mono_input_hold_start() -> Input {
 pub fn mono_input_hold_end() -> Input {
     Input::HoldEnd { at_ms: mono_ms() }
 }
-/// 割込みで潰された hold のキャンセル。時刻を持たない（誤爆判定を通さず、必ず破棄する）ので
-/// hold_start/end と違い単調時計を刻まない。statemachine の型を lib.rs に晒さない同じ方針で。
-pub fn input_cancel() -> Input {
-    Input::Cancel
+/// モニタ由来の割込み（他キー/マウスが hold に入った）。時刻を持たない（誤爆判定を通さず、
+/// Recording なら必ず破棄する）ので hold_start/end と違い単調時計を刻まない。パネルの Esc /
+/// `ptt_cancel` が使う `Input::Cancel` とは別 — こちらは Recording 以外では no-op に落ち、
+/// MaxHold 満了後の確定済みセッションを壊さない。statemachine の型を lib.rs に晒さない同じ方針で。
+pub fn input_hold_interrupted() -> Input {
+    Input::HoldInterrupted
 }
 
 /// 実行層の全状態。Tauri state として1つだけ持つ。

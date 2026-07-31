@@ -126,6 +126,11 @@ impl HoldState {
             // 他の修飾キーが「離れた」だけ。押しっぱなしのものが無くなったので、次の
             // 押し下げを受け付けられるよう再武装する。ここで再武装しないと、左⌘を使った
             // あとの最初の長押しが黙って無視される。
+            //
+            // poison の解除ポイントは非対称に2つある: (1) ここ（foreign が全解放された）と
+            // (2) 下の対象キーの完全リリース。片方だけ残すと壊れる — (1) が無いと和音後に
+            // 対象キーを離さず foreign だけ離したケースで再武装できず、(2) が無いと単独の
+            // 割込み poison が対象キーを離しても解けない。両方を保つこと。
             self.poisoned = false;
             return None;
         }
@@ -150,7 +155,8 @@ impl HoldState {
             }
             None
         } else if !down && was_down {
-            // 完全に離れた。ここが唯一の再武装ポイント。
+            // 対象キーが完全に離れた。poison 解除の2つ目のポイント（上の foreign 全解放と
+            // 対になる非対称）。単独割込みで潰した hold は、対象キーを離すここで初めて解ける。
             self.poisoned = false;
             if self.holding {
                 self.holding = false;
@@ -271,8 +277,9 @@ where
     // SAFETY: setup（メインスレッド）から呼ぶ。モニタとブロックはアプリのライフタイム分
     // 意図的にleakする（`watch_option_tap` と同じ扱い）。
     unsafe {
-        // 割込み（keyDown / マウス）用ブロック。グローバル用はイベントを見ないので `_ev`、
-        // ローカル用はイベントをそのまま返して通過させる（nil を返すと飲み込んでしまう）。
+        // 割込み（keyDown / マウス）用ブロック。グローバル用は戻り値を使わない（フックでは
+        // なく傍受なので値を返せない）ので `_ev`、ローカル用はイベントをそのまま返して
+        // 通過させる（nil を返すと飲み込んでしまう）。
         let interrupt_global = {
             let f = dispatch_interrupt.clone();
             block2::RcBlock::new(move |_ev: *mut AnyObject| f())

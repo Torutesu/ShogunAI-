@@ -508,14 +508,16 @@ fn setup_macos(app: &tauri::App) {
     {
         let start = app.handle().clone();
         let end = app.handle().clone();
-        let cancel = app.handle().clone();
+        let interrupted = app.handle().clone();
         hold_monitor::watch(
             hold_key,
             move || ptt::feed(&start, ptt::mono_input_hold_start()),
             move || ptt::feed(&end, ptt::mono_input_hold_end()),
-            // 割込みで潰された hold は送信ではなくキャンセル。他キー入力・Esc・マウス
-            // クリックで録音が「送信」に化けないよう、on_end とは別経路で破棄する。
-            move || ptt::feed(&cancel, ptt::input_cancel()),
+            // 割込みで潰された hold は送信ではなくキャンセル。他キー入力・マウスクリックで
+            // 録音が「送信」に化けないよう、on_end とは別経路で破棄する。ただし MaxHold
+            // 満了後にキーを握ったままの割込みは確定済み録音を壊してはならないので、
+            // Recording でのみ効く `HoldInterrupted` を送る（`Input::Cancel` とは別）。
+            move || ptt::feed(&interrupted, ptt::input_hold_interrupted()),
         );
     }
 

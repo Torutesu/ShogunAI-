@@ -104,6 +104,10 @@ pub enum Input {
     MaxHoldExpired { at_ms: i64 },
     /// Esc、またはパネルのキャンセル操作。
     Cancel,
+    /// 進行中の hold に他のキーやマウスが割り込んだ。Recording を潰す点は `Cancel` と
+    /// 同じだが、**Recording でなければ何もしない** — MaxHold 満了後や文字起こし中に届いた
+    /// 割込みが、確定済みのセッションを壊してはならない。
+    HoldInterrupted,
     /// 文字起こしが返った。空文字は `Fail::NothingHeard` として扱われる。
     Transcribed(String),
     /// どこかで失敗した。
@@ -225,7 +229,11 @@ impl Machine {
             }
 
             // ── キャンセル ──────────────────────────────────────────────────────────────
-            (S::Recording, I::Cancel) => {
+            // モニタ由来の割込み（`HoldInterrupted`）も Esc/パネル操作の `Cancel` と、
+            // Recording を潰す効果は同じ。両者の違いは Recording 以外での扱い —
+            // `HoldInterrupted` は下の catch-all で no-op に落ち、確定済みセッションを
+            // 壊さない（MaxHold 満了後にキーを握ったまま別キーが入っても文字起こしを守る）。
+            (S::Recording, I::Cancel | I::HoldInterrupted) => {
                 self.hold_started_at = None;
                 self.state = S::Idle;
                 vec![
@@ -371,6 +379,47 @@ mod tests {
         assert!(!fx.iter().any(|e| matches!(e, Effect::SubmitToAgent(_))));
     }
 
+    /// 録音中の割込み（他キー/マウス）は Esc と同じく録音を捨てる。送信はしない。
+    #[test]
+    fn a_hold_interrupt_while_recording_discards_without_submitting() {
+        let mut m = machine();
+        m.step(Input::HoldStart { at_ms: 1_000 });
+        let fx = m.step(Input::HoldInterrupted);
+
+        assert_eq!(m.state(), State::Idle);
+        assert!(fx.contains(&Effect::DiscardCapture));
+        assert!(fx.contains(&Effect::HidePanel));
+        assert!(!fx.iter().any(|e| matches!(e, Effect::SubmitToAgent(_))));
+    }
+
+    /// MaxHold 満了で Transcribing に進んだあと、まだキーを握ったまま別キーが入っても
+    /// 確定済み録音を壊さない。`HoldInterrupted` は Recording 以外では効果ゼロ。
+    #[test]
+    fn a_hold_interrupt_after_max_hold_does_not_disturb_transcribing() {
+        let mut m = machine();
+        m.step(Input::HoldStart { at_ms: 0 });
+        m.step(Input::MaxHoldExpired { at_ms: 30_000 }); // → Transcribing
+        assert_eq!(m.state(), State::Transcribing);
+
+        let fx = m.step(Input::HoldInterrupted);
+        assert_eq!(m.state(), State::Transcribing, "割込みで確定済みセッションが壊れた");
+        assert!(fx.is_empty(), "Transcribing 中の HoldInterrupted は何も出さない");
+    }
+
+    /// 応答中の割込みも効果ゼロ。読んでいる応答をモニタ由来の割込みで畳まない。
+    #[test]
+    fn a_hold_interrupt_while_responding_is_a_no_op() {
+        let mut m = machine();
+        m.step(Input::HoldStart { at_ms: 1_000 });
+        m.step(Input::HoldEnd { at_ms: 3_000 });
+        m.step(Input::Transcribed("hi".into())); // → Responding
+        assert_eq!(m.state(), State::Responding);
+
+        let fx = m.step(Input::HoldInterrupted);
+        assert_eq!(m.state(), State::Responding);
+        assert!(fx.is_empty(), "Responding 中の HoldInterrupted は何も出さない");
+    }
+
     /// 文字起こしが返ればエージェントへ送る。
     #[test]
     fn a_transcript_is_submitted_to_the_agent() {
@@ -440,6 +489,7 @@ mod tests {
             Input::HoldEnd { at_ms: 5_000 },
             Input::MaxHoldExpired { at_ms: 5_000 },
             Input::Cancel,
+            Input::HoldInterrupted,
             Input::Transcribed("x".into()),
             Input::Failed(Fail::Network),
             Input::ResponseDone,
@@ -465,6 +515,7 @@ mod tests {
             Input::HoldEnd { at_ms: 9_000 },
             Input::MaxHoldExpired { at_ms: 30_000 },
             Input::Cancel,
+            Input::HoldInterrupted,
             Input::Failed(Fail::MicUnavailable),
         ];
         for input in exits.iter() {
