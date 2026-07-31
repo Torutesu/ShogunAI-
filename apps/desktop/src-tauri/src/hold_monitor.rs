@@ -64,33 +64,131 @@ impl HoldKey {
     }
 }
 
+/// モニタから見えたイベントに対する判定。押し下げ/離し/割込みという生の事実だけを渡すと、
+/// これが「いま何をすべきか」を [`Edge`] で返す。objc ブロックはこの判定を呼んで、返った
+/// Edge を on_start/on_end/on_cancel に流すだけ — 状態の全ては、ここに閉じてテスト可能にする。
+#[derive(Debug, Default)]
+struct HoldState {
+    /// このholdでマイクを開いたか。`Edge::End`/`Edge::Cancel` を返して良いかの唯一の判断材料。
+    holding: bool,
+    /// 他の入力が割り込んだ。対象キーが完全に離れるまで再武装しない — poison中は押し下げ
+    /// エッジを見ても `Edge::Start` を返さない。
+    poisoned: bool,
+    /// 前回の flagsChanged 時点でこのキーが押されていたか。真の押し下げエッジだけを取るため。
+    was_down: bool,
+}
+
+/// 判定の結果、実行層に伝えるべきこと。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Edge {
+    /// マイクを開く。`on_start`。
+    Start,
+    /// 手を離した。溜まった録音を文字起こしへ。`on_end`。
+    End,
+    /// 割込みで潰した。溜まった録音は捨てる。`on_cancel`。
+    Cancel,
+}
+
+impl HoldState {
+    /// keyDown またはマウス系イベント（＝対象キー以外の入力）。**active な hold だけを潰す。**
+    ///
+    /// hold していないときの割込みでは何もしない。ここで poison を立てると、修飾なしの
+    /// タイピング（keyUp を監視していない）のあと毒が残り、次のholdの押し下げエッジが黙って
+    /// 無視される — 「1回目は無反応、押し直すと効く」という壊れた挙動になる。poison は
+    /// 「active な hold を潰した」ときにだけ立てる（潰したあとは対象キーの完全リリースまで
+    /// 再開しないので、そこまで再武装を止める意味がある）。
+    fn on_interrupt(&mut self) -> Option<Edge> {
+        if self.holding {
+            self.holding = false;
+            self.poisoned = true;
+            Some(Edge::Cancel)
+        } else {
+            None
+        }
+    }
+
+    /// flagsChanged イベント。`code`/`flags` はイベントの生の値、`target_*` は監視対象キーの諸元、
+    /// `foreign_held` は対象キー以外の修飾キーが押されているかを見るマスク。
+    fn on_flags_changed(
+        &mut self,
+        code: u16,
+        flags: usize,
+        target_code: u16,
+        target_down: usize,
+        foreign_held: usize,
+    ) -> Option<Edge> {
+        if code != target_code {
+            if flags & foreign_held != 0 {
+                // 他の修飾キーが押されている = 和音。長押しは無効。割込みと同じ扱い
+                // （active な hold だけを潰し、hold していなければ何もしない）。
+                return self.on_interrupt();
+            }
+            // 他の修飾キーが「離れた」だけ。押しっぱなしのものが無くなったので、次の
+            // 押し下げを受け付けられるよう再武装する。ここで再武装しないと、左⌘を使った
+            // あとの最初の長押しが黙って無視される。
+            self.poisoned = false;
+            return None;
+        }
+
+        let down = flags & target_down != 0;
+        let was_down = std::mem::replace(&mut self.was_down, down);
+
+        if down && !was_down {
+            // 真の押し下げエッジ。他の修飾キーが既に押されているなら和音なので始めない。
+            if flags & foreign_held != 0 {
+                self.poisoned = true;
+                return None;
+            }
+            // poison中（割り込み後、まだ完全に離れていない）は再武装しない。素の押し下げ
+            // エッジは真の up→down でしか来ないので通常ここは false だが、念のため守る。
+            if self.poisoned {
+                return None;
+            }
+            if !self.holding {
+                self.holding = true;
+                return Some(Edge::Start);
+            }
+            None
+        } else if !down && was_down {
+            // 完全に離れた。ここが唯一の再武装ポイント。
+            self.poisoned = false;
+            if self.holding {
+                self.holding = false;
+                return Some(Edge::End);
+            }
+            None
+        } else {
+            None
+        }
+    }
+}
+
 /// 長押しの監視を開始する。アプリのライフタイム中ずっと動き続ける（モニタは意図的にleakする、
 /// `watch_option_tap` と同じ）。
 ///
-/// 押し下がったら `on_start`、離れたら `on_end` を呼ぶ。**`on_end` は `on_start` を呼んだ
-/// 場合にのみ呼ばれる** — 押していないキーが離れたことにして、開いていないマイクを閉じに
-/// 行かせない。
+/// 押し下がったら `on_start`、離れたら `on_end`、割込みで潰されたら `on_cancel` を呼ぶ。
+/// **`on_end` または `on_cancel` のどちらか一方が、`on_start` を呼んだ場合にのみ呼ばれる** —
+/// 押していないキーが離れたことにして、開いていないマイクを閉じに行かせない。
 ///
-/// 他のキーやマウスが割り込んだholdは無効化する（poison）。⌘クリックや⌘Tabを
-/// 「長押し」と読み違えると、ユーザーが普通の操作をしただけで録音が始まる。
+/// 他のキーやマウスが割り込んだholdは無効化する（`on_cancel`）。⌘クリックや⌘Tabを
+/// 「長押し」と読み違えると、ユーザーが普通の操作をしただけで録音が始まる。割込みでは
+/// `on_end` ではなく `on_cancel` を呼ぶ — `on_end` は文字起こし→送信まで走るので、
+/// 「無効化」のつもりの割込みが「送信」に化けてしまう。
 #[cfg(target_os = "macos")]
-pub fn watch<S, E>(key: HoldKey, on_start: S, on_end: E)
+pub fn watch<S, E, C>(key: HoldKey, on_start: S, on_end: E, on_cancel: C)
 where
     S: Fn() + Send + Sync + 'static,
     E: Fn() + Send + Sync + 'static,
+    C: Fn() + Send + Sync + 'static,
 {
     use objc2::runtime::AnyObject;
     use objc2::{class, msg_send};
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::Arc;
+    use std::sync::Mutex;
 
-    /// このholdでマイクを開いたか。`on_end` を呼んで良いかの唯一の判断材料。
-    static HOLDING: AtomicBool = AtomicBool::new(false);
-    /// 他の入力が割り込んだ。キーが完全に離れるまで再武装しない — poison中は押し下げエッジを
-    /// 見ても `on_start` を呼ばない。
-    static POISONED: AtomicBool = AtomicBool::new(false);
-    /// 前回の flagsChanged 時点でこのキーが押されていたか。真の押し下げエッジだけを取るため。
-    static WAS_DOWN: AtomicBool = AtomicBool::new(false);
+    // 全ての判定はここに閉じる。イベントは全て main スレッドに届くので競合はないが、
+    // 生の static ではなく Mutex に包んで unwrap を避ける（毒った lock で panic しない）。
+    static STATE: Mutex<HoldState> =
+        Mutex::new(HoldState { holding: false, poisoned: false, was_down: false });
 
     const MASK_KEY_DOWN: usize = 1 << 10; // NSEventMaskKeyDown
     const MASK_FLAGS_CHANGED: usize = 1 << 12; // NSEventMaskFlagsChanged
@@ -137,96 +235,137 @@ where
     // hex を見て確認する。既定では読まないので通常コストはゼロ。
     let debug = std::env::var_os("SHOGUN_PTT_DEBUG").is_some();
 
-    let on_start = Arc::new(on_start);
-    let on_end = Arc::new(on_end);
+    let on_start = std::sync::Arc::new(on_start);
+    let on_end = std::sync::Arc::new(on_end);
+    let on_cancel = std::sync::Arc::new(on_cancel);
 
-    // 割り込みでholdを無効化する。すでに録音が始まっていたなら、開いたマイクは閉じる。
-    let poison = {
-        let on_end = on_end.clone();
-        Arc::new(move || {
-            POISONED.store(true, Ordering::Relaxed);
-            if HOLDING.swap(false, Ordering::Relaxed) {
-                on_end();
+    // 返った Edge を対応するコールバックに流す。unwrap は使わない — 毒った lock でも
+    // デーモンを落とさず、その1イベントを黙って捨てる（CLAUDE.md: デーモンは落とさない）。
+    let dispatch_interrupt = {
+        let on_cancel = on_cancel.clone();
+        move || {
+            let Ok(mut s) = STATE.lock() else { return };
+            if let Some(Edge::Cancel) = s.on_interrupt() {
+                drop(s);
+                on_cancel();
             }
-        })
+        }
+    };
+    let dispatch_flags = {
+        let on_start = on_start.clone();
+        let on_end = on_end.clone();
+        let on_cancel = on_cancel.clone();
+        move |code: u16, flags: usize| {
+            let Ok(mut s) = STATE.lock() else { return };
+            let edge = s.on_flags_changed(code, flags, target_code, target_down, foreign_held);
+            drop(s);
+            match edge {
+                Some(Edge::Start) => on_start(),
+                Some(Edge::End) => on_end(),
+                Some(Edge::Cancel) => on_cancel(),
+                None => {}
+            }
+        }
     };
 
     // SAFETY: setup（メインスレッド）から呼ぶ。モニタとブロックはアプリのライフタイム分
     // 意図的にleakする（`watch_option_tap` と同じ扱い）。
     unsafe {
-        let poison_for_block = poison.clone();
-        let disarm_block = block2::RcBlock::new(move |_ev: *mut AnyObject| poison_for_block());
-        let key_mon: *mut AnyObject = msg_send![
+        // 割込み（keyDown / マウス）用ブロック。グローバル用はイベントを見ないので `_ev`、
+        // ローカル用はイベントをそのまま返して通過させる（nil を返すと飲み込んでしまう）。
+        let interrupt_global = {
+            let f = dispatch_interrupt.clone();
+            block2::RcBlock::new(move |_ev: *mut AnyObject| f())
+        };
+        let interrupt_local = {
+            let f = dispatch_interrupt.clone();
+            block2::RcBlock::new(move |ev: *mut AnyObject| -> *mut AnyObject {
+                f();
+                ev
+            })
+        };
+        // flagsChanged 用ブロック。イベントから code/flags を読む。ローカル用は同じ判定を
+        // したうえでイベントを返す。
+        let flags_global = {
+            let f = dispatch_flags.clone();
+            block2::RcBlock::new(move |ev: *mut AnyObject| {
+                if ev.is_null() {
+                    return;
+                }
+                let code: u16 = msg_send![ev, keyCode];
+                let flags: usize = msg_send![ev, modifierFlags];
+                if debug {
+                    eprintln!("[ptt] flagsChanged code={code:#06x} flags={flags:#010x}");
+                }
+                f(code, flags);
+            })
+        };
+        let flags_local = {
+            let f = dispatch_flags.clone();
+            block2::RcBlock::new(move |ev: *mut AnyObject| -> *mut AnyObject {
+                if ev.is_null() {
+                    return ev;
+                }
+                let code: u16 = msg_send![ev, keyCode];
+                let flags: usize = msg_send![ev, modifierFlags];
+                if debug {
+                    eprintln!("[ptt] flagsChanged (local) code={code:#06x} flags={flags:#010x}");
+                }
+                f(code, flags);
+                ev
+            })
+        };
+
+        // グローバルモニタは他アプリ宛のイベントを見る。ローカルモニタは SHOGUN 自身の
+        // ウィンドウ（Full UI / 設定）がキーのときのイベントを見る — 設定画面で有効化した
+        // 直後や、録音中に自アプリがアクティブ化したときの離しがグローバルには届かないので、
+        // 両方を張らないと PTT が無反応・マイクが開きっぱなしになる。
+        let key_mon_g: *mut AnyObject = msg_send![
             class!(NSEvent),
             addGlobalMonitorForEventsMatchingMask: MASK_KEY_DOWN,
-            handler: &*disarm_block
+            handler: &*interrupt_global
         ];
-        let mouse_mon: *mut AnyObject = msg_send![
+        let key_mon_l: *mut AnyObject = msg_send![
+            class!(NSEvent),
+            addLocalMonitorForEventsMatchingMask: MASK_KEY_DOWN,
+            handler: &*interrupt_local
+        ];
+        let mouse_mon_g: *mut AnyObject = msg_send![
             class!(NSEvent),
             addGlobalMonitorForEventsMatchingMask: MASK_MOUSE,
-            handler: &*disarm_block
+            handler: &*interrupt_global
         ];
-        std::mem::forget(disarm_block);
-
-        let flags_block = block2::RcBlock::new(move |ev: *mut AnyObject| {
-            if ev.is_null() {
-                return;
-            }
-            let code: u16 = msg_send![ev, keyCode];
-            let flags: usize = msg_send![ev, modifierFlags];
-
-            if debug {
-                eprintln!("[ptt] flagsChanged code={code:#06x} flags={flags:#010x}");
-            }
-
-            if code != target_code {
-                if flags & foreign_held != 0 {
-                    // 他の修飾キーが押されている = 和音。長押しは無効。
-                    poison();
-                } else {
-                    // 他の修飾キーが「離れた」だけ。押しっぱなしのものが無くなったので、
-                    // 次の押し下げを受け付けられるよう再武装する。ここで再武装しないと、
-                    // 左⌘を使ったあとの最初の長押しが黙って無視される。
-                    POISONED.store(false, Ordering::Relaxed);
-                }
-                return;
-            }
-
-            let down = flags & target_down != 0;
-            let was_down = WAS_DOWN.swap(down, Ordering::Relaxed);
-
-            if down && !was_down {
-                // 真の押し下げエッジ。他の修飾キーが既に押されているなら和音なので始めない。
-                if flags & foreign_held != 0 {
-                    POISONED.store(true, Ordering::Relaxed);
-                    return;
-                }
-                // poison中（割り込み後、まだ完全に離れていない）は再武装しない。素の押し下げ
-                // エッジは真の up→down でしか来ないので通常ここは false だが、念のため守る。
-                if POISONED.load(Ordering::Relaxed) {
-                    return;
-                }
-                if !HOLDING.swap(true, Ordering::Relaxed) {
-                    on_start();
-                }
-            } else if !down && was_down {
-                // 完全に離れた。ここが唯一の再武装ポイント。
-                POISONED.store(false, Ordering::Relaxed);
-                if HOLDING.swap(false, Ordering::Relaxed) {
-                    on_end();
-                }
-            }
-        });
-        let flags_mon: *mut AnyObject = msg_send![
+        let mouse_mon_l: *mut AnyObject = msg_send![
+            class!(NSEvent),
+            addLocalMonitorForEventsMatchingMask: MASK_MOUSE,
+            handler: &*interrupt_local
+        ];
+        let flags_mon_g: *mut AnyObject = msg_send![
             class!(NSEvent),
             addGlobalMonitorForEventsMatchingMask: MASK_FLAGS_CHANGED,
-            handler: &*flags_block
+            handler: &*flags_global
         ];
-        std::mem::forget(flags_block);
+        let flags_mon_l: *mut AnyObject = msg_send![
+            class!(NSEvent),
+            addLocalMonitorForEventsMatchingMask: MASK_FLAGS_CHANGED,
+            handler: &*flags_local
+        ];
+        std::mem::forget(interrupt_global);
+        std::mem::forget(interrupt_local);
+        std::mem::forget(flags_global);
+        std::mem::forget(flags_local);
 
         // モニタが張れなければ push-to-talk は静かに死ぬ。Accessibility 権限が拒否された
-        // ときにログに理由が残るよう、`watch_option_tap` と同じく null を確認する。
-        if key_mon.is_null() || mouse_mon.is_null() || flags_mon.is_null() {
+        // ときにログに理由が残るよう、`watch_option_tap` と同じく null を確認する。ローカル
+        // モニタ側が null でも、自アプリ宛のイベントだけが見えなくなる（他アプリ宛は生きる）
+        // ので、6本すべて個別に見る。
+        if key_mon_g.is_null()
+            || key_mon_l.is_null()
+            || mouse_mon_g.is_null()
+            || mouse_mon_l.is_null()
+            || flags_mon_g.is_null()
+            || flags_mon_l.is_null()
+        {
             eprintln!("[ptt] hold monitor failed to install (accessibility permission?)");
         } else {
             eprintln!("[ptt] hold monitor watching {}", key.key());
@@ -279,5 +418,101 @@ mod tests {
     #[test]
     fn the_fn_key_has_no_device_bit() {
         assert_eq!(HoldKey::Fn.down_flag(), 1 << 23);
+    }
+
+    // ── HoldState の判定ロジック ──────────────────────────────────────────────────────
+    //
+    // 右⌘（既定）の諸元でテストする。実際の値は key_code()/down_flag() から取り、テストが
+    // それらの定数を横目に写経しないようにする。
+
+    const TC: u16 = 54; // RightCommand.key_code()
+    const TD: usize = 0x0000_0010; // RightCommand.down_flag()
+    // 対象キー以外の全修飾ビット（左⌘を含む）。foreign_held と同じ計算。
+    const FOREIGN: usize = (0x0000_0001
+        | 0x0000_0002
+        | 0x0000_0004
+        | 0x0000_0008
+        | 0x0000_0010
+        | 0x0000_0020
+        | 0x0000_0040
+        | 0x0000_2000
+        | (1 << 23))
+        & !TD;
+    const LEFT_CMD: usize = 0x0000_0008; // NX_DEVICELCMDKEYMASK
+
+    /// 対象キーの真の押し下げエッジ。他修飾は押されていない前提。
+    fn press(s: &mut HoldState) -> Option<Edge> {
+        s.on_flags_changed(TC, TD, TC, TD, FOREIGN)
+    }
+
+    /// 対象キーの真のリリースエッジ。
+    fn release(s: &mut HoldState) -> Option<Edge> {
+        s.on_flags_changed(TC, 0, TC, TD, FOREIGN)
+    }
+
+    /// バグ2の回帰: 修飾なしのタイピング（interrupt）のあと、対象キーの押し下げで Start が
+    /// 出る。旧実装ではタイピングが毒を残して None になっていた。
+    #[test]
+    fn typing_before_a_hold_does_not_swallow_the_first_press() {
+        let mut s = HoldState::default();
+        assert_eq!(s.on_interrupt(), None, "hold していないときの割込みは何も出さない");
+        assert_eq!(press(&mut s), Some(Edge::Start), "タイピング直後の1回目のholdが効く");
+    }
+
+    /// バグ1の回帰: hold 中の割込みは End ではなく Cancel。続くリリースは二重に End を出さず、
+    /// 完全リリースで再武装したあとは次の hold が始まる。
+    #[test]
+    fn an_interrupt_during_a_hold_cancels_rather_than_ending() {
+        let mut s = HoldState::default();
+        assert_eq!(press(&mut s), Some(Edge::Start));
+        assert_eq!(s.on_interrupt(), Some(Edge::Cancel), "割込みは送信ではなく破棄");
+        assert_eq!(release(&mut s), None, "潰したあとのリリースで End を二重に出さない");
+        assert_eq!(press(&mut s), Some(Edge::Start), "完全リリースで再武装済み");
+    }
+
+    /// 潰したあと、キーを離さないまま（down のまま）再度 flagsChanged が来ても何も出ない。
+    /// poison が効いている。
+    #[test]
+    fn a_poisoned_hold_stays_dead_until_the_key_is_released() {
+        let mut s = HoldState::default();
+        press(&mut s);
+        assert_eq!(s.on_interrupt(), Some(Edge::Cancel));
+        // 対象キーは down のまま。down→down はエッジでないので何も起きないが、was_down が
+        // すでに true なので押し下げエッジも来ない。
+        assert_eq!(s.on_flags_changed(TC, TD, TC, TD, FOREIGN), None, "poison中は無反応");
+    }
+
+    /// 左⌘（foreign）を押したまま対象キーを押しても Start は出ない（和音）。左⌘を離すと
+    /// 再武装し、以降の対象キー単独の押し下げで Start。
+    #[test]
+    fn a_chord_start_is_ignored_and_rearms_when_the_other_key_lifts() {
+        let mut s = HoldState::default();
+        // 左⌘ down（対象キー以外の flagsChanged、foreign が押されている）。
+        assert_eq!(s.on_flags_changed(55, LEFT_CMD, TC, TD, FOREIGN), None);
+        // 左⌘を押したまま対象キーの押し下げエッジ。和音なので Start は出ず、poison される。
+        assert_eq!(s.on_flags_changed(TC, TD | LEFT_CMD, TC, TD, FOREIGN), None, "和音では始めない");
+        // 左⌘を離す（対象キー以外の flagsChanged、foreign が無くなった）→ 再武装。
+        assert_eq!(s.on_flags_changed(55, 0, TC, TD, FOREIGN), None);
+        // ここで対象キーは down のままなので、いったんリリースしてから単独で押し直す。
+        assert_eq!(release(&mut s), None, "潰されたholdのリリースは End を出さない");
+        assert_eq!(press(&mut s), Some(Edge::Start), "単独の押し下げは通る");
+    }
+
+    /// 正常経路の回帰: hold 中の対象キーのリリースエッジで End が出る。
+    #[test]
+    fn a_normal_release_ends_the_hold() {
+        let mut s = HoldState::default();
+        assert_eq!(press(&mut s), Some(Edge::Start));
+        assert_eq!(release(&mut s), Some(Edge::End));
+    }
+
+    /// hold していないときに対象キー以外の修飾が離れても何も出ず、その後の hold は成功する。
+    #[test]
+    fn a_foreign_release_while_idle_is_harmless() {
+        let mut s = HoldState::default();
+        // 対象キー以外の flagsChanged（foreign なし = 何かが離れた）。
+        assert_eq!(s.on_flags_changed(55, 0, TC, TD, FOREIGN), None);
+        assert_eq!(press(&mut s), Some(Edge::Start), "その後の hold は成功する");
+        assert_eq!(release(&mut s), Some(Edge::End));
     }
 }

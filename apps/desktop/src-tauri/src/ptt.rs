@@ -185,6 +185,11 @@ pub fn mono_input_hold_start() -> Input {
 pub fn mono_input_hold_end() -> Input {
     Input::HoldEnd { at_ms: mono_ms() }
 }
+/// 割込みで潰された hold のキャンセル。時刻を持たない（誤爆判定を通さず、必ず破棄する）ので
+/// hold_start/end と違い単調時計を刻まない。statemachine の型を lib.rs に晒さない同じ方針で。
+pub fn input_cancel() -> Input {
+    Input::Cancel
+}
 
 /// 実行層の全状態。Tauri state として1つだけ持つ。
 pub struct Session {
