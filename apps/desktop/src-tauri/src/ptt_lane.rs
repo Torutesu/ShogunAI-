@@ -70,6 +70,15 @@ fn store_cached(path: PathBuf, lang: Option<String>, asr: Whisper) {
     }
 }
 
+/// キャッシュしている重みを解放する。βの PTT を無効化したときに呼ぶ — 使わない機能のために
+/// 数百MBを抱え続けない。**有効化し直した最初のセッションはロードし直しになる**（キャッシュが
+/// 空なので）が、それは無効化の対価として妥当で、以降のセッションはまた再利用に乗る（M3）。
+pub fn clear_model_cache() {
+    if let Ok(mut guard) = model_cache().lock() {
+        *guard = None;
+    }
+}
+
 fn now_ms() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
 }

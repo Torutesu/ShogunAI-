@@ -322,6 +322,11 @@ pub fn set_ptt_settings(app: tauri::AppHandle, settings: PttSettings) -> Result<
     }
     save_settings(&app, &settings)?;
     ENABLED.store(settings.enabled, Ordering::Relaxed);
+    // 無効化したら、キャッシュしている重み（数百MB）を今すぐ手放す。使わない機能のために
+    // 抱え続けない（M3）。有効化し直した最初のセッションはロードし直しになる。
+    if !settings.enabled {
+        crate::ptt_lane::clear_model_cache();
+    }
     // 結果を1行残す（`castle::set_castle_position` と同じ idiom）。`enabled` はこの瞬間から
     // 効くが `hold_key` は次回起動から、という非対称を明示しておくと、実機で「キーを変えたのに
     // 効かない」を見たとき原因が設定の未保存でなく再起動待ちだと切り分けられる。
@@ -334,10 +339,29 @@ pub fn set_ptt_settings(app: tauri::AppHandle, settings: PttSettings) -> Result<
 
 /// 機械に入力を1つ与え、返った副作用を順番に実行する。**全ての入力はここを通る** ので、
 /// 機械のテストが実挙動をそのまま説明する。
-///
-/// ロックは step の間だけ握って、副作用を回す前に必ず落とす。`StartCapture` の失敗経路は
-/// `feed` を再入するので、機械ロックを握ったまま副作用を回すと自分自身とデッドロックする。
 pub fn feed(app: &tauri::AppHandle, input: Input) {
+    feed_gated(app, None, input);
+}
+
+/// 飛行中の非同期完了専用の入口。spawn 時点で控えた `gen` が現在のセッション世代と一致する
+/// ときだけ機械に通す。一致しなければ「前セッションの遅れた完了」なので、機械には渡さず
+/// ログ1行で捨てる。**発話テキストや応答本文はログに入れない**（不変条件2 / テレメトリ規約）—
+/// 落とした入力の種別だけを残す（B2）。
+pub fn feed_if_current(app: &tauri::AppHandle, gen: u64, input: Input) {
+    feed_gated(app, Some(gen), input);
+}
+
+/// `feed` と `feed_if_current` の共通実装。`expected_gen` が `Some` のときは、**machine ロックを
+/// 握ったまま**世代を照合し、一致するときだけ step する。
+///
+/// 世代の照合と increment を両方ロック内で行うのが肝（I1）。もし照合がロック外だと、load →
+/// lock の窓で main スレッドの `feed(HoldStart)` が step + increment まで走り、照合を通過した
+/// stale な `Failed` が**新**セッションの machine に入って `(Recording, Failed)` 腕が新録音を
+/// 破棄し得る（TOCTOU）。increment をロック内の step 直後に移したことで、照合と step の間に
+/// 世代が動く隙が無くなり、この窓が閉じる。逆に stale 側が先にロックを取れたなら、その時点の
+/// 世代はまだ旧セッションのもの＝照合は正しく通り、旧セッションの状態に適用される（その失敗は
+/// 本当に旧セッションのものなので、それで正しい）。
+fn feed_gated(app: &tauri::AppHandle, expected_gen: Option<u64>, input: Input) {
     // βで無効なときは `HoldStart` だけを捨てる。**それ以外は必ず通す** — 録音中に設定を
     // オフにしても、`Cancel` / `HoldEnd` / `MaxHoldExpired` は届いてマイクを閉じねばならない。
     // この非対称が肝で、全部捨てると押しっぱなしで無効化したときマイクが開きっぱなしになる。
@@ -352,25 +376,42 @@ pub fn feed(app: &tauri::AppHandle, input: Input) {
     // なので、専用メトリクスを足さず既存の expand を再利用する。
     let hold_start = matches!(input, Input::HoldStart { .. }).then(Instant::now);
 
+    // ロックは step の間だけ握って、副作用を回す前に必ず落とす。`StartCapture` の失敗経路は
+    // `feed` を再入するので、機械ロックを握ったまま副作用を回すと自分自身とデッドロックする。
+    // 世代の照合と increment だけはロック内で済ませる（上のコメント参照）。
     let effects = {
         let Ok(mut m) = session.machine.lock() else {
             eprintln!("[ptt] machine lock poisoned — dropping input");
             return;
         };
-        m.step(input)
+        // 非同期完了は、ロックの下で世代を照合してから step する。ずれていれば step せず捨てる。
+        if let Some(gen) = expected_gen {
+            let current = session.generation.load(Ordering::SeqCst);
+            if current != gen {
+                eprintln!(
+                    "[ptt] stale {} from gen {gen} dropped (current {current})",
+                    input_kind(&input)
+                );
+                return;
+            }
+        }
+        let effects = m.step(input);
+        // 新しい録音が成立したら、同じロックの下で世代を1つ進める。`Transition(Recording)` は
+        // 「Recording へ入る」唯一の効果なので、これを機に飛行中の非同期完了（前セッションの
+        // ASR / 応答）が古くなる。照合と increment が同じロック下なので、両者は直列化される（B2/I1）。
+        if effects
+            .iter()
+            .any(|e| matches!(e, Effect::Transition(shogun_core::ptt::statemachine::State::Recording)))
+        {
+            session.generation.fetch_add(1, Ordering::SeqCst);
+        }
+        effects
         // ここでロックが落ちる。以降の run_effect / feed 再入は機械ロックを持たない。
     };
 
     let shows_listening = effects
         .iter()
         .any(|e| matches!(e, Effect::ShowPanel(Panel::Listening)));
-
-    // 新しい録音が成立したら世代を1つ進める。`Transition(Recording)` は「Recording へ入る」
-    // 唯一の効果なので、これを機に控えておいた飛行中の非同期完了（前セッションの ASR / 応答）
-    // が古くなる。ここで進めておけば、`feed_if_current` が戻ってきた完了を弾ける（B2）。
-    if effects.iter().any(|e| matches!(e, Effect::Transition(shogun_core::ptt::statemachine::State::Recording))) {
-        session.generation.fetch_add(1, Ordering::SeqCst);
-    }
 
     for effect in effects {
         // `StartCapture` の失敗腕は `feed` を再入してエラーパネルまで出しきる。再入が走った
@@ -388,20 +429,6 @@ pub fn feed(app: &tauri::AppHandle, input: Input) {
         if let Some(reg) = app.try_state::<crate::metrics::SloRegister>() {
             reg.record_expand_ms(started.elapsed().as_millis() as f64);
         }
-    }
-}
-
-/// 飛行中の非同期完了専用の入口。spawn 時点で控えた `gen` が現在のセッション世代と一致する
-/// ときだけ `feed` に通す。一致しなければ「前セッションの遅れた完了」なので、機械には渡さず
-/// ログ1行で捨てる。**発話テキストや応答本文はログに入れない**（不変条件2 / テレメトリ規約）—
-/// 落とした入力の種別だけを残す（B2）。
-pub fn feed_if_current(app: &tauri::AppHandle, gen: u64, input: Input) {
-    let session = app.state::<Session>();
-    let current = session.generation.load(Ordering::SeqCst);
-    if current == gen {
-        feed(app, input);
-    } else {
-        eprintln!("[ptt] stale {} from gen {gen} dropped (current {current})", input_kind(&input));
     }
 }
 
@@ -582,7 +609,7 @@ fn submit(app: &tauri::AppHandle, gen: u64, spoken: String) {
         let win = app.get_webview_window(WINDOW_LABEL);
         for delta in rx {
             // 自分がもう最新でないなら、ここで受信を打ち切る。`rx` を drop すると送信側が
-            // 転送失敗を見て正常終了し、旧ストリームのデルタが新しい回答パネルに混ざらない（B2）。
+            // 転送失敗を見て正常終了し、旧ストリームの受信自体が止まる（B2）。
             if session.generation.load(Ordering::SeqCst) != gen {
                 eprintln!("[ptt] stale stream from gen {gen} aborted");
                 break;
@@ -597,6 +624,15 @@ fn submit(app: &tauri::AppHandle, gen: u64, spoken: String) {
                 }
             }
             if let Some(w) = win.as_ref() {
+                // emit の直前にもう一度世代を確認する。ループ頭の照合と emit の間に新セッションが
+                // 成立すると、確認済みのデルタが1発だけ新パネルに漏れ得るので、ここで二重に閉じる。
+                // それでも load→emit の窓は残る（完全にゼロにするには emit と世代 increment を同じ
+                // ロックに入れる必要がある）が、窓は1デルタ未満まで縮み、漏れた1発も次の listening
+                // 表示で消える（M2）。
+                if session.generation.load(Ordering::SeqCst) != gen {
+                    eprintln!("[ptt] stale stream from gen {gen} aborted");
+                    break;
+                }
                 let _ = w.emit("ptt:delta", delta);
             }
         }
