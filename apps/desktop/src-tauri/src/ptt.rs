@@ -219,6 +219,13 @@ pub struct Session {
     max_hold_epoch: Arc<AtomicU64>,
     /// このセッションでマイクが開いた時刻。計測用。
     started_at: Mutex<Option<Instant>>,
+    /// 録音セッションの世代。新しい録音が成立する（`Transition(Recording)` が出る）たびに
+    /// 進む。飛行中の非同期完了（ASR結果・応答デルタ）は spawn 時点の世代を控え、戻ってきた
+    /// ときに一致するときだけ受理する — でないと、遅れて完了した前セッションの ASR が次の
+    /// セッションを壊し（1つ目の回答が2つ目の質問に返る）、旧ストリームのデルタが新しい
+    /// 回答パネルに混じる（B2）。`max_hold_epoch` とは別軸: あちらはタイマー1本のキャンセル、
+    /// こちらはセッションをまたぐ全非同期の帰属判定。
+    generation: AtomicU64,
 }
 
 impl Session {
@@ -228,6 +235,7 @@ impl Session {
             lane: Mutex::new(None),
             max_hold_epoch: Arc::new(AtomicU64::new(0)),
             started_at: Mutex::new(None),
+            generation: AtomicU64::new(0),
         }
     }
 }
@@ -357,8 +365,21 @@ pub fn feed(app: &tauri::AppHandle, input: Input) {
         .iter()
         .any(|e| matches!(e, Effect::ShowPanel(Panel::Listening)));
 
+    // 新しい録音が成立したら世代を1つ進める。`Transition(Recording)` は「Recording へ入る」
+    // 唯一の効果なので、これを機に控えておいた飛行中の非同期完了（前セッションの ASR / 応答）
+    // が古くなる。ここで進めておけば、`feed_if_current` が戻ってきた完了を弾ける（B2）。
+    if effects.iter().any(|e| matches!(e, Effect::Transition(shogun_core::ptt::statemachine::State::Recording))) {
+        session.generation.fetch_add(1, Ordering::SeqCst);
+    }
+
     for effect in effects {
-        run_effect(app, effect);
+        // `StartCapture` の失敗腕は `feed` を再入してエラーパネルまで出しきる。再入が走った
+        // 時点で機械は先へ進んでおり、この効果列に残った `PlaySound(Start)`/`ShowPanel(Listening)`/
+        // `StartTimer` は「古い世界」のもの — 実行するとエラー表示を「Listening…」で上書きし、
+        // 録音していないのに開始音まで鳴る。だから再入 feed の後は `Break` で残りを打ち切る（B3）。
+        if run_effect(app, effect).is_break() {
+            break;
+        }
     }
 
     // `show_panel` は同期なので、効果ループを抜けた時点でパネルは出ている。押下から
@@ -370,14 +391,48 @@ pub fn feed(app: &tauri::AppHandle, input: Input) {
     }
 }
 
-fn run_effect(app: &tauri::AppHandle, effect: Effect) {
+/// 飛行中の非同期完了専用の入口。spawn 時点で控えた `gen` が現在のセッション世代と一致する
+/// ときだけ `feed` に通す。一致しなければ「前セッションの遅れた完了」なので、機械には渡さず
+/// ログ1行で捨てる。**発話テキストや応答本文はログに入れない**（不変条件2 / テレメトリ規約）—
+/// 落とした入力の種別だけを残す（B2）。
+pub fn feed_if_current(app: &tauri::AppHandle, gen: u64, input: Input) {
+    let session = app.state::<Session>();
+    let current = session.generation.load(Ordering::SeqCst);
+    if current == gen {
+        feed(app, input);
+    } else {
+        eprintln!("[ptt] stale {} from gen {gen} dropped (current {current})", input_kind(&input));
+    }
+}
+
+/// 非同期完了のログ用に、入力の種別だけを表す短い名前。発話テキスト・応答・失敗理由は
+/// 一切含めない（`Failed` の中身すら code に落とさない — 種別で足りる）。
+fn input_kind(input: &Input) -> &'static str {
+    match input {
+        Input::Transcribed(_) => "Transcribed",
+        Input::ResponseDone => "ResponseDone",
+        Input::Failed(_) => "Failed",
+        Input::HoldStart { .. } => "HoldStart",
+        Input::HoldEnd { .. } => "HoldEnd",
+        Input::MaxHoldExpired { .. } => "MaxHoldExpired",
+        Input::Cancel => "Cancel",
+        Input::HoldInterrupted => "HoldInterrupted",
+        Input::Dismiss => "Dismiss",
+    }
+}
+
+fn run_effect(app: &tauri::AppHandle, effect: Effect) -> std::ops::ControlFlow<()> {
+    use std::ops::ControlFlow;
     let session = app.state::<Session>();
     match effect {
         Effect::Transition(s) => eprintln!("[ptt] → {}", s.tag()),
 
         Effect::StartCapture => {
             let (model, language) = asr_choice();
-            match crate::ptt_lane::start(app, model, language) {
+            // レーンは自分の世代を控える必要がある: モデルロードは start の中（レーンスレッド）で
+            // 失敗し得て、その失敗は `feed_if_current` で戻す。この時点の世代が今のセッション。
+            let gen = session.generation.load(Ordering::SeqCst);
+            match crate::ptt_lane::start(app, gen, model, language) {
                 Ok(handle) => {
                     if let Ok(mut g) = session.lane.lock() {
                         *g = Some(handle);
@@ -387,23 +442,30 @@ fn run_effect(app: &tauri::AppHandle, effect: Effect) {
                     }
                     crate::analytics::capture_ptt_started(app);
                 }
-                // 機械に遷移を決めさせる。ここで state を触らない。
-                Err(why) => feed(app, Input::Failed(why)),
+                // 機械に遷移を決めさせる。ここで state を触らない。エラーパネルまで出しきった
+                // この再入 feed の後、残りの効果列（Start音・Listening表示・タイマー）は古い世界の
+                // ものなので `Break` で打ち切る（B3）。
+                Err(why) => {
+                    feed(app, Input::Failed(why));
+                    return ControlFlow::Break(());
+                }
             }
         }
 
         // whisperは数百ms掛かる。イベントハンドラのスレッドで待つとhold monitorが凍るので、
-        // 停止と文字起こしの取り出しは新しいスレッドで。
+        // 停止と文字起こしの取り出しは新しいスレッドで。spawn 前に世代を控え、遅れて返る前
+        // セッションの文字起こしを次セッションへ流し込まないよう `feed_if_current` を通す（B2）。
         Effect::StopCapture => {
             let handle = session.lane.lock().ok().and_then(|mut g| g.take());
             if let Ok(mut g) = session.started_at.lock() {
                 *g = None;
             }
             if let Some(handle) = handle {
+                let gen = session.generation.load(Ordering::SeqCst);
                 let app = app.clone();
                 std::thread::spawn(move || {
                     let text = crate::ptt_lane::stop(handle);
-                    feed(&app, Input::Transcribed(text));
+                    feed_if_current(&app, gen, Input::Transcribed(text));
                 });
             }
         }
@@ -436,7 +498,12 @@ fn run_effect(app: &tauri::AppHandle, effect: Effect) {
 
         Effect::HidePanel => hide_panel(app),
 
-        Effect::SubmitToAgent(text) => submit(app, text),
+        Effect::SubmitToAgent(text) => {
+            // 送信に入る時点の世代を控える。旧 submit スレッドを中断する術がないので、代わりに
+            // 「戻ってきた完了・デルタが古ければ弾く」で対処する（B2）。
+            let gen = session.generation.load(Ordering::SeqCst);
+            submit(app, gen, text);
+        }
 
         Effect::StartTimer { timer: Timer::MaxHold, ms } => {
             let epoch = session.max_hold_epoch.fetch_add(1, Ordering::SeqCst) + 1;
@@ -457,11 +524,19 @@ fn run_effect(app: &tauri::AppHandle, effect: Effect) {
             session.max_hold_epoch.fetch_add(1, Ordering::SeqCst);
         }
     }
+    // ここまで来た効果は正常に流れた。StartCapture の失敗腕だけが早期 `Break` を返す。
+    ControlFlow::Continue(())
 }
 
 /// 文字起こしテキストをコンテキストと合わせてエージェントへ投げ、応答をストリームで
 /// パネルに流す。**新しいスレッドで走る** — ネットワーク往復でイベントスレッドを塞がない。
-fn submit(app: &tauri::AppHandle, spoken: String) {
+///
+/// `gen` は送信を始めた時点のセッション世代。旧 submit スレッドを外から止める術がないので、
+/// 受信ループは delta ごとに世代の一致を確認し、ずれたら **ループを break** する。break で `rx`
+/// が drop され、送信側の `complete_streaming` は `out.send(delta).is_err()` を見て転送を打ち切り
+/// 正常終了する（anthropic.rs の既存設計）— これが旧ストリームの中断機構になる。delta の emit も
+/// 完了の `feed` も、すべて世代が現在と一致するときだけ行う（B2）。
+fn submit(app: &tauri::AppHandle, gen: u64, spoken: String) {
     use shogun_core::daemon::{Db, ReplyContextCache};
     use shogun_core::ptt::prompt::{build_prompt, Spoken};
 
@@ -469,7 +544,7 @@ fn submit(app: &tauri::AppHandle, spoken: String) {
     std::thread::spawn(move || {
         // DBはエージェント構築（Keychainキーの解決）に要る。無ければ投げられない。
         let Some(db) = app.try_state::<Db>().map(|s| s.inner().clone()) else {
-            feed(&app, Input::Failed(Fail::Network));
+            feed_if_current(&app, gen, Input::Failed(Fail::Network));
             return;
         };
 
@@ -492,7 +567,7 @@ fn submit(app: &tauri::AppHandle, spoken: String) {
         );
 
         let Some(agent) = crate::inline_source::mac::build_agent(&db) else {
-            feed(&app, Input::Failed(Fail::KeyRejected));
+            feed_if_current(&app, gen, Input::Failed(Fail::KeyRejected));
             return;
         };
 
@@ -501,10 +576,17 @@ fn submit(app: &tauri::AppHandle, spoken: String) {
         let prompt_for_send = prompt.clone();
         let sender = std::thread::spawn(move || agent.complete_streaming_blocking(&prompt_for_send, tx));
 
+        let session = app.state::<Session>();
         let started = Instant::now();
         let mut first_token_ms: Option<u64> = None;
         let win = app.get_webview_window(WINDOW_LABEL);
         for delta in rx {
+            // 自分がもう最新でないなら、ここで受信を打ち切る。`rx` を drop すると送信側が
+            // 転送失敗を見て正常終了し、旧ストリームのデルタが新しい回答パネルに混ざらない（B2）。
+            if session.generation.load(Ordering::SeqCst) != gen {
+                eprintln!("[ptt] stale stream from gen {gen} aborted");
+                break;
+            }
             if first_token_ms.is_none() {
                 let ms = started.elapsed().as_millis() as u64;
                 first_token_ms = Some(ms);
@@ -519,15 +601,16 @@ fn submit(app: &tauri::AppHandle, spoken: String) {
             }
         }
 
-        // 送信スレッドの結果を回収。panic は Network 失敗として扱う（詳細は言わない）。
+        // 送信スレッドの結果を回収。panic は Network 失敗として扱う（詳細は言わない）。完了の
+        // 反映は `feed_if_current`: 旧セッションの失敗が新セッションの録音を巻き添えにしない（B2）。
         match sender.join() {
             Ok(Ok(())) => {
                 let total_ms = started.elapsed().as_millis() as u64;
                 crate::analytics::capture_ptt_completed(&app, first_token_ms, total_ms);
-                feed(&app, Input::ResponseDone);
+                feed_if_current(&app, gen, Input::ResponseDone);
             }
-            Ok(Err(why)) => feed(&app, Input::Failed(why)),
-            Err(_) => feed(&app, Input::Failed(Fail::Network)),
+            Ok(Err(why)) => feed_if_current(&app, gen, Input::Failed(why)),
+            Err(_) => feed_if_current(&app, gen, Input::Failed(Fail::Network)),
         }
     });
 }
