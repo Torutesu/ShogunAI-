@@ -56,7 +56,9 @@
 - **スタンドアロン bin**（`shogun-api` / `shogun-mcp`）: `crates/shogun-mcp/src/plan_source.rs` `FilePlanSource` — `SHOGUN_ONBOARDING_JSON` env → macOS 既定パス（`~/Library/Application Support/dev.shogun.spike/onboarding.json`）を**毎回再読込**。ファイル無し = トライアル未開始（フルアクセス）。identifier は tauri.conf.json と lockstep（コメントで明記）。
 - **既定値の決定**: 何も分からないとき（オンボーディング未完了・ファイル無し）= `Plan::Trial{started_at_ms: None}` = フルアクセス。刻印はオンボーディング完了時に一度だけ打たれ、そこから7日（onboarding.rs の既存性質）。オンボーディングの `plan` フィールドは**意思表明のみで権利を与えない**。
 
-## 4. 期限切れトライアルの姿勢（**要オーナー確認**）
+## 4. 期限切れトライアルの姿勢（**2026-07-31 オーナー確定**）
+
+**決定: 下記の現実装（ローカルのみ生存）で確定。** 代替案 (A)(B) は不採用。
 
 CLAUDE.md「トライアル後は全員課金」（Free なし）に従い、期限切れ・未課金は **Standard 機能もロック**する。ただしアプリは破壊的に死なない:
 
@@ -64,7 +66,7 @@ CLAUDE.md「トライアル後は全員課金」（Free なし）に従い、期
 - **ロック**: エージェント実行、Memory API 3面、全送信経路、第1層読み取り/同期、Dream Cycle / Morning Brief（Select KKキーを消費するもの・デバイス外に出るもの全部）。
 - UI は `entitlement_status`（status = `trial_expired`）で「trial ended」状態を表示する（表示は webview、判定は Rust）。
 
-**オーナーが選び直せる代替案**: (A) キャプチャもロック（完全停止）/ (B) 期限切れでも第1層読み取りだけ残す（Standard相当へ軟着陸 — ただし「全員課金」と矛盾）。現実装は上記の中間（ローカルのみ生存）。
+**検討した代替案（いずれも不採用・2026-07-31）**: (A) キャプチャもロック（完全停止）— メモリに穴が空き、後から課金しても埋め戻せないため却下 / (B) 期限切れでも第1層読み取りだけ残す（Standard相当へ軟着陸）— 「トライアル後は全員課金」と矛盾するため却下。確定した実装は両者の中間（ローカルのみ生存）。
 
 **注意（#8 前の運用リスク）**: Stripe 実装前は購入経路が無いため、刻印から7日を過ぎた実機はロック状態に落ちる。dev/QA は `SHOGUN_FORCE_ONBOARDING` とは別に、onboarding.json の刻印を消す/進めることで回避できるが、**#8 マージまで本ブランチを一般配布ビルドに載せない**こと。
 
