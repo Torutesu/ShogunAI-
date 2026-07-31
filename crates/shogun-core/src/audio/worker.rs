@@ -58,6 +58,15 @@ impl<S: AudioSource, T: Transcriber> Worker<S, T> {
         consumed
     }
 
+    /// Give back the ASR after the worker is done, so a caller that reloads the same model every
+    /// session (push-to-talk) can keep the loaded weights alive instead of paying the load again.
+    /// The source is dropped (its device is already released by `stop`); only the transcriber, which
+    /// owns nothing session-specific but its weights, comes back. Meeting lanes never call this — a
+    /// `Whisper` lives exactly one meeting there — so it changes no existing behaviour.
+    pub fn into_asr(self) -> T {
+        self.asr
+    }
+
     /// Stop capture and flush the final utterance on each speaker before the buffers are dropped.
     pub fn stop(&mut self, now: i64, sink: &mut dyn SegmentSink) {
         self.now = now;
@@ -130,5 +139,18 @@ mod tests {
         assert_eq!(sink.lines.len(), 0);
         w.stop(2_000, &mut sink); // flush emits the buffered utterance
         assert_eq!(sink.lines.len(), 1);
+    }
+
+    #[test]
+    fn into_asr_returns_the_transcriber_for_reuse() {
+        let frames = vec![
+            Frame { speaker: Speaker::Me, samples: tone(SAMPLE_RATE as usize) },
+            Frame { speaker: Speaker::Me, samples: vec![0.0; SAMPLE_RATE as usize] },
+        ];
+        let mut w = Worker::new(FakeSource::new(frames), FakeTranscriber::default());
+        let mut sink = VecSink::default();
+        w.poll(1_000, &mut sink); // speech then silence → one transcribe call
+        let asr = w.into_asr();
+        assert_eq!(asr.calls, 1, "the reused transcriber carries its state across the handoff");
     }
 }
