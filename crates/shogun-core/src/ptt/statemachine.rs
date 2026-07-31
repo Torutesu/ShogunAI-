@@ -218,12 +218,17 @@ impl Machine {
                     ]
                 } else {
                     self.state = S::Transcribing;
+                    // ShowPanel は StopCapture より前に置く。StopCapture は実行層で文字起こし
+                    // スレッドを spawn し、そのスレッドが結果に応じて自分で ShowPanel(Error/
+                    // Responding) を呼ぶ。もし StopCapture が先だと、flush が即時に終わったとき
+                    // spawn 側のパネル更新がここの ShowPanel(Transcribing) より先に走り、後から
+                    // Transcribing が上書きして「Working…」で固まる。順序でこれを構造的に防ぐ。
                     vec![
                         Effect::CancelTimer(Timer::MaxHold),
                         Effect::Transition(S::Transcribing),
-                        Effect::StopCapture,
                         Effect::PlaySound(Sound::End),
                         Effect::ShowPanel(Panel::Transcribing),
+                        Effect::StopCapture,
                     ]
                 }
             }
@@ -353,6 +358,27 @@ mod tests {
         assert!(fx.contains(&Effect::PlaySound(Sound::End)));
         assert!(fx.contains(&Effect::ShowPanel(Panel::Transcribing)));
         assert!(fx.contains(&Effect::CancelTimer(Timer::MaxHold)));
+    }
+
+    /// HoldEnd 正常腕では ShowPanel(Transcribing) が StopCapture より必ず前に出る。
+    /// StopCapture は実行層で文字起こしスレッドを spawn し、そのスレッドが結果次第で自分の
+    /// パネル更新を呼ぶ。この順序が壊れると spawn 側の ShowPanel が先行し得て、後から
+    /// Transcribing が上書きし「Working…」で固まる（B4）。
+    #[test]
+    fn show_panel_precedes_stop_capture_on_hold_end() {
+        let mut m = machine();
+        m.step(Input::HoldStart { at_ms: 1_000 });
+        let fx = m.step(Input::HoldEnd { at_ms: 3_000 });
+
+        let show = fx
+            .iter()
+            .position(|e| matches!(e, Effect::ShowPanel(Panel::Transcribing)))
+            .expect("ShowPanel(Transcribing) が無い");
+        let stop = fx
+            .iter()
+            .position(|e| matches!(e, Effect::StopCapture))
+            .expect("StopCapture が無い");
+        assert!(show < stop, "ShowPanel(Transcribing) は StopCapture より前でなければならない");
     }
 
     /// 押しっぱなしで放置してもマイクは閉じる。手を離す入力が永遠に来ない場合の保険。
