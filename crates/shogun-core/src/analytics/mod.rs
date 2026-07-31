@@ -191,7 +191,7 @@ mod tests {
         assert_eq!(parsed["batch"].as_array().unwrap().len(), 0);
     }
 
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::AtomicBool;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
