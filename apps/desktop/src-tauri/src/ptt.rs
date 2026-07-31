@@ -79,24 +79,40 @@ pub fn build_panel(app: &tauri::AppHandle) -> Option<tauri::WebviewWindow> {
 
 /// パネルに中身を出す。位置は castle 設定に合わせ、録音中も応答も同じ場所に出す
 /// （視線を動かさせない）。
+///
+/// **本体は必ず main スレッドで回す。** `set_size`/`show`/`redock_ptt` は AppKit
+/// （NSWindow の setter）を叩くが、`show_panel` は文字起こしスレッド・submit スレッド・
+/// MaxHold タイマースレッドからも呼ばれる。AppKit は main-thread-only なので、バックグラウンド
+/// スレッドから叩くとクラッシュする（B1）。`run_on_main_thread` は main から呼ばれた場合は
+/// クロージャをその場で同期実行し（tauri-runtime-wry の `send_user_message`）、他スレッドから
+/// なら main のイベントループへ FIFO で積む。この FIFO 性が、効果列の並び（B4）で保証した
+/// ShowPanel→StopCapture の表示順をディスパッチ後も崩さない。
 pub fn show_panel(app: &tauri::AppHandle, view: PanelView) {
-    let Some(win) = app.get_webview_window(WINDOW_LABEL) else { return };
-    let size = match view {
-        PanelView::Responding => RESPONDING_SIZE,
-        _ => LISTENING_SIZE,
-    };
-    let _ = win.set_size(tauri::LogicalSize::new(size.0, size.1));
-    // 状態が変わるたびに送る。webview側はこれだけを見て描き分ける。
-    let _ = win.emit("ptt:panel", view);
-    let _ = win.show();
-    let _ = win.set_always_on_top(true);
-    redock_ptt(&win);
+    let app = app.clone();
+    let _ = app.clone().run_on_main_thread(move || {
+        let Some(win) = app.get_webview_window(WINDOW_LABEL) else { return };
+        let size = match view {
+            PanelView::Responding => RESPONDING_SIZE,
+            _ => LISTENING_SIZE,
+        };
+        let _ = win.set_size(tauri::LogicalSize::new(size.0, size.1));
+        // 状態が変わるたびに送る。webview側はこれだけを見て描き分ける。
+        let _ = win.emit("ptt:panel", view);
+        let _ = win.show();
+        let _ = win.set_always_on_top(true);
+        redock_ptt(&win);
+    });
 }
 
+/// パネルを伏せる。`show_panel` と同じく AppKit（`hide` は NSWindow を触る）を叩くので、
+/// 呼び出し元のスレッドに関わらず main で回す（B1）。
 pub fn hide_panel(app: &tauri::AppHandle) {
-    if let Some(win) = app.get_webview_window(WINDOW_LABEL) {
-        let _ = win.hide();
-    }
+    let app = app.clone();
+    let _ = app.clone().run_on_main_thread(move || {
+        if let Some(win) = app.get_webview_window(WINDOW_LABEL) {
+            let _ = win.hide();
+        }
+    });
 }
 
 /// PTTパネルを castle 設定の位置に置き直す。
@@ -109,9 +125,9 @@ fn redock_ptt(win: &tauri::WebviewWindow) {
         Ok(p) if !p.is_null() => p as *mut objc2::runtime::AnyObject,
         _ => return,
     };
-    // SAFETY: `ptr` は tauri が所有する生きた NSWindow。show() は main スレッドから呼ばれる
-    // 前提（Task 12 の実行層が main で回す）で、ここも同じ経路で走る。setter は void を返す
-    // 純粋な AppKit 呼び出し。
+    // SAFETY: `ptr` は tauri が所有する生きた NSWindow。呼び出し元の `show_panel` が本体を
+    // `run_on_main_thread` に包むので、ここは常に main スレッドで走る（B1）。setter は void を
+    // 返す純粋な AppKit 呼び出し。
     unsafe {
         use objc2::msg_send;
         use objc2::runtime::AnyObject;
