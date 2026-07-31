@@ -165,7 +165,7 @@ export const STRINGS = {
     meetingNotesSaved: "Saved",
     meetingNotesFailed: "Couldn't save",
     meetingRecapTitle: "Meeting notes",
-    meetingRecapNoNotes: "You didn't write anything this time.",
+    meetingRecapNoNotes: "No notes added. Transcript text may still be saved on this Mac.",
     meetingRecapMinutes: "min",
     meetingRecapDone: "Done",
     // Minutes — the model-generated layer (MT4, FR-MT-19), shown on top of the degraded Recap
@@ -174,9 +174,19 @@ export const STRINGS = {
     meetingMinutesSummary: "Summary",
     meetingMinutesDecisions: "Decisions",
     meetingMinutesNextActions: "Next actions",
-    meetingMinutesPending: "Preparing notes…",
+    meetingMinutesPending: "Preparing summary…",
+    meetingMinutesNeedsKey:
+      "AI summary needs the Select KK key in Keychain (SHOGUN / select-kk-batch). Your transcript is shown below.",
+    meetingRecapYourNotes: "Your notes",
+    meetingTranscriptHeading: "Transcript",
+    meetingTranscriptEmpty: "No transcript captured — model missing or silence.",
+    meetingTranscriptOnlyBlanks:
+      "Audio was heard but nothing clear was transcribed — only silence markers.",
+    meetingTranscriptSpeakerMe: "Me",
+    meetingTranscriptSpeakerOther: "Other",
+    meetingTranscriptSpeakerUnknown: "Speaker",
     meetingUntitled: "Meeting",
-    meetingStarting: "Taking notes in",
+    meetingStarting: "Starts in",
     meetingStart: "Start",
     meetingNotNow: "Not now",
     meetingStop: "Stop",
@@ -184,20 +194,26 @@ export const STRINGS = {
     meetingNeverThisApp: "Never for this app",
     // meeting notes — settings (FR-MT-01/02/03)
     meetingSection: "Meeting notes",
-    meetingHint: "Offers a place to write when a meeting starts. One tap declines, one tap stops.",
+    meetingHint:
+      "Detects meetings and transcribes on this Mac when you approve. One tap to decline, one tap to stop.",
     meetingOn: "On",
     meetingOff: "Off",
     meetingExcluded: "Never offer for",
     meetingExcludedEmpty: "No apps excluded",
     meetingExcludedRemove: "Remove",
-    // The disclosure of FR-MT-03. It can be stated this plainly because it is simply what
-    // happens: nothing joins the call, and no audio file is ever written.
-    // FR-MT-03 requires this to match the implementation exactly. At this stage SHOGUN does not
-    // listen at all — it opens a note next to the meeting — so the copy says that and nothing
-    // more. It gains the transcription sentence when transcription actually exists (MT3), not
-    // before: a disclosure that describes a future build is not a disclosure.
+    meetingMicOnly: "Detect by microphone alone",
+    meetingMicOnlyHint:
+      "Off by default. When on, sustained microphone use can offer notes without Meet or Zoom in front — useful for calls in other apps.",
+    // FR-MT-03 disclosure family. Must match MT3 (invariant 2): on-device audio during approved
+    // meetings, no recording/waveform/audio file to disk/temp/cloud — transcript + provenance only.
+    // Reuse these keys everywhere; never claim we do not listen while ASR runs.
     meetingDisclosure:
-      "Nothing joins your call and no audio is captured. SHOGUN opens a note beside the meeting; what you write stays on this Mac.",
+      "Nothing joins your call. For meetings you approve, audio is processed on this Mac only — no recording, waveform, or audio file is saved to disk, temp storage, or the cloud. Only transcript text and its provenance are kept here. Turn meetings off or exclude apps anytime below.",
+    meetingDisclosureBrief:
+      "Nothing joins your call. On-device only — no audio file saved.",
+    meetingListening: "Listening on this Mac · no recording saved",
+    meetingDisclosureRecap:
+      "Processed on this Mac only. No recording saved — transcript, provenance, and your notes.",
     // errors
     sources: "Sources",
     noAnswer: "(no response)",

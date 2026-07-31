@@ -82,6 +82,11 @@ pub struct Settings {
     /// `docs/context-layer-audit-and-plan.md` §8), *not* Auto.
     #[serde(default)]
     pub language: MeetingLanguage,
+    /// When `false` (shipped default), sustained microphone use alone never opens an offer —
+    /// a Meet URL, Zoom, or meeting controls must corroborate. Opt-in for Discord-style calls
+    /// in apps SHOGUN does not recognise (FR-MT-04).
+    #[serde(default)]
+    pub allow_mic_only_detect: bool,
 }
 
 // Written out rather than derived, though it is derivable. `#[derive(Default)]` would leave the
@@ -99,6 +104,7 @@ impl Default for Settings {
             excluded_occurrences: BTreeSet::new(),
             asr_model: AsrModel::Small,
             language: MeetingLanguage::English,
+            allow_mic_only_detect: false,
         }
     }
 }
@@ -151,6 +157,11 @@ mod tests {
         // The promise of FR-MT-01, asserted rather than trusted: a build that flips this default
         // fails here instead of in a user's meeting.
         assert!(!Settings::default().enabled);
+    }
+
+    #[test]
+    fn mic_only_detect_ships_off() {
+        assert!(!Settings::default().allow_mic_only_detect);
     }
 
     #[test]

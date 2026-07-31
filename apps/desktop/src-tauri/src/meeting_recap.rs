@@ -17,7 +17,7 @@
 //! module adds no second sink; it passes `db.traceability_sink()`.
 
 #[cfg(target_os = "macos")]
-pub use mac::spawn;
+pub use mac::{select_kk_configured, spawn};
 
 #[cfg(target_os = "macos")]
 mod mac {
@@ -50,6 +50,12 @@ mod mac {
     /// pins a thread for the API's 24-hour ceiling.
     const POLL_INTERVAL: Duration = Duration::from_secs(30);
     const MAX_POLLS: u32 = 20;
+
+    /// Whether the Batch lane's Select KK credential is present in Keychain. The overlay uses this
+    /// to show a needs-key state only when Rust confirms absence — not on a UI timeout.
+    pub fn select_kk_configured() -> bool {
+        select_kk_key().is_some()
+    }
 
     /// The Select KK key, if this build has been provisioned with one. Absent is a normal state: the
     /// Recap then stays degraded rather than being generated. Read exactly like dream.rs.
@@ -97,6 +103,7 @@ mod mac {
         // The Select KK key. Absent → keep the degraded Recap (invariant 5 / FR-MT-19).
         let Some(key) = select_kk_key() else {
             eprintln!("[meeting] no Select KK key; keeping degraded recap");
+            let _ = app.emit("meeting_recap_needs_key", session_id);
             return;
         };
 

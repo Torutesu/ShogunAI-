@@ -66,10 +66,34 @@ impl SegmentSink for DbSink {
 fn whisper_model_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
     if let Ok(m) = std::env::var("SHOGUN_WHISPER_MODEL") {
         let p = std::path::PathBuf::from(m);
-        return p.exists().then_some(p);
+        if p.exists() {
+            return Some(p);
+        }
+        eprintln!(
+            "[meeting] SHOGUN_WHISPER_MODEL set but missing on disk: {}",
+            p.display()
+        );
+    }
+    for p in dev_whisper_candidates() {
+        if p.exists() {
+            eprintln!("[meeting] whisper model (dev checkout): {}", p.display());
+            return Some(p);
+        }
     }
     let p = app.path().resource_dir().ok()?.join("models/whisper-small.gguf");
     p.exists().then_some(p)
+}
+
+/// Dev-checkout paths for `scripts/fetch-whisper-model.sh` output. The fetch script lands
+/// `ggml-small.bin` under repo `models/whisper/`; without this the spike binary only looks at
+/// `SHOGUN_WHISPER_MODEL` or the packaged resource dir and degrades to notes-only even when the
+/// model is already on disk.
+fn dev_whisper_candidates() -> [std::path::PathBuf; 2] {
+    let base = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    [
+        base.join("../../../models/whisper/ggml-small.bin"),
+        base.join("../../../models/whisper-small.gguf"),
+    ]
 }
 
 /// The whisper model to load for `model`, degrading toward the bundled small model. For `Turbo` we

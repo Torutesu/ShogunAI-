@@ -54,6 +54,10 @@ use shogun_core::meeting::gate::OfferGate;
         /// The running audio lane (MT3), when one is capturing. `None` while idle, or when audio
         /// degraded to notes-only. Held here so `StopAudio` can tear the exact same lane down.
         audio: Option<crate::audio_lane::Handle>,
+        /// Set when the offer that opened this interval saw a Meet URL (FR-MT-11 tab/window end).
+        opened_via_meet_url: bool,
+        /// When the session browser's frontmost tab first stopped looking like a meeting.
+        url_lost_since_ms: Option<i64>,
     }
 
     impl Lane {
@@ -71,6 +75,8 @@ use shogun_core::meeting::gate::OfferGate;
                 gate: OfferGate::new(),
                 mic: MicWatch::new(),
                 audio: None,
+                opened_via_meet_url: false,
+                url_lost_since_ms: None,
             }
         }
     }
@@ -181,6 +187,8 @@ use shogun_core::meeting::gate::OfferGate;
                 Effect::CloseSession(why) => {
                     if let Some(id) = lane.session_id.take() {
                         lane.last_session_id = Some(id);
+                        lane.opened_via_meet_url = false;
+                        lane.url_lost_since_ms = None;
                         if close_session(app, id) {
                             eprintln!("[meeting] session {id} closed ({why:?})");
                         } else {
@@ -276,7 +284,8 @@ use shogun_core::meeting::gate::OfferGate;
 
         // Fed every tick, including while a meeting is already running: the watch measures a
         // continuous stretch, so skipping observations would make it forget the call is ongoing.
-        let mic_sustained = lane.mic.observe(mic_open, now);
+        lane.mic.observe(mic_open, now);
+        let mic_sustained_ms = lane.mic.sustained_ms(now);
 
         if !lane.settings.enabled {
             return;
@@ -301,24 +310,47 @@ use shogun_core::meeting::gate::OfferGate;
             return;
         }
 
-        // Signal (2) only. The microphone-in-use and AX-controls signals of FR-MT-04 need native
-        // probes that do not exist yet; claiming them here would inflate the confidence stored
-        // against the interval beyond what was actually observed.
+        // Signal (2) only. The AX-controls signal of FR-MT-04 needs native probes that do not
+        // exist yet; claiming them here would inflate the confidence stored against the interval
+        // beyond what was actually observed.
+        let has_meet_url = page_url.is_some_and(detect::is_meeting_url);
+        let has_zoom_bundle = detect::is_meeting_app(bundle_id);
+        let meeting_context = has_zoom_bundle || has_meet_url;
+        let on_media_page = page_url.is_some_and(detect::is_media_url);
+        let page_host = page_url.and_then(detect::host_from_url);
         let signals = Signals {
-            // The opener: people have been talking through this machine for a sustained stretch.
-            mic_in_use: mic_sustained,
+            // Sustained mic: suppressed on media pages unless a meeting URL/app is already in
+            // front; mic-only elsewhere needs 30s, not 10s (FR-MT-04 — ② alone is weak).
+            mic_in_use: detect::mic_counts_as_signal(
+                mic_sustained_ms,
+                meeting_context,
+                on_media_page,
+            ),
             // Corroboration: a known meeting app, or a browser on a meeting page. Either can
             // still open an interval alone, so a call whose audio does not run through the
             // default input device is not invisible.
-            meeting_app_frontmost: detect::is_meeting_app(bundle_id)
-                || page_url.is_some_and(detect::is_meeting_url),
+            meeting_app_frontmost: meeting_context,
             ..Default::default()
         };
-        if let Decision::Offer { confidence, provenance } = detect::decide(&signals) {
+        let ctx = detect::DetectionCtx {
+            is_browser: is_browser(bundle_id),
+            page_host: page_host.as_deref(),
+            has_meet_url,
+            has_zoom_bundle,
+            window_title,
+        };
+        let policy = detect::OfferPolicy {
+            allow_mic_only: lane.settings.allow_mic_only_detect,
+        };
+        if let Decision::Offer { confidence, provenance } =
+            detect::evaluate_offer(&signals, &ctx, &policy)
+        {
             // The window title, not the app name: "Weekly sync" is what the user calls the
             // meeting, and `zoom.us` on every row would make the whole timeline look identical.
             lane.title = window_title.map(str::to_string);
             lane.app_bundle_id = Some(bundle_id.to_string());
+            lane.opened_via_meet_url = has_meet_url;
+            lane.url_lost_since_ms = None;
             lane.confidence = confidence;
             lane.provenance = provenance;
             let effects = lane.machine.step(Input::MeetingDetected);
@@ -326,9 +358,44 @@ use shogun_core::meeting::gate::OfferGate;
         }
     }
 
+    /// Frontmost-app facts for the recording watchdog (FR-MT-11). `None` when the driver could
+    /// not read the frontmost app this tick.
+    struct TickObservation<'a> {
+        bundle_id: &'a str,
+        page_url: Option<&'a str>,
+        window_title: Option<&'a str>,
+        is_browser: bool,
+    }
+
+    /// Update grace timer when a Meet-URL session's browser is frontmost and no longer on Meet,
+    /// or when the session browser is no longer frontmost at all (user switched to another app).
+    fn observe_meeting_url(lane: &mut Lane, obs: &TickObservation<'_>, now: i64) {
+        if !lane.opened_via_meet_url {
+            return;
+        }
+        let Some(session_browser) = lane.app_bundle_id.as_deref() else {
+            return;
+        };
+        if session_browser.is_empty() {
+            return;
+        }
+        if obs.bundle_id != session_browser || !obs.is_browser {
+            // Left the session browser — same grace as leaving the Meet tab (FR-MT-11).
+            if lane.url_lost_since_ms.is_none() {
+                lane.url_lost_since_ms = Some(now);
+            }
+            return;
+        }
+        if detect::browser_meeting_page_present(obs.page_url, obs.window_title) {
+            lane.url_lost_since_ms = None;
+        } else if lane.url_lost_since_ms.is_none() {
+            lane.url_lost_since_ms = Some(now);
+        }
+    }
+
     /// One-second tick: advances the offer countdown, ends meetings that are over, and keeps the
     /// pill's clock moving.
-    pub fn tick(app: &tauri::AppHandle) {
+    fn tick(app: &tauri::AppHandle, obs: Option<TickObservation<'_>>) {
         let now = now_ms();
         enum Next {
             Nothing,
@@ -356,17 +423,34 @@ use shogun_core::meeting::gate::OfferGate;
                     }
                 }
                 State::Recording => {
+                    if let Some(obs) = obs.as_ref() {
+                        observe_meeting_url(lane, obs, now);
+                    }
                     // FR-MT-11. Without this the interval never closes on its own: the user quits
                     // the meeting app and the pill keeps counting until they think to press Stop.
                     //
                     // `last_sound_at` is pinned to `now` because there is no audio lane yet, so
                     // the silence condition cannot fire and must not pretend to. It becomes real
                     // in MT3.
-                    let present = lane
-                        .app_bundle_id
-                        .as_deref()
-                        // `map_or(true, ..)`: `is_none_or` needs Rust 1.82, MSRV here is 1.80.
-                        .map_or(true, crate::display::is_app_running);
+                    //
+                    // Mic-only offers often fire while the SHOGUN overlay (or Tauri dev) is
+                    // frontmost. `frontmost_app` then yields an empty bundle id, and
+                    // `is_app_running("")` is always false — the very next tick reported AppGone
+                    // and the Recap showed 0 min. When there is no bundle to watch, the call *is*
+                    // the sustained microphone signal that opened the offer.
+                    //
+                    // Browser Meet sessions store `com.google.Chrome` (etc.) as the bundle: Chrome
+                    // staying open after the user navigates to Gmail is not "still in the meeting".
+                    // Track the meeting URL with a short grace instead (FR-MT-11 tab/window end).
+                    let mic_open = crate::mic::input_in_use();
+                    let present = if lane.opened_via_meet_url {
+                        !detect::meeting_url_left_past_grace(lane.url_lost_since_ms, now)
+                    } else {
+                        match lane.app_bundle_id.as_deref() {
+                            None | Some("") => lane.mic.observe(mic_open, now),
+                            Some(bundle_id) => crate::display::is_app_running(bundle_id),
+                        }
+                    };
                     let live = LiveSignals {
                         meeting_app_present: present,
                         occurrence_ends_at: None,
@@ -492,8 +576,18 @@ use shogun_core::meeting::gate::OfferGate;
                     url.as_deref(),
                     crate::mic::input_in_use(),
                 );
+                tick(
+                    &app,
+                    Some(TickObservation {
+                        bundle_id: &front.bundle_id,
+                        page_url: url.as_deref(),
+                        window_title: Some(&title),
+                        is_browser: is_browser(&front.bundle_id),
+                    }),
+                );
+            } else {
+                tick(&app, None);
             }
-            tick(&app);
         })
     }
 
@@ -545,11 +639,68 @@ use shogun_core::meeting::gate::OfferGate;
         .build()
         .map_err(|e| eprintln!("[meeting] overlay window build failed: {e}"))
         .ok()?;
-        crate::float_on_all_spaces(&win);
+        configure_overlay_window(&win);
         // What the webview was actually pointed at. A window whose webview never runs any
         // JavaScript looks exactly like a window that was never created.
         eprintln!("[meeting] overlay url = {:?}", win.url().map(|u| u.to_string()));
         Some(win)
+    }
+
+    /// One-time NSWindow setup for the meeting overlay. Deliberately NOT `float_on_all_spaces`:
+    /// that helper orders the window front and sets `canHide=false` / `movableByWindowBackground`,
+    /// which left a transparent full-window hit target blocking the desktop even when the lane
+    /// was Idle and `hide()` had been called.
+    fn configure_overlay_window(win: &tauri::WebviewWindow) {
+        use objc2::msg_send;
+        use objc2::runtime::AnyObject;
+        use std::sync::atomic::Ordering;
+
+        let ptr = match win.ns_window() {
+            Ok(p) if !p.is_null() => p as *mut AnyObject,
+            _ => {
+                eprintln!("[meeting] ns_window unavailable — overlay may not float correctly");
+                return;
+            }
+        };
+        let behavior = crate::PANEL_BEHAVIOR.load(Ordering::Relaxed);
+        let level = crate::OVERLAY_LEVEL;
+        // SAFETY: live NSWindow on the main thread (setup).
+        unsafe {
+            let _: () = msg_send![ptr, setCollectionBehavior: behavior];
+            let _: () = msg_send![ptr, setLevel: level];
+            let _: () = msg_send![ptr, setHidesOnDeactivate: false];
+            // Must stay hideable — the notch overlay sets canHide=false for residency, but this
+            // window must disappear entirely when the lane is Idle.
+            let _: () = msg_send![ptr, setCanHide: true];
+            // Drag is via the grip strip only; a movable background turns the whole frame into
+            // an invisible click-catcher.
+            let _: () = msg_send![ptr, setMovableByWindowBackground: false];
+            // Start click-through until sync_window shows real UI.
+            let _: () = msg_send![ptr, setIgnoresMouseEvents: true];
+        }
+        eprintln!("[meeting] overlay window configured (hidden, click-through)");
+    }
+
+    fn overlay_ns_window(win: &tauri::WebviewWindow) -> Option<*mut objc2::runtime::AnyObject> {
+        match win.ns_window() {
+            Ok(p) if !p.is_null() => Some(p as *mut objc2::runtime::AnyObject),
+            _ => None,
+        }
+    }
+
+    /// When `block` is false the window is removed from the screen and passes mouse events through.
+    fn set_overlay_mouse_blocking(win: &tauri::WebviewWindow, block: bool) {
+        use objc2::msg_send;
+        use objc2::runtime::AnyObject;
+        let Some(ptr) = overlay_ns_window(win) else { return };
+        // SAFETY: live NSWindow; called from the main thread via sync_window / setup.
+        unsafe {
+            let _: () = msg_send![ptr, setIgnoresMouseEvents: !block];
+            if !block {
+                let nil: *mut AnyObject = std::ptr::null_mut();
+                let _: () = msg_send![ptr, orderOut: nil];
+            }
+        }
     }
 
     /// Park the overlay at the top-right of the screen the cursor is on.
@@ -593,6 +744,13 @@ use shogun_core::meeting::gate::OfferGate;
 
     /// Show, hide and resize the overlay to match the lane's state.
     fn sync_window(app: &tauri::AppHandle, state: State, enabled: bool) {
+        let handle = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            sync_window_main(&handle, state, enabled);
+        });
+    }
+
+    fn sync_window_main(app: &tauri::AppHandle, state: State, enabled: bool) {
         // `PARKED` records only whether the overlay has been placed yet — the user may drag it
         // afterwards and it must not jump back. Showing is attempted on *every* tick it should
         // be visible: `show()` is idempotent, and treating "we showed it once" as "it is on
@@ -605,8 +763,12 @@ use shogun_core::meeting::gate::OfferGate;
         // something failed at setup and the right answer is to do nothing rather than to try
         // creating an AppKit window from this thread.
         let Some(win) = app.get_webview_window(WINDOW_LABEL) else { return };
+        // Logged on change only, so a running meeting does not print once a second.
+        static LAST: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
         if !visible {
             let _ = win.hide();
+            set_overlay_mouse_blocking(&win, false);
+            LAST.store(false, Ordering::SeqCst);
             return;
         }
         let size = if state == State::Wrapping { RECAP_SIZE } else { BAR_SIZE };
@@ -614,10 +776,17 @@ use shogun_core::meeting::gate::OfferGate;
         if !PARKED.swap(true, Ordering::SeqCst) {
             park_top_right(&win, size);
         }
+        set_overlay_mouse_blocking(&win, true);
         let shown = win.show();
         let _ = win.set_always_on_top(true);
-        // Logged on change only, so a running meeting does not print once a second.
-        static LAST: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        // Accessory apps do not auto-show windows — order front only when the lane needs UI.
+        if let Some(ptr) = overlay_ns_window(&win) {
+            use objc2::msg_send;
+            // SAFETY: live NSWindow on the main thread.
+            unsafe {
+                let _: () = msg_send![ptr, orderFrontRegardless];
+            }
+        }
         if !LAST.swap(true, Ordering::SeqCst) {
             eprintln!(
                 "[meeting] overlay show ok={} pos={:?} size={:?}",
@@ -695,6 +864,13 @@ use shogun_core::meeting::gate::OfferGate;
         }
     }
 
+    /// Whether the Select KK Batch credential (`SHOGUN` / `select-kk-batch`) is in Keychain. The
+    /// overlay uses this so "needs key" is shown only when Rust confirms absence, not on a timeout.
+    #[tauri::command]
+    pub fn meeting_select_kk_configured() -> bool {
+        crate::meeting_recap::select_kk_configured()
+    }
+
     /// The Recap for the most recently finished meeting (FR-MT-19), if there is one.
     ///
     /// Degraded by construction in MT2: assembled locally from the interval, the user's note and
@@ -751,6 +927,68 @@ use shogun_core::meeting::gate::OfferGate;
         })
     }
 
+    /// One transcribed line for the post-meeting viewer (FR-MT-10). Shown only after Stop, never
+    /// during recording.
+    #[derive(Serialize)]
+    pub struct TranscriptLineView {
+        ts: i64,
+        speaker: Option<String>,
+        text: String,
+    }
+
+    /// Whisper marks silence as `[BLANK_AUDIO]`; the Recap viewer hides these but must not claim
+    /// "no transcript" when they are the only rows stored.
+    fn is_blank_transcript_marker(text: &str) -> bool {
+        text.trim().eq_ignore_ascii_case("[BLANK_AUDIO]")
+    }
+
+    /// Displayable transcript lines plus a flag when only blank-audio markers were stored.
+    #[derive(Serialize)]
+    pub struct MeetingTranscriptView {
+        lines: Vec<TranscriptLineView>,
+        only_blanks: bool,
+    }
+
+    /// The session transcript for the most recently finished meeting, or for `session_id` when
+    /// provided. Blank-audio markers are filtered out; `only_blanks` is set when that was all
+    /// that was stored.
+    #[tauri::command]
+    pub fn get_meeting_transcript(
+        app: tauri::AppHandle,
+        session_id: Option<i64>,
+    ) -> MeetingTranscriptView {
+        let id = session_id.or_else(|| {
+            LANE.lock()
+                .ok()
+                .and_then(|g| g.as_ref().and_then(|l| l.last_session_id))
+        });
+        let Some(id) = id else {
+            return MeetingTranscriptView { lines: Vec::new(), only_blanks: false };
+        };
+        let Some(db) = db(&app) else {
+            return MeetingTranscriptView { lines: Vec::new(), only_blanks: false };
+        };
+        let stored = db.meeting_transcript(id);
+        let mut displayable = Vec::new();
+        let mut saw_blank = false;
+        for (ts, speaker, text) in stored {
+            if text.trim().is_empty() {
+                continue;
+            }
+            if is_blank_transcript_marker(&text) {
+                saw_blank = true;
+                continue;
+            }
+            displayable.push(TranscriptLineView { ts, speaker, text });
+        }
+        let only_blanks = displayable.is_empty() && saw_blank;
+        eprintln!(
+            "[meeting] get_meeting_transcript session={id}: {} displayable (only_blanks={only_blanks})",
+            displayable.len()
+        );
+        MeetingTranscriptView { lines: displayable, only_blanks }
+    }
+
     /// Current settings for the Settings UI.
     #[tauri::command]
     pub fn get_meeting_settings() -> Settings {
@@ -790,6 +1028,24 @@ use shogun_core::meeting::gate::OfferGate;
             emit(&app, lane, now);
         }
         eprintln!("[meeting] notes → {}", if enabled { "enabled" } else { "off" });
+        Ok(())
+    }
+
+    /// Mic-only detection opt-in (FR-MT-04). Ships off: sustained mic alone never offers unless
+    /// the user enables this in settings.
+    #[tauri::command]
+    pub fn set_meeting_allow_mic_only(allow: bool, app: tauri::AppHandle) -> Result<(), String> {
+        let candidate = {
+            let Ok(g) = LANE.lock() else { return Err("busy".into()) };
+            let Some(lane) = g.as_ref() else { return Err("not ready".into()) };
+            Settings { allow_mic_only_detect: allow, ..lane.settings.clone() }
+        };
+        save(&app, &candidate)?;
+
+        let Ok(mut g) = LANE.lock() else { return Err("busy".into()) };
+        let Some(lane) = g.as_mut() else { return Err("not ready".into()) };
+        lane.settings = candidate;
+        eprintln!("[meeting] mic-only detect → {}", if allow { "on" } else { "off" });
         Ok(())
     }
 

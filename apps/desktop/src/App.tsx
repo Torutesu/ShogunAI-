@@ -2,12 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
-
-// Report webview-side failures to the terminal via Rust — a silent catch made real errors
-// (missing window-API permissions) look like "the button does nothing".
-function uiLog(msg: string): void {
-  if (IN_TAURI) void invoke("ui_log", { msg }).catch(() => undefined);
-}
+import { uiLog } from "./uiLog";
 
 // Explicit window drag on mouse-down. data-tauri-drag-region proved unreliable on device, so call
 // startDragging() directly. Ignore drags that start on an interactive control (button/input).
@@ -59,6 +54,12 @@ interface MeetingView {
   app_bundle_id: string | null;
   elapsed_ms: number;
   countdown_ms: number;
+}
+
+/** mm:ss. Tabular figures in CSS keep the row from reflowing as the seconds tick. */
+function clock(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
 }
 
 interface Status {
@@ -574,10 +575,34 @@ export function App(): JSX.Element {
     if (r.width < 1 || r.height < 1) return;
     // +1 guards against a fractional layout width being truncated into a clipped pill.
     void applyPanelSize(Math.ceil(r.width) + 1, Math.ceil(r.height) + 1);
-  }, [open, live, state.commitments.length, state.open_loops.length, meeting?.state, meeting?.title, meeting?.elapsed_ms]);
+  }, [
+    open,
+    live,
+    state.commitments.length,
+    state.open_loops.length,
+    meeting?.state,
+    meeting?.title,
+    meeting?.elapsed_ms,
+    meeting?.countdown_ms,
+  ]);
+
+  const meetingLive =
+    meeting?.enabled && (meeting.state === "offered" || meeting.state === "recording")
+      ? meeting
+      : null;
 
   // Collapsed: a clear, clickable handle hanging from the notch.
   if (!open) {
+    // A meeting in progress outranks the ordinary handle (FR-MT-09).
+    if (meetingLive) {
+      return (
+        <div className="stage stage--handle">
+          <div ref={pillRef}>
+            <MeetingPill view={meetingLive} />
+          </div>
+        </div>
+      );
+    }
     return (
       <div className="stage stage--handle">
         <button
@@ -619,6 +644,7 @@ export function App(): JSX.Element {
 
   return (
     <div className="stage">
+      {meetingLive ? <MeetingPill view={meetingLive} /> : null}
       <div className="panel" onPointerEnter={cancelAutoCollapse} onPointerLeave={onPanelLeave}>
         {showSettings ? (
           <Settings
@@ -633,6 +659,8 @@ export function App(): JSX.Element {
             }}
             onCleared={refreshState}
           />
+        ) : meetingLive?.state === "recording" ? (
+          <MeetingNote />
         ) : (
           <>
             <header className="head" onMouseDown={beginDrag}>
@@ -839,15 +867,119 @@ export function App(): JSX.Element {
   );
 }
 
+/** The meeting note (FR-MT-10). Expanded panel is notes-only while recording. */
+function MeetingNote(): JSX.Element {
+  const [body, setBody] = useState("");
+  const [status, setStatus] = useState<"idle" | "saved" | "failed">("idle");
+  const latest = useRef("");
+
+  const save = (text: string): void => {
+    if (!IN_TAURI) return;
+    void invoke("meeting_save_note", { body: text })
+      .then(() => setStatus("saved"))
+      .catch(() => setStatus("failed"));
+  };
+
+  useEffect(() => {
+    latest.current = body;
+  }, [body]);
+
+  useEffect(() => {
+    if (!body) return;
+    const id = window.setTimeout(() => save(body), 800);
+    return () => window.clearTimeout(id);
+  }, [body]);
+
+  useEffect(
+    () => () => {
+      if (latest.current) save(latest.current);
+    },
+    [],
+  );
+
+  return (
+    <div className="mnote">
+      <textarea
+        className="mnote__area"
+        value={body}
+        placeholder={t.meetingNotePlaceholder}
+        onChange={(e) => {
+          setBody(e.target.value);
+          setStatus("idle");
+        }}
+        onFocus={() => void invoke("focus_field", { focused: true }).catch(() => undefined)}
+        onBlur={() => void invoke("focus_field", { focused: false }).catch(() => undefined)}
+      />
+      <div className="mnote__status">
+        {status === "saved" ? t.meetingNotesSaved : status === "failed" ? t.meetingNotesFailed : ""}
+      </div>
+    </div>
+  );
+}
+
+/** The meeting pill (FR-MT-08/09). Replaces the handle while offered or recording. */
+function MeetingPill({ view }: { view: MeetingView }): JSX.Element {
+  const title = view.title?.trim() || t.meetingUntitled;
+
+  if (view.state === "offered") {
+    return (
+      <div className="mpill mpill--offer">
+        <span className="mpill__title">{title}</span>
+        <span className="mpill__count">
+          {t.meetingStarting} {Math.ceil(view.countdown_ms / 1000)}s
+        </span>
+        <span className="mpill__acts">
+          {view.app_bundle_id ? (
+            <button
+              type="button"
+              className="mpill__btn mpill__btn--quiet"
+              onClick={() =>
+                void invoke("meeting_exclude_app", { bundleId: view.app_bundle_id }).catch(
+                  () => undefined,
+                )
+              }
+            >
+              {t.meetingNeverThisApp}
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className="mpill__btn"
+            onClick={() => void invoke("meeting_not_now").catch(() => undefined)}
+          >
+            {t.meetingNotNow}
+          </button>
+          <button
+            type="button"
+            className="mpill__btn mpill__btn--go"
+            onClick={() => void invoke("meeting_start").catch(() => undefined)}
+          >
+            {t.meetingStart}
+          </button>
+        </span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mpill">
+      <span className="mpill__label">{t.meetingNotes}</span>
+      <span className="mpill__time">{clock(view.elapsed_ms)}</span>
+      <span className="mpill__title">{title}</span>
+      <button
+        type="button"
+        className="mpill__btn mpill__btn--stop"
+        onClick={() => void invoke("meeting_stop").catch(() => undefined)}
+      >
+        {t.meetingStop}
+      </button>
+    </div>
+  );
+}
+
 // Corner grip that lets the user stretch the open panel. The native panel is a borderless NSPanel
 // (no OS resize edges), so we drive `set_panel_size` from a pointer drag — the panel's top-left is
 // anchored, so it grows down/right, which reads naturally for a window that hangs from the notch.
-/** The meeting pill (FR-MT-08/09).
- *
- *  Replaces the ordinary handle while a meeting is offered or being noted, because the one thing
- *  it must never do is be missable: this is the surface that makes "it was listening and I never
- *  knew" impossible. Hence no confirmation on Stop, an always-moving clock, and a live dot rather
- *  than a red record lamp — nothing is being recorded, and the lamp would say otherwise. */
 function ResizeGrip(props: {
   current: () => Size;
   onResize: (w: number, h: number) => void;
@@ -1045,14 +1177,18 @@ function DreamSection(): JSX.Element {
  *  the backend shows "Off" rather than briefly claiming the feature is on. */
 function MeetingSection(): JSX.Element {
   const [on, setOn] = useState(false);
+  const [micOnly, setMicOnly] = useState(false);
   const [busy, setBusy] = useState(false);
   const [excluded, setExcluded] = useState<string[]>([]);
 
   const load = (): void => {
     if (!IN_TAURI) return;
-    void invoke<{ enabled: boolean; excluded_apps: string[] }>("get_meeting_settings")
+    void invoke<{ enabled: boolean; excluded_apps: string[]; allow_mic_only_detect?: boolean }>(
+      "get_meeting_settings",
+    )
       .then((s) => {
         setOn(s.enabled);
+        setMicOnly(s.allow_mic_only_detect ?? false);
         setExcluded(s.excluded_apps ?? []);
       })
       .catch(() => undefined);
@@ -1071,6 +1207,17 @@ function MeetingSection(): JSX.Element {
       .then(load)
       .catch(() => setOn(!next))
       .finally(() => setBusy(false));
+  };
+
+  const toggleMicOnly = (next: boolean): void => {
+    if (!IN_TAURI) {
+      setMicOnly(next);
+      return;
+    }
+    setMicOnly(next);
+    void invoke("set_meeting_allow_mic_only", { allow: next })
+      .then(load)
+      .catch(() => setMicOnly(!next));
   };
 
   return (
@@ -1099,6 +1246,19 @@ function MeetingSection(): JSX.Element {
         </button>
       </div>
       <div className="set__hint">{t.meetingHint}</div>
+      {on ? (
+        <div className="set">
+          <label className="set__row">
+            <input
+              type="checkbox"
+              checked={micOnly}
+              onChange={(e) => toggleMicOnly(e.target.checked)}
+            />
+            <span>{t.meetingMicOnly}</span>
+          </label>
+          <div className="set__hint">{t.meetingMicOnlyHint}</div>
+        </div>
+      ) : null}
       {/* Tier (b), undoable. An exclusion added by an impatient tap during a meeting would
           otherwise become a permanent blind spot with no way back (FR-MT-02b). */}
       {on ? (

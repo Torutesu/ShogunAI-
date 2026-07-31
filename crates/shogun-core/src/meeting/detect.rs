@@ -56,6 +56,22 @@ pub fn is_meeting_app(bundle_id: &str) -> bool {
 /// Hosts that mean "a meeting is open in the browser" (FR-MT-04). Google Meet in v1.
 const MEETING_HOSTS: &[&str] = &["meet.google.com"];
 
+/// Host suffixes for passive media playback — never meeting context on their own.
+///
+/// A sustained microphone on a YouTube tab is usually speaker bleed into an open input device
+/// or a PiP window whose URL AX cannot read, not attendance. Mic-only offers are suppressed
+/// here; a real Meet/Zoom URL or native meeting app still opens normally.
+const MEDIA_HOST_SUFFIXES: &[&str] = &[
+    "youtube.com",
+    "youtu.be",
+    "netflix.com",
+    "twitch.tv",
+    "spotify.com",
+    "vimeo.com",
+    "soundcloud.com",
+    "music.apple.com",
+];
+
 /// Whether a browser URL is a meeting (FR-MT-04).
 ///
 /// Matches on the parsed **host**, never on a substring of the URL: `meet.google.com.evil.test`
@@ -66,7 +82,138 @@ pub fn is_meeting_url(url: &str) -> bool {
     MEETING_HOSTS.iter().any(|h| host == *h)
 }
 
+/// Whether a browser URL is known passive media (YouTube, streaming, etc.).
+///
+/// These pages must not corroborate mic-only detection. [`is_meeting_url`] wins when both could
+/// apply — a Meet link is never classified as media.
+pub fn is_media_url(url: &str) -> bool {
+    let Some(host) = host_of(url) else { return false };
+    if is_meeting_url(url) {
+        return false;
+    }
+    is_media_host(&host)
+}
+
+fn is_media_host(host: &str) -> bool {
+    MEDIA_HOST_SUFFIXES
+        .iter()
+        .any(|suffix| host == *suffix || host.ends_with(&format!(".{suffix}")))
+}
+
+/// Window titles that mean passive media or PiP — not a meeting the user is attending.
+///
+/// AX often cannot read the URL inside a PiP window, so the title is the only cheap signal.
+const SUPPRESSED_TITLE_PATTERNS: &[&str] = &[
+    "picture-in-picture",
+    "picture in picture",
+    "youtube",
+    "netflix",
+    "twitch",
+    "spotify",
+    "vimeo",
+    "hulu",
+    "disney+",
+    "prime video",
+    "soundcloud",
+];
+
+/// Whether a focused window title should block an offer (PiP, streaming tabs, etc.).
+pub fn is_suppressed_title(title: &str) -> bool {
+    let lower = title.to_ascii_lowercase();
+    SUPPRESSED_TITLE_PATTERNS.iter().any(|p| lower.contains(p))
+}
+
+/// Adapter-side facts the pure detector needs to apply product policy (FR-MT-04).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DetectionCtx<'a> {
+    /// Frontmost app is a browser (Chrome, Safari, Arc, …).
+    pub is_browser: bool,
+    /// Parsed host of the frontmost browser tab, when a URL was read.
+    pub page_host: Option<&'a str>,
+    /// A known meeting URL is open (`meet.google.com`, …).
+    pub has_meet_url: bool,
+    /// Native Zoom (`us.zoom.xos`) is frontmost.
+    pub has_zoom_bundle: bool,
+    /// Focused window title, when AX returned one.
+    pub window_title: Option<&'a str>,
+}
+
+/// User settings that gate how aggressively mic-only evidence may open an offer.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct OfferPolicy {
+    /// When `false`, sustained mic use alone never opens an interval.
+    pub allow_mic_only: bool,
+}
+
+/// Count how many independent signals fired (calendar included when present).
+fn corroborating_count(signals: &Signals) -> usize {
+    usize::from(signals.mic_in_use)
+        + usize::from(signals.meeting_app_frontmost)
+        + usize::from(signals.meeting_controls_visible)
+        + usize::from(signals.occurrence_now)
+}
+
+/// Whether the observation already proves a v1 meeting app (Meet URL or native Zoom).
+fn has_strong_opener(ctx: &DetectionCtx<'_>) -> bool {
+    ctx.has_meet_url || ctx.has_zoom_bundle
+}
+
+/// Browser tab with no readable host — cannot prove Meet is open (PiP, AX gaps).
+fn browser_lacks_meeting_proof(ctx: &DetectionCtx<'_>) -> bool {
+    ctx.is_browser && !ctx.has_meet_url && ctx.page_host.is_none_or(str::is_empty)
+}
+
+/// Apply FR-MT-04 policy on top of raw signals, then score.
+///
+/// Biases toward fewer false positives: mic-only is opt-in, PiP/media titles are dropped,
+/// browsers with an empty host cannot corroborate, and non-URL offers need two agreeing signals
+/// unless Meet or Zoom is already proven.
+pub fn evaluate_offer(
+    signals: &Signals,
+    ctx: &DetectionCtx<'_>,
+    policy: &OfferPolicy,
+) -> Decision {
+    if ctx.window_title.is_some_and(is_suppressed_title) {
+        return Decision::Ignore;
+    }
+
+    let mut effective = *signals;
+
+    if browser_lacks_meeting_proof(ctx) {
+        effective.mic_in_use = false;
+        effective.meeting_app_frontmost = false;
+    }
+
+    let mic_is_only_opener = effective.mic_in_use
+        && !effective.meeting_app_frontmost
+        && !effective.meeting_controls_visible;
+    if mic_is_only_opener && !policy.allow_mic_only {
+        effective.mic_in_use = false;
+    }
+
+    let d = decide(&effective);
+    let Decision::Offer { confidence, provenance } = d else {
+        return d;
+    };
+
+    if !has_strong_opener(ctx) && corroborating_count(&effective) < 2 {
+        let mic_only_allowed = policy.allow_mic_only
+            && effective.mic_in_use
+            && !effective.meeting_app_frontmost
+            && !effective.meeting_controls_visible;
+        if !mic_only_allowed {
+            return Decision::Ignore;
+        }
+    }
+
+    Decision::Offer { confidence, provenance }
+}
+
 /// The host component of an absolute URL, lowercased and without userinfo or port.
+pub fn host_from_url(url: &str) -> Option<String> {
+    host_of(url)
+}
+
 fn host_of(url: &str) -> Option<String> {
     let rest = url.split_once("://")?.1;
     let authority = rest.split(['/', '?', '#']).next()?;
@@ -123,10 +270,30 @@ pub fn decide(signals: &Signals) -> Decision {
 }
 
 
-/// How long the microphone must stay in use before it counts as a meeting rather than a moment
-/// of dictation. Issue #7 asks for a sustained signal; ten seconds separates "hey Siri" and a
+/// How long the microphone must stay in use before it counts when something else already says
+/// "meeting" (a Meet URL, Zoom, calendar corroboration). Ten seconds separates "hey Siri" and a
 /// voice memo from a call without making the offer feel late.
 pub const MIC_SUSTAIN_MS: i64 = 10_000;
+
+/// Mic-only is the weakest opener (FR-MT-04: ② alone is medium, not certain). When nothing else
+/// corroborates, wait longer so speaker bleed on a media tab or a stray open input does not
+/// surface the offer.
+pub const MIC_ONLY_SUSTAIN_MS: i64 = 30_000;
+
+/// Whether sustained microphone use should count as signal ② this tick.
+///
+/// Suppressed on known media pages unless [`meeting_context`] is already true (Meet URL / Zoom).
+/// Shorter sustain when meeting context is present; longer when mic is the only evidence.
+pub fn mic_counts_as_signal(sustained_ms: i64, meeting_context: bool, on_media_page: bool) -> bool {
+    if sustained_ms == 0 {
+        return false;
+    }
+    if on_media_page && !meeting_context {
+        return false;
+    }
+    let threshold = if meeting_context { MIC_SUSTAIN_MS } else { MIC_ONLY_SUSTAIN_MS };
+    sustained_ms >= threshold
+}
 
 /// Turns "the microphone is open right now" into "a call is happening".
 ///
@@ -147,7 +314,7 @@ impl MicWatch {
     }
 
     /// Feed one observation. Returns whether the microphone has been continuously in use for
-    /// [`MIC_SUSTAIN_MS`].
+    /// at least [`MIC_SUSTAIN_MS`] — used by the recording watchdog, not the offer threshold.
     pub fn observe(&mut self, in_use: bool, now: i64) -> bool {
         if !in_use {
             self.since_ms = None;
@@ -157,6 +324,11 @@ impl MicWatch {
         // `saturating_sub` so a clock that jumps backwards restarts the wait instead of
         // reporting a meeting that has been running for negative time.
         now.saturating_sub(since) >= MIC_SUSTAIN_MS
+    }
+
+    /// Continuous in-use duration in milliseconds, or zero when the mic is closed.
+    pub fn sustained_ms(&self, now: i64) -> i64 {
+        self.since_ms.map(|since| now.saturating_sub(since)).unwrap_or(0)
     }
 }
 
@@ -175,6 +347,44 @@ pub struct LiveSignals {
 pub const OCCURRENCE_GRACE_MS: i64 = 10 * 60 * 1_000;
 /// FR-MT-11: silence that ends a meeting.
 pub const SILENCE_LIMIT_MS: i64 = 15 * 60 * 1_000;
+/// FR-MT-11: after the meeting page leaves the frontmost browser tab, wait this long before
+/// wrapping. Covers a quick alt-tab or lobby flicker without keeping the pill alive for hours
+/// because Chrome is still open on Gmail.
+pub const MEETING_URL_LEFT_GRACE_MS: i64 = 20_000;
+
+/// Whether the frontmost browser tab still looks like an active meeting (FR-MT-11).
+///
+/// Used while a session opened on a Meet URL is recording: quitting Chrome is handled by
+/// [`LiveSignals::meeting_app_present`]; navigating to mail or closing the Meet tab is this.
+pub fn browser_meeting_page_present(page_url: Option<&str>, window_title: Option<&str>) -> bool {
+    if page_url.is_some_and(is_meeting_url) {
+        return true;
+    }
+    if let Some(url) = page_url {
+        if is_media_url(url) {
+            return false;
+        }
+        if host_of(url).is_some_and(|h| !h.is_empty()) {
+            return false;
+        }
+    }
+    if let Some(title) = window_title {
+        let lower = title.to_ascii_lowercase();
+        if lower.contains("meet") || lower.contains("zoom") {
+            return true;
+        }
+        // PiP / AX gaps: an unreadable URL with a media title is still in-call, not "left".
+        if is_suppressed_title(title) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Whether a URL-tracked session has been off the meeting page long enough to wrap (FR-MT-11).
+pub fn meeting_url_left_past_grace(lost_since_ms: Option<i64>, now: i64) -> bool {
+    lost_since_ms.is_some_and(|since| now.saturating_sub(since) >= MEETING_URL_LEFT_GRACE_MS)
+}
 
 /// Whether a running meeting should end, and why (FR-MT-11).
 ///
@@ -357,11 +567,113 @@ mod tests {
 
     #[test]
     fn a_sustained_microphone_is_a_meeting_on_its_own() {
-        // The signal that makes this app-agnostic. A call in an app nobody put in the bundle-id
-        // table is still a call, and `mic_in_use` here means MicWatch has been saying yes for
-        // MIC_SUSTAIN_MS — the brief bursts that are dictation never reach this point.
+        // `decide` still scores mic-only; product policy gates it unless opted in.
         let d = decide(&Signals { mic_in_use: true, ..Default::default() });
         assert!(matches!(d, Decision::Offer { .. }));
+    }
+
+    #[test]
+    fn mic_only_is_blocked_by_default_policy() {
+        let signals = Signals { mic_in_use: true, ..Default::default() };
+        let ctx = DetectionCtx::default();
+        let policy = OfferPolicy::default();
+        assert_eq!(evaluate_offer(&signals, &ctx, &policy), Decision::Ignore);
+    }
+
+    #[test]
+    fn mic_only_offers_when_opted_in() {
+        let signals = Signals { mic_in_use: true, ..Default::default() };
+        let ctx = DetectionCtx::default();
+        let policy = OfferPolicy { allow_mic_only: true };
+        assert!(matches!(evaluate_offer(&signals, &ctx, &policy), Decision::Offer { .. }));
+    }
+
+    #[test]
+    fn youtube_url_is_not_a_meeting_and_mic_only_blocked() {
+        assert!(!is_meeting_url("https://www.youtube.com/watch?v=abc"));
+        assert!(is_media_url("https://www.youtube.com/watch?v=abc"));
+        let signals = Signals {
+            mic_in_use: mic_counts_as_signal(MIC_ONLY_SUSTAIN_MS, false, true),
+            ..Default::default()
+        };
+        let ctx = DetectionCtx {
+            is_browser: true,
+            page_host: Some("www.youtube.com"),
+            window_title: Some("Rick Astley - YouTube"),
+            ..Default::default()
+        };
+        assert_eq!(evaluate_offer(&signals, &ctx, &OfferPolicy::default()), Decision::Ignore);
+    }
+
+    #[test]
+    fn empty_host_chrome_with_mic_does_not_offer() {
+        let signals = Signals {
+            mic_in_use: mic_counts_as_signal(MIC_ONLY_SUSTAIN_MS, false, false),
+            ..Default::default()
+        };
+        let ctx = DetectionCtx {
+            is_browser: true,
+            page_host: Some(""),
+            window_title: Some("New tab - Google Chrome"),
+            ..Default::default()
+        };
+        assert_eq!(evaluate_offer(&signals, &ctx, &OfferPolicy::default()), Decision::Ignore);
+    }
+
+    #[test]
+    fn pip_title_suppresses_even_with_mic() {
+        let signals = Signals {
+            mic_in_use: mic_counts_as_signal(MIC_ONLY_SUSTAIN_MS, false, false),
+            ..Default::default()
+        };
+        let ctx = DetectionCtx {
+            is_browser: true,
+            page_host: Some(""),
+            window_title: Some("Picture-in-picture"),
+            ..Default::default()
+        };
+        assert_eq!(evaluate_offer(&signals, &ctx, &OfferPolicy::default()), Decision::Ignore);
+        assert!(is_suppressed_title("Picture-in-picture"));
+    }
+
+    #[test]
+    fn meet_url_opens_without_mic() {
+        let signals = Signals { meeting_app_frontmost: true, ..Default::default() };
+        let ctx = DetectionCtx {
+            is_browser: true,
+            page_host: Some("meet.google.com"),
+            has_meet_url: true,
+            ..Default::default()
+        };
+        assert!(matches!(
+            evaluate_offer(&signals, &ctx, &OfferPolicy::default()),
+            Decision::Offer { .. }
+        ));
+    }
+
+    #[test]
+    fn zoom_bundle_opens_without_mic() {
+        let signals = Signals { meeting_app_frontmost: true, ..Default::default() };
+        let ctx = DetectionCtx { has_zoom_bundle: true, ..Default::default() };
+        assert!(matches!(
+            evaluate_offer(&signals, &ctx, &OfferPolicy::default()),
+            Decision::Offer { .. }
+        ));
+    }
+
+    #[test]
+    fn controls_alone_need_a_second_signal() {
+        let signals = Signals { meeting_controls_visible: true, ..Default::default() };
+        assert!(matches!(decide(&signals), Decision::Offer { .. }));
+        assert_eq!(
+            evaluate_offer(&signals, &DetectionCtx::default(), &OfferPolicy::default()),
+            Decision::Ignore
+        );
+    }
+
+    #[test]
+    fn host_from_url_parses_meet() {
+        assert_eq!(host_from_url("https://meet.google.com/abc-defg-hij").as_deref(), Some("meet.google.com"));
     }
 
     #[test]
@@ -381,6 +693,50 @@ mod tests {
     }
 
     #[test]
+    fn youtube_is_not_a_meeting_url() {
+        assert!(!is_meeting_url("https://www.youtube.com/watch?v=dQw4w9WgXcQ"));
+        assert!(!is_meeting_url("https://youtu.be/dQw4w9WgXcQ"));
+        assert!(!is_meeting_url("https://m.youtube.com/watch?v=abc"));
+    }
+
+    #[test]
+    fn media_urls_are_recognised() {
+        assert!(is_media_url("https://www.youtube.com/watch?v=abc"));
+        assert!(is_media_url("https://youtu.be/abc"));
+        assert!(is_media_url("https://music.youtube.com/watch?v=abc"));
+        assert!(is_media_url("https://www.netflix.com/watch/123"));
+        assert!(is_media_url("https://www.twitch.tv/somechannel"));
+    }
+
+    #[test]
+    fn meet_urls_are_not_media() {
+        assert!(!is_media_url("https://meet.google.com/abc-defg-hij"));
+    }
+
+    #[test]
+    fn mic_on_media_never_counts_without_meeting_context() {
+        assert!(!mic_counts_as_signal(MIC_ONLY_SUSTAIN_MS, false, true));
+        assert!(!mic_counts_as_signal(MIC_ONLY_SUSTAIN_MS + 1_000, false, true));
+    }
+
+    #[test]
+    fn mic_on_media_counts_with_meeting_context_after_short_sustain() {
+        assert!(!mic_counts_as_signal(MIC_SUSTAIN_MS - 1, true, true));
+        assert!(mic_counts_as_signal(MIC_SUSTAIN_MS, true, true));
+    }
+
+    #[test]
+    fn mic_alone_needs_the_longer_sustain() {
+        assert!(!mic_counts_as_signal(MIC_SUSTAIN_MS, false, false));
+        assert!(mic_counts_as_signal(MIC_ONLY_SUSTAIN_MS, false, false));
+    }
+
+    #[test]
+    fn mic_with_meeting_context_uses_the_shorter_sustain() {
+        assert!(mic_counts_as_signal(MIC_SUSTAIN_MS, true, false));
+    }
+
+    #[test]
     fn a_lookalike_host_is_not_a_meeting_url() {
         // Host matching must not be substring matching, or an attacker-controlled or merely
         // unlucky domain turns the microphone offer on.
@@ -389,6 +745,42 @@ mod tests {
         assert!(!is_meeting_url("https://example.test/?u=meet.google.com"));
     }
 
+
+    #[test]
+    fn meet_url_in_browser_counts_as_present() {
+        assert!(browser_meeting_page_present(
+            Some("https://meet.google.com/abc-defg-hij"),
+            Some("Meet – weekly – Google Chrome"),
+        ));
+    }
+
+    #[test]
+    fn gmail_tab_means_meeting_page_left() {
+        assert!(!browser_meeting_page_present(
+            Some("https://mail.google.com/mail/u/0/"),
+            Some("Inbox - Gmail"),
+        ));
+    }
+
+    #[test]
+    fn pip_with_unreadable_url_still_counts_as_present() {
+        assert!(browser_meeting_page_present(
+            None,
+            Some("Picture-in-picture"),
+        ));
+    }
+
+    #[test]
+    fn meeting_url_left_needs_grace_before_wrap() {
+        let lost = 1_000_000;
+        assert!(!meeting_url_left_past_grace(Some(lost), lost + MEETING_URL_LEFT_GRACE_MS - 1));
+        assert!(meeting_url_left_past_grace(Some(lost), lost + MEETING_URL_LEFT_GRACE_MS));
+    }
+
+    #[test]
+    fn meeting_url_never_lost_has_no_grace_deadline() {
+        assert!(!meeting_url_left_past_grace(None, 9_999_999));
+    }
 
     #[test]
     fn a_brief_burst_of_microphone_use_is_not_a_meeting() {

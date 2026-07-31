@@ -348,6 +348,32 @@ fn an_interval_left_open_by_a_crash_is_closed_at_the_next_start() {
 }
 
 #[test]
+fn leaving_a_meet_tab_ends_recording_after_grace() {
+    // FR-MT-11: tab/window disappearance — Chrome can stay open on Gmail while the meeting is over.
+    let now = 1_000_000;
+    let lost = now;
+    assert!(!detect::browser_meeting_page_present(
+        Some("https://mail.google.com/mail/u/0/"),
+        Some("Inbox"),
+    ));
+    assert!(!detect::meeting_url_left_past_grace(Some(lost), lost + detect::MEETING_URL_LEFT_GRACE_MS - 1));
+    let after_grace = lost + detect::MEETING_URL_LEFT_GRACE_MS;
+    assert!(detect::meeting_url_left_past_grace(Some(lost), after_grace));
+
+    let present = !detect::meeting_url_left_past_grace(Some(lost), after_grace);
+    let live = LiveSignals {
+        meeting_app_present: present,
+        occurrence_ends_at: None,
+        last_sound_at: after_grace,
+    };
+    assert_eq!(
+        detect::end_condition(&live, after_grace),
+        Some(EndReason::AppGone),
+        "past grace the meeting page is treated as gone even if the browser process is still running"
+    );
+}
+
+#[test]
 fn a_browser_on_a_meet_call_is_offered_like_any_other_meeting() {
     // Issue #7 requires Google Meet, and Meet is a page rather than an app: without the URL
     // signal, browser meetings are invisible however well Zoom works.

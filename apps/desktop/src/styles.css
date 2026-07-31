@@ -1311,8 +1311,11 @@ kbd {
   background: transparent;
   overflow: hidden;
   height: 100%;
+  /* Pass clicks through any transparent padding inside the fixed window frame. */
+  pointer-events: none;
 }
 .ov {
+  pointer-events: auto;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -1508,6 +1511,19 @@ kbd {
   font-size: var(--fs-xs);
   color: var(--muted);
 }
+.ov__disclosure,
+.ov__listening {
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+  color: var(--muted);
+}
+.ov__disclosure {
+  margin: 0;
+  padding: 0 12px 10px;
+}
+.ov__listening {
+  margin-top: 2px;
+}
 
 /* The model-generated minutes, layered under the notes once they arrive. Kept calm: a hairline
    above it separates it from the raw notes without a heavy container. */
@@ -1518,6 +1534,75 @@ kbd {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+.ov__minutes--lead {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
+.ov__mpending,
+.ov__mdegraded {
+  margin: 0;
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  color: var(--muted);
+}
+.ov__mdegraded {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(128, 128, 128, 0.1);
+}
+.ov__notes {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--hairline, rgba(128, 128, 128, 0.2));
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.ov__tsec {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--hairline, rgba(128, 128, 128, 0.2));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ov__tturns {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.ov__tturn {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ov__tmeta {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.ov__tspeaker {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+.ov__ttime {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.ov__ttext {
+  margin: 0;
+  font-size: var(--fs-xs);
+  line-height: 1.55;
+  word-break: break-word;
+}
+.ov__tempty {
+  margin: 0;
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  color: var(--muted);
 }
 .ov__msec {
   display: flex;

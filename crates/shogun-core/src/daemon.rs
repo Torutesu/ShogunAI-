@@ -566,6 +566,19 @@ impl Db {
             .collect()
     }
 
+    /// Full transcript lines for the post-meeting viewer (FR-MT-10): `(ts, speaker, text)` in time
+    /// order. Empty when the interval has no transcript or on a DB error.
+    pub fn meeting_transcript(&self, session_id: i64) -> Vec<(i64, Option<String>, String)> {
+        self.conn
+            .lock()
+            .ok()
+            .and_then(|conn| shogun_memory::transcript_segments::for_session(&conn, session_id).ok())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(ts, speaker, text, _confidence)| (ts, speaker, text))
+            .collect()
+    }
+
     /// The note typed during a meeting interval (FR-MT-10), if any. `None` covers both "no note"
     /// and a DB error — the Recap builder treats both the same (nothing to add from notes).
     pub fn meeting_note(&self, session_id: i64) -> Option<String> {
@@ -905,21 +918,65 @@ impl Db {
         }
     }
 
+    /// Lexical search over meeting recaps and transcripts. Query-relevant, not latest-session.
+    pub fn search_meetings(&self, query: &str, limit: usize) -> Vec<shogun_memory::search::MeetingSearchHit> {
+        if query.trim().is_empty() {
+            return Vec::new();
+        }
+        self.conn
+            .lock()
+            .ok()
+            .and_then(|c| shogun_memory::search::search_meetings(&c, query, limit).ok())
+            .unwrap_or_default()
+    }
+
     /// The evidence half of [`Self::assemble_context`]: hybrid-search the query and turn the best
     /// hits into dated, attributed [`Evidence`], each excerpt capped at `excerpt_chars`. Split out
     /// so the compressed path can take evidence WITHOUT also loading state facts (which it rebuilds
     /// from the ref version), instead of running the two state queries twice (Issue #63 finding #2).
+    ///
+    /// Event-log hits and meeting-interval hits (recap + transcript) are merged by relevance score
+    /// so a question about a specific past meeting surfaces that session, not whatever ended last.
     fn assemble_evidence(&self, query: &str, max_hits: usize, excerpt_chars: usize) -> Vec<Evidence> {
-        self.search(query, max_hits)
+        let event_hits = self.search(query, max_hits);
+        let meeting_hits = self.search_meetings(query, max_hits);
+
+        let mut ranked: Vec<(f64, Evidence)> = Vec::with_capacity(event_hits.len() + meeting_hits.len());
+        for h in event_hits {
+            ranked.push((
+                h.score,
+                Evidence {
+                    event_id: h.event_id,
+                    ts: h.ts,
+                    source: h.source,
+                    title: h.window_title,
+                    excerpt: shogun_memory::search::excerpt(&h.content, query, excerpt_chars),
+                },
+            ));
+        }
+        for h in meeting_hits {
+            ranked.push((
+                h.score,
+                Evidence {
+                    // Negative id marks meeting provenance (not an event_log row).
+                    event_id: -h.session_id,
+                    ts: h.ts,
+                    source: "meeting".to_string(),
+                    title: h.title,
+                    excerpt: shogun_memory::search::excerpt(&h.content, query, excerpt_chars),
+                },
+            ));
+        }
+        ranked.sort_by(|a, b| {
+            b.0.partial_cmp(&a.0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(b.1.ts.cmp(&a.1.ts))
+        });
+        ranked
             .into_iter()
-            .map(|h| Evidence {
-                event_id: h.event_id,
-                ts: h.ts,
-                source: h.source,
-                title: h.window_title,
-                excerpt: shogun_memory::search::excerpt(&h.content, query, excerpt_chars),
-            })
+            .map(|(_, e)| e)
             .filter(|e| !e.excerpt.is_empty())
+            .take(max_hits)
             .collect()
     }
 
@@ -2461,6 +2518,67 @@ mod tests {
         let hit = pack.evidence.iter().find(|e| e.excerpt.contains("12k")).unwrap();
         assert_eq!(hit.source, "capture");
         assert!(hit.event_id > 0);
+    }
+
+    #[test]
+    fn assemble_context_retrieves_query_relevant_meeting_not_latest() {
+        use shogun_memory::session::{open, NewSession};
+
+        let db = Db::open_in_memory(clock(10_000)).unwrap();
+        let conn = db.conn.lock().unwrap();
+        let old = open(
+            &conn,
+            &NewSession {
+                kind: "meeting",
+                started_at: 1_000,
+                title: Some("Phoenix planning"),
+                app_bundle_id: None,
+                calendar_occurrence_id: None,
+                confidence: 0.8,
+                provenance: "{}",
+            },
+        )
+        .unwrap();
+        let recent = open(
+            &conn,
+            &NewSession {
+                kind: "meeting",
+                started_at: 9_000,
+                title: Some("Daily standup"),
+                app_bundle_id: None,
+                calendar_occurrence_id: None,
+                confidence: 0.8,
+                provenance: "{}",
+            },
+        )
+        .unwrap();
+        shogun_memory::meeting_recaps::save(
+            &conn,
+            old,
+            "Phoenix launch is targeted for March with beta in February.",
+            "[]",
+            "[]",
+            "m",
+            2_000,
+        )
+        .unwrap();
+        shogun_memory::meeting_recaps::save(&conn, recent, "Nothing blocking today.", "[]", "[]", "m", 10_000)
+            .unwrap();
+        drop(conn);
+
+        let pack = db.assemble_context("Phoenix launch beta", 5, 300);
+        let meeting = pack
+            .evidence
+            .iter()
+            .find(|e| e.source == "meeting")
+            .expect("meeting evidence must be present");
+        assert!(meeting.excerpt.contains("Phoenix"));
+        assert_eq!(meeting.event_id, -old);
+        assert!(
+            !pack.evidence.iter().any(|e| e.source == "meeting" && e.excerpt.contains("Nothing blocking")),
+            "unrelated latest meeting must not appear: {:?}",
+            pack.evidence
+        );
     }
 
     #[test]

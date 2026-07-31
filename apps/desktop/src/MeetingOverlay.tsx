@@ -8,6 +8,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
 import { t } from "./strings";
+import { uiLog } from "./uiLog";
 
 export interface MeetingView {
   state: "idle" | "offered" | "recording" | "wrapping";
@@ -35,10 +36,58 @@ export interface Minutes {
   next_actions: { text: string; owner: string | null }[];
 }
 
+export interface TranscriptLine {
+  ts: number;
+  speaker: string | null;
+  text: string;
+}
+
+interface MeetingTranscript {
+  lines: TranscriptLine[];
+  only_blanks: boolean;
+}
+
+interface TranscriptTurn {
+  speakerLabel: string;
+  ts: number;
+  text: string;
+}
+
 /** mm:ss. Tabular figures in CSS keep the row from reflowing as the seconds tick. */
 function clock(ms: number): string {
   const total = Math.max(0, Math.floor(ms / 1000));
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+}
+
+function speakerLabel(speaker: string | null): string {
+  if (speaker === "me") return t.meetingTranscriptSpeakerMe;
+  if (speaker === "other") return t.meetingTranscriptSpeakerOther;
+  return t.meetingTranscriptSpeakerUnknown;
+}
+
+function minutesHasContent(minutes: Minutes): boolean {
+  return (
+    minutes.summary.trim().length > 0 ||
+    minutes.decisions.length > 0 ||
+    minutes.next_actions.length > 0
+  );
+}
+
+/** Group consecutive lines from the same speaker into readable turns. */
+function groupTurns(lines: TranscriptLine[]): TranscriptTurn[] {
+  if (lines.length === 0) return [];
+  const origin = lines[0].ts;
+  const turns: TranscriptTurn[] = [];
+  for (const line of lines) {
+    const label = speakerLabel(line.speaker);
+    const last = turns[turns.length - 1];
+    if (last && last.speakerLabel === label) {
+      last.text = `${last.text} ${line.text}`;
+    } else {
+      turns.push({ speakerLabel: label, ts: line.ts - origin, text: line.text });
+    }
+  }
+  return turns;
 }
 
 const call = (cmd: string, args?: Record<string, unknown>): void => {
@@ -49,6 +98,9 @@ export function MeetingOverlay(): JSX.Element | null {
   const [view, setView] = useState<MeetingView | null>(null);
   const [recap, setRecap] = useState<Recap | null>(null);
   const [minutes, setMinutes] = useState<Minutes | null>(null);
+  const [transcript, setTranscript] = useState<TranscriptLine[]>([]);
+  const [onlyBlanks, setOnlyBlanks] = useState(false);
+  const [minutesNeedsKey, setMinutesNeedsKey] = useState(false);
   const [note, setNote] = useState("");
 
   // Polled, with the push event as an accelerator rather than the source of truth.
@@ -71,29 +123,69 @@ export function MeetingOverlay(): JSX.Element | null {
     };
   }, []);
 
-  // The Recap is read once the interval has closed — it is assembled from the stored session,
-  // so there is nothing to show before then. The model-generated minutes are read alongside it,
-  // but they usually are not ready yet (the Batch lane is async): the `meeting_recap` event, fired
-  // when they land, is what triggers the refetch that fills them in on the card already shown.
+  // Recap reads: degraded card, minutes (async), transcript. Transcript is fetched on wrap and
+  // polled until lines land — the audio lane flushes on Stop, but a one-shot fetch raced empty
+  // before segments were visible, and the meeting window lacked IPC permission until fixed.
   useEffect(() => {
     if (view?.state !== "wrapping") return;
-    void invoke<Recap | null>("meeting_recap").then(setRecap).catch(() => undefined);
-    void invoke<Minutes | null>("meeting_recap_minutes").then(setMinutes).catch(() => undefined);
-    const off = listen("meeting_recap", () => {
-      void invoke<Minutes | null>("meeting_recap_minutes").then(setMinutes).catch(() => undefined);
+    setMinutesNeedsKey(false);
+    setTranscript([]);
+    setOnlyBlanks(false);
+
+    let transcriptDone = false;
+    let minutesDone = false;
+
+    void invoke<boolean>("meeting_select_kk_configured")
+      .then((configured) => {
+        if (!configured) setMinutesNeedsKey(true);
+      })
+      .catch(() => undefined);
+
+    const fetchRecap = (): void => {
+      void invoke<Recap | null>("meeting_recap")
+        .then(setRecap)
+        .catch((err) => uiLog(`meeting overlay invoke meeting_recap failed: ${err}`));
+    };
+    const fetchMinutes = (): void => {
+      if (minutesDone) return;
+      void invoke<Minutes | null>("meeting_recap_minutes")
+        .then((m) => {
+          setMinutes(m);
+          if (m && minutesHasContent(m)) minutesDone = true;
+        })
+        .catch((err) => uiLog(`meeting overlay invoke meeting_recap_minutes failed: ${err}`));
+    };
+    const fetchTranscript = (): void => {
+      if (transcriptDone) return;
+      void invoke<MeetingTranscript>("get_meeting_transcript")
+        .then((res) => {
+          setTranscript(res.lines);
+          setOnlyBlanks(res.only_blanks);
+          if (res.lines.length > 0 || res.only_blanks) transcriptDone = true;
+        })
+        .catch((err) => uiLog(`meeting overlay invoke get_meeting_transcript failed: ${err}`));
+    };
+
+    fetchRecap();
+    fetchMinutes();
+    fetchTranscript();
+
+    const poll = window.setInterval(() => {
+      fetchTranscript();
+      fetchMinutes();
+    }, 1000);
+
+    const offRecap = listen("meeting_recap", () => {
+      fetchMinutes();
+      fetchTranscript();
     });
+    const offNeedsKey = listen("meeting_recap_needs_key", () => setMinutesNeedsKey(true));
     return () => {
-      void off.then((f) => f());
+      window.clearInterval(poll);
+      void offRecap.then((f) => f());
+      void offNeedsKey.then((f) => f());
     };
   }, [view?.state]);
-
-  // Why nothing is on screen, when nothing is on screen. The window can be shown and still look
-  // empty, and from the outside that is indistinguishable from the window never appearing.
-  useEffect(() => {
-    call("ui_log", {
-      msg: `overlay render view=${view ? `${view.state}/enabled=${view.enabled}` : "null"}`,
-    });
-  }, [view?.state, view?.enabled]);
 
   if (!view || !view.enabled || view.state === "idle") return null;
 
@@ -124,6 +216,7 @@ export function MeetingOverlay(): JSX.Element | null {
             {t.meetingNotNow}
           </button>
         </div>
+        <p className="ov__disclosure">{t.meetingDisclosureBrief}</p>
       </div>
     );
   }
@@ -135,6 +228,7 @@ export function MeetingOverlay(): JSX.Element | null {
         <div className="ov__body">
           <div className="ov__time">{clock(view.elapsed_ms)}</div>
           <div className="ov__name ov__name--sub">{name}</div>
+          <div className="ov__listening">{t.meetingListening}</div>
         </div>
         <input
           className="ov__note"
@@ -160,12 +254,14 @@ export function MeetingOverlay(): JSX.Element | null {
 
   // Wrapping: the degraded Recap (FR-MT-19). The summary and the action items arrive with MT4;
   // until then this shows what is actually known, and says so rather than leaving a blank card
-  // that reads as "your meeting was lost".
-  const minutesHasContent =
-    minutes != null &&
-    (minutes.summary.trim().length > 0 ||
-      minutes.decisions.length > 0 ||
-      minutes.next_actions.length > 0);
+  // that reads as "your meeting was lost". The transcript is shown here only — never during
+  // recording (FR-MT-10).
+  const minutesReady = minutes != null && minutesHasContent(minutes);
+  const turns = groupTurns(transcript);
+  const hasTranscript = turns.length > 0;
+  const showMinutesPending = hasTranscript && !minutesReady && !minutesNeedsKey;
+  const showMinutesNeedsKey = hasTranscript && !minutesReady && minutesNeedsKey;
+
   return (
     <div className="ov ov--recap">
       {grip}
@@ -179,16 +275,8 @@ export function MeetingOverlay(): JSX.Element | null {
           ) : null}
         </div>
         <div className="ov__rbody">
-          {recap?.notes ? (
-            <pre className="ov__rnotes">{recap.notes}</pre>
-          ) : (
-            <div className="ov__rempty">{t.meetingRecapNoNotes}</div>
-          )}
-          {/* The model-generated minutes, layered on top of the degraded Recap when they arrive.
-              Never blanks the card while absent: the notes above always show. Display only — a
-              next action is a suggestion to confirm, not something this system will do. */}
-          {minutesHasContent ? (
-            <div className="ov__minutes">
+          {minutesReady ? (
+            <div className="ov__minutes ov__minutes--lead">
               {minutes?.summary ? (
                 <div className="ov__msec">
                   <div className="ov__mhead">{t.meetingMinutesSummary}</div>
@@ -220,7 +308,42 @@ export function MeetingOverlay(): JSX.Element | null {
               ) : null}
             </div>
           ) : null}
+          {showMinutesPending ? (
+            <p className="ov__mpending">{t.meetingMinutesPending}</p>
+          ) : null}
+          {showMinutesNeedsKey ? (
+            <p className="ov__mdegraded">{t.meetingMinutesNeedsKey}</p>
+          ) : null}
+          {recap?.notes ? (
+            <div className="ov__notes">
+              <div className="ov__mhead">{t.meetingRecapYourNotes}</div>
+              <pre className="ov__rnotes">{recap.notes}</pre>
+            </div>
+          ) : !minutesReady && !hasTranscript ? (
+            <div className="ov__rempty">{t.meetingRecapNoNotes}</div>
+          ) : null}
+          <div className="ov__tsec">
+            <div className="ov__mhead">{t.meetingTranscriptHeading}</div>
+            {hasTranscript ? (
+              <div className="ov__tturns">
+                {turns.map((turn, i) => (
+                  <div className="ov__tturn" key={i}>
+                    <div className="ov__tmeta">
+                      <span className="ov__tspeaker">{turn.speakerLabel}</span>
+                      <span className="ov__ttime">{clock(turn.ts)}</span>
+                    </div>
+                    <p className="ov__ttext">{turn.text}</p>
+                  </div>
+                ))}
+              </div>
+            ) : onlyBlanks ? (
+              <p className="ov__tempty">{t.meetingTranscriptOnlyBlanks}</p>
+            ) : (
+              <p className="ov__tempty">{t.meetingTranscriptEmpty}</p>
+            )}
+          </div>
         </div>
+        <p className="ov__disclosure">{t.meetingDisclosureRecap}</p>
         <button type="button" className="ov__go ov__go--wide" onClick={() => call("meeting_wrapped")}>
           {t.meetingRecapDone}
         </button>
