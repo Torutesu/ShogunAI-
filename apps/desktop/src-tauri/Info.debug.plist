@@ -5,5 +5,7 @@
     <!-- Same as Info.plist, applied to debug bundles (`tauri build --debug`). -->
     <key>LSUIElement</key>
     <true/>
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>SHOGUN reads the focused window only when you turn on Visual recall, runs on-device text recognition, and never saves screenshots.</string>
 </dict>
 </plist>

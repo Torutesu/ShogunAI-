@@ -8,5 +8,7 @@
          but the window-server treats an unbundled dev process differently for Space management. -->
     <key>LSUIElement</key>
     <true/>
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>SHOGUN reads the focused window only when you turn on Visual recall, runs on-device text recognition, and never saves screenshots.</string>
 </dict>
 </plist>

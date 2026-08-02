@@ -4,15 +4,24 @@
 //! wired to `transcript_segments` at the call site. One `Vad` per speaker: mic and system audio
 //! are independent streams and must not have their silence boundaries interleaved.
 
+use std::sync::{Arc, RwLock};
+
 use super::asr::Transcriber;
 use super::capture::{AudioSource, Frame};
 use super::vad::Vad;
 use super::{Speaker, Utterance};
+use crate::meeting::settings::{MeetingLanguage, Settings};
 
 /// Where finished lines go. The desktop implements this over `transcript_segments`; tests collect
 /// into a Vec.
 pub trait SegmentSink {
-    fn emit(&mut self, u: &Utterance, text: &str, confidence: f64);
+    fn emit(
+        &mut self,
+        u: &Utterance,
+        text: &str,
+        confidence: f64,
+        translation: Option<&str>,
+    );
 }
 
 pub struct Worker<S: AudioSource, T: Transcriber> {
@@ -22,19 +31,57 @@ pub struct Worker<S: AudioSource, T: Transcriber> {
     vad_other: Vad,
     /// Wall-clock ms of the current step, set by the driver each poll.
     now: i64,
+    /// Live meeting settings — read on each line so mode/lang changes apply to new utterances.
+    live_settings: Option<Arc<RwLock<Settings>>>,
 }
 
 impl<S: AudioSource, T: Transcriber> Worker<S, T> {
     pub fn new(source: S, asr: T) -> Self {
-        Worker { source, asr, vad_me: Vad::new(), vad_other: Vad::new(), now: 0 }
+        Worker {
+            source,
+            asr,
+            vad_me: Vad::new(),
+            vad_other: Vad::new(),
+            now: 0,
+            live_settings: None,
+        }
+    }
+
+    pub fn with_live_settings(mut self, settings: Arc<RwLock<Settings>>) -> Self {
+        self.live_settings = Some(settings);
+        self
+    }
+
+    fn maybe_translate(&mut self, speaker: Speaker, pcm: &[f32], text: &str) -> Option<String> {
+        let settings = self.live_settings.as_ref()?.read().ok()?;
+        let target = settings.translation_target(speaker == Speaker::Me)?;
+        if target == MeetingLanguage::Auto {
+            return None;
+        }
+        match target {
+            MeetingLanguage::English => self
+                .asr
+                .translate_to_english(pcm)
+                .into_iter()
+                .next()
+                .map(|s| s.text)
+                .filter(|t| !t.is_empty() && t != text),
+            MeetingLanguage::Japanese => {
+                // EN→JA is async in the desktop sink (Select KK / latency). ASR shows immediately.
+                let _ = text;
+                None
+            }
+            MeetingLanguage::Auto => None,
+        }
     }
 
     fn transcribe_cut(&mut self, speaker: Speaker, pcm: Vec<f32>, sink: &mut dyn SegmentSink) {
-        let u = Utterance { speaker, started_at: self.now, pcm };
+        let u = Utterance { speaker, started_at: self.now, pcm: pcm.clone() };
         for seg in self.asr.transcribe(&u.pcm) {
             let text = seg.text.trim();
             if !text.is_empty() {
-                sink.emit(&u, text, seg.confidence);
+                let translation = self.maybe_translate(speaker, &pcm, text);
+                sink.emit(&u, text, seg.confidence, translation.as_deref());
             }
         }
         // u (and its pcm) is dropped here — the waveform never outlives transcription.
@@ -83,7 +130,13 @@ mod tests {
         lines: Vec<(Speaker, String, f64)>,
     }
     impl SegmentSink for VecSink {
-        fn emit(&mut self, u: &Utterance, text: &str, confidence: f64) {
+        fn emit(
+            &mut self,
+            u: &Utterance,
+            text: &str,
+            confidence: f64,
+            _translation: Option<&str>,
+        ) {
             self.lines.push((u.speaker, text.to_string(), confidence));
         }
     }

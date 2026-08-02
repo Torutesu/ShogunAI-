@@ -16,6 +16,8 @@ pub mod axcache;
 mod model_fetch;
 mod capture_source;
 mod connectors;
+#[cfg(all(target_os = "macos", feature = "visual-recall-ocr"))]
+mod screen_ocr;
 pub mod display;
 mod dream;
 mod exclusions;
@@ -27,11 +29,14 @@ mod inline_source;
 mod integrate;
 pub mod meeting;
 mod meeting_recap;
+#[cfg(target_os = "macos")]
+mod meeting_translate;
 mod mic;
 mod analytics;
 mod notch_actions;
 mod notch_exec;
 mod onboarding;
+mod visual_recall;
 
 /// The collectionBehavior the overlay wants, selected at setup (NSPanel mode = canJoinAllSpaces +
 /// fullScreenAuxiliary = 257; plain-window fallback = moveToActiveSpace 274) and re-asserted by
@@ -143,6 +148,12 @@ pub fn run() {
         meeting::mac::get_meeting_settings,
         meeting::mac::set_meeting_enabled,
         meeting::mac::set_meeting_allow_mic_only,
+        meeting::mac::set_meeting_mode,
+        meeting::mac::set_meeting_langs,
+        meeting::mac::meeting_overlay_dismiss,
+        meeting::mac::meeting_overlay_set_interactive,
+        visual_recall::mac::get_visual_recall_settings,
+        visual_recall::mac::set_visual_recall_enabled,
         notch_actions::mac::notch_actions,
         notch_exec::mac::run_notch_action,
         notch_exec::mac::confirm_notch_action,
@@ -417,9 +428,11 @@ fn setup_macos(app: &tauri::App) {
             // the draft command, so a press never collects context.
             let reply_cache = shogun_core::daemon::ReplyContextCache::new();
             app.manage(reply_cache.clone());
+            let visual_recall = visual_recall::mac::init(app.handle());
             let _ = capture_source::spawn_capture_poller(
                 db.clone(),
                 exclusion_policy,
+                visual_recall,
                 None,
                 Some(reply_cache),
             );

@@ -12,23 +12,32 @@
 //! Invariant 2 holds by construction: the waveform lives only in the `Worker`'s buffers and is
 //! dropped the moment a line is transcribed — this file writes text, never audio.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::{Arc, RwLock};
 use std::thread::JoinHandle;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use serde::Serialize;
 use shogun_core::audio::capture::{AudioSource, MultiSource};
 use shogun_core::audio::worker::{SegmentSink, Worker};
 use shogun_core::audio::{Speaker, Utterance};
 use shogun_core::daemon::Db;
-use shogun_core::meeting::settings::{AsrModel, MeetingLanguage};
-use tauri::Manager;
+use shogun_core::meeting::settings::{AsrModel, MeetingLanguage, Settings};
+use tauri::{Emitter, Manager};
 
 /// A running audio lane. Dropping the handle without `stop` would leak the thread, so the machine
 /// always takes it back through `stop` on `Effect::StopAudio`.
 pub struct Handle {
     stop: Arc<AtomicBool>,
     join: Option<JoinHandle<()>>,
+    last_audio_at: Arc<AtomicI64>,
+}
+
+impl Handle {
+    /// Epoch ms when audio frames were last consumed — feeds the silence watchdog (FR-MT-11).
+    pub fn last_audio_at(&self) -> i64 {
+        self.last_audio_at.load(Ordering::Relaxed)
+    }
 }
 
 fn now_ms() -> i64 {
@@ -38,24 +47,71 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
+#[derive(Serialize, Clone)]
+struct LiveLineEvent {
+    ts: i64,
+    speaker: Option<String>,
+    text: String,
+    translation: Option<String>,
+}
+
 /// Persists finished transcript lines against one meeting interval. Owns a cloned `Db` (Arc-backed,
 /// so the clone shares the same connection) and the interval it is writing to.
 struct DbSink {
     db: Db,
     session_id: i64,
+    app: tauri::AppHandle,
+    settings: Arc<RwLock<Settings>>,
 }
 
 impl SegmentSink for DbSink {
-    fn emit(&mut self, u: &Utterance, text: &str, confidence: f64) {
-        // The capture source decides the speaker: mic input is me, the system tap is everyone else.
-        // We never infer, so there is no `Unknown` on this path.
+    fn emit(
+        &mut self,
+        u: &Utterance,
+        text: &str,
+        confidence: f64,
+        translation: Option<&str>,
+    ) {
         let speaker = match u.speaker {
             Speaker::Me => shogun_memory::transcript_segments::Speaker::Me,
             Speaker::Other => shogun_memory::transcript_segments::Speaker::Other,
         };
-        // Best-effort: `append_transcript` swallows write failures so a hiccup drops one line
-        // rather than tearing down capture.
         self.db.append_transcript(self.session_id, u.started_at, speaker, text, confidence);
+
+        if !crate::meeting::mac::live_emit_allowed(self.session_id) {
+            return;
+        }
+        let speaker_str = match u.speaker {
+            Speaker::Me => Some("me".to_string()),
+            Speaker::Other => Some("other".to_string()),
+        };
+        let event = LiveLineEvent {
+            ts: u.started_at,
+            speaker: speaker_str,
+            text: text.to_string(),
+            translation: translation.map(str::to_string),
+        };
+        // Emit directly — Tauri events are thread-safe; blocking the audio worker on
+        // run_on_main_thread can stall whisper while the main thread holds LANE.
+        let _ = self.app.emit("meeting_live_line", event);
+
+        // EN→JA: whisper has no native path — async fill-in when target is Japanese.
+        if translation.is_none() {
+            if let Ok(s) = self.settings.read() {
+                let target = s.translation_target(u.speaker == Speaker::Me);
+                if target == Some(MeetingLanguage::Japanese)
+                    && crate::meeting_translate::should_translate_asr(text)
+                {
+                    crate::meeting_translate::spawn_ja_translation(
+                        &self.app,
+                        self.db.clone(),
+                        self.session_id,
+                        u.started_at,
+                        text.to_string(),
+                    );
+                }
+            }
+        }
     }
 }
 
@@ -110,36 +166,29 @@ fn select_model_path(app: &tauri::AppHandle, model: AsrModel) -> Option<std::pat
     whisper_model_path(app)
 }
 
-/// Start listening for meeting `session_id` with the chosen ASR `model` and `language`. Returns
-/// `None` (notes only) whenever any piece of the pipeline is unavailable — this is the degraded,
-/// not the error, path (FR-MT-13, OPEN-07/08).
-///
-/// `language` fixes the transcription language for the whole session (English-primary policy, §8):
-/// English/Japanese pin whisper; Auto detects once and locks (see whisper.rs). It is threaded in as
-/// its own param, alongside `model`, so the meeting machine's settings decide it.
+/// Start listening for meeting `session_id` with the chosen ASR `model` and live `settings`.
+/// Returns `None` (notes only) whenever any piece of the pipeline is unavailable — this is the
+/// degraded, not the error, path (FR-MT-13, OPEN-07/08).
 pub fn start(
     app: &tauri::AppHandle,
     session_id: i64,
-    model: AsrModel,
-    language: MeetingLanguage,
+    settings: Arc<RwLock<Settings>>,
 ) -> Option<Handle> {
-    // The database the sink writes into. Absent DB means nowhere to store the transcript, so there
-    // is no point listening.
     let db = app.try_state::<Db>().map(|s| s.inner().clone());
     let Some(db) = db else {
         eprintln!("[meeting] no database for the audio lane; notes only");
         return None;
     };
 
-    // The ASR model. Absent in a dev checkout without the fetch script; a real load failure is the
-    // same outcome here — notes only — but is worth logging distinctly. A Turbo preference is
-    // honoured when the fetched model is available, otherwise this resolves the bundled small model.
+    let (model, language) = {
+        let s = settings.read().ok()?;
+        (s.asr_model, s.asr_language())
+    };
+
     let Some(model_path) = select_model_path(app, model) else {
         eprintln!("[meeting] no whisper model bundled; notes only");
         return None;
     };
-    // The language is fixed for the session here: `whisper_code()` gives whisper `Some("en")`/
-    // `Some("ja")` for a chosen language, or `None` for Auto (detect-once-then-lock inside whisper).
     let asr = match shogun_core::audio::asr::whisper::Whisper::load_with_language(
         &model_path.to_string_lossy(),
         language.whisper_code(),
@@ -151,7 +200,6 @@ pub fn start(
         }
     };
 
-    // The microphone (speaker = me). Denied permission or no input device → notes only.
     let mic = match shogun_core::audio::capture::mic::Mic::open() {
         Ok(m) => m,
         Err(e) => {
@@ -160,9 +208,6 @@ pub fn start(
         }
     };
 
-    // The system tap (speaker = other) is best-effort: `Ok(None)` on macOS < 14.4, and any error
-    // is treated the same — mic-only capture rather than no capture. So a call whose participants'
-    // audio we cannot tap still records the user's own side.
     let mut sources: Vec<Box<dyn AudioSource>> = vec![Box::new(mic)];
     match shogun_core::audio::capture::system_tap::SystemTap::open() {
         Ok(Some(tap)) => sources.push(Box::new(tap)),
@@ -171,25 +216,28 @@ pub fn start(
     }
 
     let source = MultiSource::new(sources);
-    let mut worker = Worker::new(source, asr);
-    let mut sink = DbSink { db, session_id };
+    let worker = Worker::new(source, asr).with_live_settings(settings.clone());
+    let mut sink = DbSink { db, session_id, app: app.clone(), settings };
 
     let stop = Arc::new(AtomicBool::new(false));
     let stop_flag = stop.clone();
+    let last_audio_at = Arc::new(AtomicI64::new(now_ms()));
+    let last_audio_flag = last_audio_at.clone();
     let join = std::thread::spawn(move || {
-        // Poll-and-park: drain everything available, and only sleep when there was nothing, so a
-        // busy meeting is transcribed promptly while an idle one costs almost no CPU.
+        let mut worker = worker;
         while !stop_flag.load(Ordering::Relaxed) {
-            if worker.poll(now_ms(), &mut sink) == 0 {
+            let now = now_ms();
+            if worker.poll(now, &mut sink) == 0 {
                 std::thread::sleep(Duration::from_millis(20));
+            } else {
+                last_audio_flag.store(now, Ordering::Relaxed);
             }
         }
-        // Flush the final utterance on each speaker and release the devices before the buffers go.
         worker.stop(now_ms(), &mut sink);
     });
 
     eprintln!("[meeting] audio lane started for session {session_id}");
-    Some(Handle { stop, join: Some(join) })
+    Some(Handle { stop, join: Some(join), last_audio_at })
 }
 
 /// Stop the lane: signal the thread and wait for it to flush and release the devices. A missing
@@ -198,8 +246,6 @@ pub fn stop(handle: Option<Handle>) {
     let Some(mut handle) = handle else { return };
     handle.stop.store(true, Ordering::Relaxed);
     if let Some(join) = handle.join.take() {
-        // Ignore a poisoned/panicked capture thread: we are tearing down anyway, and a panic there
-        // must not propagate into the meeting machine.
         let _ = join.join();
     }
     eprintln!("[meeting] audio lane stopped");

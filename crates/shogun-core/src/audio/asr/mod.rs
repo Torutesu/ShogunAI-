@@ -13,6 +13,12 @@ pub trait Transcriber: Send {
     /// Transcribe one utterance. Returns zero or more lines. An empty result is normal (silence,
     /// or audio the model could not read) and must not be an error the caller has to handle.
     fn transcribe(&mut self, pcm: &[f32]) -> Vec<Segment>;
+
+    /// Translate speech to English (whisper `translate` task). Default: not supported.
+    fn translate_to_english(&mut self, pcm: &[f32]) -> Vec<Segment> {
+        let _ = pcm;
+        Vec::new()
+    }
 }
 
 /// Deterministic stand-in for pipeline tests: emits one line whose text encodes the sample count,

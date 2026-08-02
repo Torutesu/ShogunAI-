@@ -10,6 +10,11 @@ description = "SHOGUN Phase 0 notch-UI spike shell (throwaway; macOS/arm64 only)
 # This crate only builds on macOS/arm64 (Tauri + AppKit). On Linux CI it is a workspace
 # member that resolves but is not built; `cargo test -p spike-harness` stays green.
 
+[features]
+default = []
+# Issue #107 screen OCR — off until Vision OCR module compiles (sibling agent).
+visual-recall-ocr = []
+
 [lib]
 name = "shogun_desktop_spike_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
@@ -66,16 +71,22 @@ objc2-app-kit = { version = "0.3", features = [
     "NSWorkspace", "NSRunningApplication", "libc",
 ] }
 objc2-foundation = { version = "0.3", features = [
-    "NSString", "NSArray", "NSGeometry", "NSNotification",
+    "NSString", "NSArray", "NSDictionary", "NSGeometry", "NSNotification",
 ] }
-objc2-core-graphics = { version = "0.3", features = ["CGEvent", "CGEventTypes"] }
+objc2-core-graphics = { version = "0.3", features = ["CGEvent", "CGEventTypes", "CGImage", "CGWindow", "CGGeometry"] }
 objc2-core-foundation = { version = "0.3", features = ["CFRunLoop", "CFMachPort", "CFBase"] }
+objc2-vision = { version = "0.3", features = ["VNRecognizeTextRequest", "VNRequestHandler", "VNObservation", "block2", "objc2-core-graphics"] }
+core-graphics = { version = "0.24", features = ["link"] }
+foreign-types = "0.5"
+twox-hash = "1"
 accessibility-sys = "0.2"
 # localtime_r for the zone offset: the Dream Cycle window is local wall-clock, and only the OS
 # knows the offset actually in effect (DST included).
 libc = "0.2"
 core-foundation = "0.10"
 core-foundation-sys = "0.8"
+# RAM-only frame buffers for Screenpipe-style text-region gate (issue #106).
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 [lints]
 workspace = true

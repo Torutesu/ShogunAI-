@@ -360,16 +360,26 @@ fn leaving_a_meet_tab_ends_recording_after_grace() {
     let after_grace = lost + detect::MEETING_URL_LEFT_GRACE_MS;
     assert!(detect::meeting_url_left_past_grace(Some(lost), after_grace));
 
-    let present = !detect::meeting_url_left_past_grace(Some(lost), after_grace);
+    // Mic still open after grace → session stays (background Meet tab while on X.com).
+    assert!(detect::meet_url_session_present(Some(lost), after_grace, true, None));
+
+    // Mic closed but not yet past quiet debounce → still present briefly.
+    let closed = after_grace;
+    assert!(detect::meet_url_session_present(Some(lost), closed, false, Some(closed)));
+
+    // Mic quiet long enough → gone.
+    let quiet = closed + detect::MIC_QUIET_AFTER_URL_LEFT_MS;
+    assert!(!detect::meet_url_session_present(Some(lost), quiet, false, Some(closed)));
+
     let live = LiveSignals {
-        meeting_app_present: present,
+        meeting_app_present: false,
         occurrence_ends_at: None,
-        last_sound_at: after_grace,
+        last_sound_at: quiet,
     };
     assert_eq!(
-        detect::end_condition(&live, after_grace),
+        detect::end_condition(&live, quiet),
         Some(EndReason::AppGone),
-        "past grace the meeting page is treated as gone even if the browser process is still running"
+        "past grace and mic quiet the meeting page is treated as gone"
     );
 }
 

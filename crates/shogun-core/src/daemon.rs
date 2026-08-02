@@ -358,7 +358,7 @@ impl Db {
     /// instead of appending a near-identical row; otherwise a fresh hash makes a new event. The
     /// `content_hash` on the passed `ev` is ignored — this method decides it. Returns `(id, touched)`.
     pub fn capture_collapsed(&self, ev: &NewEvent<'_>) -> Option<(i64, bool)> {
-        let recents = self.recent_capture_bodies(RECENT_DEDUP_WINDOW);
+        let recents = self.recent_source_bodies(ev.source, RECENT_DEDUP_WINDOW);
         let recent_refs: Vec<Recent<'_>> =
             recents.iter().map(|(h, c)| Recent { content_hash: h, content: c }).collect();
         let decision = decide_hash(ev.content, &recent_refs, Self::content_hash);
@@ -366,9 +366,19 @@ impl Db {
         self.capture(&collapsed)
     }
 
+    /// Recent event bodies for one `source`, newest-first — used by near-dup collapse (FR-CAP-03).
+    fn recent_source_bodies(&self, source: &str, limit: usize) -> Vec<(String, String)> {
+        self.conn
+            .lock()
+            .ok()
+            .and_then(|c| event_log::recent_source_bodies(&c, source, limit).ok())
+            .unwrap_or_default()
+    }
+
     /// Recent capture bodies `(hash, content)` newest-first, for the near-dup collapse.
+    #[allow(dead_code)]
     fn recent_capture_bodies(&self, limit: usize) -> Vec<(String, String)> {
-        self.conn.lock().ok().and_then(|c| event_log::recent_capture_bodies(&c, limit).ok()).unwrap_or_default()
+        self.recent_source_bodies("capture", limit)
     }
 
     /// Ingest a window capture end-to-end (the real capture path, FR-CAP-01/03 + WP2.7): near-dup
@@ -382,9 +392,32 @@ impl Db {
         text: &str,
         dwell_ms: i64,
     ) -> Option<(i64, bool, Vec<i64>)> {
+        self.ingest_text_event("capture", bundle_id, window_title, text, dwell_ms)
+    }
+
+    /// Ingest on-device screen OCR text (issue #107, decision B). Source is `screen_ocr`; pixels
+    /// never reach this method — only the extracted string + provenance.
+    pub fn ingest_screen_ocr(
+        &self,
+        bundle_id: Option<&str>,
+        window_title: Option<&str>,
+        text: &str,
+        dwell_ms: i64,
+    ) -> Option<(i64, bool, Vec<i64>)> {
+        self.ingest_text_event("screen_ocr", bundle_id, window_title, text, dwell_ms)
+    }
+
+    fn ingest_text_event(
+        &self,
+        source: &'static str,
+        bundle_id: Option<&str>,
+        window_title: Option<&str>,
+        text: &str,
+        dwell_ms: i64,
+    ) -> Option<(i64, bool, Vec<i64>)> {
         let ev = NewEvent {
             ts: self.now_ms(),
-            source: "capture",
+            source,
             kind: "text",
             app_bundle_id: bundle_id,
             window_title,

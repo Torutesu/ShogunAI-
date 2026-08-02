@@ -16,3 +16,4 @@ build/
 /apps/desktop/src-tauri/gen/
 *.jsonl
 models/
+legacy/screenpipe-ref/

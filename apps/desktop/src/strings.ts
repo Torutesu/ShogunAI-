@@ -204,6 +204,13 @@ export const STRINGS = {
     meetingMicOnly: "Detect by microphone alone",
     meetingMicOnlyHint:
       "Off by default. When on, sustained microphone use can offer notes without Meet or Zoom in front — useful for calls in other apps.",
+    visualRecallSection: "Visual recall",
+    visualRecallHint:
+      "When accessibility text is missing, read the focused window with on-device OCR. No screenshots are saved — only text and provenance.",
+    visualRecallOn: "On",
+    visualRecallOff: "Off",
+    visualRecallDisclosure:
+      "Requires Screen Recording permission for the focused window only. Frames stay in memory, text is recognized on this Mac, then pixels are discarded. Nothing is uploaded.",
     // FR-MT-03 disclosure family. Must match MT3 (invariant 2): on-device audio during approved
     // meetings, no recording/waveform/audio file to disk/temp/cloud — transcript + provenance only.
     // Reuse these keys everywhere; never claim we do not listen while ASR runs.
@@ -214,6 +221,20 @@ export const STRINGS = {
     meetingListening: "Listening on this Mac · no recording saved",
     meetingDisclosureRecap:
       "Processed on this Mac only. No recording saved — transcript, provenance, and your notes.",
+    // live in-meeting overlay (issue #93)
+    meetingModeTranscription: "Transcription",
+    meetingModeOneWay: "One-way translation",
+    meetingModeTwoWay: "Two-way translation",
+    meetingLangAuto: "Auto-detect",
+    meetingLangEnglish: "English",
+    meetingLangJapanese: "Japanese",
+    meetingLangArrow: "→",
+    meetingLangSwap: "↔",
+    meetingLiveEmpty: "Listening…",
+    meetingLiveShowSource: "Show source",
+    meetingLiveHideSource: "Hide source",
+    meetingOverlayClose: "Close",
+    meetingOverlaySettings: "Settings",
     // errors
     sources: "Sources",
     noAnswer: "(no response)",

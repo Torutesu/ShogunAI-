@@ -1308,8 +1308,11 @@ kbd {
 :root[data-window="meeting"],
 :root[data-window="meeting"] body,
 :root[data-window="meeting"] #root {
+  margin: 0;
+  padding: 0;
   background: transparent;
   overflow: hidden;
+  width: 100%;
   height: 100%;
   /* Pass clicks through any transparent padding inside the fixed window frame. */
   pointer-events: none;
@@ -1331,11 +1334,26 @@ kbd {
   font-family: var(--sys);
   box-sizing: border-box;
 }
-/* The only affordance saying "you can move me" — the window has no title bar. */
+/* Drag handle vs interactive controls — header drags; buttons/menus/scroll opt out. */
+.ov__drag {
+  -webkit-app-region: drag;
+  app-region: drag;
+  cursor: grab;
+}
+.ov__drag:active {
+  cursor: grabbing;
+}
+.ov__nodrag,
+.ov__nodrag * {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
 .ov__grip {
   flex: none;
   align-self: stretch;
   width: 14px;
+  -webkit-app-region: drag;
+  app-region: drag;
   cursor: grab;
   background-image: radial-gradient(currentColor 1px, transparent 1px);
   background-size: 4px 6px;
@@ -1351,6 +1369,8 @@ kbd {
 .ov__body {
   flex: 1;
   min-width: 0;
+  -webkit-app-region: drag;
+  app-region: drag;
 }
 .ov__kicker {
   font-size: var(--fs-xs);
@@ -1380,6 +1400,8 @@ kbd {
   align-items: center;
   gap: 8px;
   flex: none;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
 }
 /* One primary action, as in the reference. The countdown rides inside it so the deadline is
    visible without becoming a second thing to read. */
@@ -1405,6 +1427,8 @@ kbd {
 .ov__go--wide {
   width: 100%;
   justify-content: center;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
 }
 .ov__count {
   font-variant-numeric: tabular-nums;
@@ -1463,6 +1487,249 @@ kbd {
   background: #ff453a;
   flex: none;
 }
+/* live in-meeting pane (issue #93) */
+.ov--live {
+  align-items: stretch;
+  flex-direction: column;
+  padding: 0;
+  height: 100%;
+  background: rgba(18, 18, 20, 0.72);
+  -webkit-backdrop-filter: blur(40px) saturate(1.4);
+  backdrop-filter: blur(40px) saturate(1.4);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 20px;
+  overflow: hidden;
+}
+.ov__live {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 14px 16px 12px 6px;
+}
+.ov__livehead {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  -webkit-app-region: drag;
+  app-region: drag;
+  cursor: grab;
+}
+.ov__modepick,
+.ov__langpick {
+  position: relative;
+  flex: none;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+.ov__langrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  justify-content: center;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+.ov__modebtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: inherit;
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: var(--r-pill);
+  padding: 6px 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ov__chev {
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid currentColor;
+  opacity: 0.7;
+}
+.ov__modemenu,
+.ov__langmenu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 20;
+  min-width: 180px;
+  padding: 6px;
+  background: rgba(12, 12, 14, 0.94);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 14px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
+}
+.ov__modeopt,
+.ov__langopt {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  font-size: var(--fs-xs);
+  color: var(--ink);
+  background: none;
+  border: none;
+  border-radius: 8px;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+.ov__modeopt:hover,
+.ov__langopt:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+.ov__modeopt.is-on,
+.ov__langopt.is-on {
+  background: rgba(255, 255, 255, 0.12);
+}
+.ov__langbtn {
+  font: inherit;
+  font-size: var(--fs-xs);
+  color: var(--ink);
+  background: none;
+  border: none;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.35);
+  padding: 2px 2px 3px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ov__langbtn--auto {
+  border-bottom-style: dashed;
+  opacity: 0.85;
+}
+.ov__langarrow {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  flex: none;
+}
+.ov__liveacts {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  flex: none;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+.ov__iconbtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  font: inherit;
+  color: var(--ink);
+  background: none;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  opacity: 0.85;
+}
+.ov__iconbtn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  opacity: 1;
+}
+.ov__icon {
+  width: 18px;
+  height: 18px;
+}
+.ov__livebody {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px 4px 8px 8px;
+  margin-top: 4px;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+.ov__liveempty {
+  margin: 0;
+  padding: 24px 8px;
+  text-align: center;
+  font-size: var(--fs-sm);
+  color: var(--muted);
+}
+.ov__liveline {
+  margin-bottom: 12px;
+}
+.ov__livemeta {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 3px;
+}
+.ov__livespeaker {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.ov__livetime {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  opacity: 0.7;
+}
+.ov__livetext {
+  margin: 0;
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  color: var(--ink);
+}
+.ov__livesrc {
+  margin: 4px 0 0;
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+  color: var(--muted);
+}
+.ov__livefoot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  flex: none;
+  -webkit-app-region: drag;
+  app-region: drag;
+}
+.ov__livetitle {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ov__livetime--foot {
+  flex: none;
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+.ov__stop--live {
+  flex: none;
+  font-size: var(--fs-xs);
+  padding: 6px 12px;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+.ov__stop--live:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
 /* recap */
 .ov--recap {
   align-items: stretch;
@@ -1480,6 +1747,9 @@ kbd {
   display: flex;
   align-items: baseline;
   gap: 8px;
+  -webkit-app-region: drag;
+  app-region: drag;
+  cursor: grab;
 }
 .ov__rtitle {
   font-size: var(--fs-sm);
@@ -1498,6 +1768,8 @@ kbd {
   flex: 1;
   min-height: 0;
   overflow: auto;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
 }
 .ov__rnotes {
   margin: 0;

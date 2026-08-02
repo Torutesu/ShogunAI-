@@ -1,0 +1,153 @@
+//! Screenpipe-style OCR trigger + gated capture path (issue #106 decision B).
+//!
+//! Mirrors `screenpipe-capture/src/paired_capture.rs` OCR decisions without JPEG timeline
+//! storage. Flow: CGWindow capture (RAM) → text-region detect → pixel-signature gate →
+//! Apple Vision on union crop → text + provenance → drop pixels.
+//! Reference: https://github.com/screenpipe/screenpipe
+
+use image::DynamicImage;
+use image::GenericImageView;
+
+use super::ocr_gate::{OcrDecision, OcrGate};
+use super::text_regions::{detect_text_regions, image_pixel_signature, union_region, TextRegion};
+
+/// Padding around the detected-text union crop (Screenpipe #5054 benchmark).
+pub const UNION_PAD_PX: u32 = 20;
+
+const CANVAS_APP_PATTERNS: &[&str] = &[
+    "google docs",
+    "google sheets",
+    "google slides",
+    "google drawings",
+    "figma",
+    "excalidraw",
+    "miro",
+    "canva",
+    "tldraw",
+];
+
+/// Terminal emulators whose AX buffer is raw/unformatted — Screenpipe always OCRs these.
+pub fn app_prefers_ocr(bundle_or_app: &str) -> bool {
+    let n = bundle_or_app.to_lowercase();
+    n.contains("wezterm")
+        || n.contains("alacritty")
+        || n.contains("kitty")
+        || n.contains("hyper")
+        || n.contains("warp")
+}
+
+/// AX tree returned text but likely missed canvas/GPU document body (Screenpipe thin heuristic).
+pub fn a11y_content_is_thin(window_title: Option<&str>, ax_text_len: usize) -> bool {
+    if let Some(win) = window_title {
+        let win_lower = win.to_lowercase();
+        if CANVAS_APP_PATTERNS.iter().any(|pat| win_lower.contains(pat)) {
+            return true;
+        }
+    }
+    ax_text_len < 100
+}
+
+/// Pre-gate OCR triggers from Screenpipe `paired_capture` (minus meeting-only gate).
+pub fn wants_ocr(
+    bundle_or_app: &str,
+    window_title: Option<&str>,
+    ax_empty: bool,
+    ax_text_len: usize,
+) -> bool {
+    let prefers = app_prefers_ocr(bundle_or_app);
+    let has_ax = !prefers && !ax_empty;
+    let thin = has_ax && a11y_content_is_thin(window_title, ax_text_len);
+    prefers || !has_ax || thin
+}
+
+/// Outcome of one gated OCR attempt on the focused window.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OcrOutcome {
+    /// OCR not needed (AX sufficient, or gate skip with no cached text).
+    Skipped,
+    /// Vision ran but returned nothing usable.
+    Empty,
+    /// Extracted text ready for `ingest_screen_ocr`.
+    Text(String),
+}
+
+/// Stateful Screenpipe-style OCR gate (one per capture poller).
+#[derive(Debug, Default)]
+pub struct RecallPipeline {
+    gate: OcrGate,
+}
+
+impl RecallPipeline {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Run the gated OCR path on a focused-window image already in RAM.
+    pub fn ocr_gated_window(
+        &mut self,
+        frame: &DynamicImage,
+        app_key: &str,
+        wants_ocr: bool,
+        ocr_crop: impl FnOnce(&DynamicImage, TextRegion) -> Option<String>,
+    ) -> OcrOutcome {
+        if !wants_ocr {
+            return OcrOutcome::Skipped;
+        }
+
+        let regions = detect_text_regions(frame);
+        let (frame_w, frame_h) = frame.dimensions();
+        let Some(union) = union_region(&regions, UNION_PAD_PX, frame_w, frame_h) else {
+            return OcrOutcome::Skipped;
+        };
+        let union_img = frame.crop_imm(union.x, union.y, union.width, union.height);
+        let signature = image_pixel_signature(&union_img);
+
+        match self.gate.observe(app_key, signature) {
+            OcrDecision::Skip => {
+                if let Some(cached) = self.gate.indexed_text(app_key) {
+                    if cached.trim().is_empty() {
+                        OcrOutcome::Empty
+                    } else {
+                        OcrOutcome::Text(cached.to_string())
+                    }
+                } else {
+                    OcrOutcome::Skipped
+                }
+            }
+            OcrDecision::Ocr => {
+                let text = ocr_crop(frame, union).unwrap_or_default();
+                if text.trim().is_empty() {
+                    OcrOutcome::Empty
+                } else {
+                    self.gate.ocr_indexed(app_key, &text);
+                    OcrOutcome::Text(text)
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn terminals_always_want_ocr() {
+        assert!(wants_ocr("com.github.wez.wezterm", None, false, 5000));
+    }
+
+    #[test]
+    fn rich_ax_skips_ocr() {
+        assert!(!wants_ocr("com.apple.Safari", Some("Inbox"), false, 500));
+    }
+
+    #[test]
+    fn thin_ax_triggers_ocr() {
+        assert!(wants_ocr(
+            "com.google.Chrome",
+            Some("Q1 Plan - Google Docs"),
+            false,
+            200
+        ));
+    }
+}

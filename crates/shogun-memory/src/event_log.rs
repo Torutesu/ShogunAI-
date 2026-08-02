@@ -115,16 +115,27 @@ pub fn insert_or_touch_with_thread(
 /// The most recent capture bodies `(content_hash, content)`, newest first, for the near-duplicate
 /// collapse (FR-CAP-03). Scoped to `source = 'capture'` (only re-read window bodies collapse; user
 /// notes and integration events are distinct). `limit` bounds the comparison cost.
-pub fn recent_capture_bodies(
+/// Recent `(content_hash, content)` pairs for near-dup collapse (FR-CAP-03). Scoped to one
+/// `source` so OCR re-reads do not collapse against AX captures and vice versa.
+pub fn recent_source_bodies(
     conn: &Connection,
+    source: &str,
     limit: usize,
 ) -> Result<Vec<(String, String)>, rusqlite::Error> {
     let mut stmt = conn.prepare(
         "SELECT content_hash, content FROM event_log
-         WHERE source = 'capture' ORDER BY id DESC LIMIT ?1",
+         WHERE source = ?1 ORDER BY id DESC LIMIT ?2",
     )?;
-    let rows = stmt.query_map(params![limit as i64], |r| Ok((r.get(0)?, r.get(1)?)))?;
+    let rows = stmt.query_map(params![source, limit as i64], |r| Ok((r.get(0)?, r.get(1)?)))?;
     rows.collect()
+}
+
+/// [`recent_source_bodies`] for `source = 'capture'` — kept for callers that only care about AX.
+pub fn recent_capture_bodies(
+    conn: &Connection,
+    limit: usize,
+) -> Result<Vec<(String, String)>, rusqlite::Error> {
+    recent_source_bodies(conn, "capture", limit)
 }
 
 /// One event's id and content, for the Dream Cycle consolidation pass (which classifies a day's

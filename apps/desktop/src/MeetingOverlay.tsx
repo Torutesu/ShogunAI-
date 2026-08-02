@@ -3,7 +3,7 @@
 // meeting window, and the notch sits at the top edge of the screen outside that field of view.
 // "Always visible, always one tap to stop" only holds if it appears near what they are watching.
 
-import { useEffect, useState, type JSX } from "react";
+import { useCallback, useEffect, useRef, useState, type JSX } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
@@ -27,9 +27,6 @@ export interface Recap {
   degraded: boolean;
 }
 
-// The model-generated minutes (MT4). They arrive AFTER the degraded Recap is already on screen —
-// the Batch lane is async — so this is layered on top of `Recap`, never a replacement. A next
-// action is a suggestion to confirm, not something the app will do (invariant 4): display only.
 export interface Minutes {
   summary: string;
   decisions: string[];
@@ -40,6 +37,7 @@ export interface TranscriptLine {
   ts: number;
   speaker: string | null;
   text: string;
+  translation?: string | null;
 }
 
 interface MeetingTranscript {
@@ -47,10 +45,34 @@ interface MeetingTranscript {
   only_blanks: boolean;
 }
 
+type MeetingMode = "transcription" | "one_way" | "two_way";
+type MeetingLanguage = "english" | "japanese" | "auto";
+
+interface MeetingSettings {
+  meeting_mode: MeetingMode;
+  source_lang: MeetingLanguage;
+  target_lang: MeetingLanguage;
+  my_lang: MeetingLanguage;
+  other_lang: MeetingLanguage;
+}
+
 interface TranscriptTurn {
   speakerLabel: string;
   ts: number;
   text: string;
+  translation?: string | null;
+}
+
+interface LiveLineEvent {
+  ts: number;
+  speaker: string | null;
+  text: string;
+  translation?: string | null;
+}
+
+interface TranslationEvent {
+  ts: number;
+  translation: string;
 }
 
 /** mm:ss. Tabular figures in CSS keep the row from reflowing as the seconds tick. */
@@ -65,12 +87,53 @@ function speakerLabel(speaker: string | null): string {
   return t.meetingTranscriptSpeakerUnknown;
 }
 
+function langLabel(lang: MeetingLanguage): string {
+  if (lang === "auto") return t.meetingLangAuto;
+  if (lang === "japanese") return t.meetingLangJapanese;
+  return t.meetingLangEnglish;
+}
+
+function modeLabel(mode: MeetingMode): string {
+  if (mode === "one_way") return t.meetingModeOneWay;
+  if (mode === "two_way") return t.meetingModeTwoWay;
+  return t.meetingModeTranscription;
+}
+
 function minutesHasContent(minutes: Minutes): boolean {
   return (
     minutes.summary.trim().length > 0 ||
     minutes.decisions.length > 0 ||
     minutes.next_actions.length > 0
   );
+}
+
+/** Drop LLM meta-chat/refusals — overlay must never paint these as subtitles. */
+function looksLikeTranslateRefusal(text: string): boolean {
+  const lower = text.toLowerCase().trim();
+  if (!lower) return true;
+  const needles = [
+    "i don't see",
+    "i do not see",
+    "could you please",
+    "please provide",
+    "provide the",
+    "spoken line",
+    "audio content",
+    "no text to translate",
+    "nothing to translate",
+    "you'd like translated",
+    "can you provide",
+  ];
+  if (needles.some((n) => lower.includes(n))) return true;
+  return ["sure,", "sure!", "certainly", "of course", "here is the translation", "here's the translation"].some(
+    (p) => lower.startsWith(p),
+  );
+}
+
+function usableTranslation(text: string | null | undefined): string | null {
+  if (!text?.trim()) return null;
+  if (looksLikeTranslateRefusal(text)) return null;
+  return text.trim();
 }
 
 /** Group consecutive lines from the same speaker into readable turns. */
@@ -81,10 +144,15 @@ function groupTurns(lines: TranscriptLine[]): TranscriptTurn[] {
   for (const line of lines) {
     const label = speakerLabel(line.speaker);
     const last = turns[turns.length - 1];
-    if (last && last.speakerLabel === label) {
+    if (last && last.speakerLabel === label && last.translation === line.translation) {
       last.text = `${last.text} ${line.text}`;
     } else {
-      turns.push({ speakerLabel: label, ts: line.ts - origin, text: line.text });
+      turns.push({
+        speakerLabel: label,
+        ts: line.ts - origin,
+        text: line.text,
+        translation: line.translation,
+      });
     }
   }
   return turns;
@@ -94,6 +162,110 @@ const call = (cmd: string, args?: Record<string, unknown>): void => {
   void invoke(cmd, args).catch(() => undefined);
 };
 
+/** AppKit hit-tests the whole NSWindow rect; CSS holes do not pass clicks to apps behind. */
+function useOverlayInteractive(active: boolean): void {
+  useEffect(() => {
+    call("meeting_overlay_set_interactive", { interactive: active });
+    return () => {
+      call("meeting_overlay_set_interactive", { interactive: false });
+    };
+  }, [active]);
+}
+
+const startDrag = (): void => {
+  call("meeting_drag");
+};
+
+/** Coalesce rapid `meeting_live_line` / translation events into one paint per frame. */
+function useLiveLineBuffer(active: boolean): {
+  lines: TranscriptLine[];
+  pushLine: (line: TranscriptLine) => void;
+  patchTranslation: (ts: number, translation: string) => void;
+  snapshot: () => TranscriptLine[];
+} {
+  const [lines, setLines] = useState<TranscriptLine[]>([]);
+  const pendingRef = useRef<TranscriptLine[]>([]);
+  const transRef = useRef<Map<number, string>>(new Map());
+  const rafRef = useRef<number | null>(null);
+
+  const flush = useCallback((): void => {
+    rafRef.current = null;
+    const batch = pendingRef.current;
+    const patches = transRef.current;
+    pendingRef.current = [];
+    transRef.current = new Map();
+    if (batch.length === 0 && patches.size === 0) return;
+    setLines((prev) => {
+      let next = batch.length > 0 ? [...prev, ...batch] : prev;
+      if (patches.size > 0) {
+        next = next.map((l) => {
+          const translation = patches.get(l.ts);
+          return translation != null ? { ...l, translation } : l;
+        });
+      }
+      return next;
+    });
+  }, []);
+
+  const schedule = useCallback((): void => {
+    if (rafRef.current != null) return;
+    rafRef.current = window.requestAnimationFrame(flush);
+  }, [flush]);
+
+  useEffect(() => {
+    if (active) {
+      setLines([]);
+      pendingRef.current = [];
+      transRef.current = new Map();
+      if (rafRef.current != null) {
+        window.cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+      return;
+    }
+    if (rafRef.current != null) {
+      window.cancelAnimationFrame(rafRef.current);
+      flush();
+    }
+  }, [active, flush]);
+
+  useEffect(
+    () => () => {
+      if (rafRef.current != null) window.cancelAnimationFrame(rafRef.current);
+    },
+    [],
+  );
+
+  const pushLine = useCallback(
+    (line: TranscriptLine) => {
+      pendingRef.current.push(line);
+      schedule();
+    },
+    [schedule],
+  );
+
+  const patchTranslation = useCallback(
+    (ts: number, translation: string) => {
+      const usable = usableTranslation(translation);
+      if (!usable) return;
+      transRef.current.set(ts, usable);
+      schedule();
+    },
+    [schedule],
+  );
+
+  const snapshot = useCallback(
+    (): TranscriptLine[] => [...lines, ...pendingRef.current],
+    [lines],
+  );
+
+  return { lines, pushLine, patchTranslation, snapshot };
+}
+
+const MODES: MeetingMode[] = ["transcription", "one_way", "two_way"];
+const LANGS: MeetingLanguage[] = ["auto", "english", "japanese"];
+const ONE_WAY_TARGET_LANGS: MeetingLanguage[] = ["english", "japanese"];
+
 export function MeetingOverlay(): JSX.Element | null {
   const [view, setView] = useState<MeetingView | null>(null);
   const [recap, setRecap] = useState<Recap | null>(null);
@@ -101,15 +273,26 @@ export function MeetingOverlay(): JSX.Element | null {
   const [transcript, setTranscript] = useState<TranscriptLine[]>([]);
   const [onlyBlanks, setOnlyBlanks] = useState(false);
   const [minutesNeedsKey, setMinutesNeedsKey] = useState(false);
-  const [note, setNote] = useState("");
+  const [stopping, setStopping] = useState(false);
+  const live = useLiveLineBuffer(view?.state === "recording");
+  const liveLines = live.lines;
+  const [settings, setSettings] = useState<MeetingSettings>({
+    meeting_mode: "transcription",
+    source_lang: "auto",
+    target_lang: "japanese",
+    my_lang: "english",
+    other_lang: "japanese",
+  });
+  const [modeOpen, setModeOpen] = useState(false);
+  const [langOpen, setLangOpen] = useState<"source" | "target" | "my" | "other" | null>(null);
+  const [showSource, setShowSource] = useState(false);
+  const liveScrollRef = useRef<HTMLDivElement>(null);
+  const liveSnapshotRef = useRef<TranscriptLine[]>([]);
 
-  // Polled, with the push event as an accelerator rather than the source of truth.
-  //
-  // Relying on the event alone left this window holding the state it happened to see when it
-  // mounted: it rendered "idle", never heard another word, and stayed blank while a meeting ran
-  // — a transparent window with nothing in it is indistinguishable from no window at all. A
-  // status call a second is nothing next to a surface that has to be right whenever the user
-  // looks at it.
+  useEffect(() => {
+    liveSnapshotRef.current = live.snapshot();
+  }, [liveLines, live.snapshot]);
+
   useEffect(() => {
     const read = (): void => {
       void invoke<MeetingView>("meeting_status").then(setView).catch(() => undefined);
@@ -123,16 +306,53 @@ export function MeetingOverlay(): JSX.Element | null {
     };
   }, []);
 
-  // Recap reads: degraded card, minutes (async), transcript. Transcript is fetched on wrap and
-  // polled until lines land — the audio lane flushes on Stop, but a one-shot fetch raced empty
-  // before segments were visible, and the meeting window lacked IPC permission until fixed.
+  useEffect(() => {
+    if (view?.state !== "recording") return;
+    void invoke<MeetingSettings>("get_meeting_settings")
+      .then(setSettings)
+      .catch(() => undefined);
+
+    const offLine = listen<LiveLineEvent>("meeting_live_line", (e) => {
+      const line = e.payload;
+      live.pushLine({
+        ts: line.ts,
+        speaker: line.speaker,
+        text: line.text,
+        translation: line.translation ?? null,
+      });
+    });
+    const offTrans = listen<TranslationEvent>("meeting_live_translation", (e) => {
+      const { ts, translation } = e.payload;
+      live.patchTranslation(ts, translation);
+    });
+    return () => {
+      void offLine.then((f) => f());
+      void offTrans.then((f) => f());
+    };
+  }, [view?.state, live.pushLine, live.patchTranslation]);
+
+  useEffect(() => {
+    if (view?.state !== "recording") setStopping(false);
+  }, [view?.state]);
+
+  useEffect(() => {
+    liveScrollRef.current?.scrollTo({
+      top: liveScrollRef.current.scrollHeight,
+      behavior: "smooth",
+    });
+  }, [liveLines.length]);
+
   useEffect(() => {
     if (view?.state !== "wrapping") return;
     setMinutesNeedsKey(false);
-    setTranscript([]);
     setOnlyBlanks(false);
+    // Carry live transcript into Recap so Stop does not flash an empty card.
+    const seeded = liveSnapshotRef.current;
+    if (seeded.length > 0) {
+      setTranscript(seeded);
+    }
 
-    let transcriptDone = false;
+    let transcriptDone = seeded.length > 0;
     let minutesDone = false;
 
     void invoke<boolean>("meeting_select_kk_configured")
@@ -187,27 +407,53 @@ export function MeetingOverlay(): JSX.Element | null {
     };
   }, [view?.state]);
 
+  const overlayActive = Boolean(view?.enabled && view && view.state !== "idle");
+  useOverlayInteractive(overlayActive);
+
   if (!view || !view.enabled || view.state === "idle") return null;
 
   const name = view.title?.trim() || t.meetingUntitled;
 
-  // A grip strip down the left edge of every state: the window has no title bar, so this is the
-  // only affordance that says "you can move me".
   const grip = (
-    <div className="ov__grip" onMouseDown={() => call("meeting_drag")} title={t.meetingNotes} />
+    <div
+      className="ov__grip"
+      title={t.meetingNotes}
+      onPointerDown={(e) => {
+        if (e.button === 0) startDrag();
+      }}
+    />
   );
+
+  const handleStop = (): void => {
+    if (stopping) return;
+    setStopping(true);
+    call("meeting_stop");
+  };
+
+  const setMode = (mode: MeetingMode): void => {
+    setSettings((s) => ({ ...s, meeting_mode: mode }));
+    setModeOpen(false);
+    call("set_meeting_mode", { mode });
+  };
+
+  const setLang = (
+    field: "source_lang" | "target_lang" | "my_lang" | "other_lang",
+    lang: MeetingLanguage,
+  ): void => {
+    setSettings((s) => ({ ...s, [field]: lang }));
+    setLangOpen(null);
+    call("set_meeting_langs", { [field]: lang });
+  };
 
   if (view.state === "offered") {
     return (
-      <div className="ov ov--offer">
+      <div className="ov ov--offer ov__nodrag">
         {grip}
-        <div className="ov__body">
+        <div className="ov__body ov__drag">
           <div className="ov__kicker">{t.meetingDetected}</div>
           <div className="ov__name">{name}</div>
         </div>
-        <div className="ov__acts">
-          {/* One primary action, as in the reference. The countdown lives inside the button so
-              the user sees the deadline without it becoming a second thing to read. */}
+        <div className="ov__acts ov__nodrag">
           <button type="button" className="ov__go" onClick={() => call("meeting_start")}>
             {t.meetingTakeNotes}
             <span className="ov__count">{Math.ceil(view.countdown_ms / 1000)}</span>
@@ -222,51 +468,187 @@ export function MeetingOverlay(): JSX.Element | null {
   }
 
   if (view.state === "recording") {
-    return (
-      <div className="ov">
-        {grip}
-        <div className="ov__body">
-          <div className="ov__time">{clock(view.elapsed_ms)}</div>
-          <div className="ov__name ov__name--sub">{name}</div>
-          <div className="ov__listening">{t.meetingListening}</div>
-        </div>
-        <input
-          className="ov__note"
-          value={note}
-          placeholder={t.meetingNotePlaceholder}
-          onChange={(e) => setNote(e.target.value)}
-          onBlur={() => note && call("meeting_save_note", { body: note })}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && note) {
-              call("meeting_save_note", { body: note });
-            }
-          }}
-        />
-        {/* Stop is the largest target here and takes no confirmation: stopping must never be
-            harder than starting was. */}
-        <button type="button" className="ov__stop" onClick={() => call("meeting_stop")}>
-          <span className="ov__stopdot" />
-          {t.meetingStop}
+    const translating = settings.meeting_mode !== "transcription";
+    const liveTurns = groupTurns(liveLines);
+
+    const langPicker = (
+      field: "source" | "target" | "my" | "other",
+      langKey: "source_lang" | "target_lang" | "my_lang" | "other_lang",
+      value: MeetingLanguage,
+      options: MeetingLanguage[],
+    ) => (
+      <div className="ov__langpick">
+        <button
+          type="button"
+          className={`ov__langbtn${field === "source" || field === "my" ? " ov__langbtn--auto" : ""}`}
+          onClick={() => setLangOpen(langOpen === field ? null : field)}
+        >
+          {langLabel(value)}
         </button>
+        {langOpen === field ? (
+          <div className="ov__langmenu" role="listbox">
+            {options.map((opt) => (
+              <button
+                key={opt}
+                type="button"
+                role="option"
+                aria-selected={opt === value}
+                className={`ov__langopt${opt === value ? " is-on" : ""}`}
+                onClick={() => setLang(langKey, opt)}
+              >
+                {langLabel(opt)}
+              </button>
+            ))}
+          </div>
+        ) : null}
+      </div>
+    );
+
+    return (
+      <div className="ov ov--live ov__nodrag">
+        {grip}
+        <div className="ov__live">
+          <header className="ov__livehead ov__drag">
+            <div className="ov__modepick">
+              <button
+                type="button"
+                className="ov__modebtn"
+                aria-expanded={modeOpen}
+                onClick={() => {
+                  setModeOpen(!modeOpen);
+                  setLangOpen(null);
+                }}
+              >
+                {modeLabel(settings.meeting_mode)}
+                <span className="ov__chev" aria-hidden />
+              </button>
+              {modeOpen ? (
+                <div className="ov__modemenu" role="listbox">
+                  {MODES.map((m) => (
+                    <button
+                      key={m}
+                      type="button"
+                      role="option"
+                      aria-selected={m === settings.meeting_mode}
+                      className={`ov__modeopt${m === settings.meeting_mode ? " is-on" : ""}`}
+                      onClick={() => setMode(m)}
+                    >
+                      {modeLabel(m)}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+
+            {settings.meeting_mode === "one_way" ? (
+              <div className="ov__langrow">
+                {langPicker("source", "source_lang", settings.source_lang, LANGS)}
+                <span className="ov__langarrow">{t.meetingLangArrow}</span>
+                {langPicker("target", "target_lang", settings.target_lang, ONE_WAY_TARGET_LANGS)}
+              </div>
+            ) : null}
+
+            {settings.meeting_mode === "two_way" ? (
+              <div className="ov__langrow">
+                {langPicker("my", "my_lang", settings.my_lang, ONE_WAY_TARGET_LANGS)}
+                <span className="ov__langarrow">{t.meetingLangSwap}</span>
+                {langPicker("other", "other_lang", settings.other_lang, ONE_WAY_TARGET_LANGS)}
+              </div>
+            ) : null}
+
+            <div className="ov__liveacts ov__nodrag">
+              {translating ? (
+                <button
+                  type="button"
+                  className="ov__iconbtn"
+                  title={showSource ? t.meetingLiveHideSource : t.meetingLiveShowSource}
+                  aria-label={showSource ? t.meetingLiveHideSource : t.meetingLiveShowSource}
+                  onClick={() => setShowSource(!showSource)}
+                >
+                  <svg className="ov__icon" viewBox="0 0 24 24" aria-hidden>
+                    <path
+                      d="M4 8h16M6 12h12M8 16h8"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.5"
+                      strokeLinecap="round"
+                    />
+                  </svg>
+                </button>
+              ) : null}
+              <button
+                type="button"
+                className="ov__iconbtn"
+                title={t.meetingOverlayClose}
+                aria-label={t.meetingOverlayClose}
+                onClick={() => call("meeting_overlay_dismiss")}
+              >
+                <svg className="ov__icon" viewBox="0 0 24 24" aria-hidden>
+                  <path
+                    d="M6 6l12 12M18 6L6 18"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                    strokeLinecap="round"
+                  />
+                </svg>
+              </button>
+            </div>
+          </header>
+
+          <div className="ov__livebody ov__nodrag" ref={liveScrollRef}>
+            {liveTurns.length === 0 ? (
+              <p className="ov__liveempty">{t.meetingLiveEmpty}</p>
+            ) : (
+              liveTurns.map((turn, i) => {
+                const translation = usableTranslation(turn.translation);
+                const primary = translating && translation ? translation : turn.text;
+                const secondary =
+                  translating && translation && showSource ? turn.text : null;
+                return (
+                  <div className="ov__liveline" key={`${turn.ts}-${i}`}>
+                    <div className="ov__livemeta">
+                      <span className="ov__livespeaker">{turn.speakerLabel}</span>
+                      <span className="ov__livetime">{clock(turn.ts)}</span>
+                    </div>
+                    <p className="ov__livetext">{primary}</p>
+                    {secondary ? <p className="ov__livesrc">{secondary}</p> : null}
+                  </div>
+                );
+              })
+            )}
+          </div>
+
+          <footer className="ov__livefoot ov__drag">
+            <span className="ov__livetitle">{name}</span>
+            <span className="ov__livetime ov__livetime--foot">{clock(view.elapsed_ms)}</span>
+            <button
+              type="button"
+              className="ov__stop ov__stop--live ov__nodrag"
+              disabled={stopping}
+              onClick={handleStop}
+            >
+              <span className="ov__stopdot" />
+              {t.meetingStop}
+            </button>
+          </footer>
+        </div>
       </div>
     );
   }
 
-  // Wrapping: the degraded Recap (FR-MT-19). The summary and the action items arrive with MT4;
-  // until then this shows what is actually known, and says so rather than leaving a blank card
-  // that reads as "your meeting was lost". The transcript is shown here only — never during
-  // recording (FR-MT-10).
   const minutesReady = minutes != null && minutesHasContent(minutes);
   const turns = groupTurns(transcript);
   const hasTranscript = turns.length > 0;
   const showMinutesPending = hasTranscript && !minutesReady && !minutesNeedsKey;
   const showMinutesNeedsKey = hasTranscript && !minutesReady && minutesNeedsKey;
+  const showWrapping = !recap && !minutesReady && !hasTranscript;
 
   return (
-    <div className="ov ov--recap">
+    <div className="ov ov--recap ov__nodrag">
       {grip}
       <div className="ov__recap">
-        <div className="ov__rhead">
+        <div className="ov__rhead ov__drag">
           <span className="ov__rtitle">{recap?.title ?? name}</span>
           {recap?.duration_minutes != null ? (
             <span className="ov__rmin">
@@ -274,7 +656,8 @@ export function MeetingOverlay(): JSX.Element | null {
             </span>
           ) : null}
         </div>
-        <div className="ov__rbody">
+        <div className="ov__rbody ov__nodrag">
+          {showWrapping ? <p className="ov__mpending">{t.meetingMinutesPending}</p> : null}
           {minutesReady ? (
             <div className="ov__minutes ov__minutes--lead">
               {minutes?.summary ? (
@@ -344,7 +727,7 @@ export function MeetingOverlay(): JSX.Element | null {
           </div>
         </div>
         <p className="ov__disclosure">{t.meetingDisclosureRecap}</p>
-        <button type="button" className="ov__go ov__go--wide" onClick={() => call("meeting_wrapped")}>
+        <button type="button" className="ov__go ov__go--wide ov__nodrag" onClick={() => call("meeting_wrapped")}>
           {t.meetingRecapDone}
         </button>
       </div>

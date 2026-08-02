@@ -10,7 +10,8 @@
 //! source is driven by a bounded **poll** (≥2 s) as the reliable fallback; an AXObserver push can be
 //! layered on later to reduce latency without changing this composition.
 //!
-//! Invariant 2: AX text only — no screenshot, no image, ever.
+//! Invariant 2: AX text is the default path; optional visual recall (issue #107) may OCR the
+//! focused window in RAM only — text + provenance persisted, pixels discarded immediately.
 //!
 //! `capture_once` is part of the public surface (the main-thread-timer driver alternative in the
 //! runbook uses it directly); it is `allow(unused_imports)` because the default driver only calls
@@ -33,12 +34,66 @@ mod mac {
 
     use shogun_core::capture::exclusion::ExclusionPolicy;
     use shogun_core::capture::pipeline::{capture_focus, CaptureOutcome, Focus};
+    use shogun_core::capture::visual_recall::Settings as VisualRecallSettings;
     use shogun_core::capture::walk_policy::Limits;
     use shogun_core::daemon::Db;
 
     use super::{DEFAULT_POLL_MS, WALK_BUDGET_MS};
     use crate::axcache::{ax_trusted, focused_window};
     use crate::display::frontmost_app;
+    use crate::visual_recall::mac::SharedSettings;
+    #[cfg(feature = "visual-recall-ocr")]
+    use crate::screen_ocr::{self, MIN_OCR_INTERVAL_MS};
+    #[cfg(feature = "visual-recall-ocr")]
+    use crate::visual_recall::pipeline::{self, RecallPipeline};
+
+    #[cfg(not(feature = "visual-recall-ocr"))]
+    const MIN_OCR_INTERVAL_MS: u64 = 5_000;
+
+    #[cfg(feature = "visual-recall-ocr")]
+    /// Poll cadence gate — separate from Screenpipe's pixel-signature OCR gate.
+    struct OcrPollGate {
+        last_focus_key: Option<String>,
+        last_ocr_at: Option<Instant>,
+    }
+
+    #[cfg(feature = "visual-recall-ocr")]
+    impl OcrPollGate {
+        fn new() -> Self {
+            Self { last_focus_key: None, last_ocr_at: None }
+        }
+
+        fn should_run(
+            &mut self,
+            focus_key: &str,
+            bundle_id: &str,
+            window_title: Option<&str>,
+            ax_empty: bool,
+            ax_text_len: usize,
+            now: Instant,
+        ) -> bool {
+            let focus_changed = self.last_focus_key.as_deref() != Some(focus_key);
+            if focus_changed {
+                return true;
+            }
+            if !pipeline::wants_ocr(bundle_id, window_title, ax_empty, ax_text_len) {
+                return false;
+            }
+            match self.last_ocr_at {
+                Some(t) => now.duration_since(t).as_millis() as u64 >= MIN_OCR_INTERVAL_MS,
+                None => true,
+            }
+        }
+
+        fn mark(&mut self, focus_key: String, now: Instant) {
+            self.last_focus_key = Some(focus_key);
+            self.last_ocr_at = Some(now);
+        }
+    }
+
+    fn focus_key(bundle_id: &str, title: Option<&str>) -> String {
+        format!("{bundle_id}\0{}", title.unwrap_or(""))
+    }
 
     /// Capture the current focus into memory once. Reads the frontmost app, builds the focused
     /// window's `AxNode`, runs the exclusion→walk composition (250 ms budget), and — on a real
@@ -82,6 +137,59 @@ mod mac {
         Some(outcome)
     }
 
+    #[cfg(feature = "visual-recall-ocr")]
+    fn maybe_screen_ocr(
+        db: &Db,
+        visual: &VisualRecallSettings,
+        front_pid: i32,
+        bundle_id: &str,
+        title: Option<&str>,
+        dwell_ms: i64,
+        ax_empty: bool,
+        ax_text_len: usize,
+        poll_gate: &mut OcrPollGate,
+        recall: &mut RecallPipeline,
+    ) {
+        if !visual.enabled {
+            return;
+        }
+        let now = Instant::now();
+        let key = focus_key(bundle_id, title);
+        if !poll_gate.should_run(&key, bundle_id, title, ax_empty, ax_text_len, now) {
+            return;
+        }
+        let outcome = screen_ocr::ocr_focused_window_gated(
+            recall,
+            front_pid,
+            &key,
+            bundle_id,
+            title,
+            ax_empty,
+            ax_text_len,
+        );
+        let text = match outcome {
+            pipeline::OcrOutcome::Text(t) => t,
+            pipeline::OcrOutcome::Skipped | pipeline::OcrOutcome::Empty => {
+                poll_gate.mark(key, now);
+                return;
+            }
+        };
+        let digest = screen_ocr::text_digest(&text);
+        match db.ingest_screen_ocr(Some(bundle_id), title, &text, dwell_ms) {
+            Some((id, touched, cands)) => {
+                eprintln!(
+                    "[screen_ocr] {} {} chars digest={digest:#x} → event {id} {} (+{} candidate(s))",
+                    bundle_id,
+                    text.len(),
+                    if touched { "touched" } else { "new" },
+                    cands.len(),
+                );
+            }
+            None => eprintln!("[screen_ocr] {} — DB write skipped (digest={digest:#x})", bundle_id),
+        }
+        poll_gate.mark(key, now);
+    }
+
     /// Spawn the capture poller: every `interval` (default [`DEFAULT_POLL_MS`]), if the process is
     /// Accessibility-trusted, capture the current focus into memory. The `Db` handle is cloned into
     /// the thread (it is `Arc`-backed and `Send`); the policy is shared with the settings commands
@@ -92,6 +200,7 @@ mod mac {
     pub fn spawn_capture_poller(
         db: Db,
         policy: std::sync::Arc<std::sync::Mutex<ExclusionPolicy>>,
+        visual_recall: SharedSettings,
         interval: Option<Duration>,
         reply_cache: Option<shogun_core::daemon::ReplyContextCache>,
     ) -> std::thread::JoinHandle<()> {
@@ -99,6 +208,10 @@ mod mac {
         let dwell_ms = interval.as_millis() as i64;
         std::thread::spawn(move || {
             let mut warm_for: Option<String> = None;
+            #[cfg(feature = "visual-recall-ocr")]
+            let mut ocr_poll_gate = OcrPollGate::new();
+            #[cfg(feature = "visual-recall-ocr")]
+            let mut recall_pipeline = RecallPipeline::new();
             loop {
                 if ax_trusted() {
                     // Re-read the policy each tick: excluding an app is usually a reaction to
@@ -109,8 +222,41 @@ mod mac {
                         std::thread::sleep(interval);
                         continue;
                     };
-                    // errors are swallowed inside ingest; a None just means no focus this tick
-                    let _ = capture_once(&db, &current, dwell_ms);
+                    let visual = visual_recall
+                        .read()
+                        .map(|g| g.clone())
+                        .unwrap_or_default();
+                    let ax_outcome = capture_once(&db, &current, dwell_ms);
+                    if let Some(CaptureOutcome::Excluded(_)) = ax_outcome.as_ref() {
+                        // Excluded windows are never OCR'd either.
+                    } else if visual.enabled {
+                        if let Some(front) = frontmost_app() {
+                            let title = focused_window(front.pid).and_then(|w| w.title());
+                            if current.is_excluded(&front.bundle_id, title.as_deref()).is_none() {
+                                #[cfg(feature = "visual-recall-ocr")]
+                                {
+                                    let ax_empty =
+                                        matches!(ax_outcome, Some(CaptureOutcome::Empty) | None);
+                                    let ax_text_len = match ax_outcome.as_ref() {
+                                        Some(CaptureOutcome::Captured { text, .. }) => text.len(),
+                                        _ => 0,
+                                    };
+                                    maybe_screen_ocr(
+                                        &db,
+                                        &visual,
+                                        front.pid,
+                                        &front.bundle_id,
+                                        title.as_deref(),
+                                        dwell_ms,
+                                        ax_empty,
+                                        ax_text_len,
+                                        &mut ocr_poll_gate,
+                                        &mut recall_pipeline,
+                                    );
+                                }
+                            }
+                        }
+                    }
                     drop(current);
 
                     // Pre-assemble the reply context for whatever the user is now looking at, so

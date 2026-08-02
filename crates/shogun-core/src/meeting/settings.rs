@@ -26,6 +26,19 @@ pub enum AsrModel {
     Turbo,
 }
 
+/// How the in-meeting overlay presents speech while recording (issue #93).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum MeetingMode {
+    /// Live speech→text only; no translation.
+    #[default]
+    Transcription,
+    /// Source (auto-detect or fixed) → target language subtitles.
+    OneWay,
+    /// Bidirectional: Me → other's language, Other → my language.
+    TwoWay,
+}
+
 /// Which language the meeting is transcribed in. The policy is English-primary, Japanese
 /// alongside (`docs/context-layer-audit-and-plan.md` §8), so the shipped default is **English**,
 /// not `Auto`: device testing found whisper's per-utterance auto-detection misfires on short
@@ -87,6 +100,29 @@ pub struct Settings {
     /// in apps SHOGUN does not recognise (FR-MT-04).
     #[serde(default)]
     pub allow_mic_only_detect: bool,
+    /// In-meeting overlay mode while recording (issue #93).
+    #[serde(default)]
+    pub meeting_mode: MeetingMode,
+    /// One-way source language (auto-detect or fixed). Also drives ASR when not `Auto`.
+    #[serde(default)]
+    pub source_lang: MeetingLanguage,
+    /// One-way target language (English or Japanese for v1).
+    #[serde(default = "default_target_lang")]
+    pub target_lang: MeetingLanguage,
+    /// Two-way: the language *I* speak (and what Other's speech is translated into).
+    #[serde(default)]
+    pub my_lang: MeetingLanguage,
+    /// Two-way: the language the *other* speaks (and what My speech is translated into).
+    #[serde(default = "default_other_lang")]
+    pub other_lang: MeetingLanguage,
+}
+
+fn default_target_lang() -> MeetingLanguage {
+    MeetingLanguage::Japanese
+}
+
+fn default_other_lang() -> MeetingLanguage {
+    MeetingLanguage::Japanese
 }
 
 // Written out rather than derived, though it is derivable. `#[derive(Default)]` would leave the
@@ -105,6 +141,44 @@ impl Default for Settings {
             asr_model: AsrModel::Small,
             language: MeetingLanguage::English,
             allow_mic_only_detect: false,
+            meeting_mode: MeetingMode::Transcription,
+            source_lang: MeetingLanguage::Auto,
+            target_lang: MeetingLanguage::Japanese,
+            my_lang: MeetingLanguage::English,
+            other_lang: MeetingLanguage::Japanese,
+        }
+    }
+}
+
+impl Settings {
+    /// ASR language for the audio lane: one-way `source_lang` when not Auto, else `language`.
+    pub fn asr_language(&self) -> MeetingLanguage {
+        if self.meeting_mode == MeetingMode::OneWay && self.source_lang != MeetingLanguage::Auto {
+            self.source_lang
+        } else {
+            self.language
+        }
+    }
+
+    /// Target language for a finished line, if translation mode is active. `speaker_me` is true for
+    /// mic (`Me`) and false for system tap (`Other`).
+    pub fn translation_target(&self, speaker_me: bool) -> Option<MeetingLanguage> {
+        match self.meeting_mode {
+            MeetingMode::Transcription => None,
+            MeetingMode::OneWay => {
+                if self.target_lang == MeetingLanguage::Auto {
+                    None
+                } else {
+                    Some(self.target_lang)
+                }
+            }
+            MeetingMode::TwoWay => {
+                if speaker_me {
+                    Some(self.other_lang)
+                } else {
+                    Some(self.my_lang)
+                }
+            }
         }
     }
 }

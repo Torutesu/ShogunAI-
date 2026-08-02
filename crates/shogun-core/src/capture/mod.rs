@@ -8,4 +8,5 @@
 pub mod dedup;
 pub mod exclusion;
 pub mod pipeline;
+pub mod visual_recall;
 pub mod walk_policy;

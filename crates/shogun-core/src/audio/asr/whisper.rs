@@ -46,7 +46,17 @@ impl Whisper {
     /// (`Some("en")`/`Some("ja")`) to pin the language, or `None` for Auto (detect once, then lock).
     /// Callers pass `MeetingLanguage::whisper_code()` straight through.
     pub fn load_with_language(model_path: &str, lang: Option<&str>) -> Result<Self, String> {
-        let ctx = WhisperContext::new_with_params(model_path, WhisperContextParameters::default())
+        let mut params = WhisperContextParameters::default();
+        // Default CPU: Metal + Chrome + system tap can jetsam the process (SIGKILL/137). Opt in
+        // with SHOGUN_WHISPER_GPU=1 when memory headroom is available.
+        let gpu = std::env::var("SHOGUN_WHISPER_GPU")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+        if !gpu {
+            params.use_gpu(false);
+            eprintln!("[meeting] whisper GPU off (set SHOGUN_WHISPER_GPU=1 for Metal)");
+        }
+        let ctx = WhisperContext::new_with_params(model_path, params)
             .map_err(|e| format!("whisper load failed: {e}"))?;
         Ok(Whisper { ctx, language: lang.map(str::to_string), fixed: lang.is_some() })
     }
@@ -105,6 +115,38 @@ impl Transcriber for Whisper {
             // already in [0,1] (see `segment_confidence`).
             let conf = segment_confidence(&segment);
             out.push(Segment { text, confidence: conf });
+        }
+        out
+    }
+
+    fn translate_to_english(&mut self, pcm: &[f32]) -> Vec<Segment> {
+        let Ok(mut state) = self.ctx.create_state() else {
+            return Vec::new();
+        };
+        let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+        params.set_translate(true);
+        params.set_language(Some("en"));
+        params.set_print_progress(false);
+        params.set_print_realtime(false);
+        params.set_print_timestamps(false);
+        params.set_no_context(true);
+        if state.full(params, pcm).is_err() {
+            return Vec::new();
+        }
+        let n = state.full_n_segments();
+        let mut out = Vec::new();
+        for i in 0..n {
+            let Some(segment) = state.get_segment(i) else {
+                continue;
+            };
+            let Ok(text) = segment.to_str_lossy() else {
+                continue;
+            };
+            let text = text.trim().to_string();
+            if text.is_empty() {
+                continue;
+            }
+            out.push(Segment { text, confidence: segment_confidence(&segment) });
         }
         out
     }

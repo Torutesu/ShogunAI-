@@ -1295,6 +1295,61 @@ function MeetingSection(): JSX.Element {
   );
 }
 
+function VisualRecallSection(): JSX.Element {
+  const [on, setOn] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!IN_TAURI) return;
+    void invoke<{ enabled: boolean }>("get_visual_recall_settings")
+      .then((s) => setOn(s.enabled))
+      .catch(() => undefined);
+  }, []);
+
+  const toggle = (next: boolean): void => {
+    if (!IN_TAURI) {
+      setOn(next);
+      return;
+    }
+    setBusy(true);
+    setOn(next);
+    void invoke("set_visual_recall_enabled", { enabled: next })
+      .then(() => undefined)
+      .catch(() => setOn(!next))
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <section className="set">
+      <div className="set__label" id="seg-visual-recall">{t.visualRecallSection}</div>
+      <div className="seg" role="radiogroup" aria-labelledby="seg-visual-recall">
+        <button
+          type="button"
+          role="radio"
+          aria-checked={on}
+          disabled={busy}
+          className={`seg__opt${on ? " is-on" : ""}`}
+          onClick={() => toggle(true)}
+        >
+          {t.visualRecallOn}
+        </button>
+        <button
+          type="button"
+          role="radio"
+          aria-checked={!on}
+          disabled={busy}
+          className={`seg__opt${!on ? " is-on" : ""}`}
+          onClick={() => toggle(false)}
+        >
+          {t.visualRecallOff}
+        </button>
+      </div>
+      <div className="set__hint">{t.visualRecallHint}</div>
+      <div className="set__hint set__hint--quiet">{t.visualRecallDisclosure}</div>
+    </section>
+  );
+}
+
 function AiSessionsSection(): JSX.Element {
   const [on, setOn] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -2044,6 +2099,7 @@ function Settings(props: {
             someone found this switch — burying an opt-in below six connectors is how a feature
             stays permanently off (FR-MT-01). */}
         <MeetingSection />
+        <VisualRecallSection />
         <ConnectionsSection />
         <ComposioSection />
         <AiSessionsSection />

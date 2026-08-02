@@ -351,6 +351,10 @@ pub const SILENCE_LIMIT_MS: i64 = 15 * 60 * 1_000;
 /// wrapping. Covers a quick alt-tab or lobby flicker without keeping the pill alive for hours
 /// because Chrome is still open on Gmail.
 pub const MEETING_URL_LEFT_GRACE_MS: i64 = 20_000;
+/// After the meeting page is gone past grace, the mic must stay closed this long before the
+/// session ends. Separates "tab switched away but call still running" (mic open) from hang-up
+/// flicker at the device layer.
+pub const MIC_QUIET_AFTER_URL_LEFT_MS: i64 = 8_000;
 
 /// Whether the frontmost browser tab still looks like an active meeting (FR-MT-11).
 ///
@@ -384,6 +388,52 @@ pub fn browser_meeting_page_present(page_url: Option<&str>, window_title: Option
 /// Whether a URL-tracked session has been off the meeting page long enough to wrap (FR-MT-11).
 pub fn meeting_url_left_past_grace(lost_since_ms: Option<i64>, now: i64) -> bool {
     lost_since_ms.is_some_and(|since| now.saturating_sub(since) >= MEETING_URL_LEFT_GRACE_MS)
+}
+
+/// Whether a browser Meet session should still count as present (FR-MT-11).
+///
+/// Past the URL-leave grace the frontmost tab no longer looks like a meeting, but an open
+/// microphone almost always means the call is still running on a background tab — the user may be
+/// on another Chrome tab, reading mail, or looking at the SHOGUN overlay. Recording continues
+/// while the mic is open; once it closes, wait [`MIC_QUIET_AFTER_URL_LEFT_MS`] so a hang-up
+/// flicker does not end the session mid-word.
+pub fn meet_url_session_present(
+    lost_since_ms: Option<i64>,
+    now: i64,
+    mic_open: bool,
+    mic_closed_since_ms: Option<i64>,
+) -> bool {
+    if !meeting_url_left_past_grace(lost_since_ms, now) {
+        return true;
+    }
+    if mic_open {
+        return true;
+    }
+    mic_closed_since_ms
+        .is_none_or(|since| now.saturating_sub(since) < MIC_QUIET_AFTER_URL_LEFT_MS)
+}
+
+/// Whether the user has clearly left the call (FR-MT-11). Used to shorten Recap auto-dismiss.
+pub fn call_clearly_ended(
+    opened_via_meet_url: bool,
+    url_lost_since_ms: Option<i64>,
+    now: i64,
+    mic_open: bool,
+    mic_closed_since_ms: Option<i64>,
+    zoom_bundle_id: Option<&str>,
+    zoom_running: bool,
+) -> bool {
+    if opened_via_meet_url {
+        meeting_url_left_past_grace(url_lost_since_ms, now)
+            && !meet_url_session_present(url_lost_since_ms, now, mic_open, mic_closed_since_ms)
+    } else if zoom_bundle_id.is_some_and(is_meeting_app) {
+        !zoom_running
+    } else {
+        !mic_open
+            && mic_closed_since_ms.is_some_and(|since| {
+                now.saturating_sub(since) >= MIC_QUIET_AFTER_URL_LEFT_MS
+            })
+    }
 }
 
 /// Whether a running meeting should end, and why (FR-MT-11).
@@ -780,6 +830,30 @@ mod tests {
     #[test]
     fn meeting_url_never_lost_has_no_grace_deadline() {
         assert!(!meeting_url_left_past_grace(None, 9_999_999));
+    }
+
+    #[test]
+    fn meet_url_past_grace_stays_present_while_mic_open() {
+        let lost = 1_000_000;
+        let after = lost + MEETING_URL_LEFT_GRACE_MS;
+        assert!(meet_url_session_present(Some(lost), after, true, None));
+    }
+
+    #[test]
+    fn meet_url_past_grace_ends_after_mic_quiet() {
+        let lost = 1_000_000;
+        let after_grace = lost + MEETING_URL_LEFT_GRACE_MS;
+        let closed = after_grace;
+        assert!(meet_url_session_present(Some(lost), closed, false, Some(closed)));
+        let quiet = closed + MIC_QUIET_AFTER_URL_LEFT_MS;
+        assert!(!meet_url_session_present(Some(lost), quiet, false, Some(closed)));
+    }
+
+    #[test]
+    fn tab_switch_with_mic_open_keeps_session() {
+        let lost = 1_000_000;
+        let later = lost + MEETING_URL_LEFT_GRACE_MS + 60_000;
+        assert!(meet_url_session_present(Some(lost), later, true, None));
     }
 
     #[test]
