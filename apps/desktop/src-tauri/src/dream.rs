@@ -61,7 +61,6 @@ pub mod mac {
     /// shipped binary carrying the operator's key can be extracted, and spend caps become
     /// unenforceable. The shipping design puts a licence token here and a Select-operated relay in
     /// front of the Batch API: docs/batch-relay-design.md.
-    const SELECT_KK_ACCOUNT: &str = "select-kk-batch";
 
     /// Guards a manual run against the nightly one. Both would write the same ledger rows, and while
     /// that is idempotent it would double the Batch spend.
@@ -257,11 +256,7 @@ pub mod mac {
     /// The Select KK key, if this build has been provisioned with one. Absent is the normal case
     /// today: the cycle then runs the local lane rather than not running.
     fn select_kk_key() -> Option<String> {
-        keychain_store::get_generic_secret(SELECT_KK_ACCOUNT)
-            .ok()
-            .and_then(|b| String::from_utf8(b).ok())
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
+        keychain_store::get_select_kk_key()
     }
 
     // ------------------------------------------------------------------------ running a cycle
@@ -332,7 +327,9 @@ pub mod mac {
             Err(shogun_core::llm::LlmError::Unauthorized(status, _)) => {
                 eprintln!(
                     "[dream] batch credential rejected (HTTP {status}) — running the local lane. \
-                     Check the SHOGUN/select-kk-batch Keychain entry."
+                     Check the {}/{} Keychain entry.",
+                    keychain_store::SERVICE,
+                    keychain_store::SELECT_KK_ACCOUNT
                 );
                 Ok(run_local(db, cond, tonight, now_ms))
             }
@@ -406,6 +403,25 @@ pub mod mac {
         status_view(&db)
     }
 
+    /// Whether the Batch/Select-KK credential is present and valid.
+    #[tauri::command]
+    pub fn select_kk_configured() -> bool {
+        keychain_store::select_kk_configured()
+    }
+
+    /// Save the Select KK API key (Dream Cycle, recap, live meeting translation).
+    #[tauri::command]
+    pub fn set_select_kk_key(key: String) -> Result<(), String> {
+        keychain_store::set_select_kk_key(&key)
+    }
+
+    /// Remove the Select KK API key.
+    #[tauri::command]
+    pub fn clear_select_kk_key() -> Result<(), String> {
+        keychain_store::delete_generic_secret(keychain_store::SELECT_KK_ACCOUNT)
+            .map_err(|e| e.to_string())
+    }
+
     /// The same status, callable with a plain `&Db` so other views (the Full UI window) can read
     /// it without going through the command layer — and without re-deriving tonight's cycle id.
     pub fn status_view(db: &Db) -> DreamStatusView {
@@ -418,7 +434,7 @@ pub mod mac {
                 Indicator::Amber => "amber",
                 Indicator::Red => "red",
             },
-            batch_lane: select_kk_key().is_some(),
+            batch_lane: keychain_store::select_kk_configured(),
             last_kind: s
                 .last
                 .as_ref()

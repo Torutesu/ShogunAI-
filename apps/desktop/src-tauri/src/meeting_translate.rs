@@ -21,7 +21,6 @@ mod mac {
 
     use shogun_integrations::keychain_store;
 
-    const SELECT_KK_ACCOUNT: &str = "select-kk-batch";
     const TRANSLATE_MODEL: &str = "claude-haiku-4-5-20251001";
     const TRANSLATE_PURPOSE: &str = "meeting_live_translate";
     const TRANSLATE_SYSTEM: &str =
@@ -42,6 +41,7 @@ mod mac {
     #[derive(Serialize, Clone)]
     struct TranslationEvent {
         ts: i64,
+        speaker: Option<String>,
         translation: String,
     }
 
@@ -61,20 +61,26 @@ mod mac {
     }
 
     fn select_kk_key() -> Option<String> {
-        keychain_store::get_generic_secret(SELECT_KK_ACCOUNT)
-            .ok()
-            .and_then(|b| String::from_utf8(b).ok())
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
+        keychain_store::get_select_kk_key()
     }
 
-    fn log_translate_err(ts: i64, err: &LlmError) {
+    fn log_translate_err(app: &tauri::AppHandle, ts: i64, err: &LlmError) {
         match err {
-            LlmError::Unauthorized(status, _) => {
-                eprintln!("[meeting] live translate ts={ts} failed: HTTP {status} (check SHOGUN/select-kk-batch Keychain entry)");
+            LlmError::Unauthorized(status, detail) => {
+                eprintln!(
+                    "[meeting] live translate ts={ts} failed: HTTP {status} (check {}/{} Keychain entry){}",
+                    keychain_store::SERVICE,
+                    keychain_store::SELECT_KK_ACCOUNT,
+                    if detail.is_empty() { String::new() } else { format!(": {detail}") }
+                );
+                let _ = app.emit("meeting_translate_key_invalid", ());
             }
             LlmError::RateLimited(status, _) => {
                 eprintln!("[meeting] live translate ts={ts} failed: HTTP {status} (rate limited, keeping ASR line)");
+            }
+            LlmError::Provider(msg) if msg.contains("HTTP 400") => {
+                eprintln!("[meeting] live translate ts={ts} failed: {msg} (check Select KK key format)");
+                let _ = app.emit("meeting_translate_key_invalid", ());
             }
             other => eprintln!("[meeting] live translate ts={ts} failed: {other}"),
         }
@@ -108,6 +114,9 @@ mod mac {
                     | "inaudible"
                     | "background music"
                     | "instrumental"
+                    | "blank"
+                    | "blank audio"
+                    | "blank_audio"
             ) {
                 return false;
             }
@@ -249,6 +258,7 @@ mod mac {
         db: Db,
         session_id: i64,
         ts: i64,
+        speaker: Option<String>,
         text: String,
     ) {
         let source = text.trim().to_string();
@@ -283,7 +293,12 @@ mod mac {
             let _guard = Guard;
 
             let Some(key) = select_kk_key() else {
-                eprintln!("[meeting] live translate ts={ts} skipped — no Select KK key (SHOGUN/select-kk-batch)");
+                eprintln!(
+                    "[meeting] live translate ts={ts} skipped — no Select KK key ({}/{})",
+                    keychain_store::SERVICE,
+                    keychain_store::SELECT_KK_ACCOUNT
+                );
+                let _ = app.emit("meeting_translate_needs_key", ());
                 return;
             };
             let (Ok(transport), Ok(rt)) = (
@@ -305,7 +320,7 @@ mod mac {
             let translated = match rt.block_on(translate_with_backoff(&client, &source, ts)) {
                 Ok(t) => sanitize_translation(&t),
                 Err(e) => {
-                    log_translate_err(ts, &e);
+                    log_translate_err(&app, ts, &e);
                     return;
                 }
             };
@@ -324,7 +339,7 @@ mod mac {
             }
             let _ = app.emit(
                 "meeting_live_translation",
-                TranslationEvent { ts, translation: translated },
+                TranslationEvent { ts, speaker, translation: translated },
             );
         });
     }

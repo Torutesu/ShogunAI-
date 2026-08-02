@@ -22,7 +22,7 @@ use shogun_core::audio::capture::{AudioSource, MultiSource};
 use shogun_core::audio::worker::{SegmentSink, Worker};
 use shogun_core::audio::{Speaker, Utterance};
 use shogun_core::daemon::Db;
-use shogun_core::meeting::settings::{AsrModel, MeetingLanguage, Settings};
+use shogun_core::meeting::settings::{AsrModel, MeetingLanguage, MeetingMode, Settings};
 use tauri::{Emitter, Manager};
 
 /// A running audio lane. Dropping the handle without `stop` would leak the thread, so the machine
@@ -87,7 +87,7 @@ impl SegmentSink for DbSink {
         };
         let event = LiveLineEvent {
             ts: u.started_at,
-            speaker: speaker_str,
+            speaker: speaker_str.clone(),
             text: text.to_string(),
             translation: translation.map(str::to_string),
         };
@@ -98,8 +98,14 @@ impl SegmentSink for DbSink {
         // EN→JA: whisper has no native path — async fill-in when target is Japanese.
         if translation.is_none() {
             if let Ok(s) = self.settings.read() {
-                let target = s.translation_target(u.speaker == Speaker::Me);
+                let speaker_me = u.speaker == Speaker::Me;
+                let target = s.translation_target(speaker_me);
+                // Two-way Other→my_lang English is whisper translate only; never async EN→JA.
+                let whisper_owns_lane = s.meeting_mode == MeetingMode::TwoWay
+                    && !speaker_me
+                    && s.my_lang == MeetingLanguage::English;
                 if target == Some(MeetingLanguage::Japanese)
+                    && !whisper_owns_lane
                     && crate::meeting_translate::should_translate_asr(text)
                 {
                     crate::meeting_translate::spawn_ja_translation(
@@ -107,6 +113,7 @@ impl SegmentSink for DbSink {
                         self.db.clone(),
                         self.session_id,
                         u.started_at,
+                        speaker_str.clone(),
                         text.to_string(),
                     );
                 }

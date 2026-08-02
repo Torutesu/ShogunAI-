@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useRef, useState, type JSX } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { t } from "./strings";
 import { uiLog } from "./uiLog";
@@ -72,6 +73,7 @@ interface LiveLineEvent {
 
 interface TranslationEvent {
   ts: number;
+  speaker?: string | null;
   translation: string;
 }
 
@@ -162,98 +164,36 @@ const call = (cmd: string, args?: Record<string, unknown>): void => {
   void invoke(cmd, args).catch(() => undefined);
 };
 
-/** AppKit hit-tests the whole NSWindow rect; sync ignoresMouseEvents with `.ov` hit-tests. */
-function useOverlayHitTest(active: boolean): void {
-  useEffect(() => {
-    if (!active) {
-      call("meeting_overlay_set_interactive", { interactive: false });
-      return;
-    }
-
-    let last = false;
-    let raf: number | null = null;
-
-    const overCard = (x: number, y: number): boolean => {
-      const el = document.elementFromPoint(x, y);
-      return Boolean(el?.closest(".ov"));
-    };
-
-    const push = (interactive: boolean): void => {
-      if (last === interactive) return;
-      last = interactive;
-      call("meeting_overlay_set_interactive", { interactive });
-    };
-
-    const syncAt = (x: number, y: number): void => {
-      push(overCard(x, y));
-    };
-
-    const schedule = (x: number, y: number): void => {
-      if (raf != null) return;
-      raf = window.requestAnimationFrame(() => {
-        raf = null;
-        syncAt(x, y);
-      });
-    };
-
-    const onPointerMove = (e: PointerEvent): void => {
-      schedule(e.clientX, e.clientY);
-    };
-
-    const onPointerLeave = (): void => {
-      push(false);
-    };
-
-    // After paint / resize: pick up pointer already over the card without waiting for move.
-    const assertPainted = (): void => {
-      window.requestAnimationFrame(() => {
-        window.requestAnimationFrame(() => {
-          const ov = document.querySelector(".ov");
-          if (!ov) {
-            push(false);
-            return;
-          }
-          const r = ov.getBoundingClientRect();
-          const cx = r.left + r.width / 2;
-          const cy = r.top + r.height / 2;
-          syncAt(cx, cy);
-        });
-      });
-    };
-
-    assertPainted();
-    window.addEventListener("pointermove", onPointerMove, { passive: true });
-    document.documentElement.addEventListener("pointerleave", onPointerLeave);
-
-    const offSurface = listen("meeting_overlay_surface", () => {
-      last = false;
-      assertPainted();
-    });
-
-    return () => {
-      if (raf != null) window.cancelAnimationFrame(raf);
-      window.removeEventListener("pointermove", onPointerMove);
-      document.documentElement.removeEventListener("pointerleave", onPointerLeave);
-      void offSurface.then((f) => f());
-      call("meeting_overlay_set_interactive", { interactive: false });
-    };
-  }, [active]);
+/** Drag the meeting overlay window. CSS `-webkit-app-region: drag` is the primary path; this
+ *  handles pointer-down on grip/header/footer and falls back to native AppKit drag. */
+function beginMeetingDrag(e: React.PointerEvent): void {
+  if (e.button !== 0) return;
+  const el = e.target as HTMLElement;
+  if (el.closest("button, input, a, textarea, select, [data-no-drag]")) return;
+  if (
+    el.closest(
+      ".ov__livebody, .ov__rbody, .ov__acts, .ov__liveacts, .ov__modepick, .ov__langpick, .ov__modemenu, .ov__langmenu",
+    )
+  ) {
+    return;
+  }
+  void getCurrentWindow()
+    .startDragging()
+    .catch(() => call("meeting_drag"));
 }
 
-const startDrag = (): void => {
-  call("meeting_drag");
-};
-
-/** Coalesce rapid `meeting_live_line` / translation events into one paint per frame. */
+function translationPatchKey(ts: number, speaker: string | null | undefined): string {
+  return `${ts}:${speaker ?? ""}`;
+}
 function useLiveLineBuffer(active: boolean): {
   lines: TranscriptLine[];
   pushLine: (line: TranscriptLine) => void;
-  patchTranslation: (ts: number, translation: string) => void;
+  patchTranslation: (ts: number, speaker: string | null | undefined, translation: string) => void;
   snapshot: () => TranscriptLine[];
 } {
   const [lines, setLines] = useState<TranscriptLine[]>([]);
   const pendingRef = useRef<TranscriptLine[]>([]);
-  const transRef = useRef<Map<number, string>>(new Map());
+  const transRef = useRef<Map<string, string>>(new Map());
   const rafRef = useRef<number | null>(null);
 
   const flush = useCallback((): void => {
@@ -267,7 +207,7 @@ function useLiveLineBuffer(active: boolean): {
       let next = batch.length > 0 ? [...prev, ...batch] : prev;
       if (patches.size > 0) {
         next = next.map((l) => {
-          const translation = patches.get(l.ts);
+          const translation = patches.get(translationPatchKey(l.ts, l.speaker));
           return translation != null ? { ...l, translation } : l;
         });
       }
@@ -313,10 +253,10 @@ function useLiveLineBuffer(active: boolean): {
   );
 
   const patchTranslation = useCallback(
-    (ts: number, translation: string) => {
+    (ts: number, speaker: string | null | undefined, translation: string) => {
       const usable = usableTranslation(translation);
       if (!usable) return;
-      transRef.current.set(ts, usable);
+      transRef.current.set(translationPatchKey(ts, speaker), usable);
       schedule();
     },
     [schedule],
@@ -354,6 +294,7 @@ export function MeetingOverlay(): JSX.Element | null {
   const [modeOpen, setModeOpen] = useState(false);
   const [langOpen, setLangOpen] = useState<"source" | "target" | "my" | "other" | null>(null);
   const [showSource, setShowSource] = useState(false);
+  const [translateKeyIssue, setTranslateKeyIssue] = useState<"missing" | "invalid" | null>(null);
   const liveScrollRef = useRef<HTMLDivElement>(null);
   const liveSnapshotRef = useRef<TranscriptLine[]>([]);
 
@@ -375,9 +316,18 @@ export function MeetingOverlay(): JSX.Element | null {
   }, []);
 
   useEffect(() => {
-    if (view?.state !== "recording") return;
+    if (view?.state !== "recording") {
+      setTranslateKeyIssue(null);
+      return;
+    }
     void invoke<MeetingSettings>("get_meeting_settings")
       .then(setSettings)
+      .catch(() => undefined);
+
+    void invoke<boolean>("meeting_select_kk_configured")
+      .then((configured) => {
+        if (!configured) setTranslateKeyIssue("missing");
+      })
       .catch(() => undefined);
 
     const offLine = listen<LiveLineEvent>("meeting_live_line", (e) => {
@@ -390,12 +340,16 @@ export function MeetingOverlay(): JSX.Element | null {
       });
     });
     const offTrans = listen<TranslationEvent>("meeting_live_translation", (e) => {
-      const { ts, translation } = e.payload;
-      live.patchTranslation(ts, translation);
+      const { ts, speaker, translation } = e.payload;
+      live.patchTranslation(ts, speaker, translation);
     });
+    const offNeedsKey = listen("meeting_translate_needs_key", () => setTranslateKeyIssue("missing"));
+    const offKeyInvalid = listen("meeting_translate_key_invalid", () => setTranslateKeyIssue("invalid"));
     return () => {
       void offLine.then((f) => f());
       void offTrans.then((f) => f());
+      void offNeedsKey.then((f) => f());
+      void offKeyInvalid.then((f) => f());
     };
   }, [view?.state, live.pushLine, live.patchTranslation]);
 
@@ -475,22 +429,11 @@ export function MeetingOverlay(): JSX.Element | null {
     };
   }, [view?.state]);
 
-  const overlayActive = Boolean(view?.enabled && view && view.state !== "idle");
-  useOverlayHitTest(overlayActive);
-
   if (!view || !view.enabled || view.state === "idle") return null;
 
   const name = view.title?.trim() || t.meetingUntitled;
 
-  const grip = (
-    <div
-      className="ov__grip"
-      title={t.meetingNotes}
-      onPointerDown={(e) => {
-        if (e.button === 0) startDrag();
-      }}
-    />
-  );
+  const grip = <div className="ov__grip" title={t.meetingNotes} />;
 
   const handleStop = (): void => {
     if (stopping) return;
@@ -515,7 +458,7 @@ export function MeetingOverlay(): JSX.Element | null {
 
   if (view.state === "offered") {
     return (
-      <div className="ov ov--offer ov__nodrag">
+      <div className="ov ov--offer" onPointerDown={beginMeetingDrag}>
         {grip}
         <div className="ov__body ov__drag">
           <div className="ov__kicker">{t.meetingDetected}</div>
@@ -573,7 +516,7 @@ export function MeetingOverlay(): JSX.Element | null {
     );
 
     return (
-      <div className="ov ov--live ov__nodrag">
+      <div className="ov ov--live" onPointerDown={beginMeetingDrag}>
         {grip}
         <div className="ov__live">
           <header className="ov__livehead ov__drag">
@@ -665,6 +608,13 @@ export function MeetingOverlay(): JSX.Element | null {
           </header>
 
           <div className="ov__livebody ov__nodrag" ref={liveScrollRef}>
+            {translateKeyIssue && translating ? (
+              <p className="ov__mdegraded ov__mdegraded--warn">
+                {translateKeyIssue === "invalid"
+                  ? t.meetingTranslateKeyInvalid
+                  : t.meetingTranslateNeedsKey}
+              </p>
+            ) : null}
             {liveTurns.length === 0 ? (
               <p className="ov__liveempty">{t.meetingLiveEmpty}</p>
             ) : (
@@ -713,7 +663,7 @@ export function MeetingOverlay(): JSX.Element | null {
   const showWrapping = !recap && !minutesReady && !hasTranscript;
 
   return (
-    <div className="ov ov--recap ov__nodrag">
+    <div className="ov ov--recap" onPointerDown={beginMeetingDrag}>
       {grip}
       <div className="ov__recap">
         <div className="ov__rhead ov__drag">

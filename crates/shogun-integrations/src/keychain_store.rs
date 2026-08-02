@@ -1,10 +1,9 @@
 //! macOS Keychain helpers with stable dev access (invariant 7).
 //!
-//! Default `SecItemAdd` ACL binds to the creating binary's cdhash, so each `cargo build` /
-//! `tauri dev` rebuild invalidates "Always Allow" and macOS re-prompts. We store secrets with an
-//! open ACL (`SecAccessCreate(NULL, …)`) and cache reads in-process so one unlock covers the
-//! whole session. Legacy entries under service `SHOGUN` are read once and migrated to
-//! [`SERVICE`] on repair.
+//! Secrets use [`SERVICE`] with the default Keychain ACL. Custom `SecAccess` ACLs
+//! (`SecAccessCreate`) return `OSStatus 4` on current macOS, so we store without `kSecAttrAccess`.
+//! Reads are cached in-process so one unlock covers the whole session. Legacy entries under
+//! service `SHOGUN` are read once and migrated to [`SERVICE`] on repair.
 
 #![cfg(target_os = "macos")]
 
@@ -23,7 +22,9 @@ use security_framework_sys::item::{
     kSecAttrAccount, kSecAttrService, kSecClass, kSecClassGenericPassword, kSecReturnData,
     kSecValueData,
 };
-use security_framework_sys::keychain_item::{SecItemAdd, SecItemCopyMatching, SecItemDelete};
+use security_framework_sys::keychain_item::{
+    SecItemAdd, SecItemCopyMatching, SecItemDelete, SecItemUpdate,
+};
 
 fn cvt(status: i32) -> Result<()> {
     if status == errSecSuccess {
@@ -39,25 +40,10 @@ pub const SERVICE: &str = "com.selectkk.shogun";
 /// Pre-unification service name still present on some dev machines.
 const LEGACY_SERVICE: &str = "SHOGUN";
 
+/// Keychain account for the Select KK credential (Batch lane + live meeting translate).
+pub const SELECT_KK_ACCOUNT: &str = "select-kk-batch";
+
 static CACHE: OnceLock<Mutex<HashMap<String, Vec<u8>>>> = OnceLock::new();
-
-fn cache() -> &'static Mutex<HashMap<String, Vec<u8>>> {
-    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-#[link(name = "Security", kind = "framework")]
-extern "C" {
-    static kSecAttrAccess: core_foundation_sys::string::CFStringRef;
-    static kSecAttrAccessible: core_foundation_sys::string::CFStringRef;
-    static kSecAttrAccessibleAfterFirstUnlock: core_foundation_sys::string::CFStringRef;
-
-    fn SecAccessCreate(
-        trusted_list: core_foundation_sys::array::CFArrayRef,
-        trusted_list_for_confirm: core_foundation_sys::array::CFArrayRef,
-        owner_is_trusted: u8,
-        access: *mut security_framework_sys::base::SecAccessRef,
-    ) -> i32;
-}
 
 /// Read a generic-password secret. Tries [`SERVICE`], then [`LEGACY_SERVICE`]. Cached after first
 /// successful read for this process.
@@ -75,7 +61,7 @@ pub fn get_generic_secret(account: &str) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-/// Store a generic-password secret under [`SERVICE`] with an open ACL (any app, no cdhash bind).
+/// Store a generic-password secret under [`SERVICE`].
 pub fn set_generic_secret(account: &str, password: &[u8]) -> Result<()> {
     let _ = delete_from_keychain(LEGACY_SERVICE, account);
     write_to_keychain(SERVICE, account, password)?;
@@ -95,20 +81,139 @@ pub fn delete_generic_secret(account: &str) -> Result<()> {
     Ok(())
 }
 
-/// Re-save known accounts with the open ACL so future debug rebuilds stop prompting.
+/// Whether a Select KK credential is present and looks like a real Anthropic API key.
+pub fn select_kk_configured() -> bool {
+    get_select_kk_key().is_some()
+}
+
+/// Read the Select KK API key. Keychain first (`SELECT_KK_ACCOUNT` under [`SERVICE`] or
+/// [`LEGACY_SERVICE`]); `SHOGUN_SELECT_KK` env is dev provisioning only (recap_probe parity).
+pub fn get_select_kk_key() -> Option<String> {
+    if let Ok(k) = std::env::var("SHOGUN_SELECT_KK") {
+        let trimmed = k.trim().to_string();
+        if let Some(key) = normalize_select_kk_key(&trimmed) {
+            return Some(key);
+        }
+    }
+    let bytes = get_generic_secret(SELECT_KK_ACCOUNT).ok()?;
+    let raw = decode_secret(bytes)?;
+    let key = normalize_select_kk_key(&raw)?;
+    // Dev machines sometimes store the key as hex (same shape as the DB encryption key). Heal once.
+    if raw != key {
+        if let Err(e) = set_generic_secret(SELECT_KK_ACCOUNT, key.as_bytes()) {
+            eprintln!("[keychain] could not rewrite normalized {SELECT_KK_ACCOUNT}: {e}");
+        } else {
+            eprintln!("[keychain] normalized hex-encoded {SELECT_KK_ACCOUNT} to plain text");
+        }
+    }
+    Some(key)
+}
+
+/// Store the Select KK API key (Dream Cycle, recap, live translation). Plain text only.
+pub fn set_select_kk_key(key: &str) -> Result<(), String> {
+    let key = key.trim();
+    let Some(normalized) = normalize_select_kk_key(key) else {
+        return Err("key must start with sk-ant- (paste the API key, not hex)".into());
+    };
+    set_generic_secret(SELECT_KK_ACCOUNT, normalized.as_bytes()).map_err(|e| e.to_string())
+}
+
+/// Migrate legacy `SHOGUN` service entries to [`SERVICE`] without delete-before-write.
 ///
-/// Call once near startup after the user has authorized access. Each account that exists is read
-/// (possibly from cache) and written back with the stable ACL.
+/// Call once near startup after the user has authorized access. Items already on [`SERVICE`] are
+/// left untouched — re-writing them used to delete-then-add and could wipe secrets when add failed.
 pub fn repair_dev_acls(accounts: &[&str]) {
     for account in accounts {
-        match get_generic_secret(account) {
-            Ok(bytes) => {
-                if let Err(e) = set_generic_secret(account, &bytes) {
-                    eprintln!("[keychain] could not repair ACL for {account}: {e}");
-                }
-            }
-            Err(_) => {}
+        if read_from_keychain(SERVICE, account).is_ok() {
+            continue;
         }
+        let Ok(bytes) = read_from_keychain(LEGACY_SERVICE, account) else {
+            continue;
+        };
+        if let Err(e) = write_to_keychain(SERVICE, account, &bytes) {
+            eprintln!("[keychain] could not migrate legacy {account}: {e}");
+            continue;
+        }
+        let _ = delete_from_keychain(LEGACY_SERVICE, account);
+        if let Ok(mut guard) = cache().lock() {
+            guard.insert(account.to_string(), bytes);
+        }
+        eprintln!("[keychain] migrated legacy {account} to {SERVICE}");
+    }
+}
+
+fn decode_secret(bytes: Vec<u8>) -> Option<String> {
+    String::from_utf8(bytes)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// Accept plain `sk-ant-…` keys and one common dev mistake: the key hex-encoded as ASCII.
+fn normalize_select_kk_key(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.starts_with("sk-ant-") {
+        return Some(trimmed.to_string());
+    }
+    if trimmed.len() >= 40
+        && trimmed.len().is_multiple_of(2)
+        && trimmed.chars().all(|c| c.is_ascii_hexdigit())
+    {
+        let decoded = decode_hex_ascii(trimmed)?;
+        let text = String::from_utf8(decoded).ok()?;
+        let text = text.trim();
+        if text.starts_with("sk-ant-") {
+            return Some(text.to_string());
+        }
+    }
+    None
+}
+
+fn decode_hex_ascii(hex: &str) -> Option<Vec<u8>> {
+    let bytes = hex.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len() / 2);
+    for pair in bytes.chunks_exact(2) {
+        let hi = hex_nibble(pair[0])?;
+        let lo = hex_nibble(pair[1])?;
+        out.push((hi << 4) | lo);
+    }
+    Some(out)
+}
+
+fn hex_nibble(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_select_kk_key;
+
+    #[test]
+    fn select_kk_accepts_plain_key() {
+        assert_eq!(
+            normalize_select_kk_key("sk-ant-api03-abc"),
+            Some("sk-ant-api03-abc".into())
+        );
+    }
+
+    #[test]
+    fn select_kk_decodes_hex_mistake() {
+        // "sk-ant-api03-test-key-value" hex-encoded (devs sometimes store like the DB key)
+        let hex = "736b2d616e742d61706930332d746573742d6b65792d76616c7565";
+        assert_eq!(
+            normalize_select_kk_key(hex),
+            Some("sk-ant-api03-test-key-value".into())
+        );
+    }
+
+    #[test]
+    fn select_kk_rejects_garbage() {
+        assert!(normalize_select_kk_key("not-a-key").is_none());
     }
 }
 
@@ -121,21 +226,21 @@ fn read_from_keychain(service: &str, account: &str) -> Result<Vec<u8>> {
 }
 
 fn write_to_keychain(service: &str, account: &str, password: &[u8]) -> Result<()> {
-    let _ = delete_from_keychain(service, account);
+    let value = CFData::from_buffer(password);
+    if read_from_keychain(service, account).is_ok() {
+        let query = query_dict(service, account, false);
+        let update = CFDictionary::from_CFType_pairs(&[(
+            unsafe { CFString::wrap_under_get_rule(kSecValueData) },
+            value.into_CFType(),
+        )]);
+        return cvt(unsafe {
+            SecItemUpdate(query.as_concrete_TypeRef(), update.as_concrete_TypeRef())
+        });
+    }
     let mut attrs = base_attrs(service, account);
-    let access = open_access()?;
-    let accessible = unsafe { CFString::wrap_under_get_rule(kSecAttrAccessibleAfterFirstUnlock) };
-    attrs.push((
-        unsafe { CFString::wrap_under_get_rule(kSecAttrAccess) },
-        access,
-    ));
-    attrs.push((
-        unsafe { CFString::wrap_under_get_rule(kSecAttrAccessible) },
-        accessible.into_CFType(),
-    ));
     attrs.push((
         unsafe { CFString::wrap_under_get_rule(kSecValueData) },
-        CFData::from_buffer(password).into_CFType(),
+        value.into_CFType(),
     ));
     let dict = CFDictionary::from_CFType_pairs(&attrs);
     let mut ret = std::ptr::null();
@@ -145,13 +250,6 @@ fn write_to_keychain(service: &str, account: &str, password: &[u8]) -> Result<()
 fn delete_from_keychain(service: &str, account: &str) -> Result<()> {
     let query = query_dict(service, account, false);
     cvt(unsafe { SecItemDelete(query.as_concrete_TypeRef()) })
-}
-
-fn open_access() -> Result<core_foundation::base::CFType> {
-    let mut access = std::ptr::null_mut();
-    // NULL trusted list → any application may access without a per-cdhash prompt.
-    cvt(unsafe { SecAccessCreate(std::ptr::null(), std::ptr::null(), 1, &mut access) })?;
-    Ok(unsafe { core_foundation::base::CFType::wrap_under_create_rule(access as CFTypeRef) })
 }
 
 fn base_attrs(service: &str, account: &str) -> Vec<(CFString, core_foundation::base::CFType)> {
@@ -169,6 +267,10 @@ fn base_attrs(service: &str, account: &str) -> Vec<(CFString, core_foundation::b
             CFString::new(account).into_CFType(),
         ),
     ]
+}
+
+fn cache() -> &'static Mutex<HashMap<String, Vec<u8>>> {
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 fn query_dict(service: &str, account: &str, return_data: bool) -> CFDictionary<CFString, core_foundation::base::CFType> {

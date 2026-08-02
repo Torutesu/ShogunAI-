@@ -37,8 +37,7 @@ mod mac {
     const RECAP_MODEL: &str = "claude-haiku-4-5-20251001";
 
     /// Keychain coordinates of the Batch lane's credential — the *same* slot the Dream Cycle reads
-    /// (dream.rs / `SELECT_KK_ACCOUNT`). One Select KK source, not a second.
-    const SELECT_KK_ACCOUNT: &str = "select-kk-batch";
+    /// (dream.rs / `keychain_store::SELECT_KK_ACCOUNT`). One Select KK source, not a second.
 
     /// The traceability `purpose` tag carried on the summary chunk (read back as
     /// `traceview::Purpose::MeetingRecap`).
@@ -54,17 +53,13 @@ mod mac {
     /// Whether the Batch lane's Select KK credential is present in Keychain. The overlay uses this
     /// to show a needs-key state only when Rust confirms absence — not on a UI timeout.
     pub fn select_kk_configured() -> bool {
-        select_kk_key().is_some()
+        keychain_store::select_kk_configured()
     }
 
     /// The Select KK key, if this build has been provisioned with one. Absent is a normal state: the
     /// Recap then stays degraded rather than being generated. Read exactly like dream.rs.
     fn select_kk_key() -> Option<String> {
-        keychain_store::get_generic_secret(SELECT_KK_ACCOUNT)
-            .ok()
-            .and_then(|b| String::from_utf8(b).ok())
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
+        keychain_store::get_select_kk_key()
     }
 
     /// Generate the Recap for the just-closed `session_id` on a background thread, then emit

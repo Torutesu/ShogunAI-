@@ -31,6 +31,8 @@ pub struct Worker<S: AudioSource, T: Transcriber> {
     vad_other: Vad,
     /// Wall-clock ms of the current step, set by the driver each poll.
     now: i64,
+    /// Monotonic offset so utterances finalized in the same poll (or same ms) get distinct `ts`.
+    line_seq: u32,
     /// Live meeting settings — read on each line so mode/lang changes apply to new utterances.
     live_settings: Option<Arc<RwLock<Settings>>>,
 }
@@ -43,6 +45,7 @@ impl<S: AudioSource, T: Transcriber> Worker<S, T> {
             vad_me: Vad::new(),
             vad_other: Vad::new(),
             now: 0,
+            line_seq: 0,
             live_settings: None,
         }
     }
@@ -76,7 +79,9 @@ impl<S: AudioSource, T: Transcriber> Worker<S, T> {
     }
 
     fn transcribe_cut(&mut self, speaker: Speaker, pcm: Vec<f32>, sink: &mut dyn SegmentSink) {
-        let u = Utterance { speaker, started_at: self.now, pcm: pcm.clone() };
+        let ts = self.now + self.line_seq as i64;
+        self.line_seq += 1;
+        let u = Utterance { speaker, started_at: ts, pcm: pcm.clone() };
         for seg in self.asr.transcribe(&u.pcm) {
             let text = seg.text.trim();
             if !text.is_empty() {

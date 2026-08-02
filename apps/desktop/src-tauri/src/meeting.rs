@@ -912,9 +912,10 @@ use shogun_core::meeting::gate::OfferGate;
         if !PARKED.swap(true, Ordering::SeqCst) {
             park_top_right(&win, size);
         }
-        // Click-through until the webview hit-tests `.ov` and calls
-        // `meeting_overlay_set_interactive`. Do not stomp a live interactive=true on resize —
-        // re-apply the stored desire instead of forcing click-through.
+        // Whole window captures clicks while any meeting surface is visible. Transparent padding
+        // around `.ov` may block clicks too — better than pointermove hit-tests that flip false
+        // before the first move or on pointerleave and let clicks fall through to Meet behind.
+        OVERLAY_WANTS_INTERACTIVE.store(true, Ordering::SeqCst);
         apply_overlay_interactive(&win);
         let shown = win.show();
         let _ = win.set_always_on_top(true);
@@ -951,11 +952,30 @@ use shogun_core::meeting::gate::OfferGate;
     }
 
     /// Let the user move the overlay (Issue #7: draggable).
+    ///
+    /// `start_dragging` alone is unreliable on borderless WKWebView windows — hand the in-flight
+    /// mouse event to AppKit like the notch panel's `start_panel_drag`.
     #[tauri::command]
     pub fn meeting_drag(app: tauri::AppHandle) {
-        if let Some(win) = app.get_webview_window(WINDOW_LABEL) {
+        let handle = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            use objc2::runtime::AnyObject;
+            use objc2::{class, msg_send};
+            let Some(win) = handle.get_webview_window(WINDOW_LABEL) else { return };
+            let Some(ptr) = overlay_ns_window(&win) else { return };
+            // SAFETY: main thread; standard AppKit calls on a live NSWindow.
+            unsafe {
+                let ns_app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+                if !ns_app.is_null() {
+                    let ev: *mut AnyObject = msg_send![ns_app, currentEvent];
+                    if !ev.is_null() {
+                        let _: () = msg_send![ptr, performWindowDragWithEvent: ev];
+                        return;
+                    }
+                }
+            }
             let _ = win.start_dragging();
-        }
+        });
     }
 
     /// Toggle whether the overlay window captures mouse events. The webview drives this from
@@ -1033,7 +1053,7 @@ use shogun_core::meeting::gate::OfferGate;
         }
     }
 
-    /// Whether the Select KK Batch credential (`SHOGUN` / `select-kk-batch`) is in Keychain. The
+    /// Whether the Select KK credential (`com.selectkk.shogun` / `select-kk-batch`) is in Keychain.
     /// overlay uses this so "needs key" is shown only when Rust confirms absence, not on a timeout.
     #[tauri::command]
     pub fn meeting_select_kk_configured() -> bool {

@@ -155,6 +155,10 @@ pub fn run() {
         visual_recall::mac::get_visual_recall_settings,
         visual_recall::mac::set_visual_recall_enabled,
         visual_recall::mac::get_visual_recall_status,
+        visual_recall::mac::get_screen_frame,
+        visual_recall::mac::search_screen_frames,
+        visual_recall::mac::get_screen_frames_in_range,
+        visual_recall::mac::rescan_screen_frame,
         notch_actions::mac::notch_actions,
         notch_exec::mac::run_notch_action,
         notch_exec::mac::confirm_notch_action,
@@ -198,6 +202,9 @@ pub fn run() {
         ai_sessions::mac::set_ai_session_import,
         dream::mac::dream_status,
         dream::mac::run_dream_now,
+        dream::mac::select_kk_configured,
+        dream::mac::set_select_kk_key,
+        dream::mac::clear_select_kk_key,
         // First-run Accessibility permission guide (Issue #46). Own webview (onboarding.html),
         // opened by setup_macos when trust is missing and the user hasn't skipped/completed it.
         onboarding::mac::accessibility_status,
@@ -242,8 +249,8 @@ fn setup_macos(app: &tauri::App) {
     eprintln!("[shell] SHOGUN starting — pid {} — build: plain-window/drag/quit", std::process::id());
     eprintln!("========================================================");
 
-    // Re-save known secrets with an open Keychain ACL so debug rebuilds stop invalidating
-    // "Always Allow". May prompt once per existing item on first launch after this update.
+    // Migrate legacy SHOGUN-service secrets to com.selectkk.shogun on first launch after update.
+    // Non-destructive: items already on the new service are left alone.
     shogun_integrations::keychain_store::repair_dev_acls(&[
         "memory-db-key",
         "select-kk-batch",
@@ -429,6 +436,12 @@ fn setup_macos(app: &tauri::App) {
         }
     }
 
+    // Meeting notes (§6.16). Independent of the memory DB: settings, the offer overlay, and Meet
+    // detection must work even when capture cannot start — a corrupt DB must not make the toggle
+    // return "not ready" or leave LANE unset (FR-MT-01/02a).
+    meeting::mac::init(&app.handle().clone());
+    meeting::mac::spawn_meeting_driver(app.handle().clone());
+
     // WP2.2: start the memory capture source. Open the on-device DB under the app-data dir and
     // poll the focus into memory (exclusion → walk → collapse → extract). AX text only (invariant
     // 2). If the DB can't be opened the daemon simply doesn't capture — the shell keeps running.
@@ -466,11 +479,6 @@ fn setup_macos(app: &tauri::App) {
             // decides is in shogun-core; this starts the driver that reads idle/power/clock and
             // actually ticks it. Without a Select KK key it runs the local-rule lane — no network.
             let _ = dream::mac::spawn_dream_driver(db.clone());
-
-            // Meeting notes (§6.16). Settings load first — the default is off (FR-MT-01), so a
-            // fresh install starts the driver with a detector that declines to look at anything.
-            meeting::mac::init(&app.handle().clone());
-            meeting::mac::spawn_meeting_driver(app.handle().clone());
             // Say it started. The driver is silent by design once running — the gate skips all
             // day without logging — so without this line "working" and "never spawned" look
             // identical for the twenty-odd hours before the window opens.
@@ -480,22 +488,14 @@ fn setup_macos(app: &tauri::App) {
                 shogun_core::dreamcycle::schedule::DEFAULT_WINDOW_END_HOUR,
             );
 
-            // First-layer connectors (§6.9). Build the Composio-backed runtime and start the
-            // 15-min read-sync poller. Missing Composio creds are not fatal — the app runs
-            // without connectors until the user configures them in Settings.
-            match connectors::mac::build_runtime(app.handle(), true /* draft-stop default ON */) {
-                Ok(rt) => {
-                    let shared = std::sync::Arc::new(std::sync::Mutex::new(rt));
-                    connectors::mac::spawn_sync_poller(shared.clone(), db.clone(), app.handle().clone());
-                    app.manage(connectors::mac::ConnectorState(shared));
-                    // The shared L3 approval queue (producers enqueue sends; the UI confirms them).
-                    app.manage(approvals::mac::ApprovalQueueState::default());
-                    eprintln!("[spike] connector runtime started (read-sync poller live)");
-                }
-                Err(e) => eprintln!("[spike] connectors not started: {e}"),
-            }
+            install_connectors(app.handle(), Some(db));
         }
-        Err(e) => eprintln!("[spike] memory DB unavailable — capture source not started: {e}"),
+        Err(e) => {
+            eprintln!("[spike] memory DB unavailable — capture source not started: {e}");
+            // ConnectorState + ApprovalQueueState must exist before any settings command runs.
+            // The read-sync poller needs a DB; listing/connecting still works without one.
+            install_connectors(app.handle(), None);
+        }
     }
 
     // --- 匿名プロダクト分析（PostHog, #61）---
@@ -1828,6 +1828,69 @@ fn redock_to_castle(handle: &tauri::AppHandle) {
 #[cfg(target_os = "macos")]
 const DB_KEY_ACCOUNT: &str = "memory-db-key";
 
+/// Register connector runtime state for Tauri commands. Always called — `connectors_list` and
+/// meeting settings must not fail with "state not managed" when the memory DB is down.
+#[cfg(target_os = "macos")]
+fn install_connectors(app: &tauri::AppHandle, db: Option<shogun_core::daemon::Db>) {
+    use tauri::Manager;
+    match connectors::mac::build_runtime(app, true /* draft-stop default ON */) {
+        Ok(rt) => {
+            let shared = std::sync::Arc::new(std::sync::Mutex::new(rt));
+            if let Some(db) = db {
+                connectors::mac::spawn_sync_poller(shared.clone(), db, app.clone());
+                eprintln!("[spike] connector runtime started (read-sync poller live)");
+            } else {
+                eprintln!("[spike] connector runtime started (read-sync poller skipped — no DB)");
+            }
+            app.manage(connectors::mac::ConnectorState(shared));
+            app.manage(approvals::mac::ApprovalQueueState::default());
+        }
+        Err(e) => eprintln!("[spike] connectors not started: {e}"),
+    }
+}
+
+/// Whether an open failure looks like a corrupt or wrong-key encrypted file rather than a
+/// transient I/O error.
+#[cfg(target_os = "macos")]
+fn is_unreadable_db_error(msg: &str) -> bool {
+    let lower = msg.to_ascii_lowercase();
+    lower.contains("not a database")
+        || lower.contains("file is encrypted or is not a database")
+        || lower.contains("hmac check failed")
+        || lower.contains("malformed database schema")
+}
+
+/// Open the encrypted DB, backing up and recreating when the on-disk file cannot be read.
+#[cfg(target_os = "macos")]
+fn open_encrypted_db(
+    path: &std::path::Path,
+    key: &shogun_memory::DbKey,
+    clock: shogun_core::daemon::Clock,
+) -> Result<shogun_core::daemon::Db, String> {
+    match shogun_core::daemon::Db::open_encrypted(path, key, clock.clone()) {
+        Ok(db) => Ok(db),
+        Err(e) => {
+            let msg = e.to_string();
+            if path.exists() && is_unreadable_db_error(&msg) {
+                let stamp = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                let backup = path.with_file_name(format!("memory.db.unreadable-{stamp}"));
+                if std::fs::rename(path, &backup).is_ok() {
+                    eprintln!(
+                        "[spike] unreadable memory DB moved to {} — creating a fresh store",
+                        backup.display()
+                    );
+                    return shogun_core::daemon::Db::open_encrypted(path, key, clock)
+                        .map_err(|e| e.to_string());
+                }
+            }
+            Err(msg)
+        }
+    }
+}
+
 /// Read the database key from the Keychain, generating and storing one on first run.
 ///
 /// The key lives in the Keychain and nowhere else (invariant 7) — never a file, never a log, and
@@ -1910,13 +1973,13 @@ fn memory_db(app: &tauri::App) -> Result<shogun_core::daemon::Db, String> {
         }
     }
 
-    let clock = std::sync::Arc::new(|| {
+    let clock: shogun_core::daemon::Clock = std::sync::Arc::new(|| {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as i64)
             .unwrap_or(0)
     });
-    let db = shogun_core::daemon::Db::open_encrypted(path, &key, clock).map_err(|e| e.to_string())?;
+    let db = open_encrypted_db(&path, &key, clock)?;
     ensure_ort_dylib(app);
     let db = attach_embedder(db, embedding_model_paths(app));
     // 圧縮は段階展開: 既定 off。ヘビーユーザー/AB は SHOGUN_COMPRESSION=1 で有効化（設定 UI は次周）。
