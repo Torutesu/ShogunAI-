@@ -3,7 +3,8 @@
 //! Opt-in screen OCR (default off). Persisted to `visual_recall.json` under app data; the capture
 //! poller reads the shared `RwLock` each tick so toggling applies immediately.
 //!
-//! OCR gate + text-region modules mirror Screenpipe's capture path (decision B, no image storage).
+//! Compressed JPEG frames (≤72 h) are stored in the memory DB when enabled; recall APIs let chat
+//! pull frames by query/time and re-OCR on demand.
 
 #[cfg(all(target_os = "macos", feature = "visual-recall-ocr"))]
 pub mod ocr_gate;
@@ -102,14 +103,19 @@ pub mod mac {
     pub struct VisualRecallStatus {
         pub enabled: bool,
         pub events_24h: i64,
+        pub frames_count: i64,
+        pub frames_oldest_ms: Option<i64>,
+        pub frames_bytes: i64,
         pub recent: Vec<VisualRecallSnippet>,
     }
 
-    /// Settings + live timeline for visual recall (issue #106). Text excerpts only — no pixels.
+    /// Settings + live timeline for visual recall (issue #106). Text excerpts in `recent`; frame
+    /// stats are counts only — no pixels over IPC.
     #[tauri::command]
     pub fn get_visual_recall_status(db: tauri::State<'_, shogun_core::daemon::Db>) -> VisualRecallStatus {
         const PREVIEW_CHARS: usize = 140;
         let enabled = get_visual_recall_settings().enabled;
+        let frame_stats = db.screen_frame_stats();
         let recent = db
             .screen_ocr_previews(5, PREVIEW_CHARS)
             .into_iter()
@@ -123,6 +129,137 @@ pub mod mac {
                 excerpt: p.excerpt,
             })
             .collect();
-        VisualRecallStatus { enabled, events_24h: db.screen_ocr_count_24h(), recent }
+        VisualRecallStatus {
+            enabled,
+            events_24h: db.screen_ocr_count_24h(),
+            frames_count: frame_stats.count,
+            frames_oldest_ms: frame_stats.oldest_ms,
+            frames_bytes: frame_stats.total_bytes,
+            recent,
+        }
+    }
+
+    #[derive(serde::Serialize)]
+    pub struct ScreenFrameView {
+        pub id: i64,
+        pub event_id: i64,
+        pub ts: i64,
+        pub app: Option<String>,
+        pub window: Option<String>,
+        pub width: u32,
+        pub height: u32,
+        pub jpeg_bytes: usize,
+        pub ocr_text: String,
+        /// Raw JPEG bytes (local-only; hook for future vision input).
+        pub jpeg: Vec<u8>,
+    }
+
+    #[derive(serde::Serialize)]
+    pub struct ScreenFrameSummaryView {
+        pub id: i64,
+        pub event_id: i64,
+        pub ts: i64,
+        pub app: Option<String>,
+        pub window: Option<String>,
+        pub width: u32,
+        pub height: u32,
+        pub jpeg_bytes: usize,
+        pub ocr_excerpt: String,
+        pub needs_rescan: bool,
+    }
+
+    fn frame_to_view(rec: shogun_memory::screen_frames::FrameRecord) -> ScreenFrameView {
+        let s = rec.summary;
+        let jpeg_len = rec.jpeg.len();
+        ScreenFrameView {
+            id: s.id,
+            event_id: s.event_id,
+            ts: s.created_at_ms,
+            app: s.app_bundle_id,
+            window: s.window_title,
+            width: s.width,
+            height: s.height,
+            jpeg_bytes: jpeg_len,
+            ocr_text: s.ocr_text,
+            jpeg: rec.jpeg,
+        }
+    }
+
+    /// Fetch one stored frame by id (JPEG + linked OCR text).
+    #[tauri::command]
+    pub fn get_screen_frame(
+        frame_id: i64,
+        db: tauri::State<'_, shogun_core::daemon::Db>,
+    ) -> Option<ScreenFrameView> {
+        db.get_screen_frame(frame_id).map(frame_to_view)
+    }
+
+    /// Search stored frames for a visual-recall question (metadata only — use [`get_screen_frame`] for bytes).
+    #[tauri::command]
+    pub fn search_screen_frames(
+        query: String,
+        limit: Option<usize>,
+        db: tauri::State<'_, shogun_core::daemon::Db>,
+    ) -> Vec<ScreenFrameSummaryView> {
+        const EXCERPT: usize = 200;
+        db.search_screen_frames(&query, limit.unwrap_or(6), EXCERPT)
+            .into_iter()
+            .map(|f| ScreenFrameSummaryView {
+                id: f.frame_id,
+                event_id: f.event_id,
+                ts: f.ts,
+                app: f.app_bundle_id,
+                window: f.window_title,
+                width: f.width,
+                height: f.height,
+                jpeg_bytes: 0,
+                ocr_excerpt: f.ocr_excerpt,
+                needs_rescan: f.needs_rescan,
+            })
+            .collect()
+    }
+
+    /// Frames in a time window (ms since epoch), newest first.
+    #[tauri::command]
+    pub fn get_screen_frames_in_range(
+        from_ms: i64,
+        to_ms: i64,
+        limit: Option<usize>,
+        db: tauri::State<'_, shogun_core::daemon::Db>,
+    ) -> Vec<ScreenFrameSummaryView> {
+        db.screen_frames_in_range(from_ms, to_ms, limit.unwrap_or(20))
+            .into_iter()
+            .map(|s| ScreenFrameSummaryView {
+                id: s.id,
+                event_id: s.event_id,
+                ts: s.created_at_ms,
+                app: s.app_bundle_id,
+                window: s.window_title,
+                width: s.width,
+                height: s.height,
+                jpeg_bytes: s.jpeg_bytes,
+                ocr_excerpt: shogun_memory::search::excerpt(&s.ocr_text, "", 200),
+                needs_rescan: s.ocr_text.trim().len() < shogun_memory::screen_frames::THIN_OCR_CHARS,
+            })
+            .collect()
+    }
+
+    /// Re-OCR a stored frame (pull image → Vision). Returns fresh text; does not mutate DB.
+    #[cfg(feature = "visual-recall-ocr")]
+    #[tauri::command]
+    pub fn rescan_screen_frame(
+        frame_id: i64,
+        db: tauri::State<'_, shogun_core::daemon::Db>,
+    ) -> Result<String, String> {
+        let rec = db.get_screen_frame(frame_id).ok_or("frame not found")?;
+        crate::screen_ocr::ocr_jpeg_bytes(&rec.jpeg)
+            .filter(|t| !t.trim().is_empty())
+            .ok_or_else(|| "Vision returned no text".to_string())
+    }
+
+    #[cfg(not(feature = "visual-recall-ocr"))]
+    #[tauri::command]
+    pub fn rescan_screen_frame(_frame_id: i64) -> Result<String, String> {
+        Err("visual-recall-ocr feature disabled".to_string())
     }
 }

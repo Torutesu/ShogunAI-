@@ -1117,12 +1117,43 @@ function DreamSection(): JSX.Element {
   const [status, setStatus] = useState<DreamStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [selectKkState, setSelectKkState] = useState(false);
+  const [selectKkInput, setSelectKkInput] = useState("");
+  const [selectKkMsg, setSelectKkMsg] = useState("");
 
   const refresh = useCallback((): void => {
     if (!IN_TAURI) return;
     void invoke<DreamStatus>("dream_status").then(setStatus).catch(() => undefined);
+    void invoke<boolean>("select_kk_configured")
+      .then(setSelectKkState)
+      .catch(() => undefined);
   }, []);
   useEffect(refresh, [refresh]);
+
+  const saveSelectKk = (): void => {
+    const k = selectKkInput.trim();
+    if (!k || !IN_TAURI) return;
+    void invoke("set_select_kk_key", { key: k })
+      .then(() => {
+        setSelectKkState(true);
+        setSelectKkInput("");
+        setSelectKkMsg(t.selectKkSaved);
+      })
+      .catch((e) => setSelectKkMsg(String(e)));
+  };
+
+  const removeSelectKk = (): void => {
+    if (!IN_TAURI) {
+      setSelectKkState(false);
+      return;
+    }
+    void invoke("clear_select_kk_key")
+      .then(() => {
+        setSelectKkState(false);
+        setSelectKkMsg("");
+      })
+      .catch((e) => setSelectKkMsg(String(e)));
+  };
 
   const runNow = (): void => {
     setBusy(true);
@@ -1165,6 +1196,41 @@ function DreamSection(): JSX.Element {
           {busy ? t.dreamRunning : t.dreamRunNow}
         </button>
       </div>
+      <div className="set__hint">{t.selectKkKey}</div>
+      <div className={`set__hint${selectKkState ? " is-ok" : ""}`}>
+        {selectKkState ? t.selectKkPresent : t.selectKkAbsent}
+      </div>
+      <div className="set__hint">{t.selectKkHint}</div>
+      <div className="keyrow">
+        <input
+          className="keyrow__input"
+          type="password"
+          placeholder={t.selectKkPlaceholder}
+          value={selectKkInput}
+          autoComplete="off"
+          onChange={(e) => setSelectKkInput(e.target.value)}
+          onFocus={() => {
+            if (IN_TAURI) void invoke("focus_field", { focused: true }).catch(() => undefined);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") saveSelectKk();
+          }}
+        />
+        <button
+          className="keyrow__btn"
+          type="button"
+          onClick={saveSelectKk}
+          disabled={!selectKkInput.trim()}
+        >
+          {t.keySave}
+        </button>
+        {selectKkState ? (
+          <button className="keyrow__btn" type="button" onClick={removeSelectKk}>
+            {t.keyRemove}
+          </button>
+        ) : null}
+      </div>
+      {selectKkMsg ? <div className="set__hint">{selectKkMsg}</div> : null}
     </section>
   );
 }

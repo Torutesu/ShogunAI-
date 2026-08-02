@@ -1824,6 +1824,11 @@ kbd {
   border-radius: 8px;
   background: rgba(128, 128, 128, 0.1);
 }
+.ov__mdegraded--warn {
+  color: var(--warn, #c9a227);
+  background: rgba(201, 162, 39, 0.12);
+  border: 1px solid rgba(201, 162, 39, 0.35);
+}
 .ov__notes {
   margin-top: 12px;
   padding-top: 12px;

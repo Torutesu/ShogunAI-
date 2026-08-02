@@ -1,9 +1,9 @@
-//! On-device screen OCR (issue #106/#107, decision B: OCR-then-discard).
+//! On-device screen OCR (issue #106/#107).
 //!
 //! Capture + OCR path mirrored from Screenpipe (`screenpipe-screen` + `screenpipe-capture`):
-//! CGWindow capture → RAM `DynamicImage` → text-region gate → Apple Vision on crop → text only.
-//! **No JPEG/PNG timeline storage** (CLAUDE.md invariant 2). Screenpipe Commercial License
-//! prevents vendoring their sources; architecture and thresholds match their public crates.
+//! CGWindow capture → RAM `DynamicImage` → text-region gate → Apple Vision on crop → text.
+//! On fresh Vision success the caller may persist a compressed JPEG (72 h local retention —
+//! explicit invariant-2 exception, user decision 2026-08-02). No cloud upload.
 //! Reference: https://github.com/screenpipe/screenpipe
 
 use core_foundation::array::CFArray;
@@ -20,7 +20,8 @@ use core_graphics::window::{
     CGWindowListCreateImage,
 };
 use foreign_types::ForeignType;
-use image::{DynamicImage, ImageBuffer};
+use image::codecs::jpeg::JpegEncoder;
+use image::{DynamicImage, GenericImageView, ImageBuffer, ImageEncoder};
 use objc2::AnyThread;
 use objc2::runtime::AnyObject;
 use objc2_core_graphics::CGImage as VisionImage;
@@ -34,6 +35,25 @@ use crate::visual_recall::pipeline::{self, RecallPipeline};
 
 /// Minimum dwell between OCR passes on the same focus (respect idle CPU SLO spirit).
 pub const MIN_OCR_INTERVAL_MS: u64 = 10_000;
+
+/// JPEG quality for persisted OCR frames (~60–70 per product spec).
+pub const FRAME_JPEG_QUALITY: u8 = 65;
+
+/// Compressed frame ready for `screen_frames` insert (full window, not OCR crop).
+#[derive(Debug, Clone)]
+pub struct OcrFrame {
+    pub jpeg: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// Outcome of a gated OCR pass on the focused window.
+#[derive(Debug, Clone)]
+pub struct OcrGatedResult {
+    pub outcome: pipeline::OcrOutcome,
+    /// Present only when Apple Vision ran this tick and returned non-empty text.
+    pub frame: Option<OcrFrame>,
+}
 
 /// CGWindow id for the frontmost normal window owned by `pid`, if any.
 pub fn focused_window_id(pid: i32) -> Option<u32> {
@@ -100,7 +120,8 @@ pub fn capture_window(window_id: u32) -> Option<(CGImage, DynamicImage)> {
     Some((cg, frame))
 }
 
-/// Gated OCR on the focused window — Screenpipe `paired_capture` OCR path without storage.
+/// Gated OCR on the focused window. Returns text outcome plus an optional JPEG when Vision
+/// ran fresh and produced text (caller stores via `Db::store_screen_frame`).
 pub fn ocr_focused_window_gated(
     pipeline: &mut RecallPipeline,
     pid: i32,
@@ -110,23 +131,43 @@ pub fn ocr_focused_window_gated(
     ax_empty: bool,
     ax_text_len: usize,
     meeting_active: bool,
-) -> pipeline::OcrOutcome {
+) -> OcrGatedResult {
     let Some((cg, frame)) = capture_focused_window(pid) else {
-        return pipeline::OcrOutcome::Skipped;
+        return OcrGatedResult { outcome: pipeline::OcrOutcome::Skipped, frame: None };
     };
     let trigger =
         pipeline::wants_ocr(bundle_or_app, window_title, ax_empty, ax_text_len, meeting_active);
-    pipeline.ocr_gated_window(&frame, app_key, trigger, |_, crop| {
+    let (outcome, fresh_vision) = pipeline.ocr_gated_window(&frame, app_key, trigger, |_, crop| {
         let rect = CGRect::new(
             &CGPoint::new(f64::from(crop.x), f64::from(crop.y)),
             &CGSize::new(f64::from(crop.width), f64::from(crop.height)),
         );
         cg.cropped(rect).and_then(|sub| ocr_cg_image(&sub))
-    })
+    });
+    let store_frame = fresh_vision && matches!(outcome, pipeline::OcrOutcome::Text(_));
+    let jpeg_frame = if store_frame { encode_frame_jpeg(&frame) } else { None };
+    OcrGatedResult { outcome, frame: jpeg_frame }
+}
+
+/// Encode the full captured window as JPEG (quality [`FRAME_JPEG_QUALITY`]).
+pub fn encode_frame_jpeg(frame: &DynamicImage) -> Option<OcrFrame> {
+    let (width, height) = frame.dimensions();
+    if width == 0 || height == 0 {
+        return None;
+    }
+    let rgb = frame.to_rgb8();
+    let mut buf = Vec::new();
+    let mut enc = JpegEncoder::new_with_quality(&mut buf, FRAME_JPEG_QUALITY);
+    enc.write_image(rgb.as_raw(), width, height, image::ExtendedColorType::Rgb8)
+        .ok()?;
+    if buf.is_empty() {
+        return None;
+    }
+    Some(OcrFrame { jpeg: buf, width, height })
 }
 
 /// Apple Vision OCR on a CGImage crop (Screenpipe `perform_ocr_apple` semantics, flat text).
-fn ocr_cg_image(image: &CGImage) -> Option<String> {
+pub fn ocr_cg_image(image: &CGImage) -> Option<String> {
     // SAFETY: both CGImage types are transparent refs to the same CoreGraphics object.
     let vision_image = unsafe { &*(image.as_ptr() as *const VisionImage) };
     let options = NSDictionary::<objc2_vision::VNImageOption, AnyObject>::new();
@@ -134,6 +175,47 @@ fn ocr_cg_image(image: &CGImage) -> Option<String> {
         VNImageRequestHandler::initWithCGImage_options(
             VNImageRequestHandler::alloc(),
             vision_image,
+            &options,
+        )
+    };
+    let request = unsafe {
+        let req = VNRecognizeTextRequest::init(VNRecognizeTextRequest::alloc());
+        req.setRecognitionLevel(VNRequestTextRecognitionLevel::Accurate);
+        req.setUsesLanguageCorrection(true);
+        req
+    };
+    let requests = NSArray::from_slice(&[&*request as &VNRequest]);
+    handler.performRequests_error(&requests).ok()?;
+    let observations = request.results()?;
+    let mut lines: Vec<String> = Vec::new();
+    for obs in observations.iter() {
+        let Some(text_obs) = obs.downcast_ref::<VNRecognizedTextObservation>() else {
+            continue;
+        };
+        let candidates = text_obs.topCandidates(1);
+        if let Some(best) = candidates.firstObject() {
+            let line = best.string().to_string();
+            if !line.trim().is_empty() {
+                lines.push(line);
+            }
+        }
+    }
+    if lines.is_empty() {
+        return None;
+    }
+    Some(lines.join("\n"))
+}
+
+/// Re-OCR a stored JPEG (visual recall pull → scan path).
+pub fn ocr_jpeg_bytes(jpeg: &[u8]) -> Option<String> {
+    use objc2_foundation::NSData;
+
+    let data = NSData::with_bytes(jpeg);
+    let options = NSDictionary::<objc2_vision::VNImageOption, AnyObject>::new();
+    let handler = unsafe {
+        VNImageRequestHandler::initWithData_options(
+            VNImageRequestHandler::alloc(),
+            &data,
             &options,
         )
     };
@@ -247,11 +329,21 @@ pub fn text_digest(text: &str) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use image::RgbaImage;
 
     #[test]
     fn digest_changes_with_content() {
         let a = text_digest("hello");
         let b = text_digest("world");
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn jpeg_encoder_produces_bytes() {
+        let img = DynamicImage::ImageRgba8(RgbaImage::from_pixel(4, 4, image::Rgba([10, 20, 30, 255])));
+        let frame = encode_frame_jpeg(&img).expect("jpeg");
+        assert_eq!(frame.width, 4);
+        assert_eq!(frame.height, 4);
+        assert!(frame.jpeg.starts_with(&[0xFF, 0xD8]));
     }
 }

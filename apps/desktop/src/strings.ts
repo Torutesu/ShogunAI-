@@ -66,6 +66,13 @@ export const STRINGS = {
     dreamEvents: "events",
     dreamChanges: "updates",
     dreamChunks: "sent",
+    selectKkKey: "Select KK key",
+    selectKkHint:
+      "Powers nightly review, meeting summaries, and live translation. Paste the plain sk-ant-… API key — not hex.",
+    selectKkPresent: "Connected — batch features and translation can run.",
+    selectKkAbsent: "Not set — nightly review runs locally only; translation and AI summaries need this key.",
+    selectKkPlaceholder: "Paste Select KK API key (sk-ant-…)…",
+    selectKkSaved: "Select KK key saved.",
     // approvals (L3 confirmation queue — anything leaving the device)
     approvals: "Approvals",
     approvalsHint: "Anything that leaves your device waits here for your explicit confirmation.",
@@ -176,7 +183,7 @@ export const STRINGS = {
     meetingMinutesNextActions: "Next actions",
     meetingMinutesPending: "Preparing summary…",
     meetingMinutesNeedsKey:
-      "AI summary needs the Select KK key in Keychain (SHOGUN / select-kk-batch). Your transcript is shown below.",
+      "AI summary needs the Select KK key in Settings → Nightly review. Your transcript is shown below.",
     meetingRecapYourNotes: "Your notes",
     meetingTranscriptHeading: "Transcript",
     meetingTranscriptEmpty: "No transcript captured — model missing or silence.",
@@ -240,6 +247,10 @@ export const STRINGS = {
     meetingLiveEmpty: "Listening…",
     meetingLiveShowSource: "Show source",
     meetingLiveHideSource: "Hide source",
+    meetingTranslateNeedsKey:
+      "Translation needs the Select KK key in Settings → Nightly review. Transcription still works.",
+    meetingTranslateKeyInvalid:
+      "Select KK key was rejected — re-paste it in Settings → Nightly review (plain sk-ant-… key, not hex).",
     meetingOverlayClose: "Close",
     meetingOverlaySettings: "Settings",
     // errors

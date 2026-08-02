@@ -793,6 +793,29 @@ pub mod mac {
                 p.push('\n');
             }
         }
+        if !ctx.screen_frames.is_empty() {
+            p.push_str("\nStored screen captures (JPEG, ≤72 h, linked to OCR events):\n");
+            for f in &ctx.screen_frames {
+                p.push_str("- [screen frame ");
+                p.push_str(&f.frame_id.to_string());
+                p.push_str(" · ");
+                if let Some(app) = f.app_bundle_id.as_deref().filter(|s| !s.is_empty()) {
+                    p.push_str(app);
+                    p.push_str(" · ");
+                }
+                if let Some(w) = f.window_title.as_deref().filter(|s| !s.is_empty()) {
+                    p.push_str(w);
+                    p.push_str(" · ");
+                }
+                p.push_str(&format!("{}×{}", f.width, f.height));
+                if f.needs_rescan {
+                    p.push_str(" · thin OCR — re-scanned text may appear in evidence");
+                }
+                p.push_str("] ");
+                p.push_str(&f.ocr_excerpt);
+                p.push('\n');
+            }
+        }
         if !ctx.evidence.is_empty() {
             p.push_str("\nRetrieved from their history (most relevant first):\n");
             for e in &ctx.evidence {
@@ -801,6 +824,9 @@ pub mod mac {
                 if let Some(t) = e.title.as_deref().filter(|t| !t.is_empty()) {
                     p.push_str(" · ");
                     p.push_str(t);
+                }
+                if let Some(fid) = e.frame_id {
+                    p.push_str(&format!(" · frame {fid}"));
                 }
                 p.push_str("] ");
                 p.push_str(&e.excerpt);
@@ -812,6 +838,27 @@ pub mod mac {
         p.push_str("\nSHOGUN:");
         p
     }
+
+    #[cfg(all(target_os = "macos", feature = "visual-recall-ocr"))]
+    fn enrich_thin_frame_ocr(db: &Db, ctx: &mut ContextPack) {
+        for frame in &ctx.screen_frames {
+            if !frame.needs_rescan {
+                continue;
+            }
+            let Some(rec) = db.get_screen_frame(frame.frame_id) else { continue };
+            let Some(text) = crate::screen_ocr::ocr_jpeg_bytes(&rec.jpeg) else { continue };
+            let excerpt = shogun_memory::search::excerpt(&text, "", 400);
+            for ev in &mut ctx.evidence {
+                if ev.frame_id == Some(frame.frame_id) {
+                    ev.excerpt.push_str("\n[re-scanned from stored frame]: ");
+                    ev.excerpt.push_str(&excerpt);
+                }
+            }
+        }
+    }
+
+    #[cfg(not(all(target_os = "macos", feature = "visual-recall-ocr")))]
+    fn enrich_thin_frame_ocr(_db: &Db, _ctx: &mut ContextPack) {}
 
     /// One source behind an answer, for the citation line under it.
     #[derive(serde::Serialize)]
@@ -886,6 +933,8 @@ pub mod mac {
             }
             _ => db.assemble_context(&query, CHAT_EVIDENCE_HITS, CHAT_EVIDENCE_CHARS),
         };
+        let mut ctx = ctx;
+        enrich_thin_frame_ocr(db, &mut ctx);
         // Without a key there is nothing to answer with; with the dev mock the "answer" is the
         // prompt itself, and printing that dumps SHOGUN's entire internal prompt at the user. Say
         // what is actually wrong instead. (The UI also pre-empts this from `has_key`.)

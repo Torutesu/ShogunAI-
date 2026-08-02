@@ -11,7 +11,8 @@
 //! layered on later to reduce latency without changing this composition.
 //!
 //! Invariant 2: AX text is the default path; optional visual recall (issue #107) may OCR the
-//! focused window in RAM only — text + provenance persisted, pixels discarded immediately.
+//! focused window in RAM — text + provenance persisted; compressed JPEG frames retained ≤72 h
+//! when Visual recall is on (explicit exception, user decision 2026-08-02).
 //!
 //! `capture_once` is part of the public surface (the main-thread-timer driver alternative in the
 //! runbook uses it directly); it is `allow(unused_imports)` because the default driver only calls
@@ -139,6 +140,9 @@ mod mac {
     }
 
     #[cfg(feature = "visual-recall-ocr")]
+    const FRAME_PURGE_INTERVAL_MS: u64 = 30 * 60 * 1_000;
+
+    #[cfg(feature = "visual-recall-ocr")]
     fn maybe_screen_ocr(
         db: &Db,
         visual: &VisualRecallSettings,
@@ -168,7 +172,7 @@ mod mac {
         ) {
             return;
         }
-        let outcome = screen_ocr::ocr_focused_window_gated(
+        let result = screen_ocr::ocr_focused_window_gated(
             recall,
             front_pid,
             &key,
@@ -178,7 +182,7 @@ mod mac {
             ax_text_len,
             meeting_active,
         );
-        let text = match outcome {
+        let text = match result.outcome {
             pipeline::OcrOutcome::Text(t) => t,
             pipeline::OcrOutcome::Skipped | pipeline::OcrOutcome::Empty => {
                 poll_gate.mark(key, now);
@@ -189,6 +193,28 @@ mod mac {
         let display_id = Some(crate::geometry::mac::primary_display_id());
         match db.ingest_screen_ocr(Some(bundle_id), title, &text, dwell_ms, display_id) {
             Some((id, touched, cands)) => {
+                // Store JPEG only on a fresh OCR event (not dedup touch, not cache replay).
+                if !touched {
+                    if let Some(frame) = result.frame {
+                        // Explicit invariant-2 exception: local encrypted BLOB, 72 h purge.
+                        if let Some(frame_id) = db.store_screen_frame(
+                            id,
+                            Some(bundle_id),
+                            title,
+                            display_id,
+                            frame.width,
+                            frame.height,
+                            &frame.jpeg,
+                        ) {
+                            eprintln!(
+                                "[screen_ocr] frame {frame_id} {}x{} {} bytes → event {id}",
+                                frame.width,
+                                frame.height,
+                                frame.jpeg.len(),
+                            );
+                        }
+                    }
+                }
                 eprintln!(
                     "[screen_ocr] {} {} chars digest={digest:#x} → event {id} {} (+{} candidate(s))",
                     bundle_id,
@@ -224,6 +250,8 @@ mod mac {
             let mut ocr_poll_gate = OcrPollGate::new();
             #[cfg(feature = "visual-recall-ocr")]
             let mut recall_pipeline = RecallPipeline::new();
+            #[cfg(feature = "visual-recall-ocr")]
+            let mut last_frame_purge = Instant::now();
             loop {
                 if ax_trusted() {
                     // Re-read the policy each tick: excluding an app is usually a reaction to
@@ -270,6 +298,17 @@ mod mac {
                         }
                     }
                     drop(current);
+
+                    #[cfg(feature = "visual-recall-ocr")]
+                    if visual.enabled
+                        && last_frame_purge.elapsed().as_millis() as u64 >= FRAME_PURGE_INTERVAL_MS
+                    {
+                        let removed = db.purge_screen_frames();
+                        if removed > 0 {
+                            eprintln!("[screen_ocr] purged {removed} frame(s) older than 72 h");
+                        }
+                        last_frame_purge = Instant::now();
+                    }
 
                     // Pre-assemble the reply context for whatever the user is now looking at, so
                     // pressing the draft button only starts generation (SLO: offer in 150ms —

@@ -1,9 +1,8 @@
-//! Screenpipe-style OCR trigger + gated capture path (issue #106 decision B).
+//! Screenpipe-style OCR trigger + gated capture path (issue #106).
 //!
-//! Mirrors `screenpipe-capture/src/paired_capture.rs` OCR decisions without JPEG timeline
-//! storage. Flow: CGWindow capture (RAM) → text-region detect → pixel-signature gate →
-//! Apple Vision on union crop → text + provenance → drop pixels.
-//! Reference: https://github.com/screenpipe/screenpipe
+//! Flow: CGWindow capture (RAM) → text-region detect → pixel-signature gate →
+//! Apple Vision on union crop → text + provenance. On fresh Vision success the caller may
+//! persist a compressed JPEG (72 h, see `screen_frames`) before dropping pixels.
 
 use image::DynamicImage;
 use image::GenericImageView;
@@ -93,21 +92,23 @@ impl RecallPipeline {
     }
 
     /// Run the gated OCR path on a focused-window image already in RAM.
+    /// Returns `(outcome, fresh_vision)` — `fresh_vision` is true when Apple Vision ran this tick
+    /// (not a pixel-signature cache hit).
     pub fn ocr_gated_window(
         &mut self,
         frame: &DynamicImage,
         app_key: &str,
         wants_ocr: bool,
         ocr_crop: impl FnOnce(&DynamicImage, TextRegion) -> Option<String>,
-    ) -> OcrOutcome {
+    ) -> (OcrOutcome, bool) {
         if !wants_ocr {
-            return OcrOutcome::Skipped;
+            return (OcrOutcome::Skipped, false);
         }
 
         let regions = detect_text_regions(frame);
         let (frame_w, frame_h) = frame.dimensions();
         let Some(union) = union_region(&regions, UNION_PAD_PX, frame_w, frame_h) else {
-            return OcrOutcome::Skipped;
+            return (OcrOutcome::Skipped, false);
         };
         let union_img = frame.crop_imm(union.x, union.y, union.width, union.height);
         let signature = image_pixel_signature(&union_img);
@@ -116,21 +117,21 @@ impl RecallPipeline {
             OcrDecision::Skip => {
                 if let Some(cached) = self.gate.indexed_text(app_key) {
                     if cached.trim().is_empty() {
-                        OcrOutcome::Empty
+                        (OcrOutcome::Empty, false)
                     } else {
-                        OcrOutcome::Text(cached.to_string())
+                        (OcrOutcome::Text(cached.to_string()), false)
                     }
                 } else {
-                    OcrOutcome::Skipped
+                    (OcrOutcome::Skipped, false)
                 }
             }
             OcrDecision::Ocr => {
                 let text = ocr_crop(frame, union).unwrap_or_default();
                 if text.trim().is_empty() {
-                    OcrOutcome::Empty
+                    (OcrOutcome::Empty, true)
                 } else {
                     self.gate.ocr_indexed(app_key, &text);
-                    OcrOutcome::Text(text)
+                    (OcrOutcome::Text(text), true)
                 }
             }
         }
