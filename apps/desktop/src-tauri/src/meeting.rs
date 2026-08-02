@@ -17,7 +17,7 @@
 
 #[cfg(target_os = "macos")]
 pub mod mac {
-    use std::sync::atomic::{AtomicI64, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
     use std::sync::{Arc, Mutex, RwLock};
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -802,19 +802,22 @@ use shogun_core::meeting::gate::OfferGate;
         }
     }
 
-    /// When `block` is false the window is removed from the screen and passes mouse events through.
-    fn set_overlay_mouse_blocking(win: &tauri::WebviewWindow, block: bool) {
+    /// Webview-owned desire: capture mouse on the glass card (`ignoresMouseEvents=false`).
+    static OVERLAY_WANTS_INTERACTIVE: AtomicBool = AtomicBool::new(false);
+
+    /// AppKit-only click-through toggle. Never orderOut here — visibility is sync_window's job.
+    fn set_overlay_ignores_mouse(win: &tauri::WebviewWindow, ignores: bool) {
         use objc2::msg_send;
-        use objc2::runtime::AnyObject;
         let Some(ptr) = overlay_ns_window(win) else { return };
         // SAFETY: live NSWindow; called from the main thread via sync_window / setup.
         unsafe {
-            let _: () = msg_send![ptr, setIgnoresMouseEvents: !block];
-            if !block {
-                let nil: *mut AnyObject = std::ptr::null_mut();
-                let _: () = msg_send![ptr, orderOut: nil];
-            }
+            let _: () = msg_send![ptr, setIgnoresMouseEvents: ignores];
         }
+    }
+
+    fn apply_overlay_interactive(win: &tauri::WebviewWindow) {
+        let interactive = OVERLAY_WANTS_INTERACTIVE.load(Ordering::SeqCst);
+        set_overlay_ignores_mouse(win, !interactive);
     }
 
     /// Park the overlay at the top-right of the screen the cursor is on.
@@ -899,7 +902,8 @@ use shogun_core::meeting::gate::OfferGate;
         // creating an AppKit window from this thread.
         let Some(win) = app.get_webview_window(WINDOW_LABEL) else { return };
         if !visible {
-            set_overlay_mouse_blocking(&win, false);
+            OVERLAY_WANTS_INTERACTIVE.store(false, Ordering::SeqCst);
+            set_overlay_ignores_mouse(&win, true);
             let _ = win.hide();
             PARKED.store(false, Ordering::SeqCst);
             return;
@@ -908,10 +912,10 @@ use shogun_core::meeting::gate::OfferGate;
         if !PARKED.swap(true, Ordering::SeqCst) {
             park_top_right(&win, size);
         }
-        // Stay click-through until the webview paints `.ov` and calls
-        // `meeting_overlay_set_interactive(true)`. Showing a transparent window with
-        // ignoresMouseEvents=false before React mounts blocks the desktop invisibly.
-        set_overlay_mouse_blocking(&win, false);
+        // Click-through until the webview hit-tests `.ov` and calls
+        // `meeting_overlay_set_interactive`. Do not stomp a live interactive=true on resize —
+        // re-apply the stored desire instead of forcing click-through.
+        apply_overlay_interactive(&win);
         let shown = win.show();
         let _ = win.set_always_on_top(true);
         // Accessory apps do not auto-show windows — order front only when the lane needs UI.
@@ -922,11 +926,13 @@ use shogun_core::meeting::gate::OfferGate;
                 let _: () = msg_send![ptr, orderFrontRegardless];
             }
         }
+        let _ = app.emit("meeting_overlay_surface", ());
         eprintln!(
-            "[meeting] overlay show ok={} pos={:?} size={:?}",
+            "[meeting] overlay show ok={} pos={:?} size={:?} interactive={}",
             shown.is_ok(),
             win.outer_position().ok(),
-            (size.0, size.1)
+            (size.0, size.1),
+            OVERLAY_WANTS_INTERACTIVE.load(Ordering::SeqCst),
         );
     }
 
@@ -952,15 +958,16 @@ use shogun_core::meeting::gate::OfferGate;
         }
     }
 
-    /// Toggle whether the overlay window captures mouse events. The webview calls this once `.ov`
-    /// is painted (interactive=true) and on unmount / idle (interactive=false). AppKit ignores
-    /// CSS `pointer-events` for hit-testing against windows behind this one.
+    /// Toggle whether the overlay window captures mouse events. The webview drives this from
+    /// pointer hit-tests over `.ov` (interactive=true on the glass card, false elsewhere / idle).
+    /// AppKit ignores CSS `pointer-events` for hit-testing against windows behind this one.
     #[tauri::command]
     pub fn meeting_overlay_set_interactive(app: tauri::AppHandle, interactive: bool) {
+        OVERLAY_WANTS_INTERACTIVE.store(interactive, Ordering::SeqCst);
         let handle = app.clone();
         let _ = app.run_on_main_thread(move || {
             let Some(win) = handle.get_webview_window(WINDOW_LABEL) else { return };
-            set_overlay_mouse_blocking(&win, interactive);
+            apply_overlay_interactive(&win);
             eprintln!("[meeting] overlay interactive={interactive}");
         });
     }

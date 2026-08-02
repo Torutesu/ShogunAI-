@@ -162,11 +162,79 @@ const call = (cmd: string, args?: Record<string, unknown>): void => {
   void invoke(cmd, args).catch(() => undefined);
 };
 
-/** AppKit hit-tests the whole NSWindow rect; CSS holes do not pass clicks to apps behind. */
-function useOverlayInteractive(active: boolean): void {
+/** AppKit hit-tests the whole NSWindow rect; sync ignoresMouseEvents with `.ov` hit-tests. */
+function useOverlayHitTest(active: boolean): void {
   useEffect(() => {
-    call("meeting_overlay_set_interactive", { interactive: active });
+    if (!active) {
+      call("meeting_overlay_set_interactive", { interactive: false });
+      return;
+    }
+
+    let last = false;
+    let raf: number | null = null;
+
+    const overCard = (x: number, y: number): boolean => {
+      const el = document.elementFromPoint(x, y);
+      return Boolean(el?.closest(".ov"));
+    };
+
+    const push = (interactive: boolean): void => {
+      if (last === interactive) return;
+      last = interactive;
+      call("meeting_overlay_set_interactive", { interactive });
+    };
+
+    const syncAt = (x: number, y: number): void => {
+      push(overCard(x, y));
+    };
+
+    const schedule = (x: number, y: number): void => {
+      if (raf != null) return;
+      raf = window.requestAnimationFrame(() => {
+        raf = null;
+        syncAt(x, y);
+      });
+    };
+
+    const onPointerMove = (e: PointerEvent): void => {
+      schedule(e.clientX, e.clientY);
+    };
+
+    const onPointerLeave = (): void => {
+      push(false);
+    };
+
+    // After paint / resize: pick up pointer already over the card without waiting for move.
+    const assertPainted = (): void => {
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => {
+          const ov = document.querySelector(".ov");
+          if (!ov) {
+            push(false);
+            return;
+          }
+          const r = ov.getBoundingClientRect();
+          const cx = r.left + r.width / 2;
+          const cy = r.top + r.height / 2;
+          syncAt(cx, cy);
+        });
+      });
+    };
+
+    assertPainted();
+    window.addEventListener("pointermove", onPointerMove, { passive: true });
+    document.documentElement.addEventListener("pointerleave", onPointerLeave);
+
+    const offSurface = listen("meeting_overlay_surface", () => {
+      last = false;
+      assertPainted();
+    });
+
     return () => {
+      if (raf != null) window.cancelAnimationFrame(raf);
+      window.removeEventListener("pointermove", onPointerMove);
+      document.documentElement.removeEventListener("pointerleave", onPointerLeave);
+      void offSurface.then((f) => f());
       call("meeting_overlay_set_interactive", { interactive: false });
     };
   }, [active]);
@@ -408,7 +476,7 @@ export function MeetingOverlay(): JSX.Element | null {
   }, [view?.state]);
 
   const overlayActive = Boolean(view?.enabled && view && view.state !== "idle");
-  useOverlayInteractive(overlayActive);
+  useOverlayHitTest(overlayActive);
 
   if (!view || !view.enabled || view.state === "idle") return null;
 

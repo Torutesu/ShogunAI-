@@ -797,7 +797,7 @@ pub mod mac {
             p.push_str("\nRetrieved from their history (most relevant first):\n");
             for e in &ctx.evidence {
                 p.push_str("- [");
-                p.push_str(&e.source);
+                p.push_str(&shogun_memory::search::evidence_source_label(&e.source));
                 if let Some(t) = e.title.as_deref().filter(|t| !t.is_empty()) {
                     p.push_str(" · ");
                     p.push_str(t);
