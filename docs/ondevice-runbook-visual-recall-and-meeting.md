@@ -19,7 +19,95 @@
 
 ---
 
-## 0. Linux 側で既に green のもの（実機で再確認しなくてよい）
+## 0. 最短スモークテスト（ゼロから。実作業 15 分＋初回ビルド待ち）
+
+細かい検証は §3 以降。まず「動いているか」だけ見るならここだけで足りる。
+
+### ステップ 1 — 道具（初回だけ）
+
+```
+xcode-select --install                     # 既に入っていればスキップ
+brew install pnpm
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+`tauri-cli` は入れなくてよい（`apps/desktop` の devDependency に入っている）。
+
+### ステップ 2 — 起動（2 コマンド）
+
+```
+git fetch origin claude/verify-changes-device-54rm2z
+git checkout claude/verify-changes-device-54rm2z
+cd apps/desktop && pnpm install && pnpm tauri dev 2>/tmp/shogun.log
+```
+
+初回の Rust ビルドは 10〜20 分かかる。**別タブ**で `tail -f /tmp/shogun.log` を開いておく。
+
+権限ダイアログが出たら全部 Allow（アクセシビリティ・画面収録・マイク）。**画面収録を許可したらアプリを再起動**する（macOS は再起動まで反映しない）。
+
+### ステップ 3 — 3 つだけ確認する
+
+**① 起動ログ**（`tail` のタブ）
+
+```
+[visual_recall] screen OCR off (default)
+[spike] memory DB: …/dev.shogun.spike/memory.db
+[spike] ⌘⇧J registered
+```
+
+3 行出れば起動は成功。Visual recall が既定 OFF であることもこれで確認できる。
+
+**② Visual recall（画面 OCR）** — 一番速く signal が出る
+
+1. **⌘⇧J** でパネルを開く → **⚙** → **Visual recall** を **On**（ログ: `screen OCR enabled`）
+2. **ターミナルか Google Docs を前面にして 15 秒待つ**（他のアプリだと OCR が発火しないことがある。同一画面への OCR は最短 10 秒間隔）
+3. 画面の内容を少し変えて、もう 15 秒待つ（前回と同じピクセルだと skip される）
+4. ⚙ の Visual recall ステータスで **frames の件数が増えている**こと
+5. パネルのチャットに `what was on my screen this morning` と入れる → 画面由来の証跡が返る
+   （`roadmap` のような普通の語句だとフレームは引かれない仕様）
+
+**③ 会議オーバーレイ** — 1 人でも試せる
+
+1. Chrome で `https://meet.google.com/new` を開いて参加（**相手は不要**）
+2. パネルに会議ピルが出る → **Start** を押す
+3. ⚠️ **初回は whisper turbo モデルを 1 回だけダウンロードする（1.6GB）**。ログ `[meeting] fetching turbo model (first use)` → 落ちるまで文字起こしは出ない。失敗しても small モデルに自動フォールバックする
+4. 英語で少し喋る → オーバーレイに ASR 行が出る
+5. ヘッダーのモードピッカーで **One-way** → EN→JA の訳が**後追いで**埋まる（先に ASR 行、あとから訳が正しい挙動）
+   - 訳が付かない時はログの `[meeting] live translate … skipped — …` の理由を読む。多いのは `no Select KK key`
+6. **クリックスルー**（前回の実機ブロッカー）: オーバーレイの**透明部分**をクリック → 背後の Meet が反応する。カードの上に乗せると `[meeting] overlay interactive=true` がログに出てボタンが押せる
+
+ここまで通れば差分は実機で生きている。
+
+### 訳を出したい場合だけ（Select KK キー）
+
+```
+security add-generic-password -s com.selectkk.shogun -a select-kk-batch -w
+```
+
+`-w` の後に対話でキーを貼る（履歴に残さないため引数で渡さない）。
+
+### 片付け
+
+- Visual recall を **Off** に戻す（⚙ から）
+- 保存されたフレームも消したい場合:
+  ```
+  sqlite3 ~/Library/Application\ Support/dev.shogun.spike/memory.db "delete from screen_frames;"
+  ```
+  （§4.5 の穴のため、Off にしただけでは既存フレームは自動で消えない）
+
+### 詰まったら
+
+| 症状 | 対処 |
+|---|---|
+| frames が増えない | システム設定 → プライバシーとセキュリティ → **画面収録** にアプリを追加 → 再起動 |
+| 会議ピルが出ない | `meet.google.com` のタブが**前面**にあるか。Zoom アプリ起動でも可 |
+| 文字起こしが出ない | モデル DL 待ち（ログ確認）。マイク権限も確認 |
+| ビルドが Cargo.lock で衝突 | `git checkout -- Cargo.lock` してから pull |
+| パネルが描画されない | `SHOGUN_NO_NOTCH=1 pnpm tauri dev` で通常ウィンドウに逃げる |
+
+---
+
+## 0.5 Linux 側で既に green のもの（実機で再確認しなくてよい）
 
 実機の時間は「Mac でしか動かないもの」に使う。以下はこのブランチ上で検証済み:
 
