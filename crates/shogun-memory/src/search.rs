@@ -150,7 +150,7 @@ pub fn lexical_terms(query: &str) -> Vec<String> {
 
 /// Returns `None` when nothing usable is left, which the caller treats as "no results" rather than
 /// running an empty MATCH.
-fn fts_query(query: &str) -> Option<String> {
+pub(crate) fn fts_query(query: &str) -> Option<String> {
     let terms = lexical_terms(query);
     if terms.is_empty() {
         // A question made only of function words has nothing to retrieve on. Returning None is
@@ -219,6 +219,41 @@ pub fn query_asks_about_screen(query: &str) -> bool {
     ]
     .iter()
     .any(|p| q.contains(p))
+}
+
+/// UTC day window implied by the question (`today`, `yesterday`, …). Returns `(from_ms, to_ms)`.
+pub fn query_time_window(query: &str, now_ms: i64) -> Option<(i64, i64)> {
+    let q = query.to_ascii_lowercase();
+    let day_ms = 24 * 60 * 60 * 1000;
+    let today_start = (now_ms / day_ms) * day_ms;
+    if q.contains("yesterday") {
+        return Some((today_start - day_ms, today_start));
+    }
+    if q.contains("today") || q.contains("this morning") || q.contains("earlier today") {
+        return Some((today_start, now_ms));
+    }
+    None
+}
+
+/// True when the agent should pull stored screen frames (visual recall path).
+pub fn query_wants_visual_recall(query: &str, now_ms: i64) -> bool {
+    if query_asks_about_screen(query) {
+        return true;
+    }
+    query_time_window(query, now_ms).is_some_and(|_| {
+        let q = query.to_ascii_lowercase();
+        ["screen", "window", "see", "look", "show", "display", "app"]
+            .iter()
+            .any(|p| q.contains(p))
+    })
+}
+
+/// Default time window for visual-recall frame search.
+pub fn visual_recall_window(query: &str, now_ms: i64) -> (i64, i64) {
+    if let Some(win) = query_time_window(query, now_ms) {
+        return win;
+    }
+    (now_ms - crate::screen_frames::RETENTION_MS, now_ms)
 }
 
 /// FTS over one `event_log.source` tag (e.g. `screen_ocr` for visual recall).
@@ -1072,6 +1107,13 @@ mod warm_window_tests {
     fn screen_query_heuristic_matches_natural_phrases() {
         assert!(query_asks_about_screen("what was on my screen yesterday"));
         assert!(!query_asks_about_screen("vendor pricing email"));
+        assert!(query_wants_visual_recall("what was on my screen yesterday", 0));
+        assert!(query_wants_visual_recall("what did I see on screen today", 86_400_000));
+        let Some((from, to)) = query_time_window("yesterday", 86_400_000 * 2) else {
+            panic!("expected window");
+        };
+        assert_eq!(from, 0);
+        assert_eq!(to, 86_400_000);
     }
 
     #[test]

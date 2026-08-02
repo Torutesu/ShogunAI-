@@ -1,8 +1,9 @@
-//! Visual recall settings (issue #107, decision B: OCR-then-discard).
+//! Visual recall settings (issue #107).
 //!
 //! When enabled, the macOS adapter may capture a focused window into RAM, run on-device OCR
-//! (Apple Vision), persist **text + provenance** only, and discard pixels immediately. Default
-//! is **off** — same opt-in posture as meeting notes (FR-MT-01).
+//! (Apple Vision), persist text + provenance, and optionally retain compressed JPEG frames
+//! for ≤72 h (`screen_frames` — explicit invariant-2 exception, user decision 2026-08-02).
+//! Default is **off**.
 
 /// Persisted visual-recall preference. Default off; serde defaults keep partial files safe.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

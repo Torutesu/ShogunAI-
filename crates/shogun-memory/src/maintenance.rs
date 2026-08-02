@@ -68,6 +68,7 @@ pub struct DeleteReport {
     pub threads: usize,
     pub sessions: usize,
     pub session_notes: usize,
+    pub screen_frames: usize,
     pub traceability: usize,
 }
 
@@ -93,6 +94,7 @@ pub fn delete_all(conn: &mut Connection) -> Result<DeleteReport, rusqlite::Error
     // Meeting notes are the user's own words — the most personal rows here — and they reference
     // sessions, so they go before them (FR-MT-10).
     let session_notes = tx.execute("DELETE FROM session_notes", [])?;
+    let screen_frames = tx.execute("DELETE FROM screen_frames", [])?;
     // Sessions hold the meeting's title, summary and decisions — user data, and referenced by
     // event_log, so they go after it (FR-SET-07, FR-MT-05).
     let sessions = tx.execute("DELETE FROM sessions", [])?;
@@ -109,6 +111,7 @@ pub fn delete_all(conn: &mut Connection) -> Result<DeleteReport, rusqlite::Error
         threads,
         sessions,
         session_notes,
+        screen_frames,
         traceability,
     })
 }
