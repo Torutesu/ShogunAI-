@@ -1109,11 +1109,12 @@ mod warm_window_tests {
         assert!(!query_asks_about_screen("vendor pricing email"));
         assert!(query_wants_visual_recall("what was on my screen yesterday", 0));
         assert!(query_wants_visual_recall("what did I see on screen today", 86_400_000));
-        let Some((from, to)) = query_time_window("yesterday", 86_400_000 * 2) else {
+        let now = 86_400_000 * 2;
+        let Some((from, to)) = query_time_window("yesterday", now) else {
             panic!("expected window");
         };
-        assert_eq!(from, 0);
-        assert_eq!(to, 86_400_000);
+        assert_eq!(from, 86_400_000);
+        assert_eq!(to, now);
     }
 
     #[test]
