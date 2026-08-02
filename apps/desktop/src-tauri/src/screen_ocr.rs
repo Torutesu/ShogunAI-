@@ -109,11 +109,13 @@ pub fn ocr_focused_window_gated(
     window_title: Option<&str>,
     ax_empty: bool,
     ax_text_len: usize,
+    meeting_active: bool,
 ) -> pipeline::OcrOutcome {
     let Some((cg, frame)) = capture_focused_window(pid) else {
         return pipeline::OcrOutcome::Skipped;
     };
-    let trigger = pipeline::wants_ocr(bundle_or_app, window_title, ax_empty, ax_text_len);
+    let trigger =
+        pipeline::wants_ocr(bundle_or_app, window_title, ax_empty, ax_text_len, meeting_active);
     pipeline.ocr_gated_window(&frame, app_key, trigger, |_, crop| {
         let rect = CGRect::new(
             &CGPoint::new(f64::from(crop.x), f64::from(crop.y)),

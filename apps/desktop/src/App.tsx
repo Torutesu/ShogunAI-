@@ -1298,12 +1298,34 @@ function MeetingSection(): JSX.Element {
 function VisualRecallSection(): JSX.Element {
   const [on, setOn] = useState(false);
   const [busy, setBusy] = useState(false);
+  type RecallStatus = {
+    enabled: boolean;
+    events_24h: number;
+    recent: {
+      ts: number;
+      app: string | null;
+      window: string | null;
+      chars: number;
+      excerpt: string;
+    }[];
+  };
+  const [status, setStatus] = useState<RecallStatus | null>(null);
+
+  const refreshStatus = (): void => {
+    if (!IN_TAURI) return;
+    void invoke<RecallStatus>("get_visual_recall_status")
+      .then(setStatus)
+      .catch(() => undefined);
+  };
 
   useEffect(() => {
     if (!IN_TAURI) return;
     void invoke<{ enabled: boolean }>("get_visual_recall_settings")
       .then((s) => setOn(s.enabled))
       .catch(() => undefined);
+    refreshStatus();
+    const id = window.setInterval(refreshStatus, 12_000);
+    return () => window.clearInterval(id);
   }, []);
 
   const toggle = (next: boolean): void => {
@@ -1314,10 +1336,21 @@ function VisualRecallSection(): JSX.Element {
     setBusy(true);
     setOn(next);
     void invoke("set_visual_recall_enabled", { enabled: next })
-      .then(() => undefined)
+      .then(() => refreshStatus())
       .catch(() => setOn(!next))
       .finally(() => setBusy(false));
   };
+
+  const latest = status?.recent[0];
+  const statusLine = !on
+    ? t.visualRecallStatusOff
+    : latest
+      ? t.visualRecallStatusLive(
+          latest.chars,
+          latest.app ?? "an app",
+          latest.window ?? "",
+        )
+      : t.visualRecallStatusIdle;
 
   return (
     <section className="set">
@@ -1345,6 +1378,22 @@ function VisualRecallSection(): JSX.Element {
         </button>
       </div>
       <div className="set__hint">{t.visualRecallHint}</div>
+      <div className="set__hint set__hint--quiet">{statusLine}</div>
+      {on && status && status.recent.length > 0 ? (
+        <div className="set__hint set__hint--quiet">
+          <div>{t.visualRecallTimeline}</div>
+          <ul className="set__list">
+            {status.recent.slice(0, 3).map((row) => (
+              <li key={row.ts}>
+                {(row.app ?? "app") + (row.window ? ` · ${row.window}` : "")} — {row.chars} chars
+                {row.excerpt ? `: ${row.excerpt}` : ""}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : on ? (
+        <div className="set__hint set__hint--quiet">{t.visualRecallTimelineEmpty}</div>
+      ) : null}
       <div className="set__hint set__hint--quiet">{t.visualRecallDisclosure}</div>
     </section>
   );

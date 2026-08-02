@@ -37,14 +37,23 @@ pub fn app_prefers_ocr(bundle_or_app: &str) -> bool {
 }
 
 /// AX tree returned text but likely missed canvas/GPU document body (Screenpipe thin heuristic).
-pub fn a11y_content_is_thin(window_title: Option<&str>, ax_text_len: usize) -> bool {
+pub fn a11y_content_is_thin(window_title: Option<&str>, ax_text_len: usize, meeting_active: bool) -> bool {
     if let Some(win) = window_title {
         let win_lower = win.to_lowercase();
         if CANVAS_APP_PATTERNS.iter().any(|pat| win_lower.contains(pat)) {
             return true;
         }
+        if meeting_active
+            && (win_lower.contains("presentation")
+                || win_lower.contains("slide")
+                || win_lower.contains("share")
+                || win_lower.contains("screen share"))
+        {
+            return true;
+        }
     }
-    ax_text_len < 100
+    let thin_threshold = if meeting_active { 400 } else { 100 };
+    ax_text_len < thin_threshold
 }
 
 /// Pre-gate OCR triggers from Screenpipe `paired_capture` (minus meeting-only gate).
@@ -53,10 +62,11 @@ pub fn wants_ocr(
     window_title: Option<&str>,
     ax_empty: bool,
     ax_text_len: usize,
+    meeting_active: bool,
 ) -> bool {
     let prefers = app_prefers_ocr(bundle_or_app);
     let has_ax = !prefers && !ax_empty;
-    let thin = has_ax && a11y_content_is_thin(window_title, ax_text_len);
+    let thin = has_ax && a11y_content_is_thin(window_title, ax_text_len, meeting_active);
     prefers || !has_ax || thin
 }
 
@@ -133,12 +143,12 @@ mod tests {
 
     #[test]
     fn terminals_always_want_ocr() {
-        assert!(wants_ocr("com.github.wez.wezterm", None, false, 5000));
+        assert!(wants_ocr("com.github.wez.wezterm", None, false, 5000, false));
     }
 
     #[test]
     fn rich_ax_skips_ocr() {
-        assert!(!wants_ocr("com.apple.Safari", Some("Inbox"), false, 500));
+        assert!(!wants_ocr("com.apple.Safari", Some("Inbox"), false, 500, false));
     }
 
     #[test]
@@ -147,7 +157,14 @@ mod tests {
             "com.google.Chrome",
             Some("Q1 Plan - Google Docs"),
             false,
-            200
+            200,
+            false
         ));
+    }
+
+    #[test]
+    fn meeting_relaxes_thin_threshold() {
+        assert!(!wants_ocr("com.apple.Safari", Some("Inbox"), false, 250, true));
+        assert!(wants_ocr("com.apple.Safari", Some("Slide deck"), false, 250, true));
     }
 }

@@ -392,7 +392,7 @@ impl Db {
         text: &str,
         dwell_ms: i64,
     ) -> Option<(i64, bool, Vec<i64>)> {
-        self.ingest_text_event("capture", bundle_id, window_title, text, dwell_ms)
+        self.ingest_text_event("capture", bundle_id, window_title, text, dwell_ms, None)
     }
 
     /// Ingest on-device screen OCR text (issue #107, decision B). Source is `screen_ocr`; pixels
@@ -403,8 +403,9 @@ impl Db {
         window_title: Option<&str>,
         text: &str,
         dwell_ms: i64,
+        display_id: Option<i64>,
     ) -> Option<(i64, bool, Vec<i64>)> {
-        self.ingest_text_event("screen_ocr", bundle_id, window_title, text, dwell_ms)
+        self.ingest_text_event("screen_ocr", bundle_id, window_title, text, dwell_ms, display_id)
     }
 
     fn ingest_text_event(
@@ -414,6 +415,7 @@ impl Db {
         window_title: Option<&str>,
         text: &str,
         dwell_ms: i64,
+        display_id: Option<i64>,
     ) -> Option<(i64, bool, Vec<i64>)> {
         let ev = NewEvent {
             ts: self.now_ms(),
@@ -424,7 +426,7 @@ impl Db {
             content: text,
             content_hash: "", // ignored — capture_collapsed decides it
             dwell_ms,
-            display_id: None,
+            display_id,
             window_bounds: None,
         };
         let (id, touched) = self.capture_collapsed(&ev)?;
@@ -971,7 +973,26 @@ impl Db {
     /// Event-log hits and meeting-interval hits (recap + transcript) are merged by relevance score
     /// so a question about a specific past meeting surfaces that session, not whatever ended last.
     fn assemble_evidence(&self, query: &str, max_hits: usize, excerpt_chars: usize) -> Vec<Evidence> {
-        let event_hits = self.search(query, max_hits);
+        let mut event_hits = self.search(query, max_hits);
+        if shogun_memory::search::query_asks_about_screen(query) {
+            let ocr_hits = self.search_source(query, "screen_ocr", max_hits);
+            let seen: std::collections::HashSet<i64> = event_hits.iter().map(|h| h.event_id).collect();
+            for mut h in ocr_hits {
+                if seen.contains(&h.event_id) {
+                    continue;
+                }
+                // Slight boost so OCR text wins ties when the question is about the screen.
+                h.score *= 1.15;
+                event_hits.push(h);
+            }
+            event_hits.sort_by(|a, b| {
+                b.score
+                    .partial_cmp(&a.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then(b.ts.cmp(&a.ts))
+            });
+            event_hits.truncate(max_hits);
+        }
         let meeting_hits = self.search_meetings(query, max_hits);
 
         let mut ranked: Vec<(f64, Evidence)> = Vec::with_capacity(event_hits.len() + meeting_hits.len());
@@ -1680,6 +1701,55 @@ impl Db {
                     .ok()
             })
             .unwrap_or_default()
+    }
+
+    /// FTS search scoped to one event-log `source` (visual recall uses `screen_ocr`).
+    pub fn search_source(
+        &self,
+        query: &str,
+        source: &str,
+        limit: usize,
+    ) -> Vec<shogun_memory::search::SearchHit> {
+        if query.trim().is_empty() {
+            return Vec::new();
+        }
+        self.conn
+            .lock()
+            .ok()
+            .and_then(|c| {
+                let ids = shogun_memory::search::fts_search_source(&c, query, source, limit).ok()?;
+                let ranked: Vec<(i64, f64)> =
+                    ids.into_iter().enumerate().map(|(i, id)| (id, 1.0 / (i as f64 + 1.0))).collect();
+                shogun_memory::search::hydrate(&c, &ranked).ok()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Recent on-device screen OCR previews for settings / Full UI (text only, no pixels).
+    pub fn screen_ocr_previews(
+        &self,
+        limit: usize,
+        excerpt_chars: usize,
+    ) -> Vec<shogun_memory::event_log::RecentEventPreview> {
+        self.conn
+            .lock()
+            .ok()
+            .and_then(|c| {
+                shogun_memory::event_log::recent_previews_by_source(&c, "screen_ocr", limit, excerpt_chars)
+                    .ok()
+            })
+            .unwrap_or_default()
+    }
+
+    /// How many `screen_ocr` events landed in the last 24 hours.
+    pub fn screen_ocr_count_24h(&self) -> i64 {
+        let now = self.now_ms();
+        let since = now - 24 * 60 * 60 * 1000;
+        self.conn
+            .lock()
+            .ok()
+            .and_then(|c| shogun_memory::event_log::count_source_in_range(&c, "screen_ocr", since, now).ok())
+            .unwrap_or(0)
     }
 
     /// Open loops as Fusion/Brief input (stalest first; the Brief caps the count). Closed loops

@@ -154,6 +154,7 @@ pub fn run() {
         meeting::mac::meeting_overlay_set_interactive,
         visual_recall::mac::get_visual_recall_settings,
         visual_recall::mac::set_visual_recall_enabled,
+        visual_recall::mac::get_visual_recall_status,
         notch_actions::mac::notch_actions,
         notch_exec::mac::run_notch_action,
         notch_exec::mac::confirm_notch_action,

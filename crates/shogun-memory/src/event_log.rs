@@ -138,6 +138,61 @@ pub fn recent_capture_bodies(
     recent_source_bodies(conn, "capture", limit)
 }
 
+/// Metadata + short excerpt for recent events from one `source` (settings / Full UI).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecentEventPreview {
+    pub id: i64,
+    pub ts: i64,
+    pub app_bundle_id: Option<String>,
+    pub window_title: Option<String>,
+    pub excerpt: String,
+    pub content_len: usize,
+    pub dwell_ms: i64,
+    pub display_id: Option<i64>,
+}
+
+/// Newest-first previews for a source. Excerpt is capped; full body is never returned.
+pub fn recent_previews_by_source(
+    conn: &Connection,
+    source: &str,
+    limit: usize,
+    excerpt_chars: usize,
+) -> Result<Vec<RecentEventPreview>, rusqlite::Error> {
+    let cap = excerpt_chars.max(1) as i64;
+    let mut stmt = conn.prepare(
+        "SELECT id, ts, app_bundle_id, window_title,
+                substr(content, 1, ?3), length(content), dwell_ms, display_id
+         FROM event_log WHERE source = ?1 ORDER BY id DESC LIMIT ?2",
+    )?;
+    let rows = stmt.query_map(params![source, limit as i64, cap], |r| {
+        Ok(RecentEventPreview {
+            id: r.get(0)?,
+            ts: r.get(1)?,
+            app_bundle_id: r.get(2)?,
+            window_title: r.get(3)?,
+            excerpt: r.get::<_, String>(4)?.trim().to_string(),
+            content_len: r.get::<_, i64>(5)? as usize,
+            dwell_ms: r.get(6)?,
+            display_id: r.get(7)?,
+        })
+    })?;
+    rows.collect()
+}
+
+/// Count events from `source` in `[from_ts, to_ts)`.
+pub fn count_source_in_range(
+    conn: &Connection,
+    source: &str,
+    from_ts: i64,
+    to_ts: i64,
+) -> Result<i64, rusqlite::Error> {
+    conn.query_row(
+        "SELECT count(*) FROM event_log WHERE source = ?1 AND ts >= ?2 AND ts < ?3",
+        params![source, from_ts, to_ts],
+        |r| r.get(0),
+    )
+}
+
 /// One event's id and content, for the Dream Cycle consolidation pass (which classifies a day's
 /// events). Content is included because consolidation reads it; callers that only need metadata
 /// use the state reads instead.

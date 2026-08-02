@@ -11,8 +11,8 @@ description = "SHOGUN Phase 0 notch-UI spike shell (throwaway; macOS/arm64 only)
 # member that resolves but is not built; `cargo test -p spike-harness` stays green.
 
 [features]
-default = []
-# Issue #107 screen OCR — off until Vision OCR module compiles (sibling agent).
+default = ["visual-recall-ocr"]
+# Issue #106/#107 screen OCR (decision B: OCR-then-discard). Disable for headless CI if needed.
 visual-recall-ocr = []
 
 [lib]

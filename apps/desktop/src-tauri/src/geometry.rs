@@ -131,4 +131,9 @@ pub mod mac {
             display_count,
         })
     }
+
+    /// Spatial-ready display id for the primary screen (menubar owner). v1 uses index 0.
+    pub fn primary_display_id() -> i64 {
+        0
+    }
 }

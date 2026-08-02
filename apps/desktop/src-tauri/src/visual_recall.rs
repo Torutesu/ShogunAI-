@@ -86,4 +86,43 @@ pub mod mac {
         );
         Ok(())
     }
+
+    #[derive(serde::Serialize)]
+    pub struct VisualRecallSnippet {
+        pub ts: i64,
+        pub app: Option<String>,
+        pub window: Option<String>,
+        pub chars: usize,
+        pub dwell_ms: i64,
+        pub display_id: Option<i64>,
+        pub excerpt: String,
+    }
+
+    #[derive(serde::Serialize)]
+    pub struct VisualRecallStatus {
+        pub enabled: bool,
+        pub events_24h: i64,
+        pub recent: Vec<VisualRecallSnippet>,
+    }
+
+    /// Settings + live timeline for visual recall (issue #106). Text excerpts only — no pixels.
+    #[tauri::command]
+    pub fn get_visual_recall_status(db: tauri::State<'_, shogun_core::daemon::Db>) -> VisualRecallStatus {
+        const PREVIEW_CHARS: usize = 140;
+        let enabled = get_visual_recall_settings().enabled;
+        let recent = db
+            .screen_ocr_previews(5, PREVIEW_CHARS)
+            .into_iter()
+            .map(|p| VisualRecallSnippet {
+                ts: p.ts,
+                app: p.app_bundle_id,
+                window: p.window_title,
+                chars: p.content_len,
+                dwell_ms: p.dwell_ms,
+                display_id: p.display_id,
+                excerpt: p.excerpt,
+            })
+            .collect();
+        VisualRecallStatus { enabled, events_24h: db.screen_ocr_count_24h(), recent }
+    }
 }

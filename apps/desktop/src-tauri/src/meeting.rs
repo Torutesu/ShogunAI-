@@ -105,6 +105,14 @@ use shogun_core::meeting::gate::OfferGate;
         session_id > 0 && LIVE_EMIT_SESSION.load(Ordering::Acquire) == session_id
     }
 
+    /// True while a meeting interval is open (capture poller uses this for screen-OCR fusion).
+    pub fn is_recording() -> bool {
+        LANE.lock()
+            .ok()
+            .and_then(|g| g.as_ref().map(|l| l.machine.state() == State::Recording))
+            .unwrap_or(false)
+    }
+
     fn set_live_emit_session(session_id: i64) {
         LIVE_EMIT_SESSION.store(session_id, Ordering::Release);
     }

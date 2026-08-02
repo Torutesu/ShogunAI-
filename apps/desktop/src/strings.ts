@@ -211,6 +211,13 @@ export const STRINGS = {
     visualRecallOff: "Off",
     visualRecallDisclosure:
       "Requires Screen Recording permission for the focused window only. Frames stay in memory, text is recognized on this Mac, then pixels are discarded. Nothing is uploaded.",
+    visualRecallStatusOff: "Off — no screen pixels are read.",
+    visualRecallStatusIdle:
+      "On — waiting for a window that needs OCR (canvas apps, terminals, or thin accessibility text).",
+    visualRecallStatusLive: (n: number, app: string, window: string) =>
+      `On — last read ${n} chars from ${app}${window ? ` · ${window}` : ""}.`,
+    visualRecallTimeline: "Recent screen text",
+    visualRecallTimelineEmpty: "No screen text stored yet — OCR runs when a window needs it.",
     // FR-MT-03 disclosure family. Must match MT3 (invariant 2): on-device audio during approved
     // meetings, no recording/waveform/audio file to disk/temp/cloud — transcript + provenance only.
     // Reuse these keys everywhere; never claim we do not listen while ASR runs.

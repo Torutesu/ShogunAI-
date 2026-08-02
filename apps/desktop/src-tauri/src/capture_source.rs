@@ -70,13 +70,14 @@ mod mac {
             window_title: Option<&str>,
             ax_empty: bool,
             ax_text_len: usize,
+            meeting_active: bool,
             now: Instant,
         ) -> bool {
             let focus_changed = self.last_focus_key.as_deref() != Some(focus_key);
             if focus_changed {
                 return true;
             }
-            if !pipeline::wants_ocr(bundle_id, window_title, ax_empty, ax_text_len) {
+            if !pipeline::wants_ocr(bundle_id, window_title, ax_empty, ax_text_len, meeting_active) {
                 return false;
             }
             match self.last_ocr_at {
@@ -155,7 +156,16 @@ mod mac {
         }
         let now = Instant::now();
         let key = focus_key(bundle_id, title);
-        if !poll_gate.should_run(&key, bundle_id, title, ax_empty, ax_text_len, now) {
+        let meeting_active = crate::meeting::mac::is_recording();
+        if !poll_gate.should_run(
+            &key,
+            bundle_id,
+            title,
+            ax_empty,
+            ax_text_len,
+            meeting_active,
+            now,
+        ) {
             return;
         }
         let outcome = screen_ocr::ocr_focused_window_gated(
@@ -166,6 +176,7 @@ mod mac {
             title,
             ax_empty,
             ax_text_len,
+            meeting_active,
         );
         let text = match outcome {
             pipeline::OcrOutcome::Text(t) => t,
@@ -175,7 +186,8 @@ mod mac {
             }
         };
         let digest = screen_ocr::text_digest(&text);
-        match db.ingest_screen_ocr(Some(bundle_id), title, &text, dwell_ms) {
+        let display_id = Some(crate::geometry::mac::primary_display_id());
+        match db.ingest_screen_ocr(Some(bundle_id), title, &text, dwell_ms, display_id) {
             Some((id, touched, cands)) => {
                 eprintln!(
                     "[screen_ocr] {} {} chars digest={digest:#x} → event {id} {} (+{} candidate(s))",

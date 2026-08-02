@@ -188,6 +188,61 @@ fn is_cjk(c: char) -> bool {
     )
 }
 
+/// Human label for evidence citations (FR-MEM-23). Raw `source` tags stay in the DB.
+pub fn evidence_source_label(source: &str) -> String {
+    match source {
+        "screen_ocr" => "screen text".to_string(),
+        "capture" => "window".to_string(),
+        "meeting" => "meeting".to_string(),
+        "gmail" => "mail".to_string(),
+        "gcal" => "calendar".to_string(),
+        "slack" => "chat".to_string(),
+        "notion" => "doc".to_string(),
+        "github" => "code".to_string(),
+        "linear" => "issue".to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// True when the question is likely about on-screen content (visual recall path).
+pub fn query_asks_about_screen(query: &str) -> bool {
+    let q = query.to_ascii_lowercase();
+    [
+        "on my screen",
+        "on screen",
+        "what was on",
+        "what did i see",
+        "shown on",
+        "displayed on",
+        "looking at",
+        "on my display",
+    ]
+    .iter()
+    .any(|p| q.contains(p))
+}
+
+/// FTS over one `event_log.source` tag (e.g. `screen_ocr` for visual recall).
+pub fn fts_search_source(
+    conn: &Connection,
+    query: &str,
+    source: &str,
+    limit: usize,
+) -> Result<Vec<i64>, rusqlite::Error> {
+    let Some(expr) = fts_query(query) else {
+        return Ok(Vec::new());
+    };
+    let mut stmt = conn.prepare(
+        "SELECT f.rowid FROM event_fts f
+         INNER JOIN event_log e ON e.id = f.rowid
+         WHERE event_fts MATCH ?1 AND e.source = ?2
+         ORDER BY bm25(event_fts) LIMIT ?3",
+    )?;
+    let ids = stmt
+        .query_map(params![expr, source, limit as i64], |r| r.get::<_, i64>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(ids)
+}
+
 /// Full-text search over the event log, best-match first, capped at `limit`. Returns event
 /// ids ordered by bm25 relevance (SQLite's bm25 is more-negative-is-better, so ascending).
 pub fn fts_search(conn: &Connection, query: &str, limit: usize) -> Result<Vec<i64>, rusqlite::Error> {
@@ -1011,5 +1066,29 @@ mod warm_window_tests {
             hits.iter().all(|h| h.ts > now - WARM_WINDOW_MS),
             "the old row must not appear when the window sufficed"
         );
+    }
+
+    #[test]
+    fn screen_query_heuristic_matches_natural_phrases() {
+        assert!(query_asks_about_screen("what was on my screen yesterday"));
+        assert!(!query_asks_about_screen("vendor pricing email"));
+    }
+
+    #[test]
+    fn fts_search_source_scopes_to_one_tag() {
+        let conn = crate::open_in_memory().unwrap();
+        add(&conn, "quarterly roadmap slide text", "ocr1", 1_000);
+        conn.execute(
+            "UPDATE event_log SET source = 'screen_ocr' WHERE content_hash = 'ocr1'",
+            [],
+        )
+        .unwrap();
+        add(&conn, "quarterly roadmap from accessibility", "cap1", 1_100);
+
+        let ocr_ids = fts_search_source(&conn, "roadmap", "screen_ocr", 5).unwrap();
+        assert_eq!(ocr_ids.len(), 1);
+        let cap_ids = fts_search_source(&conn, "roadmap", "capture", 5).unwrap();
+        assert_eq!(cap_ids.len(), 1);
+        assert_ne!(ocr_ids[0], cap_ids[0]);
     }
 }
