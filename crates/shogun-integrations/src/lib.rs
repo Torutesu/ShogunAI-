@@ -30,6 +30,9 @@ pub mod transport;
 /// macOS Keychain token store — no network, so not behind `live`.
 #[cfg(target_os = "macos")]
 pub mod keychain;
+/// Shared Keychain read/write with stable ACL + in-process cache.
+#[cfg(target_os = "macos")]
+pub mod keychain_store;
 #[cfg(feature = "live")]
 pub mod oauth_flow;
 

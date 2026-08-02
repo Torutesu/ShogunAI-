@@ -19,7 +19,8 @@ mod mac {
     use shogun_core::llm::{LlmError, Secret, SelectKkKey};
     use tauri::Emitter;
 
-    const KEYCHAIN_SERVICE: &str = "SHOGUN";
+    use shogun_integrations::keychain_store;
+
     const SELECT_KK_ACCOUNT: &str = "select-kk-batch";
     const TRANSLATE_MODEL: &str = "claude-haiku-4-5-20251001";
     const TRANSLATE_PURPOSE: &str = "meeting_live_translate";
@@ -60,7 +61,7 @@ mod mac {
     }
 
     fn select_kk_key() -> Option<String> {
-        security_framework::passwords::get_generic_password(KEYCHAIN_SERVICE, SELECT_KK_ACCOUNT)
+        keychain_store::get_generic_secret(SELECT_KK_ACCOUNT)
             .ok()
             .and_then(|b| String::from_utf8(b).ok())
             .map(|s| s.trim().to_string())

@@ -35,7 +35,7 @@ pub mod mac {
     use shogun_core::llm::{AgentClient, ByokKey, LlmError, MockAgentClient, Secret};
 
     /// The Keychain service the BYOK keys live under (invariant 7).
-    const KEYCHAIN_SERVICE: &str = "com.selectkk.shogun";
+    use shogun_integrations::keychain_store;
 
     // ---- Agent-lane provider settings (provider + model; NON-secret, so a JSON file is fine —
     // ---- the KEY always stays in the Keychain, one account per provider) ----------------------
@@ -454,7 +454,7 @@ pub mod mac {
     /// Read the ACTIVE provider's BYOK key from the Keychain (invariant 7 — never a
     /// file/env/DB/log). `None` if unset.
     fn keychain_byok(provider: &str) -> Option<String> {
-        security_framework::passwords::get_generic_password(KEYCHAIN_SERVICE, keychain_account(provider))
+        keychain_store::get_generic_secret(keychain_account(provider))
             .ok()
             .and_then(|bytes| String::from_utf8(bytes).ok())
     }
@@ -472,11 +472,7 @@ pub mod mac {
         if key.is_empty() {
             return Err("key is empty".into());
         }
-        security_framework::passwords::set_generic_password(
-            KEYCHAIN_SERVICE,
-            keychain_account(&provider),
-            key.as_bytes(),
-        )
+        keychain_store::set_generic_secret(keychain_account(&provider), key.as_bytes())
         .map_err(|e| e.to_string())?;
         eprintln!("[inline] BYOK key saved to Keychain (provider: {provider})");
         refresh_has_key();
@@ -489,7 +485,7 @@ pub mod mac {
         if !PROVIDERS.contains(&provider.as_str()) {
             return Err(format!("unknown provider: {provider}"));
         }
-        security_framework::passwords::delete_generic_password(KEYCHAIN_SERVICE, keychain_account(&provider))
+        keychain_store::delete_generic_secret(keychain_account(&provider))
             .map_err(|e| e.to_string())?;
         eprintln!("[inline] BYOK key removed from Keychain (provider: {provider})");
         refresh_has_key();

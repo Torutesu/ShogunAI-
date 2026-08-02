@@ -29,6 +29,7 @@ pub mod mac {
         cycle_id, input_range, local_time, run_batch_cycle, window_position, DreamScheduler,
         DEFAULT_LOOKBACK_MS, DEFAULT_WINDOW_END_HOUR, DEFAULT_WINDOW_START_HOUR,
     };
+    use shogun_integrations::keychain_store;
 
     /// How often the driver re-evaluates the gate. The gate itself decides whether anything happens;
     /// ticking every 5 minutes just means a machine that goes idle at 02:07 does not wait for 03:00.
@@ -60,7 +61,6 @@ pub mod mac {
     /// shipped binary carrying the operator's key can be extracted, and spend caps become
     /// unenforceable. The shipping design puts a licence token here and a Select-operated relay in
     /// front of the Batch API: docs/batch-relay-design.md.
-    const KEYCHAIN_SERVICE: &str = "SHOGUN";
     const SELECT_KK_ACCOUNT: &str = "select-kk-batch";
 
     /// Guards a manual run against the nightly one. Both would write the same ledger rows, and while
@@ -257,7 +257,7 @@ pub mod mac {
     /// The Select KK key, if this build has been provisioned with one. Absent is the normal case
     /// today: the cycle then runs the local lane rather than not running.
     fn select_kk_key() -> Option<String> {
-        security_framework::passwords::get_generic_password(KEYCHAIN_SERVICE, SELECT_KK_ACCOUNT)
+        keychain_store::get_generic_secret(SELECT_KK_ACCOUNT)
             .ok()
             .and_then(|b| String::from_utf8(b).ok())
             .map(|s| s.trim().to_string())

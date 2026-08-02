@@ -4060,8 +4060,11 @@ name = "shogun-integrations"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "core-foundation",
+ "core-foundation-sys",
  "getrandom 0.3.4",
  "security-framework",
+ "security-framework-sys",
  "serde",
  "serde_json",
  "sha2",

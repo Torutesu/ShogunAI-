@@ -241,6 +241,18 @@ fn setup_macos(app: &tauri::App) {
     eprintln!("[shell] SHOGUN starting — pid {} — build: plain-window/drag/quit", std::process::id());
     eprintln!("========================================================");
 
+    // Re-save known secrets with an open Keychain ACL so debug rebuilds stop invalidating
+    // "Always Allow". May prompt once per existing item on first launch after this update.
+    shogun_integrations::keychain_store::repair_dev_acls(&[
+        "memory-db-key",
+        "select-kk-batch",
+        "composio-api-key",
+        "anthropic-byok",
+        "openrouter-byok",
+        "openai-byok",
+        "gemini-byok",
+    ]);
+
     // PROVEN by [panelstate]: a Regular app's plain window is REFUSED entry to other apps'
     // Spaces — onActiveSpace/drawn stayed false through hundreds of re-orders with both
     // canJoinAllSpaces (273) and moveToActiveSpace (274). That's an OS wall, not a flag problem.
@@ -1823,8 +1835,8 @@ const DB_KEY_ACCOUNT: &str = "memory-db-key";
 /// memory permanently unreadable.
 #[cfg(target_os = "macos")]
 fn db_key() -> Result<shogun_memory::DbKey, String> {
-    const SERVICE: &str = "com.selectkk.shogun";
-    match security_framework::passwords::get_generic_password(SERVICE, DB_KEY_ACCOUNT) {
+    use shogun_integrations::keychain_store;
+    match keychain_store::get_generic_secret(DB_KEY_ACCOUNT) {
         Ok(bytes) => {
             let hex = String::from_utf8(bytes).map_err(|_| "db key is not valid text".to_string())?;
             shogun_memory::DbKey::from_hex(&hex)
@@ -1835,11 +1847,7 @@ fn db_key() -> Result<shogun_memory::DbKey, String> {
             let mut raw = [0u8; 32];
             getrandom::getrandom(&mut raw).map_err(|e| format!("key generation failed: {e}"))?;
             let key = shogun_memory::DbKey::new(raw);
-            security_framework::passwords::set_generic_password(
-                SERVICE,
-                DB_KEY_ACCOUNT,
-                key.to_hex().as_bytes(),
-            )
+            keychain_store::set_generic_secret(DB_KEY_ACCOUNT, key.to_hex().as_bytes())
             .map_err(|e| format!("could not store the db key: {e}"))?;
             eprintln!("[spike] memory DB key created and stored in the Keychain");
             Ok(key)

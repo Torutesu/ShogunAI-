@@ -26,6 +26,7 @@ mod mac {
     use shogun_core::daemon::Db;
     use shogun_core::meeting::minutes::{self, TranscriptLine};
     use shogun_core::meeting::settings::MeetingLanguage;
+    use shogun_integrations::keychain_store;
     use tauri::{Emitter, Manager};
 
     /// The Recap's Batch model. Small and fast on purpose: a per-meeting summarisation job that
@@ -36,8 +37,7 @@ mod mac {
     const RECAP_MODEL: &str = "claude-haiku-4-5-20251001";
 
     /// Keychain coordinates of the Batch lane's credential — the *same* slot the Dream Cycle reads
-    /// (dream.rs `KEYCHAIN_SERVICE` / `SELECT_KK_ACCOUNT`). One Select KK source, not a second.
-    const KEYCHAIN_SERVICE: &str = "SHOGUN";
+    /// (dream.rs / `SELECT_KK_ACCOUNT`). One Select KK source, not a second.
     const SELECT_KK_ACCOUNT: &str = "select-kk-batch";
 
     /// The traceability `purpose` tag carried on the summary chunk (read back as
@@ -60,7 +60,7 @@ mod mac {
     /// The Select KK key, if this build has been provisioned with one. Absent is a normal state: the
     /// Recap then stays degraded rather than being generated. Read exactly like dream.rs.
     fn select_kk_key() -> Option<String> {
-        security_framework::passwords::get_generic_password(KEYCHAIN_SERVICE, SELECT_KK_ACCOUNT)
+        keychain_store::get_generic_secret(SELECT_KK_ACCOUNT)
             .ok()
             .and_then(|b| String::from_utf8(b).ok())
             .map(|s| s.trim().to_string())
