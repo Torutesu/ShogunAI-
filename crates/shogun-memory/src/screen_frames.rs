@@ -38,6 +38,8 @@ pub struct FrameSummary {
     pub height: u32,
     pub jpeg_bytes: usize,
     pub ocr_text: String,
+    /// Linked event source: `screen_ocr` (auto) or `user_screenshot` (explicit capture).
+    pub source: String,
 }
 
 /// Full frame row including JPEG bytes (for agent re-scan / future vision input).
@@ -60,6 +62,8 @@ pub struct FrameRecallHit {
     pub ocr_excerpt: String,
     /// True when stored OCR text is thin; caller should re-scan the JPEG (Vision path).
     pub needs_rescan: bool,
+    /// Linked event source (`screen_ocr` or `user_screenshot`).
+    pub source: String,
 }
 
 fn map_summary(row: &rusqlite::Row<'_>) -> rusqlite::Result<FrameSummary> {
@@ -74,11 +78,12 @@ fn map_summary(row: &rusqlite::Row<'_>) -> rusqlite::Result<FrameSummary> {
         height: u32::try_from(row.get::<_, i64>(7)?).unwrap_or(0),
         jpeg_bytes: usize::try_from(row.get::<_, i64>(8)?).unwrap_or(0),
         ocr_text: row.get(9)?,
+        source: row.get(10)?,
     })
 }
 
 const SUMMARY_SELECT: &str = "SELECT f.id, f.created_at_ms, f.event_id, f.app_bundle_id, f.window_title,
-    f.display_id, f.width, f.height, length(f.bytes), coalesce(e.content, '')";
+    f.display_id, f.width, f.height, length(f.bytes), coalesce(e.content, ''), coalesce(e.source, 'screen_ocr')";
 
 /// Insert one compressed frame. Returns the new row id.
 pub fn insert(conn: &Connection, frame: &NewFrame<'_>) -> Result<i64, rusqlite::Error> {
@@ -101,6 +106,24 @@ pub fn insert(conn: &Connection, frame: &NewFrame<'_>) -> Result<i64, rusqlite::
 }
 
 /// Lookup by frame row id.
+pub fn get_summary_by_id(
+    conn: &Connection,
+    id: i64,
+) -> Result<Option<FrameSummary>, rusqlite::Error> {
+    conn.query_row(
+        &format!(
+            "{SUMMARY_SELECT}
+             FROM screen_frames f
+             LEFT JOIN event_log e ON e.id = f.event_id
+             WHERE f.id = ?1"
+        ),
+        [id],
+        map_summary,
+    )
+    .optional()
+}
+
+/// Lookup by frame row id, including JPEG bytes.
 pub fn get_by_id(conn: &Connection, id: i64) -> Result<Option<FrameRecord>, rusqlite::Error> {
     let mut stmt = conn.prepare(&format!(
         "{SUMMARY_SELECT}, f.bytes
@@ -113,11 +136,11 @@ pub fn get_by_id(conn: &Connection, id: i64) -> Result<Option<FrameRecord>, rusq
         return Ok(None);
     };
     let summary = map_summary(row)?;
-    let jpeg: Vec<u8> = row.get(10)?;
+    let jpeg: Vec<u8> = row.get(11)?;
     Ok(Some(FrameRecord { summary, jpeg }))
 }
 
-/// Lookup by linked `screen_ocr` event id.
+/// Lookup by linked event id.
 pub fn get_by_event_id(conn: &Connection, event_id: i64) -> Result<Option<FrameRecord>, rusqlite::Error> {
     let mut stmt = conn.prepare(&format!(
         "{SUMMARY_SELECT}, f.bytes
@@ -131,7 +154,7 @@ pub fn get_by_event_id(conn: &Connection, event_id: i64) -> Result<Option<FrameR
         return Ok(None);
     };
     let summary = map_summary(row)?;
-    let jpeg: Vec<u8> = row.get(10)?;
+    let jpeg: Vec<u8> = row.get(11)?;
     Ok(Some(FrameRecord { summary, jpeg }))
 }
 
@@ -164,6 +187,71 @@ pub fn frame_id_for_event(conn: &Connection, event_id: i64) -> Result<Option<i64
     .optional()
 }
 
+/// Latest frame id per event (one query — avoids N+1 in evidence assembly).
+pub fn frame_ids_for_events(
+    conn: &Connection,
+    event_ids: &[i64],
+) -> Result<std::collections::HashMap<i64, i64>, rusqlite::Error> {
+    if event_ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let placeholders = std::iter::repeat("?")
+        .take(event_ids.len())
+        .collect::<Vec<_>>()
+        .join(",");
+    let sql = format!(
+        "SELECT event_id, id FROM screen_frames WHERE event_id IN ({placeholders}) ORDER BY id DESC"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let mut rows = stmt.query(rusqlite::params_from_iter(event_ids.iter()))?;
+    let mut out = std::collections::HashMap::new();
+    while let Some(row) = rows.next()? {
+        let event_id: i64 = row.get(0)?;
+        let frame_id: i64 = row.get(1)?;
+        out.entry(event_id).or_insert(frame_id);
+    }
+    Ok(out)
+}
+
+/// Delete frames older than `cutoff_ms`. Returns rows removed.
+pub fn purge_older_than(conn: &Connection, cutoff_ms: i64) -> Result<usize, rusqlite::Error> {
+    conn.execute("DELETE FROM screen_frames WHERE created_at_ms < ?1", [cutoff_ms])
+}
+
+/// Delete auto-capture frames only (`screen_ocr` events). User-initiated shots are kept.
+pub fn purge_auto_only(conn: &Connection) -> Result<usize, rusqlite::Error> {
+    conn.execute(
+        "DELETE FROM screen_frames WHERE event_id IN (
+            SELECT id FROM event_log WHERE source = 'screen_ocr'
+         )",
+        [],
+    )
+}
+
+/// Delete one frame and its now-orphaned visual-recall event atomically.
+pub fn delete_by_id(conn: &mut Connection, id: i64) -> Result<bool, rusqlite::Error> {
+    let tx = conn.transaction()?;
+    let event_id: Option<i64> = tx
+        .query_row("SELECT event_id FROM screen_frames WHERE id = ?1", [id], |r| r.get(0))
+        .optional()?;
+    let Some(event_id) = event_id else {
+        return Ok(false);
+    };
+    let removed = tx.execute("DELETE FROM screen_frames WHERE id = ?1", [id])?;
+    if removed == 0 {
+        return Ok(false);
+    }
+    tx.execute(
+        "DELETE FROM event_log
+         WHERE id = ?1
+           AND source IN ('screen_ocr', 'user_screenshot')
+           AND NOT EXISTS (SELECT 1 FROM screen_frames WHERE event_id = ?1)",
+        [event_id],
+    )?;
+    tx.commit()?;
+    Ok(true)
+}
+
 /// Search frames for visual-recall questions: FTS on linked OCR text, scoped to a time window.
 pub fn search_for_recall(
     conn: &Connection,
@@ -181,7 +269,7 @@ pub fn search_for_recall(
              INNER JOIN event_log e ON e.id = f.event_id
              INNER JOIN event_fts fts ON fts.rowid = e.id
              WHERE f.created_at_ms >= ?1 AND f.created_at_ms <= ?2
-               AND event_fts MATCH ?3 AND e.source = 'screen_ocr'
+               AND event_fts MATCH ?3 AND e.source IN ('screen_ocr', 'user_screenshot')
              ORDER BY bm25(event_fts), f.created_at_ms DESC
              LIMIT ?4"
         ))?;
@@ -218,12 +306,8 @@ fn recall_hit_from_summary(s: &FrameSummary, excerpt_chars: usize) -> FrameRecal
         height: s.height,
         ocr_excerpt: crate::search::excerpt(&s.ocr_text, "", excerpt_chars),
         needs_rescan,
+        source: s.source.clone(),
     }
-}
-
-/// Delete frames older than `cutoff_ms`. Returns rows removed.
-pub fn purge_older_than(conn: &Connection, cutoff_ms: i64) -> Result<usize, rusqlite::Error> {
-    conn.execute("DELETE FROM screen_frames WHERE created_at_ms < ?1", [cutoff_ms])
 }
 
 /// Aggregate stats for settings / status surfaces (no pixel payload).
@@ -338,5 +422,33 @@ mod tests {
         let listed = list_in_range(&conn, 2_000, 6_000, 10).unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].event_id, e2);
+    }
+
+    #[test]
+    fn delete_removes_orphan_event_in_same_transaction() {
+        let mut conn = crate::open_in_memory().unwrap();
+        let event_id = seed_event(&conn, 1_000, "private screen text");
+        let first = seed_frame(&conn, 1_000, event_id, b"a");
+        let second = seed_frame(&conn, 1_001, event_id, b"b");
+
+        assert!(delete_by_id(&mut conn, first).unwrap());
+        let event_exists: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM event_log WHERE id = ?1)",
+                [event_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(event_exists);
+
+        assert!(delete_by_id(&mut conn, second).unwrap());
+        let event_exists: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM event_log WHERE id = ?1)",
+                [event_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(!event_exists);
     }
 }

@@ -112,11 +112,23 @@ pub fn insert_or_touch_with_thread(
     }
 }
 
-/// The most recent capture bodies `(content_hash, content)`, newest first, for the near-duplicate
-/// collapse (FR-CAP-03). Scoped to `source = 'capture'` (only re-read window bodies collapse; user
-/// notes and integration events are distinct). `limit` bounds the comparison cost.
-/// Recent `(content_hash, content)` pairs for near-dup collapse (FR-CAP-03). Scoped to one
-/// `source` so OCR re-reads do not collapse against AX captures and vice versa.
+/// Replace event text after a Vision re-scan (visual recall). Updates `content_hash` for FTS.
+pub fn update_content_and_hash(
+    conn: &Connection,
+    event_id: i64,
+    content: &str,
+    content_hash: &str,
+) -> Result<bool, rusqlite::Error> {
+    let content = crate::redact::redact(content);
+    let n = conn.execute(
+        "UPDATE event_log SET content = ?1, content_hash = ?2 WHERE id = ?3",
+        params![content.as_ref(), content_hash, event_id],
+    )?;
+    Ok(n > 0)
+}
+
+/// The most recent `(content_hash, content)` pairs for near-dup collapse (FR-CAP-03), scoped to
+/// one `source` so OCR re-reads do not collapse against AX captures and vice versa.
 pub fn recent_source_bodies(
     conn: &Connection,
     source: &str,

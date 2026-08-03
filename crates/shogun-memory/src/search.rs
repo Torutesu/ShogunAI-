@@ -221,36 +221,61 @@ pub fn query_asks_about_screen(query: &str) -> bool {
     .any(|p| q.contains(p))
 }
 
-/// UTC day window implied by the question (`today`, `yesterday`, …). Returns `(from_ms, to_ms)`.
-pub fn query_time_window(query: &str, now_ms: i64) -> Option<(i64, i64)> {
+/// Exact local calendar boundaries supplied by the OS-facing caller.
+///
+/// Two boundaries are required because a local day can be 23 or 25 hours across DST changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LocalDayBounds {
+    pub yesterday_start_ms: i64,
+    pub today_start_ms: i64,
+}
+
+fn query_has_word(query: &str, word: &str) -> bool {
+    query
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|part| part == word)
+}
+
+/// Local day window implied by the question (`today`, `yesterday`, …). Returns `(from_ms, to_ms)`.
+pub fn query_time_window(
+    query: &str,
+    now_ms: i64,
+    local_days: LocalDayBounds,
+) -> Option<(i64, i64)> {
     let q = query.to_ascii_lowercase();
-    let day_ms = 24 * 60 * 60 * 1000;
-    let today_start = (now_ms / day_ms) * day_ms;
     if q.contains("yesterday") {
-        return Some((today_start - day_ms, today_start));
+        return Some((local_days.yesterday_start_ms, local_days.today_start_ms));
     }
     if q.contains("today") || q.contains("this morning") || q.contains("earlier today") {
-        return Some((today_start, now_ms));
+        return Some((local_days.today_start_ms, now_ms));
     }
     None
 }
 
 /// True when the agent should pull stored screen frames (visual recall path).
-pub fn query_wants_visual_recall(query: &str, now_ms: i64) -> bool {
+pub fn query_wants_visual_recall(
+    query: &str,
+    now_ms: i64,
+    local_days: LocalDayBounds,
+) -> bool {
     if query_asks_about_screen(query) {
         return true;
     }
-    query_time_window(query, now_ms).is_some_and(|_| {
+    query_time_window(query, now_ms, local_days).is_some_and(|_| {
         let q = query.to_ascii_lowercase();
         ["screen", "window", "see", "look", "show", "display", "app"]
             .iter()
-            .any(|p| q.contains(p))
+            .any(|word| query_has_word(&q, word))
     })
 }
 
 /// Default time window for visual-recall frame search.
-pub fn visual_recall_window(query: &str, now_ms: i64) -> (i64, i64) {
-    if let Some(win) = query_time_window(query, now_ms) {
+pub fn visual_recall_window(
+    query: &str,
+    now_ms: i64,
+    local_days: LocalDayBounds,
+) -> (i64, i64) {
+    if let Some(win) = query_time_window(query, now_ms, local_days) {
         return win;
     }
     (now_ms - crate::screen_frames::RETENTION_MS, now_ms)
@@ -1105,16 +1130,56 @@ mod warm_window_tests {
 
     #[test]
     fn screen_query_heuristic_matches_natural_phrases() {
+        let days = LocalDayBounds {
+            yesterday_start_ms: 0,
+            today_start_ms: 86_400_000,
+        };
         assert!(query_asks_about_screen("what was on my screen yesterday"));
         assert!(!query_asks_about_screen("vendor pricing email"));
-        assert!(query_wants_visual_recall("what was on my screen yesterday", 0));
-        assert!(query_wants_visual_recall("what did I see on screen today", 86_400_000));
+        assert!(query_wants_visual_recall("what was on my screen yesterday", 0, days));
+        assert!(query_wants_visual_recall(
+            "what did I see on screen today",
+            86_400_000,
+            days
+        ));
+        assert!(!query_wants_visual_recall("what happened today", 86_400_000, days));
         let now = 86_400_000 * 2;
-        let Some((from, to)) = query_time_window("yesterday", now) else {
+        let Some((from, to)) = query_time_window("yesterday", now, days) else {
             panic!("expected window");
         };
-        assert_eq!(from, 86_400_000);
+        assert_eq!(from, 0);
+        assert_eq!(to, 86_400_000);
+    }
+
+    #[test]
+    fn query_time_window_uses_exact_local_midnights() {
+        // 2020-01-02 01:00 UTC = 2020-01-02 10:00 JST (+9h)
+        let now = 1_577_894_400_000_i64;
+        let days = LocalDayBounds {
+            yesterday_start_ms: 1_577_804_400_000,
+            today_start_ms: 1_577_890_800_000,
+        };
+        let Some((from, to)) = query_time_window("today", now, days) else {
+            panic!("expected window");
+        };
+        assert_eq!(from, days.today_start_ms);
         assert_eq!(to, now);
+        let Some((from, to)) = query_time_window("yesterday", now, days) else {
+            panic!("expected window");
+        };
+        assert_eq!((from, to), (days.yesterday_start_ms, days.today_start_ms));
+    }
+
+    #[test]
+    fn yesterday_window_can_span_a_dst_transition() {
+        let days = LocalDayBounds {
+            yesterday_start_ms: 1_000,
+            today_start_ms: 1_000 + 23 * 60 * 60 * 1_000,
+        };
+        assert_eq!(
+            query_time_window("yesterday", days.today_start_ms + 1, days),
+            Some((days.yesterday_start_ms, days.today_start_ms))
+        );
     }
 
     #[test]
