@@ -89,6 +89,7 @@ pub fn select_kk_configured() -> bool {
 /// Read the Select KK API key. Keychain first (`SELECT_KK_ACCOUNT` under [`SERVICE`] or
 /// [`LEGACY_SERVICE`]); `SHOGUN_SELECT_KK` env is dev provisioning only (recap_probe parity).
 pub fn get_select_kk_key() -> Option<String> {
+    #[cfg(debug_assertions)]
     if let Ok(k) = std::env::var("SHOGUN_SELECT_KK") {
         let trimmed = k.trim().to_string();
         if let Some(key) = normalize_select_kk_key(&trimmed) {
@@ -156,7 +157,7 @@ fn normalize_select_kk_key(raw: &str) -> Option<String> {
         return Some(trimmed.to_string());
     }
     if trimmed.len() >= 40
-        && trimmed.len().is_multiple_of(2)
+        && trimmed.len() % 2 == 0
         && trimmed.chars().all(|c| c.is_ascii_hexdigit())
     {
         let decoded = decode_hex_ascii(trimmed)?;
