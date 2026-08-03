@@ -221,12 +221,7 @@ fn text_from_request(request: &VNRecognizeTextRequest) -> Option<OcrPass> {
     })
 }
 
-/// Apple Vision OCR on a CGImage crop (Screenpipe `perform_ocr_apple` semantics, flat text).
-pub fn ocr_cg_image(image: &CGImage) -> Option<String> {
-    ocr_cg_image_pass(image).map(|p| p.text)
-}
-
-/// Same as [`ocr_cg_image`] but keeps mean Vision confidence for logging / future gates.
+/// Apple Vision OCR on a CGImage crop (Screenpipe `perform_ocr_apple` semantics).
 pub fn ocr_cg_image_pass(image: &CGImage) -> Option<OcrPass> {
     // SAFETY: both CGImage types are transparent refs to the same CoreGraphics object.
     let vision_image = unsafe { &*(image.as_ptr() as *const VisionImage) };
