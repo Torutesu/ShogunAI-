@@ -17,3 +17,7 @@ build/
 *.jsonl
 models/
 legacy/screenpipe-ref/
+
+# Local research notes (not for repo)
+research_super_intern/
+feedback.md
