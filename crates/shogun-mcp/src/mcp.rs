@@ -19,6 +19,7 @@ use shogun_agents::approval::ApprovalQueue;
 use crate::backend::{MemoryBackend, ReadParams};
 use crate::memory_api::{tool_level, ApiLevel, Tool, ALL_TOOLS};
 use crate::rest;
+use crate::visual_recall_api::{is_structured_read, render_structured};
 
 /// The MCP protocol version this server speaks.
 pub const PROTOCOL_VERSION: &str = "2024-11-05";
@@ -83,15 +84,25 @@ impl<B: MemoryBackend> McpServer<B> {
                 let read_params = ReadParams {
                     id: args.get("id").and_then(Value::as_i64),
                     query: args.get("query").and_then(Value::as_str).map(str::to_string),
+                    from_ms: args.get("from_ms").and_then(Value::as_i64),
+                    to_ms: args.get("to_ms").and_then(Value::as_i64),
                 };
-                let include_low = args.get("include_low").and_then(Value::as_bool).unwrap_or(false);
-                let items = self.backend.read(tool, &read_params);
-                rest::render_reads(tool, &items, include_low)
+                if is_structured_read(tool) {
+                    self.backend
+                        .read_structured(tool, &read_params)
+                        .map(|json| render_structured(tool, &json))
+                        .unwrap_or_else(|| r#"{"error":"unavailable"}"#.to_string())
+                } else {
+                    let include_low = args.get("include_low").and_then(Value::as_bool).unwrap_or(false);
+                    let items = self.backend.read(tool, &read_params);
+                    rest::render_reads(tool, &items, include_low)
+                }
             }
             ApiLevel::Write(_) => {
-                // append_note takes `text`; propose takes the whole argument object.
                 let body = if tool == Tool::MemoryAppendNote {
                     args.get("text").and_then(Value::as_str).unwrap_or_default().to_string()
+                } else if matches!(tool, Tool::VisualRecallSetEnabled | Tool::VisualRecallDeleteFrame) {
+                    args.to_string()
                 } else {
                     args.to_string()
                 };
@@ -167,6 +178,25 @@ fn tool_descriptor(tool: Tool) -> Value {
             "Run an action; external sends require L3 confirmation",
             json!({ "kind": { "type": "string" } }),
         ),
+        Tool::VisualRecallStatus => ("Visual recall status (enabled, frame stats, recent OCR)", json!({})),
+        Tool::VisualRecallSetEnabled => ("Enable or disable visual recall (L1)", json!({ "enabled": { "type": "boolean" } })),
+        Tool::VisualRecallSearchFrames => (
+            "Search stored screen frames by OCR text",
+            json!({
+                "query": { "type": "string" },
+                "from_ms": { "type": "integer" },
+                "to_ms": { "type": "integer" }
+            }),
+        ),
+        Tool::VisualRecallGetFrame => (
+            "Get one stored frame's metadata and OCR text",
+            json!({ "id": { "type": "integer" } }),
+        ),
+        Tool::VisualRecallRescanFrame => (
+            "Re-OCR a stored JPEG via on-device Vision",
+            json!({ "id": { "type": "integer" } }),
+        ),
+        Tool::VisualRecallDeleteFrame => ("Delete one stored frame and its OCR event (L1)", json!({ "id": { "type": "integer" } })),
     };
     json!({
         "name": tool.wire_name(),
@@ -220,11 +250,12 @@ mod tests {
     }
 
     #[test]
-    fn tools_list_has_all_thirteen() {
+    fn tools_list_has_all_nineteen() {
         let v = call(&server(), r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#);
         let tools = v["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 13);
+        assert_eq!(tools.len(), 19);
         assert!(tools.iter().any(|t| t["name"] == "memory.search"));
+        assert!(tools.iter().any(|t| t["name"] == "visual_recall.status"));
         assert!(tools.iter().any(|t| t["name"] == "actions.execute"));
     }
 

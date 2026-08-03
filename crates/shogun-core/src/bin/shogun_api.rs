@@ -52,15 +52,35 @@ fn wall_clock() -> Clock {
     })
 }
 
+fn visual_recall_settings_path(db_path: &str) -> Option<std::path::PathBuf> {
+    std::env::var("SHOGUN_VISUAL_RECALL_SETTINGS")
+        .ok()
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::path::Path::new(db_path)
+                .parent()
+                .map(|p| p.join("visual_recall.json"))
+        })
+}
+
+fn db_backend(db: Db) -> DbBackend {
+    let mut backend = DbBackend::new(db);
+    let db_path = std::env::var("SHOGUN_DB_PATH").unwrap_or_else(|_| "./shogun.db".to_string());
+    if let Some(path) = visual_recall_settings_path(&db_path) {
+        backend = backend.with_visual_recall_settings_path(path);
+    }
+    backend
+}
+
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
     let db_path = std::env::var("SHOGUN_DB_PATH").unwrap_or_else(|_| "./shogun.db".to_string());
     let port = std::env::var("SHOGUN_API_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(DEFAULT_PORT);
 
     let clock = wall_clock();
-    let db = Db::open(&db_path, clock.clone())
+    let db = Db::open_at_path(&db_path, clock.clone())
         .map_err(|e| std::io::Error::other(format!("open db {db_path}: {e}")))?;
-    let backend = Arc::new(DbBackend::new(db));
+    let backend = Arc::new(db_backend(db));
 
     let mut tokens = TokenRegistry::new();
     match std::env::var("SHOGUN_API_TOKEN") {
@@ -92,7 +112,7 @@ mod tests {
             let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
             rt.block_on(async move {
                 let db = Db::open_in_memory(wall_clock()).unwrap();
-                let backend = Arc::new(DbBackend::new(db));
+                let backend = Arc::new(db_backend(db));
                 let mut tokens = TokenRegistry::new();
                 tokens.issue("dev");
                 let approvals = Arc::new(Mutex::new(ApprovalQueue::new()));

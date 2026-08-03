@@ -2,7 +2,7 @@
 //! (§6.11). Pure — the actual socket work is [`crate::http`]. This is the CLI's half of the REST
 //! contract; the server's half is `shogun_mcp::rest`.
 
-use crate::command::{Command, ListOrGet};
+use crate::command::{Command, ListOrGet, VisualRecallCommand};
 
 /// An HTTP call: method + path (query folded in) + optional body.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,7 +36,7 @@ fn state_path(noun: &str, which: &ListOrGet) -> String {
 /// the read opt-in query.
 pub fn to_call(command: &Command, include_low: bool) -> Option<HttpCall> {
     let get = |path: String| HttpCall { method: "GET", path, body: None };
-    let post = |path: &str, body: String| HttpCall { method: "POST", path: path.to_string(), body: Some(body) };
+    let post = |path: String, body: String| HttpCall { method: "POST", path, body: Some(body) };
     let low = |mut path: String| {
         if include_low {
             path.push_str(if path.contains('?') { "&include_low" } else { "?include_low" });
@@ -51,12 +51,34 @@ pub fn to_call(command: &Command, include_low: bool) -> Option<HttpCall> {
         Command::Projects(w) => get(low(state_path("projects", w))),
         Command::Commitments(w) => get(low(state_path("commitments", w))),
         Command::OpenLoops(w) => get(low(state_path("open_loops", w))),
-        Command::Note { text } => post("/v1/memory/notes", text.clone()),
-        Command::Propose { description } => post("/v1/state/proposals", description.clone()),
+        Command::Note { text } => post("/v1/memory/notes".into(), text.clone()),
+        Command::Propose { description } => post("/v1/state/proposals".into(), description.clone()),
         // `run` carries the action JSON spec (e.g. '{"kind":"local_search","query":"x"}').
-        Command::Run { agent } => post("/v1/actions/execute", agent.clone()),
+        Command::Run { agent } => post("/v1/actions/execute".into(), agent.clone()),
         Command::ApiStatus => get("/v1/status".to_string()),
         Command::Metrics => get("/v1/metrics".to_string()),
+        Command::VisualRecall(cmd) => match cmd {
+            VisualRecallCommand::Status => get("/v1/visual_recall/status".to_string()),
+            VisualRecallCommand::Enable => post("/v1/visual_recall/enabled".into(), r#"{"enabled":true}"#.to_string()),
+            VisualRecallCommand::Disable => post("/v1/visual_recall/enabled".into(), r#"{"enabled":false}"#.to_string()),
+            VisualRecallCommand::Search { query, from_ms, to_ms } => {
+                let mut path = format!("/v1/visual_recall/frames/search?q={}", encode(query));
+                if let Some(f) = from_ms {
+                    path.push_str(&format!("&from_ms={f}"));
+                }
+                if let Some(t) = to_ms {
+                    path.push_str(&format!("&to_ms={t}"));
+                }
+                get(low(path))
+            }
+            VisualRecallCommand::FrameGet { id } => get(format!("/v1/visual_recall/frames/{id}")),
+            VisualRecallCommand::FrameRescan { id } => {
+                post(format!("/v1/visual_recall/frames/{id}/rescan"), String::new())
+            }
+            VisualRecallCommand::FrameDelete { id } => {
+                post("/v1/visual_recall/frames/delete".into(), format!(r#"{{"id":{id}}}"#))
+            }
+        },
         Command::Help => return None,
     })
 }

@@ -27,6 +27,12 @@ pub enum Tool {
     MemoryAppendNote,
     StateProposeUpdate,
     ActionsExecute,
+    VisualRecallStatus,
+    VisualRecallSetEnabled,
+    VisualRecallSearchFrames,
+    VisualRecallGetFrame,
+    VisualRecallRescanFrame,
+    VisualRecallDeleteFrame,
 }
 
 /// Every tool, for exhaustive iteration (settings / tests).
@@ -44,6 +50,12 @@ pub const ALL_TOOLS: &[Tool] = &[
     Tool::MemoryAppendNote,
     Tool::StateProposeUpdate,
     Tool::ActionsExecute,
+    Tool::VisualRecallStatus,
+    Tool::VisualRecallSetEnabled,
+    Tool::VisualRecallSearchFrames,
+    Tool::VisualRecallGetFrame,
+    Tool::VisualRecallRescanFrame,
+    Tool::VisualRecallDeleteFrame,
 ];
 
 impl Tool {
@@ -63,6 +75,12 @@ impl Tool {
             Tool::MemoryAppendNote => "memory.append_note",
             Tool::StateProposeUpdate => "state.propose_update",
             Tool::ActionsExecute => "actions.execute",
+            Tool::VisualRecallStatus => "visual_recall.status",
+            Tool::VisualRecallSetEnabled => "visual_recall.set_enabled",
+            Tool::VisualRecallSearchFrames => "visual_recall.search_frames",
+            Tool::VisualRecallGetFrame => "visual_recall.get_frame",
+            Tool::VisualRecallRescanFrame => "visual_recall.rescan_frame",
+            Tool::VisualRecallDeleteFrame => "visual_recall.delete_frame",
         }
     }
 
@@ -94,10 +112,18 @@ pub fn tool_level(tool: Tool) -> ApiLevel {
         | Tool::StateProjectsGet
         | Tool::StateCommitmentsList
         | Tool::StateCommitmentsGet
-        | Tool::StateOpenLoopsList
-        | Tool::StateOpenLoopsGet => ApiLevel::Read,
+        |         Tool::StateOpenLoopsList
+        | Tool::StateOpenLoopsGet
+        | Tool::VisualRecallStatus
+        | Tool::VisualRecallSearchFrames
+        | Tool::VisualRecallGetFrame
+        | Tool::VisualRecallRescanFrame => ApiLevel::Read,
         // append a user note to the event log — local, reversible.
         Tool::MemoryAppendNote => ApiLevel::Write(Level::L1),
+        // visual recall master switch — same as Settings toggle (L1, local).
+        Tool::VisualRecallSetEnabled => ApiLevel::Write(Level::L1),
+        // Deleting a local frame is an L1 write.
+        Tool::VisualRecallDeleteFrame => ApiLevel::Write(Level::L1),
         // propose a state change — one-tap confirm in the Notch.
         Tool::StateProposeUpdate => ApiLevel::Write(Level::L2),
         // launch a preset agent — level follows the action it runs.
@@ -196,7 +222,7 @@ mod tests {
         for &t in ALL_TOOLS {
             let _ = tool_level(t); // exhaustive match means this cannot be undefined
         }
-        assert_eq!(ALL_TOOLS.len(), 13);
+        assert_eq!(ALL_TOOLS.len(), 19);
     }
 
     #[test]
@@ -215,9 +241,19 @@ mod tests {
                         | Tool::StateCommitmentsGet
                         | Tool::StateOpenLoopsList
                         | Tool::StateOpenLoopsGet
+                        | Tool::VisualRecallStatus
+                        | Tool::VisualRecallSearchFrames
+                        | Tool::VisualRecallGetFrame
+                        | Tool::VisualRecallRescanFrame
                 )),
                 ApiLevel::Write(_) => {
-                    assert!(matches!(t, Tool::MemoryAppendNote | Tool::StateProposeUpdate))
+                    assert!(matches!(
+                        t,
+                        Tool::MemoryAppendNote
+                            | Tool::StateProposeUpdate
+                            | Tool::VisualRecallSetEnabled
+                            | Tool::VisualRecallDeleteFrame
+                    ))
                 }
                 ApiLevel::PerAction => assert_eq!(t, Tool::ActionsExecute),
             }

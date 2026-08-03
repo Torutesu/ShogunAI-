@@ -83,6 +83,8 @@ pub struct ScreenFrameRef {
     pub ocr_excerpt: String,
     /// Thin stored OCR — caller should re-scan the JPEG (Vision) before answering.
     pub needs_rescan: bool,
+    /// Linked event source.
+    pub source: String,
 }
 
 /// The grounded context for one question: confidence-gated state facts plus the retrieved
@@ -335,6 +337,17 @@ impl Db {
     /// Open a fresh in-memory database (migrations applied) — for tests and ephemeral use.
     pub fn open_in_memory(clock: Clock) -> Result<Self, MemoryError> {
         Ok(Self::new(shogun_memory::open_in_memory()?, clock))
+    }
+
+    /// Open plaintext or encrypted DB at `path`. Encrypted files use Keychain on macOS or
+    /// `SHOGUN_DB_KEY` (hex).
+    pub fn open_at_path(path: impl AsRef<std::path::Path>, clock: Clock) -> Result<Self, String> {
+        let path = path.as_ref();
+        if path.exists() && !shogun_memory::is_plaintext_db(path) {
+            let key = load_db_encryption_key()?;
+            return Self::open_encrypted(path, &key, clock).map_err(|e| e.to_string());
+        }
+        Self::open(path, clock).map_err(|e| e.to_string())
     }
 
     /// Record a captured event (capture → memory, FR-CAP-03 dedup-touch). Swallows storage errors
@@ -996,12 +1009,14 @@ impl Db {
         excerpt_chars: usize,
     ) -> (Vec<Evidence>, Vec<ScreenFrameRef>) {
         let now = self.now_ms();
-        let screen_frames = if shogun_memory::search::query_wants_visual_recall(query, now) {
+        let local_days = local_day_bounds(now);
+        let screen_frames =
+            if shogun_memory::search::query_wants_visual_recall(query, now, local_days) {
             self.recall_screen_frames(query, max_hits, excerpt_chars)
         } else {
             Vec::new()
         };
-        let frame_by_event: std::collections::HashMap<i64, i64> = screen_frames
+        let mut frame_by_event: std::collections::HashMap<i64, i64> = screen_frames
             .iter()
             .map(|f| (f.event_id, f.frame_id))
             .collect();
@@ -1027,12 +1042,14 @@ impl Db {
         }
         let meeting_hits = self.search_meetings(query, max_hits);
 
+        let event_ids: Vec<i64> = event_hits.iter().map(|h| h.event_id).collect();
+        for (event_id, frame_id) in self.frame_ids_for_events(&event_ids) {
+            frame_by_event.entry(event_id).or_insert(frame_id);
+        }
+
         let mut ranked: Vec<(f64, Evidence)> = Vec::with_capacity(event_hits.len() + meeting_hits.len());
         for h in event_hits {
-            let frame_id = frame_by_event
-                .get(&h.event_id)
-                .copied()
-                .or_else(|| self.frame_id_for_event(h.event_id));
+            let frame_id = frame_by_event.get(&h.event_id).copied();
             let mut excerpt = shogun_memory::search::excerpt(&h.content, query, excerpt_chars);
             if let Some(fid) = frame_id {
                 excerpt.push_str(&format!(" [screen frame {fid} stored]"));
@@ -1066,6 +1083,12 @@ impl Db {
         // Frame-only hits: add evidence lines from stored JPEGs not already in ranked set.
         let seen_events: std::collections::HashSet<i64> =
             ranked.iter().map(|(_, e)| e.event_id).collect();
+        let top_event_score = ranked.iter().map(|(s, _)| *s).fold(0.0_f64, f64::max);
+        let frame_score = if top_event_score > 0.0 {
+            top_event_score * 0.75
+        } else {
+            0.5
+        };
         for f in &screen_frames {
             if seen_events.contains(&f.event_id) {
                 continue;
@@ -1076,7 +1099,7 @@ impl Db {
             }
             excerpt.push_str(&format!(" [screen frame {} stored]", f.frame_id));
             ranked.push((
-                0.85,
+                frame_score,
                 Evidence {
                     event_id: f.event_id,
                     ts: f.ts,
@@ -1865,13 +1888,52 @@ impl Db {
     }
 
     /// Drop visual-recall frames older than the rolling retention window.
-    pub fn purge_screen_frames(&self) -> usize {
+    pub fn purge_screen_frames(&self) -> Result<usize, String> {
         let cutoff = self.now_ms() - shogun_memory::screen_frames::RETENTION_MS;
-        self.conn
+        let conn = self
+            .conn
             .lock()
-            .ok()
-            .and_then(|c| shogun_memory::screen_frames::purge_older_than(&c, cutoff).ok())
-            .unwrap_or(0)
+            .map_err(|_| "memory DB lock poisoned during frame purge".to_string())?;
+        shogun_memory::screen_frames::purge_older_than(&conn, cutoff)
+            .map_err(|e| format!("purge expired screen frames: {e}"))
+    }
+
+    /// Drop auto-capture frames only (passive OCR). User-initiated shots are kept.
+    pub fn purge_auto_screen_frames(&self) -> Result<usize, String> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| "memory DB lock poisoned during frame purge".to_string())?;
+        shogun_memory::screen_frames::purge_auto_only(&conn)
+            .map_err(|e| format!("purge automatic screen frames: {e}"))
+    }
+
+    /// Delete one stored frame and its linked OCR event when no other frame references it.
+    pub fn delete_screen_frame(&self, frame_id: i64) -> Result<bool, String> {
+        let mut conn = self
+            .conn
+            .lock()
+            .map_err(|_| "memory DB lock poisoned during frame delete".to_string())?;
+        shogun_memory::screen_frames::delete_by_id(&mut conn, frame_id)
+            .map_err(|e| format!("delete screen frame: {e}"))
+    }
+
+    /// Persist refreshed OCR text for a screen frame's linked event (visual recall re-scan).
+    pub fn update_event_ocr_text(&self, event_id: i64, text: &str) -> Result<bool, String> {
+        let hash = Self::content_hash(text);
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| "memory DB lock poisoned during OCR update".to_string())?;
+        shogun_memory::event_log::update_content_and_hash(&conn, event_id, text, &hash)
+            .map_err(|e| format!("update event OCR text: {e}"))
+    }
+
+    /// List frames in the retention window for UI timeline (newest first).
+    pub fn list_screen_frames(&self, limit: usize) -> Vec<shogun_memory::screen_frames::FrameSummary> {
+        let now = self.now_ms();
+        let from = now - shogun_memory::screen_frames::RETENTION_MS;
+        self.screen_frames_in_range(from, now, limit)
     }
 
     /// Frame-cache stats for settings (count / oldest / bytes — no pixels).
@@ -1893,9 +1955,15 @@ impl Db {
         self.recall_screen_frames(query, limit, excerpt_chars)
     }
 
-    fn recall_screen_frames(&self, query: &str, limit: usize, excerpt_chars: usize) -> Vec<ScreenFrameRef> {
-        let now = self.now_ms();
-        let (from_ms, to_ms) = shogun_memory::search::visual_recall_window(query, now);
+    /// Search stored frames in an explicit time window (Memory API / MCP).
+    pub fn search_screen_frames_window(
+        &self,
+        query: &str,
+        from_ms: i64,
+        to_ms: i64,
+        limit: usize,
+        excerpt_chars: usize,
+    ) -> Vec<ScreenFrameRef> {
         self.conn
             .lock()
             .ok()
@@ -1915,15 +1983,79 @@ impl Db {
                 height: h.height,
                 ocr_excerpt: h.ocr_excerpt,
                 needs_rescan: h.needs_rescan,
+                source: h.source,
             })
             .collect()
     }
 
-    fn frame_id_for_event(&self, event_id: i64) -> Option<i64> {
+    /// Count stored frames whose `created_at_ms` lies in `[from_ms, to_ms]`.
+    pub fn screen_frames_count_in_range(&self, from_ms: i64, to_ms: i64) -> i64 {
         self.conn
             .lock()
             .ok()
-            .and_then(|c| shogun_memory::screen_frames::frame_id_for_event(&c, event_id).ok())
+            .and_then(|c| {
+                c.query_row(
+                    "SELECT count(*) FROM screen_frames WHERE created_at_ms >= ?1 AND created_at_ms <= ?2",
+                    rusqlite::params![from_ms, to_ms],
+                    |r| r.get(0),
+                )
+                .ok()
+            })
+            .unwrap_or(0)
+    }
+
+    /// Latest stored frame metadata (no JPEG bytes).
+    pub fn latest_screen_frame_summary(&self) -> Option<shogun_memory::screen_frames::FrameSummary> {
+        let now = self.now_ms();
+        self.screen_frames_in_range(0, now, 1).into_iter().next()
+    }
+
+    fn recall_screen_frames(&self, query: &str, limit: usize, excerpt_chars: usize) -> Vec<ScreenFrameRef> {
+        let now = self.now_ms();
+        let local_days = local_day_bounds(now);
+        let (from_ms, to_ms) =
+            shogun_memory::search::visual_recall_window(query, now, local_days);
+        self.conn
+            .lock()
+            .ok()
+            .and_then(|c| {
+                shogun_memory::screen_frames::search_for_recall(&c, query, from_ms, to_ms, limit, excerpt_chars)
+                    .ok()
+            })
+            .unwrap_or_default()
+            .into_iter()
+            .map(|h| ScreenFrameRef {
+                frame_id: h.frame_id,
+                event_id: h.event_id,
+                ts: h.ts,
+                app_bundle_id: h.app_bundle_id,
+                window_title: h.window_title,
+                width: h.width,
+                height: h.height,
+                ocr_excerpt: h.ocr_excerpt,
+                needs_rescan: h.needs_rescan,
+                source: h.source,
+            })
+            .collect()
+    }
+
+    fn frame_ids_for_events(&self, event_ids: &[i64]) -> std::collections::HashMap<i64, i64> {
+        self.conn
+            .lock()
+            .ok()
+            .and_then(|c| shogun_memory::screen_frames::frame_ids_for_events(&c, event_ids).ok())
+            .unwrap_or_default()
+    }
+
+    /// Fetch frame metadata and OCR without loading the JPEG BLOB.
+    pub fn get_screen_frame_summary(
+        &self,
+        frame_id: i64,
+    ) -> Option<shogun_memory::screen_frames::FrameSummary> {
+        self.conn
+            .lock()
+            .ok()
+            .and_then(|c| shogun_memory::screen_frames::get_summary_by_id(&c, frame_id).ok())
             .flatten()
     }
 
@@ -2283,6 +2415,86 @@ fn facts_to_blocks(
             )
         })
         .collect()
+}
+
+#[cfg(feature = "db")]
+fn load_db_encryption_key() -> Result<shogun_memory::DbKey, String> {
+    if let Ok(hex) = std::env::var("SHOGUN_DB_KEY") {
+        let trimmed = hex.trim();
+        if !trimmed.is_empty() {
+            return shogun_memory::DbKey::from_hex(trimmed)
+                .ok_or_else(|| "SHOGUN_DB_KEY is not valid hex".to_string());
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use shogun_integrations::keychain_store;
+        const DB_KEY_ACCOUNT: &str = "memory-db-key";
+        let bytes = keychain_store::get_generic_secret(DB_KEY_ACCOUNT).map_err(|e| {
+            format!(
+                "could not read memory DB key from Keychain (status {}): unlock Keychain and retry",
+                e.code()
+            )
+        })?;
+        let hex = String::from_utf8(bytes).map_err(|_| "memory DB key in Keychain is not valid text".to_string())?;
+        shogun_memory::DbKey::from_hex(&hex)
+            .ok_or_else(|| "memory DB key in Keychain is malformed".to_string())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err("encrypted memory DB requires SHOGUN_DB_KEY".to_string())
+    }
+}
+
+/// Exact local midnight boundaries for the current and previous calendar day.
+#[cfg(feature = "db")]
+pub fn local_day_bounds(now_ms: i64) -> shogun_memory::search::LocalDayBounds {
+    #[cfg(target_os = "macos")]
+    {
+        // SAFETY: `tm` is initialized by localtime_r. mktime accepts and normalizes the copied
+        // local calendar values; `tm_isdst = -1` makes libc resolve the correct offset per date.
+        unsafe {
+            let mut tm: libc::tm = std::mem::zeroed();
+            let t = (now_ms / 1000) as libc::time_t;
+            if libc::localtime_r(&t, &mut tm).is_null() {
+                return utc_day_bounds(now_ms);
+            }
+            tm.tm_hour = 0;
+            tm.tm_min = 0;
+            tm.tm_sec = 0;
+            tm.tm_isdst = -1;
+            let today = libc::mktime(&mut tm);
+            if today == -1 {
+                return utc_day_bounds(now_ms);
+            }
+            let mut yesterday_tm = tm;
+            yesterday_tm.tm_mday -= 1;
+            yesterday_tm.tm_isdst = -1;
+            let yesterday = libc::mktime(&mut yesterday_tm);
+            if yesterday == -1 {
+                utc_day_bounds(now_ms)
+            } else {
+                shogun_memory::search::LocalDayBounds {
+                    yesterday_start_ms: (yesterday as i64) * 1000,
+                    today_start_ms: (today as i64) * 1000,
+                }
+            }
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        utc_day_bounds(now_ms)
+    }
+}
+
+#[cfg(feature = "db")]
+fn utc_day_bounds(now_ms: i64) -> shogun_memory::search::LocalDayBounds {
+    const DAY_MS: i64 = 24 * 60 * 60 * 1000;
+    let today_start_ms = now_ms.div_euclid(DAY_MS) * DAY_MS;
+    shogun_memory::search::LocalDayBounds {
+        yesterday_start_ms: today_start_ms - DAY_MS,
+        today_start_ms,
+    }
 }
 
 #[cfg(test)]

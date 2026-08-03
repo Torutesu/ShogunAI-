@@ -91,6 +91,12 @@ objc2-core-foundation = { version = "0.3.2", optional = true }
 block2 = { version = "0.6", optional = true }
 dispatch2 = { version = "0.3", optional = true }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
+objc2 = "0.6"
+objc2-foundation = "0.3"
+objc2-vision = { version = "0.3", features = ["VNRecognizeTextRequest", "VNRequestHandler", "VNObservation", "block2"] }
+
 [[bin]]
 name = "shogun-api"
 path = "src/bin/shogun_api.rs"

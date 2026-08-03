@@ -84,13 +84,21 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
     };
     let path = req.uri().path().to_string();
     let token = rest::bearer(req.headers().get(AUTHORIZATION).and_then(|v| v.to_str().ok()));
-    // Parse the query string: `?include_low` (FR-API-06 opt-in) and `?q=<search>`.
+    // Parse the query string: `?include_low` (FR-API-06 opt-in), `?q=<search>`, visual-recall window.
     let raw_query = req.uri().query().unwrap_or("");
     let include_low = raw_query.split('&').any(|kv| kv == "include_low" || kv.starts_with("include_low="));
     let query = raw_query
         .split('&')
         .find_map(|kv| kv.strip_prefix("q="))
         .map(percent_decode);
+    let from_ms = raw_query
+        .split('&')
+        .find_map(|kv| kv.strip_prefix("from_ms="))
+        .and_then(|v| v.parse::<i64>().ok());
+    let to_ms = raw_query
+        .split('&')
+        .find_map(|kv| kv.strip_prefix("to_ms="))
+        .and_then(|v| v.parse::<i64>().ok());
 
     // Read the request body (POST writes / actions). Bounded to 256 KiB; empty on read failure.
     let body = axum::body::to_bytes(req.into_body(), 256 * 1024)
@@ -102,7 +110,16 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
     let (status, resp_body) = match method {
         None => (405, r#"{"error":"method_not_allowed"}"#.to_string()),
         Some(method) => {
-            let rreq = RestRequest { method, path, token, include_low, query, body };
+            let rreq = RestRequest {
+                method,
+                path,
+                token,
+                include_low,
+                query,
+                body,
+                from_ms,
+                to_ms,
+            };
             match rest::route(&rreq, &state.tokens) {
                 // actions.execute needs the shared approval queue (L3 sends enqueue there).
                 Routed::Action => match state.approvals.lock() {

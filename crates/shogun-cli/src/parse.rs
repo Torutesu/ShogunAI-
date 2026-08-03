@@ -135,7 +135,73 @@ fn parse_command(positionals: &[String], no_screen: bool) -> Result<Command, Cli
             }),
         },
         "metrics" => Ok(Command::Metrics),
+        "visual-recall" => parse_visual_recall(rest),
         other => Err(CliError::UnknownCommand(other.to_string())),
+    }
+}
+
+fn parse_visual_recall(rest: &[String]) -> Result<Command, CliError> {
+    use crate::command::VisualRecallCommand;
+    match rest.first().map(String::as_str) {
+        None => Err(CliError::MissingArgument("visual-recall subcommand")),
+        Some("status") => Ok(Command::VisualRecall(VisualRecallCommand::Status)),
+        Some("enable") => Ok(Command::VisualRecall(VisualRecallCommand::Enable)),
+        Some("disable") => Ok(Command::VisualRecall(VisualRecallCommand::Disable)),
+        Some("search") => {
+            let mut from_ms = None;
+            let mut to_ms = None;
+            let mut query_parts: Vec<String> = Vec::new();
+            let mut i = 1;
+            while i < rest.len() {
+                match rest[i].as_str() {
+                    "--from-ms" => {
+                        let v = rest.get(i + 1).ok_or(CliError::MissingFlagValue("--from-ms"))?;
+                        from_ms = Some(v.parse().map_err(|_| CliError::BadId(v.clone()))?);
+                        i += 2;
+                    }
+                    "--to-ms" => {
+                        let v = rest.get(i + 1).ok_or(CliError::MissingFlagValue("--to-ms"))?;
+                        to_ms = Some(v.parse().map_err(|_| CliError::BadId(v.clone()))?);
+                        i += 2;
+                    }
+                    _ => {
+                        query_parts.push(rest[i].clone());
+                        i += 1;
+                    }
+                }
+            }
+            let query = join(&query_parts).ok_or(CliError::MissingArgument("<query>"))?;
+            Ok(Command::VisualRecall(VisualRecallCommand::Search {
+                query,
+                from_ms,
+                to_ms,
+            }))
+        }
+        Some("frame") => match rest.get(1).map(String::as_str) {
+            Some("get") => {
+                let id_str = rest.get(2).ok_or(CliError::MissingArgument("<id>"))?;
+                let id = id_str.parse().map_err(|_| CliError::BadId(id_str.clone()))?;
+                Ok(Command::VisualRecall(VisualRecallCommand::FrameGet { id }))
+            }
+            Some("rescan") => {
+                let id_str = rest.get(2).ok_or(CliError::MissingArgument("<id>"))?;
+                let id = id_str.parse().map_err(|_| CliError::BadId(id_str.clone()))?;
+                Ok(Command::VisualRecall(VisualRecallCommand::FrameRescan { id }))
+            }
+            Some("delete") => {
+                let id_str = rest.get(2).ok_or(CliError::MissingArgument("<id>"))?;
+                let id = id_str.parse().map_err(|_| CliError::BadId(id_str.clone()))?;
+                Ok(Command::VisualRecall(VisualRecallCommand::FrameDelete { id }))
+            }
+            other => Err(CliError::UnknownSubcommand {
+                command: "visual-recall frame",
+                got: other.unwrap_or("").to_string(),
+            }),
+        },
+        other => Err(CliError::UnknownSubcommand {
+            command: "visual-recall",
+            got: other.unwrap_or("").to_string(),
+        }),
     }
 }
 

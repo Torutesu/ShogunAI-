@@ -36,8 +36,22 @@ pub enum Command {
     ApiStatus,
     /// `shogun metrics` → the in-product SLO snapshot (NFR-SLO-00).
     Metrics,
+    /// `shogun visual-recall status|enable|disable|search|frame get|frame rescan`
+    VisualRecall(VisualRecallCommand),
     /// `shogun help` / no args.
     Help,
+}
+
+/// Visual recall subcommands (Memory API symmetry).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VisualRecallCommand {
+    Status,
+    Enable,
+    Disable,
+    Search { query: String, from_ms: Option<i64>, to_ms: Option<i64> },
+    FrameGet { id: i64 },
+    FrameRescan { id: i64 },
+    FrameDelete { id: i64 },
 }
 
 impl Command {
@@ -58,6 +72,13 @@ impl Command {
             Command::Note { .. } => Tool::MemoryAppendNote,
             Command::Propose { .. } => Tool::StateProposeUpdate,
             Command::Run { .. } => Tool::ActionsExecute,
+            Command::VisualRecall(VisualRecallCommand::Status) => Tool::VisualRecallStatus,
+            Command::VisualRecall(VisualRecallCommand::Enable) => Tool::VisualRecallSetEnabled,
+            Command::VisualRecall(VisualRecallCommand::Disable) => Tool::VisualRecallSetEnabled,
+            Command::VisualRecall(VisualRecallCommand::Search { .. }) => Tool::VisualRecallSearchFrames,
+            Command::VisualRecall(VisualRecallCommand::FrameGet { .. }) => Tool::VisualRecallGetFrame,
+            Command::VisualRecall(VisualRecallCommand::FrameRescan { .. }) => Tool::VisualRecallRescanFrame,
+            Command::VisualRecall(VisualRecallCommand::FrameDelete { .. }) => Tool::VisualRecallDeleteFrame,
             Command::ApiStatus | Command::Metrics | Command::Help => return None,
         })
     }
@@ -82,6 +103,13 @@ COMMANDS:
     run <agent>               Launch a preset agent         (level follows action)
     api status                Show the running REST port
     metrics                   In-product SLO snapshot
+    visual-recall status      Visual recall status + frame stats
+    visual-recall enable      Turn visual recall on (L1)
+    visual-recall disable     Turn passive recall off + purge auto frames (L1)
+    visual-recall search <q> [--from-ms N] [--to-ms N]  Search stored screen frames
+    visual-recall frame get <id>           Frame metadata + OCR text
+    visual-recall frame rescan <id>        Re-OCR stored JPEG
+    visual-recall frame delete <id>        Delete one stored frame
     help                      This help
 
 GLOBAL FLAGS:

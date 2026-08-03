@@ -29,6 +29,10 @@ pub struct ReadParams {
     pub id: Option<i64>,
     /// The query for `search` (`?q=...`).
     pub query: Option<String>,
+    /// Optional visual-recall time window start (unix ms).
+    pub from_ms: Option<i64>,
+    /// Optional visual-recall time window end (unix ms).
+    pub to_ms: Option<i64>,
 }
 
 /// The result of a write tool (append_note = L1, propose_update = L2). `Some(id)` when a row was
@@ -46,6 +50,12 @@ pub trait MemoryBackend: Send + Sync {
     /// "accepted" so a read-only backend still compiles.
     fn write(&self, _tool: Tool, _body: &str) -> WriteResult {
         Ok(None)
+    }
+
+    /// Structured JSON for tools that do not use [`ReadItem`] / the confidence gate (visual recall).
+    /// `None` → fall back to [`Self::read`].
+    fn read_structured(&self, _tool: Tool, _params: &ReadParams) -> Option<String> {
+        None
     }
 }
 

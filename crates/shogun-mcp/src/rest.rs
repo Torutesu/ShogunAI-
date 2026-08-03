@@ -15,6 +15,7 @@ use shogun_agents::permission::{Action, Level, LocalAction, SendAction};
 
 use crate::backend::{MemoryBackend, ReadParams};
 use crate::memory_api::{read_inclusion, AuthResult, ReadInclusion, TokenRegistry, Tool};
+use crate::visual_recall_api::{is_structured_read, render_structured};
 
 /// The HTTP methods the Memory API uses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,6 +36,10 @@ pub struct RestRequest {
     pub query: Option<String>,
     /// The request body (POST writes, e.g. the note text).
     pub body: Option<String>,
+    /// `?from_ms=` — visual-recall frame search window start.
+    pub from_ms: Option<i64>,
+    /// `?to_ms=` — visual-recall frame search window end.
+    pub to_ms: Option<i64>,
 }
 
 /// The routing decision. The server turns this into an HTTP response, running the backend for the
@@ -98,6 +103,28 @@ fn resolve(method: Method, path: &str) -> Result<Routed, RouteMiss> {
         ["v1", "memory", "context"] => {
             method_is(method, Method::Get, Routed::Read { tool: Tool::MemoryGetContext, id: None })
         }
+        ["v1", "visual_recall", "status"] => {
+            method_is(method, Method::Get, Routed::Read { tool: Tool::VisualRecallStatus, id: None })
+        }
+        ["v1", "visual_recall", "enabled"] => {
+            method_is(method, Method::Post, Routed::Write { tool: Tool::VisualRecallSetEnabled, level: Level::L1 })
+        }
+        ["v1", "visual_recall", "frames", "search"] => {
+            method_is(method, Method::Get, Routed::Read { tool: Tool::VisualRecallSearchFrames, id: None })
+        }
+        ["v1", "visual_recall", "frames", id, "rescan"] => match id.parse::<i64>() {
+            Ok(parsed) => {
+                method_is(method, Method::Post, Routed::Read { tool: Tool::VisualRecallRescanFrame, id: Some(parsed) })
+            }
+            Err(_) => Err(RouteMiss::NotFound),
+        },
+        ["v1", "visual_recall", "frames", "delete"] => {
+            method_is(method, Method::Post, Routed::Write { tool: Tool::VisualRecallDeleteFrame, level: Level::L1 })
+        },
+        ["v1", "visual_recall", "frames", id] => match id.parse::<i64>() {
+            Ok(parsed) => method_is(method, Method::Get, Routed::Read { tool: Tool::VisualRecallGetFrame, id: Some(parsed) }),
+            Err(_) => Err(RouteMiss::NotFound),
+        },
         ["v1", "memory", "notes"] => {
             method_is(method, Method::Post, Routed::Write { tool: Tool::MemoryAppendNote, level: Level::L1 })
         }
@@ -313,6 +340,20 @@ fn json_escape(s: &str) -> String {
 /// Route + render **with real data** from `backend`. For a read tool, the backend supplies rows and
 /// this applies the confidence gate (FR-API-06: Low excluded unless `?include_low`, Medium flagged
 /// `possibly`); other decisions render as [`body_for`]. This is what the server calls.
+fn structured_read_status(json: &str) -> u16 {
+    match serde_json::from_str::<serde_json::Value>(json) {
+        Ok(v) => {
+            let err = v.get("error").and_then(|e| e.as_str());
+            match err {
+                Some("not_found") | Some("missing_frame_id") => 404,
+                Some(_) => 400,
+                None => 200,
+            }
+        }
+        Err(_) => 500,
+    }
+}
+
 pub fn respond_with<B: MemoryBackend + ?Sized>(
     req: &RestRequest,
     tokens: &TokenRegistry,
@@ -320,9 +361,22 @@ pub fn respond_with<B: MemoryBackend + ?Sized>(
 ) -> (u16, String) {
     match route(req, tokens) {
         Routed::Read { tool, id } => {
-            let params = ReadParams { id, query: req.query.clone() };
-            let items = backend.read(tool, &params);
-            (200, render_reads(tool, &items, req.include_low))
+            let params = ReadParams {
+                id,
+                query: req.query.clone(),
+                from_ms: req.from_ms,
+                to_ms: req.to_ms,
+            };
+            if is_structured_read(tool) {
+                let json = backend
+                    .read_structured(tool, &params)
+                    .unwrap_or_else(|| r#"{"error":"unavailable"}"#.to_string());
+                let status = structured_read_status(&json);
+                (status, render_structured(tool, &json))
+            } else {
+                let items = backend.read(tool, &params);
+                (200, render_reads(tool, &items, req.include_low))
+            }
         }
         Routed::Write { tool, level } => {
             match backend.write(tool, req.body.as_deref().unwrap_or("")) {
@@ -357,7 +411,16 @@ mod tests {
         r
     }
     fn req(method: Method, path: &str, token: Option<&str>) -> RestRequest {
-        RestRequest { method, path: path.into(), token: token.map(str::to_string), include_low: false, query: None, body: None }
+        RestRequest {
+            method,
+            path: path.into(),
+            token: token.map(str::to_string),
+            include_low: false,
+            query: None,
+            body: None,
+            from_ms: None,
+            to_ms: None,
+        }
     }
 
     #[test]
@@ -541,6 +604,34 @@ mod tests {
     fn json_escape_handles_quotes_and_controls() {
         assert_eq!(json_escape(r#"a"b\c"#), "a\\\"b\\\\c");
         assert_eq!(json_escape("line\nbreak"), "line\\nbreak");
+    }
+
+    #[test]
+    fn visual_recall_endpoints_resolve() {
+        assert_eq!(
+            route(&req(Method::Get, "/v1/visual_recall/status", Some("t")), &reg()),
+            Routed::Read { tool: Tool::VisualRecallStatus, id: None }
+        );
+        assert_eq!(
+            route(&req(Method::Post, "/v1/visual_recall/enabled", Some("t")), &reg()),
+            Routed::Write { tool: Tool::VisualRecallSetEnabled, level: Level::L1 }
+        );
+        assert_eq!(
+            route(&req(Method::Get, "/v1/visual_recall/frames/search", Some("t")), &reg()),
+            Routed::Read { tool: Tool::VisualRecallSearchFrames, id: None }
+        );
+        assert_eq!(
+            route(&req(Method::Get, "/v1/visual_recall/frames/12", Some("t")), &reg()),
+            Routed::Read { tool: Tool::VisualRecallGetFrame, id: Some(12) }
+        );
+        assert_eq!(
+            route(&req(Method::Post, "/v1/visual_recall/frames/12/rescan", Some("t")), &reg()),
+            Routed::Read { tool: Tool::VisualRecallRescanFrame, id: Some(12) }
+        );
+        assert_eq!(
+            route(&req(Method::Post, "/v1/visual_recall/frames/delete", Some("t")), &reg()),
+            Routed::Write { tool: Tool::VisualRecallDeleteFrame, level: Level::L1 }
+        );
     }
 
     #[test]
