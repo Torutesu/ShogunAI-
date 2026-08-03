@@ -718,19 +718,9 @@ body {
   height: 100vh;
   display: flex;
   flex-direction: column;
-  background: var(--bg, #0d0d0f);
-  color: var(--text, #e8e8ea);
+  background: #0d0d0f;
+  color: #e8e8ea;
   overflow: hidden;
-}
-:root[data-appearance="light"] .vr-shell {
-  background: #f7f8fb;
-  color: #1a1a1c;
-}
-@media (prefers-color-scheme: light) {
-  :root[data-appearance="auto"] .vr-shell {
-    background: #f7f8fb;
-    color: #1a1a1c;
-  }
 }
 .vr-chrome {
   flex: none;
@@ -851,77 +841,125 @@ body {
 .vr-stage__preview--empty {
   min-height: 200px;
 }
-/* Independent scrub strip — dark bg, no shared card chrome with preview. */
+/* Present-center scrub: fixed playhead, track pans under it, history off-window. */
 .vr-scrub {
   flex: none;
   outline: none;
-  padding: 4px 2px 2px;
+  margin: 0 -20px;
+  padding: 8px 0 4px;
+  background: #0a0a0c;
 }
-.vr-scrub:focus-visible .vr-scrub__track {
-  box-shadow: 0 0 0 2px rgba(110, 231, 160, 0.35);
+.vr-scrub:focus-visible .vr-scrub__viewport {
+  box-shadow: inset 0 0 0 2px rgba(110, 231, 160, 0.35);
 }
-.vr-scrub__track {
+.vr-scrub__viewport {
   position: relative;
-  height: 28px;
-  display: flex;
-  align-items: center;
-  cursor: pointer;
+  height: 44px;
+  overflow: hidden;
+  cursor: grab;
   touch-action: none;
   user-select: none;
 }
-.vr-scrub__track::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  right: 0;
-  height: 3px;
-  border-radius: 2px;
-  background: rgba(255, 255, 255, 0.12);
+.vr-scrub__viewport:active {
+  cursor: grabbing;
 }
-.vr-scrub__fill {
+.vr-scrub__rail {
   position: absolute;
+  top: 0;
   left: 0;
-  height: 3px;
-  border-radius: 2px;
-  background: var(--live, #6ee7a0);
+  height: 100%;
+  display: flex;
+  align-items: center;
+  will-change: transform;
   pointer-events: none;
 }
-.vr-scrub__thumb {
+.vr-scrub__pad {
+  flex: none;
+  height: 1px;
+}
+.vr-scrub__track {
+  position: relative;
+  flex: none;
+  height: 18px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.06);
+  overflow: visible;
+}
+.vr-scrub__seg {
   position: absolute;
-  top: 50%;
-  width: 10px;
-  height: 22px;
-  margin-left: -5px;
-  transform: translateY(-50%);
-  border-radius: 5px;
+  top: 0;
+  bottom: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  border-right: 1px solid rgba(0, 0, 0, 0.28);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  transition: top 80ms ease, bottom 80ms ease, box-shadow 80ms ease;
+}
+.vr-scrub__seg:last-child {
+  border-right: none;
+}
+.vr-scrub__seg--active {
+  top: -3px;
+  bottom: -3px;
+  z-index: 1;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    0 1px 4px rgba(0, 0, 0, 0.35);
+}
+.vr-scrub__seg-mark {
+  display: grid;
+  place-items: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 3px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.4);
+  color: #f4f4f5;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  pointer-events: none;
+}
+.vr-scrub__seg--active .vr-scrub__seg-mark {
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+}
+.vr-scrub__playhead {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  left: 50%;
+  width: 4px;
+  margin-left: -2px;
+  border-radius: 999px;
   background: #f4f4f5;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35), 0 1px 4px rgba(0, 0, 0, 0.4);
   pointer-events: none;
+  z-index: 2;
 }
-:root[data-appearance="light"] .vr-scrub__track::before {
-  background: rgba(0, 0, 0, 0.12);
+.vr-scrub__playhead::before {
+  content: none;
 }
-:root[data-appearance="light"] .vr-scrub__thumb {
-  background: #1a1a1c;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
-}
-@media (prefers-color-scheme: light) {
-  :root[data-appearance="auto"] .vr-scrub__track::before {
-    background: rgba(0, 0, 0, 0.12);
-  }
-  :root[data-appearance="auto"] .vr-scrub__thumb {
-    background: #1a1a1c;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
-  }
-}
-.vr-stage__preview img {
-  display: block;
-  width: 100%;
+.vr-stage__media {
   flex: 1;
   min-height: 200px;
   max-height: min(62vh, 520px);
-  object-fit: contain;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   background: #0a0a0a;
+  overflow: hidden;
+}
+.vr-stage__img {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  object-position: center;
 }
 .vr-stage__caption {
   display: flex;

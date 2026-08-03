@@ -7,39 +7,44 @@ export interface AppInfo {
   serviceKey?: string;
 }
 
+// Segment hues: soft pastels / clear brand-adjacent (avoid muddy near-blacks).
 const BUNDLES: Record<string, AppInfo> = {
-  "com.hnc.Discord": { label: "Discord", color: "#5865F2" },
-  "com.spotify.client": { label: "Spotify", color: "#1DB954" },
-  "com.google.Chrome": { label: "Chrome", color: "#4285F4" },
-  "com.google.Chrome.canary": { label: "Chrome", color: "#4285F4" },
-  "com.apple.Safari": { label: "Safari", color: "#0A84FF" },
-  "com.apple.SafariTechnologyPreview": { label: "Safari", color: "#0A84FF" },
-  "com.microsoft.VSCode": { label: "Code", color: "#007ACC" },
-  "com.todesktop.230313mzl4w4u92": { label: "Cursor", color: "#7C3AED" },
-  "com.slack.Slack": { label: "Slack", color: "#4A154B" },
-  "com.apple.mail": { label: "Mail", color: "#007AFF" },
-  "com.apple.finder": { label: "Finder", color: "#5AC8FA" },
-  "com.apple.Terminal": { label: "Terminal", color: "#3C3C3C" },
-  "com.figma.Desktop": { label: "Figma", color: "#A259FF" },
-  "notion.id": { label: "Notion", color: "#000000", serviceKey: "notion" },
-  "com.linear": { label: "Linear", color: "#5E6AD2", serviceKey: "linear" },
-  "com.openai.chat": { label: "Chat", color: "#10A37F" },
-  "company.thebrowser.Browser": { label: "Arc", color: "#FC5C3C" },
-  "com.apple.Notes": { label: "Notes", color: "#FFCC00" },
-  "com.apple.iCal": { label: "Calendar", color: "#FF3B30", serviceKey: "gcal" },
-  "com.apple.MobileSMS": { label: "Messages", color: "#34C759" },
-  "com.apple.systempreferences": { label: "Settings", color: "#8E8E93" },
-  "com.github.GitHubClient": { label: "GitHub", color: "#181717", serviceKey: "github" },
-  "us.zoom.xos": { label: "Zoom", color: "#2D8CFF" },
-  "com.google.meet": { label: "Meet", color: "#00897B" },
-  "com.apple.FinalCut": { label: "Final Cut", color: "#A855F7" },
-  "com.adobe.Photoshop": { label: "Photoshop", color: "#31A8FF" },
-  "com.apple.dt.Xcode": { label: "Xcode", color: "#147EFB" },
+  "com.hnc.Discord": { label: "Discord", color: "#8B95F5" },
+  "com.spotify.client": { label: "Spotify", color: "#5ED99A" },
+  "com.google.Chrome": { label: "Chrome", color: "#7AB3F5" },
+  "com.google.Chrome.canary": { label: "Chrome", color: "#7AB3F5" },
+  "com.apple.Safari": { label: "Safari", color: "#6BB8FF" },
+  "com.apple.SafariTechnologyPreview": { label: "Safari", color: "#6BB8FF" },
+  "com.microsoft.VSCode": { label: "Code", color: "#5BB8E8" },
+  "com.todesktop.230313mzl4w4u92": { label: "Cursor", color: "#A78BFA" },
+  "com.slack.Slack": { label: "Slack", color: "#E8A0BF" },
+  "com.apple.mail": { label: "Mail", color: "#6BA3FF" },
+  "com.apple.finder": { label: "Finder", color: "#7DD3FC" },
+  "com.apple.Terminal": { label: "Terminal", color: "#94A3B8" },
+  "dev.warp.Warp-Stable": { label: "Warp", color: "#3D4450" },
+  "dev.warp.Warp": { label: "Warp", color: "#3D4450" },
+  "com.figma.Desktop": { label: "Figma", color: "#C4A1FF" },
+  "notion.id": { label: "Notion", color: "#A8A29E", serviceKey: "notion" },
+  "com.linear": { label: "Linear", color: "#9AA3E8", serviceKey: "linear" },
+  "com.openai.chat": { label: "Chat", color: "#5ECFB0" },
+  "company.thebrowser.Browser": { label: "Arc", color: "#FF8F75" },
+  "com.apple.Notes": { label: "Notes", color: "#F5D76E" },
+  "net.shinyfrog.bear": { label: "Bear", color: "#9EC9F0" },
+  "net.shinyfrog.bear-alt": { label: "Bear", color: "#9EC9F0" },
+  "com.apple.iCal": { label: "Calendar", color: "#FF8A80", serviceKey: "gcal" },
+  "com.apple.MobileSMS": { label: "Messages", color: "#6EE7A0" },
+  "com.apple.systempreferences": { label: "Settings", color: "#C4C4C8" },
+  "com.github.GitHubClient": { label: "GitHub", color: "#9CA3AF", serviceKey: "github" },
+  "us.zoom.xos": { label: "Zoom", color: "#7EC4FF" },
+  "com.google.meet": { label: "Meet", color: "#4DB6A8" },
+  "com.apple.FinalCut": { label: "Final Cut", color: "#C084FC" },
+  "com.adobe.Photoshop": { label: "Photoshop", color: "#6EC1FF" },
+  "com.apple.dt.Xcode": { label: "Xcode", color: "#6BA8F5" },
 };
 
 const FALLBACK_COLORS = [
-  "#6366f1", "#8b5cf6", "#ec4899", "#f43f5e", "#f97316",
-  "#eab308", "#22c55e", "#14b8a6", "#06b6d4", "#3b82f6",
+  "#9EC9F0", "#F5C6AA", "#B8E0D2", "#E8B4D4", "#D4C4F0",
+  "#F5E6A3", "#A8D5A2", "#F2B8A0", "#A8C5D4", "#D4B8A8",
 ];
 
 function hashTint(key: string): string {
@@ -63,12 +68,17 @@ export function appServiceIcon(info: AppInfo): ServiceIcon | undefined {
   return undefined;
 }
 
-/** Segment tint at ~18% opacity for timeline bar. */
-export function segmentTint(color: string): string {
+/** Soft pastel fill for timeline segments (readable on dark scrub shell). */
+export function segmentTint(color: string, active = false): string {
   const hex = color.replace("#", "");
   const n = parseInt(hex.length === 3 ? hex.split("").map((c) => c + c).join("") : hex, 16);
   const r = (n >> 16) & 255;
   const g = (n >> 8) & 255;
   const b = n & 255;
-  return `rgba(${r}, ${g}, ${b}, 0.55)`;
+  // Lift toward white so brand hues stay distinct without muddying.
+  const lift = active ? 0.22 : 0.38;
+  const rr = Math.round(r + (255 - r) * lift);
+  const gg = Math.round(g + (255 - g) * lift);
+  const bb = Math.round(b + (255 - b) * lift);
+  return `rgba(${rr}, ${gg}, ${bb}, ${active ? 0.95 : 0.78})`;
 }

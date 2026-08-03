@@ -1,24 +1,21 @@
 // Entry for the Visual recall browse window. Separate document from the notch panel — the
 // timeline, image preview, and OCR scrubber need room a notch settings pane cannot give.
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { resolveApp, segmentTint } from "./appIcons";
 import { t } from "./strings";
 import "./styles.css";
 
 const IN_TAURI = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
-function loadAppearance(): "auto" | "light" | "dark" {
-  try {
-    const v = JSON.parse(localStorage.getItem("shogun.appearance") ?? '"auto"');
-    return v === "light" || v === "dark" ? v : "auto";
-  } catch {
-    return "auto";
-  }
-}
-document.documentElement.dataset.appearance = loadAppearance();
+/** Fixed spacing — history extends past the window; do not fit-all into one bar. */
+const PX_PER_FRAME = 24;
+
+// Browse window stays dark so scrub segments + playhead read clean.
+document.documentElement.dataset.appearance = "dark";
 document.body.classList.add("full-window");
 
 type FrameListItem = {
@@ -41,6 +38,12 @@ type FrameImage = {
   source: string;
 };
 
+type AppSegment = {
+  start: number;
+  end: number;
+  app: string | null;
+};
+
 function formatWhen(ts: number): string {
   return new Date(ts).toLocaleString(undefined, {
     month: "short",
@@ -55,6 +58,22 @@ function excerptOcr(text: string, maxLines = 2): string {
   return lines.join("\n");
 }
 
+/** Contiguous runs of the same app_bundle_id (or null). */
+function appSegments(frames: FrameListItem[]): AppSegment[] {
+  if (frames.length === 0) return [];
+  const out: AppSegment[] = [];
+  let start = 0;
+  let app = frames[0]!.app;
+  for (let i = 1; i < frames.length; i++) {
+    if (frames[i]!.app === app) continue;
+    out.push({ start, end: i - 1, app });
+    start = i;
+    app = frames[i]!.app;
+  }
+  out.push({ start, end: frames.length - 1, app });
+  return out;
+}
+
 /** Drag the browse window. Overlay title bar + CSS drag region; startDragging is the fallback. */
 function beginDrag(e: React.PointerEvent): void {
   if (!IN_TAURI || e.button !== 0) return;
@@ -63,44 +82,85 @@ function beginDrag(e: React.PointerEvent): void {
   void getCurrentWindow().startDragging().catch(() => undefined);
 }
 
-/** Scrub strip lives outside the preview card — drag handle, click track, arrow keys. */
+/**
+ * Present-center scrub: fixed playhead at viewport middle = selected time.
+ * Track uses fixed px/frame so history runs off-window to the left; drag/scroll pans under center.
+ */
 function ScrubBar(props: {
+  frames: FrameListItem[];
   value: number;
-  max: number;
   label: string;
   onChange: (next: number) => void;
 }): JSX.Element {
-  const { value, max, label, onChange } = props;
-  const trackRef = useRef<HTMLDivElement>(null);
-  const dragging = useRef(false);
+  const { frames, value, label, onChange } = props;
+  const max = Math.max(0, frames.length - 1);
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const [viewW, setViewW] = useState(0);
+  const drag = useRef<{
+    pointerId: number;
+    startX: number;
+    startIdx: number;
+    moved: boolean;
+  } | null>(null);
 
-  const seekFromClientX = (clientX: number): void => {
-    const el = trackRef.current;
+  const segments = useMemo(() => appSegments(frames), [frames]);
+
+  useEffect(() => {
+    const el = viewportRef.current;
+    if (!el) return;
+    const sync = (): void => setViewW(el.clientWidth);
+    sync();
+    const ro = new ResizeObserver(sync);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const clampIdx = (n: number): number => Math.min(max, Math.max(0, Math.round(n)));
+
+  /** Visual: left = older, right = newer. Fixed center playhead; rail pans underneath. */
+  const seekFromClientX = (clientX: number, baseIdx: number): void => {
+    const el = viewportRef.current;
     if (!el || max <= 0) return;
     const rect = el.getBoundingClientRect();
-    if (rect.width <= 0) return;
-    const t = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
-    onChange(Math.round(t * max));
+    const centerX = rect.left + rect.width / 2;
+    // Tap left of center → older (lower idx).
+    onChange(clampIdx(baseIdx + (clientX - centerX) / PX_PER_FRAME));
   };
 
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>): void => {
     if (e.button !== 0 || max <= 0) return;
-    dragging.current = true;
+    drag.current = { pointerId: e.pointerId, startX: e.clientX, startIdx: value, moved: false };
     e.currentTarget.setPointerCapture(e.pointerId);
-    seekFromClientX(e.clientX);
   };
 
   const onPointerMove = (e: React.PointerEvent<HTMLDivElement>): void => {
-    if (!dragging.current) return;
-    seekFromClientX(e.clientX);
+    const d = drag.current;
+    if (!d || e.pointerId !== d.pointerId) return;
+    const dx = e.clientX - d.startX;
+    if (!d.moved && Math.abs(dx) < 3) return;
+    d.moved = true;
+    // Drag right → rail follows finger → older under playhead (natural left-to-right pan).
+    onChange(clampIdx(d.startIdx - dx / PX_PER_FRAME));
   };
 
   const onPointerUp = (e: React.PointerEvent<HTMLDivElement>): void => {
-    if (!dragging.current) return;
-    dragging.current = false;
+    const d = drag.current;
+    if (!d || e.pointerId !== d.pointerId) return;
+    drag.current = null;
     if (e.currentTarget.hasPointerCapture(e.pointerId)) {
       e.currentTarget.releasePointerCapture(e.pointerId);
     }
+    // Tap (no drag): seek relative to fixed center.
+    if (!d.moved) seekFromClientX(e.clientX, d.startIdx);
+  };
+
+  const onWheel = (e: React.WheelEvent<HTMLDivElement>): void => {
+    if (max <= 0) return;
+    const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+    if (delta === 0) return;
+    e.preventDefault();
+    // Scroll right (pos delta) → newer under playhead (left-to-right timeline feel).
+    onChange(clampIdx(value + delta / PX_PER_FRAME));
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>): void => {
@@ -120,7 +180,11 @@ function ScrubBar(props: {
     }
   };
 
-  const pct = max <= 0 ? 0 : (value / max) * 100;
+  // Half-viewport pads so oldest/newest can sit under the fixed center marker.
+  const pad = viewW / 2;
+  const railW = pad * 2 + frames.length * PX_PER_FRAME;
+  // Selected frame center under viewport center.
+  const translateX = viewW > 0 ? -(value + 0.5) * PX_PER_FRAME : 0;
 
   return (
     <div
@@ -135,15 +199,49 @@ function ScrubBar(props: {
       onKeyDown={onKeyDown}
     >
       <div
-        ref={trackRef}
-        className="vr-scrub__track"
+        ref={viewportRef}
+        className="vr-scrub__viewport"
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
+        onWheel={onWheel}
       >
-        <div className="vr-scrub__fill" style={{ width: `${pct}%` }} />
-        <div className="vr-scrub__thumb" style={{ left: `${pct}%` }} />
+        <div
+          className="vr-scrub__rail"
+          style={{ width: railW, transform: `translate3d(${translateX}px, 0, 0)` }}
+        >
+          <div className="vr-scrub__pad" style={{ width: pad }} />
+          <div className="vr-scrub__track" style={{ width: frames.length * PX_PER_FRAME }}>
+            {segments.map((seg) => {
+              const info = resolveApp(seg.app);
+              const w = (seg.end - seg.start + 1) * PX_PER_FRAME;
+              const active = value >= seg.start && value <= seg.end;
+              const showMark = w >= 22;
+              const initial = (info.label.charAt(0) || "?").toUpperCase();
+              return (
+                <div
+                  key={`${seg.start}-${seg.end}`}
+                  className={`vr-scrub__seg${active ? " vr-scrub__seg--active" : ""}`}
+                  title={info.label}
+                  style={{
+                    left: seg.start * PX_PER_FRAME,
+                    width: w,
+                    background: segmentTint(info.color, active),
+                  }}
+                >
+                  {showMark ? (
+                    <span className="vr-scrub__seg-mark" aria-hidden>
+                      {initial}
+                    </span>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+          <div className="vr-scrub__pad" style={{ width: pad }} />
+        </div>
+        <div className="vr-scrub__playhead" aria-hidden />
       </div>
     </div>
   );
@@ -157,14 +255,23 @@ function VisualRecallBrowse(): JSX.Element {
   const [failed, setFailed] = useState<string | null>(null);
   const [ocrOpen, setOcrOpen] = useState(false);
   const [deleteArmed, setDeleteArmed] = useState(false);
+  const centeredOnce = useRef(false);
 
   const refreshFrames = (): void => {
     if (!IN_TAURI) return;
     void invoke<FrameListItem[]>("list_screen_frames")
       .then((rows) => {
+        // API newest-first → oldest→newest so index grows toward present.
         const ordered = [...rows].reverse();
         setFrames(ordered);
-        setIdx((cur) => (ordered.length === 0 ? 0 : Math.min(cur, ordered.length - 1)));
+        setIdx((cur) => {
+          if (ordered.length === 0) return 0;
+          if (!centeredOnce.current) {
+            centeredOnce.current = true;
+            return ordered.length - 1;
+          }
+          return Math.min(cur, ordered.length - 1);
+        });
         setFailed(null);
       })
       .catch((e) => setFailed(String(e)));
@@ -228,6 +335,7 @@ function VisualRecallBrowse(): JSX.Element {
   const ocrText = previewMeta?.ocr_text || current?.ocr_excerpt || "";
   const when = previewMeta?.ts ?? current?.ts;
   const appName = previewMeta?.app ?? current?.app;
+  const appLabel = resolveApp(appName).label;
 
   return (
     <div className="vr-shell">
@@ -271,10 +379,12 @@ function VisualRecallBrowse(): JSX.Element {
           <div className="vr-stage">
             {previewUrl && current ? (
               <figure className="vr-stage__preview">
-                <img src={previewUrl} alt="" draggable={false} />
+                <div className="vr-stage__media">
+                  <img className="vr-stage__img" src={previewUrl} alt="" draggable={false} />
+                </div>
                 <figcaption className="vr-stage__caption">
                   {when != null ? <time>{formatWhen(when)}</time> : null}
-                  {appName ? <span className="vr-stage__app">{appName}</span> : null}
+                  {appName ? <span className="vr-stage__app">{appLabel}</span> : null}
                 </figcaption>
                 {ocrText ? (
                   <div className="vr-stage__ocr" data-no-drag>
@@ -292,10 +402,10 @@ function VisualRecallBrowse(): JSX.Element {
             ) : (
               <div className="vr-stage__preview vr-stage__preview--empty" aria-hidden />
             )}
-            {/* Scrub outside the preview card — not boxed into the same frame. */}
+            {/* Scrub outside the preview card — present fixed at center, history pans left. */}
             <ScrubBar
+              frames={frames}
               value={idx}
-              max={Math.max(0, frames.length - 1)}
               label={t.visualRecallScrubHint}
               onChange={setIdx}
             />
