@@ -915,6 +915,9 @@ use shogun_core::meeting::gate::OfferGate;
         // Whole window captures clicks while any meeting surface is visible. Transparent padding
         // around `.ov` may block clicks too — better than pointermove hit-tests that flip false
         // before the first move or on pointerleave and let clicks fall through to Meet behind.
+        // Product trade-off (2026-08): overlay parks top-right; Meet/Zoom controls there become
+        // unclickable until dismissed. Pointermove hit-testing was tried (752612f) and reverted
+        // (0743193). Revisit with CGEventTap cursor tracking if real-device testing blocks ship.
         OVERLAY_WANTS_INTERACTIVE.store(true, Ordering::SeqCst);
         apply_overlay_interactive(&win);
         let shown = win.show();
@@ -975,20 +978,6 @@ use shogun_core::meeting::gate::OfferGate;
                 }
             }
             let _ = win.start_dragging();
-        });
-    }
-
-    /// Toggle whether the overlay window captures mouse events. The webview drives this from
-    /// pointer hit-tests over `.ov` (interactive=true on the glass card, false elsewhere / idle).
-    /// AppKit ignores CSS `pointer-events` for hit-testing against windows behind this one.
-    #[tauri::command]
-    pub fn meeting_overlay_set_interactive(app: tauri::AppHandle, interactive: bool) {
-        OVERLAY_WANTS_INTERACTIVE.store(interactive, Ordering::SeqCst);
-        let handle = app.clone();
-        let _ = app.run_on_main_thread(move || {
-            let Some(win) = handle.get_webview_window(WINDOW_LABEL) else { return };
-            apply_overlay_interactive(&win);
-            eprintln!("[meeting] overlay interactive={interactive}");
         });
     }
 
