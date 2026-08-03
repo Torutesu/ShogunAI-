@@ -142,7 +142,10 @@ pub fn ocr_focused_window_gated(
             &CGPoint::new(f64::from(crop.x), f64::from(crop.y)),
             &CGSize::new(f64::from(crop.width), f64::from(crop.height)),
         );
-        cg.cropped(rect).and_then(|sub| ocr_cg_image(&sub))
+        // Prefer pass API so stderr gets mean Vision confidence without content.
+        cg.cropped(rect)
+            .and_then(|sub| ocr_cg_image_pass(&sub))
+            .map(|p| p.text)
     });
     let store_frame = fresh_vision && matches!(outcome, pipeline::OcrOutcome::Text(_));
     let jpeg_frame = if store_frame { encode_frame_jpeg(&frame) } else { None };
@@ -166,8 +169,65 @@ pub fn encode_frame_jpeg(frame: &DynamicImage) -> Option<OcrFrame> {
     Some(OcrFrame { jpeg: buf, width, height })
 }
 
+/// One Vision pass: flat text plus mean top-candidate confidence (not persisted yet).
+#[derive(Debug, Clone)]
+pub struct OcrPass {
+    pub text: String,
+    /// Mean of `VNRecognizedText.confidence` for kept lines, in `[0, 1]`.
+    pub mean_confidence: f32,
+    pub line_count: usize,
+}
+
+fn configure_recognize_text(req: &VNRecognizeTextRequest) {
+    req.setRecognitionLevel(VNRequestTextRecognitionLevel::Accurate);
+    req.setUsesLanguageCorrection(true);
+    // Revision 3+: pick latin vs CJK etc. without hardcoding `recognitionLanguages`.
+    req.setAutomaticallyDetectsLanguage(true);
+}
+
+fn text_from_request(request: &VNRecognizeTextRequest) -> Option<OcrPass> {
+    let observations = request.results()?;
+    let mut lines: Vec<String> = Vec::new();
+    let mut conf_sum = 0.0f32;
+    for obs in observations.iter() {
+        let Some(text_obs) = obs.downcast_ref::<VNRecognizedTextObservation>() else {
+            continue;
+        };
+        let candidates = text_obs.topCandidates(1);
+        if let Some(best) = candidates.firstObject() {
+            let line = best.string().to_string();
+            if line.trim().is_empty() {
+                continue;
+            }
+            conf_sum += best.confidence();
+            lines.push(line);
+        }
+    }
+    if lines.is_empty() {
+        return None;
+    }
+    let line_count = lines.len();
+    let mean_confidence = conf_sum / line_count as f32;
+    let text = lines.join("\n");
+    // Length + confidence only — never log OCR body (capture invariant).
+    eprintln!(
+        "[screen_ocr] vision lines={line_count} mean_conf={mean_confidence:.2} chars={}",
+        text.len()
+    );
+    Some(OcrPass {
+        text,
+        mean_confidence,
+        line_count,
+    })
+}
+
 /// Apple Vision OCR on a CGImage crop (Screenpipe `perform_ocr_apple` semantics, flat text).
 pub fn ocr_cg_image(image: &CGImage) -> Option<String> {
+    ocr_cg_image_pass(image).map(|p| p.text)
+}
+
+/// Same as [`ocr_cg_image`] but keeps mean Vision confidence for logging / future gates.
+pub fn ocr_cg_image_pass(image: &CGImage) -> Option<OcrPass> {
     // SAFETY: both CGImage types are transparent refs to the same CoreGraphics object.
     let vision_image = unsafe { &*(image.as_ptr() as *const VisionImage) };
     let options = NSDictionary::<objc2_vision::VNImageOption, AnyObject>::new();
@@ -180,34 +240,21 @@ pub fn ocr_cg_image(image: &CGImage) -> Option<String> {
     };
     let request = unsafe {
         let req = VNRecognizeTextRequest::init(VNRecognizeTextRequest::alloc());
-        req.setRecognitionLevel(VNRequestTextRecognitionLevel::Accurate);
-        req.setUsesLanguageCorrection(true);
+        configure_recognize_text(&req);
         req
     };
     let requests = NSArray::from_slice(&[&*request as &VNRequest]);
     handler.performRequests_error(&requests).ok()?;
-    let observations = request.results()?;
-    let mut lines: Vec<String> = Vec::new();
-    for obs in observations.iter() {
-        let Some(text_obs) = obs.downcast_ref::<VNRecognizedTextObservation>() else {
-            continue;
-        };
-        let candidates = text_obs.topCandidates(1);
-        if let Some(best) = candidates.firstObject() {
-            let line = best.string().to_string();
-            if !line.trim().is_empty() {
-                lines.push(line);
-            }
-        }
-    }
-    if lines.is_empty() {
-        return None;
-    }
-    Some(lines.join("\n"))
+    text_from_request(&request)
 }
 
 /// Re-OCR a stored JPEG (visual recall pull → scan path).
 pub fn ocr_jpeg_bytes(jpeg: &[u8]) -> Option<String> {
+    ocr_jpeg_bytes_pass(jpeg).map(|p| p.text)
+}
+
+/// Same as [`ocr_jpeg_bytes`] but keeps mean Vision confidence.
+pub fn ocr_jpeg_bytes_pass(jpeg: &[u8]) -> Option<OcrPass> {
     use objc2_foundation::NSData;
 
     let data = NSData::with_bytes(jpeg);
@@ -221,30 +268,12 @@ pub fn ocr_jpeg_bytes(jpeg: &[u8]) -> Option<String> {
     };
     let request = unsafe {
         let req = VNRecognizeTextRequest::init(VNRecognizeTextRequest::alloc());
-        req.setRecognitionLevel(VNRequestTextRecognitionLevel::Accurate);
-        req.setUsesLanguageCorrection(true);
+        configure_recognize_text(&req);
         req
     };
     let requests = NSArray::from_slice(&[&*request as &VNRequest]);
     handler.performRequests_error(&requests).ok()?;
-    let observations = request.results()?;
-    let mut lines: Vec<String> = Vec::new();
-    for obs in observations.iter() {
-        let Some(text_obs) = obs.downcast_ref::<VNRecognizedTextObservation>() else {
-            continue;
-        };
-        let candidates = text_obs.topCandidates(1);
-        if let Some(best) = candidates.firstObject() {
-            let line = best.string().to_string();
-            if !line.trim().is_empty() {
-                lines.push(line);
-            }
-        }
-    }
-    if lines.is_empty() {
-        return None;
-    }
-    Some(lines.join("\n"))
+    text_from_request(&request)
 }
 
 fn cg_image_to_dynamic(image: &CGImage) -> Option<DynamicImage> {

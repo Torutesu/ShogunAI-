@@ -1,10 +1,8 @@
 //! Visual recall settings + Tauri commands (issue #106/#107).
 //!
-//! Opt-in screen OCR (default off). Persisted to `visual_recall.json` under app data; the capture
-//! poller reads the shared `RwLock` each tick so toggling applies immediately.
+//! Opt-in passive screen OCR (default off). Saved frames use the same 72 h JPEG retention.
 //!
-//! Compressed JPEG frames (≤72 h) are stored in the memory DB when enabled; recall APIs let chat
-//! pull frames by query/time and re-OCR on demand.
+//! Memory API / MCP / CLI symmetry via shogun-mcp tools + DbBackend (invariant 6).
 
 #[cfg(all(target_os = "macos", feature = "visual-recall-ocr"))]
 pub mod ocr_gate;
@@ -23,24 +21,39 @@ pub mod mac {
     pub type SharedSettings = std::sync::Arc<RwLock<Settings>>;
 
     static LANE: Mutex<Option<SharedSettings>> = Mutex::new(None);
+    static SETTINGS_PATH: Mutex<Option<std::path::PathBuf>> = Mutex::new(None);
 
     fn settings_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
-        app.path().app_data_dir().ok().map(|d| d.join("visual_recall.json"))
+        app.path()
+            .app_data_dir()
+            .ok()
+            .map(|d| crate::memory_data_dir(d).join("visual_recall.json"))
     }
 
-    /// Load persisted settings, publish the shared handle, return it for the capture poller.
-    pub fn init(app: &tauri::AppHandle) -> SharedSettings {
-        let mut settings = Settings::default();
-        if let Some(p) = settings_path(app) {
-            if let Ok(text) = std::fs::read_to_string(p) {
-                if let Ok(saved) = serde_json::from_str::<Settings>(&text) {
-                    settings = saved;
-                }
-            }
+    /// Reload settings from disk into RAM so Memory API writes are observed by the capture loop.
+    pub fn refresh_settings(shared: &SharedSettings) -> Settings {
+        let disk = SETTINGS_PATH
+            .lock()
+            .ok()
+            .and_then(|g| g.as_ref().map(|p| shogun_core::capture::visual_recall::load_settings(p)))
+            .unwrap_or_default();
+        if let Ok(mut live) = shared.write() {
+            *live = disk.clone();
         }
+        disk
+    }
+
+    pub fn init(app: &tauri::AppHandle) -> SharedSettings {
+        let settings = settings_path(app)
+            .as_deref()
+            .map(shogun_core::capture::visual_recall::load_settings)
+            .unwrap_or_default();
         let shared = std::sync::Arc::new(RwLock::new(settings.clone()));
         if let Ok(mut g) = LANE.lock() {
             *g = Some(shared.clone());
+        }
+        if let Ok(mut p) = SETTINGS_PATH.lock() {
+            *p = settings_path(app);
         }
         eprintln!(
             "[visual_recall] screen OCR {}",
@@ -51,11 +64,7 @@ pub mod mac {
 
     fn save(app: &tauri::AppHandle, settings: &Settings) -> Result<(), String> {
         let Some(p) = settings_path(app) else { return Ok(()) };
-        if let Some(dir) = p.parent() {
-            let _ = std::fs::create_dir_all(dir);
-        }
-        let json = serde_json::to_string_pretty(settings).map_err(|e| e.to_string())?;
-        std::fs::write(&p, json).map_err(|e| format!("save failed: {e}"))
+        shogun_core::capture::visual_recall::save_settings(&p, settings)
     }
 
     #[tauri::command]
@@ -67,9 +76,12 @@ pub mod mac {
             .unwrap_or_default()
     }
 
-    /// Master switch for screen OCR (issue #107). Persist first, then apply.
     #[tauri::command]
-    pub fn set_visual_recall_enabled(enabled: bool, app: tauri::AppHandle) -> Result<(), String> {
+    pub fn set_visual_recall_enabled(
+        enabled: bool,
+        app: tauri::AppHandle,
+        db: tauri::State<'_, shogun_core::daemon::Db>,
+    ) -> Result<(), String> {
         let candidate = {
             let Ok(g) = LANE.lock() else { return Err("busy".into()) };
             let Some(shared) = g.as_ref() else { return Err("not ready".into()) };
@@ -81,6 +93,13 @@ pub mod mac {
         let Some(shared) = g.as_ref() else { return Err("not ready".into()) };
         let mut live = shared.write().map_err(|_| "busy".to_string())?;
         *live = candidate;
+        if !enabled {
+            // Passive OCR off: drop auto frames only; user-initiated shots stay until 72 h purge.
+            let removed = db.purge_auto_screen_frames()?;
+            if removed > 0 {
+                eprintln!("[visual_recall] disabled — purged {removed} auto frame(s)");
+            }
+        }
         eprintln!(
             "[visual_recall] screen OCR {}",
             if enabled { "enabled" } else { "off" }
@@ -109,8 +128,6 @@ pub mod mac {
         pub recent: Vec<VisualRecallSnippet>,
     }
 
-    /// Settings + live timeline for visual recall (issue #106). Text excerpts in `recent`; frame
-    /// stats are counts only — no pixels over IPC.
     #[tauri::command]
     pub fn get_visual_recall_status(db: tauri::State<'_, shogun_core::daemon::Db>) -> VisualRecallStatus {
         const PREVIEW_CHARS: usize = 140;
@@ -140,126 +157,112 @@ pub mod mac {
     }
 
     #[derive(serde::Serialize)]
-    pub struct ScreenFrameView {
+    pub struct FrameListItem {
         pub id: i64,
-        pub event_id: i64,
         pub ts: i64,
-        pub app: Option<String>,
-        pub window: Option<String>,
-        pub width: u32,
-        pub height: u32,
-        pub jpeg_bytes: usize,
-        pub ocr_text: String,
-        /// Raw JPEG bytes (local-only; hook for future vision input).
-        pub jpeg: Vec<u8>,
-    }
-
-    #[derive(serde::Serialize)]
-    pub struct ScreenFrameSummaryView {
-        pub id: i64,
         pub event_id: i64,
-        pub ts: i64,
         pub app: Option<String>,
         pub window: Option<String>,
         pub width: u32,
         pub height: u32,
         pub jpeg_bytes: usize,
         pub ocr_excerpt: String,
-        pub needs_rescan: bool,
+        pub source: String,
     }
 
-    fn frame_to_view(rec: shogun_memory::screen_frames::FrameRecord) -> ScreenFrameView {
-        let s = rec.summary;
-        let jpeg_len = rec.jpeg.len();
-        ScreenFrameView {
-            id: s.id,
-            event_id: s.event_id,
-            ts: s.created_at_ms,
-            app: s.app_bundle_id,
-            window: s.window_title,
-            width: s.width,
-            height: s.height,
-            jpeg_bytes: jpeg_len,
-            ocr_text: s.ocr_text,
-            jpeg: rec.jpeg,
-        }
-    }
-
-    /// Fetch one stored frame by id (JPEG + linked OCR text).
     #[tauri::command]
-    pub fn get_screen_frame(
-        frame_id: i64,
-        db: tauri::State<'_, shogun_core::daemon::Db>,
-    ) -> Option<ScreenFrameView> {
-        db.get_screen_frame(frame_id).map(frame_to_view)
-    }
-
-    /// Search stored frames for a visual-recall question (metadata only — use [`get_screen_frame`] for bytes).
-    #[tauri::command]
-    pub fn search_screen_frames(
-        query: String,
-        limit: Option<usize>,
-        db: tauri::State<'_, shogun_core::daemon::Db>,
-    ) -> Vec<ScreenFrameSummaryView> {
-        const EXCERPT: usize = 200;
-        db.search_screen_frames(&query, limit.unwrap_or(6), EXCERPT)
+    pub fn list_screen_frames(db: tauri::State<'_, shogun_core::daemon::Db>) -> Vec<FrameListItem> {
+        const LIMIT: usize = 200;
+        const EXCERPT: usize = 160;
+        db.list_screen_frames(LIMIT)
             .into_iter()
-            .map(|f| ScreenFrameSummaryView {
-                id: f.frame_id,
-                event_id: f.event_id,
-                ts: f.ts,
-                app: f.app_bundle_id,
-                window: f.window_title,
-                width: f.width,
-                height: f.height,
-                jpeg_bytes: 0,
-                ocr_excerpt: f.ocr_excerpt,
-                needs_rescan: f.needs_rescan,
-            })
-            .collect()
-    }
-
-    /// Frames in a time window (ms since epoch), newest first.
-    #[tauri::command]
-    pub fn get_screen_frames_in_range(
-        from_ms: i64,
-        to_ms: i64,
-        limit: Option<usize>,
-        db: tauri::State<'_, shogun_core::daemon::Db>,
-    ) -> Vec<ScreenFrameSummaryView> {
-        db.screen_frames_in_range(from_ms, to_ms, limit.unwrap_or(20))
-            .into_iter()
-            .map(|s| ScreenFrameSummaryView {
+            .map(|s| FrameListItem {
                 id: s.id,
-                event_id: s.event_id,
                 ts: s.created_at_ms,
+                event_id: s.event_id,
                 app: s.app_bundle_id,
                 window: s.window_title,
                 width: s.width,
                 height: s.height,
                 jpeg_bytes: s.jpeg_bytes,
-                ocr_excerpt: shogun_memory::search::excerpt(&s.ocr_text, "", 200),
-                needs_rescan: s.ocr_text.trim().len() < shogun_memory::screen_frames::THIN_OCR_CHARS,
+                ocr_excerpt: shogun_memory::search::excerpt(&s.ocr_text, "", EXCERPT),
+                source: s.source,
             })
             .collect()
     }
 
-    /// Re-OCR a stored frame (pull image → Vision). Returns fresh text; does not mutate DB.
-    #[cfg(feature = "visual-recall-ocr")]
-    #[tauri::command]
-    pub fn rescan_screen_frame(
-        frame_id: i64,
-        db: tauri::State<'_, shogun_core::daemon::Db>,
-    ) -> Result<String, String> {
-        let rec = db.get_screen_frame(frame_id).ok_or("frame not found")?;
-        crate::screen_ocr::ocr_jpeg_bytes(&rec.jpeg)
-            .filter(|t| !t.trim().is_empty())
-            .ok_or_else(|| "Vision returned no text".to_string())
+    #[derive(serde::Serialize)]
+    pub struct FrameImage {
+        pub id: i64,
+        pub mime: String,
+        pub width: u32,
+        pub height: u32,
+        pub jpeg_base64: String,
+        pub ocr_text: String,
+        pub ts: i64,
+        pub app: Option<String>,
+        pub window: Option<String>,
+        pub source: String,
     }
 
-    #[cfg(not(feature = "visual-recall-ocr"))]
     #[tauri::command]
-    pub fn rescan_screen_frame(_frame_id: i64) -> Result<String, String> {
-        Err("visual-recall-ocr feature disabled".to_string())
+    pub fn get_screen_frame_image(
+        frame_id: i64,
+        db: tauri::State<'_, shogun_core::daemon::Db>,
+    ) -> Result<FrameImage, String> {
+        let rec = db.get_screen_frame(frame_id).ok_or_else(|| "not found".to_string())?;
+        let s = rec.summary;
+        Ok(FrameImage {
+            id: s.id,
+            mime: "image/jpeg".to_string(),
+            width: s.width,
+            height: s.height,
+            jpeg_base64: base64_encode(&rec.jpeg),
+            ocr_text: s.ocr_text,
+            ts: s.created_at_ms,
+            app: s.app_bundle_id,
+            window: s.window_title,
+            source: s.source,
+        })
+    }
+
+    #[tauri::command]
+    pub fn delete_screen_frame(
+        frame_id: i64,
+        db: tauri::State<'_, shogun_core::daemon::Db>,
+    ) -> Result<(), String> {
+        if db.delete_screen_frame(frame_id)? {
+            Ok(())
+        } else {
+            Err("not found".into())
+        }
+    }
+
+    #[tauri::command]
+    pub fn open_visual_recall(app: tauri::AppHandle) {
+        crate::build_visual_recall_window(&app);
+    }
+
+    fn base64_encode(bytes: &[u8]) -> String {
+        const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut out = String::new();
+        for chunk in bytes.chunks(3) {
+            let b0 = chunk[0];
+            let b1 = chunk.get(1).copied().unwrap_or(0);
+            let b2 = chunk.get(2).copied().unwrap_or(0);
+            out.push(TABLE[(b0 >> 2) as usize] as char);
+            out.push(TABLE[(((b0 & 0x03) << 4) | (b1 >> 4)) as usize] as char);
+            if chunk.len() > 1 {
+                out.push(TABLE[(((b1 & 0x0f) << 2) | (b2 >> 6)) as usize] as char);
+            } else {
+                out.push('=');
+            }
+            if chunk.len() > 2 {
+                out.push(TABLE[(b2 & 0x3f) as usize] as char);
+            } else {
+                out.push('=');
+            }
+        }
+        out
     }
 }

@@ -53,12 +53,18 @@ const OVERLAY_LEVEL: isize = 3;
 /// Window label for the Full UI (spec §D). Shared by the builder and the open path so the
 /// "already open → focus it" check can't drift from the label the window was built with.
 pub(crate) const FULL_UI_LABEL: &str = "fullui";
+/// Window label for the Visual recall browse UI (saved screen timeline).
+pub(crate) const VISUAL_RECALL_LABEL: &str = "visual-recall";
 /// Full UI window size, in LOGICAL points. The minimum is the spec §D floor — below it the
 /// sidebar plus a three-card health row stops fitting.
 const FULL_UI_W: f64 = 1200.0;
 const FULL_UI_H: f64 = 820.0;
 const FULL_UI_MIN_W: f64 = 1040.0;
 const FULL_UI_MIN_H: f64 = 720.0;
+const VISUAL_RECALL_W: f64 = 720.0;
+const VISUAL_RECALL_H: f64 = 640.0;
+const VISUAL_RECALL_MIN_W: f64 = 480.0;
+const VISUAL_RECALL_MIN_H: f64 = 400.0;
 
 /// True while the USER hid the overlay (toggle shortcut / Esc / tray). The auto-residency
 /// machinery (watchers, heal, respawn) must respect this — a deliberately hidden panel stays
@@ -151,14 +157,13 @@ pub fn run() {
         meeting::mac::set_meeting_mode,
         meeting::mac::set_meeting_langs,
         meeting::mac::meeting_overlay_dismiss,
-        meeting::mac::meeting_overlay_set_interactive,
         visual_recall::mac::get_visual_recall_settings,
         visual_recall::mac::set_visual_recall_enabled,
         visual_recall::mac::get_visual_recall_status,
-        visual_recall::mac::get_screen_frame,
-        visual_recall::mac::search_screen_frames,
-        visual_recall::mac::get_screen_frames_in_range,
-        visual_recall::mac::rescan_screen_frame,
+        visual_recall::mac::list_screen_frames,
+        visual_recall::mac::get_screen_frame_image,
+        visual_recall::mac::delete_screen_frame,
+        visual_recall::mac::open_visual_recall,
         notch_actions::mac::notch_actions,
         notch_exec::mac::run_notch_action,
         notch_exec::mac::confirm_notch_action,
@@ -909,6 +914,50 @@ fn center_on_cursor_screen(win: &tauri::WebviewWindow) {
     // drifting off-screen to the left.
     let x = (mp.x + (ms.width - FULL_UI_W) / 2.0).max(mp.x);
     let y = (mp.y + (ms.height - FULL_UI_H) / 2.0).max(mp.y);
+    let _ = win.set_position(tauri::LogicalPosition::new(x, y));
+}
+
+/// Visual recall browse window — timeline scrubber, image preview, OCR text, delete.
+///
+/// Ordinary window like Full UI: user sits and browses saved screens. Already open → focus it.
+pub(crate) fn build_visual_recall_window(handle: &tauri::AppHandle) {
+    use tauri::Manager;
+    if let Some(win) = handle.get_webview_window(VISUAL_RECALL_LABEL) {
+        let _ = win.unminimize();
+        let _ = win.show();
+        let _ = win.set_focus();
+        eprintln!("[shell] visual recall window already open — focused");
+        return;
+    }
+    let builder = tauri::WebviewWindowBuilder::new(
+        handle,
+        VISUAL_RECALL_LABEL,
+        tauri::WebviewUrl::App("visual-recall.html".into()),
+    )
+    .title("SHOGUN — Visual recall")
+    .resizable(true)
+    .min_inner_size(VISUAL_RECALL_MIN_W, VISUAL_RECALL_MIN_H)
+    .inner_size(VISUAL_RECALL_W, VISUAL_RECALL_H)
+    .transparent(true)
+    .title_bar_style(tauri::TitleBarStyle::Overlay)
+    .focused(true);
+    match builder.build() {
+        Ok(win) => {
+            center_visual_recall_on_cursor_screen(&win);
+            eprintln!("[shell] visual recall window built");
+        }
+        Err(e) => eprintln!("[shell] visual recall window build failed: {e}"),
+    }
+}
+
+fn center_visual_recall_on_cursor_screen(win: &tauri::WebviewWindow) {
+    let Ok(cursor) = win.cursor_position() else { return };
+    let Ok(Some(mon)) = win.monitor_from_point(cursor.x, cursor.y) else { return };
+    let scale = mon.scale_factor();
+    let mp = mon.position().to_logical::<f64>(scale);
+    let ms = mon.size().to_logical::<f64>(scale);
+    let x = (mp.x + (ms.width - VISUAL_RECALL_W) / 2.0).max(mp.x);
+    let y = (mp.y + (ms.height - VISUAL_RECALL_H) / 2.0).max(mp.y);
     let _ = win.set_position(tauri::LogicalPosition::new(x, y));
 }
 
@@ -1866,12 +1915,13 @@ fn open_encrypted_db(
     path: &std::path::Path,
     key: &shogun_memory::DbKey,
     clock: shogun_core::daemon::Clock,
+    key_just_minted: bool,
 ) -> Result<shogun_core::daemon::Db, String> {
     match shogun_core::daemon::Db::open_encrypted(path, key, clock.clone()) {
         Ok(db) => Ok(db),
         Err(e) => {
             let msg = e.to_string();
-            if path.exists() && is_unreadable_db_error(&msg) {
+            if path.exists() && is_unreadable_db_error(&msg) && !key_just_minted {
                 let stamp = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_secs())
@@ -1897,26 +1947,61 @@ fn open_encrypted_db(
 /// it is not derived from anything guessable. If the Keychain hands back something malformed we
 /// refuse rather than silently minting a new key, because a new key would make the existing
 /// memory permanently unreadable.
+/// Whether the DB encryption key was freshly minted this launch (vs loaded from Keychain).
 #[cfg(target_os = "macos")]
-fn db_key() -> Result<shogun_memory::DbKey, String> {
+struct DbKeyLoad {
+    key: shogun_memory::DbKey,
+    minted: bool,
+}
+
+/// `errSecItemNotFound` — the only Keychain error where minting a new key is safe.
+#[cfg(target_os = "macos")]
+const ERR_SEC_ITEM_NOT_FOUND: i32 = -25_300;
+
+#[cfg(target_os = "macos")]
+fn db_key() -> Result<DbKeyLoad, String> {
     use shogun_integrations::keychain_store;
     match keychain_store::get_generic_secret(DB_KEY_ACCOUNT) {
         Ok(bytes) => {
             let hex = String::from_utf8(bytes).map_err(|_| "db key is not valid text".to_string())?;
-            shogun_memory::DbKey::from_hex(&hex)
-                .ok_or_else(|| "db key in the Keychain is malformed — refusing to replace it".into())
+            let key = shogun_memory::DbKey::from_hex(&hex)
+                .ok_or_else(|| "db key in the Keychain is malformed — refusing to replace it".to_string())?;
+            Ok(DbKeyLoad { key, minted: false })
         }
-        Err(_) => {
+        Err(e) if e.code() == ERR_SEC_ITEM_NOT_FOUND => {
             // First run: mint a key from the OS CSPRNG.
             let mut raw = [0u8; 32];
             getrandom::getrandom(&mut raw).map_err(|e| format!("key generation failed: {e}"))?;
             let key = shogun_memory::DbKey::new(raw);
             keychain_store::set_generic_secret(DB_KEY_ACCOUNT, key.to_hex().as_bytes())
-            .map_err(|e| format!("could not store the db key: {e}"))?;
+                .map_err(|e| format!("could not store the db key: {e}"))?;
             eprintln!("[spike] memory DB key created and stored in the Keychain");
-            Ok(key)
+            Ok(DbKeyLoad { key, minted: true })
+        }
+        Err(e) => Err(format!(
+            "could not read the memory DB key from the Keychain (status {}): unlock Keychain access and relaunch",
+            e.code()
+        )),
+    }
+}
+
+/// Resolve the memory store directory (co-locates `memory.db` and `visual_recall.json`).
+#[cfg(target_os = "macos")]
+pub(crate) fn memory_data_dir(base: std::path::PathBuf) -> std::path::PathBuf {
+    let mut dir = base;
+    if let Ok(suffix) = std::env::var("SHOGUN_DATA_SUFFIX") {
+        let suffix = suffix.trim();
+        if !suffix.is_empty() {
+            let safe: String = suffix
+                .chars()
+                .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
+                .collect();
+            if !safe.is_empty() {
+                dir = dir.join(format!("dev-{safe}"));
+            }
         }
     }
+    dir
 }
 
 /// Open (creating if needed) the on-device memory DB under the app-data dir, with a real
@@ -1928,20 +2013,16 @@ fn db_key() -> Result<shogun_memory::DbKey, String> {
 #[cfg(target_os = "macos")]
 fn memory_db(app: &tauri::App) -> Result<shogun_core::daemon::Db, String> {
     use tauri::Manager;
-    let mut dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    // Every checkout of this app shares one bundle identifier, so every branch would otherwise
-    // share one memory.db. A branch that adds a migration then leaves the file at a schema the
-    // other branch's binary refuses to open — correctly, since it can't know what a future
-    // migration did. `SHOGUN_DATA_SUFFIX` gives a worktree its own store so branches stop
-    // colliding; unset (the shipped app) it changes nothing.
+    let base = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let dir = memory_data_dir(base);
     if let Ok(suffix) = std::env::var("SHOGUN_DATA_SUFFIX") {
         let suffix = suffix.trim();
         if !suffix.is_empty() {
-            // Keep it a single path segment — this comes from a dev's shell, but a stray slash
-            // would silently write outside the app-data dir.
-            let safe: String = suffix.chars().filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_').collect();
+            let safe: String = suffix
+                .chars()
+                .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
+                .collect();
             if !safe.is_empty() {
-                dir = dir.join(format!("dev-{safe}"));
                 eprintln!("[spike] SHOGUN_DATA_SUFFIX set — using an isolated store: {safe}");
             }
         }
@@ -1949,7 +2030,7 @@ fn memory_db(app: &tauri::App) -> Result<shogun_core::daemon::Db, String> {
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let path = dir.join("memory.db");
     eprintln!("[spike] memory DB: {}", path.display());
-    let key = db_key()?;
+    let DbKeyLoad { key, minted: key_minted } = db_key()?;
 
     if shogun_memory::is_plaintext_db(&path) {
         eprintln!("[spike] existing plaintext memory DB found — encrypting it");
@@ -1979,7 +2060,7 @@ fn memory_db(app: &tauri::App) -> Result<shogun_core::daemon::Db, String> {
             .map(|d| d.as_millis() as i64)
             .unwrap_or(0)
     });
-    let db = open_encrypted_db(&path, &key, clock)?;
+    let db = open_encrypted_db(&path, &key, clock, key_minted)?;
     ensure_ort_dylib(app);
     let db = attach_embedder(db, embedding_model_paths(app));
     // 圧縮は段階展開: 既定 off。ヘビーユーザー/AB は SHOGUN_COMPRESSION=1 で有効化（設定 UI は次周）。

@@ -213,18 +213,40 @@ export const STRINGS = {
       "Off by default. When on, sustained microphone use can offer notes without Meet or Zoom in front — useful for calls in other apps.",
     visualRecallSection: "Visual recall",
     visualRecallHint:
-      "When accessibility text is missing, read the focused window with on-device OCR. No screenshots are saved — only text and provenance.",
+      "Passive OCR reads the focused window when accessibility text is thin. Saved frames stay on this Mac for up to 72 hours, then purge automatically.",
     visualRecallOn: "On",
     visualRecallOff: "Off",
     visualRecallDisclosure:
-      "Requires Screen Recording permission for the focused window only. Frames stay in memory, text is recognized on this Mac, then pixels are discarded. Nothing is uploaded.",
-    visualRecallStatusOff: "Off — no screen pixels are read.",
+      "Requires Screen Recording for the focused window. Compressed JPEGs and OCR text stay local in memory for up to 72 hours — nothing is uploaded.",
+    visualRecallStatusOff: "Off — passive OCR paused. You can still save a screen manually.",
     visualRecallStatusIdle:
       "On — waiting for a window that needs OCR (canvas apps, terminals, or thin accessibility text).",
     visualRecallStatusLive: (n: number, app: string, window: string) =>
       `On — last read ${n} chars from ${app}${window ? ` · ${window}` : ""}.`,
-    visualRecallTimeline: "Recent screen text",
-    visualRecallTimelineEmpty: "No screen text stored yet — OCR runs when a window needs it.",
+    visualRecallTimeline: "Saved screens (72 h)",
+    visualRecallTimelineEmpty: "No saved screens yet — turn on Visual recall to start the local timeline.",
+    visualRecallDeleteFrame: "Delete",
+    visualRecallDeleteConfirm: "Remove this screen?",
+    visualRecallDeleteCancel: "Cancel",
+    visualRecallBrowse: "Browse saved screens",
+    visualRecallBrowseSub: "Open the 72 h timeline on this Mac",
+    visualRecallScrubHint: "Scrub through saved screens",
+    visualRecallShowText: "Show text",
+    visualRecallHideText: "Hide text",
+    visualRecallClose: "Close",
+    visualRecallSearchAll: "Search All",
+    visualRecallSearchShortcut: "/",
+    visualRecallSettings: "Settings",
+    visualRecallZoomIn: "Zoom in",
+    visualRecallZoomOut: "Zoom out",
+    visualRecallOcrMode: "Show text overlay",
+    visualRecallOcrModeOff: "Hide text overlay",
+    visualRecallJumpToDay: "Jump to day",
+    visualRecallNoFramesThatDay: "No screens on this day",
+    visualRecallSearchEmpty: "No screens match your search",
+    visualRecallRetentionNote: "Screens purge automatically after 72 hours.",
+    visualRecallFrameMeta: (when: string, app: string, window: string) =>
+      `${when} · ${app}${window ? ` · ${window}` : ""}`,
     // FR-MT-03 disclosure family. Must match MT3 (invariant 2): on-device audio during approved
     // meetings, no recording/waveform/audio file to disk/temp/cloud — transcript + provenance only.
     // Reuse these keys everywhere; never claim we do not listen while ASR runs.

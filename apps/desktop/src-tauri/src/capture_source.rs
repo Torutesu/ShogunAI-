@@ -251,8 +251,32 @@ mod mac {
             #[cfg(feature = "visual-recall-ocr")]
             let mut recall_pipeline = RecallPipeline::new();
             #[cfg(feature = "visual-recall-ocr")]
-            let mut last_frame_purge = Instant::now();
+            let mut last_frame_purge = Instant::now() - Duration::from_millis(FRAME_PURGE_INTERVAL_MS);
+            #[cfg(feature = "visual-recall-ocr")]
+            {
+                match db.purge_screen_frames() {
+                    Ok(removed) if removed > 0 => {
+                        eprintln!("[screen_ocr] startup purge removed {removed} frame(s) older than 72 h");
+                    }
+                    Ok(_) => {}
+                    Err(e) => eprintln!("[screen_ocr] startup retention purge failed: {e}"),
+                }
+            }
             loop {
+                // Retention is independent of capture permissions and policy locks. Revoking
+                // Accessibility access must never leave saved JPEGs beyond 72 hours.
+                #[cfg(feature = "visual-recall-ocr")]
+                if last_frame_purge.elapsed().as_millis() as u64 >= FRAME_PURGE_INTERVAL_MS {
+                    match db.purge_screen_frames() {
+                        Ok(removed) if removed > 0 => {
+                            eprintln!("[screen_ocr] purged {removed} frame(s) older than 72 h");
+                        }
+                        Ok(_) => {}
+                        Err(e) => eprintln!("[screen_ocr] retention purge failed: {e}"),
+                    }
+                    last_frame_purge = Instant::now();
+                }
+
                 if ax_trusted() {
                     // Re-read the policy each tick: excluding an app is usually a reaction to
                     // what is on screen right now, so it must take effect now, not next launch.
@@ -262,10 +286,7 @@ mod mac {
                         std::thread::sleep(interval);
                         continue;
                     };
-                    let visual = visual_recall
-                        .read()
-                        .map(|g| g.clone())
-                        .unwrap_or_default();
+                    let visual = crate::visual_recall::mac::refresh_settings(&visual_recall);
                     let ax_outcome = capture_once(&db, &current, dwell_ms);
                     if let Some(CaptureOutcome::Excluded(_)) = ax_outcome.as_ref() {
                         // Excluded windows are never OCR'd either.
@@ -298,17 +319,6 @@ mod mac {
                         }
                     }
                     drop(current);
-
-                    #[cfg(feature = "visual-recall-ocr")]
-                    if visual.enabled
-                        && last_frame_purge.elapsed().as_millis() as u64 >= FRAME_PURGE_INTERVAL_MS
-                    {
-                        let removed = db.purge_screen_frames();
-                        if removed > 0 {
-                            eprintln!("[screen_ocr] purged {removed} frame(s) older than 72 h");
-                        }
-                        last_frame_purge = Instant::now();
-                    }
 
                     // Pre-assemble the reply context for whatever the user is now looking at, so
                     // pressing the draft button only starts generation (SLO: offer in 150ms —

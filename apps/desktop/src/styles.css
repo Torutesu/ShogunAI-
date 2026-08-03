@@ -710,7 +710,330 @@ body {
 .set__row {
   display: flex;
   gap: 4px;
+  margin-top: 6px;
 }
+
+/* Visual recall browse window — dedicated timeline + preview (not in notch). */
+.vr-shell {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg, #0d0d0f);
+  color: var(--text, #e8e8ea);
+  overflow: hidden;
+}
+:root[data-appearance="light"] .vr-shell {
+  background: #f7f8fb;
+  color: #1a1a1c;
+}
+@media (prefers-color-scheme: light) {
+  :root[data-appearance="auto"] .vr-shell {
+    background: #f7f8fb;
+    color: #1a1a1c;
+  }
+}
+.vr-chrome {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px 10px 72px;
+  border-bottom: 1px solid var(--line, rgba(255, 255, 255, 0.08));
+  -webkit-app-region: drag;
+  app-region: drag;
+  cursor: grab;
+  user-select: none;
+}
+.vr-chrome:active {
+  cursor: grabbing;
+}
+.vr-chrome__title {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.vr-chrome__name {
+  font-size: var(--fs-lg, 15px);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.vr-chrome__sub {
+  font-size: var(--fs-xs, 11px);
+  color: var(--muted, #8a8a90);
+}
+.vr-chrome__actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+.vr-chrome__confirm {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.vr-chrome__confirm-label {
+  font-size: var(--fs-xs, 11px);
+  color: var(--muted, #8a8a90);
+  white-space: nowrap;
+}
+.vr-chrome__btn {
+  padding: 5px 10px;
+  border: 1px solid var(--line, rgba(255, 255, 255, 0.12));
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: var(--fs-sm, 12px);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color var(--sp, 120ms), background var(--sp, 120ms);
+}
+.vr-chrome__btn:hover {
+  border-color: var(--live, #6ee7a0);
+  background: rgba(255, 255, 255, 0.04);
+}
+.vr-chrome__btn--danger:hover {
+  border-color: #f87171;
+  background: rgba(248, 113, 113, 0.08);
+}
+.vr-chrome__btn--icon {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  font-size: 13px;
+  color: var(--muted, #8a8a90);
+}
+.vr-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 16px 20px 20px;
+  overflow-y: auto;
+}
+.vr-body__err {
+  color: #f87171;
+  font-size: var(--fs-sm, 12px);
+  margin: 0 0 12px;
+}
+.vr-body__empty {
+  margin: 0;
+  font-size: var(--fs-sm, 12px);
+  color: var(--muted, #8a8a90);
+  line-height: 1.45;
+}
+.vr-stage {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  flex: 1;
+  min-height: 0;
+}
+/* Preview = own framed card. Scrub sits below, outside this border. */
+.vr-stage__preview {
+  margin: 0;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line, rgba(255, 255, 255, 0.08));
+  border-radius: 10px;
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.25);
+}
+.vr-stage__preview--empty {
+  min-height: 200px;
+}
+/* Independent scrub strip — dark bg, no shared card chrome with preview. */
+.vr-scrub {
+  flex: none;
+  outline: none;
+  padding: 4px 2px 2px;
+}
+.vr-scrub:focus-visible .vr-scrub__track {
+  box-shadow: 0 0 0 2px rgba(110, 231, 160, 0.35);
+}
+.vr-scrub__track {
+  position: relative;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  touch-action: none;
+  user-select: none;
+}
+.vr-scrub__track::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.12);
+}
+.vr-scrub__fill {
+  position: absolute;
+  left: 0;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--live, #6ee7a0);
+  pointer-events: none;
+}
+.vr-scrub__thumb {
+  position: absolute;
+  top: 50%;
+  width: 10px;
+  height: 22px;
+  margin-left: -5px;
+  transform: translateY(-50%);
+  border-radius: 5px;
+  background: #f4f4f5;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+}
+:root[data-appearance="light"] .vr-scrub__track::before {
+  background: rgba(0, 0, 0, 0.12);
+}
+:root[data-appearance="light"] .vr-scrub__thumb {
+  background: #1a1a1c;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+@media (prefers-color-scheme: light) {
+  :root[data-appearance="auto"] .vr-scrub__track::before {
+    background: rgba(0, 0, 0, 0.12);
+  }
+  :root[data-appearance="auto"] .vr-scrub__thumb {
+    background: #1a1a1c;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+  }
+}
+.vr-stage__preview img {
+  display: block;
+  width: 100%;
+  flex: 1;
+  min-height: 200px;
+  max-height: min(62vh, 520px);
+  object-fit: contain;
+  background: #0a0a0a;
+}
+.vr-stage__caption {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  font-size: var(--fs-sm, 12px);
+  color: var(--muted, #8a8a90);
+  border-top: 1px solid var(--line, rgba(255, 255, 255, 0.06));
+}
+.vr-stage__app {
+  color: var(--text, #e8e8ea);
+  font-weight: 500;
+}
+.vr-stage__ocr {
+  padding: 0 12px 10px;
+}
+.vr-stage__ocr-toggle {
+  border: none;
+  background: none;
+  color: var(--muted, #8a8a90);
+  font: inherit;
+  font-size: var(--fs-xs, 11px);
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.vr-stage__ocr-toggle:hover {
+  color: var(--text, #e8e8ea);
+}
+.vr-stage__ocr-text {
+  margin: 6px 0 0;
+  font-size: var(--fs-sm, 12px);
+  line-height: 1.4;
+  color: var(--muted, #8a8a90);
+  white-space: pre-wrap;
+  max-height: 3.2em;
+  overflow: hidden;
+}
+
+/* Notch settings — open the separate browse window. */
+.vr-launch {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  margin-top: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: linear-gradient(135deg, var(--fill-strong), var(--fill));
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--sp), background var(--sp), transform var(--sp);
+}
+.vr-launch:hover {
+  border-color: var(--accent);
+  background: var(--fill-strong);
+}
+.vr-launch:active {
+  transform: scale(0.98);
+}
+.vr-launch__glyph {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-sm);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 15px;
+  font-weight: 600;
+}
+.vr-launch__body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.vr-launch__title {
+  font-size: var(--fs-md);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.vr-launch__sub {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  line-height: 1.3;
+}
+.vr-launch__badge {
+  flex: none;
+  min-width: 22px;
+  padding: 2px 7px;
+  border-radius: var(--r-pill);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+.vr-launch__arrow {
+  flex: none;
+  color: var(--muted);
+  font-size: var(--fs-md);
+}
+
 .keys {
   display: flex;
   align-items: center;

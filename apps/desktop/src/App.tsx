@@ -1367,6 +1367,7 @@ function VisualRecallSection(): JSX.Element {
   type RecallStatus = {
     enabled: boolean;
     events_24h: number;
+    frames_count: number;
     recent: {
       ts: number;
       app: string | null;
@@ -1407,6 +1408,11 @@ function VisualRecallSection(): JSX.Element {
       .finally(() => setBusy(false));
   };
 
+  const openBrowse = (): void => {
+    if (!IN_TAURI) return;
+    void invoke("open_visual_recall").catch(() => undefined);
+  };
+
   const latest = status?.recent[0];
   const statusLine = !on
     ? t.visualRecallStatusOff
@@ -1444,22 +1450,18 @@ function VisualRecallSection(): JSX.Element {
         </button>
       </div>
       <div className="set__hint">{t.visualRecallHint}</div>
+      <button type="button" className="vr-launch" onClick={openBrowse}>
+        <span className="vr-launch__glyph" aria-hidden="true">⤢</span>
+        <span className="vr-launch__body">
+          <span className="vr-launch__title">{t.visualRecallBrowse}</span>
+          <span className="vr-launch__sub">{t.visualRecallBrowseSub}</span>
+        </span>
+        {status && status.frames_count > 0 ? (
+          <span className="vr-launch__badge">{status.frames_count}</span>
+        ) : null}
+        <span className="vr-launch__arrow" aria-hidden="true">→</span>
+      </button>
       <div className="set__hint set__hint--quiet">{statusLine}</div>
-      {on && status && status.recent.length > 0 ? (
-        <div className="set__hint set__hint--quiet">
-          <div>{t.visualRecallTimeline}</div>
-          <ul className="set__list">
-            {status.recent.slice(0, 3).map((row) => (
-              <li key={row.ts}>
-                {(row.app ?? "app") + (row.window ? ` · ${row.window}` : "")} — {row.chars} chars
-                {row.excerpt ? `: ${row.excerpt}` : ""}
-              </li>
-            ))}
-          </ul>
-        </div>
-      ) : on ? (
-        <div className="set__hint set__hint--quiet">{t.visualRecallTimelineEmpty}</div>
-      ) : null}
       <div className="set__hint set__hint--quiet">{t.visualRecallDisclosure}</div>
     </section>
   );
