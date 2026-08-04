@@ -137,34 +137,59 @@ pub mod mac {
             );
             return false;
         }
+        // Do not hold LANE across mic open — keep the lock short so settings IPC cannot stall.
+        {
+            let mut lane = match LANE.lock() {
+                Ok(g) => g,
+                Err(_) => return false,
+            };
+            let Some(lane) = lane.as_mut() else {
+                return false;
+            };
+            if lane.audio.is_some() {
+                // Already live — treat as success so the release path still runs.
+                lane.ui_recording = true;
+                return true;
+            }
+        }
+
+        let handle = match voice_lane::start(&app) {
+            Ok(h) => h,
+            Err(e) => {
+                emit_error(&app, e);
+                return false;
+            }
+        };
+
         let mut lane = match LANE.lock() {
             Ok(g) => g,
-            Err(_) => return false,
+            Err(_) => {
+                // Lane gone — stop the mic we just opened.
+                let _ = voice_lane::stop(handle);
+                return false;
+            }
         };
         let Some(lane) = lane.as_mut() else {
+            let _ = voice_lane::stop(handle);
             return false;
         };
         if lane.audio.is_some() {
-            // Already live — treat as success so the release path still runs.
+            // Race: another start won. Drop this handle.
+            let _ = voice_lane::stop(handle);
             lane.ui_recording = true;
             return true;
         }
-        match voice_lane::start(&app) {
-            Ok(handle) => {
-                lane.audio = Some(handle);
-                lane.ui_recording = true;
-                emit_state(&app, "recording", None, None);
-                eprintln!("[voice] hold start — mic open");
-                true
-            }
-            Err(e) => {
-                emit_error(&app, e);
-                false
-            }
-        }
+        lane.audio = Some(handle);
+        lane.ui_recording = true;
+        emit_state(&app, "recording", None, None);
+        eprintln!("[voice] hold start — mic open");
+        true
     }
 
     /// End hold: stop mic → Whisper → chat. Always leaves recording via processing/response/error.
+    ///
+    /// Whisper runs on a dedicated thread so the voice-hold worker is never blocked on ASR (slow
+    /// model ≠ crash, but blocking the ordered hold worker made the next press look dead).
     pub fn on_hold_end(app: AppHandle) {
         let audio = {
             let mut lane = match LANE.lock() {
@@ -190,46 +215,48 @@ pub mod mac {
         emit_state(&app, "processing", None, None);
         eprintln!("[voice] hold end — transcribing");
 
-        let transcript = match voice_lane::stop(audio) {
-            TranscriptOutcome::Ok(t) => t,
-            TranscriptOutcome::Empty => {
-                emit_error(&app, "Didn't catch that — try again.");
-                return;
-            }
-            TranscriptOutcome::Err(e) => {
-                emit_error(&app, e);
-                return;
-            }
-        };
+        std::thread::Builder::new()
+            .name("voice-asr".into())
+            .spawn(move || {
+                let transcript = match voice_lane::stop(audio) {
+                    TranscriptOutcome::Ok(t) => t,
+                    TranscriptOutcome::Empty => {
+                        emit_error(&app, "Didn't catch that — try again.");
+                        return;
+                    }
+                    TranscriptOutcome::Err(e) => {
+                        emit_error(&app, e);
+                        return;
+                    }
+                };
 
-        emit_state(&app, "processing", Some(transcript.clone()), None);
+                emit_state(&app, "processing", Some(transcript.clone()), None);
 
-        let db = match app.try_state::<Db>() {
-            Some(db) => db.inner().clone(),
-            None => {
-                emit_error(&app, "Memory isn't ready yet — try again in a moment.");
-                return;
-            }
-        };
+                let db = match app.try_state::<Db>() {
+                    Some(db) => db.inner().clone(),
+                    None => {
+                        emit_error(&app, "Memory isn't ready yet — try again in a moment.");
+                        return;
+                    }
+                };
 
-        let app_bg = app.clone();
-        std::thread::spawn(move || {
-            let answer: Result<ChatAnswer, String> =
-                crate::inline_source::mac::voice_chat(&db, &transcript);
-            match answer {
-                Ok(a) => {
-                    let _ = app_bg.emit(
-                        "voice_response",
-                        VoiceResponseEvent {
-                            text: a.text.clone(),
-                            transcript: transcript.clone(),
-                        },
-                    );
-                    emit_state(&app_bg, "response", Some(transcript), Some(a.text));
+                let answer: Result<ChatAnswer, String> =
+                    crate::inline_source::mac::voice_chat(&db, &transcript);
+                match answer {
+                    Ok(a) => {
+                        let _ = app.emit(
+                            "voice_response",
+                            VoiceResponseEvent {
+                                text: a.text.clone(),
+                                transcript: transcript.clone(),
+                            },
+                        );
+                        emit_state(&app, "response", Some(transcript), Some(a.text));
+                    }
+                    Err(e) => emit_error(&app, e),
                 }
-                Err(e) => emit_error(&app_bg, e),
-            }
-        });
+            })
+            .ok();
     }
 
     #[tauri::command]

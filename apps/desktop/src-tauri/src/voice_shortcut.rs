@@ -39,6 +39,7 @@ enum Cmd {
 }
 
 static HOLDING: AtomicBool = AtomicBool::new(false);
+static INSTALLED: AtomicBool = AtomicBool::new(false);
 static CMD_TX: Mutex<Option<Sender<Cmd>>> = Mutex::new(None);
 
 fn key_code_for_token(token: &str) -> Option<u16> {
@@ -240,6 +241,12 @@ fn worker_loop(rx: Receiver<Cmd>) {
 pub fn install(app: &tauri::AppHandle) {
     use objc2::runtime::AnyObject;
     use objc2::{class, msg_send};
+
+    // Hot-reload / double setup must not stack monitors — that reintroduced the release SIGSEGV.
+    if INSTALLED.swap(true, Ordering::SeqCst) {
+        eprintln!("[voice] hold-to-talk already installed — skip");
+        return;
+    }
 
     let (tx, rx) = mpsc::channel::<Cmd>();
     if let Ok(mut slot) = CMD_TX.lock() {

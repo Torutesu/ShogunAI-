@@ -54,7 +54,7 @@ impl Whisper {
             .unwrap_or(false);
         if !gpu {
             params.use_gpu(false);
-            eprintln!("[meeting] whisper GPU off (set SHOGUN_WHISPER_GPU=1 for Metal)");
+            eprintln!("[whisper] GPU off (set SHOGUN_WHISPER_GPU=1 for Metal)");
         }
         let ctx = WhisperContext::new_with_params(model_path, params)
             .map_err(|e| format!("whisper load failed: {e}"))?;

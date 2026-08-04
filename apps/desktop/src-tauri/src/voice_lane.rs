@@ -1,16 +1,20 @@
 //! Hold-to-talk audio lane: mic open only while the shortcut is held, ring buffer in RAM, on-device
 //! Whisper on release. No disk, no DB — ephemeral transcripts for voice dialogue (#44).
+//!
+//! Whisper (~487MB) must never load on the NSEvent / AppKit thread. Load happens on a background
+//! preload thread (when voice is enabled) or on the capture thread at release — never in `start`.
 
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
 use serde::Serialize;
+use shogun_core::audio::asr::Transcriber;
 use shogun_core::audio::capture::mic::Mic;
 use shogun_core::audio::capture::AudioSource;
 use shogun_core::audio::ring::Ring;
-use shogun_core::audio::asr::Transcriber;
 use tauri::{AppHandle, Emitter, Manager};
 
 /// Outcome of a single hold-to-talk capture.
@@ -45,12 +49,20 @@ struct WhisperSlot {
 
 static WHISPER: Mutex<Option<WhisperSlot>> = Mutex::new(None);
 
+fn model_missing_hint() -> String {
+    "Speech model missing (~465MB ggml-small). Run scripts/fetch-whisper-model.sh, or set SHOGUN_WHISPER_MODEL to a ggml-small.bin path.".into()
+}
+
 fn whisper_model_path(app: &AppHandle) -> Option<std::path::PathBuf> {
     if let Ok(m) = std::env::var("SHOGUN_WHISPER_MODEL") {
         let p = std::path::PathBuf::from(m);
         if p.exists() {
             return Some(p);
         }
+        eprintln!(
+            "[voice] SHOGUN_WHISPER_MODEL set but missing on disk: {}",
+            p.display()
+        );
     }
     let base = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     for p in [
@@ -61,7 +73,11 @@ fn whisper_model_path(app: &AppHandle) -> Option<std::path::PathBuf> {
             return Some(p);
         }
     }
-    let p = app.path().resource_dir().ok()?.join("models/whisper-small.gguf");
+    let p = app
+        .path()
+        .resource_dir()
+        .ok()?
+        .join("models/whisper-small.gguf");
     p.exists().then_some(p)
 }
 
@@ -72,25 +88,50 @@ pub fn preload_whisper(app: &AppHandle) -> Result<(), String> {
 
 fn load_whisper(app: &AppHandle) -> Result<(), String> {
     let Some(path) = whisper_model_path(app) else {
-        return Err("no whisper model on disk".into());
+        return Err(model_missing_hint());
     };
-    let mut guard = WHISPER.lock().map_err(|_| "whisper cache lock poisoned".to_string())?;
+    let mut guard = WHISPER
+        .lock()
+        .map_err(|_| "whisper cache lock poisoned".to_string())?;
     if guard.as_ref().is_some_and(|s| s.path == path) {
         return Ok(());
     }
-    let asr = shogun_core::audio::asr::whisper::Whisper::load_with_language(
-        &path.to_string_lossy(),
-        None,
-    )
-    .map_err(|e| format!("whisper load failed: {e}"))?;
+    // Drop prior model before loading a new path so we do not hold two ~487MB copies.
+    *guard = None;
+    let path_str = path.to_string_lossy().to_string();
+    let loaded = catch_unwind(AssertUnwindSafe(|| {
+        shogun_core::audio::asr::whisper::Whisper::load_with_language(&path_str, None)
+    }));
+    let asr = match loaded {
+        Ok(Ok(w)) => w,
+        Ok(Err(e)) => return Err(format!("whisper load failed: {e}")),
+        Err(_) => {
+            return Err(
+                "Speech model crashed while loading. Try again, or keep SHOGUN_WHISPER_GPU unset (CPU)."
+                    .into(),
+            )
+        }
+    };
     *guard = Some(WhisperSlot { path, asr });
     Ok(())
 }
 
 fn transcribe_pcm(pcm: &[f32]) -> Result<String, String> {
-    let mut guard = WHISPER.lock().map_err(|_| "whisper cache lock poisoned".to_string())?;
-    let slot = guard.as_mut().ok_or("whisper not loaded")?;
-    let segments = slot.asr.transcribe(pcm);
+    let mut guard = WHISPER
+        .lock()
+        .map_err(|_| "whisper cache lock poisoned".to_string())?;
+    let slot = guard.as_mut().ok_or_else(|| {
+        "Speech model not ready yet — wait a moment after enabling Voice, then try again.".to_string()
+    })?;
+    let segments = catch_unwind(AssertUnwindSafe(|| slot.asr.transcribe(pcm)));
+    let segments = match segments {
+        Ok(s) => s,
+        Err(_) => {
+            return Err(
+                "Speech recognition crashed on this clip. Try a shorter hold.".into(),
+            )
+        }
+    };
     let text: String = segments
         .iter()
         .map(|s| s.text.trim())
@@ -105,8 +146,10 @@ fn transcribe_pcm(pcm: &[f32]) -> Result<String, String> {
 }
 
 /// Open the mic and start filling a RAM ring buffer. Emits `voice_level` while active.
+///
+/// Does **not** load Whisper here — that belongs on preload / release so hold-start stays fast and
+/// never blocks the voice-hold worker (or AppKit) on a 487MB model load.
 pub fn start(app: &AppHandle) -> Result<Handle, String> {
-    load_whisper(app)?;
     let mic = Mic::open().map_err(|e| format!("microphone unavailable: {e}"))?;
     let stop = Arc::new(AtomicBool::new(false));
     let stop_flag = stop.clone();
@@ -129,6 +172,9 @@ pub fn start(app: &AppHandle) -> Result<Handle, String> {
         if pcm.is_empty() {
             return TranscriptOutcome::Empty;
         }
+        if let Err(e) = load_whisper(&app_handle) {
+            return TranscriptOutcome::Err(e);
+        }
         match transcribe_pcm(&pcm) {
             Ok(t) if t.trim().is_empty() => TranscriptOutcome::Empty,
             Ok(t) => TranscriptOutcome::Ok(t),
@@ -136,7 +182,10 @@ pub fn start(app: &AppHandle) -> Result<Handle, String> {
         }
     });
 
-    Ok(Handle { stop, join: Some(join) })
+    Ok(Handle {
+        stop,
+        join: Some(join),
+    })
 }
 
 /// Signal the lane to stop, wait for Whisper, return the transcript outcome.
