@@ -86,22 +86,63 @@ pub mod mac {
         Ok(())
     }
 
+    /// Read OS login-item truth, repair mismatches, and persist effective state when needed.
+    fn reconcile_with_os(app: &tauri::AppHandle) -> Settings {
+        let prefs = load_settings(app);
+        let mgr = app.autolaunch();
+
+        let os_enabled = match mgr.is_enabled() {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("[launch] reconcile: could not read OS login-item state: {e}");
+                return prefs;
+            }
+        };
+
+        if prefs.enabled == os_enabled {
+            return Settings { enabled: os_enabled };
+        }
+
+        eprintln!(
+            "[launch] reconcile: pref={} os={}",
+            if prefs.enabled { "on" } else { "off" },
+            if os_enabled { "on" } else { "off" }
+        );
+
+        if prefs.enabled && !os_enabled {
+            if let Err(e) = mgr.enable() {
+                eprintln!("[launch] reconcile: retry enable failed: {e}");
+            }
+        } else if !prefs.enabled && os_enabled {
+            if let Err(e) = mgr.disable() {
+                eprintln!("[launch] reconcile: disable stale login item failed: {e}");
+            }
+        }
+
+        let effective = mgr.is_enabled().unwrap_or(os_enabled);
+
+        if effective != prefs.enabled {
+            let reconciled = Settings { enabled: effective };
+            if let Err(e) = save_settings(app, &reconciled) {
+                eprintln!("[launch] reconcile: persist effective state failed: {e}");
+            }
+        }
+
+        Settings { enabled: effective }
+    }
+
     pub fn init(app: &App) {
         remove_legacy_launch_agent_plist();
-        let settings = load_settings(app.handle());
-        if let Err(e) = apply_os_state(app.handle(), settings.enabled) {
-            eprintln!("[launch] startup sync failed: {e}");
-        } else {
-            eprintln!(
-                "[launch] preference={} (login-item sync ok)",
-                if settings.enabled { "on" } else { "off" }
-            );
-        }
+        let settings = reconcile_with_os(app.handle());
+        eprintln!(
+            "[launch] effective={} (login-item reconcile ok)",
+            if settings.enabled { "on" } else { "off" }
+        );
     }
 
     #[tauri::command]
     pub fn get_launch_at_login_settings(app: tauri::AppHandle) -> Settings {
-        load_settings(&app)
+        reconcile_with_os(&app)
     }
 
     /// Persist first, then touch the OS login item (same order as meeting settings).
