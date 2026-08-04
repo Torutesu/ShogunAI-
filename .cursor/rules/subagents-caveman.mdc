@@ -1,0 +1,12 @@
+---
+description: Subagents and Task workers must use caveman mode (full intensity)
+alwaysApply: true
+---
+
+# Subagents use caveman mode
+
+When launching **Task** subagents or any delegated background worker in this repo, the prompt **must** include:
+
+> Use caveman mode (full intensity) per `~/.agents/skills/caveman/SKILL.md` — terse, no fluff, full technical accuracy.
+
+Applies to all delegated workers. Parent agent reads caveman skill before delegating if unfamiliar.
