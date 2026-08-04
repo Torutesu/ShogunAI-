@@ -28,6 +28,9 @@ pub mod mac {
     struct Lane {
         settings: Settings,
         audio: Option<voice_lane::Handle>,
+        /// True between successful hold-start and hold-end — used to idle-out a stuck UI if
+        /// release arrives with no audio handle (should be rare after the ordered worker).
+        ui_recording: bool,
     }
 
     static LANE: Mutex<Option<Lane>> = Mutex::new(None);
@@ -102,7 +105,11 @@ pub mod mac {
         let enabled_log = settings.enabled;
         let _ = build_overlay(app);
         if let Ok(mut lane) = LANE.lock() {
-            *lane = Some(Lane { settings: settings.clone(), audio: None });
+            *lane = Some(Lane {
+                settings: settings.clone(),
+                audio: None,
+                ui_recording: false,
+            });
         }
         if settings.enabled {
             preload_whisper_bg(app);
@@ -113,50 +120,72 @@ pub mod mac {
         );
     }
 
-    pub fn on_hold_start(app: AppHandle) {
+    /// Begin hold-to-talk capture. Returns `true` when the mic lane is live (UI shows recording).
+    pub fn on_hold_start(app: AppHandle) -> bool {
         let enabled = LANE
             .lock()
             .ok()
             .and_then(|g| g.as_ref().map(|l| l.settings.enabled))
             .unwrap_or(false);
         if !enabled {
-            return;
+            return false;
         }
         if crate::meeting::mac::is_recording() {
             emit_error(
                 &app,
                 "Voice is unavailable while meeting notes are recording.",
             );
-            return;
+            return false;
         }
         let mut lane = match LANE.lock() {
             Ok(g) => g,
-            Err(_) => return,
+            Err(_) => return false,
         };
-        let Some(lane) = lane.as_mut() else { return };
+        let Some(lane) = lane.as_mut() else {
+            return false;
+        };
         if lane.audio.is_some() {
-            return;
+            // Already live — treat as success so the release path still runs.
+            lane.ui_recording = true;
+            return true;
         }
         match voice_lane::start(&app) {
             Ok(handle) => {
                 lane.audio = Some(handle);
+                lane.ui_recording = true;
                 emit_state(&app, "recording", None, None);
                 eprintln!("[voice] hold start — mic open");
+                true
             }
-            Err(e) => emit_error(&app, e),
+            Err(e) => {
+                emit_error(&app, e);
+                false
+            }
         }
     }
 
+    /// End hold: stop mic → Whisper → chat. Always leaves recording via processing/response/error.
     pub fn on_hold_end(app: AppHandle) {
         let audio = {
             let mut lane = match LANE.lock() {
                 Ok(g) => g,
                 Err(_) => return,
             };
-            let Some(lane) = lane.as_mut() else { return };
-            lane.audio.take()
+            let Some(lane) = lane.as_mut() else {
+                return;
+            };
+            let was_recording = lane.ui_recording || lane.audio.is_some();
+            lane.ui_recording = false;
+            match lane.audio.take() {
+                Some(handle) => handle,
+                None => {
+                    if was_recording {
+                        emit_state(&app, "idle", None, None);
+                    }
+                    return;
+                }
+            }
         };
-        let Some(audio) = audio else { return };
 
         emit_state(&app, "processing", None, None);
         eprintln!("[voice] hold end — transcribing");
@@ -191,7 +220,10 @@ pub mod mac {
                 Ok(a) => {
                     let _ = app_bg.emit(
                         "voice_response",
-                        VoiceResponseEvent { text: a.text.clone(), transcript: transcript.clone() },
+                        VoiceResponseEvent {
+                            text: a.text.clone(),
+                            transcript: transcript.clone(),
+                        },
                     );
                     emit_state(&app_bg, "response", Some(transcript), Some(a.text));
                 }

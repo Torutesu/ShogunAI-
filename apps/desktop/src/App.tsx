@@ -412,7 +412,7 @@ export function App(): JSX.Element {
             setShowSettings(false);
             const sz = voicePanelSize(p);
             void applyPanelSize(sz.w, sz.h);
-          } else if (p === "idle" && !pinnedRef.current) {
+          } else if ((p === "idle" || p === "error") && !pinnedRef.current) {
             setOpen(false);
             sizeForViewRef.current({ open: false });
           }
