@@ -1361,6 +1361,62 @@ function MeetingSection(): JSX.Element {
   );
 }
 
+function LaunchAtLoginSection(): JSX.Element {
+  const [on, setOn] = useState(true);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!IN_TAURI) return;
+    void invoke<{ enabled: boolean }>("get_launch_at_login_settings")
+      .then((s) => setOn(s.enabled))
+      .catch(() => undefined);
+  }, []);
+
+  const toggle = (next: boolean): void => {
+    if (!IN_TAURI) {
+      setOn(next);
+      return;
+    }
+    setBusy(true);
+    setOn(next);
+    void invoke("set_launch_at_login_enabled", { enabled: next })
+      .then(() =>
+        invoke<{ enabled: boolean }>("get_launch_at_login_settings").then((s) => setOn(s.enabled)),
+      )
+      .catch(() => setOn(!next))
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <section className="set">
+      <div className="set__label" id="seg-launch">{t.launchAtLoginSection}</div>
+      <div className="seg" role="radiogroup" aria-labelledby="seg-launch">
+        <button
+          type="button"
+          role="radio"
+          aria-checked={on}
+          disabled={busy}
+          className={`seg__opt${on ? " is-on" : ""}`}
+          onClick={() => toggle(true)}
+        >
+          {t.launchAtLoginOn}
+        </button>
+        <button
+          type="button"
+          role="radio"
+          aria-checked={!on}
+          disabled={busy}
+          className={`seg__opt${!on ? " is-on" : ""}`}
+          onClick={() => toggle(false)}
+        >
+          {t.launchAtLoginOff}
+        </button>
+      </div>
+      <div className="set__hint">{t.launchAtLoginHint}</div>
+    </section>
+  );
+}
+
 function VisualRecallSection(): JSX.Element {
   const [on, setOn] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -2216,6 +2272,7 @@ function Settings(props: {
             someone found this switch — burying an opt-in below six connectors is how a feature
             stays permanently off (FR-MT-01). */}
         <MeetingSection />
+        <LaunchAtLoginSection />
         <VisualRecallSection />
         <ConnectionsSection />
         <ComposioSection />

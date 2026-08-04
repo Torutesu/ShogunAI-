@@ -27,6 +27,7 @@ mod geometry;
 mod hover;
 mod inline_source;
 mod integrate;
+mod launch_at_login;
 pub mod meeting;
 mod meeting_recap;
 #[cfg(target_os = "macos")]
@@ -127,6 +128,12 @@ pub fn run() {
     let builder = tauri::Builder::default();
     #[cfg(target_os = "macos")]
     let builder = builder
+        .plugin(
+            tauri_plugin_autostart::Builder::new()
+                // AppleScript registers in System Settings → Login Items (LaunchAgent plist is invisible there).
+                .macos_launcher(tauri_plugin_autostart::MacosLauncher::AppleScript)
+                .build(),
+        )
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
         integrate::mac::painted,
@@ -219,6 +226,8 @@ pub fn run() {
         onboarding::mac::onboarding_event,
         analytics::analytics_get_opt_out,
         analytics::analytics_set_opt_out,
+        launch_at_login::mac::get_launch_at_login_settings,
+        launch_at_login::mac::set_launch_at_login_enabled,
     ]);
 
     // NOTE: the visible surface is a NATIVE NSPanel hosting the webview's content view
@@ -254,16 +263,12 @@ fn setup_macos(app: &tauri::App) {
     eprintln!("[shell] SHOGUN starting — pid {} — build: plain-window/drag/quit", std::process::id());
     eprintln!("========================================================");
 
-    // Migrate legacy SHOGUN-service secrets to com.selectkk.shogun on first launch after update.
-    // Non-destructive: items already on the new service are left alone.
-    shogun_integrations::keychain_store::repair_dev_acls(&[
+    // One Keychain pass for secrets read during boot (DB, Dream, Composio). BYOK keys load lazily
+    // when the user picks a provider — warming them here caused extra prompts for unused keys.
+    shogun_integrations::keychain_store::warm_startup_keychain(&[
         "memory-db-key",
         "select-kk-batch",
         "composio-api-key",
-        "anthropic-byok",
-        "openrouter-byok",
-        "openai-byok",
-        "gemini-byok",
     ]);
 
     // PROVEN by [panelstate]: a Regular app's plain window is REFUSED entry to other apps'
@@ -307,6 +312,8 @@ fn setup_macos(app: &tauri::App) {
     // before any fallible early-return below (geometry etc.) — a skipped load silently reverts
     // every chat/draft to the default provider.
     inline_source::mac::init_llm_settings(app.handle());
+
+    launch_at_login::mac::init(app);
 
     // Audit fixes: event-driven Space follow (re-show on every desktop/full-screen switch) and the
     // ground-truth [panelstate] diagnostics stream.

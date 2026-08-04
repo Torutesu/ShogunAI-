@@ -97,6 +97,11 @@ export const STRINGS = {
     castleBottomCenter: "Bottom",
     castleBottomRight: "Bottom right",
     behavior: "When you look away",
+    launchAtLoginSection: "Launch at login",
+    launchAtLoginOn: "On",
+    launchAtLoginOff: "Off",
+    launchAtLoginHint:
+      "Open Shogun when you sign in to this Mac. Quitting stays quit until the next login.",
     stayOpen: "Stay open",
     autoHide: "Auto-hide",
     stayOpenHint: "Keep the panel open until you close it.",
