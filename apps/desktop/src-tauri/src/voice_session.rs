@@ -1,14 +1,18 @@
-//! Voice dialogue session: overlay window, settings, hold lifecycle, and context-aware chat (#44).
+//! Voice hold-to-talk session: overlay, settings, mic lifecycle, dictation output (#44).
+//!
+//! On release: Whisper → inject transcript into focused text field (AX), else clipboard → idle.
+//! Chat response is deferred; this path is dictation-first per product ask.
 
 #[cfg(target_os = "macos")]
 pub mod mac {
     use std::sync::Mutex;
+    use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 
     use serde::Serialize;
-    use shogun_core::daemon::Db;
+    use shogun_core::inline::TextInserter;
     use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
 
-    use crate::inline_source::mac::ChatAnswer;
+    use crate::inline_source::mac::AxTextInserter;
     use crate::voice_lane::{self, TranscriptOutcome};
 
     const WINDOW_LABEL: &str = "voice";
@@ -48,10 +52,12 @@ pub mod mac {
     }
 
     #[derive(Clone, Serialize)]
-    pub struct VoiceResponseEvent {
-        pub text: String,
-        pub transcript: String,
+    pub struct VoiceToastEvent {
+        pub message: String,
     }
+
+    /// Monotonic session id so a late ASR thread cannot clobber a newer hold.
+    static SESSION: AtomicU64 = AtomicU64::new(0);
 
     fn settings_path(app: &AppHandle) -> Option<std::path::PathBuf> {
         app.path().app_data_dir().ok().map(|d| d.join("voice.json"))
@@ -87,6 +93,64 @@ pub mod mac {
         let msg = message.into();
         let _ = app.emit("voice_error", VoiceErrorEvent { message: msg.clone() });
         emit_state(app, "error", None, Some(msg));
+    }
+
+    fn emit_toast(app: &AppHandle, message: impl Into<String>) {
+        let message = message.into();
+        let _ = app.emit("voice_toast", VoiceToastEvent { message });
+    }
+
+    /// Leave transcript on the general pasteboard (no restore — user wants the text).
+    fn copy_to_clipboard(text: &str) -> Result<(), String> {
+        use objc2::runtime::AnyObject;
+        use objc2::{class, msg_send};
+        use objc2_foundation::NSString;
+
+        let pb: *mut AnyObject = unsafe { msg_send![class!(NSPasteboard), generalPasteboard] };
+        if pb.is_null() {
+            return Err("no pasteboard".into());
+        }
+        let utf8 = NSString::from_str("public.utf8-plain-text");
+        let ours = NSString::from_str(text);
+        let _: isize = unsafe { msg_send![pb, clearContents] };
+        let ok: bool = unsafe { msg_send![pb, setString: &*ours, forType: &*utf8] };
+        if ok {
+            Ok(())
+        } else {
+            Err("could not write the pasteboard".into())
+        }
+    }
+
+    /// Dictation output: focused field via AX (+ ⌘V fallback inside AxTextInserter), else clipboard.
+    fn deliver_dictation(app: &AppHandle, transcript: &str) {
+        use crate::inline_source::mac::AxCursorReader;
+        use shogun_core::inline::CursorReader;
+
+        // Only inject when an editable text-carrying field is focused (same signal as inline draft).
+        let has_field = AxCursorReader.read().is_some();
+        if has_field {
+            match AxTextInserter.insert(transcript) {
+                Ok(()) => {
+                    eprintln!("[voice] dictation pasted into focused field");
+                    emit_toast(app, "Pasted");
+                    emit_state(app, "idle", Some(transcript.to_string()), None);
+                    return;
+                }
+                Err(e) => {
+                    eprintln!("[voice] dictation inject failed ({e}) — clipboard");
+                }
+            }
+        } else {
+            eprintln!("[voice] no injectable field — clipboard");
+        }
+
+        match copy_to_clipboard(transcript) {
+            Ok(()) => {
+                emit_toast(app, "Copied to clipboard");
+                emit_state(app, "idle", Some(transcript.to_string()), None);
+            }
+            Err(ce) => emit_error(app, format!("Could not paste or copy: {ce}")),
+        }
     }
 
     fn preload_whisper_bg(app: &AppHandle) {
@@ -181,15 +245,34 @@ pub mod mac {
         }
         lane.audio = Some(handle);
         lane.ui_recording = true;
+        let _ = SESSION.fetch_add(1, AtomicOrdering::SeqCst);
         emit_state(&app, "recording", None, None);
         eprintln!("[voice] hold start — mic open");
         true
     }
 
-    /// End hold: stop mic → Whisper → chat. Always leaves recording via processing/response/error.
+    /// True when a hold is still live (mic handle or UI recording flag). Used by the release failsafe.
+    pub fn is_ui_recording() -> bool {
+        LANE.lock()
+            .ok()
+            .and_then(|g| g.as_ref().map(|l| l.ui_recording || l.audio.is_some()))
+            .unwrap_or(false)
+    }
+
+    /// If still recording 500ms after a release signal, force `on_hold_end` again. Returns true when
+    /// it had to act (stuck path).
+    pub fn force_end_if_recording(app: AppHandle) -> bool {
+        if !is_ui_recording() {
+            return false;
+        }
+        eprintln!("[voice] force_end_if_recording — ending stuck hold");
+        on_hold_end(app);
+        true
+    }
+
+    /// End hold: stop mic → Whisper → dictation inject/clipboard → idle.
     ///
-    /// Whisper runs on a dedicated thread so the voice-hold worker is never blocked on ASR (slow
-    /// model ≠ crash, but blocking the ordered hold worker made the next press look dead).
+    /// Whisper runs on a dedicated thread so the voice-hold worker is never blocked on ASR.
     pub fn on_hold_end(app: AppHandle) {
         let audio = {
             let mut lane = match LANE.lock() {
@@ -212,9 +295,13 @@ pub mod mac {
             }
         };
 
+        // Signal release to the frontend before ASR so a stuck recording chrome can failsafe.
+        let _ = app.emit("voice_hold_released", ());
+        // Leave recording immediately so the notch meter cannot stick while ASR runs.
         emit_state(&app, "processing", None, None);
-        eprintln!("[voice] hold end — transcribing");
+        eprintln!("[voice] hold end — transcribing (dictation)");
 
+        let session = SESSION.load(AtomicOrdering::SeqCst);
         std::thread::Builder::new()
             .name("voice-asr".into())
             .spawn(move || {
@@ -230,31 +317,14 @@ pub mod mac {
                     }
                 };
 
-                emit_state(&app, "processing", Some(transcript.clone()), None);
-
-                let db = match app.try_state::<Db>() {
-                    Some(db) => db.inner().clone(),
-                    None => {
-                        emit_error(&app, "Memory isn't ready yet — try again in a moment.");
-                        return;
-                    }
-                };
-
-                let answer: Result<ChatAnswer, String> =
-                    crate::inline_source::mac::voice_chat(&db, &transcript);
-                match answer {
-                    Ok(a) => {
-                        let _ = app.emit(
-                            "voice_response",
-                            VoiceResponseEvent {
-                                text: a.text.clone(),
-                                transcript: transcript.clone(),
-                            },
-                        );
-                        emit_state(&app, "response", Some(transcript), Some(a.text));
-                    }
-                    Err(e) => emit_error(&app, e),
+                if SESSION.load(AtomicOrdering::SeqCst) != session {
+                    eprintln!("[voice] discard stale transcript (newer hold started)");
+                    return;
                 }
+
+                emit_state(&app, "processing", Some(transcript.clone()), None);
+                // Dictation-first: no chat call on this path.
+                deliver_dictation(&app, &transcript);
             })
             .ok();
     }
@@ -283,6 +353,12 @@ pub mod mac {
     #[tauri::command]
     pub fn voice_dismiss(app: AppHandle) {
         emit_state(&app, "idle", None, None);
+    }
+
+    /// Frontend failsafe: force-end a hold that stayed in recording after release.
+    #[tauri::command]
+    pub fn voice_force_end(app: AppHandle) {
+        let _ = force_end_if_recording(app);
     }
 
     fn build_overlay(app: &AppHandle) -> Option<WebviewWindow> {

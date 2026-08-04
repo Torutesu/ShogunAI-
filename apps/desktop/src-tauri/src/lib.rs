@@ -237,6 +237,7 @@ pub fn run() {
         voice_session::mac::get_voice_settings,
         voice_session::mac::set_voice_enabled,
         voice_session::mac::voice_dismiss,
+        voice_session::mac::voice_force_end,
     ]);
 
     // NOTE: the visible surface is a NATIVE NSPanel hosting the webview's content view

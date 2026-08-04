@@ -278,6 +278,9 @@ export function App(): JSX.Element {
     level: 0,
   });
   const voicePeak = useRef(0);
+  /** Last `voice_level` timestamp — failsafe ends stuck recording after release + quiet. */
+  const lastVoiceLevelAt = useRef(0);
+  const voiceReleaseWatch = useRef<number | null>(null);
 
   // Open-view sizes are user-resizable (corner grip) and persist across the Rust-driven respawns.
   // Chat and Settings keep INDEPENDENT sizes — chat wants short+wide, Settings wants tall enough
@@ -407,14 +410,23 @@ export function App(): JSX.Element {
             level: p === "recording" ? cur.level : 0,
           }));
           if (p === "recording") voicePeak.current = 0;
-          if (p === "recording" || p === "processing" || p === "response") {
+          if (p === "recording" || p === "processing") {
             setOpen(true);
             setShowSettings(false);
             const sz = voicePanelSize(p);
             void applyPanelSize(sz.w, sz.h);
-          } else if ((p === "idle" || p === "error") && !pinnedRef.current) {
+          } else if (p === "idle") {
+            // Dictation done — always collapse; do not leave recording chrome stuck open.
             setOpen(false);
             sizeForViewRef.current({ open: false });
+          } else if (p === "error" && !pinnedRef.current) {
+            setOpen(false);
+            sizeForViewRef.current({ open: false });
+          } else if (p === "response") {
+            setOpen(true);
+            setShowSettings(false);
+            const sz = voicePanelSize(p);
+            void applyPanelSize(sz.w, sz.h);
           }
         },
       ),
@@ -424,7 +436,43 @@ export function App(): JSX.Element {
         const rms = e.payload.rms;
         voicePeak.current = Math.max(voicePeak.current * 0.85, rms);
         const norm = voicePeak.current > 0 ? Math.min(1, rms / voicePeak.current) : 0;
+        lastVoiceLevelAt.current = performance.now();
         setVoice((cur) => (cur.phase === "recording" ? { ...cur, level: norm } : cur));
+      }),
+    );
+    offs.push(
+      listen<{ message: string }>("voice_toast", (e) => {
+        setVoiceToast(e.payload.message);
+        window.setTimeout(() => setVoiceToast(null), 2200);
+      }),
+    );
+    // Release signal from Rust: if UI still shows recording after 500ms with no levels, force end.
+    offs.push(
+      listen("voice_hold_released", () => {
+        if (voiceReleaseWatch.current != null) {
+          window.clearInterval(voiceReleaseWatch.current);
+          voiceReleaseWatch.current = null;
+        }
+        const started = performance.now();
+        voiceReleaseWatch.current = window.setInterval(() => {
+          const phase = voiceRef.current.phase;
+          if (phase !== "recording") {
+            if (voiceReleaseWatch.current != null) {
+              window.clearInterval(voiceReleaseWatch.current);
+              voiceReleaseWatch.current = null;
+            }
+            return;
+          }
+          const quietMs = performance.now() - lastVoiceLevelAt.current;
+          const waited = performance.now() - started;
+          if (waited >= 500 && quietMs >= 500) {
+            if (voiceReleaseWatch.current != null) {
+              window.clearInterval(voiceReleaseWatch.current);
+              voiceReleaseWatch.current = null;
+            }
+            void invoke("voice_force_end").catch(() => undefined);
+          }
+        }, 100);
       }),
     );
     // The notch's own hover detection finally drives the panel. Until now the tracker ran, emitted
@@ -467,6 +515,10 @@ export function App(): JSX.Element {
     window.addEventListener("keydown", onEsc);
     return () => {
       window.removeEventListener("keydown", onEsc);
+      if (voiceReleaseWatch.current != null) {
+        window.clearInterval(voiceReleaseWatch.current);
+        voiceReleaseWatch.current = null;
+      }
       offs.forEach((p) => void p.then((off) => off()));
     };
   }, []);
@@ -1415,7 +1467,7 @@ function DreamSection(): JSX.Element {
   );
 }
 
-/** Hold-to-talk voice dialogue (#44). Beta, off by default; needs BYOK for answers. */
+/** Hold-to-talk dictation (#44). Beta, off by default; transcript goes to focused field or clipboard. */
 function VoiceSection(): JSX.Element {
   const [on, setOn] = useState(false);
   const [busy, setBusy] = useState(false);

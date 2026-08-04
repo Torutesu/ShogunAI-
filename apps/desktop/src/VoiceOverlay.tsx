@@ -34,6 +34,8 @@ export function VoiceOverlay(): JSX.Element {
   const [response, setResponse] = useState("");
   const [error, setError] = useState("");
   const peak = useRef(0);
+  const phaseRef = useRef(phase);
+  phaseRef.current = phase;
 
   useEffect(() => {
     const unsubs: Array<() => void> = [];
@@ -53,9 +55,11 @@ export function VoiceOverlay(): JSX.Element {
         setError("");
         setLevel(0);
       }
+      if (p !== "recording") setLevel(0);
     }).then((u) => unsubs.push(u));
 
     void listen<LevelEvent>("voice_level", (e) => {
+      if (phaseRef.current !== "recording") return;
       const rms = e.payload.rms;
       peak.current = Math.max(peak.current * 0.85, rms);
       const norm = peak.current > 0 ? Math.min(1, rms / peak.current) : 0;

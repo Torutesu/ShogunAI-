@@ -7,6 +7,9 @@
 //! global-style block for local monitors is an ABI mismatch and crashes on key-up when the app
 //! is key — that was the release-time crash. Start/end also run on one worker so a fast tap
 //! cannot process End before Start finishes (stuck "recording").
+//!
+//! Critical: `-[NSEvent type]` returns NSEventType (10/11/12), NOT the monitor mask bit
+//! (`1 << type`). Comparing type to MASK_* made `is_release` always false → stuck recording.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
@@ -15,9 +18,15 @@ use std::time::{Duration, Instant};
 
 use tauri::AppHandle;
 
+/// Monitor registration masks (`addGlobalMonitorForEventsMatchingMask:`).
 const MASK_KEY_DOWN: usize = 1 << 10;
 const MASK_KEY_UP: usize = 1 << 11;
 const MASK_FLAGS_CHANGED: usize = 1 << 12;
+
+/// `-[NSEvent type]` / NSEventType values — must NOT be confused with MASK_* above.
+const TYPE_KEY_DOWN: usize = 10;
+const TYPE_KEY_UP: usize = 11;
+const TYPE_FLAGS_CHANGED: usize = 12;
 
 const FLAG_SHIFT: usize = 1 << 17;
 const FLAG_CONTROL: usize = 1 << 18;
@@ -27,6 +36,8 @@ const FLAG_FUNCTION: usize = 1 << 23;
 
 /// Auto-end a forgotten hold so the notch cannot stick in "recording".
 const MAX_HOLD: Duration = Duration::from_secs(30);
+/// After End, re-check once so a missed stop cannot leave the mic/UI live.
+const END_FAILSAFE: Duration = Duration::from_millis(500);
 
 struct Combo {
     modifiers: usize,
@@ -136,12 +147,59 @@ fn combo_matches(flags: usize, key: u16, combo: &Combo) -> bool {
     normalize_mods(flags) == combo.modifiers && key == combo.key_code
 }
 
-/// Release when the letter key goes up, or any required modifier of the chord drops.
+fn type_name(ty: usize) -> &'static str {
+    match ty {
+        TYPE_KEY_DOWN => "keyDown",
+        TYPE_KEY_UP => "keyUp",
+        TYPE_FLAGS_CHANGED => "flagsChanged",
+        _ => "other",
+    }
+}
+
+fn mods_label(mods: usize) -> String {
+    let mut parts = Vec::new();
+    if mods & FLAG_CONTROL != 0 {
+        parts.push("⌃");
+    }
+    if mods & FLAG_OPTION != 0 {
+        parts.push("⌥");
+    }
+    if mods & FLAG_SHIFT != 0 {
+        parts.push("⇧");
+    }
+    if mods & FLAG_COMMAND != 0 {
+        parts.push("⌘");
+    }
+    if mods & FLAG_FUNCTION != 0 {
+        parts.push("Fn");
+    }
+    if parts.is_empty() {
+        "none".into()
+    } else {
+        parts.join("")
+    }
+}
+
+/// True when this event touches the voice chord (letter key or a required modifier change).
+fn touches_combo(ty: usize, flags: usize, key: u16, combo: &Combo) -> bool {
+    if key == combo.key_code {
+        return true;
+    }
+    if ty == TYPE_FLAGS_CHANGED {
+        let before_relevant = HOLDING.load(Ordering::SeqCst);
+        let mods = normalize_mods(flags);
+        return before_relevant || (mods & combo.modifiers) != 0;
+    }
+    false
+}
+
+/// Release when the letter key goes up, OR any required modifier of the chord drops.
+/// ⌃⌥V: releasing Control OR Option OR V all end the hold (order does not matter).
 fn is_release(ty: usize, flags: usize, key: u16, combo: &Combo) -> bool {
-    if ty == MASK_KEY_UP {
+    if ty == TYPE_KEY_UP {
         return key == combo.key_code;
     }
-    if ty == MASK_FLAGS_CHANGED {
+    if ty == TYPE_FLAGS_CHANGED {
         let mods = normalize_mods(flags);
         return (mods & combo.modifiers) != combo.modifiers;
     }
@@ -162,36 +220,87 @@ fn send_cmd(cmd: Cmd) {
     }
 }
 
+fn current_modifier_flags() -> usize {
+    use objc2::{class, msg_send};
+    // SAFETY: NSEvent class method; readable from any thread on modern macOS.
+    let flags: usize = unsafe { msg_send![class!(NSEvent), modifierFlags] };
+    normalize_mods(flags)
+}
+
 fn on_press(app: &AppHandle, ev: *mut objc2::runtime::AnyObject) {
     use objc2::msg_send;
-    if HOLDING.load(Ordering::SeqCst) {
-        return;
-    }
     let combo = current_voice_combo(app);
     // SAFETY: NSEvent pointer from AppKit monitor callback.
     let flags: usize = unsafe { msg_send![ev, modifierFlags] };
     let key: u16 = unsafe { msg_send![ev, keyCode] };
+    let ty: usize = unsafe { msg_send![ev, type] };
+    if touches_combo(ty, flags, key, &combo) {
+        eprintln!(
+            "[voice] {} key={} mods={} holding={}",
+            type_name(ty),
+            key,
+            mods_label(normalize_mods(flags)),
+            HOLDING.load(Ordering::SeqCst)
+        );
+    }
+    if HOLDING.load(Ordering::SeqCst) {
+        return;
+    }
     if combo_matches(flags, key, &combo) {
         HOLDING.store(true, Ordering::SeqCst);
+        eprintln!(
+            "[voice] hold start chord key={} mods={}",
+            key,
+            mods_label(normalize_mods(flags))
+        );
         send_cmd(Cmd::Start(app.clone()));
     }
 }
 
 fn on_release(app: &AppHandle, ev: *mut objc2::runtime::AnyObject) {
     use objc2::msg_send;
-    if !HOLDING.load(Ordering::SeqCst) {
-        return;
-    }
     let combo = current_voice_combo(app);
     // SAFETY: NSEvent pointer from AppKit monitor callback.
     let flags: usize = unsafe { msg_send![ev, modifierFlags] };
     let ty: usize = unsafe { msg_send![ev, type] };
     let key: u16 = unsafe { msg_send![ev, keyCode] };
+    if touches_combo(ty, flags, key, &combo) {
+        eprintln!(
+            "[voice] {} key={} mods={} holding={}",
+            type_name(ty),
+            key,
+            mods_label(normalize_mods(flags)),
+            HOLDING.load(Ordering::SeqCst)
+        );
+    }
+    if !HOLDING.load(Ordering::SeqCst) {
+        return;
+    }
     if is_release(ty, flags, key, &combo) {
         HOLDING.store(false, Ordering::SeqCst);
-        eprintln!("[voice] hold release (ty={ty})");
+        eprintln!(
+            "[voice] hold release ({} key={} mods={})",
+            type_name(ty),
+            key,
+            mods_label(normalize_mods(flags))
+        );
         send_cmd(Cmd::End(app.clone()));
     }
+}
+
+fn schedule_end_failsafe(app: AppHandle) {
+    std::thread::Builder::new()
+        .name("voice-end-failsafe".into())
+        .spawn(move || {
+            std::thread::sleep(END_FAILSAFE);
+            if crate::voice_session::mac::force_end_if_recording(app) {
+                eprintln!(
+                    "[voice] end failsafe — still recording {}ms after release",
+                    END_FAILSAFE.as_millis()
+                );
+            }
+        })
+        .ok();
 }
 
 fn worker_loop(rx: Receiver<Cmd>) {
@@ -199,7 +308,7 @@ fn worker_loop(rx: Receiver<Cmd>) {
     let mut timeout_app: Option<AppHandle> = None;
     loop {
         let wait = if hold_started.is_some() {
-            Duration::from_millis(250)
+            Duration::from_millis(100)
         } else {
             Duration::from_secs(3600)
         };
@@ -219,16 +328,37 @@ fn worker_loop(rx: Receiver<Cmd>) {
             Ok(Cmd::End(app)) => {
                 hold_started = None;
                 timeout_app = None;
-                crate::voice_session::mac::on_hold_end(app);
+                crate::voice_session::mac::on_hold_end(app.clone());
+                schedule_end_failsafe(app);
             }
             Err(RecvTimeoutError::Timeout) => {
                 if let (Some(started), Some(app)) = (hold_started, timeout_app.as_ref()) {
+                    // Poll modifier flags while holding — catches a missed flagsChanged (common
+                    // when Control/Option release order races with the letter key on ⌃⌥V).
+                    if HOLDING.load(Ordering::SeqCst) {
+                        let combo = current_voice_combo(app);
+                        let mods = current_modifier_flags();
+                        if (mods & combo.modifiers) != combo.modifiers {
+                            HOLDING.store(false, Ordering::SeqCst);
+                            eprintln!(
+                                "[voice] hold release (mod poll mods={})",
+                                mods_label(mods)
+                            );
+                            hold_started = None;
+                            let app = app.clone();
+                            timeout_app = None;
+                            crate::voice_session::mac::on_hold_end(app.clone());
+                            schedule_end_failsafe(app);
+                            continue;
+                        }
+                    }
                     if started.elapsed() >= MAX_HOLD && HOLDING.swap(false, Ordering::SeqCst) {
                         eprintln!("[voice] hold auto-end after {}s", MAX_HOLD.as_secs());
                         hold_started = None;
                         let app = app.clone();
                         timeout_app = None;
-                        crate::voice_session::mac::on_hold_end(app);
+                        crate::voice_session::mac::on_hold_end(app.clone());
+                        schedule_end_failsafe(app);
                     }
                 }
             }
