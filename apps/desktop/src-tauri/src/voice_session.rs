@@ -12,9 +12,6 @@ pub mod mac {
     use crate::voice_lane::{self, TranscriptOutcome};
 
     const WINDOW_LABEL: &str = "voice";
-    const RECORD_SIZE: (f64, f64) = (360.0, 88.0);
-    const RESPONSE_SIZE: (f64, f64) = (480.0, 280.0);
-    const MARGIN: f64 = 24.0;
 
     #[derive(Clone, serde::Serialize, serde::Deserialize)]
     pub struct Settings {
@@ -89,15 +86,26 @@ pub mod mac {
         emit_state(app, "error", None, Some(msg));
     }
 
+    fn preload_whisper_bg(app: &AppHandle) {
+        let app = app.clone();
+        std::thread::spawn(move || {
+            if let Err(e) = voice_lane::preload_whisper(&app) {
+                eprintln!("[voice] whisper preload failed: {e}");
+            } else {
+                eprintln!("[voice] whisper model ready");
+            }
+        });
+    }
+
     pub fn init(app: &AppHandle) {
         let settings = load_settings(app);
         let enabled_log = settings.enabled;
-        match build_overlay(app) {
-            Some(_) => eprintln!("[voice] overlay window ready (hidden)"),
-            None => eprintln!("[voice] overlay window unavailable"),
-        }
+        let _ = build_overlay(app);
         if let Ok(mut lane) = LANE.lock() {
-            *lane = Some(Lane { settings, audio: None });
+            *lane = Some(Lane { settings: settings.clone(), audio: None });
+        }
+        if settings.enabled {
+            preload_whisper_bg(app);
         }
         eprintln!(
             "[voice] dialogue {}",
@@ -132,7 +140,6 @@ pub mod mac {
         match voice_lane::start(&app) {
             Ok(handle) => {
                 lane.audio = Some(handle);
-                show_overlay(&app, RECORD_SIZE);
                 emit_state(&app, "recording", None, None);
                 eprintln!("[voice] hold start — mic open");
             }
@@ -152,18 +159,15 @@ pub mod mac {
         let Some(audio) = audio else { return };
 
         emit_state(&app, "processing", None, None);
-        resize_overlay(&app, RECORD_SIZE);
         eprintln!("[voice] hold end — transcribing");
 
         let transcript = match voice_lane::stop(audio) {
             TranscriptOutcome::Ok(t) => t,
             TranscriptOutcome::Empty => {
-                hide_overlay(&app);
                 emit_error(&app, "Didn't catch that — try again.");
                 return;
             }
             TranscriptOutcome::Err(e) => {
-                hide_overlay(&app);
                 emit_error(&app, e);
                 return;
             }
@@ -174,7 +178,6 @@ pub mod mac {
         let db = match app.try_state::<Db>() {
             Some(db) => db.inner().clone(),
             None => {
-                hide_overlay(&app);
                 emit_error(&app, "Memory isn't ready yet — try again in a moment.");
                 return;
             }
@@ -190,13 +193,9 @@ pub mod mac {
                         "voice_response",
                         VoiceResponseEvent { text: a.text.clone(), transcript: transcript.clone() },
                     );
-                    show_overlay(&app_bg, RESPONSE_SIZE);
                     emit_state(&app_bg, "response", Some(transcript), Some(a.text));
                 }
-                Err(e) => {
-                    hide_overlay(&app_bg);
-                    emit_error(&app_bg, e);
-                }
+                Err(e) => emit_error(&app_bg, e),
             }
         });
     }
@@ -215,13 +214,15 @@ pub mod mac {
         let settings = lane.as_mut().ok_or("voice not initialized")?;
         settings.settings.enabled = enabled;
         save_settings(&app, &settings.settings);
+        if enabled {
+            preload_whisper_bg(&app);
+        }
         eprintln!("[voice] enabled={enabled}");
         Ok(())
     }
 
     #[tauri::command]
     pub fn voice_dismiss(app: AppHandle) {
-        hide_overlay(&app);
         emit_state(&app, "idle", None, None);
     }
 
@@ -237,7 +238,7 @@ pub mod mac {
             .always_on_top(true)
             .shadow(false)
             .skip_taskbar(true)
-            .inner_size(RECORD_SIZE.0, RECORD_SIZE.1)
+            .inner_size(1.0, 1.0)
             .visible(false)
             .focused(false)
             .build()
@@ -267,54 +268,5 @@ pub mod mac {
             let _: () = msg_send![ptr, setMovableByWindowBackground: false];
             let _: () = msg_send![ptr, setIgnoresMouseEvents: false];
         }
-    }
-
-    fn park_bottom_center(win: &WebviewWindow, size: (f64, f64)) {
-        let _ = win.set_size(tauri::Size::Logical(tauri::LogicalSize {
-            width: size.0,
-            height: size.1,
-        }));
-        let monitor = win.current_monitor().ok().flatten();
-        let Some(monitor) = monitor else { return };
-        let screen = monitor.size();
-        let scale = monitor.scale_factor();
-        let sw = screen.width as f64 / scale;
-        let sh = screen.height as f64 / scale;
-        let x = (sw - size.0) / 2.0;
-        let y = sh - size.1 - MARGIN;
-        let _ = win.set_position(tauri::Position::Logical(tauri::LogicalPosition { x, y }));
-    }
-
-    fn with_overlay<F>(app: &AppHandle, f: F)
-    where
-        F: FnOnce(&WebviewWindow) + Send + 'static,
-    {
-        let app = app.clone();
-        let app_bg = app.clone();
-        let _ = app.run_on_main_thread(move || {
-            if let Some(win) = app_bg.get_webview_window(WINDOW_LABEL) {
-                f(&win);
-            }
-        });
-    }
-
-    fn show_overlay(app: &AppHandle, size: (f64, f64)) {
-        with_overlay(app, move |win| {
-            park_bottom_center(win, size);
-            let _ = win.show();
-            let _ = win.set_focus();
-        });
-    }
-
-    fn resize_overlay(app: &AppHandle, size: (f64, f64)) {
-        with_overlay(app, move |win| {
-            park_bottom_center(win, size);
-        });
-    }
-
-    fn hide_overlay(app: &AppHandle) {
-        with_overlay(app, |win| {
-            let _ = win.hide();
-        });
     }
 }

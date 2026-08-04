@@ -65,6 +65,11 @@ fn whisper_model_path(app: &AppHandle) -> Option<std::path::PathBuf> {
     p.exists().then_some(p)
 }
 
+/// Warm the whisper model off the hot path (hold-to-talk must not load 500MB on an NSEvent thread).
+pub fn preload_whisper(app: &AppHandle) -> Result<(), String> {
+    load_whisper(app)
+}
+
 fn load_whisper(app: &AppHandle) -> Result<(), String> {
     let Some(path) = whisper_model_path(app) else {
         return Err("no whisper model on disk".into());

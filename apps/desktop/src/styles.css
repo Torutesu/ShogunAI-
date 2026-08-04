@@ -1574,6 +1574,122 @@ kbd {
   padding-inline: 12px;
 }
 
+/* voice pill + panel (#44) — same notch-hung glass as the meeting pill */
+.vpill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  max-width: 360px;
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(30px) saturate(1.7);
+  backdrop-filter: blur(30px) saturate(1.7);
+  border: 1px solid var(--line);
+  border-top: none;
+  border-radius: 0 0 var(--r-md) var(--r-md);
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.4);
+  color: var(--ink);
+  font-family: var(--sys);
+  font-size: var(--fs-sm);
+}
+.vpill__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex: none;
+  animation: vpill-pulse 1.2s ease-in-out infinite;
+}
+@keyframes vpill-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.55; transform: scale(0.92); }
+}
+.vpill__label {
+  color: var(--muted);
+  flex: none;
+}
+.vpill__meter {
+  flex: 1;
+  min-width: 48px;
+  height: 4px;
+  border-radius: var(--r-pill);
+  background: var(--fill);
+  overflow: hidden;
+}
+.vpill__meter-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 80ms linear;
+}
+
+.voice-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px 14px;
+  flex: 1;
+  min-height: 0;
+  box-sizing: border-box;
+}
+.voice-panel__kicker {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  letter-spacing: 0.02em;
+}
+.voice-panel__meter {
+  height: 6px;
+  border-radius: var(--r-pill);
+  background: var(--fill);
+  overflow: hidden;
+}
+.voice-panel__meter-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 80ms linear;
+}
+.voice-panel__hint {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+.voice-panel__transcript {
+  font-size: var(--fs-sm);
+  color: var(--muted);
+  font-style: italic;
+}
+.voice-panel__transcript--sub {
+  font-size: var(--fs-xs);
+}
+.voice-panel__response {
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  max-height: 160px;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+.voice-panel__acts {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+.voice-panel__btn {
+  font: inherit;
+  font-size: var(--fs-xs);
+  padding: 5px 12px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--line);
+  background: var(--fill);
+  color: var(--ink);
+  cursor: pointer;
+  transition: background var(--sp);
+}
+.voice-panel__btn--primary {
+  background: var(--fill-strong);
+  font-weight: 600;
+}
+
 /* excluded-app list (FR-MT-02b). Deliberately plain: it is a list of decisions the user already
    made, and its only job is to let them be taken back. */
 .mexcl {

@@ -132,7 +132,9 @@ pub fn install(app: &tauri::AppHandle) {
             let key: u16 = msg_send![ev, keyCode];
             if combo_matches(flags, key, &combo) {
                 HOLDING.store(true, Ordering::SeqCst);
-                crate::voice_session::mac::on_hold_start(handle_start.clone());
+                // NSEvent monitor thread — never block here (whisper load / mic / transcribe).
+                let app = handle_start.clone();
+                std::thread::spawn(move || crate::voice_session::mac::on_hold_start(app));
             }
         });
 
@@ -153,7 +155,8 @@ pub fn install(app: &tauri::AppHandle) {
             };
             if release {
                 HOLDING.store(false, Ordering::SeqCst);
-                crate::voice_session::mac::on_hold_end(handle_stop.clone());
+                let app = handle_stop.clone();
+                std::thread::spawn(move || crate::voice_session::mac::on_hold_end(app));
             }
         });
 

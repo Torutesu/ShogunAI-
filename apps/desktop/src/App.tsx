@@ -85,6 +85,39 @@ interface InlineStatus {
   detail: string | null;
 }
 
+/** Hold-to-talk voice dialogue (#44). Rust owns lifecycle; notch expands on `voice_state`. */
+interface VoiceView {
+  phase: "idle" | "recording" | "processing" | "response" | "error";
+  transcript: string;
+  response: string;
+  error: string;
+  level: number;
+}
+
+interface LevelEvent {
+  rms: number;
+}
+
+const VOICE_W_RECORD = 360;
+const VOICE_H_RECORD = 100;
+const VOICE_W_PROCESS = 400;
+const VOICE_H_PROCESS = 140;
+const VOICE_W_RESPONSE = 480;
+const VOICE_H_RESPONSE = 280;
+
+function voicePanelSize(phase: VoiceView["phase"]): Size {
+  switch (phase) {
+    case "recording":
+      return { w: VOICE_W_RECORD, h: VOICE_H_RECORD };
+    case "processing":
+      return { w: VOICE_W_PROCESS, h: VOICE_H_PROCESS };
+    case "response":
+      return { w: VOICE_W_RESPONSE, h: VOICE_H_RESPONSE };
+    default:
+      return { w: W, h: H_OPEN };
+  }
+}
+
 interface StateItem {
   id: number;
   text: string;
@@ -237,6 +270,14 @@ export function App(): JSX.Element {
   const historyMark = useRef<number | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [voiceToast, setVoiceToast] = useState<string | null>(null);
+  const [voice, setVoice] = useState<VoiceView>({
+    phase: "idle",
+    transcript: "",
+    response: "",
+    error: "",
+    level: 0,
+  });
+  const voicePeak = useRef(0);
 
   // Open-view sizes are user-resizable (corner grip) and persist across the Rust-driven respawns.
   // Chat and Settings keep INDEPENDENT sizes — chat wants short+wide, Settings wants tall enough
@@ -352,6 +393,40 @@ export function App(): JSX.Element {
         sizeForViewRef.current({ open: true });
       }),
     );
+    offs.push(
+      listen<{ phase: VoiceView["phase"]; transcript?: string | null; response?: string | null }>(
+        "voice_state",
+        (e) => {
+          const p = e.payload.phase;
+          setVoice((cur) => ({
+            ...cur,
+            phase: p,
+            transcript: e.payload.transcript ?? (p === "idle" ? "" : cur.transcript),
+            response: e.payload.response ?? (p === "idle" ? "" : cur.response),
+            error: p === "error" ? e.payload.response ?? cur.error : p === "idle" ? "" : cur.error,
+            level: p === "recording" ? cur.level : 0,
+          }));
+          if (p === "recording") voicePeak.current = 0;
+          if (p === "recording" || p === "processing" || p === "response") {
+            setOpen(true);
+            setShowSettings(false);
+            const sz = voicePanelSize(p);
+            void applyPanelSize(sz.w, sz.h);
+          } else if (p === "idle" && !pinnedRef.current) {
+            setOpen(false);
+            sizeForViewRef.current({ open: false });
+          }
+        },
+      ),
+    );
+    offs.push(
+      listen<LevelEvent>("voice_level", (e) => {
+        const rms = e.payload.rms;
+        voicePeak.current = Math.max(voicePeak.current * 0.85, rms);
+        const norm = voicePeak.current > 0 ? Math.min(1, rms / voicePeak.current) : 0;
+        setVoice((cur) => (cur.phase === "recording" ? { ...cur, level: norm } : cur));
+      }),
+    );
     // The notch's own hover detection finally drives the panel. Until now the tracker ran, emitted
     // transitions, and nothing listened — opening was click-only, which is why hovering the notch
     // did nothing while hovering the collapsed pill worked.
@@ -371,6 +446,7 @@ export function App(): JSX.Element {
           // stays, everything else follows your attention.
           if (pinnedRef.current) return;
           if (inputRef.current.trim().length > 0 || thinkingRef.current) return;
+          if (voiceRef.current.phase === "recording" || voiceRef.current.phase === "processing") return;
           setOpen((cur) => {
             if (!cur) return cur;
             sizeForViewRef.current({ open: false });
@@ -461,6 +537,9 @@ export function App(): JSX.Element {
   // a captured value — otherwise an unpinned-at-mount panel would ignore the pin forever.
   const pinnedRef = useRef(pinned);
   pinnedRef.current = pinned;
+  const voiceRef = useRef(voice);
+  voiceRef.current = voice;
+  const voiceActive = voice.phase !== "idle" && voice.phase !== "error";
 
   const onPanelLeave = useCallback((): void => {
     if (pinned) return;
@@ -471,6 +550,7 @@ export function App(): JSX.Element {
       // answer still arriving all mean the panel is in use even though the cursor wandered off.
       const composerHasFocus = document.activeElement?.classList.contains("composer__input") ?? false;
       if (composerHasFocus || inputRef.current.trim().length > 0 || thinkingRef.current) return;
+      if (voiceRef.current.phase === "recording" || voiceRef.current.phase === "processing") return;
       setShowSettings(false);
       setOpen(false);
       sizeForViewRef.current({ open: false });
@@ -599,12 +679,16 @@ export function App(): JSX.Element {
     meeting?.title,
     meeting?.elapsed_ms,
     meeting?.countdown_ms,
+    voice?.phase,
+    voice?.level,
   ]);
 
   const meetingLive =
     meeting?.enabled && (meeting.state === "offered" || meeting.state === "recording")
       ? meeting
       : null;
+
+  const voiceLive = voiceActive ? voice : null;
 
   // Collapsed: a clear, clickable handle hanging from the notch.
   if (!open) {
@@ -614,6 +698,15 @@ export function App(): JSX.Element {
         <div className="stage stage--handle">
           <div ref={pillRef}>
             <MeetingPill view={meetingLive} />
+          </div>
+        </div>
+      );
+    }
+    if (voiceLive?.phase === "recording") {
+      return (
+        <div className="stage stage--handle">
+          <div ref={pillRef}>
+            <VoicePill view={voiceLive} />
           </div>
         </div>
       );
@@ -677,6 +770,11 @@ export function App(): JSX.Element {
           />
         ) : meetingLive?.state === "recording" ? (
           <MeetingNote />
+        ) : voiceLive ? (
+          <VoicePanel
+            view={voiceLive}
+            onDismiss={() => void invoke("voice_dismiss").catch(() => undefined)}
+          />
         ) : (
           <>
             <header className="head" onMouseDown={beginDrag}>
@@ -879,6 +977,72 @@ export function App(): JSX.Element {
           onCommit={onResizeCommit}
         />
       </div>
+    </div>
+  );
+}
+
+/** Collapsed notch pill while hold-to-talk is active (#44). */
+function VoicePill({ view }: { view: VoiceView }): JSX.Element {
+  return (
+    <div className="vpill">
+      <span className="vpill__dot" aria-hidden />
+      <span className="vpill__label">{t.voiceListening}</span>
+      <span className="vpill__meter" aria-hidden>
+        <span className="vpill__meter-fill" style={{ width: `${Math.round(view.level * 100)}%` }} />
+      </span>
+    </div>
+  );
+}
+
+/** Expanded notch surface for voice dialogue (#44). */
+function VoicePanel({
+  view,
+  onDismiss,
+}: {
+  view: VoiceView;
+  onDismiss: () => void;
+}): JSX.Element {
+  const copyResponse = (): void => {
+    if (!view.response) return;
+    void navigator.clipboard.writeText(view.response).catch(() => undefined);
+  };
+
+  return (
+    <div className="voice-panel">
+      {view.phase === "recording" ? (
+        <>
+          <div className="voice-panel__kicker">{t.voiceListening}</div>
+          <div className="voice-panel__meter" aria-hidden>
+            <div className="voice-panel__meter-fill" style={{ width: `${Math.round(view.level * 100)}%` }} />
+          </div>
+          <div className="voice-panel__hint">{t.voiceHoldHint}</div>
+        </>
+      ) : null}
+
+      {view.phase === "processing" ? (
+        <>
+          <div className="voice-panel__kicker">{t.voiceProcessing}</div>
+          {view.transcript ? <div className="voice-panel__transcript">"{view.transcript}"</div> : null}
+        </>
+      ) : null}
+
+      {view.phase === "response" ? (
+        <>
+          <div className="voice-panel__kicker">{t.voiceAnswer}</div>
+          {view.transcript ? (
+            <div className="voice-panel__transcript voice-panel__transcript--sub">"{view.transcript}"</div>
+          ) : null}
+          <div className="voice-panel__response">{view.response}</div>
+          <div className="voice-panel__acts">
+            <button type="button" className="voice-panel__btn" onClick={copyResponse}>
+              {t.voiceCopy}
+            </button>
+            <button type="button" className="voice-panel__btn voice-panel__btn--primary" onClick={onDismiss}>
+              {t.voiceClose}
+            </button>
+          </div>
+        </>
+      ) : null}
     </div>
   );
 }
