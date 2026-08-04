@@ -12,7 +12,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-BIN="$ROOT/apps/desktop/src-tauri/target/debug/shogun-desktop-spike"
+BIN="${SHOGUN_DESKTOP_BIN:-$ROOT/target/debug/shogun-desktop-spike}"
 ENT="$ROOT/apps/desktop/src-tauri/entitlements.plist"
 IDENTITY="${SHOGUN_SIGN_IDENTITY:--}"
 

@@ -45,20 +45,30 @@ pub const SELECT_KK_ACCOUNT: &str = "select-kk-batch";
 
 static CACHE: OnceLock<Mutex<HashMap<String, Vec<u8>>>> = OnceLock::new();
 
-/// Read a generic-password secret. Tries [`SERVICE`], then [`LEGACY_SERVICE`]. Cached after first
-/// successful read for this process.
+/// Read a generic-password secret. Tries [`SERVICE`], then [`LEGACY_SERVICE`]. Migrates legacy-only
+/// entries to [`SERVICE`] on first read. Cached after first successful read for this process so
+/// startup does not hit the Keychain once per subsystem (DB key, Select KK, Composio, …).
 pub fn get_generic_secret(account: &str) -> Result<Vec<u8>> {
     if let Ok(guard) = cache().lock() {
         if let Some(bytes) = guard.get(account) {
             return Ok(bytes.clone());
         }
     }
-    let bytes = read_from_keychain(SERVICE, account)
-        .or_else(|_| read_from_keychain(LEGACY_SERVICE, account))?;
-    if let Ok(mut guard) = cache().lock() {
-        guard.insert(account.to_string(), bytes.clone());
+    match read_from_keychain(SERVICE, account) {
+        Ok(bytes) => {
+            warm_cache(account, &bytes);
+            Ok(bytes)
+        }
+        Err(_) => {
+            let bytes = read_from_keychain(LEGACY_SERVICE, account)?;
+            // Best-effort migration — do not fail the read if rewrite fails.
+            if write_to_keychain(SERVICE, account, &bytes).is_ok() {
+                let _ = delete_from_keychain(LEGACY_SERVICE, account);
+            }
+            warm_cache(account, &bytes);
+            Ok(bytes)
+        }
     }
-    Ok(bytes)
 }
 
 /// Store a generic-password secret under [`SERVICE`].
@@ -119,28 +129,23 @@ pub fn set_select_kk_key(key: &str) -> Result<(), String> {
     set_generic_secret(SELECT_KK_ACCOUNT, normalized.as_bytes()).map_err(|e| e.to_string())
 }
 
-/// Migrate legacy `SHOGUN` service entries to [`SERVICE`] without delete-before-write.
+/// Touch every known account once at startup so later subsystems reuse the in-process cache.
 ///
-/// Call once near startup after the user has authorized access. Items already on [`SERVICE`] are
-/// left untouched — re-writing them used to delete-then-add and could wipe secrets when add failed.
-pub fn repair_dev_acls(accounts: &[&str]) {
+/// Missing accounts are ignored (`errSecItemNotFound` does not prompt). Existing items may still
+/// show one Keychain dialog per launch in unsigned `tauri dev` builds — run
+/// `scripts/codesign-desktop-dev.sh` after building so "Always Allow" survives rebuilds.
+pub fn warm_startup_keychain(accounts: &[&str]) {
     for account in accounts {
-        if read_from_keychain(SERVICE, account).is_ok() {
-            continue;
+        if let Ok(bytes) = get_generic_secret(account) {
+            eprintln!("[keychain] warmed {account} ({} bytes)", bytes.len());
         }
-        let Ok(bytes) = read_from_keychain(LEGACY_SERVICE, account) else {
-            continue;
-        };
-        if let Err(e) = write_to_keychain(SERVICE, account, &bytes) {
-            eprintln!("[keychain] could not migrate legacy {account}: {e}");
-            continue;
-        }
-        let _ = delete_from_keychain(LEGACY_SERVICE, account);
-        if let Ok(mut guard) = cache().lock() {
-            guard.insert(account.to_string(), bytes);
-        }
-        eprintln!("[keychain] migrated legacy {account} to {SERVICE}");
     }
+}
+
+/// Migrate legacy `SHOGUN` service entries to [`SERVICE`] without delete-before-write.
+#[deprecated(note = "use warm_startup_keychain — migration now happens inside get_generic_secret")]
+pub fn repair_dev_acls(accounts: &[&str]) {
+    warm_startup_keychain(accounts);
 }
 
 fn decode_secret(bytes: Vec<u8>) -> Option<String> {
@@ -268,6 +273,12 @@ fn base_attrs(service: &str, account: &str) -> Vec<(CFString, core_foundation::b
             CFString::new(account).into_CFType(),
         ),
     ]
+}
+
+fn warm_cache(account: &str, bytes: &[u8]) {
+    if let Ok(mut guard) = cache().lock() {
+        guard.insert(account.to_string(), bytes.to_vec());
+    }
 }
 
 fn cache() -> &'static Mutex<HashMap<String, Vec<u8>>> {
