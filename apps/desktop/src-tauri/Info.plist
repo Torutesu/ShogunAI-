@@ -10,5 +10,7 @@
     <true/>
     <key>NSScreenCaptureUsageDescription</key>
     <string>SHOGUN reads the focused window only when you turn on Visual recall, runs on-device text recognition, and never saves screenshots.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>SHOGUN uses the microphone for meeting notes and hold-to-talk voice dialogue. Audio stays on your Mac and is never saved to disk.</string>
 </dict>
 </plist>

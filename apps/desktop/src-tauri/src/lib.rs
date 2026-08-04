@@ -38,6 +38,12 @@ mod notch_actions;
 mod notch_exec;
 mod onboarding;
 mod visual_recall;
+#[cfg(target_os = "macos")]
+mod voice_lane;
+#[cfg(target_os = "macos")]
+mod voice_session;
+#[cfg(target_os = "macos")]
+mod voice_shortcut;
 
 /// The collectionBehavior the overlay wants, selected at setup (NSPanel mode = canJoinAllSpaces +
 /// fullScreenAuxiliary = 257; plain-window fallback = moveToActiveSpace 274) and re-asserted by
@@ -228,6 +234,9 @@ pub fn run() {
         analytics::analytics_set_opt_out,
         launch_at_login::mac::get_launch_at_login_settings,
         launch_at_login::mac::set_launch_at_login_enabled,
+        voice_session::mac::get_voice_settings,
+        voice_session::mac::set_voice_enabled,
+        voice_session::mac::voice_dismiss,
     ]);
 
     // NOTE: the visible surface is a NATIVE NSPanel hosting the webview's content view
@@ -453,6 +462,9 @@ fn setup_macos(app: &tauri::App) {
     // return "not ready" or leave LANE unset (FR-MT-01/02a).
     meeting::mac::init(&app.handle().clone());
     meeting::mac::spawn_meeting_driver(app.handle().clone());
+
+    voice_session::mac::init(app.handle());
+    voice_shortcut::install(app.handle());
 
     // WP2.2: start the memory capture source. Open the on-device DB under the app-data dir and
     // poll the focus into memory (exclusion → walk → collapse → extract). AX text only (invariant
@@ -1639,12 +1651,13 @@ mod shortcuts {
     // bare modifier can't be a global shortcut, and the previous ⌃⌥G "alternative" only confused
     // (it showed as rerebindable in Settings but the real trigger was the ⌥ tap). Summon and quit
     // stay user-rebindable.
-    const ACTIONS: [&str; 2] = ["summon", "quit"];
+    const ACTIONS: [&str; 3] = ["summon", "quit", "voice"];
 
     fn defaults() -> Bindings {
         let mut m = HashMap::new();
         m.insert("summon".into(), "Control+Alt+KeyN".into());
         m.insert("quit".into(), "Control+Alt+KeyQ".into());
+        m.insert("voice".into(), "Control+Alt+KeyV".into());
         m
     }
 
@@ -1665,7 +1678,8 @@ mod shortcuts {
     /// The current on-disk version. v2 = the (short-lived) ⌥G draft default; v3 = draft back to
     /// ⌃⌥G; v4 = draft removed entirely (the ⌥ tap is the sole trigger). A v4 load drops any
     /// persisted "draft" binding from disk (ACTIONS no longer contains it, so it's ignored anyway).
-    const SHORTCUTS_VERSION: u32 = 4;
+    /// v5 = voice hold shortcut (⌃⌥V default).
+    const SHORTCUTS_VERSION: u32 = 5;
 
     /// Load persisted bindings, filling any missing action with its default.
     pub fn load(app: &tauri::AppHandle) -> Bindings {
@@ -1720,9 +1734,23 @@ mod shortcuts {
         }
     }
 
+    /// Read one persisted binding (used by hold-to-talk monitors).
+    pub(crate) fn binding(app: &tauri::AppHandle, action: &str) -> Option<String> {
+        app.try_state::<Store>()?
+            .0
+            .lock()
+            .ok()?
+            .get(action)
+            .cloned()
+    }
+
     /// Register `combo` for `action`. The combo string parses via the plugin (invalid combos and
     /// already-taken combos surface as Err — nothing changes in that case).
     pub fn register_action(app: &tauri::AppHandle, action: &str, combo: &str) -> Result<(), String> {
+        if action == "voice" {
+            // Hold-to-talk is wired through NSEvent monitors, not the global-shortcut plugin.
+            return Ok(());
+        }
         let act = action.to_string();
         app.global_shortcut()
             .on_shortcut(combo, move |app, _sc, event| {
@@ -1772,10 +1800,12 @@ mod shortcuts {
         if old.as_deref() == Some(combo.as_str()) {
             return Ok(());
         }
-        register_action(&app, &action, &combo)?;
-        if let Some(old) = old {
-            if let Err(e) = app.global_shortcut().unregister(old.as_str()) {
-                eprintln!("[shell] old shortcut unregister failed ({old}): {e}");
+        if action != "voice" {
+            register_action(&app, &action, &combo)?;
+            if let Some(old) = old {
+                if let Err(e) = app.global_shortcut().unregister(old.as_str()) {
+                    eprintln!("[shell] old shortcut unregister failed ({old}): {e}");
+                }
             }
         }
         if let Ok(mut g) = store.0.lock() {

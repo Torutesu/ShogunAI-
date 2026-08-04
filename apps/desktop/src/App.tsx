@@ -236,6 +236,7 @@ export function App(): JSX.Element {
   /// anything above it is history rather than part of what you're doing now.
   const historyMark = useRef<number | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [voiceToast, setVoiceToast] = useState<string | null>(null);
 
   // Open-view sizes are user-resizable (corner grip) and persist across the Rust-driven respawns.
   // Chat and Settings keep INDEPENDENT sizes — chat wants short+wide, Settings wants tall enough
@@ -406,6 +407,20 @@ export function App(): JSX.Element {
     const id = setInterval(refreshState, 3000);
     return () => clearInterval(id);
   }, [refreshState]);
+
+  useEffect(() => {
+    if (!IN_TAURI) return;
+    let unlisten: (() => void) | undefined;
+    void listen<{ message: string }>("voice_error", (e) => {
+      setVoiceToast(e.payload.message);
+      window.setTimeout(() => setVoiceToast(null), 4000);
+    }).then((fn) => {
+      unlisten = fn;
+    });
+    return () => {
+      unlisten?.();
+    };
+  }, []);
 
   // Click a state row to resolve it (commitment → done, open loop → closed); refresh immediately.
   const resolveItem = (kind: "commitment" | "open_loop", id: number): void => {
@@ -644,6 +659,7 @@ export function App(): JSX.Element {
 
   return (
     <div className="stage">
+      {voiceToast ? <div className="voice-toast">{voiceToast}</div> : null}
       {meetingLive ? <MeetingPill view={meetingLive} /> : null}
       <div className="panel" onPointerEnter={cancelAutoCollapse} onPointerLeave={onPanelLeave}>
         {showSettings ? (
@@ -1231,6 +1247,60 @@ function DreamSection(): JSX.Element {
         ) : null}
       </div>
       {selectKkMsg ? <div className="set__hint">{selectKkMsg}</div> : null}
+    </section>
+  );
+}
+
+/** Hold-to-talk voice dialogue (#44). Beta, off by default; needs BYOK for answers. */
+function VoiceSection(): JSX.Element {
+  const [on, setOn] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!IN_TAURI) return;
+    void invoke<{ enabled: boolean }>("get_voice_settings")
+      .then((s) => setOn(s.enabled))
+      .catch(() => undefined);
+  }, []);
+
+  const toggle = (next: boolean): void => {
+    if (!IN_TAURI) {
+      setOn(next);
+      return;
+    }
+    setBusy(true);
+    setOn(next);
+    void invoke("set_voice_enabled", { enabled: next })
+      .catch(() => setOn(!next))
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <section className="set">
+      <div className="set__label">{t.voiceSection}</div>
+      <div className="set__hint">{t.voiceHint}</div>
+      <div className="seg" role="radiogroup" aria-label={t.voiceSection}>
+        <button
+          type="button"
+          role="radio"
+          aria-checked={!on}
+          className={`seg__opt${!on ? " is-on" : ""}`}
+          disabled={busy}
+          onClick={() => toggle(false)}
+        >
+          {t.voiceOff}
+        </button>
+        <button
+          type="button"
+          role="radio"
+          aria-checked={on}
+          className={`seg__opt${on ? " is-on" : ""}`}
+          disabled={busy}
+          onClick={() => toggle(true)}
+        >
+          {t.voiceOn}
+        </button>
+      </div>
     </section>
   );
 }
@@ -2076,6 +2146,7 @@ function ApprovalsSection(): JSX.Element | null {
 const DEFAULT_BINDS: Record<string, string> = {
   summon: "Control+Alt+KeyN",
   quit: "Control+Alt+KeyQ",
+  voice: "Control+Alt+KeyV",
 };
 /** The model each provider runs. Mirrors default_model() in inline_source.rs — shown so the user
  *  can see what will run, not so they can change it. */
@@ -2100,6 +2171,7 @@ const PROVIDERS: Array<{ id: string; label: string }> = [
 ];
 const SHORTCUT_ROWS: Array<{ action: string; label: string }> = [
   { action: "summon", label: t.summonShortcut },
+  { action: "voice", label: t.voiceShortcut },
   { action: "quit", label: t.quitShortcut },
 ];
 
@@ -2274,6 +2346,7 @@ function Settings(props: {
         <MeetingSection />
         <LaunchAtLoginSection />
         <VisualRecallSection />
+        <VoiceSection />
         <ConnectionsSection />
         <ComposioSection />
         <AiSessionsSection />

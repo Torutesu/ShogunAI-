@@ -876,6 +876,11 @@ pub mod mac {
         pub citations: Vec<Citation>,
     }
 
+    /// Context-aware chat for the voice dialogue lane (#44). Same BYOK path as `shogun_chat`.
+    pub(crate) fn voice_chat(db: &Db, message: &str) -> Result<ChatAnswer, String> {
+        chat_blocking(db, message)
+    }
+
     fn chat_blocking(db: &Db, message: &str) -> Result<ChatAnswer, String> {
         use shogun_memory::thread::Referent;
 
