@@ -317,29 +317,38 @@ pub fn corroborate(conn: &mut Connection) -> Result<usize, rusqlite::Error> {
         // Compare against the *base*, not the aged-down `confidence`: a row that has simply gone
         // quiet would otherwise look un-corroborated again on every pass and be re-raised forever.
         let sql = format!(
-            "SELECT s.id, s.base_confidence, count(DISTINCT p.event_id)
+            "SELECT s.id, s.base_confidence, count(DISTINCT p.event_id), MAX(e.ts)
                FROM {table} s
                JOIN state_provenance p
                  ON p.state_table = '{table}' AND p.state_id = s.id
+               JOIN event_log e
+                 ON e.id = p.event_id
               GROUP BY s.id
              HAVING count(DISTINCT p.event_id) > 1"
         );
         let mut stmt = tx.prepare(&sql)?;
-        let rows: Vec<(i64, f64, i64)> = stmt
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+        let rows: Vec<(i64, f64, i64, i64)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
             .collect::<Result<Vec<_>, _>>()?;
         drop(stmt);
-        for (id, base, evidence) in rows {
+        for (id, base, evidence, newest_evidence_ts) in rows {
             let target = corroborated_confidence(evidence as f64).clamp(0.0, 1.0);
             if target > base {
                 // Raise the visible value too so a standalone corroborate pass is not invisible;
                 // the next decay recomputes it from the new base and ages it correctly.
+                //
+                // `last_evidence_at` must advance to the newest corroborating event, or the very
+                // next decay pass ages the raised value from the ORIGINAL sighting and drops the
+                // row straight back below the Medium boundary — silently undoing the promotion
+                // this function exists to make (the corroborating events ARE evidence).
                 tx.execute(
                     &format!(
                         "UPDATE {table} SET base_confidence = ?1,
-                                            confidence = MAX(confidence, ?1) WHERE id = ?2"
+                                            confidence = MAX(confidence, ?1),
+                                            last_evidence_at = MAX(last_evidence_at, ?3)
+                                      WHERE id = ?2"
                     ),
-                    params![target, id],
+                    params![target, id, newest_evidence_ts],
                 )?;
                 raised += 1;
             }
@@ -443,6 +452,30 @@ mod corroboration_tests {
             .unwrap();
         assert!(c >= 0.5, "must clear the Low band it was stuck below: {c}");
         assert!(c < 0.8, "but not become assertable: {c}");
+    }
+
+    /// The corroborate → decay sequence, which is exactly what the hourly maintenance runs. The
+    /// regression this guards: `corroborate` used to leave `last_evidence_at` at the original
+    /// sighting, so the very next decay pass aged the raised value from that old timestamp and
+    /// dropped the row straight back below the Medium boundary — the promotion never survived an
+    /// hour.
+    #[test]
+    fn a_corroborated_row_survives_the_next_decay_pass() {
+        let mut conn = crate::open_in_memory().unwrap();
+        let id = seed(&mut conn, 4); // evidence at ts 1..=4
+        // The row was first seeded long ago relative to the decay clock below.
+        conn.execute("UPDATE commitments SET last_evidence_at = 1 WHERE id = ?1", [id]).unwrap();
+        assert_eq!(corroborate(&mut conn).unwrap(), 1);
+
+        // An hour after the newest evidence — the ordinary maintenance cadence.
+        let half_life = 30 * 24 * 3_600_000i64;
+        let now = 4 + 3_600_000;
+        decay_confidence(&mut conn, now, half_life).unwrap();
+
+        let c: f64 = conn
+            .query_row("SELECT confidence FROM commitments WHERE id = ?1", [id], |r| r.get(0))
+            .unwrap();
+        assert!(c >= 0.5, "corroboration must survive the next decay pass, got {c}");
     }
 
     #[test]

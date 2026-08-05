@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { t } from "./strings";
 
 /**
- * 「匿名の利用状況を送信」トグル（オプトアウト方式・既定ON）。
+ * "Share anonymous usage" toggle (opt-out model; default ON). Rendered in the onboarding success
+ * screen and in the panel's Settings, so the choice stays reachable after first run.
  */
 export function AnalyticsToggle() {
   const [optOut, setOptOut] = useState(false);
@@ -21,7 +23,7 @@ export function AnalyticsToggle() {
     try {
       await invoke("analytics_set_opt_out", { optOut: next });
     } catch {
-      setOptOut(!next); // 失敗したら戻す
+      setOptOut(!next); // roll back on failure
     }
   }
 
@@ -31,9 +33,9 @@ export function AnalyticsToggle() {
     <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
       <input type="checkbox" checked={!optOut} onChange={toggle} />
       <span>
-        匿名の利用状況を送信して改善に協力する
+        {t.analyticsShare}
         <br />
-        <small>個人データ・画面キャプチャ内容・APIキーは一切送りません。</small>
+        <small>{t.analyticsNote}</small>
       </span>
     </label>
   );

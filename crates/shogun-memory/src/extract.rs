@@ -252,10 +252,16 @@ pub fn extract(text: &str) -> Vec<Candidate> {
 /// came from. Every row is written at its heuristic low confidence — the caller does not get to
 /// upgrade it here. Commitments are `Open` with no due date (a local rule can't reliably parse
 /// one); open loops default to `open`. Returns the new row ids in candidate order.
+///
+/// `evidence_ts` is the timestamp of the *event the text came from*, not the ingestion clock:
+/// an open loop's staleness ages from when the thing was said. For a connector backfill (a month
+/// of mail imported today) using "now" would rank a month-old unanswered thread as brand new —
+/// below genuinely fresh loops — in every staleness-ordered surface (Morning Brief, FR-MB-03).
 pub fn persist_candidates(
     conn: &mut Connection,
     event_id: i64,
     candidates: &[Candidate],
+    evidence_ts: i64,
     now: i64,
 ) -> Result<Vec<i64>, MemoryError> {
     let prov = [Provenance::new(event_id)];
@@ -283,7 +289,7 @@ pub fn persist_candidates(
                     description,
                     counterparty_id: None,
                     project_id: None,
-                    opened_at: now,
+                    opened_at: evidence_ts,
                     confidence: *confidence,
                     now,
                 },
@@ -507,7 +513,7 @@ mod tests {
         )
         .unwrap();
         let cands = extract("I'll send the deck. Waiting on legal to reply.");
-        let ids = persist_candidates(&mut conn, e, &cands, 100).unwrap();
+        let ids = persist_candidates(&mut conn, e, &cands, 1, 100).unwrap();
         assert_eq!(ids.len(), 2);
 
         let commitments = crate::state::list_commitments(&conn).unwrap();
@@ -540,7 +546,7 @@ mod tests {
             },
         )
         .unwrap();
-        let ids = persist_candidates(&mut conn, e, &[], 100).unwrap();
+        let ids = persist_candidates(&mut conn, e, &[], 1, 100).unwrap();
         assert!(ids.is_empty());
         let n: i64 = conn.query_row("SELECT count(*) FROM commitments", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 0);

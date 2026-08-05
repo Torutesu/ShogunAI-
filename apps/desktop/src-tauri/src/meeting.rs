@@ -141,7 +141,9 @@ use shogun_core::meeting::gate::OfferGate;
         // `ended_at IS NULL` forever, and `active()` assumes at most one open row. Close it at
         // its last known moment rather than pretending it is still running.
         if let Some(db) = app.try_state::<shogun_core::daemon::Db>() {
-            let closed = db.close_abandoned_meetings();
+            // Boot cutoff: only rows from BEFORE this run are abandoned (a later call must never
+            // catch a meeting this run just opened).
+            let closed = db.close_abandoned_meetings(now_ms());
             if closed > 0 {
                 eprintln!("[meeting] closed {closed} interval(s) left open by a previous run");
             }
@@ -255,6 +257,16 @@ use shogun_core::meeting::gate::OfferGate;
         let now = now_ms();
         let Ok(mut g) = LANE.lock() else { return };
         let Some(lane) = g.as_mut() else { return };
+        // A "no" must outlive the state transition. Without recording the decline, the machine
+        // returns to Idle, the meeting app is still frontmost, and the next 1s tick re-offers —
+        // ten seconds later the recording the user just refused starts by itself. Stop counts as
+        // the same "no": the meeting is still going, and stopping it is declining the rest of it
+        // (FR-MT-02c).
+        if matches!(input, Input::NotNow | Input::Stop) {
+            if let Some(bid) = lane.app_bundle_id.clone() {
+                lane.gate.decline(&bid, now);
+            }
+        }
         let effects = lane.machine.step(input);
         apply(app, lane, &effects, now);
     }
@@ -281,9 +293,9 @@ use shogun_core::meeting::gate::OfferGate;
         if !lane.settings.enabled {
             return;
         }
-        // Switching apps ends the cooldown on the one left behind: coming back later is a new
-        // meeting and deserves to be asked about again.
-        lane.gate.observe_front(bundle_id);
+        // A sustained switch away ends the cooldown on the app left behind: coming back later is
+        // a new meeting and deserves to be asked about again (a momentary flick clears nothing).
+        lane.gate.observe_front(bundle_id, now);
         if lane.machine.state() != State::Idle {
             return;
         }
@@ -346,10 +358,14 @@ use shogun_core::meeting::gate::OfferGate;
             match lane.machine.state() {
                 State::Idle => Next::Nothing,
                 State::Offered => {
-                    // `checked_sub`-style guard: a clock that jumped backwards (NTP, wake from
-                    // sleep) would otherwise freeze the countdown until real time caught up.
-                    let elapsed = now.saturating_sub(lane.since_ms);
-                    if !(0..Params::default().offer_grace_ms as i64).contains(&elapsed) {
+                    let elapsed = now - lane.since_ms;
+                    if elapsed < 0 {
+                        // The clock jumped backwards (NTP, wake from sleep). Re-anchor the
+                        // countdown instead of expiring it: expiry STARTS a recording, and a
+                        // clock jump is not the user's consent.
+                        lane.since_ms = now;
+                        Next::Emit
+                    } else if elapsed >= Params::default().offer_grace_ms as i64 {
                         Next::Step(Input::GraceExpired)
                     } else {
                         Next::Emit
@@ -359,9 +375,9 @@ use shogun_core::meeting::gate::OfferGate;
                     // FR-MT-11. Without this the interval never closes on its own: the user quits
                     // the meeting app and the pill keeps counting until they think to press Stop.
                     //
-                    // `last_sound_at` is pinned to `now` because there is no audio lane yet, so
-                    // the silence condition cannot fire and must not pretend to. It becomes real
-                    // in MT3.
+                    // `last_sound_at` comes from the audio lane's last transcribed utterance
+                    // (MT3). When audio degraded to notes-only there is no honest silence signal,
+                    // so it stays pinned to `now` and the silence timeout simply cannot fire.
                     let present = lane
                         .app_bundle_id
                         .as_deref()
@@ -370,7 +386,7 @@ use shogun_core::meeting::gate::OfferGate;
                     let live = LiveSignals {
                         meeting_app_present: present,
                         occurrence_ends_at: None,
-                        last_sound_at: now,
+                        last_sound_at: lane.audio.as_ref().map(|h| h.last_voice_ms()).unwrap_or(now),
                     };
                     match detect::end_condition(&live, now) {
                         Some(why) => Next::Step(Input::AutoEnd(why)),
@@ -682,7 +698,13 @@ use shogun_core::meeting::gate::OfferGate;
     /// inventing a session for it.
     #[tauri::command]
     pub fn meeting_save_note(body: String, app: tauri::AppHandle) -> Result<(), String> {
-        let id = LANE.lock().ok().and_then(|g| g.as_ref().and_then(|l| l.session_id));
+        // Fall back to the just-finished interval: a note typed during the meeting is often
+        // flushed (blur / debounce) moments after auto-wrap closed the session, and dropping it
+        // then would lose exactly the text the user most wants kept.
+        let id = LANE
+            .lock()
+            .ok()
+            .and_then(|g| g.as_ref().and_then(|l| l.session_id.or(l.last_session_id)));
         let Some(id) = id else { return Ok(()) };
         let db = db(&app).ok_or("no database")?;
         // Report the failure. Swallowing it would tell the webview the note is safe while the

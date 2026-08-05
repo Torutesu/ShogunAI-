@@ -89,8 +89,11 @@ impl Default for GeometryParams {
             enter_bottom: 4.0,
             stay_hysteresis: 4.0,
             exp_margin: 16.0,
-            expanded_w: 400.0,
-            expanded_h: 180.0,
+            // The webview panel's real default size (App.tsx W × H_OPEN). R_exp smaller than the
+            // panel meant a cursor resting in the panel's lower half was "outside" to the
+            // tracker, which collapsed an unpinned panel under the user's pointer.
+            expanded_w: 560.0,
+            expanded_h: 360.0,
             top_band: 40.0,
         }
     }

@@ -87,6 +87,15 @@ export function MeetingOverlay(): JSX.Element | null {
     };
   }, [view?.state]);
 
+  // The note used to be saved only on blur / Enter — the window being hidden mid-type (auto-wrap,
+  // a display change) lost the text, the one part of a meeting record that cannot be regenerated.
+  // A short debounce makes it durable while typing; blur/Enter still save immediately.
+  useEffect(() => {
+    if (view?.state !== "recording" || !note) return;
+    const timer = window.setTimeout(() => call("meeting_save_note", { body: note }), 800);
+    return () => window.clearTimeout(timer);
+  }, [note, view?.state]);
+
   // Why nothing is on screen, when nothing is on screen. The window can be shown and still look
   // empty, and from the outside that is indistinguishable from the window never appearing.
   useEffect(() => {

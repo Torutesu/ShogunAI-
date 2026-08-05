@@ -25,6 +25,7 @@ function beginDrag(e: React.MouseEvent): void {
 }
 import { t } from "./strings";
 import { SERVICE_ICONS } from "./serviceIcons";
+import { AnalyticsToggle } from "./AnalyticsToggle";
 
 // SHOGUN panel. A visible, interactive window that hangs from the notch. Opening/closing is driven
 // by direct clicks in the webview (reliable — no dependency on the CGEventTap hover path or a global
@@ -113,6 +114,9 @@ const AUTO_COLLAPSE_MS = 400;
 /** How long the pill holds a ⌥-tap outcome before returning to the live source. Long enough to
  *  read, short enough that it never becomes something you have to dismiss. */
 const INLINE_HOLD_MS = 2200;
+/** Ceiling on a chat turn. A hung provider otherwise leaves the thinking dots bouncing forever —
+ *  generous, because a long grounded answer over a slow connection is still a success. */
+const CHAT_TIMEOUT_MS = 90_000;
 const H_SETTINGS = 460; // taller default so setting groups fit; body scrolls; clamped to screen
 const MIN_W = 460;
 const MIN_H = 240;
@@ -219,7 +223,8 @@ export function App(): JSX.Element {
   const [appearance, setAppearance] = useState<Appearance>(() => loadJson<Appearance>("shogun.appearance", "auto"));
 
   // Persist across window respawns (the Rust side rebuilds the window to change Spaces).
-  useEffect(() => saveJson("shogun.open", open), [open]);
+  // `open` is deliberately NOT persisted: launch is always expanded (see the useState above), so
+  // writing it back would only be a value nothing reads.
   useEffect(() => saveJson("shogun.msgs", msgs.slice(-50)), [msgs]);
   useEffect(() => saveJson("shogun.appearance", appearance), [appearance]);
   const [showState, setShowState] = useState(false);
@@ -357,6 +362,14 @@ export function App(): JSX.Element {
       listen<StatePayload>("state", (e) => {
         const st = e.payload.state;
         if (st === "hover" || st === "expanded") {
+          // Q2 / SLO-01: report paint completion for this transition. Double-rAF so the panel is
+          // actually on screen; Rust pairs it with the tracker's commit timestamp and drops
+          // anything unpaired. Without this call the expand-latency SLO records nothing at all.
+          requestAnimationFrame(() =>
+            requestAnimationFrame(() =>
+              void invoke("painted", { state: st, t1PerfMs: performance.now() }).catch(() => undefined),
+            ),
+          );
           // Never fight a user who pinned the panel open, and never re-open one they just closed
           // by hand — the tracker doesn't know about either.
           setOpen((cur) => {
@@ -384,11 +397,29 @@ export function App(): JSX.Element {
     );
     // Overlay spec: Escape closes the overlay (it stays hidden until summoned again).
     const onEsc = (e: KeyboardEvent): void => {
-      if (e.key === "Escape") void invoke("hide_panel").catch(() => undefined);
+      if (e.key === "Escape") {
+        // Tell the tracker WHY the panel is going away — otherwise every session's close reason
+        // reads as a timeout and the Q4 false-positive tally counts real uses as misfires.
+        void invoke("collapse_request", { reason: "esc" }).catch(() => undefined);
+        void invoke("hide_panel").catch(() => undefined);
+      }
     };
     window.addEventListener("keydown", onEsc);
+    // Q4: count real interactions (and reset the Expanded idle timer). Deliberately coarse —
+    // kinds only, never content.
+    const onClick = (): void => void invoke("interact", { kind: "click" }).catch(() => undefined);
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key !== "Escape") void invoke("interact", { kind: "key" }).catch(() => undefined);
+    };
+    const onScroll = (): void => void invoke("interact", { kind: "scroll" }).catch(() => undefined);
+    window.addEventListener("pointerdown", onClick);
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("wheel", onScroll, { passive: true });
     return () => {
       window.removeEventListener("keydown", onEsc);
+      window.removeEventListener("pointerdown", onClick);
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("wheel", onScroll);
       offs.forEach((p) => void p.then((off) => off()));
     };
   }, []);
@@ -526,9 +557,20 @@ export function App(): JSX.Element {
       finish(t.noKey);
       return;
     }
+    // A hung provider must not leave the thinking dots bouncing forever with no way out — after
+    // the ceiling the turn resolves to a visible failure (a late real answer is dropped: by then
+    // the user has been told it failed, and appending it out of the blue would be stranger).
+    let settled = false;
+    const settle = (text: string, citations?: Citation[]): void => {
+      if (settled) return;
+      settled = true;
+      finish(text, citations);
+    };
+    const timer = window.setTimeout(() => settle(`${t.answerFailed}: timed out`), CHAT_TIMEOUT_MS);
     void invoke<ChatAnswer>("shogun_chat", { message: q })
-      .then((r) => finish(r?.text || t.noAnswer, r?.citations))
-      .catch((e) => finish(`${t.answerFailed}: ${e}`));
+      .then((r) => settle(r?.text || t.noAnswer, r?.citations))
+      .catch((e) => settle(`${t.answerFailed}: ${e}`))
+      .finally(() => window.clearTimeout(timer));
   }, [input, thinking, status]);
 
   // Fix the history boundary on first render, before anything is appended this session.
@@ -1888,6 +1930,12 @@ function Settings(props: {
         <ComposioSection />
         <AiSessionsSection />
         <DreamSection />
+        <section className="set">
+          {/* The opt-out used to exist only on the onboarding success screen — anyone who
+              skipped onboarding stayed opted in with no way to change it (FR-TEL). */}
+          <div className="set__label">{t.analyticsLabel}</div>
+          <AnalyticsToggle />
+        </section>
         <section className="set">
           <div className="set__label" id="seg-appearance">{t.appearance}</div>
           <div className="seg" role="radiogroup" aria-labelledby="seg-appearance">

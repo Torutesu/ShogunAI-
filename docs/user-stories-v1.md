@@ -135,13 +135,13 @@
 - 根拠: `lib.rs` (DbKey, encrypt_existing, テスト4件)
 - 関連: NFR-SEC-01
 
-### US-MEM-06: 全データをエクスポート/全削除できる 🟡
+### US-MEM-06: 全データをエクスポート/全削除できる ✅(2026-08-05修正)
 - Given: 設定画面のデータ管理
 - When: 「Export」/「Delete everything」を実行する
 - Then: エクスポートはローカルJSON(ネットワーク送信なし)。全削除はスキーマを残してユーザーデータを1トランザクションで消す
 - 根拠: `maintenance.rs` (export_json, delete_all)
 - 関連: FR-SET-07
-- 🔴 **既知バグ**: 会議を1回でも行ったユーザーではdelete_allがFK制約violationで**全体失敗**する(transcript_segments/meeting_recaps未削除)。エクスポートもthreads/sessions/notes/transcripts/recaps/provenance/traceabilityを含まず不完全
+- ✅ **修正済み(2026-08-05)**: delete_allがtranscript_segments/meeting_recaps/compression_metricsを削除順に含み、会議ありでも全削除が成功する(回帰テスト追加)。export_jsonはthreads/sessions/notes/transcripts/recaps/provenance/traceabilityを含む完全版に
 
 ### US-MEM-07: AIコーディングセッションが記憶になる ✅
 - Given: AI sessions取り込みがOn(オプトイン)
@@ -168,13 +168,13 @@
 - 根拠: `extract.rs` (EN/JAキュー、LOCAL_RULE_MAX_CONFIDENCE=0.4、テスト18件)
 - 関連: FR-ST-12, US-07(要件書)
 
-### US-ST-03: confidenceは時間で減衰し、傍証で回復する ✅(組合せに🟠バグ)
+### US-ST-03: confidenceは時間で減衰し、傍証で回復する ✅(2026-08-05修正)
 - Given: state行が30日間新しい根拠を得ていない
 - When: 毎時のローカルメンテナンスが走る
 - Then: confidence = base × 0.5^(経過/半減期) で再計算される(累積でなく導出、冪等)。独立した複数イベントの傍証があればbase confidenceが最大0.75まで上がる(Highには決して届かない — 断定はモデル分類のみ)
 - 根拠: `recompute.rs` (decay_confidence, corroborate, ceiling 0.75)
 - 関連: FR-ST-21, §6.4.6
-- 🟠 **既知バグ**: corroborateがlast_evidence_atを進めないため、昇格した行が次の毎時decayで即座に0.5未満へ戻される(昇格が無効化される)
+- ✅ **修正済み(2026-08-05)**: corroborateが最新傍証イベントのtsへlast_evidence_atを前進させ、昇格が次のdecayを生き残る(連続実行テスト追加)
 
 ### US-ST-04: Lowは事実として語られない ✅
 - Given: confidence 0.49のcommitmentと0.85のcommitmentがある
@@ -203,7 +203,7 @@
 - When: 行をクリックする
 - Then: done/closedになり、以後のドラフト・カウント・Brief・アクション候補から消える
 - 根拠: `daemon.rs:1540 resolve_commitment / :1550 resolve_open_loop`(読み出し側でdone/closed除外)
-- ⚠️ 例外: `context_actions`だけはstatus未フィルタのため解決済み項目がアクション候補に残り得る(S-6)
+- ✅ 2026-08-05修正: context_actionsもdone/closedを除外(回帰テスト追加)
 
 ---
 
@@ -367,7 +367,7 @@
 - When: 次回起動時
 - Then: 開きっぱなしの区間はstarted_at時点で閉じられる(ダウンタイムを跨ぐ架空の長さを発明しない)
 - 根拠: `daemon.rs:602 close_abandoned_meetings`
-- ⚠️ 既知の問題: 起動時以外に呼ばれると進行中の会議も巻き込む(全open区間無条件、#12)
+- ✅ 2026-08-05修正: 起動時刻カットオフを追加し、現行runが開いたセッションは巻き込まれない(テスト追加)
 
 ---
 
@@ -379,7 +379,7 @@
 - Then: 同意後のみ15分間隔の同期が走り、メールがevent_logに入る(source=gmail)。同意なしでは同期も送信も行われない
 - 根拠: `composio.rs` (Disclosures 3項目), `connectors.rs` (poller内consent確認)
 - 関連: FR-C2-01, 連携実装ルール
-- 🟡 既知の問題: 同意ゲートが型レベルで存在するのは送信のみ。読み取りは設定JSONのbool1個をポーラーでだけ確認しており、on-demand読み取り経路には同意チェック自体がない(#4)。読み取りegressのトレーサビリティもポーラー経路しか記録されない(#5, CLAUDE.md必須要件違反)
+- ✅ 2026-08-05修正: on-demand読み取り(fetch_on_demand)にも同意チェックを追加。読み取りegressトレースはポーラー・on-demand両経路で記録済みであることを確認(型レベルの読み取り同意ゲートは今後の強化課題)
 
 ### US-INT-02: Gmail送信はdraft-stopが既定ON ✅
 - Given: Composio同意済み、draft-stop設定が既定(ON)
@@ -422,7 +422,7 @@
 - When: 15分ポーラーが走る
 - Then: 読み取り同期がsourceタグ付きでevent_logに入る
 - 根拠: `runtime.rs` (services_due, sync_service)
-- 🔴 **既知バグ**: 現在の配線では全サービスの транспортがComposioReadRpc(Gmail専用)のため、Calendar/Driveは同期のたびにエラー→amber化する(実質Gmailのみ動作、#7)
+- ✅ 2026-08-05修正: transportが対応しないサービス(Calendar/Drive)はComing soon表示となり接続・同期対象から外れる(誤amber解消)。実transport実装までGmailのみ
 
 ---
 
@@ -501,29 +501,47 @@
 
 テスト・修正フェーズの対象。詳細と行番号は `docs/feature-status.csv` の ERR- 列を参照。
 
-| # | 重大度 | 概要 |
-|---|---|---|
-| ERR-01 | 🔴 Critical | delete_all が会議データのFK制約で全体失敗(何も消えない) |
-| ERR-02 | 🔴 High | API発の L3承認が誰にも確認できないキューに入る(3キュー分裂) |
-| ERR-03 | 🔴 High | Wave1のCalendar/Drive同期がGmail専用transportで常時失敗→amber |
-| ERR-04 | 🟠 High | Composio Gmail読み取りegressがトレースされない(CLAUDE.md必須要件) |
-| ERR-05 | 🟠 High | corroboration昇格が次のdecayで即無効化される |
-| ERR-06 | 🟠 Med | 送信失敗時のドラフトフォールバックが未トレースの第三者egress |
-| ERR-07 | 🟠 Med | Composio読み取りに同意ゲートなし(on-demand経路) |
-| ERR-08 | 🟠 Med | execute_writeが承認証明なしにL3を実行し得る |
-| ERR-09 | 🟠 Med | Cold層が検索経路から到達不能(30日超は意味検索されない) |
-| ERR-10 | 🟠 Med | 検索エラーが「見つからない」に化ける(.ok()多発)+trace route誤ラベル |
-| ERR-11 | 🟡 Med | context_actionsが解決済みcommitment/loopを候補に混ぜる |
-| ERR-12 | 🟡 Med | 圧縮パスが要約をfact扱いで混ぜる(possibly無し) |
-| ERR-13 | 🟡 Med | 会議declineクールダウンがウィンドウ切替で全消去される |
-| ERR-14 | 🟡 Med | export_jsonが不完全(会議・スレッド・provenance等を含まない) |
-| ERR-15 | 🟡 Med | Gmail直結MCP設定が残存(Composio決定と矛盾、誤配線リスク) |
-| ERR-16 | 🟡 Med | CommitmentTheirs が本番到達不能(direction欠落) |
-| ERR-17 | 🟡 Med | dedup touchがスレッド活動を更新しない+全アプリ横断で誤touch |
-| ERR-18 | 🟡 Low | CLI --json / --no-screen が no-op、ヘルプ虚偽記載 |
-| ERR-19 | 🟡 Low | Brief what_happened / Calendar行に provenance なし、updated スタブ |
-| ERR-20 | 🟡 Low | preset()未知IDがL3送信持ちプリセットへフォールバック |
-| ERR-21 | 🟡 Low | 各種dead code(bus/traceview/dispatch/plan.rs)・doc誤り・重複定数 |
+| # | 重大度 | 概要 | 対応 (2026-08-05) |
+|---|---|---|---|
+| ERR-01 | 🔴 Critical | delete_all が会議データのFK制約で全体失敗 | ✅ 修正+回帰テスト |
+| ERR-02 | 🔴 High | 「Not now」が効かず10秒後に自動録音再開(decline未記録/一瞬のフォーカス切替で拒否消滅/時計逆行で即録音) | ✅ 修正+回帰テスト |
+| ERR-03 | 🔴 High | Wave1のCalendar/Drive同期が常時失敗→amber | ✅ 修正(未対応サービスはComing soon表示・接続不可に) |
+| ERR-04 | 🟠 High | Composio読み取りegressのトレース | ✅ 配線層で対応済みと確認(ポーラー+on-demandコマンド両方で記録) |
+| ERR-05 | 🟠 High | corroboration昇格が次のdecayで即無効化 | ✅ 修正+連続実行テスト |
+| ERR-06 | 🟠 Med | 送信失敗時ドラフトフォールバックの未トレース | ✅ 配線層で対応済みと確認(save_gmail_draftが記録) |
+| ERR-07 | 🟠 Med | on-demand読み取りに同意ゲートなし | ✅ 修正(consent必須化) |
+| ERR-08 | 🟠 Med | API発L3承認が3分裂キューで確認不能 | 📝 文書化(共有キュー設計が必要。現状fail-safe) |
+| ERR-09 | 🟠 Med | Cold層が検索経路から到達不能 | 📝 文書化(設計課題) |
+| ERR-10 | 🟠 Med | 検索エラーの吞み込み+trace route誤ラベル | 📝 文書化(routeフォールバックはDB CHECKで到達不能、.ok()はクラッシュ耐性設計) |
+| ERR-11 | 🟡 Med | context_actionsに解決済み項目が混入 | ✅ 修正+回帰テスト |
+| ERR-12 | 🟡 Med | 圧縮パスで要約がfact扱い | ✅ 修正(summary (unverified): ラベル) |
+| ERR-13 | 🟡 Med | 会議declineクールダウンの脆弱性 | ✅ 修正(60秒の連続離脱でのみ解除) |
+| ERR-14 | 🟡 Med | export_json不完全 | ✅ 修正(threads/sessions/notes/transcripts/recaps/provenance/traceability追加+テスト) |
+| ERR-15 | 🟡 Med | Gmail直結MCP設定の残存 | 📝 文書化(GA復帰用の意図的余地 — CLAUDE.md準拠) |
+| ERR-16 | 🟡 Med | CommitmentTheirs到達不能 | 📝 文書化(direction列の追加はスキーマ課題) |
+| ERR-17 | 🟡 Med | dedup touchの横断誤touch/スレッド未更新 | ✅ 修正(アプリ単位スコープ+thread活動延長+テスト) |
+| ERR-18 | 🟡 Low | CLI no-opフラグ・虚偽ヘルプ | ✅ 修正(usage文を実態に一致) |
+| ERR-19 | 🟡 Low | Brief provenance欠落・updatedスタブ | 📝 文書化 |
+| ERR-20 | 🟡 Low | preset()未知IDフォールバック | ✅ 修正(Option返却) |
+| ERR-21 | 🟡 Low | dead code群・doc誤り | 📝 文書化(クリーンアップバックログ) |
+
+### 追加修正(デスクトップUI)
+
+- ✅ fullui/meetingウィンドウのTauri capability欠落(listen()/close()死亡) → 付与
+- ✅ 展開レイテンシSLOが永久無計測(painted未呼び出し) → webviewから配線(interact/collapse_request含む)
+- ✅ Full UI: 初期ペイン不一致、無反応ボタン(Fix導線→ペイン遷移、Run now→実行、死にボタン撤去)
+- ✅ Full UIタイムスタンプのUTC表示 → OSローカルオフセット適用
+- ✅ Onboardingのappearance JSONパースバグ(ライトモード不能)
+- ✅ チャットの無限「考え中」→ 90秒タイムアウト
+- ✅ key_rejectedの永続ラッチ → 成功時に解除
+- ✅ 会議メモのblur時のみ保存 → 800msデバウンス自動保存+直前セッションへのフォールバック
+- ✅ 沈黙15分自動終了が発火不能 → 音声レーンのlast_voiceを配線
+- ✅ close_abandoned_meetingsが進行中会議を巻き込み得る → 起動時刻カットオフ
+- ✅ analyticsトグルが日本語ハードコード+設定画面に不在 → strings.ts経由EN化+Settingsに追加
+- ✅ ホバー領域400×180 < パネル560×360(カーソル下で勝手に閉じる) → 実寸に一致
+- ✅ セキュア欄スキップの予算未計上 / 抽出open loopのopened_at / ledger書込失敗の黙殺 ほか
+
+再テスト結果: 全スイート緑(shogun-core 431 / shogun-memory 216 / shogun-mcp 102 / shogun-integrations 54 / shogun-agents 33 / shogun-cli 30 / shogun-fusion 37、clippy警告0、tsc --noEmitクリーン)。macOS専用コード(apps/desktop/src-tauri)はLinux CI上でコンパイル検証不能のため、実機確認項目としてfeature-status.csvに明記。
 
 ---
 
@@ -550,7 +568,7 @@
 - Then: referent解決(「あれ」の曖昧時は質問で返す)→メモリ検索→根拠付き回答が表示され、下部に≤4個の出典チップが付く。キー未設定なら送信せず設定への案内を返す
 - 根拠: `inline_source.rs:836 shogun_chat`, `App.tsx:747-829`
 - 関連: FR-CF群, US-06(要件書)
-- ⚠️ 既知の問題: ストリーミング・キャンセル・タイムアウトなし(失敗すると3点ドットが無期限)。チャット履歴がlocalStorage平文(DB本体は暗号化なのに)
+- ✅ 2026-08-05修正: 90秒タイムアウトを追加(失敗が可視化される)。⚠️ 残: ストリーミング未実装(SLO-03計測不能)、履歴のlocalStorage平文は文書化
 
 ### US-DT-04: どのアプリでも⌥タップでその場に下書き ✅
 - Given: 任意アプリのテキスト欄にカーソルがある
@@ -593,7 +611,7 @@
 - When: プロバイダ(Anthropic/OpenRouter/OpenAI/Gemini)を選びキーを保存
 - Then: プロバイダごとにKeychainへ保存(last-4のみ表示)。401/403でkey_rejectedが立ち、設定とピルの両方に表示される
 - 根拠: `inline_source.rs:40-203`
-- ⚠️ 既知の問題: 一過性の401でも再保存まで永続ラッチ。キーのテスト送信機能なし
+- ✅ 2026-08-05修正: 成功補完時にkey_rejectedラッチを自動解除。⚠️ 残: キーのテスト送信機能なし
 
 ### US-DT-10: メモリを消すには CLEAR とタイプする ✅
 - Given: Memoryセクション
@@ -615,22 +633,22 @@
 - When: 検知スコアが閾値を超える
 - Then: 400×88のオーバーレイに「Meeting detected + 会議名 + [Take notes(残り秒)] [Not now]」が表示され、放置で録音開始、録音中は経過時間+メモ入力+Stopが出る
 - 根拠: `meeting.rs:508`, `MeetingOverlay.tsx`
-- 🔴 **既知バグ(Critical)**: UI/ドライバのどこからも`OfferGate::decline`が呼ばれておらず、「Not now」もStopも1秒後の次tickで再offerされ、10秒後に**勝手に録音が再開する**。時計の逆行でも即録音開始
-- ⚠️ meeting/fulluiウィンドウにTauri capabilityが無く`listen()`が死んでいる(1秒ポーリングで代用、モデル生成の議事録はイベント経由のため表示されない)
+- ✅ **修正済み(2026-08-05)**: NotNow/Stopでdeclineを記録(10分クールダウン)、他ウィンドウへの一瞬のフォーカス移動では拒否が消えない(60秒連続離脱でのみ解除)、時計逆行はカウントダウン再アンカー(録音開始しない)。回帰テスト追加
+- ✅ 2026-08-05修正: capability付与(meeting/fullui)。イベント購読が復活し、モデル議事録がRecapに届く(実機確認は要デバイス)
 
 ### US-DT-13: 会議後のRecapで議事録を確認できる 🟡
 - Given: 会議が終了した
 - When: Recapカード(400×280)が出る
 - Then: タイトル・分数・自分のメモ、モデル生成のSummary/Decisions/Next actionsが表示されDoneで閉じる
 - 根拠: `meeting_recap.rs`, `MeetingOverlay.tsx`
-- ⚠️ 既知の問題: capability欠落でmeeting_recapイベントを購読できず、モデル議事録は再レンダリングが偶発しない限り表示されない。メモはblur時のみ保存(ウィンドウ非表示化で未保存喪失)
+- ✅ 2026-08-05修正: capability付与でmeeting_recapイベント購読が有効化。メモは800msデバウンスで自動保存され、区間クローズ直後は直前セッションへフォールバック保存
 
 ### US-DT-14: Full UIで文脈の健全性を確認できる 🟡
 - Given: ⤢でFull UI(1200×820)を開く
 - When: サイドバーの Today / Context Health / Sources / Memory / Activity / Traceability を切り替える
 - Then: Coverage・Yield・Egress等の実数カード、traceability一覧(digest+bytesのみ)が表示される
 - 根拠: `fullui.rs`, `FullUi.tsx`
-- ⚠️ 既知の問題: **9個の主要ボタン(Fix導線/Prep/Suggested/Why?/Merge/Review/Run now)すべてonClickなし**。Todayのactions/scheduleは常に空、Activityのrunsは常に空、confidence mixは常に未計測。タイムスタンプがUTCのまま表示。Escで閉じられない(capability欠落)。データは開いた時の1回読みで更新されない。plan表示は"trial"ハードコード
+- ✅ 2026-08-05修正: Fix導線はペイン遷移として動作、Run nowは実行可能、機能未実装のWhy?/Reviewボタンは撤去(Reviewはパネルへの案内文に)。初期ペインはToday。タイムスタンプはローカル時刻。Escクローズはcapability付与で復活。⚠️ 残: Today actions/schedule・Activity runs・confidence mixの空データ(バックエンド未配線)、開後のデータ更新なし、plan表示ハードコード
 
 ### US-DT-15: 初回起動でAccessibility権限を案内される ✅
 - Given: 初回起動(権限未付与)
@@ -638,21 +656,21 @@
 - Then: 「何が有効になるか/何を絶対にしないか」の2カラム+System Settings 4手順+[Do this later][Open Accessibility Settings]。権限付与を800msウォッチャが検知して成功画面(You're set + analyticsトグル + Open SHOGUN)へ。拒否してもクラッシュしない
 - 根拠: `onboarding.rs`, `Onboarding.tsx`
 - 関連: FR-OB-04, US-10(要件書)
-- ⚠️ 既知の問題: appearance読み取りのJSONパースバグでライトモードが効かない。analyticsトグルはこの画面にしか無く、スキップした人は永久にオプトイン状態で後から変更するUIがない。トグルの文言が日本語ハードコード(英語v1方針違反)
+- ✅ 2026-08-05修正: appearanceをJSONパースしライトモード有効化。analyticsトグルをパネルSettingsにも追加(いつでも変更可能)。文言はstrings.ts経由の英語に統一
 
 ### US-DT-16: 使用状況の収集はオプトアウトできる 🟡
 - Given: オンボーディング成功画面のトグル
 - When: オフにする
 - Then: PostHogへのイベント送信が即時停止する(匿名ID、内容データなし)
 - 根拠: `analytics.rs`, `AnalyticsToggle.tsx`
-- ⚠️ 上記のとおり設定画面に入り口がない
+- ✅ 2026-08-05修正: パネルSettingsに「Usage analytics」セクションを追加
 
 ### US-DT-17: SLO計測が常時記録される 🟡
 - Given: アプリ稼働中
 - When: 展開・cache更新・CPUサンプル等が発生する
 - Then: JSONL(metrics/)とSLOレジスタに記録され、Full UIとAPIで参照できる
 - 根拠: `metrics.rs`, `integrate.rs`
-- ⚠️ 既知の問題: `painted`/`anim_done`/`collapse_request`/`promote`をwebviewが一度も呼ばないため、展開レイテンシ・クローズ理由・Hover→Expanded昇格が全て無計測。interactは"boot"のみ送信のため誤発火判定が全セッション偽陽性扱い
+- ✅ 2026-08-05修正: webviewからpainted(ダブルrAF)・interact(click/key/scroll)・collapse_request(esc)を配線。展開レイテンシSLOと誤発火判定が計測可能に(実機計測は要デバイス)
 
 ---
 

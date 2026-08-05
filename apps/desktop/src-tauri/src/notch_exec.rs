@@ -139,6 +139,7 @@ pub mod mac {
         // shogun_query_executed（#61）: submit した時のみ発火。
         let outcome = match &submitted.disposition {
             Disposition::AutoRan => "ok",
+            Disposition::Failed => "failed",
             Disposition::AwaitingConfirm => "awaiting_confirm",
             Disposition::Rejected(_) => "rejected",
         };
@@ -150,6 +151,7 @@ pub mod mac {
 
         match submitted.disposition {
             Disposition::AutoRan => "executed".to_string(),
+            Disposition::Failed => "failed".to_string(),
             Disposition::AwaitingConfirm => format!("confirm:{}", submitted.id.0),
             Disposition::Rejected(_) => "rejected".to_string(),
         }

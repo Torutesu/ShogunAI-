@@ -31,6 +31,10 @@ pub enum RejectReason {
 pub enum Disposition {
     /// L1: executed immediately.
     AutoRan,
+    /// L1: the effector ran and reported an error. Distinct from [`Disposition::AutoRan`] so a
+    /// caller keying off the return value (a UI writing "done") cannot mistake a failure for a
+    /// success; the observer's `on_failed` carries the error detail.
+    Failed,
     /// L2: queued, awaiting a one-tap confirm.
     AwaitingConfirm,
     /// Refused (see [`RejectReason`]).
@@ -136,10 +140,7 @@ impl<E: LocalEffector, O: ExecutionObserver> ExecutionEngine<E, O> {
             }
             Err(e) => {
                 self.observer.on_failed(id, action, &e);
-                // A failed auto-run is still "not awaiting" and not a policy rejection; surface it
-                // as AutoRan-attempted with the failure already reported. Callers key off the
-                // observer for failures; the disposition only distinguishes gating outcomes.
-                Disposition::AutoRan
+                Disposition::Failed
             }
         }
     }
@@ -271,6 +272,16 @@ mod tests {
         assert_eq!(r.disposition, Disposition::AutoRan);
         assert_eq!(engine.pending_len(), 0);
         assert!(spy.events().iter().any(|e| e.starts_with("executed:")));
+    }
+
+    #[test]
+    fn l1_effector_failure_is_not_reported_as_auto_ran() {
+        let spy = Spy { fail_with: Some("boom".into()), ..Spy::default() };
+        let mut engine = ExecutionEngine::new(&spy, &spy, 5000);
+        let r = engine.submit(l1(), 0);
+        assert_eq!(r.disposition, Disposition::Failed, "a failed run must not read as success");
+        assert!(spy.events().iter().any(|e| e.starts_with("failed:")));
+        assert!(!spy.events().iter().any(|e| e.starts_with("executed:")));
     }
 
     #[test]

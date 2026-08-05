@@ -161,11 +161,11 @@ pub const PRESETS: &[Preset] = &[
     Preset { id: PresetId::NoteCapture, fr: "FR-AG-16", name: "Note Capture", operations: NOTE_CAPTURE },
 ];
 
-/// Look up a preset by id.
-pub fn preset(id: PresetId) -> &'static Preset {
-    // PRESETS covers every variant (asserted in tests), so this always finds one; the fallback
-    // keeps the function total without `unwrap`.
-    PRESETS.iter().find(|p| p.id == id).unwrap_or(&PRESETS[0])
+/// Look up a preset by id. `None` can only mean a variant was added without a `PRESETS` row —
+/// the caller must treat that as "no preset", never fall back to a different one (the old
+/// fallback resolved unknown ids to Reply Drafter, a preset holding an L3 send).
+pub fn preset(id: PresetId) -> Option<&'static Preset> {
+    PRESETS.iter().find(|p| p.id == id)
 }
 
 #[cfg(test)]
@@ -223,7 +223,7 @@ mod tests {
             PresetId::IssueTriage,
             PresetId::NoteCapture,
         ] {
-            let p = preset(id);
+            let p = preset(id).expect("every PresetId variant must have a PRESETS row");
             assert!(
                 p.operations.iter().any(|op| op.level == Level::L3),
                 "{} should have an L3 send operation",
@@ -236,7 +236,7 @@ mod tests {
     fn local_only_presets_have_no_send() {
         // Meeting Prep and Task Extractor never leave the device with a write.
         for id in [PresetId::MeetingPrep, PresetId::TaskExtractor] {
-            let p = preset(id);
+            let p = preset(id).expect("every PresetId variant must have a PRESETS row");
             assert!(
                 p.operations.iter().all(|op| !op.kind.is_external_send()),
                 "{} must not have a send operation",
@@ -256,7 +256,7 @@ mod tests {
             PresetId::IssueTriage,
             PresetId::NoteCapture,
         ] {
-            assert_eq!(preset(id).id, id, "lookup returned the wrong preset");
+            assert_eq!(preset(id).expect("must resolve").id, id, "lookup returned the wrong preset");
         }
     }
 }

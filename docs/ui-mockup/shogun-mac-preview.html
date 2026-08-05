@@ -485,9 +485,9 @@ kbd{display:inline-grid;place-items:center;min-width:23px;height:23px;padding:0 
         overdueは<span style="color:#ff9f0a">amber強調</span>。confidence Medium は「possibly:」で弱く表現(High=断定、Low=非表示)。思考中は3点ドット。</div>
       <div class="note"><b>既知の問題</b> <span class="warntag">⚠️</span>
         <ul>
-          <li>ストリーミングなし(全文一括)・キャンセル/タイムアウトなし → 失敗時は3点ドットが無期限 (E-13b)</li>
-          <li>チャット履歴がlocalStorage平文(50件上限)。DB本体は暗号化されているのに (E-39)</li>
-          <li>解決済みstateがアクション候補に混ざるバックエンドバグ (E-11)</li>
+          <li>✅ E-13b修正済み: 90秒タイムアウト追加。⚠️ ストリーミングは未実装(E-13)</li>
+          <li>⚠️ チャット履歴のlocalStorage平文は文書化 (E-39)</li>
+          <li>✅ E-11修正済み: 解決済みstateはアクション候補から除外</li>
         </ul></div>
     </div>
   </section>
@@ -576,11 +576,10 @@ kbd{display:inline-grid;place-items:center;min-width:23px;height:23px;padding:0 
       <div class="note"><b>実装済み</b> <span class="oktag">✅</span><br>
         検知シグナル: マイク10秒持続使用(.40) + 会議アプリ/URL(.30) + コントロール(.15) + カレンダー補強(.10)。カレンダー単独では絶対にofferしない。
         検知段階で音声は1サンプルも読まない。既定はOff(オプトイン)。</div>
-      <div class="note"><b>既知の問題</b> <span class="misstag">🔴 Critical</span>
+      <div class="note"><b>修正済み (2026-08-05)</b> <span class="oktag">✅</span>
         <ul>
-          <li><b>「Not now」が効かない</b>: declineクールダウンがコードから一度も呼ばれておらず、1秒後に再offer→10秒放置で勝手に録音開始 (E-02)</li>
-          <li>時計の逆行でカウントダウンが即失効し録音が自動開始 (E-02)</li>
-          <li>meetingウィンドウにTauri capabilityがなくイベント購読が死んでいる(1秒ポーリングで代用、反応が最大1秒遅れる) (E-15)</li>
+          <li>E-02: 「Not now」/Stopが10分のクールダウンとして記録され、一瞬のフォーカス移動では消えない。時計逆行はカウントダウン再アンカー(録音開始しない)</li>
+          <li>E-15: meetingウィンドウにcapability付与(イベント購読が復活)</li>
         </ul></div>
     </div>
   </section>
@@ -606,9 +605,9 @@ kbd{display:inline-grid;place-items:center;min-width:23px;height:23px;padding:0 
         メモはsession_notesに保存(本人の言葉なのでマスクなし)。PCMは30秒RAMリングのみ、whisperで文字起こし後即破棄。</div>
       <div class="note"><b>既知の問題</b> <span class="warntag">⚠️</span>
         <ul>
-          <li>メモはblur時のみ保存 → ウィンドウが隠されるとタイプ中のメモが消える (E-28)</li>
-          <li>沈黙15分での自動終了が発火不能(last_sound_atが常にnowで固定) (E-42)</li>
-          <li>Stop後に再offerされる問題は Offer 側 E-02 と同根</li>
+          <li>✅ E-28修正済み: メモは800msデバウンスで自動保存</li>
+          <li>✅ E-42修正済み: 音声レーンのlast_voiceを配線し沈黙15分終了が機能</li>
+          <li>✅ Stop後の再offerはE-02修正で解消</li>
         </ul></div>
     </div>
   </section>
@@ -647,7 +646,7 @@ kbd{display:inline-grid;place-items:center;min-width:23px;height:23px;padding:0 
         議事録の next_actions は提案のみで実行はしない(不変条件4がプロンプトに明記)。生成失敗時も空にならない(縮退Recap)。</div>
       <div class="note"><b>既知の問題</b> <span class="warntag">⚠️</span>
         <ul>
-          <li>capability欠落で meeting_recap イベントを購読できず、<b>モデル議事録が実際にはほぼ表示されない</b>(偶発的な再レンダリング頼み) (E-15)</li>
+          <li>✅ E-15修正済み: capability付与でモデル議事録がイベント経由で届く</li>
           <li>要件のRecap仕様にある「Picked up + [Track]ボタン」(押した項目だけconfidence 1.0でstate確定)は未実装</li>
           <li>「Why? ⌄」根拠セグメント降下も未実装</li>
         </ul></div>
@@ -722,10 +721,9 @@ kbd{display:inline-grid;place-items:center;min-width:23px;height:23px;padding:0 
         Context Healthのカード(Coverage/Yield/Egress/Grounding実数、SLO表)。Traceabilityはdigest+bytesのみ表示(本文なし)。</div>
       <div class="note"><b>既知の問題</b> <span class="warntag">⚠️</span>
         <ul>
-          <li><b>主要ボタン9個すべてonClickなし</b>(Fix導線・Prep・Suggested・Why?・Merge・Review・Run now) (E-43)</li>
-          <li>Todayのactions/schedule・Activityのruns・Memoryのmerge_candidatesは常に空(バックエンド未配線) (E-45)</li>
-          <li>タイムスタンプがUTCのままローカル表記 (E-44) / Escで閉じられない (E-15) / 開いた後のデータ更新なし</li>
-          <li>初期表示ペインがHealth(ナビ先頭はToday)・プラン表示"Trial"ハードコード (E-45)</li>
+          <li>✅ E-43修正済み: Fix導線はペイン遷移、Run nowは実行、死にボタン(Why?/Review)は撤去・案内文化</li>
+          <li>✅ E-44/E-45修正済み: ローカル時刻表示・初期ペインToday・Escクローズ復活(E-15)</li>
+          <li>⚠️ 残: Today actions/schedule・Activity runs・merge_candidatesの空データ(バックエンド未配線)、開後のデータ更新なし、plan表示ハードコード</li>
         </ul></div>
     </div>
   </section>
@@ -776,9 +774,9 @@ kbd{display:inline-grid;place-items:center;min-width:23px;height:23px;padding:0 
         初回クリック後は「Waiting for permission…」スピナー+トラブルシュート、付与検知で成功画面(You're set + analyticsトグル + Open SHOGUN)。権限拒否でもクラッシュしない。</div>
       <div class="note"><b>既知の問題</b> <span class="warntag">⚠️</span>
         <ul>
-          <li>appearance読み取りのJSONパースバグでライトモードが効かない (E-46)</li>
-          <li>analyticsオプトアウトはこの成功画面にしか存在しない。スキップした人は永久にオプトイン (E-47)</li>
-          <li>トグルの説明文が日本語ハードコード(英語v1方針違反) (E-31)</li>
+          <li>✅ E-46修正済み: ライトモードが正しく適用される</li>
+          <li>✅ E-47修正済み: パネルSettingsに「Usage analytics」セクションを追加</li>
+          <li>✅ E-31修正済み: 文言はstrings.ts経由の英語に統一</li>
           <li>Escで閉じられない(ボタン2つ以外の脱出経路なし)</li>
         </ul></div>
     </div>

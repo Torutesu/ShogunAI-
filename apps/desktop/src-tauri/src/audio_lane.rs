@@ -12,7 +12,7 @@
 //! Invariant 2 holds by construction: the waveform lives only in the `Worker`'s buffers and is
 //! dropped the moment a line is transcribed — this file writes text, never audio.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -29,6 +29,17 @@ use tauri::Manager;
 pub struct Handle {
     stop: Arc<AtomicBool>,
     join: Option<JoinHandle<()>>,
+    /// Epoch ms of the last transcribed utterance — the "someone is still talking" signal the
+    /// meeting driver's silence timeout (FR-MT-11) reads. Starts at lane start so the countdown
+    /// begins from the meeting, not from 1970.
+    last_voice_ms: Arc<AtomicI64>,
+}
+
+impl Handle {
+    /// When a voice was last heard (epoch ms).
+    pub fn last_voice_ms(&self) -> i64 {
+        self.last_voice_ms.load(Ordering::Relaxed)
+    }
 }
 
 fn now_ms() -> i64 {
@@ -43,6 +54,8 @@ fn now_ms() -> i64 {
 struct DbSink {
     db: Db,
     session_id: i64,
+    /// Shared with [`Handle::last_voice_ms`]; bumped on every transcribed utterance.
+    last_voice: Arc<AtomicI64>,
 }
 
 impl SegmentSink for DbSink {
@@ -56,6 +69,7 @@ impl SegmentSink for DbSink {
         // Best-effort: `append_transcript` swallows write failures so a hiccup drops one line
         // rather than tearing down capture.
         self.db.append_transcript(self.session_id, u.started_at, speaker, text, confidence);
+        self.last_voice.fetch_max(now_ms(), Ordering::Relaxed);
     }
 }
 
@@ -148,7 +162,8 @@ pub fn start(
 
     let source = MultiSource::new(sources);
     let mut worker = Worker::new(source, asr);
-    let mut sink = DbSink { db, session_id };
+    let last_voice = Arc::new(AtomicI64::new(now_ms()));
+    let mut sink = DbSink { db, session_id, last_voice: last_voice.clone() };
 
     let stop = Arc::new(AtomicBool::new(false));
     let stop_flag = stop.clone();
@@ -165,7 +180,7 @@ pub fn start(
     });
 
     eprintln!("[meeting] audio lane started for session {session_id}");
-    Some(Handle { stop, join: Some(join) })
+    Some(Handle { stop, join: Some(join), last_voice_ms: last_voice })
 }
 
 /// Stop the lane: signal the thread and wait for it to flush and release the devices. A missing

@@ -12,7 +12,12 @@ export const STRINGS = {
     waiting: "waiting",
     // peek (hover preview)
     peekHint: "click to open",
-    openPanel: "Open ShogunAI (⌥J)",
+    // ⌃⌥N is the actual summon shortcut (shortcuts.json default); ⌥ alone is the draft tap.
+    openPanel: "Open ShogunAI (⌃⌥N)",
+    // usage analytics (opt-out; anonymous product events only)
+    analyticsLabel: "Usage analytics",
+    analyticsShare: "Share anonymous usage to help improve SHOGUN",
+    analyticsNote: "Feature counts only — never your captured text, personal data, or keys.",
     // welcome (expanded, empty thread)
     welcomeTitle: "What can I take off your plate?",
     welcomeSub: "Ask about your work, or tap ⌥ (Option) in any app to draft where you're typing.",
@@ -317,6 +322,7 @@ export const FULL_UI = {
     // activity
     waitingForYou: "Waiting for you",
     review: "Review",
+    reviewInPanel: "Confirm or reject from the SHOGUN panel — Settings › Approvals",
     runHistory: "Run history",
     noRunsExplained:
       "Nothing has run. Agents are what carry an action out, and they come with Pro — so there's no history here rather than an empty one.",

@@ -340,7 +340,7 @@ impl Db {
         let now = self.now_ms();
         let ids = {
             let mut g = self.conn.lock().ok()?;
-            shogun_memory::extract::persist_candidates(&mut g, id, &candidates, now).unwrap_or_default()
+            shogun_memory::extract::persist_candidates(&mut g, id, &candidates, ev.ts, now).unwrap_or_default()
         };
         Some((id, touched, ids))
     }
@@ -358,7 +358,7 @@ impl Db {
     /// instead of appending a near-identical row; otherwise a fresh hash makes a new event. The
     /// `content_hash` on the passed `ev` is ignored — this method decides it. Returns `(id, touched)`.
     pub fn capture_collapsed(&self, ev: &NewEvent<'_>) -> Option<(i64, bool)> {
-        let recents = self.recent_capture_bodies(RECENT_DEDUP_WINDOW);
+        let recents = self.recent_capture_bodies(ev.app_bundle_id, RECENT_DEDUP_WINDOW);
         let recent_refs: Vec<Recent<'_>> =
             recents.iter().map(|(h, c)| Recent { content_hash: h, content: c }).collect();
         let decision = decide_hash(ev.content, &recent_refs, Self::content_hash);
@@ -366,9 +366,13 @@ impl Db {
         self.capture(&collapsed)
     }
 
-    /// Recent capture bodies `(hash, content)` newest-first, for the near-dup collapse.
-    fn recent_capture_bodies(&self, limit: usize) -> Vec<(String, String)> {
-        self.conn.lock().ok().and_then(|c| event_log::recent_capture_bodies(&c, limit).ok()).unwrap_or_default()
+    /// Recent capture bodies `(hash, content)` newest-first for one app, for the near-dup collapse.
+    fn recent_capture_bodies(&self, app_bundle_id: Option<&str>, limit: usize) -> Vec<(String, String)> {
+        self.conn
+            .lock()
+            .ok()
+            .and_then(|c| event_log::recent_capture_bodies(&c, app_bundle_id, limit).ok())
+            .unwrap_or_default()
     }
 
     /// Ingest a window capture end-to-end (the real capture path, FR-CAP-01/03 + WP2.7): near-dup
@@ -402,7 +406,7 @@ impl Db {
         let now = self.now_ms();
         let ids = {
             let mut g = self.conn.lock().ok()?;
-            shogun_memory::extract::persist_candidates(&mut g, id, &candidates, now).unwrap_or_default()
+            shogun_memory::extract::persist_candidates(&mut g, id, &candidates, ev.ts, now).unwrap_or_default()
         };
         Some((id, touched, ids))
     }
@@ -453,8 +457,9 @@ impl Db {
             // A newly-ingested item is extracted for commitments / open loops, linked to it.
             let candidates = shogun_memory::extract::extract(&it.body);
             if !candidates.is_empty() {
-                let ids = shogun_memory::extract::persist_candidates(&mut guard, id, &candidates, now)
-                    .unwrap_or_default();
+                let ids =
+                    shogun_memory::extract::persist_candidates(&mut guard, id, &candidates, it.ts_ms, now)
+                        .unwrap_or_default();
                 summary.candidates += ids.len();
             }
         }
@@ -596,14 +601,17 @@ impl Db {
 
     /// Close intervals left open by a previous run (crash, force-quit, power cut).
     ///
-    /// Returns how many were closed. They are closed at their `started_at`, not at "now": the app
-    /// has no idea when the meeting actually ended, and inventing a duration that spans the time
-    /// the machine was off would be a worse answer than a zero-length interval.
-    pub fn close_abandoned_meetings(&self) -> usize {
+    /// Only rows that started before `started_before_ms` (the caller's boot time) are touched, so
+    /// a call that lands after this run has opened a live meeting cannot zero-length it. Returns
+    /// how many were closed. They are closed at their `started_at`, not at "now": the app has no
+    /// idea when the meeting actually ended, and inventing a duration that spans the time the
+    /// machine was off would be a worse answer than a zero-length interval.
+    pub fn close_abandoned_meetings(&self, started_before_ms: i64) -> usize {
         let Ok(conn) = self.conn.lock() else { return 0 };
         conn.execute(
-            "UPDATE sessions SET ended_at = started_at, updated_at = ?1 WHERE ended_at IS NULL",
-            [self.now_ms()],
+            "UPDATE sessions SET ended_at = started_at, updated_at = ?1
+              WHERE ended_at IS NULL AND started_at < ?2",
+            rusqlite::params![self.now_ms(), started_before_ms],
         )
         .unwrap_or(0)
     }
@@ -741,8 +749,10 @@ impl Db {
             summary.newly_inserted += 1;
             let candidates = shogun_memory::extract::extract(&t.text);
             if !candidates.is_empty() {
-                summary.candidates += candidates.len();
-                let _ = shogun_memory::extract::persist_candidates(&mut guard, id, &candidates, now);
+                let ids =
+                    shogun_memory::extract::persist_candidates(&mut guard, id, &candidates, t.ts_ms, now)
+                        .unwrap_or_default();
+                summary.candidates += ids.len();
             }
         }
         summary
@@ -1001,7 +1011,16 @@ impl Db {
                         .unwrap_or((0, String::new(), None));
                     out_evidence.push(Evidence { event_id: id, ts, source, title, excerpt: b.text.clone() });
                 }
-                _ => out_facts.push(b.text.clone()),
+                // State facts passed the confidence gate upstream (High asserted, Medium already
+                // "possibly:"-prefixed) — they may stand as facts.
+                shogun_fusion::block::BlockRef::State { .. } => out_facts.push(b.text.clone()),
+                // Thread/session summaries are extractive or model text with NO confidence gate
+                // and no provenance row. Handing them to the prompt naked would give a summary
+                // the same authority as a gated fact — label them so the model treats them as
+                // context, never as something it may assert.
+                shogun_fusion::block::BlockRef::Thread(_) | shogun_fusion::block::BlockRef::Session(_) => {
+                    out_facts.push(format!("summary (unverified): {}", b.text));
+                }
             }
         }
 
@@ -1324,7 +1343,9 @@ impl Db {
         self.conn
             .lock()
             .ok()
-            .and_then(|mut g| shogun_memory::extract::persist_candidates(&mut g, event_id, candidates, now).ok())
+            .and_then(|mut g| {
+                shogun_memory::extract::persist_candidates(&mut g, event_id, candidates, now, now).ok()
+            })
             .unwrap_or_default()
     }
 
@@ -1436,7 +1457,13 @@ impl Db {
         let mut states: Vec<StateCandidate> = Vec::new();
         let rel = |subject: &str, summary: &str| screen_relevance(&screen, subject, summary);
 
+        // Resolved rows must not compete for the four action slots: a commitment the user ticked
+        // off, or a loop they closed, is finished work — proposing it again is the panel telling
+        // the user their click didn't count (every other read path filters the same way).
         for c in self.conn.lock().ok().and_then(|c| state::list_commitments(&c).ok()).unwrap_or_default() {
+            if !matches!(c.status.as_str(), "open" | "overdue") {
+                continue;
+            }
             let summary = c.description.clone();
             states.push(StateCandidate {
                 kind: StateKind::CommitmentMine,
@@ -1447,6 +1474,9 @@ impl Db {
             });
         }
         for l in self.conn.lock().ok().and_then(|c| state::list_open_loops(&c).ok()).unwrap_or_default() {
+            if l.status != "open" {
+                continue;
+            }
             let summary = l.description.clone();
             states.push(StateCandidate {
                 kind: open_loop_state_kind(&l.kind),
@@ -2650,6 +2680,62 @@ mod tests {
             "v1 context actions are local (L1/L2) — no external sends (invariant 4)");
         assert!(cache.facts.iter().any(|f| f.contains("roadmap")), "gated fact present");
         assert!(!cache.facts.iter().any(|f| f.contains("vague")), "low-confidence fact excluded");
+    }
+
+    /// A commitment the user resolved (or a loop they closed) is finished work — it must not
+    /// re-surface as a fact or occupy one of the four action slots on the next panel open.
+    #[test]
+    fn context_actions_excludes_resolved_state() {
+        use shogun_fusion::assemble::ScreenContext;
+        let db = Db::open_in_memory(clock(1)).unwrap();
+        let e = db.capture(&ev("evidence", "h1", 1)).unwrap().0;
+        let cid = db
+            .insert_commitment(
+                &shogun_memory::state::NewCommitment {
+                    direction: shogun_memory::state::CommitmentDirection::Mine,
+                    counterparty_id: None,
+                    description: "send the finished deck",
+                    due_at: Some(10),
+                    status: shogun_memory::state::CommitmentStatus::Open,
+                    project_id: None,
+                    confidence: 0.9,
+                    now: 1,
+                },
+                &[shogun_memory::state::Provenance::new(e)],
+            )
+            .unwrap();
+        let lid = db
+            .insert_open_loop(
+                &shogun_memory::state::NewOpenLoop {
+                    kind: shogun_memory::state::OpenLoopKind::ReplyNeeded,
+                    description: "reply about the finished deck",
+                    counterparty_id: None,
+                    project_id: None,
+                    opened_at: 1,
+                    confidence: 0.9,
+                    now: 1,
+                },
+                &[shogun_memory::state::Provenance::new(e)],
+            )
+            .unwrap();
+        db.resolve_commitment(cid);
+        db.resolve_open_loop(lid);
+
+        let screen = ScreenContext {
+            app_bundle_id: "com.apple.Mail".into(),
+            window_title: "finished deck".into(),
+            salient: vec!["deck".into()],
+        };
+        let cache = db.context_actions(screen, None);
+        assert!(
+            !cache.facts.iter().any(|f| f.contains("finished deck")),
+            "resolved state must not come back as a fact: {:?}",
+            cache.facts
+        );
+        assert!(
+            !cache.actions.iter().any(|a| a.rationale.contains("finished deck")),
+            "resolved state must not occupy an action slot"
+        );
     }
 
     #[test]

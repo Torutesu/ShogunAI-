@@ -68,26 +68,27 @@ pub const USAGE: &str = "\
 shogun — SHOGUN Memory API (CLI face)
 
 USAGE:
-    shogun [--token <t>] [--json] <command>
+    shogun [--token <t>] <command>
 
 COMMANDS:
     search <query>            Hybrid memory search
-    context [--no-screen]     Current context cache
+    context                   Current context cache
     people list|get <id>      People state
     projects list|get <id>    Projects state
     commitments list|get <id> Commitments state
     open-loops list|get <id>  Open loops state
     note <text>               Append a user note            (L1)
     propose <description>     Propose a state change        (L2)
-    run <agent>               Launch a preset agent         (level follows action)
+    run <action-json>         Execute an action             (level follows action)
     api status                Show the running REST port
     metrics                   In-product SLO snapshot
     help                      This help
 
 GLOBAL FLAGS:
-    --token <t>   API token (else read from Keychain when the daemon is running)
-    --json        Machine-readable output
-    --include-low Include <0.5 confidence results (reads; default excludes them)";
+    --token <t>   API token (else the SHOGUN_API_TOKEN environment variable)
+    --include-low Include <0.5 confidence results (reads; default excludes them)
+
+Output is the server's JSON, as received.";
 
 #[cfg(test)]
 mod tests {
