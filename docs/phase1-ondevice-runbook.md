@@ -178,6 +178,84 @@ security add-generic-password -s com.selectkk.shogun -a anthropic-byok -w
 - **モデル**: 下書きは低レイテンシ優先で `claude-sonnet-5` 既定（Settingsで変更可の想定）。
 - AXシンボル（`AXUIElementCreateSystemWide` / `kAXSelectedTextAttribute` / `AXUIElementSetAttributeValue`）が `accessibility-sys 0.2` で名前差異があればビルドエラーを貼って調整。
 
+## 6.6 サブスク委譲（APIキー無しで Agent lane を動かす）— Issue #110
+
+ユーザーが既にログイン済みのベンダー公式CLIに Agent lane を委譲する経路。ロジック・分類・トレーサビリティは Linux テスト済み（`crates/shogun-core/src/llm/subscription.rs`、24ケース）。**実機で初めて検証されるのは「各CLIの非対話呼び出し規約」**——ここが唯一の未確認点なので、まずここを潰す。
+
+### 前提
+
+委譲先のいずれかがインストール済み・ログイン済みであること。SHOGUN 側の設定は不要（鍵を持たないため）。
+
+### Step 1: 呼び出し規約の素振り（SHOGUN を起動する前に）
+
+`subscription.rs` の `Delegate::completion_args()` が定義する呼び出しを、そのままターミナルで再現する。**プロンプトは stdin**（argv に置くと同一マシンの全プロセスから `ps` で読めるため。FR-AG-06d）:
+
+```
+echo 'Reply with the single word: ok' | claude -p --output-format text
+echo 'Reply with the single word: ok' | codex exec -
+echo 'Reply with the single word: ok' | gemini
+```
+
+- **exit 0 + stdout に応答**が出れば規約は正しい
+- 対話プロンプトで止まる／usage が出る場合は、その CLI の headless モードのフラグを確認し **`completion_args()` を直す**。これが「ベンダーCLIの変更を吸収する唯一の場所」として設計されている
+- ログインしていない場合の stderr 文言を控えておく（`LOGIN_MARKERS` に一致するか。しなければマーカーを追加する）
+- 上限到達時の文言も同様（`RATE_LIMIT_MARKERS`）。**上限到達を「未ログイン」と誤分類すると、壊れていないアカウントの再認証にユーザーを送ることになる**ので、ここは実文言で確認する
+
+### Step 2: 検出と接続テスト（アプリ内）
+
+1. Settings を開く → **Your subscription** セクションに検出結果が出る
+2. ログ:
+```
+[inline] subscription delegates: claude-code=installed codex=not_installed gemini-cli=not_installed
+```
+3. **Test connection** を押す → 実際に1回完了を走らせて `ready` / `needs_login` / `rate_limited` を判定する
+```
+[inline] verified claude-code → ready
+```
+> 検出（`--version`）はネットワークも枠も使わないが、**Test connection はユーザーの枠を1〜2トークン消費する**。だから自動では走らせない。
+
+### Step 3: 同意して使う
+
+1. 開示3項目を読み **I understand — use my plan** を押す（`subscription_consent = true`）
+2. **Use this** で委譲先を選択
+3. ⌃⌥G / チャットを実行:
+```
+[inline] live Agent lane — delegating to claude-code on the user's own plan
+```
+同意なしで委譲先が選ばれている場合は生成せず、こう出る（FR-AG-06b）:
+```
+[inline] claude-code selected but the disclosure is unaccepted — not drafting
+```
+
+### Step 4: 確認すべき事実
+
+- **APIキーを一度も入力せずに**生成が通ること（これが Issue #110 の完了条件そのもの）
+- トレーサビリティ画面に `local_agent` 行が1件、**第三者バッジ無し**で出ること
+- `~/.claude/.credentials.json` 等が**一切開かれていない**こと。実機で確認するなら:
+```
+sudo fs_usage -w -f filesys | grep -i credentials
+```
+→ SHOGUN プロセスからのアクセスがゼロであること（CI 側は `scripts/check-secret-exposure.py` が静的に担保）
+
+### Step 5: SLO-03 の実測（**マージ前必須**）
+
+プロセス spawn は数百ms〜秒かかる。SLO-03（アクション実行→初トークン 1s）を割る可能性が最も高いのがこの経路。
+
+```
+# 10回まわして wall-clock を取る
+for i in $(seq 10); do /usr/bin/time -p sh -c "echo 'draft a one-line reply' | claude -p --output-format text > /dev/null" 2>&1 | grep real; done
+```
+
+p50/p95 を出して **PR本文に貼る**（CLAUDE.md「SLO関連の変更は計測結果をPR本文に貼る」）。1s を割れない場合は、常駐セッション化やストリーミング出力への変更が必要——**黙って SLO を下げない**。
+
+### 既知の未実装
+
+- 現状は**非ストリーミング**（完了を待って一括返却）。SLO-03 を満たすにはストリーミング出力の取り込みが要る
+- 毎回 spawn する。常駐セッション化は Step 5 の実測を見てから判断する
+- レート制限時の BYOK 自動フォールバックは未実装（分類は出来ているので導線を足すだけ）
+
+---
+
 ## 7. 詰まったら
 
 | 症状 | 対処 |

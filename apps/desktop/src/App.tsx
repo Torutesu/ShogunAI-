@@ -1710,6 +1710,34 @@ const PROVIDERS: Array<{ id: string; label: string }> = [
   { id: "openai", label: "OpenAI" },
   { id: "gemini", label: "Gemini" },
 ];
+
+/** A vendor CLI SHOGUN can delegate the Agent lane to, as reported by `subscription_delegates`. */
+type DelegateInfo = {
+  id: string;
+  label: string;
+  /** Whose quota a run is billed against, e.g. "Claude Pro / Max". */
+  plan: string;
+  /** The binary looked up on PATH — shown in the "not installed" instructions. */
+  binary: string;
+  state: "not_installed" | "installed" | "ready" | "needs_login" | "rate_limited";
+  version: string;
+};
+
+/** The one line that tells the user where they stand with a delegate, and what to do next. */
+function delegateStateLine(state: DelegateInfo["state"]): string {
+  switch (state) {
+    case "ready":
+      return t.subStateReady;
+    case "installed":
+      return t.subStateInstalled;
+    case "needs_login":
+      return t.subStateNeedsLogin;
+    case "rate_limited":
+      return t.subStateRateLimited;
+    default:
+      return t.subStateNotInstalled;
+  }
+}
 const SHORTCUT_ROWS: Array<{ action: string; label: string }> = [
   { action: "summon", label: t.summonShortcut },
   { action: "quit", label: t.quitShortcut },
@@ -1767,28 +1795,52 @@ function Settings(props: {
   // Agent-lane provider + model (non-secret; the key above is per-provider in the Keychain).
   const [provider, setProvider] = useState("anthropic");
   const [model, setModel] = useState("");
+  // Subscription delegation (Issue #110). `consent` is the user's acceptance of the disclosure;
+  // the backend refuses to delegate without it, so this is not a cosmetic checkbox.
+  const [delegates, setDelegates] = useState<DelegateInfo[]>([]);
+  const [consent, setConsent] = useState(false);
+  const [testing, setTesting] = useState<string | null>(null);
+  const loadDelegates = useCallback((): void => {
+    if (!IN_TAURI) return;
+    void invoke<DelegateInfo[]>("subscription_delegates")
+      .then(setDelegates)
+      .catch(() => undefined);
+  }, []);
   useEffect(() => {
     if (!IN_TAURI) return;
-    void invoke<{ provider: string; model: string }>("get_llm_settings")
+    void invoke<{ provider: string; model: string; subscription_consent: boolean }>("get_llm_settings")
       .then((s) => {
         setProvider(s.provider);
         setModel(s.model);
+        setConsent(s.subscription_consent);
       })
       .catch(() => undefined);
-  }, []);
-  const applyLlm = (p: string, m: string): void => {
-    const prev = { provider, model };
+    loadDelegates();
+  }, [loadDelegates]);
+  const applyLlm = (p: string, m: string, c?: boolean): void => {
+    const prev = { provider, model, consent };
     setProvider(p);
     setModel(m);
+    if (c !== undefined) setConsent(c);
     setKeyMsg("");
     if (IN_TAURI)
-      void invoke("set_llm_settings", { provider: p, model: m }).catch((e) => {
+      void invoke("set_llm_settings", { provider: p, model: m, subscriptionConsent: c }).catch((e) => {
         // Roll the UI back — an optimistic provider the backend never accepted would send the
         // next key save to the wrong Keychain account.
         setProvider(prev.provider);
         setModel(prev.model);
+        setConsent(prev.consent);
         setKeyMsg(String(e));
       });
+  };
+  /** Run one real completion through a delegate to find out whether it is signed in. */
+  const testDelegate = (id: string): void => {
+    if (!IN_TAURI) return;
+    setTesting(id);
+    void invoke<DelegateInfo>("verify_subscription_delegate", { id })
+      .then((d) => setDelegates((prev) => prev.map((p) => (p.id === d.id ? d : p))))
+      .catch((e) => setKeyMsg(String(e)))
+      .finally(() => setTesting(null));
   };
 
   const saveKey = (): void => {
@@ -1952,8 +2004,85 @@ function Settings(props: {
           {keyErr ? <div className="set__hint is-err">{keyErr}</div> : null}
           <div className="set__hint">{t.shortcutHint}</div>
         </section>
+        {/* Subscription first, API key second. The order is the point: most people arriving here
+            already pay for an assistant, and asking them for a metered key before offering the
+            plan they hold is what makes them close the window. */}
         <section className="set">
-          <div className="set__label" id="seg-provider">{t.model}</div>
+          <div className="set__label">{t.subTitle}</div>
+          <div className="set__hint">{t.subHint}</div>
+          {delegates.filter((d) => d.state !== "not_installed").length === 0 ? (
+            <div className="set__hint">{t.subNone}</div>
+          ) : (
+            delegates
+              .filter((d) => d.state !== "not_installed")
+              .map((d) => {
+                const active = provider === d.id;
+                return (
+                  <div className="sub" key={d.id}>
+                    <div className="sub__head">
+                      <span className="sub__name">{d.label}</span>
+                      <span className="sub__plan">
+                        {t.subRunsOn} {d.plan}
+                      </span>
+                    </div>
+                    <div
+                      className={`set__hint${d.state === "ready" ? " is-ok" : d.state === "needs_login" ? " is-err" : ""}`}
+                    >
+                      {delegateStateLine(d.state)}
+                    </div>
+                    <div className="keyrow">
+                      <button
+                        className="keyrow__btn"
+                        type="button"
+                        disabled={active}
+                        // Selecting carries the consent already on file. If it was never given the
+                        // backend refuses to delegate, and the note below says so — the alternative
+                        // (auto-granting on click) would make the disclosure meaningless.
+                        onClick={() => applyLlm(d.id, "")}
+                      >
+                        {active ? t.subInUse : t.subUse}
+                      </button>
+                      <button
+                        className="keyrow__btn"
+                        type="button"
+                        disabled={testing === d.id}
+                        onClick={() => testDelegate(d.id)}
+                      >
+                        {testing === d.id ? t.subTesting : t.subTest}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })
+          )}
+          <div className="keyrow">
+            <button className="keyrow__btn" type="button" onClick={loadDelegates}>
+              {t.subRefresh}
+            </button>
+          </div>
+          <div className="set__label">{t.subConsentTitle}</div>
+          <ul className="set__list">
+            <li>{t.subConsentItem1}</li>
+            <li>{t.subConsentItem2}</li>
+            <li>{t.subConsentItem3}</li>
+          </ul>
+          <div className="keyrow">
+            <button
+              className="keyrow__btn"
+              type="button"
+              onClick={() => applyLlm(provider, model, !consent)}
+            >
+              {consent ? t.subConsentRevoke : t.subConsentAccept}
+            </button>
+          </div>
+          {/* `delegates` lists every known delegate, installed or not, so this is a reliable
+              "is a subscription selected" test without duplicating the Rust-side list here. */}
+          {delegates.some((d) => d.id === provider) && !consent ? (
+            <div className="set__hint is-err">{t.subConsentNeeded}</div>
+          ) : null}
+        </section>
+        <section className="set">
+          <div className="set__label" id="seg-provider">{t.subApiKeyTitle}</div>
           <div className="seg" role="radiogroup" aria-labelledby="seg-provider">
             {PROVIDERS.map((p) => (
               <button
@@ -1977,7 +2106,11 @@ function Settings(props: {
               name and written to the log. The provider already has one right default; picking a
               model is not a decision this product needs to offer, and the field's only proven use
               was leaking a credential. */}
-          <div className="set__hint">{t.modelFor} {defaultModelFor(provider)}</div>
+          {/* Only meaningful for an API-key provider. A delegate runs whatever model its own plan
+              gives it, so naming one here would be a claim SHOGUN cannot honour. */}
+          {delegates.some((d) => d.id === provider) ? null : (
+            <div className="set__hint">{t.modelFor} {defaultModelFor(provider)}</div>
+          )}
           <div className="set__hint">{t.modelHint}</div>
         </section>
         <section className="set">

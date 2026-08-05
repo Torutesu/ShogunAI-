@@ -12,7 +12,7 @@ SHOGUNのモノレポ。本ファイルはmacOSアプリ本体(`crates/` + `apps
 2. **画像・音声データを一切保存しない。** 画面キャプチャはAccessibility API経由のテキストのみ。会議の音声は**オンデバイスでのみ処理し、波形はRAMから出さない**（ディスク・一時ファイル・クラウドのいずれにも書かない）。永続化するのは文字起こしテキストとそのprovenanceのみ。スクリーンショット・録画・音声ファイルを生成するコードを書かない
 3. **生データはデバイス外に出さない。** クラウドに出るのは処理用チャンクのみ。送信箇所には必ずトレーサビリティログを実装（唯一の明示的例外＝Gmail の Composio 全面経由。詳細と必須条件は「連携実装ルール」参照）
 4. **L1（自動実行）に外部送信系アクションを絶対に含めない。** 送信・投稿・カレンダー作成は必ずL3（明示確認）
-5. **キーの分離**: インデックス・分類・Dream Cycle・Morning Brief = Select KKキー（Batch API）／エージェント推論・チャット・ドラフト = ユーザーBYOK。逆転させない
+5. **キーの分離**: インデックス・分類・Dream Cycle・Morning Brief = Select KKキー（Batch API）／エージェント推論・チャット・ドラフト = ユーザー資格情報（BYOK **または** サブスク委譲。Issue #110）。逆転させない。**サブスク委譲をBatch laneに使わない**（プラン枠を焼き切りユーザー本人のCLIを止めるため）
 6. **人間UIとAI API（MCP/CLI）は完全対称。** 新機能はUIとAPI両方から呼べる形で設計する。AI経由の操作にも同じL1/L2/L3を適用
 7. **secrets（OAuthトークン・BYOKキー）はKeychain以外に保存しない。** 平文ファイル・DB・ログへの書き出し禁止
 
@@ -26,7 +26,8 @@ SHOGUNのモノレポ。本ファイルはmacOSアプリ本体(`crates/` + `apps
 - **macOSネイティブ**: AXUIElement / NSWorkspace / NSEventグローバルモニタ / security-framework（Keychain）
 - **MCP**: Rust MCP SDK。クライアント（公式リモートMCPへ直接OAuth）とサーバー（Memory API）の両方
 - **第2層連携**: Composio（オプトイン。Gmail送信含む）
-- **BYOK**: v1はAnthropicのみ（プロバイダ抽象化層は用意、実装は1つ）
+- **Agent lane の資格情報**: 第一選択は**サブスク委譲**（Issue #110。ユーザーが既にログイン済みのベンダー公式CLI `claude` / `codex` / `gemini` をローカルサブプロセスとして起動し、そのプランの枠で推論する）。BYOK（APIキー）はフォールバック。**他アプリの資格情報ファイル・Keychainエントリを読むコードを書かない。ベンダーのコンシューマ向けOAuthを自前実装しない**（規約違反・BAN対象）
+- **BYOK**: v1はAnthropic + OpenAI互換（プロバイダ抽象化層あり）
 - **課金**: Stripe / **配布**: Developer ID + notarization（App Store不使用）/ **更新**: Tauri updater
 - 判断記録: ストレージにPGLiteを使わない理由は docs/requirements-v1.0.md 付録B
 
@@ -52,7 +53,7 @@ docs/               # 要件・仕様・判断記録
 
 - Freeプランなし。7日間フルトライアル（Pro相当）→ Standard / Pro
 - **Standard**: キャプチャ＋メモリ＋検索＋Notch UI＋第1層連携（読み取り）＋Dream Cycle＋Morning Brief。Select KKキーのみで動作（BYOK不要）
-- **Pro**: ＋エージェント実行（L1/L2/L3）＋Memory API（MCP/CLI/REST）＋Composio第2層。BYOK必要
+- **Pro**: ＋エージェント実行（L1/L2/L3）＋Memory API（MCP/CLI/REST）＋Composio第2層。**サブスク委譲 または BYOK が必要**（Issue #110。APIキー必須をやめ、既に契約済みのClaude/ChatGPT/Geminiプランで動くことを既定にする。サブスク経路は明示的opt-in同意が前提）
 - プラン判定はRustコア側で行う。webview側のゲーティングだけに頼らない
 - **会議ノート（§6.16 FR-MT群）はトライアル含む全プランで使える。** 使ってみて価値が分かる機能で、トライアル中に体験できなければ課金判断の材料にならない（Memory API経由の参照=FR-MT-22 のみPro）
 - ⚠️ **要解消の分岐**: `design-system/foundation-tokens` ブランチの CLAUDE.md は「Free / $0 プランあり、トライアル後は未課金ならFreeへ降格」と書かれており、本ファイル（Freeプランなし・トライアル後は全員課金）と矛盾する。オーナー判断は**Free廃止・全員課金**（2026-07-26）。マージ時に本ファイルを正とし、LP（`apps/website` の pricing）も併せて更新すること

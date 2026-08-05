@@ -23,6 +23,11 @@ pub enum Route {
     Composio,
     /// Billing / licensing calls.
     Billing,
+    /// Agent inference delegated to a local, already-signed-in vendor CLI on the user's own
+    /// subscription (Issue #110). Separate from [`Route::MessagesApi`] because the disclosure is
+    /// different: SHOGUN holds no credential and does not open the socket — a local process the
+    /// user already installed does, against their plan quota.
+    LocalAgent,
 }
 
 impl Route {
@@ -34,6 +39,7 @@ impl Route {
             Route::Mcp => "mcp",
             Route::Composio => "composio",
             Route::Billing => "billing",
+            Route::LocalAgent => "local_agent",
         }
     }
 }
@@ -125,6 +131,7 @@ mod tests {
         assert_eq!(Route::Mcp.as_db_str(), "mcp");
         assert_eq!(Route::Composio.as_db_str(), "composio");
         assert_eq!(Route::Billing.as_db_str(), "billing");
+        assert_eq!(Route::LocalAgent.as_db_str(), "local_agent");
     }
 
     #[test]

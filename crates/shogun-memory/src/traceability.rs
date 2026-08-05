@@ -4,7 +4,7 @@
 //!
 //! The table (V1__init.sql) stores **only** the chunk's byte length + an xxh64 digest, never the
 //! sent text (privacy rule / G8). There is no text column, so a body cannot be persisted here even
-//! by mistake. `route` is constrained by a CHECK to the five known routes; [`Route`] mirrors that
+//! by mistake. `route` is constrained by a CHECK to the known route set; [`Route`] mirrors that
 //! set exactly, so an insert always produces a valid value and a read always parses back.
 //!
 //! The LLM layer's `TraceRecord` (shogun-core) maps 1:1 onto [`TraceRow`]; the daemon bridges the
@@ -21,6 +21,10 @@ pub enum Route {
     Mcp,
     Composio,
     Billing,
+    /// Agent inference delegated to a local, already-signed-in vendor CLI running on the user's own
+    /// subscription (Issue #110). Distinct from [`Route::MessagesApi`]: SHOGUN holds no credential
+    /// and does not open the socket — a separate local process does, against the user's plan quota.
+    LocalAgent,
 }
 
 impl Route {
@@ -32,6 +36,7 @@ impl Route {
             Route::Mcp => "mcp",
             Route::Composio => "composio",
             Route::Billing => "billing",
+            Route::LocalAgent => "local_agent",
         }
     }
 
@@ -44,6 +49,7 @@ impl Route {
             "mcp" => Route::Mcp,
             "composio" => Route::Composio,
             "billing" => Route::Billing,
+            "local_agent" => Route::LocalAgent,
             _ => return None,
         })
     }
@@ -213,6 +219,20 @@ mod tests {
     }
 
     #[test]
+    fn local_agent_route_is_accepted_and_is_not_third_party() {
+        // V12 widened the CHECK. A subscription-delegated send must be storable, and must NOT get
+        // the third-party badge: the user's own vendor on the user's own plan is not a relay
+        // (unlike Composio, FR-C2-04).
+        let conn = crate::open_in_memory().unwrap();
+        insert(&conn, &row(1, Route::LocalAgent, "agent", "api.anthropic.com")).unwrap();
+        let (route, tp): (String, i64) = conn
+            .query_row("SELECT route, third_party FROM traceability_log", [], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap();
+        assert_eq!(route, "local_agent");
+        assert_eq!(tp, 0);
+    }
+
+    #[test]
     fn list_is_most_recent_first() {
         let conn = crate::open_in_memory().unwrap();
         insert(&conn, &row(100, Route::BatchApi, "indexing", "api.anthropic.com")).unwrap();
@@ -254,7 +274,14 @@ mod tests {
 
     #[test]
     fn route_string_roundtrips() {
-        for r in [Route::BatchApi, Route::MessagesApi, Route::Mcp, Route::Composio, Route::Billing] {
+        for r in [
+            Route::BatchApi,
+            Route::MessagesApi,
+            Route::Mcp,
+            Route::Composio,
+            Route::Billing,
+            Route::LocalAgent,
+        ] {
             assert_eq!(Route::parse(r.as_str()), Some(r));
         }
         assert_eq!(Route::parse("nope"), None);
