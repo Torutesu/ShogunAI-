@@ -1,0 +1,797 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>SHOGUN — UI Preview on a Mac (designer handoff)</title>
+<style>
+/* ============================================================
+   SHOGUN UI preview — designer handoff
+   すべての数値・色は apps/desktop/src/styles.css の実値
+   (2026-08-05 時点の main 実装) から転記。
+   このファイルは単体で開けます(依存なし)。
+   ============================================================ */
+:root{
+  /* ---- 実装トークン (styles.css :root, dark) ---- */
+  --glass: rgba(18,21,28,.62);
+  --glass-2: rgba(28,32,41,.70);
+  --line: rgba(255,255,255,.11);
+  --line-strong: rgba(255,255,255,.18);
+  --ink:#eef1f5; --muted:#9aa3af; --faint:#8b95a3;
+  --accent:#6ea8fe; --accent-2:#8f7dfb; --accent-ink:#06101c;
+  --accent-soft: color-mix(in srgb, var(--accent) 26%, transparent);
+  --live:#30d158; --warn:#ff9f0a;
+  --fill: rgba(255,255,255,.06);
+  --fill-strong: rgba(255,255,255,.12);
+  --card: rgba(255,255,255,.045);
+  --sys: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans", sans-serif;
+  --fs-xs:10px; --fs-sm:11px; --fs-md:12px; --fs-lg:13px; --fs-xl:14px;
+  --r-xs:7px; --r-sm:10px; --r-md:13px; --r-lg:16px; --r-xl:20px; --r-pill:999px;
+  --sp: 160ms cubic-bezier(.32,.72,0,1);
+  /* ---- プレビューページ自身の色 ---- */
+  --page:#0a0c10; --page-ink:#e6e9ee; --page-muted:#8a93a3; --page-line:rgba(255,255,255,.08);
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--page);color:var(--page-ink);font-family:var(--sys);-webkit-font-smoothing:antialiased}
+button{font-family:var(--sys)}
+
+/* ===== page chrome ===== */
+.doc{max-width:1360px;margin:0 auto;padding:28px 24px 80px}
+.doc h1{font-size:20px;font-weight:700;letter-spacing:-.01em}
+.doc h1 .mark{margin-right:8px}
+.doc .sub{margin-top:6px;color:var(--page-muted);font-size:13px;line-height:1.6;max-width:88ch}
+.tabs{display:flex;flex-wrap:wrap;gap:6px;margin:18px 0 14px}
+.tab{border:1px solid var(--page-line);background:rgba(255,255,255,.04);color:var(--page-muted);
+     font-size:12px;padding:7px 14px;border-radius:999px;cursor:pointer;transition:all var(--sp)}
+.tab:hover{color:var(--page-ink)}
+.tab.is-on{background:#1c2333;border-color:#3a4a6b;color:#cfe0ff;font-weight:600}
+.scene{display:none}
+.scene.is-on{display:block}
+.stagewrap{overflow-x:auto;border-radius:14px}
+.notes{margin-top:14px;display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.note{border:1px solid var(--page-line);border-radius:10px;padding:12px 14px;background:rgba(255,255,255,.02);font-size:12px;line-height:1.65;color:var(--page-muted)}
+.note b{color:var(--page-ink)}
+.note .warntag{color:#ffb054;font-weight:700}
+.note .oktag{color:#4fd671;font-weight:700}
+.note .misstag{color:#ff7a6e;font-weight:700}
+.note ul{padding-left:16px}
+@media (max-width:900px){.notes{grid-template-columns:1fr}}
+
+/* ===== the Mac ===== */
+.mac{position:relative;width:1280px;height:800px;margin:0 auto;border-radius:18px;overflow:hidden;
+     background:
+       radial-gradient(90% 70% at 20% 0%, #21315a 0%, transparent 55%),
+       radial-gradient(80% 60% at 85% 100%, #3a2a55 0%, transparent 60%),
+       linear-gradient(180deg,#131a2b 0%,#0d1220 100%);
+     border:1px solid #2a2f3a; box-shadow:0 30px 80px rgba(0,0,0,.55)}
+/* menu bar */
+.menubar{position:absolute;top:0;left:0;right:0;height:28px;display:flex;align-items:center;justify-content:space-between;
+         padding:0 14px;background:rgba(10,12,18,.55);backdrop-filter:blur(20px);
+         font-size:12px;color:rgba(255,255,255,.85)}
+.menubar .l,.menubar .r{display:flex;align-items:center;gap:16px}
+.menubar .apple{font-size:13px}
+.menubar b{font-weight:700}
+.menubar .r{font-size:11px;color:rgba(255,255,255,.7)}
+/* the physical notch */
+.notchcut{position:absolute;top:0;left:50%;transform:translateX(-50%);width:180px;height:28px;
+          background:#000;border-radius:0 0 10px 10px;z-index:5}
+/* a fake "current app" window behind everything, to読める文脈 */
+.bgwin{position:absolute;left:120px;top:90px;width:760px;height:560px;border-radius:10px;
+       background:#161a22;border:1px solid #262b36;box-shadow:0 18px 50px rgba(0,0,0,.4);opacity:.85}
+.bgwin .tb{height:36px;border-bottom:1px solid #232833;display:flex;align-items:center;padding:0 12px;border-radius:10px 10px 0 0;background:#1a1f29}
+.bgwin .dot{width:12px;height:12px;border-radius:50%;margin-right:8px}
+.bgwin .tb .t{flex:1;text-align:center;font-size:12px;color:#78808f}
+.bgwin .body{padding:18px 22px;color:#9aa3b2;font-size:13px;line-height:1.8}
+.bgwin .body h3{color:#d7dce4;font-size:15px;margin-bottom:10px}
+.bgwin .body p{margin-bottom:10px;max-width:64ch}
+.dock{position:absolute;bottom:10px;left:50%;transform:translateX(-50%);height:54px;width:420px;border-radius:16px;
+      background:rgba(255,255,255,.08);backdrop-filter:blur(24px);border:1px solid rgba(255,255,255,.12);
+      display:flex;align-items:center;justify-content:center;gap:14px}
+.dock i{width:38px;height:38px;border-radius:10px;display:block;background:linear-gradient(135deg,#2c3547,#1d2331)}
+.dock i:nth-child(2){background:linear-gradient(135deg,#2a4a7a,#1c3050)}
+.dock i:nth-child(3){background:linear-gradient(135deg,#4a3a2a,#302518)}
+.dock i:nth-child(4){background:linear-gradient(135deg,#2a4a3a,#183024)}
+
+/* ============================================================
+   SHOGUN 実UI再現 (styles.css 転記)
+   ============================================================ */
+/* ---- Idle pill (collapsed handle) ---- */
+.handle{position:absolute;top:28px;left:50%;transform:translateX(-50%);z-index:6;
+  display:inline-flex;align-items:center;gap:8px;padding:6px 12px;
+  background:var(--glass);border:1px solid var(--line);border-top:none;
+  border-radius:0 0 var(--r-md) var(--r-md);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.08);
+  color:var(--ink);cursor:pointer}
+.handle__live{display:inline-flex;align-items:center;gap:8px;font-size:var(--fs-sm);color:var(--muted)}
+.handle__live b{color:var(--ink);font-weight:600}
+.handle__count{font-size:var(--fs-xs);color:var(--muted);background:var(--fill);
+  border:1px solid var(--line);border-radius:var(--r-pill);padding:3px 9px}
+.live__dot{width:7px;height:7px;border-radius:50%;background:var(--live);
+  box-shadow:0 0 7px color-mix(in srgb, var(--live) 65%, transparent);
+  animation:live-pulse 2.4s ease-in-out infinite}
+@keyframes live-pulse{0%,100%{opacity:1}50%{opacity:.55}}
+
+/* ---- Expanded panel ---- */
+.panelpos{position:absolute;top:28px;left:50%;transform:translateX(-50%);z-index:6;width:560px}
+.panel{display:flex;flex-direction:column;height:360px;
+  background:var(--glass);border:1px solid var(--line);border-top:none;
+  border-radius:0 0 var(--r-xl) var(--r-xl);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.1);overflow:hidden;
+  backdrop-filter:blur(28px) saturate(1.5)} /* 実装はblurなし(透明NSPanel)。プレビューでは雰囲気再現のため付与 */
+.panel--tall{height:460px}
+.head{display:flex;align-items:center;justify-content:space-between;gap:8px;
+  padding:6px 9px;border-bottom:1px solid var(--line);cursor:grab}
+.head__left{display:flex;align-items:center;gap:9px;min-width:0}
+.head__right{display:flex;align-items:center;gap:4px}
+.srcchip{display:inline-flex;align-items:center;gap:7px;font-size:var(--fs-xs);color:var(--muted);
+  background:var(--fill-strong);border:1px solid var(--line);border-radius:var(--r-pill);padding:4px 11px}
+.srcchip b{color:var(--ink);font-weight:600}
+.chip{border:1px solid var(--line);background:var(--fill);color:var(--muted);
+  font-size:var(--fs-xs);border-radius:var(--r-pill);padding:3px 9px;cursor:pointer;white-space:nowrap}
+.chip.is-on{color:var(--ink);border-color:var(--line-strong);background:var(--fill-strong)}
+.icon{display:grid;place-items:center;width:26px;height:26px;border:none;background:transparent;
+  color:var(--muted);border-radius:var(--r-sm);font-size:13px;cursor:pointer}
+.icon:hover{background:var(--fill);color:var(--ink)}
+.icon--on{background:var(--accent-soft);color:var(--accent)}
+.icon svg{display:block}
+
+.state{max-height:108px;overflow-y:auto;padding:6px 10px 8px;border-bottom:1px solid var(--line)}
+.state__row{display:flex;align-items:baseline;justify-content:space-between;gap:8px;padding:5px 6px;
+  width:100%;text-align:left;background:none;border:none;border-radius:var(--r-sm);cursor:pointer}
+.state__row:hover{background:var(--fill)}
+.state__check{width:16px;height:16px;align-self:center;display:inline-grid;place-items:center;border-radius:50%;
+  border:1px solid var(--line-strong);color:var(--faint);opacity:.5;font-size:10px;line-height:1}
+.state__text{font-size:var(--fs-md);color:var(--ink);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.state__meta{font-size:var(--fs-xs);color:var(--faint)}
+.state__meta.is-over{color:var(--warn);font-weight:600}
+
+.thread{flex:1;min-height:0;overflow-y:auto;padding:8px 10px;display:flex;flex-direction:column;gap:5px}
+.welcome{margin:auto 0;max-width:46ch;padding:0 8px}
+.welcome__t{font-size:var(--fs-xl);font-weight:640;letter-spacing:-.01em}
+.welcome__s{margin-top:6px;font-size:var(--fs-sm);line-height:1.55;color:var(--muted)}
+.welcome__key{margin-top:12px;font-size:var(--fs-sm);color:var(--warn);
+  background:color-mix(in srgb, var(--warn) 12%, transparent);
+  border:1px solid color-mix(in srgb, var(--warn) 30%, var(--line));
+  border-radius:var(--r-sm);padding:8px 11px}
+.msg{max-width:86%;padding:6px 9px;border-radius:var(--r-lg);font-size:var(--fs-md);line-height:1.55;white-space:pre-wrap}
+.msg--me{align-self:flex-end;background:var(--accent);color:var(--accent-ink);
+  border-bottom-right-radius:var(--r-xs);font-weight:500}
+.msg--shogun{align-self:flex-start;background:var(--fill);color:var(--ink);border:1px solid var(--line);
+  border-bottom-left-radius:var(--r-xs)}
+.cites{display:flex;flex-wrap:wrap;align-items:center;gap:5px;margin-top:8px;padding-top:7px;border-top:1px solid var(--line)}
+.cites__label{font-size:var(--fs-xs);letter-spacing:.06em;color:var(--faint)}
+.cite{max-width:16ch;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-size:var(--fs-xs);
+  color:var(--muted);background:var(--fill);border:1px solid var(--line);border-radius:var(--r-pill);padding:2px 8px}
+
+.composer{padding:6px 9px 14px;border-top:1px solid var(--line)}
+.composer__card{display:flex;flex-direction:column;gap:4px;background:var(--fill);
+  border:1px solid var(--line);border-radius:var(--r-md);padding:5px 8px}
+.composer__input{width:100%;background:transparent;border:none;padding:2px 2px 0;color:var(--faint);
+  font-size:var(--fs-lg);outline:none}
+.composer__bar{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.composer__model{display:inline-flex;align-items:center;gap:5px;border:none;background:transparent;
+  color:var(--muted);font-size:var(--fs-sm);font-weight:600;padding:5px 9px;cursor:pointer}
+.composer__caret{color:var(--faint);font-size:11px}
+.composer__send{width:22px;height:22px;border:none;border-radius:50%;
+  background:linear-gradient(135deg,var(--accent),var(--accent-2));
+  color:var(--accent-ink);font-size:14px;cursor:pointer;box-shadow:0 2px 8px var(--accent-soft)}
+.resizer{position:absolute;right:3px;bottom:3px;width:14px;height:14px;cursor:nwse-resize;opacity:.5;
+  background-image:linear-gradient(135deg,transparent 44%,var(--faint) 44%,var(--faint) 56%,transparent 56%),
+                   linear-gradient(135deg,transparent 68%,var(--faint) 68%,var(--faint) 80%,transparent 80%)}
+
+/* ---- Settings ---- */
+.settings{display:flex;flex-direction:column;height:100%}
+.settings__head{padding:9px 10px 9px 14px;border-bottom:1px solid var(--line);
+  display:flex;align-items:center;justify-content:space-between}
+.settings__title{font-size:var(--fs-lg);font-weight:640}
+.settings__body{flex:1;min-height:0;overflow-y:auto;padding:9px;display:flex;flex-direction:column;gap:8px}
+.set{background:var(--card);border:1px solid var(--line);border-radius:var(--r-sm);padding:8px 9px}
+.set__label{font-size:var(--fs-xs);letter-spacing:.06em;color:var(--faint);margin-bottom:5px;text-transform:uppercase}
+.set__hint{margin-top:4px;font-size:var(--fs-sm);line-height:1.35;color:var(--muted)}
+.set__hint.is-ok{color:var(--live)}
+.seg{display:flex;gap:4px;background:var(--fill);border:1px solid var(--line);border-radius:var(--r-md);padding:4px}
+.seg__opt{flex:1;border:none;background:transparent;color:var(--muted);font-size:var(--fs-sm);
+  padding:6px 0;border-radius:var(--r-sm);cursor:pointer;text-align:center}
+.seg__opt.is-on{background:var(--fill-strong);color:var(--ink);font-weight:600}
+.keyrow{display:flex;gap:6px;margin-top:6px}
+.keyrow__input{flex:1;min-width:0;font-size:var(--fs-sm);padding:6px 10px;border-radius:var(--r-sm);
+  border:1px solid var(--line);background:var(--fill-strong);color:var(--faint)}
+.keyrow__btn{font-size:var(--fs-sm);padding:6px 12px;border-radius:var(--r-sm);
+  border:1px solid var(--line);background:var(--fill-strong);color:var(--ink);cursor:pointer}
+.keyrow__btn--go{background:var(--accent);border-color:transparent;color:var(--accent-ink);font-weight:600}
+.conn{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:5px 0;border-top:1px solid var(--line)}
+.conn:first-child{border-top:none}
+.conn__mark{width:20px;height:20px;border-radius:var(--r-pill);display:inline-flex;align-items:center;justify-content:center;
+  font-size:10px;font-weight:700}
+.conn__meta{flex:1;display:flex;flex-direction:column;gap:2px}
+.conn__name{font-size:var(--fs-md);color:var(--ink);font-weight:600}
+.conn__state{font-size:var(--fs-xs);color:var(--faint)}
+.conn__state.is-ok{color:var(--live)}
+.conn__state.is-warn{color:var(--warn)}
+.castle{display:flex;justify-content:center;padding:4px 0 2px}
+.castle__screen{position:relative;width:100%;max-width:244px;aspect-ratio:16/10;
+  border:1px solid var(--line-strong);border-radius:var(--r-md);background:var(--fill)}
+.castle__screen::before{content:"";position:absolute;top:-1px;left:50%;transform:translateX(-50%);
+  width:40px;height:5px;background:var(--line-strong);border-radius:0 0 4px 4px}
+.castle__spot{position:absolute;border:none;padding:0;cursor:pointer;opacity:.5;
+  background:color-mix(in srgb, var(--ink) 34%, transparent);border-radius:var(--r-pill)}
+.castle__spot.is-on{opacity:1;background:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.castle__spot--notch{top:7px;left:50%;transform:translateX(-50%);width:34px;height:7px;border-radius:0 0 5px 5px}
+.castle__spot--left{left:8px;top:50%;transform:translateY(-50%);width:6px;height:42px}
+.castle__spot--right{right:8px;top:50%;transform:translateY(-50%);width:6px;height:42px}
+.castle__spot--bc{bottom:8px;left:50%;transform:translateX(-50%);width:48px;height:6px}
+.castle__spot--bl{left:9px;bottom:9px;width:22px;height:16px;border-radius:5px}
+.castle__spot--br{right:9px;bottom:9px;width:22px;height:16px;border-radius:5px}
+kbd{display:inline-grid;place-items:center;min-width:23px;height:23px;padding:0 6px;border-radius:var(--r-xs);
+  background:var(--fill-strong);border:1px solid var(--line);font-size:var(--fs-sm);font-weight:700;color:var(--ink)}
+.keys{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:3px 0}
+.keys__name{font-size:var(--fs-md);color:var(--ink)}
+.keys__combo{display:flex;gap:4px}
+
+/* ---- Meeting overlay ---- */
+.ovpos{position:absolute;top:44px;right:16px;z-index:7;width:400px}
+.ov{display:flex;align-items:center;gap:10px;height:88px;padding:10px 12px 10px 0;
+  background:var(--glass);backdrop-filter:blur(34px) saturate(1.7);
+  border:1px solid var(--line);border-radius:var(--r-lg);
+  box-shadow:0 18px 44px rgba(0,0,0,.45);color:var(--ink)}
+.ov__grip{align-self:stretch;width:14px;cursor:grab;color:var(--muted);opacity:.5;
+  background-image:radial-gradient(currentColor 1px, transparent 1px);
+  background-size:4px 6px;background-position:center;background-repeat:repeat-y;
+  border-radius:var(--r-lg) 0 0 var(--r-lg)}
+.ov__body{flex:1;min-width:0}
+.ov__kicker{font-size:var(--fs-xs);color:var(--muted)}
+.ov__name{font-size:var(--fs-sm);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ov__name--sub{font-weight:400;color:var(--muted);font-size:var(--fs-xs)}
+.ov__time{font-size:19px;font-weight:600;font-variant-numeric:tabular-nums;line-height:1.15}
+.ov__acts{display:flex;align-items:center;gap:8px}
+.ov__go{display:inline-flex;align-items:center;gap:8px;font-size:var(--fs-sm);font-weight:600;
+  color:var(--ink);background:var(--fill-strong);border:1px solid var(--line);
+  border-radius:var(--r-pill);padding:8px 14px;cursor:pointer;white-space:nowrap}
+.ov__go--wide{width:100%;justify-content:center}
+.ov__count{font-variant-numeric:tabular-nums;color:var(--muted);font-size:var(--fs-xs);font-weight:400}
+.ov__quiet{font-size:var(--fs-xs);color:var(--muted);background:none;border:none;cursor:pointer;padding:6px 2px}
+.ov__note{flex:1.3;min-width:0;font-size:var(--fs-xs);color:var(--faint);background:var(--fill);
+  border:1px solid var(--line);border-radius:var(--r-pill);padding:7px 12px}
+.ov__stop{display:inline-flex;align-items:center;gap:7px;font-size:var(--fs-sm);font-weight:600;
+  color:var(--ink);background:var(--fill-strong);border:1px solid var(--line);
+  border-radius:var(--r-pill);padding:8px 14px;cursor:pointer}
+.ov__stopdot{width:9px;height:9px;border-radius:2px;background:#ff453a}
+.ov--recap{align-items:stretch;height:280px;padding:0}
+.ov__recap{flex:1;min-width:0;display:flex;flex-direction:column;gap:10px;padding:14px 16px 14px 6px}
+.ov__rhead{display:flex;align-items:baseline;gap:8px}
+.ov__rtitle{font-size:var(--fs-sm);font-weight:600}
+.ov__rmin{font-size:var(--fs-xs);color:var(--muted);font-variant-numeric:tabular-nums}
+.ov__rbody{flex:1;min-height:0;overflow:auto}
+.ov__rnotes{font-size:var(--fs-xs);line-height:1.6;white-space:pre-wrap;font-family:var(--sys)}
+.ov__minutes{margin-top:12px;padding-top:12px;border-top:1px solid rgba(128,128,128,.2);display:flex;flex-direction:column;gap:10px}
+.ov__mhead{font-size:var(--fs-xs);font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+.ov__msummary{font-size:var(--fs-xs);line-height:1.6}
+.ov__mlist{padding-left:16px;font-size:var(--fs-xs);line-height:1.6}
+.ov__mowner{margin-left:6px;padding:0 6px;border-radius:8px;font-size:var(--fs-xs);color:var(--muted);background:rgba(128,128,128,.15)}
+
+/* ---- Full UI ---- */
+.fullwin{position:absolute;left:50%;top:56px;transform:translateX(-50%);width:1200px;height:700px;z-index:6;
+  border-radius:12px;overflow:hidden;background:#101319;color:var(--ink);
+  border:1px solid #262b36;box-shadow:0 30px 70px rgba(0,0,0,.6);display:flex;flex-direction:column}
+.fullwin .lights{position:absolute;top:14px;left:14px;display:flex;gap:8px;z-index:3}
+.fullwin .lights i{width:12px;height:12px;border-radius:50%}
+.full__body{flex:1;display:flex;min-height:0}
+.side{width:236px;flex:none;display:flex;flex-direction:column;gap:2px;padding:44px 12px 18px;
+  border-right:1px solid var(--line);overflow-y:auto}
+.side__brand{display:flex;align-items:center;gap:10px;padding:4px 10px 18px}
+.side__name{font-size:var(--fs-xl);font-weight:700}
+.side__group{font-size:var(--fs-xs);font-weight:600;letter-spacing:.09em;color:var(--faint);padding:16px 12px 8px;text-transform:uppercase}
+.side__item{display:flex;align-items:center;gap:12px;width:100%;padding:9px 12px;border:none;background:none;
+  border-radius:var(--r-sm);color:var(--muted);font-size:var(--fs-lg);text-align:left;cursor:pointer}
+.side__item.is-on{background:var(--fill-strong);color:var(--ink);font-weight:600}
+.side__plan{margin:2px 10px 0;align-self:flex-start;font-size:var(--fs-xs);font-weight:600;color:var(--muted);
+  background:var(--fill);border:1px solid var(--line);border-radius:var(--r-pill);padding:3px 10px}
+.pane{flex:1;display:flex;flex-direction:column;min-width:0}
+.pane__head{padding:40px 30px 18px;border-bottom:1px solid var(--line)}
+.pane__title{font-size:21px;font-weight:620;letter-spacing:-.018em}
+.pane__sub{margin-top:5px;font-size:var(--fs-lg);color:var(--muted);line-height:1.5}
+.pane__body{flex:1;min-height:0;overflow-y:auto;padding:22px 30px 30px;display:flex;flex-direction:column;gap:18px}
+.hgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+.hcard{display:flex;flex-direction:column;gap:10px;min-height:132px;padding:16px 17px;
+  background:var(--card);border:1px solid var(--line);border-radius:var(--r-lg)}
+.hcard--wide{grid-column:span 2}
+.hcard__k{font-size:var(--fs-xs);font-weight:700;letter-spacing:.09em;color:var(--faint);text-transform:uppercase}
+.hcard__v{flex:1;font-size:var(--fs-xl);line-height:1.5}
+.hcard__big{font-size:26px;font-weight:640;letter-spacing:-.025em}
+.hcard__fix{align-self:flex-start;border:none;background:none;padding:0;color:var(--accent);
+  font-size:var(--fs-lg);font-weight:550;cursor:pointer}
+.slorow{display:grid;grid-template-columns:1fr 1fr;gap:8px 26px;font-size:var(--fs-lg)}
+.slorow .r{display:flex;justify-content:space-between;gap:10px}
+.slorow .ok{color:var(--live)} .slorow .bad{color:var(--warn)} .slorow .tg{color:var(--faint)}
+.mix{display:flex;height:7px;border-radius:var(--r-pill);overflow:hidden;background:var(--fill-strong);margin-bottom:9px}
+
+/* ---- Onboarding ---- */
+.onbpos{position:absolute;left:50%;top:80px;transform:translateX(-50%);z-index:6}
+.onb-card{width:640px;background:var(--glass);backdrop-filter:blur(34px) saturate(1.7);
+  border:1px solid var(--line);border-radius:var(--r-xl);
+  box-shadow:0 28px 66px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.06);overflow:hidden;color:var(--ink)}
+.onb-head{display:flex;align-items:center;justify-content:space-between;padding:18px 28px;border-bottom:1px solid var(--line)}
+.onb-brand{display:inline-flex;align-items:center;gap:9px;font-size:var(--fs-lg);font-weight:700;letter-spacing:.18em}
+.onb-badge{display:inline-flex;align-items:center;gap:7px;padding:5px 11px;border-radius:var(--r-pill);
+  border:1px solid var(--line);background:var(--fill);font-size:var(--fs-sm);color:var(--muted)}
+.onb-dot{width:7px;height:7px;border-radius:50%;background:var(--muted)}
+.onb-body{padding:30px 28px 24px;display:flex;flex-direction:column}
+.onb-tile{width:54px;height:54px;border-radius:var(--r-lg);display:grid;place-items:center;
+  background:color-mix(in srgb, var(--accent) 12%, transparent);
+  border:1px solid color-mix(in srgb, var(--accent) 28%, transparent);margin-bottom:20px}
+.onb-title{font-size:24px;font-weight:640;letter-spacing:-.022em;line-height:1.22}
+.onb-lead{margin-top:10px;font-size:var(--fs-xl);line-height:1.6;color:var(--muted);max-width:54ch}
+.onb-cols{margin-top:22px;display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.onb-col{display:flex;flex-direction:column;gap:10px;padding:16px;border:1px solid var(--line);
+  border-radius:var(--r-lg);background:var(--card)}
+.onb-col-h{font-size:var(--fs-sm);font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--faint)}
+.onb-item{display:flex;align-items:flex-start;gap:9px;font-size:var(--fs-lg);line-height:1.45}
+.onb-steps{margin-top:16px;padding:16px;border:1px solid var(--line);border-radius:var(--r-lg);background:var(--card)}
+.onb-steps .h{font-size:var(--fs-sm);font-weight:600;color:var(--faint);text-transform:uppercase;letter-spacing:.06em}
+.onb-steps ol{list-style:none;margin-top:12px;display:flex;flex-direction:column;gap:11px}
+.onb-steps li{display:flex;align-items:center;gap:12px;font-size:var(--fs-lg)}
+.onb-num{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;flex:none;
+  background:color-mix(in srgb, var(--accent) 12%, transparent);
+  border:1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  color:var(--accent);font-size:var(--fs-sm);font-weight:700}
+.onb-foot{margin-top:24px;display:flex;align-items:center;gap:14px}
+.onb-skipwrap{display:flex;flex-direction:column;gap:3px}
+.onb-ghost{background:transparent;border:none;color:var(--muted);font-size:var(--fs-lg);font-weight:600;cursor:pointer;text-align:left}
+.onb-skipnote{font-size:var(--fs-xs);line-height:1.4;color:var(--faint);max-width:34ch}
+.onb-btn{flex:none;margin-left:auto;padding:12px 22px;border-radius:var(--r-md);border:1px solid transparent;
+  background:var(--accent);color:var(--accent-ink);font-size:var(--fs-lg);font-weight:600;cursor:pointer}
+
+/* annotation pins on the mac */
+.pin-note{position:absolute;z-index:9;font-size:11px;color:#0b1020;background:#ffd166;border-radius:8px;
+  padding:4px 9px;font-weight:700;box-shadow:0 4px 14px rgba(0,0,0,.4)}
+.pin-note.blue{background:#9cc2ff}
+@media (prefers-reduced-motion: reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+<div class="doc">
+  <h1><span class="mark">⚔</span>SHOGUN — 最新実装UIのビジュアルプレビュー(デザイナー引き継ぎ用)</h1>
+  <p class="sub">
+    実装コード(<code>apps/desktop/src/styles.css</code> / <code>App.tsx</code> / <code>MeetingOverlay.tsx</code> /
+    <code>FullUi.tsx</code> / <code>Onboarding.tsx</code>)から転記した実トークン・実文言で、
+    Macの画面内での見え方を再現したものです。各シーンの下に「実装済み / 未実装 / 既知の問題」の注記があります。
+    ステータスの正本は <code>docs/feature-status.csv</code>、ストーリーは <code>docs/user-stories-v1.md</code>。
+  </p>
+
+  <div class="tabs" id="tabs">
+    <button class="tab is-on" data-s="idle">1. Idle ピル</button>
+    <button class="tab" data-s="welcome">2. 展開 — Welcome</button>
+    <button class="tab" data-s="chat">3. 展開 — 会話+State</button>
+    <button class="tab" data-s="settings">4. 設定 (560×460)</button>
+    <button class="tab" data-s="meet-offer">5. 会議 — Offer</button>
+    <button class="tab" data-s="meet-rec">6. 会議 — Recording</button>
+    <button class="tab" data-s="meet-recap">7. 会議 — Recap</button>
+    <button class="tab" data-s="fullui">8. Full UI</button>
+    <button class="tab" data-s="onboarding">9. Onboarding</button>
+  </div>
+
+  <!-- ============ SCENE: idle ============ -->
+  <section class="scene is-on" data-scene="idle">
+    <div class="stagewrap"><div class="mac">
+      <div class="menubar"><div class="l"><span class="apple"></span><b>Mail</b><span>File</span><span>Edit</span><span>View</span><span>Mailbox</span></div>
+        <div class="r"><span>⚔</span><span>◐</span><span>Wed Aug 5</span><span>9:41</span></div></div>
+      <div class="notchcut"></div>
+      <div class="bgwin">
+        <div class="tb"><span class="dot" style="background:#ff5f57"></span><span class="dot" style="background:#febc2e"></span><span class="dot" style="background:#28c840"></span><span class="t">Acme renewal — Mail</span></div>
+        <div class="body"><h3>Re: Renewal terms for FY27</h3>
+          <p>Hi — thanks for the call earlier. Before we can sign, we need the revised pricing deck you mentioned, ideally before Friday.</p>
+          <p>Also, can you confirm who owns the security questionnaire on your side?</p></div>
+      </div>
+      <button class="handle"><span class="handle__live"><span class="live__dot"></span>reading <b>Mail</b></span><span class="handle__count">2 due</span></button>
+      <div class="pin-note" style="top:84px;left:50%;transform:translateX(-50%)">44px高・内容幅ハグ / クリック or 250ms滞留で展開</div>
+      <div class="dock"><i></i><i></i><i></i><i></i></div>
+    </div></div>
+    <div class="notes">
+      <div class="note"><b>実装済み</b> <span class="oktag">✅</span><br>
+        ノッチ直下に吊り下がるピル(radius 0 0 13 13、上辺ボーダーなし)。「● reading <b>アプリ名</b>」+ due/waitingカウントチップ。
+        ライブドットは #30D158・7px・2.4s パルス。Space切替・スリープ復帰後も常駐自己修復(1Hzウォッチャ)。</div>
+      <div class="note"><b>既知の問題</b> <span class="warntag">⚠️</span>
+        <ul>
+          <li>起動時 open=true ハードコードのため、初回はこのIdle状態を経ずに展開状態で出る (E-16)</li>
+          <li>仕様のHoverプレビュー(A2「click to open」ピーク)は未実装。hover=即展開 (E-19)</li>
+          <li>ツールチップの「⌥J」表記は誤り。実ショートカットは ⌃⌥N / ⌘⇧J (E-31系)</li>
+        </ul></div>
+    </div>
+  </section>
+
+  <!-- ============ SCENE: welcome ============ -->
+  <section class="scene" data-scene="welcome">
+    <div class="stagewrap"><div class="mac">
+      <div class="menubar"><div class="l"><span class="apple"></span><b>Mail</b><span>File</span><span>Edit</span></div>
+        <div class="r"><span>⚔</span><span>Wed Aug 5</span><span>9:41</span></div></div>
+      <div class="notchcut"></div>
+      <div class="bgwin" style="opacity:.5"></div>
+      <div class="panelpos"><div class="panel">
+        <div class="head">
+          <div class="head__left"><span class="srcchip"><span class="live__dot"></span>reading <b>Mail</b></span><button class="chip">2 due · 1 waiting</button></div>
+          <div class="head__right">
+            <button class="icon icon--on" title="Pinned"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4h6l-1 6 3 3H7l3-3-1-6z"/><path d="M12 13v7"/></svg></button>
+            <button class="icon">⤢</button><button class="icon">⚙︎</button><button class="icon">▁</button><button class="icon">✕</button>
+          </div>
+        </div>
+        <div class="thread">
+          <div class="welcome">
+            <div class="welcome__t">What can I take off your plate?</div>
+            <div class="welcome__s">Ask about your work, or tap ⌥ (Option) in any app to draft where you're typing.</div>
+            <div class="welcome__key">No key yet — add one in settings for real answers.</div>
+          </div>
+        </div>
+        <div class="composer"><div class="composer__card">
+          <div class="composer__input">Ask ShogunAI…</div>
+          <div class="composer__bar">
+            <button class="composer__model">Claude API <span class="composer__caret">⌄</span></button>
+            <button class="composer__send">↑</button>
+          </div>
+        </div></div>
+        <div class="resizer"></div>
+      </div></div>
+      <div class="pin-note" style="top:400px;left:50%;transform:translateX(-50%)">560×360 (最小460×240) / 角丸 0 0 20 20 / unfurl 220ms</div>
+    </div></div>
+    <div class="notes">
+      <div class="note"><b>実装済み</b> <span class="oktag">✅</span><br>
+        ヘッダ: srcchip + カウントチップ / 右にピン(45°回転で解除表示)・履歴⏱(会話があるときのみ)・Full UI ⤢・設定⚙︎・最小化▁・終了✕(26×26)。
+        Welcome文言・キー未設定warnバナー・コンポーザ(モデルピル+↑送信 22px グラデ円)・右下リサイズグリップは実装どおり。</div>
+      <div class="note"><b>注意</b> <span class="warntag">⚠️</span>
+        <ul>
+          <li>実物のNSPanelはbackdrop-blurなし(透明+ガラス色のみ)。本プレビューは雰囲気のためblur付与</li>
+          <li>コンテキストアクションボタン(≤4個/150ms)はバックエンド完成・<span class="misstag">UI未実装</span> (E-10)</li>
+          <li>検索UIはどの画面にも存在しない (E-10b)</li>
+          <li>✕は確認なしでプロセス終了 (E-31系)</li>
+        </ul></div>
+    </div>
+  </section>
+
+  <!-- ============ SCENE: chat ============ -->
+  <section class="scene" data-scene="chat">
+    <div class="stagewrap"><div class="mac">
+      <div class="menubar"><div class="l"><span class="apple"></span><b>Mail</b></div><div class="r"><span>⚔</span><span>9:42</span></div></div>
+      <div class="notchcut"></div>
+      <div class="bgwin" style="opacity:.5"></div>
+      <div class="panelpos"><div class="panel">
+        <div class="head">
+          <div class="head__left"><span class="srcchip"><span class="live__dot"></span>reading <b>Mail</b></span><button class="chip is-on">2 due · 1 waiting</button></div>
+          <div class="head__right">
+            <button class="icon icon--on"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4h6l-1 6 3 3H7l3-3-1-6z"/><path d="M12 13v7"/></svg></button>
+            <button class="icon">⏱</button><button class="icon">⤢</button><button class="icon">⚙︎</button><button class="icon">▁</button><button class="icon">✕</button>
+          </div>
+        </div>
+        <div class="state">
+          <button class="state__row"><span class="state__check">✓</span><span class="state__text">Send revised pricing deck to Acme</span><span class="state__meta is-over">due today</span></button>
+          <button class="state__row"><span class="state__check">✓</span><span class="state__text">Confirm security questionnaire owner</span><span class="state__meta">due Fri</span></button>
+          <button class="state__row"><span class="state__check">✓</span><span class="state__text">possibly: launch review on the 14th</span><span class="state__meta">waiting · 3d</span></button>
+        </div>
+        <div class="thread">
+          <div class="msg msg--me">what did we agree with acme on renewal?</div>
+          <div class="msg msg--shogun">You settled the renewal at $12k/year on the Jul 29 call. The revised pricing deck is still owed to Ken before Friday — that's the open commitment. possibly: the launch review moves to the 14th.
+            <div class="cites"><span class="cites__label">Sources</span><span class="cite">Acme renewal — Mail</span><span class="cite">Weekly sync notes</span><span class="cite">Calendar · Jul 29</span></div>
+          </div>
+        </div>
+        <div class="composer"><div class="composer__card">
+          <div class="composer__input">Ask ShogunAI…</div>
+          <div class="composer__bar"><button class="composer__model">Claude API <span class="composer__caret">⌄</span></button><button class="composer__send">↑</button></div>
+        </div></div>
+        <div class="resizer"></div>
+      </div></div>
+      <div class="pin-note" style="top:112px;left:calc(50% + 300px)">stateリスト: 行クリックで解決(Undoなし) / 低確度は「possibly:」接頭</div>
+    </div></div>
+    <div class="notes">
+      <div class="note"><b>実装済み</b> <span class="oktag">✅</span><br>
+        自分の発話=右寄せaccentバブル、回答=左寄せfill+境界。回答下に出典チップ(≤4)。カウントチップ押下でstateリスト開閉、
+        overdueは<span style="color:#ff9f0a">amber強調</span>。confidence Medium は「possibly:」で弱く表現(High=断定、Low=非表示)。思考中は3点ドット。</div>
+      <div class="note"><b>既知の問題</b> <span class="warntag">⚠️</span>
+        <ul>
+          <li>ストリーミングなし(全文一括)・キャンセル/タイムアウトなし → 失敗時は3点ドットが無期限 (E-13b)</li>
+          <li>チャット履歴がlocalStorage平文(50件上限)。DB本体は暗号化されているのに (E-39)</li>
+          <li>解決済みstateがアクション候補に混ざるバックエンドバグ (E-11)</li>
+        </ul></div>
+    </div>
+  </section>
+
+  <!-- ============ SCENE: settings ============ -->
+  <section class="scene" data-scene="settings">
+    <div class="stagewrap"><div class="mac">
+      <div class="menubar"><div class="l"><span class="apple"></span><b>Mail</b></div><div class="r"><span>⚔</span><span>9:43</span></div></div>
+      <div class="notchcut"></div>
+      <div class="bgwin" style="opacity:.4"></div>
+      <div class="panelpos"><div class="panel panel--tall"><div class="settings">
+        <div class="settings__head"><span class="settings__title">Settings</span><button class="chip">Done</button></div>
+        <div class="settings__body">
+          <div class="set"><div class="set__label">Meeting notes</div>
+            <div class="seg"><button class="seg__opt">Off</button><button class="seg__opt is-on">On</button></div>
+            <div class="set__hint">Audio is processed on this Mac. No recording is saved.</div></div>
+          <div class="set"><div class="set__label">Connections</div>
+            <div class="conn"><span class="conn__mark" style="color:#ea4335;background:rgba(234,67,53,.18);border:1px solid rgba(234,67,53,.34)">M</span>
+              <span class="conn__meta"><span class="conn__name">Gmail</span><span class="conn__state is-ok">Connected · synced 3m ago</span></span>
+              <button class="keyrow__btn">Disconnect</button></div>
+            <div class="conn"><span class="conn__mark" style="color:#4285f4;background:rgba(66,133,244,.18);border:1px solid rgba(66,133,244,.34)">C</span>
+              <span class="conn__meta"><span class="conn__name">Google Calendar</span><span class="conn__state is-warn">Needs reauth</span></span>
+              <button class="keyrow__btn">Disconnect</button></div>
+            <div class="conn"><span class="conn__mark" style="color:#9aa3af;background:rgba(154,163,175,.14);border:1px solid rgba(154,163,175,.3)">S</span>
+              <span class="conn__meta"><span class="conn__name">Slack</span><span class="conn__state">Coming soon</span></span></div></div>
+          <div class="set"><div class="set__label">Appearance</div>
+            <div class="seg"><button class="seg__opt is-on">Dark</button><button class="seg__opt">Light</button><button class="seg__opt">Auto</button></div></div>
+          <div class="set"><div class="set__label">Castle Position</div>
+            <div class="castle"><div class="castle__screen">
+              <button class="castle__spot castle__spot--notch is-on"></button>
+              <button class="castle__spot castle__spot--left"></button>
+              <button class="castle__spot castle__spot--right"></button>
+              <button class="castle__spot castle__spot--bc"></button>
+              <button class="castle__spot castle__spot--bl"></button>
+              <button class="castle__spot castle__spot--br"></button>
+            </div></div></div>
+          <div class="set"><div class="set__label">Shortcuts</div>
+            <div class="keys"><span class="keys__name">Draft at cursor</span><span class="keys__combo"><kbd>⌥</kbd></span></div>
+            <div class="keys"><span class="keys__name">Show / hide overlay</span><span class="keys__combo"><kbd>⌃</kbd><kbd>⌥</kbd><kbd>N</kbd></span></div>
+            <div class="keys"><span class="keys__name">Quit</span><span class="keys__combo"><kbd>⌃</kbd><kbd>⌥</kbd><kbd>Q</kbd></span></div></div>
+          <div class="set"><div class="set__label">Model</div>
+            <div class="seg"><button class="seg__opt is-on">Claude API</button><button class="seg__opt">OpenRouter</button><button class="seg__opt">OpenAI</button><button class="seg__opt">Gemini</button></div></div>
+          <div class="set"><div class="set__label">Your key</div>
+            <div class="set__hint is-ok">Connected — key ends in …a4F9</div>
+            <div class="keyrow"><span class="keyrow__input">sk-ant-••••••••••••</span><button class="keyrow__btn keyrow__btn--go">Save</button><button class="keyrow__btn">Remove</button></div></div>
+        </div>
+      </div></div></div>
+      <div class="pin-note" style="top:96px;left:calc(50% + 300px)">560×460 / パネル内ビュー(別窓ではない) / 全12セクション(ここでは抜粋7)</div>
+    </div></div>
+    <div class="notes">
+      <div class="note"><b>実装済み</b> <span class="oktag">✅</span><br>
+        実際の並び順: Approvals → Meeting notes → Connections → Sending (Composio) → AI sessions → Nightly review →
+        Appearance → Castle Position → Shortcuts → Model → Your key → Memory の12セクション縦積み。
+        セグメントコントロール・Keychainキー管理(last-4表示)・CLEARタイプ確認付きメモリ削除。</div>
+      <div class="note"><b>既知の問題</b> <span class="warntag">⚠️</span>
+        <ul>
+          <li>Connections の「Connect」は実OAuthを走らせない(mark_connectedのみ)。Needs reauth 状態にRe-authボタンがない (E-26)</li>
+          <li>キャプチャ除外の設定UIが存在しない(Full UIは導線があるかのように見せている) (E-27)</li>
+          <li>会議の「このアプリでは録らない」を追加するUIがない (E-28)</li>
+          <li>ワイヤーフレーム仕様書いわく「パネルに9(12)セクションは無理がある → Full UIへ移設予定」</li>
+        </ul></div>
+    </div>
+  </section>
+
+  <!-- ============ SCENE: meet-offer ============ -->
+  <section class="scene" data-scene="meet-offer">
+    <div class="stagewrap"><div class="mac">
+      <div class="menubar"><div class="l"><span class="apple"></span><b>zoom.us</b><span>Meeting</span></div><div class="r"><span>⚔</span><span>12:00</span></div></div>
+      <div class="notchcut"></div>
+      <div class="bgwin"><div class="tb"><span class="dot" style="background:#ff5f57"></span><span class="dot" style="background:#febc2e"></span><span class="dot" style="background:#28c840"></span><span class="t">Weekly sync</span></div>
+        <div class="body" style="display:grid;grid-template-columns:1fr 1fr;gap:14px;padding:22px">
+          <div style="aspect-ratio:16/10;border-radius:10px;background:linear-gradient(135deg,#26304a,#1a2136);display:grid;place-items:center;color:#8ea0c4">Alice</div>
+          <div style="aspect-ratio:16/10;border-radius:10px;background:linear-gradient(135deg,#3a2f4a,#241d33);display:grid;place-items:center;color:#a292c0">Ken</div>
+          <div style="aspect-ratio:16/10;border-radius:10px;background:linear-gradient(135deg,#2a4038,#1a2b24);display:grid;place-items:center;color:#8fbc9f">You</div>
+          <div style="aspect-ratio:16/10;border-radius:10px;background:linear-gradient(135deg,#403428,#2b2218);display:grid;place-items:center;color:#c0a985">Mia</div>
+        </div></div>
+      <button class="handle"><span class="handle__live"><span class="live__dot"></span>reading <b>zoom.us</b></span><span class="handle__count">2 due</span></button>
+      <div class="ovpos"><div class="ov">
+        <div class="ov__grip"></div>
+        <div class="ov__body"><div class="ov__kicker">Meeting detected</div><div class="ov__name">Weekly sync</div></div>
+        <div class="ov__acts"><button class="ov__go">Take notes <span class="ov__count">8s</span></button><button class="ov__quiet">Not now</button></div>
+      </div></div>
+      <div class="pin-note" style="top:140px;right:20px">400×88 / 右上(上44px・右16px) / カウントダウン実数で減少、放置で開始</div>
+    </div></div>
+    <div class="notes">
+      <div class="note"><b>実装済み</b> <span class="oktag">✅</span><br>
+        検知シグナル: マイク10秒持続使用(.40) + 会議アプリ/URL(.30) + コントロール(.15) + カレンダー補強(.10)。カレンダー単独では絶対にofferしない。
+        検知段階で音声は1サンプルも読まない。既定はOff(オプトイン)。</div>
+      <div class="note"><b>既知の問題</b> <span class="misstag">🔴 Critical</span>
+        <ul>
+          <li><b>「Not now」が効かない</b>: declineクールダウンがコードから一度も呼ばれておらず、1秒後に再offer→10秒放置で勝手に録音開始 (E-02)</li>
+          <li>時計の逆行でカウントダウンが即失効し録音が自動開始 (E-02)</li>
+          <li>meetingウィンドウにTauri capabilityがなくイベント購読が死んでいる(1秒ポーリングで代用、反応が最大1秒遅れる) (E-15)</li>
+        </ul></div>
+    </div>
+  </section>
+
+  <!-- ============ SCENE: meet-rec ============ -->
+  <section class="scene" data-scene="meet-rec">
+    <div class="stagewrap"><div class="mac">
+      <div class="menubar"><div class="l"><span class="apple"></span><b>zoom.us</b></div><div class="r"><span>⚔</span><span>12:04</span></div></div>
+      <div class="notchcut"></div>
+      <div class="bgwin" style="opacity:.7"><div class="tb"><span class="dot" style="background:#ff5f57"></span><span class="dot" style="background:#febc2e"></span><span class="dot" style="background:#28c840"></span><span class="t">Weekly sync</span></div></div>
+      <div class="ovpos"><div class="ov">
+        <div class="ov__grip"></div>
+        <div class="ov__body"><div class="ov__time">12:04</div><div class="ov__name ov__name--sub">Weekly sync</div></div>
+        <button class="ov__note">Type your notes…</button>
+        <button class="ov__stop"><span class="ov__stopdot"></span>Stop</button>
+      </div></div>
+      <div class="pin-note" style="top:140px;right:20px">経過時間はtabular-nums / Stopは確認なし即停止 / 音声はRAMから出ない</div>
+      <div class="pin-note blue" style="top:176px;right:20px">ライブ文字起こしは意図的に非表示(仕様)</div>
+    </div></div>
+    <div class="notes">
+      <div class="note"><b>実装済み</b> <span class="oktag">✅</span><br>
+        録音中バー: 経過時間(19px tabular) + 会議名 + メモ入力ピル + Stop(赤四角ドット #FF453A — 唯一のハードコード赤。録画ランプの赤丸は使わない=録画ではない)。
+        メモはsession_notesに保存(本人の言葉なのでマスクなし)。PCMは30秒RAMリングのみ、whisperで文字起こし後即破棄。</div>
+      <div class="note"><b>既知の問題</b> <span class="warntag">⚠️</span>
+        <ul>
+          <li>メモはblur時のみ保存 → ウィンドウが隠されるとタイプ中のメモが消える (E-28)</li>
+          <li>沈黙15分での自動終了が発火不能(last_sound_atが常にnowで固定) (E-42)</li>
+          <li>Stop後に再offerされる問題は Offer 側 E-02 と同根</li>
+        </ul></div>
+    </div>
+  </section>
+
+  <!-- ============ SCENE: meet-recap ============ -->
+  <section class="scene" data-scene="meet-recap">
+    <div class="stagewrap"><div class="mac">
+      <div class="menubar"><div class="l"><span class="apple"></span><b>Finder</b></div><div class="r"><span>⚔</span><span>12:36</span></div></div>
+      <div class="notchcut"></div>
+      <div class="bgwin" style="opacity:.5"></div>
+      <div class="ovpos"><div class="ov ov--recap">
+        <div class="ov__grip" style="border-radius:16px 0 0 16px"></div>
+        <div class="ov__recap">
+          <div class="ov__rhead"><span class="ov__rtitle">Weekly sync</span><span class="ov__rmin">32 min</span></div>
+          <div class="ov__rbody">
+            <div class="ov__rnotes">- pricing decision pending
+- Alice takes the vendor thread</div>
+            <div class="ov__minutes">
+              <div><div class="ov__mhead">Summary</div>
+                <div class="ov__msummary">Vendor renewal settled at 12k for the year. Launch date moved to the 14th.</div></div>
+              <div><div class="ov__mhead">Decisions</div>
+                <ul class="ov__mlist"><li>Renewal at 12k — agreed</li></ul></div>
+              <div><div class="ov__mhead">Next actions</div>
+                <ul class="ov__mlist"><li>Send the revised deck<span class="ov__mowner">You</span></li>
+                <li>Own the vendor thread<span class="ov__mowner">Alice</span></li></ul></div>
+            </div>
+          </div>
+          <button class="ov__go ov__go--wide">Done</button>
+        </div>
+      </div></div>
+      <div class="pin-note" style="top:340px;right:20px">400×280 / モデル無しでもタイトル・分数・メモの縮退Recapが必ず出る</div>
+    </div></div>
+    <div class="notes">
+      <div class="note"><b>実装済み</b> <span class="oktag">✅</span><br>
+        Recapカード: タイトル+分数 → 自分のメモ(pre) → モデル生成議事録(SUMMARY / DECISIONS / NEXT ACTIONS、担当者バッジ付き) → Done。
+        議事録の next_actions は提案のみで実行はしない(不変条件4がプロンプトに明記)。生成失敗時も空にならない(縮退Recap)。</div>
+      <div class="note"><b>既知の問題</b> <span class="warntag">⚠️</span>
+        <ul>
+          <li>capability欠落で meeting_recap イベントを購読できず、<b>モデル議事録が実際にはほぼ表示されない</b>(偶発的な再レンダリング頼み) (E-15)</li>
+          <li>要件のRecap仕様にある「Picked up + [Track]ボタン」(押した項目だけconfidence 1.0でstate確定)は未実装</li>
+          <li>「Why? ⌄」根拠セグメント降下も未実装</li>
+        </ul></div>
+    </div>
+  </section>
+
+  <!-- ============ SCENE: fullui ============ -->
+  <section class="scene" data-scene="fullui">
+    <div class="stagewrap"><div class="mac">
+      <div class="menubar"><div class="l"><span class="apple"></span><b>SHOGUN</b></div><div class="r"><span>⚔</span><span>9:45</span></div></div>
+      <div class="notchcut"></div>
+      <div class="fullwin">
+        <div class="lights"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i></div>
+        <div class="full__body">
+          <div class="side">
+            <div class="side__brand">
+              <svg width="24" height="24" viewBox="0 0 100 100" fill="none"><defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#38bdf8"/><stop offset=".55" stop-color="#0aa5f4"/><stop offset="1" stop-color="#0b74d6"/></linearGradient></defs><path d="M66 20 L34 34 L66 60 L34 80" stroke="url(#lg)" stroke-width="26" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              <span class="side__name">ShogunAI</span></div>
+            <span class="side__plan">Trial</span>
+            <button class="side__item">Today</button>
+            <button class="side__item is-on">Context Health</button>
+            <div class="side__group">Where it comes from</div>
+            <button class="side__item">Sources</button>
+            <button class="side__item">Memory</button>
+            <div class="side__group">What it did</div>
+            <button class="side__item">Activity</button>
+            <button class="side__item">Traceability</button>
+          </div>
+          <div class="pane">
+            <div class="pane__head"><div class="pane__title">Context Health</div>
+              <div class="pane__sub">How well SHOGUN understands your work right now — and how to fix what it can't see.</div></div>
+            <div class="pane__body">
+              <div class="hgrid">
+                <div class="hcard"><div class="hcard__k">Coverage</div>
+                  <div class="hcard__v"><span class="hcard__big">18h</span> / 24h captured</div>
+                  <button class="hcard__fix">Review exclusions →</button></div>
+                <div class="hcard"><div class="hcard__k">Yield</div>
+                  <div class="hcard__v">1,204 events → 38 candidates → <b>9 tracked</b></div>
+                  <button class="hcard__fix">Language settings →</button></div>
+                <div class="hcard"><div class="hcard__k">Egress</div>
+                  <div class="hcard__v"><span class="hcard__big">12</span> chunks · 84 KB · <b style="color:var(--warn)">1 third-party</b></div>
+                  <button class="hcard__fix">Open Traceability →</button></div>
+                <div class="hcard"><div class="hcard__k">Confidence mix</div>
+                  <div class="mix"><span style="flex:0;background:var(--live)"></span><span style="flex:62;background:var(--accent)"></span><span style="flex:38;background:var(--faint)"></span></div>
+                  <div class="hcard__v">Not measured yet</div>
+                  <button class="hcard__fix">Nightly review →</button></div>
+                <div class="hcard"><div class="hcard__k">Grounding</div>
+                  <div class="hcard__v"><span class="hcard__big">71%</span> of answers cited a source</div>
+                  <button class="hcard__fix">Widen search →</button></div>
+                <div class="hcard"><div class="hcard__k">Freshness</div>
+                  <div class="hcard__v">Mail 3m · Calendar <b style="color:var(--warn)">reauth</b> · Slack —</div>
+                  <button class="hcard__fix">Re-connect →</button></div>
+                <div class="hcard hcard--wide"><div class="hcard__k">SLO</div>
+                  <div class="slorow">
+                    <div class="r"><span>Panel expand</span><span><b class="bad">not measured</b> <span class="tg">/ 100ms</span></span></div>
+                    <div class="r"><span>Context cache</span><span><b class="ok">142ms</b> · 288ms <span class="tg">/ 300ms</span></span></div>
+                    <div class="r"><span>Local search</span><span><b class="bad">not measured</b> <span class="tg">/ 500ms</span></span></div>
+                    <div class="r"><span>First token</span><span><b class="bad">not measured</b> <span class="tg">/ 1s</span></span></div>
+                    <div class="r"><span>Idle CPU</span><span><b class="bad">not measured</b> <span class="tg">/ 5%</span></span></div>
+                    <div class="r"><span>Actions shown</span><span><b class="ok">96ms</b> · 141ms <span class="tg">/ 150ms</span></span></div>
+                  </div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="pin-note" style="top:36px;left:110px">1200×820 (min 1040×720) / タイトルバーOverlay / 背景 #101319</div>
+    </div></div>
+    <div class="notes">
+      <div class="note"><b>実装済み</b> <span class="oktag">✅</span><br>
+        サイドバー236px(Today / Context Health / Sources / Memory / Activity / Traceability + Trialプランピル)。
+        Context Healthのカード(Coverage/Yield/Egress/Grounding実数、SLO表)。Traceabilityはdigest+bytesのみ表示(本文なし)。</div>
+      <div class="note"><b>既知の問題</b> <span class="warntag">⚠️</span>
+        <ul>
+          <li><b>主要ボタン9個すべてonClickなし</b>(Fix導線・Prep・Suggested・Why?・Merge・Review・Run now) (E-43)</li>
+          <li>Todayのactions/schedule・Activityのruns・Memoryのmerge_candidatesは常に空(バックエンド未配線) (E-45)</li>
+          <li>タイムスタンプがUTCのままローカル表記 (E-44) / Escで閉じられない (E-15) / 開いた後のデータ更新なし</li>
+          <li>初期表示ペインがHealth(ナビ先頭はToday)・プラン表示"Trial"ハードコード (E-45)</li>
+        </ul></div>
+    </div>
+  </section>
+
+  <!-- ============ SCENE: onboarding ============ -->
+  <section class="scene" data-scene="onboarding">
+    <div class="stagewrap"><div class="mac">
+      <div class="menubar"><div class="l"><span class="apple"></span><b>SHOGUN</b></div><div class="r"><span>⚔</span><span>9:40</span></div></div>
+      <div class="notchcut"></div>
+      <div class="onbpos"><div class="onb-card">
+        <div class="onb-head">
+          <span class="onb-brand"><span>⚔</span>SHOGUN</span>
+          <span class="onb-badge"><span class="onb-dot"></span>Not granted yet</span>
+        </div>
+        <div class="onb-body">
+          <div class="onb-tile"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7.5 3.2v5.3c0 4.7-3.2 8.4-7.5 10.2-4.3-1.8-7.5-5.5-7.5-10.2V6.2L12 3z"/><path d="M9 11.8l2.2 2.2L15.2 10"/></svg></div>
+          <div class="onb-title">Let SHOGUN read your screen</div>
+          <div class="onb-lead">SHOGUN builds your work memory from the text on screen — using macOS Accessibility. Text only. Nothing leaves this Mac raw.</div>
+          <div class="onb-cols">
+            <div class="onb-col"><div class="onb-col-h">What this turns on</div>
+              <div class="onb-item">✓ Remembers what you read and write</div>
+              <div class="onb-item">✓ Answers grounded in your own work</div>
+              <div class="onb-item">✓ Drafts where you're typing (⌥)</div></div>
+            <div class="onb-col"><div class="onb-col-h">What it never does</div>
+              <div class="onb-item">🛡 No screenshots, no recordings</div>
+              <div class="onb-item">🛡 Password fields are never read</div>
+              <div class="onb-item">🛡 Raw text never leaves this Mac</div></div>
+          </div>
+          <div class="onb-steps"><div class="h">Grant it in System Settings</div>
+            <ol>
+              <li><span class="onb-num">1</span>Open System Settings → Privacy &amp; Security</li>
+              <li><span class="onb-num">2</span>Select Accessibility</li>
+              <li><span class="onb-num">3</span>Turn on SHOGUN</li>
+              <li><span class="onb-num">4</span>Come back here — we'll notice automatically</li>
+            </ol></div>
+          <div class="onb-foot">
+            <div class="onb-skipwrap"><button class="onb-ghost">Do this later</button>
+              <span class="onb-skipnote">You can grant this anytime from Settings.</span></div>
+            <button class="onb-btn">Open Accessibility Settings</button>
+          </div>
+        </div>
+      </div></div>
+      <div class="pin-note" style="top:60px;left:calc(50% + 340px)">720×640・中央・常時最前面 / 権限付与を自動検知して成功画面へ</div>
+    </div></div>
+    <div class="notes">
+      <div class="note"><b>実装済み</b> <span class="oktag">✅</span><br>
+        シールドタイル・2カラム(有効になること/絶対にしないこと)・System Settings 4手順・[Do this later][Open Accessibility Settings]。
+        初回クリック後は「Waiting for permission…」スピナー+トラブルシュート、付与検知で成功画面(You're set + analyticsトグル + Open SHOGUN)。権限拒否でもクラッシュしない。</div>
+      <div class="note"><b>既知の問題</b> <span class="warntag">⚠️</span>
+        <ul>
+          <li>appearance読み取りのJSONパースバグでライトモードが効かない (E-46)</li>
+          <li>analyticsオプトアウトはこの成功画面にしか存在しない。スキップした人は永久にオプトイン (E-47)</li>
+          <li>トグルの説明文が日本語ハードコード(英語v1方針違反) (E-31)</li>
+          <li>Escで閉じられない(ボタン2つ以外の脱出経路なし)</li>
+        </ul></div>
+    </div>
+  </section>
+</div>
+
+<script>
+const tabs = document.querySelectorAll('.tab');
+const scenes = document.querySelectorAll('.scene');
+tabs.forEach(t => t.addEventListener('click', () => {
+  tabs.forEach(x => x.classList.toggle('is-on', x === t));
+  scenes.forEach(s => s.classList.toggle('is-on', s.dataset.scene === t.dataset.s));
+}));
+</script>
+</body>
+</html>
