@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>SHOGUN — 最新UI可視化(実装コード準拠・操作可)</title>
+<title>ShogunAI — 最新UI可視化(実装コード準拠・操作可)</title>
 <style>
 /* ═══════════════════════════════════════════════════════════════════════════
    1) アプリ本体のトークン — apps/desktop/src/styles.css をそのまま移植
@@ -130,7 +130,7 @@ body {
   width: 168px; height: 26px;
   background: #000; border-radius: 0 0 10px 10px; z-index: 4;
 }
-/* 背景に置くダミーのMailウィンドウ(SHOGUNが読んでいる対象) */
+/* 背景に置くダミーのMailウィンドウ(ShogunAIが読んでいる対象) */
 .dummywin {
   position: absolute; left: 6%; top: 12%; width: 56%; height: 74%;
   border-radius: 10px; background: rgba(28, 30, 38, 0.9);
@@ -150,7 +150,7 @@ body {
 .dummywin__body b { color: var(--ink); }
 .dummyline { height: 8px; border-radius: 4px; background: var(--fill-strong); margin-top: 10px; }
 
-/* SHOGUN のウィンドウホスト(Castle Position に応じて移動) */
+/* ShogunAI のウィンドウホスト(Castle Position に応じて移動) */
 .host { position: absolute; z-index: 5; }
 .host[data-pos="notch"] { top: 26px; left: 50%; transform: translateX(-50%); }
 .host[data-pos="left_edge"] { top: 50%; left: 0; transform: translateY(-50%); }
@@ -626,7 +626,7 @@ kbd {
 .conf--low { color: var(--muted); background: var(--fill-strong); }
 .fempty { padding: 14px 18px 18px; font-size: var(--fs-lg); line-height: 1.6; color: var(--muted); max-width: 68ch; }
 
-/* ═══════ 導線(LP → DL → 初回起動)— 提案設計。website 側は SHOGUN ブランドトークン ═══════ */
+/* ═══════ 導線(LP → DL → 初回起動)— 提案設計。website 側は ShogunAI ブランドトークン ═══════ */
 .fn-map { display: flex; align-items: center; gap: 0; flex-wrap: wrap; margin-bottom: 16px; }
 .fn-node {
   font: inherit; font-size: 12px; padding: 8px 14px; cursor: pointer;
@@ -795,7 +795,7 @@ kbd {
 <body>
 
 <header class="sim-head">
-  <h1><span class="mark">⚔</span>SHOGUN — 最新UI可視化</h1>
+  <h1><span class="mark">⚔</span>ShogunAI — 最新UI可視化</h1>
   <p>
     <code>apps/desktop/src</code> の最新実装(App.tsx / MeetingOverlay.tsx / FullUi.tsx / styles.css)を
     そのまま HTML に移植した操作可能シミュレータです。文言・寸法・アニメーション・タイミング(ホバー展開 250ms /
@@ -848,7 +848,7 @@ kbd {
         </div>
       </div>
 
-      <!-- SHOGUN パネルホスト -->
+      <!-- ShogunAI パネルホスト -->
       <div class="host" id="host" data-pos="notch"></div>
     </div>
   </div>
@@ -925,7 +925,7 @@ kbd {
   </div>
   <div class="sim-stage-wrap">
     <div class="mac" style="aspect-ratio: 16/9;">
-      <div class="menubar"><div class="menubar__l"><span></span><b>SHOGUN</b></div><div class="menubar__r"><span>9:41</span></div></div>
+      <div class="menubar"><div class="menubar__l"><span></span><b>ShogunAI</b></div><div class="menubar__r"><span>9:41</span></div></div>
       <div class="notch"></div>
       <div class="ob-stage"><div class="ob" id="obRoot"></div></div>
     </div>
@@ -1267,7 +1267,7 @@ function renderSettingsPanel() {
                 '<button type="button" class="mexcl__rm" data-excl="' + esc(id) + '">Remove</button></div>';
             }).join('')) + '</div>'
       : '') +
-    '<div class="set__hint">Nothing joins your call and no audio is captured. SHOGUN opens a note beside the meeting; what you write stays on this Mac.</div>' +
+    '<div class="set__hint">Nothing joins your call and no audio is captured. ShogunAI opens a note beside the meeting; what you write stays on this Mac.</div>' +
     '</section>';
 
   var conns = '<section class="set"><div class="set__label">Connections</div>' +
@@ -1330,7 +1330,7 @@ function renderSettingsPanel() {
       return '<button type="button" class="castle__spot ' + c.cls + (s.castle === c.id ? ' is-on' : '') +
         '" data-castle="' + c.id + '" title="' + c.label + '"></button>';
     }).join('') + '</div></div>' +
-    '<div class="set__hint">Where SHOGUN lives on screen. Edges rest as a thin line, corners as a small box; hover to expand from wherever it’s anchored.</div></section>';
+    '<div class="set__hint">Where ShogunAI lives on screen. Edges rest as a thin line, corners as a small box; hover to expand from wherever it’s anchored.</div></section>';
 
   var shortcuts = '<section class="set"><div class="set__label">Shortcuts</div>' +
     '<div class="keys"><span class="keys__name">Draft with ShogunAI</span>' +
@@ -1888,16 +1888,16 @@ var obRoot = document.getElementById('obRoot');
 function obState(mode) {
   if (mode === 'granted') {
     obRoot.innerHTML =
-      '<div class="ob__brand">' + logoSvg() + ' SHOGUN</div>' +
+      '<div class="ob__brand">' + logoSvg() + ' ShogunAI</div>' +
       '<h2>You’re set</h2>' +
-      '<p class="ob__lead">SHOGUN can read your screen now. Reach it two ways: tap ⌥ (Option) in any app, or rest your cursor on the notch.</p>' +
-      '<button class="ob__cta" type="button">Open SHOGUN</button>';
+      '<p class="ob__lead">ShogunAI can read your screen now. Reach it two ways: tap ⌥ (Option) in any app, or rest your cursor on the notch.</p>' +
+      '<button class="ob__cta" type="button">Open ShogunAI</button>';
     return;
   }
   obRoot.innerHTML =
-    '<div class="ob__brand">' + logoSvg() + ' SHOGUN</div>' +
-    '<h2>Let SHOGUN read your screen</h2>' +
-    '<p class="ob__lead">SHOGUN builds your work context from on-screen text through macOS Accessibility. It reads text only — never images, never your keystrokes — and the context is built on this Mac.</p>' +
+    '<div class="ob__brand">' + logoSvg() + ' ShogunAI</div>' +
+    '<h2>Let ShogunAI read your screen</h2>' +
+    '<p class="ob__lead">ShogunAI builds your work context from on-screen text through macOS Accessibility. It reads text only — never images, never your keystrokes — and the context is built on this Mac.</p>' +
     '<div class="ob__cols">' +
       '<div class="ob__col"><div class="ob__colh">WHAT THIS TURNS ON</div><ul>' +
         '<li>Draft right where you’re typing — tap ⌥ (Option) in any app.</li>' +
@@ -1910,8 +1910,8 @@ function obState(mode) {
     '</div>' +
     '<div class="ob__steps"><div class="ob__colh">GRANT IT IN SYSTEM SETTINGS</div><ol>' +
       '<li>Open Privacy &amp; Security › Accessibility.</li>' +
-      '<li>Find SHOGUN in the list.</li>' +
-      '<li>Turn the SHOGUN toggle on.</li>' +
+      '<li>Find ShogunAI in the list.</li>' +
+      '<li>Turn the ShogunAI toggle on.</li>' +
       '<li>Authenticate with your password or Touch ID.</li></ol></div>' +
     '<div>' +
       '<button class="ob__cta" type="button" onclick="obState(\'waiting\')">' +
@@ -1947,12 +1947,12 @@ function fnScreenHtml() {
   /* ── 0: LP(ブランドルール準拠: hero = ワンライナー + サブ1行 + CTA1つ)── */
   if (s === 0) {
     return '<div class="lp">' +
-      '<div class="lp__nav"><div class="lp__brand"><span class="k">⚔</span>SHOGUN</div>' +
+      '<div class="lp__nav"><div class="lp__brand"><span class="k">⚔</span>ShogunAI</div>' +
       '<div class="lp__links"><span>Memory</span><span>Execution</span><span>Pricing</span><span>FAQ</span>' +
       '<button class="lp-cta" onclick="fnGo(1)">Get Early Access</button></div></div>' +
       '<div class="lp__hero">' +
       '<h2 class="lp__h1">Your AI has memory.<br>Now it acts.</h2>' +
-      '<p class="lp__sub">SHOGUN is the operating system for the AI-native individual. Memory that captures your day. Execution that acts on it.</p>' +
+      '<p class="lp__sub">ShogunAI is the operating system for the AI-native individual. Memory that captures your day. Execution that acts on it.</p>' +
       '<div class="lp__heroacts"><button class="lp-cta" onclick="fnGo(1)">Get Early Access</button>' +
       '<button class="lp-cta lp-cta--ghost" onclick="fnGo(2)">Download for macOS</button></div>' +
       '<div class="lp__meta">macOS 14 Sonoma or later · Apple Silicon · Your data stays on your Mac</div>' +
@@ -1985,13 +1985,13 @@ function fnScreenHtml() {
   /* ── 2: ダウンロード(要件チェック + DMG)── */
   if (s === 2) {
     return '<div class="dl"><div class="dl__wrap">' +
-      '<h2>SHOGUN for macOS</h2>' +
+      '<h2>ShogunAI for macOS</h2>' +
       '<div class="dl__sub">Version 0.1.0 · Apple Silicon · macOS 14 Sonoma or later</div>' +
       '<div class="dl__check">This Mac is compatible — Apple Silicon, macOS 15</div>' +
-      '<div class="dl__btnrow"><button class="lp-cta" onclick="fnGo(3)">Download SHOGUN.dmg</button>' +
+      '<div class="dl__btnrow"><button class="lp-cta" onclick="fnGo(3)">Download ShogunAI.dmg</button>' +
       '<button class="lp-cta lp-cta--ghost" onclick="fnGo(3)">続行(インストールへ)</button></div>' +
-      '<div class="dl__fine">SHOGUN-0.1.0-aarch64.dmg · 38 MB<br>sha256: 4f9c…a12b · Notarized by Apple — updates arrive in-app</div>' +
-      '<div class="dl__check is-bad" style="margin-top:22px;">Intel Mac / macOS 13以前の場合: 「This Mac isn’t supported yet — SHOGUN needs Apple Silicon and macOS 14+.」+ メール登録の受け皿を出す</div>' +
+      '<div class="dl__fine">ShogunAI-0.1.0-aarch64.dmg · 38 MB<br>sha256: 4f9c…a12b · Notarized by Apple — updates arrive in-app</div>' +
+      '<div class="dl__check is-bad" style="margin-top:22px;">Intel Mac / macOS 13以前の場合: 「This Mac isn’t supported yet — ShogunAI needs Apple Silicon and macOS 14+.」+ メール登録の受け皿を出す</div>' +
       '</div></div>';
   }
 
@@ -2007,11 +2007,11 @@ function fnScreenHtml() {
       '<div class="dmg2">' +
       '<div class="dmg2__bar">' +
       '<span class="tl tl--r"></span><span class="tl tl--y"></span><span class="tl tl--g"></span>' +
-      '<span class="dmg2__title">SHOGUN</span></div>' +
+      '<span class="dmg2__title">ShogunAI</span></div>' +
       '<div class="dmg2__body">' +
       '<div class="dmg2__mark">' + logoSvg(230) + '</div>' +
       '<div class="dmg2__row">' +
-      '<div class="dmg2__cell"><div class="dmg2__app">' + logoSvg(40) + '</div>SHOGUN</div>' +
+      '<div class="dmg2__cell"><div class="dmg2__app">' + logoSvg(40) + '</div>ShogunAI</div>' +
       '<div class="dmg2__arrow">' + arrowSvg + '</div>' +
       '<div class="dmg2__cell"><div class="dmg2__folder">' + folderSvg + '</div>Applications</div>' +
       '</div>' +
@@ -2021,18 +2021,18 @@ function fnScreenHtml() {
       '<div class="inst2__rail">' +
       '<div class="inst2__h">WHAT HAPPENS NEXT</div>' +
       '<div class="step-row"><span class="step-num">1</span><div>' +
-      '<div class="step-t">Drag SHOGUN into Applications</div>' +
+      '<div class="step-t">Drag ShogunAI into Applications</div>' +
       '<div class="step-d">The disk image is just the box — eject it once the drag finishes.</div></div></div>' +
       '<div class="step-row"><span class="step-num">2</span><div>' +
-      '<div class="step-t">Open SHOGUN from Applications</div>' +
+      '<div class="step-t">Open ShogunAI from Applications</div>' +
       '<div class="step-d">Launch it like any app. Spotlight works too.</div></div></div>' +
       '<div class="step-row"><span class="step-num">3</span><div>' +
       '<div class="step-t">Click Open when macOS asks</div>' +
-      '<div class="step-d">A one-time check on first launch. SHOGUN is notarized by Apple, so this dialog never returns.</div></div></div>' +
+      '<div class="step-d">A one-time check on first launch. ShogunAI is notarized by Apple, so this dialog never returns.</div></div></div>' +
       '<div class="inst2__gkwrap">' + FN_TAG.os +
       '<div class="gk">' +
       '<div class="gk__icon">' + logoSvg(20) + '</div>' +
-      '<div class="gk__t">“SHOGUN” is an app downloaded from the Internet. Are you sure you want to open it?</div>' +
+      '<div class="gk__t">“ShogunAI” is an app downloaded from the Internet. Are you sure you want to open it?</div>' +
       '<div class="gk__d">Apple checked it for malicious software and none was detected.</div>' +
       '<div class="gk__acts"><button class="gk__btn gk__btn--go" onclick="fnGo(4)">Open</button>' +
       '<button class="gk__btn">Cancel</button></div>' +
@@ -2057,15 +2057,15 @@ function fnScreenHtml() {
 
     var inner = '';
     if (fnState.wiz === 0) {
-      inner = '<div class="ob__brand">' + logoSvg() + ' SHOGUN</div>' +
-        '<h2>Welcome to SHOGUN</h2>' +
-        '<p class="ob__lead">SHOGUN builds a memory of your work and acts on it — from the notch, right where you already are.</p>' +
+      inner = '<div class="ob__brand">' + logoSvg() + ' ShogunAI</div>' +
+        '<h2>Welcome to ShogunAI</h2>' +
+        '<p class="ob__lead">ShogunAI builds a memory of your work and acts on it — from the notch, right where you already are.</p>' +
         '<div class="wiz__banner">Your 7-day trial starts now. It’s the full product — nothing held back.</div>' +
         '<div class="wiz__acts"><button class="ob__cta" type="button" onclick="wizGo(1)">Continue</button></div>';
     } else if (fnState.wiz === 1) {
-      inner = '<div class="ob__brand">' + logoSvg() + ' SHOGUN</div>' +
-        '<h2>Let SHOGUN read your screen</h2>' +
-        '<p class="ob__lead">SHOGUN builds your work context from on-screen text through macOS Accessibility. It reads text only — never images, never your keystrokes — and the context is built on this Mac.</p>' +
+      inner = '<div class="ob__brand">' + logoSvg() + ' ShogunAI</div>' +
+        '<h2>Let ShogunAI read your screen</h2>' +
+        '<p class="ob__lead">ShogunAI builds your work context from on-screen text through macOS Accessibility. It reads text only — never images, never your keystrokes — and the context is built on this Mac.</p>' +
         '<div class="ob__cols">' +
         '<div class="ob__col"><div class="ob__colh">WHAT THIS TURNS ON</div><ul>' +
         '<li>Draft right where you’re typing — tap ⌥.</li><li>The notch panel, acting on what you see.</li><li>Answers from your work memory.</li></ul></div>' +
@@ -2075,7 +2075,7 @@ function fnScreenHtml() {
         '<button class="ob__skip" type="button" onclick="wizGo(2)">Do this later</button></div>' +
         '<div class="ob__status" style="color:var(--faint)">System Settings のトグル自体は OS 描画(タブ④が実装済みの実画面)。許可されるまでポーリングして自動で次へ進む。</div>';
     } else if (fnState.wiz === 2) {
-      inner = '<div class="ob__brand">' + logoSvg() + ' SHOGUN</div>' +
+      inner = '<div class="ob__brand">' + logoSvg() + ' ShogunAI</div>' +
         '<h2>Connect what you already use</h2>' +
         '<p class="ob__lead">Read-only to start. Each service connects directly — data stays on your device. You can add or remove these anytime in Settings.</p>' +
         '<div class="conns" style="margin-top:14px;">' +
@@ -2087,21 +2087,21 @@ function fnScreenHtml() {
         '<div class="wiz__acts"><button class="ob__cta" type="button" onclick="wizGo(3)">Continue</button>' +
         '<button class="ob__skip" type="button" onclick="wizGo(3)">Skip for now</button></div>';
     } else if (fnState.wiz === 3) {
-      inner = '<div class="ob__brand">' + logoSvg() + ' SHOGUN</div>' +
+      inner = '<div class="ob__brand">' + logoSvg() + ' ShogunAI</div>' +
         '<h2>Bring your own key</h2>' +
-        '<p class="ob__lead">Chat and ⌥-tap drafts run on your own key, saved to your Keychain — never a file or a server. Without one, SHOGUN still captures and remembers; answers go live the moment you add it.</p>' +
+        '<p class="ob__lead">Chat and ⌥-tap drafts run on your own key, saved to your Keychain — never a file or a server. Without one, ShogunAI still captures and remembers; answers go live the moment you add it.</p>' +
         '<div class="keyrow" style="margin-top:14px;"><input class="keyrow__input" type="password" placeholder="Paste your API key…">' +
         '<button class="keyrow__btn" type="button">Save</button></div>' +
         '<div class="wiz__acts"><button class="ob__cta" type="button" onclick="wizGo(4)">Continue</button>' +
         '<button class="ob__skip" type="button" onclick="wizGo(4)">Add this later in Settings</button></div>';
     } else {
-      inner = '<div class="ob__brand">' + logoSvg() + ' SHOGUN</div>' +
+      inner = '<div class="ob__brand">' + logoSvg() + ' ShogunAI</div>' +
         '<h2>You’re set</h2>' +
-        '<p class="ob__lead">Reach SHOGUN two ways: tap ⌥ (Option) in any app to draft where you’re typing, or rest your cursor on the notch.</p>' +
+        '<p class="ob__lead">Reach ShogunAI two ways: tap ⌥ (Option) in any app to draft where you’re typing, or rest your cursor on the notch.</p>' +
         '<div style="margin-top:16px;"><button class="handle" type="button" style="position:static;" onclick="fnGo(5)">' +
         '<span class="handle__live"><span class="live__dot"></span>reading&nbsp;<b>Mail</b></span>' +
         '<span class="handle__count">2 due</span></button></div>' +
-        '<div class="wiz__acts"><button class="ob__cta" type="button" onclick="fnGo(5)">Open SHOGUN</button></div>';
+        '<div class="wiz__acts"><button class="ob__cta" type="button" onclick="fnGo(5)">Open ShogunAI</button></div>';
     }
     return stepsHtml +
       '<div class="ob-stage" style="padding:0;"><div class="ob" style="width:640px;">' + inner + '</div></div>';
