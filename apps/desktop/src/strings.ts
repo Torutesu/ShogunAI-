@@ -125,7 +125,9 @@ export const STRINGS = {
     // Subscription delegation (Issue #110): run on the plan the user already pays for, so the
     // first-run path never demands a second, metered credential.
     subTitle: "Your subscription",
-    subHint: "Already paying for an assistant? Use that plan — no API key, no per-token bill.",
+    // Says "no API key to set up", not "free": a plan's allowance for this is finite, and copy
+    // that implies otherwise turns into a support complaint the first time it runs out.
+    subHint: "Already paying for an assistant? Run on that plan instead — no API key to set up. Each plan includes an allowance for this.",
     subNone: "No assistant found on this Mac. Install one, or add an API key below.",
     subUse: "Use this",
     subInUse: "In use",
@@ -136,7 +138,7 @@ export const STRINGS = {
     subStateReady: "Ready — running on your plan.",
     subStateInstalled: "Found. Test the connection to confirm you're signed in.",
     subStateNeedsLogin: "Signed out. Open a terminal and run it once to sign in.",
-    subStateRateLimited: "Your plan's limit is reached. It resets on your plan's schedule.",
+    subStateRateLimited: "This plan's allowance is used up. It refreshes on the plan's cycle — add an API key below to keep working before then.",
     subStateNotInstalled: "Not installed.",
     subRunsOn: "Runs on",
     // The disclosure. A consumer plan is not the metered API path, and the difference is the

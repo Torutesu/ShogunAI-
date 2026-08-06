@@ -8,12 +8,33 @@
 //! pays for Claude Pro/Max or a ChatGPT plan; asking them for a SHOGUN subscription *plus* an API
 //! key *plus* per-token billing is charging three times for one job.
 //!
+//! ## The policy this depends on (check before changing anything here)
+//!
+//! Anthropic's position moved twice in 2026 and could move again, so it is recorded rather than
+//! assumed:
+//!
+//! - **Feb–Apr 2026**: third-party use of subscription OAuth tokens was banned outright and blocked
+//!   server-side. Tools that had minted their own tokens against the consumer endpoints stopped
+//!   working.
+//! - **From 2026-06-15**: Claude plans carry a **monthly Agent SDK credit** (~$20 Pro / $100 Max 5x
+//!   / $200 Max 20x, billed at standard API rates) that explicitly covers the Agent SDK, `claude -p`,
+//!   **and third-party apps authenticating with the user's subscription through that surface**.
+//!
+//! So delegation is a sanctioned path, and `claude -p` — what this module runs — is named in the
+//! covered set. What stays permanently out of bounds is the thing that got banned: minting or
+//! lifting subscription OAuth tokens and calling the API directly. The credit is also per-account
+//! and cannot be pooled, which is another reason this runs locally under the user's own login
+//! rather than through anything server-side.
+//!
+//! OpenAI has no equivalent published statement about third-party use of a ChatGPT-plan sign-in;
+//! `codex exec` here is the user running their own installed CLI. If that becomes a problem it is a
+//! per-delegate decision, not a reason to abandon the approach.
+//!
 //! ## What this is NOT
 //!
-//! There is no public OAuth by which a third-party app may spend a consumer Claude/ChatGPT
-//! subscription. Reimplementing a vendor CLI's authorization flow, or lifting the token it stored,
-//! is off the table — it breaks the vendors' terms, gets user accounts banned, and is not a base a
-//! notarized paid product can stand on. So this module has hard non-goals, asserted by tests below:
+//! Reimplementing a vendor's authorization flow, or lifting the token its CLI stored, is off the
+//! table — that is precisely what was banned, it gets user accounts terminated, and it is not a base
+//! a notarized paid product can stand on. So this module has hard non-goals, asserted by tests below:
 //!
 //! 1. It never reads another application's credential store (`~/.claude/.credentials.json`,
 //!    `~/.codex/auth.json`, another app's Keychain item, …).
@@ -32,8 +53,11 @@
 //! - **Invariant 5 (key separation).** [`SubscriptionAgentClient`] implements [`AgentClient`] and
 //!   *deliberately does not implement* [`BatchClient`](super::BatchClient). Indexing / Dream Cycle /
 //!   Morning Brief stay on the Select KK Batch API. Beyond the invariant this is a product
-//!   requirement: subscription quotas are windowed, and pushing batch volume through one would burn
-//!   the user's own Claude Code down to zero — SHOGUN breaking the user's day job.
+//!   requirement: the delegate spends a **finite monthly credit**, and batch volume is exactly the
+//!   workload that drains it. Burn it in week one and the Agent lane — the thing the user actually
+//!   notices — is dead until the month turns, to buy indexing that Select KK already covers at
+//!   batch rates. (It would *not* stop the user's interactive Claude Code: since 2026-06-15 that
+//!   allowance is separate. The cost is the credit, not their day job.)
 //! - **Invariant 3 (traceability).** A delegated run is still egress. Exactly one [`TraceRecord`]
 //!   is written per completion on [`Route::LocalAgent`], carrying only a digest and byte length.
 //! - **Invariant 7 (secrets).** The prompt travels on **stdin**, never argv: argv is world-readable
@@ -115,9 +139,9 @@ impl Delegate {
         }
     }
 
-    /// Whose quota a run is spent against. The UI must say this before the user opts in — "this
-    /// runs on your own plan" is the entire proposition, and a rate-limit message later is only
-    /// intelligible if the user was told which plan it refers to.
+    /// Whose allowance a run is spent against. The UI must say this before the user opts in —
+    /// "this runs on your own plan" is the entire proposition, and an exhausted-allowance message
+    /// later is only intelligible if the user was told which plan it refers to.
     pub fn plan_label(self) -> &'static str {
         match self {
             Delegate::ClaudeCode => "Claude Pro / Max",
@@ -358,8 +382,9 @@ pub fn verify(runner: &dyn CommandRunner, delegate: Delegate) -> DelegateState {
 pub enum DelegateFailure {
     NotInstalled,
     NeedsLogin,
-    /// The subscription's quota window is exhausted. Never SHOGUN's fault, and must not be reported
-    /// as SHOGUN failing.
+    /// The plan's allowance for delegated runs is used up. Never SHOGUN's fault, and must not be
+    /// reported as SHOGUN failing. Note this is an *allowance*, not a short rolling window: on
+    /// Claude it is the monthly Agent SDK credit, so "try again in a bit" would be bad advice.
     RateLimited,
     Timeout,
     /// Anything else. Already passed through [`redact_secrets`] and truncated.
@@ -433,8 +458,11 @@ impl DelegateFailure {
                 401,
                 format!("{} is not signed in — run `{}` once in a terminal to log in", delegate.label(), delegate.binary()),
             ),
+            // Deliberately does not say "try again shortly": this is a plan allowance (a monthly
+            // credit on Claude), not a rolling window, so the honest next step is an API key rather
+            // than waiting.
             DelegateFailure::RateLimited => LlmError::RateLimited(format!(
-                "{} usage limit reached on your {} plan — it resets on the vendor's schedule",
+                "{} has no allowance left on your {} — it refreshes on that plan's cycle. Add an API key in Settings to keep working before then.",
                 delegate.label(),
                 delegate.plan_label()
             )),
@@ -876,6 +904,9 @@ mod tests {
         let msg = e.to_string();
         assert!(msg.contains("Claude Pro / Max"), "{msg}");
         assert!(!msg.to_lowercase().contains("shogun"), "{msg}");
+        // An allowance is not a rolling window. Telling the user to wait a few minutes for a
+        // credit that refreshes monthly is worse than saying nothing.
+        assert!(!msg.to_lowercase().contains("try again"), "{msg}");
     }
 
     #[test]
