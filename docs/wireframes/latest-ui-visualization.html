@@ -689,19 +689,54 @@ kbd {
 .dl__lbl { margin-top: 18px; font-size: 11px; font-weight: 700; letter-spacing: .07em; color: #666; }
 
 /* DMG インストール & Gatekeeper(OS描画 — 文言のみ設計可) */
-.inst { display: flex; gap: 22px; flex-wrap: wrap; align-items: flex-start; }
-.dmg {
-  flex: 1; min-width: 320px; border-radius: 12px; overflow: hidden;
-  border: 1px solid rgba(255,255,255,.14); background: #2b2d33;
-  box-shadow: 0 24px 60px rgba(0,0,0,.5); color: #ddd;
+.inst2 { display: flex; gap: 24px; flex-wrap: wrap; align-items: stretch; }
+/* DMG ウィンドウ: 実物同様、背景画像側にブランドとガイドを焼き込む設計。文言は最小限 */
+.dmg2 {
+  flex: 1.25; min-width: 400px; border-radius: 12px; overflow: hidden;
+  border: 1px solid rgba(255,255,255,.13);
+  box-shadow: 0 30px 80px rgba(0,0,0,.55);
+  display: flex; flex-direction: column;
 }
-.dmg__bar { height: 30px; display: flex; align-items: center; gap: 6px; padding: 0 12px; background: #35373d; border-bottom: 1px solid rgba(0,0,0,.3); font-size: 11px; }
-.dmg__title { flex: 1; text-align: center; color: #aaa; }
-.dmg__body { display: flex; align-items: center; justify-content: center; gap: 34px; padding: 44px 20px; }
-.dmg__icon { display: flex; flex-direction: column; align-items: center; gap: 8px; font-size: 11px; color: #ccc; }
-.dmg__app { width: 64px; height: 64px; border-radius: 15px; background: #101319; border: 1px solid rgba(255,255,255,.12); display: grid; place-items: center; }
-.dmg__folder { width: 64px; height: 64px; display: grid; place-items: center; font-size: 46px; }
-.dmg__arrow { font-size: 26px; color: #888; }
+.dmg2__bar {
+  height: 32px; display: flex; align-items: center; gap: 6px; padding: 0 12px;
+  background: rgba(30,32,38,.92); border-bottom: 1px solid rgba(0,0,0,.4);
+  font-size: 11px; color: #aaa;
+}
+.dmg2__title { flex: 1; text-align: center; font-weight: 600; }
+.dmg2__body {
+  position: relative; flex: 1; padding: 52px 30px 34px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 30px;
+  background:
+    radial-gradient(90% 130% at 50% -30%, #1a2030 0%, transparent 60%),
+    linear-gradient(180deg, #0c0e13 0%, #080808 100%);
+}
+.dmg2__mark { position: absolute; inset: 0; display: grid; place-items: center; opacity: .045; pointer-events: none; }
+.dmg2__row { position: relative; display: flex; align-items: flex-start; gap: 46px; }
+.dmg2__cell { display: flex; flex-direction: column; align-items: center; gap: 10px; font-size: 11.5px; color: #ccc; }
+.dmg2__app {
+  width: 78px; height: 78px; border-radius: 19px;
+  background: linear-gradient(145deg, #161b26, #0b0e14);
+  border: 1px solid rgba(255,255,255,.15);
+  box-shadow: 0 14px 34px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.09);
+  display: grid; place-items: center;
+}
+.dmg2__folder { width: 78px; height: 78px; display: grid; place-items: center; }
+.dmg2__arrow { align-self: center; color: #C8A96E; margin-top: -16px; }
+.dmg2__cap { position: relative; font-size: 12px; color: #8a8a8a; letter-spacing: .01em; }
+
+/* 右レール: この後に起きることを先に言う(番号 = 実際の手順) */
+.inst2__rail { flex: 1; min-width: 330px; display: flex; flex-direction: column; gap: 10px; }
+.inst2__h { font-size: 11px; font-weight: 700; letter-spacing: .08em; color: #666; margin-bottom: 2px; }
+.step-row { display: flex; gap: 13px; background: #141414; border: 1px solid #2A2A2A; border-radius: 10px; padding: 13px 15px; }
+.step-num {
+  flex: none; width: 22px; height: 22px; border-radius: 50%; margin-top: 1px;
+  border: 1px solid #C8A96E; color: #C8A96E;
+  font-size: 11px; font-weight: 700; display: grid; place-items: center;
+}
+.step-t { font-size: 13px; font-weight: 600; color: #fff; }
+.step-d { margin-top: 3px; font-size: 11.5px; color: #999; line-height: 1.6; }
+.inst2__gkwrap { margin: 4px 0 0 35px; display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.inst2__cta { margin-top: auto; padding-top: 8px; }
 .gk {
   width: 300px; border-radius: 12px; background: rgba(240,240,245,.97); color: #1b1d22;
   box-shadow: 0 24px 60px rgba(0,0,0,.5); padding: 20px 18px 14px; text-align: center;
@@ -1962,27 +1997,48 @@ function fnScreenHtml() {
 
   /* ── 3: インストール(DMG ドラッグ + Gatekeeper = OS描画)── */
   if (s === 3) {
-    return '<div class="inst">' +
-      '<div class="dmg"><div class="dmg__bar">' +
+    var folderSvg =
+      '<svg width="62" height="50" viewBox="0 0 52 42"><path d="M2 8a4 4 0 0 1 4-4h13l4 5h23a4 4 0 0 1 4 4v25a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8z" fill="#4da3ff"/><path d="M2 14h48v24a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V14z" fill="#74b9ff"/></svg>';
+    var arrowSvg =
+      '<svg width="56" height="14" viewBox="0 0 56 14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' +
+      '<path d="M2 7h46"/><path d="M42 1.5 48 7l-6 5.5"/></svg>';
+    return '<div class="inst2">' +
+      /* DMG: ブランド背景に焼き込む想定のビジュアル。読ませる文言は1行だけ */
+      '<div class="dmg2">' +
+      '<div class="dmg2__bar">' +
       '<span class="tl tl--r"></span><span class="tl tl--y"></span><span class="tl tl--g"></span>' +
-      '<span class="dmg__title">SHOGUN</span></div>' +
-      '<div class="dmg__body">' +
-      '<div class="dmg__icon"><div class="dmg__app">' + logoSvg(38) + '</div>SHOGUN.app</div>' +
-      '<div class="dmg__arrow">→</div>' +
-      '<div class="dmg__icon"><div class="dmg__folder">' +
-      '<svg width="52" height="42" viewBox="0 0 52 42"><path d="M2 8a4 4 0 0 1 4-4h13l4 5h23a4 4 0 0 1 4 4v25a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8z" fill="#4da3ff"/><path d="M2 14h48v24a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V14z" fill="#74b9ff"/></svg>' +
-      '</div>Applications</div>' +
+      '<span class="dmg2__title">SHOGUN</span></div>' +
+      '<div class="dmg2__body">' +
+      '<div class="dmg2__mark">' + logoSvg(230) + '</div>' +
+      '<div class="dmg2__row">' +
+      '<div class="dmg2__cell"><div class="dmg2__app">' + logoSvg(40) + '</div>SHOGUN</div>' +
+      '<div class="dmg2__arrow">' + arrowSvg + '</div>' +
+      '<div class="dmg2__cell"><div class="dmg2__folder">' + folderSvg + '</div>Applications</div>' +
+      '</div>' +
+      '<div class="dmg2__cap">Drag to Applications to install.</div>' +
       '</div></div>' +
+      /* 右レール: 次に起きることを先に言っておく(Gatekeeper で驚かせない) */
+      '<div class="inst2__rail">' +
+      '<div class="inst2__h">WHAT HAPPENS NEXT</div>' +
+      '<div class="step-row"><span class="step-num">1</span><div>' +
+      '<div class="step-t">Drag SHOGUN into Applications</div>' +
+      '<div class="step-d">The disk image is just the box — eject it once the drag finishes.</div></div></div>' +
+      '<div class="step-row"><span class="step-num">2</span><div>' +
+      '<div class="step-t">Open SHOGUN from Applications</div>' +
+      '<div class="step-d">Launch it like any app. Spotlight works too.</div></div></div>' +
+      '<div class="step-row"><span class="step-num">3</span><div>' +
+      '<div class="step-t">Click Open when macOS asks</div>' +
+      '<div class="step-d">A one-time check on first launch. SHOGUN is notarized by Apple, so this dialog never returns.</div></div></div>' +
+      '<div class="inst2__gkwrap">' + FN_TAG.os +
       '<div class="gk">' +
       '<div class="gk__icon">' + logoSvg(20) + '</div>' +
       '<div class="gk__t">“SHOGUN” is an app downloaded from the Internet. Are you sure you want to open it?</div>' +
       '<div class="gk__d">Apple checked it for malicious software and none was detected.</div>' +
       '<div class="gk__acts"><button class="gk__btn gk__btn--go" onclick="fnGo(4)">Open</button>' +
       '<button class="gk__btn">Cancel</button></div>' +
-      '</div>' +
-      '<div class="inst__note"><b style="color:#999">設計可能な範囲:</b> DMG の背景画像(左にapp、右にApplicationsエイリアス、矢印を背景に描く)とボリューム名・アイコンまで。' +
-      '右の Gatekeeper ダイアログは <b style="color:#999">OS が描くため設計不可</b> — notarization 済みなら文言はこの1回で済み、DLページ側に「Open をクリック」の予告を書いておくのが導線設計になります。</div>' +
-      '</div>';
+      '</div></div>' +
+      '<div class="inst2__cta"><button class="lp-cta" onclick="fnGo(4)">続けて初回起動へ</button></div>' +
+      '</div></div>';
   }
 
   /* ── 4: 初回起動ウィザード(提案 — 既存実装は step 2 の Accessibility のみ)── */
