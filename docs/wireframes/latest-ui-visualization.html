@@ -1,0 +1,1782 @@
+<!DOCTYPE html>
+<html lang="ja" data-appearance="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SHOGUN — 最新UI可視化(実装コード準拠・操作可)</title>
+<style>
+/* ═══════════════════════════════════════════════════════════════════════════
+   1) アプリ本体のトークン — apps/desktop/src/styles.css をそのまま移植
+   ═══════════════════════════════════════════════════════════════════════════ */
+:root {
+  --glass: rgba(18, 21, 28, 0.62);
+  --glass-2: rgba(28, 32, 41, 0.70);
+  --line: rgba(255, 255, 255, 0.11);
+  --line-strong: rgba(255, 255, 255, 0.18);
+  --ink: #eef1f5;
+  --muted: #9aa3af;
+  --faint: #8b95a3;
+  --accent: #6ea8fe;
+  --accent-2: #8f7dfb;
+  --accent-ink: #06101c;
+  --accent-soft: color-mix(in srgb, var(--accent) 26%, transparent);
+  --live: #30d158;
+  --warn: #ff9f0a;
+  --fill: rgba(255, 255, 255, 0.06);
+  --fill-strong: rgba(255, 255, 255, 0.12);
+  --card: rgba(255, 255, 255, 0.045);
+  --sys: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans", sans-serif;
+  --sp: 160ms cubic-bezier(0.32, 0.72, 0, 1);
+  --fs-xs: 10px; --fs-sm: 11px; --fs-md: 12px; --fs-lg: 13px; --fs-xl: 14px;
+  --r-xs: 7px; --r-sm: 10px; --r-md: 13px; --r-lg: 16px; --r-xl: 20px; --r-pill: 999px;
+}
+:root[data-appearance="light"] {
+  --glass: rgba(252, 253, 255, 0.82);
+  --glass-2: rgba(255, 255, 255, 0.88);
+  --line: rgba(16, 24, 40, 0.10);
+  --line-strong: rgba(16, 24, 40, 0.17);
+  --ink: #1b1d22;
+  --muted: #5c616a;
+  --faint: #6b7280;
+  --accent: #2f6fed;
+  --accent-2: #6a53e6;
+  --accent-ink: #ffffff;
+  --live: #1f9e3c;
+  --warn: #a4560a;
+  --fill: rgba(0, 0, 0, 0.045);
+  --fill-strong: rgba(0, 0, 0, 0.09);
+  --card: rgba(0, 0, 0, 0.035);
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ═══════ シミュレータ側のクローム(製品UIではない) ═══════ */
+body {
+  background: #080808;
+  color: #fff;
+  font-family: var(--sys);
+  -webkit-font-smoothing: antialiased;
+  min-height: 100vh;
+}
+.sim-head {
+  padding: 22px 28px 0;
+  max-width: 1220px;
+  margin: 0 auto;
+}
+.sim-head h1 { font-size: 19px; font-weight: 650; letter-spacing: -0.01em; }
+.sim-head h1 .mark { color: #C8A96E; margin-right: 8px; }
+.sim-head p { margin-top: 6px; font-size: 12px; color: #999; line-height: 1.6; }
+.sim-tabs {
+  max-width: 1220px; margin: 14px auto 0; padding: 0 28px;
+  display: flex; gap: 6px; flex-wrap: wrap;
+}
+.sim-tab {
+  font: inherit; font-size: 12px; padding: 7px 14px; cursor: pointer;
+  color: #999; background: #141414; border: 1px solid #2A2A2A; border-radius: 999px;
+  transition: color .15s, border-color .15s;
+}
+.sim-tab:hover { color: #fff; }
+.sim-tab.is-on { color: #fff; border-color: #C8A96E; }
+.sim-bar {
+  max-width: 1220px; margin: 12px auto 0; padding: 0 28px;
+  display: flex; gap: 6px; flex-wrap: wrap; align-items: center;
+}
+.sim-btn {
+  font: inherit; font-size: 11px; padding: 6px 12px; cursor: pointer;
+  color: #ccc; background: transparent; border: 1px solid #2A2A2A; border-radius: 8px;
+}
+.sim-btn:hover { background: #141414; color: #fff; }
+.sim-note {
+  max-width: 1220px; margin: 10px auto 0; padding: 0 28px;
+  font-size: 11px; color: #666; line-height: 1.7;
+}
+.sim-note b { color: #999; font-weight: 600; }
+.sim-stage-wrap { max-width: 1220px; margin: 14px auto 40px; padding: 0 28px; }
+.sim-scene { display: none; }
+.sim-scene.is-on { display: block; }
+
+/* ═══════ macOS デスクトップシーン ═══════ */
+.mac {
+  position: relative;
+  width: 100%; aspect-ratio: 16 / 10;
+  border-radius: 14px; overflow: hidden;
+  border: 1px solid #2A2A2A;
+  background:
+    radial-gradient(120% 90% at 20% 0%, #2b3a5e 0%, transparent 55%),
+    radial-gradient(110% 90% at 85% 15%, #4a3160 0%, transparent 55%),
+    radial-gradient(120% 110% at 55% 110%, #14324a 0%, #0b1020 70%);
+}
+:root[data-appearance="light"] .mac {
+  background:
+    radial-gradient(120% 90% at 20% 0%, #cfe0ff 0%, transparent 55%),
+    radial-gradient(110% 90% at 85% 15%, #e6d6ff 0%, transparent 55%),
+    radial-gradient(120% 110% at 55% 110%, #bcd8ef 0%, #dde7f5 70%);
+}
+.menubar {
+  position: absolute; inset: 0 0 auto 0; height: 26px;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 14px;
+  font-size: 11.5px; color: rgba(255,255,255,.92);
+  background: rgba(20, 22, 30, 0.45);
+  backdrop-filter: blur(20px);
+  z-index: 3;
+}
+:root[data-appearance="light"] .menubar { color: rgba(20,22,30,.85); background: rgba(255,255,255,.5); }
+.menubar__l, .menubar__r { display: flex; gap: 16px; align-items: center; }
+.menubar__l b { font-weight: 700; }
+.menubar__r { font-variant-numeric: tabular-nums; }
+.notch {
+  position: absolute; top: 0; left: 50%; transform: translateX(-50%);
+  width: 168px; height: 26px;
+  background: #000; border-radius: 0 0 10px 10px; z-index: 4;
+}
+/* 背景に置くダミーのMailウィンドウ(SHOGUNが読んでいる対象) */
+.dummywin {
+  position: absolute; left: 6%; top: 12%; width: 56%; height: 74%;
+  border-radius: 10px; background: rgba(28, 30, 38, 0.9);
+  border: 1px solid rgba(255,255,255,.08);
+  box-shadow: 0 24px 60px rgba(0,0,0,.4);
+  overflow: hidden;
+}
+:root[data-appearance="light"] .dummywin { background: rgba(252,252,255,.92); border-color: rgba(0,0,0,.08); }
+.dummywin__bar {
+  height: 30px; display: flex; align-items: center; gap: 6px; padding: 0 12px;
+  border-bottom: 1px solid var(--line);
+}
+.tl { width: 11px; height: 11px; border-radius: 50%; }
+.tl--r { background: #ff5f57; } .tl--y { background: #febc2e; } .tl--g { background: #28c840; }
+.dummywin__title { flex: 1; text-align: center; font-size: 11px; color: var(--muted); }
+.dummywin__body { padding: 14px 16px; font-size: 11.5px; color: var(--muted); line-height: 1.7; }
+.dummywin__body b { color: var(--ink); }
+.dummyline { height: 8px; border-radius: 4px; background: var(--fill-strong); margin-top: 10px; }
+
+/* SHOGUN のウィンドウホスト(Castle Position に応じて移動) */
+.host { position: absolute; z-index: 5; }
+.host[data-pos="notch"] { top: 26px; left: 50%; transform: translateX(-50%); }
+.host[data-pos="left_edge"] { top: 50%; left: 0; transform: translateY(-50%); }
+.host[data-pos="right_edge"] { top: 50%; right: 0; transform: translateY(-50%); }
+.host[data-pos="bottom_left"] { bottom: 12px; left: 12px; }
+.host[data-pos="bottom_center"] { bottom: 0; left: 50%; transform: translateX(-50%); }
+.host[data-pos="bottom_right"] { bottom: 12px; right: 12px; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   2) 以下は styles.css からの忠実な移植(パネル・ピル・設定・オーバーレイ・Full UI)
+   ═══════════════════════════════════════════════════════════════════════════ */
+.stage { display: flex; flex-direction: column; align-items: stretch; color: var(--ink); font-family: var(--sys); user-select: none; }
+
+/* collapsed handle */
+.handle {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 6px 12px;
+  background: var(--glass);
+  backdrop-filter: blur(30px) saturate(1.7);
+  border: 1px solid var(--line); border-top: none;
+  border-radius: 0 0 var(--r-md) var(--r-md);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.08), 0 10px 26px rgba(0,0,0,.35);
+  color: var(--ink); font: inherit; font-family: var(--sys);
+  cursor: pointer; text-align: left; transition: background var(--sp);
+}
+.handle:hover { background: var(--glass-2); }
+/* エッジ・コーナー安置形(Castle Position): エッジは細い線、コーナーは小箱 */
+.host:not([data-pos="notch"]) .handle { border-radius: var(--r-md); border-top: 1px solid var(--line); }
+.host[data-pos="left_edge"] .handle, .host[data-pos="right_edge"] .handle { writing-mode: vertical-rl; padding: 12px 6px; }
+.host[data-pos="left_edge"] .handle { border-radius: 0 var(--r-md) var(--r-md) 0; border-left: none; }
+.host[data-pos="right_edge"] .handle { border-radius: var(--r-md) 0 0 var(--r-md); border-right: none; }
+.host[data-pos="bottom_center"] .handle { border-radius: var(--r-md) var(--r-md) 0 0; border-bottom: none; border-top: 1px solid var(--line); }
+.handle__live { display: inline-flex; align-items: center; gap: 8px; font-size: var(--fs-sm); color: var(--muted); min-width: 0; }
+.handle__live b { color: var(--ink); font-weight: 600; white-space: nowrap; }
+.handle__count {
+  flex: none; font-size: var(--fs-xs); color: var(--muted);
+  background: var(--fill); border: 1px solid var(--line); border-radius: var(--r-pill); padding: 3px 9px;
+}
+.live__dot {
+  width: 7px; height: 7px; border-radius: 50%; background: var(--live);
+  box-shadow: 0 0 7px color-mix(in srgb, var(--live) 65%, transparent);
+  flex: none; animation: live-pulse 2.4s ease-in-out infinite;
+}
+@keyframes live-pulse { 0%,100% { opacity: 1; } 50% { opacity: .55; } }
+
+/* open panel */
+.panel {
+  position: relative; display: flex; flex-direction: column;
+  width: 560px; height: 360px;
+  background: var(--glass);
+  backdrop-filter: blur(34px) saturate(1.7);
+  border: 1px solid var(--line); border-top: none;
+  border-radius: 0 0 var(--r-xl) var(--r-xl);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.1), 0 24px 60px rgba(0,0,0,.42);
+  overflow: hidden; transform-origin: top center;
+  animation: panel-unfurl 220ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+.panel.is-settings { height: 460px; }
+.host:not([data-pos="notch"]) .panel { border-radius: var(--r-xl); border-top: 1px solid var(--line); }
+.host[data-pos="bottom_center"] .panel,
+.host[data-pos="bottom_left"] .panel,
+.host[data-pos="bottom_right"] .panel { transform-origin: bottom center; }
+@keyframes panel-unfurl {
+  from { opacity: 0; transform: translateY(-8px) scale(.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* header */
+.head {
+  flex: none; display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 6px 9px; border-bottom: 1px solid var(--line); cursor: grab;
+}
+.head:active { cursor: grabbing; }
+.head__left { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.head__right { display: flex; align-items: center; gap: 4px; flex: none; }
+.chip {
+  border: 1px solid var(--line); background: var(--fill); color: var(--muted);
+  font: inherit; font-family: var(--sys); font-size: var(--fs-xs);
+  border-radius: var(--r-pill); padding: 3px 9px; cursor: pointer; white-space: nowrap;
+  transition: background var(--sp), color var(--sp), border-color var(--sp);
+}
+.chip:hover { background: var(--fill-strong); color: var(--ink); }
+.chip[aria-pressed="true"] { color: var(--ink); border-color: var(--line-strong); background: var(--fill-strong); }
+.icon {
+  display: grid; place-items: center; width: 26px; height: 26px;
+  border: none; background: transparent; color: var(--muted);
+  border-radius: var(--r-sm); font-size: 13px; cursor: pointer;
+  transition: background var(--sp), color var(--sp);
+}
+.icon:hover { background: var(--fill); color: var(--ink); }
+.icon--on { background: var(--accent-soft); color: var(--accent); }
+.icon--close:hover { color: var(--warn); }
+.icon svg { transition: transform var(--sp); }
+
+/* state list */
+.state { flex: none; max-height: 108px; overflow-y: auto; padding: 6px 10px 8px; border-bottom: 1px solid var(--line); }
+.state__row {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
+  padding: 5px 6px; width: 100%; text-align: left;
+  background: none; border: none; border-radius: var(--r-sm); cursor: pointer;
+  color: inherit; font: inherit; transition: background var(--sp);
+  animation: row-in 240ms cubic-bezier(0.32,0.72,0,1) both;
+}
+.state__row:nth-child(2) { animation-delay: 40ms; }
+.state__row:nth-child(3) { animation-delay: 80ms; }
+@keyframes row-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+.state__row:hover { background: var(--fill); }
+.state__check {
+  flex: none; width: 16px; height: 16px; align-self: center; display: inline-grid; place-items: center;
+  border-radius: 50%; border: 1px solid var(--line-strong); color: var(--faint); opacity: .5;
+  font-size: 10px; line-height: 1; transition: background var(--sp), color var(--sp), opacity var(--sp);
+}
+.state__row:hover .state__check { color: var(--ink); opacity: 1; background: var(--fill-strong); }
+.state__text { font-size: var(--fs-md); color: var(--ink); min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.state__meta { font-size: var(--fs-xs); color: var(--faint); flex: none; }
+.state__meta.is-over { color: var(--warn); font-weight: 600; }
+.state__empty { font-size: var(--fs-sm); color: var(--faint); padding: 8px; }
+
+/* thread */
+.thread { flex: 1; min-height: 0; overflow-y: auto; padding: 8px 10px; display: flex; flex-direction: column; gap: 5px; }
+.welcome { margin: auto 0; max-width: 46ch; }
+.welcome__t { font-size: var(--fs-xl); font-weight: 640; letter-spacing: -0.01em; }
+.welcome__s { margin-top: 6px; font-size: var(--fs-sm); line-height: 1.55; color: var(--muted); }
+.welcome__key {
+  margin-top: 12px; font-size: var(--fs-sm); color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warn) 30%, var(--line));
+  border-radius: var(--r-sm); padding: 8px 11px;
+}
+.msg {
+  max-width: 86%; padding: 6px 9px; border-radius: var(--r-lg);
+  font-size: var(--fs-md); line-height: 1.55; white-space: pre-wrap; user-select: text;
+  animation: msg-in 180ms cubic-bezier(0.32,0.72,0,1);
+}
+@keyframes msg-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+.msg--me { align-self: flex-end; background: var(--accent); color: var(--accent-ink); border-bottom-right-radius: var(--r-xs); font-weight: 500; }
+.msg--shogun { align-self: flex-start; background: var(--fill); color: var(--ink); border: 1px solid var(--line); border-bottom-left-radius: var(--r-xs); }
+.msg--think { display: inline-flex; align-items: center; gap: 4px; padding: 13px 14px; }
+.think__dot { width: 5px; height: 5px; border-radius: 50%; background: var(--faint); animation: think-bounce 1.2s ease-in-out infinite; }
+.think__dot:nth-child(2) { animation-delay: .15s; }
+.think__dot:nth-child(3) { animation-delay: .3s; }
+@keyframes think-bounce { 0%,70%,100% { opacity: .35; transform: translateY(0); } 35% { opacity: 1; transform: translateY(-3px); } }
+.cites { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-top: 8px; padding-top: 7px; border-top: 1px solid var(--line); }
+.cites__label { font-size: var(--fs-xs); letter-spacing: .06em; color: var(--faint); }
+.cite {
+  max-width: 16ch; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  font-size: var(--fs-xs); color: var(--muted); background: var(--fill);
+  border: 1px solid var(--line); border-radius: var(--r-pill); padding: 2px 8px;
+}
+
+/* composer */
+.composer { flex: none; padding: 6px 9px 14px; border-top: 1px solid var(--line); }
+.composer__card {
+  display: flex; flex-direction: column; gap: 4px;
+  background: var(--fill); border: 1px solid var(--line); border-radius: var(--r-md);
+  padding: 5px 8px; transition: border-color var(--sp), box-shadow var(--sp);
+}
+.composer__card:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line-strong));
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.srcchip {
+  display: inline-flex; align-items: center; gap: 7px; min-width: 0; max-width: 100%;
+  font-size: var(--fs-xs); color: var(--muted); background: var(--fill-strong);
+  border: 1px solid var(--line); border-radius: var(--r-pill); padding: 4px 11px;
+}
+.srcchip b { color: var(--ink); font-weight: 600; white-space: nowrap; }
+.composer__input {
+  width: 100%; background: transparent; border: none; padding: 2px 2px 0;
+  color: var(--ink); font: inherit; font-family: var(--sys); font-size: var(--fs-lg); outline: none;
+}
+.composer__input::placeholder { color: var(--faint); }
+.composer__bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.composer__model {
+  display: inline-flex; align-items: center; gap: 5px; border: none; background: transparent;
+  color: var(--muted); font: inherit; font-family: var(--sys); font-size: var(--fs-sm); font-weight: 600;
+  border-radius: var(--r-sm); padding: 5px 9px; cursor: pointer; transition: background var(--sp), color var(--sp);
+}
+.composer__model:hover { background: var(--fill-strong); color: var(--ink); }
+.composer__caret { color: var(--faint); font-size: 11px; }
+.composer__send {
+  width: 22px; height: 22px; border: none; border-radius: 50%;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  color: var(--accent-ink); font-size: 14px; cursor: pointer;
+  box-shadow: 0 2px 8px var(--accent-soft);
+  transition: filter var(--sp), transform var(--sp), box-shadow var(--sp);
+}
+.composer__send:disabled { opacity: .4; cursor: default; box-shadow: none; }
+.composer__send:not(:disabled):hover { filter: brightness(1.07); }
+.composer__send:not(:disabled):active { transform: scale(.92); }
+
+/* resize grip */
+.resizer {
+  position: absolute; right: 3px; bottom: 3px; width: 14px; height: 14px; z-index: 6;
+  cursor: nwse-resize; opacity: .5;
+  background-image:
+    linear-gradient(135deg, transparent 44%, var(--faint) 44%, var(--faint) 56%, transparent 56%),
+    linear-gradient(135deg, transparent 68%, var(--faint) 68%, var(--faint) 80%, transparent 80%);
+  transition: opacity var(--sp);
+}
+.resizer:hover { opacity: .95; }
+
+/* ⌥-tap inline feedback */
+.inline--work { color: var(--muted); }
+.inline--ok { color: var(--live); }
+.inline--warn { color: var(--warn); }
+.inline__dot { width: 6px; height: 6px; border-radius: 50%; flex: none; background: currentColor; }
+.inline__dot--work { animation: live-pulse 1s ease-in-out infinite; }
+
+/* settings */
+.settings { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.settings__head { flex: none; display: flex; align-items: center; justify-content: space-between; padding: 9px 10px 9px 14px; border-bottom: 1px solid var(--line); }
+.settings__title { font-size: var(--fs-lg); font-weight: 640; letter-spacing: -0.01em; }
+.settings__body { flex: 1; min-height: 0; overflow-y: auto; padding: 9px; display: flex; flex-direction: column; gap: 8px; }
+.set { background: var(--card); border: 1px solid var(--line); border-radius: var(--r-sm); padding: 8px 9px; }
+.set__label { font-size: var(--fs-xs); letter-spacing: .06em; color: var(--faint); margin-bottom: 5px; }
+.set__hint { margin-top: 4px; font-size: var(--fs-sm); line-height: 1.35; color: var(--muted); }
+.set__hint.is-ok { color: var(--live); }
+.set__hint.is-err { color: var(--warn); }
+.seg { display: flex; gap: 4px; background: var(--fill); border: 1px solid var(--line); border-radius: var(--r-md); padding: 4px; }
+.seg__opt {
+  flex: 1; border: none; background: transparent; color: var(--muted);
+  font: inherit; font-family: var(--sys); font-size: var(--fs-sm); padding: 6px 0;
+  border-radius: var(--r-sm); cursor: pointer; transition: background var(--sp), color var(--sp);
+}
+.seg__opt:hover { color: var(--ink); }
+.seg__opt.is-on { background: var(--fill-strong); color: var(--ink); font-weight: 600; }
+.keys { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 3px 0; }
+.keys__name { font-size: var(--fs-md); color: var(--ink); }
+.keys__combo { display: flex; gap: 4px; flex: none; }
+.keys__combo--fixed { padding: 2px; opacity: .8; cursor: default; }
+kbd {
+  display: inline-grid; place-items: center; min-width: 23px; height: 23px; padding: 0 6px;
+  border-radius: var(--r-xs); background: var(--fill-strong); border: 1px solid var(--line);
+  font-family: var(--sys); font-size: var(--fs-sm); font-weight: 700;
+}
+.keyrow { display: flex; gap: 6px; margin-top: 6px; }
+.keyrow__input {
+  flex: 1; min-width: 0; font: inherit; font-size: var(--fs-sm); padding: 6px 10px;
+  border-radius: var(--r-sm); border: 1px solid var(--line); background: var(--fill-strong);
+  color: var(--ink); outline: none; transition: border-color var(--sp);
+}
+.keyrow__btn {
+  font: inherit; font-size: var(--fs-sm); padding: 6px 12px; border-radius: var(--r-sm);
+  border: 1px solid var(--line); background: var(--fill-strong); color: var(--ink);
+  cursor: pointer; transition: background var(--sp);
+}
+.keyrow__btn:hover:not(:disabled) { background: var(--fill); }
+.keyrow__btn:disabled { opacity: .4; cursor: default; }
+.keyrow__btn--danger { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, var(--line)); }
+.keyrow__btn--go { background: var(--accent); border-color: transparent; color: var(--accent-ink); font-weight: 600; }
+.keyrow__btn--go:hover:not(:disabled) { background: var(--accent); filter: brightness(1.07); }
+.conns { display: flex; flex-direction: column; margin-top: 8px; }
+.conn { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 0; border-top: 1px solid var(--line); }
+.conn:first-child { border-top: none; }
+.conn__mark {
+  flex: none; width: 20px; height: 20px; border-radius: var(--r-pill);
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: var(--fs-xs); font-weight: 700; line-height: 1;
+  color: var(--tint); background: color-mix(in srgb, var(--tint) 18%, transparent);
+  border: 1px solid color-mix(in srgb, var(--tint) 34%, transparent);
+}
+.conn__meta { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.conn__name { font-size: var(--fs-md); color: var(--ink); font-weight: 600; }
+.conn__state { font-size: var(--fs-xs); color: var(--faint); }
+.conn__state.is-ok { color: var(--live); }
+.conn__state.is-warn { color: var(--warn); }
+.apprs { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; }
+.appr { border: 1px solid var(--line); border-radius: var(--r-sm); padding: 9px 10px; background: var(--fill); }
+.appr__top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.appr__op { font-size: var(--fs-md); font-weight: 660; color: var(--ink); }
+.appr__route { font-size: var(--fs-xs); color: var(--faint); text-align: right; }
+.appr__body {
+  margin: 7px 0; padding: 8px 9px; max-height: 160px; overflow: auto;
+  border-radius: var(--r-xs); background: var(--fill-strong); color: var(--ink);
+  font-family: var(--sys); font-size: var(--fs-sm); line-height: 1.45; white-space: pre-wrap; user-select: text;
+}
+.appr__acts { display: flex; gap: 6px; }
+.castle { display: flex; justify-content: center; padding: 4px 0 2px; }
+.castle__screen {
+  position: relative; width: 100%; max-width: 244px; aspect-ratio: 16/10;
+  border: 1px solid var(--line-strong); border-radius: var(--r-md); background: var(--fill);
+}
+.castle__screen::before {
+  content: ""; position: absolute; top: -1px; left: 50%; transform: translateX(-50%);
+  width: 40px; height: 5px; background: var(--line-strong); border-radius: 0 0 4px 4px;
+}
+.castle__spot {
+  position: absolute; border: none; padding: 0; cursor: pointer; opacity: .5;
+  background: color-mix(in srgb, var(--ink) 34%, transparent);
+  border-radius: var(--r-pill);
+  transition: opacity var(--sp), background var(--sp), box-shadow var(--sp);
+}
+.castle__spot:hover { opacity: .85; }
+.castle__spot.is-on { opacity: 1; background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.castle__spot--notch { top: 7px; left: 50%; transform: translateX(-50%); width: 34px; height: 7px; border-radius: 0 0 5px 5px; }
+.castle__spot--left { left: 8px; top: 50%; transform: translateY(-50%); width: 6px; height: 42px; }
+.castle__spot--right { right: 8px; top: 50%; transform: translateY(-50%); width: 6px; height: 42px; }
+.castle__spot--bc { bottom: 8px; left: 50%; transform: translateX(-50%); width: 48px; height: 6px; }
+.castle__spot--bl { left: 9px; bottom: 9px; width: 22px; height: 16px; border-radius: 5px; }
+.castle__spot--br { right: 9px; bottom: 9px; width: 22px; height: 16px; border-radius: 5px; }
+.mexcl { margin-top: 10px; }
+.mexcl__label { font-size: var(--fs-xs); color: var(--muted); margin-bottom: 6px; }
+.mexcl__row {
+  display: flex; align-items: center; gap: 8px; padding: 5px 8px;
+  background: var(--fill); border: 1px solid var(--line); border-radius: var(--r-sm);
+}
+.mexcl__id { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-xs); }
+.mexcl__rm { flex: none; font: inherit; font-size: var(--fs-xs); color: var(--muted); background: none; border: none; cursor: pointer; padding: 2px 4px; }
+.mexcl__rm:hover { color: var(--ink); }
+.chk { display: flex; gap: 6px; align-items: center; margin-top: 4px; font-size: var(--fs-sm); color: var(--muted); }
+
+/* ═══════ ミーティングオーバーレイ(MeetingOverlay.tsx / Issue #7) ═══════ */
+.ov-host { position: absolute; top: 40px; right: 18px; z-index: 6; }
+.ov {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px 10px 0;
+  background: var(--glass);
+  backdrop-filter: blur(34px) saturate(1.7);
+  border: 1px solid var(--line); border-radius: var(--r-lg);
+  box-shadow: 0 18px 44px rgba(0,0,0,.45);
+  color: var(--ink); font-family: var(--sys);
+  min-width: 320px;
+  animation: msg-in 180ms cubic-bezier(0.32,0.72,0,1);
+}
+.ov__grip {
+  flex: none; align-self: stretch; width: 14px; cursor: grab;
+  background-image: radial-gradient(currentColor 1px, transparent 1px);
+  background-size: 4px 6px; background-position: center; background-repeat: repeat-y;
+  color: var(--muted); opacity: .5; border-radius: var(--r-lg) 0 0 var(--r-lg);
+}
+.ov__body { flex: 1; min-width: 0; }
+.ov__kicker { font-size: var(--fs-xs); color: var(--muted); letter-spacing: .02em; }
+.ov__name { font-size: var(--fs-sm); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ov__name--sub { font-weight: 400; color: var(--muted); font-size: var(--fs-xs); }
+.ov__time { font-size: 19px; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.15; }
+.ov__acts { display: flex; align-items: center; gap: 8px; flex: none; }
+.ov__go {
+  display: inline-flex; align-items: center; gap: 8px;
+  font: inherit; font-size: var(--fs-sm); font-weight: 600; color: var(--ink);
+  background: var(--fill-strong); border: 1px solid var(--line); border-radius: var(--r-pill);
+  padding: 8px 14px; cursor: pointer; white-space: nowrap; transition: background var(--sp);
+}
+.ov__go:hover { background: var(--fill); }
+.ov__go--wide { width: 100%; justify-content: center; }
+.ov__count { font-variant-numeric: tabular-nums; font-weight: 400; color: var(--muted); font-size: var(--fs-xs); }
+.ov__quiet { font: inherit; font-size: var(--fs-xs); color: var(--muted); background: none; border: none; cursor: pointer; padding: 6px 2px; white-space: nowrap; }
+.ov__quiet:hover { color: var(--ink); }
+.ov__note {
+  flex: 1.3; min-width: 100px; font: inherit; font-size: var(--fs-xs); color: var(--ink);
+  background: var(--fill); border: 1px solid var(--line); border-radius: var(--r-pill);
+  padding: 7px 12px; outline: none;
+}
+.ov__note::placeholder { color: var(--muted); }
+.ov__stop {
+  display: inline-flex; align-items: center; gap: 7px; flex: none;
+  font: inherit; font-size: var(--fs-sm); font-weight: 600; color: var(--ink);
+  background: var(--fill-strong); border: 1px solid var(--line); border-radius: var(--r-pill);
+  padding: 8px 14px; cursor: pointer;
+}
+.ov__stopdot { width: 9px; height: 9px; border-radius: 2px; background: #ff453a; flex: none; }
+.ov--recap { align-items: stretch; padding: 0; max-width: 420px; }
+.ov__recap { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px; padding: 14px 16px 14px 6px; }
+.ov__rhead { display: flex; align-items: baseline; gap: 8px; }
+.ov__rtitle { font-size: var(--fs-sm); font-weight: 600; }
+.ov__rmin { flex: none; font-size: var(--fs-xs); color: var(--muted); font-variant-numeric: tabular-nums; }
+.ov__rbody { flex: 1; min-height: 0; max-height: 220px; overflow: auto; }
+.ov__rnotes { margin: 0; font: inherit; font-size: var(--fs-xs); line-height: 1.6; white-space: pre-wrap; }
+.ov__rempty { font-size: var(--fs-xs); color: var(--muted); }
+.ov__minutes { margin-top: 12px; padding-top: 12px; border-top: 1px solid rgba(128,128,128,.2); display: flex; flex-direction: column; gap: 10px; }
+.ov__msec { display: flex; flex-direction: column; gap: 4px; }
+.ov__mhead { font-size: var(--fs-xs); font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.ov__msummary { margin: 0; font-size: var(--fs-xs); line-height: 1.6; }
+.ov__mlist { margin: 0; padding-left: 16px; font-size: var(--fs-xs); line-height: 1.6; }
+.ov__mowner { margin-left: 6px; padding: 0 6px; border-radius: 8px; font-size: var(--fs-xs); color: var(--muted); background: rgba(128,128,128,.15); }
+
+/* ═══════ Full UI(FullUi.tsx / spec §D) ═══════ */
+.fullwin {
+  position: relative; width: 100%; height: 640px;
+  border-radius: 12px; overflow: hidden; border: 1px solid #2A2A2A;
+  box-shadow: 0 30px 80px rgba(0,0,0,.5);
+}
+.fullwin__lights { position: absolute; top: 15px; left: 16px; display: flex; gap: 7px; z-index: 3; }
+.full { height: 100%; display: flex; flex-direction: column; background: #101319; color: var(--ink); overflow: hidden; font-family: var(--sys); }
+:root[data-appearance="light"] .full { background: #f7f8fb; }
+.full__body { flex: 1; min-height: 0; display: flex; }
+.side { width: 236px; flex: none; display: flex; flex-direction: column; gap: 2px; padding: 44px 12px 18px; border-right: 1px solid var(--line); overflow-y: auto; }
+.side__brand { display: flex; align-items: center; gap: 10px; padding: 4px 10px 18px; }
+.side__name { font-size: var(--fs-xl); font-weight: 700; letter-spacing: -0.01em; }
+.side__group { font-size: var(--fs-xs); font-weight: 600; letter-spacing: .09em; color: var(--faint); padding: 16px 12px 8px; }
+.side__item {
+  display: flex; align-items: center; gap: 12px; width: 100%; padding: 9px 12px;
+  border: none; background: none; border-radius: var(--r-sm); color: var(--muted);
+  font: inherit; font-family: var(--sys); font-size: var(--fs-lg); text-align: left; cursor: pointer;
+  transition: background var(--sp), color var(--sp);
+}
+.side__item:hover { background: var(--fill); color: var(--ink); }
+.side__item.is-on { background: var(--fill-strong); color: var(--ink); font-weight: 600; }
+.side__plan {
+  margin: 2px 10px 0; align-self: flex-start; font-size: var(--fs-xs); font-weight: 600;
+  color: var(--muted); background: var(--fill); border: 1px solid var(--line);
+  border-radius: var(--r-pill); padding: 3px 10px;
+}
+.pane { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.pane__head { flex: none; padding: 40px 30px 18px; border-bottom: 1px solid var(--line); animation: row-in 240ms cubic-bezier(0.32,0.72,0,1) both; }
+.pane__title { font-size: 21px; font-weight: 620; letter-spacing: -0.018em; }
+.pane__sub { margin-top: 5px; font-size: var(--fs-lg); color: var(--muted); line-height: 1.5; }
+.pane__body { flex: 1; min-height: 0; overflow-y: auto; padding: 22px 30px 30px; display: flex; flex-direction: column; gap: 18px; }
+.fcard { background: var(--card); border: 1px solid var(--line); border-radius: var(--r-lg); overflow: hidden; animation: row-in 260ms cubic-bezier(0.32,0.72,0,1) both; }
+.fcard__label { font-size: var(--fs-xs); font-weight: 700; letter-spacing: .09em; color: var(--accent); padding: 16px 18px 2px; }
+.fcard__sub { padding: 7px 18px 0; font-size: var(--fs-lg); color: var(--muted); line-height: 1.55; }
+.frow { display: flex; align-items: center; justify-content: space-between; gap: 22px; padding: 15px 18px; border-top: 1px solid var(--line); }
+.frow__lead { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.frow__t { font-size: var(--fs-xl); font-weight: 550; }
+.frow__d { font-size: var(--fs-lg); color: var(--muted); line-height: 1.5; }
+.frow__trail { flex: none; display: flex; align-items: center; gap: 10px; }
+.hgrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+.hcard {
+  display: flex; flex-direction: column; gap: 10px; min-height: 132px; padding: 16px 17px;
+  background: var(--card); border: 1px solid var(--line); border-radius: var(--r-lg);
+  transition: border-color var(--sp), transform var(--sp);
+  animation: row-in 260ms cubic-bezier(0.32,0.72,0,1) both;
+}
+.hcard:hover { border-color: var(--line-strong); transform: translateY(-1px); }
+.hcard--wide { grid-column: span 2; }
+.hcard__k { font-size: var(--fs-xs); font-weight: 700; letter-spacing: .09em; color: var(--faint); }
+.hcard__v { flex: 1; font-size: var(--fs-xl); line-height: 1.5; }
+.hcard__fix {
+  align-self: flex-start; border: none; background: none; padding: 0; color: var(--accent);
+  font: inherit; font-family: var(--sys); font-size: var(--fs-lg); font-weight: 550; cursor: pointer;
+}
+.hcard__fix:hover { text-decoration: underline; }
+.mix { display: flex; height: 7px; border-radius: var(--r-pill); overflow: hidden; background: var(--fill-strong); margin-bottom: 9px; }
+.thead, .trow { display: flex; gap: 14px; align-items: center; }
+.thead { padding: 11px 18px; border-bottom: 1px solid var(--line); font-size: var(--fs-xs); font-weight: 600; letter-spacing: .07em; color: var(--faint); }
+.trow { padding: 12px 18px; font-size: var(--fs-lg); border-top: 1px solid var(--line); }
+.trow:hover { background: var(--fill); }
+.trow--flag { background: color-mix(in srgb, var(--warn) 10%, transparent); }
+.c-time { width: 74px; flex: none; color: var(--muted); font-variant-numeric: tabular-nums; }
+.c-grow { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.c-mid { width: 130px; flex: none; color: var(--muted); }
+.c-end { width: 96px; flex: none; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+.c-digest { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: var(--fs-md); color: var(--faint); }
+.lvl { font-size: var(--fs-xs); font-weight: 700; padding: 2px 8px; border-radius: var(--r-pill); border: 1px solid var(--line); }
+.lvl--l1 { color: var(--live); background: color-mix(in srgb, var(--live) 14%, transparent); }
+.lvl--l2 { color: var(--accent); background: var(--accent-soft); }
+.lvl--l3 { color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, transparent); }
+.pillbadge {
+  display: inline-flex; align-items: center; gap: 7px; font-size: var(--fs-md); font-weight: 550;
+  border-radius: var(--r-pill); padding: 5px 12px; border: 1px solid var(--line);
+  background: var(--fill); color: var(--muted);
+}
+.pillbadge__dot { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); }
+.pillbadge--ok { color: var(--live); background: color-mix(in srgb, var(--live) 12%, transparent); }
+.pillbadge--ok .pillbadge__dot { background: var(--live); }
+.pillbadge--warn { color: var(--warn); background: color-mix(in srgb, var(--warn) 12%, transparent); }
+.pillbadge--warn .pillbadge__dot { background: var(--warn); }
+.fbtn {
+  border: 1px solid var(--line-strong); background: var(--fill); color: var(--ink);
+  font: inherit; font-family: var(--sys); font-size: var(--fs-lg); font-weight: 550;
+  padding: 8px 15px; border-radius: var(--r-sm); cursor: pointer;
+  transition: background var(--sp), transform var(--sp);
+}
+.fbtn:hover { background: var(--fill-strong); }
+.fbtn--go { background: var(--accent); border-color: transparent; color: var(--accent-ink); }
+.brief__h { font-size: var(--fs-xs); font-weight: 700; letter-spacing: .09em; color: var(--accent); margin-bottom: 8px; }
+.brief__sec { padding: 14px 18px; border-top: 1px solid var(--line); }
+.brief__p { font-size: var(--fs-xl); line-height: 1.62; }
+.brief__b { display: flex; gap: 10px; align-items: baseline; font-size: var(--fs-lg); line-height: 1.55; padding: 3px 0; }
+.conf { flex: none; font-size: var(--fs-xs); font-weight: 600; padding: 2px 8px; border-radius: var(--r-pill); }
+.conf--high { color: var(--live); background: color-mix(in srgb, var(--live) 14%, transparent); }
+.conf--medium { color: var(--accent); background: var(--accent-soft); }
+.conf--low { color: var(--muted); background: var(--fill-strong); }
+.fempty { padding: 14px 18px 18px; font-size: var(--fs-lg); line-height: 1.6; color: var(--muted); max-width: 68ch; }
+
+/* ═══════ オンボーディング(Onboarding.tsx / Issue #46) ═══════ */
+.ob-stage { display: flex; justify-content: center; padding: 30px 0; }
+.ob {
+  width: 560px; border-radius: var(--r-xl); overflow: hidden;
+  background: var(--glass-2); backdrop-filter: blur(34px) saturate(1.7);
+  border: 1px solid var(--line); box-shadow: 0 30px 80px rgba(0,0,0,.5);
+  color: var(--ink); font-family: var(--sys); padding: 26px 28px;
+}
+.ob__brand { display: flex; align-items: center; gap: 9px; font-weight: 700; font-size: var(--fs-lg); margin-bottom: 16px; }
+.ob h2 { font-size: 19px; font-weight: 650; letter-spacing: -0.015em; }
+.ob__lead { margin-top: 8px; font-size: var(--fs-lg); color: var(--muted); line-height: 1.6; }
+.ob__cols { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 16px; }
+.ob__col { background: var(--card); border: 1px solid var(--line); border-radius: var(--r-md); padding: 12px 14px; }
+.ob__colh { font-size: var(--fs-xs); font-weight: 700; letter-spacing: .07em; color: var(--faint); margin-bottom: 8px; }
+.ob__col ul { margin: 0; padding-left: 16px; font-size: var(--fs-sm); color: var(--muted); line-height: 1.65; }
+.ob__steps { margin-top: 16px; }
+.ob__steps ol { margin: 8px 0 0; padding-left: 20px; font-size: var(--fs-sm); color: var(--muted); line-height: 1.9; }
+.ob__cta {
+  margin-top: 18px; display: inline-flex; align-items: center; gap: 8px;
+  font: inherit; font-size: var(--fs-lg); font-weight: 600;
+  background: var(--accent); color: var(--accent-ink); border: none;
+  border-radius: var(--r-sm); padding: 10px 18px; cursor: pointer;
+}
+.ob__skip { margin-left: 10px; font: inherit; font-size: var(--fs-sm); color: var(--muted); background: none; border: none; cursor: pointer; }
+.ob__status { margin-top: 12px; font-size: var(--fs-sm); color: var(--muted); display: flex; align-items: center; gap: 8px; }
+</style>
+</head>
+<body>
+
+<header class="sim-head">
+  <h1><span class="mark">⚔</span>SHOGUN — 最新UI可視化</h1>
+  <p>
+    <code>apps/desktop/src</code> の最新実装(App.tsx / MeetingOverlay.tsx / FullUi.tsx / styles.css)を
+    そのまま HTML に移植した操作可能シミュレータです。文言・寸法・アニメーション・タイミング(ホバー展開 250ms /
+    自動格納 400ms / インライン表示保持 2.2s)は実装値に一致させています。
+  </p>
+</header>
+
+<nav class="sim-tabs">
+  <button class="sim-tab is-on" data-scene="desktop">① ノッチパネル(常駐UI)</button>
+  <button class="sim-tab" data-scene="meeting">② ミーティングオーバーレイ</button>
+  <button class="sim-tab" data-scene="fullui">③ Full UI(別ウィンドウ)</button>
+  <button class="sim-tab" data-scene="onboarding">④ オンボーディング</button>
+</nav>
+
+<!-- ═══════════ シーン 1: デスクトップ + ノッチパネル ═══════════ -->
+<div class="sim-scene is-on" id="scene-desktop">
+  <div class="sim-bar">
+    <button class="sim-btn" onclick="simInline('ok')">⌥タップ(ドラフト成功)</button>
+    <button class="sim-btn" onclick="simInline('no_key')">⌥タップ(キー未設定)</button>
+    <button class="sim-btn" onclick="simInline('no_context')">⌥タップ(編集フィールドなし)</button>
+    <button class="sim-btn" onclick="setAppearance('dark')">Dark</button>
+    <button class="sim-btn" onclick="setAppearance('light')">Light</button>
+  </div>
+  <div class="sim-note">
+    <b>挙動:</b> 折りたたみ時はピルだけがノッチからぶら下がる。ピルに <b>250ms</b> ホバーで展開(通過では開かない)。
+    ピン解除時はポインタが離れて <b>400ms</b> で自動格納(入力中・回答生成中は格納しない)。
+    ⚙︎ で設定(パネルが 460px に伸びる)、▁ で最小化、⤢ で Full UI。設定内の Castle Position を選ぶと常駐位置が移動します。
+  </div>
+  <div class="sim-stage-wrap">
+    <div class="mac" id="mac">
+      <div class="menubar">
+        <div class="menubar__l"><span></span><b>Mail</b><span>File</span><span>Edit</span><span>View</span></div>
+        <div class="menubar__r"><span>⌃⌥N to summon</span><span id="clock">9:41</span></div>
+      </div>
+      <div class="notch"></div>
+
+      <div class="dummywin">
+        <div class="dummywin__bar">
+          <span class="tl tl--r"></span><span class="tl tl--y"></span><span class="tl tl--g"></span>
+          <span class="dummywin__title">Re: Vendor renewal — Alice Reyes</span>
+        </div>
+        <div class="dummywin__body">
+          <b>Alice Reyes</b> — Tue 9:02 AM<br>
+          Hi — just checking on the renewal terms we discussed…
+          <div class="dummyline" style="width:88%"></div>
+          <div class="dummyline" style="width:74%"></div>
+          <div class="dummyline" style="width:81%"></div>
+          <div class="dummyline" style="width:40%"></div>
+        </div>
+      </div>
+
+      <!-- SHOGUN パネルホスト -->
+      <div class="host" id="host" data-pos="notch"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ シーン 2: ミーティングオーバーレイ ═══════════ -->
+<div class="sim-scene" id="scene-meeting">
+  <div class="sim-bar">
+    <button class="sim-btn" onclick="meetingOffer()">会議を検知させる(offered)</button>
+    <button class="sim-btn" onclick="meetingIdle()">リセット(idle)</button>
+  </div>
+  <div class="sim-note">
+    <b>挙動:</b> 会議アプリのフォーカスを検知すると右上に独立ウィンドウで提案が出る(ノッチとは別。視線が会議画面にあるため)。
+    「Take notes」ボタン内で締切カウントダウンが進み、0で自動辞退。ノート中は経過時計が常に動き、<b>Stop は確認なしの最大ターゲット</b>。
+    緑のドットであり録音ランプ(赤)ではない — 音声は保存されないため。Stop 後は Recap が即時表示され、
+    モデル生成の Minutes(Summary / Decisions / Next actions)は Batch レーンから<b>あとから</b>届いてカードに重なります(約3秒でシミュレート)。
+  </div>
+  <div class="sim-stage-wrap">
+    <div class="mac">
+      <div class="menubar">
+        <div class="menubar__l"><span></span><b>zoom.us</b><span>Meeting</span><span>Edit</span></div>
+        <div class="menubar__r"><span>9:41</span></div>
+      </div>
+      <div class="notch"></div>
+      <div class="dummywin" style="left:10%; top:14%; width:62%; height:70%;">
+        <div class="dummywin__bar">
+          <span class="tl tl--r"></span><span class="tl tl--y"></span><span class="tl tl--g"></span>
+          <span class="dummywin__title">Weekly sync</span>
+        </div>
+        <div class="dummywin__body">
+          <b>Weekly sync</b> — 3 participants
+          <div class="dummyline" style="width:92%; height:120px; border-radius:10px;"></div>
+        </div>
+      </div>
+      <div class="ov-host" id="ovHost"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ シーン 3: Full UI ═══════════ -->
+<div class="sim-scene" id="scene-fullui">
+  <div class="sim-bar">
+    <span style="font-size:11px;color:#666;">プラン:</span>
+    <button class="sim-btn" id="planPro" onclick="setPlan('pro')">Pro</button>
+    <button class="sim-btn" id="planStd" onclick="setPlan('standard')">Standard</button>
+  </div>
+  <div class="sim-note">
+    <b>挙動:</b> パネルの ⤢ から開く別ウィンドウ。パネルは「一瞥と一打鍵」、Full UI は「座って読む」場所。
+    6ペイン構成(Today / Context Health / Sources / Memory / Activity / Traceability)。
+    数値はすべて Rust コアが組み立てて渡す(webview は描くだけ)。プラン出し分けもデータ側で行われる —
+    Standard に切り替えるとエージェント実行履歴・第三者経由送信が「存在しない」状態で描画されます。
+    低confidenceの行は「possibly:」で必ずヘッジされ、事実として描かれません。
+  </div>
+  <div class="sim-stage-wrap">
+    <div class="fullwin">
+      <div class="fullwin__lights">
+        <span class="tl tl--r"></span><span class="tl tl--y"></span><span class="tl tl--g"></span>
+      </div>
+      <div class="full" id="fullRoot"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ シーン 4: オンボーディング ═══════════ -->
+<div class="sim-scene" id="scene-onboarding">
+  <div class="sim-bar">
+    <button class="sim-btn" onclick="obState('guide')">許可前(guide)</button>
+    <button class="sim-btn" onclick="obState('waiting')">設定を開いた後(waiting)</button>
+    <button class="sim-btn" onclick="obState('granted')">許可済み(success)</button>
+  </div>
+  <div class="sim-note">
+    <b>挙動:</b> 初回起動時の Accessibility 許可ガイド(Issue #46)。「何が有効になるか」「何を絶対にしないか」を先に開示し、
+    System Settings への導線を1つだけ置く。許可されるまでポーリングし、済むと success 画面に切り替わる。
+  </div>
+  <div class="sim-stage-wrap">
+    <div class="mac" style="aspect-ratio: 16/9;">
+      <div class="menubar"><div class="menubar__l"><span></span><b>SHOGUN</b></div><div class="menubar__r"><span>9:41</span></div></div>
+      <div class="notch"></div>
+      <div class="ob-stage"><div class="ob" id="obRoot"></div></div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ════════════════════════════════════════════════════════════════
+   共通: タブ・テーマ
+   ════════════════════════════════════════════════════════════════ */
+document.querySelectorAll('.sim-tab').forEach(function (tab) {
+  tab.addEventListener('click', function () {
+    document.querySelectorAll('.sim-tab').forEach(function (t) { t.classList.remove('is-on'); });
+    document.querySelectorAll('.sim-scene').forEach(function (s) { s.classList.remove('is-on'); });
+    tab.classList.add('is-on');
+    document.getElementById('scene-' + tab.dataset.scene).classList.add('is-on');
+  });
+});
+function setAppearance(mode) {
+  document.documentElement.setAttribute('data-appearance', mode);
+  state.appearance = mode;
+  render();
+}
+
+var LOGO_SVG =
+  '<svg width="24" height="24" viewBox="0 0 100 100" role="img" aria-label="ShogunAI">' +
+  '<defs><linearGradient id="smg" x1="0.15" y1="0.08" x2="0.85" y2="0.92">' +
+  '<stop offset="0" stop-color="#38bdf8"/><stop offset="0.5" stop-color="#0aa5f4"/><stop offset="1" stop-color="#0b74d6"/>' +
+  '</linearGradient></defs>' +
+  '<path d="M66 20 L34 34 L66 60 L34 80" fill="none" stroke="url(#smg)" stroke-width="26" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+var PIN_SVG = function (pinned) {
+  return '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" ' +
+    'stroke-linecap="round" stroke-linejoin="round"' + (pinned ? '' : ' style="transform:rotate(45deg)"') + '>' +
+    '<path d="M9 4h6l-1 6 3 3H7l3-3-1-6z"/><path d="M12 13v7"/></svg>';
+};
+
+/* ════════════════════════════════════════════════════════════════
+   シーン1: ノッチパネル — App.tsx の状態機械を再現
+   実装定数: HOVER_DWELL_MS=250, AUTO_COLLAPSE_MS=400, INLINE_HOLD_MS=2200
+   ════════════════════════════════════════════════════════════════ */
+var HOVER_DWELL_MS = 250, AUTO_COLLAPSE_MS = 400, INLINE_HOLD_MS = 2200;
+
+var state = {
+  open: true,               // App.tsx: 常に展開で起動
+  settings: false,
+  pinned: true,             // 既定 pinned=true
+  showState: false,
+  thinking: false,
+  msgs: [],
+  input: '',
+  inline: null,             // {phase} — ⌥タップのフィードバック
+  provider: 'anthropic',
+  appearance: 'dark',
+  castle: 'notch',
+  commitments: [
+    { id: 1, text: 'Send Alice the Q3 deck', meta: 'overdue' },
+    { id: 2, text: 'Reply to the vendor about pricing', meta: '70% sure' }
+  ],
+  open_loops: [ { id: 1, text: 'Waiting on legal sign-off', meta: '3d waiting' } ],
+  hasKey: true,
+  meetingOn: true,
+  excluded: ['com.spotify.client'],
+  composio: { hasKey: true, last4: '8f2a', consent: false, draftStop: true, c1: false, c2: false, c3: false },
+  aiSessions: false,
+  approvals: [
+    { id: 1, op: 'Send email — Alice Reyes', dest: 'alice@vendor.com', route: 'composio',
+      body: 'Subject: Renewal terms\n\nHi Alice,\n\nConfirming the terms we discussed: 12-month renewal at the current rate, review clause in month 6.\n\nBest,\nT' }
+  ],
+  confirming: false, confirmText: '', cleared: false
+};
+
+var PROVIDERS = [
+  { id: 'anthropic', label: 'Claude API', model: 'claude-sonnet-5', ph: 'Paste your Anthropic API key…' },
+  { id: 'openrouter', label: 'OpenRouter', model: 'anthropic/claude-sonnet-4.5', ph: 'Paste your OpenRouter API key…' },
+  { id: 'openai', label: 'OpenAI', model: 'gpt-4o-mini', ph: 'Paste your OpenAI API key…' },
+  { id: 'gemini', label: 'Gemini', model: 'gemini-2.5-flash', ph: 'Paste your Gemini API key…' }
+];
+var CONNECTIONS = [
+  { source: 'gmail', label: 'Gmail', tint: '#EA4335', state: 'connected', sync: '9:38 AM' },
+  { source: 'gcal', label: 'Google Calendar', tint: '#1A73E8', state: 'connected', sync: '9:29 AM' },
+  { source: 'gdrive', label: 'Google Drive', tint: '#0F9D58', state: 'disconnected', sync: null },
+  { source: 'slack', label: 'Slack', tint: '#611f69', state: 'needs_reauth', sync: null },
+  { source: 'notion', label: 'Notion', tint: '#9aa3af', state: 'coming_soon', sync: null },
+  { source: 'github', label: 'GitHub', tint: '#9aa3af', state: 'coming_soon', sync: null },
+  { source: 'linear', label: 'Linear', tint: '#5E6AD2', state: 'coming_soon', sync: null }
+];
+var CONN_STATE_LABEL = { connected: 'Connected', needs_reauth: 'Needs reauth', disconnected: 'Not connected', coming_soon: 'Coming soon' };
+var CASTLES = [
+  { id: 'notch', label: 'Notch', cls: 'castle__spot--notch' },
+  { id: 'left_edge', label: 'Left edge', cls: 'castle__spot--left' },
+  { id: 'right_edge', label: 'Right edge', cls: 'castle__spot--right' },
+  { id: 'bottom_left', label: 'Bottom left', cls: 'castle__spot--bl' },
+  { id: 'bottom_center', label: 'Bottom', cls: 'castle__spot--bc' },
+  { id: 'bottom_right', label: 'Bottom right', cls: 'castle__spot--br' }
+];
+
+var INLINE_COPY = {
+  drafting: { text: 'Drafting…', tone: 'work' },
+  inserted: { text: 'Drafted', tone: 'ok' },
+  no_context: { text: 'No editable field here', tone: 'warn' },
+  no_key: { text: 'Add a key in settings to draft', tone: 'warn' },
+  key_rejected: { text: 'Key rejected — check it in settings', tone: 'warn' },
+  failed: { text: "Couldn't draft", tone: 'warn' }
+};
+
+function esc(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+var host = document.getElementById('host');
+var hoverTimer = null, leaveTimer = null, inlineTimer = null;
+
+/* ⌥-tap simulation: drafting → 成果 → INLINE_HOLD_MS 後にライブ表示へ戻る */
+function simInline(kind) {
+  clearTimeout(inlineTimer);
+  if (kind === 'ok') {
+    state.inline = { phase: 'drafting' };
+    render();
+    inlineTimer = setTimeout(function () {
+      state.inline = { phase: 'inserted' };
+      render();
+      inlineTimer = setTimeout(function () { state.inline = null; render(); }, INLINE_HOLD_MS);
+    }, 1100);
+  } else {
+    state.inline = { phase: kind };
+    render();
+    inlineTimer = setTimeout(function () { state.inline = null; render(); }, INLINE_HOLD_MS);
+  }
+}
+
+function inlineChip(cls) {
+  var line = state.inline ? INLINE_COPY[state.inline.phase] : null;
+  if (line) {
+    return '<span class="' + cls + ' inline--' + line.tone + '">' +
+      '<span class="inline__dot' + (line.tone === 'work' ? ' inline__dot--work' : '') + '"></span>' + esc(line.text) + '</span>';
+  }
+  return '<span class="' + cls + '"><span class="live__dot"></span>reading&nbsp;<b>Mail</b></span>';
+}
+
+function expand() { state.open = true; render(); }
+function collapse() { state.settings = false; state.open = false; render(); }
+
+function onHandleEnter() {
+  clearTimeout(hoverTimer);
+  hoverTimer = setTimeout(function () { expand(); }, HOVER_DWELL_MS);
+}
+function onHandleLeave() { clearTimeout(hoverTimer); }
+function onPanelEnter() { clearTimeout(leaveTimer); }
+function onPanelLeave() {
+  if (state.pinned) return;
+  clearTimeout(leaveTimer);
+  leaveTimer = setTimeout(function () {
+    var composerFocused = document.activeElement && document.activeElement.classList.contains('composer__input');
+    if (composerFocused || state.input.trim().length > 0 || state.thinking) return;
+    state.settings = false; state.open = false; render();
+  }, AUTO_COLLAPSE_MS);
+}
+
+function resolveItem(kind, id) {
+  if (kind === 'c') state.commitments = state.commitments.filter(function (c) { return c.id !== id; });
+  else state.open_loops = state.open_loops.filter(function (l) { return l.id !== id; });
+  render();
+}
+
+function send() {
+  var q = state.input.trim();
+  if (!q || state.thinking) return;
+  state.input = '';
+  state.msgs.push({ role: 'me', text: q });
+  state.thinking = true;
+  render();
+  setTimeout(function () {  // 実装のモック応答(IN_TAURI=false 分岐)と同じ 700ms
+    state.msgs.push({
+      role: 'shogun',
+      text: "I'd start with the overdue deck for Alice — want me to draft it at your cursor?",
+      citations: ['Weekly sync', 'Mail — Alice Reyes']
+    });
+    state.thinking = false;
+    render();
+  }, 700);
+}
+
+/* ── レンダリング ───────────────────────────────────────────── */
+function render() {
+  host.setAttribute('data-pos', state.castle);
+  if (!state.open) { host.innerHTML = renderHandle(); bindHandle(); return; }
+  host.innerHTML = state.settings ? renderSettingsPanel() : renderChatPanel();
+  bindPanel();
+}
+
+function renderHandle() {
+  var counts = '';
+  if (state.commitments.length > 0) counts = '<span class="handle__count">' + state.commitments.length + ' due</span>';
+  else if (state.open_loops.length > 0) counts = '<span class="handle__count">' + state.open_loops.length + ' waiting</span>';
+  return '<div class="stage stage--handle">' +
+    '<button class="handle" id="hHandle" type="button" title="Open ShogunAI (⌥J)">' +
+    inlineChip('handle__live') + counts + '</button></div>';
+}
+
+function bindHandle() {
+  var h = document.getElementById('hHandle');
+  h.addEventListener('click', function () { clearTimeout(hoverTimer); expand(); });
+  h.addEventListener('pointerenter', onHandleEnter);
+  h.addEventListener('pointerleave', onHandleLeave);
+}
+
+function renderChatPanel() {
+  var total = state.commitments.length + state.open_loops.length;
+  var head =
+    '<header class="head">' +
+      '<div class="head__left">' + inlineChip('srcchip') +
+        (total > 0
+          ? '<button class="chip" id="hStateChip" type="button" aria-pressed="' + state.showState + '">' +
+            state.commitments.length + ' due · ' + state.open_loops.length + ' waiting</button>'
+          : '') +
+      '</div>' +
+      '<div class="head__right">' +
+        '<button class="icon' + (state.pinned ? ' icon--on' : '') + '" id="hPin" type="button" title="' +
+          (state.pinned ? 'Let it withdraw when I look away' : 'Keep open') + '">' + PIN_SVG(state.pinned) + '</button>' +
+        '<button class="icon" id="hFull" type="button" title="Open ShogunAI window">⤢</button>' +
+        '<button class="icon" id="hSettings" type="button" title="Settings">⚙︎</button>' +
+        '<button class="icon" id="hMin" type="button" title="Minimize to the notch">▁</button>' +
+        '<button class="icon icon--close" type="button" title="Quit ShogunAI">✕</button>' +
+      '</div>' +
+    '</header>';
+
+  var stateList = '';
+  if (state.showState) {
+    var rows = '';
+    state.commitments.forEach(function (c) {
+      rows += '<button type="button" class="state__row" data-kind="c" data-id="' + c.id + '" title="Click to mark done">' +
+        '<span class="state__check">✓</span><span class="state__text">' + esc(c.text) + '</span>' +
+        '<span class="state__meta' + (c.meta === 'overdue' ? ' is-over' : '') + '">' + esc(c.meta) + '</span></button>';
+    });
+    state.open_loops.forEach(function (l) {
+      rows += '<button type="button" class="state__row" data-kind="l" data-id="' + l.id + '" title="Click to mark done">' +
+        '<span class="state__check">✓</span><span class="state__text">' + esc(l.text) + '</span>' +
+        '<span class="state__meta">' + esc(l.meta) + '</span></button>';
+    });
+    if (!rows) rows = '<div class="state__empty">Nothing tracked yet.</div>';
+    stateList = '<div class="state">' + rows + '</div>';
+  }
+
+  var thread = '';
+  if (state.msgs.length === 0) {
+    thread = '<div class="welcome">' +
+      '<div class="welcome__t">What can I take off your plate?</div>' +
+      '<div class="welcome__s">Ask about your work, or tap ⌥ (Option) in any app to draft where you’re typing.</div>' +
+      (!state.hasKey ? '<div class="welcome__key">No key yet — add one in settings for real answers.</div>' : '') +
+      '</div>';
+  } else {
+    state.msgs.forEach(function (m) {
+      var cites = '';
+      if (m.citations) {
+        cites = '<div class="cites"><span class="cites__label">Sources</span>' +
+          m.citations.map(function (c) { return '<span class="cite">' + esc(c) + '</span>'; }).join('') + '</div>';
+      }
+      thread += '<div class="msg msg--' + m.role + '">' + esc(m.text) + cites + '</div>';
+    });
+  }
+  if (state.thinking) {
+    thread += '<div class="msg msg--shogun msg--think"><span class="think__dot"></span><span class="think__dot"></span><span class="think__dot"></span></div>';
+  }
+
+  var provider = PROVIDERS.find(function (p) { return p.id === state.provider; });
+  var composer =
+    '<div class="composer"><div class="composer__card">' +
+      '<input class="composer__input" id="hInput" placeholder="Ask ShogunAI…" value="' + esc(state.input) + '">' +
+      '<div class="composer__bar">' +
+        '<button class="composer__model" id="hModel" type="button" title="Model">' + provider.label +
+          ' <span class="composer__caret">⌄</span></button>' +
+        '<div class="composer__tools">' +
+          '<button class="composer__send" id="hSend" type="button" title="Send"' +
+            (!state.input.trim() || state.thinking ? ' disabled' : '') + '>↑</button>' +
+        '</div>' +
+      '</div>' +
+    '</div></div>';
+
+  return '<div class="stage"><div class="panel" id="hPanel">' +
+    head + stateList +
+    '<div class="thread" id="hThread">' + thread + '</div>' +
+    composer +
+    '<div class="resizer" title="Drag to resize"></div>' +
+    '</div></div>';
+}
+
+function renderSettingsPanel() {
+  var s = state;
+  var approvals = '';
+  if (s.approvals.length > 0) {
+    approvals = '<section class="set"><div class="set__label">Approvals</div>' +
+      '<div class="set__hint">Anything that leaves your device waits here for your explicit confirmation.</div>' +
+      '<div class="apprs">' +
+      s.approvals.map(function (a) {
+        return '<div class="appr"><div class="appr__top"><span class="appr__op">' + esc(a.op) + '</span>' +
+          '<span class="appr__route">' + esc(a.dest) + ' · ' + (a.route === 'composio' ? 'third-party (Composio)' : 'direct') + '</span></div>' +
+          '<pre class="appr__body">' + esc(a.body) + '</pre>' +
+          '<div class="appr__acts">' +
+          '<button class="keyrow__btn keyrow__btn--go" data-appr-ok="' + a.id + '" type="button">Confirm &amp; send</button>' +
+          '<button class="keyrow__btn" data-appr-no="' + a.id + '" type="button">Reject</button>' +
+          '</div></div>';
+      }).join('') + '</div></section>';
+  }
+
+  var meeting =
+    '<section class="set"><div class="set__label">Meeting notes</div>' +
+    '<div class="seg">' +
+      '<button type="button" class="seg__opt' + (s.meetingOn ? ' is-on' : '') + '" data-meeting="1">On</button>' +
+      '<button type="button" class="seg__opt' + (!s.meetingOn ? ' is-on' : '') + '" data-meeting="0">Off</button>' +
+    '</div>' +
+    '<div class="set__hint">Offers a place to write when a meeting starts. One tap declines, one tap stops.</div>' +
+    (s.meetingOn
+      ? '<div class="mexcl"><div class="mexcl__label">Never offer for</div>' +
+        (s.excluded.length === 0
+          ? '<div class="set__hint">No apps excluded</div>'
+          : s.excluded.map(function (id) {
+              return '<div class="mexcl__row"><span class="mexcl__id">' + esc(id) + '</span>' +
+                '<button type="button" class="mexcl__rm" data-excl="' + esc(id) + '">Remove</button></div>';
+            }).join('')) + '</div>'
+      : '') +
+    '<div class="set__hint">Nothing joins your call and no audio is captured. SHOGUN opens a note beside the meeting; what you write stays on this Mac.</div>' +
+    '</section>';
+
+  var conns = '<section class="set"><div class="set__label">Connections</div>' +
+    '<div class="set__hint">First-layer integrations connect directly to each service. Data stays on your device.</div>' +
+    '<div class="conns">' +
+    CONNECTIONS.map(function (c) {
+      var mod = c.state === 'connected' ? ' is-ok' : c.state === 'needs_reauth' ? ' is-warn' : '';
+      var connected = c.state === 'connected' || c.state === 'needs_reauth';
+      var btn = connected
+        ? '<button class="keyrow__btn" type="button">Disconnect</button>'
+        : '<button class="keyrow__btn" type="button"' + (c.state === 'coming_soon' ? ' disabled title="Not available yet"' : '') + '>Connect</button>';
+      return '<div class="conn">' +
+        '<span class="conn__mark" style="--tint:' + c.tint + '">' + c.label.charAt(0) + '</span>' +
+        '<div class="conn__meta"><span class="conn__name">' + c.label + '</span>' +
+        '<span class="conn__state' + mod + '">' + CONN_STATE_LABEL[c.state] + (c.sync ? ' · ' + c.sync : '') + '</span></div>' +
+        btn + '</div>';
+    }).join('') + '</div></section>';
+
+  var cw = s.composio;
+  var composio = '<section class="set"><div class="set__label">Sending (Composio)</div>' +
+    '<div class="set__hint">Optional. Enables sending email through Composio. Off by default — a key and explicit consent are required before any message leaves this device.</div>' +
+    '<div class="set__hint' + (cw.hasKey ? ' is-ok' : '') + '">' + (cw.hasKey ? 'Key added ·· ' + cw.last4 : 'No key') + '</div>' +
+    (cw.consent
+      ? '<div class="keyrow"><span class="set__hint is-ok" style="margin:0;align-self:center;">Consent granted</span>' +
+        '<button class="keyrow__btn" type="button" data-composio-revoke>Revoke</button></div>'
+      : '<div class="set__hint">Before enabling sending</div>' +
+        '<label class="chk"><input type="checkbox" data-cchk="c1"' + (cw.c1 ? ' checked' : '') + '> Sends go through Composio, a third-party service.</label>' +
+        '<label class="chk"><input type="checkbox" data-cchk="c2"' + (cw.c2 ? ' checked' : '') + '> Your recipient, subject, and message body leave this device.</label>' +
+        '<label class="chk"><input type="checkbox" data-cchk="c3"' + (cw.c3 ? ' checked' : '') + '> You can turn this off at any time.</label>' +
+        '<div class="keyrow"><button class="keyrow__btn" type="button" data-composio-grant' +
+          (cw.c1 && cw.c2 && cw.c3 ? '' : ' disabled') + '>Grant consent</button></div>') +
+    '<label class="chk" style="opacity:' + (cw.consent ? 1 : 0.4) + '">' +
+      '<input type="checkbox" data-draftstop' + (cw.draftStop ? ' checked' : '') + (cw.consent ? '' : ' disabled') + '>' +
+      ' Draft-only mode (save a draft instead of sending)</label>' +
+    '</section>';
+
+  var ai = '<section class="set"><div class="set__label">AI sessions</div>' +
+    '<div class="seg">' +
+      '<button type="button" class="seg__opt' + (s.aiSessions ? ' is-on' : '') + '" data-ai="1">Importing</button>' +
+      '<button type="button" class="seg__opt' + (!s.aiSessions ? ' is-on' : '') + '" data-ai="0">Off</button>' +
+    '</div>' +
+    '<div class="set__hint">Read your local AI coding-tool transcripts so ShogunAI remembers what you worked on and decided there. Stays on your device.</div></section>';
+
+  var dream = '<section class="set"><div class="set__label">Nightly review</div>' +
+    '<div class="set__hint">While your Mac is idle overnight, ShogunAI works through the day and updates what it’s tracking.</div>' +
+    '<div class="conn"><div class="conn__meta">' +
+    '<span class="conn__state is-ok">Last run 2026-08-06</span>' +
+    '<span class="conn__state">1,204 events · 38 updates · 9 sent</span>' +
+    '</div><button class="keyrow__btn" type="button">Run now</button></div></section>';
+
+  var appearance = '<section class="set"><div class="set__label">Appearance</div><div class="seg">' +
+    ['dark', 'light', 'auto'].map(function (a) {
+      return '<button type="button" class="seg__opt' + (s.appearance === a ? ' is-on' : '') + '" data-appearance-opt="' + a + '">' +
+        a.charAt(0).toUpperCase() + a.slice(1) + '</button>';
+    }).join('') + '</div></section>';
+
+  var castle = '<section class="set"><div class="set__label">Castle Position</div>' +
+    '<div class="castle"><div class="castle__screen">' +
+    CASTLES.map(function (c) {
+      return '<button type="button" class="castle__spot ' + c.cls + (s.castle === c.id ? ' is-on' : '') +
+        '" data-castle="' + c.id + '" title="' + c.label + '"></button>';
+    }).join('') + '</div></div>' +
+    '<div class="set__hint">Where SHOGUN lives on screen. Edges rest as a thin line, corners as a small box; hover to expand from wherever it’s anchored.</div></section>';
+
+  var shortcuts = '<section class="set"><div class="set__label">Shortcuts</div>' +
+    '<div class="keys"><span class="keys__name">Draft with ShogunAI</span>' +
+    '<span class="keys__combo keys__combo--fixed" title="Tap ⌥ (Option) alone — always on, not rebindable."><kbd>⌥</kbd></span></div>' +
+    '<div class="keys"><span class="keys__name">Show / hide overlay</span>' +
+    '<span class="keys__combo"><kbd>⌃</kbd><kbd>⌥</kbd><kbd>N</kbd></span></div>' +
+    '<div class="keys"><span class="keys__name">Quit</span>' +
+    '<span class="keys__combo"><kbd>⌃</kbd><kbd>⌥</kbd><kbd>Q</kbd></span></div>' +
+    '<div class="set__hint">Click a shortcut to change it. Saved instantly, works everywhere.</div></section>';
+
+  var prov = PROVIDERS.find(function (p) { return p.id === s.provider; });
+  var model = '<section class="set"><div class="set__label">Model</div><div class="seg">' +
+    PROVIDERS.map(function (p) {
+      return '<button type="button" class="seg__opt' + (s.provider === p.id ? ' is-on' : '') + '" data-provider="' + p.id + '">' + p.label + '</button>';
+    }).join('') + '</div>' +
+    '<div class="set__hint">Runs on ' + prov.model + '</div>' +
+    '<div class="set__hint">Chat and ⌥-tap drafts run on this provider with your own key. Each provider keeps its own key below.</div></section>';
+
+  var key = '<section class="set"><div class="set__label">Your key</div>' +
+    '<div class="set__hint' + (s.hasKey ? ' is-ok' : '') + '">' +
+      (s.hasKey ? 'Connected — answers and drafts are yours.' : 'Not set — ShogunAI will echo until you add a key.') + '</div>' +
+    '<div class="set__hint">Kept per provider — switching doesn’t remove the others.</div>' +
+    '<div class="keyrow"><input class="keyrow__input" type="password" placeholder="' + prov.ph + '">' +
+    '<button class="keyrow__btn" type="button" disabled>Save</button>' +
+    (s.hasKey ? '<button class="keyrow__btn" type="button">Remove</button>' : '') +
+    '</div></section>';
+
+  var stateCount = s.commitments.length + s.open_loops.length;
+  var memory = '<section class="set"><div class="set__label">Memory</div>' +
+    '<div class="set__hint">Removes the commitments and open loops ShogunAI extracted. Your captured history stays. This can’t be undone.</div>' +
+    (!s.confirming
+      ? '<div class="keyrow"><button class="keyrow__btn keyrow__btn--danger" type="button" data-clear-start' +
+        (stateCount === 0 ? ' disabled' : '') + '>Clear extracted state' + (stateCount > 0 ? ' (' + stateCount + ')' : '') + '</button>' +
+        (s.cleared ? '<span class="set__hint is-ok" style="margin:0;align-self:center;">Cleared.</span>' : '') + '</div>'
+      : '<div class="set__hint is-err">Permanently delete ' + stateCount + ' extracted items? Type CLEAR to confirm.</div>' +
+        '<div class="keyrow"><input class="keyrow__input" id="hClearInput" placeholder="Type CLEAR" value="' + esc(s.confirmText) + '">' +
+        '<button class="keyrow__btn" type="button" data-clear-cancel>Cancel</button>' +
+        '<button class="keyrow__btn keyrow__btn--danger" type="button" data-clear-go' +
+        (s.confirmText.trim().toUpperCase() === 'CLEAR' ? '' : ' disabled') + '>Delete</button></div>') +
+    '</section>';
+
+  return '<div class="stage"><div class="panel is-settings" id="hPanel">' +
+    '<div class="settings">' +
+    '<header class="settings__head"><span class="settings__title">Settings</span>' +
+    '<button class="chip" id="hDone" type="button">Done</button></header>' +
+    '<div class="settings__body">' +
+    approvals + meeting + conns + composio + ai + dream + appearance + castle + shortcuts + model + key + memory +
+    '</div></div>' +
+    '<div class="resizer" title="Drag to resize"></div>' +
+    '</div></div>';
+}
+
+function bindPanel() {
+  var panel = document.getElementById('hPanel');
+  panel.addEventListener('pointerenter', onPanelEnter);
+  panel.addEventListener('pointerleave', onPanelLeave);
+
+  var q = function (id) { return document.getElementById(id); };
+  if (q('hStateChip')) q('hStateChip').addEventListener('click', function () { state.showState = !state.showState; render(); });
+  if (q('hPin')) q('hPin').addEventListener('click', function () { state.pinned = !state.pinned; render(); });
+  if (q('hSettings')) q('hSettings').addEventListener('click', function () { state.settings = true; render(); });
+  if (q('hMin')) q('hMin').addEventListener('click', collapse);
+  if (q('hFull')) q('hFull').addEventListener('click', function () {
+    document.querySelector('[data-scene="fullui"]').click();
+  });
+  if (q('hDone')) q('hDone').addEventListener('click', function () { state.settings = false; render(); });
+  if (q('hModel')) q('hModel').addEventListener('click', function () { state.settings = true; render(); });
+
+  panel.querySelectorAll('.state__row').forEach(function (row) {
+    row.addEventListener('click', function () { resolveItem(row.dataset.kind, Number(row.dataset.id)); });
+  });
+
+  var input = q('hInput');
+  if (input) {
+    input.addEventListener('input', function () {
+      state.input = input.value;
+      var btn = q('hSend');
+      if (btn) btn.disabled = !state.input.trim() || state.thinking;
+    });
+    input.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+    });
+  }
+  if (q('hSend')) q('hSend').addEventListener('click', send);
+  var thread = q('hThread');
+  if (thread) thread.scrollTop = thread.scrollHeight;
+
+  /* settings bindings */
+  panel.querySelectorAll('[data-appearance-opt]').forEach(function (b) {
+    b.addEventListener('click', function () { setAppearance(b.dataset.appearanceOpt === 'auto' ? 'dark' : b.dataset.appearanceOpt); state.appearance = b.dataset.appearanceOpt; render(); });
+  });
+  panel.querySelectorAll('[data-castle]').forEach(function (b) {
+    b.addEventListener('click', function () { state.castle = b.dataset.castle; render(); });
+  });
+  panel.querySelectorAll('[data-provider]').forEach(function (b) {
+    b.addEventListener('click', function () { state.provider = b.dataset.provider; render(); });
+  });
+  panel.querySelectorAll('[data-meeting]').forEach(function (b) {
+    b.addEventListener('click', function () { state.meetingOn = b.dataset.meeting === '1'; render(); });
+  });
+  panel.querySelectorAll('[data-ai]').forEach(function (b) {
+    b.addEventListener('click', function () { state.aiSessions = b.dataset.ai === '1'; render(); });
+  });
+  panel.querySelectorAll('[data-excl]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      state.excluded = state.excluded.filter(function (id) { return id !== b.dataset.excl; });
+      render();
+    });
+  });
+  panel.querySelectorAll('[data-appr-ok],[data-appr-no]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      var id = Number(b.dataset.apprOk || b.dataset.apprNo);
+      state.approvals = state.approvals.filter(function (a) { return a.id !== id; });
+      render();
+    });
+  });
+  panel.querySelectorAll('[data-cchk]').forEach(function (b) {
+    b.addEventListener('change', function () { state.composio[b.dataset.cchk] = b.checked; render(); });
+  });
+  var grant = panel.querySelector('[data-composio-grant]');
+  if (grant) grant.addEventListener('click', function () { state.composio.consent = true; render(); });
+  var revoke = panel.querySelector('[data-composio-revoke]');
+  if (revoke) revoke.addEventListener('click', function () {
+    // 実装同様: 同意撤回で draft_stop は強制的にONへ戻る
+    state.composio.consent = false; state.composio.draftStop = true;
+    state.composio.c1 = state.composio.c2 = state.composio.c3 = false;
+    render();
+  });
+  var ds = panel.querySelector('[data-draftstop]');
+  if (ds) ds.addEventListener('change', function () { state.composio.draftStop = ds.checked; render(); });
+  var cs = panel.querySelector('[data-clear-start]');
+  if (cs) cs.addEventListener('click', function () { state.confirming = true; state.cleared = false; render(); });
+  var cc = panel.querySelector('[data-clear-cancel]');
+  if (cc) cc.addEventListener('click', function () { state.confirming = false; state.confirmText = ''; render(); });
+  var ci = q('hClearInput');
+  if (ci) {
+    ci.focus();
+    ci.addEventListener('input', function () {
+      state.confirmText = ci.value;
+      var go = panel.querySelector('[data-clear-go]');
+      if (go) go.disabled = state.confirmText.trim().toUpperCase() !== 'CLEAR';
+    });
+  }
+  var cg = panel.querySelector('[data-clear-go]');
+  if (cg) cg.addEventListener('click', function () {
+    if (state.confirmText.trim().toUpperCase() !== 'CLEAR') return;
+    state.commitments = []; state.open_loops = [];
+    state.confirming = false; state.confirmText = ''; state.cleared = true;
+    render();
+  });
+}
+
+/* ════════════════════════════════════════════════════════════════
+   シーン2: ミーティングオーバーレイ — MeetingOverlay.tsx を再現
+   ════════════════════════════════════════════════════════════════ */
+var ovHost = document.getElementById('ovHost');
+var meeting = { state: 'idle', countdown: 15, elapsed: 0, note: '', notes: [], minutes: null };
+var meetTimer = null;
+
+function meetingIdle() {
+  clearInterval(meetTimer);
+  meeting = { state: 'idle', countdown: 15, elapsed: 0, note: '', notes: [], minutes: null };
+  renderMeeting();
+}
+function meetingOffer() {
+  clearInterval(meetTimer);
+  meeting.state = 'offered'; meeting.countdown = 15;
+  meetTimer = setInterval(function () {
+    meeting.countdown--;
+    if (meeting.countdown <= 0) { meetingIdle(); return; }  // 期限切れ = 自動辞退
+    renderMeeting();
+  }, 1000);
+  renderMeeting();
+}
+function meetingStart() {
+  clearInterval(meetTimer);
+  meeting.state = 'recording'; meeting.elapsed = 0;
+  meetTimer = setInterval(function () { meeting.elapsed += 1000; renderMeeting(); }, 1000);
+  renderMeeting();
+}
+function meetingStop() {
+  clearInterval(meetTimer);
+  if (meeting.note.trim()) meeting.notes.push(meeting.note.trim());
+  meeting.state = 'wrapping'; meeting.minutes = null;
+  renderMeeting();
+  // Minutes は Batch レーンから非同期に届く(MT4)— 3秒でシミュレート
+  setTimeout(function () {
+    if (meeting.state !== 'wrapping') return;
+    meeting.minutes = {
+      summary: 'Renewal terms agreed in principle; deck revision is the blocking item before the launch review.',
+      decisions: ['Renew for 12 months at the current rate', 'Add a review clause at month 6'],
+      next_actions: [
+        { text: 'Send the revised deck', owner: 'You' },
+        { text: 'Share the redlined contract', owner: 'Alice' }
+      ]
+    };
+    renderMeeting();
+  }, 3000);
+}
+
+function clockStr(ms) {
+  var t = Math.max(0, Math.floor(ms / 1000));
+  return Math.floor(t / 60) + ':' + String(t % 60).padStart(2, '0');
+}
+
+function renderMeeting() {
+  var grip = '<div class="ov__grip" title="Notes"></div>';
+  if (meeting.state === 'idle') { ovHost.innerHTML = ''; return; }
+  if (meeting.state === 'offered') {
+    ovHost.innerHTML = '<div class="ov ov--offer">' + grip +
+      '<div class="ov__body"><div class="ov__kicker">Meeting detected</div><div class="ov__name">Weekly sync</div></div>' +
+      '<div class="ov__acts">' +
+      '<button type="button" class="ov__go" onclick="meetingStart()">Take notes <span class="ov__count">' + meeting.countdown + '</span></button>' +
+      '<button type="button" class="ov__quiet" onclick="meetingIdle()">Not now</button>' +
+      '</div></div>';
+    return;
+  }
+  if (meeting.state === 'recording') {
+    ovHost.innerHTML = '<div class="ov">' + grip +
+      '<div class="ov__body"><div class="ov__time">' + clockStr(meeting.elapsed) + '</div>' +
+      '<div class="ov__name ov__name--sub">Weekly sync</div></div>' +
+      '<input class="ov__note" id="ovNote" placeholder="Type your notes…" value="' + esc(meeting.note) + '">' +
+      '<button type="button" class="ov__stop" onclick="meetingStop()"><span class="ov__stopdot"></span>Stop</button>' +
+      '</div>';
+    var n = document.getElementById('ovNote');
+    n.addEventListener('input', function () { meeting.note = n.value; });
+    n.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' && meeting.note.trim()) { meeting.notes.push(meeting.note.trim()); meeting.note = ''; n.value = ''; }
+    });
+    return;
+  }
+  // wrapping — degraded Recap、Minutes は届き次第重ねる
+  var m = meeting.minutes;
+  var notesHtml = meeting.notes.length
+    ? '<pre class="ov__rnotes">' + esc(meeting.notes.join('\n')) + '</pre>'
+    : '<div class="ov__rempty">You didn’t write anything this time.</div>';
+  var minutesHtml = '';
+  if (m) {
+    minutesHtml = '<div class="ov__minutes">' +
+      '<div class="ov__msec"><div class="ov__mhead">Summary</div><p class="ov__msummary">' + esc(m.summary) + '</p></div>' +
+      '<div class="ov__msec"><div class="ov__mhead">Decisions</div><ul class="ov__mlist">' +
+      m.decisions.map(function (d) { return '<li>' + esc(d) + '</li>'; }).join('') + '</ul></div>' +
+      '<div class="ov__msec"><div class="ov__mhead">Next actions</div><ul class="ov__mlist">' +
+      m.next_actions.map(function (a) {
+        return '<li>' + esc(a.text) + (a.owner ? '<span class="ov__mowner">' + esc(a.owner) + '</span>' : '') + '</li>';
+      }).join('') + '</ul></div></div>';
+  } else {
+    minutesHtml = '<div class="ov__minutes"><div class="ov__rempty">Preparing notes…</div></div>';
+  }
+  ovHost.innerHTML = '<div class="ov ov--recap">' + grip +
+    '<div class="ov__recap">' +
+    '<div class="ov__rhead"><span class="ov__rtitle">Meeting notes — Weekly sync</span>' +
+    '<span class="ov__rmin">' + Math.max(1, Math.round(meeting.elapsed / 60000)) + ' min</span></div>' +
+    '<div class="ov__rbody">' + notesHtml + minutesHtml + '</div>' +
+    '<button type="button" class="ov__go ov__go--wide" onclick="meetingIdle()">Done</button>' +
+    '</div></div>';
+}
+
+/* ════════════════════════════════════════════════════════════════
+   シーン3: Full UI — FullUi.tsx + sample.ts のデータをそのまま使用
+   ════════════════════════════════════════════════════════════════ */
+var SAMPLE = {
+  pro: {
+    plan: 'pro',
+    health: {
+      cards: [
+        { label: 'COVERAGE', value: '18h / 24h captured', fix: 'Open capture rules' },
+        { label: 'BLIND SPOTS', value: '2h focused in an unconnected app', detail: '3 events with no source', fix: 'Unmute · report as a gap' },
+        { label: 'FRESHNESS', value: 'Mail 3m · Calendar 12m · Slack —', fix: 'Re-authenticate Slack' },
+        { label: 'YIELD', value: '1,204 → 38 → 9 tracked', fix: 'Language settings' },
+        { label: 'GROUNDING', value: '71% of answers cited a source', fix: 'Widen the search window' },
+        { label: 'EGRESS', value: '12 chunks · 84 KB', detail: '0 third-party', fix: 'Open Traceability' }
+      ],
+      mix: { high: 0, medium: 62, low: 38 },
+      slo: [
+        { name: 'Panel expand', p50: 58, p95: 92, target: '100ms' },
+        { name: 'Local search', p50: 120, p95: 410, target: '500ms' },
+        { name: 'Action buttons', p50: 88, p95: 134, target: '150ms' },
+        { name: 'Cache refresh', p50: 96, p95: 240, target: '300ms' },
+        { name: 'First token', p50: 340, p95: 820, target: '1s' },
+        { name: 'Idle CPU', p50: 1.4, p95: 3.8, target: '5%' }
+      ]
+    },
+    today: {
+      sections: [
+        { heading: 'TODAY', body: 'Three meetings, and the vendor renewal needs to close before the launch review on the 14th. Your afternoon is clear after 3 PM — that’s the window for the deck.', bullets: [] },
+        { heading: 'COMMITMENTS DUE', body: null, bullets: ['Send the revised deck to Alice — due today', 'Confirm the launch date with the team — due Friday'] },
+        { heading: 'OPEN LOOPS', body: null, bullets: ['Vendor hasn’t replied on renewal terms — waiting 3 days'] }
+      ],
+      actions: [
+        { label: 'Open the renewal thread', locked: false },
+        { label: 'Prep for Weekly sync', locked: false },
+        { label: 'Draft the deck email', locked: true }
+      ],
+      schedule: [
+        { time: '10:00', title: 'Weekly sync', detail: '3 people · recurring' },
+        { time: '13:30', title: 'Vendor call — renewal terms', detail: 'Alice Reyes · the open thread' }
+      ]
+    },
+    sources: {
+      sources: [
+        { name: 'Mail', scope: 'read + draft', freshness: '3m ago', health: 'ok', third: false },
+        { name: 'Calendar', scope: 'read', freshness: '12m ago', health: 'ok', third: false },
+        { name: 'Slack', scope: 'read', freshness: 'token expired', health: 'warn', third: false },
+        { name: 'Mail sending', scope: 'send only', freshness: '—', health: 'ok', third: true }
+      ],
+      exclusions: [
+        { title: 'Password managers & banking', detail: 'Always excluded — can’t be turned off.', locked: true },
+        { title: 'Private browsing windows', detail: 'Excluded by default.', locked: false, enabled: true },
+        { title: 'Custom exclusions', detail: '2 apps, 1 window title pattern.', locked: false, enabled: true }
+      ]
+    },
+    memory: {
+      commitments: [
+        { text: 'You: send the revised deck to Alice', detail: 'From Weekly sync · 3 segments · due today', conf: 'medium' },
+        { text: 'Alice: owns the vendor thread', detail: 'From Weekly sync · 2 segments', conf: 'medium' },
+        { text: 'review Q3 numbers before the board call', detail: 'From Mail · 1 segment', conf: 'low' }
+      ],
+      merges: [ { names: 'Alice Reyes · A. Reyes · alice@vendor.com', detail: '3 records · first seen 12 days ago' } ]
+    },
+    activity: {
+      pending: [ { title: 'Send email — Alice Reyes', level: 'L3', detail: 'Drafted 9:12 AM · leaves the device via a third party' } ],
+      runs: [
+        { time: '09:12', action: 'Draft reply — vendor renewal', level: 'L2', by: 'One-tap', egress: '3 chunks' },
+        { time: '08:55', action: 'Extract commitments from Weekly sync', level: 'L1', by: 'Automatic', egress: null },
+        { time: '02:14', action: 'Nightly review — reclassify open loops', level: 'L1', by: 'Automatic', egress: '9 chunks' }
+      ],
+      nightly: { finished: '2:14 AM', events: '1,204', updates: 38, chunks: 9 }
+    },
+    trace: {
+      rows: [
+        { time: '09:14', route: 'third_party', purpose: 'Send email', dest: 'Composio', digest: 'sha256:4f9c…a12b', bytes: '1.2 KB' },
+        { time: '09:12', route: 'direct', purpose: 'Draft generation', dest: 'Your provider', digest: 'sha256:9b21…7e04', bytes: '18 KB' },
+        { time: '02:14', route: 'direct', purpose: 'Nightly classification', dest: 'Batch indexing', digest: 'sha256:1ae8…d550', bytes: '41 KB' }
+      ],
+      thirdCount: 1
+    }
+  }
+};
+/* Standard: sample.ts の SAMPLE_VIEW_STANDARD と同じ変換 — コア側がデータから消す */
+SAMPLE.standard = JSON.parse(JSON.stringify(SAMPLE.pro));
+SAMPLE.standard.plan = 'standard';
+SAMPLE.standard.today.actions.forEach(function (a) { a.locked = a.label === 'Draft the deck email'; });
+SAMPLE.standard.sources.sources = SAMPLE.standard.sources.sources
+  .filter(function (s) { return !s.third; })
+  .map(function (s) { s.scope = 'read-only'; return s; });
+SAMPLE.standard.activity.pending = [];
+SAMPLE.standard.activity.runs = [];
+SAMPLE.standard.trace.rows = SAMPLE.standard.trace.rows.filter(function (r) { return r.route === 'direct'; });
+SAMPLE.standard.trace.thirdCount = 0;
+
+var fullState = { plan: 'pro', pane: 'health' };
+var NAV = [
+  { id: 'today', label: 'Today' },
+  { id: 'health', label: 'Context Health' },
+  { id: 'sources', label: 'Sources', group: 'WHERE IT COMES FROM' },
+  { id: 'memory', label: 'Memory' },
+  { id: 'activity', label: 'Activity', group: 'WHAT IT DID' },
+  { id: 'trace', label: 'Traceability' }
+];
+var PANE_COPY = {
+  today: ['Today', 'Your brief, your schedule, and what to do about it.'],
+  health: ['Context Health', 'What ShogunAI can and can’t see right now — every number has a way to fix it.'],
+  sources: ['Sources', 'Where context comes from, how fresh it is, and what’s excluded.'],
+  memory: ['Memory', 'Everything ShogunAI has extracted, with the evidence behind it.'],
+  activity: ['Activity', 'What ran, at what level, and whether anything left.'],
+  trace: ['Traceability', 'Every byte that left this device — digest and size only, never content.']
+};
+
+function setPlan(p) { fullState.plan = p; renderFull(); }
+
+function renderFull() {
+  var v = SAMPLE[fullState.plan];
+  document.getElementById('planPro').style.borderColor = fullState.plan === 'pro' ? '#C8A96E' : '#2A2A2A';
+  document.getElementById('planStd').style.borderColor = fullState.plan === 'standard' ? '#C8A96E' : '#2A2A2A';
+
+  var side = '<nav class="side"><div class="side__brand">' + LOGO_SVG + '<span class="side__name">ShogunAI</span></div>' +
+    (v.plan !== 'pro' ? '<span class="side__plan">Standard</span>' : '') +
+    NAV.map(function (n) {
+      return (n.group ? '<div class="side__group">' + n.group + '</div>' : '') +
+        '<button type="button" class="side__item' + (fullState.pane === n.id ? ' is-on' : '') + '" data-pane="' + n.id + '">' + n.label + '</button>';
+    }).join('') + '</nav>';
+
+  var body = '';
+  var p = fullState.pane;
+
+  if (p === 'health') {
+    body = '<div class="hgrid">' +
+      v.health.cards.map(function (c) {
+        return '<div class="hcard"><div class="hcard__k">' + c.label + '</div>' +
+          '<div class="hcard__v">' + c.value + (c.detail ? '<div class="frow__d">' + c.detail + '</div>' : '') + '</div>' +
+          '<button type="button" class="hcard__fix">' + c.fix + ' →</button></div>';
+      }).join('') +
+      '<div class="hcard"><div class="hcard__k">CONFIDENCE MIX</div><div class="hcard__v">' +
+      '<div class="mix">' +
+      '<span style="width:' + v.health.mix.high + '%;background:var(--live)"></span>' +
+      '<span style="width:' + v.health.mix.medium + '%;background:var(--accent)"></span>' +
+      '<span style="width:' + v.health.mix.low + '%;background:var(--faint)"></span></div>' +
+      '<span class="frow__d">High ' + v.health.mix.high + '% · Medium ' + v.health.mix.medium + '% · Low ' + v.health.mix.low + '%</span>' +
+      '</div></div>' +
+      '<div class="hcard hcard--wide"><div class="hcard__k">LATENCY &amp; CPU</div>' +
+      '<div class="hcard__v" style="display:grid;grid-template-columns:1fr 1fr;gap:8px 26px;">' +
+      v.health.slo.map(function (s) {
+        return '<div style="display:flex;justify-content:space-between;font-size:var(--fs-md)">' +
+          '<span style="color:var(--muted)">' + s.name + '</span>' +
+          '<span style="font-variant-numeric:tabular-nums"><span style="color:var(--live)">' + s.p50 + '</span> · ' +
+          s.p95 + ' <span style="color:var(--faint)">/ ' + s.target + '</span></span></div>';
+      }).join('') + '</div></div></div>';
+  }
+
+  if (p === 'today') {
+    var brief = '<div class="fcard"><div class="fcard__label">MORNING BRIEF</div>' +
+      v.today.sections.map(function (s) {
+        return '<div class="brief__sec"><div class="brief__h">' + s.heading + '</div>' +
+          (s.body ? '<p class="brief__p">' + s.body + '</p>' : '') +
+          s.bullets.map(function (b) {
+            return '<div class="brief__b"><span style="color:var(--faint)">·</span><span>' + b + '</span></div>';
+          }).join('') + '</div>';
+      }).join('') +
+      '<div class="brief__sec"><div class="brief__h">SUGGESTED ACTIONS</div>' +
+      '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px;">' +
+      v.today.actions.map(function (a) {
+        return a.locked
+          ? '<span class="fbtn" style="color:var(--faint);cursor:default;">' + a.label + '</span>'
+          : '<button type="button" class="fbtn">' + a.label + '</button>';
+      }).join('') + '</div>' +
+      (v.today.actions.some(function (a) { return a.locked; })
+        ? '<div class="frow__d" style="margin-top:10px;">Drafting runs on your own key — that comes with Pro.</div>' : '') +
+      '</div></div>';
+    var sched = '<div class="fcard"><div class="fcard__label">SCHEDULE</div>' +
+      v.today.schedule.map(function (s) {
+        return '<div class="frow"><div class="frow__lead"><span class="frow__t">' + s.title + '</span>' +
+          '<span class="frow__d">' + s.time + ' · ' + s.detail + '</span></div>' +
+          '<div class="frow__trail"><button type="button" class="fbtn">Prep</button></div></div>';
+      }).join('') + '</div>';
+    body = brief + sched;
+  }
+
+  if (p === 'sources') {
+    body = '<div class="fcard"><div class="fcard__label">CONNECTED SERVICES</div>' +
+      '<div class="fcard__sub">Each one connects directly. Scope is what ShogunAI is allowed to read.</div>' +
+      v.sources.sources.map(function (s) {
+        return '<div class="frow"><div class="frow__lead"><span class="frow__t">' + s.name + '</span>' +
+          '<span class="frow__d">' + s.scope + ' · ' + s.freshness + '</span></div>' +
+          '<div class="frow__trail">' +
+          (s.third ? '<span class="pillbadge pillbadge--warn"><span class="pillbadge__dot"></span>third-party</span>' : '') +
+          '<span class="pillbadge ' + (s.health === 'ok' ? 'pillbadge--ok' : 'pillbadge--warn') + '">' +
+          '<span class="pillbadge__dot"></span>' + (s.health === 'ok' ? 'Healthy' : 'Needs attention') + '</span>' +
+          '</div></div>';
+      }).join('') + '</div>' +
+      '<div class="fcard"><div class="fcard__label">CAPTURE EXCLUSIONS</div>' +
+      '<div class="fcard__sub">Apps and windows ShogunAI never reads. Excluded time still counts against coverage.</div>' +
+      v.sources.exclusions.map(function (e) {
+        return '<div class="frow"><div class="frow__lead"><span class="frow__t">' + e.title + '</span>' +
+          '<span class="frow__d">' + e.detail + '</span></div>' +
+          '<div class="frow__trail"><span class="pillbadge">' +
+          (e.locked ? '<span class="pillbadge__dot"></span>Always excluded' : (e.enabled ? 'On' : 'Off')) +
+          '</span></div></div>';
+      }).join('') + '</div>';
+  }
+
+  if (p === 'memory') {
+    body = '<div class="fcard"><div class="fcard__label">COMMITMENTS</div>' +
+      '<div class="fcard__sub">Every row carries the evidence it came from and how sure ShogunAI is.</div>' +
+      v.memory.commitments.map(function (r) {
+        var confLabel = r.conf.charAt(0).toUpperCase() + r.conf.slice(1);
+        return '<div class="frow"><div class="frow__lead" style="flex-direction:row;align-items:center;gap:12px;">' +
+          '<span class="conf conf--' + r.conf + '">' + confLabel + '</span>' +
+          '<div style="display:flex;flex-direction:column;gap:3px;min-width:0;">' +
+          '<span class="frow__t"' + (r.conf === 'low' ? ' style="color:var(--muted)"' : '') + '>' +
+          (r.conf === 'low' ? '<span style="color:var(--faint)">possibly: </span>' : '') + r.text + '</span>' +
+          '<span class="frow__d">' + r.detail + '</span></div></div>' +
+          '<div class="frow__trail"><button type="button" class="hcard__fix">Why? →</button></div></div>';
+      }).join('') + '</div>' +
+      (v.memory.merges.length
+        ? '<div class="fcard"><div class="fcard__label">NEEDS YOUR EYE</div>' +
+          '<div class="fcard__sub">These look like the same person, but not confidently enough to merge on their own.</div>' +
+          v.memory.merges.map(function (m) {
+            return '<div class="frow"><div class="frow__lead"><span class="frow__t">' + m.names + '</span>' +
+              '<span class="frow__d">' + m.detail + '</span></div>' +
+              '<div class="frow__trail"><button type="button" class="fbtn">Keep separate</button>' +
+              '<button type="button" class="fbtn fbtn--go">Merge</button></div></div>';
+          }).join('') + '</div>'
+        : '');
+  }
+
+  if (p === 'activity') {
+    var pend = v.activity.pending.length === 0
+      ? '<div class="fcard"><div class="fcard__label">WAITING FOR YOU</div>' +
+        '<div class="fempty">Nothing waiting. Anything that would leave your device queues here first.</div></div>'
+      : v.activity.pending.map(function (a) {
+          return '<div class="fcard"><div class="fcard__label">WAITING FOR YOU</div><div class="frow">' +
+            '<div class="frow__lead" style="flex-direction:row;align-items:center;gap:12px;">' +
+            '<span class="lvl lvl--l3">' + a.level + '</span>' +
+            '<div style="display:flex;flex-direction:column;gap:3px;"><span class="frow__t">' + a.title + '</span>' +
+            '<span class="frow__d">' + a.detail + '</span></div></div>' +
+            '<div class="frow__trail"><button type="button" class="fbtn fbtn--go">Review</button></div></div></div>';
+        }).join('');
+    var runs = v.activity.runs.length === 0
+      ? '<div class="fcard"><div class="fcard__label">RUN HISTORY</div>' +
+        '<div class="fcard__sub" style="padding-bottom:18px;">Nothing has run. Agents are what carry an action out, and they come with Pro — so there’s no history here rather than an empty one.</div></div>'
+      : '<div class="fcard"><div class="fcard__label">RUN HISTORY</div>' +
+        '<div class="thead"><span class="c-time">Time</span><span class="c-grow">Action</span>' +
+        '<span class="c-mid">Approved by</span><span class="c-end">Left device</span></div>' +
+        v.activity.runs.map(function (r) {
+          return '<div class="trow"><span class="c-time">' + r.time + '</span>' +
+            '<span class="c-grow"><span class="lvl lvl--' + r.level.toLowerCase() + '" style="margin-right:10px;">' + r.level + '</span>' +
+            r.action + '</span><span class="c-mid">' + r.by + '</span>' +
+            '<span class="c-end">' + (r.egress || '—') + '</span></div>';
+        }).join('') + '</div>';
+    var nightly = '<div class="fcard"><div class="fcard__label">LAST NIGHTLY CYCLE</div><div class="frow">' +
+      '<div class="frow__lead"><span class="frow__t">Finished ' + v.activity.nightly.finished + '</span>' +
+      '<span class="frow__d">' + v.activity.nightly.events + ' events read · ' + v.activity.nightly.updates +
+      ' updates · ' + v.activity.nightly.chunks + ' chunks sent</span></div>' +
+      '<div class="frow__trail"><span class="pillbadge pillbadge--ok"><span class="pillbadge__dot"></span>Healthy</span>' +
+      '<button type="button" class="fbtn">Run now</button></div></div></div>';
+    body = pend + runs + nightly;
+  }
+
+  if (p === 'trace') {
+    body = '<div class="fcard"><div class="fcard__label">EVERYTHING THAT LEFT THIS DEVICE</div>' +
+      '<div class="fcard__sub">Content is never logged — only a digest and a byte count, so this page can’t leak what it records.</div>' +
+      '<div class="thead" style="margin-top:14px;"><span class="c-time">Time</span><span class="c-mid">Route</span>' +
+      '<span class="c-grow">Purpose</span><span class="c-mid">Destination</span><span class="c-grow">Digest</span>' +
+      '<span class="c-end">Bytes</span></div>' +
+      v.trace.rows.map(function (r) {
+        return '<div class="trow' + (r.route === 'third_party' ? ' trow--flag' : '') + '">' +
+          '<span class="c-time">' + r.time + '</span>' +
+          '<span class="c-mid">' + (r.route === 'third_party' ? 'third-party' : 'Direct') + '</span>' +
+          '<span class="c-grow">' + r.purpose + '</span><span class="c-mid">' + r.dest + '</span>' +
+          '<span class="c-grow c-digest">' + r.digest + '</span><span class="c-end">' + r.bytes + '</span></div>';
+      }).join('') +
+      (v.trace.thirdCount === 0
+        ? '<div class="frow"><div class="frow__lead"><span class="frow__t" style="color:var(--live)">No third-party routes</span>' +
+          '<span class="frow__d">Nothing was handed to another service to send on your behalf.</span></div></div>'
+        : '') + '</div>';
+  }
+
+  var copy = PANE_COPY[p];
+  document.getElementById('fullRoot').innerHTML =
+    '<div class="full__body">' + side +
+    '<section class="pane"><div class="pane__head"><div class="pane__title">' + copy[0] + '</div>' +
+    '<div class="pane__sub">' + copy[1] + '</div></div>' +
+    '<div class="pane__body">' + body + '</div></section></div>';
+
+  document.querySelectorAll('#fullRoot [data-pane]').forEach(function (b) {
+    b.addEventListener('click', function () { fullState.pane = b.dataset.pane; renderFull(); });
+  });
+}
+
+/* ════════════════════════════════════════════════════════════════
+   シーン4: オンボーディング(Accessibility 許可ガイド)
+   ════════════════════════════════════════════════════════════════ */
+var obRoot = document.getElementById('obRoot');
+function obState(mode) {
+  if (mode === 'granted') {
+    obRoot.innerHTML =
+      '<div class="ob__brand">' + LOGO_SVG + ' SHOGUN</div>' +
+      '<h2>You’re set</h2>' +
+      '<p class="ob__lead">SHOGUN can read your screen now. Reach it two ways: tap ⌥ (Option) in any app, or rest your cursor on the notch.</p>' +
+      '<button class="ob__cta" type="button">Open SHOGUN</button>';
+    return;
+  }
+  obRoot.innerHTML =
+    '<div class="ob__brand">' + LOGO_SVG + ' SHOGUN</div>' +
+    '<h2>Let SHOGUN read your screen</h2>' +
+    '<p class="ob__lead">SHOGUN builds your work context from on-screen text through macOS Accessibility. It reads text only — never images, never your keystrokes — and the context is built on this Mac.</p>' +
+    '<div class="ob__cols">' +
+      '<div class="ob__col"><div class="ob__colh">WHAT THIS TURNS ON</div><ul>' +
+        '<li>Draft right where you’re typing — tap ⌥ (Option) in any app.</li>' +
+        '<li>Open the notch panel and act on what you’re looking at.</li>' +
+        '<li>Answer from the memory it builds of your work.</li></ul></div>' +
+      '<div class="ob__col"><div class="ob__colh">WHAT IT NEVER DOES</div><ul>' +
+        '<li>Never captures images or screenshots.</li>' +
+        '<li>Never logs your keystrokes.</li>' +
+        '<li>Never sends your screen off this Mac.</li></ul></div>' +
+    '</div>' +
+    '<div class="ob__steps"><div class="ob__colh">GRANT IT IN SYSTEM SETTINGS</div><ol>' +
+      '<li>Open Privacy &amp; Security › Accessibility.</li>' +
+      '<li>Find SHOGUN in the list.</li>' +
+      '<li>Turn the SHOGUN toggle on.</li>' +
+      '<li>Authenticate with your password or Touch ID.</li></ol></div>' +
+    '<div>' +
+      '<button class="ob__cta" type="button" onclick="obState(\'waiting\')">' +
+        (mode === 'waiting' ? 'Open Settings again' : 'Open Accessibility Settings') + '</button>' +
+      '<button class="ob__skip" type="button">Do this later</button>' +
+    '</div>' +
+    (mode === 'waiting'
+      ? '<div class="ob__status"><span class="inline__dot inline__dot--work" style="color:var(--warn);background:currentColor;"></span>Waiting for permission… <span style="color:var(--faint)">Not granted yet</span></div>'
+      : '<div class="ob__status" style="color:var(--faint)">Until you grant it, drafting, the notch panel, and memory stay off. You can turn it on any time from Settings.</div>');
+}
+
+/* 時計 */
+(function () {
+  var el = document.getElementById('clock');
+  function tick() {
+    var d = new Date();
+    el.textContent = d.getHours() + ':' + String(d.getMinutes()).padStart(2, '0');
+  }
+  tick(); setInterval(tick, 15000);
+})();
+
+render();
+renderMeeting();
+renderFull();
+obState('guide');
+</script>
+</body>
+</html>
