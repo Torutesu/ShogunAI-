@@ -28,9 +28,13 @@ apps/desktop の React 実装へ反映 (Claude)
 (CSS・ロゴSVGはインライン済み、スクリプト・アニメーションは除去済み。単体で開いてもプラグインに
 上げても同じ見た目になる)。
 
+> ⚠️ **方針変更(2026-08-07)**: ノッチ以外のウィンドウUIは廃止(`docs/notch-first-ui-decision.md`)。
+> 設定・ビューは `notch-full--*` が正。`fullui-*` / `settings--*` は参照用として残している。
+
 | ファイル群 | フレーム数/テーマ | 内容 |
 |---|---|---|
 | `notch--{idle,welcome,answer,tracked,meeting}` | 5 | ノッチパネルの各ステート(idle=折りたたみピル、他は展開固定) |
+| `notch-full--{set-general,set-privacy,set-conn,set-model,set-approvals,today,memory,status}` | 8 | **ノッチファースト**: 設定5タブ+Today/Memory/Statusビュー(すべてパネル内、620×460) |
 | `fullui-pro--{today,health,sources,memory,activity,trace}` | 6 | Full UI (Pro) の各タブ |
 | `fullui-standard--{…同6タブ}` | 6 | Full UI (Standard) の各タブ |
 | `settings--{account,privacy,appearance,shortcuts,memory,connections,aisessions,model,nightly,approvals}` | 10 | 設定の各セクション |

@@ -1,0 +1,481 @@
+<!doctype html>
+<html lang="en" translate="no">
+<head>
+<meta charset="utf-8" />
+<meta name="google" content="notranslate" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>SHOGUN — Notch-first UI (everything in the panel)</title>
+<script src="shogun-theme.js"></script>
+<!--
+  Direction change (owner decision, 2026-08-07): SHOGUN has no windowed UI besides the notch.
+  Settings and the Full-UI surfaces (brief, memory, health, traceability, approvals) all live
+  INSIDE the notch panel as panel states. The separate Full UI / Settings windows in
+  shogun-fullui*.html / shogun-settings.html are superseded as v1 surfaces — their FUNCTIONS
+  stay (see docs/notch-first-ui-decision.md), only the windows go.
+
+  Meeting notes UI is owned by the designer and is deliberately NOT in this file; the meeting
+  state in shogun-notch.html remains the functional placeholder.
+
+  Panel geometry follows docs/wireframe-spec.md §0: settings/views open at H_SETTINGS=460.
+  All text ≤14px (panel ceiling).
+-->
+<style>
+  @import url("shogun-ui.css");
+
+  :root{
+    --g-tint:rgba(16,18,24,.58);
+    --g-tint-2:rgba(16,18,24,.72);
+    --g-line:rgba(255,255,255,.13);
+    --g-line-2:rgba(255,255,255,.20);
+    --g-ink:#FFFFFF;
+    --g-muted:rgba(255,255,255,.68);
+    --g-faint:rgba(255,255,255,.45);
+    --g-fill:rgba(255,255,255,.08);
+    --g-fill-2:rgba(255,255,255,.14);
+    --g-accent:#2F6FED;
+    --g-accent-hi:#3B82F6;
+    --g-live:#34D058;
+    --g-warn:#FFB020;
+    --g-danger:#FF6B5A;
+    --blur:blur(44px) saturate(180%);
+  }
+  html[data-theme="light"]{
+    --g-tint:rgba(255,255,255,.76);
+    --g-tint-2:rgba(255,255,255,.86);
+    --g-line:rgba(16,24,40,.10);
+    --g-line-2:rgba(16,24,40,.17);
+    --g-ink:#1B1D22;
+    --g-muted:rgba(27,29,34,.68);
+    --g-faint:rgba(27,29,34,.45);
+    --g-fill:rgba(16,24,40,.045);
+    --g-fill-2:rgba(16,24,40,.085);
+    --g-accent:#2F6FED;
+    --g-accent-hi:#1B5FE0;
+    --g-live:#1F9E3C;
+    --g-warn:#A4560A;
+    --g-danger:#C2341D;
+  }
+  html[data-theme="light"] .glass{box-shadow:0 28px 70px rgba(16,24,40,.20), inset 0 1px 0 rgba(255,255,255,.75)}
+  html[data-theme="light"] .menubar{background:rgba(255,255,255,.58);color:#1B1D22}
+  html[data-theme="light"] .menubar .l .m{color:rgba(27,29,34,.6)}
+  html[data-theme="light"] .switcher{background:rgba(255,255,255,.78)}
+  html[data-theme="light"] .switcher button.on{background:#16181D;color:#fff}
+  html[data-theme="light"] .caption{color:rgba(27,29,34,.5)}
+  html[data-theme="light"] .btn.primary{color:#fff}
+
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:var(--sys);-webkit-font-smoothing:antialiased;min-height:100vh}
+  button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
+  .screen{position:relative;min-height:100vh;overflow:hidden}
+
+  .menubar{position:relative;height:30px;display:flex;align-items:center;justify-content:space-between;
+    padding:0 18px;background:rgba(10,12,16,.42);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);
+    font-size:13px;color:var(--g-ink);z-index:5}
+  .menubar .l{display:flex;gap:18px;align-items:center}
+  .menubar .l .app{display:flex;align-items:center;gap:7px;font-weight:700}
+  .menubar .l .m{color:var(--g-muted)}
+  .menubar .r{display:flex;gap:15px;align-items:center}
+  .clock{font-variant-numeric:tabular-nums}
+  .notch{position:absolute;top:0;left:50%;transform:translateX(-50%);width:210px;height:30px;
+    background:#000;border-radius:0 0 13px 13px;z-index:6}
+  .hang{position:absolute;top:30px;left:50%;transform:translateX(-50%);z-index:8}
+
+  .glass{background:var(--g-tint);backdrop-filter:var(--blur);-webkit-backdrop-filter:var(--blur);
+    border:1px solid var(--g-line);border-top:none;color:var(--g-ink);
+    box-shadow:0 30px 80px rgba(0,0,0,.46), inset 0 1px 0 rgba(255,255,255,.10)}
+
+  .panel{width:620px;border-radius:0 0 26px 26px;overflow:hidden;display:flex;flex-direction:column;
+    transition:height 260ms var(--ease)}
+
+  /* ——— shared head ——— */
+  .head{flex:none;display:flex;align-items:center;gap:8px;padding:11px 14px;border-bottom:1px solid var(--g-line)}
+  .icn{width:28px;height:28px;border-radius:9px;display:grid;place-items:center;color:var(--g-faint);flex:none;
+    transition:background 160ms,color 160ms}
+  .icn:hover{background:var(--g-fill);color:var(--g-ink)}
+  .h-title{font-size:13px;font-weight:600}
+  .h-sub{font-size:11px;color:var(--g-faint)}
+  .pill{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--g-line);
+    background:var(--g-fill);color:var(--g-muted);font-size:11.5px;border-radius:999px;
+    padding:5px 12px;white-space:nowrap}
+  .pill b{color:var(--g-ink);font-weight:600}
+  .live-dot{width:7px;height:7px;border-radius:50%;background:var(--g-live);
+    box-shadow:0 0 10px rgba(52,208,88,.7);flex:none;animation:pulse 2.4s ease-in-out infinite}
+  .spacer{flex:1}
+
+  /* ——— settings tabs ——— */
+  .tabs{flex:none;display:flex;gap:6px;padding:12px 16px 0;overflow-x:auto}
+  .tab{font-size:12px;color:var(--g-muted);border:1px solid var(--g-line);background:var(--g-fill);
+    border-radius:999px;padding:6px 13px;white-space:nowrap;transition:background 160ms,color 160ms}
+  .tab:hover{color:var(--g-ink);background:var(--g-fill-2)}
+  .tab.on{color:var(--g-ink);background:var(--g-fill-2);border-color:var(--g-line-2);font-weight:600}
+
+  /* ——— rows ——— */
+  .body{flex:1;min-height:0;overflow-y:auto;padding:10px 16px 16px;display:flex;flex-direction:column}
+  .sec{font-size:10px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--g-faint);
+    padding:12px 4px 6px}
+  .sec.accent{color:var(--g-accent-hi)}
+  .sec.danger{color:var(--g-danger)}
+  .row{display:flex;align-items:center;gap:14px;padding:10px 4px}
+  .row + .row{border-top:1px solid var(--g-line)}
+  .row .lead{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+  .row .t{font-size:13px;font-weight:550}
+  .row .d{font-size:11.5px;color:var(--g-muted);line-height:1.45}
+  .row .trail{flex:none;display:flex;align-items:center;gap:8px}
+
+  /* controls, compact */
+  .seg{display:inline-flex;gap:2px;background:var(--g-fill);border:1px solid var(--g-line);
+    border-radius:10px;padding:2px}
+  .seg span{font-size:11.5px;color:var(--g-muted);padding:5px 11px;border-radius:8px;white-space:nowrap}
+  .seg span.on{background:var(--g-fill-2);color:var(--g-ink);font-weight:600}
+  .toggle{position:relative;width:38px;height:22px;border-radius:999px;background:var(--g-fill-2);
+    border:1px solid var(--g-line);flex:none}
+  .toggle i{position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;
+    box-shadow:0 1px 4px rgba(0,0,0,.4)}
+  .toggle.on{background:var(--g-accent);border-color:transparent}
+  .toggle.on i{left:18px}
+  .kb{display:inline-grid;place-items:center;min-width:24px;height:23px;padding:0 7px;border-radius:7px;
+    background:var(--g-fill-2);border:1px solid var(--g-line);color:var(--g-ink);font-size:11px;font-weight:600}
+  .badge{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:550;
+    border-radius:999px;padding:4px 10px;border:1px solid var(--g-line);background:var(--g-fill);color:var(--g-muted)}
+  .badge .dot{width:5px;height:5px;border-radius:50%;background:var(--g-faint)}
+  .badge.ok{color:var(--g-live);background:rgba(52,208,88,.13);border-color:rgba(52,208,88,.3)}
+  .badge.ok .dot{background:var(--g-live)}
+  .badge.warn{color:var(--g-warn);background:rgba(255,176,32,.12);border-color:rgba(255,176,32,.3)}
+  .badge.warn .dot{background:var(--g-warn)}
+  .btn{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:550;
+    padding:6px 12px;border-radius:9px;border:1px solid var(--g-line-2);background:var(--g-fill);color:var(--g-ink)}
+  .btn:hover{background:var(--g-fill-2)}
+  .btn.primary{background:var(--g-accent);border-color:transparent;color:#fff}
+  .btn.danger{color:var(--g-danger);border-color:rgba(255,107,90,.32);background:rgba(255,107,90,.10)}
+  .input{flex:1;font-size:12px;padding:8px 11px;border-radius:9px;border:1px solid var(--g-line);
+    background:var(--g-fill);color:var(--g-faint)}
+  .tile{flex:none;width:30px;height:30px;border-radius:9px;display:grid;place-items:center;
+    font-size:12px;font-weight:700;color:#fff}
+  .tile.mail{background:#EA4335}.tile.cal{background:#1A73E8}
+  .tile.chat{background:#611F69}.tile.notes{background:#16181D}
+
+  /* memory / today / status bits */
+  .search{display:flex;align-items:center;gap:9px;background:var(--g-fill);border:1px solid var(--g-line);
+    border-radius:12px;padding:9px 12px;margin:12px 16px 0}
+  .search .ph{flex:1;font-size:12.5px;color:var(--g-faint)}
+  .chips{display:flex;gap:6px;padding:10px 16px 0}
+  .conf{font-size:10px;font-weight:600;padding:2px 7px;border-radius:999px;flex:none}
+  .conf.md{color:var(--g-accent-hi);background:rgba(59,130,246,.16)}
+  .conf.lo{color:var(--g-muted);background:var(--g-fill-2)}
+  .meta{flex:none;font-size:11px;color:var(--g-faint)}
+  .meta.over{color:var(--g-warn);font-weight:600}
+  .fix{font-size:11.5px;color:var(--g-accent-hi);font-weight:550}
+
+  .stat2{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:2px 0}
+  .scard{border:1px solid var(--g-line);background:var(--g-fill);border-radius:13px;padding:11px 13px;
+    display:flex;flex-direction:column;gap:5px}
+  .scard .k{font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--g-faint)}
+  .scard .v{font-size:13px;line-height:1.45}
+  .scard .v b{font-weight:640}
+  .scard .v .big{font-size:18px;font-weight:640;letter-spacing:-.02em}
+
+  .brief-h{font-size:10px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;
+    color:var(--g-accent-hi);padding:11px 4px 5px}
+  .brief-p{font-size:13px;line-height:1.55;color:var(--g-ink);opacity:.92;padding:0 4px}
+  .bullet{display:flex;gap:9px;align-items:baseline;font-size:12.5px;line-height:1.5;padding:2px 4px}
+  .bullet .dot{color:var(--g-faint)}
+  .acts{display:flex;gap:7px;flex-wrap:wrap;padding:7px 4px 0}
+
+  .appr{border:1px solid var(--g-line);background:var(--g-fill);border-radius:13px;padding:12px 13px;
+    display:flex;flex-direction:column;gap:9px;margin-top:6px}
+  .appr .top{display:flex;align-items:center;gap:10px}
+  .appr .op{flex:1;font-size:13px;font-weight:600}
+  .appr .quote{font-size:12px;line-height:1.55;color:var(--g-ink);opacity:.9;background:var(--g-fill);
+    border:1px solid var(--g-line);border-radius:10px;padding:9px 11px}
+  .appr .a-acts{display:flex;gap:7px}
+
+  .state{display:none}
+  .state.active{display:flex;flex-direction:column;flex:1;min-height:0}
+  .state.active .body > *{animation:rise 240ms var(--ease) both}
+
+  /* switcher */
+  .switcher{position:fixed;bottom:26px;left:50%;transform:translateX(-50%);display:flex;gap:3px;z-index:20;
+    background:rgba(16,18,24,.66);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);
+    border:1px solid var(--g-line);border-radius:999px;padding:5px;box-shadow:0 20px 50px rgba(0,0,0,.5)}
+  .switcher button{font-size:12px;color:var(--g-muted);padding:7px 13px;border-radius:999px}
+  .switcher button:hover{color:#fff}
+  .switcher button.on{background:#fff;color:#0C0E13;font-weight:600}
+  .caption{position:fixed;bottom:80px;left:50%;transform:translateX(-50%);font-size:12px;
+    color:var(--g-faint);z-index:20}
+</style>
+</head>
+<body>
+<div class="desk"></div>
+<div class="screen">
+  <div class="menubar">
+    <div class="l">
+      <span class="app"><img src="shogun-mark.svg" width="15" height="15" alt="" />SHOGUN</span>
+      <span class="m">File</span><span class="m">Edit</span><span class="m">View</span>
+    </div>
+    <div class="r">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M5 13a10 10 0 0 1 14 0M8.5 16.5a5 5 0 0 1 7 0M12 20h.01"/></svg>
+      <span class="clock">9:41</span>
+    </div>
+  </div>
+  <div class="notch"></div>
+
+  <div class="hang">
+    <div class="panel glass" id="panel" style="height:460px">
+
+      <!-- shared head: back appears inside settings/views -->
+      <div class="head">
+        <span class="icn" id="back" title="Back">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+        </span>
+        <div style="min-width:0">
+          <div class="h-title" id="p-title">Settings</div>
+          <div class="h-sub" id="p-sub">Everything lives here — there is no other window.</div>
+        </div>
+        <span class="spacer"></span>
+        <span class="pill"><span class="live-dot"></span>reading <b>Mail</b></span>
+        <span class="icn" title="Close">
+          <svg width="15" height="15" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" fill="none"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>
+        </span>
+      </div>
+
+      <!-- ═══ SETTINGS · GENERAL ═══ -->
+      <div class="state active" data-state="set-general">
+        <div class="tabs">
+          <button class="tab on">General</button><button class="tab">Privacy &amp; Data</button>
+          <button class="tab">Connections</button><button class="tab">Model &amp; Key</button>
+          <button class="tab">Approvals</button>
+        </div>
+        <div class="body">
+          <div class="sec">Appearance</div>
+          <div class="row"><div class="lead"><span class="t">Theme</span><span class="d">Dark, light, or match the system.</span></div>
+            <div class="trail"><div class="seg" data-theme-seg><span data-pref="dark" class="on">Dark</span><span data-pref="light">Light</span><span data-pref="auto">Auto</span></div></div></div>
+          <div class="row"><div class="lead"><span class="t">Open on hover</span><span class="d">Resting the cursor on the pill opens the panel.</span></div>
+            <div class="trail"><div class="toggle on"><i></i></div></div></div>
+          <div class="row"><div class="lead"><span class="t">Dim when not focused</span><span class="d">Let the glass fall back while you work elsewhere.</span></div>
+            <div class="trail"><div class="toggle on"><i></i></div></div></div>
+          <div class="sec">Shortcuts</div>
+          <div class="row"><div class="lead"><span class="t">Draft with SHOGUN</span><span class="d">Tap ⌥ alone — always on, not rebindable.</span></div>
+            <div class="trail"><span class="kb">⌥</span></div></div>
+          <div class="row"><div class="lead"><span class="t">Show / hide panel</span><span class="d">Summon or dismiss from anywhere.</span></div>
+            <div class="trail"><span class="kb">⌃</span><span class="kb">⌥</span><span class="kb">N</span></div></div>
+          <div class="sec">Nightly review</div>
+          <div class="row"><div class="lead"><span class="t">Last run — 2:14 AM</span><span class="d">1,204 events read · 38 updates · no errors.</span></div>
+            <div class="trail"><span class="badge ok"><span class="dot"></span>Healthy</span><button class="btn">Run now</button></div></div>
+        </div>
+      </div>
+
+      <!-- ═══ SETTINGS · PRIVACY & DATA ═══ -->
+      <div class="state" data-state="set-privacy">
+        <div class="tabs">
+          <button class="tab">General</button><button class="tab on">Privacy &amp; Data</button>
+          <button class="tab">Connections</button><button class="tab">Model &amp; Key</button>
+          <button class="tab">Approvals</button>
+        </div>
+        <div class="body">
+          <div class="sec">Permissions</div>
+          <div class="row"><div class="lead"><span class="t">Accessibility</span><span class="d">Reads on-screen text only — images are never captured.</span></div>
+            <div class="trail"><span class="badge ok"><span class="dot"></span>Granted</span></div></div>
+          <div class="row"><div class="lead"><span class="t">Microphone</span><span class="d">Only for meeting notes. Audio never leaves RAM.</span></div>
+            <div class="trail"><span class="badge"><span class="dot"></span>Not requested</span></div></div>
+          <div class="row"><div class="lead"><span class="t">Capture exclusions</span><span class="d">Password managers &amp; banking always excluded. +2 apps, 1 pattern.</span></div>
+            <div class="trail"><button class="btn">Edit list</button></div></div>
+          <div class="sec accent">What left this device</div>
+          <div class="row"><div class="lead"><span class="t">Today — 12 chunks · 84 KB</span><span class="d">Digest and size only, content is never logged.</span></div>
+            <div class="trail"><span class="badge ok"><span class="dot"></span>0 third-party</span></div></div>
+          <div class="row"><div class="lead"><span class="t" style="font-weight:400;font-size:12px;color:var(--g-muted)">09:12 · Draft generation · Your provider</span></div>
+            <div class="trail"><span class="meta">18 KB</span></div></div>
+          <div class="row"><div class="lead"><span class="t" style="font-weight:400;font-size:12px;color:var(--g-muted)">02:14 · Nightly classification · Batch indexing</span></div>
+            <div class="trail"><span class="meta">41 KB</span></div></div>
+          <div class="sec danger">Danger zone</div>
+          <div class="row"><div class="lead"><span class="t">Clear extracted state</span><span class="d">Commitments and open loops go; captured history stays.</span></div>
+            <div class="trail"><button class="btn danger">Clear</button></div></div>
+          <div class="row"><div class="lead"><span class="t">Delete all data</span><span class="d">Erases capture, memory, and state from this Mac.</span></div>
+            <div class="trail"><button class="btn danger">Delete</button></div></div>
+        </div>
+      </div>
+
+      <!-- ═══ SETTINGS · CONNECTIONS ═══ -->
+      <div class="state" data-state="set-conn">
+        <div class="tabs">
+          <button class="tab">General</button><button class="tab">Privacy &amp; Data</button>
+          <button class="tab on">Connections</button><button class="tab">Model &amp; Key</button>
+          <button class="tab">Approvals</button>
+        </div>
+        <div class="body">
+          <div class="sec">First-layer services — direct, read into your context</div>
+          <div class="row"><span class="tile mail">M</span>
+            <div class="lead"><span class="t">Mail</span><span class="d" style="color:var(--g-live)">Connected · read + draft</span></div>
+            <div class="trail"><button class="btn">Disconnect</button></div></div>
+          <div class="row"><span class="tile cal">C</span>
+            <div class="lead"><span class="t">Calendar</span><span class="d" style="color:var(--g-live)">Connected · read</span></div>
+            <div class="trail"><button class="btn">Disconnect</button></div></div>
+          <div class="row"><span class="tile chat">S</span>
+            <div class="lead"><span class="t">Slack</span><span class="d">Not available yet</span></div>
+            <div class="trail"><button class="btn" style="opacity:.5">Connect</button></div></div>
+          <div class="row"><span class="tile notes">N</span>
+            <div class="lead"><span class="t">Notion</span><span class="d">Not connected</span></div>
+            <div class="trail"><button class="btn primary">Connect</button></div></div>
+          <div class="sec">Sources health</div>
+          <div class="row"><div class="lead"><span class="t">Freshness</span><span class="d">Mail 3m · Calendar 12m · Slack — re-auth needed.</span></div>
+            <div class="trail"><span class="badge warn"><span class="dot"></span>1 stale</span></div></div>
+        </div>
+      </div>
+
+      <!-- ═══ SETTINGS · MODEL & KEY ═══ -->
+      <div class="state" data-state="set-model">
+        <div class="tabs">
+          <button class="tab">General</button><button class="tab">Privacy &amp; Data</button>
+          <button class="tab">Connections</button><button class="tab on">Model &amp; Key</button>
+          <button class="tab">Approvals</button>
+        </div>
+        <div class="body">
+          <div class="sec">Provider — runs chat and ⌥-drafts on your key</div>
+          <div class="row"><div class="lead"><span class="t">Provider</span><span class="d">Each provider keeps its own key in your Keychain.</span></div>
+            <div class="trail"><div class="seg"><span class="on">Anthropic</span><span>OpenRouter</span><span>OpenAI</span><span>Gemini</span></div></div></div>
+          <div class="row"><div class="lead"><span class="t">Anthropic key</span><span class="d">Add a key for real answers instead of an echo.</span></div>
+            <div class="trail"><span class="badge warn"><span class="dot"></span>Not set</span></div></div>
+          <div class="row" style="gap:8px">
+            <span class="input">Paste your Anthropic API key…</span>
+            <button class="btn primary">Save</button>
+          </div>
+          <div class="row"><div class="lead"><span class="t">Model id</span><span class="d">Leave blank to use the provider default.</span></div>
+            <div class="trail"><span class="input" style="flex:none;width:180px">Model id (blank = default)</span></div></div>
+        </div>
+      </div>
+
+      <!-- ═══ SETTINGS · APPROVALS ═══ -->
+      <div class="state" data-state="set-approvals">
+        <div class="tabs">
+          <button class="tab">General</button><button class="tab">Privacy &amp; Data</button>
+          <button class="tab">Connections</button><button class="tab">Model &amp; Key</button>
+          <button class="tab on">Approvals</button>
+        </div>
+        <div class="body">
+          <div class="sec">Waiting for you — nothing leaves without an explicit OK</div>
+          <div class="appr">
+            <div class="top"><span class="op">Send email — Alice Reyes</span>
+              <span class="badge warn"><span class="dot"></span>third-party (Composio)</span></div>
+            <div class="quote">Hi Alice — confirming the vendor renewal is settled at 12k for the year. I'll send the revised deck before the launch review.</div>
+            <div class="a-acts"><button class="btn primary">Confirm &amp; send</button><button class="btn">Reject</button></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ═══ VIEW · TODAY (brief in the panel) ═══ -->
+      <div class="state" data-state="today">
+        <div class="body" style="padding-top:4px">
+          <div class="brief-h">Today</div>
+          <p class="brief-p">Three meetings, and the vendor renewal needs to close before the launch review on the 14th. Your afternoon is clear after 3 PM — that's the window for the deck.</p>
+          <div class="brief-h">Commitments due</div>
+          <div class="bullet"><span class="dot">·</span><span>Send the revised deck to Alice <span style="color:var(--g-warn);font-weight:600">— due today</span></span></div>
+          <div class="bullet"><span class="dot">·</span><span>Confirm the launch date with the team — due Friday</span></div>
+          <div class="brief-h">Open loops</div>
+          <div class="bullet"><span class="dot">·</span><span>Vendor hasn't replied on renewal terms — waiting 3 days</span></div>
+          <div class="brief-h">Schedule</div>
+          <div class="bullet"><span class="dot">·</span><span><b>10:00</b> Weekly sync · <b>13:30</b> Vendor call · <b>16:00</b> Launch review</span></div>
+          <div class="acts">
+            <button class="btn">Draft the deck email</button>
+            <button class="btn">Nudge the vendor</button>
+            <button class="btn">Prep for Weekly sync</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ═══ VIEW · MEMORY ═══ -->
+      <div class="state" data-state="memory">
+        <div class="search">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" style="color:var(--g-faint)"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
+          <span class="ph">Search everything SHOGUN remembers…</span>
+          <span class="badge">Text + meaning</span>
+        </div>
+        <div class="chips">
+          <button class="tab on">Commitments</button><button class="tab">Open loops</button>
+          <button class="tab">People</button><button class="tab">Projects</button>
+        </div>
+        <div class="body">
+          <div class="row"><span class="conf md">Medium</span>
+            <div class="lead"><span class="t">You: send the revised deck to Alice</span><span class="d">From Weekly sync · 3 segments · due today</span></div>
+            <div class="trail"><span class="fix">Why? →</span></div></div>
+          <div class="row"><span class="conf md">Medium</span>
+            <div class="lead"><span class="t">Alice: owns the vendor thread</span><span class="d">From Weekly sync · 2 segments</span></div>
+            <div class="trail"><span class="fix">Why? →</span></div></div>
+          <div class="row"><span class="conf lo">Low</span>
+            <div class="lead"><span class="t" style="color:var(--g-muted)"><span style="color:var(--g-faint)">possibly:</span> review Q3 numbers before the board call</span><span class="d">From Mail · 1 segment</span></div>
+            <div class="trail"><span class="fix">Why? →</span></div></div>
+          <div class="sec">Needs your eye</div>
+          <div class="row"><div class="lead"><span class="t">Alice Reyes · A. Reyes · alice@vendor.com</span><span class="d">Same person? 3 records · first seen 12 days ago</span></div>
+            <div class="trail"><button class="btn">Keep separate</button><button class="btn primary">Merge</button></div></div>
+        </div>
+      </div>
+
+      <!-- ═══ VIEW · STATUS (health + trace, condensed) ═══ -->
+      <div class="state" data-state="status">
+        <div class="body" style="padding-top:14px">
+          <div class="stat2">
+            <div class="scard"><span class="k">Coverage</span>
+              <span class="v"><span class="big">18h</span> <span style="color:var(--g-muted)">/ 24h captured</span></span>
+              <span class="fix">Open capture rules →</span></div>
+            <div class="scard"><span class="k">Freshness</span>
+              <span class="v">Mail <span style="color:var(--g-live)">3m</span> · Cal <span style="color:var(--g-live)">12m</span> · Slack <span style="color:var(--g-warn)">—</span></span>
+              <span class="fix">Re-authenticate Slack →</span></div>
+            <div class="scard"><span class="k">Egress</span>
+              <span class="v"><b>12 chunks</b> · 84 KB · <span style="color:var(--g-live)">0 third-party</span></span>
+              <span class="fix">Open Privacy &amp; Data →</span></div>
+            <div class="scard"><span class="k">SLO</span>
+              <span class="v">Expand <span style="color:var(--g-live)">58ms</span> · Search <span style="color:var(--g-live)">120ms</span> · CPU <span style="color:var(--g-live)">1.4%</span></span>
+              <span class="fix">All within target</span></div>
+          </div>
+          <div class="sec accent">Confidence mix</div>
+          <div class="row" style="border-top:none;padding-top:4px"><div class="lead">
+            <span class="d">High <b style="color:var(--g-ink)">0%</b> · Medium <b style="color:var(--g-ink)">62%</b> · Low <b style="color:var(--g-ink)">38%</b> — low-confidence items are only ever shown as "possibly".</span></div>
+            <div class="trail"><span class="fix">Nightly classification →</span></div></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <div class="caption" id="cap">Settings · General — inside the panel, 620×460</div>
+  <div class="switcher" id="sw">
+    <button class="on" data-go="set-general" data-cap="Settings · General — inside the panel, 620×460">General</button>
+    <button data-go="set-privacy" data-cap="Settings · Privacy &amp; Data — permissions, egress ledger, danger zone">Privacy</button>
+    <button data-go="set-conn" data-cap="Settings · Connections — first-layer services">Connections</button>
+    <button data-go="set-model" data-cap="Settings · Model &amp; Key — BYOK">Model</button>
+    <button data-go="set-approvals" data-cap="Settings · Approvals — L3 queue">Approvals</button>
+    <button data-go="today" data-cap="View · Today — the brief, in the panel">Today</button>
+    <button data-go="memory" data-cap="View · Memory — search + tracked, in the panel">Memory</button>
+    <button data-go="status" data-cap="View · Status — health + egress, condensed">Status</button>
+  </div>
+</div>
+
+<script>
+  const states = document.querySelectorAll(".state");
+  const btns = document.querySelectorAll("#sw button");
+  const cap = document.getElementById("cap");
+  const title = document.getElementById("p-title");
+  const sub = document.getElementById("p-sub");
+  const panel = document.getElementById("panel");
+  const META = {
+    "set-general":["Settings","Everything lives here — there is no other window.",460],
+    "set-privacy":["Settings","Permissions, what left the device, and the way out.",460],
+    "set-conn":["Settings","Direct connections. Data stays on your device.",460],
+    "set-model":["Settings","Your key, kept in the macOS Keychain.",460],
+    "set-approvals":["Settings","Anything leaving the device waits for your OK.",460],
+    "today":["Today","Your brief — assembled overnight, on this Mac.",430],
+    "memory":["Memory","Everything SHOGUN holds, with its evidence.",460],
+    "status":["Status","What it can see, and every byte that left.",400],
+  };
+  function show(name){
+    states.forEach(s => s.classList.toggle("active", s.dataset.state === name));
+    const m = META[name];
+    title.textContent = m[0]; sub.textContent = m[1];
+    panel.style.height = m[2] + "px";
+  }
+  btns.forEach(b => b.addEventListener("click", () => {
+    btns.forEach(x => x.classList.toggle("on", x === b));
+    cap.textContent = b.dataset.cap;
+    show(b.dataset.go);
+  }));
+</script>
+</body>
+</html>

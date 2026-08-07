@@ -100,6 +100,23 @@ const PAGES = [
     ],
   },
   { file: "shogun-standard-locks.html", name: "standard-locks", states: [{ id: "default", drive: null }] },
+  {
+    file: "shogun-notch-full.html",
+    name: "notch-full",
+    states: [
+      "set-general", "set-privacy", "set-conn", "set-model", "set-approvals",
+      "today", "memory", "status",
+    ].map((s) => ({
+      id: s,
+      drive:
+        s === "set-general"
+          ? null
+          : async (page) => {
+              await page.click(`#sw button[data-go="${s}"]`);
+              await page.waitForTimeout(350); // panel height transition
+            },
+    })),
+  },
 ];
 
 const THEMES = ["dark", "light"];
