@@ -1,0 +1,507 @@
+<!doctype html>
+<html lang="en" translate="no" data-theme="dark" data-appearance="dark"><head>
+<meta charset="utf-8">
+<meta name="google" content="notranslate">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SHOGUN / standard-locks / default / dark</title>
+<style>
+/* SHOGUN — shared glass UI system.
+
+   Everything SHOGUN shows sits on top of your work, so every surface is translucent glass over
+   a blurred desktop: the notch overlay, the Settings window, the onboarding card.
+
+   Palette keeps SHOGUN's own accent (§0 --accent #2F6FED / #6EA8FE family) rather than the
+   reference's orange. Composition — sidebar + right pane, accent uppercase section labels,
+   row = title + description + trailing control, an isolated danger zone — follows the
+   reference screenshots.
+
+   Motion: 180–260ms on cubic-bezier(.32,.72,0,1), matching --sp in apps/desktop/src/styles.css.
+   Everything collapses under prefers-reduced-motion at the bottom of this file. */
+
+:root{
+  /* glass surfaces */
+  --g-1:rgba(18,21,28,.62);        /* primary panel */
+  --g-2:rgba(24,28,37,.58);        /* raised card on glass */
+  --g-3:rgba(255,255,255,.06);     /* inset fill */
+  --g-4:rgba(255,255,255,.11);     /* stronger fill */
+  --g-sidebar:rgba(14,17,23,.46);
+
+  --line:rgba(255,255,255,.11);
+  --line-2:rgba(255,255,255,.18);
+
+  --ink:#FFFFFF;
+  --muted:rgba(255,255,255,.66);
+  --faint:rgba(255,255,255,.42);
+
+  --accent:#2F6FED;
+  --accent-hi:#4F8DFF;
+  --accent-soft:rgba(79,141,255,.16);
+  --accent-line:rgba(79,141,255,.34);
+
+  --live:#34D058;
+  --live-soft:rgba(52,208,88,.14);
+  --warn:#FFB020;
+  --warn-soft:rgba(255,176,32,.13);
+  --warn-line:rgba(255,176,32,.30);
+  --danger:#FF6B5A;
+  --danger-soft:rgba(255,107,90,.12);
+  --danger-line:rgba(255,107,90,.32);
+
+  --r-sm:10px; --r-md:14px; --r-lg:18px; --r-xl:26px; --r-pill:999px;
+
+  --blur:blur(46px) saturate(180%);
+  --blur-sm:blur(24px) saturate(160%);
+
+  --shadow:0 32px 90px rgba(0,0,0,.52), inset 0 1px 0 rgba(255,255,255,.10);
+  --shadow-sm:0 10px 30px rgba(0,0,0,.30);
+
+  --sys:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  --ease:cubic-bezier(.32,.72,0,1);
+  --sp:180ms var(--ease);
+}
+
+/* ——— light appearance ———
+   Same glass, lit from the other side: the panel becomes a bright frosted sheet and the ink
+   inverts. Values follow :root[data-appearance="light"] in apps/desktop/src/styles.css
+   (--ink #1B1D22, --muted #5C616A, --accent #2F6FED, --live #1F9E3C, --warn #A4560A). */
+html[data-theme="light"]{
+  --g-1:rgba(255,255,255,.74);
+  --g-2:rgba(255,255,255,.62);
+  --g-3:rgba(16,24,40,.045);
+  --g-4:rgba(16,24,40,.085);
+  --g-sidebar:rgba(255,255,255,.52);
+
+  --line:rgba(16,24,40,.10);
+  --line-2:rgba(16,24,40,.17);
+
+  --ink:#1B1D22;
+  --muted:#5C616A;
+  --faint:#8A9099;
+
+  --accent:#2F6FED;
+  --accent-hi:#1B5FE0;
+  --accent-soft:rgba(47,111,237,.10);
+  --accent-line:rgba(47,111,237,.26);
+
+  --live:#1F9E3C;
+  --live-soft:rgba(31,158,60,.10);
+  --warn:#A4560A;
+  --warn-soft:rgba(164,86,10,.10);
+  --warn-line:rgba(164,86,10,.24);
+  --danger:#C2341D;
+  --danger-soft:rgba(194,52,29,.09);
+  --danger-line:rgba(194,52,29,.26);
+
+  --shadow:0 30px 80px rgba(16,24,40,.20), inset 0 1px 0 rgba(255,255,255,.7);
+  --shadow-sm:0 6px 18px rgba(16,24,40,.12);
+}
+html[data-theme="light"] .desk{
+  background:
+    radial-gradient(1100px 700px at 16% 12%, #CFE0FA 0%, transparent 62%),
+    radial-gradient(900px 640px at 84% 74%, #E4D8F7 0%, transparent 58%),
+    radial-gradient(700px 500px at 62% 26%, #CFEAEC 0%, transparent 60%),
+    linear-gradient(158deg,#F2F5FA 0%,#E7EBF2 100%);
+}
+html[data-theme="light"] .toggle{background:rgba(16,24,40,.14)}
+html[data-theme="light"] .btn.primary{color:#fff}
+html[data-theme="light"] .tl.r,html[data-theme="light"] .tl.y,html[data-theme="light"] .tl.g{box-shadow:inset 0 0 0 .5px rgba(0,0,0,.14)}
+
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:var(--sys);color:var(--ink);-webkit-font-smoothing:antialiased;
+  font-feature-settings:"cv11","ss01";min-height:100vh}
+button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
+
+/* ——— appearance switch (floating, shared across the prototypes) ——— */
+.theme-switch{position:fixed;top:22px;right:22px;z-index:50;display:inline-flex;gap:2px;padding:4px;
+  border-radius:var(--r-pill);background:var(--g-1);border:1px solid var(--line);
+  backdrop-filter:var(--blur-sm);-webkit-backdrop-filter:var(--blur-sm);box-shadow:var(--shadow-sm)}
+.theme-switch button{display:grid;place-items:center;width:34px;height:30px;border-radius:var(--r-pill);
+  color:var(--faint);transition:background var(--sp),color var(--sp)}
+.theme-switch button:hover{color:var(--ink)}
+.theme-switch button.on{background:var(--g-4);color:var(--ink)}
+.theme-switch svg{stroke:currentColor}
+
+/* ——— the desktop behind the glass — soft, abstract, no fake UI ——— */
+.desk{position:fixed;inset:0;z-index:0;
+  background:
+    radial-gradient(1100px 700px at 16% 12%, #26456F 0%, transparent 62%),
+    radial-gradient(900px 640px at 84% 74%, #46285E 0%, transparent 58%),
+    radial-gradient(700px 500px at 62% 26%, #1D5C63 0%, transparent 60%),
+    linear-gradient(158deg,#0E1119 0%,#080A0E 100%);}
+.desk::after{content:"";position:absolute;inset:0;backdrop-filter:blur(70px);-webkit-backdrop-filter:blur(70px)}
+
+/* ——— glass primitives ——— */
+.glass{background:var(--g-1);backdrop-filter:var(--blur);-webkit-backdrop-filter:var(--blur);
+  border:1px solid var(--line);box-shadow:var(--shadow)}
+
+/* ——— window shell ——— */
+.win{position:relative;z-index:1;border-radius:var(--r-xl);overflow:hidden;display:flex;flex-direction:column;
+  animation:win-in 320ms var(--ease) both}
+.titlebar{height:50px;flex:none;display:flex;align-items:center;gap:8px;padding:0 18px;
+  border-bottom:1px solid var(--line)}
+.tl{width:12px;height:12px;border-radius:50%}
+.tl.r{background:#FF5F57}.tl.y{background:#FEBC2E}.tl.g{background:#28C840}
+.shell{flex:1;min-height:0;display:flex}
+
+/* ——— sidebar ——— */
+.sidebar{width:236px;flex:none;background:var(--g-sidebar);border-right:1px solid var(--line);
+  padding:18px 12px;display:flex;flex-direction:column;gap:2px;overflow-y:auto}
+.side-head{padding:4px 10px 18px}
+.side-group{font-size:11px;font-weight:600;letter-spacing:.09em;text-transform:uppercase;
+  color:var(--faint);padding:16px 12px 8px}
+.nav{display:flex;align-items:center;gap:12px;padding:9px 12px;border-radius:var(--r-sm);
+  color:var(--muted);text-align:left;width:100%;position:relative;
+  transition:background var(--sp),color var(--sp)}
+.nav svg{flex:none;stroke:currentColor;opacity:.72;transition:opacity var(--sp)}
+.nav span{font-size:14px;font-weight:500}
+.nav:hover{background:var(--g-3);color:var(--ink)}
+.nav:hover svg{opacity:1}
+.nav.active{background:var(--g-4);color:var(--ink)}
+.nav.active svg{opacity:1;stroke:var(--accent-hi)}
+.nav.active span{font-weight:600}
+
+/* ——— content ——— */
+.content{flex:1;min-width:0;min-height:0;display:flex;flex-direction:column}
+.content-head{flex:none;padding:24px 30px 18px;border-bottom:1px solid var(--line)}
+.content-head h1{font-size:21px;font-weight:620;letter-spacing:-.018em}
+.content-head p{margin-top:5px;font-size:13.5px;color:var(--muted);line-height:1.5}
+.content-body{flex:1;min-height:0;overflow-y:auto;padding:22px 30px 30px;
+  display:flex;flex-direction:column;gap:18px}
+.pane{display:none;flex-direction:column;gap:18px}
+.pane.active{display:flex}
+.pane.active > *{animation:rise 260ms var(--ease) both}
+.pane.active > *:nth-child(2){animation-delay:45ms}
+.pane.active > *:nth-child(3){animation-delay:90ms}
+.pane.active > *:nth-child(4){animation-delay:135ms}
+
+/* ——— cards & rows ——— */
+.card{background:var(--g-2);border:1px solid var(--line);border-radius:var(--r-lg);overflow:hidden;
+  backdrop-filter:var(--blur-sm);-webkit-backdrop-filter:var(--blur-sm)}
+.card-head{padding:16px 18px 2px}
+.card-label{font-size:11px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--accent-hi)}
+.card-label.danger{color:var(--danger)}
+.card-sub{margin-top:7px;font-size:13px;color:var(--muted);line-height:1.55}
+
+.row{display:flex;align-items:center;justify-content:space-between;gap:22px;padding:15px 18px}
+.row + .row,.card-head + .row{border-top:1px solid var(--line)}
+.row .lead{display:flex;flex-direction:column;gap:3px;min-width:0}
+.row .lead .t{font-size:14px;font-weight:550}
+.row .lead .d{font-size:13px;color:var(--muted);line-height:1.5}
+.row .trail{flex:none;display:flex;align-items:center;gap:10px}
+
+/* ——— controls ——— */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;font-size:13px;font-weight:550;
+  padding:9px 16px;border-radius:var(--r-sm);border:1px solid var(--line-2);background:var(--g-3);
+  color:var(--ink);transition:background var(--sp),transform var(--sp),border-color var(--sp)}
+.btn:hover{background:var(--g-4)}
+.btn:active{transform:scale(.97)}
+.btn.primary{background:var(--accent);border-color:transparent;box-shadow:0 8px 22px rgba(47,111,237,.4)}
+.btn.primary:hover{background:var(--accent-hi)}
+.btn.danger{color:var(--danger);border-color:var(--danger-line);background:var(--danger-soft)}
+.btn.danger:hover{background:rgba(255,107,90,.2)}
+.btn.sm{font-size:12px;padding:7px 13px}
+.btn.lg{font-size:14px;padding:11px 20px;border-radius:12px}
+
+.seg{display:inline-flex;gap:2px;background:var(--g-3);border:1px solid var(--line);
+  border-radius:12px;padding:3px}
+.seg > span{font-size:12.5px;color:var(--muted);padding:7px 15px;border-radius:9px;white-space:nowrap;
+  transition:background var(--sp),color var(--sp)}
+.seg > span:hover{color:var(--ink)}
+.seg > span.on{background:var(--g-4);color:var(--ink);font-weight:600}
+
+.toggle{position:relative;width:44px;height:26px;border-radius:var(--r-pill);background:var(--g-4);
+  border:1px solid var(--line);transition:background var(--sp);flex:none}
+.toggle i{position:absolute;top:2px;left:2px;width:20px;height:20px;border-radius:50%;background:#fff;
+  box-shadow:0 1px 4px rgba(0,0,0,.4);transition:left 220ms var(--ease)}
+.toggle.on{background:var(--accent);border-color:transparent}
+.toggle.on i{left:20px}
+
+.input{font-size:13px;padding:10px 13px;border-radius:var(--r-sm);border:1px solid var(--line);
+  background:var(--g-3);color:var(--faint);transition:border-color var(--sp),background var(--sp)}
+.input:hover{border-color:var(--line-2);background:var(--g-4)}
+
+.badge{display:inline-flex;align-items:center;gap:7px;font-size:12px;font-weight:550;
+  border-radius:var(--r-pill);padding:5px 12px;border:1px solid var(--line);background:var(--g-3);color:var(--muted)}
+.badge .dot{width:6px;height:6px;border-radius:50%;background:var(--faint)}
+.badge.ok{color:var(--live);background:var(--live-soft);border-color:rgba(52,208,88,.3)}
+.badge.ok .dot{background:var(--live);box-shadow:0 0 8px rgba(52,208,88,.7)}
+.badge.warn{color:var(--warn);background:var(--warn-soft);border-color:var(--warn-line)}
+.badge.warn .dot{background:var(--warn)}
+.badge.info{color:var(--accent-hi);background:var(--accent-soft);border-color:var(--accent-line)}
+.badge.info .dot{background:var(--accent-hi)}
+
+.chip{font-size:12px;color:var(--muted);background:var(--g-3);border:1px solid var(--line);
+  border-radius:var(--r-pill);padding:5px 11px}
+
+.kbd{display:inline-grid;place-items:center;min-width:28px;height:27px;padding:0 8px;border-radius:8px;
+  background:var(--g-4);border:1px solid var(--line);font-size:12.5px;font-weight:600}
+
+.slider{display:flex;align-items:center;gap:12px}
+.slider .track{position:relative;width:168px;height:5px;border-radius:var(--r-pill);background:var(--g-4)}
+.slider .fill{position:absolute;left:0;top:0;height:5px;border-radius:var(--r-pill);background:var(--accent)}
+.slider .knob{position:absolute;top:-7px;width:19px;height:19px;border-radius:50%;background:#fff;
+  box-shadow:0 2px 8px rgba(0,0,0,.45);transition:transform var(--sp)}
+.slider:hover .knob{transform:scale(1.12)}
+
+/* service tiles */
+.tile{flex:none;width:38px;height:38px;border-radius:11px;display:grid;place-items:center;
+  font-size:15px;font-weight:700;color:#fff;box-shadow:var(--shadow-sm)}
+.tile.mail{background:#EA4335}.tile.cal{background:#1A73E8}
+.tile.chat{background:#611F69}.tile.notes{background:#16181D}
+.tile.soft{background:var(--accent-soft);border:1px solid var(--accent-line);color:var(--accent-hi)}
+
+.wordmark{display:flex;align-items:center;gap:10px}
+.wordmark .name{font-size:15px;font-weight:700;letter-spacing:.17em}
+
+/* ——— motion ——— */
+@keyframes win-in{from{opacity:0;transform:translateY(10px) scale(.988)}to{opacity:1;transform:none}}
+@keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+@keyframes unfurl{from{opacity:0;transform:translateY(-8px) scale(.985)}to{opacity:1;transform:none}}
+@keyframes pop{from{opacity:0;transform:translateY(5px) scale(.97)}to{opacity:1;transform:none}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+
+@media (prefers-reduced-motion: reduce){
+  *,*::before,*::after{animation-duration:1ms !important;animation-delay:0ms !important;
+    transition-duration:1ms !important}
+}
+
+</style>
+
+<!--
+  How SHOGUN looks on Standard. Every other prototype is implicitly Pro; these are the surfaces
+  that change when the agent engine isn't part of the plan.
+
+  Rules being drawn (docs/requirements-v1.0.md):
+  · FR-CF-05 — Fusion still runs on Standard and still *suggests*. Only execution that needs BYOK
+    is locked, and AT MOST 1 of the 4 action candidates may be shown locked, "so Standard doesn't
+    become an ad surface". Both notch states below keep 3 live actions + 1 locked.
+  · FR-BIL-03 — first-layer integrations are read-only on Standard; drafting and sending are Pro.
+  · FR-BIL-02 — plan boundary == key boundary. Standard runs on SHOGUN's key and needs no BYOK,
+    so the key field itself is the Pro-gated thing in Settings.
+
+  The locked affordance is deliberately quiet: same row, dimmed label, a small lock, and the
+  upgrade line only appears on the one locked item.
+-->
+<style>
+  body{padding:44px;display:flex;flex-direction:column;align-items:center;gap:30px}
+
+  /* .desk is a fixed layer at z-index:0, so anything that isn't itself a stacking context
+     (plain headings, captions) would paint underneath it. Lift the lanes above it. */
+  .lane{position:relative;z-index:1;width:1180px;display:flex;flex-direction:column;gap:14px}
+  .lane-head{display:flex;align-items:baseline;gap:12px}
+  .lane-head h2{font-size:15px;font-weight:640;letter-spacing:-.01em}
+  .lane-head .rule{font-size:12.5px;color:var(--faint)}
+  .pair{display:grid;grid-template-columns:1fr 1fr;gap:20px;align-items:start}
+  .cap{display:flex;align-items:center;gap:9px;margin-bottom:9px;font-size:12.5px;color:var(--muted)}
+  .cap .pin{font-size:11px;font-weight:700;letter-spacing:.05em;padding:3px 9px;border-radius:var(--r-pill)}
+  .cap .pin.pro{color:var(--accent-hi);background:var(--accent-soft);border:1px solid var(--accent-line)}
+  .cap .pin.std{color:var(--muted);background:var(--g-3);border:1px solid var(--line)}
+
+  /* ——— notch panel ——— */
+  .panel{border-radius:20px;overflow:hidden;display:flex;flex-direction:column}
+  .p-head{display:flex;align-items:center;gap:8px;padding:12px 14px;border-bottom:1px solid var(--line)}
+  .pill{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--line);background:var(--g-3);
+    color:var(--muted);font-size:11.5px;border-radius:var(--r-pill);padding:5px 12px;white-space:nowrap}
+  .pill b{color:var(--ink);font-weight:600}
+  .live-dot{width:7px;height:7px;border-radius:50%;background:var(--live);
+    box-shadow:0 0 9px rgba(52,208,88,.55);flex:none}
+  .p-body{display:flex;flex-direction:column;gap:14px;padding:16px 20px}
+  .ask{align-self:flex-end;max-width:80%;background:var(--accent);color:#fff;font-size:14px;font-weight:550;
+    padding:11px 18px;border-radius:var(--r-pill)}
+  .answer{font-size:16px;line-height:1.55;letter-spacing:-.006em}
+
+  .acts{display:flex;align-items:center;gap:13px;flex-wrap:wrap}
+  .act{display:inline-flex;align-items:center;gap:8px;font-size:13.5px;color:var(--muted)}
+  .act svg{stroke:currentColor;flex:none}
+  .act.locked{color:var(--faint)}
+  .act.locked svg{stroke:var(--faint)}
+  .sep{width:3px;height:3px;border-radius:50%;background:var(--faint);flex:none}
+  .upsell{margin-top:2px;display:inline-flex;align-items:center;gap:8px;font-size:12.5px;color:var(--accent-hi);
+    background:var(--accent-soft);border:1px solid var(--accent-line);border-radius:11px;padding:8px 13px}
+  .upsell b{font-weight:600}
+
+  .composer{padding:0 20px 18px}
+  .cc{border:1px solid var(--line);background:var(--g-3);border-radius:16px;padding:13px 14px 11px;
+    display:flex;flex-direction:column;gap:11px}
+  .cc .field{font-size:14px;color:var(--faint)}
+  .cc .bar{display:flex;align-items:center;gap:10px}
+  .mode{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;color:var(--muted);
+    border:1px solid var(--line);border-radius:var(--r-pill);padding:6px 13px}
+  .mode.off{opacity:.55}
+  .send{margin-left:auto;width:38px;height:38px;border-radius:50%;display:grid;place-items:center;
+    background:var(--accent)}
+  .send.off{background:var(--g-4)}
+
+  /* ——— settings fragment ——— */
+  .frag{border-radius:var(--r-lg);overflow:hidden}
+  .f-head{padding:16px 18px 2px}
+  .locked-note{display:flex;gap:12px;align-items:flex-start;padding:14px 18px;border-top:1px solid var(--line)}
+  .locked-note .ico{flex:none;width:34px;height:34px;border-radius:10px;display:grid;place-items:center;
+    background:var(--accent-soft);border:1px solid var(--accent-line)}
+  .locked-note .tx{flex:1;font-size:13px;line-height:1.55;color:var(--muted)}
+  .locked-note .tx b{color:var(--ink);font-weight:600;display:block;font-size:14px;margin-bottom:3px}
+  .dimmed{opacity:.45;pointer-events:none}
+</style>
+<style>*,*::before,*::after{animation:none!important;transition:none!important}</style></head>
+<body>
+<div class="desk"></div>
+
+<!-- ══ notch: answer ══ -->
+<div class="lane">
+  <div class="lane-head">
+    <h2>Notch — answer with actions</h2>
+    <span class="rule">FR-CF-05 · Fusion still suggests on Standard; at most 1 of 4 actions may show locked</span>
+  </div>
+  <div class="pair">
+
+    <div>
+      <div class="cap"><span class="pin pro">Pro</span>All four actions run.</div>
+      <div class="panel glass">
+        <div class="p-head"><span class="pill"><span class="live-dot"></span>reading <b>Mail</b></span><span class="pill">3 due · 2 waiting</span></div>
+        <div class="p-body">
+          <div class="ask">What's still open on the renewal?</div>
+          <div class="answer">Alice still owes the pricing sign-off, and you owe her the revised deck.</div>
+          <div class="acts">
+            <span class="act"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3z"></path></svg>Draft it</span>
+            <span class="sep"></span>
+            <span class="act"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12l5 5L20 6"></path></svg>Track both</span>
+            <span class="sep"></span>
+            <span class="act"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H8l-4 4V5a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2z"></path></svg>Follow-ups</span>
+            <span class="sep"></span>
+            <span class="act"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5"></path></svg>Sources</span>
+          </div>
+        </div>
+        <div class="composer"><div class="cc">
+          <div class="field">Ask about your screen or work, or ⌘↵ to draft</div>
+          <div class="bar"><span class="mode">Anthropic</span>
+            <span class="send"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="6 11 12 5 18 11"></polyline></svg></span>
+          </div>
+        </div></div>
+      </div>
+    </div>
+
+    <div>
+      <div class="cap"><span class="pin std">Standard</span>Same answer, same suggestions — only the draft is held back.</div>
+      <div class="panel glass">
+        <div class="p-head"><span class="pill"><span class="live-dot"></span>reading <b>Mail</b></span><span class="pill">3 due · 2 waiting</span></div>
+        <div class="p-body">
+          <div class="ask">What's still open on the renewal?</div>
+          <div class="answer">Alice still owes the pricing sign-off, and you owe her the revised deck.</div>
+          <div class="acts">
+            <span class="act locked"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke-width="1.9" stroke-linecap="round"><rect x="4.5" y="10.5" width="15" height="10" rx="2.5"></rect><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"></path></svg>Draft it</span>
+            <span class="sep"></span>
+            <span class="act"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12l5 5L20 6"></path></svg>Track both</span>
+            <span class="sep"></span>
+            <span class="act"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H8l-4 4V5a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2z"></path></svg>Follow-ups</span>
+            <span class="sep"></span>
+            <span class="act"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5"></path></svg>Sources</span>
+          </div>
+          <div class="upsell">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><rect x="4.5" y="10.5" width="15" height="10" rx="2.5"></rect><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"></path></svg>
+            <span>Drafting runs on your own key — <b>available on Pro</b></span>
+          </div>
+        </div>
+        <div class="composer"><div class="cc">
+          <div class="field">Ask about your screen or work</div>
+          <div class="bar"><span class="mode off">No key — runs on ours</span>
+            <span class="send"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="6 11 12 5 18 11"></polyline></svg></span>
+          </div>
+        </div></div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ══ settings: model & key ══ -->
+<div class="lane">
+  <div class="lane-head">
+    <h2>Settings — Model &amp; Key</h2>
+    <span class="rule">FR-BIL-02 · plan boundary = key boundary: Standard needs no key, so the field itself is the Pro thing</span>
+  </div>
+  <div class="pair">
+
+    <div>
+      <div class="cap"><span class="pin pro">Pro</span>You bring the key; agent work runs on it.</div>
+      <div class="frag card">
+        <div class="f-head"><div class="card-label">Your key</div>
+          <div class="card-sub">Kept per provider in your macOS Keychain.</div></div>
+        <div class="row" style="border-top:1px solid var(--line)">
+          <div class="lead"><div class="t">Provider</div><div class="d">Chat, ⌥-drafts, and agents run here.</div></div>
+          <div class="trail"><div class="seg"><span class="on">Anthropic</span><span>OpenAI</span><span>Gemini</span></div></div>
+        </div>
+        <div class="row">
+          <div class="input" style="flex:1">Paste your Anthropic API key…</div>
+          <div class="trail"><button class="btn primary sm">Save</button></div>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="cap"><span class="pin std">Standard</span>Nothing to configure — and we say why, not just "locked".</div>
+      <div class="frag card">
+        <div class="f-head"><div class="card-label">Your key</div>
+          <div class="card-sub">Standard runs entirely on SHOGUN's key. There's nothing you need to add.</div></div>
+        <div class="locked-note">
+          <span class="ico">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent-hi)" stroke-width="1.8" stroke-linecap="round"><rect x="4.5" y="10.5" width="15" height="10" rx="2.5"></rect><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"></path></svg>
+          </span>
+          <span class="tx"><b>Your own key is a Pro feature</b>
+            Agent reasoning, chat, and ⌥-drafts never run on our key — that's why they come with Pro, and why Pro asks for yours.</span>
+          <button class="btn primary sm">See Pro</button>
+        </div>
+        <div class="row dimmed">
+          <div class="lead"><div class="t">Provider</div><div class="d">Chat, ⌥-drafts, and agents run here.</div></div>
+          <div class="trail"><div class="seg"><span class="on">Anthropic</span><span>OpenAI</span><span>Gemini</span></div></div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ══ settings: connections ══ -->
+<div class="lane">
+  <div class="lane-head">
+    <h2>Settings — Connections</h2>
+    <span class="rule">FR-BIL-03 · on Standard, integrations sync context but can't write</span>
+  </div>
+  <div class="pair">
+
+    <div>
+      <div class="cap"><span class="pin pro">Pro</span>Read and write.</div>
+      <div class="frag card">
+        <div class="row" style="padding:15px 18px">
+          <div class="lead" style="flex-direction:row;align-items:center;gap:13px">
+            <span class="tile mail">M</span>
+            <div style="display:flex;flex-direction:column;gap:2px">
+              <span class="t">Mail</span><span class="d">Connected · read + draft + send</span></div>
+          </div>
+          <div class="trail"><button class="btn sm">Manage</button></div>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="cap"><span class="pin std">Standard</span>Still connected, still feeding context — just read-only.</div>
+      <div class="frag card">
+        <div class="row" style="padding:15px 18px">
+          <div class="lead" style="flex-direction:row;align-items:center;gap:13px">
+            <span class="tile mail">M</span>
+            <div style="display:flex;flex-direction:column;gap:2px">
+              <span class="t">Mail</span><span class="d">Connected · read-only</span></div>
+          </div>
+          <div class="trail">
+            <span class="badge"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="4.5" y="10.5" width="15" height="10" rx="2.5"></rect><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"></path></svg>Sending on Pro</span>
+            <button class="btn sm">Manage</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+
+
+</body></html>
