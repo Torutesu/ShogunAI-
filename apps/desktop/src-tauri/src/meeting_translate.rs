@@ -1,10 +1,9 @@
-//! Live EN→JA translation for the meeting overlay (issue #93). JA→EN uses on-device whisper
-//! translate in the audio worker; this module handles the reverse direction asynchronously so ASR
-//! lines appear immediately and translation fills in when ready (Select KK Messages API — sync,
-//! typically 1–3s per short line; Batch is reserved for recap/dream).
+//! Live translation for the meeting overlay (issue #93). EN→JA and (Deepgram path) JA→EN use
+//! Select KK Messages API asynchronously so ASR lines appear immediately and translation fills in
+//! when ready. Whisper-only JA→EN still uses on-device whisper translate in the audio worker.
 
 #[cfg(target_os = "macos")]
-pub use mac::{should_translate_asr, spawn_ja_translation};
+pub use mac::{should_translate_asr, spawn_ja_translation, spawn_translation};
 
 #[cfg(target_os = "macos")]
 mod mac {
@@ -17,14 +16,17 @@ mod mac {
     use shogun_core::llm::anthropic::{AnthropicConfig, AnthropicSelectKkMessagesClient};
     use shogun_core::llm::transport::ReqwestTransport;
     use shogun_core::llm::{LlmError, Secret, SelectKkKey};
+    use shogun_core::meeting::settings::MeetingLanguage;
     use tauri::Emitter;
 
     use shogun_integrations::keychain_store;
 
     const TRANSLATE_MODEL: &str = "claude-haiku-4-5-20251001";
     const TRANSLATE_PURPOSE: &str = "meeting_live_translate";
-    const TRANSLATE_SYSTEM: &str =
+    const TRANSLATE_SYSTEM_JA: &str =
         "Translate to Japanese. Output ONLY the translation. No preamble.";
+    const TRANSLATE_SYSTEM_EN: &str =
+        "Translate to English. Output ONLY the translation. No preamble.";
     /// Cap concurrent network translates so a fast talker cannot stack threads.
     const MAX_IN_FLIGHT: usize = 3;
     /// After a 429, pause new translate requests briefly.
@@ -62,6 +64,14 @@ mod mac {
 
     fn select_kk_key() -> Option<String> {
         keychain_store::get_select_kk_key()
+    }
+
+    fn system_prompt(target: MeetingLanguage) -> &'static str {
+        match target {
+            MeetingLanguage::Japanese => TRANSLATE_SYSTEM_JA,
+            MeetingLanguage::English => TRANSLATE_SYSTEM_EN,
+            MeetingLanguage::Auto => TRANSLATE_SYSTEM_EN,
+        }
     }
 
     fn log_translate_err(app: &tauri::AppHandle, ts: i64, err: &LlmError) {
@@ -129,7 +139,6 @@ mod mac {
             return false;
         }
 
-        // Whisper sometimes emits bare filler tokens on noise.
         if stripped.len() <= 2 && !stripped.chars().any(|c| c.is_alphabetic()) {
             return false;
         }
@@ -152,7 +161,6 @@ mod mac {
         }
     }
 
-    /// Strip wrapping quotes / markdown fences models sometimes add despite instructions.
     fn sanitize_translation(raw: &str) -> String {
         let mut text = raw.trim().to_string();
         if text.len() >= 2 {
@@ -173,7 +181,6 @@ mod mac {
         text
     }
 
-    /// Detect assistant meta-chat / refusal instead of a translation.
     pub fn looks_like_refusal(text: &str) -> bool {
         let lower = text.to_lowercase();
         const NEEDLES: &[&str] = &[
@@ -221,6 +228,7 @@ mod mac {
 
     async fn translate_with_backoff<T: shogun_core::llm::transport::HttpTransport, S: shogun_core::llm::traceability::TraceabilitySink>(
         client: &AnthropicSelectKkMessagesClient<T, S>,
+        system: &str,
         source: &str,
         ts: i64,
     ) -> Result<String, LlmError> {
@@ -233,7 +241,7 @@ mod mac {
                 .await;
             }
             match client
-                .complete_with_system(Some(TRANSLATE_SYSTEM), source)
+                .complete_with_system(Some(system), source)
                 .await
             {
                 Ok(t) => return Ok(t),
@@ -252,7 +260,7 @@ mod mac {
         Err(last_err)
     }
 
-    /// Translate one line to Japanese on a background thread and emit `meeting_live_translation`.
+    /// Translate one line to Japanese (compat wrapper).
     pub fn spawn_ja_translation(
         app: &tauri::AppHandle,
         db: Db,
@@ -261,6 +269,22 @@ mod mac {
         speaker: Option<String>,
         text: String,
     ) {
+        spawn_translation(app, db, session_id, ts, speaker, text, MeetingLanguage::Japanese);
+    }
+
+    /// Translate one line to `target` on a background thread and emit `meeting_live_translation`.
+    pub fn spawn_translation(
+        app: &tauri::AppHandle,
+        db: Db,
+        session_id: i64,
+        ts: i64,
+        speaker: Option<String>,
+        text: String,
+        target: MeetingLanguage,
+    ) {
+        if matches!(target, MeetingLanguage::Auto) {
+            return;
+        }
         let source = text.trim().to_string();
         if !should_translate_asr(&source) {
             eprintln!("[meeting] live translate ts={ts} skipped — non-speech/blank ASR");
@@ -283,6 +307,7 @@ mod mac {
 
         remember_source(&source, ts);
         let app = app.clone();
+        let system = system_prompt(target);
         std::thread::spawn(move || {
             struct Guard;
             impl Drop for Guard {
@@ -317,7 +342,7 @@ mod mac {
                     .with_temperature(0.0),
                 TRANSLATE_PURPOSE,
             );
-            let translated = match rt.block_on(translate_with_backoff(&client, &source, ts)) {
+            let translated = match rt.block_on(translate_with_backoff(&client, system, &source, ts)) {
                 Ok(t) => sanitize_translation(&t),
                 Err(e) => {
                     log_translate_err(&app, ts, &e);

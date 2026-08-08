@@ -1532,6 +1532,9 @@ function MeetingSection(): JSX.Element {
   const [micOnly, setMicOnly] = useState(false);
   const [busy, setBusy] = useState(false);
   const [excluded, setExcluded] = useState<string[]>([]);
+  const [deepgramKey, setDeepgramKey] = useState({ has_key: false, key_last4: "" });
+  const [deepgramInput, setDeepgramInput] = useState("");
+  const [deepgramErr, setDeepgramErr] = useState("");
 
   const load = (): void => {
     if (!IN_TAURI) return;
@@ -1542,6 +1545,12 @@ function MeetingSection(): JSX.Element {
         setOn(s.enabled);
         setMicOnly(s.allow_mic_only_detect ?? false);
         setExcluded(s.excluded_apps ?? []);
+      })
+      .catch(() => undefined);
+    void invoke<{ has_key: boolean; key_last4: string }>("get_deepgram_key_status")
+      .then((s) => {
+        setDeepgramKey(s);
+        setDeepgramErr("");
       })
       .catch(() => undefined);
   };
@@ -1570,6 +1579,32 @@ function MeetingSection(): JSX.Element {
     void invoke("set_meeting_allow_mic_only", { allow: next })
       .then(load)
       .catch(() => setMicOnly(!next));
+  };
+
+  const saveDeepgramKey = (): void => {
+    const k = deepgramInput.trim();
+    if (!k) return;
+    if (!IN_TAURI) {
+      setDeepgramKey({ has_key: true, key_last4: k.slice(-4) });
+      setDeepgramInput("");
+      return;
+    }
+    void invoke("set_deepgram_key", { key: k })
+      .then(() => {
+        setDeepgramInput("");
+        load();
+      })
+      .catch((e) => setDeepgramErr(String(e)));
+  };
+
+  const removeDeepgramKey = (): void => {
+    if (!IN_TAURI) {
+      setDeepgramKey({ has_key: false, key_last4: "" });
+      return;
+    }
+    void invoke("clear_deepgram_key")
+      .then(load)
+      .catch((e) => setDeepgramErr(String(e)));
   };
 
   return (
@@ -1640,6 +1675,43 @@ function MeetingSection(): JSX.Element {
           )}
         </div>
       ) : null}
+      <div className="set__label">{t.deepgramAsrKey}</div>
+      <div className={`set__hint${deepgramKey.has_key ? " is-ok" : ""}`}>
+        {deepgramKey.has_key
+          ? `${t.deepgramAsrPresent} ·· ${deepgramKey.key_last4}`
+          : t.deepgramAsrAbsent}
+      </div>
+      <div className="set__hint">{t.deepgramAsrHint}</div>
+      {deepgramErr ? <div className="set__hint is-err">{deepgramErr}</div> : null}
+      <div className="keyrow">
+        <input
+          className="keyrow__input"
+          type="password"
+          placeholder={t.deepgramAsrPlaceholder}
+          value={deepgramInput}
+          autoComplete="off"
+          onChange={(e) => setDeepgramInput(e.target.value)}
+          onFocus={() => {
+            if (IN_TAURI) void invoke("focus_field", { focused: true }).catch(() => undefined);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") saveDeepgramKey();
+          }}
+        />
+        <button
+          className="keyrow__btn"
+          type="button"
+          onClick={saveDeepgramKey}
+          disabled={!deepgramInput.trim()}
+        >
+          {t.keySave}
+        </button>
+        {deepgramKey.has_key ? (
+          <button className="keyrow__btn" type="button" onClick={removeDeepgramKey}>
+            {t.keyRemove}
+          </button>
+        ) : null}
+      </div>
       {/* Kept visible whether the feature is on or off: someone deciding whether to turn it on
           needs this more than someone who already has (FR-MT-03). */}
       <div className="set__hint set__hint--quiet">{t.meetingDisclosure}</div>

@@ -1049,6 +1049,52 @@ use shogun_core::meeting::gate::OfferGate;
         crate::meeting_recap::select_kk_configured()
     }
 
+    /// Deepgram API key presence for meeting live STT. Secrets are never returned in full.
+    #[derive(Serialize)]
+    pub struct DeepgramKeyStatus {
+        pub has_key: bool,
+        pub key_last4: String,
+    }
+
+    #[tauri::command]
+    pub fn get_deepgram_key_status() -> DeepgramKeyStatus {
+        match shogun_integrations::keychain_store::get_deepgram_asr_key() {
+            Some(k) if !k.trim().is_empty() => {
+                let k = k.trim();
+                let n = k.chars().count();
+                let last4 = if n >= 4 {
+                    k.chars().skip(n - 4).collect()
+                } else {
+                    "····".to_string()
+                };
+                DeepgramKeyStatus { has_key: true, key_last4: last4 }
+            }
+            _ => DeepgramKeyStatus { has_key: false, key_last4: String::new() },
+        }
+    }
+
+    /// Save the Deepgram API key to Keychain (meeting live STT). The key value is never logged.
+    #[tauri::command]
+    pub fn set_deepgram_key(key: String) -> Result<(), String> {
+        shogun_integrations::keychain_store::set_deepgram_asr_key(&key)?;
+        eprintln!("[meeting] deepgram api key saved to Keychain");
+        Ok(())
+    }
+
+    /// Remove the Deepgram API key from Keychain.
+    #[tauri::command]
+    pub fn clear_deepgram_key() -> Result<(), String> {
+        match shogun_integrations::keychain_store::delete_generic_secret(
+            shogun_integrations::keychain_store::DEEPGRAM_ASR_ACCOUNT,
+        ) {
+            Ok(()) => {}
+            Err(e) if e.code() == -25300 /* errSecItemNotFound */ => {}
+            Err(e) => return Err(e.to_string()),
+        }
+        eprintln!("[meeting] deepgram api key removed");
+        Ok(())
+    }
+
     /// The Recap for the most recently finished meeting (FR-MT-19), if there is one.
     ///
     /// Degraded by construction in MT2: assembled locally from the interval, the user's note and

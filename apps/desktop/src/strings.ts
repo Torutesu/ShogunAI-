@@ -232,6 +232,13 @@ export const STRINGS = {
     meetingMicOnly: "Detect by microphone alone",
     meetingMicOnlyHint:
       "Off by default. When on, sustained microphone use can offer notes without Meet or Zoom in front — useful for calls in other apps.",
+    deepgramAsrKey: "Speech provider key",
+    deepgramAsrHint:
+      "Powers live meeting transcription. Paste once — stored in your Keychain on this Mac.",
+    deepgramAsrPresent: "Connected — live transcription can run.",
+    deepgramAsrAbsent:
+      "Not set — your typed notes still save; live speech transcription needs this key.",
+    deepgramAsrPlaceholder: "Paste Deepgram API key…",
     visualRecallSection: "Visual recall",
     visualRecallHint:
       "Passive OCR reads the focused window when accessibility text is thin. Saved frames stay on this Mac for up to 72 hours, then purge automatically.",
@@ -268,16 +275,15 @@ export const STRINGS = {
     visualRecallRetentionNote: "Screens purge automatically after 72 hours.",
     visualRecallFrameMeta: (when: string, app: string, window: string) =>
       `${when} · ${app}${window ? ` · ${window}` : ""}`,
-    // FR-MT-03 disclosure family. Must match MT3 (invariant 2): on-device audio during approved
-    // meetings, no recording/waveform/audio file to disk/temp/cloud — transcript + provenance only.
-    // Reuse these keys everywhere; never claim we do not listen while ASR runs.
+    // FR-MT-03 disclosure (2026-08-05): Deepgram Nova-3 processes audio for STT only; MIP opt-out;
+    // SHOGUN never saves waveform/recording. Reuse these keys everywhere.
     meetingDisclosure:
-      "Nothing joins your call. For meetings you approve, audio is processed on this Mac only — no recording, waveform, or audio file is saved to disk, temp storage, or the cloud. Only transcript text and its provenance are kept here. Turn meetings off or exclude apps anytime below.",
+      "Nothing joins your call. For meetings you approve, audio is temporarily processed by our speech provider for live transcription only — not retained for training (MIP opt-out). No recording, waveform, or audio file is saved by SHOGUN to disk or temp storage. Only transcript text and its provenance are kept here. Turn meetings off or exclude apps anytime below.",
     meetingDisclosureBrief:
-      "Nothing joins your call. On-device only — no audio file saved.",
-    meetingListening: "Listening on this Mac · no recording saved",
+      "Nothing joins your call. Speech provider processes audio temporarily for transcription — not for training. No audio file saved by SHOGUN.",
+    meetingListening: "Listening · speech provider (not for training) · no recording saved",
     meetingDisclosureRecap:
-      "Processed on this Mac only. No recording saved — transcript, provenance, and your notes.",
+      "Audio was processed temporarily for transcription only — not retained for training. No recording saved by SHOGUN — transcript, provenance, and your notes.",
     // live in-meeting overlay (issue #93)
     meetingModeTranscription: "Transcription",
     meetingModeOneWay: "One-way translation",

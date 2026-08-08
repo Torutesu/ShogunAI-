@@ -16,8 +16,18 @@
 
 use std::collections::BTreeSet;
 
-/// Which on-device ASR model to use. `Small` (bundled default) or `Turbo` (large-v3-turbo,
-/// opt-in high accuracy, fetched on first use). Defaults to Small (§5).
+/// Which ASR engine transcribes meetings. Default is Deepgram (company-paid, 2026-08-05).
+/// Whisper remains an offline/dev fallback (`SHOGUN_ASR_BACKEND=whisper` or settings).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum AsrBackend {
+    #[default]
+    Deepgram,
+    Whisper,
+}
+
+/// Which on-device ASR model to use when [`AsrBackend::Whisper`]. `Small` (bundled) or `Turbo`
+/// (large-v3-turbo, opt-in, fetched on first use). Defaults to Small (§5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum AsrModel {
@@ -71,6 +81,15 @@ impl MeetingLanguage {
             MeetingLanguage::Auto => None,
         }
     }
+
+    /// Deepgram `language` query value. Auto → multilingual Nova-3.
+    pub fn deepgram_code(self) -> &'static str {
+        match self {
+            MeetingLanguage::English => "en",
+            MeetingLanguage::Japanese => "ja",
+            MeetingLanguage::Auto => "multi",
+        }
+    }
 }
 
 /// Meeting-notes settings as persisted.
@@ -88,7 +107,10 @@ pub struct Settings {
     /// Tier (b), the calendar half: occurrence external ids that never offer — the recurring 1:1
     /// a user never wants noted (FR-MT-02).
     pub excluded_occurrences: BTreeSet<String>,
-    /// Which on-device ASR model transcribes the meeting. Defaults to Small (§5).
+    /// Which ASR engine. Defaults to Deepgram (company-paid Nova-3).
+    #[serde(default)]
+    pub asr_backend: AsrBackend,
+    /// Whisper model when `asr_backend == Whisper`. Defaults to Small.
     #[serde(default)]
     pub asr_model: AsrModel,
     /// Which language the meeting is transcribed in. Defaults to English (English-primary policy,
@@ -138,6 +160,7 @@ impl Default for Settings {
             enabled: false,
             excluded_apps: BTreeSet::new(),
             excluded_occurrences: BTreeSet::new(),
+            asr_backend: AsrBackend::Deepgram,
             asr_model: AsrModel::Small,
             language: MeetingLanguage::English,
             allow_mic_only_detect: false,
@@ -327,6 +350,12 @@ mod tests {
 
         assert!(!restored.enabled);
         assert_eq!(restored.excluded_apps.len(), 1);
+    }
+
+    #[test]
+    fn asr_backend_defaults_to_deepgram() {
+        assert_eq!(AsrBackend::default(), AsrBackend::Deepgram);
+        assert_eq!(Settings::default().asr_backend, AsrBackend::Deepgram);
     }
 
     #[test]

@@ -1,6 +1,9 @@
-//! The ASR seam. `worker` depends on this trait, not on whisper — so the pipeline is tested with a
-//! deterministic fake, and the real engine (and a future Apple SpeechAnalyzer backend on macOS 26+)
-//! plug in behind the same shape (§5).
+//! The ASR seam. `worker` depends on this trait, not on a specific engine — so the pipeline is
+//! tested with a deterministic fake, and backends (Deepgram Nova-3 default, optional whisper
+//! fallback, future Apple SpeechAnalyzer) plug in behind the same shape.
+
+#[cfg(feature = "net")]
+pub mod deepgram;
 
 #[cfg(all(feature = "audio", target_os = "macos"))]
 pub mod whisper;
@@ -8,13 +11,14 @@ pub mod whisper;
 use super::Segment;
 
 /// Turn 16 kHz mono f32 PCM into text. Given an in-memory slice — never a file path — so no caller
-/// can be tempted to spill audio to disk (invariant 2).
+/// can be tempted to spill audio to disk (invariant 2 / SHOGUN-local waveform rule).
 pub trait Transcriber: Send {
     /// Transcribe one utterance. Returns zero or more lines. An empty result is normal (silence,
     /// or audio the model could not read) and must not be an error the caller has to handle.
     fn transcribe(&mut self, pcm: &[f32]) -> Vec<Segment>;
 
-    /// Translate speech to English (whisper `translate` task). Default: not supported.
+    /// Translate speech to English (whisper `translate` task). Default: not supported — Deepgram
+    /// path uses Select KK for JA→EN instead.
     fn translate_to_english(&mut self, pcm: &[f32]) -> Vec<Segment> {
         let _ = pcm;
         Vec::new()

@@ -159,6 +159,9 @@ pub fn run() {
         meeting::mac::meeting_recap,
         meeting::mac::meeting_recap_minutes,
         meeting::mac::meeting_select_kk_configured,
+        meeting::mac::get_deepgram_key_status,
+        meeting::mac::set_deepgram_key,
+        meeting::mac::clear_deepgram_key,
         meeting::mac::get_meeting_transcript,
         meeting::mac::meeting_exclude_app,
         meeting::mac::meeting_include_app,
@@ -279,6 +282,7 @@ fn setup_macos(app: &tauri::App) {
         "memory-db-key",
         "select-kk-batch",
         "composio-api-key",
+        "deepgram-asr",
     ]);
 
     // PROVEN by [panelstate]: a Regular app's plain window is REFUSED entry to other apps'

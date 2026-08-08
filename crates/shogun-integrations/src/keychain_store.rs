@@ -43,6 +43,9 @@ const LEGACY_SERVICE: &str = "SHOGUN";
 /// Keychain account for the Select KK credential (Batch lane + live meeting translate).
 pub const SELECT_KK_ACCOUNT: &str = "select-kk-batch";
 
+/// Keychain account for the user's Deepgram API key (meeting live STT).
+pub const DEEPGRAM_ASR_ACCOUNT: &str = "deepgram-asr";
+
 static CACHE: OnceLock<Mutex<HashMap<String, Vec<u8>>>> = OnceLock::new();
 
 /// Read a generic-password secret. Tries [`SERVICE`], then [`LEGACY_SERVICE`]. Migrates legacy-only
@@ -118,6 +121,29 @@ pub fn get_select_kk_key() -> Option<String> {
         }
     }
     Some(key)
+}
+
+/// Whether a Deepgram API key is present in Keychain.
+pub fn deepgram_asr_configured() -> bool {
+    get_deepgram_asr_key().is_some()
+}
+
+/// Read the Deepgram API key from Keychain (`DEEPGRAM_ASR_ACCOUNT` under [`SERVICE`]).
+pub fn get_deepgram_asr_key() -> Option<String> {
+    let bytes = get_generic_secret(DEEPGRAM_ASR_ACCOUNT).ok()?;
+    decode_secret(bytes)
+}
+
+/// Store the Deepgram API key for meeting live STT. Plain text only; never logged.
+pub fn set_deepgram_asr_key(key: &str) -> Result<(), String> {
+    let key = key.trim();
+    if key.is_empty() {
+        return Err("key is empty".into());
+    }
+    if key.chars().count() < 8 {
+        return Err("key looks too short — paste the full Deepgram API key".into());
+    }
+    set_generic_secret(DEEPGRAM_ASR_ACCOUNT, key.as_bytes()).map_err(|e| e.to_string())
 }
 
 /// Store the Select KK API key (Dream Cycle, recap, live translation). Plain text only.

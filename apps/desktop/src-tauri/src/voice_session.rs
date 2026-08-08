@@ -1,6 +1,6 @@
 //! Voice hold-to-talk session: overlay, settings, mic lifecycle, dictation output (#44).
 //!
-//! On release: Whisper → inject transcript into focused text field (AX), else clipboard → idle.
+//! On release: Deepgram Nova-3 (when configured) or Whisper fallback → inject into focused field (AX), else clipboard → idle.
 //! Chat response is deferred; this path is dictation-first per product ask.
 
 #[cfg(target_os = "macos")]
@@ -153,13 +153,13 @@ pub mod mac {
         }
     }
 
-    fn preload_whisper_bg(app: &AppHandle) {
+    fn preload_asr_bg(app: &AppHandle) {
         let app = app.clone();
         std::thread::spawn(move || {
-            if let Err(e) = voice_lane::preload_whisper(&app) {
-                eprintln!("[voice] whisper preload failed: {e}");
+            if let Err(e) = voice_lane::preload_asr(&app) {
+                eprintln!("[voice] asr preload failed: {e}");
             } else {
-                eprintln!("[voice] whisper model ready");
+                eprintln!("[voice] dictation ASR ready");
             }
         });
     }
@@ -176,7 +176,7 @@ pub mod mac {
             });
         }
         if settings.enabled {
-            preload_whisper_bg(app);
+            preload_asr_bg(app);
         }
         eprintln!(
             "[voice] dialogue {}",
@@ -270,9 +270,9 @@ pub mod mac {
         true
     }
 
-    /// End hold: stop mic → Whisper → dictation inject/clipboard → idle.
+    /// End hold: stop mic → Deepgram or Whisper → dictation inject/clipboard → idle.
     ///
-    /// Whisper runs on a dedicated thread so the voice-hold worker is never blocked on ASR.
+    /// ASR runs on a dedicated thread so the voice-hold worker is never blocked.
     pub fn on_hold_end(app: AppHandle) {
         let audio = {
             let mut lane = match LANE.lock() {
@@ -344,7 +344,7 @@ pub mod mac {
         settings.settings.enabled = enabled;
         save_settings(&app, &settings.settings);
         if enabled {
-            preload_whisper_bg(&app);
+            preload_asr_bg(&app);
         }
         eprintln!("[voice] enabled={enabled}");
         Ok(())
