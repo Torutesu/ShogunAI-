@@ -461,7 +461,7 @@ impl DelegateFailure {
             // Deliberately does not say "try again shortly": this is a plan allowance (a monthly
             // credit on Claude), not a rolling window, so the honest next step is an API key rather
             // than waiting.
-            DelegateFailure::RateLimited => LlmError::RateLimited(format!(
+            DelegateFailure::RateLimited => LlmError::QuotaExhausted(format!(
                 "{} has no allowance left on your {} — it refreshes on that plan's cycle. Add an API key in Settings to keep working before then.",
                 delegate.label(),
                 delegate.plan_label()
@@ -900,7 +900,7 @@ mod tests {
     #[test]
     fn rate_limit_error_names_the_plan_and_does_not_blame_shogun() {
         let e = DelegateFailure::RateLimited.into_llm_error(Delegate::ClaudeCode);
-        assert!(matches!(e, LlmError::RateLimited(_)));
+        assert!(matches!(e, LlmError::QuotaExhausted(_)));
         let msg = e.to_string();
         assert!(msg.contains("Claude Pro / Max"), "{msg}");
         assert!(!msg.to_lowercase().contains("shogun"), "{msg}");
