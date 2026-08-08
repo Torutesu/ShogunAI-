@@ -453,8 +453,6 @@ export const STRINGS = {
     deleteDone: "Deleted from this device.",
     // Anonymous usage card (Slice D). Opt-in — OFF by default, and never carries captured content.
     analyticsTitle: "Anonymous usage",
-    analyticsNote:
-      "Off by default. When on, anonymous, aggregated usage stats help improve quality. Never your captured content.",
     // Generic on/off labels for the notch settings toggles (own catalog, so they can't drift from
     // the FULL_UI copy).
     toggleOn: "On",

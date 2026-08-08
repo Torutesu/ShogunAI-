@@ -2418,13 +2418,6 @@ function ApprovalsSection(): JSX.Element | null {
   );
 }
 
-// Draft is not here: it fires on a bare ⌥ (Option) tap, which can't be a global shortcut and so
-// isn't rebindable. Settings shows it as a fixed row.
-const DEFAULT_BINDS: Record<string, string> = {
-  summon: "Control+Alt+KeyN",
-  quit: "Control+Alt+KeyQ",
-  voice: "Control+Alt+KeyV",
-};
 /** The model each provider runs. Mirrors default_model() in inline_source.rs — shown so the user
  *  can see what will run, not so they can change it. */
 function defaultModelFor(provider: string): string {

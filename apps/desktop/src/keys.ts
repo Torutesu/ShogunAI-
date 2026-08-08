@@ -8,6 +8,7 @@
 export const DEFAULT_BINDS: Record<string, string> = {
   summon: "Control+Alt+KeyN",
   quit: "Control+Alt+KeyQ",
+  voice: "Control+Alt+KeyV",
 };
 
 /** "Control+Alt+KeyN" → ["⌃","⌥","N"] for <kbd> chips. */
