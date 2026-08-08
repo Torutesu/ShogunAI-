@@ -324,6 +324,293 @@
   filter: none;
 }
 
+/* ── first-run flow (issue #6) ────────────────────────────────────────────
+   Six steps in the same card the #46 guide used. One column, one idea per step, and a footer
+   whose primary action is always in the same place so six steps feel like one motion. All rules
+   here layer onto the onb-* tokens above — the flow is not a separate world, it is this product
+   being explained. */
+
+.ob-card {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 80px);
+}
+
+/* progress as segments, not a bar: six discrete steps, and you can see there are six */
+.ob-prog {
+  flex: 1;
+  display: flex;
+  gap: 3px;
+  min-width: 0;
+  margin: 0 16px;
+}
+.ob-seg {
+  flex: 1;
+  height: 3px;
+  border-radius: var(--r-pill);
+  background: var(--fill);
+  transition: background 200ms var(--sp);
+}
+.ob-seg.is-done {
+  background: var(--accent);
+}
+.ob-count {
+  flex: none;
+  font-size: var(--fs-xs);
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.ob-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.ob-foot {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 28px 20px;
+  border-top: 1px solid var(--line);
+}
+.ob-acts {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ob-foot .onb-btn {
+  margin-left: 0;
+}
+
+.obs {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.ob-points {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.ob-points li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: var(--fs-lg);
+  color: var(--ink);
+}
+
+/* a stated fact — the shape used wherever onboarding makes a promise */
+.ob-facts {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ob-fact {
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--card);
+}
+.ob-fact-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ob-fact-t {
+  display: block;
+  font-size: var(--fs-md);
+  font-weight: 600;
+  color: var(--ink);
+}
+.ob-fact-b {
+  display: block;
+  margin-top: 3px;
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  color: var(--muted);
+  max-width: 56ch;
+}
+.ob-locked {
+  color: var(--accent);
+}
+
+/* never read — a fact of the build, so it is shown, never offered */
+.ob-never {
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--fill);
+}
+.ob-never-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ob-never-title {
+  font-size: var(--fs-md);
+  font-weight: 600;
+  color: var(--ink);
+}
+.ob-never-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+.ob-never-item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 7px;
+  font-size: var(--fs-sm);
+  color: var(--ink);
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--r-pill);
+  padding: 5px 12px;
+}
+.ob-never-item b {
+  font-weight: 500;
+  color: var(--faint);
+  font-size: var(--fs-xs);
+}
+.ob-never-note {
+  margin-top: 10px;
+  font-size: var(--fs-sm);
+  color: var(--faint);
+}
+
+/* permission — one card whose whole job is to change state in front of you */
+.ob-perm {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 18px;
+  border-radius: var(--r-lg);
+  border: 1px solid var(--line);
+  background: var(--card);
+}
+.ob-perm.is-on {
+  border-color: color-mix(in srgb, var(--live) 34%, transparent);
+  background: var(--onb-live-soft);
+}
+.ob-perm-state {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  color: var(--live);
+}
+.ob-perm-proof {
+  font-size: var(--fs-md);
+  color: var(--muted);
+}
+.ob-perm-cta {
+  display: flex;
+}
+.ob-perm-cta .onb-btn {
+  margin-left: 0;
+}
+
+/* plans — two cards, picked not sold */
+.ob-plans {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.ob-plan {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  text-align: left;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--card);
+  color: var(--ink);
+  font: inherit;
+  font-family: var(--sys);
+  cursor: pointer;
+  transition: border-color 140ms var(--sp), background 140ms var(--sp);
+}
+.ob-plan:hover {
+  border-color: var(--line-strong);
+}
+.ob-plan.is-on {
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  background: var(--onb-soft);
+}
+.ob-plan-name {
+  font-size: var(--fs-lg);
+  font-weight: 600;
+}
+.ob-plan-body {
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+/* BYOK row (Pro only) — the key goes to the Keychain, nowhere else */
+.ob-keyrow {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+.ob-keyinput {
+  flex: 1;
+  min-width: 0;
+  padding: 9px 12px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--line-strong);
+  background: var(--fill);
+  color: var(--ink);
+  font: inherit;
+  font-family: var(--sys);
+  font-size: var(--fs-md);
+}
+.ob-keyinput:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+/* drafts-only switch row */
+.ob-switchrow {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  cursor: pointer;
+}
+.ob-switchrow input {
+  margin-top: 3px;
+}
+
+/* the two triggers taught at the end */
+.ob-keys {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--card);
+}
+.ob-keys-name {
+  font-size: var(--fs-md);
+  color: var(--ink);
+}
+.ob-keys-chips {
+  display: inline-flex;
+  gap: 4px;
+}
+
 @keyframes onb-rise {
   from {
     opacity: 0;

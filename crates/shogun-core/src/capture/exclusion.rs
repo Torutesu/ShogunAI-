@@ -116,6 +116,22 @@ impl ExclusionPolicy {
         self.user_bundles.iter().map(String::as_str).collect()
     }
 
+    /// The exclusion categories and how many rules each currently covers, read from THIS live
+    /// policy. Onboarding renders these directly (issue #6, "reads" step): a UI that hardcoded the
+    /// list would tell the user a lie about today's behaviour the moment a default is added. The
+    /// first four are the non-removable defaults counted from their live tables; `sensitive_titles`
+    /// is the user's own title/URL patterns. Ids are stable keys looked up in the UI's string
+    /// catalogue (strings.ts) — never display text (CLAUDE.md: copy stays out of code).
+    pub fn category_counts(&self) -> Vec<(&'static str, usize)> {
+        vec![
+            ("password_managers", PASSWORD_MANAGERS.len()),
+            ("auth_dialog", AUTH_AGENTS.len()),
+            ("terminals", TERMINALS.len()),
+            ("private_browsing", KNOWN_BROWSERS.len()),
+            ("sensitive_titles", self.user_title_patterns.len()),
+        ]
+    }
+
     /// Add a title/URL substring pattern (matched case-insensitively against the window title).
     pub fn add_title_pattern(&mut self, pattern: impl Into<String>) {
         let p = pattern.into().to_lowercase();
@@ -291,5 +307,30 @@ mod tests {
             Some(ExclusionReason::UserPattern)
         );
         assert_eq!(p.is_excluded("com.apple.Numbers", Some("budget.numbers")), None);
+    }
+
+    #[test]
+    fn category_counts_report_the_live_default_tables() {
+        let counts = ExclusionPolicy::new().category_counts();
+        assert_eq!(
+            counts,
+            vec![
+                ("password_managers", PASSWORD_MANAGERS.len()),
+                ("auth_dialog", AUTH_AGENTS.len()),
+                ("terminals", TERMINALS.len()),
+                ("private_browsing", KNOWN_BROWSERS.len()),
+                ("sensitive_titles", 0),
+            ],
+            "onboarding must render the live policy, not a hardcoded list"
+        );
+    }
+
+    #[test]
+    fn sensitive_titles_count_tracks_user_patterns() {
+        let mut p = ExclusionPolicy::new();
+        p.add_title_pattern("Salary");
+        p.add_title_pattern("medical");
+        let sensitive = p.category_counts().into_iter().find(|(id, _)| *id == "sensitive_titles");
+        assert_eq!(sensitive, Some(("sensitive_titles", 2)));
     }
 }

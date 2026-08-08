@@ -32,6 +32,24 @@ pub struct AnalyticsConfig {
     pub distinct_id: String,
 }
 
+/// PostHog キーの解決（純関数）。優先順位: 実行時 env → ビルド時埋め込み → None（無効）。
+///
+/// - `runtime`: プロセス起動時の `SHOGUN_POSTHOG_KEY`（ローカル開発での上書き用）
+/// - `built_in`: 呼び出し側クレートで `option_env!("SHOGUN_POSTHOG_KEY")` によりビルド時に
+///   埋め込まれたキー（配布ビルドの既定値。リリース CI がビルド環境に設定する）
+///
+/// 空文字・空白のみは「未設定」として次の候補へフォールバックする。両方無ければ `None` で
+/// 分析は no-op（開発・OSS ビルドで無害）。キーは PostHog の write-only project key であり
+/// シークレットではないが、リポジトリにはコミットしない（CI secret から注入）。
+pub fn resolve_api_key(runtime: Option<&str>, built_in: Option<&str>) -> Option<String> {
+    [runtime, built_in]
+        .into_iter()
+        .flatten()
+        .map(str::trim)
+        .find(|k| !k.is_empty())
+        .map(str::to_string)
+}
+
 /// PostHog `/batch` に投げる JSON ボディを組み立てる純関数。
 ///
 /// 形式: `{ "api_key": ..., "batch": [ { "event", "distinct_id", "properties" }, ... ] }`
@@ -191,7 +209,42 @@ mod tests {
         assert_eq!(parsed["batch"].as_array().unwrap().len(), 0);
     }
 
-    use std::sync::atomic::{AtomicBool, Ordering};
+    // ── resolve_api_key: 実行時 env → ビルド時埋め込み → None ────────────────
+
+    #[test]
+    fn runtime_key_wins_over_built_in() {
+        assert_eq!(
+            resolve_api_key(Some("phc_runtime"), Some("phc_builtin")),
+            Some("phc_runtime".to_string())
+        );
+    }
+
+    #[test]
+    fn built_in_key_is_the_distributed_default() {
+        assert_eq!(resolve_api_key(None, Some("phc_builtin")), Some("phc_builtin".to_string()));
+    }
+
+    #[test]
+    fn empty_or_whitespace_runtime_falls_back_to_built_in() {
+        assert_eq!(resolve_api_key(Some(""), Some("phc_builtin")), Some("phc_builtin".to_string()));
+        assert_eq!(
+            resolve_api_key(Some("  \t"), Some("phc_builtin")),
+            Some("phc_builtin".to_string())
+        );
+    }
+
+    #[test]
+    fn no_key_anywhere_disables_analytics() {
+        assert_eq!(resolve_api_key(None, None), None);
+        assert_eq!(resolve_api_key(Some(""), Some("")), None);
+    }
+
+    #[test]
+    fn resolved_key_is_trimmed() {
+        assert_eq!(resolve_api_key(Some(" phc_x "), None), Some("phc_x".to_string()));
+    }
+
+    use std::sync::atomic::AtomicBool;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 

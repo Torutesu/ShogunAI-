@@ -222,6 +222,37 @@ pub fn castle_origin(vis: Rect, w: f64, h: f64, pos: CastlePosition) -> Point {
     Point::new(x, y)
 }
 
+/// A user-dragged resting place (issue #21), stored as offsets inside the target screen's
+/// **visible frame**: `dx` from its left edge to the panel's left edge, `dy` from its top edge
+/// DOWN to the panel's top edge. Relative rather than absolute so the spot translates across
+/// displays and display-configuration changes; `drag_origin` clamps the result fully on screen.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DragOffset {
+    pub dx: f64,
+    pub dy: f64,
+}
+
+/// Bottom-left NS origin for a `w`×`h` panel resting at the dragged offset `off` inside `vis`.
+/// Anchored at the panel's TOP-LEFT corner — a drag grabs the pill where it is, and expanding
+/// grows down/right from that corner (same reading as the manual corner-grip resize). Clamped
+/// exactly like `castle_origin`, so a display change can only pull the panel back on screen,
+/// never lose it.
+pub fn drag_origin(vis: Rect, w: f64, h: f64, off: DragOffset) -> Point {
+    let x = vis.x + off.dx;
+    let y = vis.max_y() - off.dy - h;
+    // `max` guards a degenerate visible frame smaller than the panel (clamp collapses to the edge).
+    let x = x.clamp(vis.x, (vis.max_x() - w).max(vis.x));
+    let y = y.clamp(vis.y, (vis.max_y() - h).max(vis.y));
+    Point::new(x, y)
+}
+
+/// Inverse of `drag_origin`: the offsets describing a panel whose frame origin (bottom-left) is
+/// `origin` with height `h`, on the screen whose visible frame is `vis`. Used to RECORD where a
+/// native window drag dropped the panel.
+pub fn drag_offset(vis: Rect, origin: Point, h: f64) -> DragOffset {
+    DragOffset { dx: origin.x - vis.x, dy: vis.max_y() - (origin.y + h) }
+}
+
 /// Convert a CGEvent point (top-left origin, y-down, referenced to the primary display)
 /// to NS coordinates (spec §3.4.7). `primary_height` is `NSScreen.screens[0].frame.height`.
 ///
@@ -389,5 +420,49 @@ mod tests {
         assert_eq!(pill.y, v.y);
         assert_eq!(open.y, v.y); // bottom edge held across the size change
         assert_eq!(pill.x + 260.0 / 2.0, open.x + 400.0 / 2.0); // centre held
+    }
+
+    #[test]
+    fn drag_offset_and_origin_round_trip() {
+        // Record a dropped frame, replay it on the same screen: identical origin.
+        let v = visible();
+        let (w, h) = (260.0, 44.0);
+        let dropped = Point::new(v.x + 300.0, v.y + 120.0);
+        let off = drag_offset(v, dropped, h);
+        assert_eq!(drag_origin(v, w, h, off), dropped);
+    }
+
+    #[test]
+    fn drag_origin_is_anchored_top_left_across_size_changes() {
+        // Pill → open panel at a dragged spot: the TOP-LEFT corner stays put, the panel grows
+        // down/right (the same reading as the manual corner-grip resize).
+        let v = visible();
+        let off = DragOffset { dx: 300.0, dy: 200.0 };
+        let pill = drag_origin(v, 260.0, 44.0, off);
+        let open = drag_origin(v, 400.0, 180.0, off);
+        assert_eq!(pill.x, open.x); // left edge held
+        assert_eq!(pill.y + 44.0, open.y + 180.0); // top edge held
+    }
+
+    #[test]
+    fn drag_origin_clamps_back_on_screen_after_a_display_change() {
+        // The offsets were recorded on a large display; replayed on a smaller one they land
+        // outside — the panel must be pulled fully back inside the visible frame.
+        let big = Rect::new(0.0, 0.0, 3440.0, 1415.0);
+        let small = visible();
+        let (w, h) = (400.0, 180.0);
+        let off = drag_offset(big, Point::new(big.max_x() - w, big.y), h); // bottom-right of big
+        let o = drag_origin(small, w, h, off);
+        assert!(o.x >= small.x && o.x + w <= small.max_x());
+        assert!(o.y >= small.y && o.y + h <= small.max_y());
+    }
+
+    #[test]
+    fn drag_origin_survives_a_degenerate_visible_frame() {
+        // A visible frame smaller than the panel collapses to the frame origin instead of
+        // producing an off-screen or NaN position.
+        let v = Rect::new(10.0, 20.0, 100.0, 50.0);
+        let o = drag_origin(v, 400.0, 180.0, DragOffset { dx: 42.0, dy: 7.0 });
+        assert_eq!((o.x, o.y), (v.x, v.y));
     }
 }

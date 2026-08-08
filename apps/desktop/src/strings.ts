@@ -4,6 +4,95 @@
 
 export const STRINGS = {
   en: {
+    // ── onboarding (issue #6) ─────────────────────────────────────────────────
+    // First run, in its own window. The order is deliberate — what it does, what it reads and
+    // never keeps, then permission, then the rest. Nothing is asked for before the reason to
+    // grant it has been given. The permission step reuses the `onboarding` block below (#46).
+    obNext: "Continue",
+    obBack: "Back",
+    obSkip: "Skip for now",
+    obStep: "Step {n} of {total}",
+
+    obWelcomeTitle: "SHOGUN lives in the notch.",
+    obWelcomeBody:
+      "It watches the work you're already doing, works out what you owe and what you're waiting on, and puts the next move one click away — right under the notch.",
+    obWelcomePoint1: "Nothing to file, tag or maintain.",
+    obWelcomePoint2: "It gets useful by tomorrow morning, and better every night.",
+    obWelcomeStart: "Set up SHOGUN",
+
+    obReadsTitle: "What it reads, and what it never keeps.",
+    obReadsBody:
+      "SHOGUN reads the text of the window you're working in, through macOS Accessibility. That's it.",
+    obReadsKeep1Title: "No screenshots. Ever.",
+    obReadsKeep1Body: "No images are captured, and none are stored. Text only.",
+    obReadsKeep2Title: "Your work stays on this Mac.",
+    obReadsKeep2Body:
+      "Raw captures never leave the device. Only small processed chunks go out for indexing, and every one is logged where you can read it.",
+    obReadsKeep3Title: "Nothing is sent on your behalf.",
+    obReadsKeep3Body: "Replies, posts and invites wait for you to confirm them, one at a time.",
+    obNeverTitle: "Never read at all",
+    obNeverBody: "These are built in. There's nothing to configure, and they can't be turned off.",
+    obNeverApps: { one: "1 app", other: "{n} apps" },
+    obNeverRules: { one: "1 rule", other: "{n} rules" },
+    /// Labels for the exclusion categories Rust reports — the ids come from the live policy, so a
+    /// category added there shows up here as soon as it has a label.
+    obExclusion: {
+      password_managers: "Password managers",
+      auth_dialog: "The macOS authentication dialog",
+      terminals: "Terminals",
+      private_browsing: "Private browsing windows",
+      sensitive_titles: "Windows with sensitive titles",
+    } as Record<string, string>,
+
+    obPermTitle: "SHOGUN needs one permission.",
+    obPermBody:
+      "Accessibility lets it read the text of your active window. macOS will ask you to allow it in System Settings — SHOGUN can't grant it for you.",
+    obPermGranted: "Granted — it's reading",
+    obPermProof: "Right now: {app}",
+    obPermSkipTitle: "Without it",
+    obPermSkipBody:
+      "Connections and chat still work, but SHOGUN can't see what you're working on — so it can't tell you what's next, and drafts won't know your context.",
+
+    obPlanTitle: "Seven days of everything.",
+    obPlanBody:
+      "Your trial includes every feature. When it ends, pick the plan you actually used — no card until then.",
+    obPlanStandard: "Standard",
+    obPlanStandardBody: "Capture, memory, search, the panel, read-only connections, nightly review.",
+    obPlanPro: "Pro",
+    obPlanProBody: "Everything in Standard, plus agents that act for you, the Memory API, and send.",
+    obPlanKeys: "Two keys, two jobs",
+    obPlanKeysBody:
+      "Indexing and the nightly review run on SHOGUN's own key — included, nothing to set up. Agent work and chat run on your key, so your reasoning is yours and never metered by us.",
+    obKeyTitle: "Your key",
+    obKeyBody: "Stored in your macOS Keychain — never in a file, a database or a log.",
+
+    obConnectTitle: "Connect what you work in.",
+    obConnectBody:
+      "First-layer connections talk to each service from this Mac. Read-only to begin with — you can add sending later, once you trust it.",
+    obDraftStop: "Drafts only",
+    obDraftStopBody: "Write replies and leave them in drafts. Nothing is ever sent for you.",
+    obDraftStopLocked: "Turning this off needs your consent first — that lives in Settings.",
+    obConnectSkip: "You can connect these later in Settings.",
+
+    obReadyTitle: "You're set.",
+    obReadyBody: "Two things worth knowing, and then it's out of your way.",
+    obReadyShortcut: "Open SHOGUN from anywhere",
+    obReadyDraft: "Draft where you're typing",
+    obReadyDraftKey: "Tap ⌥",
+    obReadyTonight: "Tonight",
+    obReadyTonightBody:
+      "While your Mac is idle, SHOGUN works through the day and updates what it's tracking. Tomorrow it'll know a little. By the weekend it'll know your week.",
+    obReadyStart: "Start using SHOGUN",
+
+    // Analytics opt-out toggle (issue #61 / #28 — on by default, metadata only, never content)
+    analyticsToggleLabel: "Share anonymous usage metrics to help improve SHOGUN",
+    analyticsToggleDetail:
+      "Event names and timings only — never your content, screen text, or API keys.",
+    // Settings › Privacy — the toggle's permanent home (issue #99); onboarding shows it once,
+    // this section is where a set-up user changes their mind later.
+    privacy: "Privacy",
+
+    // ── panel ─────────────────────────────────────────────────────────────────
     // live line
     reading: "reading",
     yourScreen: "your screen",
@@ -357,6 +446,12 @@ export const FULL_UI = {
 export const tf = FULL_UI.en;
 
 export type Locale = keyof typeof STRINGS;
+
+/** A count with its plural form. English needs one/other; the shape is what other locales need
+ *  more of, so counted copy is written as a form table from the start rather than `+ " apps"`. */
+export function count(forms: { one: string; other: string }, n: number): string {
+  return (n === 1 ? forms.one : forms.other).replace("{n}", String(n));
+}
 
 /** Active locale (v1: English fixed; a settings-driven value in Phase 1). */
 export const t = STRINGS.en;

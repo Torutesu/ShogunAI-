@@ -23,8 +23,22 @@ function beginDrag(e: React.MouseEvent): void {
       .catch((err) => uiLog(`startDragging failed: ${err}`)),
   );
 }
+
+// Collapsed state: let the pill be dragged to a new spot (issue #21). The whole strip is one
+// button whose click expands the panel, so we can't use beginDrag (it bails on buttons). Native
+// performWindowDragWithEvent handles the distinction for us: a real drag moves the window and
+// swallows the click, while a stationary press returns and falls through to onClick (expand) —
+// so the pill stays click-to-open AND becomes drag-to-move without a manual threshold. Rust
+// remembers the dropped spot as the resting place until a Castle Position is picked again
+// (docs/fixes/2026-07-30-pill-drag-port-design.md).
+function beginPillDrag(e: React.MouseEvent): void {
+  if (!IN_TAURI || e.button !== 0) return;
+  void invoke("start_panel_drag").catch((err) => uiLog(`start_panel_drag failed: ${err}`));
+}
 import { t } from "./strings";
-import { SERVICE_ICONS } from "./serviceIcons";
+import { AnalyticsToggle } from "./AnalyticsToggle";
+import { ConnectionsList } from "./connections";
+import { comboChips, DEFAULT_BINDS } from "./keys";
 
 // SHOGUN panel. A visible, interactive window that hangs from the notch. Opening/closing is driven
 // by direct clicks in the webview (reliable — no dependency on the CGEventTap hover path or a global
@@ -588,6 +602,13 @@ export function App(): JSX.Element {
             cancelHoverOpen();
             expand();
           }}
+          onMouseDown={(e) => {
+            // A drag must never expand the panel: kill the hover-dwell timer the moment the
+            // press starts. The native drag swallows the click on a real move; a stationary
+            // press still expands through onClick above.
+            cancelHoverOpen();
+            beginPillDrag(e);
+          }}
           onPointerEnter={onHandleEnter}
           onPointerLeave={cancelHoverOpen}
           title={t.openPanel}
@@ -891,69 +912,8 @@ function ResizeGrip(props: {
   );
 }
 
-// First-layer connections (§6.9). Connect / disconnect a service and show its sync state. Talks to
-// the Rust connector commands (connectors_list / connect_service / disconnect_service); the data
-// layer stays in Rust (invariant 1) — this is presentation only.
-type ConnState = "connected" | "needs_reauth" | "disconnected" | "coming_soon";
-interface ServiceStatus {
-  source: string; // "gmail" | "gcal" | "gdrive" | "slack" | "notion" | "github" | "linear"
-  state: ConnState;
-  last_sync_ms: number | null;
-  has_endpoint: boolean;
-}
-const CONN_LABELS: Record<string, string> = {
-  gmail: "Gmail",
-  gcal: "Google Calendar",
-  gdrive: "Google Drive",
-  slack: "Slack",
-  notion: "Notion",
-  github: "GitHub",
-  linear: "Linear",
-};
-// Brand marks, inlined from simple-icons at build time (see scripts/generate-service-icons.mjs).
-// Services that project has removed on trademark request — Slack, OpenAI — fall back to a lettered
-// disc in the service's own colour rather than an approximated logo.
-const CONN_FALLBACK_TINT: Record<string, string> = {
-  slack: "#611f69",
-  openai: "#74aa9c",
-};
-
-/// Perceived luminance of a #rrggbb colour, 0..1 (Rec. 709 coefficients).
-function luminance(hex: string): number {
-  const n = parseInt(hex.slice(1), 16);
-  const [r, g, b] = [(n >> 16) & 255, (n >> 8) & 255, n & 255];
-  return (0.2126 * r + 0.7152 * g + 0.0587 * b) / 255;
-}
-
-/// A service's mark: the real logo where we have one, a lettered disc where we don't.
-///
-/// Brand colours are used as-is except at the extremes — Notion and GitHub are near-black, which
-/// disappears on the dark panel — where the mark falls back to the foreground colour so it stays
-/// legible in whichever theme is showing.
-function ServiceMark(props: { source: string; label: string }): JSX.Element {
-  const icon = SERVICE_ICONS[props.source];
-  const raw = icon?.hex ?? CONN_FALLBACK_TINT[props.source] ?? "";
-  const lum = raw ? luminance(raw) : 0.5;
-  const tint = !raw || lum < 0.16 || lum > 0.9 ? "var(--ink)" : raw;
-  return (
-    <span className="conn__mark" style={{ "--tint": tint } as React.CSSProperties} aria-hidden="true">
-      {icon ? (
-        <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" role="presentation">
-          <path d={icon.path} />
-        </svg>
-      ) : (
-        props.label.charAt(0)
-      )}
-    </span>
-  );
-}
-
-const CONN_STATE_LABEL: Record<ConnState, string> = {
-  connected: "Connected",
-  needs_reauth: "Needs reauth",
-  disconnected: "Not connected",
-  coming_soon: "Coming soon",
-};
+// First-layer connections (§6.9): the row UI lives in src/connections.tsx, shared with the
+// onboarding flow so the two surfaces can never drift (invariant 1 — presentation only here).
 
 // The nightly cycle's result (FR-DC-06). Shown because the work happens while nobody is watching:
 // without this, "did anything happen last night" is unanswerable, and a run that has been quietly
@@ -1502,83 +1462,11 @@ function CastlePositionSection(): JSX.Element {
 }
 
 function ConnectionsSection(): JSX.Element {
-  const [rows, setRows] = useState<ServiceStatus[]>([]);
-  const [busy, setBusy] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  const refresh = useCallback((): void => {
-    if (!IN_TAURI) return;
-    void invoke<ServiceStatus[]>("connectors_list")
-      .then((r) => {
-        setRows(r);
-        setError(null);
-      })
-      .catch((e) => setError(String(e)));
-  }, []);
-  useEffect(refresh, [refresh]);
-
-  const act = useCallback(
-    (cmd: "connect_service" | "disconnect_service", source: string): void => {
-      setBusy(source);
-      setError(null);
-      void invoke(cmd, { service: source })
-        .then(refresh)
-        .catch((e) => setError(String(e)))
-        .finally(() => setBusy(null));
-    },
-    [refresh],
-  );
-
   return (
     <section className="set">
       <div className="set__label">{t.connections}</div>
       <div className="set__hint">{t.connectionsHint}</div>
-      {error ? <div className="set__hint is-err">{error}</div> : null}
-      {rows.length === 0 ? (
-        <div className="set__hint">{t.connectionsEmpty}</div>
-      ) : (
-        <div className="conns">
-          {rows.map((r) => {
-            const label = CONN_LABELS[r.source] ?? r.source;
-            const canConnect = r.has_endpoint && r.state !== "coming_soon";
-            const connected = r.state === "connected" || r.state === "needs_reauth";
-            const stateMod =
-              r.state === "connected" ? " is-ok" : r.state === "needs_reauth" ? " is-warn" : "";
-            return (
-              <div key={r.source} className="conn">
-                <ServiceMark source={r.source} label={label} />
-                <div className="conn__meta">
-                  <span className="conn__name">{label}</span>
-                  <span className={`conn__state${stateMod}`}>
-                    {CONN_STATE_LABEL[r.state]}
-                    {r.last_sync_ms ? ` · ${new Date(r.last_sync_ms).toLocaleTimeString()}` : ""}
-                  </span>
-                </div>
-                {connected ? (
-                  <button
-                    className="keyrow__btn"
-                    type="button"
-                    disabled={busy === r.source}
-                    onClick={() => act("disconnect_service", r.source)}
-                  >
-                    {busy === r.source ? "…" : t.disconnect}
-                  </button>
-                ) : (
-                  <button
-                    className="keyrow__btn"
-                    type="button"
-                    disabled={!canConnect || busy === r.source}
-                    onClick={() => act("connect_service", r.source)}
-                    title={canConnect ? "" : t.connectionsUnavailable}
-                  >
-                    {busy === r.source ? t.connecting : t.connect}
-                  </button>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      )}
+      <ConnectionsList />
     </section>
   );
 }
@@ -1683,12 +1571,6 @@ function ApprovalsSection(): JSX.Element | null {
   );
 }
 
-// Draft is not here: it fires on a bare ⌥ (Option) tap, which can't be a global shortcut and so
-// isn't rebindable. Settings shows it as a fixed row.
-const DEFAULT_BINDS: Record<string, string> = {
-  summon: "Control+Alt+KeyN",
-  quit: "Control+Alt+KeyQ",
-};
 /** The model each provider runs. Mirrors default_model() in inline_source.rs — shown so the user
  *  can see what will run, not so they can change it. */
 function defaultModelFor(provider: string): string {
@@ -1715,18 +1597,6 @@ const SHORTCUT_ROWS: Array<{ action: string; label: string }> = [
   { action: "quit", label: t.quitShortcut },
 ];
 
-/** "Control+Alt+KeyN" → ["⌃","⌥","N"] for <kbd> chips. */
-function comboChips(combo: string): string[] {
-  return combo.split("+").map((part) => {
-    if (part === "Control") return "⌃";
-    if (part === "Alt") return "⌥";
-    if (part === "Shift") return "⇧";
-    if (part === "Super") return "⌘";
-    if (part.startsWith("Key")) return part.slice(3);
-    if (part.startsWith("Digit")) return part.slice(5);
-    return part;
-  });
-}
 
 function Settings(props: {
   appearance: Appearance;
@@ -2071,6 +1941,13 @@ function Settings(props: {
               </div>
             </div>
           )}
+        </section>
+        {/* Privacy — permanent home of the analytics opt-out (issue #99). Onboarding shows the
+            same toggle once; without this section a set-up user had no way to change their mind.
+            Sits with Memory at the bottom: both are data controls, not daily-use settings. */}
+        <section className="set">
+          <div className="set__label">{t.privacy}</div>
+          <AnalyticsToggle />
         </section>
       </div>
     </div>

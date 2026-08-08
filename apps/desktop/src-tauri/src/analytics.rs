@@ -122,13 +122,24 @@ pub fn analytics_set_opt_out(
     Ok(())
 }
 
-/// 分析を初期化する。`SHOGUN_POSTHOG_KEY` 未設定なら無効（no-op）ラッパを返す。
+/// ビルド時に埋め込む PostHog project write key（配布ビルドの既定値）。
+///
+/// **リリース CI は `SHOGUN_POSTHOG_KEY` をビルド環境（CI secret）に設定すること** —
+/// 未設定でビルドすると配布物は分析無効のまま出荷される（Issue #99 の元不具合）。
+/// キーは write-only / 公開安全設計だがリポジトリにはコミットしない。
+/// `build.rs` の `rerun-if-env-changed` が env 変更時の再コンパイルを保証する。
+const BUILT_IN_POSTHOG_KEY: Option<&str> = option_env!("SHOGUN_POSTHOG_KEY");
+
+/// 分析を初期化する。キー解決は 実行時 env（ローカル開発の上書き）→ ビルド時埋め込み → 無効。
+/// キーが両方無ければ no-op ラッパを返す（開発ビルドで無害）。
 pub fn init(app: &AppHandle) -> Analytics {
-    let key = std::env::var("SHOGUN_POSTHOG_KEY").unwrap_or_default();
-    if key.is_empty() {
-        eprintln!("[analytics] SHOGUN_POSTHOG_KEY unset — analytics disabled");
+    let runtime_key = std::env::var("SHOGUN_POSTHOG_KEY").ok();
+    let Some(key) =
+        shogun_core::analytics::resolve_api_key(runtime_key.as_deref(), BUILT_IN_POSTHOG_KEY)
+    else {
+        eprintln!("[analytics] no PostHog key (runtime env or build-time embed) — analytics disabled");
         return Analytics(None);
-    }
+    };
     let host = std::env::var("SHOGUN_POSTHOG_HOST")
         .unwrap_or_else(|_| "https://us.i.posthog.com".to_string());
     let state = match load_or_init_state(app) {

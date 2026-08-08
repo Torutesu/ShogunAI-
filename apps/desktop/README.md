@@ -28,6 +28,25 @@ apps/desktop/
   `tauri dev`. All measurement (S-11/S-12/S-13) and the four-question verdicts happen here.
   Requires Accessibility permission (single TCC category — see `docs/phase0-findings.md`).
 
+## Release builds — analytics key (Issue #99)
+
+The PostHog project write key is embedded **at build time** via
+`option_env!("SHOGUN_POSTHOG_KEY")` in `src-tauri/src/analytics.rs`, with the runtime
+env var of the same name overriding it for local development. Precedence
+(`shogun_core::analytics::resolve_api_key`): runtime env → build-time embed → disabled
+(no-op).
+
+- **Release CI must export `SHOGUN_POSTHOG_KEY` (from a CI secret) in the environment of
+  the `tauri build` step.** A build without it ships with analytics silently disabled —
+  the original Issue #99 bug.
+- The key is a PostHog *project API key* (`phc_…`): write-only and public-by-design, so
+  embedding it in the binary is safe. It is still sourced from a CI secret and **never
+  committed to the repo**.
+- `src-tauri/build.rs` emits `cargo:rerun-if-env-changed=SHOGUN_POSTHOG_KEY` so
+  incremental builds pick up env changes.
+- Optional: `SHOGUN_POSTHOG_HOST` (runtime env) overrides the default
+  `https://us.i.posthog.com`.
+
 ## Key decisions (Stage-A research → `docs/phase0-findings.md`)
 
 - NSPanel via `tauri-nspanel` v2.1 (`object_setClass`); dynamic key-window for the search

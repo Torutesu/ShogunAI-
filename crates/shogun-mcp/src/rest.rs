@@ -98,6 +98,9 @@ fn resolve(method: Method, path: &str) -> Result<Routed, RouteMiss> {
         ["v1", "memory", "context"] => {
             method_is(method, Method::Get, Routed::Read { tool: Tool::MemoryGetContext, id: None })
         }
+        ["v1", "device", "onboarding"] => {
+            method_is(method, Method::Get, Routed::Read { tool: Tool::DeviceOnboardingGet, id: None })
+        }
         ["v1", "memory", "notes"] => {
             method_is(method, Method::Post, Routed::Write { tool: Tool::MemoryAppendNote, level: Level::L1 })
         }

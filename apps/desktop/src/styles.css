@@ -151,12 +151,16 @@ body {
   color: var(--ink);
   font: inherit;
   font-family: var(--sys);
-  cursor: pointer;
+  /* click opens, drag repositions — grab reads as "movable", matching the open panel's header. */
+  cursor: grab;
   text-align: left;
   transition: background var(--sp);
 }
 .handle:hover {
   background: var(--glass-2);
+}
+.handle:active {
+  cursor: grabbing;
 }
 .handle__live {
   display: inline-flex;
