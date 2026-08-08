@@ -3,7 +3,7 @@
 //! when ready. Whisper-only JA→EN still uses on-device whisper translate in the audio worker.
 
 #[cfg(target_os = "macos")]
-pub use mac::{should_translate_asr, spawn_ja_translation, spawn_translation};
+pub use mac::{should_translate_asr, spawn_translation};
 
 #[cfg(target_os = "macos")]
 mod mac {
@@ -261,6 +261,9 @@ mod mac {
     }
 
     /// Translate one line to Japanese (compat wrapper).
+    // Kept for the whisper-only JA→EN lane; the Deepgram path translates elsewhere, so nothing
+    // calls this today.
+    #[allow(dead_code)]
     pub fn spawn_ja_translation(
         app: &tauri::AppHandle,
         db: Db,

@@ -984,12 +984,13 @@ pub mod mac {
     pub fn delete_all_and_account(db: tauri::State<'_, Db>) -> Result<String, String> {
         let report = db.delete_all().ok_or_else(|| "deletion failed".to_string())?;
         // BYOK provider keys.
-        for provider in PROVIDERS {
+        for provider in BYOK_PROVIDERS {
             let _ = security_framework::passwords::delete_generic_password(
-                KEYCHAIN_SERVICE, keychain_account(provider));
+                shogun_integrations::keychain_store::SERVICE, keychain_account(provider));
         }
         // OAuth token sets for every connectable service (`<source>-tokenset`).
-        let token_store = shogun_integrations::KeychainTokenStore::new(KEYCHAIN_SERVICE);
+        let token_store =
+            shogun_integrations::KeychainTokenStore::new(shogun_integrations::keychain_store::SERVICE);
         for service in shogun_mcp::scope::ALL_SERVICES {
             use shogun_integrations::TokenStore;
             let _ = token_store.delete(*service);

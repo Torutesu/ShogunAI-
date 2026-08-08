@@ -35,10 +35,25 @@ def strip_line_comments(text):
     return "\n".join(out)
 
 
+# A migration may declare a sanctioned exception with a `-- non-additive-ok: <reason>` line,
+# but ONLY if the file also carries a rollback plan (CLAUDE.md: unavoidable changes need a
+# decision record + rollback plan). Data-preserving table rebuilds (SQLite cannot ALTER a CHECK
+# in place: create-copy-drop-rename) are the intended use; the reason line IS the decision record.
+EXCEPTION_MARK = re.compile(r"^--\s*non-additive-ok:\s*\S", re.IGNORECASE | re.MULTILINE)
+ROLLBACK_MARK = re.compile(r"ロールバック手順|rollback", re.IGNORECASE)
+
+
+def sanctioned(text):
+    """True when the file declares a non-additive exception AND documents a rollback plan."""
+    return bool(EXCEPTION_MARK.search(text)) and bool(ROLLBACK_MARK.search(text))
+
+
 def scan(files):
     """Yield (path, label, snippet) for every banned statement in the migration SQL."""
     hits = []
     for path, text in files:
+        if sanctioned(text):
+            continue
         code = strip_line_comments(text)
         for regex, label in BANNED:
             for m in regex.finditer(code):
@@ -58,6 +73,10 @@ def self_test():
     assert scan(clean) == [], "additive DDL and commented keywords must pass"
     found = scan(dirty)
     assert len(found) == 1 and found[0][1] == "DROP COLUMN", "must catch a real DROP COLUMN"
+    rebuild = "-- non-additive-ok: CHECK constraint rebuild\n-- ロールバック手順: ...\nDROP TABLE t;"
+    assert scan([("V9__rebuild.sql", rebuild)]) == [], "a sanctioned rebuild with a rollback plan must pass"
+    no_rollback = "-- non-additive-ok: CHECK constraint rebuild\nDROP TABLE t;"
+    assert len(scan([("V9__bad.sql", no_rollback)])) == 1, "the exception mark alone (no rollback plan) must NOT pass"
     print("self-test OK: detector passes additive migrations and catches a DROP COLUMN.")
 
 

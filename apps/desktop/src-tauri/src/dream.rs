@@ -53,14 +53,14 @@ pub mod mac {
     /// (docs/batch-relay-design.md §4.4).
     const BATCH_MODEL: &str = "claude-haiku-4-5-20251001";
 
-    /// Keychain coordinates of the Batch lane's credential (invariant 7 — never a file, a DB or a
-    /// log). No UI writes here: it is not the user's key.
-    ///
-    /// **Interim, development only.** Today this slot holds a raw Anthropic key and the lane calls
-    /// Anthropic directly, which is fine on a developer's own machine and must never ship — a
-    /// shipped binary carrying the operator's key can be extracted, and spend caps become
-    /// unenforceable. The shipping design puts a licence token here and a Select-operated relay in
-    /// front of the Batch API: docs/batch-relay-design.md.
+    // Keychain coordinates of the Batch lane's credential (invariant 7 — never a file, a DB or a
+    // log). No UI writes here: it is not the user's key.
+    //
+    // **Interim, development only.** Today this slot holds a raw Anthropic key and the lane calls
+    // Anthropic directly, which is fine on a developer's own machine and must never ship — a
+    // shipped binary carrying the operator's key can be extracted, and spend caps become
+    // unenforceable. The shipping design puts a licence token here and a Select-operated relay in
+    // front of the Batch API: docs/batch-relay-design.md.
 
     /// Guards a manual run against the nightly one. Both would write the same ledger rows, and while
     /// that is idempotent it would double the Batch spend.

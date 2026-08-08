@@ -1,5 +1,13 @@
 -- Add `asr` to traceability_log.route CHECK (meeting Deepgram STT, 2026-08-05).
--- SQLite cannot ALTER a CHECK in place — rebuild the table.
+-- non-additive-ok: SQLite cannot ALTER a CHECK in place — data-preserving table rebuild
+-- (create-copy-drop-rename). Every row is copied; no column is dropped, renamed or retyped,
+-- so V12 readers still work against the V13 schema.
+--
+-- ロールバック手順:
+--   1. 同じ手順で CHECK から 'asr' を除いたテーブルを作り直す
+--   2. コピー前に  DELETE FROM traceability_log WHERE route = 'asr';
+--      （トレース行は監査記録であり、消すのは CHECK に収まらない行だけに限ること）
+--   3. refinery_schema_history から version = 13 の行を削除する
 
 CREATE TABLE traceability_log_new (
     id          INTEGER PRIMARY KEY,

@@ -8,7 +8,8 @@
 -- 元は V12 として書かれたが、screen_frames の V12 / asr の V13 と並行開発で採番が衝突した
 -- ためマージ時に V14 へ改番。CHECK は V13 の集合（'asr' 含む）に 'local_agent' を足した形。
 --
--- SQLite は CHECK 制約を ALTER できないため、テーブル再作成 + コピー。traceability_log を
+-- non-additive-ok: SQLite は CHECK 制約を ALTER できないため、テーブル再作成 + コピー
+-- （データ保全リビルド。列の削除・改名・型変更なし）。traceability_log を
 -- 参照する外部キーは存在しないので FK 無効化は不要。DROP TABLE は付随インデックスも落とすため
 -- idx_traceability_ts を張り直す。
 --

@@ -36,8 +36,8 @@ mod mac {
     /// an intent instead (docs/batch-relay-design.md §4.4).
     const RECAP_MODEL: &str = "claude-haiku-4-5-20251001";
 
-    /// Keychain coordinates of the Batch lane's credential — the *same* slot the Dream Cycle reads
-    /// (dream.rs / `keychain_store::SELECT_KK_ACCOUNT`). One Select KK source, not a second.
+    // Keychain coordinates of the Batch lane's credential — the *same* slot the Dream Cycle reads
+    // (dream.rs / `keychain_store::SELECT_KK_ACCOUNT`). One Select KK source, not a second.
 
     /// The traceability `purpose` tag carried on the summary chunk (read back as
     /// `traceview::Purpose::MeetingRecap`).

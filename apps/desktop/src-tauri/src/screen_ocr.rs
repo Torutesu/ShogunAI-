@@ -160,7 +160,7 @@ pub fn encode_frame_jpeg(frame: &DynamicImage) -> Option<OcrFrame> {
     }
     let rgb = frame.to_rgb8();
     let mut buf = Vec::new();
-    let mut enc = JpegEncoder::new_with_quality(&mut buf, FRAME_JPEG_QUALITY);
+    let enc = JpegEncoder::new_with_quality(&mut buf, FRAME_JPEG_QUALITY);
     enc.write_image(rgb.as_raw(), width, height, image::ExtendedColorType::Rgb8)
         .ok()?;
     if buf.is_empty() {
@@ -254,13 +254,11 @@ pub fn ocr_jpeg_bytes_pass(jpeg: &[u8]) -> Option<OcrPass> {
 
     let data = NSData::with_bytes(jpeg);
     let options = NSDictionary::<objc2_vision::VNImageOption, AnyObject>::new();
-    let handler = unsafe {
-        VNImageRequestHandler::initWithData_options(
-            VNImageRequestHandler::alloc(),
-            &data,
-            &options,
-        )
-    };
+    let handler = VNImageRequestHandler::initWithData_options(
+        VNImageRequestHandler::alloc(),
+        &data,
+        &options,
+    );
     let request = unsafe {
         let req = VNRecognizeTextRequest::init(VNRecognizeTextRequest::alloc());
         configure_recognize_text(&req);

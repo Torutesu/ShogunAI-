@@ -47,15 +47,6 @@ mod voice_session;
 #[cfg(target_os = "macos")]
 mod voice_shortcut;
 
-/// 素の修飾キーの長押し検知（push-to-talk, Issue #44）。
-#[cfg(target_os = "macos")]
-
-/// push-to-talk の一発ASRレーン（Issue #44）。
-#[cfg(target_os = "macos")]
-
-/// push-to-talk の実行層（Issue #44）。
-#[cfg(target_os = "macos")]
-
 /// The collectionBehavior the overlay wants, selected at setup (NSPanel mode = canJoinAllSpaces +
 /// fullScreenAuxiliary = 257; plain-window fallback = moveToActiveSpace 274) and re-asserted by
 /// every heal/reassert path. `stationary` (1<<4) was dropped: it is a suspect for the panel not
@@ -1404,11 +1395,9 @@ fn set_panel_size(app: tauri::AppHandle, width: f64, height: f64, anchor: Option
             // notification a user drag does — without the flag every collapse/expand would be
             // recorded as a drag override.
             with_programmatic_move(|| {
-                // SAFETY: main thread, live NSWindow/NSPanel (the closure doesn't inherit the
-                // enclosing unsafe block).
-                unsafe {
-                    let _: () = msg_send![ptr, setFrame: r, display: true];
-                }
+                // Main thread, live NSWindow/NSPanel; the closure runs inside the enclosing
+                // unsafe block, so no inner one is needed.
+                let _: () = msg_send![ptr, setFrame: r, display: true];
             });
             // The window is transparent, so macOS derives its shadow from the rendered alpha mask
             // — and caches it. Without this the shadow keeps the shape the panel had at its
@@ -2163,11 +2152,9 @@ fn redock_to_castle(handle: &tauri::AppHandle) {
             let o = resting_origin(vis, w.size.width, w.size.height);
             let origin = NSPoint { x: o.x, y: o.y };
             with_programmatic_move(|| {
-                // SAFETY: main thread, live NSWindow/NSPanel (the closure doesn't inherit the
-                // enclosing unsafe block).
-                unsafe {
-                    let _: () = msg_send![ptr, setFrameOrigin: origin];
-                }
+                // Main thread, live NSWindow/NSPanel; the closure runs inside the enclosing
+                // unsafe block, so no inner one is needed.
+                let _: () = msg_send![ptr, setFrameOrigin: origin];
             });
         }
     });

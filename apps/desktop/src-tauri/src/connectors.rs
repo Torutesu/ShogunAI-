@@ -205,7 +205,6 @@ pub mod mac {
         app: tauri::AppHandle,
         state: tauri::State<'_, ConnectorState>,
         db: tauri::State<'_, Db>,
-        app: tauri::AppHandle,
     ) -> Result<u64, String> {
         let svc = from_source(&service).ok_or_else(|| format!("unknown service: {service}"))?;
         if !transport_serves(svc) {
