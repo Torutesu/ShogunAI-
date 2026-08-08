@@ -262,8 +262,6 @@ pub fn run() {
         inline_source::mac::clear_memory,
         inline_source::mac::delete_data_since,
         inline_source::mac::delete_all_and_account,
-        inline_source::mac::get_privacy_prefs,
-        inline_source::mac::set_analytics_enabled,
         shortcuts::get_shortcuts,
         shortcuts::set_shortcut,
         shortcuts::hide_panel,
@@ -402,11 +400,6 @@ fn setup_macos(app: &tauri::App) {
     // before any fallible early-return below (geometry etc.) — a skipped load silently reverts
     // every chat/draft to the default provider.
     inline_source::mac::init_llm_settings(app.handle());
-
-    // Privacy preferences (opt-in anonymous usage stats; #28). Loaded here alongside the LLM
-    // settings so the `analytics_enabled()` gate has the persisted value before any send path runs.
-    // Default is OFF — a fresh install never sends until the user opts in.
-    inline_source::mac::init_privacy_prefs(app.handle());
 
     launch_at_login::mac::init(app);
     // ~/Shougun.md: load on startup (creating a sample if missing) and watch for changes.

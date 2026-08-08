@@ -2564,13 +2564,15 @@ function PrivacySecuritySection(props: {
       .catch((e) => setKeyMsg(String(e)));
   };
 
-  // Anonymous usage (Slice D). Opt-in — read the persisted value once, default OFF. Writing
-  // rolls the local state back on error so the toggle never claims a state the backend rejected.
-  const [analytics, setAnalytics] = useState(false);
+  // Anonymous usage — the SAME opt-out state (analytics.json) the onboarding toggle and the
+  // PostHog worker read (opt-out model, default ON; CLAUDE.md 2026-08-08 統合決定). `analytics`
+  // here is "enabled" = !opt_out. Writing rolls the local state back on error so the toggle
+  // never claims a state the backend rejected.
+  const [analytics, setAnalytics] = useState(true);
   useEffect(() => {
     if (!IN_TAURI) return;
-    void invoke<{ analytics_enabled: boolean }>("get_privacy_prefs")
-      .then((p) => setAnalytics(p.analytics_enabled))
+    void invoke<boolean>("analytics_get_opt_out")
+      .then((optOut) => setAnalytics(!optOut))
       .catch(() => undefined);
   }, []);
   const toggleAnalytics = (next: boolean): void => {
@@ -2578,7 +2580,7 @@ function PrivacySecuritySection(props: {
     if (IN_TAURI)
       // Roll back only if the UI still shows the value THIS write set — two rapid toggles whose
       // writes resolve out of order must not let a stale failure flip a state a later write owns.
-      void invoke("set_analytics_enabled", { enabled: next }).catch(() =>
+      void invoke("analytics_set_opt_out", { optOut: !next }).catch(() =>
         setAnalytics((cur) => (cur === next ? !next : cur)),
       );
   };
@@ -2856,12 +2858,10 @@ function Settings(props: {
   const [binds, setBinds] = useState<Record<string, string>>(DEFAULT_BINDS);
   const [recording, setRecording] = useState<string | null>(null);
   const [keyErr, setKeyErr] = useState("");
-  // BYOK key entry: the key goes straight to the macOS Keychain via Rust (never a file/DB/log).
-  const [keyInput, setKeyInput] = useState("");
-  const [keyState, setKeyState] = useState<boolean>(hasKey);
-  const [keyMsg, setKeyMsg] = useState("");
-  useEffect(() => setKeyState(hasKey), [hasKey]);
-  // Agent-lane provider + model (non-secret; the key above is per-provider in the Keychain).
+  // Errors from delegate selection/verification surface inside the subscription card. BYOK key
+  // entry itself lives in PrivacySecuritySection — the one key home (2026-08-08 統合).
+  const [subMsg, setSubMsg] = useState("");
+  // Agent-lane provider + model (non-secret; the key is per-provider in the Keychain).
   const [provider, setProvider] = useState("anthropic");
   const [model, setModel] = useState("");
   // Subscription delegation (Issue #110). `consent` is the user's acceptance of the disclosure;
@@ -2891,7 +2891,7 @@ function Settings(props: {
     setProvider(p);
     setModel(m);
     if (c !== undefined) setConsent(c);
-    setKeyMsg("");
+    setSubMsg("");
     if (IN_TAURI)
       void invoke("set_llm_settings", { provider: p, model: m, subscriptionConsent: c }).catch((e) => {
         // Roll the UI back — an optimistic provider the backend never accepted would send the
@@ -2899,7 +2899,7 @@ function Settings(props: {
         setProvider(prev.provider);
         setModel(prev.model);
         setConsent(prev.consent);
-        setKeyMsg(String(e));
+        setSubMsg(String(e));
       });
   };
   /** Run one real completion through a delegate to find out whether it is signed in. */
@@ -2908,39 +2908,8 @@ function Settings(props: {
     setTesting(id);
     void invoke<DelegateInfo>("verify_subscription_delegate", { id })
       .then((d) => setDelegates((prev) => prev.map((p) => (p.id === d.id ? d : p))))
-      .catch((e) => setKeyMsg(String(e)))
+      .catch((e) => setSubMsg(String(e)))
       .finally(() => setTesting(null));
-  };
-
-  const saveKey = (): void => {
-    const k = keyInput.trim();
-    if (!k) return;
-    if (!IN_TAURI) {
-      setKeyState(true);
-      setKeyInput("");
-      return;
-    }
-    // The provider is passed EXPLICITLY so the key always lands in the account the user sees
-    // selected — never the backend's possibly-lagging idea of the current provider.
-    void invoke("set_byok_key", { provider, key: k })
-      .then(() => {
-        setKeyState(true);
-        setKeyInput("");
-        setKeyMsg(t.keySaved);
-      })
-      .catch((e) => setKeyMsg(String(e)));
-  };
-  const removeKey = (): void => {
-    if (!IN_TAURI) {
-      setKeyState(false);
-      return;
-    }
-    void invoke("clear_byok_key", { provider })
-      .then(() => {
-        setKeyState(false);
-        setKeyMsg("");
-      })
-      .catch((e) => setKeyMsg(String(e)));
   };
 
   const refresh = useCallback((): void => {
@@ -3159,73 +3128,7 @@ function Settings(props: {
           {delegates.some((d) => d.id === provider) && !consent ? (
             <div className="set__hint is-err">{t.subConsentNeeded}</div>
           ) : null}
-        </section>
-        <section className="set">
-          <div className="set__label" id="seg-provider">{t.subApiKeyTitle}</div>
-          <div className="seg" role="radiogroup" aria-labelledby="seg-provider">
-            {PROVIDERS.map((p) => (
-              <button
-                key={p.id}
-                type="button"
-                role="radio"
-                aria-checked={provider === p.id}
-                className={`seg__opt${provider === p.id ? " is-on" : ""}`}
-                onClick={() => {
-                  // Model ids are provider-specific — carrying one across providers sends an
-                  // invalid model to the new provider. Blank = the provider's default.
-                  if (p.id !== provider) applyLlm(p.id, "");
-                }}
-              >
-                {p.label}
-              </button>
-            ))}
-          </div>
-          {/* No free-text model field. It sat directly above the key entry and looked identical
-              to it, so a pasted API key landed in the model — which was then sent as the model
-              name and written to the log. The provider already has one right default; picking a
-              model is not a decision this product needs to offer, and the field's only proven use
-              was leaking a credential. */}
-          {/* Only meaningful for an API-key provider. A delegate runs whatever model its own plan
-              gives it, so naming one here would be a claim SHOGUN cannot honour. */}
-          {delegates.some((d) => d.id === provider) ? null : (
-            <div className="set__hint">{t.modelFor} {defaultModelFor(provider)}</div>
-          )}
-          <div className="set__hint">{t.modelHint}</div>
-        </section>
-        <section className="set">
-          <div className="set__label">{t.key}</div>
-          <div
-            className={`set__hint${keyRejected ? " is-err" : keyState ? " is-ok" : ""}`}
-          >
-            {keyRejected ? t.keyRejected : keyState ? t.keyPresent : t.keyAbsent}
-          </div>
-          <div className="set__hint">{t.keyScope}</div>
-          <div className="keyrow">
-            <input
-              className="keyrow__input"
-              type="password"
-              placeholder={t.keyPlaceholders[provider] ?? t.keyPlaceholders.anthropic}
-              value={keyInput}
-              autoComplete="off"
-              onChange={(e) => setKeyInput(e.target.value)}
-              onFocus={() => {
-                // The nonactivating panel must become key before it takes keystrokes.
-                if (IN_TAURI) void invoke("focus_field", { focused: true }).catch(() => undefined);
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") saveKey();
-              }}
-            />
-            <button className="keyrow__btn" type="button" onClick={saveKey} disabled={!keyInput.trim()}>
-              {t.keySave}
-            </button>
-            {keyState ? (
-              <button className="keyrow__btn" type="button" onClick={removeKey}>
-                {t.keyRemove}
-              </button>
-            ) : null}
-          </div>
-          {keyMsg ? <div className="set__hint">{keyMsg}</div> : null}
+          {subMsg ? <div className="set__hint is-err">{subMsg}</div> : null}
         </section>
         <PrivacySecuritySection hasKey={hasKey} keyRejected={keyRejected} onDeleted={onCleared} />
         <section className="set">
