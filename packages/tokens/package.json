@@ -1,0 +1,19 @@
+{
+  "name": "@shogun-ai/tokens",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./css": "./dist/tokens.css",
+    "./ts": "./dist/tokens.ts",
+    "./web.css": "./dist/tokens.web.css",
+    "./tokens.json": "./src/tokens.json"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node --test scripts/build.test.mjs"
+  },
+  "devDependencies": {
+    "@shogun-ai/config": "workspace:*"
+  }
+}

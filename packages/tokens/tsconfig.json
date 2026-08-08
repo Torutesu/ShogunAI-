@@ -1,0 +1,4 @@
+{
+  "extends": "@shogun-ai/config/tsconfig.base.json",
+  "include": ["scripts/**/*", "src/**/*"]
+}
