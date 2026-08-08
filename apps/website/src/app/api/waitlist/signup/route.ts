@@ -3,6 +3,7 @@ import { rateLimit } from '@/lib/rate-limit';
 import { isValidEmail, signupPayload } from '@/lib/referral';
 import { addParticipant } from '@/lib/service';
 import { clientIp, hashIp, isAuthorizedOrigin, isHoneypotTripped } from '@/lib/waitlist-auth';
+import { getPostHogClient } from '@/lib/posthog-server';
 
 export const runtime = 'nodejs';
 
@@ -39,6 +40,21 @@ export async function POST(req: Request) {
 
   try {
     const { row, duplicate } = await addParticipant(body.email, ref, hashIp(ip));
+
+    // Analytics only for a FRESH signup: a duplicate is indistinguishable from the honeypot
+    // path in the response, and must not emit an identify/capture for a row the caller does
+    // not own (see docs/fixes/2026-07-30-waitlist-security-fix.md).
+    const posthog = getPostHogClient();
+    if (posthog && !duplicate && row.refCode) {
+      posthog.identify({ distinctId: row.refCode });
+      posthog.capture({
+        distinctId: row.refCode,
+        event: 'waitlist_signed_up',
+        properties: { has_ref_code: !!ref },
+      });
+      await posthog.flush();
+    }
+
     // Duplicates get the same generic success as the honeypot path: the
     // owner keeps their original status link (tokens are NOT rotated), and
     // a third party who knows the email learns nothing they can use.

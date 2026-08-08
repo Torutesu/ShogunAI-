@@ -3,6 +3,7 @@ import { rateLimit } from '@/lib/rate-limit';
 import { isValidStatusToken } from '@/lib/referral';
 import { submitProfile } from '@/lib/service';
 import { clientIp } from '@/lib/waitlist-auth';
+import { getPostHogClient } from '@/lib/posthog-server';
 
 export const runtime = 'nodejs';
 
@@ -38,5 +39,16 @@ export async function POST(req: Request) {
   if (!result) return fail('not_found');
 
   const qualified = result.justQualified || !!result.row.qualifiedAt;
+
+  const posthog = getPostHogClient();
+  if (posthog && result.row.refCode) {
+    posthog.capture({
+      distinctId: result.row.refCode,
+      event: 'waitlist_profile_submitted',
+      properties: { just_qualified: result.justQualified },
+    });
+    await posthog.flush();
+  }
+
   return ok({ qualified, justQualified: result.justQualified });
 }

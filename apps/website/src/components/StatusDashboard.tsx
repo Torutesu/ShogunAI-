@@ -1,6 +1,7 @@
 'use client';
 
 import { ArrowRight, Check, Copy, Gift, Loader2, Share2, Star, Trophy } from 'lucide-react';
+import posthog from 'posthog-js';
 import { useCallback, useEffect, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -53,25 +54,28 @@ export function StatusDashboard({ code }: { code: string }) {
     return (
       <Card className="mx-auto grid max-w-md gap-4 text-center">
         <h1 className="font-display text-2xl font-semibold">We couldn’t find that page</h1>
-        <p className="text-muted">This link is invalid or expired. Check the URL from your welcome email.</p>
+        <p className="text-muted">
+          This link is invalid or expired. Check the URL from your welcome email.
+        </p>
         <Button asChild className="justify-self-center">
           <a href="/">Back to home</a>
         </Button>
       </Card>
     );
-  if (error) return <Card className="mx-auto max-w-md text-center text-muted">Something went wrong. Please refresh.</Card>;
+  if (error)
+    return (
+      <Card className="text-muted mx-auto max-w-md text-center">
+        Something went wrong. Please refresh.
+      </Card>
+    );
   if (!data)
     return (
       <div className="grid place-items-center py-16">
-        <Loader2 className="size-5 animate-spin text-accent" />
+        <Loader2 className="text-accent size-5 animate-spin" />
       </div>
     );
 
-  return data.profileComplete ? (
-    <Tracking data={data} />
-  ) : (
-    <Onboarding code={code} onDone={load} />
-  );
+  return data.profileComplete ? <Tracking data={data} /> : <Onboarding code={code} onDone={load} />;
 }
 
 /* ---------- Step 1: thank-you + program + rewards + form ---------- */
@@ -80,28 +84,36 @@ function Onboarding({ code, onDone }: { code: string; onDone: () => void }) {
     <div className="mx-auto grid max-w-2xl gap-6">
       <div className="text-center">
         <Badge dot>You’re on the waitlist</Badge>
-        <h1 className="mt-4 font-display text-[clamp(30px,4vw,44px)] font-semibold tracking-[-0.02em]">
+        <h1 className="font-display mt-4 text-[clamp(30px,4vw,44px)] font-semibold tracking-[-0.02em]">
           Thanks for signing up
         </h1>
-        <p className="mx-auto mt-3 max-w-[46ch] text-[17px] leading-relaxed text-muted">
-          You’re on the list for ShogunAI. Want to skip ahead? We run a referral program — invite friends,
-          climb the line, and earn months of ShogunAI free.
+        <p className="text-muted mx-auto mt-3 max-w-[46ch] text-[17px] leading-relaxed">
+          You’re on the list for ShogunAI. Want to skip ahead? We run a referral program — invite
+          friends, climb the line, and earn months of ShogunAI free.
         </p>
       </div>
 
       {/* Program + rewards pitch */}
       <Card>
         <div className="mb-1 flex items-center gap-2">
-          <Gift className="size-4 text-accent" />
-          <p className="text-xs font-semibold uppercase tracking-[0.08em] text-accent">How the referral program works</p>
+          <Gift className="text-accent size-4" />
+          <p className="text-accent text-xs font-semibold tracking-[0.08em] uppercase">
+            How the referral program works
+          </p>
         </div>
-        <p className="text-sm text-muted">
-          Every friend who joins with your link and completes their profile counts as one referral. The more
-          you refer, the more you unlock — rewards replace each other, so you always hold your best one.
+        <p className="text-muted text-sm">
+          Every friend who joins with your link and completes their profile counts as one referral.
+          The more you refer, the more you unlock — rewards replace each other, so you always hold
+          your best one.
         </p>
         <div className="mt-4 grid gap-2.5">
           {TIERS.map((t) => (
-            <Rung key={t.threshold} badge={String(t.threshold)} label={t.label} meta={`${t.threshold} referrals`} />
+            <Rung
+              key={t.threshold}
+              badge={String(t.threshold)}
+              label={t.label}
+              meta={`${t.threshold} referrals`}
+            />
           ))}
           <Rung
             badge={<Star className="size-3.5" />}
@@ -129,6 +141,10 @@ function Tracking({ data }: { data: Status }) {
       await navigator.clipboard.writeText(data.shareUrl);
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
+      posthog.capture('referral_link_copied', {
+        qualified_referrals: data.qualifiedReferrals,
+        has_tier: !!data.tier,
+      });
     } catch {
       /* clipboard unavailable */
     }
@@ -138,23 +154,28 @@ function Tracking({ data }: { data: Status }) {
     <div className="mx-auto grid max-w-3xl gap-6">
       <div className="text-center">
         <Badge dot>Your spot is secured</Badge>
-        <h1 className="mt-4 font-display text-[clamp(30px,4vw,44px)] font-semibold tracking-[-0.02em]">
+        <h1 className="font-display mt-4 text-[clamp(30px,4vw,44px)] font-semibold tracking-[-0.02em]">
           You’re in{data.nickname ? `, ${data.nickname}` : ''}
         </h1>
-        <p className="mx-auto mt-3 max-w-[46ch] text-[17px] leading-relaxed text-muted">
-          Share your link below. Every qualified referral moves you up the line and up the leaderboard.
+        <p className="text-muted mx-auto mt-3 max-w-[46ch] text-[17px] leading-relaxed">
+          Share your link below. Every qualified referral moves you up the line and up the
+          leaderboard.
         </p>
       </div>
 
       {/* Your referral link */}
       <Card>
         <div className="mb-1 flex items-center gap-2">
-          <Share2 className="size-4 text-accent" />
-          <p className="text-xs font-semibold uppercase tracking-[0.08em] text-accent">Your referral link</p>
+          <Share2 className="text-accent size-4" />
+          <p className="text-accent text-xs font-semibold tracking-[0.08em] uppercase">
+            Your referral link
+          </p>
         </div>
-        <p className="text-sm text-muted">A referral counts once your invite completes their profile.</p>
+        <p className="text-muted text-sm">
+          A referral counts once your invite completes their profile.
+        </p>
         <div className="mt-4 flex flex-wrap gap-2.5">
-          <span className="flex min-w-[220px] flex-1 items-center overflow-hidden text-ellipsis whitespace-nowrap rounded-full border border-border bg-cloud px-4 font-mono text-[13px] leading-[44px] text-ink">
+          <span className="border-border bg-cloud text-ink flex min-w-[220px] flex-1 items-center overflow-hidden rounded-full border px-4 font-mono text-[13px] leading-[44px] text-ellipsis whitespace-nowrap">
             {data.shareUrl}
           </span>
           <Button onClick={copyShare}>
@@ -170,19 +191,24 @@ function Tracking({ data }: { data: Status }) {
         <div className="grid gap-4">
           <div className="flex items-baseline justify-between">
             <div>
-              <div className="text-xs font-semibold uppercase tracking-[0.08em] text-accent">Your position</div>
-              <div className="text-sm text-muted">of {data.totalWaiting?.toLocaleString() ?? '—'} on the waitlist</div>
+              <div className="text-accent text-xs font-semibold tracking-[0.08em] uppercase">
+                Your position
+              </div>
+              <div className="text-muted text-sm">
+                of {data.totalWaiting?.toLocaleString() ?? '—'} on the waitlist
+              </div>
             </div>
             {data.leaderboardRank && (
-              <span className="inline-flex items-center gap-1.5 rounded-full bg-sky-soft px-3 py-1 text-sm font-semibold text-accent-strong">
+              <span className="bg-sky-soft text-accent-strong inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-sm font-semibold">
                 <Trophy className="size-3.5" /> #{data.leaderboardRank}
               </span>
             )}
           </div>
           <div>
             <div className="mb-1.5 flex items-center justify-between text-sm">
-              <span className="font-medium text-ink">
-                <span className="font-display text-lg font-semibold tabular-nums">{count}</span> qualified referrals
+              <span className="text-ink font-medium">
+                <span className="font-display text-lg font-semibold tabular-nums">{count}</span>{' '}
+                qualified referrals
               </span>
               {next && (
                 <span className="text-muted">
@@ -190,9 +216,9 @@ function Tracking({ data }: { data: Status }) {
                 </span>
               )}
             </div>
-            <div className="h-2.5 overflow-hidden rounded-full bg-cloud">
+            <div className="bg-cloud h-2.5 overflow-hidden rounded-full">
               <div
-                className="h-full rounded-full bg-accent [transition:width_0.8s_var(--ease-out-soft)]"
+                className="bg-accent h-full rounded-full [transition:width_0.8s_var(--ease-out-soft)]"
                 style={{ width: `${tierProgress * 100}%` }}
               />
             </div>
@@ -202,8 +228,8 @@ function Tracking({ data }: { data: Status }) {
 
       {/* Reward ladder — progress */}
       <Card>
-        <p className="text-xs font-semibold uppercase tracking-[0.08em] text-accent">Rewards</p>
-        <h2 className="mb-3.5 mt-2.5 font-display text-2xl font-semibold">
+        <p className="text-accent text-xs font-semibold tracking-[0.08em] uppercase">Rewards</p>
+        <h2 className="font-display mt-2.5 mb-3.5 text-2xl font-semibold">
           {data.tier ? `You’ve unlocked ${data.tier.label}` : 'Refer 3 to unlock your first reward'}
         </h2>
         <div className="grid gap-2.5">
@@ -232,8 +258,8 @@ function Tracking({ data }: { data: Status }) {
 
       {/* Leaderboard by nickname */}
       <Card>
-        <p className="text-xs font-semibold uppercase tracking-[0.08em] text-accent">Leaderboard</p>
-        <h2 className="mb-3.5 mt-2.5 font-display text-2xl font-semibold">Top referrers</h2>
+        <p className="text-accent text-xs font-semibold tracking-[0.08em] uppercase">Leaderboard</p>
+        <h2 className="font-display mt-2.5 mb-3.5 text-2xl font-semibold">Top referrers</h2>
         <LeaderboardInline meRefCode={data.refCode} />
       </Card>
     </div>
@@ -264,10 +290,10 @@ function RankRing({ position, total }: { position: number | null; total: number 
         />
       </svg>
       <div className="absolute text-center">
-        <div className="font-display text-[32px] font-semibold leading-none tabular-nums">
+        <div className="font-display text-[32px] leading-none font-semibold tabular-nums">
           {position ? `#${position.toLocaleString()}` : '—'}
         </div>
-        {topPct && <div className="mt-1 text-xs text-muted">Top {topPct}%</div>}
+        {topPct && <div className="text-muted mt-1 text-xs">Top {topPct}%</div>}
       </div>
     </div>
   );
@@ -289,7 +315,11 @@ function Rung({
   return (
     <div
       className={`flex items-center gap-3.5 rounded-lg border px-4 py-3.5 ${
-        done ? 'border-[#bfeeff] bg-sky-soft' : next ? 'border-accent ring-4 ring-accent/10' : 'border-border bg-surface'
+        done
+          ? 'bg-sky-soft border-[#bfeeff]'
+          : next
+            ? 'border-accent ring-accent/10 ring-4'
+            : 'border-border bg-surface'
       }`}
     >
       <span
@@ -299,8 +329,8 @@ function Rung({
       >
         {badge}
       </span>
-      <span className="font-medium text-ink">{label}</span>
-      <span className="ml-auto text-[13px] text-muted">{meta}</span>
+      <span className="text-ink font-medium">{label}</span>
+      <span className="text-muted ml-auto text-[13px]">{meta}</span>
     </div>
   );
 }
@@ -332,6 +362,7 @@ function ProfileForm({ code, onDone }: { code: string; onDone: () => void }) {
         setState('idle');
         return;
       }
+      posthog.capture('waitlist_profile_completed', { just_qualified: !!d.justQualified });
       onDone();
     } catch {
       setMsg('Network hiccup. Try again.');
@@ -344,33 +375,64 @@ function ProfileForm({ code, onDone }: { code: string; onDone: () => void }) {
 
   return (
     <Card>
-      <p className="text-xs font-semibold uppercase tracking-[0.08em] text-accent">Interested? Join the program</p>
-      <h2 className="mb-1 mt-2.5 font-display text-2xl font-semibold">Answer 4 quick questions</h2>
-      <p className="text-sm text-muted">
-        We’ll generate your personal referral link and add you to the leaderboard under your nickname.
+      <p className="text-accent text-xs font-semibold tracking-[0.08em] uppercase">
+        Interested? Join the program
+      </p>
+      <h2 className="font-display mt-2.5 mb-1 text-2xl font-semibold">Answer 4 quick questions</h2>
+      <p className="text-muted text-sm">
+        We’ll generate your personal referral link and add you to the leaderboard under your
+        nickname.
       </p>
       <form onSubmit={onSubmit} className="mt-4 grid gap-4">
-        <label className="grid gap-1.5 text-sm font-medium text-ink">
+        <label className="text-ink grid gap-1.5 text-sm font-medium">
           Leaderboard nickname
-          <input name="nickname" maxLength={40} required placeholder="e.g. shogun_sam" className={field} />
+          <input
+            name="nickname"
+            maxLength={40}
+            required
+            placeholder="e.g. shogun_sam"
+            className={field}
+          />
         </label>
-        <label className="grid gap-1.5 text-sm font-medium text-ink">
+        <label className="text-ink grid gap-1.5 text-sm font-medium">
           Why did you sign up?
-          <input name="a1" maxLength={200} required placeholder="What made ShogunAI click for you" className={field} />
+          <input
+            name="a1"
+            maxLength={200}
+            required
+            placeholder="What made ShogunAI click for you"
+            className={field}
+          />
         </label>
-        <label className="grid gap-1.5 text-sm font-medium text-ink">
+        <label className="text-ink grid gap-1.5 text-sm font-medium">
           Where do you work?
-          <input name="a2" maxLength={120} required placeholder="Company / what you do" className={field} />
+          <input
+            name="a2"
+            maxLength={120}
+            required
+            placeholder="Company / what you do"
+            className={field}
+          />
         </label>
-        <label className="grid gap-1.5 text-sm font-medium text-ink">
+        <label className="text-ink grid gap-1.5 text-sm font-medium">
           What’s the biggest problem you’d hand to ShogunAI?
-          <input name="a3" maxLength={200} required placeholder="The workflow you’d love gone" className={field} />
+          <input
+            name="a3"
+            maxLength={200}
+            required
+            placeholder="The workflow you’d love gone"
+            className={field}
+          />
         </label>
         <Button type="submit" disabled={state === 'loading'}>
-          {state === 'loading' ? <Loader2 className="size-4 animate-spin" /> : 'Get my referral link'}
+          {state === 'loading' ? (
+            <Loader2 className="size-4 animate-spin" />
+          ) : (
+            'Get my referral link'
+          )}
           {state !== 'loading' && <ArrowRight className="size-4" />}
         </Button>
-        {msg && <p className="text-sm text-danger">{msg}</p>}
+        {msg && <p className="text-danger text-sm">{msg}</p>}
       </form>
     </Card>
   );
@@ -391,10 +453,11 @@ function LeaderboardInline({ meRefCode }: { meRefCode: string }) {
   if (board === null)
     return (
       <div className="grid place-items-center py-4">
-        <Loader2 className="size-4 animate-spin text-accent" />
+        <Loader2 className="text-accent size-4 animate-spin" />
       </div>
     );
-  if (!board.length) return <p className="text-sm text-muted">No qualified referrals yet. Be the first.</p>;
+  if (!board.length)
+    return <p className="text-muted text-sm">No qualified referrals yet. Be the first.</p>;
   return (
     <div className="grid gap-1">
       {board.map((e) => {
@@ -413,11 +476,11 @@ function LeaderboardInline({ meRefCode }: { meRefCode: string }) {
             >
               {e.rank}
             </span>
-            <span className="truncate text-sm font-medium text-ink">
+            <span className="text-ink truncate text-sm font-medium">
               {e.name}
-              {me && <span className="ml-2 text-xs font-normal text-accent">you</span>}
+              {me && <span className="text-accent ml-2 text-xs font-normal">you</span>}
             </span>
-            <span className="font-semibold tabular-nums text-accent">{e.count}</span>
+            <span className="text-accent font-semibold tabular-nums">{e.count}</span>
           </div>
         );
       })}

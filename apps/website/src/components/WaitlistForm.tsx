@@ -1,6 +1,7 @@
 'use client';
 
 import { Loader2 } from 'lucide-react';
+import posthog from 'posthog-js';
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -27,7 +28,9 @@ export function WaitlistForm({ refCode, labels }: { refCode?: string; labels: Wa
     e.preventDefault();
     setState('loading');
     setMsg('');
-    const honeypot = (e.currentTarget.elements.namedItem('company_url') as HTMLInputElement)?.value ?? '';
+    const honeypot =
+      (e.currentTarget.elements.namedItem('company_url') as HTMLInputElement)?.value ?? '';
+    posthog.capture('waitlist_submitted', { has_ref_code: !!refCode });
     try {
       const res = await fetch('/api/waitlist/signup', {
         method: 'POST',
@@ -37,8 +40,13 @@ export function WaitlistForm({ refCode, labels }: { refCode?: string; labels: Wa
       const data = await res.json();
       if (!res.ok || !data.ok) {
         setState('error');
+        const errorType = data?.error === 'rate_limited' ? 'rate_limited' : 'bad_email';
         setMsg(data?.error === 'rate_limited' ? labels.errRate : labels.errBadEmail);
+        posthog.capture('waitlist_signup_error', { error_type: errorType });
         return;
+      }
+      if (data.refCode) {
+        posthog.identify(data.refCode, { signed_up_via_referral: !!refCode });
       }
       if (data.statusUrl) {
         window.location.href = data.statusUrl;
@@ -49,11 +57,16 @@ export function WaitlistForm({ refCode, labels }: { refCode?: string; labels: Wa
     } catch {
       setState('error');
       setMsg(labels.errNetwork);
+      posthog.capture('waitlist_signup_error', { error_type: 'network' });
     }
   }
 
   return (
-    <form onSubmit={onSubmit} noValidate className="mx-auto mt-8 flex max-w-lg flex-wrap justify-center gap-2.5">
+    <form
+      onSubmit={onSubmit}
+      noValidate
+      className="mx-auto mt-8 flex max-w-lg flex-wrap justify-center gap-2.5"
+    >
       <Input
         type="email"
         name="email"
@@ -76,7 +89,11 @@ export function WaitlistForm({ refCode, labels }: { refCode?: string; labels: Wa
         {state === 'loading' ? <Loader2 className="size-4 animate-spin" /> : labels.submit}
       </Button>
       {msg && (
-        <p className={`basis-full text-sm ${state === 'error' ? 'text-danger' : 'text-accent-strong'}`}>{msg}</p>
+        <p
+          className={`basis-full text-sm ${state === 'error' ? 'text-danger' : 'text-accent-strong'}`}
+        >
+          {msg}
+        </p>
       )}
     </form>
   );
