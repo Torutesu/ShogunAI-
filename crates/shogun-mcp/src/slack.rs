@@ -68,7 +68,7 @@ mod tests {
     }
     // Slack is Wave 2, so it must be released for any of this to be reachable.
     fn ctx(conn: ConnState) -> OpContext {
-        OpContext { highest_released: Wave::Two, conn, draft_stop: false }
+        OpContext { highest_released: Wave::Two, conn, draft_stop: false, plan: shogun_agents::entitlement::Entitlements::trial_not_started() }
     }
 
     #[test]
@@ -95,7 +95,7 @@ mod tests {
     #[test]
     fn unreleased_slack_denies_either_way() {
         // At Wave 1 Slack isn't rolled out — neither a post nor the fallback is reachable.
-        let ctx1 = OpContext { highest_released: Wave::One, conn: connected(), draft_stop: false };
+        let ctx1 = OpContext { highest_released: Wave::One, conn: connected(), draft_stop: false, plan: shogun_agents::entitlement::Entitlements::trial_not_started() };
         assert_eq!(resolve_post(&ctx1, PostCapability::Approved), SlackDelivery::Denied);
         assert_eq!(resolve_post(&ctx1, PostCapability::AdminApprovalRequired), SlackDelivery::Denied);
     }

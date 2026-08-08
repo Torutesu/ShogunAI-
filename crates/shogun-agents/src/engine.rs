@@ -13,6 +13,7 @@
 //! (event-log write + bus publish) through [`ExecutionObserver`], both injected by the daemon.
 //! `now_ms` is a parameter, never a clock read, so queueing/expiry is deterministic under test.
 
+use crate::entitlement::Entitlements;
 use crate::permission::{Action, Level};
 
 /// A handle for a submitted action (for confirm / cancel).
@@ -24,6 +25,9 @@ pub struct ActionId(pub u64);
 pub enum RejectReason {
     /// An external send (L3). v1 has no L3 execution path (opens in M4).
     ExternalSendNotAvailable,
+    /// The current plan does not include agent execution (issue #97): Standard, or an expired
+    /// trial. Enforced here in the Rust core — the webview only displays the state.
+    PlanNotEntitled,
 }
 
 /// What happened when an action was submitted.
@@ -106,9 +110,19 @@ impl<E: LocalEffector, O: ExecutionObserver> ExecutionEngine<E, O> {
         id
     }
 
-    /// Submit an action. L1 runs now; L2 is queued; L3 (send) is rejected.
-    pub fn submit(&mut self, action: Action, now_ms: u64) -> Submitted {
+    /// Submit an action. L1 runs now; L2 is queued; L3 (send) is rejected. The caller passes the
+    /// current [`Entitlements`] (resolved by the desktop layer per decision, issue #97): without
+    /// `agent_execution` — Standard plan or an expired trial — *nothing* is executed or queued,
+    /// regardless of level. The plan gate runs before the level gate so a non-entitled send is
+    /// reported as a plan rejection, but invariant 4 still holds behind it (an entitled send is
+    /// still rejected as L3).
+    pub fn submit(&mut self, action: Action, now_ms: u64, ent: &Entitlements) -> Submitted {
         let id = self.alloc_id();
+        if !ent.agent_execution {
+            let reason = RejectReason::PlanNotEntitled;
+            self.observer.on_rejected(id, &action, &reason);
+            return Submitted { id, disposition: Disposition::Rejected(reason) };
+        }
         match action.required_level() {
             Level::L1 => {
                 let disposition = self.run_now(id, &action);
@@ -205,8 +219,14 @@ impl<E: LocalEffector, O: ExecutionObserver> ExecutionEngine<E, O> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::entitlement::{entitlements, Plan, TRIAL_DURATION_MS};
     use crate::permission::{LocalAction, SendAction};
     use std::cell::RefCell;
+
+    /// An entitled caller (active trial) — the default for the level-gating tests.
+    fn ent() -> Entitlements {
+        Entitlements::trial_not_started()
+    }
 
     /// Records every observer callback and controls whether the effector succeeds.
     #[derive(Default)]
@@ -267,7 +287,7 @@ mod tests {
     fn l1_auto_runs_and_reports() {
         let spy = Spy::default();
         let mut engine = ExecutionEngine::new(&spy, &spy, 5000);
-        let r = engine.submit(l1(), 0);
+        let r = engine.submit(l1(), 0, &ent());
         assert_eq!(r.disposition, Disposition::AutoRan);
         assert_eq!(engine.pending_len(), 0);
         assert!(spy.events().iter().any(|e| e.starts_with("executed:")));
@@ -277,7 +297,7 @@ mod tests {
     fn l2_awaits_then_confirm_executes() {
         let spy = Spy::default();
         let mut engine = ExecutionEngine::new(&spy, &spy, 5000);
-        let r = engine.submit(l2(), 1000);
+        let r = engine.submit(l2(), 1000, &ent());
         assert_eq!(r.disposition, Disposition::AwaitingConfirm);
         assert_eq!(engine.pending_len(), 1);
         // no execution yet
@@ -292,7 +312,7 @@ mod tests {
     fn l2_confirm_after_timeout_is_expired_not_run() {
         let spy = Spy::default();
         let mut engine = ExecutionEngine::new(&spy, &spy, 5000);
-        let r = engine.submit(l2(), 0);
+        let r = engine.submit(l2(), 0, &ent());
         let out = engine.confirm(r.id, 6000); // 6000 > 5000 timeout
         assert_eq!(out, Outcome::Expired);
         assert!(spy.events().iter().any(|e| e.starts_with("expired:")));
@@ -303,7 +323,7 @@ mod tests {
     fn l2_cancel_drops_without_running() {
         let spy = Spy::default();
         let mut engine = ExecutionEngine::new(&spy, &spy, 5000);
-        let r = engine.submit(l2(), 0);
+        let r = engine.submit(l2(), 0, &ent());
         let out = engine.cancel(r.id);
         assert_eq!(out, Outcome::Cancelled);
         assert_eq!(engine.pending_len(), 0);
@@ -314,7 +334,7 @@ mod tests {
     fn l3_send_is_rejected_never_run() {
         let spy = Spy::default();
         let mut engine = ExecutionEngine::new(&spy, &spy, 5000);
-        let r = engine.submit(l3(), 0);
+        let r = engine.submit(l3(), 0, &ent());
         assert_eq!(
             r.disposition,
             Disposition::Rejected(RejectReason::ExternalSendNotAvailable)
@@ -329,7 +349,7 @@ mod tests {
     fn effector_failure_is_reported() {
         let spy = Spy { fail_with: Some("no such app".into()), ..Default::default() };
         let mut engine = ExecutionEngine::new(&spy, &spy, 5000);
-        engine.submit(l1(), 0);
+        engine.submit(l1(), 0, &ent());
         assert!(spy.events().iter().any(|e| e == "failed:1:no such app"));
     }
 
@@ -337,14 +357,45 @@ mod tests {
     fn expire_due_sweeps_only_stale_pending() {
         let spy = Spy::default();
         let mut engine = ExecutionEngine::new(&spy, &spy, 5000);
-        let a = engine.submit(l2(), 0); // submitted at 0
-        let b = engine.submit(l2(), 4000); // submitted at 4000
+        let a = engine.submit(l2(), 0, &ent()); // submitted at 0
+        let b = engine.submit(l2(), 4000, &ent()); // submitted at 4000
         // at t=6000: a is 6000ms old (>5000, stale); b is 2000ms old (live)
         let expired = engine.expire_due(6000);
         assert_eq!(expired, vec![a.id]);
         assert_eq!(engine.pending_len(), 1);
         // b still confirmable
         assert_eq!(engine.confirm(b.id, 6500), Outcome::Executed);
+    }
+
+    #[test]
+    fn standard_plan_rejects_every_level_without_running() {
+        // Standard has no agent execution (issue #97): L1 does not run, L2 is not queued.
+        let spy = Spy::default();
+        let mut engine = ExecutionEngine::new(&spy, &spy, 5000);
+        let standard = entitlements(Plan::Standard, 0);
+        for action in [l1(), l2(), l3()] {
+            let r = engine.submit(action, 0, &standard);
+            assert_eq!(r.disposition, Disposition::Rejected(RejectReason::PlanNotEntitled));
+        }
+        assert_eq!(engine.pending_len(), 0);
+        assert!(!spy.events().iter().any(|e| e.starts_with("run:")), "effector never touched");
+        assert_eq!(spy.events().iter().filter(|e| e.starts_with("rejected:")).count(), 3);
+    }
+
+    #[test]
+    fn expired_trial_rejects_but_active_trial_runs() {
+        let spy = Spy::default();
+        let mut engine = ExecutionEngine::new(&spy, &spy, 5000);
+        let plan = Plan::Trial { started_at_ms: Some(0) };
+        // active trial: L1 auto-runs
+        let active = entitlements(plan, TRIAL_DURATION_MS - 1);
+        assert_eq!(engine.submit(l1(), 0, &active).disposition, Disposition::AutoRan);
+        // expired trial: locked
+        let expired = entitlements(plan, TRIAL_DURATION_MS);
+        assert_eq!(
+            engine.submit(l1(), 0, &expired).disposition,
+            Disposition::Rejected(RejectReason::PlanNotEntitled)
+        );
     }
 
     #[test]

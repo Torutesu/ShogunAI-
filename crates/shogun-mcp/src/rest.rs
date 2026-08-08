@@ -11,6 +11,7 @@
 //! unauthenticated `/v1/status` discovery endpoint is exempt.
 
 use shogun_agents::approval::{ApprovalQueue, Origin, Preview, Route};
+use shogun_agents::entitlement::Entitlements;
 use shogun_agents::permission::{Action, Level, LocalAction, SendAction};
 
 use crate::backend::{MemoryBackend, ReadParams};
@@ -43,6 +44,10 @@ pub struct RestRequest {
 pub enum Routed {
     /// 401 — no valid token (FR-API-03).
     Unauthorized,
+    /// 403 — valid token, but the plan does not include the Memory API (issue #97: Pro/Trial
+    /// only; Standard and expired-trial devices are refused on every tool endpoint, reads
+    /// included). `/v1/status` and `/v1/metrics` stay open (they expose no memory data).
+    PlanLocked,
     /// 404 — no such endpoint.
     NotFound,
     /// 405 — path exists but not for this method.
@@ -137,17 +142,20 @@ fn method_is(actual: Method, expected: Method, ok: Routed) -> Result<Routed, Rou
     }
 }
 
-/// Route a request: resolve the endpoint, then apply auth. `/v1/status` and `/v1/metrics` are the
-/// two unauthenticated endpoints (localhost-bound health/discovery, no capture content); every tool
-/// endpoint requires a valid token (FR-API-03).
-pub fn route(req: &RestRequest, tokens: &TokenRegistry) -> Routed {
+/// Route a request: resolve the endpoint, then apply auth, then the plan gate. `/v1/status` and
+/// `/v1/metrics` are the two unauthenticated endpoints (localhost-bound health/discovery, no
+/// capture content); every tool endpoint requires a valid token (FR-API-03) AND a plan that
+/// includes the Memory API (issue #97: Pro/Trial only). The plan gate lives here in the shared
+/// routing layer so the REST server and the CLI face cannot drift.
+pub fn route(req: &RestRequest, tokens: &TokenRegistry, ent: &Entitlements) -> Routed {
     match resolve(req.method, &req.path) {
         Err(RouteMiss::NotFound) => Routed::NotFound,
         Err(RouteMiss::MethodNotAllowed) => Routed::MethodNotAllowed,
         Ok(Routed::Status) => Routed::Status,   // unauthenticated discovery
         Ok(Routed::Metrics) => Routed::Metrics, // unauthenticated health (NFR-SLO-00)
         Ok(resolved) => match tokens.authenticate(req.token.as_deref()) {
-            AuthResult::Granted => resolved,
+            AuthResult::Granted if ent.memory_api => resolved,
+            AuthResult::Granted => Routed::PlanLocked,
             _ => Routed::Unauthorized,
         },
     }
@@ -157,6 +165,7 @@ pub fn route(req: &RestRequest, tokens: &TokenRegistry) -> Routed {
 pub fn status_code(routed: &Routed) -> u16 {
     match routed {
         Routed::Unauthorized => 401,
+        Routed::PlanLocked => 403,
         Routed::NotFound => 404,
         Routed::MethodNotAllowed => 405,
         Routed::Read { .. } | Routed::Status | Routed::Metrics => 200,
@@ -207,6 +216,7 @@ fn level_label(level: Level) -> &'static str {
 pub fn body_for(routed: &Routed) -> String {
     match routed {
         Routed::Unauthorized => r#"{"error":"unauthorized"}"#.to_string(),
+        Routed::PlanLocked => r#"{"error":"plan_required"}"#.to_string(),
         Routed::NotFound => r#"{"error":"not_found"}"#.to_string(),
         Routed::MethodNotAllowed => r#"{"error":"method_not_allowed"}"#.to_string(),
         Routed::Status => r#"{"status":"ok","service":"shogun-memory-api"}"#.to_string(),
@@ -222,8 +232,8 @@ pub fn body_for(routed: &Routed) -> String {
 
 /// Route + render with a stub body (no backend). The server uses [`respond_with`]; this stays for
 /// callers/tests that don't need real data.
-pub fn respond(req: &RestRequest, tokens: &TokenRegistry) -> (u16, String) {
-    let routed = route(req, tokens);
+pub fn respond(req: &RestRequest, tokens: &TokenRegistry, ent: &Entitlements) -> (u16, String) {
+    let routed = route(req, tokens, ent);
     (status_code(&routed), body_for(&routed))
 }
 
@@ -319,9 +329,10 @@ fn json_escape(s: &str) -> String {
 pub fn respond_with<B: MemoryBackend + ?Sized>(
     req: &RestRequest,
     tokens: &TokenRegistry,
+    ent: &Entitlements,
     backend: &B,
 ) -> (u16, String) {
-    match route(req, tokens) {
+    match route(req, tokens, ent) {
         Routed::Read { tool, id } => {
             let params = ReadParams { id, query: req.query.clone() };
             let items = backend.read(tool, &params);
@@ -353,6 +364,12 @@ pub fn respond_with<B: MemoryBackend + ?Sized>(
 mod tests {
     use super::*;
     use crate::memory_api::{tool_level, ApiLevel};
+    use shogun_agents::entitlement::{entitlements, Plan, TRIAL_DURATION_MS};
+
+    /// An entitled plan (active trial) for the routing tests.
+    fn ent() -> Entitlements {
+        Entitlements::trial_not_started()
+    }
 
     fn reg() -> TokenRegistry {
         let mut r = TokenRegistry::new();
@@ -372,73 +389,105 @@ mod tests {
 
     #[test]
     fn unknown_path_is_404_even_with_a_token() {
-        assert_eq!(route(&req(Method::Get, "/v1/nope", Some("t")), &reg()), Routed::NotFound);
+        assert_eq!(route(&req(Method::Get, "/v1/nope", Some("t")), &reg(), &ent()), Routed::NotFound);
     }
 
     #[test]
     fn wrong_method_is_405() {
         // search is GET-only
-        assert_eq!(route(&req(Method::Post, "/v1/memory/search", Some("t")), &reg()), Routed::MethodNotAllowed);
+        assert_eq!(route(&req(Method::Post, "/v1/memory/search", Some("t")), &reg(), &ent()), Routed::MethodNotAllowed);
     }
 
     #[test]
     fn tool_endpoints_require_a_token_including_reads() {
-        assert_eq!(route(&req(Method::Get, "/v1/memory/search", None), &reg()), Routed::Unauthorized);
-        assert_eq!(route(&req(Method::Get, "/v1/state/people", Some("wrong")), &reg()), Routed::Unauthorized);
+        assert_eq!(route(&req(Method::Get, "/v1/memory/search", None), &reg(), &ent()), Routed::Unauthorized);
+        assert_eq!(route(&req(Method::Get, "/v1/state/people", Some("wrong")), &reg(), &ent()), Routed::Unauthorized);
+    }
+
+    #[test]
+    fn locked_plan_is_403_on_every_tool_endpoint_but_status_stays_open() {
+        // Issue #97: Standard / expired trial → the Memory API is refused with a valid token,
+        // reads included; the unauthenticated health endpoints keep answering.
+        let expired = entitlements(Plan::Trial { started_at_ms: Some(0) }, TRIAL_DURATION_MS);
+        for locked in [entitlements(Plan::Standard, 0), expired] {
+            for (method, path) in [
+                (Method::Get, "/v1/memory/search"),
+                (Method::Get, "/v1/state/people"),
+                (Method::Post, "/v1/memory/notes"),
+                (Method::Post, "/v1/actions/execute"),
+            ] {
+                let routed = route(&req(method, path, Some("t")), &reg(), &locked);
+                assert_eq!(routed, Routed::PlanLocked, "{path} must be plan-locked");
+                assert_eq!(status_code(&routed), 403);
+            }
+            assert_eq!(route(&req(Method::Get, "/v1/status", None), &reg(), &locked), Routed::Status);
+            assert_eq!(route(&req(Method::Get, "/v1/metrics", None), &reg(), &locked), Routed::Metrics);
+            // no token still reads as 401, not 403 (auth first — the plan is not disclosed)
+            assert_eq!(
+                route(&req(Method::Get, "/v1/memory/search", None), &reg(), &locked),
+                Routed::Unauthorized
+            );
+        }
+        // Pro passes
+        let pro = entitlements(Plan::Pro, 0);
+        assert!(matches!(
+            route(&req(Method::Get, "/v1/memory/search", Some("t")), &reg(), &pro),
+            Routed::Read { .. }
+        ));
     }
 
     #[test]
     fn status_is_unauthenticated() {
-        assert_eq!(route(&req(Method::Get, "/v1/status", None), &reg()), Routed::Status);
+        assert_eq!(route(&req(Method::Get, "/v1/status", None), &reg(), &ent()), Routed::Status);
         assert_eq!(status_code(&Routed::Status), 200);
     }
 
     #[test]
     fn metrics_is_unauthenticated_and_get_only() {
         // health endpoint: open like status (NFR-SLO-00), no capture content, localhost-bound.
-        assert_eq!(route(&req(Method::Get, "/v1/metrics", None), &reg()), Routed::Metrics);
+        assert_eq!(route(&req(Method::Get, "/v1/metrics", None), &reg(), &ent()), Routed::Metrics);
         assert_eq!(status_code(&Routed::Metrics), 200);
         // still GET-only
-        assert_eq!(route(&req(Method::Post, "/v1/metrics", Some("t")), &reg()), Routed::MethodNotAllowed);
+        assert_eq!(route(&req(Method::Post, "/v1/metrics", Some("t")), &reg(), &ent()), Routed::MethodNotAllowed);
     }
 
     #[test]
     fn read_endpoints_resolve_to_read_tools() {
         assert_eq!(
-            route(&req(Method::Get, "/v1/memory/search", Some("t")), &reg()),
+            route(&req(Method::Get, "/v1/memory/search", Some("t")), &reg(), &ent()),
             Routed::Read { tool: Tool::MemorySearch, id: None }
         );
         assert_eq!(
-            route(&req(Method::Get, "/v1/state/commitments", Some("t")), &reg()),
+            route(&req(Method::Get, "/v1/state/commitments", Some("t")), &reg(), &ent()),
             Routed::Read { tool: Tool::StateCommitmentsList, id: None }
         );
         // trailing id selects the get variant
         assert_eq!(
-            route(&req(Method::Get, "/v1/state/people/42", Some("t")), &reg()),
+            route(&req(Method::Get, "/v1/state/people/42", Some("t")), &reg(), &ent()),
             Routed::Read { tool: Tool::StatePeopleGet, id: Some(42) }
         );
     }
 
     #[test]
     fn write_endpoints_carry_their_levels_and_202() {
-        let note = route(&req(Method::Post, "/v1/memory/notes", Some("t")), &reg());
+        let note = route(&req(Method::Post, "/v1/memory/notes", Some("t")), &reg(), &ent());
         assert_eq!(note, Routed::Write { tool: Tool::MemoryAppendNote, level: Level::L1 });
         assert_eq!(status_code(&note), 202);
 
-        let propose = route(&req(Method::Post, "/v1/state/proposals", Some("t")), &reg());
+        let propose = route(&req(Method::Post, "/v1/state/proposals", Some("t")), &reg(), &ent());
         assert_eq!(propose, Routed::Write { tool: Tool::StateProposeUpdate, level: Level::L2 });
     }
 
     #[test]
     fn actions_execute_routes_to_action() {
-        assert_eq!(route(&req(Method::Post, "/v1/actions/execute", Some("t")), &reg()), Routed::Action);
+        assert_eq!(route(&req(Method::Post, "/v1/actions/execute", Some("t")), &reg(), &ent()), Routed::Action);
         assert_eq!(status_code(&Routed::Action), 202);
     }
 
     #[test]
     fn trailing_slash_is_tolerated() {
         assert_eq!(
-            route(&req(Method::Get, "/v1/state/projects/", Some("t")), &reg()),
+            route(&req(Method::Get, "/v1/state/projects/", Some("t")), &reg(), &ent()),
             Routed::Read { tool: Tool::StateProjectsList, id: None }
         );
     }
@@ -447,20 +496,20 @@ mod tests {
     fn respond_renders_status_and_json_body() {
         let tokens = reg();
         // unauthenticated status
-        let (s, b) = respond(&req(Method::Get, "/v1/status", None), &tokens);
+        let (s, b) = respond(&req(Method::Get, "/v1/status", None), &tokens, &ent());
         assert_eq!(s, 200);
         assert!(b.contains("shogun-memory-api"));
         // authed read → 200 with tool + empty results
-        let (s, b) = respond(&req(Method::Get, "/v1/memory/search", Some("t")), &tokens);
+        let (s, b) = respond(&req(Method::Get, "/v1/memory/search", Some("t")), &tokens, &ent());
         assert_eq!(s, 200);
         assert!(b.contains("\"tool\":\"memory.search\""));
         assert!(b.contains("\"results\":[]"));
         // missing token → 401
-        let (s, b) = respond(&req(Method::Get, "/v1/memory/search", None), &tokens);
+        let (s, b) = respond(&req(Method::Get, "/v1/memory/search", None), &tokens, &ent());
         assert_eq!(s, 401);
         assert!(b.contains("unauthorized"));
         // write → 202 with level
-        let (s, b) = respond(&req(Method::Post, "/v1/memory/notes", Some("t")), &tokens);
+        let (s, b) = respond(&req(Method::Post, "/v1/memory/notes", Some("t")), &tokens, &ent());
         assert_eq!(s, 202);
         assert!(b.contains("\"level\":\"L1\""));
     }
@@ -482,7 +531,7 @@ mod tests {
         let tokens = reg();
 
         // default: low excluded, medium flagged possibly
-        let (s, b) = respond_with(&req(Method::Get, "/v1/state/people", Some("t")), &tokens, &Fake);
+        let (s, b) = respond_with(&req(Method::Get, "/v1/state/people", Some("t")), &tokens, &ent(), &Fake);
         assert_eq!(s, 200);
         assert!(b.contains("\"text\":\"high\""));
         assert!(b.contains(r#""text":"medium","confidence":0.6,"possibly":true"#));
@@ -490,7 +539,7 @@ mod tests {
 
         // include_low pulls the low one in
         let with_low = RestRequest { include_low: true, ..req(Method::Get, "/v1/state/people", Some("t")) };
-        let (_, b2) = respond_with(&with_low, &tokens, &Fake);
+        let (_, b2) = respond_with(&with_low, &tokens, &ent(), &Fake);
         assert!(b2.contains("\"text\":\"low\""));
     }
 
@@ -498,9 +547,9 @@ mod tests {
     fn respond_with_still_enforces_auth_and_404() {
         use crate::backend::StubBackend;
         let tokens = reg();
-        let (s, _) = respond_with(&req(Method::Get, "/v1/state/people", None), &tokens, &StubBackend);
+        let (s, _) = respond_with(&req(Method::Get, "/v1/state/people", None), &tokens, &ent(), &StubBackend);
         assert_eq!(s, 401, "no token still 401 even with a backend");
-        let (s, _) = respond_with(&req(Method::Get, "/v1/nope", Some("t")), &tokens, &StubBackend);
+        let (s, _) = respond_with(&req(Method::Get, "/v1/nope", Some("t")), &tokens, &ent(), &StubBackend);
         assert_eq!(s, 404);
     }
 
@@ -549,7 +598,7 @@ mod tests {
     #[test]
     fn resolved_read_tool_is_actually_a_read() {
         // guard against a routing table that points a read path at a write tool
-        if let Routed::Read { tool, .. } = route(&req(Method::Get, "/v1/state/open_loops", Some("t")), &reg()) {
+        if let Routed::Read { tool, .. } = route(&req(Method::Get, "/v1/state/open_loops", Some("t")), &reg(), &ent()) {
             assert_eq!(tool_level(tool), ApiLevel::Read);
         } else {
             panic!("expected a read");

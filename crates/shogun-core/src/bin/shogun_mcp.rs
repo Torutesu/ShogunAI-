@@ -30,7 +30,13 @@ fn main() -> std::io::Result<()> {
     let clock: shogun_core::daemon::Clock = Arc::new(now_ms);
     let db = Db::open(&db_path, clock)
         .map_err(|e| std::io::Error::other(format!("open db {db_path}: {e}")))?;
-    let server = McpServer::new(DbBackend::new(db), now_ms);
+    // Plan gate (issue #97): trial stamp from the desktop app's onboarding.json
+    // (SHOGUN_ONBOARDING_JSON overrides the path); billing is the pre-Stripe stub. Consulted on
+    // every tools/call, so trial expiry takes effect mid-session.
+    let plan_source = shogun_mcp::plan_source::FilePlanSource::from_env();
+    let server = McpServer::new(DbBackend::new(db), now_ms, move || {
+        plan_source.resolve(u64::try_from(now_ms()).unwrap_or(0))
+    });
 
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();

@@ -252,7 +252,7 @@ mod tests {
             query: None,
             body: Some("ship v1 on friday".into()),
         };
-        let (status, body) = respond_with(&req, &tokens, &backend);
+        let (status, body) = respond_with(&req, &tokens, &shogun_mcp::entitlement::Entitlements::trial_not_started(), &backend);
         assert_eq!(status, 202);
         assert!(body.contains("memory.append_note"));
         assert!(body.contains("\"level\":\"L1\""));
@@ -275,7 +275,7 @@ mod tests {
             query: None,
             body: None,
         };
-        let (status, body) = respond_with(&req, &tokens, &backend);
+        let (status, body) = respond_with(&req, &tokens, &shogun_mcp::entitlement::Entitlements::trial_not_started(), &backend);
         assert_eq!(status, 200);
         // real DB data rendered through the API layer's confidence-gated JSON
         assert!(body.contains("send the report"), "body: {body}");

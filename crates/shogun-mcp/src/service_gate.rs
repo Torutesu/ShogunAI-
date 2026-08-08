@@ -8,11 +8,16 @@
 //!    (needs-reauth) service serves cached **reads** but no writes (the token is invalid).
 //! 4. **Draft-stop mode** — the Gmail "draft-stop" setting (§6.10) blocks Gmail send entirely, even
 //!    though send would otherwise route to Composio.
+//! 5. **Plan entitlement** (issue #97) — reads need an active plan (`first_layer_reads`: Standard
+//!    and up, Gmail-read-via-Composio included per the 2026-07-30 decision); writes and sends are
+//!    agent execution (`agent_execution`: Pro / active trial), and the Composio-routed Gmail send
+//!    additionally needs the send unlock. An expired trial is denied everything here.
 //!
 //! Invariant 4 is preserved end to end: the scope table only ever gates an [`OpClass::ExternalSend`]
 //! at L3 / Composio / not-implemented, and this gate maps that faithfully — it can never turn a send
 //! into an L1/L2 auto-run (test-asserted).
 
+use shogun_agents::entitlement::Entitlements;
 use shogun_agents::permission::Level;
 
 use crate::connection::ConnState;
@@ -27,6 +32,9 @@ pub struct OpContext {
     pub conn: ConnState,
     /// The global Gmail draft-stop setting (§6.10): when true, Gmail never sends.
     pub draft_stop: bool,
+    /// The plan entitlements in force (issue #97), resolved by the caller from onboarding +
+    /// billing state — never re-derived here.
+    pub plan: Entitlements,
 }
 
 /// Why an operation was refused by the gate.
@@ -44,6 +52,9 @@ pub enum DenyReason {
     NeedsReauth,
     /// Gmail draft-stop is on, so send is blocked (§6.10).
     DraftStop,
+    /// The plan does not cover this operation (issue #97): reads need an active plan (Standard+),
+    /// writes/sends need agent execution (Pro / active trial).
+    PlanNotEntitled,
 }
 
 /// The gate's verdict for one service operation.
@@ -92,7 +103,20 @@ pub fn authorize_op(service: Service, op_name: &str, ctx: &OpContext) -> OpDecis
     if matches!(op.gating, Gating::ComposioOnly) && ctx.draft_stop {
         return OpDecision::Denied(DenyReason::DraftStop);
     }
-    // 5. Map the (surviving) gating to a decision.
+    // 5. Plan entitlement (issue #97). Reads are Standard-and-up (Gmail read via Composio
+    //    included — the 2026-07-30 decision); anything that writes or sends is agent execution
+    //    (Pro / active trial), and the Composio-routed send additionally needs the send unlock.
+    let entitled = match op.class {
+        OpClass::Read => ctx.plan.first_layer_reads,
+        OpClass::ExternalSend if matches!(op.gating, Gating::ComposioOnly) => {
+            ctx.plan.agent_execution && ctx.plan.composio_send_unlock
+        }
+        _ => ctx.plan.agent_execution,
+    };
+    if !entitled {
+        return OpDecision::Denied(DenyReason::PlanNotEntitled);
+    }
+    // 6. Map the (surviving) gating to a decision.
     match op.gating {
         Gating::Background => OpDecision::Background,
         Gating::Level(l) => OpDecision::RequiresLevel(l),
@@ -124,7 +148,7 @@ mod tests {
         ConnState::NeedsReauth { reason: ReauthReason::TokenExpired, last_sync_ms: 500 }
     }
     fn ctx(conn: ConnState, draft_stop: bool) -> OpContext {
-        OpContext { highest_released: Wave::One, conn, draft_stop }
+        OpContext { highest_released: Wave::One, conn, draft_stop, plan: Entitlements::trial_not_started() }
     }
 
     #[test]
@@ -195,6 +219,69 @@ mod tests {
         assert_eq!(
             authorize_op(Service::GoogleCalendar, "event_create", &ctx(connected(), false)),
             OpDecision::RequiresLevel(Level::L3)
+        );
+    }
+
+    #[test]
+    fn standard_plan_reads_but_never_writes_or_sends() {
+        // Issue #97 boundary: Standard keeps first-layer reads (Gmail read via Composio included)
+        // but has no agent execution — every write/send is plan-denied.
+        use shogun_agents::entitlement::{entitlements, Plan};
+        let standard = OpContext {
+            highest_released: Wave::One,
+            conn: connected(),
+            draft_stop: false,
+            plan: entitlements(Plan::Standard, 0),
+        };
+        assert_eq!(authorize_op(Service::Gmail, "read_sync", &standard), OpDecision::Background);
+        assert_eq!(
+            authorize_op(Service::Gmail, "draft_create_update", &standard),
+            OpDecision::Denied(DenyReason::PlanNotEntitled)
+        );
+        assert_eq!(
+            authorize_op(Service::Gmail, "send", &standard),
+            OpDecision::Denied(DenyReason::PlanNotEntitled)
+        );
+        assert_eq!(
+            authorize_op(Service::GoogleCalendar, "event_create", &standard),
+            OpDecision::Denied(DenyReason::PlanNotEntitled)
+        );
+    }
+
+    #[test]
+    fn expired_trial_is_denied_reads_too() {
+        // Trial後は全員課金: an expired trial has no active plan — even the background read-sync
+        // stops (it spends the Select KK lane). Local capture/search are not this gate's concern.
+        use shogun_agents::entitlement::{entitlements, Plan, TRIAL_DURATION_MS};
+        let expired = OpContext {
+            highest_released: Wave::One,
+            conn: connected(),
+            draft_stop: false,
+            plan: entitlements(Plan::Trial { started_at_ms: Some(0) }, TRIAL_DURATION_MS),
+        };
+        for op in ["read_sync", "draft_create_update", "send"] {
+            assert_eq!(
+                authorize_op(Service::Gmail, op, &expired),
+                OpDecision::Denied(DenyReason::PlanNotEntitled),
+                "{op} must be plan-denied when the trial has expired"
+            );
+        }
+    }
+
+    #[test]
+    fn draft_stop_denial_still_wins_over_plan_denial_for_gmail_send() {
+        // Order check: with draft-stop ON, the send reports DraftStop regardless of plan — the
+        // stricter, user-set safety gate is never masked by the billing state.
+        use shogun_agents::entitlement::{entitlements, Plan};
+        let standard_stop = OpContext {
+            highest_released: Wave::One,
+            conn: connected(),
+            draft_stop: true,
+            plan: entitlements(Plan::Standard, 0),
+        };
+        assert_eq!(
+            authorize_op(Service::Gmail, "send", &standard_stop),
+            OpDecision::Denied(DenyReason::DraftStop)
         );
     }
 

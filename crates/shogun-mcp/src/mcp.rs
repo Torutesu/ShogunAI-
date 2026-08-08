@@ -15,6 +15,7 @@ use std::sync::Mutex;
 
 use serde_json::{json, Value};
 use shogun_agents::approval::ApprovalQueue;
+use shogun_agents::entitlement::Entitlements;
 
 use crate::backend::{MemoryBackend, ReadParams};
 use crate::memory_api::{tool_level, ApiLevel, Tool, ALL_TOOLS};
@@ -23,16 +24,28 @@ use crate::rest;
 /// The MCP protocol version this server speaks.
 pub const PROTOCOL_VERSION: &str = "2024-11-05";
 
-/// The MCP server: a backend, the shared approval queue, and a clock.
+/// The MCP server: a backend, the shared approval queue, a clock, and the plan entitlement
+/// provider (issue #97). The provider is a closure (not a snapshot) because a trial can expire
+/// while the stdio session is running — it is consulted on every `tools/call`.
 pub struct McpServer<B: MemoryBackend> {
     backend: B,
     approvals: Mutex<ApprovalQueue>,
     clock: Box<dyn Fn() -> i64 + Send + Sync>,
+    entitlements: Box<dyn Fn() -> Entitlements + Send + Sync>,
 }
 
 impl<B: MemoryBackend> McpServer<B> {
-    pub fn new(backend: B, clock: impl Fn() -> i64 + Send + Sync + 'static) -> Self {
-        Self { backend, approvals: Mutex::new(ApprovalQueue::new()), clock: Box::new(clock) }
+    pub fn new(
+        backend: B,
+        clock: impl Fn() -> i64 + Send + Sync + 'static,
+        entitlements: impl Fn() -> Entitlements + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            backend,
+            approvals: Mutex::new(ApprovalQueue::new()),
+            clock: Box::new(clock),
+            entitlements: Box::new(entitlements),
+        }
     }
 
     /// Handle one JSON-RPC line. Returns the response line, or `None` for a notification (no id).
@@ -69,6 +82,13 @@ impl<B: MemoryBackend> McpServer<B> {
     }
 
     fn tools_call(&self, id: Value, params: Option<&Value>) -> String {
+        // Plan gate first (issue #97): the Memory API is Pro/Trial only. Over stdio there is no
+        // token (process trust), so this is the face's whole authorization — a Standard or
+        // trial-expired device refuses every tool call, reads included. `tools/list` stays
+        // answerable (discovering the tool names discloses no memory data).
+        if !(self.entitlements)().memory_api {
+            return error(id, -32003, "plan_required: the Memory API needs Pro (or an active trial)");
+        }
         let Some(params) = params else {
             return error(id, -32602, "missing params");
         };
@@ -201,7 +221,13 @@ mod tests {
     }
 
     fn server() -> McpServer<Fake> {
-        McpServer::new(Fake, || 1000)
+        McpServer::new(Fake, || 1000, Entitlements::trial_not_started)
+    }
+
+    /// A server whose plan does not include the Memory API (issue #97).
+    fn locked_server() -> McpServer<Fake> {
+        use shogun_agents::entitlement::{entitlements, Plan};
+        McpServer::new(Fake, || 1000, || entitlements(Plan::Standard, 0))
     }
 
     fn call(server: &McpServer<Fake>, line: &str) -> Value {
@@ -262,6 +288,24 @@ mod tests {
         let text = v["result"]["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("\"pending\":true"));
         assert!(text.contains("\"approval_id\":"));
+    }
+
+    #[test]
+    fn locked_plan_refuses_every_tools_call_but_lists_and_initializes() {
+        // Issue #97: Standard plan → every tools/call (read, write, action) is refused with the
+        // plan error; initialize and tools/list still answer (no memory data disclosed).
+        let s = locked_server();
+        for line in [
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"memory.search","arguments":{"query":"q"}}}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"memory.append_note","arguments":{"text":"buy milk"}}}"#,
+            r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"actions.execute","arguments":{"kind":"send_email","to":"a@b.com","subject":"s","body":"b"}}}"#,
+        ] {
+            let v = call(&s, line);
+            assert_eq!(v["error"]["code"], -32003, "expected plan error for {line}");
+        }
+        // initialize / tools/list keep working
+        assert!(call(&s, r#"{"jsonrpc":"2.0","id":4,"method":"initialize"}"#)["result"]["protocolVersion"].is_string());
+        assert!(call(&s, r#"{"jsonrpc":"2.0","id":5,"method":"tools/list"}"#)["result"]["tools"].is_array());
     }
 
     #[test]
