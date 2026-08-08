@@ -130,8 +130,10 @@ export const STRINGS = {
     // your attention does.
     pin: "Keep open",
     unpin: "Let it withdraw when I look away",
-    // The separate window (spec §D) — where the brief, health, memory and logs live.
-    openFullUi: "Open ShogunAI window",
+    // In-panel hub — the brief, health, memory and logs, drawn inside the notch panel so nothing
+    // routine needs a separate window (meetings and Visual Recall keep their own surfaces).
+    overview: "Overview",
+    hubFailed: "Couldn't read your context",
     // connections (first-layer integrations)
     connections: "Connections",
     connectionsHint: "First-layer integrations connect directly to each service. Data stays on your device.",

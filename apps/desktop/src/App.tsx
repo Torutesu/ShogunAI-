@@ -30,10 +30,20 @@ function beginPillDrag(e: React.MouseEvent): void {
   if (!IN_TAURI || e.button !== 0) return;
   void invoke("start_panel_drag").catch((err) => uiLog(`start_panel_drag failed: ${err}`));
 }
-import { t } from "./strings";
+import { t, tf } from "./strings";
 import { AnalyticsToggle } from "./AnalyticsToggle";
 import { ConnectionsList } from "./connections";
 import { comboChips, DEFAULT_BINDS } from "./keys";
+import {
+  Activity as HubActivity,
+  Health as HubHealth,
+  Memory as HubMemory,
+  Sources as HubSources,
+  Today as HubToday,
+  Trace as HubTrace,
+} from "./fullui/FullUi";
+import { SAMPLE_VIEW } from "./fullui/sample";
+import type { FullUiView, PaneId } from "./fullui/types";
 
 // SHOGUN panel. A visible, interactive window that hangs from the notch. Opening/closing is driven
 // by direct clicks in the webview (reliable — no dependency on the CGEventTap hover path or a global
@@ -165,6 +175,7 @@ const INLINE_HOLD_MS = 2200;
  *  generous, because a long grounded answer over a slow connection is still a success. */
 const CHAT_TIMEOUT_MS = 90_000;
 const H_SETTINGS = 460; // taller default so setting groups fit; body scrolls; clamped to screen
+const H_HUB = 560; // the in-panel hub draws the overview panes (cards, tables); give them room
 const MIN_W = 460;
 const MIN_H = 240;
 // Collapsed fallback, used only until the pill has been measured. The window is transparent, so
@@ -287,6 +298,9 @@ export function App(): JSX.Element {
   /// anything above it is history rather than part of what you're doing now.
   const historyMark = useRef<number | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  /// The in-panel hub (Today / Health / Sources / Memory / Activity / Trace). Everything routine
+  /// finishes inside the notch — only meetings and Visual Recall get their own surfaces.
+  const [showHub, setShowHub] = useState(false);
   const [voiceToast, setVoiceToast] = useState<string | null>(null);
   const [voice, setVoice] = useState<VoiceView>({
     phase: "idle",
@@ -311,23 +325,30 @@ export function App(): JSX.Element {
     const s = loadJson<Size>("shogun.size.settings", { w: W, h: H_SETTINGS });
     return clampSize(s.w, s.h);
   });
+  const [hubSize, setHubSize] = useState<Size>(() => {
+    const s = loadJson<Size>("shogun.size.hub", { w: W, h: H_HUB });
+    return clampSize(s.w, s.h);
+  });
   useEffect(() => saveJson("shogun.pinned", pinned), [pinned]);
   useEffect(() => saveJson("shogun.size.chat", chatSize), [chatSize]);
   useEffect(() => saveJson("shogun.size.settings", setSize), [setSize]);
+  useEffect(() => saveJson("shogun.size.hub", hubSize), [hubSize]);
 
   // Size the window to match the current view (handle / chat / settings). Pass explicit flags when
   // a state setter in the same handler hasn't committed yet (React batches updates).
   const sizeForView = useCallback(
-    (opts?: { open?: boolean; settings?: boolean }): void => {
+    (opts?: { open?: boolean; settings?: boolean; hub?: boolean }): void => {
       const isOpen = opts?.open ?? open;
       const isSettings = opts?.settings ?? showSettings;
+      const isHub = opts?.hub ?? showHub;
       // Collapsed: a provisional pill-sized window; the measuring effect below tightens it to the
       // pill's real bounds so the transparent remainder never eats clicks.
       if (!isOpen) void applyPanelSize(W_HANDLE_FALLBACK, H_HANDLE);
       else if (isSettings) void applyPanelSize(setSize.w, setSize.h);
+      else if (isHub) void applyPanelSize(hubSize.w, hubSize.h);
       else void applyPanelSize(chatSize.w, chatSize.h);
     },
-    [open, showSettings, chatSize, setSize],
+    [open, showSettings, showHub, chatSize, setSize, hubSize],
   );
   // The boot/summon listeners live in a run-once effect; a ref keeps them calling the LATEST sizer
   // instead of a stale closure captured at mount.
@@ -360,8 +381,9 @@ export function App(): JSX.Element {
     if (!s) return;
     void applyPanelSize(s.w, s.h, "left");
     if (showSettings) setSetSize(s);
+    else if (showHub) setHubSize(s);
     else setChatSize(s);
-  }, [showSettings]);
+  }, [showSettings, showHub]);
   // Active agent provider, shown on the composer's model pill (mirrors Settings → Model).
   const [provider, setProvider] = useState<string>("anthropic");
   const threadRef = useRef<HTMLDivElement>(null);
@@ -653,6 +675,7 @@ export function App(): JSX.Element {
 
   const collapse = (): void => {
     setShowSettings(false);
+    setShowHub(false);
     setOpen(false);
     sizeForView({ open: false });
   };
@@ -688,11 +711,18 @@ export function App(): JSX.Element {
   useEffect(() => cancelHoverOpen, [cancelHoverOpen]);
   const openSettings = (): void => {
     setShowSettings(true);
-    sizeForView({ open: true, settings: true });
+    setShowHub(false);
+    sizeForView({ open: true, settings: true, hub: false });
   };
   const closeSettings = (): void => {
     setShowSettings(false);
     sizeForView({ open: true, settings: false });
+  };
+  const toggleHub = (): void => {
+    const next = !showHub;
+    setShowHub(next);
+    setShowSettings(false);
+    sizeForView({ open: true, settings: false, hub: next });
   };
 
   const send = useCallback((): void => {
@@ -950,18 +980,24 @@ export function App(): JSX.Element {
                     ⏱
                   </button>
                 ) : null}
-                {/* The panel is for a glance and a keystroke; anything you want to sit and read —
-                    the brief, health, memory, the run log — lives in the Full UI window. */}
+                {/* The brief, health, memory and run log open HERE, as the in-panel hub — the
+                    notch is where things finish; a separate window would defeat that. Only
+                    meetings and Visual Recall keep their own surfaces. */}
                 <button
-                  className="icon"
+                  className={`icon${showHub ? " icon--on" : ""}`}
                   type="button"
-                  title={t.openFullUi}
-                  aria-label={t.openFullUi}
-                  onClick={() => {
-                    if (IN_TAURI) void invoke("open_full_ui").catch((err) => uiLog(`open_full_ui failed: ${err}`));
-                  }}
+                  title={t.overview}
+                  aria-label={t.overview}
+                  aria-pressed={showHub}
+                  onClick={toggleHub}
                 >
-                  ⤢
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                       stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="4" y="4" width="7" height="7" rx="1.5" />
+                    <rect x="13" y="4" width="7" height="7" rx="1.5" />
+                    <rect x="4" y="13" width="7" height="7" rx="1.5" />
+                    <rect x="13" y="13" width="7" height="7" rx="1.5" />
+                  </svg>
                 </button>
                 <button className="icon" type="button" title={t.settings} aria-label={t.settings} onClick={openSettings}>
                   ⚙︎
@@ -1005,6 +1041,10 @@ export function App(): JSX.Element {
               </div>
             ) : null}
 
+            {showHub ? (
+              <Hub />
+            ) : (
+              <>
             <div className="thread" ref={threadRef}>
               {visibleMsgs.length === 0 ? (
                 <div className="welcome">
@@ -1088,13 +1128,84 @@ export function App(): JSX.Element {
                 </div>
               </div>
             </div>
+              </>
+            )}
           </>
         )}
         <ResizeGrip
-          current={() => (showSettings ? setSize : chatSize)}
+          current={() => (showSettings ? setSize : showHub ? hubSize : chatSize)}
           onResize={onResizeLive}
           onCommit={onResizeCommit}
         />
+      </div>
+    </div>
+  );
+}
+
+/** In-panel hub: the overview panes (Today / Health / Sources / Memory / Activity / Trace) drawn
+ *  inside the notch panel. Same Rust-assembled `full_ui_view` snapshot, same presentation-only
+ *  rule (CLAUDE.md invariant 1) — only the chrome differs: a tab strip instead of a sidebar, at
+ *  overlay density. Everything routine finishes in the notch; meetings and Visual Recall are the
+ *  deliberate exceptions with their own surfaces. */
+const HUB_TABS: { id: PaneId; label: string }[] = [
+  { id: "today", label: tf.navToday },
+  { id: "health", label: tf.navHealth },
+  { id: "sources", label: tf.navSources },
+  { id: "memory", label: tf.navMemory },
+  { id: "activity", label: tf.navActivity },
+  { id: "trace", label: tf.navTrace },
+];
+
+function Hub(): JSX.Element {
+  const [view, setView] = useState<FullUiView | null>(null);
+  const [failed, setFailed] = useState<string | null>(null);
+  const [pane, setPane] = useState<PaneId>("today");
+
+  // A one-shot snapshot per open, like the old window took per launch — the hub unmounts when
+  // you leave it, so reopening refetches.
+  useEffect(() => {
+    if (!IN_TAURI) {
+      setView(SAMPLE_VIEW);
+      return;
+    }
+    invoke<FullUiView>("full_ui_view")
+      .then(setView)
+      .catch((e) => setFailed(String(e)));
+  }, []);
+
+  return (
+    <div className="hub">
+      <div className="hub__tabs" role="tablist">
+        {HUB_TABS.map((n) => (
+          <button
+            key={n.id}
+            type="button"
+            role="tab"
+            className={`hub__tab${pane === n.id ? " is-on" : ""}`}
+            aria-selected={pane === n.id}
+            onClick={() => setPane(n.id)}
+          >
+            {n.label}
+          </button>
+        ))}
+      </div>
+      <div className="hub__body">
+        {/* Say what went wrong rather than falling back to fixture data — a pane quietly showing
+            invented numbers is the one failure mode this surface must not have. */}
+        {failed ? (
+          <div className="fempty">
+            {t.hubFailed} — {failed}
+          </div>
+        ) : !view ? null : (
+          <>
+            {pane === "today" && <HubToday v={view.today} />}
+            {pane === "health" && <HubHealth v={view.health} onNav={setPane} />}
+            {pane === "sources" && <HubSources v={view.sources} />}
+            {pane === "memory" && <HubMemory v={view.memory} />}
+            {pane === "activity" && <HubActivity v={view.activity} />}
+            {pane === "trace" && <HubTrace v={view.trace} />}
+          </>
+        )}
       </div>
     </div>
   );

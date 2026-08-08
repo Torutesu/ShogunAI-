@@ -2445,6 +2445,103 @@ kbd {
   color: var(--muted);
   background: rgba(128, 128, 128, 0.15);
 }
+/* In-panel hub — the overview panes (Today / Health / Sources / Memory / Activity / Trace) drawn
+   inside the notch panel instead of a separate window. Reuses the .fcard/.frow/.hgrid family
+   below, tightened to overlay density: the cards were sized for a window you sit in front of,
+   and here they share ~560px with a tab strip. */
+.hub {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.hub__tabs {
+  flex: none;
+  display: flex;
+  gap: 4px;
+  padding: 8px 10px 7px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--line);
+}
+.hub__tab {
+  border: 1px solid transparent;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-family: var(--sys);
+  font-size: var(--fs-sm);
+  border-radius: var(--r-pill);
+  padding: 4px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--sp), color var(--sp);
+}
+.hub__tab:hover {
+  background: var(--fill);
+  color: var(--ink);
+}
+.hub__tab.is-on {
+  background: var(--fill-strong);
+  border-color: var(--line);
+  color: var(--ink);
+  font-weight: 600;
+}
+.hub__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+/* overlay density for the big-window cards */
+.hub .fcard__label {
+  padding: 12px 14px 2px;
+}
+.hub .fcard__sub {
+  padding: 6px 14px 0;
+  font-size: var(--fs-md);
+}
+.hub .frow {
+  padding: 11px 14px;
+  gap: 12px;
+}
+.hub .frow__t {
+  font-size: var(--fs-lg);
+}
+.hub .frow__d {
+  font-size: var(--fs-md);
+}
+.hub .hgrid {
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.hub .hcard {
+  min-height: 0;
+  padding: 12px 13px;
+}
+.hub .hcard__v {
+  font-size: var(--fs-lg);
+}
+/* The activity/trace tables carry up to six columns; at panel width the fixed ones slim down and
+   the flexible ones ellipsize rather than forcing a sideways scroll. */
+.hub .thead,
+.hub .trow {
+  padding-left: 14px;
+  padding-right: 14px;
+  gap: 10px;
+}
+.hub .c-time {
+  width: 56px;
+}
+.hub .c-mid {
+  width: 84px;
+}
+.hub .c-end {
+  width: 64px;
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════════════════════
    Full UI — the separate window (spec §D). Shares the tokens above; the panel is a dense
    overlay capped at 14px type, but this is a window you sit in front of, so headings get room.
