@@ -231,6 +231,36 @@ LP・デッキでは固有名を出さず、カテゴリ名で見せる。行の
 
 ---
 
+## 4.6 必ず飛んでくる3つの問いへの答え（Garryとの対話より、2026-08）
+
+コンテキストレイヤーを名乗る限り必ず問われる3つ。答えは構造の中に既にある。デッキのQ&Aスライド・登壇・投資家面談で使う。
+
+### Q1「モデルが進化したら、要らなくなるのでは？」
+
+逆で、モデルの進化は追い風。**モデルは読者、コンテキストは蔵書。ライブラリはユーザーのもの。**賢い読者ほど同じ本から多くを引き出す——モデルが賢くなるたびに、同じ記憶から引き出せる価値が増える。BYOK／サブスク委譲で「読者」は差し替え可能にしてあり、堀は知能ではなくライブラリの側にある。モデルが進化するほど、差別化はコンテキストへ移る。
+
+> **EN**: Models are the readers. Your context is the library — and the library belongs to you. Every smarter reader extracts more from the same books, so every model upgrade raises the value of your memory.
+
+> **JA**: モデルは読者、コンテキストは蔵書です。蔵書はあなたのもの。賢い読者ほど同じ本から多くを引き出す——モデルが進化するたびに、あなたの記憶の価値が上がる。
+
+### Q2「それはただのRAGでは？」
+
+その通り、検索は簡単でコモディティ。難しいのはその手前の**編集**——何をホットメモリに残し、何を事実へ昇格させ、何を忘れるか。RAGは文書の検索、SHOGUNは状態の推定（provenance＋confidence）。低確度を事実として混ぜない誠実さと、忘却の設計（Hot/Warm/Cold・72h削除）が製品の本体。**検索する価値があるものを作ること、それが製品。**
+
+> **EN**: Retrieval is easy. Being worth retrieving is the product — deciding what stays hot, what gets promoted to fact, and what gets forgotten.
+
+> **JA**: 検索は簡単です。難しいのは、検索する価値のある記憶を作ること——何をホットに残し、何を事実とし、何を忘れるか。そこが製品です。
+
+### Q3「人生すべてを1つに入れて、漏洩したらどうする？」
+
+この問いこそ、ローカルファーストが「機能」ではなく「前提」である理由。**記憶が完全であるほど、それは他人のサーバーには置けない。**データの重心はデバイス上・ユーザーのプライバシー下、画像・音声は保存しない、秘密はKeychain、外へ出るものにはトレーサビリティ。クラウド集約型のコンテキストレイヤーはこの問いに構造的に答えられない——集約するなら、主権とセットでなければならない。
+
+> **EN**: The more complete the memory, the less it can live on someone else's server. Aggregation demands sovereignty — that's why SHOGUN is local-first by architecture, not by feature flag.
+
+> **JA**: 記憶が完全であるほど、他人のサーバーには置けません。すべてを集めるなら、あなたの主権の下で。ローカルファーストは機能ではなく、前提です。
+
+---
+
 ## 5. アンチバンドル注意（「全部入り」と言わない）
 
 「オールインワン」訴求は既存カテゴリの機能グリッド比較（Otterより文字起こしが正確か？）に引きずり込まれて負ける。**個別機能の土俵に乗らない**。
