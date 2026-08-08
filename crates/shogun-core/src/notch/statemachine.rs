@@ -12,7 +12,7 @@
 //!
 //! ```text
 //!   Idle ──hover 120ms──▶ Hover(preview) ──click / ⌘⇧Space──▶ Expanded(full)
-//!        ◀─mouse-leave 200ms─┘          ◀─Esc / outside / 20s idle─┘
+//!        ◀─mouse-leave 300ms─┘          ◀─Esc / outside / 20s idle─┘
 //!   Idle ──⌘⇧Space────────────────────────────────────────────▶ Expanded  (direct)
 //!   any  ──app went fullscreen──▶ Hidden ──fullscreen ended──▶ Idle
 //! ```
@@ -29,7 +29,7 @@
 pub enum Timer {
     /// Idle→Hover dwell (default 120ms, or 250ms on a fast approach). FR-NU-01.
     Dwell,
-    /// Hover(preview) mouse-leave grace (200ms) before it collapses. FR-NU-01.
+    /// Hover(preview) mouse-leave grace (300ms) before it collapses. Spec T4 / playbook P0.
     HoverExit,
     /// Expanded(full) no-interaction timeout (20s) before it collapses. FR-NU-01.
     ExpandedIdle,
@@ -138,7 +138,7 @@ impl Default for Params {
         Self {
             dwell_ms: 120,
             dwell_fast_ms: 250,
-            hover_exit_ms: 200,
+            hover_exit_ms: 300,
             expanded_idle_ms: 20_000,
             collapse_timeout_ms: 400,
         }
@@ -377,7 +377,7 @@ mod tests {
         let mut m = sm();
         to_hover(&mut m);
         let fx = m.step(Input::HoverExitStay);
-        assert!(fx.contains(&Effect::StartTimer { timer: Timer::HoverExit, ms: 200 }));
+        assert!(fx.contains(&Effect::StartTimer { timer: Timer::HoverExit, ms: 300 }));
         assert_eq!(m.state(), State::Hover);
         // Re-enter cancels the grace.
         let fx = m.step(Input::HoverReenter);

@@ -137,13 +137,12 @@ const IN_TAURI =
 // Rust-driven respawns.
 const W = 560;
 const H_OPEN = 360;
-const H_HANDLE = 44;
-/** How long the cursor must rest on the collapsed pill before it opens. Long enough that crossing
- *  the pill on the way somewhere else doesn't trigger it, short enough to feel immediate. */
-const HOVER_DWELL_MS = 250;
-/** Grace period after the pointer leaves an unpinned panel. Long enough to cross the gap to a
- *  control that overlaps it, short enough that the panel feels like it follows your attention. */
-const AUTO_COLLAPSE_MS = 400;
+/** Idle chin height = measured safeAreaInsets.top on this machine (notch_h=32). Fill cutout. */
+const H_HANDLE = 32;
+/** Leave grace after pointer exits unpinned panel (spec T4 / playbook P0: 300ms at R_exp). */
+const AUTO_COLLAPSE_MS = 300;
+/** Shell close paint budget — keep panel mounted until scaleY finishes, then shrink frame. */
+const COLLAPSE_ANIM_MS = 160;
 /** How long the pill holds a ⌥-tap outcome before returning to the live source. Long enough to
  *  read, short enough that it never becomes something you have to dismiss. */
 const INLINE_HOLD_MS = 2200;
@@ -244,6 +243,13 @@ export function App(): JSX.Element {
   // localStorage used to leave the window at open-size while rendering only the handle — a big
   // empty panel showing just "reading …".) Minimize still collapses within the session.
   const [open, setOpen] = useState<boolean>(true);
+  /** Rust notch SM mirror — drives shell CSS only. Webview does not own dwell. */
+  const [notchSm, setNotchSm] = useState<string>("expanded");
+  /** True while close scaleY runs; panel stays mounted until COLLAPSE_ANIM_MS elapses. */
+  const [collapsing, setCollapsing] = useState(false);
+  const collapseTimer = useRef<number | null>(null);
+  const beginCollapseRef = useRef<() => void>(() => undefined);
+  const openRef = useRef(true);
   const [status, setStatus] = useState<Status | null>(IN_TAURI ? null : MOCK_STATUS);
   const [state, setState] = useState<StateView>(IN_TAURI ? { commitments: [], open_loops: [] } : MOCK_STATE);
   const [ctxApp, setCtxApp] = useState<string>("");
@@ -417,11 +423,9 @@ export function App(): JSX.Element {
             void applyPanelSize(sz.w, sz.h);
           } else if (p === "idle") {
             // Dictation done — always collapse; do not leave recording chrome stuck open.
-            setOpen(false);
-            sizeForViewRef.current({ open: false });
+            beginCollapseRef.current();
           } else if (p === "error" && !pinnedRef.current) {
-            setOpen(false);
-            sizeForViewRef.current({ open: false });
+            beginCollapseRef.current();
           } else if (p === "response") {
             setOpen(true);
             setShowSettings(false);
@@ -475,31 +479,35 @@ export function App(): JSX.Element {
         }, 100);
       }),
     );
-    // The notch's own hover detection finally drives the panel. Until now the tracker ran, emitted
-    // transitions, and nothing listened — opening was click-only, which is why hovering the notch
-    // did nothing while hovering the collapsed pill worked.
+    // Rust owns hover intent / dwell. Webview only paints shell classes + open/close.
     offs.push(
       listen<StatePayload>("state", (e) => {
         const st = e.payload.state;
+        setNotchSm(st);
         if (st === "hover" || st === "expanded") {
           // Never fight a user who pinned the panel open, and never re-open one they just closed
           // by hand — the tracker doesn't know about either.
-          setOpen((cur) => {
-            if (cur) return cur;
+          setCollapsing(false);
+          if (collapseTimer.current != null) {
+            window.clearTimeout(collapseTimer.current);
+            collapseTimer.current = null;
+          }
+          if (!openRef.current) {
+            // Frame first, class next frame — same morph discipline as expand().
             sizeForViewRef.current({ open: true });
-            return true;
-          });
-        } else if (st === "idle" || st === "hidden") {
+            window.requestAnimationFrame(() => {
+              window.requestAnimationFrame(() => {
+                setOpen(true);
+              });
+            });
+          }
+        } else if (st === "idle" || st === "hidden" || st === "collapsing") {
           // Withdraw on the same rule as the pointer-leave path: pinned stays, work in progress
           // stays, everything else follows your attention.
           if (pinnedRef.current) return;
           if (inputRef.current.trim().length > 0 || thinkingRef.current) return;
           if (voiceRef.current.phase === "recording" || voiceRef.current.phase === "processing") return;
-          setOpen((cur) => {
-            if (!cur) return cur;
-            sizeForViewRef.current({ open: false });
-            return false;
-          });
+          beginCollapseRef.current();
         }
       }),
     );
@@ -604,47 +612,57 @@ export function App(): JSX.Element {
       if (composerHasFocus || inputRef.current.trim().length > 0 || thinkingRef.current) return;
       if (voiceRef.current.phase === "recording" || voiceRef.current.phase === "processing") return;
       setShowSettings(false);
-      setOpen(false);
-      sizeForViewRef.current({ open: false });
+      beginCollapseRef.current();
     }, AUTO_COLLAPSE_MS);
   }, [pinned, cancelAutoCollapse]);
   useEffect(() => cancelAutoCollapse, [cancelAutoCollapse]);
 
+  openRef.current = open;
+  const beginCollapse = useCallback((): void => {
+    if (collapseTimer.current != null) return;
+    if (!openRef.current) {
+      setCollapsing(false);
+      setNotchSm("idle");
+      return;
+    }
+    setCollapsing(true);
+    setNotchSm((s) => (s === "idle" || s === "hidden" ? s : "collapsing"));
+    collapseTimer.current = window.setTimeout(() => {
+      collapseTimer.current = null;
+      setCollapsing(false);
+      setOpen(false);
+      setNotchSm("idle");
+      sizeForViewRef.current({ open: false });
+    }, COLLAPSE_ANIM_MS);
+  }, []);
+  beginCollapseRef.current = beginCollapse;
+
   const collapse = (): void => {
     setShowSettings(false);
-    setOpen(false);
-    sizeForView({ open: false });
+    beginCollapse();
   };
   const expand = (): void => {
-    setOpen(true);
-    sizeForView({ open: true });
-  };
-
-  // Hover-to-open. The pill opens on dwell, not on entry: Phase 0 lists hover misfire as an open
-  // question, and opening the instant the cursor crosses the pill is exactly the failure mode —
-  // the panel would fire while you were on your way to the menu bar. So we wait HOVER_DWELL_MS of
-  // continuous hover and cancel the moment the pointer leaves. A pointer that is merely passing
-  // through is gone long before the timer elapses.
-  //
-  // Deliberately not gated on cursor velocity: dwell alone is measurable in the spike, and adding a
-  // second heuristic would make a No-Go answer harder to attribute. Revisit with the Phase 0 data.
-  const hoverTimer = useRef<number | null>(null);
-  const cancelHoverOpen = useCallback((): void => {
-    if (hoverTimer.current != null) {
-      window.clearTimeout(hoverTimer.current);
-      hoverTimer.current = null;
+    if (collapseTimer.current != null) {
+      window.clearTimeout(collapseTimer.current);
+      collapseTimer.current = null;
     }
-  }, []);
-  const onHandleEnter = useCallback((): void => {
-    cancelHoverOpen();
-    hoverTimer.current = window.setTimeout(() => {
-      hoverTimer.current = null;
-      setOpen(true);
-      sizeForViewRef.current({ open: true });
-    }, HOVER_DWELL_MS);
-  }, [cancelHoverOpen]);
-  // A pending timer must not outlive the component (or a click that opens the panel first).
-  useEffect(() => cancelHoverOpen, [cancelHoverOpen]);
+    setCollapsing(false);
+    setNotchSm("expanded");
+    // Grow the NSPanel first, then flip shell class on the next frame so scaleY actually
+    // transitions inside the open frame (resize + class in one tick kills the morph).
+    sizeForView({ open: true });
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        setOpen(true);
+      });
+    });
+  };
+  useEffect(
+    () => () => {
+      if (collapseTimer.current != null) window.clearTimeout(collapseTimer.current);
+    },
+    [],
+  );
   const openSettings = (): void => {
     setShowSettings(true);
     sizeForView({ open: true, settings: true });
@@ -721,7 +739,8 @@ export function App(): JSX.Element {
     const r = el.getBoundingClientRect();
     if (r.width < 1 || r.height < 1) return;
     // +1 guards against a fractional layout width being truncated into a clipped pill.
-    void applyPanelSize(Math.ceil(r.width) + 1, Math.ceil(r.height) + 1);
+    // Height floors at H_HANDLE so a short content pill never leaves air under the notch.
+    void applyPanelSize(Math.ceil(r.width) + 1, Math.max(H_HANDLE, Math.ceil(r.height)));
   }, [
     open,
     live,
@@ -742,71 +761,74 @@ export function App(): JSX.Element {
 
   const voiceLive = voiceActive ? voice : null;
 
-  // Collapsed: a clear, clickable handle hanging from the notch.
-  if (!open) {
-    // A meeting in progress outranks the ordinary handle (FR-MT-09).
-    if (meetingLive) {
-      return (
-        <div className="stage stage--handle">
-          <div ref={pillRef}>
-            <MeetingPill view={meetingLive} />
-          </div>
-        </div>
-      );
-    }
-    if (voiceLive?.phase === "recording") {
-      return (
-        <div className="stage stage--handle">
-          <div ref={pillRef}>
-            <VoicePill view={voiceLive} />
-          </div>
-        </div>
-      );
-    }
-    return (
-      <div className="stage stage--handle">
-        <button
-          className="handle"
-          ref={handleRef}
-          type="button"
-          onClick={() => {
-            cancelHoverOpen();
-            expand();
-          }}
-          onPointerEnter={onHandleEnter}
-          onPointerLeave={cancelHoverOpen}
-          title={t.openPanel}
-        >
-          {inlineLine ? (
-            <span className={`handle__live inline--${inlineLine.tone}`}>
-              <span className={`inline__dot inline__dot--${inlineLine.tone}`} />
-              {inlineLine.text}
-            </span>
-          ) : (
-          <span className="handle__live">
-            <span className="live__dot" />
-            {t.reading} <b>{live}</b>
-          </span>
-          )}
-          {state.commitments.length > 0 ? (
-            <span className="handle__count">
-              {state.commitments.length} {t.due}
-            </span>
-          ) : state.open_loops.length > 0 ? (
-            <span className="handle__count">
-              {state.open_loops.length} {t.waiting}
-            </span>
-          ) : null}
-        </button>
-      </div>
-    );
-  }
+  // Shell class: Rust SM when available; collapsing overrides for close paint.
+  // Rust emits "hover" (HoverIntent); map to is-hoverintent for CSS.
+  const shellMode = collapsing
+    ? "is-collapsing"
+    : open
+      ? "is-expanded"
+      : notchSm === "hover" || notchSm === "hoverintent"
+        ? "is-hoverintent"
+        : "is-idle";
 
+  // Idle face only when fully collapsed — never alongside expanded/collapsing panel (double-pill).
+  const showIdleFace = !open && !collapsing;
+
+  const idleChin = !showIdleFace ? null : meetingLive ? (
+    <div ref={pillRef}>
+      <MeetingPill view={meetingLive} />
+    </div>
+  ) : voiceLive?.phase === "recording" ? (
+    <div ref={pillRef}>
+      <VoicePill view={voiceLive} />
+    </div>
+  ) : (
+    <button
+      className="handle"
+      ref={handleRef}
+      type="button"
+      onClick={() => expand()}
+      title={t.openPanel}
+    >
+      {inlineLine ? (
+        <span className={`handle__live inline--${inlineLine.tone}`}>
+          <span className={`inline__dot inline__dot--${inlineLine.tone}`} />
+          {inlineLine.text}
+        </span>
+      ) : (
+        <span className="handle__live">
+          <span className="live__dot" />
+          {t.reading} <b>{live}</b>
+        </span>
+      )}
+      {state.commitments.length > 0 ? (
+        <span className="handle__count">
+          {state.commitments.length} {t.due}
+        </span>
+      ) : state.open_loops.length > 0 ? (
+        <span className="handle__count">
+          {state.open_loops.length} {t.waiting}
+        </span>
+      ) : null}
+    </button>
+  );
+
+  // Panel always mounted (playbook P0 pre-mount). Idle face mounts only when needed.
   return (
-    <div className="stage">
+    <div className={`stage notch-shell ${shellMode}`}>
       {voiceToast ? <div className="voice-toast">{voiceToast}</div> : null}
-      {meetingLive ? <MeetingPill view={meetingLive} /> : null}
-      <div className="panel" onPointerEnter={cancelAutoCollapse} onPointerLeave={onPanelLeave}>
+      {showIdleFace ? (
+        <div className="notch-idle" aria-hidden={open || collapsing}>
+          {idleChin}
+        </div>
+      ) : null}
+      <div
+        className="panel"
+        onPointerEnter={cancelAutoCollapse}
+        onPointerLeave={onPanelLeave}
+        aria-hidden={!open || collapsing}
+      >
+        <div className="panel__body">
         {showSettings ? (
           <Settings
             appearance={appearance}
@@ -820,9 +842,9 @@ export function App(): JSX.Element {
             }}
             onCleared={refreshState}
           />
-        ) : meetingLive?.state === "recording" ? (
+        ) : meetingLive?.state === "recording" && open ? (
           <MeetingNote />
-        ) : voiceLive ? (
+        ) : voiceLive && open ? (
           <VoicePanel
             view={voiceLive}
             onDismiss={() => void invoke("voice_dismiss").catch(() => undefined)}
@@ -1023,6 +1045,7 @@ export function App(): JSX.Element {
             </div>
           </>
         )}
+        </div>
         <ResizeGrip
           current={() => (showSettings ? setSize : chatSize)}
           onResize={onResizeLive}

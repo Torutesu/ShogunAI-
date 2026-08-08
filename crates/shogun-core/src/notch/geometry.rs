@@ -195,18 +195,29 @@ impl CastlePosition {
     }
 }
 
-/// Bottom-left NS origin for a `w`×`h` panel resting at `pos` inside `vis` — the target screen's
-/// **visible frame** (menu bar already excluded). The anchored axis sits flush to the edge; the
-/// free axis is centred. The result is clamped so the panel stays fully on screen, matching the
-/// existing top-centre dock (`pin_top_centre`): a panel switching size grows away from its anchor.
-pub fn castle_origin(vis: Rect, w: f64, h: f64, pos: CastlePosition) -> Point {
+/// Which frame to dock against for `pos`.
+///
+/// **Notch** uses the full `screen` frame so the panel top edge meets the physical display top
+/// (welded under/behind the hardware notch — boring.notch). Edge/corner castles use `visible`
+/// (menu bar + Dock already excluded) so they stay in the usable work area.
+pub fn castle_dock_frame(screen: Rect, visible: Rect, pos: CastlePosition) -> Rect {
+    match pos {
+        CastlePosition::Notch => screen,
+        _ => visible,
+    }
+}
+
+/// Bottom-left NS origin for a `w`×`h` panel resting at `pos` inside `dock` — typically from
+/// [`castle_dock_frame`]. The anchored axis sits flush to the edge; the free axis is centred.
+/// The result is clamped so the panel stays inside `dock`.
+pub fn castle_origin(dock: Rect, w: f64, h: f64, pos: CastlePosition) -> Point {
     use CastlePosition::*;
-    let left = vis.x;
-    let centre_x = vis.x + (vis.w - w) / 2.0;
-    let right = vis.max_x() - w;
-    let top = vis.max_y() - h;
-    let middle_y = vis.y + (vis.h - h) / 2.0;
-    let bottom = vis.y;
+    let left = dock.x;
+    let centre_x = dock.x + (dock.w - w) / 2.0;
+    let right = dock.max_x() - w;
+    let top = dock.max_y() - h;
+    let middle_y = dock.y + (dock.h - h) / 2.0;
+    let bottom = dock.y;
     let (x, y) = match pos {
         Notch => (centre_x, top),
         LeftEdge => (left, middle_y),
@@ -215,10 +226,10 @@ pub fn castle_origin(vis: Rect, w: f64, h: f64, pos: CastlePosition) -> Point {
         BottomCenter => (centre_x, bottom),
         BottomRight => (right, bottom),
     };
-    // Keep the panel on-screen even when it is wider/taller than the free space (clamp collapses to
-    // the edge). `max` guards a degenerate visible frame smaller than the panel.
-    let x = x.clamp(vis.x, (vis.max_x() - w).max(vis.x));
-    let y = y.clamp(vis.y, (vis.max_y() - h).max(vis.y));
+    // Keep the panel inside `dock` even when it is wider/taller than the free space (clamp
+    // collapses to the edge). `max` guards a degenerate frame smaller than the panel.
+    let x = x.clamp(dock.x, (dock.max_x() - w).max(dock.x));
+    let y = y.clamp(dock.y, (dock.max_y() - h).max(dock.y));
     Point::new(x, y)
 }
 
@@ -314,7 +325,10 @@ mod tests {
         assert!(!r.contains(Point::new(5.0, 10.0)));
     }
 
-    // The screen's visible frame (menu bar excluded): 1512×950, offset 0,0 (bottom-left origin).
+    // Full screen vs visible (menu bar excluded): 1512×982 screen, 1512×950 visible.
+    fn screen() -> Rect {
+        Rect::new(0.0, 0.0, 1512.0, 982.0)
+    }
     fn visible() -> Rect {
         Rect::new(0.0, 0.0, 1512.0, 950.0)
     }
@@ -338,13 +352,18 @@ mod tests {
     }
 
     #[test]
-    fn notch_is_top_centre_matching_the_existing_dock() {
+    fn notch_docks_to_full_screen_top_not_visible_frame() {
+        let s = screen();
         let v = visible();
+        assert_eq!(castle_dock_frame(s, v, CastlePosition::Notch), s);
+        assert_eq!(castle_dock_frame(s, v, CastlePosition::BottomCenter), v);
         let (w, h) = (400.0, 180.0);
-        let o = castle_origin(v, w, h, CastlePosition::Notch);
-        // Flush to the visible top, horizontally centred — identical to pin_top_centre's math.
-        assert_eq!(o.y, v.max_y() - h);
-        assert_eq!(o.x, v.x + (v.w - w) / 2.0);
+        let dock = castle_dock_frame(s, v, CastlePosition::Notch);
+        let o = castle_origin(dock, w, h, CastlePosition::Notch);
+        // Flush to physical screen top (behind/under hardware notch), horizontally centred.
+        assert_eq!(o.y, s.max_y() - h);
+        assert_eq!(o.x, s.x + (s.w - w) / 2.0);
+        assert!(o.y + h > v.max_y()); // overlaps menu-bar band — welded, not below it
     }
 
     #[test]
