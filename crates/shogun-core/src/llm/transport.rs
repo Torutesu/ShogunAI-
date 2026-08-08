@@ -113,6 +113,87 @@ pub trait HttpTransport: Send + Sync {
     ) -> impl Future<Output = Result<HttpResponse, TransportError>> + Send;
 }
 
+/// ストリーミング応答の結末。ステータスをボディより先に確定できるので、非2xxのときに
+/// 「エラー本文をデルタとして画面に流してしまう」経路が構造的に存在しない。
+#[derive(Debug)]
+pub enum StreamOutcome {
+    /// 2xx。ボディは到着順に `on_chunk` へ渡し終えた。
+    Streamed { status: u16 },
+    /// 非2xx。`on_chunk` は一度も呼ばず、エラー本文だけを持って返る。
+    Failed { status: u16, body: String },
+}
+
+/// 増分でボディを受け取るトランスポート。
+///
+/// [`HttpTransport`] と分けてある。全実装に streaming を強いるとモックもBatch lane側も
+/// 巻き添えになるが、増分が要るのはAgent laneのSSEだけで、しかもそこは「最初の一文字までの
+/// 時間」がSLOになっている唯一の経路だから。
+///
+/// チャンクはコールバックで渡す。チャネルにすると送信側と受信側を同時に走らせる必要が生じ、
+/// ライブラリ側にランタイムを持ち込むことになる — が、デコードは「バイトが届いた瞬間に
+/// その場で」やれば済むので、同時実行そのものが要らない。
+///
+/// `on_chunk` が `false` を返したらそこで打ち切る。応答の途中でパネルを閉じるのは正常な
+/// 操作であって、失敗ではない。
+pub trait StreamingTransport: Send + Sync {
+    /// `req` を送り、ボディを届いた順に `on_chunk` へ渡す。返るのは [`StreamOutcome`]。
+    ///
+    /// `on_chunk` を値渡しにしているのは、await をまたいで借用しないことでフューチャを `Send`
+    /// に保つため。
+    fn send_streaming<F>(
+        &self,
+        req: HttpRequest,
+        on_chunk: F,
+    ) -> impl Future<Output = Result<StreamOutcome, TransportError>> + Send
+    where
+        F: FnMut(&str) -> bool + Send;
+}
+
+/// 決められたチャンクを順に流すだけのテスト用トランスポート。ネットワーク無しで
+/// ストリーミング経路を検証するための土台。
+pub struct MockStreamingTransport {
+    status: u16,
+    chunks: std::sync::Mutex<std::collections::VecDeque<String>>,
+}
+
+impl MockStreamingTransport {
+    pub fn new(status: u16, chunks: Vec<String>) -> Self {
+        Self { status, chunks: std::sync::Mutex::new(chunks.into()) }
+    }
+}
+
+impl StreamingTransport for MockStreamingTransport {
+    fn send_streaming<F>(
+        &self,
+        _req: HttpRequest,
+        mut on_chunk: F,
+    ) -> impl Future<Output = Result<StreamOutcome, TransportError>> + Send
+    where
+        F: FnMut(&str) -> bool + Send,
+    {
+        let queued: Vec<String> = self
+            .chunks
+            .lock()
+            .map(|mut q| q.drain(..).collect())
+            .unwrap_or_default();
+        let status = self.status;
+        async move {
+            // 非2xxではチャンクを1つも渡さず、本文だけを組み立てて返す — 実トランスポートと
+            // 同じ振る舞い。エラー本文が回答としてパネルに出る経路を塞ぐ。
+            if !(200..300).contains(&status) {
+                return Ok(StreamOutcome::Failed { status, body: queued.concat() });
+            }
+            for c in queued {
+                // コールバックが false を返したら打ち切る。閉じたパネルに向かって流し続けない。
+                if !on_chunk(&c) {
+                    break;
+                }
+            }
+            Ok(StreamOutcome::Streamed { status })
+        }
+    }
+}
+
 // ---- test double ---------------------------------------------------------------------------
 
 /// A transport that records every request and replays canned responses in order — the offline
@@ -214,6 +295,91 @@ impl HttpTransport for ReqwestTransport {
     }
 }
 
+/// `carry` に溜まったバイトのうち、有効なUTF-8として確定した前半を切り出す。
+///
+/// 途中で切れた文字（`error_len() == None`）は `None` を返して次のチャンクを待つ。一方
+/// **そもそも不正なバイト列は捨てる** — 待っても直らないので、残しておくと carry の先頭に
+/// 居座り、以降のチャンクが永久に出力されなくなる（carry も無限に伸びる）。
+#[cfg(feature = "net")]
+fn take_valid_utf8(carry: &mut Vec<u8>) -> Option<String> {
+    loop {
+        let (valid_to, invalid_len) = match std::str::from_utf8(carry) {
+            Ok(_) => (carry.len(), None),
+            Err(e) => (e.valid_up_to(), e.error_len()),
+        };
+        if valid_to > 0 {
+            // `carry[..valid_to]` は構築上つねに有効なUTF-8なので、ここで文字は失われない。
+            let s = String::from_utf8_lossy(&carry[..valid_to]).into_owned();
+            carry.drain(..valid_to);
+            return Some(s);
+        }
+        match invalid_len {
+            // 直らないバイト列。捨てて、その後ろに有効な文字が続いていないか見直す。
+            Some(n) => {
+                carry.drain(..n);
+            }
+            // 途中で切れた文字（または carry が空）。次のチャンクを待つ。
+            None => return None,
+        }
+    }
+}
+
+#[cfg(feature = "net")]
+impl StreamingTransport for ReqwestTransport {
+    fn send_streaming<F>(
+        &self,
+        req: HttpRequest,
+        mut on_chunk: F,
+    ) -> impl Future<Output = Result<StreamOutcome, TransportError>> + Send
+    where
+        F: FnMut(&str) -> bool + Send,
+    {
+        let client = self.client.clone();
+        async move {
+            let method = match req.method {
+                Method::Get => reqwest::Method::GET,
+                Method::Post => reqwest::Method::POST,
+            };
+            let mut rb = client.request(method, &req.url);
+            for (k, v) in &req.headers {
+                rb = rb.header(k, v);
+            }
+            if let Some(body) = req.body {
+                rb = rb.body(body);
+            }
+            let mut resp = rb.send().await.map_err(|e| TransportError::Io(e.to_string()))?;
+            let status = resp.status().as_u16();
+            // ステータスはボディより先に確定する。非2xxならチャンクを1つも渡さず、本文を
+            // 集め切って `Failed` で返す — エラー本文がSSEデルタとして画面に出る経路を塞ぐ。
+            if !(200..300).contains(&status) {
+                let body = resp.text().await.map_err(|e| TransportError::Io(e.to_string()))?;
+                return Ok(StreamOutcome::Failed { status, body });
+            }
+            // マルチバイト文字はチャンク境界をまたぐ（日本語の応答ではほぼ毎回起きる）。
+            // 到着したバイトをそのまま lossy 変換すると、境界にかかった1文字は置換文字に
+            // なって二度と戻らない。`take_valid_utf8` で有効な前半だけを渡し、途中で切れた
+            // 文字のバイトは次のチャンクの頭と繋ぐために持ち越す。
+            let mut carry: Vec<u8> = Vec::new();
+            while let Some(bytes) =
+                resp.chunk().await.map_err(|e| TransportError::Io(e.to_string()))?
+            {
+                carry.extend_from_slice(&bytes);
+                if let Some(s) = take_valid_utf8(&mut carry) {
+                    // 届いたその場でコールバックへ。false なら打ち切る（パネルが閉じた）。
+                    if !on_chunk(&s) {
+                        break;
+                    }
+                }
+                // take_valid_utf8 が None を返したときはまだ1文字も完成していない。
+                // 次のチャンクを待つ。
+            }
+            // ストリームが閉じたとき carry に残っているバイトは捨てる。正常な SSE は必ず
+            // 行末で終わるので、ここに文字の途中のバイトが来ることはない。
+            Ok(StreamOutcome::Streamed { status })
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -249,6 +415,63 @@ mod tests {
         assert!(dumped.contains("2023-06-01"));
     }
 
+    /// ストリーミング用のモックが、渡された順にチャンクをコールバックへ渡すこと。
+    #[tokio::test]
+    async fn mock_streaming_transport_delivers_chunks_in_order() {
+        let t = MockStreamingTransport::new(200, vec!["one ".into(), "two".into()]);
+        let req =
+            HttpRequest::new(Method::Post, "https://api.anthropic.com/v1/messages", vec![], None)
+                .unwrap();
+
+        let mut got: Vec<String> = Vec::new();
+        let outcome = t
+            .send_streaming(req, |c| {
+                got.push(c.to_string());
+                true
+            })
+            .await
+            .unwrap();
+
+        assert!(matches!(outcome, StreamOutcome::Streamed { status: 200 }));
+        assert_eq!(got, vec!["one ".to_string(), "two".to_string()]);
+    }
+
+    /// コールバックが `false` を返す（＝パネルが閉じた）と、その場でストリームを打ち切り、
+    /// エラーにせず `Ok` で戻る。応答の途中で閉じるのは正常な操作で、失敗ではない。
+    #[tokio::test]
+    async fn a_callback_returning_false_stops_the_stream_early() {
+        let t = MockStreamingTransport::new(200, vec!["one".into(), "two".into()]);
+        let req =
+            HttpRequest::new(Method::Post, "https://api.anthropic.com/v1/messages", vec![], None)
+                .unwrap();
+
+        let mut seen: Vec<String> = Vec::new();
+        let outcome = t
+            .send_streaming(req, |c| {
+                seen.push(c.to_string());
+                // 最初の1つだけ受け取って打ち切る。
+                false
+            })
+            .await
+            .unwrap();
+
+        assert!(matches!(outcome, StreamOutcome::Streamed { status: 200 }));
+        assert_eq!(seen, vec!["one".to_string()], "打ち切り後もチャンクを渡している");
+    }
+
+    /// 非2xxではデルタを1つも流さない。エラー本文が回答としてパネルに出る経路を塞ぐ。
+    #[tokio::test]
+    async fn a_failed_status_streams_no_chunks() {
+        let t = MockStreamingTransport::new(401, vec!["{\"error\":\"bad key\"}".into()]);
+        let req = HttpRequest::new(Method::Post, "https://api.anthropic.com/v1/messages", vec![], None).unwrap();
+        let mut seen = 0usize;
+
+        let outcome = t.send_streaming(req, |_| { seen += 1; true }).await.unwrap();
+
+        assert_eq!(seen, 0, "エラー本文がチャンクとして流れた");
+        assert!(matches!(outcome, StreamOutcome::Failed { status: 401, .. }));
+    }
+
     #[tokio::test]
     async fn mock_records_requests_and_replays_responses() {
         let t = MockTransport::new([
@@ -268,5 +491,60 @@ mod tests {
         assert!(!r2.is_success());
         assert_eq!(t.sent().len(), 2);
         assert_eq!(t.sent()[1].url, "https://x/b");
+    }
+
+    /// マルチバイト文字がチャンク境界にかかっても壊れない。日本語の応答では常に起きる。
+    #[cfg(feature = "net")]
+    #[test]
+    fn a_multibyte_character_split_across_chunks_survives() {
+        // "日本" = 6 bytes. 最初のチャンクが1文字目の途中で切れる。
+        let full = "日本".as_bytes();
+        let (head, tail) = full.split_at(4);
+
+        let mut carry = head.to_vec();
+        let first = take_valid_utf8(&mut carry).expect("1文字目は確定しているはず");
+        assert_eq!(first, "日");
+        assert_eq!(carry.len(), 1, "2文字目の途中のバイトが持ち越されていない");
+
+        carry.extend_from_slice(tail);
+        let second = take_valid_utf8(&mut carry).expect("2文字目が確定するはず");
+        assert_eq!(second, "本");
+        assert!(carry.is_empty());
+
+        assert_eq!(format!("{first}{second}"), "日本", "文字が壊れた");
+    }
+
+    /// 1文字も完成していないチャンクでは何も出さず、バイトを捨てもしない。
+    #[cfg(feature = "net")]
+    #[test]
+    fn an_incomplete_first_character_is_held_not_dropped() {
+        let mut carry = "日".as_bytes()[..2].to_vec();
+        assert!(take_valid_utf8(&mut carry).is_none());
+        assert_eq!(carry.len(), 2, "確定前のバイトが捨てられた");
+    }
+
+    /// 直らない不正バイトは捨てて先へ進む。残すと carry の先頭に居座って、以降の応答が
+    /// 永久に出なくなる（レビューで見つかった livelock）。
+    #[cfg(feature = "net")]
+    #[test]
+    fn an_invalid_byte_is_dropped_rather_than_blocking_the_stream() {
+        let mut carry = vec![0xFF];
+        carry.extend_from_slice("ok".as_bytes());
+
+        assert_eq!(take_valid_utf8(&mut carry).as_deref(), Some("ok"));
+        assert!(carry.is_empty());
+    }
+
+    /// 不正バイトだけが届いた場合も詰まらない: 何も返さないが、バイトは溜め込まない。
+    #[cfg(feature = "net")]
+    #[test]
+    fn a_lone_invalid_byte_does_not_accumulate() {
+        let mut carry = vec![0xFF];
+        assert!(take_valid_utf8(&mut carry).is_none());
+        assert!(carry.is_empty(), "不正バイトが carry に残っている（livelockの条件）");
+
+        // 次のチャンクは普通に読める。
+        carry.extend_from_slice("hi".as_bytes());
+        assert_eq!(take_valid_utf8(&mut carry).as_deref(), Some("hi"));
     }
 }

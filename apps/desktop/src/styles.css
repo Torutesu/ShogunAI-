@@ -711,6 +711,12 @@ body {
 .set__hint.is-ok {
   color: var(--live);
 }
+/* A quieter hint — disclosures and secondary notes that should read a shade back
+   from a normal hint (meeting disclosure, the PTT restart note). */
+.set__hint--quiet {
+  color: var(--faint);
+}
+/* Label + control on one line (hold-key picker). */
 .set__row {
   display: flex;
   gap: 4px;

@@ -46,6 +46,15 @@ mod voice_session;
 #[cfg(target_os = "macos")]
 mod voice_shortcut;
 
+/// 素の修飾キーの長押し検知（push-to-talk, Issue #44）。
+#[cfg(target_os = "macos")]
+
+/// push-to-talk の一発ASRレーン（Issue #44）。
+#[cfg(target_os = "macos")]
+
+/// push-to-talk の実行層（Issue #44）。
+#[cfg(target_os = "macos")]
+
 /// The collectionBehavior the overlay wants, selected at setup (NSPanel mode = canJoinAllSpaces +
 /// fullScreenAuxiliary = 257; plain-window fallback = moveToActiveSpace 274) and re-asserted by
 /// every heal/reassert path. `stationary` (1<<4) was dropped: it is a suspect for the panel not
