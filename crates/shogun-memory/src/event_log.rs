@@ -155,12 +155,21 @@ pub fn recent_source_bodies(
     rows.collect()
 }
 
-/// [`recent_source_bodies`] for `source = 'capture'` — kept for callers that only care about AX.
+/// [`recent_source_bodies`] for `source = 'capture'`, additionally scoped to ONE app: a
+/// ≥98%-similar body in a different app is a different capture, and collapsing onto it would
+/// silently reassign the new capture to the other app's row. `IS` (not `=`) so a NULL bundle id
+/// matches only NULL.
 pub fn recent_capture_bodies(
     conn: &Connection,
+    app_bundle_id: Option<&str>,
     limit: usize,
 ) -> Result<Vec<(String, String)>, rusqlite::Error> {
-    recent_source_bodies(conn, "capture", limit)
+    let mut stmt = conn.prepare(
+        "SELECT content_hash, content FROM event_log
+         WHERE source = 'capture' AND app_bundle_id IS ?1 ORDER BY id DESC LIMIT ?2",
+    )?;
+    let rows = stmt.query_map(params![app_bundle_id, limit as i64], |r| Ok((r.get(0)?, r.get(1)?)))?;
+    rows.collect()
 }
 
 /// Metadata + short excerpt for recent events from one `source` (settings / Full UI).

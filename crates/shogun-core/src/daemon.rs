@@ -390,7 +390,11 @@ impl Db {
     /// instead of appending a near-identical row; otherwise a fresh hash makes a new event. The
     /// `content_hash` on the passed `ev` is ignored — this method decides it. Returns `(id, touched)`.
     pub fn capture_collapsed(&self, ev: &NewEvent<'_>) -> Option<(i64, bool)> {
-        let recents = self.recent_source_bodies(ev.source, RECENT_DEDUP_WINDOW);
+        let recents = if ev.source == "capture" {
+            self.recent_capture_bodies(ev.app_bundle_id, RECENT_DEDUP_WINDOW)
+        } else {
+            self.recent_source_bodies(ev.source, RECENT_DEDUP_WINDOW)
+        };
         let recent_refs: Vec<Recent<'_>> =
             recents.iter().map(|(h, c)| Recent { content_hash: h, content: c }).collect();
         let decision = decide_hash(ev.content, &recent_refs, Self::content_hash);
@@ -407,10 +411,13 @@ impl Db {
             .unwrap_or_default()
     }
 
-    /// Recent capture bodies `(hash, content)` newest-first, for the near-dup collapse.
-    #[allow(dead_code)]
-    fn recent_capture_bodies(&self, limit: usize) -> Vec<(String, String)> {
-        self.recent_source_bodies("capture", limit)
+    /// Recent capture bodies `(hash, content)` newest-first for one app, for the near-dup collapse.
+    fn recent_capture_bodies(&self, app_bundle_id: Option<&str>, limit: usize) -> Vec<(String, String)> {
+        self.conn
+            .lock()
+            .ok()
+            .and_then(|c| event_log::recent_capture_bodies(&c, app_bundle_id, limit).ok())
+            .unwrap_or_default()
     }
 
     /// Ingest a window capture end-to-end (the real capture path, FR-CAP-01/03 + WP2.7): near-dup

@@ -298,7 +298,7 @@ mod tests {
     fn l1_effector_failure_is_not_reported_as_auto_ran() {
         let spy = Spy { fail_with: Some("boom".into()), ..Spy::default() };
         let mut engine = ExecutionEngine::new(&spy, &spy, 5000);
-        let r = engine.submit(l1(), 0);
+        let r = engine.submit(l1(), 0, &ent());
         assert_eq!(r.disposition, Disposition::Failed, "a failed run must not read as success");
         assert!(spy.events().iter().any(|e| e.starts_with("failed:")));
         assert!(!spy.events().iter().any(|e| e.starts_with("executed:")));
