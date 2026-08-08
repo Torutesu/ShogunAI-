@@ -30,9 +30,9 @@ pub struct VadParams {
 }
 
 impl Default for VadParams {
-    /// Defaults tuned for meeting speech: ~ -40 dBFS floor, 500 ms hangover, 300 ms min, 30 s max.
+    /// Defaults tuned for meeting speech: ~ -40 dBFS floor, 300 ms hangover, 300 ms min, 30 s max.
     fn default() -> Self {
-        VadParams { rms_floor: 0.01, hangover_ms: 500, min_ms: 300, max_ms: 30_000 }
+        VadParams { rms_floor: 0.01, hangover_ms: 300, min_ms: 300, max_ms: 30_000 }
     }
 }
 
@@ -175,7 +175,7 @@ mod tests {
         // The ms→frames/samples conversion must reproduce the original hardcoded constants exactly,
         // so switching new() onto with_params(default) changes nothing.
         let v = Vad::new();
-        assert_eq!(v.hangover_frames, 25);
+        assert_eq!(v.hangover_frames, 15); // 300 ms / 20 ms frame
         assert_eq!(v.max_samples, 30 * SAMPLE_RATE as usize);
         assert_eq!(v.min_samples, SAMPLE_RATE as usize * 300 / 1000);
         assert_eq!(v.rms_floor, 0.01);

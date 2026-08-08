@@ -1,5 +1,9 @@
-//! Hold-to-talk audio lane: mic open only while the shortcut is held, ring buffer in RAM,
-//! Nova-3 (Deepgram) on release when auth is configured; otherwise on-device Whisper fallback.
+//! Hold-to-talk audio lane: mic open only while the shortcut is held.
+//!
+//! **Deepgram live WS (primary):** open stream on hold-start, push ~100 ms PCM chunks while
+//! speaking, `CloseStream` on release → final transcript already in flight (Wispr/Willow feel).
+//! Falls back to ring-buffer + HTTP batch (or Whisper) if the WS handshake fails.
+//!
 //! No disk, no DB for audio — ephemeral transcripts for voice dictation (#44).
 //!
 //! Whisper (~487MB) must never load on the NSEvent / AppKit thread. Deepgram auth is warmed on a
@@ -12,7 +16,9 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use serde::Serialize;
-use shogun_core::audio::asr::deepgram::{self, Deepgram, DeepgramConfig};
+use shogun_core::audio::asr::deepgram::{
+    self, Deepgram, DeepgramConfig, DeepgramLive, LiveMode, LIVE_CHUNK_SAMPLES,
+};
 use shogun_core::audio::asr::Transcriber;
 use shogun_core::audio::capture::mic::Mic;
 use shogun_core::audio::capture::AudioSource;
@@ -94,11 +100,20 @@ fn trace_sink(app: &AppHandle) -> Option<Arc<dyn shogun_core::llm::traceability:
         .map(|s| Arc::new(s.inner().clone().traceability_sink()) as Arc<dyn shogun_core::llm::traceability::TraceabilitySink>)
 }
 
+fn voice_config() -> DeepgramConfig {
+    DeepgramConfig::default().with_purpose("voice_dictation")
+}
+
 fn build_deepgram(app: &AppHandle) -> Result<Deepgram, String> {
     let auth = deepgram::resolve_auth()?;
-    let cfg = DeepgramConfig::default().with_purpose("voice_dictation");
+    let cfg = voice_config();
     let trace = trace_sink(app);
     Deepgram::new(cfg, auth, trace)
+}
+
+fn try_open_live(app: &AppHandle) -> Result<DeepgramLive, String> {
+    let mut auth = deepgram::resolve_auth()?;
+    DeepgramLive::connect(&voice_config(), auth.as_mut(), LiveMode::Voice, trace_sink(app))
 }
 
 fn deepgram_configured() -> bool {
@@ -113,7 +128,7 @@ pub fn preload_asr(app: &AppHandle) -> Result<(), String> {
             .lock()
             .map_err(|_| "asr cache lock poisoned".to_string())?;
         *guard = Some(AsrCache::Deepgram(d));
-        eprintln!("[voice] ASR backend=deepgram (nova-3, multi)");
+        eprintln!("[voice] ASR backend=deepgram (nova-3 live WS, multi)");
         return Ok(());
     }
     eprintln!("[voice] no Deepgram auth — will use whisper fallback when you dictate");
@@ -235,33 +250,99 @@ fn transcribe_clip(app: &AppHandle, pcm: &[f32]) -> TranscriptOutcome {
     }
 }
 
-/// Open the mic and start filling a RAM ring buffer. Emits `voice_level` while active.
+fn flush_chunk(live: &mut DeepgramLive, pending: &mut Vec<f32>) {
+    if pending.is_empty() {
+        return;
+    }
+    if let Err(e) = live.push_pcm(pending) {
+        eprintln!("[voice] live push failed: {e}");
+    }
+    pending.clear();
+}
+
+/// Open the mic and start streaming (live WS) or filling a RAM ring (HTTP/Whisper fallback).
 ///
-/// Does **not** load ASR models here — preload / release keeps hold-start fast.
+/// Does **not** load Whisper here — preload / release keeps hold-start fast. Live WS opens on the
+/// capture thread so the UI is not blocked on the handshake; audio streams as soon as connected.
 pub fn start(app: &AppHandle) -> Result<Handle, String> {
     let mic = Mic::open().map_err(|e| format!("microphone unavailable: {e}"))?;
     let stop = Arc::new(AtomicBool::new(false));
     let stop_flag = stop.clone();
     let app_handle = app.clone();
+    let prefer_live = deepgram_configured();
 
     let join = std::thread::spawn(move || {
         let mut mic = mic;
+        let mut live = if prefer_live {
+            match try_open_live(&app_handle) {
+                Ok(session) => {
+                    eprintln!("[voice] live WS open");
+                    Some(session)
+                }
+                Err(e) => {
+                    eprintln!("[voice] live WS unavailable ({e}); HTTP batch fallback");
+                    None
+                }
+            }
+        } else {
+            None
+        };
         let mut ring = Ring::new();
+        let mut pending: Vec<f32> = Vec::with_capacity(LIVE_CHUNK_SAMPLES);
+
         while !stop_flag.load(Ordering::Relaxed) {
             if let Some(frame) = mic.try_recv() {
                 let level = rms(&frame.samples);
                 let _ = app_handle.emit("voice_level", LevelEvent { rms: level });
-                ring.push(&frame.samples);
+                if live.is_some() {
+                    pending.extend_from_slice(&frame.samples);
+                    while pending.len() >= LIVE_CHUNK_SAMPLES {
+                        let chunk: Vec<f32> = pending.drain(..LIVE_CHUNK_SAMPLES).collect();
+                        if let Some(ref mut session) = live {
+                            if let Err(e) = session.push_pcm(&chunk) {
+                                eprintln!("[voice] live push failed ({e}); switching to ring");
+                                ring.push(&chunk);
+                                ring.push(&pending);
+                                pending.clear();
+                                // Drop session → CloseStream; remaining audio goes to HTTP path.
+                                let _ = live.take();
+                                break;
+                            }
+                        }
+                    }
+                } else {
+                    ring.push(&frame.samples);
+                }
             } else {
                 std::thread::sleep(Duration::from_millis(10));
             }
         }
         mic.stop();
-        let pcm = ring.drain();
-        if pcm.is_empty() {
-            return TranscriptOutcome::Empty;
+
+        if let Some(mut session) = live.take() {
+            flush_chunk(&mut session, &mut pending);
+            match session.finish() {
+                Ok(t) if t.trim().is_empty() => TranscriptOutcome::Empty,
+                Ok(t) => TranscriptOutcome::Ok(t),
+                Err(e) => {
+                    let pcm = ring.drain();
+                    if !pcm.is_empty() {
+                        eprintln!("[voice] live finish failed ({e}); HTTP fallback on ring");
+                        return transcribe_clip(&app_handle, &pcm);
+                    }
+                    TranscriptOutcome::Err(e)
+                }
+            }
+        } else {
+            if !pending.is_empty() {
+                ring.push(&pending);
+            }
+            let pcm = ring.drain();
+            if pcm.is_empty() {
+                return TranscriptOutcome::Empty;
+            }
+            transcribe_clip(&app_handle, &pcm)
         }
-        transcribe_clip(&app_handle, &pcm)
     });
 
     Ok(Handle {

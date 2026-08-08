@@ -1,18 +1,20 @@
-//! The MT3 audio lane: the desktop side of capture → VAD → ASR → transcript (FR-MT-13).
+//! The MT3 audio lane: the desktop side of capture → ASR → transcript (FR-MT-13).
 //!
 //! The pipeline itself is pure logic in `shogun_core::audio` and is tested there. This file does
 //! only the parts that cannot be pure: it opens the real macOS backends (mic via cpal, system tap
 //! via Core Audio), owns the polling thread, and drops finished lines into the meeting DB.
 //!
-//! **Default ASR = Deepgram Nova-3** (company-paid, 2026-08-05). Whisper is an offline/dev
-//! fallback (`asr_backend: whisper` or `SHOGUN_ASR_BACKEND=whisper`).
+//! **Default ASR = Deepgram Nova-3 live WebSocket** (company-paid, 2026-08-05). Continuous PCM
+//! stream per speaker with interim overlay updates; HTTP batch + local VAD is the fallback when
+//! the WS handshake fails. Whisper remains an offline/dev fallback (`asr_backend: whisper` or
+//! `SHOGUN_ASR_BACKEND=whisper`).
 //!
 //! **Degradation is the rule, not the exception.** Missing auth/model, a denied microphone, or a
 //! macOS without the system tap must never take the meeting down: the interval and the user's notes
 //! still record. Every failure here logs `[meeting] … ; notes only` and returns `None`.
 //!
-//! Waveform lives only in the `Worker`'s buffers and is dropped after transcription — this file
-//! writes text, never audio. Deepgram egress is process-only (`mip_opt_out=true`).
+//! Waveform lives only in RAM and is dropped after transcription — this file writes text, never
+//! audio. Deepgram egress is process-only (`mip_opt_out=true`).
 
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, RwLock};
@@ -20,7 +22,9 @@ use std::thread::JoinHandle;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
-use shogun_core::audio::asr::deepgram::{self, Deepgram, DeepgramConfig};
+use shogun_core::audio::asr::deepgram::{
+    self, Deepgram, DeepgramConfig, DeepgramLive, LiveMode, LiveResult, LIVE_CHUNK_SAMPLES,
+};
 use shogun_core::audio::asr::whisper::Whisper;
 use shogun_core::audio::asr::Transcriber;
 use shogun_core::audio::capture::{AudioSource, MultiSource};
@@ -58,6 +62,9 @@ struct LiveLineEvent {
     speaker: Option<String>,
     text: String,
     translation: Option<String>,
+    /// When true, overlay updates the in-progress line for this speaker instead of appending.
+    #[serde(default)]
+    interim: bool,
 }
 
 /// Persists finished transcript lines against one meeting interval. Owns a cloned `Db` (Arc-backed,
@@ -72,6 +79,74 @@ struct DbSink {
     select_kk_owns_en: bool,
 }
 
+impl DbSink {
+    fn emit_line(
+        &mut self,
+        speaker: Speaker,
+        ts: i64,
+        text: &str,
+        confidence: f64,
+        translation: Option<&str>,
+        interim: bool,
+    ) {
+        let speaker_mem = match speaker {
+            Speaker::Me => shogun_memory::transcript_segments::Speaker::Me,
+            Speaker::Other => shogun_memory::transcript_segments::Speaker::Other,
+        };
+        if !interim {
+            self.db
+                .append_transcript(self.session_id, ts, speaker_mem, text, confidence);
+        }
+
+        if !crate::meeting::mac::live_emit_allowed(self.session_id) {
+            return;
+        }
+        let speaker_str = match speaker {
+            Speaker::Me => Some("me".to_string()),
+            Speaker::Other => Some("other".to_string()),
+        };
+        let event = LiveLineEvent {
+            ts,
+            speaker: speaker_str.clone(),
+            text: text.to_string(),
+            translation: translation.map(str::to_string),
+            interim,
+        };
+        let _ = self.app.emit("meeting_live_line", event);
+
+        if interim || translation.is_some() {
+            return;
+        }
+        // Async Select KK fill-in when the ASR backend did not already supply a translation.
+        if let Ok(s) = self.settings.read() {
+            let speaker_me = speaker == Speaker::Me;
+            let target = s.translation_target(speaker_me);
+            let whisper_owns_en = !self.select_kk_owns_en
+                && s.meeting_mode == MeetingMode::TwoWay
+                && !speaker_me
+                && s.my_lang == MeetingLanguage::English;
+            let needs_kk = match target {
+                Some(MeetingLanguage::Japanese) => !whisper_owns_en,
+                Some(MeetingLanguage::English) => self.select_kk_owns_en,
+                _ => false,
+            };
+            if needs_kk && crate::meeting_translate::should_translate_asr(text) {
+                if let Some(lang) = target {
+                    crate::meeting_translate::spawn_translation(
+                        &self.app,
+                        self.db.clone(),
+                        self.session_id,
+                        ts,
+                        speaker_str,
+                        text.to_string(),
+                        lang,
+                    );
+                }
+            }
+        }
+    }
+}
+
 impl SegmentSink for DbSink {
     fn emit(
         &mut self,
@@ -80,59 +155,7 @@ impl SegmentSink for DbSink {
         confidence: f64,
         translation: Option<&str>,
     ) {
-        let speaker = match u.speaker {
-            Speaker::Me => shogun_memory::transcript_segments::Speaker::Me,
-            Speaker::Other => shogun_memory::transcript_segments::Speaker::Other,
-        };
-        self.db.append_transcript(self.session_id, u.started_at, speaker, text, confidence);
-
-        if !crate::meeting::mac::live_emit_allowed(self.session_id) {
-            return;
-        }
-        let speaker_str = match u.speaker {
-            Speaker::Me => Some("me".to_string()),
-            Speaker::Other => Some("other".to_string()),
-        };
-        let event = LiveLineEvent {
-            ts: u.started_at,
-            speaker: speaker_str.clone(),
-            text: text.to_string(),
-            translation: translation.map(str::to_string),
-        };
-        // Emit directly — Tauri events are thread-safe; blocking the audio worker on
-        // run_on_main_thread can stall ASR while the main thread holds LANE.
-        let _ = self.app.emit("meeting_live_line", event);
-
-        // Async Select KK fill-in when the ASR backend did not already supply a translation.
-        if translation.is_none() {
-            if let Ok(s) = self.settings.read() {
-                let speaker_me = u.speaker == Speaker::Me;
-                let target = s.translation_target(speaker_me);
-                // Whisper TwoWay Other→English: whisper translate owns the lane.
-                let whisper_owns_en = !self.select_kk_owns_en
-                    && s.meeting_mode == MeetingMode::TwoWay
-                    && !speaker_me
-                    && s.my_lang == MeetingLanguage::English;
-                let needs_kk = match target {
-                    Some(MeetingLanguage::Japanese) => !whisper_owns_en,
-                    Some(MeetingLanguage::English) => self.select_kk_owns_en,
-                    _ => false,
-                };
-                if needs_kk && crate::meeting_translate::should_translate_asr(text) {
-                    if let Some(lang) = target {
-                        crate::meeting_translate::spawn_translation(
-                            &self.app,
-                            self.db.clone(),
-                            self.session_id,
-                            u.started_at,
-                            speaker_str.clone(),
-                            text.to_string(),
-                            lang,
-                        );
-                    }
-                }
-            }
-        }
+        self.emit_line(u.speaker, u.started_at, text, confidence, translation, false);
     }
 }
 
@@ -211,14 +234,46 @@ impl Transcriber for MeetingAsr {
     }
 }
 
+fn meeting_config(language: MeetingLanguage) -> DeepgramConfig {
+    DeepgramConfig::default().with_language(language.deepgram_code())
+}
+
 fn build_deepgram(db: &Db, language: MeetingLanguage) -> Result<Deepgram, String> {
     if !deepgram::deepgram_allowed_by_plan(true) {
         return Err("Deepgram ASR not allowed by plan".into());
     }
     let auth = deepgram::resolve_auth()?;
-    let cfg = DeepgramConfig::default().with_language(language.deepgram_code());
+    let cfg = meeting_config(language);
     let trace = Arc::new(db.traceability_sink());
     Deepgram::new(cfg, auth, Some(trace))
+}
+
+fn try_open_live_pair(
+    db: &Db,
+    language: MeetingLanguage,
+    dual: bool,
+) -> Result<(DeepgramLive, Option<DeepgramLive>), String> {
+    if !deepgram::deepgram_allowed_by_plan(true) {
+        return Err("Deepgram ASR not allowed by plan".into());
+    }
+    let cfg = meeting_config(language);
+    let trace: Arc<dyn shogun_core::llm::traceability::TraceabilitySink> =
+        Arc::new(db.traceability_sink());
+    let mut auth = deepgram::resolve_auth()?;
+    let me = DeepgramLive::connect(&cfg, auth.as_mut(), LiveMode::Meeting, Some(trace.clone()))?;
+    let other = if dual {
+        // Fresh auth header (cached inside the auth impl).
+        let mut auth2 = deepgram::resolve_auth()?;
+        Some(DeepgramLive::connect(
+            &cfg,
+            auth2.as_mut(),
+            LiveMode::Meeting,
+            Some(trace),
+        )?)
+    } else {
+        None
+    };
+    Ok((me, other))
 }
 
 fn build_whisper(app: &tauri::AppHandle, model: AsrModel, language: MeetingLanguage) -> Option<Whisper> {
@@ -231,6 +286,161 @@ fn build_whisper(app: &tauri::AppHandle, model: AsrModel, language: MeetingLangu
         Err(e) => {
             eprintln!("[meeting] whisper model present but failed to load ({e}); notes only");
             None
+        }
+    }
+}
+
+struct StreamBuf {
+    pending: Vec<f32>,
+    /// Wall-clock ms when the current interim/final utterance started.
+    utterance_ts: i64,
+    line_seq: u32,
+}
+
+impl StreamBuf {
+    fn new() -> Self {
+        Self {
+            pending: Vec::with_capacity(LIVE_CHUNK_SAMPLES),
+            utterance_ts: 0,
+            line_seq: 0,
+        }
+    }
+
+    fn next_ts(&mut self, now: i64) -> i64 {
+        if self.utterance_ts == 0 {
+            self.utterance_ts = now + self.line_seq as i64;
+            self.line_seq += 1;
+        }
+        self.utterance_ts
+    }
+
+    fn clear_utterance(&mut self) {
+        self.utterance_ts = 0;
+    }
+}
+
+fn push_stream_pcm(
+    live: &mut DeepgramLive,
+    buf: &mut StreamBuf,
+    samples: &[f32],
+) -> Result<(), String> {
+    buf.pending.extend_from_slice(samples);
+    while buf.pending.len() >= LIVE_CHUNK_SAMPLES {
+        let chunk: Vec<f32> = buf.pending.drain(..LIVE_CHUNK_SAMPLES).collect();
+        live.push_pcm(&chunk)?;
+    }
+    Ok(())
+}
+
+fn handle_live_results(
+    speaker: Speaker,
+    live: &DeepgramLive,
+    buf: &mut StreamBuf,
+    now: i64,
+    sink: &mut DbSink,
+) {
+    for r in live.drain() {
+        apply_live_result(speaker, &r, buf, now, sink);
+    }
+}
+
+fn apply_live_result(
+    speaker: Speaker,
+    r: &LiveResult,
+    buf: &mut StreamBuf,
+    now: i64,
+    sink: &mut DbSink,
+) {
+    let text = r.text.trim();
+    if text.is_empty() {
+        return;
+    }
+    let ts = buf.next_ts(now);
+    if r.is_final {
+        sink.emit_line(speaker, ts, text, r.confidence, None, false);
+        buf.clear_utterance();
+    } else {
+        sink.emit_line(speaker, ts, text, r.confidence, None, true);
+    }
+}
+
+fn run_live_loop(
+    mut source: MultiSource,
+    mut me: DeepgramLive,
+    mut other: Option<DeepgramLive>,
+    mut sink: DbSink,
+    stop: Arc<AtomicBool>,
+    last_audio_at: Arc<AtomicI64>,
+) {
+    let mut me_buf = StreamBuf::new();
+    let mut other_buf = StreamBuf::new();
+
+    while !stop.load(Ordering::Relaxed) {
+        let now = now_ms();
+        let mut got = false;
+        while let Some(frame) = source.try_recv() {
+            got = true;
+            match frame.speaker {
+                Speaker::Me => {
+                    if let Err(e) = push_stream_pcm(&mut me, &mut me_buf, &frame.samples) {
+                        eprintln!("[meeting] live Me push failed: {e}");
+                    }
+                }
+                Speaker::Other => {
+                    if let Some(ref mut live) = other {
+                        if let Err(e) = push_stream_pcm(live, &mut other_buf, &frame.samples) {
+                            eprintln!("[meeting] live Other push failed: {e}");
+                        }
+                    }
+                }
+            }
+        }
+        if got {
+            last_audio_at.store(now, Ordering::Relaxed);
+        } else {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+
+        handle_live_results(Speaker::Me, &me, &mut me_buf, now, &mut sink);
+        if let Some(ref live) = other {
+            handle_live_results(Speaker::Other, live, &mut other_buf, now, &mut sink);
+        }
+    }
+
+    source.stop();
+    // Flush trailing PCM then close streams for final transcripts.
+    if !me_buf.pending.is_empty() {
+        let _ = me.push_pcm(&me_buf.pending);
+        me_buf.pending.clear();
+    }
+    if let Some(ref mut live) = other {
+        if !other_buf.pending.is_empty() {
+            let _ = live.push_pcm(&other_buf.pending);
+            other_buf.pending.clear();
+        }
+    }
+
+    let now = now_ms();
+    match me.finish_finals() {
+        Ok(finals) => {
+            for t in finals {
+                let ts = me_buf.next_ts(now);
+                sink.emit_line(Speaker::Me, ts, &t, 0.9, None, false);
+                me_buf.clear_utterance();
+            }
+        }
+        Err(e) => eprintln!("[meeting] live Me finish: {e}"),
+    }
+    if let Some(live) = other.take() {
+        match live.finish_finals() {
+            Ok(finals) => {
+                for t in finals {
+                    let ts = other_buf.next_ts(now);
+                    sink.emit_line(Speaker::Other, ts, &t, 0.9, None, false);
+                    other_buf.clear_utterance();
+                }
+            }
+            Err(e) => eprintln!("[meeting] live Other finish: {e}"),
         }
     }
 }
@@ -253,24 +463,6 @@ pub fn start(
         (resolve_asr_backend(&s), s.asr_model, s.asr_language())
     };
 
-    let (asr, select_kk_owns_en) = match backend {
-        AsrBackend::Deepgram => match build_deepgram(&db, language) {
-            Ok(d) => {
-                eprintln!("[meeting] ASR backend=deepgram");
-                (MeetingAsr::Deepgram(d), true)
-            }
-            Err(e) => {
-                eprintln!("[meeting] deepgram unavailable ({e}); notes only");
-                return None;
-            }
-        },
-        AsrBackend::Whisper => {
-            let w = build_whisper(app, model, language)?;
-            eprintln!("[meeting] ASR backend=whisper (offline/dev fallback)");
-            (MeetingAsr::Whisper(w), false)
-        }
-    };
-
     let mic = match shogun_core::audio::capture::mic::Mic::open() {
         Ok(m) => m,
         Err(e) => {
@@ -280,41 +472,110 @@ pub fn start(
     };
 
     let mut sources: Vec<Box<dyn AudioSource>> = vec![Box::new(mic)];
+    let mut has_tap = false;
     match shogun_core::audio::capture::system_tap::SystemTap::open() {
-        Ok(Some(tap)) => sources.push(Box::new(tap)),
+        Ok(Some(tap)) => {
+            has_tap = true;
+            sources.push(Box::new(tap));
+        }
         Ok(None) => eprintln!("[meeting] system audio tap unavailable (macOS < 14.4); mic only"),
         Err(e) => eprintln!("[meeting] system audio tap failed ({e}); mic only"),
     }
 
     let source = MultiSource::new(sources);
-    let worker = Worker::new(source, asr).with_live_settings(settings.clone());
-    let mut sink = DbSink {
-        db,
-        session_id,
-        app: app.clone(),
-        settings,
-        select_kk_owns_en,
-    };
-
     let stop = Arc::new(AtomicBool::new(false));
     let stop_flag = stop.clone();
     let last_audio_at = Arc::new(AtomicI64::new(now_ms()));
     let last_audio_flag = last_audio_at.clone();
-    let join = std::thread::spawn(move || {
-        let mut worker = worker;
-        while !stop_flag.load(Ordering::Relaxed) {
-            let now = now_ms();
-            if worker.poll(now, &mut sink) == 0 {
-                std::thread::sleep(Duration::from_millis(20));
-            } else {
-                last_audio_flag.store(now, Ordering::Relaxed);
+
+    match backend {
+        AsrBackend::Deepgram => {
+            let sink = DbSink {
+                db: db.clone(),
+                session_id,
+                app: app.clone(),
+                settings: settings.clone(),
+                select_kk_owns_en: true,
+            };
+            match try_open_live_pair(&db, language, has_tap) {
+                Ok((me, other)) => {
+                    eprintln!("[meeting] ASR backend=deepgram live WS");
+                    let join = std::thread::spawn(move || {
+                        run_live_loop(source, me, other, sink, stop_flag, last_audio_flag);
+                    });
+                    eprintln!("[meeting] audio lane started for session {session_id}");
+                    return Some(Handle {
+                        stop,
+                        join: Some(join),
+                        last_audio_at,
+                    });
+                }
+                Err(e) => {
+                    eprintln!(
+                        "[meeting] deepgram live WS unavailable ({e}); HTTP batch + VAD fallback"
+                    );
+                    let d = match build_deepgram(&db, language) {
+                        Ok(d) => d,
+                        Err(e2) => {
+                            eprintln!("[meeting] deepgram unavailable ({e2}); notes only");
+                            return None;
+                        }
+                    };
+                    let asr = MeetingAsr::Deepgram(d);
+                    let worker = Worker::new(source, asr).with_live_settings(settings.clone());
+                    let mut sink = sink;
+                    let join = std::thread::spawn(move || {
+                        run_worker_loop(worker, &mut sink, stop_flag, last_audio_flag);
+                    });
+                    eprintln!("[meeting] audio lane started for session {session_id} (HTTP fallback)");
+                    return Some(Handle {
+                        stop,
+                        join: Some(join),
+                        last_audio_at,
+                    });
+                }
             }
         }
-        worker.stop(now_ms(), &mut sink);
-    });
+        AsrBackend::Whisper => {
+            let w = build_whisper(app, model, language)?;
+            eprintln!("[meeting] ASR backend=whisper (offline/dev fallback)");
+            let asr = MeetingAsr::Whisper(w);
+            let worker = Worker::new(source, asr).with_live_settings(settings.clone());
+            let mut sink = DbSink {
+                db,
+                session_id,
+                app: app.clone(),
+                settings,
+                select_kk_owns_en: false,
+            };
+            let join = std::thread::spawn(move || {
+                run_worker_loop(worker, &mut sink, stop_flag, last_audio_flag);
+            });
+            eprintln!("[meeting] audio lane started for session {session_id}");
+            Some(Handle {
+                stop,
+                join: Some(join),
+                last_audio_at,
+            })
+        }
+    }
+}
 
-    eprintln!("[meeting] audio lane started for session {session_id}");
-    Some(Handle { stop, join: Some(join), last_audio_at })
+fn run_worker_loop<S: AudioSource, T: Transcriber>(
+    mut worker: Worker<S, T>,
+    sink: &mut DbSink,
+    stop: Arc<AtomicBool>,
+    last_audio_at: Arc<AtomicI64>,
+) {
+    while !stop.load(Ordering::Relaxed) {
+        let now = now_ms();
+        if worker.poll(now, sink) == 0 {
+            std::thread::sleep(Duration::from_millis(20));
+        } else {
+            last_audio_at.store(now, Ordering::Relaxed);
+        }
+    }
+    worker.stop(now_ms(), sink);
 }
 
 /// Stop the lane: signal the thread and wait for it to flush and release the devices. A missing

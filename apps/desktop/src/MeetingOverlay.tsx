@@ -69,6 +69,7 @@ interface LiveLineEvent {
   speaker: string | null;
   text: string;
   translation?: string | null;
+  interim?: boolean;
 }
 
 interface TranslationEvent {
@@ -187,12 +188,16 @@ function translationPatchKey(ts: number, speaker: string | null | undefined): st
 }
 function useLiveLineBuffer(active: boolean): {
   lines: TranscriptLine[];
+  interims: TranscriptLine[];
   pushLine: (line: TranscriptLine) => void;
+  upsertInterim: (line: TranscriptLine) => void;
   patchTranslation: (ts: number, speaker: string | null | undefined, translation: string) => void;
   snapshot: () => TranscriptLine[];
 } {
   const [lines, setLines] = useState<TranscriptLine[]>([]);
+  const [interims, setInterims] = useState<TranscriptLine[]>([]);
   const pendingRef = useRef<TranscriptLine[]>([]);
+  const interimRef = useRef<Map<string, TranscriptLine>>(new Map());
   const transRef = useRef<Map<string, string>>(new Map());
   const rafRef = useRef<number | null>(null);
 
@@ -200,8 +205,15 @@ function useLiveLineBuffer(active: boolean): {
     rafRef.current = null;
     const batch = pendingRef.current;
     const patches = transRef.current;
+    const interimBatch = Array.from(interimRef.current.values());
     pendingRef.current = [];
     transRef.current = new Map();
+    if (batch.length === 0 && patches.size === 0 && interimBatch.length === 0) {
+      // Still refresh interims when map was cleared.
+      setInterims(interimBatch);
+      return;
+    }
+    setInterims(interimBatch);
     if (batch.length === 0 && patches.size === 0) return;
     setLines((prev) => {
       let next = batch.length > 0 ? [...prev, ...batch] : prev;
@@ -223,7 +235,9 @@ function useLiveLineBuffer(active: boolean): {
   useEffect(() => {
     if (active) {
       setLines([]);
+      setInterims([]);
       pendingRef.current = [];
+      interimRef.current = new Map();
       transRef.current = new Map();
       if (rafRef.current != null) {
         window.cancelAnimationFrame(rafRef.current);
@@ -246,7 +260,16 @@ function useLiveLineBuffer(active: boolean): {
 
   const pushLine = useCallback(
     (line: TranscriptLine) => {
+      interimRef.current.delete(line.speaker ?? "");
       pendingRef.current.push(line);
+      schedule();
+    },
+    [schedule],
+  );
+
+  const upsertInterim = useCallback(
+    (line: TranscriptLine) => {
+      interimRef.current.set(line.speaker ?? "", line);
       schedule();
     },
     [schedule],
@@ -267,7 +290,7 @@ function useLiveLineBuffer(active: boolean): {
     [lines],
   );
 
-  return { lines, pushLine, patchTranslation, snapshot };
+  return { lines, interims, pushLine, upsertInterim, patchTranslation, snapshot };
 }
 
 const MODES: MeetingMode[] = ["transcription", "one_way", "two_way"];
@@ -284,6 +307,7 @@ export function MeetingOverlay(): JSX.Element | null {
   const [stopping, setStopping] = useState(false);
   const live = useLiveLineBuffer(view?.state === "recording");
   const liveLines = live.lines;
+  const liveInterims = live.interims;
   const [settings, setSettings] = useState<MeetingSettings>({
     meeting_mode: "transcription",
     source_lang: "auto",
@@ -332,12 +356,17 @@ export function MeetingOverlay(): JSX.Element | null {
 
     const offLine = listen<LiveLineEvent>("meeting_live_line", (e) => {
       const line = e.payload;
-      live.pushLine({
+      const row: TranscriptLine = {
         ts: line.ts,
         speaker: line.speaker,
         text: line.text,
         translation: line.translation ?? null,
-      });
+      };
+      if (line.interim) {
+        live.upsertInterim(row);
+      } else {
+        live.pushLine(row);
+      }
     });
     const offTrans = listen<TranslationEvent>("meeting_live_translation", (e) => {
       const { ts, speaker, translation } = e.payload;
@@ -351,7 +380,7 @@ export function MeetingOverlay(): JSX.Element | null {
       void offNeedsKey.then((f) => f());
       void offKeyInvalid.then((f) => f());
     };
-  }, [view?.state, live.pushLine, live.patchTranslation]);
+  }, [view?.state, live.pushLine, live.upsertInterim, live.patchTranslation]);
 
   useEffect(() => {
     if (view?.state !== "recording") setStopping(false);
@@ -362,7 +391,7 @@ export function MeetingOverlay(): JSX.Element | null {
       top: liveScrollRef.current.scrollHeight,
       behavior: "smooth",
     });
-  }, [liveLines.length]);
+  }, [liveLines.length, liveInterims.length]);
 
   useEffect(() => {
     if (view?.state !== "wrapping") return;
@@ -480,7 +509,7 @@ export function MeetingOverlay(): JSX.Element | null {
 
   if (view.state === "recording") {
     const translating = settings.meeting_mode !== "transcription";
-    const liveTurns = groupTurns(liveLines);
+    const liveTurns = groupTurns([...liveLines, ...liveInterims]);
 
     const langPicker = (
       field: "source" | "target" | "my" | "other",
