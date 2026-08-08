@@ -64,6 +64,7 @@ mod mac {
             Self { last_focus_key: None, last_ocr_at: None }
         }
 
+        #[allow(clippy::too_many_arguments)] // one gate, one call site; a params struct adds nothing
         fn should_run(
             &mut self,
             focus_key: &str,
@@ -143,6 +144,7 @@ mod mac {
     const FRAME_PURGE_INTERVAL_MS: u64 = 30 * 60 * 1_000;
 
     #[cfg(feature = "visual-recall-ocr")]
+    #[allow(clippy::too_many_arguments)] // capture-tick context; one call site
     fn maybe_screen_ocr(
         db: &Db,
         visual: &VisualRecallSettings,

@@ -901,8 +901,9 @@ use shogun_core::meeting::gate::OfferGate;
         // Skip redundant AppKit work: emit() runs every second while a meeting is active, but the
         // overlay only needs to change on visibility/state/size transitions. Hammering set_size /
         // orderFront every tick races teardown and can destabilize the webview.
-        static LAST: std::sync::Mutex<Option<(bool, State, bool, f64, f64)>> =
-            std::sync::Mutex::new(None);
+        // (visible, state, overlay_dismissed, w, h) — the last emitted overlay geometry.
+        type LastEmit = (bool, State, bool, f64, f64);
+        static LAST: std::sync::Mutex<Option<LastEmit>> = std::sync::Mutex::new(None);
         if let Ok(mut last) = LAST.lock() {
             if last.as_ref().is_some_and(|(v, s, dismissed, w, h)| {
                 *v == visible

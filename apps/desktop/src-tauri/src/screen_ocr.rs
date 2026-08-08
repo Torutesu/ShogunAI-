@@ -75,19 +75,19 @@ pub fn focused_window_id(pid: i32) -> Option<u32> {
         let dict = array.get(i)?;
         let owner = dict
             .find(kCGWindowOwnerPID())
-            .and_then(|v| cf_number_i32(&*v))
+            .and_then(|v| cf_number_i32(&v))
             .unwrap_or(0);
         if owner != pid {
             continue;
         }
         let layer = dict
             .find(kCGWindowLayer())
-            .and_then(|v| cf_number_i32(&*v))
+            .and_then(|v| cf_number_i32(&v))
             .unwrap_or(-1);
         if layer != 0 {
             continue;
         }
-        let wid = dict.find(kCGWindowNumber()).and_then(|v| cf_number_u32(&*v))?;
+        let wid = dict.find(kCGWindowNumber()).and_then(|v| cf_number_u32(&v))?;
         return Some(wid);
     }
     None
@@ -122,6 +122,7 @@ pub fn capture_window(window_id: u32) -> Option<(CGImage, DynamicImage)> {
 
 /// Gated OCR on the focused window. Returns text outcome plus an optional JPEG when Vision
 /// ran fresh and produced text (caller stores via `Db::store_screen_frame`).
+#[allow(clippy::too_many_arguments)] // the capture tick's full gate context; one call site
 pub fn ocr_focused_window_gated(
     pipeline: &mut RecallPipeline,
     pid: i32,
@@ -310,14 +311,17 @@ fn cg_image_to_dynamic(image: &CGImage) -> Option<DynamicImage> {
     ImageBuffer::from_raw(width as u32, height as u32, rgba).map(DynamicImage::ImageRgba8)
 }
 
+#[allow(non_snake_case)] // mirrors the CoreGraphics constant it stands in for
 fn kCGWindowOwnerPID() -> CFString {
     CFString::from_static_string("kCGWindowOwnerPID")
 }
 
+#[allow(non_snake_case)] // mirrors the CoreGraphics constant it stands in for
 fn kCGWindowLayer() -> CFString {
     CFString::from_static_string("kCGWindowLayer")
 }
 
+#[allow(non_snake_case)] // mirrors the CoreGraphics constant it stands in for
 fn kCGWindowNumber() -> CFString {
     CFString::from_static_string("kCGWindowNumber")
 }

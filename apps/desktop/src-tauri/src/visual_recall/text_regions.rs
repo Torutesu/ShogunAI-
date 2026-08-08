@@ -184,8 +184,8 @@ fn otsu_threshold(pixels: &[u8]) -> u8 {
     let mut weight_bg = 0.0f64;
     let mut best_sigma = 0.0f64;
     let mut best_t = 0u8;
-    for t in 0..256usize {
-        weight_bg += hist[t] as f64;
+    for (t, &count) in hist.iter().enumerate() {
+        weight_bg += count as f64;
         if weight_bg == 0.0 {
             continue;
         }
@@ -193,7 +193,7 @@ fn otsu_threshold(pixels: &[u8]) -> u8 {
         if weight_fg == 0.0 {
             break;
         }
-        sum_bg += t as f64 * hist[t] as f64;
+        sum_bg += t as f64 * count as f64;
         let mean_bg = sum_bg / weight_bg;
         let mean_fg = (sum_all - sum_bg) / weight_fg;
         let sigma = weight_bg * weight_fg * (mean_bg - mean_fg) * (mean_bg - mean_fg);
@@ -212,8 +212,8 @@ fn close_9x1(binary: &[u8], w: usize, h: usize) -> Vec<u8> {
         let row = &binary[y * w..(y + 1) * w];
         let out = &mut dilated[y * w..(y + 1) * w];
         let mut count: u32 = 0;
-        for x in 0..R.min(w) {
-            count += row[x] as u32;
+        for &px in &row[..R.min(w)] {
+            count += px as u32;
         }
         for x in 0..w {
             if x + R < w {
@@ -230,8 +230,8 @@ fn close_9x1(binary: &[u8], w: usize, h: usize) -> Vec<u8> {
         let row = &dilated[y * w..(y + 1) * w];
         let out = &mut closed[y * w..(y + 1) * w];
         let mut count: u32 = 0;
-        for x in 0..R.min(w) {
-            count += row[x] as u32;
+        for &px in &row[..R.min(w)] {
+            count += px as u32;
         }
         for x in 0..w {
             if x + R < w {

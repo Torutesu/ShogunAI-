@@ -86,7 +86,9 @@ pub mod mac {
             let Ok(g) = LANE.lock() else { return Err("busy".into()) };
             let Some(shared) = g.as_ref() else { return Err("not ready".into()) };
             let current = shared.read().map_err(|_| "busy".to_string())?;
-            Settings { enabled, ..current.clone() }
+            let mut candidate = current.clone();
+            candidate.enabled = enabled;
+            candidate
         };
         save(&app, &candidate)?;
         let Ok(g) = LANE.lock() else { return Err("busy".into()) };

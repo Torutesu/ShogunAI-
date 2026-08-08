@@ -504,11 +504,11 @@ pub fn start(
                         run_live_loop(source, me, other, sink, stop_flag, last_audio_flag);
                     });
                     eprintln!("[meeting] audio lane started for session {session_id}");
-                    return Some(Handle {
+                    Some(Handle {
                         stop,
                         join: Some(join),
                         last_audio_at,
-                    });
+                    })
                 }
                 Err(e) => {
                     eprintln!(
@@ -528,11 +528,11 @@ pub fn start(
                         run_worker_loop(worker, &mut sink, stop_flag, last_audio_flag);
                     });
                     eprintln!("[meeting] audio lane started for session {session_id} (HTTP fallback)");
-                    return Some(Handle {
+                    Some(Handle {
                         stop,
                         join: Some(join),
                         last_audio_at,
-                    });
+                    })
                 }
             }
         }

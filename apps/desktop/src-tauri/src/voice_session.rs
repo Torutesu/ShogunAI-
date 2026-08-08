@@ -17,16 +17,10 @@ pub mod mac {
 
     const WINDOW_LABEL: &str = "voice";
 
-    #[derive(Clone, serde::Serialize, serde::Deserialize)]
+    #[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
     pub struct Settings {
         #[serde(default)]
         pub enabled: bool,
-    }
-
-    impl Default for Settings {
-        fn default() -> Self {
-            Self { enabled: false }
-        }
     }
 
     struct Lane {
