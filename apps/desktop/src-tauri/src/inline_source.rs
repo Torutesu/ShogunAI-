@@ -850,6 +850,7 @@ pub mod mac {
         db: Db,
         warm: Option<shogun_core::daemon::ReplyContext>,
         app: tauri::AppHandle,
+        directives: String,
     ) {
         // Emitted before the thread starts so the pill reacts to the press itself, not to the
         // generation finishing — the whole point is that the tap feels answered immediately.
@@ -872,7 +873,7 @@ pub mod mac {
                 push_inline(&app, InlineStatus { phase: "no_key", chars: 0, detail: None });
                 return;
             };
-            let outcome = compose_inline(&AxCursorReader, &agent, &AxTextInserter, &memory);
+            let outcome = compose_inline(&AxCursorReader, &agent, &AxTextInserter, &memory, &directives);
             match &outcome {
                 InlineOutcome::Inserted { chars } => {
                     eprintln!("[inline] inserted {chars} chars at the cursor");
@@ -909,9 +910,10 @@ pub mod mac {
     pub fn inline_at_cursor(
         db: tauri::State<'_, Db>,
         reply: tauri::State<'_, shogun_core::daemon::ReplyContextCache>,
+        user_cfg: tauri::State<'_, crate::user_config_watch::UserConfigState>,
         app: tauri::AppHandle,
     ) -> &'static str {
-        run_inline_at_cursor(db.inner().clone(), reply.current(), app);
+        run_inline_at_cursor(db.inner().clone(), reply.current(), app, user_cfg.directives());
         "started"
     }
 
@@ -1080,8 +1082,13 @@ pub mod mac {
     /// (FR-ST-20) AND the evidence retrieved for that message (Phase R1). Evidence is dated and
     /// attributed so the model answers from what was actually seen, and can say which item it
     /// used rather than asserting from nowhere.
-    fn build_chat_prompt(message: &str, ctx: &ContextPack) -> String {
-        let mut p = String::from(
+    fn build_chat_prompt(message: &str, ctx: &ContextPack, directives: &str) -> String {
+        let mut p = String::new();
+        if !directives.trim().is_empty() {
+            p.push_str(directives.trim());
+            p.push('\n');
+        }
+        p.push_str(
             "You are SHOGUN, the user's private work assistant on their Mac. Answer grounded in what \
              you remember about their work. Be concise, concrete, and useful — no filler.\n\
              Prefer the retrieved evidence over your own assumptions. Cite the item you used when it \
@@ -1181,11 +1188,13 @@ pub mod mac {
     }
 
     /// Context-aware chat for the voice dialogue lane (#44). Same BYOK path as `shogun_chat`.
+    /// The voice lane has no Shougun.md directive plumbing yet, so directives are empty here —
+    /// notch chat (`shogun_chat`) is the directive-aware caller.
     pub(crate) fn voice_chat(db: &Db, message: &str) -> Result<ChatAnswer, String> {
-        chat_blocking(db, message)
+        chat_blocking(db, message, "")
     }
 
-    fn chat_blocking(db: &Db, message: &str) -> Result<ChatAnswer, String> {
+    fn chat_blocking(db: &Db, message: &str, directives: &str) -> Result<ChatAnswer, String> {
         use shogun_memory::thread::Referent;
 
         // A question that refers to something without naming it ("how's that going?") can't be
@@ -1258,7 +1267,7 @@ pub mod mac {
         if !agent.is_live() {
             return no_key();
         }
-        let text = agent.complete(&build_chat_prompt(message, &ctx)).map_err(|e| {
+        let text = agent.complete(&build_chat_prompt(message, &ctx, directives)).map_err(|e| {
             // Same latch as the ⌥-tap path: chat surfaces the error text, but Settings is where
             // the fix is, and it needs to know the key is the problem.
             if matches!(e, LlmError::Unauthorized(..)) {
@@ -1287,12 +1296,14 @@ pub mod mac {
     pub async fn shogun_chat(
         message: String,
         db: tauri::State<'_, Db>,
+        user_cfg: tauri::State<'_, crate::user_config_watch::UserConfigState>,
         app: tauri::AppHandle,
     ) -> Result<ChatAnswer, String> {
         use tauri::Manager;
         let db = db.inner().clone();
+        let directives = user_cfg.directives();
         let started = std::time::Instant::now();
-        let answered = tokio::task::spawn_blocking(move || chat_blocking(&db, &message))
+        let answered = tokio::task::spawn_blocking(move || chat_blocking(&db, &message, &directives))
             .await
             .map_err(|e| e.to_string())?;
 

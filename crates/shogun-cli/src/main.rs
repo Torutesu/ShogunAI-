@@ -29,6 +29,43 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
+    if let command::Command::Config { action } = &invocation.command {
+        use shogun_core::user_config::{default_path, load_report};
+        let Some(path) = default_path() else {
+            eprintln!("error: could not resolve home dir");
+            return ExitCode::from(1);
+        };
+        match action {
+            command::ConfigAction::Path => {
+                println!("{}", path.display());
+            }
+            command::ConfigAction::Show => match load_report(&path) {
+                Ok((cfg, _)) => println!("{cfg:#?}"),
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    return ExitCode::from(1);
+                }
+            },
+            command::ConfigAction::Validate => match load_report(&path) {
+                Ok((_, report)) => {
+                    if report.ok {
+                        println!("ok");
+                    } else {
+                        for e in &report.section_errors {
+                            println!("{}:{} {}", e.section, e.line, e.message);
+                        }
+                        return ExitCode::from(1);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    return ExitCode::from(1);
+                }
+            },
+        }
+        return ExitCode::SUCCESS;
+    }
+
     let Some(call) = wire::to_call(&invocation.command, invocation.include_low) else {
         println!("{}", command::USAGE);
         return ExitCode::SUCCESS;

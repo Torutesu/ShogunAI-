@@ -2,7 +2,7 @@
 //! whole command grammar is unit-testable without spawning a process. Dependency-free (no clap):
 //! the grammar is small and the tests are the spec.
 
-use crate::command::{Command, ListOrGet};
+use crate::command::{Command, ConfigAction, ListOrGet};
 
 /// A fully parsed invocation: the command plus global flags.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -137,6 +137,18 @@ fn parse_command(positionals: &[String], no_screen: bool) -> Result<Command, Cli
         "metrics" => Ok(Command::Metrics),
         "onboarding" => Ok(Command::Onboarding),
         "visual-recall" => parse_visual_recall(rest),
+        "config" => {
+            let action = match rest.first().map(String::as_str) {
+                Some("path") => ConfigAction::Path,
+                Some("show") => ConfigAction::Show,
+                Some("validate") => ConfigAction::Validate,
+                Some(other) => {
+                    return Err(CliError::UnknownSubcommand { command: "config", got: other.to_string() })
+                }
+                None => return Err(CliError::MissingArgument("path|show|validate")),
+            };
+            Ok(Command::Config { action })
+        }
         other => Err(CliError::UnknownCommand(other.to_string())),
     }
 }
@@ -317,5 +329,29 @@ mod tests {
             Command::Run { agent: r#"{"kind":"local_search","query":"x"}"#.into() }
         );
         assert_eq!(parse(&v(&["run"])), Err(CliError::MissingArgument("<action-json>")));
+    }
+
+    #[test]
+    fn parses_config_actions() {
+        assert_eq!(
+            parse(&v(&["config", "validate"])).unwrap().command,
+            Command::Config { action: ConfigAction::Validate }
+        );
+        assert_eq!(
+            parse(&v(&["config", "path"])).unwrap().command,
+            Command::Config { action: ConfigAction::Path }
+        );
+        assert_eq!(
+            parse(&v(&["config", "show"])).unwrap().command,
+            Command::Config { action: ConfigAction::Show }
+        );
+        assert_eq!(
+            parse(&v(&["config"])),
+            Err(CliError::MissingArgument("path|show|validate"))
+        );
+        assert_eq!(
+            parse(&v(&["config", "frobnicate"])),
+            Err(CliError::UnknownSubcommand { command: "config", got: "frobnicate".into() })
+        );
     }
 }

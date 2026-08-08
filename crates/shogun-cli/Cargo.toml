@@ -23,6 +23,7 @@ path = "src/main.rs"
 [dependencies]
 shogun-mcp = { path = "../shogun-mcp" }
 shogun-agents = { path = "../shogun-agents" }
+shogun-core = { path = "../shogun-core" }
 
 [lints]
 workspace = true

@@ -80,7 +80,7 @@ pub fn to_call(command: &Command, include_low: bool) -> Option<HttpCall> {
                 post("/v1/visual_recall/frames/delete".into(), format!(r#"{{"id":{id}}}"#))
             }
         },
-        Command::Help => return None,
+        Command::Help | Command::Config { .. } => return None,
     })
 }
 

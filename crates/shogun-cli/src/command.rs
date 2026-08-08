@@ -11,6 +11,14 @@ pub enum ListOrGet {
     Get { id: i64 },
 }
 
+/// The action for `shogun config path|show|validate`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConfigAction {
+    Path,
+    Show,
+    Validate,
+}
+
 /// A parsed CLI command.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
@@ -42,6 +50,8 @@ pub enum Command {
     VisualRecall(VisualRecallCommand),
     /// `shogun help` / no args.
     Help,
+    /// `shogun config path|show|validate`
+    Config { action: ConfigAction },
 }
 
 /// Visual recall subcommands (Memory API symmetry).
@@ -82,7 +92,7 @@ impl Command {
             Command::VisualRecall(VisualRecallCommand::FrameGet { .. }) => Tool::VisualRecallGetFrame,
             Command::VisualRecall(VisualRecallCommand::FrameRescan { .. }) => Tool::VisualRecallRescanFrame,
             Command::VisualRecall(VisualRecallCommand::FrameDelete { .. }) => Tool::VisualRecallDeleteFrame,
-            Command::ApiStatus | Command::Metrics | Command::Help => return None,
+            Command::ApiStatus | Command::Metrics | Command::Help | Command::Config { .. } => return None,
         })
     }
 }
@@ -114,6 +124,7 @@ COMMANDS:
     visual-recall frame get <id>           Frame metadata + OCR text
     visual-recall frame rescan <id>        Re-OCR stored JPEG
     visual-recall frame delete <id>        Delete one stored frame
+    config path|show|validate Show the Shougun.md path, parsed config, or validation
     help                      This help
 
 GLOBAL FLAGS:
@@ -156,6 +167,7 @@ mod tests {
     fn local_commands_have_no_tool() {
         assert!(Command::ApiStatus.tool().is_none());
         assert!(Command::Help.tool().is_none());
+        assert!(Command::Config { action: ConfigAction::Path }.tool().is_none());
     }
 
     #[test]

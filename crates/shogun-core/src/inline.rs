@@ -75,7 +75,8 @@ pub enum InlineOutcome {
 /// Build the Agent-lane prompt from the caret context + relevant memory (already confidence-gated by
 /// the caller — FR-ST-20). Pure: this is the piece that turns "what's on screen + what I remember"
 /// into an instruction to write the best continuation, asking for *only* the text to insert.
-pub fn build_prompt(ctx: &CursorContext, memory: &[String]) -> String {
+/// `directives` is the rendered user-config block (empty string when no config is set).
+pub fn build_prompt(ctx: &CursorContext, memory: &[String], directives: &str) -> String {
     let mut p = String::new();
     p.push_str("You are writing directly in the user's active app");
     if !ctx.app.trim().is_empty() {
@@ -96,6 +97,15 @@ pub fn build_prompt(ctx: &CursorContext, memory: &[String]) -> String {
     // to the most plausible draft instead of asking. Underspecified is the normal case here, not an
     // error to report.
     p.push_str("Never ask a question, request more detail, or explain yourself. If the context is thin, write the most plausible draft you can from what is given and commit to it. Your entire reply is inserted verbatim at the cursor.\n");
+
+    // Directives go AFTER the insert-only / no-preamble constraints on purpose: user
+    // directives flavor voice and content, but must not relax the "insert only the text"
+    // contract stated above. Do not move this block above those constraints.
+    if !directives.trim().is_empty() {
+        p.push('\n');
+        p.push_str(directives.trim());
+        p.push('\n');
+    }
 
     let facts: Vec<&str> = memory.iter().map(|m| m.trim()).filter(|m| !m.is_empty()).collect();
     if !facts.is_empty() {
@@ -125,7 +135,13 @@ pub fn build_prompt(ctx: &CursorContext, memory: &[String]) -> String {
 /// the BYOK Agent lane, then insert at the caret. Any failing step stops the flow without inserting.
 /// Traceability is the `AgentClient`'s responsibility (it records the egress at the point the chunk
 /// leaves the device), so this orchestration never traces — one trace, at the true egress.
-pub fn compose_inline<R, A, I>(reader: &R, agent: &A, inserter: &I, memory: &[String]) -> InlineOutcome
+pub fn compose_inline<R, A, I>(
+    reader: &R,
+    agent: &A,
+    inserter: &I,
+    memory: &[String],
+    directives: &str,
+) -> InlineOutcome
 where
     R: CursorReader + ?Sized,
     A: AgentClient + ?Sized,
@@ -137,7 +153,7 @@ where
     // NOTE: an EMPTY context is still a context — a focused empty field ("write the first line of
     // this reply") is the most common draft. The reader returning Some already means a real,
     // writable field is focused; only reader None is NoContext.
-    let prompt = build_prompt(&ctx, memory);
+    let prompt = build_prompt(&ctx, memory, directives);
     let text = match agent.complete(&prompt) {
         Ok(t) => t,
         Err(e @ crate::llm::LlmError::Unauthorized(..)) => return InlineOutcome::KeyRejected(e.to_string()),
@@ -197,7 +213,7 @@ mod tests {
 
     #[test]
     fn prompt_includes_field_memory_and_surrounding_text() {
-        let p = build_prompt(&ctx(), &["you owe Alice the deck (Fri)".into(), "legal sign-off pending".into()]);
+        let p = build_prompt(&ctx(), &["you owe Alice the deck (Fri)".into(), "legal sign-off pending".into()], "");
         assert!(p.contains("Mail — Re: Q3 roadmap"), "app + field label grounds the prompt: {p}");
         assert!(p.contains("Output only the text to insert"), "asks for insertion text only");
         assert!(p.contains("Never ask a question"), "forbids the meta-question failure mode");
@@ -207,7 +223,7 @@ mod tests {
 
     #[test]
     fn empty_memory_omits_the_memory_section() {
-        let p = build_prompt(&ctx(), &[]);
+        let p = build_prompt(&ctx(), &[], "");
         assert!(!p.contains("What the user has in view"), "no memory ⇒ no memory section");
     }
 
@@ -215,14 +231,14 @@ mod tests {
     fn after_text_is_included_only_when_present() {
         let mut c = ctx();
         c.after = "Best,\nJordan".into();
-        let p = build_prompt(&c, &[]);
+        let p = build_prompt(&c, &[], "");
         assert!(p.contains("Text after the cursor:\nBest,\nJordan"));
     }
 
     #[test]
     fn happy_path_generates_and_inserts_at_the_caret() {
         let ins = inserter(true);
-        let out = compose_inline(&FixedReader(Some(ctx())), &agent(), &ins, &["memo".into()]);
+        let out = compose_inline(&FixedReader(Some(ctx())), &agent(), &ins, &["memo".into()], "");
         // the mock echoes "draft: <prompt>", which is what gets inserted
         assert!(matches!(out, InlineOutcome::Inserted { chars } if chars > 0));
         assert!(ins.last.borrow().starts_with("draft: "), "generated text was inserted at the caret");
@@ -233,7 +249,7 @@ mod tests {
     #[test]
     fn no_field_focused_does_nothing() {
         let ins = inserter(true);
-        let out = compose_inline(&FixedReader(None), &agent(), &ins, &[]);
+        let out = compose_inline(&FixedReader(None), &agent(), &ins, &[], "");
         assert_eq!(out, InlineOutcome::NoContext);
         assert!(ins.last.borrow().is_empty(), "nothing generated or inserted when there's no field");
     }
@@ -244,7 +260,7 @@ mod tests {
         // returning Some means a writable field is focused — generation must proceed.
         let empty = CursorContext { app: "Mail".into(), field_label: String::new(), before: "   ".into(), after: String::new() };
         let ins = inserter(true);
-        let out = compose_inline(&FixedReader(Some(empty)), &agent(), &ins, &[]);
+        let out = compose_inline(&FixedReader(Some(empty)), &agent(), &ins, &[], "");
         assert!(matches!(out, InlineOutcome::Inserted { chars } if chars > 0));
         assert!(ins.last.borrow().contains("currently empty"), "the prompt says the field is empty");
     }
@@ -252,14 +268,28 @@ mod tests {
     #[test]
     fn generation_failure_inserts_nothing() {
         let ins = inserter(true);
-        let out = compose_inline(&FixedReader(Some(ctx())), &FailAgent, &ins, &[]);
+        let out = compose_inline(&FixedReader(Some(ctx())), &FailAgent, &ins, &[], "");
         assert!(matches!(out, InlineOutcome::GenerationFailed(_)));
         assert!(ins.last.borrow().is_empty(), "nothing was inserted");
     }
 
     #[test]
     fn insert_failure_is_reported() {
-        let out = compose_inline(&FixedReader(Some(ctx())), &agent(), &inserter(false), &[]);
+        let out = compose_inline(&FixedReader(Some(ctx())), &agent(), &inserter(false), &[], "");
         assert!(matches!(out, InlineOutcome::InsertFailed(_)));
+    }
+
+    #[test]
+    fn build_prompt_includes_directives_when_present() {
+        let c = ctx();
+        let p = build_prompt(&c, &[], "User Directives:\n- be terse\n");
+        assert!(p.contains("be terse"));
+    }
+
+    #[test]
+    fn build_prompt_omits_directives_when_empty() {
+        let c = ctx();
+        let p = build_prompt(&c, &[], "");
+        assert!(!p.contains("User Directives"));
     }
 }
