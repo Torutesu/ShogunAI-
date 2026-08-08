@@ -481,6 +481,8 @@ impl<T: crate::llm::transport::StreamingTransport, S: TraceabilitySink> Anthropi
                 Err(crate::llm::status_error("messages", status, &body))
             }
         }
+    }
+}
 
 /// Select-KK Messages client for latency-sensitive work (e.g. live meeting translation). The Batch
 /// lane is the default Select-KK path; this is the exception when sub-second UX matters and Batch
