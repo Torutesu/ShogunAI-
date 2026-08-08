@@ -313,14 +313,10 @@ fn take_valid_utf8(carry: &mut Vec<u8>) -> Option<String> {
             carry.drain(..valid_to);
             return Some(s);
         }
-        match invalid_len {
-            // 直らないバイト列。捨てて、その後ろに有効な文字が続いていないか見直す。
-            Some(n) => {
-                carry.drain(..n);
-            }
-            // 途中で切れた文字（または carry が空）。次のチャンクを待つ。
-            None => return None,
-        }
+        // `None` は途中で切れた文字（または carry が空）— 次のチャンクを待つ。`Some(n)` は
+        // 直らないバイト列。捨てて、その後ろに有効な文字が続いていないか見直す。
+        let n = invalid_len?;
+        carry.drain(..n);
     }
 }
 
