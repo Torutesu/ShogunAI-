@@ -1862,6 +1862,7 @@ impl Db {
     ///
     /// Explicit exception to invariant 2 (user decision 2026-08-02): frames are local-only,
     /// encrypted at rest with the memory DB, and purged after 72 h — not audio, not forever.
+    #[allow(clippy::too_many_arguments)] // frame metadata is one row; a params struct adds nothing
     pub fn store_screen_frame(
         &self,
         event_id: i64,

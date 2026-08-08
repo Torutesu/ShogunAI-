@@ -90,11 +90,14 @@ impl DeepgramAuth for EphemeralTokenAuth {
 }
 
 /// Keychain-backed API key (`com.selectkk.shogun` / `deepgram-asr`). Cached per session.
+/// macOS-only: the Keychain store does not exist on other targets (Linux CI builds `net`).
+#[cfg(target_os = "macos")]
 #[derive(Default)]
 pub struct KeychainKeyAuth {
     cached: Option<String>,
 }
 
+#[cfg(target_os = "macos")]
 impl DeepgramAuth for KeychainKeyAuth {
     fn authorization_header(&mut self) -> Result<String, String> {
         if let Some(ref key) = self.cached {
@@ -123,7 +126,7 @@ impl DeepgramAuth for DebugEnvKeyAuth {
             if key.trim().is_empty() {
                 return Err("SHOGUN_DEEPGRAM_API_KEY is empty".into());
             }
-            return Ok(format!("Token {}", key.trim()));
+            Ok(format!("Token {}", key.trim()))
         }
         #[cfg(not(debug_assertions))]
         {
@@ -181,6 +184,7 @@ pub fn resolve_auth() -> Result<Box<dyn DeepgramAuth>, String> {
             return Ok(Box::new(EphemeralTokenAuth::new(url)?));
         }
     }
+    #[cfg(target_os = "macos")]
     if shogun_integrations::keychain_store::deepgram_asr_configured() {
         return Ok(Box::new(KeychainKeyAuth::default()));
     }
@@ -323,10 +327,7 @@ impl DeepgramLive {
 
     /// Non-blocking drain of one transcript event.
     pub fn try_recv(&self) -> Option<LiveResult> {
-        match self.result_rx.try_recv() {
-            Ok(r) => Some(r),
-            Err(TryRecvError::Empty | TryRecvError::Disconnected) => None,
-        }
+        self.result_rx.try_recv().ok()
     }
 
     /// Drain all currently available results.
@@ -742,8 +743,7 @@ mod tests {
 
     #[test]
     fn rejects_mip_opt_in() {
-        let mut cfg = DeepgramConfig::default();
-        cfg.mip_opt_out = false;
+        let cfg = DeepgramConfig { mip_opt_out: false, ..DeepgramConfig::default() };
         let err = match Deepgram::new(cfg, Box::new(DebugEnvKeyAuth), None) {
             Ok(_) => panic!("expected mip_opt_out rejection"),
             Err(e) => e,

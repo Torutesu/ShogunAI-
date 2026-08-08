@@ -304,7 +304,8 @@ impl MemoryBackend for DbBackend {
             Tool::StateProposeUpdate => Ok(None),
             Tool::VisualRecallSetEnabled => {
                 let enabled = parse_enabled_body(body)?;
-                let settings = Settings { enabled, ..self.load_vr_settings() };
+                let mut settings = self.load_vr_settings();
+                settings.enabled = enabled;
                 self.save_vr_settings(&settings)?;
                 if !enabled {
                     let removed = self.db.purge_auto_screen_frames()?;
