@@ -20,6 +20,10 @@
 //! - [`transport`] is the HTTP seam ([`HttpTransport`]) so the network clients are testable with
 //!   no socket; [`traceability`] is the send-log seam ([`TraceabilitySink`]) that records only a
 //!   digest + byte-length of every outbound chunk (AR-11 / G8, never the text).
+//! - [`subscription`] is a **third** Agent-lane implementation (Issue #110) that spends the user's
+//!   existing Claude/ChatGPT/Gemini subscription by delegating to the vendor CLI they already
+//!   signed into, so the Agent lane works with no API key at all. It implements [`AgentClient`]
+//!   only — never [`BatchClient`] — so invariant 5 holds there too, by the same compile error.
 //! - [`anthropic`] is the real Anthropic REST layer: pure request builders + response parsers
 //!   (Linux-testable) plus thin async clients that wire transport + sink together. The
 //!   Batch-lane client takes a [`SelectKkKey`] and the Agent-lane client a [`ByokKey`], so
@@ -29,6 +33,7 @@ pub mod anthropic;
 pub mod openai_compat;
 /// チャンク境界をまたぐ増分SSEデコーダ（SLO-03の初トークン計測に必要）。
 pub mod sse;
+pub mod subscription;
 pub mod traceability;
 pub mod transport;
 
@@ -175,6 +180,13 @@ pub enum LlmError {
     /// re-paste a key that was never the problem.
     #[error("credential rejected (HTTP {0}){}", if .1.is_empty() { String::new() } else { format!(": {}", .1) })]
     Unauthorized(u16, String),
+    /// The quota is exhausted, not the credential wrong (HTTP 429, or a delegate reporting its
+    /// plan's usage limit). Distinct from [`Provider`] because it is neither a bug nor the user's
+    /// mistake, and the only useful response is to wait or fall back — retrying immediately just
+    /// deepens the hole. The message names whose quota ran out so the UI never reads as SHOGUN
+    /// failing.
+    #[error("{0}")]
+    RateLimited(String),
     #[error("not configured (missing key)")]
     NotConfigured,
     #[error("transport: {0}")]

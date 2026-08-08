@@ -38,6 +38,40 @@ def scan(files):
     return hits
 
 
+# --- Issue #110 guard: never lift another application's stored credential -------------------
+#
+# Subscription delegation is legitimate precisely because SHOGUN delegates to a vendor CLI the user
+# already signed into, and never touches the token that CLI stored. Reading `~/.claude/.credentials.json`
+# (or a peer app's Keychain item) would turn the feature into credential theft, break the vendors'
+# terms, and get user accounts banned. The distinction is invisible in a diff — one `read_to_string`
+# looks like any other — so it is enforced here instead of remembered.
+# Matches the credential FILES the vendor CLIs keep their tokens in. Deliberately not matching the
+# Keychain APIs in general: SHOGUN legitimately uses the Keychain for its own items (invariant 7),
+# so flagging `security find-generic-password` would be noise — and the file paths are where a
+# credential lift would actually have to go.
+CREDENTIAL_LIFT_RE = re.compile(
+    r"""\.claude/\.credentials|\.codex/auth\.json|\.gemini/oauth_creds|\.credentials\.json""",
+    re.IGNORECASE,
+)
+
+# The module that documents and tests the non-goal names these paths in its own assertions.
+CREDENTIAL_LIFT_ALLOWLIST = {
+    "crates/shogun-core/src/llm/subscription.rs",  # the FORBIDDEN table its own test checks against
+}
+
+
+def scan_credential_lift(files):
+    """Yield (path, lineno, line) for every reach toward another app's credential store."""
+    hits = []
+    for path, text in files:
+        if path in CREDENTIAL_LIFT_ALLOWLIST:
+            continue
+        for i, line in enumerate(text.splitlines(), 1):
+            if CREDENTIAL_LIFT_RE.search(line):
+                hits.append((path, i, line.strip()))
+    return hits
+
+
 def self_test():
     clean = [
         ("crates/shogun-core/src/llm/anthropic.rs", "key.expose()"),  # allowlisted
@@ -49,20 +83,52 @@ def self_test():
     assert scan(clean) == [], "allowlisted / unrelated code must pass"
     found = scan(dirty)
     assert len(found) == 1 and found[0][0].endswith("engine.rs"), "must catch expose() in a non-allowlisted file"
-    print("self-test OK: detector allows the allowlist and catches a stray expose().")
+
+    lift_clean = [
+        ("crates/shogun-core/src/llm/subscription.rs", 'const FORBIDDEN: &[&str] = &[".credentials"];'),
+        ("crates/shogun-core/src/llm/mod.rs", "let cfg = read_to_string(settings_path)?;"),
+        # SHOGUN's own Keychain item, and an unrelated path under a vendor's config dir. Neither is
+        # a credential lift, and flagging them would train people to ignore this check.
+        ("crates/shogun-core/examples/recap_probe.rs", "security find-generic-password -s SHOGUN -a select-kk-batch"),
+        ("crates/shogun-memory/src/ai_session.rs", "SHOGUN_AI_SESSION_LOG=~/.claude/projects/x.jsonl"),
+    ]
+    lift_dirty = [
+        ("crates/shogun-core/src/llm/thief.rs", 'read_to_string("~/.claude/.credentials.json")'),
+        ("apps/desktop/src-tauri/src/oops.rs", 'let tok = fs::read(home.join(".codex/auth.json"))?;'),
+    ]
+    assert scan_credential_lift(lift_clean) == [], "the documented non-goal and ordinary reads must pass"
+    assert len(scan_credential_lift(lift_dirty)) == 2, "must catch a reach into another app's credentials"
+    print("self-test OK: detector allows the allowlist and catches a stray expose() / credential lift.")
 
 
 def repo_rust_files():
     root = pathlib.Path(".")
-    for p in sorted(root.glob("crates/**/*.rs")):
-        yield p.as_posix(), p.read_text(encoding="utf-8", errors="replace")
+    # apps/desktop is scanned too: the Tauri layer is where a "just read the token" shortcut would
+    # be most tempting, since it already holds the Keychain handle.
+    for pattern in ("crates/**/*.rs", "apps/desktop/src-tauri/src/**/*.rs"):
+        for p in sorted(root.glob(pattern)):
+            yield p.as_posix(), p.read_text(encoding="utf-8", errors="replace")
 
 
 def main():
     if "--self-test" in sys.argv:
         self_test()
         return 0
-    hits = scan(list(repo_rust_files()))
+    files = list(repo_rust_files())
+
+    lifts = scan_credential_lift(files)
+    if lifts:
+        print("Issue #110 violation: code reaches into another application's credential store.")
+        for path, line, text in lifts:
+            print(f"  - {path}:{line}: {text}")
+        print(
+            "\nSubscription delegation works by launching a CLI the user already signed into — never by "
+            "reading the token it stored. Delegate instead; if a site is genuinely unrelated, add it to "
+            "CREDENTIAL_LIFT_ALLOWLIST here with a decision record."
+        )
+        return 1
+
+    hits = scan(files)
     if hits:
         print("invariant-7 violation: Secret::expose() used outside the allowlist — a raw secret may leak.")
         for path, line, text in hits:

@@ -24,6 +24,10 @@ pub enum Route {
     Billing,
     /// Third-party meeting ASR (Deepgram; V13). Always disclosed.
     Asr,
+    /// Agent inference delegated to a local, already-signed-in vendor CLI running on the user's own
+    /// subscription (Issue #110). Distinct from [`Route::MessagesApi`]: SHOGUN holds no credential
+    /// and does not open the socket — a separate local process does, against the user's plan quota.
+    LocalAgent,
 }
 
 impl Route {
@@ -36,6 +40,7 @@ impl Route {
             Route::Composio => "composio",
             Route::Billing => "billing",
             Route::Asr => "asr",
+            Route::LocalAgent => "local_agent",
         }
     }
 
@@ -49,6 +54,7 @@ impl Route {
             "composio" => Route::Composio,
             "billing" => Route::Billing,
             "asr" => Route::Asr,
+            "local_agent" => Route::LocalAgent,
             _ => return None,
         })
     }
@@ -218,6 +224,20 @@ mod tests {
     }
 
     #[test]
+    fn local_agent_route_is_accepted_and_is_not_third_party() {
+        // V12 widened the CHECK. A subscription-delegated send must be storable, and must NOT get
+        // the third-party badge: the user's own vendor on the user's own plan is not a relay
+        // (unlike Composio, FR-C2-04).
+        let conn = crate::open_in_memory().unwrap();
+        insert(&conn, &row(1, Route::LocalAgent, "agent", "api.anthropic.com")).unwrap();
+        let (route, tp): (String, i64) = conn
+            .query_row("SELECT route, third_party FROM traceability_log", [], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap();
+        assert_eq!(route, "local_agent");
+        assert_eq!(tp, 0);
+    }
+
+    #[test]
     fn list_is_most_recent_first() {
         let conn = crate::open_in_memory().unwrap();
         insert(&conn, &row(100, Route::BatchApi, "indexing", "api.anthropic.com")).unwrap();
@@ -266,6 +286,7 @@ mod tests {
             Route::Composio,
             Route::Billing,
             Route::Asr,
+            Route::LocalAgent,
         ] {
             assert_eq!(Route::parse(r.as_str()), Some(r));
         }

@@ -31,6 +31,9 @@ pub mod mac {
         OpenAiCompatAgentClient, OpenAiCompatConfig, GEMINI_BASE_URL, OPENAI_BASE_URL,
         OPENROUTER_BASE_URL,
     };
+    use shogun_core::llm::subscription::{
+        self, Delegate, DelegateState, ProcessRunner, SubscriptionAgentClient,
+    };
     use shogun_core::llm::transport::ReqwestTransport;
     use shogun_core::llm::{AgentClient, ByokKey, LlmError, MockAgentClient, Secret};
 
@@ -40,20 +43,41 @@ pub mod mac {
     // ---- Agent-lane provider settings (provider + model; NON-secret, so a JSON file is fine —
     // ---- the KEY always stays in the Keychain, one account per provider) ----------------------
 
-    /// Providers the Agent lane can run on. The Batch lane (indexing / Dream Cycle) is untouched
-    /// by this choice — it stays on the Select KK lane (invariant 5).
-    const PROVIDERS: [&str; 4] = ["anthropic", "openrouter", "openai", "gemini"];
+    /// BYOK providers the Agent lane can run on with the user's own API key. The Batch lane
+    /// (indexing / Dream Cycle) is untouched by this choice — it stays on the Select KK lane
+    /// (invariant 5).
+    const BYOK_PROVIDERS: [&str; 4] = ["anthropic", "openrouter", "openai", "gemini"];
+
+    /// A provider id is valid if it is a BYOK provider or a subscription delegate (Issue #110).
+    fn is_known_provider(p: &str) -> bool {
+        BYOK_PROVIDERS.contains(&p) || Delegate::parse(p).is_some()
+    }
+
+    /// The delegate behind a provider id, if this provider spends the user's own subscription
+    /// rather than an API key. `None` for every BYOK provider.
+    fn delegate_for(provider: &str) -> Option<Delegate> {
+        Delegate::parse(provider)
+    }
 
     #[derive(Clone, serde::Serialize, serde::Deserialize)]
     pub struct LlmSettings {
         pub provider: String,
-        /// Model id in the provider's own naming. Empty = the provider's default.
+        /// Model id in the provider's own naming. Empty = the provider's default. Ignored for
+        /// subscription delegates — the vendor CLI picks the model its plan allows.
         pub model: String,
+        /// The user has read the subscription-route disclosure and opted in (Issue #110).
+        ///
+        /// Delegating means the prompt leaves through a vendor CLI on a **consumer plan**, whose
+        /// data handling is not the same as the metered API path SHOGUN's privacy copy describes.
+        /// That difference is the user's to accept, so it is stored as an explicit flag and
+        /// `build_agent` refuses a delegate without it — a defaulted-on disclosure is not consent.
+        #[serde(default)]
+        pub subscription_consent: bool,
     }
 
     impl Default for LlmSettings {
         fn default() -> Self {
-            Self { provider: "anthropic".into(), model: String::new() }
+            Self { provider: "anthropic".into(), model: String::new(), subscription_consent: false }
         }
     }
 
@@ -66,7 +90,7 @@ pub mod mac {
     /// the only writer: anything that doesn't look like one of our model ids is redacted rather
     /// than printed.
     fn loggable_model(model: &str) -> String {
-        let known = PROVIDERS.iter().any(|p| default_model(p) == model);
+        let known = BYOK_PROVIDERS.iter().any(|p| default_model(p) == model);
         let plausible = model.len() <= 48
             && model
                 .chars()
@@ -94,6 +118,9 @@ pub mod mac {
             "openrouter" => "anthropic/claude-sonnet-4.5",
             "openai" => "gpt-4o-mini",
             "gemini" => "gemini-2.5-flash",
+            // A subscription delegate runs whatever model its own CLI defaults to on that plan.
+            // Naming one here would be a guess SHOGUN has no way to honour.
+            _ if delegate_for(provider).is_some() => "",
             _ => "claude-sonnet-5",
         }
     }
@@ -135,8 +162,18 @@ pub mod mac {
         }
     }
 
+    /// Whether the active provider has something to authenticate with: a Keychain key for a BYOK
+    /// provider, or a present-and-consented delegate for a subscription provider.
+    ///
+    /// The delegate check is `--version` only — no network, no quota, no credential read. Sign-in
+    /// is deliberately NOT probed here: that costs the user's quota, and this runs on every
+    /// provider change.
     fn refresh_has_key() {
-        let present = keychain_byok(&current_settings().provider).is_some();
+        let s = current_settings();
+        let present = match delegate_for(&s.provider) {
+            Some(d) => s.subscription_consent && subscription::detect(&ProcessRunner, d).is_installed(),
+            None => keychain_byok(&s.provider).is_some(),
+        };
         HAS_KEY.store(present, std::sync::atomic::Ordering::Relaxed);
         // A new key, or a different provider, deserves a fresh verdict.
         KEY_REJECTED.store(false, std::sync::atomic::Ordering::Relaxed);
@@ -153,7 +190,7 @@ pub mod mac {
         if let Some(p) = settings_path(app) {
             if let Ok(text) = std::fs::read_to_string(p) {
                 if let Ok(saved) = serde_json::from_str::<LlmSettings>(&text) {
-                    if PROVIDERS.contains(&saved.provider.as_str()) {
+                    if is_known_provider(&saved.provider) {
                         s = saved;
                     }
                 }
@@ -184,12 +221,25 @@ pub mod mac {
 
     /// Change provider/model. The key is NOT touched — each provider keeps its own Keychain
     /// account, entered separately in Settings.
+    ///
+    /// `subscription_consent` carries the Issue #110 disclosure decision. It is `Option` so an
+    /// ordinary provider/model change (from a screen that has no consent control) leaves the
+    /// existing decision alone instead of silently revoking or granting it.
     #[tauri::command]
-    pub fn set_llm_settings(provider: String, model: String, app: tauri::AppHandle) -> Result<(), String> {
-        if !PROVIDERS.contains(&provider.as_str()) {
+    pub fn set_llm_settings(
+        provider: String,
+        model: String,
+        subscription_consent: Option<bool>,
+        app: tauri::AppHandle,
+    ) -> Result<(), String> {
+        if !is_known_provider(&provider) {
             return Err(format!("unknown provider: {provider}"));
         }
-        let s = LlmSettings { provider, model: model.trim().to_string() };
+        let s = LlmSettings {
+            provider,
+            model: model.trim().to_string(),
+            subscription_consent: subscription_consent.unwrap_or(current_settings().subscription_consent),
+        };
         if let Some(p) = settings_path(&app) {
             if let Some(dir) = p.parent() {
                 let _ = std::fs::create_dir_all(dir);
@@ -512,6 +562,10 @@ pub mod mac {
             rt: tokio::runtime::Runtime,
             client: OpenAiCompatAgentClient<ReqwestTransport, DbTraceabilitySink>,
         },
+        /// Delegated to a vendor CLI on the user's own subscription (Issue #110). No tokio runtime:
+        /// the delegate is a subprocess, and the whole inline flow already runs on its own std
+        /// thread, so the blocking wait is exactly where it belongs.
+        Subscription(SubscriptionAgentClient<ProcessRunner, DbTraceabilitySink>),
     }
 
     impl InlineAgent {
@@ -532,6 +586,7 @@ pub mod mac {
                 // (never a tokio worker), so there is no runtime already driving this thread.
                 InlineAgent::Anthropic { rt, client } => rt.block_on(client.complete(prompt)),
                 InlineAgent::OpenAiCompat { rt, client } => rt.block_on(client.complete(prompt)),
+                InlineAgent::Subscription(client) => client.complete(prompt),
             }
         }
     }
@@ -550,7 +605,10 @@ pub mod mac {
     /// for that provider. The key itself is NEVER logged (invariant 7).
     #[tauri::command]
     pub fn set_byok_key(provider: String, key: String) -> Result<(), String> {
-        if !PROVIDERS.contains(&provider.as_str()) {
+        // Only BYOK providers, deliberately: a subscription delegate has no key, and accepting one
+        // under its id would file a real credential under an account nothing ever reads — a secret
+        // at rest for no purpose (invariant 7).
+        if !BYOK_PROVIDERS.contains(&provider.as_str()) {
             return Err(format!("unknown provider: {provider}"));
         }
         let key = key.trim();
@@ -567,7 +625,7 @@ pub mod mac {
     /// Remove `provider`'s BYOK key — chat and drafts stop until a new one is added.
     #[tauri::command]
     pub fn clear_byok_key(provider: String) -> Result<(), String> {
-        if !PROVIDERS.contains(&provider.as_str()) {
+        if !BYOK_PROVIDERS.contains(&provider.as_str()) {
             return Err(format!("unknown provider: {provider}"));
         }
         keychain_store::delete_generic_secret(keychain_account(&provider))
@@ -599,6 +657,76 @@ pub mod mac {
         })
     }
 
+    // ---- subscription delegates (Issue #110) -------------------------------------------------
+
+    /// One delegate as the onboarding / Settings UI sees it. Carries no credential and no captured
+    /// text — a name, a plan label, a state tag, and the CLI's version string.
+    #[derive(serde::Serialize)]
+    pub struct DelegateInfo {
+        pub id: String,
+        pub label: String,
+        /// Whose quota a run is billed against, e.g. "Claude Pro / Max".
+        pub plan: String,
+        /// The binary looked up on PATH — shown in the "not installed" instructions.
+        pub binary: String,
+        /// `not_installed` / `installed` / `ready` / `needs_login` / `rate_limited`.
+        pub state: String,
+        pub version: String,
+    }
+
+    fn delegate_info(d: Delegate, state: &DelegateState) -> DelegateInfo {
+        DelegateInfo {
+            id: d.id().to_string(),
+            label: d.label().to_string(),
+            plan: d.plan_label().to_string(),
+            binary: d.binary().to_string(),
+            state: state.tag().to_string(),
+            version: match state {
+                DelegateState::NotInstalled => String::new(),
+                DelegateState::Installed { version }
+                | DelegateState::Ready { version }
+                | DelegateState::NeedsLogin { version }
+                | DelegateState::RateLimited { version } => version.clone(),
+            },
+        }
+    }
+
+    /// Which vendor CLIs are installed, so onboarding can lead with "use the plan you already pay
+    /// for" instead of an API-key field.
+    ///
+    /// Presence only (`--version`): no network, no quota, and no reading of the delegates' stored
+    /// credentials. A delegate never reports `ready` from this call — that needs
+    /// [`verify_subscription_delegate`], which the user triggers.
+    #[tauri::command]
+    pub fn subscription_delegates() -> Vec<DelegateInfo> {
+        let found = subscription::detect_all(&ProcessRunner);
+        let infos: Vec<DelegateInfo> =
+            found.iter().map(|(d, state)| delegate_info(*d, state)).collect();
+        eprintln!(
+            "[inline] subscription delegates: {}",
+            infos.iter().map(|i| format!("{}={}", i.id, i.state)).collect::<Vec<_>>().join(" ")
+        );
+        infos
+    }
+
+    /// Run one minimal completion through `id` to find out whether it is actually signed in.
+    ///
+    /// User-triggered ("Test connection") because it spends a token or two of their quota. It is
+    /// also the only honest check available: the alternative is reading the delegate's credential
+    /// file, which SHOGUN does not do.
+    #[tauri::command]
+    pub fn verify_subscription_delegate(id: String) -> Result<DelegateInfo, String> {
+        let d = Delegate::parse(&id).ok_or_else(|| format!("unknown delegate: {id}"))?;
+        let state = subscription::verify(&ProcessRunner, d);
+        eprintln!("[inline] verified {} → {}", d.id(), state.tag());
+        // A successful verify clears a stale "credential rejected" pill for the active provider.
+        if state.is_usable() && current_settings().provider == d.id() {
+            KEY_REJECTED.store(false, std::sync::atomic::Ordering::Relaxed);
+            HAS_KEY.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        Ok(delegate_info(d, &state))
+    }
+
     /// Opt-in echo mock, for exercising the AX read→insert loop on device without a key.
     ///
     /// Off unless `SHOGUN_MOCK_AGENT=1`. It used to be the automatic fallback whenever a key was
@@ -619,6 +747,23 @@ pub mod mac {
     /// Agent-lane client construction (invariant 5) rather than re-deriving it.
     pub(crate) fn build_agent(db: &Db) -> Option<InlineAgent> {
         let s = current_settings();
+
+        // Subscription delegation (Issue #110): no key to read, so this branch comes first.
+        if let Some(d) = delegate_for(&s.provider) {
+            if !s.subscription_consent {
+                // The disclosure was never accepted. Running anyway would send the user's text
+                // through a consumer plan they never agreed to use for this.
+                eprintln!("[inline] {} selected but the disclosure is unaccepted — not drafting", d.id());
+                return None;
+            }
+            eprintln!("[inline] live Agent lane — delegating to {} on the user's own plan", d.id());
+            return Some(InlineAgent::Subscription(SubscriptionAgentClient::new(
+                ProcessRunner,
+                db.traceability_sink(),
+                d,
+            )));
+        }
+
         let Some(key) = keychain_byok(&s.provider) else {
             if mock_agent_enabled() {
                 eprintln!("[inline] SHOGUN_MOCK_AGENT=1 — echo mock (AX path still runs)");

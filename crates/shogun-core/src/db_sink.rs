@@ -29,6 +29,7 @@ fn map_route(route: Route) -> DbRoute {
         Route::Composio => DbRoute::Composio,
         Route::Billing => DbRoute::Billing,
         Route::Asr => DbRoute::Asr,
+        Route::LocalAgent => DbRoute::LocalAgent,
     }
 }
 

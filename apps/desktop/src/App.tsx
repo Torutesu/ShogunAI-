@@ -2383,6 +2383,34 @@ const PROVIDERS: Array<{ id: string; label: string }> = [
   { id: "openai", label: "OpenAI" },
   { id: "gemini", label: "Gemini" },
 ];
+
+/** A vendor CLI SHOGUN can delegate the Agent lane to, as reported by `subscription_delegates`. */
+type DelegateInfo = {
+  id: string;
+  label: string;
+  /** Whose quota a run is billed against, e.g. "Claude Pro / Max". */
+  plan: string;
+  /** The binary looked up on PATH — shown in the "not installed" instructions. */
+  binary: string;
+  state: "not_installed" | "installed" | "ready" | "needs_login" | "rate_limited";
+  version: string;
+};
+
+/** The one line that tells the user where they stand with a delegate, and what to do next. */
+function delegateStateLine(state: DelegateInfo["state"]): string {
+  switch (state) {
+    case "ready":
+      return t.subStateReady;
+    case "installed":
+      return t.subStateInstalled;
+    case "needs_login":
+      return t.subStateNeedsLogin;
+    case "rate_limited":
+      return t.subStateRateLimited;
+    default:
+      return t.subStateNotInstalled;
+  }
+}
 const SHORTCUT_ROWS: Array<{ action: string; label: string }> = [
   { action: "summon", label: t.summonShortcut },
   { action: "voice", label: t.voiceShortcut },
@@ -2772,6 +2800,92 @@ function Settings(props: {
   const [binds, setBinds] = useState<Record<string, string>>(DEFAULT_BINDS);
   const [recording, setRecording] = useState<string | null>(null);
   const [keyErr, setKeyErr] = useState("");
+  // BYOK key entry: the key goes straight to the macOS Keychain via Rust (never a file/DB/log).
+  const [keyInput, setKeyInput] = useState("");
+  const [keyState, setKeyState] = useState<boolean>(hasKey);
+  const [keyMsg, setKeyMsg] = useState("");
+  useEffect(() => setKeyState(hasKey), [hasKey]);
+  // Agent-lane provider + model (non-secret; the key above is per-provider in the Keychain).
+  const [provider, setProvider] = useState("anthropic");
+  const [model, setModel] = useState("");
+  // Subscription delegation (Issue #110). `consent` is the user's acceptance of the disclosure;
+  // the backend refuses to delegate without it, so this is not a cosmetic checkbox.
+  const [delegates, setDelegates] = useState<DelegateInfo[]>([]);
+  const [consent, setConsent] = useState(false);
+  const [testing, setTesting] = useState<string | null>(null);
+  const loadDelegates = useCallback((): void => {
+    if (!IN_TAURI) return;
+    void invoke<DelegateInfo[]>("subscription_delegates")
+      .then(setDelegates)
+      .catch(() => undefined);
+  }, []);
+  useEffect(() => {
+    if (!IN_TAURI) return;
+    void invoke<{ provider: string; model: string; subscription_consent: boolean }>("get_llm_settings")
+      .then((s) => {
+        setProvider(s.provider);
+        setModel(s.model);
+        setConsent(s.subscription_consent);
+      })
+      .catch(() => undefined);
+    loadDelegates();
+  }, [loadDelegates]);
+  const applyLlm = (p: string, m: string, c?: boolean): void => {
+    const prev = { provider, model, consent };
+    setProvider(p);
+    setModel(m);
+    if (c !== undefined) setConsent(c);
+    setKeyMsg("");
+    if (IN_TAURI)
+      void invoke("set_llm_settings", { provider: p, model: m, subscriptionConsent: c }).catch((e) => {
+        // Roll the UI back — an optimistic provider the backend never accepted would send the
+        // next key save to the wrong Keychain account.
+        setProvider(prev.provider);
+        setModel(prev.model);
+        setConsent(prev.consent);
+        setKeyMsg(String(e));
+      });
+  };
+  /** Run one real completion through a delegate to find out whether it is signed in. */
+  const testDelegate = (id: string): void => {
+    if (!IN_TAURI) return;
+    setTesting(id);
+    void invoke<DelegateInfo>("verify_subscription_delegate", { id })
+      .then((d) => setDelegates((prev) => prev.map((p) => (p.id === d.id ? d : p))))
+      .catch((e) => setKeyMsg(String(e)))
+      .finally(() => setTesting(null));
+  };
+
+  const saveKey = (): void => {
+    const k = keyInput.trim();
+    if (!k) return;
+    if (!IN_TAURI) {
+      setKeyState(true);
+      setKeyInput("");
+      return;
+    }
+    // The provider is passed EXPLICITLY so the key always lands in the account the user sees
+    // selected — never the backend's possibly-lagging idea of the current provider.
+    void invoke("set_byok_key", { provider, key: k })
+      .then(() => {
+        setKeyState(true);
+        setKeyInput("");
+        setKeyMsg(t.keySaved);
+      })
+      .catch((e) => setKeyMsg(String(e)));
+  };
+  const removeKey = (): void => {
+    if (!IN_TAURI) {
+      setKeyState(false);
+      return;
+    }
+    void invoke("clear_byok_key", { provider })
+      .then(() => {
+        setKeyState(false);
+        setKeyMsg("");
+      })
+      .catch((e) => setKeyMsg(String(e)));
+  };
 
   const refresh = useCallback((): void => {
     if (!IN_TAURI) return;
@@ -2911,6 +3025,150 @@ function Settings(props: {
           ))}
           {keyErr ? <div className="set__hint is-err">{keyErr}</div> : null}
           <div className="set__hint">{t.shortcutHint}</div>
+        </section>
+        {/* Subscription first, API key second. The order is the point: most people arriving here
+            already pay for an assistant, and asking them for a metered key before offering the
+            plan they hold is what makes them close the window. */}
+        <section className="set">
+          <div className="set__label">{t.subTitle}</div>
+          <div className="set__hint">{t.subHint}</div>
+          {delegates.filter((d) => d.state !== "not_installed").length === 0 ? (
+            <div className="set__hint">{t.subNone}</div>
+          ) : (
+            delegates
+              .filter((d) => d.state !== "not_installed")
+              .map((d) => {
+                const active = provider === d.id;
+                return (
+                  <div className="sub" key={d.id}>
+                    <div className="sub__head">
+                      <span className="sub__name">{d.label}</span>
+                      <span className="sub__plan">
+                        {t.subRunsOn} {d.plan}
+                      </span>
+                    </div>
+                    <div
+                      className={`set__hint${d.state === "ready" ? " is-ok" : d.state === "needs_login" ? " is-err" : ""}`}
+                    >
+                      {delegateStateLine(d.state)}
+                    </div>
+                    <div className="keyrow">
+                      <button
+                        className="keyrow__btn"
+                        type="button"
+                        disabled={active}
+                        // Selecting carries the consent already on file. If it was never given the
+                        // backend refuses to delegate, and the note below says so — the alternative
+                        // (auto-granting on click) would make the disclosure meaningless.
+                        onClick={() => applyLlm(d.id, "")}
+                      >
+                        {active ? t.subInUse : t.subUse}
+                      </button>
+                      <button
+                        className="keyrow__btn"
+                        type="button"
+                        disabled={testing === d.id}
+                        onClick={() => testDelegate(d.id)}
+                      >
+                        {testing === d.id ? t.subTesting : t.subTest}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })
+          )}
+          <div className="keyrow">
+            <button className="keyrow__btn" type="button" onClick={loadDelegates}>
+              {t.subRefresh}
+            </button>
+          </div>
+          <div className="set__label">{t.subConsentTitle}</div>
+          <ul className="set__list">
+            <li>{t.subConsentItem1}</li>
+            <li>{t.subConsentItem2}</li>
+            <li>{t.subConsentItem3}</li>
+          </ul>
+          <div className="keyrow">
+            <button
+              className="keyrow__btn"
+              type="button"
+              onClick={() => applyLlm(provider, model, !consent)}
+            >
+              {consent ? t.subConsentRevoke : t.subConsentAccept}
+            </button>
+          </div>
+          {/* `delegates` lists every known delegate, installed or not, so this is a reliable
+              "is a subscription selected" test without duplicating the Rust-side list here. */}
+          {delegates.some((d) => d.id === provider) && !consent ? (
+            <div className="set__hint is-err">{t.subConsentNeeded}</div>
+          ) : null}
+        </section>
+        <section className="set">
+          <div className="set__label" id="seg-provider">{t.subApiKeyTitle}</div>
+          <div className="seg" role="radiogroup" aria-labelledby="seg-provider">
+            {PROVIDERS.map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                role="radio"
+                aria-checked={provider === p.id}
+                className={`seg__opt${provider === p.id ? " is-on" : ""}`}
+                onClick={() => {
+                  // Model ids are provider-specific — carrying one across providers sends an
+                  // invalid model to the new provider. Blank = the provider's default.
+                  if (p.id !== provider) applyLlm(p.id, "");
+                }}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+          {/* No free-text model field. It sat directly above the key entry and looked identical
+              to it, so a pasted API key landed in the model — which was then sent as the model
+              name and written to the log. The provider already has one right default; picking a
+              model is not a decision this product needs to offer, and the field's only proven use
+              was leaking a credential. */}
+          {/* Only meaningful for an API-key provider. A delegate runs whatever model its own plan
+              gives it, so naming one here would be a claim SHOGUN cannot honour. */}
+          {delegates.some((d) => d.id === provider) ? null : (
+            <div className="set__hint">{t.modelFor} {defaultModelFor(provider)}</div>
+          )}
+          <div className="set__hint">{t.modelHint}</div>
+        </section>
+        <section className="set">
+          <div className="set__label">{t.key}</div>
+          <div
+            className={`set__hint${keyRejected ? " is-err" : keyState ? " is-ok" : ""}`}
+          >
+            {keyRejected ? t.keyRejected : keyState ? t.keyPresent : t.keyAbsent}
+          </div>
+          <div className="set__hint">{t.keyScope}</div>
+          <div className="keyrow">
+            <input
+              className="keyrow__input"
+              type="password"
+              placeholder={t.keyPlaceholders[provider] ?? t.keyPlaceholders.anthropic}
+              value={keyInput}
+              autoComplete="off"
+              onChange={(e) => setKeyInput(e.target.value)}
+              onFocus={() => {
+                // The nonactivating panel must become key before it takes keystrokes.
+                if (IN_TAURI) void invoke("focus_field", { focused: true }).catch(() => undefined);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") saveKey();
+              }}
+            />
+            <button className="keyrow__btn" type="button" onClick={saveKey} disabled={!keyInput.trim()}>
+              {t.keySave}
+            </button>
+            {keyState ? (
+              <button className="keyrow__btn" type="button" onClick={removeKey}>
+                {t.keyRemove}
+              </button>
+            ) : null}
+          </div>
+          {keyMsg ? <div className="set__hint">{keyMsg}</div> : null}
         </section>
         <PrivacySecuritySection hasKey={hasKey} keyRejected={keyRejected} onDeleted={onCleared} />
         <section className="set">

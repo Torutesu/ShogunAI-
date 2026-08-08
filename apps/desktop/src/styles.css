@@ -1272,6 +1272,39 @@ kbd {
   font-weight: 700;
 }
 
+/* Settings — subscription delegation (Issue #110). One card per assistant found on this Mac. */
+.sub {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--fill-strong);
+}
+.sub__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.sub__name {
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  color: var(--ink);
+}
+.sub__plan {
+  font-size: var(--fs-sm);
+  color: var(--muted);
+}
+/* The disclosure bullets. Indented rather than bulleted-and-cramped: this is the text the user
+   has to actually read before opting in, so it gets room. */
+.set__list {
+  margin: 6px 0 0;
+  padding-left: 16px;
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  color: var(--muted);
+}
+
 /* Settings — BYOK key entry (saved straight to the Keychain) */
 .keyrow {
   display: flex;

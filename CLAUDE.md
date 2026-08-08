@@ -14,7 +14,7 @@ SHOGUNのモノレポ。本ファイルはmacOSアプリ本体(`crates/` + `apps
    **【2026-08-05 明示的例外｜会議 ASR】Meeting notes の既定 ASR は Deepgram Nova-3 Multilingual（クラウド live STT）。音声はライブ文字起こしのためにのみ外部へ送る（process-only）。常に `mip_opt_out=true`（学習・モデル改善への利用なし）。波形は SHOGUN がディスクへ書かない。会社キーはデスクトップバイナリ／共有 Keychain 秘密に埋め込まず、SHOGUN/Select バックエンドが保持するか短命 JWT（Deepgram `/auth/grant`）を発行する。UI に開示必須。FR-MT-13（オンデバイス ASR）への明示的例外。**
 3. **生データはデバイス外に出さない。** クラウドに出るのは処理用チャンクのみ。送信箇所には必ずトレーサビリティログを実装（明示的例外＝Gmail の Composio 全面経由、および 2026-08-05 の会議 ASR Deepgram ライブ STT。詳細と必須条件は各例外参照）
 4. **L1（自動実行）に外部送信系アクションを絶対に含めない。** 送信・投稿・カレンダー作成は必ずL3（明示確認）
-5. **キーの分離**: インデックス・分類・Dream Cycle・Morning Brief = Select KKキー（Batch API）／エージェント推論・チャット・ドラフト = ユーザーBYOK。逆転させない
+5. **キーの分離**: インデックス・分類・Dream Cycle・Morning Brief = Select KKキー（Batch API）／エージェント推論・チャット・ドラフト = ユーザー資格情報（BYOK **または** サブスク委譲。Issue #110）。逆転させない。**サブスク委譲をBatch laneに使わない**（委譲先が使うのは月次の有限クレジット。バッチ量はそれを最速で溶かす作業であり、焼き切るとAgent lane自体が月替わりまで死ぬ）
 6. **人間UIとAI API（MCP/CLI）は完全対称。** 新機能はUIとAPI両方から呼べる形で設計する。AI経由の操作にも同じL1/L2/L3を適用
 7. **secrets（OAuthトークン・BYOKキー）はKeychain以外に保存しない。** 平文ファイル・DB・ログへの書き出し禁止
 
@@ -28,7 +28,8 @@ SHOGUNのモノレポ。本ファイルはmacOSアプリ本体(`crates/` + `apps
 - **macOSネイティブ**: AXUIElement / NSWorkspace / NSEventグローバルモニタ / security-framework（Keychain）
 - **MCP**: Rust MCP SDK。クライアント（公式リモートMCPへ直接OAuth）とサーバー（Memory API）の両方
 - **第2層連携**: Composio（オプトイン。Gmail送信含む）
-- **BYOK**: v1はAnthropicのみ（プロバイダ抽象化層は用意、実装は1つ）
+- **Agent lane の資格情報**: 第一選択は**サブスク委譲**（Issue #110。ユーザーが既にログイン済みのベンダー公式CLI `claude` / `codex` / `gemini` をローカルサブプロセスとして起動し、そのプランの枠で推論する）。BYOK（APIキー）はフォールバック。**他アプリの資格情報ファイル・Keychainエントリを読むコードを書かない。ベンダーのコンシューマ向けOAuthを自前実装しない**（規約違反・BAN対象）
+- **BYOK**: v1はAnthropic + OpenAI互換（プロバイダ抽象化層あり）
 - **課金**: Stripe / **配布**: Developer ID + notarization（App Store不使用）/ **更新**: Tauri updater
 - 判断記録: ストレージにPGLiteを使わない理由は docs/requirements-v1.0.md 付録B
 
@@ -54,7 +55,7 @@ docs/               # 要件・仕様・判断記録
 
 - Freeプランなし。7日間フルトライアル（Pro相当）→ Standard / Pro
 - **Standard**: キャプチャ＋メモリ＋検索＋Notch UI＋第1層連携（読み取り）＋Dream Cycle＋Morning Brief。Select KKキーのみで動作（BYOK不要）
-- **Pro**: ＋エージェント実行（L1/L2/L3）＋Memory API（MCP/CLI/REST）＋Composio第2層。BYOK必要
+- **Pro**: ＋エージェント実行（L1/L2/L3）＋Memory API（MCP/CLI/REST）＋Composio第2層。**サブスク委譲 または BYOK が必要**（Issue #110。APIキー必須をやめ、既に契約済みのClaude/ChatGPT/Geminiプランで動くことを既定にする。サブスク経路は明示的opt-in同意が前提）
 - **【2026-07-30 決定】Gmail 読み取りは Composio 経由になっても Standard に含める**（Gmail 全面 Composio 化で「第1層読み取り=Standard」の文字通り解釈だと Gmail 読み取りが Pro 落ちし Wave 1 の Standard 価値が崩れるため）。Pro の「Composio第2層」ゲートが意味するのは**送信の解放（draft-stop OFF での実送信）のみ**。読み取りの 3開示 opt-in 同意は全プラン共通で必須
 - プラン判定はRustコア側で行う。webview側のゲーティングだけに頼らない
 - **会議ノート（§6.16 FR-MT群）はトライアル含む全プランで使える。** 使ってみて価値が分かる機能で、トライアル中に体験できなければ課金判断の材料にならない（Memory API経由の参照=FR-MT-22 のみPro）

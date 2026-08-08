@@ -244,6 +244,36 @@ export const STRINGS = {
     keySave: "Save",
     keyRemove: "Remove",
     keySaved: "Saved to your Keychain — answers are live.",
+    // Subscription delegation (Issue #110): run on the plan the user already pays for, so the
+    // first-run path never demands a second, metered credential.
+    subTitle: "Your subscription",
+    // Says "no API key to set up", not "free": a plan's allowance for this is finite, and copy
+    // that implies otherwise turns into a support complaint the first time it runs out.
+    subHint: "Already paying for an assistant? Run on that plan instead — no API key to set up. Each plan includes an allowance for this.",
+    subNone: "No assistant found on this Mac. Install one, or add an API key below.",
+    subUse: "Use this",
+    subInUse: "In use",
+    subTest: "Test connection",
+    subTesting: "Testing…",
+    subRefresh: "Look again",
+    // Per-delegate state lines. Deliberately say what to DO, not just what is wrong.
+    subStateReady: "Ready — running on your plan.",
+    subStateInstalled: "Found. Test the connection to confirm you're signed in.",
+    subStateNeedsLogin: "Signed out. Open a terminal and run it once to sign in.",
+    subStateRateLimited: "This plan's allowance is used up. It refreshes on the plan's cycle — add an API key below to keep working before then.",
+    subStateNotInstalled: "Not installed.",
+    subRunsOn: "Runs on",
+    // The disclosure. A consumer plan is not the metered API path, and the difference is the
+    // user's to accept — so this is an explicit opt-in, never a default.
+    subConsentTitle: "Before using your plan",
+    subConsentItem1: "Your prompt leaves this device through that assistant, on your own plan.",
+    subConsentItem2: "A consumer plan's data handling is set by that vendor, not by ShogunAI.",
+    subConsentItem3: "ShogunAI never reads or stores that account's sign-in — it stays with the tool you installed.",
+    subConsentAccept: "I understand — use my plan",
+    subConsentRevoke: "Stop using my plan",
+    subConsentNeeded: "Accept the note above to run on your plan.",
+    // The API-key path, once it is the fallback rather than the front door.
+    subApiKeyTitle: "Or use an API key",
     // Composio sending (opt-in second-layer, FR-C2-02 / FR-C2-03)
     composioTitle: "Sending (Composio)",
     composioHint: "Optional. Enables sending email through Composio. Off by default — a key and explicit consent are required before any message leaves this device.",
