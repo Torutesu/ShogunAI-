@@ -140,6 +140,15 @@ pub mod mac {
 
     // ------------------------------------------------------------- commands
 
+    /// Whether the wired transport can actually serve this service. The live transport is
+    /// `ComposioReadRpc`, which serves **Gmail only** — letting Calendar/Drive "connect" would put
+    /// them on the 15-minute poller, where every tick errors and flips them to amber
+    /// ("Needs reauth" for a service the user never mis-authed). Until a real Calendar/Drive
+    /// transport exists they are presented as coming soon.
+    fn transport_serves(svc: shogun_mcp::scope::Service) -> bool {
+        matches!(svc, shogun_mcp::scope::Service::Gmail)
+    }
+
     /// List every service's connection status for the connections screen.
     #[tauri::command]
     pub fn connectors_list(
@@ -148,7 +157,15 @@ pub mod mac {
     ) -> Result<Vec<shogun_integrations::ServiceStatus>, String> {
         let now = db.now_ms();
         let rt = state.0.lock().map_err(|_| "runtime lock poisoned".to_string())?;
-        Ok(rt.statuses(now))
+        let mut rows = rt.statuses(now);
+        for row in &mut rows {
+            // Released by wave, but not reachable through the wired transport → "Coming soon",
+            // not a Connect button that can only end in a false amber.
+            if !transport_serves(row.service) {
+                row.state = shogun_integrations::ConnUi::ComingSoon;
+            }
+        }
+        Ok(rows)
     }
 
     /// Connect a service. For the Composio-backed Gmail transport "connect" means the user has
@@ -166,6 +183,9 @@ pub mod mac {
         db: tauri::State<'_, Db>,
     ) -> Result<(), String> {
         let svc = from_source(&service).ok_or_else(|| format!("unknown service: {service}"))?;
+        if !transport_serves(svc) {
+            return Err(format!("{service} is not available yet"));
+        }
         let now = db.now_ms();
         state
             .0
@@ -182,11 +202,21 @@ pub mod mac {
     pub fn fetch_on_demand(
         service: String,
         query: String,
+        app: tauri::AppHandle,
         state: tauri::State<'_, ConnectorState>,
         db: tauri::State<'_, Db>,
         app: tauri::AppHandle,
     ) -> Result<u64, String> {
         let svc = from_source(&service).ok_or_else(|| format!("unknown service: {service}"))?;
+        if !transport_serves(svc) {
+            return Err(format!("{service} is not available yet"));
+        }
+        // The same opt-in gate the sync poller applies (CLAUDE.md 連携実装ルール): an on-demand
+        // fetch sends the user_id + query to Composio exactly like a poll does, so it must be
+        // impossible without the user's explicit Composio consent.
+        if !load_composio_policy(&app).consent_acknowledged {
+            return Err("Composio consent has not been granted".into());
+        }
         let mut rt = state.0.lock().map_err(|_| "runtime lock poisoned".to_string())?;
         // Plan gate (issue #97): refresh entitlements so the service gate sees the current plan
         // (reads are Standard-and-up; an expired trial is denied).

@@ -227,9 +227,19 @@ fn freshness(last_sync_ms: Option<i64>, now_ms: i64) -> String {
 
 fn clock(ts_ms: i64) -> String {
     // Local wall-clock without pulling in a date crate: the core stores unix-ms, and the window
-    // only needs hh:mm.
-    let secs = ts_ms / 1000;
-    let mins_of_day = (secs % 86_400) / 60;
+    // only needs hh:mm. The OS offset (DST folded in) is applied — a bare `% 86_400` rendered
+    // every timestamp in UTC while looking local, off by the user's whole zone offset.
+    let off_secs = unsafe {
+        let mut tm: libc::tm = std::mem::zeroed();
+        let t = (ts_ms / 1000) as libc::time_t;
+        if libc::localtime_r(&t, &mut tm).is_null() {
+            0
+        } else {
+            tm.tm_gmtoff as i64
+        }
+    };
+    let secs = ts_ms / 1000 + off_secs;
+    let mins_of_day = (secs.rem_euclid(86_400)) / 60;
     format!("{:02}:{:02}", mins_of_day / 60, mins_of_day % 60)
 }
 

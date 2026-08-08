@@ -92,11 +92,11 @@ pub const USAGE: &str = "\
 shogun — SHOGUN Memory API (CLI face)
 
 USAGE:
-    shogun [--token <t>] [--json] <command>
+    shogun [--token <t>] <command>
 
 COMMANDS:
     search <query>            Hybrid memory search
-    context [--no-screen]     Current context cache
+    context                   Current context cache
     people list|get <id>      People state
     projects list|get <id>    Projects state
     commitments list|get <id> Commitments state
@@ -117,9 +117,10 @@ COMMANDS:
     help                      This help
 
 GLOBAL FLAGS:
-    --token <t>   API token (else read from Keychain when the daemon is running)
-    --json        Machine-readable output
-    --include-low Include <0.5 confidence results (reads; default excludes them)";
+    --token <t>   API token (else the SHOGUN_API_TOKEN environment variable)
+    --include-low Include <0.5 confidence results (reads; default excludes them)
+
+Output is the server's JSON, as received.";
 
 #[cfg(test)]
 mod tests {

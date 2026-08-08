@@ -184,7 +184,9 @@ use shogun_core::meeting::gate::OfferGate;
         // `ended_at IS NULL` forever, and `active()` assumes at most one open row. Close it at
         // its last known moment rather than pretending it is still running.
         if let Some(db) = app.try_state::<shogun_core::daemon::Db>() {
-            let closed = db.close_abandoned_meetings();
+            // Boot cutoff: only rows from BEFORE this run are abandoned (a later call must never
+            // catch a meeting this run just opened).
+            let closed = db.close_abandoned_meetings(now_ms());
             if closed > 0 {
                 eprintln!("[meeting] closed {closed} interval(s) left open by a previous run");
             }
@@ -343,6 +345,16 @@ use shogun_core::meeting::gate::OfferGate;
         let stop_audio = {
             let Ok(mut g) = LANE.lock() else { return };
             let Some(lane) = g.as_mut() else { return };
+            // A "no" must outlive the state transition. Without recording the decline, the machine
+            // returns to Idle, the meeting app is still frontmost, and the next 1s tick re-offers —
+            // ten seconds later the recording the user just refused starts by itself. Stop counts as
+            // the same "no": the meeting is still going, and stopping it is declining the rest of it
+            // (FR-MT-02c).
+            if matches!(input, Input::NotNow | Input::Stop) {
+                if let Some(bid) = lane.app_bundle_id.clone() {
+                    lane.gate.decline(&bid, now);
+                }
+            }
             let effects = lane.machine.step(input);
             if effects.is_empty() {
                 return;
@@ -375,9 +387,9 @@ use shogun_core::meeting::gate::OfferGate;
         if !lane.settings.enabled {
             return;
         }
-        // Switching apps ends the cooldown on the one left behind: coming back later is a new
-        // meeting and deserves to be asked about again.
-        lane.gate.observe_front(bundle_id);
+        // A sustained switch away ends the cooldown on the app left behind: coming back later is
+        // a new meeting and deserves to be asked about again (a momentary flick clears nothing).
+        lane.gate.observe_front(bundle_id, now);
         if lane.machine.state() != State::Idle {
             return;
         }
@@ -542,10 +554,14 @@ use shogun_core::meeting::gate::OfferGate;
             match lane.machine.state() {
                 State::Idle => Next::Nothing,
                 State::Offered => {
-                    // `checked_sub`-style guard: a clock that jumped backwards (NTP, wake from
-                    // sleep) would otherwise freeze the countdown until real time caught up.
-                    let elapsed = now.saturating_sub(lane.since_ms);
-                    if !(0..Params::default().offer_grace_ms as i64).contains(&elapsed) {
+                    let elapsed = now - lane.since_ms;
+                    if elapsed < 0 {
+                        // The clock jumped backwards (NTP, wake from sleep). Re-anchor the
+                        // countdown instead of expiring it: expiry STARTS a recording, and a
+                        // clock jump is not the user's consent.
+                        lane.since_ms = now;
+                        Next::Emit
+                    } else if elapsed >= Params::default().offer_grace_ms as i64 {
                         Next::Step(Input::GraceExpired)
                     } else {
                         Next::Emit
@@ -1029,7 +1045,13 @@ use shogun_core::meeting::gate::OfferGate;
     /// inventing a session for it.
     #[tauri::command]
     pub fn meeting_save_note(body: String, app: tauri::AppHandle) -> Result<(), String> {
-        let id = LANE.lock().ok().and_then(|g| g.as_ref().and_then(|l| l.session_id));
+        // Fall back to the just-finished interval: a note typed during the meeting is often
+        // flushed (blur / debounce) moments after auto-wrap closed the session, and dropping it
+        // then would lose exactly the text the user most wants kept.
+        let id = LANE
+            .lock()
+            .ok()
+            .and_then(|g| g.as_ref().and_then(|l| l.session_id.or(l.last_session_id)));
         let Some(id) = id else { return Ok(()) };
         let db = db(&app).ok_or("no database")?;
         // Report the failure. Swallowing it would tell the webview the note is safe while the

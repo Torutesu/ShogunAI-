@@ -46,7 +46,7 @@ fn on_focus(
     if !settings.enabled {
         return (Vec::new(), None);
     }
-    gate.observe_front(bundle_id);
+    gate.observe_front(bundle_id, now);
     if machine.state() != State::Idle {
         return (Vec::new(), None);
     }
@@ -337,14 +337,26 @@ fn an_interval_left_open_by_a_crash_is_closed_at_the_next_start() {
     let db = Db::open_in_memory(clock(1_000)).unwrap();
     let id = db.open_meeting(Some("Weekly sync"), Some("us.zoom.xos"), 0.35, "{}").unwrap();
 
-    let closed = db.close_abandoned_meetings();
+    // The boot cutoff: rows from before this "run" are abandoned; a meeting opened after the
+    // cutoff must never be touched.
+    let closed = db.close_abandoned_meetings(2_000);
 
     assert_eq!(closed, 1);
     assert!(
         db.meeting_recap(id).is_some_and(|r| r.duration_minutes.is_some()),
         "the abandoned interval must be closed, not left running"
     );
-    assert_eq!(db.close_abandoned_meetings(), 0, "a second start finds nothing to close");
+    assert_eq!(db.close_abandoned_meetings(2_000), 0, "a second start finds nothing to close");
+
+    // A session that started AT the boot cutoff belongs to the current run (half-open bound) —
+    // it must never be zero-lengthed by a later sweep.
+    let live = db.open_meeting(Some("Live"), Some("us.zoom.xos"), 0.35, "{}").unwrap();
+    assert_eq!(
+        db.close_abandoned_meetings(1_000),
+        0,
+        "a session opened by the current run must not be zero-lengthed"
+    );
+    assert!(db.close_meeting(live), "the live session is still open and closable");
 }
 
 #[test]

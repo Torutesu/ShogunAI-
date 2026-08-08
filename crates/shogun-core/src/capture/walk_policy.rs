@@ -101,7 +101,10 @@ pub fn walk<N: AxNode + Clone>(root: &N, limits: Limits, mut should_stop: impl F
         }
         let role = node.role();
         if role == Role::SecureTextField {
-            // Skip the node and its entire subtree.
+            // Skip the node and its entire subtree — but the node was still visited, so it must
+            // be charged against the element budget: a tree stuffed with secure fields must not
+            // be able to iterate unboundedly (only the 250ms timebox would stop it otherwise).
+            res.elements_visited += 1;
             continue;
         }
         res.elements_visited += 1;

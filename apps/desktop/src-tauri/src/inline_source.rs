@@ -126,6 +126,15 @@ pub mod mac {
         }
     }
 
+    /// Clear the rejected latch after any successful Agent-lane completion: the provider just
+    /// accepted the key, so a stale verdict (a transient 401 from clock skew or an outage) must
+    /// not keep telling the user their key is bad until they re-save it.
+    pub fn note_key_accepted() {
+        if KEY_REJECTED.swap(false, std::sync::atomic::Ordering::Relaxed) {
+            eprintln!("[inline] provider accepted the key again — clearing the rejected flag");
+        }
+    }
+
     fn refresh_has_key() {
         let present = keychain_byok(&current_settings().provider).is_some();
         HAS_KEY.store(present, std::sync::atomic::Ordering::Relaxed);
@@ -722,6 +731,7 @@ pub mod mac {
             match &outcome {
                 InlineOutcome::Inserted { chars } => {
                     eprintln!("[inline] inserted {chars} chars at the cursor");
+                    note_key_accepted();
                     push_inline(&app, InlineStatus { phase: "inserted", chars: *chars, detail: None });
                 }
                 // Nothing gets inserted on a rejected key, so without this the tap is silent and
@@ -1111,6 +1121,9 @@ pub mod mac {
             }
             e.to_string()
         })?;
+        // The provider just accepted the key — clear a stale rejected verdict (transient 401s
+        // must not stick until the user re-saves the same key).
+        note_key_accepted();
         let citations = ctx
             .evidence
             .iter()

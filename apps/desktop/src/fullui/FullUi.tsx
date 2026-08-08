@@ -8,6 +8,7 @@
 // state rather than deciding entitlement for itself.
 
 import { useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { Logo } from "../Logo";
 import { tf } from "../strings";
 import type {
@@ -41,7 +42,9 @@ const PANE_COPY: Record<PaneId, { title: string; sub: string }> = {
 };
 
 export function FullUi({ view }: { view: FullUiView }): JSX.Element {
-  const [pane, setPane] = useState<PaneId>("health");
+  // Land on Today — the sidebar's first item. Landing on a different pane than the one the nav
+  // highlights first reads as a glitch.
+  const [pane, setPane] = useState<PaneId>("today");
   const copy = PANE_COPY[pane];
 
   return (
@@ -76,7 +79,7 @@ export function FullUi({ view }: { view: FullUiView }): JSX.Element {
           </div>
           <div className="pane__body">
             {pane === "today" && <Today v={view.today} />}
-            {pane === "health" && <Health v={view.health} />}
+            {pane === "health" && <Health v={view.health} onNav={setPane} />}
             {pane === "sources" && <Sources v={view.sources} />}
             {pane === "memory" && <Memory v={view.memory} />}
             {pane === "activity" && <Activity v={view.activity} />}
@@ -100,7 +103,7 @@ function planLabel(plan: FullUiView["plan"]): string {
 // ——— D2 · Context Health ———————————————————————————————————————————————————————————————
 // The pane the spec calls the point of the product: every number carries a way to fix it.
 
-function Health({ v }: { v: HealthView }): JSX.Element {
+function Health({ v, onNav }: { v: HealthView; onNav: (p: PaneId) => void }): JSX.Element {
   if (v.cards.length === 0 && !v.mix && v.slo.length === 0) {
     return <div className="fcard"><Empty>{tf.emptyHealth}</Empty></div>;
   }
@@ -113,11 +116,16 @@ function Health({ v }: { v: HealthView }): JSX.Element {
             {c.value}
             {c.detail && <div className="frow__d">{c.detail}</div>}
           </div>
-          {c.fix && (
-            <button type="button" className="hcard__fix">
-              {c.fix.label} →
-            </button>
-          )}
+          {c.fix &&
+            (c.fix.target === "settings" ? (
+              // Capture rules / search window live in the panel's Settings, not in this window —
+              // a plain pointer, not a button that would go nowhere.
+              <span className="frow__d">{c.fix.label} — SHOGUN panel ⚙︎</span>
+            ) : (
+              <button type="button" className="hcard__fix" onClick={() => onNav(c.fix!.target as PaneId)}>
+                {c.fix.label} →
+              </button>
+            ))}
         </div>
       ))}
 
@@ -318,11 +326,6 @@ function Memory({ v }: { v: MemoryView }): JSX.Element {
                 <span className="frow__d">{r.detail}</span>
               </div>
             </div>
-            <div className="frow__trail">
-              <button type="button" className="hcard__fix">
-                {tf.why} →
-              </button>
-            </div>
           </div>
         ))}
       </div>
@@ -353,6 +356,27 @@ function Memory({ v }: { v: MemoryView }): JSX.Element {
   );
 }
 
+/** "Run now" for the nightly review — wired to the same command the panel's settings use. The
+ *  view is a one-shot snapshot, so the row's numbers refresh on the next window open. */
+function RunNowButton(): JSX.Element {
+  const [busy, setBusy] = useState(false);
+  return (
+    <button
+      type="button"
+      className="fbtn"
+      disabled={busy}
+      onClick={() => {
+        setBusy(true);
+        void invoke("run_dream_now")
+          .catch(() => undefined)
+          .finally(() => setBusy(false));
+      }}
+    >
+      {busy ? "…" : tf.runNow}
+    </button>
+  );
+}
+
 function confLabel(c: Confidence): string {
   return c === "high" ? tf.high : c === "medium" ? tf.medium : tf.low;
 }
@@ -380,9 +404,9 @@ function Activity({ v }: { v: ActivityView }): JSX.Element {
               </div>
             </div>
             <div className="frow__trail">
-              <button type="button" className="fbtn fbtn--go">
-                {tf.review}
-              </button>
+              {/* The confirm/reject controls are the panel's Approvals section — pointing there
+                  beats a Review button with nothing behind it. */}
+              <span className="frow__d">{tf.reviewInPanel}</span>
             </div>
           </div>
         </div>
@@ -438,9 +462,7 @@ function Activity({ v }: { v: ActivityView }): JSX.Element {
               <span className="pillbadge__dot" />
               {v.nightly.health === "ok" ? tf.healthy : tf.needsAttention}
             </span>
-            <button type="button" className="fbtn">
-              {tf.runNow}
-            </button>
+            <RunNowButton />
           </div>
         </div>
       </div>

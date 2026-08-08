@@ -112,16 +112,23 @@ pub fn run_cycle<R: DreamJobRunner>(
     input_from_ts: i64,
     input_to_ts: i64,
 ) -> CycleReport {
+    // A failed ledger write is worth a log line: a lost `Done` silently re-runs the job next
+    // cycle (safe — jobs are idempotent — but it should not be invisible while debugging).
+    let record = |kind, state| {
+        if !db.record_job(cycle_id, kind, state, input_from_ts, input_to_ts) {
+            eprintln!("dream: ledger write failed for {cycle_id} {kind:?} -> {state:?}");
+        }
+    };
     let mut completed = Vec::new();
     for kind in db.resume(cycle_id, cycle) {
-        db.record_job(cycle_id, kind, JobState::Running, input_from_ts, input_to_ts);
+        record(kind, JobState::Running);
         match runner.run(kind, input_from_ts, input_to_ts) {
             Ok(()) => {
-                db.record_job(cycle_id, kind, JobState::Done, input_from_ts, input_to_ts);
+                record(kind, JobState::Done);
                 completed.push(kind);
             }
             Err(e) => {
-                db.record_job(cycle_id, kind, JobState::Failed, input_from_ts, input_to_ts);
+                record(kind, JobState::Failed);
                 return CycleReport { completed, failed: Some((kind, e)) };
             }
         }

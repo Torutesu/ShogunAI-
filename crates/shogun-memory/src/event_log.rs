@@ -106,6 +106,16 @@ pub fn insert_or_touch_with_thread(
             "UPDATE event_log SET last_seen_at = ?1, dwell_ms = dwell_ms + ?2 WHERE id = ?3",
             params![ev.ts, ev.dwell_ms, id],
         )?;
+        // A touch is the user returning to this conversation, so its thread's recency must move
+        // too — recency drives referent resolution ("that thing"), and the windows a user
+        // revisits most are exactly the ones that would otherwise go stale. Best-effort like the
+        // insert path's thread upsert: an index failure never fails the durable write.
+        // `event_count` stays put — no new event exists.
+        let _ = conn.execute(
+            "UPDATE threads SET last_activity_at = max(last_activity_at, ?1), updated_at = ?1
+              WHERE thread_key = (SELECT thread_key FROM event_log WHERE id = ?2)",
+            params![ev.ts, id],
+        );
         Ok((id, true))
     } else {
         Ok((insert_with_thread(conn, ev, native_thread_id)?, false))
@@ -134,6 +144,9 @@ pub fn recent_source_bodies(
     source: &str,
     limit: usize,
 ) -> Result<Vec<(String, String)>, rusqlite::Error> {
+    // Scoped to one app: a ≥98%-similar body seen in a *different* app must stay a separate
+    // event, or the touch reuses the other app's row and the new capture's app/window attribution
+    // is silently lost (`IS` so a NULL bundle id still matches only other NULL rows).
     let mut stmt = conn.prepare(
         "SELECT content_hash, content FROM event_log
          WHERE source = ?1 ORDER BY id DESC LIMIT ?2",
@@ -326,9 +339,29 @@ mod tests {
         note.source = "user";
         insert(&conn, &note).unwrap();
 
-        let got = recent_capture_bodies(&conn, 8).unwrap();
+        let got = recent_capture_bodies(&conn, Some("com.apple.Safari"), 8).unwrap();
         assert_eq!(got.iter().map(|(_, c)| c.as_str()).collect::<Vec<_>>(), vec!["second", "first"]);
         assert_eq!(got[0].0, "h2");
+    }
+
+    #[test]
+    fn recent_capture_bodies_is_scoped_to_one_app() {
+        // The near-dup collapse must only compare against the SAME app's recent bodies: a
+        // ≥98%-similar body in a different app is a different capture, and collapsing onto it
+        // would silently reassign the new capture to the other app's row.
+        let conn = crate::open_in_memory().unwrap();
+        insert(&conn, &ev("shared body", "h1", 1, 0)).unwrap();
+        let mut other_app = ev("other app body", "h2", 2, 0);
+        other_app.app_bundle_id = Some("com.apple.Mail");
+        insert(&conn, &other_app).unwrap();
+
+        let safari = recent_capture_bodies(&conn, Some("com.apple.Safari"), 8).unwrap();
+        assert_eq!(safari.len(), 1);
+        assert_eq!(safari[0].1, "shared body");
+        let mail = recent_capture_bodies(&conn, Some("com.apple.Mail"), 8).unwrap();
+        assert_eq!(mail.len(), 1);
+        assert_eq!(mail[0].1, "other app body");
+        assert!(recent_capture_bodies(&conn, None, 8).unwrap().is_empty(), "NULL matches only NULL");
     }
 
     #[test]

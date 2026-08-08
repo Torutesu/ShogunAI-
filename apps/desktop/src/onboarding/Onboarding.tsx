@@ -78,9 +78,17 @@ export function Onboarding(): JSX.Element {
   const shownLogged = useRef(false);
   const grantedLogged = useRef(false);
 
-  // Theme: shared with the notch window through same-origin localStorage.
+  // Theme: shared with the notch window through same-origin localStorage. The value is stored
+  // JSON-encoded (App.tsx saveJson), so it must be parsed — reading it raw yields `"dark"` with
+  // quotes, which matches no CSS selector and silently pinned this window to dark.
   useEffect(() => {
-    const appearance = (localStorage.getItem("shogun.appearance") as Appearance | null) ?? "auto";
+    let appearance: Appearance = "auto";
+    try {
+      const raw = localStorage.getItem("shogun.appearance");
+      if (raw) appearance = JSON.parse(raw) as Appearance;
+    } catch {
+      /* fall back to auto */
+    }
     document.documentElement.setAttribute("data-appearance", appearance);
   }, []);
 
