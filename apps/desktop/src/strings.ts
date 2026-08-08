@@ -203,6 +203,8 @@ export const STRINGS = {
     autoHideHint: "Slide back to the notch when you move away.",
     draftShortcut: "Draft with ShogunAI",
     draftFixedHint: "Tap ⌥ (Option) alone — always on, not rebindable.",
+    recallShortcut: "Visual recall",
+    recallFixedHint: "Press both ⌘ (Command) keys together — always on, not rebindable.",
     summonShortcut: "Show / hide overlay",
     quitShortcut: "Quit",
     shortcuts: "Shortcuts",

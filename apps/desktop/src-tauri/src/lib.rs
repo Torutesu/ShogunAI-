@@ -39,6 +39,8 @@ mod analytics;
 mod notch_actions;
 mod notch_exec;
 mod onboarding;
+#[cfg(target_os = "macos")]
+mod recall_shortcut;
 mod visual_recall;
 #[cfg(target_os = "macos")]
 mod voice_lane;
@@ -543,6 +545,9 @@ fn setup_macos(app: &tauri::App) {
 
     voice_session::mac::init(app.handle());
     voice_shortcut::install(app.handle());
+    // Visual recall summon: both Command keys pressed together (left ⌘ + right ⌘). A fixed
+    // chord like the ⌥-tap — bare modifiers can't go through the global-shortcut plugin.
+    recall_shortcut::install(app.handle());
 
     // WP2.2: start the memory capture source. Open the on-device DB under the app-data dir and
     // poll the focus into memory (exclusion → walk → collapse → extract). AX text only (invariant

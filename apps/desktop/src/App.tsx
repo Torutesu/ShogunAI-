@@ -3135,6 +3135,15 @@ function Settings(props: {
               <kbd>⌥</kbd>
             </span>
           </div>
+          {/* Visual recall is likewise a fixed chord: both Command keys at once. Bare modifiers
+              can't go through the rebindable global-shortcut path (recall_shortcut.rs). */}
+          <div className="keys">
+            <span className="keys__name">{t.recallShortcut}</span>
+            <span className="keys__combo keys__combo--fixed" title={t.recallFixedHint}>
+              <kbd>⌘</kbd>
+              <kbd>⌘</kbd>
+            </span>
+          </div>
           {SHORTCUT_ROWS.map(({ action, label }) => (
             <div key={action} className="keys">
               <span className="keys__name">{label}</span>
