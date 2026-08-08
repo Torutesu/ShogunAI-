@@ -155,6 +155,13 @@ export const STRINGS = {
     dreamEvents: "events",
     dreamChanges: "updates",
     dreamChunks: "sent",
+    selectKkKey: "Select KK key",
+    selectKkHint:
+      "Powers nightly review, meeting summaries, and live translation. Paste the plain sk-ant-… API key — not hex.",
+    selectKkPresent: "Connected — batch features and translation can run.",
+    selectKkAbsent: "Not set — nightly review runs locally only; translation and AI summaries need this key.",
+    selectKkPlaceholder: "Paste Select KK API key (sk-ant-…)…",
+    selectKkSaved: "Select KK key saved.",
     // approvals (L3 confirmation queue — anything leaving the device)
     approvals: "Approvals",
     approvalsHint: "Anything that leaves your device waits here for your explicit confirmation.",
@@ -179,6 +186,11 @@ export const STRINGS = {
     castleBottomCenter: "Bottom",
     castleBottomRight: "Bottom right",
     behavior: "When you look away",
+    launchAtLoginSection: "Launch at login",
+    launchAtLoginOn: "On",
+    launchAtLoginOff: "Off",
+    launchAtLoginHint:
+      "Open Shogun when you sign in to this Mac. Quitting stays quit until the next login.",
     stayOpen: "Stay open",
     autoHide: "Auto-hide",
     stayOpenHint: "Keep the panel open until you close it.",
@@ -192,6 +204,22 @@ export const STRINGS = {
     recordHint: "Press keys… (Esc to cancel)",
     needModifier: "Include a modifier (⌃ ⌥ ⇧ ⌘).",
     shortcutHint: "Click a shortcut to change it. Saved instantly, works everywhere.",
+    voiceTitle: "Voice",
+    voiceSection: "Voice dialogue",
+    voiceHint: "Hold the shortcut, speak, release — on-device speech into the focused field (or clipboard). Beta; off by default.",
+    voiceOn: "On",
+    voiceOff: "Off",
+    voiceShortcut: "Hold to talk",
+    voiceListening: "Listening…",
+    voiceHoldHint: "Release when done",
+    voiceProcessing: "Transcribing…",
+    voiceAnswer: "Answer",
+    voiceCopy: "Copy",
+    voiceClose: "Close",
+    voiceError: "Couldn't capture",
+    voicePasted: "Pasted",
+    voiceCopied: "Copied to clipboard",
+    voiceConflict: "Voice is unavailable while meeting notes are recording.",
     model: "Model",
     modelFor: "Runs on",
     modelHint: "Chat and ⌥-tap drafts run on this provider with your own key. Each provider keeps its own key below.",
@@ -254,7 +282,7 @@ export const STRINGS = {
     meetingNotesSaved: "Saved",
     meetingNotesFailed: "Couldn't save",
     meetingRecapTitle: "Meeting notes",
-    meetingRecapNoNotes: "You didn't write anything this time.",
+    meetingRecapNoNotes: "No notes added. Transcript text may still be saved on this Mac.",
     meetingRecapMinutes: "min",
     meetingRecapDone: "Done",
     // Minutes — the model-generated layer (MT4, FR-MT-19), shown on top of the degraded Recap
@@ -263,9 +291,19 @@ export const STRINGS = {
     meetingMinutesSummary: "Summary",
     meetingMinutesDecisions: "Decisions",
     meetingMinutesNextActions: "Next actions",
-    meetingMinutesPending: "Preparing notes…",
+    meetingMinutesPending: "Preparing summary…",
+    meetingMinutesNeedsKey:
+      "AI summary needs the Select KK key in Settings → Nightly review. Your transcript is shown below.",
+    meetingRecapYourNotes: "Your notes",
+    meetingTranscriptHeading: "Transcript",
+    meetingTranscriptEmpty: "No transcript captured — model missing or silence.",
+    meetingTranscriptOnlyBlanks:
+      "Audio was heard but nothing clear was transcribed — only silence markers.",
+    meetingTranscriptSpeakerMe: "Me",
+    meetingTranscriptSpeakerOther: "Other",
+    meetingTranscriptSpeakerUnknown: "Speaker",
     meetingUntitled: "Meeting",
-    meetingStarting: "Taking notes in",
+    meetingStarting: "Starts in",
     meetingStart: "Start",
     meetingNotNow: "Not now",
     meetingStop: "Stop",
@@ -273,20 +311,86 @@ export const STRINGS = {
     meetingNeverThisApp: "Never for this app",
     // meeting notes — settings (FR-MT-01/02/03)
     meetingSection: "Meeting notes",
-    meetingHint: "Offers a place to write when a meeting starts. One tap declines, one tap stops.",
+    meetingHint:
+      "Detects meetings and transcribes on this Mac when you approve. One tap to decline, one tap to stop.",
     meetingOn: "On",
     meetingOff: "Off",
     meetingExcluded: "Never offer for",
     meetingExcludedEmpty: "No apps excluded",
     meetingExcludedRemove: "Remove",
-    // The disclosure of FR-MT-03. It can be stated this plainly because it is simply what
-    // happens: nothing joins the call, and no audio file is ever written.
-    // FR-MT-03 requires this to match the implementation exactly. At this stage SHOGUN does not
-    // listen at all — it opens a note next to the meeting — so the copy says that and nothing
-    // more. It gains the transcription sentence when transcription actually exists (MT3), not
-    // before: a disclosure that describes a future build is not a disclosure.
+    meetingMicOnly: "Detect by microphone alone",
+    meetingMicOnlyHint:
+      "Off by default. When on, sustained microphone use can offer notes without Meet or Zoom in front — useful for calls in other apps.",
+    deepgramAsrKey: "Speech provider key",
+    deepgramAsrHint:
+      "Powers live meeting transcription. Paste once — stored in your Keychain on this Mac.",
+    deepgramAsrPresent: "Connected — live transcription can run.",
+    deepgramAsrAbsent:
+      "Not set — your typed notes still save; live speech transcription needs this key.",
+    deepgramAsrPlaceholder: "Paste Deepgram API key…",
+    visualRecallSection: "Visual recall",
+    visualRecallHint:
+      "Passive OCR reads the focused window when accessibility text is thin. Saved frames stay on this Mac for up to 72 hours, then purge automatically.",
+    visualRecallOn: "On",
+    visualRecallOff: "Off",
+    visualRecallDisclosure:
+      "Requires Screen Recording for the focused window. Compressed JPEGs and OCR text stay local in memory for up to 72 hours — nothing is uploaded.",
+    visualRecallStatusOff: "Off — passive OCR paused. You can still save a screen manually.",
+    visualRecallStatusIdle:
+      "On — waiting for a window that needs OCR (canvas apps, terminals, or thin accessibility text).",
+    visualRecallStatusLive: (n: number, app: string, window: string) =>
+      `On — last read ${n} chars from ${app}${window ? ` · ${window}` : ""}.`,
+    visualRecallTimeline: "Saved screens (72 h)",
+    visualRecallTimelineEmpty: "No saved screens yet — turn on Visual recall to start the local timeline.",
+    visualRecallDeleteFrame: "Delete",
+    visualRecallDeleteConfirm: "Remove this screen?",
+    visualRecallDeleteCancel: "Cancel",
+    visualRecallBrowse: "Browse saved screens",
+    visualRecallBrowseSub: "Open the 72 h timeline on this Mac",
+    visualRecallScrubHint: "Scrub through saved screens",
+    visualRecallShowText: "Show text",
+    visualRecallHideText: "Hide text",
+    visualRecallClose: "Close",
+    visualRecallSearchAll: "Search All",
+    visualRecallSearchShortcut: "/",
+    visualRecallSettings: "Settings",
+    visualRecallZoomIn: "Zoom in",
+    visualRecallZoomOut: "Zoom out",
+    visualRecallOcrMode: "Show text overlay",
+    visualRecallOcrModeOff: "Hide text overlay",
+    visualRecallJumpToDay: "Jump to day",
+    visualRecallNoFramesThatDay: "No screens on this day",
+    visualRecallSearchEmpty: "No screens match your search",
+    visualRecallRetentionNote: "Screens purge automatically after 72 hours.",
+    visualRecallFrameMeta: (when: string, app: string, window: string) =>
+      `${when} · ${app}${window ? ` · ${window}` : ""}`,
+    // FR-MT-03 disclosure (2026-08-05): Deepgram Nova-3 processes audio for STT only; MIP opt-out;
+    // SHOGUN never saves waveform/recording. Reuse these keys everywhere.
     meetingDisclosure:
-      "Nothing joins your call and no audio is captured. SHOGUN opens a note beside the meeting; what you write stays on this Mac.",
+      "Nothing joins your call. For meetings you approve, audio is temporarily processed by our speech provider for live transcription only — not retained for training (MIP opt-out). No recording, waveform, or audio file is saved by SHOGUN to disk or temp storage. Only transcript text and its provenance are kept here. Turn meetings off or exclude apps anytime below.",
+    meetingDisclosureBrief:
+      "Nothing joins your call. Speech provider processes audio temporarily for transcription — not for training. No audio file saved by SHOGUN.",
+    meetingListening: "Listening · speech provider (not for training) · no recording saved",
+    meetingDisclosureRecap:
+      "Audio was processed temporarily for transcription only — not retained for training. No recording saved by SHOGUN — transcript, provenance, and your notes.",
+    // live in-meeting overlay (issue #93)
+    meetingModeTranscription: "Transcription",
+    meetingModeOneWay: "One-way translation",
+    meetingModeTwoWay: "Two-way translation",
+    meetingLangAuto: "Auto-detect",
+    meetingLangEnglish: "English",
+    meetingLangJapanese: "Japanese",
+    meetingLangArrow: "→",
+    meetingLangSwap: "↔",
+    meetingLiveEmpty: "Listening…",
+    meetingLiveShowSource: "Show source",
+    meetingLiveHideSource: "Hide source",
+    meetingTranslateNeedsKey:
+      "Translation needs the Select KK key in Settings → Nightly review. Transcription still works.",
+    meetingTranslateKeyInvalid:
+      "Select KK key was rejected — re-paste it in Settings → Nightly review (plain sk-ant-… key, not hex).",
+    meetingOverlayClose: "Close",
+    meetingOverlaySettings: "Settings",
     // Privacy & Security (issue #28). One home for the key, the data-use policy, and deletion.
     privacyTitle: "Privacy & Security",
     // Key card. The key never leaves the Keychain and is never shown back in plaintext — settled

@@ -68,6 +68,7 @@ pub struct DeleteReport {
     pub threads: usize,
     pub sessions: usize,
     pub session_notes: usize,
+    pub screen_frames: usize,
     pub traceability: usize,
 }
 
@@ -97,6 +98,7 @@ pub fn delete_all(conn: &mut Connection) -> Result<DeleteReport, rusqlite::Error
     let session_notes = tx.execute("DELETE FROM session_notes", [])?;
     tx.execute("DELETE FROM transcript_segments", [])?;
     tx.execute("DELETE FROM meeting_recaps", [])?;
+    let screen_frames = tx.execute("DELETE FROM screen_frames", [])?;
     // Sessions hold the meeting's title, summary and decisions — user data. event_log also
     // references sessions, and it was already cleared above, so sessions can go now (FR-SET-07,
     // FR-MT-05).
@@ -114,6 +116,7 @@ pub fn delete_all(conn: &mut Connection) -> Result<DeleteReport, rusqlite::Error
         threads,
         sessions,
         session_notes,
+        screen_frames,
         traceability,
     })
 }

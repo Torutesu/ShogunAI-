@@ -52,6 +52,8 @@ pub struct AnthropicConfig {
     pub model: String,
     /// `max_tokens` for the request.
     pub max_tokens: u32,
+    /// Sampling temperature. Omitted from the request body when `None`.
+    pub temperature: Option<f32>,
 }
 
 impl AnthropicConfig {
@@ -63,6 +65,7 @@ impl AnthropicConfig {
             version: DEFAULT_ANTHROPIC_VERSION.to_string(),
             model: model.into(),
             max_tokens: 1024,
+            temperature: None,
         }
     }
 
@@ -82,6 +85,11 @@ impl AnthropicConfig {
 
     pub fn with_max_tokens(mut self, max_tokens: u32) -> Self {
         self.max_tokens = max_tokens;
+        self
+    }
+
+    pub fn with_temperature(mut self, temperature: f32) -> Self {
+        self.temperature = Some(temperature);
         self
     }
 
@@ -122,12 +130,29 @@ pub fn build_messages_request(
     prompt: &str,
     stream: bool,
 ) -> Result<HttpRequest, LlmError> {
-    let body = json!({
+    build_messages_exchange(cfg, key, None, prompt, stream)
+}
+
+/// Like [`build_messages_request`] but separates system instructions from the user turn.
+pub fn build_messages_exchange(
+    cfg: &AnthropicConfig,
+    key: &Secret,
+    system: Option<&str>,
+    user: &str,
+    stream: bool,
+) -> Result<HttpRequest, LlmError> {
+    let mut body = json!({
         "model": cfg.model,
         "max_tokens": cfg.max_tokens,
-        "messages": [{ "role": "user", "content": prompt }],
+        "messages": [{ "role": "user", "content": user }],
         "stream": stream,
     });
+    if let Some(system) = system {
+        body["system"] = json!(system);
+    }
+    if let Some(temperature) = cfg.temperature {
+        body["temperature"] = json!(temperature);
+    }
     Ok(HttpRequest::new(
         Method::Post,
         format!("{}/v1/messages", cfg.base_url),
@@ -374,7 +399,11 @@ impl<T: HttpTransport, S: TraceabilitySink> AnthropicAgentClient<T, S> {
     /// egress point — before the request goes out — so a prompt that left the device but got a
     /// 401/timeout back is still traced (invariant 3: every send site logs, success or not).
     pub async fn complete(&self, prompt: &str) -> Result<String, LlmError> {
-        let req = build_messages_request(&self.cfg, self.key.secret(), prompt, true)?;
+        self.complete_with_stream(prompt, true).await
+    }
+
+    async fn complete_with_stream(&self, prompt: &str, stream: bool) -> Result<String, LlmError> {
+        let req = build_messages_request(&self.cfg, self.key.secret(), prompt, stream)?;
         self.sink.record(TraceRecord::for_chunk(
             Route::MessagesApi,
             "agent",
@@ -387,6 +416,56 @@ impl<T: HttpTransport, S: TraceabilitySink> AnthropicAgentClient<T, S> {
             return Err(crate::llm::status_error("messages", resp.status, &resp.body));
         }
         parse_completion_body(&resp.body)
+    }
+}
+
+/// Select-KK Messages client for latency-sensitive work (e.g. live meeting translation). The Batch
+/// lane is the default Select-KK path; this is the exception when sub-second UX matters and Batch
+/// polling is too slow. Constructed with a [`SelectKkKey`] — not interchangeable with
+/// [`AnthropicAgentClient`]'s [`ByokKey`] (invariant 5).
+pub struct AnthropicSelectKkMessagesClient<T: HttpTransport, S: TraceabilitySink> {
+    transport: T,
+    sink: S,
+    key: SelectKkKey,
+    cfg: AnthropicConfig,
+    purpose: String,
+}
+
+impl<T: HttpTransport, S: TraceabilitySink> AnthropicSelectKkMessagesClient<T, S> {
+    pub fn new(
+        transport: T,
+        sink: S,
+        key: SelectKkKey,
+        cfg: AnthropicConfig,
+        purpose: impl Into<String>,
+    ) -> Self {
+        Self { transport, sink, key, cfg, purpose: purpose.into() }
+    }
+
+    /// Send `prompt` synchronously (non-streaming) and return the assistant text.
+    pub async fn complete(&self, prompt: &str) -> Result<String, LlmError> {
+        self.complete_with_system(None, prompt).await
+    }
+
+    /// Send a system + user exchange synchronously (non-streaming) and return the assistant text.
+    pub async fn complete_with_system(
+        &self,
+        system: Option<&str>,
+        user: &str,
+    ) -> Result<String, LlmError> {
+        let req = build_messages_exchange(&self.cfg, self.key.secret(), system, user, false)?;
+        self.sink.record(TraceRecord::for_chunk(
+            Route::MessagesApi,
+            self.purpose.clone(),
+            self.cfg.destination(),
+            user,
+            false,
+        ));
+        let resp = self.transport.send(req).await?;
+        if !resp.is_success() {
+            return Err(crate::llm::status_error("messages", resp.status, &resp.body));
+        }
+        parse_messages_response(&resp.body)
     }
 }
 
@@ -540,6 +619,18 @@ mod tests {
     }
 
     #[test]
+    fn messages_exchange_includes_system_and_temperature() {
+        let key = Secret::new("kk-123456");
+        let cfg = cfg().with_temperature(0.0);
+        let req = build_messages_exchange(&cfg, &key, Some("translate only"), "hello world", false).unwrap();
+        let body: Value = serde_json::from_str(req.body.as_deref().unwrap()).unwrap();
+        assert_eq!(body["system"], "translate only");
+        assert_eq!(body["messages"][0]["content"], "hello world");
+        assert_eq!(body["temperature"], 0.0);
+        assert_eq!(body["stream"], false);
+    }
+
+    #[test]
     fn batch_create_request_wraps_items() {
         let key = Secret::new("kk-abc");
         let items = vec![
@@ -647,7 +738,7 @@ mod tests {
             cfg(),
         );
         let err = client.complete("x").await.unwrap_err();
-        assert!(matches!(err, LlmError::Provider(_)));
+        assert!(matches!(err, LlmError::RateLimited(429, _)));
         // the prompt STILL left the device — the egress is traced even on provider failure
         // (invariant 3: send sites always log)
         assert_eq!(client.sink_records().len(), 1);

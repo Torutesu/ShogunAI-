@@ -714,7 +714,368 @@ body {
 .set__row {
   display: flex;
   gap: 4px;
+  margin-top: 6px;
 }
+
+/* Visual recall browse window — dedicated timeline + preview (not in notch). */
+.vr-shell {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: #0d0d0f;
+  color: #e8e8ea;
+  overflow: hidden;
+}
+.vr-chrome {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px 10px 72px;
+  border-bottom: 1px solid var(--line, rgba(255, 255, 255, 0.08));
+  -webkit-app-region: drag;
+  app-region: drag;
+  cursor: grab;
+  user-select: none;
+}
+.vr-chrome:active {
+  cursor: grabbing;
+}
+.vr-chrome__title {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.vr-chrome__name {
+  font-size: var(--fs-lg, 15px);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.vr-chrome__sub {
+  font-size: var(--fs-xs, 11px);
+  color: var(--muted, #8a8a90);
+}
+.vr-chrome__actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+.vr-chrome__confirm {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.vr-chrome__confirm-label {
+  font-size: var(--fs-xs, 11px);
+  color: var(--muted, #8a8a90);
+  white-space: nowrap;
+}
+.vr-chrome__btn {
+  padding: 5px 10px;
+  border: 1px solid var(--line, rgba(255, 255, 255, 0.12));
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: var(--fs-sm, 12px);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color var(--sp, 120ms), background var(--sp, 120ms);
+}
+.vr-chrome__btn:hover {
+  border-color: var(--live, #6ee7a0);
+  background: rgba(255, 255, 255, 0.04);
+}
+.vr-chrome__btn--danger:hover {
+  border-color: #f87171;
+  background: rgba(248, 113, 113, 0.08);
+}
+.vr-chrome__btn--icon {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  font-size: 13px;
+  color: var(--muted, #8a8a90);
+}
+.vr-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 16px 20px 20px;
+  overflow-y: auto;
+}
+.vr-body__err {
+  color: #f87171;
+  font-size: var(--fs-sm, 12px);
+  margin: 0 0 12px;
+}
+.vr-body__empty {
+  margin: 0;
+  font-size: var(--fs-sm, 12px);
+  color: var(--muted, #8a8a90);
+  line-height: 1.45;
+}
+.vr-stage {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  flex: 1;
+  min-height: 0;
+}
+/* Preview = own framed card. Scrub sits below, outside this border. */
+.vr-stage__preview {
+  margin: 0;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line, rgba(255, 255, 255, 0.08));
+  border-radius: 10px;
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.25);
+}
+.vr-stage__preview--empty {
+  min-height: 200px;
+}
+/* Present-center scrub: fixed playhead, track pans under it, history off-window. */
+.vr-scrub {
+  flex: none;
+  outline: none;
+  margin: 0 -20px;
+  padding: 8px 0 4px;
+  background: #0a0a0c;
+}
+.vr-scrub:focus-visible .vr-scrub__viewport {
+  box-shadow: inset 0 0 0 2px rgba(110, 231, 160, 0.35);
+}
+.vr-scrub__viewport {
+  position: relative;
+  height: 44px;
+  overflow: hidden;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+.vr-scrub__viewport:active {
+  cursor: grabbing;
+}
+.vr-scrub__rail {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  will-change: transform;
+  pointer-events: none;
+}
+.vr-scrub__pad {
+  flex: none;
+  height: 1px;
+}
+.vr-scrub__track {
+  position: relative;
+  flex: none;
+  height: 18px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.06);
+  overflow: visible;
+}
+.vr-scrub__seg {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  border-right: 1px solid rgba(0, 0, 0, 0.28);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  transition: top 80ms ease, bottom 80ms ease, box-shadow 80ms ease;
+}
+.vr-scrub__seg:last-child {
+  border-right: none;
+}
+.vr-scrub__seg--active {
+  top: -3px;
+  bottom: -3px;
+  z-index: 1;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    0 1px 4px rgba(0, 0, 0, 0.35);
+}
+.vr-scrub__seg-mark {
+  display: grid;
+  place-items: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 3px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.4);
+  color: #f4f4f5;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  pointer-events: none;
+}
+.vr-scrub__seg--active .vr-scrub__seg-mark {
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+}
+.vr-scrub__playhead {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  left: 50%;
+  width: 4px;
+  margin-left: -2px;
+  border-radius: 999px;
+  background: #f4f4f5;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35), 0 1px 4px rgba(0, 0, 0, 0.4);
+  pointer-events: none;
+  z-index: 2;
+}
+.vr-scrub__playhead::before {
+  content: none;
+}
+.vr-stage__media {
+  flex: 1;
+  min-height: 200px;
+  max-height: min(62vh, 520px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #0a0a0a;
+  overflow: hidden;
+}
+.vr-stage__img {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  object-position: center;
+}
+.vr-stage__caption {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  font-size: var(--fs-sm, 12px);
+  color: var(--muted, #8a8a90);
+  border-top: 1px solid var(--line, rgba(255, 255, 255, 0.06));
+}
+.vr-stage__app {
+  color: var(--text, #e8e8ea);
+  font-weight: 500;
+}
+.vr-stage__ocr {
+  padding: 0 12px 10px;
+}
+.vr-stage__ocr-toggle {
+  border: none;
+  background: none;
+  color: var(--muted, #8a8a90);
+  font: inherit;
+  font-size: var(--fs-xs, 11px);
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.vr-stage__ocr-toggle:hover {
+  color: var(--text, #e8e8ea);
+}
+.vr-stage__ocr-text {
+  margin: 6px 0 0;
+  font-size: var(--fs-sm, 12px);
+  line-height: 1.4;
+  color: var(--muted, #8a8a90);
+  white-space: pre-wrap;
+  max-height: 3.2em;
+  overflow: hidden;
+}
+
+/* Notch settings — open the separate browse window. */
+.vr-launch {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  margin-top: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: linear-gradient(135deg, var(--fill-strong), var(--fill));
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--sp), background var(--sp), transform var(--sp);
+}
+.vr-launch:hover {
+  border-color: var(--accent);
+  background: var(--fill-strong);
+}
+.vr-launch:active {
+  transform: scale(0.98);
+}
+.vr-launch__glyph {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-sm);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 15px;
+  font-weight: 600;
+}
+.vr-launch__body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.vr-launch__title {
+  font-size: var(--fs-md);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.vr-launch__sub {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  line-height: 1.3;
+}
+.vr-launch__badge {
+  flex: none;
+  min-width: 22px;
+  padding: 2px 7px;
+  border-radius: var(--r-pill);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+.vr-launch__arrow {
+  flex: none;
+  color: var(--muted);
+  font-size: var(--fs-md);
+}
+
 .keys {
   display: flex;
   align-items: center;
@@ -1235,6 +1596,122 @@ kbd {
   padding-inline: 12px;
 }
 
+/* voice pill + panel (#44) — same notch-hung glass as the meeting pill */
+.vpill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  max-width: 360px;
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(30px) saturate(1.7);
+  backdrop-filter: blur(30px) saturate(1.7);
+  border: 1px solid var(--line);
+  border-top: none;
+  border-radius: 0 0 var(--r-md) var(--r-md);
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.4);
+  color: var(--ink);
+  font-family: var(--sys);
+  font-size: var(--fs-sm);
+}
+.vpill__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex: none;
+  animation: vpill-pulse 1.2s ease-in-out infinite;
+}
+@keyframes vpill-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.55; transform: scale(0.92); }
+}
+.vpill__label {
+  color: var(--muted);
+  flex: none;
+}
+.vpill__meter {
+  flex: 1;
+  min-width: 48px;
+  height: 4px;
+  border-radius: var(--r-pill);
+  background: var(--fill);
+  overflow: hidden;
+}
+.vpill__meter-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 80ms linear;
+}
+
+.voice-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px 14px;
+  flex: 1;
+  min-height: 0;
+  box-sizing: border-box;
+}
+.voice-panel__kicker {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  letter-spacing: 0.02em;
+}
+.voice-panel__meter {
+  height: 6px;
+  border-radius: var(--r-pill);
+  background: var(--fill);
+  overflow: hidden;
+}
+.voice-panel__meter-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 80ms linear;
+}
+.voice-panel__hint {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+.voice-panel__transcript {
+  font-size: var(--fs-sm);
+  color: var(--muted);
+  font-style: italic;
+}
+.voice-panel__transcript--sub {
+  font-size: var(--fs-xs);
+}
+.voice-panel__response {
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  max-height: 160px;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+.voice-panel__acts {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+.voice-panel__btn {
+  font: inherit;
+  font-size: var(--fs-xs);
+  padding: 5px 12px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--line);
+  background: var(--fill);
+  color: var(--ink);
+  cursor: pointer;
+  transition: background var(--sp);
+}
+.voice-panel__btn--primary {
+  background: var(--fill-strong);
+  font-weight: 600;
+}
+
 /* excluded-app list (FR-MT-02b). Deliberately plain: it is a list of decisions the user already
    made, and its only job is to let them be taken back. */
 .mexcl {
@@ -1330,11 +1807,17 @@ kbd {
 :root[data-window="meeting"],
 :root[data-window="meeting"] body,
 :root[data-window="meeting"] #root {
+  margin: 0;
+  padding: 0;
   background: transparent;
   overflow: hidden;
+  width: 100%;
   height: 100%;
+  /* Pass clicks through any transparent padding inside the fixed window frame. */
+  pointer-events: none;
 }
 .ov {
+  pointer-events: auto;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -1350,11 +1833,26 @@ kbd {
   font-family: var(--sys);
   box-sizing: border-box;
 }
-/* The only affordance saying "you can move me" — the window has no title bar. */
+/* Drag handle vs interactive controls — header drags; buttons/menus/scroll opt out. */
+.ov__drag {
+  -webkit-app-region: drag;
+  app-region: drag;
+  cursor: grab;
+}
+.ov__drag:active {
+  cursor: grabbing;
+}
+.ov__nodrag,
+.ov__nodrag * {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
 .ov__grip {
   flex: none;
   align-self: stretch;
   width: 14px;
+  -webkit-app-region: drag;
+  app-region: drag;
   cursor: grab;
   background-image: radial-gradient(currentColor 1px, transparent 1px);
   background-size: 4px 6px;
@@ -1370,6 +1868,8 @@ kbd {
 .ov__body {
   flex: 1;
   min-width: 0;
+  -webkit-app-region: drag;
+  app-region: drag;
 }
 .ov__kicker {
   font-size: var(--fs-xs);
@@ -1399,6 +1899,8 @@ kbd {
   align-items: center;
   gap: 8px;
   flex: none;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
 }
 /* One primary action, as in the reference. The countdown rides inside it so the deadline is
    visible without becoming a second thing to read. */
@@ -1424,6 +1926,8 @@ kbd {
 .ov__go--wide {
   width: 100%;
   justify-content: center;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
 }
 .ov__count {
   font-variant-numeric: tabular-nums;
@@ -1482,6 +1986,249 @@ kbd {
   background: #ff453a;
   flex: none;
 }
+/* live in-meeting pane (issue #93) */
+.ov--live {
+  align-items: stretch;
+  flex-direction: column;
+  padding: 0;
+  height: 100%;
+  background: rgba(18, 18, 20, 0.72);
+  -webkit-backdrop-filter: blur(40px) saturate(1.4);
+  backdrop-filter: blur(40px) saturate(1.4);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 20px;
+  overflow: hidden;
+}
+.ov__live {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 14px 16px 12px 6px;
+}
+.ov__livehead {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  -webkit-app-region: drag;
+  app-region: drag;
+  cursor: grab;
+}
+.ov__modepick,
+.ov__langpick {
+  position: relative;
+  flex: none;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+.ov__langrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  justify-content: center;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+.ov__modebtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: inherit;
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: var(--r-pill);
+  padding: 6px 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ov__chev {
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid currentColor;
+  opacity: 0.7;
+}
+.ov__modemenu,
+.ov__langmenu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 20;
+  min-width: 180px;
+  padding: 6px;
+  background: rgba(12, 12, 14, 0.94);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 14px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
+}
+.ov__modeopt,
+.ov__langopt {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  font-size: var(--fs-xs);
+  color: var(--ink);
+  background: none;
+  border: none;
+  border-radius: 8px;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+.ov__modeopt:hover,
+.ov__langopt:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+.ov__modeopt.is-on,
+.ov__langopt.is-on {
+  background: rgba(255, 255, 255, 0.12);
+}
+.ov__langbtn {
+  font: inherit;
+  font-size: var(--fs-xs);
+  color: var(--ink);
+  background: none;
+  border: none;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.35);
+  padding: 2px 2px 3px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ov__langbtn--auto {
+  border-bottom-style: dashed;
+  opacity: 0.85;
+}
+.ov__langarrow {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  flex: none;
+}
+.ov__liveacts {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  flex: none;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+.ov__iconbtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  font: inherit;
+  color: var(--ink);
+  background: none;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  opacity: 0.85;
+}
+.ov__iconbtn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  opacity: 1;
+}
+.ov__icon {
+  width: 18px;
+  height: 18px;
+}
+.ov__livebody {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px 4px 8px 8px;
+  margin-top: 4px;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+.ov__liveempty {
+  margin: 0;
+  padding: 24px 8px;
+  text-align: center;
+  font-size: var(--fs-sm);
+  color: var(--muted);
+}
+.ov__liveline {
+  margin-bottom: 12px;
+}
+.ov__livemeta {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 3px;
+}
+.ov__livespeaker {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.ov__livetime {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  opacity: 0.7;
+}
+.ov__livetext {
+  margin: 0;
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  color: var(--ink);
+}
+.ov__livesrc {
+  margin: 4px 0 0;
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+  color: var(--muted);
+}
+.ov__livefoot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  flex: none;
+  -webkit-app-region: drag;
+  app-region: drag;
+}
+.ov__livetitle {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ov__livetime--foot {
+  flex: none;
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+.ov__stop--live {
+  flex: none;
+  font-size: var(--fs-xs);
+  padding: 6px 12px;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+.ov__stop--live:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
 /* recap */
 .ov--recap {
   align-items: stretch;
@@ -1499,6 +2246,9 @@ kbd {
   display: flex;
   align-items: baseline;
   gap: 8px;
+  -webkit-app-region: drag;
+  app-region: drag;
+  cursor: grab;
 }
 .ov__rtitle {
   font-size: var(--fs-sm);
@@ -1517,6 +2267,8 @@ kbd {
   flex: 1;
   min-height: 0;
   overflow: auto;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
 }
 .ov__rnotes {
   margin: 0;
@@ -1530,6 +2282,19 @@ kbd {
   font-size: var(--fs-xs);
   color: var(--muted);
 }
+.ov__disclosure,
+.ov__listening {
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+  color: var(--muted);
+}
+.ov__disclosure {
+  margin: 0;
+  padding: 0 12px 10px;
+}
+.ov__listening {
+  margin-top: 2px;
+}
 
 /* The model-generated minutes, layered under the notes once they arrive. Kept calm: a hairline
    above it separates it from the raw notes without a heavy container. */
@@ -1540,6 +2305,80 @@ kbd {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+.ov__minutes--lead {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
+.ov__mpending,
+.ov__mdegraded {
+  margin: 0;
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  color: var(--muted);
+}
+.ov__mdegraded {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(128, 128, 128, 0.1);
+}
+.ov__mdegraded--warn {
+  color: var(--warn, #c9a227);
+  background: rgba(201, 162, 39, 0.12);
+  border: 1px solid rgba(201, 162, 39, 0.35);
+}
+.ov__notes {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--hairline, rgba(128, 128, 128, 0.2));
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.ov__tsec {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--hairline, rgba(128, 128, 128, 0.2));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ov__tturns {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.ov__tturn {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ov__tmeta {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.ov__tspeaker {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+.ov__ttime {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.ov__ttext {
+  margin: 0;
+  font-size: var(--fs-xs);
+  line-height: 1.55;
+  word-break: break-word;
+}
+.ov__tempty {
+  margin: 0;
+  font-size: var(--fs-xs);
+  line-height: 1.5;
+  color: var(--muted);
 }
 .ov__msec {
   display: flex;
@@ -2074,4 +2913,120 @@ body.full-window {
 /* Only the working state pulses: a finished draft shouldn't keep drawing the eye. */
 .inline__dot--work {
   animation: live-pulse 1s ease-in-out infinite;
+}
+
+/* ── voice overlay (#44) ───────────────────────────────────────────────────────────────── */
+:root[data-window="voice"],
+:root[data-window="voice"] body,
+:root[data-window="voice"] #root {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  overflow: hidden;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.voice-ov {
+  pointer-events: auto;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  box-sizing: border-box;
+  padding: 8px;
+}
+.voice-ov--hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+.voice-ov__card {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(34px) saturate(1.7);
+  backdrop-filter: blur(34px) saturate(1.7);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg, 14px);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.45);
+  color: var(--ink);
+  font-family: var(--sys);
+  box-sizing: border-box;
+}
+.voice-ov__kicker {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  letter-spacing: 0.02em;
+}
+.voice-ov__kicker--err {
+  color: var(--danger, #e55);
+}
+.voice-ov__meter {
+  height: 6px;
+  border-radius: var(--r-pill);
+  background: var(--fill);
+  overflow: hidden;
+}
+.voice-ov__meter-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #6ee7b7, #38bdf8);
+  transition: width 60ms linear;
+}
+.voice-ov__hint {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+.voice-ov__transcript {
+  font-size: var(--fs-sm);
+  color: var(--muted);
+  font-style: italic;
+}
+.voice-ov__transcript--sub {
+  font-size: var(--fs-xs);
+}
+.voice-ov__response {
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  max-height: 160px;
+  overflow: auto;
+}
+.voice-ov__acts {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+.voice-ov__btn {
+  font: inherit;
+  font-size: var(--fs-sm);
+  padding: 6px 12px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--line);
+  background: var(--fill);
+  color: var(--ink);
+  cursor: pointer;
+}
+.voice-ov__btn--primary {
+  font-weight: 600;
+  background: var(--fill-strong);
+}
+.voice-toast {
+  position: fixed;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+  max-width: 90%;
+  padding: 8px 12px;
+  border-radius: var(--r-pill);
+  background: rgba(20, 20, 24, 0.92);
+  border: 1px solid var(--line);
+  color: var(--ink);
+  font-size: var(--fs-xs);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
 }

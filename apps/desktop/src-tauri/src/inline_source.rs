@@ -35,7 +35,7 @@ pub mod mac {
     use shogun_core::llm::{AgentClient, ByokKey, LlmError, MockAgentClient, Secret};
 
     /// The Keychain service the BYOK keys live under (invariant 7).
-    const KEYCHAIN_SERVICE: &str = "com.selectkk.shogun";
+    use shogun_integrations::keychain_store;
 
     // ---- Agent-lane provider settings (provider + model; NON-secret, so a JSON file is fine —
     // ---- the KEY always stays in the Keychain, one account per provider) ----------------------
@@ -530,7 +530,7 @@ pub mod mac {
     /// Read the ACTIVE provider's BYOK key from the Keychain (invariant 7 — never a
     /// file/env/DB/log). `None` if unset.
     fn keychain_byok(provider: &str) -> Option<String> {
-        security_framework::passwords::get_generic_password(KEYCHAIN_SERVICE, keychain_account(provider))
+        keychain_store::get_generic_secret(keychain_account(provider))
             .ok()
             .and_then(|bytes| String::from_utf8(bytes).ok())
     }
@@ -548,11 +548,7 @@ pub mod mac {
         if key.is_empty() {
             return Err("key is empty".into());
         }
-        security_framework::passwords::set_generic_password(
-            KEYCHAIN_SERVICE,
-            keychain_account(&provider),
-            key.as_bytes(),
-        )
+        keychain_store::set_generic_secret(keychain_account(&provider), key.as_bytes())
         .map_err(|e| e.to_string())?;
         eprintln!("[inline] BYOK key saved to Keychain (provider: {provider})");
         refresh_has_key();
@@ -565,7 +561,7 @@ pub mod mac {
         if !PROVIDERS.contains(&provider.as_str()) {
             return Err(format!("unknown provider: {provider}"));
         }
-        security_framework::passwords::delete_generic_password(KEYCHAIN_SERVICE, keychain_account(&provider))
+        keychain_store::delete_generic_secret(keychain_account(&provider))
             .map_err(|e| e.to_string())?;
         eprintln!("[inline] BYOK key removed from Keychain (provider: {provider})");
         refresh_has_key();
@@ -946,14 +942,40 @@ pub mod mac {
                 p.push('\n');
             }
         }
+        if !ctx.screen_frames.is_empty() {
+            p.push_str("\nStored screen captures (JPEG, ≤72 h, linked to OCR events):\n");
+            for f in &ctx.screen_frames {
+                p.push_str("- [screen frame ");
+                p.push_str(&f.frame_id.to_string());
+                p.push_str(" · ");
+                if let Some(app) = f.app_bundle_id.as_deref().filter(|s| !s.is_empty()) {
+                    p.push_str(app);
+                    p.push_str(" · ");
+                }
+                if let Some(w) = f.window_title.as_deref().filter(|s| !s.is_empty()) {
+                    p.push_str(w);
+                    p.push_str(" · ");
+                }
+                p.push_str(&format!("{}×{}", f.width, f.height));
+                if f.needs_rescan {
+                    p.push_str(" · thin OCR — re-scanned text may appear in evidence");
+                }
+                p.push_str("] ");
+                p.push_str(&f.ocr_excerpt);
+                p.push('\n');
+            }
+        }
         if !ctx.evidence.is_empty() {
             p.push_str("\nRetrieved from their history (most relevant first):\n");
             for e in &ctx.evidence {
                 p.push_str("- [");
-                p.push_str(&e.source);
+                p.push_str(&shogun_memory::search::evidence_source_label(&e.source));
                 if let Some(t) = e.title.as_deref().filter(|t| !t.is_empty()) {
                     p.push_str(" · ");
                     p.push_str(t);
+                }
+                if let Some(fid) = e.frame_id {
+                    p.push_str(&format!(" · frame {fid}"));
                 }
                 p.push_str("] ");
                 p.push_str(&e.excerpt);
@@ -965,6 +987,27 @@ pub mod mac {
         p.push_str("\nSHOGUN:");
         p
     }
+
+    #[cfg(all(target_os = "macos", feature = "visual-recall-ocr"))]
+    fn enrich_thin_frame_ocr(db: &Db, ctx: &mut ContextPack) {
+        for frame in &ctx.screen_frames {
+            if !frame.needs_rescan {
+                continue;
+            }
+            let Some(rec) = db.get_screen_frame(frame.frame_id) else { continue };
+            let Some(text) = crate::screen_ocr::ocr_jpeg_bytes(&rec.jpeg) else { continue };
+            let excerpt = shogun_memory::search::excerpt(&text, "", 400);
+            for ev in &mut ctx.evidence {
+                if ev.frame_id == Some(frame.frame_id) {
+                    ev.excerpt.push_str("\n[re-scanned from stored frame]: ");
+                    ev.excerpt.push_str(&excerpt);
+                }
+            }
+        }
+    }
+
+    #[cfg(not(all(target_os = "macos", feature = "visual-recall-ocr")))]
+    fn enrich_thin_frame_ocr(_db: &Db, _ctx: &mut ContextPack) {}
 
     /// One source behind an answer, for the citation line under it.
     #[derive(serde::Serialize)]
@@ -980,6 +1023,11 @@ pub mod mac {
     pub struct ChatAnswer {
         pub text: String,
         pub citations: Vec<Citation>,
+    }
+
+    /// Context-aware chat for the voice dialogue lane (#44). Same BYOK path as `shogun_chat`.
+    pub(crate) fn voice_chat(db: &Db, message: &str) -> Result<ChatAnswer, String> {
+        chat_blocking(db, message)
     }
 
     fn chat_blocking(db: &Db, message: &str) -> Result<ChatAnswer, String> {
@@ -1039,6 +1087,8 @@ pub mod mac {
             }
             _ => db.assemble_context(&query, CHAT_EVIDENCE_HITS, CHAT_EVIDENCE_CHARS),
         };
+        let mut ctx = ctx;
+        enrich_thin_frame_ocr(db, &mut ctx);
         // Without a key there is nothing to answer with; with the dev mock the "answer" is the
         // prompt itself, and printing that dumps SHOGUN's entire internal prompt at the user. Say
         // what is actually wrong instead. (The UI also pre-empts this from `has_key`.)

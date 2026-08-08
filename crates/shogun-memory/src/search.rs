@@ -119,9 +119,11 @@ const MAX_FTS_TERMS: usize = 24;
 /// its overlapping trigrams — that is how a trigram index is queried for those scripts, and it is
 /// the same OR-of-terms shape.
 ///
-/// Returns `None` when nothing usable is left, which the caller treats as "no results" rather than
-/// running an empty MATCH.
-fn fts_query(query: &str) -> Option<String> {
+/// Extract searchable terms from a user's question (same rules as [`fts_query`]).
+///
+/// Shared by event FTS and meeting-table retrieval so both halves of hybrid search speak the
+/// same vocabulary.
+pub fn lexical_terms(query: &str) -> Vec<String> {
     let mut terms: Vec<String> = Vec::new();
     for raw in query.split(|c: char| !c.is_alphanumeric()) {
         if terms.len() >= MAX_FTS_TERMS {
@@ -137,22 +139,26 @@ fn fts_query(query: &str) -> Option<String> {
                 if terms.len() >= MAX_FTS_TERMS {
                     break;
                 }
-                terms.push(quote(&w.iter().collect::<String>()));
+                terms.push(w.iter().collect::<String>());
             }
-        } else if is_stopword(raw) {
-            // Keep going — a stopword contributes no signal but its presence still means the
-            // question had words in it.
-        } else {
-            terms.push(quote(raw));
+        } else if !is_stopword(raw) {
+            terms.push(raw.to_string());
         }
     }
+    terms
+}
+
+/// Returns `None` when nothing usable is left, which the caller treats as "no results" rather than
+/// running an empty MATCH.
+pub(crate) fn fts_query(query: &str) -> Option<String> {
+    let terms = lexical_terms(query);
     if terms.is_empty() {
         // A question made only of function words has nothing to retrieve on. Returning None is
         // honest: matching every document via "the" would fill the result budget with noise and
         // push out anything real.
         return None;
     }
-    Some(terms.join(" OR "))
+    Some(terms.into_iter().map(|t| quote(&t)).collect::<Vec<_>>().join(" OR "))
 }
 
 /// English function words, which match nearly every document and so only crowd out real hits.
@@ -180,6 +186,121 @@ fn is_cjk(c: char) -> bool {
     matches!(c as u32,
         0x3040..=0x309F | 0x30A0..=0x30FF | 0x4E00..=0x9FFF | 0xFF66..=0xFF9F
     )
+}
+
+/// Human label for evidence citations (FR-MEM-23). Raw `source` tags stay in the DB.
+pub fn evidence_source_label(source: &str) -> String {
+    match source {
+        "screen_ocr" => "screen text".to_string(),
+        "capture" => "window".to_string(),
+        "meeting" => "meeting".to_string(),
+        "gmail" => "mail".to_string(),
+        "gcal" => "calendar".to_string(),
+        "slack" => "chat".to_string(),
+        "notion" => "doc".to_string(),
+        "github" => "code".to_string(),
+        "linear" => "issue".to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// True when the question is likely about on-screen content (visual recall path).
+pub fn query_asks_about_screen(query: &str) -> bool {
+    let q = query.to_ascii_lowercase();
+    [
+        "on my screen",
+        "on screen",
+        "what was on",
+        "what did i see",
+        "shown on",
+        "displayed on",
+        "looking at",
+        "on my display",
+    ]
+    .iter()
+    .any(|p| q.contains(p))
+}
+
+/// Exact local calendar boundaries supplied by the OS-facing caller.
+///
+/// Two boundaries are required because a local day can be 23 or 25 hours across DST changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LocalDayBounds {
+    pub yesterday_start_ms: i64,
+    pub today_start_ms: i64,
+}
+
+fn query_has_word(query: &str, word: &str) -> bool {
+    query
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|part| part == word)
+}
+
+/// Local day window implied by the question (`today`, `yesterday`, …). Returns `(from_ms, to_ms)`.
+pub fn query_time_window(
+    query: &str,
+    now_ms: i64,
+    local_days: LocalDayBounds,
+) -> Option<(i64, i64)> {
+    let q = query.to_ascii_lowercase();
+    if q.contains("yesterday") {
+        return Some((local_days.yesterday_start_ms, local_days.today_start_ms));
+    }
+    if q.contains("today") || q.contains("this morning") || q.contains("earlier today") {
+        return Some((local_days.today_start_ms, now_ms));
+    }
+    None
+}
+
+/// True when the agent should pull stored screen frames (visual recall path).
+pub fn query_wants_visual_recall(
+    query: &str,
+    now_ms: i64,
+    local_days: LocalDayBounds,
+) -> bool {
+    if query_asks_about_screen(query) {
+        return true;
+    }
+    query_time_window(query, now_ms, local_days).is_some_and(|_| {
+        let q = query.to_ascii_lowercase();
+        ["screen", "window", "see", "look", "show", "display", "app"]
+            .iter()
+            .any(|word| query_has_word(&q, word))
+    })
+}
+
+/// Default time window for visual-recall frame search.
+pub fn visual_recall_window(
+    query: &str,
+    now_ms: i64,
+    local_days: LocalDayBounds,
+) -> (i64, i64) {
+    if let Some(win) = query_time_window(query, now_ms, local_days) {
+        return win;
+    }
+    (now_ms - crate::screen_frames::RETENTION_MS, now_ms)
+}
+
+/// FTS over one `event_log.source` tag (e.g. `screen_ocr` for visual recall).
+pub fn fts_search_source(
+    conn: &Connection,
+    query: &str,
+    source: &str,
+    limit: usize,
+) -> Result<Vec<i64>, rusqlite::Error> {
+    let Some(expr) = fts_query(query) else {
+        return Ok(Vec::new());
+    };
+    let mut stmt = conn.prepare(
+        "SELECT f.rowid FROM event_fts f
+         INNER JOIN event_log e ON e.id = f.rowid
+         WHERE event_fts MATCH ?1 AND e.source = ?2
+         ORDER BY bm25(event_fts) LIMIT ?3",
+    )?;
+    let ids = stmt
+        .query_map(params![expr, source, limit as i64], |r| r.get::<_, i64>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(ids)
 }
 
 /// Full-text search over the event log, best-match first, capped at `limit`. Returns event
@@ -287,6 +408,200 @@ pub fn hydrate(conn: &Connection, ranked: &[(i64, f64)]) -> Result<Vec<SearchHit
 /// FTS-only search — the lexical half alone. Kept for callers without an embedder.
 pub fn search(conn: &Connection, query: &str, limit: usize) -> Result<Vec<SearchHit>, rusqlite::Error> {
     search_hybrid(conn, query, None, limit)
+}
+
+/// A meeting interval surfaced by query-relevant retrieval over `meeting_recaps` and
+/// `transcript_segments` (FR-MT-22 chat grounding). `session_id` is the provenance key.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MeetingSearchHit {
+    pub session_id: i64,
+    pub ts: i64,
+    pub title: Option<String>,
+    pub content: String,
+    pub score: f64,
+}
+
+/// Lexical search over meeting minutes and transcripts. Query-relevant — not "latest session".
+///
+/// Scores each meeting interval by how many query terms hit its recap fields and transcript lines.
+/// Returns best-first, capped at `limit`. Empty when the query has no usable terms or nothing
+/// matches.
+pub fn search_meetings(
+    conn: &Connection,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<MeetingSearchHit>, rusqlite::Error> {
+    let terms = lexical_terms(query);
+    if terms.is_empty() || limit == 0 {
+        return Ok(Vec::new());
+    }
+
+    use std::collections::HashMap;
+
+    struct Candidate {
+        ts: i64,
+        title: Option<String>,
+        summary: Option<String>,
+        decisions: Option<String>,
+        next_actions: Option<String>,
+        transcript: Vec<String>,
+        score: f64,
+    }
+
+    let mut candidates: HashMap<i64, Candidate> = HashMap::new();
+
+    let mut recap_stmt = conn.prepare(
+        "SELECT mr.session_id, s.started_at, s.title, mr.summary, mr.decisions, mr.next_actions
+         FROM meeting_recaps mr
+         JOIN sessions s ON s.id = mr.session_id
+         WHERE s.kind IN ('meeting', 'call')",
+    )?;
+    let recap_rows = recap_stmt.query_map([], |r| {
+        Ok((
+            r.get::<_, i64>(0)?,
+            r.get::<_, i64>(1)?,
+            r.get::<_, Option<String>>(2)?,
+            r.get::<_, String>(3)?,
+            r.get::<_, String>(4)?,
+            r.get::<_, String>(5)?,
+        ))
+    })?;
+    for row in recap_rows {
+        let (sid, ts, title, summary, decisions, next_actions) = row?;
+        let blob = format!(
+            "{} {} {} {}",
+            title.as_deref().unwrap_or(""),
+            summary,
+            decisions,
+            next_actions
+        );
+        let score = score_terms(&blob, &terms);
+        if score <= 0.0 {
+            continue;
+        }
+        candidates.insert(
+            sid,
+            Candidate {
+                ts,
+                title,
+                summary: Some(summary),
+                decisions: Some(decisions),
+                next_actions: Some(next_actions),
+                transcript: Vec::new(),
+                score,
+            },
+        );
+    }
+
+    let mut tx_stmt = conn.prepare(
+        "SELECT ts.session_id, s.started_at, s.title, ts.text
+         FROM transcript_segments ts
+         JOIN sessions s ON s.id = ts.session_id
+         WHERE s.kind IN ('meeting', 'call')",
+    )?;
+    let tx_rows = tx_stmt.query_map([], |r| {
+        Ok((
+            r.get::<_, i64>(0)?,
+            r.get::<_, i64>(1)?,
+            r.get::<_, Option<String>>(2)?,
+            r.get::<_, String>(3)?,
+        ))
+    })?;
+    for row in tx_rows {
+        let (sid, ts, title, text) = row?;
+        let line_score = score_terms(&text, &terms);
+        if line_score <= 0.0 {
+            continue;
+        }
+        candidates
+            .entry(sid)
+            .and_modify(|c| {
+                c.score += line_score * 0.5;
+                c.transcript.push(text.clone());
+            })
+            .or_insert_with(|| Candidate {
+                ts,
+                title,
+                summary: None,
+                decisions: None,
+                next_actions: None,
+                transcript: vec![text],
+                score: line_score * 0.5,
+            });
+    }
+
+    let mut hits: Vec<MeetingSearchHit> = candidates
+        .into_iter()
+        .map(|(session_id, c)| {
+            let content = format_meeting_content(
+                c.title.as_deref(),
+                c.summary.as_deref(),
+                c.decisions.as_deref(),
+                c.next_actions.as_deref(),
+                &c.transcript,
+            );
+            MeetingSearchHit {
+                session_id,
+                ts: c.ts,
+                title: c.title,
+                content,
+                score: c.score,
+            }
+        })
+        .filter(|h| !h.content.is_empty())
+        .collect();
+
+    hits.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(b.ts.cmp(&a.ts))
+    });
+    hits.truncate(limit);
+    Ok(hits)
+}
+
+fn score_terms(hay: &str, terms: &[String]) -> f64 {
+    let lower = hay.to_ascii_lowercase();
+    terms
+        .iter()
+        .filter(|t| lower.contains(&t.to_ascii_lowercase()))
+        .count() as f64
+}
+
+/// Assemble the searchable text for one meeting interval. Transcript lines are capped so a long
+/// call cannot dominate the prompt budget before `excerpt` runs.
+fn format_meeting_content(
+    title: Option<&str>,
+    summary: Option<&str>,
+    decisions: Option<&str>,
+    next_actions: Option<&str>,
+    transcript: &[String],
+) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(t) = title.filter(|t| !t.is_empty()) {
+        parts.push(format!("Meeting: {t}"));
+    }
+    if let Some(s) = summary.filter(|s| !s.is_empty()) {
+        parts.push(format!("Summary: {s}"));
+    }
+    if let Some(d) = decisions.filter(|d| !d.is_empty() && *d != "[]") {
+        parts.push(format!("Decisions: {d}"));
+    }
+    if let Some(n) = next_actions.filter(|n| !n.is_empty() && *n != "[]") {
+        parts.push(format!("Next actions: {n}"));
+    }
+    if !transcript.is_empty() {
+        let joined = transcript.join(" ");
+        const TX_CAP: usize = 4_000;
+        if joined.chars().count() > TX_CAP {
+            let short: String = joined.chars().take(TX_CAP).collect();
+            parts.push(format!("Transcript (excerpt): {short}…"));
+        } else {
+            parts.push(format!("Transcript: {joined}"));
+        }
+    }
+    parts.join("\n")
 }
 
 /// Hybrid search (FR-MEM-20): fuse the FTS lexical list with the Warm-layer vector list via RRF.
@@ -483,6 +798,144 @@ mod tests {
     }
 
     #[test]
+    fn search_meetings_finds_recap_by_query_term() {
+        use crate::meeting_recaps;
+        use crate::session::{open, NewSession};
+
+        let conn = crate::open_in_memory().unwrap();
+        let sid = open(
+            &conn,
+            &NewSession {
+                kind: "meeting",
+                started_at: 5_000,
+                title: Some("Vendor pricing sync"),
+                app_bundle_id: Some("us.zoom.xos"),
+                calendar_occurrence_id: None,
+                confidence: 0.8,
+                provenance: "{}",
+            },
+        )
+        .unwrap();
+        meeting_recaps::save(
+            &conn,
+            sid,
+            "Discussed renewal pricing and the 12k quote.",
+            r#"["Approve the vendor renewal"]"#,
+            r#"[{"text":"email procurement","owner":"Alice"}]"#,
+            "claude-batch",
+            6_000,
+        )
+        .unwrap();
+
+        let hits = search_meetings(&conn, "vendor pricing", 5).unwrap();
+        assert_eq!(hits.len(), 1, "recap matched by query: {hits:?}");
+        assert!(hits[0].content.contains("12k"));
+        assert_eq!(hits[0].title.as_deref(), Some("Vendor pricing sync"));
+    }
+
+    #[test]
+    fn search_meetings_prefers_the_relevant_session_not_the_latest() {
+        use crate::meeting_recaps;
+        use crate::session::{open, NewSession};
+
+        let conn = crate::open_in_memory().unwrap();
+        let old = open(
+            &conn,
+            &NewSession {
+                kind: "meeting",
+                started_at: 1_000,
+                title: Some("Design review"),
+                app_bundle_id: None,
+                calendar_occurrence_id: None,
+                confidence: 0.8,
+                provenance: "{}",
+            },
+        )
+        .unwrap();
+        let recent = open(
+            &conn,
+            &NewSession {
+                kind: "meeting",
+                started_at: 9_000,
+                title: Some("Daily standup"),
+                app_bundle_id: None,
+                calendar_occurrence_id: None,
+                confidence: 0.8,
+                provenance: "{}",
+            },
+        )
+        .unwrap();
+        meeting_recaps::save(&conn, old, "Roadmap and launch timeline for Phoenix.", "[]", "[]", "m", 2_000)
+            .unwrap();
+        meeting_recaps::save(&conn, recent, "Nothing blocking today.", "[]", "[]", "m", 10_000).unwrap();
+
+        let hits = search_meetings(&conn, "Phoenix launch", 5).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].session_id, old, "older but relevant meeting wins over latest");
+    }
+
+    #[test]
+    fn search_meetings_finds_transcript_when_recap_is_missing() {
+        use crate::session::{open, NewSession};
+        use crate::transcript_segments::{append, NewSegment, Speaker};
+
+        let conn = crate::open_in_memory().unwrap();
+        let sid = open(
+            &conn,
+            &NewSession {
+                kind: "meeting",
+                started_at: 3_000,
+                title: Some("Budget call"),
+                app_bundle_id: None,
+                calendar_occurrence_id: None,
+                confidence: 0.8,
+                provenance: "{}",
+            },
+        )
+        .unwrap();
+        append(
+            &conn,
+            &NewSegment {
+                session_id: sid,
+                ts: 3_100,
+                speaker: Speaker::Other,
+                text: "We agreed to cap infrastructure spend at forty thousand.",
+                confidence: 0.9,
+            },
+            3_200,
+        )
+        .unwrap();
+
+        let hits = search_meetings(&conn, "infrastructure spend", 5).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert!(hits[0].content.contains("forty thousand"));
+    }
+
+    #[test]
+    fn search_meetings_returns_nothing_for_unrelated_queries() {
+        use crate::meeting_recaps;
+        use crate::session::{open, NewSession};
+
+        let conn = crate::open_in_memory().unwrap();
+        let sid = open(
+            &conn,
+            &NewSession {
+                kind: "meeting",
+                started_at: 1_000,
+                title: Some("Weekly sync"),
+                app_bundle_id: None,
+                calendar_occurrence_id: None,
+                confidence: 0.8,
+                provenance: "{}",
+            },
+        )
+        .unwrap();
+        meeting_recaps::save(&conn, sid, "Discussed hiring plans.", "[]", "[]", "m", 2_000).unwrap();
+
+        assert!(search_meetings(&conn, "vendor migration", 5).unwrap().is_empty());
+    }
+
+    #[test]
     fn hybrid_search_finds_semantic_match_fts_would_miss() {
         use crate::embed::{Embedder, MockEmbedder, E5_SMALL_DIM};
         let conn = crate::open_in_memory().unwrap();
@@ -673,5 +1126,77 @@ mod warm_window_tests {
             hits.iter().all(|h| h.ts > now - WARM_WINDOW_MS),
             "the old row must not appear when the window sufficed"
         );
+    }
+
+    #[test]
+    fn screen_query_heuristic_matches_natural_phrases() {
+        let days = LocalDayBounds {
+            yesterday_start_ms: 0,
+            today_start_ms: 86_400_000,
+        };
+        assert!(query_asks_about_screen("what was on my screen yesterday"));
+        assert!(!query_asks_about_screen("vendor pricing email"));
+        assert!(query_wants_visual_recall("what was on my screen yesterday", 0, days));
+        assert!(query_wants_visual_recall(
+            "what did I see on screen today",
+            86_400_000,
+            days
+        ));
+        assert!(!query_wants_visual_recall("what happened today", 86_400_000, days));
+        let now = 86_400_000 * 2;
+        let Some((from, to)) = query_time_window("yesterday", now, days) else {
+            panic!("expected window");
+        };
+        assert_eq!(from, 0);
+        assert_eq!(to, 86_400_000);
+    }
+
+    #[test]
+    fn query_time_window_uses_exact_local_midnights() {
+        // 2020-01-02 01:00 UTC = 2020-01-02 10:00 JST (+9h)
+        let now = 1_577_894_400_000_i64;
+        let days = LocalDayBounds {
+            yesterday_start_ms: 1_577_804_400_000,
+            today_start_ms: 1_577_890_800_000,
+        };
+        let Some((from, to)) = query_time_window("today", now, days) else {
+            panic!("expected window");
+        };
+        assert_eq!(from, days.today_start_ms);
+        assert_eq!(to, now);
+        let Some((from, to)) = query_time_window("yesterday", now, days) else {
+            panic!("expected window");
+        };
+        assert_eq!((from, to), (days.yesterday_start_ms, days.today_start_ms));
+    }
+
+    #[test]
+    fn yesterday_window_can_span_a_dst_transition() {
+        let days = LocalDayBounds {
+            yesterday_start_ms: 1_000,
+            today_start_ms: 1_000 + 23 * 60 * 60 * 1_000,
+        };
+        assert_eq!(
+            query_time_window("yesterday", days.today_start_ms + 1, days),
+            Some((days.yesterday_start_ms, days.today_start_ms))
+        );
+    }
+
+    #[test]
+    fn fts_search_source_scopes_to_one_tag() {
+        let conn = crate::open_in_memory().unwrap();
+        add(&conn, "quarterly roadmap slide text", "ocr1", 1_000);
+        conn.execute(
+            "UPDATE event_log SET source = 'screen_ocr' WHERE content_hash = 'ocr1'",
+            [],
+        )
+        .unwrap();
+        add(&conn, "quarterly roadmap from accessibility", "cap1", 1_100);
+
+        let ocr_ids = fts_search_source(&conn, "roadmap", "screen_ocr", 5).unwrap();
+        assert_eq!(ocr_ids.len(), 1);
+        let cap_ids = fts_search_source(&conn, "roadmap", "capture", 5).unwrap();
+        assert_eq!(cap_ids.len(), 1);
+        assert_ne!(ocr_ids[0], cap_ids[0]);
     }
 }

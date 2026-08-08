@@ -11,22 +11,7 @@ use crate::parse::Invocation;
 
 /// A stable, lower-kebab tool name for output (Debug names are not a stable contract).
 pub fn tool_name(tool: Tool) -> &'static str {
-    match tool {
-        Tool::MemorySearch => "memory.search",
-        Tool::MemoryGetContext => "memory.get_context",
-        Tool::StatePeopleList => "state.people.list",
-        Tool::StatePeopleGet => "state.people.get",
-        Tool::StateProjectsList => "state.projects.list",
-        Tool::StateProjectsGet => "state.projects.get",
-        Tool::StateCommitmentsList => "state.commitments.list",
-        Tool::StateCommitmentsGet => "state.commitments.get",
-        Tool::StateOpenLoopsList => "state.open_loops.list",
-        Tool::StateOpenLoopsGet => "state.open_loops.get",
-        Tool::MemoryAppendNote => "memory.append_note",
-        Tool::StateProposeUpdate => "state.propose_update",
-        Tool::ActionsExecute => "actions.execute",
-        Tool::DeviceOnboardingGet => "device.onboarding.get",
-    }
+    tool.wire_name()
 }
 
 /// A short label for a tool's level.

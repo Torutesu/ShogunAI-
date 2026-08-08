@@ -28,6 +28,7 @@ fn map_route(route: Route) -> DbRoute {
         Route::Mcp => DbRoute::Mcp,
         Route::Composio => DbRoute::Composio,
         Route::Billing => DbRoute::Billing,
+        Route::Asr => DbRoute::Asr,
     }
 }
 

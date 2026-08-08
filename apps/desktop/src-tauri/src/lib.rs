@@ -16,6 +16,8 @@ pub mod axcache;
 mod model_fetch;
 mod capture_source;
 mod connectors;
+#[cfg(all(target_os = "macos", feature = "visual-recall-ocr"))]
+mod screen_ocr;
 pub mod display;
 mod dream;
 mod entitlement;
@@ -26,13 +28,23 @@ mod geometry;
 mod hover;
 mod inline_source;
 mod integrate;
+mod launch_at_login;
 pub mod meeting;
 mod meeting_recap;
+#[cfg(target_os = "macos")]
+mod meeting_translate;
 mod mic;
 mod analytics;
 mod notch_actions;
 mod notch_exec;
 mod onboarding;
+mod visual_recall;
+#[cfg(target_os = "macos")]
+mod voice_lane;
+#[cfg(target_os = "macos")]
+mod voice_session;
+#[cfg(target_os = "macos")]
+mod voice_shortcut;
 
 /// The collectionBehavior the overlay wants, selected at setup (NSPanel mode = canJoinAllSpaces +
 /// fullScreenAuxiliary = 257; plain-window fallback = moveToActiveSpace 274) and re-asserted by
@@ -49,12 +61,18 @@ const OVERLAY_LEVEL: isize = 3;
 /// Window label for the Full UI (spec §D). Shared by the builder and the open path so the
 /// "already open → focus it" check can't drift from the label the window was built with.
 pub(crate) const FULL_UI_LABEL: &str = "fullui";
+/// Window label for the Visual recall browse UI (saved screen timeline).
+pub(crate) const VISUAL_RECALL_LABEL: &str = "visual-recall";
 /// Full UI window size, in LOGICAL points. The minimum is the spec §D floor — below it the
 /// sidebar plus a three-card health row stops fitting.
 const FULL_UI_W: f64 = 1200.0;
 const FULL_UI_H: f64 = 820.0;
 const FULL_UI_MIN_W: f64 = 1040.0;
 const FULL_UI_MIN_H: f64 = 720.0;
+const VISUAL_RECALL_W: f64 = 720.0;
+const VISUAL_RECALL_H: f64 = 640.0;
+const VISUAL_RECALL_MIN_W: f64 = 480.0;
+const VISUAL_RECALL_MIN_H: f64 = 400.0;
 
 /// True while the USER hid the overlay (toggle shortcut / Esc / tray). The auto-residency
 /// machinery (watchers, heal, respawn) must respect this — a deliberately hidden panel stays
@@ -168,6 +186,12 @@ pub fn run() {
     let builder = tauri::Builder::default();
     #[cfg(target_os = "macos")]
     let builder = builder
+        .plugin(
+            tauri_plugin_autostart::Builder::new()
+                // AppleScript registers in System Settings → Login Items (LaunchAgent plist is invisible there).
+                .macos_launcher(tauri_plugin_autostart::MacosLauncher::AppleScript)
+                .build(),
+        )
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
         integrate::mac::painted,
@@ -186,12 +210,28 @@ pub fn run() {
         meeting::mac::meeting_save_note,
         meeting::mac::meeting_recap,
         meeting::mac::meeting_recap_minutes,
+        meeting::mac::meeting_select_kk_configured,
+        meeting::mac::get_deepgram_key_status,
+        meeting::mac::set_deepgram_key,
+        meeting::mac::clear_deepgram_key,
+        meeting::mac::get_meeting_transcript,
         meeting::mac::meeting_exclude_app,
         meeting::mac::meeting_include_app,
         meeting::mac::meeting_drag,
         meeting::mac::meeting_wrapped,
         meeting::mac::get_meeting_settings,
         meeting::mac::set_meeting_enabled,
+        meeting::mac::set_meeting_allow_mic_only,
+        meeting::mac::set_meeting_mode,
+        meeting::mac::set_meeting_langs,
+        meeting::mac::meeting_overlay_dismiss,
+        visual_recall::mac::get_visual_recall_settings,
+        visual_recall::mac::set_visual_recall_enabled,
+        visual_recall::mac::get_visual_recall_status,
+        visual_recall::mac::list_screen_frames,
+        visual_recall::mac::get_screen_frame_image,
+        visual_recall::mac::delete_screen_frame,
+        visual_recall::mac::open_visual_recall,
         notch_actions::mac::notch_actions,
         notch_exec::mac::run_notch_action,
         notch_exec::mac::confirm_notch_action,
@@ -240,6 +280,9 @@ pub fn run() {
         ai_sessions::mac::set_ai_session_import,
         dream::mac::dream_status,
         dream::mac::run_dream_now,
+        dream::mac::select_kk_configured,
+        dream::mac::set_select_kk_key,
+        dream::mac::clear_select_kk_key,
         // First-run onboarding flow (issue #6, superseding the #46 AX guide). Own webview
         // (onboarding.html), opened by setup_macos until the flow has been completed once.
         // State is Rust-owned (invariant 1); the AX check split (silent poll / prompting button)
@@ -253,6 +296,12 @@ pub fn run() {
         exclusions::mac::exclusion_categories,
         analytics::analytics_get_opt_out,
         analytics::analytics_set_opt_out,
+        launch_at_login::mac::get_launch_at_login_settings,
+        launch_at_login::mac::set_launch_at_login_enabled,
+        voice_session::mac::get_voice_settings,
+        voice_session::mac::set_voice_enabled,
+        voice_session::mac::voice_dismiss,
+        voice_session::mac::voice_force_end,
     ]);
 
     // NOTE: the visible surface is a NATIVE NSPanel hosting the webview's content view
@@ -287,6 +336,15 @@ fn setup_macos(app: &tauri::App) {
     eprintln!("========================================================");
     eprintln!("[shell] SHOGUN starting — pid {} — build: plain-window/drag/quit", std::process::id());
     eprintln!("========================================================");
+
+    // One Keychain pass for secrets read during boot (DB, Dream, Composio). BYOK keys load lazily
+    // when the user picks a provider — warming them here caused extra prompts for unused keys.
+    shogun_integrations::keychain_store::warm_startup_keychain(&[
+        "memory-db-key",
+        "select-kk-batch",
+        "composio-api-key",
+        "deepgram-asr",
+    ]);
 
     // PROVEN by [panelstate]: a Regular app's plain window is REFUSED entry to other apps'
     // Spaces — onActiveSpace/drawn stayed false through hundreds of re-orders with both
@@ -334,6 +392,8 @@ fn setup_macos(app: &tauri::App) {
     // settings so the `analytics_enabled()` gate has the persisted value before any send path runs.
     // Default is OFF — a fresh install never sends until the user opts in.
     inline_source::mac::init_privacy_prefs(app.handle());
+
+    launch_at_login::mac::init(app);
 
     // Audit fixes: event-driven Space follow (re-show on every desktop/full-screen switch) and the
     // ground-truth [panelstate] diagnostics stream.
@@ -471,6 +531,15 @@ fn setup_macos(app: &tauri::App) {
         }
     }
 
+    // Meeting notes (§6.16). Independent of the memory DB: settings, the offer overlay, and Meet
+    // detection must work even when capture cannot start — a corrupt DB must not make the toggle
+    // return "not ready" or leave LANE unset (FR-MT-01/02a).
+    meeting::mac::init(&app.handle().clone());
+    meeting::mac::spawn_meeting_driver(app.handle().clone());
+
+    voice_session::mac::init(app.handle());
+    voice_shortcut::install(app.handle());
+
     // WP2.2: start the memory capture source. Open the on-device DB under the app-data dir and
     // poll the focus into memory (exclusion → walk → collapse → extract). AX text only (invariant
     // 2). If the DB can't be opened the daemon simply doesn't capture — the shell keeps running.
@@ -483,9 +552,11 @@ fn setup_macos(app: &tauri::App) {
             // the draft command, so a press never collects context.
             let reply_cache = shogun_core::daemon::ReplyContextCache::new();
             app.manage(reply_cache.clone());
+            let visual_recall = visual_recall::mac::init(app.handle());
             let _ = capture_source::spawn_capture_poller(
                 db.clone(),
                 exclusion_policy,
+                visual_recall,
                 None,
                 Some(reply_cache),
             );
@@ -506,11 +577,6 @@ fn setup_macos(app: &tauri::App) {
             // decides is in shogun-core; this starts the driver that reads idle/power/clock and
             // actually ticks it. Without a Select KK key it runs the local-rule lane — no network.
             let _ = dream::mac::spawn_dream_driver(db.clone());
-
-            // Meeting notes (§6.16). Settings load first — the default is off (FR-MT-01), so a
-            // fresh install starts the driver with a detector that declines to look at anything.
-            meeting::mac::init(&app.handle().clone());
-            meeting::mac::spawn_meeting_driver(app.handle().clone());
             // Say it started. The driver is silent by design once running — the gate skips all
             // day without logging — so without this line "working" and "never spawned" look
             // identical for the twenty-odd hours before the window opens.
@@ -520,28 +586,14 @@ fn setup_macos(app: &tauri::App) {
                 shogun_core::dreamcycle::schedule::DEFAULT_WINDOW_END_HOUR,
             );
 
-            // First-layer connectors (§6.9). Build the Composio-backed runtime and start the
-            // 15-min read-sync poller. Missing Composio creds are not fatal — the app runs
-            // without connectors until the user configures them in Settings.
-            // Draft-stop is seeded from the persisted ComposioPolicy (composio.json) — the single
-            // source the settings/onboarding toggle and the L3 send gate read. Absent/unreadable
-            // policy defaults to draft_stop = true (invariant 4 fail-safe, see ComposioPolicy).
-            match connectors::mac::build_runtime(
-                app.handle(),
-                approvals::mac::load_composio_policy(app.handle()).draft_stop,
-            ) {
-                Ok(rt) => {
-                    let shared = std::sync::Arc::new(std::sync::Mutex::new(rt));
-                    connectors::mac::spawn_sync_poller(shared.clone(), db.clone(), app.handle().clone());
-                    app.manage(connectors::mac::ConnectorState(shared));
-                    // The shared L3 approval queue (producers enqueue sends; the UI confirms them).
-                    app.manage(approvals::mac::ApprovalQueueState::default());
-                    eprintln!("[spike] connector runtime started (read-sync poller live)");
-                }
-                Err(e) => eprintln!("[spike] connectors not started: {e}"),
-            }
+            install_connectors(app.handle(), Some(db));
         }
-        Err(e) => eprintln!("[spike] memory DB unavailable — capture source not started: {e}"),
+        Err(e) => {
+            eprintln!("[spike] memory DB unavailable — capture source not started: {e}");
+            // ConnectorState + ApprovalQueueState must exist before any settings command runs.
+            // The read-sync poller needs a DB; listing/connecting still works without one.
+            install_connectors(app.handle(), None);
+        }
     }
 
     // --- 匿名プロダクト分析（PostHog, #61）---
@@ -970,6 +1022,50 @@ fn center_on_cursor_screen(win: &tauri::WebviewWindow) {
     // drifting off-screen to the left.
     let x = (mp.x + (ms.width - FULL_UI_W) / 2.0).max(mp.x);
     let y = (mp.y + (ms.height - FULL_UI_H) / 2.0).max(mp.y);
+    let _ = win.set_position(tauri::LogicalPosition::new(x, y));
+}
+
+/// Visual recall browse window — timeline scrubber, image preview, OCR text, delete.
+///
+/// Ordinary window like Full UI: user sits and browses saved screens. Already open → focus it.
+pub(crate) fn build_visual_recall_window(handle: &tauri::AppHandle) {
+    use tauri::Manager;
+    if let Some(win) = handle.get_webview_window(VISUAL_RECALL_LABEL) {
+        let _ = win.unminimize();
+        let _ = win.show();
+        let _ = win.set_focus();
+        eprintln!("[shell] visual recall window already open — focused");
+        return;
+    }
+    let builder = tauri::WebviewWindowBuilder::new(
+        handle,
+        VISUAL_RECALL_LABEL,
+        tauri::WebviewUrl::App("visual-recall.html".into()),
+    )
+    .title("SHOGUN — Visual recall")
+    .resizable(true)
+    .min_inner_size(VISUAL_RECALL_MIN_W, VISUAL_RECALL_MIN_H)
+    .inner_size(VISUAL_RECALL_W, VISUAL_RECALL_H)
+    .transparent(true)
+    .title_bar_style(tauri::TitleBarStyle::Overlay)
+    .focused(true);
+    match builder.build() {
+        Ok(win) => {
+            center_visual_recall_on_cursor_screen(&win);
+            eprintln!("[shell] visual recall window built");
+        }
+        Err(e) => eprintln!("[shell] visual recall window build failed: {e}"),
+    }
+}
+
+fn center_visual_recall_on_cursor_screen(win: &tauri::WebviewWindow) {
+    let Ok(cursor) = win.cursor_position() else { return };
+    let Ok(Some(mon)) = win.monitor_from_point(cursor.x, cursor.y) else { return };
+    let scale = mon.scale_factor();
+    let mp = mon.position().to_logical::<f64>(scale);
+    let ms = mon.size().to_logical::<f64>(scale);
+    let x = (mp.x + (ms.width - VISUAL_RECALL_W) / 2.0).max(mp.x);
+    let y = (mp.y + (ms.height - VISUAL_RECALL_H) / 2.0).max(mp.y);
     let _ = win.set_position(tauri::LogicalPosition::new(x, y));
 }
 
@@ -1728,12 +1824,13 @@ mod shortcuts {
     // bare modifier can't be a global shortcut, and the previous ⌃⌥G "alternative" only confused
     // (it showed as rerebindable in Settings but the real trigger was the ⌥ tap). Summon and quit
     // stay user-rebindable.
-    const ACTIONS: [&str; 2] = ["summon", "quit"];
+    const ACTIONS: [&str; 3] = ["summon", "quit", "voice"];
 
     fn defaults() -> Bindings {
         let mut m = HashMap::new();
         m.insert("summon".into(), "Control+Alt+KeyN".into());
         m.insert("quit".into(), "Control+Alt+KeyQ".into());
+        m.insert("voice".into(), "Control+Alt+KeyV".into());
         m
     }
 
@@ -1754,7 +1851,8 @@ mod shortcuts {
     /// The current on-disk version. v2 = the (short-lived) ⌥G draft default; v3 = draft back to
     /// ⌃⌥G; v4 = draft removed entirely (the ⌥ tap is the sole trigger). A v4 load drops any
     /// persisted "draft" binding from disk (ACTIONS no longer contains it, so it's ignored anyway).
-    const SHORTCUTS_VERSION: u32 = 4;
+    /// v5 = voice hold shortcut (⌃⌥V default).
+    const SHORTCUTS_VERSION: u32 = 5;
 
     /// Load persisted bindings, filling any missing action with its default.
     pub fn load(app: &tauri::AppHandle) -> Bindings {
@@ -1809,9 +1907,23 @@ mod shortcuts {
         }
     }
 
+    /// Read one persisted binding (used by hold-to-talk monitors).
+    pub(crate) fn binding(app: &tauri::AppHandle, action: &str) -> Option<String> {
+        app.try_state::<Store>()?
+            .0
+            .lock()
+            .ok()?
+            .get(action)
+            .cloned()
+    }
+
     /// Register `combo` for `action`. The combo string parses via the plugin (invalid combos and
     /// already-taken combos surface as Err — nothing changes in that case).
     pub fn register_action(app: &tauri::AppHandle, action: &str, combo: &str) -> Result<(), String> {
+        if action == "voice" {
+            // Hold-to-talk is wired through NSEvent monitors, not the global-shortcut plugin.
+            return Ok(());
+        }
         let act = action.to_string();
         app.global_shortcut()
             .on_shortcut(combo, move |app, _sc, event| {
@@ -1861,10 +1973,12 @@ mod shortcuts {
         if old.as_deref() == Some(combo.as_str()) {
             return Ok(());
         }
-        register_action(&app, &action, &combo)?;
-        if let Some(old) = old {
-            if let Err(e) = app.global_shortcut().unregister(old.as_str()) {
-                eprintln!("[shell] old shortcut unregister failed ({old}): {e}");
+        if action != "voice" {
+            register_action(&app, &action, &combo)?;
+            if let Some(old) = old {
+                if let Err(e) = app.global_shortcut().unregister(old.as_str()) {
+                    eprintln!("[shell] old shortcut unregister failed ({old}): {e}");
+                }
             }
         }
         if let Ok(mut g) = store.0.lock() {
@@ -2046,36 +2160,134 @@ fn redock_to_castle(handle: &tauri::AppHandle) {
 #[cfg(target_os = "macos")]
 const DB_KEY_ACCOUNT: &str = "memory-db-key";
 
+/// Register connector runtime state for Tauri commands. Always called — `connectors_list` and
+/// meeting settings must not fail with "state not managed" when the memory DB is down.
+#[cfg(target_os = "macos")]
+fn install_connectors(app: &tauri::AppHandle, db: Option<shogun_core::daemon::Db>) {
+    use tauri::Manager;
+    // Draft-stop is seeded from the persisted ComposioPolicy (composio.json) — the single source
+    // the settings/onboarding toggle and the L3 send gate read. Absent/unreadable policy defaults
+    // to draft_stop = true (invariant 4 fail-safe, see ComposioPolicy).
+    match connectors::mac::build_runtime(app, approvals::mac::load_composio_policy(app).draft_stop) {
+        Ok(rt) => {
+            let shared = std::sync::Arc::new(std::sync::Mutex::new(rt));
+            if let Some(db) = db {
+                connectors::mac::spawn_sync_poller(shared.clone(), db, app.clone());
+                eprintln!("[spike] connector runtime started (read-sync poller live)");
+            } else {
+                eprintln!("[spike] connector runtime started (read-sync poller skipped — no DB)");
+            }
+            app.manage(connectors::mac::ConnectorState(shared));
+            app.manage(approvals::mac::ApprovalQueueState::default());
+        }
+        Err(e) => eprintln!("[spike] connectors not started: {e}"),
+    }
+}
+
+/// Whether an open failure looks like a corrupt or wrong-key encrypted file rather than a
+/// transient I/O error.
+#[cfg(target_os = "macos")]
+fn is_unreadable_db_error(msg: &str) -> bool {
+    let lower = msg.to_ascii_lowercase();
+    lower.contains("not a database")
+        || lower.contains("file is encrypted or is not a database")
+        || lower.contains("hmac check failed")
+        || lower.contains("malformed database schema")
+}
+
+/// Open the encrypted DB, backing up and recreating when the on-disk file cannot be read.
+#[cfg(target_os = "macos")]
+fn open_encrypted_db(
+    path: &std::path::Path,
+    key: &shogun_memory::DbKey,
+    clock: shogun_core::daemon::Clock,
+    key_just_minted: bool,
+) -> Result<shogun_core::daemon::Db, String> {
+    match shogun_core::daemon::Db::open_encrypted(path, key, clock.clone()) {
+        Ok(db) => Ok(db),
+        Err(e) => {
+            let msg = e.to_string();
+            if path.exists() && is_unreadable_db_error(&msg) && !key_just_minted {
+                let stamp = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                let backup = path.with_file_name(format!("memory.db.unreadable-{stamp}"));
+                if std::fs::rename(path, &backup).is_ok() {
+                    eprintln!(
+                        "[spike] unreadable memory DB moved to {} — creating a fresh store",
+                        backup.display()
+                    );
+                    return shogun_core::daemon::Db::open_encrypted(path, key, clock)
+                        .map_err(|e| e.to_string());
+                }
+            }
+            Err(msg)
+        }
+    }
+}
+
 /// Read the database key from the Keychain, generating and storing one on first run.
 ///
 /// The key lives in the Keychain and nowhere else (invariant 7) — never a file, never a log, and
 /// it is not derived from anything guessable. If the Keychain hands back something malformed we
 /// refuse rather than silently minting a new key, because a new key would make the existing
 /// memory permanently unreadable.
+/// Whether the DB encryption key was freshly minted this launch (vs loaded from Keychain).
 #[cfg(target_os = "macos")]
-fn db_key() -> Result<shogun_memory::DbKey, String> {
-    const SERVICE: &str = "com.selectkk.shogun";
-    match security_framework::passwords::get_generic_password(SERVICE, DB_KEY_ACCOUNT) {
+struct DbKeyLoad {
+    key: shogun_memory::DbKey,
+    minted: bool,
+}
+
+/// `errSecItemNotFound` — the only Keychain error where minting a new key is safe.
+#[cfg(target_os = "macos")]
+const ERR_SEC_ITEM_NOT_FOUND: i32 = -25_300;
+
+#[cfg(target_os = "macos")]
+fn db_key() -> Result<DbKeyLoad, String> {
+    use shogun_integrations::keychain_store;
+    match keychain_store::get_generic_secret(DB_KEY_ACCOUNT) {
         Ok(bytes) => {
             let hex = String::from_utf8(bytes).map_err(|_| "db key is not valid text".to_string())?;
-            shogun_memory::DbKey::from_hex(&hex)
-                .ok_or_else(|| "db key in the Keychain is malformed — refusing to replace it".into())
+            let key = shogun_memory::DbKey::from_hex(&hex)
+                .ok_or_else(|| "db key in the Keychain is malformed — refusing to replace it".to_string())?;
+            Ok(DbKeyLoad { key, minted: false })
         }
-        Err(_) => {
+        Err(e) if e.code() == ERR_SEC_ITEM_NOT_FOUND => {
             // First run: mint a key from the OS CSPRNG.
             let mut raw = [0u8; 32];
             getrandom::getrandom(&mut raw).map_err(|e| format!("key generation failed: {e}"))?;
             let key = shogun_memory::DbKey::new(raw);
-            security_framework::passwords::set_generic_password(
-                SERVICE,
-                DB_KEY_ACCOUNT,
-                key.to_hex().as_bytes(),
-            )
-            .map_err(|e| format!("could not store the db key: {e}"))?;
+            keychain_store::set_generic_secret(DB_KEY_ACCOUNT, key.to_hex().as_bytes())
+                .map_err(|e| format!("could not store the db key: {e}"))?;
             eprintln!("[spike] memory DB key created and stored in the Keychain");
-            Ok(key)
+            Ok(DbKeyLoad { key, minted: true })
+        }
+        Err(e) => Err(format!(
+            "could not read the memory DB key from the Keychain (status {}): unlock Keychain access and relaunch",
+            e.code()
+        )),
+    }
+}
+
+/// Resolve the memory store directory (co-locates `memory.db` and `visual_recall.json`).
+#[cfg(target_os = "macos")]
+pub(crate) fn memory_data_dir(base: std::path::PathBuf) -> std::path::PathBuf {
+    let mut dir = base;
+    if let Ok(suffix) = std::env::var("SHOGUN_DATA_SUFFIX") {
+        let suffix = suffix.trim();
+        if !suffix.is_empty() {
+            let safe: String = suffix
+                .chars()
+                .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
+                .collect();
+            if !safe.is_empty() {
+                dir = dir.join(format!("dev-{safe}"));
+            }
         }
     }
+    dir
 }
 
 /// Open (creating if needed) the on-device memory DB under the app-data dir, with a real
@@ -2087,20 +2299,16 @@ fn db_key() -> Result<shogun_memory::DbKey, String> {
 #[cfg(target_os = "macos")]
 fn memory_db(app: &tauri::App) -> Result<shogun_core::daemon::Db, String> {
     use tauri::Manager;
-    let mut dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    // Every checkout of this app shares one bundle identifier, so every branch would otherwise
-    // share one memory.db. A branch that adds a migration then leaves the file at a schema the
-    // other branch's binary refuses to open — correctly, since it can't know what a future
-    // migration did. `SHOGUN_DATA_SUFFIX` gives a worktree its own store so branches stop
-    // colliding; unset (the shipped app) it changes nothing.
+    let base = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let dir = memory_data_dir(base);
     if let Ok(suffix) = std::env::var("SHOGUN_DATA_SUFFIX") {
         let suffix = suffix.trim();
         if !suffix.is_empty() {
-            // Keep it a single path segment — this comes from a dev's shell, but a stray slash
-            // would silently write outside the app-data dir.
-            let safe: String = suffix.chars().filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_').collect();
+            let safe: String = suffix
+                .chars()
+                .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_')
+                .collect();
             if !safe.is_empty() {
-                dir = dir.join(format!("dev-{safe}"));
                 eprintln!("[spike] SHOGUN_DATA_SUFFIX set — using an isolated store: {safe}");
             }
         }
@@ -2108,7 +2316,7 @@ fn memory_db(app: &tauri::App) -> Result<shogun_core::daemon::Db, String> {
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let path = dir.join("memory.db");
     eprintln!("[spike] memory DB: {}", path.display());
-    let key = db_key()?;
+    let DbKeyLoad { key, minted: key_minted } = db_key()?;
 
     if shogun_memory::is_plaintext_db(&path) {
         eprintln!("[spike] existing plaintext memory DB found — encrypting it");
@@ -2132,13 +2340,13 @@ fn memory_db(app: &tauri::App) -> Result<shogun_core::daemon::Db, String> {
         }
     }
 
-    let clock = std::sync::Arc::new(|| {
+    let clock: shogun_core::daemon::Clock = std::sync::Arc::new(|| {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as i64)
             .unwrap_or(0)
     });
-    let db = shogun_core::daemon::Db::open_encrypted(path, &key, clock).map_err(|e| e.to_string())?;
+    let db = open_encrypted_db(&path, &key, clock, key_minted)?;
     ensure_ort_dylib(app);
     let db = attach_embedder(db, embedding_model_paths(app));
     // 圧縮は段階展開: 既定 off。ヘビーユーザー/AB は SHOGUN_COMPRESSION=1 で有効化（設定 UI は次周）。

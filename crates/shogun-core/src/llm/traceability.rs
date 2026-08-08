@@ -23,6 +23,8 @@ pub enum Route {
     Composio,
     /// Billing / licensing calls.
     Billing,
+    /// Third-party meeting ASR (Deepgram Nova-3; CLAUDE.md 2026-08-05 exception).
+    Asr,
 }
 
 impl Route {
@@ -34,6 +36,7 @@ impl Route {
             Route::Mcp => "mcp",
             Route::Composio => "composio",
             Route::Billing => "billing",
+            Route::Asr => "asr",
         }
     }
 }
@@ -125,6 +128,7 @@ mod tests {
         assert_eq!(Route::Mcp.as_db_str(), "mcp");
         assert_eq!(Route::Composio.as_db_str(), "composio");
         assert_eq!(Route::Billing.as_db_str(), "billing");
+        assert_eq!(Route::Asr.as_db_str(), "asr");
     }
 
     #[test]

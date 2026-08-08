@@ -25,16 +25,31 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
+fn visual_recall_settings_path(db_path: &str) -> Option<std::path::PathBuf> {
+    std::env::var("SHOGUN_VISUAL_RECALL_SETTINGS")
+        .ok()
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::path::Path::new(db_path)
+                .parent()
+                .map(|p| p.join("visual_recall.json"))
+        })
+}
+
 fn main() -> std::io::Result<()> {
     let db_path = std::env::var("SHOGUN_DB_PATH").unwrap_or_else(|_| "./shogun.db".to_string());
     let clock: shogun_core::daemon::Clock = Arc::new(now_ms);
-    let db = Db::open(&db_path, clock)
+    let db = Db::open_at_path(&db_path, clock)
         .map_err(|e| std::io::Error::other(format!("open db {db_path}: {e}")))?;
+    let mut backend = DbBackend::new(db);
+    if let Some(path) = visual_recall_settings_path(&db_path) {
+        backend = backend.with_visual_recall_settings_path(path);
+    }
     // Plan gate (issue #97): trial stamp from the desktop app's onboarding.json
     // (SHOGUN_ONBOARDING_JSON overrides the path); billing is the pre-Stripe stub. Consulted on
     // every tools/call, so trial expiry takes effect mid-session.
     let plan_source = shogun_mcp::plan_source::FilePlanSource::from_env();
-    let server = McpServer::new(DbBackend::new(db), now_ms, move || {
+    let server = McpServer::new(backend, now_ms, move || {
         plan_source.resolve(u64::try_from(now_ms()).unwrap_or(0))
     });
 

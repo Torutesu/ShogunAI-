@@ -4,8 +4,9 @@
 //!
 //! The table (V1__init.sql) stores **only** the chunk's byte length + an xxh64 digest, never the
 //! sent text (privacy rule / G8). There is no text column, so a body cannot be persisted here even
-//! by mistake. `route` is constrained by a CHECK to the five known routes; [`Route`] mirrors that
-//! set exactly, so an insert always produces a valid value and a read always parses back.
+//! by mistake. `route` is constrained by a CHECK to the known routes; [`Route`] mirrors that
+//! set (V1 + additive migrations), so an insert always produces a valid value and a read always
+//! parses back.
 //!
 //! The LLM layer's `TraceRecord` (shogun-core) maps 1:1 onto [`TraceRow`]; the daemon bridges the
 //! two when it wires the sink. Keeping the enum here (rather than depending on shogun-core) keeps
@@ -21,6 +22,8 @@ pub enum Route {
     Mcp,
     Composio,
     Billing,
+    /// Third-party meeting ASR (Deepgram; V13). Always disclosed.
+    Asr,
 }
 
 impl Route {
@@ -32,6 +35,7 @@ impl Route {
             Route::Mcp => "mcp",
             Route::Composio => "composio",
             Route::Billing => "billing",
+            Route::Asr => "asr",
         }
     }
 
@@ -44,13 +48,14 @@ impl Route {
             "mcp" => Route::Mcp,
             "composio" => Route::Composio,
             "billing" => Route::Billing,
+            "asr" => Route::Asr,
             _ => return None,
         })
     }
 
-    /// Composio is the only third-party route (FR-C2-04); used to default the badge.
+    /// Third-party routes that must surface a disclosure badge (FR-C2-04 + meeting ASR).
     pub fn is_third_party(self) -> bool {
-        matches!(self, Route::Composio)
+        matches!(self, Route::Composio | Route::Asr)
     }
 }
 
@@ -254,7 +259,14 @@ mod tests {
 
     #[test]
     fn route_string_roundtrips() {
-        for r in [Route::BatchApi, Route::MessagesApi, Route::Mcp, Route::Composio, Route::Billing] {
+        for r in [
+            Route::BatchApi,
+            Route::MessagesApi,
+            Route::Mcp,
+            Route::Composio,
+            Route::Billing,
+            Route::Asr,
+        ] {
             assert_eq!(Route::parse(r.as_str()), Some(r));
         }
         assert_eq!(Route::parse("nope"), None);

@@ -16,14 +16,37 @@
 
 use std::collections::BTreeSet;
 
-/// Which on-device ASR model to use. `Small` (bundled default) or `Turbo` (large-v3-turbo,
-/// opt-in high accuracy, fetched on first use). Defaults to Small (§5).
+/// Which ASR engine transcribes meetings. Default is Deepgram (company-paid, 2026-08-05).
+/// Whisper remains an offline/dev fallback (`SHOGUN_ASR_BACKEND=whisper` or settings).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum AsrBackend {
+    #[default]
+    Deepgram,
+    Whisper,
+}
+
+/// Which on-device ASR model to use when [`AsrBackend::Whisper`]. `Small` (bundled) or `Turbo`
+/// (large-v3-turbo, opt-in, fetched on first use). Defaults to Small (§5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum AsrModel {
     #[default]
     Small,
     Turbo,
+}
+
+/// How the in-meeting overlay presents speech while recording (issue #93).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum MeetingMode {
+    /// Live speech→text only; no translation.
+    #[default]
+    Transcription,
+    /// Source (auto-detect or fixed) → target language subtitles.
+    OneWay,
+    /// Bidirectional: Me → other's language, Other → my language.
+    TwoWay,
 }
 
 /// Which language the meeting is transcribed in. The policy is English-primary, Japanese
@@ -58,6 +81,15 @@ impl MeetingLanguage {
             MeetingLanguage::Auto => None,
         }
     }
+
+    /// Deepgram `language` query value. Auto → multilingual Nova-3.
+    pub fn deepgram_code(self) -> &'static str {
+        match self {
+            MeetingLanguage::English => "en",
+            MeetingLanguage::Japanese => "ja",
+            MeetingLanguage::Auto => "multi",
+        }
+    }
 }
 
 /// Meeting-notes settings as persisted.
@@ -75,13 +107,44 @@ pub struct Settings {
     /// Tier (b), the calendar half: occurrence external ids that never offer — the recurring 1:1
     /// a user never wants noted (FR-MT-02).
     pub excluded_occurrences: BTreeSet<String>,
-    /// Which on-device ASR model transcribes the meeting. Defaults to Small (§5).
+    /// Which ASR engine. Defaults to Deepgram (company-paid Nova-3).
+    #[serde(default)]
+    pub asr_backend: AsrBackend,
+    /// Whisper model when `asr_backend == Whisper`. Defaults to Small.
     #[serde(default)]
     pub asr_model: AsrModel,
     /// Which language the meeting is transcribed in. Defaults to English (English-primary policy,
     /// `docs/context-layer-audit-and-plan.md` §8), *not* Auto.
     #[serde(default)]
     pub language: MeetingLanguage,
+    /// When `false` (shipped default), sustained microphone use alone never opens an offer —
+    /// a Meet URL, Zoom, or meeting controls must corroborate. Opt-in for Discord-style calls
+    /// in apps SHOGUN does not recognise (FR-MT-04).
+    #[serde(default)]
+    pub allow_mic_only_detect: bool,
+    /// In-meeting overlay mode while recording (issue #93).
+    #[serde(default)]
+    pub meeting_mode: MeetingMode,
+    /// One-way source language (auto-detect or fixed). Also drives ASR when not `Auto`.
+    #[serde(default)]
+    pub source_lang: MeetingLanguage,
+    /// One-way target language (English or Japanese for v1).
+    #[serde(default = "default_target_lang")]
+    pub target_lang: MeetingLanguage,
+    /// Two-way: the language *I* speak (and what Other's speech is translated into).
+    #[serde(default)]
+    pub my_lang: MeetingLanguage,
+    /// Two-way: the language the *other* speaks (and what My speech is translated into).
+    #[serde(default = "default_other_lang")]
+    pub other_lang: MeetingLanguage,
+}
+
+fn default_target_lang() -> MeetingLanguage {
+    MeetingLanguage::Japanese
+}
+
+fn default_other_lang() -> MeetingLanguage {
+    MeetingLanguage::Japanese
 }
 
 // Written out rather than derived, though it is derivable. `#[derive(Default)]` would leave the
@@ -97,8 +160,48 @@ impl Default for Settings {
             enabled: false,
             excluded_apps: BTreeSet::new(),
             excluded_occurrences: BTreeSet::new(),
+            asr_backend: AsrBackend::Deepgram,
             asr_model: AsrModel::Small,
             language: MeetingLanguage::English,
+            allow_mic_only_detect: false,
+            meeting_mode: MeetingMode::Transcription,
+            source_lang: MeetingLanguage::Auto,
+            target_lang: MeetingLanguage::Japanese,
+            my_lang: MeetingLanguage::English,
+            other_lang: MeetingLanguage::Japanese,
+        }
+    }
+}
+
+impl Settings {
+    /// ASR language for the audio lane: one-way `source_lang` when not Auto, else `language`.
+    pub fn asr_language(&self) -> MeetingLanguage {
+        if self.meeting_mode == MeetingMode::OneWay && self.source_lang != MeetingLanguage::Auto {
+            self.source_lang
+        } else {
+            self.language
+        }
+    }
+
+    /// Target language for a finished line, if translation mode is active. `speaker_me` is true for
+    /// mic (`Me`) and false for system tap (`Other`).
+    pub fn translation_target(&self, speaker_me: bool) -> Option<MeetingLanguage> {
+        match self.meeting_mode {
+            MeetingMode::Transcription => None,
+            MeetingMode::OneWay => {
+                if self.target_lang == MeetingLanguage::Auto {
+                    None
+                } else {
+                    Some(self.target_lang)
+                }
+            }
+            MeetingMode::TwoWay => {
+                if speaker_me {
+                    Some(self.other_lang)
+                } else {
+                    Some(self.my_lang)
+                }
+            }
         }
     }
 }
@@ -151,6 +254,11 @@ mod tests {
         // The promise of FR-MT-01, asserted rather than trusted: a build that flips this default
         // fails here instead of in a user's meeting.
         assert!(!Settings::default().enabled);
+    }
+
+    #[test]
+    fn mic_only_detect_ships_off() {
+        assert!(!Settings::default().allow_mic_only_detect);
     }
 
     #[test]
@@ -242,6 +350,12 @@ mod tests {
 
         assert!(!restored.enabled);
         assert_eq!(restored.excluded_apps.len(), 1);
+    }
+
+    #[test]
+    fn asr_backend_defaults_to_deepgram() {
+        assert_eq!(AsrBackend::default(), AsrBackend::Deepgram);
+        assert_eq!(Settings::default().asr_backend, AsrBackend::Deepgram);
     }
 
     #[test]

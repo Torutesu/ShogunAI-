@@ -177,6 +177,8 @@ pub enum LlmError {
     NotConfigured,
     #[error("transport: {0}")]
     Transport(#[from] transport::TransportError),
+    #[error("rate limited (HTTP {0}){}", if .1.is_empty() { String::new() } else { format!(": {}", .1) })]
+    RateLimited(u16, String),
     #[error("malformed response: {0}")]
     Parse(String),
 }
@@ -187,6 +189,7 @@ pub enum LlmError {
 pub fn status_error(step: &str, status: u16, body: &str) -> LlmError {
     match status {
         401 | 403 => LlmError::Unauthorized(status, redact_secrets(&first_line(body))),
+        429 => LlmError::RateLimited(status, redact_secrets(&first_line(body))),
         _ => LlmError::Provider(format!("{step} HTTP {status}")),
     }
 }

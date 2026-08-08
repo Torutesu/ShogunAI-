@@ -2,12 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
-
-// Report webview-side failures to the terminal via Rust — a silent catch made real errors
-// (missing window-API permissions) look like "the button does nothing".
-function uiLog(msg: string): void {
-  if (IN_TAURI) void invoke("ui_log", { msg }).catch(() => undefined);
-}
+import { uiLog } from "./uiLog";
 
 // Explicit window drag on mouse-down. data-tauri-drag-region proved unreliable on device, so call
 // startDragging() directly. Ignore drags that start on an interactive control (button/input).
@@ -75,6 +70,12 @@ interface MeetingView {
   countdown_ms: number;
 }
 
+/** mm:ss. Tabular figures in CSS keep the row from reflowing as the seconds tick. */
+function clock(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+}
+
 interface Status {
   app: string;
   commitments: number;
@@ -96,6 +97,39 @@ interface InlineStatus {
   phase: "drafting" | "inserted" | "no_context" | "no_key" | "key_rejected" | "failed";
   chars: number;
   detail: string | null;
+}
+
+/** Hold-to-talk voice dialogue (#44). Rust owns lifecycle; notch expands on `voice_state`. */
+interface VoiceView {
+  phase: "idle" | "recording" | "processing" | "response" | "error";
+  transcript: string;
+  response: string;
+  error: string;
+  level: number;
+}
+
+interface LevelEvent {
+  rms: number;
+}
+
+const VOICE_W_RECORD = 360;
+const VOICE_H_RECORD = 100;
+const VOICE_W_PROCESS = 400;
+const VOICE_H_PROCESS = 140;
+const VOICE_W_RESPONSE = 480;
+const VOICE_H_RESPONSE = 280;
+
+function voicePanelSize(phase: VoiceView["phase"]): Size {
+  switch (phase) {
+    case "recording":
+      return { w: VOICE_W_RECORD, h: VOICE_H_RECORD };
+    case "processing":
+      return { w: VOICE_W_PROCESS, h: VOICE_H_PROCESS };
+    case "response":
+      return { w: VOICE_W_RESPONSE, h: VOICE_H_RESPONSE };
+    default:
+      return { w: W, h: H_OPEN };
+  }
 }
 
 interface StateItem {
@@ -249,6 +283,18 @@ export function App(): JSX.Element {
   /// anything above it is history rather than part of what you're doing now.
   const historyMark = useRef<number | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [voiceToast, setVoiceToast] = useState<string | null>(null);
+  const [voice, setVoice] = useState<VoiceView>({
+    phase: "idle",
+    transcript: "",
+    response: "",
+    error: "",
+    level: 0,
+  });
+  const voicePeak = useRef(0);
+  /** Last `voice_level` timestamp — failsafe ends stuck recording after release + quiet. */
+  const lastVoiceLevelAt = useRef(0);
+  const voiceReleaseWatch = useRef<number | null>(null);
 
   // Open-view sizes are user-resizable (corner grip) and persist across the Rust-driven respawns.
   // Chat and Settings keep INDEPENDENT sizes — chat wants short+wide, Settings wants tall enough
@@ -364,6 +410,85 @@ export function App(): JSX.Element {
         sizeForViewRef.current({ open: true });
       }),
     );
+    offs.push(
+      listen<{ phase: VoiceView["phase"]; transcript?: string | null; response?: string | null }>(
+        "voice_state",
+        (e) => {
+          const p = e.payload.phase;
+          setVoice((cur) => ({
+            ...cur,
+            phase: p,
+            transcript: e.payload.transcript ?? (p === "idle" ? "" : cur.transcript),
+            response: e.payload.response ?? (p === "idle" ? "" : cur.response),
+            error: p === "error" ? e.payload.response ?? cur.error : p === "idle" ? "" : cur.error,
+            level: p === "recording" ? cur.level : 0,
+          }));
+          if (p === "recording") voicePeak.current = 0;
+          if (p === "recording" || p === "processing") {
+            setOpen(true);
+            setShowSettings(false);
+            const sz = voicePanelSize(p);
+            void applyPanelSize(sz.w, sz.h);
+          } else if (p === "idle") {
+            // Dictation done — always collapse; do not leave recording chrome stuck open.
+            setOpen(false);
+            sizeForViewRef.current({ open: false });
+          } else if (p === "error" && !pinnedRef.current) {
+            setOpen(false);
+            sizeForViewRef.current({ open: false });
+          } else if (p === "response") {
+            setOpen(true);
+            setShowSettings(false);
+            const sz = voicePanelSize(p);
+            void applyPanelSize(sz.w, sz.h);
+          }
+        },
+      ),
+    );
+    offs.push(
+      listen<LevelEvent>("voice_level", (e) => {
+        const rms = e.payload.rms;
+        voicePeak.current = Math.max(voicePeak.current * 0.85, rms);
+        const norm = voicePeak.current > 0 ? Math.min(1, rms / voicePeak.current) : 0;
+        lastVoiceLevelAt.current = performance.now();
+        setVoice((cur) => (cur.phase === "recording" ? { ...cur, level: norm } : cur));
+      }),
+    );
+    offs.push(
+      listen<{ message: string }>("voice_toast", (e) => {
+        setVoiceToast(e.payload.message);
+        window.setTimeout(() => setVoiceToast(null), 2200);
+      }),
+    );
+    // Release signal from Rust: if UI still shows recording after 500ms with no levels, force end.
+    offs.push(
+      listen("voice_hold_released", () => {
+        if (voiceReleaseWatch.current != null) {
+          window.clearInterval(voiceReleaseWatch.current);
+          voiceReleaseWatch.current = null;
+        }
+        const started = performance.now();
+        voiceReleaseWatch.current = window.setInterval(() => {
+          const phase = voiceRef.current.phase;
+          if (phase !== "recording") {
+            if (voiceReleaseWatch.current != null) {
+              window.clearInterval(voiceReleaseWatch.current);
+              voiceReleaseWatch.current = null;
+            }
+            return;
+          }
+          const quietMs = performance.now() - lastVoiceLevelAt.current;
+          const waited = performance.now() - started;
+          if (waited >= 500 && quietMs >= 500) {
+            if (voiceReleaseWatch.current != null) {
+              window.clearInterval(voiceReleaseWatch.current);
+              voiceReleaseWatch.current = null;
+            }
+            void invoke("voice_force_end").catch(() => undefined);
+          }
+        }, 100);
+      }),
+    );
     // The notch's own hover detection finally drives the panel. Until now the tracker ran, emitted
     // transitions, and nothing listened — opening was click-only, which is why hovering the notch
     // did nothing while hovering the collapsed pill worked.
@@ -383,6 +508,7 @@ export function App(): JSX.Element {
           // stays, everything else follows your attention.
           if (pinnedRef.current) return;
           if (inputRef.current.trim().length > 0 || thinkingRef.current) return;
+          if (voiceRef.current.phase === "recording" || voiceRef.current.phase === "processing") return;
           setOpen((cur) => {
             if (!cur) return cur;
             sizeForViewRef.current({ open: false });
@@ -403,6 +529,10 @@ export function App(): JSX.Element {
     window.addEventListener("keydown", onEsc);
     return () => {
       window.removeEventListener("keydown", onEsc);
+      if (voiceReleaseWatch.current != null) {
+        window.clearInterval(voiceReleaseWatch.current);
+        voiceReleaseWatch.current = null;
+      }
       offs.forEach((p) => void p.then((off) => off()));
     };
   }, []);
@@ -419,6 +549,20 @@ export function App(): JSX.Element {
     const id = setInterval(refreshState, 3000);
     return () => clearInterval(id);
   }, [refreshState]);
+
+  useEffect(() => {
+    if (!IN_TAURI) return;
+    let unlisten: (() => void) | undefined;
+    void listen<{ message: string }>("voice_error", (e) => {
+      setVoiceToast(e.payload.message);
+      window.setTimeout(() => setVoiceToast(null), 4000);
+    }).then((fn) => {
+      unlisten = fn;
+    });
+    return () => {
+      unlisten?.();
+    };
+  }, []);
 
   // Click a state row to resolve it (commitment → done, open loop → closed); refresh immediately.
   const resolveItem = (kind: "commitment" | "open_loop", id: number): void => {
@@ -459,6 +603,9 @@ export function App(): JSX.Element {
   // a captured value — otherwise an unpinned-at-mount panel would ignore the pin forever.
   const pinnedRef = useRef(pinned);
   pinnedRef.current = pinned;
+  const voiceRef = useRef(voice);
+  voiceRef.current = voice;
+  const voiceActive = voice.phase !== "idle" && voice.phase !== "error";
 
   const onPanelLeave = useCallback((): void => {
     if (pinned) return;
@@ -469,6 +616,7 @@ export function App(): JSX.Element {
       // answer still arriving all mean the panel is in use even though the cursor wandered off.
       const composerHasFocus = document.activeElement?.classList.contains("composer__input") ?? false;
       if (composerHasFocus || inputRef.current.trim().length > 0 || thinkingRef.current) return;
+      if (voiceRef.current.phase === "recording" || voiceRef.current.phase === "processing") return;
       setShowSettings(false);
       setOpen(false);
       sizeForViewRef.current({ open: false });
@@ -588,10 +736,47 @@ export function App(): JSX.Element {
     if (r.width < 1 || r.height < 1) return;
     // +1 guards against a fractional layout width being truncated into a clipped pill.
     void applyPanelSize(Math.ceil(r.width) + 1, Math.ceil(r.height) + 1);
-  }, [open, live, state.commitments.length, state.open_loops.length, meeting?.state, meeting?.title, meeting?.elapsed_ms]);
+  }, [
+    open,
+    live,
+    state.commitments.length,
+    state.open_loops.length,
+    meeting?.state,
+    meeting?.title,
+    meeting?.elapsed_ms,
+    meeting?.countdown_ms,
+    voice?.phase,
+    voice?.level,
+  ]);
+
+  const meetingLive =
+    meeting?.enabled && (meeting.state === "offered" || meeting.state === "recording")
+      ? meeting
+      : null;
+
+  const voiceLive = voiceActive ? voice : null;
 
   // Collapsed: a clear, clickable handle hanging from the notch.
   if (!open) {
+    // A meeting in progress outranks the ordinary handle (FR-MT-09).
+    if (meetingLive) {
+      return (
+        <div className="stage stage--handle">
+          <div ref={pillRef}>
+            <MeetingPill view={meetingLive} />
+          </div>
+        </div>
+      );
+    }
+    if (voiceLive?.phase === "recording") {
+      return (
+        <div className="stage stage--handle">
+          <div ref={pillRef}>
+            <VoicePill view={voiceLive} />
+          </div>
+        </div>
+      );
+    }
     return (
       <div className="stage stage--handle">
         <button
@@ -640,6 +825,8 @@ export function App(): JSX.Element {
 
   return (
     <div className="stage">
+      {voiceToast ? <div className="voice-toast">{voiceToast}</div> : null}
+      {meetingLive ? <MeetingPill view={meetingLive} /> : null}
       <div className="panel" onPointerEnter={cancelAutoCollapse} onPointerLeave={onPanelLeave}>
         {showSettings ? (
           <Settings
@@ -653,6 +840,13 @@ export function App(): JSX.Element {
               refreshLlm();
             }}
             onCleared={refreshState}
+          />
+        ) : meetingLive?.state === "recording" ? (
+          <MeetingNote />
+        ) : voiceLive ? (
+          <VoicePanel
+            view={voiceLive}
+            onDismiss={() => void invoke("voice_dismiss").catch(() => undefined)}
           />
         ) : (
           <>
@@ -860,15 +1054,185 @@ export function App(): JSX.Element {
   );
 }
 
+/** Collapsed notch pill while hold-to-talk is active (#44). */
+function VoicePill({ view }: { view: VoiceView }): JSX.Element {
+  return (
+    <div className="vpill">
+      <span className="vpill__dot" aria-hidden />
+      <span className="vpill__label">{t.voiceListening}</span>
+      <span className="vpill__meter" aria-hidden>
+        <span className="vpill__meter-fill" style={{ width: `${Math.round(view.level * 100)}%` }} />
+      </span>
+    </div>
+  );
+}
+
+/** Expanded notch surface for voice dialogue (#44). */
+function VoicePanel({
+  view,
+  onDismiss,
+}: {
+  view: VoiceView;
+  onDismiss: () => void;
+}): JSX.Element {
+  const copyResponse = (): void => {
+    if (!view.response) return;
+    void navigator.clipboard.writeText(view.response).catch(() => undefined);
+  };
+
+  return (
+    <div className="voice-panel">
+      {view.phase === "recording" ? (
+        <>
+          <div className="voice-panel__kicker">{t.voiceListening}</div>
+          <div className="voice-panel__meter" aria-hidden>
+            <div className="voice-panel__meter-fill" style={{ width: `${Math.round(view.level * 100)}%` }} />
+          </div>
+          <div className="voice-panel__hint">{t.voiceHoldHint}</div>
+        </>
+      ) : null}
+
+      {view.phase === "processing" ? (
+        <>
+          <div className="voice-panel__kicker">{t.voiceProcessing}</div>
+          {view.transcript ? <div className="voice-panel__transcript">"{view.transcript}"</div> : null}
+        </>
+      ) : null}
+
+      {view.phase === "response" ? (
+        <>
+          <div className="voice-panel__kicker">{t.voiceAnswer}</div>
+          {view.transcript ? (
+            <div className="voice-panel__transcript voice-panel__transcript--sub">"{view.transcript}"</div>
+          ) : null}
+          <div className="voice-panel__response">{view.response}</div>
+          <div className="voice-panel__acts">
+            <button type="button" className="voice-panel__btn" onClick={copyResponse}>
+              {t.voiceCopy}
+            </button>
+            <button type="button" className="voice-panel__btn voice-panel__btn--primary" onClick={onDismiss}>
+              {t.voiceClose}
+            </button>
+          </div>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+/** The meeting note (FR-MT-10). Expanded panel is notes-only while recording. */
+function MeetingNote(): JSX.Element {
+  const [body, setBody] = useState("");
+  const [status, setStatus] = useState<"idle" | "saved" | "failed">("idle");
+  const latest = useRef("");
+
+  const save = (text: string): void => {
+    if (!IN_TAURI) return;
+    void invoke("meeting_save_note", { body: text })
+      .then(() => setStatus("saved"))
+      .catch(() => setStatus("failed"));
+  };
+
+  useEffect(() => {
+    latest.current = body;
+  }, [body]);
+
+  useEffect(() => {
+    if (!body) return;
+    const id = window.setTimeout(() => save(body), 800);
+    return () => window.clearTimeout(id);
+  }, [body]);
+
+  useEffect(
+    () => () => {
+      if (latest.current) save(latest.current);
+    },
+    [],
+  );
+
+  return (
+    <div className="mnote">
+      <textarea
+        className="mnote__area"
+        value={body}
+        placeholder={t.meetingNotePlaceholder}
+        onChange={(e) => {
+          setBody(e.target.value);
+          setStatus("idle");
+        }}
+        onFocus={() => void invoke("focus_field", { focused: true }).catch(() => undefined)}
+        onBlur={() => void invoke("focus_field", { focused: false }).catch(() => undefined)}
+      />
+      <div className="mnote__status">
+        {status === "saved" ? t.meetingNotesSaved : status === "failed" ? t.meetingNotesFailed : ""}
+      </div>
+    </div>
+  );
+}
+
+/** The meeting pill (FR-MT-08/09). Replaces the handle while offered or recording. */
+function MeetingPill({ view }: { view: MeetingView }): JSX.Element {
+  const title = view.title?.trim() || t.meetingUntitled;
+
+  if (view.state === "offered") {
+    return (
+      <div className="mpill mpill--offer">
+        <span className="mpill__title">{title}</span>
+        <span className="mpill__count">
+          {t.meetingStarting} {Math.ceil(view.countdown_ms / 1000)}s
+        </span>
+        <span className="mpill__acts">
+          {view.app_bundle_id ? (
+            <button
+              type="button"
+              className="mpill__btn mpill__btn--quiet"
+              onClick={() =>
+                void invoke("meeting_exclude_app", { bundleId: view.app_bundle_id }).catch(
+                  () => undefined,
+                )
+              }
+            >
+              {t.meetingNeverThisApp}
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className="mpill__btn"
+            onClick={() => void invoke("meeting_not_now").catch(() => undefined)}
+          >
+            {t.meetingNotNow}
+          </button>
+          <button
+            type="button"
+            className="mpill__btn mpill__btn--go"
+            onClick={() => void invoke("meeting_start").catch(() => undefined)}
+          >
+            {t.meetingStart}
+          </button>
+        </span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mpill">
+      <span className="mpill__label">{t.meetingNotes}</span>
+      <span className="mpill__time">{clock(view.elapsed_ms)}</span>
+      <span className="mpill__title">{title}</span>
+      <button
+        type="button"
+        className="mpill__btn mpill__btn--stop"
+        onClick={() => void invoke("meeting_stop").catch(() => undefined)}
+      >
+        {t.meetingStop}
+      </button>
+    </div>
+  );
+}
+
 // Corner grip that lets the user stretch the open panel. The native panel is a borderless NSPanel
 // (no OS resize edges), so we drive `set_panel_size` from a pointer drag — the panel's top-left is
 // anchored, so it grows down/right, which reads naturally for a window that hangs from the notch.
-/** The meeting pill (FR-MT-08/09).
- *
- *  Replaces the ordinary handle while a meeting is offered or being noted, because the one thing
- *  it must never do is be missable: this is the surface that makes "it was listening and I never
- *  knew" impossible. Hence no confirmation on Stop, an always-moving clock, and a live dot rather
- *  than a red record lamp — nothing is being recorded, and the lamp would say otherwise. */
 function ResizeGrip(props: {
   current: () => Size;
   onResize: (w: number, h: number) => void;
@@ -945,12 +1309,43 @@ function DreamSection(): JSX.Element {
   const [status, setStatus] = useState<DreamStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [selectKkState, setSelectKkState] = useState(false);
+  const [selectKkInput, setSelectKkInput] = useState("");
+  const [selectKkMsg, setSelectKkMsg] = useState("");
 
   const refresh = useCallback((): void => {
     if (!IN_TAURI) return;
     void invoke<DreamStatus>("dream_status").then(setStatus).catch(() => undefined);
+    void invoke<boolean>("select_kk_configured")
+      .then(setSelectKkState)
+      .catch(() => undefined);
   }, []);
   useEffect(refresh, [refresh]);
+
+  const saveSelectKk = (): void => {
+    const k = selectKkInput.trim();
+    if (!k || !IN_TAURI) return;
+    void invoke("set_select_kk_key", { key: k })
+      .then(() => {
+        setSelectKkState(true);
+        setSelectKkInput("");
+        setSelectKkMsg(t.selectKkSaved);
+      })
+      .catch((e) => setSelectKkMsg(String(e)));
+  };
+
+  const removeSelectKk = (): void => {
+    if (!IN_TAURI) {
+      setSelectKkState(false);
+      return;
+    }
+    void invoke("clear_select_kk_key")
+      .then(() => {
+        setSelectKkState(false);
+        setSelectKkMsg("");
+      })
+      .catch((e) => setSelectKkMsg(String(e)));
+  };
 
   const runNow = (): void => {
     setBusy(true);
@@ -993,6 +1388,95 @@ function DreamSection(): JSX.Element {
           {busy ? t.dreamRunning : t.dreamRunNow}
         </button>
       </div>
+      <div className="set__hint">{t.selectKkKey}</div>
+      <div className={`set__hint${selectKkState ? " is-ok" : ""}`}>
+        {selectKkState ? t.selectKkPresent : t.selectKkAbsent}
+      </div>
+      <div className="set__hint">{t.selectKkHint}</div>
+      <div className="keyrow">
+        <input
+          className="keyrow__input"
+          type="password"
+          placeholder={t.selectKkPlaceholder}
+          value={selectKkInput}
+          autoComplete="off"
+          onChange={(e) => setSelectKkInput(e.target.value)}
+          onFocus={() => {
+            if (IN_TAURI) void invoke("focus_field", { focused: true }).catch(() => undefined);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") saveSelectKk();
+          }}
+        />
+        <button
+          className="keyrow__btn"
+          type="button"
+          onClick={saveSelectKk}
+          disabled={!selectKkInput.trim()}
+        >
+          {t.keySave}
+        </button>
+        {selectKkState ? (
+          <button className="keyrow__btn" type="button" onClick={removeSelectKk}>
+            {t.keyRemove}
+          </button>
+        ) : null}
+      </div>
+      {selectKkMsg ? <div className="set__hint">{selectKkMsg}</div> : null}
+    </section>
+  );
+}
+
+/** Hold-to-talk dictation (#44). Beta, off by default; transcript goes to focused field or clipboard. */
+function VoiceSection(): JSX.Element {
+  const [on, setOn] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!IN_TAURI) return;
+    void invoke<{ enabled: boolean }>("get_voice_settings")
+      .then((s) => setOn(s.enabled))
+      .catch(() => undefined);
+  }, []);
+
+  const toggle = (next: boolean): void => {
+    if (!IN_TAURI) {
+      setOn(next);
+      return;
+    }
+    setBusy(true);
+    setOn(next);
+    void invoke("set_voice_enabled", { enabled: next })
+      .catch(() => setOn(!next))
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <section className="set">
+      <div className="set__label">{t.voiceSection}</div>
+      <div className="set__hint">{t.voiceHint}</div>
+      <div className="seg" role="radiogroup" aria-label={t.voiceSection}>
+        <button
+          type="button"
+          role="radio"
+          aria-checked={!on}
+          className={`seg__opt${!on ? " is-on" : ""}`}
+          disabled={busy}
+          onClick={() => toggle(false)}
+        >
+          {t.voiceOff}
+        </button>
+        <button
+          type="button"
+          role="radio"
+          aria-checked={on}
+          className={`seg__opt${on ? " is-on" : ""}`}
+          disabled={busy}
+          onClick={() => toggle(true)}
+        >
+          {t.voiceOn}
+        </button>
+      </div>
     </section>
   );
 }
@@ -1005,15 +1489,28 @@ function DreamSection(): JSX.Element {
  *  the backend shows "Off" rather than briefly claiming the feature is on. */
 function MeetingSection(): JSX.Element {
   const [on, setOn] = useState(false);
+  const [micOnly, setMicOnly] = useState(false);
   const [busy, setBusy] = useState(false);
   const [excluded, setExcluded] = useState<string[]>([]);
+  const [deepgramKey, setDeepgramKey] = useState({ has_key: false, key_last4: "" });
+  const [deepgramInput, setDeepgramInput] = useState("");
+  const [deepgramErr, setDeepgramErr] = useState("");
 
   const load = (): void => {
     if (!IN_TAURI) return;
-    void invoke<{ enabled: boolean; excluded_apps: string[] }>("get_meeting_settings")
+    void invoke<{ enabled: boolean; excluded_apps: string[]; allow_mic_only_detect?: boolean }>(
+      "get_meeting_settings",
+    )
       .then((s) => {
         setOn(s.enabled);
+        setMicOnly(s.allow_mic_only_detect ?? false);
         setExcluded(s.excluded_apps ?? []);
+      })
+      .catch(() => undefined);
+    void invoke<{ has_key: boolean; key_last4: string }>("get_deepgram_key_status")
+      .then((s) => {
+        setDeepgramKey(s);
+        setDeepgramErr("");
       })
       .catch(() => undefined);
   };
@@ -1031,6 +1528,43 @@ function MeetingSection(): JSX.Element {
       .then(load)
       .catch(() => setOn(!next))
       .finally(() => setBusy(false));
+  };
+
+  const toggleMicOnly = (next: boolean): void => {
+    if (!IN_TAURI) {
+      setMicOnly(next);
+      return;
+    }
+    setMicOnly(next);
+    void invoke("set_meeting_allow_mic_only", { allow: next })
+      .then(load)
+      .catch(() => setMicOnly(!next));
+  };
+
+  const saveDeepgramKey = (): void => {
+    const k = deepgramInput.trim();
+    if (!k) return;
+    if (!IN_TAURI) {
+      setDeepgramKey({ has_key: true, key_last4: k.slice(-4) });
+      setDeepgramInput("");
+      return;
+    }
+    void invoke("set_deepgram_key", { key: k })
+      .then(() => {
+        setDeepgramInput("");
+        load();
+      })
+      .catch((e) => setDeepgramErr(String(e)));
+  };
+
+  const removeDeepgramKey = (): void => {
+    if (!IN_TAURI) {
+      setDeepgramKey({ has_key: false, key_last4: "" });
+      return;
+    }
+    void invoke("clear_deepgram_key")
+      .then(load)
+      .catch((e) => setDeepgramErr(String(e)));
   };
 
   return (
@@ -1059,6 +1593,19 @@ function MeetingSection(): JSX.Element {
         </button>
       </div>
       <div className="set__hint">{t.meetingHint}</div>
+      {on ? (
+        <div className="set">
+          <label className="set__row">
+            <input
+              type="checkbox"
+              checked={micOnly}
+              onChange={(e) => toggleMicOnly(e.target.checked)}
+            />
+            <span>{t.meetingMicOnly}</span>
+          </label>
+          <div className="set__hint">{t.meetingMicOnlyHint}</div>
+        </div>
+      ) : null}
       {/* Tier (b), undoable. An exclusion added by an impatient tap during a meeting would
           otherwise become a permanent blind spot with no way back (FR-MT-02b). */}
       {on ? (
@@ -1088,9 +1635,208 @@ function MeetingSection(): JSX.Element {
           )}
         </div>
       ) : null}
+      <div className="set__label">{t.deepgramAsrKey}</div>
+      <div className={`set__hint${deepgramKey.has_key ? " is-ok" : ""}`}>
+        {deepgramKey.has_key
+          ? `${t.deepgramAsrPresent} ·· ${deepgramKey.key_last4}`
+          : t.deepgramAsrAbsent}
+      </div>
+      <div className="set__hint">{t.deepgramAsrHint}</div>
+      {deepgramErr ? <div className="set__hint is-err">{deepgramErr}</div> : null}
+      <div className="keyrow">
+        <input
+          className="keyrow__input"
+          type="password"
+          placeholder={t.deepgramAsrPlaceholder}
+          value={deepgramInput}
+          autoComplete="off"
+          onChange={(e) => setDeepgramInput(e.target.value)}
+          onFocus={() => {
+            if (IN_TAURI) void invoke("focus_field", { focused: true }).catch(() => undefined);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") saveDeepgramKey();
+          }}
+        />
+        <button
+          className="keyrow__btn"
+          type="button"
+          onClick={saveDeepgramKey}
+          disabled={!deepgramInput.trim()}
+        >
+          {t.keySave}
+        </button>
+        {deepgramKey.has_key ? (
+          <button className="keyrow__btn" type="button" onClick={removeDeepgramKey}>
+            {t.keyRemove}
+          </button>
+        ) : null}
+      </div>
       {/* Kept visible whether the feature is on or off: someone deciding whether to turn it on
           needs this more than someone who already has (FR-MT-03). */}
       <div className="set__hint set__hint--quiet">{t.meetingDisclosure}</div>
+    </section>
+  );
+}
+
+function LaunchAtLoginSection(): JSX.Element {
+  const [on, setOn] = useState(true);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!IN_TAURI) return;
+    void invoke<{ enabled: boolean }>("get_launch_at_login_settings")
+      .then((s) => setOn(s.enabled))
+      .catch(() => undefined);
+  }, []);
+
+  const toggle = (next: boolean): void => {
+    if (!IN_TAURI) {
+      setOn(next);
+      return;
+    }
+    setBusy(true);
+    setOn(next);
+    void invoke("set_launch_at_login_enabled", { enabled: next })
+      .then(() =>
+        invoke<{ enabled: boolean }>("get_launch_at_login_settings").then((s) => setOn(s.enabled)),
+      )
+      .catch(() => setOn(!next))
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <section className="set">
+      <div className="set__label" id="seg-launch">{t.launchAtLoginSection}</div>
+      <div className="seg" role="radiogroup" aria-labelledby="seg-launch">
+        <button
+          type="button"
+          role="radio"
+          aria-checked={on}
+          disabled={busy}
+          className={`seg__opt${on ? " is-on" : ""}`}
+          onClick={() => toggle(true)}
+        >
+          {t.launchAtLoginOn}
+        </button>
+        <button
+          type="button"
+          role="radio"
+          aria-checked={!on}
+          disabled={busy}
+          className={`seg__opt${!on ? " is-on" : ""}`}
+          onClick={() => toggle(false)}
+        >
+          {t.launchAtLoginOff}
+        </button>
+      </div>
+      <div className="set__hint">{t.launchAtLoginHint}</div>
+    </section>
+  );
+}
+
+function VisualRecallSection(): JSX.Element {
+  const [on, setOn] = useState(false);
+  const [busy, setBusy] = useState(false);
+  type RecallStatus = {
+    enabled: boolean;
+    events_24h: number;
+    frames_count: number;
+    recent: {
+      ts: number;
+      app: string | null;
+      window: string | null;
+      chars: number;
+      excerpt: string;
+    }[];
+  };
+  const [status, setStatus] = useState<RecallStatus | null>(null);
+
+  const refreshStatus = (): void => {
+    if (!IN_TAURI) return;
+    void invoke<RecallStatus>("get_visual_recall_status")
+      .then(setStatus)
+      .catch(() => undefined);
+  };
+
+  useEffect(() => {
+    if (!IN_TAURI) return;
+    void invoke<{ enabled: boolean }>("get_visual_recall_settings")
+      .then((s) => setOn(s.enabled))
+      .catch(() => undefined);
+    refreshStatus();
+    const id = window.setInterval(refreshStatus, 12_000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  const toggle = (next: boolean): void => {
+    if (!IN_TAURI) {
+      setOn(next);
+      return;
+    }
+    setBusy(true);
+    setOn(next);
+    void invoke("set_visual_recall_enabled", { enabled: next })
+      .then(() => refreshStatus())
+      .catch(() => setOn(!next))
+      .finally(() => setBusy(false));
+  };
+
+  const openBrowse = (): void => {
+    if (!IN_TAURI) return;
+    void invoke("open_visual_recall").catch(() => undefined);
+  };
+
+  const latest = status?.recent[0];
+  const statusLine = !on
+    ? t.visualRecallStatusOff
+    : latest
+      ? t.visualRecallStatusLive(
+          latest.chars,
+          latest.app ?? "an app",
+          latest.window ?? "",
+        )
+      : t.visualRecallStatusIdle;
+
+  return (
+    <section className="set">
+      <div className="set__label" id="seg-visual-recall">{t.visualRecallSection}</div>
+      <div className="seg" role="radiogroup" aria-labelledby="seg-visual-recall">
+        <button
+          type="button"
+          role="radio"
+          aria-checked={on}
+          disabled={busy}
+          className={`seg__opt${on ? " is-on" : ""}`}
+          onClick={() => toggle(true)}
+        >
+          {t.visualRecallOn}
+        </button>
+        <button
+          type="button"
+          role="radio"
+          aria-checked={!on}
+          disabled={busy}
+          className={`seg__opt${!on ? " is-on" : ""}`}
+          onClick={() => toggle(false)}
+        >
+          {t.visualRecallOff}
+        </button>
+      </div>
+      <div className="set__hint">{t.visualRecallHint}</div>
+      <button type="button" className="vr-launch" onClick={openBrowse}>
+        <span className="vr-launch__glyph" aria-hidden="true">⤢</span>
+        <span className="vr-launch__body">
+          <span className="vr-launch__title">{t.visualRecallBrowse}</span>
+          <span className="vr-launch__sub">{t.visualRecallBrowseSub}</span>
+        </span>
+        {status && status.frames_count > 0 ? (
+          <span className="vr-launch__badge">{status.frames_count}</span>
+        ) : null}
+        <span className="vr-launch__arrow" aria-hidden="true">→</span>
+      </button>
+      <div className="set__hint set__hint--quiet">{statusLine}</div>
+      <div className="set__hint set__hint--quiet">{t.visualRecallDisclosure}</div>
     </section>
   );
 }
@@ -1571,6 +2317,13 @@ function ApprovalsSection(): JSX.Element | null {
   );
 }
 
+// Draft is not here: it fires on a bare ⌥ (Option) tap, which can't be a global shortcut and so
+// isn't rebindable. Settings shows it as a fixed row.
+const DEFAULT_BINDS: Record<string, string> = {
+  summon: "Control+Alt+KeyN",
+  quit: "Control+Alt+KeyQ",
+  voice: "Control+Alt+KeyV",
+};
 /** The model each provider runs. Mirrors default_model() in inline_source.rs — shown so the user
  *  can see what will run, not so they can change it. */
 function defaultModelFor(provider: string): string {
@@ -1594,6 +2347,7 @@ const PROVIDERS: Array<{ id: string; label: string }> = [
 ];
 const SHORTCUT_ROWS: Array<{ action: string; label: string }> = [
   { action: "summon", label: t.summonShortcut },
+  { action: "voice", label: t.voiceShortcut },
   { action: "quit", label: t.quitShortcut },
 ];
 
@@ -2043,6 +2797,9 @@ function Settings(props: {
             someone found this switch — burying an opt-in below six connectors is how a feature
             stays permanently off (FR-MT-01). */}
         <MeetingSection />
+        <LaunchAtLoginSection />
+        <VisualRecallSection />
+        <VoiceSection />
         <ConnectionsSection />
         <ComposioSection />
         <AiSessionsSection />

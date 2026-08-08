@@ -112,19 +112,97 @@ pub fn insert_or_touch_with_thread(
     }
 }
 
-/// The most recent capture bodies `(content_hash, content)`, newest first, for the near-duplicate
-/// collapse (FR-CAP-03). Scoped to `source = 'capture'` (only re-read window bodies collapse; user
-/// notes and integration events are distinct). `limit` bounds the comparison cost.
-pub fn recent_capture_bodies(
+/// Replace event text after a Vision re-scan (visual recall). Updates `content_hash` for FTS.
+pub fn update_content_and_hash(
     conn: &Connection,
+    event_id: i64,
+    content: &str,
+    content_hash: &str,
+) -> Result<bool, rusqlite::Error> {
+    let content = crate::redact::redact(content);
+    let n = conn.execute(
+        "UPDATE event_log SET content = ?1, content_hash = ?2 WHERE id = ?3",
+        params![content.as_ref(), content_hash, event_id],
+    )?;
+    Ok(n > 0)
+}
+
+/// The most recent `(content_hash, content)` pairs for near-dup collapse (FR-CAP-03), scoped to
+/// one `source` so OCR re-reads do not collapse against AX captures and vice versa.
+pub fn recent_source_bodies(
+    conn: &Connection,
+    source: &str,
     limit: usize,
 ) -> Result<Vec<(String, String)>, rusqlite::Error> {
     let mut stmt = conn.prepare(
         "SELECT content_hash, content FROM event_log
-         WHERE source = 'capture' ORDER BY id DESC LIMIT ?1",
+         WHERE source = ?1 ORDER BY id DESC LIMIT ?2",
     )?;
-    let rows = stmt.query_map(params![limit as i64], |r| Ok((r.get(0)?, r.get(1)?)))?;
+    let rows = stmt.query_map(params![source, limit as i64], |r| Ok((r.get(0)?, r.get(1)?)))?;
     rows.collect()
+}
+
+/// [`recent_source_bodies`] for `source = 'capture'` — kept for callers that only care about AX.
+pub fn recent_capture_bodies(
+    conn: &Connection,
+    limit: usize,
+) -> Result<Vec<(String, String)>, rusqlite::Error> {
+    recent_source_bodies(conn, "capture", limit)
+}
+
+/// Metadata + short excerpt for recent events from one `source` (settings / Full UI).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecentEventPreview {
+    pub id: i64,
+    pub ts: i64,
+    pub app_bundle_id: Option<String>,
+    pub window_title: Option<String>,
+    pub excerpt: String,
+    pub content_len: usize,
+    pub dwell_ms: i64,
+    pub display_id: Option<i64>,
+}
+
+/// Newest-first previews for a source. Excerpt is capped; full body is never returned.
+pub fn recent_previews_by_source(
+    conn: &Connection,
+    source: &str,
+    limit: usize,
+    excerpt_chars: usize,
+) -> Result<Vec<RecentEventPreview>, rusqlite::Error> {
+    let cap = excerpt_chars.max(1) as i64;
+    let mut stmt = conn.prepare(
+        "SELECT id, ts, app_bundle_id, window_title,
+                substr(content, 1, ?3), length(content), dwell_ms, display_id
+         FROM event_log WHERE source = ?1 ORDER BY id DESC LIMIT ?2",
+    )?;
+    let rows = stmt.query_map(params![source, limit as i64, cap], |r| {
+        Ok(RecentEventPreview {
+            id: r.get(0)?,
+            ts: r.get(1)?,
+            app_bundle_id: r.get(2)?,
+            window_title: r.get(3)?,
+            excerpt: r.get::<_, String>(4)?.trim().to_string(),
+            content_len: r.get::<_, i64>(5)? as usize,
+            dwell_ms: r.get(6)?,
+            display_id: r.get(7)?,
+        })
+    })?;
+    rows.collect()
+}
+
+/// Count events from `source` in `[from_ts, to_ts)`.
+pub fn count_source_in_range(
+    conn: &Connection,
+    source: &str,
+    from_ts: i64,
+    to_ts: i64,
+) -> Result<i64, rusqlite::Error> {
+    conn.query_row(
+        "SELECT count(*) FROM event_log WHERE source = ?1 AND ts >= ?2 AND ts < ?3",
+        params![source, from_ts, to_ts],
+        |r| r.get(0),
+    )
 }
 
 /// One event's id and content, for the Dream Cycle consolidation pass (which classifies a day's

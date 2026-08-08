@@ -28,7 +28,8 @@ pub mod mac {
 
     use crate::connectors::mac::{ConnectorState, Runtime};
 
-    const KEYCHAIN_SERVICE: &str = "com.selectkk.shogun";
+    use shogun_integrations::keychain_store;
+
     const COMPOSIO_KEY_ACCOUNT: &str = "composio-api-key";
 
     // ---- Composio policy (non-secret: stored in JSON, NOT the Keychain) --------------------
@@ -370,7 +371,7 @@ pub mod mac {
 
     /// The Composio API key is a plain secret (not a TokenSet) — read it directly from the Keychain.
     pub(crate) fn composio_api_key() -> Option<String> {
-        security_framework::passwords::get_generic_password(KEYCHAIN_SERVICE, COMPOSIO_KEY_ACCOUNT)
+        keychain_store::get_generic_secret(COMPOSIO_KEY_ACCOUNT)
             .ok()
             .and_then(|b| String::from_utf8(b).ok())
     }
@@ -398,11 +399,7 @@ pub mod mac {
         if key.chars().count() < 8 {
             return Err("key looks too short — check you pasted the full Composio API key".into());
         }
-        security_framework::passwords::set_generic_password(
-            KEYCHAIN_SERVICE,
-            COMPOSIO_KEY_ACCOUNT,
-            key.as_bytes(),
-        )
+        keychain_store::set_generic_secret(COMPOSIO_KEY_ACCOUNT, key.as_bytes())
         .map_err(|e| e.to_string())?;
         eprintln!("[composio] api key saved to Keychain");
         // Rebuild the live runtime so the new key is used immediately.
@@ -418,10 +415,7 @@ pub mod mac {
     /// Remove the Composio API key from the Keychain. Not-found is silently ignored.
     #[tauri::command]
     pub fn clear_composio_key() -> Result<(), String> {
-        match security_framework::passwords::delete_generic_password(
-            KEYCHAIN_SERVICE,
-            COMPOSIO_KEY_ACCOUNT,
-        ) {
+        match keychain_store::delete_generic_secret(COMPOSIO_KEY_ACCOUNT) {
             Ok(()) => {}
             Err(e) if e.code() == -25300 /* errSecItemNotFound */ => {}
             Err(e) => return Err(e.to_string()),

@@ -27,6 +27,8 @@ pub mod scope;
 pub mod service_gate;
 pub mod slack;
 pub mod sync;
+/// Visual recall structured API helpers (Memory API symmetry).
+pub mod visual_recall_api;
 /// The REST listener (feature `server`): a localhost-bound axum adapter over [`rest`].
 #[cfg(feature = "server")]
 pub mod server;

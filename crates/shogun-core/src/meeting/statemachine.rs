@@ -184,21 +184,18 @@ impl Machine {
                 vec![Effect::Transition(S::Idle)]
             }
 
-            // Everything else is a no-op. A late timer or a repeated Stop must not move the
+            // A late timer or a repeated Stop must not move the
             // machine, and the daemon cannot afford to panic on an unexpected input (CLAUDE.md).
             _ => Vec::new(),
         }
     }
 
     /// How long the Recap may sit on screen before the lane returns to Idle on its own.
-    ///
-    /// `Wrapping` is where the Recap is shown, so it cannot be left instantly — but it must not
-    /// be a resting state either: detection only acts from `Idle`, so a machine parked in
-    /// `Wrapping` has quietly stopped noticing meetings. Whoever shows the Recap is expected to
-    /// dismiss it; this deadline is what makes forgetting to survivable rather than fatal.
-    pub const RECAP_DISMISS_MS: i64 = 5 * 60 * 1_000;
+    pub const RECAP_DISMISS_MS: i64 = 90_000;
+    /// Shorter auto-dismiss when the user has already left the call (FR-MT-11).
+    pub const RECAP_DISMISS_LEFT_MS: i64 = 60_000;
 
-    /// Recording → Wrapping. Audio stops first    /// Recording → Wrapping. Audio stops first, so that the instant the interval is over the
+    /// Recording → Wrapping. Audio stops first, so that the instant the interval is over the
     /// microphone is already closed — before any slower work (closing the row, building Recap).
     fn end(&mut self, why: EndReason) -> Vec<Effect> {
         self.state = State::Wrapping;

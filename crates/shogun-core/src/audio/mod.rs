@@ -1,13 +1,13 @@
-//! The meeting audio lane (MT3, FR-MT-13): microphone + system audio → on-device ASR → text.
+//! The meeting audio lane (MT3, FR-MT-13): microphone + system audio → ASR → text.
 //!
-//! Invariant 2 is the design's spine: the waveform lives only in a RAM ring buffer and is
-//! discarded after transcription. Nothing here writes samples to a file, and the ASR engine is
-//! fed an in-memory `&[f32]` slice — a path that requires a temp file is not chosen.
+//! Default ASR is Deepgram Nova-3 (cloud live STT, CLAUDE.md 2026-08-05 exception). Whisper remains
+//! an optional offline/dev fallback. SHOGUN never writes the waveform to disk; Deepgram egress is
+//! process-only with `mip_opt_out=true` and a third-party traceability row (duration digest only).
 //!
 //! The pure-logic pieces (`ring`, `resample`, `vad`, the `Transcriber`/`AudioSource` traits, and
 //! `worker`) are dependency-light and unit-tested on Linux CI with fakes. The real FFI backends
 //! (`capture::mic`, `capture::system_tap`, `asr::whisper`) live behind the `audio` feature and
-//! `#[cfg(target_os = "macos")]`, mirroring how `db`/`net` isolate their heavy deps.
+//! `#[cfg(target_os = "macos")]`. `asr::deepgram` needs the `net` feature.
 
 pub mod asr;
 pub mod capture;

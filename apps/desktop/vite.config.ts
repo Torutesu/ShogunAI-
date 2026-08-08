@@ -23,6 +23,7 @@ export default defineConfig({
         index: resolve(__dirname, "index.html"),
         fullui: resolve(__dirname, "fullui.html"),
         onboarding: resolve(__dirname, "onboarding.html"),
+        "visual-recall": resolve(__dirname, "visual-recall.html"),
       },
     },
   },

@@ -294,7 +294,7 @@ pub mod mac {
             plan: "trial",
             today: today(&db, now),
             health: health(&db, &metrics, now),
-            sources: sources(connectors.as_ref(), &app, now)?,
+            sources: sources(connectors.as_ref(), &app, &db, now)?,
             memory: memory(&db),
             activity: activity(&db, approvals.as_ref())?,
             trace: trace(&db, now),
@@ -410,6 +410,7 @@ pub mod mac {
     fn sources(
         connectors: Option<&tauri::State<'_, crate::connectors::mac::ConnectorState>>,
         app: &tauri::AppHandle,
+        db: &Db,
         now: i64,
     ) -> Result<SourcesView, String> {
         // No connector runtime → no services to report, not an error.
@@ -436,7 +437,10 @@ pub mod mac {
                 },
                 third_party: false,
             })
-            .collect();
+            .collect::<Vec<_>>();
+
+        let mut all_sources = visual_recall_source_row(db, now);
+        all_sources.extend(sources);
 
         // What SHOGUN refuses to read. Sourced from the live policy rather than restated here —
         // a screen claiming "password managers are excluded" while the policy disagreed would be
@@ -468,10 +472,50 @@ pub mod mac {
         }
 
         Ok(SourcesView {
-            sources,
+            sources: all_sources,
             exclusions,
             ai_sessions_on: crate::ai_sessions::mac::get_ai_session_import(app.clone()),
         })
+    }
+
+    fn visual_recall_source_row(db: &Db, now: i64) -> Vec<SourceRow> {
+        let settings = crate::visual_recall::mac::get_visual_recall_settings();
+        if !settings.enabled {
+            return vec![SourceRow {
+                id: "screen_ocr".to_string(),
+                name: "Visual recall".to_string(),
+                mark: "V".to_string(),
+                tint: "var(--accent)",
+                scope: "off — opt in from Settings".to_string(),
+                freshness: "—".to_string(),
+                health: "down",
+                third_party: false,
+            }];
+        }
+        let count_24h = db.screen_ocr_count_24h();
+        let latest = db.screen_ocr_previews(1, 80).into_iter().next();
+        let (freshness, health) = match latest {
+            Some(p) => {
+                let label = freshness(Some(p.ts), now);
+                let scope_hint = p
+                    .app_bundle_id
+                    .as_deref()
+                    .unwrap_or("unknown app");
+                let detail = format!("{scope_hint} · {} chars", p.content_len);
+                (format!("{label} · {detail}"), "ok")
+            }
+            None => ("waiting for OCR window".to_string(), "warn"),
+        };
+        vec![SourceRow {
+            id: "screen_ocr".to_string(),
+            name: "Visual recall".to_string(),
+            mark: "V".to_string(),
+            tint: "var(--accent)",
+            scope: format!("on-device OCR · {count_24h} reads / 24h"),
+            freshness,
+            health,
+            third_party: false,
+        }]
     }
 
     fn memory(db: &Db) -> MemoryView {

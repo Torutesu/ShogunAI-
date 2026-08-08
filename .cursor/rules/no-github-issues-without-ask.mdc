@@ -1,0 +1,19 @@
+---
+description: Never push or mutate GitHub (issues/PRs) in this repo without explicit user approval
+alwaysApply: true
+---
+
+# No GitHub / remote writes without asking
+
+In **Torutesu/ShogunAI-** / this workspace, **NEVER** do any of the following without asking first and getting a clear yes:
+
+1. **`git push`** (any branch, including `-u`)
+2. **Create** a GitHub issue
+3. **Edit / comment / close / reopen** a GitHub issue
+4. **Open or update a PR** (`gh pr create`, etc.)
+
+Do **not** treat these as permission: "add a todo", "backlog", "remember", "track this", "refer to issue N".
+
+**Referring** to an existing issue (e.g. read `#106`) is fine. **Writing** to GitHub or the remote is not, until the user says so.
+
+Screenpipe / visual recall: track against existing **#106** when relevant — do not open a new issue for it.

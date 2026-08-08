@@ -66,6 +66,25 @@ pub struct Evidence {
     pub source: String,
     pub title: Option<String>,
     pub excerpt: String,
+    /// Linked `screen_frames` row when a JPEG is stored for this evidence (≤72 h).
+    pub frame_id: Option<i64>,
+}
+
+/// A stored screen capture available for visual recall (metadata only — bytes via [`Db::get_screen_frame`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScreenFrameRef {
+    pub frame_id: i64,
+    pub event_id: i64,
+    pub ts: i64,
+    pub app_bundle_id: Option<String>,
+    pub window_title: Option<String>,
+    pub width: u32,
+    pub height: u32,
+    pub ocr_excerpt: String,
+    /// Thin stored OCR — caller should re-scan the JPEG (Vision) before answering.
+    pub needs_rescan: bool,
+    /// Linked event source.
+    pub source: String,
 }
 
 /// The grounded context for one question: confidence-gated state facts plus the retrieved
@@ -75,6 +94,8 @@ pub struct Evidence {
 pub struct ContextPack {
     pub facts: Vec<String>,
     pub evidence: Vec<Evidence>,
+    /// Stored JPEG frames matching a visual-recall question (hook for future vision input).
+    pub screen_frames: Vec<ScreenFrameRef>,
 }
 
 /// How much of a thread a reply context carries. Enough to answer in the conversation's own
@@ -318,6 +339,17 @@ impl Db {
         Ok(Self::new(shogun_memory::open_in_memory()?, clock))
     }
 
+    /// Open plaintext or encrypted DB at `path`. Encrypted files use Keychain on macOS or
+    /// `SHOGUN_DB_KEY` (hex).
+    pub fn open_at_path(path: impl AsRef<std::path::Path>, clock: Clock) -> Result<Self, String> {
+        let path = path.as_ref();
+        if path.exists() && !shogun_memory::is_plaintext_db(path) {
+            let key = load_db_encryption_key()?;
+            return Self::open_encrypted(path, &key, clock).map_err(|e| e.to_string());
+        }
+        Self::open(path, clock).map_err(|e| e.to_string())
+    }
+
     /// Record a captured event (capture → memory, FR-CAP-03 dedup-touch). Swallows storage errors
     /// so the capture daemon never crashes on a write hiccup; returns `(id, touched)` on success.
     pub fn capture(&self, ev: &NewEvent<'_>) -> Option<(i64, bool)> {
@@ -358,7 +390,7 @@ impl Db {
     /// instead of appending a near-identical row; otherwise a fresh hash makes a new event. The
     /// `content_hash` on the passed `ev` is ignored — this method decides it. Returns `(id, touched)`.
     pub fn capture_collapsed(&self, ev: &NewEvent<'_>) -> Option<(i64, bool)> {
-        let recents = self.recent_capture_bodies(RECENT_DEDUP_WINDOW);
+        let recents = self.recent_source_bodies(ev.source, RECENT_DEDUP_WINDOW);
         let recent_refs: Vec<Recent<'_>> =
             recents.iter().map(|(h, c)| Recent { content_hash: h, content: c }).collect();
         let decision = decide_hash(ev.content, &recent_refs, Self::content_hash);
@@ -366,9 +398,19 @@ impl Db {
         self.capture(&collapsed)
     }
 
+    /// Recent event bodies for one `source`, newest-first — used by near-dup collapse (FR-CAP-03).
+    fn recent_source_bodies(&self, source: &str, limit: usize) -> Vec<(String, String)> {
+        self.conn
+            .lock()
+            .ok()
+            .and_then(|c| event_log::recent_source_bodies(&c, source, limit).ok())
+            .unwrap_or_default()
+    }
+
     /// Recent capture bodies `(hash, content)` newest-first, for the near-dup collapse.
+    #[allow(dead_code)]
     fn recent_capture_bodies(&self, limit: usize) -> Vec<(String, String)> {
-        self.conn.lock().ok().and_then(|c| event_log::recent_capture_bodies(&c, limit).ok()).unwrap_or_default()
+        self.recent_source_bodies("capture", limit)
     }
 
     /// Ingest a window capture end-to-end (the real capture path, FR-CAP-01/03 + WP2.7): near-dup
@@ -382,16 +424,42 @@ impl Db {
         text: &str,
         dwell_ms: i64,
     ) -> Option<(i64, bool, Vec<i64>)> {
+        self.ingest_text_event("capture", bundle_id, window_title, text, dwell_ms, None)
+    }
+
+    /// Ingest on-device screen OCR text (issue #107). Source is `screen_ocr`; only the extracted
+    /// string + provenance reach this method. Optional JPEG frames are stored separately via
+    /// [`store_screen_frame`] (72 h retention — explicit invariant-2 exception, 2026-08-02).
+    pub fn ingest_screen_ocr(
+        &self,
+        bundle_id: Option<&str>,
+        window_title: Option<&str>,
+        text: &str,
+        dwell_ms: i64,
+        display_id: Option<i64>,
+    ) -> Option<(i64, bool, Vec<i64>)> {
+        self.ingest_text_event("screen_ocr", bundle_id, window_title, text, dwell_ms, display_id)
+    }
+
+    fn ingest_text_event(
+        &self,
+        source: &'static str,
+        bundle_id: Option<&str>,
+        window_title: Option<&str>,
+        text: &str,
+        dwell_ms: i64,
+        display_id: Option<i64>,
+    ) -> Option<(i64, bool, Vec<i64>)> {
         let ev = NewEvent {
             ts: self.now_ms(),
-            source: "capture",
+            source,
             kind: "text",
             app_bundle_id: bundle_id,
             window_title,
             content: text,
             content_hash: "", // ignored — capture_collapsed decides it
             dwell_ms,
-            display_id: None,
+            display_id,
             window_bounds: None,
         };
         let (id, touched) = self.capture_collapsed(&ev)?;
@@ -563,6 +631,19 @@ impl Db {
             .unwrap_or_default()
             .into_iter()
             .map(|(_ts, speaker, text, _confidence)| (speaker, text))
+            .collect()
+    }
+
+    /// Full transcript lines for the post-meeting viewer (FR-MT-10): `(ts, speaker, text)` in time
+    /// order. Empty when the interval has no transcript or on a DB error.
+    pub fn meeting_transcript(&self, session_id: i64) -> Vec<(i64, Option<String>, String)> {
+        self.conn
+            .lock()
+            .ok()
+            .and_then(|conn| shogun_memory::transcript_segments::for_session(&conn, session_id).ok())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(ts, speaker, text, _confidence)| (ts, speaker, text))
             .collect()
     }
 
@@ -777,10 +858,8 @@ impl Db {
                     ts,
                     source: String::new(),
                     title: None,
-                    // The thread's own text is what a reply is grounded in, so it is kept whole
-                    // up to a generous cap rather than excerpted around a query — there is no
-                    // query yet.
                     excerpt: shogun_memory::search::excerpt(&content, "", REPLY_TURN_CHARS),
+                    frame_id: None,
                 })
                 .collect::<Vec<_>>();
             (title, turns)
@@ -797,6 +876,7 @@ impl Db {
                     source: h.source,
                     title: h.window_title,
                     excerpt: shogun_memory::search::excerpt(&h.content, t, REPLY_RELATED_CHARS),
+                    frame_id: None,
                 })
                 .collect(),
             None => Vec::new(),
@@ -899,28 +979,150 @@ impl Db {
     /// window capture cannot eat the whole prompt. Search is FTS-only until the embedding model
     /// lands (`search_hybrid` takes the vector half then, with no change here).
     pub fn assemble_context(&self, query: &str, max_hits: usize, excerpt_chars: usize) -> ContextPack {
-        ContextPack {
-            facts: self.inline_memory(FACT_LIMIT),
-            evidence: self.assemble_evidence(query, max_hits, excerpt_chars),
+        let (evidence, screen_frames) = self.assemble_evidence_with_frames(query, max_hits, excerpt_chars);
+        ContextPack { facts: self.inline_memory(FACT_LIMIT), evidence, screen_frames }
+    }
+
+    /// Lexical search over meeting recaps and transcripts. Query-relevant, not latest-session.
+    pub fn search_meetings(&self, query: &str, limit: usize) -> Vec<shogun_memory::search::MeetingSearchHit> {
+        if query.trim().is_empty() {
+            return Vec::new();
         }
+        self.conn
+            .lock()
+            .ok()
+            .and_then(|c| shogun_memory::search::search_meetings(&c, query, limit).ok())
+            .unwrap_or_default()
     }
 
     /// The evidence half of [`Self::assemble_context`]: hybrid-search the query and turn the best
     /// hits into dated, attributed [`Evidence`], each excerpt capped at `excerpt_chars`. Split out
     /// so the compressed path can take evidence WITHOUT also loading state facts (which it rebuilds
     /// from the ref version), instead of running the two state queries twice (Issue #63 finding #2).
-    fn assemble_evidence(&self, query: &str, max_hits: usize, excerpt_chars: usize) -> Vec<Evidence> {
-        self.search(query, max_hits)
+    ///
+    /// Event-log hits and meeting-interval hits (recap + transcript) are merged by relevance score
+    /// so a question about a specific past meeting surfaces that session, not whatever ended last.
+    fn assemble_evidence_with_frames(
+        &self,
+        query: &str,
+        max_hits: usize,
+        excerpt_chars: usize,
+    ) -> (Vec<Evidence>, Vec<ScreenFrameRef>) {
+        let now = self.now_ms();
+        let local_days = local_day_bounds(now);
+        let screen_frames =
+            if shogun_memory::search::query_wants_visual_recall(query, now, local_days) {
+            self.recall_screen_frames(query, max_hits, excerpt_chars)
+        } else {
+            Vec::new()
+        };
+        let mut frame_by_event: std::collections::HashMap<i64, i64> = screen_frames
+            .iter()
+            .map(|f| (f.event_id, f.frame_id))
+            .collect();
+
+        let mut event_hits = self.search(query, max_hits);
+        if shogun_memory::search::query_asks_about_screen(query) {
+            let ocr_hits = self.search_source(query, "screen_ocr", max_hits);
+            let seen: std::collections::HashSet<i64> = event_hits.iter().map(|h| h.event_id).collect();
+            for mut h in ocr_hits {
+                if seen.contains(&h.event_id) {
+                    continue;
+                }
+                h.score *= 1.15;
+                event_hits.push(h);
+            }
+            event_hits.sort_by(|a, b| {
+                b.score
+                    .partial_cmp(&a.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then(b.ts.cmp(&a.ts))
+            });
+            event_hits.truncate(max_hits);
+        }
+        let meeting_hits = self.search_meetings(query, max_hits);
+
+        let event_ids: Vec<i64> = event_hits.iter().map(|h| h.event_id).collect();
+        for (event_id, frame_id) in self.frame_ids_for_events(&event_ids) {
+            frame_by_event.entry(event_id).or_insert(frame_id);
+        }
+
+        let mut ranked: Vec<(f64, Evidence)> = Vec::with_capacity(event_hits.len() + meeting_hits.len());
+        for h in event_hits {
+            let frame_id = frame_by_event.get(&h.event_id).copied();
+            let mut excerpt = shogun_memory::search::excerpt(&h.content, query, excerpt_chars);
+            if let Some(fid) = frame_id {
+                excerpt.push_str(&format!(" [screen frame {fid} stored]"));
+            }
+            ranked.push((
+                h.score,
+                Evidence {
+                    event_id: h.event_id,
+                    ts: h.ts,
+                    source: h.source,
+                    title: h.window_title,
+                    excerpt,
+                    frame_id,
+                },
+            ));
+        }
+        for h in meeting_hits {
+            ranked.push((
+                h.score,
+                Evidence {
+                    event_id: -h.session_id,
+                    ts: h.ts,
+                    source: "meeting".to_string(),
+                    title: h.title,
+                    excerpt: shogun_memory::search::excerpt(&h.content, query, excerpt_chars),
+                    frame_id: None,
+                },
+            ));
+        }
+
+        // Frame-only hits: add evidence lines from stored JPEGs not already in ranked set.
+        let seen_events: std::collections::HashSet<i64> =
+            ranked.iter().map(|(_, e)| e.event_id).collect();
+        let top_event_score = ranked.iter().map(|(s, _)| *s).fold(0.0_f64, f64::max);
+        let frame_score = if top_event_score > 0.0 {
+            top_event_score * 0.75
+        } else {
+            0.5
+        };
+        for f in &screen_frames {
+            if seen_events.contains(&f.event_id) {
+                continue;
+            }
+            let mut excerpt = f.ocr_excerpt.clone();
+            if f.needs_rescan {
+                excerpt.push_str(" [thin OCR — re-scan frame recommended]");
+            }
+            excerpt.push_str(&format!(" [screen frame {} stored]", f.frame_id));
+            ranked.push((
+                frame_score,
+                Evidence {
+                    event_id: f.event_id,
+                    ts: f.ts,
+                    source: "screen_ocr".to_string(),
+                    title: f.window_title.clone(),
+                    excerpt,
+                    frame_id: Some(f.frame_id),
+                },
+            ));
+        }
+
+        ranked.sort_by(|a, b| {
+            b.0.partial_cmp(&a.0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(b.1.ts.cmp(&a.1.ts))
+        });
+        let evidence = ranked
             .into_iter()
-            .map(|h| Evidence {
-                event_id: h.event_id,
-                ts: h.ts,
-                source: h.source,
-                title: h.window_title,
-                excerpt: shogun_memory::search::excerpt(&h.content, query, excerpt_chars),
-            })
+            .map(|(_, e)| e)
             .filter(|e| !e.excerpt.is_empty())
-            .collect()
+            .take(max_hits)
+            .collect();
+        (evidence, screen_frames)
     }
 
     /// 圧縮版のコンテキスト組み立て（Issue #63）。`config.enabled` が false のときは
@@ -941,13 +1143,13 @@ impl Db {
         // 支配コストは evidence 検索。まずそれだけ走らせ、直後に予算をチェックする（finding #1）。
         // fact は各由来で 1 回だけ読む（compressed は ref 版、fallback は文字列版）ので、ここで
         // assemble_context を呼んで両方を二重ロードすることはしない（finding #2）。
-        let evidence = self.assemble_evidence(query, max_hits, excerpt_chars);
+        let (evidence, screen_frames) = self.assemble_evidence_with_frames(query, max_hits, excerpt_chars);
         let est = HeuristicEstimator::default();
 
         // 検索直後の早期フォールバック: 支配コストの直後で予算を超えていたら、要約組み立てや
         // compress に進まず raw をそのまま返す（この guard こそが実際に総処理時間を縛る）。
         if started.elapsed().as_millis() as u64 > COMPRESS_BUDGET_MS {
-            return self.raw_fallback(query, evidence, started);
+            return self.raw_fallback(query, evidence, screen_frames, started);
         }
 
         // Task 2: fact ブロックは実 state id 付きの ref 版から組み立てる（fallback 用の文字列版とは
@@ -981,7 +1183,7 @@ impl Db {
 
         // 最終 guard: 要約組み立て後・compress 前にもう一度予算をチェック（保険）。
         if started.elapsed().as_millis() as u64 > COMPRESS_BUDGET_MS {
-            return self.raw_fallback(query, evidence, started);
+            return self.raw_fallback(query, evidence, screen_frames, started);
         }
 
         let out = compress(Candidates { blocks }, config);
@@ -995,11 +1197,18 @@ impl Db {
         for b in &out.blocks {
             match b.id_ref {
                 shogun_fusion::block::BlockRef::Event(id) => {
-                    let (ts, source, title) = ev_by_id
+                    let (ts, source, title, frame_id) = ev_by_id
                         .get(&id)
-                        .map(|e| (e.ts, e.source.clone(), e.title.clone()))
-                        .unwrap_or((0, String::new(), None));
-                    out_evidence.push(Evidence { event_id: id, ts, source, title, excerpt: b.text.clone() });
+                        .map(|e| (e.ts, e.source.clone(), e.title.clone(), e.frame_id))
+                        .unwrap_or((0, String::new(), None, None));
+                    out_evidence.push(Evidence {
+                        event_id: id,
+                        ts,
+                        source,
+                        title,
+                        excerpt: b.text.clone(),
+                        frame_id,
+                    });
                 }
                 _ => out_facts.push(b.text.clone()),
             }
@@ -1016,7 +1225,7 @@ impl Db {
             compress_ms,
         );
 
-        (ContextPack { facts: out_facts, evidence: out_evidence }, out.stats, false)
+        (ContextPack { facts: out_facts, evidence: out_evidence, screen_frames }, out.stats, false)
     }
 
     /// 予算超過時の raw フォールバック。fact は文字列版を「ここで」1 回だけ読む（compressed 経路の
@@ -1026,6 +1235,7 @@ impl Db {
         &self,
         query: &str,
         evidence: Vec<Evidence>,
+        screen_frames: Vec<ScreenFrameRef>,
         started: std::time::Instant,
     ) -> (ContextPack, shogun_fusion::compress::CompressionStats, bool) {
         use shogun_fusion::budget::TokenEstimator;
@@ -1048,7 +1258,7 @@ impl Db {
             elapsed_ms,
             elapsed_ms,
         );
-        (ContextPack { facts, evidence }, shogun_fusion::compress::CompressionStats::default(), true)
+        (ContextPack { facts, evidence, screen_frames }, shogun_fusion::compress::CompressionStats::default(), true)
     }
 
     /// 解決済みスレッドの保存済み要約を ThreadSummary ブロックにする。要約は raw ターンより
@@ -1599,6 +1809,286 @@ impl Db {
             .unwrap_or_default()
     }
 
+    /// FTS search scoped to one event-log `source` (visual recall uses `screen_ocr`).
+    pub fn search_source(
+        &self,
+        query: &str,
+        source: &str,
+        limit: usize,
+    ) -> Vec<shogun_memory::search::SearchHit> {
+        if query.trim().is_empty() {
+            return Vec::new();
+        }
+        self.conn
+            .lock()
+            .ok()
+            .and_then(|c| {
+                let ids = shogun_memory::search::fts_search_source(&c, query, source, limit).ok()?;
+                let ranked: Vec<(i64, f64)> =
+                    ids.into_iter().enumerate().map(|(i, id)| (id, 1.0 / (i as f64 + 1.0))).collect();
+                shogun_memory::search::hydrate(&c, &ranked).ok()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Recent on-device screen OCR previews for settings / Full UI (text only, no pixels).
+    pub fn screen_ocr_previews(
+        &self,
+        limit: usize,
+        excerpt_chars: usize,
+    ) -> Vec<shogun_memory::event_log::RecentEventPreview> {
+        self.conn
+            .lock()
+            .ok()
+            .and_then(|c| {
+                shogun_memory::event_log::recent_previews_by_source(&c, "screen_ocr", limit, excerpt_chars)
+                    .ok()
+            })
+            .unwrap_or_default()
+    }
+
+    /// How many `screen_ocr` events landed in the last 24 hours.
+    pub fn screen_ocr_count_24h(&self) -> i64 {
+        let now = self.now_ms();
+        let since = now - 24 * 60 * 60 * 1000;
+        self.conn
+            .lock()
+            .ok()
+            .and_then(|c| shogun_memory::event_log::count_source_in_range(&c, "screen_ocr", since, now).ok())
+            .unwrap_or(0)
+    }
+
+    /// Persist a compressed JPEG from visual-recall OCR, linked to its `screen_ocr` event.
+    ///
+    /// Explicit exception to invariant 2 (user decision 2026-08-02): frames are local-only,
+    /// encrypted at rest with the memory DB, and purged after 72 h — not audio, not forever.
+    pub fn store_screen_frame(
+        &self,
+        event_id: i64,
+        bundle_id: Option<&str>,
+        window_title: Option<&str>,
+        display_id: Option<i64>,
+        width: u32,
+        height: u32,
+        jpeg: &[u8],
+    ) -> Option<i64> {
+        let now = self.now_ms();
+        self.conn
+            .lock()
+            .ok()
+            .and_then(|c| {
+                shogun_memory::screen_frames::insert(
+                    &c,
+                    &shogun_memory::screen_frames::NewFrame {
+                        created_at_ms: now,
+                        event_id,
+                        app_bundle_id: bundle_id,
+                        window_title,
+                        display_id,
+                        width,
+                        height,
+                        jpeg,
+                    },
+                )
+                .ok()
+            })
+    }
+
+    /// Drop visual-recall frames older than the rolling retention window.
+    pub fn purge_screen_frames(&self) -> Result<usize, String> {
+        let cutoff = self.now_ms() - shogun_memory::screen_frames::RETENTION_MS;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| "memory DB lock poisoned during frame purge".to_string())?;
+        shogun_memory::screen_frames::purge_older_than(&conn, cutoff)
+            .map_err(|e| format!("purge expired screen frames: {e}"))
+    }
+
+    /// Drop auto-capture frames only (passive OCR). User-initiated shots are kept.
+    pub fn purge_auto_screen_frames(&self) -> Result<usize, String> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| "memory DB lock poisoned during frame purge".to_string())?;
+        shogun_memory::screen_frames::purge_auto_only(&conn)
+            .map_err(|e| format!("purge automatic screen frames: {e}"))
+    }
+
+    /// Delete one stored frame and its linked OCR event when no other frame references it.
+    pub fn delete_screen_frame(&self, frame_id: i64) -> Result<bool, String> {
+        let mut conn = self
+            .conn
+            .lock()
+            .map_err(|_| "memory DB lock poisoned during frame delete".to_string())?;
+        shogun_memory::screen_frames::delete_by_id(&mut conn, frame_id)
+            .map_err(|e| format!("delete screen frame: {e}"))
+    }
+
+    /// Persist refreshed OCR text for a screen frame's linked event (visual recall re-scan).
+    pub fn update_event_ocr_text(&self, event_id: i64, text: &str) -> Result<bool, String> {
+        let hash = Self::content_hash(text);
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| "memory DB lock poisoned during OCR update".to_string())?;
+        shogun_memory::event_log::update_content_and_hash(&conn, event_id, text, &hash)
+            .map_err(|e| format!("update event OCR text: {e}"))
+    }
+
+    /// List frames in the retention window for UI timeline (newest first).
+    pub fn list_screen_frames(&self, limit: usize) -> Vec<shogun_memory::screen_frames::FrameSummary> {
+        let now = self.now_ms();
+        let from = now - shogun_memory::screen_frames::RETENTION_MS;
+        self.screen_frames_in_range(from, now, limit)
+    }
+
+    /// Frame-cache stats for settings (count / oldest / bytes — no pixels).
+    pub fn screen_frame_stats(&self) -> shogun_memory::screen_frames::FrameStats {
+        self.conn
+            .lock()
+            .ok()
+            .and_then(|c| shogun_memory::screen_frames::stats(&c).ok())
+            .unwrap_or_default()
+    }
+
+    /// Search stored screen frames for a visual-recall question (metadata + OCR excerpt).
+    pub fn search_screen_frames(
+        &self,
+        query: &str,
+        limit: usize,
+        excerpt_chars: usize,
+    ) -> Vec<ScreenFrameRef> {
+        self.recall_screen_frames(query, limit, excerpt_chars)
+    }
+
+    /// Search stored frames in an explicit time window (Memory API / MCP).
+    pub fn search_screen_frames_window(
+        &self,
+        query: &str,
+        from_ms: i64,
+        to_ms: i64,
+        limit: usize,
+        excerpt_chars: usize,
+    ) -> Vec<ScreenFrameRef> {
+        self.conn
+            .lock()
+            .ok()
+            .and_then(|c| {
+                shogun_memory::screen_frames::search_for_recall(&c, query, from_ms, to_ms, limit, excerpt_chars)
+                    .ok()
+            })
+            .unwrap_or_default()
+            .into_iter()
+            .map(|h| ScreenFrameRef {
+                frame_id: h.frame_id,
+                event_id: h.event_id,
+                ts: h.ts,
+                app_bundle_id: h.app_bundle_id,
+                window_title: h.window_title,
+                width: h.width,
+                height: h.height,
+                ocr_excerpt: h.ocr_excerpt,
+                needs_rescan: h.needs_rescan,
+                source: h.source,
+            })
+            .collect()
+    }
+
+    /// Count stored frames whose `created_at_ms` lies in `[from_ms, to_ms]`.
+    pub fn screen_frames_count_in_range(&self, from_ms: i64, to_ms: i64) -> i64 {
+        self.conn
+            .lock()
+            .ok()
+            .and_then(|c| {
+                c.query_row(
+                    "SELECT count(*) FROM screen_frames WHERE created_at_ms >= ?1 AND created_at_ms <= ?2",
+                    rusqlite::params![from_ms, to_ms],
+                    |r| r.get(0),
+                )
+                .ok()
+            })
+            .unwrap_or(0)
+    }
+
+    /// Latest stored frame metadata (no JPEG bytes).
+    pub fn latest_screen_frame_summary(&self) -> Option<shogun_memory::screen_frames::FrameSummary> {
+        let now = self.now_ms();
+        self.screen_frames_in_range(0, now, 1).into_iter().next()
+    }
+
+    fn recall_screen_frames(&self, query: &str, limit: usize, excerpt_chars: usize) -> Vec<ScreenFrameRef> {
+        let now = self.now_ms();
+        let local_days = local_day_bounds(now);
+        let (from_ms, to_ms) =
+            shogun_memory::search::visual_recall_window(query, now, local_days);
+        self.conn
+            .lock()
+            .ok()
+            .and_then(|c| {
+                shogun_memory::screen_frames::search_for_recall(&c, query, from_ms, to_ms, limit, excerpt_chars)
+                    .ok()
+            })
+            .unwrap_or_default()
+            .into_iter()
+            .map(|h| ScreenFrameRef {
+                frame_id: h.frame_id,
+                event_id: h.event_id,
+                ts: h.ts,
+                app_bundle_id: h.app_bundle_id,
+                window_title: h.window_title,
+                width: h.width,
+                height: h.height,
+                ocr_excerpt: h.ocr_excerpt,
+                needs_rescan: h.needs_rescan,
+                source: h.source,
+            })
+            .collect()
+    }
+
+    fn frame_ids_for_events(&self, event_ids: &[i64]) -> std::collections::HashMap<i64, i64> {
+        self.conn
+            .lock()
+            .ok()
+            .and_then(|c| shogun_memory::screen_frames::frame_ids_for_events(&c, event_ids).ok())
+            .unwrap_or_default()
+    }
+
+    /// Fetch frame metadata and OCR without loading the JPEG BLOB.
+    pub fn get_screen_frame_summary(
+        &self,
+        frame_id: i64,
+    ) -> Option<shogun_memory::screen_frames::FrameSummary> {
+        self.conn
+            .lock()
+            .ok()
+            .and_then(|c| shogun_memory::screen_frames::get_summary_by_id(&c, frame_id).ok())
+            .flatten()
+    }
+
+    /// Fetch one stored frame by id (JPEG bytes + metadata). Local-only; never leaves device.
+    pub fn get_screen_frame(&self, frame_id: i64) -> Option<shogun_memory::screen_frames::FrameRecord> {
+        self.conn
+            .lock()
+            .ok()
+            .and_then(|c| shogun_memory::screen_frames::get_by_id(&c, frame_id).ok())
+            .flatten()
+    }
+
+    /// Frames captured in a wall-clock window (newest first).
+    pub fn screen_frames_in_range(
+        &self,
+        from_ms: i64,
+        to_ms: i64,
+        limit: usize,
+    ) -> Vec<shogun_memory::screen_frames::FrameSummary> {
+        self.conn
+            .lock()
+            .ok()
+            .and_then(|c| shogun_memory::screen_frames::list_in_range(&c, from_ms, to_ms, limit).ok())
+            .unwrap_or_default()
+    }
+
     /// Open loops as Fusion/Brief input (stalest first; the Brief caps the count). Closed loops
     /// are excluded so resolving one from the panel removes it everywhere (memory, counts, Brief).
     pub fn open_loops(&self) -> Vec<OpenLoopItem> {
@@ -1932,6 +2422,86 @@ fn facts_to_blocks(
             )
         })
         .collect()
+}
+
+#[cfg(feature = "db")]
+fn load_db_encryption_key() -> Result<shogun_memory::DbKey, String> {
+    if let Ok(hex) = std::env::var("SHOGUN_DB_KEY") {
+        let trimmed = hex.trim();
+        if !trimmed.is_empty() {
+            return shogun_memory::DbKey::from_hex(trimmed)
+                .ok_or_else(|| "SHOGUN_DB_KEY is not valid hex".to_string());
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use shogun_integrations::keychain_store;
+        const DB_KEY_ACCOUNT: &str = "memory-db-key";
+        let bytes = keychain_store::get_generic_secret(DB_KEY_ACCOUNT).map_err(|e| {
+            format!(
+                "could not read memory DB key from Keychain (status {}): unlock Keychain and retry",
+                e.code()
+            )
+        })?;
+        let hex = String::from_utf8(bytes).map_err(|_| "memory DB key in Keychain is not valid text".to_string())?;
+        shogun_memory::DbKey::from_hex(&hex)
+            .ok_or_else(|| "memory DB key in Keychain is malformed".to_string())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err("encrypted memory DB requires SHOGUN_DB_KEY".to_string())
+    }
+}
+
+/// Exact local midnight boundaries for the current and previous calendar day.
+#[cfg(feature = "db")]
+pub fn local_day_bounds(now_ms: i64) -> shogun_memory::search::LocalDayBounds {
+    #[cfg(target_os = "macos")]
+    {
+        // SAFETY: `tm` is initialized by localtime_r. mktime accepts and normalizes the copied
+        // local calendar values; `tm_isdst = -1` makes libc resolve the correct offset per date.
+        unsafe {
+            let mut tm: libc::tm = std::mem::zeroed();
+            let t = (now_ms / 1000) as libc::time_t;
+            if libc::localtime_r(&t, &mut tm).is_null() {
+                return utc_day_bounds(now_ms);
+            }
+            tm.tm_hour = 0;
+            tm.tm_min = 0;
+            tm.tm_sec = 0;
+            tm.tm_isdst = -1;
+            let today = libc::mktime(&mut tm);
+            if today == -1 {
+                return utc_day_bounds(now_ms);
+            }
+            let mut yesterday_tm = tm;
+            yesterday_tm.tm_mday -= 1;
+            yesterday_tm.tm_isdst = -1;
+            let yesterday = libc::mktime(&mut yesterday_tm);
+            if yesterday == -1 {
+                utc_day_bounds(now_ms)
+            } else {
+                shogun_memory::search::LocalDayBounds {
+                    yesterday_start_ms: (yesterday as i64) * 1000,
+                    today_start_ms: (today as i64) * 1000,
+                }
+            }
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        utc_day_bounds(now_ms)
+    }
+}
+
+#[cfg(feature = "db")]
+fn utc_day_bounds(now_ms: i64) -> shogun_memory::search::LocalDayBounds {
+    const DAY_MS: i64 = 24 * 60 * 60 * 1000;
+    let today_start_ms = now_ms.div_euclid(DAY_MS) * DAY_MS;
+    shogun_memory::search::LocalDayBounds {
+        yesterday_start_ms: today_start_ms - DAY_MS,
+        today_start_ms,
+    }
 }
 
 #[cfg(test)]
@@ -2468,6 +3038,67 @@ mod tests {
         let hit = pack.evidence.iter().find(|e| e.excerpt.contains("12k")).unwrap();
         assert_eq!(hit.source, "capture");
         assert!(hit.event_id > 0);
+    }
+
+    #[test]
+    fn assemble_context_retrieves_query_relevant_meeting_not_latest() {
+        use shogun_memory::session::{open, NewSession};
+
+        let db = Db::open_in_memory(clock(10_000)).unwrap();
+        let conn = db.conn.lock().unwrap();
+        let old = open(
+            &conn,
+            &NewSession {
+                kind: "meeting",
+                started_at: 1_000,
+                title: Some("Phoenix planning"),
+                app_bundle_id: None,
+                calendar_occurrence_id: None,
+                confidence: 0.8,
+                provenance: "{}",
+            },
+        )
+        .unwrap();
+        let recent = open(
+            &conn,
+            &NewSession {
+                kind: "meeting",
+                started_at: 9_000,
+                title: Some("Daily standup"),
+                app_bundle_id: None,
+                calendar_occurrence_id: None,
+                confidence: 0.8,
+                provenance: "{}",
+            },
+        )
+        .unwrap();
+        shogun_memory::meeting_recaps::save(
+            &conn,
+            old,
+            "Phoenix launch is targeted for March with beta in February.",
+            "[]",
+            "[]",
+            "m",
+            2_000,
+        )
+        .unwrap();
+        shogun_memory::meeting_recaps::save(&conn, recent, "Nothing blocking today.", "[]", "[]", "m", 10_000)
+            .unwrap();
+        drop(conn);
+
+        let pack = db.assemble_context("Phoenix launch beta", 5, 300);
+        let meeting = pack
+            .evidence
+            .iter()
+            .find(|e| e.source == "meeting")
+            .expect("meeting evidence must be present");
+        assert!(meeting.excerpt.contains("Phoenix"));
+        assert_eq!(meeting.event_id, -old);
+        assert!(
+            !pack.evidence.iter().any(|e| e.source == "meeting" && e.excerpt.contains("Nothing blocking")),
+            "unrelated latest meeting must not appear: {:?}",
+            pack.evidence
+        );
     }
 
     #[test]
@@ -3021,6 +3652,7 @@ mod tests {
             source: "capture".into(),
             title: Some("t".into()),
             excerpt: "a".repeat(40),
+            frame_id: None,
         }];
         let est = HeuristicEstimator::default();
         let blocks = evidence_to_blocks(&ev, 0.7, &est);
