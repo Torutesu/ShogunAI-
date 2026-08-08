@@ -160,7 +160,7 @@ fn has_strong_opener(ctx: &DetectionCtx<'_>) -> bool {
 
 /// Browser tab with no readable host — cannot prove Meet is open (PiP, AX gaps).
 fn browser_lacks_meeting_proof(ctx: &DetectionCtx<'_>) -> bool {
-    ctx.is_browser && !ctx.has_meet_url && ctx.page_host.is_none_or(str::is_empty)
+    ctx.is_browser && !ctx.has_meet_url && ctx.page_host.map_or(true, str::is_empty)
 }
 
 /// Apply FR-MT-04 policy on top of raw signals, then score.
@@ -410,7 +410,7 @@ pub fn meet_url_session_present(
         return true;
     }
     mic_closed_since_ms
-        .is_none_or(|since| now.saturating_sub(since) < MIC_QUIET_AFTER_URL_LEFT_MS)
+        .map_or(true, |since| now.saturating_sub(since) < MIC_QUIET_AFTER_URL_LEFT_MS)
 }
 
 /// Whether the user has clearly left the call (FR-MT-11). Used to shorten Recap auto-dismiss.

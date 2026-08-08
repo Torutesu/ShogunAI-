@@ -145,6 +145,14 @@ pub fn delete_since(conn: &mut Connection, cutoff_ts: i64) -> Result<DeleteRepor
         [cutoff_ts],
     )?;
 
+    // Visual-recall frames in the window — and any frame referencing a doomed event (V12:
+    // screen_frames.event_id → event_log with no cascade) — must go before the events, or the
+    // event delete FK-fails and rolls the whole deletion back.
+    let screen_frames = tx.execute(
+        "DELETE FROM screen_frames WHERE created_at_ms >= ?1 OR event_id IN (SELECT id FROM event_log WHERE ts >= ?1)",
+        [cutoff_ts],
+    )?;
+
     // The events themselves (AD trigger clears event_fts).
     let events = tx.execute("DELETE FROM event_log WHERE ts >= ?1", [cutoff_ts])?;
 
@@ -196,6 +204,7 @@ pub fn delete_since(conn: &mut Connection, cutoff_ts: i64) -> Result<DeleteRepor
         threads: 0,
         sessions,
         session_notes,
+        screen_frames,
         traceability,
     })
 }

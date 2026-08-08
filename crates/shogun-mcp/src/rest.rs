@@ -661,27 +661,27 @@ mod tests {
     #[test]
     fn visual_recall_endpoints_resolve() {
         assert_eq!(
-            route(&req(Method::Get, "/v1/visual_recall/status", Some("t")), &reg()),
+            route(&req(Method::Get, "/v1/visual_recall/status", Some("t")), &reg(), &ent()),
             Routed::Read { tool: Tool::VisualRecallStatus, id: None }
         );
         assert_eq!(
-            route(&req(Method::Post, "/v1/visual_recall/enabled", Some("t")), &reg()),
+            route(&req(Method::Post, "/v1/visual_recall/enabled", Some("t")), &reg(), &ent()),
             Routed::Write { tool: Tool::VisualRecallSetEnabled, level: Level::L1 }
         );
         assert_eq!(
-            route(&req(Method::Get, "/v1/visual_recall/frames/search", Some("t")), &reg()),
+            route(&req(Method::Get, "/v1/visual_recall/frames/search", Some("t")), &reg(), &ent()),
             Routed::Read { tool: Tool::VisualRecallSearchFrames, id: None }
         );
         assert_eq!(
-            route(&req(Method::Get, "/v1/visual_recall/frames/12", Some("t")), &reg()),
+            route(&req(Method::Get, "/v1/visual_recall/frames/12", Some("t")), &reg(), &ent()),
             Routed::Read { tool: Tool::VisualRecallGetFrame, id: Some(12) }
         );
         assert_eq!(
-            route(&req(Method::Post, "/v1/visual_recall/frames/12/rescan", Some("t")), &reg()),
+            route(&req(Method::Post, "/v1/visual_recall/frames/12/rescan", Some("t")), &reg(), &ent()),
             Routed::Read { tool: Tool::VisualRecallRescanFrame, id: Some(12) }
         );
         assert_eq!(
-            route(&req(Method::Post, "/v1/visual_recall/frames/delete", Some("t")), &reg()),
+            route(&req(Method::Post, "/v1/visual_recall/frames/delete", Some("t")), &reg(), &ent()),
             Routed::Write { tool: Tool::VisualRecallDeleteFrame, level: Level::L1 }
         );
     }

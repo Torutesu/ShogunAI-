@@ -121,9 +121,9 @@ impl<B: MemoryBackend> McpServer<B> {
             ApiLevel::Write(_) => {
                 let body = if tool == Tool::MemoryAppendNote {
                     args.get("text").and_then(Value::as_str).unwrap_or_default().to_string()
-                } else if matches!(tool, Tool::VisualRecallSetEnabled | Tool::VisualRecallDeleteFrame) {
-                    args.to_string()
                 } else {
+                    // VisualRecallSetEnabled / VisualRecallDeleteFrame / StateProposeUpdate all
+                    // take the raw JSON args as the body.
                     args.to_string()
                 };
                 match self.backend.write(tool, &body) {

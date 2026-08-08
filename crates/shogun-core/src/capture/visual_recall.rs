@@ -8,17 +8,11 @@
 use std::path::Path;
 
 /// Persisted visual-recall preference. Default off; serde defaults keep partial files safe.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Settings {
     /// Master switch. Off means no screen pixels are read and no OCR runs.
     #[serde(default)]
     pub enabled: bool,
-}
-
-impl Default for Settings {
-    fn default() -> Self {
-        Self { enabled: false }
-    }
 }
 
 /// Load settings from `path`, or default when missing/unreadable.
