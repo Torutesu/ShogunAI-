@@ -3,10 +3,11 @@
    Design language: soft glass, generous corner radii, layered rounded cards. */
 :root {
   /* The panel sits on top of whatever you're working on, so it reads as glass rather than as an
-     opaque sheet: the tint is light enough to let the desktop through and the blur does the work
-     of keeping text legible. Prototyped in docs/wireframes before landing here. */
-  --glass: rgba(18, 21, 28, 0.62);
-  --glass-2: rgba(28, 32, 41, 0.70);
+     opaque sheet — but the webview has no real backdrop blur over the desktop, so the tint must
+     carry legibility on its own. Kept mostly opaque; a busy window behind should only ghost
+     through, never compete with the text. Prototyped in docs/wireframes before landing here. */
+  --glass: rgba(18, 21, 28, 0.86);
+  --glass-2: rgba(28, 32, 41, 0.92);
   --line: rgba(255, 255, 255, 0.11);
   --line-strong: rgba(255, 255, 255, 0.18);
   --ink: #eef1f5;
@@ -42,8 +43,8 @@
    sync in one place (App.tsx always sets data-appearance now, but the bootstrap default must
    still be dark to avoid a light flash). */
 :root[data-appearance="dark"] {
-  --glass: rgba(18, 21, 28, 0.62);
-  --glass-2: rgba(28, 32, 41, 0.70);
+  --glass: rgba(18, 21, 28, 0.86);
+  --glass-2: rgba(28, 32, 41, 0.92);
   --line: rgba(255, 255, 255, 0.11);
   --line-strong: rgba(255, 255, 255, 0.18);
   --ink: #eef1f5;
@@ -59,8 +60,8 @@
   --card: rgba(255, 255, 255, 0.045);
 }
 :root[data-appearance="light"] {
-  --glass: rgba(252, 253, 255, 0.82);
-  --glass-2: rgba(255, 255, 255, 0.88);
+  --glass: rgba(252, 253, 255, 0.94);
+  --glass-2: rgba(255, 255, 255, 0.97);
   --line: rgba(16, 24, 40, 0.10);
   --line-strong: rgba(16, 24, 40, 0.17);
   --ink: #1b1d22;
@@ -77,8 +78,8 @@
 }
 @media (prefers-color-scheme: light) {
   :root[data-appearance="auto"] {
-    --glass: rgba(252, 253, 255, 0.82);
-    --glass-2: rgba(255, 255, 255, 0.88);
+    --glass: rgba(252, 253, 255, 0.94);
+    --glass-2: rgba(255, 255, 255, 0.97);
     --line: rgba(16, 24, 40, 0.10);
     --line-strong: rgba(16, 24, 40, 0.17);
     --ink: #1b1d22;
@@ -178,16 +179,6 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.handle__count {
-  flex: none;
-  font-size: var(--fs-xs);
-  color: var(--muted);
-  background: var(--fill);
-  border: 1px solid var(--line);
-  border-radius: var(--r-pill);
-  padding: 3px 9px;
-}
-
 /* open panel */
 .panel {
   position: relative;

@@ -96,9 +96,8 @@ export const STRINGS = {
     // live line
     reading: "reading",
     yourScreen: "your screen",
-    // counts chip
-    due: "due",
-    waiting: "waiting",
+    // tracked-items toggle (opens the commitments / open-loops list)
+    stateList: "Tracked items",
     // peek (hover preview)
     peekHint: "click to open",
     // ⌃⌥N is the actual summon shortcut (shortcuts.json default); ⌥ alone is the draft tap.

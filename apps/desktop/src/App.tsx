@@ -847,15 +847,6 @@ export function App(): JSX.Element {
             {t.reading} <b>{live}</b>
           </span>
           )}
-          {state.commitments.length > 0 ? (
-            <span className="handle__count">
-              {state.commitments.length} {t.due}
-            </span>
-          ) : state.open_loops.length > 0 ? (
-            <span className="handle__count">
-              {state.open_loops.length} {t.waiting}
-            </span>
-          ) : null}
         </button>
       </div>
     );
@@ -904,9 +895,26 @@ export function App(): JSX.Element {
                     {t.reading} <b>{live}</b>
                   </span>
                 )}
+                {/* Raw counts ("4000 due") read as alarm-noise once real data lands, so the
+                    tracked-items list opens from a quiet icon instead of a number badge. */}
                 {totalState > 0 ? (
-                  <button className="chip" type="button" onClick={() => setShowState((v) => !v)} aria-pressed={showState}>
-                    {state.commitments.length} {t.due} · {state.open_loops.length} {t.waiting}
+                  <button
+                    className={`icon${showState ? " icon--on" : ""}`}
+                    type="button"
+                    title={t.stateList}
+                    aria-label={t.stateList}
+                    aria-pressed={showState}
+                    onClick={() => setShowState((v) => !v)}
+                  >
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                         stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M4 5.5l1.5 1.5L8 4.5" />
+                      <path d="M11 6h9" />
+                      <path d="M4 12l1.5 1.5L8 11" />
+                      <path d="M11 12.5h9" />
+                      <path d="M4 18.5l1.5 1.5L8 17.5" />
+                      <path d="M11 19h9" />
+                    </svg>
                   </button>
                 ) : null}
               </div>
