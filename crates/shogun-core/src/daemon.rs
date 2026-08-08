@@ -1150,6 +1150,13 @@ impl Db {
         shogun_memory::maintenance::delete_all(&mut g).ok()
     }
 
+    /// Delete user data at or after `cutoff_ts` (unix ms), sweeping orphaned state (FR-SET-07 /
+    /// #28). `None` on failure (the transaction leaves the DB untouched).
+    pub fn delete_since(&self, cutoff_ts: i64) -> Option<shogun_memory::maintenance::DeleteReport> {
+        let mut g = self.conn.lock().ok()?;
+        shogun_memory::maintenance::delete_since(&mut g, cutoff_ts).ok()
+    }
+
     // -------------------------------------------------------------- state writes (deliberate)
     // Unlike capture, state writes are low-frequency and deliberate (Dream Cycle consolidation,
     // API propose). They return the new id or `None` on failure so the caller (e.g. a Dream Cycle

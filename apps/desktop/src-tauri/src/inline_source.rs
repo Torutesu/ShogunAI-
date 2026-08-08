@@ -202,6 +202,82 @@ pub mod mac {
         Ok(())
     }
 
+    // ---- Privacy preferences (opt-in analytics; #28 §9-1, contract point for #62) ------------
+    //
+    // Mirrors the `LlmSettings`/`llm.json` store above: a static Mutex cache, an `init_*` loader
+    // called once at setup, and a path helper under the app-data dir. The KEY difference is intent
+    // — this is a NON-secret user preference, so a JSON file is the right home (secrets stay in the
+    // Keychain, invariant 7). Default is OFF: analytics is opt-IN, never on until the user says so.
+
+    #[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
+    pub struct PrivacyPrefs {
+        /// Anonymous, aggregated usage stats. OFF by default (opt-in) — #28 §9-1. The `bool`
+        /// default (`false`) IS the opt-out default, so `#[derive(Default)]` is load-bearing here:
+        /// a fresh install, or a `privacy.json` that fails to parse, lands on analytics OFF.
+        pub analytics_enabled: bool,
+    }
+
+    static PRIVACY_PREFS: std::sync::Mutex<Option<PrivacyPrefs>> = std::sync::Mutex::new(None);
+
+    fn privacy_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+        use tauri::Manager;
+        app.path().app_data_dir().ok().map(|d| d.join("privacy.json"))
+    }
+
+    /// Load persisted privacy prefs into the in-memory copy. Called once at setup (mirrors
+    /// `init_llm_settings`). A missing or unreadable file leaves the opt-out default in place.
+    pub fn init_privacy_prefs(app: &tauri::AppHandle) {
+        let mut p = PrivacyPrefs::default();
+        if let Some(path) = privacy_path(app) {
+            if let Ok(text) = std::fs::read_to_string(path) {
+                if let Ok(saved) = serde_json::from_str::<PrivacyPrefs>(&text) {
+                    p = saved;
+                }
+            }
+        }
+        eprintln!("[inline] analytics enabled = {}", p.analytics_enabled);
+        if let Ok(mut g) = PRIVACY_PREFS.lock() {
+            *g = Some(p);
+        }
+    }
+
+    /// The one gate every analytics/telemetry send MUST pass through (#28; the contract point for
+    /// the #62 PostHog work). Fails closed: if the cache is unreadable or unset, analytics is OFF.
+    #[allow(dead_code)]
+    pub fn analytics_enabled() -> bool {
+        PRIVACY_PREFS
+            .lock()
+            .ok()
+            .and_then(|g| g.clone())
+            .unwrap_or_default()
+            .analytics_enabled
+    }
+
+    /// Current privacy prefs for the Settings UI. Defaults (analytics OFF) when unset.
+    #[tauri::command]
+    pub fn get_privacy_prefs() -> PrivacyPrefs {
+        PRIVACY_PREFS.lock().ok().and_then(|g| g.clone()).unwrap_or_default()
+    }
+
+    /// Turn anonymous usage stats on or off, persisted to `privacy.json`. The value the user sets
+    /// here is the only thing `analytics_enabled()` (and therefore any future send) reads.
+    #[tauri::command]
+    pub fn set_analytics_enabled(enabled: bool, app: tauri::AppHandle) -> Result<(), String> {
+        let p = PrivacyPrefs { analytics_enabled: enabled };
+        if let Some(path) = privacy_path(&app) {
+            if let Some(dir) = path.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+            let json = serde_json::to_string_pretty(&p).map_err(|e| e.to_string())?;
+            std::fs::write(&path, json).map_err(|e| format!("save failed: {e}"))?;
+        }
+        if let Ok(mut g) = PRIVACY_PREFS.lock() {
+            *g = Some(p);
+        }
+        eprintln!("[inline] analytics_enabled → {enabled}");
+        Ok(())
+    }
+
     // ---- AX helpers -------------------------------------------------------------------------
 
     /// Copy a string attribute off an element (create rule; released here). `None` if absent or not
@@ -496,6 +572,28 @@ pub mod mac {
         Ok(())
     }
 
+    /// Last 4 characters of the ACTIVE provider's BYOK key for the Settings read-back echo, or
+    /// `None` when no key is set. Only the 4-char suffix crosses to the webview — the full key
+    /// stays in Rust and is NEVER returned or logged (invariant 7 / NFR-SEC-02). A key too short
+    /// to have 4 chars is masked entirely rather than echoed.
+    #[tauri::command]
+    pub fn byok_key_last4() -> Option<String> {
+        let provider = current_settings().provider;
+        keychain_byok(&provider).and_then(|k| {
+            let k = k.trim();
+            if k.is_empty() {
+                return None;
+            }
+            // Mask entirely rather than echo a key too short to have a 4-char suffix, so the
+            // full secret is never returned (invariant 7). Otherwise take the last 4 only.
+            if k.chars().count() < 4 {
+                Some("····".to_string())
+            } else {
+                Some(Secret::new(k).last4())
+            }
+        })
+    }
+
     /// Opt-in echo mock, for exercising the AX read→insert loop on device without a key.
     ///
     /// Off unless `SHOGUN_MOCK_AGENT=1`. It used to be the automatic fallback whenever a key was
@@ -771,6 +869,57 @@ pub mod mac {
         ok
     }
 
+    /// Delete user data captured within the last `range` window (#28). `range` is "1h" or "24h".
+    /// Local and immediate — nothing is sent anywhere. Returns the per-table deletion report.
+    #[tauri::command]
+    pub fn delete_data_since(range: String, db: tauri::State<'_, Db>) -> Result<String, String> {
+        let window_ms: i64 = match range.as_str() {
+            "1h" => 60 * 60 * 1000,
+            "24h" => 24 * 60 * 60 * 1000,
+            other => return Err(format!("unknown range: {other}")),
+        };
+        let cutoff = db.now_ms() - window_ms;
+        let report = db.delete_since(cutoff).ok_or_else(|| "deletion failed".to_string())?;
+        eprintln!("[shell] delete_data_since {range} — events={} people={} commitments={}",
+            report.events, report.people, report.commitments);
+        serde_json::to_string(&report).map_err(|e| e.to_string())
+    }
+
+    /// Delete ALL user data and every user-held secret, then clear the account's local state (#28).
+    ///
+    /// Wipes the memory DB rows (schema + encrypted DB file are KEPT so the app keeps working) and
+    /// removes, best-effort, every user secret from the Keychain:
+    ///   - all BYOK provider keys (`<provider>-byok`),
+    ///   - all OAuth token sets for connected services (`<source>-tokenset`),
+    ///   - the Composio API key (`composio-api-key`).
+    ///
+    /// The local DB encryption key (`memory-db-key`) is intentionally KEPT: `delete_all` clears the
+    /// rows but leaves the encrypted DB file and schema in place, so deleting its key would brick a
+    /// database the app still needs to open. A missing Keychain entry is a no-op.
+    #[tauri::command]
+    pub fn delete_all_and_account(db: tauri::State<'_, Db>) -> Result<String, String> {
+        let report = db.delete_all().ok_or_else(|| "deletion failed".to_string())?;
+        // BYOK provider keys.
+        for provider in PROVIDERS {
+            let _ = security_framework::passwords::delete_generic_password(
+                KEYCHAIN_SERVICE, keychain_account(provider));
+        }
+        // OAuth token sets for every connectable service (`<source>-tokenset`).
+        let token_store = shogun_integrations::KeychainTokenStore::new(KEYCHAIN_SERVICE);
+        for service in shogun_mcp::scope::ALL_SERVICES {
+            use shogun_integrations::TokenStore;
+            let _ = token_store.delete(*service);
+        }
+        // The Composio API key (reuse the approvals command's not-found-tolerant helper).
+        let _ = crate::approvals::mac::clear_composio_key();
+        refresh_has_key();
+        eprintln!(
+            "[shell] delete_all_and_account — all user data, BYOK keys, OAuth token sets and the \
+             Composio key removed (DB encryption key kept)"
+        );
+        serde_json::to_string(&report).map_err(|e| e.to_string())
+    }
+
     /// How much retrieved evidence the chat prompt carries. Six excerpts of ~600 chars keeps the
     /// grounded half well under a page of context while covering a thread's worth of hits.
     const CHAT_EVIDENCE_HITS: usize = 6;
@@ -951,5 +1100,31 @@ pub mod mac {
             m.record_first_token_ms(started.elapsed().as_secs_f64() * 1000.0);
         }
         answered
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::{analytics_enabled, PrivacyPrefs, PRIVACY_PREFS};
+
+        /// Analytics is opt-IN: a fresh `PrivacyPrefs` (a new install, or a `privacy.json` that
+        /// fails to parse and falls back to the default) must have stats OFF. The `bool` default
+        /// carries this, so the test guards against anyone changing the field default under it.
+        #[test]
+        fn default_prefs_have_analytics_off() {
+            assert!(!PrivacyPrefs::default().analytics_enabled, "opt-in: default must be OFF");
+        }
+
+        /// Fail-closed: with the cache unset (`None`) — before `init_privacy_prefs` runs, or if the
+        /// lock is poisoned — the gate every send passes through must report OFF, never ON. The
+        /// static starts as `None`; no test in this module ever populates it, so this reads the
+        /// genuine unset path.
+        #[test]
+        fn analytics_gate_is_closed_when_cache_is_unset() {
+            assert!(
+                PRIVACY_PREFS.lock().map(|g| g.is_none()).unwrap_or(true),
+                "precondition: the prefs cache is unset in this test process",
+            );
+            assert!(!analytics_enabled(), "fail-closed: unset cache must gate analytics OFF");
+        }
     }
 }

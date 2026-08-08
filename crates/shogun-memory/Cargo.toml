@@ -11,6 +11,8 @@ description = "SHOGUN memory: SQLite schema, versioned migrations, event log, st
 # testable on Linux CI. Data centre of gravity is Rust (AR-04); the webview never touches this.
 
 [dependencies]
+# The pure secret-redaction logic (DB write path + log path). Kept in its own dependency-free crate.
+shogun-redact = { path = "../shogun-redact" }
 rusqlite = { version = "0.31", features = ["bundled-sqlcipher-vendored-openssl"] }
 sqlite-vec = "0.1"
 zerocopy = "0.7"

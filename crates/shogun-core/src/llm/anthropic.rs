@@ -12,6 +12,16 @@
 //! Linux with a [`MockTransport`]. The invariant-5 key split is preserved end-to-end: the batch
 //! client is constructed with a [`SelectKkKey`], the agent client with a [`ByokKey`].
 //!
+//! **Data-use note (#28, design decision ①):** the Anthropic API does not use inputs or outputs
+//! to train models by default — this is a commitment in Anthropic's Commercial Terms, not a
+//! setting we toggle. There is **no per-request "do not train" header**, so this client sets none;
+//! the accurate statement to make to users (and in docs/privacy-security.md) is that training
+//! non-use is the default, not that we opted out of it. Standard commercial retention deletes API
+//! inputs/outputs on the vendor backend within ~30 days (longer only for a flagged Usage Policy
+//! violation). Zero Data Retention is an enterprise account-level arrangement — again not a header,
+//! and not something wired here. Nothing below changes request behaviour; this is documentation of
+//! the vendor's default so the product's privacy copy stays truthful.
+//!
 //! **Streaming note (SLO-03):** the transport returns a full response body, so token-by-token
 //! first-token latency is not yet expressible here — [`AnthropicAgentClient::complete`] parses the
 //! whole SSE body and returns the accumulated text. A streaming transport variant is the tracked

@@ -287,6 +287,39 @@ export const STRINGS = {
     // before: a disclosure that describes a future build is not a disclosure.
     meetingDisclosure:
       "Nothing joins your call and no audio is captured. SHOGUN opens a note beside the meeting; what you write stays on this Mac.",
+    // Privacy & Security (issue #28). One home for the key, the data-use policy, and deletion.
+    privacyTitle: "Privacy & Security",
+    // Key card. The key never leaves the Keychain and is never shown back in plaintext — settled
+    // state is a set/not-set indicator only (no last-4: the backend deliberately hands out no key
+    // material). Reuses the model/provider picker and key entry moved here from the old key block.
+    keyEncryptedNote:
+      "Your key is encrypted in the macOS Keychain. No one — including our team — can read it in plaintext.",
+    // Data-use policy card.
+    policyNotTrained: "Not used for model training",
+    policyLocalFirst: "Local-first",
+    policyEncrypted: "Encrypted at rest and in transit",
+    policyLink: "Read the full privacy policy",
+    // Data deletion card. Local and immediate — nothing is sent anywhere.
+    deleteTitle: "Delete data",
+    deleteHint: "Removes captured data from this device. This can't be undone.",
+    deleteLast1h: "Last hour",
+    deleteLast24h: "Last 24 hours",
+    deleteAll: "Delete everything & account",
+    // Range-specific confirm — names the window ({range} = "Last hour" / "Last 24 hours").
+    deleteConfirmRange: "Delete {range} from this device? This can't be undone.",
+    deleteAllConfirm:
+      "This deletes everything and removes your keys. Type DELETE to confirm.",
+    deleteAllConfirmPlaceholder: "Type DELETE",
+    deleteConfirmBtn: "Delete",
+    deleteDone: "Deleted from this device.",
+    // Anonymous usage card (Slice D). Opt-in — OFF by default, and never carries captured content.
+    analyticsTitle: "Anonymous usage",
+    analyticsNote:
+      "Off by default. When on, anonymous, aggregated usage stats help improve quality. Never your captured content.",
+    // Generic on/off labels for the notch settings toggles (own catalog, so they can't drift from
+    // the FULL_UI copy).
+    toggleOn: "On",
+    toggleOff: "Off",
     // errors
     sources: "Sources",
     noAnswer: "(no response)",

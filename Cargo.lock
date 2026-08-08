@@ -3893,6 +3893,7 @@ dependencies = [
  "shogun-integrations",
  "shogun-mcp",
  "shogun-memory",
+ "shogun-redact",
  "thiserror 1.0.69",
  "tokio",
  "twox-hash",
@@ -3972,11 +3973,16 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "shogun-redact",
  "sqlite-vec",
  "thiserror 1.0.69",
  "tokenizers",
  "zerocopy 0.7.35",
 ]
+
+[[package]]
+name = "shogun-redact"
+version = "0.1.0"
 
 [[package]]
 name = "simd-adler32"
