@@ -33,8 +33,10 @@ Gatekeeper の要件（macOS 14+）: Web からダウンロードされたアプ
 ```bash
 security find-identity -v -p codesigning
 # → "Developer ID Application: Your Name (XXXXXXXXXX)" の行の引用符内全体をコピー
-# 括弧内の10桁が Team ID
+# Developer ID 証明書では括弧内の10桁 = Team ID
 ```
+
+注意: `Apple Development: ...` の行を使わないこと（開発用。これで署名した配布物は Gatekeeper に弾かれる）。また **Apple Development 証明書の括弧内は Team ID ではない**（証明書固有 ID）。Team ID は [Membership details](https://developer.apple.com/account#MembershipDetailsCard) の Team ID、または証明書詳細の「組織単位(OU)」で確認する。
 
 ### 1-c. 公証（notarization)クレデンシャル
 

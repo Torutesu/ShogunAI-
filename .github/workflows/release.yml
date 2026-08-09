@@ -80,15 +80,21 @@ jobs:
       - run: pnpm --filter @shogun-ai/tokens build
 
       # On tag builds the tag is the version of record (v0.1.0 → 0.1.0); tauri.conf.json stays at
-      # 0.0.0 in-repo. workflow_dispatch keeps the in-repo version for throwaway test builds.
-      - name: resolve version from tag
-        id: version
+      # 0.0.0 in-repo. Patched in the checkout rather than passed as `tauri build --config`, because
+      # pnpm claims `--config` for its own settings and would eat the flag before tauri sees it.
+      # workflow_dispatch keeps the in-repo version for throwaway test builds.
+      - name: stamp version from tag
+        if: startsWith(github.ref, 'refs/tags/v')
         run: |
-          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            echo "config={\"version\":\"${GITHUB_REF_NAME#v}\"}" >> "$GITHUB_OUTPUT"
-          else
-            echo "config={}" >> "$GITHUB_OUTPUT"
-          fi
+          VERSION="${GITHUB_REF_NAME#v}"
+          node -e '
+            const fs = require("fs");
+            const p = "apps/desktop/src-tauri/tauri.conf.json";
+            const c = JSON.parse(fs.readFileSync(p, "utf8"));
+            c.version = process.argv[1];
+            fs.writeFileSync(p, JSON.stringify(c, null, 2) + "\n");
+          ' "$VERSION"
+          echo "Building version $VERSION"
 
       # App Store Connect API key lane: notarytool wants the .p8 on disk; Tauri reads its path
       # from APPLE_API_KEY_PATH. Written to RUNNER_TEMP, which the runner wipes after the job.
@@ -115,7 +121,7 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
-        run: pnpm --filter @shogun-ai/desktop tauri build --config '${{ steps.version.outputs.config }}'
+        run: pnpm --filter @shogun-ai/desktop build
 
       # Prove what we're about to publish: valid Developer ID signature, Gatekeeper acceptance,
       # stapled notarization ticket. A red X here beats a "damaged app" dialog on a user's Mac.
