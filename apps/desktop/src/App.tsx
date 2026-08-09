@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
@@ -20,6 +21,15 @@ function beginDrag(e: React.MouseEvent): void {
 }
 import { t } from "./strings";
 import { SERVICE_ICONS } from "./serviceIcons";
+import {
+  IconClose,
+  IconHistory,
+  IconMaximize2,
+  IconMinimize,
+  IconPin,
+  IconPinOff,
+  IconSettings,
+} from "./utilityIcons";
 
 // SHOGUN panel. A visible, interactive window that hangs from the notch. Opening/closing is driven
 // by direct clicks in the webview (reliable — no dependency on the CGEventTap hover path or a global
@@ -137,12 +147,18 @@ const IN_TAURI =
 // Rust-driven respawns.
 const W = 560;
 const H_OPEN = 360;
-/** Idle chin height = measured safeAreaInsets.top on this machine (notch_h=32). Fill cutout. */
-const H_HANDLE = 32;
+/** Hardware notch cutout (safeAreaInsets.top). Welded black fills this — labels do not. */
+const H_DEAD = 32;
+/** Visible Idle content row below the cutout (boring.notch drop). */
+const H_CHIN_ROW = 28;
+/** Idle panel height = dead silicon band + readable content row. */
+const H_HANDLE = H_DEAD + H_CHIN_ROW;
 /** Leave grace after pointer exits unpinned panel (spec T4 / playbook P0: 300ms at R_exp). */
 const AUTO_COLLAPSE_MS = 300;
-/** Shell close paint budget — keep panel mounted until scaleY finishes, then shrink frame. */
-const COLLAPSE_ANIM_MS = 160;
+/** Shell open paint budget — Idle→Expanded morph (CLAUDE.md ≤100ms). */
+const OPEN_ANIM_MS = 100;
+/** Shell close paint budget — keep panel mounted until scale finishes, then shrink frame. */
+const COLLAPSE_ANIM_MS = 140;
 /** How long the pill holds a ⌥-tap outcome before returning to the live source. Long enough to
  *  read, short enough that it never becomes something you have to dismiss. */
 const INLINE_HOLD_MS = 2200;
@@ -245,10 +261,15 @@ export function App(): JSX.Element {
   const [open, setOpen] = useState<boolean>(true);
   /** Rust notch SM mirror — drives shell CSS only. Webview does not own dwell. */
   const [notchSm, setNotchSm] = useState<string>("expanded");
-  /** True while close scaleY runs; panel stays mounted until COLLAPSE_ANIM_MS elapses. */
+  /** True while open morph runs: full frame + idle-scale pose, then class flip to Expanded. */
+  const [expanding, setExpanding] = useState(false);
+  /** True while close scale runs; panel stays mounted until COLLAPSE_ANIM_MS elapses. */
   const [collapsing, setCollapsing] = useState(false);
   const collapseTimer = useRef<number | null>(null);
+  const expandTimer = useRef<number | null>(null);
   const beginCollapseRef = useRef<() => void>(() => undefined);
+  const expandRef = useRef<() => void>(() => undefined);
+  const stageRef = useRef<HTMLDivElement | null>(null);
   const openRef = useRef(true);
   const [status, setStatus] = useState<Status | null>(IN_TAURI ? null : MOCK_STATUS);
   const [state, setState] = useState<StateView>(IN_TAURI ? { commitments: [], open_loops: [] } : MOCK_STATE);
@@ -487,19 +508,8 @@ export function App(): JSX.Element {
         if (st === "hover" || st === "expanded") {
           // Never fight a user who pinned the panel open, and never re-open one they just closed
           // by hand — the tracker doesn't know about either.
-          setCollapsing(false);
-          if (collapseTimer.current != null) {
-            window.clearTimeout(collapseTimer.current);
-            collapseTimer.current = null;
-          }
           if (!openRef.current) {
-            // Frame first, class next frame — same morph discipline as expand().
-            sizeForViewRef.current({ open: true });
-            window.requestAnimationFrame(() => {
-              window.requestAnimationFrame(() => {
-                setOpen(true);
-              });
-            });
+            expandRef.current();
           }
         } else if (st === "idle" || st === "hidden" || st === "collapsing") {
           // Withdraw on the same rule as the pointer-leave path: pinned stays, work in progress
@@ -618,13 +628,34 @@ export function App(): JSX.Element {
   useEffect(() => cancelAutoCollapse, [cancelAutoCollapse]);
 
   openRef.current = open;
+
+  /** Paint chin→panel scale factors on the stage (compositor-only; no React re-render). */
+  const applyMorphScale = useCallback((w: number, h: number): void => {
+    const el = stageRef.current;
+    if (!el) return;
+    const chinW = handleRef.current?.getBoundingClientRect().width
+      ?? pillRef.current?.getBoundingClientRect().width
+      ?? W_HANDLE_FALLBACK;
+    const sx = Math.min(1, Math.max(0.22, chinW / Math.max(1, w)));
+    const sy = Math.min(1, Math.max(0.06, H_HANDLE / Math.max(1, h)));
+    el.style.setProperty("--shell-sx", sx.toFixed(4));
+    el.style.setProperty("--shell-sy", sy.toFixed(4));
+  }, []);
+
   const beginCollapse = useCallback((): void => {
     if (collapseTimer.current != null) return;
+    if (expandTimer.current != null) {
+      window.clearTimeout(expandTimer.current);
+      expandTimer.current = null;
+    }
+    setExpanding(false);
     if (!openRef.current) {
       setCollapsing(false);
       setNotchSm("idle");
       return;
     }
+    const target = showSettings ? setSize : chatSize;
+    applyMorphScale(target.w, target.h);
     setCollapsing(true);
     setNotchSm((s) => (s === "idle" || s === "hidden" ? s : "collapsing"));
     collapseTimer.current = window.setTimeout(() => {
@@ -634,32 +665,54 @@ export function App(): JSX.Element {
       setNotchSm("idle");
       sizeForViewRef.current({ open: false });
     }, COLLAPSE_ANIM_MS);
-  }, []);
+  }, [applyMorphScale, showSettings, setSize, chatSize]);
   beginCollapseRef.current = beginCollapse;
 
   const collapse = (): void => {
     setShowSettings(false);
     beginCollapse();
   };
-  const expand = (): void => {
+  const expand = useCallback((): void => {
     if (collapseTimer.current != null) {
       window.clearTimeout(collapseTimer.current);
       collapseTimer.current = null;
     }
+    if (expandTimer.current != null) {
+      window.clearTimeout(expandTimer.current);
+      expandTimer.current = null;
+    }
     setCollapsing(false);
     setNotchSm("expanded");
-    // Grow the NSPanel first, then flip shell class on the next frame so scaleY actually
-    // transitions inside the open frame (resize + class in one tick kills the morph).
-    sizeForView({ open: true });
-    window.requestAnimationFrame(() => {
+    const target = showSettings ? setSize : chatSize;
+    applyMorphScale(target.w, target.h);
+    // 1) Grow NSPanel to full frame. 2) Pose visible shell at Idle scale. 3) Flip to Expanded
+    // so transform actually transitions (resize+class same tick kills the morph).
+    void (async () => {
+      if (IN_TAURI) {
+        if (showSettings) await applyPanelSize(setSize.w, setSize.h);
+        else await applyPanelSize(chatSize.w, chatSize.h);
+      }
+      // Commit Idle-scale pose synchronously so the next frame only retargets transform.
+      flushSync(() => {
+        setExpanding(true);
+      });
+      const panel = stageRef.current?.querySelector(".panel");
+      if (panel instanceof HTMLElement) void panel.offsetHeight;
       window.requestAnimationFrame(() => {
         setOpen(true);
+        expandTimer.current = window.setTimeout(() => {
+          expandTimer.current = null;
+          setExpanding(false);
+        }, OPEN_ANIM_MS);
       });
-    });
-  };
+    })();
+  }, [applyMorphScale, showSettings, setSize, chatSize]);
+  expandRef.current = expand;
+
   useEffect(
     () => () => {
       if (collapseTimer.current != null) window.clearTimeout(collapseTimer.current);
+      if (expandTimer.current != null) window.clearTimeout(expandTimer.current);
     },
     [],
   );
@@ -761,18 +814,20 @@ export function App(): JSX.Element {
 
   const voiceLive = voiceActive ? voice : null;
 
-  // Shell class: Rust SM when available; collapsing overrides for close paint.
+  // Shell class: Rust SM when available; expanding/collapsing override for morph paint.
   // Rust emits "hover" (HoverIntent); map to is-hoverintent for CSS.
   const shellMode = collapsing
     ? "is-collapsing"
-    : open
-      ? "is-expanded"
-      : notchSm === "hover" || notchSm === "hoverintent"
-        ? "is-hoverintent"
-        : "is-idle";
+    : expanding && !open
+      ? "is-expanding"
+      : open
+        ? "is-expanded"
+        : notchSm === "hover" || notchSm === "hoverintent"
+          ? "is-hoverintent"
+          : "is-idle";
 
-  // Idle face only when fully collapsed — never alongside expanded/collapsing panel (double-pill).
-  const showIdleFace = !open && !collapsing;
+  // Idle face only when fully collapsed — never during expand/collapse (double-pill flash).
+  const showIdleFace = !open && !collapsing && !expanding;
 
   const idleChin = !showIdleFace ? null : meetingLive ? (
     <div ref={pillRef}>
@@ -790,35 +845,38 @@ export function App(): JSX.Element {
       onClick={() => expand()}
       title={t.openPanel}
     >
-      {inlineLine ? (
-        <span className={`handle__live inline--${inlineLine.tone}`}>
-          <span className={`inline__dot inline__dot--${inlineLine.tone}`} />
-          {inlineLine.text}
-        </span>
-      ) : (
-        <span className="handle__live">
-          <span className="live__dot" />
-          {t.reading} <b>{live}</b>
-        </span>
-      )}
-      {state.commitments.length > 0 ? (
-        <span className="handle__count">
-          {state.commitments.length} {t.due}
-        </span>
-      ) : state.open_loops.length > 0 ? (
-        <span className="handle__count">
-          {state.open_loops.length} {t.waiting}
-        </span>
-      ) : null}
+      <span className="handle__dead" aria-hidden />
+      <span className="handle__row">
+        {inlineLine ? (
+          <span className={`handle__live inline--${inlineLine.tone}`}>
+            <span className={`inline__dot inline__dot--${inlineLine.tone}`} />
+            {inlineLine.text}
+          </span>
+        ) : (
+          <span className="handle__live">
+            <span className="live__dot" />
+            {t.reading} <b>{live}</b>
+          </span>
+        )}
+        {state.commitments.length > 0 ? (
+          <span className="handle__count">
+            {state.commitments.length} {t.due}
+          </span>
+        ) : state.open_loops.length > 0 ? (
+          <span className="handle__count">
+            {state.open_loops.length} {t.waiting}
+          </span>
+        ) : null}
+      </span>
     </button>
   );
 
-  // Panel always mounted (playbook P0 pre-mount). Idle face mounts only when needed.
+  // Panel always mounted (playbook P0 pre-mount). Idle face mounts only when fully Idle.
   return (
-    <div className={`stage notch-shell ${shellMode}`}>
+    <div ref={stageRef} className={`stage notch-shell ${shellMode}`}>
       {voiceToast ? <div className="voice-toast">{voiceToast}</div> : null}
       {showIdleFace ? (
-        <div className="notch-idle" aria-hidden={open || collapsing}>
+        <div className="notch-idle" aria-hidden={open || collapsing || expanding}>
           {idleChin}
         </div>
       ) : null}
@@ -826,7 +884,7 @@ export function App(): JSX.Element {
         className="panel"
         onPointerEnter={cancelAutoCollapse}
         onPointerLeave={onPanelLeave}
-        aria-hidden={!open || collapsing}
+        aria-hidden={!open || collapsing || (expanding && !open)}
       >
         <div className="panel__body">
         {showSettings ? (
@@ -882,14 +940,7 @@ export function App(): JSX.Element {
                   aria-pressed={pinned}
                   onClick={() => setPinned((v) => !v)}
                 >
-                  {/* A pin that leans when unpinned — the state is legible without reading the
-                      tooltip, which matters for a control that changes how the panel behaves. */}
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                       stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"
-                       style={pinned ? undefined : { transform: "rotate(45deg)" }}>
-                    <path d="M9 4h6l-1 6 3 3H7l3-3-1-6z" />
-                    <path d="M12 13v7" />
-                  </svg>
+                  {pinned ? <IconPin /> : <IconPinOff />}
                 </button>
                 {/* Only offered when there is a backlog to open — an always-present control for an
                     empty history is a button that does nothing most of the time. */}
@@ -902,7 +953,7 @@ export function App(): JSX.Element {
                     aria-pressed={showHistory}
                     onClick={() => setShowHistory((v) => !v)}
                   >
-                    ⏱
+                    <IconHistory />
                   </button>
                 ) : null}
                 {/* The panel is for a glance and a keystroke; anything you want to sit and read —
@@ -916,13 +967,14 @@ export function App(): JSX.Element {
                     if (IN_TAURI) void invoke("open_full_ui").catch((err) => uiLog(`open_full_ui failed: ${err}`));
                   }}
                 >
-                  ⤢
+                  <IconMaximize2 />
                 </button>
                 <button className="icon" type="button" title={t.settings} aria-label={t.settings} onClick={openSettings}>
-                  ⚙︎
+                  <IconSettings />
                 </button>
+                <span className="head__divider" aria-hidden="true" />
                 <button className="icon" type="button" title={t.minimize} aria-label={t.minimize} onClick={collapse}>
-                  ▁
+                  <IconMinimize />
                 </button>
                 <button
                   className="icon icon--close"
@@ -933,7 +985,7 @@ export function App(): JSX.Element {
                     if (IN_TAURI) void invoke("quit_app").catch((err) => uiLog(`quit failed: ${err}`));
                   }}
                 >
-                  ✕
+                  <IconClose />
                 </button>
               </div>
             </header>
@@ -1888,7 +1940,9 @@ function VisualRecallSection(): JSX.Element {
       </div>
       <div className="set__hint">{t.visualRecallHint}</div>
       <button type="button" className="vr-launch" onClick={openBrowse}>
-        <span className="vr-launch__glyph" aria-hidden="true">⤢</span>
+        <span className="vr-launch__glyph" aria-hidden="true">
+          <IconMaximize2 size={16} />
+        </span>
         <span className="vr-launch__body">
           <span className="vr-launch__title">{t.visualRecallBrowse}</span>
           <span className="vr-launch__sub">{t.visualRecallBrowseSub}</span>

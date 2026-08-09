@@ -16,22 +16,28 @@
   --accent-soft: color-mix(in srgb, var(--accent) 26%, transparent);
   --live: #30d158;
   --warn: #ff9f0a;
+  --danger: #ff6b6b;
   --fill: rgba(255, 255, 255, 0.06);
   --fill-strong: rgba(255, 255, 255, 0.12);
   --card: rgba(255, 255, 255, 0.045);
   --sys: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  /* Shell motion (playbook §3). --sp kept as alias for non-shell UI chrome. */
-  --notch-open: 120ms cubic-bezier(0.32, 0.72, 0, 1);
-  --notch-close: 160ms cubic-bezier(0.4, 0, 0.2, 1);
-  --notch-content: 90ms cubic-bezier(0.16, 1, 0.3, 1);
+  /* Shell motion (playbook §3). Open ≤100ms SLO; close ~140ms critically-damped feel. */
+  --notch-open: 100ms cubic-bezier(0.32, 0.72, 0, 1);
+  --notch-close: 140ms cubic-bezier(0.4, 0, 0.2, 1);
+  --notch-content: 72ms cubic-bezier(0.16, 1, 0.3, 1);
   --notch-hover: 80ms ease-out;
   --sp: var(--notch-close);
   /* Idle chin (spec) vs Expanded bottom radius — tween with shell. */
   --r-idle-bot: 8px;
   --r-exp-bot: 16px;
   --r-shell-bot: var(--r-idle-bot);
-  /* Hardware notch band = safeAreaInsets.top (measured 32pt here). Fill cutout flush. */
-  --chin-h: 32px;
+  /* Morph start scale: chin W×H over panel W×H. JS overwrites on expand/collapse. */
+  --shell-sx: 0.46;
+  --shell-sy: 0.089;
+  /* Hardware cutout (dead) + visible content drop below silicon (boring.notch). */
+  --notch-dead-h: 32px;
+  --chin-row-h: 28px;
+  --chin-h: calc(var(--notch-dead-h) + var(--chin-row-h));
   /* Type scale. Tightened one step across the board: this is a dense overlay hanging off the
      menu bar, and at the previous sizes a few settings groups filled the whole screen height. */
   --fs-xs: 10px;
@@ -65,6 +71,7 @@
   --accent-ink: #06101c;
   --live: #30d158;
   --warn: #ff9f0a;
+  --danger: #ff6b6b;
   --fill: rgba(255, 255, 255, 0.06);
   --fill-strong: rgba(255, 255, 255, 0.12);
   --card: rgba(255, 255, 255, 0.045);
@@ -82,6 +89,7 @@
   --accent-ink: #ffffff;
   --live: #1f9e3c;
   --warn: #a4560a;
+  --danger: #d64545;
   --fill: rgba(0, 0, 0, 0.045);
   --fill-strong: rgba(0, 0, 0, 0.09);
   --card: rgba(0, 0, 0, 0.035);
@@ -100,6 +108,7 @@
     --accent-ink: #ffffff;
     --live: #1f9e3c;
     --warn: #a4560a;
+    --danger: #d64545;
     --fill: rgba(0, 0, 0, 0.045);
     --fill-strong: rgba(0, 0, 0, 0.09);
     --card: rgba(0, 0, 0, 0.035);
@@ -146,6 +155,7 @@ body {
 .stage--handle,
 .notch-shell.is-idle,
 .notch-shell.is-hoverintent,
+.notch-shell.is-expanding,
 .notch-shell.is-collapsing {
   align-items: center;
   justify-content: flex-start;
@@ -155,7 +165,8 @@ body {
   --r-shell-bot: var(--r-exp-bot);
 }
 .notch-shell.is-idle,
-.notch-shell.is-hoverintent {
+.notch-shell.is-hoverintent,
+.notch-shell.is-expanding {
   --r-shell-bot: var(--r-idle-bot);
 }
 .notch-shell.is-collapsing {
@@ -177,25 +188,17 @@ body {
   align-items: stretch;
   width: 100%;
   z-index: 2;
-  transition:
-    opacity var(--notch-close),
-    transform var(--notch-close);
-}
-.notch-shell.is-expanded .notch-idle,
-.notch-shell.is-collapsing .notch-idle {
-  opacity: 0;
-  visibility: hidden;
-  pointer-events: none;
-  transform: scaleY(0.92);
-  transform-origin: top center;
 }
 
-/* collapsed handle — welded opaque #000 chin; top square, bottom radius 8 */
+/* collapsed handle — welded opaque #000 chin; top square, bottom radius 8.
+   Dead band under hardware cutout; labels/icons only in the drop row below. */
 .handle {
   position: relative;
   display: inline-flex;
-  align-items: center;
-  gap: 8px;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: 0;
   width: auto;
   max-width: min(320px, 100%);
   height: var(--chin-h);
@@ -212,10 +215,23 @@ body {
   font-family: var(--sys);
   cursor: pointer;
   text-align: left;
-  transition:
-    border-radius var(--notch-open),
-    opacity var(--notch-open);
-  will-change: transform, opacity;
+  box-sizing: border-box;
+}
+.handle__dead {
+  display: block;
+  flex: none;
+  height: var(--notch-dead-h);
+  min-height: var(--notch-dead-h);
+  pointer-events: none;
+}
+.handle__row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: var(--chin-row-h);
+  min-height: var(--chin-row-h);
+  max-height: var(--chin-row-h);
+  min-width: 0;
 }
 .handle::before {
   content: "";
@@ -272,10 +288,14 @@ body {
   overflow: hidden;
   transform-origin: top center;
   transition:
-    opacity var(--notch-open),
     transform var(--notch-open),
     border-radius var(--notch-open);
-  will-change: transform, opacity;
+}
+/* Always fill the fixed webview frame — never flip position absolute↔flex mid-morph. */
+.notch-shell .panel {
+  position: absolute;
+  inset: 0;
+  flex: none;
 }
 /* Glass fill below the chin band (notch rectangle stays pure #000). */
 .panel::after {
@@ -291,6 +311,22 @@ body {
   z-index: 0;
   pointer-events: none;
   border-radius: 0 0 var(--r-shell-bot) var(--r-shell-bot);
+  opacity: 0;
+  transition: opacity var(--notch-content);
+}
+.notch-shell.is-expanded .panel::after {
+  opacity: 1;
+  transition-delay: 24ms;
+}
+/* Blur is expensive under scale — keep morph paint as opaque black only. */
+.notch-shell.is-expanding .panel::after,
+.notch-shell.is-collapsing .panel::after,
+.notch-shell.is-idle .panel::after,
+.notch-shell.is-hoverintent .panel::after {
+  opacity: 0;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  transition: none;
 }
 .panel::before {
   content: "";
@@ -310,35 +346,49 @@ body {
   flex-direction: column;
   flex: 1;
   min-height: 0;
+  transform-origin: top center;
 }
 /* Pre-mounted Expanded: paint-hidden Idle, paint-ready for T2 class flip.
    visibility:hidden (not just opacity) so a compositor glitch can't show a second chin. */
 .notch-shell.is-idle .panel,
 .notch-shell.is-hoverintent .panel {
-  position: absolute;
-  inset: 0;
   opacity: 0;
   visibility: hidden;
   pointer-events: none;
-  transform: scaleY(0.18);
-  /* Keep in compositor; do not use display:none. */
+  transform: scale(var(--shell-sx), var(--shell-sy));
+  transition: none;
+}
+/* Morph start pose: full frame, opaque black chin-scale shell, no Idle face (one shape). */
+.notch-shell.is-expanding .panel {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: none;
+  transform: scale(var(--shell-sx), var(--shell-sy));
+  border-radius: 0 0 var(--r-idle-bot) var(--r-idle-bot);
+  /* Keep transition armed — next frame only changes transform target (is-expanded). */
+  transition:
+    transform var(--notch-open),
+    border-radius var(--notch-open);
+  will-change: transform;
 }
 .notch-shell.is-expanded .panel {
   opacity: 1;
   visibility: visible;
-  transform: scaleY(1);
+  transform: scale(1, 1);
   pointer-events: auto;
   animation: none;
 }
 .notch-shell.is-collapsing .panel {
-  opacity: 0;
+  /* Stay opaque — reverse morph into chin, never fade-pop away. */
+  opacity: 1;
   visibility: visible;
-  transform: scaleY(0.18);
+  transform: scale(var(--shell-sx), var(--shell-sy));
   pointer-events: none;
+  border-radius: 0 0 var(--r-idle-bot) var(--r-idle-bot);
   transition:
-    opacity var(--notch-close),
     transform var(--notch-close),
     border-radius var(--notch-close);
+  will-change: transform;
 }
 .notch-shell.is-expanded .panel__body {
   opacity: 1;
@@ -347,28 +397,35 @@ body {
     opacity var(--notch-content),
     transform var(--notch-content);
   transition-delay: 16ms;
-  transform-origin: top center;
 }
 .notch-shell.is-idle .panel__body,
 .notch-shell.is-hoverintent .panel__body,
-.notch-shell.is-collapsing .panel__body {
+.notch-shell.is-expanding .panel__body {
   opacity: 0;
   transform: scale(0.92);
   transition: none;
+}
+.notch-shell.is-collapsing .panel__body {
+  opacity: 0;
+  transform: scale(0.94);
+  transition:
+    opacity 48ms ease-out,
+    transform 48ms ease-out;
 }
 /* Fallback when shell classes absent (dev / first paint): keep prior unfurl, clipped to SLO. */
 @keyframes panel-unfurl {
   from {
     opacity: 0;
-    transform: scaleY(0.92);
+    transform: scale(0.96, 0.92);
   }
   to {
     opacity: 1;
-    transform: scaleY(1);
+    transform: scale(1, 1);
   }
 }
 .stage:not(.notch-shell) .panel {
   animation: panel-unfurl var(--notch-open) both;
+  transform-origin: top center;
 }
 
 .live__dot {
@@ -390,11 +447,12 @@ body {
   }
 }
 
-/* header — height locked to Idle chin so open reads as chin stretch, not new window */
+/* header — height locked to Idle chin so open reads as chin stretch, not new window.
+   Content sits in the drop row below the hardware cutout (same as Idle handle). */
 .head {
   flex: none;
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   justify-content: space-between;
   gap: 8px;
   height: var(--chin-h);
@@ -403,6 +461,7 @@ body {
   /* Left padding kept tight so the live-source chip lands close to where the collapsed pill sits,
      i.e. the indicator barely moves when the panel opens. */
   padding: 0 9px;
+  padding-top: var(--notch-dead-h);
   background: #000;
   border-bottom: 1px solid var(--line);
   cursor: grab;
@@ -427,6 +486,13 @@ body {
   align-items: center;
   gap: 4px;
   flex: none;
+}
+.head__divider {
+  flex: none;
+  width: 1px;
+  height: 13px;
+  margin: 0 2px;
+  background: var(--line-strong);
 }
 .chip {
   border: 1px solid var(--line);
@@ -453,20 +519,19 @@ body {
 .icon {
   display: grid;
   place-items: center;
-  width: 28px;
-  height: 28px;
-  min-width: 28px;
-  min-height: 28px;
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
+  min-height: 24px;
   border: none;
   background: transparent;
-  color: var(--muted);
+  color: var(--ink-soft, #b8c0cc);
   border-radius: var(--r-sm);
-  font-size: 13px;
   cursor: pointer;
   transition: background var(--notch-hover), color var(--notch-hover);
 }
 .icon:hover {
-  background: rgba(128, 128, 128, 0.2);
+  background: rgba(128, 128, 128, 0.22);
   color: var(--ink);
 }
 /* An active toggle has to read as "on" at a glance — this one changes how the panel behaves, so
@@ -480,6 +545,8 @@ body {
   color: var(--accent);
 }
 .icon svg {
+  display: block;
+  flex: none;
   transition: transform var(--notch-hover);
 }
 
@@ -952,13 +1019,15 @@ body {
   background: rgba(248, 113, 113, 0.08);
 }
 .vr-chrome__btn--icon {
-  width: 28px;
-  height: 28px;
+  width: 30px;
+  height: 30px;
   padding: 0;
   display: grid;
   place-items: center;
-  font-size: 13px;
-  color: var(--muted, #8a8a90);
+  color: var(--ink-soft, #b8c0cc);
+}
+.vr-chrome__btn--icon:hover {
+  color: var(--ink);
 }
 .vr-body {
   flex: 1;
@@ -1404,8 +1473,12 @@ body {
   border-radius: 5px;
 }
 
+.icon--close {
+  color: var(--danger);
+}
 .icon--close:hover {
-  color: var(--warn);
+  color: color-mix(in srgb, var(--danger) 78%, white);
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
 }
 
 kbd {
@@ -1672,12 +1745,13 @@ kbd {
   min-height: var(--chin-h);
   max-height: var(--chin-h);
   margin: 0;
-  padding: 0 8px 0 12px;
+  padding: var(--notch-dead-h) 8px 0 12px;
   max-width: 460px;
   background: #000;
   border: none;
   border-radius: 0 0 var(--r-shell-bot) var(--r-shell-bot);
   box-shadow: none;
+  box-sizing: border-box;
   color: var(--ink);
   font-family: var(--sys);
   font-size: var(--fs-sm);
@@ -1753,12 +1827,13 @@ kbd {
   min-height: var(--chin-h);
   max-height: var(--chin-h);
   margin: 0;
-  padding: 0 12px;
+  padding: var(--notch-dead-h) 12px 0;
   max-width: 360px;
   background: #000;
   border: none;
   border-radius: 0 0 var(--r-shell-bot) var(--r-shell-bot);
   box-shadow: none;
+  box-sizing: border-box;
   color: var(--ink);
   font-family: var(--sys);
   font-size: var(--fs-sm);
@@ -2301,6 +2376,7 @@ kbd {
 .ov__icon {
   width: 18px;
   height: 18px;
+  display: block;
 }
 .ov__livebody {
   flex: 1;
