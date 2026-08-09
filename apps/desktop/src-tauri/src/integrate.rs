@@ -696,10 +696,10 @@ pub mod mac {
     }
 
     fn metrics_dir() -> PathBuf {
-        // ~/Library/Application Support/dev.shogun.spike/metrics/ (spec §4.4; the
+        // ~/Library/Application Support/com.syogun.shogunai/metrics/ (spec §4.4; the
         // recorder appends YYYYMMDD.jsonl with UTC daily rotation).
         let base = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-        let dir = PathBuf::from(base).join("Library/Application Support/dev.shogun.spike/metrics");
+        let dir = PathBuf::from(base).join("Library/Application Support/com.syogun.shogunai/metrics");
         let _ = std::fs::create_dir_all(&dir);
         dir
     }

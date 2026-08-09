@@ -51,7 +51,7 @@ cd apps/desktop && pnpm install && pnpm tauri dev 2>/tmp/shogun.log
 
 ```
 [visual_recall] screen OCR off (default)
-[spike] memory DB: …/dev.shogun.spike/memory.db
+[spike] memory DB: …/com.syogun.shogunai/memory.db
 [spike] ⌘⇧J registered
 ```
 
@@ -91,7 +91,7 @@ security add-generic-password -s com.selectkk.shogun -a select-kk-batch -w
 - Visual recall を **Off** に戻す（⚙ から）
 - 保存されたフレームも消したい場合:
   ```
-  sqlite3 ~/Library/Application\ Support/dev.shogun.spike/memory.db "delete from screen_frames;"
+  sqlite3 ~/Library/Application\ Support/com.syogun.shogunai/memory.db "delete from screen_frames;"
   ```
   （§4.5 の穴のため、Off にしただけでは既存フレームは自動で消えない）
 
@@ -170,7 +170,7 @@ pnpm tauri dev 2>/tmp/shogun.log
 
 ```
 [visual_recall] screen OCR off (default)        ← 既定 OFF（オプトイン）であることの証明
-[spike] memory DB: …/dev.shogun.spike/memory.db
+[spike] memory DB: …/com.syogun.shogunai/memory.db
 [spike] connector runtime started (read-sync poller live)
 ```
 
@@ -184,8 +184,8 @@ pnpm tauri dev 2>/tmp/shogun.log
 
 ```
 # アプリを終了してから、DB をわざと壊す（バックアップを取ってから）
-cp ~/Library/Application\ Support/dev.shogun.spike/memory.db /tmp/memory.db.bak
-printf 'garbage' > ~/Library/Application\ Support/dev.shogun.spike/memory.db
+cp ~/Library/Application\ Support/com.syogun.shogunai/memory.db /tmp/memory.db.bak
+printf 'garbage' > ~/Library/Application\ Support/com.syogun.shogunai/memory.db
 ```
 
 再起動 → 期待するログ:
@@ -223,14 +223,14 @@ OCR は**常時**ではなくゲート付き（Screenpipe 方式）。狙って�
 ### 4.3 保存されているのは JPEG だけ・DB の中だけ
 
 ```
-sqlite3 ~/Library/Application\ Support/dev.shogun.spike/memory.db \
+sqlite3 ~/Library/Application\ Support/com.syogun.shogunai/memory.db \
   "select count(*), min(created_at_ms), sum(length(bytes)), group_concat(distinct mime) from screen_frames;"
 ```
 
 - `mime` が `image/jpeg` のみ（品質 65）。
 - **ディスク上に画像ファイルが1つも生まれていない**こと（不変条件2）:
   ```
-  find ~/Library/Application\ Support/dev.shogun.spike -type f \
+  find ~/Library/Application\ Support/com.syogun.shogunai -type f \
     \( -name '*.png' -o -name '*.jpg' -o -name '*.jpeg' -o -name '*.wav' -o -name '*.caf' -o -name '*.m4a' \)
   ```
   → **何も出ないのが正**。会議を録っても音声ファイルは生まれない。

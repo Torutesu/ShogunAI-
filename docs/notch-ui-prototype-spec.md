@@ -435,7 +435,7 @@ webview → Rust（Tauri command）:
 
 ### 4.4 記録フォーマット（JSONL）
 
-- パス: `~/Library/Application Support/dev.shogun.spike/metrics/YYYYMMDD.jsonl`（日次ローテーション。ソーク24hで最大2ファイル）。
+- パス: `~/Library/Application Support/com.syogun.shogunai/metrics/YYYYMMDD.jsonl`（日次ローテーション。ソーク24hで最大2ファイル）。
 - 1 行 = 1 レコード。共通フィールド: `{"ts": <epoch_ms>, "mono": <起動からのns>, "type": "<metric.*|event.*|counter.*|soak.*>", "v": 1, "payload": {...}}`
 - 代表例:
 

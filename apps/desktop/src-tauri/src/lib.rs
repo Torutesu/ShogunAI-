@@ -333,8 +333,8 @@ pub fn run() {
 fn setup_macos(app: &tauri::App) {
     use tauri::Manager;
 
-    // Loud identity banner: if more than one SHOGUN is alive (e.g. a stale bundled "SHOGUN
-    // Spike.app" left running from an earlier `open`), the visible panel may be the OLD process
+    // Loud identity banner: if more than one SHOGUN is alive (e.g. a stale bundled "ShogunAI.app"
+    // left running from an earlier `open`), the visible panel may be the OLD process
     // while shortcuts hit the new one — which looks exactly like "quit button dead, drag dead".
     // The PID makes that unambiguous in the log.
     eprintln!("========================================================");

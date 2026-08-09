@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "SHOGUN Spike",
+  "productName": "ShogunAI",
   "version": "0.0.0",
-  "identifier": "dev.shogun.spike",
+  "identifier": "com.syogun.shogunai",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
@@ -23,8 +23,10 @@
   "bundle": {
     "active": true,
     "targets": ["app"],
+    "icon": ["icons/icon.icns"],
     "macOS": {
-      "entitlements": "entitlements.plist"
+      "entitlements": "entitlements.plist",
+      "minimumSystemVersion": "14.0"
     }
   }
 }

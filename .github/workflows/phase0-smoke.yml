@@ -150,7 +150,7 @@ jobs:
 
       - name: Report + stream counts
         run: |
-          M="$HOME/Library/Application Support/dev.shogun.spike/metrics"
+          M="$HOME/Library/Application Support/com.syogun.shogunai/metrics"
           echo "---- metrics dir ----"; ls -la "$M" || true
           echo "---- stream counts ----"
           for t in metric.expand_latency metric.cpu_sample metric.cache_update event.expand_session event.expand_commit event.state_transition event.tap_status counter.top_band_entry soak.heartbeat; do
@@ -186,5 +186,5 @@ jobs:
             /tmp/report.md
             /tmp/expanded.png
             /tmp/idle.png
-            ~/Library/Application Support/dev.shogun.spike/metrics/*.jsonl
+            ~/Library/Application Support/com.syogun.shogunai/metrics/*.jsonl
           if-no-files-found: warn

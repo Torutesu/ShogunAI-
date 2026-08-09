@@ -15,7 +15,7 @@
 
 前提:
 - ビルド: `cargo tauri dev`（または `cargo run -p shogun-desktop-spike`）でアプリを起動できること
-- バンドル識別子は `dev.shogun.spike`（`tauri.conf.json`）
+- バンドル識別子は `com.syogun.shogunai`（`tauri.conf.json`）
 - 既定の長押しキーは**右⌘**（`hold_monitor.rs` の `HoldKey::RightCommand`）
 
 ---
@@ -156,12 +156,12 @@ PTT パネルは、notch が使う reparent 済みの `NATIVE_PANEL` ではな�
 
 ## 5. マイク権限ダイアログ
 
-- [ ] 一度権限をリセットする: `tccutil reset Microphone dev.shogun.spike`
+- [ ] 一度権限をリセットする: `tccutil reset Microphone com.syogun.shogunai`
 - [ ] アプリを再起動し、右⌘を押して hold する（マイクを初めて開く）
 - [ ] macOS の権限ダイアログが出て、そこに `Info.plist` の `NSMicrophoneUsageDescription` の
       文言が表示される
 - [ ] ダイアログで**許可**すると、そのまま録音が進む
-- [ ] もう一度 `tccutil reset Microphone dev.shogun.spike` してリセットし、今度は**拒否**する
+- [ ] もう一度 `tccutil reset Microphone com.syogun.shogunai` してリセットし、今度は**拒否**する
 - [ ] 拒否した場合、パネル内に `mic_unavailable` のエラー文
       （"SHOGUN cannot reach the microphone. Open Privacy & Security settings to allow it."）が出る
 - [ ] エラー文の「**Open Settings**」導線を押すと、プライバシー＞マイクの設定ペインが開く
@@ -198,16 +198,16 @@ push-to-talk の 1 回の発話は「1 プロンプトになって消える」�
 - [ ] 右⌘を押して数語話し、離してエージェントに応答させる（1 セッション完了させる）
 - [ ] 直後に、新しく作られたファイルが無いことを確認する:
       ```
-      find ~/Library/Application\ Support/dev.shogun.spike -newermt '-5 minutes'
+      find ~/Library/Application\ Support/com.syogun.shogunai -newermt '-5 minutes'
       ```
       → 音声ファイル（`.wav` / `.caf` / `.pcm` 等）が**1つも無い**こと
       （DB の WAL/ジャーナル等が出るのは可。音声波形ファイルが無いことを見る）
-- [ ] DB は `~/Library/Application Support/dev.shogun.spike/memory.db`。**暗号化されている**
+- [ ] DB は `~/Library/Application Support/com.syogun.shogunai/memory.db`。**暗号化されている**
       （Keychain の `memory-db-key` で開く SQLCipher DB）ので、素の `sqlite3` では開けません。
       行が増えていないことは次のどちらかで確認します:
   - [ ] 簡易確認: PTT セッションの**前後で `memory.db` の mtime とサイズが変わらない**こと。
         ```
-        stat -f '%m %z' ~/Library/Application\ Support/dev.shogun.spike/memory.db
+        stat -f '%m %z' ~/Library/Application\ Support/com.syogun.shogunai/memory.db
         ```
         （PTT だけを行い、会議レーンを動かしていなければ、書き込みが無い＝更新されないはず）
   - [ ] 厳密確認: SQLCipher 対応 `sqlite3` に Keychain のキーを渡して開き、`sessions` /
