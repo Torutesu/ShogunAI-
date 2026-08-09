@@ -161,6 +161,7 @@ export const STRINGS = {
     connectionsUnavailable: "Not available yet",
     connect: "Connect",
     connecting: "Connecting…",
+    reconnect: "Reconnect",
     disconnect: "Disconnect",
     // AI coding-tool transcripts (opt-in source)
     aiSessions: "AI sessions",

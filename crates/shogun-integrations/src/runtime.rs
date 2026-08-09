@@ -114,6 +114,14 @@ impl<T> ConnectorRuntime<T> {
         self.registry.apply(service, ConnEvent::TokenExpired);
     }
 
+    /// Record that an interactive connect attempt failed mid-flight (browser denial, timeout,
+    /// token exchange, persist) — amber with the reauth affordance (FR-INT-06), the same event a
+    /// failed sync applies. Never called for precondition problems (missing OAuth client config),
+    /// which leave the service Disconnected.
+    pub fn mark_connect_failed(&mut self, service: Service) {
+        self.registry.apply(service, ConnEvent::ConnectFailed);
+    }
+
     /// Disconnect a service (FR-INT-07): the token is deleted by the caller; this clears state.
     pub fn disconnect(&mut self, service: Service, delete_events: bool) -> DisconnectOutcome {
         self.registry.disconnect(service, delete_events)
@@ -336,6 +344,14 @@ mod tests {
     fn runtime(items: Vec<FetchedItem>, err: Option<String>) -> ConnectorRuntime<FakeTransport> {
         // Wave 1 released, draft-stop on (irrelevant to reads).
         ConnectorRuntime::new(FakeTransport { items, err }, Wave::One, true)
+    }
+
+    #[test]
+    fn mark_connect_failed_turns_only_that_service_amber() {
+        let mut rt = runtime(vec![], None);
+        rt.mark_connect_failed(Service::GoogleCalendar);
+        assert!(rt.registry().state(Service::GoogleCalendar).is_amber());
+        assert_eq!(rt.registry().state(Service::Gmail), ConnState::Disconnected);
     }
 
     #[test]

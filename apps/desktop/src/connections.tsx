@@ -143,6 +143,17 @@ export function ConnectionsList(props: {
                     {r.last_sync_ms ? ` · ${new Date(r.last_sync_ms).toLocaleTimeString()}` : ""}
                   </span>
                 </div>
+                {r.state === "needs_reauth" ? (
+                  // Amber (FR-INT-06): the retry affordance — re-run the connect flow in place.
+                  <button
+                    className="keyrow__btn"
+                    type="button"
+                    disabled={busy === r.source}
+                    onClick={() => act("connect_service", r.source)}
+                  >
+                    {busy === r.source ? t.connecting : t.reconnect}
+                  </button>
+                ) : null}
                 {connected ? (
                   <button
                     className="keyrow__btn"
