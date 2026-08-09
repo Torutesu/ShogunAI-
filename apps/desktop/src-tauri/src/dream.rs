@@ -497,12 +497,26 @@ pub mod mac {
     /// Run the degraded cycle now, on request (FR-SET: "manual run (degraded)"). Deliberately the
     /// state-only sequence: a manual full run would spend Select KK's budget on a button press, and
     /// what a user wants from this button is their overdue/staleness brought up to date.
+    ///
+    /// Async (C-3): the cycle does real DB work, so it runs on a blocking thread via
+    /// `spawn_blocking` — the same pattern as `shogun_chat` — instead of pinning the command
+    /// thread. Name and payload are unchanged (`App.tsx` / `FullUi.tsx` keep working); the Dream
+    /// UI reads progress from `dream_status` (the cycle writes its ledger rows as it goes) and
+    /// refreshes when the returned promise settles, exactly as before.
     #[tauri::command]
-    pub fn run_dream_now(db: tauri::State<'_, Db>) -> Result<String, String> {
+    pub async fn run_dream_now(db: tauri::State<'_, Db>) -> Result<String, String> {
+        let db = db.inner().clone();
+        tokio::task::spawn_blocking(move || run_dream_now_blocking(&db))
+            .await
+            .map_err(|e| e.to_string())?
+    }
+
+    /// The blocking body of [`run_dream_now`]. `RUNNING` still guards against the nightly driver
+    /// (and a double press) — released on every exit path below.
+    fn run_dream_now_blocking(db: &Db) -> Result<String, String> {
         if RUNNING.swap(true, Ordering::SeqCst) {
             return Err("a cycle is already running".into());
         }
-        let db = db.inner();
         let (secs, off) = now_local();
         let now_ms = secs * 1000;
         let classifier = shogun_core::dreamcycle::jobs::LocalRuleClassifier;

@@ -24,7 +24,7 @@ pub struct ActionView {
 pub mod mac {
     use shogun_core::daemon::Db;
     use shogun_fusion::assemble::{ActionCandidate, ScreenContext};
-    use shogun_fusion::{Action, Level, LocalAction};
+    use shogun_fusion::{Action, Level, LocalAction, SendAction};
 
     use super::ActionView;
     use crate::axcache::focused_window;
@@ -49,6 +49,8 @@ pub mod mac {
             Action::Local(LocalAction::CopyToClipboard { .. }) => "Copy draft".to_string(),
             Action::Local(LocalAction::UpdateState { table, .. }) => format!("Update {table}"),
             Action::Local(LocalAction::SaveDraft { target }) => format!("Draft {target}"),
+            // B-5: the DraftReply candidate. Drafts only — the send still needs the L3 confirm.
+            Action::Send(SendAction::SendEmail { .. }) => "Draft reply (confirm)".to_string(),
             Action::Send(_) => "Send (confirm)".to_string(),
         }
     }
