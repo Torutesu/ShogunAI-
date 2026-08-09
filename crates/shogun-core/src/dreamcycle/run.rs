@@ -201,7 +201,7 @@ mod tests {
     }
 
     #[test]
-    fn full_cycle_runs_all_six_in_order() {
+    fn full_cycle_runs_the_whole_sequence_in_order() {
         let db = db();
         let runner = Runner::new(None);
         let report = run_cycle(&db, &runner, "c1", CycleKind::Full, 0, 100);

@@ -184,6 +184,43 @@ impl<'a, C: Classifier, S: Summarizer> DbDreamRunner<'a, C, S> {
         Ok(())
     }
 
+    /// LessonDistillation (Full only, Plan D-4): turn unprocessed approval feedback into
+    /// lessons, then run the lesson lifecycle. Local rules only in v1 (designs §5.3 honest
+    /// degradation) — no Batch call, so the job runs identically on Linux and on-device.
+    ///
+    /// The processed watermark is `lesson_distill_meta.last_processed_feedback_id` (V17): the
+    /// job reads feedback strictly above it and advances it only after every upsert landed.
+    /// Idempotent across a crash-resume (FR-DC-04): a re-run before the watermark moved re-reads
+    /// the same window, and `upsert_lesson` dedupes already-linked evidence, so nothing double
+    /// counts; after the watermark moved, old feedback is never re-consumed, so decay is not
+    /// refreshed by stale evidence. Errors carry no feedback text (CLAUDE.md privacy rule).
+    fn lesson_distillation(&self) -> Result<(), String> {
+        let watermark = self.db.lesson_distill_watermark();
+        let feedback = self.db.feedback_after(watermark);
+        let candidates = shogun_memory::lessons::distill(&feedback);
+        if !candidates.is_empty() {
+            for candidate in &candidates {
+                if self.db.upsert_lesson(candidate, self.now_ms).is_none() {
+                    return Err("lesson upsert failed".to_string());
+                }
+            }
+            // Advance only after every candidate landed, so a crash re-runs the whole window.
+            // A night that distilled nothing leaves the watermark put: below-threshold signals
+            // (two same-direction edits) keep accumulating until a later night completes the
+            // pattern, instead of being silently consumed. No upsert happens on those nights,
+            // so re-reading the window cannot refresh any lesson's decay clock.
+            let max_id = feedback.iter().map(|f| f.id).max().unwrap_or(watermark);
+            if !self.db.set_lesson_distill_watermark(max_id) {
+                return Err("lesson watermark write failed".to_string());
+            }
+        }
+        // Lifecycle last, new evidence included: decay, contradiction, floor, cap (§5.3).
+        self.db
+            .decay_lessons(self.now_ms)
+            .map(|_outcome| ())
+            .ok_or_else(|| "lesson lifecycle failed".to_string())
+    }
+
     /// MorningBrief (Full only, Plan C-1): assemble the day's brief from state tables plus the
     /// window's meeting recaps, and persist it to `briefs` keyed by the local date — so the
     /// morning display is a read (immediate, offline-stable) instead of a live degraded assembly.
@@ -474,6 +511,9 @@ impl<C: Classifier, S: Summarizer> DreamJobRunner for DbDreamRunner<'_, C, S> {
             // MorningBrief persists the day's brief to `briefs` (Plan C-1) so the morning display
             // is a read; `Db::local_morning_brief` remains the fallback when no row exists.
             JobKind::MorningBrief => self.morning_brief(from_ts, to_ts),
+            // LessonDistillation consumes the feedback watermark, not the cycle window: feedback
+            // recorded between cycles must never fall through a window seam (Plan D-4).
+            JobKind::LessonDistillation => self.lesson_distillation(),
         }
     }
 }
@@ -908,6 +948,139 @@ mod tests {
             "the recap summary feeds What happened: {:?}",
             payload.what_happened
         );
+    }
+
+    // ------------------------------------------------------------------ LessonDistillation (Plan D-4)
+
+    /// A body long enough that stripping one closing line is nowhere near a 30% cut.
+    const DRAFT_BODY: &str = "Hi team,\nHere is the current status of the migration work.\nEverything is on track for the Friday checkpoint and the remaining items are listed in the tracker.";
+
+    /// Record `n` approval-time edits that all strip the same signature line (the (a) rule).
+    fn record_signature_edits(db: &Db, n: usize, base_ts: i64) -> Vec<i64> {
+        use shogun_memory::lessons::{FeedbackKind, LessonScope, NewFeedback};
+        (0..n)
+            .map(|i| {
+                let before = format!("{DRAFT_BODY}\nExtra note number {i}.\nBest, Taro");
+                let after = format!("{DRAFT_BODY}\nExtra note number {i}.");
+                db.record_feedback(
+                    FeedbackKind::EditBeforeApprove,
+                    LessonScope::App,
+                    &NewFeedback {
+                        ts_ms: base_ts + i as i64,
+                        action_kind: Some("draft_reply"),
+                        scope_ref: Some("com.apple.Mail"),
+                        before_text: Some(&before),
+                        after_text: Some(&after),
+                    },
+                )
+                .unwrap()
+            })
+            .collect()
+    }
+
+    fn lesson_state(db: &Db) -> Vec<(i64, f64, i64, bool)> {
+        db.lessons_all().into_iter().map(|l| (l.id, l.confidence, l.evidence_count, l.active)).collect()
+    }
+
+    #[test]
+    fn lesson_distillation_distills_a_pattern_and_advances_the_watermark() {
+        let now = 100 * 24 * 60 * 60 * 1000;
+        let db = db_at(now);
+        let ids = record_signature_edits(&db, 3, now - 5000);
+
+        let clf = LocalRuleClassifier;
+        let sum = LocalExtractiveSummarizer;
+        let runner = DbDreamRunner::new(&db, &clf, &sum, now);
+        runner.run(JobKind::LessonDistillation, now - 86_400_000, now).unwrap();
+
+        let lessons = db.lessons_all();
+        assert_eq!(lessons.len(), 1, "three same-direction edits distill one lesson");
+        assert!(lessons[0].active);
+        assert_eq!(lessons[0].evidence_count, 3);
+        assert!(lessons[0].instruction.contains("Best, Taro"));
+        assert_eq!(db.lesson_distill_watermark(), *ids.iter().max().unwrap());
+    }
+
+    #[test]
+    fn below_threshold_feedback_is_not_consumed_until_the_pattern_completes() {
+        let now = 100 * 24 * 60 * 60 * 1000;
+        let db = db_at(now);
+        record_signature_edits(&db, 2, now - 5000);
+
+        let clf = LocalRuleClassifier;
+        let sum = LocalExtractiveSummarizer;
+        let runner = DbDreamRunner::new(&db, &clf, &sum, now);
+        runner.run(JobKind::LessonDistillation, 0, now).unwrap();
+        assert!(db.lessons_all().is_empty(), "two edits are not a pattern");
+        assert_eq!(db.lesson_distill_watermark(), 0, "unfired signals stay unconsumed");
+
+        // A later night's third edit completes the pattern across the accumulated window.
+        let third = record_signature_edits(&db, 1, now - 100);
+        runner.run(JobKind::LessonDistillation, 0, now).unwrap();
+        let lessons = db.lessons_all();
+        assert_eq!(lessons.len(), 1);
+        assert_eq!(lessons[0].evidence_count, 3, "the two earlier edits count as evidence");
+        assert_eq!(db.lesson_distill_watermark(), third[0]);
+    }
+
+    #[test]
+    fn lesson_distillation_rerun_does_not_double_evidence() {
+        let now = 100 * 24 * 60 * 60 * 1000;
+        let db = db_at(now);
+        record_signature_edits(&db, 3, now - 5000);
+
+        let clf = LocalRuleClassifier;
+        let sum = LocalExtractiveSummarizer;
+        let runner = DbDreamRunner::new(&db, &clf, &sum, now);
+
+        // Crash-resume case 1: upserts landed but the watermark write was lost — replay the
+        // job's first half by hand (watermark still 0), then run the real job over the same
+        // unprocessed window.
+        for candidate in shogun_memory::lessons::distill(&db.feedback_after(0)) {
+            db.upsert_lesson(&candidate, now).unwrap();
+        }
+        let after_first = lesson_state(&db);
+        runner.run(JobKind::LessonDistillation, 0, now).unwrap();
+        assert_eq!(lesson_state(&db), after_first, "re-reading the window must not double evidence");
+
+        // Crash-resume case 2: the whole job ran but the ledger `Done` was lost — a full re-run
+        // sees no unprocessed feedback and changes nothing.
+        runner.run(JobKind::LessonDistillation, 0, now).unwrap();
+        assert_eq!(lesson_state(&db), after_first, "an idle re-run must change nothing");
+    }
+
+    #[test]
+    fn lesson_distillation_runs_the_lifecycle_so_stale_lessons_sleep() {
+        use shogun_memory::lessons::{DEACTIVATION_FLOOR, LESSON_HALF_LIFE_MS};
+        let born = 100 * 24 * 60 * 60 * 1000;
+        let db = db_at(born);
+        record_signature_edits(&db, 3, born - 5000);
+        let clf = LocalRuleClassifier;
+        let sum = LocalExtractiveSummarizer;
+        DbDreamRunner::new(&db, &clf, &sum, born).run(JobKind::LessonDistillation, 0, born).unwrap();
+        assert!(db.lessons_all()[0].active);
+
+        // Five silent half-lives later, the nightly job's lifecycle pass puts it to sleep.
+        let later = born + 5 * LESSON_HALF_LIFE_MS;
+        DbDreamRunner::new(&db, &clf, &sum, later).run(JobKind::LessonDistillation, 0, later).unwrap();
+        let l = &db.lessons_all()[0];
+        assert!(l.confidence < DEACTIVATION_FLOOR, "confidence decayed: {}", l.confidence);
+        assert!(!l.active, "a long-unevidenced lesson sleeps");
+    }
+
+    #[test]
+    fn full_cycle_with_no_feedback_completes_and_touches_no_lessons() {
+        let now = 100 * 24 * 60 * 60 * 1000;
+        let db = db_at(now);
+        db.capture(&make_ev(now - 1000, "I'll send the deck.", "h1")).unwrap();
+        let clf = LocalRuleClassifier;
+        let sum = LocalExtractiveSummarizer;
+        let runner = DbDreamRunner::new(&db, &clf, &sum, now);
+        let report = run_cycle(&db, &runner, "cycle-l5", CycleKind::Full, now - 86_400_000, now);
+        assert!(report.is_complete(), "{report:?}");
+        assert!(report.completed.contains(&JobKind::LessonDistillation));
+        assert!(db.lessons_all().is_empty());
+        assert_eq!(db.lesson_distill_watermark(), 0);
     }
 
     #[test]

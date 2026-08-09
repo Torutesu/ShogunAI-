@@ -232,6 +232,21 @@ impl std::fmt::Debug for FeedbackRow {
     }
 }
 
+fn feedback_from_row(r: &rusqlite::Row<'_>) -> Result<FeedbackRow, rusqlite::Error> {
+    let kind_s: String = r.get(2)?;
+    let scope_s: String = r.get(4)?;
+    Ok(FeedbackRow {
+        id: r.get(0)?,
+        ts_ms: r.get(1)?,
+        kind: FeedbackKind::parse(&kind_s).ok_or_else(|| parse_err("feedback kind", &kind_s))?,
+        action_kind: r.get(3)?,
+        scope: LessonScope::parse(&scope_s).ok_or_else(|| parse_err("scope", &scope_s))?,
+        scope_ref: r.get(5)?,
+        before_text: r.get(6)?,
+        after_text: r.get(7)?,
+    })
+}
+
 /// List feedback events at or after `since_ts_ms`, oldest first — the distillation job's input.
 pub fn list_feedback_since(
     conn: &Connection,
@@ -241,21 +256,58 @@ pub fn list_feedback_since(
         "SELECT id, ts_ms, kind, action_kind, scope, scope_ref, before_text, after_text
          FROM feedback_events WHERE ts_ms >= ?1 ORDER BY ts_ms, id",
     )?;
-    let rows = stmt.query_map([since_ts_ms], |r| {
-        let kind_s: String = r.get(2)?;
-        let scope_s: String = r.get(4)?;
-        Ok(FeedbackRow {
-            id: r.get(0)?,
-            ts_ms: r.get(1)?,
-            kind: FeedbackKind::parse(&kind_s).ok_or_else(|| parse_err("feedback kind", &kind_s))?,
-            action_kind: r.get(3)?,
-            scope: LessonScope::parse(&scope_s).ok_or_else(|| parse_err("scope", &scope_s))?,
-            scope_ref: r.get(5)?,
-            before_text: r.get(6)?,
-            after_text: r.get(7)?,
-        })
-    })?;
+    let rows = stmt.query_map([since_ts_ms], feedback_from_row)?;
     rows.collect()
+}
+
+/// List feedback events with id strictly greater than `after_id`, in id order — the
+/// watermark-driven variant of [`list_feedback_since`] the LessonDistillation Dream job reads
+/// (Plan D-4: "unprocessed feedback" = everything above the stored watermark).
+pub fn list_feedback_after(
+    conn: &Connection,
+    after_id: i64,
+) -> Result<Vec<FeedbackRow>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT id, ts_ms, kind, action_kind, scope, scope_ref, before_text, after_text
+         FROM feedback_events WHERE id > ?1 ORDER BY id",
+    )?;
+    let rows = stmt.query_map([after_id], feedback_from_row)?;
+    rows.collect()
+}
+
+/// Count feedback events at or after `since_ts_ms` — the D-6 `feedback_events_last_7d` counter.
+/// A count only: no text leaves the table.
+pub fn count_feedback_since(conn: &Connection, since_ts_ms: i64) -> Result<i64, rusqlite::Error> {
+    conn.query_row("SELECT count(*) FROM feedback_events WHERE ts_ms >= ?1", [since_ts_ms], |r| {
+        r.get(0)
+    })
+}
+
+// ---------------------------------------------------------------- distillation watermark (D-4)
+
+/// The distillation watermark: the highest `feedback_events.id` a completed LessonDistillation
+/// pass has consumed (V17 single-row meta table, 0 = nothing processed yet). The job reads
+/// strictly above it via [`list_feedback_after`] and advances it via [`set_distill_watermark`]
+/// only after its upserts land, so a crash between the two re-reads the same window — safe,
+/// because [`upsert_lesson`] dedupes already-linked evidence.
+pub fn distill_watermark(conn: &Connection) -> Result<i64, rusqlite::Error> {
+    conn.query_row("SELECT last_processed_feedback_id FROM lesson_distill_meta WHERE id = 1", [], |r| {
+        r.get(0)
+    })
+}
+
+/// Advance the distillation watermark (see [`distill_watermark`]). Monotonic: a smaller value
+/// never rewinds it, so a stale re-run cannot cause later passes to re-consume old feedback.
+pub fn set_distill_watermark(
+    conn: &Connection,
+    last_processed_feedback_id: i64,
+) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "UPDATE lesson_distill_meta
+         SET last_processed_feedback_id = MAX(last_processed_feedback_id, ?1) WHERE id = 1",
+        [last_processed_feedback_id],
+    )?;
+    Ok(())
 }
 
 // ---------------------------------------------------------------- lessons: upsert
@@ -546,23 +598,7 @@ pub fn active_lessons(
          WHERE active = 1 AND confidence >= ?1
          ORDER BY confidence DESC, last_evidence_at DESC, id",
     )?;
-    let rows = stmt.query_map([INJECTION_FLOOR], |r| {
-        let kind_s: String = r.get(1)?;
-        let scope_s: String = r.get(2)?;
-        Ok(Lesson {
-            id: r.get(0)?,
-            kind: LessonKind::parse(&kind_s).ok_or_else(|| parse_err("lesson kind", &kind_s))?,
-            scope: LessonScope::parse(&scope_s).ok_or_else(|| parse_err("scope", &scope_s))?,
-            scope_ref: r.get(3)?,
-            instruction: r.get(4)?,
-            confidence: r.get(5)?,
-            evidence_count: r.get(6)?,
-            active: r.get::<_, i64>(7)? != 0,
-            created_at: r.get(8)?,
-            updated_at: r.get(9)?,
-            last_evidence_at: r.get(10)?,
-        })
-    })?;
+    let rows = stmt.query_map([INJECTION_FLOOR], lesson_from_row)?;
     let mut out = Vec::new();
     for row in rows {
         let lesson = row?;
@@ -574,6 +610,62 @@ pub fn active_lessons(
         }
     }
     Ok(out)
+}
+
+/// The shared column order for lesson reads:
+/// `id, kind, scope, scope_ref, instruction, confidence, evidence_count, active, created_at,
+/// updated_at, last_evidence_at`.
+fn lesson_from_row(r: &rusqlite::Row<'_>) -> Result<Lesson, rusqlite::Error> {
+    let kind_s: String = r.get(1)?;
+    let scope_s: String = r.get(2)?;
+    Ok(Lesson {
+        id: r.get(0)?,
+        kind: LessonKind::parse(&kind_s).ok_or_else(|| parse_err("lesson kind", &kind_s))?,
+        scope: LessonScope::parse(&scope_s).ok_or_else(|| parse_err("scope", &scope_s))?,
+        scope_ref: r.get(3)?,
+        instruction: r.get(4)?,
+        confidence: r.get(5)?,
+        evidence_count: r.get(6)?,
+        active: r.get::<_, i64>(7)? != 0,
+        created_at: r.get(8)?,
+        updated_at: r.get(9)?,
+        last_evidence_at: r.get(10)?,
+    })
+}
+
+/// Every lesson row, sleeping included, strongest first — the Learned UI / `lessons.list` supply
+/// (invariant 6: the API sees the same rows the human list shows). Carries instructions and
+/// bookkeeping only — never `feedback_events` text.
+pub fn list_lessons(conn: &Connection) -> Result<Vec<Lesson>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT id, kind, scope, scope_ref, instruction, confidence, evidence_count,
+                active, created_at, updated_at, last_evidence_at
+         FROM lessons
+         ORDER BY active DESC, confidence DESC, last_evidence_at DESC, id",
+    )?;
+    let rows = stmt.query_map([], lesson_from_row)?;
+    rows.collect()
+}
+
+/// Flip one lesson's `active` switch (`lessons.set_active` / the Learned UI toggle). Returns
+/// `false` when no such lesson exists. An OFF here is the user's explicit choice — the lifecycle
+/// never turns a lesson back on ([`upsert_lesson`] respects it).
+pub fn set_lesson_active(
+    conn: &Connection,
+    lesson_id: i64,
+    active: bool,
+    now: i64,
+) -> Result<bool, rusqlite::Error> {
+    let n = conn.execute(
+        "UPDATE lessons SET active = ?2, updated_at = ?3 WHERE id = ?1",
+        params![lesson_id, active as i64, now],
+    )?;
+    Ok(n > 0)
+}
+
+/// How many lessons are currently active — the D-6 `active_lessons` counter.
+pub fn count_active_lessons(conn: &Connection) -> Result<i64, rusqlite::Error> {
+    conn.query_row("SELECT count(*) FROM lessons WHERE active = 1", [], |r| r.get(0))
 }
 
 // ---------------------------------------------------------------- instruction templates
@@ -1208,6 +1300,64 @@ mod tests {
         assert!(opposes(REPLY_IN_ENGLISH_INSTRUCTION, REPLY_IN_JAPANESE_INSTRUCTION));
         assert!(!opposes(SHORTEN_INSTRUCTION, &remove));
         assert!(!opposes("free text", "other free text"));
+    }
+
+    // ------------------------------------------------ watermark / list / set_active
+
+    #[test]
+    fn watermark_starts_at_zero_advances_monotonically_and_bounds_list_feedback_after() {
+        let conn = crate::open_in_memory().unwrap();
+        assert_eq!(distill_watermark(&conn).unwrap(), 0);
+        let ids = signature_edits(&conn, 3, 1_000);
+
+        // everything is unprocessed at watermark 0
+        let unprocessed = list_feedback_after(&conn, distill_watermark(&conn).unwrap()).unwrap();
+        assert_eq!(unprocessed.iter().map(|f| f.id).collect::<Vec<_>>(), ids);
+
+        // advancing past the first two leaves only the third
+        set_distill_watermark(&conn, ids[1]).unwrap();
+        assert_eq!(distill_watermark(&conn).unwrap(), ids[1]);
+        let rest = list_feedback_after(&conn, ids[1]).unwrap();
+        assert_eq!(rest.iter().map(|f| f.id).collect::<Vec<_>>(), vec![ids[2]]);
+
+        // monotonic: a stale (smaller) write never rewinds
+        set_distill_watermark(&conn, 0).unwrap();
+        assert_eq!(distill_watermark(&conn).unwrap(), ids[1]);
+    }
+
+    #[test]
+    fn list_lessons_returns_sleeping_rows_and_set_active_flips_the_switch() {
+        let mut conn = crate::open_in_memory().unwrap();
+        let evidence = signature_edits(&conn, 3, 0);
+        let candidate = distill(&list_feedback_since(&conn, 0).unwrap()).remove(0);
+        let id = upsert_lesson(&mut conn, &candidate, &evidence, 100).unwrap();
+
+        let all = list_lessons(&conn).unwrap();
+        assert_eq!(all.len(), 1);
+        assert!(all[0].active);
+        assert_eq!(count_active_lessons(&conn).unwrap(), 1);
+
+        // switch off: still listed (the Learned list shows sleeping rows), no longer injectable
+        assert!(set_lesson_active(&conn, id, false, 200).unwrap());
+        let all = list_lessons(&conn).unwrap();
+        assert_eq!(all.len(), 1);
+        assert!(!all[0].active);
+        assert_eq!(count_active_lessons(&conn).unwrap(), 0);
+        assert!(active_lessons(&conn, &[], 10).unwrap().is_empty());
+
+        // back on, and an unknown id reports false
+        assert!(set_lesson_active(&conn, id, true, 300).unwrap());
+        assert_eq!(count_active_lessons(&conn).unwrap(), 1);
+        assert!(!set_lesson_active(&conn, 9999, false, 300).unwrap());
+    }
+
+    #[test]
+    fn count_feedback_since_counts_without_reading_text() {
+        let conn = crate::open_in_memory().unwrap();
+        signature_edits(&conn, 3, 1_000);
+        assert_eq!(count_feedback_since(&conn, 0).unwrap(), 3);
+        assert_eq!(count_feedback_since(&conn, 1_002).unwrap(), 1);
+        assert_eq!(count_feedback_since(&conn, 2_000).unwrap(), 0);
     }
 
     #[test]

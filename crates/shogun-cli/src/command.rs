@@ -46,12 +46,22 @@ pub enum Command {
     ApiStatus,
     /// `shogun metrics` → the in-product SLO snapshot (NFR-SLO-00).
     Metrics,
+    /// `shogun lessons list|enable <id>|disable <id>` (L5, Plan D-5 — Memory API symmetry).
+    Lessons(LessonsCommand),
     /// `shogun visual-recall status|enable|disable|search|frame get|frame rescan`
     VisualRecall(VisualRecallCommand),
     /// `shogun help` / no args.
     Help,
     /// `shogun config path|show|validate`
     Config { action: ConfigAction },
+}
+
+/// Lessons subcommands (invariant 6: same list + toggle the Learned UI offers).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LessonsCommand {
+    List,
+    Enable { id: i64 },
+    Disable { id: i64 },
 }
 
 /// Visual recall subcommands (Memory API symmetry).
@@ -85,6 +95,9 @@ impl Command {
             Command::Propose { .. } => Tool::StateProposeUpdate,
             Command::Run { .. } => Tool::ActionsExecute,
             Command::Onboarding => Tool::DeviceOnboardingGet,
+            Command::Lessons(LessonsCommand::List) => Tool::LessonsList,
+            Command::Lessons(LessonsCommand::Enable { .. })
+            | Command::Lessons(LessonsCommand::Disable { .. }) => Tool::LessonsSetActive,
             Command::VisualRecall(VisualRecallCommand::Status) => Tool::VisualRecallStatus,
             Command::VisualRecall(VisualRecallCommand::Enable) => Tool::VisualRecallSetEnabled,
             Command::VisualRecall(VisualRecallCommand::Disable) => Tool::VisualRecallSetEnabled,
@@ -116,7 +129,10 @@ COMMANDS:
     run <agent>               Launch a preset agent         (level follows action)
     onboarding                This device's first-run setup state
     api status                Show the running REST port
-    metrics                   In-product SLO snapshot
+    metrics                   In-product SLO snapshot + lesson counters
+    lessons list              Learned lessons (instruction, confidence, active)
+    lessons enable <id>       Switch a learned lesson on  (L1)
+    lessons disable <id>      Switch a learned lesson off (L1)
     visual-recall status      Visual recall status + frame stats
     visual-recall enable      Turn visual recall on (L1)
     visual-recall disable     Turn passive recall off + purge auto frames (L1)
@@ -168,6 +184,21 @@ mod tests {
         assert!(Command::ApiStatus.tool().is_none());
         assert!(Command::Help.tool().is_none());
         assert!(Command::Config { action: ConfigAction::Path }.tool().is_none());
+    }
+
+    #[test]
+    fn lessons_commands_map_to_the_lessons_tools_at_ui_levels() {
+        use shogun_agents::permission::Level;
+        use shogun_mcp::memory_api::{tool_level, ApiLevel};
+        assert_eq!(Command::Lessons(LessonsCommand::List).tool(), Some(Tool::LessonsList));
+        assert_eq!(tool_level(Tool::LessonsList), ApiLevel::Read);
+        for cmd in [
+            Command::Lessons(LessonsCommand::Enable { id: 1 }),
+            Command::Lessons(LessonsCommand::Disable { id: 1 }),
+        ] {
+            assert_eq!(cmd.tool(), Some(Tool::LessonsSetActive));
+            assert_eq!(tool_level(cmd.tool().unwrap()), ApiLevel::Write(Level::L1));
+        }
     }
 
     #[test]

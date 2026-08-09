@@ -2,7 +2,11 @@
 
 use crate::memory_api::Tool;
 
-/// Visual-recall reads return structured JSON, not [`crate::backend::ReadItem`] rows.
+/// Reads that return structured JSON, not [`crate::backend::ReadItem`] rows: the visual-recall
+/// tools, and `lessons.list` (a lesson row is id + kind + scope + instruction + confidence +
+/// evidence_count + active — richer than a label/confidence pair; the Low-band read gate does
+/// not apply because the Learned list deliberately shows sleeping/weak rows too, exactly like
+/// the human UI — invariant 6).
 pub fn is_structured_read(tool: Tool) -> bool {
     matches!(
         tool,
@@ -10,6 +14,7 @@ pub fn is_structured_read(tool: Tool) -> bool {
             | Tool::VisualRecallSearchFrames
             | Tool::VisualRecallGetFrame
             | Tool::VisualRecallRescanFrame
+            | Tool::LessonsList
     )
 }
 

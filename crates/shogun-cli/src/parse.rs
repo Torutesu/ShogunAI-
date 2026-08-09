@@ -136,6 +136,7 @@ fn parse_command(positionals: &[String], no_screen: bool) -> Result<Command, Cli
         },
         "metrics" => Ok(Command::Metrics),
         "onboarding" => Ok(Command::Onboarding),
+        "lessons" => parse_lessons(rest),
         "visual-recall" => parse_visual_recall(rest),
         "config" => {
             let action = match rest.first().map(String::as_str) {
@@ -150,6 +151,20 @@ fn parse_command(positionals: &[String], no_screen: bool) -> Result<Command, Cli
             Ok(Command::Config { action })
         }
         other => Err(CliError::UnknownCommand(other.to_string())),
+    }
+}
+
+fn parse_lessons(rest: &[String]) -> Result<Command, CliError> {
+    use crate::command::LessonsCommand;
+    let id_arg = |rest: &[String]| -> Result<i64, CliError> {
+        let id_str = rest.get(1).ok_or(CliError::MissingArgument("<id>"))?;
+        id_str.parse::<i64>().map_err(|_| CliError::BadId(id_str.clone()))
+    };
+    match rest.first().map(String::as_str) {
+        None | Some("list") => Ok(Command::Lessons(LessonsCommand::List)),
+        Some("enable") => Ok(Command::Lessons(LessonsCommand::Enable { id: id_arg(rest)? })),
+        Some("disable") => Ok(Command::Lessons(LessonsCommand::Disable { id: id_arg(rest)? })),
+        Some(other) => Err(CliError::UnknownSubcommand { command: "lessons", got: other.to_string() }),
     }
 }
 
@@ -313,6 +328,27 @@ mod tests {
     fn include_low_flag_sets_the_field() {
         let inv = parse(&v(&["people", "list", "--include-low"])).unwrap();
         assert!(inv.include_low);
+    }
+
+    #[test]
+    fn lessons_grammar_parses_list_enable_disable() {
+        use crate::command::LessonsCommand;
+        assert_eq!(parse(&v(&["lessons"])).unwrap().command, Command::Lessons(LessonsCommand::List));
+        assert_eq!(parse(&v(&["lessons", "list"])).unwrap().command, Command::Lessons(LessonsCommand::List));
+        assert_eq!(
+            parse(&v(&["lessons", "enable", "7"])).unwrap().command,
+            Command::Lessons(LessonsCommand::Enable { id: 7 })
+        );
+        assert_eq!(
+            parse(&v(&["lessons", "disable", "7"])).unwrap().command,
+            Command::Lessons(LessonsCommand::Disable { id: 7 })
+        );
+        assert_eq!(parse(&v(&["lessons", "enable"])), Err(CliError::MissingArgument("<id>")));
+        assert_eq!(parse(&v(&["lessons", "disable", "x"])), Err(CliError::BadId("x".into())));
+        assert_eq!(
+            parse(&v(&["lessons", "delete"])),
+            Err(CliError::UnknownSubcommand { command: "lessons", got: "delete".into() })
+        );
     }
 
     #[test]

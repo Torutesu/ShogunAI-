@@ -30,6 +30,11 @@ pub enum Tool {
     /// The device's onboarding / first-run setup state (issue #6). A read: an agent needs to know
     /// how far this device is configured, symmetrically with the human UI (invariant 6).
     DeviceOnboardingGet,
+    /// Learned lessons (L5, Plan D-5): the same rows the Learned UI lists — id, kind, scope,
+    /// instruction, confidence, evidence_count, active. Never `feedback_events` text.
+    LessonsList,
+    /// Flip one lesson's active switch — the same toggle the Learned UI offers (invariant 6).
+    LessonsSetActive,
     VisualRecallStatus,
     VisualRecallSetEnabled,
     VisualRecallSearchFrames,
@@ -54,6 +59,8 @@ pub const ALL_TOOLS: &[Tool] = &[
     Tool::StateProposeUpdate,
     Tool::ActionsExecute,
     Tool::DeviceOnboardingGet,
+    Tool::LessonsList,
+    Tool::LessonsSetActive,
     Tool::VisualRecallStatus,
     Tool::VisualRecallSetEnabled,
     Tool::VisualRecallSearchFrames,
@@ -80,6 +87,8 @@ impl Tool {
             Tool::StateProposeUpdate => "state.propose_update",
             Tool::ActionsExecute => "actions.execute",
             Tool::DeviceOnboardingGet => "device.onboarding.get",
+            Tool::LessonsList => "lessons.list",
+            Tool::LessonsSetActive => "lessons.set_active",
             Tool::VisualRecallStatus => "visual_recall.status",
             Tool::VisualRecallSetEnabled => "visual_recall.set_enabled",
             Tool::VisualRecallSearchFrames => "visual_recall.search_frames",
@@ -120,12 +129,15 @@ pub fn tool_level(tool: Tool) -> ApiLevel {
         | Tool::StateOpenLoopsList
         | Tool::StateOpenLoopsGet
         | Tool::DeviceOnboardingGet
+        | Tool::LessonsList
         | Tool::VisualRecallStatus
         | Tool::VisualRecallSearchFrames
         | Tool::VisualRecallGetFrame
         | Tool::VisualRecallRescanFrame => ApiLevel::Read,
         // append a user note to the event log — local, reversible.
         Tool::MemoryAppendNote => ApiLevel::Write(Level::L1),
+        // a lesson's ON/OFF toggle — same as the Learned UI switch (L1, local, reversible).
+        Tool::LessonsSetActive => ApiLevel::Write(Level::L1),
         // visual recall master switch — same as Settings toggle (L1, local).
         Tool::VisualRecallSetEnabled => ApiLevel::Write(Level::L1),
         // Deleting a local frame is an L1 write.
@@ -238,7 +250,20 @@ mod tests {
         for &t in ALL_TOOLS {
             let _ = tool_level(t); // exhaustive match means this cannot be undefined
         }
-        assert_eq!(ALL_TOOLS.len(), 20);
+        assert_eq!(ALL_TOOLS.len(), 22);
+    }
+
+    #[test]
+    fn lessons_tools_are_symmetric_reads_and_l1_writes() {
+        // Invariant 6 (Plan D-5): the Learned list and its ON/OFF toggle exist on the agent
+        // surface at the same levels as the human UI. The list is a read; the toggle is L1
+        // (local, reversible) — flipping a lesson can never become a send.
+        assert_eq!(Tool::from_wire("lessons.list"), Some(Tool::LessonsList));
+        assert_eq!(Tool::from_wire("lessons.set_active"), Some(Tool::LessonsSetActive));
+        assert_eq!(tool_level(Tool::LessonsList), ApiLevel::Read);
+        assert_eq!(tool_level(Tool::LessonsSetActive), ApiLevel::Write(Level::L1));
+        assert!(ALL_TOOLS.contains(&Tool::LessonsList));
+        assert!(ALL_TOOLS.contains(&Tool::LessonsSetActive));
     }
 
     #[test]
@@ -258,6 +283,7 @@ mod tests {
                         | Tool::StateOpenLoopsList
                         | Tool::StateOpenLoopsGet
                         | Tool::DeviceOnboardingGet
+                        | Tool::LessonsList
                         | Tool::VisualRecallStatus
                         | Tool::VisualRecallSearchFrames
                         | Tool::VisualRecallGetFrame
@@ -268,6 +294,7 @@ mod tests {
                         t,
                         Tool::MemoryAppendNote
                             | Tool::StateProposeUpdate
+                            | Tool::LessonsSetActive
                             | Tool::VisualRecallSetEnabled
                             | Tool::VisualRecallDeleteFrame
                     ))

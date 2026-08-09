@@ -14,6 +14,7 @@ use std::sync::{Arc, Mutex};
 
 use rusqlite::Connection;
 use shogun_memory::event_log::{self, NewEvent};
+use shogun_memory::lessons;
 use shogun_memory::state::{self, NewCommitment, NewOpenLoop, NewPerson, NewProject, Provenance};
 use shogun_memory::traceability::{Filter, TraceRow};
 use shogun_memory::MemoryError;
@@ -115,6 +116,11 @@ const COMPRESS_BUDGET_MS: u64 = 50;
 //
 /// 検索 evidence: relevance は呼び出し側の検索スコア由来なので EVIDENCE_RELEVANCE を上書きする。
 const EVIDENCE_RELEVANCE: f64 = 0.7;
+
+/// How many learned lessons ride into one context assembly / generation prompt (Plan D-5's
+/// default top-k of 5). The token budget in `shogun_fusion::assemble::LESSON_BUDGET_TOKENS`
+/// bounds them again by size.
+const LESSON_TOP_K: usize = 5;
 const EVIDENCE_SCORE: ScoreInputs =
     ScoreInputs { relevance: EVIDENCE_RELEVANCE, freshness: 0.5, task_link: 0.0, confidence: 1.0 };
 /// retrieved evidence の属する session の保存済み要約。参照先＝関連度高、要約＝confidence 1.0。
@@ -1310,6 +1316,12 @@ impl Db {
                 shogun_fusion::block::BlockRef::Thread(_) | shogun_fusion::block::BlockRef::Session(_) => {
                     out_facts.push(format!("summary (unverified): {}", b.text));
                 }
+                // Lesson blocks are built only inside `assemble` (D-5, ContextCache.lesson_lines)
+                // — this compression path never constructs one. If one ever appears, treat it
+                // like the unverified-summary case: context, never an assertable fact.
+                shogun_fusion::block::BlockRef::Lesson(_) => {
+                    out_facts.push(format!("summary (unverified): {}", b.text));
+                }
             }
         }
 
@@ -1802,7 +1814,10 @@ impl Db {
             });
         }
 
-        assemble(screen, &states, "", &Intent { hint: intent_hint })
+        // D-5: scope-matched learned lessons (this app + global), top-k, ride along for the
+        // generation prompt. Content only — assemble() never lets them touch levels.
+        let lessons = self.lessons_for_screen(&screen.app_bundle_id, LESSON_TOP_K);
+        assemble(screen, &states, "", &Intent { hint: intent_hint }, &lessons)
     }
 
     // -------------------------------------------------------------- state reads → Fusion supply
@@ -2251,6 +2266,140 @@ impl Db {
         self.conn.lock().ok().and_then(|c| shogun_memory::briefs::get_brief(&c, date).ok().flatten())
     }
 
+    // -------------------------------------------------------------- L5 lessons (Plan D-4/D-5/D-6)
+    // Db wrappers over `shogun_memory::lessons`, next to the brief wrappers: the
+    // LessonDistillation Dream job, Context Fusion injection, and the Memory API lessons tools
+    // all read/write through these. Feedback text never leaves the DB through any of them —
+    // the only wrapper that returns it ([`Self::feedback_after`]) feeds the local distiller.
+
+    /// The distillation watermark: highest `feedback_events.id` already consumed (0 = none).
+    pub fn lesson_distill_watermark(&self) -> i64 {
+        self.conn.lock().ok().and_then(|c| lessons::distill_watermark(&c).ok()).unwrap_or(0)
+    }
+
+    /// Advance the distillation watermark (monotonic). Returns false on a write failure so the
+    /// job can report the night as failed and stay resumable.
+    pub fn set_lesson_distill_watermark(&self, last_processed_feedback_id: i64) -> bool {
+        self.conn
+            .lock()
+            .ok()
+            .map(|c| lessons::set_distill_watermark(&c, last_processed_feedback_id).is_ok())
+            .unwrap_or(false)
+    }
+
+    /// Unprocessed feedback (id strictly above the watermark), oldest first — the distillation
+    /// job's input. Local-only data: the rows carry the user's before/after text, so this must
+    /// never feed a log or an egress path.
+    pub fn feedback_after(&self, after_id: i64) -> Vec<lessons::FeedbackRow> {
+        self.conn
+            .lock()
+            .ok()
+            .and_then(|c| lessons::list_feedback_after(&c, after_id).ok())
+            .unwrap_or_default()
+    }
+
+    /// Record one feedback signal (the D-2 approval hooks call this). Returns the new row id.
+    pub fn record_feedback(
+        &self,
+        kind: lessons::FeedbackKind,
+        scope: lessons::LessonScope,
+        f: &lessons::NewFeedback<'_>,
+    ) -> Option<i64> {
+        self.conn.lock().ok().and_then(|c| lessons::record_feedback(&c, kind, scope, f).ok())
+    }
+
+    /// Insert-or-merge a distilled lesson with its evidence ids (provenance mandatory).
+    /// `None` on a lock/write failure (the job reports failure without echoing any text).
+    pub fn upsert_lesson(&self, candidate: &lessons::LessonCandidate, now_ms: i64) -> Option<i64> {
+        let mut conn = self.conn.lock().ok()?;
+        lessons::upsert_lesson(&mut conn, candidate, &candidate.evidence, now_ms).ok()
+    }
+
+    /// Run the lesson lifecycle pass (decay, contradiction, floor, cap) at `now_ms`.
+    pub fn decay_lessons(&self, now_ms: i64) -> Option<lessons::LifecycleOutcome> {
+        let mut conn = self.conn.lock().ok()?;
+        lessons::decay_and_deactivate(&mut conn, now_ms).ok()
+    }
+
+    /// The lessons eligible for injection right now (active, at/above the Low-band floor,
+    /// scope-filtered, strongest first, at most `top_k`) — the Fusion/D-5 supply.
+    pub fn active_lessons(
+        &self,
+        scopes: &[lessons::ScopeFilter<'_>],
+        top_k: usize,
+    ) -> Vec<lessons::Lesson> {
+        self.conn
+            .lock()
+            .ok()
+            .and_then(|c| lessons::active_lessons(&c, scopes, top_k).ok())
+            .unwrap_or_default()
+    }
+
+    /// Every lesson row, sleeping included — the Learned UI / `lessons.list` supply. Instructions
+    /// and bookkeeping only; never `feedback_events` text.
+    pub fn lessons_all(&self) -> Vec<lessons::Lesson> {
+        self.conn.lock().ok().and_then(|c| lessons::list_lessons(&c).ok()).unwrap_or_default()
+    }
+
+    /// Flip one lesson's active switch (`lessons.set_active`). `false` when the row is missing or
+    /// the write failed.
+    pub fn set_lesson_active(&self, lesson_id: i64, active: bool) -> bool {
+        let now = self.now_ms();
+        self.conn
+            .lock()
+            .ok()
+            .and_then(|c| lessons::set_lesson_active(&c, lesson_id, active, now).ok())
+            .unwrap_or(false)
+    }
+
+    /// D-6 counters for `shogun metrics`: (active lessons, feedback events in the last 7 days).
+    /// `None` when the DB is unreadable — rendered as `measured:false`, never a fabricated zero.
+    pub fn lesson_counters(&self) -> Option<crate::metrics::LessonCounters> {
+        const WEEK_MS: i64 = 7 * 24 * 60 * 60 * 1000;
+        let now = self.now_ms();
+        let conn = self.conn.lock().ok()?;
+        Some(crate::metrics::LessonCounters {
+            active_lessons: lessons::count_active_lessons(&conn).ok()?,
+            feedback_events_last_7d: lessons::count_feedback_since(&conn, now - WEEK_MS).ok()?,
+        })
+    }
+
+    /// The active lessons relevant to the current screen (this app + global scope), mapped into
+    /// Fusion's input view — instruction + confidence only (D-5).
+    pub fn lessons_for_screen(
+        &self,
+        app_bundle_id: &str,
+        top_k: usize,
+    ) -> Vec<shogun_fusion::assemble::LessonInput> {
+        use lessons::{LessonScope, ScopeFilter};
+        let scopes = [
+            ScopeFilter { scope: LessonScope::App, scope_ref: Some(app_bundle_id) },
+            ScopeFilter { scope: LessonScope::Global, scope_ref: None },
+        ];
+        self.active_lessons(&scopes, top_k)
+            .into_iter()
+            .map(|l| shogun_fusion::assemble::LessonInput {
+                id: l.id,
+                instruction: l.instruction,
+                confidence: l.confidence,
+            })
+            .collect()
+    }
+
+    /// The active lessons mapped into the directive-render view (D-5a): the desktop joins these
+    /// into the Shougun.md system-prompt block via
+    /// [`crate::user_config::render_directives_with_lessons`]. Unscoped call sites (the standing
+    /// prompt has no focused app) take every scope, top-k strongest.
+    pub fn learned_lessons(&self, top_k: usize) -> Vec<crate::user_config::LearnedLesson> {
+        self.active_lessons(&[], top_k)
+            .into_iter()
+            .map(|l| crate::user_config::LearnedLesson {
+                instruction: l.instruction,
+                confidence: l.confidence,
+            })
+            .collect()
+    }
+
     // -------------------------------------------------------------- Dream Cycle job ledger (FR-DC-04)
     // Persist each job's state so a killed cycle resumes by skipping the `done` jobs. The plan
     // vocabulary (JobKind/JobState) is shogun-core's; storage keeps strings, mapped here.
@@ -2450,6 +2599,7 @@ fn job_kind_str(kind: JobKind) -> &'static str {
         JobKind::ConfidenceRecalc => "confidence_recalc",
         JobKind::ColdDemotion => "cold_demotion",
         JobKind::MorningBrief => "morning_brief",
+        JobKind::LessonDistillation => "lesson_distillation",
     }
 }
 
@@ -2461,6 +2611,7 @@ fn parse_job_kind(s: &str) -> Option<JobKind> {
         "confidence_recalc" => JobKind::ConfidenceRecalc,
         "cold_demotion" => JobKind::ColdDemotion,
         "morning_brief" => JobKind::MorningBrief,
+        "lesson_distillation" => JobKind::LessonDistillation,
         _ => return None,
     })
 }
@@ -3778,7 +3929,7 @@ mod tests {
         // resume the full cycle: done jobs are skipped, the running one is rescheduled
         let todo = db.resume(cycle, CycleKind::Full);
         assert_eq!(todo.first(), Some(&JobKind::StateUpdate));
-        assert_eq!(todo.len(), 4); // StateUpdate, ConfidenceRecalc, ColdDemotion, MorningBrief
+        assert_eq!(todo.len(), 5); // StateUpdate, ConfidenceRecalc, ColdDemotion, MorningBrief, LessonDistillation
         assert!(!todo.contains(&JobKind::Consolidation));
     }
 

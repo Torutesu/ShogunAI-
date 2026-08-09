@@ -5,7 +5,7 @@
 //! The actual job effects (Batch-API consolidation, Warm→Cold demotion, …) are I/O the daemon runs
 //! behind the [`DreamJob`] seam; this module only decides *which* jobs remain and *in what order*.
 
-/// The six Dream Cycle jobs, in execution order (FR-DC-03).
+/// The seven Dream Cycle jobs, in execution order (FR-DC-03 + Plan D-4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum JobKind {
     /// 1. Extract state-table update candidates from today's event log.
@@ -20,6 +20,9 @@ pub enum JobKind {
     ColdDemotion,
     /// 6. Generate the Morning Brief (§6.8).
     MorningBrief,
+    /// 7. Distill unprocessed approval feedback into lessons + run the lesson lifecycle
+    ///    (Plan D-4, designs §5.3). Local rules only — no Batch call in v1.
+    LessonDistillation,
 }
 
 /// The full nightly sequence (FR-DC-03).
@@ -30,6 +33,7 @@ pub const FULL_SEQUENCE: &[JobKind] = &[
     JobKind::ConfidenceRecalc,
     JobKind::ColdDemotion,
     JobKind::MorningBrief,
+    JobKind::LessonDistillation,
 ];
 
 /// The degraded (catch-up) sequence: local state maintenance only, **no Batch API** (FR-DC-01).
@@ -111,7 +115,7 @@ mod tests {
     }
 
     #[test]
-    fn full_sequence_is_the_six_jobs_in_order() {
+    fn full_sequence_is_the_seven_jobs_in_order() {
         assert_eq!(
             FULL_SEQUENCE,
             &[
@@ -121,6 +125,7 @@ mod tests {
                 JobKind::ConfidenceRecalc,
                 JobKind::ColdDemotion,
                 JobKind::MorningBrief,
+                JobKind::LessonDistillation,
             ]
         );
     }
@@ -143,7 +148,8 @@ mod tests {
                 JobKind::StateUpdate,
                 JobKind::ConfidenceRecalc,
                 JobKind::ColdDemotion,
-                JobKind::MorningBrief
+                JobKind::MorningBrief,
+                JobKind::LessonDistillation
             ]
         );
     }
@@ -166,7 +172,7 @@ mod tests {
         let rem = remaining(CycleKind::Full, &runs);
         assert!(!rem.contains(&JobKind::ColdDemotion));
         assert_eq!(rem.first(), Some(&JobKind::Consolidation));
-        assert_eq!(rem.len(), 5);
+        assert_eq!(rem.len(), FULL_SEQUENCE.len() - 1);
     }
 
     #[test]
@@ -179,10 +185,12 @@ mod tests {
 
     #[test]
     fn degraded_cycle_is_state_maintenance_only_no_batch_jobs() {
-        // No Consolidation / Compression / ColdDemotion / MorningBrief (all Batch-API or heavy).
+        // No Consolidation / Compression / ColdDemotion / MorningBrief / LessonDistillation
+        // (Batch-API, heavy, or non-essential for a catch-up run).
         assert_eq!(DEGRADED_SEQUENCE, &[JobKind::StateUpdate, JobKind::ConfidenceRecalc]);
         let rem = remaining(CycleKind::Degraded, &[]);
         assert!(!rem.contains(&JobKind::Consolidation));
         assert!(!rem.contains(&JobKind::MorningBrief));
+        assert!(!rem.contains(&JobKind::LessonDistillation));
     }
 }

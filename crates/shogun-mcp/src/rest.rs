@@ -133,6 +133,13 @@ fn resolve(method: Method, path: &str) -> Result<Routed, RouteMiss> {
             Ok(parsed) => method_is(method, Method::Get, Routed::Read { tool: Tool::VisualRecallGetFrame, id: Some(parsed) }),
             Err(_) => Err(RouteMiss::NotFound),
         },
+        // Lessons (L5, Plan D-5 — invariant 6 symmetry with the Learned UI).
+        ["v1", "lessons"] => {
+            method_is(method, Method::Get, Routed::Read { tool: Tool::LessonsList, id: None })
+        }
+        ["v1", "lessons", "active"] => {
+            method_is(method, Method::Post, Routed::Write { tool: Tool::LessonsSetActive, level: Level::L1 })
+        }
         ["v1", "memory", "notes"] => {
             method_is(method, Method::Post, Routed::Write { tool: Tool::MemoryAppendNote, level: Level::L1 })
         }
@@ -684,6 +691,24 @@ mod tests {
             route(&req(Method::Post, "/v1/visual_recall/frames/delete", Some("t")), &reg(), &ent()),
             Routed::Write { tool: Tool::VisualRecallDeleteFrame, level: Level::L1 }
         );
+    }
+
+    #[test]
+    fn lessons_endpoints_resolve_at_the_learned_ui_levels() {
+        // GET /v1/lessons → the list read; POST /v1/lessons/active → the L1 toggle (invariant 6).
+        assert_eq!(
+            route(&req(Method::Get, "/v1/lessons", Some("t")), &reg(), &ent()),
+            Routed::Read { tool: Tool::LessonsList, id: None }
+        );
+        assert_eq!(
+            route(&req(Method::Post, "/v1/lessons/active", Some("t")), &reg(), &ent()),
+            Routed::Write { tool: Tool::LessonsSetActive, level: Level::L1 }
+        );
+        // wrong methods are 405, auth still applies, and the plan gate holds
+        assert_eq!(route(&req(Method::Post, "/v1/lessons", Some("t")), &reg(), &ent()), Routed::MethodNotAllowed);
+        assert_eq!(route(&req(Method::Get, "/v1/lessons", None), &reg(), &ent()), Routed::Unauthorized);
+        let locked = entitlements(Plan::Standard, 0);
+        assert_eq!(route(&req(Method::Get, "/v1/lessons", Some("t")), &reg(), &locked), Routed::PlanLocked);
     }
 
     #[test]
