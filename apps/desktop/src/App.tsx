@@ -214,10 +214,9 @@ function appName(bundle: string): string {
 }
 
 /// How a resize should hold the panel in place.
-/// - `center` (default): the panel hangs from the notch, so switching views must not walk it
-///   sideways by half of every size change.
-/// - `left`: the corner grip is a bottom-right drag, so the top-left has to stay put or the
-///   pointer drifts away from the corner it grabbed.
+/// - `center` (default): keep horizontal centre under the notch (castle dock). View switches and
+///   the corner grip both use this — width changes ±dx/2 per side.
+/// - `left`: legacy top-left pin (grow down/right only). Kept for the Rust command; unused by grip.
 type Anchor = "center" | "left";
 
 async function applyPanelSize(w: number, h: number, anchor: Anchor = "center"): Promise<void> {
@@ -345,7 +344,8 @@ export function App(): JSX.Element {
 
   // Live resize from the corner grip. During the drag we only resize the native panel (the webview
   // reflows via CSS — no React state churn), rAF-throttled so we don't flood the IPC bridge. The
-  // per-view size is committed to state (and persisted) once on release.
+  // per-view size is committed to state (and persisted) once on release. Always castle-centre
+  // anchor so width grows/shrinks symmetrically under the notch.
   const liveSize = useRef<Size | null>(null);
   const raf = useRef<number | null>(null);
   const onResizeLive = useCallback((w: number, h: number): void => {
@@ -355,7 +355,7 @@ export function App(): JSX.Element {
       raf.current = requestAnimationFrame(() => {
         raf.current = null;
         const cur = liveSize.current;
-        if (cur) void applyPanelSize(cur.w, cur.h, "left");
+        if (cur) void applyPanelSize(cur.w, cur.h, "center");
       });
     }
   }, []);
@@ -367,7 +367,7 @@ export function App(): JSX.Element {
     const s = liveSize.current;
     liveSize.current = null;
     if (!s) return;
-    void applyPanelSize(s.w, s.h, "left");
+    void applyPanelSize(s.w, s.h, "center");
     if (showSettings) setSetSize(s);
     else setChatSize(s);
   }, [showSettings]);
@@ -1285,8 +1285,9 @@ function MeetingPill({ view }: { view: MeetingView }): JSX.Element {
 }
 
 // Corner grip that lets the user stretch the open panel. The native panel is a borderless NSPanel
-// (no OS resize edges), so we drive `set_panel_size` from a pointer drag — the panel's top-left is
-// anchored, so it grows down/right, which reads naturally for a window that hangs from the notch.
+// (no OS resize edges), so we drive `set_panel_size` from a pointer drag. Horizontal centre stays
+// under the notch: drag Δ on the right edge → width += 2Δ so left mirrors. screenX/Y (not client*)
+// — client coords shift when the panel re-centres mid-drag and would double-count.
 function ResizeGrip(props: {
   current: () => Size;
   onResize: (w: number, h: number) => void;
@@ -1298,13 +1299,17 @@ function ResizeGrip(props: {
     e.preventDefault();
     e.stopPropagation();
     const s = current();
-    start.current = { x: e.clientX, y: e.clientY, w: s.w, h: s.h };
+    start.current = { x: e.screenX, y: e.screenY, w: s.w, h: s.h };
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
   };
   const onMove = (e: React.PointerEvent): void => {
     const s = start.current;
     if (!s) return;
-    onResize(s.w + (e.clientX - s.x), s.h + (e.clientY - s.y));
+    const dx = e.screenX - s.x;
+    const dy = e.screenY - s.y;
+    // Width: ±dx/2 each side (centre fixed) ⇒ total Δw = 2·dx so right edge tracks the cursor.
+    // Height: top stays docked to the notch ⇒ Δh = dy only (grows/shrinks downward).
+    onResize(s.w + 2 * dx, s.h + dy);
   };
   const onUp = (e: React.PointerEvent): void => {
     if (!start.current) return;

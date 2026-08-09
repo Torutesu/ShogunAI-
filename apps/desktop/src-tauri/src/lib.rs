@@ -1256,9 +1256,8 @@ fn adopt_native_panel(win: &tauri::WebviewWindow) {
 /// Resize the visible overlay (native panel or fallback window) — the webview's minimize/expand
 /// control. AppKit frames are bottom-left origin. The default path re-docks the panel at its
 /// Castle Position (issue #20) with the new size, so it grows AWAY from its anchor (down from the
-/// notch, up from the bottom, right from the left edge …). `anchor: "left"` is the manual
-/// corner-grip drag: it keeps the top-left corner put so the panel grows down/right under the
-/// pointer, wherever the panel currently sits.
+/// notch; horizontal centre stays under the notch). Corner-grip drag also uses castle (width
+/// ±dx/2 each side). `anchor: "left"` is a legacy top-left pin (grow down/right only).
 #[cfg(target_os = "macos")]
 #[tauri::command]
 fn set_panel_size(app: tauri::AppHandle, width: f64, height: f64, anchor: Option<String>) {

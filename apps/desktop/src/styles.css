@@ -1680,7 +1680,8 @@ kbd {
 }
 
 /* corner resize grip — the only way to stretch the borderless panel (no OS resize edges). Two
-   diagonal ticks in the bottom-right corner; drives set_panel_size from a pointer drag. */
+   diagonal ticks in the bottom-right corner; drives set_panel_size from a pointer drag
+   (width expands symmetrically about the notch centre; height grows down). */
 .resizer {
   position: absolute;
   right: 3px;
