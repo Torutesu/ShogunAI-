@@ -250,6 +250,22 @@ jobs:
           xcrun stapler validate "$DMG_PATH"
           spctl --assess --type open --context context:primary-signature -v "$DMG_PATH"
 
+          # Everything above passes for an app that cannot start. A build once shipped signed,
+          # notarized and stapled, and still died on SIGKILL at exec because the entitlements
+          # carried a literal `$(AppIdentifierPrefix)` — codesign does not expand Xcode build
+          # variables, and AMFI refuses restricted entitlements it cannot resolve. Nothing in
+          # codesign/spctl/stapler catches that, so assert it directly.
+          ENT="$(codesign -d --entitlements :- "$APP" 2>/dev/null || true)"
+          if printf '%s' "$ENT" | grep -qF '$('; then
+            echo "::error::Signed entitlements contain an unexpanded build variable — this app will not launch"
+            printf '%s\n' "$ENT"
+            exit 1
+          fi
+
+          # The first signed build also shipped with a blank icon, which no signing check notices.
+          test -f "$APP/Contents/Resources/icon.icns" \
+            || { echo "::error::No icon.icns in the bundle — the app would ship with a generic icon"; exit 1; }
+
       # The versioned DMG name changes every release; the LP wants one stable URL. Ship a
       # fixed-name copy alongside so the LP can hard-link
       # `releases/latest/download/ShogunAI-macOS-arm64.dmg` forever.
