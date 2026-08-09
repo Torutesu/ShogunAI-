@@ -272,11 +272,41 @@ impl SloRegistry {
     }
 }
 
+/// L5 lesson counters for the `shogun metrics` surface (Plan D-6): how many lessons are active
+/// and how much feedback the last week recorded. Counts only — no instruction text, and never
+/// any `feedback_events` content (CLAUDE.md: capture/user text stays out of metrics surfaces).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LessonCounters {
+    pub active_lessons: i64,
+    pub feedback_events_last_7d: i64,
+}
+
 /// Render SLO snapshots as the JSON both `shogun metrics` and the Advanced UI read (NFR-SLO-00).
 /// Hand-rolled (no serde dep in this ungated module). An unmeasured SLO reports `measured:false`
 /// and `pass:false` — silence is never success (spec §4.5).
 pub fn render_snapshots_json(snapshots: &[SloSnapshot]) -> String {
-    let items: Vec<String> = snapshots
+    format!(r#"{{"metrics":[{}]}}"#, slo_items(snapshots).join(","))
+}
+
+/// [`render_snapshots_json`] plus the D-6 `lessons` block. `None` (counters not computable —
+/// no DB behind this process, or a read failure) renders `"lessons":{"measured":false}` in the
+/// crate's convention: an unmeasured value is flagged, never fabricated as zero.
+pub fn render_snapshots_json_with_lessons(
+    snapshots: &[SloSnapshot],
+    lessons: Option<LessonCounters>,
+) -> String {
+    let lessons_json = match lessons {
+        Some(c) => format!(
+            r#"{{"active_lessons":{},"feedback_events_last_7d":{},"measured":true}}"#,
+            c.active_lessons, c.feedback_events_last_7d
+        ),
+        None => r#"{"measured":false}"#.to_string(),
+    };
+    format!(r#"{{"metrics":[{}],"lessons":{}}}"#, slo_items(snapshots).join(","), lessons_json)
+}
+
+fn slo_items(snapshots: &[SloSnapshot]) -> Vec<String> {
+    snapshots
         .iter()
         .map(|s| {
             format!(
@@ -291,8 +321,7 @@ pub fn render_snapshots_json(snapshots: &[SloSnapshot]) -> String {
                 s.p95_overflowed,
             )
         })
-        .collect();
-    format!(r#"{{"metrics":[{}]}}"#, items.join(","))
+        .collect()
 }
 
 /// Format an f64 as a finite JSON number (non-finite → 0 so the payload is always valid JSON).
@@ -440,5 +469,22 @@ mod tests {
         assert!(json.contains(r#""measured":true,"p95_overflowed":false"#));
         // an unmeasured SLO is measured:false and pass:false (silence ≠ success)
         assert!(json.contains(r#""slo":"NFR-SLO-04","count":0,"p50":0,"p95":0,"budget_p95":500,"pass":false,"measured":false"#), "{json}");
+    }
+
+    #[test]
+    fn lesson_counters_render_measured_or_flagged_unmeasured() {
+        let reg = SloRegistry::new();
+        let snaps = reg.snapshot_all();
+        // computable counters render with measured:true
+        let json = render_snapshots_json_with_lessons(
+            &snaps,
+            Some(LessonCounters { active_lessons: 3, feedback_events_last_7d: 12 }),
+        );
+        assert!(json.contains(r#""lessons":{"active_lessons":3,"feedback_events_last_7d":12,"measured":true}"#), "{json}");
+        assert!(json.starts_with(r#"{"metrics":["#));
+        // not computable → measured:false, never a fabricated zero
+        let json = render_snapshots_json_with_lessons(&snaps, None);
+        assert!(json.contains(r#""lessons":{"measured":false}"#), "{json}");
+        assert!(!json.contains("active_lessons"), "{json}");
     }
 }

@@ -2,7 +2,7 @@
 //! (§6.11). Pure — the actual socket work is [`crate::http`]. This is the CLI's half of the REST
 //! contract; the server's half is `shogun_mcp::rest`.
 
-use crate::command::{Command, ListOrGet, VisualRecallCommand};
+use crate::command::{Command, LessonsCommand, ListOrGet, VisualRecallCommand};
 
 /// An HTTP call: method + path (query folded in) + optional body.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,6 +56,15 @@ pub fn to_call(command: &Command, include_low: bool) -> Option<HttpCall> {
         // `run` carries the action JSON spec (e.g. '{"kind":"local_search","query":"x"}').
         Command::Run { agent } => post("/v1/actions/execute".into(), agent.clone()),
         Command::Onboarding => get("/v1/device/onboarding".to_string()),
+        Command::Lessons(cmd) => match cmd {
+            LessonsCommand::List => get("/v1/lessons".to_string()),
+            LessonsCommand::Enable { id } => {
+                post("/v1/lessons/active".into(), format!(r#"{{"id":{id},"active":true}}"#))
+            }
+            LessonsCommand::Disable { id } => {
+                post("/v1/lessons/active".into(), format!(r#"{{"id":{id},"active":false}}"#))
+            }
+        },
         Command::ApiStatus => get("/v1/status".to_string()),
         Command::Metrics => get("/v1/metrics".to_string()),
         Command::VisualRecall(cmd) => match cmd {
@@ -130,6 +139,26 @@ mod tests {
         assert_eq!(run.method, "POST");
         assert_eq!(run.path, "/v1/actions/execute");
         assert_eq!(run.body.as_deref(), Some(r#"{"kind":"local_search","query":"x"}"#));
+    }
+
+    #[test]
+    fn lessons_calls_match_the_rest_contract() {
+        assert_eq!(
+            to_call(&Command::Lessons(LessonsCommand::List), false).unwrap(),
+            HttpCall { method: "GET", path: "/v1/lessons".into(), body: None }
+        );
+        assert_eq!(
+            to_call(&Command::Lessons(LessonsCommand::Enable { id: 7 }), false).unwrap(),
+            HttpCall {
+                method: "POST",
+                path: "/v1/lessons/active".into(),
+                body: Some(r#"{"id":7,"active":true}"#.into())
+            }
+        );
+        assert_eq!(
+            to_call(&Command::Lessons(LessonsCommand::Disable { id: 7 }), false).unwrap().body.as_deref(),
+            Some(r#"{"id":7,"active":false}"#)
+        );
     }
 
     #[test]

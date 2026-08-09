@@ -19,27 +19,33 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use shogun_agents::approval::ApprovalQueue;
 use shogun_core::daemon::{Clock, Db};
 use shogun_core::db_backend::DbBackend;
-use shogun_core::metrics::{render_snapshots_json, SloRegistry};
+use shogun_core::metrics::{render_snapshots_json_with_lessons, SloRegistry};
 use shogun_mcp::memory_api::TokenRegistry;
 use shogun_mcp::server::{bind_local, serve_on, AppState, MetricsSource, DEFAULT_PORT};
 
 /// The live SLO metrics source served at `GET /v1/metrics` (NFR-SLO-00). Wraps the shared
 /// registry the runtime records into; here it starts empty, so every SLO reads as unmeasured until
-/// the notch runtime populates it (silence ≠ success, spec §4.5).
-struct RegistryMetrics(Arc<Mutex<SloRegistry>>);
+/// the notch runtime populates it (silence ≠ success, spec §4.5). The D-6 lesson counters
+/// (active lessons, feedback in the last 7 days) come from the DB; an unreadable DB renders
+/// `lessons.measured:false` in the same convention.
+struct RegistryMetrics {
+    registry: Arc<Mutex<SloRegistry>>,
+    db: Db,
+}
 
 impl MetricsSource for RegistryMetrics {
     fn snapshot_json(&self) -> String {
-        self.0
+        let lessons = self.db.lesson_counters();
+        self.registry
             .lock()
-            .map(|r| render_snapshots_json(&r.snapshot_all()))
-            .unwrap_or_else(|_| r#"{"metrics":[]}"#.to_string())
+            .map(|r| render_snapshots_json_with_lessons(&r.snapshot_all(), lessons))
+            .unwrap_or_else(|_| r#"{"metrics":[],"lessons":{"measured":false}}"#.to_string())
     }
 }
 
-/// Build an empty metrics source for the API process.
-fn metrics_source() -> Arc<dyn MetricsSource> {
-    Arc::new(RegistryMetrics(Arc::new(Mutex::new(SloRegistry::new()))))
+/// Build the metrics source for the API process (empty SLO registry + DB-backed lesson counters).
+fn metrics_source(db: Db) -> Arc<dyn MetricsSource> {
+    Arc::new(RegistryMetrics { registry: Arc::new(Mutex::new(SloRegistry::new())), db })
 }
 
 /// A real wall-clock in unix ms (never panics; 0 before the epoch).
@@ -80,6 +86,7 @@ async fn main() -> std::io::Result<()> {
     let clock = wall_clock();
     let db = Db::open_at_path(&db_path, clock.clone())
         .map_err(|e| std::io::Error::other(format!("open db {db_path}: {e}")))?;
+    let metrics = metrics_source(db.clone());
     let backend = Arc::new(db_backend(db));
 
     let mut tokens = TokenRegistry::new();
@@ -95,7 +102,7 @@ async fn main() -> std::io::Result<()> {
     let plan_source = shogun_mcp::plan_source::FilePlanSource::from_env();
     let plan_clock = clock.clone();
     let state = AppState::new(Arc::new(tokens), backend, approvals, clock)
-        .with_metrics(metrics_source())
+        .with_metrics(metrics)
         .with_entitlements(Arc::new(move || {
             plan_source.resolve(u64::try_from((plan_clock)()).unwrap_or(0))
         }));
@@ -121,12 +128,13 @@ mod tests {
             let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
             rt.block_on(async move {
                 let db = Db::open_in_memory(wall_clock()).unwrap();
+                let metrics = metrics_source(db.clone());
                 let backend = Arc::new(db_backend(db));
                 let mut tokens = TokenRegistry::new();
                 tokens.issue("dev");
                 let approvals = Arc::new(Mutex::new(ApprovalQueue::new()));
                 let state =
-                    AppState::new(Arc::new(tokens), backend, approvals, wall_clock()).with_metrics(metrics_source());
+                    AppState::new(Arc::new(tokens), backend, approvals, wall_clock()).with_metrics(metrics);
                 let listener = bind_local(0).await.unwrap();
                 let port = listener.local_addr().unwrap().port();
                 tx.send(port).unwrap();
@@ -169,6 +177,12 @@ mod tests {
         assert!(r.body.contains("\"metrics\":"), "metrics body: {}", r.body);
         assert!(r.body.contains("NFR-SLO-01"), "metrics body: {}", r.body);
         assert!(r.body.contains("\"measured\":false"), "unmeasured SLOs must not read as pass: {}", r.body);
+        // the D-6 lesson counters ride on the same surface: a live DB reports real (zero) counts
+        assert!(
+            r.body.contains(r#""lessons":{"active_lessons":0,"feedback_events_last_7d":0,"measured":true}"#),
+            "lesson counters missing: {}",
+            r.body
+        );
 
         // an external send routes to L3 pending approval, never runs (FR-API-04)
         let r = request(

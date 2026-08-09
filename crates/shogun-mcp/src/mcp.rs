@@ -122,8 +122,8 @@ impl<B: MemoryBackend> McpServer<B> {
                 let body = if tool == Tool::MemoryAppendNote {
                     args.get("text").and_then(Value::as_str).unwrap_or_default().to_string()
                 } else {
-                    // VisualRecallSetEnabled / VisualRecallDeleteFrame / StateProposeUpdate all
-                    // take the raw JSON args as the body.
+                    // VisualRecallSetEnabled / VisualRecallDeleteFrame / StateProposeUpdate /
+                    // LessonsSetActive all take the raw JSON args as the body.
                     args.to_string()
                 };
                 match self.backend.write(tool, &body) {
@@ -193,6 +193,14 @@ fn tool_descriptor(tool: Tool) -> Value {
         | Tool::StateProjectsList
         | Tool::StateCommitmentsList
         | Tool::StateOpenLoopsList => ("List state records", json!({ "include_low": { "type": "boolean" } })),
+        Tool::LessonsList => (
+            "List learned lessons (id, kind, scope, instruction, confidence, evidence count, active)",
+            json!({}),
+        ),
+        Tool::LessonsSetActive => (
+            "Switch a learned lesson on or off (L1)",
+            json!({ "id": { "type": "integer" }, "active": { "type": "boolean" } }),
+        ),
         Tool::MemoryAppendNote => ("Append a user note (L1)", json!({ "text": { "type": "string" } })),
         Tool::StateProposeUpdate => ("Propose a state change (L2)", json!({})),
         Tool::ActionsExecute => (
@@ -244,9 +252,17 @@ mod tests {
             if tool == Tool::MemoryAppendNote {
                 assert_eq!(body, "buy milk");
                 Ok(Some(42))
+            } else if tool == Tool::LessonsSetActive {
+                // the MCP face passes the raw JSON args through, same as REST bodies
+                assert_eq!(body, r#"{"active":false,"id":7}"#);
+                Ok(Some(7))
             } else {
                 Ok(None)
             }
+        }
+        fn read_structured(&self, tool: Tool, _p: &ReadParams) -> Option<String> {
+            (tool == Tool::LessonsList)
+                .then(|| r#"{"lessons":[{"id":7,"instruction":"Write replies in English.","active":true}]}"#.to_string())
         }
     }
 
@@ -286,6 +302,9 @@ mod tests {
         assert!(tools.iter().any(|t| t["name"] == "actions.execute"));
         // Invariant 6: onboarding state is on the agent-facing surface too (issue #6).
         assert!(tools.iter().any(|t| t["name"] == "device.onboarding.get"));
+        // Invariant 6: the Learned list and its toggle are on the agent surface too (Plan D-5).
+        assert!(tools.iter().any(|t| t["name"] == "lessons.list"));
+        assert!(tools.iter().any(|t| t["name"] == "lessons.set_active"));
     }
 
     #[test]
@@ -308,6 +327,26 @@ mod tests {
         );
         let text = v["result"]["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("\"id\":42"));
+    }
+
+    #[test]
+    fn tools_call_lessons_list_and_set_active_use_the_shared_backend() {
+        // invariant 6: the MCP face serves the same lessons rows and the same L1 toggle.
+        let v = call(
+            &server(),
+            r#"{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"lessons.list","arguments":{}}}"#,
+        );
+        let text = v["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("\"tool\":\"lessons.list\""), "{text}");
+        assert!(text.contains("Write replies in English."), "{text}");
+
+        let v = call(
+            &server(),
+            r#"{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"lessons.set_active","arguments":{"id":7,"active":false}}}"#,
+        );
+        let text = v["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("\"accepted\":true"), "{text}");
+        assert!(text.contains("\"id\":7"), "{text}");
     }
 
     #[test]
