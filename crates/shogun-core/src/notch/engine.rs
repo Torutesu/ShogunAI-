@@ -8,7 +8,7 @@
 //! becomes T5" rule and stale-timer suppression — means the integration is unit-tested off
 //! device; the macOS adapter only sources events and applies outputs.
 
-use crate::notch::geometry::{cg_to_ns, Point, Regions};
+use crate::notch::geometry::{cg_to_ns, GeometryParams, Point, Rect, Regions};
 use crate::notch::hover::{HoverParams, HoverSignal, HoverTracker};
 use crate::notch::statemachine::{Effect, Input, Params, State, StateMachine, Timer};
 use std::collections::HashSet;
@@ -47,7 +47,7 @@ pub enum EngineInput {
 }
 
 /// Concrete actions the macOS adapter must apply.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum EngineOutput {
     /// Push this state to the webview (`state` event) — the only UI signal.
     WebviewState(State),
@@ -65,6 +65,8 @@ pub enum EngineOutput {
     OpenFullUi,
     /// Q4 denominator: the pointer entered the top band.
     TopBandEntry,
+    /// CGEventTap early-reject band height (points from display top).
+    HoverBand(f64),
 }
 
 /// The integrated engine. One per display where the panel appears.
@@ -73,6 +75,14 @@ pub struct NotchEngine {
     sm: StateMachine,
     /// Primary-display height for CG→NS normalisation (spec §3.4.7).
     primary_height: f64,
+    /// Menubar band floor (NS y) — kept so `set_panel_hit_size` can re-apply regions.
+    menubar_min_y: f64,
+    /// Screen + Idle rects for rebuilding `r_exp` on open/resize.
+    screen: Rect,
+    idle: Rect,
+    /// Last live panel size (from `set_panel_hit_size`); floors open hit region.
+    last_panel_w: f64,
+    last_panel_h: f64,
     /// Timers the adapter currently has scheduled — used to drop stale fires after a cancel.
     active_timers: HashSet<TimerKey>,
 }
@@ -104,11 +114,18 @@ impl NotchEngine {
         primary_height: f64,
         hover_params: HoverParams,
         sm_params: Params,
+        screen: Rect,
+        idle: Rect,
     ) -> Self {
         Self {
             hover: HoverTracker::new(regions, menubar_min_y, hover_params),
             sm: StateMachine::new(sm_params),
             primary_height,
+            menubar_min_y,
+            screen,
+            idle,
+            last_panel_w: GeometryParams::default().expanded_w,
+            last_panel_h: GeometryParams::default().expanded_h,
             active_timers: HashSet::new(),
         }
     }
@@ -118,9 +135,40 @@ impl NotchEngine {
     }
 
     /// Update regions after a display change (spec §3.7.2).
-    pub fn set_regions(&mut self, regions: Regions, menubar_min_y: f64, primary_height: f64) {
+    pub fn set_regions(
+        &mut self,
+        regions: Regions,
+        menubar_min_y: f64,
+        primary_height: f64,
+        screen: Rect,
+        idle: Rect,
+    ) {
         self.hover.set_regions(regions, menubar_min_y);
+        self.menubar_min_y = menubar_min_y;
         self.primary_height = primary_height;
+        self.screen = screen;
+        self.idle = idle;
+    }
+
+    /// Replace `r_exp` with the live NSPanel size (open / resize). Leave-grace covers full panel.
+    pub fn set_panel_hit_size(&mut self, panel_w: f64, panel_h: f64) {
+        use crate::notch::geometry::regions_with_panel;
+        let w = panel_w.max(1.0);
+        let h = panel_h.max(1.0);
+        self.last_panel_w = w;
+        self.last_panel_h = h;
+        let regs = regions_with_panel(self.screen, self.idle, w, h, GeometryParams::default());
+        self.hover.set_regions(regs, self.menubar_min_y);
+    }
+
+    /// Grow `r_exp` to at least the last/open panel floor as soon as Hover/Expanded starts,
+    /// so the cursor can enter the body before `set_panel_size` IPC arrives.
+    fn ensure_open_hit_region(&mut self) {
+        let p = GeometryParams::default();
+        // Product chat defaults (560×360) exceed spike 400×180 — floor covers both.
+        let w = self.last_panel_w.max(p.expanded_w).max(560.0);
+        let h = self.last_panel_h.max(p.expanded_h).max(360.0);
+        self.set_panel_hit_size(w, h);
     }
 
     /// Feed one input; returns the outputs to apply, in order.
@@ -210,7 +258,17 @@ impl NotchEngine {
     fn apply_sm(&mut self, input: Input, out: &mut Vec<EngineOutput>) {
         for effect in self.sm.step(input) {
             match effect {
-                Effect::Transition(s) => out.push(EngineOutput::WebviewState(s)),
+                Effect::Transition(s) => {
+                    out.push(EngineOutput::WebviewState(s));
+                    if matches!(s, State::Hover | State::Expanded) {
+                        self.ensure_open_hit_region();
+                        out.push(EngineOutput::HoverBand(self.last_panel_h + GeometryParams::default().exp_margin));
+                    } else if matches!(s, State::Idle | State::Hidden) {
+                        // Idle chin band — content drop may push above classic 40pt.
+                        let idle_band = self.idle.h + GeometryParams::default().enter_bottom;
+                        out.push(EngineOutput::HoverBand(idle_band.max(40.0)));
+                    }
+                }
                 Effect::SetIgnoresMouse(b) => out.push(EngineOutput::SetIgnoresMouse(b)),
                 Effect::MarkPreviewCommit => out.push(EngineOutput::PreviewCommit),
                 Effect::MarkExpandCommit => out.push(EngineOutput::ExpandCommit),
@@ -240,7 +298,15 @@ mod tests {
         let regs = regions(screen, idle, GeometryParams::default());
         let menubar_min_y = screen.max_y() - 24.0;
         (
-            NotchEngine::new(regs, menubar_min_y, 982.0, HoverParams::default(), Params::default()),
+            NotchEngine::new(
+                regs,
+                menubar_min_y,
+                982.0,
+                HoverParams::default(),
+                Params::default(),
+                screen,
+                idle,
+            ),
             regs,
             982.0,
         )
@@ -304,9 +370,10 @@ mod tests {
         enter_notch(&mut e, &regs, h, 100);
         e.on_input(EngineInput::TimerFired(Timer::Dwell)); // Hover(preview)
 
-        // Leave R_exp (below band) → HoverExit grace scheduled.
+        // Leave R_exp entirely (below the open hit floor) → HoverExit grace scheduled.
         let cx = regs.r_enter.mid_x();
-        let (bx, by) = cg(cx, regs.top_band_min_y - 50.0, h);
+        // After Hover opens, r_exp grows to the product floor (~360pt); leave well below it.
+        let (bx, by) = cg(cx, 100.0, h);
         let out = e.on_input(EngineInput::MouseCg { x: bx, y: by, t_ms: 200, buttons: 0 });
         assert!(out.iter().any(|o| matches!(o, EngineOutput::ScheduleTimer { timer: Timer::HoverExit, .. })));
 
@@ -327,7 +394,7 @@ mod tests {
         e.on_input(EngineInput::TimerFired(Timer::Dwell)); // Hover
         // Leave R_exp + grace expiry → Collapsing.
         let cx = regs.r_enter.mid_x();
-        let (bx, by) = cg(cx, regs.top_band_min_y - 50.0, h);
+        let (bx, by) = cg(cx, 100.0, h);
         e.on_input(EngineInput::MouseCg { x: bx, y: by, t_ms: 200, buttons: 0 });
         e.on_input(EngineInput::TimerFired(Timer::HoverExit));
         assert_eq!(e.state(), State::Collapsing);

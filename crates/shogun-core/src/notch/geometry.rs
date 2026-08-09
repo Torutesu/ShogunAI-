@@ -96,8 +96,22 @@ impl Default for GeometryParams {
     }
 }
 
-/// The Idle "silhouette" rect: the real notch, or the 180×menubar pseudo-notch,
-/// anchored top-centre on `screen` (spec §3.2.1, §3.2.2).
+/// Visible Idle content row below the hardware cutout (boring.notch drop). Welded black still
+/// fills `notch_h`; labels/icons live in this extra strip so they are not under silicon.
+pub const IDLE_CONTENT_DROP: f64 = 28.0;
+
+/// Idle hit/visual height: hardware `notch_h` plus the visible content drop on real-notch
+/// machines. Pseudo-notch already sits in the visible menubar band — no extra drop.
+pub fn idle_height(notch_h: f64, is_notch: bool) -> f64 {
+    if is_notch {
+        notch_h + IDLE_CONTENT_DROP
+    } else {
+        notch_h
+    }
+}
+
+/// The Idle "silhouette" rect: the real notch (plus content drop), or the 180×menubar
+/// pseudo-notch, anchored top-centre on `screen` (spec §3.2.1, §3.2.2).
 pub fn idle_rect(screen: Rect, notch_w: f64, notch_h: f64) -> Rect {
     Rect::new(screen.mid_x() - notch_w / 2.0, screen.max_y() - notch_h, notch_w, notch_h)
 }
@@ -110,14 +124,31 @@ pub fn idle_rect(screen: Rect, notch_w: f64, notch_h: f64) -> Rect {
 /// so it only admits the pinned case.
 pub const TOP_EDGE_OVERSHOOT: f64 = 1.0;
 
-/// Build the three regions from the Idle rect and the screen (spec §3.4.2).
-pub fn regions(screen: Rect, idle: Rect, p: GeometryParams) -> Regions {
+/// Rebuild regions with a live panel size (open/resize). Keeps Idle enter/stay rings; replaces
+/// `r_exp` with the actual panel frame + grace margin so leave-grace covers the Combined region.
+pub fn regions_with_panel(screen: Rect, idle: Rect, panel_w: f64, panel_h: f64, p: GeometryParams) -> Regions {
     let r_enter = idle.expand(p.enter_lr, p.enter_lr, p.enter_bottom, TOP_EDGE_OVERSHOOT);
     let r_stay = r_enter.inset_all(p.stay_hysteresis);
-    let expanded =
-        Rect::new(screen.mid_x() - p.expanded_w / 2.0, screen.max_y() - p.expanded_h, p.expanded_w, p.expanded_h);
-    let r_exp = expanded.inset_all(p.exp_margin);
-    Regions { r_enter, r_stay, r_exp, top_band_min_y: screen.max_y() - p.top_band }
+    let panel = Rect::new(
+        screen.mid_x() - panel_w / 2.0,
+        screen.max_y() - panel_h,
+        panel_w,
+        panel_h,
+    );
+    let r_exp = panel.inset_all(p.exp_margin);
+    // Idle early-reject floor: at least the Idle chin (+ enter bottom), else the classic 40pt band.
+    // Points inside `r_exp` below this floor are still tracked (see HoverTracker).
+    Regions {
+        r_enter,
+        r_stay,
+        r_exp,
+        top_band_min_y: screen.max_y() - p.top_band.max(idle.h + p.enter_bottom),
+    }
+}
+
+/// Build the three regions from the Idle rect and the screen (spec §3.4.2).
+pub fn regions(screen: Rect, idle: Rect, p: GeometryParams) -> Regions {
+    regions_with_panel(screen, idle, p.expanded_w, p.expanded_h, p)
 }
 
 /// Where the user parks SHOGUN's panel — its "castle" (issue #20). The Notch is the default,
