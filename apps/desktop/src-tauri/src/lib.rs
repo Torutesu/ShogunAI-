@@ -2169,6 +2169,10 @@ const DB_KEY_ACCOUNT: &str = "memory-db-key";
 #[cfg(target_os = "macos")]
 fn install_connectors(app: &tauri::AppHandle, db: Option<shogun_core::daemon::Db>) {
     use tauri::Manager;
+    // The ONE shared L3 approval queue (B-3 / E-08): created unconditionally at startup, before
+    // the connector runtime, so every producer and the confirm UI always resolve the same managed
+    // queue — even when the connector runtime fails to start.
+    app.manage(approvals::mac::ApprovalQueueState::default());
     // Draft-stop is seeded from the persisted ComposioPolicy (composio.json) — the single source
     // the settings/onboarding toggle and the L3 send gate read. Absent/unreadable policy defaults
     // to draft_stop = true (invariant 4 fail-safe, see ComposioPolicy).
@@ -2182,7 +2186,6 @@ fn install_connectors(app: &tauri::AppHandle, db: Option<shogun_core::daemon::Db
                 eprintln!("[spike] connector runtime started (read-sync poller skipped — no DB)");
             }
             app.manage(connectors::mac::ConnectorState(shared));
-            app.manage(approvals::mac::ApprovalQueueState::default());
         }
         Err(e) => eprintln!("[spike] connectors not started: {e}"),
     }

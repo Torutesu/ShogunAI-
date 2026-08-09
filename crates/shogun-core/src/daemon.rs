@@ -2174,6 +2174,23 @@ impl Db {
         self.conn.lock().ok().and_then(|c| shogun_memory::briefs::get_brief(&c, date).ok().flatten())
     }
 
+    /// Record one L5 feedback signal (Plan D-2: the approval-time hooks call this from
+    /// `confirm_send` / `reject_send` / the one-tap state resolve). **Fire-and-forget by
+    /// contract**: any lock or write failure returns `None` and is swallowed — a feedback write
+    /// must never block or fail the approval action it observes, and the before/after text is
+    /// never logged (it stays local-DB-only; see `shogun_memory::lessons`).
+    pub fn record_feedback(
+        &self,
+        kind: shogun_memory::lessons::FeedbackKind,
+        scope: shogun_memory::lessons::LessonScope,
+        feedback: &shogun_memory::lessons::NewFeedback<'_>,
+    ) -> Option<i64> {
+        self.conn
+            .lock()
+            .ok()
+            .and_then(|c| shogun_memory::lessons::record_feedback(&c, kind, scope, feedback).ok())
+    }
+
     // -------------------------------------------------------------- Dream Cycle job ledger (FR-DC-04)
     // Persist each job's state so a killed cycle resumes by skipping the `done` jobs. The plan
     // vocabulary (JobKind/JobState) is shogun-core's; storage keeps strings, mapped here.
@@ -3581,6 +3598,40 @@ mod tests {
         assert!(brief.degraded);
         assert_eq!(brief.commitments_due.len(), 1);
         assert_eq!(brief.commitments_due[0].text, "overdue one");
+    }
+
+    #[test]
+    fn record_feedback_wrapper_persists_the_signal_locally() {
+        use shogun_memory::lessons::{list_feedback_since, FeedbackKind, LessonScope, NewFeedback};
+
+        let db = Db::open_in_memory(clock(1)).unwrap();
+        let id = db.record_feedback(
+            FeedbackKind::EditBeforeApprove,
+            LessonScope::Person,
+            &NewFeedback {
+                ts_ms: 42,
+                action_kind: Some("send_email"),
+                scope_ref: Some("alice@example.com"),
+                before_text: Some("proposed body"),
+                after_text: Some("final body"),
+            },
+        );
+        assert!(id.is_some(), "a healthy DB accepts the feedback write");
+
+        // Read it back through the same connection the wrapper wrote to.
+        let rows = {
+            let c = db.conn.lock().unwrap();
+            list_feedback_since(&c, 0).unwrap()
+        };
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].kind, FeedbackKind::EditBeforeApprove);
+        assert_eq!(rows[0].scope, LessonScope::Person);
+        assert_eq!(rows[0].scope_ref.as_deref(), Some("alice@example.com"));
+        assert_eq!(rows[0].before_text.as_deref(), Some("proposed body"));
+        assert_eq!(rows[0].after_text.as_deref(), Some("final body"));
+        // Fire-and-forget shape: the wrapper returns Option, never Err — an approval action can
+        // discard it with `let _ =` and can never be failed by it.
+        let _: Option<i64> = id;
     }
 
     #[test]

@@ -27,7 +27,7 @@ net = ["dep:reqwest", "dep:sha2", "dep:shogun-integrations", "dep:shogun-mcp", "
 # `db` pulls in the storage + fusion layers for the daemon's wiring (DB-backed traceability sink,
 # capture writes, state reads → Fusion supply). OFF by default so the pure-logic tests stay
 # rusqlite-free; the daemon (and its CI step) enable it.
-db = ["dep:shogun-memory", "dep:rusqlite", "dep:shogun-fusion", "dep:shogun-mcp", "dep:shogun-integrations"]
+db = ["dep:shogun-memory", "dep:rusqlite", "dep:shogun-fusion", "dep:shogun-mcp", "dep:shogun-integrations", "dep:shogun-agents"]
 # `daemon-server` builds the runnable `shogun-api` binary: it composes the DB, the DB-backed
 # Memory API backend, the shared approval queue, and the axum REST listener into one process.
 # `exec` is the connector execution path WITHOUT the standalone axum server: the send-execution

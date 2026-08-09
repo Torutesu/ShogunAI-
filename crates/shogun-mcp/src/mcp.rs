@@ -11,10 +11,10 @@
 //! is for the REST/HTTP face, FR-API-03). Levels still apply: an external send routes to the
 //! shared approval queue and returns pending, never running without a UI confirm (FR-API-04).
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
-use shogun_agents::approval::ApprovalQueue;
+use shogun_agents::approval::{ApprovalOrigin, ApprovalQueue};
 use shogun_agents::entitlement::Entitlements;
 
 use crate::backend::{MemoryBackend, ReadParams};
@@ -28,9 +28,14 @@ pub const PROTOCOL_VERSION: &str = "2024-11-05";
 /// The MCP server: a backend, the shared approval queue, a clock, and the plan entitlement
 /// provider (issue #97). The provider is a closure (not a snapshot) because a trial can expire
 /// while the stdio session is running — it is consulted on every `tools/call`.
+///
+/// The approval queue is **injected**, never constructed here (B-3 / E-08): the composition root
+/// creates the one process-wide queue and hands the same `Arc` to every face (this MCP face, the
+/// REST [`crate::server::AppState`], and the confirm UI), so an MCP-submitted L3 send lands in
+/// the same queue the UI drains.
 pub struct McpServer<B: MemoryBackend> {
     backend: B,
-    approvals: Mutex<ApprovalQueue>,
+    approvals: Arc<Mutex<ApprovalQueue>>,
     clock: Box<dyn Fn() -> i64 + Send + Sync>,
     entitlements: Box<dyn Fn() -> Entitlements + Send + Sync>,
 }
@@ -38,12 +43,13 @@ pub struct McpServer<B: MemoryBackend> {
 impl<B: MemoryBackend> McpServer<B> {
     pub fn new(
         backend: B,
+        approvals: Arc<Mutex<ApprovalQueue>>,
         clock: impl Fn() -> i64 + Send + Sync + 'static,
         entitlements: impl Fn() -> Entitlements + Send + Sync + 'static,
     ) -> Self {
         Self {
             backend,
-            approvals: Mutex::new(ApprovalQueue::new()),
+            approvals,
             clock: Box::new(clock),
             entitlements: Box::new(entitlements),
         }
@@ -137,7 +143,7 @@ impl<B: MemoryBackend> McpServer<B> {
                 let body = args.to_string();
                 let now = (self.clock)();
                 match self.approvals.lock() {
-                    Ok(mut queue) => rest::act(Some(&body), now, &mut queue).1,
+                    Ok(mut queue) => rest::act(Some(&body), now, &mut queue, ApprovalOrigin::Mcp).1,
                     Err(_) => return error(id, -32000, "internal"),
                 }
             }
@@ -250,14 +256,18 @@ mod tests {
         }
     }
 
+    fn shared_queue() -> Arc<Mutex<ApprovalQueue>> {
+        Arc::new(Mutex::new(ApprovalQueue::new()))
+    }
+
     fn server() -> McpServer<Fake> {
-        McpServer::new(Fake, || 1000, Entitlements::trial_not_started)
+        McpServer::new(Fake, shared_queue(), || 1000, Entitlements::trial_not_started)
     }
 
     /// A server whose plan does not include the Memory API (issue #97).
     fn locked_server() -> McpServer<Fake> {
         use shogun_agents::entitlement::{entitlements, Plan};
-        McpServer::new(Fake, || 1000, || entitlements(Plan::Standard, 0))
+        McpServer::new(Fake, shared_queue(), || 1000, || entitlements(Plan::Standard, 0))
     }
 
     fn call(server: &McpServer<Fake>, line: &str) -> Value {
@@ -312,13 +322,21 @@ mod tests {
 
     #[test]
     fn tools_call_send_is_pending_l3_via_shared_queue() {
+        let shared = shared_queue();
+        let s = McpServer::new(Fake, shared.clone(), || 1000, Entitlements::trial_not_started);
         let v = call(
-            &server(),
+            &s,
             r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"actions.execute","arguments":{"kind":"send_email","to":"a@b.com","subject":"s","body":"b"}}}"#,
         );
         let text = v["result"]["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("\"pending\":true"));
         assert!(text.contains("\"approval_id\":"));
+        assert!(text.contains("\"origin\":\"mcp\""), "the pending result labels the MCP face: {text}");
+        // The send landed in the injected queue — the same one the UI drains (B-3 / E-08).
+        let q = shared.lock().unwrap();
+        assert_eq!(q.pending_len(), 1);
+        let id = q.pending_ids()[0];
+        assert_eq!(q.origin(id), Some(ApprovalOrigin::Mcp));
     }
 
     #[test]

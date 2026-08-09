@@ -8,7 +8,7 @@
 //! construction here means the routing (email → Composio second layer; everything else → direct
 //! first layer) and the Gmail "Subject: …\n\n…" body shape are defined once.
 
-use crate::approval::{ApprovalId, ApprovalQueue, Origin, Preview, Route};
+use crate::approval::{ApprovalId, ApprovalOrigin, ApprovalQueue, Preview, Route};
 use crate::permission::SendAction;
 
 /// A drafted, ready-to-confirm send produced by an agent. The body is already generated (by the
@@ -54,7 +54,7 @@ impl ProposedSend {
 pub fn propose(
     queue: &mut ApprovalQueue,
     proposal: &ProposedSend,
-    origin: Origin,
+    origin: ApprovalOrigin,
     now_ms: u64,
 ) -> ApprovalId {
     let (action, full_body, route) = proposal.parts();
@@ -97,7 +97,7 @@ mod tests {
     fn propose_enqueues_an_l3_send_the_confirm_path_can_run() {
         let mut q = ApprovalQueue::new();
         let p = ProposedSend::CalendarEvent { title: "Sync".into(), body: "agenda".into() };
-        let id = propose(&mut q, &p, Origin::Human, 0);
+        let id = propose(&mut q, &p, ApprovalOrigin::Ui, 0);
         assert_eq!(q.pending_len(), 1);
         // it is a normal L3 entry: a dedicated-button confirm yields the ConfirmedSend to execute.
         match q.confirm(id, ConfirmIntent::DedicatedButton, 1000) {
