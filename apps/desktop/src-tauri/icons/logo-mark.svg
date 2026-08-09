@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img" aria-label="ShogunAI">
+  <defs>
+    <linearGradient id="s-grad" x1="0.15" y1="0.08" x2="0.85" y2="0.92">
+      <stop offset="0" stop-color="#38bdf8"/>
+      <stop offset="0.5" stop-color="#0aa5f4"/>
+      <stop offset="1" stop-color="#0b74d6"/>
+    </linearGradient>
+    <linearGradient id="s-fold" x1="0.3" y1="0.25" x2="0.7" y2="0.72">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <path
+    d="M66 20 L34 34 L66 60 L34 80"
+    fill="none"
+    stroke="url(#s-grad)"
+    stroke-width="26"
+    stroke-linecap="round"
+    stroke-linejoin="round"/>
+  <path
+    d="M66 20 L34 34 L66 60 L34 80"
+    fill="none"
+    stroke="url(#s-fold)"
+    stroke-width="26"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    opacity="0.5"/>
+</svg>
