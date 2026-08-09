@@ -215,6 +215,53 @@ impl ReplyContextCache {
     pub fn current(&self) -> Option<ReplyContext> {
         self.inner.lock().ok().and_then(|g| g.clone())
     }
+
+    /// Drop the warm pack: something changed underneath it (an integration sync landed new items),
+    /// so whatever was assembled before is stale. The next `get` is an honest miss until the focus
+    /// path re-assembles via [`Self::put`] — invalidation never rebuilds inline, because building
+    /// on the press path is exactly what this cache exists to prevent.
+    pub fn invalidate(&self) {
+        if let Ok(mut g) = self.inner.lock() {
+            *g = None;
+        }
+    }
+}
+
+/// The daemon-owned bus subscription that keeps the reply-context cache honest across integration
+/// syncs (design §2.2 / E-49): an [`crate::bus::BusEvent::IntegrationSynced`] means new items just
+/// landed in the event log, so a pack assembled before the sync may answer with a stale thread.
+///
+/// No thread of its own: like the daemon's other background work (embedding, local maintenance,
+/// the dream driver's `tick`) this is tick-driven — the host's existing loop calls [`Self::pump`],
+/// which drains whatever the bus has buffered via the non-blocking `try_recv` and returns
+/// immediately when the bus is quiet (no busy loop, no waiting). Invalidation only clears; the
+/// rebuild stays on the focus path ([`ReplyContextCache::put`]), preserving the cache's
+/// "None on miss" contract.
+pub struct SyncInvalidator {
+    sub: crate::bus::Subscriber,
+    cache: ReplyContextCache,
+}
+
+impl SyncInvalidator {
+    /// Subscribe to `bus` on behalf of `cache`. Only events published after this call are seen,
+    /// so wire it up before the first sync can run.
+    pub fn new(bus: &crate::bus::Bus, cache: ReplyContextCache) -> Self {
+        Self { sub: bus.subscribe(), cache }
+    }
+
+    /// Drain every buffered bus event, invalidating the cache for each `IntegrationSynced` seen
+    /// (other event kinds pass through untouched). Non-blocking — an empty bus returns 0 at once.
+    /// Returns how many sync events were handled, so the caller's tick can log/meter quietly.
+    pub fn pump(&mut self) -> usize {
+        let mut handled = 0;
+        while let Some(ev) = self.sub.try_recv() {
+            if let crate::bus::BusEvent::IntegrationSynced { .. } = *ev {
+                self.cache.invalidate();
+                handled += 1;
+            }
+        }
+        handled
+    }
 }
 
 /// What one local maintenance pass changed ([`Db::run_local_maintenance`]).
@@ -276,12 +323,23 @@ pub struct Db {
     /// in effect — the desktop only supplies an `enabled` config behind a flag, so the default is
     /// unchanged behaviour.
     compression_config: Option<shogun_fusion::compress::CompressionConfig>,
+    /// The internal event bus, when wired (design §2.2 / E-49). `None` keeps every publish a
+    /// no-op, so a `Db` opened without the daemon composition behaves exactly as before.
+    bus: Option<crate::bus::Bus>,
 }
 
 impl Db {
     /// Wrap an already-open, migrated connection.
     pub fn new(conn: Connection, clock: Clock) -> Self {
-        Self { conn: Arc::new(Mutex::new(conn)), clock, embedder: None, compression_config: None }
+        Self { conn: Arc::new(Mutex::new(conn)), clock, embedder: None, compression_config: None, bus: None }
+    }
+
+    /// Attach the internal event bus (design §2.2). Same handoff pattern as [`Self::with_embedder`]:
+    /// the daemon composition owns the [`crate::bus::Bus`] and hands this handle over; without it,
+    /// ingest publishes nothing and behaviour is unchanged.
+    pub fn with_bus(mut self, bus: crate::bus::Bus) -> Self {
+        self.bus = Some(bus);
+        self
     }
 
     /// Attach the local embedding model, turning search from lexical-only into hybrid.
@@ -495,43 +553,62 @@ impl Db {
     /// (FR-ST-02). Extraction is skipped on a touch so a re-sync never multiplies candidates.
     ///
     /// The caller ([`crate::service_gate`]) has already authorized the sync; this method only
-    /// persists. `newly_inserted` is what an `IntegrationSynced` bus event should report as the
-    /// count. Returns a zeroed summary on a lock failure (never panics).
+    /// persists. On completion, a batch that inserted ≥ 1 **new** item publishes
+    /// [`crate::bus::BusEvent::IntegrationSynced`] per source on the bus (§6.9, design §2.2) so
+    /// subscribers — e.g. the reply-context invalidator — learn that memory just changed; a
+    /// dedup-only or empty batch publishes nothing (nothing changed). Returns a zeroed summary on
+    /// a lock failure (never panics).
     pub fn ingest_integration(&self, items: &[shogun_mcp::sync::IngestItem]) -> IngestSummary {
         let now = self.now_ms();
-        let Ok(mut guard) = self.conn.lock() else {
-            return IngestSummary::default();
-        };
         let mut summary = IngestSummary::default();
-        for it in items {
-            let hash = Self::content_hash(&it.body);
-            let ev = NewEvent {
-                ts: it.ts_ms,
-                source: it.source,
-                kind: it.kind,
-                app_bundle_id: None,
-                window_title: (!it.title.is_empty()).then_some(it.title.as_str()),
-                content: &it.body,
-                content_hash: &hash,
-                dwell_ms: 0,
-                display_id: None,
-                window_bounds: None,
+        // Per-source newly-inserted counts for the bus. A batch normally carries one service, so a
+        // tiny vec beats a map.
+        let mut synced: Vec<(&'static str, u64)> = Vec::new();
+        {
+            let Ok(mut guard) = self.conn.lock() else {
+                return IngestSummary::default();
             };
-            let Ok((id, touched)) = event_log::insert_or_touch(&guard, &ev) else {
-                continue;
-            };
-            summary.processed += 1;
-            if touched {
-                continue;
+            for it in items {
+                let hash = Self::content_hash(&it.body);
+                let ev = NewEvent {
+                    ts: it.ts_ms,
+                    source: it.source,
+                    kind: it.kind,
+                    app_bundle_id: None,
+                    window_title: (!it.title.is_empty()).then_some(it.title.as_str()),
+                    content: &it.body,
+                    content_hash: &hash,
+                    dwell_ms: 0,
+                    display_id: None,
+                    window_bounds: None,
+                };
+                let Ok((id, touched)) = event_log::insert_or_touch(&guard, &ev) else {
+                    continue;
+                };
+                summary.processed += 1;
+                if touched {
+                    continue;
+                }
+                summary.newly_inserted += 1;
+                match synced.iter_mut().find(|(s, _)| *s == it.source) {
+                    Some((_, n)) => *n += 1,
+                    None => synced.push((it.source, 1)),
+                }
+                // A newly-ingested item is extracted for commitments / open loops, linked to it.
+                let candidates = shogun_memory::extract::extract(&it.body);
+                if !candidates.is_empty() {
+                    let ids =
+                        shogun_memory::extract::persist_candidates(&mut guard, id, &candidates, it.ts_ms, now)
+                            .unwrap_or_default();
+                    summary.candidates += ids.len();
+                }
             }
-            summary.newly_inserted += 1;
-            // A newly-ingested item is extracted for commitments / open loops, linked to it.
-            let candidates = shogun_memory::extract::extract(&it.body);
-            if !candidates.is_empty() {
-                let ids =
-                    shogun_memory::extract::persist_candidates(&mut guard, id, &candidates, it.ts_ms, now)
-                        .unwrap_or_default();
-                summary.candidates += ids.len();
+        }
+        // Publish after the DB lock is released. Non-blocking (AR-07); carries only the source tag
+        // and a count — never item content.
+        if let Some(bus) = &self.bus {
+            for (source, count) in synced {
+                bus.publish(crate::bus::BusEvent::IntegrationSynced { source, count });
             }
         }
         summary
@@ -3303,6 +3380,112 @@ mod tests {
             (second.processed, second.newly_inserted, second.candidates),
             (1, 0, 0),
             "an unchanged re-sync must not duplicate the event or re-extract"
+        );
+    }
+
+    /// One sync batch with new items → exactly one `IntegrationSynced` on the bus, carrying the
+    /// source tag and the newly-inserted count — never item content (design §2.2 wiring).
+    #[test]
+    fn a_sync_with_new_items_publishes_exactly_one_integration_synced() {
+        use crate::bus::{Bus, BusEvent};
+        use shogun_mcp::sync::IngestItem;
+        let bus = Bus::new(8);
+        let mut sub = bus.subscribe();
+        let db = Db::open_in_memory(clock(1)).unwrap().with_bus(bus);
+        let items = vec![
+            IngestItem { source: "gmail", kind: "email", title: "A".into(), body: "first mail".into(), ts_ms: 100 },
+            IngestItem { source: "gmail", kind: "email", title: "B".into(), body: "second mail".into(), ts_ms: 200 },
+        ];
+        let summary = db.ingest_integration(&items);
+        assert_eq!(summary.newly_inserted, 2);
+        let ev = sub.try_recv().expect("one event for the batch");
+        assert_eq!(*ev, BusEvent::IntegrationSynced { source: "gmail", count: 2 });
+        assert!(sub.try_recv().is_none(), "exactly one event per synced source, not one per item");
+    }
+
+    /// A sync that changes nothing (dedup-only re-sync, or an empty batch) stays silent — no
+    /// event means no needless cache invalidation downstream.
+    #[test]
+    fn a_sync_with_zero_new_items_publishes_nothing() {
+        use crate::bus::Bus;
+        use shogun_mcp::sync::IngestItem;
+        let bus = Bus::new(8);
+        let db = Db::open_in_memory(clock(1)).unwrap().with_bus(bus.clone());
+        let item = IngestItem {
+            source: "gmail",
+            kind: "email",
+            title: "Invoice".into(),
+            body: "Payment is due next week".into(),
+            ts_ms: 100,
+        };
+        db.ingest_integration(std::slice::from_ref(&item));
+        // Subscribe after the first (publishing) sync; only silence must follow.
+        let mut sub = bus.subscribe();
+        let second = db.ingest_integration(std::slice::from_ref(&item));
+        assert_eq!(second.newly_inserted, 0, "precondition: an unchanged re-sync is dedup-only");
+        assert!(sub.try_recv().is_none(), "a dedup-only sync must not publish");
+        db.ingest_integration(&[]);
+        assert!(sub.try_recv().is_none(), "an empty batch must not publish");
+    }
+
+    /// The §2.2 loop end-to-end: sync lands new items → `IntegrationSynced` → the daemon's
+    /// subscription empties the cache, so the next `get` is an honest miss until the focus path
+    /// re-assembles. Invalidation clears — it never rebuilds inline.
+    #[test]
+    fn an_integration_synced_event_empties_the_cache_until_reassembled() {
+        use crate::bus::Bus;
+        use shogun_mcp::sync::IngestItem;
+        let bus = Bus::new(8);
+        let db = Db::open_in_memory(clock(10_000)).unwrap().with_bus(bus.clone());
+        let cache = ReplyContextCache::new();
+        let mut inv = SyncInvalidator::new(&bus, cache.clone());
+
+        db.capture(&NewEvent { window_title: Some("Alpha"), ..ev("alpha notes", "h1", 100) })
+            .unwrap();
+        let key =
+            shogun_memory::thread::thread_key("capture", None, Some("com.apple.Safari"), Some("Alpha"))
+                .unwrap();
+        cache.put(db.build_reply_context(&key));
+        assert!(cache.get(&key).is_some(), "precondition: warm before the sync");
+
+        // A non-sync event leaves the warm pack alone.
+        bus.publish(crate::bus::BusEvent::CacheUpdated);
+        assert_eq!(inv.pump(), 0);
+        assert!(cache.get(&key).is_some(), "unrelated events must not evict the pack");
+
+        let summary = db.ingest_integration(&[IngestItem {
+            source: "gmail",
+            kind: "email",
+            title: "Re: Alpha".into(),
+            body: "new material for the alpha thread".into(),
+            ts_ms: 200,
+        }]);
+        assert_eq!(summary.newly_inserted, 1);
+        assert_eq!(inv.pump(), 1, "one sync event handled");
+        assert!(cache.get(&key).is_none(), "stale pack is gone — a miss, not an inline rebuild");
+        assert!(cache.current().is_none(), "cleared entirely, whatever thread was held");
+
+        // The focus path re-assembles; the cache serves again.
+        cache.put(db.build_reply_context(&key));
+        assert!(cache.get(&key).is_some(), "fresh after re-assembly");
+    }
+
+    /// The subscription is tick-driven, not a spin: pumping a quiet bus does no work and returns
+    /// at once (`try_recv` is non-blocking), so an idle daemon burns nothing between ticks.
+    #[test]
+    fn pumping_a_quiet_bus_returns_immediately_without_spinning() {
+        use crate::bus::Bus;
+        let bus = Bus::new(8);
+        let cache = ReplyContextCache::new();
+        let mut inv = SyncInvalidator::new(&bus, cache);
+        let t0 = std::time::Instant::now();
+        for _ in 0..1_000 {
+            assert_eq!(inv.pump(), 0, "a quiet bus handles nothing");
+        }
+        assert!(
+            t0.elapsed() < std::time::Duration::from_millis(100),
+            "1000 quiet pumps must be near-instant (non-blocking drain, no spin/wait): {:?}",
+            t0.elapsed()
         );
     }
 
