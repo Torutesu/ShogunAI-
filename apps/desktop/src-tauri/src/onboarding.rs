@@ -196,7 +196,7 @@ pub mod mac {
             ONBOARDING_LABEL,
             tauri::WebviewUrl::App("onboarding.html".into()),
         )
-        .title("SHOGUN")
+        .title("ShogunAI")
         .inner_size(720.0, 640.0)
         .min_inner_size(640.0, 560.0)
         .resizable(false)

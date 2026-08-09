@@ -366,7 +366,7 @@ pub mod mac {
             return Some(win);
         }
         let win = tauri::WebviewWindowBuilder::new(app, WINDOW_LABEL, tauri::WebviewUrl::default())
-            .title("SHOGUN — voice")
+            .title("ShogunAI — voice")
             .transparent(true)
             .decorations(false)
             .resizable(false)

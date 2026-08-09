@@ -738,7 +738,7 @@ use shogun_core::meeting::gate::OfferGate;
             // JavaScript — shown, sized, positioned, and completely blank.
             tauri::WebviewUrl::default(),
         )
-        .title("SHOGUN — meeting")
+        .title("ShogunAI — meeting")
         .transparent(true)
         .decorations(false)
         .resizable(false)
