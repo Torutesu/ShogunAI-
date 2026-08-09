@@ -10,7 +10,7 @@
 //! Auth (FR-API-03): every tool endpoint requires a valid token — reads included; only the
 //! unauthenticated `/v1/status` discovery endpoint is exempt.
 
-use shogun_agents::approval::{ApprovalQueue, Origin, Preview, Route};
+use shogun_agents::approval::{ApprovalOrigin, ApprovalQueue, Preview, Route};
 use shogun_agents::entitlement::Entitlements;
 use shogun_agents::permission::{Action, Level, LocalAction, SendAction};
 
@@ -321,8 +321,14 @@ fn parse_action(body: &str) -> Option<ActionSpec> {
 
 /// Handle `actions.execute` (auth already enforced by [`route`]). A local action is authorized to
 /// run (200); an external send is enqueued in the shared approval queue and returns pending +
-/// approval id (202, FR-API-04) — it never runs here without a UI confirm.
-pub fn act(body: Option<&str>, now_ms: i64, approvals: &mut ApprovalQueue) -> (u16, String) {
+/// approval id (202, FR-API-04) — it never runs here without a UI confirm. `origin` labels which
+/// face enqueued it (REST/CLI = Api, stdio = Mcp) in the single shared queue (B-3 / E-08).
+pub fn act(
+    body: Option<&str>,
+    now_ms: i64,
+    approvals: &mut ApprovalQueue,
+    origin: ApprovalOrigin,
+) -> (u16, String) {
     let Some(body) = body else {
         return (400, r#"{"error":"missing_body"}"#.to_string());
     };
@@ -334,8 +340,15 @@ pub fn act(body: Option<&str>, now_ms: i64, approvals: &mut ApprovalQueue) -> (u
         }
         Some(ActionSpec::Send(send, preview)) => {
             let now = u64::try_from(now_ms).unwrap_or(0);
-            let id = approvals.request(send, preview, Origin::AiApi, now);
-            (202, format!(r#"{{"pending":true,"approval_id":{},"level":"L3"}}"#, id.0))
+            let id = approvals.request(send, preview, origin, now);
+            (
+                202,
+                format!(
+                    r#"{{"pending":true,"approval_id":{},"level":"L3","origin":"{}"}}"#,
+                    id.0,
+                    origin.as_str()
+                ),
+            )
         }
     }
 }
@@ -626,7 +639,7 @@ mod tests {
     #[test]
     fn act_local_is_authorized_immediately() {
         let mut q = ApprovalQueue::new();
-        let (s, b) = act(Some(r#"{"kind":"local_search","query":"budget"}"#), 0, &mut q);
+        let (s, b) = act(Some(r#"{"kind":"local_search","query":"budget"}"#), 0, &mut q, ApprovalOrigin::Api);
         assert_eq!(s, 200);
         assert!(b.contains("\"executed\":\"local\""));
         assert!(b.contains("\"level\":\"L1\""));
@@ -640,6 +653,7 @@ mod tests {
             Some(r#"{"kind":"send_email","to":"a@b.com","subject":"Hi","body":"hello"}"#),
             1000,
             &mut q,
+            ApprovalOrigin::Api,
         );
         assert_eq!(s, 202);
         assert!(b.contains("\"pending\":true"));
@@ -651,11 +665,11 @@ mod tests {
     #[test]
     fn act_rejects_missing_and_malformed_bodies() {
         let mut q = ApprovalQueue::new();
-        assert_eq!(act(None, 0, &mut q).0, 400);
-        assert_eq!(act(Some("not json"), 0, &mut q).0, 400);
-        assert_eq!(act(Some(r#"{"kind":"unknown_thing"}"#), 0, &mut q).0, 400);
+        assert_eq!(act(None, 0, &mut q, ApprovalOrigin::Api).0, 400);
+        assert_eq!(act(Some("not json"), 0, &mut q, ApprovalOrigin::Api).0, 400);
+        assert_eq!(act(Some(r#"{"kind":"unknown_thing"}"#), 0, &mut q, ApprovalOrigin::Api).0, 400);
         // a send kind missing a required field is also rejected
-        assert_eq!(act(Some(r#"{"kind":"send_email"}"#), 0, &mut q).0, 400);
+        assert_eq!(act(Some(r#"{"kind":"send_email"}"#), 0, &mut q, ApprovalOrigin::Api).0, 400);
         assert_eq!(q.pending_len(), 0);
     }
 

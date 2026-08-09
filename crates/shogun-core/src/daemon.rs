@@ -3918,6 +3918,40 @@ mod tests {
     }
 
     #[test]
+    fn record_feedback_wrapper_persists_the_signal_locally() {
+        use shogun_memory::lessons::{list_feedback_since, FeedbackKind, LessonScope, NewFeedback};
+
+        let db = Db::open_in_memory(clock(1)).unwrap();
+        let id = db.record_feedback(
+            FeedbackKind::EditBeforeApprove,
+            LessonScope::Person,
+            &NewFeedback {
+                ts_ms: 42,
+                action_kind: Some("send_email"),
+                scope_ref: Some("alice@example.com"),
+                before_text: Some("proposed body"),
+                after_text: Some("final body"),
+            },
+        );
+        assert!(id.is_some(), "a healthy DB accepts the feedback write");
+
+        // Read it back through the same connection the wrapper wrote to.
+        let rows = {
+            let c = db.conn.lock().unwrap();
+            list_feedback_since(&c, 0).unwrap()
+        };
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].kind, FeedbackKind::EditBeforeApprove);
+        assert_eq!(rows[0].scope, LessonScope::Person);
+        assert_eq!(rows[0].scope_ref.as_deref(), Some("alice@example.com"));
+        assert_eq!(rows[0].before_text.as_deref(), Some("proposed body"));
+        assert_eq!(rows[0].after_text.as_deref(), Some("final body"));
+        // Fire-and-forget shape: the wrapper returns Option, never Err — an approval action can
+        // discard it with `let _ =` and can never be failed by it.
+        let _: Option<i64> = id;
+    }
+
+    #[test]
     fn dream_cycle_resume_skips_done_jobs_from_the_db() {
         let db = Db::open_in_memory(clock(1)).unwrap();
         let cycle = "20260720";

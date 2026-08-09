@@ -32,12 +32,30 @@ pub enum KeyKind {
     Byok,
 }
 
-/// Who requested the operation. The flow is identical for both (FR-AG-04); only the waiting
-/// semantics differ (an API caller holds a pending result).
+/// The surface a pending approval was requested from (B-3 / E-08 queue unification). The flow is
+/// identical for all three (FR-AG-04 / invariant 6) — the origin never changes permissions,
+/// confirmation rules, or expiry. It is carried so the single shared queue's listing can label
+/// each entry (UI / API / MCP) and so an API/MCP caller's waiting semantics (holding a pending
+/// result) are visible to the confirm UI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Origin {
-    Human,
-    AiApi,
+pub enum ApprovalOrigin {
+    /// Enqueued by the human UI (Notch / settings / an agent the user launched from the UI).
+    Ui,
+    /// Enqueued through the REST/CLI Memory API face.
+    Api,
+    /// Enqueued through the MCP (stdio) face.
+    Mcp,
+}
+
+impl ApprovalOrigin {
+    /// Stable wire label for list output ("ui" / "api" / "mcp").
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ApprovalOrigin::Ui => "ui",
+            ApprovalOrigin::Api => "api",
+            ApprovalOrigin::Mcp => "mcp",
+        }
+    }
 }
 
 /// The full preview shown at L3 confirmation (FR-AG-03). `full_body` is the complete content, never
@@ -135,7 +153,7 @@ struct PendingApproval {
     id: ApprovalId,
     action: SendAction,
     preview: Preview,
-    origin: Origin,
+    origin: ApprovalOrigin,
     created_ms: u64,
 }
 
@@ -159,7 +177,7 @@ impl ApprovalQueue {
 
     /// Enqueue a send for L3 approval. Returns the handle; the request starts [`ApprovalState::Pending`]
     /// (an AI-API caller holds this pending result until resolved — FR-AG-04).
-    pub fn request(&mut self, action: SendAction, preview: Preview, origin: Origin, now_ms: u64) -> ApprovalId {
+    pub fn request(&mut self, action: SendAction, preview: Preview, origin: ApprovalOrigin, now_ms: u64) -> ApprovalId {
         let id = self.alloc_id();
         self.pending.push(PendingApproval { id, action, preview, origin, created_ms: now_ms });
         id
@@ -227,9 +245,16 @@ impl ApprovalQueue {
         self.pending.iter().find(|p| p.id == id).map(|p| &p.preview)
     }
 
-    /// The origin of a pending request.
-    pub fn origin(&self, id: ApprovalId) -> Option<Origin> {
+    /// The origin of a pending request (which surface enqueued it — shown in the list UI).
+    pub fn origin(&self, id: ApprovalId) -> Option<ApprovalOrigin> {
         self.pending.iter().find(|p| p.id == id).map(|p| p.origin)
+    }
+
+    /// The action of a pending request (read-only; confirmation still goes through
+    /// [`Self::confirm`]). Lets approval-time hooks derive per-action metadata (e.g. the L5
+    /// feedback scope) without dequeuing.
+    pub fn action(&self, id: ApprovalId) -> Option<&SendAction> {
+        self.pending.iter().find(|p| p.id == id).map(|p| &p.action)
     }
 
     pub fn pending_len(&self) -> usize {
@@ -258,8 +283,8 @@ mod tests {
     #[test]
     fn pending_ids_lists_requests_oldest_first() {
         let mut q = ApprovalQueue::new();
-        let a = q.request(email(), preview(), Origin::Human, 0);
-        let b = q.request(email(), preview(), Origin::Human, 1);
+        let a = q.request(email(), preview(), ApprovalOrigin::Ui, 0);
+        let b = q.request(email(), preview(), ApprovalOrigin::Ui, 1);
         assert_eq!(q.pending_ids(), vec![a, b]);
         q.confirm(a, ConfirmIntent::DedicatedButton, 2);
         assert_eq!(q.pending_ids(), vec![b]);
@@ -278,16 +303,16 @@ mod tests {
     #[test]
     fn request_starts_pending() {
         let mut q = ApprovalQueue::new();
-        let id = q.request(email(), preview(), Origin::AiApi, 0);
+        let id = q.request(email(), preview(), ApprovalOrigin::Api, 0);
         assert_eq!(q.poll(id), Decision::StillPending);
         assert_eq!(q.pending_len(), 1);
-        assert_eq!(q.origin(id), Some(Origin::AiApi));
+        assert_eq!(q.origin(id), Some(ApprovalOrigin::Api));
     }
 
     #[test]
     fn enter_key_alone_does_not_confirm() {
         let mut q = ApprovalQueue::new();
-        let id = q.request(email(), preview(), Origin::Human, 0);
+        let id = q.request(email(), preview(), ApprovalOrigin::Ui, 0);
         // Enter → refused, still pending.
         assert_eq!(q.confirm(id, ConfirmIntent::EnterKey, 1000), Decision::RequiresDedicatedButton);
         assert_eq!(q.poll(id), Decision::StillPending);
@@ -297,7 +322,7 @@ mod tests {
     #[test]
     fn dedicated_button_confirms_and_yields_the_send() {
         let mut q = ApprovalQueue::new();
-        let id = q.request(email(), preview(), Origin::Human, 0);
+        let id = q.request(email(), preview(), ApprovalOrigin::Ui, 0);
         let decision = q.confirm(id, ConfirmIntent::DedicatedButton, 1000);
         // the confirmed decision carries both the action and its preview (for traceability)
         assert_eq!(decision, Decision::Confirmed(ConfirmedSend { action: email(), preview: preview() }));
@@ -309,7 +334,7 @@ mod tests {
     #[test]
     fn confirm_after_timeout_is_rejected_not_run() {
         let mut q = ApprovalQueue::new();
-        let id = q.request(email(), preview(), Origin::AiApi, 0);
+        let id = q.request(email(), preview(), ApprovalOrigin::Api, 0);
         // 10min + 1ms later
         let decision = q.confirm(id, ConfirmIntent::DedicatedButton, APPROVAL_TIMEOUT_MS + 1);
         assert_eq!(decision, Decision::Rejected(RejectCause::TimedOut));
@@ -319,8 +344,8 @@ mod tests {
     #[test]
     fn expire_due_rejects_only_stale_requests() {
         let mut q = ApprovalQueue::new();
-        let a = q.request(email(), preview(), Origin::AiApi, 0);
-        let b = q.request(email(), preview(), Origin::Human, APPROVAL_TIMEOUT_MS); // newer
+        let a = q.request(email(), preview(), ApprovalOrigin::Api, 0);
+        let b = q.request(email(), preview(), ApprovalOrigin::Ui, APPROVAL_TIMEOUT_MS); // newer
         // at now = TIMEOUT+1: a is stale, b is fresh
         let expired = q.expire_due(APPROVAL_TIMEOUT_MS + 1);
         assert_eq!(expired, vec![a]);
@@ -335,7 +360,7 @@ mod tests {
     #[test]
     fn user_reject_removes_the_request() {
         let mut q = ApprovalQueue::new();
-        let id = q.request(email(), preview(), Origin::Human, 0);
+        let id = q.request(email(), preview(), ApprovalOrigin::Ui, 0);
         assert_eq!(q.reject(id, RejectCause::UserRejected), Decision::Rejected(RejectCause::UserRejected));
         assert_eq!(q.pending_len(), 0);
     }
@@ -350,7 +375,7 @@ mod tests {
     #[test]
     fn preview_is_available_for_the_confirm_ui() {
         let mut q = ApprovalQueue::new();
-        let id = q.request(email(), preview(), Origin::Human, 0);
+        let id = q.request(email(), preview(), ApprovalOrigin::Ui, 0);
         let p = q.preview(id).unwrap();
         assert_eq!(p.destination, "alice@example.com");
         assert_eq!(p.route, Route::ViaComposio);

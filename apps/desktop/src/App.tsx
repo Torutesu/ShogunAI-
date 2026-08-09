@@ -2327,6 +2327,7 @@ interface ApprovalView {
   destination: string;
   full_body: string;
   route: string; // "direct" | "composio"
+  origin: string; // "ui" | "api" | "mcp" — which surface enqueued it (B-3 shared queue)
 }
 
 function ApprovalsSection(): JSX.Element | null {
@@ -2386,6 +2387,8 @@ function ApprovalsSection(): JSX.Element | null {
             <div key={r.id} className="appr">
               <div className="appr__top">
                 <span className="appr__op">{r.op_type}</span>
+                {/* B-3: which surface enqueued it — a UI, API, or MCP caller share this one queue. */}
+                <span className="appr__route">{(r.origin ?? "ui").toUpperCase()}</span>
                 <span className="appr__route">
                   {r.destination} · {r.route === "composio" ? t.approvalsVia : t.approvalsDirect}
                 </span>

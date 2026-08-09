@@ -103,6 +103,98 @@ fn composio_send_is_l3_and_gated_by_draft_stop() {
     assert_eq!(preview.route, shogun_agents::approval::Route::ViaComposio);
 }
 
+/// B-3 / E-08 regression: **an L3 send submitted through the MCP or REST face lands in the ONE
+/// shared approval queue** — the same queue the confirm UI drains — labeled with its origin, and
+/// is resolvable (confirm / reject) from that queue regardless of origin. Before B-3 each face
+/// constructed a private queue no UI ever drained; the constructor-injection this exercises is
+/// what closes E-08.
+#[test]
+fn api_and_mcp_sends_land_in_the_one_shared_queue_with_origins() {
+    use std::sync::{Arc, Mutex};
+
+    use shogun_agents::approval::{
+        ApprovalId, ApprovalOrigin, ApprovalQueue, ConfirmIntent, Decision, RejectCause,
+    };
+    use shogun_mcp::backend::StubBackend;
+    use shogun_mcp::mcp::McpServer;
+    use shogun_mcp::rest;
+
+    // The one process-wide queue (what the desktop manages at startup / a bin creates at its
+    // composition root). Both faces below receive THIS queue, not their own.
+    let shared: Arc<Mutex<ApprovalQueue>> = Arc::new(Mutex::new(ApprovalQueue::new()));
+
+    // 1. MCP face: actions.execute with a send → 202-equivalent pending, enqueued in `shared`.
+    let server = McpServer::new(
+        StubBackend,
+        shared.clone(),
+        || 1_000,
+        shogun_agents::entitlement::Entitlements::trial_not_started,
+    );
+    let resp = server
+        .handle_line(
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"actions.execute","arguments":{"kind":"send_email","to":"a@b.com","subject":"s","body":"mcp draft"}}}"#,
+        )
+        .expect("a response line");
+    // The tool result is a JSON string inside the JSON-RPC envelope, so the inner quotes arrive
+    // escaped on the wire.
+    assert!(resp.contains(r#"\"pending\":true"#), "MCP send must be pending, never executed: {resp}");
+    assert!(resp.contains(r#"\"origin\":\"mcp\""#), "the MCP face labels its origin: {resp}");
+
+    // 2. REST face: the same shared queue, Api origin.
+    let (status, body) = {
+        let mut q = shared.lock().expect("queue");
+        rest::act(
+            Some(r#"{"kind":"send_email","to":"b@c.com","subject":"s","body":"api draft"}"#),
+            1_000,
+            &mut q,
+            ApprovalOrigin::Api,
+        )
+    };
+    assert_eq!(status, 202);
+    assert!(body.contains("\"origin\":\"api\""), "{body}");
+
+    // 3. One listing (what the UI's list_approvals drains) shows BOTH, each with its origin.
+    let (mcp_id, api_id) = {
+        let q = shared.lock().expect("queue");
+        let ids = q.pending_ids();
+        assert_eq!(ids.len(), 2, "both faces enqueued into the same queue");
+        assert_eq!(q.origin(ids[0]), Some(ApprovalOrigin::Mcp));
+        assert_eq!(q.origin(ids[1]), Some(ApprovalOrigin::Api));
+        // full-content previews are present for the confirm UI (FR-AG-03)
+        assert_eq!(q.preview(ids[0]).expect("preview").full_body, "Subject: s\n\nmcp draft");
+        (ids[0], ids[1])
+    };
+
+    // 4. The UI-side confirm/reject operates on them identically, regardless of origin.
+    {
+        let mut q = shared.lock().expect("queue");
+        assert!(matches!(
+            q.confirm(mcp_id, ConfirmIntent::DedicatedButton, 2_000),
+            Decision::Confirmed(cs) if cs.preview.full_body == "Subject: s\n\nmcp draft"
+        ));
+        assert_eq!(
+            q.reject(api_id, RejectCause::UserRejected),
+            Decision::Rejected(RejectCause::UserRejected)
+        );
+        assert_eq!(q.pending_len(), 0, "both resolved through the one queue");
+    }
+
+    // 5. L1-can-never-send stays intact on the same surface: a local action through the same
+    //    faces executes locally and never touches the queue.
+    let (status, body) = {
+        let mut q = shared.lock().expect("queue");
+        rest::act(Some(r#"{"kind":"local_search","query":"x"}"#), 1_000, &mut q, ApprovalOrigin::Api)
+    };
+    assert_eq!(status, 200);
+    assert!(body.contains("\"executed\":\"local\""));
+    assert_eq!(shared.lock().expect("queue").pending_len(), 0, "a local action never enqueues");
+    // and an unknown id is refused, not silently confirmed
+    assert_eq!(
+        shared.lock().expect("queue").confirm(ApprovalId(999), ConfirmIntent::DedicatedButton, 0),
+        Decision::Unknown
+    );
+}
+
 /// Issue #97 regression: **no send path bypasses BOTH the entitlement gate and the L3/consent
 /// gates.** Every surface that could emit an external send is checked with a non-entitled plan
 /// (Standard, expired trial) — each one must refuse before any send exists — and then with an
