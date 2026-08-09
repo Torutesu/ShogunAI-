@@ -96,9 +96,11 @@ fn probe() -> String {
         .unwrap_or_else(|| "(no title)".into());
     let url = axcache::browser_url(front.pid);
 
+    // Strong surfaces only, mirroring the adapter: Weak (Teams, Webex) corroborates via ctx.
     let signals = Signals {
-        meeting_app_frontmost: detect::is_meeting_app(&front.bundle_id)
-            || url.as_deref().is_some_and(detect::is_meeting_url),
+        meeting_app_frontmost: detect::bundle_hint(&front.bundle_id)
+            == Some(detect::MeetingHint::Strong)
+            || url.as_deref().and_then(detect::host_hint) == Some(detect::MeetingHint::Strong),
         ..Default::default()
     };
     let verdict = match detect::decide(&signals) {

@@ -18,12 +18,18 @@
 //! sampled here.** That boundary is the whole difference between detection and eavesdropping, so
 //! it is stated in the type: [`Signals::mic_in_use`] is a `bool`, and this module never sees a
 //! sample buffer.
+//!
+//! Bundle ids and hosts are tiered ([`MeetingHint`]): a **Strong** surface is meeting-only (the
+//! Zoom app, a Meet page) and being frontmost is itself evidence; a **Weak** surface is a
+//! resident app or portal (Teams, Webex) where frontmost usually means chat, so it only counts
+//! as one corroborating vote and needs sustained mic use or another signal before an offer.
 
 /// What the adapter observed at one detection tick.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Signals {
-    /// ② A known meeting app is frontmost (see [`is_meeting_app`]), or the browser is on a
-    /// meeting URL (see [`is_meeting_url`]).
+    /// ② A **Strong** meeting app is frontmost, or the browser is on a **Strong** meeting URL
+    /// (see [`bundle_hint`] / [`host_hint`]). Weak surfaces (Teams, Webex, a huddle hint) must
+    /// not set this — they reach the detector through [`DetectionCtx`] as single votes.
     pub meeting_app_frontmost: bool,
     /// ② The audio input device is in use. **Truth value only — no samples are read.**
     pub mic_in_use: bool,
@@ -42,19 +48,85 @@ pub enum Decision {
     Offer { confidence: f64, provenance: String },
 }
 
-/// Bundle ids of the meeting apps v1 detects (FR-MT-04). Zoom only for the native app; Meet is a
-/// browser URL, handled by [`is_meeting_url`].
+/// How strongly a bundle id or host says "a meeting is happening" (FR-MT-04, Plan A).
+///
+/// `Strong` surfaces are meeting-only — the native Zoom app, a Meet page — so being frontmost is
+/// itself evidence and can open an offer alone. `Weak` surfaces are resident chat apps and
+/// portals — Teams, Webex — where frontmost usually means someone reading messages; a Weak match
+/// is one corroborating vote and never an opener on its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MeetingHint {
+    Strong,
+    Weak,
+}
+
+/// Bundle ids of apps that exist to hold meetings (FR-MT-04). Frontmost is evidence by itself.
 ///
 /// A table rather than a heuristic: guessing "is this a meeting app?" from a window title is how
 /// a note-taking offer ends up appearing over someone's banking tab.
-const MEETING_BUNDLE_IDS: &[&str] = &["us.zoom.xos"];
+const STRONG_MEETING_BUNDLES: &[&str] = &["us.zoom.xos"];
 
-pub fn is_meeting_app(bundle_id: &str) -> bool {
-    MEETING_BUNDLE_IDS.contains(&bundle_id)
+/// Bundle ids of resident apps that *can* hold meetings but mostly hold chat (Plan A-2). Teams
+/// and Webex stay open all day; frontmost alone must never raise the offer to listen.
+const WEAK_MEETING_BUNDLES: &[&str] =
+    &["com.microsoft.teams2", "com.microsoft.teams", "Cisco-Systems.Spark"];
+
+/// Hosts that mean "a meeting is open in the browser" (FR-MT-04). `app.zoom.us` is the Zoom Web
+/// client (Plan A-1) — the join page shares the host, but a join page becomes a call within
+/// seconds, so Strong does no harm; the marketing site lives on `zoom.us` and does not match.
+const STRONG_MEETING_HOSTS: &[&str] = &["meet.google.com", "app.zoom.us"];
+
+/// Hosts where a meeting *may* be open but chat, calendars and admin pages share the address
+/// (Plan A-2). One corroborating vote, like the weak bundles.
+const WEAK_MEETING_HOSTS: &[&str] = &["teams.microsoft.com", "teams.live.com"];
+
+/// Weak host *suffixes*: Webex parks every tenant on its own subdomain (`acme.webex.com`), and
+/// the admin console shares them — suffix-matched like [`is_media_host`], Weak like Teams.
+const WEAK_MEETING_HOST_SUFFIXES: &[&str] = &["webex.com"];
+
+/// Slack's bundle id — huddles run inside it, so no bundle table can see them (Plan A-4); the
+/// adapter asks [`huddle_hint`] instead when this app is frontmost.
+pub const SLACK_BUNDLE_ID: &str = "com.tinyspeck.slackmacgap";
+
+/// How strongly a frontmost bundle id says "meeting", if at all (FR-MT-04, Plan A-0).
+pub fn bundle_hint(bundle_id: &str) -> Option<MeetingHint> {
+    if STRONG_MEETING_BUNDLES.contains(&bundle_id) {
+        Some(MeetingHint::Strong)
+    } else if WEAK_MEETING_BUNDLES.contains(&bundle_id) {
+        Some(MeetingHint::Weak)
+    } else {
+        None
+    }
 }
 
-/// Hosts that mean "a meeting is open in the browser" (FR-MT-04). Google Meet in v1.
-const MEETING_HOSTS: &[&str] = &["meet.google.com"];
+/// How strongly a browser URL says "meeting", if at all (FR-MT-04, Plan A-0).
+///
+/// Matches on the parsed **host** (via [`host_of`]), never on a substring of the URL — the same
+/// protection as [`is_meeting_url`]: `app.zoom.us.evil.test` must not raise the offer to listen.
+pub fn host_hint(url: &str) -> Option<MeetingHint> {
+    let host = host_of(url)?;
+    if STRONG_MEETING_HOSTS.iter().any(|h| host == *h) {
+        return Some(MeetingHint::Strong);
+    }
+    if WEAK_MEETING_HOSTS.iter().any(|h| host == *h)
+        || host_matches_suffix(&host, WEAK_MEETING_HOST_SUFFIXES)
+    {
+        return Some(MeetingHint::Weak);
+    }
+    None
+}
+
+/// Exact-or-subdomain host match: `acme.webex.com` matches the suffix `webex.com`;
+/// `evilwebex.com` does not. Shared by the media and Webex tables.
+fn host_matches_suffix(host: &str, suffixes: &[&str]) -> bool {
+    suffixes.iter().any(|suffix| host == *suffix || host.ends_with(&format!(".{suffix}")))
+}
+
+/// Whether the bundle id is any known meeting app, Strong or Weak. Thin compatibility wrapper
+/// over [`bundle_hint`]; policy code should ask for the tier instead.
+pub fn is_meeting_app(bundle_id: &str) -> bool {
+    bundle_hint(bundle_id).is_some()
+}
 
 /// Host suffixes for passive media playback — never meeting context on their own.
 ///
@@ -72,14 +144,14 @@ const MEDIA_HOST_SUFFIXES: &[&str] = &[
     "music.apple.com",
 ];
 
-/// Whether a browser URL is a meeting (FR-MT-04).
+/// Whether a browser URL is any known meeting page, Strong or Weak (FR-MT-04).
 ///
 /// Matches on the parsed **host**, never on a substring of the URL: `meet.google.com.evil.test`
 /// and `?redirect=meet.google.com` both contain the host as text, and a `contains` check here
-/// would let an arbitrary page raise the offer to listen.
+/// would let an arbitrary page raise the offer to listen. Thin compatibility wrapper over
+/// [`host_hint`]; policy code should ask for the tier instead.
 pub fn is_meeting_url(url: &str) -> bool {
-    let Some(host) = host_of(url) else { return false };
-    MEETING_HOSTS.iter().any(|h| host == *h)
+    host_hint(url).is_some()
 }
 
 /// Whether a browser URL is known passive media (YouTube, streaming, etc.).
@@ -95,9 +167,7 @@ pub fn is_media_url(url: &str) -> bool {
 }
 
 fn is_media_host(host: &str) -> bool {
-    MEDIA_HOST_SUFFIXES
-        .iter()
-        .any(|suffix| host == *suffix || host.ends_with(&format!(".{suffix}")))
+    host_matches_suffix(host, MEDIA_HOST_SUFFIXES)
 }
 
 /// Window titles that mean passive media or PiP — not a meeting the user is attending.
@@ -130,10 +200,18 @@ pub struct DetectionCtx<'a> {
     pub is_browser: bool,
     /// Parsed host of the frontmost browser tab, when a URL was read.
     pub page_host: Option<&'a str>,
-    /// A known meeting URL is open (`meet.google.com`, …).
+    /// A **Strong** meeting URL is open (`meet.google.com`, `app.zoom.us`).
     pub has_meet_url: bool,
-    /// Native Zoom (`us.zoom.xos`) is frontmost.
-    pub has_zoom_bundle: bool,
+    /// A **Strong** meeting app (native Zoom) is frontmost.
+    pub has_strong_bundle: bool,
+    /// A **Weak** meeting surface is frontmost — a Teams/Webex bundle or a Weak host (Plan A-2).
+    /// One corroborating vote, never an opener: the adapter must *not* also fold this into
+    /// [`Signals::meeting_app_frontmost`], or one observation would count twice.
+    pub has_weak_meeting_signal: bool,
+    /// Slack's window/AX text looks like a huddle in progress (see [`huddle_hint`], Plan A-4).
+    /// One corroborating vote, exactly like a Weak bundle — alone it does nothing, and with
+    /// sustained mic use it produces an offer, never an auto-start.
+    pub has_huddle_hint: bool,
     /// Focused window title, when AX returned one.
     pub window_title: Option<&'a str>,
 }
@@ -145,17 +223,23 @@ pub struct OfferPolicy {
     pub allow_mic_only: bool,
 }
 
-/// Count how many independent signals fired (calendar included when present).
-fn corroborating_count(signals: &Signals) -> usize {
+/// Count how many independent signals fired (calendar included when present). A Weak meeting
+/// surface and a huddle hint are each **one** vote (Plan A-0/A-4): they can corroborate a mic or
+/// controls signal into an offer, but two votes are needed and neither is ever an opener.
+fn corroborating_count(signals: &Signals, ctx: &DetectionCtx<'_>) -> usize {
     usize::from(signals.mic_in_use)
         + usize::from(signals.meeting_app_frontmost)
         + usize::from(signals.meeting_controls_visible)
         + usize::from(signals.occurrence_now)
+        + usize::from(ctx.has_weak_meeting_signal)
+        + usize::from(ctx.has_huddle_hint)
 }
 
-/// Whether the observation already proves a v1 meeting app (Meet URL or native Zoom).
+/// Whether the observation already proves a meeting surface that exists only for meetings
+/// (a Strong URL or the native Zoom app). **Strong only** — a Weak surface or a huddle hint
+/// must corroborate, never open (Plan A-0).
 fn has_strong_opener(ctx: &DetectionCtx<'_>) -> bool {
-    ctx.has_meet_url || ctx.has_zoom_bundle
+    ctx.has_meet_url || ctx.has_strong_bundle
 }
 
 /// Browser tab with no readable host — cannot prove Meet is open (PiP, AX gaps).
@@ -167,7 +251,8 @@ fn browser_lacks_meeting_proof(ctx: &DetectionCtx<'_>) -> bool {
 ///
 /// Biases toward fewer false positives: mic-only is opt-in, PiP/media titles are dropped,
 /// browsers with an empty host cannot corroborate, and non-URL offers need two agreeing signals
-/// unless Meet or Zoom is already proven.
+/// unless Meet or Zoom is already proven. A Weak surface or huddle hint (Plan A) is one of those
+/// two signals — Teams frontmost plus sustained mic offers; Teams frontmost alone never does.
 pub fn evaluate_offer(
     signals: &Signals,
     ctx: &DetectionCtx<'_>,
@@ -184,9 +269,14 @@ pub fn evaluate_offer(
         effective.meeting_app_frontmost = false;
     }
 
+    // A Weak surface or a huddle hint corroborates the mic, so the mic is no longer "only" —
+    // without this the mic-only opt-in gate would zero the very signal Plan A pairs with a Weak
+    // vote, and Teams-plus-sustained-mic could never offer under the default policy.
     let mic_is_only_opener = effective.mic_in_use
         && !effective.meeting_app_frontmost
-        && !effective.meeting_controls_visible;
+        && !effective.meeting_controls_visible
+        && !ctx.has_weak_meeting_signal
+        && !ctx.has_huddle_hint;
     if mic_is_only_opener && !policy.allow_mic_only {
         effective.mic_in_use = false;
     }
@@ -196,7 +286,7 @@ pub fn evaluate_offer(
         return d;
     };
 
-    if !has_strong_opener(ctx) && corroborating_count(&effective) < 2 {
+    if !has_strong_opener(ctx) && corroborating_count(&effective, ctx) < 2 {
         let mic_only_allowed = policy.allow_mic_only
             && effective.mic_in_use
             && !effective.meeting_app_frontmost
@@ -206,7 +296,39 @@ pub fn evaluate_offer(
         }
     }
 
+    let mut ctx_evidence: Vec<&str> = Vec::new();
+    if ctx.has_weak_meeting_signal {
+        ctx_evidence.push("weak_meeting_signal");
+    }
+    if ctx.has_huddle_hint {
+        ctx_evidence.push("huddle_hint");
+    }
+    let provenance = if ctx_evidence.is_empty() {
+        provenance
+    } else {
+        with_ctx_evidence(&provenance, &ctx_evidence)
+    };
+
     Decision::Offer { confidence, provenance }
+}
+
+/// Record ctx-side evidence (Weak surface, huddle hint) in the provenance [`decide`] built, so a
+/// wrong Weak offer is explainable from the stored interval like any other (FR-MT-04).
+fn with_ctx_evidence(provenance: &str, extra: &[&str]) -> String {
+    let mut map = serde_json::from_str::<serde_json::Value>(provenance)
+        .ok()
+        .and_then(|v| match v {
+            serde_json::Value::Object(m) => Some(m),
+            _ => None,
+        })
+        .unwrap_or_default();
+    let signals = map.entry("signals").or_insert_with(|| serde_json::Value::Array(Vec::new()));
+    if let serde_json::Value::Array(fired) = signals {
+        for name in extra {
+            fired.push(serde_json::Value::String((*name).to_string()));
+        }
+    }
+    serde_json::Value::Object(map).to_string()
 }
 
 /// The host component of an absolute URL, lowercased and without userinfo or port.
@@ -390,6 +512,55 @@ pub fn meeting_url_left_past_grace(lost_since_ms: Option<i64>, now: i64) -> bool
     lost_since_ms.is_some_and(|since| now.saturating_sub(since) >= MEETING_URL_LEFT_GRACE_MS)
 }
 
+/// The word that names a Slack huddle, in the two languages Slack's UI shows it in.
+const HUDDLE_WORDS: &[&str] = &["huddle", "ハドル"];
+
+/// Call-control vocabulary that appears in a huddle's UI but not in chat about huddles.
+const HUDDLE_CONTROL_VOCAB: &[&str] =
+    &["mute", "unmute", "leave", "share screen", "ミュート", "退出", "画面共有"];
+
+fn mentions_huddle(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    HUDDLE_WORDS.iter().any(|w| lower.contains(w))
+}
+
+fn mentions_call_controls(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    HUDDLE_CONTROL_VOCAB.iter().any(|w| lower.contains(w))
+}
+
+/// Whether Slack's window title / AX text looks like a huddle in progress (Plan A-4).
+///
+/// Slack ships huddles inside the ordinary Slack window under the ordinary bundle id
+/// ([`SLACK_BUNDLE_ID`]), so no bundle table can see them. The hint instead reads what
+/// Accessibility already exposes: "Huddle" (or the Japanese UI's "ハドル") **co-occurring with
+/// call-control vocabulary** (mute / leave / 退出 …). Co-occurrence is the point — "huddle" alone
+/// is ordinary chat ("let's huddle tomorrow"), and a hint that fired on message text would put
+/// the offer over every conversation that mentions the word.
+///
+/// Policy lives in [`evaluate_offer`]: the hint alone does nothing; with sustained mic use
+/// (≥ [`MIC_SUSTAIN_MS`]) it is a Weak offer, never an auto-start.
+pub fn huddle_hint(window_title: Option<&str>, ax_snippets: &[&str]) -> bool {
+    let huddle_seen = window_title.is_some_and(mentions_huddle)
+        || ax_snippets.iter().any(|s| mentions_huddle(s));
+    if !huddle_seen {
+        return false;
+    }
+    window_title.is_some_and(mentions_call_controls)
+        || ax_snippets.iter().any(|s| mentions_call_controls(s))
+}
+
+/// Plan A-4: after the huddle hint disappears from the title/AX text, wait this long before
+/// treating the huddle as left. Same shape and length as [`MEETING_URL_LEFT_GRACE_MS`] — a
+/// redraw or a moment on another channel must not wrap a huddle mid-sentence.
+pub const HUDDLE_HINT_LOST_GRACE_MS: i64 = 20_000;
+
+/// Whether a huddle session has been without its hint long enough to wrap (Plan A-4).
+/// Mirrors [`meeting_url_left_past_grace`].
+pub fn huddle_hint_lost_past_grace(lost_since_ms: Option<i64>, now: i64) -> bool {
+    lost_since_ms.is_some_and(|since| now.saturating_sub(since) >= HUDDLE_HINT_LOST_GRACE_MS)
+}
+
 /// Whether a browser Meet session should still count as present (FR-MT-11).
 ///
 /// Past the URL-leave grace the frontmost tab no longer looks like a meeting, but an open
@@ -426,7 +597,9 @@ pub fn call_clearly_ended(
     if opened_via_meet_url {
         meeting_url_left_past_grace(url_lost_since_ms, now)
             && !meet_url_session_present(url_lost_since_ms, now, mic_open, mic_closed_since_ms)
-    } else if zoom_bundle_id.is_some_and(is_meeting_app) {
+    } else if zoom_bundle_id.is_some_and(|b| bundle_hint(b) == Some(MeetingHint::Strong)) {
+        // Strong only: quitting Zoom is leaving the call. A Weak bundle (Teams, Webex) stays
+        // resident after the call, so its presence proves nothing — fall through to the mic.
         !zoom_running
     } else {
         !mic_open
@@ -704,7 +877,7 @@ mod tests {
     #[test]
     fn zoom_bundle_opens_without_mic() {
         let signals = Signals { meeting_app_frontmost: true, ..Default::default() };
-        let ctx = DetectionCtx { has_zoom_bundle: true, ..Default::default() };
+        let ctx = DetectionCtx { has_strong_bundle: true, ..Default::default() };
         assert!(matches!(
             evaluate_offer(&signals, &ctx, &OfferPolicy::default()),
             Decision::Offer { .. }
@@ -793,6 +966,223 @@ mod tests {
         assert!(!is_meeting_url("https://meet.google.com.evil.test/x"));
         assert!(!is_meeting_url("https://notmeet.google.com/x"));
         assert!(!is_meeting_url("https://example.test/?u=meet.google.com"));
+    }
+
+    // ── Plan A: tiered (Strong/Weak) detection ─────────────────────────────────────────────
+
+    #[test]
+    fn a_weak_bundle_alone_does_not_offer() {
+        // A-0/A-2: a resident chat app in front is someone reading messages, not a meeting.
+        let signals = Signals::default();
+        let ctx = DetectionCtx {
+            has_weak_meeting_signal: true,
+            window_title: Some("Chat | Microsoft Teams"),
+            ..Default::default()
+        };
+        assert_eq!(evaluate_offer(&signals, &ctx, &OfferPolicy::default()), Decision::Ignore);
+    }
+
+    #[test]
+    fn a_weak_bundle_with_sustained_mic_offers() {
+        // A-0: the Weak vote plus sustained mic is the two-signal case — and it must clear the
+        // default policy's mic-only gate, because the mic is not "only" here.
+        let signals = Signals {
+            mic_in_use: mic_counts_as_signal(MIC_SUSTAIN_MS, true, false),
+            ..Default::default()
+        };
+        let ctx = DetectionCtx { has_weak_meeting_signal: true, ..Default::default() };
+        let d = evaluate_offer(&signals, &ctx, &OfferPolicy::default());
+        let Decision::Offer { provenance, .. } = d else { panic!("expected an offer") };
+        assert!(provenance.contains("mic_sustained"));
+        assert!(provenance.contains("weak_meeting_signal"), "the Weak vote is evidence too");
+        serde_json::from_str::<serde_json::Value>(&provenance).expect("provenance must be JSON");
+    }
+
+    #[test]
+    fn strong_hosts_still_offer_alone() {
+        // The A-0 refactor must not weaken what already worked: a Strong URL frontmost is an
+        // opener by itself, exactly as before the tiers existed.
+        for (url, host) in [
+            ("https://meet.google.com/abc-defg-hij", "meet.google.com"),
+            ("https://app.zoom.us/wc/1234567890/join", "app.zoom.us"),
+        ] {
+            assert_eq!(host_hint(url), Some(MeetingHint::Strong), "{url}");
+            let signals = Signals { meeting_app_frontmost: true, ..Default::default() };
+            let ctx = DetectionCtx {
+                is_browser: true,
+                page_host: Some(host),
+                has_meet_url: true,
+                ..Default::default()
+            };
+            assert!(
+                matches!(
+                    evaluate_offer(&signals, &ctx, &OfferPolicy::default()),
+                    Decision::Offer { .. }
+                ),
+                "{url} should offer alone"
+            );
+        }
+    }
+
+    #[test]
+    fn zoom_web_client_host_offers() {
+        // A-1: the Zoom Web client lives on app.zoom.us and is Strong like the native app.
+        assert_eq!(host_hint("https://app.zoom.us/wc/1234567890/start"), Some(MeetingHint::Strong));
+        assert!(is_meeting_url("https://app.zoom.us/wc/1234567890/start"));
+    }
+
+    #[test]
+    fn zoom_marketing_site_does_not() {
+        // A-1: zoom.us is the marketing site, not the meeting — and no lookalike or subdomain
+        // trick may promote itself to app.zoom.us.
+        assert_eq!(host_hint("https://zoom.us/pricing"), None);
+        assert_eq!(host_hint("https://www.zoom.us/"), None);
+        assert_eq!(host_hint("https://app.zoom.us.evil.test/wc"), None);
+        assert_eq!(host_hint("https://example.test/?u=app.zoom.us"), None);
+    }
+
+    #[test]
+    fn teams_frontmost_alone_never_offers() {
+        // A-2: Teams is where chat lives all day. Frontmost — even with a calendar occurrence
+        // agreeing — is not an observation of attendance and must never open the offer.
+        for bundle in ["com.microsoft.teams2", "com.microsoft.teams"] {
+            assert_eq!(bundle_hint(bundle), Some(MeetingHint::Weak), "{bundle}");
+        }
+        let signals = Signals { occurrence_now: true, ..Default::default() };
+        let ctx = DetectionCtx { has_weak_meeting_signal: true, ..Default::default() };
+        assert_eq!(evaluate_offer(&signals, &ctx, &OfferPolicy::default()), Decision::Ignore);
+    }
+
+    #[test]
+    fn teams_with_mic_sustained_offers() {
+        // A-2: the same Teams window plus a sustained mic is a call.
+        let signals = Signals {
+            mic_in_use: mic_counts_as_signal(MIC_SUSTAIN_MS, true, false),
+            ..Default::default()
+        };
+        let ctx = DetectionCtx {
+            has_weak_meeting_signal: true,
+            window_title: Some("Weekly sync | Microsoft Teams"),
+            ..Default::default()
+        };
+        assert!(matches!(
+            evaluate_offer(&signals, &ctx, &OfferPolicy::default()),
+            Decision::Offer { .. }
+        ));
+    }
+
+    #[test]
+    fn webex_subdomain_matches() {
+        // A-2: every Webex tenant is its own subdomain; the suffix match is exact-label, so a
+        // lookalike registering evilwebex.com gains nothing.
+        assert_eq!(host_hint("https://acme.webex.com/meet/team"), Some(MeetingHint::Weak));
+        assert_eq!(host_hint("https://webex.com/"), Some(MeetingHint::Weak));
+        assert_eq!(host_hint("https://evilwebex.com/"), None);
+        assert_eq!(host_hint("https://acme.webex.com.evil.test/"), None);
+        assert_eq!(bundle_hint("Cisco-Systems.Spark"), Some(MeetingHint::Weak));
+    }
+
+    #[test]
+    fn teams_meeting_ends_on_silence_not_on_app_presence() {
+        // A-2: Teams keeps running after everyone hangs up, so AppGone cannot be the end for a
+        // Weak-bundle meeting — the silence limit is, and the app's continued presence must not
+        // postpone it.
+        let now = 1_000_000;
+        let call_over_app_still_running = LiveSignals {
+            meeting_app_present: true,
+            occurrence_ends_at: None,
+            last_sound_at: now - SILENCE_LIMIT_MS - 1,
+        };
+        assert_eq!(end_condition(&call_over_app_still_running, now), Some(EndReason::Silence));
+
+        let still_talking = LiveSignals {
+            meeting_app_present: true,
+            occurrence_ends_at: None,
+            last_sound_at: now,
+        };
+        assert_eq!(end_condition(&still_talking, now), None);
+    }
+
+    #[test]
+    fn weak_bundle_quit_does_not_read_as_leaving_the_call() {
+        // A-2, the call_clearly_ended side of the same rule: only a Strong bundle's disappearance
+        // means "left". A quit Teams with the mic still open is a call routed elsewhere.
+        assert!(!call_clearly_ended(
+            false,
+            None,
+            1_000_000,
+            true, // mic still open
+            None,
+            Some("com.microsoft.teams2"),
+            false, // app no longer running
+        ));
+        // Zoom (Strong) quitting still ends it, exactly as before the tiers.
+        assert!(call_clearly_ended(false, None, 1_000_000, true, None, Some("us.zoom.xos"), false));
+    }
+
+    // ── Plan A-4: Slack huddles ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn huddle_title_plus_mic_offers() {
+        // The hint needs the huddle word AND call-control vocabulary, then mic-sustained is the
+        // second vote. English and Japanese UIs both count.
+        assert!(huddle_hint(Some("Huddle • #design"), &["Mute", "Leave huddle"]));
+        assert!(huddle_hint(Some("ハドル • #design"), &["ミュート", "退出"]));
+
+        let signals = Signals {
+            mic_in_use: mic_counts_as_signal(MIC_SUSTAIN_MS, true, false),
+            ..Default::default()
+        };
+        let ctx = DetectionCtx {
+            has_huddle_hint: true,
+            window_title: Some("Huddle • #design"),
+            ..Default::default()
+        };
+        let d = evaluate_offer(&signals, &ctx, &OfferPolicy::default());
+        let Decision::Offer { provenance, .. } = d else { panic!("expected an offer") };
+        assert!(provenance.contains("huddle_hint"), "the hint is evidence and must be recorded");
+    }
+
+    #[test]
+    fn huddle_title_alone_does_nothing() {
+        // One vote is not a meeting: without the mic the hint must produce no offer at all,
+        // however clearly the window says "Huddle".
+        assert!(huddle_hint(Some("Huddle • #design"), &["Mute"]));
+        let signals = Signals::default();
+        let ctx = DetectionCtx {
+            has_huddle_hint: true,
+            window_title: Some("Huddle • #design"),
+            ..Default::default()
+        };
+        assert_eq!(evaluate_offer(&signals, &ctx, &OfferPolicy::default()), Decision::Ignore);
+    }
+
+    #[test]
+    fn slack_chat_mentioning_huddle_does_not_trigger() {
+        // "huddle" in message text is conversation, not a call — the control vocabulary is what
+        // separates the huddle UI from chat about huddles.
+        assert!(!huddle_hint(
+            Some("#general – Slack"),
+            &["did you catch the huddle earlier?", "yes — notes are in the doc"],
+        ));
+        assert!(!huddle_hint(None, &["let's huddle tomorrow morning"]));
+        assert!(!huddle_hint(Some("#general – Slack"), &["昨日のハドルどうだった？"]));
+        // And control words with no huddle word at all (an ordinary call app's UI) do nothing.
+        assert!(!huddle_hint(Some("#general – Slack"), &["Mute", "Leave"]));
+    }
+
+    #[test]
+    fn huddle_hint_lost_needs_grace_before_wrap() {
+        // Mirrors the Meet-tab leave grace: a redraw or a glance at another channel must not
+        // wrap the huddle mid-sentence.
+        let lost = 1_000_000;
+        assert!(!huddle_hint_lost_past_grace(Some(lost), lost + HUDDLE_HINT_LOST_GRACE_MS - 1));
+        assert!(huddle_hint_lost_past_grace(Some(lost), lost + HUDDLE_HINT_LOST_GRACE_MS));
+    }
+
+    #[test]
+    fn huddle_hint_never_lost_has_no_grace_deadline() {
+        assert!(!huddle_hint_lost_past_grace(None, 9_999_999));
     }
 
 

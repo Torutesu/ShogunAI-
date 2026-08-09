@@ -59,9 +59,11 @@ fn on_focus(
     }) {
         return (Vec::new(), None);
     }
+    // Strong surfaces only, as the real adapter does: a Weak surface (Teams, Webex) reaches the
+    // detector through `DetectionCtx`, never through `meeting_app_frontmost`.
     let signals = Signals {
-        meeting_app_frontmost: detect::is_meeting_app(bundle_id)
-            || page_url.is_some_and(detect::is_meeting_url),
+        meeting_app_frontmost: detect::bundle_hint(bundle_id) == Some(detect::MeetingHint::Strong)
+            || page_url.and_then(detect::host_hint) == Some(detect::MeetingHint::Strong),
         ..Default::default()
     };
     match detect::decide(&signals) {
