@@ -175,13 +175,16 @@ interface Size {
   h: number;
 }
 
-// Keep the panel inside the visible screen — it hangs from the top (notch), so cap it to the work
-// area. availWidth/Height already exclude the Dock and menu bar; leave a small margin.
+// Hard ceiling: panel cannot exceed ¾ of the display the webview is on. `window.screen` tracks the
+// panel's monitor in Tauri; Rust `set_panel_size` enforces the same cap on the native frame.
+const PANEL_MAX_SCREEN_FRAC = 0.75;
 function maxSize(): Size {
   if (typeof window === "undefined") return { w: 1200, h: 800 };
+  const sw = window.screen.width;
+  const sh = window.screen.height;
   return {
-    w: Math.max(MIN_W, Math.round(window.screen.availWidth - 40)),
-    h: Math.max(MIN_H, Math.round(window.screen.availHeight - 40)),
+    w: Math.max(MIN_W, Math.floor(sw * PANEL_MAX_SCREEN_FRAC)),
+    h: Math.max(MIN_H, Math.floor(sh * PANEL_MAX_SCREEN_FRAC)),
   };
 }
 function clampSize(w: number, h: number): Size {

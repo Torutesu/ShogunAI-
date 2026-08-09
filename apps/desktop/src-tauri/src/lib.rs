@@ -75,6 +75,8 @@ const VISUAL_RECALL_W: f64 = 720.0;
 const VISUAL_RECALL_H: f64 = 640.0;
 const VISUAL_RECALL_MIN_W: f64 = 480.0;
 const VISUAL_RECALL_MIN_H: f64 = 400.0;
+/// Open notch panel resize ceiling — must match `PANEL_MAX_SCREEN_FRAC` in App.tsx.
+const PANEL_MAX_SCREEN_FRAC: f64 = 0.75;
 
 /// True while the USER hid the overlay (toggle shortcut / Esc / tray). The auto-residency
 /// machinery (watchers, heal, respawn) must respect this — a deliberately hidden panel stays
@@ -1272,8 +1274,17 @@ fn set_panel_size(app: tauri::AppHandle, width: f64, height: f64, anchor: Option
         let Some(ptr) = overlay_ptr(&h) else { return };
         // SAFETY: main thread, live NSWindow/NSPanel.
         unsafe {
-            let f: NSRect = msg_send![ptr, frame];
+            let mut width = width;
+            let mut height = height;
             let screen: *mut AnyObject = msg_send![ptr, screen];
+            if !screen.is_null() {
+                let f: NSRect = msg_send![screen, frame];
+                let max_w = (f.size.width * PANEL_MAX_SCREEN_FRAC).floor();
+                let max_h = (f.size.height * PANEL_MAX_SCREEN_FRAC).floor();
+                width = width.min(max_w);
+                height = height.min(max_h);
+            }
+            let f: NSRect = msg_send![ptr, frame];
             let pos = current_castle();
             let (mut x, mut y) = if keep_left {
                 // Manual corner-grip resize (bottom-right grip): the top-left has to stay put or the
