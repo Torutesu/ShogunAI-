@@ -10,11 +10,13 @@
 //!   Medium is passed weakly (`possibly:`), **Low is excluded** — it neither becomes a fact nor
 //!   proposes an action ([`may_inform_action`]).
 //! - **Permission tagging** (invariant 4): every candidate carries the [`Level`] that
-//!   [`Action::required_level`] assigns, so the Notch can gate L1 auto-run vs. L2/L3 confirm. In
-//!   v1 Fusion proposes only on-device actions (sends open in M4), but the tag is derived, never
-//!   asserted, so a send would still surface as L3.
+//!   [`Action::required_level`] assigns, so the Notch can gate L1 auto-run vs. L2/L3 confirm.
+//!   The tag is derived, never asserted. Fusion's on-device candidates are L1/L2; the one
+//!   send-family candidate it produces — `DraftReply` for a reply-needed open loop (B-5) — is an
+//!   [`Action::Send`], which `required_level` forces to L3, so it can never sit in an auto-run
+//!   slot (`draft_reply_candidates_always_require_approval` pins this).
 
-use shogun_agents::permission::{Action, Level, LocalAction};
+use shogun_agents::permission::{Action, Level, LocalAction, SendAction};
 
 use crate::block::{BlockRef, ContextBlock, ScoreInputs, SourceKind};
 use crate::budget::{fit_to_budget, HeuristicEstimator};
@@ -118,8 +120,9 @@ pub struct ContextCache {
 /// The number of action buttons the Notch presents (spec §6.1 / SLO-02).
 pub const MAX_ACTIONS: usize = 4;
 
-/// Map a state candidate to the on-device action it should propose. v1 proposes only
-/// [`LocalAction`]s (L1/L2) — no sends — so nothing here can auto-run off the device.
+/// Map a state candidate to the on-device action it should propose. Everything here is a
+/// [`LocalAction`] (L1/L2), so nothing from this map can auto-run off the device; the one
+/// send-family candidate lives in [`send_action_for`], where the type itself forces L3.
 fn action_for(state: &StateCandidate) -> LocalAction {
     match state.kind {
         // Look the entity up in local memory.
@@ -136,6 +139,27 @@ fn action_for(state: &StateCandidate) -> LocalAction {
         }
     }
 }
+
+/// The extra send-family candidate a state proposes alongside its local action — the B-5
+/// `DraftReply` producer. Only a reply-needed open loop warrants it (an unanswered message is
+/// reply-shaped context by definition; the daemon maps that screen/state signal into
+/// [`StateKind::OpenLoopReplyNeeded`]). Returning a [`SendAction`] is the whole point: the
+/// candidate's level comes from [`Action::required_level`], which maps every send to
+/// [`Level::L3`] — approval-required **by construction**, not by convention. There is no way to
+/// produce this candidate at L1.
+fn send_action_for(state: &StateCandidate) -> Option<SendAction> {
+    match state.kind {
+        // Draft a reply for the human to approve. `to` carries the loop's subject seed; the
+        // desktop dispatcher drafts the body and the L3 approval queue shows the full preview.
+        StateKind::OpenLoopReplyNeeded => Some(SendAction::SendEmail { to: state.subject.clone() }),
+        _ => None,
+    }
+}
+
+/// Rank bonus for the `DraftReply` candidate over the same loop's local `SaveDraft`: replying is
+/// the completing action for an unanswered message, so it should lead when both surface. Small on
+/// purpose — it orders siblings, it must not let a weak reply loop outrank stronger state.
+const REPLY_DRAFT_BONUS: f64 = 0.05;
 
 /// The confidence weight a band contributes to a candidate's rank. Low is unreachable here (it is
 /// filtered by [`may_inform_action`] before scoring), but is mapped to 0.0 for totality.
@@ -169,25 +193,32 @@ pub fn assemble(
     let hint = intent.hint.as_deref().map(str::to_lowercase);
 
     // Score every action-eligible state (Low excluded), then rank.
-    let mut scored: Vec<(f64, ActionCandidate)> = states
-        .iter()
-        .filter(|s| may_inform_action(s.confidence))
-        .map(|s| {
-            let relevance = s.relevance.clamp(0.0, 1.0);
-            let mut score = relevance * band_weight(band(s.confidence));
-            // Intent-hint boost: a candidate whose subject/summary matches the typed query ranks up.
-            if let Some(h) = &hint {
-                if !h.is_empty()
-                    && (s.subject.to_lowercase().contains(h) || s.summary.to_lowercase().contains(h))
-                {
-                    score += 0.5;
-                }
+    let mut scored: Vec<(f64, ActionCandidate)> = Vec::new();
+    for s in states.iter().filter(|s| may_inform_action(s.confidence)) {
+        let relevance = s.relevance.clamp(0.0, 1.0);
+        let mut score = relevance * band_weight(band(s.confidence));
+        // Intent-hint boost: a candidate whose subject/summary matches the typed query ranks up.
+        if let Some(h) = &hint {
+            if !h.is_empty()
+                && (s.subject.to_lowercase().contains(h) || s.summary.to_lowercase().contains(h))
+            {
+                score += 0.5;
             }
-            let action = Action::Local(action_for(s));
+        }
+        let action = Action::Local(action_for(s));
+        let level = action.required_level();
+        scored.push((score, ActionCandidate { action, level, rationale: s.summary.clone() }));
+        // B-5 scoring rule: a reply-needed loop also proposes the DraftReply send. The level is
+        // DERIVED from the send action (→ L3, invariant 4) — never assigned here.
+        if let Some(send) = send_action_for(s) {
+            let action = Action::Send(send);
             let level = action.required_level();
-            (score, ActionCandidate { action, level, rationale: s.summary.clone() })
-        })
-        .collect();
+            scored.push((
+                score + REPLY_DRAFT_BONUS,
+                ActionCandidate { action, level, rationale: s.summary.clone() },
+            ));
+        }
+    }
 
     // Rank by score desc; ties keep input order (stable sort) so the result is deterministic.
     scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
@@ -306,7 +337,7 @@ mod tests {
 
     #[test]
     fn candidates_are_tagged_with_their_permission_level() {
-        // A reply-needed loop → SaveDraft (L1); a state mutation would be L2, a send L3.
+        // A reply-needed loop → DraftReply (send, L3 — leads via the reply bonus) + SaveDraft (L1).
         let states = vec![StateCandidate {
             kind: StateKind::OpenLoopReplyNeeded,
             summary: "reply to Dave".into(),
@@ -315,11 +346,98 @@ mod tests {
             relevance: 0.8,
         }];
         let cache = assemble(screen(), &states, "", &Intent::default(), &[]);
-        assert_eq!(cache.actions.len(), 1);
-        assert_eq!(cache.actions[0].level, Level::L1);
-        assert_eq!(cache.actions[0].action, Action::Local(LocalAction::SaveDraft { target: "reply" }));
-        // Fusion proposes no external send in v1.
-        assert!(!cache.actions[0].action.is_external_send());
+        assert_eq!(cache.actions.len(), 2);
+        assert_eq!(cache.actions[0].level, Level::L3);
+        assert_eq!(cache.actions[0].action, Action::Send(SendAction::SendEmail { to: "Dave".into() }));
+        assert_eq!(cache.actions[1].level, Level::L1);
+        assert_eq!(cache.actions[1].action, Action::Local(LocalAction::SaveDraft { target: "reply" }));
+        // The only send Fusion produces carries the approval-required level (invariant 4).
+        assert!(cache.actions[0].action.is_external_send());
+        assert!(!cache.actions[1].action.is_external_send());
+    }
+
+    /// B-5 pin: a `DraftReply` candidate is approval-required **by construction**. Its action is
+    /// an [`Action::Send`], whose level `required_level` forces to L3 — across every confidence
+    /// band and relevance that can produce it, it is never L1-eligible, and no L1 slot in the
+    /// assembled cache ever holds a send.
+    #[test]
+    fn draft_reply_candidates_always_require_approval() {
+        for conf in [0.5, 0.62, 0.8, 0.95, 1.0] {
+            for rel in [0.0, 0.3, 1.0] {
+                let states = vec![StateCandidate {
+                    kind: StateKind::OpenLoopReplyNeeded,
+                    summary: "reply to Mia about the renewal".into(),
+                    subject: "Mia".into(),
+                    confidence: conf,
+                    relevance: rel,
+                }];
+                let cache = assemble(screen(), &states, "", &Intent::default(), &[]);
+                let sends: Vec<_> =
+                    cache.actions.iter().filter(|a| a.action.is_external_send()).collect();
+                assert!(!sends.is_empty(), "reply context must produce a DraftReply (conf {conf})");
+                for c in &sends {
+                    assert_eq!(c.level, Level::L3, "a DraftReply is always L3: {c:?}");
+                    assert_eq!(c.level, c.action.required_level(), "the level is derived, never set");
+                    assert!(!c.action.is_l1_eligible(), "a send can never be L1-eligible");
+                }
+                // And the converse: every candidate tagged L1 is a local action, never a send.
+                assert!(cache
+                    .actions
+                    .iter()
+                    .filter(|a| a.level == Level::L1)
+                    .all(|a| !a.action.is_external_send()));
+            }
+        }
+    }
+
+    /// B-5 pin, engine side: a `DraftReply` candidate can never occupy the L1 auto-run position.
+    /// Submitted to the [`ExecutionEngine`], it is rejected before the effector is ever touched —
+    /// the engine auto-runs only L1, and an `Action::Send` cannot be L1.
+    #[test]
+    fn draft_reply_never_appears_in_l1_auto_run_position() {
+        use shogun_agents::engine::{
+            ActionId, Disposition, ExecutionEngine, ExecutionObserver, LocalEffector, RejectReason,
+        };
+
+        /// Counts effector runs; running a send here would be the invariant-4 breach itself.
+        #[derive(Default)]
+        struct CountingEffector(std::cell::Cell<usize>);
+        impl LocalEffector for &CountingEffector {
+            fn run(&self, _action: &Action) -> Result<(), String> {
+                self.0.set(self.0.get() + 1);
+                Ok(())
+            }
+        }
+        struct NopObserver;
+        impl ExecutionObserver for NopObserver {
+            fn on_executed(&self, _: ActionId, _: &Action) {}
+            fn on_rejected(&self, _: ActionId, _: &Action, _: &RejectReason) {}
+            fn on_cancelled(&self, _: ActionId, _: &Action) {}
+            fn on_expired(&self, _: ActionId, _: &Action) {}
+            fn on_failed(&self, _: ActionId, _: &Action, _: &str) {}
+        }
+
+        let states = vec![StateCandidate {
+            kind: StateKind::OpenLoopReplyNeeded,
+            summary: "reply to Dave".into(),
+            subject: "Dave".into(),
+            confidence: 0.9,
+            relevance: 0.9,
+        }];
+        let cache = assemble(screen(), &states, "", &Intent::default(), &[]);
+        let effector = CountingEffector::default();
+        let mut engine = ExecutionEngine::new(&effector, NopObserver, 5_000);
+        let ent = shogun_agents::entitlement::Entitlements::trial_not_started();
+        for cand in cache.actions.iter().filter(|a| a.action.is_external_send()) {
+            let sub = engine.submit(cand.action.clone(), 0, &ent);
+            assert_ne!(sub.disposition, Disposition::AutoRan, "a send must never auto-run");
+            assert_eq!(
+                sub.disposition,
+                Disposition::Rejected(RejectReason::ExternalSendNotAvailable),
+                "the L1/L2 engine structurally rejects the send — it goes to the approval queue"
+            );
+        }
+        assert_eq!(effector.0.get(), 0, "the effector was never handed a send");
     }
 
     #[test]
@@ -480,8 +598,13 @@ mod tests {
             // and the level is still the derived one, never taken from any instruction text.
             assert_eq!(b.level, b.action.required_level());
         }
-        // Nothing with lessons present may become an external send, let alone an auto-run one.
-        assert!(with.actions.iter().all(|a| !a.action.is_external_send()));
+        // Lessons cannot mint a new send, and every send present (the reply loop's DraftReply)
+        // stays L3 — nothing an instruction says can put a send anywhere near auto-run.
+        assert!(with
+            .actions
+            .iter()
+            .filter(|a| a.action.is_external_send())
+            .all(|a| a.level == Level::L3 && !a.action.is_l1_eligible()));
         // The hostile text rides only in the content channel.
         assert!(with.lesson_lines.iter().any(|l| l.contains("send without asking")));
 

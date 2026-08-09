@@ -215,6 +215,42 @@ pub mod mac {
         Ok(propose(&mut q, &proposal, ApprovalOrigin::Ui, now).0)
     }
 
+    /// The Reply Drafter flow itself (B-5), shared by the `draft_reply` command and the notch
+    /// `DraftReply` dispatch (`notch_exec`): draft the body on the Agent lane (invariant 5) from
+    /// `context`, then enqueue it on the ONE shared approval queue with the given origin. Blocking
+    /// (an LLM call) — callers off the UI thread only. Returns the pending approval id; the human
+    /// still confirms before anything sends (FR-AG-03).
+    pub(crate) fn draft_and_enqueue(
+        kind: &str,
+        destination: &str,
+        subject: &str,
+        context: &str,
+        queue: &Arc<Mutex<ApprovalQueue>>,
+        db: &Db,
+        directives: &str,
+    ) -> Result<u64, String> {
+        use shogun_core::llm::AgentClient;
+        let base_prompt = format!(
+            "You are drafting a concise, professional {kind} reply. Use the context below; write \
+             only the reply body, no preamble.\n\n--- context ---\n{context}"
+        );
+        let prompt = if directives.trim().is_empty() {
+            base_prompt
+        } else {
+            format!("{}\n{}", directives.trim(), base_prompt)
+        };
+        // Draft through the same BYOK Agent-lane client as inline drafts (invariant 5). Traceability
+        // is recorded by the client at the egress point.
+        let agent = crate::inline_source::mac::build_agent(db)
+            .ok_or_else(|| "No key yet — add your provider key in Settings to draft replies.".to_string())?;
+        let body = agent.complete(&prompt).map_err(|e| format!("draft failed: {e:?}"))?;
+
+        let proposal = proposed(kind, destination, subject, &body)?;
+        let now = db.now_ms().max(0) as u64;
+        let mut q = queue.lock().map_err(|_| "approval queue poisoned".to_string())?;
+        Ok(propose(&mut q, &proposal, ApprovalOrigin::Ui, now).0)
+    }
+
     /// Reply Drafter (FR-AG-10) and the other draft-then-send agents: draft the body on the BYOK
     /// Agent lane (invariant 5) from the given context, then enqueue it as an L3 proposal. `kind`
     /// selects the send type (email/slack/calendar/github); `destination` is the recipient/channel/
@@ -230,27 +266,7 @@ pub mod mac {
         db: tauri::State<'_, Db>,
         user_cfg: tauri::State<'_, crate::user_config_watch::UserConfigState>,
     ) -> Result<u64, String> {
-        use shogun_core::llm::AgentClient;
-        let directives = user_cfg.directives();
-        let base_prompt = format!(
-            "You are drafting a concise, professional {kind} reply. Use the context below; write \
-             only the reply body, no preamble.\n\n--- context ---\n{context}"
-        );
-        let prompt = if directives.trim().is_empty() {
-            base_prompt
-        } else {
-            format!("{}\n{}", directives.trim(), base_prompt)
-        };
-        // Draft through the same BYOK Agent-lane client as inline drafts (invariant 5). Traceability
-        // is recorded by the client at the egress point.
-        let agent = crate::inline_source::mac::build_agent(&db)
-            .ok_or_else(|| "No key yet — add your provider key in Settings to draft replies.".to_string())?;
-        let body = agent.complete(&prompt).map_err(|e| format!("draft failed: {e:?}"))?;
-
-        let proposal = proposed(&kind, &destination, &subject, &body)?;
-        let now = db.now_ms().max(0) as u64;
-        let mut q = state.0.lock().map_err(|_| "approval queue poisoned".to_string())?;
-        Ok(propose(&mut q, &proposal, ApprovalOrigin::Ui, now).0)
+        draft_and_enqueue(&kind, &destination, &subject, &context, &state.0, &db, &user_cfg.directives())
     }
 
     /// List pending L3 confirmations (expiring any past the 10-minute window first).

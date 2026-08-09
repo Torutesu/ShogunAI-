@@ -271,12 +271,31 @@ impl SyncInvalidator {
 }
 
 /// What one local maintenance pass changed ([`Db::run_local_maintenance`]).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct LocalMaintenance {
     pub decayed: usize,
     pub corroborated: usize,
     pub overdue: usize,
     pub stale: usize,
+    /// The commitments THIS pass flipped `open` → `overdue` (C-3). Each appears in exactly one
+    /// pass — the status transition is the dedup watermark (see
+    /// [`shogun_memory::recompute::recompute_overdue_and_staleness_detailed`]) — so
+    /// [`overdue_notifications`] over this list fires once per item, never repeating.
+    pub newly_overdue: Vec<shogun_memory::recompute::NewlyOverdue>,
+}
+
+/// Decide WHAT to notify for a maintenance pass's newly-overdue commitments (C-3). Pure: maps each
+/// item to a [`ShowNotification`](shogun_agents::permission::LocalAction::ShowNotification) —
+/// a non-egress, L1-permitted local action (pinned by `overdue_notifications_are_l1_non_sends`).
+/// Dedup is upstream: the input list already contains each commitment exactly once, ever.
+pub fn overdue_notifications(
+    newly: &[shogun_memory::recompute::NewlyOverdue],
+) -> Vec<shogun_agents::permission::Action> {
+    use shogun_agents::permission::{Action, LocalAction};
+    newly
+        .iter()
+        .map(|c| Action::Local(LocalAction::ShowNotification { text: format!("Overdue: {}", c.description) }))
+        .collect()
 }
 
 /// One candidate answer to "which thread is this question about".
@@ -1718,8 +1737,19 @@ impl Db {
         // corroborated row showing last pass's number until the next hour.
         let corroborated = self.corroborate();
         let decayed = self.decay_confidence(now_ms, half_life_ms);
-        let (overdue, stale) = self.recompute_overdue_and_staleness(now_ms);
-        LocalMaintenance { decayed, corroborated, overdue, stale }
+        // The detailed pass reports WHICH commitments flipped open→overdue right now, so the
+        // caller can notify each exactly once (C-3; the flip itself is the dedup watermark).
+        let (newly_overdue, stale) = self
+            .conn
+            .lock()
+            .ok()
+            .and_then(|mut g| {
+                shogun_memory::recompute::recompute_overdue_and_staleness_detailed(&mut g, now_ms)
+                    .ok()
+            })
+            .unwrap_or_default();
+        let overdue = newly_overdue.len();
+        LocalMaintenance { decayed, corroborated, overdue, stale, newly_overdue }
     }
 
     pub fn decay_confidence(&self, now_ms: i64, half_life_ms: i64) -> usize {
@@ -3024,6 +3054,68 @@ mod tests {
         );
     }
 
+    /// C-3 pin: an overdue notification is a non-egress, L1-permitted local action — it can never
+    /// be (or become) a send. `required_level` derives L1 from the action type; the type is
+    /// `Action::Local`, which has no send variant, so the property is structural.
+    #[test]
+    fn overdue_notifications_are_l1_non_sends() {
+        use shogun_agents::permission::Level;
+        let newly = vec![
+            shogun_memory::recompute::NewlyOverdue { id: 1, description: "send the deck".into() },
+            shogun_memory::recompute::NewlyOverdue { id: 2, description: "review the PR".into() },
+        ];
+        let actions = overdue_notifications(&newly);
+        assert_eq!(actions.len(), newly.len(), "one notification per newly-overdue item");
+        for a in &actions {
+            assert_eq!(a.required_level(), Level::L1, "a notification is L1-permitted: {a:?}");
+            assert!(a.is_l1_eligible());
+            assert!(!a.is_external_send(), "a notification never leaves the device: {a:?}");
+        }
+        assert_ne!(actions[0], actions[1], "each item gets its own notification");
+    }
+
+    /// C-3 end-to-end (compilable half): the hourly maintenance reports a newly-overdue
+    /// commitment exactly once — the pass that flips it — and later passes report nothing, so the
+    /// desktop hook fires one notification per commitment, ever.
+    #[test]
+    fn maintenance_reports_newly_overdue_once_then_never_again() {
+        let db = Db::open_in_memory(clock(1_000)).unwrap();
+        let e = db.capture(&ev("promise", "h1", 100)).unwrap().0;
+        db.insert_commitment(
+            &shogun_memory::state::NewCommitment {
+                direction: shogun_memory::state::CommitmentDirection::Mine,
+                counterparty_id: None,
+                description: "send the deck",
+                due_at: Some(5_000),
+                status: shogun_memory::state::CommitmentStatus::Open,
+                project_id: None,
+                confidence: 0.9,
+                now: 100,
+            },
+            &[shogun_memory::state::Provenance::new(e)],
+        )
+        .unwrap();
+
+        const HALF_LIFE: i64 = 30 * 24 * 3_600_000;
+        // Before the due time: nothing to notify.
+        let before = db.run_local_maintenance(1_000, HALF_LIFE);
+        assert!(before.newly_overdue.is_empty());
+        assert!(overdue_notifications(&before.newly_overdue).is_empty());
+
+        // The pass that crosses the due time notifies exactly once.
+        let first = db.run_local_maintenance(10_000, HALF_LIFE);
+        assert_eq!(first.newly_overdue.len(), 1);
+        assert_eq!(first.overdue, 1);
+        let notes = overdue_notifications(&first.newly_overdue);
+        assert_eq!(notes.len(), 1);
+
+        // Every subsequent pass: silent for the already-notified item.
+        for later in [10_000, 20_000, 1_000_000] {
+            let again = db.run_local_maintenance(later, HALF_LIFE);
+            assert!(again.newly_overdue.is_empty(), "must never re-notify: {again:?}");
+        }
+    }
+
     /// A reply is written *into* a conversation, so the thread's own words must lead the prompt —
     /// state facts and older similar threads are supporting material, not the subject.
     #[test]
@@ -3691,8 +3783,16 @@ mod tests {
         let cache = db.context_actions(screen, None);
         // the low-confidence loop is gated out; the reply-needed one is present as an action
         assert!(!cache.actions.is_empty());
-        assert!(cache.actions.iter().all(|a| a.level != shogun_fusion::Level::L3),
-            "v1 context actions are local (L1/L2) — no external sends (invariant 4)");
+        // B-5: the reply-needed loop also proposes DraftReply — the ONLY send-family candidate,
+        // and it carries L3 (invariant 4: approval-required by construction, never auto-run).
+        assert!(
+            cache.actions.iter().all(|a| a.action.is_external_send() == (a.level == shogun_fusion::Level::L3)),
+            "L3 iff external send — locals stay L1/L2, sends are never below L3 (invariant 4)"
+        );
+        assert!(
+            cache.actions.iter().any(|a| a.action.is_external_send()),
+            "a reply-needed loop must produce the DraftReply candidate (B-5)"
+        );
         assert!(cache.facts.iter().any(|f| f.contains("roadmap")), "gated fact present");
         assert!(!cache.facts.iter().any(|f| f.contains("vague")), "low-confidence fact excluded");
     }

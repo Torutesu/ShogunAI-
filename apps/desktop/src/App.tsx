@@ -1198,7 +1198,7 @@ export function App(): JSX.Element {
 /** Context-action buttons above the composer (Plan B-1 / E-10). Fetched once per expand — the
  *  cache is pre-assembled Rust-side (never collect-on-press), so this is a read, not a build.
  *  Dispositions: L1 ran (`executed`) → one-line note; L2 (`confirm:<id>`) → inline Confirm/Cancel
- *  chip → `confirm_notch_action`; L3 send (`queued:<id>`) → queued-for-approval note + badge bump
+ *  chip → `confirm_notch_action`; L3 send (`queued:<id>` / `drafting`) → queued-for-approval note + badge bump
  *  via `onQueued`. Buttons are ordinary tab stops; the row never traps focus. */
 function ActionsRow({ onQueued }: { onQueued: () => void }): JSX.Element | null {
   const [actions, setActions] = useState<ActionView[]>(IN_TAURI ? [] : MOCK_ACTIONS);
@@ -1261,7 +1261,7 @@ function ActionsRow({ onQueued }: { onQueued: () => void }): JSX.Element | null 
       .then((r) => {
         if (r === "executed") flash(`${t.actionDone} — ${a.label}`, "ok");
         else if (r.startsWith("confirm:")) setConfirm({ idx, id: Number(r.slice("confirm:".length)) });
-        else if (r.startsWith("queued:")) {
+        else if (r.startsWith("queued:") || r === "drafting") {
           flash(t.actionQueued, "ok");
           onQueued();
         } else if (r === "rejected") flash(t.actionRejected, "warn");
