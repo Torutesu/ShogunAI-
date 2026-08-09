@@ -10,8 +10,10 @@
 //! end-to-end; the on-device build swaps in a Batch classifier without changing this file.
 //!
 //! Every other job (Compression, StateUpdate, ConfidenceRecalc, ColdDemotion, MorningBrief) is a
-//! pure local DB effect. The Degraded sequence (StateUpdate + ConfidenceRecalc) therefore needs no
-//! classifier at all — matching FR-DC-01 (a catch-up run does no Batch work).
+//! local DB effect; Compression and MorningBrief route their prose through the same injected
+//! [`Summarizer`] seam (extractive by default, Batch on-device — `generated` records which one
+//! wrote the persisted brief). The Degraded sequence (StateUpdate + ConfidenceRecalc) therefore
+//! needs no classifier at all — matching FR-DC-01 (a catch-up run does no Batch work).
 
 use shogun_memory::extract::Candidate;
 
@@ -49,6 +51,14 @@ impl Classifier for LocalRuleClassifier {
 /// worth summarising" and the caller leaves the summary unwritten.
 pub trait Summarizer {
     fn summarize(&self, events: &[shogun_memory::event_log::EventText]) -> Option<String>;
+
+    /// Whether this summariser produces model-generated prose (the Batch/Select-KK lane). The
+    /// default is `false`: the extractive fallback is honest degradation, and a Morning Brief
+    /// persisted through it is marked `generated = 0` (FR-MB-04) — the same pattern as
+    /// Consolidation running on local rules. The on-device Batch summariser overrides this.
+    fn is_generative(&self) -> bool {
+        false
+    }
 }
 
 /// The always-available, network-free summariser (the Linux-test default): pull each event's lead
@@ -172,6 +182,113 @@ impl<'a, C: Classifier, S: Summarizer> DbDreamRunner<'a, C, S> {
     fn cold_demotion(&self) -> Result<(), String> {
         self.db.demote_cold(self.now_ms - shogun_memory::cold::WARM_WINDOW_MS);
         Ok(())
+    }
+
+    /// MorningBrief (Full only, Plan C-1): assemble the day's brief from state tables plus the
+    /// window's meeting recaps, and persist it to `briefs` keyed by the local date — so the
+    /// morning display is a read (immediate, offline-stable) instead of a live degraded assembly.
+    ///
+    /// The summariser seam decides honesty, same as Compression: a Batch-backed summariser yields
+    /// generated prose and `generated = 1`; the local extractive default persists `generated = 0`
+    /// (FR-MB-04 honest degradation). The upsert keys on the day, so a crash-resume re-run over
+    /// the same plan day is idempotent (FR-DC-04), and the FR-MB-06 `updated` mark falls out of
+    /// the stored payload-digest comparison.
+    fn morning_brief(&self, from_ts: i64, to_ts: i64) -> Result<(), String> {
+        use shogun_fusion::brief::{assemble_brief, CalendarLine, WHAT_HAPPENED_MAX};
+
+        const DAY_MS: i64 = 24 * 60 * 60 * 1000;
+        let date = crate::daemon::local_date_string(self.now_ms);
+        let day = crate::daemon::local_day_bounds(self.now_ms);
+
+        // Calendar-equivalent "Today" lines (design §4.1): commitments due this local day stand in
+        // for calendar rows until the real Calendar connector lands (B-4) and replaces them.
+        let due = self.db.commitments_due(self.now_ms);
+        let calendar: Vec<CalendarLine> = due
+            .iter()
+            .filter_map(|c| {
+                c.due_at_ms
+                    .filter(|&t| t >= day.today_start_ms && t < day.today_start_ms + DAY_MS)
+                    .map(|t| CalendarLine { start_ms: t, title: c.description.clone(), updated: false })
+            })
+            .collect();
+
+        // "What happened": the window's meeting recaps first (minutes already written by the Recap
+        // lane), then the day's sessions/threads through the summariser seam. Compression ran
+        // earlier in the sequence, so a thread's stored summary is reused before re-summarising.
+        // The assembler caps the section again (FR-MB-01: ≤5 lines).
+        let mut what_happened: Vec<String> = Vec::new();
+        for sid in self.db.active_sessions_between(from_ts, to_ts) {
+            if what_happened.len() >= WHAT_HAPPENED_MAX {
+                break;
+            }
+            if let Some(recap) = self.db.meeting_recap_full(sid) {
+                if !recap.summary.is_empty() {
+                    what_happened.push(recap.summary);
+                    continue;
+                }
+            }
+            if let Some(s) = self.db.session_summary(sid).or_else(|| self.summarizer.summarize(&self.db.session_event_texts(sid))) {
+                what_happened.push(s);
+            }
+        }
+        for t in self.db.active_threads_between(from_ts, to_ts) {
+            if what_happened.len() >= WHAT_HAPPENED_MAX {
+                break;
+            }
+            if let Some(s) = self
+                .db
+                .thread_summary(&t.thread_key)
+                .or_else(|| self.summarizer.summarize(&self.db.thread_event_texts(&t.thread_key)))
+            {
+                what_happened.push(s);
+            }
+        }
+        if what_happened.is_empty() {
+            if let Some(s) = self.summarizer.summarize(&self.db.events_in_range(from_ts, to_ts)) {
+                what_happened.push(s);
+            }
+        }
+
+        // Suggested actions are Fusion's runtime concern (the panel ranks them against the live
+        // screen); the nightly brief persists none rather than freezing stale ones overnight.
+        let brief = assemble_brief(calendar, &due, &self.db.open_loops(), what_happened, Vec::new());
+        let payload = payload_from_brief(&date, &brief);
+        let json = serde_json::to_string(&payload).map_err(|e| format!("brief serialize: {e}"))?;
+        self.db
+            .save_brief(&date, &json, self.summarizer.is_generative())
+            .map(|_updated| ())
+            .ok_or_else(|| "brief write failed".to_string())
+    }
+}
+
+/// Convert the assembled fusion brief into the persisted payload shape. The stored type lives in
+/// `shogun_memory::briefs` (storage must not depend on shogun-fusion), so the conversion happens
+/// here, at the layer that can see both.
+fn payload_from_brief(
+    date: &str,
+    brief: &shogun_fusion::brief::MorningBrief,
+) -> shogun_memory::briefs::BriefPayload {
+    use shogun_memory::briefs::{BriefActionLine, BriefLine, BriefPayload, BriefScheduleLine};
+    let line = |i: &shogun_fusion::brief::BriefItem| BriefLine {
+        text: i.text.clone(),
+        provenance_event_id: i.provenance_event_id,
+        possibly: i.possibly,
+    };
+    BriefPayload {
+        date: date.to_string(),
+        today: brief
+            .today
+            .iter()
+            .map(|c| BriefScheduleLine { start_ms: c.start_ms, title: c.title.clone(), updated: c.updated })
+            .collect(),
+        commitments_due: brief.commitments_due.iter().map(line).collect(),
+        open_loops: brief.open_loops.iter().map(line).collect(),
+        what_happened: brief.what_happened.clone(),
+        suggested_actions: brief
+            .suggested_actions
+            .iter()
+            .map(|a| BriefActionLine { label: a.rationale.clone(), level: format!("{:?}", a.level) })
+            .collect(),
     }
 }
 
@@ -354,9 +471,9 @@ impl<C: Classifier, S: Summarizer> DreamJobRunner for DbDreamRunner<'_, C, S> {
             JobKind::StateUpdate => self.state_update(),
             JobKind::ConfidenceRecalc => self.confidence_recalc(),
             JobKind::ColdDemotion => self.cold_demotion(),
-            // MorningBrief is generated on demand from live state (Db::local_morning_brief); the job
-            // slot exists for sequencing/telemetry and has no separate persisted effect here.
-            JobKind::MorningBrief => Ok(()),
+            // MorningBrief persists the day's brief to `briefs` (Plan C-1) so the morning display
+            // is a read; `Db::local_morning_brief` remains the fallback when no row exists.
+            JobKind::MorningBrief => self.morning_brief(from_ts, to_ts),
         }
     }
 }
@@ -392,6 +509,10 @@ mod tests {
         let commitments = db.commitments_due(now);
         assert_eq!(commitments.len(), 1);
         assert!(commitments[0].confidence <= shogun_memory::extract::LOCAL_RULE_MAX_CONFIDENCE);
+
+        // the final job persisted the day's brief (Plan C-1)
+        let date = crate::daemon::local_date_string(now);
+        assert!(db.brief_for(&date).is_some(), "a full cycle must leave a briefs row");
     }
 
     #[test]
@@ -653,6 +774,140 @@ mod tests {
         let summary = db.session_summary(sid).expect("Compression must fill the session summary");
         assert!(!summary.is_empty());
         assert!(summary.contains("ship Friday"), "summary carries the session's lead sentence");
+    }
+
+    // ------------------------------------------------------------------ MorningBrief (Plan C-1)
+
+    /// A high-confidence overdue commitment — solid brief material (Low is excluded, FR-MB-05).
+    fn overdue_commitment(db: &Db, desc: &'static str, now: i64) {
+        let e = db.capture(&make_ev(1, desc, desc)).unwrap().0;
+        db.insert_commitment(
+            &shogun_memory::state::NewCommitment {
+                direction: shogun_memory::state::CommitmentDirection::Mine,
+                counterparty_id: None,
+                description: desc,
+                due_at: Some(now - 5000),
+                status: shogun_memory::state::CommitmentStatus::Open,
+                project_id: None,
+                confidence: 0.9,
+                now: 1,
+            },
+            &[shogun_memory::state::Provenance::new(e)],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn morning_brief_persists_a_row_marked_not_generated_with_the_local_summarizer() {
+        let now = 100 * 24 * 60 * 60 * 1000;
+        let db = db_at(now);
+        overdue_commitment(&db, "send the overdue deck", now);
+
+        let clf = LocalRuleClassifier;
+        let sum = LocalExtractiveSummarizer;
+        let runner = DbDreamRunner::new(&db, &clf, &sum, now);
+        runner.run(JobKind::MorningBrief, now - 86_400_000, now).unwrap();
+
+        let date = crate::daemon::local_date_string(now);
+        let row = db.brief_for(&date).expect("the job must write a briefs row");
+        assert!(!row.generated, "the extractive summariser is honest degradation: generated=0");
+        assert!(!row.updated, "the day's first brief is not an update");
+
+        let payload: shogun_memory::briefs::BriefPayload =
+            serde_json::from_str(&row.payload).expect("payload is valid BriefPayload JSON");
+        assert_eq!(payload.date, date);
+        assert!(
+            payload.commitments_due.iter().any(|l| l.text == "send the overdue deck"),
+            "the overdue commitment reaches the persisted brief"
+        );
+        assert!(payload.suggested_actions.is_empty(), "no stale actions are frozen overnight");
+    }
+
+    #[test]
+    fn morning_brief_rerun_over_the_same_day_is_idempotent() {
+        let now = 100 * 24 * 60 * 60 * 1000;
+        let db = db_at(now);
+        overdue_commitment(&db, "send the report", now);
+
+        let clf = LocalRuleClassifier;
+        let sum = LocalExtractiveSummarizer;
+        let runner = DbDreamRunner::new(&db, &clf, &sum, now);
+        // crash-resume: the job re-runs over the same plan day (FR-DC-04)
+        runner.run(JobKind::MorningBrief, now - 86_400_000, now).unwrap();
+        runner.run(JobKind::MorningBrief, now - 86_400_000, now).unwrap();
+
+        let row = db.brief_for(&crate::daemon::local_date_string(now)).unwrap();
+        assert!(!row.updated, "an unchanged re-run must not manufacture an Updated mark");
+    }
+
+    #[test]
+    fn morning_brief_regeneration_after_state_changed_is_marked_updated() {
+        let now = 100 * 24 * 60 * 60 * 1000;
+        let db = db_at(now);
+        overdue_commitment(&db, "first thing", now);
+
+        let clf = LocalRuleClassifier;
+        let sum = LocalExtractiveSummarizer;
+        let runner = DbDreamRunner::new(&db, &clf, &sum, now);
+        runner.run(JobKind::MorningBrief, now - 86_400_000, now).unwrap();
+
+        // new state lands, the brief is regenerated for the same day → content differs
+        overdue_commitment(&db, "second thing", now);
+        runner.run(JobKind::MorningBrief, now - 86_400_000, now).unwrap();
+
+        let row = db.brief_for(&crate::daemon::local_date_string(now)).unwrap();
+        assert!(row.updated, "changed content is the FR-MB-06 Updated case");
+    }
+
+    #[test]
+    fn morning_brief_marks_generated_when_the_summarizer_is_batch_backed() {
+        // A stand-in for the on-device Batch summariser: generative prose, is_generative()=true.
+        struct Generative;
+        impl Summarizer for Generative {
+            fn summarize(&self, _: &[EventText]) -> Option<String> {
+                Some("A generated recap of the day.".into())
+            }
+            fn is_generative(&self) -> bool {
+                true
+            }
+        }
+
+        let now = 100 * 24 * 60 * 60 * 1000;
+        let db = db_at(now);
+        db.capture(&make_ev(now - 1000, "the day's material", "h1")).unwrap();
+
+        let clf = LocalRuleClassifier;
+        let sum = Generative;
+        let runner = DbDreamRunner::new(&db, &clf, &sum, now);
+        runner.run(JobKind::MorningBrief, now - 86_400_000, now).unwrap();
+
+        let row = db.brief_for(&crate::daemon::local_date_string(now)).unwrap();
+        assert!(row.generated, "a Batch-backed summariser marks the brief generated");
+        let payload: shogun_memory::briefs::BriefPayload = serde_json::from_str(&row.payload).unwrap();
+        assert_eq!(payload.what_happened, vec!["A generated recap of the day.".to_string()]);
+    }
+
+    #[test]
+    fn morning_brief_carries_the_windows_meeting_recap() {
+        let now = 100 * 24 * 60 * 60 * 1000;
+        let db = db_at(now);
+        let sid = db.open_meeting(Some("Weekly sync"), Some("us.zoom.xos"), 0.6, "{}").unwrap();
+        let (ev_id, _) = db.capture(&make_ev(now - 1000, "meeting talk", "m1")).unwrap();
+        assert!(db.attach_event_to_meeting(sid, ev_id));
+        db.save_meeting_recap(sid, "Decided to ship Friday.", "[]", "[]", "batch-model");
+
+        let clf = LocalRuleClassifier;
+        let sum = LocalExtractiveSummarizer;
+        let runner = DbDreamRunner::new(&db, &clf, &sum, now);
+        runner.run(JobKind::MorningBrief, 0, now + 1).unwrap();
+
+        let row = db.brief_for(&crate::daemon::local_date_string(now)).unwrap();
+        let payload: shogun_memory::briefs::BriefPayload = serde_json::from_str(&row.payload).unwrap();
+        assert!(
+            payload.what_happened.iter().any(|l| l.contains("ship Friday")),
+            "the recap summary feeds What happened: {:?}",
+            payload.what_happened
+        );
     }
 
     #[test]

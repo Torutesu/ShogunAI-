@@ -2156,6 +2156,24 @@ impl Db {
         assemble_degraded(calendar, &self.commitments_due(now_ms))
     }
 
+    /// Persist the nightly Morning Brief for `date` (Plan C-1: the Dream Cycle's MorningBrief job
+    /// writes it, the morning display reads it). Upsert on the day key — idempotent under a
+    /// crash-resume re-run (FR-DC-04). Returns `None` on a lock/write failure so the job can
+    /// report the night as failed and stay resumable.
+    pub fn save_brief(&self, date: &str, payload_json: &str, generated: bool) -> Option<bool> {
+        let now = self.now_ms();
+        self.conn
+            .lock()
+            .ok()
+            .and_then(|c| shogun_memory::briefs::upsert_brief(&c, date, payload_json, generated, now).ok())
+    }
+
+    /// The persisted brief for `date` (`None` when the nightly job hasn't written one — the caller
+    /// falls back to [`Self::local_morning_brief`], FR-MB-04).
+    pub fn brief_for(&self, date: &str) -> Option<shogun_memory::briefs::StoredBrief> {
+        self.conn.lock().ok().and_then(|c| shogun_memory::briefs::get_brief(&c, date).ok().flatten())
+    }
+
     // -------------------------------------------------------------- Dream Cycle job ledger (FR-DC-04)
     // Persist each job's state so a killed cycle resumes by skipping the `done` jobs. The plan
     // vocabulary (JobKind/JobState) is shogun-core's; storage keeps strings, mapped here.
@@ -2536,6 +2554,27 @@ fn utc_day_bounds(now_ms: i64) -> shogun_memory::search::LocalDayBounds {
         yesterday_start_ms: today_start_ms - DAY_MS,
         today_start_ms,
     }
+}
+
+/// The local calendar date (`YYYY-MM-DD`) an instant falls on — the `briefs` row key (Plan C-1).
+/// Mirrors [`local_day_bounds`]: real local time on macOS (`localtime_r`, DST folded in), UTC
+/// elsewhere (the Linux-test path).
+#[cfg(feature = "db")]
+pub fn local_date_string(now_ms: i64) -> String {
+    let secs = now_ms.div_euclid(1000);
+    #[cfg(target_os = "macos")]
+    {
+        // SAFETY: `tm` is only read after localtime_r reports success by returning non-null.
+        unsafe {
+            let mut tm: libc::tm = std::mem::zeroed();
+            let t = secs as libc::time_t;
+            if !libc::localtime_r(&t, &mut tm).is_null() {
+                return format!("{:04}-{:02}-{:02}", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday);
+            }
+        }
+    }
+    let ymd = crate::dreamcycle::schedule::local_time(secs, 0).yyyymmdd;
+    format!("{:04}-{:02}-{:02}", ymd / 10_000, (ymd / 100) % 100, ymd % 100)
 }
 
 #[cfg(test)]

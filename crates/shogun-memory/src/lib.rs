@@ -15,6 +15,7 @@ use std::path::Path;
 use rusqlite::Connection;
 
 pub mod ai_session;
+pub mod briefs;
 pub mod cold;
 pub mod compression_metrics;
 pub mod embed;
@@ -345,6 +346,7 @@ mod tests {
             "feedback_events",
             "lessons",
             "lesson_provenance",
+            "briefs",
         ] {
             assert!(tables.iter().any(|t| t == expected), "missing table {expected}");
         }
