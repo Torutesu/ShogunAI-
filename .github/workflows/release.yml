@@ -17,26 +17,25 @@ name: release
 #   APPLE_API_ISSUER + APPLE_API_KEY + APPLE_API_KEY_CONTENT   App Store Connect API key (issuer id,
 #                                                   key id, base64 .p8 content)
 #
-# Why each Apple step is explicit here instead of delegated to the Tauri bundler:
-#   - Tauri's `dmg` target shells out to create-dmg's bundle_dmg.sh, which drives Finder over
-#     AppleScript to lay the window out. On a headless runner that can block forever (the first
-#     run of this workflow sat in that step for over an hour). `hdiutil` does the same job with no
-#     window server involved.
+# Why the Apple steps are explicit here instead of delegated to the Tauri bundler:
+#   - The bundler calls `notarytool ... --wait` with no timeout. This workflow's first run printed
+#     "Notarizing …/SHOGUN Spike.app" and then sat there for 56 minutes until it was cancelled
+#     (post-job cleanup killed an orphaned `notarytool`). `--wait --timeout 30m` bounds the Apple
+#     round-trip, and a rejected submission prints its server-side log instead of a bare exit code.
+#   - With notarization driven here, the DMG is built with `hdiutil` too: it keeps the disk image
+#     out of the bundler's create-dmg/AppleScript path, and lets us sign, notarize and staple the
+#     DMG as its own artifact.
 #   - Signing material is imported into a keychain we own, so `codesign` still works in the later
 #     steps (the bundler's throwaway keychain disappears with the bundler).
-#   - `notarytool --wait --timeout` bounds the Apple round-trip, and a failed submission prints its
-#     server-side log instead of just an exit code.
 # No signing material ever touches the repo.
+#
+# Measured on the first green run (2026-08-09, cold cache): 11 min wall clock — 9 min build+sign,
+# 54 s for both notarization round-trips, 2 s verification.
 
 on:
   push:
     tags:
       - "v*"
-    # TEMPORARY: first end-to-end validation of the signing/notarization pipeline before this
-    # lands on main (`workflow_dispatch` only shows up in the Actions UI once the workflow exists
-    # on the default branch). Delete this `branches:` block once the pipeline has gone green.
-    branches:
-      - "claude/apple-developer-signing-distribution-50sld5"
   workflow_dispatch:
 
 permissions:

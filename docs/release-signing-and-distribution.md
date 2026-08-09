@@ -83,7 +83,9 @@ git push origin v0.1.0
    - `SHOGUN-macOS-arm64-0.1.0.dmg`（バージョン付き）
    - `SHOGUN-macOS-arm64.dmg`（LP 用固定名）
 
-**なぜ Tauri の DMG 生成を使わないか**: Tauri の `dmg` ターゲットは create-dmg 由来の `bundle_dmg.sh` を呼び、AppleScript で Finder にウィンドウ配置をさせる。ヘッドレスのランナーではここが無限にブロックしうる（本ワークフローの初回実行が実際に1時間以上停止した）。`hdiutil` なら window server を介さず同じ成果物が作れるため、DMG 生成は自前ステップにしている。あわせて **`.app` と DMG の両方**を公証・staple している（DMG だけを staple すると、アプリを Applications にドラッグした後の初回起動でオンライン確認が必要になる）。
+**なぜ公証と DMG 生成を Tauri に任せないか**: Tauri のバンドラは `notarytool ... --wait` をタイムアウトなしで呼ぶ。本ワークフローの初回実行は `Notarizing .../SHOGUN Spike.app` を出力したまま **56分間無反応**となり、キャンセル時の後片付けで孤児プロセス `notarytool` が回収された（ビルドと署名自体は6分で正常完了していた）。そのため公証は自前ステップで `--wait --timeout 30m` を付けて実行し、失敗時は Apple 側のログを出力する。公証を自前で回すなら DMG も `hdiutil` で作るほうが扱いやすく（バンドラの create-dmg / AppleScript 経路を通らない）、**`.app` と DMG の両方**を署名・公証・staple できる。DMG だけを staple すると、アプリを Applications にドラッグした後の初回起動でオンライン確認が必要になる。
+
+**実測（2026-08-09 初回グリーン、キャッシュ無し）**: 全体11分（ビルド＋署名9分 / 公証2回で54秒 / 検証2秒）。
 
 最後に人間が Release ページで **Publish release** を押した時点で公開される（LP のリンクが新版を指すのはこの瞬間）。
 
