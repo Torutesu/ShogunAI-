@@ -117,6 +117,29 @@ xcrun stapler validate ShogunAI-macOS-arm64.dmg   # → The validate action work
 
 ---
 
+## 4-b. エンタイトルメントは空にしてある（触ると起動しなくなる）
+
+`apps/desktop/src-tauri/entitlements.plist` は**意図的に空**。以前は次を宣言していた:
+
+```xml
+<key>keychain-access-groups</key>
+<array><string>$(AppIdentifierPrefix)dev.shogun.spike</string></array>
+```
+
+これが原因で、署名・公証まで全部通ったビルドが**起動できなかった**（Finder は「アプリケーション "ShogunAI" を開けません。」としか言わない。ターミナルから直接実行すると `zsh: killed` = exec 時点の SIGKILL）。理由は2つ:
+
+1. `$(AppIdentifierPrefix)` は **Xcode のビルド変数**で、`codesign` は展開しない。署名済みバイナリにはリテラル文字列がそのまま入る。`keychain-access-groups` は制限付きエンタイトルメントなので、hardened runtime 下で AMFI が起動を拒否する
+2. そもそもアクセスグループはデータ保護キーチェーンの概念。`keychain_store.rs` は既定のファイルキーチェーンに `kSecClassGenericPassword` を置いており、判定は ACL と呼び出し元の署名で行われる。グループは一度も参照されていなかった
+
+このアプリが OS に要求するものはすべて TCC 側（Accessibility / 画面収録 / マイク）で、Info.plist の用途文字列で足りる。非サンドボックスの Developer ID アプリは、ネットワークにも自分のキーチェーン項目にもエンタイトルメントを必要としない。**追加する前に、本当に必要かを確認すること。**
+
+診断コマンド（「開けません」が出たら最初にこれ）:
+
+```bash
+/Applications/ShogunAI.app/Contents/MacOS/shogun-desktop-spike   # killed なら署名/エンタイトルメント
+codesign -dv --entitlements - /Applications/ShogunAI.app          # 何が焼き込まれているか
+```
+
 ## 5. 既知の注意点・今後
 
 - **製品名/識別子（2026-08-09 変更済み）**: `ShogunAI` / `com.syogun.shogunai`（旧: `SHOGUN Spike` / `dev.shogun.spike`）。識別子は所有ドメイン syogun.com の逆DNS。**これ以上変更しないこと** — 変えると Keychain・TCC 許可（Accessibility / Screen Recording / Mic）・アプリデータ（`~/Library/Application Support/<identifier>/` の memory.db と onboarding.json）が全部リセットされる。識別子は `tauri.conf.json` / `entitlements.plist` の keychain-access-groups / `crates/shogun-mcp/src/plan_source.rs` の `DESKTOP_IDENTIFIER` / `apps/desktop/src-tauri/src/meeting.rs` の `SHOGUN_BUNDLE_IDS` が lockstep。開発機に旧 `dev.shogun.spike` のデータが残っている場合、そのまま引き継がれないので必要なら手で移す

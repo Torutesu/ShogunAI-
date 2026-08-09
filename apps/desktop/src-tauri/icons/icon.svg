@@ -1,0 +1,62 @@
+<!-- Source of truth for the macOS app icon. The rasters (icon.icns / icon.png) are generated
+     from this file — see the regeneration command in apps/desktop/README.md.
+
+     The mark is the same "S" ribbon geometry and gradient as apps/desktop/src/Logo.tsx and the
+     marketing site's Logo.tsx: one brand, one mark. If those change, this must change with them.
+
+     Layout follows Apple's macOS icon grid: a 1024 canvas with the rounded-square body inset to
+     824x824 (100pt margin) and a 185 corner radius, so the icon sits at the same optical size as
+     system apps in the Dock and Finder. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024"
+     role="img" aria-label="ShogunAI">
+  <defs>
+    <!-- Body: the brand's near-black, lifted very slightly at the top so the square reads as a
+         surface rather than a hole punched in the Dock. -->
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1A1A1A"/>
+      <stop offset="0.55" stop-color="#0F0F0F"/>
+      <stop offset="1" stop-color="#080808"/>
+    </linearGradient>
+    <!-- Ribbon gradient — identical stops to Logo.tsx. -->
+    <linearGradient id="ribbon" x1="0.15" y1="0.08" x2="0.85" y2="0.92">
+      <stop offset="0" stop-color="#38BDF8"/>
+      <stop offset="0.5" stop-color="#0AA5F4"/>
+      <stop offset="1" stop-color="#0B74D6"/>
+    </linearGradient>
+    <!-- Highlight along the fold, as in Logo.tsx. -->
+    <linearGradient id="fold" x1="0.3" y1="0.25" x2="0.7" y2="0.72">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <!-- A faint pool of brand blue under the mark so it sits in the surface instead of on it.
+         A blur filter would be the obvious way to do this, but filter regions rasterize as a
+         visible rectangle in some renderers — a radial fill is exact everywhere. -->
+    <radialGradient id="pool" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#0AA5F4" stop-opacity="0.11"/>
+      <stop offset="0.6" stop-color="#0AA5F4" stop-opacity="0.035"/>
+      <stop offset="1" stop-color="#0AA5F4" stop-opacity="0"/>
+    </radialGradient>
+    <clipPath id="bodyClip">
+      <rect x="100" y="100" width="824" height="824" rx="185" ry="185"/>
+    </clipPath>
+  </defs>
+
+  <g>
+    <rect x="100" y="100" width="824" height="824" rx="185" ry="185" fill="url(#body)"/>
+    <!-- Hairline top edge: the same trick the system icons use to separate body from background. -->
+    <rect x="100.5" y="100.5" width="823" height="823" rx="184.5" ry="184.5"
+          fill="none" stroke="#FFFFFF" stroke-opacity="0.10" stroke-width="1"/>
+  </g>
+
+  <ellipse cx="512" cy="512" rx="420" ry="420" fill="url(#pool)" clip-path="url(#bodyClip)"/>
+
+  <!-- Mark: Logo.tsx's 100-unit viewBox scaled to 520 and centered (512 - 520/2 = 252). At this
+       size the ribbon stands 447 tall inside the 824 body — a hair over half, which is where
+       Apple's grid puts a single-glyph mark. -->
+  <g transform="translate(252 252) scale(5.2)">
+    <path d="M66 20 L34 34 L66 60 L34 80" fill="none" stroke="url(#ribbon)"
+          stroke-width="26" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M66 20 L34 34 L66 60 L34 80" fill="none" stroke="url(#fold)" opacity="0.5"
+          stroke-width="26" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>

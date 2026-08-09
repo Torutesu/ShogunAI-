@@ -1,0 +1,42 @@
+<!-- Source of truth for the disk-image window background. The PNGs beside this file are generated
+     from it (see apps/desktop/README.md); the release workflow only ships the PNGs.
+
+     Geometry is tied to the appdmg spec in .github/workflows/release.yml: a 660x400 window with
+     the app icon centred at (175, 190) and the Applications link at (485, 190). Move one and the
+     other must move with it, or the arrow will point at nothing.
+
+     No text: Finder draws the two icon labels itself, and the arrow between a app and a folder is
+     the idiom every Mac user already reads. Adding a headline would only compete with them. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 660 400" width="660" height="400">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#101010"/>
+      <stop offset="1" stop-color="#080808"/>
+    </linearGradient>
+    <!-- A pool of light under the app icon: the eye lands on what you are meant to drag. -->
+    <radialGradient id="spot" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#0AA5F4" stop-opacity="0.13"/>
+      <stop offset="0.65" stop-color="#0AA5F4" stop-opacity="0.03"/>
+      <stop offset="1" stop-color="#0AA5F4" stop-opacity="0"/>
+    </radialGradient>
+    <!-- The arrow fades in from the app and lands solid on the folder, so it reads as motion
+         towards Applications rather than a static rule between two icons. userSpaceOnUse is
+         required, not stylistic: a horizontal line has a zero-height bounding box, and an
+         objectBoundingBox gradient on a zero-extent box makes the element drop out entirely. -->
+    <linearGradient id="arrow" gradientUnits="userSpaceOnUse" x1="252" y1="190" x2="400" y2="190">
+      <stop offset="0" stop-color="#C8A96E" stop-opacity="0.40"/>
+      <stop offset="1" stop-color="#C8A96E" stop-opacity="0.95"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="660" height="400" fill="url(#bg)"/>
+  <ellipse cx="175" cy="190" rx="185" ry="185" fill="url(#spot)"/>
+
+  <g stroke="url(#arrow)" fill="none" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <line x1="252" y1="190" x2="396" y2="190"/>
+    <polyline points="384,178 400,190 384,202"/>
+  </g>
+
+  <!-- Hairline inset frame — the same edge treatment as the app icon body. -->
+  <rect x="0.5" y="0.5" width="659" height="399" fill="none" stroke="#FFFFFF" stroke-opacity="0.05"/>
+</svg>
