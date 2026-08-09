@@ -410,9 +410,21 @@ use shogun_core::meeting::gate::OfferGate;
         // Signal (2) only. The AX-controls signal of FR-MT-04 needs native probes that do not
         // exist yet; claiming them here would inflate the confidence stored against the interval
         // beyond what was actually observed.
-        let has_meet_url = page_url.is_some_and(detect::is_meeting_url);
-        let has_zoom_bundle = detect::is_meeting_app(bundle_id);
-        let meeting_context = has_zoom_bundle || has_meet_url;
+        let url_hint = page_url.and_then(detect::host_hint);
+        let bundle_hint = detect::bundle_hint(bundle_id);
+        let has_meet_url = url_hint == Some(detect::MeetingHint::Strong);
+        let has_strong_bundle = bundle_hint == Some(detect::MeetingHint::Strong);
+        // Weak surfaces (Teams, Webex — Plan A-2): one corroborating vote in the detector, never
+        // an opener, so they ride in the ctx rather than in `meeting_app_frontmost`.
+        let has_weak_meeting_signal = bundle_hint == Some(detect::MeetingHint::Weak)
+            || url_hint == Some(detect::MeetingHint::Weak);
+        // Slack huddles (Plan A-4): same bundle id as ordinary Slack, so the hint reads the
+        // window title. The captured-AX-snippet feed is wired in the on-device pass; title-only
+        // can only under-detect, never false-positive.
+        let has_huddle_hint =
+            bundle_id == detect::SLACK_BUNDLE_ID && detect::huddle_hint(window_title, &[]);
+        let meeting_context =
+            has_strong_bundle || has_meet_url || has_weak_meeting_signal || has_huddle_hint;
         let on_media_page = page_url.is_some_and(detect::is_media_url);
         let page_host = page_url.and_then(detect::host_from_url);
         let signals = Signals {
@@ -423,17 +435,19 @@ use shogun_core::meeting::gate::OfferGate;
                 meeting_context,
                 on_media_page,
             ),
-            // Corroboration: a known meeting app, or a browser on a meeting page. Either can
-            // still open an interval alone, so a call whose audio does not run through the
+            // Corroboration: a Strong meeting app, or a browser on a Strong meeting page. Either
+            // can still open an interval alone, so a call whose audio does not run through the
             // default input device is not invisible.
-            meeting_app_frontmost: meeting_context,
+            meeting_app_frontmost: has_strong_bundle || has_meet_url,
             ..Default::default()
         };
         let ctx = detect::DetectionCtx {
             is_browser: is_browser(bundle_id),
             page_host: page_host.as_deref(),
             has_meet_url,
-            has_zoom_bundle,
+            has_strong_bundle,
+            has_weak_meeting_signal,
+            has_huddle_hint,
             window_title,
         };
         let policy = detect::OfferPolicy {
