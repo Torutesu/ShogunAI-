@@ -124,15 +124,11 @@ pub(crate) fn overlay_ptr(handle: &tauri::AppHandle) -> Option<*mut objc2::runti
 /// (spec §3.11.2), then in setup: the native overlay NSPanel, geometry read, mouse tap, and the
 /// integrated engine + measurement streams.
 pub fn run() {
-    // ROOT-CAUSE FIX (overlay): become an Accessory (background) app BEFORE AppKit creates any
-    // window. The reference overlays that float over every app/Space are Accessory/LSUIElement
-    // from process start; SHOGUN used to create its window as a Regular app and flip the policy
-    // afterwards — and a window born under Regular policy keeps its original Space binding, which
-    // is why canJoinAllSpaces read back correctly yet was never honored. The window itself is no
-    // longer declared in tauri.conf.json: it is built in setup, after this line has run.
+    // Regular activation policy: Dock icon (colored S mark) + menu-bar tray. Overlay NSPanel
+    // still uses canJoinAllSpaces + mainMenu+3 level; LSUIElement is off so the Dock shows the app.
     #[cfg(target_os = "macos")]
     if std::env::var("SHOGUN_NO_NOTCH").is_err() {
-        set_accessory_activation();
+        set_regular_activation();
     }
     let builder = tauri::Builder::default();
     #[cfg(target_os = "macos")]
@@ -337,23 +333,26 @@ fn setup_macos(app: &tauri::App) {
     watch_space_changes(app);
     spawn_panel_state_logger(app);
 
-    // Menu-bar residency (overlay spec): a ⚔ tray item with Show/Hide + Quit. Combined with the
-    // Accessory policy there is no Dock icon — SHOGUN lives in the menu bar like other overlays.
+    // Menu-bar residency: S-mark tray icon (template silhouette) with Show/Hide + Quit.
     {
         use tauri::menu::{Menu, MenuItem};
         use tauri::tray::TrayIconBuilder;
         let items = (
             MenuItem::with_id(app, "toggle", "Show / Hide", true, None::<&str>),
-            MenuItem::with_id(app, "quit", "Quit SHOGUN", true, None::<&str>),
+            MenuItem::with_id(app, "quit", "Quit ShogunAI", true, None::<&str>),
         );
         if let (Ok(toggle_i), Ok(quit_i)) = items {
             match Menu::with_items(app, &[&toggle_i, &quit_i]) {
                 Ok(menu) => {
-                    let mut b = TrayIconBuilder::with_id("shogun-tray").menu(&menu).title("⚔");
-                    if let Some(icon) = app.default_window_icon() {
-                        b = b.icon(icon.clone());
-                    }
-                    let built = b
+                    let tray_icon = tauri::image::Image::from_bytes(
+                        include_bytes!("../icons/tray-icon@2x.png"),
+                    )
+                    .expect("tray icon bytes");
+                    let built = TrayIconBuilder::with_id("shogun-tray")
+                        .menu(&menu)
+                        .tooltip("ShogunAI")
+                        .icon(tray_icon)
+                        .icon_as_template(true)
                         .on_menu_event(|app, event| match event.id.as_ref() {
                             "toggle" => toggle_panel(app),
                             "quit" => {
@@ -364,7 +363,7 @@ fn setup_macos(app: &tauri::App) {
                         })
                         .build(app);
                     match built {
-                        Ok(_tray) => eprintln!("[shell] menu-bar tray installed (⚔)"),
+                        Ok(_tray) => eprintln!("[shell] menu-bar tray installed (S mark)"),
                         Err(e) => eprintln!("[shell] tray install failed: {e}"),
                     }
                 }
@@ -419,11 +418,13 @@ fn setup_macos(app: &tauri::App) {
             primary_height: g.primary_height,
             is_notch: g.is_notch,
             display_count: g.display_count,
+            screen: g.screen,
+            idle: g.idle,
             // Every display's own notch geometry, so hovering the notch on a second monitor is
             // hit-tested against that monitor rather than against the primary's coordinates.
             per_display: geometry::mac::read_all(mtm)
                 .into_iter()
-                .map(|d| (d.screen, d.regions, d.screen.max_y() - d.menubar_h))
+                .map(|d| (d.screen, d.regions, d.screen.max_y() - d.menubar_h, d.idle))
                 .collect(),
         },
         rx,
@@ -545,12 +546,10 @@ fn setup_macos(app: &tauri::App) {
     report_panel_health(app.handle());
 }
 
-/// Set the app's activation policy to Accessory (NSApplicationActivationPolicyAccessory = 1): no
-/// Dock icon, background overlay. Required for the notch window to actually follow every Space and
-/// draw over full-screen apps — a Regular-policy app ignores that even with canJoinAllSpaces set.
-/// Runs on the main thread (setup).
+/// Regular activation policy (NSApplicationActivationPolicyRegular = 0): Dock icon visible.
+/// Runs on the main thread before any window is created.
 #[cfg(target_os = "macos")]
-fn set_accessory_activation() {
+fn set_regular_activation() {
     use objc2::runtime::AnyObject;
     use objc2::{class, msg_send};
     // SAFETY: standard AppKit calls on the shared NSApplication, on the main thread.
@@ -560,8 +559,8 @@ fn set_accessory_activation() {
             eprintln!("[shell] NSApplication nil — activation policy unchanged");
             return;
         }
-        let ok: bool = msg_send![ns_app, setActivationPolicy: 1isize];
-        eprintln!("[shell] activation policy = Accessory (no Dock icon, all-spaces overlay) ok={ok}");
+        let ok: bool = msg_send![ns_app, setActivationPolicy: 0isize];
+        eprintln!("[shell] activation policy = Regular (Dock icon + menu-bar tray) ok={ok}");
     }
 }
 
@@ -753,7 +752,7 @@ fn set_panel_hidden(handle: &tauri::AppHandle) {
                 let _: () = msg_send![ptr, orderOut: nil];
             }
         }
-        eprintln!("[shell] toggle → hidden (summon shortcut or ⚔ tray to show)");
+        eprintln!("[shell] toggle → hidden (summon shortcut or menu-bar tray to show)");
     });
 }
 
@@ -883,7 +882,7 @@ fn build_panel_window(handle: &tauri::AppHandle) {
     // shown before the swap). Panels shown as panels from the start are what the reference
     // overlays do.
     let builder = tauri::WebviewWindowBuilder::new(handle, "notch", tauri::WebviewUrl::default())
-        .title("SHOGUN")
+        .title("ShogunAI")
         .transparent(true)
         .decorations(false)
         .resizable(false)
@@ -939,7 +938,7 @@ pub(crate) fn build_full_ui_window(handle: &tauri::AppHandle) {
         FULL_UI_LABEL,
         tauri::WebviewUrl::App("fullui.html".into()),
     )
-    .title("SHOGUN")
+    .title("ShogunAI")
     .resizable(true)
     // Spec §D floor. Below this the sidebar plus a three-card health row stops fitting.
     .min_inner_size(FULL_UI_MIN_W, FULL_UI_MIN_H)
@@ -1007,7 +1006,7 @@ pub(crate) fn build_visual_recall_window(handle: &tauri::AppHandle) {
         VISUAL_RECALL_LABEL,
         tauri::WebviewUrl::App("visual-recall.html".into()),
     )
-    .title("SHOGUN — Visual recall")
+    .title("ShogunAI — Visual recall")
     .resizable(true)
     .min_inner_size(VISUAL_RECALL_MIN_W, VISUAL_RECALL_MIN_H)
     .inner_size(VISUAL_RECALL_W, VISUAL_RECALL_H)
@@ -1225,16 +1224,18 @@ fn adopt_native_panel(win: &tauri::WebviewWindow) {
         let _: () = msg_send![panel, setHasShadow: false];
         // Kill AppKit window animations that fight the CSS Idle↔Expanded morph.
         let _: () = msg_send![panel, setAnimationBehavior: 2isize]; // NSWindowAnimationBehaviorNone
-        let _: () = msg_send![panel, setLevel: OVERLAY_LEVEL];
         let want = PANEL_BEHAVIOR.load(std::sync::atomic::Ordering::Relaxed);
         let _: () = msg_send![panel, setCollectionBehavior: want];
         let _: () = msg_send![panel, setHidesOnDeactivate: false];
         let _: () = msg_send![panel, setCanHide: false];
         let _: () = msg_send![panel, setMovableByWindowBackground: true];
+        // ORDER: setFloatingPanel BEFORE setLevel. AppKit's floating-panel path resets level to
+        // NSFloatingWindowLevel (3); boring.notch sets isFloatingPanel first, then mainMenu+3.
         let _: () = msg_send![panel, setFloatingPanel: true];
         let _: () = msg_send![panel, setBecomesKeyOnlyIfNeeded: true];
         let _: () = msg_send![panel, setWorksWhenModal: true];
         let _: () = msg_send![panel, setAcceptsMouseMovedEvents: true];
+        let _: () = msg_send![panel, setLevel: OVERLAY_LEVEL];
 
         NATIVE_PANEL.store(panel, std::sync::atomic::Ordering::Release);
         reposition_to_cursor_screen(panel);
@@ -1246,7 +1247,7 @@ fn adopt_native_panel(win: &tauri::WebviewWindow) {
         let pf: NSRect = msg_send![panel, frame];
         eprintln!(
             "[shell] NATIVE NSPanel hosting the webview — behavior={got} level={lvl} styleMask={mask} \
-             frame={:.0},{:.0} {:.0}x{:.0} (mainMenu+3, born a panel)",
+             frame={:.0},{:.0} {:.0}x{:.0} (want level {OVERLAY_LEVEL}=mainMenu+3)",
             pf.origin.x, pf.origin.y, pf.size.width, pf.size.height
         );
     }
@@ -1261,6 +1262,7 @@ fn adopt_native_panel(win: &tauri::WebviewWindow) {
 #[cfg(target_os = "macos")]
 #[tauri::command]
 fn set_panel_size(app: tauri::AppHandle, width: f64, height: f64, anchor: Option<String>) {
+    use tauri::Manager;
     let keep_left = anchor.as_deref() == Some("left");
     let anchor_label = if keep_left { "left" } else { "castle" };
     let h = app.clone();
@@ -1314,10 +1316,15 @@ fn set_panel_size(app: tauri::AppHandle, width: f64, height: f64, anchor: Option
             let _: () = msg_send![ptr, invalidateShadow];
             let _: () = msg_send![ptr, setHasShadow: false];
             let _: () = msg_send![ptr, setLevel: OVERLAY_LEVEL];
+            let lvl: isize = msg_send![ptr, level];
             eprintln!(
                 "[shell] panel resized to {:.0}x{:.0} at {:.0},{:.0} (anchor {}) level={}",
-                width, height, r.origin.x, r.origin.y, anchor_label, OVERLAY_LEVEL
+                width, height, r.origin.x, r.origin.y, anchor_label, lvl
             );
+        }
+        // Hover R_exp + CGEventTap band must match the live frame or move-into-panel collapses.
+        if let Some(shared) = h.try_state::<std::sync::Arc<integrate::mac::Shared>>() {
+            shared.set_panel_hit_size(width, height);
         }
     });
 }
