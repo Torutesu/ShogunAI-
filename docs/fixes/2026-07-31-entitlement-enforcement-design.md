@@ -53,7 +53,7 @@
 ### プロバイダ seam（プラン状態の供給）
 
 - **desktop**: `apps/desktop/src-tauri/src/entitlement.rs` `mac::current(&AppHandle)` — onboarding.json の `trial_started_at`（unix秒 → ms）+ `BillingState::Unknown`（スタブ）。判定点ごとに再解決（インメモリ読み + 純関数なので安価）。UI 表示用に `entitlement_status` コマンド（表示専用 view）を追加。
-- **スタンドアロン bin**（`shogun-api` / `shogun-mcp`）: `crates/shogun-mcp/src/plan_source.rs` `FilePlanSource` — `SHOGUN_ONBOARDING_JSON` env → macOS 既定パス（`~/Library/Application Support/dev.shogun.spike/onboarding.json`）を**毎回再読込**。ファイル無し = トライアル未開始（フルアクセス）。identifier は tauri.conf.json と lockstep（コメントで明記）。
+- **スタンドアロン bin**（`shogun-api` / `shogun-mcp`）: `crates/shogun-mcp/src/plan_source.rs` `FilePlanSource` — `SHOGUN_ONBOARDING_JSON` env → macOS 既定パス（`~/Library/Application Support/com.syogun.shogunai/onboarding.json`）を**毎回再読込**。ファイル無し = トライアル未開始（フルアクセス）。identifier は tauri.conf.json と lockstep（コメントで明記）。
 - **既定値の決定**: 何も分からないとき（オンボーディング未完了・ファイル無し）= `Plan::Trial{started_at_ms: None}` = フルアクセス。刻印はオンボーディング完了時に一度だけ打たれ、そこから7日（onboarding.rs の既存性質）。オンボーディングの `plan` フィールドは**意思表明のみで権利を与えない**。
 
 ## 4. 期限切れトライアルの姿勢（**2026-07-31 オーナー確定**）

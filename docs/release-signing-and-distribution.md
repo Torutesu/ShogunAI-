@@ -14,7 +14,7 @@ CLAUDE.md「課金/配布」どおり、SHOGUN は **Developer ID 署名 + notar
             → 人間が Release を publish → LP の固定リンクが新版を指す
 ```
 
-Gatekeeper の要件（macOS 14+）: Web からダウンロードされたアプリは **Developer ID 署名 + notarization（公証）+ ticket staple** の3点が揃っていないと「壊れているため開けません」ダイアログになる。ad-hoc 署名やただの codesign では配布不可。この3点はすべて Tauri v2 バンドラが環境変数から自動実行する。
+Gatekeeper の要件（macOS 14+）: Web からダウンロードされたアプリは **Developer ID 署名 + notarization（公証）+ ticket staple** の3点が揃っていないと「壊れているため開けません」ダイアログになる。ad-hoc 署名やただの codesign では配布不可。署名は Tauri v2 バンドラが環境変数から行い、公証と staple はワークフローの明示ステップが行う（理由は §2 末尾）。
 
 ---
 
@@ -80,8 +80,8 @@ git push origin v0.1.0
 4. staple 済み `.app` から `hdiutil` で DMG を作成 → DMG も署名・公証・staple
 5. `codesign --verify` / `spctl --assess` / `stapler validate` を `.app` と DMG の両方で検証（ここが赤ければ配布物は壊れている）
 6. **Draft** の GitHub Release に DMG を2つ添付:
-   - `SHOGUN-macOS-arm64-0.1.0.dmg`（バージョン付き）
-   - `SHOGUN-macOS-arm64.dmg`（LP 用固定名）
+   - `ShogunAI-macOS-arm64-0.1.0.dmg`（バージョン付き）
+   - `ShogunAI-macOS-arm64.dmg`（LP 用固定名）
 
 **なぜ公証と DMG 生成を Tauri に任せないか**: Tauri のバンドラは `notarytool ... --wait` をタイムアウトなしで呼ぶ。本ワークフローの初回実行は `Notarizing .../SHOGUN Spike.app` を出力したまま **56分間無反応**となり、キャンセル時の後片付けで孤児プロセス `notarytool` が回収された（ビルドと署名自体は6分で正常完了していた）。そのため公証は自前ステップで `--wait --timeout 30m` を付けて実行し、失敗時は Apple 側のログを出力する。公証を自前で回すなら DMG も `hdiutil` で作るほうが扱いやすく（バンドラの create-dmg / AppleScript 経路を通らない）、**`.app` と DMG の両方**を署名・公証・staple できる。DMG だけを staple すると、アプリを Applications にドラッグした後の初回起動でオンライン確認が必要になる。
 
@@ -96,21 +96,21 @@ git push origin v0.1.0
 公開後、以下の URL が常に最新版を指す（リダイレクト）:
 
 ```
-https://github.com/torutesu/ShogunAI-/releases/latest/download/SHOGUN-macOS-arm64.dmg
+https://github.com/torutesu/ShogunAI-/releases/latest/download/ShogunAI-macOS-arm64.dmg
 ```
 
 LP のダウンロードボタンはこの固定 URL に張るだけでよい。将来 CDN（Cloudflare R2 等）に載せ替える場合も、この URL から DMG を取得して置くだけで署名・公証はそのまま有効（署名はファイルに内包されており、配布経路に依存しない）。
 
-ユーザー側の体験: DMG を開く → アプリを Applications へドラッグ → 初回起動時に「"SHOGUN Spike" は Apple により悪質なソフトウェアが含まれていないか確認されました」の確認ダイアログ（公証済みの正常フロー）→ 起動。
+ユーザー側の体験: DMG を開く → アプリを Applications へドラッグ → 初回起動時に「"ShogunAI" は Apple により悪質なソフトウェアが含まれていないか確認されました」の確認ダイアログ（公証済みの正常フロー）→ 起動。
 
 ## 4. 手元での最終確認（任意）
 
 配布前に自分の Mac で:
 
 ```bash
-spctl --assess --type open --context context:primary-signature -v SHOGUN-macOS-arm64.dmg
+spctl --assess --type open --context context:primary-signature -v ShogunAI-macOS-arm64.dmg
 # → accepted / source=Notarized Developer ID なら合格
-xcrun stapler validate SHOGUN-macOS-arm64.dmg   # → The validate action worked!
+xcrun stapler validate ShogunAI-macOS-arm64.dmg   # → The validate action worked!
 ```
 
 ブラウザで実際にダウンロードして開くのが最終テスト（quarantine 属性が付いた状態での Gatekeeper 挙動を踏む）。
@@ -119,7 +119,8 @@ xcrun stapler validate SHOGUN-macOS-arm64.dmg   # → The validate action worked
 
 ## 5. 既知の注意点・今後
 
-- **製品名/識別子**: 現状は Phase 0 スパイクのため `SHOGUN Spike` / `dev.shogun.spike`。一般公開前に `tauri.conf.json` の `productName` / `identifier` を製品名へ変更する（`entitlements.plist` の keychain-access-groups も同時に変更。識別子を変えると Keychain・TCC 許可（Accessibility / Screen Recording / Mic）がリセットされるため、**トライアル開始前に一度だけ**行うこと）
+- **製品名/識別子（2026-08-09 変更済み）**: `ShogunAI` / `com.syogun.shogunai`（旧: `SHOGUN Spike` / `dev.shogun.spike`）。識別子は所有ドメイン syogun.com の逆DNS。**これ以上変更しないこと** — 変えると Keychain・TCC 許可（Accessibility / Screen Recording / Mic）・アプリデータ（`~/Library/Application Support/<identifier>/` の memory.db と onboarding.json）が全部リセットされる。識別子は `tauri.conf.json` / `entitlements.plist` の keychain-access-groups / `crates/shogun-mcp/src/plan_source.rs` の `DESKTOP_IDENTIFIER` / `apps/desktop/src-tauri/src/meeting.rs` の `SHOGUN_BUNDLE_IDS` が lockstep。開発機に旧 `dev.shogun.spike` のデータが残っている場合、そのまま引き継がれないので必要なら手で移す
+- **バイナリ名**: `.app` 内の実行ファイルは Cargo のパッケージ名 `shogun-desktop-spike` のまま（アクティビティモニタにこの名前で出る）。改名するには Cargo.toml のパッケージ名と `ci.yml` / `phase0-smoke.yml` / `scripts/codesign-desktop-dev.sh` の参照を揃える必要があり、製品名変更とは独立した作業
 - **TCC 許可の持続**: 安定した Developer ID 署名になることで、これまで dev ビルドで問題だった「リビルドごとの許可やり直し」は配布ビルドでは起きない
 - **自動更新（Tauri updater）**: 未設定。導入時は updater 署名鍵ペアの生成・`createUpdaterArtifacts` 有効化・update manifest 配信先が必要（別トラック。Gatekeeper 署名とは独立）
 - **Intel Mac**: 対応環境は Apple Silicon のみ（CLAUDE.md）。x86_64 ビルドは作らない

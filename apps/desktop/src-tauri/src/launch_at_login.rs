@@ -57,6 +57,8 @@ pub mod mac {
 
     /// Older builds used LaunchAgent (plist in ~/Library/LaunchAgents). That autostarts but does
     /// not appear in System Settings → Login Items, and would double-launch after we switch modes.
+    /// The filename is the pre-rename product name ("SHOGUN Spike") on purpose — only those builds
+    /// ever wrote this plist, so that is the only name worth cleaning up.
     fn remove_legacy_launch_agent_plist() {
         let Ok(home) = std::env::var("HOME") else {
             return;

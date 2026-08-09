@@ -7,7 +7,7 @@ set -euo pipefail
 # Run from the repo root regardless of invocation cwd.
 cd "$(dirname "$0")/.."
 
-OUT_DIR="${SHOGUN_SPIKE_METRICS:-$HOME/Library/Application Support/dev.shogun.spike/metrics}"
+OUT_DIR="${SHOGUN_SPIKE_METRICS:-$HOME/Library/Application Support/com.syogun.shogunai/metrics}"
 mkdir -p "$OUT_DIR"
 EXT_LOG="$OUT_DIR/$(date +%Y%m%d)-cpu_external.jsonl"
 

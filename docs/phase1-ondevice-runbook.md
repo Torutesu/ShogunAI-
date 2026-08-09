@@ -57,7 +57,7 @@ pnpm tauri dev 2>/tmp/shogun.log
 起動ログで確認する行（別タブで `tail -f /tmp/shogun.log`）:
 
 - `[shell] notch panel installed (all-spaces, over menu bar, hover-reveal)` — NSPanel 化成功（これが出ればノッチ表示）
-- `[spike] memory DB: …/dev.shogun.spike/memory.db` — DB パス（後で CLI から同じ DB を叩く）
+- `[spike] memory DB: …/com.syogun.shogunai/memory.db` — DB パス（後で CLI から同じ DB を叩く）
 - `[spike] ⌘⇧J registered` / `[spike] ⌃⌥G registered` — ショートカット登録成功
 - `[shell] panel install failed: …` が出たら NSPanel 化に失敗（プレーンウィンドウにフォールバック）
 

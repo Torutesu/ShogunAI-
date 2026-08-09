@@ -469,7 +469,7 @@ use shogun_core::meeting::gate::OfferGate;
 
     /// Bundle ids for this build. The overlay often reports an empty bundle id; both mean
     /// "SHOGUN is frontmost" and must not start the Meet-tab leave grace (FR-MT-11).
-    const SHOGUN_BUNDLE_IDS: &[&str] = &["dev.shogun.spike"];
+    const SHOGUN_BUNDLE_IDS: &[&str] = &["com.syogun.shogunai"];
 
     fn is_shogun_frontmost(bundle_id: &str) -> bool {
         bundle_id.is_empty() || SHOGUN_BUNDLE_IDS.contains(&bundle_id)

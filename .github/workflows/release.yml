@@ -163,7 +163,7 @@ jobs:
           APP="$(ls -d target/release/bundle/macos/*.app)"
           VERSION="$(node -p 'require("./apps/desktop/src-tauri/tauri.conf.json").version')"
           DMG_DIR="target/release/bundle/dmg"
-          DMG="$DMG_DIR/SHOGUN-macOS-arm64-${VERSION}.dmg"
+          DMG="$DMG_DIR/ShogunAI-macOS-arm64-${VERSION}.dmg"
           mkdir -p "$DMG_DIR"
           echo "app=$APP  version=$VERSION"
 
@@ -209,7 +209,7 @@ jobs:
           rm -rf "$STAGE" && mkdir -p "$STAGE"
           ditto "$APP" "$STAGE/$(basename "$APP")"
           ln -s /Applications "$STAGE/Applications"
-          hdiutil create -volname "SHOGUN" -srcfolder "$STAGE" -fs HFS+ -format UDZO -ov "$DMG"
+          hdiutil create -volname "ShogunAI" -srcfolder "$STAGE" -fs HFS+ -format UDZO -ov "$DMG"
 
           # 3) The DMG is its own distributable artifact: sign, notarize and staple it too, so
           #    Gatekeeper clears it at mount time without calling home.
@@ -234,9 +234,9 @@ jobs:
 
       # The versioned DMG name changes every release; the LP wants one stable URL. Ship a
       # fixed-name copy alongside so the LP can hard-link
-      # `releases/latest/download/SHOGUN-macOS-arm64.dmg` forever.
+      # `releases/latest/download/ShogunAI-macOS-arm64.dmg` forever.
       - name: stable-name copy for the LP download link
-        run: cp "$DMG_PATH" target/release/bundle/dmg/SHOGUN-macOS-arm64.dmg
+        run: cp "$DMG_PATH" target/release/bundle/dmg/ShogunAI-macOS-arm64.dmg
 
       - name: upload artifacts (workflow run)
         uses: actions/upload-artifact@v4

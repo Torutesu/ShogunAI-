@@ -123,7 +123,7 @@ pnpm --filter @shogun-ai/desktop dev           # tauri dev（debugビルド、�
 
 ## 4. 計測実行（release ビルド必須）
 
-出力先は `~/Library/Application Support/dev.shogun.spike/metrics/`（`integrate.rs` の `metrics_path()` と `scripts/*.sh` が一致）。
+出力先は `~/Library/Application Support/com.syogun.shogunai/metrics/`（`integrate.rs` の `metrics_path()` と `scripts/*.sh` が一致）。
 
 ```bash
 cargo build -p shogun-desktop-spike --release
@@ -141,7 +141,7 @@ RENTER_X=… RENTER_Y=2 ./scripts/spike-expand-test.sh 200
 
 ```bash
 cargo run -p spike-harness --release --bin report -- \
-  ~/Library/Application\ Support/dev.shogun.spike/metrics/*.jsonl \
+  ~/Library/Application\ Support/com.syogun.shogunai/metrics/*.jsonl \
   -o docs/phase0-report-$(date +%Y%m%d).md
 ```
 

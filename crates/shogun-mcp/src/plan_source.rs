@@ -20,7 +20,7 @@ use shogun_agents::entitlement::{
 
 /// The desktop app's bundle identifier — its app-data directory holds `onboarding.json`. Kept in
 /// lockstep with `apps/desktop/src-tauri/tauri.conf.json`.
-const DESKTOP_IDENTIFIER: &str = "dev.shogun.spike";
+const DESKTOP_IDENTIFIER: &str = "com.syogun.shogunai";
 
 /// Parse `onboarding.json` text into the trial stamp in unix **ms**, tolerating anything: only a
 /// versioned (v1+) file with a numeric `state.trial_started_at` (unix seconds) yields a stamp.

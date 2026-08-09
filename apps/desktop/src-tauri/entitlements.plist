@@ -6,7 +6,7 @@
          codesign (see scripts/codesign-desktop-dev.sh). -->
     <key>keychain-access-groups</key>
     <array>
-        <string>$(AppIdentifierPrefix)dev.shogun.spike</string>
+        <string>$(AppIdentifierPrefix)com.syogun.shogunai</string>
     </array>
 </dict>
 </plist>
