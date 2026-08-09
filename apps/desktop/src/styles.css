@@ -2490,6 +2490,11 @@ kbd {
   flex-direction: column;
   gap: 10px;
 }
+/* Cards must keep their natural height and let the body scroll — as flex children they would
+   otherwise SHRINK to fit, silently clipping their own overflow-hidden content. */
+.hub__body > * {
+  flex: none;
+}
 /* overlay density for the big-window cards */
 .hub .fcard__label {
   padding: 12px 14px 2px;
