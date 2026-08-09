@@ -18,7 +18,7 @@ use rusqlite::{params, Connection};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Route {
     BatchApi,
-    /// Batch lane via the Select-operated relay (V17; docs/batch-relay-design.md §3.3) — the
+    /// Batch lane via the Select-operated relay (V18; docs/batch-relay-design.md §3.3) — the
     /// shipping Standard/Pro path. Distinct from [`Route::BatchApi`] (direct, development-only)
     /// because the disclosure differs: the chunk crosses the operator's server and the viewer
     /// must say "via operator server". Not third-party — the relay is the operator's own
@@ -247,7 +247,7 @@ mod tests {
 
     #[test]
     fn batch_relay_route_is_accepted_and_is_not_third_party() {
-        // V17 widened the CHECK. A relay-routed chunk must be storable and distinguishable from
+        // V18 widened the CHECK. A relay-routed chunk must be storable and distinguishable from
         // the direct 'batch_api' route (docs/batch-relay-design.md §3.3); the relay is the
         // operator's own server, so it does NOT get the third-party badge (that stays Composio/ASR)
         // — the viewer labels it "via operator server" from the route itself.

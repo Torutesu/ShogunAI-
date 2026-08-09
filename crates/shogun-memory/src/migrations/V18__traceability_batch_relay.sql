@@ -17,7 +17,7 @@
 --   2. コピー前に  DELETE FROM traceability_log WHERE route = 'batch_relay';
 --      （トレース行は監査記録であり、消すのは CHECK に収まらない行だけに限ること）
 --   3. refinery_schema_history から version = 17 の行を削除する
--- 破壊的な列削除・改名は行っていないため、V16 のコードは V17 のスキーマ上でも動作する。
+-- 破壊的な列削除・改名は行っていないため、V17 のコードは V18 のスキーマ上でも動作する。
 
 CREATE TABLE traceability_log_v17 (
     id          INTEGER PRIMARY KEY,
