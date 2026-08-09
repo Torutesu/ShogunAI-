@@ -297,6 +297,7 @@ body {
   background: var(--fill-strong);
 }
 .icon {
+  position: relative; /* anchors the approvals badge */
   display: grid;
   place-items: center;
   width: 26px;
@@ -308,6 +309,23 @@ body {
   font-size: 13px;
   cursor: pointer;
   transition: background var(--sp), color var(--sp);
+}
+/* Pending L3 sends on the settings gear (B-1). Warn-toned: these wait for the user. */
+.icon__badge {
+  position: absolute;
+  top: -2px;
+  right: -3px;
+  min-width: 13px;
+  height: 13px;
+  padding: 0 3px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-pill);
+  background: var(--warn);
+  color: var(--accent-ink);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
 }
 .icon:hover {
   background: var(--fill);
@@ -522,6 +540,194 @@ body {
     opacity: 1;
     transform: translateY(-3px);
   }
+}
+
+/* context actions (B-1) — up to four gated buttons directly above the composer. */
+.acts {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 9px 0;
+}
+.acts__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  border: 1px solid var(--line);
+  background: var(--fill);
+  color: var(--ink);
+  font: inherit;
+  font-family: var(--sys);
+  font-size: var(--fs-sm);
+  border-radius: var(--r-pill);
+  padding: 4px 10px 4px 5px;
+  cursor: pointer;
+  transition: background var(--sp), border-color var(--sp);
+  animation: row-in 240ms cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+.acts__btn:nth-child(2) { animation-delay: 40ms; }
+.acts__btn:nth-child(3) { animation-delay: 80ms; }
+.acts__btn:nth-child(n + 4) { animation-delay: 120ms; }
+.acts__btn:hover:not(:disabled) {
+  background: var(--fill-strong);
+  border-color: var(--line-strong);
+}
+.acts__btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+/* The permission tag: L1 runs on its own, L2 asks once, L3 waits in Approvals. */
+.acts__lvl {
+  flex: none;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 2px 5px;
+  border-radius: var(--r-pill);
+  background: var(--fill-strong);
+  color: var(--faint);
+}
+.acts__lvl--l1 { color: var(--live); }
+.acts__lvl--l2 { color: var(--accent); }
+.acts__lvl--l3 { color: var(--warn); }
+.acts__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.acts__note {
+  width: 100%;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+.acts__note--ok { color: var(--live); }
+.acts__note--warn { color: var(--warn); }
+/* L2 one-tap confirm chip — replaces the row until answered or dismissed. */
+.acts__confirm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  width: 100%;
+}
+.acts__confirmq {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-sm);
+  color: var(--muted);
+}
+.acts__confirmq b {
+  color: var(--ink);
+  font-weight: 600;
+}
+.acts__go,
+.acts__cancel {
+  flex: none;
+  border: 1px solid var(--line);
+  background: var(--fill);
+  color: var(--ink);
+  font: inherit;
+  font-family: var(--sys);
+  font-size: var(--fs-sm);
+  border-radius: var(--r-pill);
+  padding: 3px 11px;
+  cursor: pointer;
+  transition: background var(--sp), color var(--sp), border-color var(--sp);
+}
+.acts__go {
+  background: var(--accent);
+  border-color: transparent;
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+.acts__go:hover {
+  background: color-mix(in srgb, var(--accent) 86%, var(--ink));
+}
+.acts__cancel:hover {
+  background: var(--fill-strong);
+}
+
+/* in-panel memory search (B-6) — a slim bar under the header, results as rows. */
+.search {
+  flex: none;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+}
+.search__input {
+  width: 100%;
+  border: 1px solid var(--line);
+  background: var(--fill);
+  color: var(--ink);
+  font: inherit;
+  font-family: var(--sys);
+  font-size: var(--fs-md);
+  border-radius: var(--r-sm);
+  padding: 5px 9px;
+  outline: none;
+  transition: border-color var(--sp), box-shadow var(--sp);
+}
+.search__input:focus {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line-strong));
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.search__input::placeholder {
+  color: var(--faint);
+}
+.search__results {
+  max-height: 168px;
+  overflow-y: auto;
+  margin-top: 4px;
+}
+.search__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 5px 6px;
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+  transition: background var(--sp);
+}
+.search__row:hover {
+  background: var(--fill);
+}
+.search__excerpt {
+  min-width: 0;
+  flex: 1;
+  font-size: var(--fs-md);
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.search__excerpt b {
+  color: var(--ink);
+  font-weight: 600;
+}
+.search__meta {
+  flex: none;
+  font-size: var(--fs-xs);
+  color: var(--faint);
+}
+.search__empty,
+.search__hintline {
+  margin-top: 5px;
+  font-size: var(--fs-xs);
+  color: var(--faint);
+  padding: 0 2px;
 }
 
 /* composer — a rounded input card: source chip on top, field, then a bar with the model pill

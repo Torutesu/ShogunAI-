@@ -209,6 +209,62 @@ const MOCK_STATE: StateView = {
   open_loops: [{ id: 1, text: "Waiting on legal sign-off", meta: "3d waiting" }],
 };
 
+/** One context-action button (B-1) — the `notch_actions` command's ActionView projection. */
+interface ActionView {
+  label: string;
+  /** "L1" | "L2" | "L3" — the permission level the UI gates on (invariant 4 surfaced). */
+  level: string;
+  rationale: string;
+}
+
+/** One memory-search row (B-6) — the `search_memory` command's SearchHitView projection. */
+interface SearchHitView {
+  event_id: number;
+  /** Unix ms — rendered as relative time. */
+  ts: number;
+  source: string;
+  /** App bundle id when the event came from a window capture; empty otherwise. */
+  app: string;
+  excerpt: string;
+}
+
+const MOCK_ACTIONS: ActionView[] = [
+  { label: "Search memory: Alice", level: "L1", rationale: "Overdue: send Alice the Q3 deck" },
+  { label: "Draft vendor reply", level: "L2", rationale: "Reply to the vendor about pricing" },
+];
+const MOCK_HITS: SearchHitView[] = [
+  { event_id: 1, ts: Date.now() - 40 * 60_000, source: "ax", app: "com.apple.mail", excerpt: "Alice asked for the Q3 deck by Friday — can you send the latest version?" },
+  { event_id: 2, ts: Date.now() - 26 * 3_600_000, source: "ax", app: "com.tinyspeck.slackmacgap", excerpt: "vendor pricing thread: waiting on the updated quote before we reply" },
+];
+
+/** Compact relative time for search rows ("now", "5m", "3h", "2d"). */
+function relTime(ts: number): string {
+  const mins = Math.floor((Date.now() - ts) / 60_000);
+  if (mins < 1) return "now";
+  if (mins < 60) return `${mins}m`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h`;
+  return `${Math.floor(hours / 24)}d`;
+}
+
+/** The excerpt with each query match emphasized. Case-insensitive; falls back to plain text when
+ *  lowercasing shifts offsets (rare locale-specific expansions), so a match is never mis-sliced. */
+function emphasize(text: string, query: string): JSX.Element {
+  const needle = query.trim().toLowerCase();
+  const lower = text.toLowerCase();
+  if (!needle || lower.length !== text.length) return <>{text}</>;
+  const parts: JSX.Element[] = [];
+  let from = 0;
+  let key = 0;
+  for (let at = lower.indexOf(needle); at >= 0; at = lower.indexOf(needle, from)) {
+    if (at > from) parts.push(<span key={key++}>{text.slice(from, at)}</span>);
+    parts.push(<b key={key++}>{text.slice(at, at + needle.length)}</b>);
+    from = at + needle.length;
+  }
+  parts.push(<span key={key++}>{text.slice(from)}</span>);
+  return <>{parts}</>;
+}
+
 function appName(bundle: string): string {
   if (!bundle) return t.yourScreen;
   const seg = bundle.split(".").pop() || bundle;
@@ -276,6 +332,11 @@ export function App(): JSX.Element {
   useEffect(() => saveJson("shogun.appearance", appearance), [appearance]);
   const [showState, setShowState] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  /// In-panel memory search (B-6): toggled by the header button or the `/` shortcut.
+  const [showSearch, setShowSearch] = useState(false);
+  /// Pending L3 sends — the badge on the settings gear. Polled with the rest of the state and
+  /// bumped optimistically when a context action queues one (the poll then corrects it).
+  const [approvalsCount, setApprovalsCount] = useState(0);
   /// The ⌥-tap's own feedback. The pill shows it briefly and then returns to the live source —
   /// this is a reply to a keystroke, not a status the user has to dismiss.
   const [inline, setInline] = useState<InlineStatus | null>(null);
@@ -568,6 +629,10 @@ export function App(): JSX.Element {
     if (!IN_TAURI) return;
     void invoke<Status>("shogun_status").then((s) => setStatus(s)).catch(() => undefined);
     void invoke<StateView>("shogun_state").then((s) => s && setState(s)).catch(() => undefined);
+    // Count only — the rows themselves are the ApprovalsSection's business (Settings).
+    void invoke<unknown[]>("list_approvals")
+      .then((r) => setApprovalsCount(Array.isArray(r) ? r.length : 0))
+      .catch(() => undefined);
   }, []);
 
   useEffect(() => {
@@ -590,6 +655,21 @@ export function App(): JSX.Element {
       unlisten?.();
     };
   }, []);
+
+  // `/` opens the memory search (B-6) — a reach-anywhere shortcut, but never while typing:
+  // a slash in the composer (or any field) is text, not a command.
+  useEffect(() => {
+    const onSlash = (e: KeyboardEvent): void => {
+      if (e.key !== "/" || e.metaKey || e.ctrlKey || e.altKey) return;
+      const el = e.target as HTMLElement | null;
+      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
+      if (!open || showSettings) return;
+      e.preventDefault();
+      setShowSearch(true);
+    };
+    window.addEventListener("keydown", onSlash);
+    return () => window.removeEventListener("keydown", onSlash);
+  }, [open, showSettings]);
 
   // Click a state row to resolve it (commitment → done, open loop → closed); refresh immediately.
   const resolveItem = (kind: "commitment" | "open_loop", id: number): void => {
@@ -942,6 +1022,18 @@ export function App(): JSX.Element {
                     ⏱
                   </button>
                 ) : null}
+                {/* Memory search (B-6). Also on `/` — the button is the discoverable face of the
+                    shortcut. */}
+                <button
+                  className="icon"
+                  type="button"
+                  title={t.searchOpen}
+                  aria-label={t.searchOpen}
+                  aria-pressed={showSearch}
+                  onClick={() => setShowSearch((v) => !v)}
+                >
+                  ⌕
+                </button>
                 {/* The panel is for a glance and a keystroke; anything you want to sit and read —
                     the brief, health, memory, the run log — lives in the Full UI window. */}
                 <button
@@ -957,6 +1049,13 @@ export function App(): JSX.Element {
                 </button>
                 <button className="icon" type="button" title={t.settings} aria-label={t.settings} onClick={openSettings}>
                   ⚙︎
+                  {/* B-1: pending L3 sends. The count is the only thing this touches — the queue
+                      itself is the ApprovalsSection's business (Settings). */}
+                  {approvalsCount > 0 ? (
+                    <span className="icon__badge" title={t.approvalsBadge(approvalsCount)} aria-label={t.approvalsBadge(approvalsCount)}>
+                      {approvalsCount}
+                    </span>
+                  ) : null}
                 </button>
                 <button className="icon" type="button" title={t.minimize} aria-label={t.minimize} onClick={collapse}>
                   ▁
@@ -997,6 +1096,8 @@ export function App(): JSX.Element {
               </div>
             ) : null}
 
+            {showSearch ? <SearchBox onClose={() => setShowSearch(false)} /> : null}
+
             <div className="thread" ref={threadRef}>
               {visibleMsgs.length === 0 ? (
                 <div className="welcome">
@@ -1031,6 +1132,8 @@ export function App(): JSX.Element {
                 </div>
               ) : null}
             </div>
+
+            <ActionsRow onQueued={() => setApprovalsCount((n) => n + 1)} />
 
             <div className="composer">
               <div className="composer__card">
@@ -1088,6 +1191,243 @@ export function App(): JSX.Element {
           onCommit={onResizeCommit}
         />
       </div>
+    </div>
+  );
+}
+
+/** Context-action buttons above the composer (Plan B-1 / E-10). Fetched once per expand — the
+ *  cache is pre-assembled Rust-side (never collect-on-press), so this is a read, not a build.
+ *  Dispositions: L1 ran (`executed`) → one-line note; L2 (`confirm:<id>`) → inline Confirm/Cancel
+ *  chip → `confirm_notch_action`; L3 send (`queued:<id>`) → queued-for-approval note + badge bump
+ *  via `onQueued`. Buttons are ordinary tab stops; the row never traps focus. */
+function ActionsRow({ onQueued }: { onQueued: () => void }): JSX.Element | null {
+  const [actions, setActions] = useState<ActionView[]>(IN_TAURI ? [] : MOCK_ACTIONS);
+  const [busy, setBusy] = useState<number | null>(null);
+  /// A pending L2 one-tap confirm: which button asked, and the engine's action id.
+  const [confirm, setConfirm] = useState<{ idx: number; id: number } | null>(null);
+  const [note, setNote] = useState<{ text: string; tone: "ok" | "warn" } | null>(null);
+  const noteTimer = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!IN_TAURI) return;
+    const t0 = performance.now();
+    let stale = false;
+    void invoke<ActionView[]>("notch_actions")
+      .then((a) => {
+        if (stale) return;
+        setActions(a.slice(0, 4));
+        // SLO-02: expand → buttons painted. Double-rAF so the row is actually on screen (same
+        // convention as the `painted` command); the sample lands via `record_ui_slo`.
+        requestAnimationFrame(() =>
+          requestAnimationFrame(() =>
+            void invoke("record_ui_slo", { name: "actions_present", ms: performance.now() - t0 }).catch(
+              () => undefined,
+            ),
+          ),
+        );
+      })
+      .catch(() => setActions([]));
+    return () => {
+      stale = true;
+    };
+  }, []);
+  useEffect(
+    () => () => {
+      if (noteTimer.current != null) window.clearTimeout(noteTimer.current);
+    },
+    [],
+  );
+
+  const flash = (text: string, tone: "ok" | "warn"): void => {
+    setNote({ text, tone });
+    if (noteTimer.current != null) window.clearTimeout(noteTimer.current);
+    noteTimer.current = window.setTimeout(() => {
+      noteTimer.current = null;
+      setNote(null);
+    }, 2600);
+  };
+
+  const run = (idx: number): void => {
+    if (busy != null) return;
+    const a = actions[idx];
+    if (!a) return;
+    if (!IN_TAURI) {
+      flash(`${t.actionDone} — ${a.label}`, "ok");
+      return;
+    }
+    setBusy(idx);
+    setConfirm(null);
+    void invoke<string>("run_notch_action", { index: idx })
+      .then((r) => {
+        if (r === "executed") flash(`${t.actionDone} — ${a.label}`, "ok");
+        else if (r.startsWith("confirm:")) setConfirm({ idx, id: Number(r.slice("confirm:".length)) });
+        else if (r.startsWith("queued:")) {
+          flash(t.actionQueued, "ok");
+          onQueued();
+        } else if (r === "rejected") flash(t.actionRejected, "warn");
+        else if (r === "no-action") flash(t.actionGone, "warn");
+        else flash(t.actionFailed, "warn");
+      })
+      .catch(() => flash(t.actionFailed, "warn"))
+      .finally(() => setBusy(null));
+  };
+
+  const doConfirm = (): void => {
+    const c = confirm;
+    if (!c) return;
+    setConfirm(null);
+    void invoke<string>("confirm_notch_action", { id: c.id })
+      .then((r) => {
+        if (r === "executed") flash(`${t.actionDone} — ${actions[c.idx]?.label ?? ""}`.trim(), "ok");
+        else if (r === "expired") flash(t.actionExpired, "warn");
+        else flash(t.actionFailed, "warn");
+      })
+      .catch(() => flash(t.actionFailed, "warn"));
+  };
+
+  // Fusion's never-empty guarantee means this shouldn't happen — but when it does, no strip is
+  // better than an empty one.
+  if (actions.length === 0 && !note && !confirm) return null;
+
+  return (
+    <div className="acts" role="toolbar" aria-label={t.actionsAria}>
+      {note ? (
+        <div className={`acts__note acts__note--${note.tone}`} role="status">
+          {note.text}
+        </div>
+      ) : null}
+      {confirm ? (
+        <div className="acts__confirm" role="group" aria-label={t.actionConfirmQ}>
+          <span className="acts__confirmq">
+            {t.actionConfirmQ} <b>{actions[confirm.idx]?.label}</b>
+          </span>
+          <button type="button" className="acts__go" onClick={doConfirm}>
+            {t.actionConfirm}
+          </button>
+          {/* Cancel is local: the engine's pending confirm simply expires server-side (8s), so
+              dismissing the chip is enough — nothing runs without the explicit tap. */}
+          <button type="button" className="acts__cancel" onClick={() => setConfirm(null)}>
+            {t.actionCancel}
+          </button>
+        </div>
+      ) : (
+        actions.map((a, i) => (
+          <button
+            key={i}
+            type="button"
+            className="acts__btn"
+            disabled={busy != null}
+            title={a.rationale}
+            onClick={() => run(i)}
+          >
+            <span className={`acts__lvl acts__lvl--${a.level.toLowerCase()}`}>{a.level}</span>
+            <span className="acts__label">{busy === i ? "…" : a.label}</span>
+          </button>
+        ))
+      )}
+    </div>
+  );
+}
+
+/** In-panel memory search (Plan B-6 / E-10b). Debounced hybrid search over the event log via
+ *  `search_memory`; Enter copies the top match, Esc clears then closes. Records SLO-04 per query
+ *  (committed → results drawn) through the same `record_ui_slo` path as the actions row. */
+function SearchBox({ onClose }: { onClose: () => void }): JSX.Element {
+  const [query, setQuery] = useState("");
+  const [hits, setHits] = useState<SearchHitView[]>([]);
+  const [copied, setCopied] = useState<number | null>(null);
+  const inputEl = useRef<HTMLInputElement>(null);
+  /// Monotonic query token: a slow early response must never overwrite a newer query's rows.
+  const seq = useRef(0);
+
+  useEffect(() => {
+    inputEl.current?.focus();
+  }, []);
+
+  useEffect(() => {
+    const q = query.trim();
+    if (!q) {
+      setHits([]);
+      return;
+    }
+    if (!IN_TAURI) {
+      setHits(MOCK_HITS);
+      return;
+    }
+    const id = window.setTimeout(() => {
+      const mine = ++seq.current;
+      const t0 = performance.now();
+      void invoke<SearchHitView[]>("search_memory", { query: q, limit: 8 })
+        .then((r) => {
+          if (mine !== seq.current) return;
+          setHits(r);
+          // SLO-04: query committed → results drawn (double-rAF, as everywhere).
+          requestAnimationFrame(() =>
+            requestAnimationFrame(() =>
+              void invoke("record_ui_slo", { name: "local_search", ms: performance.now() - t0 }).catch(
+                () => undefined,
+              ),
+            ),
+          );
+        })
+        .catch(() => setHits([]));
+    }, 150);
+    return () => window.clearTimeout(id);
+  }, [query]);
+
+  /// Picking a row copies its excerpt — the panel's cheapest useful act on a memory (the jump to
+  /// the evidence row lives in the Full UI).
+  const pick = (h: SearchHitView): void => {
+    void navigator.clipboard?.writeText(h.excerpt).catch(() => undefined);
+    setCopied(h.event_id);
+    window.setTimeout(() => setCopied(null), 1600);
+  };
+
+  return (
+    <div className="search">
+      <input
+        ref={inputEl}
+        className="search__input"
+        aria-label={t.searchAria}
+        placeholder={t.searchPlaceholder}
+        value={query}
+        onFocus={() => {
+          // Same as the composer: a nonactivating NSPanel won't take keystrokes until made key.
+          if (IN_TAURI) void invoke("focus_field", { focused: true }).catch(() => undefined);
+        }}
+        onChange={(e) => setQuery(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && hits.length > 0) {
+            e.preventDefault();
+            pick(hits[0]);
+          } else if (e.key === "Escape") {
+            // First Esc clears, second closes — and never reaches the global handler that hides
+            // the whole panel.
+            e.preventDefault();
+            e.stopPropagation();
+            if (query) setQuery("");
+            else onClose();
+          }
+        }}
+      />
+      {query.trim() ? (
+        hits.length === 0 ? (
+          <div className="search__empty">{t.searchEmpty}</div>
+        ) : (
+          <div className="search__results">
+            {hits.map((h) => (
+              <button key={h.event_id} type="button" className="search__row" onClick={() => pick(h)}>
+                <span className="search__excerpt">{emphasize(h.excerpt, query)}</span>
+                <span className="search__meta">
+                  {copied === h.event_id ? t.searchCopied : `${appName(h.app || h.source)} · ${relTime(h.ts)}`}
+                </span>
+              </button>
+            ))}
+          </div>
+        )
+      ) : (
+        <div className="search__hintline">{t.searchHint}</div>
+      )}
     </div>
   );
 }

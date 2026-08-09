@@ -18,6 +18,8 @@ pub mod mac {
     use shogun_agents::engine::{
         ActionId, Disposition, ExecutionEngine, ExecutionObserver, LocalEffector, Outcome, RejectReason,
     };
+    use shogun_agents::permission::SendAction;
+    use shogun_agents::producer::{propose, ProposedSend};
     use shogun_core::daemon::Db;
     use shogun_fusion::assemble::ScreenContext;
     use shogun_fusion::{Action, LocalAction};
@@ -115,15 +117,41 @@ pub mod mac {
         }
     }
 
+    /// Map a Fusion send candidate to an L3 approval proposal. The notch never drafts a body —
+    /// that is the Reply Drafter's job (B-5) — so the proposal carries the destination and an
+    /// empty body; the Approvals card shows exactly that (FR-AG-03: the full body, even when it
+    /// is empty, never a summary).
+    fn proposal_of(send: &SendAction) -> ProposedSend {
+        match send {
+            SendAction::SendEmail { to } => ProposedSend::Email {
+                to: to.clone(),
+                subject: String::new(),
+                body: String::new(),
+            },
+            SendAction::PostMessage { channel } => {
+                ProposedSend::SlackPost { channel: channel.clone(), body: String::new() }
+            }
+            SendAction::CreateCalendarEvent { title } => {
+                ProposedSend::CalendarEvent { title: title.clone(), body: String::new() }
+            }
+            SendAction::PostComment { target } => {
+                ProposedSend::IssueComment { target: target.clone(), body: String::new() }
+            }
+        }
+    }
+
     /// Tauri command: run the context action at `index` (as shown by `notch_actions`). Re-assembles
-    /// the candidates for the current screen, submits the Nth to the engine, and returns a status:
-    /// `"executed"` (L1 auto-ran), `"confirm:<id>"` (L2 — call `confirm_notch_action`), `"rejected"`,
-    /// or `"unavailable"` / `"no-action"`.
+    /// the candidates for the current screen. An L3 send is never submitted to the engine (which
+    /// must reject it — invariant 4): it is routed to the ONE shared approval queue (B-3), where
+    /// the human confirms explicitly, and this returns `"queued:<id>"`. Everything else goes to
+    /// the engine and returns a status: `"executed"` (L1 auto-ran), `"confirm:<id>"` (L2 — call
+    /// `confirm_notch_action`), `"rejected"`, or `"unavailable"` / `"no-action"`.
     #[tauri::command]
     pub fn run_notch_action(
         index: usize,
         db: tauri::State<'_, Db>,
         engine: tauri::State<'_, NotchEngine>,
+        approvals: tauri::State<'_, crate::approvals::mac::ApprovalQueueState>,
         analytics: tauri::State<'_, crate::analytics::Analytics>,
         app: tauri::AppHandle,
     ) -> String {
@@ -131,10 +159,26 @@ pub mod mac {
         let Some(cand) = cache.actions.get(index) else {
             return "no-action".to_string();
         };
+        let level = format!("{:?}", cand.level);
+        // L3 send → the shared approval queue (Plan B-1 step 2). Same origin tag as the other
+        // UI producers; the analytics event mirrors the engine path (level + outcome, no content).
+        if let Action::Send(send) = &cand.action {
+            let Ok(mut q) = approvals.0.lock() else {
+                return "unavailable".to_string();
+            };
+            let proposal = proposal_of(send);
+            let now = db.now_ms().max(0) as u64;
+            let id = propose(&mut q, &proposal, shogun_agents::approval::ApprovalOrigin::Ui, now).0;
+            let mut p = shogun_core::analytics::Props::new();
+            p.insert("query_type".into(), serde_json::Value::from("notch_action"));
+            p.insert("permission_level".into(), serde_json::Value::from(level));
+            p.insert("outcome".into(), serde_json::Value::from("queued"));
+            analytics.capture("shogun_query_executed", p);
+            return format!("queued:{id}");
+        }
         let Ok(mut eng) = engine.lock() else {
             return "unavailable".to_string();
         };
-        let level = format!("{:?}", cand.level);
         // Plan gate (issue #97): resolved core-side per click; the engine rejects when the plan
         // has no agent execution (Standard / expired trial).
         let ent = crate::entitlement::mac::current(&app);

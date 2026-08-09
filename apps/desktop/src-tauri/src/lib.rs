@@ -39,6 +39,7 @@ mod analytics;
 mod notch_actions;
 mod notch_exec;
 mod onboarding;
+mod search_ui;
 mod visual_recall;
 #[cfg(target_os = "macos")]
 mod voice_lane;
@@ -236,6 +237,8 @@ pub fn run() {
         notch_actions::mac::notch_actions,
         notch_exec::mac::run_notch_action,
         notch_exec::mac::confirm_notch_action,
+        search_ui::mac::search_memory,
+        metrics::record_ui_slo,
         inline_source::mac::inline_at_cursor,
         inline_source::mac::shogun_status,
         inline_source::mac::shogun_state,
