@@ -170,6 +170,8 @@ const MIN_H = 240;
 // max-width:100% ↔ set_panel_size feedback loop that shrunk Idle to ~130px (narrower than
 // hardware notch_w≈179). Content may grow above this up to `.handle` max-width.
 const W_HANDLE_FALLBACK = 260;
+/** Quiet hiding Idle — hardware-notch-sized weld when frontmost is self / unknown. */
+const W_HIDE = 180;
 
 interface Size {
   w: number;
@@ -215,6 +217,23 @@ function appName(bundle: string): string {
   if (!bundle) return t.yourScreen;
   const seg = bundle.split(".").pop() || bundle;
   return seg.charAt(0).toUpperCase() + seg.slice(1);
+}
+
+/** Own process / product labels — never show as Idle "reading …" (hiding chin instead). */
+const OWN_FOCUS_IDS = new Set([
+  "dev.shogun.spike",
+  "shogunai",
+  "shogun",
+  "shogun-desktop-spike",
+  "spike",
+]);
+
+function isSelfFocus(id: string): boolean {
+  if (!id.trim()) return true; // unknown / cleared → quiet welded Idle
+  const lower = id.trim().toLowerCase();
+  if (OWN_FOCUS_IDS.has(lower)) return true;
+  const seg = lower.split(".").pop() || lower;
+  return OWN_FOCUS_IDS.has(seg);
 }
 
 /// How a resize should hold the panel in place.
@@ -780,7 +799,9 @@ export function App(): JSX.Element {
   })();
 
   const totalState = state.commitments.length + state.open_loops.length;
-  const live = appName(ctxApp || status?.app || "");
+  const focusId = ctxApp || status?.app || "";
+  const selfFocus = isSelfFocus(focusId);
+  const live = selfFocus ? "" : appName(focusId);
   const providerLabel = PROVIDERS.find((p) => p.id === provider)?.label ?? t.model;
 
   // Collapsed: shrink the window to the pill's real bounds. The panel is transparent, so every
@@ -797,14 +818,19 @@ export function App(): JSX.Element {
     if (r.width < 1 || r.height < 1) return;
     // +1 guards against a fractional layout width being truncated into a clipped pill.
     // Width floors at W_HANDLE_FALLBACK — never re-shrink below the good-era Idle chin.
+    // Hiding Idle floors at notch-sized weld (W_HIDE × H_DEAD) instead.
     // Height floors at H_HANDLE so a short content pill never leaves air under the notch.
+    const hiding = el.classList.contains("handle--hiding");
+    const minW = hiding ? W_HIDE : W_HANDLE_FALLBACK;
+    const minH = hiding ? H_DEAD : H_HANDLE;
     void applyPanelSize(
-      Math.max(W_HANDLE_FALLBACK, Math.ceil(r.width) + 1),
-      Math.max(H_HANDLE, Math.ceil(r.height)),
+      Math.max(minW, Math.ceil(r.width) + 1),
+      Math.max(minH, Math.ceil(r.height)),
     );
   }, [
     open,
     live,
+    selfFocus,
     state.commitments.length,
     state.open_loops.length,
     meeting?.state,
@@ -847,35 +873,38 @@ export function App(): JSX.Element {
     </div>
   ) : (
     <button
-      className="handle"
+      className={`handle${selfFocus && !inlineLine ? " handle--hiding" : ""}`}
       ref={handleRef}
       type="button"
       onClick={() => expand()}
       title={t.openPanel}
+      aria-label={t.openPanel}
     >
       <span className="handle__dead" aria-hidden />
-      <span className="handle__row">
-        {inlineLine ? (
-          <span className={`handle__live inline--${inlineLine.tone}`}>
-            <span className={`inline__dot inline__dot--${inlineLine.tone}`} />
-            {inlineLine.text}
-          </span>
-        ) : (
-          <span className="handle__live">
-            <span className="live__dot" />
-            {t.reading} <b>{live}</b>
-          </span>
-        )}
-        {state.commitments.length > 0 ? (
-          <span className="handle__count">
-            {state.commitments.length} {t.due}
-          </span>
-        ) : state.open_loops.length > 0 ? (
-          <span className="handle__count">
-            {state.open_loops.length} {t.waiting}
-          </span>
-        ) : null}
-      </span>
+      {selfFocus && !inlineLine ? null : (
+        <span className="handle__row">
+          {inlineLine ? (
+            <span className={`handle__live inline--${inlineLine.tone}`}>
+              <span className={`inline__dot inline__dot--${inlineLine.tone}`} />
+              {inlineLine.text}
+            </span>
+          ) : (
+            <span className="handle__live">
+              <span className="live__dot" />
+              {t.reading} <b>{live}</b>
+            </span>
+          )}
+          {state.commitments.length > 0 ? (
+            <span className="handle__count">
+              {state.commitments.length} {t.due}
+            </span>
+          ) : state.open_loops.length > 0 ? (
+            <span className="handle__count">
+              {state.open_loops.length} {t.waiting}
+            </span>
+          ) : null}
+        </span>
+      )}
     </button>
   );
 
@@ -927,12 +956,12 @@ export function App(): JSX.Element {
                     <span className={`inline__dot inline__dot--${inlineLine.tone}`} />
                     {inlineLine.text}
                   </span>
-                ) : (
+                ) : live ? (
                   <span className="srcchip" title={`${t.reading} ${live}`}>
                     <span className="live__dot" />
                     {t.reading} <b>{live}</b>
                   </span>
-                )}
+                ) : null}
                 {totalState > 0 ? (
                   <button className="chip" type="button" onClick={() => setShowState((v) => !v)} aria-pressed={showState}>
                     {state.commitments.length} {t.due} · {state.open_loops.length} {t.waiting}

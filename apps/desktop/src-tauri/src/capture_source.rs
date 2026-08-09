@@ -104,6 +104,10 @@ mod mac {
     /// frontmost app / focused window.
     pub fn capture_once(db: &Db, policy: &ExclusionPolicy, dwell_ms: i64) -> Option<CaptureOutcome> {
         let front = frontmost_app()?;
+        // Never capture / ingest our own process as focus — memory would store "reading itself".
+        if crate::display::is_own_app(&front.bundle_id, &front.name) {
+            return None;
+        }
         let root = focused_window(front.pid)?;
         let title = root.title();
         let focus = Focus { bundle_id: &front.bundle_id, window_title: title.as_deref() };

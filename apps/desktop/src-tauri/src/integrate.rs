@@ -662,17 +662,39 @@ pub mod mac {
         // text read into memory and pushed across to the webview. The text is unused there today,
         // which is the only reason this was invisible; the moment anything consumes it, an excluded
         // app is in a prompt.
+        // Own process is the same: never publish "reading ShogunAI" / walk our own AX tree.
         let title = crate::axcache::focused_window(pid).and_then(|w| w.title());
-        if crate::exclusions::mac::is_excluded(bundle_id, title.as_deref()) {
+        let own = crate::display::is_own_app(bundle_id, name);
+        let excluded = crate::exclusions::mac::is_excluded(bundle_id, title.as_deref());
+        if own || excluded {
             // Drop whatever the previous app left behind, so the panel never shows stale context
-            // while the user is looking at something SHOGUN is not allowed to read.
+            // while the user is looking at something SHOGUN is not allowed to read (or itself).
+            let had = shared.last_context.lock().ok().is_some_and(|g| g.is_some());
+            if had {
+                let why = if own {
+                    "own app (hiding Idle)"
+                } else {
+                    "excluded from reading"
+                };
+                eprintln!("[spike] cache cleared — {bundle_id} is {why}");
+            }
             if let Ok(mut g) = shared.last_context.lock() {
-                if g.is_some() {
-                    eprintln!("[spike] cache cleared — {bundle_id} is excluded from reading");
-                }
                 *g = None;
             }
             *last_digest = None;
+            // Tell the webview so Idle does not keep a stale "reading …" label.
+            if had {
+                let _ = app.emit(
+                    "context",
+                    ContextPayload {
+                        bundle_id: String::new(),
+                        title_masked: String::new(),
+                        text: String::new(),
+                        captured_at_ms: now_epoch_ms(),
+                        partial: false,
+                    },
+                );
+            }
             return None;
         }
 

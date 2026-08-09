@@ -457,10 +457,9 @@ use shogun_core::meeting::gate::OfferGate;
 
     /// Bundle ids for this build. The overlay often reports an empty bundle id; both mean
     /// "SHOGUN is frontmost" and must not start the Meet-tab leave grace (FR-MT-11).
-    const SHOGUN_BUNDLE_IDS: &[&str] = &["dev.shogun.spike"];
-
     fn is_shogun_frontmost(bundle_id: &str) -> bool {
-        bundle_id.is_empty() || SHOGUN_BUNDLE_IDS.contains(&bundle_id)
+        // Empty bundle = NSPanel quirk (always us). Otherwise match owned identifiers.
+        bundle_id.is_empty() || crate::display::is_own_app(bundle_id, "")
     }
 
     /// Update grace timer when a Meet-URL session's browser is frontmost and no longer on Meet,

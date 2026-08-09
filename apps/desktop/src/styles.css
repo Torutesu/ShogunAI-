@@ -251,6 +251,22 @@ body {
 .handle:hover {
   background: #000;
 }
+/* Quiet welded Idle — hardware-notch-sized black only; no "reading …" chrome.
+   Hover under notch still expands via Rust R_enter (panel size independent). */
+.handle--hiding {
+  min-width: 180px;
+  max-width: 200px;
+  width: 180px;
+  height: var(--notch-dead-h);
+  min-height: var(--notch-dead-h);
+  max-height: var(--notch-dead-h);
+  padding: 0;
+  cursor: default;
+}
+.handle--hiding .handle__dead {
+  height: 100%;
+  min-height: 100%;
+}
 .handle__live {
   display: inline-flex;
   align-items: center;

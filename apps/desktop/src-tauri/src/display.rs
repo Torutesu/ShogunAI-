@@ -10,7 +10,7 @@
 #![allow(dead_code, unused_imports)]
 
 #[cfg(target_os = "macos")]
-pub use mac::{frontmost_app, frontmost_pid, is_app_running, FrontApp};
+pub use mac::{frontmost_app, frontmost_pid, is_app_running, is_own_app, FrontApp};
 
 #[cfg(target_os = "macos")]
 mod mac {
@@ -22,6 +22,28 @@ mod mac {
         pub pid: i32,
         pub bundle_id: String,
         pub name: String,
+    }
+
+    /// This build's bundle ids (Tauri `identifier` / entitlements).
+    const OWN_BUNDLES: &[&str] = &["dev.shogun.spike"];
+    /// Localized / product / cargo package names that mean "us", not a user focus target.
+    const OWN_NAMES: &[&str] = &["ShogunAI", "SHOGUN", "shogun-desktop-spike"];
+
+    /// True when frontmost is SHOGUN itself (or the empty-bundle NSPanel quirk). Must not drive
+    /// Idle "reading …" or the context-cache walk — the panel would report reading itself.
+    pub fn is_own_app(bundle_id: &str, name: &str) -> bool {
+        if OWN_BUNDLES.iter().any(|b| bundle_id.eq_ignore_ascii_case(b)) {
+            return true;
+        }
+        if OWN_NAMES.iter().any(|n| {
+            name.eq_ignore_ascii_case(n) || bundle_id.eq_ignore_ascii_case(n)
+        }) {
+            return true;
+        }
+        // Overlay / nonactivating panel often reports an empty bundle id while we are frontmost
+        // (see meeting lane). Empty + empty/Shogun name ⇒ self, not an unknown third-party app.
+        bundle_id.is_empty()
+            && (name.is_empty() || OWN_NAMES.iter().any(|n| name.eq_ignore_ascii_case(n)))
     }
 
     /// PID of the frontmost application, if any. This is the focus signal that drives the

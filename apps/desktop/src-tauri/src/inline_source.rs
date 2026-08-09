@@ -679,7 +679,11 @@ pub mod mac {
 
     #[tauri::command]
     pub fn shogun_status(db: tauri::State<'_, Db>) -> Status {
-        let app = crate::display::frontmost_app().map(|f| f.bundle_id).unwrap_or_default();
+        // Never report our own process as the "reading" target — Idle would say reading ShogunAI.
+        let app = crate::display::frontmost_app()
+            .filter(|f| !crate::display::is_own_app(&f.bundle_id, &f.name))
+            .map(|f| f.bundle_id)
+            .unwrap_or_default();
         Status {
             app,
             commitments: db.commitments_due(db.now_ms()).len(),
