@@ -2,7 +2,7 @@
 
 **Status**: Draft v1（2026-08-08）
 **用途**: LP・X・セールスデッキ・FAQ・採用ページで使う「他カテゴリとの比較・差別化」文言のソース・オブ・トゥルース。外向けコピーはここから引く。
-**前提**: SHOGUNブランドルール（shogun-brand skill / NFR-UI-02）準拠。**LP・製品UIでは競合固有名を出さない**。本書は内部資料なので名指しで書く。
+**前提**: ShogunAIブランドルール（shogun-brand skill / NFR-UI-02）準拠。**LP・製品UIでは競合固有名を出さない**。本書は内部資料なので名指しで書く。
 
 ---
 
@@ -10,17 +10,17 @@
 
 いまのAIツール市場は「瞬間」ごとに分断されている。会議の60分は会議ノートアプリが、口述の30秒はディクテーションアプリが、質問の1往復はチャットボットが、人間関係のレコードはCRMが持っている。それぞれは自分のサイロで起きたことしか知らず、アウトプット——文字起こし、ノート、回答、レコード——を出したところで止まる。**続きをやるのは常に人間だ。**
 
-SHOGUNはこの分断の反対側に立つ。OSレイヤーで一日全体を受動的に観測し、単一のワールドモデル（people / projects / commitments / open_loops）を維持し、その記憶から**実行まで**行く。
+ShogunAIはこの分断の反対側に立つ。OSレイヤーで一日全体を受動的に観測し、単一のワールドモデル（people / projects / commitments / open_loops）を維持し、その記憶から**実行まで**行く。
 
-重要なのは、これが「機能のバンドル」ではないことだ。ディクテーションも会議ノートもCRM的な人物記憶もチャットも、SHOGUNの中では**同じ一つの記憶を読み書きする入出力チャネル**にすぎない。声で指示した内容を会議の文脈が補い、会議で交わした約束が人物レコードを更新し、翌朝のブリーフに現れる。単能アプリを10個並べても、この接続は絶対に起きない。
+重要なのは、これが「機能のバンドル」ではないことだ。ディクテーションも会議ノートもCRM的な人物記憶もチャットも、ShogunAIの中では**同じ一つの記憶を読み書きする入出力チャネル**にすぎない。声で指示した内容を会議の文脈が補い、会議で交わした約束が人物レコードを更新し、翌朝のブリーフに現れる。単能アプリを10個並べても、この接続は絶対に起きない。
 
-2007年、iPhoneは「電話・カメラ・ブラウザ・音楽」をひとつのデバイスに統合した。統合の価値はアプリの合算ではなく、同じ画面・同じ連絡先・同じ写真ロールを共有したことにあった。2026年、SHOGUNは「記憶・実行・データ主権」をひとつのOSに統合する。共有されるのは、あなたの仕事のワールドモデルだ。
+2007年、iPhoneは「電話・カメラ・ブラウザ・音楽」をひとつのデバイスに統合した。統合の価値はアプリの合算ではなく、同じ画面・同じ連絡先・同じ写真ロールを共有したことにあった。2026年、ShogunAIは「記憶・実行・データ主権」をひとつのOSに統合する。共有されるのは、あなたの仕事のワールドモデルだ。
 
 これを一語で言えば**パーソナルAGI**——あなたの仕事の全域で汎用に、状態を推定し、実行するエージェントである（語り方の規律は§6）。
 
 ---
 
-## 1.4 SHOGUNの5層構造（社内・投資家向けの構造説明の背骨）
+## 1.4 ShogunAIの5層構造（社内・投資家向けの構造説明の背骨）
 
 構造を説明するときは、この5層で語る。単一アプリはこのうち1層の、さらに一部しか持っていない。
 
@@ -36,9 +36,9 @@ SHOGUNはこの分断の反対側に立つ。OSレイヤーで一日全体を受
 
 ## 1.45 人間の認知との同型性（この5層は発明ではない）
 
-人間も同じ構造でコンテキストを認識し、記憶を作っている。SHOGUNのワールドモデルは人間が頭の中に持つ仕事のモデルと同型であり、だからMorning Briefは読めばすぐ分かる（引き継ぎコストがない）。最適にシステムへ落とすと、各段は「減衰せず・並列で・24時間」動くものに変わる。
+人間も同じ構造でコンテキストを認識し、記憶を作っている。ShogunAIのワールドモデルは人間が頭の中に持つ仕事のモデルと同型であり、だからMorning Briefは読めばすぐ分かる（引き継ぎコストがない）。最適にシステムへ落とすと、各段は「減衰せず・並列で・24時間」動くものに変わる。
 
-| 人間の認知 | SHOGUNの層 | 最適にシステム化すると変わること |
+| 人間の認知 | ShogunAIの層 | 最適にシステム化すると変わること |
 |---|---|---|
 | 知覚と選択的注意（重要なものだけ拾う） | L1 取得 | 人間の注意は同時に一箇所だけ。システムは画面・受信箱・会議を並列に拾い、取りこぼさない |
 | スキーマ化（出来事をログではなく「人・関係・状況のモデル」として記憶） | L2 ハーネス | 人間の記憶は書き換わり根拠を思い出せない。システムはprovenance+confidenceが残り、減衰しない |
@@ -48,15 +48,15 @@ SHOGUNはこの分断の反対側に立つ。OSレイヤーで一日全体を受
 
 **人間から引き継ぐ設計原則**（システムが人間を超える話とセットで、何を意図的に残すかを言う）:
 
-1. **選択的注意** — 人間は網膜の全ピクセルを保存しない。SHOGUNも録画せず意味のあるテキストだけ拾う。キャプチャ設計＝監視ではなく注意の設計
+1. **選択的注意** — 人間は網膜の全ピクセルを保存しない。ShogunAIも録画せず意味のあるテキストだけ拾う。キャプチャ設計＝監視ではなく注意の設計
 2. **忘却は機能** — Hot 24h / Warm 30日 / Cold 圧縮、OCRの72h自動削除は「忘却の実装」。全部残す（録画系）のは人間的でも最適でもない
 3. **確度つきの想起** — 低confidenceを事実として混ぜず「〜の可能性」として弱く渡す。誠実な記憶だけが実行の土台になれる
 
 **投資家向け言い回し**:
 
-> **EN**: We didn't invent this architecture. Perceive, model, act, consolidate in sleep, learn — it's how human cognition already works. SHOGUN makes each stage lossless, parallel, and always-on.
+> **EN**: We didn't invent this architecture. Perceive, model, act, consolidate in sleep, learn — it's how human cognition already works. ShogunAI makes each stage lossless, parallel, and always-on.
 
-> **JA**: この5層は発明ではありません。知覚し、モデル化し、実行し、眠りの中で整理し、学習する——人間の認知そのものです。SHOGUNはその各段を、減衰せず・並列で・24時間動く形に置き換えた。
+> **JA**: この5層は発明ではありません。知覚し、モデル化し、実行し、眠りの中で整理し、学習する——人間の認知そのものです。ShogunAIはその各段を、減衰せず・並列で・24時間動く形に置き換えた。
 
 ---
 
@@ -66,7 +66,7 @@ SHOGUNはこの分断の反対側に立つ。OSレイヤーで一日全体を受
 
 単一アプリの取得手段は一つしかない。音声入力はマイクだけ、会議ノートは会議音声だけ、CRMは手入力だけ、チャットボットはあなたのペーストだけ。取得手段が一つなら、見える世界もその手段の形に切り取られる。
 
-SHOGUNは取得手段そのものをスタックとして持ち、**対象ごとに最適な手段を選んで**文脈を組み立てる:
+ShogunAIは取得手段そのものをスタックとして持ち、**対象ごとに最適な手段を選んで**文脈を組み立てる:
 
 | 手段 | 取れるもの | 使いどころ |
 |---|---|---|
@@ -78,9 +78,9 @@ SHOGUNは取得手段そのものをスタックとして持ち、**対象ごと
 
 外向けの言い方（デッキ・技術説明用。UIでは技術名を出さない点に注意——LP/UI向けは「画面・会議・外部サービスから受動的に」へ丸める）:
 
-> **EN**: Point tools have one way in — a mic, a form, a paste box. SHOGUN has a full acquisition stack — structured data over MCP, on-screen text via the system accessibility layer, and opt-in visual recall — and picks the best one for each piece of context. Better input, better world model, better execution.
+> **EN**: Point tools have one way in — a mic, a form, a paste box. ShogunAI has a full acquisition stack — structured data over MCP, on-screen text via the system accessibility layer, and opt-in visual recall — and picks the best one for each piece of context. Better input, better world model, better execution.
 
-> **JA**: 単一アプリの入口は一つです。マイクだけ、フォームだけ、ペースト欄だけ。SHOGUNは取得の手段を複数持ち、対象ごとに最適な形で文脈を取ります。入口の質が、記憶の質と実行の質を決める。
+> **JA**: 単一アプリの入口は一つです。マイクだけ、フォームだけ、ペースト欄だけ。ShogunAIは取得の手段を複数持ち、対象ごとに最適な形で文脈を取ります。入口の質が、記憶の質と実行の質を決める。
 
 **規律**: この訴求をするときは必ずプライバシーの規律をセットで言う（ローカル保存／画像・音声は保存しない／Visual recallはopt-in・72時間・暗号化）。取得能力の自慢は、規律の提示がないと監視ツールに聞こえる。
 
@@ -98,13 +98,13 @@ SHOGUNは取得手段そのものをスタックとして持ち、**対象ごと
 
 英語での言い回し（デッキ・X用）:
 
-> Every point tool hits the same three walls: it only sees its own moment, it stops at output, and its memory connects to nothing. SHOGUN is built on the other side of all three.
+> Every point tool hits the same three walls: it only sees its own moment, it stops at output, and its memory connects to nothing. ShogunAI is built on the other side of all three.
 
 ---
 
 ## 3. カテゴリ別メッセージング
 
-各カテゴリ: 「彼らの世界観 → 構造的限界 → SHOGUNの答え → そのまま使えるコピー」。コピーはEN/JAとも翻訳ではなく同じ主張の各言語ネイティブ表現。
+各カテゴリ: 「彼らの世界観 → 構造的限界 → ShogunAIの答え → そのまま使えるコピー」。コピーはEN/JAとも翻訳ではなく同じ主張の各言語ネイティブ表現。
 
 ### 3.1 ディクテーション／ボイス系（Wispr Flow, superwhisper, Aqua Voice）
 
@@ -112,13 +112,13 @@ SHOGUNは取得手段そのものをスタックとして持ち、**対象ごと
 
 **構造的限界**: 変換して終わり（壁2）。あなたが「ミカに例の件、金曜でいいって送っといて」と言っても、ディクテーションは*その文字列*を返すだけだ。ミカが誰で、例の件が何で、どのスレッドに送るべきかを知らない（壁1）。声の速さは、文脈を補い実行するエンジンがあって初めて仕事の速さになる。
 
-**SHOGUNの答え**: 声はSHOGUNの入力チャネルの一つ（push-to-talk）。同じ発話が、記憶と接続しているから指示として成立する。「例の件」をopen_loopsから解決し、ドラフトを作り、L3承認を待つところまでが一動作。
+**ShogunAIの答え**: 声はShogunAIの入力チャネルの一つ（push-to-talk）。同じ発話が、記憶と接続しているから指示として成立する。「例の件」をopen_loopsから解決し、ドラフトを作り、L3承認を待つところまでが一動作。
 
 **コピー（EN）**:
-> Dictation turns your voice into text. SHOGUN turns it into finished work — because it already knows who Mika is and what "that thing" means.
+> Dictation turns your voice into text. ShogunAI turns it into finished work — because it already knows who Mika is and what "that thing" means.
 
 **コピー（JA）**:
-> 音声入力は、声を文字にして終わります。SHOGUNは同じ一言から、相手と用件を思い出し、下書きまで済ませる。声が速いのではなく、仕事が速い。
+> 音声入力は、声を文字にして終わります。ShogunAIは同じ一言から、相手と用件を思い出し、下書きまで済ませる。声が速いのではなく、仕事が速い。
 
 ### 3.2 会議ノート／MTG系（Granola, Otter, tl;dv, Fireflies）
 
@@ -126,13 +126,13 @@ SHOGUNは取得手段そのものをスタックとして持ち、**対象ごと
 
 **構造的限界**: 会議の枠内しか見ない（壁1）。その相手と先週交わした約束も、会議直前まで開いていた資料も知らないから、要約は「その場で言われたことの圧縮」を超えない。そしてノートを出して終わる（壁2）。フォローアップのメール、約束のトラッキングは人間の宿題として残る。
 
-**SHOGUNの答え**: 会議は一日の一部として扱う。会議前後の画面文脈と過去の関係史を持った状態でrecapを作り、交わしたコミットメントはcommitments / open_loopsに入って追跡され、フォローアップのドラフトまで進む。会議が終わった瞬間に「議事録」ではなく「次の一手」がある。
+**ShogunAIの答え**: 会議は一日の一部として扱う。会議前後の画面文脈と過去の関係史を持った状態でrecapを作り、交わしたコミットメントはcommitments / open_loopsに入って追跡され、フォローアップのドラフトまで進む。会議が終わった瞬間に「議事録」ではなく「次の一手」がある。
 
 **コピー（EN）**:
-> Meeting recorders remember the hour. SHOGUN remembers the relationship — what was promised last week, what you owe them, and it drafts the follow-up before you close the window.
+> Meeting recorders remember the hour. ShogunAI remembers the relationship — what was promised last week, what you owe them, and it drafts the follow-up before you close the window.
 
 **コピー（JA）**:
-> 会議ツールが覚えているのは、その60分だけです。SHOGUNは相手との経緯ごと覚えていて、会議が終わる頃にはフォローアップの下書きができている。議事録は成果物ではなく、途中経過です。
+> 会議ツールが覚えているのは、その60分だけです。ShogunAIは相手との経緯ごと覚えていて、会議が終わる頃にはフォローアップの下書きができている。議事録は成果物ではなく、途中経過です。
 
 ### 3.3 CRM／人間関係管理（Salesforce, Attio, Dex, Clay）
 
@@ -140,13 +140,13 @@ SHOGUNは取得手段そのものをスタックとして持ち、**対象ごと
 
 **構造的限界**: CRMは**あなたが餌をやるデータベース**だ。入力しなければ空のまま、入力するならそれ自体が仕事になる（壁1の変種: コンテキストを人力で運ばされる）。そして溜まったレコードは検索と閲覧のためにあり、レコード自身は動かない（壁2）。
 
-**SHOGUNの答え**: peopleテーブルは受動的に育つ。画面・会議・メールから人物と案件の状態が推定され、すべてのレコードに根拠（provenance）と確度（confidence）が付く。手入力ゼロで、しかも「なぜそう思うか」を提示できる。さらにそのレコードは読むためのものではなく、実行の材料になる。
+**ShogunAIの答え**: peopleテーブルは受動的に育つ。画面・会議・メールから人物と案件の状態が推定され、すべてのレコードに根拠（provenance）と確度（confidence）が付く。手入力ゼロで、しかも「なぜそう思うか」を提示できる。さらにそのレコードは読むためのものではなく、実行の材料になる。
 
 **コピー（EN）**:
-> A CRM is a database you feed. SHOGUN feeds itself — every person, every open loop, inferred from your actual day, with receipts.
+> A CRM is a database you feed. ShogunAI feeds itself — every person, every open loop, inferred from your actual day, with receipts.
 
 **コピー（JA）**:
-> CRMは、入力した分しか賢くならない台帳です。SHOGUNの人物メモリは一日の仕事から勝手に育ち、根拠付きで「いま誰に何を借りているか」に答えます。入力という仕事は発生しません。
+> CRMは、入力した分しか賢くならない台帳です。ShogunAIの人物メモリは一日の仕事から勝手に育ち、根拠付きで「いま誰に何を借りているか」に答えます。入力という仕事は発生しません。
 
 ### 3.4 チャットボット／汎用アシスタント（ChatGPT, Claude, Gemini アプリ）
 
@@ -154,13 +154,13 @@ SHOGUNは取得手段そのものをスタックとして持ち、**対象ごと
 
 **構造的限界**: 毎回の会話がほぼゼロからだ（壁3）。前提を説明し、資料をペーストし、背景を要約する——**プロンプトを書く仕事**が発生する。そして得られるのは回答であり、実行は限定的（壁2）。知能の供給は解決済みで、ボトルネックは文脈の供給に移っている。
 
-**SHOGUNの答え**: 聞く前から文脈がある。ノッチを開いた瞬間、いま画面で起きていることとワールドモデルを掛け合わせたアクションが提示されている。説明する時間はゼロで、回答ではなく完了に向かう。BYOK／サブスク委譲により、頭脳はあなたが選び、記憶と手足はSHOGUNが持つ。
+**ShogunAIの答え**: 聞く前から文脈がある。ノッチを開いた瞬間、いま画面で起きていることとワールドモデルを掛け合わせたアクションが提示されている。説明する時間はゼロで、回答ではなく完了に向かう。BYOK／サブスク委譲により、頭脳はあなたが選び、記憶と手足はShogunAIが持つ。
 
 **コピー（EN）**:
-> Chatbots wait for you to explain. SHOGUN already knows — it watched the day happen. You skip the prompt and go straight to done.
+> Chatbots wait for you to explain. ShogunAI already knows — it watched the day happen. You skip the prompt and go straight to done.
 
 **コピー（JA）**:
-> チャットボットには、まず事情を説明しなければなりません。SHOGUNは一日を見ているので、説明が要らない。プロンプトを書く時間が、そのまま消えます。
+> チャットボットには、まず事情を説明しなければなりません。ShogunAIは一日を見ているので、説明が要らない。プロンプトを書く時間が、そのまま消えます。
 
 ### 3.5 ライフログ／リコール系（Littlebird, Limitless, Rewind, Screenpipe）
 
@@ -168,13 +168,13 @@ SHOGUNは取得手段そのものをスタックとして持ち、**対象ごと
 
 **構造的限界**: 記憶が目的地になっている（壁2）。検索して「見つかる」ことがゴールで、見つけたあとの仕事は残る。多くはスクショ・録画ベースで、保存量とプライバシー面積も大きい。
 
-**SHOGUNの答え**: 記憶は手段。イベントログから状態（いま何が動いていて、誰に何を借りているか）を推定し、そこから実行する。キャプチャはAccessibility API経由のテキストで、画像・音声は保存しない。*Littlebird remembers. SHOGUN acts.*（内部用）
+**ShogunAIの答え**: 記憶は手段。イベントログから状態（いま何が動いていて、誰に何を借りているか）を推定し、そこから実行する。キャプチャはAccessibility API経由のテキストで、画像・音声は保存しない。*Littlebird remembers. ShogunAI acts.*（内部用）
 
 **コピー（EN）**:
-> Lifeloggers end at "found it." SHOGUN starts there — memory is the fuel, execution is the product.
+> Lifeloggers end at "found it." ShogunAI starts there — memory is the fuel, execution is the product.
 
 **コピー（JA）**:
-> 記録ツールのゴールは「見つかった」です。SHOGUNはそこから始まります。記憶は燃料で、成果は実行です。
+> 記録ツールのゴールは「見つかった」です。ShogunAIはそこから始まります。記憶は燃料で、成果は実行です。
 
 ---
 
@@ -188,13 +188,13 @@ LP・デッキでは固有名を出さず、カテゴリ名で見せる。行の
 | 会議ノートアプリ | その会議のみ | 会議単位 | しない（ノートを返す） |
 | CRM | 手入力・メール連携 | 入力した分 | しない（台帳のまま） |
 | チャットボット | あなたがペーストした分 | 会話単位 | 限定的（回答を返す） |
-| **SHOGUN** | **一日全体・受動的** | **単一のワールドモデル** | **承認付きで完了まで** |
+| **ShogunAI** | **一日全体・受動的** | **単一のワールドモデル** | **承認付きで完了まで** |
 
-英語版ヘッダ: *Context it sees / Memory it keeps / What it does about it* ／ SHOGUN行: *Your whole day, passively / One world model / Executes, with your approval*
+英語版ヘッダ: *Context it sees / Memory it keeps / What it does about it* ／ ShogunAI行: *Your whole day, passively / One world model / Executes, with your approval*
 
 表の下に置く一文:
 
-> **EN**: The point isn't that SHOGUN bundles these tools. It's that they finally share one memory — and one pair of hands.
+> **EN**: The point isn't that ShogunAI bundles these tools. It's that they finally share one memory — and one pair of hands.
 > **JA**: 大事なのは機能を束ねたことではありません。すべてが一つの記憶を共有し、一つの実行につながっていることです。
 
 ---
@@ -205,7 +205,7 @@ LP・デッキでは固有名を出さず、カテゴリ名で見せる。行の
 
 ### 能力マトリクス（コンテキスト〜アプリケーションレイヤー）
 
-| 能力 | 録画系<br>(Coast · Screenpipe · Littlebird) | コネクタ・ログ系<br>(Unabyss · Nessie) | ブラウザ系<br>(Dia · Dex · Aside) | 垂直GTM<br>(Monaco · Octolane) | SHOGUN |
+| 能力 | 録画系<br>(Coast · Screenpipe · Littlebird) | コネクタ・ログ系<br>(Unabyss · Nessie) | ブラウザ系<br>(Dia · Dex · Aside) | 垂直GTM<br>(Monaco · Octolane) | ShogunAI |
 |---|---|---|---|---|---|
 | OSレベルの作業実態キャプチャ | ○ ただし録画で重く、プライバシー抵抗大 | ✕ 保存済みデータ・AI会話ログのみ | △ ブラウザ内限定 | ✕ 自ドメインの通信のみ | ◎ AXテキスト。軽く、録らない |
 | 構造化ワールドモデル（状態＋根拠＋確度） | △ ログの索引まで | △ 同期・構造化はするが状態を持たない | △ ワークスペース学習止まり | ○ ただしGTM限定の垂直脳 | ◎ state tables×4＋provenance＋confidence |
@@ -219,7 +219,7 @@ LP・デッキでは固有名を出さず、カテゴリ名で見せる。行の
 1. **取得の非対称** — 録画系は負荷・プライバシー・ガバナンスで構造的に不利。コネクタ系は「保存された結果」しか見えない。OSレベルのテキストキャプチャは両者の上位集合で、逆は成り立たない
 2. **実行前提の記憶は後付けできない** — 検索のためのログと実行のための状態モデルはスキーマから別物。provenance/confidenceは最初から入れないと成立しない。記憶系が実行を足すには記憶を作り直す必要がある
 3. **記憶×実行の複利ループ** — 実行→修正が集まる→記憶が賢くなる→実行精度が上がる。片方しか持たないプレイヤーはループを回せない。スイッチングコストは使用時間に比例して積み上がる
-4. **檻の構造** — Dexはブラウザの外に出られない（設計の檻）、垂直GTMはドメインの外を見ない（事業モデルの檻）、Coastは実行を持たない（時間の檻）。SHOGUNの制約はmacOSのみで拡張方向が塞がれていない
+4. **檻の構造** — Dexはブラウザの外に出られない（設計の檻）、垂直GTMはドメインの外を見ない（事業モデルの檻）、Coastは実行を持たない（時間の檻）。ShogunAIの制約はmacOSのみで拡張方向が塞がれていない
 5. **アプリレイヤーは敵ではなく将来の顧客** — 垂直アプリが育つほど土台の価値が増す。KIOKUのMCP提供（コンテキストプロバイダー戦略）で「上に乗る側」を取り込む
 6. **信頼の筋肉** — 実行系で最も怖いのは「勝手に送る」こと。L1/L2/L3・draft-stop・egressトレーサビリティは実行の日常運用でしか磨かれない。実行を持たない競合はゼロから
 
@@ -245,7 +245,7 @@ LP・デッキでは固有名を出さず、カテゴリ名で見せる。行の
 
 ### Q2「それはただのRAGでは？」
 
-その通り、検索は簡単でコモディティ。難しいのはその手前の**編集**——何をホットメモリに残し、何を事実へ昇格させ、何を忘れるか。RAGは文書の検索、SHOGUNは状態の推定（provenance＋confidence）。低確度を事実として混ぜない誠実さと、忘却の設計（Hot/Warm/Cold・72h削除）が製品の本体。**検索する価値があるものを作ること、それが製品。**
+その通り、検索は簡単でコモディティ。難しいのはその手前の**編集**——何をホットメモリに残し、何を事実へ昇格させ、何を忘れるか。RAGは文書の検索、ShogunAIは状態の推定（provenance＋confidence）。低確度を事実として混ぜない誠実さと、忘却の設計（Hot/Warm/Cold・72h削除）が製品の本体。**検索する価値があるものを作ること、それが製品。**
 
 > **EN**: Retrieval is easy. Being worth retrieving is the product — deciding what stays hot, what gets promoted to fact, and what gets forgotten.
 
@@ -255,7 +255,7 @@ LP・デッキでは固有名を出さず、カテゴリ名で見せる。行の
 
 この問いこそ、ローカルファーストが「機能」ではなく「前提」である理由。**記憶が完全であるほど、それは他人のサーバーには置けない。**データの重心はデバイス上・ユーザーのプライバシー下、画像・音声は保存しない、秘密はKeychain、外へ出るものにはトレーサビリティ。クラウド集約型のコンテキストレイヤーはこの問いに構造的に答えられない——集約するなら、主権とセットでなければならない。
 
-> **EN**: The more complete the memory, the less it can live on someone else's server. Aggregation demands sovereignty — that's why SHOGUN is local-first by architecture, not by feature flag.
+> **EN**: The more complete the memory, the less it can live on someone else's server. Aggregation demands sovereignty — that's why ShogunAI is local-first by architecture, not by feature flag.
 
 > **JA**: 記憶が完全であるほど、他人のサーバーには置けません。すべてを集めるなら、あなたの主権の下で。ローカルファーストは機能ではなく、前提です。
 
@@ -289,11 +289,11 @@ LP・デッキでは固有名を出さず、カテゴリ名で見せる。行の
 
 ### 言い回し（EN）
 
-> AGI won't arrive as a chatbot with better answers. For you, it arrives as an agent that knows the full state of your work — every person, every promise, every open loop — and acts on it. That's what SHOGUN is: personal AGI, scoped to your work, running on your Mac.
+> AGI won't arrive as a chatbot with better answers. For you, it arrives as an agent that knows the full state of your work — every person, every promise, every open loop — and acts on it. That's what ShogunAI is: personal AGI, scoped to your work, running on your Mac.
 
 ### 言い回し（JA）
 
-> AGIは「もっと賢い回答」としては来ません。あなたにとってのAGIは、仕事の全状態——人、約束、やりかけ——を把握して動くエージェントとして来ます。SHOGUNはそれを、あなたのMacの上で作る。パーソナルAGIです。
+> AGIは「もっと賢い回答」としては来ません。あなたにとってのAGIは、仕事の全状態——人、約束、やりかけ——を把握して動くエージェントとして来ます。ShogunAIはそれを、あなたのMacの上で作る。パーソナルAGIです。
 
 ### 禁じ手
 
