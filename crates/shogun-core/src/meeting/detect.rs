@@ -561,6 +561,28 @@ pub fn huddle_hint_lost_past_grace(lost_since_ms: Option<i64>, now: i64) -> bool
     lost_since_ms.is_some_and(|since| now.saturating_sub(since) >= HUDDLE_HINT_LOST_GRACE_MS)
 }
 
+/// Whether a huddle session should still count as present (Plan A-4). Mirrors
+/// [`meet_url_session_present`]: past the hint-loss grace an open microphone still means the call
+/// is running (the user alt-tabbed away, and Slack's huddle UI is only visible while Slack is
+/// frontmost); once the mic closes, wait [`MIC_QUIET_AFTER_URL_LEFT_MS`] so a hang-up flicker does
+/// not end the session mid-word. The silence limit in [`end_condition`] still applies
+/// independently, so the huddle ends on whichever fires first.
+pub fn huddle_session_present(
+    lost_since_ms: Option<i64>,
+    now: i64,
+    mic_open: bool,
+    mic_closed_since_ms: Option<i64>,
+) -> bool {
+    if !huddle_hint_lost_past_grace(lost_since_ms, now) {
+        return true;
+    }
+    if mic_open {
+        return true;
+    }
+    mic_closed_since_ms
+        .map_or(true, |since| now.saturating_sub(since) < MIC_QUIET_AFTER_URL_LEFT_MS)
+}
+
 /// Whether a browser Meet session should still count as present (FR-MT-11).
 ///
 /// Past the URL-leave grace the frontmost tab no longer looks like a meeting, but an open
@@ -1183,6 +1205,38 @@ mod tests {
     #[test]
     fn huddle_hint_never_lost_has_no_grace_deadline() {
         assert!(!huddle_hint_lost_past_grace(None, 9_999_999));
+    }
+
+    #[test]
+    fn huddle_past_grace_stays_present_while_mic_open() {
+        // Alt-tabbing away from Slack hides the huddle UI, but the open mic proves the call is
+        // still running — exactly the Meet-tab rule.
+        let lost = 1_000_000;
+        let after = lost + HUDDLE_HINT_LOST_GRACE_MS;
+        assert!(huddle_session_present(Some(lost), after, true, None));
+    }
+
+    #[test]
+    fn huddle_past_grace_ends_after_mic_quiet() {
+        let lost = 1_000_000;
+        let after_grace = lost + HUDDLE_HINT_LOST_GRACE_MS;
+        let closed = after_grace;
+        assert!(huddle_session_present(Some(lost), closed, false, Some(closed)));
+        let quiet = closed + MIC_QUIET_AFTER_URL_LEFT_MS;
+        assert!(!huddle_session_present(Some(lost), quiet, false, Some(closed)));
+    }
+
+    #[test]
+    fn huddle_within_grace_is_present_regardless_of_mic() {
+        // A redraw or a glance at another channel must not wrap the huddle mid-sentence.
+        let lost = 1_000_000;
+        let within = lost + HUDDLE_HINT_LOST_GRACE_MS - 1;
+        assert!(huddle_session_present(Some(lost), within, false, Some(lost)));
+    }
+
+    #[test]
+    fn huddle_hint_never_lost_is_always_present() {
+        assert!(huddle_session_present(None, 9_999_999, false, Some(0)));
     }
 
 

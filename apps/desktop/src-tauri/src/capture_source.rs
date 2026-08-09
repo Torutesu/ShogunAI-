@@ -20,7 +20,7 @@
 #![allow(dead_code, unused_imports)]
 
 #[cfg(target_os = "macos")]
-pub use mac::{capture_once, spawn_capture_poller};
+pub use mac::{capture_once, latest_slack_ax_snippets, spawn_capture_poller};
 
 /// Default poll interval for the capture source (FR-CAP; ≥2 s per the AXObserver-reliability
 /// fallback). Dwell accumulates across polls of the same window body.
@@ -98,6 +98,70 @@ mod mac {
         format!("{bundle_id}\0{}", title.unwrap_or(""))
     }
 
+    // ── Slack AX snippets for huddle detection (Plan A-4) ──────────────────────────────────
+    //
+    // Slack huddles run inside the ordinary Slack window under the ordinary bundle id, so the
+    // meeting detector's `huddle_hint` needs a look at the window's AX text — and the capture
+    // poller already walks that tree every tick. Rather than paying a second AX walk from the
+    // meeting driver, `capture_once` parks a bounded copy of its most recent Slack output here
+    // and the driver reads it. The text is user content: it is never logged, it is capped in
+    // both count and length, and it goes stale rather than lingering (a buffer that outlived
+    // the capture would keep a huddle "present" forever after Slack was excluded from capture).
+
+    /// At most this many snippets are kept — the huddle vocabulary (Mute / Leave / 画面共有) sits
+    /// in the window chrome the walk reaches early, so a handful of lines is enough.
+    const SLACK_SNIPPET_MAX: usize = 20;
+    /// Each snippet is truncated to this many characters. Control labels are short; message
+    /// bodies are not, and the hint must not hold more of them than matching needs.
+    const SLACK_SNIPPET_MAX_CHARS: usize = 120;
+    /// Snippets older than this are treated as absent. The poller refreshes every ~2 s, so this
+    /// tolerates a slow walk without letting a dead buffer impersonate a live huddle.
+    const SLACK_SNIPPET_FRESH_MS: u64 = 10_000;
+
+    /// `(captured_at, snippets)` of the most recent Slack capture, or `None`.
+    static SLACK_AX_SNIPPETS: std::sync::Mutex<Option<(Instant, Vec<String>)>> =
+        std::sync::Mutex::new(None);
+
+    /// Record (or clear) the Slack snippet buffer from one capture outcome.
+    fn note_slack_capture(bundle_id: &str, outcome: &CaptureOutcome) {
+        if bundle_id != shogun_core::meeting::detect::SLACK_BUNDLE_ID {
+            return;
+        }
+        let next = match outcome {
+            CaptureOutcome::Captured { text, .. } => {
+                let snippets: Vec<String> = text
+                    .lines()
+                    .map(str::trim)
+                    .filter(|l| !l.is_empty())
+                    .take(SLACK_SNIPPET_MAX)
+                    .map(|l| l.chars().take(SLACK_SNIPPET_MAX_CHARS).collect())
+                    .collect();
+                Some((Instant::now(), snippets))
+            }
+            // Excluded or empty: hold nothing. An excluded Slack must leave no copy of its text
+            // behind, and an empty walk is evidence the huddle UI is gone.
+            CaptureOutcome::Excluded(_) | CaptureOutcome::Empty => None,
+        };
+        if let Ok(mut g) = SLACK_AX_SNIPPETS.lock() {
+            *g = next;
+        }
+    }
+
+    /// The most recent Slack AX snippets, bounded and fresh — the meeting driver feeds these to
+    /// `huddle_hint` instead of walking the AX tree a second time. Empty when Slack was not
+    /// captured recently (not frontmost, excluded, untrusted, or the buffer went stale).
+    pub fn latest_slack_ax_snippets() -> Vec<String> {
+        let Ok(g) = SLACK_AX_SNIPPETS.lock() else { return Vec::new() };
+        match g.as_ref() {
+            Some((at, snippets))
+                if at.elapsed().as_millis() as u64 <= SLACK_SNIPPET_FRESH_MS =>
+            {
+                snippets.clone()
+            }
+            _ => Vec::new(),
+        }
+    }
+
     /// Capture the current focus into memory once. Reads the frontmost app, builds the focused
     /// window's `AxNode`, runs the exclusion→walk composition (250 ms budget), and — on a real
     /// capture — persists it via `Db::ingest_capture` (collapse + extract). `dwell_ms` is credited
@@ -137,6 +201,9 @@ mod mac {
                 }
             }
         }
+        // Slack only: park a bounded copy of the walk output for huddle detection (Plan A-4),
+        // so the meeting driver never issues an AX walk of its own.
+        note_slack_capture(&front.bundle_id, &outcome);
         Some(outcome)
     }
 
