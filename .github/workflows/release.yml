@@ -1,0 +1,153 @@
+name: release
+
+# Signed + notarized macOS distribution build (Developer ID, App Store 不使用 — CLAUDE.md「課金/配布」).
+# Produces a .dmg that Gatekeeper accepts when downloaded from the web (LP direct-download lane).
+#
+# Trigger:
+#   - push a tag `v*` (e.g. v0.1.0) → build, sign, notarize, attach the DMG to a draft GitHub Release
+#   - workflow_dispatch → same build, artifacts uploaded to the run (no Release created)
+#
+# Required repository secrets (setup runbook: docs/release-signing-and-distribution.md):
+#   APPLE_CERTIFICATE             base64-encoded Developer ID Application .p12
+#   APPLE_CERTIFICATE_PASSWORD    password of that .p12
+#   APPLE_SIGNING_IDENTITY        e.g. "Developer ID Application: Taro Yamada (TEAMID1234)"
+#   APPLE_TEAM_ID                 10-char team ID
+# and ONE of the two notarization credential sets:
+#   APPLE_ID + APPLE_PASSWORD                       Apple ID + app-specific password (simplest)
+#   APPLE_API_ISSUER + APPLE_API_KEY + APPLE_API_KEY_CONTENT   App Store Connect API key (issuer id,
+#                                                   key id, base64 .p8 content)
+#
+# The Tauri v2 bundler consumes these env vars natively: it imports the cert into a throwaway
+# keychain, codesigns with hardened runtime + entitlements.plist, submits to notarytool, and
+# staples the ticket. No signing material ever touches the repo.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write # create the draft release on tag builds
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos-arm64:
+    name: macOS arm64 (sign + notarize + dmg)
+    # macos-14 is Apple Silicon — matches the app's only supported target (arm64, macOS 14+).
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      # Fail fast with a readable message instead of a mid-build codesign/notarytool error.
+      - name: preflight signing secrets
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
+        run: |
+          missing=()
+          [ -n "$APPLE_CERTIFICATE" ] || missing+=(APPLE_CERTIFICATE)
+          [ -n "$APPLE_SIGNING_IDENTITY" ] || missing+=(APPLE_SIGNING_IDENTITY)
+          [ -n "$APPLE_TEAM_ID" ] || missing+=(APPLE_TEAM_ID)
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::Missing signing secrets: ${missing[*]} — see docs/release-signing-and-distribution.md"
+            exit 1
+          fi
+          if { [ -z "$APPLE_ID" ] || [ -z "$APPLE_PASSWORD" ]; } && \
+             { [ -z "$APPLE_API_ISSUER" ] || [ -z "$APPLE_API_KEY" ] || [ -z "$APPLE_API_KEY_CONTENT" ]; }; then
+            echo "::error::No notarization credentials: set APPLE_ID+APPLE_PASSWORD or APPLE_API_ISSUER+APPLE_API_KEY+APPLE_API_KEY_CONTENT"
+            exit 1
+          fi
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Generated (gitignored) token CSS the desktop entry may import — same as ci.yml jobs.
+      - run: pnpm --filter @shogun-ai/tokens build
+
+      # On tag builds the tag is the version of record (v0.1.0 → 0.1.0); tauri.conf.json stays at
+      # 0.0.0 in-repo. workflow_dispatch keeps the in-repo version for throwaway test builds.
+      - name: resolve version from tag
+        id: version
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "config={\"version\":\"${GITHUB_REF_NAME#v}\"}" >> "$GITHUB_OUTPUT"
+          else
+            echo "config={}" >> "$GITHUB_OUTPUT"
+          fi
+
+      # App Store Connect API key lane: notarytool wants the .p8 on disk; Tauri reads its path
+      # from APPLE_API_KEY_PATH. Written to RUNNER_TEMP, which the runner wipes after the job.
+      - name: materialize App Store Connect API key
+        env:
+          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY_CONTENT }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        run: |
+          if [ -z "$APPLE_API_KEY_CONTENT" ]; then
+            echo "No App Store Connect API key configured — using Apple ID lane for notarization."
+            exit 0
+          fi
+          KEY_PATH="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY}.p8"
+          echo "$APPLE_API_KEY_CONTENT" | base64 --decode > "$KEY_PATH"
+          echo "APPLE_API_KEY_PATH=$KEY_PATH" >> "$GITHUB_ENV"
+
+      - name: build, sign, notarize
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        run: pnpm --filter @shogun-ai/desktop tauri build --config '${{ steps.version.outputs.config }}'
+
+      # Prove what we're about to publish: valid Developer ID signature, Gatekeeper acceptance,
+      # stapled notarization ticket. A red X here beats a "damaged app" dialog on a user's Mac.
+      - name: verify signature + notarization
+        run: |
+          APP=$(ls -d target/release/bundle/macos/*.app)
+          DMG=$(ls target/release/bundle/dmg/*.dmg)
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          spctl --assess --type exec --verbose=2 "$APP"
+          xcrun stapler validate "$DMG"
+
+      # Versioned DMG name contains the product name's space ("SHOGUN Spike_0.1.0_aarch64.dmg")
+      # and changes every release; the LP wants one stable URL. Ship a fixed-name copy alongside
+      # so the LP can hard-link `releases/latest/download/SHOGUN-macOS-arm64.dmg` forever.
+      - name: stable-name copy for the LP download link
+        run: |
+          DMG=$(ls target/release/bundle/dmg/*.dmg)
+          cp "$DMG" target/release/bundle/dmg/SHOGUN-macOS-arm64.dmg
+
+      - name: upload artifacts (workflow run)
+        uses: actions/upload-artifact@v4
+        with:
+          name: shogun-macos-arm64
+          path: |
+            target/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+
+      # Draft so a human decides when the download URL goes live on the LP.
+      - name: draft GitHub release (tag builds)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: target/release/bundle/dmg/*.dmg
+          generate_release_notes: true

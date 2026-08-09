@@ -22,9 +22,11 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["app"],
+    "targets": ["app", "dmg"],
+    "icon": ["icons/icon.icns"],
     "macOS": {
-      "entitlements": "entitlements.plist"
+      "entitlements": "entitlements.plist",
+      "minimumSystemVersion": "14.0"
     }
   }
 }
