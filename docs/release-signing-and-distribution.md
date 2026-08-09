@@ -74,13 +74,16 @@ git push origin v0.1.0
 
 → `release` ワークフローが走り、以下を自動実行:
 
-1. arm64 でフルビルド（`tauri build`、バージョンはタグから注入）
-2. Developer ID 署名（hardened runtime + `entitlements.plist`）
-3. notarytool へ提出 → チケットを DMG に staple
-4. `codesign --verify` / `spctl --assess` / `stapler validate` で検証（ここが赤ければ配布物は壊れている）
-5. **Draft** の GitHub Release に DMG を2つ添付:
-   - `SHOGUN Spike_0.1.0_aarch64.dmg`（バージョン付き）
+1. ジョブ専用キーチェーンに証明書を取り込み、署名アイデンティティが解決することを先に検証
+2. arm64 でフルビルド（`tauri build`、バージョンはタグから注入）＋ Developer ID 署名（hardened runtime + `entitlements.plist`）
+3. `.app` を notarytool へ提出（`--wait --timeout 30m`）→ staple
+4. staple 済み `.app` から `hdiutil` で DMG を作成 → DMG も署名・公証・staple
+5. `codesign --verify` / `spctl --assess` / `stapler validate` を `.app` と DMG の両方で検証（ここが赤ければ配布物は壊れている）
+6. **Draft** の GitHub Release に DMG を2つ添付:
+   - `SHOGUN-macOS-arm64-0.1.0.dmg`（バージョン付き）
    - `SHOGUN-macOS-arm64.dmg`（LP 用固定名）
+
+**なぜ Tauri の DMG 生成を使わないか**: Tauri の `dmg` ターゲットは create-dmg 由来の `bundle_dmg.sh` を呼び、AppleScript で Finder にウィンドウ配置をさせる。ヘッドレスのランナーではここが無限にブロックしうる（本ワークフローの初回実行が実際に1時間以上停止した）。`hdiutil` なら window server を介さず同じ成果物が作れるため、DMG 生成は自前ステップにしている。あわせて **`.app` と DMG の両方**を公証・staple している（DMG だけを staple すると、アプリを Applications にドラッグした後の初回起動でオンライン確認が必要になる）。
 
 最後に人間が Release ページで **Publish release** を押した時点で公開される（LP のリンクが新版を指すのはこの瞬間）。
 
