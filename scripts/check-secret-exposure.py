@@ -19,6 +19,7 @@ import sys
 ALLOWLIST = {
     "crates/shogun-core/src/llm/anthropic.rs",     # builds the x-api-key header (the traced egress)
     "crates/shogun-core/src/llm/openai_compat.rs",  # builds the Authorization: Bearer header (OpenAI/OpenRouter egress)
+    "crates/shogun-core/src/llm/relay.rs",          # builds Authorization: Bearer <license token> for the batch relay (traced egress; decision: docs/batch-relay-design.md §4.1)
     "crates/shogun-core/src/llm/mod.rs",           # defines expose() + its unit tests
     # Future: the Keychain store module, when added, goes here with a decision record.
 }
@@ -72,6 +73,68 @@ def scan_credential_lift(files):
     return hits
 
 
+# --- Batch-relay guard (E-38 / docs/batch-relay-design.md §7): the direct-Anthropic Batch path
+# must not ship ------------------------------------------------------------------------------
+#
+# The shipping Batch lane goes license-token → relay; only a developer's debug build may hit
+# Anthropic directly with a raw key. shogun-core enforces half of this in the type system
+# (`BatchRoute::DirectAnthropic` exists only under `cfg(debug_assertions)`), but the desktop
+# crate could still construct `AnthropicBatchClient` unconditionally — one `::new(` looks like
+# any other — so the other half is enforced here: in `apps/desktop`, every reference to the
+# direct client (or the debug-only route variant) must sit inside a `#[cfg(debug_assertions)]`-
+# gated item. A hit outside such a region is the §2.1 rejected design headed for a release
+# binary.
+DIRECT_BATCH_RE = re.compile(r"AnthropicBatchClient|BatchRoute::DirectAnthropic")
+
+# Only the desktop crate is held to this: shogun-core legitimately defines/tests the direct
+# client, and CI's release guarantee there is the missing enum variant, not this scan.
+DIRECT_BATCH_PREFIX = "apps/desktop/"
+
+CFG_DEBUG_RE = re.compile(r"#\[cfg\(debug_assertions\)\]")
+
+
+def _debug_gated_lines(text):
+    """Return the set of 1-based line numbers covered by a #[cfg(debug_assertions)]-gated item.
+
+    Brace-counting heuristic, deliberately simple (this is a guard, not a parser): the attribute
+    covers every line up to and including the close of the first brace block that opens after it
+    (a gated fn/mod/const body or match arm), or up to the first `;` for a braceless item.
+    """
+    gated = set()
+    pending = False   # saw the attribute, waiting for the item's block to open
+    depth = 0         # current brace depth
+    close_at = None   # brace depth at which the gated block ends (None = not inside one)
+    for i, line in enumerate(text.splitlines(), 1):
+        if CFG_DEBUG_RE.search(line):
+            pending = True
+        if pending or close_at is not None:
+            gated.add(i)
+        opens, closes = line.count("{"), line.count("}")
+        if pending:
+            if opens > 0:
+                close_at = depth  # the gated block closes when depth returns here
+                pending = False
+            elif ";" in line:
+                pending = False   # braceless gated item (const/use) ends at the semicolon
+        depth += opens - closes
+        if close_at is not None and depth <= close_at:
+            close_at = None
+    return gated
+
+
+def scan_direct_batch(files):
+    """Yield (path, lineno, line) for direct-Batch references outside a debug-gated region."""
+    hits = []
+    for path, text in files:
+        if not path.startswith(DIRECT_BATCH_PREFIX):
+            continue
+        gated = _debug_gated_lines(text)
+        for i, line in enumerate(text.splitlines(), 1):
+            if DIRECT_BATCH_RE.search(line) and i not in gated:
+                hits.append((path, i, line.strip()))
+    return hits
+
+
 def self_test():
     clean = [
         ("crates/shogun-core/src/llm/anthropic.rs", "key.expose()"),  # allowlisted
@@ -98,7 +161,48 @@ def self_test():
     ]
     assert scan_credential_lift(lift_clean) == [], "the documented non-goal and ordinary reads must pass"
     assert len(scan_credential_lift(lift_dirty)) == 2, "must catch a reach into another app's credentials"
-    print("self-test OK: detector allows the allowlist and catches a stray expose() / credential lift.")
+
+    gated_dream = (
+        "apps/desktop/src-tauri/src/dream.rs",
+        "\n".join([
+            "fn run_via_batch() {",
+            "    let outcome = match batch_route(env) {",
+            "        BatchRoute::Relay => {",
+            "            let client = RelayBatchClient::new(t, sink, credential, cfg);",
+            "            run(client)",
+            "        }",
+            "        #[cfg(debug_assertions)]",
+            "        BatchRoute::DirectAnthropic => {",
+            "            let client = shogun_core::llm::anthropic::AnthropicBatchClient::new(t, sink, credential, cfg);",
+            "            run(client)",
+            "        }",
+            "    };",
+            "}",
+        ]),
+    )
+    ungated_dream = (
+        "apps/desktop/src-tauri/src/dream.rs",
+        "\n".join([
+            "fn run_via_batch() {",
+            "    // the rejected §2.1 design: a raw operator key in a shipping code path",
+            "    let client = AnthropicBatchClient::new(t, sink, credential, cfg);",
+            "}",
+        ]),
+    )
+    core_definition = (
+        # shogun-core defines and tests the direct client; its release guarantee is the missing
+        # enum variant, so this scan must not fire outside apps/desktop.
+        "crates/shogun-core/src/llm/anthropic.rs",
+        "pub struct AnthropicBatchClient<T, S> { transport: T, sink: S }",
+    )
+    assert scan_direct_batch([gated_dream, core_definition]) == [], "debug-gated / core code must pass"
+    found = scan_direct_batch([ungated_dream])
+    assert len(found) == 1 and found[0][1] == 3, "must catch an ungated direct-Batch construction"
+
+    print(
+        "self-test OK: detector allows the allowlist and catches a stray expose() / credential "
+        "lift / ungated direct-Batch path."
+    )
 
 
 def repo_rust_files():
@@ -125,6 +229,18 @@ def main():
             "\nSubscription delegation works by launching a CLI the user already signed into — never by "
             "reading the token it stored. Delegate instead; if a site is genuinely unrelated, add it to "
             "CREDENTIAL_LIFT_ALLOWLIST here with a decision record."
+        )
+        return 1
+
+    direct = scan_direct_batch(files)
+    if direct:
+        print("batch-relay violation (E-38): the direct-Anthropic Batch path escapes its cfg(debug_assertions) gate.")
+        for path, line, text in direct:
+            print(f"  - {path}:{line}: {text}")
+        print(
+            "\nA shipping binary must reach the Batch API only through the relay (license token; "
+            "docs/batch-relay-design.md). Construct the direct client only inside a "
+            "#[cfg(debug_assertions)]-gated item, behind shogun_core::llm::batch_route."
         )
         return 1
 

@@ -13,8 +13,15 @@ use twox_hash::XxHash64;
 /// The route a chunk left by. Matches the `route` CHECK set in `traceability_log`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Route {
-    /// Batch API, Select KK key (indexing / classification / Dream Cycle / Morning Brief).
+    /// Batch API, Select KK key (indexing / classification / Dream Cycle / Morning Brief) —
+    /// direct to Anthropic. Development builds only, once the relay ships.
     BatchApi,
+    /// Batch lane via the Select-operated relay (docs/batch-relay-design.md §3.3) — the shipping
+    /// Standard/Pro path. Distinct from [`Route::BatchApi`] because the disclosure differs: the
+    /// chunk crosses the operator's server, and the traceability screen must say so ("via
+    /// operator server"), the way Composio sends say "via third party". Not `third_party` — the
+    /// relay is the operator's own infrastructure, and it stores no chunk content (NFR-PRV-04).
+    BatchRelay,
     /// Messages API, user BYOK key (agent inference / chat / drafts).
     MessagesApi,
     /// A remote MCP integration.
@@ -37,6 +44,7 @@ impl Route {
     pub fn as_db_str(self) -> &'static str {
         match self {
             Route::BatchApi => "batch_api",
+            Route::BatchRelay => "batch_relay",
             Route::MessagesApi => "messages_api",
             Route::Mcp => "mcp",
             Route::Composio => "composio",
@@ -130,6 +138,7 @@ mod tests {
     #[test]
     fn route_db_strings_match_schema() {
         assert_eq!(Route::BatchApi.as_db_str(), "batch_api");
+        assert_eq!(Route::BatchRelay.as_db_str(), "batch_relay");
         assert_eq!(Route::MessagesApi.as_db_str(), "messages_api");
         assert_eq!(Route::Mcp.as_db_str(), "mcp");
         assert_eq!(Route::Composio.as_db_str(), "composio");
