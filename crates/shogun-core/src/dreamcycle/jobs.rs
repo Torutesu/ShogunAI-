@@ -342,17 +342,18 @@ pub fn build_batch_items(events: &[shogun_memory::event_log::EventText]) -> Vec<
 /// build the prompts, run the batch to completion (submit → poll → results), and parse the model's
 /// JSON into per-event candidates at [`BATCH_CONFIDENCE`]. Async — the on-device scheduler awaits
 /// this *before* the sync cycle and feeds the result to a [`PrecomputedClassifier`], so the sync
-/// `DreamJobRunner` never has to bridge async. Generic over the transport, so it is Linux-testable
-/// with a mock (no network). `sleep` is the injected inter-poll delay (FR-DC-05).
-pub async fn classify_via_batch<T, S, F, Fut>(
-    client: &crate::llm::anthropic::AnthropicBatchClient<T, S>,
+/// `DreamJobRunner` never has to bridge async. Generic over the
+/// [`BatchLane`](crate::llm::anthropic::BatchLane) — the direct Anthropic client (dev) and the
+/// relay client (shipping) both fit — so it is Linux-testable with a mock transport (no network).
+/// `sleep` is the injected inter-poll delay (FR-DC-05).
+pub async fn classify_via_batch<B, F, Fut>(
+    client: &B,
     events: &[shogun_memory::event_log::EventText],
     max_polls: u32,
     sleep: F,
 ) -> Result<Vec<(i64, Vec<Candidate>)>, crate::llm::LlmError>
 where
-    T: crate::llm::transport::HttpTransport,
-    S: crate::llm::traceability::TraceabilitySink,
+    B: crate::llm::anthropic::BatchLane,
     F: FnMut() -> Fut,
     Fut: std::future::Future<Output = ()>,
 {
@@ -360,7 +361,8 @@ where
         return Ok(Vec::new());
     }
     let items = build_batch_items(events);
-    let results = client.run(&items, max_polls, sleep).await?;
+    let results =
+        crate::llm::anthropic::run_batch_to_completion(client, &items, max_polls, sleep).await?;
     Ok(parse_batch_classification(&results))
 }
 

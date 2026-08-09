@@ -45,22 +45,22 @@ pub mod mac {
     const BATCH_POLL_INTERVAL: Duration = Duration::from_secs(60);
     const BATCH_MAX_POLLS: u32 = 120;
 
-    /// The Batch lane's classification model. Small and fast on purpose: consolidation is a
-    /// per-event labelling job over a whole night of events, and Select KK pays for every one.
-    ///
-    /// Interim. Once the batch relay lands the device stops naming a model at all and sends an
-    /// intent instead — a client that can pick the model is a client that can pick an expensive one
-    /// (docs/batch-relay-design.md §4.4).
-    const BATCH_MODEL: &str = "claude-haiku-4-5-20251001";
+    /// The direct lane's classification model — **debug builds only**. On the shipping (relay)
+    /// path the device does not name a model at all; it sends a `model_class` intent and the
+    /// relay chooses — a client that can pick the model is a client that can pick an expensive
+    /// one (docs/batch-relay-design.md §4.4).
+    #[cfg(debug_assertions)]
+    const DEV_DIRECT_BATCH_MODEL: &str = "claude-haiku-4-5-20251001";
 
     // Keychain coordinates of the Batch lane's credential (invariant 7 — never a file, a DB or a
     // log). No UI writes here: it is not the user's key.
     //
-    // **Interim, development only.** Today this slot holds a raw Anthropic key and the lane calls
-    // Anthropic directly, which is fine on a developer's own machine and must never ship — a
-    // shipped binary carrying the operator's key can be extracted, and spend caps become
-    // unenforceable. The shipping design puts a licence token here and a Select-operated relay in
-    // front of the Batch API: docs/batch-relay-design.md.
+    // On the shipping (relay) route this slot holds the **license token** (FR-BIL-08) and the
+    // only Anthropic key lives server-side at the relay (docs/batch-relay-design.md §4.1). Only
+    // a debug build with `SHOGUN_DEV_DIRECT_ANTHROPIC=1` treats the slot as a raw Anthropic key
+    // and calls Anthropic directly (E-38) — a release binary cannot even construct that route
+    // (`shogun_core::llm::batch_route`), because a shipped binary carrying the operator's key
+    // can be extracted, and spend caps become unenforceable.
 
     /// Guards a manual run against the nightly one. Both would write the same ledger rows, and while
     /// that is idempotent it would double the Batch spend.
@@ -281,9 +281,12 @@ pub mod mac {
         }
     }
 
-    /// The Batch/Select-KK lane (invariant 5). Falls back to the local lane only when the transport
-    /// or runtime cannot be built at all — a *provider* failure is a failed cycle that carries to
-    /// the next night (FR-DC-05), not a silent downgrade to weaker candidates.
+    /// The Batch/Select-KK lane (invariant 5), routed per `shogun_core::llm::batch_route`:
+    /// the relay by default (the Keychain slot holds the license token, the relay holds the
+    /// key — docs/batch-relay-design.md), or direct Anthropic in a debug build with the
+    /// explicit env opt-in. Falls back to the local lane only when the transport or runtime
+    /// cannot be built at all — a *provider* failure is a failed cycle that carries to the next
+    /// night (FR-DC-05), not a silent downgrade to weaker candidates.
     fn run_via_batch(
         db: &Db,
         key: String,
@@ -291,7 +294,8 @@ pub mod mac {
         tonight: &str,
         now_ms: i64,
     ) -> Result<GatedRun, String> {
-        use shogun_core::llm::anthropic::{AnthropicBatchClient, AnthropicConfig};
+        use shogun_core::llm::batch_route::{batch_route, BatchRoute, DEV_DIRECT_ENV};
+        use shogun_core::llm::relay::{ModelClass, RelayBatchClient, RelayConfig};
         use shogun_core::llm::transport::ReqwestTransport;
         use shogun_core::llm::{Secret, SelectKkKey};
 
@@ -303,21 +307,49 @@ pub mod mac {
             return Ok(run_local(db, cond, tonight, now_ms));
         };
 
-        let client = AnthropicBatchClient::new(
-            transport,
-            db.traceability_sink(),
-            SelectKkKey::new(Secret::new(key)),
-            AnthropicConfig::new(BATCH_MODEL),
-        );
-        match rt.block_on(run_batch_cycle(
-            db,
-            &client,
-            cond,
-            tonight,
-            now_ms,
-            BATCH_MAX_POLLS,
-            || async { tokio::time::sleep(BATCH_POLL_INTERVAL).await },
-        )) {
+        let credential = SelectKkKey::new(Secret::new(key));
+        let outcome = match batch_route(std::env::var(DEV_DIRECT_ENV).ok().as_deref()) {
+            BatchRoute::Relay => {
+                // Shipping path: license token → relay; the device sends an intent, never a
+                // model id (§4.4). Traceability records Route::BatchRelay per chunk (§3.3).
+                let client = RelayBatchClient::new(
+                    transport,
+                    db.traceability_sink(),
+                    credential,
+                    RelayConfig::new(ModelClass::Classify),
+                );
+                rt.block_on(run_batch_cycle(
+                    db,
+                    &client,
+                    cond,
+                    tonight,
+                    now_ms,
+                    BATCH_MAX_POLLS,
+                    || async { tokio::time::sleep(BATCH_POLL_INTERVAL).await },
+                ))
+            }
+            // Dev-only direct path (E-38): the slot holds a raw Anthropic key. The variant does
+            // not exist in a release build, so this arm cannot ship.
+            #[cfg(debug_assertions)]
+            BatchRoute::DirectAnthropic => {
+                let client = shogun_core::llm::anthropic::AnthropicBatchClient::new(
+                    transport,
+                    db.traceability_sink(),
+                    credential,
+                    shogun_core::llm::anthropic::AnthropicConfig::new(DEV_DIRECT_BATCH_MODEL),
+                );
+                rt.block_on(run_batch_cycle(
+                    db,
+                    &client,
+                    cond,
+                    tonight,
+                    now_ms,
+                    BATCH_MAX_POLLS,
+                    || async { tokio::time::sleep(BATCH_POLL_INTERVAL).await },
+                ))
+            }
+        };
+        match outcome {
             Ok(gated) => Ok(gated),
             // A rejected credential is not a bad night, and treating it as one would retry it
             // every night forever while the indicator blamed the service. Fall back to the local
@@ -331,6 +363,16 @@ pub mod mac {
                     keychain_store::SERVICE,
                     keychain_store::SELECT_KK_ACCOUNT
                 );
+                Ok(run_local(db, cond, tonight, now_ms))
+            }
+            // §4.5: 402 (plan does not cover the Batch lane) and 429 (daily cap reached) also
+            // run the local lane tonight — the relay said no by policy, not by outage, so
+            // retrying tonight is pointless and recording a failed night would blame the service.
+            Err(
+                e @ (shogun_core::llm::LlmError::QuotaExhausted(_)
+                | shogun_core::llm::LlmError::RateLimited(..)),
+            ) => {
+                eprintln!("[dream] batch lane declined ({e}) — running the local lane tonight");
                 Ok(run_local(db, cond, tonight, now_ms))
             }
             Err(e) => {

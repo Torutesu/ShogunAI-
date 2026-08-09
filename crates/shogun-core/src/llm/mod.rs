@@ -30,7 +30,13 @@
 //!   invariant 5 stays compile-enforced end-to-end.
 
 pub mod anthropic;
+/// Relay-vs-direct routing for the Batch lane (docs/batch-relay-design.md §7; the direct route
+/// exists only in debug builds).
+pub mod batch_route;
 pub mod openai_compat;
+/// The shipping Batch lane: license token → Select-operated relay → Anthropic Batch API
+/// (docs/batch-relay-design.md). The device never holds an Anthropic key on this path.
+pub mod relay;
 /// チャンク境界をまたぐ増分SSEデコーダ（SLO-03の初トークン計測に必要）。
 pub mod sse;
 pub mod subscription;

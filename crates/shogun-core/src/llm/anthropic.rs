@@ -541,6 +541,65 @@ fn batch_status_error(step: &str, status: u16, body: &str) -> LlmError {
     crate::llm::status_error(&format!("batch {step}"), status, body)
 }
 
+/// The Batch lane's lifecycle seam: submit / poll / results, exposed separately so the Dream
+/// Cycle scheduler owns the poll cadence. Two implementations, chosen by
+/// [`batch_route`](crate::llm::batch_route::batch_route):
+/// - [`AnthropicBatchClient`] — direct to Anthropic with a raw key (development only; the
+///   release binary cannot construct this route),
+/// - [`RelayBatchClient`](crate::llm::relay::RelayBatchClient) — the shipping path through the
+///   Select-operated relay, holding only a license token (docs/batch-relay-design.md).
+///
+/// Static dispatch only (mirrors [`HttpTransport`]), so the futures stay `Send` without
+/// `async-trait`.
+pub trait BatchLane: Send + Sync {
+    /// Create a batch. Implementations record one traceability row per item at the TRUE egress
+    /// point, before the request goes out (invariant 3).
+    fn submit(
+        &self,
+        items: &[BatchItem],
+    ) -> impl std::future::Future<Output = Result<BatchHandle, LlmError>> + Send;
+
+    /// Poll a batch's status. Callers loop on their own cadence until [`BatchStatus::is_ended`].
+    fn poll(
+        &self,
+        batch_id: &str,
+    ) -> impl std::future::Future<Output = Result<BatchHandle, LlmError>> + Send;
+
+    /// Fetch results once the batch has ended. Keyed by `custom_id` (any order).
+    fn results(
+        &self,
+        batch_id: &str,
+    ) -> impl std::future::Future<Output = Result<Vec<BatchResult>, LlmError>> + Send;
+}
+
+/// Run any [`BatchLane`] to completion: submit, then poll until `ended` (up to `max_polls`),
+/// then fetch results. `sleep` is the delay between polls (injected so tests don't wait and the
+/// daemon controls the cadence — FR-DC-05: a batch that never ends within budget is an error the
+/// Dream Cycle carries to the next night, it does not block local features).
+pub async fn run_batch_to_completion<B, F, Fut>(
+    client: &B,
+    items: &[BatchItem],
+    max_polls: u32,
+    mut sleep: F,
+) -> Result<Vec<BatchResult>, LlmError>
+where
+    B: BatchLane,
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
+    let handle = client.submit(items).await?;
+    if handle.status.is_ended() {
+        return client.results(&handle.id).await;
+    }
+    for _ in 0..max_polls {
+        sleep().await;
+        if client.poll(&handle.id).await?.status.is_ended() {
+            return client.results(&handle.id).await;
+        }
+    }
+    Err(LlmError::Provider("batch did not end within the poll budget".into()))
+}
+
 /// Batch-lane client (indexing / classification / Dream Cycle / Morning Brief). Constructed with
 /// a [`SelectKkKey`]. Exposes the three lifecycle steps separately — submit / poll / results — so
 /// the Dream Cycle scheduler owns the poll cadence rather than this layer busy-waiting. Each
@@ -599,32 +658,43 @@ impl<T: HttpTransport, S: TraceabilitySink> AnthropicBatchClient<T, S> {
         Ok(parse_batch_results(&resp.body))
     }
 
-    /// Run a batch to completion: submit, then poll until `ended` (up to `max_polls`), then fetch
-    /// results. `sleep` is the delay between polls (injected so tests don't wait and the daemon
-    /// controls the cadence — FR-DC-05: a batch that never ends within budget is an error the
-    /// Dream Cycle carries to the next night, it does not block local features). Traceability is
-    /// recorded by `submit` (one row per item).
+    /// Run a batch to completion: submit → poll until `ended` → results. Delegates to
+    /// [`run_batch_to_completion`] (shared with the relay client); traceability is recorded by
+    /// `submit` (one row per item).
     pub async fn run<F, Fut>(
         &self,
         items: &[BatchItem],
         max_polls: u32,
-        mut sleep: F,
+        sleep: F,
     ) -> Result<Vec<BatchResult>, LlmError>
     where
         F: FnMut() -> Fut,
         Fut: std::future::Future<Output = ()>,
     {
-        let handle = self.submit(items).await?;
-        if handle.status.is_ended() {
-            return self.results(&handle.id).await;
-        }
-        for _ in 0..max_polls {
-            sleep().await;
-            if self.poll(&handle.id).await?.status.is_ended() {
-                return self.results(&handle.id).await;
-            }
-        }
-        Err(LlmError::Provider("batch did not end within the poll budget".into()))
+        run_batch_to_completion(self, items, max_polls, sleep).await
+    }
+}
+
+impl<T: HttpTransport, S: TraceabilitySink> BatchLane for AnthropicBatchClient<T, S> {
+    fn submit(
+        &self,
+        items: &[BatchItem],
+    ) -> impl std::future::Future<Output = Result<BatchHandle, LlmError>> + Send {
+        AnthropicBatchClient::submit(self, items)
+    }
+
+    fn poll(
+        &self,
+        batch_id: &str,
+    ) -> impl std::future::Future<Output = Result<BatchHandle, LlmError>> + Send {
+        AnthropicBatchClient::poll(self, batch_id)
+    }
+
+    fn results(
+        &self,
+        batch_id: &str,
+    ) -> impl std::future::Future<Output = Result<Vec<BatchResult>, LlmError>> + Send {
+        AnthropicBatchClient::results(self, batch_id)
     }
 }
 

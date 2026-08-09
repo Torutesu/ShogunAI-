@@ -140,10 +140,12 @@ impl<'a, C: Classifier> DreamScheduler<'a, C> {
 /// the state-only sequence with no model call (FR-DC-01); a **Skip** does nothing.
 ///
 /// Keeping the model call here (async) and the cycle sync means the `DreamJobRunner` never bridges
-/// async. Generic over the transport, so it is Linux-testable with a mock (no network).
-pub async fn run_batch_cycle<T, S, F, Fut>(
+/// async. Generic over the [`BatchLane`](crate::llm::anthropic::BatchLane) — the direct Anthropic
+/// client (dev) and the relay client (shipping, docs/batch-relay-design.md) both fit — so it is
+/// Linux-testable with a mock transport (no network).
+pub async fn run_batch_cycle<B, F, Fut>(
     db: &Db,
-    batch_client: &crate::llm::anthropic::AnthropicBatchClient<T, S>,
+    batch_client: &B,
     conditions: &RunConditions,
     cycle_id: &str,
     now_ms: i64,
@@ -151,8 +153,7 @@ pub async fn run_batch_cycle<T, S, F, Fut>(
     sleep: F,
 ) -> Result<GatedRun, crate::llm::LlmError>
 where
-    T: crate::llm::transport::HttpTransport,
-    S: crate::llm::traceability::TraceabilitySink,
+    B: crate::llm::anthropic::BatchLane,
     F: FnMut() -> Fut,
     Fut: std::future::Future<Output = ()>,
 {
