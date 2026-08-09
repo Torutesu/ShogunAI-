@@ -1,15 +1,17 @@
-//! Visual recall summon: pressing BOTH Command keys (left ⌘ + right ⌘) together opens the
-//! screenshot-history browse window.
+//! Visual recall summon: pressing the left AND right side of one modifier together (default
+//! ⌘⌘) opens the screenshot-history browse window. Rebindable via the "recall" binding's
+//! "Dual+X" combo, read live on every event — rebinding to a normal chord makes this monitor
+//! inert (the global-shortcut plugin dispatches instead).
 //!
 //! A bare-modifier chord cannot be a global-shortcut-plugin combo (those need a real key), so
 //! this uses NSEvent flagsChanged monitors — the same pattern as hold-to-talk
 //! (voice_shortcut.rs). Left/right distinction comes from the DEVICE-DEPENDENT low bits of
-//! `modifierFlags` (NX_DEVICELCMDKEYMASK / NX_DEVICERCMDKEYMASK): on a flagsChanged event
-//! `keyCode` only says which key moved, while the device bits say which Command keys are held
-//! right now — exactly what a two-key chord needs.
+//! `modifierFlags` (IOKit NX_DEVICE*KEYMASK): on a flagsChanged event `keyCode` only says which
+//! key moved, while the device bits say which sides are held right now — exactly what a
+//! two-key chord needs.
 //!
-//! Edge-triggered with re-arm: the chord fires once when the second ⌘ lands and cannot fire
-//! again until at least one ⌘ is released, so holding the pair doesn't reopen/refocus in a loop.
+//! Edge-triggered with re-arm: the chord fires once when the second key lands and cannot fire
+//! again until at least one is released, so holding the pair doesn't reopen/refocus in a loop.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -25,10 +27,6 @@ const FLAG_OPTION: usize = 1 << 19;
 const FLAG_COMMAND: usize = 1 << 20;
 const FLAG_FUNCTION: usize = 1 << 23;
 
-/// Device-DEPENDENT bits in the low word of `modifierFlags` (IOKit NX_DEVICE*KEYMASK).
-const DEVICE_LEFT_CMD: usize = 0x0008;
-const DEVICE_RIGHT_CMD: usize = 0x0010;
-
 static FIRED: AtomicBool = AtomicBool::new(false);
 static INSTALLED: AtomicBool = AtomicBool::new(false);
 
@@ -36,16 +34,34 @@ fn normalize_mods(flags: usize) -> usize {
     flags & (FLAG_SHIFT | FLAG_CONTROL | FLAG_OPTION | FLAG_COMMAND | FLAG_FUNCTION)
 }
 
+/// (left device mask, right device mask, standard flag) for the modifier the "recall" binding's
+/// "Dual+X" combo targets, or None when recall is bound to a normal chord (monitor then inert).
+/// Device masks are IOKit NX_DEVICE*KEYMASK values in the low word of `modifierFlags`.
+fn dual_masks(app: &AppHandle) -> Option<(usize, usize, usize)> {
+    let combo = crate::shortcuts::binding(app, "recall").unwrap_or_else(|| "Dual+Super".into());
+    match combo.strip_prefix("Dual+")? {
+        "Super" => Some((0x0008, 0x0010, FLAG_COMMAND)),
+        "Control" => Some((0x0001, 0x2000, FLAG_CONTROL)),
+        "Shift" => Some((0x0002, 0x0004, FLAG_SHIFT)),
+        "Alt" => Some((0x0020, 0x0040, FLAG_OPTION)),
+        _ => None,
+    }
+}
+
 fn on_flags(app: &AppHandle, ev: *mut objc2::runtime::AnyObject) {
     use objc2::msg_send;
+    let Some((left, right, flag)) = dual_masks(app) else {
+        FIRED.store(false, Ordering::SeqCst);
+        return;
+    };
     // SAFETY: NSEvent pointer from AppKit monitor callback.
     let flags: usize = unsafe { msg_send![ev, modifierFlags] };
-    let both = flags & DEVICE_LEFT_CMD != 0 && flags & DEVICE_RIGHT_CMD != 0;
-    // Strict chord: ONLY Command among the standard modifiers. ⌘⌘ with Shift/Control/Option held
-    // is some other gesture in flight, not a summon.
-    if both && normalize_mods(flags) == FLAG_COMMAND {
+    let both = flags & left != 0 && flags & right != 0;
+    // Strict chord: ONLY the target modifier among the standard set. The pair with Shift/Control/
+    // Option held is some other gesture in flight, not a summon.
+    if both && normalize_mods(flags) == flag {
         if !FIRED.swap(true, Ordering::SeqCst) {
-            eprintln!("[recall] ⌘⌘ chord — opening visual recall");
+            eprintln!("[recall] dual-modifier chord — opening visual recall");
             let app = app.clone();
             let handle = app.clone();
             // Monitors fire on the main thread, but route through run_on_main_thread anyway so a
@@ -53,7 +69,7 @@ fn on_flags(app: &AppHandle, ev: *mut objc2::runtime::AnyObject) {
             let _ = handle.run_on_main_thread(move || crate::build_visual_recall_window(&app));
         }
     } else if !both {
-        // Re-arm only when a Command key actually lifted — releasing Shift while both ⌘ stay
+        // Re-arm only when one of the pair actually lifted — releasing Shift while both stay
         // down must not queue a second fire.
         FIRED.store(false, Ordering::SeqCst);
     }

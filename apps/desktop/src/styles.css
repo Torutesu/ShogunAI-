@@ -1090,11 +1090,6 @@ body {
   flex: none;
 }
 /* Draft's ⌥-tap trigger is fixed, not rebindable — show it dimmer and non-interactive. */
-.keys__combo--fixed {
-  padding: 2px;
-  opacity: 0.8;
-  cursor: default;
-}
 .keys__btn {
   border: none;
   background: transparent;
@@ -2540,6 +2535,78 @@ kbd {
 }
 .hub .c-end {
   width: 64px;
+}
+/* "System" pane — Context Health + Traceability folded into one low-priority tab: dense
+   label/value rows with the fix inline, and the SLO table compressed to a strip. */
+.sysgrid {
+  display: flex;
+  flex-direction: column;
+  padding: 4px 0 6px;
+}
+.sysrow {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 6px 14px;
+  font-size: var(--fs-md);
+}
+.sysrow__k {
+  flex: none;
+  width: 92px;
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  color: var(--faint);
+  text-transform: uppercase;
+}
+.sysrow__v {
+  flex: 1;
+  min-width: 0;
+  color: var(--ink);
+}
+.sysrow__d {
+  color: var(--muted);
+}
+.sysrow__fix {
+  flex: none;
+  font: inherit;
+  font-family: var(--sys);
+  font-size: var(--fs-sm);
+  color: var(--accent);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+.sysrow__fix:hover {
+  text-decoration: underline;
+}
+.sysrow__fix--quiet {
+  color: var(--muted);
+  cursor: default;
+}
+.sysrow__fix--quiet:hover {
+  text-decoration: none;
+}
+.sysslo {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  padding: 9px 14px 12px;
+  border-top: 1px solid var(--line);
+  font-size: var(--fs-sm);
+  color: var(--muted);
+}
+.sysslo__item b {
+  font-weight: 600;
+  color: var(--live);
+  font-variant-numeric: tabular-nums;
+}
+.sysslo__item b.is-warn {
+  color: var(--warn);
+}
+.sysslo__t {
+  color: var(--faint);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════════════════════

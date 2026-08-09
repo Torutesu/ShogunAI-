@@ -36,14 +36,13 @@ import { ConnectionsList } from "./connections";
 import { comboChips, DEFAULT_BINDS } from "./keys";
 import {
   Activity as HubActivity,
-  Health as HubHealth,
   Memory as HubMemory,
   Sources as HubSources,
   Today as HubToday,
   Trace as HubTrace,
 } from "./fullui/FullUi";
 import { SAMPLE_VIEW } from "./fullui/sample";
-import type { FullUiView, PaneId } from "./fullui/types";
+import type { FullUiView } from "./fullui/types";
 
 // SHOGUN panel. A visible, interactive window that hangs from the notch. Opening/closing is driven
 // by direct clicks in the webview (reliable — no dependency on the CGEventTap hover path or a global
@@ -1147,19 +1146,82 @@ export function App(): JSX.Element {
  *  rule (CLAUDE.md invariant 1) — only the chrome differs: a tab strip instead of a sidebar, at
  *  overlay density. Everything routine finishes in the notch; meetings and Visual Recall are the
  *  deliberate exceptions with their own surfaces. */
-const HUB_TABS: { id: PaneId; label: string }[] = [
+/// Hub tabs run in attention order; Context Health and Traceability are audit surfaces you visit
+/// rarely, so they fold into one "System" tab at the far right instead of two up front
+/// (2026-08-09). The Full UI window keeps them as separate panes.
+type HubPane = "today" | "sources" | "memory" | "activity" | "system";
+const HUB_TABS: { id: HubPane; label: string }[] = [
   { id: "today", label: tf.navToday },
-  { id: "health", label: tf.navHealth },
   { id: "sources", label: tf.navSources },
   { id: "memory", label: tf.navMemory },
   { id: "activity", label: tf.navActivity },
-  { id: "trace", label: tf.navTrace },
+  { id: "system", label: tf.navSystem },
 ];
+
+/** Context Health + Traceability, folded into one compact pane: the big-window card grid becomes
+ *  dense label/value rows with the fix inline, the SLO table an inline strip, and the trace table
+ *  sits directly below — presentation-only over the same Rust-assembled view. */
+function HubSystem({ v, onNav }: { v: FullUiView; onNav: (p: HubPane) => void }): JSX.Element {
+  const h = v.health;
+  return (
+    <>
+      <div className="fcard">
+        <div className="fcard__label">{tf.navHealth}</div>
+        <div className="sysgrid">
+          {h.cards.map((c) => (
+            <div className="sysrow" key={c.key}>
+              <span className="sysrow__k">{c.label}</span>
+              <span className="sysrow__v">
+                {c.value}
+                {c.detail ? <span className="sysrow__d"> · {c.detail}</span> : null}
+              </span>
+              {c.fix ? (
+                c.fix.target === "sources" ? (
+                  <button type="button" className="sysrow__fix" onClick={() => onNav("sources")}>
+                    {c.fix.label} →
+                  </button>
+                ) : (
+                  // Settings lives behind ⚙︎ and the trace table is right below — a pointer, not
+                  // a button that would go nowhere.
+                  <span className="sysrow__fix sysrow__fix--quiet">{c.fix.label}</span>
+                )
+              ) : null}
+            </div>
+          ))}
+          {h.mix ? (
+            <div className="sysrow">
+              <span className="sysrow__k">{tf.confidenceMix}</span>
+              <span className="sysrow__v sysrow__d">
+                {tf.high} {h.mix.high_pct}% · {tf.medium} {h.mix.medium_pct}% · {tf.low} {h.mix.low_pct}%
+              </span>
+            </div>
+          ) : null}
+        </div>
+        {h.slo.length > 0 ? (
+          <div className="sysslo">
+            {h.slo.map((s) => (
+              <span className="sysslo__item" key={s.name}>
+                {s.name}{" "}
+                {s.p50 == null ? (
+                  <span className="sysslo__t">—</span>
+                ) : (
+                  <b className={s.within_target ? "" : "is-warn"}>{s.p50}</b>
+                )}
+                <span className="sysslo__t">/{s.target}</span>
+              </span>
+            ))}
+          </div>
+        ) : null}
+      </div>
+      <HubTrace v={v.trace} />
+    </>
+  );
+}
 
 function Hub(): JSX.Element {
   const [view, setView] = useState<FullUiView | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
-  const [pane, setPane] = useState<PaneId>("today");
+  const [pane, setPane] = useState<HubPane>("today");
 
   // A one-shot snapshot per open, like the old window took per launch — the hub unmounts when
   // you leave it, so reopening refetches.
@@ -1199,11 +1261,10 @@ function Hub(): JSX.Element {
         ) : !view ? null : (
           <>
             {pane === "today" && <HubToday v={view.today} />}
-            {pane === "health" && <HubHealth v={view.health} onNav={setPane} />}
             {pane === "sources" && <HubSources v={view.sources} />}
             {pane === "memory" && <HubMemory v={view.memory} />}
             {pane === "activity" && <HubActivity v={view.activity} />}
-            {pane === "trace" && <HubTrace v={view.trace} />}
+            {pane === "system" && <HubSystem v={view} onNav={setPane} />}
           </>
         )}
       </div>
@@ -2587,10 +2648,15 @@ function delegateStateLine(state: DelegateInfo["state"]): string {
   }
 }
 const SHORTCUT_ROWS: Array<{ action: string; label: string }> = [
+  { action: "draft", label: t.draftShortcut },
+  { action: "recall", label: t.recallShortcut },
   { action: "summon", label: t.summonShortcut },
   { action: "voice", label: t.voiceShortcut },
   { action: "quit", label: t.quitShortcut },
 ];
+/** Actions whose trigger may be a bare-modifier gesture (a solo tap or a left+right pair) rather
+ *  than a key chord. Matches the Rust side's special-combo handling. */
+const GESTURE_ACTIONS = new Set(["draft", "recall"]);
 
 
 /** Privacy & Security (issue #28). One place for the LLM key, the data-use policy, and data
@@ -3042,29 +3108,27 @@ function Settings(props: {
   // Capture the new combo at the WINDOW level (capture phase). Relying on the recording button's
   // own focus proved fragile on device — clicks landed but keystrokes never did, so rebinding
   // looked broken. A window listener catches keys no matter where focus sits inside the panel.
+  //
+  // Draft and Visual recall additionally accept bare-modifier gestures: a solo modifier tap
+  // (press and release one modifier with nothing else) records "Tap+X", and pressing the left
+  // and right side of the same modifier together records "Dual+X" — matching how they trigger.
   useEffect(() => {
     if (!recording) return;
     const action = recording;
-    const onKey = (e: KeyboardEvent): void => {
-      e.preventDefault();
-      e.stopPropagation();
-      if (e.key === "Escape") {
-        setRecording(null);
-        setKeyErr("");
-        return;
-      }
-      if (["Control", "Alt", "Shift", "Meta"].includes(e.key)) return; // modifier alone: keep waiting
-      const mods = [
-        e.ctrlKey && "Control",
-        e.altKey && "Alt",
-        e.shiftKey && "Shift",
-        e.metaKey && "Super",
-      ].filter(Boolean) as string[];
-      if (mods.length === 0) {
-        setKeyErr(t.needModifier);
-        return;
-      }
-      const combo = [...mods, e.code].join("+");
+    const gestures = GESTURE_ACTIONS.has(action);
+    /// Physical modifier codes currently held (e.g. "MetaLeft"). `solo` is the tap candidate: the
+    /// one modifier that went down alone; any other input clears it. `dirty` marks that a
+    /// non-modifier key joined this hold, killing both gestures until everything is released.
+    const down = new Set<string>();
+    let solo: string | null = null;
+    let dirty = false;
+    const modOf = (code: string): string | null =>
+      code.startsWith("Control") ? "Control"
+      : code.startsWith("Alt") ? "Alt"
+      : code.startsWith("Shift") ? "Shift"
+      : code.startsWith("Meta") ? "Super"
+      : null;
+    const commit = (combo: string): void => {
       setRecording(null);
       setKeyErr("");
       if (!IN_TAURI) {
@@ -3075,8 +3139,61 @@ function Settings(props: {
         .then(refresh)
         .catch((err) => setKeyErr(String(err)));
     };
+    const onKey = (e: KeyboardEvent): void => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.key === "Escape") {
+        setRecording(null);
+        setKeyErr("");
+        return;
+      }
+      const mod = modOf(e.code);
+      if (["Control", "Alt", "Shift", "Meta"].includes(e.key) || mod) {
+        if (!mod) return;
+        down.add(e.code);
+        if (gestures) {
+          const base = e.code.replace(/(Left|Right)$/, "");
+          if (down.has(base + "Left") && down.has(base + "Right")) {
+            commit("Dual+" + mod);
+            return;
+          }
+          solo = down.size === 1 && !dirty ? e.code : null;
+        }
+        return; // modifier alone: keep waiting for the rest of the chord (or a tap release)
+      }
+      dirty = true;
+      solo = null;
+      const mods = [
+        e.ctrlKey && "Control",
+        e.altKey && "Alt",
+        e.shiftKey && "Shift",
+        e.metaKey && "Super",
+      ].filter(Boolean) as string[];
+      if (mods.length === 0) {
+        setKeyErr(t.needModifier);
+        return;
+      }
+      commit([...mods, e.code].join("+"));
+    };
+    const onUp = (e: KeyboardEvent): void => {
+      const mod = modOf(e.code);
+      if (!mod) return;
+      if (gestures && solo === e.code && !dirty && down.size === 1) {
+        commit("Tap+" + mod);
+        return;
+      }
+      down.delete(e.code);
+      if (down.size === 0) {
+        solo = null;
+        dirty = false;
+      }
+    };
     window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
+    window.addEventListener("keyup", onUp, true);
+    return () => {
+      window.removeEventListener("keydown", onKey, true);
+      window.removeEventListener("keyup", onUp, true);
+    };
   }, [recording, refresh]);
 
   return (
@@ -3127,23 +3244,6 @@ function Settings(props: {
         <CastlePositionSection />
         <section className="set">
           <div className="set__label">{t.shortcuts}</div>
-          {/* Draft is a fixed ⌥-tap trigger (a bare modifier can't be a global shortcut), shown
-              here so it's discoverable but not presented as rebindable. */}
-          <div className="keys">
-            <span className="keys__name">{t.draftShortcut}</span>
-            <span className="keys__combo keys__combo--fixed" title={t.draftFixedHint}>
-              <kbd>⌥</kbd>
-            </span>
-          </div>
-          {/* Visual recall is likewise a fixed chord: both Command keys at once. Bare modifiers
-              can't go through the rebindable global-shortcut path (recall_shortcut.rs). */}
-          <div className="keys">
-            <span className="keys__name">{t.recallShortcut}</span>
-            <span className="keys__combo keys__combo--fixed" title={t.recallFixedHint}>
-              <kbd>⌘</kbd>
-              <kbd>⌘</kbd>
-            </span>
-          </div>
           {SHORTCUT_ROWS.map(({ action, label }) => (
             <div key={action} className="keys">
               <span className="keys__name">{label}</span>
