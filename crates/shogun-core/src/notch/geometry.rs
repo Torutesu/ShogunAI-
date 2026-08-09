@@ -98,7 +98,7 @@ impl Default for GeometryParams {
 
 /// Visible Idle content row below the hardware cutout (boring.notch drop). Welded black still
 /// fills `notch_h`; labels/icons live in this extra strip so they are not under silicon.
-pub const IDLE_CONTENT_DROP: f64 = 28.0;
+pub const IDLE_CONTENT_DROP: f64 = 44.0;
 
 /// Idle hit/visual height: hardware `notch_h` plus the visible content drop on real-notch
 /// machines. Pseudo-notch already sits in the visible menubar band — no extra drop.

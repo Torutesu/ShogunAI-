@@ -149,8 +149,9 @@ const W = 560;
 const H_OPEN = 360;
 /** Hardware notch cutout (safeAreaInsets.top). Welded black fills this — labels do not. */
 const H_DEAD = 32;
-/** Visible Idle content row below the cutout (boring.notch drop). */
-const H_CHIN_ROW = 28;
+/** Visible Idle content row below the cutout. Matches pre-weld 44px chin presence; text stays
+ *  out of silicon (dead band above). Keep in sync with CSS `--chin-row-h` + Rust `IDLE_CONTENT_DROP`. */
+const H_CHIN_ROW = 44;
 /** Idle panel height = dead silicon band + readable content row. */
 const H_HANDLE = H_DEAD + H_CHIN_ROW;
 /** Leave grace after pointer exits unpinned panel (spec T4 / playbook P0: 300ms at R_exp). */
@@ -165,9 +166,9 @@ const INLINE_HOLD_MS = 2200;
 const H_SETTINGS = 460; // taller default so setting groups fit; body scrolls; clamped to screen
 const MIN_W = 460;
 const MIN_H = 240;
-// Collapsed fallback, used only until the pill has been measured. The window is transparent, so
-// any part of it that ISN'T the pill would still swallow clicks meant for the app underneath —
-// the collapsed window is therefore shrunk to the pill's real bounds (see the measuring effect).
+// Collapsed floor + provisional size until measure runs. Floor stops the
+// max-width:100% ↔ set_panel_size feedback loop that shrunk Idle to ~130px (narrower than
+// hardware notch_w≈179). Content may grow above this up to `.handle` max-width.
 const W_HANDLE_FALLBACK = 260;
 
 interface Size {
@@ -795,8 +796,12 @@ export function App(): JSX.Element {
     const r = el.getBoundingClientRect();
     if (r.width < 1 || r.height < 1) return;
     // +1 guards against a fractional layout width being truncated into a clipped pill.
+    // Width floors at W_HANDLE_FALLBACK — never re-shrink below the good-era Idle chin.
     // Height floors at H_HANDLE so a short content pill never leaves air under the notch.
-    void applyPanelSize(Math.ceil(r.width) + 1, Math.max(H_HANDLE, Math.ceil(r.height)));
+    void applyPanelSize(
+      Math.max(W_HANDLE_FALLBACK, Math.ceil(r.width) + 1),
+      Math.max(H_HANDLE, Math.ceil(r.height)),
+    );
   }, [
     open,
     live,

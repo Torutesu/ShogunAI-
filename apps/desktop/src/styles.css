@@ -36,7 +36,8 @@
   --shell-sy: 0.089;
   /* Hardware cutout (dead) + visible content drop below silicon (boring.notch). */
   --notch-dead-h: 32px;
-  --chin-row-h: 28px;
+  /* Visible drop below silicon — match pre-weld 44px Idle presence (sync H_CHIN_ROW / IDLE_CONTENT_DROP). */
+  --chin-row-h: 44px;
   --chin-h: calc(var(--notch-dead-h) + var(--chin-row-h));
   /* Type scale. Tightened one step across the board: this is a dense overlay hanging off the
      menu bar, and at the previous sizes a few settings groups filled the whole screen height. */
@@ -200,6 +201,8 @@ body {
   justify-content: flex-start;
   gap: 0;
   width: auto;
+  /* Floor matches W_HANDLE_FALLBACK — blocks measure↔max-width:100% shrink below notch presence. */
+  min-width: 260px;
   max-width: min(320px, 100%);
   height: var(--chin-h);
   min-height: var(--chin-h);
@@ -231,7 +234,9 @@ body {
   height: var(--chin-row-h);
   min-height: var(--chin-row-h);
   max-height: var(--chin-row-h);
-  min-width: 0;
+  /* Do not min-width:0 — that let the column chin collapse under a shrinking NSPanel. */
+  min-width: min-content;
+  width: 100%;
 }
 .handle::before {
   content: "";
@@ -1747,6 +1752,7 @@ kbd {
   max-height: var(--chin-h);
   margin: 0;
   padding: var(--notch-dead-h) 8px 0 12px;
+  min-width: 260px;
   max-width: 460px;
   background: #000;
   border: none;
@@ -1829,6 +1835,7 @@ kbd {
   max-height: var(--chin-h);
   margin: 0;
   padding: var(--notch-dead-h) 12px 0;
+  min-width: 260px;
   max-width: 360px;
   background: #000;
   border: none;
