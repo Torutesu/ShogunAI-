@@ -10,6 +10,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { t } from "./strings";
 import { uiLog } from "./uiLog";
+import { IconAlignJustify, IconClose } from "./utilityIcons";
 
 export interface MeetingView {
   state: "idle" | "offered" | "recording" | "wrapping";
@@ -605,15 +606,7 @@ export function MeetingOverlay(): JSX.Element | null {
                   aria-label={showSource ? t.meetingLiveHideSource : t.meetingLiveShowSource}
                   onClick={() => setShowSource(!showSource)}
                 >
-                  <svg className="ov__icon" viewBox="0 0 24 24" aria-hidden>
-                    <path
-                      d="M4 8h16M6 12h12M8 16h8"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="1.5"
-                      strokeLinecap="round"
-                    />
-                  </svg>
+                  <IconAlignJustify className="ov__icon" />
                 </button>
               ) : null}
               <button
@@ -623,15 +616,7 @@ export function MeetingOverlay(): JSX.Element | null {
                 aria-label={t.meetingOverlayClose}
                 onClick={() => call("meeting_overlay_dismiss")}
               >
-                <svg className="ov__icon" viewBox="0 0 24 24" aria-hidden>
-                  <path
-                    d="M6 6l12 12M18 6L6 18"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.5"
-                    strokeLinecap="round"
-                  />
-                </svg>
+                <IconClose className="ov__icon" />
               </button>
             </div>
           </header>
