@@ -25,6 +25,11 @@ on:
   push:
     tags:
       - "v*"
+    # TEMPORARY: first end-to-end validation of the signing/notarization pipeline before this
+    # lands on main (`workflow_dispatch` only shows up in the Actions UI once the workflow exists
+    # on the default branch). Delete this `branches:` block once the pipeline has gone green.
+    branches:
+      - "claude/apple-developer-signing-distribution-50sld5"
   workflow_dispatch:
 
 permissions:
