@@ -17,14 +17,14 @@
 pub use shogun_core::notch::hover::{HoverParams, HoverSignal, HoverTracker};
 
 #[cfg(target_os = "macos")]
-pub use mac::{start, TapEvent};
+pub use mac::{set_hover_band_cg, start, TapEvent};
 
 #[cfg(target_os = "macos")]
 mod mac {
     use std::cell::Cell;
     use std::ffi::c_void;
     use std::ptr::NonNull;
-    use std::sync::atomic::{AtomicPtr, Ordering};
+    use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
     use std::sync::mpsc::Sender;
     use std::time::Duration;
 
@@ -34,13 +34,25 @@ mod mac {
         CGEventTapProxy, CGEventType,
     };
 
-    /// Height of the early-reject band, measured DOWN FROM THE TOP OF WHICHEVER DISPLAY the
-    /// pointer is on. Mirrors shogun_core's 40pt band (spec §3.4.1).
-    ///
-    /// Not an absolute `y <= 40`: CG's origin is the primary display's top-left, so on a second
-    /// monitor placed anywhere but exactly level with the primary, its top edge sits at some other
-    /// global y — an absolute test made the notch unreachable there (⌥J worked, hover didn't).
-    const TOP_BAND_CG: f64 = 40.0;
+    /// Default Idle early-reject band (spec §3.4.1). Grown to live panel height while open so
+    /// moves into the Expanded body still reach HoverTracker.
+    const DEFAULT_BAND_CG: f64 = 40.0;
+    static HOVER_BAND_CG_BITS: AtomicU64 = AtomicU64::new(DEFAULT_BAND_CG.to_bits());
+
+    /// Set the CGEventTap top-band height (points down from each display's top). Call on every
+    /// panel open/resize; Idle chin uses ~40–70, Expanded uses panel_h + grace.
+    pub fn set_hover_band_cg(height: f64) {
+        let h = if height.is_finite() && height > 0.0 {
+            height.max(DEFAULT_BAND_CG)
+        } else {
+            DEFAULT_BAND_CG
+        };
+        HOVER_BAND_CG_BITS.store(h.to_bits(), Ordering::Relaxed);
+    }
+
+    fn hover_band_cg() -> f64 {
+        f64::from_bits(HOVER_BAND_CG_BITS.load(Ordering::Relaxed))
+    }
 
     /// The top edge, in CG coordinates, of the display containing `x, y`.
     ///
@@ -121,7 +133,7 @@ mod mac {
             let _ = ctx.tx.send(TapEvent::Up);
         } else if etype == CGEventType::MouseMoved || etype == CGEventType::LeftMouseDragged {
             let loc = unsafe { CGEvent::location(Some(event.as_ref())) };
-            let inside = loc.y - display_top_cg(loc.x, loc.y) <= TOP_BAND_CG;
+            let inside = loc.y - display_top_cg(loc.x, loc.y) <= hover_band_cg();
             // Early reject: below the band AND already known-outside → zero further work.
             // One edge sample passes on band exit so HoverTracker sees the leave.
             if inside || ctx.in_band.get() {

@@ -73,6 +73,8 @@ pub mod mac {
         /// generation is still current at receive time (TOCTOU-proof, review #6).
         Timer(Timer, u64),
         Input(EngineInput),
+        /// Live NSPanel size — rebuilds `r_exp` + CGEventTap band so leave-grace covers the panel.
+        PanelSize { w: f64, h: f64 },
     }
 
     /// An open preview/expanded session (spec §4.2.4). Opened when the preview (Hover) first
@@ -119,6 +121,10 @@ pub mod mac {
         pub fn trigger_hotkey(&self) {
             self.send(Ev::Input(EngineInput::Hotkey));
         }
+        /// Update hover `r_exp` + CGEventTap top band to the live panel frame (open/resize).
+        pub fn set_panel_hit_size(&self, w: f64, h: f64) {
+            self.send(Ev::PanelSize { w, h });
+        }
         fn set_reason(&self, r: &'static str) {
             if let Ok(mut g) = self.collapse_reason.lock() {
                 *g = r;
@@ -133,10 +139,12 @@ pub mod mac {
         pub primary_height: f64,
         pub is_notch: bool,
         pub display_count: u32,
-        /// One entry per attached display: the screen's CG rect plus its own notch regions.
+        pub screen: crate::geometry::Rect,
+        pub idle: crate::geometry::Rect,
+        /// One entry per attached display: screen rect, regions, menubar floor, idle rect.
         /// The engine hit-tests against whichever of these the pointer is inside, so the notch
         /// works on a second monitor instead of only where the panel happens to live.
-        pub per_display: Vec<(crate::geometry::Rect, Regions, f64)>,
+        pub per_display: Vec<(crate::geometry::Rect, Regions, f64, crate::geometry::Rect)>,
     }
 
     // ---------------------------------------------------------------- timers
@@ -281,11 +289,20 @@ pub mod mac {
                 geo.primary_height,
                 HoverParams::default(),
                 Params::default(),
+                geo.screen,
+                geo.idle,
             );
             let timers = TimerSvc::spawn(ev_tx);
             let mut prev_state = State::Idle;
             while let Ok(ev) = ev_rx.recv() {
                 let input = match ev {
+                    Ev::PanelSize { w, h } => {
+                        engine.set_panel_hit_size(w, h);
+                        // CGEventTap early-reject band must cover the open panel or moves into
+                        // the body never reach HoverTracker (one edge sample → false leave).
+                        crate::hover::set_hover_band_cg(h + 16.0);
+                        continue;
+                    }
                     Ev::Tap(TapEvent::Status { active }) => {
                         shared.recorder.record(Body::TapStatus { active });
                         continue;
@@ -296,16 +313,22 @@ pub mod mac {
                         // screen changes does anything get swapped.
                         if per_display.len() > 1 {
                             let ns_y = geo.primary_height - y;
-                            if let Some((i, (_, regs, menubar))) = per_display
+                            if let Some((i, (screen, regs, menubar, idle))) = per_display
                                 .iter()
                                 .enumerate()
-                                .find(|(_, (r, _, _))| {
+                                .find(|(_, (r, _, _, _))| {
                                     x >= r.x && x <= r.x + r.w && ns_y >= r.y && ns_y <= r.y + r.h
                                 })
                             {
                                 if active_display != Some(i) {
                                     active_display = Some(i);
-                                    engine.set_regions(*regs, *menubar, geo.primary_height);
+                                    engine.set_regions(
+                                        *regs,
+                                        *menubar,
+                                        geo.primary_height,
+                                        *screen,
+                                        *idle,
+                                    );
                                 }
                             }
                         }
@@ -428,6 +451,9 @@ pub mod mac {
             }
             EngineOutput::TopBandEntry => {
                 shared.recorder.record(Body::TopBandEntry { count: 1 });
+            }
+            EngineOutput::HoverBand(h) => {
+                crate::hover::set_hover_band_cg(h);
             }
         }
     }
