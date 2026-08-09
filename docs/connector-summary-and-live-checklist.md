@@ -77,6 +77,7 @@
       `security add-generic-password -s com.selectkk.shogun -a composio-api-key -w '<KEY>'`
 - [ ] （同上）`SHOGUN_COMPOSIO_USER_ID`（Composioのconnected accountユーザーID）
 - [ ] テスト用Googleアカウント（同意画面のテストユーザーに追加済み）
+- [ ] （Calendar / Drive の第1層読み取りをライブ検証する場合）起動シェルに `SHOGUN_ENABLE_WAVE1_READ=calendar,drive` を設定（受理トークン: `calendar`/`gcal`, `drive`/`gdrive`。未設定の既定は Gmail のみ＝Calendar/Drive は UI 上 Coming soon のまま。リビルド不要でフラグだけで解放される）
 
 ### 4-2. ビルド & 起動
 
