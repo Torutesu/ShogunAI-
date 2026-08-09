@@ -44,6 +44,10 @@ jobs:
     name: macOS arm64 (sign + notarize + dmg)
     # macos-14 is Apple Silicon — matches the app's only supported target (arm64, macOS 14+).
     runs-on: macos-14
+    # A cold Rust build plus an Apple notarization queue wait runs ~30-45 min; anything past this
+    # is a hang (the DMG bundler waiting on Finder is the classic one), and the default 6h job
+    # limit would burn a whole runner-hour budget before failing.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
