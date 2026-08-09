@@ -164,6 +164,22 @@ impl Slo {
         }
     }
 
+    /// Map a UI-reported metric name to its SLO. This is the contract for the desktop shell's
+    /// `record_ui_slo(name, ms)` command (Plan B-1/B-6): the webview reports the durations only
+    /// it can observe (buttons painted, results drawn) under these fixed names, and the mapping
+    /// lives here so the shell shim stays a dumb pipe and the naming is Linux-tested. `IdleCpu`
+    /// is deliberately unmappable — it is sampled out-of-process, never a UI duration.
+    pub fn from_ui_name(name: &str) -> Option<Slo> {
+        match name {
+            "expand" => Some(Slo::Expand),
+            "actions_present" => Some(Slo::ActionsPresented),
+            "first_token" => Some(Slo::FirstToken),
+            "local_search" => Some(Slo::Search),
+            "cache_update" => Some(Slo::CacheUpdate),
+            _ => None,
+        }
+    }
+
     /// The p95 acceptance ceiling (ms, or percent for `IdleCpu`).
     pub fn budget_p95(self) -> f64 {
         match self {
@@ -455,6 +471,19 @@ mod tests {
         // Budgets match the CLAUDE.md / §7.1 table.
         assert_eq!(Slo::Expand.budget_p95(), 100.0);
         assert_eq!(Slo::IdleCpu.budget_p95(), 5.0);
+    }
+
+    #[test]
+    fn ui_names_map_to_their_slos() {
+        assert_eq!(Slo::from_ui_name("actions_present"), Some(Slo::ActionsPresented));
+        assert_eq!(Slo::from_ui_name("local_search"), Some(Slo::Search));
+        assert_eq!(Slo::from_ui_name("expand"), Some(Slo::Expand));
+        assert_eq!(Slo::from_ui_name("first_token"), Some(Slo::FirstToken));
+        assert_eq!(Slo::from_ui_name("cache_update"), Some(Slo::CacheUpdate));
+        // Unknown names and the out-of-process CPU sample must not silently land in a histogram.
+        assert_eq!(Slo::from_ui_name("idle_cpu"), None);
+        assert_eq!(Slo::from_ui_name(""), None);
+        assert_eq!(Slo::from_ui_name("Actions_Present"), None);
     }
 
     #[test]
