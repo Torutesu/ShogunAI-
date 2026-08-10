@@ -27,6 +27,8 @@ mod geometry;
 mod hover;
 mod inline_source;
 mod integrate;
+mod dock_visibility;
+mod notch_status_visibility;
 mod launch_at_login;
 pub mod meeting;
 mod meeting_recap;
@@ -126,12 +128,8 @@ pub(crate) fn overlay_ptr(handle: &tauri::AppHandle) -> Option<*mut objc2::runti
 /// (spec §3.11.2), then in setup: the native overlay NSPanel, geometry read, mouse tap, and the
 /// integrated engine + measurement streams.
 pub fn run() {
-    // Regular activation policy: Dock icon (colored S mark) + menu-bar tray. Overlay NSPanel
-    // still uses canJoinAllSpaces + mainMenu+3 level; LSUIElement is off so the Dock shows the app.
-    #[cfg(target_os = "macos")]
-    if std::env::var("SHOGUN_NO_NOTCH").is_err() {
-        set_regular_activation();
-    }
+    // Activation policy (Regular vs Accessory) is applied in setup_macos from dock_visibility.json
+    // before the overlay window is built — see dock_visibility::mac::init.
     let builder = tauri::Builder::default();
     #[cfg(target_os = "macos")]
     let builder = builder
@@ -174,6 +172,7 @@ pub fn run() {
         meeting::mac::set_meeting_mode,
         meeting::mac::set_meeting_langs,
         meeting::mac::meeting_overlay_dismiss,
+        meeting::mac::meeting_set_overlay_panel,
         visual_recall::mac::get_visual_recall_settings,
         visual_recall::mac::set_visual_recall_enabled,
         visual_recall::mac::get_visual_recall_status,
@@ -238,6 +237,10 @@ pub fn run() {
         analytics::analytics_set_opt_out,
         launch_at_login::mac::get_launch_at_login_settings,
         launch_at_login::mac::set_launch_at_login_enabled,
+        dock_visibility::mac::get_dock_visible,
+        dock_visibility::mac::set_dock_visible,
+        notch_status_visibility::get_notch_status_visible,
+        notch_status_visibility::set_notch_status_visible,
         voice_session::mac::get_voice_settings,
         voice_session::mac::set_voice_enabled,
         voice_session::mac::voice_dismiss,
@@ -305,10 +308,12 @@ fn setup_macos(app: &tauri::App) {
     // adopted/docked, so it lands at the right spot on launch instead of flashing at the notch and
     // jumping. Default (Notch) reproduces the historical top-centre dock.
     castle::init(app.handle());
+    // Dock vs menu-bar-only: must run before the overlay window is first built.
+    dock_visibility::mac::init(app);
 
-    // The window is NOT declared in tauri.conf.json — it is built HERE, after the process became
-    // an Accessory app at the very top of run(). A window created while the app was still Regular
-    // keeps its original Space binding forever (canJoinAllSpaces reads back but is ignored) —
+    // The window is NOT declared in tauri.conf.json — it is built HERE, after activation policy
+    // is set from the saved preference. A window created while the app was still Regular keeps
+    // its original Space binding forever (canJoinAllSpaces reads back but is ignored) —
     // the last structural difference between SHOGUN and overlays that float everywhere.
     match app.get_webview_window("notch") {
         Some(win) => {
@@ -546,24 +551,6 @@ fn setup_macos(app: &tauri::App) {
     // Last line of setup, and outside the DB branch: whether the panel is on screen has nothing to
     // do with whether memory opened, and a failed DB must not swallow the answer.
     report_panel_health(app.handle());
-}
-
-/// Regular activation policy (NSApplicationActivationPolicyRegular = 0): Dock icon visible.
-/// Runs on the main thread before any window is created.
-#[cfg(target_os = "macos")]
-fn set_regular_activation() {
-    use objc2::runtime::AnyObject;
-    use objc2::{class, msg_send};
-    // SAFETY: standard AppKit calls on the shared NSApplication, on the main thread.
-    unsafe {
-        let ns_app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
-        if ns_app.is_null() {
-            eprintln!("[shell] NSApplication nil — activation policy unchanged");
-            return;
-        }
-        let ok: bool = msg_send![ns_app, setActivationPolicy: 0isize];
-        eprintln!("[shell] activation policy = Regular (Dock icon + menu-bar tray) ok={ok}");
-    }
 }
 
 /// (main thread) Dock origin for castle placement. Notch welds to the physical screen top
