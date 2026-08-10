@@ -101,3 +101,30 @@ export function IconAlignJustify(props: IconProps) {
     </svg>
   );
 }
+
+/** Copy-to-clipboard (two overlapping rectangles). */
+export function IconCopy(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+    </svg>
+  );
+}
+
+/** Horizontal sliders — captions panel settings affordance. */
+export function IconSliders(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M4 21v-7" />
+      <path d="M4 10V3" />
+      <path d="M12 21v-9" />
+      <path d="M12 8V3" />
+      <path d="M20 21v-5" />
+      <path d="M20 12V3" />
+      <path d="M1 14h6" />
+      <path d="M9 8h6" />
+      <path d="M17 16h6" />
+    </svg>
+  );
+}

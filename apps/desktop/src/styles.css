@@ -57,11 +57,23 @@
   --r-pill: 999px;
   /* Welded Idle fill — always black, never glass. */
   --chin: #000000;
+  --chin-ink: #eef1f5;
+  --chin-muted: #9aa3af;
+  --chin-fill: rgba(255, 255, 255, 0.06);
+  --chin-line: rgba(255, 255, 255, 0.11);
+  /* Opaque panel/settings ground under transparent NSPanel (must stay solid). */
+  --shell: #000000;
+  /* Scrollbar tokens — transparent track, ink-tinted thumb (overlay on content edge). */
+  --scroll-track: transparent;
+  --scroll-thumb: color-mix(in srgb, var(--ink) 26%, transparent);
+  --scroll-thumb-hover: color-mix(in srgb, var(--ink) 40%, transparent);
+  color-scheme: dark;
 }
 /* Bare :root doubles as the JS-not-ready bootstrap default AND explicit dark, so keep them in
    sync in one place (App.tsx always sets data-appearance now, but the bootstrap default must
    still be dark to avoid a light flash). */
 :root[data-appearance="dark"] {
+  color-scheme: dark;
   --glass: rgba(12, 14, 18, 0.78);
   --glass-2: rgba(22, 26, 34, 0.86);
   --line: rgba(255, 255, 255, 0.11);
@@ -78,8 +90,10 @@
   --fill: rgba(255, 255, 255, 0.06);
   --fill-strong: rgba(255, 255, 255, 0.12);
   --card: rgba(255, 255, 255, 0.045);
+  --shell: #000000;
 }
 :root[data-appearance="light"] {
+  color-scheme: light;
   --glass: rgba(252, 253, 255, 0.82);
   --glass-2: rgba(255, 255, 255, 0.88);
   --line: rgba(16, 24, 40, 0.10);
@@ -96,6 +110,10 @@
   --fill: rgba(0, 0, 0, 0.045);
   --fill-strong: rgba(0, 0, 0, 0.09);
   --card: rgba(0, 0, 0, 0.035);
+  --shell: #f7f8fb;
+}
+:root[data-appearance="auto"] {
+  color-scheme: light dark;
 }
 @media (prefers-color-scheme: light) {
   :root[data-appearance="auto"] {
@@ -112,11 +130,10 @@
     --live: #1f9e3c;
     --warn: #a4560a;
     --danger: #d64545;
-    --danger: #d64545;
-    --danger: #d64545;
     --fill: rgba(0, 0, 0, 0.045);
     --fill-strong: rgba(0, 0, 0, 0.09);
     --card: rgba(0, 0, 0, 0.035);
+    --shell: #f7f8fb;
   }
 }
 
@@ -204,15 +221,15 @@ body {
   align-items: stretch;
   justify-content: flex-start;
   gap: 0;
-  width: auto;
-  /* Floor matches W_HANDLE_FALLBACK — blocks measure↔max-width:100% shrink below notch presence. */
-  min-width: 260px;
-  max-width: min(360px, 100%);
+  width: 180px;
+  /* Match hardware/pseudo notch (~180). Wider Idle hung outside the cutout into menu-bar air. */
+  min-width: 180px;
+  max-width: 180px;
   height: var(--chin-h);
   min-height: var(--chin-h);
   max-height: var(--chin-h);
   margin: 0;
-  padding: 0 12px;
+  padding: 0 8px;
   background: var(--chin);
   border: none;
   border-radius: 0 0 var(--r-shell-bot) var(--r-shell-bot);
@@ -259,7 +276,7 @@ body {
    Hover under notch still expands via Rust R_enter (panel size independent). */
 .handle--hiding {
   min-width: 180px;
-  max-width: 200px;
+  max-width: 180px;
   width: 180px;
   height: var(--notch-dead-h);
   min-height: var(--notch-dead-h);
@@ -315,6 +332,18 @@ body {
   transition:
     transform var(--notch-open),
     border-radius var(--notch-open);
+}
+/* Settings: solid shell only — no translucent glass sheet over transparent window. */
+.panel--settings {
+  background: var(--shell);
+}
+.panel--settings::after,
+.notch-shell.is-expanded .panel--settings::after,
+.notch-shell.is-expanding .panel--settings::after,
+.notch-shell.is-collapsing .panel--settings::after {
+  background: var(--shell);
+  opacity: 1;
+  transition: none;
 }
 /* Always fill the fixed webview frame — never flip position absolute↔flex mid-morph. */
 .notch-shell .panel {
@@ -996,7 +1025,7 @@ body {
   gap: 0;
   scroll-behavior: smooth;
   -webkit-overflow-scrolling: touch;
-  scrollbar-gutter: stable;
+  /* thin + custom colors forces WKWebView off macOS default overlay white gutter */
   scrollbar-width: thin;
   scrollbar-color: var(--scroll-thumb) var(--scroll-track);
   contain: layout style;
@@ -1008,20 +1037,19 @@ body {
   appearance: none;
 }
 .settings__body::-webkit-scrollbar-track {
-  background: var(--scroll-track);
-  border-radius: 0;
+  background: transparent;
 }
 .settings__body::-webkit-scrollbar-thumb {
   background: var(--scroll-thumb);
   border-radius: 0;
   border: none;
-  min-height: 32px;
+  min-height: 24px;
 }
 .settings__body::-webkit-scrollbar-thumb:hover {
   background: var(--scroll-thumb-hover);
 }
 .settings__body::-webkit-scrollbar-corner {
-  background: var(--scroll-track);
+  background: transparent;
 }
 /* Section = open block + bottom hairline. No fill, no radius, no card chrome. */
 .set {
@@ -2104,9 +2132,10 @@ kbd {
   min-height: var(--chin-h);
   max-height: var(--chin-h);
   margin: 0;
-  padding: var(--notch-dead-h) 8px 0 12px;
-  min-width: 260px;
-  max-width: 460px;
+  padding: var(--notch-dead-h) 8px 0 8px;
+  min-width: 180px;
+  max-width: 180px;
+  width: 180px;
   background: #000;
   border: none;
   border-radius: 0 0 var(--r-shell-bot) var(--r-shell-bot);
@@ -2187,9 +2216,10 @@ kbd {
   min-height: var(--chin-h);
   max-height: var(--chin-h);
   margin: 0;
-  padding: var(--notch-dead-h) 12px 0;
-  min-width: 260px;
-  max-width: 360px;
+  padding: var(--notch-dead-h) 8px 0;
+  min-width: 180px;
+  max-width: 180px;
+  width: 180px;
   background: #000;
   border: none;
   border-radius: 0 0 var(--r-shell-bot) var(--r-shell-bot);
@@ -2434,22 +2464,21 @@ kbd {
   font-family: var(--sys);
   box-sizing: border-box;
 }
-/* Meeting detected offer — white pill card (reference screenshot; exact tokens). */
-.ov--offer {
+/* Meeting detected offer — white pill card (reference screenshot; exact tokens).
+   Do NOT use `.ov` here: its glass/backdrop paints a full-rect compositor layer on transparent
+   WKWebView; CSS border-radius does not clip that layer, so --glass grey peeks at corners. */
+.ov-offer {
+  pointer-events: auto;
   display: block;
+  width: 100%;
   height: 100%;
+  margin: 0;
   padding: 0;
-  gap: 0;
   background: transparent;
-  border: none;
-  border-radius: 0;
-  box-shadow: none;
-  -webkit-backdrop-filter: none;
-  backdrop-filter: none;
   color: #111111;
   overflow: visible;
 }
-.ov__offer {
+.ov-offer .ov__offer {
   position: relative;
   display: flex;
   flex-direction: column;
@@ -2457,10 +2486,14 @@ kbd {
   height: 100%;
   box-sizing: border-box;
   padding: 16px 16px 14px;
-  background: #FFFFFF;
+  background: #ffffff;
   border-radius: 16px;
-  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.28);
   overflow: hidden;
+  /* border-radius alone is not enough on transparent Tauri/WKWebView — clip the painted rect. */
+  clip-path: inset(0 round 16px);
+  -webkit-clip-path: inset(0 round 16px);
+  /* drop-shadow follows the clipped alpha; box-shadow leaves a rectangular halo at corners. */
+  filter: drop-shadow(0 12px 24px rgba(0, 0, 0, 0.22));
 }
 .ov__offer-row {
   display: flex;
@@ -2530,16 +2563,24 @@ kbd {
   font-size: 13px;
   font-weight: 600;
   color: #111111;
-  background: #F2F2F2;
+  background: #f2f2f2;
   border: none;
   border-radius: 6px;
   padding: 8px 12px;
   cursor: pointer;
   white-space: nowrap;
   transition: background 120ms ease;
+  -webkit-appearance: none;
+  appearance: none;
+  overflow: hidden;
+  box-shadow: none;
 }
 .ov__offer-go:hover {
   background: #e8e8e8;
+}
+.ov__offer-go:focus-visible {
+  outline: 2px solid #2f6fed;
+  outline-offset: 2px;
 }
 .ov__offer-ico {
   width: 18px;
@@ -2548,6 +2589,7 @@ kbd {
   display: block;
   object-fit: contain;
   pointer-events: none;
+  background: transparent;
 }
 .ov__offer-skip {
   font: inherit;
@@ -2567,12 +2609,13 @@ kbd {
   position: absolute;
   left: 0;
   bottom: 0;
+  width: 100%;
   height: 3px;
   max-width: 100%;
   background: #2f6fed;
   border-radius: 0 2px 0 0;
   pointer-events: none;
-  transition: width 200ms linear;
+  will-change: width;
 }
 /* Drag handle vs interactive controls — header drags; buttons/menus/scroll opt out. */
 .ov__drag {
@@ -2744,23 +2787,27 @@ kbd {
   overflow: visible;
 }
 .ov--live-pill {
-  justify-content: center;
+  justify-content: flex-end;
   align-items: center;
-  padding: 8px;
+  /* Top inset = tooltip height + gap so tips above the bar stay inside the webview. */
+  padding: 36px 8px 8px;
+  overflow: visible;
 }
 .ov__live {
+  position: relative;
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  padding: 14px 16px 12px 16px;
-  background: rgba(18, 18, 20, 0.72);
+  padding: 12px 14px 14px;
+  background: rgba(12, 12, 14, 0.78);
   -webkit-backdrop-filter: blur(40px) saturate(1.4);
   backdrop-filter: blur(40px) saturate(1.4);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 20px;
   overflow: hidden;
-  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.45);
+  box-shadow: none;
+  color: #fff;
 }
 /* Black floating control capsule — matches in-meeting reference. */
 .ov__bar {
@@ -2775,7 +2822,8 @@ kbd {
   padding: 6px 8px 6px 14px;
   background: #000000;
   border-radius: 999px;
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+  box-shadow: none;
+  overflow: visible;
   -webkit-app-region: no-drag;
   app-region: no-drag;
 }
@@ -2784,12 +2832,14 @@ kbd {
   align-items: center;
   gap: 4px;
   flex: none;
+  overflow: visible;
 }
 .ov__bar-slot {
   position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
+  overflow: visible;
 }
 .ov__bar-slot--more {
   z-index: 5;
@@ -2808,7 +2858,21 @@ kbd {
   white-space: nowrap;
   border-radius: 6px;
   pointer-events: none;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  box-shadow: none;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 100ms ease, visibility 100ms ease;
+  z-index: 20;
+}
+/* Hover-only after first pointer move (avoids false :hover when window spawns under cursor). */
+.ov__bar--hover-ready .ov__bar-slot:hover > .ov__bar-tip,
+.ov__bar-btn:focus-visible ~ .ov__bar-tip {
+  opacity: 1;
+  visibility: visible;
+}
+.ov__bar-slot--more:has(.ov__modemenu) > .ov__bar-tip {
+  opacity: 0;
+  visibility: hidden;
 }
 .ov__bar-btn {
   display: inline-flex;
@@ -2825,7 +2889,7 @@ kbd {
   opacity: 0.92;
   transition: background 120ms ease, opacity 120ms ease;
 }
-.ov__bar-btn:hover {
+.ov__bar--hover-ready .ov__bar-btn:hover:not(.is-on) {
   opacity: 1;
   background: rgba(255, 255, 255, 0.08);
 }
@@ -2847,20 +2911,109 @@ kbd {
   flex: none;
 }
 .ov__wave {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  margin: 0;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  cursor: pointer;
+  flex: none;
+  color: #fff;
+  opacity: 0.92;
+  transition: background 120ms ease, opacity 120ms ease;
+}
+.ov__wave:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.08);
+}
+.ov__wave:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.55);
+  outline-offset: 1px;
+}
+.ov__wave-glyph {
+  position: absolute;
+  inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 3px;
-  width: 28px;
-  height: 22px;
-  flex: none;
+  pointer-events: none;
+  transition:
+    opacity 260ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 260ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.ov__wave-glyph--bars {
+  gap: 2px;
+  opacity: 1;
+  transform: scale(0.92);
+}
+.ov__wave.is-paused .ov__wave-glyph--bars {
+  opacity: 0;
+  transform: scale(0.55);
+}
+.ov__wave-glyph--play {
+  opacity: 0;
+  transform: scale(0.55);
+}
+.ov__wave.is-paused .ov__wave-glyph--play {
+  opacity: 1;
+  transform: scale(1);
 }
 .ov__wave-bar {
-  width: 2px;
+  display: block;
+  width: 2.5px;
+  height: var(--h, 40%);
   min-height: 4px;
+  max-height: 16px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.88);
-  transition: height 80ms linear;
+  background: currentColor;
+  transform-origin: center;
+  transition:
+    height 90ms linear,
+    opacity 220ms ease,
+    transform 260ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.ov__wave.is-live .ov__wave-bar:nth-child(1) {
+  animation: ov-wave-idle 1.15s ease-in-out infinite;
+}
+.ov__wave.is-live .ov__wave-bar:nth-child(2) {
+  animation: ov-wave-idle 1.15s ease-in-out 0.12s infinite;
+}
+.ov__wave.is-live .ov__wave-bar:nth-child(3) {
+  animation: ov-wave-idle 1.15s ease-in-out 0.24s infinite;
+}
+.ov__wave.is-live .ov__wave-bar:nth-child(4) {
+  animation: ov-wave-idle 1.15s ease-in-out 0.08s infinite;
+}
+.ov__wave.is-live .ov__wave-bar:nth-child(5) {
+  animation: ov-wave-idle 1.15s ease-in-out 0.2s infinite;
+}
+.ov__wave.is-paused .ov__wave-bar {
+  height: 22%;
+  opacity: 0;
+  transform: scaleY(0.35);
+  animation: none;
+}
+.ov__wave-play {
+  display: block;
+  width: 21px;
+  height: 21px;
+  margin-left: 1.5px;
+  filter: drop-shadow(0 0 0.25px rgba(255, 255, 255, 0.35));
+}
+@keyframes ov-wave-idle {
+  0%,
+  100% {
+    transform: scaleY(0.82);
+  }
+  50% {
+    transform: scaleY(1.12);
+  }
 }
 .ov__bar-stop {
   display: inline-flex;
@@ -2922,15 +3075,37 @@ kbd {
   text-overflow: ellipsis;
 }
 .ov__livehead {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
+  gap: 8px;
   padding-bottom: 10px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   -webkit-app-region: drag;
   app-region: drag;
   cursor: grab;
+}
+.ov__livehead-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  justify-self: start;
+  min-width: 0;
+}
+.ov__live-grip {
+  justify-self: center;
+}
+.ov__liveacts {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  justify-self: end;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  margin-left: 0;
+  flex: none;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
 }
 .ov__modepick,
 .ov__langpick {
@@ -2954,15 +3129,24 @@ kbd {
   align-items: center;
   gap: 6px;
   font: inherit;
-  font-size: var(--fs-xs);
+  font-size: 12px;
   font-weight: 500;
-  color: var(--ink);
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.22);
-  border-radius: var(--r-pill);
+  color: #fff;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 999px;
   padding: 6px 12px;
   cursor: pointer;
   white-space: nowrap;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+.ov__modebtn:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.4);
+}
+.ov__modebtn[aria-expanded="true"] {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.4);
 }
 .ov__chev {
   width: 0;
@@ -3027,15 +3211,6 @@ kbd {
   color: var(--muted);
   flex: none;
 }
-.ov__liveacts {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  margin-left: auto;
-  flex: none;
-  -webkit-app-region: no-drag;
-  app-region: no-drag;
-}
 .ov__iconbtn {
   display: inline-flex;
   align-items: center;
@@ -3057,10 +3232,6 @@ kbd {
 .ov__icon {
   width: 18px;
   height: 18px;
-  display: block;
-}
-  display: block;
-}
   display: block;
 }
 .ov__livebody {
@@ -3943,4 +4114,573 @@ body.full-window {
   color: var(--ink);
   font-size: var(--fs-xs);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+/* ---- Meeting: reusable drag / resize ---- */
+.drag-handle-6dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 22px;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.08);
+  cursor: grab;
+  flex: none;
+  -webkit-app-region: drag;
+  app-region: drag;
+  user-select: none;
+}
+.drag-handle-6dot:active {
+  cursor: grabbing;
+}
+.drag-handle-6dot__img {
+  width: 16px;
+  height: 16px;
+  display: block;
+  opacity: 0.85;
+  pointer-events: none;
+}
+.resize-corner-handle {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  opacity: 0;
+  pointer-events: none;
+  cursor: nwse-resize;
+  z-index: 8;
+  transition: opacity 120ms ease;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+.ov__live:hover > .resize-corner-handle,
+.ov__canvas:hover > .resize-corner-handle,
+.ov__chat:hover > .resize-corner-handle,
+.resize-corner-handle:active {
+  opacity: 1;
+  pointer-events: auto;
+}
+.resize-corner-handle__glyph {
+  width: 14px;
+  height: 14px;
+  display: block;
+  opacity: 0.9;
+  pointer-events: none;
+}
+
+/* ---- AI Canvas (Notes) ---- */
+.ov__canvas {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 12px 14px 14px;
+  background: rgba(12, 12, 14, 0.82);
+  -webkit-backdrop-filter: blur(40px) saturate(1.4);
+  backdrop-filter: blur(40px) saturate(1.4);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 18px;
+  overflow: hidden;
+  color: #fff;
+}
+.ov__canvas-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.ov__canvas-titles {
+  min-width: 0;
+  cursor: grab;
+}
+.ov__canvas-title {
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+}
+.ov__canvas-status {
+  margin-top: 4px;
+  font-size: 12px;
+  font-weight: 450;
+  color: rgba(255, 255, 255, 0.55);
+}
+.ov__canvas-tools {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  justify-self: end;
+}
+.ov__canvas-modepick {
+  position: relative;
+}
+.ov__canvas-modebtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+  padding: 6px 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ov__canvas-modebtn:hover,
+.ov__canvas-modebtn[aria-expanded="true"] {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.28);
+}
+.ov__canvas-modemenu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  min-width: 220px;
+  padding: 6px;
+  background: rgba(16, 16, 18, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 14px;
+}
+.ov__canvas-modeopt {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  font-size: 13px;
+  color: #fff;
+  background: none;
+  border: none;
+  border-radius: 10px;
+  padding: 9px 10px;
+  cursor: pointer;
+}
+.ov__canvas-modeopt:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+.ov__canvas-modeopt.is-on {
+  background: rgba(255, 255, 255, 0.1);
+}
+.ov__canvas-modeopt.is-disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.ov__canvas-modeopt-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.ov__canvas-check,
+.ov__canvas-check-spacer {
+  width: 12px;
+  flex: none;
+  font-size: 11px;
+  opacity: 0.9;
+}
+.ov__canvas-tag {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: rgba(255, 255, 255, 0.45);
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  padding: 2px 7px;
+}
+.ov__canvas-ext {
+  font-size: 12px;
+  opacity: 0.55;
+}
+.ov__canvas-menudiv {
+  height: 1px;
+  margin: 4px 6px;
+  background: rgba(255, 255, 255, 0.1);
+}
+.ov__canvas-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding-right: 2px;
+}
+.ov__canvas-summary {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.45;
+  color: rgba(255, 255, 255, 0.92);
+  white-space: pre-wrap;
+}
+.ov__canvas-empty {
+  margin: 0;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.45);
+}
+.ov__canvas-timeline {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+.ov__canvas-step {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: 10px;
+  min-height: 44px;
+}
+.ov__canvas-step-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 4px;
+}
+.ov__canvas-step-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #3b82f6;
+  flex: none;
+}
+.ov__canvas-step-line {
+  flex: 1;
+  width: 2px;
+  margin-top: 4px;
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  min-height: 18px;
+}
+.ov__canvas-step-meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.ov__canvas-step-label {
+  font-size: 13px;
+  font-weight: 600;
+}
+.ov__canvas-step-time {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.45);
+  flex: none;
+}
+.ov__canvas-step-detail {
+  margin: 4px 0 12px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+/* ---- Captions transcript / split / display prefs ---- */
+.ov__langrow--header {
+  flex: none;
+  justify-content: flex-end;
+}
+.ov__disp-anchor {
+  position: relative;
+}
+.ov__disp {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 40;
+  width: 280px;
+  padding: 14px 14px 12px;
+  background: #0a0a0b;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 14px;
+  color: #fff;
+}
+.ov__disp-title {
+  font-size: 14px;
+  font-weight: 650;
+  margin-bottom: 12px;
+}
+.ov__disp-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 34px;
+  margin-bottom: 8px;
+}
+.ov__disp-row:last-child {
+  margin-bottom: 0;
+}
+.ov__disp-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.72);
+  min-width: 0;
+}
+.ov__disp-ico {
+  width: 16px;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.55);
+  flex: none;
+}
+.ov__seg {
+  display: inline-flex;
+  align-items: stretch;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+  overflow: hidden;
+  flex: none;
+}
+.ov__seg-btn {
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.55);
+  background: transparent;
+  border: none;
+  border-right: 1px solid rgba(255, 255, 255, 0.12);
+  padding: 5px 10px;
+  cursor: pointer;
+  min-width: 28px;
+}
+.ov__seg-btn:last-child {
+  border-right: none;
+}
+.ov__seg-btn.is-on {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.16);
+}
+.ov__toggle {
+  position: relative;
+  width: 42px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.18);
+  cursor: pointer;
+  flex: none;
+  transition: background 140ms ease;
+}
+.ov__toggle.is-on {
+  background: #0a84ff;
+}
+.ov__toggle-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  background: #fff;
+  transition: transform 140ms ease;
+}
+.ov__toggle.is-on .ov__toggle-knob {
+  transform: translateX(18px);
+}
+.ov__transcript {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.ov__transcript-line,
+.ov__split-line {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.45;
+  color: rgba(255, 255, 255, 0.95);
+  white-space: pre-wrap;
+}
+.ov__livebody--split {
+  overflow: auto;
+}
+.ov__split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 1px minmax(0, 1fr);
+  gap: 0 14px;
+  min-height: 100%;
+}
+.ov__split--stack {
+  grid-template-columns: 1fr;
+  grid-template-rows: auto auto auto;
+  gap: 12px 0;
+}
+.ov__split--stack .ov__split-div {
+  width: 100%;
+  height: 1px;
+}
+.ov__split--dst-only {
+  grid-template-columns: 1fr;
+}
+.ov__split-div {
+  width: 1px;
+  background: rgba(255, 255, 255, 0.12);
+  align-self: stretch;
+}
+.ov__split-col {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+.ov__cap--s .ov__transcript-line,
+.ov__cap--s .ov__split-line {
+  font-size: 14px;
+}
+.ov__cap--m .ov__transcript-line,
+.ov__cap--m .ov__split-line {
+  font-size: 16px;
+}
+.ov__cap--l .ov__transcript-line,
+.ov__cap--l .ov__split-line {
+  font-size: 18px;
+}
+.ov__cap--light .ov__transcript-line,
+.ov__cap--light .ov__split-line {
+  font-weight: 400;
+}
+.ov__cap--bold .ov__transcript-line,
+.ov__cap--bold .ov__split-line {
+  font-weight: 650;
+}
+.ov__iconbtn.is-on {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+/* ---- AI Chat sidebar ---- */
+.ov__chat {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 10px 12px 12px;
+  background: rgba(12, 12, 14, 0.86);
+  -webkit-backdrop-filter: blur(40px) saturate(1.4);
+  backdrop-filter: blur(40px) saturate(1.4);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 18px;
+  overflow: hidden;
+  color: #fff;
+}
+.ov__chat-head {
+  display: grid;
+  grid-template-columns: 32px 1fr 32px;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.ov__chat-head .ov__panel-grip {
+  justify-self: center;
+}
+.ov__chat-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-bottom: 44px;
+}
+.ov__chat-empty {
+  margin: auto 0;
+  text-align: center;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.4);
+}
+.ov__chat-msg {
+  max-width: 92%;
+  padding: 8px 10px;
+  border-radius: 12px;
+  font-size: 13px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+}
+.ov__chat-msg--user {
+  align-self: flex-end;
+  background: rgba(255, 255, 255, 0.12);
+}
+.ov__chat-msg--assistant {
+  align-self: flex-start;
+  background: rgba(255, 255, 255, 0.06);
+}
+.ov__chat-skill {
+  position: absolute;
+  left: 0;
+  bottom: 8px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.7);
+  background: transparent;
+  border: 1px dashed rgba(255, 255, 255, 0.28);
+  border-radius: 999px;
+  padding: 6px 12px;
+  cursor: default;
+}
+.ov__chat-inputwrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 12px 12px 10px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 16px;
+}
+.ov__chat-input {
+  width: 100%;
+  box-sizing: border-box;
+  font: inherit;
+  font-size: 13px;
+  color: #fff;
+  background: transparent;
+  border: none;
+  outline: none;
+  padding: 0;
+}
+.ov__chat-input::placeholder {
+  color: rgba(255, 255, 255, 0.4);
+}
+.ov__chat-trail {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.ov__chat-send {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.ov__chat-send:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.ov__chat-send:not(:disabled):hover {
+  background: rgba(255, 255, 255, 0.24);
 }

@@ -67,6 +67,9 @@ use shogun_core::meeting::gate::OfferGate;
         overlay_dismissed: bool,
         /// Why the last interval closed — drives shorter Recap auto-dismiss after auto-end.
         last_end_reason: Option<EndReason>,
+        /// Capture/ASR paused while the meeting interval stays open (waveform toggle).
+        /// Not a machine state — Stop still ends the session; pause only holds the mic/ASR lane.
+        paused: bool,
     }
 
     impl Lane {
@@ -91,6 +94,7 @@ use shogun_core::meeting::gate::OfferGate;
                 live_settings: Arc::new(RwLock::new(settings)),
                 overlay_dismissed: false,
                 last_end_reason: None,
+                paused: false,
             }
         }
     }
@@ -140,6 +144,8 @@ use shogun_core::meeting::gate::OfferGate;
         pub elapsed_ms: i64,
         /// Milliseconds left in the Offered grace, so the countdown is visible (FR-MT-08).
         pub countdown_ms: i64,
+        /// True while capture/ASR is paused; meeting interval stays open (not ended).
+        pub paused: bool,
     }
 
     fn view(lane: &Lane, now: i64) -> MeetingView {
@@ -156,6 +162,7 @@ use shogun_core::meeting::gate::OfferGate;
             } else {
                 0
             },
+            paused: state == State::Recording && lane.paused,
         }
     }
 
@@ -230,6 +237,7 @@ use shogun_core::meeting::gate::OfferGate;
                     if *state == State::Idle {
                         lane.overlay_dismissed = false;
                         lane.last_end_reason = None;
+                        lane.paused = false;
                     }
                 }
                 Effect::OpenSession => {
@@ -237,6 +245,7 @@ use shogun_core::meeting::gate::OfferGate;
                 }
                 Effect::CloseSession(why) => {
                     lane.last_end_reason = Some(*why);
+                    lane.paused = false;
                     if let Some(id) = lane.session_id.take() {
                         lane.last_session_id = Some(id);
                         lane.opened_via_meet_url = false;
@@ -258,6 +267,7 @@ use shogun_core::meeting::gate::OfferGate;
                 Effect::StartAudio => {
                     if let Some(id) = lane.session_id {
                         lane.overlay_dismissed = false;
+                        lane.paused = false;
                         set_live_emit_session(id);
                         if let Ok(mut live) = lane.live_settings.write() {
                             *live = lane.settings.clone();
@@ -270,6 +280,7 @@ use shogun_core::meeting::gate::OfferGate;
                     }
                 }
                 Effect::StopAudio => {
+                    lane.paused = false;
                     set_live_emit_session(0);
                     stop_audio = lane.audio.take();
                 }
@@ -711,12 +722,28 @@ use shogun_core::meeting::gate::OfferGate;
     /// Idle / hidden fallback size.
     const BAR_SIZE: (f64, f64) = (400.0, 88.0);
     /// In-meeting black control capsule only (notes panel closed).
-    const PILL_SIZE: (f64, f64) = (320.0, 72.0);
-    /// Live notes/transcript pane + control capsule during recording (issue #93).
-    const LIVE_SIZE: (f64, f64) = (520.0, 400.0);
+    /// Height includes top inset for bar-slot tooltips (they sit above the 52px bar).
+    const PILL_SIZE: (f64, f64) = (320.0, 100.0);
+    /// Live captions/transcript pane + control capsule during recording (issue #93).
+    /// Wide enough for one-way split columns.
+    const LIVE_SIZE: (f64, f64) = (560.0, 360.0);
+    /// AI Canvas alone + control capsule (Notes pill).
+    const CANVAS_SIZE: (f64, f64) = (400.0, 380.0);
+    /// AI side chat alone + control capsule.
+    const CHAT_SIZE: (f64, f64) = (360.0, 520.0);
+    /// Multiple panels stacked above the control capsule.
+    const BOTH_SIZE: (f64, f64) = (520.0, 720.0);
     const RECAP_SIZE: (f64, f64) = (400.0, 280.0);
-    /// Whether the live notes panel is expanded above the control pill.
+    /// Whether the live captions panel is expanded above the control pill.
     static OVERLAY_PANEL_OPEN: AtomicBool = AtomicBool::new(true);
+    /// Whether the AI Canvas panel is open above the control pill (Notes button).
+    static OVERLAY_CANVAS_OPEN: AtomicBool = AtomicBool::new(false);
+    /// Whether the AI Chat panel is open above the control pill.
+    static OVERLAY_CHAT_OPEN: AtomicBool = AtomicBool::new(false);
+    /// User-resized overlay size while a panel is open (logical px). Cleared when all panels close.
+    static OVERLAY_CUSTOM_SIZE: std::sync::Mutex<Option<(f64, f64)>> = std::sync::Mutex::new(None);
+    const OVERLAY_SIZE_MIN: (f64, f64) = (300.0, 220.0);
+    const OVERLAY_SIZE_MAX: (f64, f64) = (720.0, 900.0);
     /// Distance from screen edges, in logical pixels.
     const MARGIN: f64 = 16.0;
     /// Menu-bar height to clear for top-right parking.
@@ -783,6 +810,7 @@ use shogun_core::meeting::gate::OfferGate;
     fn configure_overlay_window(win: &tauri::WebviewWindow) {
         use objc2::msg_send;
         use objc2::runtime::AnyObject;
+        use objc2::class;
         use std::sync::atomic::Ordering;
 
         let ptr = match win.ns_window() {
@@ -796,6 +824,12 @@ use shogun_core::meeting::gate::OfferGate;
         let level = crate::OVERLAY_LEVEL;
         // SAFETY: live NSWindow on the main thread (setup).
         unsafe {
+            // Transparent webview: default NSWindow backing is opaque grey — it peeks where
+            // WKWebView does not clip CSS border-radius (offer card corners).
+            let _: () = msg_send![ptr, setOpaque: false];
+            let clear: *mut AnyObject = msg_send![class!(NSColor), clearColor];
+            let _: () = msg_send![ptr, setBackgroundColor: clear];
+            let _: () = msg_send![ptr, setHasShadow: false];
             let _: () = msg_send![ptr, setCollectionBehavior: behavior];
             let _: () = msg_send![ptr, setLevel: level];
             let _: () = msg_send![ptr, setHidesOnDeactivate: false];
@@ -907,6 +941,64 @@ use shogun_core::meeting::gate::OfferGate;
         }
     }
 
+    /// Logical size for the in-meeting overlay: pill / captions / AI Canvas / chat / stacks.
+    /// Honors a user corner-resize while any panel is open.
+    fn recording_overlay_size() -> (f64, f64) {
+        use std::sync::atomic::Ordering;
+        let panel = OVERLAY_PANEL_OPEN.load(Ordering::SeqCst);
+        let canvas = OVERLAY_CANVAS_OPEN.load(Ordering::SeqCst);
+        let chat = OVERLAY_CHAT_OPEN.load(Ordering::SeqCst);
+        if panel || canvas || chat {
+            if let Ok(guard) = OVERLAY_CUSTOM_SIZE.lock() {
+                if let Some(custom) = *guard {
+                    return custom;
+                }
+            }
+        }
+        let open = u8::from(panel) + u8::from(canvas) + u8::from(chat);
+        if open >= 2 {
+            return BOTH_SIZE;
+        }
+        if canvas {
+            return CANVAS_SIZE;
+        }
+        if chat {
+            return CHAT_SIZE;
+        }
+        if panel {
+            return LIVE_SIZE;
+        }
+        PILL_SIZE
+    }
+
+    fn clear_custom_size_if_idle() {
+        use std::sync::atomic::Ordering;
+        if OVERLAY_PANEL_OPEN.load(Ordering::SeqCst)
+            || OVERLAY_CANVAS_OPEN.load(Ordering::SeqCst)
+            || OVERLAY_CHAT_OPEN.load(Ordering::SeqCst)
+        {
+            return;
+        }
+        if let Ok(mut g) = OVERLAY_CUSTOM_SIZE.lock() {
+            *g = None;
+        }
+    }
+
+    fn clamp_overlay_size(width: f64, height: f64) -> (f64, f64) {
+        (
+            width.clamp(OVERLAY_SIZE_MIN.0, OVERLAY_SIZE_MAX.0).round(),
+            height.clamp(OVERLAY_SIZE_MIN.1, OVERLAY_SIZE_MAX.1).round(),
+        )
+    }
+
+    fn sync_recording_overlay(app: &tauri::AppHandle) {
+        let Ok(g) = LANE.lock() else { return };
+        let Some(lane) = g.as_ref() else { return };
+        if lane.machine.state() == State::Recording && !lane.overlay_dismissed {
+            sync_window(app, State::Recording, lane.settings.enabled, false);
+        }
+    }
+
     /// Show, hide and resize the overlay to match the lane's state.
     fn sync_window(app: &tauri::AppHandle, state: State, enabled: bool, overlay_dismissed: bool) {
         let handle = app.clone();
@@ -928,13 +1020,7 @@ use shogun_core::meeting::gate::OfferGate;
             && !(state == State::Recording && overlay_dismissed);
         let size = match state {
             State::Wrapping => RECAP_SIZE,
-            State::Recording => {
-                if OVERLAY_PANEL_OPEN.load(Ordering::SeqCst) {
-                    LIVE_SIZE
-                } else {
-                    PILL_SIZE
-                }
-            }
+            State::Recording => recording_overlay_size(),
             State::Offered => OFFER_SIZE,
             State::Idle => BAR_SIZE,
         };
@@ -980,13 +1066,28 @@ use shogun_core::meeting::gate::OfferGate;
             .ok()
             .and_then(|m| m.as_ref().map(|prev| *prev != park_mode))
             .unwrap_or(true);
+        // Corner-resize must keep the user's position — do not re-park on size-only changes.
+        let custom_overlay_size = state == State::Recording
+            && (OVERLAY_PANEL_OPEN.load(Ordering::SeqCst)
+                || OVERLAY_CANVAS_OPEN.load(Ordering::SeqCst)
+                || OVERLAY_CHAT_OPEN.load(Ordering::SeqCst))
+            && OVERLAY_CUSTOM_SIZE
+                .lock()
+                .ok()
+                .and_then(|g| *g)
+                .is_some();
         let _ = win.set_size(tauri::LogicalSize::new(size.0, size.1));
-        if !PARKED.load(Ordering::SeqCst) || size_changed || park_mode_changed {
+        if !PARKED.load(Ordering::SeqCst)
+            || park_mode_changed
+            || (size_changed && !custom_overlay_size)
+        {
             park_overlay(&win, park_mode, size);
             PARKED.store(true, Ordering::SeqCst);
             if let Ok(mut last_mode) = LAST_PARK_MODE.lock() {
                 *last_mode = Some(park_mode);
             }
+        } else if size_changed {
+            PARKED.store(true, Ordering::SeqCst);
         }
         // Whole window captures clicks while any meeting surface is visible. Transparent padding
         // around `.ov` may block clicks too — better than pointermove hit-tests that flip false
@@ -1071,6 +1172,7 @@ use shogun_core::meeting::gate::OfferGate;
                 app_bundle_id: None,
                 elapsed_ms: 0,
                 countdown_ms: 0,
+                paused: false,
             })
     }
 
@@ -1098,6 +1200,77 @@ use shogun_core::meeting::gate::OfferGate;
             return;
         }
         step(&app, Input::Stop);
+    }
+
+    /// Toggle capture/ASR pause while keeping the meeting interval open.
+    /// Pause stops feeding ASR (tears down the audio lane in RAM only — no waveform to disk).
+    /// Resume restarts the lane against the same session. Stop still ends the meeting.
+    ///
+    /// Emit + unlock first; heavy audio start/stop runs after so the webview morph is not
+    /// gated on device teardown / Deepgram reconnect.
+    #[tauri::command]
+    pub fn meeting_toggle_pause(app: tauri::AppHandle) {
+        let now = now_ms();
+        enum After {
+            Stop(Option<crate::audio_lane::Handle>),
+            Start {
+                id: i64,
+                live: Arc<RwLock<Settings>>,
+            },
+        }
+        let after = {
+            let Ok(mut g) = LANE.lock() else { return };
+            let Some(lane) = g.as_mut() else { return };
+            if lane.machine.state() != State::Recording {
+                return;
+            }
+            if lane.paused {
+                lane.paused = false;
+                let start = lane.session_id.map(|id| {
+                    set_live_emit_session(id);
+                    if let Ok(mut live) = lane.live_settings.write() {
+                        *live = lane.settings.clone();
+                    }
+                    After::Start {
+                        id,
+                        live: lane.live_settings.clone(),
+                    }
+                });
+                eprintln!("[meeting] capture resumed (session held)");
+                emit(&app, lane, now);
+                start
+            } else {
+                lane.paused = true;
+                set_live_emit_session(0);
+                let handle = lane.audio.take();
+                eprintln!("[meeting] capture paused (session held)");
+                emit(&app, lane, now);
+                Some(After::Stop(handle))
+            }
+        };
+        match after {
+            Some(After::Start { id, live }) => {
+                // Resume: open devices off the command thread so invoke returns after emit.
+                let app2 = app.clone();
+                std::thread::spawn(move || {
+                    let handle = crate::audio_lane::start(&app2, id, live);
+                    if let Ok(mut g) = LANE.lock() {
+                        if let Some(lane) = g.as_mut() {
+                            if lane.machine.state() == State::Recording && !lane.paused {
+                                lane.audio = handle;
+                                return;
+                            }
+                        }
+                    }
+                    finish_audio_stop(handle);
+                });
+            }
+            Some(After::Stop(handle)) => {
+                // Pause: join audio on a worker so the command returns immediately after emit.
+                std::thread::spawn(move || finish_audio_stop(handle));
+            }
+            None => {}
+        }
     }
 
     /// Save the note typed during the meeting (FR-MT-10). Silently does nothing when no interval
@@ -1423,16 +1596,57 @@ use shogun_core::meeting::gate::OfferGate;
         }
     }
 
-    /// Expand/collapse the live notes panel above the black control pill.
+    /// Expand/collapse the live captions panel above the black control pill.
     #[tauri::command]
     pub fn meeting_set_overlay_panel(app: tauri::AppHandle, open: bool) {
         use std::sync::atomic::Ordering;
         OVERLAY_PANEL_OPEN.store(open, Ordering::SeqCst);
-        let Ok(g) = LANE.lock() else { return };
-        let Some(lane) = g.as_ref() else { return };
-        if lane.machine.state() == State::Recording && !lane.overlay_dismissed {
-            sync_window(&app, State::Recording, lane.settings.enabled, false);
+        clear_custom_size_if_idle();
+        sync_recording_overlay(&app);
+    }
+
+    /// Expand/collapse the AI Canvas panel (Notes / document pill).
+    #[tauri::command]
+    pub fn meeting_set_overlay_canvas(app: tauri::AppHandle, open: bool) {
+        use std::sync::atomic::Ordering;
+        OVERLAY_CANVAS_OPEN.store(open, Ordering::SeqCst);
+        clear_custom_size_if_idle();
+        sync_recording_overlay(&app);
+    }
+
+    /// Expand/collapse the AI Chat panel.
+    #[tauri::command]
+    pub fn meeting_set_overlay_chat(app: tauri::AppHandle, open: bool) {
+        use std::sync::atomic::Ordering;
+        OVERLAY_CHAT_OPEN.store(open, Ordering::SeqCst);
+        clear_custom_size_if_idle();
+        sync_recording_overlay(&app);
+    }
+
+    /// Live corner-resize of the meeting overlay (captions / AI Canvas / chat).
+    /// Keeps the top-left corner fixed (grow/shrink down and right).
+    #[tauri::command]
+    pub fn meeting_set_overlay_size(app: tauri::AppHandle, width: f64, height: f64) {
+        use std::sync::atomic::Ordering;
+        if !OVERLAY_PANEL_OPEN.load(Ordering::SeqCst)
+            && !OVERLAY_CANVAS_OPEN.load(Ordering::SeqCst)
+            && !OVERLAY_CHAT_OPEN.load(Ordering::SeqCst)
+        {
+            return;
         }
+        let size = clamp_overlay_size(width, height);
+        if let Ok(mut g) = OVERLAY_CUSTOM_SIZE.lock() {
+            *g = Some(size);
+        }
+        let handle = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            let Some(win) = handle.get_webview_window(WINDOW_LABEL) else { return };
+            let prev = win.outer_position().ok();
+            let _ = win.set_size(tauri::LogicalSize::new(size.0, size.1));
+            if let Some(p) = prev {
+                let _ = win.set_position(p);
+            }
+        });
     }
 
     /// Undo tier (b): offer for this app again.

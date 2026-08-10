@@ -154,6 +154,7 @@ pub fn run() {
         meeting::mac::meeting_start,
         meeting::mac::meeting_not_now,
         meeting::mac::meeting_stop,
+        meeting::mac::meeting_toggle_pause,
         meeting::mac::meeting_save_note,
         meeting::mac::meeting_recap,
         meeting::mac::meeting_recap_minutes,
@@ -173,6 +174,9 @@ pub fn run() {
         meeting::mac::set_meeting_langs,
         meeting::mac::meeting_overlay_dismiss,
         meeting::mac::meeting_set_overlay_panel,
+        meeting::mac::meeting_set_overlay_canvas,
+        meeting::mac::meeting_set_overlay_chat,
+        meeting::mac::meeting_set_overlay_size,
         visual_recall::mac::get_visual_recall_settings,
         visual_recall::mac::set_visual_recall_enabled,
         visual_recall::mac::get_visual_recall_status,
@@ -416,6 +420,19 @@ fn setup_macos(app: &tauri::App) {
     // T-07/T-08: mouse tap → integrated engine + measurement streams.
     let (tx, rx) = std::sync::mpsc::channel::<hover::TapEvent>();
     hover::start(tx);
+    // Idle early-reject zone = notch silhouette + 2pt pad (not a full menu-bar strip).
+    {
+        use geometry::GeometryParams;
+        let p = GeometryParams::default();
+        hover::set_hover_band_cg(g.idle.h + p.enter_bottom, g.idle.w + 2.0 * p.enter_lr);
+        eprintln!(
+            "[spike] hover band Idle: {:.0}×{:.0} (visible idle {:.0}×{:.0})",
+            g.idle.w + 2.0 * p.enter_lr,
+            g.idle.h + p.enter_bottom,
+            g.idle.w,
+            g.idle.h
+        );
+    }
     let menubar_min_y = g.screen.max_y() - g.menubar_h;
     let shared = integrate::start(
         app.handle().clone(),
