@@ -1,13 +1,44 @@
-// The ShogunAI "S" ribbon mark.
+// The ShogunAI mark: a folded-paper kabuto, six flat facets around a vertical axis.
 //
-// Same geometry and gradient as the marketing site's Logo.tsx — one brand, one mark. If the site's
-// version changes, this must change with it; a desktop app drawing a different logo from the
-// landing page is the kind of drift users notice immediately.
+// Same geometry as the marketing site's Logo.tsx and the app icon
+// (src-tauri/icons/icon.svg) — one brand, one mark. If any of them changes, all of them must.
 //
 // Self-contained rather than importing from apps/website: that package is a separate workspace
-// with its own build, and the desktop app must not depend on it. The gradient ids are namespaced
-// so they can't collide with anything else the webview renders.
+// with its own build, and the desktop app must not depend on it.
 
+/** Left half of the mark, in its own 1000x644 space. The right half is this mirrored, so the two
+ *  sides cannot drift apart under editing. */
+const FACETS = [
+  "M497 4 L307 266 L487 552 Z", // centre peak
+  "M0 109 L312 279 L422 531 L179 415 Z", // upper wing
+  "M179 435 L370 508 L62 644 Z", // lower blade
+];
+
+/** Brand blue. Flat, not a gradient: the mark reads as folded paper, and a gradient across a facet
+ *  fights the fold it is meant to describe. */
+export const MARK_BLUE = "#0B4DFF";
+
+/** The mark itself, without a plate. Callers place it on whatever surface they already have. */
+export function MarkFacets({ fill = MARK_BLUE }: { fill?: string }): JSX.Element {
+  return (
+    <g fill={fill}>
+      {FACETS.map((d) => (
+        <path key={d} d={d} />
+      ))}
+      <g transform="translate(1000,0) scale(-1,1)">
+        {FACETS.map((d) => (
+          <path key={d} d={d} />
+        ))}
+      </g>
+    </g>
+  );
+}
+
+/**
+ * The mark at `size` square. The artwork is wider than it is tall (1000x644), so it is centred in
+ * a square box: every existing call site passes one number and lays the result out as a square,
+ * and changing that contract would move the logo in every header at once.
+ */
 export function Logo({ size = 26, className }: { size?: number; className?: string }): JSX.Element {
   return (
     <svg
@@ -18,35 +49,10 @@ export function Logo({ size = 26, className }: { size?: number; className?: stri
       role="img"
       aria-label="ShogunAI"
     >
-      <defs>
-        <linearGradient id="shogun-mark-grad" x1="0.15" y1="0.08" x2="0.85" y2="0.92">
-          <stop offset="0" stopColor="#38bdf8" />
-          <stop offset="0.5" stopColor="#0aa5f4" />
-          <stop offset="1" stopColor="#0b74d6" />
-        </linearGradient>
-        <linearGradient id="shogun-mark-fold" x1="0.3" y1="0.25" x2="0.7" y2="0.72">
-          <stop offset="0" stopColor="#ffffff" stopOpacity="0.55" />
-          <stop offset="1" stopColor="#ffffff" stopOpacity="0" />
-        </linearGradient>
-      </defs>
-      {/* The ribbon, then a soft highlight along its fold — two passes of the same path. */}
-      <path
-        d="M66 20 L34 34 L66 60 L34 80"
-        fill="none"
-        stroke="url(#shogun-mark-grad)"
-        strokeWidth="26"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      <path
-        d="M66 20 L34 34 L66 60 L34 80"
-        fill="none"
-        stroke="url(#shogun-mark-fold)"
-        strokeWidth="26"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        opacity="0.5"
-      />
+      {/* 1000 → 100 wide, then centred vertically: (100 − 64.4) / 2 = 17.8 */}
+      <g transform="translate(0 17.8) scale(0.1)">
+        <MarkFacets />
+      </g>
     </svg>
   );
 }

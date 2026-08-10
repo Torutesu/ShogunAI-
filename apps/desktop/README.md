@@ -63,8 +63,10 @@ output that happens to be committed (CI has no image toolchain).
 - `src-tauri/icons/icon.svg` → `icon.icns` (the app icon, what Finder and the Dock show)
 - `src-tauri/dmg/background.svg` → `background.png` / `background@2x.png` (the DMG window)
 
-The mark itself is the same "S" ribbon as `src/Logo.tsx` and the marketing site. One brand, one
-mark: change it in one place and it must change in all three.
+The mark itself — a folded-paper kabuto — is the same geometry as `src/Logo.tsx` and the marketing
+site's `Logo.tsx`. One brand, one mark: change it in one place and it must change in all three. The
+facet paths live in a 1000x644 space and only the left half is authored; the right half is that
+mirrored, so the two sides cannot drift apart.
 
 To regenerate after editing an SVG (needs `sharp`, and the Tauri CLI for the `.icns`):
 
