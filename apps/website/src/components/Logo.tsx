@@ -1,81 +1,82 @@
-/** ShogunAI "S" ribbon mark. Gradient sprite defined once in the layout. */
+/**
+ * The ShogunAI mark: a folded-paper kabuto, six flat facets around a vertical axis.
+ *
+ * Same geometry as apps/desktop/src/Logo.tsx and the app icon — one brand, one mark. If any of
+ * them changes, all of them must.
+ */
+
+/** Left half of the mark in its own 957x614 space. The right half is this mirrored, so the two
+ *  sides cannot drift apart under editing. */
+const FACETS = [
+  'M296 254 L469 0 L469 525 Z', // centre peak
+  'M0 101 L276 264 L446 524 L176 390 Z', // wing
+  'M62 613 L171 413 L331 493 Z', // blade
+];
+
+/** Brand blue, sampled from the artwork. Flat, not a gradient: the mark reads as folded paper,
+ *  and a gradient across a facet fights the fold it is meant to describe. */
+export const MARK_BLUE = '#004CFC';
+
+function Facets({ fill = MARK_BLUE }: { fill?: string }) {
+  return (
+    <g fill={fill}>
+      {FACETS.map((d) => (
+        <path key={d} d={d} />
+      ))}
+      <g transform="translate(957,0) scale(-1,1)">
+        {FACETS.map((d) => (
+          <path key={d} d={d} />
+        ))}
+      </g>
+    </g>
+  );
+}
+
+/**
+ * The mark at `size` square. The artwork is wider than it is tall (957x614), so it is centred in
+ * a square box: every call site passes one number and lays the result out as a square.
+ */
 export function Logo({ size = 26, className }: { size?: number; className?: string }) {
   return (
     <svg
       width={size}
       height={size}
-      viewBox="0 0 100 100"
+      viewBox="0 0 957 957"
       className={className}
       role="img"
       aria-label="ShogunAI"
     >
-      <use href="#logoS" />
+      <use href="#logoMark" />
     </svg>
   );
 }
 
 /**
- * Animated mark: the ribbon draws itself in on mount, then a subtle idle
- * shimmer. Inlines the path (rather than <use>) so the stroke can animate.
+ * Hero variant. The facets are inlined rather than referenced through <use> so a page can animate
+ * them individually. Note that the previous mark animated by drawing its stroke on; a mark built
+ * from filled facets cannot be drawn that way, so the `logo-draw` hook is kept for any existing
+ * rule but no longer implies a stroke-dash animation.
  */
 export function AnimatedLogo({ size = 26, className }: { size?: number; className?: string }) {
   return (
-    <svg width={size} height={size} viewBox="0 0 100 100" className={className} role="img" aria-label="ShogunAI">
-      <path
-        d="M66 20 L34 34 L66 60 L34 80"
-        fill="none"
-        stroke="url(#s-grad)"
-        strokeWidth="26"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        className="logo-draw"
-      />
-      <path
-        d="M66 20 L34 34 L66 60 L34 80"
-        fill="none"
-        stroke="url(#s-fold)"
-        strokeWidth="26"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        opacity="0.5"
-        className="logo-draw"
-      />
+    <svg width={size} height={size} viewBox="0 0 957 957" className={className} role="img" aria-label="ShogunAI">
+      <g className="logo-draw" transform="translate(0 171.5)">
+        <Facets />
+      </g>
     </svg>
   );
 }
 
-/** Hidden gradient/symbol definitions — render once near the root. */
+/** Hidden symbol definition — render once near the root. */
 export function LogoDefs() {
   return (
     <svg width="0" height="0" style={{ position: 'absolute' }} aria-hidden="true">
       <defs>
-        <linearGradient id="s-grad" x1="0.15" y1="0.08" x2="0.85" y2="0.92">
-          <stop offset="0" stopColor="#38bdf8" />
-          <stop offset="0.5" stopColor="#0aa5f4" />
-          <stop offset="1" stopColor="#0b74d6" />
-        </linearGradient>
-        <linearGradient id="s-fold" x1="0.3" y1="0.25" x2="0.7" y2="0.72">
-          <stop offset="0" stopColor="#ffffff" stopOpacity="0.55" />
-          <stop offset="1" stopColor="#ffffff" stopOpacity="0" />
-        </linearGradient>
-        <symbol id="logoS" viewBox="0 0 100 100">
-          <path
-            d="M66 20 L34 34 L66 60 L34 80"
-            fill="none"
-            stroke="url(#s-grad)"
-            strokeWidth="26"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-          <path
-            d="M66 20 L34 34 L66 60 L34 80"
-            fill="none"
-            stroke="url(#s-fold)"
-            strokeWidth="26"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            opacity="0.5"
-          />
+        <symbol id="logoMark" viewBox="0 0 957 957">
+          {/* Centred in the square box: (957 − 614) / 2 = 171.5 */}
+          <g transform="translate(0 171.5)">
+            <Facets />
+          </g>
         </symbol>
       </defs>
     </svg>

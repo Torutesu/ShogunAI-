@@ -22,15 +22,19 @@ export default function OpengraphImage() {
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 20 }}>
-          <svg width="64" height="64" viewBox="0 0 100 100">
-            <path
-              d="M66 20 L34 34 L66 60 L34 80"
-              fill="none"
-              stroke="#0aa5f4"
-              strokeWidth="26"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
+          <svg width="64" height="41" viewBox="0 0 957 614">
+            {/* Inlined rather than shared with components/Logo: the OG image is rendered by
+                Satori, which supports neither <use> nor <symbol>. Geometry must stay in step. */}
+            <g fill="#004CFC">
+              <path d="M296 254 L469 0 L469 525 Z" />
+              <path d="M0 101 L276 264 L446 524 L176 390 Z" />
+              <path d="M62 613 L171 413 L331 493 Z" />
+              <g transform="translate(957,0) scale(-1,1)">
+                <path d="M296 254 L469 0 L469 525 Z" />
+                <path d="M0 101 L276 264 L446 524 L176 390 Z" />
+                <path d="M62 613 L171 413 L331 493 Z" />
+              </g>
+            </g>
           </svg>
           <div style={{ fontSize: 40, fontWeight: 700, color: '#090b0c' }}>ShogunAI</div>
         </div>

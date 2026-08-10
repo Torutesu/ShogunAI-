@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Sign the desktop debug binary with a stable local identity so Keychain "Always Allow" survives
-# `cargo`/`tauri dev` rebuilds when paired with open ACL items (keychain_store.rs).
+# `cargo`/`tauri dev` rebuilds. What makes that work is the stable signature plus the open ACL
+# items in keychain_store.rs — NOT the entitlements file, which is deliberately empty (see the
+# comment in apps/desktop/src-tauri/entitlements.plist before adding anything to it).
 #
 # One-time setup (pick one):
 #   A) Apple Development cert from Xcode (best): export SHOGUN_SIGN_IDENTITY="Apple Development: …"

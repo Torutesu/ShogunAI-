@@ -54,3 +54,31 @@ env var of the same name overriding it for local development. Precedence
 - Hover via a listen-only **CGEventTap** from the start (global NSEvent monitor drops
   mouseMoved over other apps' fullscreen / during menu tracking).
 - `level 101` blocks IME (tauri-nspanel #104) — drop to `25` while the search field is key.
+
+## App icon and disk-image art
+
+Both are generated from SVG sources; the SVGs are the things to edit, the rasters are build
+output that happens to be committed (CI has no image toolchain).
+
+- `src-tauri/icons/icon.svg` → `icon.icns` (the app icon, what Finder and the Dock show)
+- `src-tauri/dmg/background.svg` → `background.png` / `background@2x.png` (the DMG window)
+
+The mark itself — a folded-paper kabuto — is the same geometry as `src/Logo.tsx` and the marketing
+site's `Logo.tsx`. One brand, one mark: change it in one place and it must change in all three. The
+facet paths live in a 1000x644 space and only the left half is authored; the right half is that
+mirrored, so the two sides cannot drift apart.
+
+To regenerate after editing an SVG (needs `sharp`, and the Tauri CLI for the `.icns`):
+
+```bash
+npx --yes sharp-cli -i src-tauri/icons/icon.svg -o src-tauri/icons/icon.png resize 1024 1024
+pnpm tauri icon src-tauri/icons/icon.png -o src-tauri/icons
+# The CLI also emits Windows/iOS/Android sets. This app is macOS-only — keep icon.icns,
+# icon.png and icon.svg, and delete the rest so the folder does not fill with dead art.
+
+npx --yes sharp-cli -i src-tauri/dmg/background.svg -o src-tauri/dmg/background.png resize 660 400
+npx --yes sharp-cli -i src-tauri/dmg/background.svg -o src-tauri/dmg/background@2x.png resize 1320 800
+```
+
+The DMG icon coordinates live in the `appdmg` spec inside `.github/workflows/release.yml` and are
+drawn into the background art. Move an icon in one place and it must move in the other.
