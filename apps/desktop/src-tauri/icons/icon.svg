@@ -2,7 +2,8 @@
      from this file — see the regeneration command in apps/desktop/README.md.
 
      The mark is the same folded-paper kabuto as apps/desktop/src/Logo.tsx and the marketing
-     site's Logo.tsx: one brand, one mark. If those change, this must change with them.
+     site's Logo.tsx: one brand, one mark. If those change, this must change with them. Only the
+     left half is authored; the right is that mirrored, so the two sides cannot drift apart.
 
      Layout follows Apple's macOS icon grid: a 1024 canvas with the rounded-square body inset to
      824x824 (100pt margin) and a 185 corner radius, so the icon sits at the same optical size as
@@ -28,16 +29,16 @@
           fill="none" stroke="#0B1220" stroke-opacity="0.10" stroke-width="1"/>
   </g>
 
-  <!-- Mark: 1000x644 artwork scaled to 620 wide and centred on the body.
-       x: 512 − 620/2 = 202.  y: 512 − (620 × 0.644)/2 = 512 − 199.6 = 312.4 -->
-  <g transform="translate(202 312.4) scale(0.62)" fill="#0B4DFF">
-    <path d="M497 4 L307 266 L487 552 Z"/>
-    <path d="M0 109 L312 279 L422 531 L179 415 Z"/>
-    <path d="M179 435 L370 508 L62 644 Z"/>
-    <g transform="translate(1000,0) scale(-1,1)">
-      <path d="M497 4 L307 266 L487 552 Z"/>
-      <path d="M0 109 L312 279 L422 531 L179 415 Z"/>
-      <path d="M179 435 L370 508 L62 644 Z"/>
+  <!-- Mark: the 957x614 artwork scaled to 620 wide (0.6479) and centred on the body.
+       x: (1024 − 620) / 2 = 202.   y: (1024 − 620 × 614/957) / 2 = (1024 − 397.7) / 2 = 313.1 -->
+  <g transform="translate(202 313.1) scale(0.6479)" fill="#004CFC">
+    <path d="M296 254 L469 0 L469 525 Z"/>
+    <path d="M0 101 L276 264 L446 524 L176 390 Z"/>
+    <path d="M62 613 L171 413 L331 493 Z"/>
+    <g transform="translate(957,0) scale(-1,1)">
+      <path d="M296 254 L469 0 L469 525 Z"/>
+      <path d="M0 101 L276 264 L446 524 L176 390 Z"/>
+      <path d="M62 613 L171 413 L331 493 Z"/>
     </g>
   </g>
 </svg>

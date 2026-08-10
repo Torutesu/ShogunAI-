@@ -16,9 +16,9 @@
     <!-- A pool of light under the app icon: the eye lands on what you are meant to drag. Brand blue,
          matching the mark on the icon tile sitting on top of it. -->
     <radialGradient id="spot" cx="0.5" cy="0.5" r="0.5">
-      <stop offset="0" stop-color="#0B4DFF" stop-opacity="0.13"/>
-      <stop offset="0.65" stop-color="#0B4DFF" stop-opacity="0.03"/>
-      <stop offset="1" stop-color="#0B4DFF" stop-opacity="0"/>
+      <stop offset="0" stop-color="#004CFC" stop-opacity="0.13"/>
+      <stop offset="0.65" stop-color="#004CFC" stop-opacity="0.03"/>
+      <stop offset="1" stop-color="#004CFC" stop-opacity="0"/>
     </radialGradient>
     <!-- The arrow fades in from the app and lands solid on the folder, so it reads as motion
          towards Applications rather than a static rule between two icons. userSpaceOnUse is
