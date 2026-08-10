@@ -2786,6 +2786,44 @@ kbd {
   box-shadow: none;
   overflow: visible;
 }
+.ov--live-desk {
+  position: relative;
+  justify-content: stretch;
+  align-items: stretch;
+  padding: 0;
+  gap: 0;
+  overflow: hidden;
+  /* Empty desk must not eat hits in the webview; AppKit still needs ignoresMouseEvents
+     (useDeskClickThrough). Children re-enable. */
+  pointer-events: none;
+  background: transparent;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  border: none;
+  box-shadow: none;
+}
+.ov--live-desk .ov__float {
+  pointer-events: auto;
+}
+.ov__float {
+  position: absolute;
+  z-index: 2;
+  box-sizing: border-box;
+}
+.ov__bar-shell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  z-index: 6;
+}
+.ov__bar-shell.ov__float {
+  align-items: stretch;
+}
+.ov__bar-move {
+  align-self: center;
+}
 .ov--live-pill {
   justify-content: flex-end;
   align-items: center;
@@ -2808,6 +2846,9 @@ kbd {
   overflow: hidden;
   box-shadow: none;
   color: #fff;
+}
+.ov__live.ov__float {
+  flex: none;
 }
 /* Black floating control capsule — matches in-meeting reference. */
 .ov__bar {
@@ -3320,79 +3361,157 @@ kbd {
   opacity: 0.55;
   cursor: default;
 }
-/* recap */
+/* recap — match AI Canvas dark glass, not the old translucent pill */
 .ov--recap {
   align-items: stretch;
-  padding: 0 0 0 0;
+  padding: 8px;
+  background: transparent;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  overflow: visible;
 }
 .ov__recap {
   flex: 1;
   min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 14px 16px 14px 6px;
+  gap: 0;
+  padding: 14px 14px 12px;
+  background: rgba(12, 12, 14, 0.88);
+  -webkit-backdrop-filter: blur(40px) saturate(1.4);
+  backdrop-filter: blur(40px) saturate(1.4);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 18px;
+  overflow: hidden;
+  clip-path: inset(0 round 18px);
+  -webkit-clip-path: inset(0 round 18px);
+  color: #fff;
+  filter: drop-shadow(0 18px 36px rgba(0, 0, 0, 0.4));
 }
 .ov__rhead {
   display: flex;
-  align-items: baseline;
-  gap: 8px;
-  -webkit-app-region: drag;
-  app-region: drag;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.ov__rhead-main {
+  min-width: 0;
+  flex: 1;
   cursor: grab;
 }
+.ov__rkicker {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: rgba(255, 255, 255, 0.45);
+  margin-bottom: 3px;
+}
 .ov__rtitle {
-  font-size: var(--fs-sm);
-  font-weight: 600;
+  font-size: 16px;
+  font-weight: 650;
+  letter-spacing: -0.015em;
+  line-height: 1.25;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: #fff;
+}
+.ov__rhead-tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  padding-top: 2px;
 }
 .ov__rmin {
   flex: none;
-  font-size: var(--fs-xs);
-  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.7);
   font-variant-numeric: tabular-nums;
+  padding: 4px 8px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.1);
 }
 .ov__rbody {
   flex: 1;
   min-height: 0;
   overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-right: 2px;
   -webkit-app-region: no-drag;
   app-region: no-drag;
+}
+.ov__rfoot {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+.ov__rdone {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: #111;
+  background: #fff;
+  border: none;
+  border-radius: 11px;
+  padding: 10px 14px;
+  cursor: pointer;
+  transition: background 120ms ease, transform 120ms ease;
+}
+.ov__rdone:hover {
+  background: #f0f0f0;
+}
+.ov__rdone:active {
+  transform: scale(0.985);
 }
 .ov__rnotes {
   margin: 0;
   font: inherit;
-  font-size: var(--fs-xs);
-  line-height: 1.6;
+  font-size: 13px;
+  line-height: 1.55;
+  color: rgba(255, 255, 255, 0.88);
   white-space: pre-wrap;
   word-break: break-word;
 }
 .ov__rempty {
-  font-size: var(--fs-xs);
-  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  color: rgba(255, 255, 255, 0.45);
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
 }
 .ov__disclosure,
 .ov__listening {
-  font-size: var(--fs-xs);
+  font-size: 11px;
   line-height: 1.45;
-  color: var(--muted);
+  color: rgba(255, 255, 255, 0.4);
 }
 .ov__disclosure {
   margin: 0;
-  padding: 0 12px 10px;
+  padding: 0;
 }
 .ov__listening {
   margin-top: 2px;
 }
 
-/* The model-generated minutes, layered under the notes once they arrive. Kept calm: a hairline
-   above it separates it from the raw notes without a heavy container. */
 .ov__minutes {
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid var(--hairline, rgba(128, 128, 128, 0.2));
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -3402,109 +3521,190 @@ kbd {
   padding-top: 0;
   border-top: none;
 }
+.ov__mstatus {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+}
+.ov__mstatus-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #6ea8ff;
+  box-shadow: 0 0 0 0 rgba(110, 168, 255, 0.55);
+  animation: ov-mstatus-pulse 1.4s ease-out infinite;
+  flex: none;
+}
+@keyframes ov-mstatus-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(110, 168, 255, 0.45);
+  }
+  70% {
+    box-shadow: 0 0 0 8px rgba(110, 168, 255, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(110, 168, 255, 0);
+  }
+}
 .ov__mpending,
 .ov__mdegraded {
   margin: 0;
-  font-size: var(--fs-xs);
+  font-size: 12px;
   line-height: 1.5;
-  color: var(--muted);
+  color: rgba(255, 255, 255, 0.55);
 }
 .ov__mdegraded {
-  padding: 8px 10px;
-  border-radius: 8px;
-  background: rgba(128, 128, 128, 0.1);
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.65);
 }
 .ov__mdegraded--warn {
-  color: var(--warn, #c9a227);
+  color: #e6c35c;
   background: rgba(201, 162, 39, 0.12);
   border: 1px solid rgba(201, 162, 39, 0.35);
 }
 .ov__notes {
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid var(--hairline, rgba(128, 128, 128, 0.2));
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.ov__tsec {
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid var(--hairline, rgba(128, 128, 128, 0.2));
   display: flex;
   flex-direction: column;
   gap: 8px;
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+}
+.ov__tsec {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
 }
 .ov__tturns {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
 }
 .ov__tturn {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
 }
 .ov__tmeta {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 8px;
 }
 .ov__tspeaker {
-  font-size: var(--fs-xs);
+  font-size: 11px;
   font-weight: 600;
+  color: rgba(255, 255, 255, 0.85);
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.08);
 }
 .ov__ttime {
-  font-size: var(--fs-xs);
-  color: var(--muted);
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.4);
   font-variant-numeric: tabular-nums;
 }
 .ov__ttext {
   margin: 0;
-  font-size: var(--fs-xs);
-  line-height: 1.55;
+  font-size: 13px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.78);
   word-break: break-word;
 }
 .ov__tempty {
   margin: 0;
-  font-size: var(--fs-xs);
+  font-size: 12px;
   line-height: 1.5;
-  color: var(--muted);
+  color: rgba(255, 255, 255, 0.4);
 }
 .ov__msec {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+.ov__msec--summary {
+  background: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.07) 0%,
+    rgba(255, 255, 255, 0.035) 100%
+  );
+  border-color: rgba(255, 255, 255, 0.12);
 }
 .ov__mhead {
-  font-size: var(--fs-xs);
+  font-size: 11px;
   font-weight: 600;
-  color: var(--muted);
+  color: rgba(255, 255, 255, 0.45);
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.06em;
 }
 .ov__msummary {
   margin: 0;
-  font-size: var(--fs-xs);
-  line-height: 1.6;
+  font-size: 14px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.92);
   word-break: break-word;
+  white-space: pre-wrap;
 }
 .ov__mlist {
   margin: 0;
-  padding-left: 16px;
-  font-size: var(--fs-xs);
-  line-height: 1.6;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: rgba(255, 255, 255, 0.88);
 }
 .ov__mlist li {
+  position: relative;
+  padding-left: 14px;
   word-break: break-word;
 }
+.ov__mlist li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.55em;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.35);
+}
+.ov__mlist--actions li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+}
+.ov__maction {
+  flex: 1;
+  min-width: 0;
+}
 .ov__mowner {
-  margin-left: 6px;
-  padding: 0 6px;
-  border-radius: 8px;
-  font-size: var(--fs-xs);
-  color: var(--muted);
-  background: rgba(128, 128, 128, 0.15);
+  margin-left: 0;
+  padding: 2px 7px;
+  border-radius: 7px;
+  font-size: 11px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.7);
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.08);
 }
 /* ═══════════════════════════════════════════════════════════════════════════════════════════
    Full UI — the separate window (spec §D). Shares the tokens above; the panel is a dense
@@ -4328,6 +4528,10 @@ body.full-window {
   font-size: 13px;
   color: rgba(255, 255, 255, 0.45);
 }
+.ov__canvas-empty--soft {
+  margin-top: 10px;
+  font-size: 11px;
+}
 .ov__canvas-timeline {
   list-style: none;
   margin: 0;
@@ -4441,7 +4645,7 @@ body.full-window {
   display: inline-flex;
   align-items: stretch;
   border: 1px solid rgba(255, 255, 255, 0.16);
-  border-radius: 999px;
+  border-radius: 11px;
   overflow: hidden;
   flex: none;
 }
@@ -4504,6 +4708,10 @@ body.full-window {
   line-height: 1.45;
   color: rgba(255, 255, 255, 0.95);
   white-space: pre-wrap;
+}
+.ov__split-line.is-pending {
+  min-height: 1.45em;
+  color: transparent;
 }
 .ov__livebody--split {
   overflow: auto;

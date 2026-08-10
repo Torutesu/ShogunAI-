@@ -192,23 +192,6 @@ interface TimelineStep {
   detail: string;
 }
 
-/** Heuristic rolling summary from transcript so far (LLM path: Select KK Messages — not wired yet). */
-function buildLiveSummary(lines: TranscriptLine[]): string {
-  const turns = groupTurns(lines);
-  if (turns.length === 0) return "";
-  const recent = turns.slice(-10);
-  if (turns.length <= 3) {
-    return recent.map((t) => t.text.trim()).filter(Boolean).join(" ");
-  }
-  const opener = turns
-    .slice(0, 2)
-    .map((t) => t.text.trim())
-    .filter(Boolean)
-    .join(" ");
-  const bullets = recent.slice(-6).map((t) => `• ${t.speakerLabel}: ${t.text.trim()}`);
-  return [opener, bullets.join("\n")].filter(Boolean).join("\n\n");
-}
-
 /** Chronological milestone list — time-bucketed speaker clusters. */
 function buildTimeline(lines: TranscriptLine[]): TimelineStep[] {
   const turns = groupTurns(lines);
@@ -421,6 +404,11 @@ export function MeetingOverlay(): JSX.Element | null {
   const [canvasMode, setCanvasMode] = useState<CanvasMode>("live_summary");
   const [canvasModeOpen, setCanvasModeOpen] = useState(false);
   const [canvasSummary, setCanvasSummary] = useState("");
+  const [canvasSummaryStatus, setCanvasSummaryStatus] = useState<
+    "idle" | "waiting" | "updating" | "needs_key" | "failed"
+  >("idle");
+  const canvasSummaryFingerprintRef = useRef("");
+  const canvasSummaryInFlightRef = useRef(false);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState("");
   const [chatBusy, setChatBusy] = useState(false);
@@ -562,12 +550,76 @@ export function MeetingOverlay(): JSX.Element | null {
   }, [view?.state, notesOpen, ccOn, chatOn]);
 
   useEffect(() => {
-    if (!notesOpen || canvasMode !== "live_summary") return;
+    if (!notesOpen || canvasMode !== "live_summary" || view?.state !== "recording") {
+      return;
+    }
+    const turns = groupTurns(liveLines);
+    const transcript = turns
+      .map((t) => `${t.speakerLabel}: ${t.text.trim()}`)
+      .filter((line) => line.length > 2)
+      .join("\n");
+    if (turns.length < 5 || transcript.length < 420) {
+      setCanvasSummaryStatus((s) => (s === "updating" ? s : "waiting"));
+      return;
+    }
+    const fingerprint = `${turns.length}:${transcript.length}:${turns[turns.length - 1]?.ts ?? 0}`;
+    if (fingerprint === canvasSummaryFingerprintRef.current) return;
+    if (canvasSummaryInFlightRef.current) return;
+
     const timer = window.setTimeout(() => {
-      setCanvasSummary(buildLiveSummary(liveLines));
-    }, 400);
+      if (canvasSummaryInFlightRef.current) return;
+      canvasSummaryInFlightRef.current = true;
+      setCanvasSummaryStatus("updating");
+      void invoke("meeting_request_live_summary", { transcript })
+        .then(() => {
+          canvasSummaryFingerprintRef.current = fingerprint;
+        })
+        .catch((err: unknown) => {
+          canvasSummaryInFlightRef.current = false;
+          const msg = String(err);
+          if (msg.includes("need_more_context") || msg.includes("rate_limited") || msg.includes("in_flight")) {
+            setCanvasSummaryStatus((s) => (canvasSummary ? s : "waiting"));
+          } else if (msg.includes("needs_key")) {
+            setCanvasSummaryStatus("needs_key");
+          } else {
+            setCanvasSummaryStatus("failed");
+          }
+        });
+    }, 22_000);
     return () => window.clearTimeout(timer);
-  }, [notesOpen, canvasMode, liveLines]);
+  }, [notesOpen, canvasMode, liveLines, view?.state, canvasSummary]);
+
+  useEffect(() => {
+    const offOk = listen<{ summary: string }>("meeting_live_summary", (e) => {
+      canvasSummaryInFlightRef.current = false;
+      const text = e.payload.summary?.trim() ?? "";
+      if (text) {
+        setCanvasSummary(text);
+        setCanvasSummaryStatus("idle");
+      }
+    });
+    const offKey = listen("meeting_live_summary_needs_key", () => {
+      canvasSummaryInFlightRef.current = false;
+      setCanvasSummaryStatus("needs_key");
+    });
+    const offFail = listen("meeting_live_summary_failed", () => {
+      canvasSummaryInFlightRef.current = false;
+      setCanvasSummaryStatus("failed");
+    });
+    return () => {
+      void offOk.then((f) => f());
+      void offKey.then((f) => f());
+      void offFail.then((f) => f());
+    };
+  }, []);
+
+  useEffect(() => {
+    if (view?.state === "recording") return;
+    setCanvasSummary("");
+    setCanvasSummaryStatus("idle");
+    canvasSummaryFingerprintRef.current = "";
+    canvasSummaryInFlightRef.current = false;
+  }, [view?.state]);
 
   useEffect(() => {
     if (!ccOn) {
@@ -730,8 +782,6 @@ export function MeetingOverlay(): JSX.Element | null {
   if (!view || !view.enabled || view.state === "idle") return null;
 
   const name = view.title?.trim() || t.meetingUntitled;
-
-  const grip = <div className="ov__grip" title={t.meetingNotes} />;
 
   const handleStop = (): void => {
     if (stopping) return;
@@ -980,9 +1030,22 @@ export function MeetingOverlay(): JSX.Element | null {
         <div className="ov__canvas-body ov__nodrag" data-no-drag>
           {canvasMode === "live_summary" ? (
             canvasSummary ? (
-              <p className="ov__canvas-summary">{canvasSummary}</p>
+              <>
+                <p className="ov__canvas-summary">{canvasSummary}</p>
+                {canvasSummaryStatus === "updating" ? (
+                  <p className="ov__canvas-empty ov__canvas-empty--soft">{t.meetingCanvasSummaryUpdating}</p>
+                ) : null}
+              </>
             ) : (
-              <p className="ov__canvas-empty">{t.meetingCanvasSummaryEmpty}</p>
+              <p className="ov__canvas-empty">
+                {canvasSummaryStatus === "needs_key"
+                  ? t.meetingCanvasSummaryNeedsKey
+                  : canvasSummaryStatus === "failed"
+                    ? t.meetingCanvasSummaryFailed
+                    : canvasSummaryStatus === "updating"
+                      ? t.meetingCanvasSummaryUpdating
+                      : t.meetingCanvasSummaryWaiting}
+              </p>
             )
           ) : timelineSteps.length > 0 ? (
             <ol className="ov__canvas-timeline">
@@ -1540,8 +1603,12 @@ export function MeetingOverlay(): JSX.Element | null {
                     {liveTurns.map((turn, i) => {
                       const translation = usableTranslation(turn.translation);
                       return (
-                        <p className="ov__split-line" key={`dst-${turn.ts}-${i}`}>
-                          {translation ?? turn.text}
+                        <p
+                          className={`ov__split-line${translation ? "" : " is-pending"}`}
+                          key={`dst-${turn.ts}-${i}`}
+                          aria-busy={!translation}
+                        >
+                          {translation ?? ""}
                         </p>
                       );
                     })}
@@ -1585,66 +1652,88 @@ export function MeetingOverlay(): JSX.Element | null {
 
   return (
     <div className="ov ov--recap" onPointerDown={beginMeetingDrag}>
-      {grip}
       <div className="ov__recap">
-        <div className="ov__rhead ov__drag">
-          <span className="ov__rtitle">{recap?.title ?? name}</span>
-          {recap?.duration_minutes != null ? (
-            <span className="ov__rmin">
-              {recap.duration_minutes} {t.meetingRecapMinutes}
-            </span>
-          ) : null}
-        </div>
+        <header className="ov__rhead">
+          <div className="ov__rhead-main ov__drag" onPointerDown={beginMeetingDrag}>
+            <div className="ov__rkicker">{t.meetingRecapTitle}</div>
+            <div className="ov__rtitle">{recap?.title ?? name}</div>
+          </div>
+          <div className="ov__rhead-tools">
+            {recap?.duration_minutes != null ? (
+              <span className="ov__rmin">
+                {recap.duration_minutes} {t.meetingRecapMinutes}
+              </span>
+            ) : null}
+            <DragHandle6Dot
+              className="ov__drag ov__panel-grip"
+              title={t.meetingNotes}
+              onPointerDown={beginMeetingDrag}
+            />
+          </div>
+        </header>
+
         <div className="ov__rbody ov__nodrag">
-          {showWrapping ? <p className="ov__mpending">{t.meetingMinutesPending}</p> : null}
+          {showWrapping ? (
+            <div className="ov__mstatus">
+              <span className="ov__mstatus-dot" aria-hidden />
+              <p className="ov__mpending">{t.meetingMinutesPending}</p>
+            </div>
+          ) : null}
+
           {minutesReady ? (
             <div className="ov__minutes ov__minutes--lead">
               {minutes?.summary ? (
-                <div className="ov__msec">
+                <section className="ov__msec ov__msec--summary">
                   <div className="ov__mhead">{t.meetingMinutesSummary}</div>
                   <p className="ov__msummary">{minutes.summary}</p>
-                </div>
+                </section>
               ) : null}
               {minutes && minutes.decisions.length > 0 ? (
-                <div className="ov__msec">
+                <section className="ov__msec">
                   <div className="ov__mhead">{t.meetingMinutesDecisions}</div>
                   <ul className="ov__mlist">
                     {minutes.decisions.map((d, i) => (
                       <li key={i}>{d}</li>
                     ))}
                   </ul>
-                </div>
+                </section>
               ) : null}
               {minutes && minutes.next_actions.length > 0 ? (
-                <div className="ov__msec">
+                <section className="ov__msec">
                   <div className="ov__mhead">{t.meetingMinutesNextActions}</div>
-                  <ul className="ov__mlist">
+                  <ul className="ov__mlist ov__mlist--actions">
                     {minutes.next_actions.map((a, i) => (
                       <li key={i}>
-                        {a.text}
+                        <span className="ov__maction">{a.text}</span>
                         {a.owner ? <span className="ov__mowner">{a.owner}</span> : null}
                       </li>
                     ))}
                   </ul>
-                </div>
+                </section>
               ) : null}
             </div>
           ) : null}
+
           {showMinutesPending ? (
-            <p className="ov__mpending">{t.meetingMinutesPending}</p>
+            <div className="ov__mstatus">
+              <span className="ov__mstatus-dot" aria-hidden />
+              <p className="ov__mpending">{t.meetingMinutesPending}</p>
+            </div>
           ) : null}
           {showMinutesNeedsKey ? (
             <p className="ov__mdegraded">{t.meetingMinutesNeedsKey}</p>
           ) : null}
+
           {recap?.notes ? (
-            <div className="ov__notes">
+            <section className="ov__notes">
               <div className="ov__mhead">{t.meetingRecapYourNotes}</div>
               <pre className="ov__rnotes">{recap.notes}</pre>
-            </div>
+            </section>
           ) : !minutesReady && !hasTranscript ? (
             <div className="ov__rempty">{t.meetingRecapNoNotes}</div>
           ) : null}
-          <div className="ov__tsec">
+
+          <section className="ov__tsec">
             <div className="ov__mhead">{t.meetingTranscriptHeading}</div>
             {hasTranscript ? (
               <div className="ov__tturns">
@@ -1663,12 +1752,19 @@ export function MeetingOverlay(): JSX.Element | null {
             ) : (
               <p className="ov__tempty">{t.meetingTranscriptEmpty}</p>
             )}
-          </div>
+          </section>
         </div>
-        <p className="ov__disclosure">{t.meetingDisclosureRecap}</p>
-        <button type="button" className="ov__go ov__go--wide ov__nodrag" onClick={() => call("meeting_wrapped")}>
-          {t.meetingRecapDone}
-        </button>
+
+        <footer className="ov__rfoot ov__nodrag">
+          <p className="ov__disclosure">{t.meetingDisclosureRecap}</p>
+          <button
+            type="button"
+            className="ov__rdone"
+            onClick={() => call("meeting_wrapped")}
+          >
+            {t.meetingRecapDone}
+          </button>
+        </footer>
       </div>
     </div>
   );

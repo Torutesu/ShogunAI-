@@ -341,8 +341,12 @@ export const STRINGS = {
     meetingCanvasOfficial: "Official",
     meetingCanvasDrag: "Move",
     meetingCanvasSummaryEmpty: "Summary appears as the conversation grows.",
+    meetingCanvasSummaryWaiting: "Listening for more of the meeting before summarizing…",
     meetingCanvasTimelineEmpty: "Timeline fills as topics emerge.",
     meetingCanvasSummaryUpdating: "Updating summary…",
+    meetingCanvasSummaryNeedsKey:
+      "Live Summary needs the Select KK key in Settings → Nightly review.",
+    meetingCanvasSummaryFailed: "Couldn’t update the summary. Will retry as the meeting continues.",
     meetingDisplayOriginal: "Original text",
     meetingChatTitle: "Chat",
     meetingChatPlaceholder: "Please ask anything about meeting.",

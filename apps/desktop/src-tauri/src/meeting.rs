@@ -733,7 +733,7 @@ use shogun_core::meeting::gate::OfferGate;
     const CHAT_SIZE: (f64, f64) = (360.0, 520.0);
     /// Multiple panels stacked above the control capsule.
     const BOTH_SIZE: (f64, f64) = (520.0, 720.0);
-    const RECAP_SIZE: (f64, f64) = (400.0, 280.0);
+    const RECAP_SIZE: (f64, f64) = (420.0, 520.0);
     /// Whether the live captions panel is expanded above the control pill.
     static OVERLAY_PANEL_OPEN: AtomicBool = AtomicBool::new(true);
     /// Whether the AI Canvas panel is open above the control pill (Notes button).

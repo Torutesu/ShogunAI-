@@ -33,6 +33,8 @@ mod launch_at_login;
 pub mod meeting;
 mod meeting_recap;
 #[cfg(target_os = "macos")]
+mod meeting_live_summary;
+#[cfg(target_os = "macos")]
 mod meeting_translate;
 mod mic;
 mod analytics;
@@ -159,6 +161,8 @@ pub fn run() {
         meeting::mac::meeting_recap,
         meeting::mac::meeting_recap_minutes,
         meeting::mac::meeting_select_kk_configured,
+        #[cfg(target_os = "macos")]
+        meeting_live_summary::meeting_request_live_summary,
         meeting::mac::get_deepgram_key_status,
         meeting::mac::set_deepgram_key,
         meeting::mac::clear_deepgram_key,
