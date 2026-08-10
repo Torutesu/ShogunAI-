@@ -1,0 +1,25 @@
+[package]
+name = "shogun-license"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "SHOGUN licence tokens: verify the signed, device-bound plan assertion issued by the licence API (issue #8, FR-BIL-08/09)."
+
+# Its own crate rather than a module in shogun-agents so the permission model stays dependency-
+# free: signature verification needs ed25519/base64/serde_json, and shogun-agents is the crate
+# every other one sits on top of. Dependency direction: license → agents (for the shared
+# Plan/BillingState vocabulary). Platform-independent, so the grace-window boundaries are
+# unit-testable on Linux CI.
+
+[dependencies]
+shogun-agents = { path = "../shogun-agents" }
+# Verification only — no signing key ever exists on the device (the private key lives on the
+# licence API). `rand_core` is not needed for verify, so default features stay off.
+ed25519-dalek = { version = "2", default-features = false, features = ["alloc"] }
+base64 = "0.22"
+serde_json = "1"
+
+[lints]
+workspace = true

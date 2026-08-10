@@ -20,6 +20,7 @@ mod connectors;
 mod screen_ocr;
 pub mod display;
 mod dream;
+mod billing;
 mod entitlement;
 mod exclusions;
 mod fullui;
@@ -289,6 +290,14 @@ pub fn run() {
         // State is Rust-owned (invariant 1); the AX check split (silent poll / prompting button)
         // and the accessibility-changed watcher are the #46 assets, kept.
         entitlement::mac::entitlement_status,
+        // Stripe billing (issue #8). Status/activation are local; checkout and the portal open
+        // Stripe-hosted pages in the system browser — no card UI in this app (FR-BIL-07).
+        billing::mac::billing_status,
+        billing::mac::billing_activate,
+        billing::mac::billing_refresh,
+        billing::mac::billing_deactivate,
+        billing::mac::billing_open_checkout,
+        billing::mac::billing_open_portal,
         onboarding::mac::accessibility_status,
         onboarding::mac::onboarding_state,
         onboarding::mac::set_onboarding_state,
@@ -543,6 +552,10 @@ fn setup_macos(app: &tauri::App) {
 
     voice_session::mac::init(app.handle());
     voice_shortcut::install(app.handle());
+
+    // Licence verification: once at launch, then every 24h (FR-BIL-08). Off the setup thread —
+    // a slow or unreachable licence API must never delay the panel coming up.
+    billing::mac::spawn_verification_loop(app.handle().clone());
 
     // WP2.2: start the memory capture source. Open the on-device DB under the app-data dir and
     // poll the focus into memory (exclusion → walk → collapse → extract). AX text only (invariant

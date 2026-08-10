@@ -63,6 +63,8 @@ shogun-agents = { path = "../../../crates/shogun-agents" }
 # `live` for the effectful side (reqwest + Keychain). shogun-mcp for scope::from_source.
 shogun-integrations = { path = "../../../crates/shogun-integrations", features = ["live"] }
 shogun-mcp = { path = "../../../crates/shogun-mcp" }
+# Licence-token verification for the Stripe billing state (issue #8).
+shogun-license = { path = "../../../crates/shogun-license" }
 # The turbo whisper model is fetched once over HTTPS on first use (model_fetch.rs). The HTTP egress
 # itself lives in shogun-core (`model_asset::download_verified`, feature `net`) — FR-TR-03 keeps the
 # one raw HTTP client in the traced egress crate, so the shell no longer depends on reqwest/sha2.

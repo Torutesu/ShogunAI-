@@ -24,11 +24,19 @@ shogun-agents = { path = "../shogun-agents" }
 # The Memory API applies the same confidence rule as UI reads (FR-API-06); reuse the single
 # implementation in shogun-fusion rather than re-deriving the bands. One-way: mcp → fusion.
 shogun-fusion = { path = "../shogun-fusion" }
+# Licence-token verification for the billing half of plan resolution (issue #8). One-way: mcp →
+# license → agents.
+shogun-license = { path = "../shogun-license" }
 # Parse the actions.execute request body (a small JSON action spec).
 serde_json = "1"
 # REST server (feature `server`): localhost-bound axum listener over the pure routing layer.
 axum = { version = "0.8", optional = true }
 tokio = { version = "1", optional = true, features = ["rt-multi-thread", "net", "macros", "io-util"] }
+
+[dev-dependencies]
+# Mint a licence token in-test to prove that billing overrides an expired trial end-to-end.
+ed25519-dalek = { version = "2", default-features = false, features = ["alloc"] }
+base64 = "0.22"
 
 [lints]
 workspace = true

@@ -4,8 +4,9 @@
 //! - **trial stamp**: `onboarding.json`'s `trial_started_at` (unix seconds, stamped once at
 //!   onboarding completion — see `crate::onboarding`). No stamp = trial-not-started = full access
 //!   (the documented default; the 7-day clock starts at completion).
-//! - **billing**: the pre-Stripe stub (`BillingState::Unknown`). Issue #8 replaces exactly this
-//!   one line with a real subscription lookup; nothing else changes.
+//! - **billing**: this device's verified licence token (issue #8 — `crate::billing`). A valid
+//!   token is `BillingState::Active(plan)`; no licence, an expired grace window or a token this
+//!   build cannot verify is `Unknown`/`Lapsed`, which falls back to the trial rules.
 //!
 //! Every gate takes the resolved [`Entitlements`] value from here — plan decisions live in the
 //! Rust core; the webview only *displays* the state (`entitlement_status` below). The onboarding
@@ -14,9 +15,7 @@
 
 #[cfg(target_os = "macos")]
 pub mod mac {
-    use shogun_agents::entitlement::{
-        entitlements, resolve_plan, BillingState, Entitlements, PlanStatus,
-    };
+    use shogun_agents::entitlement::{entitlements, resolve_plan, Entitlements, PlanStatus};
     use tauri::AppHandle;
 
     fn now_ms() -> u64 {
@@ -37,8 +36,8 @@ pub mod mac {
     /// Resolve the entitlements in force right now. Called at each enforcement point (cheap: one
     /// in-memory state read + pure math), so trial expiry takes effect without a restart.
     pub fn current(app: &AppHandle) -> Entitlements {
-        // Billing stub (#8): no record known yet. Stripe replaces this line.
-        let billing = BillingState::Unknown;
+        // The cached licence token — a local file read plus a signature check, no network (#8).
+        let billing = crate::billing::mac::state(app);
         let plan = resolve_plan(trial_started_at_ms(app), billing);
         entitlements(plan, now_ms())
     }

@@ -31,7 +31,7 @@
 
 主要API:
 - `Plan { Trial{started_at_ms: Option<u64>}, Standard, Pro }`
-- `BillingState { Unknown(既定・Stripe前スタブ), Active(PaidPlan), Lapsed }` / `resolve_plan(trial_stamp_ms, billing) -> Plan`
+- `BillingState { Unknown(課金レコードなし), Active(PaidPlan), Lapsed }` / `resolve_plan(trial_stamp_ms, billing) -> Plan`（#8 で実物が供給されるようになった。§5）
 - `entitlements(plan, now_ms) -> Entitlements`（**純粋**。now_ms は常に引数 — リポジトリ規約どおり時計を読まない）
 - `TRIAL_DURATION_MS = 7日`。境界は `now - start >= 7日` で失効（`start+7d-1ms` は Trial、`start+7d` ちょうどで TrialExpired。テストで固定）
 - `EntitlementSource` trait（プロバイダ seam）+ `StaticPlan`（テスト/固定用）
@@ -52,8 +52,8 @@
 
 ### プロバイダ seam（プラン状態の供給）
 
-- **desktop**: `apps/desktop/src-tauri/src/entitlement.rs` `mac::current(&AppHandle)` — onboarding.json の `trial_started_at`（unix秒 → ms）+ `BillingState::Unknown`（スタブ）。判定点ごとに再解決（インメモリ読み + 純関数なので安価）。UI 表示用に `entitlement_status` コマンド（表示専用 view）を追加。
-- **スタンドアロン bin**（`shogun-api` / `shogun-mcp`）: `crates/shogun-mcp/src/plan_source.rs` `FilePlanSource` — `SHOGUN_ONBOARDING_JSON` env → macOS 既定パス（`~/Library/Application Support/com.syogun.shogunai/onboarding.json`）を**毎回再読込**。ファイル無し = トライアル未開始（フルアクセス）。identifier は tauri.conf.json と lockstep（コメントで明記）。
+- **desktop**: `apps/desktop/src-tauri/src/entitlement.rs` `mac::current(&AppHandle)` — onboarding.json の `trial_started_at`（unix秒 → ms）+ 検証済みライセンストークン（#8。それ以前は `BillingState::Unknown` のスタブだった）。判定点ごとに再解決（インメモリ読み + 純関数なので安価）。UI 表示用に `entitlement_status` コマンド（表示専用 view）を追加。
+- **スタンドアロン bin**（`shogun-api` / `shogun-mcp`）: `crates/shogun-mcp/src/plan_source.rs` `FilePlanSource` — `SHOGUN_ONBOARDING_JSON` env → macOS 既定パス（`~/Library/Application Support/com.syogun.shogunai/onboarding.json`）を**毎回再読込**。#8 以降は同ディレクトリの `billing.json`（`SHOGUN_BILLING_JSON` で上書き可）も同様に毎回読んで署名検証する。ファイル無し = トライアル未開始（フルアクセス）。identifier は tauri.conf.json と lockstep（コメントで明記）。
 - **既定値の決定**: 何も分からないとき（オンボーディング未完了・ファイル無し）= `Plan::Trial{started_at_ms: None}` = フルアクセス。刻印はオンボーディング完了時に一度だけ打たれ、そこから7日（onboarding.rs の既存性質）。オンボーディングの `plan` フィールドは**意思表明のみで権利を与えない**。
 
 ## 4. 期限切れトライアルの姿勢（**2026-07-31 オーナー確定**）
@@ -68,15 +68,17 @@ CLAUDE.md「トライアル後は全員課金」（Free なし）に従い、期
 
 **検討した代替案（いずれも不採用・2026-07-31）**: (A) キャプチャもロック（完全停止）— メモリに穴が空き、後から課金しても埋め戻せないため却下 / (B) 期限切れでも第1層読み取りだけ残す（Standard相当へ軟着陸）— 「トライアル後は全員課金」と矛盾するため却下。確定した実装は両者の中間（ローカルのみ生存）。
 
-**注意（#8 前の運用リスク）**: Stripe 実装前は購入経路が無いため、刻印から7日を過ぎた実機はロック状態に落ちる。dev/QA は `SHOGUN_FORCE_ONBOARDING` とは別に、onboarding.json の刻印を消す/進めることで回避できるが、**#8 マージまで本ブランチを一般配布ビルドに載せない**こと。
+**【解消 2026-08-10】** 上記の「購入経路が無い」リスクは issue #8（Stripe 決済フロー本体）で解消。ただし配布前に **`crates/shogun-license/src/lib.rs` の `EMBEDDED_PUBLIC_KEY_B64` を実鍵で埋めること**——空のままだとどの端末もライセンストークンを検証できず、結局ここに書いたロック状態と同じになる。詳細は docs/fixes/2026-08-10-stripe-billing-flow-design.md §6。
 
-## 5. Stripe（#8）統合 seam
+## 5. Stripe（#8）統合 seam 【実装済み 2026-08-10】
 
-差し替え点は2箇所だけ:
-1. `apps/desktop/src-tauri/src/entitlement.rs` `mac::current` の `BillingState::Unknown` を実サブスクリプション参照に置換
-2. `crates/shogun-mcp/src/plan_source.rs` `FilePlanSource::resolve` の同スタブ（または billing を含む共有ファイル/IPC に拡張）
+予告どおり差し替え点は2箇所で、entitlement のロジック自体は1行も変わっていない:
+1. `apps/desktop/src-tauri/src/entitlement.rs` `mac::current` → `crate::billing::mac::state(app)`（`billing.json` のトークンを署名検証してBillingStateへ。ネットワークなし）
+2. `crates/shogun-mcp/src/plan_source.rs` `FilePlanSource` → `billing.json` を毎回再読込 + 検証（`billing_state_of`）
 
-`resolve_plan(trial_stamp, billing)` は既に billing 優先（Active はトライアル時計に勝ち、Lapsed はトライアル規則へフォールバック）。`PaidPlan::{Standard, Pro}` が Stripe の price/product にマップされる想定。旧 #46 移行デバイス（刻印なしで使い続けるケース）の起点規則は onboarding 設計 doc §6-1 の未決のまま — #8 で「初回課金チェック時に刻む」等を決める。
+`resolve_plan(trial_stamp, billing)` は元から billing 優先（Active はトライアル時計に勝ち、Lapsed はトライアル規則へフォールバック）。`PaidPlan::{Standard, Pro}` は Stripe の Price ID → プラン名 → トークンの `plan` フィールド経由でマップされる。旧 #46 移行デバイス（刻印なしで使い続けるケース）の起点規則は **未決のまま据え置き**（#8 では変更していない。課金すればトークンが勝つため実害範囲は「刻印なし・無課金で使い続ける端末」に限られる）。
+
+全体設計は docs/fixes/2026-08-10-stripe-billing-flow-design.md。
 
 ## 6. 意図的にゲートしないもの
 

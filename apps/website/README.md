@@ -88,6 +88,31 @@ double-count, and the distinct-IP-hash fraud signal.
 | `POST /api/waitlist/signup` | origin allowlist + rate limit + honeypot, or `x-webhook-secret` | `{ ok, refCode, statusUrl }` |
 | `POST /api/waitlist/profile` | private status token in body | `{ ok, qualified, justQualified }` |
 | `GET /api/waitlist/status?code=` | private status token | dashboard payload (no email) |
+| `POST /api/stripe/checkout` | origin rate limit | `{ ok, url }` — Stripe Checkout session |
+| `POST /api/stripe/portal` | licence key in body | `{ ok, url }` — Stripe Customer Portal |
+| `POST /api/stripe/webhook` | **Stripe signature (mandatory)** | `{ ok }` |
+| `POST /api/license/verify` | licence key + device id in body | plan, status, period end, signed token |
+
+## Billing (issue #8)
+
+Stripe Checkout + Billing, mirrored into `subscriptions` / `licenses` by the
+webhook so "who can use the app until when" is one SELECT away. Prices live in
+`src/lib/pricing.ts` (Standard $49/mo billed annually or $62 monthly; Pro
+$99/mo billed annually or $124 monthly) and must match the LP copy in
+`src/i18n/dictionaries.ts` — `tests/billing.test.ts` fails if they drift.
+
+Price IDs never reach the browser: the client sends a plan name and the server
+resolves the Stripe price from `STRIPE_PRICE_*`. With `STRIPE_SECRET_KEY`
+unset every billing route answers 503 and the site keeps working.
+
+```bash
+node ../../scripts/gen-license-keypair.mjs   # LICENSE_SIGNING_KEY + public key
+stripe listen --forward-to localhost:3000/api/stripe/webhook   # local webhook
+```
+
+The public key from that script goes into `EMBEDDED_PUBLIC_KEY_B64` in
+`crates/shogun-license/src/lib.rs` so shipped Macs can verify licence tokens
+offline. Full design: `docs/fixes/2026-08-10-stripe-billing-flow-design.md`.
 | `GET /api/waitlist/leaderboard?limit=` | public | masked top-N |
 | `GET /api/waitlist/invite-context?ref=` | public | masked inviter + tier |
 

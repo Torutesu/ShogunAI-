@@ -1129,6 +1129,16 @@ body {
 .set__hint.is-err {
   color: var(--warn);
 }
+/* Degraded-but-working, in the amber sense of the notch indicator: an ended trial, a
+   subscription winding down, a licence running on its offline grace (issue #8 / FR-BIL-09).
+   Same colour as an error but it is a state, not a failure — the copy carries the difference. */
+.set__hint.is-warn {
+  color: var(--warn);
+}
+/* A keyrow whose buttons are a list of choices rather than one action + input. */
+.keyrow--wrap {
+  flex-wrap: wrap;
+}
 .seg {
   display: flex;
   gap: 4px;
