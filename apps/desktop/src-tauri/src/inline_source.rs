@@ -486,11 +486,11 @@ pub mod mac {
     pub(crate) enum InlineAgent {
         Mock(MockAgentClient),
         Anthropic {
-            rt: tokio::runtime::Runtime,
+            rt: &'static tokio::runtime::Runtime,
             client: AnthropicAgentClient<ReqwestTransport, DbTraceabilitySink>,
         },
         OpenAiCompat {
-            rt: tokio::runtime::Runtime,
+            rt: &'static tokio::runtime::Runtime,
             client: OpenAiCompatAgentClient<ReqwestTransport, DbTraceabilitySink>,
         },
         /// Delegated to a vendor CLI on the user's own subscription (Issue #110). No tokio runtime:
@@ -506,6 +506,58 @@ pub mod mac {
         /// prompt into the user's thread.
         pub(crate) fn is_live(&self) -> bool {
             !matches!(self, InlineAgent::Mock(_))
+        }
+
+        /// Generate `prompt`, pushing each text delta to `out` as it arrives.
+        ///
+        /// The point is SLO-03 (first token within 1s): the caller paints what it receives instead
+        /// of waiting for the last byte. **The prompt, model and context are exactly the ones
+        /// [`AgentClient::complete`] would send** — this changes when the text shows up, not what
+        /// it says.
+        ///
+        /// Providers with no incremental wire format (the vendor-CLI delegate, the echo mock) send
+        /// their whole answer as one delta. That is honest — there is nothing earlier to show —
+        /// and it keeps one contract for the caller instead of two code paths in the UI.
+        ///
+        /// Returns the full text, so the caller never has to re-join the deltas itself.
+        pub(crate) fn complete_streaming(
+            &self,
+            prompt: &str,
+            out: std::sync::mpsc::Sender<String>,
+        ) -> Result<String, LlmError> {
+            // Tee: the deltas go to the caller live, and the joined copy comes back at the end
+            // (for the transcript, the citation row, and the analytics length).
+            let (tee, joined) = std::sync::mpsc::channel::<String>();
+            let collector = std::thread::spawn(move || {
+                let mut whole = String::new();
+                for delta in joined {
+                    whole.push_str(&delta);
+                    // A closed receiver means the caller stopped listening — the panel closed,
+                    // or the user hit stop. Dropping `joined` here is what carries that upstream:
+                    // the provider client's next send fails, its `on_chunk` returns false, and
+                    // the HTTP response is abandoned instead of being paid for to the last token.
+                    if out.send(delta).is_err() {
+                        break;
+                    }
+                }
+                whole
+            });
+
+            let streamed = match self {
+                InlineAgent::Anthropic { rt, client } => rt.block_on(client.complete_streaming(prompt, tee)),
+                InlineAgent::OpenAiCompat { rt, client } => {
+                    rt.block_on(client.complete_streaming(prompt, tee))
+                }
+                // No incremental format — one delta, then done.
+                InlineAgent::Mock(_) | InlineAgent::Subscription(_) => {
+                    self.complete(prompt).map(|text| {
+                        let _ = tee.send(text);
+                    })
+                }
+            };
+
+            let whole = collector.join().unwrap_or_default();
+            streamed.map(|()| whole)
         }
     }
 
@@ -704,8 +756,11 @@ pub mod mac {
             return None;
         };
         let model = effective_model(&s);
-        match (ReqwestTransport::new(), tokio::runtime::Builder::new_current_thread().enable_all().build()) {
-            (Ok(transport), Ok(rt)) => {
+        // The shared lane: after the first turn the connection to the provider is already open,
+        // so a press no longer pays DNS + TCP + TLS before the prompt can go out. Building a
+        // client and a runtime here per call was pure latency (see `net_lane`).
+        match crate::net_lane::lane() {
+            Some((transport, rt)) => {
                 let byok = ByokKey::new(Secret::new(key));
                 eprintln!("[inline] live Agent lane — provider {} model {}", s.provider, loggable_model(&model));
                 match s.provider.as_str() {
@@ -1104,7 +1159,9 @@ pub mod mac {
     fn enrich_thin_frame_ocr(_db: &Db, _ctx: &mut ContextPack) {}
 
     /// One source behind an answer, for the citation line under it.
-    #[derive(serde::Serialize)]
+    /// `Clone` because `chat_done` carries these to the panel and Tauri's `emit` takes a
+    /// clonable payload (one event, potentially several webviews).
+    #[derive(Clone, serde::Serialize)]
     pub struct Citation {
         pub event_id: i64,
         pub source: String,
@@ -1126,7 +1183,46 @@ pub mod mac {
         chat_blocking(db, message, "")
     }
 
+    /// The result of everything a chat turn does BEFORE the model is called.
+    ///
+    /// Retrieval is shared by the streaming and non-streaming commands, and it has to stay
+    /// literally shared rather than merely similar: the answer's quality lives entirely in this
+    /// half, so a second copy of it is a second set of retrieval parameters that can silently
+    /// drift apart. Streaming changes when text reaches the panel; it must not be able to change
+    /// what the model was told.
+    enum ChatPlan {
+        /// Nothing to generate — the turn already has its answer (an ambiguous referent to
+        /// disambiguate, or no usable key).
+        Settled(ChatAnswer),
+        /// Ready to generate.
+        Generate {
+            agent: InlineAgent,
+            prompt: String,
+            citations: Vec<Citation>,
+        },
+    }
+
     fn chat_blocking(db: &Db, message: &str, directives: &str) -> Result<ChatAnswer, String> {
+        match chat_plan(db, message, directives)? {
+            ChatPlan::Settled(answer) => Ok(answer),
+            ChatPlan::Generate { agent, prompt, citations } => {
+                let text = agent.complete(&prompt).map_err(note_and_render_llm_error)?;
+                note_key_accepted();
+                Ok(ChatAnswer { text, citations })
+            }
+        }
+    }
+
+    /// Same latch as the ⌥-tap path: chat surfaces the error text, but Settings is where the fix
+    /// is, and it needs to know the key is the problem.
+    fn note_and_render_llm_error(e: LlmError) -> String {
+        if matches!(e, LlmError::Unauthorized(..)) {
+            note_key_rejected();
+        }
+        e.to_string()
+    }
+
+    fn chat_plan(db: &Db, message: &str, directives: &str) -> Result<ChatPlan, String> {
         use shogun_memory::thread::Referent;
 
         // A question that refers to something without naming it ("how's that going?") can't be
@@ -1148,10 +1244,10 @@ pub mod mac {
                         .filter_map(|c| c.title.clone())
                         .collect();
                     if !options.is_empty() {
-                        return Ok(ChatAnswer {
+                        return Ok(ChatPlan::Settled(ChatAnswer {
                             text: format!("Which one — {}?", options.join(", or ")),
                             citations: Vec::new(),
-                        });
+                        }));
                     }
                 }
                 Referent::Resolved => {
@@ -1189,27 +1285,16 @@ pub mod mac {
         // prompt itself, and printing that dumps SHOGUN's entire internal prompt at the user. Say
         // what is actually wrong instead. (The UI also pre-empts this from `has_key`.)
         let no_key = || {
-            Ok(ChatAnswer {
+            Ok(ChatPlan::Settled(ChatAnswer {
                 text: "No key yet — add your provider key in Settings to get real answers."
                     .to_string(),
                 citations: Vec::new(),
-            })
+            }))
         };
         let Some(agent) = build_agent(db) else { return no_key() };
         if !agent.is_live() {
             return no_key();
         }
-        let text = agent.complete(&build_chat_prompt(message, &ctx, directives)).map_err(|e| {
-            // Same latch as the ⌥-tap path: chat surfaces the error text, but Settings is where
-            // the fix is, and it needs to know the key is the problem.
-            if matches!(e, LlmError::Unauthorized(..)) {
-                note_key_rejected();
-            }
-            e.to_string()
-        })?;
-        // The provider just accepted the key — clear a stale rejected verdict (transient 401s
-        // must not stick until the user re-saves the same key).
-        note_key_accepted();
         let citations = ctx
             .evidence
             .iter()
@@ -1219,11 +1304,19 @@ pub mod mac {
                 title: e.title.clone(),
             })
             .collect();
-        Ok(ChatAnswer { text, citations })
+        Ok(ChatPlan::Generate {
+            agent,
+            prompt: build_chat_prompt(message, &ctx, directives),
+            citations,
+        })
     }
 
     /// Chat with SHOGUN, grounded in memory, on the BYOK Agent lane. Runs the blocking generation on
     /// a blocking thread so it never touches a tokio worker. Records one egress trace (invariant 3).
+    ///
+    /// Non-streaming: the whole answer comes back as one value. The notch panel calls
+    /// [`shogun_chat_stream`] instead — this remains for callers with nowhere to paint a partial
+    /// answer, and it shares [`chat_plan`] with the streamed path so the two cannot drift.
     #[tauri::command]
     pub async fn shogun_chat(
         message: String,
@@ -1245,7 +1338,7 @@ pub mod mac {
         if let Ok(a) = &answered {
             let m = app.state::<crate::metrics::SloRegister>();
             m.record_answer(!a.citations.is_empty());
-            // Not first-token latency yet — this path is non-streaming, so it measures the whole
+            // Not first-token latency: this path is non-streaming, so it measures the whole
             // answer. Recorded against the same SLO row because it is strictly worse than the
             // number the SLO asks for: if this passes, first-token would too.
             m.record_first_token_ms(started.elapsed().as_secs_f64() * 1000.0);
@@ -1253,4 +1346,138 @@ pub mod mac {
         answered
     }
 
+    // ---- streamed chat (SLO-03: first token within 1s) ---------------------------------------
+
+    /// One text delta on its way to the panel.
+    #[derive(Clone, serde::Serialize)]
+    pub struct ChatDelta {
+        /// The turn this belongs to, echoed from the caller. The panel drops deltas for a turn it
+        /// has stopped or replaced — without it, a cancelled answer would keep writing itself into
+        /// the next question.
+        ///
+        /// The id comes FROM the panel rather than being minted here on purpose: a
+        /// backend-assigned id can only be learned from the command's return value, which is a
+        /// round trip the first delta can beat. The panel would then have to buffer deltas whose
+        /// turn it doesn't know yet — exactly the bookkeeping streaming was supposed to remove.
+        pub turn: u64,
+        pub text: String,
+    }
+
+    /// The end of a turn, however it ended.
+    #[derive(Clone, serde::Serialize)]
+    pub struct ChatDone {
+        pub turn: u64,
+        /// What the answer was grounded in. Empty on failure.
+        pub citations: Vec<Citation>,
+        /// `None` on success; the (redacted) provider message otherwise.
+        pub error: Option<String>,
+    }
+
+    /// The turn the user asked to stop, or 0. One slot rather than a set: the panel runs one turn
+    /// at a time, and naming the exact turn means a stale value can never cancel a later one.
+    static CANCELLED_TURN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+    /// Stop the streamed turn `turn`. Idempotent, and harmless for a turn that already finished.
+    ///
+    /// Cancelling actually abandons the HTTP response rather than just hiding it: the panel's
+    /// receiver goes away, which fails the next send inside the provider client, which returns
+    /// `false` from its chunk callback. Tokens the user stopped are tokens SHOGUN stops paying for.
+    #[tauri::command]
+    pub fn shogun_chat_cancel(turn: u64) {
+        CANCELLED_TURN.store(turn, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Chat, streamed. Same retrieval, same prompt, same model, same context as [`shogun_chat`] —
+    /// the only difference is that the text is painted as it arrives instead of after the last
+    /// byte, which is what SLO-03 (first token within 1s) is measured against.
+    ///
+    /// The answer arrives as `chat_delta` events and finishes with exactly one `chat_done`. A turn
+    /// settled before generation — an ambiguous referent, no key — goes out through the same two
+    /// events, so the panel has one rendering path rather than two.
+    #[tauri::command]
+    pub async fn shogun_chat_stream(
+        message: String,
+        turn: u64,
+        db: tauri::State<'_, Db>,
+        user_cfg: tauri::State<'_, crate::user_config_watch::UserConfigState>,
+        app: tauri::AppHandle,
+    ) -> Result<(), String> {
+        use std::sync::atomic::Ordering;
+        use tauri::{Emitter, Manager};
+
+        let db = db.inner().clone();
+        let directives = user_cfg.directives();
+        let started = std::time::Instant::now();
+
+        // Retrieval and generation both block; neither may run on a tokio worker.
+        tokio::task::spawn_blocking(move || {
+            let emit_done = |citations: Vec<Citation>, error: Option<String>| {
+                let _ = app.emit("chat_done", ChatDone { turn, citations, error });
+            };
+
+            let plan = match chat_plan(&db, &message, &directives) {
+                Ok(p) => p,
+                Err(e) => return emit_done(Vec::new(), Some(e)),
+            };
+            let (agent, prompt, citations) = match plan {
+                // Nothing to generate — send it as one delta so the panel's streaming path is
+                // also its only path.
+                ChatPlan::Settled(answer) => {
+                    let _ = app.emit("chat_delta", ChatDelta { turn, text: answer.text });
+                    return emit_done(answer.citations, None);
+                }
+                ChatPlan::Generate { agent, prompt, citations } => (agent, prompt, citations),
+            };
+
+            // The deltas land here and go straight out as events. `first` is the number SLO-03
+            // actually asks for — the non-streaming path could only ever time the whole answer.
+            let (tx, rx) = std::sync::mpsc::channel::<String>();
+            let pump = {
+                let app = app.clone();
+                std::thread::spawn(move || {
+                    let mut first: Option<f64> = None;
+                    for text in rx {
+                        // Breaking here drops `rx`, which is what actually stops the provider:
+                        // the send fails upstream and the response is abandoned.
+                        if CANCELLED_TURN.load(Ordering::Relaxed) == turn {
+                            break;
+                        }
+                        if first.is_none() {
+                            first = Some(started.elapsed().as_secs_f64() * 1000.0);
+                        }
+                        if app.emit("chat_delta", ChatDelta { turn, text }).is_err() {
+                            break;
+                        }
+                    }
+                    first
+                })
+            };
+
+            let generated = agent.complete_streaming(&prompt, tx);
+            let first_token_ms = pump.join().unwrap_or_default();
+
+            // A stopped turn is not a failure and not an answer: the panel already owns what it
+            // painted, so close the turn without an error and without counting it as grounded.
+            if CANCELLED_TURN.load(Ordering::Relaxed) == turn {
+                return emit_done(Vec::new(), None);
+            }
+
+            match generated {
+                Ok(_) => {
+                    // The provider just accepted the key — clear a stale rejected verdict
+                    // (transient 401s must not stick until the user re-saves the same key).
+                    note_key_accepted();
+                    let m = app.state::<crate::metrics::SloRegister>();
+                    m.record_answer(!citations.is_empty());
+                    if let Some(ms) = first_token_ms {
+                        m.record_first_token_ms(ms);
+                    }
+                    emit_done(citations, None);
+                }
+                Err(e) => emit_done(Vec::new(), Some(note_and_render_llm_error(e))),
+            }
+        })
+        .await
+        .map_err(|e| e.to_string())
+    }
 }

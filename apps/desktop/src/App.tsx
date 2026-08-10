@@ -44,7 +44,6 @@ import { comboChips, DEFAULT_BINDS } from "./keys";
 type Appearance = "auto" | "light" | "dark";
 type Citation = { event_id: number; source: string; title: string | null };
 type Msg = { role: "me" | "shogun"; text: string; citations?: Citation[] };
-type ChatAnswer = { text: string; citations: Citation[] };
 
 interface ContextPayload {
   bundle_id: string;
@@ -161,9 +160,17 @@ const AUTO_COLLAPSE_MS = 400;
 /** How long the pill holds a ⌥-tap outcome before returning to the live source. Long enough to
  *  read, short enough that it never becomes something you have to dismiss. */
 const INLINE_HOLD_MS = 2200;
-/** Ceiling on a chat turn. A hung provider otherwise leaves the thinking dots bouncing forever —
- *  generous, because a long grounded answer over a slow connection is still a success. */
-const CHAT_TIMEOUT_MS = 90_000;
+/** Ceiling on SILENCE within a chat turn, not on the turn itself. Answers stream, so "nothing has
+ *  arrived for this long" is the honest test for a hung provider, where a flat ceiling on the whole
+ *  turn cut off exactly the long grounded answers that were worth waiting for.
+ *
+ *  Left at the old whole-turn number rather than tightened. Against a streaming provider it is
+ *  never reached — the first token lands in about a second and every delta rearms it — and the one
+ *  path that still answers in a single delta (a subscription delegate, which is a vendor CLI
+ *  subprocess with no incremental output) needs the full budget for its whole answer. Shortening it
+ *  would only ever punish that path. Waiting is no longer the only option anyway: Stop is live for
+ *  the whole turn. */
+const CHAT_SILENCE_MS = 90_000;
 const H_SETTINGS = 460; // taller default so setting groups fit; body scrolls; clamped to screen
 const MIN_W = 460;
 const MIN_H = 240;
@@ -267,6 +274,10 @@ export function App(): JSX.Element {
   const [msgs, setMsgs] = useState<Msg[]>(() => loadJson<Msg[]>("shogun.msgs", []));
   const [input, setInput] = useState("");
   const [thinking, setThinking] = useState(false);
+  /// The answer being written right now, or null between turns. Held apart from `msgs` so a
+  /// partial answer is never persisted and never mistaken for a finished one: it is committed
+  /// into the thread on `chat_done` and nowhere else.
+  const [streaming, setStreaming] = useState<string | null>(null);
   const [appearance, setAppearance] = useState<Appearance>(() => loadJson<Appearance>("shogun.appearance", "auto"));
 
   // Persist across window respawns (the Rust side rebuilds the window to change Spaces).
@@ -536,12 +547,19 @@ export function App(): JSX.Element {
     );
     // Overlay spec: Escape closes the overlay (it stays hidden until summoned again).
     const onEsc = (e: KeyboardEvent): void => {
-      if (e.key === "Escape") {
-        // Tell the tracker WHY the panel is going away — otherwise every session's close reason
-        // reads as a timeout and the Q4 false-positive tally counts real uses as misfires.
-        void invoke("collapse_request", { reason: "esc" }).catch(() => undefined);
-        void invoke("hide_panel").catch(() => undefined);
+      if (e.key !== "Escape") return;
+      // …but while an answer is arriving, Escape means "stop this", not "throw the panel away".
+      // Hiding mid-answer would abandon text the user is reading with no way back to it.
+      // (`stopRef`/`liveTurn` are refs, so this once-registered listener still sees the current
+      // turn rather than the one that existed at mount.)
+      if (liveTurn.current != null) {
+        stopRef.current?.();
+        return;
       }
+      // Tell the tracker WHY the panel is going away — otherwise every session's close reason
+      // reads as a timeout and the Q4 false-positive tally counts real uses as misfires.
+      void invoke("collapse_request", { reason: "esc" }).catch(() => undefined);
+      void invoke("hide_panel").catch(() => undefined);
     };
     window.addEventListener("keydown", onEsc);
     // Q4: count real interactions (and reset the Expanded idle timer). Deliberately coarse —
@@ -603,8 +621,13 @@ export function App(): JSX.Element {
   };
 
   useEffect(() => {
-    threadRef.current?.scrollTo({ top: threadRef.current.scrollHeight, behavior: "smooth" });
-  }, [msgs, thinking, open]);
+    // `auto` while text is streaming: a smooth scroll restarts on every token and never catches
+    // up, so the newest line ends up permanently just below the fold.
+    threadRef.current?.scrollTo({
+      top: threadRef.current.scrollHeight,
+      behavior: streaming == null ? "smooth" : "auto",
+    });
+  }, [msgs, thinking, streaming, open]);
 
   // Withdraw when the pointer leaves — but only when doing so can't destroy work. Typing in the
   // composer, a half-written question, or an answer still streaming all mean the panel is in use
@@ -695,14 +718,117 @@ export function App(): JSX.Element {
     sizeForView({ open: true, settings: false });
   };
 
+  // ---- streamed chat turn ------------------------------------------------------------------
+  // Refs rather than state for everything the event listeners consult: the listeners are
+  // registered once at mount, so a captured value would be frozen at the first turn forever.
+
+  /// The turn ids we hand to Rust. Client-minted so a delta can never arrive for an id the panel
+  /// doesn't recognise yet.
+  const turnSeq = useRef(0);
+  /// The turn currently being written, or null. Deltas for any other id are stale — a stopped or
+  /// timed-out turn whose provider hadn't noticed yet — and are dropped.
+  const liveTurn = useRef<number | null>(null);
+  /// What has arrived so far for `liveTurn`. Mirrors the `streaming` state so the listeners and
+  /// timers can read "now" without re-registering on every token.
+  const partialRef = useRef("");
+  const watchdog = useRef<number | null>(null);
+  /// So the once-registered Escape handler can reach the current `stopStreaming`.
+  const stopRef = useRef<(() => void) | null>(null);
+  /// Pending repaint. Deltas arrive far faster than the screen refreshes — a fast provider sends
+  /// tokens in bursts — so the text is accumulated in `partialRef` and pushed to state once per
+  /// frame. Rendering per token would spend more time in React than the tokens save.
+  const paintFrame = useRef<number | null>(null);
+
+  const paintPartial = useCallback((): void => {
+    if (paintFrame.current != null) return;
+    paintFrame.current = window.requestAnimationFrame(() => {
+      paintFrame.current = null;
+      setStreaming(partialRef.current);
+    });
+  }, []);
+
+  const cancelPaint = useCallback((): void => {
+    if (paintFrame.current != null) {
+      window.cancelAnimationFrame(paintFrame.current);
+      paintFrame.current = null;
+    }
+  }, []);
+
+  /// Close the turn: commit whatever arrived (plus `suffix`, when the turn didn't end on its own
+  /// terms) into the thread. Partial text is kept rather than thrown away — the tokens that did
+  /// arrive are as grounded as the ones that didn't, and replacing them with an error loses work
+  /// the user was already reading.
+  const endTurn = useCallback(
+    (suffix?: string, citations?: Citation[]): void => {
+      liveTurn.current = null;
+      if (watchdog.current != null) {
+        window.clearTimeout(watchdog.current);
+        watchdog.current = null;
+      }
+      // A queued repaint would land after the answer has already been committed to the thread,
+      // and would put the partial back on screen underneath it.
+      cancelPaint();
+      const partial = partialRef.current.trim();
+      partialRef.current = "";
+      const text = suffix ? (partial ? `${partial}\n\n${suffix}` : suffix) : partial || t.noAnswer;
+      setMsgs((m) => [...m, { role: "shogun", text, citations }]);
+      setStreaming(null);
+      setThinking(false);
+    },
+    [cancelPaint],
+  );
+
+  const armWatchdog = useCallback(
+    (turn: number): void => {
+      if (watchdog.current != null) window.clearTimeout(watchdog.current);
+      watchdog.current = window.setTimeout(() => {
+        if (liveTurn.current !== turn) return;
+        if (IN_TAURI) void invoke("shogun_chat_cancel", { turn }).catch(() => undefined);
+        endTurn(`${t.answerFailed}: timed out`);
+      }, CHAT_SILENCE_MS);
+    },
+    [endTurn],
+  );
+
+  // The answer as it is written. Registered once; everything it needs is behind a ref.
+  useEffect(() => {
+    if (!IN_TAURI) return;
+    const offs: Array<Promise<() => void>> = [
+      listen<{ turn: number; text: string }>("chat_delta", (e) => {
+        if (liveTurn.current !== e.payload.turn) return;
+        armWatchdog(e.payload.turn);
+        partialRef.current += e.payload.text;
+        paintPartial();
+      }),
+      listen<{ turn: number; citations: Citation[]; error: string | null }>("chat_done", (e) => {
+        if (liveTurn.current !== e.payload.turn) return;
+        const { error, citations } = e.payload;
+        endTurn(error ? `${t.answerFailed}: ${error}` : undefined, citations);
+      }),
+    ];
+    return () => offs.forEach((p) => void p.then((off) => off()));
+  }, [armWatchdog, endTurn, paintPartial]);
+
+  // A turn in flight must not outlive the component: a fired watchdog or a queued repaint would
+  // both call setState on something that is gone.
+  useEffect(
+    () => () => {
+      cancelPaint();
+      if (watchdog.current != null) window.clearTimeout(watchdog.current);
+    },
+    [cancelPaint],
+  );
+
   const send = useCallback((): void => {
     const q = input.trim();
     if (!q || thinking) return;
     setInput("");
     setMsgs((m) => [...m, { role: "me", text: q }]);
     setThinking(true);
+    setStreaming("");
     const finish = (text: string, citations?: Citation[]): void => {
       setMsgs((m) => [...m, { role: "shogun", text, citations }]);
+      setStreaming(null);
       setThinking(false);
     };
     if (!IN_TAURI) {
@@ -715,21 +841,33 @@ export function App(): JSX.Element {
       finish(t.noKey);
       return;
     }
-    // A hung provider must not leave the thinking dots bouncing forever with no way out — after
-    // the ceiling the turn resolves to a visible failure (a late real answer is dropped: by then
-    // the user has been told it failed, and appending it out of the blue would be stranger).
-    let settled = false;
-    const settle = (text: string, citations?: Citation[]): void => {
-      if (settled) return;
-      settled = true;
-      finish(text, citations);
-    };
-    const timer = window.setTimeout(() => settle(`${t.answerFailed}: timed out`), CHAT_TIMEOUT_MS);
-    void invoke<ChatAnswer>("shogun_chat", { message: q })
-      .then((r) => settle(r?.text || t.noAnswer, r?.citations))
-      .catch((e) => settle(`${t.answerFailed}: ${e}`))
-      .finally(() => window.clearTimeout(timer));
-  }, [input, thinking, status]);
+
+    // The turn id is minted here, not by Rust: the first token can beat the command's own reply,
+    // and a panel that doesn't yet know the id would have to buffer deltas it can't place.
+    const turn = ++turnSeq.current;
+    liveTurn.current = turn;
+
+    partialRef.current = "";
+    // The ceiling is on SILENCE, not on the answer. A stream still producing tokens is not a hung
+    // provider, and a flat ceiling on the whole turn punished exactly the long grounded answers
+    // that are worth waiting for. Every delta rearms it (see the chat_delta listener).
+    armWatchdog(turn);
+
+    void invoke("shogun_chat_stream", { message: q, turn }).catch((e) => {
+      if (liveTurn.current !== turn) return;
+      endTurn(`${t.answerFailed}: ${e}`);
+    });
+  }, [input, thinking, status, armWatchdog, endTurn]);
+
+  /// Stop the turn in flight. Rust abandons the HTTP response rather than reading it to the end,
+  /// so stopping actually stops the work — it isn't just the UI looking away.
+  const stopStreaming = useCallback((): void => {
+    const turn = liveTurn.current;
+    if (turn == null) return;
+    if (IN_TAURI) void invoke("shogun_chat_cancel", { turn }).catch(() => undefined);
+    endTurn(t.answerStopped);
+  }, [endTurn]);
+  stopRef.current = stopStreaming;
 
   // Fix the history boundary on first render, before anything is appended this session.
   if (historyMark.current === null) historyMark.current = msgs.length;
@@ -1023,7 +1161,15 @@ export function App(): JSX.Element {
                   </div>
                 ))
               )}
-              {thinking ? (
+              {/* The answer as it is written. The dots only stand in for the wait BEFORE the
+                  first token — once text is arriving, the text itself is the progress indicator,
+                  and leaving the dots under it would be two things saying the same thing. */}
+              {streaming ? (
+                <div className="msg msg--shogun msg--live" aria-live="polite">
+                  {streaming}
+                  <span className="msg__caret" aria-hidden="true" />
+                </div>
+              ) : thinking ? (
                 <div className="msg msg--shogun msg--think" aria-live="polite" aria-label="Thinking">
                   <span className="think__dot" />
                   <span className="think__dot" />
@@ -1066,16 +1212,32 @@ export function App(): JSX.Element {
                       duplicates it adds a control without adding a capability, and the composer
                       is the one place that has to stay uncluttered. */}
                   <div className="composer__tools">
-                    <button
-                      className="composer__send"
-                      type="button"
-                      title={t.send}
-                      aria-label={t.send}
-                      onClick={send}
-                      disabled={!input.trim() || thinking}
-                    >
-                      ↑
-                    </button>
+                    {/* Send becomes Stop for the duration of a turn. A disabled send button
+                        during the one moment you might want to take it back is a dead control
+                        exactly when the user needs a live one — and stopping here really does
+                        abandon the request upstream, not just hide the answer. */}
+                    {thinking ? (
+                      <button
+                        className="composer__send composer__send--stop"
+                        type="button"
+                        title={t.stop}
+                        aria-label={t.stop}
+                        onClick={stopStreaming}
+                      >
+                        ■
+                      </button>
+                    ) : (
+                      <button
+                        className="composer__send"
+                        type="button"
+                        title={t.send}
+                        aria-label={t.send}
+                        onClick={send}
+                        disabled={!input.trim()}
+                      >
+                        ↑
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>

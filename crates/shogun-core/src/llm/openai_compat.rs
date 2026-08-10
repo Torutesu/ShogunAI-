@@ -70,17 +70,26 @@ impl OpenAiCompatConfig {
     }
 }
 
-/// Build the `POST {base}/chat/completions` request (non-streamed JSON response).
+/// Build the `POST {base}/chat/completions` request.
+///
+/// `stream` picks the wire format: `false` is one JSON body ([`parse_chat_response`]), `true` is
+/// SSE read incrementally by [`SseDecoder::openai`](super::sse::SseDecoder::openai). Nothing else
+/// about the request changes — same model, same prompt, same cap — so the two paths differ in
+/// when the text arrives, never in what it says.
 pub fn build_chat_request(
     cfg: &OpenAiCompatConfig,
     key: &Secret,
     prompt: &str,
+    stream: bool,
 ) -> Result<HttpRequest, LlmError> {
-    let body = json!({
+    let mut body = json!({
         "model": cfg.model,
         "max_tokens": cfg.max_tokens,
         "messages": [{ "role": "user", "content": prompt }],
     });
+    if stream {
+        body["stream"] = Value::Bool(true);
+    }
     Ok(HttpRequest::new(
         Method::Post,
         format!("{}/chat/completions", cfg.base_url),
@@ -113,23 +122,30 @@ pub fn parse_chat_response(body: &str) -> Result<String, LlmError> {
 /// (invariant 5 — a Select KK key is a type error). Every completion records one digest-only
 /// traceability row for the prompt chunk that left the device (AR-11 / G8); the row's
 /// `destination` carries the real host (openrouter.ai, api.openai.com, …).
-pub struct OpenAiCompatAgentClient<T: HttpTransport, S: TraceabilitySink> {
+///
+/// The struct itself carries no transport bound, mirroring
+/// [`AnthropicAgentClient`](super::anthropic::AnthropicAgentClient): `complete` requires
+/// `T: HttpTransport` and `complete_streaming` requires `T: StreamingTransport`, each in its own
+/// block, so a streaming-only transport can back this client.
+pub struct OpenAiCompatAgentClient<T, S> {
     transport: T,
     sink: S,
     key: ByokKey,
     cfg: OpenAiCompatConfig,
 }
 
-impl<T: HttpTransport, S: TraceabilitySink> OpenAiCompatAgentClient<T, S> {
+impl<T, S> OpenAiCompatAgentClient<T, S> {
     pub fn new(transport: T, sink: S, key: ByokKey, cfg: OpenAiCompatConfig) -> Self {
         Self { transport, sink, key, cfg }
     }
+}
 
+impl<T: HttpTransport, S: TraceabilitySink> OpenAiCompatAgentClient<T, S> {
     /// Send `prompt` and return the assistant text. The traceability row is recorded at the TRUE
     /// egress point — before the request goes out — so a prompt that left the device but got a
     /// 401/timeout back is still traced (invariant 3: every send site logs, success or not).
     pub async fn complete(&self, prompt: &str) -> Result<String, LlmError> {
-        let req = build_chat_request(&self.cfg, self.key.secret(), prompt)?;
+        let req = build_chat_request(&self.cfg, self.key.secret(), prompt, false)?;
         self.sink.record(TraceRecord::for_chunk(
             Route::MessagesApi,
             "agent",
@@ -145,10 +161,55 @@ impl<T: HttpTransport, S: TraceabilitySink> OpenAiCompatAgentClient<T, S> {
     }
 }
 
+/// ストリーミング経路。[`super::anthropic::AnthropicAgentClient::complete_streaming`] と
+/// 同じ約束をOpenAI互換の側でも果たす: 届いたチャンクをその場でデコードし、テキストデルタ
+/// だけを `out` に流す。返り値でテキストを返さないのも同じ理由 — 完成を待った時点で
+/// 「初トークン1s」が消える。
+impl<T: crate::llm::transport::StreamingTransport, S: TraceabilitySink>
+    OpenAiCompatAgentClient<T, S>
+{
+    pub async fn complete_streaming(
+        &self,
+        prompt: &str,
+        out: std::sync::mpsc::Sender<String>,
+    ) -> Result<(), LlmError> {
+        let req = build_chat_request(&self.cfg, self.key.secret(), prompt, true)?;
+        // 送信前に記録する（不変条件3）。ダイジェストのみで本文は残さない。
+        self.sink.record(TraceRecord::for_chunk(
+            Route::MessagesApi,
+            "agent",
+            self.cfg.destination(),
+            prompt,
+            false,
+        ));
+
+        let mut decoder = crate::llm::sse::SseDecoder::openai();
+        let outcome = self
+            .transport
+            .send_streaming(req, |chunk| {
+                for delta in decoder.push(chunk) {
+                    // 受け手が消えた = パネルが閉じられた。打ち切って正常終了する。
+                    if out.send(delta).is_err() {
+                        return false;
+                    }
+                }
+                true
+            })
+            .await?;
+
+        match outcome {
+            crate::llm::transport::StreamOutcome::Streamed { .. } => Ok(()),
+            crate::llm::transport::StreamOutcome::Failed { status, body } => {
+                Err(super::status_error("chat/completions", status, &body))
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::traceability::RecordingSink;
-    use super::super::transport::{HttpResponse, MockTransport};
+    use super::super::transport::{HttpResponse, MockStreamingTransport, MockTransport};
     use super::*;
 
     fn cfg() -> OpenAiCompatConfig {
@@ -157,7 +218,7 @@ mod tests {
 
     #[test]
     fn request_carries_bearer_auth_model_and_prompt() {
-        let req = build_chat_request(&cfg(), &Secret::new("sk-or-123"), "write hi").unwrap();
+        let req = build_chat_request(&cfg(), &Secret::new("sk-or-123"), "write hi", false).unwrap();
         assert_eq!(req.url, "https://openrouter.ai/api/v1/chat/completions");
         assert!(req
             .headers
@@ -166,6 +227,25 @@ mod tests {
         let body: Value = serde_json::from_str(req.body.as_deref().unwrap()).unwrap();
         assert_eq!(body["model"], "openai/gpt-4o-mini");
         assert_eq!(body["messages"][0]["content"], "write hi");
+        assert!(body.get("stream").is_none(), "非ストリーミング要求に stream を付けない");
+    }
+
+    /// ストリーミングで変わるのは `stream: true` の1フィールドだけ — モデルもプロンプトも
+    /// 上限も同じ。速さのために答えの中身を変えていないことを、ここで型ではなく値で押さえる。
+    #[test]
+    fn only_the_stream_flag_differs_between_the_two_paths() {
+        let key = Secret::new("sk-or-123");
+        let plain = build_chat_request(&cfg(), &key, "write hi", false).unwrap();
+        let streamed = build_chat_request(&cfg(), &key, "write hi", true).unwrap();
+        assert_eq!(plain.url, streamed.url);
+        assert_eq!(plain.headers, streamed.headers);
+
+        let mut a: Value = serde_json::from_str(plain.body.as_deref().unwrap()).unwrap();
+        let mut b: Value = serde_json::from_str(streamed.body.as_deref().unwrap()).unwrap();
+        assert_eq!(b["stream"], Value::Bool(true));
+        a.as_object_mut().unwrap().remove("stream");
+        b.as_object_mut().unwrap().remove("stream");
+        assert_eq!(a, b);
     }
 
     #[test]
@@ -231,5 +311,78 @@ mod tests {
         assert!(matches!(call(401).await, LlmError::Unauthorized(401, _)));
         assert!(matches!(call(403).await, LlmError::Unauthorized(403, _)));
         assert!(matches!(call(500).await, LlmError::Provider(m) if m.contains("500")));
+    }
+
+    // ---- streaming ----------------------------------------------------------------------
+
+    fn streaming_client(
+        status: u16,
+        chunks: Vec<String>,
+    ) -> OpenAiCompatAgentClient<MockStreamingTransport, RecordingSink> {
+        OpenAiCompatAgentClient::new(
+            MockStreamingTransport::new(status, chunks),
+            RecordingSink::new(),
+            ByokKey::new(Secret::new("sk-or-stream")),
+            cfg(),
+        )
+    }
+
+    /// 届いた端からデルタが出ること — この経路が存在する理由そのもの。
+    #[tokio::test]
+    async fn streaming_completion_emits_deltas_as_they_arrive() {
+        let client = streaming_client(
+            200,
+            vec![
+                "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\n".to_string(),
+                "data: {\"choices\":[{\"delta\":{\"content\":\"the \"}}]}\n\n".to_string(),
+                "data: {\"choices\":[{\"delta\":{\"content\":\"draft\"}}]}\n\n".to_string(),
+                "data: [DONE]\n\n".to_string(),
+            ],
+        );
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        client.complete_streaming("prompt text", tx).await.unwrap();
+
+        let got: Vec<String> = rx.into_iter().collect();
+        assert_eq!(got, vec!["the ".to_string(), "draft".to_string()]);
+        assert_eq!(got.concat(), "the draft", "非ストリーミング経路と同じ本文になる");
+    }
+
+    /// 401は「直せる唯一のエラー」なので、ネットワーク不調と区別して返す。エラー本文が
+    /// デルタとして画面に流れないことも同時に押さえる。
+    #[tokio::test]
+    async fn a_rejected_key_surfaces_as_unauthorized_from_the_streaming_path() {
+        let client = streaming_client(401, vec!["{\"error\":{\"message\":\"bad key\"}}".to_string()]);
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let err = client.complete_streaming("p", tx).await.unwrap_err();
+
+        assert!(matches!(err, LlmError::Unauthorized(401, _)), "401 が Unauthorized 以外: {err:?}");
+        assert!(rx.into_iter().next().is_none(), "エラー本文がデルタとして流れている");
+    }
+
+    /// 失敗しても送信は記録する。デバイスから出た事実は結果によらず残す（不変条件3）。
+    #[tokio::test]
+    async fn streaming_records_egress_even_when_the_request_fails() {
+        let client = streaming_client(500, vec![]);
+
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let _ = client.complete_streaming("p", tx).await;
+
+        assert_eq!(client.sink.records().len(), 1, "送信前のトレースが記録されていない");
+    }
+
+    /// パネルを閉じる = 受け手が消える。打ち切って正常終了する（失敗ではない）。
+    #[tokio::test]
+    async fn a_dropped_receiver_ends_the_stream_without_an_error() {
+        let client = streaming_client(
+            200,
+            vec!["data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\n\n".to_string()],
+        );
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        drop(rx);
+
+        assert!(client.complete_streaming("p", tx).await.is_ok());
     }
 }
