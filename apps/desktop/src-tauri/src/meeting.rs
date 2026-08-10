@@ -702,22 +702,41 @@ use shogun_core::meeting::gate::OfferGate;
 
     // ── The floating overlay ────────────────────────────────────────────────────────────────
     //
-    // A window of its own rather than the notch (Issue #7: "画面右上に小さなフローティング
-    // ウィンドウ…ドラッグで位置変更可能"). During a meeting the user's eyes are on the meeting
-    // window, and the notch sits at the very top of the screen outside that field of view —
-    // "always visible, always one tap to stop" only holds if it appears near what they are
-    // looking at.
+    // A window of its own rather than the notch (Issue #7: floating near meeting controls).
+    // Offer card parks top-right; in-meeting pill parks bottom-center above the mic bar.
 
     const WINDOW_LABEL: &str = "meeting";
-    /// Offered and Recording are one compact bar; Recap needs room for the card.
+    /// Offered: white horizontal pill (Meeting detected). Room for title stack + Take Notes.
+    const OFFER_SIZE: (f64, f64) = (440.0, 96.0);
+    /// Idle / hidden fallback size.
     const BAR_SIZE: (f64, f64) = (400.0, 88.0);
-    /// Live transcription/translation pane during recording (issue #93).
-    const LIVE_SIZE: (f64, f64) = (520.0, 360.0);
+    /// In-meeting black control capsule only (notes panel closed).
+    const PILL_SIZE: (f64, f64) = (320.0, 72.0);
+    /// Live notes/transcript pane + control capsule during recording (issue #93).
+    const LIVE_SIZE: (f64, f64) = (520.0, 400.0);
     const RECAP_SIZE: (f64, f64) = (400.0, 280.0);
-    /// Distance from the top-right corner of the visible screen, in logical pixels.
+    /// Whether the live notes panel is expanded above the control pill.
+    static OVERLAY_PANEL_OPEN: AtomicBool = AtomicBool::new(true);
+    /// Distance from screen edges, in logical pixels.
     const MARGIN: f64 = 16.0;
-    /// Menu-bar height to clear, in logical pixels.
+    /// Menu-bar height to clear for top-right parking.
     const MENUBAR_H: f64 = 28.0;
+    /// Distance from the bottom of the visible screen — clears Meet/Zoom mic bar.
+    const BOTTOM_MARGIN: f64 = 100.0;
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum ParkMode {
+        TopRight,
+        BottomCenter,
+    }
+
+    fn park_mode_for_state(state: State) -> ParkMode {
+        match state {
+            State::Recording => ParkMode::BottomCenter,
+            // Offer card and Recap are notification-style surfaces, not in-meeting controls.
+            State::Offered | State::Wrapping | State::Idle => ParkMode::TopRight,
+        }
+    }
 
     /// Build the overlay window, hidden. **Setup only — this must run on the main thread.**
     ///
@@ -819,28 +838,24 @@ use shogun_core::meeting::gate::OfferGate;
         set_overlay_ignores_mouse(win, !interactive);
     }
 
-    /// Park the overlay at the top-right of the screen the cursor is on.
-    ///
-    /// Only on first show: after that the user may have dragged it somewhere they prefer, and
-    /// moving it back each meeting would undo that every time.
-    ///
-    /// Computed and set entirely in **physical** pixels. Mixing the two coordinate systems is
-    /// how the panel ended up in the middle of the screen: the monitor answers in physical
-    /// pixels, the window size is given in logical ones, and subtracting one from the other on a
-    /// Retina display is off by exactly the scale factor.
-    fn park_top_right(win: &tauri::WebviewWindow, size: (f64, f64)) {
-        // `current_monitor` on a window that has never been shown can answer None, so fall back
-        // to the primary screen rather than leaving the panel wherever the window server put it.
-        let monitor = match win.current_monitor() {
-            Ok(Some(m)) => m,
+    fn overlay_monitor(win: &tauri::WebviewWindow) -> Option<tauri::Monitor> {
+        match win.current_monitor() {
+            Ok(Some(m)) => Some(m),
             _ => match win.primary_monitor() {
-                Ok(Some(m)) => m,
+                Ok(Some(m)) => Some(m),
                 _ => {
                     eprintln!("[meeting] no monitor to park the overlay on");
-                    return;
+                    None
                 }
             },
-        };
+        }
+    }
+
+    /// Park the overlay at the top-right of the screen the cursor is on (offer / recap).
+    ///
+    /// Computed and set entirely in **physical** pixels — see `park_bottom_center`.
+    fn park_top_right(win: &tauri::WebviewWindow, size: (f64, f64)) {
+        let Some(monitor) = overlay_monitor(win) else { return };
         let scale = monitor.scale_factor();
         let screen = monitor.size();
         let origin = monitor.position();
@@ -852,10 +867,44 @@ use shogun_core::meeting::gate::OfferGate;
         let x = origin.x + screen.width as i32 - w - margin;
         let y = origin.y + top;
         eprintln!(
-            "[meeting] park to ({x},{y}) physical — screen {}x{} at ({},{}) scale {scale}",
+            "[meeting] park top-right ({x},{y}) physical — screen {}x{} at ({},{}) scale {scale}",
             screen.width, screen.height, origin.x, origin.y
         );
         let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
+    }
+
+    /// Park the overlay bottom-center on the screen the cursor is on — above the Meet mic bar.
+    ///
+    /// Re-parked when the window size changes (pill ↔ live panel) so the anchor stays centered.
+    /// After that the user may drag it; we do not move it until hide, resize, or offer → live.
+    ///
+    /// Computed and set entirely in **physical** pixels. Mixing the two coordinate systems is
+    /// how the panel ended up in the middle of the screen: the monitor answers in physical
+    /// pixels, the window size is given in logical ones, and subtracting one from the other on a
+    /// Retina display is off by exactly the scale factor.
+    fn park_bottom_center(win: &tauri::WebviewWindow, size: (f64, f64)) {
+        let Some(monitor) = overlay_monitor(win) else { return };
+        let scale = monitor.scale_factor();
+        let screen = monitor.size();
+        let origin = monitor.position();
+        let w = (size.0 * scale).round() as i32;
+        let h = (size.1 * scale).round() as i32;
+        let bottom = (BOTTOM_MARGIN * scale).round() as i32;
+
+        let x = origin.x + (screen.width as i32 - w) / 2;
+        let y = origin.y + screen.height as i32 - h - bottom;
+        eprintln!(
+            "[meeting] park bottom-center ({x},{y}) physical — screen {}x{} at ({},{}) scale {scale}",
+            screen.width, screen.height, origin.x, origin.y
+        );
+        let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
+    }
+
+    fn park_overlay(win: &tauri::WebviewWindow, mode: ParkMode, size: (f64, f64)) {
+        match mode {
+            ParkMode::TopRight => park_top_right(win, size),
+            ParkMode::BottomCenter => park_bottom_center(win, size),
+        }
     }
 
     /// Show, hide and resize the overlay to match the lane's state.
@@ -872,20 +921,35 @@ use shogun_core::meeting::gate::OfferGate;
         // be visible: `show()` is idempotent, and treating "we showed it once" as "it is on
         // screen" is what left an invisible window in the one state that has to be seen.
         static PARKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        static LAST_PARK_MODE: std::sync::Mutex<Option<ParkMode>> = std::sync::Mutex::new(None);
         use std::sync::atomic::Ordering;
 
         let visible = enabled && !matches!(state, State::Idle)
             && !(state == State::Recording && overlay_dismissed);
         let size = match state {
             State::Wrapping => RECAP_SIZE,
-            State::Recording => LIVE_SIZE,
-            _ => BAR_SIZE,
+            State::Recording => {
+                if OVERLAY_PANEL_OPEN.load(Ordering::SeqCst) {
+                    LIVE_SIZE
+                } else {
+                    PILL_SIZE
+                }
+            }
+            State::Offered => OFFER_SIZE,
+            State::Idle => BAR_SIZE,
         };
         // Skip redundant AppKit work: emit() runs every second while a meeting is active, but the
         // overlay only needs to change on visibility/state/size transitions. Hammering set_size /
         // orderFront every tick races teardown and can destabilize the webview.
         static LAST: std::sync::Mutex<Option<(bool, State, bool, f64, f64)>> =
             std::sync::Mutex::new(None);
+        let prev_size = LAST
+            .lock()
+            .ok()
+            .and_then(|l| l.as_ref().map(|(_, _, _, w, h)| (*w, *h)));
+        let size_changed = prev_size
+            .map(|(w, h)| w != size.0 || h != size.1)
+            .unwrap_or(true);
         if let Ok(mut last) = LAST.lock() {
             if last.as_ref().is_some_and(|(v, s, dismissed, w, h)| {
                 *v == visible
@@ -905,18 +969,31 @@ use shogun_core::meeting::gate::OfferGate;
             set_overlay_ignores_mouse(&win, true);
             let _ = win.hide();
             PARKED.store(false, Ordering::SeqCst);
+            if let Ok(mut last_mode) = LAST_PARK_MODE.lock() {
+                *last_mode = None;
+            }
             return;
         }
+        let park_mode = park_mode_for_state(state);
+        let park_mode_changed = LAST_PARK_MODE
+            .lock()
+            .ok()
+            .and_then(|m| m.as_ref().map(|prev| *prev != park_mode))
+            .unwrap_or(true);
         let _ = win.set_size(tauri::LogicalSize::new(size.0, size.1));
-        if !PARKED.swap(true, Ordering::SeqCst) {
-            park_top_right(&win, size);
+        if !PARKED.load(Ordering::SeqCst) || size_changed || park_mode_changed {
+            park_overlay(&win, park_mode, size);
+            PARKED.store(true, Ordering::SeqCst);
+            if let Ok(mut last_mode) = LAST_PARK_MODE.lock() {
+                *last_mode = Some(park_mode);
+            }
         }
         // Whole window captures clicks while any meeting surface is visible. Transparent padding
         // around `.ov` may block clicks too — better than pointermove hit-tests that flip false
         // before the first move or on pointerleave and let clicks fall through to Meet behind.
-        // Product trade-off (2026-08): overlay parks top-right; Meet/Zoom controls there become
-        // unclickable until dismissed. Pointermove hit-testing was tried (752612f) and reverted
-        // (0743193). Revisit with CGEventTap cursor tracking if real-device testing blocks ship.
+        // Product trade-off (2026-08): offer/recap park top-right; live pill parks bottom-center.
+        // Transparent padding may still block controls underneath. Pointermove hit-testing was
+        // tried (752612f) and reverted (0743193). Revisit with CGEventTap cursor tracking if needed.
         OVERLAY_WANTS_INTERACTIVE.store(true, Ordering::SeqCst);
         apply_overlay_interactive(&win);
         let shown = win.show();
@@ -1343,6 +1420,18 @@ use shogun_core::meeting::gate::OfferGate;
         if lane.machine.state() == State::Recording {
             lane.overlay_dismissed = true;
             emit(&app, lane, now);
+        }
+    }
+
+    /// Expand/collapse the live notes panel above the black control pill.
+    #[tauri::command]
+    pub fn meeting_set_overlay_panel(app: tauri::AppHandle, open: bool) {
+        use std::sync::atomic::Ordering;
+        OVERLAY_PANEL_OPEN.store(open, Ordering::SeqCst);
+        let Ok(g) = LANE.lock() else { return };
+        let Some(lane) = g.as_ref() else { return };
+        if lane.machine.state() == State::Recording && !lane.overlay_dismissed {
+            sync_window(&app, State::Recording, lane.settings.enabled, false);
         }
     }
 
