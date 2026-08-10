@@ -30,24 +30,6 @@ import {
   IconPinOff,
   IconSettings,
 } from "./utilityIcons";
-import {
-  IconClose,
-  IconHistory,
-  IconMaximize2,
-  IconMinimize,
-  IconPin,
-  IconPinOff,
-  IconSettings,
-} from "./utilityIcons";
-import {
-  IconClose,
-  IconHistory,
-  IconMaximize2,
-  IconMinimize,
-  IconPin,
-  IconPinOff,
-  IconSettings,
-} from "./utilityIcons";
 
 // SHOGUN panel. A visible, interactive window that hangs from the notch. Opening/closing is driven
 // by direct clicks in the webview (reliable — no dependency on the CGEventTap hover path or a global
@@ -82,6 +64,8 @@ interface MeetingView {
   app_bundle_id: string | null;
   elapsed_ms: number;
   countdown_ms: number;
+  /** Capture/ASR paused; meeting session still open (waveform toggle). */
+  paused?: boolean;
 }
 
 /** mm:ss. Tabular figures in CSS keep the row from reflowing as the seconds tick. */
@@ -183,14 +167,9 @@ const COLLAPSE_ANIM_MS = 140;
 const INLINE_HOLD_MS = 2200;
 const MIN_W = 460;
 const MIN_H = 240;
-// Collapsed floor + provisional size until measure runs. Floor stops the
-// max-width:100% ↔ set_panel_size feedback loop that shrunk Idle to ~130px (narrower than
-// hardware notch_w≈179). Content may grow above this up to `.handle` max-width.
-const W_HANDLE_FALLBACK = 280;
-/** Quiet hiding Idle — hardware-notch-sized weld when frontmost is self / unknown. */
-const W_HIDE = 180;
-/** Quiet hiding Idle — hardware-notch-sized weld when frontmost is self / unknown. */
-const W_HIDE = 180;
+// Collapsed floor + hard cap = hardware/pseudo notch width (~180). Wider Idle chrome (260–280)
+// hung into empty menu-bar space and felt like an oversized hitbox outside the notch.
+const W_HANDLE_FALLBACK = 180;
 /** Quiet hiding Idle — hardware-notch-sized weld when frontmost is self / unknown. */
 const W_HIDE = 180;
 
@@ -238,40 +217,6 @@ function appName(bundle: string): string {
   if (!bundle) return t.yourScreen;
   const seg = bundle.split(".").pop() || bundle;
   return seg.charAt(0).toUpperCase() + seg.slice(1);
-}
-
-/** Own process / product labels — never show as Idle "reading …" (hiding chin instead). */
-const OWN_FOCUS_IDS = new Set([
-  "dev.shogun.spike",
-  "shogunai",
-  "shogun",
-  "shogun-desktop-spike",
-  "spike",
-]);
-
-function isSelfFocus(id: string): boolean {
-  if (!id.trim()) return true; // unknown / cleared → quiet welded Idle
-  const lower = id.trim().toLowerCase();
-  if (OWN_FOCUS_IDS.has(lower)) return true;
-  const seg = lower.split(".").pop() || lower;
-  return OWN_FOCUS_IDS.has(seg);
-}
-
-/** Own process / product labels — never show as Idle "reading …" (hiding chin instead). */
-const OWN_FOCUS_IDS = new Set([
-  "dev.shogun.spike",
-  "shogunai",
-  "shogun",
-  "shogun-desktop-spike",
-  "spike",
-]);
-
-function isSelfFocus(id: string): boolean {
-  if (!id.trim()) return true; // unknown / cleared → quiet welded Idle
-  const lower = id.trim().toLowerCase();
-  if (OWN_FOCUS_IDS.has(lower)) return true;
-  const seg = lower.split(".").pop() || lower;
-  return OWN_FOCUS_IDS.has(seg);
 }
 
 /** Own process / product labels — never show as Idle "reading …" (hiding chin instead). */
@@ -862,15 +807,14 @@ export function App(): JSX.Element {
     if (!el) return;
     const r = el.getBoundingClientRect();
     if (r.width < 1 || r.height < 1) return;
-    // +1 guards against a fractional layout width being truncated into a clipped pill.
-    // Width floors at W_HANDLE_FALLBACK — never re-shrink below the good-era Idle chin.
-    // Hiding Idle floors at notch-sized weld (W_HIDE × H_DEAD) instead.
+    // Cap Idle at notch width — never grow into empty menu-bar left/right of the cutout.
+    // Hiding Idle uses the same weld (W_HIDE × H_DEAD).
     // Height floors at H_HANDLE so a short content pill never leaves air under the notch.
     const hiding = el.classList.contains("handle--hiding");
-    const minW = hiding ? W_HIDE : W_HANDLE_FALLBACK;
+    const notchW = hiding ? W_HIDE : W_HANDLE_FALLBACK;
     const minH = hiding ? H_DEAD : H_HANDLE;
     void applyPanelSize(
-      Math.max(minW, Math.ceil(r.width) + 1),
+      notchW,
       Math.max(minH, Math.ceil(r.height)),
     );
   }, [
@@ -2721,7 +2665,7 @@ function Settings(props: {
   onDone: () => void;
   onCleared: () => void;
 }): JSX.Element {
-  const { appearance, setAppearance, showStatusInNotch, setShowStatusInNotch, hasKey, keyRejected, stateCount, onDone, onCleared } = props;
+  const { appearance, setAppearance, hasKey, keyRejected, stateCount, onDone, onCleared } = props;
   // Clearing extracted state is destructive and context is foundational, so it is a deliberate
   // two-step: reveal a typed confirmation, and only a matching "CLEAR" enables the delete.
   const [confirming, setConfirming] = useState(false);

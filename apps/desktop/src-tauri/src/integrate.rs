@@ -301,7 +301,8 @@ pub mod mac {
                         // CGEventTap early-reject band must cover the open panel or moves into
                         // the body never reach HoverTracker (one edge sample → false leave).
                         // Welded hide shrinks the visual frame — floor to Idle silhouette.
-                        crate::hover::set_hover_band_cg(engine.hover_band_cg_for_panel(h));
+                        let (band_h, band_w) = engine.hover_band_cg_for_panel(w, h);
+                        crate::hover::set_hover_band_cg(band_h, band_w);
                         continue;
                     }
                     Ev::Tap(TapEvent::Status { active }) => {
@@ -453,8 +454,8 @@ pub mod mac {
             EngineOutput::TopBandEntry => {
                 shared.recorder.record(Body::TopBandEntry { count: 1 });
             }
-            EngineOutput::HoverBand(h) => {
-                crate::hover::set_hover_band_cg(h);
+            EngineOutput::HoverBand { height, width } => {
+                crate::hover::set_hover_band_cg(height, width);
             }
         }
     }

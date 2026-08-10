@@ -65,8 +65,9 @@ pub enum EngineOutput {
     OpenFullUi,
     /// Q4 denominator: the pointer entered the top band.
     TopBandEntry,
-    /// CGEventTap early-reject band height (points from display top).
-    HoverBand(f64),
+    /// CGEventTap early-reject zone: height from display top, width centred on display
+    /// (Idle = notch silhouette + pad; open = live panel + grace).
+    HoverBand { height: f64, width: f64 },
 }
 
 /// The integrated engine. One per display where the panel appears.
@@ -166,12 +167,32 @@ impl NotchEngine {
         self.hover.set_regions(regs, self.menubar_min_y);
     }
 
-    /// CGEventTap early-reject band for a live panel height. Floors to the Idle chin when the
-    /// webview shrinks the welded hide frame below hardware notch + content drop.
-    pub fn hover_band_cg_for_panel(&self, panel_h: f64) -> f64 {
+    /// CGEventTap early-reject zone for a live panel size. Floors to the Idle silhouette when
+    /// welded hide shrinks the visual frame — hover still finds the notch, but the band stays
+    /// notch-wide (not a full menu-bar strip). Open panels grow the band to panel + grace.
+    pub fn hover_band_cg_for_panel(&self, panel_w: f64, panel_h: f64) -> (f64, f64) {
         let p = GeometryParams::default();
-        let idle_floor = self.idle.h + p.enter_bottom;
-        (panel_h + p.exp_margin).max(idle_floor).max(p.top_band)
+        let idle_h = self.idle.h + p.enter_bottom;
+        let idle_w = self.idle.w + 2.0 * p.enter_lr;
+        // Height is the open signal — welded hide is 180×32 while idle silhouette is ~179×76.
+        // Comparing width alone (180 > 179) wrongly inflated the band to panel+grace in Idle.
+        let open = panel_h > self.idle.h;
+        let h = if open {
+            panel_h + p.exp_margin
+        } else {
+            idle_h
+        };
+        let w = if open {
+            panel_w + 2.0 * p.exp_margin
+        } else {
+            idle_w
+        };
+        (h, w)
+    }
+
+    fn idle_hover_band(&self) -> (f64, f64) {
+        let p = GeometryParams::default();
+        (self.idle.h + p.enter_bottom, self.idle.w + 2.0 * p.enter_lr)
     }
 
     /// Grow `r_exp` to at least the last/open panel floor as soon as Hover/Expanded starts,
@@ -275,11 +296,15 @@ impl NotchEngine {
                     out.push(EngineOutput::WebviewState(s));
                     if matches!(s, State::Hover | State::Expanded) {
                         self.ensure_open_hit_region();
-                        out.push(EngineOutput::HoverBand(self.last_panel_h + GeometryParams::default().exp_margin));
+                        let p = GeometryParams::default();
+                        out.push(EngineOutput::HoverBand {
+                            height: self.last_panel_h + p.exp_margin,
+                            width: self.last_panel_w + 2.0 * p.exp_margin,
+                        });
                     } else if matches!(s, State::Idle | State::Hidden) {
-                        // Idle chin band — content drop may push above classic 40pt.
-                        let idle_band = self.idle.h + GeometryParams::default().enter_bottom;
-                        out.push(EngineOutput::HoverBand(idle_band.max(40.0)));
+                        // Idle: notch silhouette only (±enter pad) — not a full-width top strip.
+                        let (h, w) = self.idle_hover_band();
+                        out.push(EngineOutput::HoverBand { height: h, width: w });
                     }
                 }
                 Effect::SetIgnoresMouse(b) => out.push(EngineOutput::SetIgnoresMouse(b)),
@@ -457,7 +482,12 @@ mod tests {
         );
         e.set_panel_hit_size(180.0, 32.0);
         let p = GeometryParams::default();
-        assert!(e.hover_band_cg_for_panel(32.0) >= idle_h + p.enter_bottom);
+        let (band_h, band_w) = e.hover_band_cg_for_panel(180.0, 32.0);
+        assert!(band_h >= idle_h + p.enter_bottom);
+        // Width stays notch-sized — must not become a full menu-bar catch strip.
+        assert!(band_w <= idle.w + 2.0 * p.enter_lr + 1.0);
+        // 180×32 welded hide: 180 > 179 must not trigger open-band width (212pt).
+        assert!((band_w - (idle.w + 2.0 * p.enter_lr)).abs() < 1.0);
 
         // Lower chin: inside full Idle rect but below the 32pt visual panel.
         let cx = idle.mid_x();

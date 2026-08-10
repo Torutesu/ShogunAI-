@@ -84,10 +84,13 @@ pub struct GeometryParams {
 
 impl Default for GeometryParams {
     fn default() -> Self {
+        // enter_lr / enter_bottom: 2pt pad only — hit must hug visible notch silhouette
+        // (not bleed into empty menu-bar left/right/below). Spec Appendix A started at 8/4;
+        // product feedback: that external catch zone felt "outside the notch".
         Self {
-            enter_lr: 8.0,
-            enter_bottom: 4.0,
-            stay_hysteresis: 4.0,
+            enter_lr: 2.0,
+            enter_bottom: 2.0,
+            stay_hysteresis: 2.0,
             exp_margin: 16.0,
             expanded_w: 400.0,
             expanded_h: 180.0,
@@ -136,8 +139,8 @@ pub fn regions_with_panel(screen: Rect, idle: Rect, panel_w: f64, panel_h: f64, 
         panel_h,
     );
     let r_exp = panel.inset_all(p.exp_margin);
-    // Idle early-reject floor: at least the Idle chin (+ enter bottom), else the classic 40pt band.
-    // Points inside `r_exp` below this floor are still tracked (see HoverTracker).
+    // Idle early-reject floor: Idle chin (+ enter bottom). Points inside `r_exp` below this
+    // floor are still tracked (see HoverTracker). Width is enforced in the CGEventTap adapter.
     Regions {
         r_enter,
         r_stay,
@@ -297,10 +300,10 @@ mod tests {
         let s = internal_screen();
         let idle = idle_rect(s, 200.0, 32.0);
         let r = regions(s, idle, GeometryParams::default());
-        // left/right +8, bottom +4, top +TOP_EDGE_OVERSHOOT (pinned-cursor admission).
-        assert_eq!(r.r_enter.x, idle.x - 8.0);
-        assert_eq!(r.r_enter.max_x(), idle.max_x() + 8.0);
-        assert_eq!(r.r_enter.y, idle.y - 4.0);
+        // left/right +2, bottom +2, top +TOP_EDGE_OVERSHOOT (pinned-cursor admission).
+        assert_eq!(r.r_enter.x, idle.x - 2.0);
+        assert_eq!(r.r_enter.max_x(), idle.max_x() + 2.0);
+        assert_eq!(r.r_enter.y, idle.y - 2.0);
         assert_eq!(r.r_enter.max_y(), idle.max_y() + TOP_EDGE_OVERSHOOT);
     }
 
