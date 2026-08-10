@@ -1,15 +1,28 @@
-// The meeting overlay: its own small floating window, parked top-right and draggable
-// (Issue #7). Separate from the notch on purpose — during a meeting the user is looking at the
-// meeting window, and the notch sits at the top edge of the screen outside that field of view.
-// "Always visible, always one tap to stop" only holds if it appears near what they are watching.
+// The meeting overlay: its own small floating window (Issue #7). Rust parks the offer card
+// top-right and the in-meeting control pill bottom-center above the Meet mic bar. Draggable.
 
 import { useCallback, useEffect, useRef, useState, type JSX } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
+import meetingIcon from "./assets/shogun_meeting.svg";
+import meetingIcon from "./assets/meeting/shogun_meeting.svg";
+import notesIcon from "./assets/meeting/notes.svg";
+import ccIcon from "./assets/meeting/cc.svg";
+import chatIcon from "./assets/meeting/chat.svg";
+import moreIcon from "./assets/meeting/more.svg";
+import stopIcon from "./assets/meeting/stop.svg";
 import { t } from "./strings";
 import { uiLog } from "./uiLog";
+import { IconAlignJustify, IconClose } from "./utilityIcons";
+
+/** Must match `Params::default().offer_grace_ms` in shogun-core meeting statemachine. */
+const OFFER_GRACE_MS = 10_000;
+import { IconAlignJustify, IconClose } from "./utilityIcons";
+
+/** Must match `Params::default().offer_grace_ms` in shogun-core meeting statemachine. */
+const OFFER_GRACE_MS = 10_000;
 import { IconAlignJustify, IconClose } from "./utilityIcons";
 
 export interface MeetingView {
@@ -174,7 +187,7 @@ function beginMeetingDrag(e: React.PointerEvent): void {
   if (el.closest("button, input, a, textarea, select, [data-no-drag]")) return;
   if (
     el.closest(
-      ".ov__livebody, .ov__rbody, .ov__acts, .ov__liveacts, .ov__modepick, .ov__langpick, .ov__modemenu, .ov__langmenu",
+      ".ov__livebody, .ov__rbody, .ov__acts, .ov__liveacts, .ov__modepick, .ov__langpick, .ov__modemenu, .ov__langmenu, .ov__bar, .ov__bar-tip",
     )
   ) {
     return;
@@ -320,8 +333,14 @@ export function MeetingOverlay(): JSX.Element | null {
   const [langOpen, setLangOpen] = useState<"source" | "target" | "my" | "other" | null>(null);
   const [showSource, setShowSource] = useState(false);
   const [translateKeyIssue, setTranslateKeyIssue] = useState<"missing" | "invalid" | null>(null);
+  const [notesOpen, setNotesOpen] = useState(true);
+  const [ccOn, setCcOn] = useState(false);
+  const [chatOn, setChatOn] = useState(false);
+  const [audioLevel, setAudioLevel] = useState(0);
   const liveScrollRef = useRef<HTMLDivElement>(null);
   const liveSnapshotRef = useRef<TranscriptLine[]>([]);
+  const audioPeakRef = useRef(0);
+  const audioHasRealLevelRef = useRef(false);
 
   useEffect(() => {
     liveSnapshotRef.current = live.snapshot();
@@ -385,6 +404,52 @@ export function MeetingOverlay(): JSX.Element | null {
 
   useEffect(() => {
     if (view?.state !== "recording") setStopping(false);
+  }, [view?.state]);
+
+  useEffect(() => {
+    if (view?.state !== "recording") return;
+    call("meeting_set_overlay_panel", { open: notesOpen });
+  }, [view?.state, notesOpen]);
+
+  useEffect(() => {
+    if (view?.state !== "recording") {
+      audioHasRealLevelRef.current = false;
+      setAudioLevel(0);
+      return;
+    }
+    const off = listen<{ rms: number }>("meeting_level", (e) => {
+      audioHasRealLevelRef.current = true;
+      const rms = e.payload.rms;
+      audioPeakRef.current = Math.max(audioPeakRef.current * 0.85, rms);
+      const norm = audioPeakRef.current > 0 ? Math.min(1, rms / audioPeakRef.current) : 0;
+      setAudioLevel(norm);
+    });
+    let raf = 0;
+    let t0 = performance.now();
+    const pulse = (now: number): void => {
+      if (!audioHasRealLevelRef.current) {
+        const phase = (now - t0) / 1000;
+        const wave = 0.22 + 0.55 * (0.5 + 0.5 * Math.sin(phase * 3.1));
+        setAudioLevel(wave);
+      }
+      raf = window.requestAnimationFrame(pulse);
+    };
+    raf = window.requestAnimationFrame(pulse);
+    return () => {
+      window.cancelAnimationFrame(raf);
+      void off.then((f) => f());
+    };
+  }, [view?.state]);
+
+  useEffect(() => {
+    if (view?.state !== "offered") return;
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      call("meeting_not_now");
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
   }, [view?.state]);
 
   useEffect(() => {
@@ -487,23 +552,61 @@ export function MeetingOverlay(): JSX.Element | null {
   };
 
   if (view.state === "offered") {
+    const remain = Math.max(0, Math.min(1, view.countdown_ms / OFFER_GRACE_MS));
     return (
-      <div className="ov ov--offer" onPointerDown={beginMeetingDrag}>
-        {grip}
-        <div className="ov__body ov__drag">
-          <div className="ov__kicker">{t.meetingDetected}</div>
-          <div className="ov__name">{name}</div>
+      <div
+        className="ov ov--offer"
+        onPointerDown={beginMeetingDrag}
+        title={t.meetingDisclosureBrief}
+      >
+        <div className="ov__offer ov__drag">
+          <div className="ov__offer-row">
+            <div className="ov__offer-left">
+              <span className="ov__offer-accent" aria-hidden>
+                {Array.from({ length: 5 }, (_, i) => (
+                  <span key={i} className="ov__offer-dot" />
+                ))}
+              </span>
+              <div className="ov__offer-copy">
+                <div className="ov__offer-title">{t.meetingDetected}</div>
+                <div className="ov__offer-sub">{name}</div>
+              </div>
+            </div>
+            <div className="ov__offer-acts ov__nodrag">
+              <button
+                type="button"
+                className="ov__offer-go"
+                onClick={() => call("meeting_start")}
+              >
+                <img
+                  className="ov__offer-ico"
+                  src={meetingIcon}
+                  alt=""
+                  width={18}
+                  height={18}
+                  draggable={false}
+                />
+                {t.meetingTakeNotes}
+              </button>
+              <button
+                type="button"
+                className="ov__offer-skip"
+                onClick={() => call("meeting_not_now")}
+              >
+                {t.meetingNotNow}
+              </button>
+            </div>
+          </div>
+          <div
+            className="ov__offer-progress"
+            role="progressbar"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={Math.round(remain * 100)}
+            aria-label={t.meetingStarting}
+            style={{ width: `${remain * 100}%` }}
+          />
         </div>
-        <div className="ov__acts ov__nodrag">
-          <button type="button" className="ov__go" onClick={() => call("meeting_start")}>
-            {t.meetingTakeNotes}
-            <span className="ov__count">{Math.ceil(view.countdown_ms / 1000)}</span>
-          </button>
-          <button type="button" className="ov__quiet" onClick={() => call("meeting_not_now")}>
-            {t.meetingNotNow}
-          </button>
-        </div>
-        <p className="ov__disclosure">{t.meetingDisclosureBrief}</p>
       </div>
     );
   }
@@ -545,126 +648,276 @@ export function MeetingOverlay(): JSX.Element | null {
       </div>
     );
 
+    const toggleNotes = (): void => {
+      setNotesOpen((open) => !open);
+      setModeOpen(false);
+      setLangOpen(null);
+    };
+
+    const toggleCc = (): void => {
+      const next = !ccOn;
+      setCcOn(next);
+      if (next) {
+        setMode("transcription");
+        setChatOn(false);
+      }
+      setModeOpen(false);
+    };
+
+    const toggleChat = (): void => {
+      const next = !chatOn;
+      setChatOn(next);
+      if (next) {
+        setMode("two_way");
+        setCcOn(false);
+        setNotesOpen(true);
+      }
+      setModeOpen(false);
+    };
+
+    const waveHeights = [0.35, 0.85, 0.55, 0.95, 0.45].map((base, i) => {
+      const wobble = 0.15 * Math.sin(audioLevel * 12 + i * 1.7);
+      return Math.max(0.18, Math.min(1, base * (0.35 + audioLevel * 0.9) + wobble));
+    });
+
+    const controlBar = (
+      <div className="ov__bar ov__nodrag" data-no-drag>
+        <div className="ov__bar-cluster" role="toolbar" aria-label={t.meetingNotes}>
+          <div className="ov__bar-slot">
+            {notesOpen ? (
+              <span className="ov__bar-tip" role="tooltip">
+                {t.meetingCloseNote}
+              </span>
+            ) : null}
+            <button
+              type="button"
+              className={`ov__bar-btn${notesOpen ? " is-on" : ""}`}
+              aria-pressed={notesOpen}
+              aria-label={notesOpen ? t.meetingCloseNote : t.meetingOpenNotes}
+              title={notesOpen ? t.meetingCloseNote : t.meetingOpenNotes}
+              onClick={toggleNotes}
+            >
+              <img className="ov__bar-ico" src={notesIcon} alt="" width={20} height={20} draggable={false} />
+            </button>
+          </div>
+          <button
+            type="button"
+            className={`ov__bar-btn${ccOn ? " is-on" : ""}`}
+            aria-pressed={ccOn}
+            aria-label={t.meetingCaptions}
+            title={t.meetingCaptions}
+            onClick={toggleCc}
+          >
+            <img className="ov__bar-ico" src={ccIcon} alt="" width={20} height={20} draggable={false} />
+          </button>
+          <button
+            type="button"
+            className={`ov__bar-btn${chatOn ? " is-on" : ""}`}
+            aria-pressed={chatOn}
+            aria-label={t.meetingChat}
+            title={t.meetingChat}
+            onClick={toggleChat}
+          >
+            <img className="ov__bar-ico" src={chatIcon} alt="" width={20} height={20} draggable={false} />
+          </button>
+          <div className="ov__bar-slot ov__bar-slot--more">
+            <button
+              type="button"
+              className={`ov__bar-btn${modeOpen ? " is-on" : ""}`}
+              aria-expanded={modeOpen}
+              aria-label={t.meetingMore}
+              title={t.meetingMore}
+              onClick={() => {
+                setModeOpen(!modeOpen);
+                setLangOpen(null);
+              }}
+            >
+              <img className="ov__bar-ico" src={moreIcon} alt="" width={20} height={20} draggable={false} />
+            </button>
+            {modeOpen && !notesOpen ? (
+              <div className="ov__modemenu ov__modemenu--bar" role="listbox">
+                {MODES.map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    role="option"
+                    aria-selected={m === settings.meeting_mode}
+                    className={`ov__modeopt${m === settings.meeting_mode ? " is-on" : ""}`}
+                    onClick={() => setMode(m)}
+                  >
+                    {modeLabel(m)}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        </div>
+
+        <span className="ov__bar-div" aria-hidden />
+
+        <div
+          className="ov__wave"
+          role="img"
+          aria-label={t.meetingWaveform}
+        >
+          {waveHeights.map((h, i) => (
+            <span
+              key={i}
+              className="ov__wave-bar"
+              style={{ height: `${Math.round(h * 100)}%` }}
+            />
+          ))}
+        </div>
+
+        <button
+          type="button"
+          className="ov__bar-stop"
+          disabled={stopping}
+          aria-label={t.meetingEndMeeting}
+          title={t.meetingEndMeeting}
+          onClick={handleStop}
+        >
+          <img className="ov__bar-stop-ico" src={stopIcon} alt="" width={36} height={36} draggable={false} />
+        </button>
+      </div>
+    );
+
     return (
-      <div className="ov ov--live" onPointerDown={beginMeetingDrag}>
-        {grip}
-        <div className="ov__live">
-          <header className="ov__livehead ov__drag">
-            <div className="ov__modepick">
-              <button
-                type="button"
-                className="ov__modebtn"
-                aria-expanded={modeOpen}
-                onClick={() => {
-                  setModeOpen(!modeOpen);
-                  setLangOpen(null);
-                }}
-              >
-                {modeLabel(settings.meeting_mode)}
-                <span className="ov__chev" aria-hidden />
-              </button>
-              {modeOpen ? (
-                <div className="ov__modemenu" role="listbox">
-                  {MODES.map((m) => (
-                    <button
-                      key={m}
-                      type="button"
-                      role="option"
-                      aria-selected={m === settings.meeting_mode}
-                      className={`ov__modeopt${m === settings.meeting_mode ? " is-on" : ""}`}
-                      onClick={() => setMode(m)}
-                    >
-                      {modeLabel(m)}
-                    </button>
-                  ))}
+      <div
+        className={`ov ov--live${notesOpen ? "" : " ov--live-pill"}`}
+        onPointerDown={beginMeetingDrag}
+      >
+        {notesOpen ? (
+          <div className="ov__live">
+            <header className="ov__livehead ov__drag">
+              <div className="ov__modepick">
+                <button
+                  type="button"
+                  className="ov__modebtn"
+                  aria-expanded={modeOpen}
+                  onClick={() => {
+                    setModeOpen(!modeOpen);
+                    setLangOpen(null);
+                  }}
+                >
+                  {modeLabel(settings.meeting_mode)}
+                  <span className="ov__chev" aria-hidden />
+                </button>
+                {modeOpen ? (
+                  <div className="ov__modemenu" role="listbox">
+                    {MODES.map((m) => (
+                      <button
+                        key={m}
+                        type="button"
+                        role="option"
+                        aria-selected={m === settings.meeting_mode}
+                        className={`ov__modeopt${m === settings.meeting_mode ? " is-on" : ""}`}
+                        onClick={() => setMode(m)}
+                      >
+                        {modeLabel(m)}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+
+              {settings.meeting_mode === "one_way" ? (
+                <div className="ov__langrow">
+                  {langPicker("source", "source_lang", settings.source_lang, LANGS)}
+                  <span className="ov__langarrow">{t.meetingLangArrow}</span>
+                  {langPicker("target", "target_lang", settings.target_lang, ONE_WAY_TARGET_LANGS)}
                 </div>
               ) : null}
-            </div>
 
-            {settings.meeting_mode === "one_way" ? (
-              <div className="ov__langrow">
-                {langPicker("source", "source_lang", settings.source_lang, LANGS)}
-                <span className="ov__langarrow">{t.meetingLangArrow}</span>
-                {langPicker("target", "target_lang", settings.target_lang, ONE_WAY_TARGET_LANGS)}
-              </div>
-            ) : null}
+              {settings.meeting_mode === "two_way" ? (
+                <div className="ov__langrow">
+                  {langPicker("my", "my_lang", settings.my_lang, ONE_WAY_TARGET_LANGS)}
+                  <span className="ov__langarrow">{t.meetingLangSwap}</span>
+                  {langPicker("other", "other_lang", settings.other_lang, ONE_WAY_TARGET_LANGS)}
+                </div>
+              ) : null}
 
-            {settings.meeting_mode === "two_way" ? (
-              <div className="ov__langrow">
-                {langPicker("my", "my_lang", settings.my_lang, ONE_WAY_TARGET_LANGS)}
-                <span className="ov__langarrow">{t.meetingLangSwap}</span>
-                {langPicker("other", "other_lang", settings.other_lang, ONE_WAY_TARGET_LANGS)}
-              </div>
-            ) : null}
-
-            <div className="ov__liveacts ov__nodrag">
-              {translating ? (
+              <div className="ov__liveacts ov__nodrag">
+                {translating ? (
+                  <button
+                    type="button"
+                    className="ov__iconbtn"
+                    title={showSource ? t.meetingLiveHideSource : t.meetingLiveShowSource}
+                    aria-label={showSource ? t.meetingLiveHideSource : t.meetingLiveShowSource}
+                    onClick={() => setShowSource(!showSource)}
+                  >
+                    <IconAlignJustify className="ov__icon" />
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   className="ov__iconbtn"
-                  title={showSource ? t.meetingLiveHideSource : t.meetingLiveShowSource}
-                  aria-label={showSource ? t.meetingLiveHideSource : t.meetingLiveShowSource}
-                  onClick={() => setShowSource(!showSource)}
+                  title={t.meetingOverlayClose}
+                  aria-label={t.meetingOverlayClose}
+                  onClick={() => call("meeting_overlay_dismiss")}
                 >
-                  <IconAlignJustify className="ov__icon" />
+                  <IconClose className="ov__icon" />
                 </button>
+              </div>
+            </header>
+
+            <div className="ov__livebody ov__nodrag" ref={liveScrollRef}>
+              {translateKeyIssue && translating ? (
+                <p className="ov__mdegraded ov__mdegraded--warn">
+                  {translateKeyIssue === "invalid"
+                    ? t.meetingTranslateKeyInvalid
+                    : t.meetingTranslateNeedsKey}
+                </p>
               ) : null}
-              <button
-                type="button"
-                className="ov__iconbtn"
-                title={t.meetingOverlayClose}
-                aria-label={t.meetingOverlayClose}
-                onClick={() => call("meeting_overlay_dismiss")}
-              >
-                <IconClose className="ov__icon" />
-              </button>
-            </div>
-          </header>
-
-          <div className="ov__livebody ov__nodrag" ref={liveScrollRef}>
-            {translateKeyIssue && translating ? (
-              <p className="ov__mdegraded ov__mdegraded--warn">
-                {translateKeyIssue === "invalid"
-                  ? t.meetingTranslateKeyInvalid
-                  : t.meetingTranslateNeedsKey}
-              </p>
-            ) : null}
-            {liveTurns.length === 0 ? (
-              <p className="ov__liveempty">{t.meetingLiveEmpty}</p>
-            ) : (
-              liveTurns.map((turn, i) => {
-                const translation = usableTranslation(turn.translation);
-                const primary = translating && translation ? translation : turn.text;
-                const secondary =
-                  translating && translation && showSource ? turn.text : null;
-                return (
-                  <div className="ov__liveline" key={`${turn.ts}-${i}`}>
-                    <div className="ov__livemeta">
-                      <span className="ov__livespeaker">{turn.speakerLabel}</span>
-                      <span className="ov__livetime">{clock(turn.ts)}</span>
+              {liveTurns.length === 0 ? (
+                <p className="ov__liveempty">{t.meetingLiveEmpty}</p>
+              ) : (
+                liveTurns.map((turn, i) => {
+                  const translation = usableTranslation(turn.translation);
+                  const primary = translating && translation ? translation : turn.text;
+                  const secondary =
+                    translating && translation && showSource ? turn.text : null;
+                  return (
+                    <div className="ov__liveline" key={`${turn.ts}-${i}`}>
+                      <div className="ov__livemeta">
+                        <span className="ov__livespeaker">{turn.speakerLabel}</span>
+                        <span className="ov__livetime">{clock(turn.ts)}</span>
+                      </div>
+                      <p className="ov__livetext">{primary}</p>
+                      {secondary ? <p className="ov__livesrc">{secondary}</p> : null}
                     </div>
-                    <p className="ov__livetext">{primary}</p>
-                    {secondary ? <p className="ov__livesrc">{secondary}</p> : null}
-                  </div>
-                );
-              })
-            )}
-          </div>
+                  );
+                })
+              )}
+            </div>
 
-          <footer className="ov__livefoot ov__drag">
-            <span className="ov__livetitle">{name}</span>
-            <span className="ov__livetime ov__livetime--foot">{clock(view.elapsed_ms)}</span>
-            <button
-              type="button"
-              className="ov__stop ov__stop--live ov__nodrag"
-              disabled={stopping}
-              onClick={handleStop}
-            >
-              <span className="ov__stopdot" />
-              {t.meetingStop}
-            </button>
-          </footer>
-        </div>
+            <footer className="ov__livefoot ov__drag">
+              <span className="ov__livetitle">{name}</span>
+              <span className="ov__livetime ov__livetime--foot">{clock(view.elapsed_ms)}</span>
+            </footer>
+          </div>
+        ) : null}
+
+        {ccOn && !notesOpen && liveTurns.length > 0 ? (
+          <div className="ov__ccstrip ov__nodrag" aria-live="polite">
+            {(() => {
+              const last = liveTurns[liveTurns.length - 1];
+              const translation = usableTranslation(last.translation);
+              const text =
+                settings.meeting_mode !== "transcription" && translation
+                  ? translation
+                  : last.text;
+              return (
+                <>
+                  <span className="ov__ccspeaker">{last.speakerLabel}</span>
+                  <span className="ov__cctext">{text}</span>
+                </>
+              );
+            })()}
+          </div>
+        ) : null}
+
+        {controlBar}
       </div>
     );
   }
