@@ -85,6 +85,11 @@ export const STRINGS = {
     dark: "Dark",
     light: "Light",
     auto: "Auto",
+    showInDock: "Show in Dock",
+    showInDockOn: "On",
+    showInDockOff: "Off",
+    showInDockHint:
+      "Show ShogunAI in the Dock. Off keeps menu-bar only.",
     // Castle Position (issue #20) — where SHOGUN resides on screen and expands from. "Castle"
     // because it's where SHOGUN keeps watch from; six resting places, the notch by default.
     castle: "Castle Position",
@@ -189,7 +194,7 @@ export const STRINGS = {
     // and the word would promise a file that will never exist.
     meetingNotes: "Notes",
     meetingDetected: "Meeting detected",
-    meetingTakeNotes: "Take notes",
+    meetingTakeNotes: "Take Notes",
     meetingNotesSaved: "Saved",
     meetingNotesFailed: "Couldn't save",
     meetingRecapTitle: "Meeting notes",
@@ -231,13 +236,11 @@ export const STRINGS = {
     meetingExcludedRemove: "Remove",
     meetingMicOnly: "Detect by microphone alone",
     meetingMicOnlyHint:
-      "Off by default. When on, sustained microphone use can offer notes without Meet or Zoom in front — useful for calls in other apps.",
+      "Off by default. When on, sustained mic use can offer notes even without Meet or Zoom focused.",
     deepgramAsrKey: "Speech provider key",
-    deepgramAsrHint:
-      "Powers live meeting transcription. Paste once — stored in your Keychain on this Mac.",
+    deepgramAsrHint: "Powers live transcription. Paste once — stored in Keychain on this Mac.",
     deepgramAsrPresent: "Connected — live transcription can run.",
-    deepgramAsrAbsent:
-      "Not set — your typed notes still save; live speech transcription needs this key.",
+    deepgramAsrAbsent: "Not set — typed notes still save; live transcription needs this key.",
     deepgramAsrPlaceholder: "Paste Deepgram API key…",
     visualRecallSection: "Visual recall",
     visualRecallHint:
@@ -278,7 +281,7 @@ export const STRINGS = {
     // FR-MT-03 disclosure (2026-08-05): Deepgram Nova-3 processes audio for STT only; MIP opt-out;
     // SHOGUN never saves waveform/recording. Reuse these keys everywhere.
     meetingDisclosure:
-      "Nothing joins your call. For meetings you approve, audio is temporarily processed by our speech provider for live transcription only — not retained for training (MIP opt-out). No recording, waveform, or audio file is saved by SHOGUN to disk or temp storage. Only transcript text and its provenance are kept here. Turn meetings off or exclude apps anytime below.",
+      "Nothing joins your call. Approved meetings send audio temporarily to our speech provider for live transcription only — not for training (MIP opt-out). SHOGUN never saves recordings or waveforms; only transcript text and provenance stay here.",
     meetingDisclosureBrief:
       "Nothing joins your call. Speech provider processes audio temporarily for transcription — not for training. No audio file saved by SHOGUN.",
     meetingListening: "Listening · speech provider (not for training) · no recording saved",
@@ -302,6 +305,20 @@ export const STRINGS = {
       "Select KK key was rejected — re-paste it in Settings → Nightly review (plain sk-ant-… key, not hex).",
     meetingOverlayClose: "Close",
     meetingOverlaySettings: "Settings",
+    meetingCloseNote: "Close Note",
+    meetingOpenNotes: "Notes",
+    meetingCaptions: "Captions",
+    meetingChat: "Chat",
+    meetingMore: "More",
+    meetingWaveform: "Audio level",
+    meetingEndMeeting: "End meeting notes",
+    meetingCloseNote: "Close Note",
+    meetingOpenNotes: "Notes",
+    meetingCaptions: "Captions",
+    meetingChat: "Chat",
+    meetingMore: "More",
+    meetingWaveform: "Audio level",
+    meetingEndMeeting: "End meeting notes",
     // errors
     sources: "Sources",
     noAnswer: "(no response)",
