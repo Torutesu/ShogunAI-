@@ -410,6 +410,8 @@ export function App(): JSX.Element {
   const [meeting, setMeeting] = useState<MeetingView | null>(null);
   // The pill replaces the handle, so it needs its own ref for the collapsed-size measurement.
   const pillRef = useRef<HTMLDivElement>(null);
+  const meetingRef = useRef<MeetingView | null>(null);
+  meetingRef.current = meeting;
 
   // Start at the open size and prove the webview is alive.
   useEffect(() => {
@@ -525,6 +527,16 @@ export function App(): JSX.Element {
           // Never fight a user who pinned the panel open, and never re-open one they just closed
           // by hand — the tracker doesn't know about either.
           if (!openRef.current) {
+            // Meeting chin owns Stop / Take Notes. expand() sets expanding/open and unmounts
+            // MeetingPill (showIdleFace=false) mid-click — hover looked like it worked, Stop never fired.
+            const m = meetingRef.current;
+            if (
+              (st === "hover" || st === "expanded") &&
+              m?.enabled &&
+              (m.state === "offered" || m.state === "recording")
+            ) {
+              return;
+            }
             expandRef.current();
           }
         } else if (st === "idle" || st === "hidden" || st === "collapsing") {
@@ -1307,7 +1319,15 @@ function MeetingPill({ view }: { view: MeetingView }): JSX.Element {
       <button
         type="button"
         className="mpill__btn mpill__btn--stop"
-        onClick={() => void invoke("meeting_stop").catch(() => undefined)}
+        onPointerDown={(e) => {
+          e.stopPropagation();
+          e.preventDefault();
+          void invoke("meeting_stop").catch(() => undefined);
+        }}
+        onClick={(e) => {
+          e.stopPropagation();
+          e.preventDefault();
+        }}
       >
         {t.meetingStop}
       </button>
