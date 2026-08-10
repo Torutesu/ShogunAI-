@@ -122,6 +122,13 @@ export const STRINGS = {
     inlineKeyRejected: "Key rejected — check it in settings",
     inlineNoKey: "Add a key in settings to draft",
     inlineFailed: "Couldn't draft",
+    // What the app could not set up at boot. These are not transient outcomes — nothing the user
+    // does in the panel clears them, so unlike the ⌥-tap lines above they stay until fixed. Each
+    // says which capability is off, because "something is wrong" is not actionable.
+    healthNoMemory: "Memory is off — capture and search unavailable",
+    healthNoAccess: "Grant Accessibility to use drafting and capture",
+    healthNoModel: "Search is text-only until the local model is installed",
+    healthFix: "Fix",
     // settings
     settings: "Settings",
     // Earlier conversations. Kept out of the way by default: the panel is for asking something
