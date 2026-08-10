@@ -17,6 +17,8 @@
   --live: #30d158;
   --warn: #ff9f0a;
   --danger: #ff6b6b;
+  --danger: #ff6b6b;
+  --danger: #ff6b6b;
   --fill: rgba(255, 255, 255, 0.06);
   --fill-strong: rgba(255, 255, 255, 0.12);
   --card: rgba(255, 255, 255, 0.045);
@@ -109,6 +111,8 @@
     --accent-ink: #ffffff;
     --live: #1f9e3c;
     --warn: #a4560a;
+    --danger: #d64545;
+    --danger: #d64545;
     --danger: #d64545;
     --fill: rgba(0, 0, 0, 0.045);
     --fill-strong: rgba(0, 0, 0, 0.09);
@@ -203,17 +207,17 @@ body {
   width: auto;
   /* Floor matches W_HANDLE_FALLBACK — blocks measure↔max-width:100% shrink below notch presence. */
   min-width: 260px;
-  max-width: min(320px, 100%);
+  max-width: min(360px, 100%);
   height: var(--chin-h);
   min-height: var(--chin-h);
   max-height: var(--chin-h);
   margin: 0;
   padding: 0 12px;
-  background: #000;
+  background: var(--chin);
   border: none;
   border-radius: 0 0 var(--r-shell-bot) var(--r-shell-bot);
   box-shadow: none;
-  color: var(--ink);
+  color: var(--chin-ink);
   font: inherit;
   font-family: var(--sys);
   cursor: pointer;
@@ -245,11 +249,11 @@ body {
   right: 0;
   top: 0;
   height: 1px;
-  background: #000;
+  background: var(--chin);
   pointer-events: none;
 }
 .handle:hover {
-  background: #000;
+  background: var(--chin);
 }
 /* Quiet welded Idle — hardware-notch-sized black only; no "reading …" chrome.
    Hover under notch still expands via Rust R_enter (panel size independent). */
@@ -272,12 +276,12 @@ body {
   align-items: center;
   gap: 8px;
   font-size: var(--fs-sm);
-  color: var(--muted);
+  color: var(--chin-muted);
   min-width: 0;
   flex: 1;
 }
 .handle__live b {
-  color: var(--ink);
+  color: var(--chin-ink);
   font-weight: 600;
   white-space: nowrap;
   overflow: hidden;
@@ -286,22 +290,22 @@ body {
 .handle__count {
   flex: none;
   font-size: var(--fs-xs);
-  color: var(--muted);
-  background: var(--fill);
-  border: 1px solid var(--line);
+  color: var(--chin-muted);
+  background: var(--chin-fill);
+  border: 1px solid var(--chin-line);
   border-radius: var(--r-pill);
   padding: 3px 9px;
 }
 
-/* open panel — black weld under notch + glass body; bottom radius 16; no native/CSS float shadow */
+/* open panel — weld under notch + themed body; bottom radius 16; no native/CSS float shadow */
 .panel {
   position: relative;
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  /* Opaque black base so the notch cutout zone stays welded; glass sits below chin. */
-  background: #000;
+  /* Shell fill; chin band (::before) stays welded black; body uses --glass via ::after. */
+  background: var(--shell);
   border: 1px solid var(--line);
   border-top: none;
   border-radius: 0 0 var(--r-shell-bot) var(--r-shell-bot);
@@ -318,7 +322,7 @@ body {
   inset: 0;
   flex: none;
 }
-/* Glass fill below the chin band (notch rectangle stays pure #000). */
+/* Body fill below the chin band (notch rectangle stays welded black). Opaque — no blur (janks nested scroll). */
 .panel::after {
   content: "";
   position: absolute;
@@ -327,8 +331,6 @@ body {
   top: var(--chin-h);
   bottom: 0;
   background: var(--glass);
-  -webkit-backdrop-filter: blur(28px) saturate(1.55);
-  backdrop-filter: blur(28px) saturate(1.55);
   z-index: 0;
   pointer-events: none;
   border-radius: 0 0 var(--r-shell-bot) var(--r-shell-bot);
@@ -339,14 +341,12 @@ body {
   opacity: 1;
   transition-delay: 24ms;
 }
-/* Blur is expensive under scale — keep morph paint as opaque black only. */
+/* Blur is expensive under scale — keep morph paint opaque only. */
 .notch-shell.is-expanding .panel::after,
 .notch-shell.is-collapsing .panel::after,
 .notch-shell.is-idle .panel::after,
 .notch-shell.is-hoverintent .panel::after {
   opacity: 0;
-  -webkit-backdrop-filter: none;
-  backdrop-filter: none;
   transition: none;
 }
 .panel::before {
@@ -356,7 +356,7 @@ body {
   right: 0;
   top: 0;
   height: var(--chin-h);
-  background: #000;
+  background: var(--chin);
   z-index: 1;
   pointer-events: none;
 }
@@ -473,23 +473,36 @@ body {
 .head {
   flex: none;
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   justify-content: space-between;
   gap: 8px;
   height: var(--chin-h);
   min-height: var(--chin-h);
   max-height: var(--chin-h);
   /* Left padding kept tight so the live-source chip lands close to where the collapsed pill sits,
-     i.e. the indicator barely moves when the panel opens. */
-  padding: 0 9px;
-  padding-top: var(--notch-dead-h);
-  background: #000;
+     i.e. the indicator barely moves when the panel opens. Bottom pad lifts icons off the hairline. */
+  padding: var(--notch-dead-h) 9px 4px;
+  /* Dead band = welded black; drop row matches expanded body (--shell). */
+  background: linear-gradient(
+    to bottom,
+    var(--chin) 0,
+    var(--chin) var(--notch-dead-h),
+    var(--shell) var(--notch-dead-h)
+  );
   border-bottom: 1px solid var(--line);
   cursor: grab;
   box-sizing: border-box;
 }
 .head:active {
   cursor: grabbing;
+}
+:root[data-appearance="light"] .head {
+  background: var(--shell);
+}
+@media (prefers-color-scheme: light) {
+  :root[data-appearance="auto"] .head {
+    background: var(--shell);
+  }
 }
 /* interactive children must not show the grab cursor */
 .head .chip,
@@ -507,6 +520,13 @@ body {
   align-items: center;
   gap: 4px;
   flex: none;
+}
+.head__divider {
+  flex: none;
+  width: 1px;
+  height: 13px;
+  margin: 0 2px;
+  background: var(--line-strong);
 }
 .head__divider {
   flex: none;
@@ -540,34 +560,38 @@ body {
 .icon {
   display: grid;
   place-items: center;
-  width: 24px;
-  height: 24px;
-  min-width: 24px;
-  min-height: 24px;
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0;
   border: none;
-  background: transparent;
-  color: var(--ink-soft, #b8c0cc);
-  border-radius: var(--r-sm);
+  background: var(--fill-strong);
+  color: var(--muted);
+  border-radius: 50%;
+  box-shadow: none;
   cursor: pointer;
   transition: background var(--notch-hover), color var(--notch-hover);
 }
 .icon:hover {
-  background: rgba(128, 128, 128, 0.22);
+  background: color-mix(in srgb, var(--fill-strong) 72%, var(--ink));
   color: var(--ink);
 }
 /* An active toggle has to read as "on" at a glance — this one changes how the panel behaves, so
    leaving it to a tooltip would hide the difference between two very different modes. */
 .icon--on {
-  background: var(--accent-soft);
+  background: color-mix(in srgb, var(--accent) 24%, var(--fill-strong));
   color: var(--accent);
 }
 .icon--on:hover {
-  background: var(--accent-soft);
+  background: color-mix(in srgb, var(--accent) 30%, var(--fill-strong));
   color: var(--accent);
 }
 .icon svg {
   display: block;
   flex: none;
+  width: 14px;
+  height: 14px;
   transition: transform var(--notch-hover);
 }
 
@@ -673,6 +697,8 @@ body {
   display: flex;
   flex-direction: column;
   gap: 5px;
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
 }
 .welcome {
   margin: auto 0;
@@ -904,61 +930,246 @@ body {
   transform: scale(0.92);
 }
 
-/* settings */
+/* settings — open instrument layout: hairlines + type, no gray cards, square everywhere */
 .settings {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
+  background: var(--shell);
+  color: var(--ink);
+  --set-motion: 170ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 .settings__head {
   flex: none;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 9px 10px 9px 14px;
+  gap: 12px;
+  padding: 12px 14px 11px 16px;
+  background: var(--shell);
+  color: var(--ink);
   border-bottom: 1px solid var(--line);
 }
 .settings__title {
-  font-size: var(--fs-lg);
-  font-weight: 640;
-  letter-spacing: -0.01em;
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+/* Primary exit CTA — solid accent bar, square, reads as intentional close */
+.settings__done {
+  flex: none;
+  font: inherit;
+  font-family: var(--sys);
+  font-size: var(--fs-sm);
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 7px 16px;
+  border: none;
+  border-radius: 0;
+  background: var(--accent);
+  color: var(--accent-ink);
+  cursor: pointer;
+  transition: filter var(--set-motion), transform 120ms ease;
+}
+.settings__done:hover {
+  filter: brightness(1.08);
+}
+.settings__done:active {
+  transform: scale(0.97);
+  filter: brightness(0.96);
+}
+.settings__done:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 .settings__body {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 9px;
+  overflow-x: hidden;
+  padding: 4px 18px 28px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 0;
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: var(--scroll-thumb) var(--scroll-track);
+  contain: layout style;
 }
-/* each setting group is a soft rounded card — grouping + roundness in one move */
+.settings__body::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+  -webkit-appearance: none;
+  appearance: none;
+}
+.settings__body::-webkit-scrollbar-track {
+  background: var(--scroll-track);
+  border-radius: 0;
+}
+.settings__body::-webkit-scrollbar-thumb {
+  background: var(--scroll-thumb);
+  border-radius: 0;
+  border: none;
+  min-height: 32px;
+}
+.settings__body::-webkit-scrollbar-thumb:hover {
+  background: var(--scroll-thumb-hover);
+}
+.settings__body::-webkit-scrollbar-corner {
+  background: var(--scroll-track);
+}
+/* Section = open block + bottom hairline. No fill, no radius, no card chrome. */
 .set {
-  background: var(--card);
-  border: 1px solid var(--line);
-  border-radius: var(--r-sm);
-  padding: 8px 9px;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  padding: 18px 2px 16px;
+  animation: set-reveal var(--set-motion) both;
+}
+.set:last-child {
+  border-bottom: none;
+  padding-bottom: 12px;
+}
+.settings__body > .set:nth-child(1) { animation-delay: 0ms; }
+.settings__body > .set:nth-child(2) { animation-delay: 20ms; }
+.settings__body > .set:nth-child(3) { animation-delay: 35ms; }
+.settings__body > .set:nth-child(4) { animation-delay: 50ms; }
+.settings__body > .set:nth-child(5) { animation-delay: 65ms; }
+.settings__body > .set:nth-child(6) { animation-delay: 80ms; }
+.settings__body > .set:nth-child(7) { animation-delay: 95ms; }
+.settings__body > .set:nth-child(8) { animation-delay: 110ms; }
+.settings__body > .set:nth-child(n + 9) { animation-delay: 120ms; }
+@keyframes set-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 .set__label {
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--ink) 62%, var(--faint));
+  margin-bottom: 10px;
+}
+.set__sublabel {
   font-size: var(--fs-xs);
-  letter-spacing: 0.06em;
-  color: var(--faint);
-  margin-bottom: 5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: color-mix(in srgb, var(--ink) 78%, var(--muted));
+  margin: 0 0 6px;
 }
 .set__hint {
-  margin-top: 4px;
+  margin: 8px 0 0;
   font-size: var(--fs-sm);
-  line-height: 1.35;
+  line-height: 1.45;
   color: var(--muted);
 }
 .set__hint.is-ok {
   color: var(--live);
 }
+.set__hint--quiet {
+  color: color-mix(in srgb, var(--muted) 82%, transparent);
+  font-size: 11px;
+  line-height: 1.4;
+}
+.set__status {
+  margin: 2px 0 0;
+  font-size: var(--fs-sm);
+  font-weight: 550;
+  line-height: 1.4;
+  color: color-mix(in srgb, var(--ink) 82%, var(--muted));
+}
+.set__status.is-ok {
+  color: var(--live);
+}
+.set__disclosure {
+  margin: 16px 0 0;
+  padding-top: 12px;
+  border-top: 1px solid color-mix(in srgb, var(--line) 75%, transparent);
+  font-size: 11px;
+  line-height: 1.45;
+  color: color-mix(in srgb, var(--muted) 78%, transparent);
+}
+.set__stack {
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.set__stack > .set__hint,
+.set__stack > .set__status,
+.set__stack > p {
+  margin-top: 0;
+}
+.set__stack .keyrow {
+  margin-top: 4px;
+}
+.set__stack--key {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+  gap: 6px;
+}
+.set__stack--key .set__label {
+  margin-bottom: 4px;
+}
 .set__row {
   display: flex;
-  gap: 4px;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0;
+  cursor: pointer;
+  color: var(--ink);
+}
+.set__row input[type="checkbox"] {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin: 2px 0 0;
+  accent-color: var(--accent);
+}
+.set__row-label {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-sm);
+  font-weight: 550;
+  line-height: 1.35;
+  color: var(--ink);
+}
+/* Nested set inside a section (legacy) — no second hairline stack. */
+.set .set {
+  border-bottom: none;
+  padding: 10px 0 0;
   margin-top: 6px;
+  animation: none;
+}
+/* Settings-scoped: force square corners on nested chrome (inputs, segs, keys, etc.) */
+.settings .seg,
+.settings .seg__opt,
+.settings .keyrow__input,
+.settings .keyrow__btn,
+.settings .keys__btn,
+.settings .keys__rec,
+.settings .appr,
+.settings .appr__body,
+.settings .conn__mark,
+.settings .vr-launch,
+.settings .vr-launch__glyph,
+.settings .castle__screen,
+.settings kbd {
+  border-radius: 0;
 }
 
 /* Visual recall browse window — dedicated timeline + preview (not in notch). */
@@ -1255,37 +1466,41 @@ body {
 .vr-launch {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   width: 100%;
-  margin-top: 8px;
-  padding: 10px 12px;
-  border: 1px solid var(--line);
-  border-radius: var(--r-md);
-  background: linear-gradient(135deg, var(--fill-strong), var(--fill));
+  margin-top: 10px;
+  padding: 11px 0;
+  border: none;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
   color: var(--ink);
   font: inherit;
   text-align: left;
   cursor: pointer;
-  transition: border-color var(--sp), background var(--sp), transform var(--sp);
+  transition: color var(--set-motion, 160ms), border-color var(--set-motion, 160ms), background var(--set-motion, 160ms);
 }
 .vr-launch:hover {
-  border-color: var(--accent);
-  background: var(--fill-strong);
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--line));
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  color: var(--ink);
 }
 .vr-launch:active {
-  transform: scale(0.98);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
 .vr-launch__glyph {
   flex: none;
-  width: 28px;
-  height: 28px;
+  width: 26px;
+  height: 26px;
   display: grid;
   place-items: center;
-  border-radius: var(--r-sm);
-  background: var(--accent-soft);
+  border-radius: 0;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--line));
+  background: transparent;
   color: var(--accent);
-  font-size: 15px;
-  font-weight: 600;
+  font-size: 13px;
+  font-weight: 650;
 }
 .vr-launch__body {
   flex: 1;
@@ -1326,77 +1541,105 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  padding: 3px 0;
+  gap: 12px;
+  padding: 10px 0;
+  border-top: 1px solid color-mix(in srgb, var(--line) 55%, transparent);
+}
+.keys:first-of-type {
+  border-top: none;
+  margin-top: 2px;
+  padding-top: 2px;
 }
 .keys__name {
   font-size: var(--fs-md);
+  font-weight: 550;
   color: var(--ink);
+  letter-spacing: -0.01em;
 }
 .keys__combo {
-  display: flex;
-  gap: 4px;
+  display: inline-flex;
+  align-items: center;
   flex: none;
+  gap: 0;
+  border: none;
+  background: none;
+  padding: 0;
+  font-family: var(--sys);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--ink);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
-/* Draft's ⌥-tap trigger is fixed, not rebindable — show it dimmer and non-interactive. */
+/* Draft's ⌥-tap trigger is fixed, not rebindable — show it slightly quieter. */
 .keys__combo--fixed {
-  padding: 2px;
-  opacity: 0.8;
+  opacity: 0.72;
   cursor: default;
+  letter-spacing: 0.04em;
 }
 .keys__btn {
   border: none;
   background: transparent;
-  padding: 3px;
-  border-radius: var(--r-xs);
+  padding: 4px 2px;
+  border-radius: 0;
   cursor: pointer;
-  transition: background var(--sp);
+  transition: color var(--set-motion, 160ms), opacity var(--set-motion, 160ms);
 }
-.keys__btn:hover {
-  background: var(--fill-strong);
+.keys__btn:hover .keys__combo {
+  color: var(--accent);
 }
 .keys__rec {
-  border: 1px dashed var(--accent);
-  background: var(--fill);
+  border: none;
+  border-bottom: 1px dashed var(--accent);
+  background: transparent;
   color: var(--accent);
   font: inherit;
   font-family: var(--sys);
   font-size: var(--fs-sm);
-  padding: 5px 11px;
-  border-radius: var(--r-sm);
+  padding: 4px 2px;
+  border-radius: 0;
   cursor: text;
 }
 .set__hint.is-err {
   color: var(--warn);
 }
+/* Segmented control — open hairline track, square selected cell */
 .seg {
   display: flex;
-  gap: 4px;
-  background: var(--fill);
+  gap: 0;
+  background: transparent;
   border: 1px solid var(--line);
-  border-radius: var(--r-md);
-  padding: 4px;
+  border-radius: 0;
+  padding: 0;
+  overflow: hidden;
 }
 .seg__opt {
   flex: 1;
   border: none;
+  border-right: 1px solid var(--line);
   background: transparent;
   color: var(--muted);
   font: inherit;
   font-family: var(--sys);
   font-size: var(--fs-sm);
-  padding: 6px 0;
-  border-radius: var(--r-sm);
+  padding: 7px 0;
+  border-radius: 0;
   cursor: pointer;
-  transition: background var(--sp), color var(--sp);
+  transition: background var(--set-motion, 160ms), color var(--set-motion, 160ms);
+}
+.seg__opt:last-child {
+  border-right: none;
 }
 .seg__opt:hover {
   color: var(--ink);
+  background: color-mix(in srgb, var(--ink) 4%, transparent);
 }
 .seg__opt.is-on {
-  background: var(--fill-strong);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
   color: var(--ink);
-  font-weight: 600;
+  font-weight: 650;
+  box-shadow: inset 0 -2px 0 var(--accent);
 }
 
 /* Castle Position (issue #20) — a little Mac silhouette whose six anchor points are drawn where
@@ -1413,8 +1656,8 @@ body {
   max-width: 244px;
   aspect-ratio: 16 / 10;
   border: 1px solid var(--line-strong);
-  border-radius: var(--r-md);
-  background: var(--fill);
+  border-radius: 0;
+  background: transparent;
 }
 /* The physical notch bump at the top-centre, so the silhouette reads as a modern Mac. */
 .castle__screen::before {
@@ -1498,8 +1741,8 @@ body {
   color: var(--danger);
 }
 .icon--close:hover {
-  color: color-mix(in srgb, var(--danger) 78%, white);
-  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  color: color-mix(in srgb, var(--danger) 82%, white);
+  background: color-mix(in srgb, var(--danger) 18%, var(--fill-strong));
 }
 
 kbd {
@@ -1519,49 +1762,72 @@ kbd {
 /* Settings — BYOK key entry (saved straight to the Keychain) */
 .keyrow {
   display: flex;
-  gap: 6px;
-  margin-top: 6px;
+  gap: 8px;
+  margin-top: 8px;
+  align-items: stretch;
 }
 .keyrow__input {
   flex: 1;
   min-width: 0;
   font: inherit;
   font-size: var(--fs-sm);
-  padding: 6px 10px;
-  border-radius: var(--r-sm);
+  padding: 8px 10px;
+  height: 34px;
+  box-sizing: border-box;
+  border-radius: 0;
   border: 1px solid var(--line);
-  background: var(--fill-strong);
+  background: transparent;
   color: var(--ink);
   outline: none;
-  transition: border-color var(--sp);
+  transition: border-color var(--set-motion, 160ms), background var(--set-motion, 160ms);
 }
 .keyrow__input:hover {
   border-color: var(--line-strong);
 }
+.keyrow__input:focus {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+}
 .keyrow__btn {
   font: inherit;
   font-size: var(--fs-sm);
-  padding: 6px 12px;
-  border-radius: var(--r-sm);
+  font-weight: 550;
+  padding: 0 14px;
+  height: 34px;
+  box-sizing: border-box;
+  border-radius: 0;
   border: 1px solid var(--line);
-  background: var(--fill-strong);
+  background: transparent;
   color: var(--ink);
   cursor: pointer;
-  transition: background var(--sp);
+  white-space: nowrap;
+  transition: background var(--set-motion, 160ms), border-color var(--set-motion, 160ms), color var(--set-motion, 160ms);
 }
 .keyrow__btn:hover:not(:disabled) {
-  background: var(--fill);
+  border-color: var(--line-strong);
+  background: color-mix(in srgb, var(--ink) 5%, transparent);
 }
 .keyrow__btn:disabled {
   opacity: 0.4;
   cursor: default;
 }
+.keyrow__btn--quiet {
+  color: var(--muted);
+  border-color: transparent;
+  background: transparent;
+}
+.keyrow__btn--quiet:hover:not(:disabled) {
+  color: var(--ink);
+  border-color: transparent;
+  background: color-mix(in srgb, var(--ink) 4%, transparent);
+}
 .keyrow__btn--danger {
   color: var(--warn);
-  border-color: color-mix(in srgb, var(--warn) 40%, var(--line));
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--line));
 }
 .keyrow__btn--danger:not(:disabled):hover {
-  background: color-mix(in srgb, var(--warn) 14%, transparent);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  border-color: var(--warn);
 }
 .confirm {
   display: flex;
@@ -1582,14 +1848,19 @@ kbd {
 .apprs {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
   margin-top: 8px;
 }
 .appr {
-  border: 1px solid var(--line);
-  border-radius: var(--r-sm);
-  padding: 9px 10px;
-  background: var(--fill);
+  border: none;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  padding: 10px 0 2px;
+  background: transparent;
+}
+.appr:first-child {
+  border-top: none;
+  padding-top: 2px;
 }
 .appr__top {
   display: flex;
@@ -1609,12 +1880,14 @@ kbd {
   min-width: 0;
 }
 .appr__body {
-  margin: 7px 0;
-  padding: 8px 9px;
+  margin: 8px 0;
+  padding: 9px 0;
   max-height: 160px;
   overflow: auto;
-  border-radius: var(--r-xs);
-  background: var(--fill-strong);
+  border-radius: 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  background: transparent;
   color: var(--ink);
   font-family: var(--sys);
   font-size: var(--fs-sm);
@@ -1624,6 +1897,14 @@ kbd {
   /* the body is the thing being approved — let the user select and check it */
   user-select: text;
   -webkit-user-select: text;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--accent) 40%, transparent) transparent;
+}
+.appr__body::-webkit-scrollbar {
+  width: 4px;
+}
+.appr__body::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--ink) 22%, transparent);
 }
 .appr__acts {
   display: flex;
@@ -1634,34 +1915,41 @@ kbd {
   background: var(--accent);
   border-color: transparent;
   color: var(--accent-ink);
-  font-weight: 600;
+  font-weight: 650;
 }
 .keyrow__btn--go:hover:not(:disabled) {
   background: var(--accent);
   filter: brightness(1.07);
+}
+.keyrow__btn--go:disabled {
+  opacity: 0.45;
+  filter: none;
+}
+.keyrow__btn--go:disabled {
+  opacity: 0.45;
+  filter: none;
 }
 
 /* connections list (Settings → Connections) — one row per first-layer service */
 .conns {
   display: flex;
   flex-direction: column;
-  margin-top: 8px;
+  margin-top: 10px;
 }
 .conn {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  padding: 5px 0;
+  gap: 10px;
+  padding: 10px 0;
   border-top: 1px solid var(--line);
 }
-/* Service mark: a tinted disc with the service's initial. Gives the list something to scan by
-   other than word length, without shipping an approximated trademark. */
+/* Service mark: square tint chip — scan by color without rounded disc chrome. */
 .conn__mark {
   flex: none;
-  width: 20px;
-  height: 20px;
-  border-radius: var(--r-pill);
+  width: 22px;
+  height: 22px;
+  border-radius: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1669,14 +1957,15 @@ kbd {
   font-weight: 700;
   line-height: 1;
   color: var(--tint);
-  background: color-mix(in srgb, var(--tint) 18%, transparent);
-  border: 1px solid color-mix(in srgb, var(--tint) 34%, transparent);
+  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--tint) 50%, transparent);
 }
 .conn__meta {
   flex: 1;
 }
 .conn:first-child {
   border-top: none;
+  padding-top: 2px;
 }
 .conn__meta {
   display: flex;
@@ -1698,6 +1987,49 @@ kbd {
 }
 .conn__state.is-warn {
   color: var(--warn);
+}
+/* Connect / Disconnect — intentional CTAs, not generic keyrow chips */
+.conn__btn {
+  flex: none;
+  font: inherit;
+  font-family: var(--sys);
+  font-size: var(--fs-xs);
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 6px 12px;
+  min-width: 5.5rem;
+  border-radius: 0;
+  border: 1px solid var(--accent);
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  transition: background var(--set-motion, 160ms), color var(--set-motion, 160ms), border-color var(--set-motion, 160ms), filter 120ms ease;
+}
+.conn__btn:hover:not(:disabled) {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+.conn__btn:active:not(:disabled) {
+  filter: brightness(0.94);
+}
+.conn__btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.conn__btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.conn__btn--off {
+  border-color: var(--line-strong);
+  color: var(--muted);
+  background: transparent;
+}
+.conn__btn--off:hover:not(:disabled) {
+  border-color: var(--danger);
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
 }
 
 /* corner resize grip — the only way to stretch the borderless panel (no OS resize edges). Two
@@ -1726,6 +2058,11 @@ kbd {
   * {
     transition: none !important;
     animation: none !important;
+  }
+  .settings__body > .set {
+    animation: none !important;
+    opacity: 1;
+    transform: none;
   }
 }
 
@@ -1973,7 +2310,7 @@ kbd {
 /* excluded-app list (FR-MT-02b). Deliberately plain: it is a list of decisions the user already
    made, and its only job is to let them be taken back. */
 .mexcl {
-  margin-top: 10px;
+  margin-top: 6px;
 }
 .mexcl__label {
   font-size: var(--fs-xs);
@@ -1986,16 +2323,21 @@ kbd {
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 0;
 }
 .mexcl__row {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 5px 8px;
-  background: var(--fill);
-  border: 1px solid var(--line);
-  border-radius: var(--r-sm, 8px);
+  padding: 8px 0;
+  background: transparent;
+  border: none;
+  border-top: 1px solid color-mix(in srgb, var(--line) 60%, transparent);
+  border-radius: 0;
+}
+.mexcl__row:first-child {
+  border-top: none;
+  padding-top: 2px;
 }
 .mexcl__id {
   flex: 1;
@@ -2004,6 +2346,7 @@ kbd {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: var(--fs-xs);
+  color: color-mix(in srgb, var(--ink) 80%, var(--muted));
 }
 .mexcl__rm {
   flex: none;
@@ -2016,7 +2359,7 @@ kbd {
   padding: 2px 4px;
 }
 .mexcl__rm:hover {
-  color: var(--ink);
+  color: var(--danger);
 }
 /* The secondary action on the offer: available, not competing with Start. */
 .mpill__btn--quiet {
@@ -2059,9 +2402,9 @@ kbd {
 }
 
 /* ── meeting overlay (Issue #7) ────────────────────────────────────────────────────────────
-   Its own floating window, parked top-right and draggable. Sized to the content and nothing
-   more: it sits over someone's meeting, so every pixel it takes is a pixel of the person they
-   are talking to. */
+   Its own floating window, parked bottom-center above the Meet mic bar (Rust positions it).
+   Sized to the content and nothing more: it sits over someone's meeting, so every pixel it
+   takes is a pixel of the person they are talking to. */
 :root[data-window="meeting"],
 :root[data-window="meeting"] body,
 :root[data-window="meeting"] #root {
@@ -2090,6 +2433,146 @@ kbd {
   color: var(--ink);
   font-family: var(--sys);
   box-sizing: border-box;
+}
+/* Meeting detected offer — white pill card (reference screenshot; exact tokens). */
+.ov--offer {
+  display: block;
+  height: 100%;
+  padding: 0;
+  gap: 0;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  color: #111111;
+  overflow: visible;
+}
+.ov__offer {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  height: 100%;
+  box-sizing: border-box;
+  padding: 16px 16px 14px;
+  background: #FFFFFF;
+  border-radius: 16px;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.28);
+  overflow: hidden;
+}
+.ov__offer-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-width: 0;
+}
+.ov__offer-left {
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+}
+.ov__offer-accent {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  align-self: stretch;
+  margin: 0;
+  width: 4px;
+}
+.ov__offer-dot {
+  flex: none;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: #2f6fed;
+}
+.ov__offer-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ov__offer-title {
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.25;
+  color: #111111;
+  letter-spacing: -0.01em;
+}
+.ov__offer-sub {
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.3;
+  color: #8a8a8a;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ov__offer-acts {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+.ov__offer-go {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: #111111;
+  background: #F2F2F2;
+  border: none;
+  border-radius: 6px;
+  padding: 8px 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 120ms ease;
+}
+.ov__offer-go:hover {
+  background: #e8e8e8;
+}
+.ov__offer-ico {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  display: block;
+  object-fit: contain;
+  pointer-events: none;
+}
+.ov__offer-skip {
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  color: #9a9a9a;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 6px 4px;
+  white-space: nowrap;
+}
+.ov__offer-skip:hover {
+  color: #555555;
+}
+.ov__offer-progress {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 3px;
+  max-width: 100%;
+  background: #2f6fed;
+  border-radius: 0 2px 0 0;
+  pointer-events: none;
+  transition: width 200ms linear;
 }
 /* Drag handle vs interactive controls — header drags; buttons/menus/scroll opt out. */
 .ov__drag {
@@ -2244,25 +2727,199 @@ kbd {
   background: #ff453a;
   flex: none;
 }
-/* live in-meeting pane (issue #93) */
+/* live in-meeting pane (issue #93) + black control capsule */
 .ov--live {
   align-items: stretch;
   flex-direction: column;
-  padding: 0;
+  justify-content: flex-end;
+  padding: 8px;
+  gap: 8px;
   height: 100%;
-  background: rgba(18, 18, 20, 0.72);
-  -webkit-backdrop-filter: blur(40px) saturate(1.4);
-  backdrop-filter: blur(40px) saturate(1.4);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 20px;
-  overflow: hidden;
+  background: transparent;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  overflow: visible;
+}
+.ov--live-pill {
+  justify-content: center;
+  align-items: center;
+  padding: 8px;
 }
 .ov__live {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  padding: 14px 16px 12px 6px;
+  padding: 14px 16px 12px 16px;
+  background: rgba(18, 18, 20, 0.72);
+  -webkit-backdrop-filter: blur(40px) saturate(1.4);
+  backdrop-filter: blur(40px) saturate(1.4);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 20px;
+  overflow: hidden;
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.45);
+}
+/* Black floating control capsule — matches in-meeting reference. */
+.ov__bar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  flex: none;
+  align-self: center;
+  height: 52px;
+  padding: 6px 8px 6px 14px;
+  background: #000000;
+  border-radius: 999px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+.ov__bar-cluster {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+}
+.ov__bar-slot {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.ov__bar-slot--more {
+  z-index: 5;
+}
+.ov__bar-tip {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 8px);
+  transform: translateX(-50%);
+  padding: 5px 8px;
+  background: #000000;
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.2;
+  white-space: nowrap;
+  border-radius: 6px;
+  pointer-events: none;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+}
+.ov__bar-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  cursor: pointer;
+  color: #ffffff;
+  opacity: 0.92;
+  transition: background 120ms ease, opacity 120ms ease;
+}
+.ov__bar-btn:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.08);
+}
+.ov__bar-btn.is-on {
+  background: #3a3a3a;
+  opacity: 1;
+}
+.ov__bar-ico {
+  width: 20px;
+  height: 20px;
+  display: block;
+  pointer-events: none;
+  object-fit: contain;
+}
+.ov__bar-div {
+  width: 1px;
+  height: 22px;
+  background: rgba(255, 255, 255, 0.28);
+  flex: none;
+}
+.ov__wave {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  width: 28px;
+  height: 22px;
+  flex: none;
+}
+.ov__wave-bar {
+  width: 2px;
+  min-height: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.88);
+  transition: height 80ms linear;
+}
+.ov__bar-stop {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  margin: 0;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  cursor: pointer;
+  flex: none;
+}
+.ov__bar-stop:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.ov__bar-stop-ico {
+  width: 36px;
+  height: 36px;
+  display: block;
+  pointer-events: none;
+}
+.ov__modemenu--bar {
+  top: auto;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  min-width: 168px;
+}
+.ov__ccstrip {
+  align-self: stretch;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  max-width: 100%;
+  padding: 8px 12px;
+  background: rgba(0, 0, 0, 0.78);
+  border-radius: 12px;
+  color: #ffffff;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+.ov__ccspeaker {
+  flex: none;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.7;
+}
+.ov__cctext {
+  min-width: 0;
+  font-size: 13px;
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .ov__livehead {
   display: flex;
@@ -2400,6 +3057,10 @@ kbd {
 .ov__icon {
   width: 18px;
   height: 18px;
+  display: block;
+}
+  display: block;
+}
   display: block;
 }
 .ov__livebody {
@@ -2686,7 +3347,7 @@ kbd {
   /* Opaque, unlike the panel. Transparency earns its place on the overlay — you look PAST that
      one at the work underneath. This is a window you look AT: dense tables, small type, long
      reading. Anything showing through here is just noise competing with the content. */
-  background: #101319;
+  background: var(--bg);
   color: var(--ink);
   overflow: hidden;
 }
@@ -3119,15 +3780,9 @@ kbd {
 body.full-window {
   background: transparent;
 }
-:root[data-appearance="light"] .full {
-  background: #f7f8fb;
-}
-/* Same light ground when the window follows the system (appearance = auto) and the system is
-   light — otherwise light-mode users on "auto" would get the dark ground from `.full` above. */
-@media (prefers-color-scheme: light) {
-  :root[data-appearance="auto"] .full {
-    background: #f7f8fb;
-  }
+:root[data-appearance="light"] .full,
+:root[data-appearance="auto"] .full {
+  background: var(--bg);
 }
 
 /* Boot / failure state for the Full UI window, before the core's view arrives. */
