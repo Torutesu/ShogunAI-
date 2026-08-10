@@ -151,14 +151,27 @@ impl NotchEngine {
     }
 
     /// Replace `r_exp` with the live NSPanel size (open / resize). Leave-grace covers full panel.
+    ///
+    /// The visual frame may shrink (welded hide) below [`Self::idle`]; hit regions and the
+    /// CGEventTap band must still cover the full Idle silhouette so notch hover keeps working.
     pub fn set_panel_hit_size(&mut self, panel_w: f64, panel_h: f64) {
         use crate::notch::geometry::regions_with_panel;
         let w = panel_w.max(1.0);
         let h = panel_h.max(1.0);
         self.last_panel_w = w;
         self.last_panel_h = h;
-        let regs = regions_with_panel(self.screen, self.idle, w, h, GeometryParams::default());
+        let hit_w = w.max(self.idle.w);
+        let hit_h = h.max(self.idle.h);
+        let regs = regions_with_panel(self.screen, self.idle, hit_w, hit_h, GeometryParams::default());
         self.hover.set_regions(regs, self.menubar_min_y);
+    }
+
+    /// CGEventTap early-reject band for a live panel height. Floors to the Idle chin when the
+    /// webview shrinks the welded hide frame below hardware notch + content drop.
+    pub fn hover_band_cg_for_panel(&self, panel_h: f64) -> f64 {
+        let p = GeometryParams::default();
+        let idle_floor = self.idle.h + p.enter_bottom;
+        (panel_h + p.exp_margin).max(idle_floor).max(p.top_band)
     }
 
     /// Grow `r_exp` to at least the last/open panel floor as soon as Hover/Expanded starts,
@@ -423,5 +436,34 @@ mod tests {
         let out = e.on_input(EngineInput::OpenFullUi);
         assert!(out.contains(&EngineOutput::OpenFullUi));
         assert_eq!(e.state(), State::Collapsing);
+    }
+
+    #[test]
+    fn welded_hide_floors_hover_band_and_chin_hit() {
+        // Visual welded hide is 180×32; Idle silhouette is notch_w × (notch_h + content drop).
+        let screen = Rect::new(0.0, 0.0, 1512.0, 982.0);
+        let idle_h = 32.0 + 44.0;
+        let idle = idle_rect(screen, 180.0, idle_h);
+        let regs = regions(screen, idle, GeometryParams::default());
+        let menubar_min_y = screen.max_y() - 24.0;
+        let mut e = NotchEngine::new(
+            regs,
+            menubar_min_y,
+            982.0,
+            HoverParams::default(),
+            Params::default(),
+            screen,
+            idle,
+        );
+        e.set_panel_hit_size(180.0, 32.0);
+        let p = GeometryParams::default();
+        assert!(e.hover_band_cg_for_panel(32.0) >= idle_h + p.enter_bottom);
+
+        // Lower chin: inside full Idle rect but below the 32pt visual panel.
+        let cx = idle.mid_x();
+        let chin_ns_y = idle.y + 20.0;
+        let (gx, gy) = cg(cx, chin_ns_y, 982.0);
+        let out = e.on_input(EngineInput::MouseCg { x: gx, y: gy, t_ms: 100, buttons: 0 });
+        assert!(out.iter().any(|o| matches!(o, EngineOutput::WebviewState(State::HoverIntent))));
     }
 }
