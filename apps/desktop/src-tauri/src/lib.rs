@@ -18,6 +18,7 @@ mod capture_source;
 mod connectors;
 #[cfg(all(target_os = "macos", feature = "visual-recall-ocr"))]
 mod screen_ocr;
+mod startup_health;
 pub mod display;
 mod dream;
 mod entitlement;
@@ -296,6 +297,7 @@ pub fn run() {
         onboarding::mac::onboarding_state,
         onboarding::mac::set_onboarding_state,
         onboarding::mac::open_accessibility_settings,
+        startup_health::mac::startup_health,
         onboarding::mac::onboarding_event,
         exclusions::mac::exclusion_categories,
         analytics::analytics_get_opt_out,
@@ -609,6 +611,9 @@ fn setup_macos(app: &tauri::App) {
         }
         Err(e) => {
             eprintln!("[spike] memory DB unavailable — capture source not started: {e}");
+            // Without this the app runs on looking healthy while capture, search and ⌥-tap are
+            // all dead, and the only trace is this stderr line nobody sees in a shipped build.
+            startup_health::mac::set_memory_db_error(e);
             // ConnectorState + ApprovalQueueState must exist before any settings command runs.
             // The read-sync poller needs a DB; listing/connecting still works without one.
             install_connectors(app.handle(), None);
@@ -2490,15 +2495,19 @@ fn attach_embedder(
 ) -> shogun_core::daemon::Db {
     let Some((model, tokenizer)) = paths else {
         eprintln!("[embed] no local model — search stays lexical (hybrid needs the bundled model)");
+        startup_health::mac::set_embedding_model(false);
         return db;
     };
     match shogun_memory::embed_onnx::OnnxEmbedder::load(&model, &tokenizer) {
         Ok(e) => {
             eprintln!("[embed] local model loaded — hybrid search enabled");
+            startup_health::mac::set_embedding_model(true);
             db.with_embedder(std::sync::Arc::new(e))
         }
         Err(e) => {
             eprintln!("[embed] model present but failed to load ({e}) — search stays lexical");
+            // Present-but-broken is the same outcome for the user as absent: lexical search.
+            startup_health::mac::set_embedding_model(false);
             db
         }
     }

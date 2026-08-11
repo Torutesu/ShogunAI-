@@ -146,6 +146,11 @@ jobs:
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # apps/desktop/README.md: a release build without this ships with analytics silently
+          # disabled (issue #99). The value is a write-only PostHog project key, but it is still
+          # sourced from a secret. Unset secret = empty = today's behaviour, so this is safe to
+          # carry before the secret exists.
+          SHOGUN_POSTHOG_KEY: ${{ secrets.SHOGUN_POSTHOG_KEY }}
         run: pnpm --filter @shogun-ai/desktop build
 
       - name: notarize app, build dmg, notarize dmg
@@ -204,12 +209,25 @@ jobs:
           notarize "$RUNNER_TEMP/app.zip"
           xcrun stapler staple "$APP"
 
-          # 2) DMG built from the now-stapled app. hdiutil only — no Finder, no AppleScript.
-          STAGE="$RUNNER_TEMP/dmg-stage"
-          rm -rf "$STAGE" && mkdir -p "$STAGE"
-          ditto "$APP" "$STAGE/$(basename "$APP")"
-          ln -s /Applications "$STAGE/Applications"
-          hdiutil create -volname "ShogunAI" -srcfolder "$STAGE" -fs HFS+ -format UDZO -ov "$DMG"
+          # 2) DMG built from the now-stapled app. appdmg writes the window's .DS_Store directly,
+          #    so the background image, icon size and icon positions survive without driving Finder
+          #    over AppleScript (the thing that hangs headless runners). Coordinates are the ones
+          #    the background art was drawn against — see apps/desktop/src-tauri/dmg/background.svg.
+          cat > "$RUNNER_TEMP/appdmg.json" <<JSON
+          {
+            "title": "ShogunAI",
+            "icon": "$GITHUB_WORKSPACE/apps/desktop/src-tauri/icons/icon.icns",
+            "background": "$GITHUB_WORKSPACE/apps/desktop/src-tauri/dmg/background.png",
+            "icon-size": 128,
+            "window": { "size": { "width": 660, "height": 400 } },
+            "format": "UDZO",
+            "contents": [
+              { "x": 175, "y": 190, "type": "file", "path": "$GITHUB_WORKSPACE/$APP" },
+              { "x": 485, "y": 190, "type": "link", "path": "/Applications" }
+            ]
+          }
+          JSON
+          npx --yes appdmg@0.6.6 "$RUNNER_TEMP/appdmg.json" "$DMG"
 
           # 3) The DMG is its own distributable artifact: sign, notarize and staple it too, so
           #    Gatekeeper clears it at mount time without calling home.
@@ -231,6 +249,22 @@ jobs:
           xcrun stapler validate "$APP"
           xcrun stapler validate "$DMG_PATH"
           spctl --assess --type open --context context:primary-signature -v "$DMG_PATH"
+
+          # Everything above passes for an app that cannot start. A build once shipped signed,
+          # notarized and stapled, and still died on SIGKILL at exec because the entitlements
+          # carried a literal `$(AppIdentifierPrefix)` — codesign does not expand Xcode build
+          # variables, and AMFI refuses restricted entitlements it cannot resolve. Nothing in
+          # codesign/spctl/stapler catches that, so assert it directly.
+          ENT="$(codesign -d --entitlements :- "$APP" 2>/dev/null || true)"
+          if printf '%s' "$ENT" | grep -qF '$('; then
+            echo "::error::Signed entitlements contain an unexpanded build variable — this app will not launch"
+            printf '%s\n' "$ENT"
+            exit 1
+          fi
+
+          # The first signed build also shipped with a blank icon, which no signing check notices.
+          test -f "$APP/Contents/Resources/icon.icns" \
+            || { echo "::error::No icon.icns in the bundle — the app would ship with a generic icon"; exit 1; }
 
       # The versioned DMG name changes every release; the LP wants one stable URL. Ship a
       # fixed-name copy alongside so the LP can hard-link

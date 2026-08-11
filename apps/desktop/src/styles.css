@@ -2993,6 +2993,22 @@ body.full-window {
   animation: live-pulse 1s ease-in-out infinite;
 }
 
+/* The way out, inside the warning chip. Smaller and tighter than a standalone .chip so the row
+   still reads as one sentence rather than a label with a button parked next to it. */
+.chip--inline {
+  margin-left: 8px;
+  padding: 1px 7px;
+  color: inherit;
+  border-color: currentColor;
+  background: transparent;
+  opacity: 0.85;
+}
+.chip--inline:hover {
+  opacity: 1;
+  background: var(--fill);
+  color: inherit;
+}
+
 /* ── voice overlay (#44) ───────────────────────────────────────────────────────────────── */
 :root[data-window="voice"],
 :root[data-window="voice"] body,

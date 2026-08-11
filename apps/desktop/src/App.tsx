@@ -98,6 +98,17 @@ interface InlineStatus {
   detail: string | null;
 }
 
+/** What the app could not set up at boot (startup_health.rs). Unlike InlineStatus these are not
+ *  outcomes of an action — they are standing conditions, and they stay on screen until fixed. */
+interface StartupHealth {
+  /** Reason the memory DB could not be opened, or null when it opened normally. */
+  memory_db_error: string | null;
+  /** Read live on every query, so granting the permission clears the warning without a relaunch. */
+  accessibility: boolean;
+  /** false = hybrid search unavailable, results are lexical only. */
+  embedding_model: boolean;
+}
+
 /** Hold-to-talk voice dialogue (#44). Rust owns lifecycle; notch expands on `voice_state`. */
 interface VoiceView {
   phase: "idle" | "recording" | "processing" | "response" | "error";
@@ -160,6 +171,8 @@ const AUTO_COLLAPSE_MS = 400;
 /** How long the pill holds a ⌥-tap outcome before returning to the live source. Long enough to
  *  read, short enough that it never becomes something you have to dismiss. */
 const INLINE_HOLD_MS = 2200;
+/** ⌥-tap results the user has to act on. They persist instead of fading with INLINE_HOLD_MS. */
+const STICKY_INLINE_PHASES = new Set<InlineStatus["phase"]>(["no_key", "key_rejected"]);
 /** Ceiling on SILENCE within a chat turn, not on the turn itself. Answers stream, so "nothing has
  *  arrived for this long" is the honest test for a hung provider, where a flat ceiling on the whole
  *  turn cut off exactly the long grounded answers that were worth waiting for.
@@ -290,6 +303,7 @@ export function App(): JSX.Element {
   /// The ⌥-tap's own feedback. The pill shows it briefly and then returns to the live source —
   /// this is a reply to a keystroke, not a status the user has to dismiss.
   const [inline, setInline] = useState<InlineStatus | null>(null);
+  const [health, setHealth] = useState<StartupHealth | null>(null);
   /// Pinned = the panel stays put. Unpinned = it withdraws as soon as the pointer leaves, which is
   /// the counterpart to opening on hover: the same gesture that summons it also dismisses it, so
   /// a glance costs no clicks at all. Persisted because the panel is respawned by Rust.
@@ -408,12 +422,18 @@ export function App(): JSX.Element {
     // has started (FR-MT-07). The first read covers a webview reload mid-meeting.
     offs.push(listen<MeetingView>("meeting", (e) => setMeeting(e.payload)));
     void invoke<MeetingView>("meeting_status").then(setMeeting).catch(() => undefined);
+    // Boot conditions the app used to keep to itself (stderr only). Asked again on every expand
+    // below, so granting Accessibility from System Settings clears the warning in place.
+    void invoke<StartupHealth>("startup_health").then(setHealth).catch(() => undefined);
     offs.push(
       listen<InlineStatus>("inline", (e) => {
         setInline(e.payload);
         // `drafting` holds until the outcome replaces it — a spinner that timed itself out would
-        // claim the draft had finished when it hadn't.
-        if (e.payload.phase !== "drafting") {
+        // claim the draft had finished when it hadn't. A missing or rejected key is not an outcome
+        // either: nothing clears it but a trip to settings, and timing it out after two seconds is
+        // how a 401 came to look identical to a shortcut that simply does not fire. Those stay up
+        // until the next tap replaces them.
+        if (e.payload.phase !== "drafting" && !STICKY_INLINE_PHASES.has(e.payload.phase)) {
           window.setTimeout(() => setInline(null), INLINE_HOLD_MS);
         }
       }),
@@ -682,6 +702,9 @@ export function App(): JSX.Element {
   const expand = (): void => {
     setOpen(true);
     sizeForView({ open: true });
+    // Accessibility is the one condition the user can fix without restarting, so re-read rather
+    // than trust the value from boot.
+    void invoke<StartupHealth>("startup_health").then(setHealth).catch(() => undefined);
   };
 
   // Hover-to-open. The pill opens on dwell, not on entry: Phase 0 lists hover misfire as an open
@@ -903,6 +926,35 @@ export function App(): JSX.Element {
     }
   })();
 
+  // A standing condition from boot, if any. Ordered by how much of the product it takes away:
+  // no memory is everything, no Accessibility is every input path, no model is only the search
+  // quality. Only the worst one is shown — a stack of warnings in a notch panel reads as noise.
+  const healthLine = ((): { text: string; fix: "settings" | "accessibility" | null } | null => {
+    if (!health) return null;
+    if (health.memory_db_error) return { text: t.healthNoMemory, fix: "settings" };
+    if (!health.accessibility) return { text: t.healthNoAccess, fix: "accessibility" };
+    if (!health.embedding_model) return { text: t.healthNoModel, fix: null };
+    return null;
+  })();
+
+  // The ⌥-tap result wins the slot while it is showing: it answers something the user just did.
+  const noticeLine = inlineLine
+    ? { text: inlineLine.text, tone: inlineLine.tone, fix: null as "settings" | "accessibility" | null }
+    : healthLine
+      ? { text: healthLine.text, tone: "warn" as const, fix: healthLine.fix }
+      : null;
+
+  const runFix = (fix: "settings" | "accessibility" | null): void => {
+    if (fix === "accessibility") {
+      void invoke("open_accessibility_settings")
+        // Re-read straight away: the user may grant it while the pane is open.
+        .then(() => invoke<StartupHealth>("startup_health").then(setHealth))
+        .catch(() => undefined);
+      return;
+    }
+    if (fix === "settings") void invoke("open_full_ui").catch(() => undefined);
+  };
+
   const totalState = state.commitments.length + state.open_loops.length;
   const live = appName(ctxApp || status?.app || "");
   const providerLabel = PROVIDERS.find((p) => p.id === provider)?.label ?? t.model;
@@ -983,10 +1035,10 @@ export function App(): JSX.Element {
           onPointerLeave={cancelHoverOpen}
           title={t.openPanel}
         >
-          {inlineLine ? (
-            <span className={`handle__live inline--${inlineLine.tone}`}>
-              <span className={`inline__dot inline__dot--${inlineLine.tone}`} />
-              {inlineLine.text}
+          {noticeLine ? (
+            <span className={`handle__live inline--${noticeLine.tone}`}>
+              <span className={`inline__dot inline__dot--${noticeLine.tone}`} />
+              {noticeLine.text}
             </span>
           ) : (
           <span className="handle__live">
@@ -1040,10 +1092,21 @@ export function App(): JSX.Element {
                 {/* The live source sits top-left, in the same spot the collapsed pill occupies, so
                     opening the panel doesn't make the indicator jump to the bottom. App NAME only —
                     never window titles or paths (no usernames leak into the UI). */}
-                {inlineLine ? (
-                  <span className={`srcchip inline--${inlineLine.tone}`}>
-                    <span className={`inline__dot inline__dot--${inlineLine.tone}`} />
-                    {inlineLine.text}
+                {noticeLine ? (
+                  <span className={`srcchip inline--${noticeLine.tone}`}>
+                    <span className={`inline__dot inline__dot--${noticeLine.tone}`} />
+                    {noticeLine.text}
+                    {noticeLine.fix ? (
+                      // The reason and the way out in the same chip: a warning that makes the user
+                      // hunt for the setting is only marginally better than silence.
+                      <button
+                        className="chip chip--inline"
+                        type="button"
+                        onClick={() => runFix(noticeLine.fix)}
+                      >
+                        {t.healthFix}
+                      </button>
+                    ) : null}
                   </span>
                 ) : (
                   <span className="srcchip" title={`${t.reading} ${live}`}>

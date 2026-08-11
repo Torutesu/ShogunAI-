@@ -2,11 +2,24 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <!-- Lets a stable signing identity share Keychain access across rebuilds when paired with
-         codesign (see scripts/codesign-desktop-dev.sh). -->
-    <key>keychain-access-groups</key>
-    <array>
-        <string>$(AppIdentifierPrefix)com.syogun.shogunai</string>
-    </array>
+    <!-- Intentionally empty. Do not add entitlements here without checking the app actually needs
+         them under a Developer ID signature.
+
+         This file used to declare:
+             keychain-access-groups = [ $(AppIdentifierPrefix)dev.shogun.spike ]
+         which did nothing and broke the shipped app. Two reasons:
+
+         1. `$(AppIdentifierPrefix)` is an Xcode build variable. `codesign` does not expand build
+            variables, so the signed binary carried the literal string. `keychain-access-groups` is
+            a restricted entitlement, so AMFI refused to start the hardened-runtime app: the
+            process took SIGKILL at exec and Finder reported only "ShogunAI can't be opened".
+         2. Access groups apply to the data-protection keychain. keychain_store.rs stores
+            kSecClassGenericPassword items in the default file keychain, where access is decided by
+            ACLs and the caller's code signature — the group was never consulted.
+
+         Everything this app asks of the OS is TCC-gated, not entitlement-gated: Accessibility,
+         Screen Recording and the microphone are granted by the user against the bundle identifier,
+         with the purpose strings in Info.plist. Non-sandboxed Developer ID apps need no entitlement
+         for network access or for their own keychain items. -->
 </dict>
 </plist>
