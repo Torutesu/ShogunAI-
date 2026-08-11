@@ -159,7 +159,6 @@ pub mod mac {
         body: String,
         state: tauri::State<'_, ApprovalQueueState>,
         db: tauri::State<'_, Db>,
-        app: tauri::AppHandle,
     ) -> Result<u64, String> {
         let proposal = proposed(&kind, &destination, &subject, &body)?;
         let now = db.now_ms().max(0) as u64;
@@ -168,7 +167,7 @@ pub mod mac {
             propose(&mut q, &proposal, Origin::Human, now).0
         };
         // Something is waiting on a human decision — the first reason cues exist at all (#49).
-        crate::sound::mac::play(&app, shogun_core::sound::Cue::ApprovalPending);
+        crate::sound::mac::play(shogun_core::sound::Cue::ApprovalPending);
         Ok(id)
     }
 
@@ -186,7 +185,6 @@ pub mod mac {
         state: tauri::State<'_, ApprovalQueueState>,
         db: tauri::State<'_, Db>,
         user_cfg: tauri::State<'_, crate::user_config_watch::UserConfigState>,
-        app: tauri::AppHandle,
     ) -> Result<u64, String> {
         use shogun_core::llm::AgentClient;
         let directives = user_cfg.directives();
@@ -212,7 +210,7 @@ pub mod mac {
             propose(&mut q, &proposal, Origin::Human, now).0
         };
         // A draft the user did not watch being written is exactly the case that needs telling.
-        crate::sound::mac::play(&app, shogun_core::sound::Cue::ApprovalPending);
+        crate::sound::mac::play(shogun_core::sound::Cue::ApprovalPending);
         Ok(id)
     }
 

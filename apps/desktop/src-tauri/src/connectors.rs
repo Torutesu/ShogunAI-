@@ -181,7 +181,6 @@ pub mod mac {
         service: String,
         state: tauri::State<'_, ConnectorState>,
         db: tauri::State<'_, Db>,
-        app: tauri::AppHandle,
     ) -> Result<(), String> {
         let svc = from_source(&service).ok_or_else(|| format!("unknown service: {service}"))?;
         if !transport_serves(svc) {
@@ -195,7 +194,7 @@ pub mod mac {
             .mark_connected(svc, now);
         eprintln!("[connectors] connected {service} (Composio transport)");
         // The landing point when the user comes back from a browser and is looking elsewhere (#49).
-        crate::sound::mac::play(&app, shogun_core::sound::Cue::ConnectorLinked);
+        crate::sound::mac::play(shogun_core::sound::Cue::ConnectorLinked);
         Ok(())
     }
 

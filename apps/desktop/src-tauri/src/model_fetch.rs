@@ -63,7 +63,7 @@ pub fn ensure_turbo(app: &tauri::AppHandle) -> Option<PathBuf> {
             // triggered by a meeting starting, and by then the mic is live. (This module, unlike
             // its callers, is not itself macOS-gated.)
             #[cfg(target_os = "macos")]
-            crate::sound::mac::play(app, shogun_core::sound::Cue::ModelReady);
+            crate::sound::mac::play(shogun_core::sound::Cue::ModelReady);
             Some(dest)
         }
         Err(e) => {

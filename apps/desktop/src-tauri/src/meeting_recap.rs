@@ -110,7 +110,7 @@ mod mac {
             let _ = app.emit("meeting_recap", session_id);
             // The meeting just ended, so the mic is usually cold and this one can actually be
             // heard — the Ready case that most often reaches the user (#49).
-            crate::sound::mac::play(app, shogun_core::sound::Cue::RecapReady);
+            crate::sound::mac::play(shogun_core::sound::Cue::RecapReady);
             eprintln!("[meeting] recap generated for session {session_id}");
         }
     }

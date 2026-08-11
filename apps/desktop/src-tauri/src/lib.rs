@@ -628,7 +628,7 @@ fn setup_macos(app: &tauri::App) {
             startup_health::mac::set_memory_db_error(e);
             // …and say it out loud. Capture silently not running is the failure that costs the
             // user a day of memory, which is exactly what the Fail cue is for (#49).
-            sound::mac::play(app.handle(), shogun_core::sound::Cue::CaptureStopped);
+            sound::mac::play(shogun_core::sound::Cue::CaptureStopped);
             // ConnectorState + ApprovalQueueState must exist before any settings command runs.
             // The read-sync poller needs a DB; listing/connecting still works without one.
             install_connectors(app.handle(), None);
@@ -647,7 +647,7 @@ fn setup_macos(app: &tauri::App) {
 
     // Silent unless the user explicitly asked for a startup sound (#49 D1): SHOGUN is a login
     // item, so launching is something the Mac did, not something the user did.
-    sound::mac::play(app.handle(), shogun_core::sound::Cue::AppLaunched);
+    sound::mac::play(shogun_core::sound::Cue::AppLaunched);
 
     // Last line of setup, and outside the DB branch: whether the panel is on screen has nothing to
     // do with whether memory opened, and a failed DB must not swallow the answer.
@@ -1499,7 +1499,7 @@ fn summon_to_active_space(app: &tauri::AppHandle) {
     // panel was collapsed to the handle.
     use tauri::Emitter;
     let _ = app.emit("summon", ());
-    sound::mac::play(app, shogun_core::sound::Cue::Summon);
+    sound::mac::play(shogun_core::sound::Cue::Summon);
 }
 
 /// Event-driven residency: re-assert the panel on BOTH desktop/full-screen switches

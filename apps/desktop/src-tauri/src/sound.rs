@@ -51,6 +51,14 @@ pub mod mac {
 
     static STATE: Mutex<Option<State>> = Mutex::new(None);
 
+    /// The handle playback needs, stored once at setup.
+    ///
+    /// Cues fire from a dozen places — an approval command, the meeting driver, a background ASR
+    /// thread — and threading an `AppHandle` into each of them would widen unrelated signatures
+    /// (it already pushed `draft_reply` past the argument limit). `AppHandle` is cheap to clone
+    /// and safe to share, so the module keeps its own.
+    static APP: std::sync::OnceLock<AppHandle> = std::sync::OnceLock::new();
+
     fn settings_path(app: &AppHandle) -> Option<std::path::PathBuf> {
         app.path().app_data_dir().ok().map(|d| d.join("sound.json"))
     }
@@ -58,6 +66,7 @@ pub mod mac {
     /// Load settings and preload the players. Any failure leaves the defaults in place —
     /// unreadable settings must never make the app louder than the user asked for.
     pub fn init(app: &AppHandle) {
+        let _ = APP.set(app.clone());
         let settings = settings_path(app)
             .and_then(|p| std::fs::read_to_string(p).ok())
             .and_then(|t| serde_json::from_str::<Settings>(&t).ok())
@@ -268,8 +277,10 @@ pub mod mac {
     // ── playing ─────────────────────────────────────────────────────────────────────────────
 
     /// Play `cue` if the policy allows it. Never blocks the caller: the decision is cheap and the
-    /// playback hops to the main thread.
-    pub fn play(app: &AppHandle, cue: Cue) {
+    /// playback hops to the main thread. A no-op before `init` — nothing can need a cue before
+    /// setup has run.
+    pub fn play(cue: Cue) {
+        let Some(app) = APP.get() else { return };
         let (settings, last) = {
             let Ok(g) = STATE.lock() else { return };
             match g.as_ref() {

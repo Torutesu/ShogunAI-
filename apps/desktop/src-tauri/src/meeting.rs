@@ -237,7 +237,7 @@ use shogun_core::meeting::gate::OfferGate;
                         // The only UI that starts recording if it is ignored, so it is worth a
                         // sound (#49). In practice the mic is usually already hot by now and the
                         // hot-mic rule keeps this silent — the pill stays the primary channel.
-                        crate::sound::mac::play(app, shogun_core::sound::Cue::MeetingOffered);
+                        crate::sound::mac::play(shogun_core::sound::Cue::MeetingOffered);
                     }
                 }
                 Effect::OpenSession => {
