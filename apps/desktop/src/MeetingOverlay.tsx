@@ -446,6 +446,8 @@ export function MeetingOverlay(): JSX.Element | null {
   >("idle");
   const canvasSummaryFingerprintRef = useRef("");
   const canvasSummaryInFlightRef = useRef(false);
+  const canvasSummaryTimerRef = useRef<number | null>(null);
+  const canvasSummaryPayloadRef = useRef<{ transcript: string; fingerprint: string } | null>(null);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState("");
   const [chatBusy, setChatBusy] = useState(false);
@@ -612,20 +614,32 @@ export function MeetingOverlay(): JSX.Element | null {
       .filter((line) => line.length > 2)
       .join("\n");
     if (turns.length < 5 || transcript.length < 420) {
+      canvasSummaryPayloadRef.current = null;
       setCanvasSummaryStatus((s) => (s === "updating" ? s : "waiting"));
       return;
     }
     const fingerprint = `${turns.length}:${transcript.length}:${turns[turns.length - 1]?.ts ?? 0}`;
     if (fingerprint === canvasSummaryFingerprintRef.current) return;
+
+    // Hand the newest transcript to whatever timer is already armed. This effect re-runs on every
+    // incoming line/translation patch, so re-arming (or clearing) here would restart the 22 s wait
+    // forever while people talk — the request would never fire and the Canvas would sit on
+    // "Listening for more…". Arm once, let it mature, read the latest payload when it fires.
+    canvasSummaryPayloadRef.current = { transcript, fingerprint };
+    if (canvasSummaryTimerRef.current !== null) return;
     if (canvasSummaryInFlightRef.current) return;
 
-    const timer = window.setTimeout(() => {
+    canvasSummaryTimerRef.current = window.setTimeout(() => {
+      canvasSummaryTimerRef.current = null;
+      const payload = canvasSummaryPayloadRef.current;
+      if (!payload) return;
       if (canvasSummaryInFlightRef.current) return;
+      if (payload.fingerprint === canvasSummaryFingerprintRef.current) return;
       canvasSummaryInFlightRef.current = true;
       setCanvasSummaryStatus("updating");
-      void invoke("meeting_request_live_summary", { transcript })
+      void invoke("meeting_request_live_summary", { transcript: payload.transcript })
         .then(() => {
-          canvasSummaryFingerprintRef.current = fingerprint;
+          canvasSummaryFingerprintRef.current = payload.fingerprint;
         })
         .catch((err: unknown) => {
           canvasSummaryInFlightRef.current = false;
@@ -639,8 +653,20 @@ export function MeetingOverlay(): JSX.Element | null {
           }
         });
     }, 22_000);
-    return () => window.clearTimeout(timer);
   }, [canvasActive, canvasMode, liveLines, view?.state, canvasSummary]);
+
+  // Teardown for the timer armed above. Keyed on the gates only — never on liveLines — so a
+  // pending request survives incoming transcript but is dropped when the Canvas closes, the mode
+  // switches, the meeting ends, or the overlay unmounts.
+  useEffect(() => {
+    return () => {
+      if (canvasSummaryTimerRef.current !== null) {
+        window.clearTimeout(canvasSummaryTimerRef.current);
+        canvasSummaryTimerRef.current = null;
+      }
+      canvasSummaryPayloadRef.current = null;
+    };
+  }, [canvasActive, canvasMode, view?.state]);
 
   useEffect(() => {
     const offOk = listen<{ summary: string }>("meeting_live_summary", (e) => {
