@@ -15,6 +15,7 @@ import moreIcon from "./assets/meeting/more.svg";
 import stopIcon from "./assets/meeting/stop.svg";
 import closeIcon from "./assets/meeting/close.svg";
 import preferenceIcon from "./assets/meeting/preference.svg";
+import gripIcon from "./assets/meeting/grip.svg";
 import { DragHandle6Dot } from "./DragHandle6Dot";
 import { ResizeCornerHandle } from "./ResizeCornerHandle";
 import { t } from "./strings";
@@ -1383,7 +1384,20 @@ export function MeetingOverlay(): JSX.Element | null {
     });
 
     const controlBar = (
-      <div className={`ov__bar ov__nodrag${barHoverReady ? " ov__bar--hover-ready" : ""}`} data-no-drag>
+      <div
+        className={`ov__bar-wrap ov__nodrag${barHoverReady ? " ov__bar--hover-ready" : ""}`}
+        data-no-drag
+      >
+        <button
+          type="button"
+          className="ov__bar-move"
+          aria-label={t.meetingCanvasDrag}
+          title={t.meetingCanvasDrag}
+          onPointerDown={drag}
+        >
+          <img src={gripIcon} alt="" width={14} height={14} draggable={false} aria-hidden />
+        </button>
+        <div className="ov__bar">
         <div className="ov__bar-cluster" role="toolbar" aria-label={t.meetingNotes}>
           <div className="ov__bar-slot">
             <button
@@ -1522,6 +1536,7 @@ export function MeetingOverlay(): JSX.Element | null {
         >
           <img className="ov__bar-stop-ico" src={stopIcon} alt="" width={36} height={36} draggable={false} />
         </button>
+        </div>
       </div>
     );
 

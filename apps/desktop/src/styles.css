@@ -2839,8 +2839,61 @@ kbd {
   box-shadow: none;
   pointer-events: none;
 }
-.ov--live-pill .ov__bar {
+.ov--live-pill .ov__bar-wrap {
   pointer-events: auto;
+}
+/* Wrap = black pill only in flow. Grip is absolute — cannot push icons. */
+.ov__bar-wrap {
+  position: relative;
+  display: block;
+  flex: 0 0 auto;
+  width: max-content;
+  z-index: 6;
+}
+/* Dead-center on top edge; mostly above so it does not cover More/CC. */
+.ov__bar-wrap > .ov__bar-move {
+  position: absolute !important;
+  left: 50%;
+  top: 0;
+  transform: translate(-50%, -70%);
+  z-index: 4;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 36px;
+  height: 16px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: rgba(28, 28, 30, 0.96);
+  color: #fff;
+  font: inherit;
+  appearance: none;
+  -webkit-appearance: none;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+  cursor: grab;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+.ov__bar-wrap > .ov__bar-move:active {
+  cursor: grabbing;
+}
+.ov__bar-wrap.ov__bar--hover-ready:hover > .ov__bar-move,
+.ov__bar-wrap > .ov__bar-move:active,
+.ov__bar-wrap > .ov__bar-move:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+.ov__bar-wrap > .ov__bar-move img {
+  width: 14px;
+  height: 14px;
+  display: block;
+  pointer-events: none;
+  opacity: 1;
 }
 /* Independent panel window shell — transparent; glass is on the inner card only. */
 .ov-panel-shell {
