@@ -831,13 +831,9 @@ export function App(): JSX.Element {
       setStreaming(null);
       setThinking(false);
     };
-    if (!IN_TAURI) {
-      setTimeout(() => finish("I'd start with the overdue deck for Alice — want me to draft it at your cursor?"), 700);
-      return;
-    }
     // No key means the backend would answer from the echo mock, so say so directly rather than
-    // round-tripping for a non-answer.
-    if (status && !status.has_key) {
+    // round-tripping for a non-answer. Resolves in this tick, so no turn is ever in flight.
+    if (IN_TAURI && status && !status.has_key) {
       finish(t.noKey);
       return;
     }
@@ -848,6 +844,19 @@ export function App(): JSX.Element {
     liveTurn.current = turn;
 
     partialRef.current = "";
+
+    // Browser mock (`pnpm dev:vite`, no backend). Routed through the same turn lifecycle rather
+    // than its own bare setTimeout: otherwise Stop renders for the delay and does nothing, which
+    // is the one behaviour a UI mock exists to get right.
+    if (!IN_TAURI) {
+      watchdog.current = window.setTimeout(() => {
+        if (liveTurn.current !== turn) return;
+        partialRef.current = "I'd start with the overdue deck for Alice — want me to draft it at your cursor?";
+        endTurn();
+      }, 700);
+      return;
+    }
+
     // The ceiling is on SILENCE, not on the answer. A stream still producing tokens is not a hung
     // provider, and a flat ceiling on the whole turn punished exactly the long grounded answers
     // that are worth waiting for. Every delta rearms it (see the chat_delta listener).

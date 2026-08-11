@@ -1379,9 +1379,17 @@ pub mod mac {
 
     /// Stop the streamed turn `turn`. Idempotent, and harmless for a turn that already finished.
     ///
-    /// Cancelling actually abandons the HTTP response rather than just hiding it: the panel's
-    /// receiver goes away, which fails the next send inside the provider client, which returns
-    /// `false` from its chunk callback. Tokens the user stopped are tokens SHOGUN stops paying for.
+    /// This abandons the HTTP response rather than merely hiding it: the pump stops reading, its
+    /// receiver drops, the next send inside the provider client fails, and its chunk callback
+    /// returns `false`. Tokens the user stopped are tokens SHOGUN stops paying for.
+    ///
+    /// It takes effect at the **next chunk**, not instantly — the pump is parked on the channel,
+    /// so a turn cancelled before its first token keeps the request open until that token lands.
+    /// That window is bounded by time-to-first-token and invisible to the user (the panel closes
+    /// the turn immediately either way). Waking the pump early would mean a second channel and a
+    /// select loop for no outcome anyone can observe. The one path that cannot be cut short at all
+    /// is the subscription delegate: a CLI subprocess produces its whole answer as one delta, so
+    /// there is no earlier boundary to stop at.
     #[tauri::command]
     pub fn shogun_chat_cancel(turn: u64) {
         CANCELLED_TURN.store(turn, std::sync::atomic::Ordering::Relaxed);
