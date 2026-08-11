@@ -66,5 +66,8 @@ pub mod notch;
 /// shogun-agents; available under `exec` — the desktop — and `daemon-server`).
 #[cfg(feature = "exec")]
 pub mod send_exec;
+/// Sound cues and, first, the rules for staying silent — the policy the shell asks before it
+/// plays anything (Issue #49, `docs/sound-design.md`).
+pub mod sound;
 pub mod traceview;
 pub mod user_config;

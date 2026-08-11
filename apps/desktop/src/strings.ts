@@ -232,6 +232,27 @@ export const STRINGS = {
     voicePasted: "Pasted",
     voiceCopied: "Copied to clipboard",
     voiceConflict: "Voice is unavailable while meeting notes are recording.",
+
+    // ── sounds (issue #49) ────────────────────────────────────────────────────
+    // The mic line is not a footnote: sounds going quiet during a call is the design working,
+    // and without saying so it reads as a bug worth reporting.
+    soundSection: "Sounds",
+    soundHint:
+      "A short cue when something needs you, and when something breaks. Never during automatic work.",
+    soundOff: "Off",
+    soundEssential: "Essential",
+    soundFull: "Full",
+    soundOffHint: "Nothing makes a sound.",
+    soundEssentialHint: "Only a decision you owe, and a failure that costs you work.",
+    soundFullHint: "Also confirmations, and things finishing.",
+    soundStartup: "Play the startup sound",
+    soundStartupHint: "Off by default — ShogunAI starts with your Mac, which isn't a moment you chose.",
+    soundQuietHours: "Quiet hours",
+    soundQuietFrom: "From",
+    soundQuietTo: "To",
+    soundMicNote: "Sounds are always muted while any app is using the microphone.",
+    soundPreview: "Preview",
+    soundPreviewMuted: "Muted right now — a microphone is in use.",
     model: "Model",
     modelFor: "Runs on",
     modelHint: "Chat and ⌥-tap drafts run on this provider with your own key. Each provider keeps its own key below.",

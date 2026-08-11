@@ -59,6 +59,11 @@ pub fn ensure_turbo(app: &tauri::AppHandle) -> Option<PathBuf> {
     match shogun_core::model_asset::download_verified(TURBO_URL, &tmp, &dest, TURBO_SHA256) {
         Ok(bytes) => {
             eprintln!("[meeting] turbo model fetched and verified ({bytes} bytes)");
+            // A wait that just ended (#49). Usually silent in practice — this download is
+            // triggered by a meeting starting, and by then the mic is live. (This module, unlike
+            // its callers, is not itself macOS-gated.)
+            #[cfg(target_os = "macos")]
+            crate::sound::mac::play(app, shogun_core::sound::Cue::ModelReady);
             Some(dest)
         }
         Err(e) => {
