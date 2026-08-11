@@ -321,8 +321,10 @@ Sounds
 | `cargo clippy --workspace --exclude shogun-desktop-spike --all-targets` | ✅ warning ゼロ |
 | 不変条件ガード（egress / secrets / migrations） | ✅ 3件とも pass |
 | desktop frontend `typecheck` / `build:vite` | ✅ green |
-| **`cargo clippy -p shogun-desktop-spike`（macOS shell）** | ⚠️ **未実行。** Linux コンテナでは AppKit/Tauri がリンクできず、この crate はビルド対象外。**macOS CI（`macos-build` ジョブ）が最初の検証機会**になる |
+| **`cargo clippy -p shogun-desktop-spike`（macOS shell）** | ✅ green（PR #117 / macOS CI）。作業環境（Linux）では AppKit/Tauri がリンクできないため、この crate の検証は macOS CI が担う。**新規 FFI（`NSSound initWithData:` / CoreAudio transport type / `NSUserDefaults`）はコンパイル・clippy とも通過**。初回は `clippy::too_many_arguments` で落ちたが、原因は cue のために `AppHandle` を引数に足したことで、FFI ではなかった（`sound::mac` が `AppHandle` を保持する形に変更して解消） |
 | 実機での音（§10 A1〜A7） | ⚠️ 未実施。実機必須 |
+
+**コンパイルが通ったこと ≠ 正しい音が鳴ること。** CI が保証するのは型と lint だけで、`NSSound` が実際に鳴るか、S1 が実際に会議中の混入を止めるか、音量が適切かは §10 の実機検証でしか分からない。
 
 ---
 
