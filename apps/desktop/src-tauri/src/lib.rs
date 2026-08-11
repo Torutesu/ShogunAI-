@@ -37,6 +37,7 @@ mod meeting_recap;
 mod meeting_translate;
 mod mic;
 mod analytics;
+mod net_lane;
 mod notch_actions;
 mod notch_exec;
 mod onboarding;
@@ -241,6 +242,8 @@ pub fn run() {
         inline_source::mac::shogun_status,
         inline_source::mac::shogun_state,
         inline_source::mac::shogun_chat,
+        inline_source::mac::shogun_chat_stream,
+        inline_source::mac::shogun_chat_cancel,
         inline_source::mac::quit_app,
         inline_source::mac::ui_log,
         inline_source::mac::set_byok_key,
@@ -343,15 +346,6 @@ fn setup_macos(app: &tauri::App) {
     eprintln!("[shell] SHOGUN starting — pid {} — build: plain-window/drag/quit", std::process::id());
     eprintln!("========================================================");
 
-    // One Keychain pass for secrets read during boot (DB, Dream, Composio). BYOK keys load lazily
-    // when the user picks a provider — warming them here caused extra prompts for unused keys.
-    shogun_integrations::keychain_store::warm_startup_keychain(&[
-        "memory-db-key",
-        "select-kk-batch",
-        "composio-api-key",
-        "deepgram-asr",
-    ]);
-
     // PROVEN by [panelstate]: a Regular app's plain window is REFUSED entry to other apps'
     // Spaces — onActiveSpace/drawn stayed false through hundreds of re-orders with both
     // canJoinAllSpaces (273) and moveToActiveSpace (274). That's an OS wall, not a flag problem.
@@ -388,6 +382,20 @@ fn setup_macos(app: &tauri::App) {
         }
         None => build_panel_window(app.handle()),
     }
+
+    // One Keychain pass for secrets read during boot (DB, Dream, Composio). BYOK keys load lazily
+    // when the user picks a provider — warming them here caused extra prompts for unused keys.
+    //
+    // Deliberately AFTER the window exists. Nothing before this point reads a secret, and these
+    // are four round trips to securityd on the main thread: running them first meant the user
+    // watched an empty menu bar for their duration. Now the webview is already loading while they
+    // happen, and they still land before the first consumer (`memory_db`, a few lines down).
+    shogun_integrations::keychain_store::warm_startup_keychain(&[
+        "memory-db-key",
+        "select-kk-batch",
+        "composio-api-key",
+        "deepgram-asr",
+    ]);
 
     // Agent-lane provider settings (provider + model; key stays in the Keychain). MUST load
     // before any fallible early-return below (geometry etc.) — a skipped load silently reverts
@@ -524,7 +532,14 @@ fn setup_macos(app: &tauri::App) {
     }
     // Whatever happens to be focused when SHOGUN launches gets no special exemption — launching
     // while a password manager is frontmost must not read it.
-    if let Some(front) = display::frontmost_app() {
+    //
+    // Off the main thread: this is a diagnostic (it prints a line and drops the result), but it
+    // walks a foreign app's AX tree with a 250ms budget, and an unresponsive frontmost app spends
+    // all of it. Nothing below waits on the line, so boot shouldn't either. The capture poller
+    // reads the same focus a moment later through the same exclusion policy — which is installed
+    // above, so this thread cannot outrun it and read something it shouldn't.
+    std::thread::spawn(|| {
+        let Some(front) = display::frontmost_app() else { return };
         let pid = front.pid;
         let title = axcache::focused_window(pid).and_then(|w| w.title());
         if exclusions::mac::is_excluded(&front.bundle_id, title.as_deref()) {
@@ -535,7 +550,7 @@ fn setup_macos(app: &tauri::App) {
                 r.text_bytes, r.elements_visited, r.depth_reached, r.partial
             );
         }
-    }
+    });
 
     // Meeting notes (§6.16). Independent of the memory DB: settings, the offer overlay, and Meet
     // detection must work even when capture cannot start — a corrupt DB must not make the toggle

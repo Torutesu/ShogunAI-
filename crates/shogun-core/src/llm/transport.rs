@@ -252,19 +252,58 @@ impl HttpTransport for MockTransport {
 /// The production transport: a `reqwest` client pinned to HTTPS with rustls. Certificate
 /// verification is never disabled (NFR-SEC-04) and `https_only(true)` is a second guard beyond
 /// [`HttpRequest::new`]'s scheme check.
+///
+/// Cheap to clone — the inner `reqwest::Client` is a handle onto one connection pool, which is
+/// the whole point of [`Self::shared`].
 #[cfg(feature = "net")]
+#[derive(Clone)]
 pub struct ReqwestTransport {
     client: reqwest::Client,
 }
 
+/// One pool for the whole process. See [`ReqwestTransport::shared`].
+#[cfg(feature = "net")]
+static SHARED_CLIENT: std::sync::OnceLock<Result<reqwest::Client, String>> =
+    std::sync::OnceLock::new();
+
+#[cfg(feature = "net")]
+fn build_client() -> Result<reqwest::Client, TransportError> {
+    reqwest::Client::builder()
+        .https_only(true)
+        // Keep the connection alive between turns. Without this every chat turn, every ⌥-tap
+        // draft and every recap re-pays DNS + TCP + TLS to the provider before the model has
+        // seen a single byte — on a normal link that is most of the budget the "first token in
+        // 1s" SLO has to fit inside. The pool is per-host, so an idle window longer than the
+        // gap between two turns is what actually gets reused.
+        .pool_idle_timeout(std::time::Duration::from_secs(300))
+        .pool_max_idle_per_host(4)
+        .tcp_keepalive(std::time::Duration::from_secs(60))
+        // Connect-only, deliberately: a whole-request timeout would cut long streamed answers
+        // off mid-sentence, and a stream that is still producing tokens is not a hung request.
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| TransportError::Io(e.to_string()))
+}
+
 #[cfg(feature = "net")]
 impl ReqwestTransport {
+    /// A transport over the process-wide connection pool. **Prefer this over [`Self::new`]** for
+    /// anything a user waits on: a fresh client starts with an empty pool, so its first request
+    /// always pays a full handshake no matter how recently another one finished.
+    ///
+    /// The build result is memoised, failure included — if TLS cannot be initialised at all,
+    /// retrying per request would just re-fail slowly.
+    pub fn shared() -> Result<Self, TransportError> {
+        match SHARED_CLIENT.get_or_init(|| build_client().map_err(|e| e.to_string())) {
+            Ok(client) => Ok(Self { client: client.clone() }),
+            Err(e) => Err(TransportError::Io(e.clone())),
+        }
+    }
+
+    /// A transport with its own private connection pool. Only for callers that genuinely want
+    /// isolation; everything on a latency path wants [`Self::shared`].
     pub fn new() -> Result<Self, TransportError> {
-        let client = reqwest::Client::builder()
-            .https_only(true)
-            .build()
-            .map_err(|e| TransportError::Io(e.to_string()))?;
-        Ok(Self { client })
+        Ok(Self { client: build_client()? })
     }
 }
 
