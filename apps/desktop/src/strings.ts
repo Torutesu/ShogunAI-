@@ -323,6 +323,7 @@ export const STRINGS = {
     minimize: "Minimize to the notch",
     resizeHint: "Drag to resize",
     send: "Send",
+    stop: "Stop",
     settingsTitle: "Settings",
     done: "Done",
     // state rows
@@ -489,6 +490,7 @@ export const STRINGS = {
     sources: "Sources",
     noAnswer: "(no response)",
     answerFailed: "Couldn't answer",
+    answerStopped: "Stopped.",
     // first-run Accessibility permission guide (Issue #46). Reusable shape: every field is copy for
     // ONE permission, so a future Microphone/Screen guide reuses the same component with its own
     // block. Brand rules: the only emoji is ⚔, no competitor/stack names, plain language.

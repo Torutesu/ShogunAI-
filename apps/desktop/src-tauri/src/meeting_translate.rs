@@ -14,7 +14,6 @@ mod mac {
     use serde::Serialize;
     use shogun_core::daemon::Db;
     use shogun_core::llm::anthropic::{AnthropicConfig, AnthropicSelectKkMessagesClient};
-    use shogun_core::llm::transport::ReqwestTransport;
     use shogun_core::llm::{LlmError, Secret, SelectKkKey};
     use shogun_core::meeting::settings::MeetingLanguage;
     use tauri::Emitter;
@@ -329,10 +328,11 @@ mod mac {
                 let _ = app.emit("meeting_translate_needs_key", ());
                 return;
             };
-            let (Ok(transport), Ok(rt)) = (
-                ReqwestTransport::new(),
-                tokio::runtime::Builder::new_current_thread().enable_all().build(),
-            ) else {
+            // Shared lane (`net_lane`): this runs once per spoken line, so a private client here
+            // meant a fresh DNS + TCP + TLS handshake for every subtitle — paid inside the window
+            // where the caption is supposed to appear. Reusing the open connection is the
+            // difference between a subtitle that lands with the speech and one that trails it.
+            let Some((transport, rt)) = crate::net_lane::lane() else {
                 eprintln!("[meeting] live translate ts={ts} skipped — transport/runtime unavailable");
                 return;
             };

@@ -524,6 +524,34 @@ body {
   }
 }
 
+/* The answer while it is still being written. No entry animation: msg-in would replay on every
+   token and leave the text permanently sliding. */
+.msg--live {
+  animation: none;
+}
+/* A caret on the last character, so a pause between tokens still reads as "writing" rather than
+   as "finished". It sits inline, which means it follows the text instead of being parked in a
+   corner of the bubble. */
+.msg__caret {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  background: var(--accent);
+  animation: caret-blink 1s steps(2, start) infinite;
+}
+@keyframes caret-blink {
+  to {
+    visibility: hidden;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .msg__caret {
+    animation: none;
+  }
+}
+
 /* composer — a rounded input card: source chip on top, field, then a bar with the model pill
    (left) and draft/send tools (right). */
 .composer {
@@ -658,6 +686,17 @@ body {
 }
 .composer__send:not(:disabled):active {
   transform: scale(0.92);
+}
+/* Stop, in the send button's place while a turn is in flight. Deliberately not the accent
+   gradient: it is the one control here that undoes rather than commits, and it should not look
+   like the button the user just pressed. */
+.composer__send--stop {
+  background: var(--fill);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  box-shadow: none;
+  font-size: 9px;
+  line-height: 1;
 }
 
 /* settings */
