@@ -529,12 +529,10 @@ export function App(): JSX.Element {
           if (!openRef.current) {
             // Meeting chin owns Stop / Take Notes. expand() sets expanding/open and unmounts
             // MeetingPill (showIdleFace=false) mid-click — hover looked like it worked, Stop never fired.
+            // Hover only: Expanded is a deliberate open (hotkey, real click), and swallowing it
+            // here left the panel unreachable for the whole meeting.
             const m = meetingRef.current;
-            if (
-              (st === "hover" || st === "expanded") &&
-              m?.enabled &&
-              (m.state === "offered" || m.state === "recording")
-            ) {
+            if (st === "hover" && m?.enabled && (m.state === "offered" || m.state === "recording")) {
               return;
             }
             expandRef.current();
@@ -1320,6 +1318,9 @@ function MeetingPill({ view }: { view: MeetingView }): JSX.Element {
         type="button"
         className="mpill__btn mpill__btn--stop"
         onPointerDown={(e) => {
+          // Primary button only — pointerdown fires for right/middle too, and ending a meeting
+          // on a stray right-click is not recoverable.
+          if (e.button !== 0) return;
           e.stopPropagation();
           e.preventDefault();
           void invoke("meeting_stop").catch(() => undefined);
