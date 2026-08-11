@@ -2437,7 +2437,16 @@ kbd {
    takes is a pixel of the person they are talking to. */
 :root[data-window="meeting"],
 :root[data-window="meeting"] body,
-:root[data-window="meeting"] #root {
+:root[data-window="meeting"] #root,
+:root[data-window="meeting-cc"],
+:root[data-window="meeting-cc"] body,
+:root[data-window="meeting-cc"] #root,
+:root[data-window="meeting-canvas"],
+:root[data-window="meeting-canvas"] body,
+:root[data-window="meeting-canvas"] #root,
+:root[data-window="meeting-chat"],
+:root[data-window="meeting-chat"] body,
+:root[data-window="meeting-chat"] #root {
   margin: 0;
   padding: 0;
   background: transparent;
@@ -2446,6 +2455,19 @@ kbd {
   height: 100%;
   /* Pass clicks through any transparent padding inside the fixed window frame. */
   pointer-events: none;
+}
+/* Opaque panel windows: whole frame is chrome — no click-through padding. */
+:root[data-window="meeting-cc"],
+:root[data-window="meeting-cc"] body,
+:root[data-window="meeting-cc"] #root,
+:root[data-window="meeting-canvas"],
+:root[data-window="meeting-canvas"] body,
+:root[data-window="meeting-canvas"] #root,
+:root[data-window="meeting-chat"],
+:root[data-window="meeting-chat"] body,
+:root[data-window="meeting-chat"] #root {
+  background: #0c0c0e;
+  pointer-events: auto;
 }
 .ov {
   pointer-events: auto;
@@ -2830,6 +2852,33 @@ kbd {
   /* Top inset = tooltip height + gap so tips above the bar stay inside the webview. */
   padding: 36px 8px 8px;
   overflow: visible;
+}
+/* Independent opaque panel window — fill chrome, no desk padding. */
+.ov--panel-solo {
+  justify-content: stretch;
+  align-items: stretch;
+  padding: 0;
+  gap: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #0c0c0e;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  pointer-events: auto;
+}
+.ov--panel-solo .ov__live,
+.ov--panel-solo .ov__canvas,
+.ov--panel-solo .ov__chat {
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+  width: 100%;
+  border-radius: 0;
+  box-shadow: none;
 }
 .ov__live {
   position: relative;

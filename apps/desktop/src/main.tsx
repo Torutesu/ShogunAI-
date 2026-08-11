@@ -6,14 +6,8 @@ import { MeetingOverlay } from "./MeetingOverlay";
 import { VoiceOverlay } from "./VoiceOverlay";
 import "./styles.css";
 
-// One bundle, two windows. The meeting overlay is its own small floating panel (Issue #7), so
-// the entry point picks a root by the window it is running in rather than the notch panel having
-// to host a surface that belongs next to the meeting.
-//
-// Asked through the official API rather than by reading Tauri's internals: the internals are an
-// implementation detail, and when the shape changed the check silently answered "not the meeting
-// window" — which renders nothing into a transparent window, i.e. a panel that exists, is shown,
-// and cannot be seen.
+// One bundle, many windows. Meeting host + independent opaque panel windows each mount
+// MeetingOverlay; the entry point picks a root by window label.
 function currentLabel(): string {
   try {
     return getCurrentWindow().label;
@@ -22,20 +16,31 @@ function currentLabel(): string {
   }
 }
 
+function isMeetingLabel(label: string): boolean {
+  return (
+    label === "meeting" ||
+    label === "meeting-cc" ||
+    label === "meeting-canvas" ||
+    label === "meeting-chat"
+  );
+}
+
 const root = document.getElementById("root");
 if (root) {
   const label = currentLabel();
-  const meeting = label === "meeting";
+  const meeting = isMeetingLabel(label);
   const voice = label === "voice";
-  document.documentElement.setAttribute("data-window", meeting ? "meeting" : voice ? "voice" : "main");
-  // Say which root was chosen. A blank overlay and a missing overlay look identical on screen;
-  // in the log they do not.
-  // Reported to Rust, not just the webview console: a blank overlay and a missing overlay look
-  // identical on screen, and the webview's console is not in the dev log.
+  // data-window uses the real label so CSS can target host vs each panel surface.
+  document.documentElement.setAttribute(
+    "data-window",
+    meeting ? label : voice ? "voice" : "main",
+  );
   void import("@tauri-apps/api/core")
     .then(({ invoke }) =>
       invoke("ui_log", {
-        msg: `window label=${label || "(unknown)"} → ${meeting ? "meeting overlay" : voice ? "voice overlay" : "main app"}`,
+        msg: `window label=${label || "(unknown)"} → ${
+          meeting ? `meeting overlay (${label})` : voice ? "voice overlay" : "main app"
+        }`,
       }),
     )
     .catch(() => undefined);

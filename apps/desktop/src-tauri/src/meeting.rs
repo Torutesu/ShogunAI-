@@ -717,32 +717,58 @@ use shogun_core::meeting::gate::OfferGate;
     // Offer card parks top-right; in-meeting pill parks bottom-center above the mic bar.
 
     const WINDOW_LABEL: &str = "meeting";
+    const WIN_CC: &str = "meeting-cc";
+    const WIN_CANVAS: &str = "meeting-canvas";
+    const WIN_CHAT: &str = "meeting-chat";
     /// Offered: white horizontal pill (Meeting detected). Room for title stack + Take Notes.
     const OFFER_SIZE: (f64, f64) = (440.0, 96.0);
     /// Idle / hidden fallback size.
     const BAR_SIZE: (f64, f64) = (400.0, 88.0);
-    /// In-meeting black control capsule only (notes panel closed).
+    /// In-meeting black control capsule only (content panels are separate windows).
     /// Height includes top inset for bar-slot tooltips (they sit above the 52px bar).
     const PILL_SIZE: (f64, f64) = (320.0, 100.0);
-    /// Live captions/transcript pane + control capsule during recording (issue #93).
-    /// Wide enough for one-way split columns.
-    const LIVE_SIZE: (f64, f64) = (560.0, 360.0);
-    /// AI Canvas alone + control capsule (Notes pill).
-    const CANVAS_SIZE: (f64, f64) = (400.0, 380.0);
-    /// AI side chat alone + control capsule.
-    const CHAT_SIZE: (f64, f64) = (360.0, 520.0);
-    /// Multiple panels stacked above the control capsule.
-    const BOTH_SIZE: (f64, f64) = (520.0, 720.0);
+    /// Live captions window default (own NSWindow — not stacked in the host).
+    const LIVE_SIZE: (f64, f64) = (520.0, 300.0);
+    /// AI Canvas window default.
+    const CANVAS_SIZE: (f64, f64) = (380.0, 320.0);
+    /// AI Chat window default.
+    const CHAT_SIZE: (f64, f64) = (320.0, 480.0);
     const RECAP_SIZE: (f64, f64) = (420.0, 520.0);
-    /// Whether the live captions panel is expanded above the control pill.
+    /// Whether the live captions panel window is open.
     static OVERLAY_PANEL_OPEN: AtomicBool = AtomicBool::new(true);
-    /// Whether the AI Canvas panel is open above the control pill (Notes button).
+    /// Whether the AI Canvas panel window is open.
     static OVERLAY_CANVAS_OPEN: AtomicBool = AtomicBool::new(false);
-    /// Whether the AI Chat panel is open above the control pill.
+    /// Whether the AI Chat panel window is open.
     static OVERLAY_CHAT_OPEN: AtomicBool = AtomicBool::new(false);
-    /// User-resized overlay size while a panel is open (logical px). Cleared when all panels close.
-    static OVERLAY_CUSTOM_SIZE: std::sync::Mutex<Option<(f64, f64)>> = std::sync::Mutex::new(None);
-    const OVERLAY_SIZE_MIN: (f64, f64) = (300.0, 220.0);
+
+    #[derive(Debug, Clone, Copy, Default)]
+    struct PanelSizes {
+        cc: Option<(f64, f64)>,
+        canvas: Option<(f64, f64)>,
+        chat: Option<(f64, f64)>,
+    }
+
+    #[derive(Debug, Clone, Copy, Default)]
+    struct PanelParked {
+        cc: bool,
+        canvas: bool,
+        chat: bool,
+    }
+
+    /// Per-panel user resize (logical px). Independent windows — never one shared desk size.
+    static PANEL_CUSTOM_SIZE: std::sync::Mutex<PanelSizes> =
+        std::sync::Mutex::new(PanelSizes {
+            cc: None,
+            canvas: None,
+            chat: None,
+        });
+    static PANEL_PARKED: std::sync::Mutex<PanelParked> =
+        std::sync::Mutex::new(PanelParked {
+            cc: false,
+            canvas: false,
+            chat: false,
+        });
+    const OVERLAY_SIZE_MIN: (f64, f64) = (280.0, 180.0);
     const OVERLAY_SIZE_MAX: (f64, f64) = (720.0, 900.0);
     /// Distance from screen edges, in logical pixels.
     const MARGIN: f64 = 16.0;
@@ -765,49 +791,58 @@ use shogun_core::meeting::gate::OfferGate;
         }
     }
 
-    /// Build the overlay window, hidden. **Setup only — this must run on the main thread.**
-    ///
-    /// Creating a window is an AppKit call, and AppKit is main-thread-only: building it lazily
-    /// from the detection thread the first time a meeting appeared took the whole app down at
-    /// exactly the moment it was supposed to start working. The window is therefore made once at
-    /// launch and merely shown and hidden afterwards, which is safe from any thread.
+    /// Build host + independent panel windows (hidden). **Setup only — main thread.**
     pub fn build_overlay(app: &tauri::AppHandle) -> Option<tauri::WebviewWindow> {
-        if let Some(win) = app.get_webview_window(WINDOW_LABEL) {
+        // Host stays transparent (offer/recap rounded chrome). Content panels are opaque —
+        // never one shared transparent desk that blocks clicks in empty space.
+        let host = build_one_overlay(app, WINDOW_LABEL, BAR_SIZE, "ShogunAI — meeting", false)?;
+        let _ = build_one_overlay(app, WIN_CC, LIVE_SIZE, "ShogunAI — captions", true);
+        let _ = build_one_overlay(app, WIN_CANVAS, CANVAS_SIZE, "ShogunAI — canvas", true);
+        let _ = build_one_overlay(app, WIN_CHAT, CHAT_SIZE, "ShogunAI — chat", true);
+        Some(host)
+    }
+
+    fn build_one_overlay(
+        app: &tauri::AppHandle,
+        label: &str,
+        size: (f64, f64),
+        title: &str,
+        opaque: bool,
+    ) -> Option<tauri::WebviewWindow> {
+        if let Some(win) = app.get_webview_window(label) {
             return Some(win);
         }
         let win = tauri::WebviewWindowBuilder::new(
             app,
-            WINDOW_LABEL,
-            // Same entry point as the notch window. `App("index.html")` resolved to a URL the
-            // dev server did not serve, so the window existed with a webview that never ran any
-            // JavaScript — shown, sized, positioned, and completely blank.
+            label,
             tauri::WebviewUrl::default(),
         )
-        .title("ShogunAI — meeting")
-        .transparent(true)
+        .title(title)
+        .transparent(!opaque)
         .decorations(false)
         .resizable(false)
         .always_on_top(true)
         .shadow(false)
         .skip_taskbar(true)
-        .inner_size(BAR_SIZE.0, BAR_SIZE.1)
+        .inner_size(size.0, size.1)
         .visible(false)
         .focused(false)
         .build()
-        .map_err(|e| eprintln!("[meeting] overlay window build failed: {e}"))
+        .map_err(|e| eprintln!("[meeting] overlay `{label}` build failed: {e}"))
         .ok()?;
-        configure_overlay_window(&win);
-        // What the webview was actually pointed at. A window whose webview never runs any
-        // JavaScript looks exactly like a window that was never created.
-        eprintln!("[meeting] overlay url = {:?}", win.url().map(|u| u.to_string()));
+        configure_overlay_window(&win, opaque);
+        eprintln!(
+            "[meeting] overlay `{label}` url = {:?} opaque={opaque}",
+            win.url().map(|u| u.to_string())
+        );
         Some(win)
     }
 
-    /// One-time NSWindow setup for the meeting overlay. Deliberately NOT `float_on_all_spaces`:
+    /// One-time NSWindow setup for a meeting overlay. Deliberately NOT `float_on_all_spaces`:
     /// that helper orders the window front and sets `canHide=false` / `movableByWindowBackground`,
     /// which left a transparent full-window hit target blocking the desktop even when the lane
     /// was Idle and `hide()` had been called.
-    fn configure_overlay_window(win: &tauri::WebviewWindow) {
+    fn configure_overlay_window(win: &tauri::WebviewWindow, opaque: bool) {
         use objc2::msg_send;
         use objc2::runtime::AnyObject;
         use objc2::class;
@@ -824,11 +859,18 @@ use shogun_core::meeting::gate::OfferGate;
         let level = crate::OVERLAY_LEVEL;
         // SAFETY: live NSWindow on the main thread (setup).
         unsafe {
-            // Transparent webview: default NSWindow backing is opaque grey — it peeks where
-            // WKWebView does not clip CSS border-radius (offer card corners).
-            let _: () = msg_send![ptr, setOpaque: false];
-            let clear: *mut AnyObject = msg_send![class!(NSColor), clearColor];
-            let _: () = msg_send![ptr, setBackgroundColor: clear];
+            if opaque {
+                // Opaque content panels: solid backing, sized to chrome — no invisible click wall.
+                let _: () = msg_send![ptr, setOpaque: true];
+                let black: *mut AnyObject = msg_send![class!(NSColor), blackColor];
+                let _: () = msg_send![ptr, setBackgroundColor: black];
+            } else {
+                // Transparent host: default NSWindow backing is opaque grey — it peeks where
+                // WKWebView does not clip CSS border-radius (offer card corners).
+                let _: () = msg_send![ptr, setOpaque: false];
+                let clear: *mut AnyObject = msg_send![class!(NSColor), clearColor];
+                let _: () = msg_send![ptr, setBackgroundColor: clear];
+            }
             let _: () = msg_send![ptr, setHasShadow: false];
             let _: () = msg_send![ptr, setCollectionBehavior: behavior];
             let _: () = msg_send![ptr, setLevel: level];
@@ -841,10 +883,12 @@ use shogun_core::meeting::gate::OfferGate;
             // an invisible click-catcher — transparent padding and rounded corners still block
             // clicks behind the window at the AppKit layer.
             let _: () = msg_send![ptr, setMovableByWindowBackground: false];
-            // Start click-through until sync_window shows real UI.
+            // Start click-through until sync_window / show_content_panel shows real UI.
             let _: () = msg_send![ptr, setIgnoresMouseEvents: true];
         }
-        eprintln!("[meeting] overlay window configured (hidden, click-through)");
+        eprintln!(
+            "[meeting] overlay window configured (hidden, click-through, opaque={opaque})"
+        );
     }
 
     fn overlay_ns_window(win: &tauri::WebviewWindow) -> Option<*mut objc2::runtime::AnyObject> {
@@ -941,34 +985,33 @@ use shogun_core::meeting::gate::OfferGate;
         }
     }
 
-    /// Logical size for the in-meeting overlay: pill / captions / AI Canvas / chat / stacks.
-    /// Honors a user corner-resize while any panel is open.
+    /// Host window size only — content panels are separate windows.
     fn recording_overlay_size() -> (f64, f64) {
-        use std::sync::atomic::Ordering;
-        let panel = OVERLAY_PANEL_OPEN.load(Ordering::SeqCst);
-        let canvas = OVERLAY_CANVAS_OPEN.load(Ordering::SeqCst);
-        let chat = OVERLAY_CHAT_OPEN.load(Ordering::SeqCst);
-        if panel || canvas || chat {
-            if let Ok(guard) = OVERLAY_CUSTOM_SIZE.lock() {
-                if let Some(custom) = *guard {
-                    return custom;
-                }
+        PILL_SIZE
+    }
+
+    fn panel_default_size(label: &str) -> (f64, f64) {
+        match label {
+            WIN_CC => LIVE_SIZE,
+            WIN_CANVAS => CANVAS_SIZE,
+            WIN_CHAT => CHAT_SIZE,
+            _ => PILL_SIZE,
+        }
+    }
+
+    fn panel_size(label: &'static str) -> (f64, f64) {
+        if let Ok(guard) = PANEL_CUSTOM_SIZE.lock() {
+            let custom = match label {
+                WIN_CC => guard.cc,
+                WIN_CANVAS => guard.canvas,
+                WIN_CHAT => guard.chat,
+                _ => None,
+            };
+            if let Some(size) = custom {
+                return size;
             }
         }
-        let open = u8::from(panel) + u8::from(canvas) + u8::from(chat);
-        if open >= 2 {
-            return BOTH_SIZE;
-        }
-        if canvas {
-            return CANVAS_SIZE;
-        }
-        if chat {
-            return CHAT_SIZE;
-        }
-        if panel {
-            return LIVE_SIZE;
-        }
-        PILL_SIZE
+        panel_default_size(label)
     }
 
     fn clear_custom_size_if_idle() {
@@ -979,8 +1022,11 @@ use shogun_core::meeting::gate::OfferGate;
         {
             return;
         }
-        if let Ok(mut g) = OVERLAY_CUSTOM_SIZE.lock() {
-            *g = None;
+        if let Ok(mut g) = PANEL_CUSTOM_SIZE.lock() {
+            *g = PanelSizes::default();
+        }
+        if let Ok(mut g) = PANEL_PARKED.lock() {
+            *g = PanelParked::default();
         }
     }
 
@@ -991,12 +1037,187 @@ use shogun_core::meeting::gate::OfferGate;
         )
     }
 
-    fn sync_recording_overlay(app: &tauri::AppHandle) {
-        let Ok(g) = LANE.lock() else { return };
-        let Some(lane) = g.as_ref() else { return };
-        if lane.machine.state() == State::Recording && !lane.overlay_dismissed {
-            sync_window(app, State::Recording, lane.settings.enabled, false);
+    fn hide_content_panels(app: &tauri::AppHandle) {
+        for label in [WIN_CC, WIN_CANVAS, WIN_CHAT] {
+            if let Some(win) = app.get_webview_window(label) {
+                let _ = win.hide();
+            }
         }
+        if let Ok(mut g) = PANEL_PARKED.lock() {
+            *g = PanelParked::default();
+        }
+    }
+
+    /// Park a content panel in a non-overlapping slot above the recording bar.
+    ///
+    /// Slots (first open only — user drag wins after):
+    /// - captions (`meeting-cc`): bottom-center above the pill
+    /// - canvas (`meeting-canvas`): left margin, same band
+    /// - chat (`meeting-chat`): right margin, same band
+    /// If a side panel would intersect the default captions band, stack it one tier higher.
+    fn park_content_panel(win: &tauri::WebviewWindow, label: &str, size: (f64, f64)) {
+        let Some(monitor) = overlay_monitor(win) else { return };
+        let scale = monitor.scale_factor();
+        let screen = monitor.size();
+        let origin = monitor.position();
+        let w = (size.0 * scale).round() as i32;
+        let h = (size.1 * scale).round() as i32;
+        let margin = (MARGIN * scale).round() as i32;
+        let gap = (16.0 * scale).round() as i32;
+        let bottom = ((BOTTOM_MARGIN + PILL_SIZE.1 + 16.0) * scale).round() as i32;
+        let screen_w = screen.width as i32;
+        let screen_h = screen.height as i32;
+        let y_bar = origin.y + screen_h - h - bottom;
+
+        // Reserved center band for default captions so side panels never share its column.
+        let cc_w = (LIVE_SIZE.0 * scale).round() as i32;
+        let cc_h = (LIVE_SIZE.1 * scale).round() as i32;
+        let cc_left = origin.x + (screen_w - cc_w) / 2;
+        let cc_right = cc_left + cc_w;
+        let y_stack = (y_bar - cc_h - gap).max(origin.y + margin);
+
+        let (mut x, y) = match label {
+            WIN_CC => (origin.x + (screen_w - w) / 2, y_bar),
+            WIN_CANVAS => {
+                let x_left = origin.x + margin;
+                // Side-by-side when it clears captions; else stack above captions band.
+                if x_left + w + gap <= cc_left {
+                    (x_left, y_bar)
+                } else {
+                    (x_left, y_stack)
+                }
+            }
+            WIN_CHAT => {
+                let x_right = origin.x + screen_w - w - margin;
+                if x_right >= cc_right + gap {
+                    (x_right, y_bar)
+                } else {
+                    (x_right, y_stack)
+                }
+            }
+            _ => (origin.x + (screen_w - w) / 2, y_bar),
+        };
+        // Keep fully on-monitor (narrow displays / large custom sizes).
+        let x_min = origin.x + margin;
+        let x_max = (origin.x + screen_w - w - margin).max(x_min);
+        x = x.clamp(x_min, x_max);
+
+        eprintln!("[meeting] park panel `{label}` ({x},{y}) size {}x{}", size.0, size.1);
+        let _ = win.set_size(tauri::LogicalSize::new(size.0, size.1));
+        let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
+        // Re-assert size after position (Tao must match NSWindow for WKWebView layout).
+        let _ = win.set_size(tauri::LogicalSize::new(size.0, size.1));
+        if let Ok(actual) = win.outer_size() {
+            let aw = (actual.width as f64) / scale;
+            let ah = (actual.height as f64) / scale;
+            if (aw - size.0).abs() > 8.0 || (ah - size.1).abs() > 8.0 {
+                eprintln!(
+                    "[meeting] WARN panel `{label}` size desync want={}x{} got={aw:.0}x{ah:.0}",
+                    size.0, size.1
+                );
+            }
+        }
+    }
+
+    fn show_content_panel(app: &tauri::AppHandle, label: &'static str, open: bool) {
+        let Some(win) = app.get_webview_window(label) else { return };
+        if !open {
+            let _ = win.hide();
+            return;
+        }
+        let size = panel_size(label);
+        let needs_park = PANEL_PARKED
+            .lock()
+            .ok()
+            .map(|g| {
+                !match label {
+                    WIN_CC => g.cc,
+                    WIN_CANVAS => g.canvas,
+                    WIN_CHAT => g.chat,
+                    _ => false,
+                }
+            })
+            .unwrap_or(true);
+        let _ = win.set_size(tauri::LogicalSize::new(size.0, size.1));
+        if needs_park {
+            park_content_panel(&win, label, size);
+            if let Ok(mut g) = PANEL_PARKED.lock() {
+                match label {
+                    WIN_CC => g.cc = true,
+                    WIN_CANVAS => g.canvas = true,
+                    WIN_CHAT => g.chat = true,
+                    _ => {}
+                }
+            }
+        }
+        // Opaque panel windows always capture clicks while visible — no shared click-through flag.
+        set_overlay_ignores_mouse(&win, false);
+        let _ = win.show();
+        let _ = win.set_always_on_top(true);
+        if let Some(ptr) = overlay_ns_window(&win) {
+            use objc2::msg_send;
+            // SAFETY: live NSWindow on main thread.
+            unsafe {
+                let _: () = msg_send![ptr, orderFrontRegardless];
+            }
+        }
+        eprintln!(
+            "[meeting] panel `{label}` show pos={:?} size={:?}",
+            win.outer_position().ok(),
+            (size.0, size.1),
+        );
+    }
+
+    #[derive(Debug, Clone, Copy, Serialize)]
+    struct OverlayPanelFlags {
+        panel: bool,
+        canvas: bool,
+        chat: bool,
+    }
+
+    fn panel_flags() -> OverlayPanelFlags {
+        use std::sync::atomic::Ordering;
+        OverlayPanelFlags {
+            panel: OVERLAY_PANEL_OPEN.load(Ordering::SeqCst),
+            canvas: OVERLAY_CANVAS_OPEN.load(Ordering::SeqCst),
+            chat: OVERLAY_CHAT_OPEN.load(Ordering::SeqCst),
+        }
+    }
+
+    fn emit_panel_flags(app: &tauri::AppHandle) {
+        let _ = app.emit("meeting_overlay_panels", panel_flags());
+    }
+
+    fn sync_content_panels(app: &tauri::AppHandle, recording_visible: bool) {
+        use std::sync::atomic::Ordering;
+        if !recording_visible {
+            hide_content_panels(app);
+            return;
+        }
+        show_content_panel(app, WIN_CC, OVERLAY_PANEL_OPEN.load(Ordering::SeqCst));
+        show_content_panel(app, WIN_CANVAS, OVERLAY_CANVAS_OPEN.load(Ordering::SeqCst));
+        show_content_panel(app, WIN_CHAT, OVERLAY_CHAT_OPEN.load(Ordering::SeqCst));
+    }
+
+    /// Toggle open flags change host size/visibility? No — only panel windows. Bypass
+    /// `sync_window_main`'s LAST short-circuit so show/hide still runs.
+    fn sync_content_panels_for_recording(app: &tauri::AppHandle) {
+        let recording_visible = LANE
+            .lock()
+            .ok()
+            .and_then(|g| {
+                g.as_ref().map(|l| {
+                    l.settings.enabled
+                        && l.machine.state() == State::Recording
+                        && !l.overlay_dismissed
+                })
+            })
+            .unwrap_or(false);
+        let handle = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            sync_content_panels(&handle, recording_visible);
+        });
+        emit_panel_flags(app);
     }
 
     /// Show, hide and resize the overlay to match the lane's state.
@@ -1054,6 +1275,7 @@ use shogun_core::meeting::gate::OfferGate;
             OVERLAY_WANTS_INTERACTIVE.store(false, Ordering::SeqCst);
             set_overlay_ignores_mouse(&win, true);
             let _ = win.hide();
+            hide_content_panels(app);
             PARKED.store(false, Ordering::SeqCst);
             if let Ok(mut last_mode) = LAST_PARK_MODE.lock() {
                 *last_mode = None;
@@ -1066,40 +1288,19 @@ use shogun_core::meeting::gate::OfferGate;
             .ok()
             .and_then(|m| m.as_ref().map(|prev| *prev != park_mode))
             .unwrap_or(true);
-        // Corner-resize must keep the user's position — do not re-park on size-only changes.
-        let custom_overlay_size = state == State::Recording
-            && (OVERLAY_PANEL_OPEN.load(Ordering::SeqCst)
-                || OVERLAY_CANVAS_OPEN.load(Ordering::SeqCst)
-                || OVERLAY_CHAT_OPEN.load(Ordering::SeqCst))
-            && OVERLAY_CUSTOM_SIZE
-                .lock()
-                .ok()
-                .and_then(|g| *g)
-                .is_some();
         let _ = win.set_size(tauri::LogicalSize::new(size.0, size.1));
-        if !PARKED.load(Ordering::SeqCst)
-            || park_mode_changed
-            || (size_changed && !custom_overlay_size)
-        {
+        if !PARKED.load(Ordering::SeqCst) || park_mode_changed || size_changed {
             park_overlay(&win, park_mode, size);
             PARKED.store(true, Ordering::SeqCst);
             if let Ok(mut last_mode) = LAST_PARK_MODE.lock() {
                 *last_mode = Some(park_mode);
             }
-        } else if size_changed {
-            PARKED.store(true, Ordering::SeqCst);
         }
-        // Whole window captures clicks while any meeting surface is visible. Transparent padding
-        // around `.ov` may block clicks too — better than pointermove hit-tests that flip false
-        // before the first move or on pointerleave and let clicks fall through to Meet behind.
-        // Product trade-off (2026-08): offer/recap park top-right; live pill parks bottom-center.
-        // Transparent padding may still block controls underneath. Pointermove hit-testing was
-        // tried (752612f) and reverted (0743193). Revisit with CGEventTap cursor tracking if needed.
+        // Whole window captures clicks while the host surface is visible.
         OVERLAY_WANTS_INTERACTIVE.store(true, Ordering::SeqCst);
         apply_overlay_interactive(&win);
         let shown = win.show();
         let _ = win.set_always_on_top(true);
-        // Accessory apps do not auto-show windows — order front only when the lane needs UI.
         if let Some(ptr) = overlay_ns_window(&win) {
             use objc2::msg_send;
             // SAFETY: live NSWindow on the main thread.
@@ -1107,13 +1308,21 @@ use shogun_core::meeting::gate::OfferGate;
                 let _: () = msg_send![ptr, orderFrontRegardless];
             }
         }
+        let recording_visible = state == State::Recording;
+        sync_content_panels(app, recording_visible);
+        if recording_visible {
+            emit_panel_flags(app);
+        }
         let _ = app.emit("meeting_overlay_surface", ());
         eprintln!(
-            "[meeting] overlay show ok={} pos={:?} size={:?} interactive={}",
+            "[meeting] overlay show ok={} pos={:?} size={:?} interactive={} panels=cc:{} canvas:{} chat:{}",
             shown.is_ok(),
             win.outer_position().ok(),
             (size.0, size.1),
             OVERLAY_WANTS_INTERACTIVE.load(Ordering::SeqCst),
+            OVERLAY_PANEL_OPEN.load(Ordering::SeqCst),
+            OVERLAY_CANVAS_OPEN.load(Ordering::SeqCst),
+            OVERLAY_CHAT_OPEN.load(Ordering::SeqCst),
         );
     }
 
@@ -1136,12 +1345,13 @@ use shogun_core::meeting::gate::OfferGate;
     /// `start_dragging` alone is unreliable on borderless WKWebView windows — hand the in-flight
     /// mouse event to AppKit like the notch panel's `start_panel_drag`.
     #[tauri::command]
-    pub fn meeting_drag(app: tauri::AppHandle) {
+    pub fn meeting_drag(app: tauri::AppHandle, label: Option<String>) {
+        let label = label.unwrap_or_else(|| WINDOW_LABEL.to_string());
         let handle = app.clone();
         let _ = app.run_on_main_thread(move || {
             use objc2::runtime::AnyObject;
             use objc2::{class, msg_send};
-            let Some(win) = handle.get_webview_window(WINDOW_LABEL) else { return };
+            let Some(win) = handle.get_webview_window(&label) else { return };
             let Some(ptr) = overlay_ns_window(&win) else { return };
             // SAFETY: main thread; standard AppKit calls on a live NSWindow.
             unsafe {
@@ -1596,56 +1806,61 @@ use shogun_core::meeting::gate::OfferGate;
         }
     }
 
-    /// Expand/collapse the live captions panel above the black control pill.
+    /// Expand/collapse the live captions panel window.
     #[tauri::command]
     pub fn meeting_set_overlay_panel(app: tauri::AppHandle, open: bool) {
         use std::sync::atomic::Ordering;
         OVERLAY_PANEL_OPEN.store(open, Ordering::SeqCst);
         clear_custom_size_if_idle();
-        sync_recording_overlay(&app);
+        sync_content_panels_for_recording(&app);
     }
 
-    /// Expand/collapse the AI Canvas panel (Notes / document pill).
+    /// Expand/collapse the AI Canvas panel window.
     #[tauri::command]
     pub fn meeting_set_overlay_canvas(app: tauri::AppHandle, open: bool) {
         use std::sync::atomic::Ordering;
         OVERLAY_CANVAS_OPEN.store(open, Ordering::SeqCst);
         clear_custom_size_if_idle();
-        sync_recording_overlay(&app);
+        sync_content_panels_for_recording(&app);
     }
 
-    /// Expand/collapse the AI Chat panel.
+    /// Expand/collapse the AI Chat panel window.
     #[tauri::command]
     pub fn meeting_set_overlay_chat(app: tauri::AppHandle, open: bool) {
         use std::sync::atomic::Ordering;
         OVERLAY_CHAT_OPEN.store(open, Ordering::SeqCst);
         clear_custom_size_if_idle();
-        sync_recording_overlay(&app);
+        sync_content_panels_for_recording(&app);
     }
 
-    /// Live corner-resize of the meeting overlay (captions / AI Canvas / chat).
-    /// Keeps the top-left corner fixed (grow/shrink down and right).
+    /// Live corner-resize of one content panel window (keeps top-left fixed).
     #[tauri::command]
-    pub fn meeting_set_overlay_size(app: tauri::AppHandle, width: f64, height: f64) {
-        use std::sync::atomic::Ordering;
-        if !OVERLAY_PANEL_OPEN.load(Ordering::SeqCst)
-            && !OVERLAY_CANVAS_OPEN.load(Ordering::SeqCst)
-            && !OVERLAY_CHAT_OPEN.load(Ordering::SeqCst)
-        {
-            return;
-        }
+    pub fn meeting_set_overlay_size(app: tauri::AppHandle, width: f64, height: f64, label: Option<String>) {
+        let label_owned = label.unwrap_or_else(|| WIN_CC.to_string());
+        let key: &'static str = match label_owned.as_str() {
+            WIN_CC => WIN_CC,
+            WIN_CANVAS => WIN_CANVAS,
+            WIN_CHAT => WIN_CHAT,
+            _ => return,
+        };
         let size = clamp_overlay_size(width, height);
-        if let Ok(mut g) = OVERLAY_CUSTOM_SIZE.lock() {
-            *g = Some(size);
+        if let Ok(mut g) = PANEL_CUSTOM_SIZE.lock() {
+            match key {
+                WIN_CC => g.cc = Some(size),
+                WIN_CANVAS => g.canvas = Some(size),
+                WIN_CHAT => g.chat = Some(size),
+                _ => {}
+            }
         }
         let handle = app.clone();
         let _ = app.run_on_main_thread(move || {
-            let Some(win) = handle.get_webview_window(WINDOW_LABEL) else { return };
+            let Some(win) = handle.get_webview_window(key) else { return };
             let prev = win.outer_position().ok();
             let _ = win.set_size(tauri::LogicalSize::new(size.0, size.1));
             if let Some(p) = prev {
                 let _ = win.set_position(p);
             }
+            let _ = win.set_size(tauri::LogicalSize::new(size.0, size.1));
         });
     }
 
