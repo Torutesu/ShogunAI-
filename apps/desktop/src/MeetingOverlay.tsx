@@ -279,7 +279,7 @@ function windowLabelForSurface(surface: MeetingSurface): string {
 
 function defaultPanelSize(surface: MeetingSurface): { w: number; h: number } {
   if (surface === "canvas") return { w: 380, h: 320 };
-  if (surface === "chat") return { w: 320, h: 480 };
+  if (surface === "chat") return { w: 320, h: 380 };
   if (surface === "cc") return { w: 520, h: 300 };
   return { w: 320, h: 100 };
 }
@@ -458,6 +458,7 @@ export function MeetingOverlay(): JSX.Element | null {
   const audioHasRealLevelRef = useRef(false);
   const offerProgressRef = useRef<HTMLDivElement>(null);
   const offerDeadlineRef = useRef(0);
+  const prevMeetingStateRef = useRef<MeetingView["state"] | null>(null);
 
   const drag = (e: React.PointerEvent): void => beginMeetingDrag(e, winLabel);
 
@@ -555,6 +556,16 @@ export function MeetingOverlay(): JSX.Element | null {
     if (!isHost || view?.state !== "recording") return;
     call("meeting_set_overlay_panel", { open: ccOn });
   }, [isHost, view?.state, ccOn]);
+
+  useEffect(() => {
+    if (!isHost) return;
+    const prev = prevMeetingStateRef.current;
+    prevMeetingStateRef.current = view?.state ?? null;
+    if (view?.state !== "recording" || prev === "recording") return;
+    // Take Notes / fresh session — chat and canvas stay closed until bar toggles.
+    setChatOn(false);
+    setNotesOpen(false);
+  }, [isHost, view?.state]);
 
   useEffect(() => {
     if (!isHost) return;

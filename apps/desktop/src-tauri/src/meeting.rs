@@ -731,8 +731,8 @@ use shogun_core::meeting::gate::OfferGate;
     const LIVE_SIZE: (f64, f64) = (520.0, 300.0);
     /// AI Canvas window default.
     const CANVAS_SIZE: (f64, f64) = (380.0, 320.0);
-    /// AI Chat window default.
-    const CHAT_SIZE: (f64, f64) = (320.0, 480.0);
+    /// AI Chat window default (shorter than CC so three panels fit typical MacBook heights).
+    const CHAT_SIZE: (f64, f64) = (320.0, 380.0);
     const RECAP_SIZE: (f64, f64) = (420.0, 520.0);
     /// Whether the live captions panel window is open.
     static OVERLAY_PANEL_OPEN: AtomicBool = AtomicBool::new(true);
@@ -1048,64 +1048,131 @@ use shogun_core::meeting::gate::OfferGate;
         }
     }
 
-    /// Park a content panel in a non-overlapping slot above the recording bar.
-    ///
-    /// Slots (first open only — user drag wins after):
-    /// - captions (`meeting-cc`): bottom-center above the pill
-    /// - canvas (`meeting-canvas`): left margin, same band
-    /// - chat (`meeting-chat`): right margin, same band
-    /// If a side panel would intersect the default captions band, stack it one tier higher.
-    fn park_content_panel(win: &tauri::WebviewWindow, label: &str, size: (f64, f64)) {
-        let Some(monitor) = overlay_monitor(win) else { return };
+    #[derive(Debug, Clone, Copy)]
+    struct PanelPlacement {
+        label: &'static str,
+        x: i32,
+        y: i32,
+        size: (f64, f64),
+    }
+
+    /// Bottom-align above the recording pill; clamp top so tall chat stays below the menu bar.
+    fn content_panel_y(origin_y: i32, screen_h: i32, h: i32, bottom: i32, top_clear: i32) -> i32 {
+        let y = origin_y + screen_h - h - bottom;
+        y.max(origin_y + top_clear)
+    }
+
+    /// CC center, canvas left, chat right — x from actual panel widths, group-shifted to fit.
+    fn compute_content_panel_layout(monitor: &tauri::Monitor) -> Vec<PanelPlacement> {
+        use std::sync::atomic::Ordering;
+
         let scale = monitor.scale_factor();
         let screen = monitor.size();
         let origin = monitor.position();
-        let w = (size.0 * scale).round() as i32;
-        let h = (size.1 * scale).round() as i32;
+        let gap = (12.0 * scale).round() as i32;
         let margin = (MARGIN * scale).round() as i32;
-        let gap = (16.0 * scale).round() as i32;
         let bottom = ((BOTTOM_MARGIN + PILL_SIZE.1 + 16.0) * scale).round() as i32;
-        let screen_w = screen.width as i32;
-        let screen_h = screen.height as i32;
-        let y_bar = origin.y + screen_h - h - bottom;
+        let top_clear = ((MARGIN + MENUBAR_H) * scale).round() as i32;
+        let cx = origin.x + (screen.width as i32) / 2;
 
-        // Reserved center band for default captions so side panels never share its column.
-        let cc_w = (LIVE_SIZE.0 * scale).round() as i32;
-        let cc_h = (LIVE_SIZE.1 * scale).round() as i32;
-        let cc_left = origin.x + (screen_w - cc_w) / 2;
+        let cc_open = OVERLAY_PANEL_OPEN.load(Ordering::SeqCst);
+        let canvas_open = OVERLAY_CANVAS_OPEN.load(Ordering::SeqCst);
+        let chat_open = OVERLAY_CHAT_OPEN.load(Ordering::SeqCst);
+
+        let cc_size = panel_size(WIN_CC);
+        let cc_w = (cc_size.0 * scale).round() as i32;
+        let cc_left = cx - cc_w / 2;
         let cc_right = cc_left + cc_w;
-        let y_stack = (y_bar - cc_h - gap).max(origin.y + margin);
 
-        let (mut x, y) = match label {
-            WIN_CC => (origin.x + (screen_w - w) / 2, y_bar),
-            WIN_CANVAS => {
-                let x_left = origin.x + margin;
-                // Side-by-side when it clears captions; else stack above captions band.
-                if x_left + w + gap <= cc_left {
-                    (x_left, y_bar)
-                } else {
-                    (x_left, y_stack)
-                }
-            }
-            WIN_CHAT => {
-                let x_right = origin.x + screen_w - w - margin;
-                if x_right >= cc_right + gap {
-                    (x_right, y_bar)
-                } else {
-                    (x_right, y_stack)
-                }
-            }
-            _ => (origin.x + (screen_w - w) / 2, y_bar),
-        };
-        // Keep fully on-monitor (narrow displays / large custom sizes).
-        let x_min = origin.x + margin;
-        let x_max = (origin.x + screen_w - w - margin).max(x_min);
-        x = x.clamp(x_min, x_max);
+        let mut out = Vec::new();
 
+        if cc_open {
+            let cc_h = (cc_size.1 * scale).round() as i32;
+            out.push(PanelPlacement {
+                label: WIN_CC,
+                x: cc_left,
+                y: content_panel_y(origin.y, screen.height as i32, cc_h, bottom, top_clear),
+                size: cc_size,
+            });
+        }
+
+        if canvas_open {
+            let size = panel_size(WIN_CANVAS);
+            let w = (size.0 * scale).round() as i32;
+            let h = (size.1 * scale).round() as i32;
+            let x = if cc_open {
+                cc_left - gap - w
+            } else {
+                cx - w / 2
+            };
+            out.push(PanelPlacement {
+                label: WIN_CANVAS,
+                x,
+                y: content_panel_y(origin.y, screen.height as i32, h, bottom, top_clear),
+                size,
+            });
+        }
+
+        if chat_open {
+            let size = panel_size(WIN_CHAT);
+            let w = (size.0 * scale).round() as i32;
+            let h = (size.1 * scale).round() as i32;
+            let x = if cc_open {
+                cc_right + gap
+            } else {
+                cx - w / 2
+            };
+            out.push(PanelPlacement {
+                label: WIN_CHAT,
+                x,
+                y: content_panel_y(origin.y, screen.height as i32, h, bottom, top_clear),
+                size,
+            });
+        }
+
+        if out.is_empty() {
+            return out;
+        }
+
+        let avail_left = origin.x + margin;
+        let avail_right = origin.x + screen.width as i32 - margin;
+        let leftmost = out.iter().map(|p| p.x).min().unwrap_or(avail_left);
+        let rightmost = out
+            .iter()
+            .map(|p| p.x + (p.size.0 * scale).round() as i32)
+            .max()
+            .unwrap_or(avail_right);
+        let mut shift = 0;
+        if rightmost > avail_right {
+            shift = avail_right - rightmost;
+        }
+        if leftmost + shift < avail_left {
+            shift += avail_left - (leftmost + shift);
+        }
+        if shift != 0 {
+            for p in &mut out {
+                p.x += shift;
+            }
+        }
+
+        for p in &mut out {
+            let w = (p.size.0 * scale).round() as i32;
+            let min_x = avail_left;
+            let max_x = (avail_right - w).max(min_x);
+            p.x = p.x.clamp(min_x, max_x);
+        }
+
+        out
+    }
+
+    fn apply_panel_placement(win: &tauri::WebviewWindow, placement: PanelPlacement, scale: f64) {
+        let label = placement.label;
+        let size = placement.size;
+        let x = placement.x;
+        let y = placement.y;
         eprintln!("[meeting] park panel `{label}` ({x},{y}) size {}x{}", size.0, size.1);
         let _ = win.set_size(tauri::LogicalSize::new(size.0, size.1));
         let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
-        // Re-assert size after position (Tao must match NSWindow for WKWebView layout).
         let _ = win.set_size(tauri::LogicalSize::new(size.0, size.1));
         if let Ok(actual) = win.outer_size() {
             let aw = (actual.width as f64) / scale;
@@ -1116,6 +1183,17 @@ use shogun_core::meeting::gate::OfferGate;
                     size.0, size.1
                 );
             }
+        }
+    }
+
+    /// Park open content panels as one row (re-layouts all open panels when any needs park).
+    fn park_content_panels(app: &tauri::AppHandle, monitor: &tauri::Monitor) {
+        let scale = monitor.scale_factor();
+        for placement in compute_content_panel_layout(monitor) {
+            let Some(win) = app.get_webview_window(placement.label) else {
+                continue;
+            };
+            apply_panel_placement(&win, placement, scale);
         }
     }
 
@@ -1140,13 +1218,19 @@ use shogun_core::meeting::gate::OfferGate;
             .unwrap_or(true);
         let _ = win.set_size(tauri::LogicalSize::new(size.0, size.1));
         if needs_park {
-            park_content_panel(&win, label, size);
+            if let Some(monitor) = overlay_monitor(&win) {
+                park_content_panels(app, &monitor);
+            }
             if let Ok(mut g) = PANEL_PARKED.lock() {
-                match label {
-                    WIN_CC => g.cc = true,
-                    WIN_CANVAS => g.canvas = true,
-                    WIN_CHAT => g.chat = true,
-                    _ => {}
+                use std::sync::atomic::Ordering;
+                if OVERLAY_PANEL_OPEN.load(Ordering::SeqCst) {
+                    g.cc = true;
+                }
+                if OVERLAY_CANVAS_OPEN.load(Ordering::SeqCst) {
+                    g.canvas = true;
+                }
+                if OVERLAY_CHAT_OPEN.load(Ordering::SeqCst) {
+                    g.chat = true;
                 }
             }
         }
