@@ -775,7 +775,7 @@ use shogun_core::meeting::gate::OfferGate;
     /// Menu-bar height to clear for top-right parking.
     const MENUBAR_H: f64 = 28.0;
     /// Distance from the bottom of the visible screen — clears Meet/Zoom mic bar.
-    const BOTTOM_MARGIN: f64 = 100.0;
+    const BOTTOM_MARGIN: f64 = 136.0;
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum ParkMode {
@@ -793,12 +793,12 @@ use shogun_core::meeting::gate::OfferGate;
 
     /// Build host + independent panel windows (hidden). **Setup only — main thread.**
     pub fn build_overlay(app: &tauri::AppHandle) -> Option<tauri::WebviewWindow> {
-        // Host stays transparent (offer/recap rounded chrome). Content panels are opaque —
-        // never one shared transparent desk that blocks clicks in empty space.
+        // Every meeting surface is its own tight transparent window (glass chrome in CSS).
+        // Never one shared transparent desk that blocks clicks in empty space.
         let host = build_one_overlay(app, WINDOW_LABEL, BAR_SIZE, "ShogunAI — meeting", false)?;
-        let _ = build_one_overlay(app, WIN_CC, LIVE_SIZE, "ShogunAI — captions", true);
-        let _ = build_one_overlay(app, WIN_CANVAS, CANVAS_SIZE, "ShogunAI — canvas", true);
-        let _ = build_one_overlay(app, WIN_CHAT, CHAT_SIZE, "ShogunAI — chat", true);
+        let _ = build_one_overlay(app, WIN_CC, LIVE_SIZE, "ShogunAI — captions", false);
+        let _ = build_one_overlay(app, WIN_CANVAS, CANVAS_SIZE, "ShogunAI — canvas", false);
+        let _ = build_one_overlay(app, WIN_CHAT, CHAT_SIZE, "ShogunAI — chat", false);
         Some(host)
     }
 
@@ -860,13 +860,12 @@ use shogun_core::meeting::gate::OfferGate;
         // SAFETY: live NSWindow on the main thread (setup).
         unsafe {
             if opaque {
-                // Opaque content panels: solid backing, sized to chrome — no invisible click wall.
                 let _: () = msg_send![ptr, setOpaque: true];
                 let black: *mut AnyObject = msg_send![class!(NSColor), blackColor];
                 let _: () = msg_send![ptr, setBackgroundColor: black];
             } else {
-                // Transparent host: default NSWindow backing is opaque grey — it peeks where
-                // WKWebView does not clip CSS border-radius (offer card corners).
+                // Transparent frame: clear NSWindow backing so CSS glass + border-radius show
+                // Meet behind. Window stays sized to chrome only — no desk padding.
                 let _: () = msg_send![ptr, setOpaque: false];
                 let clear: *mut AnyObject = msg_send![class!(NSColor), clearColor];
                 let _: () = msg_send![ptr, setBackgroundColor: clear];
@@ -1234,7 +1233,7 @@ use shogun_core::meeting::gate::OfferGate;
                 }
             }
         }
-        // Opaque panel windows always capture clicks while visible — no shared click-through flag.
+        // Content panel windows capture clicks while visible (tight chrome, no desk padding).
         set_overlay_ignores_mouse(&win, false);
         let _ = win.show();
         let _ = win.set_always_on_top(true);
