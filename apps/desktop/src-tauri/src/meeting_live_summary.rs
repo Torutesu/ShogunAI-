@@ -107,11 +107,15 @@ pub fn meeting_request_live_summary(app: tauri::AppHandle, transcript: String) -
         }
         let _guard = Guard;
 
+        // Every exit from this worker must emit exactly one terminal event: the command already
+        // returned Ok, so the FE has latched its in-flight guard and only an event clears it.
+        // Returning silently here blocks Live Summary for the rest of the meeting.
         let (Ok(transport), Ok(rt)) = (
             ReqwestTransport::new(),
             tokio::runtime::Builder::new_current_thread().enable_all().build(),
         ) else {
             eprintln!("[meeting] live summary skipped — transport/runtime unavailable");
+            let _ = app2.emit("meeting_live_summary_failed", ());
             return;
         };
         let client = AnthropicSelectKkMessagesClient::new(
@@ -131,6 +135,7 @@ pub fn meeting_request_live_summary(app: tauri::AppHandle, transcript: String) -
                 let summary = text.trim().to_string();
                 if summary.is_empty() {
                     eprintln!("[meeting] live summary returned empty");
+                    let _ = app2.emit("meeting_live_summary_failed", ());
                     return;
                 }
                 let _ = app2.emit("meeting_live_summary", LiveSummaryEvent { summary });
