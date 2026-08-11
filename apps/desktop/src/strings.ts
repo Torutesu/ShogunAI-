@@ -286,7 +286,7 @@ export const STRINGS = {
       "Nothing joins your call. Speech provider processes audio temporarily for transcription — not for training. No audio file saved by SHOGUN.",
     meetingListening: "Listening · speech provider (not for training) · no recording saved",
     meetingDisclosureRecap:
-      "Audio was processed temporarily for transcription only — not retained for training. No recording saved by SHOGUN — transcript, provenance, and your notes.",
+      "Audio was used for transcription only — not kept for training. SHOGUN saves transcript text and your notes, never a recording.",
     // live in-meeting overlay (issue #93)
     meetingModeTranscription: "Transcribe",
     meetingModeOneWay: "One-way Translation",

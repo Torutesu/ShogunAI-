@@ -560,15 +560,9 @@ export function MeetingOverlay(): JSX.Element | null {
   useEffect(() => {
     if (!isHost) return;
     const prev = prevMeetingStateRef.current;
+    const enteringRecording = view?.state === "recording" && prev !== "recording";
     prevMeetingStateRef.current = view?.state ?? null;
-    if (view?.state !== "recording" || prev === "recording") return;
-    // Take Notes / fresh session — chat and canvas stay closed until bar toggles.
-    setChatOn(false);
-    setNotesOpen(false);
-  }, [isHost, view?.state]);
 
-  useEffect(() => {
-    if (!isHost) return;
     if (view?.state !== "recording") {
       if (notesOpen) setNotesOpen(false);
       if (chatOn) setChatOn(false);
@@ -578,8 +572,13 @@ export function MeetingOverlay(): JSX.Element | null {
       call("meeting_set_overlay_chat", { open: false });
       return;
     }
-    call("meeting_set_overlay_canvas", { open: notesOpen });
-    call("meeting_set_overlay_chat", { open: chatOn });
+
+    if (enteringRecording) {
+      if (notesOpen) setNotesOpen(false);
+      if (chatOn) setChatOn(false);
+    }
+    call("meeting_set_overlay_canvas", { open: enteringRecording ? false : notesOpen });
+    call("meeting_set_overlay_chat", { open: enteringRecording ? false : chatOn });
   }, [isHost, view?.state, notesOpen, chatOn]);
 
   useEffect(() => {
@@ -1336,9 +1335,6 @@ export function MeetingOverlay(): JSX.Element | null {
               </div>
             ))
           )}
-          <button type="button" className="ov__chat-skill" disabled>
-            {t.meetingChatAddSkill}
-          </button>
         </div>
         <div className="ov__chat-inputwrap ov__nodrag" data-no-drag>
           <input
@@ -1459,6 +1455,13 @@ export function MeetingOverlay(): JSX.Element | null {
                     className={`ov__modeopt${m === settings.meeting_mode ? " is-on" : ""}`}
                     onClick={() => setMode(m)}
                   >
+                    {m === settings.meeting_mode ? (
+                      <span className="ov__mode-check" aria-hidden>
+                        ✓
+                      </span>
+                    ) : (
+                      <span className="ov__mode-check-spacer" aria-hidden />
+                    )}
                     {modeLabel(m)}
                   </button>
                 ))}
@@ -1553,6 +1556,13 @@ export function MeetingOverlay(): JSX.Element | null {
                       className={`ov__modeopt${m === settings.meeting_mode ? " is-on" : ""}`}
                       onClick={() => setMode(m)}
                     >
+                      {m === settings.meeting_mode ? (
+                        <span className="ov__mode-check" aria-hidden>
+                          ✓
+                        </span>
+                      ) : (
+                        <span className="ov__mode-check-spacer" aria-hidden />
+                      )}
                       {modeLabel(m)}
                     </button>
                   ))}
@@ -1650,9 +1660,31 @@ export function MeetingOverlay(): JSX.Element | null {
           ) : null}
           {liveTurns.length === 0 ? (
             <p className="ov__liveempty">{t.meetingLiveEmpty}</p>
+          ) : translating && captionSplit === "stack" ? (
+            <div
+              className={`ov__stack${
+                settings.meeting_mode === "one_way" && !showOriginal ? " ov__stack--dst-only" : ""
+              }`}
+            >
+              {liveTurns.map((turn, i) => {
+                const translation = usableTranslation(turn.translation);
+                const hideSrc = settings.meeting_mode === "one_way" && !showOriginal;
+                return (
+                  <div className="ov__stack-turn" key={`stack-${turn.ts}-${i}`}>
+                    {!hideSrc ? <p className="ov__stack-src">{turn.text}</p> : null}
+                    <p
+                      className={`ov__stack-dst${translation ? "" : " is-pending"}`}
+                      aria-busy={!translation}
+                    >
+                      {translation ?? ""}
+                    </p>
+                  </div>
+                );
+              })}
+            </div>
           ) : translating ? (
             <div
-              className={`ov__split${captionSplit === "stack" ? " ov__split--stack" : ""}${
+              className={`ov__split${
                 settings.meeting_mode === "one_way" && !showOriginal ? " ov__split--dst-only" : ""
               }`}
             >
@@ -1706,27 +1738,15 @@ export function MeetingOverlay(): JSX.Element | null {
       </div>
     ) : null;
 
-    // Host = control bar only. Each content surface lives in its own opaque window.
+    // Host = control bar only. Each content surface lives in its own glass window.
     if (surface === "cc") {
-      return (
-        <div className="ov ov--live ov--panel-solo" onPointerDown={drag}>
-          {captionsPanel}
-        </div>
-      );
+      return <div className="ov-panel-shell ov--panel-solo">{captionsPanel}</div>;
     }
     if (surface === "canvas") {
-      return (
-        <div className="ov ov--live ov--panel-solo" onPointerDown={drag}>
-          {canvasPanel}
-        </div>
-      );
+      return <div className="ov-panel-shell ov--panel-solo">{canvasPanel}</div>;
     }
     if (surface === "chat") {
-      return (
-        <div className="ov ov--live ov--panel-solo" onPointerDown={drag}>
-          {chatPanel}
-        </div>
-      );
+      return <div className="ov-panel-shell ov--panel-solo">{chatPanel}</div>;
     }
     return (
       <div className="ov ov--live ov--live-pill" onPointerDown={drag}>
