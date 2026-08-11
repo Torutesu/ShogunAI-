@@ -1756,6 +1756,160 @@ function VoiceSection(): JSX.Element {
   );
 }
 
+/** Sound cues (issue #49). Rust owns the policy — this only reads and writes the three settings
+ *  it is allowed to change, and states the one rule it cannot: nothing plays while a microphone
+ *  is live, because that chime would land in the user's transcript and in everyone else's call. */
+type SoundPref = "off" | "essential" | "full";
+interface SoundSettings {
+  pref: SoundPref;
+  startup_sound: boolean;
+  quiet_hours: { enabled: boolean; start_min: number; end_min: number };
+}
+
+const SOUND_DEFAULTS: SoundSettings = {
+  pref: "essential",
+  startup_sound: false,
+  quiet_hours: { enabled: true, start_min: 22 * 60, end_min: 8 * 60 },
+};
+
+const minToTime = (m: number): string =>
+  `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+const timeToMin = (v: string): number => {
+  const [h, m] = v.split(":").map((n) => Number.parseInt(n, 10));
+  if (!Number.isFinite(h) || !Number.isFinite(m)) return 0;
+  return Math.min(23 * 60 + 59, Math.max(0, h * 60 + m));
+};
+
+function SoundSection(): JSX.Element {
+  const [s, setS] = useState<SoundSettings>(SOUND_DEFAULTS);
+  const [busy, setBusy] = useState(false);
+  const [muted, setMuted] = useState(false);
+
+  useEffect(() => {
+    if (!IN_TAURI) return;
+    void invoke<SoundSettings>("get_sound_settings")
+      .then((next) => setS(next))
+      .catch(() => undefined);
+  }, []);
+
+  /** Every write returns the settings Rust actually stored, so a clamped value shows up here
+   *  instead of the UI and the daemon quietly disagreeing. */
+  const write = (cmd: string, args: Record<string, unknown>): void => {
+    if (!IN_TAURI) return;
+    setBusy(true);
+    void invoke<SoundSettings>(cmd, args)
+      .then((next) => setS(next))
+      .catch(() => undefined)
+      .finally(() => setBusy(false));
+  };
+
+  const preview = (): void => {
+    if (!IN_TAURI) return;
+    void invoke<boolean>("preview_sound_cue", { asset: "ask" })
+      .then((played) => setMuted(!played))
+      .catch(() => undefined);
+  };
+
+  const hint =
+    s.pref === "off" ? t.soundOffHint : s.pref === "full" ? t.soundFullHint : t.soundEssentialHint;
+
+  return (
+    <section className="set">
+      <div className="set__label">{t.soundSection}</div>
+      <div className="set__hint">{t.soundHint}</div>
+      <div className="seg" role="radiogroup" aria-label={t.soundSection}>
+        {(["off", "essential", "full"] as SoundPref[]).map((p) => (
+          <button
+            key={p}
+            type="button"
+            role="radio"
+            aria-checked={s.pref === p}
+            className={`seg__opt${s.pref === p ? " is-on" : ""}`}
+            disabled={busy}
+            onClick={() => write("set_sound_pref", { pref: p })}
+          >
+            {p === "off" ? t.soundOff : p === "essential" ? t.soundEssential : t.soundFull}
+          </button>
+        ))}
+      </div>
+      <div className="set__hint">{hint}</div>
+      {s.pref !== "off" ? (
+        <div className="set">
+          <label className="set__row">
+            <input
+              type="checkbox"
+              checked={s.startup_sound}
+              disabled={busy}
+              onChange={(e) => write("set_sound_startup", { enabled: e.target.checked })}
+            />
+            <span>{t.soundStartup}</span>
+          </label>
+          <div className="set__hint">{t.soundStartupHint}</div>
+
+          <label className="set__row">
+            <input
+              type="checkbox"
+              checked={s.quiet_hours.enabled}
+              disabled={busy}
+              onChange={(e) =>
+                write("set_sound_quiet_hours", {
+                  enabled: e.target.checked,
+                  startMin: s.quiet_hours.start_min,
+                  endMin: s.quiet_hours.end_min,
+                })
+              }
+            />
+            <span>{t.soundQuietHours}</span>
+          </label>
+          {s.quiet_hours.enabled ? (
+            <div className="set__row">
+              <label>
+                {t.soundQuietFrom}{" "}
+                <input
+                  type="time"
+                  value={minToTime(s.quiet_hours.start_min)}
+                  disabled={busy}
+                  onChange={(e) =>
+                    write("set_sound_quiet_hours", {
+                      enabled: true,
+                      startMin: timeToMin(e.target.value),
+                      endMin: s.quiet_hours.end_min,
+                    })
+                  }
+                />
+              </label>
+              <label>
+                {t.soundQuietTo}{" "}
+                <input
+                  type="time"
+                  value={minToTime(s.quiet_hours.end_min)}
+                  disabled={busy}
+                  onChange={(e) =>
+                    write("set_sound_quiet_hours", {
+                      enabled: true,
+                      startMin: s.quiet_hours.start_min,
+                      endMin: timeToMin(e.target.value),
+                    })
+                  }
+                />
+              </label>
+            </div>
+          ) : null}
+
+          <div className="set__row">
+            <button className="chip" type="button" onClick={preview}>
+              {t.soundPreview}
+            </button>
+          </div>
+          {muted ? <div className="set__hint">{t.soundPreviewMuted}</div> : null}
+        </div>
+      ) : null}
+      {/* Not a footnote: without this line, going quiet mid-call reads as a bug. */}
+      <div className="set__hint">{t.soundMicNote}</div>
+    </section>
+  );
+}
+
 // AI coding-tool transcripts. Opt-in: a session log is a transcript of the user's work, so
 // nothing is read until they say so.
 /** Meeting notes: tier (a) of the three ways to say no, plus the disclosure (FR-MT-01/02/03).
@@ -3214,6 +3368,7 @@ function Settings(props: {
         <LaunchAtLoginSection />
         <VisualRecallSection />
         <VoiceSection />
+        <SoundSection />
         <ConnectionsSection />
         <ComposioSection />
         <AiSessionsSection />

@@ -314,6 +314,8 @@ pub mod mac {
         }
         if newly_completed {
             eprintln!("[onboarding] completed (plan intent: {:?})", next.plan);
+            // The one sound SHOGUN makes about itself, once in the life of an install (#49 §6.2).
+            crate::sound::mac::play(shogun_core::sound::Cue::OnboardingComplete);
             // Funnel: completion, plan intent only — never content (#91 gate applies).
             if let Some(analytics) = app.try_state::<crate::analytics::Analytics>() {
                 let mut p = shogun_core::analytics::Props::new();

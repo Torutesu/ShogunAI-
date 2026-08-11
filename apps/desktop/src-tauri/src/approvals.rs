@@ -162,8 +162,13 @@ pub mod mac {
     ) -> Result<u64, String> {
         let proposal = proposed(&kind, &destination, &subject, &body)?;
         let now = db.now_ms().max(0) as u64;
-        let mut q = state.0.lock().map_err(|_| "approval queue poisoned".to_string())?;
-        Ok(propose(&mut q, &proposal, Origin::Human, now).0)
+        let id = {
+            let mut q = state.0.lock().map_err(|_| "approval queue poisoned".to_string())?;
+            propose(&mut q, &proposal, Origin::Human, now).0
+        };
+        // Something is waiting on a human decision — the first reason cues exist at all (#49).
+        crate::sound::mac::play(shogun_core::sound::Cue::ApprovalPending);
+        Ok(id)
     }
 
     /// Reply Drafter (FR-AG-10) and the other draft-then-send agents: draft the body on the BYOK
@@ -200,8 +205,13 @@ pub mod mac {
 
         let proposal = proposed(&kind, &destination, &subject, &body)?;
         let now = db.now_ms().max(0) as u64;
-        let mut q = state.0.lock().map_err(|_| "approval queue poisoned".to_string())?;
-        Ok(propose(&mut q, &proposal, Origin::Human, now).0)
+        let id = {
+            let mut q = state.0.lock().map_err(|_| "approval queue poisoned".to_string())?;
+            propose(&mut q, &proposal, Origin::Human, now).0
+        };
+        // A draft the user did not watch being written is exactly the case that needs telling.
+        crate::sound::mac::play(shogun_core::sound::Cue::ApprovalPending);
+        Ok(id)
     }
 
     /// List pending L3 confirmations (expiring any past the 10-minute window first).

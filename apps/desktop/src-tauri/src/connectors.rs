@@ -193,6 +193,8 @@ pub mod mac {
             .map_err(|_| "runtime lock poisoned".to_string())?
             .mark_connected(svc, now);
         eprintln!("[connectors] connected {service} (Composio transport)");
+        // The landing point when the user comes back from a browser and is looking elsewhere (#49).
+        crate::sound::mac::play(shogun_core::sound::Cue::ConnectorLinked);
         Ok(())
     }
 

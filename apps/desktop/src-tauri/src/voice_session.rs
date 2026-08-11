@@ -87,6 +87,9 @@ pub mod mac {
         let msg = message.into();
         let _ = app.emit("voice_error", VoiceErrorEvent { message: msg.clone() });
         emit_state(app, "error", None, Some(msg));
+        // Push-to-talk failing quietly is the worst outcome: the user held a key, said something,
+        // and nothing happened (#49, push-to-talk design §5).
+        crate::sound::mac::play(shogun_core::sound::Cue::VoiceFailed);
     }
 
     fn emit_toast(app: &AppHandle, message: impl Into<String>) {
@@ -211,6 +214,11 @@ pub mod mac {
             }
         }
 
+        // BEFORE the mic opens, deliberately (#49 §5). Our own capture cannot pick up a cue that
+        // has already played, and meeting recording blocks this path entirely — so the only thing
+        // left that could hear it is another app's live call, which the hot-mic rule catches.
+        crate::sound::mac::play(shogun_core::sound::Cue::VoiceStart);
+
         let handle = match voice_lane::start(&app) {
             Ok(h) => h,
             Err(e) => {
@@ -299,8 +307,14 @@ pub mod mac {
         std::thread::Builder::new()
             .name("voice-asr".into())
             .spawn(move || {
+                // Cue after `stop`, so our own mic is already closed and cannot hear its own end
+                // cue — and only on success: a failure plays its own sound from `emit_error`, and
+                // two cues back to back would say less than either one alone (#49).
                 let transcript = match voice_lane::stop(audio) {
-                    TranscriptOutcome::Ok(t) => t,
+                    TranscriptOutcome::Ok(t) => {
+                        crate::sound::mac::play(shogun_core::sound::Cue::VoiceEnd);
+                        t
+                    }
                     TranscriptOutcome::Empty => {
                         emit_error(&app, "Didn't catch that — try again.");
                         return;

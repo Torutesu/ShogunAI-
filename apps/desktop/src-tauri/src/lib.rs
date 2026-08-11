@@ -41,6 +41,9 @@ mod net_lane;
 mod notch_actions;
 mod notch_exec;
 mod onboarding;
+/// UI cue playback and the silence rules around it (#49, docs/sound-design.md).
+#[cfg(target_os = "macos")]
+mod sound;
 mod visual_recall;
 #[cfg(target_os = "macos")]
 mod voice_lane;
@@ -302,6 +305,11 @@ pub fn run() {
         exclusions::mac::exclusion_categories,
         analytics::analytics_get_opt_out,
         analytics::analytics_set_opt_out,
+        sound::mac::get_sound_settings,
+        sound::mac::set_sound_pref,
+        sound::mac::set_sound_startup,
+        sound::mac::set_sound_quiet_hours,
+        sound::mac::preview_sound_cue,
         launch_at_login::mac::get_launch_at_login_settings,
         launch_at_login::mac::set_launch_at_login_enabled,
         voice_session::mac::get_voice_settings,
@@ -561,6 +569,10 @@ fn setup_macos(app: &tauri::App) {
     voice_session::mac::init(app.handle());
     voice_shortcut::install(app.handle());
 
+    // Cue playback (#49). Before the DB branch below: the one cue that can fire during setup is
+    // the capture-stopped failure, and it needs the players already loaded.
+    sound::mac::init(app.handle());
+
     // WP2.2: start the memory capture source. Open the on-device DB under the app-data dir and
     // poll the focus into memory (exclusion → walk → collapse → extract). AX text only (invariant
     // 2). If the DB can't be opened the daemon simply doesn't capture — the shell keeps running.
@@ -614,6 +626,9 @@ fn setup_macos(app: &tauri::App) {
             // Without this the app runs on looking healthy while capture, search and ⌥-tap are
             // all dead, and the only trace is this stderr line nobody sees in a shipped build.
             startup_health::mac::set_memory_db_error(e);
+            // …and say it out loud. Capture silently not running is the failure that costs the
+            // user a day of memory, which is exactly what the Fail cue is for (#49).
+            sound::mac::play(shogun_core::sound::Cue::CaptureStopped);
             // ConnectorState + ApprovalQueueState must exist before any settings command runs.
             // The read-sync poller needs a DB; listing/connecting still works without one.
             install_connectors(app.handle(), None);
@@ -629,6 +644,10 @@ fn setup_macos(app: &tauri::App) {
         analytics.capture("app_opened", p);
     }
     app.manage(analytics);
+
+    // Silent unless the user explicitly asked for a startup sound (#49 D1): SHOGUN is a login
+    // item, so launching is something the Mac did, not something the user did.
+    sound::mac::play(shogun_core::sound::Cue::AppLaunched);
 
     // Last line of setup, and outside the DB branch: whether the panel is on screen has nothing to
     // do with whether memory opened, and a failed DB must not swallow the answer.
@@ -1480,6 +1499,7 @@ fn summon_to_active_space(app: &tauri::AppHandle) {
     // panel was collapsed to the handle.
     use tauri::Emitter;
     let _ = app.emit("summon", ());
+    sound::mac::play(shogun_core::sound::Cue::Summon);
 }
 
 /// Event-driven residency: re-assert the panel on BOTH desktop/full-screen switches
