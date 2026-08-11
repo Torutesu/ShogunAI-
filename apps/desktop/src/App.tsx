@@ -1236,8 +1236,11 @@ export function App(): JSX.Element {
               {/* The answer as it is written. The dots only stand in for the wait BEFORE the
                   first token — once text is arriving, the text itself is the progress indicator,
                   and leaving the dots under it would be two things saying the same thing. */}
+              {/* aria-atomic=false so a screen reader announces each new piece rather than
+                  re-reading the whole answer from the top on every repaint — which, at one
+                  repaint per frame, would make the panel unusable with VoiceOver. */}
               {streaming ? (
-                <div className="msg msg--shogun msg--live" aria-live="polite">
+                <div className="msg msg--shogun msg--live" aria-live="polite" aria-atomic="false">
                   {streaming}
                   <span className="msg__caret" aria-hidden="true" />
                 </div>
