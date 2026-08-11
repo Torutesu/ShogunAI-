@@ -1546,11 +1546,21 @@ use shogun_core::meeting::gate::OfferGate;
                 // Resume: open devices off the command thread so invoke returns after emit.
                 let app2 = app.clone();
                 std::thread::spawn(move || {
-                    let handle = crate::audio_lane::start(&app2, id, live);
+                    let mut handle = crate::audio_lane::start(&app2, id, live);
                     if let Ok(mut g) = LANE.lock() {
                         if let Some(lane) = g.as_mut() {
-                            if lane.machine.state() == State::Recording && !lane.paused {
-                                lane.audio = handle;
+                            // Only adopt the lane this worker actually started for. A fast
+                            // pause/resume/pause/resume leaves two resume workers racing here, and
+                            // Handle has no Drop-stop — overwriting a live `lane.audio` would leak
+                            // a mic + Deepgram lane that keeps streaming and duplicating transcript
+                            // lines. The session check keeps a worker whose meeting already ended
+                            // from attaching to the *next* meeting's lane.
+                            if lane.machine.state() == State::Recording
+                                && !lane.paused
+                                && lane.session_id == Some(id)
+                                && lane.audio.is_none()
+                            {
+                                lane.audio = handle.take();
                                 return;
                             }
                         }
