@@ -2076,6 +2076,241 @@ function VisualRecallSection(): JSX.Element {
   );
 }
 
+// ---- Memory API (MCP / CLI / REST) -------------------------------------------------------------
+
+interface MemoryApiTokenMeta {
+  id: string;
+  name: string;
+  created_at: number;
+}
+
+interface MemoryApiSettingsView {
+  enabled: boolean;
+  profile: { display_name: string; role: string; prefs: string };
+  tokens: MemoryApiTokenMeta[];
+  gate_note: string;
+}
+
+function MemoryApiSection(): JSX.Element {
+  const [settings, setSettings] = useState<MemoryApiSettingsView>({
+    enabled: false,
+    profile: { display_name: "", role: "", prefs: "" },
+    tokens: [],
+    gate_note: "",
+  });
+  const [busy, setBusy] = useState(false);
+  const [name, setName] = useState("");
+  const [role, setRole] = useState("");
+  const [prefs, setPrefs] = useState("");
+  const [tokenName, setTokenName] = useState("");
+  const [issuedOnce, setIssuedOnce] = useState<string>("");
+  const [err, setErr] = useState("");
+
+  const refresh = useCallback((): void => {
+    if (!IN_TAURI) return;
+    void invoke<MemoryApiSettingsView>("memory_api_settings")
+      .then((s) => {
+        setSettings(s);
+        setName(s.profile.display_name);
+        setRole(s.profile.role);
+        setPrefs(s.profile.prefs);
+        setErr("");
+      })
+      .catch((e) => setErr(String(e)));
+  }, []);
+
+  useEffect(refresh, [refresh]);
+
+  const toggle = (next: boolean): void => {
+    if (!IN_TAURI) {
+      setSettings((s) => ({ ...s, enabled: next }));
+      return;
+    }
+    setBusy(true);
+    setSettings((s) => ({ ...s, enabled: next }));
+    void invoke("set_memory_api_enabled", { enabled: next })
+      .then(refresh)
+      .catch((e) => {
+        setErr(String(e));
+        setSettings((s) => ({ ...s, enabled: !next }));
+      })
+      .finally(() => setBusy(false));
+  };
+
+  const saveProfile = (): void => {
+    if (!IN_TAURI) {
+      setSettings((s) => ({
+        ...s,
+        profile: { display_name: name, role, prefs },
+      }));
+      return;
+    }
+    void invoke("set_memory_api_profile", {
+      displayName: name,
+      role,
+      prefs,
+    })
+      .then(refresh)
+      .catch((e) => setErr(String(e)));
+  };
+
+  const issueToken = (): void => {
+    const n = tokenName.trim();
+    if (!n) return;
+    if (!IN_TAURI) {
+      setIssuedOnce("dev-token-preview");
+      setTokenName("");
+      return;
+    }
+    void invoke<{ id: string; name: string; created_at: number; token: string }>(
+      "issue_memory_api_token",
+      { name: n },
+    )
+      .then((v) => {
+        setIssuedOnce(v.token);
+        setTokenName("");
+        refresh();
+      })
+      .catch((e) => setErr(String(e)));
+  };
+
+  const revokeToken = (id: string): void => {
+    if (!IN_TAURI) {
+      setSettings((s) => ({ ...s, tokens: s.tokens.filter((t) => t.id !== id) }));
+      return;
+    }
+    void invoke("revoke_memory_api_token", { id })
+      .then(() => {
+        setIssuedOnce("");
+        refresh();
+      })
+      .catch((e) => setErr(String(e)));
+  };
+
+  return (
+    <section className="set">
+      <div className="set__label" id="seg-memory-api">{t.memoryApiTitle}</div>
+      <div className="set__hint">{t.memoryApiHint}</div>
+      {err ? <div className="set__hint is-err">{err}</div> : null}
+      <div className="seg" role="radiogroup" aria-labelledby="seg-memory-api">
+        <button
+          type="button"
+          role="radio"
+          aria-checked={settings.enabled}
+          disabled={busy}
+          className={`seg__opt${settings.enabled ? " is-on" : ""}`}
+          onClick={() => toggle(true)}
+        >
+          {t.memoryApiOn}
+        </button>
+        <button
+          type="button"
+          role="radio"
+          aria-checked={!settings.enabled}
+          disabled={busy}
+          className={`seg__opt${!settings.enabled ? " is-on" : ""}`}
+          onClick={() => toggle(false)}
+        >
+          {t.memoryApiOff}
+        </button>
+      </div>
+      <div className="set__hint set__hint--quiet">{t.memoryApiGateNote}</div>
+
+      <div className="set__label" style={{ marginTop: 10 }}>{t.memoryApiProfileLabel}</div>
+      <div className="keyrow">
+        <input
+          className="keyrow__input"
+          type="text"
+          placeholder={t.memoryApiDisplayName}
+          value={name}
+          autoComplete="off"
+          onChange={(e) => setName(e.target.value)}
+          onFocus={() => {
+            if (IN_TAURI) void invoke("focus_field", { focused: true }).catch(() => undefined);
+          }}
+        />
+      </div>
+      <div className="keyrow" style={{ marginTop: 6 }}>
+        <input
+          className="keyrow__input"
+          type="text"
+          placeholder={t.memoryApiRole}
+          value={role}
+          autoComplete="off"
+          onChange={(e) => setRole(e.target.value)}
+          onFocus={() => {
+            if (IN_TAURI) void invoke("focus_field", { focused: true }).catch(() => undefined);
+          }}
+        />
+      </div>
+      <div className="set__hint">{t.memoryApiPrefsHint}</div>
+      <textarea
+        className="keyrow__input"
+        style={{ minHeight: 72, resize: "vertical", width: "100%", boxSizing: "border-box" }}
+        placeholder={t.memoryApiPrefsPlaceholder}
+        value={prefs}
+        onChange={(e) => setPrefs(e.target.value)}
+        onFocus={() => {
+          if (IN_TAURI) void invoke("focus_field", { focused: true }).catch(() => undefined);
+        }}
+      />
+      <div className="keyrow" style={{ marginTop: 6 }}>
+        <button className="keyrow__btn" type="button" onClick={saveProfile}>
+          {t.memoryApiSaveProfile}
+        </button>
+      </div>
+
+      <div className="set__label" style={{ marginTop: 12 }}>{t.memoryApiTokensLabel}</div>
+      <div className="set__hint">{t.memoryApiTokensHint}</div>
+      {settings.tokens.length === 0 ? (
+        <div className="set__hint set__hint--quiet">{t.memoryApiNoTokens}</div>
+      ) : (
+        settings.tokens.map((tok) => (
+          <div className="keyrow" key={tok.id} style={{ marginTop: 4 }}>
+            <span className="set__hint" style={{ flex: 1 }}>
+              {tok.name}
+            </span>
+            <button className="keyrow__btn" type="button" onClick={() => revokeToken(tok.id)}>
+              {t.memoryApiRevokeToken}
+            </button>
+          </div>
+        ))
+      )}
+      <div className="keyrow" style={{ marginTop: 6 }}>
+        <input
+          className="keyrow__input"
+          type="text"
+          placeholder={t.memoryApiTokenNamePlaceholder}
+          value={tokenName}
+          autoComplete="off"
+          onChange={(e) => setTokenName(e.target.value)}
+          onFocus={() => {
+            if (IN_TAURI) void invoke("focus_field", { focused: true }).catch(() => undefined);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") issueToken();
+          }}
+        />
+        <button
+          className="keyrow__btn"
+          type="button"
+          onClick={issueToken}
+          disabled={!tokenName.trim()}
+        >
+          {t.memoryApiIssueToken}
+        </button>
+      </div>
+      {issuedOnce ? (
+        <div className="set__hint is-ok">
+          {t.memoryApiTokenIssued}
+          <br />
+          <code style={{ userSelect: "all", wordBreak: "break-all" }}>{issuedOnce}</code>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 function AiSessionsSection(): JSX.Element {
   const [on, setOn] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -2834,6 +3069,7 @@ function Settings(props: {
         <MeetingSection />
         <LaunchAtLoginSection />
         <VisualRecallSection />
+        <MemoryApiSection />
         <VoiceSection />
         <ConnectionsSection />
         <ComposioSection />
