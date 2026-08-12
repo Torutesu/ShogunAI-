@@ -59,8 +59,13 @@ fn trim_transcript(raw: &str) -> String {
         return t.to_string();
     }
     // Keep the most recent context — older opener is less useful for a rolling summary.
-    let start = t.len().saturating_sub(MAX_CHARS);
-    let slice = t.get(start..).unwrap_or(t);
+    // Byte offset must land on a UTF-8 char boundary (Japanese is rarely aligned to MAX_CHARS).
+    // Walk forward so the kept suffix stays ≤ MAX_CHARS (MSRV 1.80: no floor_char_boundary).
+    let mut start = t.len().saturating_sub(MAX_CHARS);
+    while start < t.len() && !t.is_char_boundary(start) {
+        start += 1;
+    }
+    let slice = &t[start..];
     format!("…\n{slice}")
 }
 
@@ -148,4 +153,33 @@ pub fn meeting_request_live_summary(app: tauri::AppHandle, transcript: String) -
         }
     });
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn trim_transcript_cuts_on_utf8_boundary() {
+        // Each hiragana is 3 bytes — a naive byte slice at MAX_CHARS is mid-char.
+        let unit = "あ";
+        assert_eq!(unit.len(), 3);
+        let need = MAX_CHARS / unit.len() + 8;
+        let raw = unit.repeat(need);
+        assert!(raw.len() > MAX_CHARS);
+
+        let out = trim_transcript(&raw);
+        assert!(out.starts_with("…\n"));
+        let body = &out["…\n".len()..];
+        assert!(body.len() <= MAX_CHARS);
+        assert!(body.len() < raw.len());
+        assert!(std::str::from_utf8(body.as_bytes()).is_ok());
+        assert!(body.chars().all(|c| c == 'あ'));
+    }
+
+    #[test]
+    fn trim_transcript_short_passthrough() {
+        let raw = "hello meeting";
+        assert_eq!(trim_transcript(raw), raw);
+    }
 }
