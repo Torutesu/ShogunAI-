@@ -1095,37 +1095,47 @@ use shogun_core::meeting::gate::OfferGate;
             });
         }
 
+        // With captions closed there is no centre anchor to flank, so the survivors are centred as
+        // a group. Centring them individually puts both at `cx - w/2` and lands canvas and chat on
+        // top of each other whenever both are open without captions.
+        let canvas_size = panel_size(WIN_CANVAS);
+        let chat_size = panel_size(WIN_CHAT);
+        let canvas_w = (canvas_size.0 * scale).round() as i32;
+        let chat_w = (chat_size.0 * scale).round() as i32;
+        let (loose_canvas_x, loose_chat_x) = if canvas_open && chat_open {
+            let left = cx - (canvas_w + gap + chat_w) / 2;
+            (left, left + canvas_w + gap)
+        } else {
+            (cx - canvas_w / 2, cx - chat_w / 2)
+        };
+
         if canvas_open {
-            let size = panel_size(WIN_CANVAS);
-            let w = (size.0 * scale).round() as i32;
-            let h = (size.1 * scale).round() as i32;
+            let h = (canvas_size.1 * scale).round() as i32;
             let x = if cc_open {
-                cc_left - gap - w
+                cc_left - gap - canvas_w
             } else {
-                cx - w / 2
+                loose_canvas_x
             };
             out.push(PanelPlacement {
                 label: WIN_CANVAS,
                 x,
                 y: content_panel_y(origin.y, screen.height as i32, h, bottom, top_clear),
-                size,
+                size: canvas_size,
             });
         }
 
         if chat_open {
-            let size = panel_size(WIN_CHAT);
-            let w = (size.0 * scale).round() as i32;
-            let h = (size.1 * scale).round() as i32;
+            let h = (chat_size.1 * scale).round() as i32;
             let x = if cc_open {
                 cc_right + gap
             } else {
-                cx - w / 2
+                loose_chat_x
             };
             out.push(PanelPlacement {
                 label: WIN_CHAT,
                 x,
                 y: content_panel_y(origin.y, screen.height as i32, h, bottom, top_clear),
-                size,
+                size: chat_size,
             });
         }
 
@@ -1200,6 +1210,19 @@ use shogun_core::meeting::gate::OfferGate;
         let Some(win) = app.get_webview_window(label) else { return };
         if !open {
             let _ = win.hide();
+            // Drop this panel's parked bit and re-fit the survivors. Leaving the bit set kept the
+            // closed panel's slot as a gap in the row and suppressed the re-park on reopen.
+            if let Ok(mut g) = PANEL_PARKED.lock() {
+                match label {
+                    WIN_CC => g.cc = false,
+                    WIN_CANVAS => g.canvas = false,
+                    WIN_CHAT => g.chat = false,
+                    _ => {}
+                }
+            }
+            if let Some(monitor) = overlay_monitor(&win) {
+                park_content_panels(app, &monitor);
+            }
             return;
         }
         let size = panel_size(label);
@@ -1269,6 +1292,14 @@ use shogun_core::meeting::gate::OfferGate;
 
     fn emit_panel_flags(app: &tauri::AppHandle) {
         let _ = app.emit("meeting_overlay_panels", panel_flags());
+    }
+
+    /// Broadcast a settings change to every meeting window. `MeetingView` carries no settings and
+    /// each panel window fetches its own copy once at mount, so without this a mode or language
+    /// switch in the bar never reaches captions — the core translates while the panel keeps
+    /// rendering the transcription layout.
+    fn emit_settings(app: &tauri::AppHandle, settings: &Settings) {
+        let _ = app.emit("meeting_settings", settings.clone());
     }
 
     fn sync_content_panels(app: &tauri::AppHandle, recording_visible: bool) {
@@ -1851,6 +1882,7 @@ use shogun_core::meeting::gate::OfferGate;
             *live = candidate;
         }
         emit(&app, lane, now);
+        emit_settings(&app, &lane.settings);
         Ok(())
     }
 
@@ -1884,6 +1916,7 @@ use shogun_core::meeting::gate::OfferGate;
             *live = candidate;
         }
         emit(&app, lane, now);
+        emit_settings(&app, &lane.settings);
         Ok(())
     }
 
