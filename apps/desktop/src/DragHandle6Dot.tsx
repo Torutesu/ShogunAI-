@@ -31,8 +31,8 @@ export function DragHandle6Dot(props: DragHandle6DotProps): JSX.Element {
         className="drag-handle-6dot__img"
         src={gripIcon}
         alt=""
-        width={18}
-        height={18}
+        width={14}
+        height={14}
         draggable={false}
         aria-hidden
       />

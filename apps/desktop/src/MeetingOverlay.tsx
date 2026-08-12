@@ -15,7 +15,6 @@ import moreIcon from "./assets/meeting/more.svg";
 import stopIcon from "./assets/meeting/stop.svg";
 import closeIcon from "./assets/meeting/close.svg";
 import preferenceIcon from "./assets/meeting/preference.svg";
-import gripIcon from "./assets/meeting/grip.svg";
 import { DragHandle6Dot } from "./DragHandle6Dot";
 import { ResizeCornerHandle } from "./ResizeCornerHandle";
 import { t } from "./strings";
@@ -237,14 +236,21 @@ const call = (cmd: string, args?: Record<string, unknown>): void => {
 function beginMeetingDrag(e: React.PointerEvent, windowLabel?: string): void {
   if (e.button !== 0) return;
   const el = e.target as HTMLElement;
-  if (el.closest("button, input, a, textarea, select, [data-no-drag]")) return;
-  if (
-    el.closest(
-      ".ov__livebody, .ov__rbody, .ov__acts, .ov__liveacts, .ov__modepick, .ov__langpick, .ov__modemenu, .ov__langmenu, .ov__bar, .ov__bar-tip, .ov__canvas-body, .ov__canvas-tools, .ov__canvas-modemenu, .ov__disp, .ov__chat-body, .ov__chat-input, .ov__chat-tools, .resize-corner-handle",
-    )
-  ) {
-    return;
+  // Host grip is a control (button / DragHandle6Dot) inside `[data-no-drag]` chrome — allow it
+  // before the interactive exclusions, or the pill never moves.
+  const isGrip = !!el.closest(".ov__bar-move, .drag-handle-6dot");
+  if (!isGrip) {
+    if (el.closest("button, input, a, textarea, select, [data-no-drag]")) return;
+    if (
+      el.closest(
+        ".ov__livebody, .ov__rbody, .ov__acts, .ov__liveacts, .ov__modepick, .ov__langpick, .ov__modemenu, .ov__langmenu, .ov__bar-tip, .ov__canvas-body, .ov__canvas-tools, .ov__canvas-modemenu, .ov__disp, .ov__chat-body, .ov__chat-input, .ov__chat-tools, .resize-corner-handle",
+      )
+    ) {
+      return;
+    }
   }
+  e.preventDefault();
+  e.stopPropagation();
   const label = windowLabel ?? (() => {
     try {
       return getCurrentWindow().label;
@@ -252,9 +258,9 @@ function beginMeetingDrag(e: React.PointerEvent, windowLabel?: string): void {
       return "meeting";
     }
   })();
-  void getCurrentWindow()
-    .startDragging()
-    .catch(() => call("meeting_drag", { label }));
+  // Prefer AppKit performWindowDragWithEvent — WKWebView startDragging alone is flaky on the
+  // transparent host pill (see meeting_drag).
+  call("meeting_drag", { label });
 }
 
 type MeetingSurface = "host" | "cc" | "canvas" | "chat";
@@ -287,7 +293,8 @@ function defaultPanelSize(surface: MeetingSurface): { w: number; h: number } {
 
 /** Host pill — match Rust `PILL_SIZE` / `PILL_WITH_MENU_SIZE`. */
 const HOST_PILL_SIZE = { w: 320, h: 100 } as const;
-const HOST_PILL_WITH_MENU_SIZE = { w: 320, h: 220 } as const;
+/** Tall enough for mode list + one-way/two-way lang row under More. */
+const HOST_PILL_WITH_MENU_SIZE = { w: 320, h: 280 } as const;
 
 function translationPatchKey(ts: number, speaker: string | null | undefined): string {
   return `${ts}:${speaker ?? ""}`;
@@ -778,9 +785,15 @@ export function MeetingOverlay(): JSX.Element | null {
       setBarHoverReady(false);
       return;
     }
+    // Transparent host click-through: first pointermove may never fire until the cursor is
+    // already over the pill. Also arm on pointerenter/pointerdown of the bar wrap.
     const enable = (): void => setBarHoverReady(true);
     window.addEventListener("pointermove", enable, { once: true });
-    return () => window.removeEventListener("pointermove", enable);
+    window.addEventListener("pointerdown", enable, { once: true });
+    return () => {
+      window.removeEventListener("pointermove", enable);
+      window.removeEventListener("pointerdown", enable);
+    };
   }, [view?.state]);
 
   useEffect(() => {
@@ -951,7 +964,13 @@ export function MeetingOverlay(): JSX.Element | null {
 
   const setMode = (mode: MeetingMode): void => {
     setSettings((s) => ({ ...s, meeting_mode: mode }));
-    setModeOpen(false);
+    // Captions panel has its own lang row — close the mode list there.
+    // Host More keeps open for translate modes so source/target (or my/other) stay reachable
+    // without opening captions first.
+    if (ccOn || mode === "transcription") {
+      setModeOpen(false);
+    }
+    setLangOpen(null);
     call("set_meeting_mode", { mode });
   };
 
@@ -1478,19 +1497,16 @@ export function MeetingOverlay(): JSX.Element | null {
 
     const controlBar = (
       <div
-        className={`ov__bar-wrap ov__nodrag${barHoverReady ? " ov__bar--hover-ready" : ""}`}
-        data-no-drag
+        className={`ov__bar-wrap${barHoverReady ? " ov__bar--hover-ready" : ""}`}
+        onPointerEnter={() => setBarHoverReady(true)}
+        onPointerDown={drag}
       >
-        <button
-          type="button"
+        <DragHandle6Dot
           className="ov__bar-move"
-          aria-label={t.meetingCanvasDrag}
           title={t.meetingCanvasDrag}
           onPointerDown={drag}
-        >
-          <img src={gripIcon} alt="" width={14} height={14} draggable={false} aria-hidden />
-        </button>
-        <div className="ov__bar">
+        />
+        <div className="ov__bar ov__nodrag" data-no-drag>
         <div className="ov__bar-cluster" role="toolbar" aria-label={t.meetingNotes}>
           <div className="ov__bar-slot">
             <button
@@ -1572,6 +1588,20 @@ export function MeetingOverlay(): JSX.Element | null {
                     {modeLabel(m)}
                   </button>
                 ))}
+                {settings.meeting_mode === "one_way" ? (
+                  <div className="ov__langrow ov__langrow--menu">
+                    {langPicker("source", "source_lang", settings.source_lang, LANGS)}
+                    <span className="ov__langarrow">{t.meetingLangArrow}</span>
+                    {langPicker("target", "target_lang", settings.target_lang, ONE_WAY_TARGET_LANGS)}
+                  </div>
+                ) : null}
+                {settings.meeting_mode === "two_way" ? (
+                  <div className="ov__langrow ov__langrow--menu">
+                    {langPicker("my", "my_lang", settings.my_lang, ONE_WAY_TARGET_LANGS)}
+                    <span className="ov__langarrow">{t.meetingLangSwap}</span>
+                    {langPicker("other", "other_lang", settings.other_lang, ONE_WAY_TARGET_LANGS)}
+                  </div>
+                ) : null}
               </div>
             ) : null}
           </div>
