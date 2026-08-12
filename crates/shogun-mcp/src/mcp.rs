@@ -11,11 +11,13 @@
 //! is for the REST/HTTP face, FR-API-03). Levels still apply: an external send routes to the
 //! shared approval queue and returns pending, never running without a UI confirm (FR-API-04).
 
+use std::path::PathBuf;
 use std::sync::Mutex;
 
 use serde_json::{json, Value};
 use shogun_agents::approval::ApprovalQueue;
 
+use crate::approval_store;
 use crate::backend::{MemoryBackend, ReadParams};
 use crate::memory_api::{tool_level, ApiLevel, Tool, ALL_TOOLS};
 use crate::rest;
@@ -28,12 +30,27 @@ pub const PROTOCOL_VERSION: &str = "2024-11-05";
 pub struct McpServer<B: MemoryBackend> {
     backend: B,
     approvals: Mutex<ApprovalQueue>,
+    /// When set, L3 sends persist to `l3_approvals.json` so the desktop Approvals UI can confirm.
+    approvals_path: Option<PathBuf>,
     clock: Box<dyn Fn() -> i64 + Send + Sync>,
 }
 
 impl<B: MemoryBackend> McpServer<B> {
     pub fn new(backend: B, clock: impl Fn() -> i64 + Send + Sync + 'static) -> Self {
-        Self { backend, approvals: Mutex::new(ApprovalQueue::new()), clock: Box::new(clock) }
+        Self {
+            backend,
+            approvals: Mutex::new(ApprovalQueue::new()),
+            approvals_path: None,
+            clock: Box::new(clock),
+        }
+    }
+
+    /// Persist L3 pending approvals to `path` (shared with the desktop app).
+    pub fn with_approvals_path(mut self, path: PathBuf) -> Self {
+        let loaded = approval_store::load_queue(&path);
+        self.approvals = Mutex::new(loaded);
+        self.approvals_path = Some(path);
+        self
     }
 
     /// Handle one JSON-RPC line. Returns the response line, or `None` for a notification (no id).
@@ -116,18 +133,51 @@ impl<B: MemoryBackend> McpServer<B> {
                 }
             }
             ApiLevel::PerAction => {
-                // The arguments ARE the action spec; route through the shared act() + approval queue.
+                // The arguments ARE the action spec; route through act() + shared L3 store.
                 let body = args.to_string();
                 let now = (self.clock)();
-                match self.approvals.lock() {
-                    Ok(mut queue) => rest::act(Some(&body), now, &mut queue).1,
-                    Err(_) => return error(id, -32000, "internal"),
+                // local_search: actually run hybrid search via the same backend as memory.search.
+                if let Ok(v) = serde_json::from_str::<Value>(&body) {
+                    if v.get("kind").and_then(Value::as_str) == Some("local_search") {
+                        let query = v.get("query").and_then(Value::as_str).unwrap_or_default();
+                        let items = self.backend.read(
+                            Tool::MemorySearch,
+                            &ReadParams { query: Some(query.to_string()), ..ReadParams::default() },
+                        );
+                        let rendered = rest::render_reads(Tool::MemorySearch, &items, false);
+                        format!(r#"{{"executed":"local","level":"L1","kind":"local_search","results":{rendered}}}"#)
+                    } else {
+                        self.execute_action(&body, now)
+                    }
+                } else {
+                    self.execute_action(&body, now)
                 }
             }
         };
 
         // MCP tool results are content blocks; we return the tool's JSON as a text block.
         result(id, json!({ "content": [{ "type": "text", "text": text }], "isError": false }))
+    }
+
+    /// Run `actions.execute` against the in-memory queue, then flush to the shared file when set.
+    fn execute_action(&self, body: &str, now: i64) -> String {
+        if let Some(path) = &self.approvals_path {
+            match approval_store::with_queue(path, |queue| rest::act(Some(body), now, queue).1) {
+                Ok(text) => {
+                    // Keep the in-memory mutex mirror in sync for same-process polls/tests.
+                    if let Ok(mut guard) = self.approvals.lock() {
+                        *guard = approval_store::load_queue(path);
+                    }
+                    text
+                }
+                Err(e) => format!(r#"{{"error":"approval_store","message":{}}}"#, json!(e)),
+            }
+        } else {
+            match self.approvals.lock() {
+                Ok(mut queue) => rest::act(Some(body), now, &mut queue).1,
+                Err(_) => r#"{"error":"internal"}"#.to_string(),
+            }
+        }
     }
 }
 
@@ -184,8 +234,23 @@ fn tool_descriptor(tool: Tool) -> Value {
         Tool::MemoryAppendNote => ("Append a user note (L1)", json!({ "text": { "type": "string" } })),
         Tool::StateProposeUpdate => ("Propose a state change (L2)", json!({})),
         Tool::ActionsExecute => (
-            "Run an action; external sends require L3 confirmation. v2: listed for API/UI symmetry — standalone MCP does not share the Notch approval queue yet; prefer the desktop app for L3 sends.",
-            json!({ "kind": { "type": "string" } }),
+            "Execute an action. Local kinds (local_search, open_app, reveal_file, show_notification, copy_to_clipboard) are L1/L2 — local_search runs hybrid search immediately. External sends (send_email, post_message, create_calendar_event, post_comment) are always L3: enqueued to the shared approval queue and return {pending, approval_id}; they never leave the device until the user confirms in SHOGUN Settings → Approvals (dedicated button; Enter alone never confirms). Prefer this over inventing a send path.",
+            json!({
+                "kind": {
+                    "type": "string",
+                    "description": "local_search | open_app | reveal_file | show_notification | copy_to_clipboard | send_email | post_message | create_calendar_event | post_comment"
+                },
+                "query": { "type": "string", "description": "local_search query" },
+                "to": { "type": "string", "description": "send_email recipient" },
+                "subject": { "type": "string" },
+                "body": { "type": "string" },
+                "channel": { "type": "string", "description": "post_message channel" },
+                "title": { "type": "string", "description": "create_calendar_event title" },
+                "target": { "type": "string", "description": "post_comment target" },
+                "bundle_id": { "type": "string" },
+                "path": { "type": "string" },
+                "text": { "type": "string" }
+            }),
         ),
         Tool::VisualRecallStatus => ("Visual recall status (enabled, frame stats, recent OCR)", json!({})),
         Tool::VisualRecallSetEnabled => ("Enable or disable visual recall (L1)", json!({ "enabled": { "type": "boolean" } })),
@@ -313,6 +378,34 @@ mod tests {
         let text = v["result"]["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("\"pending\":true"));
         assert!(text.contains("\"approval_id\":"));
+    }
+
+    #[test]
+    fn tools_call_send_persists_to_shared_store_file() {
+        let mut path = std::env::temp_dir();
+        path.push(format!("mcp-l3-{}.json", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let server = McpServer::new(Fake, || 1000).with_approvals_path(path.clone());
+        let v = call(
+            &server,
+            r#"{"jsonrpc":"2.0","id":50,"method":"tools/call","params":{"name":"actions.execute","arguments":{"kind":"send_email","to":"a@b.com","subject":"s","body":"b"}}}"#,
+        );
+        let text = v["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("\"pending\":true"));
+        let loaded = crate::approval_store::load_queue(&path);
+        assert_eq!(loaded.pending_len(), 1);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn tools_call_local_search_runs_backend() {
+        let v = call(
+            &server(),
+            r#"{"jsonrpc":"2.0","id":51,"method":"tools/call","params":{"name":"actions.execute","arguments":{"kind":"local_search","query":"x"}}}"#,
+        );
+        let text = v["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("\"executed\":\"local\""));
+        assert!(text.contains("\"kind\":\"local_search\""));
     }
 
     #[test]

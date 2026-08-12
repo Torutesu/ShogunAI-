@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SHOGUN Memory MCP — client setup</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #f6f5f2;
+      --fg: #1a1a1a;
+      --muted: #5c5c5c;
+      --border: #d4d0c8;
+      --code-bg: #ebe8e1;
+      --callout: #e8f0e6;
+      --callout-border: #6b8f71;
+      --warn: #f5ebe0;
+      --warn-border: #b8895a;
+      --btn: #2a2a2a;
+      --btn-fg: #f6f5f2;
+      --link: #2d5a3d;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #121412;
+        --fg: #e8e6e1;
+        --muted: #9a9a92;
+        --border: #2e322e;
+        --code-bg: #1c1f1c;
+        --callout: #1a241c;
+        --callout-border: #4a7a52;
+        --warn: #2a2218;
+        --warn-border: #a07848;
+        --btn: #e8e6e1;
+        --btn-fg: #121412;
+        --link: #8fc99a;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif;
+      background: var(--bg);
+      color: var(--fg);
+    }
+    main {
+      max-width: 44rem;
+      margin: 0 auto;
+      padding: 2rem 1.25rem 4rem;
+    }
+    h1 {
+      font-size: 1.5rem;
+      font-weight: 650;
+      letter-spacing: -0.02em;
+      margin: 0 0 0.35rem;
+    }
+    h2 {
+      font-size: 1.1rem;
+      font-weight: 650;
+      margin: 2.25rem 0 0.6rem;
+      padding-top: 0.5rem;
+      border-top: 1px solid var(--border);
+    }
+    h2:first-of-type { border-top: 0; padding-top: 0; }
+    h3 {
+      font-size: 0.95rem;
+      font-weight: 600;
+      margin: 1.25rem 0 0.4rem;
+    }
+    p, li { color: var(--fg); }
+    .lede, .muted, .note { color: var(--muted); }
+    .lede { margin: 0 0 1.25rem; }
+    a { color: var(--link); }
+    ul { padding-left: 1.2rem; margin: 0.4rem 0 0.8rem; }
+    li { margin: 0.25rem 0; }
+    code, kbd {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.88em;
+    }
+    .callout, .warn {
+      border: 1px solid var(--callout-border);
+      background: var(--callout);
+      border-radius: 6px;
+      padding: 0.85rem 1rem;
+      margin: 1rem 0;
+    }
+    .warn {
+      border-color: var(--warn-border);
+      background: var(--warn);
+    }
+    .callout strong, .warn strong { font-weight: 650; }
+    .snippet {
+      position: relative;
+      margin: 0.5rem 0 1rem;
+    }
+    .snippet pre {
+      margin: 0;
+      padding: 0.85rem 1rem;
+      padding-right: 4.5rem;
+      overflow-x: auto;
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font: 12.5px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      white-space: pre;
+    }
+    .snippet button {
+      position: absolute;
+      top: 0.45rem;
+      right: 0.45rem;
+      border: 0;
+      border-radius: 4px;
+      padding: 0.3rem 0.55rem;
+      font: 12px/1 ui-sans-serif, system-ui, sans-serif;
+      background: var(--btn);
+      color: var(--btn-fg);
+      cursor: pointer;
+    }
+    .snippet button:hover { opacity: 0.9; }
+    .snippet button.copied { opacity: 0.7; }
+    nav.toc {
+      margin: 1rem 0 0;
+      padding: 0.75rem 1rem;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+    }
+    nav.toc ol { margin: 0.35rem 0 0; padding-left: 1.25rem; }
+    nav.toc li { margin: 0.15rem 0; }
+    footer {
+      margin-top: 2.5rem;
+      padding-top: 1rem;
+      border-top: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>SHOGUN Memory MCP setup</h1>
+    <p class="lede">
+      Wire agent clients to local Memory API over <strong>stdio</strong>
+      (<code>shogun-mcp</code>). One job: copy commands and config.
+      Source of truth:
+      <a href="memory-api-mcp.md"><code>docs/memory-api-mcp.md</code></a>
+      and <a href="examples/"><code>docs/examples/</code></a>.
+    </p>
+
+    <nav class="toc" aria-label="Contents">
+      <strong>Contents</strong>
+      <ol>
+        <li><a href="#prereqs">Prerequisites</a></li>
+        <li><a href="#auth">Auth</a></li>
+        <li><a href="#cursor">Cursor</a></li>
+        <li><a href="#claude-desktop">Claude Desktop</a></li>
+        <li><a href="#claude-code">Claude Code</a></li>
+        <li><a href="#smoke">Smoke check</a></li>
+        <li><a href="#gaps">Gaps / not yet</a></li>
+      </ol>
+    </nav>
+
+    <div class="warn" id="stdio-note">
+      <strong>stdio only.</strong> Do not expose Memory MCP over HTTP.
+      Streamable HTTP MCP is parked; stick to a local client spawning
+      <code>shogun-mcp</code> on stdin/stdout.
+    </div>
+
+    <h2 id="prereqs">1. Prerequisites</h2>
+    <ol>
+      <li>
+        Build the binary (from repo root):
+        <div class="snippet">
+          <button type="button" data-copy>Copy</button>
+          <pre><code>cargo build -p shogun-core --features db --bin shogun-mcp --release
+# → target/release/shogun-mcp</code></pre>
+        </div>
+      </li>
+      <li>
+        In the SHOGUN desktop app: <strong>Settings → Memory API → On</strong>
+        (writes <code>memory_api.json</code>; fail-closed if missing or off).
+      </li>
+      <li>
+        <strong>Settings → Memory API → Issue</strong> a token. Copy once into
+        the client env as <code>SHOGUN_API_TOKEN</code>.
+      </li>
+      <li>
+        Point the client at the live DB (same folder as the running app).
+      </li>
+    </ol>
+
+    <h3>DB paths (macOS)</h3>
+    <p class="muted">Replace <code>YOU</code> with your home username. Use the path that matches the app you actually run.</p>
+    <div class="snippet">
+      <button type="button" data-copy>Copy</button>
+      <pre><code># Product / shipping identifier
+~/Library/Application Support/com.selectkk.shogun/memory.db
+~/Library/Application Support/com.selectkk.shogun/memory_api.json
+
+# Local spike / current desktop identifier (dev.shogun.spike)
+~/Library/Application Support/dev.shogun.spike/memory.db
+~/Library/Application Support/dev.shogun.spike/memory_api.json</code></pre>
+    </div>
+    <p class="note">
+      Open Settings → Memory API once so <code>memory_api.json</code> exists next to the live DB.
+      Standalone bins default DB to <code>./shogun.db</code> unless <code>SHOGUN_DB_PATH</code> is set.
+    </p>
+
+    <h2 id="auth">2. Auth (short)</h2>
+    <div class="callout">
+      <ol style="margin:0; padding-left:1.2rem;">
+        <li><strong>Enable</strong> Memory API in Settings → <code>memory_api.json</code>.</li>
+        <li><strong>Issue token</strong> in Settings → paste as <code>SHOGUN_API_TOKEN</code> in the client. Secrets live in Keychain (<code>memory-api-tokens</code>), not files.</li>
+        <li>If <strong>any</strong> tokens exist, stdio MCP <strong>requires</strong> a matching token. If none yet, process-trust is allowed when enabled (dev DX).</li>
+        <li>
+          Encrypted DB: signed app can read Keychain account <code>memory-db-key</code>
+          (service <code>com.selectkk.shogun</code>).
+          <strong>Unsigned / cargo-built <code>shogun-mcp</code></strong> may need
+          <code>SHOGUN_DB_KEY</code> in the client env (hex from that Keychain item).
+        </li>
+      </ol>
+    </div>
+    <p class="muted">Optional: pull the DB key for unsigned debug (macOS Keychain):</p>
+    <div class="snippet">
+      <button type="button" data-copy>Copy</button>
+      <pre><code>security find-generic-password -s com.selectkk.shogun -a memory-db-key -w</code></pre>
+    </div>
+    <p class="note">Paste that hex into MCP env as <code>SHOGUN_DB_KEY</code> only when the unsigned binary cannot unlock Keychain itself.</p>
+
+    <h2 id="cursor">3. Cursor</h2>
+    <p>
+      User or project MCP config. Example file:
+      <a href="examples/cursor-mcp.shogun.json"><code>docs/examples/cursor-mcp.shogun.json</code></a>.
+      Typical location: Cursor Settings → MCP, or project <code>.cursor/mcp.json</code> / user <code>~/.cursor/mcp.json</code> (exact path depends on Cursor version).
+    </p>
+    <div class="snippet">
+      <button type="button" data-copy>Copy</button>
+      <pre><code>{
+  "mcpServers": {
+    "shogun-memory": {
+      "command": "/ABS/PATH/TO/ShogunAI-/target/release/shogun-mcp",
+      "args": [],
+      "env": {
+        "SHOGUN_DB_PATH": "/Users/YOU/Library/Application Support/com.selectkk.shogun/memory.db",
+        "SHOGUN_MEMORY_API_SETTINGS": "/Users/YOU/Library/Application Support/com.selectkk.shogun/memory_api.json",
+        "SHOGUN_API_TOKEN": "shogun_PASTE_ISSUED_TOKEN"
+      }
+    }
+  }
+}</code></pre>
+    </div>
+    <p class="note">
+      Spike DB: swap <code>com.selectkk.shogun</code> → <code>dev.shogun.spike</code>.
+      Unsigned binary: add <code>"SHOGUN_DB_KEY": "HEX_FROM_KEYCHAIN"</code> under <code>env</code>.
+    </p>
+
+    <h2 id="claude-desktop">4. Claude Desktop</h2>
+    <p>
+      Config file (macOS):
+      <code>~/Library/Application Support/Claude/claude_desktop_config.json</code>.
+      Example:
+      <a href="examples/claude-desktop.shogun.json"><code>docs/examples/claude-desktop.shogun.json</code></a>.
+    </p>
+    <div class="snippet">
+      <button type="button" data-copy>Copy</button>
+      <pre><code>{
+  "mcpServers": {
+    "shogun-memory": {
+      "command": "/ABS/PATH/TO/ShogunAI-/target/release/shogun-mcp",
+      "args": [],
+      "env": {
+        "SHOGUN_DB_PATH": "/Users/YOU/Library/Application Support/com.selectkk.shogun/memory.db",
+        "SHOGUN_MEMORY_API_SETTINGS": "/Users/YOU/Library/Application Support/com.selectkk.shogun/memory_api.json",
+        "SHOGUN_API_TOKEN": "shogun_PASTE_ISSUED_TOKEN"
+      }
+    }
+  }
+}</code></pre>
+    </div>
+    <p class="note">Restart Claude Desktop after editing. Same spike / <code>SHOGUN_DB_KEY</code> notes as Cursor.</p>
+
+    <h2 id="claude-code">5. Claude Code</h2>
+    <p class="muted">
+      No checked-in example under <code>docs/examples/</code> yet. Best-effort from the same env contract as Cursor / Desktop
+      (<code>docs/memory-api-mcp.md</code>). Confirm flag names with <code>claude mcp --help</code> on your CLI version.
+    </p>
+    <h3>CLI (best-effort)</h3>
+    <div class="snippet">
+      <button type="button" data-copy>Copy</button>
+      <pre><code>claude mcp add shogun-memory \
+  --env SHOGUN_DB_PATH="/Users/YOU/Library/Application Support/com.selectkk.shogun/memory.db" \
+  --env SHOGUN_MEMORY_API_SETTINGS="/Users/YOU/Library/Application Support/com.selectkk.shogun/memory_api.json" \
+  --env SHOGUN_API_TOKEN="shogun_PASTE_ISSUED_TOKEN" \
+  -- /ABS/PATH/TO/ShogunAI-/target/release/shogun-mcp</code></pre>
+    </div>
+    <h3>JSON shape (same as other clients)</h3>
+    <p class="muted">If your Claude Code setup uses an <code>mcpServers</code> JSON file, reuse the Cursor / Desktop block above.</p>
+    <div class="snippet">
+      <button type="button" data-copy>Copy</button>
+      <pre><code>{
+  "mcpServers": {
+    "shogun-memory": {
+      "command": "/ABS/PATH/TO/ShogunAI-/target/release/shogun-mcp",
+      "args": [],
+      "env": {
+        "SHOGUN_DB_PATH": "/Users/YOU/Library/Application Support/com.selectkk.shogun/memory.db",
+        "SHOGUN_MEMORY_API_SETTINGS": "/Users/YOU/Library/Application Support/com.selectkk.shogun/memory_api.json",
+        "SHOGUN_API_TOKEN": "shogun_PASTE_ISSUED_TOKEN"
+      }
+    }
+  }
+}</code></pre>
+    </div>
+
+    <h2 id="other">6. Other agents</h2>
+    <p>
+      Checked under <code>docs/examples/</code>:
+      <strong>Cursor</strong> and <strong>Claude Desktop</strong> only.
+      No Windsurf / VS Code Copilot / Continue / Zed recipes in-repo yet.
+      Any stdio MCP client that can set env vars can use the same
+      <code>command</code> + three env keys (plus optional <code>SHOGUN_DB_KEY</code>).
+    </p>
+
+    <h2 id="smoke">7. Smoke check</h2>
+    <ol>
+      <li>Enable Memory API + issue token.</li>
+      <li>Point client at <code>shogun-mcp</code> with env vars.</li>
+      <li>In agent chat: <code>profile.whoami</code> → <code>memory.get_context</code> → <code>memory.append_note</code>.</li>
+      <li>Disable Memory API → restart MCP → process should refuse (stderr: disabled).</li>
+    </ol>
+
+    <h2 id="gaps">Gaps / not yet</h2>
+    <ul>
+      <li><strong>Claude Code</strong> — no official example JSON in <code>docs/examples/</code>; CLI snippet is best-effort.</li>
+      <li><strong>HTTP / network MCP</strong> — not supported for Memory; do not open a port for agents.</li>
+      <li><strong>Live AX / Notch cache</strong> — standalone MCP sees DB-backed context only, not the live screen cache.</li>
+      <li><strong><code>actions.execute</code></strong> — local kinds run (or authorize) immediately; external sends are <strong>L3</strong>: enqueued to the shared approval file (<code>l3_approvals.json</code>) and must be confirmed in Settings → Approvals before anything leaves the device.</li>
+    </ul>
+
+    <footer>
+      SHOGUN Memory MCP · static setup page · open this file in a browser
+      (<code>docs/mcp-setup.html</code>). Prefer editing
+      <a href="memory-api-mcp.md">memory-api-mcp.md</a> if the protocol changes.
+    </footer>
+  </main>
+  <script>
+    document.querySelectorAll("[data-copy]").forEach(function (btn) {
+      btn.addEventListener("click", async function () {
+        var pre = btn.parentElement.querySelector("pre");
+        var text = pre ? pre.innerText : "";
+        try {
+          await navigator.clipboard.writeText(text);
+          btn.textContent = "Copied";
+          btn.classList.add("copied");
+          setTimeout(function () {
+            btn.textContent = "Copy";
+            btn.classList.remove("copied");
+          }, 1400);
+        } catch (e) {
+          btn.textContent = "Select+copy";
+        }
+      });
+    });
+  </script>
+</body>
+</html>

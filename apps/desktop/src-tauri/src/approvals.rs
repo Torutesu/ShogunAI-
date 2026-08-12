@@ -101,12 +101,37 @@ pub mod mac {
         sender.send_capability().is_some()
     }
 
-    /// The shared L3 approval queue (the same one an agent enqueues into and the UI drains).
-    pub struct ApprovalQueueState(pub Mutex<ApprovalQueue>);
+    /// The shared L3 approval queue (the same one an agent / MCP enqueues into and the UI drains).
+    /// When `path` is set, pending rows persist to `l3_approvals.json` so standalone `shogun-mcp`
+    /// and this process share one confirm UX (FR-API-04 / invariant 6).
+    pub struct ApprovalQueueState {
+        pub queue: Mutex<ApprovalQueue>,
+        pub path: Option<std::path::PathBuf>,
+    }
 
     impl Default for ApprovalQueueState {
         fn default() -> Self {
-            Self(Mutex::new(ApprovalQueue::new()))
+            Self { queue: Mutex::new(ApprovalQueue::new()), path: None }
+        }
+    }
+
+    impl ApprovalQueueState {
+        pub fn with_store_path(path: std::path::PathBuf) -> Self {
+            let queue = shogun_mcp::approval_store::load_queue(&path);
+            Self { queue: Mutex::new(queue), path: Some(path) }
+        }
+
+        /// Reload from the shared file (MCP may have enqueued), run `f`, persist.
+        fn with_synced_queue<R>(&self, f: impl FnOnce(&mut ApprovalQueue) -> R) -> Result<R, String> {
+            let mut guard = self.queue.lock().map_err(|_| "approval queue poisoned".to_string())?;
+            if let Some(path) = &self.path {
+                *guard = shogun_mcp::approval_store::load_queue(path);
+            }
+            let out = f(&mut guard);
+            if let Some(path) = &self.path {
+                shogun_mcp::approval_store::save_queue(path, &guard)?;
+            }
+            Ok(out)
         }
     }
 
@@ -157,8 +182,7 @@ pub mod mac {
     ) -> Result<u64, String> {
         let proposal = proposed(&kind, &destination, &subject, &body)?;
         let now = db.now_ms().max(0) as u64;
-        let mut q = state.0.lock().map_err(|_| "approval queue poisoned".to_string())?;
-        Ok(propose(&mut q, &proposal, Origin::Human, now).0)
+        state.with_synced_queue(|q| propose(q, &proposal, Origin::Human, now).0)
     }
 
     /// Reply Drafter (FR-AG-10) and the other draft-then-send agents: draft the body on the BYOK
@@ -188,8 +212,7 @@ pub mod mac {
 
         let proposal = proposed(&kind, &destination, &subject, &body)?;
         let now = db.now_ms().max(0) as u64;
-        let mut q = state.0.lock().map_err(|_| "approval queue poisoned".to_string())?;
-        Ok(propose(&mut q, &proposal, Origin::Human, now).0)
+        state.with_synced_queue(|q| propose(q, &proposal, Origin::Human, now).0)
     }
 
     /// List pending L3 confirmations (expiring any past the 10-minute window first).
@@ -199,32 +222,30 @@ pub mod mac {
         db: tauri::State<'_, Db>,
     ) -> Result<Vec<ApprovalView>, String> {
         let now = db.now_ms().max(0) as u64;
-        let mut q = state.0.lock().map_err(|_| "approval queue poisoned".to_string())?;
-        q.expire_due(now);
-        let views = q
-            .pending_ids()
-            .into_iter()
-            .filter_map(|id| q.preview(id).map(|p| (id, p)))
-            .map(|(id, p)| ApprovalView {
-                id: id.0,
-                op_type: p.op_type,
-                destination: p.destination.clone(),
-                full_body: p.full_body.clone(),
-                route: route_str(p.route),
-            })
-            .collect();
-        Ok(views)
+        state.with_synced_queue(|q| {
+            q.expire_due(now);
+            q.pending_ids()
+                .into_iter()
+                .filter_map(|id| q.preview(id).map(|p| (id, p)))
+                .map(|(id, p)| ApprovalView {
+                    id: id.0,
+                    op_type: p.op_type,
+                    destination: p.destination.clone(),
+                    full_body: p.full_body.clone(),
+                    route: route_str(p.route),
+                })
+                .collect()
+        })
     }
 
     /// Reject a pending send.
     #[tauri::command]
     pub fn reject_send(id: u64, state: tauri::State<'_, ApprovalQueueState>) -> Result<String, String> {
-        let mut q = state.0.lock().map_err(|_| "approval queue poisoned".to_string())?;
         use shogun_agents::approval::RejectCause;
-        match q.reject(ApprovalId(id), RejectCause::UserRejected) {
-            Decision::Rejected(_) => Ok("rejected".into()),
-            other => Ok(format!("{other:?}")),
-        }
+        state.with_synced_queue(|q| match q.reject(ApprovalId(id), RejectCause::UserRejected) {
+            Decision::Rejected(_) => "rejected".into(),
+            other => format!("{other:?}"),
+        })
     }
 
     /// Confirm a pending send via the dedicated button (FR-AG-03) and execute it. Enter-key intent
@@ -248,8 +269,7 @@ pub mod mac {
         // Confirm + dequeue under the queue lock, then drop it before executing (execution locks the
         // connector runtime, a different lock — keep the two lock scopes disjoint).
         let confirmed = {
-            let mut q = state.0.lock().map_err(|_| "approval queue poisoned".to_string())?;
-            match q.confirm(ApprovalId(id), ConfirmIntent::DedicatedButton, now) {
+            match state.with_synced_queue(|q| q.confirm(ApprovalId(id), ConfirmIntent::DedicatedButton, now))? {
                 Decision::Confirmed(cs) => cs,
                 Decision::RequiresDedicatedButton => return Ok("requires_button".into()),
                 Decision::StillPending => return Ok("pending".into()),

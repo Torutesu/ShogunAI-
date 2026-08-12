@@ -2041,7 +2041,16 @@ fn install_connectors(app: &tauri::AppHandle, db: Option<shogun_core::daemon::Db
                 eprintln!("[spike] connector runtime started (read-sync poller skipped — no DB)");
             }
             app.manage(connectors::mac::ConnectorState(shared));
-            app.manage(approvals::mac::ApprovalQueueState::default());
+            let approvals_path = app
+                .path()
+                .app_data_dir()
+                .ok()
+                .map(|d| memory_data_dir(d).join(shogun_mcp::approval_store::STORE_FILE));
+            let approvals = match approvals_path {
+                Some(p) => approvals::mac::ApprovalQueueState::with_store_path(p),
+                None => approvals::mac::ApprovalQueueState::default(),
+            };
+            app.manage(approvals);
         }
         Err(e) => eprintln!("[spike] connectors not started: {e}"),
     }

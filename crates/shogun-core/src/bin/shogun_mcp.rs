@@ -5,6 +5,7 @@
 //! Config via env:
 //! - `SHOGUN_DB_PATH` (default `./shogun.db`)
 //! - `SHOGUN_MEMORY_API_SETTINGS` (optional override for `memory_api.json`)
+//! - `SHOGUN_L3_APPROVALS` (optional override for `l3_approvals.json` — shared with desktop Approvals)
 //! - `SHOGUN_API_TOKEN` — **required when any Memory API tokens have been issued** (Settings →
 //!   Issue). If no tokens exist yet, process-trust allows the call when Memory API is enabled
 //!   (dev DX). Fail closed when Memory API is disabled.
@@ -103,7 +104,8 @@ fn main() -> std::io::Result<()> {
         backend = backend.with_visual_recall_settings_path(path);
     }
     backend = backend.with_memory_api_settings_path(memory_api_settings::resolve_settings_path(&db_path));
-    let server = McpServer::new(backend, now_ms);
+    let approvals_path = shogun_mcp::approval_store::resolve_store_path(&db_path);
+    let server = McpServer::new(backend, now_ms).with_approvals_path(approvals_path);
 
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();

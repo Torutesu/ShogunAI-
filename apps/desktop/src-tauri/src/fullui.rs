@@ -549,14 +549,20 @@ pub mod mac {
                 // hold it only long enough to copy the raw previews out — the formatting below
                 // (format!/matches!) then runs with the lock already released.
                 let raw: Vec<_> = {
-                    let q = a.0.lock().map_err(|_| "approval queue lock poisoned".to_string())?;
-                    // Clone the preview OUT under the lock (Preview: Clone) so `raw` owns its data —
-                    // `preview()` returns a reference into the queue, which cannot outlive the guard
-                    // dropped at the end of this block.
-                    q.pending_ids()
-                        .into_iter()
-                        .filter_map(|id| q.preview(id).map(|p| (id, p.clone())))
-                        .collect()
+                    // Prefer the shared file so MCP-enqueued L3 sends show in the Notch too.
+                    if let Some(path) = &a.path {
+                        let q = shogun_mcp::approval_store::load_queue(path);
+                        q.pending_ids()
+                            .into_iter()
+                            .filter_map(|id| q.preview(id).map(|p| (id, p.clone())))
+                            .collect()
+                    } else {
+                        let q = a.queue.lock().map_err(|_| "approval queue lock poisoned".to_string())?;
+                        q.pending_ids()
+                            .into_iter()
+                            .filter_map(|id| q.preview(id).map(|p| (id, p.clone())))
+                            .collect()
+                    }
                 };
                 raw.into_iter()
                     .map(|(id, p)| PendingApproval {

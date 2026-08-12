@@ -19,6 +19,7 @@ On macOS the desktop app stores memory under the app data directory, typically:
 ~/Library/Application Support/com.selectkk.shogun/
   memory.db
   memory_api.json      # enable + profile (display_name, role, prefs)
+  l3_approvals.json    # shared L3 queue (MCP actions.execute ↔ Settings → Approvals)
   visual_recall.json
 ```
 
@@ -28,6 +29,8 @@ Standalone bins use `SHOGUN_DB_PATH` (default `./shogun.db`). Settings resolve a
 
 1. `SHOGUN_MEMORY_API_SETTINGS` if set, else  
 2. `<parent of SHOGUN_DB_PATH>/memory_api.json`
+
+L3 approvals resolve as `SHOGUN_L3_APPROVALS` if set, else `<parent of SHOGUN_DB_PATH>/l3_approvals.json`.
 
 ## Build the MCP binary
 
@@ -86,7 +89,7 @@ See [`docs/examples/claude-desktop.shogun.json`](examples/claude-desktop.shogun.
 | `memory.search` | Specific keyword / question over events and notes. |
 | `memory.append_note` | L1 — append a user note. |
 | `profile.set` | L1 — update display_name / role / prefs in `memory_api.json`. |
-| `actions.execute` | **v2.** Listed for UI/API symmetry. Standalone MCP does **not** share the Notch L3 approval queue yet — use the desktop app for external sends. |
+| `actions.execute` | Run a local action or enqueue an L3 send. Sends return `{pending, approval_id}` and appear in **Settings → Approvals** (shared `l3_approvals.json`). Confirm with the dedicated button — Enter alone never sends. `local_search` runs hybrid search immediately. |
 
 ## Smoke check
 

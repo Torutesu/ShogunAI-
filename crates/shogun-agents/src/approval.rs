@@ -139,6 +139,16 @@ struct PendingApproval {
     created_ms: u64,
 }
 
+/// Serializable snapshot of one pending approval (for the cross-process shared store).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingRecord {
+    pub id: ApprovalId,
+    pub action: SendAction,
+    pub preview: Preview,
+    pub origin: Origin,
+    pub created_ms: u64,
+}
+
 /// The L3 approval queue. Holds pending sends until confirmed, rejected, or timed out.
 #[derive(Default)]
 pub struct ApprovalQueue {
@@ -149,6 +159,46 @@ pub struct ApprovalQueue {
 impl ApprovalQueue {
     pub fn new() -> Self {
         Self { pending: Vec::new(), next_id: 1 }
+    }
+
+    /// Empty queue that will allocate ids starting at `next_id` (must be ≥ 1).
+    pub fn with_next_id(next_id: u64) -> Self {
+        Self { pending: Vec::new(), next_id: next_id.max(1) }
+    }
+
+    /// Snapshot pending rows + the next id allocator (for file persistence / IPC).
+    pub fn export(&self) -> (u64, Vec<PendingRecord>) {
+        let records = self
+            .pending
+            .iter()
+            .map(|p| PendingRecord {
+                id: p.id,
+                action: p.action.clone(),
+                preview: p.preview.clone(),
+                origin: p.origin,
+                created_ms: p.created_ms,
+            })
+            .collect();
+        (self.next_id, records)
+    }
+
+    /// Rebuild a queue from a previously [`Self::export`]ed snapshot.
+    pub fn import(next_id: u64, records: Vec<PendingRecord>) -> Self {
+        let mut q = Self::with_next_id(next_id);
+        for r in records {
+            q.pending.push(PendingApproval {
+                id: r.id,
+                action: r.action,
+                preview: r.preview,
+                origin: r.origin,
+                created_ms: r.created_ms,
+            });
+            // Keep next_id strictly above any imported id.
+            if r.id.0 >= q.next_id {
+                q.next_id = r.id.0.wrapping_add(1).max(1);
+            }
+        }
+        q
     }
 
     fn alloc_id(&mut self) -> ApprovalId {
@@ -354,6 +404,17 @@ mod tests {
         let p = q.preview(id).unwrap();
         assert_eq!(p.destination, "alice@example.com");
         assert_eq!(p.route, Route::ViaComposio);
+    }
+
+    #[test]
+    fn export_import_round_trips_pending() {
+        let mut q = ApprovalQueue::new();
+        let id = q.request(email(), preview(), Origin::AiApi, 9);
+        let (next, records) = q.export();
+        let restored = ApprovalQueue::import(next, records);
+        assert_eq!(restored.pending_len(), 1);
+        assert_eq!(restored.origin(id), Some(Origin::AiApi));
+        assert_eq!(restored.preview(id).map(|p| p.destination.as_str()), Some("alice@example.com"));
     }
 
     // Structural note: `request` takes a `SendAction`, so only L3 sends can enter the approval
