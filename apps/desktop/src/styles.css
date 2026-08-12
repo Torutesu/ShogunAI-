@@ -2977,7 +2977,7 @@ kbd {
   background: #000000;
   border-radius: 999px;
   border: none;
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+  box-shadow: none;
   overflow: visible;
   -webkit-app-region: no-drag;
   app-region: no-drag;
