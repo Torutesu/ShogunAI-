@@ -285,6 +285,10 @@ function defaultPanelSize(surface: MeetingSurface): { w: number; h: number } {
   return { w: 320, h: 100 };
 }
 
+/** Host pill — match Rust `PILL_SIZE` / `PILL_WITH_MENU_SIZE`. */
+const HOST_PILL_SIZE = { w: 320, h: 100 } as const;
+const HOST_PILL_WITH_MENU_SIZE = { w: 320, h: 220 } as const;
+
 function translationPatchKey(ts: number, speaker: string | null | undefined): string {
   return `${ts}:${speaker ?? ""}`;
 }
@@ -760,6 +764,14 @@ export function MeetingOverlay(): JSX.Element | null {
     setModeOpen(false);
     setLangOpen(null);
   }, [ccOn]);
+
+  // Grow host window while the bar mode menu is open (menu sits above the pill).
+  useEffect(() => {
+    if (!isHost || view?.state !== "recording") return;
+    const menu = modeOpen && !ccOn;
+    const size = menu ? HOST_PILL_WITH_MENU_SIZE : HOST_PILL_SIZE;
+    call("meeting_set_overlay_size", { width: size.w, height: size.h, label: "meeting" });
+  }, [isHost, view?.state, modeOpen, ccOn]);
 
   useEffect(() => {
     if (view?.state !== "recording") {

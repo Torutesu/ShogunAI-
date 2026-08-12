@@ -727,6 +727,11 @@ use shogun_core::meeting::gate::OfferGate;
     /// In-meeting black control capsule only (content panels are separate windows).
     /// Height includes top inset for bar-slot tooltips (they sit above the 52px bar).
     const PILL_SIZE: (f64, f64) = (320.0, 100.0);
+    /// Host pill enlarged so `.ov__modemenu--bar` fits above the capsule.
+    /// Rough: tip pad 36 + menu (~3×36 + pad) + gap 8 + pill 52 + bottom pad 8 ≈ 220.
+    const PILL_WITH_MENU_SIZE: (f64, f64) = (320.0, 220.0);
+    /// Host bar mode-menu open — `recording_overlay_size` must grow or sync fights the FE.
+    static HOST_MENU_OPEN: AtomicBool = AtomicBool::new(false);
     /// Live captions window default (own NSWindow — not stacked in the host).
     const LIVE_SIZE: (f64, f64) = (520.0, 300.0);
     /// AI Canvas window default.
@@ -986,7 +991,29 @@ use shogun_core::meeting::gate::OfferGate;
 
     /// Host window size only — content panels are separate windows.
     fn recording_overlay_size() -> (f64, f64) {
-        PILL_SIZE
+        if HOST_MENU_OPEN.load(Ordering::SeqCst) {
+            PILL_WITH_MENU_SIZE
+        } else {
+            PILL_SIZE
+        }
+    }
+
+    /// Grow/shrink the host in place, keeping the bottom edge fixed (menu opens upward).
+    fn resize_host_keeping_bottom(win: &tauri::WebviewWindow, size: (f64, f64)) {
+        let prev_pos = win.outer_position().ok();
+        let prev_size = win.outer_size().ok();
+        let scale = overlay_monitor(win)
+            .map(|m| m.scale_factor())
+            .unwrap_or(1.0);
+        let _ = win.set_size(tauri::LogicalSize::new(size.0, size.1));
+        if let (Some(pos), Some(prev)) = (prev_pos, prev_size) {
+            let prev_h = (prev.height as f64) / scale;
+            let dy = ((size.1 - prev_h) * scale).round() as i32;
+            if dy != 0 {
+                let _ = win.set_position(tauri::PhysicalPosition::new(pos.x, pos.y - dy));
+            }
+        }
+        let _ = win.set_size(tauri::LogicalSize::new(size.0, size.1));
     }
 
     fn panel_default_size(label: &str) -> (f64, f64) {
@@ -1387,6 +1414,7 @@ use shogun_core::meeting::gate::OfferGate;
         let Some(win) = app.get_webview_window(WINDOW_LABEL) else { return };
         if !visible {
             OVERLAY_WANTS_INTERACTIVE.store(false, Ordering::SeqCst);
+            HOST_MENU_OPEN.store(false, Ordering::SeqCst);
             set_overlay_ignores_mouse(&win, true);
             let _ = win.hide();
             hide_content_panels(app);
@@ -1396,18 +1424,31 @@ use shogun_core::meeting::gate::OfferGate;
             }
             return;
         }
+        if state != State::Recording {
+            HOST_MENU_OPEN.store(false, Ordering::SeqCst);
+        }
         let park_mode = park_mode_for_state(state);
         let park_mode_changed = LAST_PARK_MODE
             .lock()
             .ok()
             .and_then(|m| m.as_ref().map(|prev| *prev != park_mode))
             .unwrap_or(true);
-        let _ = win.set_size(tauri::LogicalSize::new(size.0, size.1));
-        if !PARKED.load(Ordering::SeqCst) || park_mode_changed || size_changed {
-            park_overlay(&win, park_mode, size);
-            PARKED.store(true, Ordering::SeqCst);
-            if let Ok(mut last_mode) = LAST_PARK_MODE.lock() {
-                *last_mode = Some(park_mode);
+        // Menu expand/collapse: keep bottom edge (and user drag x). Full re-park would snap
+        // a dragged pill back to bottom-center every time the mode menu opens.
+        if state == State::Recording
+            && size_changed
+            && PARKED.load(Ordering::SeqCst)
+            && !park_mode_changed
+        {
+            resize_host_keeping_bottom(&win, size);
+        } else {
+            let _ = win.set_size(tauri::LogicalSize::new(size.0, size.1));
+            if !PARKED.load(Ordering::SeqCst) || park_mode_changed || size_changed {
+                park_overlay(&win, park_mode, size);
+                PARKED.store(true, Ordering::SeqCst);
+                if let Ok(mut last_mode) = LAST_PARK_MODE.lock() {
+                    *last_mode = Some(park_mode);
+                }
             }
         }
         // Whole window captures clicks while the host surface is visible.
@@ -1959,10 +2000,24 @@ use shogun_core::meeting::gate::OfferGate;
         sync_content_panels_for_recording(&app);
     }
 
-    /// Live corner-resize of one content panel window (keeps top-left fixed).
+    /// Live corner-resize of one content panel window (keeps top-left fixed),
+    /// or host pill expand/collapse for the bar mode menu (keeps bottom edge fixed).
     #[tauri::command]
     pub fn meeting_set_overlay_size(app: tauri::AppHandle, width: f64, height: f64, label: Option<String>) {
         let label_owned = label.unwrap_or_else(|| WIN_CC.to_string());
+        if label_owned == WINDOW_LABEL {
+            // Host: FE passes PILL_SIZE / PILL_WITH_MENU_SIZE — not panel clamp mins.
+            let open = height + 0.5 >= PILL_WITH_MENU_SIZE.1;
+            HOST_MENU_OPEN.store(open, Ordering::SeqCst);
+            let size = recording_overlay_size();
+            let _ = width; // host width fixed to pill constants
+            let handle = app.clone();
+            let _ = app.run_on_main_thread(move || {
+                let Some(win) = handle.get_webview_window(WINDOW_LABEL) else { return };
+                resize_host_keeping_bottom(&win, size);
+            });
+            return;
+        }
         let key: &'static str = match label_owned.as_str() {
             WIN_CC => WIN_CC,
             WIN_CANVAS => WIN_CANVAS,
