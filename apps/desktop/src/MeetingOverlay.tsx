@@ -403,6 +403,14 @@ export function MeetingOverlay(): JSX.Element | null {
   const surface = meetingSurfaceFromLabel();
   const winLabel = windowLabelForSurface(surface);
   const isHost = surface === "host";
+  /**
+   * Authoritative open flags from the core, mirrored into every window. Panel windows are built
+   * hidden at setup and stay alive for the whole session, so a panel webview cannot tell whether
+   * it is on screen from its own mount — only these flags say so.
+   */
+  const [panelsOpen, setPanelsOpen] = useState({ panel: false, canvas: false, chat: false });
+  /** Open-flag commands the host has issued but not yet seen echoed back. */
+  const panelIntentsRef = useRef<{ panel: boolean; canvas: boolean; chat: boolean }[]>([]);
   const [view, setView] = useState<MeetingView | null>(null);
   const [recap, setRecap] = useState<Recap | null>(null);
   const [minutes, setMinutes] = useState<Minutes | null>(null);
@@ -489,13 +497,17 @@ export function MeetingOverlay(): JSX.Element | null {
       void invoke<MeetingView>("meeting_status").then(applyMeetingView).catch(() => undefined);
     };
     read();
-    const timer = window.setInterval(read, 1000);
+    // Only the host keeps the 1 Hz safety poll. All four windows are built at setup and live for
+    // the whole session, so polling here without a host guard meant four webviews hitting the core
+    // every second — three of them discarding the result — even with no meeting in progress
+    // (CLAUDE.md idle-CPU SLO). Panel windows follow the `meeting` event instead.
+    const timer = isHost ? window.setInterval(read, 1000) : null;
     const off = listen<MeetingView>("meeting", (e) => applyMeetingView(e.payload));
     return () => {
-      window.clearInterval(timer);
+      if (timer !== null) window.clearInterval(timer);
       void off.then((f) => f());
     };
-  }, [applyMeetingView]);
+  }, [applyMeetingView, isHost]);
 
   useEffect(() => {
     if (view?.state !== "recording") {
@@ -505,6 +517,9 @@ export function MeetingOverlay(): JSX.Element | null {
     void invoke<MeetingSettings>("get_meeting_settings")
       .then(setSettings)
       .catch(() => undefined);
+    // This fetch runs once per state change, so mid-meeting mode/language switches only arrive as
+    // the core's broadcast — every window needs it, not just the bar that made the change.
+    const offSettings = listen<MeetingSettings>("meeting_settings", (e) => setSettings(e.payload));
 
     void invoke<boolean>("meeting_select_kk_configured")
       .then((configured) => {
@@ -537,6 +552,7 @@ export function MeetingOverlay(): JSX.Element | null {
       void offTrans.then((f) => f());
       void offNeedsKey.then((f) => f());
       void offKeyInvalid.then((f) => f());
+      void offSettings.then((f) => f());
     };
   }, [view?.state, live.pushLine, live.upsertInterim, live.patchTranslation]);
 
@@ -557,6 +573,9 @@ export function MeetingOverlay(): JSX.Element | null {
   useEffect(() => {
     // Only the host drives open flags — panel windows render their surface while Rust shows them.
     if (!isHost || view?.state !== "recording") return;
+    // notesOpen/chatOn are read only to record the intent — they stay out of the deps because
+    // re-running this effect on them would re-issue the captions command.
+    panelIntentsRef.current.push({ panel: ccOn, canvas: notesOpen, chat: chatOn });
     call("meeting_set_overlay_panel", { open: ccOn });
   }, [isHost, view?.state, ccOn]);
 
@@ -571,6 +590,12 @@ export function MeetingOverlay(): JSX.Element | null {
       if (chatOn) setChatOn(false);
       setCanvasModeOpen(false);
       setDispOpen(false);
+      // One intent per command — the core emits an echo after each, so the queue has to carry the
+      // intermediate state too, not just the end state.
+      panelIntentsRef.current.push(
+        { panel: ccOn, canvas: false, chat: chatOn },
+        { panel: ccOn, canvas: false, chat: false },
+      );
       call("meeting_set_overlay_canvas", { open: false });
       call("meeting_set_overlay_chat", { open: false });
       return;
@@ -580,15 +605,37 @@ export function MeetingOverlay(): JSX.Element | null {
       if (notesOpen) setNotesOpen(false);
       if (chatOn) setChatOn(false);
     }
-    call("meeting_set_overlay_canvas", { open: enteringRecording ? false : notesOpen });
-    call("meeting_set_overlay_chat", { open: enteringRecording ? false : chatOn });
+    const wantCanvas = enteringRecording ? false : notesOpen;
+    const wantChat = enteringRecording ? false : chatOn;
+    panelIntentsRef.current.push(
+      { panel: ccOn, canvas: wantCanvas, chat: chatOn },
+      { panel: ccOn, canvas: wantCanvas, chat: wantChat },
+    );
+    call("meeting_set_overlay_canvas", { open: wantCanvas });
+    call("meeting_set_overlay_chat", { open: wantChat });
   }, [isHost, view?.state, notesOpen, chatOn]);
 
   useEffect(() => {
-    if (!isHost) return;
     const off = listen<{ panel: boolean; canvas: boolean; chat: boolean }>(
       "meeting_overlay_panels",
       (e) => {
+        setPanelsOpen(e.payload);
+        if (!isHost) return;
+        // The core emits one of these per open-flag command, and the host's own state is what
+        // issues those commands — so feeding every echo straight back into that state let a stale
+        // echo from a rapid double-toggle flip the bar back and re-issue the command, flickering
+        // the panel. An echo matching a command we sent is an ack, not news: drop it (and any
+        // older ones it supersedes). Anything else is a genuine change — a panel closing itself —
+        // so local state is stale and yields.
+        const q = panelIntentsRef.current;
+        const acked = q.findIndex(
+          (f) => f.panel === e.payload.panel && f.canvas === e.payload.canvas && f.chat === e.payload.chat,
+        );
+        if (acked >= 0) {
+          q.splice(0, acked + 1);
+          return;
+        }
+        q.length = 0;
         setCcOn(e.payload.panel);
         setNotesOpen(e.payload.canvas);
         setChatOn(e.payload.chat);
@@ -604,8 +651,13 @@ export function MeetingOverlay(): JSX.Element | null {
   const chatActive = surface === "chat";
   const ccActive = surface === "cc";
 
+  // `canvasActive` is a constant per window, so on its own it says "this is the canvas webview",
+  // not "the canvas is on screen" — the window is hidden on close, never destroyed. Without the
+  // core's flag the summary kept refreshing (and spending Select KK budget) on a closed Canvas.
+  const canvasVisible = canvasActive && panelsOpen.canvas;
+
   useEffect(() => {
-    if (!canvasActive || canvasMode !== "live_summary" || view?.state !== "recording") {
+    if (!canvasVisible || canvasMode !== "live_summary" || view?.state !== "recording") {
       return;
     }
     const turns = groupTurns(liveLines);
@@ -653,7 +705,7 @@ export function MeetingOverlay(): JSX.Element | null {
           }
         });
     }, 22_000);
-  }, [canvasActive, canvasMode, liveLines, view?.state, canvasSummary]);
+  }, [canvasVisible, canvasMode, liveLines, view?.state, canvasSummary]);
 
   // Teardown for the timer armed above. Keyed on the gates only — never on liveLines — so a
   // pending request survives incoming transcript but is dropped when the Canvas closes, the mode
@@ -666,7 +718,7 @@ export function MeetingOverlay(): JSX.Element | null {
       }
       canvasSummaryPayloadRef.current = null;
     };
-  }, [canvasActive, canvasMode, view?.state]);
+  }, [canvasVisible, canvasMode, view?.state]);
 
   useEffect(() => {
     const offOk = listen<{ summary: string }>("meeting_live_summary", (e) => {
@@ -794,7 +846,10 @@ export function MeetingOverlay(): JSX.Element | null {
   }, [liveLines.length, liveInterims.length]);
 
   useEffect(() => {
-    if (view?.state !== "wrapping") return;
+    // Recap is host-only chrome — panel windows render nothing outside `recording`, so without
+    // this guard all four webviews polled the DB for recap/minutes/transcript every second and
+    // three threw the rows away.
+    if (!isHost || view?.state !== "wrapping") return;
     setMinutesNeedsKey(false);
     setOnlyBlanks(false);
     // Carry live transcript into Recap so Stop does not flash an empty card.
@@ -856,7 +911,7 @@ export function MeetingOverlay(): JSX.Element | null {
       void offRecap.then((f) => f());
       void offNeedsKey.then((f) => f());
     };
-  }, [view?.state]);
+  }, [isHost, view?.state]);
 
   if (!view || !view.enabled || view.state === "idle") return null;
   // Panel windows only paint while recording; offer/recap stay on the host.
