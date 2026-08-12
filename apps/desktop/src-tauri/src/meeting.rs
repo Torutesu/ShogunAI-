@@ -727,9 +727,9 @@ use shogun_core::meeting::gate::OfferGate;
     /// In-meeting black control capsule only (content panels are separate windows).
     /// Height includes top inset for bar-slot tooltips (they sit above the 52px bar).
     const PILL_SIZE: (f64, f64) = (320.0, 100.0);
-    /// Host pill enlarged so `.ov__modemenu--bar` fits above the capsule.
-    /// Rough: tip pad 36 + menu (~3×36 + pad) + gap 8 + pill 52 + bottom pad 8 ≈ 220.
-    const PILL_WITH_MENU_SIZE: (f64, f64) = (320.0, 220.0);
+    /// Host pill enlarged so `.ov__modemenu--bar` (+ lang row) fits above the capsule.
+    /// Rough: tip pad 36 + menu (~3×36 + lang row + pad) + gap 8 + pill 52 + bottom pad 8 ≈ 280.
+    const PILL_WITH_MENU_SIZE: (f64, f64) = (320.0, 280.0);
     /// Host bar mode-menu open — `recording_overlay_size` must grow or sync fights the FE.
     static HOST_MENU_OPEN: AtomicBool = AtomicBool::new(false);
     /// Live captions window default (own NSWindow — not stacked in the host).
@@ -1905,29 +1905,87 @@ use shogun_core::meeting::gate::OfferGate;
         Ok(())
     }
 
+    /// If recording (not paused) and ASR language changed, stop the live lane so a restart can
+    /// reopen Deepgram/whisper with the new hint. Without this, Transcribe→One-way mid-meeting
+    /// keeps English-only ASR and Japanese never reaches the translator.
+    fn take_asr_restart(
+        lane: &mut Lane,
+        prev_asr: MeetingLanguage,
+    ) -> Option<(i64, Arc<RwLock<Settings>>, Option<crate::audio_lane::Handle>)> {
+        let new_asr = lane.settings.asr_language();
+        if prev_asr == new_asr {
+            return None;
+        }
+        if lane.machine.state() != State::Recording || lane.paused {
+            return None;
+        }
+        let id = lane.session_id?;
+        let handle = lane.audio.take();
+        set_live_emit_session(id);
+        Some((id, lane.live_settings.clone(), handle))
+    }
+
+    fn run_asr_restart(
+        app: tauri::AppHandle,
+        id: i64,
+        live: Arc<RwLock<Settings>>,
+        old: Option<crate::audio_lane::Handle>,
+    ) {
+        std::thread::spawn(move || {
+            finish_audio_stop(old);
+            let mut handle = crate::audio_lane::start(&app, id, live);
+            if let Ok(mut g) = LANE.lock() {
+                if let Some(lane) = g.as_mut() {
+                    if lane.machine.state() == State::Recording
+                        && !lane.paused
+                        && lane.session_id == Some(id)
+                        && lane.audio.is_none()
+                    {
+                        lane.audio = handle.take();
+                        eprintln!("[meeting] ASR lane restarted (language/mode change)");
+                        return;
+                    }
+                }
+            }
+            finish_audio_stop(handle);
+        });
+    }
+
     /// In-meeting overlay mode (issue #93). Applies to new lines when changed mid-recording.
+    /// Restarts the audio lane when `asr_language()` changes (e.g. Transcribe → One-way).
     #[tauri::command]
     pub fn set_meeting_mode(mode: MeetingMode, app: tauri::AppHandle) -> Result<(), String> {
         let now = now_ms();
-        let candidate = {
+        let (candidate, prev_asr) = {
             let Ok(g) = LANE.lock() else { return Err("busy".into()) };
             let Some(lane) = g.as_ref() else { return Err("not ready".into()) };
-            Settings { meeting_mode: mode, ..lane.settings.clone() }
+            (
+                Settings { meeting_mode: mode, ..lane.settings.clone() },
+                lane.settings.asr_language(),
+            )
         };
         save(&app, &candidate)?;
 
-        let Ok(mut g) = LANE.lock() else { return Err("busy".into()) };
-        let Some(lane) = g.as_mut() else { return Err("not ready".into()) };
-        lane.settings = candidate.clone();
-        if let Ok(mut live) = lane.live_settings.write() {
-            *live = candidate;
+        let restart = {
+            let Ok(mut g) = LANE.lock() else { return Err("busy".into()) };
+            let Some(lane) = g.as_mut() else { return Err("not ready".into()) };
+            lane.settings = candidate.clone();
+            if let Ok(mut live) = lane.live_settings.write() {
+                *live = candidate;
+            }
+            let restart = take_asr_restart(lane, prev_asr);
+            emit(&app, lane, now);
+            emit_settings(&app, &lane.settings);
+            restart
+        };
+        if let Some((id, live, old)) = restart {
+            run_asr_restart(app, id, live, old);
         }
-        emit(&app, lane, now);
-        emit_settings(&app, &lane.settings);
         Ok(())
     }
 
     /// Language pair for one-way / two-way translation modes.
+    /// Restarts ASR when the resolved `asr_language()` changes (e.g. Auto → Japanese).
     #[tauri::command]
     pub fn set_meeting_langs(
         source_lang: Option<MeetingLanguage>,
@@ -1937,27 +1995,37 @@ use shogun_core::meeting::gate::OfferGate;
         app: tauri::AppHandle,
     ) -> Result<(), String> {
         let now = now_ms();
-        let candidate = {
+        let (candidate, prev_asr) = {
             let Ok(g) = LANE.lock() else { return Err("busy".into()) };
             let Some(lane) = g.as_ref() else { return Err("not ready".into()) };
-            Settings {
-                source_lang: source_lang.unwrap_or(lane.settings.source_lang),
-                target_lang: target_lang.unwrap_or(lane.settings.target_lang),
-                my_lang: my_lang.unwrap_or(lane.settings.my_lang),
-                other_lang: other_lang.unwrap_or(lane.settings.other_lang),
-                ..lane.settings.clone()
-            }
+            (
+                Settings {
+                    source_lang: source_lang.unwrap_or(lane.settings.source_lang),
+                    target_lang: target_lang.unwrap_or(lane.settings.target_lang),
+                    my_lang: my_lang.unwrap_or(lane.settings.my_lang),
+                    other_lang: other_lang.unwrap_or(lane.settings.other_lang),
+                    ..lane.settings.clone()
+                },
+                lane.settings.asr_language(),
+            )
         };
         save(&app, &candidate)?;
 
-        let Ok(mut g) = LANE.lock() else { return Err("busy".into()) };
-        let Some(lane) = g.as_mut() else { return Err("not ready".into()) };
-        lane.settings = candidate.clone();
-        if let Ok(mut live) = lane.live_settings.write() {
-            *live = candidate;
+        let restart = {
+            let Ok(mut g) = LANE.lock() else { return Err("busy".into()) };
+            let Some(lane) = g.as_mut() else { return Err("not ready".into()) };
+            lane.settings = candidate.clone();
+            if let Ok(mut live) = lane.live_settings.write() {
+                *live = candidate;
+            }
+            let restart = take_asr_restart(lane, prev_asr);
+            emit(&app, lane, now);
+            emit_settings(&app, &lane.settings);
+            restart
+        };
+        if let Some((id, live, old)) = restart {
+            run_asr_restart(app, id, live, old);
         }
-        emit(&app, lane, now);
-        emit_settings(&app, &lane.settings);
         Ok(())
     }
 

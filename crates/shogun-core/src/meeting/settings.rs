@@ -174,12 +174,23 @@ impl Default for Settings {
 }
 
 impl Settings {
-    /// ASR language for the audio lane: one-way `source_lang` when not Auto, else `language`.
+    /// ASR language for the audio lane.
+    ///
+    /// - Transcription: fixed `language` (shipped English).
+    /// - One-way: `source_lang`, or `Auto` (Deepgram `multi`) when source is Auto — do **not**
+    ///   fall back to English-only ASR or Japanese speech never reaches the translator.
+    /// - Two-way: always `Auto` / multilingual so both sides can speak different languages.
     pub fn asr_language(&self) -> MeetingLanguage {
-        if self.meeting_mode == MeetingMode::OneWay && self.source_lang != MeetingLanguage::Auto {
-            self.source_lang
-        } else {
-            self.language
+        match self.meeting_mode {
+            MeetingMode::Transcription => self.language,
+            MeetingMode::OneWay => {
+                if self.source_lang == MeetingLanguage::Auto {
+                    MeetingLanguage::Auto
+                } else {
+                    self.source_lang
+                }
+            }
+            MeetingMode::TwoWay => MeetingLanguage::Auto,
         }
     }
 
@@ -405,5 +416,42 @@ mod tests {
         assert_eq!(MeetingLanguage::English.whisper_code(), Some("en"));
         assert_eq!(MeetingLanguage::Japanese.whisper_code(), Some("ja"));
         assert_eq!(MeetingLanguage::Auto.whisper_code(), None);
+    }
+
+    #[test]
+    fn asr_language_transcription_uses_meeting_language() {
+        let s = Settings::default();
+        assert_eq!(s.meeting_mode, MeetingMode::Transcription);
+        assert_eq!(s.asr_language(), MeetingLanguage::English);
+    }
+
+    #[test]
+    fn asr_language_one_way_auto_source_is_multilingual() {
+        // Must not fall back to English-only ASR — Japanese speech would never reach translate.
+        let s = Settings {
+            meeting_mode: MeetingMode::OneWay,
+            source_lang: MeetingLanguage::Auto,
+            ..Default::default()
+        };
+        assert_eq!(s.asr_language(), MeetingLanguage::Auto);
+    }
+
+    #[test]
+    fn asr_language_one_way_fixed_source() {
+        let s = Settings {
+            meeting_mode: MeetingMode::OneWay,
+            source_lang: MeetingLanguage::Japanese,
+            ..Default::default()
+        };
+        assert_eq!(s.asr_language(), MeetingLanguage::Japanese);
+    }
+
+    #[test]
+    fn asr_language_two_way_is_multilingual() {
+        let s = Settings {
+            meeting_mode: MeetingMode::TwoWay,
+            ..Default::default()
+        };
+        assert_eq!(s.asr_language(), MeetingLanguage::Auto);
     }
 }
