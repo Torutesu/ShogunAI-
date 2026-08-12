@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "shogun-memory": {
+      "command": "/ABS/PATH/TO/ShogunAI-/target/release/shogun-mcp",
+      "args": [],
+      "env": {
+        "SHOGUN_DB_PATH": "/Users/YOU/Library/Application Support/com.selectkk.shogun/memory.db",
+        "SHOGUN_MEMORY_API_SETTINGS": "/Users/YOU/Library/Application Support/com.selectkk.shogun/memory_api.json",
+        "SHOGUN_API_TOKEN": "shogun_PASTE_ISSUED_TOKEN"
+      }
+    }
+  }
+}
