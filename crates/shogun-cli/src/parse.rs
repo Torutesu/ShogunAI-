@@ -135,6 +135,17 @@ fn parse_command(positionals: &[String], no_screen: bool) -> Result<Command, Cli
             }),
         },
         "metrics" => Ok(Command::Metrics),
+        "whoami" => Ok(Command::Whoami),
+        "profile" => match rest.first().map(String::as_str) {
+            Some("set") => {
+                let body = join(&rest[1..]).ok_or(CliError::MissingArgument("<json>"))?;
+                Ok(Command::ProfileSet { body })
+            }
+            other => Err(CliError::UnknownSubcommand {
+                command: "profile",
+                got: other.unwrap_or("").to_string(),
+            }),
+        },
         "visual-recall" => parse_visual_recall(rest),
         other => Err(CliError::UnknownCommand(other.to_string())),
     }
@@ -306,6 +317,11 @@ mod tests {
     fn api_status_and_unknown() {
         assert_eq!(parse(&v(&["api", "status"])).unwrap().command, Command::ApiStatus);
         assert!(matches!(parse(&v(&["api", "whoami"])), Err(CliError::UnknownSubcommand { .. })));
+        assert_eq!(parse(&v(&["whoami"])).unwrap().command, Command::Whoami);
+        assert_eq!(
+            parse(&v(&["profile", "set", r#"{"display_name":"A"}"#])).unwrap().command,
+            Command::ProfileSet { body: r#"{"display_name":"A"}"#.into() }
+        );
         assert_eq!(parse(&v(&["frobnicate"])), Err(CliError::UnknownCommand("frobnicate".into())));
     }
 

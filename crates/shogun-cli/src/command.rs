@@ -38,6 +38,10 @@ pub enum Command {
     Metrics,
     /// `shogun visual-recall status|enable|disable|search|frame get|frame rescan`
     VisualRecall(VisualRecallCommand),
+    /// `shogun whoami` → profile + work summary.
+    Whoami,
+    /// `shogun profile set <json>` → update profile prefs (L1).
+    ProfileSet { body: String },
     /// `shogun help` / no args.
     Help,
 }
@@ -79,6 +83,8 @@ impl Command {
             Command::VisualRecall(VisualRecallCommand::FrameGet { .. }) => Tool::VisualRecallGetFrame,
             Command::VisualRecall(VisualRecallCommand::FrameRescan { .. }) => Tool::VisualRecallRescanFrame,
             Command::VisualRecall(VisualRecallCommand::FrameDelete { .. }) => Tool::VisualRecallDeleteFrame,
+            Command::Whoami => Tool::ProfileWhoami,
+            Command::ProfileSet { .. } => Tool::ProfileSet,
             Command::ApiStatus | Command::Metrics | Command::Help => return None,
         })
     }
@@ -110,6 +116,8 @@ COMMANDS:
     visual-recall frame get <id>           Frame metadata + OCR text
     visual-recall frame rescan <id>        Re-OCR stored JPEG
     visual-recall frame delete <id>        Delete one stored frame
+    whoami                    Profile + short work summary
+    profile set <json>        Update profile prefs          (L1)
     help                      This help
 
 GLOBAL FLAGS:

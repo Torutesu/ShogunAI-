@@ -101,7 +101,10 @@ impl<B: MemoryBackend> McpServer<B> {
             ApiLevel::Write(_) => {
                 let body = if tool == Tool::MemoryAppendNote {
                     args.get("text").and_then(Value::as_str).unwrap_or_default().to_string()
-                } else if matches!(tool, Tool::VisualRecallSetEnabled | Tool::VisualRecallDeleteFrame) {
+                } else if matches!(
+                    tool,
+                    Tool::VisualRecallSetEnabled | Tool::VisualRecallDeleteFrame | Tool::ProfileSet
+                ) {
                     args.to_string()
                 } else {
                     args.to_string()
@@ -162,8 +165,14 @@ fn error(id: Value, code: i64, message: &str) -> String {
 /// A minimal MCP tool descriptor (name + description + a permissive input schema).
 fn tool_descriptor(tool: Tool) -> Value {
     let (desc, props): (&str, Value) = match tool {
-        Tool::MemorySearch => ("Hybrid search over memory", json!({ "query": { "type": "string" } })),
-        Tool::MemoryGetContext => ("The current context cache", json!({})),
+        Tool::MemorySearch => (
+            "Hybrid search over captured events and notes. Use for a specific question or keyword recall. Prefer profile.whoami for identity/prefs and memory.get_context for a compact work snapshot.",
+            json!({ "query": { "type": "string" } }),
+        ),
+        Tool::MemoryGetContext => (
+            "DB-derived work context snapshot (state facts + recent user notes). Live AX Notch screen cache is NOT available to standalone MCP — use this for orientation, then memory.search for specifics.",
+            json!({}),
+        ),
         Tool::StatePeopleGet
         | Tool::StateProjectsGet
         | Tool::StateCommitmentsGet
@@ -175,7 +184,7 @@ fn tool_descriptor(tool: Tool) -> Value {
         Tool::MemoryAppendNote => ("Append a user note (L1)", json!({ "text": { "type": "string" } })),
         Tool::StateProposeUpdate => ("Propose a state change (L2)", json!({})),
         Tool::ActionsExecute => (
-            "Run an action; external sends require L3 confirmation",
+            "Run an action; external sends require L3 confirmation. v2: listed for API/UI symmetry — standalone MCP does not share the Notch approval queue yet; prefer the desktop app for L3 sends.",
             json!({ "kind": { "type": "string" } }),
         ),
         Tool::VisualRecallStatus => ("Visual recall status (enabled, frame stats, recent OCR)", json!({})),
@@ -197,6 +206,18 @@ fn tool_descriptor(tool: Tool) -> Value {
             json!({ "id": { "type": "integer" } }),
         ),
         Tool::VisualRecallDeleteFrame => ("Delete one stored frame and its OCR event (L1)", json!({ "id": { "type": "integer" } })),
+        Tool::ProfileWhoami => (
+            "Who the user is: Settings profile (display_name, role, prefs) plus a short work summary (counts/names of people, projects, commitments, open loops). Call first in a session before search/get_context when you need identity or standing prefs. Does not search history.",
+            json!({}),
+        ),
+        Tool::ProfileSet => (
+            "Update user-owned profile fields (display_name, role, prefs). L1 — persists to memory_api.json. Only set fields the user explicitly wants stored.",
+            json!({
+                "display_name": { "type": "string" },
+                "role": { "type": "string" },
+                "prefs": { "type": "string" }
+            }),
+        ),
     };
     json!({
         "name": tool.wire_name(),
@@ -250,12 +271,14 @@ mod tests {
     }
 
     #[test]
-    fn tools_list_has_all_nineteen() {
+    fn tools_list_has_all_twenty_one() {
         let v = call(&server(), r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#);
         let tools = v["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 19);
+        assert_eq!(tools.len(), 21);
         assert!(tools.iter().any(|t| t["name"] == "memory.search"));
         assert!(tools.iter().any(|t| t["name"] == "visual_recall.status"));
+        assert!(tools.iter().any(|t| t["name"] == "profile.whoami"));
+        assert!(tools.iter().any(|t| t["name"] == "profile.set"));
         assert!(tools.iter().any(|t| t["name"] == "actions.execute"));
     }
 

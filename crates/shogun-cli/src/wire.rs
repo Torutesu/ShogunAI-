@@ -79,6 +79,8 @@ pub fn to_call(command: &Command, include_low: bool) -> Option<HttpCall> {
                 post("/v1/visual_recall/frames/delete".into(), format!(r#"{{"id":{id}}}"#))
             }
         },
+        Command::Whoami => get("/v1/profile/whoami".to_string()),
+        Command::ProfileSet { body } => post("/v1/profile".into(), body.clone()),
         Command::Help => return None,
     })
 }

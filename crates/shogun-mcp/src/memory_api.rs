@@ -33,6 +33,10 @@ pub enum Tool {
     VisualRecallGetFrame,
     VisualRecallRescanFrame,
     VisualRecallDeleteFrame,
+    /// Profile + short work summary (people/projects/commitments/open_loops counts).
+    ProfileWhoami,
+    /// Update user-owned profile prefs (L1).
+    ProfileSet,
 }
 
 /// Every tool, for exhaustive iteration (settings / tests).
@@ -56,6 +60,8 @@ pub const ALL_TOOLS: &[Tool] = &[
     Tool::VisualRecallGetFrame,
     Tool::VisualRecallRescanFrame,
     Tool::VisualRecallDeleteFrame,
+    Tool::ProfileWhoami,
+    Tool::ProfileSet,
 ];
 
 impl Tool {
@@ -81,6 +87,8 @@ impl Tool {
             Tool::VisualRecallGetFrame => "visual_recall.get_frame",
             Tool::VisualRecallRescanFrame => "visual_recall.rescan_frame",
             Tool::VisualRecallDeleteFrame => "visual_recall.delete_frame",
+            Tool::ProfileWhoami => "profile.whoami",
+            Tool::ProfileSet => "profile.set",
         }
     }
 
@@ -117,16 +125,20 @@ pub fn tool_level(tool: Tool) -> ApiLevel {
         | Tool::VisualRecallStatus
         | Tool::VisualRecallSearchFrames
         | Tool::VisualRecallGetFrame
-        | Tool::VisualRecallRescanFrame => ApiLevel::Read,
+        | Tool::VisualRecallRescanFrame
+        | Tool::ProfileWhoami => ApiLevel::Read,
         // append a user note to the event log — local, reversible.
         Tool::MemoryAppendNote => ApiLevel::Write(Level::L1),
         // visual recall master switch — same as Settings toggle (L1, local).
         Tool::VisualRecallSetEnabled => ApiLevel::Write(Level::L1),
         // Deleting a local frame is an L1 write.
         Tool::VisualRecallDeleteFrame => ApiLevel::Write(Level::L1),
+        // user-owned profile prefs text — explicit set, like Unabyss store (L1).
+        Tool::ProfileSet => ApiLevel::Write(Level::L1),
         // propose a state change — one-tap confirm in the Notch.
         Tool::StateProposeUpdate => ApiLevel::Write(Level::L2),
         // launch a preset agent — level follows the action it runs.
+        // v2: listed for symmetry; shared Notch approval queue not wired for standalone MCP yet.
         Tool::ActionsExecute => ApiLevel::PerAction,
     }
 }
@@ -152,6 +164,11 @@ pub struct TokenRegistry {
 impl TokenRegistry {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Whether any tokens are registered.
+    pub fn is_empty(&self) -> bool {
+        self.valid.is_empty()
     }
 
     /// Issue a token id (Full UI issuance).
@@ -222,7 +239,7 @@ mod tests {
         for &t in ALL_TOOLS {
             let _ = tool_level(t); // exhaustive match means this cannot be undefined
         }
-        assert_eq!(ALL_TOOLS.len(), 19);
+        assert_eq!(ALL_TOOLS.len(), 21);
     }
 
     #[test]
@@ -245,6 +262,7 @@ mod tests {
                         | Tool::VisualRecallSearchFrames
                         | Tool::VisualRecallGetFrame
                         | Tool::VisualRecallRescanFrame
+                        | Tool::ProfileWhoami
                 )),
                 ApiLevel::Write(_) => {
                     assert!(matches!(
@@ -253,6 +271,7 @@ mod tests {
                             | Tool::StateProposeUpdate
                             | Tool::VisualRecallSetEnabled
                             | Tool::VisualRecallDeleteFrame
+                            | Tool::ProfileSet
                     ))
                 }
                 ApiLevel::PerAction => assert_eq!(t, Tool::ActionsExecute),

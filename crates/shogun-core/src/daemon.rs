@@ -407,6 +407,14 @@ impl Db {
             .unwrap_or_default()
     }
 
+    /// Recent user notes (`source = user`), newest-first — Memory API `get_context` / agents.
+    pub fn recent_user_notes(&self, limit: usize) -> Vec<String> {
+        self.recent_source_bodies("user", limit)
+            .into_iter()
+            .map(|(_hash, content)| content)
+            .collect()
+    }
+
     /// Recent capture bodies `(hash, content)` newest-first, for the near-dup collapse.
     #[allow(dead_code)]
     fn recent_capture_bodies(&self, limit: usize) -> Vec<(String, String)> {

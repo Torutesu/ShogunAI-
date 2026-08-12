@@ -11,7 +11,11 @@
 //! ```
 //!
 //! Config via env: `SHOGUN_DB_PATH` (default `./shogun.db`), `SHOGUN_API_TOKEN` (issues one client
-//! token; without it every call is 401), `SHOGUN_API_PORT` (default 7464, ephemeral fallback if busy).
+//! token; without it every call is 401 unless Keychain tokens are loaded), `SHOGUN_API_PORT`
+//! (default 7464, ephemeral fallback if busy), `SHOGUN_MEMORY_API_SETTINGS` (optional).
+//!
+//! Fail closed when Memory API is disabled (`memory_api.json` missing or `enabled: false`).
+//! Soft Pro gate: `enabled` toggle until Stripe WP5.1; trial is Pro-equivalent.
 
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -21,6 +25,7 @@ use shogun_core::daemon::{Clock, Db};
 use shogun_core::db_backend::DbBackend;
 use shogun_core::metrics::{render_snapshots_json, SloRegistry};
 use shogun_mcp::memory_api::TokenRegistry;
+use shogun_mcp::memory_api_settings::{self, TOKENS_KEYCHAIN_ACCOUNT};
 use shogun_mcp::server::{bind_local, serve_on, AppState, MetricsSource, DEFAULT_PORT};
 
 /// The live SLO metrics source served at `GET /v1/metrics` (NFR-SLO-00). Wraps the shared
@@ -69,12 +74,42 @@ fn db_backend(db: Db) -> DbBackend {
     if let Some(path) = visual_recall_settings_path(&db_path) {
         backend = backend.with_visual_recall_settings_path(path);
     }
+    backend = backend.with_memory_api_settings_path(memory_api_settings::resolve_settings_path(&db_path));
     backend
+}
+
+fn load_token_registry() -> TokenRegistry {
+    let mut tokens = TokenRegistry::new();
+    match std::env::var("SHOGUN_API_TOKEN") {
+        Ok(t) if !t.is_empty() => tokens.issue(t),
+        _ => {}
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(bytes) = shogun_integrations::keychain_store::get_generic_secret(TOKENS_KEYCHAIN_ACCOUNT) {
+            for t in memory_api_settings::parse_token_blob(&bytes).tokens {
+                if !t.secret.is_empty() {
+                    tokens.issue(t.secret);
+                }
+            }
+        }
+    }
+    tokens
+}
+
+fn gate_or_exit(db_path: &str) {
+    let path = memory_api_settings::resolve_settings_path(db_path);
+    if let Err(msg) = memory_api_settings::require_enabled(&path) {
+        eprintln!("{msg}");
+        std::process::exit(1);
+    }
 }
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
     let db_path = std::env::var("SHOGUN_DB_PATH").unwrap_or_else(|_| "./shogun.db".to_string());
+    gate_or_exit(&db_path);
+
     let port = std::env::var("SHOGUN_API_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(DEFAULT_PORT);
 
     let clock = wall_clock();
@@ -82,10 +117,9 @@ async fn main() -> std::io::Result<()> {
         .map_err(|e| std::io::Error::other(format!("open db {db_path}: {e}")))?;
     let backend = Arc::new(db_backend(db));
 
-    let mut tokens = TokenRegistry::new();
-    match std::env::var("SHOGUN_API_TOKEN") {
-        Ok(t) if !t.is_empty() => tokens.issue(t),
-        _ => eprintln!("warning: SHOGUN_API_TOKEN not set — every tool call will be 401 (only /v1/status is open)"),
+    let tokens = load_token_registry();
+    if tokens.is_empty() {
+        eprintln!("warning: no Memory API tokens loaded — every tool call will be 401 (only /v1/status is open)");
     }
 
     let approvals = Arc::new(Mutex::new(ApprovalQueue::new()));
@@ -105,7 +139,8 @@ mod tests {
     use std::time::Duration;
 
     /// Boot the real server on a background thread (own runtime) and return its port. Uses an
-    /// in-memory DB seeded with nothing; the token `dev` is issued.
+    /// in-memory DB seeded with nothing; the token `dev` is issued. Skips the enable gate (unit
+    /// test composition root — production `main` still fails closed).
     fn boot_server() -> u16 {
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {

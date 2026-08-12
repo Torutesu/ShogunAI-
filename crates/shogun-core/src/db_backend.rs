@@ -13,6 +13,10 @@ use shogun_mcp::memory_api::Tool;
 
 use crate::capture::visual_recall::{load_settings, save_settings, Settings};
 use crate::daemon::{local_day_bounds, Db};
+use shogun_mcp::memory_api_settings::{
+    load_settings as load_memory_api_settings, save_settings as save_memory_api_settings,
+    Settings as MemoryApiSettings,
+};
 
 /// Max search hits returned by `memory.search` over the API.
 const SEARCH_LIMIT: usize = 20;
@@ -28,11 +32,16 @@ const EVENT_CONFIDENCE: f64 = 1.0;
 pub struct DbBackend {
     db: Db,
     visual_recall_settings_path: Option<PathBuf>,
+    memory_api_settings_path: Option<PathBuf>,
 }
 
 impl DbBackend {
     pub fn new(db: Db) -> Self {
-        Self { db, visual_recall_settings_path: None }
+        Self {
+            db,
+            visual_recall_settings_path: None,
+            memory_api_settings_path: None,
+        }
     }
 
     /// Path to `visual_recall.json` (same directory as `memory.db` in the desktop app).
@@ -41,8 +50,18 @@ impl DbBackend {
         self
     }
 
+    /// Path to `memory_api.json` (enable gate + profile prefs).
+    pub fn with_memory_api_settings_path(mut self, path: PathBuf) -> Self {
+        self.memory_api_settings_path = Some(path);
+        self
+    }
+
     fn visual_recall_settings_path(&self) -> Option<&Path> {
         self.visual_recall_settings_path.as_deref()
+    }
+
+    fn memory_api_settings_path(&self) -> Option<&Path> {
+        self.memory_api_settings_path.as_deref()
     }
 
     fn load_vr_settings(&self) -> Settings {
@@ -56,6 +75,91 @@ impl DbBackend {
             return Err("visual_recall settings path not configured".to_string());
         };
         save_settings(path, settings)
+    }
+
+    fn load_ma_settings(&self) -> MemoryApiSettings {
+        self.memory_api_settings_path()
+            .map(load_memory_api_settings)
+            .unwrap_or_default()
+    }
+
+    fn save_ma_settings(&self, settings: &MemoryApiSettings) -> Result<(), String> {
+        let Some(path) = self.memory_api_settings_path() else {
+            return Err("memory_api settings path not configured".to_string());
+        };
+        save_memory_api_settings(path, settings)
+    }
+
+    /// DB-derived context for agents. Live AX Notch cache is not available to standalone MCP.
+    fn get_context_items(&self) -> Vec<ReadItem> {
+        let mut items = Vec::new();
+        items.push(ReadItem::new(
+            "note: live AX Notch context cache is not available to standalone Memory API / MCP; this snapshot is DB-derived only"
+                .to_string(),
+            EVENT_CONFIDENCE,
+        ));
+        for fact in self.db.inline_memory(12) {
+            items.push(ReadItem::new(fact, 0.85));
+        }
+        for note in self.db.recent_user_notes(8) {
+            items.push(ReadItem::new(format!("note: {note}"), EVENT_CONFIDENCE));
+        }
+        items
+    }
+
+    fn whoami_json(&self) -> String {
+        let profile = self.load_ma_settings().profile;
+        let people: Vec<_> = self.db.people().into_iter().map(|p| p.display_name).collect();
+        let projects: Vec<_> = self.db.projects().into_iter().map(|p| p.name).collect();
+        let commitments: Vec<_> = self
+            .db
+            .commitments_due(self.db.now_ms())
+            .into_iter()
+            .map(|c| c.description)
+            .collect();
+        let open_loops: Vec<_> = self.db.open_loops().into_iter().map(|o| o.description).collect();
+        let work = json!({
+            "people": { "count": people.len(), "names": people },
+            "projects": { "count": projects.len(), "names": projects },
+            "commitments": { "count": commitments.len(), "names": commitments },
+            "open_loops": { "count": open_loops.len(), "names": open_loops },
+        });
+        json!({
+            "profile": {
+                "display_name": profile.display_name,
+                "role": profile.role,
+                "prefs": profile.prefs,
+            },
+            "work": work,
+        })
+        .to_string()
+    }
+
+    fn apply_profile_set(&self, body: &str) -> Result<(), String> {
+        let v: serde_json::Value =
+            serde_json::from_str(body).map_err(|_| "expected profile JSON object".to_string())?;
+        let mut settings = self.load_ma_settings();
+        let patch = |field: &mut String, key: &str| {
+            if let Some(s) = v.get(key).and_then(|x| x.as_str()) {
+                *field = s.to_string();
+            }
+        };
+        patch(&mut settings.profile.display_name, "display_name");
+        patch(&mut settings.profile.role, "role");
+        patch(&mut settings.profile.prefs, "prefs");
+        // Allow nested { "profile": { ... } } as well.
+        if let Some(p) = v.get("profile") {
+            if let Some(s) = p.get("display_name").and_then(|x| x.as_str()) {
+                settings.profile.display_name = s.to_string();
+            }
+            if let Some(s) = p.get("role").and_then(|x| x.as_str()) {
+                settings.profile.role = s.to_string();
+            }
+            if let Some(s) = p.get("prefs").and_then(|x| x.as_str()) {
+                settings.profile.prefs = s.to_string();
+            }
+        }
+        self.save_ma_settings(&settings)
     }
 
     fn visual_recall_status_json(&self) -> String {
@@ -228,8 +332,8 @@ impl MemoryBackend for DbBackend {
                 .into_iter()
                 .map(|hit| ReadItem::new(hit.content, EVENT_CONFIDENCE))
                 .collect(),
-            // `get_context` isn't a persisted read (the cache is RAM-only, AR-10) — empty here.
-            Tool::MemoryGetContext => Vec::new(),
+            // DB-derived work context (AX Notch cache is not available to standalone MCP).
+            Tool::MemoryGetContext => self.get_context_items(),
 
             Tool::StatePeopleList => {
                 self.db.people().into_iter().map(|p| ReadItem::new(p.display_name, p.confidence)).collect()
@@ -261,15 +365,17 @@ impl MemoryBackend for DbBackend {
                 one(id.and_then(|i| self.db.open_loop(i)), |o| ReadItem::new(o.description, o.confidence))
             }
 
-            // Structured visual-recall tools use [`Self::read_structured`].
+            // Structured visual-recall / profile tools use [`Self::read_structured`].
             Tool::VisualRecallStatus
             | Tool::VisualRecallSearchFrames
             | Tool::VisualRecallGetFrame
             | Tool::VisualRecallRescanFrame
+            | Tool::ProfileWhoami
             | Tool::MemoryAppendNote
             | Tool::StateProposeUpdate
             | Tool::VisualRecallSetEnabled
             | Tool::VisualRecallDeleteFrame
+            | Tool::ProfileSet
             | Tool::ActionsExecute => Vec::new(),
         }
     }
@@ -280,6 +386,7 @@ impl MemoryBackend for DbBackend {
             Tool::VisualRecallSearchFrames => self.visual_recall_search_json(params),
             Tool::VisualRecallGetFrame => self.visual_recall_get_frame_json(params),
             Tool::VisualRecallRescanFrame => self.visual_recall_rescan_json(params),
+            Tool::ProfileWhoami => self.whoami_json(),
             _ => return None,
         })
     }
@@ -313,6 +420,10 @@ impl MemoryBackend for DbBackend {
                 } else {
                     Err("frame not found".to_string())
                 }
+            }
+            Tool::ProfileSet => {
+                self.apply_profile_set(body)?;
+                Ok(None)
             }
             // Not a write tool.
             _ => Err("not a write tool".to_string()),
@@ -384,10 +495,21 @@ mod tests {
         db
     }
 
-    fn backend_with_settings(db: Db) -> DbBackend {
-        let dir = std::env::temp_dir().join(format!("shogun_vr_test_{}", std::process::id()));
+    fn backend_with_settings(db: Db) -> (DbBackend, PathBuf) {
+        let dir = std::env::temp_dir().join(format!(
+            "shogun_vr_test_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
         let _ = std::fs::create_dir_all(&dir);
-        DbBackend::new(db).with_visual_recall_settings_path(dir.join("visual_recall.json"))
+        let ma = dir.join("memory_api.json");
+        let backend = DbBackend::new(db)
+            .with_visual_recall_settings_path(dir.join("visual_recall.json"))
+            .with_memory_api_settings_path(ma.clone());
+        (backend, ma)
     }
 
     fn params() -> ReadParams {
@@ -499,9 +621,63 @@ mod tests {
     }
 
     #[test]
+    fn get_context_includes_user_notes() {
+        let db = Db::open_in_memory(Arc::new(|| 1)).unwrap();
+        let backend = DbBackend::new(db.clone());
+        assert!(backend.write(Tool::MemoryAppendNote, "remember the launch checklist").is_ok());
+        let items = backend.read(Tool::MemoryGetContext, &params());
+        assert!(items.len() >= 2, "expected disclaimer + note, got {items:?}");
+        assert!(items.iter().any(|i| i.label.contains("launch checklist")), "{items:?}");
+        assert!(items.iter().any(|i| i.label.contains("AX Notch")), "{items:?}");
+    }
+
+    #[test]
+    fn whoami_returns_profile_and_work_summary() {
+        use shogun_memory::state::{NewPerson, Provenance};
+        use shogun_mcp::memory_api_settings::{save_settings, Profile, Settings as MaSettings};
+
+        let db = Db::open_in_memory(Arc::new(|| 1)).unwrap();
+        let (e, _) = db.capture(&ev("h1")).unwrap();
+        db.insert_person(
+            &NewPerson { display_name: "Alice", confidence: 0.9, now: 1, ..Default::default() },
+            &[Provenance::new(e)],
+        )
+        .unwrap();
+        let (backend, path) = backend_with_settings(db);
+        save_settings(
+            &path,
+            &MaSettings {
+                enabled: true,
+                profile: Profile {
+                    display_name: "Anant".into(),
+                    role: "founder".into(),
+                    prefs: "prefer bullet answers".into(),
+                },
+            },
+        )
+        .unwrap();
+        let json = backend.read_structured(Tool::ProfileWhoami, &params()).expect("whoami");
+        assert!(json.contains("Anant"), "{json}");
+        assert!(json.contains("founder"), "{json}");
+        assert!(json.contains("Alice"), "{json}");
+        assert!(json.contains("prefer bullet answers"), "{json}");
+    }
+
+    #[test]
+    fn profile_set_persists_to_settings() {
+        let db = Db::open_in_memory(Arc::new(|| 1)).unwrap();
+        let (backend, _) = backend_with_settings(db);
+        assert!(backend
+            .write(Tool::ProfileSet, r#"{"display_name":"Kai","role":"eng","prefs":"short"}"#)
+            .is_ok());
+        let json = backend.read_structured(Tool::ProfileWhoami, &params()).expect("whoami");
+        assert!(json.contains("Kai") && json.contains("eng") && json.contains("short"), "{json}");
+    }
+
+    #[test]
     fn visual_recall_status_and_set_enabled() {
         let db = Db::open_in_memory(Arc::new(|| 5_000)).unwrap();
-        let backend = backend_with_settings(db);
+        let (backend, _) = backend_with_settings(db);
         let status = backend.read_structured(Tool::VisualRecallStatus, &params()).expect("status");
         assert!(status.contains("\"enabled\":false"));
         assert!(backend.write(Tool::VisualRecallSetEnabled, r#"{"enabled":true}"#).is_ok());

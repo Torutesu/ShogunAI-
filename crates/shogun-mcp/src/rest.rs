@@ -128,6 +128,12 @@ fn resolve(method: Method, path: &str) -> Result<Routed, RouteMiss> {
         ["v1", "memory", "notes"] => {
             method_is(method, Method::Post, Routed::Write { tool: Tool::MemoryAppendNote, level: Level::L1 })
         }
+        ["v1", "profile", "whoami"] => {
+            method_is(method, Method::Get, Routed::Read { tool: Tool::ProfileWhoami, id: None })
+        }
+        ["v1", "profile"] => {
+            method_is(method, Method::Post, Routed::Write { tool: Tool::ProfileSet, level: Level::L1 })
+        }
         ["v1", "state", "proposals"] => {
             method_is(method, Method::Post, Routed::Write { tool: Tool::StateProposeUpdate, level: Level::L2 })
         }
@@ -631,6 +637,14 @@ mod tests {
         assert_eq!(
             route(&req(Method::Post, "/v1/visual_recall/frames/delete", Some("t")), &reg()),
             Routed::Write { tool: Tool::VisualRecallDeleteFrame, level: Level::L1 }
+        );
+        assert_eq!(
+            route(&req(Method::Get, "/v1/profile/whoami", Some("t")), &reg()),
+            Routed::Read { tool: Tool::ProfileWhoami, id: None }
+        );
+        assert_eq!(
+            route(&req(Method::Post, "/v1/profile", Some("t")), &reg()),
+            Routed::Write { tool: Tool::ProfileSet, level: Level::L1 }
         );
     }
 

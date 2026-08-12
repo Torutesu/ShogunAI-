@@ -16,6 +16,8 @@ pub mod connection;
 pub mod dispatch;
 pub mod mcp;
 pub mod memory_api;
+/// Memory API enable gate + profile prefs (`memory_api.json`).
+pub mod memory_api_settings;
 pub mod rest;
 pub mod scope;
 pub mod service_gate;

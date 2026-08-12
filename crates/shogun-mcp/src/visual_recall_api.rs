@@ -2,7 +2,7 @@
 
 use crate::memory_api::Tool;
 
-/// Visual-recall reads return structured JSON, not [`crate::backend::ReadItem`] rows.
+/// Visual-recall / profile reads return structured JSON, not [`crate::backend::ReadItem`] rows.
 pub fn is_structured_read(tool: Tool) -> bool {
     matches!(
         tool,
@@ -10,6 +10,7 @@ pub fn is_structured_read(tool: Tool) -> bool {
             | Tool::VisualRecallSearchFrames
             | Tool::VisualRecallGetFrame
             | Tool::VisualRecallRescanFrame
+            | Tool::ProfileWhoami
     )
 }
 
