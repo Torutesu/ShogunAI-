@@ -17,14 +17,14 @@
 pub use shogun_core::notch::hover::{HoverParams, HoverSignal, HoverTracker};
 
 #[cfg(target_os = "macos")]
-pub use mac::{start, TapEvent};
+pub use mac::{set_hover_band_cg, start, TapEvent};
 
 #[cfg(target_os = "macos")]
 mod mac {
     use std::cell::Cell;
     use std::ffi::c_void;
     use std::ptr::NonNull;
-    use std::sync::atomic::{AtomicPtr, Ordering};
+    use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
     use std::sync::mpsc::Sender;
     use std::time::Duration;
 
@@ -34,20 +34,46 @@ mod mac {
         CGEventTapProxy, CGEventType,
     };
 
-    /// Height of the early-reject band, measured DOWN FROM THE TOP OF WHICHEVER DISPLAY the
-    /// pointer is on. Mirrors shogun_core's 40pt band (spec §3.4.1).
-    ///
-    /// Not an absolute `y <= 40`: CG's origin is the primary display's top-left, so on a second
-    /// monitor placed anywhere but exactly level with the primary, its top edge sits at some other
-    /// global y — an absolute test made the notch unreachable there (⌥J worked, hover didn't).
-    const TOP_BAND_CG: f64 = 40.0;
+    /// Default Idle early-reject zone before geometry arrives (spec §3.4.1 silhouette ≈180×40).
+    /// Grown to live panel size while open so moves into the Expanded body still reach HoverTracker.
+    const DEFAULT_BAND_H_CG: f64 = 40.0;
+    const DEFAULT_BAND_W_CG: f64 = 184.0; // ~180 notch + 2pt pad each side
+    static HOVER_BAND_H_BITS: AtomicU64 = AtomicU64::new(DEFAULT_BAND_H_CG.to_bits());
+    static HOVER_BAND_W_BITS: AtomicU64 = AtomicU64::new(DEFAULT_BAND_W_CG.to_bits());
 
-    /// The top edge, in CG coordinates, of the display containing `x, y`.
+    /// Set the CGEventTap early-reject zone: `height` points down from each display's top,
+    /// `width` centred on that display (Idle = notch silhouette; open = panel + grace).
+    /// No full-menu-bar strip — X must stay under the visible notch/panel.
+    pub fn set_hover_band_cg(height: f64, width: f64) {
+        let h = if height.is_finite() && height > 0.0 {
+            height
+        } else {
+            DEFAULT_BAND_H_CG
+        };
+        let w = if width.is_finite() && width > 0.0 {
+            width
+        } else {
+            DEFAULT_BAND_W_CG
+        };
+        HOVER_BAND_H_BITS.store(h.to_bits(), Ordering::Relaxed);
+        HOVER_BAND_W_BITS.store(w.to_bits(), Ordering::Relaxed);
+    }
+
+    fn hover_band_h_cg() -> f64 {
+        f64::from_bits(HOVER_BAND_H_BITS.load(Ordering::Relaxed))
+    }
+
+    fn hover_band_w_cg() -> f64 {
+        f64::from_bits(HOVER_BAND_W_BITS.load(Ordering::Relaxed))
+    }
+
+    /// The top edge, in CG coordinates, of the display containing `x, y`, plus that display's
+    /// horizontal centre (for notch-centred X early-reject).
     ///
     /// Uses CoreGraphics rather than NSScreen because this runs on the tap's own CFRunLoop thread,
-    /// where AppKit is not safe to touch. Falls back to 0.0 (the primary display's top) when the
-    /// point is on no known display, which keeps the old behaviour rather than dropping the event.
-    fn display_top_cg(x: f64, y: f64) -> f64 {
+    /// where AppKit is not safe to touch. Falls back to (0.0, x) when the point is on no known
+    /// display, which keeps prior Y behaviour rather than dropping the event.
+    fn display_top_and_mid_cg(x: f64, y: f64) -> (f64, f64) {
         use objc2_core_graphics::{CGDisplayBounds, CGGetDisplaysWithPoint};
         let point = objc2_core_foundation::CGPoint { x, y };
         let mut ids: [u32; 8] = [0; 8];
@@ -58,10 +84,11 @@ mod mac {
             CGGetDisplaysWithPoint(point, ids.len() as u32, ids.as_mut_ptr(), &mut count)
         };
         if ok != objc2_core_graphics::CGError::Success || count == 0 {
-            return 0.0;
+            return (0.0, x);
         }
         let bounds = CGDisplayBounds(ids[0]);
-        bounds.origin.y
+        let mid_x = bounds.origin.x + bounds.size.width / 2.0;
+        (bounds.origin.y, mid_x)
     }
 
     /// Events forwarded from the tap, in CGEvent (top-left origin) coordinates.
@@ -121,9 +148,12 @@ mod mac {
             let _ = ctx.tx.send(TapEvent::Up);
         } else if etype == CGEventType::MouseMoved || etype == CGEventType::LeftMouseDragged {
             let loc = unsafe { CGEvent::location(Some(event.as_ref())) };
-            let inside = loc.y - display_top_cg(loc.x, loc.y) <= TOP_BAND_CG;
-            // Early reject: below the band AND already known-outside → zero further work.
-            // One edge sample passes on band exit so HoverTracker sees the leave.
+            let (top_y, mid_x) = display_top_and_mid_cg(loc.x, loc.y);
+            let half_w = hover_band_w_cg() / 2.0;
+            let inside = (loc.y - top_y) <= hover_band_h_cg()
+                && (loc.x - mid_x).abs() <= half_w;
+            // Early reject: outside the notch/panel silhouette AND already known-outside → zero
+            // further work. One edge sample passes on band exit so HoverTracker sees the leave.
             if inside || ctx.in_band.get() {
                 ctx.in_band.set(inside);
                 let _ = ctx.tx.send(TapEvent::Moved { x: loc.x, y: loc.y, buttons: ctx.buttons.get() });

@@ -23,7 +23,14 @@
   "bundle": {
     "active": true,
     "targets": ["app"],
-    "icon": ["icons/icon.icns"],
+    "icon": [
+      "icons/icon-32.png",
+      "icons/icon-128.png",
+      "icons/icon-256.png",
+      "icons/icon-512.png",
+      "icons/icon.png",
+      "icons/icon.icns"
+    ],
     "macOS": {
       "entitlements": "entitlements.plist",
       "minimumSystemVersion": "14.0"

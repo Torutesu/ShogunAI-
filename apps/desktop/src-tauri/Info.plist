@@ -2,12 +2,12 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <!-- Accessory / agent app: no Dock icon, background overlay. Declaring this in the bundle's
-         Info.plist (not just at runtime) is what lets the notch panel actually join every Space and
-         draw over full-screen apps — the runtime setActivationPolicy is honored for the Dock icon
-         but the window-server treats an unbundled dev process differently for Space management. -->
-    <key>LSUIElement</key>
-    <true/>
+    <!-- Regular app: Dock icon (colored S mark) + menu-bar tray. Overlay panel still uses
+         canJoinAllSpaces + mainMenu+3 window level for notch residency. -->
+    <key>CFBundleName</key>
+    <string>ShogunAI</string>
+    <key>CFBundleDisplayName</key>
+    <string>ShogunAI</string>
     <key>NSScreenCaptureUsageDescription</key>
     <string>SHOGUN reads the focused window only when you turn on Visual recall, runs on-device text recognition, and never saves screenshots.</string>
     <key>NSMicrophoneUsageDescription</key>

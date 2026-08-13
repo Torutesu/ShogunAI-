@@ -16,7 +16,15 @@ fn engine() -> (NotchEngine, Regions, f64) {
     let menubar_min_y = screen.max_y() - 24.0;
     let primary_h = 982.0;
     (
-        NotchEngine::new(regs, menubar_min_y, primary_h, HoverParams::default(), Params::default()),
+        NotchEngine::new(
+            regs,
+            menubar_min_y,
+            primary_h,
+            HoverParams::default(),
+            Params::default(),
+            screen,
+            idle,
+        ),
         regs,
         primary_h,
     )
@@ -37,7 +45,7 @@ fn full_preview_expand_then_collapse_cycle() {
     let (mut e, regs, h) = engine();
     let cx = regs.r_enter.mid_x();
     let cy = regs.r_enter.y + regs.r_enter.h / 2.0;
-    let below_y = regs.top_band_min_y - 50.0;
+    let below_y = 100.0; // well below open r_exp floor (~360pt)
 
     // 1) Below the notch — Idle.
     move_to(&mut e, cx, below_y, h, 0);
@@ -71,7 +79,7 @@ fn preview_then_leave_collapses_without_click() {
     let (mut e, regs, h) = engine();
     let cx = regs.r_enter.mid_x();
     let cy = regs.r_enter.y + regs.r_enter.h / 2.0;
-    let below_y = regs.top_band_min_y - 50.0;
+    let below_y = 100.0; // well below open r_exp floor (~360pt)
 
     move_to(&mut e, cx, cy, h, 500);
     e.on_input(EngineInput::TimerFired(Timer::Dwell));

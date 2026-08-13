@@ -3,8 +3,10 @@
 <plist version="1.0">
 <dict>
     <!-- Same as Info.plist, applied to debug bundles (`tauri build --debug`). -->
-    <key>LSUIElement</key>
-    <true/>
+    <key>CFBundleName</key>
+    <string>ShogunAI</string>
+    <key>CFBundleDisplayName</key>
+    <string>ShogunAI</string>
     <key>NSScreenCaptureUsageDescription</key>
     <string>SHOGUN reads the focused window only when you turn on Visual recall, runs on-device text recognition, and never saves screenshots.</string>
     <key>NSMicrophoneUsageDescription</key>

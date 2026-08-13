@@ -423,7 +423,7 @@ pub mod mac {
             ONBOARDING_LABEL,
             tauri::WebviewUrl::App("onboarding.html".into()),
         )
-        .title("SHOGUN")
+        .title("ShogunAI")
         .inner_size(720.0, 640.0)
         .min_inner_size(640.0, 560.0)
         .resizable(false)
@@ -460,7 +460,7 @@ pub mod mac {
         // canJoinAllSpaces (1<<0) | fullScreenAuxiliary (1<<8) = 257. fullScreenAuxiliary is the
         // bit that lets a non-full-screen window appear over another app's full-screen Space.
         const BEHAVIOR: usize = (1 << 0) | (1 << 8);
-        const LEVEL: isize = 3; // NSFloatingWindowLevel — matches the notch overlay (OVERLAY_LEVEL).
+        const LEVEL: isize = crate::OVERLAY_LEVEL; // mainMenu+3 — notch residency
 
         let ptr = match win.ns_window() {
             Ok(p) if !p.is_null() => p as *mut AnyObject,

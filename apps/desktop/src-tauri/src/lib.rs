@@ -30,10 +30,14 @@ mod geometry;
 mod hover;
 mod inline_source;
 mod integrate;
+mod dock_visibility;
+mod notch_status_visibility;
 mod launch_at_login;
 mod user_config_watch;
 pub mod meeting;
 mod meeting_recap;
+#[cfg(target_os = "macos")]
+mod meeting_live_summary;
 #[cfg(target_os = "macos")]
 mod meeting_translate;
 mod mic;
@@ -62,10 +66,13 @@ mod voice_shortcut;
 static PANEL_BEHAVIOR: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new((1 << 0) | (1 << 8));
 
-/// NSFloatingWindowLevel (3) — the overlay spec's `.floating`: above every normal app window,
-/// below system UI. (Earlier builds used Status/25.)
+/// NSMainMenuWindowLevel (24) + 3 — same as boring.notch (`level = .mainMenu + 3`).
+///
+/// Floating (3) sits UNDER the menu bar. Frame can be flush to `screen.frame.maxY` and Idle
+/// still paints as a gap under the notch because the menu bar occludes the top band. Level 27
+/// draws in the notch/menu-bar region so the welded chin is actually visible there.
 #[cfg(target_os = "macos")]
-const OVERLAY_LEVEL: isize = 3;
+pub(crate) const OVERLAY_LEVEL: isize = 24 + 3;
 /// Window label for the Full UI (spec §D). Shared by the builder and the open path so the
 /// "already open → focus it" check can't drift from the label the window was built with.
 pub(crate) const FULL_UI_LABEL: &str = "fullui";
@@ -81,6 +88,8 @@ const VISUAL_RECALL_W: f64 = 720.0;
 const VISUAL_RECALL_H: f64 = 640.0;
 const VISUAL_RECALL_MIN_W: f64 = 480.0;
 const VISUAL_RECALL_MIN_H: f64 = 400.0;
+/// Open notch panel resize ceiling — must match `PANEL_MAX_SCREEN_FRAC` in App.tsx.
+const PANEL_MAX_SCREEN_FRAC: f64 = 0.75;
 
 /// True while the USER hid the overlay (toggle shortcut / Esc / tray). The auto-residency
 /// machinery (watchers, heal, respawn) must respect this — a deliberately hidden panel stays
@@ -126,19 +135,28 @@ fn current_drag_override() -> Option<shogun_core::notch::geometry::DragOffset> {
     DRAG_OVERRIDE.lock().ok().and_then(|g| *g)
 }
 
-/// Where the panel rests on the screen whose visible frame is `vis`: the user's dragged spot when
-/// one exists (issue #21), else the chosen Castle Position (issue #20). Both are pure functions
-/// with the same on-screen clamp, so a display change can only pull the panel back on screen.
+/// (main thread) Where the panel rests on `screen`: the user's dragged spot when one exists
+/// (issue #21), else the Castle Position dock (issue #20; Notch welds under the hardware notch).
+/// Both paths clamp on-screen, so a display change can only pull the panel back on screen.
+///
+/// SAFETY: `screen` must be a live `NSScreen*`; called on the main thread.
 #[cfg(target_os = "macos")]
-fn resting_origin(
-    vis: shogun_core::notch::geometry::Rect,
-    w: f64,
-    h: f64,
-) -> shogun_core::notch::geometry::Point {
-    use shogun_core::notch::geometry::{castle_origin, drag_origin};
+unsafe fn resting_dock_origin(
+    screen: *mut objc2::runtime::AnyObject,
+    width: f64,
+    height: f64,
+) -> objc2_foundation::NSPoint {
+    use objc2::msg_send;
+    use objc2_foundation::{NSPoint, NSRect};
+    use shogun_core::notch::geometry::{drag_origin, Rect as GRect};
     match current_drag_override() {
-        Some(off) => drag_origin(vis, w, h, off),
-        None => castle_origin(vis, w, h, current_castle()),
+        Some(off) => {
+            let vf: NSRect = msg_send![screen, visibleFrame];
+            let vis = GRect::new(vf.origin.x, vf.origin.y, vf.size.width, vf.size.height);
+            let o = drag_origin(vis, width, height, off);
+            NSPoint { x: o.x, y: o.y }
+        }
+        None => castle_dock_origin(screen, width, height, current_castle()),
     }
 }
 
@@ -181,16 +199,8 @@ pub(crate) fn overlay_ptr(handle: &tauri::AppHandle) -> Option<*mut objc2::runti
 /// (spec §3.11.2), then in setup: the native overlay NSPanel, geometry read, mouse tap, and the
 /// integrated engine + measurement streams.
 pub fn run() {
-    // ROOT-CAUSE FIX (overlay): become an Accessory (background) app BEFORE AppKit creates any
-    // window. The reference overlays that float over every app/Space are Accessory/LSUIElement
-    // from process start; SHOGUN used to create its window as a Regular app and flip the policy
-    // afterwards — and a window born under Regular policy keeps its original Space binding, which
-    // is why canJoinAllSpaces read back correctly yet was never honored. The window itself is no
-    // longer declared in tauri.conf.json: it is built in setup, after this line has run.
-    #[cfg(target_os = "macos")]
-    if std::env::var("SHOGUN_NO_NOTCH").is_err() {
-        set_accessory_activation();
-    }
+    // Activation policy (Regular vs Accessory) is applied in setup_macos from dock_visibility.json
+    // before the overlay window is built — see dock_visibility::mac::init.
     let builder = tauri::Builder::default();
     #[cfg(target_os = "macos")]
     let builder = builder
@@ -215,10 +225,13 @@ pub fn run() {
         meeting::mac::meeting_start,
         meeting::mac::meeting_not_now,
         meeting::mac::meeting_stop,
+        meeting::mac::meeting_toggle_pause,
         meeting::mac::meeting_save_note,
         meeting::mac::meeting_recap,
         meeting::mac::meeting_recap_minutes,
         meeting::mac::meeting_select_kk_configured,
+        #[cfg(target_os = "macos")]
+        meeting_live_summary::meeting_request_live_summary,
         meeting::mac::get_deepgram_key_status,
         meeting::mac::set_deepgram_key,
         meeting::mac::clear_deepgram_key,
@@ -233,6 +246,10 @@ pub fn run() {
         meeting::mac::set_meeting_mode,
         meeting::mac::set_meeting_langs,
         meeting::mac::meeting_overlay_dismiss,
+        meeting::mac::meeting_set_overlay_panel,
+        meeting::mac::meeting_set_overlay_canvas,
+        meeting::mac::meeting_set_overlay_chat,
+        meeting::mac::meeting_set_overlay_size,
         visual_recall::mac::get_visual_recall_settings,
         visual_recall::mac::set_visual_recall_enabled,
         visual_recall::mac::get_visual_recall_status,
@@ -324,6 +341,10 @@ pub fn run() {
         sound::mac::preview_sound_cue,
         launch_at_login::mac::get_launch_at_login_settings,
         launch_at_login::mac::set_launch_at_login_enabled,
+        dock_visibility::mac::get_dock_visible,
+        dock_visibility::mac::set_dock_visible,
+        notch_status_visibility::get_notch_status_visible,
+        notch_status_visibility::set_notch_status_visible,
         voice_session::mac::get_voice_settings,
         voice_session::mac::set_voice_enabled,
         voice_session::mac::voice_dismiss,
@@ -385,10 +406,12 @@ fn setup_macos(app: &tauri::App) {
     // adopted/docked, so it lands at the right spot on launch instead of flashing at the notch and
     // jumping. Default (Notch) reproduces the historical top-centre dock.
     castle::init(app.handle());
+    // Dock vs menu-bar-only: must run before the overlay window is first built.
+    dock_visibility::mac::init(app);
 
-    // The window is NOT declared in tauri.conf.json — it is built HERE, after the process became
-    // an Accessory app at the very top of run(). A window created while the app was still Regular
-    // keeps its original Space binding forever (canJoinAllSpaces reads back but is ignored) —
+    // The window is NOT declared in tauri.conf.json — it is built HERE, after activation policy
+    // is set from the saved preference. A window created while the app was still Regular keeps
+    // its original Space binding forever (canJoinAllSpaces reads back but is ignored) —
     // the last structural difference between SHOGUN and overlays that float everywhere.
     match app.get_webview_window("notch") {
         Some(win) => {
@@ -434,23 +457,26 @@ fn setup_macos(app: &tauri::App) {
     watch_space_changes(app);
     spawn_panel_state_logger(app);
 
-    // Menu-bar residency (overlay spec): a ⚔ tray item with Show/Hide + Quit. Combined with the
-    // Accessory policy there is no Dock icon — SHOGUN lives in the menu bar like other overlays.
+    // Menu-bar residency: S-mark tray icon (template silhouette) with Show/Hide + Quit.
     {
         use tauri::menu::{Menu, MenuItem};
         use tauri::tray::TrayIconBuilder;
         let items = (
             MenuItem::with_id(app, "toggle", "Show / Hide", true, None::<&str>),
-            MenuItem::with_id(app, "quit", "Quit SHOGUN", true, None::<&str>),
+            MenuItem::with_id(app, "quit", "Quit ShogunAI", true, None::<&str>),
         );
         if let (Ok(toggle_i), Ok(quit_i)) = items {
             match Menu::with_items(app, &[&toggle_i, &quit_i]) {
                 Ok(menu) => {
-                    let mut b = TrayIconBuilder::with_id("shogun-tray").menu(&menu).title("⚔");
-                    if let Some(icon) = app.default_window_icon() {
-                        b = b.icon(icon.clone());
-                    }
-                    let built = b
+                    let tray_icon = tauri::image::Image::from_bytes(
+                        include_bytes!("../icons/tray-icon@2x.png"),
+                    )
+                    .expect("tray icon bytes");
+                    let built = TrayIconBuilder::with_id("shogun-tray")
+                        .menu(&menu)
+                        .tooltip("ShogunAI")
+                        .icon(tray_icon)
+                        .icon_as_template(true)
                         .on_menu_event(|app, event| match event.id.as_ref() {
                             "toggle" => toggle_panel(app),
                             "quit" => {
@@ -461,7 +487,7 @@ fn setup_macos(app: &tauri::App) {
                         })
                         .build(app);
                     match built {
-                        Ok(_tray) => eprintln!("[shell] menu-bar tray installed (⚔)"),
+                        Ok(_tray) => eprintln!("[shell] menu-bar tray installed (S mark)"),
                         Err(e) => eprintln!("[shell] tray install failed: {e}"),
                     }
                 }
@@ -489,7 +515,7 @@ fn setup_macos(app: &tauri::App) {
     // Pin the panel INTO the notch band. Tauri's set_position is clamped below the menu bar
     // (observed: the top edge sat 39pt down — "under the notch" never actually happened), so set
     // the frame directly on the NSWindow: top-centre of its screen, top edge at the true screen
-    // top. Level 25 draws over the menu-bar band, i.e. real notch residency.
+    // top. Level mainMenu+3 (27) draws over the menu-bar band — floating (3) does not.
     if let Some(ptr) = overlay_ptr(app.handle()) {
         // SAFETY: live NSWindow/NSPanel on the main thread (setup).
         unsafe { pin_top_centre(ptr) };
@@ -507,6 +533,19 @@ fn setup_macos(app: &tauri::App) {
     // T-07/T-08: mouse tap → integrated engine + measurement streams.
     let (tx, rx) = std::sync::mpsc::channel::<hover::TapEvent>();
     hover::start(tx);
+    // Idle early-reject zone = notch silhouette + 2pt pad (not a full menu-bar strip).
+    {
+        use geometry::GeometryParams;
+        let p = GeometryParams::default();
+        hover::set_hover_band_cg(g.idle.h + p.enter_bottom, g.idle.w + 2.0 * p.enter_lr);
+        eprintln!(
+            "[spike] hover band Idle: {:.0}×{:.0} (visible idle {:.0}×{:.0})",
+            g.idle.w + 2.0 * p.enter_lr,
+            g.idle.h + p.enter_bottom,
+            g.idle.w,
+            g.idle.h
+        );
+    }
     let menubar_min_y = g.screen.max_y() - g.menubar_h;
     let shared = integrate::start(
         app.handle().clone(),
@@ -516,11 +555,13 @@ fn setup_macos(app: &tauri::App) {
             primary_height: g.primary_height,
             is_notch: g.is_notch,
             display_count: g.display_count,
+            screen: g.screen,
+            idle: g.idle,
             // Every display's own notch geometry, so hovering the notch on a second monitor is
             // hit-tested against that monitor rather than against the primary's coordinates.
             per_display: geometry::mac::read_all(mtm)
                 .into_iter()
-                .map(|d| (d.screen, d.regions, d.screen.max_y() - d.menubar_h))
+                .map(|d| (d.screen, d.regions, d.screen.max_y() - d.menubar_h, d.idle))
                 .collect(),
         },
         rx,
@@ -670,24 +711,55 @@ fn setup_macos(app: &tauri::App) {
     report_panel_health(app.handle());
 }
 
-/// Set the app's activation policy to Accessory (NSApplicationActivationPolicyAccessory = 1): no
-/// Dock icon, background overlay. Required for the notch window to actually follow every Space and
-/// draw over full-screen apps — a Regular-policy app ignores that even with canJoinAllSpaces set.
-/// Runs on the main thread (setup).
+/// (main thread) Dock origin for castle placement. Notch welds to the physical screen top
+/// (full `frame`); other castles use `visibleFrame` so they clear the menu bar / Dock.
+///
+/// SAFETY: `screen` must be a live `NSScreen*`; called on the main thread.
 #[cfg(target_os = "macos")]
-fn set_accessory_activation() {
-    use objc2::runtime::AnyObject;
-    use objc2::{class, msg_send};
-    // SAFETY: standard AppKit calls on the shared NSApplication, on the main thread.
-    unsafe {
-        let ns_app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
-        if ns_app.is_null() {
-            eprintln!("[shell] NSApplication nil — activation policy unchanged");
-            return;
-        }
-        let ok: bool = msg_send![ns_app, setActivationPolicy: 1isize];
-        eprintln!("[shell] activation policy = Accessory (no Dock icon, all-spaces overlay) ok={ok}");
-    }
+unsafe fn castle_dock_origin(
+    screen: *mut objc2::runtime::AnyObject,
+    width: f64,
+    height: f64,
+    pos: shogun_core::notch::geometry::CastlePosition,
+) -> objc2_foundation::NSPoint {
+    use objc2::msg_send;
+    use objc2_foundation::{NSPoint, NSRect};
+    use shogun_core::notch::geometry::{castle_dock_frame, castle_origin, Rect as GRect};
+    let f: NSRect = msg_send![screen, frame];
+    let vf: NSRect = msg_send![screen, visibleFrame];
+    let screen_r = GRect::new(f.origin.x, f.origin.y, f.size.width, f.size.height);
+    let vis_r = GRect::new(vf.origin.x, vf.origin.y, vf.size.width, vf.size.height);
+    let dock = castle_dock_frame(screen_r, vis_r, pos);
+    let o = castle_origin(dock, width, height, pos);
+    NSPoint { x: o.x, y: o.y }
+}
+
+/// Clamp a proposed frame into the castle dock rect (full screen for Notch, visible otherwise).
+///
+/// SAFETY: `screen` must be a live `NSScreen*`; called on the main thread.
+#[cfg(target_os = "macos")]
+unsafe fn clamp_to_castle_dock(
+    screen: *mut objc2::runtime::AnyObject,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    pos: shogun_core::notch::geometry::CastlePosition,
+) -> (f64, f64) {
+    use objc2::msg_send;
+    use objc2_foundation::NSRect;
+    use shogun_core::notch::geometry::{castle_dock_frame, Rect as GRect};
+    let f: NSRect = msg_send![screen, frame];
+    let vf: NSRect = msg_send![screen, visibleFrame];
+    let screen_r = GRect::new(f.origin.x, f.origin.y, f.size.width, f.size.height);
+    let vis_r = GRect::new(vf.origin.x, vf.origin.y, vf.size.width, vf.size.height);
+    let dock = castle_dock_frame(screen_r, vis_r, pos);
+    let max_x = dock.x + (dock.w - width).max(0.0);
+    let max_y = dock.y + (dock.h - height).max(0.0);
+    (
+        x.clamp(dock.x, max_x),
+        y.clamp(dock.y, max_y),
+    )
 }
 
 /// (main thread) Move the panel to the DISPLAY the mouse cursor is on, pinned top-centre. A window
@@ -701,7 +773,6 @@ unsafe fn reposition_to_cursor_screen(ptr: *mut objc2::runtime::AnyObject) {
     use objc2::runtime::AnyObject;
     use objc2::{class, msg_send};
     use objc2_foundation::{NSPoint, NSRect};
-    use shogun_core::notch::geometry::Rect as GRect;
     let mouse: NSPoint = msg_send![class!(NSEvent), mouseLocation];
     let screens: *mut AnyObject = msg_send![class!(NSScreen), screens];
     let count: usize = if screens.is_null() { 0 } else { msg_send![screens, count] };
@@ -717,14 +788,10 @@ unsafe fn reposition_to_cursor_screen(ptr: *mut objc2::runtime::AnyObject) {
             && mouse.y <= f.origin.y + f.size.height;
         if inside {
             // Dock at the user's resting place on the cursor's display: the dragged spot when one
-            // exists (issue #21), else the Castle Position (issue #20). The default (Notch) keeps
-            // the historical behaviour: top-centre, just under the menu bar/notch, never
-            // overlapping it. Edge/corner positions rest flush to that edge/corner instead.
-            let vf: NSRect = msg_send![s, visibleFrame];
+            // exists (issue #21), else the Castle Position (issue #20). Notch welds to the
+            // physical screen top; edge/corner positions rest on the visible frame.
             let w: NSRect = msg_send![ptr, frame];
-            let vis = GRect::new(vf.origin.x, vf.origin.y, vf.size.width, vf.size.height);
-            let o = resting_origin(vis, w.size.width, w.size.height);
-            let origin = NSPoint { x: o.x, y: o.y };
+            let origin = unsafe { resting_dock_origin(s, w.size.width, w.size.height) };
             with_programmatic_move(|| {
                 // SAFETY: same contract as the enclosing fn (main thread, live panel); the
                 // closure needs its own block because it doesn't inherit the unsafe context.
@@ -838,22 +905,21 @@ fn set_panel_hidden(handle: &tauri::AppHandle) {
                 let _: () = msg_send![ptr, orderOut: nil];
             }
         }
-        eprintln!("[shell] toggle → hidden (summon shortcut or ⚔ tray to show)");
+        eprintln!("[shell] toggle → hidden (summon shortcut or menu-bar tray to show)");
     });
 }
 
 /// (main thread) Dock the window at the user's resting place on the MENU-BAR display: the dragged
-/// spot when one exists (issue #21), else the Castle Position (issue #20). The default (Notch) is
-/// top-centre, just under the menu bar/notch (visibleFrame top — never overlapping the notch);
-/// edge/corner positions rest flush to that edge/corner.
+/// spot when one exists (issue #21), else the Castle Position (issue #20). Notch welds to the
+/// physical screen top (full frame — behind/under the hardware notch); edge and corner castles
+/// rest on the visible frame so they clear the menu bar / Dock.
 ///
 /// SAFETY: caller guarantees `ptr` is the live NSWindow and we're on the main thread.
 #[cfg(target_os = "macos")]
 unsafe fn pin_top_centre(ptr: *mut objc2::runtime::AnyObject) {
     use objc2::runtime::AnyObject;
     use objc2::{class, msg_send};
-    use objc2_foundation::{NSPoint, NSRect};
-    use shogun_core::notch::geometry::Rect as GRect;
+    use objc2_foundation::NSRect;
 
     // Dock to the MENU-BAR display, not whichever one the pointer happened to be on at launch.
     //
@@ -882,11 +948,8 @@ unsafe fn pin_top_centre(ptr: *mut objc2::runtime::AnyObject) {
     if screen.is_null() {
         return;
     }
-    let vf: NSRect = msg_send![screen, visibleFrame];
     let w: NSRect = msg_send![ptr, frame];
-    let vis = GRect::new(vf.origin.x, vf.origin.y, vf.size.width, vf.size.height);
-    let o = resting_origin(vis, w.size.width, w.size.height);
-    let origin = NSPoint { x: o.x, y: o.y };
+    let origin = unsafe { resting_dock_origin(screen, w.size.width, w.size.height) };
     with_programmatic_move(|| {
         // SAFETY: same contract as the enclosing fn (main thread, live panel); the closure
         // needs its own block because it doesn't inherit the unsafe context.
@@ -898,10 +961,11 @@ unsafe fn pin_top_centre(ptr: *mut objc2::runtime::AnyObject) {
     // "I can't see it" is usually "it is on the other one", and that is not answerable without
     // the coordinates.
     let anchor = if current_drag_override().is_some() { "drag" } else { current_castle().key() };
+    let f: NSRect = msg_send![screen, frame];
     eprintln!(
         "[shell] panel docked ({}) at {:.0},{:.0} ({:.0}x{:.0}) on the menu-bar display {:.0},{:.0} {:.0}x{:.0}",
-        anchor, o.x, o.y, w.size.width, w.size.height,
-        vf.origin.x, vf.origin.y, vf.size.width, vf.size.height
+        anchor, origin.x, origin.y, w.size.width, w.size.height,
+        f.origin.x, f.origin.y, f.size.width, f.size.height
     );
 }
 
@@ -979,15 +1043,17 @@ fn build_panel_window(handle: &tauri::AppHandle) {
     // shown before the swap). Panels shown as panels from the start are what the reference
     // overlays do.
     let builder = tauri::WebviewWindowBuilder::new(handle, "notch", tauri::WebviewUrl::default())
-        .title("SHOGUN")
+        .title("ShogunAI")
         .transparent(true)
         .decorations(false)
         .resizable(false)
         .always_on_top(true)
-        .shadow(true)
+        // Native shadow under the bezel reads as a floating gap (boring.notch: hasShadow=false).
+        .shadow(false)
         .inner_size(640.0, 300.0)
         .visible(false)
-        .focused(false);
+        .focused(false)
+        .title_bar_style(tauri::TitleBarStyle::Overlay);
     match builder.build() {
         Ok(win) => {
             if std::env::var("SHOGUN_NO_NOTCH").is_err() {
@@ -1033,7 +1099,7 @@ pub(crate) fn build_full_ui_window(handle: &tauri::AppHandle) {
         FULL_UI_LABEL,
         tauri::WebviewUrl::App("fullui.html".into()),
     )
-    .title("SHOGUN")
+    .title("ShogunAI")
     .resizable(true)
     // Spec §D floor. Below this the sidebar plus a three-card health row stops fitting.
     .min_inner_size(FULL_UI_MIN_W, FULL_UI_MIN_H)
@@ -1101,7 +1167,7 @@ pub(crate) fn build_visual_recall_window(handle: &tauri::AppHandle) {
         VISUAL_RECALL_LABEL,
         tauri::WebviewUrl::App("visual-recall.html".into()),
     )
-    .title("SHOGUN — Visual recall")
+    .title("ShogunAI — Visual recall")
     .resizable(true)
     .min_inner_size(VISUAL_RECALL_MIN_W, VISUAL_RECALL_MIN_H)
     .inner_size(VISUAL_RECALL_W, VISUAL_RECALL_H)
@@ -1255,8 +1321,10 @@ fn adopt_native_panel(win: &tauri::WebviewWindow) {
     unsafe {
         let frame: NSRect = msg_send![tao, frame];
         let alloc: *mut AnyObject = msg_send![overlay_panel_class(), alloc];
-        // styleMask: borderless (0) | nonactivatingPanel (1<<7); backing: NSBackingStoreBuffered.
-        let style: usize = 1 << 7;
+        // Match boring.notch: borderless | utilityWindow | nonactivatingPanel | hudWindow.
+        // Earlier: nonactivatingPanel alone (128) — fine for Space behavior, but utility+hud
+        // matches the reference panel chrome that actually lives in the notch band.
+        let style: usize = (1 << 4) | (1 << 7) | (1 << 13); // utility | nonactivating | hud
         let panel: *mut AnyObject =
             msg_send![alloc, initWithContentRect: frame, styleMask: style, backing: 2usize, defer: false];
         if panel.is_null() {
@@ -1275,6 +1343,17 @@ fn adopt_native_panel(win: &tauri::WebviewWindow) {
         let _: () = msg_send![panel, setContentView: cv];
         let _: () = msg_send![cv, release];
 
+        // Paint from (0,0) of the panel — no titlebar/safe-area inset pushing the WKWebView down.
+        // Flexible width/height so setFrame on the panel keeps the webview flush-top.
+        let content: NSRect = msg_send![panel, contentRectForFrameRect: frame];
+        let flush = NSRect {
+            origin: objc2_foundation::NSPoint { x: 0.0, y: 0.0 },
+            size: content.size,
+        };
+        let _: () = msg_send![cv, setFrame: flush];
+        // NSViewWidthSizable (2) | NSViewHeightSizable (16)
+        let _: () = msg_send![cv, setAutoresizingMask: (2usize | 16usize)];
+
         // No NSVisualEffectView here on purpose. Vibrancy frosts what is behind the window —
         // it obscures your work rather than revealing it, which is the opposite of what this
         // overlay wants. The panel is plain alpha over a transparent NSPanel so the window you
@@ -1289,9 +1368,11 @@ fn adopt_native_panel(win: &tauri::WebviewWindow) {
         let subs: *mut AnyObject = msg_send![cv, subviews];
         let n: usize = if subs.is_null() { 0 } else { msg_send![subs, count] };
         eprintln!(
-            "[shell] adopt: panel content view {:.0}x{:.0} with {n} subview(s){}",
+            "[shell] adopt: panel content view {:.0}x{:.0} origin=({:.0},{:.0}) with {n} subview(s){}",
             cv_frame.size.width,
             cv_frame.size.height,
+            cv_frame.origin.x,
+            cv_frame.origin.y,
             if n == 0 { " — EMPTY, nothing will be drawn" } else { "" }
         );
 
@@ -1299,17 +1380,23 @@ fn adopt_native_panel(win: &tauri::WebviewWindow) {
         let _: () = msg_send![panel, setOpaque: false];
         let clear: *mut AnyObject = msg_send![class!(NSColor), clearColor];
         let _: () = msg_send![panel, setBackgroundColor: clear];
-        let _: () = msg_send![panel, setHasShadow: true];
-        let _: () = msg_send![panel, setLevel: OVERLAY_LEVEL];
+        // Weld into the hardware notch: native window shadow reads as a floating gap under the
+        // bezel (boring.notch uses hasShadow=false; lift lives in CSS only on Expanded body).
+        let _: () = msg_send![panel, setHasShadow: false];
+        // Kill AppKit window animations that fight the CSS Idle↔Expanded morph.
+        let _: () = msg_send![panel, setAnimationBehavior: 2isize]; // NSWindowAnimationBehaviorNone
         let want = PANEL_BEHAVIOR.load(std::sync::atomic::Ordering::Relaxed);
         let _: () = msg_send![panel, setCollectionBehavior: want];
         let _: () = msg_send![panel, setHidesOnDeactivate: false];
         let _: () = msg_send![panel, setCanHide: false];
         let _: () = msg_send![panel, setMovableByWindowBackground: true];
+        // ORDER: setFloatingPanel BEFORE setLevel. AppKit's floating-panel path resets level to
+        // NSFloatingWindowLevel (3); boring.notch sets isFloatingPanel first, then mainMenu+3.
         let _: () = msg_send![panel, setFloatingPanel: true];
         let _: () = msg_send![panel, setBecomesKeyOnlyIfNeeded: true];
         let _: () = msg_send![panel, setWorksWhenModal: true];
         let _: () = msg_send![panel, setAcceptsMouseMovedEvents: true];
+        let _: () = msg_send![panel, setLevel: OVERLAY_LEVEL];
 
         NATIVE_PANEL.store(panel, std::sync::atomic::Ordering::Release);
         reposition_to_cursor_screen(panel);
@@ -1318,8 +1405,11 @@ fn adopt_native_panel(win: &tauri::WebviewWindow) {
         let got: usize = msg_send![panel, collectionBehavior];
         let lvl: isize = msg_send![panel, level];
         let mask: usize = msg_send![panel, styleMask];
+        let pf: NSRect = msg_send![panel, frame];
         eprintln!(
-            "[shell] NATIVE NSPanel hosting the webview — behavior={got} level={lvl} styleMask={mask} (born a panel, no swap)"
+            "[shell] NATIVE NSPanel hosting the webview — behavior={got} level={lvl} styleMask={mask} \
+             frame={:.0},{:.0} {:.0}x{:.0} (want level {OVERLAY_LEVEL}=mainMenu+3)",
+            pf.origin.x, pf.origin.y, pf.size.width, pf.size.height
         );
 
         // Drag override capture (issue #21): performWindowDragWithEvent: is fully native — no
@@ -1400,14 +1490,15 @@ fn note_user_move(ptr: *mut objc2::runtime::AnyObject) {
 
 /// Resize the visible overlay (native panel or fallback window) — the webview's minimize/expand
 /// control. AppKit frames are bottom-left origin. The default path re-docks the panel at its
-/// resting place with the new size — the dragged spot when one exists (issue #21, anchored
-/// top-left so it grows down/right from where the pill sits), else the Castle Position
-/// (issue #20), so it grows AWAY from its anchor (down from the notch, up from the bottom, right
-/// from the left edge …). `anchor: "left"` is the manual corner-grip drag: it keeps the top-left
-/// corner put so the panel grows down/right under the pointer, wherever the panel currently sits.
+/// resting place with the new size — the dragged spot when one exists (issue #21), else the
+/// Castle Position (issue #20) — so it grows AWAY from its anchor (down from the notch, up from
+/// the bottom, right from the left edge …; Notch stays welded under the hardware notch).
+/// `anchor: "left"` is the manual corner-grip drag: it keeps the top-left corner put so the panel
+/// grows down/right under the pointer, wherever the panel currently sits.
 #[cfg(target_os = "macos")]
 #[tauri::command]
 fn set_panel_size(app: tauri::AppHandle, width: f64, height: f64, anchor: Option<String>) {
+    use tauri::Manager;
     let keep_left = anchor.as_deref() == Some("left");
     let anchor_label = if keep_left { "left" } else { "rest" };
     let h = app.clone();
@@ -1415,35 +1506,41 @@ fn set_panel_size(app: tauri::AppHandle, width: f64, height: f64, anchor: Option
         use objc2::msg_send;
         use objc2_foundation::{NSPoint, NSRect, NSSize};
         use objc2::runtime::AnyObject;
-        use shogun_core::notch::geometry::Rect as GRect;
         let Some(ptr) = overlay_ptr(&h) else { return };
         // SAFETY: main thread, live NSWindow/NSPanel.
         unsafe {
-            let f: NSRect = msg_send![ptr, frame];
+            let mut width = width;
+            let mut height = height;
             let screen: *mut AnyObject = msg_send![ptr, screen];
+            if !screen.is_null() {
+                let f: NSRect = msg_send![screen, frame];
+                let max_w = (f.size.width * PANEL_MAX_SCREEN_FRAC).floor();
+                let max_h = (f.size.height * PANEL_MAX_SCREEN_FRAC).floor();
+                width = width.min(max_w);
+                height = height.min(max_h);
+            }
+            let f: NSRect = msg_send![ptr, frame];
+            let pos = current_castle();
             let (mut x, mut y) = if keep_left {
                 // Manual corner-grip resize (bottom-right grip): the top-left has to stay put or the
                 // panel walks out from under the pointer.
                 (f.origin.x, f.origin.y + f.size.height - height)
             } else if !screen.is_null() {
                 // View switch (handle ↔ chat ↔ settings): re-dock at the resting place so a size
-                // change grows away from the anchored edge and the panel never drifts off its
-                // resting place. The notch default reproduces the historical top-centre dock.
-                let vf: NSRect = msg_send![screen, visibleFrame];
-                let vis = GRect::new(vf.origin.x, vf.origin.y, vf.size.width, vf.size.height);
-                let o = resting_origin(vis, width, height);
+                // change grows away from the anchored edge — the dragged spot when one exists
+                // (issue #21), else the Castle Position. Notch uses the full screen frame so the
+                // top edge stays welded under the hardware notch.
+                let o = resting_dock_origin(screen, width, height);
                 (o.x, o.y)
             } else {
                 // No screen (rare): fall back to holding the panel's centre and top edge.
                 (f.origin.x + f.size.width / 2.0 - width / 2.0, f.origin.y + f.size.height - height)
             };
-            // Whichever path we took, never hang off a screen edge.
+            // Whichever path we took, never hang off the dock frame.
             if !screen.is_null() {
-                let vf: NSRect = msg_send![screen, visibleFrame];
-                let max_x = vf.origin.x + (vf.size.width - width).max(0.0);
-                let max_y = vf.origin.y + (vf.size.height - height).max(0.0);
-                x = x.clamp(vf.origin.x, max_x);
-                y = y.clamp(vf.origin.y, max_y);
+                let clamped = clamp_to_castle_dock(screen, x, y, width, height, pos);
+                x = clamped.0;
+                y = clamped.1;
             }
             let r = NSRect { origin: NSPoint { x, y }, size: NSSize { width, height } };
             // Bracketed: a resize repositions the frame origin, which posts the same did-move
@@ -1453,16 +1550,34 @@ fn set_panel_size(app: tauri::AppHandle, width: f64, height: f64, anchor: Option
                 // Main thread, live NSWindow/NSPanel; the closure runs inside the enclosing
                 // unsafe block, so no inner one is needed.
                 let _: () = msg_send![ptr, setFrame: r, display: true];
+                // Keep the hosted webview flush to the panel content origin after every resize —
+                // otherwise a stale content-view origin reintroduces the under-notch gap.
+                let cv: *mut AnyObject = msg_send![ptr, contentView];
+                if !cv.is_null() {
+                    let content: NSRect = msg_send![ptr, contentRectForFrameRect: r];
+                    let flush = NSRect {
+                        origin: NSPoint { x: 0.0, y: 0.0 },
+                        size: content.size,
+                    };
+                    let _: () = msg_send![cv, setFrame: flush];
+                }
             });
             // The window is transparent, so macOS derives its shadow from the rendered alpha mask
             // — and caches it. Without this the shadow keeps the shape the panel had at its
             // previous size, which shows up as a hard edge sitting away from the glass (most
             // visible collapsing the tall panel back to the pill).
             let _: () = msg_send![ptr, invalidateShadow];
+            let _: () = msg_send![ptr, setHasShadow: false];
+            let _: () = msg_send![ptr, setLevel: OVERLAY_LEVEL];
+            let lvl: isize = msg_send![ptr, level];
             eprintln!(
-                "[shell] panel resized to {:.0}x{:.0} at {:.0},{:.0} (anchor {})",
-                width, height, r.origin.x, r.origin.y, anchor_label
+                "[shell] panel resized to {:.0}x{:.0} at {:.0},{:.0} (anchor {}) level={}",
+                width, height, r.origin.x, r.origin.y, anchor_label, lvl
             );
+        }
+        // Hover R_exp + CGEventTap band must match the live frame or move-into-panel collapses.
+        if let Some(shared) = h.try_state::<std::sync::Arc<integrate::mac::Shared>>() {
+            shared.set_panel_hit_size(width, height);
         }
     });
 }
@@ -2190,8 +2305,7 @@ fn redock_to_castle(handle: &tauri::AppHandle) {
     let _ = handle.run_on_main_thread(move || {
         use objc2::msg_send;
         use objc2::runtime::AnyObject;
-        use objc2_foundation::{NSPoint, NSRect};
-        use shogun_core::notch::geometry::Rect as GRect;
+        use objc2_foundation::NSRect;
         let Some(ptr) = overlay_ptr(&h) else { return };
         // SAFETY: main thread, live NSWindow/NSPanel.
         unsafe {
@@ -2199,14 +2313,11 @@ fn redock_to_castle(handle: &tauri::AppHandle) {
             if screen.is_null() {
                 return;
             }
-            let vf: NSRect = msg_send![screen, visibleFrame];
             let w: NSRect = msg_send![ptr, frame];
-            let vis = GRect::new(vf.origin.x, vf.origin.y, vf.size.width, vf.size.height);
-            // `resting_origin`, not `castle_origin`: the caller (set_castle_position) clears the
-            // drag override first, so this resolves to the castle — and any future caller that
-            // redocks WITHOUT clearing keeps respecting a dragged spot.
-            let o = resting_origin(vis, w.size.width, w.size.height);
-            let origin = NSPoint { x: o.x, y: o.y };
+            // `resting_dock_origin`, not `castle_dock_origin`: the caller (set_castle_position)
+            // clears the drag override first, so this resolves to the castle — and any future
+            // caller that redocks WITHOUT clearing keeps respecting a dragged spot.
+            let origin = resting_dock_origin(screen, w.size.width, w.size.height);
             with_programmatic_move(|| {
                 // Main thread, live NSWindow/NSPanel; the closure runs inside the enclosing
                 // unsafe block, so no inner one is needed.

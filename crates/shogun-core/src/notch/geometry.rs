@@ -84,10 +84,13 @@ pub struct GeometryParams {
 
 impl Default for GeometryParams {
     fn default() -> Self {
+        // enter_lr / enter_bottom: 2pt pad only — hit must hug visible notch silhouette
+        // (not bleed into empty menu-bar left/right/below). Spec Appendix A started at 8/4;
+        // product feedback: that external catch zone felt "outside the notch".
         Self {
-            enter_lr: 8.0,
-            enter_bottom: 4.0,
-            stay_hysteresis: 4.0,
+            enter_lr: 2.0,
+            enter_bottom: 2.0,
+            stay_hysteresis: 2.0,
             exp_margin: 16.0,
             // The webview panel's real default size (App.tsx W × H_OPEN). R_exp smaller than the
             // panel meant a cursor resting in the panel's lower half was "outside" to the
@@ -99,8 +102,22 @@ impl Default for GeometryParams {
     }
 }
 
-/// The Idle "silhouette" rect: the real notch, or the 180×menubar pseudo-notch,
-/// anchored top-centre on `screen` (spec §3.2.1, §3.2.2).
+/// Visible Idle content row below the hardware cutout (boring.notch drop). Welded black still
+/// fills `notch_h`; labels/icons live in this extra strip so they are not under silicon.
+pub const IDLE_CONTENT_DROP: f64 = 44.0;
+
+/// Idle hit/visual height: hardware `notch_h` plus the visible content drop on real-notch
+/// machines. Pseudo-notch already sits in the visible menubar band — no extra drop.
+pub fn idle_height(notch_h: f64, is_notch: bool) -> f64 {
+    if is_notch {
+        notch_h + IDLE_CONTENT_DROP
+    } else {
+        notch_h
+    }
+}
+
+/// The Idle "silhouette" rect: the real notch (plus content drop), or the 180×menubar
+/// pseudo-notch, anchored top-centre on `screen` (spec §3.2.1, §3.2.2).
 pub fn idle_rect(screen: Rect, notch_w: f64, notch_h: f64) -> Rect {
     Rect::new(screen.mid_x() - notch_w / 2.0, screen.max_y() - notch_h, notch_w, notch_h)
 }
@@ -113,14 +130,31 @@ pub fn idle_rect(screen: Rect, notch_w: f64, notch_h: f64) -> Rect {
 /// so it only admits the pinned case.
 pub const TOP_EDGE_OVERSHOOT: f64 = 1.0;
 
-/// Build the three regions from the Idle rect and the screen (spec §3.4.2).
-pub fn regions(screen: Rect, idle: Rect, p: GeometryParams) -> Regions {
+/// Rebuild regions with a live panel size (open/resize). Keeps Idle enter/stay rings; replaces
+/// `r_exp` with the actual panel frame + grace margin so leave-grace covers the Combined region.
+pub fn regions_with_panel(screen: Rect, idle: Rect, panel_w: f64, panel_h: f64, p: GeometryParams) -> Regions {
     let r_enter = idle.expand(p.enter_lr, p.enter_lr, p.enter_bottom, TOP_EDGE_OVERSHOOT);
     let r_stay = r_enter.inset_all(p.stay_hysteresis);
-    let expanded =
-        Rect::new(screen.mid_x() - p.expanded_w / 2.0, screen.max_y() - p.expanded_h, p.expanded_w, p.expanded_h);
-    let r_exp = expanded.inset_all(p.exp_margin);
-    Regions { r_enter, r_stay, r_exp, top_band_min_y: screen.max_y() - p.top_band }
+    let panel = Rect::new(
+        screen.mid_x() - panel_w / 2.0,
+        screen.max_y() - panel_h,
+        panel_w,
+        panel_h,
+    );
+    let r_exp = panel.inset_all(p.exp_margin);
+    // Idle early-reject floor: Idle chin (+ enter bottom). Points inside `r_exp` below this
+    // floor are still tracked (see HoverTracker). Width is enforced in the CGEventTap adapter.
+    Regions {
+        r_enter,
+        r_stay,
+        r_exp,
+        top_band_min_y: screen.max_y() - p.top_band.max(idle.h + p.enter_bottom),
+    }
+}
+
+/// Build the three regions from the Idle rect and the screen (spec §3.4.2).
+pub fn regions(screen: Rect, idle: Rect, p: GeometryParams) -> Regions {
+    regions_with_panel(screen, idle, p.expanded_w, p.expanded_h, p)
 }
 
 /// Where the user parks SHOGUN's panel — its "castle" (issue #20). The Notch is the default,
@@ -198,18 +232,29 @@ impl CastlePosition {
     }
 }
 
-/// Bottom-left NS origin for a `w`×`h` panel resting at `pos` inside `vis` — the target screen's
-/// **visible frame** (menu bar already excluded). The anchored axis sits flush to the edge; the
-/// free axis is centred. The result is clamped so the panel stays fully on screen, matching the
-/// existing top-centre dock (`pin_top_centre`): a panel switching size grows away from its anchor.
-pub fn castle_origin(vis: Rect, w: f64, h: f64, pos: CastlePosition) -> Point {
+/// Which frame to dock against for `pos`.
+///
+/// **Notch** uses the full `screen` frame so the panel top edge meets the physical display top
+/// (welded under/behind the hardware notch — boring.notch). Edge/corner castles use `visible`
+/// (menu bar + Dock already excluded) so they stay in the usable work area.
+pub fn castle_dock_frame(screen: Rect, visible: Rect, pos: CastlePosition) -> Rect {
+    match pos {
+        CastlePosition::Notch => screen,
+        _ => visible,
+    }
+}
+
+/// Bottom-left NS origin for a `w`×`h` panel resting at `pos` inside `dock` — typically from
+/// [`castle_dock_frame`]. The anchored axis sits flush to the edge; the free axis is centred.
+/// The result is clamped so the panel stays inside `dock`.
+pub fn castle_origin(dock: Rect, w: f64, h: f64, pos: CastlePosition) -> Point {
     use CastlePosition::*;
-    let left = vis.x;
-    let centre_x = vis.x + (vis.w - w) / 2.0;
-    let right = vis.max_x() - w;
-    let top = vis.max_y() - h;
-    let middle_y = vis.y + (vis.h - h) / 2.0;
-    let bottom = vis.y;
+    let left = dock.x;
+    let centre_x = dock.x + (dock.w - w) / 2.0;
+    let right = dock.max_x() - w;
+    let top = dock.max_y() - h;
+    let middle_y = dock.y + (dock.h - h) / 2.0;
+    let bottom = dock.y;
     let (x, y) = match pos {
         Notch => (centre_x, top),
         LeftEdge => (left, middle_y),
@@ -218,10 +263,10 @@ pub fn castle_origin(vis: Rect, w: f64, h: f64, pos: CastlePosition) -> Point {
         BottomCenter => (centre_x, bottom),
         BottomRight => (right, bottom),
     };
-    // Keep the panel on-screen even when it is wider/taller than the free space (clamp collapses to
-    // the edge). `max` guards a degenerate visible frame smaller than the panel.
-    let x = x.clamp(vis.x, (vis.max_x() - w).max(vis.x));
-    let y = y.clamp(vis.y, (vis.max_y() - h).max(vis.y));
+    // Keep the panel inside `dock` even when it is wider/taller than the free space (clamp
+    // collapses to the edge). `max` guards a degenerate frame smaller than the panel.
+    let x = x.clamp(dock.x, (dock.max_x() - w).max(dock.x));
+    let y = y.clamp(dock.y, (dock.max_y() - h).max(dock.y));
     Point::new(x, y)
 }
 
@@ -289,10 +334,10 @@ mod tests {
         let s = internal_screen();
         let idle = idle_rect(s, 200.0, 32.0);
         let r = regions(s, idle, GeometryParams::default());
-        // left/right +8, bottom +4, top +TOP_EDGE_OVERSHOOT (pinned-cursor admission).
-        assert_eq!(r.r_enter.x, idle.x - 8.0);
-        assert_eq!(r.r_enter.max_x(), idle.max_x() + 8.0);
-        assert_eq!(r.r_enter.y, idle.y - 4.0);
+        // left/right +2, bottom +2, top +TOP_EDGE_OVERSHOOT (pinned-cursor admission).
+        assert_eq!(r.r_enter.x, idle.x - 2.0);
+        assert_eq!(r.r_enter.max_x(), idle.max_x() + 2.0);
+        assert_eq!(r.r_enter.y, idle.y - 2.0);
         assert_eq!(r.r_enter.max_y(), idle.max_y() + TOP_EDGE_OVERSHOOT);
     }
 
@@ -348,7 +393,10 @@ mod tests {
         assert!(!r.contains(Point::new(5.0, 10.0)));
     }
 
-    // The screen's visible frame (menu bar excluded): 1512×950, offset 0,0 (bottom-left origin).
+    // Full screen vs visible (menu bar excluded): 1512×982 screen, 1512×950 visible.
+    fn screen() -> Rect {
+        Rect::new(0.0, 0.0, 1512.0, 982.0)
+    }
     fn visible() -> Rect {
         Rect::new(0.0, 0.0, 1512.0, 950.0)
     }
@@ -372,13 +420,18 @@ mod tests {
     }
 
     #[test]
-    fn notch_is_top_centre_matching_the_existing_dock() {
+    fn notch_docks_to_full_screen_top_not_visible_frame() {
+        let s = screen();
         let v = visible();
+        assert_eq!(castle_dock_frame(s, v, CastlePosition::Notch), s);
+        assert_eq!(castle_dock_frame(s, v, CastlePosition::BottomCenter), v);
         let (w, h) = (400.0, 180.0);
-        let o = castle_origin(v, w, h, CastlePosition::Notch);
-        // Flush to the visible top, horizontally centred — identical to pin_top_centre's math.
-        assert_eq!(o.y, v.max_y() - h);
-        assert_eq!(o.x, v.x + (v.w - w) / 2.0);
+        let dock = castle_dock_frame(s, v, CastlePosition::Notch);
+        let o = castle_origin(dock, w, h, CastlePosition::Notch);
+        // Flush to physical screen top (behind/under hardware notch), horizontally centred.
+        assert_eq!(o.y, s.max_y() - h);
+        assert_eq!(o.x, s.x + (s.w - w) / 2.0);
+        assert!(o.y + h > v.max_y()); // overlaps menu-bar band — welded, not below it
     }
 
     #[test]

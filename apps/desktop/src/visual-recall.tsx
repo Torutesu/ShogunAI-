@@ -7,6 +7,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { resolveApp, segmentTint } from "./appIcons";
 import { t } from "./strings";
+import { IconClose } from "./utilityIcons";
 import "./styles.css";
 
 const IN_TAURI = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -367,7 +368,7 @@ function VisualRecallBrowse(): JSX.Element {
             )
           ) : null}
           <button type="button" className="vr-chrome__btn vr-chrome__btn--icon" onClick={closeWindow} aria-label={t.visualRecallClose}>
-            ✕
+            <IconClose />
           </button>
         </div>
       </header>

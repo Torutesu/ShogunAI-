@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
@@ -33,7 +34,16 @@ function beginPillDrag(e: React.MouseEvent): void {
 import { t } from "./strings";
 import { AnalyticsToggle } from "./AnalyticsToggle";
 import { ConnectionsList } from "./connections";
-import { comboChips, DEFAULT_BINDS } from "./keys";
+import { DEFAULT_BINDS } from "./keys";
+import {
+  IconClose,
+  IconHistory,
+  IconMaximize2,
+  IconMinimize,
+  IconPin,
+  IconPinOff,
+  IconSettings,
+} from "./utilityIcons";
 
 // SHOGUN panel. A visible, interactive window that hangs from the notch. Opening/closing is driven
 // by direct clicks in the webview (reliable — no dependency on the CGEventTap hover path or a global
@@ -67,6 +77,8 @@ interface MeetingView {
   app_bundle_id: string | null;
   elapsed_ms: number;
   countdown_ms: number;
+  /** Capture/ASR paused; meeting session still open (waveform toggle). */
+  paused?: boolean;
 }
 
 /** mm:ss. Tabular figures in CSS keep the row from reflowing as the seconds tick. */
@@ -161,13 +173,19 @@ const IN_TAURI =
 // Rust-driven respawns.
 const W = 560;
 const H_OPEN = 360;
-const H_HANDLE = 44;
-/** How long the cursor must rest on the collapsed pill before it opens. Long enough that crossing
- *  the pill on the way somewhere else doesn't trigger it, short enough to feel immediate. */
-const HOVER_DWELL_MS = 250;
-/** Grace period after the pointer leaves an unpinned panel. Long enough to cross the gap to a
- *  control that overlaps it, short enough that the panel feels like it follows your attention. */
-const AUTO_COLLAPSE_MS = 400;
+/** Hardware notch cutout (safeAreaInsets.top). Welded black fills this — labels do not. */
+const H_DEAD = 32;
+/** Visible Idle content row below the cutout. Matches pre-weld 44px chin presence; text stays
+ *  out of silicon (dead band above). Keep in sync with CSS `--chin-row-h` + Rust `IDLE_CONTENT_DROP`. */
+const H_CHIN_ROW = 44;
+/** Idle panel height = dead silicon band + readable content row. */
+const H_HANDLE = H_DEAD + H_CHIN_ROW;
+/** Leave grace after pointer exits unpinned panel (spec T4 / playbook P0: 300ms at R_exp). */
+const AUTO_COLLAPSE_MS = 300;
+/** Shell open paint budget — Idle→Expanded morph (CLAUDE.md ≤100ms). */
+const OPEN_ANIM_MS = 100;
+/** Shell close paint budget — keep panel mounted until scale finishes, then shrink frame. */
+const COLLAPSE_ANIM_MS = 140;
 /** How long the pill holds a ⌥-tap outcome before returning to the live source. Long enough to
  *  read, short enough that it never becomes something you have to dismiss. */
 const INLINE_HOLD_MS = 2200;
@@ -184,26 +202,29 @@ const STICKY_INLINE_PHASES = new Set<InlineStatus["phase"]>(["no_key", "key_reje
  *  would only ever punish that path. Waiting is no longer the only option anyway: Stop is live for
  *  the whole turn. */
 const CHAT_SILENCE_MS = 90_000;
-const H_SETTINGS = 460; // taller default so setting groups fit; body scrolls; clamped to screen
 const MIN_W = 460;
 const MIN_H = 240;
-// Collapsed fallback, used only until the pill has been measured. The window is transparent, so
-// any part of it that ISN'T the pill would still swallow clicks meant for the app underneath —
-// the collapsed window is therefore shrunk to the pill's real bounds (see the measuring effect).
-const W_HANDLE_FALLBACK = 260;
+// Collapsed floor + hard cap = hardware/pseudo notch width (~180). Wider Idle chrome (260–280)
+// hung into empty menu-bar space and felt like an oversized hitbox outside the notch.
+const W_HANDLE_FALLBACK = 180;
+/** Quiet hiding Idle — hardware-notch-sized weld when frontmost is self / unknown. */
+const W_HIDE = 180;
 
 interface Size {
   w: number;
   h: number;
 }
 
-// Keep the panel inside the visible screen — it hangs from the top (notch), so cap it to the work
-// area. availWidth/Height already exclude the Dock and menu bar; leave a small margin.
+// Hard ceiling: panel cannot exceed ¾ of the display the webview is on. `window.screen` tracks the
+// panel's monitor in Tauri; Rust `set_panel_size` enforces the same cap on the native frame.
+const PANEL_MAX_SCREEN_FRAC = 0.75;
 function maxSize(): Size {
   if (typeof window === "undefined") return { w: 1200, h: 800 };
+  const sw = window.screen.width;
+  const sh = window.screen.height;
   return {
-    w: Math.max(MIN_W, Math.round(window.screen.availWidth - 40)),
-    h: Math.max(MIN_H, Math.round(window.screen.availHeight - 40)),
+    w: Math.max(MIN_W, Math.floor(sw * PANEL_MAX_SCREEN_FRAC)),
+    h: Math.max(MIN_H, Math.floor(sh * PANEL_MAX_SCREEN_FRAC)),
   };
 }
 function clampSize(w: number, h: number): Size {
@@ -291,11 +312,27 @@ function appName(bundle: string): string {
   return seg.charAt(0).toUpperCase() + seg.slice(1);
 }
 
+/** Own process / product labels — never show as Idle "reading …" (hiding chin instead). */
+const OWN_FOCUS_IDS = new Set([
+  "dev.shogun.spike",
+  "shogunai",
+  "shogun",
+  "shogun-desktop-spike",
+  "spike",
+]);
+
+function isSelfFocus(id: string): boolean {
+  if (!id.trim()) return true; // unknown / cleared → quiet welded Idle
+  const lower = id.trim().toLowerCase();
+  if (OWN_FOCUS_IDS.has(lower)) return true;
+  const seg = lower.split(".").pop() || lower;
+  return OWN_FOCUS_IDS.has(seg);
+}
+
 /// How a resize should hold the panel in place.
-/// - `center` (default): the panel hangs from the notch, so switching views must not walk it
-///   sideways by half of every size change.
-/// - `left`: the corner grip is a bottom-right drag, so the top-left has to stay put or the
-///   pointer drifts away from the corner it grabbed.
+/// - `center` (default): keep horizontal centre under the notch (castle dock). View switches and
+///   the corner grip both use this — width changes ±dx/2 per side.
+/// - `left`: legacy top-left pin (grow down/right only). Kept for the Rust command; unused by grip.
 type Anchor = "center" | "left";
 
 async function applyPanelSize(w: number, h: number, anchor: Anchor = "center"): Promise<void> {
@@ -337,6 +374,18 @@ export function App(): JSX.Element {
   // localStorage used to leave the window at open-size while rendering only the handle — a big
   // empty panel showing just "reading …".) Minimize still collapses within the session.
   const [open, setOpen] = useState<boolean>(true);
+  /** Rust notch SM mirror — drives shell CSS only. Webview does not own dwell. */
+  const [notchSm, setNotchSm] = useState<string>("expanded");
+  /** True while open morph runs: full frame + idle-scale pose, then class flip to Expanded. */
+  const [expanding, setExpanding] = useState(false);
+  /** True while close scale runs; panel stays mounted until COLLAPSE_ANIM_MS elapses. */
+  const [collapsing, setCollapsing] = useState(false);
+  const collapseTimer = useRef<number | null>(null);
+  const expandTimer = useRef<number | null>(null);
+  const beginCollapseRef = useRef<() => void>(() => undefined);
+  const expandRef = useRef<() => void>(() => undefined);
+  const stageRef = useRef<HTMLDivElement | null>(null);
+  const openRef = useRef(true);
   const [status, setStatus] = useState<Status | null>(IN_TAURI ? null : MOCK_STATUS);
   const [state, setState] = useState<StateView>(IN_TAURI ? { commitments: [], open_loops: [] } : MOCK_STATE);
   const [ctxApp, setCtxApp] = useState<string>("");
@@ -373,6 +422,8 @@ export function App(): JSX.Element {
   /// anything above it is history rather than part of what you're doing now.
   const historyMark = useRef<number | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  /** Idle chin: reading/app/due vs quiet welded hide. Persisted in app data (Rust). */
+  const [showStatusInNotch, setShowStatusInNotch] = useState(true);
   const [voiceToast, setVoiceToast] = useState<string | null>(null);
   const [voice, setVoice] = useState<VoiceView>({
     phase: "idle",
@@ -386,34 +437,26 @@ export function App(): JSX.Element {
   const lastVoiceLevelAt = useRef(0);
   const voiceReleaseWatch = useRef<number | null>(null);
 
-  // Open-view sizes are user-resizable (corner grip) and persist across the Rust-driven respawns.
-  // Chat and Settings keep INDEPENDENT sizes — chat wants short+wide, Settings wants tall enough
-  // for its stacked groups.
+  // Open-view size is user-resizable (corner grip) and persists across Rust-driven respawns.
+  // Chat and Settings share one frame — toggling settings must not jump to a separate stored size.
   const [chatSize, setChatSize] = useState<Size>(() => {
     const s = loadJson<Size>("shogun.size.chat", { w: W, h: H_OPEN });
     return clampSize(s.w, s.h);
   });
-  const [setSize, setSetSize] = useState<Size>(() => {
-    const s = loadJson<Size>("shogun.size.settings", { w: W, h: H_SETTINGS });
-    return clampSize(s.w, s.h);
-  });
   useEffect(() => saveJson("shogun.pinned", pinned), [pinned]);
   useEffect(() => saveJson("shogun.size.chat", chatSize), [chatSize]);
-  useEffect(() => saveJson("shogun.size.settings", setSize), [setSize]);
 
-  // Size the window to match the current view (handle / chat / settings). Pass explicit flags when
-  // a state setter in the same handler hasn't committed yet (React batches updates).
+  // Size the window to match collapsed vs expanded. Pass explicit `open` when a state setter in the
+  // same handler hasn't committed yet (React batches updates). Settings enter/exit does not resize.
   const sizeForView = useCallback(
-    (opts?: { open?: boolean; settings?: boolean }): void => {
+    (opts?: { open?: boolean }): void => {
       const isOpen = opts?.open ?? open;
-      const isSettings = opts?.settings ?? showSettings;
       // Collapsed: a provisional pill-sized window; the measuring effect below tightens it to the
       // pill's real bounds so the transparent remainder never eats clicks.
       if (!isOpen) void applyPanelSize(W_HANDLE_FALLBACK, H_HANDLE);
-      else if (isSettings) void applyPanelSize(setSize.w, setSize.h);
       else void applyPanelSize(chatSize.w, chatSize.h);
     },
-    [open, showSettings, chatSize, setSize],
+    [open, chatSize],
   );
   // The boot/summon listeners live in a run-once effect; a ref keeps them calling the LATEST sizer
   // instead of a stale closure captured at mount.
@@ -422,7 +465,8 @@ export function App(): JSX.Element {
 
   // Live resize from the corner grip. During the drag we only resize the native panel (the webview
   // reflows via CSS — no React state churn), rAF-throttled so we don't flood the IPC bridge. The
-  // per-view size is committed to state (and persisted) once on release.
+  // per-view size is committed to state (and persisted) once on release. Always castle-centre
+  // anchor so width grows/shrinks symmetrically under the notch.
   const liveSize = useRef<Size | null>(null);
   const raf = useRef<number | null>(null);
   const onResizeLive = useCallback((w: number, h: number): void => {
@@ -432,7 +476,7 @@ export function App(): JSX.Element {
       raf.current = requestAnimationFrame(() => {
         raf.current = null;
         const cur = liveSize.current;
-        if (cur) void applyPanelSize(cur.w, cur.h, "left");
+        if (cur) void applyPanelSize(cur.w, cur.h, "center");
       });
     }
   }, []);
@@ -444,10 +488,9 @@ export function App(): JSX.Element {
     const s = liveSize.current;
     liveSize.current = null;
     if (!s) return;
-    void applyPanelSize(s.w, s.h, "left");
-    if (showSettings) setSetSize(s);
-    else setChatSize(s);
-  }, [showSettings]);
+    void applyPanelSize(s.w, s.h, "center");
+    setChatSize(s);
+  }, []);
   // Active agent provider, shown on the composer's model pill (mirrors Settings → Model).
   const [provider, setProvider] = useState<string>("anthropic");
   const threadRef = useRef<HTMLDivElement>(null);
@@ -471,11 +514,13 @@ export function App(): JSX.Element {
   const [meeting, setMeeting] = useState<MeetingView | null>(null);
   // The pill replaces the handle, so it needs its own ref for the collapsed-size measurement.
   const pillRef = useRef<HTMLDivElement>(null);
+  const meetingRef = useRef<MeetingView | null>(null);
+  meetingRef.current = meeting;
 
   // Start at the open size and prove the webview is alive.
   useEffect(() => {
     if (!IN_TAURI) return;
-    sizeForViewRef.current({ open: true, settings: false });
+    sizeForViewRef.current({ open: true });
     void invoke("interact", { kind: "boot" });
     const offs: Array<Promise<() => void>> = [];
     offs.push(listen<ContextPayload>("context", (e) => setCtxApp(e.payload.bundle_id || e.payload.title_masked || "")));
@@ -527,11 +572,9 @@ export function App(): JSX.Element {
             void applyPanelSize(sz.w, sz.h);
           } else if (p === "idle") {
             // Dictation done — always collapse; do not leave recording chrome stuck open.
-            setOpen(false);
-            sizeForViewRef.current({ open: false });
+            beginCollapseRef.current();
           } else if (p === "error" && !pinnedRef.current) {
-            setOpen(false);
-            sizeForViewRef.current({ open: false });
+            beginCollapseRef.current();
           } else if (p === "response") {
             setOpen(true);
             setShowSettings(false);
@@ -585,12 +628,11 @@ export function App(): JSX.Element {
         }, 100);
       }),
     );
-    // The notch's own hover detection finally drives the panel. Until now the tracker ran, emitted
-    // transitions, and nothing listened — opening was click-only, which is why hovering the notch
-    // did nothing while hovering the collapsed pill worked.
+    // Rust owns hover intent / dwell. Webview only paints shell classes + open/close.
     offs.push(
       listen<StatePayload>("state", (e) => {
         const st = e.payload.state;
+        setNotchSm(st);
         if (st === "hover" || st === "expanded") {
           // Q2 / SLO-01: report paint completion for this transition. Double-rAF so the panel is
           // actually on screen; Rust pairs it with the tracker's commit timestamp and drops
@@ -602,22 +644,24 @@ export function App(): JSX.Element {
           );
           // Never fight a user who pinned the panel open, and never re-open one they just closed
           // by hand — the tracker doesn't know about either.
-          setOpen((cur) => {
-            if (cur) return cur;
-            sizeForViewRef.current({ open: true });
-            return true;
-          });
-        } else if (st === "idle" || st === "hidden") {
+          if (!openRef.current) {
+            // Meeting chin owns Stop / Take Notes. expand() sets expanding/open and unmounts
+            // MeetingPill (showIdleFace=false) mid-click — hover looked like it worked, Stop never fired.
+            // Hover only: Expanded is a deliberate open (hotkey, real click), and swallowing it
+            // here left the panel unreachable for the whole meeting.
+            const m = meetingRef.current;
+            if (st === "hover" && m?.enabled && (m.state === "offered" || m.state === "recording")) {
+              return;
+            }
+            expandRef.current();
+          }
+        } else if (st === "idle" || st === "hidden" || st === "collapsing") {
           // Withdraw on the same rule as the pointer-leave path: pinned stays, work in progress
           // stays, everything else follows your attention.
           if (pinnedRef.current) return;
           if (inputRef.current.trim().length > 0 || thinkingRef.current) return;
           if (voiceRef.current.phase === "recording" || voiceRef.current.phase === "processing") return;
-          setOpen((cur) => {
-            if (!cur) return cur;
-            sizeForViewRef.current({ open: false });
-            return false;
-          });
+          beginCollapseRef.current();
         }
       }),
     );
@@ -670,6 +714,9 @@ export function App(): JSX.Element {
     // Count only — the rows themselves are the ApprovalsSection's business (Settings).
     void invoke<unknown[]>("list_approvals")
       .then((r) => setApprovalsCount(Array.isArray(r) ? r.length : 0))
+      .catch(() => undefined);
+    void invoke<boolean>("get_notch_status_visible")
+      .then(setShowStatusInNotch)
       .catch(() => undefined);
   }, []);
 
@@ -768,57 +815,103 @@ export function App(): JSX.Element {
       if (composerHasFocus || inputRef.current.trim().length > 0 || thinkingRef.current) return;
       if (voiceRef.current.phase === "recording" || voiceRef.current.phase === "processing") return;
       setShowSettings(false);
-      setOpen(false);
-      sizeForViewRef.current({ open: false });
+      beginCollapseRef.current();
     }, AUTO_COLLAPSE_MS);
   }, [pinned, cancelAutoCollapse]);
   useEffect(() => cancelAutoCollapse, [cancelAutoCollapse]);
 
+  openRef.current = open;
+
+  /** Paint chin→panel scale factors on the stage (compositor-only; no React re-render). */
+  const applyMorphScale = useCallback((w: number, h: number): void => {
+    const el = stageRef.current;
+    if (!el) return;
+    const chinW = handleRef.current?.getBoundingClientRect().width
+      ?? pillRef.current?.getBoundingClientRect().width
+      ?? W_HANDLE_FALLBACK;
+    const sx = Math.min(1, Math.max(0.22, chinW / Math.max(1, w)));
+    const sy = Math.min(1, Math.max(0.06, H_HANDLE / Math.max(1, h)));
+    el.style.setProperty("--shell-sx", sx.toFixed(4));
+    el.style.setProperty("--shell-sy", sy.toFixed(4));
+  }, []);
+
+  const beginCollapse = useCallback((): void => {
+    if (collapseTimer.current != null) return;
+    if (expandTimer.current != null) {
+      window.clearTimeout(expandTimer.current);
+      expandTimer.current = null;
+    }
+    setExpanding(false);
+    if (!openRef.current) {
+      setCollapsing(false);
+      setNotchSm("idle");
+      return;
+    }
+    applyMorphScale(chatSize.w, chatSize.h);
+    setCollapsing(true);
+    setNotchSm((s) => (s === "idle" || s === "hidden" ? s : "collapsing"));
+    collapseTimer.current = window.setTimeout(() => {
+      collapseTimer.current = null;
+      setCollapsing(false);
+      setOpen(false);
+      setNotchSm("idle");
+      sizeForViewRef.current({ open: false });
+    }, COLLAPSE_ANIM_MS);
+  }, [applyMorphScale, chatSize]);
+  beginCollapseRef.current = beginCollapse;
+
   const collapse = (): void => {
     setShowSettings(false);
-    setOpen(false);
-    sizeForView({ open: false });
+    beginCollapse();
   };
-  const expand = (): void => {
-    setOpen(true);
-    sizeForView({ open: true });
+  const expand = useCallback((): void => {
     // Accessibility is the one condition the user can fix without restarting, so re-read rather
     // than trust the value from boot.
     void invoke<StartupHealth>("startup_health").then(setHealth).catch(() => undefined);
-  };
-
-  // Hover-to-open. The pill opens on dwell, not on entry: Phase 0 lists hover misfire as an open
-  // question, and opening the instant the cursor crosses the pill is exactly the failure mode —
-  // the panel would fire while you were on your way to the menu bar. So we wait HOVER_DWELL_MS of
-  // continuous hover and cancel the moment the pointer leaves. A pointer that is merely passing
-  // through is gone long before the timer elapses.
-  //
-  // Deliberately not gated on cursor velocity: dwell alone is measurable in the spike, and adding a
-  // second heuristic would make a No-Go answer harder to attribute. Revisit with the Phase 0 data.
-  const hoverTimer = useRef<number | null>(null);
-  const cancelHoverOpen = useCallback((): void => {
-    if (hoverTimer.current != null) {
-      window.clearTimeout(hoverTimer.current);
-      hoverTimer.current = null;
+    if (collapseTimer.current != null) {
+      window.clearTimeout(collapseTimer.current);
+      collapseTimer.current = null;
     }
-  }, []);
-  const onHandleEnter = useCallback((): void => {
-    cancelHoverOpen();
-    hoverTimer.current = window.setTimeout(() => {
-      hoverTimer.current = null;
-      setOpen(true);
-      sizeForViewRef.current({ open: true });
-    }, HOVER_DWELL_MS);
-  }, [cancelHoverOpen]);
-  // A pending timer must not outlive the component (or a click that opens the panel first).
-  useEffect(() => cancelHoverOpen, [cancelHoverOpen]);
+    if (expandTimer.current != null) {
+      window.clearTimeout(expandTimer.current);
+      expandTimer.current = null;
+    }
+    setCollapsing(false);
+    setNotchSm("expanded");
+    applyMorphScale(chatSize.w, chatSize.h);
+    // 1) Grow NSPanel to full frame. 2) Pose visible shell at Idle scale. 3) Flip to Expanded
+    // so transform actually transitions (resize+class same tick kills the morph).
+    void (async () => {
+      if (IN_TAURI) await applyPanelSize(chatSize.w, chatSize.h);
+      // Commit Idle-scale pose synchronously so the next frame only retargets transform.
+      flushSync(() => {
+        setExpanding(true);
+      });
+      const panel = stageRef.current?.querySelector(".panel");
+      if (panel instanceof HTMLElement) void panel.offsetHeight;
+      window.requestAnimationFrame(() => {
+        setOpen(true);
+        expandTimer.current = window.setTimeout(() => {
+          expandTimer.current = null;
+          setExpanding(false);
+        }, OPEN_ANIM_MS);
+      });
+    })();
+  }, [applyMorphScale, chatSize]);
+  expandRef.current = expand;
+
+  useEffect(
+    () => () => {
+      if (collapseTimer.current != null) window.clearTimeout(collapseTimer.current);
+      if (expandTimer.current != null) window.clearTimeout(expandTimer.current);
+    },
+    [],
+  );
   const openSettings = (): void => {
     setShowSettings(true);
-    sizeForView({ open: true, settings: true });
   };
   const closeSettings = (): void => {
     setShowSettings(false);
-    sizeForView({ open: true, settings: false });
   };
 
   // ---- streamed chat turn ------------------------------------------------------------------
@@ -1036,8 +1129,12 @@ export function App(): JSX.Element {
   };
 
   const totalState = state.commitments.length + state.open_loops.length;
-  const live = appName(ctxApp || status?.app || "");
+  const focusId = ctxApp || status?.app || "";
+  const selfFocus = isSelfFocus(focusId);
+  const live = selfFocus ? "" : appName(focusId);
   const providerLabel = PROVIDERS.find((p) => p.id === provider)?.label ?? t.model;
+  // OFF = always welded hide (stricter than self-focus). ON = self-focus hides unless inline.
+  const hideIdleChin = !showStatusInNotch || (selfFocus && !inlineLine);
 
   // Collapsed: shrink the window to the pill's real bounds. The panel is transparent, so every
   // pixel of window that isn't the pill would still intercept clicks aimed at the app underneath
@@ -1051,11 +1148,22 @@ export function App(): JSX.Element {
     if (!el) return;
     const r = el.getBoundingClientRect();
     if (r.width < 1 || r.height < 1) return;
-    // +1 guards against a fractional layout width being truncated into a clipped pill.
-    void applyPanelSize(Math.ceil(r.width) + 1, Math.ceil(r.height) + 1);
+    // Cap Idle at notch width — never grow into empty menu-bar left/right of the cutout.
+    // Hiding Idle uses the same weld (W_HIDE × H_DEAD).
+    // Height floors at H_HANDLE so a short content pill never leaves air under the notch.
+    const hiding = el.classList.contains("handle--hiding");
+    const notchW = hiding ? W_HIDE : W_HANDLE_FALLBACK;
+    const minH = hiding ? H_DEAD : H_HANDLE;
+    void applyPanelSize(
+      notchW,
+      Math.max(minH, Math.ceil(r.height)),
+    );
   }, [
     open,
     live,
+    selfFocus,
+    showStatusInNotch,
+    hideIdleChin,
     state.commitments.length,
     state.open_loops.length,
     meeting?.state,
@@ -1073,58 +1181,52 @@ export function App(): JSX.Element {
 
   const voiceLive = voiceActive ? voice : null;
 
-  // Collapsed: a clear, clickable handle hanging from the notch.
-  if (!open) {
-    // A meeting in progress outranks the ordinary handle (FR-MT-09).
-    if (meetingLive) {
-      return (
-        <div className="stage stage--handle">
-          <div ref={pillRef}>
-            <MeetingPill view={meetingLive} />
-          </div>
-        </div>
-      );
-    }
-    if (voiceLive?.phase === "recording") {
-      return (
-        <div className="stage stage--handle">
-          <div ref={pillRef}>
-            <VoicePill view={voiceLive} />
-          </div>
-        </div>
-      );
-    }
-    return (
-      <div className="stage stage--handle">
-        <button
-          className="handle"
-          ref={handleRef}
-          type="button"
-          onClick={() => {
-            cancelHoverOpen();
-            expand();
-          }}
-          onMouseDown={(e) => {
-            // A drag must never expand the panel: kill the hover-dwell timer the moment the
-            // press starts. The native drag swallows the click on a real move; a stationary
-            // press still expands through onClick above.
-            cancelHoverOpen();
-            beginPillDrag(e);
-          }}
-          onPointerEnter={onHandleEnter}
-          onPointerLeave={cancelHoverOpen}
-          title={t.openPanel}
-        >
+  // Shell class: Rust SM when available; expanding/collapsing override for morph paint.
+  // Rust emits "hover" (HoverIntent); map to is-hoverintent for CSS.
+  const shellMode = collapsing
+    ? "is-collapsing"
+    : expanding && !open
+      ? "is-expanding"
+      : open
+        ? "is-expanded"
+        : notchSm === "hover" || notchSm === "hoverintent"
+          ? "is-hoverintent"
+          : "is-idle";
+
+  // Idle face only when fully collapsed — never during expand/collapse (double-pill flash).
+  const showIdleFace = !open && !collapsing && !expanding;
+
+  const idleChin = !showIdleFace ? null : meetingLive ? (
+    <div ref={pillRef}>
+      <MeetingPill view={meetingLive} />
+    </div>
+  ) : voiceLive?.phase === "recording" ? (
+    <div ref={pillRef}>
+      <VoicePill view={voiceLive} />
+    </div>
+  ) : (
+    <button
+      className={`handle${hideIdleChin ? " handle--hiding" : ""}`}
+      ref={handleRef}
+      type="button"
+      onClick={() => expand()}
+      onMouseDown={beginPillDrag}
+      title={t.openPanel}
+      aria-label={t.openPanel}
+    >
+      <span className="handle__dead" aria-hidden />
+      {hideIdleChin ? null : (
+        <span className="handle__row">
           {noticeLine ? (
             <span className={`handle__live inline--${noticeLine.tone}`}>
               <span className={`inline__dot inline__dot--${noticeLine.tone}`} />
               {noticeLine.text}
             </span>
           ) : (
-          <span className="handle__live">
-            <span className="live__dot" />
-            {t.reading} <b>{live}</b>
-          </span>
+            <span className="handle__live">
+              <span className="live__dot" />
+              {t.reading} <b>{live}</b>
+            </span>
           )}
           {state.commitments.length > 0 ? (
             <span className="handle__count">
@@ -1135,20 +1237,33 @@ export function App(): JSX.Element {
               {state.open_loops.length} {t.waiting}
             </span>
           ) : null}
-        </button>
-      </div>
-    );
-  }
+        </span>
+      )}
+    </button>
+  );
 
+  // Panel always mounted (playbook P0 pre-mount). Idle face mounts only when fully Idle.
   return (
-    <div className="stage">
+    <div ref={stageRef} className={`stage notch-shell ${shellMode}`}>
       {voiceToast ? <div className="voice-toast">{voiceToast}</div> : null}
-      {meetingLive ? <MeetingPill view={meetingLive} /> : null}
-      <div className="panel" onPointerEnter={cancelAutoCollapse} onPointerLeave={onPanelLeave}>
+      {showIdleFace ? (
+        <div className="notch-idle" aria-hidden={open || collapsing || expanding}>
+          {idleChin}
+        </div>
+      ) : null}
+      <div
+        className={`panel${showSettings ? " panel--settings" : ""}`}
+        onPointerEnter={cancelAutoCollapse}
+        onPointerLeave={onPanelLeave}
+        aria-hidden={!open || collapsing || (expanding && !open)}
+      >
+        <div className="panel__body">
         {showSettings ? (
           <Settings
             appearance={appearance}
             setAppearance={setAppearance}
+            showStatusInNotch={showStatusInNotch}
+            setShowStatusInNotch={setShowStatusInNotch}
             hasKey={!!status?.has_key}
             keyRejected={!!status?.key_rejected}
             stateCount={state.commitments.length + state.open_loops.length}
@@ -1158,9 +1273,9 @@ export function App(): JSX.Element {
             }}
             onCleared={refreshState}
           />
-        ) : meetingLive?.state === "recording" ? (
+        ) : meetingLive?.state === "recording" && open ? (
           <MeetingNote />
-        ) : voiceLive ? (
+        ) : voiceLive && open ? (
           <VoicePanel
             view={voiceLive}
             onDismiss={() => void invoke("voice_dismiss").catch(() => undefined)}
@@ -1188,12 +1303,12 @@ export function App(): JSX.Element {
                       </button>
                     ) : null}
                   </span>
-                ) : (
+                ) : live ? (
                   <span className="srcchip" title={`${t.reading} ${live}`}>
                     <span className="live__dot" />
                     {t.reading} <b>{live}</b>
                   </span>
-                )}
+                ) : null}
                 {totalState > 0 ? (
                   <button className="chip" type="button" onClick={() => setShowState((v) => !v)} aria-pressed={showState}>
                     {state.commitments.length} {t.due} · {state.open_loops.length} {t.waiting}
@@ -1209,14 +1324,7 @@ export function App(): JSX.Element {
                   aria-pressed={pinned}
                   onClick={() => setPinned((v) => !v)}
                 >
-                  {/* A pin that leans when unpinned — the state is legible without reading the
-                      tooltip, which matters for a control that changes how the panel behaves. */}
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                       stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"
-                       style={pinned ? undefined : { transform: "rotate(45deg)" }}>
-                    <path d="M9 4h6l-1 6 3 3H7l3-3-1-6z" />
-                    <path d="M12 13v7" />
-                  </svg>
+                  {pinned ? <IconPin /> : <IconPinOff />}
                 </button>
                 {/* Only offered when there is a backlog to open — an always-present control for an
                     empty history is a button that does nothing most of the time. */}
@@ -1229,7 +1337,7 @@ export function App(): JSX.Element {
                     aria-pressed={showHistory}
                     onClick={() => setShowHistory((v) => !v)}
                   >
-                    ⏱
+                    <IconHistory />
                   </button>
                 ) : null}
                 {/* Memory search (B-6). Also on `/` — the button is the discoverable face of the
@@ -1255,10 +1363,10 @@ export function App(): JSX.Element {
                     if (IN_TAURI) void invoke("open_full_ui").catch((err) => uiLog(`open_full_ui failed: ${err}`));
                   }}
                 >
-                  ⤢
+                  <IconMaximize2 />
                 </button>
                 <button className="icon" type="button" title={t.settings} aria-label={t.settings} onClick={openSettings}>
-                  ⚙︎
+                  <IconSettings />
                   {/* B-1: pending L3 sends. The count is the only thing this touches — the queue
                       itself is the ApprovalsSection's business (Settings). */}
                   {approvalsCount > 0 ? (
@@ -1267,8 +1375,9 @@ export function App(): JSX.Element {
                     </span>
                   ) : null}
                 </button>
+                <span className="head__divider" aria-hidden="true" />
                 <button className="icon" type="button" title={t.minimize} aria-label={t.minimize} onClick={collapse}>
-                  ▁
+                  <IconMinimize />
                 </button>
                 <button
                   className="icon icon--close"
@@ -1279,7 +1388,7 @@ export function App(): JSX.Element {
                     if (IN_TAURI) void invoke("quit_app").catch((err) => uiLog(`quit failed: ${err}`));
                   }}
                 >
-                  ✕
+                  <IconClose />
                 </button>
               </div>
             </header>
@@ -1422,8 +1531,9 @@ export function App(): JSX.Element {
             </div>
           </>
         )}
+        </div>
         <ResizeGrip
-          current={() => (showSettings ? setSize : chatSize)}
+          current={() => chatSize}
           onResize={onResizeLive}
           onCommit={onResizeCommit}
         />
@@ -1837,7 +1947,18 @@ function MeetingPill({ view }: { view: MeetingView }): JSX.Element {
       <button
         type="button"
         className="mpill__btn mpill__btn--stop"
-        onClick={() => void invoke("meeting_stop").catch(() => undefined)}
+        onPointerDown={(e) => {
+          // Primary button only — pointerdown fires for right/middle too, and ending a meeting
+          // on a stray right-click is not recoverable.
+          if (e.button !== 0) return;
+          e.stopPropagation();
+          e.preventDefault();
+          void invoke("meeting_stop").catch(() => undefined);
+        }}
+        onClick={(e) => {
+          e.stopPropagation();
+          e.preventDefault();
+        }}
       >
         {t.meetingStop}
       </button>
@@ -1846,8 +1967,9 @@ function MeetingPill({ view }: { view: MeetingView }): JSX.Element {
 }
 
 // Corner grip that lets the user stretch the open panel. The native panel is a borderless NSPanel
-// (no OS resize edges), so we drive `set_panel_size` from a pointer drag — the panel's top-left is
-// anchored, so it grows down/right, which reads naturally for a window that hangs from the notch.
+// (no OS resize edges), so we drive `set_panel_size` from a pointer drag. Horizontal centre stays
+// under the notch: drag Δ on the right edge → width += 2Δ so left mirrors. screenX/Y (not client*)
+// — client coords shift when the panel re-centres mid-drag and would double-count.
 function ResizeGrip(props: {
   current: () => Size;
   onResize: (w: number, h: number) => void;
@@ -1859,13 +1981,17 @@ function ResizeGrip(props: {
     e.preventDefault();
     e.stopPropagation();
     const s = current();
-    start.current = { x: e.clientX, y: e.clientY, w: s.w, h: s.h };
+    start.current = { x: e.screenX, y: e.screenY, w: s.w, h: s.h };
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
   };
   const onMove = (e: React.PointerEvent): void => {
     const s = start.current;
     if (!s) return;
-    onResize(s.w + (e.clientX - s.x), s.h + (e.clientY - s.y));
+    const dx = e.screenX - s.x;
+    const dy = e.screenY - s.y;
+    // Width: ±dx/2 each side (centre fixed) ⇒ total Δw = 2·dx so right edge tracks the cursor.
+    // Height: top stays docked to the notch ⇒ Δh = dy only (grows/shrinks downward).
+    onResize(s.w + 2 * dx, s.h + dy);
   };
   const onUp = (e: React.PointerEvent): void => {
     if (!start.current) return;
@@ -2584,89 +2710,150 @@ function MeetingSection(): JSX.Element {
           {t.meetingOff}
         </button>
       </div>
-      <div className="set__hint">{t.meetingHint}</div>
+      <p className="set__hint">{t.meetingHint}</p>
+
       {on ? (
-        <div className="set">
+        <div className="set__stack">
           <label className="set__row">
             <input
               type="checkbox"
               checked={micOnly}
               onChange={(e) => toggleMicOnly(e.target.checked)}
             />
-            <span>{t.meetingMicOnly}</span>
+            <span className="set__row-label">{t.meetingMicOnly}</span>
           </label>
-          <div className="set__hint">{t.meetingMicOnlyHint}</div>
+          <p className="set__hint set__hint--quiet">{t.meetingMicOnlyHint}</p>
+          {/* Tier (b), undoable. An exclusion added by an impatient tap during a meeting would
+              otherwise become a permanent blind spot with no way back (FR-MT-02b). */}
+          <div className="mexcl">
+            <div className="set__sublabel">{t.meetingExcluded}</div>
+            {excluded.length === 0 ? (
+              <p className="set__hint set__hint--quiet">{t.meetingExcludedEmpty}</p>
+            ) : (
+              <ul className="mexcl__list">
+                {excluded.map((id) => (
+                  <li key={id} className="mexcl__row">
+                    <span className="mexcl__id">{id}</span>
+                    <button
+                      type="button"
+                      className="mexcl__rm"
+                      onClick={() =>
+                        void invoke("meeting_include_app", { bundleId: id })
+                          .then(load)
+                          .catch(() => undefined)
+                      }
+                    >
+                      {t.meetingExcludedRemove}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
         </div>
       ) : null}
-      {/* Tier (b), undoable. An exclusion added by an impatient tap during a meeting would
-          otherwise become a permanent blind spot with no way back (FR-MT-02b). */}
-      {on ? (
-        <div className="mexcl">
-          <div className="mexcl__label">{t.meetingExcluded}</div>
-          {excluded.length === 0 ? (
-            <div className="set__hint">{t.meetingExcludedEmpty}</div>
-          ) : (
-            <ul className="mexcl__list">
-              {excluded.map((id) => (
-                <li key={id} className="mexcl__row">
-                  <span className="mexcl__id">{id}</span>
-                  <button
-                    type="button"
-                    className="mexcl__rm"
-                    onClick={() =>
-                      void invoke("meeting_include_app", { bundleId: id })
-                        .then(load)
-                        .catch(() => undefined)
-                    }
-                  >
-                    {t.meetingExcludedRemove}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
+
+      <div className="set__stack set__stack--key">
+        <div className="set__label">{t.deepgramAsrKey}</div>
+        <div className={`set__status${deepgramKey.has_key ? " is-ok" : ""}`}>
+          {deepgramKey.has_key
+            ? `${t.deepgramAsrPresent} ·· ${deepgramKey.key_last4}`
+            : t.deepgramAsrAbsent}
         </div>
-      ) : null}
-      <div className="set__label">{t.deepgramAsrKey}</div>
-      <div className={`set__hint${deepgramKey.has_key ? " is-ok" : ""}`}>
-        {deepgramKey.has_key
-          ? `${t.deepgramAsrPresent} ·· ${deepgramKey.key_last4}`
-          : t.deepgramAsrAbsent}
-      </div>
-      <div className="set__hint">{t.deepgramAsrHint}</div>
-      {deepgramErr ? <div className="set__hint is-err">{deepgramErr}</div> : null}
-      <div className="keyrow">
-        <input
-          className="keyrow__input"
-          type="password"
-          placeholder={t.deepgramAsrPlaceholder}
-          value={deepgramInput}
-          autoComplete="off"
-          onChange={(e) => setDeepgramInput(e.target.value)}
-          onFocus={() => {
-            if (IN_TAURI) void invoke("focus_field", { focused: true }).catch(() => undefined);
-          }}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") saveDeepgramKey();
-          }}
-        />
-        <button
-          className="keyrow__btn"
-          type="button"
-          onClick={saveDeepgramKey}
-          disabled={!deepgramInput.trim()}
-        >
-          {t.keySave}
-        </button>
-        {deepgramKey.has_key ? (
-          <button className="keyrow__btn" type="button" onClick={removeDeepgramKey}>
-            {t.keyRemove}
+        <p className="set__hint set__hint--quiet">{t.deepgramAsrHint}</p>
+        {deepgramErr ? <p className="set__hint is-err">{deepgramErr}</p> : null}
+        <div className="keyrow">
+          <input
+            className="keyrow__input"
+            type="password"
+            placeholder={t.deepgramAsrPlaceholder}
+            value={deepgramInput}
+            autoComplete="off"
+            onChange={(e) => setDeepgramInput(e.target.value)}
+            onFocus={() => {
+              if (IN_TAURI) void invoke("focus_field", { focused: true }).catch(() => undefined);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") saveDeepgramKey();
+            }}
+          />
+          <button
+            className="keyrow__btn keyrow__btn--go"
+            type="button"
+            onClick={saveDeepgramKey}
+            disabled={!deepgramInput.trim()}
+          >
+            {t.keySave}
           </button>
-        ) : null}
+          {deepgramKey.has_key ? (
+            <button
+              className="keyrow__btn keyrow__btn--quiet"
+              type="button"
+              onClick={removeDeepgramKey}
+            >
+              {t.keyRemove}
+            </button>
+          ) : null}
+        </div>
       </div>
+
       {/* Kept visible whether the feature is on or off: someone deciding whether to turn it on
           needs this more than someone who already has (FR-MT-03). */}
-      <div className="set__hint set__hint--quiet">{t.meetingDisclosure}</div>
+      <p className="set__disclosure">{t.meetingDisclosure}</p>
+    </section>
+  );
+}
+
+function DockVisibleSection(): JSX.Element {
+  const [on, setOn] = useState(true);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!IN_TAURI) return;
+    void invoke<boolean>("get_dock_visible")
+      .then(setOn)
+      .catch(() => undefined);
+  }, []);
+
+  const toggle = (next: boolean): void => {
+    if (!IN_TAURI) {
+      setOn(next);
+      return;
+    }
+    setBusy(true);
+    setOn(next);
+    void invoke("set_dock_visible", { visible: next })
+      .then(() => invoke<boolean>("get_dock_visible").then(setOn))
+      .catch(() => setOn(!next))
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <section className="set">
+      <div className="set__label" id="seg-dock">{t.showInDock}</div>
+      <div className="seg" role="radiogroup" aria-labelledby="seg-dock">
+        <button
+          type="button"
+          role="radio"
+          aria-checked={on}
+          disabled={busy}
+          className={`seg__opt${on ? " is-on" : ""}`}
+          onClick={() => toggle(true)}
+        >
+          {t.showInDockOn}
+        </button>
+        <button
+          type="button"
+          role="radio"
+          aria-checked={!on}
+          disabled={busy}
+          className={`seg__opt${!on ? " is-on" : ""}`}
+          onClick={() => toggle(false)}
+        >
+          {t.showInDockOff}
+        </button>
+      </div>
+      <div className="set__hint">{t.showInDockHint}</div>
     </section>
   );
 }
@@ -2817,7 +3004,9 @@ function VisualRecallSection(): JSX.Element {
       </div>
       <div className="set__hint">{t.visualRecallHint}</div>
       <button type="button" className="vr-launch" onClick={openBrowse}>
-        <span className="vr-launch__glyph" aria-hidden="true">⤢</span>
+        <span className="vr-launch__glyph" aria-hidden="true">
+          <IconMaximize2 size={16} />
+        </span>
         <span className="vr-launch__body">
           <span className="vr-launch__title">{t.visualRecallBrowse}</span>
           <span className="vr-launch__sub">{t.visualRecallBrowseSub}</span>
@@ -3784,9 +3973,27 @@ function PrivacySecuritySection(props: {
   );
 }
 
+/** "Control+Alt+KeyN" → "⌃ ⌥ N" plain glyphs (no keycap chips). */
+function comboLabel(combo: string): string {
+  return combo
+    .split("+")
+    .map((part) => {
+      if (part === "Control") return "⌃";
+      if (part === "Alt") return "⌥";
+      if (part === "Shift") return "⇧";
+      if (part === "Super") return "⌘";
+      if (part.startsWith("Key")) return part.slice(3);
+      if (part.startsWith("Digit")) return part.slice(5);
+      return part;
+    })
+    .join(" ");
+}
+
 function Settings(props: {
   appearance: Appearance;
   setAppearance: (a: Appearance) => void;
+  showStatusInNotch: boolean;
+  setShowStatusInNotch: (v: boolean) => void;
   hasKey: boolean;
   /// The provider refused this key — shown in the key section, since that is where the fix is.
   keyRejected: boolean;
@@ -3921,7 +4128,7 @@ function Settings(props: {
     <div className="settings">
       <header className="settings__head">
         <span className="settings__title">{t.settings}</span>
-        <button className="chip" type="button" onClick={onDone}>
+        <button className="settings__done" type="button" onClick={onDone}>
           {t.done}
         </button>
       </header>
@@ -3966,6 +4173,7 @@ function Settings(props: {
             ))}
           </div>
         </section>
+        <DockVisibleSection />
         <CastlePositionSection />
         <section className="set">
           <div className="set__label">{t.shortcuts}</div>
@@ -3974,7 +4182,7 @@ function Settings(props: {
           <div className="keys">
             <span className="keys__name">{t.draftShortcut}</span>
             <span className="keys__combo keys__combo--fixed" title={t.draftFixedHint}>
-              <kbd>⌥</kbd>
+              ⌥
             </span>
           </div>
           {SHORTCUT_ROWS.map(({ action, label }) => (
@@ -4001,17 +4209,13 @@ function Settings(props: {
                     setKeyErr("");
                   }}
                 >
-                  <span className="keys__combo">
-                    {comboChips(binds[action] ?? "").map((c, i) => (
-                      <kbd key={i}>{c}</kbd>
-                    ))}
-                  </span>
+                  <span className="keys__combo">{comboLabel(binds[action] ?? "")}</span>
                 </button>
               )}
             </div>
           ))}
           {keyErr ? <div className="set__hint is-err">{keyErr}</div> : null}
-          <div className="set__hint">{t.shortcutHint}</div>
+          <p className="set__hint set__hint--quiet">{t.shortcutHint}</p>
         </section>
         {/* Subscription first, API key second. The order is the point: most people arriving here
             already pay for an assistant, and asking them for a metered key before offering the

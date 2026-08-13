@@ -208,6 +208,11 @@ export const STRINGS = {
     dark: "Dark",
     light: "Light",
     auto: "Auto",
+    showInDock: "Show in Dock",
+    showInDockOn: "On",
+    showInDockOff: "Off",
+    showInDockHint:
+      "Show ShogunAI in the Dock. Off keeps menu-bar only.",
     // Castle Position (issue #20) — where SHOGUN resides on screen and expands from. "Castle"
     // because it's where SHOGUN keeps watch from; six resting places, the notch by default.
     castle: "Castle Position",
@@ -397,7 +402,7 @@ export const STRINGS = {
     // and the word would promise a file that will never exist.
     meetingNotes: "Notes",
     meetingDetected: "Meeting detected",
-    meetingTakeNotes: "Take notes",
+    meetingTakeNotes: "Take Notes",
     meetingNotesSaved: "Saved",
     meetingNotesFailed: "Couldn't save",
     meetingRecapTitle: "Meeting notes",
@@ -439,13 +444,11 @@ export const STRINGS = {
     meetingExcludedRemove: "Remove",
     meetingMicOnly: "Detect by microphone alone",
     meetingMicOnlyHint:
-      "Off by default. When on, sustained microphone use can offer notes without Meet or Zoom in front — useful for calls in other apps.",
+      "Off by default. When on, sustained mic use can offer notes even without Meet or Zoom focused.",
     deepgramAsrKey: "Speech provider key",
-    deepgramAsrHint:
-      "Powers live meeting transcription. Paste once — stored in your Keychain on this Mac.",
+    deepgramAsrHint: "Powers live transcription. Paste once — stored in Keychain on this Mac.",
     deepgramAsrPresent: "Connected — live transcription can run.",
-    deepgramAsrAbsent:
-      "Not set — your typed notes still save; live speech transcription needs this key.",
+    deepgramAsrAbsent: "Not set — typed notes still save; live transcription needs this key.",
     deepgramAsrPlaceholder: "Paste Deepgram API key…",
     visualRecallSection: "Visual recall",
     visualRecallHint:
@@ -486,17 +489,17 @@ export const STRINGS = {
     // FR-MT-03 disclosure (2026-08-05): Deepgram Nova-3 processes audio for STT only; MIP opt-out;
     // SHOGUN never saves waveform/recording. Reuse these keys everywhere.
     meetingDisclosure:
-      "Nothing joins your call. For meetings you approve, audio is temporarily processed by our speech provider for live transcription only — not retained for training (MIP opt-out). No recording, waveform, or audio file is saved by SHOGUN to disk or temp storage. Only transcript text and its provenance are kept here. Turn meetings off or exclude apps anytime below.",
+      "Nothing joins your call. Approved meetings send audio temporarily to our speech provider for live transcription only — not for training (MIP opt-out). SHOGUN never saves recordings or waveforms; only transcript text and provenance stay here.",
     meetingDisclosureBrief:
       "Nothing joins your call. Speech provider processes audio temporarily for transcription — not for training. No audio file saved by SHOGUN.",
     meetingListening: "Listening · speech provider (not for training) · no recording saved",
     meetingDisclosureRecap:
-      "Audio was processed temporarily for transcription only — not retained for training. No recording saved by SHOGUN — transcript, provenance, and your notes.",
+      "Audio was used for transcription only — not kept for training. SHOGUN saves transcript text and your notes, never a recording.",
     // live in-meeting overlay (issue #93)
-    meetingModeTranscription: "Transcription",
-    meetingModeOneWay: "One-way translation",
-    meetingModeTwoWay: "Two-way translation",
-    meetingLangAuto: "Auto-detect",
+    meetingModeTranscription: "Transcribe",
+    meetingModeOneWay: "One-way Translation",
+    meetingModeTwoWay: "Two-way Translation",
+    meetingLangAuto: "Auto",
     meetingLangEnglish: "English",
     meetingLangJapanese: "Japanese",
     meetingLangArrow: "→",
@@ -504,6 +507,21 @@ export const STRINGS = {
     meetingLiveEmpty: "Listening…",
     meetingLiveShowSource: "Show source",
     meetingLiveHideSource: "Hide source",
+    meetingCopyTranscript: "Copy transcript",
+    meetingCopiedTranscript: "Copied",
+    meetingCaptionsSettings: "Display Settings",
+    meetingCloseCaptionsPanel: "Close captions",
+    meetingDisplaySettings: "Display Settings",
+    meetingDisplayText: "Text",
+    meetingDisplayWeight: "Weight",
+    meetingDisplaySplit: "Split",
+    meetingDisplaySizeS: "S",
+    meetingDisplaySizeM: "M",
+    meetingDisplaySizeL: "L",
+    meetingDisplayWeightLight: "Light",
+    meetingDisplayWeightBold: "Bold",
+    meetingDisplaySplitSide: "Side",
+    meetingDisplaySplitStack: "Stack",
     meetingTranslateNeedsKey:
       "Translation needs the Select KK key in Settings → Nightly review. Transcription still works.",
     meetingTranslateKeyInvalid:
@@ -541,6 +559,45 @@ export const STRINGS = {
     // the FULL_UI copy).
     toggleOn: "On",
     toggleOff: "Off",
+    meetingCloseNote: "Close canvas",
+    meetingOpenNotes: "AI Canvas",
+    meetingCloseCaptions: "Close captions",
+    meetingOpenCaptions: "Captions",
+    meetingCaptions: "Captions",
+    meetingChat: "Chat",
+    meetingMore: "More",
+    meetingWaveform: "Audio level",
+    meetingPause: "Pause",
+    meetingResume: "Resume",
+    meetingEndMeeting: "End meeting notes",
+    // AI Canvas (Notes pill) — live rolling summary + chronological timeline during a meeting
+    meetingAiCanvas: "AI Canvas",
+    meetingCanvasListening: "Listening..",
+    meetingCanvasPaused: "Paused",
+    meetingCanvasLiveSummary: "Live Summary",
+    meetingCanvasTimeline: "Timeline",
+    meetingCanvasManage: "Manage",
+    meetingCanvasOfficial: "Official",
+    meetingCanvasDrag: "Move",
+    meetingCanvasSummaryEmpty: "Summary appears as the conversation grows.",
+    meetingCanvasSummaryWaiting: "Listening for more of the meeting before summarizing…",
+    meetingCanvasTimelineEmpty: "Timeline fills as topics emerge.",
+    meetingCanvasSummaryUpdating: "Updating summary…",
+    meetingCanvasSummaryNeedsKey:
+      "Live Summary needs the Select KK key in Settings → Nightly review.",
+    meetingCanvasSummaryFailed: "Couldn’t update the summary. Will retry as the meeting continues.",
+    meetingDisplayOriginal: "Original text",
+    meetingChatTitle: "Chat",
+    meetingChatPlaceholder: "Please ask anything about meeting.",
+    meetingChatAddSkill: "+ Add skill",
+    meetingChatNew: "New chat",
+    meetingChatSend: "Send",
+    meetingChatClose: "Close chat",
+    meetingChatStub:
+      "Chat needs your own API key in Settings. Ask again after adding one — answers use the live transcript as context.",
+    meetingChatEmpty: "Ask about this meeting.",
+    meetingOpenChat: "Chat",
+    meetingCloseChat: "Close chat",
     // errors
     sources: "Sources",
     noAnswer: "(no response)",

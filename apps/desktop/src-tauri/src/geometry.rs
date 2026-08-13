@@ -8,14 +8,16 @@
 //! `cg_to_ns(p, primary_height)` at the boundary (T-07).
 #![allow(dead_code, unused_imports)]
 
-pub use shogun_core::notch::geometry::{cg_to_ns, idle_rect, regions, GeometryParams, Point, Rect, Regions};
+pub use shogun_core::notch::geometry::{
+    cg_to_ns, idle_height, idle_rect, regions, GeometryParams, Point, Rect, Regions,
+};
 
 #[cfg(target_os = "macos")]
 pub use mac::{read_primary, ScreenGeometry};
 
 #[cfg(target_os = "macos")]
 pub mod mac {
-    use super::{idle_rect, regions, GeometryParams, Rect, Regions};
+    use super::{idle_height, idle_rect, regions, GeometryParams, Rect, Regions};
     use objc2::MainThreadMarker;
     use objc2_app_kit::NSScreen;
 
@@ -27,6 +29,8 @@ pub mod mac {
         pub notch_w: f64,
         pub notch_h: f64,
         pub menubar_h: f64,
+        /// Idle hit/visual rect (notch_h + content drop on real-notch machines).
+        pub idle: Rect,
         pub regions: Regions,
         /// Height of `NSScreen.screens[0]` — the primary display that anchors the CG
         /// global coordinate space. This, NOT the panel screen's height, is the
@@ -80,7 +84,9 @@ pub mod mac {
             (false, 180.0, if menubar_h > 0.0 { menubar_h } else { 24.0 })
         };
 
-        let idle = idle_rect(screen_rect, notch_w, notch_h);
+        // Real-notch: Idle hit/visual height = silicon cutout + content drop below it.
+        let idle_h = idle_height(notch_h, is_notch);
+        let idle = idle_rect(screen_rect, notch_w, idle_h);
         let regs = regions(screen_rect, idle, GeometryParams::default());
         ScreenGeometry {
             is_notch,
@@ -88,6 +94,7 @@ pub mod mac {
             notch_w,
             notch_h,
             menubar_h,
+            idle,
             regions: regs,
             primary_height,
             display_count,
@@ -118,7 +125,8 @@ pub mod mac {
             (false, 180.0, if menubar_h > 0.0 { menubar_h } else { 24.0 })
         };
 
-        let idle = idle_rect(screen_rect, notch_w, notch_h);
+        let idle_h = idle_height(notch_h, is_notch);
+        let idle = idle_rect(screen_rect, notch_w, idle_h);
         let regs = regions(screen_rect, idle, GeometryParams::default());
         Some(ScreenGeometry {
             is_notch,
@@ -126,6 +134,7 @@ pub mod mac {
             notch_w,
             notch_h,
             menubar_h,
+            idle,
             regions: regs,
             primary_height: f.size.height,
             display_count,

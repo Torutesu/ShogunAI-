@@ -103,8 +103,13 @@ impl HoverTracker {
     pub fn on_move(&mut self, p: Point, t_ms: u64, buttons: u32) -> Vec<HoverSignal> {
         let mut out = Vec::new();
 
-        // Early reject: below the top band, nothing near the notch can be true.
-        if p.y < self.regions.top_band_min_y {
+        // Early reject: below the Idle top band AND outside R_exp. Open/Hover panels extend
+        // well below the 40pt Idle band; treating that as "leave" collapsed Expanded on the
+        // first move into the body. R_exp (updated to live panel bounds) is the combined
+        // stay/leave-grace region while open.
+        let below_idle_band = p.y < self.regions.top_band_min_y;
+        let in_exp = self.regions.r_exp.contains(p);
+        if below_idle_band && !in_exp {
             if self.in_top_band {
                 self.in_top_band = false;
             }
@@ -114,8 +119,8 @@ impl HoverTracker {
             return out;
         }
 
-        // Entered the top band → Q4 denominator.
-        if !self.in_top_band {
+        // Entered the Idle top band → Q4 denominator (not merely R_exp body below the band).
+        if !below_idle_band && !self.in_top_band {
             self.in_top_band = true;
             out.push(HoverSignal::TopBandEntry);
         }
@@ -212,6 +217,21 @@ mod tests {
         let (mut h, _, _) = setup();
         let out = h.on_move(Point::new(756.0, 100.0), 0, 0);
         assert!(out.is_empty());
+    }
+
+    #[test]
+    fn move_into_r_exp_below_idle_band_does_not_exit() {
+        // Open panel body sits below the Idle top band. Early-reject must not treat that as leave.
+        let (mut h, regs, _) = setup();
+        let c = center_of(regs.r_enter);
+        h.on_move(c, 100, 0);
+        // Point in R_exp but below top_band (classic Expanded body).
+        let body = Point::new(regs.r_exp.mid_x(), regs.top_band_min_y - 20.0);
+        assert!(regs.r_exp.contains(body));
+        assert!(body.y < regs.top_band_min_y);
+        let out = h.on_move(body, 300, 0);
+        assert!(!out.contains(&HoverSignal::ExitExp));
+        // ExitStay is fine — body is outside the Idle chin stay ring.
     }
 
     #[test]
