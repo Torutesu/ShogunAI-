@@ -222,6 +222,19 @@ pub mod mac {
         Ok(id)
     }
 
+    /// What is being drafted. Four consecutive `&str` parameters is a transposition waiting to
+    /// happen — `destination` and `subject` swapped would address a send at its own subject line —
+    /// so they travel named.
+    pub(crate) struct Draft<'a> {
+        /// Send type: `email` / `slack` / `calendar` / `github`.
+        pub kind: &'a str,
+        /// Recipient / channel / title / target.
+        pub destination: &'a str,
+        pub subject: &'a str,
+        /// The thread or screen text the draft is grounded in.
+        pub context: &'a str,
+    }
+
     /// The Reply Drafter flow itself (B-5), shared by the `draft_reply` command and the notch
     /// `DraftReply` dispatch (`notch_exec`): draft the body on the Agent lane (invariant 5) from
     /// `context`, then enqueue it on the ONE shared approval queue with the given origin. Blocking
@@ -232,16 +245,14 @@ pub mod mac {
     /// API/MCP face, and that face inheriting a "the user did this" label is exactly the
     /// mislabelling the badge exists to prevent (shogun-mcp already tags Api/Mcp correctly).
     pub(crate) fn draft_and_enqueue(
-        kind: &str,
-        destination: &str,
-        subject: &str,
-        context: &str,
+        req: Draft<'_>,
         queue: &Arc<Mutex<ApprovalQueue>>,
         db: &Db,
         directives: &str,
         origin: ApprovalOrigin,
     ) -> Result<u64, String> {
         use shogun_core::llm::AgentClient;
+        let Draft { kind, destination, subject, context } = req;
         let base_prompt = format!(
             "You are drafting a concise, professional {kind} reply. Use the context below; write \
              only the reply body, no preamble.\n\n--- context ---\n{context}"
@@ -290,10 +301,12 @@ pub mod mac {
         let directives = user_cfg.directives();
         tauri::async_runtime::spawn_blocking(move || {
             draft_and_enqueue(
-                &kind,
-                &destination,
-                &subject,
-                &context,
+                Draft {
+                    kind: &kind,
+                    destination: &destination,
+                    subject: &subject,
+                    context: &context,
+                },
                 &queue,
                 &db,
                 &directives,

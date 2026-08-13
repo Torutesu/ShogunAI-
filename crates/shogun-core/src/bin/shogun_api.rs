@@ -184,7 +184,10 @@ mod tests {
             r.body
         );
 
-        // an external send routes to L3 pending approval, never runs (FR-API-04)
+        // An external send never runs (FR-API-04, invariant 4). In THIS binary it is also never
+        // accepted: standalone shogun-api has no confirm UI, so an enqueued L3 proposal would sit
+        // until it expired and the caller would have been told "pending" for something that could
+        // not be approved. Absent surface ⇒ 501, said out loud.
         let r = request(
             port,
             "POST",
@@ -193,8 +196,8 @@ mod tests {
             Some(r#"{"kind":"send_email","to":"a@b.com","subject":"s","body":"b"}"#),
         )
         .unwrap();
-        assert_eq!(r.status, 202);
-        assert!(r.body.contains("\"pending\":true"));
-        assert!(r.body.contains("\"approval_id\":"));
+        assert_eq!(r.status, 501);
+        assert!(r.body.contains("no_approval_surface"), "body: {}", r.body);
+        assert!(!r.body.contains("\"pending\":true"), "must not read as accepted: {}", r.body);
     }
 }
