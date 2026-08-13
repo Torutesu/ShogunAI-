@@ -124,12 +124,15 @@ fn api_and_mcp_sends_land_in_the_one_shared_queue_with_origins() {
     let shared: Arc<Mutex<ApprovalQueue>> = Arc::new(Mutex::new(ApprovalQueue::new()));
 
     // 1. MCP face: actions.execute with a send → 202-equivalent pending, enqueued in `shared`.
+    // Both faces are told a confirm UI exists — that is the premise of this test (the desktop
+    // hosting them). A headless process refuses the send instead; see the test below.
     let server = McpServer::new(
         StubBackend,
         shared.clone(),
         || 1_000,
         shogun_agents::entitlement::Entitlements::trial_not_started,
-    );
+    )
+    .with_approval_surface(rest::ApprovalSurface::Present);
     let resp = server
         .handle_line(
             r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"actions.execute","arguments":{"kind":"send_email","to":"a@b.com","subject":"s","body":"mcp draft"}}}"#,
@@ -148,6 +151,7 @@ fn api_and_mcp_sends_land_in_the_one_shared_queue_with_origins() {
             1_000,
             &mut q,
             ApprovalOrigin::Api,
+            rest::ApprovalSurface::Present,
         )
     };
     assert_eq!(status, 202);
@@ -183,7 +187,7 @@ fn api_and_mcp_sends_land_in_the_one_shared_queue_with_origins() {
     //    faces executes locally and never touches the queue.
     let (status, body) = {
         let mut q = shared.lock().expect("queue");
-        rest::act(Some(r#"{"kind":"local_search","query":"x"}"#), 1_000, &mut q, ApprovalOrigin::Api)
+        rest::act(Some(r#"{"kind":"local_search","query":"x"}"#), 1_000, &mut q, ApprovalOrigin::Api, rest::ApprovalSurface::Present)
     };
     assert_eq!(status, 200);
     assert!(body.contains("\"executed\":\"local\""));

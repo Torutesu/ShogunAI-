@@ -346,6 +346,9 @@ pub mod mac {
                 &queue,
                 &db,
                 &directives,
+                // The notch dispatched this on the user's tap — the human face, same as the
+                // panel's own draft command.
+                shogun_agents::approval::ApprovalOrigin::Ui,
             ) {
                 Ok(id) => eprintln!("[exec] reply draft queued for L3 approval (id {id})"),
                 Err(e) => eprintln!("[exec] reply draft failed: {e}"),

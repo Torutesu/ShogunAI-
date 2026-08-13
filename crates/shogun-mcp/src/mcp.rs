@@ -38,6 +38,7 @@ pub struct McpServer<B: MemoryBackend> {
     approvals: Arc<Mutex<ApprovalQueue>>,
     clock: Box<dyn Fn() -> i64 + Send + Sync>,
     entitlements: Box<dyn Fn() -> Entitlements + Send + Sync>,
+    surface: rest::ApprovalSurface,
 }
 
 impl<B: MemoryBackend> McpServer<B> {
@@ -52,7 +53,17 @@ impl<B: MemoryBackend> McpServer<B> {
             approvals,
             clock: Box::new(clock),
             entitlements: Box::new(entitlements),
+            // Headless by default: the standalone stdio binary has no confirm UI, and defaulting
+            // the other way would silently strand every L3 send a caller submits.
+            surface: rest::ApprovalSurface::Absent,
         }
+    }
+
+    /// Declare that this process runs a confirm UI, so L3 sends may be enqueued for it.
+    #[must_use]
+    pub fn with_approval_surface(mut self, surface: rest::ApprovalSurface) -> Self {
+        self.surface = surface;
+        self
     }
 
     /// Handle one JSON-RPC line. Returns the response line, or `None` for a notification (no id).
@@ -143,7 +154,9 @@ impl<B: MemoryBackend> McpServer<B> {
                 let body = args.to_string();
                 let now = (self.clock)();
                 match self.approvals.lock() {
-                    Ok(mut queue) => rest::act(Some(&body), now, &mut queue, ApprovalOrigin::Mcp).1,
+                    Ok(mut queue) => {
+                        rest::act(Some(&body), now, &mut queue, ApprovalOrigin::Mcp, self.surface).1
+                    }
                     Err(_) => return error(id, -32000, "internal"),
                 }
             }
@@ -362,7 +375,10 @@ mod tests {
     #[test]
     fn tools_call_send_is_pending_l3_via_shared_queue() {
         let shared = shared_queue();
-        let s = McpServer::new(Fake, shared.clone(), || 1000, Entitlements::trial_not_started);
+        // Stands in for the desktop hosting this face — the headless default is covered by
+        // `send_is_refused_when_no_confirm_ui_can_drain_the_queue`.
+        let s = McpServer::new(Fake, shared.clone(), || 1000, Entitlements::trial_not_started)
+            .with_approval_surface(rest::ApprovalSurface::Present);
         let v = call(
             &s,
             r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"actions.execute","arguments":{"kind":"send_email","to":"a@b.com","subject":"s","body":"b"}}}"#,

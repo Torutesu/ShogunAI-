@@ -2216,6 +2216,12 @@ kbd {
   text-align: right;
   min-width: 0;
 }
+/* An approval whose origin could not be attributed. Amber, not faint: "something asked to send
+   this and we cannot say what" is the one row in this list that deserves a second look. */
+.appr__route.is-warn {
+  color: var(--warn);
+  font-weight: 600;
+}
 .appr__body {
   margin: 8px 0;
   padding: 9px 0;

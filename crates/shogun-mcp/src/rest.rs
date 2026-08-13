@@ -319,15 +319,32 @@ fn parse_action(body: &str) -> Option<ActionSpec> {
     })
 }
 
+/// Whether this process has a surface that will ever drain the approval queue.
+///
+/// The desktop app has one (the Notch confirm UI); the standalone `shogun-api` / `shogun-mcp`
+/// binaries do not — they build a queue at their composition root that nobody watches. Enqueuing
+/// an L3 send there is not dangerous (invariant 4 still holds: nothing sends without a human),
+/// but it *looks* like it worked and then expires in silence, which quietly breaks invariant 6's
+/// promise that the API face behaves like the human one. Saying so is the honest outcome.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApprovalSurface {
+    /// A confirm UI is running in this process.
+    Present,
+    /// Headless: refuse external sends rather than strand them.
+    Absent,
+}
+
 /// Handle `actions.execute` (auth already enforced by [`route`]). A local action is authorized to
 /// run (200); an external send is enqueued in the shared approval queue and returns pending +
 /// approval id (202, FR-API-04) — it never runs here without a UI confirm. `origin` labels which
 /// face enqueued it (REST/CLI = Api, stdio = Mcp) in the single shared queue (B-3 / E-08).
+/// `surface` says whether anything in this process can confirm; see [`ApprovalSurface`].
 pub fn act(
     body: Option<&str>,
     now_ms: i64,
     approvals: &mut ApprovalQueue,
     origin: ApprovalOrigin,
+    surface: ApprovalSurface,
 ) -> (u16, String) {
     let Some(body) = body else {
         return (400, r#"{"error":"missing_body"}"#.to_string());
@@ -339,6 +356,13 @@ pub fn act(
             (200, format!(r#"{{"executed":"local","level":"{}"}}"#, level_label(level)))
         }
         Some(ActionSpec::Send(send, preview)) => {
+            if surface == ApprovalSurface::Absent {
+                return (
+                    501,
+                    r#"{"error":"no_approval_surface","detail":"external sends need the SHOGUN app running to confirm them"}"#
+                        .to_string(),
+                );
+            }
             let now = u64::try_from(now_ms).unwrap_or(0);
             let id = approvals.request(send, preview, origin, now);
             (
@@ -639,7 +663,7 @@ mod tests {
     #[test]
     fn act_local_is_authorized_immediately() {
         let mut q = ApprovalQueue::new();
-        let (s, b) = act(Some(r#"{"kind":"local_search","query":"budget"}"#), 0, &mut q, ApprovalOrigin::Api);
+        let (s, b) = act(Some(r#"{"kind":"local_search","query":"budget"}"#), 0, &mut q, ApprovalOrigin::Api, ApprovalSurface::Present);
         assert_eq!(s, 200);
         assert!(b.contains("\"executed\":\"local\""));
         assert!(b.contains("\"level\":\"L1\""));
@@ -654,6 +678,7 @@ mod tests {
             1000,
             &mut q,
             ApprovalOrigin::Api,
+            ApprovalSurface::Present,
         );
         assert_eq!(s, 202);
         assert!(b.contains("\"pending\":true"));
@@ -665,11 +690,39 @@ mod tests {
     #[test]
     fn act_rejects_missing_and_malformed_bodies() {
         let mut q = ApprovalQueue::new();
-        assert_eq!(act(None, 0, &mut q, ApprovalOrigin::Api).0, 400);
-        assert_eq!(act(Some("not json"), 0, &mut q, ApprovalOrigin::Api).0, 400);
-        assert_eq!(act(Some(r#"{"kind":"unknown_thing"}"#), 0, &mut q, ApprovalOrigin::Api).0, 400);
+        assert_eq!(act(None, 0, &mut q, ApprovalOrigin::Api, ApprovalSurface::Present).0, 400);
+        assert_eq!(act(Some("not json"), 0, &mut q, ApprovalOrigin::Api, ApprovalSurface::Present).0, 400);
+        assert_eq!(act(Some(r#"{"kind":"unknown_thing"}"#), 0, &mut q, ApprovalOrigin::Api, ApprovalSurface::Present).0, 400);
         // a send kind missing a required field is also rejected
-        assert_eq!(act(Some(r#"{"kind":"send_email"}"#), 0, &mut q, ApprovalOrigin::Api).0, 400);
+        assert_eq!(act(Some(r#"{"kind":"send_email"}"#), 0, &mut q, ApprovalOrigin::Api, ApprovalSurface::Present).0, 400);
+    }
+
+    #[test]
+    fn a_send_is_refused_outright_when_nothing_can_confirm_it() {
+        // Headless (`shogun-api` / `shogun-mcp` standalone): enqueuing here would look like it
+        // worked and then expire in silence. Say so instead — invariant 4 was never at risk,
+        // invariant 6's "the API face behaves like the human one" is what this protects.
+        let mut q = ApprovalQueue::new();
+        let (status, body) = act(
+            Some(r#"{"kind":"send_email","to":"a@b.com","subject":"Hi","body":"hello"}"#),
+            1000,
+            &mut q,
+            ApprovalOrigin::Api,
+            ApprovalSurface::Absent,
+        );
+        assert_eq!(status, 501);
+        assert!(body.contains("no_approval_surface"), "{body}");
+        assert_eq!(q.pending_len(), 0, "nothing may be stranded in the queue");
+
+        // A local action still runs — only external sends need a confirm surface.
+        let (ok, _) = act(
+            Some(r#"{"kind":"local_search","query":"x"}"#),
+            1000,
+            &mut q,
+            ApprovalOrigin::Api,
+            ApprovalSurface::Absent,
+        );
+        assert_eq!(ok, 200);
         assert_eq!(q.pending_len(), 0);
     }
 

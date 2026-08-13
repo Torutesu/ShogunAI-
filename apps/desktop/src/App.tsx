@@ -34,7 +34,7 @@ function beginPillDrag(e: React.MouseEvent): void {
 import { t, tf } from "./strings";
 import { AnalyticsToggle } from "./AnalyticsToggle";
 import { ConnectionsList } from "./connections";
-import { DEFAULT_BINDS } from "./keys";
+import { comboChips, DEFAULT_BINDS } from "./keys";
 import {
   IconClose,
   IconHistory,
@@ -850,6 +850,8 @@ export function App(): JSX.Element {
   useEffect(() => cancelAutoCollapse, [cancelAutoCollapse]);
 
   openRef.current = open;
+  /// Whether this expand's SLO-02 sample has already been taken (see `claimActionsSlo`).
+  const actionsSloClaimed = useRef(false);
 
   /** Paint chin→panel scale factors on the stage (compositor-only; no React re-render). */
   const applyMorphScale = useCallback((w: number, h: number): void => {
@@ -900,6 +902,8 @@ export function App(): JSX.Element {
     beginCollapse();
   };
   const expand = useCallback((): void => {
+    // A new expand is a new SLO-02 measurement window (see `claimActionsSlo`).
+    actionsSloClaimed.current = false;
     // Accessibility is the one condition the user can fix without restarting, so re-read rather
     // than trust the value from boot.
     void invoke<StartupHealth>("startup_health").then(setHealth).catch(() => undefined);
@@ -945,6 +949,16 @@ export function App(): JSX.Element {
     },
     [],
   );
+  /// SLO-02 is "expand → context buttons painted", but `ActionsRow` also remounts when the Hub
+  /// is toggled, and each mount would otherwise record a fresh sample anchored to the Hub close
+  /// — percentiles polluted by a measurement of something else entirely. The row may claim the
+  /// slot once per expand; later mounts refetch their actions but stay out of the numbers.
+  const claimActionsSlo = useCallback((): boolean => {
+    if (actionsSloClaimed.current) return false;
+    actionsSloClaimed.current = true;
+    return true;
+  }, []);
+
   const openSettings = (): void => {
     setShowSettings(true);
     setShowHub(false);
@@ -1172,7 +1186,10 @@ export function App(): JSX.Element {
         .catch(() => undefined);
       return;
     }
-    if (fix === "settings") void invoke("open_full_ui").catch(() => undefined);
+    // In-panel Settings, not the standalone Full UI window: the overview moved into the notch
+    // (the Hub), and a health chip that spawned a separate window contradicted that decision —
+    // the fix for every "settings" health line lives one click away, right here.
+    if (fix === "settings") openSettings();
   };
 
   const totalState = state.commitments.length + state.open_loops.length;
@@ -1527,7 +1544,10 @@ export function App(): JSX.Element {
               ) : null}
             </div>
 
-            <ActionsRow onQueued={() => setApprovalsCount((n) => n + 1)} />
+            <ActionsRow
+              onQueued={() => setApprovalsCount((n) => n + 1)}
+              claimSlo={claimActionsSlo}
+            />
 
             <div className="composer">
               <div className="composer__card">
@@ -1613,7 +1633,15 @@ export function App(): JSX.Element {
  *  Dispositions: L1 ran (`executed`) → one-line note; L2 (`confirm:<id>`) → inline Confirm/Cancel
  *  chip → `confirm_notch_action`; L3 send (`queued:<id>` / `drafting`) → queued-for-approval note + badge bump
  *  via `onQueued`. Buttons are ordinary tab stops; the row never traps focus. */
-function ActionsRow({ onQueued }: { onQueued: () => void }): JSX.Element | null {
+function ActionsRow({
+  onQueued,
+  claimSlo,
+}: {
+  onQueued: () => void;
+  /// Returns true when this mount owns the expand's SLO-02 sample. False on a remount caused by
+  /// something other than an expand (a Hub toggle), which must not land in the percentiles.
+  claimSlo: () => boolean;
+}): JSX.Element | null {
   const [actions, setActions] = useState<ActionView[]>(IN_TAURI ? [] : MOCK_ACTIONS);
   const [busy, setBusy] = useState<number | null>(null);
   /// A pending L2 one-tap confirm: which button asked, and the engine's action id.
@@ -1625,10 +1653,12 @@ function ActionsRow({ onQueued }: { onQueued: () => void }): JSX.Element | null 
     if (!IN_TAURI) return;
     const t0 = performance.now();
     let stale = false;
+    const measures = claimSlo();
     void invoke<ActionView[]>("notch_actions")
       .then((a) => {
         if (stale) return;
         setActions(a.slice(0, 4));
+        if (!measures) return;
         // SLO-02: expand → buttons painted. Double-rAF so the row is actually on screen (same
         // convention as the `painted` command); the sample lands via `record_ui_slo`.
         requestAnimationFrame(() =>
@@ -1643,7 +1673,7 @@ function ActionsRow({ onQueued }: { onQueued: () => void }): JSX.Element | null 
     return () => {
       stale = true;
     };
-  }, []);
+  }, [claimSlo]);
   useEffect(
     () => () => {
       if (noteTimer.current != null) window.clearTimeout(noteTimer.current);
@@ -3727,8 +3757,14 @@ function ApprovalsSection(): JSX.Element | null {
             <div key={r.id} className="appr">
               <div className="appr__top">
                 <span className="appr__op">{r.op_type}</span>
-                {/* B-3: which surface enqueued it — a UI, API, or MCP caller share this one queue. */}
-                <span className="appr__route">{(r.origin ?? "ui").toUpperCase()}</span>
+                {/* B-3: which surface enqueued it — a UI, API, or MCP caller share this one
+                    queue. An unattributable request reads as UNKNOWN and is marked: the badge is
+                    a security disclosure, so the missing case must look stranger, not safer. */}
+                <span
+                  className={`appr__route${!r.origin || r.origin === "unknown" ? " is-warn" : ""}`}
+                >
+                  {(r.origin ?? "unknown").toUpperCase()}
+                </span>
                 <span className="appr__route">
                   {r.destination} · {r.route === "composio" ? t.approvalsVia : t.approvalsDirect}
                 </span>
@@ -3833,8 +3869,17 @@ function PrivacySecuritySection(props: {
   /// Called after a "delete everything & account" wipe so the parent re-reads key status —
   /// that command removes every provider's Keychain key, so `hasKey` would otherwise go stale.
   onDeleted: () => void;
+  /// Agent-lane provider + model, owned by `Settings`. NOT re-fetched here: a second copy of
+  /// this state meant picking a subscription delegate in the parent card left `provider` stale
+  /// down here, and `saveKey` passes it explicitly — so the key landed in the WRONG provider's
+  /// Keychain account. One owner, one value.
+  provider: string;
+  /// Apply a provider change through the parent (blank model = that provider's default).
+  /// Rejects when the backend refuses, so the key card can show the reason where the user is
+  /// looking.
+  onApplyLlm: (provider: string, model: string) => Promise<void>;
 }): JSX.Element {
-  const { hasKey, keyRejected, onDeleted } = props;
+  const { hasKey, keyRejected, onDeleted, provider, onApplyLlm } = props;
   // BYOK key entry: the key goes straight to the macOS Keychain via Rust (never a file/DB/log).
   // Only the last 4 chars are ever read back (invariant 7 / NFR-SEC-02) — the full key stays in
   // Rust — so the read-back echoes "Connected ··1234", mirroring the Composio card in this screen.
@@ -3855,31 +3900,9 @@ function PrivacySecuritySection(props: {
     if (keyState) refreshLast4();
     else setKeyLast4("");
   }, [keyState, refreshLast4]);
-  // Agent-lane provider + model (non-secret; the key is per-provider in the Keychain).
-  const [provider, setProvider] = useState("anthropic");
-  const [model, setModel] = useState("");
-  useEffect(() => {
-    if (!IN_TAURI) return;
-    void invoke<{ provider: string; model: string }>("get_llm_settings")
-      .then((s) => {
-        setProvider(s.provider);
-        setModel(s.model);
-      })
-      .catch(() => undefined);
-  }, []);
   const applyLlm = (p: string, m: string): void => {
-    const prev = { provider, model };
-    setProvider(p);
-    setModel(m);
     setKeyMsg("");
-    if (IN_TAURI)
-      void invoke("set_llm_settings", { provider: p, model: m }).catch((e) => {
-        // Roll the UI back — an optimistic provider the backend never accepted would send the
-        // next key save to the wrong Keychain account.
-        setProvider(prev.provider);
-        setModel(prev.model);
-        setKeyMsg(String(e));
-      });
+    void onApplyLlm(p, m).catch((e: unknown) => setKeyMsg(String(e)));
   };
   const saveKey = (): void => {
     const k = keyInput.trim();
@@ -4139,22 +4162,6 @@ function PrivacySecuritySection(props: {
   );
 }
 
-/** "Control+Alt+KeyN" → "⌃ ⌥ N" plain glyphs (no keycap chips). */
-function comboLabel(combo: string): string {
-  return combo
-    .split("+")
-    .map((part) => {
-      if (part === "Control") return "⌃";
-      if (part === "Alt") return "⌥";
-      if (part === "Shift") return "⇧";
-      if (part === "Super") return "⌘";
-      if (part.startsWith("Key")) return part.slice(3);
-      if (part.startsWith("Digit")) return part.slice(5);
-      return part;
-    })
-    .join(" ");
-}
-
 function Settings(props: {
   appearance: Appearance;
   setAppearance: (a: Appearance) => void;
@@ -4216,21 +4223,29 @@ function Settings(props: {
       .catch(() => undefined);
     loadDelegates();
   }, [loadDelegates]);
-  const applyLlm = (p: string, m: string, c?: boolean): void => {
+  /// The ONE writer for the agent-lane provider/model (and the delegation consent). Returns a
+  /// promise so a caller that owns its own error surface — the key card in
+  /// `PrivacySecuritySection` — can show the failure where the user is looking, instead of in a
+  /// card they may have scrolled past.
+  const applyLlm = (p: string, m: string, c?: boolean): Promise<void> => {
     const prev = { provider, model, consent };
     setProvider(p);
     setModel(m);
     if (c !== undefined) setConsent(c);
     setSubMsg("");
-    if (IN_TAURI)
-      void invoke("set_llm_settings", { provider: p, model: m, subscriptionConsent: c }).catch((e) => {
+    if (!IN_TAURI) return Promise.resolve();
+    return invoke("set_llm_settings", { provider: p, model: m, subscriptionConsent: c }).then(
+      () => undefined,
+      (e: unknown) => {
         // Roll the UI back — an optimistic provider the backend never accepted would send the
         // next key save to the wrong Keychain account.
         setProvider(prev.provider);
         setModel(prev.model);
         setConsent(prev.consent);
         setSubMsg(String(e));
-      });
+        throw e;
+      },
+    );
   };
   /** Run one real completion through a delegate to find out whether it is signed in. */
   const testDelegate = (id: string): void => {
@@ -4412,7 +4427,11 @@ function Settings(props: {
                     setKeyErr("");
                   }}
                 >
-                  <span className="keys__combo">{comboLabel(binds[action] ?? "")}</span>
+                  {/* comboChips, not a local formatter: it is the only thing that knows the
+                      gesture grammar (`Tap+Alt` → "⌥ tap", `Dual+Super` → "⌘ ⌘"), and a second
+                      one here rendered those two as the literal words "Tap ⌥" / "Dual ⌘" — a
+                      different shortcut from the one onboarding teaches. */}
+                  <span className="keys__combo">{comboChips(binds[action] ?? "").join(" ")}</span>
                 </button>
               )}
             </div>
@@ -4498,7 +4517,13 @@ function Settings(props: {
           ) : null}
           {subMsg ? <div className="set__hint is-err">{subMsg}</div> : null}
         </section>
-        <PrivacySecuritySection hasKey={hasKey} keyRejected={keyRejected} onDeleted={onCleared} />
+        <PrivacySecuritySection
+          hasKey={hasKey}
+          keyRejected={keyRejected}
+          onDeleted={onCleared}
+          provider={provider}
+          onApplyLlm={(p, m) => applyLlm(p, m)}
+        />
         <section className="set">
           <div className="set__label">{t.memory}</div>
           <div className="set__hint">{t.memoryHint}</div>

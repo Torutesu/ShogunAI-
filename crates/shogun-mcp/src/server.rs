@@ -54,6 +54,7 @@ pub struct AppState {
     clock: Clock,
     metrics: Option<Arc<dyn MetricsSource>>,
     entitlements: EntitlementProvider,
+    surface: rest::ApprovalSurface,
 }
 
 impl AppState {
@@ -74,7 +75,17 @@ impl AppState {
             clock,
             metrics: None,
             entitlements: Arc::new(Entitlements::trial_not_started),
+            // Headless by default — see `McpServer::new`. The composition root that owns a
+            // confirm UI opts in with `with_approval_surface`.
+            surface: rest::ApprovalSurface::Absent,
         }
+    }
+
+    /// Declare that this process runs a confirm UI, so L3 sends may be enqueued for it.
+    #[must_use]
+    pub fn with_approval_surface(mut self, surface: rest::ApprovalSurface) -> Self {
+        self.surface = surface;
+        self
     }
 
     /// Attach the live SLO metrics source served at `GET /v1/metrics`. Without it, the endpoint
@@ -154,6 +165,7 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
                         (state.clock)(),
                         &mut queue,
                         shogun_agents::approval::ApprovalOrigin::Api,
+                        state.surface,
                     ),
                     Err(_) => (500, r#"{"error":"internal"}"#.to_string()),
                 },
@@ -272,7 +284,10 @@ mod tests {
         let listener = bind_local(0).await.unwrap();
         let addr = listener.local_addr().unwrap();
         let approvals = Arc::new(Mutex::new(ApprovalQueue::new()));
-        let state = AppState::new(Arc::new(tokens), backend, approvals, Arc::new(|| 0));
+        // The tests stand in for a process that HAS a confirm UI (the desktop app hosting this
+        // face); the headless default is exercised by `send_is_refused_without_an_approval_surface`.
+        let state = AppState::new(Arc::new(tokens), backend, approvals, Arc::new(|| 0))
+            .with_approval_surface(rest::ApprovalSurface::Present);
         tokio::spawn(async move {
             let _ = serve_on(listener, state).await;
         });

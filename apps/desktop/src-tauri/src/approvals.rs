@@ -198,8 +198,10 @@ pub mod mac {
         );
     }
 
-    /// Enqueue a send for L3 confirmation. Returns the pending id. The producer is normally an agent
-    /// (Reply Drafter etc.); this command is the shared entry point (also usable from the UI).
+    /// Enqueue a send for L3 confirmation from the webview. Returns the pending id.
+    ///
+    /// `ApprovalOrigin::Ui` is correct HERE because this is the Tauri command the panel calls;
+    /// producers on other faces enqueue through their own entry points with their own origin.
     #[tauri::command]
     pub fn submit_send(
         kind: String,
@@ -225,6 +227,10 @@ pub mod mac {
     /// `context`, then enqueue it on the ONE shared approval queue with the given origin. Blocking
     /// (an LLM call) — callers off the UI thread only. Returns the pending approval id; the human
     /// still confirms before anything sends (FR-AG-03).
+    ///
+    /// `origin` is a real parameter rather than a hardcoded `Ui`: lib.rs anticipates an in-app
+    /// API/MCP face, and that face inheriting a "the user did this" label is exactly the
+    /// mislabelling the badge exists to prevent (shogun-mcp already tags Api/Mcp correctly).
     pub(crate) fn draft_and_enqueue(
         kind: &str,
         destination: &str,
@@ -233,6 +239,7 @@ pub mod mac {
         queue: &Arc<Mutex<ApprovalQueue>>,
         db: &Db,
         directives: &str,
+        origin: ApprovalOrigin,
     ) -> Result<u64, String> {
         use shogun_core::llm::AgentClient;
         let base_prompt = format!(
@@ -254,7 +261,7 @@ pub mod mac {
         let now = db.now_ms().max(0) as u64;
         let id = {
             let mut q = queue.lock().map_err(|_| "approval queue poisoned".to_string())?;
-            propose(&mut q, &proposal, ApprovalOrigin::Ui, now).0
+            propose(&mut q, &proposal, origin, now).0
         };
         // A draft the user did not watch being written is exactly the case that needs telling (#49).
         crate::sound::mac::play(shogun_core::sound::Cue::ApprovalPending);
@@ -282,7 +289,16 @@ pub mod mac {
         let db = db.inner().clone();
         let directives = user_cfg.directives();
         tauri::async_runtime::spawn_blocking(move || {
-            draft_and_enqueue(&kind, &destination, &subject, &context, &queue, &db, &directives)
+            draft_and_enqueue(
+                &kind,
+                &destination,
+                &subject,
+                &context,
+                &queue,
+                &db,
+                &directives,
+                ApprovalOrigin::Ui,
+            )
         })
         .await
         .map_err(|e| format!("draft task failed: {e}"))?
@@ -308,7 +324,11 @@ pub mod mac {
                 full_body: p.full_body.clone(),
                 route: route_str(p.route),
                 // Every pending entry has an origin; default defensively rather than dropping the row.
-                origin: origin.map_or("ui", ApprovalOrigin::as_str),
+                // "unknown", never "ui": the badge exists to tell the human WHICH face asked to
+                // send something, and defaulting an unattributable request to "you did this" is
+                // the wrong direction for a security disclosure. It should read stranger, not
+                // safer.
+                origin: origin.map_or("unknown", ApprovalOrigin::as_str),
             })
             .collect();
         Ok(views)
