@@ -11,6 +11,23 @@
 //! permission is requested, and none is required to ask (FR-MT-12). The boundary between
 //! detecting a meeting and listening to one is exactly this line, so nothing in this file opens
 //! a stream.
+//!
+//! # What this cannot answer, and who compensates
+//!
+//! The property says *a* process is using *a* device. It does not say which process — so a voice
+//! utility that holds an input from login makes it permanently true, and read naively that is a
+//! meeting in Finder, in Slack and in the login window alike (observed on-device 2026-07-31).
+//! [`shogun_core::meeting::detect::MicWatch`] compensates behaviourally: fed
+//! [`MicSource::SystemWide`](shogun_core::meeting::detect::MicSource::SystemWide) plus the
+//! frontmost app, it writes the signal off once the stretch has outlived three unrelated apps.
+//!
+//! The real fix is attribution, and it belongs here: on macOS 14.4+, CoreAudio exposes process
+//! objects (`kAudioHardwarePropertyProcessObjectList`, then each object's
+//! `kAudioProcessPropertyIsRunningInput` and `kAudioProcessPropertyPID`). Resolving the PID to a
+//! bundle id and reporting
+//! [`MicSource::Holder`](shogun_core::meeting::detect::MicSource::Holder) lets the watch answer
+//! *who* is talking instead of guessing — and the detector already handles it. Keep the same
+//! discipline when adding it: process objects expose running state, never samples.
 
 #[cfg(target_os = "macos")]
 pub use mac::input_in_use;

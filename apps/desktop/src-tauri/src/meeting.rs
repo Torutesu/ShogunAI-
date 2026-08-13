@@ -420,9 +420,46 @@ use shogun_core::meeting::gate::OfferGate;
         let Ok(mut g) = LANE.lock() else { return };
         let Some(lane) = g.as_mut() else { return };
 
+        // Computed before the mic observation because the watch needs to know whether the open
+        // device has an explanation in front of it — see `MicObservation::meeting_context`.
+        let url_hint = page_url.and_then(detect::host_hint);
+        let bundle_hint = detect::bundle_hint(bundle_id);
+        let has_meet_url = url_hint == Some(detect::MeetingHint::Strong);
+        let has_strong_bundle = bundle_hint == Some(detect::MeetingHint::Strong);
+        // Weak surfaces (Teams, Webex — Plan A-2): one corroborating vote in the detector, never
+        // an opener, so they ride in the ctx rather than in `meeting_app_frontmost`.
+        let has_weak_meeting_signal = bundle_hint == Some(detect::MeetingHint::Weak)
+            || url_hint == Some(detect::MeetingHint::Weak);
+        // Slack huddles (Plan A-4): same bundle id as ordinary Slack, so the hint reads the
+        // window title plus the capture poller's most recent AX text for Slack.
+        //
+        // Guarded by `enabled` because these hints moved above the feature gate, and the AX
+        // snippets are captured user content: FR-MT-02a says nothing observes a meeting while
+        // meeting notes are off, and reading them here would break that. `&&` short-circuits, so
+        // a disabled build never touches the snippets at all. The rest of `on_focus` only uses
+        // this after the same gate, so nothing downstream changes.
+        let has_huddle_hint = lane.settings.enabled && slack_huddle_hint(bundle_id, window_title);
+        let meeting_context =
+            has_strong_bundle || has_meet_url || has_weak_meeting_signal || has_huddle_hint;
+
         // Fed every tick, including while a meeting is already running: the watch measures a
         // continuous stretch, so skipping observations would make it forget the call is ongoing.
-        lane.mic.observe(mic_open, now);
+        //
+        // `SystemWide` because `mic::input_in_use` reports the device, not its holder. That is
+        // permanently true on a machine where any utility keeps an input open, so the watch is
+        // given the frontmost app and the meeting context and decides for itself whether the
+        // signal still describes this user (observed on-device 2026-07-31: a held input meant an
+        // offer in Finder and in the login window). Attribution belongs in `mic.rs`; when it
+        // lands, this becomes `MicSource::Holder` and the behavioural check stops mattering.
+        lane.mic.observe(
+            &detect::MicObservation {
+                in_use: mic_open,
+                source: detect::MicSource::SystemWide,
+                frontmost_bundle_id: bundle_id,
+                meeting_context,
+            },
+            now,
+        );
         let mic_sustained_ms = lane.mic.sustained_ms(now);
 
         if !lane.settings.enabled {
@@ -450,20 +487,8 @@ use shogun_core::meeting::gate::OfferGate;
 
         // Signal (2) only. The AX-controls signal of FR-MT-04 needs native probes that do not
         // exist yet; claiming them here would inflate the confidence stored against the interval
-        // beyond what was actually observed.
-        let url_hint = page_url.and_then(detect::host_hint);
-        let bundle_hint = detect::bundle_hint(bundle_id);
-        let has_meet_url = url_hint == Some(detect::MeetingHint::Strong);
-        let has_strong_bundle = bundle_hint == Some(detect::MeetingHint::Strong);
-        // Weak surfaces (Teams, Webex — Plan A-2): one corroborating vote in the detector, never
-        // an opener, so they ride in the ctx rather than in `meeting_app_frontmost`.
-        let has_weak_meeting_signal = bundle_hint == Some(detect::MeetingHint::Weak)
-            || url_hint == Some(detect::MeetingHint::Weak);
-        // Slack huddles (Plan A-4): same bundle id as ordinary Slack, so the hint reads the
-        // window title plus the capture poller's most recent AX text for Slack.
-        let has_huddle_hint = slack_huddle_hint(bundle_id, window_title);
-        let meeting_context =
-            has_strong_bundle || has_meet_url || has_weak_meeting_signal || has_huddle_hint;
+        // beyond what was actually observed. (The hints themselves are computed above, because
+        // the mic watch needs `meeting_context` before it can judge the observation.)
         let on_media_page = page_url.is_some_and(detect::is_media_url);
         let page_host = page_url.and_then(detect::host_from_url);
         let signals = Signals {
@@ -539,7 +564,7 @@ use shogun_core::meeting::gate::OfferGate;
         }
     }
 
-    fn recording_app_present(lane: &mut Lane, _obs: Option<&TickObservation<'_>>, now: i64, mic_open: bool) -> bool {
+    fn recording_app_present(lane: &mut Lane, obs: Option<&TickObservation<'_>>, now: i64, mic_open: bool) -> bool {
         if lane.opened_via_meet_url {
             return detect::meet_url_session_present(
                 lane.url_lost_since_ms,
@@ -560,7 +585,20 @@ use shogun_core::meeting::gate::OfferGate;
             );
         }
         match lane.app_bundle_id.as_deref() {
-            None | Some("") => lane.mic.observe(mic_open, now),
+            // `meeting_context: true` — a recording is running, and that IS the explanation for
+            // the open device. The stuck check exists to stop an unexplained signal from OPENING
+            // a meeting; letting it fire here would hang up on a call already in progress because
+            // the user tabbed through three apps. Still fed rather than read, so a mic that
+            // closes on a tick with no readable frontmost app still resets the stretch.
+            None | Some("") => lane.mic.observe(
+                &detect::MicObservation {
+                    in_use: mic_open,
+                    source: detect::MicSource::SystemWide,
+                    frontmost_bundle_id: obs.map(|o| o.bundle_id).unwrap_or(""),
+                    meeting_context: true,
+                },
+                now,
+            ),
             Some(bundle_id) => crate::display::is_app_running(bundle_id),
         }
     }
