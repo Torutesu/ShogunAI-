@@ -92,7 +92,31 @@ impl FeedbackKind {
             _ => return None,
         })
     }
+
+    /// Whether this kind is a *decision on a proposal SHOGUN made*. `state_resolve` is not: the
+    /// user resolved a state record directly, with no proposal in front of them, so counting it
+    /// would inflate "how often did I decide on SHOGUN's suggestions" with work SHOGUN never
+    /// suggested.
+    pub fn is_action_decision(self) -> bool {
+        !matches!(self, FeedbackKind::StateResolve)
+    }
+
+    /// Whether the decision *took* the proposal. Editing before approving still counts: the
+    /// proposal was the starting point and it shipped. `Undo` does not — the user took it back.
+    pub fn is_adoption(self) -> bool {
+        matches!(self, FeedbackKind::EditBeforeApprove | FeedbackKind::ApproveUnchanged)
+    }
 }
+
+/// Every feedback kind, so a SQL predicate built from [`FeedbackKind::is_action_decision`] /
+/// [`FeedbackKind::is_adoption`] cannot silently miss a variant added later.
+pub const ALL_FEEDBACK_KINDS: &[FeedbackKind] = &[
+    FeedbackKind::EditBeforeApprove,
+    FeedbackKind::Reject,
+    FeedbackKind::ApproveUnchanged,
+    FeedbackKind::StateResolve,
+    FeedbackKind::Undo,
+];
 
 /// Where a lesson applies (the `scope` CHECK on both tables). `scope_ref` names the app bundle
 /// id / person id / project id; `Global` carries no ref.
@@ -281,6 +305,46 @@ pub fn count_feedback_since(conn: &Connection, since_ts_ms: i64) -> Result<i64, 
     conn.query_row("SELECT count(*) FROM feedback_events WHERE ts_ms >= ?1", [since_ts_ms], |r| {
         r.get(0)
     })
+}
+
+/// Decisions on SHOGUN's proposals since `since_ts_ms`, and how many of them adopted the
+/// proposal — the Evening Wrap's "Today's outcome" counts (§6.17, FR-EB-01).
+///
+/// Reads `feedback_events`, the table that already records approval-time decisions, rather than
+/// a second parallel ledger: two tables counting the same act would drift, and the one the user
+/// sees in the Wrap must be the one the lessons learn from.
+///
+/// Counts only. No `before_text` / `after_text` is read here, and none can be — those columns are
+/// local-only user content (V16's rule).
+pub fn decision_counts_since(
+    conn: &Connection,
+    since_ts_ms: i64,
+) -> Result<(i64, i64), rusqlite::Error> {
+    // Both lists are built from the enum, so a kind added later is a compile-time decision about
+    // which bucket it falls in rather than a silently-wrong count. The values are `as_str()`
+    // literals — never caller input — so the inlined IN lists cannot carry SQL from outside.
+    let quoted = |f: &dyn Fn(FeedbackKind) -> bool| -> String {
+        ALL_FEEDBACK_KINDS
+            .iter()
+            .copied()
+            .filter(|&k| f(k))
+            .map(|k| format!("'{}'", k.as_str()))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let decisions = quoted(&FeedbackKind::is_action_decision);
+    let adoptions = quoted(&FeedbackKind::is_adoption);
+    conn.query_row(
+        &format!(
+            "SELECT count(*),
+                    sum(CASE WHEN kind IN ({adoptions}) THEN 1 ELSE 0 END)
+             FROM feedback_events
+             WHERE ts_ms >= ?1 AND kind IN ({decisions})"
+        ),
+        [since_ts_ms],
+        // `sum()` over zero rows is NULL, not 0 — count and sum disagree on the empty case.
+        |r| Ok((r.get(0)?, r.get::<_, Option<i64>>(1)?.unwrap_or(0))),
+    )
 }
 
 // ---------------------------------------------------------------- distillation watermark (D-4)
@@ -1358,6 +1422,29 @@ mod tests {
         assert_eq!(count_feedback_since(&conn, 0).unwrap(), 3);
         assert_eq!(count_feedback_since(&conn, 1_002).unwrap(), 1);
         assert_eq!(count_feedback_since(&conn, 2_000).unwrap(), 0);
+    }
+
+    #[test]
+    fn decision_counts_separate_adoption_from_rejection_and_ignore_state_resolve() {
+        let conn = crate::open_in_memory().unwrap();
+        let f = |ts| NewFeedback {
+            ts_ms: ts,
+            action_kind: Some("draft_reply"),
+            scope_ref: None,
+            before_text: None,
+            after_text: None,
+        };
+        let rec = |k, ts| record_feedback(&conn, k, LessonScope::Global, &f(ts)).unwrap();
+        rec(FeedbackKind::ApproveUnchanged, 1_000);
+        rec(FeedbackKind::EditBeforeApprove, 1_001); // edited, but it shipped → adoption
+        rec(FeedbackKind::Reject, 1_002);
+        rec(FeedbackKind::Undo, 1_003); // decided, taken back → not an adoption
+        rec(FeedbackKind::StateResolve, 1_004); // no proposal was shown → not a decision at all
+
+        assert_eq!(decision_counts_since(&conn, 0).unwrap(), (4, 2));
+        // the window cuts from the front, and `sum()` over zero rows must read 0, not NULL.
+        assert_eq!(decision_counts_since(&conn, 1_002).unwrap(), (2, 0));
+        assert_eq!(decision_counts_since(&conn, 9_999).unwrap(), (0, 0));
     }
 
     #[test]

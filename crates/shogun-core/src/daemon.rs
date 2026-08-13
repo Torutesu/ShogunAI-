@@ -2278,6 +2278,87 @@ impl Db {
         assemble_degraded(calendar, &self.commitments_due(now_ms))
     }
 
+    /// Assemble the Evening Wrap (§6.17, FR-EB-01/02): the day's outcome, what's still open,
+    /// tomorrow's first items, and today's loose ends — **local aggregation only**, no LLM call
+    /// and no egress. The caller supplies the window boundaries (`day_start_ms` = local midnight,
+    /// `tomorrow_end_ms` = end of tomorrow) because timezone math belongs to the shell, and the
+    /// tomorrow calendar lines because calendar data flows in from the connector lane.
+    pub fn evening_wrap(
+        &self,
+        calendar_tomorrow: Vec<CalendarLine>,
+        day_start_ms: i64,
+        now_ms: i64,
+        tomorrow_end_ms: i64,
+    ) -> shogun_fusion::wrap::EveningWrap {
+        use shogun_fusion::wrap::{assemble_wrap, WrapOutcome};
+
+        // One lock for every day-window read: five separate `lock()` calls would let the day's
+        // counts and the day's lists come from different instants, and the Wrap would then show
+        // "3 done" beside a still-open list that already dropped one of them.
+        let (outcome, active_commitments, active_loops, opened_today, all_commitments) = self
+            .conn
+            .lock()
+            .ok()
+            .map(|c| {
+                let decisions =
+                    shogun_memory::lessons::decision_counts_since(&c, day_start_ms).unwrap_or((0, 0));
+                let outcome = WrapOutcome {
+                    commitments_done: u32::try_from(
+                        state::count_commitments_done_since(&c, day_start_ms).unwrap_or(0),
+                    )
+                    .unwrap_or(0),
+                    loops_closed: u32::try_from(
+                        state::count_open_loops_closed_since(&c, day_start_ms).unwrap_or(0),
+                    )
+                    .unwrap_or(0),
+                    actions_decided: u32::try_from(decisions.0).unwrap_or(0),
+                    actions_adopted: u32::try_from(decisions.1).unwrap_or(0),
+                };
+                (
+                    outcome,
+                    state::list_commitments_active_since(&c, day_start_ms).unwrap_or_default(),
+                    state::list_open_loops_active_since(&c, day_start_ms).unwrap_or_default(),
+                    state::list_open_loops_opened_since(&c, day_start_ms).unwrap_or_default(),
+                    state::list_commitments(&c).unwrap_or_default(),
+                )
+            })
+            .unwrap_or_default();
+
+        let to_due = |r: state::CommitmentRow| CommitmentDue {
+            overdue: r.status == "overdue" || r.due_at.is_some_and(|d| d < now_ms),
+            description: r.description,
+            due_at_ms: r.due_at,
+            confidence: r.confidence,
+            provenance_event_id: r.first_event_id.unwrap_or(0),
+        };
+        let to_loop = |r: state::OpenLoopRow| OpenLoopItem {
+            description: r.description,
+            staleness_days: u32::try_from(r.staleness_days).unwrap_or(0),
+            confidence: r.confidence,
+            provenance_event_id: r.first_event_id.unwrap_or(0),
+        };
+
+        // Tomorrow-due: unresolved commitments with a due time after now and inside tomorrow.
+        let tomorrow_commitments: Vec<CommitmentDue> = all_commitments
+            .into_iter()
+            .filter(|r| {
+                r.status != "done"
+                    && r.status != "cancelled"
+                    && r.due_at.is_some_and(|d| d > now_ms && d <= tomorrow_end_ms)
+            })
+            .map(to_due)
+            .collect();
+
+        assemble_wrap(
+            outcome,
+            &active_commitments.into_iter().map(to_due).collect::<Vec<_>>(),
+            &active_loops.into_iter().map(to_loop).collect::<Vec<_>>(),
+            calendar_tomorrow,
+            &tomorrow_commitments,
+            &opened_today.into_iter().map(to_loop).collect::<Vec<_>>(),
+        )
+    }
+
     /// Persist the nightly Morning Brief for `date` (Plan C-1: the Dream Cycle's MorningBrief job
     /// writes it, the morning display reads it). Upsert on the day key — idempotent under a
     /// crash-resume re-run (FR-DC-04). Returns `None` on a lock/write failure so the job can
@@ -2858,6 +2939,118 @@ mod tests {
             display_id: Some(1),
             window_bounds: None,
         }
+    }
+
+    #[test]
+    fn evening_wrap_aggregates_the_day_locally() {
+        use shogun_memory::lessons::{FeedbackKind, LessonScope, NewFeedback};
+        use shogun_memory::state::{
+            CommitmentDirection, CommitmentStatus, NewCommitment, NewOpenLoop, OpenLoopKind,
+            Provenance,
+        };
+        // A day: 00:00 = 0ms, "now" = 20:00 (72_000_000ms), tomorrow ends at 48h.
+        let day_start = 0i64;
+        let now = 72_000_000i64;
+        let tomorrow_end = 172_800_000i64;
+        let db = Db::open_in_memory(clock(now)).unwrap();
+        let (e, _) = db.capture(&ev("evidence", "h1", 1)).unwrap();
+        let prov = [Provenance::new(e)];
+
+        // done today (outcome), still-open with today's activity, due-tomorrow, opened-today loop.
+        let done_id = db
+            .insert_commitment(
+                &NewCommitment {
+                    direction: CommitmentDirection::Mine,
+                    counterparty_id: None,
+                    description: "finished today",
+                    due_at: Some(10),
+                    status: CommitmentStatus::Open,
+                    project_id: None,
+                    confidence: 0.9,
+                    now: 100,
+                },
+                &prov,
+            )
+            .unwrap();
+        assert!(db.resolve_commitment(done_id));
+        db.insert_commitment(
+            &NewCommitment {
+                direction: CommitmentDirection::Mine,
+                counterparty_id: None,
+                description: "due tomorrow",
+                due_at: Some(now + 3_600_000),
+                status: CommitmentStatus::Open,
+                project_id: None,
+                confidence: 0.9,
+                now: 200, // updated today → also "still open"
+            },
+            &prov,
+        )
+        .unwrap();
+        db.insert_open_loop(
+            &NewOpenLoop {
+                kind: OpenLoopKind::ReplyNeeded,
+                description: "new loose end",
+                counterparty_id: None,
+                project_id: None,
+                opened_at: 500,
+                confidence: 0.9,
+                now: 500,
+            },
+            &prov,
+        )
+        .unwrap();
+        // Today's decisions come from `feedback_events` — the table the lessons already learn
+        // from. One adopted (edited, then approved) and one that is not a decision on a proposal
+        // at all (`state_resolve`), so the counts have something to get wrong.
+        {
+            let conn = db.conn.lock().unwrap();
+            let f = NewFeedback {
+                ts_ms: 600,
+                action_kind: Some("draft_reply"),
+                scope_ref: None,
+                before_text: Some("draft"),
+                after_text: Some("edited draft"),
+            };
+            shogun_memory::lessons::record_feedback(
+                &conn,
+                FeedbackKind::EditBeforeApprove,
+                LessonScope::Global,
+                &f,
+            )
+            .unwrap();
+            shogun_memory::lessons::record_feedback(
+                &conn,
+                FeedbackKind::StateResolve,
+                LessonScope::Global,
+                &NewFeedback { before_text: None, after_text: None, ..f },
+            )
+            .unwrap();
+        }
+
+        let wrap = db.evening_wrap(
+            vec![CalendarLine {
+                start_ms: tomorrow_end - 1000,
+                title: "standup".into(),
+                updated: false,
+            }],
+            day_start,
+            now,
+            tomorrow_end,
+        );
+
+        assert_eq!(wrap.outcome.commitments_done, 1);
+        // `state_resolve` is not a decision on one of SHOGUN's proposals, so it counts in neither.
+        assert_eq!(wrap.outcome.actions_decided, 1);
+        assert_eq!(wrap.outcome.actions_adopted, 1);
+        // the resolved commitment is outcome, not "still open"; the live one appears once.
+        assert!(wrap.still_open.iter().any(|i| i.text == "due tomorrow"));
+        assert!(wrap.still_open.iter().all(|i| i.text != "finished today"));
+        assert_eq!(wrap.tomorrow_commitments.len(), 1);
+        assert_eq!(wrap.tomorrow_commitments[0].text, "due tomorrow");
+        assert_eq!(wrap.tomorrow_calendar.len(), 1);
+        assert_eq!(wrap.loose_ends.len(), 1);
+        assert_eq!(wrap.loose_ends[0].text, "new loose end");
     }
 
     #[cfg(feature = "daemon-server")]
