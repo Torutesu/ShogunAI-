@@ -339,10 +339,12 @@ pub mod mac {
                 screen.app_bundle_id, screen.window_title
             );
             match crate::approvals::mac::draft_and_enqueue(
-                "email",
-                &to,
-                &rationale,
-                &context,
+                crate::approvals::mac::Draft {
+                    kind: "email",
+                    destination: &to,
+                    subject: &rationale,
+                    context: &context,
+                },
                 &queue,
                 &db,
                 &directives,
