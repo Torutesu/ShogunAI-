@@ -19,7 +19,7 @@ pub mod mac {
         ApprovalId, ApprovalOrigin, ApprovalQueue, ConfirmIntent, ConfirmedSend, Decision, Preview,
     };
     use shogun_agents::permission::SendAction;
-    use shogun_memory::lessons::{FeedbackKind, LessonScope, NewFeedback};
+    use shogun_memory::lessons::{FeedbackKind, LessonScope, NewFeedback, Surface};
     use shogun_agents::producer::{propose, ProposedSend};
     use shogun_core::composio_send::HttpComposioApi;
     use shogun_core::daemon::Db;
@@ -194,6 +194,17 @@ pub mod mac {
                 scope_ref,
                 before_text: before,
                 after_text: after,
+                // Where the decision happened (V19). These are the panel's own confirm/reject
+                // commands, so the surface is the notch regardless of which face *enqueued* the
+                // proposal — the human decided here.
+                surface: Some(Surface::Notch),
+                // The remaining V19 columns stay unrecorded rather than guessed. An approval card
+                // is not a ranked candidate list, so there is no slot to report; frontmost app and
+                // offer→decision latency are real signals but neither is in hand at this call
+                // site, and "not recorded" is a truthful answer where an invented zero is not.
+                rank: None,
+                context_app: None,
+                latency_ms: None,
             },
         );
     }
