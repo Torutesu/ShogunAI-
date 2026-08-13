@@ -99,21 +99,14 @@ export const STRINGS = {
     yourScreen: "your screen",
     // tracked-items toggle (opens the commitments / open-loops list)
     stateList: "Tracked items",
-    // peek (hover preview)
-    peekHint: "click to open",
     // ⌃⌥N is the actual summon shortcut (shortcuts.json default); ⌥ alone is the draft tap.
     openPanel: "Open ShogunAI (⌃⌥N)",
-    // usage analytics (opt-out; anonymous product events only)
-    analyticsLabel: "Usage analytics",
-    analyticsShare: "Share anonymous usage to help improve SHOGUN",
-    analyticsNote: "Feature counts only — never your captured text, personal data, or keys.",
     // welcome (expanded, empty thread)
     welcomeTitle: "What can I take off your plate?",
     welcomeSub: "Ask about your work, or tap ⌥ (Option) in any app to draft where you're typing.",
     noKey: "No key yet — add one in settings for real answers.",
     // composer
     ask: "Ask ShogunAI…",
-    draftTitle: "Draft where you're typing (tap ⌥)",
     // ⌥-tap feedback. Every one of these used to look the same from the outside — nothing —
     // which made a rejected key and a broken shortcut indistinguishable.
     inlineDrafting: "Drafting…",
@@ -193,10 +186,10 @@ export const STRINGS = {
     dreamChunks: "sent",
     selectKkKey: "Select KK key",
     selectKkHint:
-      "Powers nightly review, meeting summaries, and live translation. Paste the plain sk-ant-… API key — not hex.",
+      "Powers nightly review, meeting summaries, and live translation. Paste the API key itself, not an encoded copy of it.",
     selectKkPresent: "Connected — batch features and translation can run.",
     selectKkAbsent: "Not set — nightly review runs locally only; translation and AI summaries need this key.",
-    selectKkPlaceholder: "Paste Select KK API key (sk-ant-…)…",
+    selectKkPlaceholder: "Paste the Select KK API key…",
     selectKkSaved: "Select KK key saved.",
     // approvals (L3 confirmation queue — anything leaving the device)
     approvals: "Approvals",
@@ -232,10 +225,6 @@ export const STRINGS = {
     launchAtLoginOff: "Off",
     launchAtLoginHint:
       "Open Shogun when you sign in to this Mac. Quitting stays quit until the next login.",
-    stayOpen: "Stay open",
-    autoHide: "Auto-hide",
-    stayOpenHint: "Keep the panel open until you close it.",
-    autoHideHint: "Slide back to the notch when you move away.",
     draftShortcut: "Draft with ShogunAI",
     recallShortcut: "Visual recall",
     summonShortcut: "Show / hide overlay",
@@ -246,9 +235,21 @@ export const STRINGS = {
     needModifier: "Include a modifier (⌃ ⌥ ⇧ ⌘).",
     shortcutHint:
       "Click a shortcut to change it — saved instantly, works everywhere. Draft and Visual recall also take modifier gestures: tap one modifier alone, or press both sides of a modifier together.",
+    // Personalization (Shougun.md): the one editable file that shapes how SHOGUN writes and acts.
+    // "settings file", not the format's name — the UI does not teach the user a file format.
+    personalizationTitle: "Personalization",
+    personalizationHint: "Shape SHOGUN with one plain-text settings file you can read and edit.",
+    personalizationOk: "Read successfully",
+    personalizationMissing: "Not created yet",
+    personalizationError: (section: string, line: number): string =>
+      `Couldn't read it — check ${section || "the file"}, line ${line}`,
+    personalizationOpen: "Open in editor",
+    personalizationReset: "Start from a sample",
     voiceTitle: "Voice",
     voiceSection: "Voice dialogue",
     voiceHint: "Hold the shortcut, speak, release — on-device speech into the focused field (or clipboard). Beta; off by default.",
+    thinkingAria: "Thinking",
+    someApp: "an app",
     voiceOn: "On",
     voiceOff: "Off",
     voiceShortcut: "Hold to talk",
@@ -259,9 +260,6 @@ export const STRINGS = {
     voiceCopy: "Copy",
     voiceClose: "Close",
     voiceError: "Couldn't capture",
-    voicePasted: "Pasted",
-    voiceCopied: "Copied to clipboard",
-    voiceConflict: "Voice is unavailable while meeting notes are recording.",
 
     // ── sounds (issue #49) ────────────────────────────────────────────────────
     // The mic line is not a footnote: sounds going quiet during a call is the design working,
@@ -315,11 +313,9 @@ export const STRINGS = {
     planNextBilling: "Next billing",
     planEndsOn: "Ends on",
     planLastChecked: "Last checked",
-    planNever: "never",
     // Offline grace (FR-BIL-09). Says how long is left, because "offline" alone is not actionable.
     planOffline: "Working offline — {n} of {total} days used. Connect to keep your plan active.",
     planUpgrade: "Upgrade",
-    planChoosePlan: "Choose a plan",
     planBuyStandardYear: "Standard — $49/mo, billed annually",
     planBuyStandardMonth: "Standard — $62/mo",
     planBuyProYear: "Pro — $99/mo, billed annually",
@@ -363,8 +359,6 @@ export const STRINGS = {
     subConsentAccept: "I understand — use my plan",
     subConsentRevoke: "Stop using my plan",
     subConsentNeeded: "Accept the note above to run on your plan.",
-    // The API-key path, once it is the fallback rather than the front door.
-    subApiKeyTitle: "Or use an API key",
     // Composio sending (opt-in second-layer, FR-C2-02 / FR-C2-03)
     composioTitle: "Sending (Composio)",
     composioHint: "Optional. Enables sending email through Composio. Off by default — a key and explicit consent are required before any message leaves this device.",
@@ -387,7 +381,6 @@ export const STRINGS = {
     resizeHint: "Drag to resize",
     send: "Send",
     stop: "Stop",
-    settingsTitle: "Settings",
     done: "Done",
     // state rows
     resolveHint: "Click to mark done",
@@ -447,12 +440,12 @@ export const STRINGS = {
     meetingExcludedRemove: "Remove",
     meetingMicOnly: "Detect by microphone alone",
     meetingMicOnlyHint:
-      "Off by default. When on, sustained mic use can offer notes even without Meet or Zoom focused.",
+      "Off by default. When on, sustained mic use can offer notes even without a meeting window in front.",
     deepgramAsrKey: "Speech provider key",
     deepgramAsrHint: "Powers live transcription. Paste once — stored in Keychain on this Mac.",
     deepgramAsrPresent: "Connected — live transcription can run.",
     deepgramAsrAbsent: "Not set — typed notes still save; live transcription needs this key.",
-    deepgramAsrPlaceholder: "Paste Deepgram API key…",
+    deepgramAsrPlaceholder: "Paste the speech provider API key…",
     visualRecallSection: "Visual recall",
     visualRecallHint:
       "Passive OCR reads the focused window when accessibility text is thin. Saved frames stay on this Mac for up to 72 hours, then purge automatically.",
@@ -476,26 +469,12 @@ export const STRINGS = {
     visualRecallShowText: "Show text",
     visualRecallHideText: "Hide text",
     visualRecallClose: "Close",
-    visualRecallSearchAll: "Search All",
-    visualRecallSearchShortcut: "/",
-    visualRecallSettings: "Settings",
-    visualRecallZoomIn: "Zoom in",
-    visualRecallZoomOut: "Zoom out",
-    visualRecallOcrMode: "Show text overlay",
-    visualRecallOcrModeOff: "Hide text overlay",
-    visualRecallJumpToDay: "Jump to day",
-    visualRecallNoFramesThatDay: "No screens on this day",
-    visualRecallSearchEmpty: "No screens match your search",
-    visualRecallRetentionNote: "Screens purge automatically after 72 hours.",
-    visualRecallFrameMeta: (when: string, app: string, window: string) =>
-      `${when} · ${app}${window ? ` · ${window}` : ""}`,
     // FR-MT-03 disclosure (2026-08-05): Deepgram Nova-3 processes audio for STT only; MIP opt-out;
     // SHOGUN never saves waveform/recording. Reuse these keys everywhere.
     meetingDisclosure:
       "Nothing joins your call. Approved meetings send audio temporarily to our speech provider for live transcription only — not for training (MIP opt-out). SHOGUN never saves recordings or waveforms; only transcript text and provenance stay here.",
     meetingDisclosureBrief:
       "Nothing joins your call. Speech provider processes audio temporarily for transcription — not for training. No audio file saved by SHOGUN.",
-    meetingListening: "Listening · speech provider (not for training) · no recording saved",
     meetingDisclosureRecap:
       "Audio was used for transcription only — not kept for training. SHOGUN saves transcript text and your notes, never a recording.",
     // live in-meeting overlay (issue #93)
@@ -508,8 +487,6 @@ export const STRINGS = {
     meetingLangArrow: "→",
     meetingLangSwap: "↔",
     meetingLiveEmpty: "Listening…",
-    meetingLiveShowSource: "Show source",
-    meetingLiveHideSource: "Hide source",
     meetingCopyTranscript: "Copy transcript",
     meetingCopiedTranscript: "Copied",
     meetingCaptionsSettings: "Display Settings",
@@ -528,9 +505,7 @@ export const STRINGS = {
     meetingTranslateNeedsKey:
       "Translation needs the Select KK key in Settings → Nightly review. Transcription still works.",
     meetingTranslateKeyInvalid:
-      "Select KK key was rejected — re-paste it in Settings → Nightly review (plain sk-ant-… key, not hex).",
-    meetingOverlayClose: "Close",
-    meetingOverlaySettings: "Settings",
+      "Select KK key was rejected — re-paste it in Settings → Nightly review (the key itself, not an encoded copy).",
     // Privacy & Security (issue #28). One home for the key, the data-use policy, and deletion.
     privacyTitle: "Privacy & Security",
     // Key card. The key never leaves the Keychain and is never shown back in plaintext — settled
@@ -558,18 +533,11 @@ export const STRINGS = {
     deleteDone: "Deleted from this device.",
     // Anonymous usage card (Slice D). Opt-in — OFF by default, and never carries captured content.
     analyticsTitle: "Anonymous usage",
-    // Generic on/off labels for the notch settings toggles (own catalog, so they can't drift from
-    // the FULL_UI copy).
-    toggleOn: "On",
-    toggleOff: "Off",
     meetingCloseNote: "Close canvas",
     meetingOpenNotes: "AI Canvas",
     meetingCloseCaptions: "Close captions",
     meetingOpenCaptions: "Captions",
-    meetingCaptions: "Captions",
-    meetingChat: "Chat",
     meetingMore: "More",
-    meetingWaveform: "Audio level",
     meetingPause: "Pause",
     meetingResume: "Resume",
     meetingEndMeeting: "End meeting notes",
@@ -582,7 +550,6 @@ export const STRINGS = {
     meetingCanvasManage: "Manage",
     meetingCanvasOfficial: "Official",
     meetingCanvasDrag: "Move",
-    meetingCanvasSummaryEmpty: "Summary appears as the conversation grows.",
     meetingCanvasSummaryWaiting: "Listening for more of the meeting before summarizing…",
     meetingCanvasTimelineEmpty: "Timeline fills as topics emerge.",
     meetingCanvasSummaryUpdating: "Updating summary…",
@@ -590,9 +557,7 @@ export const STRINGS = {
       "Live Summary needs the Select KK key in Settings → Nightly review.",
     meetingCanvasSummaryFailed: "Couldn’t update the summary. Will retry as the meeting continues.",
     meetingDisplayOriginal: "Original text",
-    meetingChatTitle: "Chat",
     meetingChatPlaceholder: "Please ask anything about meeting.",
-    meetingChatAddSkill: "+ Add skill",
     meetingChatNew: "New chat",
     meetingChatSend: "Send",
     meetingChatClose: "Close chat",
@@ -742,7 +707,6 @@ export const FULL_UI = {
     // broken screen, and "No data" tells the user nothing they can act on.
     emptySources: "No services connected yet. Connect one and its context starts feeding the panel — read-only, and only what you allow.",
     emptyCommitments: "Nothing extracted yet. Commitments appear here once the nightly review has worked through a day of captured context.",
-    emptyMerge: "No name collisions to resolve.",
     emptyPending: "Nothing waiting. Anything that would leave your device queues here first.",
     emptyTrace: "Nothing has left this device.",
     emptyBriefActions: "No suggestions yet — they come from the brief once it has run.",

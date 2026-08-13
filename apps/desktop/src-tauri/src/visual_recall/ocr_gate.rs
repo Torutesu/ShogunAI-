@@ -28,14 +28,6 @@ pub struct OcrGate {
 }
 
 impl OcrGate {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn reset(&mut self) {
-        self.apps.clear();
-    }
-
     /// `crop_signature` is [`crate::visual_recall::text_regions::image_pixel_signature`] of the
     /// padded union crop. Callers with no detected text regions skip without calling this.
     pub fn observe(&mut self, app_key: &str, crop_signature: u64) -> OcrDecision {
@@ -69,7 +61,7 @@ mod tests {
 
     #[test]
     fn first_sighting_ocrs_then_identical_crop_skips() {
-        let mut gate = OcrGate::new();
+        let mut gate = OcrGate::default();
         assert_eq!(gate.observe("zoom", 1), OcrDecision::Ocr);
         gate.ocr_indexed("zoom", "hello world");
         for _ in 0..5 {
@@ -79,7 +71,7 @@ mod tests {
 
     #[test]
     fn unpersisted_ocr_retries_until_committed() {
-        let mut gate = OcrGate::new();
+        let mut gate = OcrGate::default();
         assert_eq!(gate.observe("zoom", 1), OcrDecision::Ocr);
         assert_eq!(gate.observe("zoom", 1), OcrDecision::Ocr);
         gate.ocr_indexed("zoom", "hello world");

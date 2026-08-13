@@ -110,7 +110,24 @@ pub fn build_router(state: AppState) -> Router {
 
 /// The one handler. Adapts an axum request into a [`RestRequest`], calls [`rest::respond`], and
 /// renders the JSON response.
+/// Is this request addressed to us as localhost?
+///
+/// The listener is loopback-only and every tool endpoint needs a Bearer token, so memory data was
+/// never exposed. But `/v1/status` and `/v1/metrics` are deliberately open, and a page on
+/// `attacker.com` whose DNS rebinds to 127.0.0.1 is SAME-ORIGIN with this server — CORS never
+/// applies, and the live SLO snapshot (device activity timing) becomes readable by an arbitrary
+/// website. A Host check is the standard answer: a rebound page still carries its own hostname.
+fn host_is_loopback(host: Option<&str>) -> bool {
+    let Some(host) = host else { return false };
+    let name = host.rsplit_once(':').map_or(host, |(h, _)| h);
+    let name = name.trim_start_matches('[').trim_end_matches(']');
+    matches!(name, "127.0.0.1" | "localhost" | "::1" | "0.0.0.0")
+}
+
 async fn handle(State(state): State<AppState>, req: Request) -> Response {
+    if !host_is_loopback(req.headers().get(axum::http::header::HOST).and_then(|v| v.to_str().ok())) {
+        return render(403, r#"{"error":"forbidden_host"}"#.to_string());
+    }
     let method = match *req.method() {
         axum::http::Method::GET => Some(Method::Get),
         axum::http::Method::POST => Some(Method::Post),
@@ -180,10 +197,15 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
         }
     };
 
+    render(status, resp_body)
+}
+
+/// The one place a JSON response is built, so every exit from `handle` is shaped the same.
+fn render(status: u16, body: String) -> Response {
     Response::builder()
         .status(status)
         .header(CONTENT_TYPE, "application/json")
-        .body(Body::from(resp_body))
+        .body(Body::from(body))
         .unwrap_or_default()
 }
 
@@ -254,6 +276,17 @@ mod tests {
         let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
         let auth_line = auth.map(|t| format!("Authorization: Bearer {t}\r\n")).unwrap_or_default();
         let request = format!("GET {path} HTTP/1.1\r\nHost: localhost\r\n{auth_line}Connection: close\r\n\r\n");
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let mut buf = Vec::new();
+        stream.read_to_end(&mut buf).await.unwrap();
+        String::from_utf8_lossy(&buf).into_owned()
+    }
+
+    /// GET with an arbitrary `Host:` header — what a DNS-rebound page's request looks like.
+    async fn raw_get_with_host(addr: std::net::SocketAddr, path: &str, host: &str) -> String {
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let request =
+            format!("GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n");
         stream.write_all(request.as_bytes()).await.unwrap();
         let mut buf = Vec::new();
         stream.read_to_end(&mut buf).await.unwrap();
@@ -410,6 +443,38 @@ mod tests {
         // no token → 401, and the backend is not touched
         let resp = raw_post(addr, "/v1/memory/notes", None, "sneaky").await;
         assert!(resp.contains("401"), "got: {resp}");
+    }
+
+    #[tokio::test]
+    async fn a_rebound_hostname_cannot_read_the_open_endpoints() {
+        // /v1/metrics has no token by design, and the listener is loopback-only — but a page on
+        // attacker.com whose DNS answers 127.0.0.1 is same-origin with this server, so CORS never
+        // applies. The Host header is what still distinguishes it.
+        let mut tokens = TokenRegistry::new();
+        tokens.issue("t");
+        let addr = spawn_server(tokens).await;
+
+        let rebound = raw_get_with_host(addr, "/v1/metrics", "attacker.example").await;
+        assert!(rebound.contains("403"), "got: {rebound}");
+        assert!(rebound.contains("forbidden_host"), "got: {rebound}");
+
+        // The real local caller is unaffected, including with an explicit port.
+        let ok = raw_get_with_host(addr, "/v1/metrics", &format!("127.0.0.1:{}", addr.port())).await;
+        assert!(ok.contains("200"), "got: {ok}");
+        let ok_name = raw_get_with_host(addr, "/v1/status", "localhost").await;
+        assert!(ok_name.contains("200"), "got: {ok_name}");
+    }
+
+    #[test]
+    fn host_header_matching_is_name_only() {
+        assert!(host_is_loopback(Some("127.0.0.1")));
+        assert!(host_is_loopback(Some("127.0.0.1:7464")));
+        assert!(host_is_loopback(Some("localhost:7464")));
+        assert!(host_is_loopback(Some("[::1]:7464")));
+        assert!(!host_is_loopback(Some("attacker.example")));
+        assert!(!host_is_loopback(Some("localhost.attacker.example")));
+        // A missing Host is HTTP/1.1-invalid and is not something a real local caller sends.
+        assert!(!host_is_loopback(None));
     }
 
     #[tokio::test]

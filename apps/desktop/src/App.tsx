@@ -667,11 +667,17 @@ export function App(): JSX.Element {
           // Q2 / SLO-01: report paint completion for this transition. Double-rAF so the panel is
           // actually on screen; Rust pairs it with the tracker's commit timestamp and drops
           // anything unpaired. Without this call the expand-latency SLO records nothing at all.
-          requestAnimationFrame(() =>
+          //
+          // Only when the panel was actually closed: an `expanded` event that arrives while it is
+          // already open repaints nothing, and timing that would report a transition that never
+          // happened (Rust drops the unpaired sample, but the honest thing is not to send it).
+          if (!openRef.current) {
             requestAnimationFrame(() =>
-              void invoke("painted", { state: st, t1PerfMs: performance.now() }).catch(() => undefined),
-            ),
-          );
+              requestAnimationFrame(() =>
+                void invoke("painted", { state: st, t1PerfMs: performance.now() }).catch(() => undefined),
+              ),
+            );
+          }
           // Never fight a user who pinned the panel open, and never re-open one they just closed
           // by hand — the tracker doesn't know about either.
           if (!openRef.current) {
@@ -1536,7 +1542,7 @@ export function App(): JSX.Element {
                   <span className="msg__caret" aria-hidden="true" />
                 </div>
               ) : thinking ? (
-                <div className="msg msg--shogun msg--think" aria-live="polite" aria-label="Thinking">
+                <div className="msg msg--shogun msg--think" aria-live="polite" aria-label={t.thinkingAria}>
                   <span className="think__dot" />
                   <span className="think__dot" />
                   <span className="think__dot" />
@@ -3199,7 +3205,7 @@ function VisualRecallSection(): JSX.Element {
     : latest
       ? t.visualRecallStatusLive(
           latest.chars,
-          latest.app ?? "an app",
+          latest.app ?? t.someApp,
           latest.window ?? "",
         )
       : t.visualRecallStatusIdle;
@@ -3321,16 +3327,19 @@ function PersonalizationSection(): JSX.Element {
 
   return (
     <section className="set">
-      <div className="set__label">Personalization / Shougun.md</div>
-      <div className="set__hint">Shape ShogunAI with one human-readable Markdown file.</div>
+      <div className="set__label">{t.personalizationTitle}</div>
+      <div className="set__hint">{t.personalizationHint}</div>
       {status ? (
         <>
           <div className={`set__hint${status.ok ? " is-ok" : " is-err"}`}>
             {status.exists
               ? status.ok
-                ? "Parsed successfully"
-                : `Parse error: ${status.errors[0]?.section ?? ""} (line ${status.errors[0]?.line ?? 0})`
-              : "Not created yet"}
+                ? t.personalizationOk
+                : t.personalizationError(
+                    status.errors[0]?.section ?? "",
+                    status.errors[0]?.line ?? 0,
+                  )
+              : t.personalizationMissing}
           </div>
           <div className="set__row">
             <button
@@ -3339,7 +3348,7 @@ function PersonalizationSection(): JSX.Element {
               disabled={!status.exists || busy}
               onClick={() => void invoke("open_shougun_md").catch((e) => setErr(String(e)))}
             >
-              Open in Editor
+              {t.personalizationOpen}
             </button>
             <button
               className="keyrow__btn"
@@ -3353,7 +3362,7 @@ function PersonalizationSection(): JSX.Element {
                   .finally(() => setBusy(false));
               }}
             >
-              Regenerate Sample
+              {t.personalizationReset}
             </button>
           </div>
           {err ? <div className="set__hint is-err">{err}</div> : null}

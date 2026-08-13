@@ -71,6 +71,12 @@ pub fn insert_with_thread(
     let id = conn.last_insert_rowid();
     // Keep the thread index in step with the log. Failing to index must not fail the write —
     // the event is the durable record; a thread row can be rebuilt from it.
+    //
+    // Deliberately NOT one transaction, against CLAUDE.md's default "DB書き込みはWAL＋トランザクション":
+    // a transaction here would have to roll the EVENT back when only the derived index failed,
+    // which is the one outcome this path must never produce. `threads` is a Dream-Cycle-rebuildable
+    // recency cache, so a crash between the two statements costs a stale index until the next
+    // re-derivation — and costs no captured data at all.
     if let Some(key) = thread_key.as_deref() {
         let _ = crate::thread::upsert_from_event(conn, key, ev.source, ev.window_title, ev.ts);
     }

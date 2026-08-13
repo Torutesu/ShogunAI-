@@ -161,55 +161,15 @@ pub fn init(app: &AppHandle) -> Analytics {
 
 // --- push-to-talk の計測（Issue #44）---
 //
-// Issue #44 は定量目標を持つ: アクティブユーザーの30%が週次でPTTを使うこと、セッションの
-// 半分が「完了した仕事」になること。その材料になるイベントが3つ — 開始 / 完了 / 失敗 — だけ。
+// `capture_ptt_started` / `_completed` / `_failed` はここにあったが、対象だった
+// `shogun_core::ptt::statemachine` はマージ後のツリーに存在せず（hold-to-talk は
+// `voice_lane` / `voice_session` が実装）、どこからも呼ばれない死蔵コードだった。
 //
-// **不変条件（CLAUDE.md）: テレメトリに発話・文字起こし・応答を載せない。** PTTを通るものは
-// 全て利用者の音声とそれへの回答なので、ここが運ぶのは時間（ms）と結果コードだけ。文字数すら
-// 送らない — 長さが内容の指紋になり得るなら、それも情報だから。時間と enum コードがあれば
-// 「速いか」「失敗していないか」には十分答えられる。
-//
-// opt-out の尊重は [`Analytics`] / [`AnalyticsHandle`] が単独責務として強制する（capture が
-// opt_out 中に即破棄する）ので、ここでは重複チェックを書かない。setup で `Analytics` を manage
-// する前に PTT 経路へ入り得るため、ハンドルは `try_state` で取り、無ければ no-op で抜ける。
-
-/// push-to-talk のセッションが始まった（マイクが開いた）。
-///
-/// **発話も文字起こしも応答も送らない** — 送るのは時間と結果コードだけで、それで
-/// 「速いか」「失敗していないか」は十分に分かる。文字数すら送らない（長さが内容の指紋に
-/// なり得る）。
-pub fn capture_ptt_started(app: &AppHandle) {
-    if let Some(analytics) = app.try_state::<Analytics>() {
-        analytics.capture("ptt_session_started", Props::new());
-    }
-}
-
-/// 応答が最後まで届いた。`first_token_ms` が SLO-03（初トークン1s）の実測値。
-///
-/// `None` は「初トークンが1つも来なかった」— パネルが閉じられて受信を打ち切った場合。これを
-/// `0` で潰すと「0msで初トークンが来た」と見分けが付かなくなるので、`Some` のときだけ
-/// `first_token_ms` を載せる。値そのものが利用者の内容を運ぶことはない（時間だけ）。
-pub fn capture_ptt_completed(app: &AppHandle, first_token_ms: Option<u64>, total_ms: u64) {
-    if let Some(analytics) = app.try_state::<Analytics>() {
-        let mut p = Props::new();
-        p.insert("total_ms".into(), serde_json::Value::from(total_ms));
-        if let Some(ms) = first_token_ms {
-            p.insert("first_token_ms".into(), serde_json::Value::from(ms));
-        }
-        analytics.capture("ptt_session_completed", p);
-    }
-}
-
-/// セッションが失敗して終わった。`code` は `shogun_core::ptt::statemachine::Fail::code()`
-/// が返す安定した文字列（`mic_unavailable` / `no_asr_model` / `nothing_heard` /
-/// `asr_failed` / `network` / `key_rejected`）。結果コード（enum 文字列）だけを載せる。
-pub fn capture_ptt_failed(app: &AppHandle, code: &str) {
-    if let Some(analytics) = app.try_state::<Analytics>() {
-        let mut p = Props::new();
-        p.insert("code".into(), serde_json::Value::from(code));
-        analytics.capture("ptt_session_failed", p);
-    }
-}
+// **設計自体は生きている**: 送るのは時間と安定した結果コードだけ、文字数すら送らない
+// （長さが内容の指紋になり得るため）、初トークン欠測は `0` で潰さず `None` のまま——という
+// プライバシー判断は再実装時にそのまま使える。git history（このコミットの親）を参照。
+// 復活させるときは voice_lane の start / stop に、SLO-03（初トークン1s）の実測点を
+// 決めた上で配線すること。当てずっぽうに呼び出しを足すのは計測にならない。
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]

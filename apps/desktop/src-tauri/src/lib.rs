@@ -166,13 +166,24 @@ unsafe fn resting_dock_origin(
 
 /// Run `f` with `PROGRAMMATIC_MOVE` raised, so the did-move observer ignores moves we made
 /// ourselves. Main thread only (see `PROGRAMMATIC_MOVE`).
+///
+/// The flag is restored through a `Drop` guard that puts back the PREVIOUS value, which buys two
+/// things a plain store-true/store-false could not: a panic inside `f` cannot leave the flag
+/// latched (which would silently kill drag-position memory for the rest of the session), and a
+/// nested call cannot clear it on the inner exit while the outer move is still in flight.
 #[cfg(target_os = "macos")]
 fn with_programmatic_move<R>(f: impl FnOnce() -> R) -> R {
     use std::sync::atomic::Ordering;
-    PROGRAMMATIC_MOVE.store(true, Ordering::Relaxed);
-    let r = f();
-    PROGRAMMATIC_MOVE.store(false, Ordering::Relaxed);
-    r
+
+    struct Guard(bool);
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            PROGRAMMATIC_MOVE.store(self.0, Ordering::Relaxed);
+        }
+    }
+
+    let _guard = Guard(PROGRAMMATIC_MOVE.swap(true, Ordering::Relaxed));
+    f()
 }
 
 /// The NATIVE NSPanel that actually hosts the webview content on screen. The tauri/tao window
@@ -472,27 +483,32 @@ fn setup_macos(app: &tauri::App) {
         if let (Ok(toggle_i), Ok(quit_i)) = items {
             match Menu::with_items(app, &[&toggle_i, &quit_i]) {
                 Ok(menu) => {
-                    let tray_icon = tauri::image::Image::from_bytes(
-                        include_bytes!("../icons/tray-icon@2x.png"),
-                    )
-                    .expect("tray icon bytes");
-                    let built = TrayIconBuilder::with_id("shogun-tray")
-                        .menu(&menu)
-                        .tooltip("ShogunAI")
-                        .icon(tray_icon)
-                        .icon_as_template(true)
-                        .on_menu_event(|app, event| match event.id.as_ref() {
-                            "toggle" => toggle_panel(app),
-                            "quit" => {
-                                eprintln!("[shell] tray quit — exiting");
-                                std::process::exit(0);
+                    // A compiled-in PNG cannot realistically fail to decode, but the shell has
+                    // exactly one rule — never panic — and "the menu-bar icon is missing" is a
+                    // survivable degradation. Note the failure only skips the TRAY: everything
+                    // below in setup (the panel, capture, the DB) still has to run.
+                    match tauri::image::Image::from_bytes(include_bytes!("../icons/tray-icon@2x.png")) {
+                        Ok(tray_icon) => {
+                            let built = TrayIconBuilder::with_id("shogun-tray")
+                                .menu(&menu)
+                                .tooltip("ShogunAI")
+                                .icon(tray_icon)
+                                .icon_as_template(true)
+                                .on_menu_event(|app, event| match event.id.as_ref() {
+                                    "toggle" => toggle_panel(app),
+                                    "quit" => {
+                                        eprintln!("[shell] tray quit — exiting");
+                                        std::process::exit(0);
+                                    }
+                                    _ => {}
+                                })
+                                .build(app);
+                            match built {
+                                Ok(_tray) => eprintln!("[shell] menu-bar tray installed (S mark)"),
+                                Err(e) => eprintln!("[shell] tray install failed: {e}"),
                             }
-                            _ => {}
-                        })
-                        .build(app);
-                    match built {
-                        Ok(_tray) => eprintln!("[shell] menu-bar tray installed (S mark)"),
-                        Err(e) => eprintln!("[shell] tray install failed: {e}"),
+                        }
+                        Err(e) => eprintln!("[shell] tray icon unusable ({e}) — no tray this run"),
                     }
                 }
                 Err(e) => eprintln!("[shell] tray menu build failed: {e}"),
@@ -768,6 +784,26 @@ unsafe fn clamp_to_castle_dock(
         x.clamp(dock.x, max_x),
         y.clamp(dock.y, max_y),
     )
+}
+
+/// Clamp a proposed frame into `screen`'s visible frame — the bound for a user-dragged position,
+/// which belongs to the screen rather than to any castle's dock band.
+///
+/// SAFETY: `screen` must be a live `NSScreen*`; called on the main thread.
+#[cfg(target_os = "macos")]
+unsafe fn clamp_to_visible_frame(
+    screen: *mut objc2::runtime::AnyObject,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+) -> (f64, f64) {
+    use objc2::msg_send;
+    use objc2_foundation::NSRect;
+    let vf: NSRect = msg_send![screen, visibleFrame];
+    let max_x = vf.origin.x + (vf.size.width - width).max(0.0);
+    let max_y = vf.origin.y + (vf.size.height - height).max(0.0);
+    (x.clamp(vf.origin.x, max_x), y.clamp(vf.origin.y, max_y))
 }
 
 /// (main thread) Move the panel to the DISPLAY the mouse cursor is on, pinned top-centre. A window
@@ -1544,9 +1580,17 @@ fn set_panel_size(app: tauri::AppHandle, width: f64, height: f64, anchor: Option
                 // No screen (rare): fall back to holding the panel's centre and top edge.
                 (f.origin.x + f.size.width / 2.0 - width / 2.0, f.origin.y + f.size.height - height)
             };
-            // Whichever path we took, never hang off the dock frame.
+            // Whichever path we took, never hang off the dock frame. A dragged panel is clamped
+            // to the VISIBLE frame instead of the castle's dock rect: the castle rect is only a
+            // superset today (Notch = full screen), so the difference is invisible — but the
+            // moment a position narrows its dock band, clamping a dragged spot through the castle
+            // would yank the panel home on every view switch.
             if !screen.is_null() {
-                let clamped = clamp_to_castle_dock(screen, x, y, width, height, pos);
+                let clamped = if current_drag_override().is_some() {
+                    clamp_to_visible_frame(screen, x, y, width, height)
+                } else {
+                    clamp_to_castle_dock(screen, x, y, width, height, pos)
+                };
                 x = clamped.0;
                 y = clamped.1;
             }

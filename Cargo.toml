@@ -31,6 +31,15 @@ unwrap_used = "deny"
 expect_used = "warn"
 
 [workspace.lints.rust]
+# CLAUDE.md says "clippy warnings deny", but only the clippy half was enforced: rustc's own
+# `unused` group (dead_code, unused_imports, unused_variables, …) stayed at warn, which is how
+# `voice_chat` and three unreferenced analytics helpers survived review in the tree.
+#
+# `unused`, not the whole `warnings` group, and deliberately: `warnings = "deny"` also promotes
+# every clippy lint this workspace set to WARN — including `expect_used`, which is warn on
+# purpose (an `expect` in a test is idiomatic; an `unwrap` in the daemon is not, and that one is
+# already deny). Denying `warnings` wholesale would silently overrule that decision.
+unused = "deny"
 unsafe_op_in_unsafe_fn = "deny"
 
 [profile.release]

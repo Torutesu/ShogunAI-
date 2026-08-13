@@ -167,6 +167,19 @@ pub struct TokenRegistry {
     valid: Vec<String>,
 }
 
+/// Constant-time string compare. Runs over the longer of the two so the loop count leaks only a
+/// length (already visible in the header), never where the first difference is.
+fn ct_eq(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    let mut diff = (a.len() ^ b.len()) as u8;
+    let n = a.len().max(b.len());
+    for i in 0..n {
+        let (x, y) = (a.get(i).copied().unwrap_or(0), b.get(i).copied().unwrap_or(0));
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
 impl TokenRegistry {
     pub fn new() -> Self {
         Self::default()
@@ -186,7 +199,10 @@ impl TokenRegistry {
     pub fn authenticate(&self, token_id: Option<&str>) -> AuthResult {
         match token_id {
             None => AuthResult::DeniedNoToken,
-            Some(t) if self.valid.iter().any(|v| v == t) => AuthResult::Granted,
+            // `ct_eq`, not `==`: string comparison stops at the first differing byte, and over
+            // many attempts that timing describes the token prefix. Loopback-only narrows who can
+            // measure it, not whether the signal exists.
+            Some(t) if self.valid.iter().any(|v| ct_eq(v, t)) => AuthResult::Granted,
             Some(_) => AuthResult::DeniedInvalidToken,
         }
     }

@@ -170,13 +170,12 @@ pub fn encode_frame_jpeg(frame: &DynamicImage) -> Option<OcrFrame> {
     Some(OcrFrame { jpeg: buf, width, height })
 }
 
-/// One Vision pass: flat text plus mean top-candidate confidence (not persisted yet).
+/// One Vision pass. Confidence and line count are computed and logged during the pass (see
+/// `recognize_text`) but deliberately not carried on the struct: nothing consumes them, and a
+/// field no reader reads is a claim the type does not keep. Add them back with the consumer.
 #[derive(Debug, Clone)]
 pub struct OcrPass {
     pub text: String,
-    /// Mean of `VNRecognizedText.confidence` for kept lines, in `[0, 1]`.
-    pub mean_confidence: f32,
-    pub line_count: usize,
 }
 
 fn configure_recognize_text(req: &VNRecognizeTextRequest) {
@@ -215,11 +214,7 @@ fn text_from_request(request: &VNRecognizeTextRequest) -> Option<OcrPass> {
         "[screen_ocr] vision lines={line_count} mean_conf={mean_confidence:.2} chars={}",
         text.len()
     );
-    Some(OcrPass {
-        text,
-        mean_confidence,
-        line_count,
-    })
+    Some(OcrPass { text })
 }
 
 /// Apple Vision OCR on a CGImage crop (Screenpipe `perform_ocr_apple` semantics).

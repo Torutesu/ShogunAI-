@@ -1201,13 +1201,6 @@ pub mod mac {
         pub citations: Vec<Citation>,
     }
 
-    /// Context-aware chat for the voice dialogue lane (#44). Same BYOK path as `shogun_chat`.
-    /// The voice lane has no Shougun.md directive plumbing yet, so directives are empty here —
-    /// notch chat (`shogun_chat`) is the directive-aware caller.
-    pub(crate) fn voice_chat(db: &Db, message: &str) -> Result<ChatAnswer, String> {
-        chat_blocking(db, message, "")
-    }
-
     /// The result of everything a chat turn does BEFORE the model is called.
     ///
     /// Retrieval is shared by the streaming and non-streaming commands, and it has to stay

@@ -1504,14 +1504,14 @@ use shogun_core::meeting::gate::OfferGate;
         // (visible, state, overlay_dismissed, w, h) — the last emitted overlay geometry.
         type LastEmit = (bool, State, bool, f64, f64);
         static LAST: std::sync::Mutex<Option<LastEmit>> = std::sync::Mutex::new(None);
-        let prev_size = LAST
-            .lock()
-            .ok()
-            .and_then(|l| l.as_ref().map(|(_, _, _, w, h)| (*w, *h)));
-        let size_changed = prev_size
-            .map(|(w, h)| w != size.0 || h != size.1)
-            .unwrap_or(true);
-        if let Ok(mut last) = LAST.lock() {
+        // ONE acquisition: reading `prev_size` under a separate lock let a concurrent emit() land
+        // between the two, so the size we compared against was not the size we then overwrote.
+        let size_changed = {
+            let Ok(mut last) = LAST.lock() else { return };
+            let changed = last
+                .as_ref()
+                .map(|(_, _, _, w, h)| *w != size.0 || *h != size.1)
+                .unwrap_or(true);
             if last.as_ref().is_some_and(|(v, s, dismissed, w, h)| {
                 *v == visible
                     && *dismissed == overlay_dismissed
@@ -1520,7 +1520,8 @@ use shogun_core::meeting::gate::OfferGate;
                 return;
             }
             *last = Some((visible, state, overlay_dismissed, size.0, size.1));
-        }
+            changed
+        };
         // Never builds: the window exists from launch (see `build_overlay`). If it is missing,
         // something failed at setup and the right answer is to do nothing rather than to try
         // creating an AppKit window from this thread.

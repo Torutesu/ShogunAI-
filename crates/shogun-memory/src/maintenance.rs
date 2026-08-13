@@ -302,10 +302,10 @@ pub fn delete_since(conn: &mut Connection, cutoff_ts: i64) -> Result<DeleteRepor
     let briefs = tx.execute("DELETE FROM briefs WHERE built_at >= ?1", [cutoff_ts])?;
 
     // Orphan sweep: any state row with no surviving provenance is removed (children first).
-    let commitments = tx.execute(orphan_sql("commitments"), [])?;
-    let open_loops = tx.execute(orphan_sql("open_loops"), [])?;
-    let people = tx.execute(orphan_sql("people"), [])?;
-    let projects = tx.execute(orphan_sql("projects"), [])?;
+    let commitments = sweep_orphans(&tx, "commitments")?;
+    let open_loops = sweep_orphans(&tx, "open_loops")?;
+    let people = sweep_orphans(&tx, "people")?;
+    let projects = sweep_orphans(&tx, "projects")?;
 
     tx.commit()?;
 
@@ -331,14 +331,24 @@ pub fn delete_since(conn: &mut Connection, cutoff_ts: i64) -> Result<DeleteRepor
     })
 }
 
-/// DELETE for one state table's rows that have no remaining provenance row.
-fn orphan_sql(table: &'static str) -> &'static str {
-    match table {
+/// DELETE for one state table's rows that have no remaining provenance row. `None` for a table
+/// this sweep does not know — a fifth state table added without touching here should be skipped,
+/// not panic the maintenance thread mid-transaction (the caller treats it as "nothing to sweep").
+fn orphan_sql(table: &str) -> Option<&'static str> {
+    Some(match table {
         "commitments" => "DELETE FROM commitments WHERE id NOT IN (SELECT state_id FROM state_provenance WHERE state_table='commitments')",
         "open_loops" => "DELETE FROM open_loops WHERE id NOT IN (SELECT state_id FROM state_provenance WHERE state_table='open_loops')",
         "people" => "DELETE FROM people WHERE id NOT IN (SELECT state_id FROM state_provenance WHERE state_table='people')",
         "projects" => "DELETE FROM projects WHERE id NOT IN (SELECT state_id FROM state_provenance WHERE state_table='projects')",
-        _ => unreachable!("unknown state table"),
+        _ => return None,
+    })
+}
+
+/// Run the orphan sweep for `table`, or 0 when the table is unknown to [`orphan_sql`].
+fn sweep_orphans(tx: &rusqlite::Transaction<'_>, table: &str) -> Result<usize, rusqlite::Error> {
+    match orphan_sql(table) {
+        Some(sql) => tx.execute(sql, []),
+        None => Ok(0),
     }
 }
 
