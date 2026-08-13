@@ -26,6 +26,8 @@ pub enum Command {
     Search { query: String },
     /// `shogun context [--no-screen]` → the current context cache.
     Context { include_screen: bool },
+    /// `shogun pack <query>` → the grounded context pack for a task/question (FR-API-08).
+    Pack { query: String },
     /// `shogun people list|get <id>`
     People(ListOrGet),
     /// `shogun projects list|get <id>`
@@ -83,6 +85,7 @@ impl Command {
         Some(match self {
             Command::Search { .. } => Tool::MemorySearch,
             Command::Context { .. } => Tool::MemoryGetContext,
+            Command::Pack { .. } => Tool::MemoryGetContextPack,
             Command::People(ListOrGet::List) => Tool::StatePeopleList,
             Command::People(ListOrGet::Get { .. }) => Tool::StatePeopleGet,
             Command::Projects(ListOrGet::List) => Tool::StateProjectsList,
@@ -120,6 +123,7 @@ USAGE:
 COMMANDS:
     search <query>            Hybrid memory search
     context                   Current context cache
+    pack <query>              Grounded context pack (facts + evidence with provenance)
     people list|get <id>      People state
     projects list|get <id>    Projects state
     commitments list|get <id> Commitments state

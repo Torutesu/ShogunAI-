@@ -203,6 +203,12 @@ fn tool_descriptor(tool: Tool) -> Value {
     let (desc, props): (&str, Value) = match tool {
         Tool::MemorySearch => ("Hybrid search over memory", json!({ "query": { "type": "string" } })),
         Tool::MemoryGetContext => ("The current context cache", json!({})),
+        Tool::MemoryGetContextPack => (
+            "Grounded context pack for a task/question (FR-API-08): confidence-gated state facts \
+             plus dated, attributed evidence lines with event ids for provenance. Same assembly \
+             as the in-app chat.",
+            json!({ "query": { "type": "string" } }),
+        ),
         Tool::DeviceOnboardingGet => ("This device's onboarding / first-run setup state", json!({})),
         Tool::StatePeopleGet
         | Tool::StateProjectsGet
