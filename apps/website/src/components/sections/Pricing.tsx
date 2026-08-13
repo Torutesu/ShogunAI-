@@ -1,6 +1,7 @@
 'use client';
 
 import { Check } from 'lucide-react';
+import { useState } from 'react';
 import posthog from 'posthog-js';
 import { Reveal } from '@/components/animations/Reveal';
 import { Badge } from '@/components/ui/badge';
@@ -18,7 +19,49 @@ type PlanData = {
   badge?: string;
 };
 
-function Plan({ plan, featured }: { plan: PlanData; featured?: boolean }) {
+/**
+ * Billing is behind a build flag (issue #8). While the product is invite-only the CTA still
+ * feeds the waitlist; flip `NEXT_PUBLIC_BILLING_ENABLED=1` and the same button opens Stripe
+ * Checkout. One switch, so launch day is a redeploy rather than a code change.
+ */
+const BILLING_ENABLED = process.env.NEXT_PUBLIC_BILLING_ENABLED === '1';
+
+function Plan({
+  plan,
+  planId,
+  featured,
+}: {
+  plan: PlanData;
+  planId: 'standard' | 'pro';
+  featured?: boolean;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+
+  /**
+   * The headline price is the annual one, so that is what this buys. The client sends the plan
+   * name only — the Price ID lives on the server (issue #8 セキュリティ). Monthly billing is
+   * reachable from the app's settings and from the Stripe portal.
+   */
+  const startCheckout = async () => {
+    setBusy(true);
+    setErr('');
+    try {
+      const res = await fetch('/api/stripe/checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ plan: planId, interval: 'annual', source: 'lp' }),
+      });
+      const data: unknown = await res.json();
+      const url = res.ok && typeof data === 'object' && data && 'url' in data ? String(data.url) : '';
+      if (!url) throw new Error('no url');
+      window.location.assign(url);
+    } catch {
+      setBusy(false);
+      setErr('Could not open checkout. Please try again.');
+    }
+  };
+
   return (
     <Card
       className={`lift relative flex flex-col p-7 ${featured ? 'border-accent shadow-[0_12px_40px_rgba(0,166,244,0.14)]' : ''}`}
@@ -46,16 +89,41 @@ function Plan({ plan, featured }: { plan: PlanData; featured?: boolean }) {
           </li>
         ))}
       </ul>
-      <Button
-        asChild
-        variant={featured ? 'primary' : 'secondary'}
-        className="mt-auto w-full"
-        onClick={() =>
-          posthog.capture('pricing_cta_clicked', { plan: plan.name, featured: !!featured })
-        }
-      >
-        <a href="#get-started">{plan.cta}</a>
-      </Button>
+      {BILLING_ENABLED ? (
+        <>
+          <Button
+            variant={featured ? 'primary' : 'secondary'}
+            className="mt-auto w-full"
+            disabled={busy}
+            onClick={() => {
+              posthog.capture('pricing_cta_clicked', {
+                plan: plan.name,
+                featured: !!featured,
+                destination: 'checkout',
+              });
+              void startCheckout();
+            }}
+          >
+            {busy ? '…' : plan.cta}
+          </Button>
+          {err && <p className="mt-2 text-center text-sm text-red-500">{err}</p>}
+        </>
+      ) : (
+        <Button
+          asChild
+          variant={featured ? 'primary' : 'secondary'}
+          className="mt-auto w-full"
+          onClick={() =>
+            posthog.capture('pricing_cta_clicked', {
+              plan: plan.name,
+              featured: !!featured,
+              destination: 'waitlist',
+            })
+          }
+        >
+          <a href="#get-started">{plan.cta}</a>
+        </Button>
+      )}
     </Card>
   );
 }
@@ -75,10 +143,10 @@ export function Pricing({ t }: { t: Dictionary }) {
         </Reveal>
         <div className="mx-auto grid max-w-[780px] gap-6 md:grid-cols-2">
           <Reveal>
-            <Plan plan={t.pricing.standard} />
+            <Plan plan={t.pricing.standard} planId="standard" />
           </Reveal>
           <Reveal delay={0.08}>
-            <Plan plan={t.pricing.pro} featured />
+            <Plan plan={t.pricing.pro} planId="pro" featured />
           </Reveal>
         </div>
       </div>

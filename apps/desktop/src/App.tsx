@@ -1554,6 +1554,229 @@ function ResizeGrip(props: {
 // First-layer connections (§6.9): the row UI lives in src/connections.tsx, shared with the
 // onboarding flow so the two surfaces can never drift (invariant 1 — presentation only here).
 
+// ── Plan & billing (issue #8) ───────────────────────────────────────────────────────────────
+// Display only. The plan gate itself is decided in the Rust core (CLAUDE.md: プラン判定はRust
+// コア側で行う) — `entitlement_status` is the resolved answer, `billing_status` is the licence
+// behind it. This panel never decides anything; it shows what the core decided and offers the
+// two buttons that lead to Stripe's own hosted pages.
+
+interface EntitlementView {
+  status: "trial" | "trial_expired" | "standard" | "pro";
+  agent_execution: boolean;
+  memory_api: boolean;
+  composio_send_unlock: boolean;
+  first_layer_reads: boolean;
+  trial_started_at: number | null;
+}
+
+interface BillingView {
+  activated: boolean;
+  plan: string | null;
+  status: string | null;
+  valid: boolean;
+  offline_grace: boolean;
+  days_offline: number;
+  amber: boolean;
+  current_period_end: number | null;
+  verified_at: number | null;
+  cancel_at_period_end: boolean;
+  error: string | null;
+}
+
+/** Unix seconds → a date the reader recognises. */
+function billingDate(secs: number | null): string {
+  if (!secs) return "";
+  const d = new Date(secs * 1000);
+  return Number.isNaN(d.getTime()) ? "" : d.toISOString().slice(0, 10);
+}
+
+/** The four purchasable combinations. Prices are display copy; the price itself lives server-side. */
+const PLAN_CHOICES: { plan: "standard" | "pro"; interval: "annual" | "monthly"; label: string }[] = [
+  { plan: "standard", interval: "annual", label: t.planBuyStandardYear },
+  { plan: "standard", interval: "monthly", label: t.planBuyStandardMonth },
+  { plan: "pro", interval: "annual", label: t.planBuyProYear },
+  { plan: "pro", interval: "monthly", label: t.planBuyProMonth },
+];
+
+function PlanBillingSection(): JSX.Element {
+  const [ent, setEnt] = useState<EntitlementView | null>(null);
+  const [billing, setBilling] = useState<BillingView | null>(null);
+  const [keyInput, setKeyInput] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  const [choosing, setChoosing] = useState(false);
+
+  const refresh = useCallback((): void => {
+    if (!IN_TAURI) return;
+    void invoke<EntitlementView>("entitlement_status").then(setEnt).catch(() => undefined);
+    void invoke<BillingView>("billing_status").then(setBilling).catch(() => undefined);
+  }, []);
+  useEffect(refresh, [refresh]);
+
+  const activate = (): void => {
+    if (!IN_TAURI || !keyInput.trim()) return;
+    setBusy(true);
+    setMsg("");
+    void invoke<BillingView>("billing_activate", { licenseKey: keyInput.trim() })
+      .then((v) => {
+        setBilling(v);
+        setMsg(v.error ?? "");
+        if (!v.error) setKeyInput("");
+        // The plan the core enforces may have just changed — re-read it rather than inferring.
+        void invoke<EntitlementView>("entitlement_status").then(setEnt).catch(() => undefined);
+      })
+      .catch((e) => setMsg(String(e)))
+      .finally(() => setBusy(false));
+  };
+
+  const call = (cmd: string, args?: Record<string, unknown>): void => {
+    if (!IN_TAURI) return;
+    setBusy(true);
+    setMsg("");
+    void invoke(cmd, args)
+      .then(() => refresh())
+      .catch((e) => setMsg(String(e)))
+      .finally(() => setBusy(false));
+  };
+
+  // The headline is the plan in force — from the core's resolution, not from the licence file.
+  const planLabel = ((): string => {
+    switch (ent?.status) {
+      case "pro":
+        return t.planPro;
+      case "standard":
+        return t.planStandard;
+      case "trial_expired":
+        return t.planTrialExpired;
+      default:
+        return t.planTrial;
+    }
+  })();
+  const expired = ent?.status === "trial_expired";
+  const paid = ent?.status === "pro" || ent?.status === "standard";
+
+  return (
+    <section className="set">
+      <div className="set__label">{t.planTitle}</div>
+      <div className="conn">
+        <div className="conn__meta">
+          <span className={`conn__state${expired ? " is-warn" : paid ? " is-ok" : ""}`}>
+            {planLabel}
+          </span>
+          {billing?.status ? (
+            <span className="conn__state">
+              {t.planStatusLabel}: {billing.status}
+            </span>
+          ) : null}
+          {billing?.current_period_end ? (
+            <span className="conn__state">
+              {billing.cancel_at_period_end ? t.planEndsOn : t.planNextBilling}:{" "}
+              {billingDate(billing.current_period_end)}
+            </span>
+          ) : null}
+        </div>
+        <button className="keyrow__btn" type="button" disabled={busy} onClick={() => call("billing_refresh")}>
+          {t.planRefresh}
+        </button>
+      </div>
+      <div className="set__hint">{t.planHint}</div>
+      {expired ? <div className="set__hint is-warn">{t.planExpiredHint}</div> : null}
+      {billing?.cancel_at_period_end ? (
+        <div className="set__hint is-warn">{t.planCancelsAtPeriodEnd}</div>
+      ) : null}
+      {/* Offline grace (FR-BIL-09): amber from day 7, and it says how many days are left rather
+          than just "offline", because only the remaining days are actionable. */}
+      {billing?.offline_grace ? (
+        <div className={`set__hint${billing.amber ? " is-warn" : ""}`}>
+          {t.planOffline.replace("{n}", String(billing.days_offline)).replace("{total}", "14")}
+        </div>
+      ) : null}
+      {billing?.verified_at ? (
+        <div className="set__hint">
+          {t.planLastChecked}: {billingDate(billing.verified_at)}
+        </div>
+      ) : null}
+
+      {/* Upgrade / manage. Both open Stripe-hosted pages in the browser — no card UI here. */}
+      <div className="keyrow">
+        {!paid ? (
+          <button className="keyrow__btn" type="button" disabled={busy} onClick={() => setChoosing((v) => !v)}>
+            {t.planUpgrade}
+          </button>
+        ) : null}
+        {billing?.activated ? (
+          <button className="keyrow__btn" type="button" disabled={busy} onClick={() => call("billing_open_portal")}>
+            {t.planManage}
+          </button>
+        ) : null}
+      </div>
+      {choosing ? (
+        <div className="keyrow keyrow--wrap">
+          {PLAN_CHOICES.map((c) => (
+            <button
+              key={`${c.plan}-${c.interval}`}
+              className="keyrow__btn"
+              type="button"
+              disabled={busy}
+              onClick={() => call("billing_open_checkout", { plan: c.plan, interval: c.interval })}
+            >
+              {c.label}
+            </button>
+          ))}
+        </div>
+      ) : null}
+
+      {/* Activation. The key comes from the purchase confirmation; it goes straight to the
+          Keychain and is never rendered back. */}
+      {billing?.activated ? (
+        <>
+          <div className="set__hint is-ok">{t.planActivated}</div>
+          <div className="keyrow">
+            <button
+              className="keyrow__btn"
+              type="button"
+              disabled={busy}
+              onClick={() => call("billing_deactivate")}
+            >
+              {t.planDeactivate}
+            </button>
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="set__hint">{t.planActivateTitle}</div>
+          <div className="set__hint">{t.planActivateHint}</div>
+          <div className="keyrow">
+            <input
+              className="keyrow__input"
+              placeholder={t.planActivatePlaceholder}
+              value={keyInput}
+              autoComplete="off"
+              spellCheck={false}
+              onChange={(e) => setKeyInput(e.target.value)}
+              onFocus={() => {
+                if (IN_TAURI) void invoke("focus_field", { focused: true }).catch(() => undefined);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") activate();
+              }}
+            />
+            <button
+              className="keyrow__btn"
+              type="button"
+              onClick={activate}
+              disabled={busy || !keyInput.trim()}
+            >
+              {busy ? t.planActivating : t.planActivate}
+            </button>
+          </div>
+        </>
+      )}
+      {msg ? <div className="set__hint is-err">{msg}</div> : null}
+    </section>
+  );
+}
+
 // The nightly cycle's result (FR-DC-06). Shown because the work happens while nobody is watching:
 // without this, "did anything happen last night" is unanswerable, and a run that has been quietly
 // failing for a week looks exactly like one that never had anything to do.
@@ -3361,6 +3584,9 @@ function Settings(props: {
       </header>
       <div className="settings__body">
         <ApprovalsSection />
+        {/* Plan state first: when a trial has ended, everything below it is locked, and the
+            reason has to be the first thing on screen rather than a discovery. */}
+        <PlanBillingSection />
         {/* Near the top on purpose. Meeting notes ships off and only ever turns on because
             someone found this switch — burying an opt-in below six connectors is how a feature
             stays permanently off (FR-MT-01). */}
