@@ -4136,6 +4136,7 @@ dependencies = [
  "shogun-agents",
  "shogun-mcp",
  "url",
+ "zeroize",
 ]
 
 [[package]]
@@ -4146,8 +4147,10 @@ dependencies = [
  "libc",
  "serde",
  "serde_json",
+ "sha2",
  "shogun-agents",
  "shogun-fusion",
+ "subtle",
  "tokio",
 ]
 

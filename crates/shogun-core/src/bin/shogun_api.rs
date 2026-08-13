@@ -74,11 +74,12 @@ fn db_backend(db: Db) -> DbBackend {
     if let Some(path) = visual_recall_settings_path(&db_path) {
         backend = backend.with_visual_recall_settings_path(path);
     }
-    backend = backend.with_memory_api_settings_path(memory_api_settings::resolve_settings_path(&db_path));
+    backend =
+        backend.with_memory_api_settings_path(memory_api_settings::resolve_settings_path(&db_path));
     backend
 }
 
-fn load_token_registry() -> TokenRegistry {
+fn load_token_registry() -> Result<TokenRegistry, String> {
     let mut tokens = TokenRegistry::new();
     match std::env::var("SHOGUN_API_TOKEN") {
         Ok(t) if !t.is_empty() => tokens.issue(t),
@@ -86,15 +87,27 @@ fn load_token_registry() -> TokenRegistry {
     }
     #[cfg(target_os = "macos")]
     {
-        if let Ok(bytes) = shogun_integrations::keychain_store::get_generic_secret(TOKENS_KEYCHAIN_ACCOUNT) {
-            for t in memory_api_settings::parse_token_blob(&bytes).tokens {
-                if !t.secret.is_empty() {
-                    tokens.issue(t.secret);
-                }
-            }
+        let blob = memory_api_settings::load_token_blob_with_migration(
+            || match shogun_integrations::keychain_store::get_generic_secret(
+                TOKENS_KEYCHAIN_ACCOUNT,
+            ) {
+                Ok(bytes) => Ok(Some(bytes)),
+                Err(error) if error.code() == -25300 => Ok(None),
+                Err(error) => Err(format!("read Memory API token blob: {error}")),
+            },
+            |bytes| {
+                shogun_integrations::keychain_store::set_generic_secret(
+                    TOKENS_KEYCHAIN_ACCOUNT,
+                    bytes,
+                )
+                .map_err(|e| format!("rewrite Memory API token blob: {e}"))
+            },
+        )?;
+        for token in blob.tokens {
+            tokens.issue_verifier(&token.verifier)?;
         }
     }
-    tokens
+    Ok(tokens)
 }
 
 fn gate_or_exit(db_path: &str) {
@@ -110,14 +123,19 @@ async fn main() -> std::io::Result<()> {
     let db_path = std::env::var("SHOGUN_DB_PATH").unwrap_or_else(|_| "./shogun.db".to_string());
     gate_or_exit(&db_path);
 
-    let port = std::env::var("SHOGUN_API_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(DEFAULT_PORT);
+    let port = std::env::var("SHOGUN_API_PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(DEFAULT_PORT);
 
     let clock = wall_clock();
     let db = Db::open_at_path(&db_path, clock.clone())
         .map_err(|e| std::io::Error::other(format!("open db {db_path}: {e}")))?;
     let backend = Arc::new(db_backend(db));
 
-    let tokens = load_token_registry();
+    let tokens = load_token_registry().map_err(|message| {
+        std::io::Error::other(format!("Memory API token loader failed: {message}"))
+    })?;
     if tokens.is_empty() {
         eprintln!("warning: no Memory API tokens loaded — every tool call will be 401 (only /v1/status is open)");
     }
@@ -147,15 +165,18 @@ mod tests {
     fn boot_server() -> u16 {
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
             rt.block_on(async move {
                 let db = Db::open_in_memory(wall_clock()).unwrap();
                 let backend = Arc::new(db_backend(db));
                 let mut tokens = TokenRegistry::new();
                 tokens.issue("dev");
                 let approvals = Arc::new(Mutex::new(ApprovalQueue::new()));
-                let state =
-                    AppState::new(Arc::new(tokens), backend, approvals, wall_clock()).with_metrics(metrics_source());
+                let state = AppState::new(Arc::new(tokens), backend, approvals, wall_clock())
+                    .with_metrics(metrics_source());
                 let listener = bind_local(0).await.unwrap();
                 let port = listener.local_addr().unwrap().port();
                 tx.send(port).unwrap();
@@ -183,13 +204,31 @@ mod tests {
         assert_eq!(r.status, 401);
 
         // write a note, then search it back — the full write→persist→read loop over the socket
-        let r = request(port, "POST", "/v1/memory/notes", Some("dev"), Some("call Bob about the roadmap")).unwrap();
+        let r = request(
+            port,
+            "POST",
+            "/v1/memory/notes",
+            Some("dev"),
+            Some("call Bob about the roadmap"),
+        )
+        .unwrap();
         assert_eq!(r.status, 202);
         assert!(r.body.contains("\"id\":"));
 
-        let r = request(port, "GET", "/v1/memory/search?q=roadmap", Some("dev"), None).unwrap();
+        let r = request(
+            port,
+            "GET",
+            "/v1/memory/search?q=roadmap",
+            Some("dev"),
+            None,
+        )
+        .unwrap();
         assert_eq!(r.status, 200);
-        assert!(r.body.contains("call Bob about the roadmap"), "search body: {}", r.body);
+        assert!(
+            r.body.contains("call Bob about the roadmap"),
+            "search body: {}",
+            r.body
+        );
 
         // the in-product SLO snapshot is served, open like status (NFR-SLO-00); empty registry ⇒
         // every SLO reads unmeasured, never a false green (spec §4.5).
@@ -197,7 +236,11 @@ mod tests {
         assert_eq!(r.status, 200);
         assert!(r.body.contains("\"metrics\":"), "metrics body: {}", r.body);
         assert!(r.body.contains("NFR-SLO-01"), "metrics body: {}", r.body);
-        assert!(r.body.contains("\"measured\":false"), "unmeasured SLOs must not read as pass: {}", r.body);
+        assert!(
+            r.body.contains("\"measured\":false"),
+            "unmeasured SLOs must not read as pass: {}",
+            r.body
+        );
 
         // an external send routes to L3 pending approval, never runs (FR-API-04)
         let r = request(

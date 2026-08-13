@@ -44,16 +44,24 @@ pub mod mac {
         memory_api_settings::save_settings(&path, settings)
     }
 
-    fn load_token_blob() -> TokenBlob {
-        match keychain_store::get_generic_secret(TOKENS_KEYCHAIN_ACCOUNT) {
-            Ok(bytes) => memory_api_settings::parse_token_blob(&bytes),
-            Err(_) => TokenBlob::default(),
-        }
+    fn load_token_blob() -> Result<TokenBlob, String> {
+        memory_api_settings::load_token_blob_with_migration(
+            || match keychain_store::get_generic_secret(TOKENS_KEYCHAIN_ACCOUNT) {
+                Ok(bytes) => Ok(Some(bytes)),
+                Err(error) if error.code() == -25300 => Ok(None),
+                Err(error) => Err(format!("read Memory API token blob: {error}")),
+            },
+            |bytes| {
+                keychain_store::set_generic_secret(TOKENS_KEYCHAIN_ACCOUNT, bytes)
+                    .map_err(|e| e.to_string())
+            },
+        )
     }
 
     fn save_token_blob(blob: &TokenBlob) -> Result<(), String> {
         let bytes = memory_api_settings::serialize_token_blob(blob)?;
-        keychain_store::set_generic_secret(TOKENS_KEYCHAIN_ACCOUNT, &bytes).map_err(|e| e.to_string())
+        keychain_store::set_generic_secret(TOKENS_KEYCHAIN_ACCOUNT, &bytes)
+            .map_err(|e| e.to_string())
     }
 
     fn mint_secret() -> String {
@@ -101,9 +109,14 @@ pub mod mac {
     pub fn memory_api_settings(app: tauri::AppHandle) -> MemoryApiSettingsView {
         let settings = load(&app);
         let tokens = load_token_blob()
+            .unwrap_or_default()
             .tokens
             .into_iter()
-            .map(|t| TokenMeta { id: t.id, name: t.name, created_at: t.created_at })
+            .map(|t| TokenMeta {
+                id: t.id,
+                name: t.name,
+                created_at: t.created_at,
+            })
             .collect();
         MemoryApiSettingsView {
             enabled: settings.enabled,
@@ -120,7 +133,11 @@ pub mod mac {
         save(&app, &settings)?;
         eprintln!(
             "[memory_api] {}",
-            if enabled { "enabled" } else { "disabled (fail closed for MCP/API)" }
+            if enabled {
+                "enabled"
+            } else {
+                "disabled (fail closed for MCP/API)"
+            }
         );
         Ok(())
     }
@@ -142,7 +159,10 @@ pub mod mac {
     }
 
     #[tauri::command]
-    pub fn issue_memory_api_token(name: String, app: tauri::AppHandle) -> Result<IssuedTokenView, String> {
+    pub fn issue_memory_api_token(
+        name: String,
+        app: tauri::AppHandle,
+    ) -> Result<IssuedTokenView, String> {
         let _ = app; // path not needed; tokens are Keychain-only
         let name = name.trim().to_string();
         if name.is_empty() {
@@ -151,21 +171,27 @@ pub mod mac {
         let id = mint_id();
         let secret = mint_secret();
         let created_at = now_ms();
-        let mut blob = load_token_blob();
+        let mut blob = load_token_blob()?;
         blob.tokens.push(IssuedToken {
             id: id.clone(),
             name: name.clone(),
             created_at,
             secret: secret.clone(),
+            verifier: memory_api_settings::token_verifier(&secret),
         });
         save_token_blob(&blob)?;
         eprintln!("[memory_api] token issued id={id}");
-        Ok(IssuedTokenView { id, name, created_at, token: secret })
+        Ok(IssuedTokenView {
+            id,
+            name,
+            created_at,
+            token: secret,
+        })
     }
 
     #[tauri::command]
     pub fn revoke_memory_api_token(id: String) -> Result<(), String> {
-        let mut blob = load_token_blob();
+        let mut blob = load_token_blob()?;
         let before = blob.tokens.len();
         blob.tokens.retain(|t| t.id != id);
         if blob.tokens.len() == before {

@@ -25,6 +25,7 @@ use security_framework_sys::item::{
 use security_framework_sys::keychain_item::{
     SecItemAdd, SecItemCopyMatching, SecItemDelete, SecItemUpdate,
 };
+use zeroize::Zeroizing;
 
 fn cvt(status: i32) -> Result<()> {
     if status == errSecSuccess {
@@ -48,7 +49,28 @@ pub const DEEPGRAM_ASR_ACCOUNT: &str = "deepgram-asr";
 pub const GOOGLE_OAUTH_CLIENT_ID_ACCOUNT: &str = "google-oauth-client-id";
 pub const GOOGLE_OAUTH_CLIENT_SECRET_ACCOUNT: &str = "google-oauth-client-secret";
 
-static CACHE: OnceLock<Mutex<HashMap<String, Vec<u8>>>> = OnceLock::new();
+static CACHE: OnceLock<Mutex<HashMap<String, CachedSecret>>> = OnceLock::new();
+
+/// Owns cached secret bytes and clears them when replaced, removed, or dropped.
+///
+/// Public APIs still return `Vec<u8>` for compatibility; callers should keep those returned
+/// copies short-lived and avoid logging them.
+struct CachedSecret(Zeroizing<Vec<u8>>);
+
+impl CachedSecret {
+    fn new(bytes: &[u8]) -> Self {
+        Self(Zeroizing::new(bytes.to_vec()))
+    }
+
+    fn clone_bytes(&self) -> Vec<u8> {
+        self.0.to_vec()
+    }
+
+    #[cfg(test)]
+    fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+}
 
 /// Read a generic-password secret. Tries [`SERVICE`], then [`LEGACY_SERVICE`]. Migrates legacy-only
 /// entries to [`SERVICE`] on first read. Cached after first successful read for this process so
@@ -56,7 +78,7 @@ static CACHE: OnceLock<Mutex<HashMap<String, Vec<u8>>>> = OnceLock::new();
 pub fn get_generic_secret(account: &str) -> Result<Vec<u8>> {
     if let Ok(guard) = cache().lock() {
         if let Some(bytes) = guard.get(account) {
-            return Ok(bytes.clone());
+            return Ok(bytes.clone_bytes());
         }
     }
     match read_from_keychain(SERVICE, account) {
@@ -81,7 +103,7 @@ pub fn set_generic_secret(account: &str, password: &[u8]) -> Result<()> {
     let _ = delete_from_keychain(LEGACY_SERVICE, account);
     write_to_keychain(SERVICE, account, password)?;
     if let Ok(mut guard) = cache().lock() {
-        guard.insert(account.to_string(), password.to_vec());
+        guard.insert(account.to_string(), CachedSecret::new(password));
     }
     Ok(())
 }
@@ -229,7 +251,36 @@ fn hex_nibble(b: u8) -> Option<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_select_kk_key;
+    use super::{cache, normalize_select_kk_key, warm_cache, CachedSecret};
+
+    #[test]
+    fn cached_secret_clones_without_exposing_wrapper() {
+        let secret = CachedSecret::new(b"secret");
+        assert_eq!(secret.clone_bytes(), b"secret");
+        assert_eq!(secret.as_bytes(), b"secret");
+    }
+
+    #[test]
+    fn cache_replacement_updates_secret() {
+        let account = "test-cache-replacement";
+        warm_cache(account, b"old-secret");
+        warm_cache(account, b"new-secret");
+
+        let guard = cache().lock().expect("cache lock");
+        assert_eq!(
+            guard.get(account).map(CachedSecret::as_bytes),
+            Some(&b"new-secret"[..])
+        );
+    }
+
+    #[test]
+    fn cache_deletion_removes_secret() {
+        let account = "test-cache-deletion";
+        warm_cache(account, b"secret");
+        let mut guard = cache().lock().expect("cache lock");
+        assert!(guard.remove(account).is_some());
+        assert!(!guard.contains_key(account));
+    }
 
     #[test]
     fn select_kk_accepts_plain_key() {
@@ -259,7 +310,8 @@ fn read_from_keychain(service: &str, account: &str) -> Result<Vec<u8>> {
     let query = query_dict(service, account, true);
     let mut ret: CFTypeRef = std::ptr::null();
     cvt(unsafe { SecItemCopyMatching(query.as_concrete_TypeRef(), &mut ret) })?;
-    let data = unsafe { CFData::wrap_under_create_rule(ret as core_foundation_sys::data::CFDataRef) };
+    let data =
+        unsafe { CFData::wrap_under_create_rule(ret as core_foundation_sys::data::CFDataRef) };
     Ok(data.bytes().to_vec())
 }
 
@@ -309,15 +361,19 @@ fn base_attrs(service: &str, account: &str) -> Vec<(CFString, core_foundation::b
 
 fn warm_cache(account: &str, bytes: &[u8]) {
     if let Ok(mut guard) = cache().lock() {
-        guard.insert(account.to_string(), bytes.to_vec());
+        guard.insert(account.to_string(), CachedSecret::new(bytes));
     }
 }
 
-fn cache() -> &'static Mutex<HashMap<String, Vec<u8>>> {
+fn cache() -> &'static Mutex<HashMap<String, CachedSecret>> {
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn query_dict(service: &str, account: &str, return_data: bool) -> CFDictionary<CFString, core_foundation::base::CFType> {
+fn query_dict(
+    service: &str,
+    account: &str,
+    return_data: bool,
+) -> CFDictionary<CFString, core_foundation::base::CFType> {
     let mut attrs = base_attrs(service, account);
     if return_data {
         attrs.push((

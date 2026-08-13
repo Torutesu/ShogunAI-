@@ -24,6 +24,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use shogun_core::daemon::Db;
 use shogun_core::db_backend::DbBackend;
 use shogun_mcp::mcp::{serve, McpServer};
+use shogun_mcp::memory_api::{AuthResult, TokenRegistry};
 use shogun_mcp::memory_api_settings::{self, TOKENS_KEYCHAIN_ACCOUNT};
 
 fn now_ms() -> i64 {
@@ -44,23 +45,40 @@ fn visual_recall_settings_path(db_path: &str) -> Option<std::path::PathBuf> {
         })
 }
 
-fn issued_token_secrets() -> Vec<String> {
+fn load_token_registry() -> Result<TokenRegistry, String> {
+    let mut tokens = TokenRegistry::new();
     #[cfg(target_os = "macos")]
     {
-        match shogun_integrations::keychain_store::get_generic_secret(TOKENS_KEYCHAIN_ACCOUNT) {
-            Ok(bytes) => memory_api_settings::parse_token_blob(&bytes)
-                .tokens
-                .into_iter()
-                .map(|t| t.secret)
-                .filter(|s| !s.is_empty())
-                .collect(),
-            Err(_) => Vec::new(),
+        let blob = memory_api_settings::load_token_blob_with_migration(
+            || match shogun_integrations::keychain_store::get_generic_secret(
+                TOKENS_KEYCHAIN_ACCOUNT,
+            ) {
+                Ok(bytes) => Ok(Some(bytes)),
+                Err(error) if error.code() == -25300 => Ok(None),
+                Err(error) => Err(format!("read Memory API token blob: {error}")),
+            },
+            |bytes| {
+                shogun_integrations::keychain_store::set_generic_secret(
+                    TOKENS_KEYCHAIN_ACCOUNT,
+                    bytes,
+                )
+                .map_err(|e| format!("rewrite Memory API token blob: {e}"))
+            },
+        )?;
+        for token in blob.tokens {
+            tokens.issue_verifier(&token.verifier)?;
         }
     }
     #[cfg(not(target_os = "macos"))]
     {
-        Vec::new()
+        let _ = &mut tokens;
     }
+    if let Ok(token) = std::env::var("SHOGUN_API_TOKEN") {
+        if !token.is_empty() {
+            tokens.issue(token);
+        }
+    }
+    Ok(tokens)
 }
 
 /// Fail closed on disabled Memory API. If tokens exist, require `SHOGUN_API_TOKEN` to match one.
@@ -70,13 +88,19 @@ fn gate_or_exit(db_path: &str) {
         eprintln!("{msg}");
         std::process::exit(1);
     }
-    let secrets = issued_token_secrets();
-    if secrets.is_empty() {
+    let tokens = match load_token_registry() {
+        Ok(tokens) => tokens,
+        Err(message) => {
+            eprintln!("Memory API token loader failed: {message}");
+            std::process::exit(1);
+        }
+    };
+    if tokens.is_empty() {
         // Dev DX: no tokens issued yet — process trust when enabled.
         return;
     }
     match std::env::var("SHOGUN_API_TOKEN") {
-        Ok(t) if secrets.iter().any(|s| s == &t) => {}
+        Ok(t) if matches!(tokens.authenticate(Some(&t)), AuthResult::Granted) => {}
         Ok(_) => {
             eprintln!(
                 "SHOGUN_API_TOKEN does not match any issued Memory API token. Re-issue in Settings or fix the env."
@@ -103,7 +127,8 @@ fn main() -> std::io::Result<()> {
     if let Some(path) = visual_recall_settings_path(&db_path) {
         backend = backend.with_visual_recall_settings_path(path);
     }
-    backend = backend.with_memory_api_settings_path(memory_api_settings::resolve_settings_path(&db_path));
+    backend =
+        backend.with_memory_api_settings_path(memory_api_settings::resolve_settings_path(&db_path));
     let approvals_path = shogun_mcp::approval_store::resolve_store_path(&db_path);
     let server = McpServer::new(backend, now_ms).with_approvals_path(approvals_path);
 

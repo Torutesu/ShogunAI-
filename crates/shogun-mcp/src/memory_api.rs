@@ -8,8 +8,12 @@
 //!   low included only when explicitly requested — the same [`shogun_fusion::confidence`] bands the
 //!   UI uses.
 
+use sha2::{Digest, Sha256};
 use shogun_agents::permission::Level;
 use shogun_fusion::confidence::{band, Band};
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
+use subtle::ConstantTimeEq;
 
 /// The v1 Memory API tools (FR-API-02). Symmetric with the UI's corresponding features.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -120,7 +124,7 @@ pub fn tool_level(tool: Tool) -> ApiLevel {
         | Tool::StateProjectsGet
         | Tool::StateCommitmentsList
         | Tool::StateCommitmentsGet
-        |         Tool::StateOpenLoopsList
+        | Tool::StateOpenLoopsList
         | Tool::StateOpenLoopsGet
         | Tool::VisualRecallStatus
         | Tool::VisualRecallSearchFrames
@@ -158,7 +162,9 @@ pub enum AuthResult {
 /// outside this pure model.
 #[derive(Default)]
 pub struct TokenRegistry {
-    valid: Vec<String>,
+    valid: Vec<[u8; 32]>,
+    #[cfg(test)]
+    last_scan_count: AtomicUsize,
 }
 
 impl TokenRegistry {
@@ -166,29 +172,66 @@ impl TokenRegistry {
         Self::default()
     }
 
+    /// Issue a token id (Full UI issuance).
+    pub fn issue(&mut self, token: impl Into<String>) {
+        let token = token.into();
+        self.valid.push(verifier_bytes(&token));
+    }
+
+    /// Load a persisted verifier. This is trusted storage input, never bearer input.
+    pub fn issue_verifier(&mut self, verifier: &str) -> Result<(), String> {
+        self.valid
+            .push(crate::memory_api_settings::persisted_verifier_bytes(
+                verifier,
+            )?);
+        Ok(())
+    }
+
     /// Whether any tokens are registered.
     pub fn is_empty(&self) -> bool {
         self.valid.is_empty()
     }
 
-    /// Issue a token id (Full UI issuance).
-    pub fn issue(&mut self, token_id: impl Into<String>) {
-        self.valid.push(token_id.into());
-    }
-
     /// Revoke a token id (Full UI revocation).
-    pub fn revoke(&mut self, token_id: &str) {
-        self.valid.retain(|t| t != token_id);
+    pub fn revoke(&mut self, token: &str) {
+        let digest = verifier_bytes(token);
+        self.valid
+            .retain(|stored| stored.ct_eq(&digest).unwrap_u8() == 0);
     }
 
     /// Authenticate a call. `None` (no token presented) is denied — reads included (FR-API-03).
-    pub fn authenticate(&self, token_id: Option<&str>) -> AuthResult {
-        match token_id {
+    pub fn authenticate(&self, token: Option<&str>) -> AuthResult {
+        match token {
             None => AuthResult::DeniedNoToken,
-            Some(t) if self.valid.iter().any(|v| v == t) => AuthResult::Granted,
-            Some(_) => AuthResult::DeniedInvalidToken,
+            Some(t) => {
+                let digest = verifier_bytes(t);
+                let presented_verifier =
+                    t.starts_with(crate::memory_api_settings::TOKEN_VERIFIER_PREFIX);
+                let mut matched = 0u8;
+                #[cfg(test)]
+                self.last_scan_count.store(0, Ordering::Relaxed);
+                for stored in &self.valid {
+                    matched |= stored.ct_eq(&digest).unwrap_u8();
+                    #[cfg(test)]
+                    self.last_scan_count.fetch_add(1, Ordering::Relaxed);
+                }
+                if matched == 1 && !presented_verifier {
+                    AuthResult::Granted
+                } else {
+                    AuthResult::DeniedInvalidToken
+                }
+            }
         }
     }
+
+    #[cfg(test)]
+    fn last_scan_count(&self) -> usize {
+        self.last_scan_count.load(Ordering::Relaxed)
+    }
+}
+
+fn verifier_bytes(token_or_verifier: &str) -> [u8; 32] {
+    Sha256::digest(token_or_verifier.as_bytes()).into()
 }
 
 // ---- read confidence rule (FR-API-06) ------------------------------------------------------
@@ -228,8 +271,14 @@ mod tests {
     fn read_tools_are_reads_writes_carry_expected_levels() {
         assert_eq!(tool_level(Tool::MemorySearch), ApiLevel::Read);
         assert_eq!(tool_level(Tool::StatePeopleGet), ApiLevel::Read);
-        assert_eq!(tool_level(Tool::MemoryAppendNote), ApiLevel::Write(Level::L1));
-        assert_eq!(tool_level(Tool::StateProposeUpdate), ApiLevel::Write(Level::L2));
+        assert_eq!(
+            tool_level(Tool::MemoryAppendNote),
+            ApiLevel::Write(Level::L1)
+        );
+        assert_eq!(
+            tool_level(Tool::StateProposeUpdate),
+            ApiLevel::Write(Level::L2)
+        );
         assert_eq!(tool_level(Tool::ActionsExecute), ApiLevel::PerAction);
     }
 
@@ -290,18 +339,63 @@ mod tests {
         let mut reg = TokenRegistry::new();
         reg.issue("client-abc");
         assert_eq!(reg.authenticate(Some("client-abc")), AuthResult::Granted);
-        assert_eq!(reg.authenticate(Some("unknown")), AuthResult::DeniedInvalidToken);
+        assert_eq!(
+            reg.authenticate(Some("unknown")),
+            AuthResult::DeniedInvalidToken
+        );
         reg.revoke("client-abc");
-        assert_eq!(reg.authenticate(Some("client-abc")), AuthResult::DeniedInvalidToken);
+        assert_eq!(
+            reg.authenticate(Some("client-abc")),
+            AuthResult::DeniedInvalidToken
+        );
+    }
+
+    #[test]
+    fn persisted_verifier_is_not_a_bearer_token_and_scan_never_stops_early() {
+        let mut reg = TokenRegistry::new();
+        let verifier = crate::memory_api_settings::token_verifier("first");
+        reg.issue_verifier(&verifier).unwrap();
+        reg.issue("second");
+        assert_eq!(
+            reg.authenticate(Some(&verifier)),
+            AuthResult::DeniedInvalidToken
+        );
+        assert_eq!(reg.authenticate(Some("first")), AuthResult::Granted);
+        assert_eq!(reg.last_scan_count(), 2);
+    }
+
+    #[test]
+    fn migrated_legacy_token_authenticates_then_revokes() {
+        let old = br#"{"tokens":[{"id":"id","name":"n","created_at":1,"secret":"old-secret"}]}"#;
+        let (blob, migrated) =
+            crate::memory_api_settings::parse_token_blob_with_migration(old).unwrap();
+        assert!(migrated);
+        let mut reg = TokenRegistry::new();
+        reg.issue_verifier(&blob.tokens[0].verifier).unwrap();
+        assert_eq!(reg.authenticate(Some("old-secret")), AuthResult::Granted);
+        reg.revoke("old-secret");
+        assert_eq!(
+            reg.authenticate(Some("old-secret")),
+            AuthResult::DeniedInvalidToken
+        );
     }
 
     #[test]
     fn read_confidence_rule_matches_ui() {
         // High plain, Medium possibly, Low excluded by default.
-        assert_eq!(read_inclusion(0.9, false), ReadInclusion::Included { possibly: false });
-        assert_eq!(read_inclusion(0.6, false), ReadInclusion::Included { possibly: true });
+        assert_eq!(
+            read_inclusion(0.9, false),
+            ReadInclusion::Included { possibly: false }
+        );
+        assert_eq!(
+            read_inclusion(0.6, false),
+            ReadInclusion::Included { possibly: true }
+        );
         assert_eq!(read_inclusion(0.3, false), ReadInclusion::Excluded);
         // low included only on explicit opt-in, flagged possibly.
-        assert_eq!(read_inclusion(0.3, true), ReadInclusion::Included { possibly: true });
+        assert_eq!(
+            read_inclusion(0.3, true),
+            ReadInclusion::Included { possibly: true }
+        );
     }
 }
