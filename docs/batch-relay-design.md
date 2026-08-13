@@ -3,7 +3,10 @@
 Select KKキー（Dream Cycle・Morning Brief・インデックス/分類）の供給方式。
 
 - **決定日**: 2026-07-25
-- **状態**: 設計確定 / 実装未着手
+- **状態**: 実装済み（`apps/api`）。§4.1 のトークン形式は 2026-08-13 の監査で実装に合わせて確定
+- **未了**: 署名鍵ペアの発番と配置（`scripts/gen-license-keypair.mjs` →
+  ライセンスAPIの署名鍵 / `crates/shogun-license` の `EMBEDDED_PUBLIC_KEY_B64` /
+  中継の `LICENSE_PUBKEY_B64`）。これが済むまでライセンス認証は fail-closed で全落ちする
 - **関連**: CLAUDE.md 不変条件3・5・7 / requirements-v1.0.md §6.7, §6.12, FR-DC-02, FR-MB-01, FR-BIL-08, NFR-PRV-04
 
 ---
@@ -17,7 +20,7 @@ Batch API呼び出しはSelect KKが運用する中継エンドポイントが�
 Mac (SHOGUN)                    relay.shogun.app              Anthropic
      │                                │                            │
      │ POST /v1/batch                 │                            │
-     │  Authorization: <license JWT>  │                            │
+     │  Authorization: <license token>│                            │
      │  body: 処理用チャンク[]  ──────→ │ ① トークン検証             │
      │                                │ ② プラン・上限チェック      │
      │                                │ ③ 従量計上                 │
@@ -91,9 +94,44 @@ NFR-PRV-04 は「サーバー側にメモリ内容・state内容を**保存し�
 `Authorization: Bearer <license token>`。FR-BIL-08 の署名付きライセンストークンをそのまま使う
 （プラン・有効期限を含む）。**新しい認証系を作らない。**
 
-- トークンはKeychainのみ（不変条件7 / NFR-SEC-01）
-- 検証はライセンスAPIと同じ公開鍵で、中継側がローカル検証する（往復を増やさない）
+#### トークン形式（実装確定 2026-08-13）
+
+JWT ではない。`apps/website/src/lib/license.ts` が発行し、`crates/shogun-license` と
+`apps/api/src/auth.ts` が同じ形を検証する自前の3分割トークン:
+
+```
+v1.<base64url(payload JSON)>.<base64url(Ed25519 signature)>
+```
+
+署名対象は `v1.<payload>` の**そのままのバイト列**。検証側は base64url を再エンコードして
+`timingSafeEqual` で突き合わせ、代替エンコードを受け付けない。payload:
+
+```jsonc
+{
+  "v": 1,
+  "lic": "lic_…",          // ライセンスID（= 中継の所有者キー）
+  "plan": "standard" | "pro",
+  "status": "active" | "trialing" | "past_due",
+  "device": "…",           // 端末バインド
+  "exp": 1760000000        // unix 秒。約24時間
+}
+```
+
+- 検証はライセンスAPIと同じ Ed25519 公開鍵で、中継側がローカル検証する（往復を増やさない）。
+  公開鍵は中継の `LICENSE_PUBKEY_B64`（raw 32バイトの base64）に置き、SPKI へ包んで読む。
+  **公開鍵が無ければ全リクエストを 401 で落とす（fail-closed）。**
 - 失効は短い有効期限（24h）＋ライセンスAPIでの再取得で回す
+- 端末側で中継に提示するトークンは `license_client::cached_license_token()` が返す
+  `billing.json` のキャッシュ。**これは不変条件7 に対する明示的例外**（CLAUDE.md 参照）:
+  署名済み・device バインド・24時間で失効するため秘密ではない。
+  **ライセンスキー本体（`shogun-XXXX-…`、ライセンスAPIの bearer）は引き続き Keychain のみ。**
+
+#### 所有権チェック
+
+`GET /v1/batch/{id}` は**そのライセンスが作ったバッチしか読み出せない**。Anthropic の
+batch id は推測可能なので、これが無いと任意の licensee が他人の Dream Cycle 結果を
+ストリームできる。「存在しない」と「他人のもの」は同じ 404 を返し、oracle を作らない。
+所有者は `UsageStore.attachBatch` が計上と同時に記録する。
 
 ### 4.2 `POST /v1/batch`
 
@@ -132,12 +170,33 @@ NFR-PRV-04 は「サーバー側にメモリ内容・state内容を**保存し�
 
 | HTTP | 意味 | 端末の挙動 |
 |---|---|---|
-| 401 | トークン無効・失効 | ライセンス再検証。オフライン猶予（FR-BIL-09）中はローカルレーンに落ちる |
+| 400 | 本文が JSON でない・スキーマ違反・上限超過（下表） | バグ。台帳に記録し、リトライしない |
+| 401 | トークン無効・失効・公開鍵未設定 | ライセンス再検証。オフライン猶予（FR-BIL-09）中はローカルレーンに落ちる |
 | 402 | プラン外 | ローカルレーンで継続（機能は止めない） |
-| 429 | 当月/当日の上限到達 | 当夜はローカルレーンに落とし、インジケータはamber |
-| 5xx | 中継/上流の障害 | サイクル失敗として台帳に記録。翌晩に持ち越す（FR-DC-05） |
+| 404 | 不明なバッチID **または他ライセンスのバッチ** | 取得を諦める。両者を区別しない（§4.1 所有権チェック） |
+| 413 | 本文が 8 MiB 超 | チャンクを分割して再送 |
+| 429 | 当日の上限到達 **またはレート制限** | 当夜はローカルレーンに落とし、インジケータはamber |
+| 503 | 計上台帳が読めず上限を強制できない | 一時障害として扱い、翌晩に持ち越す |
+| 5xx | 中継/上流の障害（上流本文は返さない。502 + 固定文字列） | サイクル失敗として台帳に記録。翌晩に持ち越す（FR-DC-05） |
 
 **いずれの場合もローカル機能（キャプチャ・検索・Fusion提示）は無影響**（FR-DC-05）。
+
+#### 入力上限（`apps/api/src/types.ts` / `app.ts`）
+
+| 項目 | 上限 |
+|---|---|
+| 本文全体 | 8 MiB（ハンドラ到達前に `bodyLimit` で 413。無制限の `c.req.json()` は1リクエストOOM） |
+| `items` 数 | 1,000 |
+| `chunk` 1件 | 256 KiB |
+| `custom_id` | 256 バイト |
+
+#### 上限の強制は reserve-then-commit
+
+日次チャンク上限は**上流呼び出しの前に予約し、失敗したら解放する**。read-then-write だと
+N 本の同時投入がすべて同じ `used` を読んで全部通る。`JsonFileUsageStore` は read-modify-write を
+1本のキューに直列化し、台帳が壊れて読めない場合は「0扱いで通す」のではなく `unavailable` →
+503 を返す（**上限を強制できないなら使わせない側に倒す**）。
+回帰テストは「上限10に対して同時50投入 → ちょうど10だけ 202」（`apps/api/test/hardening.test.ts`）。
 
 ## 5. 端末側の実装差分
 
