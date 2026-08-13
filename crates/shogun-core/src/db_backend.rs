@@ -20,6 +20,11 @@ const SEARCH_LIMIT: usize = 20;
 const FRAME_SEARCH_LIMIT: usize = 20;
 /// OCR excerpt length for frame search / status previews.
 const FRAME_EXCERPT_CHARS: usize = 200;
+/// Evidence cap for `memory.get_context_pack` (FR-API-08) — matches the chat path's scale so the
+/// pack an external AI receives is the same grounded slice the in-app chat reads.
+const PACK_HITS: usize = 10;
+/// Per-evidence excerpt cap for the pack, so one huge window capture cannot eat the whole pack.
+const PACK_EXCERPT_CHARS: usize = 300;
 /// Confidence assigned to a captured event in search results: events are ground truth, not inferred
 /// state, so they always pass the confidence gate (they are not "possibly").
 const EVENT_CONFIDENCE: f64 = 1.0;
@@ -254,6 +259,39 @@ impl MemoryBackend for DbBackend {
                 .collect(),
             // `get_context` isn't a persisted read (the cache is RAM-only, AR-10) — empty here.
             Tool::MemoryGetContext => Vec::new(),
+
+            // FR-API-08: the grounded context pack for one task/question — the same
+            // `Db::assemble_context` the in-app chat uses (invariant 6), flattened to labeled
+            // rows. Facts are already confidence-gated by `inline_memory` (medium carries its
+            // `possibly:` prefix), and evidence rows are ground-truth events, so both pass the
+            // API gate at event confidence; each evidence line carries its provenance inline
+            // (event id, source, timestamp).
+            //
+            // `pack.screen_frames` is deliberately NOT flattened in here. Those are stored JPEGs
+            // (the invariant-2 exception), and reaching them is its own separately-gated tool —
+            // `visual_recall.get_frame`, which answers to Visual recall's on/off state. Handing
+            // an API caller frame ids as part of a text pack would route around that switch.
+            Tool::MemoryGetContextPack => {
+                let query = params.query.as_deref().unwrap_or("");
+                if query.is_empty() {
+                    return Vec::new();
+                }
+                let pack = self.db.assemble_context(query, PACK_HITS, PACK_EXCERPT_CHARS);
+                pack.facts
+                    .into_iter()
+                    .map(|f| ReadItem::new(format!("fact: {f}"), EVENT_CONFIDENCE))
+                    .chain(pack.evidence.into_iter().map(|e| {
+                        let title = e.title.as_deref().unwrap_or("-");
+                        ReadItem::new(
+                            format!(
+                                "evidence event:{} source:{} ts:{} title:{} :: {}",
+                                e.event_id, e.source, e.ts, title, e.excerpt
+                            ),
+                            EVENT_CONFIDENCE,
+                        )
+                    }))
+                    .collect()
+            }
 
             Tool::StatePeopleList => {
                 self.db.people().into_iter().map(|p| ReadItem::new(p.display_name, p.confidence)).collect()
@@ -513,6 +551,63 @@ mod tests {
         assert_eq!(hits[0].confidence, EVENT_CONFIDENCE); // events always pass the gate
         // empty query → no search
         assert!(backend.read(Tool::MemorySearch, &params()).is_empty());
+    }
+
+    #[test]
+    fn context_pack_returns_facts_and_cited_evidence() {
+        // seed: one commitment (fact supply) + one captured event matching the query (evidence).
+        let db = Db::open_in_memory(Arc::new(|| 100)).unwrap();
+        let (e, _) = db
+            .capture(&shogun_memory::event_log::NewEvent {
+                ts: 1,
+                source: "gmail",
+                kind: "message",
+                app_bundle_id: None,
+                window_title: Some("Vendor renewal"),
+                content: "the vendor renewal was settled at 12k for the year",
+                content_hash: "h1",
+                dwell_ms: 0,
+                display_id: None,
+                window_bounds: None,
+            })
+            .unwrap();
+        db.insert_commitment(
+            &NewCommitment {
+                direction: CommitmentDirection::Mine,
+                counterparty_id: None,
+                description: "confirm the vendor contract",
+                due_at: Some(50),
+                status: CommitmentStatus::Open,
+                project_id: None,
+                confidence: 0.9,
+                now: 1,
+            },
+            &[Provenance::new(e)],
+        )
+        .unwrap();
+        let backend = DbBackend::new(db);
+
+        let items = backend.read(
+            Tool::MemoryGetContextPack,
+            &ReadParams {
+                id: None,
+                query: Some("vendor renewal".into()),
+                from_ms: None,
+                to_ms: None,
+            },
+        );
+        // a fact line and an evidence line, the latter citing its event id + source (provenance).
+        assert!(items.iter().any(|i| i.label.starts_with("fact: ")), "items: {items:?}");
+        let evidence = items
+            .iter()
+            .find(|i| i.label.starts_with("evidence "))
+            .unwrap_or_else(|| panic!("no evidence line: {items:?}"));
+        assert!(evidence.label.contains(&format!("event:{e}")));
+        assert!(evidence.label.contains("source:gmail"));
+        assert!(evidence.label.contains("12k"));
+
+        // no query → empty (the pack is per-question; there is no "pack of everything").
+        assert!(backend.read(Tool::MemoryGetContextPack, &params()).is_empty());
     }
 
     #[test]

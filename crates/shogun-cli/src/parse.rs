@@ -110,6 +110,10 @@ fn parse_command(positionals: &[String], no_screen: bool) -> Result<Command, Cli
             Ok(Command::Search { query })
         }
         "context" => Ok(Command::Context { include_screen: !no_screen }),
+        "pack" => {
+            let query = join(rest).ok_or(CliError::MissingArgument("<query>"))?;
+            Ok(Command::Pack { query })
+        }
         "people" => Ok(Command::People(parse_list_or_get("people", rest)?)),
         "projects" => Ok(Command::Projects(parse_list_or_get("projects", rest)?)),
         "commitments" => Ok(Command::Commitments(parse_list_or_get("commitments", rest)?)),

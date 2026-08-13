@@ -16,6 +16,7 @@ use shogun_fusion::confidence::{band, Band};
 pub enum Tool {
     MemorySearch,
     MemoryGetContext,
+    MemoryGetContextPack,
     StatePeopleList,
     StatePeopleGet,
     StateProjectsList,
@@ -47,6 +48,7 @@ pub enum Tool {
 pub const ALL_TOOLS: &[Tool] = &[
     Tool::MemorySearch,
     Tool::MemoryGetContext,
+    Tool::MemoryGetContextPack,
     Tool::StatePeopleList,
     Tool::StatePeopleGet,
     Tool::StateProjectsList,
@@ -75,6 +77,7 @@ impl Tool {
         match self {
             Tool::MemorySearch => "memory.search",
             Tool::MemoryGetContext => "memory.get_context",
+            Tool::MemoryGetContextPack => "memory.get_context_pack",
             Tool::StatePeopleList => "state.people.list",
             Tool::StatePeopleGet => "state.people.get",
             Tool::StateProjectsList => "state.projects.list",
@@ -120,6 +123,7 @@ pub fn tool_level(tool: Tool) -> ApiLevel {
     match tool {
         Tool::MemorySearch
         | Tool::MemoryGetContext
+        | Tool::MemoryGetContextPack
         | Tool::StatePeopleList
         | Tool::StatePeopleGet
         | Tool::StateProjectsList
@@ -266,7 +270,7 @@ mod tests {
         for &t in ALL_TOOLS {
             let _ = tool_level(t); // exhaustive match means this cannot be undefined
         }
-        assert_eq!(ALL_TOOLS.len(), 22);
+        assert_eq!(ALL_TOOLS.len(), 23);
     }
 
     #[test]
@@ -290,6 +294,7 @@ mod tests {
                     t,
                     Tool::MemorySearch
                         | Tool::MemoryGetContext
+                        | Tool::MemoryGetContextPack
                         | Tool::StatePeopleList
                         | Tool::StatePeopleGet
                         | Tool::StateProjectsList

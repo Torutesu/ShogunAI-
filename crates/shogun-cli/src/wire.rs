@@ -47,6 +47,7 @@ pub fn to_call(command: &Command, include_low: bool) -> Option<HttpCall> {
     Some(match command {
         Command::Search { query } => get(low(format!("/v1/memory/search?q={}", encode(query)))),
         Command::Context { .. } => get(low("/v1/memory/context".to_string())),
+        Command::Pack { query } => get(low(format!("/v1/memory/context_pack?q={}", encode(query)))),
         Command::People(w) => get(low(state_path("people", w))),
         Command::Projects(w) => get(low(state_path("projects", w))),
         Command::Commitments(w) => get(low(state_path("commitments", w))),
