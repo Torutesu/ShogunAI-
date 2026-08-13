@@ -22,12 +22,27 @@ function currentLabel(): string {
   }
 }
 
+/** The appearance the user picked, persisted by the notch panel. Same Tauri origin, so the
+ *  overlays read the value the panel wrote. Without this the overlay windows fell through to the
+ *  bare `:root` bootstrap — i.e. permanently dark, while the rest of the app followed Light. */
+function loadAppearance(): "auto" | "light" | "dark" {
+  try {
+    const v = JSON.parse(localStorage.getItem("shogun.appearance") ?? '"auto"');
+    return v === "light" || v === "dark" ? v : "auto";
+  } catch {
+    return "auto";
+  }
+}
+
 const root = document.getElementById("root");
 if (root) {
   const label = currentLabel();
   const meeting = label === "meeting";
   const voice = label === "voice";
   document.documentElement.setAttribute("data-window", meeting ? "meeting" : voice ? "voice" : "main");
+  // App sets this for the notch panel itself; the overlays get their own windows and must set it
+  // too, or they render dark on a Light setup.
+  if (meeting || voice) document.documentElement.dataset.appearance = loadAppearance();
   // Say which root was chosen. A blank overlay and a missing overlay look identical on screen;
   // in the log they do not.
   // Reported to Rust, not just the webview console: a blank overlay and a missing overlay look

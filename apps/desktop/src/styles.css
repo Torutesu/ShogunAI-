@@ -2017,10 +2017,13 @@ kbd {
   flex-direction: column;
   padding: 0;
   height: 100%;
-  background: rgba(18, 18, 20, 0.72);
+  /* Tokenised like every other surface: it used to hardcode its own dark glass, which meant it
+     kept the old thin tint when the panel's glass was made denser, and stayed dark on a Light
+     setup. */
+  background: var(--glass);
   -webkit-backdrop-filter: blur(40px) saturate(1.4);
   backdrop-filter: blur(40px) saturate(1.4);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border: 1px solid var(--line);
   border-radius: 20px;
   overflow: hidden;
 }
@@ -2037,7 +2040,7 @@ kbd {
   gap: 10px;
   flex-wrap: wrap;
   padding-bottom: 10px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  border-bottom: 1px solid var(--line);
   -webkit-app-region: drag;
   app-region: drag;
   cursor: grab;
@@ -2067,8 +2070,8 @@ kbd {
   font-size: var(--fs-xs);
   font-weight: 500;
   color: var(--ink);
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: var(--fill);
+  border: 1px solid var(--line-strong);
   border-radius: var(--r-pill);
   padding: 6px 12px;
   cursor: pointer;
@@ -2090,8 +2093,8 @@ kbd {
   z-index: 20;
   min-width: 180px;
   padding: 6px;
-  background: rgba(12, 12, 14, 0.94);
-  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: var(--glass-2);
+  border: 1px solid var(--line-strong);
   border-radius: 14px;
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
 }
@@ -2111,11 +2114,11 @@ kbd {
 }
 .ov__modeopt:hover,
 .ov__langopt:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--fill);
 }
 .ov__modeopt.is-on,
 .ov__langopt.is-on {
-  background: rgba(255, 255, 255, 0.12);
+  background: var(--fill-strong);
 }
 .ov__langbtn {
   font: inherit;
@@ -2123,7 +2126,7 @@ kbd {
   color: var(--ink);
   background: none;
   border: none;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.35);
+  border-bottom: 1px solid var(--line-strong);
   padding: 2px 2px 3px;
   cursor: pointer;
   white-space: nowrap;
@@ -2161,7 +2164,7 @@ kbd {
   opacity: 0.85;
 }
 .ov__iconbtn:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--fill);
   opacity: 1;
 }
 .ov__icon {
@@ -2223,7 +2226,7 @@ kbd {
   align-items: center;
   gap: 10px;
   padding-top: 10px;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  border-top: 1px solid var(--line);
   flex: none;
   -webkit-app-region: drag;
   app-region: drag;
@@ -2326,7 +2329,7 @@ kbd {
 .ov__minutes {
   margin-top: 12px;
   padding-top: 12px;
-  border-top: 1px solid var(--hairline, rgba(128, 128, 128, 0.2));
+  border-top: 1px solid var(--line);
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -2346,17 +2349,17 @@ kbd {
 .ov__mdegraded {
   padding: 8px 10px;
   border-radius: 8px;
-  background: rgba(128, 128, 128, 0.1);
+  background: var(--fill);
 }
 .ov__mdegraded--warn {
   color: var(--warn, #c9a227);
-  background: rgba(201, 162, 39, 0.12);
-  border: 1px solid rgba(201, 162, 39, 0.35);
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warn) 38%, transparent);
 }
 .ov__notes {
   margin-top: 12px;
   padding-top: 12px;
-  border-top: 1px solid var(--hairline, rgba(128, 128, 128, 0.2));
+  border-top: 1px solid var(--line);
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -2364,7 +2367,7 @@ kbd {
 .ov__tsec {
   margin-top: 12px;
   padding-top: 12px;
-  border-top: 1px solid var(--hairline, rgba(128, 128, 128, 0.2));
+  border-top: 1px solid var(--line);
   display: flex;
   flex-direction: column;
   gap: 8px;
