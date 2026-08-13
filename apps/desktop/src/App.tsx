@@ -31,7 +31,7 @@ function beginPillDrag(e: React.MouseEvent): void {
   if (!IN_TAURI || e.button !== 0) return;
   void invoke("start_panel_drag").catch((err) => uiLog(`start_panel_drag failed: ${err}`));
 }
-import { t } from "./strings";
+import { t, tf } from "./strings";
 import { AnalyticsToggle } from "./AnalyticsToggle";
 import { ConnectionsList } from "./connections";
 import { DEFAULT_BINDS } from "./keys";
@@ -44,6 +44,15 @@ import {
   IconPinOff,
   IconSettings,
 } from "./utilityIcons";
+import {
+  Activity as HubActivity,
+  Memory as HubMemory,
+  Sources as HubSources,
+  Today as HubToday,
+  Trace as HubTrace,
+} from "./fullui/FullUi";
+import { SAMPLE_VIEW } from "./fullui/sample";
+import type { FullUiView } from "./fullui/types";
 
 // SHOGUN panel. A visible, interactive window that hangs from the notch. Opening/closing is driven
 // by direct clicks in the webview (reliable — no dependency on the CGEventTap hover path or a global
@@ -202,6 +211,8 @@ const STICKY_INLINE_PHASES = new Set<InlineStatus["phase"]>(["no_key", "key_reje
  *  would only ever punish that path. Waiting is no longer the only option anyway: Stop is live for
  *  the whole turn. */
 const CHAT_SILENCE_MS = 90_000;
+const H_SETTINGS = 460; // taller default so setting groups fit; body scrolls; clamped to screen
+const H_HUB = 560; // the in-panel hub draws the overview panes (cards, tables); give them room
 const MIN_W = 460;
 const MIN_H = 240;
 // Collapsed floor + hard cap = hardware/pseudo notch width (~180). Wider Idle chrome (260–280)
@@ -424,6 +435,9 @@ export function App(): JSX.Element {
   const [showSettings, setShowSettings] = useState(false);
   /** Idle chin: reading/app/due vs quiet welded hide. Persisted in app data (Rust). */
   const [showStatusInNotch, setShowStatusInNotch] = useState(true);
+  /// The in-panel hub (Today / Health / Sources / Memory / Activity / Trace). Everything routine
+  /// finishes inside the notch — only meetings and Visual Recall get their own surfaces.
+  const [showHub, setShowHub] = useState(false);
   const [voiceToast, setVoiceToast] = useState<string | null>(null);
   const [voice, setVoice] = useState<VoiceView>({
     phase: "idle",
@@ -443,20 +457,34 @@ export function App(): JSX.Element {
     const s = loadJson<Size>("shogun.size.chat", { w: W, h: H_OPEN });
     return clampSize(s.w, s.h);
   });
+  const [setSize, setSetSize] = useState<Size>(() => {
+    const s = loadJson<Size>("shogun.size.settings", { w: W, h: H_SETTINGS });
+    return clampSize(s.w, s.h);
+  });
+  const [hubSize, setHubSize] = useState<Size>(() => {
+    const s = loadJson<Size>("shogun.size.hub", { w: W, h: H_HUB });
+    return clampSize(s.w, s.h);
+  });
   useEffect(() => saveJson("shogun.pinned", pinned), [pinned]);
   useEffect(() => saveJson("shogun.size.chat", chatSize), [chatSize]);
+  useEffect(() => saveJson("shogun.size.settings", setSize), [setSize]);
+  useEffect(() => saveJson("shogun.size.hub", hubSize), [hubSize]);
 
   // Size the window to match collapsed vs expanded. Pass explicit `open` when a state setter in the
   // same handler hasn't committed yet (React batches updates). Settings enter/exit does not resize.
   const sizeForView = useCallback(
-    (opts?: { open?: boolean }): void => {
+    (opts?: { open?: boolean; settings?: boolean; hub?: boolean }): void => {
       const isOpen = opts?.open ?? open;
+      const isSettings = opts?.settings ?? showSettings;
+      const isHub = opts?.hub ?? showHub;
       // Collapsed: a provisional pill-sized window; the measuring effect below tightens it to the
       // pill's real bounds so the transparent remainder never eats clicks.
       if (!isOpen) void applyPanelSize(W_HANDLE_FALLBACK, H_HANDLE);
+      else if (isSettings) void applyPanelSize(setSize.w, setSize.h);
+      else if (isHub) void applyPanelSize(hubSize.w, hubSize.h);
       else void applyPanelSize(chatSize.w, chatSize.h);
     },
-    [open, chatSize],
+    [open, showSettings, showHub, chatSize, setSize, hubSize],
   );
   // The boot/summon listeners live in a run-once effect; a ref keeps them calling the LATEST sizer
   // instead of a stale closure captured at mount.
@@ -489,8 +517,10 @@ export function App(): JSX.Element {
     liveSize.current = null;
     if (!s) return;
     void applyPanelSize(s.w, s.h, "center");
-    setChatSize(s);
-  }, []);
+    if (showSettings) setSetSize(s);
+    else if (showHub) setHubSize(s);
+    else setChatSize(s);
+  }, [showSettings, showHub]);
   // Active agent provider, shown on the composer's model pill (mirrors Settings → Model).
   const [provider, setProvider] = useState<string>("anthropic");
   const threadRef = useRef<HTMLDivElement>(null);
@@ -862,6 +892,7 @@ export function App(): JSX.Element {
 
   const collapse = (): void => {
     setShowSettings(false);
+    setShowHub(false);
     beginCollapse();
   };
   const expand = useCallback((): void => {
@@ -909,9 +940,17 @@ export function App(): JSX.Element {
   );
   const openSettings = (): void => {
     setShowSettings(true);
+    setShowHub(false);
+    sizeForView({ open: true, settings: true, hub: false });
   };
   const closeSettings = (): void => {
     setShowSettings(false);
+  };
+  const toggleHub = (): void => {
+    const next = !showHub;
+    setShowHub(next);
+    setShowSettings(false);
+    sizeForView({ open: true, settings: false, hub: next });
   };
 
   // ---- streamed chat turn ------------------------------------------------------------------
@@ -1228,15 +1267,6 @@ export function App(): JSX.Element {
               {t.reading} <b>{live}</b>
             </span>
           )}
-          {state.commitments.length > 0 ? (
-            <span className="handle__count">
-              {state.commitments.length} {t.due}
-            </span>
-          ) : state.open_loops.length > 0 ? (
-            <span className="handle__count">
-              {state.open_loops.length} {t.waiting}
-            </span>
-          ) : null}
         </span>
       )}
     </button>
@@ -1309,9 +1339,26 @@ export function App(): JSX.Element {
                     {t.reading} <b>{live}</b>
                   </span>
                 ) : null}
+                {/* Raw counts ("4000 due") read as alarm-noise once real data lands, so the
+                    tracked-items list opens from a quiet icon instead of a number badge. */}
                 {totalState > 0 ? (
-                  <button className="chip" type="button" onClick={() => setShowState((v) => !v)} aria-pressed={showState}>
-                    {state.commitments.length} {t.due} · {state.open_loops.length} {t.waiting}
+                  <button
+                    className={`icon${showState ? " icon--on" : ""}`}
+                    type="button"
+                    title={t.stateList}
+                    aria-label={t.stateList}
+                    aria-pressed={showState}
+                    onClick={() => setShowState((v) => !v)}
+                  >
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                         stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M4 5.5l1.5 1.5L8 4.5" />
+                      <path d="M11 6h9" />
+                      <path d="M4 12l1.5 1.5L8 11" />
+                      <path d="M11 12.5h9" />
+                      <path d="M4 18.5l1.5 1.5L8 17.5" />
+                      <path d="M11 19h9" />
+                    </svg>
                   </button>
                 ) : null}
               </div>
@@ -1352,18 +1399,24 @@ export function App(): JSX.Element {
                 >
                   ⌕
                 </button>
-                {/* The panel is for a glance and a keystroke; anything you want to sit and read —
-                    the brief, health, memory, the run log — lives in the Full UI window. */}
+                {/* The brief, health, memory and run log open HERE, as the in-panel hub — the
+                    notch is where things finish; a separate window would defeat that. Only
+                    meetings and Visual Recall keep their own surfaces. */}
                 <button
-                  className="icon"
+                  className={`icon${showHub ? " icon--on" : ""}`}
                   type="button"
-                  title={t.openFullUi}
-                  aria-label={t.openFullUi}
-                  onClick={() => {
-                    if (IN_TAURI) void invoke("open_full_ui").catch((err) => uiLog(`open_full_ui failed: ${err}`));
-                  }}
+                  title={t.overview}
+                  aria-label={t.overview}
+                  aria-pressed={showHub}
+                  onClick={toggleHub}
                 >
-                  <IconMaximize2 />
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                       stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="4" y="4" width="7" height="7" rx="1.5" />
+                    <rect x="13" y="4" width="7" height="7" rx="1.5" />
+                    <rect x="4" y="13" width="7" height="7" rx="1.5" />
+                    <rect x="13" y="13" width="7" height="7" rx="1.5" />
+                  </svg>
                 </button>
                 <button className="icon" type="button" title={t.settings} aria-label={t.settings} onClick={openSettings}>
                   <IconSettings />
@@ -1417,6 +1470,10 @@ export function App(): JSX.Element {
 
             {showSearch ? <SearchBox onClose={() => setShowSearch(false)} /> : null}
 
+            {showHub ? (
+              <Hub />
+            ) : (
+              <>
             <div className="thread" ref={threadRef}>
               {visibleMsgs.length === 0 ? (
                 <div className="welcome">
@@ -1529,11 +1586,13 @@ export function App(): JSX.Element {
                 </div>
               </div>
             </div>
+              </>
+            )}
           </>
         )}
         </div>
         <ResizeGrip
-          current={() => chatSize}
+          current={() => (showSettings ? setSize : showHub ? hubSize : chatSize)}
           onResize={onResizeLive}
           onCommit={onResizeCommit}
         />
@@ -1775,6 +1834,137 @@ function SearchBox({ onClose }: { onClose: () => void }): JSX.Element {
       ) : (
         <div className="search__hintline">{t.searchHint}</div>
       )}
+    </div>
+  );
+}
+
+/** In-panel hub: the overview panes (Today / Health / Sources / Memory / Activity / Trace) drawn
+ *  inside the notch panel. Same Rust-assembled `full_ui_view` snapshot, same presentation-only
+ *  rule (CLAUDE.md invariant 1) — only the chrome differs: a tab strip instead of a sidebar, at
+ *  overlay density. Everything routine finishes in the notch; meetings and Visual Recall are the
+ *  deliberate exceptions with their own surfaces. */
+/// Hub tabs run in attention order; Context Health and Traceability are audit surfaces you visit
+/// rarely, so they fold into one "System" tab at the far right instead of two up front
+/// (2026-08-09). The Full UI window keeps them as separate panes.
+type HubPane = "today" | "sources" | "memory" | "activity" | "system";
+const HUB_TABS: { id: HubPane; label: string }[] = [
+  { id: "today", label: tf.navToday },
+  { id: "sources", label: tf.navSources },
+  { id: "memory", label: tf.navMemory },
+  { id: "activity", label: tf.navActivity },
+  { id: "system", label: tf.navSystem },
+];
+
+/** Context Health + Traceability, folded into one compact pane: the big-window card grid becomes
+ *  dense label/value rows with the fix inline, the SLO table an inline strip, and the trace table
+ *  sits directly below — presentation-only over the same Rust-assembled view. */
+function HubSystem({ v, onNav }: { v: FullUiView; onNav: (p: HubPane) => void }): JSX.Element {
+  const h = v.health;
+  return (
+    <>
+      <div className="fcard">
+        <div className="fcard__label">{tf.navHealth}</div>
+        <div className="sysgrid">
+          {h.cards.map((c) => (
+            <div className="sysrow" key={c.key}>
+              <span className="sysrow__k">{c.label}</span>
+              <span className="sysrow__v">
+                {c.value}
+                {c.detail ? <span className="sysrow__d"> · {c.detail}</span> : null}
+              </span>
+              {c.fix ? (
+                c.fix.target === "sources" ? (
+                  <button type="button" className="sysrow__fix" onClick={() => onNav("sources")}>
+                    {c.fix.label} →
+                  </button>
+                ) : (
+                  // Settings lives behind ⚙︎ and the trace table is right below — a pointer, not
+                  // a button that would go nowhere.
+                  <span className="sysrow__fix sysrow__fix--quiet">{c.fix.label}</span>
+                )
+              ) : null}
+            </div>
+          ))}
+          {h.mix ? (
+            <div className="sysrow">
+              <span className="sysrow__k">{tf.confidenceMix}</span>
+              <span className="sysrow__v sysrow__d">
+                {tf.high} {h.mix.high_pct}% · {tf.medium} {h.mix.medium_pct}% · {tf.low} {h.mix.low_pct}%
+              </span>
+            </div>
+          ) : null}
+        </div>
+        {h.slo.length > 0 ? (
+          <div className="sysslo">
+            {h.slo.map((s) => (
+              <span className="sysslo__item" key={s.name}>
+                {s.name}{" "}
+                {s.p50 == null ? (
+                  <span className="sysslo__t">—</span>
+                ) : (
+                  <b className={s.within_target ? "" : "is-warn"}>{s.p50}</b>
+                )}
+                <span className="sysslo__t">/{s.target}</span>
+              </span>
+            ))}
+          </div>
+        ) : null}
+      </div>
+      <HubTrace v={v.trace} />
+    </>
+  );
+}
+
+function Hub(): JSX.Element {
+  const [view, setView] = useState<FullUiView | null>(null);
+  const [failed, setFailed] = useState<string | null>(null);
+  const [pane, setPane] = useState<HubPane>("today");
+
+  // A one-shot snapshot per open, like the old window took per launch — the hub unmounts when
+  // you leave it, so reopening refetches.
+  useEffect(() => {
+    if (!IN_TAURI) {
+      setView(SAMPLE_VIEW);
+      return;
+    }
+    invoke<FullUiView>("full_ui_view")
+      .then(setView)
+      .catch((e) => setFailed(String(e)));
+  }, []);
+
+  return (
+    <div className="hub">
+      <div className="hub__tabs" role="tablist">
+        {HUB_TABS.map((n) => (
+          <button
+            key={n.id}
+            type="button"
+            role="tab"
+            className={`hub__tab${pane === n.id ? " is-on" : ""}`}
+            aria-selected={pane === n.id}
+            onClick={() => setPane(n.id)}
+          >
+            {n.label}
+          </button>
+        ))}
+      </div>
+      <div className="hub__body">
+        {/* Say what went wrong rather than falling back to fixture data — a pane quietly showing
+            invented numbers is the one failure mode this surface must not have. */}
+        {failed ? (
+          <div className="fempty">
+            {t.hubFailed} — {failed}
+          </div>
+        ) : !view ? null : (
+          <>
+            {pane === "today" && <HubToday v={view.today} />}
+            {pane === "sources" && <HubSources v={view.sources} />}
+            {pane === "memory" && <HubMemory v={view.memory} />}
+            {pane === "activity" && <HubActivity v={view.activity} />}
+            {pane === "system" && <HubSystem v={view} onNav={setPane} />}
+          </>
+        )}
+      </div>
     </div>
   );
 }
@@ -3614,10 +3804,15 @@ function delegateStateLine(state: DelegateInfo["state"]): string {
   }
 }
 const SHORTCUT_ROWS: Array<{ action: string; label: string }> = [
+  { action: "draft", label: t.draftShortcut },
+  { action: "recall", label: t.recallShortcut },
   { action: "summon", label: t.summonShortcut },
   { action: "voice", label: t.voiceShortcut },
   { action: "quit", label: t.quitShortcut },
 ];
+/** Actions whose trigger may be a bare-modifier gesture (a solo tap or a left+right pair) rather
+ *  than a key chord. Matches the Rust side's special-combo handling. */
+const GESTURE_ACTIONS = new Set(["draft", "recall"]);
 
 
 /** Privacy & Security (issue #28). One place for the LLM key, the data-use policy, and data
@@ -4087,29 +4282,27 @@ function Settings(props: {
   // Capture the new combo at the WINDOW level (capture phase). Relying on the recording button's
   // own focus proved fragile on device — clicks landed but keystrokes never did, so rebinding
   // looked broken. A window listener catches keys no matter where focus sits inside the panel.
+  //
+  // Draft and Visual recall additionally accept bare-modifier gestures: a solo modifier tap
+  // (press and release one modifier with nothing else) records "Tap+X", and pressing the left
+  // and right side of the same modifier together records "Dual+X" — matching how they trigger.
   useEffect(() => {
     if (!recording) return;
     const action = recording;
-    const onKey = (e: KeyboardEvent): void => {
-      e.preventDefault();
-      e.stopPropagation();
-      if (e.key === "Escape") {
-        setRecording(null);
-        setKeyErr("");
-        return;
-      }
-      if (["Control", "Alt", "Shift", "Meta"].includes(e.key)) return; // modifier alone: keep waiting
-      const mods = [
-        e.ctrlKey && "Control",
-        e.altKey && "Alt",
-        e.shiftKey && "Shift",
-        e.metaKey && "Super",
-      ].filter(Boolean) as string[];
-      if (mods.length === 0) {
-        setKeyErr(t.needModifier);
-        return;
-      }
-      const combo = [...mods, e.code].join("+");
+    const gestures = GESTURE_ACTIONS.has(action);
+    /// Physical modifier codes currently held (e.g. "MetaLeft"). `solo` is the tap candidate: the
+    /// one modifier that went down alone; any other input clears it. `dirty` marks that a
+    /// non-modifier key joined this hold, killing both gestures until everything is released.
+    const down = new Set<string>();
+    let solo: string | null = null;
+    let dirty = false;
+    const modOf = (code: string): string | null =>
+      code.startsWith("Control") ? "Control"
+      : code.startsWith("Alt") ? "Alt"
+      : code.startsWith("Shift") ? "Shift"
+      : code.startsWith("Meta") ? "Super"
+      : null;
+    const commit = (combo: string): void => {
       setRecording(null);
       setKeyErr("");
       if (!IN_TAURI) {
@@ -4120,8 +4313,61 @@ function Settings(props: {
         .then(refresh)
         .catch((err) => setKeyErr(String(err)));
     };
+    const onKey = (e: KeyboardEvent): void => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.key === "Escape") {
+        setRecording(null);
+        setKeyErr("");
+        return;
+      }
+      const mod = modOf(e.code);
+      if (["Control", "Alt", "Shift", "Meta"].includes(e.key) || mod) {
+        if (!mod) return;
+        down.add(e.code);
+        if (gestures) {
+          const base = e.code.replace(/(Left|Right)$/, "");
+          if (down.has(base + "Left") && down.has(base + "Right")) {
+            commit("Dual+" + mod);
+            return;
+          }
+          solo = down.size === 1 && !dirty ? e.code : null;
+        }
+        return; // modifier alone: keep waiting for the rest of the chord (or a tap release)
+      }
+      dirty = true;
+      solo = null;
+      const mods = [
+        e.ctrlKey && "Control",
+        e.altKey && "Alt",
+        e.shiftKey && "Shift",
+        e.metaKey && "Super",
+      ].filter(Boolean) as string[];
+      if (mods.length === 0) {
+        setKeyErr(t.needModifier);
+        return;
+      }
+      commit([...mods, e.code].join("+"));
+    };
+    const onUp = (e: KeyboardEvent): void => {
+      const mod = modOf(e.code);
+      if (!mod) return;
+      if (gestures && solo === e.code && !dirty && down.size === 1) {
+        commit("Tap+" + mod);
+        return;
+      }
+      down.delete(e.code);
+      if (down.size === 0) {
+        solo = null;
+        dirty = false;
+      }
+    };
     window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
+    window.addEventListener("keyup", onUp, true);
+    return () => {
+      window.removeEventListener("keydown", onKey, true);
+      window.removeEventListener("keyup", onUp, true);
+    };
   }, [recording, refresh]);
 
   return (
@@ -4177,14 +4423,6 @@ function Settings(props: {
         <CastlePositionSection />
         <section className="set">
           <div className="set__label">{t.shortcuts}</div>
-          {/* Draft is a fixed ⌥-tap trigger (a bare modifier can't be a global shortcut), shown
-              here so it's discoverable but not presented as rebindable. */}
-          <div className="keys">
-            <span className="keys__name">{t.draftShortcut}</span>
-            <span className="keys__combo keys__combo--fixed" title={t.draftFixedHint}>
-              ⌥
-            </span>
-          </div>
           {SHORTCUT_ROWS.map(({ action, label }) => (
             <div key={action} className="keys">
               <span className="keys__name">{label}</span>

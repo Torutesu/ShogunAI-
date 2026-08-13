@@ -46,6 +46,8 @@ mod net_lane;
 mod notch_actions;
 mod notch_exec;
 mod onboarding;
+#[cfg(target_os = "macos")]
+mod recall_shortcut;
 mod search_ui;
 /// UI cue playback and the silence rules around it (#49, docs/sound-design.md).
 #[cfg(target_os = "macos")]
@@ -621,6 +623,10 @@ fn setup_macos(app: &tauri::App) {
 
     voice_session::mac::init(app.handle());
     voice_shortcut::install(app.handle());
+    // Visual recall summon: left+right of one modifier together (default ⌘⌘). Rebindable via
+    // the "recall" binding; bare-modifier gestures can't go through the global-shortcut plugin,
+    // so the monitor reads the binding live.
+    recall_shortcut::install(app.handle());
 
     // Cue playback (#49). Before the DB branch below: the one cue that can fire during setup is
     // the capture-stopped failure, and it needs the players already loaded.
@@ -1826,12 +1832,33 @@ pub(crate) fn float_on_all_spaces(win: &tauri::WebviewWindow) {
     }
 }
 
-/// TAP ⌥ (Option) alone → draft at the cursor. Semantics of a "tap": Option goes down with no
-/// other modifier, no other key is pressed while it is held, and it is released within 500ms.
-/// That keeps every normal Option use intact — ⌥J summon, ⌥-arrow word nav, ⌥+letter special
-/// characters — because any keyDown while Option is held disarms the tap. Uses NSEvent GLOBAL
-/// monitors (Accessibility permission, already required for capture); global monitors only see
-/// other apps' events, which is exactly the draft target (the focused field over there).
+/// Run the inline draft at the cursor — the ⌥-tap's action, also dispatched when "draft" is
+/// rebound to a normal chord through the global-shortcut plugin.
+#[cfg(target_os = "macos")]
+pub(crate) fn run_inline_draft(handle: &tauri::AppHandle) {
+    use tauri::Manager;
+    if let Some(db) = handle.try_state::<shogun_core::daemon::Db>() {
+        // The draft trigger is the fastest path in the product: read the pack the focus path
+        // already built rather than assembling anything now.
+        let warm = handle
+            .try_state::<shogun_core::daemon::ReplyContextCache>()
+            .and_then(|c| c.current());
+        let directives = handle
+            .try_state::<user_config_watch::UserConfigState>()
+            .map(|s| s.directives())
+            .unwrap_or_default();
+        inline_source::mac::run_inline_at_cursor(db.inner().clone(), warm, handle.clone(), directives);
+    }
+}
+
+/// TAP one modifier alone → draft at the cursor (default ⌥; the "draft" binding's "Tap+X" combo
+/// picks the modifier, read live so a rebind applies without reinstalling). Semantics of a "tap":
+/// the modifier goes down with no other modifier, no other key is pressed while it is held, and
+/// it is released within 500ms. That keeps every normal modifier use intact — ⌥-arrow word nav,
+/// ⌥+letter special characters — because any keyDown during the hold disarms the tap. Uses
+/// NSEvent GLOBAL monitors (Accessibility permission, already required for capture); global
+/// monitors only see other apps' events, which is exactly the draft target (the focused field
+/// over there). Inert while "draft" is bound to a normal chord (the plugin handles those).
 #[cfg(target_os = "macos")]
 fn watch_option_tap(app: &tauri::App) {
     use objc2::runtime::AnyObject;
@@ -1856,10 +1883,24 @@ fn watch_option_tap(app: &tauri::App) {
     // Any mouse/scroll/gesture during the hold also disqualifies (⌥-click, ⌥-drag, ⌥-scroll).
     const MASK_MOUSE: usize = (1 << 1) | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 5) | (1 << 6)
         | (1 << 22) | (1 << 25) | (1 << 26) | (1 << 27) | (1 << 29) | (1 << 30) | (1 << 31);
-    const FLAG_OPTION: usize = 1 << 19; // NSEventModifierFlagOption
-    // shift | control | command | fn — any of these joining the chord disqualifies the tap.
-    const FLAG_OTHERS: usize = (1 << 17) | (1 << 18) | (1 << 20) | (1 << 23);
+    // shift | control | option | command | fn — the full standard-modifier set; whichever one the
+    // binding targets, all the OTHERS joining the chord disqualifies the tap.
+    const FLAG_ALL_MODS: usize = (1 << 17) | (1 << 18) | (1 << 19) | (1 << 20) | (1 << 23);
     const MAX_TAP_MS: u128 = 500;
+
+    /// The NSEvent modifier flag the "draft" binding targets, or None when draft is bound to a
+    /// normal chord (the tap watcher is then inert; the plugin dispatches instead).
+    fn tap_flag(handle: &tauri::AppHandle) -> Option<usize> {
+        let combo = crate::shortcuts::binding(handle, "draft").unwrap_or_else(|| "Tap+Alt".into());
+        match combo.strip_prefix("Tap+")? {
+            "Shift" => Some(1 << 17),
+            "Control" => Some(1 << 18),
+            "Alt" => Some(1 << 19),
+            "Super" => Some(1 << 20),
+            "Fn" => Some(1 << 23),
+            _ => None,
+        }
+    }
 
     /// Any non-Option input during the hold kills the tap until Option is released.
     fn poison() {
@@ -1887,43 +1928,35 @@ fn watch_option_tap(app: &tauri::App) {
             if ev.is_null() {
                 return;
             }
+            let Some(target) = tap_flag(&handle) else {
+                // Draft is bound to a normal chord right now — nothing for the tap watcher.
+                return;
+            };
             let flags: usize = msg_send![ev, modifierFlags];
-            let option_down = flags & FLAG_OPTION != 0;
-            let others_down = flags & FLAG_OTHERS != 0;
-            let opt_prev = OPT_PREV.swap(option_down, Ordering::Relaxed);
+            let target_down = flags & target != 0;
+            let others_down = flags & (FLAG_ALL_MODS & !target) != 0;
+            let was_down = OPT_PREV.swap(target_down, Ordering::Relaxed);
 
             if others_down {
                 // A second modifier is part of this chord — poison for the rest of the hold.
                 poison();
                 return;
             }
-            if option_down && !opt_prev {
-                // Genuine Option DOWN edge with nothing else held: start a fresh, clean hold.
+            if target_down && !was_down {
+                // Genuine DOWN edge with nothing else held: start a fresh, clean hold.
                 POISONED.store(false, Ordering::Relaxed);
                 ARMED.store(true, Ordering::Relaxed);
                 if let Ok(mut g) = DOWN_AT.lock() {
                     *g = Some(Instant::now());
                 }
-            } else if !option_down && opt_prev {
-                // Option UP edge — fire only on a clean, short, un-poisoned tap.
+            } else if !target_down && was_down {
+                // UP edge — fire only on a clean, short, un-poisoned tap.
                 let armed = ARMED.swap(false, Ordering::Relaxed);
                 let poisoned = POISONED.swap(false, Ordering::Relaxed);
                 let held = DOWN_AT.lock().ok().and_then(|g| *g).map(|t| t.elapsed().as_millis());
                 if armed && !poisoned && held.is_some_and(|h| h <= MAX_TAP_MS) {
-                    eprintln!("[shell] ⌥ tap — draft at cursor");
-                    use tauri::Manager;
-                    if let Some(db) = handle.try_state::<shogun_core::daemon::Db>() {
-                        // The ⌥-tap is the fastest path in the product: read the pack the focus
-                        // path already built rather than assembling anything now.
-                        let warm = handle
-                            .try_state::<shogun_core::daemon::ReplyContextCache>()
-                            .and_then(|c| c.current());
-                        let directives = handle
-                            .try_state::<user_config_watch::UserConfigState>()
-                            .map(|s| s.directives())
-                            .unwrap_or_default();
-                        inline_source::mac::run_inline_at_cursor(db.inner().clone(), warm, handle.clone(), directives);
-                    }
+                    eprintln!("[shell] modifier tap — draft at cursor");
+                    crate::run_inline_draft(&handle);
                 }
             }
         });
@@ -1935,9 +1968,9 @@ fn watch_option_tap(app: &tauri::App) {
         std::mem::forget(flags_block);
 
         if key_mon.is_null() || mouse_mon.is_null() || flags_mon.is_null() {
-            eprintln!("[shell] ⌥-tap monitor failed to install (accessibility permission?)");
+            eprintln!("[shell] tap-to-draft monitor failed to install (accessibility permission?)");
         } else {
-            eprintln!("[shell] ⌥ tap-to-draft installed (tap Option alone, <0.5s, no other input)");
+            eprintln!("[shell] tap-to-draft installed (default ⌥ alone, <0.5s, no other input; rebindable)");
         }
     }
 }
@@ -1997,18 +2030,47 @@ mod shortcuts {
     pub type Bindings = HashMap<String, String>;
     pub struct Store(pub Mutex<Bindings>);
 
-    // Draft is intentionally NOT here: its ONLY trigger is tapping ⌥ alone (watch_option_tap). A
-    // bare modifier can't be a global shortcut, and the previous ⌃⌥G "alternative" only confused
-    // (it showed as rerebindable in Settings but the real trigger was the ⌥ tap). Summon and quit
-    // stay user-rebindable.
-    const ACTIONS: [&str; 3] = ["summon", "quit", "voice"];
+    // Draft and recall are rebindable like everything else (2026-08 decision), but their default
+    // triggers are bare-modifier GESTURES, which the global-shortcut plugin cannot express. Those
+    // use an extended combo grammar handled by NSEvent monitors instead:
+    //   "Tap+Alt"    — a solo tap of one modifier (draft's ⌥ tap; watch_option_tap)
+    //   "Dual+Super" — left+right of the same modifier together (recall's ⌘⌘; recall_shortcut)
+    // Either action may also be bound to a normal chord ("Control+Alt+KeyD"), which then goes
+    // through the plugin and `dispatch` like summon/quit.
+    const ACTIONS: [&str; 5] = ["summon", "quit", "voice", "draft", "recall"];
 
     fn defaults() -> Bindings {
         let mut m = HashMap::new();
         m.insert("summon".into(), "Control+Alt+KeyN".into());
         m.insert("quit".into(), "Control+Alt+KeyQ".into());
         m.insert("voice".into(), "Control+Alt+KeyV".into());
+        m.insert("draft".into(), "Tap+Alt".into());
+        m.insert("recall".into(), "Dual+Super".into());
         m
+    }
+
+    /// Gesture combos ("Tap+X" / "Dual+X") live outside the global-shortcut plugin — the NSEvent
+    /// monitors read the binding live on every event, so no (un)registration is needed for them.
+    pub(crate) fn is_gesture(combo: &str) -> bool {
+        combo.starts_with("Tap+") || combo.starts_with("Dual+")
+    }
+
+    /// A gesture combo must name a real modifier, and only draft/recall accept gestures at all
+    /// (a summon you can trigger by tapping ⇧ alone would fire constantly while typing).
+    fn validate_gesture(action: &str, combo: &str) -> Result<(), String> {
+        if !matches!(action, "draft" | "recall") {
+            return Err(format!("{action} needs a key chord, not a modifier gesture"));
+        }
+        let ok = match combo.split_once('+') {
+            Some(("Tap", m)) => matches!(m, "Alt" | "Control" | "Shift" | "Super" | "Fn"),
+            Some(("Dual", m)) => matches!(m, "Alt" | "Control" | "Shift" | "Super"),
+            _ => false,
+        };
+        if ok {
+            Ok(())
+        } else {
+            Err(format!("unknown gesture combo: {combo}"))
+        }
     }
 
     fn config_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
@@ -2028,8 +2090,9 @@ mod shortcuts {
     /// The current on-disk version. v2 = the (short-lived) ⌥G draft default; v3 = draft back to
     /// ⌃⌥G; v4 = draft removed entirely (the ⌥ tap is the sole trigger). A v4 load drops any
     /// persisted "draft" binding from disk (ACTIONS no longer contains it, so it's ignored anyway).
-    /// v5 = voice hold shortcut (⌃⌥V default).
-    const SHORTCUTS_VERSION: u32 = 5;
+    /// v5 = voice hold shortcut (⌃⌥V default). v6 = draft and recall become rebindable with the
+    /// gesture combo grammar ("Tap+Alt" / "Dual+Super" defaults).
+    const SHORTCUTS_VERSION: u32 = 6;
 
     /// Load persisted bindings, filling any missing action with its default.
     pub fn load(app: &tauri::AppHandle) -> Bindings {
@@ -2101,6 +2164,11 @@ mod shortcuts {
             // Hold-to-talk is wired through NSEvent monitors, not the global-shortcut plugin.
             return Ok(());
         }
+        if is_gesture(combo) {
+            // Gesture combos are watched by NSEvent monitors that read the binding live —
+            // validate the token and there is nothing to register.
+            return validate_gesture(action, combo);
+        }
         let act = action.to_string();
         app.global_shortcut()
             .on_shortcut(combo, move |app, _sc, event| {
@@ -2114,6 +2182,8 @@ mod shortcuts {
     fn dispatch(app: &tauri::AppHandle, action: &str) {
         match action {
             "summon" => crate::toggle_panel(app),
+            "draft" => crate::run_inline_draft(app),
+            "recall" => crate::build_visual_recall_window(app),
             "quit" => {
                 eprintln!("[shell] quit shortcut — exiting");
                 std::process::exit(0);
@@ -2152,7 +2222,9 @@ mod shortcuts {
         }
         if action != "voice" {
             register_action(&app, &action, &combo)?;
-            if let Some(old) = old {
+            // Only plugin-registered chords need unregistering — gesture combos were never
+            // registered (their NSEvent monitors read the stored binding live).
+            if let Some(old) = old.filter(|o| !is_gesture(o)) {
                 if let Err(e) = app.global_shortcut().unregister(old.as_str()) {
                     eprintln!("[shell] old shortcut unregister failed ({old}): {e}");
                 }

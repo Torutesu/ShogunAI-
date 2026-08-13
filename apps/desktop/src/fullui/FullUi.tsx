@@ -1,6 +1,9 @@
 // Full UI — the separate window (spec §D). Six panes: Today, Context Health, Sources, Memory,
 // Activity, Traceability.
 //
+// The pane components are exported: the notch panel's in-panel hub (App.tsx) draws the same six
+// panes inside the panel, so routine work finishes in the notch without this window.
+//
 // This file is presentation only. Every number it draws arrives pre-computed on a `FullUiView`
 // from the Rust core (CLAUDE.md invariant 1) — nothing here aggregates, filters by plan, or
 // derives a value. Plan gating is likewise a property of the data: when the core omits agent runs
@@ -103,7 +106,7 @@ function planLabel(plan: FullUiView["plan"]): string {
 // ——— D2 · Context Health ———————————————————————————————————————————————————————————————
 // The pane the spec calls the point of the product: every number carries a way to fix it.
 
-function Health({ v, onNav }: { v: HealthView; onNav: (p: PaneId) => void }): JSX.Element {
+export function Health({ v, onNav }: { v: HealthView; onNav: (p: PaneId) => void }): JSX.Element {
   if (v.cards.length === 0 && !v.mix && v.slo.length === 0) {
     return <div className="fcard"><Empty>{tf.emptyHealth}</Empty></div>;
   }
@@ -175,7 +178,7 @@ function Health({ v, onNav }: { v: HealthView; onNav: (p: PaneId) => void }): JS
 
 // ——— D1 · Today ————————————————————————————————————————————————————————————————————————
 
-function Today({ v }: { v: TodayView }): JSX.Element {
+export function Today({ v }: { v: TodayView }): JSX.Element {
   return (
     <>
       <div className="fcard">
@@ -255,7 +258,7 @@ function Today({ v }: { v: TodayView }): JSX.Element {
 
 // ——— D4 · Sources ——————————————————————————————————————————————————————————————————————
 
-function Sources({ v }: { v: SourcesView }): JSX.Element {
+export function Sources({ v }: { v: SourcesView }): JSX.Element {
   return (
     <>
       <div className="fcard">
@@ -306,7 +309,7 @@ function Sources({ v }: { v: SourcesView }): JSX.Element {
 
 // ——— D3 · Memory ———————————————————————————————————————————————————————————————————————
 
-function Memory({ v }: { v: MemoryView }): JSX.Element {
+export function Memory({ v }: { v: MemoryView }): JSX.Element {
   return (
     <>
       <div className="fcard">
@@ -383,7 +386,7 @@ function confLabel(c: Confidence): string {
 
 // ——— D5 · Activity —————————————————————————————————————————————————————————————————————
 
-function Activity({ v }: { v: ActivityView }): JSX.Element {
+export function Activity({ v }: { v: ActivityView }): JSX.Element {
   return (
     <>
       {v.pending.length === 0 && (
@@ -472,7 +475,7 @@ function Activity({ v }: { v: ActivityView }): JSX.Element {
 
 // ——— D6 · Traceability —————————————————————————————————————————————————————————————————
 
-function Trace({ v }: { v: TraceView }): JSX.Element {
+export function Trace({ v }: { v: TraceView }): JSX.Element {
   return (
     <div className="fcard">
       <div className="fcard__label">{tf.everythingLeft}</div>

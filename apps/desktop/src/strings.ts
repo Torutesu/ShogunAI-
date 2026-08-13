@@ -23,8 +23,9 @@ export const STRINGS = {
     obReadsTitle: "What it reads, and what it never keeps.",
     obReadsBody:
       "SHOGUN reads the text of the window you're working in, through macOS Accessibility. That's it.",
-    obReadsKeep1Title: "No screenshots. Ever.",
-    obReadsKeep1Body: "No images are captured, and none are stored. Text only.",
+    obReadsKeep1Title: "No screenshots by default.",
+    obReadsKeep1Body:
+      "Screen reading is text only. Images exist only if you turn on Visual recall — compressed frames, encrypted, on this Mac, auto-deleted within 72 hours.",
     obReadsKeep2Title: "Your work stays on this Mac.",
     obReadsKeep2Body:
       "Raw captures never leave the device. Only small processed chunks go out for indexing, and every one is logged where you can read it.",
@@ -96,9 +97,8 @@ export const STRINGS = {
     // live line
     reading: "reading",
     yourScreen: "your screen",
-    // counts chip
-    due: "due",
-    waiting: "waiting",
+    // tracked-items toggle (opens the commitments / open-loops list)
+    stateList: "Tracked items",
     // peek (hover preview)
     peekHint: "click to open",
     // ⌃⌥N is the actual summon shortcut (shortcuts.json default); ⌥ alone is the draft tap.
@@ -159,8 +159,10 @@ export const STRINGS = {
     // your attention does.
     pin: "Keep open",
     unpin: "Let it withdraw when I look away",
-    // The separate window (spec §D) — where the brief, health, memory and logs live.
-    openFullUi: "Open ShogunAI window",
+    // In-panel hub — the brief, health, memory and logs, drawn inside the notch panel so nothing
+    // routine needs a separate window (meetings and Visual Recall keep their own surfaces).
+    overview: "Overview",
+    hubFailed: "Couldn't read your context",
     // connections (first-layer integrations)
     connections: "Connections",
     connectionsHint: "First-layer integrations connect directly to each service. Data stays on your device.",
@@ -235,14 +237,15 @@ export const STRINGS = {
     stayOpenHint: "Keep the panel open until you close it.",
     autoHideHint: "Slide back to the notch when you move away.",
     draftShortcut: "Draft with ShogunAI",
-    draftFixedHint: "Tap ⌥ (Option) alone — always on, not rebindable.",
+    recallShortcut: "Visual recall",
     summonShortcut: "Show / hide overlay",
     quitShortcut: "Quit",
     shortcuts: "Shortcuts",
     change: "Change",
     recordHint: "Press keys… (Esc to cancel)",
     needModifier: "Include a modifier (⌃ ⌥ ⇧ ⌘).",
-    shortcutHint: "Click a shortcut to change it. Saved instantly, works everywhere.",
+    shortcutHint:
+      "Click a shortcut to change it — saved instantly, works everywhere. Draft and Visual recall also take modifier gestures: tap one modifier alone, or press both sides of a modifier together.",
     voiceTitle: "Voice",
     voiceSection: "Voice dialogue",
     voiceHint: "Hold the shortcut, speak, release — on-device speech into the focused field (or clipboard). Beta; off by default.",
@@ -620,7 +623,7 @@ export const STRINGS = {
       ],
       wontTitle: "What it never does",
       wontItems: [
-        "Never captures images or screenshots.",
+        "Reads text only — images only with Visual recall on (encrypted, ≤72h, on-device).",
         "Never logs your keystrokes.",
         "Never sends your screen off this Mac.",
       ],
@@ -663,6 +666,9 @@ export const FULL_UI = {
     // navigation
     navToday: "Today",
     navHealth: "Context Health",
+    // The notch hub folds Context Health + Traceability into one low-priority tab at the far
+    // right (2026-08-09 decision); the Full UI window keeps them as separate panes.
+    navSystem: "System",
     navSources: "Sources",
     navMemory: "Memory",
     navActivity: "Activity",
