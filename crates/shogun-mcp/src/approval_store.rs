@@ -238,10 +238,13 @@ pub fn load_queue(path: &Path) -> Result<ApprovalQueue, String> {
     }
 }
 
-struct StoreLock { path: PathBuf }
+struct StoreLock { file: std::fs::File }
 
 impl Drop for StoreLock {
-    fn drop(&mut self) { let _ = std::fs::remove_file(&self.path); }
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        unsafe { libc::flock(std::os::fd::AsRawFd::as_raw_fd(&self.file), libc::LOCK_UN); }
+    }
 }
 
 fn lock_path(path: &Path) -> PathBuf {
@@ -251,9 +254,18 @@ fn lock_path(path: &Path) -> PathBuf {
 fn acquire_lock(path: &Path) -> Result<StoreLock, String> {
     let lock = lock_path(path);
     for _ in 0..500 {
-        match std::fs::OpenOptions::new().write(true).create_new(true).open(&lock) {
-            Ok(_) => return Ok(StoreLock { path: lock }),
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => std::thread::sleep(Duration::from_millis(2)),
+        match std::fs::OpenOptions::new().read(true).write(true).create(true).open(&lock) {
+            Ok(file) => {
+                #[cfg(unix)]
+                {
+                    let result = unsafe { libc::flock(std::os::fd::AsRawFd::as_raw_fd(&file), libc::LOCK_EX | libc::LOCK_NB) };
+                    if result == 0 { return Ok(StoreLock { file }); }
+                    if std::io::Error::last_os_error().kind() != std::io::ErrorKind::WouldBlock { return Err(format!("lock l3 approvals: {}", std::io::Error::last_os_error())); }
+                }
+                #[cfg(not(unix))]
+                { return Ok(StoreLock { file }); }
+                std::thread::sleep(Duration::from_millis(2));
+            }
             Err(e) => return Err(format!("lock l3 approvals: {e}")),
         }
     }
@@ -383,5 +395,36 @@ mod tests {
         std::fs::write(&path, r#"{"next_id":2,"terminal":[{"id":1,"status":"pending","resolved_ms":1}]}"#).unwrap();
         assert!(load_queue(&path).is_err());
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn existing_unlocked_lock_file_does_not_block_transaction() {
+        let path = tmp();
+        let lock = lock_path(&path);
+        std::fs::File::create(&lock).unwrap();
+        let send = SendAction::SendEmail { to: "a@b.com".into() };
+        assert!(with_queue(&path, |q| q.request(send.clone(), Preview::for_send(&send, "body", Route::ViaComposio), Origin::AiApi, 1)).is_ok());
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&lock);
+    }
+
+    #[test]
+    fn concurrent_transactions_serialize_exclusively() {
+        let path = std::sync::Arc::new(tmp());
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let mut handles = Vec::new();
+        for i in 0..2 {
+            let path = path.clone();
+            let barrier = barrier.clone();
+            handles.push(std::thread::spawn(move || {
+                barrier.wait();
+                let send = SendAction::SendEmail { to: format!("{i}@b.com") };
+                with_queue(&path, |q| q.request(send.clone(), Preview::for_send(&send, "body", Route::ViaComposio), Origin::AiApi, i)).unwrap()
+            }));
+        }
+        let ids: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+        assert_ne!(ids[0], ids[1]);
+        assert_eq!(load_queue(&path).unwrap().pending_len(), 2);
+        let _ = std::fs::remove_file(&*path);
     }
 }

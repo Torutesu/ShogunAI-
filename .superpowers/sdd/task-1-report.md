@@ -101,3 +101,16 @@ MCP and REST poll now call `expire_due(now)` inside same locked store transactio
 Fix commit: `c1d3832 fix: enforce consent and timeout polling`.
 
 Report-only follow-up: reviewer evidence above corresponds to committed code; no additional code changes.
+
+## Final lock fix
+
+Replaced create-new sentinel ownership with kernel advisory `flock` using existing `libc` dependency. Lock inode may remain after crash, but kernel releases held exclusive lock on process exit/SIGKILL. Lock remains held across load, mutation, and atomic save. Nonblocking acquisition retries for bounded duration. Existing lock-file permissions, unique `0600` temp files, and atomic rename preserved.
+
+Focused RED: `existing_unlocked_lock_file_does_not_block_transaction` failed under sentinel lock with `assertion failed` after timeout.
+
+GREEN evidence:
+
+- `cargo test -p shogun-mcp approval_store::tests --lib --no-fail-fast`: 9 passed, including stale lock-file and concurrent serialization tests.
+- `cargo test -p shogun-agents -p shogun-mcp --no-fail-fast`: shogun-agents 36 passed; shogun-mcp 112 unit tests + 4 invariant tests passed; doc tests passed.
+
+Final lock-fix commit recorded in final response.
