@@ -945,10 +945,14 @@ pub mod mac {
 
     /// Webview-side error channel. Silent `.catch(() => {})` swallowed real failures (the missing
     /// window-API permissions looked like "buttons do nothing") — UI errors must reach the
-    /// terminal log. Never carries captured content, only UI diagnostics.
+    /// terminal log.
+    ///
+    /// The webview is *supposed* to send only UI diagnostics, but nothing enforces that from
+    /// here — the string is whatever the panel passed. Scrubbed on the way out, so a stray key,
+    /// email or URL in a UI error message cannot become a log line.
     #[tauri::command]
     pub fn ui_log(msg: String) {
-        eprintln!("[ui] {msg}");
+        shogun_core::elog!("[ui] {msg}");
     }
 
     /// One state row for the "What I know" panel. Carries the row `id` so the UI can resolve it

@@ -88,10 +88,11 @@ mod mac {
                 eprintln!("[meeting] live translate ts={ts} failed: HTTP {status} (rate limited, keeping ASR line)");
             }
             LlmError::Provider(msg) if msg.contains("HTTP 400") => {
-                eprintln!("[meeting] live translate ts={ts} failed: {msg} (check Select KK key format)");
+                // Provider errors quote the offending request — scrub before it reaches the log.
+                shogun_core::elog!("[meeting] live translate ts={ts} failed: {msg} (check Select KK key format)");
                 let _ = app.emit("meeting_translate_key_invalid", ());
             }
-            other => eprintln!("[meeting] live translate ts={ts} failed: {other}"),
+            other => shogun_core::elog!("[meeting] live translate ts={ts} failed: {other}"),
         }
     }
 

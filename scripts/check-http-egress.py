@@ -19,6 +19,11 @@ import sys
 ALLOWLIST = {"shogun-core"}
 
 # Raw HTTP client crates. A component reaching for any of these bypasses the traced egress.
+#
+# WebSocket clients are on the same list and for the same reason: `wss://` is an egress like any
+# other — the meeting ASR lane streams audio over one (shogun-core, allowlisted, traced). A crate
+# outside the allowlist opening its own socket would leave the device with no ledger row, and the
+# HTTP-only version of this list would not have noticed.
 BANNED_HTTP_CLIENTS = {
     "reqwest",
     "hyper",
@@ -30,6 +35,13 @@ BANNED_HTTP_CLIENTS = {
     "attohttp",
     "http-client",
     "hyper-util",
+    "tungstenite",
+    "tokio-tungstenite",
+    "async-tungstenite",
+    "ws",
+    "websocket",
+    "fastwebsockets",
+    "ewebsock",
 }
 
 

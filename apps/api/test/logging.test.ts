@@ -2,6 +2,7 @@
  * only — chunk content and bearer tokens are structurally out of reach. */
 import { describe, expect, it } from "vitest";
 
+import { logId } from "../src/logging.js";
 import { makeRig, postBatch, sampleBody } from "./helpers.js";
 
 describe("redacting logger", () => {
@@ -12,7 +13,9 @@ describe("redacting logger", () => {
     const line = rig.logLines[0] ?? "";
     expect(line).toMatch(/^POST \/v1\/batch 202 \d+ms/);
     expect(line).toContain("chunks=2");
-    expect(line).toContain("license=lic_test_1");
+    // The licence is correlatable but not readable: the raw id never reaches the log sink.
+    expect(line).toContain(`license=${logId("lic_test_1")}`);
+    expect(line).not.toContain("lic_test_1");
     expect(line).not.toContain("TOP-SECRET");
   });
 

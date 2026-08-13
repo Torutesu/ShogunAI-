@@ -85,15 +85,21 @@ jobs:
       - name: test
         run: cargo test --workspace --exclude shogun-desktop-spike
       # Invariant guards (each self-tests its detector, then checks the real tree/source):
-      # - FR-TR-03: only the single traced egress (shogun-core) may depend on an HTTP client.
+      # - FR-TR-03: only the single traced egress (shogun-core) may depend on an HTTP/WS client.
       # - invariant 7: Secret::expose() only in allowlisted files (no raw-secret leak to log/DB).
+      # - invariant 2: no image/audio bytes reach the filesystem (the DB + socket exceptions only).
+      # - log rule: captured user text never reaches a log line (elog! or a shape, not the value).
       # - schema: migrations stay additive (memory lives for years; no DROP/RENAME/ALTER COLUMN).
-      - name: invariant guards (egress / secrets / migrations)
+      - name: invariant guards (egress / secrets / media / logs / migrations)
         run: |
           python3 scripts/check-http-egress.py --self-test
           python3 scripts/check-http-egress.py
           python3 scripts/check-secret-exposure.py --self-test
           python3 scripts/check-secret-exposure.py
+          python3 scripts/check-media-writes.py --self-test
+          python3 scripts/check-media-writes.py
+          python3 scripts/check-log-hygiene.py --self-test
+          python3 scripts/check-log-hygiene.py
           python3 scripts/check-migrations.py --self-test
           python3 scripts/check-migrations.py
       - name: release build (SLO code path)

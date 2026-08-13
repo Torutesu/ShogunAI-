@@ -1,7 +1,9 @@
 //! The Batch-relay client (docs/batch-relay-design.md, Plan C-2).
 //!
 //! The shipping Batch lane never holds an Anthropic key: the device holds only a **license
-//! token** (FR-BIL-08, short-lived, Keychain-only) and talks to the Select-operated relay
+//! token** (FR-BIL-08 — signed, device-bound and ~24h-lived, so it is cached in `billing.json`
+//! rather than the Keychain; CLAUDE.md invariant 7 の 2026-08-13 例外) and talks to the
+//! Select-operated relay
 //! (`relay.shogun.app`), which verifies the token, enforces the plan's daily chunk cap, and
 //! delegates to the Anthropic Batch API with the operator's server-side key. Two consequences
 //! are encoded here:

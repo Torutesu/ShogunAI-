@@ -16,7 +16,8 @@ SHOGUNのモノレポ。本ファイルはmacOSアプリ本体(`crates/` + `apps
 4. **L1（自動実行）に外部送信系アクションを絶対に含めない。** 送信・投稿・カレンダー作成は必ずL3（明示確認）
 5. **キーの分離**: インデックス・分類・Dream Cycle・Morning Brief = Select KKキー（Batch API）／エージェント推論・チャット・ドラフト = ユーザー資格情報（BYOK **または** サブスク委譲。Issue #110）。逆転させない。**サブスク委譲をBatch laneに使わない**（委譲先が使うのは月次の有限クレジット。バッチ量はそれを最速で溶かす作業であり、焼き切るとAgent lane自体が月替わりまで死ぬ）
 6. **人間UIとAI API（MCP/CLI）は完全対称。** 新機能はUIとAPI両方から呼べる形で設計する。AI経由の操作にも同じL1/L2/L3を適用
-7. **secrets（OAuthトークン・BYOKキー）はKeychain以外に保存しない。** 平文ファイル・DB・ログへの書き出し禁止
+7. **secrets（OAuthトークン・BYOKキー）はKeychain以外に保存しない。** 平文ファイル・DB・ログへの書き出し禁止  
+   **【2026-08-13 明示的例外｜ライセンストークン】** FR-BIL-08 の署名済みライセンストークン（`v1.<payload>.<sig>`）は `billing.json`（app-data、平文）に置く。これは**秘密ではない**: Ed25519署名済みで改竄不能、payload内のdevice idに束縛されるため他Macでは無価値、約24時間で失効する。CLI/MCP/RESTの3面がKeychainに触れずプラン状態を読めることが設計上の要件（`shogun_mcp::plan_source`）。**ライセンスキー本体**（`shogun-XXXX-…`、APIのbearer）は引き続きKeychainのみ。Batch relay と ASR mint はこのトークンをbearerとして提示する（`license_client::cached_license_token`）
 
 ## 技術スタック（確定。勝手に変更しない）
 

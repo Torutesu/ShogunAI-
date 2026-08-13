@@ -245,7 +245,7 @@ fn build_deepgram(db: &Db, language: MeetingLanguage) -> Result<Deepgram, String
     let auth = deepgram::resolve_auth()?;
     let cfg = meeting_config(language);
     let trace = Arc::new(db.traceability_sink());
-    Deepgram::new(cfg, auth, Some(trace))
+    Deepgram::new(cfg, auth, trace)
 }
 
 fn try_open_live_pair(
@@ -260,16 +260,11 @@ fn try_open_live_pair(
     let trace: Arc<dyn shogun_core::llm::traceability::TraceabilitySink> =
         Arc::new(db.traceability_sink());
     let mut auth = deepgram::resolve_auth()?;
-    let me = DeepgramLive::connect(&cfg, auth.as_mut(), LiveMode::Meeting, Some(trace.clone()))?;
+    let me = DeepgramLive::connect(&cfg, auth.as_mut(), LiveMode::Meeting, trace.clone())?;
     let other = if dual {
         // Fresh auth header (cached inside the auth impl).
         let mut auth2 = deepgram::resolve_auth()?;
-        Some(DeepgramLive::connect(
-            &cfg,
-            auth2.as_mut(),
-            LiveMode::Meeting,
-            Some(trace),
-        )?)
+        Some(DeepgramLive::connect(&cfg, auth2.as_mut(), LiveMode::Meeting, trace)?)
     } else {
         None
     };

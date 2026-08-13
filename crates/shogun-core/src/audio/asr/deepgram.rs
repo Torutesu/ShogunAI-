@@ -235,18 +235,23 @@ pub fn resolve_auth() -> Result<Box<dyn DeepgramAuth>, String> {
 }
 
 /// Utterance-batch Deepgram listen client implementing [`Transcriber`].
+///
+/// The traceability sink is **required**, not optional (invariant 3): audio leaving the device
+/// for a third party is exactly the egress the ledger exists to show, and a client that could be
+/// built without a sink made "sent, unrecorded" a reachable state whenever the DB was not in
+/// Tauri state. A caller that cannot supply a sink cannot start ASR.
 pub struct Deepgram {
     config: DeepgramConfig,
     auth: Box<dyn DeepgramAuth>,
     client: reqwest::blocking::Client,
-    trace: Option<Arc<dyn TraceabilitySink>>,
+    trace: Arc<dyn TraceabilitySink>,
 }
 
 impl Deepgram {
     pub fn new(
         config: DeepgramConfig,
         auth: Box<dyn DeepgramAuth>,
-        trace: Option<Arc<dyn TraceabilitySink>>,
+        trace: Arc<dyn TraceabilitySink>,
     ) -> Result<Self, String> {
         if !config.mip_opt_out {
             return Err("Deepgram mip_opt_out must be true (company policy)".into());
@@ -264,7 +269,7 @@ impl Deepgram {
 
     fn record_egress(&self, pcm_bytes: usize, duration_ms: u64) {
         record_asr_egress(
-            self.trace.as_deref(),
+            self.trace.as_ref(),
             &self.config.purpose,
             pcm_bytes,
             duration_ms,
@@ -304,7 +309,8 @@ pub struct DeepgramLive {
     join: Option<JoinHandle<()>>,
     pcm_bytes: usize,
     purpose: String,
-    trace: Option<Arc<dyn TraceabilitySink>>,
+    /// Required, for the same reason as [`Deepgram::trace`].
+    trace: Arc<dyn TraceabilitySink>,
 }
 
 impl DeepgramLive {
@@ -313,7 +319,7 @@ impl DeepgramLive {
         config: &DeepgramConfig,
         auth: &mut dyn DeepgramAuth,
         mode: LiveMode,
-        trace: Option<Arc<dyn TraceabilitySink>>,
+        trace: Arc<dyn TraceabilitySink>,
     ) -> Result<Self, String> {
         if !config.mip_opt_out {
             return Err("Deepgram mip_opt_out must be true (company policy)".into());
@@ -407,7 +413,7 @@ impl DeepgramLive {
         }
         let duration_ms = ((self.pcm_bytes as u64 / 2) * 1000) / u64::from(SAMPLE_RATE);
         record_asr_egress(
-            self.trace.as_deref(),
+            self.trace.as_ref(),
             &self.purpose,
             self.pcm_bytes,
             duration_ms,
@@ -588,12 +594,11 @@ fn parse_live_message(text: &str) -> Option<LiveResult> {
 }
 
 fn record_asr_egress(
-    sink: Option<&dyn TraceabilitySink>,
+    sink: &dyn TraceabilitySink,
     purpose: &str,
     pcm_bytes: usize,
     duration_ms: u64,
 ) {
-    let Some(sink) = sink else { return };
     // Digest duration meta only — never the waveform (invariant 2 / G8).
     let meta = format!("duration_ms={duration_ms}");
     sink.record(TraceRecord {
@@ -777,7 +782,7 @@ mod tests {
     #[test]
     fn rejects_mip_opt_in() {
         let cfg = DeepgramConfig { mip_opt_out: false, ..DeepgramConfig::default() };
-        let err = match Deepgram::new(cfg, Box::new(DebugEnvKeyAuth), None) {
+        let err = match Deepgram::new(cfg, Box::new(DebugEnvKeyAuth), Arc::new(RecordingSink::new())) {
             Ok(_) => panic!("expected mip_opt_out rejection"),
             Err(e) => e,
         };
@@ -822,7 +827,7 @@ mod tests {
         let mut d = Deepgram::new(
             DeepgramConfig::default(),
             Box::new(DebugEnvKeyAuth),
-            Some(Arc::new(RecordingSink::new())),
+            Arc::new(RecordingSink::new()),
         )
         .expect("build");
         assert!(d.transcribe(&[]).is_empty());
@@ -838,7 +843,7 @@ mod tests {
 
     #[test]
     fn meeting_listen_url_has_smart_format_not_dictation() {
-        let d = Deepgram::new(DeepgramConfig::default(), Box::new(DebugEnvKeyAuth), None)
+        let d = Deepgram::new(DeepgramConfig::default(), Box::new(DebugEnvKeyAuth), Arc::new(RecordingSink::new()))
             .expect("build");
         let url = d.listen_url();
         assert!(url.contains("mip_opt_out=true"));
@@ -854,7 +859,7 @@ mod tests {
         let d = Deepgram::new(
             DeepgramConfig::default().with_purpose("voice_dictation"),
             Box::new(DebugEnvKeyAuth),
-            None,
+            Arc::new(RecordingSink::new()),
         )
         .expect("build");
         let url = d.listen_url();

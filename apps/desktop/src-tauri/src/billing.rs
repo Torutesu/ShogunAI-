@@ -23,6 +23,7 @@ pub mod mac {
     use std::sync::Mutex;
 
     use shogun_agents::entitlement::BillingState;
+    use shogun_core::daemon::Db;
     use shogun_core::license_client;
     use shogun_integrations::keychain_store;
     use shogun_license::{public_key, verify, Freshness};
@@ -235,12 +236,43 @@ pub mod mac {
         }
     }
 
+    /// Record one licence-API call in the egress ledger (invariant 3: the traceability screen
+    /// claims to show every outbound connection, and billing traffic was the gap).
+    ///
+    /// Content-free by construction — the digest is over the endpoint name, because the request
+    /// carries no capture or memory content at all (FR-BIL-08). Best effort on purpose: this
+    /// runs at launch and on a 24h timer, sometimes before the DB is open, and a missing ledger
+    /// must not be able to delicense a paying user. That is the opposite of the ASR rule, where
+    /// the payload IS user content and an unrecorded send is the thing to prevent.
+    fn record_billing_egress(app: &AppHandle, endpoint: &str) {
+        use shogun_core::llm::traceability::{Route, TraceRecord, TraceabilitySink};
+        let Some(db) = app.try_state::<Db>() else { return };
+        let origin = api_origin();
+        let host = origin
+            .trim_start_matches("https://")
+            .trim_start_matches("http://")
+            .split('/')
+            .next()
+            .unwrap_or("")
+            .to_string();
+        // Empty chunk: the request genuinely carries no capture or memory content, so there is
+        // nothing to digest — the row exists to show that the connection happened, and to whom.
+        db.traceability_sink().record(TraceRecord::for_chunk(
+            Route::Billing,
+            endpoint,
+            host,
+            "",
+            false,
+        ));
+    }
+
     /// Ask the licence API about `license_key`, and verify any token it returns before believing
     /// it — a token for a different device, or one this build cannot check, is not an answer.
     fn check(app: &AppHandle, license_key: &str) -> Result<Outcome, String> {
         let device = device_id(app)?;
         let version = app.package_info().version.to_string();
 
+        record_billing_egress(app, "license_verify");
         match license_client::verify(&api_origin(), license_key, &device, &version) {
             Ok(resp) => match resp.token {
                 Some(token) => {
@@ -354,7 +386,12 @@ pub mod mac {
     /// The app sends the plan *name*; the Price ID stays on the server (issue #8 セキュリティ), and
     /// the card form is Stripe's, in the browser — never in this window.
     #[tauri::command]
-    pub fn billing_open_checkout(plan: String, interval: String) -> Result<String, String> {
+    pub fn billing_open_checkout(
+        plan: String,
+        interval: String,
+        app: AppHandle,
+    ) -> Result<String, String> {
+        record_billing_egress(&app, "stripe_checkout");
         let url = license_client::checkout_url(&api_origin(), &plan, &interval)
             .map_err(|e| e.message())?;
         open_in_browser(&url)?;
@@ -364,8 +401,9 @@ pub mod mac {
     /// Open the Stripe Customer Portal — cancellation, plan changes and card updates all live
     /// there (issue #8: 90%+ of billing ops off our plate).
     #[tauri::command]
-    pub fn billing_open_portal() -> Result<String, String> {
+    pub fn billing_open_portal(app: AppHandle) -> Result<String, String> {
         let key = stored_license_key().ok_or_else(|| "no licence on this Mac".to_string())?;
+        record_billing_egress(&app, "stripe_portal");
         let url = license_client::portal_url(&api_origin(), &key).map_err(|e| e.message())?;
         open_in_browser(&url)?;
         Ok(url)

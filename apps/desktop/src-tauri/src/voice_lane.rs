@@ -95,9 +95,19 @@ fn whisper_model_path(app: &AppHandle) -> Option<std::path::PathBuf> {
     p.exists().then_some(p)
 }
 
-fn trace_sink(app: &AppHandle) -> Option<Arc<dyn shogun_core::llm::traceability::TraceabilitySink>> {
+/// The traceability sink for voice ASR. `Err` when the memory DB is not in Tauri state — and
+/// that has to stop dictation rather than silently proceed: audio going to a third party with
+/// no ledger row is the one outcome invariant 3 does not allow (the ASR client no longer
+/// accepts an absent sink either).
+fn trace_sink(
+    app: &AppHandle,
+) -> Result<Arc<dyn shogun_core::llm::traceability::TraceabilitySink>, String> {
     app.try_state::<Db>()
-        .map(|s| Arc::new(s.inner().clone().traceability_sink()) as Arc<dyn shogun_core::llm::traceability::TraceabilitySink>)
+        .map(|s| {
+            Arc::new(s.inner().clone().traceability_sink())
+                as Arc<dyn shogun_core::llm::traceability::TraceabilitySink>
+        })
+        .ok_or_else(|| "memory is unavailable, so voice egress cannot be recorded".to_string())
 }
 
 fn voice_config() -> DeepgramConfig {
@@ -107,13 +117,13 @@ fn voice_config() -> DeepgramConfig {
 fn build_deepgram(app: &AppHandle) -> Result<Deepgram, String> {
     let auth = deepgram::resolve_auth()?;
     let cfg = voice_config();
-    let trace = trace_sink(app);
+    let trace = trace_sink(app)?;
     Deepgram::new(cfg, auth, trace)
 }
 
 fn try_open_live(app: &AppHandle) -> Result<DeepgramLive, String> {
     let mut auth = deepgram::resolve_auth()?;
-    DeepgramLive::connect(&voice_config(), auth.as_mut(), LiveMode::Voice, trace_sink(app))
+    DeepgramLive::connect(&voice_config(), auth.as_mut(), LiveMode::Voice, trace_sink(app)?)
 }
 
 fn deepgram_configured() -> bool {

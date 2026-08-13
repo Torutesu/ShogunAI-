@@ -8,9 +8,20 @@
  * accepted items a handler chose to expose via `relay-log-*` context vars. No body, no headers
  * (the Authorization header is a bearer credential), no query strings beyond the path.
  */
+import { createHash } from "node:crypto";
 import type { MiddlewareHandler } from "hono";
 
 export type LogFn = (line: string) => void;
+
+/** Stable short hash of a licence id, for the log line.
+ *
+ * The id is not user content, but `license=<sub>` still turns the console into a per-customer
+ * activity timeline, and the log sink is usually less protected than the usage ledger. A hash
+ * keeps what the line is actually for — correlating requests within an incident — without the
+ * identifier itself. */
+export function logId(licenseId: string): string {
+  return createHash("sha256").update(licenseId).digest("hex").slice(0, 12);
+}
 
 /** Context vars a handler may set for the log line. Numbers only — never content. */
 export interface LogVars {
@@ -31,7 +42,7 @@ export function redactingLogger(log: LogFn): MiddlewareHandler<{ Variables: LogV
       const license = c.get("relayLogLicense");
       const extras = [
         typeof chunks === "number" ? `chunks=${chunks}` : null,
-        typeof license === "string" ? `license=${license}` : null,
+        typeof license === "string" ? `license=${logId(license)}` : null,
       ]
         .filter((v): v is string => v !== null)
         .join(" ");
