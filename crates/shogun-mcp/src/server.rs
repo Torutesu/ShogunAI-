@@ -138,13 +138,13 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
                     }}
                 },
                 Routed::ApprovalPoll { id } => match state.approvals.lock() {
-                    Ok(queue) => {
+                    Ok(mut queue) => {
                         if let Some(path) = &state.approvals_path {
-                            match crate::approval_store::with_queue(path, |queue| rest::poll_approval(id, queue)) {
+                            match crate::approval_store::with_queue(path, |queue| rest::poll_approval(id, queue, (state.clock)())) {
                                 Ok(body) => (200, body),
                                 Err(error) => (500, format!(r#"{{"error":"approval_store","message":{}}}"#, serde_json::json!(error))),
                             }
-                        } else { (200, rest::poll_approval(id, &queue)) }
+                        } else { (200, rest::poll_approval(id, &mut queue, (state.clock)())) }
                     }
                     Err(_) => (500, r#"{"error":"internal"}"#.to_string()),
                 },
@@ -404,6 +404,23 @@ mod tests {
         tokio::spawn(async move { let _ = serve_on(listener, state).await; });
         let resp = raw_get(addr, &format!("/v1/actions/poll/{}", id.0), Some("t")).await;
         assert!(resp.contains("\"status\":\"pending\""), "got: {resp}");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn rest_poll_expires_and_persists_timeout() {
+        let path = std::env::temp_dir().join(format!("shogun-rest-timeout-{}.json", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let send = shogun_agents::permission::SendAction::SendEmail { to: "a@b.com".into() };
+        let id = crate::approval_store::with_queue(&path, |q| q.request(send.clone(), shogun_agents::approval::Preview::for_send(&send, "body", shogun_agents::approval::Route::ViaComposio), shogun_agents::approval::Origin::AiApi, 0)).unwrap();
+        let mut tokens = TokenRegistry::new(); tokens.issue("t");
+        let listener = bind_local(0).await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let state = AppState::new(Arc::new(tokens), Arc::new(crate::backend::StubBackend), Arc::new(Mutex::new(ApprovalQueue::new())), Arc::new(|| shogun_agents::approval::APPROVAL_TIMEOUT_MS as i64 + 1)).with_approvals_path(path.clone());
+        tokio::spawn(async move { let _ = serve_on(listener, state).await; });
+        let resp = raw_get(addr, &format!("/v1/actions/poll/{}", id.0), Some("t")).await;
+        assert!(resp.contains("\"status\":\"timed_out\""), "got: {resp}");
+        assert_eq!(crate::approval_store::load_queue(&path).unwrap().status(id), Some(shogun_agents::approval::ApprovalStatus::TimedOut));
         let _ = std::fs::remove_file(&path);
     }
 }

@@ -15,7 +15,7 @@ pub mod mac {
     use std::sync::Mutex;
 
     use serde_json::json;
-    use shogun_agents::approval::{ApprovalId, ApprovalQueue, ConfirmIntent, Decision, Origin};
+    use shogun_agents::approval::{ApprovalId, ApprovalQueue, ConfirmIntent, Decision, Origin, Preview, Route as ApprovalRoute};
     use shogun_agents::permission::SendAction;
     use shogun_agents::producer::{propose, ProposedSend};
     use shogun_core::composio_send::HttpComposioApi;
@@ -99,6 +99,15 @@ pub mod mac {
         let mut sender = shogun_mcp::composio::ComposioSender::new(consent);
         sender.set_draft_stop(policy.draft_stop);
         sender.send_capability().is_some()
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum ComposioPreflight { NoConsent, DraftOnly, Live }
+
+    fn composio_preflight(policy: &ComposioPolicy) -> ComposioPreflight {
+        if !policy.consent_acknowledged { ComposioPreflight::NoConsent }
+        else if policy.draft_stop { ComposioPreflight::DraftOnly }
+        else { ComposioPreflight::Live }
     }
 
     /// The shared L3 approval queue (the same one an agent / MCP enqueues into and the UI drains).
@@ -291,10 +300,11 @@ pub mod mac {
         let outcome: Result<String, String> = (|| {
         let outcome = if matches!(route_send(&confirmed.action), SendRoute::Composio) {
             let policy = load_composio_policy(&app);
-            if !composio_send_allowed(policy) {
-                // Gate is closed: save a draft instead of sending. Body/recipient are NOT logged
-                // (invariant 7). The draft_fallback is the authoritative path for this so we reuse
-                // it directly.
+            if composio_preflight(&policy) == ComposioPreflight::NoConsent {
+                // No consent means no Composio/draft call at all. Record content-free failure.
+                "send_failed: composio consent required".into()
+            } else if composio_preflight(&policy) == ComposioPreflight::DraftOnly {
+                // Consent exists, draft-stop blocks live send, so draft fallback is allowed.
                 let sink = db.traceability_sink();
                 match save_gmail_draft(&connectors.0, &sink, &confirmed.action, &confirmed.preview.full_body) {
                     Ok(()) => {
@@ -557,6 +567,19 @@ pub mod mac {
             assert!(policy.draft_stop, "draft_stop must default ON");
             assert!(!policy.consent_acknowledged, "consent must default NOT acknowledged");
             assert!(!composio_send_allowed(policy), "default policy must block the send");
+        }
+
+        #[test]
+        fn no_consent_preflight_makes_no_composio_or_draft_call() {
+            let policy = ComposioPolicy { draft_stop: true, consent_acknowledged: false, user_id: String::new() };
+            assert_eq!(composio_preflight(&policy), ComposioPreflight::NoConsent);
+
+            let mut q = ApprovalQueue::new();
+            let action = SendAction::SendEmail { to: "a@b.com".into() };
+            let id = q.request(action.clone(), Preview::for_send(&action, "body", ApprovalRoute::ViaComposio), Origin::Human, 0);
+            assert!(matches!(q.confirm(id, ConfirmIntent::DedicatedButton, 1), Decision::Confirmed(_)));
+            assert!(q.mark_status(id, shogun_agents::approval::ApprovalStatus::SendFailed, 2));
+            assert_eq!(q.status(id), Some(shogun_agents::approval::ApprovalStatus::SendFailed));
         }
 
         /// consent = true, draft_stop = true → still blocked (draft-stop gate).

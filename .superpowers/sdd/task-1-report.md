@@ -79,3 +79,23 @@ Pre-fix focused run exposed the blocking behavior: terminal transition test fail
 - `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml -q`: pass; pre-existing warnings only.
 
 Fix commit: `a164e7c fix: close approval ledger safety gaps`.
+
+## Re-review blocker fixes
+
+### Consent safety
+
+Composio email confirm now branches on pure `ComposioPreflight`: no consent returns content-free `send_failed: composio consent required` without draft, consent, sender, key, or transport calls. Draft fallback runs only with consent plus `draft_stop=true`. Added terminal-status assertion.
+
+### Timeout polling
+
+MCP and REST poll now call `expire_due(now)` inside same locked store transaction before reading status. Timed-out rows persist and survive reload. MCP uses injected server clock; REST uses injected app clock.
+
+### Exact GREEN evidence
+
+- `cargo test -p shogun-agents -p shogun-mcp --no-fail-fast`: pass — shogun-agents 36 tests; shogun-mcp 110 unit tests, 4 invariant tests, doc tests.
+- `cargo test -p shogun-mcp --features server --lib server::tests::rest_poll_expires_and_persists_timeout`: pass — 1 test. Initial sandbox socket attempt returned `Operation not permitted`; approved rerun passed.
+- MCP timeout poll test: pass — `mcp::tests::poll_expires_pending_and_persists_timed_out_status`.
+- `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml no_consent_preflight_makes_no_composio_or_draft_call --lib --no-fail-fast`: pass — 1 test.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml -q`: pass; existing warnings only.
+
+Fix commit: `c1d3832 fix: enforce consent and timeout polling`.

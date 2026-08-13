@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use serde_json::{json, Value};
-use shogun_agents::approval::{ApprovalId, ApprovalQueue, ApprovalStatus};
+use shogun_agents::approval::{ApprovalId, ApprovalQueue};
 
 use crate::approval_store;
 use crate::backend::{MemoryBackend, ReadParams};
@@ -25,17 +25,6 @@ use crate::visual_recall_api::{is_structured_read, render_structured};
 
 /// The MCP protocol version this server speaks.
 pub const PROTOCOL_VERSION: &str = "2024-11-05";
-
-fn status_wire(status: ApprovalStatus) -> &'static str {
-    match status {
-        ApprovalStatus::Pending => "pending",
-        ApprovalStatus::Rejected => "rejected",
-        ApprovalStatus::TimedOut => "timed_out",
-        ApprovalStatus::Sent => "sent",
-        ApprovalStatus::SendFailed => "send_failed",
-        ApprovalStatus::DraftSaved => "draft_saved",
-    }
-}
 
 /// The MCP server: a backend, the shared approval queue, and a clock.
 pub struct McpServer<B: MemoryBackend> {
@@ -187,18 +176,16 @@ impl<B: MemoryBackend> McpServer<B> {
         let Some(id) = args.get("approval_id").and_then(Value::as_u64).map(ApprovalId) else {
             return r#"{"error":"missing_approval_id"}"#.to_string();
         };
-        let status = if let Some(path) = &self.approvals_path {
-            match approval_store::with_queue(path, |queue| queue.status(id)) {
-                Ok(status) => status,
+        if let Some(path) = &self.approvals_path {
+            match approval_store::with_queue(path, |queue| rest::poll_approval(id.0, queue, (self.clock)())) {
+                Ok(body) => return body,
                 Err(error) => return format!(r#"{{"error":"approval_store","message":{}}}"#, json!(error)),
             }
         } else {
-            self.approvals.lock().ok().and_then(|queue| queue.status(id))
-        };
-        match status {
-            Some(ApprovalStatus::Pending) => format!(r#"{{"approval_id":{},"status":"pending"}}"#, id.0),
-            Some(status) => format!(r#"{{"approval_id":{},"status":"{}"}}"#, id.0, status_wire(status)),
-            None => format!(r#"{{"approval_id":{},"status":"unknown"}}"#, id.0),
+            if let Ok(mut queue) = self.approvals.lock() {
+                return rest::poll_approval(id.0, &mut queue, (self.clock)());
+            }
+            return r#"{"error":"internal"}"#.to_string();
         }
     }
 
@@ -445,6 +432,20 @@ mod tests {
         assert!(text.contains("\"pending\":true"));
         let loaded = crate::approval_store::load_queue(&path).unwrap();
         assert_eq!(loaded.pending_len(), 1);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn poll_expires_pending_and_persists_timed_out_status() {
+        let path = std::env::temp_dir().join(format!("mcp-timeout-{}.json", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let send = shogun_agents::permission::SendAction::SendEmail { to: "a@b.com".into() };
+        let id = crate::approval_store::with_queue(&path, |q| q.request(send.clone(), shogun_agents::approval::Preview::for_send(&send, "body", shogun_agents::approval::Route::ViaComposio), shogun_agents::approval::Origin::AiApi, 0)).unwrap();
+        let server = McpServer::new(Fake, || shogun_agents::approval::APPROVAL_TIMEOUT_MS as i64 + 1).with_approvals_path(path.clone());
+        let response = call(&server, &format!(r#"{{"jsonrpc":"2.0","id":77,"method":"tools/call","params":{{"name":"actions.poll","arguments":{{"approval_id":{}}}}}}}"#, id.0));
+        let text = response["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("\"status\":\"timed_out\""));
+        assert_eq!(crate::approval_store::load_queue(&path).unwrap().status(id), Some(shogun_agents::approval::ApprovalStatus::TimedOut));
         let _ = std::fs::remove_file(&path);
     }
 

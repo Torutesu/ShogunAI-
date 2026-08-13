@@ -416,7 +416,8 @@ pub fn respond_with<B: MemoryBackend + ?Sized>(
     }
 }
 
-pub fn poll_approval(id: u64, approvals: &ApprovalQueue) -> String {
+pub fn poll_approval(id: u64, approvals: &mut ApprovalQueue, now_ms: i64) -> String {
+    approvals.expire_due(u64::try_from(now_ms).unwrap_or(0));
     let status = approvals.status(ApprovalId(id));
     let status = match status {
         Some(ApprovalStatus::Pending) => "pending",
