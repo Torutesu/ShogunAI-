@@ -173,6 +173,7 @@ pub struct PendingRecord {
 pub struct ApprovalQueue {
     pending: Vec<PendingApproval>,
     terminal: Vec<TerminalRecord>,
+    in_flight: Vec<ApprovalId>,
     next_id: u64,
 }
 
@@ -180,12 +181,12 @@ pub const TERMINAL_RETENTION: usize = 256;
 
 impl ApprovalQueue {
     pub fn new() -> Self {
-        Self { pending: Vec::new(), terminal: Vec::new(), next_id: 1 }
+        Self { pending: Vec::new(), terminal: Vec::new(), in_flight: Vec::new(), next_id: 1 }
     }
 
     /// Empty queue that will allocate ids starting at `next_id` (must be ≥ 1).
     pub fn with_next_id(next_id: u64) -> Self {
-        Self { pending: Vec::new(), terminal: Vec::new(), next_id: next_id.max(1) }
+        Self { pending: Vec::new(), terminal: Vec::new(), in_flight: Vec::new(), next_id: next_id.max(1) }
     }
 
     /// Snapshot pending rows + the next id allocator (for file persistence / IPC).
@@ -217,15 +218,19 @@ impl ApprovalQueue {
             });
             // Keep next_id strictly above any imported id.
             if r.id.0 >= q.next_id {
-                q.next_id = r.id.0.wrapping_add(1).max(1);
+                q.next_id = r.id.0.checked_add(1).unwrap_or(u64::MAX);
             }
         }
         q
     }
 
-    pub fn import_with_terminal(next_id: u64, records: Vec<PendingRecord>, terminal: Vec<TerminalRecord>) -> Self {
+    pub fn import_with_terminal(next_id: u64, records: Vec<PendingRecord>, terminal: Vec<TerminalRecord>, in_flight: Vec<ApprovalId>) -> Self {
         let mut q = Self::import(next_id, records);
         q.terminal = terminal;
+        q.in_flight = in_flight;
+        for id in q.terminal.iter().map(|r| r.id).chain(q.in_flight.iter().copied()) {
+            if id.0 >= q.next_id { q.next_id = id.0.checked_add(1).unwrap_or(u64::MAX); }
+        }
         q.trim_terminal();
         q
     }
@@ -234,18 +239,19 @@ impl ApprovalQueue {
         &self.terminal
     }
 
-    fn alloc_id(&mut self) -> ApprovalId {
-        let id = ApprovalId(self.next_id);
-        self.next_id = self.next_id.wrapping_add(1);
-        id
-    }
+    pub fn in_flight_ids(&self) -> &[ApprovalId] { &self.in_flight }
 
+    pub fn try_request(&mut self, action: SendAction, preview: Preview, origin: Origin, now_ms: u64) -> Result<ApprovalId, &'static str> {
+        if self.next_id == u64::MAX { return Err("approval id space exhausted; refusing id reuse"); }
+        let id = ApprovalId(self.next_id);
+        self.next_id += 1;
+        self.pending.push(PendingApproval { id, action, preview, origin, created_ms: now_ms });
+        Ok(id)
+    }
     /// Enqueue a send for L3 approval. Returns the handle; the request starts [`ApprovalState::Pending`]
     /// (an AI-API caller holds this pending result until resolved — FR-AG-04).
     pub fn request(&mut self, action: SendAction, preview: Preview, origin: Origin, now_ms: u64) -> ApprovalId {
-        let id = self.alloc_id();
-        self.pending.push(PendingApproval { id, action, preview, origin, created_ms: now_ms });
-        id
+        self.try_request(action, preview, origin, now_ms).expect("approval id allocation failed")
     }
 
     fn position(&self, id: ApprovalId) -> Option<usize> {
@@ -275,6 +281,7 @@ impl ApprovalQueue {
             return Decision::Rejected(RejectCause::TimedOut);
         }
         let p = self.pending.remove(idx);
+        self.in_flight.push(id);
         Decision::Confirmed(ConfirmedSend { action: p.action, preview: p.preview })
     }
 
@@ -303,6 +310,7 @@ impl ApprovalQueue {
         if self.position(id).is_some() {
             return Some(ApprovalStatus::Pending);
         }
+        if self.in_flight.contains(&id) { return Some(ApprovalStatus::Pending); }
         self.terminal.iter().find(|r| r.id == id).map(|r| r.status)
     }
 
@@ -311,7 +319,8 @@ impl ApprovalQueue {
         if status == ApprovalStatus::Pending {
             return false;
         }
-        self.pending.retain(|p| p.id != id);
+        if !self.in_flight.iter().any(|candidate| *candidate == id) { return false; }
+        self.in_flight.retain(|candidate| *candidate != id);
         self.record_terminal(id, status, resolved_ms);
         true
     }
@@ -465,6 +474,32 @@ mod tests {
         let mut q = ApprovalQueue::new();
         assert_eq!(q.confirm(ApprovalId(42), ConfirmIntent::DedicatedButton, 0), Decision::Unknown);
         assert_eq!(q.poll(ApprovalId(42)), Decision::Unknown);
+    }
+
+    #[test]
+    fn terminal_status_cannot_be_forged_for_unknown_id() {
+        let mut q = ApprovalQueue::new();
+        assert!(!q.mark_status(ApprovalId(99), ApprovalStatus::Sent, 1));
+        assert_eq!(q.status(ApprovalId(99)), None);
+    }
+
+    #[test]
+    #[should_panic(expected = "approval id space exhausted")]
+    fn id_space_exhaustion_refuses_reuse() {
+        let mut q = ApprovalQueue::with_next_id(u64::MAX);
+        let _ = q.request(email(), preview(), Origin::AiApi, 0);
+    }
+
+    #[test]
+    fn terminal_import_advances_allocator() {
+        let q = ApprovalQueue::import_with_terminal(
+            1,
+            Vec::new(),
+            vec![TerminalRecord { id: ApprovalId(42), status: ApprovalStatus::Sent, resolved_ms: 1 }],
+            Vec::new(),
+        );
+        let (next, _) = q.export();
+        assert!(next > 42);
     }
 
     #[test]

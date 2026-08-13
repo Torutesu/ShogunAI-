@@ -123,7 +123,10 @@ async fn main() -> std::io::Result<()> {
     }
 
     let approvals = Arc::new(Mutex::new(ApprovalQueue::new()));
-    let state = AppState::new(Arc::new(tokens), backend, approvals, clock).with_metrics(metrics_source());
+    let approvals_path = shogun_mcp::approval_store::resolve_store_path(&db_path);
+    let state = AppState::new(Arc::new(tokens), backend, approvals, clock)
+        .with_approvals_path(approvals_path)
+        .with_metrics(metrics_source());
 
     let listener = bind_local(port).await?;
     let addr = listener.local_addr()?;

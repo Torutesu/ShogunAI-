@@ -55,3 +55,27 @@ The requested full relevant suite was started but user-interrupted during wrap-u
 - Desktop and REST server integration compile, but desktop send execution was not run against live connectors.
 - Full suite completion unavailable because user interrupted it; CLI loopback test needs an environment allowing localhost sockets.
 - No routing changes made.
+
+## Reviewer fix pass
+
+### RED
+
+Pre-fix focused run exposed the blocking behavior: terminal transition test failed because the pending body remained serialized (`assertion failed: !text.contains("SECRET BODY")`), and initial reviewer-safety changes required missing status/import APIs. These tests were then completed against the corrected implementation.
+
+### Fixes
+
+- REST `AppState` now accepts shared approval-store path; `shogun-api` resolves same `l3_approvals.json` path as MCP. REST enqueue and poll use locked `with_queue` transactions.
+- Queue tracks in-flight confirmed IDs, allowing post-confirm execution failures to become `send_failed`; forged IDs are rejected by `mark_status`.
+- ID allocation has checked terminal/in-flight import advancement and explicit exhaustion refusal; no wrap reuse.
+- Store import validates action kind, destination, route/action agreement, origin, IDs, duplicates, terminal status, and rejects invalid rows instead of filtering them.
+- Public `save_queue` acquires sidecar lock; transaction path uses private unlocked writer, preventing bypass/deadlock.
+- `actions.poll` schema now marks `approval_id` required with minimum `1`.
+
+### GREEN evidence
+
+- `cargo test -p shogun-agents -p shogun-mcp`: pass — 36 + 109 unit tests, 4 invariant tests, doc tests pass.
+- `cargo test -p shogun-mcp --features server --lib`: pass — 117 tests, including REST shared-file poll.
+- `cargo test -p shogun-cli --lib`: pass — 30 tests. Initial sandbox run blocked loopback with `Operation not permitted`; rerun with approved external execution passed.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml -q`: pass; pre-existing warnings only.
+
+Fix commit: `a164e7c fix: close approval ledger safety gaps`.

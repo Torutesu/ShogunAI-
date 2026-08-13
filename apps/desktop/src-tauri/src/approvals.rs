@@ -288,6 +288,7 @@ pub mod mac {
         // --- Composio consent + draft-stop gate (FR-C2-02 / FR-C2-03) -------------------------
         // Only Composio (email) sends are gated — first-layer sends bypass this entirely.
         use shogun_integrations::send_bridge::{route_send, SendRoute};
+        let outcome: Result<String, String> = (|| {
         let outcome = if matches!(route_send(&confirmed.action), SendRoute::Composio) {
             let policy = load_composio_policy(&app);
             if !composio_send_allowed(policy) {
@@ -343,17 +344,18 @@ pub mod mac {
             SendExecOutcome::Failed(e) => format!("send_failed:{e}"),
         }
         };
-        let status = if outcome.starts_with("sent") {
+        Ok(outcome)
+        })();
+        let status = if outcome.as_deref().unwrap_or("").starts_with("sent") {
             shogun_agents::approval::ApprovalStatus::Sent
-        } else if outcome.starts_with("draft_saved") {
+        } else if outcome.as_deref().unwrap_or("").starts_with("draft_saved") {
             shogun_agents::approval::ApprovalStatus::DraftSaved
         } else {
             shogun_agents::approval::ApprovalStatus::SendFailed
         };
-        if let Some(path) = &state.path {
-            shogun_mcp::approval_store::with_queue(path, |q| { q.mark_status(ApprovalId(id), status, now); })?;
-        }
-        Ok(outcome)
+        let marked = state.with_synced_queue(|q| q.mark_status(ApprovalId(id), status, now))?;
+        if !marked { return Err("approval status transition rejected".into()); }
+        Ok(outcome.unwrap_or_else(|error| format!("send_failed:{error}")))
     }
 
     /// FR-C2-05 fallback: save a Gmail draft (first-layer L2) when a Composio send fails.

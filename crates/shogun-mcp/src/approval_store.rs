@@ -31,6 +31,8 @@ struct WireStore {
     pending: Vec<WirePending>,
     #[serde(default)]
     terminal: Vec<WireTerminal>,
+    #[serde(default)]
+    in_flight: Vec<u64>,
 }
 
 fn default_next_id() -> u64 {
@@ -57,7 +59,7 @@ struct WireTerminal {
 
 impl Default for WireStore {
     fn default() -> Self {
-        Self { next_id: 1, pending: Vec::new(), terminal: Vec::new() }
+        Self { next_id: 1, pending: Vec::new(), terminal: Vec::new(), in_flight: Vec::new() }
     }
 }
 
@@ -81,11 +83,11 @@ fn route_wire(route: Route) -> &'static str {
     }
 }
 
-fn route_parse(s: &str) -> Option<Route> {
+fn route_parse(s: &str) -> Result<Route, String> {
     match s {
-        "direct" => Some(Route::DirectMcp),
-        "composio" => Some(Route::ViaComposio),
-        _ => None,
+        "direct" => Ok(Route::DirectMcp),
+        "composio" => Ok(Route::ViaComposio),
+        _ => Err(format!("invalid approval route: {s}")),
     }
 }
 
@@ -96,11 +98,11 @@ fn origin_wire(origin: Origin) -> &'static str {
     }
 }
 
-fn origin_parse(s: &str) -> Option<Origin> {
+fn origin_parse(s: &str) -> Result<Origin, String> {
     match s {
-        "human" => Some(Origin::Human),
-        "ai_api" => Some(Origin::AiApi),
-        _ => None,
+        "human" => Ok(Origin::Human),
+        "ai_api" => Ok(Origin::AiApi),
+        _ => Err(format!("invalid approval origin: {s}")),
     }
 }
 
@@ -115,16 +117,16 @@ fn status_wire(status: ApprovalStatus) -> &'static str {
     }
 }
 
-fn status_parse(s: &str) -> Option<ApprovalStatus> {
-    Some(match s {
-        "pending" => ApprovalStatus::Pending,
-        "rejected" => ApprovalStatus::Rejected,
-        "timed_out" => ApprovalStatus::TimedOut,
-        "sent" => ApprovalStatus::Sent,
-        "send_failed" => ApprovalStatus::SendFailed,
-        "draft_saved" => ApprovalStatus::DraftSaved,
-        _ => return None,
-    })
+fn status_parse(s: &str) -> Result<ApprovalStatus, String> {
+    match s {
+        "pending" => Ok(ApprovalStatus::Pending),
+        "rejected" => Ok(ApprovalStatus::Rejected),
+        "timed_out" => Ok(ApprovalStatus::TimedOut),
+        "sent" => Ok(ApprovalStatus::Sent),
+        "send_failed" => Ok(ApprovalStatus::SendFailed),
+        "draft_saved" => Ok(ApprovalStatus::DraftSaved),
+        _ => Err(format!("invalid approval status: {s}")),
+    }
 }
 
 fn kind_wire(action: &SendAction) -> &'static str {
@@ -136,13 +138,14 @@ fn kind_wire(action: &SendAction) -> &'static str {
     }
 }
 
-fn action_from_wire(kind: &str, destination: String) -> Option<SendAction> {
-    Some(match kind {
+fn action_from_wire(kind: &str, destination: String) -> Result<SendAction, String> {
+    if destination.trim().is_empty() { return Err("approval destination is empty".into()); }
+    Ok(match kind {
         "send_email" => SendAction::SendEmail { to: destination },
         "post_message" => SendAction::PostMessage { channel: destination },
         "create_calendar_event" => SendAction::CreateCalendarEvent { title: destination },
         "post_comment" => SendAction::PostComment { target: destination },
-        _ => return None,
+        _ => return Err(format!("invalid approval action kind: {kind}")),
     })
 }
 
@@ -158,10 +161,13 @@ fn to_wire(record: &PendingRecord) -> WirePending {
     }
 }
 
-fn from_wire(w: WirePending) -> Option<PendingRecord> {
+fn from_wire(w: WirePending) -> Result<PendingRecord, String> {
+    if w.id == 0 { return Err("approval id must be positive".into()); }
     let action = action_from_wire(&w.kind, w.destination.clone())?;
     let route = route_parse(&w.route)?;
     let origin = origin_parse(&w.origin)?;
+    let expected_route = match &action { SendAction::SendEmail { .. } => Route::ViaComposio, _ => Route::DirectMcp };
+    if route != expected_route { return Err("approval route does not match action".into()); }
     let preview = Preview {
         op_type: match &action {
             SendAction::SendEmail { .. } => "Send email",
@@ -174,7 +180,7 @@ fn from_wire(w: WirePending) -> Option<PendingRecord> {
         route,
         key_kind: KeyKind::Byok,
     };
-    Some(PendingRecord {
+    Ok(PendingRecord {
         id: ApprovalId(w.id),
         action,
         preview,
@@ -193,24 +199,39 @@ fn queue_to_wire(q: &ApprovalQueue) -> WireStore {
             status: status_wire(r.status).to_string(),
             resolved_ms: r.resolved_ms,
         }).collect(),
+        in_flight: q.in_flight_ids().iter().map(|id| id.0).collect(),
     }
 }
 
-fn queue_from_wire(store: WireStore) -> ApprovalQueue {
-    let records: Vec<PendingRecord> = store.pending.into_iter().filter_map(from_wire).collect();
-    let terminal: Vec<TerminalRecord> = store.terminal.into_iter().filter_map(|r| Some(TerminalRecord {
+fn queue_from_wire(store: WireStore) -> Result<ApprovalQueue, String> {
+    let mut ids = std::collections::HashSet::new();
+    let mut records = Vec::with_capacity(store.pending.len());
+    for row in store.pending { if !ids.insert(row.id) { return Err("duplicate approval id".into()); } records.push(from_wire(row)?); }
+    let mut terminal = Vec::with_capacity(store.terminal.len());
+    for r in store.terminal {
+        if r.id == 0 || !ids.insert(r.id) { return Err("duplicate or invalid terminal approval id".into()); }
+        let status = status_parse(&r.status)?;
+        if status == ApprovalStatus::Pending { return Err("terminal approval cannot be pending".into()); }
+        terminal.push(TerminalRecord {
         id: ApprovalId(r.id),
-        status: status_parse(&r.status)?,
+        status,
         resolved_ms: r.resolved_ms,
-    })).collect();
-    ApprovalQueue::import_with_terminal(store.next_id, records, terminal)
+        });
+    }
+    let mut in_flight = Vec::with_capacity(store.in_flight.len());
+    for id in store.in_flight {
+        if id == 0 || !ids.insert(id) { return Err("duplicate or invalid in-flight approval id".into()); }
+        in_flight.push(ApprovalId(id));
+    }
+    Ok(ApprovalQueue::import_with_terminal(store.next_id, records, terminal, in_flight))
 }
 
 /// Load shared queue. Missing file means empty; corrupt/unreadable file is an error.
 pub fn load_queue(path: &Path) -> Result<ApprovalQueue, String> {
     match std::fs::read_to_string(path) {
         Ok(text) => serde_json::from_str::<WireStore>(&text)
-            .map(queue_from_wire)
+            .map_err(|e| format!("load l3 approvals: {e}"))
+            .and_then(|store| queue_from_wire(store))
             .map_err(|e| format!("load l3 approvals: {e}")),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(ApprovalQueue::new()),
         Err(e) => Err(format!("read l3 approvals: {e}")),
@@ -241,6 +262,11 @@ fn acquire_lock(path: &Path) -> Result<StoreLock, String> {
 
 /// Persist `queue` to `path` (creates parent dirs; atomic replace).
 pub fn save_queue(path: &Path, queue: &ApprovalQueue) -> Result<(), String> {
+    let _lock = acquire_lock(path)?;
+    save_queue_unlocked(path, queue)
+}
+
+fn save_queue_unlocked(path: &Path, queue: &ApprovalQueue) -> Result<(), String> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("create l3 approvals directory: {e}"))?;
     }
@@ -268,7 +294,7 @@ pub fn with_queue<R>(path: &Path, f: impl FnOnce(&mut ApprovalQueue) -> R) -> Re
     let _lock = acquire_lock(path)?;
     let mut q = load_queue(path)?;
     let out = f(&mut q);
-    save_queue(path, &q)?;
+    save_queue_unlocked(path, &q)?;
     Ok(out)
 }
 
@@ -325,7 +351,8 @@ mod tests {
             let send = SendAction::SendEmail { to: "a@b.com".into() };
             q.request(send.clone(), Preview::for_send(&send, "SECRET BODY", Route::ViaComposio), Origin::AiApi, 1)
         }).unwrap();
-        with_queue(&path, |q| q.mark_status(id, ApprovalStatus::Sent, 2)).unwrap();
+        with_queue(&path, |q| { let _ = q.confirm(id, ConfirmIntent::DedicatedButton, 2); }).unwrap();
+        with_queue(&path, |q| assert!(q.mark_status(id, ApprovalStatus::Sent, 2))).unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(!text.contains("SECRET BODY"));
         assert_eq!(load_queue(&path).unwrap().status(id), Some(ApprovalStatus::Sent));
@@ -339,5 +366,22 @@ mod tests {
             PathBuf::from("/Users/x/Library/Application Support/com.selectkk.shogun/l3_approvals.json")
         );
         assert_eq!(resolve_store_path("memory.db"), PathBuf::from(STORE_FILE));
+    }
+
+    #[test]
+    fn semantically_invalid_rows_fail_closed() {
+        let path = tmp();
+        std::fs::write(&path, r#"{"next_id":2,"pending":[{"id":1,"kind":"send_email","destination":"a@b.com","full_body":"x","route":"direct","origin":"ai_api","created_ms":1}]}"#).unwrap();
+        let error = match load_queue(&path) { Ok(_) => panic!("invalid row accepted"), Err(error) => error };
+        assert!(error.contains("route does not match"));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn invalid_terminal_status_fails_closed() {
+        let path = tmp();
+        std::fs::write(&path, r#"{"next_id":2,"terminal":[{"id":1,"status":"pending","resolved_ms":1}]}"#).unwrap();
+        assert!(load_queue(&path).is_err());
+        let _ = std::fs::remove_file(&path);
     }
 }

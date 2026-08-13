@@ -18,6 +18,7 @@ use axum::response::Response;
 use axum::routing::any;
 use axum::Router;
 use shogun_agents::approval::ApprovalQueue;
+use std::path::PathBuf;
 use tokio::net::TcpListener;
 
 use crate::backend::MemoryBackend;
@@ -47,6 +48,7 @@ pub struct AppState {
     approvals: Arc<Mutex<ApprovalQueue>>,
     clock: Clock,
     metrics: Option<Arc<dyn MetricsSource>>,
+    approvals_path: Option<PathBuf>,
 }
 
 impl AppState {
@@ -58,8 +60,10 @@ impl AppState {
         approvals: Arc<Mutex<ApprovalQueue>>,
         clock: Clock,
     ) -> Self {
-        Self { tokens, backend, approvals, clock, metrics: None }
+        Self { tokens, backend, approvals, clock, metrics: None, approvals_path: None }
     }
+
+    pub fn with_approvals_path(mut self, path: PathBuf) -> Self { self.approvals_path = Some(path); self }
 
     /// Attach the live SLO metrics source served at `GET /v1/metrics`. Without it, the endpoint
     /// returns an empty (all-unmeasured) snapshot.
@@ -122,12 +126,26 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
             };
             match rest::route(&rreq, &state.tokens) {
                 // actions.execute needs the shared approval queue (L3 sends enqueue there).
-                Routed::Action => match state.approvals.lock() {
-                    Ok(mut queue) => rest::act(rreq.body.as_deref(), (state.clock)(), &mut queue),
-                    Err(_) => (500, r#"{"error":"internal"}"#.to_string()),
+                Routed::Action => {
+                    if let Some(path) = &state.approvals_path {
+                        match crate::approval_store::with_queue(path, |queue| rest::act(rreq.body.as_deref(), (state.clock)(), queue)) {
+                            Ok(result) => result,
+                            Err(error) => (500, format!(r#"{{"error":"approval_store","message":{}}}"#, serde_json::json!(error))),
+                        }
+                    } else { match state.approvals.lock() {
+                        Ok(mut queue) => rest::act(rreq.body.as_deref(), (state.clock)(), &mut queue),
+                        Err(_) => (500, r#"{"error":"internal"}"#.to_string()),
+                    }}
                 },
                 Routed::ApprovalPoll { id } => match state.approvals.lock() {
-                    Ok(queue) => (200, rest::poll_approval(id, &queue)),
+                    Ok(queue) => {
+                        if let Some(path) = &state.approvals_path {
+                            match crate::approval_store::with_queue(path, |queue| rest::poll_approval(id, queue)) {
+                                Ok(body) => (200, body),
+                                Err(error) => (500, format!(r#"{{"error":"approval_store","message":{}}}"#, serde_json::json!(error))),
+                            }
+                        } else { (200, rest::poll_approval(id, &queue)) }
+                    }
                     Err(_) => (500, r#"{"error":"internal"}"#.to_string()),
                 },
                 // metrics come from the injected live source (empty snapshot if none).
@@ -369,5 +387,23 @@ mod tests {
         // no token → 401
         let resp = raw_post(addr, "/v1/actions/execute", None, r#"{"kind":"local_search","query":"x"}"#).await;
         assert!(resp.contains("401"), "got: {resp}");
+    }
+
+    #[tokio::test]
+    async fn rest_uses_shared_file_ledger_for_poll() {
+        let path = std::env::temp_dir().join(format!("shogun-rest-shared-{}.json", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let send = shogun_agents::permission::SendAction::SendEmail { to: "a@b.com".into() };
+        let id = crate::approval_store::with_queue(&path, |q| {
+            q.request(send.clone(), shogun_agents::approval::Preview::for_send(&send, "body", shogun_agents::approval::Route::ViaComposio), shogun_agents::approval::Origin::AiApi, 1)
+        }).unwrap();
+        let mut tokens = TokenRegistry::new(); tokens.issue("t");
+        let listener = bind_local(0).await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let state = AppState::new(Arc::new(tokens), Arc::new(crate::backend::StubBackend), Arc::new(Mutex::new(ApprovalQueue::new())), Arc::new(|| 0)).with_approvals_path(path.clone());
+        tokio::spawn(async move { let _ = serve_on(listener, state).await; });
+        let resp = raw_get(addr, &format!("/v1/actions/poll/{}", id.0), Some("t")).await;
+        assert!(resp.contains("\"status\":\"pending\""), "got: {resp}");
+        let _ = std::fs::remove_file(&path);
     }
 }

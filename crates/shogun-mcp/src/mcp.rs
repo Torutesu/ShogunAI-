@@ -103,7 +103,7 @@ impl<B: MemoryBackend> McpServer<B> {
         tools.push(json!({
             "name": "actions.poll",
             "description": "Poll durable status for an L3 action approval",
-            "inputSchema": { "type": "object", "properties": { "approval_id": { "type": "integer" } } }
+            "inputSchema": { "type": "object", "properties": { "approval_id": { "type": "integer", "minimum": 1 } }, "required": ["approval_id"] }
         }));
         json!({ "tools": tools })
     }
@@ -394,6 +394,8 @@ mod tests {
         assert!(tools.iter().any(|t| t["name"] == "profile.whoami"));
         assert!(tools.iter().any(|t| t["name"] == "profile.set"));
         assert!(tools.iter().any(|t| t["name"] == "actions.execute"));
+        let poll = tools.iter().find(|t| t["name"] == "actions.poll").unwrap();
+        assert_eq!(poll["inputSchema"]["required"], json!(["approval_id"]));
     }
 
     #[test]

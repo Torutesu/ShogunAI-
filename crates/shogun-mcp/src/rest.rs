@@ -327,7 +327,10 @@ pub fn act(body: Option<&str>, now_ms: i64, approvals: &mut ApprovalQueue) -> (u
         }
         Some(ActionSpec::Send(send, preview)) => {
             let now = u64::try_from(now_ms).unwrap_or(0);
-            let id = approvals.request(send, preview, Origin::AiApi, now);
+            let id = match approvals.try_request(send, preview, Origin::AiApi, now) {
+                Ok(id) => id,
+                Err(error) => return (503, format!(r#"{{"error":"approval_store","message":"{}"}}"#, json_escape(error))),
+            };
             (202, format!(r#"{{"pending":true,"approval_id":{},"level":"L3"}}"#, id.0))
         }
     }
