@@ -1010,13 +1010,16 @@ pub mod mac {
             // person/project is resolvable from a bare row id here, so it is global-scoped with
             // the state kind as action_kind. Fire-and-forget: `Db::record_feedback` swallows any
             // failure — the resolve outcome above is already decided and is what the UI gets.
-            use shogun_memory::lessons::{FeedbackKind, LessonScope, NewFeedback};
+            use shogun_memory::lessons::{FeedbackKind, LessonScope, NewFeedback, Surface};
             let _ = db.record_feedback(
                 FeedbackKind::StateResolve,
                 LessonScope::Global,
                 &NewFeedback {
                     ts_ms: db.now_ms(),
                     action_kind: Some(kind.as_str()),
+                    // V19: the panel is where the tap happened. The rest stay unrecorded — a
+                    // state row is not a ranked candidate and nothing here measured a latency.
+                    surface: Some(Surface::Notch),
                     ..Default::default()
                 },
             );
