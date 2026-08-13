@@ -38,8 +38,10 @@ mod mac {
     /// Grown to live panel size while open so moves into the Expanded body still reach HoverTracker.
     const DEFAULT_BAND_H_CG: f64 = 40.0;
     const DEFAULT_BAND_W_CG: f64 = 184.0; // ~180 notch + 2pt pad each side
-    static HOVER_BAND_H_BITS: AtomicU64 = AtomicU64::new(DEFAULT_BAND_H_CG.to_bits());
-    static HOVER_BAND_W_BITS: AtomicU64 = AtomicU64::new(DEFAULT_BAND_W_CG.to_bits());
+    // f64::to_bits is not const on the workspace MSRV (1.80) — these are the IEEE-754 bit
+    // patterns of DEFAULT_BAND_H_CG (40.0) and DEFAULT_BAND_W_CG (184.0).
+    static HOVER_BAND_H_BITS: AtomicU64 = AtomicU64::new(0x4044_0000_0000_0000);
+    static HOVER_BAND_W_BITS: AtomicU64 = AtomicU64::new(0x4067_0000_0000_0000);
 
     /// Set the CGEventTap early-reject zone: `height` points down from each display's top,
     /// `width` centred on that display (Idle = notch silhouette; open = panel + grace).

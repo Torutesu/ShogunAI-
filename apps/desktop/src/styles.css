@@ -874,6 +874,7 @@ body {
   .msg__caret {
     animation: none;
   }
+}
 /* context actions (B-1) — up to four gated buttons directly above the composer. */
 .acts {
   flex: none;
