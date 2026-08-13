@@ -48,6 +48,14 @@ struct WirePending {
     route: String,
     origin: String,
     created_ms: u64,
+    #[serde(default)]
+    start_time: Option<String>,
+    #[serde(default)]
+    end_time: Option<String>,
+    #[serde(default)]
+    calendar_id: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -138,12 +146,18 @@ fn kind_wire(action: &SendAction) -> &'static str {
     }
 }
 
-fn action_from_wire(kind: &str, destination: String) -> Result<SendAction, String> {
+fn action_from_wire(kind: &str, destination: String, start_time: Option<String>, end_time: Option<String>, calendar_id: Option<String>, description: Option<String>) -> Result<SendAction, String> {
     if destination.trim().is_empty() { return Err("approval destination is empty".into()); }
     Ok(match kind {
         "send_email" => SendAction::SendEmail { to: destination },
         "post_message" => SendAction::PostMessage { channel: destination },
-        "create_calendar_event" => SendAction::CreateCalendarEvent { title: destination },
+        "create_calendar_event" => SendAction::CreateCalendarEvent {
+            title: destination,
+            start_time: start_time.ok_or("calendar approval missing start_time")?,
+            end_time: end_time.ok_or("calendar approval missing end_time")?,
+            calendar_id,
+            description: description.unwrap_or_default(),
+        },
         "post_comment" => SendAction::PostComment { target: destination },
         _ => return Err(format!("invalid approval action kind: {kind}")),
     })
@@ -158,12 +172,16 @@ fn to_wire(record: &PendingRecord) -> WirePending {
         route: route_wire(record.preview.route).to_string(),
         origin: origin_wire(record.origin).to_string(),
         created_ms: record.created_ms,
+        start_time: match &record.action { SendAction::CreateCalendarEvent { start_time, .. } => Some(start_time.clone()), _ => None },
+        end_time: match &record.action { SendAction::CreateCalendarEvent { end_time, .. } => Some(end_time.clone()), _ => None },
+        calendar_id: match &record.action { SendAction::CreateCalendarEvent { calendar_id, .. } => calendar_id.clone(), _ => None },
+        description: match &record.action { SendAction::CreateCalendarEvent { description, .. } => Some(description.clone()), _ => None },
     }
 }
 
 fn from_wire(w: WirePending) -> Result<PendingRecord, String> {
     if w.id == 0 { return Err("approval id must be positive".into()); }
-    let action = action_from_wire(&w.kind, w.destination.clone())?;
+    let action = action_from_wire(&w.kind, w.destination.clone(), w.start_time, w.end_time, w.calendar_id, w.description)?;
     let route = route_parse(&w.route)?;
     let origin = origin_parse(&w.origin)?;
     let expected_route = match &action { SendAction::SendEmail { .. } => Route::ViaComposio, _ => Route::DirectMcp };
@@ -206,7 +224,15 @@ fn queue_to_wire(q: &ApprovalQueue) -> WireStore {
 fn queue_from_wire(store: WireStore) -> Result<ApprovalQueue, String> {
     let mut ids = std::collections::HashSet::new();
     let mut records = Vec::with_capacity(store.pending.len());
-    for row in store.pending { if !ids.insert(row.id) { return Err("duplicate approval id".into()); } records.push(from_wire(row)?); }
+    for row in store.pending {
+        // Pre-calendar-schema rows had no times. Drop only this known legacy shape; one bad
+        // legacy row must not hide valid Gmail or Calendar approvals. Do not retain its body.
+        if row.kind == "create_calendar_event" && (row.start_time.is_none() || row.end_time.is_none()) {
+            continue;
+        }
+        if !ids.insert(row.id) { return Err("duplicate approval id".into()); }
+        records.push(from_wire(row)?);
+    }
     let mut terminal = Vec::with_capacity(store.terminal.len());
     for r in store.terminal {
         if r.id == 0 || !ids.insert(r.id) { return Err("duplicate or invalid terminal approval id".into()); }
@@ -386,6 +412,53 @@ mod tests {
         std::fs::write(&path, r#"{"next_id":2,"pending":[{"id":1,"kind":"send_email","destination":"a@b.com","full_body":"x","route":"direct","origin":"ai_api","created_ms":1}]}"#).unwrap();
         let error = match load_queue(&path) { Ok(_) => panic!("invalid row accepted"), Err(error) => error };
         assert!(error.contains("route does not match"));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn legacy_calendar_row_without_times_fails_closed() {
+        let path = tmp();
+        std::fs::write(&path, r#"{"next_id":2,"pending":[{"id":1,"kind":"create_calendar_event","destination":"Ship","full_body":"old","route":"direct","origin":"ai_api","created_ms":1}]}"#).unwrap();
+        let mut q = load_queue(&path).unwrap();
+        assert!(q.export().1.is_empty());
+        let send = SendAction::SendEmail { to: "next@example.com".into() };
+        let next = q.request(send.clone(), Preview::for_send(&send, "body", Route::ViaComposio), Origin::AiApi, 2);
+        assert_eq!(next.0, 2);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn legacy_calendar_row_is_dropped_without_hiding_valid_rows() {
+        let path = tmp();
+        std::fs::write(&path, r#"{"next_id":4,"pending":[
+            {"id":1,"kind":"create_calendar_event","destination":"old","full_body":"SECRET OLD","route":"direct","origin":"ai_api","created_ms":1},
+            {"id":2,"kind":"send_email","destination":"a@example.com","full_body":"valid gmail","route":"composio","origin":"ai_api","created_ms":2},
+            {"id":3,"kind":"create_calendar_event","destination":"new","full_body":"valid calendar","route":"direct","origin":"human","created_ms":3,"start_time":"2026-08-13T10:00:00Z","end_time":"2026-08-13T11:00:00Z","description":"agenda"}
+        ]}"#).unwrap();
+        let mut q = load_queue(&path).unwrap();
+        let (_, rows) = q.export();
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().all(|r| !r.preview.full_body.contains("SECRET OLD")));
+        assert!(rows.iter().any(|r| matches!(r.action, SendAction::SendEmail { .. })));
+        assert!(rows.iter().any(|r| matches!(r.action, SendAction::CreateCalendarEvent { .. })));
+        let send = SendAction::SendEmail { to: "next@example.com".into() };
+        let next = q.request(send.clone(), Preview::for_send(&send, "body", Route::ViaComposio), Origin::AiApi, 4);
+        assert_eq!(next.0, 4);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn calendar_times_survive_durable_round_trip_and_confirmation() {
+        let path = tmp();
+        let send = SendAction::CreateCalendarEvent {
+            title: "Ship".into(), start_time: "2026-08-13T10:00:00Z".into(),
+            end_time: "2026-08-13T11:00:00Z".into(), calendar_id: Some("work".into()), description: "Agenda".into(),
+        };
+        let id = with_queue(&path, |q| q.request(send.clone(), Preview::for_send(&send, send.calendar_preview_body(), Route::DirectMcp), Origin::AiApi, 1)).unwrap();
+        let mut loaded = load_queue(&path).unwrap();
+        let Decision::Confirmed(confirmed) = loaded.confirm(id, ConfirmIntent::DedicatedButton, 2) else { panic!("expected confirmation") };
+        assert_eq!(confirmed.action, send);
+        assert!(confirmed.preview.full_body.contains("endTime: 2026-08-13T11:00:00Z"));
         let _ = std::fs::remove_file(&path);
     }
 

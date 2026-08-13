@@ -233,6 +233,9 @@ pub fn run() {
         approvals::mac::set_composio_policy,
         approvals::mac::set_composio_user_id,
         approvals::mac::composio_settings,
+        approvals::mac::google_oauth_settings,
+        approvals::mac::set_google_oauth_client,
+        approvals::mac::clear_google_oauth_client,
         ai_sessions::mac::get_ai_session_import,
         ai_sessions::mac::set_ai_session_import,
         dream::mac::dream_status,
@@ -297,6 +300,8 @@ fn setup_macos(app: &tauri::App) {
     // One Keychain pass for secrets read during boot (DB, Dream, Composio). BYOK keys load lazily
     // when the user picks a provider — warming them here caused extra prompts for unused keys.
     shogun_integrations::keychain_store::warm_startup_keychain(&[
+        shogun_integrations::keychain_store::GOOGLE_OAUTH_CLIENT_ID_ACCOUNT,
+        shogun_integrations::keychain_store::GOOGLE_OAUTH_CLIENT_SECRET_ACCOUNT,
         "memory-db-key",
         "select-kk-batch",
         "composio-api-key",
@@ -2356,4 +2361,3 @@ fn attach_embedder(
         }
     }
 }
-

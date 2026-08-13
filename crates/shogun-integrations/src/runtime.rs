@@ -13,6 +13,7 @@
 //! (the WP-F "double gate").
 
 use serde_json::Value;
+use std::sync::Arc;
 use shogun_mcp::connection::{ConnEvent, ConnState, ConnectionRegistry, DisconnectOutcome};
 use shogun_mcp::scope::{Service, Wave, ALL_SERVICES};
 use shogun_mcp::service_gate::{authorize_op, OpContext, OpDecision};
@@ -67,7 +68,7 @@ pub struct ServiceStatus {
 /// Owns per-service connection state and drives sync/write over a transport. Generic over the
 /// transport so the daemon uses the live [`crate::RemoteMcpTransport`] and tests use a fake.
 pub struct ConnectorRuntime<T> {
-    transport: T,
+    transport: Arc<T>,
     registry: ConnectionRegistry,
     highest_released: Wave,
     draft_stop: bool,
@@ -75,7 +76,7 @@ pub struct ConnectorRuntime<T> {
 
 impl<T> ConnectorRuntime<T> {
     pub fn new(transport: T, highest_released: Wave, draft_stop: bool) -> Self {
-        Self { transport, registry: ConnectionRegistry::new(), highest_released, draft_stop }
+        Self { transport: Arc::new(transport), registry: ConnectionRegistry::new(), highest_released, draft_stop }
     }
 
     pub fn registry(&self) -> &ConnectionRegistry {
@@ -90,6 +91,21 @@ impl<T> ConnectorRuntime<T> {
     /// Record a completed OAuth connection for a service (drives it out of `Disconnected`).
     pub fn mark_connected(&mut self, service: Service, now_ms: i64) {
         self.registry.apply(service, ConnEvent::Connected { ts: now_ms });
+    }
+
+    /// Marking connected requires a live capability proof for released official providers.
+    pub fn validate_capabilities(&self, service: Service) -> Result<(), String>
+    where
+        T: CapabilityProbe,
+    {
+        self.transport.validate_capabilities(service)
+    }
+
+    pub fn capability_transport(&self, _service: Service) -> Arc<T>
+    where
+        T: CapabilityProbe,
+    {
+        Arc::clone(&self.transport)
     }
 
     /// Record that a service's token expired / was revoked (amber).
@@ -139,7 +155,87 @@ impl<T> ConnectorRuntime<T> {
     }
 }
 
+pub trait CapabilityProbe {
+    fn validate_capabilities(&self, service: Service) -> Result<(), String>;
+}
+
+pub struct SyncTicket<T> {
+    service: Service,
+    ctx: OpContext,
+    transport: Arc<T>,
+}
+
+impl<T: IntegrationTransport> SyncTicket<T> {
+    pub fn run<S: IngestSink>(self, sink: &S) -> Result<SyncReport, SyncFailure> {
+        match collect_sync(self.service, &self.ctx, self.transport.as_ref()) {
+            Ok(items) => Ok(SyncReport { fetched: items.len(), inserted: sink.ingest(&items) }),
+            Err(error) => Err(error),
+        }
+    }
+}
+
+pub struct OnDemandTicket<T> {
+    service: Service,
+    ctx: OpContext,
+    query: String,
+    transport: Arc<T>,
+}
+
+impl<T: IntegrationTransport> OnDemandTicket<T> {
+    pub fn run<S: IngestSink>(self, sink: &S) -> Result<SyncReport, SyncFailure> {
+        match collect_on_demand(self.service, &self.query, &self.ctx, self.transport.as_ref()) {
+            Ok(items) => Ok(SyncReport { fetched: items.len(), inserted: sink.ingest(&items) }),
+            Err(error) => Err(error),
+        }
+    }
+}
+
+pub struct WriteTicket<T> {
+    transport: Arc<T>,
+    service: Service,
+    op_name: String,
+    arguments: Value,
+}
+
+impl<T: WriteExecutor> WriteTicket<T> {
+    pub fn run(self) -> Result<Value, String> {
+        self.transport.execute(self.service, &self.op_name, self.arguments)
+    }
+}
+
 impl<T: IntegrationTransport> ConnectorRuntime<T> {
+    pub fn prepare_sync(&self, service: Service) -> Result<SyncTicket<T>, SyncFailure> {
+        let ctx = self.ctx(service);
+        match authorize_op(service, "read_sync", &ctx) {
+            OpDecision::Background | OpDecision::RequiresLevel(_) => Ok(SyncTicket { service, ctx, transport: Arc::clone(&self.transport) }),
+            OpDecision::Denied(reason) => Err(SyncFailure::Denied(reason)),
+            _ => Err(SyncFailure::Denied(shogun_mcp::service_gate::DenyReason::UnknownOp)),
+        }
+    }
+
+    pub fn apply_sync_result(&mut self, service: Service, now_ms: i64, result: &Result<SyncReport, SyncFailure>) {
+        if matches!(result, Ok(_)) {
+            self.registry.apply(service, ConnEvent::Synced { ts: now_ms });
+        } else if matches!(result, Err(SyncFailure::Transport(_))) {
+            self.registry.apply(service, ConnEvent::ConnectFailed);
+        }
+    }
+
+    pub fn apply_on_demand_result(&mut self, service: Service, result: &Result<SyncReport, SyncFailure>) {
+        if matches!(result, Err(SyncFailure::Transport(_))) {
+            self.registry.apply(service, ConnEvent::ConnectFailed);
+        }
+    }
+
+    pub fn prepare_on_demand(&self, service: Service, query: String) -> Result<OnDemandTicket<T>, SyncFailure> {
+        let ctx = self.ctx(service);
+        match authorize_op(service, "read_on_demand", &ctx) {
+            OpDecision::RequiresLevel(_) => Ok(OnDemandTicket { service, ctx, query, transport: Arc::clone(&self.transport) }),
+            OpDecision::Denied(reason) => Err(SyncFailure::Denied(reason)),
+            _ => Err(SyncFailure::Denied(shogun_mcp::service_gate::DenyReason::UnknownOp)),
+        }
+    }
+
     /// Run one read-sync for a service: gate → fetch → ingest. On success, mark the service synced;
     /// on a transport failure, turn it amber (needs-reauth) without touching other services
     /// (FR-INT-06). A gate denial (unreleased / disconnected) changes no state.
@@ -150,7 +246,7 @@ impl<T: IntegrationTransport> ConnectorRuntime<T> {
         sink: &S,
     ) -> Result<SyncReport, SyncFailure> {
         let ctx = self.ctx(service);
-        match collect_sync(service, &ctx, &self.transport) {
+        match collect_sync(service, &ctx, self.transport.as_ref()) {
             Ok(items) => {
                 let inserted = sink.ingest(&items);
                 self.registry.apply(service, ConnEvent::Synced { ts: now_ms });
@@ -178,7 +274,7 @@ impl<T: IntegrationTransport> ConnectorRuntime<T> {
         sink: &S,
     ) -> Result<SyncReport, SyncFailure> {
         let ctx = self.ctx(service);
-        match collect_on_demand(service, query, &ctx, &self.transport) {
+        match collect_on_demand(service, query, &ctx, self.transport.as_ref()) {
             Ok(items) => {
                 let inserted = sink.ingest(&items);
                 Ok(SyncReport { fetched: items.len(), inserted })
@@ -217,6 +313,16 @@ impl<T: IntegrationTransport> ConnectorRuntime<T> {
             .collect()
     }
 
+    /// Sync an already-filtered due list. Caller uses this for service-specific consent gates.
+    pub fn poll_tick_for<S: IngestSink>(
+        &mut self,
+        services: impl IntoIterator<Item = Service>,
+        now_ms: i64,
+        sink: &S,
+    ) -> Vec<(Service, Result<SyncReport, SyncFailure>)> {
+        services.into_iter().map(|s| (s, self.sync_service(s, now_ms, sink))).collect()
+    }
+
     /// Execute a first-layer write that has already passed L2/L3 confirmation upstream (the approval
     /// queue in `shogun-agents`). Re-checks the gate as defense in depth (WP-F double gate) before
     /// touching the service; a Composio-routed op (Gmail send) is refused here — it is the second
@@ -239,6 +345,14 @@ impl<T: IntegrationTransport> ConnectorRuntime<T> {
 }
 
 impl<T: IntegrationTransport + WriteExecutor> ConnectorRuntime<T> {
+    pub fn prepare_write(&self, service: Service, op_name: &str, arguments: Value) -> Result<WriteTicket<T>, String> {
+        match authorize_op(service, op_name, &self.ctx(service)) {
+            OpDecision::RequiresLevel(_) => Ok(WriteTicket { transport: Arc::clone(&self.transport), service, op_name: op_name.to_string(), arguments }),
+            OpDecision::RequiresComposio => Err(format!("{}::{op_name} is second-layer (Composio), not first-layer MCP", service.source_str())),
+            other => Err(format!("write not authorized: {other:?}")),
+        }
+    }
+
     /// The normal write path: gate + execute using the runtime's **own** transport as the executor
     /// (the live `RemoteMcpTransport` is a [`WriteExecutor`]). [`Self::execute_write`] keeps a
     /// separate-executor form for tests; production wiring uses this so it never has to hand the
@@ -249,7 +363,7 @@ impl<T: IntegrationTransport + WriteExecutor> ConnectorRuntime<T> {
         op_name: &str,
         arguments: Value,
     ) -> Result<Value, String> {
-        self.execute_write(service, op_name, arguments, &self.transport)
+        self.prepare_write(service, op_name, arguments)?.run()
     }
 }
 
@@ -333,6 +447,24 @@ mod tests {
     }
 
     #[test]
+    fn prepare_sync_accepts_background_decision_and_ticket_runs_out_of_lock() {
+        let rt = runtime(vec![item("body")], None);
+        let mut rt = rt;
+        rt.mark_connected(Service::Gmail, 100);
+        let ticket = rt.prepare_sync(Service::Gmail).expect("connected released sync should prepare");
+        let sink = CountingSink(RefCell::new(0));
+        let report = ticket.run(&sink).unwrap();
+        assert_eq!(report, SyncReport { fetched: 1, inserted: 1 });
+    }
+
+    #[test]
+    fn prepare_sync_denies_disconnected_and_unreleased_services() {
+        let rt = runtime(vec![], None);
+        assert!(matches!(rt.prepare_sync(Service::Gmail), Err(SyncFailure::Denied(_))));
+        assert!(matches!(rt.prepare_sync(Service::Slack), Err(SyncFailure::Denied(_))));
+    }
+
+    #[test]
     fn on_demand_fetch_ingests_without_touching_the_poll_schedule() {
         let mut rt = runtime(vec![item("thread body")], None);
         rt.mark_connected(Service::Gmail, 1_000);
@@ -352,6 +484,20 @@ mod tests {
         let sink = CountingSink(RefCell::new(0));
         assert!(rt.fetch_on_demand(Service::Gmail, "q", &sink).is_err());
         assert!(rt.registry().state(Service::Gmail).is_amber());
+    }
+
+    #[test]
+    fn on_demand_failure_applies_amber_without_losing_freshness() {
+        let mut rt = runtime(vec![], Some("token expired".into()));
+        rt.mark_connected(Service::Gmail, 1_000);
+        rt.apply_sync_result(Service::Gmail, 1_500, &Ok(SyncReport { fetched: 0, inserted: 0 }));
+        let result = Err(SyncFailure::Transport("token expired".into()));
+        rt.apply_on_demand_result(Service::Gmail, &result);
+        assert_eq!(rt.registry().state(Service::Gmail), ConnState::NeedsReauth {
+            reason: shogun_mcp::connection::ReauthReason::ConnectFailed,
+            last_sync_ms: 1_500,
+        });
+        assert_eq!(rt.registry().freshness_ms(Service::Gmail, 2_000), Some(500));
     }
 
     #[test]

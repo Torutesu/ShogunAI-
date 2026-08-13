@@ -9,6 +9,7 @@
 //! or the service is not a Google endpoint. It is never a silent default.
 
 use shogun_mcp::scope::Service;
+use serde_json::Value;
 
 /// The Google MCP tool name for `(service, op_name)`, if one exists.
 pub fn tool_for(service: Service, op_name: &str) -> Option<&'static str> {
@@ -68,6 +69,85 @@ pub fn tool_for(service: Service, op_name: &str) -> Option<&'static str> {
 /// The tool used to satisfy a background read-sync for a service, if it has one.
 pub fn read_sync_tool(service: Service) -> Option<&'static str> {
     tool_for(service, "read_sync")
+}
+
+/// Validate arguments at execution time, including conditionally required Drive content type.
+pub fn validate_write_arguments(service: Service, op_name: &str, arguments: &Value) -> Result<(), String> {
+    let string = |name: &str, required: bool| {
+        match arguments.get(name) {
+            Some(Value::String(_)) => Ok(()),
+            Some(_) => Err(format!("{service:?} {op_name} requires {name} string")),
+            None if required => Err(format!("{service:?} {op_name} requires {name}")),
+            None => Ok(()),
+        }
+    };
+    match (service, op_name) {
+        (Service::GoogleCalendar, "event_create") => {
+            string("startTime", true)?; string("endTime", true)?;
+        }
+        (Service::GoogleCalendar, "event_update_delete") => string("eventId", true)?,
+        (Service::GoogleDrive, "file_create") => {
+            string("title", false)?;
+            let has_content = arguments.get("textContent").is_some() || arguments.get("base64Content").is_some();
+            if has_content { string("contentMimeType", true)?; }
+            string("contentMimeType", false)?; string("textContent", false)?; string("base64Content", false)?;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Validate live server capabilities before a released connector becomes connected. The response
+/// must be a `tools/list` result with JSON schemas; names alone are insufficient for Calendar
+/// writes because `create_event` requires startTime and endTime.
+pub fn validate_write_capabilities(service: Service, result: &Value) -> Result<(), String> {
+    let tools = result
+        .get("tools")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "tools/list response had no tools".to_string())?;
+    for op in shogun_mcp::scope::scope(service).ops {
+        if !matches!(op.class, shogun_mcp::scope::OpClass::ServiceStateChange | shogun_mcp::scope::OpClass::ExternalSend)
+            || matches!(op.gating, shogun_mcp::scope::Gating::NotImplemented | shogun_mcp::scope::Gating::ComposioOnly) {
+            continue;
+        }
+        let Some(expected) = tool_for(service, op.name) else { continue };
+        let tool = tools.iter().find(|tool| tool.get("name").and_then(Value::as_str) == Some(expected))
+            .ok_or_else(|| format!("{service:?} missing released tool"))?;
+        let schema = tool.get("inputSchema").and_then(Value::as_object)
+            .ok_or_else(|| format!("{service:?} tool schema unavailable"))?;
+        if schema.get("type").and_then(Value::as_str) != Some("object") {
+            return Err(format!("{service:?} {expected} schema must be object"));
+        }
+        let properties = schema.get("properties").and_then(Value::as_object)
+            .ok_or_else(|| format!("{service:?} {expected} schema has no properties"))?;
+        let expected_fields: &[(&str, bool)] = match (service, op.name) {
+            (Service::GoogleCalendar, "event_create") => &[("summary", false), ("startTime", true), ("endTime", true), ("calendarId", false), ("description", false)],
+            (Service::GoogleCalendar, "event_update_delete") => &[("eventId", true)],
+            (Service::GoogleDrive, "file_create") => &[("title", false), ("contentMimeType", false), ("textContent", false), ("base64Content", false)],
+            _ => &[],
+        };
+        for (field, _) in expected_fields {
+            let property = properties.get(*field).ok_or_else(|| format!("{expected} schema missing property {field}"))?;
+            if property.get("type").and_then(Value::as_str) != Some("string") {
+                return Err(format!("{expected} schema property {field} must be string"));
+            }
+        }
+        let required = schema.get("required").and_then(Value::as_array);
+        for (field, must_require) in expected_fields {
+            if *must_require && !required.is_some_and(|values| values.iter().any(|v| v.as_str() == Some(*field))) {
+                return Err(format!("{expected} schema missing required field {field}"));
+            }
+        }
+        if service == Service::GoogleDrive && op.name == "file_create" {
+            // contentMimeType is required only when textContent/base64Content is supplied;
+            // schema validation must not invent an unconditional requirement.
+            if required.is_some_and(|values| values.iter().any(|v| matches!(v.as_str(), Some("textContent") | Some("base64Content"))))
+                && !required.is_some_and(|values| values.iter().any(|v| v.as_str() == Some("contentMimeType"))) {
+                return Err("create_file schema requires contentMimeType with content".into());
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -132,5 +212,46 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn calendar_capability_probe_requires_usable_create_event_schema() {
+        let result = serde_json::json!({"tools": [
+            {"name":"suggest_time","inputSchema":{"type":"object"}},
+            {"name":"create_event","inputSchema":{"type":"object","properties":{"summary":{"type":"string"},"startTime":{"type":"string"},"endTime":{"type":"string"},"calendarId":{"type":"string"},"description":{"type":"string"}}}},
+            {"name":"update_event","inputSchema":{"type":"object","properties":{"eventId":{"type":"string"}},"required":["eventId"]}}
+        ]});
+        let err = validate_write_capabilities(Service::GoogleCalendar, &result).unwrap_err();
+        assert!(err.contains("startTime"));
+    }
+
+    #[test]
+    fn calendar_capability_probe_accepts_required_times() {
+        let result = serde_json::json!({"tools": [
+            {"name":"suggest_time","inputSchema":{"type":"object"}},
+            {"name":"create_event","inputSchema":{"type":"object","properties":{"summary":{"type":"string"},"startTime":{"type":"string"},"endTime":{"type":"string"},"calendarId":{"type":"string"},"description":{"type":"string"}},"required":["startTime","endTime"]}},
+            {"name":"update_event","inputSchema":{"type":"object","properties":{"eventId":{"type":"string"}},"required":["eventId"]}}
+        ]});
+        assert!(validate_write_capabilities(Service::GoogleCalendar, &result).is_ok());
+    }
+
+    #[test]
+    fn capability_probe_does_not_require_unrelated_read_tools() {
+        let result = serde_json::json!({"tools": [
+            {"name":"create_event","inputSchema":{"type":"object","properties":{"summary":{"type":"string"},"startTime":{"type":"string"},"endTime":{"type":"string"},"calendarId":{"type":"string"},"description":{"type":"string"}},"required":["startTime","endTime"]}},
+            {"name":"update_event","inputSchema":{"type":"object","properties":{"eventId":{"type":"string"}},"required":["eventId"]}}
+        ]});
+        assert!(validate_write_capabilities(Service::GoogleCalendar, &result).is_ok());
+    }
+
+    #[test]
+    fn drive_create_validates_types_and_conditional_content_type() {
+        let result = serde_json::json!({"tools": [
+            {"name":"create_file","inputSchema":{"type":"object","properties":{"title":{"type":"string"},"contentMimeType":{"type":"string"},"textContent":{"type":"string"},"base64Content":{"type":"string"}},"required":["title"]}}
+        ]});
+        assert!(validate_write_capabilities(Service::GoogleDrive, &result).is_ok());
+        assert!(validate_write_arguments(Service::GoogleDrive, "file_create", &serde_json::json!({"title":"x","textContent":"body"})).is_err());
+        assert!(validate_write_arguments(Service::GoogleDrive, "file_create", &serde_json::json!({"title":"x"})).is_ok());
+        assert!(validate_write_arguments(Service::GoogleCalendar, "event_update_delete", &serde_json::json!({"eventId":3})).is_err());
     }
 }

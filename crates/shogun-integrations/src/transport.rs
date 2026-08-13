@@ -14,6 +14,7 @@ use shogun_mcp::scope::Service;
 use shogun_mcp::sync::{FetchedItem, IntegrationTransport};
 
 use crate::rpc::McpRpc;
+use crate::runtime::CapabilityProbe;
 use crate::toolmap;
 
 /// A first-layer transport backed by an [`McpRpc`] (a fake in tests, the live HTTPS client in
@@ -35,6 +36,11 @@ impl<R: McpRpc> RemoteMcpTransport<R> {
         self
     }
 
+    pub fn validate_capabilities(&self, service: Service) -> Result<(), String> {
+        let result = self.rpc.list_tools(service)?;
+        toolmap::validate_write_capabilities(service, &result)
+    }
+
     /// Execute a first-layer **write** op that the daemon has already authorized (an L2 draft or an
     /// L3 create, post-confirmation). Maps the scope op to its Google MCP tool and calls it with
     /// `arguments`. Returns the raw `CallToolResult` for the caller to record/inspect. An op with no
@@ -43,7 +49,14 @@ impl<R: McpRpc> RemoteMcpTransport<R> {
     pub fn execute(&self, service: Service, op_name: &str, arguments: Value) -> Result<Value, String> {
         let tool = toolmap::tool_for(service, op_name)
             .ok_or_else(|| format!("{}::{op_name} has no Google MCP tool", service.source_str()))?;
+        toolmap::validate_write_arguments(service, op_name, &arguments)?;
         self.rpc.call_tool(service, tool, arguments)
+    }
+}
+
+impl<R: McpRpc> CapabilityProbe for RemoteMcpTransport<R> {
+    fn validate_capabilities(&self, service: Service) -> Result<(), String> {
+        RemoteMcpTransport::validate_capabilities(self, service)
     }
 }
 
@@ -149,7 +162,12 @@ mod tests {
     #[test]
     fn execute_maps_write_op_to_tool() {
         let t = RemoteMcpTransport::new(FakeRpc::ok(json!({ "isError": false, "content": [] })));
-        t.execute(Service::GoogleCalendar, "event_create", json!({ "summary": "Sync" })).unwrap();
+        t.execute(
+            Service::GoogleCalendar,
+            "event_create",
+            json!({ "summary": "Sync", "startTime": "2026-08-13T10:00:00Z", "endTime": "2026-08-13T11:00:00Z" }),
+        )
+        .unwrap();
         assert_eq!(
             t.rpc.last.borrow().as_ref().unwrap(),
             &(Service::GoogleCalendar, "create_event".to_string())
@@ -162,6 +180,14 @@ mod tests {
         let t = RemoteMcpTransport::new(FakeRpc::ok(json!({})));
         let err = t.execute(Service::Gmail, "send", json!({})).unwrap_err();
         assert!(err.contains("no Google MCP tool"));
+        assert!(t.rpc.last.borrow().is_none());
+    }
+
+    #[test]
+    fn calendar_create_refuses_incomplete_action_args_before_network() {
+        let t = RemoteMcpTransport::new(FakeRpc::ok(json!({})));
+        let err = t.execute(Service::GoogleCalendar, "event_create", json!({"summary":"Sync"})).unwrap_err();
+        assert_eq!(err, "GoogleCalendar event_create requires startTime");
         assert!(t.rpc.last.borrow().is_none());
     }
 }

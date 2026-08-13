@@ -45,7 +45,13 @@ pub enum SendAction {
     /// Post a message to a chat service (Slack, …).
     PostMessage { channel: String },
     /// Create a calendar event.
-    CreateCalendarEvent { title: String },
+    CreateCalendarEvent {
+        title: String,
+        start_time: String,
+        end_time: String,
+        calendar_id: Option<String>,
+        description: String,
+    },
     /// Post a comment / review on an issue/PR (GitHub, Linear, …).
     PostComment { target: String },
 }
@@ -82,6 +88,22 @@ impl Action {
     }
 }
 
+impl SendAction {
+    /// Full Calendar event details shown at L3 confirmation. Existing persisted rows without
+    /// start/end are rejected before this can be called.
+    pub fn calendar_preview_body(&self) -> String {
+        match self {
+            SendAction::CreateCalendarEvent { title, start_time, end_time, calendar_id, description } => {
+                format!(
+                    "summary: {title}\nstartTime: {start_time}\nendTime: {end_time}\ncalendarId: {}\ndescription: {description}",
+                    calendar_id.as_deref().unwrap_or("primary")
+                )
+            }
+            _ => String::new(),
+        }
+    }
+}
+
 fn local_level(a: &LocalAction) -> Level {
     match a {
         // Trivially reversible, no external effect → auto.
@@ -104,7 +126,13 @@ mod tests {
         vec![
             Action::Send(SendAction::SendEmail { to: "a@b.com".into() }),
             Action::Send(SendAction::PostMessage { channel: "#general".into() }),
-            Action::Send(SendAction::CreateCalendarEvent { title: "Sync".into() }),
+            Action::Send(SendAction::CreateCalendarEvent {
+                title: "Sync".into(),
+                start_time: "2026-08-13T10:00:00Z".into(),
+                end_time: "2026-08-13T11:00:00Z".into(),
+                calendar_id: None,
+                description: "agenda".into(),
+            }),
             Action::Send(SendAction::PostComment { target: "pr#12".into() }),
         ]
     }

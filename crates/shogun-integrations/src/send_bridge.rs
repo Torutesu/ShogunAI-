@@ -49,8 +49,17 @@ pub fn args_for_send(action: &SendAction, body: &str) -> Value {
     match action {
         SendAction::SendEmail { to } => json!({ "to": to, "body": body }),
         SendAction::PostMessage { channel } => json!({ "channel": channel, "text": body }),
-        SendAction::CreateCalendarEvent { title } => {
-            json!({ "summary": title, "description": body })
+        SendAction::CreateCalendarEvent { title, start_time, end_time, calendar_id, description } => {
+            let mut args = json!({
+                "summary": title,
+                "startTime": start_time,
+                "endTime": end_time,
+                "description": description,
+            });
+            if let Some(calendar_id) = calendar_id {
+                args["calendarId"] = json!(calendar_id);
+            }
+            args
         }
         SendAction::PostComment { target } => json!({ "target": target, "body": body }),
     }
@@ -66,7 +75,10 @@ mod tests {
         vec![
             SendAction::SendEmail { to: "a@b.com".into() },
             SendAction::PostMessage { channel: "#general".into() },
-            SendAction::CreateCalendarEvent { title: "Sync".into() },
+            SendAction::CreateCalendarEvent {
+                title: "Sync".into(), start_time: "2026-08-13T10:00:00Z".into(),
+                end_time: "2026-08-13T11:00:00Z".into(), calendar_id: None, description: "agenda".into(),
+            },
             SendAction::PostComment { target: "pr#12".into() },
         ]
     }
@@ -98,9 +110,18 @@ mod tests {
         assert_eq!(v["channel"], "#general");
         assert_eq!(v["text"], "the confirmed text");
 
-        let c = SendAction::CreateCalendarEvent { title: "Sync".into() };
-        let v = args_for_send(&c, "agenda");
+        let c = SendAction::CreateCalendarEvent {
+            title: "Sync".into(),
+            start_time: "2026-08-13T10:00:00Z".into(),
+            end_time: "2026-08-13T11:00:00Z".into(),
+            calendar_id: Some("work".into()),
+            description: "agenda".into(),
+        };
+        let v = args_for_send(&c, "ignored legacy body");
         assert_eq!(v["summary"], "Sync");
+        assert_eq!(v["startTime"], "2026-08-13T10:00:00Z");
+        assert_eq!(v["endTime"], "2026-08-13T11:00:00Z");
+        assert_eq!(v["calendarId"], "work");
         assert_eq!(v["description"], "agenda");
     }
 }

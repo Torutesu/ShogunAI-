@@ -45,6 +45,8 @@ pub const SELECT_KK_ACCOUNT: &str = "select-kk-batch";
 
 /// Keychain account for the user's Deepgram API key (meeting live STT).
 pub const DEEPGRAM_ASR_ACCOUNT: &str = "deepgram-asr";
+pub const GOOGLE_OAUTH_CLIENT_ID_ACCOUNT: &str = "google-oauth-client-id";
+pub const GOOGLE_OAUTH_CLIENT_SECRET_ACCOUNT: &str = "google-oauth-client-secret";
 
 static CACHE: OnceLock<Mutex<HashMap<String, Vec<u8>>>> = OnceLock::new();
 
@@ -87,7 +89,11 @@ pub fn set_generic_secret(account: &str, password: &[u8]) -> Result<()> {
 /// Delete a secret from [`SERVICE`] and drop any in-process cache entry.
 pub fn delete_generic_secret(account: &str) -> Result<()> {
     let _ = delete_from_keychain(LEGACY_SERVICE, account);
-    delete_from_keychain(SERVICE, account)?;
+    match delete_from_keychain(SERVICE, account) {
+        Ok(()) => {}
+        Err(error) if error.code() == -25300 => {}
+        Err(error) => return Err(error),
+    }
     if let Ok(mut guard) = cache().lock() {
         guard.remove(account);
     }

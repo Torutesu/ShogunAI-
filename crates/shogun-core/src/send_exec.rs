@@ -119,8 +119,11 @@ where
             }
             SendRoute::FirstLayer { service, op } => {
                 let args = args_for_send(action, body);
-                let rt = self.runtime.lock().map_err(|_| "runtime lock poisoned".to_string())?;
-                rt.execute_write_owned(service, op, args).map(|_| ())
+                let ticket = {
+                    let rt = self.runtime.lock().map_err(|_| "runtime lock poisoned".to_string())?;
+                    rt.prepare_write(service, op, args)?
+                };
+                ticket.run().map(|_| ())
             }
         }
     }
@@ -272,9 +275,9 @@ mod tests {
     #[test]
     fn purpose_is_per_action() {
         let cal = ConfirmedSend {
-            action: SendAction::CreateCalendarEvent { title: "Sync".into() },
+            action: SendAction::CreateCalendarEvent { title: "Sync".into(), start_time: "2026-08-13T10:00:00Z".into(), end_time: "2026-08-13T11:00:00Z".into(), calendar_id: None, description: "agenda".into() },
             preview: Preview::for_send(
-                &SendAction::CreateCalendarEvent { title: "Sync".into() },
+                &SendAction::CreateCalendarEvent { title: "Sync".into(), start_time: "2026-08-13T10:00:00Z".into(), end_time: "2026-08-13T11:00:00Z".into(), calendar_id: None, description: "agenda".into() },
                 "Sync 3pm",
                 ApprovalRoute::DirectMcp,
             ),
@@ -325,8 +328,8 @@ mod tests {
         let (rt, executed) = runtime_at(Wave::One, &[Service::GoogleCalendar]);
         let transport = FirstLayerSendTransport::new(&rt);
 
-        let action = SendAction::CreateCalendarEvent { title: "Sync".into() };
-        let preview = Preview::for_send(&action, "agenda body", ApprovalRoute::DirectMcp);
+        let action = SendAction::CreateCalendarEvent { title: "Sync".into(), start_time: "2026-08-13T10:00:00Z".into(), end_time: "2026-08-13T11:00:00Z".into(), calendar_id: None, description: "agenda body".into() };
+        let preview = Preview::for_send(&action, action.calendar_preview_body(), ApprovalRoute::DirectMcp);
         let sink = RecordingSink::new();
         let out = execute_send(&ConfirmedSend { action, preview }, &transport, &sink);
 
@@ -335,6 +338,8 @@ mod tests {
         let (svc, op, args) = executed.borrow().clone().unwrap();
         assert_eq!((svc, op.as_str()), (Service::GoogleCalendar, "event_create"));
         assert_eq!(args["summary"], "Sync");
+        assert_eq!(args["startTime"], "2026-08-13T10:00:00Z");
+        assert_eq!(args["endTime"], "2026-08-13T11:00:00Z");
         assert_eq!(args["description"], "agenda body");
         // Exactly one trace, direct-MCP route.
         assert_eq!(sink.records().len(), 1);
@@ -449,8 +454,8 @@ mod tests {
         let first_layer = FirstLayerSendTransport::new(&rt);
         let routed = RoutedSendTransport::new(composio, first_layer, Box::new(|_a, _b| Ok(())));
 
-        let action = SendAction::CreateCalendarEvent { title: "Sync".into() };
-        let preview = Preview::for_send(&action, "agenda", ApprovalRoute::DirectMcp);
+        let action = SendAction::CreateCalendarEvent { title: "Sync".into(), start_time: "2026-08-13T10:00:00Z".into(), end_time: "2026-08-13T11:00:00Z".into(), calendar_id: None, description: "agenda".into() };
+        let preview = Preview::for_send(&action, action.calendar_preview_body(), ApprovalRoute::DirectMcp);
         let sink = RecordingSink::new();
         let out = execute_send(&ConfirmedSend { action, preview }, &routed, &sink);
 

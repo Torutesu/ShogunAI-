@@ -121,14 +121,8 @@ fn first_ts(rec: &Value, keys: &[&str]) -> i64 {
 
 /// A short, content-free reason from an `isError` result (the first text block, truncated).
 fn tool_error_reason(result: &Value) -> String {
-    let text = result
-        .get("content")
-        .and_then(Value::as_array)
-        .and_then(|blocks| blocks.iter().find_map(|b| b.get("text").and_then(Value::as_str)))
-        .unwrap_or("tool call returned isError");
-    let mut reason: String = text.chars().take(120).collect();
-    reason.insert_str(0, "mcp tool error: ");
-    reason
+    let _ = result;
+    "mcp tool call failed".to_string()
 }
 
 #[cfg(test)]
@@ -174,8 +168,8 @@ mod tests {
             "content": [ { "type": "text", "text": "invalid_grant: token expired" } ]
         });
         let err = parse_items(&result).unwrap_err();
-        assert!(err.starts_with("mcp tool error: "));
-        assert!(err.contains("invalid_grant"));
+        assert_eq!(err, "mcp tool call failed");
+        assert!(!err.contains("invalid_grant"));
     }
 
     #[test]

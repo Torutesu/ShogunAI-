@@ -24,28 +24,28 @@ impl KeychainTokenStore {
         Self
     }
 
-    fn account(service: Service) -> String {
+    pub fn token_account(service: Service) -> String {
         format!("{}-tokenset", service.source_str())
     }
 }
 
 impl TokenStore for KeychainTokenStore {
     fn load(&self, service: Service) -> Option<TokenSet> {
-        let account = Self::account(service);
+        let account = Self::token_account(service);
         let bytes = keychain_store::get_generic_secret(&account).ok()?;
         let blob = String::from_utf8(bytes).ok()?;
         token::deserialize(&blob).ok()
     }
 
     fn save(&self, service: Service, tokens: &TokenSet) -> Result<(), String> {
-        let account = Self::account(service);
+        let account = Self::token_account(service);
         let blob = token::serialize(tokens)?;
         keychain_store::set_generic_secret(&account, blob.as_bytes())
             .map_err(|_| format!("keychain write failed for {}", service.source_str()))
     }
 
     fn delete(&self, service: Service) -> Result<(), String> {
-        let account = Self::account(service);
+        let account = Self::token_account(service);
         keychain_store::delete_generic_secret(&account)
             .map_err(|_| format!("keychain delete failed for {}", service.source_str()))
     }

@@ -15,7 +15,7 @@ pub mod mac {
     use std::sync::Mutex;
 
     use serde_json::json;
-    use shogun_agents::approval::{ApprovalId, ApprovalQueue, ConfirmIntent, Decision, Origin, Preview, Route as ApprovalRoute};
+    use shogun_agents::approval::{ApprovalId, ApprovalQueue, ConfirmIntent, Decision, Origin};
     use shogun_agents::permission::SendAction;
     use shogun_agents::producer::{propose, ProposedSend};
     use shogun_core::composio_send::HttpComposioApi;
@@ -28,7 +28,7 @@ pub mod mac {
 
     use crate::connectors::mac::{ConnectorState, Runtime};
 
-    use shogun_integrations::keychain_store;
+    use shogun_integrations::{keychain_store, KeychainTokenStore};
 
     const COMPOSIO_KEY_ACCOUNT: &str = "composio-api-key";
 
@@ -47,7 +47,7 @@ pub mod mac {
         /// default — no send is ever attempted without an explicit acknowledgement.
         pub consent_acknowledged: bool,
         /// Composio account user ID for the connected Gmail account. Falls back to the
-        /// `SHOGUN_COMPOSIO_USER_ID` env var when empty. Stored in policy JSON (not a secret).
+        /// Stored in policy JSON (not a secret).
         #[serde(default)]
         pub user_id: String,
     }
@@ -171,7 +171,7 @@ pub mod mac {
     /// Build a [`ProposedSend`] from UI/agent input. Email → Composio (§6.10); everything else →
     /// direct first-layer. The action/preview/route construction is centralized in
     /// `shogun_agents::producer`.
-    fn proposed(kind: &str, destination: &str, subject: &str, body: &str) -> Result<ProposedSend, String> {
+    fn proposed(kind: &str, destination: &str, subject: &str, body: &str, start_time: Option<String>, end_time: Option<String>, calendar_id: Option<String>) -> Result<ProposedSend, String> {
         Ok(match kind {
             "email" => ProposedSend::Email {
                 to: destination.to_string(),
@@ -179,7 +179,13 @@ pub mod mac {
                 body: body.to_string(),
             },
             "slack" => ProposedSend::SlackPost { channel: destination.to_string(), body: body.to_string() },
-            "calendar" => ProposedSend::CalendarEvent { title: destination.to_string(), body: body.to_string() },
+            "calendar" => ProposedSend::CalendarEvent {
+                title: destination.to_string(),
+                start_time: start_time.ok_or("calendar startTime is required")?,
+                end_time: end_time.ok_or("calendar endTime is required")?,
+                calendar_id,
+                description: body.to_string(),
+            },
             "github" => ProposedSend::IssueComment { target: destination.to_string(), body: body.to_string() },
             other => return Err(format!("unknown send kind: {other}")),
         })
@@ -193,10 +199,13 @@ pub mod mac {
         destination: String,
         subject: String,
         body: String,
+        start_time: Option<String>,
+        end_time: Option<String>,
+        calendar_id: Option<String>,
         state: tauri::State<'_, ApprovalQueueState>,
         db: tauri::State<'_, Db>,
     ) -> Result<u64, String> {
-        let proposal = proposed(&kind, &destination, &subject, &body)?;
+        let proposal = proposed(&kind, &destination, &subject, &body, start_time, end_time, calendar_id)?;
         let now = db.now_ms().max(0) as u64;
         state.with_synced_queue(|q| propose(q, &proposal, Origin::Human, now).0)
     }
@@ -226,7 +235,7 @@ pub mod mac {
             .ok_or_else(|| "No key yet — add your provider key in Settings to draft replies.".to_string())?;
         let body = agent.complete(&prompt).map_err(|e| format!("draft failed: {e:?}"))?;
 
-        let proposal = proposed(&kind, &destination, &subject, &body)?;
+        let proposal = proposed(&kind, &destination, &subject, &body, None, None, None)?;
         let now = db.now_ms().max(0) as u64;
         state.with_synced_queue(|q| propose(q, &proposal, Origin::Human, now).0)
     }
@@ -323,9 +332,7 @@ pub mod mac {
                 let p = load_composio_policy(&app);
                 if !p.user_id.trim().is_empty() {
                     p.user_id
-                } else {
-                    std::env::var("SHOGUN_COMPOSIO_USER_ID").unwrap_or_default()
-                }
+                } else { String::new() }
             };
             let composio = ComposioSendTransport::new(HttpComposioApi::new(composio_key)?, composio_user);
             let runtime = connectors.0.clone();
@@ -384,8 +391,11 @@ pub mod mac {
         // Key names are the arg contract of `create_draft` in `ComposioReadRpc`, which maps
         // `to`/`subject`/`body` to Composio field names (`recipient_email`/`subject`/`body`).
         let args = json!({ "to": to, "subject": subject, "body": mail_body });
-        let rt = runtime.lock().map_err(|_| "runtime lock poisoned".to_string())?;
-        rt.execute_write_owned(shogun_mcp::scope::Service::Gmail, "draft_create_update", args).map(|_| ())?;
+        let ticket = {
+            let rt = runtime.lock().map_err(|_| "runtime lock poisoned".to_string())?;
+            rt.prepare_write(shogun_mcp::scope::Service::Gmail, "draft_create_update", args)?
+        };
+        ticket.run().map(|_| ())?;
         // Record traceability only on success: the draft body just left the device via Composio.
         // Route::Composio = second-layer (third-party relay); third_party = true. Chunk is digested
         // and dropped — body text never reaches storage (G8 / invariant 3).
@@ -556,9 +566,135 @@ pub mod mac {
         ComposioSettingsView { has_key, key_last4, draft_stop: policy.draft_stop, consent_acknowledged: policy.consent_acknowledged, user_id }
     }
 
+    #[derive(serde::Serialize)]
+    pub struct GoogleOAuthSettingsView {
+        pub has_client_id: bool,
+        pub has_client_secret: bool,
+    }
+
+    fn google_oauth_settings_view() -> GoogleOAuthSettingsView {
+        GoogleOAuthSettingsView {
+            has_client_id: keychain_store::get_generic_secret(keychain_store::GOOGLE_OAUTH_CLIENT_ID_ACCOUNT)
+                .ok().is_some_and(|v| !v.is_empty()),
+            has_client_secret: keychain_store::get_generic_secret(keychain_store::GOOGLE_OAUTH_CLIENT_SECRET_ACCOUNT)
+                .ok().is_some_and(|v| !v.is_empty()),
+        }
+    }
+
+    #[tauri::command]
+    pub fn google_oauth_settings() -> GoogleOAuthSettingsView {
+        google_oauth_settings_view()
+    }
+
+    fn saved_oauth_value(account: &str) -> Option<Vec<u8>> {
+        keychain_store::get_generic_secret(account).ok()
+    }
+
+    fn restore_oauth_value(account: &str, value: Option<&[u8]>) -> bool {
+        match value {
+            Some(bytes) => keychain_store::set_generic_secret(account, bytes).is_ok(),
+            None => keychain_store::delete_generic_secret(account).is_ok(),
+        }
+    }
+
+    struct GoogleOAuthSnapshot {
+        client_id: Option<Vec<u8>>,
+        client_secret: Option<Vec<u8>>,
+        calendar_tokens: Option<Vec<u8>>,
+        drive_tokens: Option<Vec<u8>>,
+    }
+
+    impl GoogleOAuthSnapshot {
+        fn capture() -> Self {
+            Self {
+                client_id: saved_oauth_value(keychain_store::GOOGLE_OAUTH_CLIENT_ID_ACCOUNT),
+                client_secret: saved_oauth_value(keychain_store::GOOGLE_OAUTH_CLIENT_SECRET_ACCOUNT),
+                calendar_tokens: keychain_store::get_generic_secret(&KeychainTokenStore::token_account(shogun_mcp::scope::Service::GoogleCalendar)).ok(),
+                drive_tokens: keychain_store::get_generic_secret(&KeychainTokenStore::token_account(shogun_mcp::scope::Service::GoogleDrive)).ok(),
+            }
+        }
+
+        fn restore(&self) -> bool {
+            let ok_oauth = restore_oauth_value(keychain_store::GOOGLE_OAUTH_CLIENT_ID_ACCOUNT, self.client_id.as_deref())
+                && restore_oauth_value(keychain_store::GOOGLE_OAUTH_CLIENT_SECRET_ACCOUNT, self.client_secret.as_deref());
+            let ok_calendar = restore_oauth_value(&KeychainTokenStore::token_account(shogun_mcp::scope::Service::GoogleCalendar), self.calendar_tokens.as_deref());
+            let ok_drive = restore_oauth_value(&KeychainTokenStore::token_account(shogun_mcp::scope::Service::GoogleDrive), self.drive_tokens.as_deref());
+            ok_oauth && ok_calendar && ok_drive
+        }
+    }
+
+    fn disconnect_google_services(state: &ConnectorState) -> Result<(), String> {
+        let store = shogun_integrations::KeychainTokenStore::new(keychain_store::SERVICE);
+        // Token deletion precedes state transition. Caller owns rollback snapshot.
+        for service in [shogun_mcp::scope::Service::GoogleCalendar, shogun_mcp::scope::Service::GoogleDrive] {
+            shogun_integrations::TokenStore::delete(&store, service)?;
+        }
+        let mut runtime = state.0.lock().map_err(|_| "runtime lock poisoned".to_string())?;
+        runtime.disconnect(shogun_mcp::scope::Service::GoogleCalendar, false);
+        runtime.disconnect(shogun_mcp::scope::Service::GoogleDrive, false);
+        Ok(())
+    }
+
+    #[tauri::command]
+    pub fn set_google_oauth_client(
+        client_id: String,
+        client_secret: String,
+        state: tauri::State<'_, ConnectorState>,
+    ) -> Result<(), String> {
+        let client_id = client_id.trim();
+        if client_id.is_empty() { return Err("Google OAuth client ID is required".into()); }
+        let snapshot = GoogleOAuthSnapshot::capture();
+        if let Err(_) = keychain_store::set_generic_secret(keychain_store::GOOGLE_OAUTH_CLIENT_ID_ACCOUNT, client_id.as_bytes()) {
+            return Err("Google OAuth client ID save failed".into());
+        }
+        let secret = client_secret.trim();
+        let secret_result = if secret.is_empty() {
+            keychain_store::delete_generic_secret(keychain_store::GOOGLE_OAUTH_CLIENT_SECRET_ACCOUNT)
+        } else {
+            keychain_store::set_generic_secret(keychain_store::GOOGLE_OAUTH_CLIENT_SECRET_ACCOUNT, secret.as_bytes())
+        };
+        if secret_result.is_err() {
+            let restored = snapshot.restore();
+            if !restored { force_google_disconnected(&state); }
+            return Err("Google OAuth client secret save failed".into());
+        }
+        if let Err(error) = disconnect_google_services(&state) {
+            if !snapshot.restore() { force_google_disconnected(&state); return Err("Google OAuth rollback failed".into()); }
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    #[tauri::command]
+    pub fn clear_google_oauth_client(state: tauri::State<'_, ConnectorState>) -> Result<(), String> {
+        let snapshot = GoogleOAuthSnapshot::capture();
+        for account in [keychain_store::GOOGLE_OAUTH_CLIENT_ID_ACCOUNT, keychain_store::GOOGLE_OAUTH_CLIENT_SECRET_ACCOUNT] {
+            match keychain_store::delete_generic_secret(account) {
+                Ok(()) => {}
+                Err(_) => {
+                    if !snapshot.restore() { force_google_disconnected(&state); return Err("Google OAuth rollback failed".into()); }
+                    return Err("Google OAuth client clear failed".into());
+                }
+            }
+        }
+        if let Err(error) = disconnect_google_services(&state) {
+            if !snapshot.restore() { force_google_disconnected(&state); return Err("Google OAuth rollback failed".into()); }
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    fn force_google_disconnected(state: &ConnectorState) {
+        if let Ok(mut runtime) = state.0.lock() {
+            runtime.disconnect(shogun_mcp::scope::Service::GoogleCalendar, false);
+            runtime.disconnect(shogun_mcp::scope::Service::GoogleDrive, false);
+        }
+    }
+
     #[cfg(test)]
     mod tests {
         use super::*;
+        use shogun_agents::approval::{Preview, Route as ApprovalRoute};
 
         /// Default policy: draft_stop = true, consent_acknowledged = false → blocked.
         #[test]

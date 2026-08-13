@@ -302,7 +302,12 @@ fn parse_action(body: &str) -> Option<ActionSpec> {
         }
         "create_calendar_event" => {
             let title = field("title")?;
-            send(SendAction::CreateCalendarEvent { title: title.clone() }, title, Route::DirectMcp)
+            let start_time = field("startTime")?;
+            let end_time = field("endTime")?;
+            let calendar_id = field("calendarId").filter(|v| !v.trim().is_empty());
+            let description = field("description").or_else(|| field("body")).unwrap_or_default();
+            let action = SendAction::CreateCalendarEvent { title, start_time, end_time, calendar_id, description };
+            send(action.clone(), action.calendar_preview_body(), Route::DirectMcp)
         }
         "post_comment" => {
             let target = field("target")?;
@@ -524,6 +529,21 @@ mod tests {
     fn actions_execute_routes_to_action() {
         assert_eq!(route(&req(Method::Post, "/v1/actions/execute", Some("t")), &reg()), Routed::Action);
         assert_eq!(status_code(&Routed::Action), 202);
+    }
+
+    #[test]
+    fn calendar_action_requires_start_and_end_and_preserves_wire_fields() {
+        let parsed = parse_action(r#"{"kind":"create_calendar_event","title":"Ship","startTime":"2026-08-13T10:00:00Z","endTime":"2026-08-13T11:00:00Z","calendarId":"work","description":"Agenda"}"#).unwrap();
+        let ActionSpec::Send(action, preview) = parsed else { panic!("expected calendar send") };
+        assert_eq!(action, SendAction::CreateCalendarEvent {
+            title: "Ship".into(),
+            start_time: "2026-08-13T10:00:00Z".into(),
+            end_time: "2026-08-13T11:00:00Z".into(),
+            calendar_id: Some("work".into()),
+            description: "Agenda".into(),
+        });
+        assert!(preview.full_body.contains("startTime: 2026-08-13T10:00:00Z"));
+        assert!(parse_action(r#"{"kind":"create_calendar_event","title":"Ship"}"#).is_none());
     }
 
     #[test]

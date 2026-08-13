@@ -18,7 +18,10 @@ fn permission_model_keeps_sends_at_l3() {
     let sends = [
         SendAction::SendEmail { to: "a@b.com".into() },
         SendAction::PostMessage { channel: "#x".into() },
-        SendAction::CreateCalendarEvent { title: "t".into() },
+        SendAction::CreateCalendarEvent {
+            title: "t".into(), start_time: "2026-08-13T10:00:00Z".into(),
+            end_time: "2026-08-13T11:00:00Z".into(), calendar_id: None, description: "body".into(),
+        },
         SendAction::PostComment { target: "r#1".into() },
     ];
     for s in sends {

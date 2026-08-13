@@ -20,7 +20,13 @@ pub enum ProposedSend {
     /// A Slack channel/thread post (first layer, L3).
     SlackPost { channel: String, body: String },
     /// A Google Calendar event (first layer, L3; irreversible → invariant 4).
-    CalendarEvent { title: String, body: String },
+    CalendarEvent {
+        title: String,
+        start_time: String,
+        end_time: String,
+        calendar_id: Option<String>,
+        description: String,
+    },
     /// A GitHub/Linear issue comment (first layer, L3).
     IssueComment { target: String, body: String },
 }
@@ -39,8 +45,15 @@ impl ProposedSend {
             ProposedSend::SlackPost { channel, body } => {
                 (SendAction::PostMessage { channel: channel.clone() }, body.clone(), Route::DirectMcp)
             }
-            ProposedSend::CalendarEvent { title, body } => {
-                (SendAction::CreateCalendarEvent { title: title.clone() }, body.clone(), Route::DirectMcp)
+            ProposedSend::CalendarEvent { title, start_time, end_time, calendar_id, description } => {
+                let action = SendAction::CreateCalendarEvent {
+                    title: title.clone(),
+                    start_time: start_time.clone(),
+                    end_time: end_time.clone(),
+                    calendar_id: calendar_id.clone(),
+                    description: description.clone(),
+                };
+                (action.clone(), action.calendar_preview_body(), Route::DirectMcp)
             }
             ProposedSend::IssueComment { target, body } => {
                 (SendAction::PostComment { target: target.clone() }, body.clone(), Route::DirectMcp)
@@ -84,7 +97,13 @@ mod tests {
     fn non_email_proposals_route_direct() {
         for (p, dest) in [
             (ProposedSend::SlackPost { channel: "#g".into(), body: "hi".into() }, "#g"),
-            (ProposedSend::CalendarEvent { title: "Sync".into(), body: "agenda".into() }, "Sync"),
+            (ProposedSend::CalendarEvent {
+                title: "Sync".into(),
+                start_time: "2026-08-13T10:00:00Z".into(),
+                end_time: "2026-08-13T11:00:00Z".into(),
+                calendar_id: None,
+                description: "agenda".into(),
+            }, "Sync"),
             (ProposedSend::IssueComment { target: "pr#12".into(), body: "lgtm".into() }, "pr#12"),
         ] {
             let (action, full, route) = p.parts();
@@ -96,14 +115,20 @@ mod tests {
     #[test]
     fn propose_enqueues_an_l3_send_the_confirm_path_can_run() {
         let mut q = ApprovalQueue::new();
-        let p = ProposedSend::CalendarEvent { title: "Sync".into(), body: "agenda".into() };
+        let p = ProposedSend::CalendarEvent {
+            title: "Sync".into(),
+            start_time: "2026-08-13T10:00:00Z".into(),
+            end_time: "2026-08-13T11:00:00Z".into(),
+            calendar_id: None,
+            description: "agenda".into(),
+        };
         let id = propose(&mut q, &p, Origin::Human, 0);
         assert_eq!(q.pending_len(), 1);
         // it is a normal L3 entry: a dedicated-button confirm yields the ConfirmedSend to execute.
         match q.confirm(id, ConfirmIntent::DedicatedButton, 1000) {
             Decision::Confirmed(cs) => {
                 assert!(matches!(cs.action, SendAction::CreateCalendarEvent { .. }));
-                assert_eq!(cs.preview.full_body, "agenda");
+                assert!(cs.preview.full_body.contains("startTime: 2026-08-13T10:00:00Z"));
             }
             other => panic!("expected Confirmed, got {other:?}"),
         }

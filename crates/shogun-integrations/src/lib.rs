@@ -38,7 +38,7 @@ pub mod oauth_flow;
 
 pub use composio::ComposioApi;
 pub use oauth::{AuthConfig, Pkce, TokenExchange, TokenSet};
-pub use rpc::{McpRpc, StaticTokenProvider, TokenProvider};
+pub use rpc::{DispatchRpc, McpRpc, StaticTokenProvider, TokenProvider};
 pub use runtime::{ConnUi, ConnectorRuntime, IngestSink, ServiceStatus, SyncReport};
 pub use send_bridge::{args_for_send, route_send, SendRoute};
 pub use token::{ManagedTokenProvider, MemoryTokenStore, TokenError, TokenManager, TokenStore};

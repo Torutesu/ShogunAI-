@@ -282,6 +282,10 @@ fn tool_descriptor(tool: Tool) -> Value {
                 "body": { "type": "string" },
                 "channel": { "type": "string", "description": "post_message channel" },
                 "title": { "type": "string", "description": "create_calendar_event title" },
+                "startTime": { "type": "string", "description": "RFC3339 event start; required for Calendar create" },
+                "endTime": { "type": "string", "description": "RFC3339 event end; required for Calendar create" },
+                "calendarId": { "type": "string", "description": "Optional Calendar ID; defaults to primary" },
+                "description": { "type": "string", "description": "Calendar event description/body" },
                 "target": { "type": "string", "description": "post_comment target" },
                 "bundle_id": { "type": "string" },
                 "path": { "type": "string" },
@@ -320,10 +324,15 @@ fn tool_descriptor(tool: Tool) -> Value {
             }),
         ),
     };
+    let input_schema = if tool == Tool::ActionsExecute {
+        json!({ "type": "object", "properties": props, "required": ["kind"], "additionalProperties": false })
+    } else {
+        json!({ "type": "object", "properties": props })
+    };
     json!({
         "name": tool.wire_name(),
         "description": desc,
-        "inputSchema": { "type": "object", "properties": props },
+        "inputSchema": input_schema,
     })
 }
 

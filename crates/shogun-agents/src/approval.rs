@@ -65,7 +65,7 @@ fn describe(action: &SendAction) -> (&'static str, String) {
     match action {
         SendAction::SendEmail { to } => ("Send email", to.clone()),
         SendAction::PostMessage { channel } => ("Post message", channel.clone()),
-        SendAction::CreateCalendarEvent { title } => ("Create calendar event", title.clone()),
+        SendAction::CreateCalendarEvent { title, .. } => ("Create calendar event", title.clone()),
         SendAction::PostComment { target } => ("Post comment", target.clone()),
     }
 }
@@ -530,7 +530,10 @@ mod tests {
         for a in [
             SendAction::SendEmail { to: "a@b.com".into() },
             SendAction::PostMessage { channel: "#eng".into() },
-            SendAction::CreateCalendarEvent { title: "Sync".into() },
+            SendAction::CreateCalendarEvent {
+                title: "Sync".into(), start_time: "2026-08-13T10:00:00Z".into(),
+                end_time: "2026-08-13T11:00:00Z".into(), calendar_id: None, description: "body".into(),
+            },
             SendAction::PostComment { target: "org/repo#1".into() },
         ] {
             let p = Preview::for_send(&a, "body", Route::DirectMcp);
