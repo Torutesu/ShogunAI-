@@ -2387,6 +2387,9 @@ function ComposioSection(): JSX.Element {
   const [check1, setCheck1] = useState(false);
   const [check2, setCheck2] = useState(false);
   const [check3, setCheck3] = useState(false);
+  const [googleOAuth, setGoogleOAuth] = useState({ has_client_id: false, has_client_secret: false });
+  const [googleClientId, setGoogleClientId] = useState("");
+  const [googleClientSecret, setGoogleClientSecret] = useState("");
 
   const refreshSettings = useCallback((): void => {
     if (!IN_TAURI) return;
@@ -2399,6 +2402,26 @@ function ComposioSection(): JSX.Element {
   }, []);
 
   useEffect(refreshSettings, [refreshSettings]);
+  useEffect(() => {
+    if (IN_TAURI) void invoke<typeof googleOAuth>("google_oauth_settings").then(setGoogleOAuth).catch((e) => setErr(String(e)));
+  }, []);
+
+  const saveGoogleOAuth = (): void => {
+    if (!googleClientId.trim()) return;
+    if (!IN_TAURI) {
+      setGoogleOAuth({ has_client_id: true, has_client_secret: Boolean(googleClientSecret.trim()) });
+      setGoogleClientId(""); setGoogleClientSecret("");
+      return;
+    }
+    void invoke("set_google_oauth_client", { clientId: googleClientId, clientSecret: googleClientSecret })
+      .then(() => { setGoogleClientId(""); setGoogleClientSecret(""); return invoke<typeof googleOAuth>("google_oauth_settings"); })
+      .then(setGoogleOAuth).catch((e) => setErr(String(e)));
+  };
+
+  const clearGoogleOAuth = (): void => {
+    if (!IN_TAURI) { setGoogleOAuth({ has_client_id: false, has_client_secret: false }); return; }
+    void invoke("clear_google_oauth_client").then(() => setGoogleOAuth({ has_client_id: false, has_client_secret: false })).catch((e) => setErr(String(e)));
+  };
 
   // Keep the user ID input field in sync with the stored value.
   useEffect(() => { setUserIdInput(settings.user_id); }, [settings.user_id]);
@@ -2607,6 +2630,18 @@ function ComposioSection(): JSX.Element {
         />
         {t.composioDraftStop}
       </label>
+
+      <div className="set__label" style={{ marginTop: 16 }}>{t.googleOAuthTitle}</div>
+      <div className="set__hint">{t.googleOAuthHint}</div>
+      <div className={`set__hint${googleOAuth.has_client_id ? " is-ok" : ""}`}>
+        {googleOAuth.has_client_id ? t.googleOAuthConfigured : t.googleOAuthMissing}
+      </div>
+      <div className="keyrow">
+        <input className="keyrow__input" type="text" placeholder={t.googleOAuthClientId} value={googleClientId} autoComplete="off" onChange={(e) => setGoogleClientId(e.target.value)} />
+        <input className="keyrow__input" type="password" placeholder={t.googleOAuthClientSecret} value={googleClientSecret} autoComplete="off" onChange={(e) => setGoogleClientSecret(e.target.value)} />
+        <button className="keyrow__btn" type="button" onClick={saveGoogleOAuth} disabled={!googleClientId.trim()}>{t.googleOAuthSave}</button>
+        {googleOAuth.has_client_id ? <button className="keyrow__btn" type="button" onClick={clearGoogleOAuth}>{t.googleOAuthClear}</button> : null}
+      </div>
     </section>
   );
 }

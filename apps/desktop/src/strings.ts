@@ -171,6 +171,14 @@ export const STRINGS = {
     composioDraftStop: "Draft-only mode (save a draft instead of sending)",
     composioUserId: "Composio user ID",
     composioUserIdHint: "Your Composio account's user identifier for the connected Gmail account.",
+    googleOAuthTitle: "Google Calendar / Drive OAuth",
+    googleOAuthHint: "Store Google OAuth desktop-client settings in Keychain. Values are never shown.",
+    googleOAuthClientId: "Google OAuth client ID",
+    googleOAuthClientSecret: "Google OAuth client secret (optional)",
+    googleOAuthConfigured: "Google OAuth client configured",
+    googleOAuthMissing: "Google OAuth client not configured",
+    googleOAuthSave: "Save Google OAuth",
+    googleOAuthClear: "Clear Google OAuth",
     // Memory API (MCP / CLI / REST — Pro; soft gate via Enable until Stripe WP5.1)
     memoryApiTitle: "Memory API",
     memoryApiHint:
