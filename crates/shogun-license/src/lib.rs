@@ -177,6 +177,9 @@ impl LicenseToken {
 /// set, else [`EMBEDDED_PUBLIC_KEY_B64`]. The env override is what dev, CI and a staging licence
 /// API use; release builds carry the embedded constant.
 pub fn public_key() -> Option<[u8; 32]> {
+    // Debug builds only: honouring the env in release would let anyone swap in their own
+    // keypair and mint themselves a plan (the whole gate rests on this key).
+    #[cfg(debug_assertions)]
     if let Ok(v) = std::env::var("SHOGUN_LICENSE_PUBKEY") {
         if let Some(k) = decode_public_key(v.trim()) {
             return Some(k);

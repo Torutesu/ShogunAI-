@@ -12,7 +12,7 @@
  *   502 upstream failure.
  */
 import { Hono } from "hono";
-import type { KeyLike } from "jose";
+import type { KeyObject } from "node:crypto";
 
 import { AuthError, verifyLicense } from "./auth.js";
 import type { AnthropicGateway } from "./gateway.js";
@@ -25,8 +25,9 @@ import { utcDate, type UsageStore } from "./usage.js";
 export interface RelayDeps {
   gateway: AnthropicGateway;
   usage: UsageStore;
-  /** The license API's ES256 public key (§4.1 — same key the license API signs with). */
-  licensePublicKey: KeyLike;
+  /** The licence API's Ed25519 public key (§4.1 — the SAME key that signs the `v1.` licence
+   * tokens; see `licensePublicKeyFromB64`). */
+  licensePublicKey: KeyObject;
   /** Per-license daily chunk cap (OPEN-B2: the concrete number comes from the cost model; the
    * enforcement lives here either way). */
   dailyChunkCap: number;
@@ -80,8 +81,10 @@ export function createApp(deps: RelayDeps): Hono<{ Variables: LogVars }> {
     return c.json({ error: "internal error" }, 500);
   });
 
+  const nowSecs = (): number => Math.floor(now().getTime() / 1000);
+
   app.post("/v1/batch", async (c) => {
-    const license = await verifyLicense(c.req.header("authorization"), deps.licensePublicKey);
+    const license = verifyLicense(c.req.header("authorization"), deps.licensePublicKey, nowSecs());
     c.set("relayLogLicense", license.licenseId);
 
     let raw: unknown;
@@ -119,9 +122,17 @@ export function createApp(deps: RelayDeps): Hono<{ Variables: LogVars }> {
   });
 
   app.get("/v1/batch/:id", async (c) => {
-    const license = await verifyLicense(c.req.header("authorization"), deps.licensePublicKey);
+    const license = verifyLicense(c.req.header("authorization"), deps.licensePublicKey, nowSecs());
     c.set("relayLogLicense", license.licenseId);
     const id = c.req.param("id");
+
+    // Ownership check (§4.1): a licence may only read back batches IT created. Anthropic batch
+    // ids are guessable, and without this any licensee could stream any other user's Dream-Cycle
+    // results. "Unknown" and "someone else's" answer identically — 404, no oracle.
+    const owner = await deps.usage.batchOwner(id);
+    if (owner !== license.licenseId) {
+      return c.json({ error: "not found" }, 404);
+    }
 
     const status = await deps.gateway.getBatch(id);
     if (status.processing_status !== "ended") {

@@ -55,18 +55,26 @@ pub mod mac {
             .unwrap_or(0)
     }
 
-    /// The licence API origin: `SHOGUN_LICENSE_API` (staging / dev) else production.
+    /// The licence API origin: `SHOGUN_LICENSE_API` (staging / dev, debug builds only) else
+    /// production. A release build that honoured the env could be pointed at an attacker's
+    /// "licence API".
     fn api_origin() -> String {
-        std::env::var("SHOGUN_LICENSE_API")
+        #[cfg(debug_assertions)]
+        if let Some(o) = std::env::var("SHOGUN_LICENSE_API")
             .ok()
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| license_client::DEFAULT_LICENSE_API.to_string())
+        {
+            return o;
+        }
+        license_client::DEFAULT_LICENSE_API.to_string()
     }
 
     fn billing_path(app: &AppHandle) -> Option<PathBuf> {
         // The env override keeps dev/QA on a scratch file, and matches what the standalone
-        // binaries read (`shogun_mcp::plan_source::billing_json_path`).
+        // binaries read (`shogun_mcp::plan_source::billing_json_path`). Debug builds only —
+        // release must read exactly one location.
+        #[cfg(debug_assertions)]
         if let Ok(p) = std::env::var("SHOGUN_BILLING_JSON") {
             if !p.trim().is_empty() {
                 return Some(PathBuf::from(p));
@@ -236,13 +244,20 @@ pub mod mac {
         match license_client::verify(&api_origin(), license_key, &device, &version) {
             Ok(resp) => match resp.token {
                 Some(token) => {
-                    if let Some(key) = public_key() {
-                        if let Err(e) = verify(&token, &key, &device) {
-                            return Ok(Outcome::Transient(format!(
-                                "licence token rejected ({})",
-                                e.as_str()
-                            )));
-                        }
+                    // No key = no verification = no entitlement. A build without the public key
+                    // must fail closed, not store whatever the server (or whoever the request
+                    // was pointed at) returned as an activated licence.
+                    let Some(key) = public_key() else {
+                        return Ok(Outcome::Transient(
+                            "no licence public key in this build (cannot verify the token)"
+                                .to_string(),
+                        ));
+                    };
+                    if let Err(e) = verify(&token, &key, &device) {
+                        return Ok(Outcome::Transient(format!(
+                            "licence token rejected ({})",
+                            e.as_str()
+                        )));
                     }
                     Ok(Outcome::Entitled(BillingSnapshot {
                         device_id: device,

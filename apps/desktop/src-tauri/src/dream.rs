@@ -253,10 +253,49 @@ pub mod mac {
         }
     }
 
-    /// The Select KK key, if this build has been provisioned with one. Absent is the normal case
-    /// today: the cycle then runs the local lane rather than not running.
+    /// The Select KK key, if this build has been provisioned with one — dev-only fuel for the
+    /// direct-Anthropic route (E-38). Release builds never read it for the Batch lane.
+    #[cfg(debug_assertions)]
     fn select_kk_key() -> Option<String> {
         keychain_store::get_select_kk_key()
+    }
+
+    /// The FR-BIL-08 licence token from the cached billing snapshot, if it still entitles this
+    /// device right now (signature, device binding and the grace window all checked by
+    /// `billing_state_of`). This — never an Anthropic key — is the relay's bearer credential:
+    /// the relay verifies exactly this token server-side (apps/api/src/auth.ts).
+    fn relay_license_token() -> Option<String> {
+        use shogun_mcp::plan_source::{billing_json_path, billing_state_of, parse_billing_snapshot};
+        let text = std::fs::read_to_string(billing_json_path()?).ok()?;
+        let snap = parse_billing_snapshot(&text)?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+            .unwrap_or(0);
+        match billing_state_of(&snap, now) {
+            shogun_agents::entitlement::BillingState::Active(_) => Some(snap.token),
+            _ => None,
+        }
+    }
+
+    /// The Batch lane's credential, resolved per route. Release: the licence token or nothing.
+    /// Debug + env opt-in: the raw dev Anthropic key for the direct route.
+    enum BatchCredential {
+        /// Licence token → relay (the shipping path).
+        Relay(String),
+        /// Dev-only: raw Anthropic key → Batch API directly.
+        #[cfg(debug_assertions)]
+        Direct(String),
+    }
+
+    /// Resolve tonight's Batch credential, or `None` → run the local lane.
+    fn batch_credential() -> Option<BatchCredential> {
+        use shogun_core::llm::batch_route::{batch_route, BatchRoute, DEV_DIRECT_ENV};
+        match batch_route(std::env::var(DEV_DIRECT_ENV).ok().as_deref()) {
+            BatchRoute::Relay => relay_license_token().map(BatchCredential::Relay),
+            #[cfg(debug_assertions)]
+            BatchRoute::DirectAnthropic => select_kk_key().map(BatchCredential::Direct),
+        }
     }
 
     // ------------------------------------------------------------------------ running a cycle
@@ -275,8 +314,8 @@ pub mod mac {
         let cond = conditions(db, &tonight);
         let now_ms = secs * 1000;
 
-        match select_kk_key() {
-            Some(key) => run_via_batch(db, key, &cond, &tonight, now_ms),
+        match batch_credential() {
+            Some(cred) => run_via_batch(db, cred, &cond, &tonight, now_ms),
             None => Ok(run_local(db, &cond, &tonight, now_ms)),
         }
     }
@@ -289,15 +328,14 @@ pub mod mac {
     /// night (FR-DC-05), not a silent downgrade to weaker candidates.
     fn run_via_batch(
         db: &Db,
-        key: String,
+        credential: BatchCredential,
         cond: &RunConditions,
         tonight: &str,
         now_ms: i64,
     ) -> Result<GatedRun, String> {
-        use shogun_core::llm::batch_route::{batch_route, BatchRoute, DEV_DIRECT_ENV};
         use shogun_core::llm::relay::{ModelClass, RelayBatchClient, RelayConfig};
         use shogun_core::llm::transport::ReqwestTransport;
-        use shogun_core::llm::{Secret, SelectKkKey};
+        use shogun_core::llm::{LicenseBearer, Secret};
 
         let (Ok(transport), Ok(rt)) = (
             ReqwestTransport::new(),
@@ -307,15 +345,14 @@ pub mod mac {
             return Ok(run_local(db, cond, tonight, now_ms));
         };
 
-        let credential = SelectKkKey::new(Secret::new(key));
-        let outcome = match batch_route(std::env::var(DEV_DIRECT_ENV).ok().as_deref()) {
-            BatchRoute::Relay => {
+        let outcome = match credential {
+            BatchCredential::Relay(token) => {
                 // Shipping path: license token → relay; the device sends an intent, never a
                 // model id (§4.4). Traceability records Route::BatchRelay per chunk (§3.3).
                 let client = RelayBatchClient::new(
                     transport,
                     db.traceability_sink(),
-                    credential,
+                    LicenseBearer::new(Secret::new(token)),
                     RelayConfig::new(ModelClass::Classify),
                 );
                 rt.block_on(run_batch_cycle(
@@ -331,11 +368,11 @@ pub mod mac {
             // Dev-only direct path (E-38): the slot holds a raw Anthropic key. The variant does
             // not exist in a release build, so this arm cannot ship.
             #[cfg(debug_assertions)]
-            BatchRoute::DirectAnthropic => {
+            BatchCredential::Direct(key) => {
                 let client = shogun_core::llm::anthropic::AnthropicBatchClient::new(
                     transport,
                     db.traceability_sink(),
-                    credential,
+                    shogun_core::llm::SelectKkKey::new(Secret::new(key)),
                     shogun_core::llm::anthropic::AnthropicConfig::new(DEV_DIRECT_BATCH_MODEL),
                 );
                 rt.block_on(run_batch_cycle(

@@ -1,6 +1,7 @@
-/** Shared test rig: ES256 key pair, license signing, the in-memory gateway fake, and a
- * fully-wired app whose logger writes into an inspectable array. */
-import { generateKeyPair, SignJWT, type KeyLike } from "jose";
+/** Shared test rig: Ed25519 key pair, `v1.` licence-token signing (the exact format the licence
+ * API issues — apps/website/src/lib/license.ts), the in-memory gateway fake, and a fully-wired
+ * app whose logger writes into an inspectable array. */
+import { generateKeyPairSync, sign as edSign, type KeyObject } from "node:crypto";
 
 import { createApp, type RelayDeps } from "../src/app.js";
 import type { AnthropicGateway, BatchStatus } from "../src/gateway.js";
@@ -8,25 +9,42 @@ import type { AnthropicBatchRequestItem } from "../src/types.js";
 import { InMemoryUsageStore } from "../src/usage.js";
 
 export interface Keys {
-  privateKey: KeyLike;
-  publicKey: KeyLike;
+  privateKey: KeyObject;
+  publicKey: KeyObject;
 }
 
 export async function makeKeys(): Promise<Keys> {
-  const { privateKey, publicKey } = await generateKeyPair("ES256");
+  const { privateKey, publicKey } = generateKeyPairSync("ed25519");
   return { privateKey, publicKey };
 }
 
+/** `"-1h"` / `"24h"` → seconds offset from now, mirroring the jose-style strings the tests use. */
+function parseExpiresIn(v: string): number {
+  const m = /^(-?\d+)h$/.exec(v);
+  if (!m) throw new Error(`unsupported expiresIn: ${v}`);
+  return Number(m[1]) * 3600;
+}
+
 export async function signLicense(
-  privateKey: KeyLike,
-  opts: { sub?: string; plan?: string; expiresIn?: string } = {},
+  privateKey: KeyObject,
+  opts: { sub?: string; plan?: string; status?: string; expiresIn?: string } = {},
 ): Promise<string> {
-  const jwt = new SignJWT({ plan: opts.plan ?? "standard" })
-    .setProtectedHeader({ alg: "ES256" })
-    .setSubject(opts.sub ?? "lic_test_1")
-    .setIssuedAt()
-    .setExpirationTime(opts.expiresIn ?? "24h");
-  return jwt.sign(privateKey);
+  const iat = Math.floor(Date.now() / 1000);
+  const payload = {
+    v: 1,
+    lic: opts.sub ?? "lic_test_1",
+    plan: opts.plan ?? "standard",
+    status: opts.status ?? "active",
+    device: "dev_test_device",
+    iat,
+    exp: iat + parseExpiresIn(opts.expiresIn ?? "24h"),
+    period_end: null,
+    cancel_at_period_end: false,
+    grace_days: 14,
+  };
+  const body = Buffer.from(JSON.stringify(payload), "utf8");
+  const sig = edSign(null, body, privateKey);
+  return `v1.${body.toString("base64url")}.${sig.toString("base64url")}`;
 }
 
 /**

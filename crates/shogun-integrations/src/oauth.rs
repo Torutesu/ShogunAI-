@@ -142,6 +142,12 @@ pub fn parse_redirect(request_line: &str) -> Result<(String, String), String> {
     let target = request_line.split_whitespace().nth(1).ok_or("malformed request line")?;
     // Give the relative target a base so `url` can parse just the path+query.
     let parsed = url::Url::parse("http://127.0.0.1").and_then(|b| b.join(target)).map_err(|e| format!("bad redirect target: {e}"))?;
+    // Only the registered redirect path resolves the flow — any local process can hit the
+    // listener, and a stray request carrying code+state params must not be mistaken for the
+    // provider's redirect.
+    if parsed.path() != "/callback" {
+        return Err(format!("unexpected redirect path: {}", parsed.path()));
+    }
     let mut code = None;
     let mut state = None;
     for (k, v) in parsed.query_pairs() {

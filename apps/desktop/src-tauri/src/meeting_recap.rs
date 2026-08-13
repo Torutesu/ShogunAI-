@@ -61,10 +61,42 @@ mod mac {
         keychain_store::select_kk_configured()
     }
 
-    /// The Select KK key, if this build has been provisioned with one. Absent is a normal state: the
-    /// Recap then stays degraded rather than being generated. Read exactly like dream.rs.
+    /// The Select KK key — dev-only fuel for the direct-Anthropic route, exactly like dream.rs.
+    #[cfg(debug_assertions)]
     fn select_kk_key() -> Option<String> {
         keychain_store::get_select_kk_key()
+    }
+
+    /// The Batch lane's credential, resolved per route (mirrors dream.rs). Release: the licence
+    /// token → relay, or `None` (the Recap stays degraded). Debug + env opt-in: the raw dev
+    /// Anthropic key → the direct Batch API.
+    enum BatchCredential {
+        Relay(String),
+        #[cfg(debug_assertions)]
+        Direct(String),
+    }
+
+    fn batch_credential() -> Option<BatchCredential> {
+        use shogun_core::llm::batch_route::{batch_route, BatchRoute, DEV_DIRECT_ENV};
+        use shogun_mcp::plan_source::{billing_json_path, billing_state_of, parse_billing_snapshot};
+        match batch_route(std::env::var(DEV_DIRECT_ENV).ok().as_deref()) {
+            BatchRoute::Relay => {
+                let text = std::fs::read_to_string(billing_json_path()?).ok()?;
+                let snap = parse_billing_snapshot(&text)?;
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+                    .unwrap_or(0);
+                match billing_state_of(&snap, now) {
+                    shogun_agents::entitlement::BillingState::Active(_) => {
+                        Some(BatchCredential::Relay(snap.token))
+                    }
+                    _ => None,
+                }
+            }
+            #[cfg(debug_assertions)]
+            BatchRoute::DirectAnthropic => select_kk_key().map(BatchCredential::Direct),
+        }
     }
 
     /// Generate the Recap for the just-closed `session_id` on a background thread, then emit
@@ -100,15 +132,16 @@ mod mac {
             .collect();
         let prompt = minutes::build_prompt(&lines, notes.as_deref(), language.whisper_code().unwrap_or("en"));
 
-        // The Select KK key. Absent → keep the degraded Recap (invariant 5 / FR-MT-19).
-        let Some(key) = select_kk_key() else {
-            eprintln!("[meeting] no Select KK key; keeping degraded recap");
+        // The Batch credential (licence token → relay; dev key → direct in debug). Absent →
+        // keep the degraded Recap (invariant 5 / FR-MT-19).
+        let Some(credential) = batch_credential() else {
+            eprintln!("[meeting] no batch credential; keeping degraded recap");
             let _ = app.emit("meeting_recap_needs_key", session_id);
             return;
         };
 
         // `generate` returns `None` on any degrade path, having already logged the specific reason.
-        if let Some((mins, model_label)) = generate(db, key, session_id, prompt) {
+        if let Some((mins, model_label)) = generate(db, credential, session_id, prompt) {
             let (dj, nj) = mins.to_columns();
             db.save_meeting_recap(session_id, &mins.summary, &dj, &nj, model_label);
             // Tell the panel to refetch — the degraded Recap is now the model's minutes.
@@ -128,15 +161,14 @@ mod mac {
     /// a debug build with the explicit env opt-in.
     fn generate(
         db: &Db,
-        key: String,
+        credential: BatchCredential,
         session_id: i64,
         prompt: String,
     ) -> Option<(shogun_core::meeting::minutes::MeetingMinutes, &'static str)> {
         use shogun_core::llm::anthropic::BatchItem;
-        use shogun_core::llm::batch_route::{batch_route, BatchRoute, DEV_DIRECT_ENV};
         use shogun_core::llm::relay::{ModelClass, RelayBatchClient, RelayConfig};
         use shogun_core::llm::transport::ReqwestTransport;
-        use shogun_core::llm::{Secret, SelectKkKey};
+        use shogun_core::llm::{LicenseBearer, Secret};
 
         let (Ok(transport), Ok(rt)) = (
             ReqwestTransport::new(),
@@ -154,15 +186,14 @@ mod mac {
             chunk: prompt,
         }];
 
-        let credential = SelectKkKey::new(Secret::new(key));
         let (run_result, model_label) =
-            match batch_route(std::env::var(DEV_DIRECT_ENV).ok().as_deref()) {
-                BatchRoute::Relay => {
-                    // Shipping path: the slot holds the license token; the relay picks the model.
+            match credential {
+                BatchCredential::Relay(token) => {
+                    // Shipping path: the licence token is the bearer; the relay picks the model.
                     let client = RelayBatchClient::new(
                         transport,
                         db.traceability_sink(),
-                        credential,
+                        LicenseBearer::new(Secret::new(token)),
                         RelayConfig::new(ModelClass::Summarize),
                     );
                     let r = rt.block_on(client.run(&items, MAX_POLLS, || async {
@@ -173,11 +204,11 @@ mod mac {
                 // Dev-only direct path (E-38): the slot holds a raw Anthropic key. The variant
                 // does not exist in a release build, so this arm cannot ship.
                 #[cfg(debug_assertions)]
-                BatchRoute::DirectAnthropic => {
+                BatchCredential::Direct(key) => {
                     let client = shogun_core::llm::anthropic::AnthropicBatchClient::new(
                         transport,
                         db.traceability_sink(),
-                        credential,
+                        shogun_core::llm::SelectKkKey::new(Secret::new(key)),
                         shogun_core::llm::anthropic::AnthropicConfig::new(RECAP_MODEL),
                     );
                     let r = rt.block_on(client.run(&items, MAX_POLLS, || async {

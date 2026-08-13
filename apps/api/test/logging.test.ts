@@ -26,6 +26,8 @@ describe("redacting logger", () => {
 
   it("logs GET result fetches without any result content", async () => {
     const rig = await makeRig();
+    // The ownership check reads the store before the gateway — register rb_1 as this licence's.
+    await rig.usage.record("lic_test_1", "2026-08-13", 1, "rb_1");
     rig.gateway.status = {
       id: "rb_1",
       processing_status: "ended",

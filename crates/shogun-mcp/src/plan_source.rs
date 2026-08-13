@@ -107,11 +107,17 @@ pub fn billing_state_of(snap: &BillingSnapshot, now_ms: u64) -> BillingState {
 }
 
 fn app_data_file(env_override: &str, file: &str) -> Option<PathBuf> {
+    // Debug builds only: a release binary that lets an env var re-point its billing/onboarding
+    // state is a plan-gate bypass primitive (pair it with a swapped public key and the gate is
+    // gone). Dev and tests keep the override.
+    #[cfg(debug_assertions)]
     if let Ok(p) = std::env::var(env_override) {
         if !p.trim().is_empty() {
             return Some(PathBuf::from(p));
         }
     }
+    #[cfg(not(debug_assertions))]
+    let _ = env_override;
     if cfg!(target_os = "macos") {
         let home = std::env::var_os("HOME")?;
         return Some(

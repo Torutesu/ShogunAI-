@@ -55,9 +55,11 @@ pub fn run_loopback_flow(
     exchange: &dyn TokenExchange,
     timeout: Duration,
 ) -> Result<TokenSet, ConnectError> {
-    let seed = entropy().map_err(ConnectError::Internal)?;
-    let pkce = Pkce::from_entropy(&seed);
-    let state = state_from(&seed);
+    // Two INDEPENDENT draws: the state travels in the browser URL (history, referers, the
+    // plaintext loopback request line), so it must never be derivable from the PKCE verifier —
+    // one seed for both made state == verifier and put the verifier in the URL.
+    let pkce = Pkce::from_entropy(&entropy().map_err(ConnectError::Internal)?);
+    let state = state_from(&entropy().map_err(ConnectError::Internal)?);
     let url = oauth::authorize_url(cfg, scopes, &pkce, &state).map_err(ConnectError::Internal)?;
     open_browser(&url).map_err(ConnectError::BrowserOpen)?;
 

@@ -25,7 +25,7 @@ use serde_json::{json, Value};
 use super::anthropic::{BatchHandle, BatchItem, BatchLane, BatchResult, BatchStatus};
 use super::traceability::{Route, TraceRecord, TraceabilitySink};
 use super::transport::{HttpRequest, HttpTransport, Method};
-use super::{LlmError, Secret, SelectKkKey};
+use super::{LicenseBearer, LlmError, Secret};
 
 /// The production relay host. Overridable per-config for a staging relay; never overridable to
 /// plain HTTP ([`HttpRequest::new`] rejects non-HTTPS).
@@ -223,19 +223,19 @@ fn relay_status_error(step: &str, status: u16, body: &str) -> LlmError {
 // ---- async client --------------------------------------------------------------------------
 
 /// Batch-lane client that goes through the Select-operated relay. Constructed with a
-/// [`SelectKkKey`] — which in the relay world *holds the license token*, not an Anthropic key
-/// (design §5: the type is the Batch lane's credential slot, so invariant 5's compile-time
-/// separation from [`super::ByokKey`] is preserved unchanged). Same submit / poll / results
-/// lifecycle as the direct client, via [`BatchLane`].
+/// [`LicenseBearer`] — the FR-BIL-08 licence token, never an Anthropic key: the type makes
+/// wiring a raw `sk-ant-` credential into this path (and so sending the operator key to a
+/// non-Anthropic host) a compile error, the same way invariant 5 separates the lanes. Same
+/// submit / poll / results lifecycle as the direct client, via [`BatchLane`].
 pub struct RelayBatchClient<T: HttpTransport, S: TraceabilitySink> {
     transport: T,
     sink: S,
-    token: SelectKkKey,
+    token: LicenseBearer,
     cfg: RelayConfig,
 }
 
 impl<T: HttpTransport, S: TraceabilitySink> RelayBatchClient<T, S> {
-    pub fn new(transport: T, sink: S, token: SelectKkKey, cfg: RelayConfig) -> Self {
+    pub fn new(transport: T, sink: S, token: LicenseBearer, cfg: RelayConfig) -> Self {
         Self { transport, sink, token, cfg }
     }
 
@@ -339,7 +339,7 @@ mod tests {
         RelayBatchClient::new(
             MockTransport::new(responses),
             RecordingSink::new(),
-            SelectKkKey::new(Secret::new("eyJ-license-jwt-123456")),
+            LicenseBearer::new(Secret::new("v1.license-token-123456")),
             cfg(),
         )
     }
@@ -518,7 +518,7 @@ mod tests {
         assert!(matches!(err, LlmError::Provider(_)));
     }
 
-    // Invariant-5 note, unchanged by the relay: `RelayBatchClient::new` takes a `SelectKkKey`
-    // (now holding the license token). Handing it a `ByokKey` does not compile:
-    //     RelayBatchClient::new(t, s, ByokKey::new(Secret::new("x")), cfg());
+    // Invariant-5 note: `RelayBatchClient::new` takes a `LicenseBearer` (the licence token).
+    // Handing it a `ByokKey` OR a `SelectKkKey` (a raw Anthropic key) does not compile:
+    //     RelayBatchClient::new(t, s, SelectKkKey::new(Secret::new("sk-ant-x")), cfg());
 }

@@ -93,6 +93,23 @@ impl SelectKkKey {
     }
 }
 
+/// The FR-BIL-08 licence token — the Batch-relay lane's bearer credential. NOT an API key of
+/// any kind: it is the signed, short-lived, device-bound plan assertion the licence API issued,
+/// and the relay is the only place it is presented. A distinct type from [`SelectKkKey`] /
+/// [`ByokKey`] so an Anthropic key can never be wired into the relay path (which would send the
+/// operator key to a non-Anthropic host) and the token can never reach a direct-API client.
+#[derive(Clone, Debug)]
+pub struct LicenseBearer(Secret);
+
+impl LicenseBearer {
+    pub fn new(secret: Secret) -> Self {
+        Self(secret)
+    }
+    pub fn secret(&self) -> &Secret {
+        &self.0
+    }
+}
+
 /// The user's BYOK key — the Agent lane only (agent inference / chat / drafts). Distinct from
 /// [`SelectKkKey`] (invariant 5).
 #[derive(Clone, Debug)]
