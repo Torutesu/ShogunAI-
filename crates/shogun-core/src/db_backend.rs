@@ -211,6 +211,30 @@ impl DbBackend {
             .to_string(),
         }
     }
+
+    /// `lessons.list` (L5, Plan D-5): every lesson row, exactly what the Learned UI lists —
+    /// and nothing more. `feedback_events` text has no path into this payload: the row type
+    /// (`lessons::Lesson`) carries instructions and bookkeeping only.
+    fn lessons_json(&self) -> String {
+        let lessons: Vec<_> = self
+            .db
+            .lessons_all()
+            .into_iter()
+            .map(|l| {
+                json!({
+                    "id": l.id,
+                    "kind": l.kind.as_str(),
+                    "scope": l.scope.as_str(),
+                    "scope_ref": l.scope_ref,
+                    "instruction": l.instruction,
+                    "confidence": l.confidence,
+                    "evidence_count": l.evidence_count,
+                    "active": l.active,
+                })
+            })
+            .collect();
+        json!({ "lessons": lessons }).to_string()
+    }
 }
 
 impl MemoryBackend for DbBackend {
@@ -268,9 +292,11 @@ impl MemoryBackend for DbBackend {
             // its live value is deferred to a shared-store follow-up.
             Tool::DeviceOnboardingGet => Vec::new(),
 
-            // Structured visual-recall tools use [`Self::read_structured`]; the rest are not read
-            // tools (write / action) — never routed here.
-            Tool::VisualRecallStatus
+            // Structured reads (visual recall, lessons.list) use [`Self::read_structured`]; the
+            // rest are not read tools (write / action) — never routed here.
+            Tool::LessonsList
+            | Tool::LessonsSetActive
+            | Tool::VisualRecallStatus
             | Tool::VisualRecallSearchFrames
             | Tool::VisualRecallGetFrame
             | Tool::VisualRecallRescanFrame
@@ -288,6 +314,7 @@ impl MemoryBackend for DbBackend {
             Tool::VisualRecallSearchFrames => self.visual_recall_search_json(params),
             Tool::VisualRecallGetFrame => self.visual_recall_get_frame_json(params),
             Tool::VisualRecallRescanFrame => self.visual_recall_rescan_json(params),
+            Tool::LessonsList => self.lessons_json(),
             _ => return None,
         })
     }
@@ -302,6 +329,15 @@ impl MemoryBackend for DbBackend {
             // A proposed state change is accepted here and surfaces in the Notch for L2 confirm; a
             // proposals table is future work, so nothing is persisted yet.
             Tool::StateProposeUpdate => Ok(None),
+            // Flip a lesson's active switch (L1) — the same effect as the Learned UI toggle.
+            Tool::LessonsSetActive => {
+                let (id, active) = parse_lesson_active_body(body)?;
+                if self.db.set_lesson_active(id, active) {
+                    Ok(Some(id))
+                } else {
+                    Err("lesson not found".to_string())
+                }
+            }
             Tool::VisualRecallSetEnabled => {
                 let enabled = parse_enabled_body(body)?;
                 let mut settings = self.load_vr_settings();
@@ -337,6 +373,15 @@ fn parse_id_body(body: &str) -> Result<i64, String> {
     v.get("id")
         .and_then(|x| x.as_i64())
         .ok_or_else(|| "expected {\"id\":number}".to_string())
+}
+
+/// Parse the `lessons.set_active` body: `{"id": <i64>, "active": <bool>}`.
+fn parse_lesson_active_body(body: &str) -> Result<(i64, bool), String> {
+    let err = || "expected {\"id\":number,\"active\":bool}".to_string();
+    let v: serde_json::Value = serde_json::from_str(body).map_err(|_| err())?;
+    let id = v.get("id").and_then(|x| x.as_i64()).ok_or_else(err)?;
+    let active = v.get("active").and_then(|x| x.as_bool()).ok_or_else(err)?;
+    Ok((id, active))
 }
 
 fn parse_enabled_body(body: &str) -> Result<bool, String> {
@@ -516,6 +561,124 @@ mod tests {
         assert!(backend.write(Tool::VisualRecallSetEnabled, r#"{"enabled":true}"#).is_ok());
         let status2 = backend.read_structured(Tool::VisualRecallStatus, &params()).expect("status");
         assert!(status2.contains("\"enabled\":true"));
+    }
+
+    /// Seed a distilled lesson via the real feedback → distill → upsert path. The draft bodies
+    /// carry an unmistakable secret marker so tests can assert it never reaches the API.
+    fn seed_lesson(db: &Db) -> i64 {
+        use shogun_memory::lessons::{distill, FeedbackKind, LessonScope, NewFeedback};
+        const SECRET: &str = "SECRET_FEEDBACK_BODY_q1";
+        for i in 0..3 {
+            let before = format!(
+                "Hi team,\nA longer draft body about the {SECRET} quarterly numbers, line {i}.\nMore detail follows in the tracker.\nBest, Taro"
+            );
+            let after = format!(
+                "Hi team,\nA longer draft body about the {SECRET} quarterly numbers, line {i}.\nMore detail follows in the tracker."
+            );
+            db.record_feedback(
+                FeedbackKind::EditBeforeApprove,
+                LessonScope::App,
+                &NewFeedback {
+                    ts_ms: i,
+                    action_kind: Some("draft_reply"),
+                    scope_ref: Some("com.apple.Mail"),
+                    before_text: Some(&before),
+                    after_text: Some(&after),
+                },
+            )
+            .unwrap();
+        }
+        let candidates = distill(&db.feedback_after(0));
+        assert_eq!(candidates.len(), 1);
+        db.upsert_lesson(&candidates[0], 100).unwrap()
+    }
+
+    #[test]
+    fn lessons_list_is_structured_and_never_exposes_feedback_text() {
+        let db = Db::open_in_memory(Arc::new(|| 100)).unwrap();
+        let id = seed_lesson(&db);
+        let backend = DbBackend::new(db);
+
+        let json = backend.read_structured(Tool::LessonsList, &params()).expect("structured");
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let row = &v["lessons"][0];
+        assert_eq!(row["id"], id);
+        assert_eq!(row["kind"], "style");
+        assert_eq!(row["scope"], "app");
+        assert_eq!(row["scope_ref"], "com.apple.Mail");
+        assert_eq!(row["evidence_count"], 3);
+        assert_eq!(row["active"], true);
+        assert!(row["instruction"].as_str().unwrap().contains("Best, Taro"));
+        assert!(row["confidence"].as_f64().unwrap() >= 0.5);
+        // The invariant: feedback_events text never leaves the DB through the API.
+        assert!(!json.contains("SECRET_FEEDBACK_BODY_q1"), "feedback text leaked: {json}");
+        assert!(!json.contains("quarterly numbers"), "feedback text leaked: {json}");
+    }
+
+    #[test]
+    fn lessons_set_active_flips_the_switch_and_rejects_bad_input() {
+        let db = Db::open_in_memory(Arc::new(|| 100)).unwrap();
+        let id = seed_lesson(&db);
+        let backend = DbBackend::new(db.clone());
+
+        // off…
+        assert_eq!(
+            backend.write(Tool::LessonsSetActive, &format!(r#"{{"id":{id},"active":false}}"#)),
+            Ok(Some(id))
+        );
+        assert!(!db.lessons_all()[0].active);
+        // …and back on
+        assert_eq!(
+            backend.write(Tool::LessonsSetActive, &format!(r#"{{"id":{id},"active":true}}"#)),
+            Ok(Some(id))
+        );
+        assert!(db.lessons_all()[0].active);
+        // unknown id and malformed bodies error, and lessons.list is not a plain read
+        assert!(backend.write(Tool::LessonsSetActive, r#"{"id":9999,"active":false}"#).is_err());
+        assert!(backend.write(Tool::LessonsSetActive, "not json").is_err());
+        assert!(backend.write(Tool::LessonsSetActive, r#"{"id":1}"#).is_err());
+        assert!(backend.read(Tool::LessonsList, &params()).is_empty());
+    }
+
+    #[test]
+    fn full_stack_lessons_through_rest_respond_with() {
+        use shogun_mcp::memory_api::TokenRegistry;
+        use shogun_mcp::rest::{respond_with, Method, RestRequest};
+
+        let db = Db::open_in_memory(Arc::new(|| 100)).unwrap();
+        let id = seed_lesson(&db);
+        let backend = DbBackend::new(db.clone());
+        let mut tokens = TokenRegistry::new();
+        tokens.issue("t");
+        let ent = shogun_mcp::entitlement::Entitlements::trial_not_started();
+        let req = |method, path: &str, body: Option<&str>| RestRequest {
+            method,
+            path: path.into(),
+            token: Some("t".into()),
+            include_low: false,
+            query: None,
+            body: body.map(str::to_string),
+            from_ms: None,
+            to_ms: None,
+        };
+
+        // GET /v1/lessons lists the lesson (no feedback text — pinned above per-payload)
+        let (status, body) = respond_with(&req(Method::Get, "/v1/lessons", None), &tokens, &ent, &backend);
+        assert_eq!(status, 200);
+        assert!(body.contains("\"tool\":\"lessons.list\""), "{body}");
+        assert!(body.contains("Best, Taro"), "{body}");
+        assert!(!body.contains("SECRET_FEEDBACK_BODY_q1"), "{body}");
+
+        // POST /v1/lessons/active flips it off through the same face
+        let (status, body) = respond_with(
+            &req(Method::Post, "/v1/lessons/active", Some(&format!(r#"{{"id":{id},"active":false}}"#))),
+            &tokens,
+            &ent,
+            &backend,
+        );
+        assert_eq!(status, 202);
+        assert!(body.contains("\"level\":\"L1\""), "{body}");
+        assert!(!db.lessons_all()[0].active);
     }
 
     #[test]

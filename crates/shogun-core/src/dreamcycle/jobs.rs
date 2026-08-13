@@ -10,8 +10,10 @@
 //! end-to-end; the on-device build swaps in a Batch classifier without changing this file.
 //!
 //! Every other job (Compression, StateUpdate, ConfidenceRecalc, ColdDemotion, MorningBrief) is a
-//! pure local DB effect. The Degraded sequence (StateUpdate + ConfidenceRecalc) therefore needs no
-//! classifier at all — matching FR-DC-01 (a catch-up run does no Batch work).
+//! local DB effect; Compression and MorningBrief route their prose through the same injected
+//! [`Summarizer`] seam (extractive by default, Batch on-device — `generated` records which one
+//! wrote the persisted brief). The Degraded sequence (StateUpdate + ConfidenceRecalc) therefore
+//! needs no classifier at all — matching FR-DC-01 (a catch-up run does no Batch work).
 
 use shogun_memory::extract::Candidate;
 
@@ -49,6 +51,14 @@ impl Classifier for LocalRuleClassifier {
 /// worth summarising" and the caller leaves the summary unwritten.
 pub trait Summarizer {
     fn summarize(&self, events: &[shogun_memory::event_log::EventText]) -> Option<String>;
+
+    /// Whether this summariser produces model-generated prose (the Batch/Select-KK lane). The
+    /// default is `false`: the extractive fallback is honest degradation, and a Morning Brief
+    /// persisted through it is marked `generated = 0` (FR-MB-04) — the same pattern as
+    /// Consolidation running on local rules. The on-device Batch summariser overrides this.
+    fn is_generative(&self) -> bool {
+        false
+    }
 }
 
 /// The always-available, network-free summariser (the Linux-test default): pull each event's lead
@@ -173,6 +183,150 @@ impl<'a, C: Classifier, S: Summarizer> DbDreamRunner<'a, C, S> {
         self.db.demote_cold(self.now_ms - shogun_memory::cold::WARM_WINDOW_MS);
         Ok(())
     }
+
+    /// LessonDistillation (Full only, Plan D-4): turn unprocessed approval feedback into
+    /// lessons, then run the lesson lifecycle. Local rules only in v1 (designs §5.3 honest
+    /// degradation) — no Batch call, so the job runs identically on Linux and on-device.
+    ///
+    /// The processed watermark is `lesson_distill_meta.last_processed_feedback_id` (V17): the
+    /// job reads feedback strictly above it and advances it only after every upsert landed.
+    /// Idempotent across a crash-resume (FR-DC-04): a re-run before the watermark moved re-reads
+    /// the same window, and `upsert_lesson` dedupes already-linked evidence, so nothing double
+    /// counts; after the watermark moved, old feedback is never re-consumed, so decay is not
+    /// refreshed by stale evidence. Errors carry no feedback text (CLAUDE.md privacy rule).
+    fn lesson_distillation(&self) -> Result<(), String> {
+        let watermark = self.db.lesson_distill_watermark();
+        let feedback = self.db.feedback_after(watermark);
+        let candidates = shogun_memory::lessons::distill(&feedback);
+        if !candidates.is_empty() {
+            for candidate in &candidates {
+                if self.db.upsert_lesson(candidate, self.now_ms).is_none() {
+                    return Err("lesson upsert failed".to_string());
+                }
+            }
+            // Advance only after every candidate landed, so a crash re-runs the whole window.
+            // A night that distilled nothing leaves the watermark put: below-threshold signals
+            // (two same-direction edits) keep accumulating until a later night completes the
+            // pattern, instead of being silently consumed. No upsert happens on those nights,
+            // so re-reading the window cannot refresh any lesson's decay clock.
+            let max_id = feedback.iter().map(|f| f.id).max().unwrap_or(watermark);
+            if !self.db.set_lesson_distill_watermark(max_id) {
+                return Err("lesson watermark write failed".to_string());
+            }
+        }
+        // Lifecycle last, new evidence included: decay, contradiction, floor, cap (§5.3).
+        self.db
+            .decay_lessons(self.now_ms)
+            .map(|_outcome| ())
+            .ok_or_else(|| "lesson lifecycle failed".to_string())
+    }
+
+    /// MorningBrief (Full only, Plan C-1): assemble the day's brief from state tables plus the
+    /// window's meeting recaps, and persist it to `briefs` keyed by the local date — so the
+    /// morning display is a read (immediate, offline-stable) instead of a live degraded assembly.
+    ///
+    /// The summariser seam decides honesty, same as Compression: a Batch-backed summariser yields
+    /// generated prose and `generated = 1`; the local extractive default persists `generated = 0`
+    /// (FR-MB-04 honest degradation). The upsert keys on the day, so a crash-resume re-run over
+    /// the same plan day is idempotent (FR-DC-04), and the FR-MB-06 `updated` mark falls out of
+    /// the stored payload-digest comparison.
+    fn morning_brief(&self, from_ts: i64, to_ts: i64) -> Result<(), String> {
+        use shogun_fusion::brief::{assemble_brief, CalendarLine, WHAT_HAPPENED_MAX};
+
+        const DAY_MS: i64 = 24 * 60 * 60 * 1000;
+        let date = crate::daemon::local_date_string(self.now_ms);
+        let day = crate::daemon::local_day_bounds(self.now_ms);
+
+        // Calendar-equivalent "Today" lines (design §4.1): commitments due this local day stand in
+        // for calendar rows until the real Calendar connector lands (B-4) and replaces them.
+        let due = self.db.commitments_due(self.now_ms);
+        let calendar: Vec<CalendarLine> = due
+            .iter()
+            .filter_map(|c| {
+                c.due_at_ms
+                    .filter(|&t| t >= day.today_start_ms && t < day.today_start_ms + DAY_MS)
+                    .map(|t| CalendarLine { start_ms: t, title: c.description.clone(), updated: false })
+            })
+            .collect();
+
+        // "What happened": the window's meeting recaps first (minutes already written by the Recap
+        // lane), then the day's sessions/threads through the summariser seam. Compression ran
+        // earlier in the sequence, so a thread's stored summary is reused before re-summarising.
+        // The assembler caps the section again (FR-MB-01: ≤5 lines).
+        let mut what_happened: Vec<String> = Vec::new();
+        for sid in self.db.active_sessions_between(from_ts, to_ts) {
+            if what_happened.len() >= WHAT_HAPPENED_MAX {
+                break;
+            }
+            if let Some(recap) = self.db.meeting_recap_full(sid) {
+                if !recap.summary.is_empty() {
+                    what_happened.push(recap.summary);
+                    continue;
+                }
+            }
+            if let Some(s) = self.db.session_summary(sid).or_else(|| self.summarizer.summarize(&self.db.session_event_texts(sid))) {
+                what_happened.push(s);
+            }
+        }
+        for t in self.db.active_threads_between(from_ts, to_ts) {
+            if what_happened.len() >= WHAT_HAPPENED_MAX {
+                break;
+            }
+            if let Some(s) = self
+                .db
+                .thread_summary(&t.thread_key)
+                .or_else(|| self.summarizer.summarize(&self.db.thread_event_texts(&t.thread_key)))
+            {
+                what_happened.push(s);
+            }
+        }
+        if what_happened.is_empty() {
+            if let Some(s) = self.summarizer.summarize(&self.db.events_in_range(from_ts, to_ts)) {
+                what_happened.push(s);
+            }
+        }
+
+        // Suggested actions are Fusion's runtime concern (the panel ranks them against the live
+        // screen); the nightly brief persists none rather than freezing stale ones overnight.
+        let brief = assemble_brief(calendar, &due, &self.db.open_loops(), what_happened, Vec::new());
+        let payload = payload_from_brief(&date, &brief);
+        let json = serde_json::to_string(&payload).map_err(|e| format!("brief serialize: {e}"))?;
+        self.db
+            .save_brief(&date, &json, self.summarizer.is_generative())
+            .map(|_updated| ())
+            .ok_or_else(|| "brief write failed".to_string())
+    }
+}
+
+/// Convert the assembled fusion brief into the persisted payload shape. The stored type lives in
+/// `shogun_memory::briefs` (storage must not depend on shogun-fusion), so the conversion happens
+/// here, at the layer that can see both.
+fn payload_from_brief(
+    date: &str,
+    brief: &shogun_fusion::brief::MorningBrief,
+) -> shogun_memory::briefs::BriefPayload {
+    use shogun_memory::briefs::{BriefActionLine, BriefLine, BriefPayload, BriefScheduleLine};
+    let line = |i: &shogun_fusion::brief::BriefItem| BriefLine {
+        text: i.text.clone(),
+        provenance_event_id: i.provenance_event_id,
+        possibly: i.possibly,
+    };
+    BriefPayload {
+        date: date.to_string(),
+        today: brief
+            .today
+            .iter()
+            .map(|c| BriefScheduleLine { start_ms: c.start_ms, title: c.title.clone(), updated: c.updated })
+            .collect(),
+        commitments_due: brief.commitments_due.iter().map(line).collect(),
+        open_loops: brief.open_loops.iter().map(line).collect(),
+        what_happened: brief.what_happened.clone(),
+        suggested_actions: brief
+            .suggested_actions
+            .iter()
+            .map(|a| BriefActionLine { label: a.rationale.clone(), level: format!("{:?}", a.level) })
+            .collect(),
+    }
 }
 
 // ------------------------------------------------------------------ Batch classifier (pure parts)
@@ -225,17 +379,18 @@ pub fn build_batch_items(events: &[shogun_memory::event_log::EventText]) -> Vec<
 /// build the prompts, run the batch to completion (submit → poll → results), and parse the model's
 /// JSON into per-event candidates at [`BATCH_CONFIDENCE`]. Async — the on-device scheduler awaits
 /// this *before* the sync cycle and feeds the result to a [`PrecomputedClassifier`], so the sync
-/// `DreamJobRunner` never has to bridge async. Generic over the transport, so it is Linux-testable
-/// with a mock (no network). `sleep` is the injected inter-poll delay (FR-DC-05).
-pub async fn classify_via_batch<T, S, F, Fut>(
-    client: &crate::llm::anthropic::AnthropicBatchClient<T, S>,
+/// `DreamJobRunner` never has to bridge async. Generic over the
+/// [`BatchLane`](crate::llm::anthropic::BatchLane) — the direct Anthropic client (dev) and the
+/// relay client (shipping) both fit — so it is Linux-testable with a mock transport (no network).
+/// `sleep` is the injected inter-poll delay (FR-DC-05).
+pub async fn classify_via_batch<B, F, Fut>(
+    client: &B,
     events: &[shogun_memory::event_log::EventText],
     max_polls: u32,
     sleep: F,
 ) -> Result<Vec<(i64, Vec<Candidate>)>, crate::llm::LlmError>
 where
-    T: crate::llm::transport::HttpTransport,
-    S: crate::llm::traceability::TraceabilitySink,
+    B: crate::llm::anthropic::BatchLane,
     F: FnMut() -> Fut,
     Fut: std::future::Future<Output = ()>,
 {
@@ -243,7 +398,8 @@ where
         return Ok(Vec::new());
     }
     let items = build_batch_items(events);
-    let results = client.run(&items, max_polls, sleep).await?;
+    let results =
+        crate::llm::anthropic::run_batch_to_completion(client, &items, max_polls, sleep).await?;
     Ok(parse_batch_classification(&results))
 }
 
@@ -354,9 +510,12 @@ impl<C: Classifier, S: Summarizer> DreamJobRunner for DbDreamRunner<'_, C, S> {
             JobKind::StateUpdate => self.state_update(),
             JobKind::ConfidenceRecalc => self.confidence_recalc(),
             JobKind::ColdDemotion => self.cold_demotion(),
-            // MorningBrief is generated on demand from live state (Db::local_morning_brief); the job
-            // slot exists for sequencing/telemetry and has no separate persisted effect here.
-            JobKind::MorningBrief => Ok(()),
+            // MorningBrief persists the day's brief to `briefs` (Plan C-1) so the morning display
+            // is a read; `Db::local_morning_brief` remains the fallback when no row exists.
+            JobKind::MorningBrief => self.morning_brief(from_ts, to_ts),
+            // LessonDistillation consumes the feedback watermark, not the cycle window: feedback
+            // recorded between cycles must never fall through a window seam (Plan D-4).
+            JobKind::LessonDistillation => self.lesson_distillation(),
         }
     }
 }
@@ -392,6 +551,10 @@ mod tests {
         let commitments = db.commitments_due(now);
         assert_eq!(commitments.len(), 1);
         assert!(commitments[0].confidence <= shogun_memory::extract::LOCAL_RULE_MAX_CONFIDENCE);
+
+        // the final job persisted the day's brief (Plan C-1)
+        let date = crate::daemon::local_date_string(now);
+        assert!(db.brief_for(&date).is_some(), "a full cycle must leave a briefs row");
     }
 
     #[test]
@@ -653,6 +816,273 @@ mod tests {
         let summary = db.session_summary(sid).expect("Compression must fill the session summary");
         assert!(!summary.is_empty());
         assert!(summary.contains("ship Friday"), "summary carries the session's lead sentence");
+    }
+
+    // ------------------------------------------------------------------ MorningBrief (Plan C-1)
+
+    /// A high-confidence overdue commitment — solid brief material (Low is excluded, FR-MB-05).
+    fn overdue_commitment(db: &Db, desc: &'static str, now: i64) {
+        let e = db.capture(&make_ev(1, desc, desc)).unwrap().0;
+        db.insert_commitment(
+            &shogun_memory::state::NewCommitment {
+                direction: shogun_memory::state::CommitmentDirection::Mine,
+                counterparty_id: None,
+                description: desc,
+                due_at: Some(now - 5000),
+                status: shogun_memory::state::CommitmentStatus::Open,
+                project_id: None,
+                confidence: 0.9,
+                now: 1,
+            },
+            &[shogun_memory::state::Provenance::new(e)],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn morning_brief_persists_a_row_marked_not_generated_with_the_local_summarizer() {
+        let now = 100 * 24 * 60 * 60 * 1000;
+        let db = db_at(now);
+        overdue_commitment(&db, "send the overdue deck", now);
+
+        let clf = LocalRuleClassifier;
+        let sum = LocalExtractiveSummarizer;
+        let runner = DbDreamRunner::new(&db, &clf, &sum, now);
+        runner.run(JobKind::MorningBrief, now - 86_400_000, now).unwrap();
+
+        let date = crate::daemon::local_date_string(now);
+        let row = db.brief_for(&date).expect("the job must write a briefs row");
+        assert!(!row.generated, "the extractive summariser is honest degradation: generated=0");
+        assert!(!row.updated, "the day's first brief is not an update");
+
+        let payload: shogun_memory::briefs::BriefPayload =
+            serde_json::from_str(&row.payload).expect("payload is valid BriefPayload JSON");
+        assert_eq!(payload.date, date);
+        assert!(
+            payload.commitments_due.iter().any(|l| l.text == "send the overdue deck"),
+            "the overdue commitment reaches the persisted brief"
+        );
+        assert!(payload.suggested_actions.is_empty(), "no stale actions are frozen overnight");
+    }
+
+    #[test]
+    fn morning_brief_rerun_over_the_same_day_is_idempotent() {
+        let now = 100 * 24 * 60 * 60 * 1000;
+        let db = db_at(now);
+        overdue_commitment(&db, "send the report", now);
+
+        let clf = LocalRuleClassifier;
+        let sum = LocalExtractiveSummarizer;
+        let runner = DbDreamRunner::new(&db, &clf, &sum, now);
+        // crash-resume: the job re-runs over the same plan day (FR-DC-04)
+        runner.run(JobKind::MorningBrief, now - 86_400_000, now).unwrap();
+        runner.run(JobKind::MorningBrief, now - 86_400_000, now).unwrap();
+
+        let row = db.brief_for(&crate::daemon::local_date_string(now)).unwrap();
+        assert!(!row.updated, "an unchanged re-run must not manufacture an Updated mark");
+    }
+
+    #[test]
+    fn morning_brief_regeneration_after_state_changed_is_marked_updated() {
+        let now = 100 * 24 * 60 * 60 * 1000;
+        let db = db_at(now);
+        overdue_commitment(&db, "first thing", now);
+
+        let clf = LocalRuleClassifier;
+        let sum = LocalExtractiveSummarizer;
+        let runner = DbDreamRunner::new(&db, &clf, &sum, now);
+        runner.run(JobKind::MorningBrief, now - 86_400_000, now).unwrap();
+
+        // new state lands, the brief is regenerated for the same day → content differs
+        overdue_commitment(&db, "second thing", now);
+        runner.run(JobKind::MorningBrief, now - 86_400_000, now).unwrap();
+
+        let row = db.brief_for(&crate::daemon::local_date_string(now)).unwrap();
+        assert!(row.updated, "changed content is the FR-MB-06 Updated case");
+    }
+
+    #[test]
+    fn morning_brief_marks_generated_when_the_summarizer_is_batch_backed() {
+        // A stand-in for the on-device Batch summariser: generative prose, is_generative()=true.
+        struct Generative;
+        impl Summarizer for Generative {
+            fn summarize(&self, _: &[EventText]) -> Option<String> {
+                Some("A generated recap of the day.".into())
+            }
+            fn is_generative(&self) -> bool {
+                true
+            }
+        }
+
+        let now = 100 * 24 * 60 * 60 * 1000;
+        let db = db_at(now);
+        db.capture(&make_ev(now - 1000, "the day's material", "h1")).unwrap();
+
+        let clf = LocalRuleClassifier;
+        let sum = Generative;
+        let runner = DbDreamRunner::new(&db, &clf, &sum, now);
+        runner.run(JobKind::MorningBrief, now - 86_400_000, now).unwrap();
+
+        let row = db.brief_for(&crate::daemon::local_date_string(now)).unwrap();
+        assert!(row.generated, "a Batch-backed summariser marks the brief generated");
+        let payload: shogun_memory::briefs::BriefPayload = serde_json::from_str(&row.payload).unwrap();
+        assert_eq!(payload.what_happened, vec!["A generated recap of the day.".to_string()]);
+    }
+
+    #[test]
+    fn morning_brief_carries_the_windows_meeting_recap() {
+        let now = 100 * 24 * 60 * 60 * 1000;
+        let db = db_at(now);
+        let sid = db.open_meeting(Some("Weekly sync"), Some("us.zoom.xos"), 0.6, "{}").unwrap();
+        let (ev_id, _) = db.capture(&make_ev(now - 1000, "meeting talk", "m1")).unwrap();
+        assert!(db.attach_event_to_meeting(sid, ev_id));
+        db.save_meeting_recap(sid, "Decided to ship Friday.", "[]", "[]", "batch-model");
+
+        let clf = LocalRuleClassifier;
+        let sum = LocalExtractiveSummarizer;
+        let runner = DbDreamRunner::new(&db, &clf, &sum, now);
+        runner.run(JobKind::MorningBrief, 0, now + 1).unwrap();
+
+        let row = db.brief_for(&crate::daemon::local_date_string(now)).unwrap();
+        let payload: shogun_memory::briefs::BriefPayload = serde_json::from_str(&row.payload).unwrap();
+        assert!(
+            payload.what_happened.iter().any(|l| l.contains("ship Friday")),
+            "the recap summary feeds What happened: {:?}",
+            payload.what_happened
+        );
+    }
+
+    // ------------------------------------------------------------------ LessonDistillation (Plan D-4)
+
+    /// A body long enough that stripping one closing line is nowhere near a 30% cut.
+    const DRAFT_BODY: &str = "Hi team,\nHere is the current status of the migration work.\nEverything is on track for the Friday checkpoint and the remaining items are listed in the tracker.";
+
+    /// Record `n` approval-time edits that all strip the same signature line (the (a) rule).
+    fn record_signature_edits(db: &Db, n: usize, base_ts: i64) -> Vec<i64> {
+        use shogun_memory::lessons::{FeedbackKind, LessonScope, NewFeedback};
+        (0..n)
+            .map(|i| {
+                let before = format!("{DRAFT_BODY}\nExtra note number {i}.\nBest, Taro");
+                let after = format!("{DRAFT_BODY}\nExtra note number {i}.");
+                db.record_feedback(
+                    FeedbackKind::EditBeforeApprove,
+                    LessonScope::App,
+                    &NewFeedback {
+                        ts_ms: base_ts + i as i64,
+                        action_kind: Some("draft_reply"),
+                        scope_ref: Some("com.apple.Mail"),
+                        before_text: Some(&before),
+                        after_text: Some(&after),
+                    },
+                )
+                .unwrap()
+            })
+            .collect()
+    }
+
+    fn lesson_state(db: &Db) -> Vec<(i64, f64, i64, bool)> {
+        db.lessons_all().into_iter().map(|l| (l.id, l.confidence, l.evidence_count, l.active)).collect()
+    }
+
+    #[test]
+    fn lesson_distillation_distills_a_pattern_and_advances_the_watermark() {
+        let now = 100 * 24 * 60 * 60 * 1000;
+        let db = db_at(now);
+        let ids = record_signature_edits(&db, 3, now - 5000);
+
+        let clf = LocalRuleClassifier;
+        let sum = LocalExtractiveSummarizer;
+        let runner = DbDreamRunner::new(&db, &clf, &sum, now);
+        runner.run(JobKind::LessonDistillation, now - 86_400_000, now).unwrap();
+
+        let lessons = db.lessons_all();
+        assert_eq!(lessons.len(), 1, "three same-direction edits distill one lesson");
+        assert!(lessons[0].active);
+        assert_eq!(lessons[0].evidence_count, 3);
+        assert!(lessons[0].instruction.contains("Best, Taro"));
+        assert_eq!(db.lesson_distill_watermark(), *ids.iter().max().unwrap());
+    }
+
+    #[test]
+    fn below_threshold_feedback_is_not_consumed_until_the_pattern_completes() {
+        let now = 100 * 24 * 60 * 60 * 1000;
+        let db = db_at(now);
+        record_signature_edits(&db, 2, now - 5000);
+
+        let clf = LocalRuleClassifier;
+        let sum = LocalExtractiveSummarizer;
+        let runner = DbDreamRunner::new(&db, &clf, &sum, now);
+        runner.run(JobKind::LessonDistillation, 0, now).unwrap();
+        assert!(db.lessons_all().is_empty(), "two edits are not a pattern");
+        assert_eq!(db.lesson_distill_watermark(), 0, "unfired signals stay unconsumed");
+
+        // A later night's third edit completes the pattern across the accumulated window.
+        let third = record_signature_edits(&db, 1, now - 100);
+        runner.run(JobKind::LessonDistillation, 0, now).unwrap();
+        let lessons = db.lessons_all();
+        assert_eq!(lessons.len(), 1);
+        assert_eq!(lessons[0].evidence_count, 3, "the two earlier edits count as evidence");
+        assert_eq!(db.lesson_distill_watermark(), third[0]);
+    }
+
+    #[test]
+    fn lesson_distillation_rerun_does_not_double_evidence() {
+        let now = 100 * 24 * 60 * 60 * 1000;
+        let db = db_at(now);
+        record_signature_edits(&db, 3, now - 5000);
+
+        let clf = LocalRuleClassifier;
+        let sum = LocalExtractiveSummarizer;
+        let runner = DbDreamRunner::new(&db, &clf, &sum, now);
+
+        // Crash-resume case 1: upserts landed but the watermark write was lost — replay the
+        // job's first half by hand (watermark still 0), then run the real job over the same
+        // unprocessed window.
+        for candidate in shogun_memory::lessons::distill(&db.feedback_after(0)) {
+            db.upsert_lesson(&candidate, now).unwrap();
+        }
+        let after_first = lesson_state(&db);
+        runner.run(JobKind::LessonDistillation, 0, now).unwrap();
+        assert_eq!(lesson_state(&db), after_first, "re-reading the window must not double evidence");
+
+        // Crash-resume case 2: the whole job ran but the ledger `Done` was lost — a full re-run
+        // sees no unprocessed feedback and changes nothing.
+        runner.run(JobKind::LessonDistillation, 0, now).unwrap();
+        assert_eq!(lesson_state(&db), after_first, "an idle re-run must change nothing");
+    }
+
+    #[test]
+    fn lesson_distillation_runs_the_lifecycle_so_stale_lessons_sleep() {
+        use shogun_memory::lessons::{DEACTIVATION_FLOOR, LESSON_HALF_LIFE_MS};
+        let born = 100 * 24 * 60 * 60 * 1000;
+        let db = db_at(born);
+        record_signature_edits(&db, 3, born - 5000);
+        let clf = LocalRuleClassifier;
+        let sum = LocalExtractiveSummarizer;
+        DbDreamRunner::new(&db, &clf, &sum, born).run(JobKind::LessonDistillation, 0, born).unwrap();
+        assert!(db.lessons_all()[0].active);
+
+        // Five silent half-lives later, the nightly job's lifecycle pass puts it to sleep.
+        let later = born + 5 * LESSON_HALF_LIFE_MS;
+        DbDreamRunner::new(&db, &clf, &sum, later).run(JobKind::LessonDistillation, 0, later).unwrap();
+        let l = &db.lessons_all()[0];
+        assert!(l.confidence < DEACTIVATION_FLOOR, "confidence decayed: {}", l.confidence);
+        assert!(!l.active, "a long-unevidenced lesson sleeps");
+    }
+
+    #[test]
+    fn full_cycle_with_no_feedback_completes_and_touches_no_lessons() {
+        let now = 100 * 24 * 60 * 60 * 1000;
+        let db = db_at(now);
+        db.capture(&make_ev(now - 1000, "I'll send the deck.", "h1")).unwrap();
+        let clf = LocalRuleClassifier;
+        let sum = LocalExtractiveSummarizer;
+        let runner = DbDreamRunner::new(&db, &clf, &sum, now);
+        let report = run_cycle(&db, &runner, "cycle-l5", CycleKind::Full, now - 86_400_000, now);
+        assert!(report.is_complete(), "{report:?}");
+        assert!(report.completed.contains(&JobKind::LessonDistillation));
+        assert!(db.lessons_all().is_empty());
+        assert_eq!(db.lesson_distill_watermark(), 0);
     }
 
     #[test]

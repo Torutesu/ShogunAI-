@@ -18,6 +18,12 @@ use rusqlite::{params, Connection};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Route {
     BatchApi,
+    /// Batch lane via the Select-operated relay (V18; docs/batch-relay-design.md §3.3) — the
+    /// shipping Standard/Pro path. Distinct from [`Route::BatchApi`] (direct, development-only)
+    /// because the disclosure differs: the chunk crosses the operator's server and the viewer
+    /// must say "via operator server". Not third-party — the relay is the operator's own
+    /// infrastructure and stores no chunk content (NFR-PRV-04).
+    BatchRelay,
     MessagesApi,
     Mcp,
     Composio,
@@ -35,6 +41,7 @@ impl Route {
     pub fn as_str(self) -> &'static str {
         match self {
             Route::BatchApi => "batch_api",
+            Route::BatchRelay => "batch_relay",
             Route::MessagesApi => "messages_api",
             Route::Mcp => "mcp",
             Route::Composio => "composio",
@@ -49,6 +56,7 @@ impl Route {
     pub fn parse(s: &str) -> Option<Route> {
         Some(match s {
             "batch_api" => Route::BatchApi,
+            "batch_relay" => Route::BatchRelay,
             "messages_api" => Route::MessagesApi,
             "mcp" => Route::Mcp,
             "composio" => Route::Composio,
@@ -238,6 +246,21 @@ mod tests {
     }
 
     #[test]
+    fn batch_relay_route_is_accepted_and_is_not_third_party() {
+        // V18 widened the CHECK. A relay-routed chunk must be storable and distinguishable from
+        // the direct 'batch_api' route (docs/batch-relay-design.md §3.3); the relay is the
+        // operator's own server, so it does NOT get the third-party badge (that stays Composio/ASR)
+        // — the viewer labels it "via operator server" from the route itself.
+        let conn = crate::open_in_memory().unwrap();
+        insert(&conn, &row(1, Route::BatchRelay, "consolidation", "relay.shogun.app")).unwrap();
+        let (route, tp): (String, i64) = conn
+            .query_row("SELECT route, third_party FROM traceability_log", [], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap();
+        assert_eq!(route, "batch_relay");
+        assert_eq!(tp, 0);
+    }
+
+    #[test]
     fn list_is_most_recent_first() {
         let conn = crate::open_in_memory().unwrap();
         insert(&conn, &row(100, Route::BatchApi, "indexing", "api.anthropic.com")).unwrap();
@@ -281,6 +304,7 @@ mod tests {
     fn route_string_roundtrips() {
         for r in [
             Route::BatchApi,
+            Route::BatchRelay,
             Route::MessagesApi,
             Route::Mcp,
             Route::Composio,

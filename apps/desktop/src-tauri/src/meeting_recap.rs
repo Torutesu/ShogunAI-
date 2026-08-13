@@ -1,10 +1,12 @@
 //! MT4: the meeting Recap generator (FR-MT-19). Turns a closed interval's transcript + notes into
 //! minutes (summary / decisions / next actions) over the Batch/Select-KK lane, then stores them.
 //!
-//! This is the desktop side of the same shape `dream.rs` uses: read the Select KK key from the
-//! Keychain (account `select-kk-batch`), build a `ReqwestTransport` + a tokio runtime, and run one
-//! Batch item through `AnthropicBatchClient`. Everything network here takes minutes, so it runs on
-//! a spawned background thread — the meeting state machine never blocks on it.
+//! This is the desktop side of the same shape `dream.rs` uses: read the Batch lane's credential
+//! from the Keychain (account `select-kk-batch` — the license token on the shipping relay route,
+//! a raw key only on the debug-gated direct route), build a `ReqwestTransport` + a tokio runtime,
+//! and run one Batch item through the routed batch client (`shogun_core::llm::batch_route`).
+//! Everything network here takes minutes, so it runs on a spawned background thread — the meeting
+//! state machine never blocks on it.
 //!
 //! **Degradation is the rule, not the exception.** The meeting already has a degraded MT2 Recap
 //! (`Db::meeting_recap`) the moment the interval closes. Every failure path here — no transcript,
@@ -29,12 +31,15 @@ mod mac {
     use shogun_integrations::keychain_store;
     use tauri::{Emitter, Manager};
 
-    /// The Recap's Batch model. Small and fast on purpose: a per-meeting summarisation job that
-    /// Select KK pays for. Mirrors the Dream Cycle's `BATCH_MODEL` choice (dream.rs).
-    ///
-    /// Interim, like dream.rs: once the batch relay lands the device stops naming a model and sends
-    /// an intent instead (docs/batch-relay-design.md §4.4).
+    /// The direct lane's Recap model — **debug builds only**, mirroring dream.rs. On the
+    /// shipping (relay) route the device sends a `model_class` intent and the relay chooses the
+    /// model (docs/batch-relay-design.md §4.4).
+    #[cfg(debug_assertions)]
     const RECAP_MODEL: &str = "claude-haiku-4-5-20251001";
+
+    /// What the recap row records as its `model` on the relay route: the device truthfully knows
+    /// only the intent it sent, not the model the relay chose.
+    const RECAP_RELAY_MODEL_LABEL: &str = "select-relay/summarize";
 
     // Keychain coordinates of the Batch lane's credential — the *same* slot the Dream Cycle reads
     // (dream.rs / `keychain_store::SELECT_KK_ACCOUNT`). One Select KK source, not a second.
@@ -103,9 +108,9 @@ mod mac {
         };
 
         // `generate` returns `None` on any degrade path, having already logged the specific reason.
-        if let Some(mins) = generate(db, key, session_id, prompt) {
+        if let Some((mins, model_label)) = generate(db, key, session_id, prompt) {
             let (dj, nj) = mins.to_columns();
-            db.save_meeting_recap(session_id, &mins.summary, &dj, &nj, RECAP_MODEL);
+            db.save_meeting_recap(session_id, &mins.summary, &dj, &nj, model_label);
             // Tell the panel to refetch — the degraded Recap is now the model's minutes.
             let _ = app.emit("meeting_recap", session_id);
             // The meeting just ended, so the mic is usually cold and this one can actually be
@@ -115,16 +120,21 @@ mod mac {
         }
     }
 
-    /// Run the summary chunk through the Batch/Select-KK lane and parse the minutes. `None` on any
-    /// transport/runtime/batch/parse failure — each logs one `[meeting] … ; keeping degraded recap`
-    /// line (never any transcript content). Mirrors dream.rs's `run_via_batch` construction.
+    /// Run the summary chunk through the Batch/Select-KK lane and parse the minutes, returning
+    /// them with the model label the recap row should record. `None` on any
+    /// transport/runtime/batch/parse failure — each logs one `[meeting] … ; keeping degraded
+    /// recap` line (never any transcript content). Mirrors dream.rs's `run_via_batch` routing:
+    /// the relay by default (license token; docs/batch-relay-design.md), direct Anthropic only in
+    /// a debug build with the explicit env opt-in.
     fn generate(
         db: &Db,
         key: String,
         session_id: i64,
         prompt: String,
-    ) -> Option<shogun_core::meeting::minutes::MeetingMinutes> {
-        use shogun_core::llm::anthropic::{AnthropicBatchClient, AnthropicConfig, BatchItem};
+    ) -> Option<(shogun_core::meeting::minutes::MeetingMinutes, &'static str)> {
+        use shogun_core::llm::anthropic::BatchItem;
+        use shogun_core::llm::batch_route::{batch_route, BatchRoute, DEV_DIRECT_ENV};
+        use shogun_core::llm::relay::{ModelClass, RelayBatchClient, RelayConfig};
         use shogun_core::llm::transport::ReqwestTransport;
         use shogun_core::llm::{Secret, SelectKkKey};
 
@@ -136,13 +146,6 @@ mod mac {
             return None;
         };
 
-        let client = AnthropicBatchClient::new(
-            transport,
-            db.traceability_sink(),
-            SelectKkKey::new(Secret::new(key)),
-            AnthropicConfig::new(RECAP_MODEL),
-        );
-
         // One item: the whole meeting summarised at once. `custom_id` is the session id so the
         // single result is trivially keyed; `purpose` is the traceability tag (Purpose::MeetingRecap).
         let items = vec![BatchItem {
@@ -151,9 +154,40 @@ mod mac {
             chunk: prompt,
         }];
 
-        let results = match rt.block_on(client.run(&items, MAX_POLLS, || async {
-            tokio::time::sleep(POLL_INTERVAL).await
-        })) {
+        let credential = SelectKkKey::new(Secret::new(key));
+        let (run_result, model_label) =
+            match batch_route(std::env::var(DEV_DIRECT_ENV).ok().as_deref()) {
+                BatchRoute::Relay => {
+                    // Shipping path: the slot holds the license token; the relay picks the model.
+                    let client = RelayBatchClient::new(
+                        transport,
+                        db.traceability_sink(),
+                        credential,
+                        RelayConfig::new(ModelClass::Summarize),
+                    );
+                    let r = rt.block_on(client.run(&items, MAX_POLLS, || async {
+                        tokio::time::sleep(POLL_INTERVAL).await
+                    }));
+                    (r, RECAP_RELAY_MODEL_LABEL)
+                }
+                // Dev-only direct path (E-38): the slot holds a raw Anthropic key. The variant
+                // does not exist in a release build, so this arm cannot ship.
+                #[cfg(debug_assertions)]
+                BatchRoute::DirectAnthropic => {
+                    let client = shogun_core::llm::anthropic::AnthropicBatchClient::new(
+                        transport,
+                        db.traceability_sink(),
+                        credential,
+                        shogun_core::llm::anthropic::AnthropicConfig::new(RECAP_MODEL),
+                    );
+                    let r = rt.block_on(client.run(&items, MAX_POLLS, || async {
+                        tokio::time::sleep(POLL_INTERVAL).await
+                    }));
+                    (r, RECAP_MODEL)
+                }
+            };
+
+        let results = match run_result {
             Ok(r) => r,
             Err(e) => {
                 // Provider / credential / never-ended: all degrade the same way here. The error is
@@ -169,7 +203,7 @@ mod mac {
         };
 
         match minutes::parse_minutes(&text) {
-            Ok(mins) => Some(mins),
+            Ok(mins) => Some((mins, model_label)),
             Err(_) => {
                 // The parse error can carry a fragment of the model output; keep it out of the log.
                 eprintln!("[meeting] recap summary unparseable; keeping degraded recap");

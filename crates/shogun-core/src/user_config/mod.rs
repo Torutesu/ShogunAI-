@@ -5,7 +5,9 @@ pub mod model;
 pub mod parse;
 pub mod sample;
 
-pub use directives::render_directives;
+pub use directives::{
+    render_directives, render_directives_with_lessons, render_learned_section, LearnedLesson,
+};
 pub use model::{
     Charm, ParseReport, Profile, RawSection, SectionError, ShougunConfig, Style, Workflow,
 };

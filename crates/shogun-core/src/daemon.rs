@@ -14,6 +14,7 @@ use std::sync::{Arc, Mutex};
 
 use rusqlite::Connection;
 use shogun_memory::event_log::{self, NewEvent};
+use shogun_memory::lessons;
 use shogun_memory::state::{self, NewCommitment, NewOpenLoop, NewPerson, NewProject, Provenance};
 use shogun_memory::traceability::{Filter, TraceRow};
 use shogun_memory::MemoryError;
@@ -115,6 +116,11 @@ const COMPRESS_BUDGET_MS: u64 = 50;
 //
 /// 検索 evidence: relevance は呼び出し側の検索スコア由来なので EVIDENCE_RELEVANCE を上書きする。
 const EVIDENCE_RELEVANCE: f64 = 0.7;
+
+/// How many learned lessons ride into one context assembly / generation prompt (Plan D-5's
+/// default top-k of 5). The token budget in `shogun_fusion::assemble::LESSON_BUDGET_TOKENS`
+/// bounds them again by size.
+const LESSON_TOP_K: usize = 5;
 const EVIDENCE_SCORE: ScoreInputs =
     ScoreInputs { relevance: EVIDENCE_RELEVANCE, freshness: 0.5, task_link: 0.0, confidence: 1.0 };
 /// retrieved evidence の属する session の保存済み要約。参照先＝関連度高、要約＝confidence 1.0。
@@ -215,15 +221,81 @@ impl ReplyContextCache {
     pub fn current(&self) -> Option<ReplyContext> {
         self.inner.lock().ok().and_then(|g| g.clone())
     }
+
+    /// Drop the warm pack: something changed underneath it (an integration sync landed new items),
+    /// so whatever was assembled before is stale. The next `get` is an honest miss until the focus
+    /// path re-assembles via [`Self::put`] — invalidation never rebuilds inline, because building
+    /// on the press path is exactly what this cache exists to prevent.
+    pub fn invalidate(&self) {
+        if let Ok(mut g) = self.inner.lock() {
+            *g = None;
+        }
+    }
+}
+
+/// The daemon-owned bus subscription that keeps the reply-context cache honest across integration
+/// syncs (design §2.2 / E-49): an [`crate::bus::BusEvent::IntegrationSynced`] means new items just
+/// landed in the event log, so a pack assembled before the sync may answer with a stale thread.
+///
+/// No thread of its own: like the daemon's other background work (embedding, local maintenance,
+/// the dream driver's `tick`) this is tick-driven — the host's existing loop calls [`Self::pump`],
+/// which drains whatever the bus has buffered via the non-blocking `try_recv` and returns
+/// immediately when the bus is quiet (no busy loop, no waiting). Invalidation only clears; the
+/// rebuild stays on the focus path ([`ReplyContextCache::put`]), preserving the cache's
+/// "None on miss" contract.
+pub struct SyncInvalidator {
+    sub: crate::bus::Subscriber,
+    cache: ReplyContextCache,
+}
+
+impl SyncInvalidator {
+    /// Subscribe to `bus` on behalf of `cache`. Only events published after this call are seen,
+    /// so wire it up before the first sync can run.
+    pub fn new(bus: &crate::bus::Bus, cache: ReplyContextCache) -> Self {
+        Self { sub: bus.subscribe(), cache }
+    }
+
+    /// Drain every buffered bus event, invalidating the cache for each `IntegrationSynced` seen
+    /// (other event kinds pass through untouched). Non-blocking — an empty bus returns 0 at once.
+    /// Returns how many sync events were handled, so the caller's tick can log/meter quietly.
+    pub fn pump(&mut self) -> usize {
+        let mut handled = 0;
+        while let Some(ev) = self.sub.try_recv() {
+            if let crate::bus::BusEvent::IntegrationSynced { .. } = *ev {
+                self.cache.invalidate();
+                handled += 1;
+            }
+        }
+        handled
+    }
 }
 
 /// What one local maintenance pass changed ([`Db::run_local_maintenance`]).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct LocalMaintenance {
     pub decayed: usize,
     pub corroborated: usize,
     pub overdue: usize,
     pub stale: usize,
+    /// The commitments THIS pass flipped `open` → `overdue` (C-3). Each appears in exactly one
+    /// pass — the status transition is the dedup watermark (see
+    /// [`shogun_memory::recompute::recompute_overdue_and_staleness_detailed`]) — so
+    /// [`overdue_notifications`] over this list fires once per item, never repeating.
+    pub newly_overdue: Vec<shogun_memory::recompute::NewlyOverdue>,
+}
+
+/// Decide WHAT to notify for a maintenance pass's newly-overdue commitments (C-3). Pure: maps each
+/// item to a [`ShowNotification`](shogun_agents::permission::LocalAction::ShowNotification) —
+/// a non-egress, L1-permitted local action (pinned by `overdue_notifications_are_l1_non_sends`).
+/// Dedup is upstream: the input list already contains each commitment exactly once, ever.
+pub fn overdue_notifications(
+    newly: &[shogun_memory::recompute::NewlyOverdue],
+) -> Vec<shogun_agents::permission::Action> {
+    use shogun_agents::permission::{Action, LocalAction};
+    newly
+        .iter()
+        .map(|c| Action::Local(LocalAction::ShowNotification { text: format!("Overdue: {}", c.description) }))
+        .collect()
 }
 
 /// One candidate answer to "which thread is this question about".
@@ -276,12 +348,23 @@ pub struct Db {
     /// in effect — the desktop only supplies an `enabled` config behind a flag, so the default is
     /// unchanged behaviour.
     compression_config: Option<shogun_fusion::compress::CompressionConfig>,
+    /// The internal event bus, when wired (design §2.2 / E-49). `None` keeps every publish a
+    /// no-op, so a `Db` opened without the daemon composition behaves exactly as before.
+    bus: Option<crate::bus::Bus>,
 }
 
 impl Db {
     /// Wrap an already-open, migrated connection.
     pub fn new(conn: Connection, clock: Clock) -> Self {
-        Self { conn: Arc::new(Mutex::new(conn)), clock, embedder: None, compression_config: None }
+        Self { conn: Arc::new(Mutex::new(conn)), clock, embedder: None, compression_config: None, bus: None }
+    }
+
+    /// Attach the internal event bus (design §2.2). Same handoff pattern as [`Self::with_embedder`]:
+    /// the daemon composition owns the [`crate::bus::Bus`] and hands this handle over; without it,
+    /// ingest publishes nothing and behaviour is unchanged.
+    pub fn with_bus(mut self, bus: crate::bus::Bus) -> Self {
+        self.bus = Some(bus);
+        self
     }
 
     /// Attach the local embedding model, turning search from lexical-only into hybrid.
@@ -495,43 +578,62 @@ impl Db {
     /// (FR-ST-02). Extraction is skipped on a touch so a re-sync never multiplies candidates.
     ///
     /// The caller ([`crate::service_gate`]) has already authorized the sync; this method only
-    /// persists. `newly_inserted` is what an `IntegrationSynced` bus event should report as the
-    /// count. Returns a zeroed summary on a lock failure (never panics).
+    /// persists. On completion, a batch that inserted ≥ 1 **new** item publishes
+    /// [`crate::bus::BusEvent::IntegrationSynced`] per source on the bus (§6.9, design §2.2) so
+    /// subscribers — e.g. the reply-context invalidator — learn that memory just changed; a
+    /// dedup-only or empty batch publishes nothing (nothing changed). Returns a zeroed summary on
+    /// a lock failure (never panics).
     pub fn ingest_integration(&self, items: &[shogun_mcp::sync::IngestItem]) -> IngestSummary {
         let now = self.now_ms();
-        let Ok(mut guard) = self.conn.lock() else {
-            return IngestSummary::default();
-        };
         let mut summary = IngestSummary::default();
-        for it in items {
-            let hash = Self::content_hash(&it.body);
-            let ev = NewEvent {
-                ts: it.ts_ms,
-                source: it.source,
-                kind: it.kind,
-                app_bundle_id: None,
-                window_title: (!it.title.is_empty()).then_some(it.title.as_str()),
-                content: &it.body,
-                content_hash: &hash,
-                dwell_ms: 0,
-                display_id: None,
-                window_bounds: None,
+        // Per-source newly-inserted counts for the bus. A batch normally carries one service, so a
+        // tiny vec beats a map.
+        let mut synced: Vec<(&'static str, u64)> = Vec::new();
+        {
+            let Ok(mut guard) = self.conn.lock() else {
+                return IngestSummary::default();
             };
-            let Ok((id, touched)) = event_log::insert_or_touch(&guard, &ev) else {
-                continue;
-            };
-            summary.processed += 1;
-            if touched {
-                continue;
+            for it in items {
+                let hash = Self::content_hash(&it.body);
+                let ev = NewEvent {
+                    ts: it.ts_ms,
+                    source: it.source,
+                    kind: it.kind,
+                    app_bundle_id: None,
+                    window_title: (!it.title.is_empty()).then_some(it.title.as_str()),
+                    content: &it.body,
+                    content_hash: &hash,
+                    dwell_ms: 0,
+                    display_id: None,
+                    window_bounds: None,
+                };
+                let Ok((id, touched)) = event_log::insert_or_touch(&guard, &ev) else {
+                    continue;
+                };
+                summary.processed += 1;
+                if touched {
+                    continue;
+                }
+                summary.newly_inserted += 1;
+                match synced.iter_mut().find(|(s, _)| *s == it.source) {
+                    Some((_, n)) => *n += 1,
+                    None => synced.push((it.source, 1)),
+                }
+                // A newly-ingested item is extracted for commitments / open loops, linked to it.
+                let candidates = shogun_memory::extract::extract(&it.body);
+                if !candidates.is_empty() {
+                    let ids =
+                        shogun_memory::extract::persist_candidates(&mut guard, id, &candidates, it.ts_ms, now)
+                            .unwrap_or_default();
+                    summary.candidates += ids.len();
+                }
             }
-            summary.newly_inserted += 1;
-            // A newly-ingested item is extracted for commitments / open loops, linked to it.
-            let candidates = shogun_memory::extract::extract(&it.body);
-            if !candidates.is_empty() {
-                let ids =
-                    shogun_memory::extract::persist_candidates(&mut guard, id, &candidates, it.ts_ms, now)
-                        .unwrap_or_default();
-                summary.candidates += ids.len();
+        }
+        // Publish after the DB lock is released. Non-blocking (AR-07); carries only the source tag
+        // and a count — never item content.
+        if let Some(bus) = &self.bus {
+            for (source, count) in synced {
+                bus.publish(crate::bus::BusEvent::IntegrationSynced { source, count });
             }
         }
         summary
@@ -1233,6 +1335,12 @@ impl Db {
                 shogun_fusion::block::BlockRef::Thread(_) | shogun_fusion::block::BlockRef::Session(_) => {
                     out_facts.push(format!("summary (unverified): {}", b.text));
                 }
+                // Lesson blocks are built only inside `assemble` (D-5, ContextCache.lesson_lines)
+                // — this compression path never constructs one. If one ever appears, treat it
+                // like the unverified-summary case: context, never an assertable fact.
+                shogun_fusion::block::BlockRef::Lesson(_) => {
+                    out_facts.push(format!("summary (unverified): {}", b.text));
+                }
             }
         }
 
@@ -1629,8 +1737,19 @@ impl Db {
         // corroborated row showing last pass's number until the next hour.
         let corroborated = self.corroborate();
         let decayed = self.decay_confidence(now_ms, half_life_ms);
-        let (overdue, stale) = self.recompute_overdue_and_staleness(now_ms);
-        LocalMaintenance { decayed, corroborated, overdue, stale }
+        // The detailed pass reports WHICH commitments flipped open→overdue right now, so the
+        // caller can notify each exactly once (C-3; the flip itself is the dedup watermark).
+        let (newly_overdue, stale) = self
+            .conn
+            .lock()
+            .ok()
+            .and_then(|mut g| {
+                shogun_memory::recompute::recompute_overdue_and_staleness_detailed(&mut g, now_ms)
+                    .ok()
+            })
+            .unwrap_or_default();
+        let overdue = newly_overdue.len();
+        LocalMaintenance { decayed, corroborated, overdue, stale, newly_overdue }
     }
 
     pub fn decay_confidence(&self, now_ms: i64, half_life_ms: i64) -> usize {
@@ -1725,7 +1844,10 @@ impl Db {
             });
         }
 
-        assemble(screen, &states, "", &Intent { hint: intent_hint })
+        // D-5: scope-matched learned lessons (this app + global), top-k, ride along for the
+        // generation prompt. Content only — assemble() never lets them touch levels.
+        let lessons = self.lessons_for_screen(&screen.app_bundle_id, LESSON_TOP_K);
+        assemble(screen, &states, "", &Intent { hint: intent_hint }, &lessons)
     }
 
     // -------------------------------------------------------------- state reads → Fusion supply
@@ -2156,6 +2278,158 @@ impl Db {
         assemble_degraded(calendar, &self.commitments_due(now_ms))
     }
 
+    /// Persist the nightly Morning Brief for `date` (Plan C-1: the Dream Cycle's MorningBrief job
+    /// writes it, the morning display reads it). Upsert on the day key — idempotent under a
+    /// crash-resume re-run (FR-DC-04). Returns `None` on a lock/write failure so the job can
+    /// report the night as failed and stay resumable.
+    pub fn save_brief(&self, date: &str, payload_json: &str, generated: bool) -> Option<bool> {
+        let now = self.now_ms();
+        self.conn
+            .lock()
+            .ok()
+            .and_then(|c| shogun_memory::briefs::upsert_brief(&c, date, payload_json, generated, now).ok())
+    }
+
+    /// The persisted brief for `date` (`None` when the nightly job hasn't written one — the caller
+    /// falls back to [`Self::local_morning_brief`], FR-MB-04).
+    pub fn brief_for(&self, date: &str) -> Option<shogun_memory::briefs::StoredBrief> {
+        self.conn.lock().ok().and_then(|c| shogun_memory::briefs::get_brief(&c, date).ok().flatten())
+    }
+
+    // -------------------------------------------------------------- L5 lessons (Plan D-4/D-5/D-6)
+    // Db wrappers over `shogun_memory::lessons`, next to the brief wrappers: the
+    // LessonDistillation Dream job, Context Fusion injection, and the Memory API lessons tools
+    // all read/write through these. Feedback text never leaves the DB through any of them —
+    // the only wrapper that returns it ([`Self::feedback_after`]) feeds the local distiller.
+
+    /// The distillation watermark: highest `feedback_events.id` already consumed (0 = none).
+    pub fn lesson_distill_watermark(&self) -> i64 {
+        self.conn.lock().ok().and_then(|c| lessons::distill_watermark(&c).ok()).unwrap_or(0)
+    }
+
+    /// Advance the distillation watermark (monotonic). Returns false on a write failure so the
+    /// job can report the night as failed and stay resumable.
+    pub fn set_lesson_distill_watermark(&self, last_processed_feedback_id: i64) -> bool {
+        self.conn
+            .lock()
+            .ok()
+            .map(|c| lessons::set_distill_watermark(&c, last_processed_feedback_id).is_ok())
+            .unwrap_or(false)
+    }
+
+    /// Unprocessed feedback (id strictly above the watermark), oldest first — the distillation
+    /// job's input. Local-only data: the rows carry the user's before/after text, so this must
+    /// never feed a log or an egress path.
+    pub fn feedback_after(&self, after_id: i64) -> Vec<lessons::FeedbackRow> {
+        self.conn
+            .lock()
+            .ok()
+            .and_then(|c| lessons::list_feedback_after(&c, after_id).ok())
+            .unwrap_or_default()
+    }
+
+    /// Record one feedback signal (the D-2 approval hooks call this). Returns the new row id.
+    pub fn record_feedback(
+        &self,
+        kind: lessons::FeedbackKind,
+        scope: lessons::LessonScope,
+        f: &lessons::NewFeedback<'_>,
+    ) -> Option<i64> {
+        self.conn.lock().ok().and_then(|c| lessons::record_feedback(&c, kind, scope, f).ok())
+    }
+
+    /// Insert-or-merge a distilled lesson with its evidence ids (provenance mandatory).
+    /// `None` on a lock/write failure (the job reports failure without echoing any text).
+    pub fn upsert_lesson(&self, candidate: &lessons::LessonCandidate, now_ms: i64) -> Option<i64> {
+        let mut conn = self.conn.lock().ok()?;
+        lessons::upsert_lesson(&mut conn, candidate, &candidate.evidence, now_ms).ok()
+    }
+
+    /// Run the lesson lifecycle pass (decay, contradiction, floor, cap) at `now_ms`.
+    pub fn decay_lessons(&self, now_ms: i64) -> Option<lessons::LifecycleOutcome> {
+        let mut conn = self.conn.lock().ok()?;
+        lessons::decay_and_deactivate(&mut conn, now_ms).ok()
+    }
+
+    /// The lessons eligible for injection right now (active, at/above the Low-band floor,
+    /// scope-filtered, strongest first, at most `top_k`) — the Fusion/D-5 supply.
+    pub fn active_lessons(
+        &self,
+        scopes: &[lessons::ScopeFilter<'_>],
+        top_k: usize,
+    ) -> Vec<lessons::Lesson> {
+        self.conn
+            .lock()
+            .ok()
+            .and_then(|c| lessons::active_lessons(&c, scopes, top_k).ok())
+            .unwrap_or_default()
+    }
+
+    /// Every lesson row, sleeping included — the Learned UI / `lessons.list` supply. Instructions
+    /// and bookkeeping only; never `feedback_events` text.
+    pub fn lessons_all(&self) -> Vec<lessons::Lesson> {
+        self.conn.lock().ok().and_then(|c| lessons::list_lessons(&c).ok()).unwrap_or_default()
+    }
+
+    /// Flip one lesson's active switch (`lessons.set_active`). `false` when the row is missing or
+    /// the write failed.
+    pub fn set_lesson_active(&self, lesson_id: i64, active: bool) -> bool {
+        let now = self.now_ms();
+        self.conn
+            .lock()
+            .ok()
+            .and_then(|c| lessons::set_lesson_active(&c, lesson_id, active, now).ok())
+            .unwrap_or(false)
+    }
+
+    /// D-6 counters for `shogun metrics`: (active lessons, feedback events in the last 7 days).
+    /// `None` when the DB is unreadable — rendered as `measured:false`, never a fabricated zero.
+    pub fn lesson_counters(&self) -> Option<crate::metrics::LessonCounters> {
+        const WEEK_MS: i64 = 7 * 24 * 60 * 60 * 1000;
+        let now = self.now_ms();
+        let conn = self.conn.lock().ok()?;
+        Some(crate::metrics::LessonCounters {
+            active_lessons: lessons::count_active_lessons(&conn).ok()?,
+            feedback_events_last_7d: lessons::count_feedback_since(&conn, now - WEEK_MS).ok()?,
+        })
+    }
+
+    /// The active lessons relevant to the current screen (this app + global scope), mapped into
+    /// Fusion's input view — instruction + confidence only (D-5).
+    pub fn lessons_for_screen(
+        &self,
+        app_bundle_id: &str,
+        top_k: usize,
+    ) -> Vec<shogun_fusion::assemble::LessonInput> {
+        use lessons::{LessonScope, ScopeFilter};
+        let scopes = [
+            ScopeFilter { scope: LessonScope::App, scope_ref: Some(app_bundle_id) },
+            ScopeFilter { scope: LessonScope::Global, scope_ref: None },
+        ];
+        self.active_lessons(&scopes, top_k)
+            .into_iter()
+            .map(|l| shogun_fusion::assemble::LessonInput {
+                id: l.id,
+                instruction: l.instruction,
+                confidence: l.confidence,
+            })
+            .collect()
+    }
+
+    /// The active lessons mapped into the directive-render view (D-5a): the desktop joins these
+    /// into the Shougun.md system-prompt block via
+    /// [`crate::user_config::render_directives_with_lessons`]. Unscoped call sites (the standing
+    /// prompt has no focused app) take every scope, top-k strongest.
+    pub fn learned_lessons(&self, top_k: usize) -> Vec<crate::user_config::LearnedLesson> {
+        self.active_lessons(&[], top_k)
+            .into_iter()
+            .map(|l| crate::user_config::LearnedLesson {
+                instruction: l.instruction,
+                confidence: l.confidence,
+            })
+            .collect()
+    }
+
     // -------------------------------------------------------------- Dream Cycle job ledger (FR-DC-04)
     // Persist each job's state so a killed cycle resumes by skipping the `done` jobs. The plan
     // vocabulary (JobKind/JobState) is shogun-core's; storage keeps strings, mapped here.
@@ -2355,6 +2629,7 @@ fn job_kind_str(kind: JobKind) -> &'static str {
         JobKind::ConfidenceRecalc => "confidence_recalc",
         JobKind::ColdDemotion => "cold_demotion",
         JobKind::MorningBrief => "morning_brief",
+        JobKind::LessonDistillation => "lesson_distillation",
     }
 }
 
@@ -2366,6 +2641,7 @@ fn parse_job_kind(s: &str) -> Option<JobKind> {
         "confidence_recalc" => JobKind::ConfidenceRecalc,
         "cold_demotion" => JobKind::ColdDemotion,
         "morning_brief" => JobKind::MorningBrief,
+        "lesson_distillation" => JobKind::LessonDistillation,
         _ => return None,
     })
 }
@@ -2536,6 +2812,27 @@ fn utc_day_bounds(now_ms: i64) -> shogun_memory::search::LocalDayBounds {
         yesterday_start_ms: today_start_ms - DAY_MS,
         today_start_ms,
     }
+}
+
+/// The local calendar date (`YYYY-MM-DD`) an instant falls on — the `briefs` row key (Plan C-1).
+/// Mirrors [`local_day_bounds`]: real local time on macOS (`localtime_r`, DST folded in), UTC
+/// elsewhere (the Linux-test path).
+#[cfg(feature = "db")]
+pub fn local_date_string(now_ms: i64) -> String {
+    let secs = now_ms.div_euclid(1000);
+    #[cfg(target_os = "macos")]
+    {
+        // SAFETY: `tm` is only read after localtime_r reports success by returning non-null.
+        unsafe {
+            let mut tm: libc::tm = std::mem::zeroed();
+            let t = secs as libc::time_t;
+            if !libc::localtime_r(&t, &mut tm).is_null() {
+                return format!("{:04}-{:02}-{:02}", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday);
+            }
+        }
+    }
+    let ymd = crate::dreamcycle::schedule::local_time(secs, 0).yyyymmdd;
+    format!("{:04}-{:02}-{:02}", ymd / 10_000, (ymd / 100) % 100, ymd % 100)
 }
 
 #[cfg(test)]
@@ -2755,6 +3052,68 @@ mod tests {
             line.unwrap().contains(shogun_fusion::confidence::POSSIBLY_PREFIX),
             "corroboration alone must not let it be stated as fact: {line:?}"
         );
+    }
+
+    /// C-3 pin: an overdue notification is a non-egress, L1-permitted local action — it can never
+    /// be (or become) a send. `required_level` derives L1 from the action type; the type is
+    /// `Action::Local`, which has no send variant, so the property is structural.
+    #[test]
+    fn overdue_notifications_are_l1_non_sends() {
+        use shogun_agents::permission::Level;
+        let newly = vec![
+            shogun_memory::recompute::NewlyOverdue { id: 1, description: "send the deck".into() },
+            shogun_memory::recompute::NewlyOverdue { id: 2, description: "review the PR".into() },
+        ];
+        let actions = overdue_notifications(&newly);
+        assert_eq!(actions.len(), newly.len(), "one notification per newly-overdue item");
+        for a in &actions {
+            assert_eq!(a.required_level(), Level::L1, "a notification is L1-permitted: {a:?}");
+            assert!(a.is_l1_eligible());
+            assert!(!a.is_external_send(), "a notification never leaves the device: {a:?}");
+        }
+        assert_ne!(actions[0], actions[1], "each item gets its own notification");
+    }
+
+    /// C-3 end-to-end (compilable half): the hourly maintenance reports a newly-overdue
+    /// commitment exactly once — the pass that flips it — and later passes report nothing, so the
+    /// desktop hook fires one notification per commitment, ever.
+    #[test]
+    fn maintenance_reports_newly_overdue_once_then_never_again() {
+        let db = Db::open_in_memory(clock(1_000)).unwrap();
+        let e = db.capture(&ev("promise", "h1", 100)).unwrap().0;
+        db.insert_commitment(
+            &shogun_memory::state::NewCommitment {
+                direction: shogun_memory::state::CommitmentDirection::Mine,
+                counterparty_id: None,
+                description: "send the deck",
+                due_at: Some(5_000),
+                status: shogun_memory::state::CommitmentStatus::Open,
+                project_id: None,
+                confidence: 0.9,
+                now: 100,
+            },
+            &[shogun_memory::state::Provenance::new(e)],
+        )
+        .unwrap();
+
+        const HALF_LIFE: i64 = 30 * 24 * 3_600_000;
+        // Before the due time: nothing to notify.
+        let before = db.run_local_maintenance(1_000, HALF_LIFE);
+        assert!(before.newly_overdue.is_empty());
+        assert!(overdue_notifications(&before.newly_overdue).is_empty());
+
+        // The pass that crosses the due time notifies exactly once.
+        let first = db.run_local_maintenance(10_000, HALF_LIFE);
+        assert_eq!(first.newly_overdue.len(), 1);
+        assert_eq!(first.overdue, 1);
+        let notes = overdue_notifications(&first.newly_overdue);
+        assert_eq!(notes.len(), 1);
+
+        // Every subsequent pass: silent for the already-notified item.
+        for later in [10_000, 20_000, 1_000_000] {
+            let again = db.run_local_maintenance(later, HALF_LIFE);
+            assert!(again.newly_overdue.is_empty(), "must never re-notify: {again:?}");
+        }
     }
 
     /// A reply is written *into* a conversation, so the thread's own words must lead the prompt —
@@ -3267,6 +3626,112 @@ mod tests {
         );
     }
 
+    /// One sync batch with new items → exactly one `IntegrationSynced` on the bus, carrying the
+    /// source tag and the newly-inserted count — never item content (design §2.2 wiring).
+    #[test]
+    fn a_sync_with_new_items_publishes_exactly_one_integration_synced() {
+        use crate::bus::{Bus, BusEvent};
+        use shogun_mcp::sync::IngestItem;
+        let bus = Bus::new(8);
+        let mut sub = bus.subscribe();
+        let db = Db::open_in_memory(clock(1)).unwrap().with_bus(bus);
+        let items = vec![
+            IngestItem { source: "gmail", kind: "email", title: "A".into(), body: "first mail".into(), ts_ms: 100 },
+            IngestItem { source: "gmail", kind: "email", title: "B".into(), body: "second mail".into(), ts_ms: 200 },
+        ];
+        let summary = db.ingest_integration(&items);
+        assert_eq!(summary.newly_inserted, 2);
+        let ev = sub.try_recv().expect("one event for the batch");
+        assert_eq!(*ev, BusEvent::IntegrationSynced { source: "gmail", count: 2 });
+        assert!(sub.try_recv().is_none(), "exactly one event per synced source, not one per item");
+    }
+
+    /// A sync that changes nothing (dedup-only re-sync, or an empty batch) stays silent — no
+    /// event means no needless cache invalidation downstream.
+    #[test]
+    fn a_sync_with_zero_new_items_publishes_nothing() {
+        use crate::bus::Bus;
+        use shogun_mcp::sync::IngestItem;
+        let bus = Bus::new(8);
+        let db = Db::open_in_memory(clock(1)).unwrap().with_bus(bus.clone());
+        let item = IngestItem {
+            source: "gmail",
+            kind: "email",
+            title: "Invoice".into(),
+            body: "Payment is due next week".into(),
+            ts_ms: 100,
+        };
+        db.ingest_integration(std::slice::from_ref(&item));
+        // Subscribe after the first (publishing) sync; only silence must follow.
+        let mut sub = bus.subscribe();
+        let second = db.ingest_integration(std::slice::from_ref(&item));
+        assert_eq!(second.newly_inserted, 0, "precondition: an unchanged re-sync is dedup-only");
+        assert!(sub.try_recv().is_none(), "a dedup-only sync must not publish");
+        db.ingest_integration(&[]);
+        assert!(sub.try_recv().is_none(), "an empty batch must not publish");
+    }
+
+    /// The §2.2 loop end-to-end: sync lands new items → `IntegrationSynced` → the daemon's
+    /// subscription empties the cache, so the next `get` is an honest miss until the focus path
+    /// re-assembles. Invalidation clears — it never rebuilds inline.
+    #[test]
+    fn an_integration_synced_event_empties_the_cache_until_reassembled() {
+        use crate::bus::Bus;
+        use shogun_mcp::sync::IngestItem;
+        let bus = Bus::new(8);
+        let db = Db::open_in_memory(clock(10_000)).unwrap().with_bus(bus.clone());
+        let cache = ReplyContextCache::new();
+        let mut inv = SyncInvalidator::new(&bus, cache.clone());
+
+        db.capture(&NewEvent { window_title: Some("Alpha"), ..ev("alpha notes", "h1", 100) })
+            .unwrap();
+        let key =
+            shogun_memory::thread::thread_key("capture", None, Some("com.apple.Safari"), Some("Alpha"))
+                .unwrap();
+        cache.put(db.build_reply_context(&key));
+        assert!(cache.get(&key).is_some(), "precondition: warm before the sync");
+
+        // A non-sync event leaves the warm pack alone.
+        bus.publish(crate::bus::BusEvent::CacheUpdated);
+        assert_eq!(inv.pump(), 0);
+        assert!(cache.get(&key).is_some(), "unrelated events must not evict the pack");
+
+        let summary = db.ingest_integration(&[IngestItem {
+            source: "gmail",
+            kind: "email",
+            title: "Re: Alpha".into(),
+            body: "new material for the alpha thread".into(),
+            ts_ms: 200,
+        }]);
+        assert_eq!(summary.newly_inserted, 1);
+        assert_eq!(inv.pump(), 1, "one sync event handled");
+        assert!(cache.get(&key).is_none(), "stale pack is gone — a miss, not an inline rebuild");
+        assert!(cache.current().is_none(), "cleared entirely, whatever thread was held");
+
+        // The focus path re-assembles; the cache serves again.
+        cache.put(db.build_reply_context(&key));
+        assert!(cache.get(&key).is_some(), "fresh after re-assembly");
+    }
+
+    /// The subscription is tick-driven, not a spin: pumping a quiet bus does no work and returns
+    /// at once (`try_recv` is non-blocking), so an idle daemon burns nothing between ticks.
+    #[test]
+    fn pumping_a_quiet_bus_returns_immediately_without_spinning() {
+        use crate::bus::Bus;
+        let bus = Bus::new(8);
+        let cache = ReplyContextCache::new();
+        let mut inv = SyncInvalidator::new(&bus, cache);
+        let t0 = std::time::Instant::now();
+        for _ in 0..1_000 {
+            assert_eq!(inv.pump(), 0, "a quiet bus handles nothing");
+        }
+        assert!(
+            t0.elapsed() < std::time::Duration::from_millis(100),
+            "1000 quiet pumps must be near-instant (non-blocking drain, no spin/wait): {:?}",
+            t0.elapsed()
+        );
+    }
+
     #[test]
     fn capture_writes_then_dedup_touches_same_row() {
         let db = Db::open_in_memory(clock(1)).unwrap();
@@ -3318,8 +3783,16 @@ mod tests {
         let cache = db.context_actions(screen, None);
         // the low-confidence loop is gated out; the reply-needed one is present as an action
         assert!(!cache.actions.is_empty());
-        assert!(cache.actions.iter().all(|a| a.level != shogun_fusion::Level::L3),
-            "v1 context actions are local (L1/L2) — no external sends (invariant 4)");
+        // B-5: the reply-needed loop also proposes DraftReply — the ONLY send-family candidate,
+        // and it carries L3 (invariant 4: approval-required by construction, never auto-run).
+        assert!(
+            cache.actions.iter().all(|a| a.action.is_external_send() == (a.level == shogun_fusion::Level::L3)),
+            "L3 iff external send — locals stay L1/L2, sends are never below L3 (invariant 4)"
+        );
+        assert!(
+            cache.actions.iter().any(|a| a.action.is_external_send()),
+            "a reply-needed loop must produce the DraftReply candidate (B-5)"
+        );
         assert!(cache.facts.iter().any(|f| f.contains("roadmap")), "gated fact present");
         assert!(!cache.facts.iter().any(|f| f.contains("vague")), "low-confidence fact excluded");
     }
@@ -3545,6 +4018,40 @@ mod tests {
     }
 
     #[test]
+    fn record_feedback_wrapper_persists_the_signal_locally() {
+        use shogun_memory::lessons::{list_feedback_since, FeedbackKind, LessonScope, NewFeedback};
+
+        let db = Db::open_in_memory(clock(1)).unwrap();
+        let id = db.record_feedback(
+            FeedbackKind::EditBeforeApprove,
+            LessonScope::Person,
+            &NewFeedback {
+                ts_ms: 42,
+                action_kind: Some("send_email"),
+                scope_ref: Some("alice@example.com"),
+                before_text: Some("proposed body"),
+                after_text: Some("final body"),
+            },
+        );
+        assert!(id.is_some(), "a healthy DB accepts the feedback write");
+
+        // Read it back through the same connection the wrapper wrote to.
+        let rows = {
+            let c = db.conn.lock().unwrap();
+            list_feedback_since(&c, 0).unwrap()
+        };
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].kind, FeedbackKind::EditBeforeApprove);
+        assert_eq!(rows[0].scope, LessonScope::Person);
+        assert_eq!(rows[0].scope_ref.as_deref(), Some("alice@example.com"));
+        assert_eq!(rows[0].before_text.as_deref(), Some("proposed body"));
+        assert_eq!(rows[0].after_text.as_deref(), Some("final body"));
+        // Fire-and-forget shape: the wrapper returns Option, never Err — an approval action can
+        // discard it with `let _ =` and can never be failed by it.
+        let _: Option<i64> = id;
+    }
+
+    #[test]
     fn dream_cycle_resume_skips_done_jobs_from_the_db() {
         let db = Db::open_in_memory(clock(1)).unwrap();
         let cycle = "20260720";
@@ -3556,7 +4063,7 @@ mod tests {
         // resume the full cycle: done jobs are skipped, the running one is rescheduled
         let todo = db.resume(cycle, CycleKind::Full);
         assert_eq!(todo.first(), Some(&JobKind::StateUpdate));
-        assert_eq!(todo.len(), 4); // StateUpdate, ConfidenceRecalc, ColdDemotion, MorningBrief
+        assert_eq!(todo.len(), 5); // StateUpdate, ConfidenceRecalc, ColdDemotion, MorningBrief, LessonDistillation
         assert!(!todo.contains(&JobKind::Consolidation));
     }
 

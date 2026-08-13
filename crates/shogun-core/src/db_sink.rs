@@ -24,6 +24,7 @@ use crate::llm::traceability::{Route, TraceRecord, TraceabilitySink};
 fn map_route(route: Route) -> DbRoute {
     match route {
         Route::BatchApi => DbRoute::BatchApi,
+        Route::BatchRelay => DbRoute::BatchRelay,
         Route::MessagesApi => DbRoute::MessagesApi,
         Route::Mcp => DbRoute::Mcp,
         Route::Composio => DbRoute::Composio,

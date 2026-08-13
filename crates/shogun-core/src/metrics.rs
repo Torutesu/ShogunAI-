@@ -164,6 +164,22 @@ impl Slo {
         }
     }
 
+    /// Map a UI-reported metric name to its SLO. This is the contract for the desktop shell's
+    /// `record_ui_slo(name, ms)` command (Plan B-1/B-6): the webview reports the durations only
+    /// it can observe (buttons painted, results drawn) under these fixed names, and the mapping
+    /// lives here so the shell shim stays a dumb pipe and the naming is Linux-tested. `IdleCpu`
+    /// is deliberately unmappable — it is sampled out-of-process, never a UI duration.
+    pub fn from_ui_name(name: &str) -> Option<Slo> {
+        match name {
+            "expand" => Some(Slo::Expand),
+            "actions_present" => Some(Slo::ActionsPresented),
+            "first_token" => Some(Slo::FirstToken),
+            "local_search" => Some(Slo::Search),
+            "cache_update" => Some(Slo::CacheUpdate),
+            _ => None,
+        }
+    }
+
     /// The p95 acceptance ceiling (ms, or percent for `IdleCpu`).
     pub fn budget_p95(self) -> f64 {
         match self {
@@ -272,11 +288,41 @@ impl SloRegistry {
     }
 }
 
+/// L5 lesson counters for the `shogun metrics` surface (Plan D-6): how many lessons are active
+/// and how much feedback the last week recorded. Counts only — no instruction text, and never
+/// any `feedback_events` content (CLAUDE.md: capture/user text stays out of metrics surfaces).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LessonCounters {
+    pub active_lessons: i64,
+    pub feedback_events_last_7d: i64,
+}
+
 /// Render SLO snapshots as the JSON both `shogun metrics` and the Advanced UI read (NFR-SLO-00).
 /// Hand-rolled (no serde dep in this ungated module). An unmeasured SLO reports `measured:false`
 /// and `pass:false` — silence is never success (spec §4.5).
 pub fn render_snapshots_json(snapshots: &[SloSnapshot]) -> String {
-    let items: Vec<String> = snapshots
+    format!(r#"{{"metrics":[{}]}}"#, slo_items(snapshots).join(","))
+}
+
+/// [`render_snapshots_json`] plus the D-6 `lessons` block. `None` (counters not computable —
+/// no DB behind this process, or a read failure) renders `"lessons":{"measured":false}` in the
+/// crate's convention: an unmeasured value is flagged, never fabricated as zero.
+pub fn render_snapshots_json_with_lessons(
+    snapshots: &[SloSnapshot],
+    lessons: Option<LessonCounters>,
+) -> String {
+    let lessons_json = match lessons {
+        Some(c) => format!(
+            r#"{{"active_lessons":{},"feedback_events_last_7d":{},"measured":true}}"#,
+            c.active_lessons, c.feedback_events_last_7d
+        ),
+        None => r#"{"measured":false}"#.to_string(),
+    };
+    format!(r#"{{"metrics":[{}],"lessons":{}}}"#, slo_items(snapshots).join(","), lessons_json)
+}
+
+fn slo_items(snapshots: &[SloSnapshot]) -> Vec<String> {
+    snapshots
         .iter()
         .map(|s| {
             format!(
@@ -291,8 +337,7 @@ pub fn render_snapshots_json(snapshots: &[SloSnapshot]) -> String {
                 s.p95_overflowed,
             )
         })
-        .collect();
-    format!(r#"{{"metrics":[{}]}}"#, items.join(","))
+        .collect()
 }
 
 /// Format an f64 as a finite JSON number (non-finite → 0 so the payload is always valid JSON).
@@ -429,6 +474,19 @@ mod tests {
     }
 
     #[test]
+    fn ui_names_map_to_their_slos() {
+        assert_eq!(Slo::from_ui_name("actions_present"), Some(Slo::ActionsPresented));
+        assert_eq!(Slo::from_ui_name("local_search"), Some(Slo::Search));
+        assert_eq!(Slo::from_ui_name("expand"), Some(Slo::Expand));
+        assert_eq!(Slo::from_ui_name("first_token"), Some(Slo::FirstToken));
+        assert_eq!(Slo::from_ui_name("cache_update"), Some(Slo::CacheUpdate));
+        // Unknown names and the out-of-process CPU sample must not silently land in a histogram.
+        assert_eq!(Slo::from_ui_name("idle_cpu"), None);
+        assert_eq!(Slo::from_ui_name(""), None);
+        assert_eq!(Slo::from_ui_name("Actions_Present"), None);
+    }
+
+    #[test]
     fn render_json_marks_measured_and_unmeasured() {
         let mut reg = SloRegistry::new();
         // one measured SLO (a fast expand), the rest unmeasured
@@ -440,5 +498,22 @@ mod tests {
         assert!(json.contains(r#""measured":true,"p95_overflowed":false"#));
         // an unmeasured SLO is measured:false and pass:false (silence ≠ success)
         assert!(json.contains(r#""slo":"NFR-SLO-04","count":0,"p50":0,"p95":0,"budget_p95":500,"pass":false,"measured":false"#), "{json}");
+    }
+
+    #[test]
+    fn lesson_counters_render_measured_or_flagged_unmeasured() {
+        let reg = SloRegistry::new();
+        let snaps = reg.snapshot_all();
+        // computable counters render with measured:true
+        let json = render_snapshots_json_with_lessons(
+            &snaps,
+            Some(LessonCounters { active_lessons: 3, feedback_events_last_7d: 12 }),
+        );
+        assert!(json.contains(r#""lessons":{"active_lessons":3,"feedback_events_last_7d":12,"measured":true}"#), "{json}");
+        assert!(json.starts_with(r#"{"metrics":["#));
+        // not computable → measured:false, never a fabricated zero
+        let json = render_snapshots_json_with_lessons(&snaps, None);
+        assert!(json.contains(r#""lessons":{"measured":false}"#), "{json}");
+        assert!(!json.contains("active_lessons"), "{json}");
     }
 }

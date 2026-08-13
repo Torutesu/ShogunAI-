@@ -42,6 +42,7 @@ mod net_lane;
 mod notch_actions;
 mod notch_exec;
 mod onboarding;
+mod search_ui;
 /// UI cue playback and the silence rules around it (#49, docs/sound-design.md).
 #[cfg(target_os = "macos")]
 mod sound;
@@ -242,6 +243,8 @@ pub fn run() {
         notch_actions::mac::notch_actions,
         notch_exec::mac::run_notch_action,
         notch_exec::mac::confirm_notch_action,
+        search_ui::mac::search_memory,
+        metrics::record_ui_slo,
         inline_source::mac::inline_at_cursor,
         inline_source::mac::shogun_status,
         inline_source::mac::shogun_state,
@@ -2222,6 +2225,10 @@ const DB_KEY_ACCOUNT: &str = "memory-db-key";
 #[cfg(target_os = "macos")]
 fn install_connectors(app: &tauri::AppHandle, db: Option<shogun_core::daemon::Db>) {
     use tauri::Manager;
+    // The ONE shared L3 approval queue (B-3 / E-08): created unconditionally at startup, before
+    // the connector runtime, so every producer and the confirm UI always resolve the same managed
+    // queue — even when the connector runtime fails to start.
+    app.manage(approvals::mac::ApprovalQueueState::default());
     // Draft-stop is seeded from the persisted ComposioPolicy (composio.json) — the single source
     // the settings/onboarding toggle and the L3 send gate read. Absent/unreadable policy defaults
     // to draft_stop = true (invariant 4 fail-safe, see ComposioPolicy).
@@ -2235,7 +2242,6 @@ fn install_connectors(app: &tauri::AppHandle, db: Option<shogun_core::daemon::Db
                 eprintln!("[spike] connector runtime started (read-sync poller skipped — no DB)");
             }
             app.manage(connectors::mac::ConnectorState(shared));
-            app.manage(approvals::mac::ApprovalQueueState::default());
         }
         Err(e) => eprintln!("[spike] connectors not started: {e}"),
     }
@@ -2439,6 +2445,8 @@ fn spawn_maintenance_job(db: shogun_core::daemon::Db) {
     std::thread::spawn(move || {
         // Let the app finish starting before touching the DB.
         std::thread::sleep(std::time::Duration::from_secs(30));
+        // C-3: the effector that shows the overdue notifications (B-2's real ShowNotification).
+        let effector = crate::notch_exec::mac::NotchEffector::new(db.clone());
         loop {
             let now = db.now_ms();
             let r = db.run_local_maintenance(now, HALF_LIFE_MS);
@@ -2447,6 +2455,21 @@ fn spawn_maintenance_job(db: shogun_core::daemon::Db) {
                     "[maintenance] {} corroborated, {} newly overdue, {} loops aged, {} decayed",
                     r.corroborated, r.overdue, r.stale, r.decayed
                 );
+            }
+            // C-3: one notification per newly-overdue commitment. `newly_overdue` holds only the
+            // rows THIS pass flipped open→overdue (the flip is the dedup watermark — core-tested),
+            // so nothing here can re-notify. The actions are ShowNotification: non-egress and
+            // L1-permitted (pinned by `overdue_notifications_are_l1_non_sends` in shogun-core),
+            // which is why they may run directly through the effector.
+            for action in shogun_core::daemon::overdue_notifications(&r.newly_overdue) {
+                debug_assert!(action.is_l1_eligible() && !action.is_external_send());
+                if let Err(e) =
+                    shogun_agents::engine::LocalEffector::run(&effector, &action)
+                {
+                    // The reason only — never the notification text (state summaries stay out
+                    // of logs).
+                    eprintln!("[maintenance] overdue notification failed: {e}");
+                }
             }
             std::thread::sleep(std::time::Duration::from_secs(60 * 60));
         }

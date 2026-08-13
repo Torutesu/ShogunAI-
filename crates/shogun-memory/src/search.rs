@@ -377,6 +377,21 @@ pub fn fts_search_since(
 /// The Warm window ordinary search covers (§ 3-tier memory: Hot 24h / Warm 30d / Cold all).
 pub const WARM_WINDOW_MS: i64 = 30 * 24 * 60 * 60 * 1000;
 
+/// The Cold cutoff: events older than `now - COLD_CUTOFF_MS` have had their Warm f32 embedding
+/// demoted to the int8 Cold archive ([`crate::cold`]), so a semantic hit on them can only come
+/// from the Cold partition scan. Identical to [`WARM_WINDOW_MS`] by design — demotion and the
+/// search boundary must agree or a band of events becomes semantically unreachable.
+pub const COLD_CUTOFF_MS: i64 = WARM_WINDOW_MS;
+
+/// Default cap on how many Cold partitions one query scans, newest first (design §2.1, E-09).
+///
+/// A partition is one [`crate::cold::PARTITION_MS`] period (30 days), so 6 partitions ≈ 7 months
+/// of history counting the Warm window. The scan is a brute-force int8 dot product over every row
+/// in each partition — bounding the partition count is what keeps the deep path's cost linear in
+/// *recent* archive size instead of total history. Callers wanting the full archive pass a larger
+/// cap explicitly (CLI/REST/MCP `depth: all` plumbing); the Warm default path never runs this scan.
+pub const DEFAULT_MAX_COLD_PARTITIONS: usize = 6;
+
 /// Hydrate ranked `(id, score)` pairs into full [`SearchHit`]s, preserving the ranked order.
 /// Ids no longer present in the event log (e.g. moved to Cold) are skipped.
 pub fn hydrate(conn: &Connection, ranked: &[(i64, f64)]) -> Result<Vec<SearchHit>, rusqlite::Error> {
@@ -661,6 +676,223 @@ pub fn search_warm_first(
         return Ok(warm);
     }
     search_hybrid_since(conn, query, query_embedding, None, limit)
+}
+
+/// How deep the semantic half of hybrid search reaches (design §2.1, E-09).
+///
+/// `WarmOnly` is the default and matches every pre-existing call path: the vector list comes from
+/// the Warm sqlite-vec KNN alone, and the Cold archive is never opened. `All` additionally runs
+/// the Cold int8 partition scan ([`search_cold_partitions`]) and fuses its hits as a third RRF
+/// source. FTS is unaffected either way — event text stays in `event_log`/FTS after demotion, so
+/// the lexical half already spans Cold and must not be re-run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SearchDepth {
+    /// Semantic search over the Warm window only (the NFR-SLO-04 fast path).
+    #[default]
+    WarmOnly,
+    /// Also scan the Cold int8 archive, up to the configured partition cap.
+    All,
+}
+
+/// Options for [`search_hybrid_with_options`]. `Default` reproduces [`search_hybrid`] exactly
+/// (unbounded FTS, Warm-only semantics, no Cold scan).
+#[derive(Debug, Clone, Copy)]
+pub struct SearchOptions {
+    /// Lexical floor, as in [`fts_search_since`]. `None` = unbounded.
+    pub since_ts: Option<i64>,
+    /// Semantic reach. See [`SearchDepth`].
+    pub depth: SearchDepth,
+    /// Cap on Cold partitions scanned (newest first) when the Cold scan runs.
+    /// See [`DEFAULT_MAX_COLD_PARTITIONS`].
+    pub max_cold_partitions: usize,
+}
+
+impl Default for SearchOptions {
+    fn default() -> Self {
+        Self {
+            since_ts: None,
+            depth: SearchDepth::WarmOnly,
+            max_cold_partitions: DEFAULT_MAX_COLD_PARTITIONS,
+        }
+    }
+}
+
+/// What one Cold scan actually did — the honest-measurement counterpart of the partition cap.
+/// `partitions_visited == 0` is the proof a Warm-only query never opened the archive.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ColdScanStats {
+    /// Non-empty partitions the scan iterated (bounded by the cap).
+    pub partitions_visited: usize,
+    /// Cold rows whose int8 dot product was computed.
+    pub rows_scanned: usize,
+}
+
+/// Ranked outcome of a Cold partition scan: event ids best-first, plus scan stats.
+#[derive(Debug, Clone, Default)]
+pub struct ColdScan {
+    /// Event ids ordered by descending dequantized dot product (ties: ascending id).
+    pub ids: Vec<i64>,
+    pub stats: ColdScanStats,
+}
+
+/// One Cold candidate held in the top-k heap. Ordering is total and deterministic:
+/// higher score wins; equal scores prefer the smaller event id (matching the RRF tie-break).
+struct ColdHit {
+    score: f32,
+    event_id: i64,
+}
+
+impl Ord for ColdHit {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // total_cmp gives a total order over f32 (scores are finite here: bounded int8 codes,
+        // finite scale and query components). Larger event_id compares *less* so that among
+        // equal scores the smaller id survives eviction and ranks first.
+        self.score.total_cmp(&other.score).then_with(|| other.event_id.cmp(&self.event_id))
+    }
+}
+
+impl PartialOrd for ColdHit {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl PartialEq for ColdHit {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == std::cmp::Ordering::Equal
+    }
+}
+
+impl Eq for ColdHit {}
+
+/// Semantic search over the Cold int8 archive (design §2.1, E-09): a bounded brute-force scan of
+/// the period partitions intersecting `range = (from_ms, to_ms)`, newest partition first, at most
+/// `max_partitions` of them, keeping a global top-`k` by dot product.
+///
+/// Each row is scored without dequantizing into an allocation: the stored int8 codes are read as
+/// a borrowed blob and dotted against the f32 query on the fly (`code as f32 * q`), then corrected
+/// by the row's per-vector scale. Warm embeddings are L2-normalized before quantization, so this
+/// dot product ranks like cosine similarity. Rows whose dimension does not match the query (e.g.
+/// archived under an older embedding model) are skipped rather than mis-scored.
+///
+/// This is the *deep* path only — never called from the Warm default path (FR-MEM-03: routine
+/// vector search stays on Warm). Cost is `rows_in_visited_partitions × dim` multiplies; the
+/// partition cap keeps that bounded regardless of total history size.
+pub fn search_cold_partitions(
+    conn: &Connection,
+    query_vec: &[f32],
+    range: (i64, i64),
+    max_partitions: usize,
+    k: usize,
+) -> Result<ColdScan, rusqlite::Error> {
+    use std::cmp::Reverse;
+    use std::collections::BinaryHeap;
+
+    let (from_ms, to_ms) = range;
+    let mut stats = ColdScanStats::default();
+    if query_vec.is_empty() || k == 0 || max_partitions == 0 || from_ms > to_ms {
+        return Ok(ColdScan { ids: Vec::new(), stats });
+    }
+
+    // Only partitions that actually hold rows count against the cap — an empty month costs nothing
+    // and must not shadow older populated ones.
+    let partitions: Vec<i64> = {
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT partition FROM cold_embeddings
+             WHERE partition BETWEEN ?1 AND ?2
+             ORDER BY partition DESC LIMIT ?3",
+        )?;
+        let rows = stmt.query_map(
+            params![
+                crate::cold::partition_of(from_ms),
+                crate::cold::partition_of(to_ms),
+                max_partitions as i64
+            ],
+            |r| r.get::<_, i64>(0),
+        )?;
+        rows.collect::<Result<Vec<_>, _>>()?
+    };
+
+    // Min-heap of size ≤ k: the weakest of the current top-k sits on top and is evicted first.
+    let mut heap: BinaryHeap<Reverse<ColdHit>> = BinaryHeap::with_capacity(k + 1);
+    let mut stmt =
+        conn.prepare("SELECT event_id, scale, codes FROM cold_embeddings WHERE partition = ?1")?;
+    for p in partitions {
+        stats.partitions_visited += 1;
+        let mut rows = stmt.query(params![p])?;
+        while let Some(row) = rows.next()? {
+            let event_id: i64 = row.get(0)?;
+            let scale: f64 = row.get(1)?;
+            let codes: &[u8] = row.get_ref(2)?.as_blob()?;
+            stats.rows_scanned += 1;
+            if codes.len() != query_vec.len() {
+                continue; // archived under a different embedding dim — cannot be scored
+            }
+            let mut dot = 0.0f32;
+            for (b, q) in codes.iter().zip(query_vec) {
+                dot += (*b as i8) as f32 * q;
+            }
+            heap.push(Reverse(ColdHit { score: dot * scale as f32, event_id }));
+            if heap.len() > k {
+                heap.pop();
+            }
+        }
+    }
+
+    let mut hits: Vec<ColdHit> = heap.into_iter().map(|r| r.0).collect();
+    hits.sort_by(|a, b| b.cmp(a)); // best-first, deterministic (total order incl. id tie-break)
+    Ok(ColdScan { ids: hits.into_iter().map(|h| h.event_id).collect(), stats })
+}
+
+/// Hybrid result plus the Cold-scan measurement (sub-SLO accounting per design §2.1: the deep
+/// path is measured separately from the Warm 500ms budget, never silently folded into it).
+#[derive(Debug, Clone)]
+pub struct DeepSearchResult {
+    pub hits: Vec<SearchHit>,
+    /// All-zero when the Cold archive was not opened.
+    pub cold: ColdScanStats,
+}
+
+/// [`search_hybrid_since`] with explicit reach (design §2.1, E-09). The Cold int8 archive is
+/// scanned and fused as a **third RRF source** when either
+///
+/// (a) `opts.depth == SearchDepth::All`, or
+/// (b) the caller's explicit time range reaches past the Cold cutoff
+///     (`opts.since_ts` set and older than `now_ms - COLD_CUTOFF_MS`) — asking for a window that
+///     old *is* asking for Cold, and answering from Warm alone would be silently wrong.
+///
+/// Default options ([`SearchOptions::default`]) reproduce [`search_hybrid`] exactly: Warm-only,
+/// archive untouched (`result.cold == ColdScanStats::default()`). FTS is never duplicated — the
+/// lexical half already covers Cold text (demotion removes only the Warm vector), so the Cold
+/// scan contributes semantics only. `now_ms` is passed in, not read, for deterministic tests.
+pub fn search_hybrid_with_options(
+    conn: &Connection,
+    query: &str,
+    query_embedding: Option<&[f32]>,
+    now_ms: i64,
+    opts: &SearchOptions,
+    limit: usize,
+) -> Result<DeepSearchResult, rusqlite::Error> {
+    let fts = fts_search_since(conn, query, opts.since_ts, limit)?;
+    let vec = match query_embedding {
+        Some(emb) => crate::vector::knn(conn, emb, limit)?,
+        None => Vec::new(),
+    };
+    let reach_cold = opts.depth == SearchDepth::All
+        || opts.since_ts.is_some_and(|s| s < now_ms - COLD_CUTOFF_MS);
+    let cold = match (reach_cold, query_embedding) {
+        (true, Some(emb)) => search_cold_partitions(
+            conn,
+            emb,
+            (opts.since_ts.unwrap_or(i64::MIN), now_ms),
+            opts.max_cold_partitions,
+            limit,
+        )?,
+        _ => ColdScan::default(),
+    };
+    let ranked = reciprocal_rank_fusion(&[&fts, &vec, &cold.ids], 60.0);
+    let capped: Vec<(i64, f64)> = ranked.into_iter().take(limit).collect();
+    Ok(DeepSearchResult { hits: hydrate(conn, &capped)?, cold: cold.stats })
 }
 
 #[cfg(test)]
@@ -1200,3 +1432,235 @@ mod warm_window_tests {
         assert_ne!(ocr_ids[0], cap_ids[0]);
     }
 }
+
+/// Cold-tier semantic search (design §2.1, E-09): the archive must be reachable on request and
+/// untouchable by default.
+#[cfg(test)]
+mod cold_search_tests {
+    use super::*;
+    use crate::cold::{self, PARTITION_MS};
+    use crate::embed::{Embedder, MockEmbedder, E5_SMALL_DIM};
+    use crate::event_log::{insert, NewEvent};
+
+    const DAY: i64 = 24 * 60 * 60 * 1000;
+
+    fn add(conn: &Connection, content: &str, hash: &str, ts: i64) -> i64 {
+        insert(
+            conn,
+            &NewEvent {
+                ts,
+                source: "capture",
+                kind: "text",
+                app_bundle_id: Some("com.apple.Safari"),
+                window_title: Some("notes"),
+                content,
+                content_hash: hash,
+                dwell_ms: 0,
+                display_id: None,
+                window_bounds: None,
+            },
+        )
+        .unwrap()
+    }
+
+    fn embed(conn: &Connection, m: &MockEmbedder, id: i64, text: &str) {
+        let v = m.embed_passages(&[text]).unwrap()[0].clone();
+        crate::vector::upsert(conn, id, &v).unwrap();
+    }
+
+    /// One event well past the cutoff, embedded and demoted through the real demotion path, plus
+    /// a fresh Warm event. The old content shares no token with the query "standup", so lexical
+    /// search alone cannot surface it — only its embedding can.
+    fn seeded_across_cutoff() -> (Connection, i64, i64) {
+        let mut conn = crate::open_in_memory().unwrap();
+        let m = MockEmbedder::new(E5_SMALL_DIM);
+        let now = 100 * PARTITION_MS;
+
+        let old_text = "the budget review meeting is on friday";
+        let old_id = add(&conn, old_text, "h_old", now - 80 * DAY);
+        embed(&conn, &m, old_id, old_text);
+
+        let fresh_text = "lunch plans for saturday afternoon";
+        let fresh_id = add(&conn, fresh_text, "h_fresh", now - DAY);
+        embed(&conn, &m, fresh_id, fresh_text);
+
+        let moved = cold::demote_older_than(&mut conn, now - COLD_CUTOFF_MS).unwrap();
+        assert_eq!(moved, 1, "precondition: the old embedding is demoted to Cold");
+        assert_eq!(cold::count(&conn).unwrap(), 1);
+        (conn, now, old_id)
+    }
+
+    #[test]
+    fn warm_only_never_touches_cold() {
+        let (conn, now, old_id) = seeded_across_cutoff();
+        let m = MockEmbedder::new(E5_SMALL_DIM);
+        let q = m.embed_query("review meeting standup").unwrap();
+
+        // Default options (WarmOnly, no explicit floor) — the archive stays closed.
+        let res = search_hybrid_with_options(
+            &conn,
+            "standup",
+            Some(&q),
+            now,
+            &SearchOptions::default(),
+            10,
+        )
+        .unwrap();
+        assert_eq!(res.cold, ColdScanStats::default(), "no partition opened, no row scanned");
+        assert!(
+            res.hits.iter().all(|h| h.event_id != old_id),
+            "the demoted event must not surface on the Warm path: {:?}",
+            res.hits
+        );
+
+        // Same with an explicit floor inside the Warm window.
+        let opts = SearchOptions { since_ts: Some(now - 7 * DAY), ..Default::default() };
+        let res = search_hybrid_with_options(&conn, "standup", Some(&q), now, &opts, 10).unwrap();
+        assert_eq!(res.cold, ColdScanStats::default());
+
+        // And default options reproduce the pre-existing entry point exactly.
+        let legacy = search_hybrid(&conn, "standup", Some(&q), 10).unwrap();
+        let via_opts =
+            search_hybrid_with_options(&conn, "standup", Some(&q), now, &SearchOptions::default(), 10)
+                .unwrap();
+        assert_eq!(legacy, via_opts.hits, "default options must not change existing behavior");
+    }
+
+    #[test]
+    fn depth_all_finds_an_old_semantic_match_lexical_search_misses() {
+        let (conn, now, old_id) = seeded_across_cutoff();
+        let m = MockEmbedder::new(E5_SMALL_DIM);
+        let q = m.embed_query("review meeting standup").unwrap();
+
+        // Lexical alone: "standup" appears nowhere, so even unbounded FTS returns nothing.
+        assert!(fts_search(&conn, "standup", 10).unwrap().is_empty(), "precondition: FTS miss");
+
+        let opts = SearchOptions { depth: SearchDepth::All, ..Default::default() };
+        let res = search_hybrid_with_options(&conn, "standup", Some(&q), now, &opts, 10).unwrap();
+        assert!(res.cold.partitions_visited >= 1, "the archive was actually opened");
+        assert!(res.cold.rows_scanned >= 1);
+        assert!(
+            res.hits.iter().any(|h| h.event_id == old_id),
+            "the >30-day-old semantic match must surface via the Cold RRF source: {:?}",
+            res.hits
+        );
+    }
+
+    #[test]
+    fn an_explicit_range_past_the_cutoff_reaches_cold_without_depth_all() {
+        let (conn, now, old_id) = seeded_across_cutoff();
+        let m = MockEmbedder::new(E5_SMALL_DIM);
+        let q = m.embed_query("review meeting standup").unwrap();
+
+        // depth stays WarmOnly, but the asked-for window plainly includes Cold territory.
+        let opts = SearchOptions { since_ts: Some(now - 90 * DAY), ..Default::default() };
+        let res = search_hybrid_with_options(&conn, "standup", Some(&q), now, &opts, 10).unwrap();
+        assert!(res.cold.partitions_visited >= 1, "an explicitly old range implies Cold");
+        assert!(res.hits.iter().any(|h| h.event_id == old_id));
+    }
+
+    #[test]
+    fn partition_cap_limits_scanning_newest_first() {
+        let mut conn = crate::open_in_memory().unwrap();
+        let m = MockEmbedder::new(E5_SMALL_DIM);
+        // Five populated partitions, one event each, at periods 10..14.
+        let mut ids = Vec::new();
+        for i in 0..5i64 {
+            let ts = (10 + i) * PARTITION_MS + 5;
+            let text = format!("archived note number {i}");
+            let id = add(&conn, &text, &format!("h{i}"), ts);
+            embed(&conn, &m, id, &text);
+            assert!(cold::demote(&mut conn, id, ts).unwrap());
+            ids.push(id);
+        }
+        let q = m.embed_query("archived note").unwrap();
+        let range = (0, 20 * PARTITION_MS);
+
+        let started = std::time::Instant::now();
+        let capped = search_cold_partitions(&conn, &q, range, 2, 10).unwrap();
+        println!(
+            "cold scan: {} partitions / {} rows in {:?}",
+            capped.stats.partitions_visited,
+            capped.stats.rows_scanned,
+            started.elapsed()
+        );
+        assert_eq!(capped.stats.partitions_visited, 2, "cap bounds the scan");
+        assert_eq!(capped.stats.rows_scanned, 2);
+        // Newest partitions win the cap slots: only the two most recent events are reachable.
+        assert_eq!(capped.ids.len(), 2);
+        assert!(capped.ids.contains(&ids[4]) && capped.ids.contains(&ids[3]), "{:?}", capped.ids);
+
+        // Uncapped (default cap ≥ 5): every populated partition is visited.
+        let full =
+            search_cold_partitions(&conn, &q, range, DEFAULT_MAX_COLD_PARTITIONS, 10).unwrap();
+        assert_eq!(full.stats.partitions_visited, 5);
+        assert_eq!(full.stats.rows_scanned, 5);
+        assert_eq!(full.ids.len(), 5);
+
+        // The time range prunes partitions before the cap does.
+        let narrow =
+            search_cold_partitions(&conn, &q, (13 * PARTITION_MS, 20 * PARTITION_MS), 6, 10)
+                .unwrap();
+        assert_eq!(narrow.stats.partitions_visited, 2, "only periods 13 and 14 intersect");
+    }
+
+    #[test]
+    fn cold_scan_ranks_by_similarity_and_breaks_ties_deterministically() {
+        let mut conn = crate::open_in_memory().unwrap();
+        let m = MockEmbedder::new(E5_SMALL_DIM);
+        let ts = 10 * PARTITION_MS + 5;
+
+        // Two identical contents (identical vectors → identical scores) and one distant decoy.
+        let a = add(&conn, "vendor contract renewal", "ha", ts);
+        let b = add(&conn, "vendor contract renewal", "hb", ts + 1);
+        let decoy = add(&conn, "weekend hiking photos", "hc", ts + 2);
+        for (id, text) in
+            [(a, "vendor contract renewal"), (b, "vendor contract renewal"), (decoy, "weekend hiking photos")]
+        {
+            embed(&conn, &m, id, text);
+            assert!(cold::demote(&mut conn, id, ts).unwrap());
+        }
+        let q = m.embed_query("vendor contract renewal").unwrap();
+        let range = (0, 20 * PARTITION_MS);
+
+        let scan = search_cold_partitions(&conn, &q, range, 6, 3).unwrap();
+        assert_eq!(scan.ids, vec![a, b, decoy], "score order, ties by ascending id");
+
+        // k=1 under a tie must deterministically keep the smaller id.
+        let top1 = search_cold_partitions(&conn, &q, range, 6, 1).unwrap();
+        assert_eq!(top1.ids, vec![a]);
+    }
+
+    #[test]
+    fn rrf_merge_with_cold_source_is_stable_and_deterministic() {
+        let (conn, now, _old_id) = seeded_across_cutoff();
+        let m = MockEmbedder::new(E5_SMALL_DIM);
+        // A query that exercises all three sources: "friday" hits FTS (old event text is still
+        // indexed), the embedding hits Warm KNN and the Cold scan.
+        let q = m.embed_query("budget review friday").unwrap();
+        let opts = SearchOptions { depth: SearchDepth::All, ..Default::default() };
+
+        let first =
+            search_hybrid_with_options(&conn, "budget friday", Some(&q), now, &opts, 10).unwrap();
+        let second =
+            search_hybrid_with_options(&conn, "budget friday", Some(&q), now, &opts, 10).unwrap();
+        assert!(!first.hits.is_empty());
+        assert_eq!(first.hits, second.hits, "same inputs, same fused ranking");
+        assert_eq!(first.cold, second.cold);
+        // Scores are strictly ordered best-first (RRF output is sorted and hydration preserves it).
+        assert!(first.hits.windows(2).all(|w| w[0].score >= w[1].score));
+    }
+
+    #[test]
+    fn cold_scan_degenerate_inputs_return_empty() {
+        let conn = crate::open_in_memory().unwrap();
+        let q = vec![0.5f32; E5_SMALL_DIM];
+        // Empty archive, zero cap, zero k, inverted range — all empty, none error.
+        assert!(search_cold_partitions(&conn, &q, (0, i64::MAX), 6, 10).unwrap().ids.is_empty());
+        assert!(search_cold_partitions(&conn, &q, (0, 100), 0, 10).unwrap().ids.is_empty());
+        assert!(search_cold_partitions(&conn, &q, (0, 100), 6, 0).unwrap().ids.is_empty());
+        assert!(search_cold_partitions(&conn, &q, (100, 0), 6, 10).unwrap().ids.is_empty());
+        assert!(search_cold_partitions(&conn, &[], (0, 100), 6, 10).unwrap().ids.is_empty());
+    }
+}
+

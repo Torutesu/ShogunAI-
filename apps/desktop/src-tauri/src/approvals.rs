@@ -12,11 +12,14 @@
 
 #[cfg(target_os = "macos")]
 pub mod mac {
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
 
     use serde_json::json;
-    use shogun_agents::approval::{ApprovalId, ApprovalQueue, ConfirmIntent, Decision, Origin};
+    use shogun_agents::approval::{
+        ApprovalId, ApprovalOrigin, ApprovalQueue, ConfirmIntent, ConfirmedSend, Decision, Preview,
+    };
     use shogun_agents::permission::SendAction;
+    use shogun_memory::lessons::{FeedbackKind, LessonScope, NewFeedback};
     use shogun_agents::producer::{propose, ProposedSend};
     use shogun_core::composio_send::HttpComposioApi;
     use shogun_core::daemon::Db;
@@ -106,16 +109,20 @@ pub mod mac {
         sender.send_capability(ent).is_some()
     }
 
-    /// The shared L3 approval queue (the same one an agent enqueues into and the UI drains).
-    pub struct ApprovalQueueState(pub Mutex<ApprovalQueue>);
+    /// The ONE shared L3 approval queue (B-3 / E-08): created once at startup and managed in
+    /// Tauri state. Every producer (an agent, `submit_send`, a future in-app API/MCP face — which
+    /// would receive a clone of this same `Arc`) enqueues here, and the settings `ApprovalsSection`
+    /// is the single drain. No other `ApprovalQueue` may be constructed in this app.
+    pub struct ApprovalQueueState(pub Arc<Mutex<ApprovalQueue>>);
 
     impl Default for ApprovalQueueState {
         fn default() -> Self {
-            Self(Mutex::new(ApprovalQueue::new()))
+            Self(Arc::new(Mutex::new(ApprovalQueue::new())))
         }
     }
 
-    /// One row for the L3 confirm UI (FR-AG-03: op type, full destination, full body, route).
+    /// One row for the L3 confirm UI (FR-AG-03: op type, full destination, full body, route;
+    /// B-3: plus which surface enqueued it — "ui" / "api" / "mcp").
     #[derive(serde::Serialize)]
     pub struct ApprovalView {
         pub id: u64,
@@ -123,6 +130,7 @@ pub mod mac {
         pub destination: String,
         pub full_body: String,
         pub route: &'static str,
+        pub origin: &'static str,
     }
 
     fn route_str(route: shogun_agents::approval::Route) -> &'static str {
@@ -149,6 +157,47 @@ pub mod mac {
         })
     }
 
+    /// L5 feedback scope for an approval item (Plan D-2 / D-6 scope rule). Deliberately simple
+    /// and derived from the item itself: an email's recipient address is a stable person handle,
+    /// so an email send is **person-scoped** with the address as `scope_ref` (resolving the
+    /// address to a `people` row is left to distillation-time joins — the raw handle is
+    /// deterministic and, like all feedback text, local-DB-only). Every other send kind has no
+    /// resolvable person, so it is **global-scoped** and distinguished by `action_kind`.
+    fn feedback_scope(action: &SendAction) -> (LessonScope, Option<&str>, &'static str) {
+        match action {
+            SendAction::SendEmail { to } => (LessonScope::Person, Some(to.as_str()), "send_email"),
+            SendAction::PostMessage { .. } => (LessonScope::Global, None, "post_message"),
+            SendAction::CreateCalendarEvent { .. } => {
+                (LessonScope::Global, None, "create_calendar_event")
+            }
+            SendAction::PostComment { .. } => (LessonScope::Global, None, "post_comment"),
+        }
+    }
+
+    /// Fire-and-forget L5 feedback write (Plan D-2). Failure is swallowed by `Db::record_feedback`
+    /// itself (returns `None`); nothing here can block or fail the approval action, and the body
+    /// text is never logged.
+    fn record_approval_feedback(
+        db: &shogun_core::daemon::Db,
+        kind: FeedbackKind,
+        action: &SendAction,
+        before: Option<&str>,
+        after: Option<&str>,
+    ) {
+        let (scope, scope_ref, action_kind) = feedback_scope(action);
+        let _ = db.record_feedback(
+            kind,
+            scope,
+            &NewFeedback {
+                ts_ms: db.now_ms(),
+                action_kind: Some(action_kind),
+                scope_ref,
+                before_text: before,
+                after_text: after,
+            },
+        );
+    }
+
     /// Enqueue a send for L3 confirmation. Returns the pending id. The producer is normally an agent
     /// (Reply Drafter etc.); this command is the shared entry point (also usable from the UI).
     #[tauri::command]
@@ -164,9 +213,50 @@ pub mod mac {
         let now = db.now_ms().max(0) as u64;
         let id = {
             let mut q = state.0.lock().map_err(|_| "approval queue poisoned".to_string())?;
-            propose(&mut q, &proposal, Origin::Human, now).0
+            propose(&mut q, &proposal, ApprovalOrigin::Ui, now).0
         };
         // Something is waiting on a human decision — the first reason cues exist at all (#49).
+        crate::sound::mac::play(shogun_core::sound::Cue::ApprovalPending);
+        Ok(id)
+    }
+
+    /// The Reply Drafter flow itself (B-5), shared by the `draft_reply` command and the notch
+    /// `DraftReply` dispatch (`notch_exec`): draft the body on the Agent lane (invariant 5) from
+    /// `context`, then enqueue it on the ONE shared approval queue with the given origin. Blocking
+    /// (an LLM call) — callers off the UI thread only. Returns the pending approval id; the human
+    /// still confirms before anything sends (FR-AG-03).
+    pub(crate) fn draft_and_enqueue(
+        kind: &str,
+        destination: &str,
+        subject: &str,
+        context: &str,
+        queue: &Arc<Mutex<ApprovalQueue>>,
+        db: &Db,
+        directives: &str,
+    ) -> Result<u64, String> {
+        use shogun_core::llm::AgentClient;
+        let base_prompt = format!(
+            "You are drafting a concise, professional {kind} reply. Use the context below; write \
+             only the reply body, no preamble.\n\n--- context ---\n{context}"
+        );
+        let prompt = if directives.trim().is_empty() {
+            base_prompt
+        } else {
+            format!("{}\n{}", directives.trim(), base_prompt)
+        };
+        // Draft through the same BYOK Agent-lane client as inline drafts (invariant 5). Traceability
+        // is recorded by the client at the egress point.
+        let agent = crate::inline_source::mac::build_agent(db)
+            .ok_or_else(|| "No key yet — add your provider key in Settings to draft replies.".to_string())?;
+        let body = agent.complete(&prompt).map_err(|e| format!("draft failed: {e:?}"))?;
+
+        let proposal = proposed(kind, destination, subject, &body)?;
+        let now = db.now_ms().max(0) as u64;
+        let id = {
+            let mut q = queue.lock().map_err(|_| "approval queue poisoned".to_string())?;
+            propose(&mut q, &proposal, ApprovalOrigin::Ui, now).0
+        };
+        // A draft the user did not watch being written is exactly the case that needs telling (#49).
         crate::sound::mac::play(shogun_core::sound::Cue::ApprovalPending);
         Ok(id)
     }
@@ -186,32 +276,7 @@ pub mod mac {
         db: tauri::State<'_, Db>,
         user_cfg: tauri::State<'_, crate::user_config_watch::UserConfigState>,
     ) -> Result<u64, String> {
-        use shogun_core::llm::AgentClient;
-        let directives = user_cfg.directives();
-        let base_prompt = format!(
-            "You are drafting a concise, professional {kind} reply. Use the context below; write \
-             only the reply body, no preamble.\n\n--- context ---\n{context}"
-        );
-        let prompt = if directives.trim().is_empty() {
-            base_prompt
-        } else {
-            format!("{}\n{}", directives.trim(), base_prompt)
-        };
-        // Draft through the same BYOK Agent-lane client as inline drafts (invariant 5). Traceability
-        // is recorded by the client at the egress point.
-        let agent = crate::inline_source::mac::build_agent(&db)
-            .ok_or_else(|| "No key yet — add your provider key in Settings to draft replies.".to_string())?;
-        let body = agent.complete(&prompt).map_err(|e| format!("draft failed: {e:?}"))?;
-
-        let proposal = proposed(&kind, &destination, &subject, &body)?;
-        let now = db.now_ms().max(0) as u64;
-        let id = {
-            let mut q = state.0.lock().map_err(|_| "approval queue poisoned".to_string())?;
-            propose(&mut q, &proposal, Origin::Human, now).0
-        };
-        // A draft the user did not watch being written is exactly the case that needs telling.
-        crate::sound::mac::play(shogun_core::sound::Cue::ApprovalPending);
-        Ok(id)
+        draft_and_enqueue(&kind, &destination, &subject, &context, &state.0, &db, &user_cfg.directives())
     }
 
     /// List pending L3 confirmations (expiring any past the 10-minute window first).
@@ -226,25 +291,48 @@ pub mod mac {
         let views = q
             .pending_ids()
             .into_iter()
-            .filter_map(|id| q.preview(id).map(|p| (id, p)))
-            .map(|(id, p)| ApprovalView {
+            .filter_map(|id| q.preview(id).map(|p| (id, p, q.origin(id))))
+            .map(|(id, p, origin)| ApprovalView {
                 id: id.0,
                 op_type: p.op_type,
                 destination: p.destination.clone(),
                 full_body: p.full_body.clone(),
                 route: route_str(p.route),
+                // Every pending entry has an origin; default defensively rather than dropping the row.
+                origin: origin.map_or("ui", ApprovalOrigin::as_str),
             })
             .collect();
         Ok(views)
     }
 
-    /// Reject a pending send.
+    /// Reject a pending send. Records the L5 `reject` signal (Plan D-2) — fire-and-forget, after
+    /// the queue decision, so a feedback failure can never affect the rejection itself.
     #[tauri::command]
-    pub fn reject_send(id: u64, state: tauri::State<'_, ApprovalQueueState>) -> Result<String, String> {
+    pub fn reject_send(
+        id: u64,
+        state: tauri::State<'_, ApprovalQueueState>,
+        db: tauri::State<'_, Db>,
+    ) -> Result<String, String> {
         let mut q = state.0.lock().map_err(|_| "approval queue poisoned".to_string())?;
         use shogun_agents::approval::RejectCause;
+        // Snapshot action + proposed body before the reject dequeues them (feedback input only).
+        let snapshot = q
+            .action(ApprovalId(id))
+            .cloned()
+            .and_then(|a| q.preview(ApprovalId(id)).map(|p| (a, p.full_body.clone())));
         match q.reject(ApprovalId(id), RejectCause::UserRejected) {
-            Decision::Rejected(_) => Ok("rejected".into()),
+            Decision::Rejected(_) => {
+                if let Some((action, proposed_body)) = snapshot {
+                    record_approval_feedback(
+                        &db,
+                        FeedbackKind::Reject,
+                        &action,
+                        Some(&proposed_body),
+                        None,
+                    );
+                }
+                Ok("rejected".into())
+            }
             other => Ok(format!("{other:?}")),
         }
     }
@@ -262,9 +350,14 @@ pub mod mac {
     ///   - Only when both gates are open (consent ✓, draft-stop OFF) is the Composio key required
     ///     and the live send attempted.
     ///   - First-layer sends (Slack/calendar/GitHub) are completely unaffected by this gate.
+    /// `edited_body` (optional) is the user's final text when the confirm UI offered an edit
+    /// field (B-5): when present and different from the proposal it replaces the sent body — the
+    /// human approved the *edited* text — and is recorded as the L5 `edit_before_approve` signal
+    /// (Plan D-2). Callers that pass nothing get the unchanged flow (`approve_unchanged`).
     #[tauri::command]
     pub fn confirm_send(
         id: u64,
+        edited_body: Option<String>,
         state: tauri::State<'_, ApprovalQueueState>,
         connectors: tauri::State<'_, ConnectorState>,
         db: tauri::State<'_, Db>,
@@ -294,6 +387,38 @@ pub mod mac {
                 Decision::StillPending => return Ok("pending".into()),
                 Decision::Rejected(c) => return Ok(format!("rejected:{c:?}")),
                 Decision::Unknown => return Ok("unknown".into()),
+            }
+        };
+
+        // --- L5 feedback hook (Plan D-2), fire-and-forget ---------------------------------------
+        // An approval with an edited body is the richest correction signal we get; an unchanged
+        // approval is the countersignal. Recorded at the decision point (the user approved),
+        // independent of whether the transport later succeeds. A feedback failure is swallowed
+        // inside `Db::record_feedback` and can never block the send below.
+        let confirmed = match edited_body.filter(|b| *b != confirmed.preview.full_body) {
+            Some(final_body) => {
+                record_approval_feedback(
+                    &db,
+                    FeedbackKind::EditBeforeApprove,
+                    &confirmed.action,
+                    Some(&confirmed.preview.full_body),
+                    Some(&final_body),
+                );
+                // The human approved the edited text, so that is what must send. Rebuild the
+                // preview from the same action + route so the trace, the preview, and the wire
+                // can never disagree (invariant 3).
+                let preview = Preview::for_send(&confirmed.action, final_body, confirmed.preview.route);
+                ConfirmedSend { action: confirmed.action, preview }
+            }
+            None => {
+                record_approval_feedback(
+                    &db,
+                    FeedbackKind::ApproveUnchanged,
+                    &confirmed.action,
+                    None,
+                    None,
+                );
+                confirmed
             }
         };
 

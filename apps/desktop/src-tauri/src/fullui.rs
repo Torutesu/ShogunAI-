@@ -312,9 +312,22 @@ pub mod mac {
     }
 
     fn today(db: &Db, now: i64) -> TodayView {
-        // The local brief is the degraded shape by definition (calendar + overdue, no generated
-        // prose); the full one arrives from the nightly cycle. Calendar lines aren't plumbed into
-        // this window yet, so the schedule comes back empty rather than invented.
+        // The nightly cycle's persisted brief first (Plan C-1): the MorningBrief job wrote a
+        // `briefs` row for this local day, so the morning display is a read — immediate and
+        // offline-stable — and `generated` reflects what actually built it (extractive = false).
+        let date = shogun_core::daemon::local_date_string(now);
+        if let Some(row) = db.brief_for(&date) {
+            if let Ok(payload) =
+                serde_json::from_str::<shogun_memory::briefs::BriefPayload>(&row.payload)
+            {
+                return today_from_payload(&payload, row.generated);
+            }
+            // An unreadable payload falls through to the degraded live assembly — the morning
+            // must never be an error screen (FR-MB-04).
+        }
+        // No persisted row: the local brief is the degraded shape by definition (calendar +
+        // overdue, no generated prose). Calendar lines aren't plumbed into this window yet, so
+        // the schedule comes back empty rather than invented.
         let brief = db.local_morning_brief(Vec::new(), now);
         let mut sections = Vec::new();
         if !brief.commitments_due.is_empty() {
@@ -338,6 +351,70 @@ pub mod mac {
             // Fusion drives these in the panel; surfacing them here is a later work package.
             actions: Vec::new(),
             schedule: Vec::new(),
+        }
+    }
+
+    /// Render the persisted nightly brief (Plan C-1). `generated` comes from the `briefs` row —
+    /// the job recorded which summariser wrote it — never a constant.
+    fn today_from_payload(p: &shogun_memory::briefs::BriefPayload, generated: bool) -> TodayView {
+        // Same medium-confidence hedge as `brief_line` (FR-MB-05): the persisted line kept its
+        // `possibly` flag, and dropping it here would state a guess as fact.
+        let bullet = |l: &shogun_memory::briefs::BriefLine| {
+            if l.possibly {
+                format!("possibly: {}", l.text)
+            } else {
+                l.text.clone()
+            }
+        };
+        let mut sections = Vec::new();
+        if !p.what_happened.is_empty() {
+            sections.push(BriefSection {
+                heading: "What happened".to_string(),
+                body: None,
+                bullets: p.what_happened.clone(),
+            });
+        }
+        if !p.commitments_due.is_empty() {
+            sections.push(BriefSection {
+                heading: "Commitments due".to_string(),
+                body: None,
+                bullets: p.commitments_due.iter().map(&bullet).collect(),
+            });
+        }
+        if !p.open_loops.is_empty() {
+            sections.push(BriefSection {
+                heading: "Open loops".to_string(),
+                body: None,
+                bullets: p.open_loops.iter().map(&bullet).collect(),
+            });
+        }
+        TodayView {
+            generated,
+            never_run: false,
+            sections,
+            actions: p
+                .suggested_actions
+                .iter()
+                .enumerate()
+                .map(|(i, a)| SuggestedAction {
+                    id: format!("brief-action-{i}"),
+                    label: a.label.clone(),
+                    locked: false,
+                })
+                .collect(),
+            schedule: p
+                .today
+                .iter()
+                .enumerate()
+                .map(|(i, s)| ScheduleItem {
+                    id: format!("brief-cal-{i}"),
+                    time: clock(s.start_ms),
+                    // FR-MB-06: the Updated mark travels in the title (the wire type mirrors
+                    // types.ts and stays unchanged).
+                    title: if s.updated { format!("{} (updated)", s.title) } else { s.title.clone() },
+                    detail: String::new(),
+                })
+                .collect(),
         }
     }
 

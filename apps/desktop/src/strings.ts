@@ -129,6 +129,27 @@ export const STRINGS = {
     healthNoAccess: "Grant Accessibility to use drafting and capture",
     healthNoModel: "Search is text-only until the local model is installed",
     healthFix: "Fix",
+    // context actions (B-1) — the buttons above the composer. Levels are the product's own
+    // permission language (L1 auto / L2 one-tap / L3 approval), shown as a small tag.
+    actionsAria: "Context actions",
+    actionDone: "Done",
+    actionFailed: "Couldn't run it",
+    actionRejected: "Not available on this plan",
+    actionGone: "That moment passed — the screen moved on",
+    actionQueued: "Waiting in Approvals — nothing sends without you",
+    actionConfirmQ: "Run it?",
+    actionConfirm: "Confirm",
+    actionCancel: "Cancel",
+    actionExpired: "The confirm window passed",
+    // in-panel memory search (B-6) — press / to search
+    searchAria: "Search memory",
+    searchPlaceholder: "Search your memory…",
+    searchOpen: "Search memory (/)",
+    searchEmpty: "No matches yet.",
+    searchHint: "Enter copies the top match · Esc closes",
+    searchCopied: "Copied",
+    // approvals badge on the settings gear — how many sends wait for explicit confirmation
+    approvalsBadge: (n: number): string => `${n} waiting for your approval`,
     // settings
     settings: "Settings",
     // Earlier conversations. Kept out of the way by default: the panel is for asking something
@@ -147,6 +168,7 @@ export const STRINGS = {
     connectionsUnavailable: "Not available yet",
     connect: "Connect",
     connecting: "Connecting…",
+    reconnect: "Reconnect",
     disconnect: "Disconnect",
     // AI coding-tool transcripts (opt-in source)
     aiSessions: "AI sessions",

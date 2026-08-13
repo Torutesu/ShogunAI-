@@ -16,6 +16,8 @@ pub enum BlockRef {
     Session(i64),
     /// state テーブルの行
     State { table: StateTable, id: i64 },
+    /// `lessons.id`（L5 注入、Plan D-5）
+    Lesson(i64),
 }
 
 /// provenance が指す state テーブル。
@@ -35,6 +37,8 @@ pub enum SourceKind {
     ThreadSummary,
     SessionSummary,
     Structured,
+    /// L5 の学習済み lesson（instruction 1文、Plan D-5）。
+    Lesson,
 }
 
 /// スコアリングの生入力（各 0.0..=1.0）。

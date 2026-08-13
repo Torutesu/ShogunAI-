@@ -15,6 +15,7 @@ use std::path::Path;
 use rusqlite::Connection;
 
 pub mod ai_session;
+pub mod briefs;
 pub mod cold;
 pub mod compression_metrics;
 pub mod embed;
@@ -27,6 +28,7 @@ pub mod extract;
 pub mod hot;
 pub mod identity;
 pub mod jobs;
+pub mod lessons;
 pub mod maintenance;
 pub mod meeting_recaps;
 pub mod quantize;
@@ -210,7 +212,7 @@ pub fn open_in_memory() -> Result<Connection, MemoryError> {
 /// The highest migration bundled in `src/migrations`. Tests assert against this rather than a
 /// literal so that adding a migration updates one place, not five — and so a *drop* in version
 /// (a migration file lost in a merge) still fails loudly.
-pub const LATEST_SCHEMA_VERSION: u32 = 14;
+pub const LATEST_SCHEMA_VERSION: u32 = 18;
 
 /// The schema version the migrations bring the database to (max applied version), or `None`
 /// if no migrations are recorded.
@@ -341,6 +343,10 @@ mod tests {
             "open_loops",
             "state_provenance",
             "traceability_log",
+            "feedback_events",
+            "lessons",
+            "lesson_provenance",
+            "briefs",
         ] {
             assert!(tables.iter().any(|t| t == expected), "missing table {expected}");
         }

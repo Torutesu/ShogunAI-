@@ -49,7 +49,10 @@ fn main() -> std::io::Result<()> {
     // (SHOGUN_ONBOARDING_JSON overrides the path); billing is the pre-Stripe stub. Consulted on
     // every tools/call, so trial expiry takes effect mid-session.
     let plan_source = shogun_mcp::plan_source::FilePlanSource::from_env();
-    let server = McpServer::new(backend, now_ms, move || {
+    // The process-wide L3 approval queue (B-3 / E-08): created once at the composition root and
+    // injected — the MCP face never owns a private queue.
+    let approvals = Arc::new(std::sync::Mutex::new(shogun_agents::approval::ApprovalQueue::new()));
+    let server = McpServer::new(backend, approvals, now_ms, move || {
         plan_source.resolve(u64::try_from(now_ms()).unwrap_or(0))
     });
 

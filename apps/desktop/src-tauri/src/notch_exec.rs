@@ -1,8 +1,10 @@
 //! Notch action execution (§6.6.2, product core). Clicking a context-action button runs it through
 //! the L1/L2/L3-gated [`ExecutionEngine`](shogun_agents::engine): L1 auto-runs, L2 waits for a
-//! one-tap confirm, L3 is refused (v1 has no send path, invariant 4 — context actions never carry an
-//! L3 anyway). The gating logic is the Linux-tested engine; this module supplies the macOS effector
-//! (the real local effects) and the reporting observer, and the Tauri commands the panel calls.
+//! one-tap confirm. The one L3 candidate — DraftReply (B-5) — never touches the engine (which
+//! structurally rejects sends, invariant 4): it is dispatched to the Reply Drafter, whose draft
+//! lands on the shared L3 approval queue for an explicit human confirm. The gating logic is the
+//! Linux-tested engine; this module supplies the macOS effector (the real local effects) and the
+//! reporting observer, and the Tauri commands the panel calls.
 #![allow(dead_code, unused_imports)]
 
 #[cfg(target_os = "macos")]
@@ -15,20 +17,124 @@ pub const CONFIRM_TIMEOUT_MS: u64 = 8_000;
 pub mod mac {
     use std::sync::Mutex;
 
+    use objc2::runtime::AnyObject;
+    use objc2::{class, msg_send};
+    use objc2_foundation::NSString;
     use shogun_agents::engine::{
         ActionId, Disposition, ExecutionEngine, ExecutionObserver, LocalEffector, Outcome, RejectReason,
     };
+    use shogun_agents::permission::SendAction;
     use shogun_core::daemon::Db;
     use shogun_fusion::assemble::ScreenContext;
-    use shogun_fusion::{Action, LocalAction};
+    use shogun_fusion::{Action, LocalAction, SendAction};
 
     use super::CONFIRM_TIMEOUT_MS;
     use crate::axcache::focused_window;
     use crate::display::frontmost_app;
 
+    // ---- real local effects (B-2). All macOS-only — this whole module is cfg(macos); Linux CI
+    // ---- covers the engine gating, the device covers these effects. ---------------------------
+
+    /// Deliver a user notification. macOS-only. Uses `NSUserNotificationCenter` — deprecated but
+    /// dependency-free (the UNUserNotifications framework is not among this app's objc2 crates,
+    /// and adding one is out of scope), and it matches the raw `msg_send!` style `lib.rs` uses for
+    /// AppKit. The text is a state summary (already confidence-gated), shown to the user only —
+    /// it is never written to a log (コード規約: capture-derived text stays out of logs).
+    fn deliver_notification(text: &str) -> Result<(), String> {
+        // SAFETY: plain AppKit/Foundation messaging. `new` returns +1 (released below);
+        // `defaultUserNotificationCenter` is get-rule (not released). NSString refs stay alive
+        // across the calls that borrow them.
+        unsafe {
+            let center: *mut AnyObject =
+                msg_send![class!(NSUserNotificationCenter), defaultUserNotificationCenter];
+            if center.is_null() {
+                return Err("no notification center (unbundled process?)".into());
+            }
+            let note: *mut AnyObject = msg_send![class!(NSUserNotification), new];
+            if note.is_null() {
+                return Err("could not create the notification".into());
+            }
+            let title = NSString::from_str("SHOGUN");
+            let _: () = msg_send![note, setTitle: &*title];
+            let body = NSString::from_str(text);
+            let _: () = msg_send![note, setInformativeText: &*body];
+            let _: () = msg_send![center, deliverNotification: note];
+            let _: () = msg_send![note, release];
+        }
+        Ok(())
+    }
+
+    /// Put text on the general pasteboard (device-local, invariant 4). macOS-only. Same
+    /// pasteboard pattern as `inline_source::paste_at_cursor`, minus the save/restore: copying IS
+    /// the user's intent here, so overwriting the clipboard is the effect, not a side effect.
+    fn copy_to_clipboard(text: &str) -> Result<(), String> {
+        // SAFETY: generalPasteboard is get-rule; the NSStrings are owned locally and outlive the
+        // calls that borrow them.
+        unsafe {
+            let pb: *mut AnyObject = msg_send![class!(NSPasteboard), generalPasteboard];
+            if pb.is_null() {
+                return Err("no pasteboard".into());
+            }
+            let utf8 = NSString::from_str("public.utf8-plain-text");
+            let ours = NSString::from_str(text);
+            let _: isize = msg_send![pb, clearContents];
+            let ok: bool = msg_send![pb, setString: &*ours, forType: &*utf8];
+            if !ok {
+                return Err("could not write the pasteboard".into());
+            }
+        }
+        Ok(())
+    }
+
+    /// Bring an app to the foreground by bundle id via `NSWorkspace` (macOS-only; same raw
+    /// `msg_send!` style as the workspace watchers in `lib.rs`).
+    fn open_app(bundle_id: &str) -> Result<(), String> {
+        // SAFETY: sharedWorkspace and both returned URLs are get-rule/autoreleased — nothing to
+        // release; the NSString outlives the call that borrows it.
+        unsafe {
+            let ws: *mut AnyObject = msg_send![class!(NSWorkspace), sharedWorkspace];
+            if ws.is_null() {
+                return Err("no workspace".into());
+            }
+            let bid = NSString::from_str(bundle_id);
+            let url: *mut AnyObject = msg_send![ws, URLForApplicationWithBundleIdentifier: &*bid];
+            if url.is_null() {
+                return Err(format!("no app for bundle id {bundle_id}"));
+            }
+            let ok: bool = msg_send![ws, openURL: url];
+            if ok {
+                Ok(())
+            } else {
+                Err(format!("could not open {bundle_id}"))
+            }
+        }
+    }
+
+    /// Reveal a file in Finder via `NSWorkspace` (macOS-only).
+    fn reveal_file(path: &str) -> Result<(), String> {
+        // SAFETY: all returned objects are get-rule/autoreleased class-method results; the
+        // NSString outlives the calls that borrow it.
+        unsafe {
+            let ws: *mut AnyObject = msg_send![class!(NSWorkspace), sharedWorkspace];
+            if ws.is_null() {
+                return Err("no workspace".into());
+            }
+            let ns_path = NSString::from_str(path);
+            let url: *mut AnyObject = msg_send![class!(NSURL), fileURLWithPath: &*ns_path];
+            if url.is_null() {
+                return Err("could not build the file URL".into());
+            }
+            let urls: *mut AnyObject = msg_send![class!(NSArray), arrayWithObject: url];
+            let _: () = msg_send![ws, activateFileViewerSelectingURLs: urls];
+        }
+        Ok(())
+    }
+
     /// The macOS local-effect seam. DB-effectful actions run against the shared handle; OS effects
-    /// (open app, notification, clipboard) are best-effort and logged. Never runs a send (the engine
-    /// rejects L3 before it reaches here).
+    /// (open app, notification, clipboard, reveal) are the real AppKit calls above. Never runs a
+    /// send (the engine rejects L3 before it reaches here). The match is exhaustive on purpose —
+    /// a future `LocalAction` variant must fail loudly here at compile time, not fall through a
+    /// catch-all stub.
     pub struct NotchEffector {
         db: Db,
     }
@@ -44,7 +150,7 @@ pub mod mac {
             match action {
                 Action::Local(LocalAction::LocalSearch { query }) => {
                     let hits = self.db.search(query, 5).len();
-                    eprintln!("[exec] local search {query:?} → {hits} hit(s)");
+                    eprintln!("[exec] local search → {hits} hit(s)");
                     Ok(())
                 }
                 Action::Local(LocalAction::SaveDraft { target }) => {
@@ -52,17 +158,41 @@ pub mod mac {
                     eprintln!("[exec] saved local draft for {target}");
                     Ok(())
                 }
-                Action::Local(LocalAction::ShowNotification { .. }) => {
-                    // Byte-length only would be odd for a notification; log the kind, not the text.
+                Action::Local(LocalAction::ShowNotification { text }) => {
+                    // Log the kind only, never the text (state summaries stay out of logs).
                     eprintln!("[exec] show notification");
-                    Ok(())
+                    deliver_notification(text)
                 }
-                Action::Local(other) => {
-                    eprintln!("[exec] local action: {other:?}");
-                    Ok(())
+                Action::Local(LocalAction::CopyToClipboard { text }) => {
+                    eprintln!("[exec] copy to clipboard ({} chars)", text.chars().count());
+                    copy_to_clipboard(text)
                 }
-                // Unreachable — the engine rejects L3 at submit (invariant 4).
-                Action::Send(_) => Err("external send is not available in v1".into()),
+                Action::Local(LocalAction::OpenApp { bundle_id }) => {
+                    eprintln!("[exec] open app {bundle_id}");
+                    open_app(bundle_id)
+                }
+                Action::Local(LocalAction::RevealFile { path }) => {
+                    eprintln!("[exec] reveal file");
+                    reveal_file(path)
+                }
+                Action::Local(LocalAction::UpdateState { table, state_id }) => {
+                    // The one L2 local action: resolve the state row (the same mutation the panel's
+                    // click-to-resolve performs). Unknown tables are an error, not a silent no-op.
+                    let done = match *table {
+                        "commitments" => self.db.resolve_commitment(*state_id),
+                        "open_loops" => self.db.resolve_open_loop(*state_id),
+                        other => return Err(format!("update_state: unsupported table {other}")),
+                    };
+                    eprintln!("[exec] update {table} #{state_id} → resolved: {done}");
+                    if done {
+                        Ok(())
+                    } else {
+                        Err(format!("update_state: no such {table} row"))
+                    }
+                }
+                // Unreachable — the engine rejects L3 at submit (invariant 4); the DraftReply
+                // candidate is dispatched to the approval queue before it can reach the engine.
+                Action::Send(_) => Err("external sends go through the L3 approval queue".into()),
             }
         }
     }
@@ -115,10 +245,13 @@ pub mod mac {
         }
     }
 
+
     /// Tauri command: run the context action at `index` (as shown by `notch_actions`). Re-assembles
-    /// the candidates for the current screen, submits the Nth to the engine, and returns a status:
-    /// `"executed"` (L1 auto-ran), `"confirm:<id>"` (L2 — call `confirm_notch_action`), `"rejected"`,
-    /// or `"unavailable"` / `"no-action"`.
+    /// the candidates for the current screen and dispatches the Nth. A DraftReply (external
+    /// send, L3 by construction) never reaches the L1/L2 engine: it drafts off-thread and lands
+    /// on the ONE shared approval queue, returning `"drafting"`. Everything else goes to the
+    /// engine and returns a status: `"executed"` (L1 auto-ran), `"confirm:<id>"` (L2 — call
+    /// `confirm_notch_action`), `"rejected"`, or `"failed"` / `"unavailable"` / `"no-action"`.
     #[tauri::command]
     pub fn run_notch_action(
         index: usize,
@@ -131,13 +264,34 @@ pub mod mac {
         let Some(cand) = cache.actions.get(index) else {
             return "no-action".to_string();
         };
-        let Ok(mut eng) = engine.lock() else {
-            return "unavailable".to_string();
-        };
         let level = format!("{:?}", cand.level);
         // Plan gate (issue #97): resolved core-side per click; the engine rejects when the plan
         // has no agent execution (Standard / expired trial).
         let ent = crate::entitlement::mac::current(&app);
+
+        // B-5: a DraftReply candidate is an external send — L3 by construction — so it never goes
+        // through the L1/L2 engine (which structurally rejects sends). Dispatch it to the Reply
+        // Drafter instead: draft on the Agent lane off-thread, then enqueue on the ONE shared
+        // approval queue (origin: Ui) for the L3 confirm UI to list/edit/confirm (FR-AG-03).
+        if let Action::Send(SendAction::SendEmail { to }) = &cand.action {
+            let outcome = if !ent.agent_execution {
+                "rejected"
+            } else if spawn_draft_reply(to.clone(), cand.rationale.clone(), db.inner().clone(), &app) {
+                "drafting"
+            } else {
+                "failed"
+            };
+            let mut p = shogun_core::analytics::Props::new();
+            p.insert("query_type".into(), serde_json::Value::from("notch_action"));
+            p.insert("permission_level".into(), serde_json::Value::from(level));
+            p.insert("outcome".into(), serde_json::Value::from(outcome));
+            analytics.capture("shogun_query_executed", p);
+            return outcome.to_string();
+        }
+
+        let Ok(mut eng) = engine.lock() else {
+            return "unavailable".to_string();
+        };
         let submitted = eng.submit(cand.action.clone(), now_ms(), &ent);
 
         // shogun_query_executed（#61）: submit した時のみ発火。
@@ -159,6 +313,46 @@ pub mod mac {
             Disposition::AwaitingConfirm => format!("confirm:{}", submitted.id.0),
             Disposition::Rejected(_) => "rejected".to_string(),
         }
+    }
+
+    /// Start the Reply Drafter for a notch DraftReply click (B-5): a dedicated thread (the Agent
+    /// call blocks for seconds — same pattern as `inline_source::run_inline_at_cursor`) drafts the
+    /// body and enqueues it on the shared [`ApprovalQueueState`](crate::approvals::mac) with
+    /// origin `Ui`. Returns whether the thread was started (false when the queue state is absent).
+    /// The error log carries provider/queue reasons only — never the draft or captured text.
+    fn spawn_draft_reply(to: String, rationale: String, db: Db, app: &tauri::AppHandle) -> bool {
+        use tauri::Manager;
+        let Some(queue) = app.try_state::<crate::approvals::mac::ApprovalQueueState>() else {
+            eprintln!("[exec] draft reply: no approval queue in state");
+            return false;
+        };
+        let queue = queue.0.clone();
+        let directives = app
+            .try_state::<crate::user_config_watch::UserConfigState>()
+            .map(|s| s.directives())
+            .unwrap_or_default();
+        let screen = current_screen();
+        std::thread::spawn(move || {
+            // Ground the draft in the open loop plus what is on screen (same inputs the candidate
+            // was scored from). The subject seed doubles as the draft's subject line.
+            let context = format!(
+                "Unanswered message (open loop): {rationale}\nOn screen: {} — {}",
+                screen.app_bundle_id, screen.window_title
+            );
+            match crate::approvals::mac::draft_and_enqueue(
+                "email",
+                &to,
+                &rationale,
+                &context,
+                &queue,
+                &db,
+                &directives,
+            ) {
+                Ok(id) => eprintln!("[exec] reply draft queued for L3 approval (id {id})"),
+                Err(e) => eprintln!("[exec] reply draft failed: {e}"),
+            }
+        });
+        true
     }
 
     /// On-device self-test of the product core, independent of the (fragile) panel rendering:

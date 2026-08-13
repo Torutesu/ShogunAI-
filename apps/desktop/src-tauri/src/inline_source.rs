@@ -992,11 +992,28 @@ pub mod mac {
     /// (→ closed). Idempotent; unknown ids are a no-op.
     #[tauri::command]
     pub fn resolve_state_item(kind: String, id: i64, db: tauri::State<'_, Db>) -> bool {
-        match kind.as_str() {
+        let resolved = match kind.as_str() {
             "commitment" => db.resolve_commitment(id),
             "open_loop" => db.resolve_open_loop(id),
             _ => false,
+        };
+        if resolved {
+            // L5 feedback hook (Plan D-2): a one-tap resolve is a `state_resolve` signal. No
+            // person/project is resolvable from a bare row id here, so it is global-scoped with
+            // the state kind as action_kind. Fire-and-forget: `Db::record_feedback` swallows any
+            // failure — the resolve outcome above is already decided and is what the UI gets.
+            use shogun_memory::lessons::{FeedbackKind, LessonScope, NewFeedback};
+            let _ = db.record_feedback(
+                FeedbackKind::StateResolve,
+                LessonScope::Global,
+                &NewFeedback {
+                    ts_ms: db.now_ms(),
+                    action_kind: Some(kind.as_str()),
+                    ..Default::default()
+                },
+            );
         }
+        resolved
     }
 
     /// Clear all extracted state (commitments + open loops). The event log, people, and projects

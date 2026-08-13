@@ -17,6 +17,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 pub mod composio;
+pub mod connect;
 pub mod endpoints;
 pub mod oauth;
 pub mod result;
@@ -37,6 +38,7 @@ pub mod keychain_store;
 pub mod oauth_flow;
 
 pub use composio::ComposioApi;
+pub use connect::ConnectError;
 pub use oauth::{AuthConfig, Pkce, TokenExchange, TokenSet};
 pub use rpc::{McpRpc, StaticTokenProvider, TokenProvider};
 pub use runtime::{ConnUi, ConnectorRuntime, IngestSink, ServiceStatus, SyncReport};

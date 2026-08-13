@@ -8,6 +8,17 @@ use rusqlite::{params, Connection};
 /// One day in milliseconds (open-loop staleness is measured in whole days).
 const DAY_MS: i64 = 24 * 60 * 60 * 1000;
 
+/// A commitment flipped `open` → `overdue` by THIS maintenance pass (C-3). The status transition
+/// itself is the notification watermark: a row is returned exactly once — the pass that flips it —
+/// and never again, because nothing ever moves a commitment back to `open`. No extra "notified"
+/// column, no migration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewlyOverdue {
+    pub id: i64,
+    /// The state summary (already the derived description, never raw capture text).
+    pub description: String,
+}
+
 /// Recompute overdue status and open-loop staleness from `now_ms` (FR-ST-21):
 /// - an `open` commitment whose `due_at` is in the past becomes `overdue`;
 /// - every `open` open loop's `staleness_days` is set to whole days since `opened_at`.
@@ -18,8 +29,30 @@ pub fn recompute_overdue_and_staleness(
     conn: &mut Connection,
     now_ms: i64,
 ) -> Result<(usize, usize), rusqlite::Error> {
+    let (newly, loops) = recompute_overdue_and_staleness_detailed(conn, now_ms)?;
+    Ok((newly.len(), loops))
+}
+
+/// [`recompute_overdue_and_staleness`], but returning WHICH commitments this pass flipped to
+/// overdue, so the caller can notify each exactly once (C-3). The select and the flip run on the
+/// same predicate inside one transaction, so the returned rows are precisely the flipped rows —
+/// an already-`overdue` row matches neither and is never re-reported.
+pub fn recompute_overdue_and_staleness_detailed(
+    conn: &mut Connection,
+    now_ms: i64,
+) -> Result<(Vec<NewlyOverdue>, usize), rusqlite::Error> {
     let tx = conn.transaction()?;
-    let overdue = tx.execute(
+    let newly: Vec<NewlyOverdue> = {
+        let mut stmt = tx.prepare(
+            "SELECT id, description FROM commitments
+              WHERE status = 'open' AND due_at IS NOT NULL AND due_at < ?1
+              ORDER BY id",
+        )?;
+        let rows = stmt
+            .query_map(params![now_ms], |r| Ok(NewlyOverdue { id: r.get(0)?, description: r.get(1)? }))?;
+        rows.collect::<Result<Vec<_>, _>>()?
+    };
+    tx.execute(
         "UPDATE commitments SET status = 'overdue', updated_at = ?1
          WHERE status = 'open' AND due_at IS NOT NULL AND due_at < ?1",
         params![now_ms],
@@ -31,7 +64,7 @@ pub fn recompute_overdue_and_staleness(
         params![now_ms, DAY_MS],
     )?;
     tx.commit()?;
-    Ok((overdue, loops))
+    Ok((newly, loops))
 }
 
 /// The four state tables carry a `confidence` and a `last_evidence_at`; decay lowers confidence for
@@ -220,6 +253,53 @@ mod tests {
         // idempotent: a second pass flags nothing new
         let (again, _) = recompute_overdue_and_staleness(&mut conn, 2_000).unwrap();
         assert_eq!(again, 0);
+    }
+
+    /// C-3 dedup: the detailed pass returns a commitment exactly once — the pass that flips it
+    /// `open` → `overdue`. The status transition is the watermark; there is no path back to
+    /// `open`, so an already-flipped row can never be reported (and so notified) again.
+    #[test]
+    fn newly_overdue_is_reported_once_and_never_repeats() {
+        let mut conn = crate::open_in_memory().unwrap();
+        let e = seed_event(&conn);
+        let id = insert_commitment(
+            &mut conn,
+            &NewCommitment {
+                direction: CommitmentDirection::Mine,
+                counterparty_id: None,
+                description: "send the deck",
+                due_at: Some(1_000),
+                status: CommitmentStatus::Open,
+                project_id: None,
+                confidence: 0.9,
+                now: 1,
+            },
+            &[Provenance::new(e)],
+        )
+        .unwrap();
+
+        // Not yet due: nothing to notify.
+        let (before_due, _) = recompute_overdue_and_staleness_detailed(&mut conn, 500).unwrap();
+        assert!(before_due.is_empty(), "not overdue yet: {before_due:?}");
+
+        // First pass past the due time: reported exactly once, with its description.
+        let (first, _) = recompute_overdue_and_staleness_detailed(&mut conn, 2_000).unwrap();
+        assert_eq!(first, vec![NewlyOverdue { id, description: "send the deck".into() }]);
+
+        // Every later pass — same instant or later — reports nothing for it again.
+        for later in [2_000, 3_000, 100_000] {
+            let (again, _) = recompute_overdue_and_staleness_detailed(&mut conn, later).unwrap();
+            assert!(again.is_empty(), "already-notified row must never repeat: {again:?}");
+        }
+    }
+
+    /// A commitment with no due date can never become overdue, so it is never reported.
+    #[test]
+    fn newly_overdue_ignores_undated_commitments() {
+        let mut conn = crate::open_in_memory().unwrap();
+        seed_commitment(&mut conn, 0.9, 0); // due_at: None
+        let (newly, _) = recompute_overdue_and_staleness_detailed(&mut conn, i64::MAX).unwrap();
+        assert!(newly.is_empty());
     }
 
     #[test]

@@ -42,16 +42,23 @@ impl Ring {
 #[derive(Default)]
 pub struct SloRegister {
     expand_ms: Mutex<Ring>,
+    /// SLO-02: expand → context-action buttons drawn. Fed by the webview via `record_ui_slo`
+    /// (the paint completion is only observable from JS, same as the `painted` command).
+    actions_present_ms: Mutex<Ring>,
     cache_update_ms: Mutex<Ring>,
     first_token_ms: Mutex<Ring>,
-    /// No call site yet — the harness samples CPU out-of-process and local search isn't
-    /// instrumented. They stay in `rows()` so the pane lists them as unmeasured rather than
-    /// pretending the SLO table is shorter than it is.
+    /// SLO-04: query committed → results drawn. Fed by the webview via `record_ui_slo`.
     local_search_ms: Mutex<Ring>,
+    /// No call site yet — the harness samples CPU out-of-process. It stays in `rows()` so the
+    /// pane lists it as unmeasured rather than pretending the SLO table is shorter than it is.
     idle_cpu_pct: Mutex<Ring>,
     /// Answers produced, and how many of them cited at least one source (FR-CF/grounding). A
     /// counter rather than a ring: the pane wants the rate over the run, not a distribution.
     answers: Mutex<(u64, u64)>,
+    /// The always-on NFR-SLO-00 registry (shogun-core), mirrored from the same samples. This is
+    /// the store `shogun metrics` renders (`measured:true` once a sample lands) — the rings above
+    /// are the health pane's rolling window, this is the run-wide histogram surface.
+    core: Mutex<shogun_core::metrics::SloRegistry>,
 }
 
 /// A metric ready to draw: percentiles plus the target it is judged against.
@@ -66,12 +73,39 @@ pub struct SloSample {
 impl SloRegister {
     pub fn record_expand_ms(&self, v: f64) {
         push(&self.expand_ms, v);
+        self.record_core(shogun_core::metrics::Slo::Expand, v);
     }
     pub fn record_cache_update_ms(&self, v: f64) {
         push(&self.cache_update_ms, v);
+        self.record_core(shogun_core::metrics::Slo::CacheUpdate, v);
     }
     pub fn record_first_token_ms(&self, v: f64) {
         push(&self.first_token_ms, v);
+        self.record_core(shogun_core::metrics::Slo::FirstToken, v);
+    }
+
+    /// Record a UI-observed duration by its `Slo::from_ui_name` name. Unknown names are dropped
+    /// (the set of names is code-controlled; an unmapped one is a programming error, not data).
+    pub fn record_ui(&self, name: &str, ms: f64) {
+        let Some(slo) = shogun_core::metrics::Slo::from_ui_name(name) else {
+            return;
+        };
+        match slo {
+            shogun_core::metrics::Slo::Expand => push(&self.expand_ms, ms),
+            shogun_core::metrics::Slo::ActionsPresented => push(&self.actions_present_ms, ms),
+            shogun_core::metrics::Slo::FirstToken => push(&self.first_token_ms, ms),
+            shogun_core::metrics::Slo::Search => push(&self.local_search_ms, ms),
+            shogun_core::metrics::Slo::CacheUpdate => push(&self.cache_update_ms, ms),
+            shogun_core::metrics::Slo::IdleCpu => return, // unreachable: from_ui_name never maps it
+        }
+        self.record_core(slo, ms);
+    }
+
+    /// Mirror a sample into the NFR-SLO-00 registry (see the `core` field).
+    fn record_core(&self, slo: shogun_core::metrics::Slo, v: f64) {
+        if let Ok(mut reg) = self.core.lock() {
+            reg.record(slo, v);
+        }
     }
 
     /// Record that an answer was produced, and whether it carried at least one citation.
@@ -99,6 +133,7 @@ impl SloRegister {
     pub fn rows(&self) -> Vec<SloSample> {
         vec![
             row("Panel expand", &self.expand_ms, spike_harness::slo::EXPAND_MS, "100ms"),
+            row("Actions presented", &self.actions_present_ms, spike_harness::slo::ACTION_PRESENT_MS, "150ms"),
             row("Cache refresh", &self.cache_update_ms, spike_harness::slo::CACHE_UPDATE_MS, "300ms"),
             row("Local search", &self.local_search_ms, spike_harness::slo::LOCAL_SEARCH_MS, "500ms"),
             row("First token", &self.first_token_ms, 1000.0, "1s"),
@@ -129,6 +164,15 @@ fn row(name: &'static str, ring: &Mutex<Ring>, threshold: f64, target: &'static 
 
 fn round1(v: f64) -> f64 {
     (v * 10.0).round() / 10.0
+}
+
+/// Tauri command: the webview reports a UI-observed SLO duration (SLO-02 `actions_present`,
+/// SLO-04 `local_search` — names are `shogun_core::metrics::Slo::from_ui_name`). Only paint
+/// completion is observable from JS, so this is the same shape as the `painted` command: the
+/// timing crosses the bridge, never any content. Unknown names are dropped.
+#[tauri::command]
+pub fn record_ui_slo(name: String, ms: f64, metrics: tauri::State<'_, SloRegister>) {
+    metrics.record_ui(&name, ms);
 }
 
 #[cfg(test)]
@@ -168,6 +212,22 @@ mod tests {
         reg.record_answer(true);
         reg.record_answer(true);
         assert_eq!(reg.grounding_pct(), Some(75));
+    }
+
+    #[test]
+    fn ui_reported_slos_land_in_their_rows() {
+        let reg = SloRegister::default();
+        reg.record_ui("actions_present", 60.0);
+        reg.record_ui("local_search", 120.0);
+        reg.record_ui("not-a-metric", 5.0); // dropped, never mis-bucketed
+        let rows = reg.rows();
+        let find = |name: &str| rows.iter().find(|r| r.name == name).map(|r| r.p50);
+        assert_eq!(find("Actions presented"), Some(Some(60.0)));
+        assert_eq!(find("Local search"), Some(Some(120.0)));
+        // The same samples reach the NFR-SLO-00 registry (measured:true for `shogun metrics`).
+        let Ok(core) = reg.core.lock() else { panic!("core registry lock poisoned") };
+        assert!(core.snapshot(shogun_core::metrics::Slo::ActionsPresented).measured);
+        assert!(core.snapshot(shogun_core::metrics::Slo::Search).measured);
     }
 
     #[test]

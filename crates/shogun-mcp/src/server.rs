@@ -149,7 +149,12 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
             match rest::route(&rreq, &state.tokens, &ent) {
                 // actions.execute needs the shared approval queue (L3 sends enqueue there).
                 Routed::Action => match state.approvals.lock() {
-                    Ok(mut queue) => rest::act(rreq.body.as_deref(), (state.clock)(), &mut queue),
+                    Ok(mut queue) => rest::act(
+                        rreq.body.as_deref(),
+                        (state.clock)(),
+                        &mut queue,
+                        shogun_agents::approval::ApprovalOrigin::Api,
+                    ),
                     Err(_) => (500, r#"{"error":"internal"}"#.to_string()),
                 },
                 // metrics come from the injected live source (empty snapshot if none).

@@ -59,6 +59,11 @@ use shogun_core::meeting::gate::OfferGate;
         opened_via_meet_url: bool,
         /// When the session browser's frontmost tab first stopped looking like a meeting.
         url_lost_since_ms: Option<i64>,
+        /// Set when the offer that opened this interval was a Slack huddle hint (Plan A-4).
+        opened_via_huddle: bool,
+        /// When Slack's title/AX text first stopped looking like a huddle — the huddle mirror of
+        /// `url_lost_since_ms` (Plan A-4).
+        huddle_hint_lost_since_ms: Option<i64>,
         /// When the system mic last transitioned to closed — debounces hang-up flicker (FR-MT-11).
         mic_closed_since_ms: Option<i64>,
         /// Shared with the audio lane — mode/lang changes apply to new lines mid-meeting.
@@ -87,6 +92,8 @@ use shogun_core::meeting::gate::OfferGate;
                 audio: None,
                 opened_via_meet_url: false,
                 url_lost_since_ms: None,
+                opened_via_huddle: false,
+                huddle_hint_lost_since_ms: None,
                 mic_closed_since_ms: None,
                 live_settings: Arc::new(RwLock::new(settings)),
                 overlay_dismissed: false,
@@ -249,6 +256,8 @@ use shogun_core::meeting::gate::OfferGate;
                         lane.last_session_id = Some(id);
                         lane.opened_via_meet_url = false;
                         lane.url_lost_since_ms = None;
+                        lane.opened_via_huddle = false;
+                        lane.huddle_hint_lost_since_ms = None;
                         lane.mic_closed_since_ms = None;
                         lane.overlay_dismissed = false;
                         if close_session(app, id) {
@@ -370,6 +379,21 @@ use shogun_core::meeting::gate::OfferGate;
         finish_audio_stop(stop_audio);
     }
 
+    /// Whether Slack is frontmost and looks like a huddle in progress (Plan A-4).
+    ///
+    /// The AX snippets come from the capture poller's most recent walk of Slack's window
+    /// (`capture_source::latest_slack_ax_snippets` — bounded in count, length and age), so
+    /// detection never issues an AX walk of its own. Read only when Slack is frontmost; the
+    /// snippets are user content and must never reach a log.
+    fn slack_huddle_hint(bundle_id: &str, window_title: Option<&str>) -> bool {
+        if bundle_id != detect::SLACK_BUNDLE_ID {
+            return false;
+        }
+        let snippets = crate::capture_source::latest_slack_ax_snippets();
+        let refs: Vec<&str> = snippets.iter().map(String::as_str).collect();
+        detect::huddle_hint(window_title, &refs)
+    }
+
     /// Called on every focus change with the frontmost app.
     ///
     /// Returns immediately when the feature is off — the detector does not run, so nothing
@@ -416,9 +440,19 @@ use shogun_core::meeting::gate::OfferGate;
         // Signal (2) only. The AX-controls signal of FR-MT-04 needs native probes that do not
         // exist yet; claiming them here would inflate the confidence stored against the interval
         // beyond what was actually observed.
-        let has_meet_url = page_url.is_some_and(detect::is_meeting_url);
-        let has_zoom_bundle = detect::is_meeting_app(bundle_id);
-        let meeting_context = has_zoom_bundle || has_meet_url;
+        let url_hint = page_url.and_then(detect::host_hint);
+        let bundle_hint = detect::bundle_hint(bundle_id);
+        let has_meet_url = url_hint == Some(detect::MeetingHint::Strong);
+        let has_strong_bundle = bundle_hint == Some(detect::MeetingHint::Strong);
+        // Weak surfaces (Teams, Webex — Plan A-2): one corroborating vote in the detector, never
+        // an opener, so they ride in the ctx rather than in `meeting_app_frontmost`.
+        let has_weak_meeting_signal = bundle_hint == Some(detect::MeetingHint::Weak)
+            || url_hint == Some(detect::MeetingHint::Weak);
+        // Slack huddles (Plan A-4): same bundle id as ordinary Slack, so the hint reads the
+        // window title plus the capture poller's most recent AX text for Slack.
+        let has_huddle_hint = slack_huddle_hint(bundle_id, window_title);
+        let meeting_context =
+            has_strong_bundle || has_meet_url || has_weak_meeting_signal || has_huddle_hint;
         let on_media_page = page_url.is_some_and(detect::is_media_url);
         let page_host = page_url.and_then(detect::host_from_url);
         let signals = Signals {
@@ -429,17 +463,19 @@ use shogun_core::meeting::gate::OfferGate;
                 meeting_context,
                 on_media_page,
             ),
-            // Corroboration: a known meeting app, or a browser on a meeting page. Either can
-            // still open an interval alone, so a call whose audio does not run through the
+            // Corroboration: a Strong meeting app, or a browser on a Strong meeting page. Either
+            // can still open an interval alone, so a call whose audio does not run through the
             // default input device is not invisible.
-            meeting_app_frontmost: meeting_context,
+            meeting_app_frontmost: has_strong_bundle || has_meet_url,
             ..Default::default()
         };
         let ctx = detect::DetectionCtx {
             is_browser: is_browser(bundle_id),
             page_host: page_host.as_deref(),
             has_meet_url,
-            has_zoom_bundle,
+            has_strong_bundle,
+            has_weak_meeting_signal,
+            has_huddle_hint,
             window_title,
         };
         let policy = detect::OfferPolicy {
@@ -454,6 +490,8 @@ use shogun_core::meeting::gate::OfferGate;
             lane.app_bundle_id = Some(bundle_id.to_string());
             lane.opened_via_meet_url = has_meet_url;
             lane.url_lost_since_ms = None;
+            lane.opened_via_huddle = has_huddle_hint;
+            lane.huddle_hint_lost_since_ms = None;
             lane.mic_closed_since_ms = None;
             lane.confidence = confidence;
             lane.provenance = provenance;
@@ -500,6 +538,17 @@ use shogun_core::meeting::gate::OfferGate;
                 lane.mic_closed_since_ms,
             );
         }
+        if lane.opened_via_huddle {
+            // Slack stays running after the huddle ends (a Weak, resident app), so app presence
+            // proves nothing — the hint-loss grace is the end signal, mirroring the Meet-tab rule.
+            // The silence limit in `end_condition` still applies; whichever fires first ends it.
+            return detect::huddle_session_present(
+                lane.huddle_hint_lost_since_ms,
+                now,
+                mic_open,
+                lane.mic_closed_since_ms,
+            );
+        }
         match lane.app_bundle_id.as_deref() {
             None | Some("") => lane.mic.observe(mic_open, now),
             Some(bundle_id) => crate::display::is_app_running(bundle_id),
@@ -537,6 +586,31 @@ use shogun_core::meeting::gate::OfferGate;
             lane.url_lost_since_ms = None;
         } else if lane.url_lost_since_ms.is_none() {
             lane.url_lost_since_ms = Some(now);
+        }
+    }
+
+    /// Track when a huddle session's hint was last seen (Plan A-4) — the huddle mirror of
+    /// [`observe_meeting_url`]. Slack's huddle UI is only observable while Slack is frontmost,
+    /// so leaving Slack starts the same grace as the hint disappearing; an open mic past the
+    /// grace keeps the session alive (see [`detect::huddle_session_present`]).
+    fn observe_huddle_hint(lane: &mut Lane, obs: &TickObservation<'_>, now: i64) {
+        if !lane.opened_via_huddle {
+            return;
+        }
+        if is_shogun_frontmost(obs.bundle_id) {
+            return;
+        }
+        if obs.bundle_id != detect::SLACK_BUNDLE_ID {
+            // Left Slack — same grace as the hint disappearing (FR-MT-11 shape).
+            if lane.huddle_hint_lost_since_ms.is_none() {
+                lane.huddle_hint_lost_since_ms = Some(now);
+            }
+            return;
+        }
+        if slack_huddle_hint(obs.bundle_id, obs.window_title) {
+            lane.huddle_hint_lost_since_ms = None;
+        } else if lane.huddle_hint_lost_since_ms.is_none() {
+            lane.huddle_hint_lost_since_ms = Some(now);
         }
     }
 
@@ -578,6 +652,7 @@ use shogun_core::meeting::gate::OfferGate;
                     observe_mic_closed(lane, mic_open, now);
                     if let Some(obs) = obs.as_ref() {
                         observe_meeting_url(lane, obs, now);
+                        observe_huddle_hint(lane, obs, now);
                     }
                     let last_sound_at = lane
                         .audio

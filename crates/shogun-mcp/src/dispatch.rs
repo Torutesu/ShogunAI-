@@ -15,7 +15,7 @@
 //! The actual data read/write/execute is the backend's job (the engine + memory layer); this
 //! module is the pure gate in front of it, so the policy is exhaustively Linux-testable.
 
-use shogun_agents::approval::{ApprovalId, ApprovalQueue, Origin, Preview};
+use shogun_agents::approval::{ApprovalId, ApprovalOrigin, ApprovalQueue, Preview};
 use shogun_agents::entitlement::Entitlements;
 use shogun_agents::permission::{Action, Level, LocalAction, SendAction};
 
@@ -156,8 +156,9 @@ impl<'a> MemoryApi<'a> {
         if let Err(d) = self.authed(token) {
             return ActionOutcome::Denied(d);
         }
-        // Origin::AiApi — the request came through the Memory API (FR-API-04).
-        let id = self.approvals.request(send, preview, Origin::AiApi, now_ms);
+        // ApprovalOrigin::Api — the request came through the Memory API (FR-API-04); the shared
+        // queue's listing labels it so the confirm UI shows where it came from (B-3 / E-08).
+        let id = self.approvals.request(send, preview, ApprovalOrigin::Api, now_ms);
         ActionOutcome::PendingApproval(id)
     }
 }
