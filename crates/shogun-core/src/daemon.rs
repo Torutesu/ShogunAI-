@@ -2050,15 +2050,24 @@ impl Db {
             })
     }
 
-    /// Drop visual-recall frames older than the rolling retention window.
+    /// Sweep the visual-recall frame cache: expire past the 72-hour window, then evict oldest-first
+    /// until the cache is back under its byte ceiling (`retention::Policy::frames`).
+    ///
+    /// Age alone bounds nothing — 72 hours of a busy screen is not a fixed size — so a heavy few
+    /// days could grow the memory DB without limit while every frame was still "within the window
+    /// we promised". The budget half is what makes the cache's footprint answerable.
     pub fn purge_screen_frames(&self) -> Result<usize, String> {
-        let cutoff = self.now_ms() - shogun_memory::screen_frames::RETENTION_MS;
-        let conn = self
+        use shogun_memory::retention::Policy;
+        let now = self.now_ms();
+        let mut conn = self
             .conn
             .lock()
             .map_err(|_| "memory DB lock poisoned during frame purge".to_string())?;
-        shogun_memory::screen_frames::purge_older_than(&conn, cutoff)
-            .map_err(|e| format!("purge expired screen frames: {e}"))
+        let items = shogun_memory::screen_frames::retention_items(&conn)
+            .map_err(|e| format!("read frame retention items: {e}"))?;
+        let sweep = Policy::frames().sweep(&items, now);
+        shogun_memory::screen_frames::delete_ids(&mut conn, &sweep.all())
+            .map_err(|e| format!("purge screen frames: {e}"))
     }
 
     /// Drop auto-capture frames only (passive OCR). User-initiated shots are kept.

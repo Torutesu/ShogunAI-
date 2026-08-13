@@ -213,9 +213,37 @@ pub fn frame_ids_for_events(
     Ok(out)
 }
 
-/// Delete frames older than `cutoff_ms`. Returns rows removed.
-pub fn purge_older_than(conn: &Connection, cutoff_ms: i64) -> Result<usize, rusqlite::Error> {
-    conn.execute("DELETE FROM screen_frames WHERE created_at_ms < ?1", [cutoff_ms])
+/// Every frame's id, age and stored size — the input [`crate::retention::Policy::sweep`] decides
+/// over. Metadata only: `length(bytes)` never loads the JPEG.
+pub fn retention_items(conn: &Connection) -> Result<Vec<crate::retention::Item>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT id, created_at_ms, length(bytes) FROM screen_frames ORDER BY created_at_ms, id",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok(crate::retention::Item { id: r.get(0)?, created_at: r.get(1)?, bytes: r.get(2)? })
+    })?;
+    rows.collect()
+}
+
+/// Delete the frames a sweep selected, in ONE transaction. Returns rows removed.
+///
+/// **Frames only — the linked events stay.** Expiry retires the *image*, not the memory: the OCR
+/// text and its provenance live in `event_log` and are the part SHOGUN is allowed to keep. This
+/// is the opposite of [`delete_by_id`], where the user asked for a specific capture to be gone
+/// and the record of it should go too.
+///
+/// One transaction so a crash mid-sweep leaves the cache consistent rather than half-expired.
+pub fn delete_ids(conn: &mut Connection, ids: &[i64]) -> Result<usize, rusqlite::Error> {
+    if ids.is_empty() {
+        return Ok(0);
+    }
+    let tx = conn.transaction()?;
+    let mut removed = 0;
+    for &id in ids {
+        removed += tx.execute("DELETE FROM screen_frames WHERE id = ?1", [id])?;
+    }
+    tx.commit()?;
+    Ok(removed)
 }
 
 /// Delete auto-capture frames only (`screen_ocr` events). User-initiated shots are kept.
@@ -385,17 +413,46 @@ mod tests {
     }
 
     #[test]
-    fn purge_drops_old_rows_only() {
-        let conn = crate::open_in_memory().unwrap();
-        let old_event = seed_event(&conn, 100, "old");
-        let new_event = seed_event(&conn, 9_000, "new");
-        seed_frame(&conn, 100, old_event, b"old");
-        seed_frame(&conn, 9_000, new_event, b"new");
-        let removed = purge_older_than(&conn, 5_000).unwrap();
-        assert_eq!(removed, 1);
+    fn a_sweep_expires_by_age_then_evicts_by_bytes() {
+        use crate::retention::Policy;
+        let mut conn = crate::open_in_memory().unwrap();
+        // Four frames of 4 bytes each. The oldest is past a 1_000 ms window; the ceiling of 8
+        // bytes then still leaves the survivors 4 over.
+        for (ts, body) in [(100i64, b"aaaa"), (5_000, b"bbbb"), (5_100, b"cccc"), (5_200, b"dddd")] {
+            let e = seed_event(&conn, ts, "x");
+            seed_frame(&conn, ts, e, body);
+        }
+        let items = retention_items(&conn).unwrap();
+        assert_eq!(items.len(), 4);
+        assert!(items.iter().all(|i| i.bytes == 4), "size comes from length(bytes)");
+
+        let sweep = Policy { retain_ms: 1_000, max_bytes: 8 }.sweep(&items, 5_200);
+        assert_eq!(sweep.expired.len(), 1, "the 100 ms frame is past the window");
+        assert_eq!(sweep.over_budget.len(), 1, "12 surviving bytes against an 8-byte ceiling");
+
+        let removed = delete_ids(&mut conn, &sweep.all()).unwrap();
+        assert_eq!(removed, 2);
         let s = stats(&conn).unwrap();
-        assert_eq!(s.count, 1);
-        assert_eq!(s.oldest_ms, Some(9_000));
+        assert_eq!(s.count, 2);
+        assert_eq!(s.total_bytes, 8, "back under the ceiling");
+        assert_eq!(s.oldest_ms, Some(5_100), "eviction took the oldest survivor");
+        // The OCR events all survive. Expiry retires the image, not the memory it produced —
+        // the text and its provenance are what SHOGUN keeps (V12's rollback note says the same).
+        let events: i64 = conn
+            .query_row("SELECT count(*) FROM event_log WHERE source = 'screen_ocr'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(events, 4, "expiring a frame must not delete the text it yielded");
+    }
+
+    #[test]
+    fn deleting_no_ids_touches_nothing() {
+        let mut conn = crate::open_in_memory().unwrap();
+        let e = seed_event(&conn, 100, "x");
+        seed_frame(&conn, 100, e, b"jpeg");
+        assert_eq!(delete_ids(&mut conn, &[]).unwrap(), 0);
+        assert_eq!(stats(&conn).unwrap().count, 1);
     }
 
     #[test]
