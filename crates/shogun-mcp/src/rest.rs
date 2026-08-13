@@ -11,6 +11,7 @@
 //! unauthenticated `/v1/status` discovery endpoint is exempt.
 
 use shogun_agents::approval::{ApprovalQueue, Origin, Preview, Route};
+use shogun_agents::approval::{ApprovalId, ApprovalStatus};
 use shogun_agents::permission::{Action, Level, LocalAction, SendAction};
 
 use crate::backend::{MemoryBackend, ReadParams};
@@ -58,6 +59,7 @@ pub enum Routed {
     Write { tool: Tool, level: Level },
     /// `actions.execute` (200 local / 202 pending for an L3 send — decided by the backend body).
     Action,
+    ApprovalPoll { id: u64 },
     /// The unauthenticated status/discovery endpoint (200).
     Status,
     /// In-product SLO metrics (200) — `shogun metrics` / Advanced UI (NFR-SLO-00). Open like
@@ -138,6 +140,10 @@ fn resolve(method: Method, path: &str) -> Result<Routed, RouteMiss> {
             method_is(method, Method::Post, Routed::Write { tool: Tool::StateProposeUpdate, level: Level::L2 })
         }
         ["v1", "actions", "execute"] => method_is(method, Method::Post, Routed::Action),
+        ["v1", "actions", "poll", id] => match id.parse::<u64>() {
+            Ok(id) => method_is(method, Method::Get, Routed::ApprovalPoll { id }),
+            Err(_) => Err(RouteMiss::NotFound),
+        },
         // state list: /v1/state/<noun>
         ["v1", "state", noun] => match state_tool(noun, false) {
             Some(tool) => method_is(method, Method::Get, Routed::Read { tool, id: None }),
@@ -189,7 +195,7 @@ pub fn status_code(routed: &Routed) -> u16 {
         Routed::Unauthorized => 401,
         Routed::NotFound => 404,
         Routed::MethodNotAllowed => 405,
-        Routed::Read { .. } | Routed::Status | Routed::Metrics => 200,
+        Routed::Read { .. } | Routed::Status | Routed::Metrics | Routed::ApprovalPoll { .. } => 200,
         // A write is accepted (L2 still confirms in the Notch); an action may be pending.
         Routed::Write { .. } | Routed::Action => 202,
     }
@@ -247,6 +253,7 @@ pub fn body_for(routed: &Routed) -> String {
             format!(r#"{{"tool":"{}","level":"{}","accepted":true}}"#, tool_name(*tool), level_label(*level))
         }
         Routed::Action => r#"{"tool":"actions.execute","status":"routed"}"#.to_string(),
+        Routed::ApprovalPoll { id } => format!(r#"{{"approval_id":{},"status":"unknown"}}"#, id),
     }
 }
 
@@ -406,6 +413,20 @@ pub fn respond_with<B: MemoryBackend + ?Sized>(
     }
 }
 
+pub fn poll_approval(id: u64, approvals: &ApprovalQueue) -> String {
+    let status = approvals.status(ApprovalId(id));
+    let status = match status {
+        Some(ApprovalStatus::Pending) => "pending",
+        Some(ApprovalStatus::Rejected) => "rejected",
+        Some(ApprovalStatus::TimedOut) => "timed_out",
+        Some(ApprovalStatus::Sent) => "sent",
+        Some(ApprovalStatus::SendFailed) => "send_failed",
+        Some(ApprovalStatus::DraftSaved) => "draft_saved",
+        None => "unknown",
+    };
+    format!(r#"{{"approval_id":{},"status":"{}"}}"#, id, status)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -499,6 +520,11 @@ mod tests {
     fn actions_execute_routes_to_action() {
         assert_eq!(route(&req(Method::Post, "/v1/actions/execute", Some("t")), &reg()), Routed::Action);
         assert_eq!(status_code(&Routed::Action), 202);
+    }
+
+    #[test]
+    fn actions_poll_routes_by_approval_id() {
+        assert_eq!(route(&req(Method::Get, "/v1/actions/poll/7", Some("t")), &reg()), Routed::ApprovalPoll { id: 7 });
     }
 
     #[test]

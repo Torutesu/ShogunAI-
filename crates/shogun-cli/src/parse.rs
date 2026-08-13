@@ -127,6 +127,13 @@ fn parse_command(positionals: &[String], no_screen: bool) -> Result<Command, Cli
             let agent = join(rest).ok_or(CliError::MissingArgument("<action-json>"))?;
             Ok(Command::Run { agent })
         }
+        "actions" => match rest.first().map(String::as_str) {
+            Some("poll") => {
+                let id = rest.get(1).ok_or(CliError::MissingArgument("<approval_id>"))?;
+                Ok(Command::ActionsPoll { approval_id: id.parse().map_err(|_| CliError::BadId(id.clone()))? })
+            }
+            other => Err(CliError::UnknownSubcommand { command: "actions", got: other.unwrap_or("").to_string() }),
+        },
         "api" => match rest.first().map(String::as_str) {
             Some("status") => Ok(Command::ApiStatus),
             other => Err(CliError::UnknownSubcommand {

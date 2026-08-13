@@ -93,6 +93,25 @@ pub enum ApprovalState {
     Rejected(RejectCause),
 }
 
+/// Durable status exposed by MCP, REST, CLI, and desktop approval views.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApprovalStatus {
+    Pending,
+    Rejected,
+    TimedOut,
+    Sent,
+    SendFailed,
+    DraftSaved,
+}
+
+/// Body-free terminal ledger row. Full preview exists only while request is pending.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TerminalRecord {
+    pub id: ApprovalId,
+    pub status: ApprovalStatus,
+    pub resolved_ms: u64,
+}
+
 /// How the user attempted to confirm. Only [`ConfirmIntent::DedicatedButton`] confirms; the Enter
 /// key alone must not (FR-AG-03).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -153,17 +172,20 @@ pub struct PendingRecord {
 #[derive(Default)]
 pub struct ApprovalQueue {
     pending: Vec<PendingApproval>,
+    terminal: Vec<TerminalRecord>,
     next_id: u64,
 }
 
+pub const TERMINAL_RETENTION: usize = 256;
+
 impl ApprovalQueue {
     pub fn new() -> Self {
-        Self { pending: Vec::new(), next_id: 1 }
+        Self { pending: Vec::new(), terminal: Vec::new(), next_id: 1 }
     }
 
     /// Empty queue that will allocate ids starting at `next_id` (must be ≥ 1).
     pub fn with_next_id(next_id: u64) -> Self {
-        Self { pending: Vec::new(), next_id: next_id.max(1) }
+        Self { pending: Vec::new(), terminal: Vec::new(), next_id: next_id.max(1) }
     }
 
     /// Snapshot pending rows + the next id allocator (for file persistence / IPC).
@@ -199,6 +221,17 @@ impl ApprovalQueue {
             }
         }
         q
+    }
+
+    pub fn import_with_terminal(next_id: u64, records: Vec<PendingRecord>, terminal: Vec<TerminalRecord>) -> Self {
+        let mut q = Self::import(next_id, records);
+        q.terminal = terminal;
+        q.trim_terminal();
+        q
+    }
+
+    pub fn terminal_records(&self) -> &[TerminalRecord] {
+        &self.terminal
     }
 
     fn alloc_id(&mut self) -> ApprovalId {
@@ -238,6 +271,7 @@ impl ApprovalQueue {
         };
         if Self::is_expired(&self.pending[idx], now_ms) {
             self.pending.remove(idx);
+            self.record_terminal(id, ApprovalStatus::TimedOut, now_ms);
             return Decision::Rejected(RejectCause::TimedOut);
         }
         let p = self.pending.remove(idx);
@@ -249,6 +283,8 @@ impl ApprovalQueue {
         match self.position(id) {
             Some(idx) => {
                 self.pending.remove(idx);
+                let status = if cause == RejectCause::TimedOut { ApprovalStatus::TimedOut } else { ApprovalStatus::Rejected };
+                self.record_terminal(id, status, 0);
                 Decision::Rejected(cause)
             }
             None => Decision::Unknown,
@@ -263,13 +299,34 @@ impl ApprovalQueue {
         }
     }
 
+    pub fn status(&self, id: ApprovalId) -> Option<ApprovalStatus> {
+        if self.position(id).is_some() {
+            return Some(ApprovalStatus::Pending);
+        }
+        self.terminal.iter().find(|r| r.id == id).map(|r| r.status)
+    }
+
+    /// Record send outcome after dedicated confirmation and execution.
+    pub fn mark_status(&mut self, id: ApprovalId, status: ApprovalStatus, resolved_ms: u64) -> bool {
+        if status == ApprovalStatus::Pending {
+            return false;
+        }
+        self.pending.retain(|p| p.id != id);
+        self.record_terminal(id, status, resolved_ms);
+        true
+    }
+
     /// Reject every request past the timeout (FR-AG-04). Returns the timed-out ids. The daemon
     /// calls this on a timer tick.
     pub fn expire_due(&mut self, now_ms: u64) -> Vec<ApprovalId> {
         let (expired, live): (Vec<PendingApproval>, Vec<PendingApproval>) =
             self.pending.drain(..).partition(|p| Self::is_expired(p, now_ms));
         self.pending = live;
-        expired.iter().map(|p| p.id).collect()
+        let ids: Vec<ApprovalId> = expired.iter().map(|p| p.id).collect();
+        for id in &ids {
+            self.record_terminal(*id, ApprovalStatus::TimedOut, now_ms);
+        }
+        ids
     }
 
     /// The preview for a pending request (what the confirm UI renders).
@@ -290,6 +347,19 @@ impl ApprovalQueue {
     /// (each id resolves to its [`Preview`] via [`Self::preview`]).
     pub fn pending_ids(&self) -> Vec<ApprovalId> {
         self.pending.iter().map(|p| p.id).collect()
+    }
+
+    fn record_terminal(&mut self, id: ApprovalId, status: ApprovalStatus, resolved_ms: u64) {
+        self.terminal.retain(|r| r.id != id);
+        self.terminal.push(TerminalRecord { id, status, resolved_ms });
+        self.trim_terminal();
+    }
+
+    fn trim_terminal(&mut self) {
+        if self.terminal.len() > TERMINAL_RETENTION {
+            let drop_count = self.terminal.len() - TERMINAL_RETENTION;
+            self.terminal.drain(..drop_count);
+        }
     }
 }
 

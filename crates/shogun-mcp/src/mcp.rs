@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use serde_json::{json, Value};
-use shogun_agents::approval::ApprovalQueue;
+use shogun_agents::approval::{ApprovalId, ApprovalQueue, ApprovalStatus};
 
 use crate::approval_store;
 use crate::backend::{MemoryBackend, ReadParams};
@@ -26,12 +26,24 @@ use crate::visual_recall_api::{is_structured_read, render_structured};
 /// The MCP protocol version this server speaks.
 pub const PROTOCOL_VERSION: &str = "2024-11-05";
 
+fn status_wire(status: ApprovalStatus) -> &'static str {
+    match status {
+        ApprovalStatus::Pending => "pending",
+        ApprovalStatus::Rejected => "rejected",
+        ApprovalStatus::TimedOut => "timed_out",
+        ApprovalStatus::Sent => "sent",
+        ApprovalStatus::SendFailed => "send_failed",
+        ApprovalStatus::DraftSaved => "draft_saved",
+    }
+}
+
 /// The MCP server: a backend, the shared approval queue, and a clock.
 pub struct McpServer<B: MemoryBackend> {
     backend: B,
     approvals: Mutex<ApprovalQueue>,
     /// When set, L3 sends persist to `l3_approvals.json` so the desktop Approvals UI can confirm.
     approvals_path: Option<PathBuf>,
+    approvals_load_error: Option<String>,
     clock: Box<dyn Fn() -> i64 + Send + Sync>,
 }
 
@@ -41,15 +53,20 @@ impl<B: MemoryBackend> McpServer<B> {
             backend,
             approvals: Mutex::new(ApprovalQueue::new()),
             approvals_path: None,
+            approvals_load_error: None,
             clock: Box::new(clock),
         }
     }
 
     /// Persist L3 pending approvals to `path` (shared with the desktop app).
     pub fn with_approvals_path(mut self, path: PathBuf) -> Self {
-        let loaded = approval_store::load_queue(&path);
+        let (loaded, load_error) = match approval_store::load_queue(&path) {
+            Ok(queue) => (queue, None),
+            Err(error) => (ApprovalQueue::new(), Some(error)),
+        };
         self.approvals = Mutex::new(loaded);
         self.approvals_path = Some(path);
+        self.approvals_load_error = load_error;
         self
     }
 
@@ -82,7 +99,12 @@ impl<B: MemoryBackend> McpServer<B> {
     }
 
     fn tools_list(&self) -> Value {
-        let tools: Vec<Value> = ALL_TOOLS.iter().map(|t| tool_descriptor(*t)).collect();
+        let mut tools: Vec<Value> = ALL_TOOLS.iter().map(|t| tool_descriptor(*t)).collect();
+        tools.push(json!({
+            "name": "actions.poll",
+            "description": "Poll durable status for an L3 action approval",
+            "inputSchema": { "type": "object", "properties": { "approval_id": { "type": "integer" } } }
+        }));
         json!({ "tools": tools })
     }
 
@@ -91,11 +113,13 @@ impl<B: MemoryBackend> McpServer<B> {
             return error(id, -32602, "missing params");
         };
         let name = params.get("name").and_then(Value::as_str).unwrap_or_default();
+        let args = params.get("arguments").cloned().unwrap_or(json!({}));
+        if name == "actions.poll" {
+            return result(id, json!({ "content": [{ "type": "text", "text": self.poll_action(&args) }], "isError": false }));
+        }
         let Some(tool) = Tool::from_wire(name) else {
             return error(id, -32602, "unknown tool");
         };
-        let args = params.get("arguments").cloned().unwrap_or(json!({}));
-
         let text = match tool_level(tool) {
             ApiLevel::Read => {
                 let read_params = ReadParams {
@@ -159,14 +183,39 @@ impl<B: MemoryBackend> McpServer<B> {
         result(id, json!({ "content": [{ "type": "text", "text": text }], "isError": false }))
     }
 
+    fn poll_action(&self, args: &Value) -> String {
+        let Some(id) = args.get("approval_id").and_then(Value::as_u64).map(ApprovalId) else {
+            return r#"{"error":"missing_approval_id"}"#.to_string();
+        };
+        let status = if let Some(path) = &self.approvals_path {
+            match approval_store::with_queue(path, |queue| queue.status(id)) {
+                Ok(status) => status,
+                Err(error) => return format!(r#"{{"error":"approval_store","message":{}}}"#, json!(error)),
+            }
+        } else {
+            self.approvals.lock().ok().and_then(|queue| queue.status(id))
+        };
+        match status {
+            Some(ApprovalStatus::Pending) => format!(r#"{{"approval_id":{},"status":"pending"}}"#, id.0),
+            Some(status) => format!(r#"{{"approval_id":{},"status":"{}"}}"#, id.0, status_wire(status)),
+            None => format!(r#"{{"approval_id":{},"status":"unknown"}}"#, id.0),
+        }
+    }
+
     /// Run `actions.execute` against the in-memory queue, then flush to the shared file when set.
     fn execute_action(&self, body: &str, now: i64) -> String {
+        if let Some(error) = &self.approvals_load_error {
+            return format!(r#"{{"error":"approval_store","message":{}}}"#, json!(error));
+        }
         if let Some(path) = &self.approvals_path {
             match approval_store::with_queue(path, |queue| rest::act(Some(body), now, queue).1) {
                 Ok(text) => {
                     // Keep the in-memory mutex mirror in sync for same-process polls/tests.
                     if let Ok(mut guard) = self.approvals.lock() {
-                        *guard = approval_store::load_queue(path);
+                        *guard = match approval_store::load_queue(path) {
+                            Ok(queue) => queue,
+                            Err(error) => return format!(r#"{{"error":"approval_store","message":{}}}"#, json!(error)),
+                        };
                     }
                     text
                 }
@@ -336,10 +385,10 @@ mod tests {
     }
 
     #[test]
-    fn tools_list_has_all_twenty_one() {
+    fn tools_list_has_all_tools() {
         let v = call(&server(), r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#);
         let tools = v["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 21);
+        assert_eq!(tools.len(), 22);
         assert!(tools.iter().any(|t| t["name"] == "memory.search"));
         assert!(tools.iter().any(|t| t["name"] == "visual_recall.status"));
         assert!(tools.iter().any(|t| t["name"] == "profile.whoami"));
@@ -392,7 +441,7 @@ mod tests {
         );
         let text = v["result"]["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("\"pending\":true"));
-        let loaded = crate::approval_store::load_queue(&path);
+        let loaded = crate::approval_store::load_queue(&path).unwrap();
         assert_eq!(loaded.pending_len(), 1);
         let _ = std::fs::remove_file(&path);
     }

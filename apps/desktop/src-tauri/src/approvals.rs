@@ -107,31 +107,38 @@ pub mod mac {
     pub struct ApprovalQueueState {
         pub queue: Mutex<ApprovalQueue>,
         pub path: Option<std::path::PathBuf>,
+        pub load_error: Option<String>,
     }
 
     impl Default for ApprovalQueueState {
         fn default() -> Self {
-            Self { queue: Mutex::new(ApprovalQueue::new()), path: None }
+            Self { queue: Mutex::new(ApprovalQueue::new()), path: None, load_error: None }
         }
     }
 
     impl ApprovalQueueState {
         pub fn with_store_path(path: std::path::PathBuf) -> Self {
-            let queue = shogun_mcp::approval_store::load_queue(&path);
-            Self { queue: Mutex::new(queue), path: Some(path) }
+            let (queue, load_error) = match shogun_mcp::approval_store::load_queue(&path) {
+                Ok(queue) => (queue, None),
+                Err(error) => (ApprovalQueue::new(), Some(error)),
+            };
+            Self { queue: Mutex::new(queue), path: Some(path), load_error }
         }
 
         /// Reload from the shared file (MCP may have enqueued), run `f`, persist.
         fn with_synced_queue<R>(&self, f: impl FnOnce(&mut ApprovalQueue) -> R) -> Result<R, String> {
+            if let Some(error) = &self.load_error {
+                return Err(error.clone());
+            } else {
             let mut guard = self.queue.lock().map_err(|_| "approval queue poisoned".to_string())?;
             if let Some(path) = &self.path {
-                *guard = shogun_mcp::approval_store::load_queue(path);
+                let out = shogun_mcp::approval_store::with_queue(path, f)?;
+                *guard = shogun_mcp::approval_store::load_queue(path)?;
+                return Ok(out);
             }
             let out = f(&mut guard);
-            if let Some(path) = &self.path {
-                shogun_mcp::approval_store::save_queue(path, &guard)?;
-            }
             Ok(out)
+        }
         }
     }
 
@@ -281,7 +288,7 @@ pub mod mac {
         // --- Composio consent + draft-stop gate (FR-C2-02 / FR-C2-03) -------------------------
         // Only Composio (email) sends are gated — first-layer sends bypass this entirely.
         use shogun_integrations::send_bridge::{route_send, SendRoute};
-        if matches!(route_send(&confirmed.action), SendRoute::Composio) {
+        let outcome = if matches!(route_send(&confirmed.action), SendRoute::Composio) {
             let policy = load_composio_policy(&app);
             if !composio_send_allowed(policy) {
                 // Gate is closed: save a draft instead of sending. Body/recipient are NOT logged
@@ -290,13 +297,13 @@ pub mod mac {
                 let sink = db.traceability_sink();
                 match save_gmail_draft(&connectors.0, &sink, &confirmed.action, &confirmed.preview.full_body) {
                     Ok(()) => {
-                        return Ok("draft_saved: composio send is off (opt-in required)".into());
+                        "draft_saved: composio send is off (opt-in required)".into()
                     }
                     Err(e) => {
-                        return Ok(format!("draft_save_failed: composio send is off (opt-in required); draft error: {e}"));
+                        format!("send_failed: composio send is off (opt-in required); draft error: {e}")
                     }
                 }
-            }
+            } else {
             // Gate is open — require the Composio API key before proceeding.
             let composio_key = composio_api_key()
                 .filter(|k| !k.trim().is_empty())
@@ -319,21 +326,34 @@ pub mod mac {
                 first_layer,
                 Box::new(move |action, body| save_gmail_draft(&draft_runtime, &draft_sink, action, body)),
             );
-            return match execute_send(&confirmed, &routed, &db.traceability_sink()) {
-                SendExecOutcome::Sent => Ok("sent".into()),
-                SendExecOutcome::Failed(e) => Ok(format!("failed:{e}")),
-            };
-        }
+            match execute_send(&confirmed, &routed, &db.traceability_sink()) {
+                SendExecOutcome::Sent => "sent".into(),
+                SendExecOutcome::Failed(e) => format!("send_failed:{e}"),
+            }
+            }
 
         // --- First-layer send (Slack / calendar / GitHub): no Composio gate, no Composio key ----
         // We confirmed above (the `SendRoute::Composio` branch returned early) that this action is
         // NOT an email send, so `FirstLayerSendTransport` alone is the right executor — no Composio
         // client or key is needed or consulted.
+        } else {
         let first_layer = FirstLayerSendTransport::new(&connectors.0);
         match execute_send(&confirmed, &first_layer, &db.traceability_sink()) {
-            SendExecOutcome::Sent => Ok("sent".into()),
-            SendExecOutcome::Failed(e) => Ok(format!("failed:{e}")),
+            SendExecOutcome::Sent => "sent".into(),
+            SendExecOutcome::Failed(e) => format!("send_failed:{e}"),
         }
+        };
+        let status = if outcome.starts_with("sent") {
+            shogun_agents::approval::ApprovalStatus::Sent
+        } else if outcome.starts_with("draft_saved") {
+            shogun_agents::approval::ApprovalStatus::DraftSaved
+        } else {
+            shogun_agents::approval::ApprovalStatus::SendFailed
+        };
+        if let Some(path) = &state.path {
+            shogun_mcp::approval_store::with_queue(path, |q| { q.mark_status(ApprovalId(id), status, now); })?;
+        }
+        Ok(outcome)
     }
 
     /// FR-C2-05 fallback: save a Gmail draft (first-layer L2) when a Composio send fails.

@@ -126,6 +126,10 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
                     Ok(mut queue) => rest::act(rreq.body.as_deref(), (state.clock)(), &mut queue),
                     Err(_) => (500, r#"{"error":"internal"}"#.to_string()),
                 },
+                Routed::ApprovalPoll { id } => match state.approvals.lock() {
+                    Ok(queue) => (200, rest::poll_approval(id, &queue)),
+                    Err(_) => (500, r#"{"error":"internal"}"#.to_string()),
+                },
                 // metrics come from the injected live source (empty snapshot if none).
                 Routed::Metrics => (
                     200,

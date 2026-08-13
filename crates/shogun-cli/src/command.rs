@@ -32,6 +32,8 @@ pub enum Command {
     Propose { description: String },
     /// `shogun run <agent>` → launch a preset agent (level follows the action).
     Run { agent: String },
+    /// `shogun actions poll <approval_id>` → durable L3 status.
+    ActionsPoll { approval_id: u64 },
     /// `shogun api status` → report the running REST port (FR-API-01).
     ApiStatus,
     /// `shogun metrics` → the in-product SLO snapshot (NFR-SLO-00).
@@ -76,6 +78,7 @@ impl Command {
             Command::Note { .. } => Tool::MemoryAppendNote,
             Command::Propose { .. } => Tool::StateProposeUpdate,
             Command::Run { .. } => Tool::ActionsExecute,
+            Command::ActionsPoll { .. } => return None,
             Command::VisualRecall(VisualRecallCommand::Status) => Tool::VisualRecallStatus,
             Command::VisualRecall(VisualRecallCommand::Enable) => Tool::VisualRecallSetEnabled,
             Command::VisualRecall(VisualRecallCommand::Disable) => Tool::VisualRecallSetEnabled,
@@ -107,6 +110,7 @@ COMMANDS:
     note <text>               Append a user note            (L1)
     propose <description>     Propose a state change        (L2)
     run <agent>               Launch a preset agent         (level follows action)
+    actions poll <id>         Poll L3 approval status
     api status                Show the running REST port
     metrics                   In-product SLO snapshot
     visual-recall status      Visual recall status + frame stats

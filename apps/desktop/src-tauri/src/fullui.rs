@@ -551,7 +551,7 @@ pub mod mac {
                 let raw: Vec<_> = {
                     // Prefer the shared file so MCP-enqueued L3 sends show in the Notch too.
                     if let Some(path) = &a.path {
-                        let q = shogun_mcp::approval_store::load_queue(path);
+                        let q = shogun_mcp::approval_store::load_queue(path).map_err(|e| e.to_string())?;
                         q.pending_ids()
                             .into_iter()
                             .filter_map(|id| q.preview(id).map(|p| (id, p.clone())))
