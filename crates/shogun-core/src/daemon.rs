@@ -2894,6 +2894,36 @@ pub fn local_day_bounds(now_ms: i64) -> shogun_memory::search::LocalDayBounds {
     }
 }
 
+/// The Evening Wrap's window (§6.17): `(local midnight today, end of tomorrow)`.
+///
+/// Same libc path as [`local_day_bounds`] rather than `today_start + 2 × 24 h`. A day containing a
+/// DST transition is 23 or 25 hours long, so fixed-length arithmetic would put "the end of
+/// tomorrow" an hour off twice a year — and the Wrap's boundaries decide which commitments count
+/// as tomorrow's, so an hour of slack at the edge silently moves items between sections.
+#[cfg(feature = "db")]
+pub fn local_wrap_window(now_ms: i64) -> (i64, i64) {
+    let today_start = local_day_bounds(now_ms).today_start_ms;
+    #[cfg(target_os = "macos")]
+    {
+        // SAFETY: `tm` is initialized by localtime_r and only read after it reports success.
+        // mktime normalizes `tm_mday + 2` across month and year ends; `tm_isdst = -1` makes libc
+        // resolve the offset in effect on *that* date, not today's.
+        unsafe {
+            let mut tm: libc::tm = std::mem::zeroed();
+            let t = (today_start / 1000) as libc::time_t;
+            if !libc::localtime_r(&t, &mut tm).is_null() {
+                tm.tm_mday += 2;
+                tm.tm_isdst = -1;
+                let end = libc::mktime(&mut tm);
+                if end != -1 {
+                    return (today_start, (end as i64) * 1000);
+                }
+            }
+        }
+    }
+    (today_start, today_start + 2 * 24 * 60 * 60 * 1000)
+}
+
 #[cfg(feature = "db")]
 fn utc_day_bounds(now_ms: i64) -> shogun_memory::search::LocalDayBounds {
     const DAY_MS: i64 = 24 * 60 * 60 * 1000;
@@ -2948,6 +2978,18 @@ mod tests {
             display_id: Some(1),
             window_bounds: None,
         }
+    }
+
+    #[test]
+    fn the_wrap_window_starts_at_local_midnight_and_ends_after_tomorrow() {
+        // On the Linux CI path local_day_bounds is UTC, so this pins the arithmetic; on macOS the
+        // libc branch supplies the same shape with DST folded in.
+        const DAY: i64 = 24 * 60 * 60 * 1_000;
+        let now = 3 * DAY + 72_000_000; // 20:00 on day 3
+        let (start, end) = local_wrap_window(now);
+        assert!(start <= now && now < end);
+        assert_eq!(start, local_day_bounds(now).today_start_ms, "the window opens at midnight");
+        assert_eq!(end - start, 2 * DAY, "today plus tomorrow");
     }
 
     #[test]
@@ -3020,6 +3062,7 @@ mod tests {
                 scope_ref: None,
                 before_text: Some("draft"),
                 after_text: Some("edited draft"),
+                ..Default::default()
             };
             shogun_memory::lessons::record_feedback(
                 &conn,
@@ -4233,6 +4276,7 @@ mod tests {
                 scope_ref: Some("alice@example.com"),
                 before_text: Some("proposed body"),
                 after_text: Some("final body"),
+                ..Default::default()
             },
         );
         assert!(id.is_some(), "a healthy DB accepts the feedback write");

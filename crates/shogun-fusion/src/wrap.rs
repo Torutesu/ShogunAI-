@@ -14,6 +14,10 @@
 //! - Confidence (FR-ST-20, via [`crate::confidence`]): Low is excluded, Medium is flagged
 //!   `possibly` — the same gate the Brief applies, reusing [`crate::brief`]'s item types so the
 //!   two surfaces can never drift apart on what a "shown fact" is.
+//!
+//! The day window itself is NOT computed here. `shogun_core::daemon::local_wrap_window` owns it,
+//! on top of the same libc `localtime_r`/`mktime` path `local_day_bounds` already uses — a second
+//! day-boundary rule built from a fixed UTC offset would disagree with the first one twice a year.
 
 use crate::brief::{BriefItem, CalendarLine, CommitmentDue, OpenLoopItem};
 use crate::confidence::{band, Band};
@@ -51,28 +55,6 @@ pub struct EveningWrap {
     pub tomorrow_commitments: Vec<BriefItem>,
     /// Open loops that appeared today and are still open, ≤5.
     pub loose_ends: Vec<BriefItem>,
-}
-
-/// Milliseconds in a day.
-const DAY_MS: i64 = 24 * 60 * 60 * 1_000;
-
-/// The window the Wrap aggregates over: local midnight today, and the end of tomorrow.
-///
-/// Split out from the shell because "today" is the one thing here that is easy to get quietly
-/// wrong. `utc_offset_seconds` comes from the OS (the *current* offset); everything else is
-/// arithmetic, and arithmetic can be tested.
-///
-/// **DST**: a day containing a transition is an hour longer or shorter than the offset says, so
-/// its far edge can be off by an hour. That is accepted rather than fixed: the Wrap's boundaries
-/// decide which commitments count as "today", and an hour of slack at the edge of a day the user
-/// is not looking at costs nothing — while carrying a full timezone database to avoid it would.
-pub fn local_day_bounds(now_ms: i64, utc_offset_seconds: i32) -> (i64, i64) {
-    let offset_ms = i64::from(utc_offset_seconds) * 1_000;
-    // `div_euclid`, not `/`: truncating division rounds *towards zero*, so any instant before
-    // 1970 would land on the following midnight and the window would cover the wrong day.
-    let local_midnight = (now_ms + offset_ms).div_euclid(DAY_MS) * DAY_MS;
-    let day_start = local_midnight - offset_ms;
-    (day_start, day_start + 2 * DAY_MS)
 }
 
 /// The shared confidence gate: Low excluded, Medium flagged (identical to the Brief's rule).
@@ -230,46 +212,6 @@ mod tests {
         let wrap = assemble_wrap(WrapOutcome::default(), &[], &[], vec![], &[], &loops);
         assert_eq!(wrap.loose_ends.len(), LOOSE_ENDS_MAX);
         assert!(wrap.loose_ends.iter().all(|i| i.text != "l0"), "low confidence excluded");
-    }
-
-    #[test]
-    fn the_day_window_starts_at_local_midnight_and_covers_tomorrow() {
-        // 2026-07-31 20:00 JST (UTC+9) = 11:00 UTC = 1_785_495_600_000 ms.
-        let jst = 9 * 3_600;
-        let now = 1_785_495_600_000i64;
-        let (start, end) = local_day_bounds(now, jst);
-
-        assert!(start <= now && now < end);
-        // Midnight JST is 15:00 UTC the day before — the boundary is local, not UTC.
-        assert_eq!((now - start) % DAY_MS, 20 * 3_600 * 1_000, "20 hours into the local day");
-        assert_eq!(end - start, 2 * DAY_MS, "today plus tomorrow");
-    }
-
-    #[test]
-    fn the_window_is_stable_across_the_utc_day_change() {
-        // 09:00 JST is 00:00 UTC: a UTC-based boundary would flip the day here mid-morning.
-        let jst = 9 * 3_600;
-        let before = 1_785_452_400_000i64; // 08:59:00 JST
-        let after = before + 2 * 60 * 1_000; // 09:01:00 JST
-        assert_eq!(local_day_bounds(before, jst), local_day_bounds(after, jst));
-    }
-
-    #[test]
-    fn a_western_offset_puts_midnight_after_the_utc_one() {
-        // UTC-07:00: local midnight is 07:00 UTC, so the window starts *later* than the UTC day.
-        let pdt = -7 * 3_600;
-        let now = 1_785_495_600_000i64;
-        let (start, _) = local_day_bounds(now, pdt);
-        let (utc_start, _) = local_day_bounds(now, 0);
-        assert_eq!(start - utc_start, 7 * 3_600 * 1_000);
-    }
-
-    #[test]
-    fn an_instant_before_the_epoch_still_lands_on_its_own_midnight() {
-        // Truncating division would round towards zero here and hand back tomorrow's midnight.
-        let (start, end) = local_day_bounds(-1, 0);
-        assert_eq!(start, -DAY_MS, "the day containing t=-1 began a day before the epoch");
-        assert!(start <= -1 && -1 < end);
     }
 
     #[test]

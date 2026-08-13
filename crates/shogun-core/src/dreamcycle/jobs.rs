@@ -973,6 +973,7 @@ mod tests {
                         scope_ref: Some("com.apple.Mail"),
                         before_text: Some(&before),
                         after_text: Some(&after),
+                        ..Default::default()
                     },
                 )
                 .unwrap()

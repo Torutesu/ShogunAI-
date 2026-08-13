@@ -191,7 +191,44 @@ fn parse_err(what: &str, value: &str) -> rusqlite::Error {
 
 // ---------------------------------------------------------------- feedback recording
 
+/// Where a decision happened (the V19 `feedback_events.surface` CHECK).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Surface {
+    Notch,
+    OptionKey,
+    Chat,
+    Recap,
+    Api,
+}
+
+/// Every surface, so a parser or settings UI stays exhaustive by construction.
+pub const ALL_SURFACES: &[Surface] =
+    &[Surface::Notch, Surface::OptionKey, Surface::Chat, Surface::Recap, Surface::Api];
+
+impl Surface {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Surface::Notch => "notch",
+            Surface::OptionKey => "option_key",
+            Surface::Chat => "chat",
+            Surface::Recap => "recap",
+            Surface::Api => "api",
+        }
+    }
+
+    /// Parse a wire name (the UI layer speaks strings). Unknown names are rejected rather than
+    /// defaulted: a typo that silently became "notch" would quietly corrupt the very statistics
+    /// this column exists to produce.
+    pub fn from_wire(s: &str) -> Option<Surface> {
+        ALL_SURFACES.iter().copied().find(|v| v.as_str() == s)
+    }
+}
+
 /// A new feedback signal (struct-parameter style shared with `event_log::NewEvent`).
+///
+/// The offer-context fields (V19) are all optional and default to `None` — "not recorded" is a
+/// real answer here, and a caller that cannot say where a decision came from should say nothing
+/// rather than pick a plausible surface.
 #[derive(Clone, Default)]
 pub struct NewFeedback<'a> {
     pub ts_ms: i64,
@@ -199,6 +236,14 @@ pub struct NewFeedback<'a> {
     pub scope_ref: Option<&'a str>,
     pub before_text: Option<&'a str>,
     pub after_text: Option<&'a str>,
+    /// Where the proposal was shown.
+    pub surface: Option<Surface>,
+    /// The candidate's slot when offered (0 = top). `None` when the surface does not rank.
+    pub rank: Option<i64>,
+    /// Frontmost bundle id at decision time — context, not content.
+    pub context_app: Option<&'a str>,
+    /// Offer → decision in ms.
+    pub latency_ms: Option<i64>,
 }
 
 /// Record one feedback signal (D-2 hooks call this from the approval commands). Returns the new
@@ -211,8 +256,10 @@ pub fn record_feedback(
     f: &NewFeedback<'_>,
 ) -> Result<i64, rusqlite::Error> {
     conn.execute(
-        "INSERT INTO feedback_events (ts_ms, kind, action_kind, scope, scope_ref, before_text, after_text)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        "INSERT INTO feedback_events
+           (ts_ms, kind, action_kind, scope, scope_ref, before_text, after_text,
+            surface, rank, context_app, latency_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         params![
             f.ts_ms,
             kind.as_str(),
@@ -221,6 +268,10 @@ pub fn record_feedback(
             f.scope_ref,
             f.before_text,
             f.after_text,
+            f.surface.map(Surface::as_str),
+            f.rank,
+            f.context_app,
+            f.latency_ms,
         ],
     )?;
     Ok(conn.last_insert_rowid())
@@ -345,6 +396,49 @@ pub fn decision_counts_since(
         // `sum()` over zero rows is NULL, not 0 — count and sum disagree on the empty case.
         |r| Ok((r.get(0)?, r.get::<_, Option<i64>>(1)?.unwrap_or(0))),
     )
+}
+
+/// Adoption rate per action kind since `since_ts_ms`: `(kind, decided, adopted)`, most-decided
+/// first. This is FR-CF-03's "recent adoption rate of this action kind" supply.
+///
+/// The caller owns the window AND the smoothing. A kind with one decision has an adoption rate of
+/// either 0% or 100%, and neither number should be allowed to swing a ranking — so this returns
+/// the two counts rather than a ratio, leaving the scorer no way to use the rate without also
+/// seeing how thin the evidence behind it is.
+///
+/// Rows with no `action_kind` are excluded: they are decisions about state, not about a proposed
+/// action, and they have no kind whose adoption rate this could be.
+pub fn acceptance_by_kind(
+    conn: &Connection,
+    since_ts_ms: i64,
+) -> Result<Vec<(String, i64, i64)>, rusqlite::Error> {
+    let adoptions = ALL_FEEDBACK_KINDS
+        .iter()
+        .copied()
+        .filter(|&k| k.is_adoption())
+        .map(|k| format!("'{}'", k.as_str()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let decisions = ALL_FEEDBACK_KINDS
+        .iter()
+        .copied()
+        .filter(|&k| k.is_action_decision())
+        .map(|k| format!("'{}'", k.as_str()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut stmt = conn.prepare(&format!(
+        "SELECT action_kind,
+                count(*),
+                sum(CASE WHEN kind IN ({adoptions}) THEN 1 ELSE 0 END)
+         FROM feedback_events
+         WHERE ts_ms >= ?1 AND action_kind IS NOT NULL AND kind IN ({decisions})
+         GROUP BY action_kind
+         ORDER BY count(*) DESC, action_kind"
+    ))?;
+    let rows = stmt.query_map([since_ts_ms], |r| {
+        Ok((r.get(0)?, r.get(1)?, r.get::<_, Option<i64>>(2)?.unwrap_or(0)))
+    })?;
+    rows.collect()
 }
 
 // ---------------------------------------------------------------- distillation watermark (D-4)
@@ -971,6 +1065,7 @@ mod tests {
                 scope_ref,
                 before_text: Some(before),
                 after_text: Some(after),
+                ..Default::default()
             },
         )
         .unwrap()
@@ -1430,9 +1525,7 @@ mod tests {
         let f = |ts| NewFeedback {
             ts_ms: ts,
             action_kind: Some("draft_reply"),
-            scope_ref: None,
-            before_text: None,
-            after_text: None,
+            ..Default::default()
         };
         let rec = |k, ts| record_feedback(&conn, k, LessonScope::Global, &f(ts)).unwrap();
         rec(FeedbackKind::ApproveUnchanged, 1_000);
@@ -1445,6 +1538,93 @@ mod tests {
         // the window cuts from the front, and `sum()` over zero rows must read 0, not NULL.
         assert_eq!(decision_counts_since(&conn, 1_002).unwrap(), (2, 0));
         assert_eq!(decision_counts_since(&conn, 9_999).unwrap(), (0, 0));
+    }
+
+    #[test]
+    fn acceptance_by_kind_groups_and_excludes_kindless_state_decisions() {
+        let conn = crate::open_in_memory().unwrap();
+        let rec = |k, action_kind, ts| {
+            record_feedback(
+                &conn,
+                k,
+                LessonScope::Global,
+                &NewFeedback {
+                    ts_ms: ts,
+                    action_kind,
+                    surface: Some(Surface::Notch),
+                    rank: Some(0),
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+        };
+        rec(FeedbackKind::ApproveUnchanged, Some("draft_reply"), 1_000);
+        rec(FeedbackKind::EditBeforeApprove, Some("draft_reply"), 1_001);
+        rec(FeedbackKind::Reject, Some("draft_reply"), 1_002);
+        rec(FeedbackKind::Reject, Some("save_note"), 1_003);
+        // no action_kind, and not a decision on a proposal either — must not appear at all.
+        rec(FeedbackKind::StateResolve, None, 1_004);
+
+        let by_kind = acceptance_by_kind(&conn, 0).unwrap();
+        assert_eq!(by_kind, vec![("draft_reply".into(), 3, 2), ("save_note".into(), 1, 0)]);
+
+        // the window applies before the grouping
+        assert_eq!(acceptance_by_kind(&conn, 1_003).unwrap(), vec![("save_note".into(), 1, 0)]);
+        assert!(acceptance_by_kind(&conn, 9_999).unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_surface_vocabulary_is_closed_at_the_boundary_and_in_the_schema() {
+        assert_eq!(Surface::from_wire("option_key"), Some(Surface::OptionKey));
+        assert_eq!(Surface::from_wire("Notch"), None, "wire names are exact");
+        assert_eq!(Surface::from_wire("keyboard"), None);
+        for &s in ALL_SURFACES {
+            assert_eq!(Surface::from_wire(s.as_str()), Some(s));
+        }
+
+        // V19's CHECK is the second line of defence: a surface that got past Rust is still refused.
+        let conn = crate::open_in_memory().unwrap();
+        let err = conn.execute(
+            "INSERT INTO feedback_events (ts_ms, kind, scope, surface)
+             VALUES (1, 'reject', 'global', 'telepathy')",
+            [],
+        );
+        assert!(err.is_err(), "the schema must reject an unknown surface too");
+        // …and NULL stays legal, because pre-V19 rows have no surface and neither does a caller
+        // that genuinely does not know.
+        conn.execute(
+            "INSERT INTO feedback_events (ts_ms, kind, scope) VALUES (1, 'reject', 'global')",
+            [],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn the_offer_context_round_trips_and_stays_metadata_only() {
+        let conn = crate::open_in_memory().unwrap();
+        record_feedback(
+            &conn,
+            FeedbackKind::ApproveUnchanged,
+            LessonScope::Global,
+            &NewFeedback {
+                ts_ms: 42,
+                action_kind: Some("draft_reply"),
+                surface: Some(Surface::Recap),
+                rank: Some(3),
+                context_app: Some("com.apple.mail"),
+                latency_ms: Some(1_500),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let got: (String, i64, String, i64) = conn
+            .query_row(
+                "SELECT surface, rank, context_app, latency_ms FROM feedback_events",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(got, ("recap".into(), 3, "com.apple.mail".into(), 1_500));
     }
 
     #[test]
