@@ -99,3 +99,5 @@ MCP and REST poll now call `expire_due(now)` inside same locked store transactio
 - `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml -q`: pass; existing warnings only.
 
 Fix commit: `c1d3832 fix: enforce consent and timeout polling`.
+
+Report-only follow-up: reviewer evidence above corresponds to committed code; no additional code changes.
