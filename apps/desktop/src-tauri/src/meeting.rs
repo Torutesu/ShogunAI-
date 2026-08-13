@@ -742,15 +742,28 @@ use shogun_core::meeting::gate::OfferGate;
         std::thread::spawn(move || loop {
             std::thread::sleep(std::time::Duration::from_secs(1));
             if let Some(front) = crate::display::frontmost_app() {
+                // FR-MT-02a: with the feature off, this loop must not pay the per-second
+                // Accessibility round-trips (focused window title, browser URL) — on_focus's own
+                // gate sits AFTER those reads, so the check has to happen here. The cheap
+                // frontmost/mic observations still flow so the mic watch stays warm.
+                let enabled = LANE
+                    .try_lock()
+                    .ok()
+                    .and_then(|g| g.as_ref().map(|l| l.settings.enabled))
+                    .unwrap_or(false);
                 // The window title is what names the meeting; the app name is the fallback when
                 // Accessibility has nothing (permission not granted, or a window with no title).
-                let title = crate::axcache::focused_window(front.pid)
-                    .and_then(|w| w.title())
-                    .filter(|t| !t.trim().is_empty())
-                    .unwrap_or_else(|| front.name.clone());
+                let title = if enabled {
+                    crate::axcache::focused_window(front.pid)
+                        .and_then(|w| w.title())
+                        .filter(|t| !t.trim().is_empty())
+                        .unwrap_or_else(|| front.name.clone())
+                } else {
+                    front.name.clone()
+                };
                 // Only asked of browsers: every other app would pay an Accessibility round-trip
                 // per second to answer "no".
-                let url = is_browser(&front.bundle_id)
+                let url = (enabled && is_browser(&front.bundle_id))
                     .then(|| crate::axcache::browser_url(front.pid))
                     .flatten();
                 // Diagnostic while the browser table is confirmed on real machines: which app
@@ -770,14 +783,16 @@ use shogun_core::meeting::gate::OfferGate;
                             .unwrap_or("")
                             .to_string()
                     });
+                    // title_len, not the title: window titles are captured user content (document
+                    // names, mail subjects) and must not reach the log — same rule as the URL path.
                     let line = format!(
-                        "{} state={} mic={} browser={} host={} title={:?}",
+                        "{} state={} mic={} browser={} host={} title_len={}",
                         front.bundle_id,
                         state_tag(),
                         crate::mic::input_in_use(),
                         is_browser(&front.bundle_id),
                         host.as_deref().unwrap_or("-"),
-                        title.chars().take(40).collect::<String>()
+                        title.chars().count()
                     );
                     if let Ok(mut g) = LAST.lock() {
                         if *g != line {

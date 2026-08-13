@@ -90,9 +90,9 @@ pub mod mac {
                 return;
             }
             for (name, bytes) in CUE_WAVS {
-                // SAFETY: `NSData::with_bytes` copies, so the slice does not need to outlive the
+                // `NSData::with_bytes` copies, so the slice does not need to outlive the
                 // call, and `initWithData:` is the documented initialiser for in-memory audio.
-                let sound = unsafe {
+                let sound = {
                     let data = NSData::with_bytes(bytes);
                     NSSound::initWithData(NSSound::alloc(), &data)
                 };
@@ -319,12 +319,10 @@ pub mod mac {
             };
             // A cue retriggered while still ringing has to be rewound; `play` alone would be
             // ignored by an already-playing NSSound.
-            unsafe {
-                if sound.isPlaying() {
-                    let _ = sound.stop();
-                }
-                let _ = sound.play();
+            if sound.isPlaying() {
+                let _ = sound.stop();
             }
+            let _ = sound.play();
         });
     }
 

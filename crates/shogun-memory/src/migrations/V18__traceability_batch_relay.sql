@@ -16,10 +16,10 @@
 --   1. 下と同じ手順で CHECK から 'batch_relay' を除いたテーブルを作り直す
 --   2. コピー前に  DELETE FROM traceability_log WHERE route = 'batch_relay';
 --      （トレース行は監査記録であり、消すのは CHECK に収まらない行だけに限ること）
---   3. refinery_schema_history から version = 17 の行を削除する
+--   3. refinery_schema_history から version = 18 の行を削除する
 -- 破壊的な列削除・改名は行っていないため、V17 のコードは V18 のスキーマ上でも動作する。
 
-CREATE TABLE traceability_log_v17 (
+CREATE TABLE traceability_log_v18 (
     id          INTEGER PRIMARY KEY,
     ts          INTEGER NOT NULL,
     route       TEXT    NOT NULL CHECK (route IN ('batch_api', 'batch_relay', 'messages_api', 'mcp', 'composio', 'billing', 'asr', 'local_agent')),
@@ -30,12 +30,12 @@ CREATE TABLE traceability_log_v17 (
     third_party INTEGER NOT NULL DEFAULT 0
 ) STRICT;
 
-INSERT INTO traceability_log_v17 (id, ts, route, purpose, destination, chunk_bytes, chunk_xxh64, third_party)
+INSERT INTO traceability_log_v18 (id, ts, route, purpose, destination, chunk_bytes, chunk_xxh64, third_party)
     SELECT id, ts, route, purpose, destination, chunk_bytes, chunk_xxh64, third_party
     FROM traceability_log;
 
 DROP TABLE traceability_log;
 
-ALTER TABLE traceability_log_v17 RENAME TO traceability_log;
+ALTER TABLE traceability_log_v18 RENAME TO traceability_log;
 
 CREATE INDEX idx_traceability_ts ON traceability_log (ts);

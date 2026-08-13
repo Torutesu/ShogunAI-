@@ -267,7 +267,7 @@ pub mod mac {
     /// title/target; `context` is the thread/screen text the draft is grounded in. Returns the
     /// pending approval id. The human still confirms before anything sends (FR-AG-03).
     #[tauri::command]
-    pub fn draft_reply(
+    pub async fn draft_reply(
         kind: String,
         destination: String,
         subject: String,
@@ -276,7 +276,16 @@ pub mod mac {
         db: tauri::State<'_, Db>,
         user_cfg: tauri::State<'_, crate::user_config_watch::UserConfigState>,
     ) -> Result<u64, String> {
-        draft_and_enqueue(&kind, &destination, &subject, &context, &state.0, &db, &user_cfg.directives())
+        // draft_and_enqueue blocks on an LLM round-trip (its contract says "callers off the UI
+        // thread only") — a sync command would freeze the whole AppKit main thread for it.
+        let queue = state.0.clone();
+        let db = db.inner().clone();
+        let directives = user_cfg.directives();
+        tauri::async_runtime::spawn_blocking(move || {
+            draft_and_enqueue(&kind, &destination, &subject, &context, &queue, &db, &directives)
+        })
+        .await
+        .map_err(|e| format!("draft task failed: {e}"))?
     }
 
     /// List pending L3 confirmations (expiring any past the 10-minute window first).

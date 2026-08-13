@@ -87,6 +87,25 @@ pub fn export_json(conn: &Connection) -> Result<String, rusqlite::Error> {
         }))
     })?;
 
+    // Briefs (V15) and distilled lessons (V16) are the user's data too. Raw feedback_events /
+    // lesson_provenance stay out by design — V16 marks them "local DB only; never exported".
+    let briefs = rows(conn, "SELECT date, payload, generated, built_at FROM briefs ORDER BY date", |r| {
+        Ok(json!({
+            "date": r.get::<_, String>(0)?, "payload": r.get::<_, String>(1)?,
+            "generated": r.get::<_, i64>(2)? != 0, "built_at": r.get::<_, i64>(3)?,
+        }))
+    })?;
+    let lessons = rows(conn, "SELECT id, kind, scope, scope_ref, instruction, confidence, evidence_count, active, created_at, updated_at, last_evidence_at FROM lessons ORDER BY id", |r| {
+        Ok(json!({
+            "id": r.get::<_, i64>(0)?, "kind": r.get::<_, String>(1)?,
+            "scope": r.get::<_, String>(2)?, "scope_ref": r.get::<_, Option<String>>(3)?,
+            "instruction": r.get::<_, String>(4)?, "confidence": r.get::<_, f64>(5)?,
+            "evidence_count": r.get::<_, i64>(6)?, "active": r.get::<_, i64>(7)? != 0,
+            "created_at": r.get::<_, i64>(8)?, "updated_at": r.get::<_, i64>(9)?,
+            "last_evidence_at": r.get::<_, i64>(10)?,
+        }))
+    })?;
+
     let doc = json!({
         "schema_version": crate::schema_version(conn)?,
         "event_log": events,
@@ -101,6 +120,8 @@ pub fn export_json(conn: &Connection) -> Result<String, rusqlite::Error> {
         "meeting_recaps": meeting_recaps,
         "state_provenance": state_provenance,
         "traceability_log": traceability,
+        "briefs": briefs,
+        "lessons": lessons,
     });
     Ok(doc.to_string())
 }
@@ -131,6 +152,9 @@ pub struct DeleteReport {
     pub meeting_recaps: usize,
     pub screen_frames: usize,
     pub traceability: usize,
+    pub briefs: usize,
+    pub feedback_events: usize,
+    pub lessons: usize,
 }
 
 /// Delete **all** user data (FR-SET-07), keeping the schema. Runs in a single transaction so a
@@ -169,6 +193,13 @@ pub fn delete_all(conn: &mut Connection) -> Result<DeleteReport, rusqlite::Error
     // FR-MT-05).
     let sessions = tx.execute("DELETE FROM sessions", [])?;
     let traceability = tx.execute("DELETE FROM traceability_log", [])?;
+    // L5 learning data (V16) and persisted briefs (V15). feedback_events.before_text/after_text
+    // hold the user's actual proposed and approved message bodies — the most personal rows here.
+    // Provenance goes before both of its parents (FK order).
+    tx.execute("DELETE FROM lesson_provenance", [])?;
+    let lessons = tx.execute("DELETE FROM lessons", [])?;
+    let feedback_events = tx.execute("DELETE FROM feedback_events", [])?;
+    let briefs = tx.execute("DELETE FROM briefs", [])?;
     tx.execute("DELETE FROM job_runs", [])?;
     // Query-hash metrics carry no content, but they are still records of the user's activity.
     tx.execute("DELETE FROM compression_metrics", [])?;
@@ -187,6 +218,9 @@ pub fn delete_all(conn: &mut Connection) -> Result<DeleteReport, rusqlite::Error
         meeting_recaps,
         screen_frames,
         traceability,
+        briefs,
+        feedback_events,
+        lessons,
     })
 }
 
@@ -253,6 +287,20 @@ pub fn delete_since(conn: &mut Connection, cutoff_ts: i64) -> Result<DeleteRepor
     // Traceability rows for sends in the window.
     let traceability = tx.execute("DELETE FROM traceability_log WHERE ts >= ?1", [cutoff_ts])?;
 
+    // L5 learning signals in the window (V16): provenance rows pointing at doomed feedback first
+    // (FK), then the feedback rows; a lesson that loses ALL of its evidence goes with them — the
+    // same orphan rule as the state tables. Briefs are keyed by build time (V15).
+    tx.execute(
+        "DELETE FROM lesson_provenance WHERE feedback_event_id IN (SELECT id FROM feedback_events WHERE ts_ms >= ?1)",
+        [cutoff_ts],
+    )?;
+    let feedback_events = tx.execute("DELETE FROM feedback_events WHERE ts_ms >= ?1", [cutoff_ts])?;
+    let lessons = tx.execute(
+        "DELETE FROM lessons WHERE id NOT IN (SELECT lesson_id FROM lesson_provenance)",
+        [],
+    )?;
+    let briefs = tx.execute("DELETE FROM briefs WHERE built_at >= ?1", [cutoff_ts])?;
+
     // Orphan sweep: any state row with no surviving provenance is removed (children first).
     let commitments = tx.execute(orphan_sql("commitments"), [])?;
     let open_loops = tx.execute(orphan_sql("open_loops"), [])?;
@@ -277,6 +325,9 @@ pub fn delete_since(conn: &mut Connection, cutoff_ts: i64) -> Result<DeleteRepor
         meeting_recaps,
         screen_frames,
         traceability,
+        briefs,
+        feedback_events,
+        lessons,
     })
 }
 

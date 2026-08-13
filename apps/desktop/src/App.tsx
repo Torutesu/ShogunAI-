@@ -778,13 +778,13 @@ export function App(): JSX.Element {
       if (e.key !== "/" || e.metaKey || e.ctrlKey || e.altKey) return;
       const el = e.target as HTMLElement | null;
       if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
-      if (!open || showSettings) return;
+      if (!open || showSettings || showHub) return;
       e.preventDefault();
       setShowSearch(true);
     };
     window.addEventListener("keydown", onSlash);
     return () => window.removeEventListener("keydown", onSlash);
-  }, [open, showSettings]);
+  }, [open, showSettings, showHub]);
 
   // Click a state row to resolve it (commitment → done, open loop → closed); refresh immediately.
   const resolveItem = (kind: "commitment" | "open_loop", id: number): void => {
@@ -844,7 +844,6 @@ export function App(): JSX.Element {
       const composerHasFocus = document.activeElement?.classList.contains("composer__input") ?? false;
       if (composerHasFocus || inputRef.current.trim().length > 0 || thinkingRef.current) return;
       if (voiceRef.current.phase === "recording" || voiceRef.current.phase === "processing") return;
-      setShowSettings(false);
       beginCollapseRef.current();
     }, AUTO_COLLAPSE_MS);
   }, [pinned, cancelAutoCollapse]);
@@ -877,7 +876,14 @@ export function App(): JSX.Element {
       setNotchSm("idle");
       return;
     }
-    applyMorphScale(chatSize.w, chatSize.h);
+    // Morph from the size the panel is ACTUALLY at (settings/hub have their own), and clear the
+    // view flags here so every collapse path — pointer-leave, Rust idle/hidden, voice — converges
+    // on the same reset; a stale showHub would otherwise re-open the hub at chat size (see
+    // expand()).
+    const cur = showSettings ? setSize : showHub ? hubSize : chatSize;
+    setShowSettings(false);
+    setShowHub(false);
+    applyMorphScale(cur.w, cur.h);
     setCollapsing(true);
     setNotchSm((s) => (s === "idle" || s === "hidden" ? s : "collapsing"));
     collapseTimer.current = window.setTimeout(() => {
@@ -887,12 +893,10 @@ export function App(): JSX.Element {
       setNotchSm("idle");
       sizeForViewRef.current({ open: false });
     }, COLLAPSE_ANIM_MS);
-  }, [applyMorphScale, chatSize]);
+  }, [applyMorphScale, chatSize, setSize, hubSize, showSettings, showHub]);
   beginCollapseRef.current = beginCollapse;
 
   const collapse = (): void => {
-    setShowSettings(false);
-    setShowHub(false);
     beginCollapse();
   };
   const expand = useCallback((): void => {
@@ -909,11 +913,14 @@ export function App(): JSX.Element {
     }
     setCollapsing(false);
     setNotchSm("expanded");
-    applyMorphScale(chatSize.w, chatSize.h);
+    // The view flags survive a deliberate open (hotkey while settings were up), so open at THAT
+    // view's size — a chat-sized settings panel clips its groups.
+    const cur = showSettings ? setSize : showHub ? hubSize : chatSize;
+    applyMorphScale(cur.w, cur.h);
     // 1) Grow NSPanel to full frame. 2) Pose visible shell at Idle scale. 3) Flip to Expanded
     // so transform actually transitions (resize+class same tick kills the morph).
     void (async () => {
-      if (IN_TAURI) await applyPanelSize(chatSize.w, chatSize.h);
+      if (IN_TAURI) await applyPanelSize(cur.w, cur.h);
       // Commit Idle-scale pose synchronously so the next frame only retargets transform.
       flushSync(() => {
         setExpanding(true);
@@ -928,7 +935,7 @@ export function App(): JSX.Element {
         }, OPEN_ANIM_MS);
       });
     })();
-  }, [applyMorphScale, chatSize]);
+  }, [applyMorphScale, chatSize, setSize, hubSize, showSettings, showHub]);
   expandRef.current = expand;
 
   useEffect(
@@ -945,6 +952,7 @@ export function App(): JSX.Element {
   };
   const closeSettings = (): void => {
     setShowSettings(false);
+    sizeForView({ open: true, settings: false, hub: false });
   };
   const toggleHub = (): void => {
     const next = !showHub;
@@ -1210,7 +1218,6 @@ export function App(): JSX.Element {
     meeting?.elapsed_ms,
     meeting?.countdown_ms,
     voice?.phase,
-    voice?.level,
   ]);
 
   const meetingLive =
@@ -3909,23 +3916,6 @@ function PrivacySecuritySection(props: {
   // PostHog worker read (opt-out model, default ON; CLAUDE.md 2026-08-08 統合決定). `analytics`
   // here is "enabled" = !opt_out. Writing rolls the local state back on error so the toggle
   // never claims a state the backend rejected.
-  const [analytics, setAnalytics] = useState(true);
-  useEffect(() => {
-    if (!IN_TAURI) return;
-    void invoke<boolean>("analytics_get_opt_out")
-      .then((optOut) => setAnalytics(!optOut))
-      .catch(() => undefined);
-  }, []);
-  const toggleAnalytics = (next: boolean): void => {
-    setAnalytics(next);
-    if (IN_TAURI)
-      // Roll back only if the UI still shows the value THIS write set — two rapid toggles whose
-      // writes resolve out of order must not let a stale failure flip a state a later write owns.
-      void invoke("analytics_set_opt_out", { optOut: !next }).catch(() =>
-        setAnalytics((cur) => (cur === next ? !next : cur)),
-      );
-  };
-
   // Data deletion (A3). 1h/24h are single-tap-then-confirm; "all" wipes everything and the keys,
   // so it mirrors the deliberate typed-confirmation used for clearing extracted state.
   const [confirming, setConfirming] = useState<null | "1h" | "24h" | "all">(null);
@@ -4141,29 +4131,10 @@ function PrivacySecuritySection(props: {
       )}
       {deleteMsg ? <div className="set__hint is-ok">{deleteMsg}</div> : null}
 
-      {/* Anonymous usage card (Slice D). Opt-in: OFF by default, never carries captured content. */}
-      <div className="set__label" id="seg-analytics">{t.analyticsTitle}</div>
-      <div className="seg" role="radiogroup" aria-labelledby="seg-analytics">
-        <button
-          type="button"
-          role="radio"
-          aria-checked={analytics}
-          className={`seg__opt${analytics ? " is-on" : ""}`}
-          onClick={() => toggleAnalytics(true)}
-        >
-          {t.toggleOn}
-        </button>
-        <button
-          type="button"
-          role="radio"
-          aria-checked={!analytics}
-          className={`seg__opt${!analytics ? " is-on" : ""}`}
-          onClick={() => toggleAnalytics(false)}
-        >
-          {t.toggleOff}
-        </button>
-      </div>
-      <div className="set__hint">{t.analyticsNote}</div>
+      {/* Anonymous usage. ONE control, the shared AnalyticsToggle — three widgets over the same
+          analytics.json opt_out drifted out of sync within a single scroll of Settings. */}
+      <div className="set__label">{t.analyticsTitle}</div>
+      <AnalyticsToggle />
     </section>
   );
 }
@@ -4397,12 +4368,6 @@ function Settings(props: {
         <DreamSection />
         <PersonalizationSection />
         <section className="set">
-          {/* The opt-out used to exist only on the onboarding success screen — anyone who
-              skipped onboarding stayed opted in with no way to change it (FR-TEL). */}
-          <div className="set__label">{t.analyticsLabel}</div>
-          <AnalyticsToggle />
-        </section>
-        <section className="set">
           <div className="set__label" id="seg-appearance">{t.appearance}</div>
           <div className="seg" role="radiogroup" aria-labelledby="seg-appearance">
             {(["dark", "light", "auto"] as Appearance[]).map((a) => (
@@ -4590,13 +4555,6 @@ function Settings(props: {
               </div>
             </div>
           )}
-        </section>
-        {/* Privacy — permanent home of the analytics opt-out (issue #99). Onboarding shows the
-            same toggle once; without this section a set-up user had no way to change their mind.
-            Sits with Memory at the bottom: both are data controls, not daily-use settings. */}
-        <section className="set">
-          <div className="set__label">{t.privacy}</div>
-          <AnalyticsToggle />
         </section>
       </div>
     </div>

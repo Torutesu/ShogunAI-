@@ -23,7 +23,6 @@ pub mod mac {
     use shogun_agents::engine::{
         ActionId, Disposition, ExecutionEngine, ExecutionObserver, LocalEffector, Outcome, RejectReason,
     };
-    use shogun_agents::permission::SendAction;
     use shogun_core::daemon::Db;
     use shogun_fusion::assemble::ScreenContext;
     use shogun_fusion::{Action, LocalAction, SendAction};
@@ -367,7 +366,16 @@ pub mod mac {
         let cache = db.context_actions(current_screen(), None);
         eprintln!("[selftest] {} context action(s) for the current screen:", cache.actions.len());
         for (i, a) in cache.actions.iter().enumerate() {
-            eprintln!("[selftest]   [{i}] {:?} {:?} — {}", a.level, a.action, a.rationale);
+            // Level + discriminant only: the Action Debug carries captured text
+            // (ShowNotification/CopyToClipboard payloads), and rationale derives from it.
+            eprintln!(
+                "[selftest]   [{i}] {:?} {}",
+                a.level,
+                match &a.action {
+                    Action::Local(_) => "local",
+                    Action::Send(_) => "send",
+                }
+            );
         }
         match (cache.actions.first(), app.try_state::<NotchEngine>()) {
             (Some(first), Some(engine)) => {

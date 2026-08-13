@@ -153,12 +153,14 @@ unsafe fn resting_dock_origin(
     use shogun_core::notch::geometry::{drag_origin, Rect as GRect};
     match current_drag_override() {
         Some(off) => {
-            let vf: NSRect = msg_send![screen, visibleFrame];
+            // SAFETY: same contract as the enclosing fn — live NSScreen*, main thread.
+            let vf: NSRect = unsafe { msg_send![screen, visibleFrame] };
             let vis = GRect::new(vf.origin.x, vf.origin.y, vf.size.width, vf.size.height);
             let o = drag_origin(vis, width, height, off);
             NSPoint { x: o.x, y: o.y }
         }
-        None => castle_dock_origin(screen, width, height, current_castle()),
+        // SAFETY: same contract as the enclosing fn — live NSScreen*, main thread.
+        None => unsafe { castle_dock_origin(screen, width, height, current_castle()) },
     }
 }
 
