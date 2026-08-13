@@ -5,8 +5,8 @@
 
 #[cfg(target_os = "macos")]
 pub mod mac {
-    use std::sync::Mutex;
     use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+    use std::sync::Mutex;
 
     use serde::Serialize;
     use shogun_core::inline::TextInserter;
@@ -35,6 +35,9 @@ pub mod mac {
         /// True between successful hold-start and hold-end — used to idle-out a stuck UI if
         /// release arrives with no audio handle (should be rare after the ordered worker).
         ui_recording: bool,
+        /// True while the released clip is being transcribed and delivered. A second hold is
+        /// ignored until this clears so sessions cannot race or surface a misleading ASR error.
+        processing: bool,
     }
 
     static LANE: Mutex<Option<Lane>> = Mutex::new(None);
@@ -48,11 +51,6 @@ pub mod mac {
 
     #[derive(Clone, Serialize)]
     pub struct VoiceErrorEvent {
-        pub message: String,
-    }
-
-    #[derive(Clone, Serialize)]
-    pub struct VoiceToastEvent {
         pub message: String,
     }
 
@@ -82,22 +80,31 @@ pub mod mac {
         }
     }
 
-    fn emit_state(app: &AppHandle, phase: &'static str, transcript: Option<String>, response: Option<String>) {
+    fn emit_state(
+        app: &AppHandle,
+        phase: &'static str,
+        transcript: Option<String>,
+        response: Option<String>,
+    ) {
         let _ = app.emit(
             "voice_state",
-            VoiceStateEvent { phase, transcript, response },
+            VoiceStateEvent {
+                phase,
+                transcript,
+                response,
+            },
         );
     }
 
     fn emit_error(app: &AppHandle, message: impl Into<String>) {
         let msg = message.into();
-        let _ = app.emit("voice_error", VoiceErrorEvent { message: msg.clone() });
+        let _ = app.emit(
+            "voice_error",
+            VoiceErrorEvent {
+                message: msg.clone(),
+            },
+        );
         emit_state(app, "error", None, Some(msg));
-    }
-
-    fn emit_toast(app: &AppHandle, message: impl Into<String>) {
-        let message = message.into();
-        let _ = app.emit("voice_toast", VoiceToastEvent { message });
     }
 
     /// Leave transcript on the general pasteboard (no restore — user wants the text).
@@ -132,7 +139,6 @@ pub mod mac {
             match AxTextInserter.insert(transcript) {
                 Ok(()) => {
                     eprintln!("[voice] dictation pasted into focused field");
-                    emit_toast(app, "Pasted");
                     emit_state(app, "idle", Some(transcript.to_string()), None);
                     return;
                 }
@@ -146,7 +152,6 @@ pub mod mac {
 
         match copy_to_clipboard(transcript) {
             Ok(()) => {
-                emit_toast(app, "Copied to clipboard");
                 emit_state(app, "idle", Some(transcript.to_string()), None);
             }
             Err(ce) => emit_error(app, format!("Could not paste or copy: {ce}")),
@@ -173,6 +178,7 @@ pub mod mac {
                 settings: settings.clone(),
                 audio: None,
                 ui_recording: false,
+                processing: false,
             });
         }
         if settings.enabled {
@@ -180,7 +186,11 @@ pub mod mac {
         }
         eprintln!(
             "[voice] dialogue {}",
-            if enabled_log { "enabled" } else { "off (beta default)" }
+            if enabled_log {
+                "enabled"
+            } else {
+                "off (beta default)"
+            }
         );
     }
 
@@ -210,6 +220,10 @@ pub mod mac {
             let Some(lane) = lane.as_mut() else {
                 return false;
             };
+            if lane.processing {
+                eprintln!("[voice] hold ignored — previous dictation still processing");
+                return false;
+            }
             if lane.audio.is_some() {
                 // Already live — treat as success so the release path still runs.
                 lane.ui_recording = true;
@@ -285,7 +299,10 @@ pub mod mac {
             let was_recording = lane.ui_recording || lane.audio.is_some();
             lane.ui_recording = false;
             match lane.audio.take() {
-                Some(handle) => handle,
+                Some(handle) => {
+                    lane.processing = true;
+                    handle
+                }
                 None => {
                     if was_recording {
                         emit_state(&app, "idle", None, None);
@@ -309,15 +326,18 @@ pub mod mac {
                     TranscriptOutcome::Ok(t) => t,
                     TranscriptOutcome::Empty => {
                         emit_error(&app, "Didn't catch that — try again.");
+                        set_processing(false);
                         return;
                     }
                     TranscriptOutcome::Err(e) => {
                         emit_error(&app, e);
+                        set_processing(false);
                         return;
                     }
                 };
 
                 if SESSION.load(AtomicOrdering::SeqCst) != session {
+                    set_processing(false);
                     eprintln!("[voice] discard stale transcript (newer hold started)");
                     return;
                 }
@@ -325,8 +345,17 @@ pub mod mac {
                 emit_state(&app, "processing", Some(transcript.clone()), None);
                 // Dictation-first: no chat call on this path.
                 deliver_dictation(&app, &transcript);
+                set_processing(false);
             })
             .ok();
+    }
+
+    fn set_processing(processing: bool) {
+        if let Ok(mut lane) = LANE.lock() {
+            if let Some(lane) = lane.as_mut() {
+                lane.processing = processing;
+            }
+        }
     }
 
     #[tauri::command]
@@ -339,7 +368,9 @@ pub mod mac {
 
     #[tauri::command]
     pub fn set_voice_enabled(enabled: bool, app: AppHandle) -> Result<(), String> {
-        let mut lane = LANE.lock().map_err(|_| "voice lane lock poisoned".to_string())?;
+        let mut lane = LANE
+            .lock()
+            .map_err(|_| "voice lane lock poisoned".to_string())?;
         let settings = lane.as_mut().ok_or("voice not initialized")?;
         settings.settings.enabled = enabled;
         save_settings(&app, &settings.settings);

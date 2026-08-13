@@ -110,19 +110,13 @@ interface LevelEvent {
   rms: number;
 }
 
-const VOICE_W_RECORD = 360;
-const VOICE_H_RECORD = 100;
-const VOICE_W_PROCESS = 400;
-const VOICE_H_PROCESS = 140;
 const VOICE_W_RESPONSE = 480;
 const VOICE_H_RESPONSE = 280;
+const VOICE_W_RECORD_COLLAPSED = 240;
+const VOICE_LEVEL_STALE_MS = 1_200;
 
 function voicePanelSize(phase: VoiceView["phase"]): Size {
   switch (phase) {
-    case "recording":
-      return { w: VOICE_W_RECORD, h: VOICE_H_RECORD };
-    case "processing":
-      return { w: VOICE_W_PROCESS, h: VOICE_H_PROCESS };
     case "response":
       return { w: VOICE_W_RESPONSE, h: VOICE_H_RESPONSE };
     default:
@@ -320,7 +314,6 @@ export function App(): JSX.Element {
   const [showSettings, setShowSettings] = useState(false);
   /** Idle chin: reading/app/due vs quiet welded hide. Persisted in app data (Rust). */
   const [showStatusInNotch, setShowStatusInNotch] = useState(true);
-  const [voiceToast, setVoiceToast] = useState<string | null>(null);
   const [voice, setVoice] = useState<VoiceView>({
     phase: "idle",
     transcript: "",
@@ -329,9 +322,10 @@ export function App(): JSX.Element {
     level: 0,
   });
   const voicePeak = useRef(0);
-  /** Last `voice_level` timestamp — failsafe ends stuck recording after release + quiet. */
+  /** `voice_level` is also the mic-capture heartbeat: even silence emits zero-RMS frames. */
   const lastVoiceLevelAt = useRef(0);
   const voiceReleaseWatch = useRef<number | null>(null);
+  const voiceMicWatch = useRef<number | null>(null);
 
   // Open-view size is user-resizable (corner grip) and persists across Rust-driven respawns.
   // Chat and Settings share one frame — toggling settings must not jump to a separate stored size.
@@ -454,12 +448,55 @@ export function App(): JSX.Element {
             error: p === "error" ? e.payload.response ?? cur.error : p === "idle" ? "" : cur.error,
             level: p === "recording" ? cur.level : 0,
           }));
-          if (p === "recording") voicePeak.current = 0;
-          if (p === "recording" || p === "processing") {
-            setOpen(true);
+          if (p !== "recording" && voiceMicWatch.current != null) {
+            window.clearInterval(voiceMicWatch.current);
+            voiceMicWatch.current = null;
+          }
+          if (p === "recording") {
+            voicePeak.current = 0;
+            lastVoiceLevelAt.current = performance.now();
+            if (voiceMicWatch.current != null) window.clearInterval(voiceMicWatch.current);
+            // A live mic produces frames even in silence. If that heartbeat stops, end the Rust
+            // session so moving bars can never outlive capture and falsely claim "recording".
+            voiceMicWatch.current = window.setInterval(() => {
+              if (voiceRef.current.phase !== "recording") return;
+              if (performance.now() - lastVoiceLevelAt.current < VOICE_LEVEL_STALE_MS) return;
+              if (voiceMicWatch.current != null) {
+                window.clearInterval(voiceMicWatch.current);
+                voiceMicWatch.current = null;
+              }
+              void invoke("voice_force_end").catch(() => undefined);
+            }, 250);
+            // Dictation is a closed-notch live activity. Keep it compact so the waveform sits
+            // beside the hardware notch instead of opening the full voice surface.
+            if (collapseTimer.current != null) {
+              window.clearTimeout(collapseTimer.current);
+              collapseTimer.current = null;
+            }
+            if (expandTimer.current != null) {
+              window.clearTimeout(expandTimer.current);
+              expandTimer.current = null;
+            }
+            setOpen(false);
+            setExpanding(false);
+            setCollapsing(false);
+            setNotchSm("idle");
+            void applyPanelSize(VOICE_W_RECORD_COLLAPSED, H_DEAD);
+          } else if (p === "processing") {
+            if (collapseTimer.current != null) {
+              window.clearTimeout(collapseTimer.current);
+              collapseTimer.current = null;
+            }
+            if (expandTimer.current != null) {
+              window.clearTimeout(expandTimer.current);
+              expandTimer.current = null;
+            }
             setShowSettings(false);
-            const sz = voicePanelSize(p);
-            void applyPanelSize(sz.w, sz.h);
+            setOpen(false);
+            setExpanding(false);
+            setCollapsing(false);
+            setNotchSm("idle");
+            void applyPanelSize(VOICE_W_RECORD_COLLAPSED, H_DEAD);
           } else if (p === "idle") {
             // Dictation done — always collapse; do not leave recording chrome stuck open.
             beginCollapseRef.current();
@@ -481,12 +518,6 @@ export function App(): JSX.Element {
         const norm = voicePeak.current > 0 ? Math.min(1, rms / voicePeak.current) : 0;
         lastVoiceLevelAt.current = performance.now();
         setVoice((cur) => (cur.phase === "recording" ? { ...cur, level: norm } : cur));
-      }),
-    );
-    offs.push(
-      listen<{ message: string }>("voice_toast", (e) => {
-        setVoiceToast(e.payload.message);
-        window.setTimeout(() => setVoiceToast(null), 2200);
       }),
     );
     // Release signal from Rust: if UI still shows recording after 500ms with no levels, force end.
@@ -563,6 +594,10 @@ export function App(): JSX.Element {
         window.clearInterval(voiceReleaseWatch.current);
         voiceReleaseWatch.current = null;
       }
+      if (voiceMicWatch.current != null) {
+        window.clearInterval(voiceMicWatch.current);
+        voiceMicWatch.current = null;
+      }
       offs.forEach((p) => void p.then((off) => off()));
     };
   }, []);
@@ -582,20 +617,6 @@ export function App(): JSX.Element {
     const id = setInterval(refreshState, 3000);
     return () => clearInterval(id);
   }, [refreshState]);
-
-  useEffect(() => {
-    if (!IN_TAURI) return;
-    let unlisten: (() => void) | undefined;
-    void listen<{ message: string }>("voice_error", (e) => {
-      setVoiceToast(e.payload.message);
-      window.setTimeout(() => setVoiceToast(null), 4000);
-    }).then((fn) => {
-      unlisten = fn;
-    });
-    return () => {
-      unlisten?.();
-    };
-  }, []);
 
   // Click a state row to resolve it (commitment → done, open loop → closed); refresh immediately.
   const resolveItem = (kind: "commitment" | "open_loop", id: number): void => {
@@ -662,11 +683,11 @@ export function App(): JSX.Element {
   const applyMorphScale = useCallback((w: number, h: number): void => {
     const el = stageRef.current;
     if (!el) return;
-    const chinW = handleRef.current?.getBoundingClientRect().width
-      ?? pillRef.current?.getBoundingClientRect().width
-      ?? W_HANDLE_FALLBACK;
+    const chinRect = (handleRef.current ?? pillRef.current)?.getBoundingClientRect();
+    const chinW = chinRect?.width ?? W_HANDLE_FALLBACK;
+    const chinH = chinRect?.height ?? H_HANDLE;
     const sx = Math.min(1, Math.max(0.22, chinW / Math.max(1, w)));
-    const sy = Math.min(1, Math.max(0.06, H_HANDLE / Math.max(1, h)));
+    const sy = Math.min(1, Math.max(0.06, chinH / Math.max(1, h)));
     el.style.setProperty("--shell-sx", sx.toFixed(4));
     el.style.setProperty("--shell-sy", sy.toFixed(4));
   }, []);
@@ -821,8 +842,9 @@ export function App(): JSX.Element {
     // Hiding Idle uses the same weld (W_HIDE × H_DEAD).
     // Height floors at H_HANDLE so a short content pill never leaves air under the notch.
     const hiding = el.classList.contains("handle--hiding");
-    const notchW = hiding ? W_HIDE : W_HANDLE_FALLBACK;
-    const minH = hiding ? H_DEAD : H_HANDLE;
+    const voiceActivity = el.querySelector(".vpill") !== null;
+    const notchW = voiceActivity ? VOICE_W_RECORD_COLLAPSED : hiding ? W_HIDE : W_HANDLE_FALLBACK;
+    const minH = voiceActivity || hiding ? H_DEAD : H_HANDLE;
     void applyPanelSize(
       notchW,
       Math.max(minH, Math.ceil(r.height)),
@@ -871,7 +893,11 @@ export function App(): JSX.Element {
     </div>
   ) : voiceLive?.phase === "recording" ? (
     <div ref={pillRef}>
-      <VoicePill view={voiceLive} />
+      <VoicePill />
+    </div>
+  ) : voiceLive?.phase === "processing" ? (
+    <div ref={pillRef}>
+      <VoiceProcessingPill />
     </div>
   ) : (
     <button
@@ -913,7 +939,6 @@ export function App(): JSX.Element {
   // Panel always mounted (playbook P0 pre-mount). Idle face mounts only when fully Idle.
   return (
     <div ref={stageRef} className={`stage notch-shell ${shellMode}`}>
-      {voiceToast ? <div className="voice-toast">{voiceToast}</div> : null}
       {showIdleFace ? (
         <div className="notch-idle" aria-hidden={open || collapsing || expanding}>
           {idleChin}
@@ -1150,14 +1175,39 @@ export function App(): JSX.Element {
 }
 
 /** Collapsed notch pill while hold-to-talk is active (#44). */
-function VoicePill({ view }: { view: VoiceView }): JSX.Element {
+function VoicePill(): JSX.Element {
+  // Port boringNotch's AudioSpectrum motion: every 300ms each bar chooses an
+  // independent random scale in 0.35...1.0. This is a recording indicator, not an RMS meter.
+  const [scales, setScales] = useState<number[]>([0.35, 0.35, 0.35, 0.35]);
+
+  useEffect(() => {
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const timer = window.setInterval(() => {
+      setScales(Array.from({ length: 4 }, () => 0.35 + Math.random() * 0.65));
+    }, 300);
+    return () => window.clearInterval(timer);
+  }, []);
+
   return (
-    <div className="vpill">
-      <span className="vpill__dot" aria-hidden />
-      <span className="vpill__label">{t.voiceListening}</span>
-      <span className="vpill__meter" aria-hidden>
-        <span className="vpill__meter-fill" style={{ width: `${Math.round(view.level * 100)}%` }} />
+    <div className="vpill" role="status" aria-label={t.voiceListening}>
+      <span className="vpill__visualizer" aria-hidden>
+        {scales.map((scale, index) => (
+          <span
+            className="vpill__bar"
+            key={index}
+            style={{ transform: `scaleY(${scale})` }}
+          />
+        ))}
       </span>
+    </div>
+  );
+}
+
+/** Same closed-notch slot, but unmistakably processing rather than recording. */
+function VoiceProcessingPill(): JSX.Element {
+  return (
+    <div className="vpill" role="status" aria-label={t.voiceProcessing}>
+      <span className="vpill__loader" aria-hidden />
     </div>
   );
 }

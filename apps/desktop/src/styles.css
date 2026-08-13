@@ -2209,25 +2209,22 @@ kbd {
 /* voice pill + panel (#44) — welded Idle chin language, matches handle / meeting pill */
 .vpill {
   position: relative;
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: 8px;
-  height: var(--chin-h);
-  min-height: var(--chin-h);
-  max-height: var(--chin-h);
+  justify-content: flex-end;
+  width: 240px;
+  min-width: 240px;
+  max-width: 240px;
+  height: var(--notch-dead-h);
+  min-height: var(--notch-dead-h);
+  max-height: var(--notch-dead-h);
   margin: 0;
-  padding: var(--notch-dead-h) 8px 0;
-  min-width: 180px;
-  max-width: 180px;
-  width: 180px;
+  padding: 0 14px 0 0;
   background: #000;
   border: none;
-  border-radius: 0 0 var(--r-shell-bot) var(--r-shell-bot);
+  border-radius: 0 0 14px 14px;
   box-shadow: none;
   box-sizing: border-box;
-  color: var(--ink);
-  font-family: var(--sys);
-  font-size: var(--fs-sm);
 }
 .vpill::before {
   content: "";
@@ -2239,35 +2236,35 @@ kbd {
   background: #000;
   pointer-events: none;
 }
-.vpill__dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--accent);
-  flex: none;
-  animation: vpill-pulse 1.2s ease-in-out infinite;
-}
-@keyframes vpill-pulse {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.55; transform: scale(0.92); }
-}
-.vpill__label {
-  color: var(--muted);
-  flex: none;
-}
-.vpill__meter {
-  flex: 1;
-  min-width: 48px;
-  height: 4px;
-  border-radius: var(--r-pill);
-  background: var(--fill);
+.vpill__visualizer {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  width: 16px;
+  height: 14px;
   overflow: hidden;
 }
-.vpill__meter-fill {
-  height: 100%;
-  border-radius: inherit;
-  background: var(--accent);
-  transition: width 80ms linear;
+.vpill__bar {
+  display: block;
+  width: 2px;
+  min-width: 2px;
+  height: 14px;
+  border-radius: 1px;
+  background: linear-gradient(180deg, #d2d2d2 0%, #858585 100%);
+  transform-origin: center;
+  transition: transform 300ms ease-in-out;
+}
+.vpill__loader {
+  width: 14px;
+  height: 14px;
+  border: 2px solid #5c5c5f;
+  border-top-color: #d2d2d2;
+  border-radius: 50%;
+  box-sizing: border-box;
+  animation: vpill-loading 650ms linear infinite;
+}
+@keyframes vpill-loading {
+  to { transform: rotate(360deg); }
 }
 
 .voice-panel {
@@ -4536,22 +4533,6 @@ body.full-window {
   font-weight: 600;
   background: var(--fill-strong);
 }
-.voice-toast {
-  position: fixed;
-  top: 8px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 20;
-  max-width: 90%;
-  padding: 8px 12px;
-  border-radius: var(--r-pill);
-  background: rgba(20, 20, 24, 0.92);
-  border: 1px solid var(--line);
-  color: var(--ink);
-  font-size: var(--fs-xs);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
-}
-
 /* ---- Meeting: reusable drag / resize ---- */
 .drag-handle-6dot {
   display: inline-flex;
