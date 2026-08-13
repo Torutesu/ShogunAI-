@@ -398,6 +398,54 @@ pub fn list_commitments(conn: &Connection) -> Result<Vec<CommitmentRow>, rusqlit
     rows.collect()
 }
 
+// ---- Evening Wrap day-window reads (§6.17, FR-EB-01) ----------------------------------------
+// The Wrap's sections are day-window aggregations. The window boundary (local midnight) is the
+// caller's concern; these functions only take the cut-off timestamp.
+
+/// Commitments marked done since `since` (Wrap "Today's outcome").
+pub fn count_commitments_done_since(conn: &Connection, since: i64) -> Result<i64, rusqlite::Error> {
+    conn.query_row(
+        "SELECT count(*) FROM commitments WHERE status = 'done' AND updated_at >= ?1",
+        [since],
+        |r| r.get(0),
+    )
+}
+
+/// Open loops closed since `since` (Wrap "Today's outcome").
+pub fn count_open_loops_closed_since(conn: &Connection, since: i64) -> Result<i64, rusqlite::Error> {
+    conn.query_row(
+        "SELECT count(*) FROM open_loops WHERE status = 'closed' AND updated_at >= ?1",
+        [since],
+        |r| r.get(0),
+    )
+}
+
+/// Unresolved commitments that saw activity since `since` (Wrap "Still open").
+pub fn list_commitments_active_since(
+    conn: &Connection,
+    since: i64,
+) -> Result<Vec<CommitmentRow>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT id, description, due_at, status, confidence,
+                (SELECT MIN(event_id) FROM state_provenance
+                   WHERE state_table = 'commitments' AND state_id = commitments.id)
+         FROM commitments
+         WHERE status NOT IN ('done', 'cancelled') AND updated_at >= ?1
+         ORDER BY (due_at IS NULL), due_at, id",
+    )?;
+    let rows = stmt.query_map([since], |r| {
+        Ok(CommitmentRow {
+            id: r.get(0)?,
+            description: r.get(1)?,
+            due_at: r.get(2)?,
+            status: r.get(3)?,
+            confidence: r.get(4)?,
+            first_event_id: r.get(5)?,
+        })
+    })?;
+    rows.collect()
+}
+
 /// An open loop read back for Fusion / Morning Brief. `kind` is the loop category
 /// (`reply_needed` / `waiting_on_them` / …) that Context Fusion maps to an action.
 #[derive(Debug, Clone, PartialEq)]
@@ -421,6 +469,52 @@ pub fn list_open_loops(conn: &Connection) -> Result<Vec<OpenLoopRow>, rusqlite::
          ORDER BY staleness_days DESC, id",
     )?;
     let rows = stmt.query_map([], |r| {
+        Ok(OpenLoopRow {
+            id: r.get(0)?,
+            kind: r.get(1)?,
+            description: r.get(2)?,
+            staleness_days: r.get(3)?,
+            status: r.get(4)?,
+            confidence: r.get(5)?,
+            first_event_id: r.get(6)?,
+        })
+    })?;
+    rows.collect()
+}
+
+/// Open loops with activity since `since`, still open (Wrap "Still open"). Stalest first.
+pub fn list_open_loops_active_since(
+    conn: &Connection,
+    since: i64,
+) -> Result<Vec<OpenLoopRow>, rusqlite::Error> {
+    open_loops_where(conn, "status != 'closed' AND updated_at >= ?1", since)
+}
+
+/// Open loops that appeared since `since` and are still open (Wrap "Loose ends"). Staleness
+/// order, matching the rest of the product rather than inventing a newest-first rule here.
+pub fn list_open_loops_opened_since(
+    conn: &Connection,
+    since: i64,
+) -> Result<Vec<OpenLoopRow>, rusqlite::Error> {
+    open_loops_where(conn, "status != 'closed' AND opened_at >= ?1", since)
+}
+
+/// Shared SELECT for the open-loop day-window reads. `where_sql` is a static predicate over
+/// columns of this module's own table — never caller input.
+fn open_loops_where(
+    conn: &Connection,
+    where_sql: &str,
+    since: i64,
+) -> Result<Vec<OpenLoopRow>, rusqlite::Error> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT id, kind, description, staleness_days, status, confidence,
+                (SELECT MIN(event_id) FROM state_provenance
+                   WHERE state_table = 'open_loops' AND state_id = open_loops.id)
+         FROM open_loops
+         WHERE {where_sql}
+         ORDER BY staleness_days DESC, id"
+    ))?;
+    let rows = stmt.query_map([since], |r| {
         Ok(OpenLoopRow {
             id: r.get(0)?,
             kind: r.get(1)?,
