@@ -53,8 +53,10 @@ describe("no persistence of chunk content", () => {
 
   it("the UsageStore interface cannot carry content: only counters land in the ledger", async () => {
     const store = new InMemoryUsageStore();
-    await store.record("lic_x", "2026-08-09", 3, "rb_1");
-    await store.record("lic_x", "2026-08-09", 2, "rb_2");
+    expect(await store.tryReserve("lic_x", "2026-08-09", 3, 100)).toBe("ok");
+    expect(await store.tryReserve("lic_x", "2026-08-09", 2, 100)).toBe("ok");
+    await store.attachBatch("rb_1", "lic_x", "2026-08-09", 3);
+    await store.attachBatch("rb_2", "lic_x", "2026-08-09", 2);
     expect(await store.usedOn("lic_x", "2026-08-09")).toBe(5);
     expect(await store.usedOn("lic_x", "2026-08-10")).toBe(0);
     expect(await store.usedOn("lic_y", "2026-08-09")).toBe(0);

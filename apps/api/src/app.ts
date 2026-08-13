@@ -12,6 +12,7 @@
  *   502 upstream failure.
  */
 import { Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import type { KeyObject } from "node:crypto";
 
 import { AuthError, verifyLicense } from "./auth.js";
@@ -19,8 +20,13 @@ import type { AnthropicGateway } from "./gateway.js";
 import { UpstreamError } from "./gateway.js";
 import { redactingLogger, type LogFn, type LogVars } from "./logging.js";
 import { MAX_TOKENS_BY_CLASS, MODEL_BY_CLASS } from "./models.js";
+import { NoRateLimit, type RateLimiter } from "./ratelimit.js";
 import { parseRelayBatchRequest, type AnthropicBatchRequestItem, type RelayResult } from "./types.js";
 import { utcDate, type UsageStore } from "./usage.js";
+
+/** Ceiling on a submission body. MAX_ITEMS × MAX_CHUNK_BYTES is far larger than any real batch;
+ * this is the number that actually bounds what one request can make the process buffer. */
+export const MAX_BODY_BYTES = 8 * 1024 * 1024;
 
 export interface RelayDeps {
   gateway: AnthropicGateway;
@@ -31,6 +37,9 @@ export interface RelayDeps {
   /** Per-license daily chunk cap (OPEN-B2: the concrete number comes from the cost model; the
    * enforcement lives here either way). */
   dailyChunkCap: number;
+  /** Per-licence request rate limit. Defaults to no limit, for deployments that do this at the
+   * edge; `index.ts` wires a token bucket. */
+  rateLimit?: RateLimiter;
   log: LogFn;
   /** Injected clock for tests. */
   now?: () => Date;
@@ -82,10 +91,23 @@ export function createApp(deps: RelayDeps): Hono<{ Variables: LogVars }> {
   });
 
   const nowSecs = (): number => Math.floor(now().getTime() / 1000);
+  const limiter = deps.rateLimit ?? new NoRateLimit();
+
+  // Bounded before any handler runs: an unbounded `c.req.json()` is a one-request OOM.
+  app.post(
+    "/v1/batch",
+    bodyLimit({
+      maxSize: MAX_BODY_BYTES,
+      onError: (c) => c.json({ error: "body too large" }, 413),
+    }),
+  );
 
   app.post("/v1/batch", async (c) => {
     const license = verifyLicense(c.req.header("authorization"), deps.licensePublicKey, nowSecs());
     c.set("relayLogLicense", license.licenseId);
+    if (!limiter.take(license.licenseId, now().getTime())) {
+      return c.json({ error: "too many requests" }, 429);
+    }
 
     let raw: unknown;
     try {
@@ -99,10 +121,21 @@ export function createApp(deps: RelayDeps): Hono<{ Variables: LogVars }> {
     }
 
     // Daily cap (§2.2 — the reason the relay exists: the limit is enforced where the key lives).
+    // Reserved BEFORE the upstream call and released if that call fails, so N simultaneous
+    // submissions cannot each read the same "used" and all pass.
     const date = utcDate(now());
-    const used = await deps.usage.usedOn(license.licenseId, date);
-    if (used + parsed.items.length > deps.dailyChunkCap) {
+    const reservation = await deps.usage.tryReserve(
+      license.licenseId,
+      date,
+      parsed.items.length,
+      deps.dailyChunkCap,
+    );
+    if (reservation === "capped") {
       return c.json({ error: "daily chunk cap reached" }, 429);
+    }
+    if (reservation === "unavailable") {
+      // The ledger is unreadable, so the spend cap cannot be enforced. Refuse rather than spend.
+      return c.json({ error: "metering unavailable" }, 503);
     }
 
     // Forward with the server-chosen model (§4.4) and the custom_ids untouched.
@@ -114,9 +147,15 @@ export function createApp(deps: RelayDeps): Hono<{ Variables: LogVars }> {
         messages: [{ role: "user", content: it.chunk }],
       },
     }));
-    const created = await deps.gateway.createBatch(requests);
+    let created;
+    try {
+      created = await deps.gateway.createBatch(requests);
+    } catch (e) {
+      await deps.usage.release(license.licenseId, date, parsed.items.length);
+      throw e;
+    }
 
-    await deps.usage.record(license.licenseId, date, parsed.items.length, created.id);
+    await deps.usage.attachBatch(created.id, license.licenseId, date, parsed.items.length);
     c.set("relayLogChunks", parsed.items.length);
     return c.json({ batch_id: created.id, accepted: parsed.items.length }, 202);
   });
@@ -124,6 +163,9 @@ export function createApp(deps: RelayDeps): Hono<{ Variables: LogVars }> {
   app.get("/v1/batch/:id", async (c) => {
     const license = verifyLicense(c.req.header("authorization"), deps.licensePublicKey, nowSecs());
     c.set("relayLogLicense", license.licenseId);
+    if (!limiter.take(license.licenseId, now().getTime())) {
+      return c.json({ error: "too many requests" }, 429);
+    }
     const id = c.req.param("id");
 
     // Ownership check (§4.1): a licence may only read back batches IT created. Anthropic batch

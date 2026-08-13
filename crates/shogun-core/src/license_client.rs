@@ -66,6 +66,31 @@ impl VerifyError {
 pub const DEFAULT_LICENSE_API: &str = "https://syogun.com";
 
 /// The verification endpoint for a given origin.
+/// The cached licence token for THIS device, if it currently entitles the device.
+///
+/// One reader for every caller that needs to present the FR-BIL-08 token as a bearer credential
+/// — today the Batch relay (`llm::relay`) and the ASR token mint. It re-checks the signature,
+/// the device binding and the offline-grace window through `plan_source::billing_state_of`, so
+/// a caller can never present a token this build would not itself accept.
+///
+/// `None` means "no entitled token on this device": every caller must degrade rather than send
+/// an unauthenticated request.
+pub fn cached_license_token() -> Option<String> {
+    use shogun_mcp::plan_source::{billing_json_path, billing_state_of, parse_billing_snapshot};
+    let text = std::fs::read_to_string(billing_json_path()?).ok()?;
+    let snap = parse_billing_snapshot(&text)?;
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+        .unwrap_or(0);
+    // Via shogun-mcp's re-export: shogun-agents is not a dependency of the `net` feature, and
+    // the plan gate's own vocabulary is the right one to read this through.
+    match billing_state_of(&snap, now_ms) {
+        shogun_mcp::entitlement::BillingState::Active(_) => Some(snap.token),
+        _ => None,
+    }
+}
+
 pub fn verify_url(origin: &str) -> String {
     format!("{}/api/license/verify", origin.trim_end_matches('/'))
 }

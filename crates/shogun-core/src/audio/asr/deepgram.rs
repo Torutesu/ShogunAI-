@@ -38,19 +38,43 @@ pub trait DeepgramAuth: Send {
 ///
 /// Expected JSON: `{ "access_token": "<jwt>", "expires_in": <secs> }` (Deepgram grant shape).
 /// Backend holds the company key and calls Deepgram `/v1/auth/grant` (or proxies listen).
+///
+/// The mint request is **authenticated with this device's licence token** (FR-BIL-08): the
+/// endpoint spends the company Deepgram key, so an unauthenticated mint would let anyone who
+/// learns the URL issue themselves tokens against it. The backend verifies the same
+/// `v1.<payload>.<sig>` token the Batch relay does (apps/api/README-asr-proxy.md).
 pub struct EphemeralTokenAuth {
     token_url: String,
+    /// Resolved per mint, not once: the token expires every ~24h and is re-verified on a timer,
+    /// so a long-running app must pick up the refreshed one.
+    license: fn() -> Option<String>,
     client: reqwest::blocking::Client,
     cached: Option<(String, Instant, Duration)>,
 }
 
 impl EphemeralTokenAuth {
+    /// Mint against `token_url`, presenting the device's cached licence token.
     pub fn new(token_url: impl Into<String>) -> Result<Self, String> {
+        Self::with_license_source(token_url, crate::license_client::cached_license_token)
+    }
+
+    /// Same, with the licence source injected — the seam the tests use to drive the "no licence"
+    /// and "licence attached" paths without a Keychain or a billing.json.
+    pub fn with_license_source(
+        token_url: impl Into<String>,
+        license: fn() -> Option<String>,
+    ) -> Result<Self, String> {
+        let token_url = token_url.into();
+        // The mint carries a bearer credential; plain HTTP would put it (and the returned
+        // Deepgram token) on the wire in the clear.
+        if !token_url.starts_with("https://") {
+            return Err("SHOGUN_ASR_TOKEN_URL must be an https:// URL".into());
+        }
         let client = reqwest::blocking::Client::builder()
             .timeout(Duration::from_secs(15))
             .build()
             .map_err(|e| format!("deepgram auth http client: {e}"))?;
-        Ok(Self { token_url: token_url.into(), client, cached: None })
+        Ok(Self { token_url, license, client, cached: None })
     }
 }
 
@@ -62,10 +86,18 @@ impl DeepgramAuth for EphemeralTokenAuth {
                 return Ok(format!("Bearer {token}"));
             }
         }
+        // No entitled licence → no mint. Degrading here is correct: the alternative is an
+        // anonymous request against a spend-bearing endpoint.
+        let license = (self.license)().ok_or_else(|| {
+            "no active licence on this device — meeting transcription needs a verified \
+             subscription"
+                .to_string()
+        })?;
         let resp = self
             .client
             .post(&self.token_url)
             .header("Accept", "application/json")
+            .header("Authorization", format!("Bearer {license}"))
             .send()
             .map_err(|e| format!("asr token fetch failed: {e}"))?;
         if !resp.status().is_success() {
@@ -181,6 +213,7 @@ pub fn resolve_auth() -> Result<Box<dyn DeepgramAuth>, String> {
     if let Ok(url) = std::env::var("SHOGUN_ASR_TOKEN_URL") {
         let url = url.trim().to_string();
         if !url.is_empty() {
+            // `EphemeralTokenAuth::new` enforces https and attaches the licence token.
             return Ok(Box::new(EphemeralTokenAuth::new(url)?));
         }
     }
@@ -749,6 +782,30 @@ mod tests {
             Err(e) => e,
         };
         assert!(err.contains("mip_opt_out"));
+    }
+
+    #[test]
+    fn the_mint_url_must_be_https() {
+        // A bearer credential goes out on this request; plain HTTP would publish it.
+        // Not `unwrap_err()`: the struct deliberately has no Debug impl, because it caches the
+        // minted Deepgram token and a derived Debug would print it.
+        let err = match EphemeralTokenAuth::new("http://mint.example/asr/token") {
+            Ok(_) => panic!("plain-http mint URL should be refused"),
+            Err(e) => e,
+        };
+        assert!(err.contains("https"), "{err}");
+        assert!(EphemeralTokenAuth::new("https://mint.example/asr/token").is_ok());
+    }
+
+    #[test]
+    fn the_mint_refuses_to_send_without_an_entitled_licence() {
+        // The endpoint spends the company Deepgram key. No licence → no request at all, rather
+        // than an anonymous one that a leaked URL could replay.
+        let mut auth =
+            EphemeralTokenAuth::with_license_source("https://mint.example/asr/token", || None)
+                .unwrap();
+        let err = auth.authorization_header().unwrap_err();
+        assert!(err.contains("licence"), "{err}");
     }
 
     #[test]

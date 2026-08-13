@@ -1,8 +1,9 @@
 name: ci
 
-# Three jobs: (1) pure crates (shogun-core + spike-harness) — platform-independent, tested
+# Four jobs: (1) pure crates (shogun-core + spike-harness) — platform-independent, tested
 # and clippy-checked on Linux; (2) desktop frontend typecheck/build; (3) the macOS/arm64
-# shell — compile + clippy only (the on-device MEASUREMENTS need a physical notch Mac).
+# shell — compile + clippy only (the on-device MEASUREMENTS need a physical notch Mac);
+# (4) the batch relay (apps/api) — the one process that holds the operator's Anthropic key.
 # Phase 1 (docs/phase1-implementation-plan.md) grows the pure-crate job as shogun-core,
 # shogun-memory, shogun-fusion, etc. come online — all covered by the workspace commands.
 
@@ -18,15 +19,22 @@ on:
     paths:
       - "crates/**"
       - "apps/desktop/**"
+      - "apps/api/**"
       - "packages/**"
+      - "scripts/**"
       - "Cargo.toml"
-      - ".github/workflows/ci.yml"
+      - ".github/workflows/**"
   pull_request:
     paths:
       - "crates/**"
       - "apps/desktop/**"
+      - "apps/api/**"
       - "packages/**"
+      # The invariant guards live here. Without this filter a PR that weakens a guard — or the
+      # workflow that runs it — is the one PR that never gets checked by it.
+      - "scripts/**"
       - "Cargo.toml"
+      - ".github/workflows/**"
 
 # Supersede in-flight runs: a new push/PR-sync cancels the previous run for the same ref, so
 # rapid pushes stop piling expensive (macos-14) jobs on top of each other.
@@ -108,6 +116,23 @@ jobs:
       - run: pnpm --filter @shogun-ai/tokens build
       - run: pnpm --filter @shogun-ai/desktop typecheck
       - run: pnpm --filter @shogun-ai/desktop build:vite
+
+  api:
+    name: batch relay (typecheck + test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # The relay holds the ONLY copy of the operator's Anthropic key (docs/batch-relay-design.md
+      # §2.1), and its suite is where the licence verification, the batch-ownership check and the
+      # spend cap are pinned. Before this job existed none of it ran anywhere.
+      - run: pnpm --filter @shogun-ai/api typecheck
+      - run: pnpm --filter @shogun-ai/api test
 
   macos-build:
     name: macOS shell (compile on Apple Silicon)

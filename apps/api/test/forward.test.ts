@@ -41,7 +41,7 @@ describe("forwarding", () => {
   it("passes an in-progress status through as {status, completed, total} (§4.3)", async () => {
     const rig = await makeRig();
     // The ownership check reads the store before the gateway — register rb_1 as this licence's.
-    await rig.usage.record("lic_test_1", "2026-08-13", 1, "rb_1");
+    await rig.usage.attachBatch("rb_1", "lic_test_1", "2026-08-13", 1);
     rig.gateway.status = {
       id: "rb_1",
       processing_status: "in_progress",
@@ -58,7 +58,7 @@ describe("forwarding", () => {
   it("streams ended results as relay-shaped JSON keyed by custom_id (§4.3)", async () => {
     const rig = await makeRig();
     // The ownership check reads the store before the gateway — register rb_1 as this licence's.
-    await rig.usage.record("lic_test_1", "2026-08-13", 1, "rb_1");
+    await rig.usage.attachBatch("rb_1", "lic_test_1", "2026-08-13", 1);
     rig.gateway.status = {
       id: "rb_1",
       processing_status: "ended",

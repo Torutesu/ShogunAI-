@@ -28,19 +28,36 @@ export interface RelayBatchRequest {
   items: RelayBatchItem[];
 }
 
+/** Ceiling on items per submission. The nightly Dream Cycle submits its whole night in one
+ * call, so this is generous — it exists to stop one request from becoming an unbounded fan-out
+ * against the operator's key, not to shape normal traffic. */
+export const MAX_ITEMS = 1000;
+
+/** Ceiling on one chunk, in UTF-8 bytes. The largest legitimate chunk is a whole meeting
+ * transcript folded into a single recap prompt; 256 KB covers a very long meeting. */
+export const MAX_CHUNK_BYTES = 256 * 1024;
+
+/** Ceiling on a `custom_id`. It is an opaque key the device chooses (an event id, a session
+ * id) and is echoed back verbatim. */
+export const MAX_CUSTOM_ID_BYTES = 256;
+
 /** Parse + validate an unknown JSON body into a RelayBatchRequest, or return an error string. */
 export function parseRelayBatchRequest(body: unknown): RelayBatchRequest | string {
   if (typeof body !== "object" || body === null) return "body must be a JSON object";
   const b = body as Record<string, unknown>;
   if (typeof b.purpose !== "string" || b.purpose.length === 0) return "purpose must be a non-empty string";
+  if (b.purpose.length > MAX_CUSTOM_ID_BYTES) return "purpose is too long";
   if (!isModelClass(b.model_class)) return "model_class must be one of classify|summarize|brief";
   if (!Array.isArray(b.items) || b.items.length === 0) return "items must be a non-empty array";
+  if (b.items.length > MAX_ITEMS) return `items must hold at most ${MAX_ITEMS} entries`;
   const items: RelayBatchItem[] = [];
   for (const raw of b.items) {
     if (typeof raw !== "object" || raw === null) return "each item must be an object";
     const it = raw as Record<string, unknown>;
     if (typeof it.custom_id !== "string" || it.custom_id.length === 0) return "each item needs a custom_id";
+    if (Buffer.byteLength(it.custom_id, "utf8") > MAX_CUSTOM_ID_BYTES) return "a custom_id is too long";
     if (typeof it.chunk !== "string" || it.chunk.length === 0) return "each item needs a chunk";
+    if (Buffer.byteLength(it.chunk, "utf8") > MAX_CHUNK_BYTES) return "a chunk is too large";
     items.push({ custom_id: it.custom_id, chunk: it.chunk });
   }
   return { purpose: b.purpose, model_class: b.model_class, items };
