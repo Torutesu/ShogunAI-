@@ -25,5 +25,8 @@ COMMIT;
 
 ## 注意
 
-72時間の自動削除は `screen_frames::purge_older_than`（`daemon` から駆動）。ロールバック後は
-この purge 対象が存在しなくなるので、呼び出し側も V12 以前に戻すこと。
+自動削除は `Db::purge_screen_frames`（`daemon` から駆動）。72時間の期限切れに加えて
+バイト上限（`retention::FRAME_MAX_BYTES`）でも古い順に退避する。**どちらの経路も画像行だけを
+消し、リンクした `screen_ocr` イベントは残す** —— 期限切れが retire するのは画像であって、
+そこから取り出したテキストではない。ロールバック後はこの sweep 対象が存在しなくなるので、
+呼び出し側も V12 以前に戻すこと。
