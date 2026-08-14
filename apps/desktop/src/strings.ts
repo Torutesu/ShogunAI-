@@ -15,7 +15,7 @@ export const STRINGS = {
     openPanel: "Open ShogunAI (⌥J)",
     // welcome (expanded, empty thread)
     welcomeTitle: "What can I take off your plate?",
-    welcomeSub: "Ask about your work, or tap ⌥ (Option) in any app to draft where you're typing.",
+    welcomeSub: "Ask about your work, or tap right ⌥ (Option) in any app to draft where you're typing.",
     noKey: "No key yet — add one in settings for real answers.",
     // composer
     ask: "Ask ShogunAI…",
@@ -112,7 +112,7 @@ export const STRINGS = {
     stayOpenHint: "Keep the panel open until you close it.",
     autoHideHint: "Slide back to the notch when you move away.",
     draftShortcut: "Draft with ShogunAI",
-    draftFixedHint: "Tap ⌥ (Option) alone — always on, not rebindable.",
+    draftFixedHint: "Tap right ⌥ (Option) alone — always on, not rebindable.",
     summonShortcut: "Show / hide overlay",
     quitShortcut: "Quit",
     shortcuts: "Shortcuts",
@@ -405,7 +405,7 @@ export const STRINGS = {
         "SHOGUN builds your work context from on-screen text through macOS Accessibility. It reads text only — never images, never your keystrokes — and the context is built on this Mac.",
       doTitle: "What this turns on",
       doItems: [
-        "Draft right where you're typing — tap ⌥ (Option) in any app.",
+        "Draft right where you're typing — tap right ⌥ (Option) in any app.",
         "Open the notch panel and act on what you're looking at.",
         "Answer from the memory it builds of your work.",
       ],
@@ -440,7 +440,7 @@ export const STRINGS = {
       // success (permission granted)
       successTitle: "You're set",
       successLead:
-        "SHOGUN can read your screen now. Reach it two ways: tap ⌥ (Option) in any app, or rest your cursor on the notch.",
+        "SHOGUN can read your screen now. Reach it two ways: tap right ⌥ (Option) in any app, or rest your cursor on the notch.",
       successCta: "Open SHOGUN",
     },
   },

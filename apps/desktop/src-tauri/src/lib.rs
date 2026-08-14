@@ -1601,7 +1601,7 @@ pub(crate) fn float_on_all_spaces(win: &tauri::WebviewWindow) {
     }
 }
 
-/// TAP ⌥ (Option) alone → draft at the cursor. Semantics of a "tap": Option goes down with no
+/// TAP right ⌥ (Option) alone → draft at the cursor. Semantics of a "tap": right Option goes down with no
 /// other modifier, no other key is pressed while it is held, and it is released within 500ms.
 /// That keeps every normal Option use intact — ⌥J summon, ⌥-arrow word nav, ⌥+letter special
 /// characters — because any keyDown while Option is held disarms the tap. Uses NSEvent GLOBAL
@@ -1634,6 +1634,7 @@ fn watch_option_tap(app: &tauri::App) {
     const FLAG_OPTION: usize = 1 << 19; // NSEventModifierFlagOption
     // shift | control | command | fn — any of these joining the chord disqualifies the tap.
     const FLAG_OTHERS: usize = (1 << 17) | (1 << 18) | (1 << 20) | (1 << 23);
+    const RIGHT_OPTION_KEY_CODE: u16 = 61;
     const MAX_TAP_MS: u128 = 500;
 
     /// Any non-Option input during the hold kills the tap until Option is released.
@@ -1663,6 +1664,7 @@ fn watch_option_tap(app: &tauri::App) {
                 return;
             }
             let flags: usize = msg_send![ev, modifierFlags];
+            let key_code: u16 = msg_send![ev, keyCode];
             let option_down = flags & FLAG_OPTION != 0;
             let others_down = flags & FLAG_OTHERS != 0;
             let opt_prev = OPT_PREV.swap(option_down, Ordering::Relaxed);
@@ -1672,7 +1674,20 @@ fn watch_option_tap(app: &tauri::App) {
                 poison();
                 return;
             }
+            if key_code != RIGHT_OPTION_KEY_CODE && ARMED.load(Ordering::Relaxed) {
+                // Pressing or releasing left Option during a right-Option hold is still a chord.
+                poison();
+                return;
+            }
             if option_down && !opt_prev {
+                if key_code != RIGHT_OPTION_KEY_CODE {
+                    // Left Option is ordinary keyboard input, never SHOGUN's refine trigger.
+                    poison();
+                    if let Ok(mut g) = DOWN_AT.lock() {
+                        *g = None;
+                    }
+                    return;
+                }
                 // Genuine Option DOWN edge with nothing else held: start a fresh, clean hold.
                 POISONED.store(false, Ordering::Relaxed);
                 ARMED.store(true, Ordering::Relaxed);
@@ -1684,8 +1699,12 @@ fn watch_option_tap(app: &tauri::App) {
                 let armed = ARMED.swap(false, Ordering::Relaxed);
                 let poisoned = POISONED.swap(false, Ordering::Relaxed);
                 let held = DOWN_AT.lock().ok().and_then(|g| *g).map(|t| t.elapsed().as_millis());
-                if armed && !poisoned && held.is_some_and(|h| h <= MAX_TAP_MS) {
-                    eprintln!("[shell] ⌥ tap — draft at cursor");
+                if key_code == RIGHT_OPTION_KEY_CODE
+                    && armed
+                    && !poisoned
+                    && held.is_some_and(|h| h <= MAX_TAP_MS)
+                {
+                    eprintln!("[shell] right ⌥ tap — draft at cursor");
                     use tauri::Manager;
                     if let Some(db) = handle.try_state::<shogun_core::daemon::Db>() {
                         // The ⌥-tap is the fastest path in the product: read the pack the focus
@@ -1708,7 +1727,7 @@ fn watch_option_tap(app: &tauri::App) {
         if key_mon.is_null() || mouse_mon.is_null() || flags_mon.is_null() {
             eprintln!("[shell] ⌥-tap monitor failed to install (accessibility permission?)");
         } else {
-            eprintln!("[shell] ⌥ tap-to-draft installed (tap Option alone, <0.5s, no other input)");
+            eprintln!("[shell] right ⌥ tap-to-draft installed (<0.5s, no other input)");
         }
     }
 }
