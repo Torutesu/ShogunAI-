@@ -12,6 +12,7 @@
 //! shared approval queue and returns pending, never running without a UI confirm (FR-API-04).
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 use serde_json::{json, Value};
@@ -24,7 +25,8 @@ use crate::rest;
 use crate::visual_recall_api::{is_structured_read, render_structured};
 
 /// The MCP protocol version this server speaks.
-pub const PROTOCOL_VERSION: &str = "2024-11-05";
+pub const PROTOCOL_VERSION: &str = "2025-11-25";
+pub const DESKTOP_UNAVAILABLE_MESSAGE: &str = "SHOGUN app not running; tool calls unavailable.";
 
 /// The MCP server: a backend, the shared approval queue, and a clock.
 pub struct McpServer<B: MemoryBackend> {
@@ -34,6 +36,8 @@ pub struct McpServer<B: MemoryBackend> {
     approvals_path: Option<PathBuf>,
     approvals_load_error: Option<String>,
     clock: Box<dyn Fn() -> i64 + Send + Sync>,
+    desktop_running: Box<dyn Fn() -> bool + Send + Sync>,
+    codex_names: AtomicBool,
 }
 
 impl<B: MemoryBackend> McpServer<B> {
@@ -44,7 +48,18 @@ impl<B: MemoryBackend> McpServer<B> {
             approvals_path: None,
             approvals_load_error: None,
             clock: Box::new(clock),
+            desktop_running: Box::new(|| true),
+            codex_names: AtomicBool::new(false),
         }
+    }
+
+    /// Gate tool execution on desktop liveness while keeping MCP discovery connected.
+    pub fn with_desktop_running_check(
+        mut self,
+        check: impl Fn() -> bool + Send + Sync + 'static,
+    ) -> Self {
+        self.desktop_running = Box::new(check);
+        self
     }
 
     /// Persist L3 pending approvals to `path` (shared with the desktop app).
@@ -66,10 +81,23 @@ impl<B: MemoryBackend> McpServer<B> {
             Err(_) => return Some(error(Value::Null, -32700, "parse error")),
         };
         let id = req.get("id").cloned();
-        let method = req.get("method").and_then(Value::as_str).unwrap_or_default();
+        let method = req
+            .get("method")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
 
         match method {
-            "initialize" => id.map(|id| result(id, self.initialize())),
+            "initialize" => id.map(|id| {
+                let requested_version = req
+                    .pointer("/params/protocolVersion")
+                    .and_then(Value::as_str);
+                let is_codex = req
+                    .pointer("/params/clientInfo/name")
+                    .and_then(Value::as_str)
+                    .is_some_and(|name| name.to_ascii_lowercase().contains("codex"));
+                self.codex_names.store(is_codex, Ordering::Relaxed);
+                result(id, self.initialize(requested_version))
+            }),
             // notifications carry no id and get no response.
             "notifications/initialized" | "notifications/cancelled" => None,
             "tools/list" => id.map(|id| result(id, self.tools_list())),
@@ -79,41 +107,75 @@ impl<B: MemoryBackend> McpServer<B> {
         }
     }
 
-    fn initialize(&self) -> Value {
+    fn initialize(&self, requested_version: Option<&str>) -> Value {
         json!({
-            "protocolVersion": PROTOCOL_VERSION,
+            "protocolVersion": requested_version.unwrap_or(PROTOCOL_VERSION),
             "capabilities": { "tools": {} },
             "serverInfo": { "name": "shogun-memory", "version": env!("CARGO_PKG_VERSION") },
         })
     }
 
     fn tools_list(&self) -> Value {
-        let mut tools: Vec<Value> = ALL_TOOLS.iter().map(|t| tool_descriptor(*t)).collect();
+        let codex_names = self.codex_names.load(Ordering::Relaxed);
+        let mut tools: Vec<Value> = ALL_TOOLS
+            .iter()
+            .map(|t| tool_descriptor(*t, codex_names))
+            .collect();
         tools.push(json!({
-            "name": "actions.poll",
+            "name": if codex_names { "actions_poll" } else { "actions.poll" },
             "description": "Poll durable status for an L3 action approval",
-            "inputSchema": { "type": "object", "properties": { "approval_id": { "type": "integer", "minimum": 1 } }, "required": ["approval_id"] }
+            "inputSchema": { "type": "object", "properties": { "approval_id": { "type": "integer", "minimum": 1 } }, "required": ["approval_id"] },
+            "annotations": {
+                "readOnlyHint": true,
+                "destructiveHint": false,
+                "idempotentHint": true,
+                "openWorldHint": false
+            }
         }));
         json!({ "tools": tools })
     }
 
     fn tools_call(&self, id: Value, params: Option<&Value>) -> String {
+        if !(self.desktop_running)() {
+            return result(
+                id,
+                json!({
+                    "content": [{ "type": "text", "text": DESKTOP_UNAVAILABLE_MESSAGE }],
+                    "isError": true
+                }),
+            );
+        }
         let Some(params) = params else {
             return error(id, -32602, "missing params");
         };
-        let name = params.get("name").and_then(Value::as_str).unwrap_or_default();
+        let name = params
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         let args = params.get("arguments").cloned().unwrap_or(json!({}));
-        if name == "actions.poll" {
-            return result(id, json!({ "content": [{ "type": "text", "text": self.poll_action(&args) }], "isError": false }));
+        if matches!(name, "actions.poll" | "actions_poll") {
+            return result(
+                id,
+                json!({ "content": [{ "type": "text", "text": self.poll_action(&args) }], "isError": false }),
+            );
         }
-        let Some(tool) = Tool::from_wire(name) else {
+        let tool = Tool::from_wire(name).or_else(|| {
+            ALL_TOOLS
+                .iter()
+                .copied()
+                .find(|tool| tool.wire_name().replace('.', "_") == name)
+        });
+        let Some(tool) = tool else {
             return error(id, -32602, "unknown tool");
         };
         let text = match tool_level(tool) {
             ApiLevel::Read => {
                 let read_params = ReadParams {
                     id: args.get("id").and_then(Value::as_i64),
-                    query: args.get("query").and_then(Value::as_str).map(str::to_string),
+                    query: args
+                        .get("query")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
                     from_ms: args.get("from_ms").and_then(Value::as_i64),
                     to_ms: args.get("to_ms").and_then(Value::as_i64),
                 };
@@ -123,14 +185,20 @@ impl<B: MemoryBackend> McpServer<B> {
                         .map(|json| render_structured(tool, &json))
                         .unwrap_or_else(|| r#"{"error":"unavailable"}"#.to_string())
                 } else {
-                    let include_low = args.get("include_low").and_then(Value::as_bool).unwrap_or(false);
+                    let include_low = args
+                        .get("include_low")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
                     let items = self.backend.read(tool, &read_params);
                     rest::render_reads(tool, &items, include_low)
                 }
             }
             ApiLevel::Write(_) => {
                 let body = if tool == Tool::MemoryAppendNote {
-                    args.get("text").and_then(Value::as_str).unwrap_or_default().to_string()
+                    args.get("text")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string()
                 } else if matches!(
                     tool,
                     Tool::VisualRecallSetEnabled | Tool::VisualRecallDeleteFrame | Tool::ProfileSet
@@ -155,10 +223,15 @@ impl<B: MemoryBackend> McpServer<B> {
                         let query = v.get("query").and_then(Value::as_str).unwrap_or_default();
                         let items = self.backend.read(
                             Tool::MemorySearch,
-                            &ReadParams { query: Some(query.to_string()), ..ReadParams::default() },
+                            &ReadParams {
+                                query: Some(query.to_string()),
+                                ..ReadParams::default()
+                            },
                         );
                         let rendered = rest::render_reads(Tool::MemorySearch, &items, false);
-                        format!(r#"{{"executed":"local","level":"L1","kind":"local_search","results":{rendered}}}"#)
+                        format!(
+                            r#"{{"executed":"local","level":"L1","kind":"local_search","results":{rendered}}}"#
+                        )
                     } else {
                         self.execute_action(&body, now)
                     }
@@ -169,17 +242,28 @@ impl<B: MemoryBackend> McpServer<B> {
         };
 
         // MCP tool results are content blocks; we return the tool's JSON as a text block.
-        result(id, json!({ "content": [{ "type": "text", "text": text }], "isError": false }))
+        result(
+            id,
+            json!({ "content": [{ "type": "text", "text": text }], "isError": false }),
+        )
     }
 
     fn poll_action(&self, args: &Value) -> String {
-        let Some(id) = args.get("approval_id").and_then(Value::as_u64).map(ApprovalId) else {
+        let Some(id) = args
+            .get("approval_id")
+            .and_then(Value::as_u64)
+            .map(ApprovalId)
+        else {
             return r#"{"error":"missing_approval_id"}"#.to_string();
         };
         if let Some(path) = &self.approvals_path {
-            match approval_store::with_queue(path, |queue| rest::poll_approval(id.0, queue, (self.clock)())) {
+            match approval_store::with_queue(path, |queue| {
+                rest::poll_approval(id.0, queue, (self.clock)())
+            }) {
                 Ok(body) => return body,
-                Err(error) => return format!(r#"{{"error":"approval_store","message":{}}}"#, json!(error)),
+                Err(error) => {
+                    return format!(r#"{{"error":"approval_store","message":{}}}"#, json!(error))
+                }
             }
         } else {
             if let Ok(mut queue) = self.approvals.lock() {
@@ -201,7 +285,12 @@ impl<B: MemoryBackend> McpServer<B> {
                     if let Ok(mut guard) = self.approvals.lock() {
                         *guard = match approval_store::load_queue(path) {
                             Ok(queue) => queue,
-                            Err(error) => return format!(r#"{{"error":"approval_store","message":{}}}"#, json!(error)),
+                            Err(error) => {
+                                return format!(
+                                    r#"{{"error":"approval_store","message":{}}}"#,
+                                    json!(error)
+                                )
+                            }
                         };
                     }
                     text
@@ -249,14 +338,14 @@ fn error(id: Value, code: i64, message: &str) -> String {
 }
 
 /// A minimal MCP tool descriptor (name + description + a permissive input schema).
-fn tool_descriptor(tool: Tool) -> Value {
+fn tool_descriptor(tool: Tool, codex_names: bool) -> Value {
     let (desc, props): (&str, Value) = match tool {
         Tool::MemorySearch => (
             "Hybrid search over captured events and notes. Use for a specific question or keyword recall. Prefer profile.whoami for identity/prefs and memory.get_context for a compact work snapshot.",
             json!({ "query": { "type": "string" } }),
         ),
         Tool::MemoryGetContext => (
-            "DB-derived work context snapshot (state facts + recent user notes). Live AX Notch screen cache is NOT available to standalone MCP — use this for orientation, then memory.search for specifics.",
+            "DB-derived work context snapshot (state facts, recent user notes, and compact recent activity excerpts). Live AX Notch screen cache is NOT available to standalone MCP — use this for orientation, then memory.search for specifics.",
             json!({}),
         ),
         Tool::StatePeopleGet
@@ -330,9 +419,19 @@ fn tool_descriptor(tool: Tool) -> Value {
         json!({ "type": "object", "properties": props })
     };
     json!({
-        "name": tool.wire_name(),
+        "name": if codex_names {
+            tool.wire_name().replace('.', "_")
+        } else {
+            tool.wire_name().to_string()
+        },
         "description": desc,
         "inputSchema": input_schema,
+        "annotations": {
+            "readOnlyHint": matches!(tool_level(tool), ApiLevel::Read),
+            "destructiveHint": matches!(tool, Tool::VisualRecallDeleteFrame | Tool::ActionsExecute),
+            "idempotentHint": matches!(tool_level(tool), ApiLevel::Read),
+            "openWorldHint": tool == Tool::ActionsExecute,
+        },
     })
 }
 
@@ -345,7 +444,11 @@ mod tests {
     impl MemoryBackend for Fake {
         fn read(&self, tool: Tool, _p: &ReadParams) -> Vec<ReadItem> {
             if tool == Tool::StateCommitmentsList {
-                vec![ReadItem::new("ship v1", 0.9), ReadItem::new("maybe refactor", 0.6), ReadItem::new("shaky", 0.3)]
+                vec![
+                    ReadItem::new("ship v1", 0.9),
+                    ReadItem::new("maybe refactor", 0.6),
+                    ReadItem::new("shaky", 0.3),
+                ]
             } else {
                 Vec::new()
             }
@@ -370,19 +473,58 @@ mod tests {
 
     #[test]
     fn initialize_reports_protocol_and_server_info() {
-        let v = call(&server(), r#"{"jsonrpc":"2.0","id":1,"method":"initialize"}"#);
+        let v = call(
+            &server(),
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize"}"#,
+        );
         assert_eq!(v["result"]["protocolVersion"], PROTOCOL_VERSION);
         assert_eq!(v["result"]["serverInfo"]["name"], "shogun-memory");
     }
 
     #[test]
+    fn initialize_echoes_client_protocol_version() {
+        let v = call(
+            &server(),
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}"#,
+        );
+        assert_eq!(v["result"]["protocolVersion"], "2025-06-18");
+    }
+
+    #[test]
+    fn codex_gets_valid_underscore_tool_names_and_can_call_them() {
+        let server = server();
+        let _ = call(
+            &server,
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","clientInfo":{"name":"codex-mcp-client","version":"1"}}}"#,
+        );
+        let listed = call(&server, r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#);
+        let tools = listed["result"]["tools"].as_array().unwrap();
+        assert!(tools
+            .iter()
+            .all(|tool| !tool["name"].as_str().unwrap().contains('.')));
+        assert!(tools.iter().any(|tool| tool["name"] == "profile_whoami"));
+        assert!(tools.iter().any(|tool| tool["name"] == "actions_poll"));
+
+        let called = call(
+            &server,
+            r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"state_commitments_list","arguments":{}}}"#,
+        );
+        assert_eq!(called["result"]["isError"], false);
+    }
+
+    #[test]
     fn notifications_get_no_response() {
-        assert!(server().handle_line(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#).is_none());
+        assert!(server()
+            .handle_line(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#)
+            .is_none());
     }
 
     #[test]
     fn tools_list_has_all_tools() {
-        let v = call(&server(), r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#);
+        let v = call(
+            &server(),
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#,
+        );
         let tools = v["result"]["tools"].as_array().unwrap();
         assert_eq!(tools.len(), 22);
         assert!(tools.iter().any(|t| t["name"] == "memory.search"));
@@ -392,6 +534,26 @@ mod tests {
         assert!(tools.iter().any(|t| t["name"] == "actions.execute"));
         let poll = tools.iter().find(|t| t["name"] == "actions.poll").unwrap();
         assert_eq!(poll["inputSchema"]["required"], json!(["approval_id"]));
+    }
+
+    #[test]
+    fn desktop_absent_keeps_discovery_but_rejects_tool_calls() {
+        let server = McpServer::new(Fake, || 1000).with_desktop_running_check(|| false);
+        let initialized = call(&server, r#"{"jsonrpc":"2.0","id":1,"method":"initialize"}"#);
+        assert_eq!(initialized["result"]["serverInfo"]["name"], "shogun-memory");
+        let listed = call(&server, r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#);
+        assert!(listed["result"]["tools"].is_array());
+
+        let called = call(
+            &server,
+            r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"profile.whoami","arguments":{}}}"#,
+        );
+        assert_eq!(called["result"]["isError"], true);
+        assert_eq!(
+            called["result"]["content"][0]["text"],
+            DESKTOP_UNAVAILABLE_MESSAGE
+        );
+        assert!(called.get("error").is_none());
     }
 
     #[test]
@@ -448,13 +610,39 @@ mod tests {
     fn poll_expires_pending_and_persists_timed_out_status() {
         let path = std::env::temp_dir().join(format!("mcp-timeout-{}.json", std::process::id()));
         let _ = std::fs::remove_file(&path);
-        let send = shogun_agents::permission::SendAction::SendEmail { to: "a@b.com".into() };
-        let id = crate::approval_store::with_queue(&path, |q| q.request(send.clone(), shogun_agents::approval::Preview::for_send(&send, "body", shogun_agents::approval::Route::ViaComposio), shogun_agents::approval::Origin::AiApi, 0)).unwrap();
-        let server = McpServer::new(Fake, || shogun_agents::approval::APPROVAL_TIMEOUT_MS as i64 + 1).with_approvals_path(path.clone());
-        let response = call(&server, &format!(r#"{{"jsonrpc":"2.0","id":77,"method":"tools/call","params":{{"name":"actions.poll","arguments":{{"approval_id":{}}}}}}}"#, id.0));
+        let send = shogun_agents::permission::SendAction::SendEmail {
+            to: "a@b.com".into(),
+        };
+        let id = crate::approval_store::with_queue(&path, |q| {
+            q.request(
+                send.clone(),
+                shogun_agents::approval::Preview::for_send(
+                    &send,
+                    "body",
+                    shogun_agents::approval::Route::ViaComposio,
+                ),
+                shogun_agents::approval::Origin::AiApi,
+                0,
+            )
+        })
+        .unwrap();
+        let server = McpServer::new(Fake, || {
+            shogun_agents::approval::APPROVAL_TIMEOUT_MS as i64 + 1
+        })
+        .with_approvals_path(path.clone());
+        let response = call(
+            &server,
+            &format!(
+                r#"{{"jsonrpc":"2.0","id":77,"method":"tools/call","params":{{"name":"actions.poll","arguments":{{"approval_id":{}}}}}}}"#,
+                id.0
+            ),
+        );
         let text = response["result"]["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("\"status\":\"timed_out\""));
-        assert_eq!(crate::approval_store::load_queue(&path).unwrap().status(id), Some(shogun_agents::approval::ApprovalStatus::TimedOut));
+        assert_eq!(
+            crate::approval_store::load_queue(&path).unwrap().status(id),
+            Some(shogun_agents::approval::ApprovalStatus::TimedOut)
+        );
         let _ = std::fs::remove_file(&path);
     }
 
@@ -476,7 +664,10 @@ mod tests {
             r#"{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"nope","arguments":{}}}"#,
         );
         assert_eq!(v["error"]["code"], -32602);
-        let v = call(&server(), r#"{"jsonrpc":"2.0","id":7,"method":"frobnicate"}"#);
+        let v = call(
+            &server(),
+            r#"{"jsonrpc":"2.0","id":7,"method":"frobnicate"}"#,
+        );
         assert_eq!(v["error"]["code"], -32601);
     }
 

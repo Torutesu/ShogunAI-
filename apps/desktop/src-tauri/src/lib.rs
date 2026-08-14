@@ -12,37 +12,38 @@ mod audio_lane;
 pub mod axcache;
 // Turbo model fetch resolves the on-device path and delegates the HTTPS download to shogun-core's
 // traced egress (model_asset). On-device only, matching where the audio lane lives.
-#[cfg(target_os = "macos")]
-mod model_fetch;
+mod analytics;
 mod capture_source;
 mod connectors;
-#[cfg(all(target_os = "macos", feature = "visual-recall-ocr"))]
-mod screen_ocr;
+mod desktop_heartbeat;
 pub mod display;
+mod dock_visibility;
 mod dream;
 mod exclusions;
 mod fullui;
-mod metrics;
 mod geometry;
 mod hover;
 mod inline_source;
 mod integrate;
-mod dock_visibility;
-mod notch_status_visibility;
 mod launch_at_login;
 pub mod meeting;
-mod meeting_recap;
 #[cfg(target_os = "macos")]
 mod meeting_live_summary;
+mod meeting_recap;
 #[cfg(target_os = "macos")]
 mod meeting_translate;
+mod memory_api_settings;
+mod metrics;
 mod mic;
-mod analytics;
+#[cfg(target_os = "macos")]
+mod model_fetch;
 mod notch_actions;
 mod notch_exec;
+mod notch_status_visibility;
 mod onboarding;
+#[cfg(all(target_os = "macos", feature = "visual-recall-ocr"))]
+mod screen_ocr;
 mod visual_recall;
-mod memory_api_settings;
 #[cfg(target_os = "macos")]
 mod voice_lane;
 #[cfg(target_os = "macos")]
@@ -100,7 +101,9 @@ static CASTLE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0)
 /// The current Castle Position read from the atomic (default `Notch`).
 #[cfg(target_os = "macos")]
 fn current_castle() -> shogun_core::notch::geometry::CastlePosition {
-    shogun_core::notch::geometry::CastlePosition::from_u8(CASTLE.load(std::sync::atomic::Ordering::Relaxed))
+    shogun_core::notch::geometry::CastlePosition::from_u8(
+        CASTLE.load(std::sync::atomic::Ordering::Relaxed),
+    )
 }
 
 /// The NATIVE NSPanel that actually hosts the webview content on screen. The tauri/tao window
@@ -144,125 +147,125 @@ pub fn run() {
         )
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
-        integrate::mac::painted,
-        integrate::mac::interact,
-        integrate::mac::promote,
-        integrate::mac::hotkey,
-        integrate::mac::open_full_ui,
-        integrate::mac::anim_done,
-        integrate::mac::collapse_request,
-        integrate::mac::clock_sync_ack,
-        integrate::mac::focus_field,
-        meeting::mac::meeting_status,
-        meeting::mac::meeting_start,
-        meeting::mac::meeting_not_now,
-        meeting::mac::meeting_stop,
-        meeting::mac::meeting_toggle_pause,
-        meeting::mac::meeting_save_note,
-        meeting::mac::meeting_recap,
-        meeting::mac::meeting_recap_minutes,
-        meeting::mac::meeting_select_kk_configured,
-        #[cfg(target_os = "macos")]
-        meeting_live_summary::meeting_request_live_summary,
-        meeting::mac::get_deepgram_key_status,
-        meeting::mac::set_deepgram_key,
-        meeting::mac::clear_deepgram_key,
-        meeting::mac::get_meeting_transcript,
-        meeting::mac::meeting_exclude_app,
-        meeting::mac::meeting_include_app,
-        meeting::mac::meeting_drag,
-        meeting::mac::meeting_wrapped,
-        meeting::mac::get_meeting_settings,
-        meeting::mac::set_meeting_enabled,
-        meeting::mac::set_meeting_allow_mic_only,
-        meeting::mac::set_meeting_mode,
-        meeting::mac::set_meeting_langs,
-        meeting::mac::meeting_overlay_dismiss,
-        meeting::mac::meeting_set_overlay_panel,
-        meeting::mac::meeting_set_overlay_canvas,
-        meeting::mac::meeting_set_overlay_chat,
-        meeting::mac::meeting_set_overlay_size,
-        visual_recall::mac::get_visual_recall_settings,
-        visual_recall::mac::set_visual_recall_enabled,
-        visual_recall::mac::get_visual_recall_status,
-        visual_recall::mac::list_screen_frames,
-        visual_recall::mac::get_screen_frame_image,
-        visual_recall::mac::delete_screen_frame,
-        visual_recall::mac::open_visual_recall,
-        memory_api_settings::mac::memory_api_settings,
-        memory_api_settings::mac::set_memory_api_enabled,
-        memory_api_settings::mac::set_memory_api_profile,
-        memory_api_settings::mac::issue_memory_api_token,
-        memory_api_settings::mac::revoke_memory_api_token,
-        notch_actions::mac::notch_actions,
-        notch_exec::mac::run_notch_action,
-        notch_exec::mac::confirm_notch_action,
-        inline_source::mac::inline_at_cursor,
-        inline_source::mac::shogun_status,
-        inline_source::mac::shogun_state,
-        inline_source::mac::shogun_chat,
-        inline_source::mac::quit_app,
-        inline_source::mac::ui_log,
-        inline_source::mac::set_byok_key,
-        inline_source::mac::clear_byok_key,
-        inline_source::mac::get_llm_settings,
-        inline_source::mac::set_llm_settings,
-        inline_source::mac::resolve_state_item,
-        inline_source::mac::clear_memory,
-        shortcuts::get_shortcuts,
-        shortcuts::set_shortcut,
-        shortcuts::hide_panel,
-        castle::get_castle_position,
-        castle::set_castle_position,
-        set_panel_size,
-        start_panel_drag,
-        // First-layer connectors + the L3 send/approval queue, both rendered as sections of the
-        // in-panel Settings view (there is no separate settings window).
-        fullui::mac::full_ui_view,
-        connectors::mac::connectors_list,
-        connectors::mac::connect_service,
-        connectors::mac::disconnect_service,
-        connectors::mac::fetch_on_demand,
-        approvals::mac::submit_send,
-        approvals::mac::draft_reply,
-        approvals::mac::list_approvals,
-        approvals::mac::confirm_send,
-        approvals::mac::reject_send,
-        approvals::mac::set_composio_key,
-        approvals::mac::clear_composio_key,
-        approvals::mac::set_composio_policy,
-        approvals::mac::set_composio_user_id,
-        approvals::mac::composio_settings,
-        approvals::mac::google_oauth_settings,
-        approvals::mac::set_google_oauth_client,
-        approvals::mac::clear_google_oauth_client,
-        ai_sessions::mac::get_ai_session_import,
-        ai_sessions::mac::set_ai_session_import,
-        dream::mac::dream_status,
-        dream::mac::run_dream_now,
-        dream::mac::select_kk_configured,
-        dream::mac::set_select_kk_key,
-        dream::mac::clear_select_kk_key,
-        // First-run Accessibility permission guide (Issue #46). Own webview (onboarding.html),
-        // opened by setup_macos when trust is missing and the user hasn't skipped/completed it.
-        onboarding::mac::accessibility_status,
-        onboarding::mac::onboarding_get,
-        onboarding::mac::open_accessibility_settings,
-        onboarding::mac::onboarding_finish,
-        onboarding::mac::onboarding_event,
-        analytics::analytics_get_opt_out,
-        analytics::analytics_set_opt_out,
-        launch_at_login::mac::get_launch_at_login_settings,
-        launch_at_login::mac::set_launch_at_login_enabled,
-        dock_visibility::mac::get_dock_visible,
-        dock_visibility::mac::set_dock_visible,
-        notch_status_visibility::get_notch_status_visible,
-        notch_status_visibility::set_notch_status_visible,
-        voice_session::mac::get_voice_settings,
-        voice_session::mac::set_voice_enabled,
-        voice_session::mac::voice_dismiss,
-        voice_session::mac::voice_force_end,
-    ]);
+            integrate::mac::painted,
+            integrate::mac::interact,
+            integrate::mac::promote,
+            integrate::mac::hotkey,
+            integrate::mac::open_full_ui,
+            integrate::mac::anim_done,
+            integrate::mac::collapse_request,
+            integrate::mac::clock_sync_ack,
+            integrate::mac::focus_field,
+            meeting::mac::meeting_status,
+            meeting::mac::meeting_start,
+            meeting::mac::meeting_not_now,
+            meeting::mac::meeting_stop,
+            meeting::mac::meeting_toggle_pause,
+            meeting::mac::meeting_save_note,
+            meeting::mac::meeting_recap,
+            meeting::mac::meeting_recap_minutes,
+            meeting::mac::meeting_select_kk_configured,
+            #[cfg(target_os = "macos")]
+            meeting_live_summary::meeting_request_live_summary,
+            meeting::mac::get_deepgram_key_status,
+            meeting::mac::set_deepgram_key,
+            meeting::mac::clear_deepgram_key,
+            meeting::mac::get_meeting_transcript,
+            meeting::mac::meeting_exclude_app,
+            meeting::mac::meeting_include_app,
+            meeting::mac::meeting_drag,
+            meeting::mac::meeting_wrapped,
+            meeting::mac::get_meeting_settings,
+            meeting::mac::set_meeting_enabled,
+            meeting::mac::set_meeting_allow_mic_only,
+            meeting::mac::set_meeting_mode,
+            meeting::mac::set_meeting_langs,
+            meeting::mac::meeting_overlay_dismiss,
+            meeting::mac::meeting_set_overlay_panel,
+            meeting::mac::meeting_set_overlay_canvas,
+            meeting::mac::meeting_set_overlay_chat,
+            meeting::mac::meeting_set_overlay_size,
+            visual_recall::mac::get_visual_recall_settings,
+            visual_recall::mac::set_visual_recall_enabled,
+            visual_recall::mac::get_visual_recall_status,
+            visual_recall::mac::list_screen_frames,
+            visual_recall::mac::get_screen_frame_image,
+            visual_recall::mac::delete_screen_frame,
+            visual_recall::mac::open_visual_recall,
+            memory_api_settings::mac::memory_api_settings,
+            memory_api_settings::mac::set_memory_api_enabled,
+            memory_api_settings::mac::set_memory_api_profile,
+            memory_api_settings::mac::issue_memory_api_token,
+            memory_api_settings::mac::revoke_memory_api_token,
+            notch_actions::mac::notch_actions,
+            notch_exec::mac::run_notch_action,
+            notch_exec::mac::confirm_notch_action,
+            inline_source::mac::inline_at_cursor,
+            inline_source::mac::shogun_status,
+            inline_source::mac::shogun_state,
+            inline_source::mac::shogun_chat,
+            inline_source::mac::quit_app,
+            inline_source::mac::ui_log,
+            inline_source::mac::set_byok_key,
+            inline_source::mac::clear_byok_key,
+            inline_source::mac::get_llm_settings,
+            inline_source::mac::set_llm_settings,
+            inline_source::mac::resolve_state_item,
+            inline_source::mac::clear_memory,
+            shortcuts::get_shortcuts,
+            shortcuts::set_shortcut,
+            shortcuts::hide_panel,
+            castle::get_castle_position,
+            castle::set_castle_position,
+            set_panel_size,
+            start_panel_drag,
+            // First-layer connectors + the L3 send/approval queue, both rendered as sections of the
+            // in-panel Settings view (there is no separate settings window).
+            fullui::mac::full_ui_view,
+            connectors::mac::connectors_list,
+            connectors::mac::connect_service,
+            connectors::mac::disconnect_service,
+            connectors::mac::fetch_on_demand,
+            approvals::mac::submit_send,
+            approvals::mac::draft_reply,
+            approvals::mac::list_approvals,
+            approvals::mac::confirm_send,
+            approvals::mac::reject_send,
+            approvals::mac::set_composio_key,
+            approvals::mac::clear_composio_key,
+            approvals::mac::set_composio_policy,
+            approvals::mac::set_composio_user_id,
+            approvals::mac::composio_settings,
+            approvals::mac::google_oauth_settings,
+            approvals::mac::set_google_oauth_client,
+            approvals::mac::clear_google_oauth_client,
+            ai_sessions::mac::get_ai_session_import,
+            ai_sessions::mac::set_ai_session_import,
+            dream::mac::dream_status,
+            dream::mac::run_dream_now,
+            dream::mac::select_kk_configured,
+            dream::mac::set_select_kk_key,
+            dream::mac::clear_select_kk_key,
+            // First-run Accessibility permission guide (Issue #46). Own webview (onboarding.html),
+            // opened by setup_macos when trust is missing and the user hasn't skipped/completed it.
+            onboarding::mac::accessibility_status,
+            onboarding::mac::onboarding_get,
+            onboarding::mac::open_accessibility_settings,
+            onboarding::mac::onboarding_finish,
+            onboarding::mac::onboarding_event,
+            analytics::analytics_get_opt_out,
+            analytics::analytics_set_opt_out,
+            launch_at_login::mac::get_launch_at_login_settings,
+            launch_at_login::mac::set_launch_at_login_enabled,
+            dock_visibility::mac::get_dock_visible,
+            dock_visibility::mac::set_dock_visible,
+            notch_status_visibility::get_notch_status_visible,
+            notch_status_visibility::set_notch_status_visible,
+            voice_session::mac::get_voice_settings,
+            voice_session::mac::set_voice_enabled,
+            voice_session::mac::voice_dismiss,
+            voice_session::mac::voice_force_end,
+        ]);
 
     // NOTE: the visible surface is a NATIVE NSPanel hosting the webview's content view
     // (adopt_native_panel). Do not drive the webview from Rust via eval()/on_page_load — wry
@@ -270,7 +273,10 @@ pub fn run() {
     builder
         .setup(|_app| {
             #[cfg(target_os = "macos")]
-            setup_macos(_app);
+            {
+                desktop_heartbeat::start(_app);
+                setup_macos(_app);
+            }
             Ok(())
         })
         .run(tauri::generate_context!())
@@ -294,7 +300,10 @@ fn setup_macos(app: &tauri::App) {
     // while shortcuts hit the new one — which looks exactly like "quit button dead, drag dead".
     // The PID makes that unambiguous in the log.
     eprintln!("========================================================");
-    eprintln!("[shell] SHOGUN starting — pid {} — build: plain-window/drag/quit", std::process::id());
+    eprintln!(
+        "[shell] SHOGUN starting — pid {} — build: plain-window/drag/quit",
+        std::process::id()
+    );
     eprintln!("========================================================");
 
     // One Keychain pass for secrets read during boot (DB, Dream, Composio). BYOK keys load lazily
@@ -370,9 +379,9 @@ fn setup_macos(app: &tauri::App) {
         if let (Ok(toggle_i), Ok(quit_i)) = items {
             match Menu::with_items(app, &[&toggle_i, &quit_i]) {
                 Ok(menu) => {
-                    let tray_icon = tauri::image::Image::from_bytes(
-                        include_bytes!("../icons/tray-icon@2x.png"),
-                    )
+                    let tray_icon = tauri::image::Image::from_bytes(include_bytes!(
+                        "../icons/tray-icon@2x.png"
+                    ))
                     .expect("tray icon bytes");
                     let built = TrayIconBuilder::with_id("shogun-tray")
                         .menu(&menu)
@@ -482,7 +491,7 @@ fn setup_macos(app: &tauri::App) {
 
     // T-11/T-12 sanity: Accessibility trust + one focused-window walk through the tested
     // policy. Event-driven focus subscription is on-device work (runbook D-03/D-05).
-    eprintln!("[spike] accessibility trusted: {}", axcache::ax_trusted());
+    eprintln!("[spike] accessibility trusted: {}", axcache::ax_trusted_silent());
     // Issue #46: on a fresh install (or a re-permission after an update) the app is running but
     // inert — nothing captures, ⌥-tap and hover taps are refused. Show the branded guide instead of
     // leaving the user in a silent dead end. Gated on the SILENT trust check + persisted
@@ -496,7 +505,10 @@ fn setup_macos(app: &tauri::App) {
         let pid = front.pid;
         let title = axcache::focused_window(pid).and_then(|w| w.title());
         if exclusions::mac::is_excluded(&front.bundle_id, title.as_deref()) {
-            eprintln!("[spike] ax snapshot skipped — {} is excluded from reading", front.bundle_id);
+            eprintln!(
+                "[spike] ax snapshot skipped — {} is excluded from reading",
+                front.bundle_id
+            );
         } else if let Some(r) = axcache::snapshot(pid, 250) {
             eprintln!(
                 "[spike] ax snapshot: {} bytes, {} elements, depth {}, partial={}",
@@ -534,7 +546,10 @@ fn setup_macos(app: &tauri::App) {
                 None,
                 Some(reply_cache),
             );
-            eprintln!("[spike] capture source started (poll {}ms)", capture_source::DEFAULT_POLL_MS);
+            eprintln!(
+                "[spike] capture source started (poll {}ms)",
+                capture_source::DEFAULT_POLL_MS
+            );
 
             // AI coding-tool transcripts (opt-in): a large share of the work happens there, and
             // the tools' own session logs carry role/time/session id that screen capture cannot.
@@ -630,10 +645,7 @@ unsafe fn clamp_to_castle_dock(
     let dock = castle_dock_frame(screen_r, vis_r, pos);
     let max_x = dock.x + (dock.w - width).max(0.0);
     let max_y = dock.y + (dock.h - height).max(0.0);
-    (
-        x.clamp(dock.x, max_x),
-        y.clamp(dock.y, max_y),
-    )
+    (x.clamp(dock.x, max_x), y.clamp(dock.y, max_y))
 }
 
 /// (main thread) Move the panel to the DISPLAY the mouse cursor is on, pinned top-centre. A window
@@ -649,7 +661,11 @@ unsafe fn reposition_to_cursor_screen(ptr: *mut objc2::runtime::AnyObject) {
     use objc2_foundation::{NSPoint, NSRect};
     let mouse: NSPoint = msg_send![class!(NSEvent), mouseLocation];
     let screens: *mut AnyObject = msg_send![class!(NSScreen), screens];
-    let count: usize = if screens.is_null() { 0 } else { msg_send![screens, count] };
+    let count: usize = if screens.is_null() {
+        0
+    } else {
+        msg_send![screens, count]
+    };
     for i in 0..count {
         let s: *mut AnyObject = msg_send![screens, objectAtIndex: i];
         if s.is_null() {
@@ -688,7 +704,11 @@ unsafe fn panel_is_on_cursor_screen(ptr: *mut objc2::runtime::AnyObject) -> bool
     let cx = w.origin.x + w.size.width / 2.0;
     let cy = w.origin.y + w.size.height / 2.0;
     let screens: *mut AnyObject = msg_send![class!(NSScreen), screens];
-    let count: usize = if screens.is_null() { 0 } else { msg_send![screens, count] };
+    let count: usize = if screens.is_null() {
+        0
+    } else {
+        msg_send![screens, count]
+    };
     for i in 0..count {
         let sc: *mut AnyObject = msg_send![screens, objectAtIndex: i];
         if sc.is_null() {
@@ -696,7 +716,10 @@ unsafe fn panel_is_on_cursor_screen(ptr: *mut objc2::runtime::AnyObject) -> bool
         }
         let f: NSRect = msg_send![sc, frame];
         let has = |x: f64, y: f64| {
-            x >= f.origin.x && x <= f.origin.x + f.size.width && y >= f.origin.y && y <= f.origin.y + f.size.height
+            x >= f.origin.x
+                && x <= f.origin.x + f.size.width
+                && y >= f.origin.y
+                && y <= f.origin.y + f.size.height
         };
         if has(mouse.x, mouse.y) {
             return has(cx, cy);
@@ -800,7 +823,11 @@ unsafe fn pin_top_centre(ptr: *mut objc2::runtime::AnyObject) {
     // Following the cursor is still the right behaviour for the deliberate "come here" action; that
     // is what ⌥J / `summon_to_active_space` does.
     let screens: *mut AnyObject = msg_send![class!(NSScreen), screens];
-    let count: usize = if screens.is_null() { 0 } else { msg_send![screens, count] };
+    let count: usize = if screens.is_null() {
+        0
+    } else {
+        msg_send![screens, count]
+    };
     let mut screen: *mut AnyObject = if count > 0 {
         msg_send![screens, objectAtIndex: 0usize]
     } else {
@@ -850,7 +877,9 @@ fn reassert_panel(handle: &tauri::AppHandle, why: &'static str) {
     if USER_HIDDEN.load(std::sync::atomic::Ordering::Relaxed) {
         return;
     }
-    let Some(ptr) = overlay_ptr(handle) else { return };
+    let Some(ptr) = overlay_ptr(handle) else {
+        return;
+    };
     // SAFETY: all call sites run on the main thread (workspace notifications and the
     // state-logger's run_on_main_thread closure); live NSWindow/NSPanel; pure AppKit
     // property and ordering calls.
@@ -992,8 +1021,12 @@ pub(crate) fn build_full_ui_window(handle: &tauri::AppHandle) {
 /// Best-effort: if the cursor or monitor can't be resolved we leave the window where Tauri put it
 /// rather than guessing a position.
 fn center_on_cursor_screen(win: &tauri::WebviewWindow) {
-    let Ok(cursor) = win.cursor_position() else { return };
-    let Ok(Some(mon)) = win.monitor_from_point(cursor.x, cursor.y) else { return };
+    let Ok(cursor) = win.cursor_position() else {
+        return;
+    };
+    let Ok(Some(mon)) = win.monitor_from_point(cursor.x, cursor.y) else {
+        return;
+    };
 
     // Work in LOGICAL points, and use the size we asked for rather than reading it back.
     // `outer_size()` right after build returns the pre-scaling size on a Retina display, so
@@ -1044,8 +1077,12 @@ pub(crate) fn build_visual_recall_window(handle: &tauri::AppHandle) {
 }
 
 fn center_visual_recall_on_cursor_screen(win: &tauri::WebviewWindow) {
-    let Ok(cursor) = win.cursor_position() else { return };
-    let Ok(Some(mon)) = win.monitor_from_point(cursor.x, cursor.y) else { return };
+    let Ok(cursor) = win.cursor_position() else {
+        return;
+    };
+    let Ok(Some(mon)) = win.monitor_from_point(cursor.x, cursor.y) else {
+        return;
+    };
     let scale = mon.scale_factor();
     let mp = mon.position().to_logical::<f64>(scale);
     let ms = mon.size().to_logical::<f64>(scale);
@@ -1128,7 +1165,11 @@ fn report_panel_health(app: &tauri::AppHandle) {
                     0
                 } else {
                     let subs: *mut AnyObject = msg_send![cv, subviews];
-                    if subs.is_null() { 0 } else { msg_send![subs, count] }
+                    if subs.is_null() {
+                        0
+                    } else {
+                        msg_send![subs, count]
+                    }
                 };
                 eprintln!(
                     "[shell] health: visible={visible} drawn={drawn} alpha={alpha:.2} \
@@ -1185,8 +1226,7 @@ fn adopt_native_panel(win: &tauri::WebviewWindow) {
         // Earlier: nonactivatingPanel alone (128) — fine for Space behavior, but utility+hud
         // matches the reference panel chrome that actually lives in the notch band.
         let style: usize = (1 << 4) | (1 << 7) | (1 << 13); // utility | nonactivating | hud
-        let panel: *mut AnyObject =
-            msg_send![alloc, initWithContentRect: frame, styleMask: style, backing: 2usize, defer: false];
+        let panel: *mut AnyObject = msg_send![alloc, initWithContentRect: frame, styleMask: style, backing: 2usize, defer: false];
         if panel.is_null() {
             eprintln!("[shell] adopt: NSPanel init failed — falling back to plain window");
             let _ = win.show();
@@ -1226,7 +1266,11 @@ fn adopt_native_panel(win: &tauri::WebviewWindow) {
         // launch, and it costs two message sends.
         let cv_frame: NSRect = msg_send![cv, frame];
         let subs: *mut AnyObject = msg_send![cv, subviews];
-        let n: usize = if subs.is_null() { 0 } else { msg_send![subs, count] };
+        let n: usize = if subs.is_null() {
+            0
+        } else {
+            msg_send![subs, count]
+        };
         eprintln!(
             "[shell] adopt: panel content view {:.0}x{:.0} origin=({:.0},{:.0}) with {n} subview(s){}",
             cv_frame.size.width,
@@ -1288,8 +1332,8 @@ fn set_panel_size(app: tauri::AppHandle, width: f64, height: f64, anchor: Option
     let h = app.clone();
     let _ = app.run_on_main_thread(move || {
         use objc2::msg_send;
-        use objc2_foundation::{NSPoint, NSRect, NSSize};
         use objc2::runtime::AnyObject;
+        use objc2_foundation::{NSPoint, NSRect, NSSize};
         let Some(ptr) = overlay_ptr(&h) else { return };
         // SAFETY: main thread, live NSWindow/NSPanel.
         unsafe {
@@ -1317,7 +1361,10 @@ fn set_panel_size(app: tauri::AppHandle, width: f64, height: f64, anchor: Option
                 (o.x, o.y)
             } else {
                 // No screen (rare): fall back to holding the panel's centre and top edge.
-                (f.origin.x + f.size.width / 2.0 - width / 2.0, f.origin.y + f.size.height - height)
+                (
+                    f.origin.x + f.size.width / 2.0 - width / 2.0,
+                    f.origin.y + f.size.height - height,
+                )
             };
             // Whichever path we took, never hang off the dock frame.
             if !screen.is_null() {
@@ -1325,7 +1372,10 @@ fn set_panel_size(app: tauri::AppHandle, width: f64, height: f64, anchor: Option
                 x = clamped.0;
                 y = clamped.1;
             }
-            let r = NSRect { origin: NSPoint { x, y }, size: NSSize { width, height } };
+            let r = NSRect {
+                origin: NSPoint { x, y },
+                size: NSSize { width, height },
+            };
             let _: () = msg_send![ptr, setFrame: r, display: true];
             // Keep the hosted webview flush to the panel content origin after every resize —
             // otherwise a stale content-view origin reintroduces the under-notch gap.
@@ -1431,8 +1481,14 @@ fn watch_space_changes(app: &tauri::App) {
             return;
         }
         for (name_str, why) in [
-            ("NSWorkspaceActiveSpaceDidChangeNotification", "space-changed"),
-            ("NSWorkspaceDidActivateApplicationNotification", "app-activated"),
+            (
+                "NSWorkspaceActiveSpaceDidChangeNotification",
+                "space-changed",
+            ),
+            (
+                "NSWorkspaceDidActivateApplicationNotification",
+                "app-activated",
+            ),
         ] {
             let handle = app.handle().clone();
             let name = NSString::from_str(name_str);
@@ -1440,8 +1496,7 @@ fn watch_space_changes(app: &tauri::App) {
                 reassert_panel(&handle, why);
             });
             let nil_obj: *mut AnyObject = std::ptr::null_mut();
-            let _obs: *mut AnyObject =
-                msg_send![nc, addObserverForName: &*name, object: nil_obj, queue: nil_obj, usingBlock: &*block];
+            let _obs: *mut AnyObject = msg_send![nc, addObserverForName: &*name, object: nil_obj, queue: nil_obj, usingBlock: &*block];
             std::mem::forget(block);
         }
         eprintln!("[shell] space + app-activation watchers installed");
@@ -1594,7 +1649,11 @@ pub(crate) fn float_on_all_spaces(win: &tauri::WebviewWindow) {
         // swapped NotchPanel for the window server to treat this as a true panel.
         let mask: usize = msg_send![ptr, styleMask];
         let cls: *const objc2::runtime::AnyClass = msg_send![ptr, class];
-        let cls_name = if cls.is_null() { "?" } else { (*cls).name().to_str().unwrap_or("?") };
+        let cls_name = if cls.is_null() {
+            "?"
+        } else {
+            (*cls).name().to_str().unwrap_or("?")
+        };
         eprintln!(
             "[shell] NSWindow behavior set={behavior} readback={got} level={lvl} hidesOnDeactivate={hides} styleMask={mask} class={cls_name}, ordered front"
         );
@@ -1628,11 +1687,22 @@ fn watch_option_tap(app: &tauri::App) {
 
     const MASK_KEY_DOWN: usize = 1 << 10; // NSEventMaskKeyDown
     const MASK_FLAGS_CHANGED: usize = 1 << 12; // NSEventMaskFlagsChanged
-    // Any mouse/scroll/gesture during the hold also disqualifies (⌥-click, ⌥-drag, ⌥-scroll).
-    const MASK_MOUSE: usize = (1 << 1) | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 5) | (1 << 6)
-        | (1 << 22) | (1 << 25) | (1 << 26) | (1 << 27) | (1 << 29) | (1 << 30) | (1 << 31);
+                                               // Any mouse/scroll/gesture during the hold also disqualifies (⌥-click, ⌥-drag, ⌥-scroll).
+    const MASK_MOUSE: usize = (1 << 1)
+        | (1 << 2)
+        | (1 << 3)
+        | (1 << 4)
+        | (1 << 5)
+        | (1 << 6)
+        | (1 << 22)
+        | (1 << 25)
+        | (1 << 26)
+        | (1 << 27)
+        | (1 << 29)
+        | (1 << 30)
+        | (1 << 31);
     const FLAG_OPTION: usize = 1 << 19; // NSEventModifierFlagOption
-    // shift | control | command | fn — any of these joining the chord disqualifies the tap.
+                                        // shift | control | command | fn — any of these joining the chord disqualifies the tap.
     const FLAG_OTHERS: usize = (1 << 17) | (1 << 18) | (1 << 20) | (1 << 23);
     const RIGHT_OPTION_KEY_CODE: u16 = 61;
     const MAX_TAP_MS: u128 = 500;
@@ -1698,7 +1768,11 @@ fn watch_option_tap(app: &tauri::App) {
                 // Option UP edge — fire only on a clean, short, un-poisoned tap.
                 let armed = ARMED.swap(false, Ordering::Relaxed);
                 let poisoned = POISONED.swap(false, Ordering::Relaxed);
-                let held = DOWN_AT.lock().ok().and_then(|g| *g).map(|t| t.elapsed().as_millis());
+                let held = DOWN_AT
+                    .lock()
+                    .ok()
+                    .and_then(|g| *g)
+                    .map(|t| t.elapsed().as_millis());
                 if key_code == RIGHT_OPTION_KEY_CODE
                     && armed
                     && !poisoned
@@ -1712,7 +1786,11 @@ fn watch_option_tap(app: &tauri::App) {
                         let warm = handle
                             .try_state::<shogun_core::daemon::ReplyContextCache>()
                             .and_then(|c| c.current());
-                        inline_source::mac::run_inline_at_cursor(db.inner().clone(), warm, handle.clone());
+                        inline_source::mac::run_inline_at_cursor(
+                            db.inner().clone(),
+                            warm,
+                            handle.clone(),
+                        );
                     }
                 }
             }
@@ -1738,23 +1816,27 @@ fn watch_option_tap(app: &tauri::App) {
 fn register_expand_shortcut(app: &tauri::App) {
     use std::sync::Arc;
     use tauri::Manager;
-    use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
+    use tauri_plugin_global_shortcut::{
+        Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState,
+    };
 
     // ⌘⇧J: ⌘⇧Space collides with the input-method source switcher on JP keyboards, so the OS
     // consumes it before the handler runs. J is uncontended.
     let expand = Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::KeyJ);
-    let res = app.global_shortcut().on_shortcut(expand, move |app, _sc, event| {
-        // Diagnostic: log every delivery so we can tell the handler fired even if state differs.
-        eprintln!("[spike] shortcut fired: {:?}", event.state());
-        if event.state() == ShortcutState::Pressed {
-            if let Some(shared) = app.try_state::<Arc<integrate::mac::Shared>>() {
-                shared.trigger_hotkey();
+    let res = app
+        .global_shortcut()
+        .on_shortcut(expand, move |app, _sc, event| {
+            // Diagnostic: log every delivery so we can tell the handler fired even if state differs.
+            eprintln!("[spike] shortcut fired: {:?}", event.state());
+            if event.state() == ShortcutState::Pressed {
+                if let Some(shared) = app.try_state::<Arc<integrate::mac::Shared>>() {
+                    shared.trigger_hotkey();
+                }
+                // Also run the UI-independent core self-test so the product path is verifiable even if
+                // the spike's webview panel doesn't render.
+                notch_exec::mac::self_test(app);
             }
-            // Also run the UI-independent core self-test so the product path is verifiable even if
-            // the spike's webview panel doesn't render.
-            notch_exec::mac::self_test(app);
-        }
-    });
+        });
     match res {
         Ok(()) => eprintln!("[spike] ⌘⇧J registered — press it to open the panel"),
         Err(e) => eprintln!("[spike] global shortcut registration failed: {e}"),
@@ -1802,7 +1884,10 @@ mod shortcuts {
     }
 
     fn config_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
-        app.path().app_data_dir().ok().map(|d| d.join("shortcuts.json"))
+        app.path()
+            .app_data_dir()
+            .ok()
+            .map(|d| d.join("shortcuts.json"))
     }
 
     /// On-disk format. `version` lets a default-change migration run ONCE instead of forever —
@@ -1863,7 +1948,10 @@ mod shortcuts {
         if let Some(dir) = p.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-        let file = ShortcutsFile { version: SHORTCUTS_VERSION, binds: binds.clone() };
+        let file = ShortcutsFile {
+            version: SHORTCUTS_VERSION,
+            binds: binds.clone(),
+        };
         match serde_json::to_string_pretty(&file) {
             Ok(json) => {
                 if let Err(e) = std::fs::write(&p, json) {
@@ -1886,7 +1974,11 @@ mod shortcuts {
 
     /// Register `combo` for `action`. The combo string parses via the plugin (invalid combos and
     /// already-taken combos surface as Err — nothing changes in that case).
-    pub fn register_action(app: &tauri::AppHandle, action: &str, combo: &str) -> Result<(), String> {
+    pub fn register_action(
+        app: &tauri::AppHandle,
+        action: &str,
+        combo: &str,
+    ) -> Result<(), String> {
         if action == "voice" {
             // Hold-to-talk is wired through NSEvent monitors, not the global-shortcut plugin.
             return Ok(());
@@ -1969,7 +2061,10 @@ mod castle {
     use tauri::Manager;
 
     fn config_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
-        app.path().app_data_dir().ok().map(|d| d.join("castle.json"))
+        app.path()
+            .app_data_dir()
+            .ok()
+            .map(|d| d.join("castle.json"))
     }
 
     /// On-disk form: the stable wire key ("notch", "left_edge", …). A string, not the raw byte, so
@@ -1994,12 +2089,16 @@ mod castle {
     }
 
     fn save(app: &tauri::AppHandle, pos: CastlePosition) -> Result<(), String> {
-        let Some(p) = config_path(app) else { return Ok(()) };
+        let Some(p) = config_path(app) else {
+            return Ok(());
+        };
         if let Some(dir) = p.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-        let json = serde_json::to_string_pretty(&CastleFile { position: pos.key().into() })
-            .map_err(|e| e.to_string())?;
+        let json = serde_json::to_string_pretty(&CastleFile {
+            position: pos.key().into(),
+        })
+        .map_err(|e| e.to_string())?;
         std::fs::write(&p, json).map_err(|e| format!("save failed: {e}"))
     }
 
@@ -2212,7 +2311,10 @@ fn memory_db(app: &tauri::App) -> Result<shogun_core::daemon::Db, String> {
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let path = dir.join("memory.db");
     eprintln!("[spike] memory DB: {}", path.display());
-    let DbKeyLoad { key, minted: key_minted } = db_key()?;
+    let DbKeyLoad {
+        key,
+        minted: key_minted,
+    } = db_key()?;
 
     if shogun_memory::is_plaintext_db(&path) {
         eprintln!("[spike] existing plaintext memory DB found — encrypting it");
@@ -2324,10 +2426,13 @@ fn ensure_ort_dylib(app: &tauri::App) {
     if std::env::var_os("ORT_DYLIB_PATH").is_some() {
         return;
     }
-    let Ok(res) = app.path().resource_dir() else { return };
+    let Ok(res) = app.path().resource_dir() else {
+        return;
+    };
     // Contents/Frameworks is a sibling of Contents/Resources.
     let bundled = [
-        res.parent().map(|c| c.join("Frameworks/libonnxruntime.dylib")),
+        res.parent()
+            .map(|c| c.join("Frameworks/libonnxruntime.dylib")),
         Some(res.join("libonnxruntime.dylib")),
     ];
     if let Some(p) = bundled.into_iter().flatten().find(|p| p.exists()) {
@@ -2344,12 +2449,17 @@ fn ensure_ort_dylib(app: &tauri::App) {
 #[cfg(target_os = "macos")]
 fn embedding_model_paths(app: &tauri::App) -> Option<(std::path::PathBuf, std::path::PathBuf)> {
     use tauri::Manager;
-    if let (Ok(m), Ok(t)) =
-        (std::env::var("SHOGUN_EMBED_MODEL"), std::env::var("SHOGUN_EMBED_TOKENIZER"))
-    {
+    if let (Ok(m), Ok(t)) = (
+        std::env::var("SHOGUN_EMBED_MODEL"),
+        std::env::var("SHOGUN_EMBED_TOKENIZER"),
+    ) {
         return Some((m.into(), t.into()));
     }
-    let dir = app.path().resource_dir().ok()?.join("models/multilingual-e5-small");
+    let dir = app
+        .path()
+        .resource_dir()
+        .ok()?
+        .join("models/multilingual-e5-small");
     let (m, t) = (dir.join("model.onnx"), dir.join("tokenizer.json"));
     (m.exists() && t.exists()).then_some((m, t))
 }

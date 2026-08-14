@@ -15,6 +15,7 @@ pub mod approval_store;
 pub mod backend;
 pub mod composio;
 pub mod connection;
+pub mod desktop_heartbeat;
 pub mod dispatch;
 pub mod mcp;
 pub mod memory_api;
@@ -22,11 +23,11 @@ pub mod memory_api;
 pub mod memory_api_settings;
 pub mod rest;
 pub mod scope;
+/// The REST listener (feature `server`): a localhost-bound axum adapter over [`rest`].
+#[cfg(feature = "server")]
+pub mod server;
 pub mod service_gate;
 pub mod slack;
 pub mod sync;
 /// Visual recall structured API helpers (Memory API symmetry).
 pub mod visual_recall_api;
-/// The REST listener (feature `server`): a localhost-bound axum adapter over [`rest`].
-#[cfg(feature = "server")]
-pub mod server;
