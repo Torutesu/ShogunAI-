@@ -364,7 +364,12 @@ pub fn consolidation_prompt(content: &str) -> String {
 
 /// Build one Batch item per event: `custom_id` is the event id (so results map back), `purpose`
 /// tags the lane for traceability, `chunk` is the classification prompt over the event's text.
-pub fn build_batch_items(events: &[shogun_memory::event_log::EventText]) -> Vec<crate::llm::anthropic::BatchItem> {
+///
+/// Takes [`BatchEventText`](shogun_memory::event_log::BatchEventText), not `EventText`, on
+/// purpose: that type is only produced by `events_in_range_partitioned`'s source-filtered `cloud`
+/// half, so an unfiltered window (which would carry meeting transcripts — A-2,
+/// `docs/meeting-text-on-the-search-spine.md`) cannot be compiled into a relay submission.
+pub fn build_batch_items(events: &[shogun_memory::event_log::BatchEventText]) -> Vec<crate::llm::anthropic::BatchItem> {
     events
         .iter()
         .map(|e| crate::llm::anthropic::BatchItem {
@@ -385,7 +390,7 @@ pub fn build_batch_items(events: &[shogun_memory::event_log::EventText]) -> Vec<
 /// `sleep` is the injected inter-poll delay (FR-DC-05).
 pub async fn classify_via_batch<B, F, Fut>(
     client: &B,
-    events: &[shogun_memory::event_log::EventText],
+    events: &[shogun_memory::event_log::BatchEventText],
     max_polls: u32,
     sleep: F,
 ) -> Result<Vec<(i64, Vec<Candidate>)>, crate::llm::LlmError>
@@ -619,9 +624,10 @@ mod tests {
 
     #[test]
     fn build_batch_items_maps_id_and_wraps_content_in_the_prompt() {
+        use shogun_memory::event_log::BatchEventText;
         let events = vec![
-            EventText { id: 7, content: "hello".into() },
-            EventText { id: 9, content: "world".into() },
+            BatchEventText { id: 7, content: "hello".into() },
+            BatchEventText { id: 9, content: "world".into() },
         ];
         let items = build_batch_items(&events);
         assert_eq!(items.len(), 2);
@@ -660,7 +666,10 @@ mod tests {
             SelectKkKey::new(Secret::new("kk-123456")),
             AnthropicConfig::new("claude-x"),
         );
-        let events = vec![EventText { id: 42, content: "I promised the deck".into() }];
+        let events = vec![shogun_memory::event_log::BatchEventText {
+            id: 42,
+            content: "I promised the deck".into(),
+        }];
         let classified = classify_via_batch(&client, &events, 3, || async {}).await.unwrap();
         assert_eq!(classified.len(), 1);
         let (id, cands) = &classified[0];

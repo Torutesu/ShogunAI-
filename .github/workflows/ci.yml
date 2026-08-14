@@ -90,7 +90,7 @@ jobs:
       # - invariant 2: no image/audio bytes reach the filesystem (the DB + socket exceptions only).
       # - log rule: captured user text never reaches a log line (elog! or a shape, not the value).
       # - schema: migrations stay additive (memory lives for years; no DROP/RENAME/ALTER COLUMN).
-      - name: invariant guards (egress / secrets / media / logs / migrations)
+      - name: invariant guards (egress / secrets / media / logs / migrations / batch filter)
         run: |
           python3 scripts/check-http-egress.py --self-test
           python3 scripts/check-http-egress.py
@@ -102,6 +102,8 @@ jobs:
           python3 scripts/check-log-hygiene.py
           python3 scripts/check-migrations.py --self-test
           python3 scripts/check-migrations.py
+          python3 scripts/check-batch-source-filter.py --self-test
+          python3 scripts/check-batch-source-filter.py
       - name: release build (SLO code path)
         run: cargo build -p spike-harness --release
 
