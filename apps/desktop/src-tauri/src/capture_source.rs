@@ -40,11 +40,11 @@ mod mac {
     use shogun_core::daemon::Db;
 
     use super::{DEFAULT_POLL_MS, WALK_BUDGET_MS};
-    use crate::axcache::{ax_trusted, focused_window};
+    use crate::axcache::{ax_trusted_silent, focused_window};
     use crate::display::frontmost_app;
-    use crate::visual_recall::mac::SharedSettings;
     #[cfg(feature = "visual-recall-ocr")]
     use crate::screen_ocr::{self, MIN_OCR_INTERVAL_MS};
+    use crate::visual_recall::mac::SharedSettings;
     #[cfg(feature = "visual-recall-ocr")]
     use crate::visual_recall::pipeline::{self, RecallPipeline};
 
@@ -61,7 +61,10 @@ mod mac {
     #[cfg(feature = "visual-recall-ocr")]
     impl OcrPollGate {
         fn new() -> Self {
-            Self { last_focus_key: None, last_ocr_at: None }
+            Self {
+                last_focus_key: None,
+                last_ocr_at: None,
+            }
         }
 
         fn should_run(
@@ -78,7 +81,13 @@ mod mac {
             if focus_changed {
                 return true;
             }
-            if !pipeline::wants_ocr(bundle_id, window_title, ax_empty, ax_text_len, meeting_active) {
+            if !pipeline::wants_ocr(
+                bundle_id,
+                window_title,
+                ax_empty,
+                ax_text_len,
+                meeting_active,
+            ) {
                 return false;
             }
             match self.last_ocr_at {
@@ -102,7 +111,11 @@ mod mac {
     /// capture — persists it via `Db::ingest_capture` (collapse + extract). `dwell_ms` is credited
     /// to the event (accumulates on a near-dup touch). Returns the outcome, or `None` if there is no
     /// frontmost app / focused window.
-    pub fn capture_once(db: &Db, policy: &ExclusionPolicy, dwell_ms: i64) -> Option<CaptureOutcome> {
+    pub fn capture_once(
+        db: &Db,
+        policy: &ExclusionPolicy,
+        dwell_ms: i64,
+    ) -> Option<CaptureOutcome> {
         let front = frontmost_app()?;
         // Never capture / ingest our own process as focus — memory would store "reading itself".
         if crate::display::is_own_app(&front.bundle_id, &front.name) {
@@ -110,7 +123,10 @@ mod mac {
         }
         let root = focused_window(front.pid)?;
         let title = root.title();
-        let focus = Focus { bundle_id: &front.bundle_id, window_title: title.as_deref() };
+        let focus = Focus {
+            bundle_id: &front.bundle_id,
+            window_title: title.as_deref(),
+        };
 
         let start = Instant::now();
         let outcome = capture_focus(policy, &focus, &root, Limits::default(), || {
@@ -121,7 +137,10 @@ mod mac {
         // Never logs captured text (only its length) — telemetry must not contain user content.
         match &outcome {
             CaptureOutcome::Excluded(reason) => {
-                eprintln!("[capture] excluded {} ({:?}) — no walk", front.bundle_id, reason);
+                eprintln!(
+                    "[capture] excluded {} ({:?}) — no walk",
+                    front.bundle_id, reason
+                );
             }
             CaptureOutcome::Empty => {}
             CaptureOutcome::Captured { text, .. } => {
@@ -227,7 +246,10 @@ mod mac {
                     cands.len(),
                 );
             }
-            None => eprintln!("[screen_ocr] {} — DB write skipped (digest={digest:#x})", bundle_id),
+            None => eprintln!(
+                "[screen_ocr] {} — DB write skipped (digest={digest:#x})",
+                bundle_id
+            ),
         }
         poll_gate.mark(key, now);
     }
@@ -255,12 +277,15 @@ mod mac {
             #[cfg(feature = "visual-recall-ocr")]
             let mut recall_pipeline = RecallPipeline::new();
             #[cfg(feature = "visual-recall-ocr")]
-            let mut last_frame_purge = Instant::now() - Duration::from_millis(FRAME_PURGE_INTERVAL_MS);
+            let mut last_frame_purge =
+                Instant::now() - Duration::from_millis(FRAME_PURGE_INTERVAL_MS);
             #[cfg(feature = "visual-recall-ocr")]
             {
                 match db.purge_screen_frames() {
                     Ok(removed) if removed > 0 => {
-                        eprintln!("[screen_ocr] startup purge removed {removed} frame(s) older than 72 h");
+                        eprintln!(
+                            "[screen_ocr] startup purge removed {removed} frame(s) older than 72 h"
+                        );
                     }
                     Ok(_) => {}
                     Err(e) => eprintln!("[screen_ocr] startup retention purge failed: {e}"),
@@ -281,7 +306,7 @@ mod mac {
                     last_frame_purge = Instant::now();
                 }
 
-                if ax_trusted() {
+                if ax_trusted_silent() {
                     // Re-read the policy each tick: excluding an app is usually a reaction to
                     // what is on screen right now, so it must take effect now, not next launch.
                     // A poisoned lock means capture stops rather than ignoring exclusions.
@@ -297,7 +322,10 @@ mod mac {
                     } else if visual.enabled {
                         if let Some(front) = frontmost_app() {
                             let title = focused_window(front.pid).and_then(|w| w.title());
-                            if current.is_excluded(&front.bundle_id, title.as_deref()).is_none() {
+                            if current
+                                .is_excluded(&front.bundle_id, title.as_deref())
+                                .is_none()
+                            {
                                 #[cfg(feature = "visual-recall-ocr")]
                                 {
                                     let ax_empty =
@@ -362,7 +390,12 @@ mod mac {
     fn focused_thread_key_and_title() -> Option<(String, Option<String>)> {
         let front = frontmost_app()?;
         let title = focused_window(front.pid)?.title();
-        let key = shogun_memory::thread::thread_key("capture", None, Some(&front.bundle_id), title.as_deref())?;
+        let key = shogun_memory::thread::thread_key(
+            "capture",
+            None,
+            Some(&front.bundle_id),
+            title.as_deref(),
+        )?;
         Some((key, title))
     }
 }
