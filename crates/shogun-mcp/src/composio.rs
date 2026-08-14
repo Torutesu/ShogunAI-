@@ -55,7 +55,9 @@ pub struct ComposioConsent {
 /// gates the whole second layer.
 pub fn grant_consent(disclosures: Disclosures) -> Result<ComposioConsent, ConsentError> {
     if disclosures.all_acknowledged() {
-        Ok(ComposioConsent { _acknowledged: disclosures })
+        Ok(ComposioConsent {
+            _acknowledged: disclosures,
+        })
     } else {
         Err(ConsentError::IncompleteDisclosures)
     }
@@ -87,7 +89,10 @@ pub struct SendCapability<'a> {
 impl ComposioSender {
     /// Build a sender from consent. Draft-stop starts ON (FR-C2-03 default).
     pub fn new(consent: ComposioConsent) -> Self {
-        Self { _consent: consent, draft_stop: true }
+        Self {
+            _consent: consent,
+            draft_stop: true,
+        }
     }
 
     /// Turn draft-stop on/off. (Off requires a deliberate settings change.)
@@ -137,7 +142,9 @@ pub const COMPOSIO_THIRD_PARTY: bool = true;
 /// a send → L3) and the L3 [`Preview`] with a `ViaComposio` route and the full subject+body text
 /// (FR-AG-03 / FR-C2-04). The returned action is meant to be enqueued in the L3 approval queue.
 pub fn prepare_send(_cap: SendCapability<'_>, mail: GmailSend) -> (SendAction, Preview) {
-    let action = SendAction::SendEmail { to: mail.to.clone() };
+    let action = SendAction::SendEmail {
+        to: mail.to.clone(),
+    };
     // Full preview text: subject + body, never a summary (FR-AG-03).
     let full = format!("Subject: {}\n\n{}", mail.subject, mail.body);
     let preview = Preview::for_send(&action, full, Route::ViaComposio);
@@ -179,21 +186,43 @@ mod tests {
     use super::*;
 
     fn full_consent() -> ComposioConsent {
-        grant_consent(Disclosures { via_third_party: true, data_types: true, revocable: true }).unwrap()
+        grant_consent(Disclosures {
+            via_third_party: true,
+            data_types: true,
+            revocable: true,
+        })
+        .unwrap()
     }
 
     #[test]
     fn consent_requires_every_disclosure() {
         // any missing acknowledgement → no consent
         for d in [
-            Disclosures { via_third_party: false, data_types: true, revocable: true },
-            Disclosures { via_third_party: true, data_types: false, revocable: true },
-            Disclosures { via_third_party: true, data_types: true, revocable: false },
+            Disclosures {
+                via_third_party: false,
+                data_types: true,
+                revocable: true,
+            },
+            Disclosures {
+                via_third_party: true,
+                data_types: false,
+                revocable: true,
+            },
+            Disclosures {
+                via_third_party: true,
+                data_types: true,
+                revocable: false,
+            },
         ] {
             assert_eq!(grant_consent(d), Err(ConsentError::IncompleteDisclosures));
         }
         // all acknowledged → ok
-        assert!(grant_consent(Disclosures { via_third_party: true, data_types: true, revocable: true }).is_ok());
+        assert!(grant_consent(Disclosures {
+            via_third_party: true,
+            data_types: true,
+            revocable: true
+        })
+        .is_ok());
     }
 
     #[test]
@@ -201,8 +230,14 @@ mod tests {
         let sender = ComposioSender::new(full_consent());
         assert!(sender.draft_stop(), "draft-stop must default ON (FR-C2-03)");
         assert_eq!(sender.offered_actions(), vec![ComposioAction::SaveDraft]);
-        assert!(!sender.offered_actions().contains(&ComposioAction::Send), "Send must be hidden");
-        assert!(sender.send_capability().is_none(), "no send capability while draft-stop ON");
+        assert!(
+            !sender.offered_actions().contains(&ComposioAction::Send),
+            "Send must be hidden"
+        );
+        assert!(
+            sender.send_capability().is_none(),
+            "no send capability while draft-stop ON"
+        );
     }
 
     #[test]
@@ -220,7 +255,11 @@ mod tests {
         let cap = sender.send_capability().unwrap();
         let (action, preview) = prepare_send(
             cap,
-            GmailSend { to: "bob@example.com".into(), subject: "Ship date".into(), body: "Friday.".into() },
+            GmailSend {
+                to: "bob@example.com".into(),
+                subject: "Ship date".into(),
+                body: "Friday.".into(),
+            },
         );
         // it's a send → L3
         use shogun_agents::permission::{Action, Level};
@@ -248,7 +287,11 @@ mod tests {
         let cap = sender.send_capability().unwrap();
         let (_action, preview) = prepare_send(
             cap,
-            GmailSend { to: "b@e.com".into(), subject: "Ship date".into(), body: "Friday.\n\nThanks".into() },
+            GmailSend {
+                to: "b@e.com".into(),
+                subject: "Ship date".into(),
+                body: "Friday.\n\nThanks".into(),
+            },
         );
         let (subject, body) = parse_gmail_full_body(&preview.full_body);
         assert_eq!(subject, "Ship date");

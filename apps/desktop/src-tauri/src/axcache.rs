@@ -12,22 +12,26 @@
 pub use shogun_core::capture::walk_policy::{walk, AxNode, ContextCache, Limits, Role, WalkResult};
 
 #[cfg(target_os = "macos")]
-pub use mac::{ax_call_count, ax_trusted, ax_trusted_silent, browser_url, focused_window, snapshot, AxElement};
+pub use mac::{
+    ax_call_count, ax_trusted, ax_trusted_silent, browser_url, focused_window, snapshot, AxElement,
+};
 
 #[cfg(target_os = "macos")]
 mod mac {
     use accessibility_sys::{
         kAXChildrenAttribute, kAXDescriptionAttribute, kAXDocumentAttribute, kAXErrorSuccess,
-        kAXFocusedWindowAttribute, kAXRoleAttribute, kAXTitleAttribute, kAXTrustedCheckOptionPrompt,
-        kAXURLAttribute, kAXValueAttribute,
-        AXIsProcessTrusted, AXIsProcessTrustedWithOptions, AXUIElementCopyAttributeValue,
-        AXUIElementCreateApplication, AXUIElementRef, AXUIElementSetMessagingTimeout,
+        kAXFocusedWindowAttribute, kAXRoleAttribute, kAXTitleAttribute,
+        kAXTrustedCheckOptionPrompt, kAXURLAttribute, kAXValueAttribute, AXIsProcessTrusted,
+        AXIsProcessTrustedWithOptions, AXUIElementCopyAttributeValue, AXUIElementCreateApplication,
+        AXUIElementRef, AXUIElementSetMessagingTimeout,
     };
     use core_foundation::base::TCFType;
     use core_foundation::boolean::CFBoolean;
     use core_foundation::dictionary::CFDictionary;
     use core_foundation::string::CFString;
-    use core_foundation_sys::array::{CFArrayGetCount, CFArrayGetTypeID, CFArrayGetValueAtIndex, CFArrayRef};
+    use core_foundation_sys::array::{
+        CFArrayGetCount, CFArrayGetTypeID, CFArrayGetValueAtIndex, CFArrayRef,
+    };
     use core_foundation_sys::base::{CFGetTypeID, CFRelease, CFRetain, CFTypeRef};
     use core_foundation_sys::string::{CFStringGetTypeID, CFStringRef};
     use core_foundation_sys::url::{CFURLGetTypeID, CFURLRef};
@@ -71,7 +75,8 @@ mod mac {
         let cf_name = CFString::new(name);
         let mut value: CFTypeRef = std::ptr::null();
         // SAFETY: valid element + attribute name; out-pointer is a CFTypeRef slot.
-        let err = unsafe { AXUIElementCopyAttributeValue(el, cf_name.as_concrete_TypeRef(), &mut value) };
+        let err =
+            unsafe { AXUIElementCopyAttributeValue(el, cf_name.as_concrete_TypeRef(), &mut value) };
         if err != kAXErrorSuccess || value.is_null() {
             return None;
         }
@@ -95,7 +100,8 @@ mod mac {
         let cf_name = CFString::new(name);
         let mut value: CFTypeRef = std::ptr::null();
         // SAFETY: as above.
-        let err = unsafe { AXUIElementCopyAttributeValue(el, cf_name.as_concrete_TypeRef(), &mut value) };
+        let err =
+            unsafe { AXUIElementCopyAttributeValue(el, cf_name.as_concrete_TypeRef(), &mut value) };
         if err != kAXErrorSuccess || value.is_null() {
             return None;
         }
@@ -112,7 +118,8 @@ mod mac {
         let cf_name = CFString::new(kAXChildrenAttribute);
         let mut value: CFTypeRef = std::ptr::null();
         // SAFETY: as above.
-        let err = unsafe { AXUIElementCopyAttributeValue(el, cf_name.as_concrete_TypeRef(), &mut value) };
+        let err =
+            unsafe { AXUIElementCopyAttributeValue(el, cf_name.as_concrete_TypeRef(), &mut value) };
         if err != kAXErrorSuccess || value.is_null() {
             return Vec::new();
         }
@@ -201,7 +208,10 @@ mod mac {
     pub fn ax_trusted() -> bool {
         // SAFETY: kAXTrustedCheckOptionPrompt is a valid immortal CFString (get rule).
         let key = unsafe { CFString::wrap_under_get_rule(kAXTrustedCheckOptionPrompt) };
-        let opts = CFDictionary::from_CFType_pairs(&[(key.as_CFType(), CFBoolean::true_value().as_CFType())]);
+        let opts = CFDictionary::from_CFType_pairs(&[(
+            key.as_CFType(),
+            CFBoolean::true_value().as_CFType(),
+        )]);
         // SAFETY: opts is a valid CFDictionary with the documented option key.
         unsafe { AXIsProcessTrustedWithOptions(opts.as_concrete_TypeRef()) }
     }
@@ -230,7 +240,8 @@ mod mac {
         let cf_name = CFString::new(name);
         let mut value: CFTypeRef = std::ptr::null();
         // SAFETY: valid element + attribute name; out-pointer is a CFTypeRef slot.
-        let err = unsafe { AXUIElementCopyAttributeValue(el, cf_name.as_concrete_TypeRef(), &mut value) };
+        let err =
+            unsafe { AXUIElementCopyAttributeValue(el, cf_name.as_concrete_TypeRef(), &mut value) };
         if err != kAXErrorSuccess || value.is_null() {
             return None;
         }

@@ -25,7 +25,9 @@ pub mod mac {
 
     use shogun_core::daemon::{ContextPack, Db};
     use shogun_core::db_sink::DbTraceabilitySink;
-    use shogun_core::inline::{compose_inline, CursorContext, CursorReader, InlineOutcome, TextInserter};
+    use shogun_core::inline::{
+        compose_inline, CursorContext, CursorReader, InlineOutcome, TextInserter,
+    };
     use shogun_core::llm::anthropic::{AnthropicAgentClient, AnthropicConfig};
     use shogun_core::llm::openai_compat::{
         OpenAiCompatAgentClient, OpenAiCompatConfig, GEMINI_BASE_URL, OPENAI_BASE_URL,
@@ -53,7 +55,10 @@ pub mod mac {
 
     impl Default for LlmSettings {
         fn default() -> Self {
-            Self { provider: "anthropic".into(), model: String::new() }
+            Self {
+                provider: "anthropic".into(),
+                model: String::new(),
+            }
         }
     }
 
@@ -150,7 +155,11 @@ pub mod mac {
                 }
             }
         }
-        eprintln!("[inline] agent provider = {} model = {}", s.provider, loggable_model(&effective_model(&s)));
+        eprintln!(
+            "[inline] agent provider = {} model = {}",
+            s.provider,
+            loggable_model(&effective_model(&s))
+        );
         if let Ok(mut g) = LLM_SETTINGS.lock() {
             *g = Some(s);
         }
@@ -158,12 +167,20 @@ pub mod mac {
     }
 
     fn current_settings() -> LlmSettings {
-        LLM_SETTINGS.lock().ok().and_then(|g| g.clone()).unwrap_or_default()
+        LLM_SETTINGS
+            .lock()
+            .ok()
+            .and_then(|g| g.clone())
+            .unwrap_or_default()
     }
 
     fn effective_model(s: &LlmSettings) -> String {
         let m = s.model.trim();
-        if m.is_empty() { default_model(&s.provider).to_string() } else { m.to_string() }
+        if m.is_empty() {
+            default_model(&s.provider).to_string()
+        } else {
+            m.to_string()
+        }
     }
 
     /// Current provider settings for the Settings UI (model echoes the effective default when
@@ -176,11 +193,18 @@ pub mod mac {
     /// Change provider/model. The key is NOT touched — each provider keeps its own Keychain
     /// account, entered separately in Settings.
     #[tauri::command]
-    pub fn set_llm_settings(provider: String, model: String, app: tauri::AppHandle) -> Result<(), String> {
+    pub fn set_llm_settings(
+        provider: String,
+        model: String,
+        app: tauri::AppHandle,
+    ) -> Result<(), String> {
         if !PROVIDERS.contains(&provider.as_str()) {
             return Err(format!("unknown provider: {provider}"));
         }
-        let s = LlmSettings { provider, model: model.trim().to_string() };
+        let s = LlmSettings {
+            provider,
+            model: model.trim().to_string(),
+        };
         if let Some(p) = settings_path(&app) {
             if let Some(dir) = p.parent() {
                 let _ = std::fs::create_dir_all(dir);
@@ -194,7 +218,11 @@ pub mod mac {
                 Err(e) => return Err(e.to_string()),
             }
         }
-        eprintln!("[inline] agent provider → {} model → {}", s.provider, loggable_model(&effective_model(&s)));
+        eprintln!(
+            "[inline] agent provider → {} model → {}",
+            s.provider,
+            loggable_model(&effective_model(&s))
+        );
         if let Ok(mut g) = LLM_SETTINGS.lock() {
             *g = Some(s);
         }
@@ -209,7 +237,8 @@ pub mod mac {
     unsafe fn copy_string(el: AXUIElementRef, name: &str) -> Option<String> {
         let cf_name = CFString::new(name);
         let mut value: CFTypeRef = std::ptr::null();
-        let err = unsafe { AXUIElementCopyAttributeValue(el, cf_name.as_concrete_TypeRef(), &mut value) };
+        let err =
+            unsafe { AXUIElementCopyAttributeValue(el, cf_name.as_concrete_TypeRef(), &mut value) };
         if err != kAXErrorSuccess || value.is_null() {
             return None;
         }
@@ -232,7 +261,9 @@ pub mod mac {
         unsafe { AXUIElementSetMessagingTimeout(sys, 0.25) };
         let cf_name = CFString::new(kAXFocusedUIElementAttribute);
         let mut value: CFTypeRef = std::ptr::null();
-        let err = unsafe { AXUIElementCopyAttributeValue(sys, cf_name.as_concrete_TypeRef(), &mut value) };
+        let err = unsafe {
+            AXUIElementCopyAttributeValue(sys, cf_name.as_concrete_TypeRef(), &mut value)
+        };
         unsafe { CFRelease(sys as CFTypeRef) };
         if err != kAXErrorSuccess || value.is_null() {
             return None;
@@ -246,7 +277,11 @@ pub mod mac {
     extern "C" {
         // std::ffi::c_void — spelled in full so the extern block needs no import.
         /// Create rule — the caller releases.
-        fn CGEventCreateKeyboardEvent(source: *const std::ffi::c_void, keycode: u16, key_down: bool) -> *mut std::ffi::c_void;
+        fn CGEventCreateKeyboardEvent(
+            source: *const std::ffi::c_void,
+            keycode: u16,
+            key_down: bool,
+        ) -> *mut std::ffi::c_void;
         fn CGEventSetFlags(event: *mut std::ffi::c_void, flags: u64);
         fn CGEventPost(tap: u32, event: *mut std::ffi::c_void);
     }
@@ -262,7 +297,11 @@ pub mod mac {
     /// The clipboard is the user's, not ours, so it is saved and restored. Restoring happens AFTER
     /// the result is verified — put back too early and the paste races with the restore and lands
     /// the old contents instead.
-    unsafe fn paste_at_cursor(text: &str, el: AXUIElementRef, before: Option<&str>) -> Result<(), String> {
+    unsafe fn paste_at_cursor(
+        text: &str,
+        el: AXUIElementRef,
+        before: Option<&str>,
+    ) -> Result<(), String> {
         use objc2::runtime::AnyObject;
         use objc2::{class, msg_send};
         use objc2_foundation::NSString;
@@ -360,8 +399,15 @@ pub mod mac {
             let value = unsafe { copy_string(el, kAXValueAttribute) };
             let field_label = unsafe { copy_string(el, kAXTitleAttribute) }.unwrap_or_default();
             unsafe { CFRelease(el as CFTypeRef) };
-            let app = crate::display::frontmost_app().map(|f| f.bundle_id).unwrap_or_default();
-            value.map(|before| CursorContext { app, field_label, before, after: String::new() })
+            let app = crate::display::frontmost_app()
+                .map(|f| f.bundle_id)
+                .unwrap_or_default();
+            value.map(|before| CursorContext {
+                app,
+                field_label,
+                before,
+                after: String::new(),
+            })
         }
     }
 
@@ -383,7 +429,11 @@ pub mod mac {
             let cf_text = CFString::new(text);
             // SAFETY: el is a live element; attr + value are valid CFStrings.
             let err = unsafe {
-                AXUIElementSetAttributeValue(el, cf_attr.as_concrete_TypeRef(), cf_text.as_concrete_TypeRef() as CFTypeRef)
+                AXUIElementSetAttributeValue(
+                    el,
+                    cf_attr.as_concrete_TypeRef(),
+                    cf_text.as_concrete_TypeRef() as CFTypeRef,
+                )
             };
             if err != kAXErrorSuccess {
                 unsafe { CFRelease(el as CFTypeRef) };
@@ -397,7 +447,9 @@ pub mod mac {
             // both do this, and they are not exotic targets — AXSelectedText is honoured by little
             // beyond native NSTextView/NSTextField. Fall back to the mechanism that works
             // everywhere, because it is the one the user would have used: paste.
-            let app = crate::display::frontmost_app().map(|f| f.bundle_id).unwrap_or_default();
+            let app = crate::display::frontmost_app()
+                .map(|f| f.bundle_id)
+                .unwrap_or_default();
             eprintln!("[inline] {app} ignored the AX write — falling back to paste");
             let pasted = unsafe { paste_at_cursor(text, el, before.as_deref()) };
             unsafe { CFRelease(el as CFTypeRef) };
@@ -473,7 +525,7 @@ pub mod mac {
             return Err("key is empty".into());
         }
         keychain_store::set_generic_secret(keychain_account(&provider), key.as_bytes())
-        .map_err(|e| e.to_string())?;
+            .map_err(|e| e.to_string())?;
         eprintln!("[inline] BYOK key saved to Keychain (provider: {provider})");
         refresh_has_key();
         Ok(())
@@ -515,16 +567,30 @@ pub mod mac {
         let Some(key) = keychain_byok(&s.provider) else {
             if mock_agent_enabled() {
                 eprintln!("[inline] SHOGUN_MOCK_AGENT=1 — echo mock (AX path still runs)");
-                return Some(InlineAgent::Mock(MockAgentClient::new(ByokKey::new(Secret::new("mock")))));
+                return Some(InlineAgent::Mock(MockAgentClient::new(ByokKey::new(
+                    Secret::new("mock"),
+                ))));
             }
-            eprintln!("[inline] no key in Keychain for provider '{}' — not drafting", s.provider);
+            eprintln!(
+                "[inline] no key in Keychain for provider '{}' — not drafting",
+                s.provider
+            );
             return None;
         };
         let model = effective_model(&s);
-        match (ReqwestTransport::new(), tokio::runtime::Builder::new_current_thread().enable_all().build()) {
+        match (
+            ReqwestTransport::new(),
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build(),
+        ) {
             (Ok(transport), Ok(rt)) => {
                 let byok = ByokKey::new(Secret::new(key));
-                eprintln!("[inline] live Agent lane — provider {} model {}", s.provider, loggable_model(&model));
+                eprintln!(
+                    "[inline] live Agent lane — provider {} model {}",
+                    s.provider,
+                    loggable_model(&model)
+                );
                 match s.provider.as_str() {
                     "openrouter" | "openai" | "gemini" => {
                         let base = match s.provider.as_str() {
@@ -601,7 +667,14 @@ pub mod mac {
     ) {
         // Emitted before the thread starts so the pill reacts to the press itself, not to the
         // generation finishing — the whole point is that the tap feels answered immediately.
-        push_inline(&app, InlineStatus { phase: "drafting", chars: 0, detail: None });
+        push_inline(
+            &app,
+            InlineStatus {
+                phase: "drafting",
+                chars: 0,
+                detail: None,
+            },
+        );
         std::thread::spawn(move || {
             let memory = match warm {
                 Some(ctx) if !ctx.is_empty() => {
@@ -617,35 +690,72 @@ pub mod mac {
             // No key means no draft AND no write. The caret sits in the user's own document;
             // putting anything there that they did not ask for is worse than doing nothing.
             let Some(agent) = build_agent(&db) else {
-                push_inline(&app, InlineStatus { phase: "no_key", chars: 0, detail: None });
+                push_inline(
+                    &app,
+                    InlineStatus {
+                        phase: "no_key",
+                        chars: 0,
+                        detail: None,
+                    },
+                );
                 return;
             };
             let outcome = compose_inline(&AxCursorReader, &agent, &AxTextInserter, &memory);
             match &outcome {
                 InlineOutcome::Inserted { chars } => {
                     eprintln!("[inline] inserted {chars} chars at the cursor");
-                    push_inline(&app, InlineStatus { phase: "inserted", chars: *chars, detail: None });
+                    push_inline(
+                        &app,
+                        InlineStatus {
+                            phase: "inserted",
+                            chars: *chars,
+                            detail: None,
+                        },
+                    );
                 }
                 // Nothing gets inserted on a rejected key, so without this the tap is silent and
                 // the reasonable next move is to press it again. Latch it for the status poll.
                 InlineOutcome::KeyRejected(why) => {
                     eprintln!("[inline] {why}");
                     note_key_rejected();
-                    push_inline(&app, InlineStatus { phase: "key_rejected", chars: 0, detail: Some(why.clone()) });
+                    push_inline(
+                        &app,
+                        InlineStatus {
+                            phase: "key_rejected",
+                            chars: 0,
+                            detail: Some(why.clone()),
+                        },
+                    );
                 }
                 InlineOutcome::NoContext => {
                     eprintln!("[inline] no editable field under the caret");
-                    push_inline(&app, InlineStatus { phase: "no_context", chars: 0, detail: None });
+                    push_inline(
+                        &app,
+                        InlineStatus {
+                            phase: "no_context",
+                            chars: 0,
+                            detail: None,
+                        },
+                    );
                 }
                 other => {
                     eprintln!("[inline] {other:?}");
                     // The reason, not the content: these carry provider/AX errors, never the
                     // draft or anything the user typed.
                     let detail = match other {
-                        InlineOutcome::GenerationFailed(e) | InlineOutcome::InsertFailed(e) => Some(e.clone()),
+                        InlineOutcome::GenerationFailed(e) | InlineOutcome::InsertFailed(e) => {
+                            Some(e.clone())
+                        }
                         _ => None,
                     };
-                    push_inline(&app, InlineStatus { phase: "failed", chars: 0, detail });
+                    push_inline(
+                        &app,
+                        InlineStatus {
+                            phase: "failed",
+                            chars: 0,
+                            detail,
+                        },
+                    );
                 }
             }
         });
@@ -737,7 +847,11 @@ pub mod mac {
                 let overdue = c.status == "overdue" || c.due_at.is_some_and(|d| d < now);
                 StateItem {
                     id: c.id,
-                    meta: if overdue { "overdue".into() } else { format!("{:.0}% sure", c.confidence * 100.0) },
+                    meta: if overdue {
+                        "overdue".into()
+                    } else {
+                        format!("{:.0}% sure", c.confidence * 100.0)
+                    },
                     text: c.description,
                 }
             })
@@ -746,9 +860,16 @@ pub mod mac {
             .open_loop_rows()
             .into_iter()
             .filter(|l| l.status != "closed")
-            .map(|l| StateItem { id: l.id, meta: format!("{}d waiting", l.staleness_days), text: l.description })
+            .map(|l| StateItem {
+                id: l.id,
+                meta: format!("{}d waiting", l.staleness_days),
+                text: l.description,
+            })
             .collect();
-        StateView { commitments, open_loops }
+        StateView {
+            commitments,
+            open_loops,
+        }
     }
 
     /// Resolve a state row the user clicked: `kind` is "commitment" (→ done) or "open_loop"
@@ -788,7 +909,12 @@ pub mod mac {
              matters (e.g. \"per the Gmail thread\"). If the evidence does not answer the question, \
              say what you do know and what is missing — never invent specifics.\n",
         );
-        let facts: Vec<&str> = ctx.facts.iter().map(|m| m.trim()).filter(|m| !m.is_empty()).collect();
+        let facts: Vec<&str> = ctx
+            .facts
+            .iter()
+            .map(|m| m.trim())
+            .filter(|m| !m.is_empty())
+            .collect();
         if !facts.is_empty() {
             p.push_str("\nWhat you remember about their work:\n");
             for m in facts {
@@ -849,8 +975,12 @@ pub mod mac {
             if !frame.needs_rescan {
                 continue;
             }
-            let Some(rec) = db.get_screen_frame(frame.frame_id) else { continue };
-            let Some(text) = crate::screen_ocr::ocr_jpeg_bytes(&rec.jpeg) else { continue };
+            let Some(rec) = db.get_screen_frame(frame.frame_id) else {
+                continue;
+            };
+            let Some(text) = crate::screen_ocr::ocr_jpeg_bytes(&rec.jpeg) else {
+                continue;
+            };
             let excerpt = shogun_memory::search::excerpt(&text, "", 400);
             for ev in &mut ctx.evidence {
                 if ev.frame_id == Some(frame.frame_id) {
@@ -954,18 +1084,22 @@ pub mod mac {
                 citations: Vec::new(),
             })
         };
-        let Some(agent) = build_agent(db) else { return no_key() };
+        let Some(agent) = build_agent(db) else {
+            return no_key();
+        };
         if !agent.is_live() {
             return no_key();
         }
-        let text = agent.complete(&build_chat_prompt(message, &ctx)).map_err(|e| {
-            // Same latch as the ⌥-tap path: chat surfaces the error text, but Settings is where
-            // the fix is, and it needs to know the key is the problem.
-            if matches!(e, LlmError::Unauthorized(..)) {
-                note_key_rejected();
-            }
-            e.to_string()
-        })?;
+        let text = agent
+            .complete(&build_chat_prompt(message, &ctx))
+            .map_err(|e| {
+                // Same latch as the ⌥-tap path: chat surfaces the error text, but Settings is where
+                // the fix is, and it needs to know the key is the problem.
+                if matches!(e, LlmError::Unauthorized(..)) {
+                    note_key_rejected();
+                }
+                e.to_string()
+            })?;
         let citations = ctx
             .evidence
             .iter()

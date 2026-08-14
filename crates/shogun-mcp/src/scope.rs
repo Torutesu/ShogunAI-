@@ -123,7 +123,11 @@ use Gating::*;
 use OpClass::*;
 
 const fn op(name: &'static str, class: OpClass, gating: Gating) -> ScopedOp {
-    ScopedOp { name, class, gating }
+    ScopedOp {
+        name,
+        class,
+        gating,
+    }
 }
 
 // ---- Gmail (Wave 1) ------------------------------------------------------------------------
@@ -187,7 +191,11 @@ const GITHUB: &[ScopedOp] = &[
 const LINEAR: &[ScopedOp] = &[
     op("read_sync", Read, Background),
     op("issue_draft", DraftLocal, Level(Level::L2)),
-    op("issue_create_update_comment", ExternalSend, Level(Level::L3)),
+    op(
+        "issue_create_update_comment",
+        ExternalSend,
+        Level(Level::L3),
+    ),
     op("status_change", ExternalSend, Level(Level::L3)),
 ];
 
@@ -208,7 +216,10 @@ pub fn scope(service: Service) -> ServiceScope {
 /// Resolve a service from its `source_str` id (`gmail` / `gcal` / `gdrive` / …) — the inverse of
 /// [`Service::source_str`]. Used by the UI/command layer to turn a string id back into a service.
 pub fn from_source(source: &str) -> Option<Service> {
-    ALL_SERVICES.iter().copied().find(|s| s.source_str() == source)
+    ALL_SERVICES
+        .iter()
+        .copied()
+        .find(|s| s.source_str() == source)
 }
 
 /// Every service, for exhaustive iteration in tests / settings.
@@ -243,7 +254,11 @@ pub enum Authorization {
 /// composed integration gate ([`crate::service_gate`]) uses this to apply the amber read/write
 /// rule and the draft-stop rule on top of the raw authorization.
 pub fn lookup(service: Service, op_name: &str) -> Option<ScopedOp> {
-    scope(service).ops.iter().copied().find(|o| o.name == op_name)
+    scope(service)
+        .ops
+        .iter()
+        .copied()
+        .find(|o| o.name == op_name)
 }
 
 pub fn authorize(service: Service, op_name: &str) -> Authorization {
@@ -269,8 +284,12 @@ mod tests {
             for o in scope(service).ops {
                 if o.class.is_external_send() {
                     match o.gating {
-                        Gating::Level(Level::L3) | Gating::ComposioOnly | Gating::NotImplemented => {}
-                        other => panic!("{service:?}::{} send gated {other:?} — must be L3", o.name),
+                        Gating::Level(Level::L3)
+                        | Gating::ComposioOnly
+                        | Gating::NotImplemented => {}
+                        other => {
+                            panic!("{service:?}::{} send gated {other:?} — must be L3", o.name)
+                        }
                     }
                 }
             }
@@ -293,7 +312,10 @@ mod tests {
                     (OpClass::ExternalSend, Gating::Level(Level::L3)) => {}
                     (OpClass::ExternalSend, Gating::ComposioOnly) => {}
                     (OpClass::ExternalSend, Gating::NotImplemented) => {}
-                    pair => panic!("{service:?}::{} has inconsistent (class, gating): {pair:?}", o.name),
+                    pair => panic!(
+                        "{service:?}::{} has inconsistent (class, gating): {pair:?}",
+                        o.name
+                    ),
                 }
             }
         }
@@ -301,44 +323,96 @@ mod tests {
 
     #[test]
     fn unknown_operation_is_denied() {
-        assert_eq!(authorize(Service::Gmail, "read_all_mailboxes"), Authorization::DeniedUnknownOp);
-        assert_eq!(authorize(Service::Slack, "delete_workspace"), Authorization::DeniedUnknownOp);
+        assert_eq!(
+            authorize(Service::Gmail, "read_all_mailboxes"),
+            Authorization::DeniedUnknownOp
+        );
+        assert_eq!(
+            authorize(Service::Slack, "delete_workspace"),
+            Authorization::DeniedUnknownOp
+        );
     }
 
     #[test]
     fn gmail_send_is_first_layer_denied_and_routed_to_composio() {
-        assert_eq!(authorize(Service::Gmail, "send"), Authorization::RequiresComposio);
+        assert_eq!(
+            authorize(Service::Gmail, "send"),
+            Authorization::RequiresComposio
+        );
     }
 
     #[test]
     fn not_implemented_operations_are_denied() {
-        assert_eq!(authorize(Service::Gmail, "delete_archive"), Authorization::DeniedNotImplemented);
-        assert_eq!(authorize(Service::Notion, "delete"), Authorization::DeniedNotImplemented);
-        assert_eq!(authorize(Service::GitHub, "pr_merge_close_branch"), Authorization::DeniedNotImplemented);
+        assert_eq!(
+            authorize(Service::Gmail, "delete_archive"),
+            Authorization::DeniedNotImplemented
+        );
+        assert_eq!(
+            authorize(Service::Notion, "delete"),
+            Authorization::DeniedNotImplemented
+        );
+        assert_eq!(
+            authorize(Service::GitHub, "pr_merge_close_branch"),
+            Authorization::DeniedNotImplemented
+        );
     }
 
     #[test]
     fn reads_sync_in_background_and_on_demand_is_l2() {
-        assert_eq!(authorize(Service::GoogleCalendar, "read_sync"), Authorization::Background);
-        assert_eq!(authorize(Service::Gmail, "read_on_demand"), Authorization::RequiresLevel(Level::L2));
-        assert_eq!(authorize(Service::GoogleCalendar, "free_busy"), Authorization::RequiresLevel(Level::L2));
+        assert_eq!(
+            authorize(Service::GoogleCalendar, "read_sync"),
+            Authorization::Background
+        );
+        assert_eq!(
+            authorize(Service::Gmail, "read_on_demand"),
+            Authorization::RequiresLevel(Level::L2)
+        );
+        assert_eq!(
+            authorize(Service::GoogleCalendar, "free_busy"),
+            Authorization::RequiresLevel(Level::L2)
+        );
     }
 
     #[test]
     fn writes_and_posts_carry_their_levels() {
-        assert_eq!(authorize(Service::Gmail, "draft_create_update"), Authorization::RequiresLevel(Level::L2));
-        assert_eq!(authorize(Service::GoogleCalendar, "event_create"), Authorization::RequiresLevel(Level::L3));
-        assert_eq!(authorize(Service::Slack, "post_message"), Authorization::RequiresLevel(Level::L3));
-        assert_eq!(authorize(Service::Slack, "reaction"), Authorization::RequiresLevel(Level::L3));
-        assert_eq!(authorize(Service::Notion, "page_or_row_create"), Authorization::RequiresLevel(Level::L3));
-        assert_eq!(authorize(Service::Linear, "status_change"), Authorization::RequiresLevel(Level::L3));
+        assert_eq!(
+            authorize(Service::Gmail, "draft_create_update"),
+            Authorization::RequiresLevel(Level::L2)
+        );
+        assert_eq!(
+            authorize(Service::GoogleCalendar, "event_create"),
+            Authorization::RequiresLevel(Level::L3)
+        );
+        assert_eq!(
+            authorize(Service::Slack, "post_message"),
+            Authorization::RequiresLevel(Level::L3)
+        );
+        assert_eq!(
+            authorize(Service::Slack, "reaction"),
+            Authorization::RequiresLevel(Level::L3)
+        );
+        assert_eq!(
+            authorize(Service::Notion, "page_or_row_create"),
+            Authorization::RequiresLevel(Level::L3)
+        );
+        assert_eq!(
+            authorize(Service::Linear, "status_change"),
+            Authorization::RequiresLevel(Level::L3)
+        );
     }
 
     #[test]
     fn slack_fallback_copy_is_l2_no_send() {
         // FR-INT-30: clipboard copy leaves no device — L2, and never a send.
-        assert_eq!(authorize(Service::Slack, "copy_to_clipboard"), Authorization::RequiresLevel(Level::L2));
-        let o = scope(Service::Slack).ops.iter().find(|o| o.name == "copy_to_clipboard").unwrap();
+        assert_eq!(
+            authorize(Service::Slack, "copy_to_clipboard"),
+            Authorization::RequiresLevel(Level::L2)
+        );
+        let o = scope(Service::Slack)
+            .ops
+            .iter()
+            .find(|o| o.name == "copy_to_clipboard")
+            .unwrap();
         assert!(!o.class.is_external_send());
     }
 
@@ -370,7 +444,11 @@ mod tests {
         let mut uniq = tags.clone();
         uniq.sort_unstable();
         uniq.dedup();
-        assert_eq!(uniq.len(), tags.len(), "source tags must be unique: {tags:?}");
+        assert_eq!(
+            uniq.len(),
+            tags.len(),
+            "source tags must be unique: {tags:?}"
+        );
         assert_eq!(Service::Gmail.source_str(), "gmail");
         assert_eq!(Service::GoogleCalendar.source_str(), "gcal");
     }
@@ -381,11 +459,23 @@ mod tests {
         assert_eq!(Service::GoogleDrive.wave(), Wave::One);
         assert!(Service::GoogleDrive.is_released(Wave::One));
         // read syncs in the background; on-demand read (Docs/Sheets content) is L2.
-        assert_eq!(authorize(Service::GoogleDrive, "read_sync"), Authorization::Background);
-        assert_eq!(authorize(Service::GoogleDrive, "read_on_demand"), Authorization::RequiresLevel(Level::L2));
+        assert_eq!(
+            authorize(Service::GoogleDrive, "read_sync"),
+            Authorization::Background
+        );
+        assert_eq!(
+            authorize(Service::GoogleDrive, "read_on_demand"),
+            Authorization::RequiresLevel(Level::L2)
+        );
         // a create writes content out → L3 (consistent with a Notion page create).
-        assert_eq!(authorize(Service::GoogleDrive, "file_create"), Authorization::RequiresLevel(Level::L3));
-        assert_eq!(authorize(Service::GoogleDrive, "delete"), Authorization::DeniedNotImplemented);
+        assert_eq!(
+            authorize(Service::GoogleDrive, "file_create"),
+            Authorization::RequiresLevel(Level::L3)
+        );
+        assert_eq!(
+            authorize(Service::GoogleDrive, "delete"),
+            Authorization::DeniedNotImplemented
+        );
         assert_eq!(Service::GoogleDrive.source_str(), "gdrive");
     }
 

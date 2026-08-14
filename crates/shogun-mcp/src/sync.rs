@@ -130,8 +130,13 @@ pub fn collect_sync<T: IntegrationTransport + ?Sized>(
     transport: &T,
 ) -> Result<Vec<IngestItem>, SyncFailure> {
     authorize_sync(service, ctx).map_err(SyncFailure::Denied)?;
-    let fetched = transport.read_sync(service).map_err(SyncFailure::Transport)?;
-    Ok(fetched.into_iter().filter_map(|it| normalize(service, it)).collect())
+    let fetched = transport
+        .read_sync(service)
+        .map_err(SyncFailure::Transport)?;
+    Ok(fetched
+        .into_iter()
+        .filter_map(|it| normalize(service, it))
+        .collect())
 }
 
 /// The op name an on-demand fetch gates on (the `read_on_demand` row; only Gmail + Drive have it).
@@ -156,8 +161,13 @@ pub fn collect_on_demand<T: IntegrationTransport + ?Sized>(
         // refuse rather than fetch under the wrong gating.
         _ => return Err(SyncFailure::Denied(DenyReason::UnknownOp)),
     }
-    let fetched = transport.fetch_on_demand(service, query).map_err(SyncFailure::Transport)?;
-    Ok(fetched.into_iter().filter_map(|it| normalize(service, it)).collect())
+    let fetched = transport
+        .fetch_on_demand(service, query)
+        .map_err(SyncFailure::Transport)?;
+    Ok(fetched
+        .into_iter()
+        .filter_map(|it| normalize(service, it))
+        .collect())
 }
 
 #[cfg(test)]
@@ -167,16 +177,30 @@ mod tests {
     use crate::scope::Wave;
 
     fn connected() -> ConnState {
-        ConnState::Connected { last_sync_ms: 1_000 }
+        ConnState::Connected {
+            last_sync_ms: 1_000,
+        }
     }
     fn amber() -> ConnState {
-        ConnState::NeedsReauth { reason: ReauthReason::TokenExpired, last_sync_ms: 500 }
+        ConnState::NeedsReauth {
+            reason: ReauthReason::TokenExpired,
+            last_sync_ms: 500,
+        }
     }
     fn ctx(highest: Wave, conn: ConnState) -> OpContext {
-        OpContext { highest_released: highest, conn, draft_stop: false }
+        OpContext {
+            highest_released: highest,
+            conn,
+            draft_stop: false,
+        }
     }
     fn item(id: &str, title: &str, body: &str, ts: i64) -> FetchedItem {
-        FetchedItem { external_id: id.into(), title: title.into(), body: body.into(), ts_ms: ts }
+        FetchedItem {
+            external_id: id.into(),
+            title: title.into(),
+            body: body.into(),
+            ts_ms: ts,
+        }
     }
 
     /// A transport that yields a fixed list, or errors.
@@ -191,7 +215,11 @@ mod tests {
                 None => Ok(self.items.clone()),
             }
         }
-        fn fetch_on_demand(&self, _service: Service, _query: &str) -> Result<Vec<FetchedItem>, String> {
+        fn fetch_on_demand(
+            &self,
+            _service: Service,
+            _query: &str,
+        ) -> Result<Vec<FetchedItem>, String> {
             match &self.err {
                 Some(e) => Err(e.clone()),
                 None => Ok(self.items.clone()),
@@ -219,29 +247,46 @@ mod tests {
     #[test]
     fn unreleased_wave_refuses_sync() {
         // Slack is Wave 2; with only Wave 1 released a sync is denied before any fetch.
-        let fake = Fake { items: vec![item("s1", "t", "b", 1)], err: None };
+        let fake = Fake {
+            items: vec![item("s1", "t", "b", 1)],
+            err: None,
+        };
         let err = collect_sync(Service::Slack, &ctx(Wave::One, connected()), &fake).unwrap_err();
         assert_eq!(err, SyncFailure::Denied(DenyReason::UnreleasedWave));
     }
 
     #[test]
     fn disconnected_service_refuses_sync() {
-        let fake = Fake { items: vec![], err: None };
-        let err = collect_sync(Service::Gmail, &ctx(Wave::One, ConnState::Disconnected), &fake).unwrap_err();
+        let fake = Fake {
+            items: vec![],
+            err: None,
+        };
+        let err = collect_sync(
+            Service::Gmail,
+            &ctx(Wave::One, ConnState::Disconnected),
+            &fake,
+        )
+        .unwrap_err();
         assert_eq!(err, SyncFailure::Denied(DenyReason::NotConnected));
     }
 
     #[test]
     fn amber_service_still_syncs_cached_reads() {
         // FR-INT-06: an amber (needs-reauth) service serves cached reads — a sync is still allowed.
-        let fake = Fake { items: vec![item("m1", "t", "body", 5)], err: None };
+        let fake = Fake {
+            items: vec![item("m1", "t", "body", 5)],
+            err: None,
+        };
         let out = collect_sync(Service::Gmail, &ctx(Wave::One, amber()), &fake).unwrap();
         assert_eq!(out.len(), 1);
     }
 
     #[test]
     fn transport_error_propagates_without_content() {
-        let fake = Fake { items: vec![], err: Some("token refresh failed".into()) };
+        let fake = Fake {
+            items: vec![],
+            err: Some("token refresh failed".into()),
+        };
         let err = collect_sync(Service::Gmail, &ctx(Wave::One, connected()), &fake).unwrap_err();
         assert_eq!(err, SyncFailure::Transport("token refresh failed".into()));
     }
@@ -249,7 +294,10 @@ mod tests {
     #[test]
     fn empty_body_items_are_dropped() {
         let fake = Fake {
-            items: vec![item("m1", "only a title", "   ", 1), item("m2", "", "real body", 2)],
+            items: vec![
+                item("m1", "only a title", "   ", 1),
+                item("m2", "", "real body", 2),
+            ],
             err: None,
         };
         let out = collect_sync(Service::Gmail, &ctx(Wave::One, connected()), &fake).unwrap();
@@ -260,8 +308,17 @@ mod tests {
     #[test]
     fn on_demand_fetch_ingests_for_a_service_with_read_on_demand() {
         // Gmail has a read_on_demand (L2) row; a connected, released Gmail fetches on demand.
-        let fake = Fake { items: vec![item("t1", "Thread", "the thread body", 7)], err: None };
-        let out = collect_on_demand(Service::Gmail, "thread-123", &ctx(Wave::One, connected()), &fake).unwrap();
+        let fake = Fake {
+            items: vec![item("t1", "Thread", "the thread body", 7)],
+            err: None,
+        };
+        let out = collect_on_demand(
+            Service::Gmail,
+            "thread-123",
+            &ctx(Wave::One, connected()),
+            &fake,
+        )
+        .unwrap();
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].source, "gmail");
         assert_eq!(out[0].body, "the thread body");
@@ -270,22 +327,44 @@ mod tests {
     #[test]
     fn on_demand_denied_for_a_service_without_that_op() {
         // Calendar has no read_on_demand row → denied (unknown op), no fetch.
-        let fake = Fake { items: vec![item("e", "t", "b", 1)], err: None };
-        let err = collect_on_demand(Service::GoogleCalendar, "q", &ctx(Wave::One, connected()), &fake).unwrap_err();
+        let fake = Fake {
+            items: vec![item("e", "t", "b", 1)],
+            err: None,
+        };
+        let err = collect_on_demand(
+            Service::GoogleCalendar,
+            "q",
+            &ctx(Wave::One, connected()),
+            &fake,
+        )
+        .unwrap_err();
         assert_eq!(err, SyncFailure::Denied(DenyReason::UnknownOp));
     }
 
     #[test]
     fn on_demand_denied_when_disconnected() {
-        let fake = Fake { items: vec![item("t", "t", "b", 1)], err: None };
-        let err = collect_on_demand(Service::Gmail, "q", &ctx(Wave::One, ConnState::Disconnected), &fake).unwrap_err();
+        let fake = Fake {
+            items: vec![item("t", "t", "b", 1)],
+            err: None,
+        };
+        let err = collect_on_demand(
+            Service::Gmail,
+            "q",
+            &ctx(Wave::One, ConnState::Disconnected),
+            &fake,
+        )
+        .unwrap_err();
         assert_eq!(err, SyncFailure::Denied(DenyReason::NotConnected));
     }
 
     #[test]
     fn calendar_items_get_the_calendar_kind() {
-        let fake = Fake { items: vec![item("e1", "Standup", "Daily standup 9am", 1)], err: None };
-        let out = collect_sync(Service::GoogleCalendar, &ctx(Wave::One, connected()), &fake).unwrap();
+        let fake = Fake {
+            items: vec![item("e1", "Standup", "Daily standup 9am", 1)],
+            err: None,
+        };
+        let out =
+            collect_sync(Service::GoogleCalendar, &ctx(Wave::One, connected()), &fake).unwrap();
         assert_eq!(out[0].source, "gcal");
         assert_eq!(out[0].kind, "calendar_event");
     }

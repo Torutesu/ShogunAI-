@@ -23,7 +23,7 @@ pub mod mac {
 
     use serde::Serialize;
     use shogun_core::meeting::detect::{self, Decision, LiveSignals, MicWatch, Signals};
-use shogun_core::meeting::gate::OfferGate;
+    use shogun_core::meeting::gate::OfferGate;
     use shogun_core::meeting::settings::{MeetingLanguage, MeetingMode, OfferContext, Settings};
     use shogun_core::meeting::statemachine::{Effect, EndReason, Input, Machine, Params, State};
     use tauri::{Emitter, Manager};
@@ -167,7 +167,10 @@ use shogun_core::meeting::gate::OfferGate;
     }
 
     fn settings_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
-        app.path().app_data_dir().ok().map(|d| d.join("meeting.json"))
+        app.path()
+            .app_data_dir()
+            .ok()
+            .map(|d| d.join("meeting.json"))
     }
 
     /// Load persisted settings. Called once at setup.
@@ -203,7 +206,11 @@ use shogun_core::meeting::gate::OfferGate;
         }
         eprintln!(
             "[meeting] notes {}",
-            if lane.settings.enabled { "enabled" } else { "off (default)" }
+            if lane.settings.enabled {
+                "enabled"
+            } else {
+                "off (default)"
+            }
         );
         if let Ok(mut g) = LANE.lock() {
             *g = Some(lane);
@@ -211,7 +218,9 @@ use shogun_core::meeting::gate::OfferGate;
     }
 
     fn save(app: &tauri::AppHandle, settings: &Settings) -> Result<(), String> {
-        let Some(p) = settings_path(app) else { return Ok(()) };
+        let Some(p) = settings_path(app) else {
+            return Ok(());
+        };
         if let Some(dir) = p.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
@@ -272,11 +281,7 @@ use shogun_core::meeting::gate::OfferGate;
                         if let Ok(mut live) = lane.live_settings.write() {
                             *live = lane.settings.clone();
                         }
-                        lane.audio = crate::audio_lane::start(
-                            app,
-                            id,
-                            lane.live_settings.clone(),
-                        );
+                        lane.audio = crate::audio_lane::start(app, id, lane.live_settings.clone());
                     }
                 }
                 Effect::StopAudio => {
@@ -309,7 +314,12 @@ use shogun_core::meeting::gate::OfferGate;
 
     fn emit(app: &tauri::AppHandle, lane: &Lane, now: i64) {
         let v = view(lane, now);
-        sync_window(app, lane.machine.state(), lane.settings.enabled, lane.overlay_dismissed);
+        sync_window(
+            app,
+            lane.machine.state(),
+            lane.settings.enabled,
+            lane.overlay_dismissed,
+        );
         // Skip redundant webview events: the tick fires every second but Wrapping is static
         // until dismiss, and Offered/Recording only need a push when the view actually changed.
         static LAST_EMIT: Mutex<Option<MeetingView>> = Mutex::new(None);
@@ -438,8 +448,10 @@ use shogun_core::meeting::gate::OfferGate;
         let policy = detect::OfferPolicy {
             allow_mic_only: lane.settings.allow_mic_only_detect,
         };
-        if let Decision::Offer { confidence, provenance } =
-            detect::evaluate_offer(&signals, &ctx, &policy)
+        if let Decision::Offer {
+            confidence,
+            provenance,
+        } = detect::evaluate_offer(&signals, &ctx, &policy)
         {
             // The window title, not the app name: "Weekly sync" is what the user calls the
             // meeting, and `zoom.us` on every row would make the whole timeline look identical.
@@ -483,7 +495,12 @@ use shogun_core::meeting::gate::OfferGate;
         }
     }
 
-    fn recording_app_present(lane: &mut Lane, _obs: Option<&TickObservation<'_>>, now: i64, mic_open: bool) -> bool {
+    fn recording_app_present(
+        lane: &mut Lane,
+        _obs: Option<&TickObservation<'_>>,
+        now: i64,
+        mic_open: bool,
+    ) -> bool {
         if lane.opened_via_meet_url {
             return detect::meet_url_session_present(
                 lane.url_lost_since_ms,
@@ -761,18 +778,16 @@ use shogun_core::meeting::gate::OfferGate;
     }
 
     /// Per-panel user resize (logical px). Independent windows — never one shared desk size.
-    static PANEL_CUSTOM_SIZE: std::sync::Mutex<PanelSizes> =
-        std::sync::Mutex::new(PanelSizes {
-            cc: None,
-            canvas: None,
-            chat: None,
-        });
-    static PANEL_PARKED: std::sync::Mutex<PanelParked> =
-        std::sync::Mutex::new(PanelParked {
-            cc: false,
-            canvas: false,
-            chat: false,
-        });
+    static PANEL_CUSTOM_SIZE: std::sync::Mutex<PanelSizes> = std::sync::Mutex::new(PanelSizes {
+        cc: None,
+        canvas: None,
+        chat: None,
+    });
+    static PANEL_PARKED: std::sync::Mutex<PanelParked> = std::sync::Mutex::new(PanelParked {
+        cc: false,
+        canvas: false,
+        chat: false,
+    });
     const OVERLAY_SIZE_MIN: (f64, f64) = (280.0, 180.0);
     const OVERLAY_SIZE_MAX: (f64, f64) = (720.0, 900.0);
     /// Distance from screen edges, in logical pixels.
@@ -817,24 +832,20 @@ use shogun_core::meeting::gate::OfferGate;
         if let Some(win) = app.get_webview_window(label) {
             return Some(win);
         }
-        let win = tauri::WebviewWindowBuilder::new(
-            app,
-            label,
-            tauri::WebviewUrl::default(),
-        )
-        .title(title)
-        .transparent(!opaque)
-        .decorations(false)
-        .resizable(false)
-        .always_on_top(true)
-        .shadow(false)
-        .skip_taskbar(true)
-        .inner_size(size.0, size.1)
-        .visible(false)
-        .focused(false)
-        .build()
-        .map_err(|e| eprintln!("[meeting] overlay `{label}` build failed: {e}"))
-        .ok()?;
+        let win = tauri::WebviewWindowBuilder::new(app, label, tauri::WebviewUrl::default())
+            .title(title)
+            .transparent(!opaque)
+            .decorations(false)
+            .resizable(false)
+            .always_on_top(true)
+            .shadow(false)
+            .skip_taskbar(true)
+            .inner_size(size.0, size.1)
+            .visible(false)
+            .focused(false)
+            .build()
+            .map_err(|e| eprintln!("[meeting] overlay `{label}` build failed: {e}"))
+            .ok()?;
         configure_overlay_window(&win, opaque);
         eprintln!(
             "[meeting] overlay `{label}` url = {:?} opaque={opaque}",
@@ -848,9 +859,9 @@ use shogun_core::meeting::gate::OfferGate;
     /// which left a transparent full-window hit target blocking the desktop even when the lane
     /// was Idle and `hide()` had been called.
     fn configure_overlay_window(win: &tauri::WebviewWindow, opaque: bool) {
+        use objc2::class;
         use objc2::msg_send;
         use objc2::runtime::AnyObject;
-        use objc2::class;
         use std::sync::atomic::Ordering;
 
         let ptr = match win.ns_window() {
@@ -890,9 +901,7 @@ use shogun_core::meeting::gate::OfferGate;
             // Start click-through until sync_window / show_content_panel shows real UI.
             let _: () = msg_send![ptr, setIgnoresMouseEvents: true];
         }
-        eprintln!(
-            "[meeting] overlay window configured (hidden, click-through, opaque={opaque})"
-        );
+        eprintln!("[meeting] overlay window configured (hidden, click-through, opaque={opaque})");
     }
 
     fn overlay_ns_window(win: &tauri::WebviewWindow) -> Option<*mut objc2::runtime::AnyObject> {
@@ -908,7 +917,9 @@ use shogun_core::meeting::gate::OfferGate;
     /// AppKit-only click-through toggle. Never orderOut here — visibility is sync_window's job.
     fn set_overlay_ignores_mouse(win: &tauri::WebviewWindow, ignores: bool) {
         use objc2::msg_send;
-        let Some(ptr) = overlay_ns_window(win) else { return };
+        let Some(ptr) = overlay_ns_window(win) else {
+            return;
+        };
         // SAFETY: live NSWindow; called from the main thread via sync_window / setup.
         unsafe {
             let _: () = msg_send![ptr, setIgnoresMouseEvents: ignores];
@@ -937,7 +948,9 @@ use shogun_core::meeting::gate::OfferGate;
     ///
     /// Computed and set entirely in **physical** pixels — see `park_bottom_center`.
     fn park_top_right(win: &tauri::WebviewWindow, size: (f64, f64)) {
-        let Some(monitor) = overlay_monitor(win) else { return };
+        let Some(monitor) = overlay_monitor(win) else {
+            return;
+        };
         let scale = monitor.scale_factor();
         let screen = monitor.size();
         let origin = monitor.position();
@@ -965,7 +978,9 @@ use shogun_core::meeting::gate::OfferGate;
     /// pixels, the window size is given in logical ones, and subtracting one from the other on a
     /// Retina display is off by exactly the scale factor.
     fn park_bottom_center(win: &tauri::WebviewWindow, size: (f64, f64)) {
-        let Some(monitor) = overlay_monitor(win) else { return };
+        let Some(monitor) = overlay_monitor(win) else {
+            return;
+        };
         let scale = monitor.scale_factor();
         let screen = monitor.size();
         let origin = monitor.position();
@@ -1206,7 +1221,10 @@ use shogun_core::meeting::gate::OfferGate;
         let size = placement.size;
         let x = placement.x;
         let y = placement.y;
-        eprintln!("[meeting] park panel `{label}` ({x},{y}) size {}x{}", size.0, size.1);
+        eprintln!(
+            "[meeting] park panel `{label}` ({x},{y}) size {}x{}",
+            size.0, size.1
+        );
         let _ = win.set_size(tauri::LogicalSize::new(size.0, size.1));
         let _ = win.set_position(tauri::PhysicalPosition::new(x, y));
         let _ = win.set_size(tauri::LogicalSize::new(size.0, size.1));
@@ -1234,7 +1252,9 @@ use shogun_core::meeting::gate::OfferGate;
     }
 
     fn show_content_panel(app: &tauri::AppHandle, label: &'static str, open: bool) {
-        let Some(win) = app.get_webview_window(label) else { return };
+        let Some(win) = app.get_webview_window(label) else {
+            return;
+        };
         if !open {
             let _ = win.hide();
             // Drop this panel's parked bit and re-fit the survivors. Leaving the bit set kept the
@@ -1256,13 +1276,11 @@ use shogun_core::meeting::gate::OfferGate;
         let needs_park = PANEL_PARKED
             .lock()
             .ok()
-            .map(|g| {
-                !match label {
-                    WIN_CC => g.cc,
-                    WIN_CANVAS => g.canvas,
-                    WIN_CHAT => g.chat,
-                    _ => false,
-                }
+            .map(|g| !match label {
+                WIN_CC => g.cc,
+                WIN_CANVAS => g.canvas,
+                WIN_CHAT => g.chat,
+                _ => false,
             })
             .unwrap_or(true);
         let _ = win.set_size(tauri::LogicalSize::new(size.0, size.1));
@@ -1369,7 +1387,12 @@ use shogun_core::meeting::gate::OfferGate;
         });
     }
 
-    fn sync_window_main(app: &tauri::AppHandle, state: State, enabled: bool, overlay_dismissed: bool) {
+    fn sync_window_main(
+        app: &tauri::AppHandle,
+        state: State,
+        enabled: bool,
+        overlay_dismissed: bool,
+    ) {
         // `PARKED` records only whether the overlay has been placed yet — the user may drag it
         // afterwards and it must not jump back. Showing is attempted on *every* tick it should
         // be visible: `show()` is idempotent, and treating "we showed it once" as "it is on
@@ -1378,7 +1401,8 @@ use shogun_core::meeting::gate::OfferGate;
         static LAST_PARK_MODE: std::sync::Mutex<Option<ParkMode>> = std::sync::Mutex::new(None);
         use std::sync::atomic::Ordering;
 
-        let visible = enabled && !matches!(state, State::Idle)
+        let visible = enabled
+            && !matches!(state, State::Idle)
             && !(state == State::Recording && overlay_dismissed);
         let size = match state {
             State::Wrapping => RECAP_SIZE,
@@ -1411,7 +1435,9 @@ use shogun_core::meeting::gate::OfferGate;
         // Never builds: the window exists from launch (see `build_overlay`). If it is missing,
         // something failed at setup and the right answer is to do nothing rather than to try
         // creating an AppKit window from this thread.
-        let Some(win) = app.get_webview_window(WINDOW_LABEL) else { return };
+        let Some(win) = app.get_webview_window(WINDOW_LABEL) else {
+            return;
+        };
         if !visible {
             OVERLAY_WANTS_INTERACTIVE.store(false, Ordering::SeqCst);
             HOST_MENU_OPEN.store(false, Ordering::SeqCst);
@@ -1506,8 +1532,12 @@ use shogun_core::meeting::gate::OfferGate;
         let _ = app.run_on_main_thread(move || {
             use objc2::runtime::AnyObject;
             use objc2::{class, msg_send};
-            let Some(win) = handle.get_webview_window(&label) else { return };
-            let Some(ptr) = overlay_ns_window(&win) else { return };
+            let Some(win) = handle.get_webview_window(&label) else {
+                return;
+            };
+            let Some(ptr) = overlay_ns_window(&win) else {
+                return;
+            };
             // SAFETY: main thread; standard AppKit calls on a live NSWindow.
             unsafe {
                 let ns_app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
@@ -1653,7 +1683,10 @@ use shogun_core::meeting::gate::OfferGate;
     /// inventing a session for it.
     #[tauri::command]
     pub fn meeting_save_note(body: String, app: tauri::AppHandle) -> Result<(), String> {
-        let id = LANE.lock().ok().and_then(|g| g.as_ref().and_then(|l| l.session_id));
+        let id = LANE
+            .lock()
+            .ok()
+            .and_then(|g| g.as_ref().and_then(|l| l.session_id));
         let Some(id) = id else { return Ok(()) };
         let db = db(&app).ok_or("no database")?;
         // Report the failure. Swallowing it would tell the webview the note is safe while the
@@ -1691,9 +1724,15 @@ use shogun_core::meeting::gate::OfferGate;
                 } else {
                     "····".to_string()
                 };
-                DeepgramKeyStatus { has_key: true, key_last4: last4 }
+                DeepgramKeyStatus {
+                    has_key: true,
+                    key_last4: last4,
+                }
             }
-            _ => DeepgramKeyStatus { has_key: false, key_last4: String::new() },
+            _ => DeepgramKeyStatus {
+                has_key: false,
+                key_last4: String::new(),
+            },
         }
     }
 
@@ -1725,7 +1764,10 @@ use shogun_core::meeting::gate::OfferGate;
     /// what was captured, with no model and no network.
     #[tauri::command]
     pub fn meeting_recap(app: tauri::AppHandle) -> Option<shogun_core::meeting::recap::Recap> {
-        let id = LANE.lock().ok().and_then(|g| g.as_ref().and_then(|l| l.last_session_id))?;
+        let id = LANE
+            .lock()
+            .ok()
+            .and_then(|g| g.as_ref().and_then(|l| l.last_session_id))?;
         db(&app).and_then(|db| db.meeting_recap(id))
     }
 
@@ -1759,7 +1801,10 @@ use shogun_core::meeting::gate::OfferGate;
     /// `meeting_recap` event). Reads the same `last_session_id` as [`meeting_recap`].
     #[tauri::command]
     pub fn meeting_recap_minutes(app: tauri::AppHandle) -> Option<MinutesView> {
-        let id = LANE.lock().ok().and_then(|g| g.as_ref().and_then(|l| l.last_session_id))?;
+        let id = LANE
+            .lock()
+            .ok()
+            .and_then(|g| g.as_ref().and_then(|l| l.last_session_id))?;
         let stored = db(&app).and_then(|db| db.meeting_recap_full(id))?;
         let decisions: Vec<String> =
             serde_json::from_str(&stored.decisions_json).unwrap_or_default();
@@ -1770,7 +1815,10 @@ use shogun_core::meeting::gate::OfferGate;
             decisions,
             next_actions: next_actions
                 .into_iter()
-                .map(|a| NextActionView { text: a.text, owner: a.owner })
+                .map(|a| NextActionView {
+                    text: a.text,
+                    owner: a.owner,
+                })
                 .collect(),
         })
     }
@@ -1811,10 +1859,16 @@ use shogun_core::meeting::gate::OfferGate;
                 .and_then(|g| g.as_ref().and_then(|l| l.last_session_id))
         });
         let Some(id) = id else {
-            return MeetingTranscriptView { lines: Vec::new(), only_blanks: false };
+            return MeetingTranscriptView {
+                lines: Vec::new(),
+                only_blanks: false,
+            };
         };
         let Some(db) = db(&app) else {
-            return MeetingTranscriptView { lines: Vec::new(), only_blanks: false };
+            return MeetingTranscriptView {
+                lines: Vec::new(),
+                only_blanks: false,
+            };
         };
         let stored = db.meeting_transcript(id);
         let mut displayable = Vec::new();
@@ -1834,7 +1888,10 @@ use shogun_core::meeting::gate::OfferGate;
             "[meeting] get_meeting_transcript session={id}: {} displayable (only_blanks={only_blanks})",
             displayable.len()
         );
-        MeetingTranscriptView { lines: displayable, only_blanks }
+        MeetingTranscriptView {
+            lines: displayable,
+            only_blanks,
+        }
     }
 
     /// Current settings for the Settings UI.
@@ -1860,14 +1917,25 @@ use shogun_core::meeting::gate::OfferGate;
     pub fn set_meeting_enabled(enabled: bool, app: tauri::AppHandle) -> Result<(), String> {
         let now = now_ms();
         let candidate = {
-            let Ok(g) = LANE.lock() else { return Err("busy".into()) };
-            let Some(lane) = g.as_ref() else { return Err("not ready".into()) };
-            Settings { enabled, ..lane.settings.clone() }
+            let Ok(g) = LANE.lock() else {
+                return Err("busy".into());
+            };
+            let Some(lane) = g.as_ref() else {
+                return Err("not ready".into());
+            };
+            Settings {
+                enabled,
+                ..lane.settings.clone()
+            }
         };
         save(&app, &candidate)?;
 
-        let Ok(mut g) = LANE.lock() else { return Err("busy".into()) };
-        let Some(lane) = g.as_mut() else { return Err("not ready".into()) };
+        let Ok(mut g) = LANE.lock() else {
+            return Err("busy".into());
+        };
+        let Some(lane) = g.as_mut() else {
+            return Err("not ready".into());
+        };
         lane.settings = candidate.clone();
         if let Ok(mut live) = lane.live_settings.write() {
             *live = candidate;
@@ -1880,7 +1948,10 @@ use shogun_core::meeting::gate::OfferGate;
         } else {
             emit(&app, lane, now);
         }
-        eprintln!("[meeting] notes → {}", if enabled { "enabled" } else { "off" });
+        eprintln!(
+            "[meeting] notes → {}",
+            if enabled { "enabled" } else { "off" }
+        );
         Ok(())
     }
 
@@ -1889,19 +1960,33 @@ use shogun_core::meeting::gate::OfferGate;
     #[tauri::command]
     pub fn set_meeting_allow_mic_only(allow: bool, app: tauri::AppHandle) -> Result<(), String> {
         let candidate = {
-            let Ok(g) = LANE.lock() else { return Err("busy".into()) };
-            let Some(lane) = g.as_ref() else { return Err("not ready".into()) };
-            Settings { allow_mic_only_detect: allow, ..lane.settings.clone() }
+            let Ok(g) = LANE.lock() else {
+                return Err("busy".into());
+            };
+            let Some(lane) = g.as_ref() else {
+                return Err("not ready".into());
+            };
+            Settings {
+                allow_mic_only_detect: allow,
+                ..lane.settings.clone()
+            }
         };
         save(&app, &candidate)?;
 
-        let Ok(mut g) = LANE.lock() else { return Err("busy".into()) };
-        let Some(lane) = g.as_mut() else { return Err("not ready".into()) };
+        let Ok(mut g) = LANE.lock() else {
+            return Err("busy".into());
+        };
+        let Some(lane) = g.as_mut() else {
+            return Err("not ready".into());
+        };
         lane.settings = candidate.clone();
         if let Ok(mut live) = lane.live_settings.write() {
             *live = candidate;
         }
-        eprintln!("[meeting] mic-only detect → {}", if allow { "on" } else { "off" });
+        eprintln!(
+            "[meeting] mic-only detect → {}",
+            if allow { "on" } else { "off" }
+        );
         Ok(())
     }
 
@@ -1911,7 +1996,11 @@ use shogun_core::meeting::gate::OfferGate;
     fn take_asr_restart(
         lane: &mut Lane,
         prev_asr: MeetingLanguage,
-    ) -> Option<(i64, Arc<RwLock<Settings>>, Option<crate::audio_lane::Handle>)> {
+    ) -> Option<(
+        i64,
+        Arc<RwLock<Settings>>,
+        Option<crate::audio_lane::Handle>,
+    )> {
         let new_asr = lane.settings.asr_language();
         if prev_asr == new_asr {
             return None;
@@ -1957,18 +2046,29 @@ use shogun_core::meeting::gate::OfferGate;
     pub fn set_meeting_mode(mode: MeetingMode, app: tauri::AppHandle) -> Result<(), String> {
         let now = now_ms();
         let (candidate, prev_asr) = {
-            let Ok(g) = LANE.lock() else { return Err("busy".into()) };
-            let Some(lane) = g.as_ref() else { return Err("not ready".into()) };
+            let Ok(g) = LANE.lock() else {
+                return Err("busy".into());
+            };
+            let Some(lane) = g.as_ref() else {
+                return Err("not ready".into());
+            };
             (
-                Settings { meeting_mode: mode, ..lane.settings.clone() },
+                Settings {
+                    meeting_mode: mode,
+                    ..lane.settings.clone()
+                },
                 lane.settings.asr_language(),
             )
         };
         save(&app, &candidate)?;
 
         let restart = {
-            let Ok(mut g) = LANE.lock() else { return Err("busy".into()) };
-            let Some(lane) = g.as_mut() else { return Err("not ready".into()) };
+            let Ok(mut g) = LANE.lock() else {
+                return Err("busy".into());
+            };
+            let Some(lane) = g.as_mut() else {
+                return Err("not ready".into());
+            };
             lane.settings = candidate.clone();
             if let Ok(mut live) = lane.live_settings.write() {
                 *live = candidate;
@@ -1996,8 +2096,12 @@ use shogun_core::meeting::gate::OfferGate;
     ) -> Result<(), String> {
         let now = now_ms();
         let (candidate, prev_asr) = {
-            let Ok(g) = LANE.lock() else { return Err("busy".into()) };
-            let Some(lane) = g.as_ref() else { return Err("not ready".into()) };
+            let Ok(g) = LANE.lock() else {
+                return Err("busy".into());
+            };
+            let Some(lane) = g.as_ref() else {
+                return Err("not ready".into());
+            };
             (
                 Settings {
                     source_lang: source_lang.unwrap_or(lane.settings.source_lang),
@@ -2012,8 +2116,12 @@ use shogun_core::meeting::gate::OfferGate;
         save(&app, &candidate)?;
 
         let restart = {
-            let Ok(mut g) = LANE.lock() else { return Err("busy".into()) };
-            let Some(lane) = g.as_mut() else { return Err("not ready".into()) };
+            let Ok(mut g) = LANE.lock() else {
+                return Err("busy".into());
+            };
+            let Some(lane) = g.as_mut() else {
+                return Err("not ready".into());
+            };
             lane.settings = candidate.clone();
             if let Ok(mut live) = lane.live_settings.write() {
                 *live = candidate;
@@ -2071,7 +2179,12 @@ use shogun_core::meeting::gate::OfferGate;
     /// Live corner-resize of one content panel window (keeps top-left fixed),
     /// or host pill expand/collapse for the bar mode menu (keeps bottom edge fixed).
     #[tauri::command]
-    pub fn meeting_set_overlay_size(app: tauri::AppHandle, width: f64, height: f64, label: Option<String>) {
+    pub fn meeting_set_overlay_size(
+        app: tauri::AppHandle,
+        width: f64,
+        height: f64,
+        label: Option<String>,
+    ) {
         let label_owned = label.unwrap_or_else(|| WIN_CC.to_string());
         if label_owned == WINDOW_LABEL {
             // Host: FE passes PILL_SIZE / PILL_WITH_MENU_SIZE — not panel clamp mins.
@@ -2081,7 +2194,9 @@ use shogun_core::meeting::gate::OfferGate;
             let _ = width; // host width fixed to pill constants
             let handle = app.clone();
             let _ = app.run_on_main_thread(move || {
-                let Some(win) = handle.get_webview_window(WINDOW_LABEL) else { return };
+                let Some(win) = handle.get_webview_window(WINDOW_LABEL) else {
+                    return;
+                };
                 resize_host_keeping_bottom(&win, size);
             });
             return;
@@ -2103,7 +2218,9 @@ use shogun_core::meeting::gate::OfferGate;
         }
         let handle = app.clone();
         let _ = app.run_on_main_thread(move || {
-            let Some(win) = handle.get_webview_window(key) else { return };
+            let Some(win) = handle.get_webview_window(key) else {
+                return;
+            };
             let prev = win.outer_position().ok();
             let _ = win.set_size(tauri::LogicalSize::new(size.0, size.1));
             if let Some(p) = prev {
@@ -2120,8 +2237,12 @@ use shogun_core::meeting::gate::OfferGate;
     #[tauri::command]
     pub fn meeting_include_app(bundle_id: String, app: tauri::AppHandle) -> Result<(), String> {
         let settings = {
-            let Ok(mut g) = LANE.lock() else { return Err("busy".into()) };
-            let Some(lane) = g.as_mut() else { return Err("not ready".into()) };
+            let Ok(mut g) = LANE.lock() else {
+                return Err("busy".into());
+            };
+            let Some(lane) = g.as_mut() else {
+                return Err("not ready".into());
+            };
             lane.settings.excluded_apps.remove(&bundle_id);
             lane.settings.clone()
         };
@@ -2133,20 +2254,32 @@ use shogun_core::meeting::gate::OfferGate;
     pub fn meeting_exclude_app(bundle_id: String, app: tauri::AppHandle) -> Result<(), String> {
         let now = now_ms();
         let candidate = {
-            let Ok(g) = LANE.lock() else { return Err("busy".into()) };
-            let Some(lane) = g.as_ref() else { return Err("not ready".into()) };
+            let Ok(g) = LANE.lock() else {
+                return Err("busy".into());
+            };
+            let Some(lane) = g.as_ref() else {
+                return Err("not ready".into());
+            };
             let mut next = lane.settings.clone();
             next.exclude_app(&bundle_id);
             next
         };
         save(&app, &candidate)?;
 
-        let Ok(mut g) = LANE.lock() else { return Err("busy".into()) };
-        let Some(lane) = g.as_mut() else { return Err("not ready".into()) };
+        let Ok(mut g) = LANE.lock() else {
+            return Err("busy".into());
+        };
+        let Some(lane) = g.as_mut() else {
+            return Err("not ready".into());
+        };
         lane.settings = candidate;
         // Excluding from the offer panel also declines whatever prompted it — from Offered that
         // is the pending offer, and from Recording the meeting in progress.
-        let input = if lane.machine.state() == State::Recording { Input::Stop } else { Input::NotNow };
+        let input = if lane.machine.state() == State::Recording {
+            Input::Stop
+        } else {
+            Input::NotNow
+        };
         let effects = lane.machine.step(input);
         let stop_audio = apply(&app, lane, &effects, now);
         drop(g);

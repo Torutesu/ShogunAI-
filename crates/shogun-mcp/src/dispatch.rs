@@ -18,7 +18,9 @@
 use shogun_agents::approval::{ApprovalId, ApprovalQueue, Origin, Preview};
 use shogun_agents::permission::{Action, Level, LocalAction, SendAction};
 
-use crate::memory_api::{read_inclusion, tool_level, ApiLevel, AuthResult, ReadInclusion, TokenRegistry, Tool};
+use crate::memory_api::{
+    read_inclusion, tool_level, ApiLevel, AuthResult, ReadInclusion, TokenRegistry, Tool,
+};
 
 /// Why a call was refused before reaching the backend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,7 +39,10 @@ pub enum ReadOutcome {
     Denied(Denied),
     /// The read is authorized; `included` items passed the confidence gate, of which `possibly`
     /// are medium-confidence (flagged) — the rest were excluded (FR-API-06).
-    Items { included: usize, possibly: usize },
+    Items {
+        included: usize,
+        possibly: usize,
+    },
 }
 
 /// The result of a write call (append_note = L1, propose_update = L2).
@@ -45,7 +50,9 @@ pub enum ReadOutcome {
 pub enum WriteOutcome {
     Denied(Denied),
     /// Authorized to write at this level (the L2 propose still surfaces in the Notch downstream).
-    Accepted { level: Level },
+    Accepted {
+        level: Level,
+    },
 }
 
 /// The result of an `actions.execute` call.
@@ -53,7 +60,9 @@ pub enum WriteOutcome {
 pub enum ActionOutcome {
     Denied(Denied),
     /// A local L1/L2 action — authorized to run via the engine (no external send).
-    Authorized { level: Level },
+    Authorized {
+        level: Level,
+    },
     /// An external send (L3) — enqueued for explicit confirmation; the caller holds this pending
     /// id and polls the approval queue. It never completes without a UI confirm (FR-API-04).
     PendingApproval(ApprovalId),
@@ -170,7 +179,10 @@ mod tests {
             api.handle_read(None, Tool::MemorySearch, &[0.9], false),
             ReadOutcome::Denied(Denied::NoToken)
         );
-        assert_eq!(api.handle_write(None, Tool::MemoryAppendNote), WriteOutcome::Denied(Denied::NoToken));
+        assert_eq!(
+            api.handle_write(None, Tool::MemoryAppendNote),
+            WriteOutcome::Denied(Denied::NoToken)
+        );
         assert_eq!(
             api.execute_local(None, LocalAction::LocalSearch { query: "x".into() }),
             ActionOutcome::Denied(Denied::NoToken)
@@ -194,11 +206,33 @@ mod tests {
         let mut approvals = ApprovalQueue::new();
         let api = MemoryApi::new(&tokens, &mut approvals);
         // 0.9 High (included, not possibly), 0.6 Medium (included, possibly), 0.3 Low (excluded).
-        let out = api.handle_read(Some("client-1"), Tool::StatePeopleList, &[0.9, 0.6, 0.3], false);
-        assert_eq!(out, ReadOutcome::Items { included: 2, possibly: 1 });
+        let out = api.handle_read(
+            Some("client-1"),
+            Tool::StatePeopleList,
+            &[0.9, 0.6, 0.3],
+            false,
+        );
+        assert_eq!(
+            out,
+            ReadOutcome::Items {
+                included: 2,
+                possibly: 1
+            }
+        );
         // include_low=true pulls the 0.3 in, flagged possibly.
-        let out2 = api.handle_read(Some("client-1"), Tool::StatePeopleList, &[0.9, 0.6, 0.3], true);
-        assert_eq!(out2, ReadOutcome::Items { included: 3, possibly: 2 });
+        let out2 = api.handle_read(
+            Some("client-1"),
+            Tool::StatePeopleList,
+            &[0.9, 0.6, 0.3],
+            true,
+        );
+        assert_eq!(
+            out2,
+            ReadOutcome::Items {
+                included: 3,
+                possibly: 2
+            }
+        );
     }
 
     #[test]
@@ -238,11 +272,20 @@ mod tests {
         let mut approvals = ApprovalQueue::new();
         let api = MemoryApi::new(&tokens, &mut approvals);
         assert_eq!(
-            api.execute_local(Some("client-1"), LocalAction::LocalSearch { query: "q".into() }),
+            api.execute_local(
+                Some("client-1"),
+                LocalAction::LocalSearch { query: "q".into() }
+            ),
             ActionOutcome::Authorized { level: Level::L1 }
         );
         assert_eq!(
-            api.execute_local(Some("client-1"), LocalAction::UpdateState { table: "people", state_id: 1 }),
+            api.execute_local(
+                Some("client-1"),
+                LocalAction::UpdateState {
+                    table: "people",
+                    state_id: 1
+                }
+            ),
             ActionOutcome::Authorized { level: Level::L2 }
         );
     }
@@ -251,7 +294,9 @@ mod tests {
     fn api_l3_send_is_pending_and_never_completes_without_ui_confirm() {
         let tokens = reg();
         let mut approvals = ApprovalQueue::new();
-        let send = SendAction::SendEmail { to: "a@b.com".into() };
+        let send = SendAction::SendEmail {
+            to: "a@b.com".into(),
+        };
         let preview = Preview::for_send(&send, "body", Route::DirectMcp);
 
         let id = {
@@ -275,7 +320,9 @@ mod tests {
     fn api_l3_send_requires_auth_before_enqueuing() {
         let tokens = reg();
         let mut approvals = ApprovalQueue::new();
-        let send = SendAction::SendEmail { to: "a@b.com".into() };
+        let send = SendAction::SendEmail {
+            to: "a@b.com".into(),
+        };
         let preview = Preview::for_send(&send, "body", Route::DirectMcp);
         let mut api = MemoryApi::new(&tokens, &mut approvals);
         assert_eq!(

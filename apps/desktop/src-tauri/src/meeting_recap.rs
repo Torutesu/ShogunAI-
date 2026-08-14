@@ -85,15 +85,24 @@ mod mac {
         let has_note = notes.as_deref().map(str::is_empty) == Some(false);
         if transcript.is_empty() && !has_note {
             // Nothing to summarise. The degraded Recap already says what little can be said.
-            eprintln!("[meeting] nothing to summarise for session {session_id}; keeping degraded recap");
+            eprintln!(
+                "[meeting] nothing to summarise for session {session_id}; keeping degraded recap"
+            );
             return;
         }
 
         let lines: Vec<TranscriptLine> = transcript
             .iter()
-            .map(|(speaker, text)| TranscriptLine { speaker: speaker.as_deref(), text })
+            .map(|(speaker, text)| TranscriptLine {
+                speaker: speaker.as_deref(),
+                text,
+            })
             .collect();
-        let prompt = minutes::build_prompt(&lines, notes.as_deref(), language.whisper_code().unwrap_or("en"));
+        let prompt = minutes::build_prompt(
+            &lines,
+            notes.as_deref(),
+            language.whisper_code().unwrap_or("en"),
+        );
 
         // The Select KK key. Absent → keep the degraded Recap (invariant 5 / FR-MT-19).
         let Some(key) = select_kk_key() else {
@@ -127,7 +136,9 @@ mod mac {
 
         let (Ok(transport), Ok(rt)) = (
             ReqwestTransport::new(),
-            tokio::runtime::Builder::new_current_thread().enable_all().build(),
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build(),
         ) else {
             eprintln!("[meeting] batch transport/runtime unavailable; keeping degraded recap");
             return None;

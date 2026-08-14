@@ -3,13 +3,13 @@
 //!
 //! 送信ロジック本体は `shogun_core::analytics`。ここは OS/設定/配線だけ。
 
+use serde::{Deserialize, Serialize};
+use shogun_core::analytics::reqwest_transport::ReqwestTransport;
+use shogun_core::analytics::{AnalyticsConfig, AnalyticsHandle, Props};
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
-use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
-use shogun_core::analytics::{AnalyticsConfig, AnalyticsHandle, Props};
-use shogun_core::analytics::reqwest_transport::ReqwestTransport;
 
 /// `analytics.json` の内容（非シークレット）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -54,7 +54,10 @@ impl Analytics {
 }
 
 fn state_path(app: &AppHandle) -> Option<PathBuf> {
-    app.path().app_data_dir().ok().map(|d| d.join("analytics.json"))
+    app.path()
+        .app_data_dir()
+        .ok()
+        .map(|d| d.join("analytics.json"))
 }
 
 /// `analytics.json` を読む。無ければ distinct_id を採番して保存し返す。
@@ -65,7 +68,10 @@ fn load_or_init_state(app: &AppHandle) -> Result<AnalyticsState, String> {
             return Ok(state);
         }
     }
-    let state = AnalyticsState { distinct_id: new_distinct_id()?, opt_out: false };
+    let state = AnalyticsState {
+        distinct_id: new_distinct_id()?,
+        opt_out: false,
+    };
     save_state(app, &state);
     Ok(state)
 }
@@ -85,7 +91,10 @@ pub fn save_state(app: &AppHandle, state: &AnalyticsState) {
 fn base_props(app: &AppHandle) -> Props {
     let mut p = Props::new();
     p.insert("os".into(), serde_json::Value::from(std::env::consts::OS));
-    p.insert("app_version".into(), app.package_info().version.to_string().into());
+    p.insert(
+        "app_version".into(),
+        app.package_info().version.to_string().into(),
+    );
     // v1 は課金基盤前のため "trial" 固定（fullui.rs と同じ実態）。
     p.insert("plan".into(), "trial".into());
     p
@@ -142,7 +151,10 @@ pub fn init(app: &AppHandle) -> Analytics {
         eprintln!("[analytics] TLS init failed — analytics disabled");
         return Analytics(None);
     };
-    let config = AnalyticsConfig { api_key: key, distinct_id: state.distinct_id };
+    let config = AnalyticsConfig {
+        api_key: key,
+        distinct_id: state.distinct_id,
+    };
     let opt_out = Arc::new(AtomicBool::new(state.opt_out));
     let handle = AnalyticsHandle::spawn_shared(config, base_props(app), opt_out, transport);
     Analytics(Some(handle))
@@ -166,7 +178,10 @@ mod tests {
         // 8-4-4-4-12 の 36 文字
         assert_eq!(id.len(), 36);
         let parts: Vec<&str> = id.split('-').collect();
-        assert_eq!(parts.iter().map(|p| p.len()).collect::<Vec<_>>(), vec![8, 4, 4, 4, 12]);
+        assert_eq!(
+            parts.iter().map(|p| p.len()).collect::<Vec<_>>(),
+            vec![8, 4, 4, 4, 12]
+        );
         // version nibble = 4
         assert_eq!(&id[14..15], "4");
         // variant nibble ∈ {8,9,a,b}
@@ -188,7 +203,10 @@ mod tests {
 
     #[test]
     fn state_opt_out_flip_serializes() {
-        let mut s = AnalyticsState { distinct_id: "x".into(), opt_out: false };
+        let mut s = AnalyticsState {
+            distinct_id: "x".into(),
+            opt_out: false,
+        };
         s.opt_out = true;
         let json = serde_json::to_string(&s).unwrap();
         let back: AnalyticsState = serde_json::from_str(&json).unwrap();

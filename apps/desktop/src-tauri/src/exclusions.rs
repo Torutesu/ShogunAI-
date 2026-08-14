@@ -51,14 +51,21 @@ pub mod mac {
 
     fn store_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
         use tauri::Manager;
-        app.path().app_data_dir().ok().map(|d| d.join("exclusions.json"))
+        app.path()
+            .app_data_dir()
+            .ok()
+            .map(|d| d.join("exclusions.json"))
     }
 
     /// Load the user's exclusions, layered onto the non-removable defaults.
     pub fn load(app: &tauri::AppHandle) -> ExclusionPolicy {
         let mut policy = ExclusionPolicy::new();
-        let Some(path) = store_path(app) else { return policy };
-        let Ok(text) = std::fs::read_to_string(path) else { return policy };
+        let Some(path) = store_path(app) else {
+            return policy;
+        };
+        let Ok(text) = std::fs::read_to_string(path) else {
+            return policy;
+        };
         if let Ok(apps) = serde_json::from_str::<Vec<String>>(&text) {
             for a in apps {
                 policy.add_app(a);

@@ -89,7 +89,9 @@ mod mac {
                 eprintln!("[meeting] live translate ts={ts} failed: HTTP {status} (rate limited, keeping ASR line)");
             }
             LlmError::Provider(msg) if msg.contains("HTTP 400") => {
-                eprintln!("[meeting] live translate ts={ts} failed: {msg} (check Select KK key format)");
+                eprintln!(
+                    "[meeting] live translate ts={ts} failed: {msg} (check Select KK key format)"
+                );
                 let _ = app.emit("meeting_translate_key_invalid", ());
             }
             other => eprintln!("[meeting] live translate ts={ts} failed: {other}"),
@@ -150,9 +152,9 @@ mod mac {
         let Ok(guard) = LAST_SOURCE.lock() else {
             return false;
         };
-        guard
-            .as_ref()
-            .is_some_and(|(last_text, last_ts)| last_text == source && (ts - last_ts).abs() < DEDUP_WINDOW_MS)
+        guard.as_ref().is_some_and(|(last_text, last_ts)| {
+            last_text == source && (ts - last_ts).abs() < DEDUP_WINDOW_MS
+        })
     }
 
     fn remember_source(source: &str, ts: i64) {
@@ -226,7 +228,10 @@ mod mac {
         FLUFF.iter().any(|prefix| lower.starts_with(prefix))
     }
 
-    async fn translate_with_backoff<T: shogun_core::llm::transport::HttpTransport, S: shogun_core::llm::traceability::TraceabilitySink>(
+    async fn translate_with_backoff<
+        T: shogun_core::llm::transport::HttpTransport,
+        S: shogun_core::llm::traceability::TraceabilitySink,
+    >(
         client: &AnthropicSelectKkMessagesClient<T, S>,
         system: &str,
         source: &str,
@@ -240,10 +245,7 @@ mod mac {
                 ))
                 .await;
             }
-            match client
-                .complete_with_system(Some(system), source)
-                .await
-            {
+            match client.complete_with_system(Some(system), source).await {
                 Ok(t) => return Ok(t),
                 Err(e @ LlmError::RateLimited(status, _)) => {
                     eprintln!(
@@ -269,7 +271,15 @@ mod mac {
         speaker: Option<String>,
         text: String,
     ) {
-        spawn_translation(app, db, session_id, ts, speaker, text, MeetingLanguage::Japanese);
+        spawn_translation(
+            app,
+            db,
+            session_id,
+            ts,
+            speaker,
+            text,
+            MeetingLanguage::Japanese,
+        );
     }
 
     /// Translate one line to `target` on a background thread and emit `meeting_live_translation`.
@@ -301,7 +311,9 @@ mod mac {
 
         if IN_FLIGHT.fetch_add(1, Ordering::AcqRel) >= MAX_IN_FLIGHT {
             IN_FLIGHT.fetch_sub(1, Ordering::AcqRel);
-            eprintln!("[meeting] live translate ts={ts} skipped — {MAX_IN_FLIGHT} already in flight");
+            eprintln!(
+                "[meeting] live translate ts={ts} skipped — {MAX_IN_FLIGHT} already in flight"
+            );
             return;
         }
 
@@ -328,9 +340,13 @@ mod mac {
             };
             let (Ok(transport), Ok(rt)) = (
                 ReqwestTransport::new(),
-                tokio::runtime::Builder::new_current_thread().enable_all().build(),
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build(),
             ) else {
-                eprintln!("[meeting] live translate ts={ts} skipped — transport/runtime unavailable");
+                eprintln!(
+                    "[meeting] live translate ts={ts} skipped — transport/runtime unavailable"
+                );
                 return;
             };
             let client = AnthropicSelectKkMessagesClient::new(
@@ -342,7 +358,8 @@ mod mac {
                     .with_temperature(0.0),
                 TRANSLATE_PURPOSE,
             );
-            let translated = match rt.block_on(translate_with_backoff(&client, system, &source, ts)) {
+            let translated = match rt.block_on(translate_with_backoff(&client, system, &source, ts))
+            {
                 Ok(t) => sanitize_translation(&t),
                 Err(e) => {
                     log_translate_err(&app, ts, &e);
@@ -364,7 +381,11 @@ mod mac {
             }
             let _ = app.emit(
                 "meeting_live_translation",
-                TranslationEvent { ts, speaker, translation: translated },
+                TranslationEvent {
+                    ts,
+                    speaker,
+                    translation: translated,
+                },
             );
         });
     }

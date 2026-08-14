@@ -67,7 +67,12 @@ struct WireTerminal {
 
 impl Default for WireStore {
     fn default() -> Self {
-        Self { next_id: 1, pending: Vec::new(), terminal: Vec::new(), in_flight: Vec::new() }
+        Self {
+            next_id: 1,
+            pending: Vec::new(),
+            terminal: Vec::new(),
+            in_flight: Vec::new(),
+        }
     }
 }
 
@@ -146,11 +151,22 @@ fn kind_wire(action: &SendAction) -> &'static str {
     }
 }
 
-fn action_from_wire(kind: &str, destination: String, start_time: Option<String>, end_time: Option<String>, calendar_id: Option<String>, description: Option<String>) -> Result<SendAction, String> {
-    if destination.trim().is_empty() { return Err("approval destination is empty".into()); }
+fn action_from_wire(
+    kind: &str,
+    destination: String,
+    start_time: Option<String>,
+    end_time: Option<String>,
+    calendar_id: Option<String>,
+    description: Option<String>,
+) -> Result<SendAction, String> {
+    if destination.trim().is_empty() {
+        return Err("approval destination is empty".into());
+    }
     Ok(match kind {
         "send_email" => SendAction::SendEmail { to: destination },
-        "post_message" => SendAction::PostMessage { channel: destination },
+        "post_message" => SendAction::PostMessage {
+            channel: destination,
+        },
         "create_calendar_event" => SendAction::CreateCalendarEvent {
             title: destination,
             start_time: start_time.ok_or("calendar approval missing start_time")?,
@@ -158,7 +174,9 @@ fn action_from_wire(kind: &str, destination: String, start_time: Option<String>,
             calendar_id,
             description: description.unwrap_or_default(),
         },
-        "post_comment" => SendAction::PostComment { target: destination },
+        "post_comment" => SendAction::PostComment {
+            target: destination,
+        },
         _ => return Err(format!("invalid approval action kind: {kind}")),
     })
 }
@@ -172,20 +190,46 @@ fn to_wire(record: &PendingRecord) -> WirePending {
         route: route_wire(record.preview.route).to_string(),
         origin: origin_wire(record.origin).to_string(),
         created_ms: record.created_ms,
-        start_time: match &record.action { SendAction::CreateCalendarEvent { start_time, .. } => Some(start_time.clone()), _ => None },
-        end_time: match &record.action { SendAction::CreateCalendarEvent { end_time, .. } => Some(end_time.clone()), _ => None },
-        calendar_id: match &record.action { SendAction::CreateCalendarEvent { calendar_id, .. } => calendar_id.clone(), _ => None },
-        description: match &record.action { SendAction::CreateCalendarEvent { description, .. } => Some(description.clone()), _ => None },
+        start_time: match &record.action {
+            SendAction::CreateCalendarEvent { start_time, .. } => Some(start_time.clone()),
+            _ => None,
+        },
+        end_time: match &record.action {
+            SendAction::CreateCalendarEvent { end_time, .. } => Some(end_time.clone()),
+            _ => None,
+        },
+        calendar_id: match &record.action {
+            SendAction::CreateCalendarEvent { calendar_id, .. } => calendar_id.clone(),
+            _ => None,
+        },
+        description: match &record.action {
+            SendAction::CreateCalendarEvent { description, .. } => Some(description.clone()),
+            _ => None,
+        },
     }
 }
 
 fn from_wire(w: WirePending) -> Result<PendingRecord, String> {
-    if w.id == 0 { return Err("approval id must be positive".into()); }
-    let action = action_from_wire(&w.kind, w.destination.clone(), w.start_time, w.end_time, w.calendar_id, w.description)?;
+    if w.id == 0 {
+        return Err("approval id must be positive".into());
+    }
+    let action = action_from_wire(
+        &w.kind,
+        w.destination.clone(),
+        w.start_time,
+        w.end_time,
+        w.calendar_id,
+        w.description,
+    )?;
     let route = route_parse(&w.route)?;
     let origin = origin_parse(&w.origin)?;
-    let expected_route = match &action { SendAction::SendEmail { .. } => Route::ViaComposio, _ => Route::DirectMcp };
-    if route != expected_route { return Err("approval route does not match action".into()); }
+    let expected_route = match &action {
+        SendAction::SendEmail { .. } => Route::ViaComposio,
+        _ => Route::DirectMcp,
+    };
+    if route != expected_route {
+        return Err("approval route does not match action".into());
+    }
     let preview = Preview {
         op_type: match &action {
             SendAction::SendEmail { .. } => "Send email",
@@ -212,11 +256,15 @@ fn queue_to_wire(q: &ApprovalQueue) -> WireStore {
     WireStore {
         next_id,
         pending: records.iter().map(to_wire).collect(),
-        terminal: q.terminal_records().iter().map(|r| WireTerminal {
-            id: r.id.0,
-            status: status_wire(r.status).to_string(),
-            resolved_ms: r.resolved_ms,
-        }).collect(),
+        terminal: q
+            .terminal_records()
+            .iter()
+            .map(|r| WireTerminal {
+                id: r.id.0,
+                status: status_wire(r.status).to_string(),
+                resolved_ms: r.resolved_ms,
+            })
+            .collect(),
         in_flight: q.in_flight_ids().iter().map(|id| id.0).collect(),
     }
 }
@@ -227,29 +275,44 @@ fn queue_from_wire(store: WireStore) -> Result<ApprovalQueue, String> {
     for row in store.pending {
         // Pre-calendar-schema rows had no times. Drop only this known legacy shape; one bad
         // legacy row must not hide valid Gmail or Calendar approvals. Do not retain its body.
-        if row.kind == "create_calendar_event" && (row.start_time.is_none() || row.end_time.is_none()) {
+        if row.kind == "create_calendar_event"
+            && (row.start_time.is_none() || row.end_time.is_none())
+        {
             continue;
         }
-        if !ids.insert(row.id) { return Err("duplicate approval id".into()); }
+        if !ids.insert(row.id) {
+            return Err("duplicate approval id".into());
+        }
         records.push(from_wire(row)?);
     }
     let mut terminal = Vec::with_capacity(store.terminal.len());
     for r in store.terminal {
-        if r.id == 0 || !ids.insert(r.id) { return Err("duplicate or invalid terminal approval id".into()); }
+        if r.id == 0 || !ids.insert(r.id) {
+            return Err("duplicate or invalid terminal approval id".into());
+        }
         let status = status_parse(&r.status)?;
-        if status == ApprovalStatus::Pending { return Err("terminal approval cannot be pending".into()); }
+        if status == ApprovalStatus::Pending {
+            return Err("terminal approval cannot be pending".into());
+        }
         terminal.push(TerminalRecord {
-        id: ApprovalId(r.id),
-        status,
-        resolved_ms: r.resolved_ms,
+            id: ApprovalId(r.id),
+            status,
+            resolved_ms: r.resolved_ms,
         });
     }
     let mut in_flight = Vec::with_capacity(store.in_flight.len());
     for id in store.in_flight {
-        if id == 0 || !ids.insert(id) { return Err("duplicate or invalid in-flight approval id".into()); }
+        if id == 0 || !ids.insert(id) {
+            return Err("duplicate or invalid in-flight approval id".into());
+        }
         in_flight.push(ApprovalId(id));
     }
-    Ok(ApprovalQueue::import_with_terminal(store.next_id, records, terminal, in_flight))
+    Ok(ApprovalQueue::import_with_terminal(
+        store.next_id,
+        records,
+        terminal,
+        in_flight,
+    ))
 }
 
 /// Load shared queue. Missing file means empty; corrupt/unreadable file is an error.
@@ -264,12 +327,16 @@ pub fn load_queue(path: &Path) -> Result<ApprovalQueue, String> {
     }
 }
 
-struct StoreLock { file: std::fs::File }
+struct StoreLock {
+    file: std::fs::File,
+}
 
 impl Drop for StoreLock {
     fn drop(&mut self) {
         #[cfg(unix)]
-        unsafe { libc::flock(std::os::fd::AsRawFd::as_raw_fd(&self.file), libc::LOCK_UN); }
+        unsafe {
+            libc::flock(std::os::fd::AsRawFd::as_raw_fd(&self.file), libc::LOCK_UN);
+        }
     }
 }
 
@@ -280,16 +347,35 @@ fn lock_path(path: &Path) -> PathBuf {
 fn acquire_lock(path: &Path) -> Result<StoreLock, String> {
     let lock = lock_path(path);
     for _ in 0..500 {
-        match std::fs::OpenOptions::new().read(true).write(true).create(true).open(&lock) {
+        match std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(&lock)
+        {
             Ok(file) => {
                 #[cfg(unix)]
                 {
-                    let result = unsafe { libc::flock(std::os::fd::AsRawFd::as_raw_fd(&file), libc::LOCK_EX | libc::LOCK_NB) };
-                    if result == 0 { return Ok(StoreLock { file }); }
-                    if std::io::Error::last_os_error().kind() != std::io::ErrorKind::WouldBlock { return Err(format!("lock l3 approvals: {}", std::io::Error::last_os_error())); }
+                    let result = unsafe {
+                        libc::flock(
+                            std::os::fd::AsRawFd::as_raw_fd(&file),
+                            libc::LOCK_EX | libc::LOCK_NB,
+                        )
+                    };
+                    if result == 0 {
+                        return Ok(StoreLock { file });
+                    }
+                    if std::io::Error::last_os_error().kind() != std::io::ErrorKind::WouldBlock {
+                        return Err(format!(
+                            "lock l3 approvals: {}",
+                            std::io::Error::last_os_error()
+                        ));
+                    }
                 }
                 #[cfg(not(unix))]
-                { return Ok(StoreLock { file }); }
+                {
+                    return Ok(StoreLock { file });
+                }
                 std::thread::sleep(Duration::from_millis(2));
             }
             Err(e) => return Err(format!("lock l3 approvals: {e}")),
@@ -309,13 +395,25 @@ fn save_queue_unlocked(path: &Path, queue: &ApprovalQueue) -> Result<(), String>
         std::fs::create_dir_all(dir).map_err(|e| format!("create l3 approvals directory: {e}"))?;
     }
     let json = serde_json::to_string_pretty(&queue_to_wire(queue)).map_err(|e| e.to_string())?;
-    let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or(STORE_FILE);
-    let temp_path = path.with_file_name(format!(".{file_name}.{}.{}.tmp", std::process::id(), unique_suffix()));
+    let file_name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(STORE_FILE);
+    let temp_path = path.with_file_name(format!(
+        ".{file_name}.{}.{}.tmp",
+        std::process::id(),
+        unique_suffix()
+    ));
     use std::os::unix::fs::PermissionsExt;
-    let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&temp_path)
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp_path)
         .map_err(|e| format!("save l3 approvals temp file: {e}"))?;
-    file.set_permissions(std::fs::Permissions::from_mode(0o600)).map_err(|e| format!("set l3 approvals permissions: {e}"))?;
-    std::io::Write::write_all(&mut file, json.as_bytes()).map_err(|e| format!("save l3 approvals temp file: {e}"))?;
+    file.set_permissions(std::fs::Permissions::from_mode(0o600))
+        .map_err(|e| format!("set l3 approvals permissions: {e}"))?;
+    std::io::Write::write_all(&mut file, json.as_bytes())
+        .map_err(|e| format!("save l3 approvals temp file: {e}"))?;
     drop(file);
     std::fs::rename(&temp_path, path).map_err(|e| {
         let _ = std::fs::remove_file(&temp_path);
@@ -324,7 +422,10 @@ fn save_queue_unlocked(path: &Path, queue: &ApprovalQueue) -> Result<(), String>
 }
 
 fn unique_suffix() -> u128 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0)
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0)
 }
 
 /// Reload from disk, run `f`, save. Used by MCP + desktop so both see the same pending set.
@@ -343,21 +444,36 @@ mod tests {
 
     fn tmp() -> PathBuf {
         let mut p = std::env::temp_dir();
-        p.push(format!("shogun-l3-{}-{}.json", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        p.push(format!(
+            "shogun-l3-{}-{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         p
     }
 
     #[test]
     fn round_trip_preserves_pending_send() {
         let path = tmp();
-        let send = SendAction::SendEmail { to: "a@b.com".into() };
+        let send = SendAction::SendEmail {
+            to: "a@b.com".into(),
+        };
         let preview = Preview::for_send(&send, "Subject: Hi\n\nbody", Route::ViaComposio);
-        let id = with_queue(&path, |q| q.request(send.clone(), preview.clone(), Origin::AiApi, 42)).unwrap();
+        let id = with_queue(&path, |q| {
+            q.request(send.clone(), preview.clone(), Origin::AiApi, 42)
+        })
+        .unwrap();
 
         let loaded = load_queue(&path).unwrap();
         assert_eq!(loaded.pending_len(), 1);
         assert_eq!(loaded.origin(id), Some(Origin::AiApi));
-        assert_eq!(loaded.preview(id).map(|p| p.full_body.as_str()), Some("Subject: Hi\n\nbody"));
+        assert_eq!(
+            loaded.preview(id).map(|p| p.full_body.as_str()),
+            Some("Subject: Hi\n\nbody")
+        );
         assert!(matches!(
             {
                 let mut q = loaded;
@@ -386,22 +502,43 @@ mod tests {
     fn terminal_status_drops_full_body_and_survives_restart() {
         let path = tmp();
         let id = with_queue(&path, |q| {
-            let send = SendAction::SendEmail { to: "a@b.com".into() };
-            q.request(send.clone(), Preview::for_send(&send, "SECRET BODY", Route::ViaComposio), Origin::AiApi, 1)
-        }).unwrap();
-        with_queue(&path, |q| { let _ = q.confirm(id, ConfirmIntent::DedicatedButton, 2); }).unwrap();
-        with_queue(&path, |q| assert!(q.mark_status(id, ApprovalStatus::Sent, 2))).unwrap();
+            let send = SendAction::SendEmail {
+                to: "a@b.com".into(),
+            };
+            q.request(
+                send.clone(),
+                Preview::for_send(&send, "SECRET BODY", Route::ViaComposio),
+                Origin::AiApi,
+                1,
+            )
+        })
+        .unwrap();
+        with_queue(&path, |q| {
+            let _ = q.confirm(id, ConfirmIntent::DedicatedButton, 2);
+        })
+        .unwrap();
+        with_queue(&path, |q| {
+            assert!(q.mark_status(id, ApprovalStatus::Sent, 2))
+        })
+        .unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(!text.contains("SECRET BODY"));
-        assert_eq!(load_queue(&path).unwrap().status(id), Some(ApprovalStatus::Sent));
+        assert_eq!(
+            load_queue(&path).unwrap().status(id),
+            Some(ApprovalStatus::Sent)
+        );
         let _ = std::fs::remove_file(&path);
     }
 
     #[test]
     fn resolve_defaults_next_to_db() {
         assert_eq!(
-            resolve_store_path("/Users/x/Library/Application Support/com.selectkk.shogun/memory.db"),
-            PathBuf::from("/Users/x/Library/Application Support/com.selectkk.shogun/l3_approvals.json")
+            resolve_store_path(
+                "/Users/x/Library/Application Support/com.selectkk.shogun/memory.db"
+            ),
+            PathBuf::from(
+                "/Users/x/Library/Application Support/com.selectkk.shogun/l3_approvals.json"
+            )
         );
         assert_eq!(resolve_store_path("memory.db"), PathBuf::from(STORE_FILE));
     }
@@ -410,7 +547,10 @@ mod tests {
     fn semantically_invalid_rows_fail_closed() {
         let path = tmp();
         std::fs::write(&path, r#"{"next_id":2,"pending":[{"id":1,"kind":"send_email","destination":"a@b.com","full_body":"x","route":"direct","origin":"ai_api","created_ms":1}]}"#).unwrap();
-        let error = match load_queue(&path) { Ok(_) => panic!("invalid row accepted"), Err(error) => error };
+        let error = match load_queue(&path) {
+            Ok(_) => panic!("invalid row accepted"),
+            Err(error) => error,
+        };
         assert!(error.contains("route does not match"));
         let _ = std::fs::remove_file(&path);
     }
@@ -421,8 +561,15 @@ mod tests {
         std::fs::write(&path, r#"{"next_id":2,"pending":[{"id":1,"kind":"create_calendar_event","destination":"Ship","full_body":"old","route":"direct","origin":"ai_api","created_ms":1}]}"#).unwrap();
         let mut q = load_queue(&path).unwrap();
         assert!(q.export().1.is_empty());
-        let send = SendAction::SendEmail { to: "next@example.com".into() };
-        let next = q.request(send.clone(), Preview::for_send(&send, "body", Route::ViaComposio), Origin::AiApi, 2);
+        let send = SendAction::SendEmail {
+            to: "next@example.com".into(),
+        };
+        let next = q.request(
+            send.clone(),
+            Preview::for_send(&send, "body", Route::ViaComposio),
+            Origin::AiApi,
+            2,
+        );
         assert_eq!(next.0, 2);
         let _ = std::fs::remove_file(&path);
     }
@@ -438,11 +585,24 @@ mod tests {
         let mut q = load_queue(&path).unwrap();
         let (_, rows) = q.export();
         assert_eq!(rows.len(), 2);
-        assert!(rows.iter().all(|r| !r.preview.full_body.contains("SECRET OLD")));
-        assert!(rows.iter().any(|r| matches!(r.action, SendAction::SendEmail { .. })));
-        assert!(rows.iter().any(|r| matches!(r.action, SendAction::CreateCalendarEvent { .. })));
-        let send = SendAction::SendEmail { to: "next@example.com".into() };
-        let next = q.request(send.clone(), Preview::for_send(&send, "body", Route::ViaComposio), Origin::AiApi, 4);
+        assert!(rows
+            .iter()
+            .all(|r| !r.preview.full_body.contains("SECRET OLD")));
+        assert!(rows
+            .iter()
+            .any(|r| matches!(r.action, SendAction::SendEmail { .. })));
+        assert!(rows
+            .iter()
+            .any(|r| matches!(r.action, SendAction::CreateCalendarEvent { .. })));
+        let send = SendAction::SendEmail {
+            to: "next@example.com".into(),
+        };
+        let next = q.request(
+            send.clone(),
+            Preview::for_send(&send, "body", Route::ViaComposio),
+            Origin::AiApi,
+            4,
+        );
         assert_eq!(next.0, 4);
         let _ = std::fs::remove_file(&path);
     }
@@ -451,21 +611,42 @@ mod tests {
     fn calendar_times_survive_durable_round_trip_and_confirmation() {
         let path = tmp();
         let send = SendAction::CreateCalendarEvent {
-            title: "Ship".into(), start_time: "2026-08-13T10:00:00Z".into(),
-            end_time: "2026-08-13T11:00:00Z".into(), calendar_id: Some("work".into()), description: "Agenda".into(),
+            title: "Ship".into(),
+            start_time: "2026-08-13T10:00:00Z".into(),
+            end_time: "2026-08-13T11:00:00Z".into(),
+            calendar_id: Some("work".into()),
+            description: "Agenda".into(),
         };
-        let id = with_queue(&path, |q| q.request(send.clone(), Preview::for_send(&send, send.calendar_preview_body(), Route::DirectMcp), Origin::AiApi, 1)).unwrap();
+        let id = with_queue(&path, |q| {
+            q.request(
+                send.clone(),
+                Preview::for_send(&send, send.calendar_preview_body(), Route::DirectMcp),
+                Origin::AiApi,
+                1,
+            )
+        })
+        .unwrap();
         let mut loaded = load_queue(&path).unwrap();
-        let Decision::Confirmed(confirmed) = loaded.confirm(id, ConfirmIntent::DedicatedButton, 2) else { panic!("expected confirmation") };
+        let Decision::Confirmed(confirmed) = loaded.confirm(id, ConfirmIntent::DedicatedButton, 2)
+        else {
+            panic!("expected confirmation")
+        };
         assert_eq!(confirmed.action, send);
-        assert!(confirmed.preview.full_body.contains("endTime: 2026-08-13T11:00:00Z"));
+        assert!(confirmed
+            .preview
+            .full_body
+            .contains("endTime: 2026-08-13T11:00:00Z"));
         let _ = std::fs::remove_file(&path);
     }
 
     #[test]
     fn invalid_terminal_status_fails_closed() {
         let path = tmp();
-        std::fs::write(&path, r#"{"next_id":2,"terminal":[{"id":1,"status":"pending","resolved_ms":1}]}"#).unwrap();
+        std::fs::write(
+            &path,
+            r#"{"next_id":2,"terminal":[{"id":1,"status":"pending","resolved_ms":1}]}"#,
+        )
+        .unwrap();
         assert!(load_queue(&path).is_err());
         let _ = std::fs::remove_file(&path);
     }
@@ -475,8 +656,16 @@ mod tests {
         let path = tmp();
         let lock = lock_path(&path);
         std::fs::File::create(&lock).unwrap();
-        let send = SendAction::SendEmail { to: "a@b.com".into() };
-        assert!(with_queue(&path, |q| q.request(send.clone(), Preview::for_send(&send, "body", Route::ViaComposio), Origin::AiApi, 1)).is_ok());
+        let send = SendAction::SendEmail {
+            to: "a@b.com".into(),
+        };
+        assert!(with_queue(&path, |q| q.request(
+            send.clone(),
+            Preview::for_send(&send, "body", Route::ViaComposio),
+            Origin::AiApi,
+            1
+        ))
+        .is_ok());
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(&lock);
     }
@@ -491,8 +680,18 @@ mod tests {
             let barrier = barrier.clone();
             handles.push(std::thread::spawn(move || {
                 barrier.wait();
-                let send = SendAction::SendEmail { to: format!("{i}@b.com") };
-                with_queue(&path, |q| q.request(send.clone(), Preview::for_send(&send, "body", Route::ViaComposio), Origin::AiApi, i)).unwrap()
+                let send = SendAction::SendEmail {
+                    to: format!("{i}@b.com"),
+                };
+                with_queue(&path, |q| {
+                    q.request(
+                        send.clone(),
+                        Preview::for_send(&send, "body", Route::ViaComposio),
+                        Origin::AiApi,
+                        i,
+                    )
+                })
+                .unwrap()
             }));
         }
         let ids: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();

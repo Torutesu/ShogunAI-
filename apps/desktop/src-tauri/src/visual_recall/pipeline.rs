@@ -36,10 +36,17 @@ pub fn app_prefers_ocr(bundle_or_app: &str) -> bool {
 }
 
 /// AX tree returned text but likely missed canvas/GPU document body (Screenpipe thin heuristic).
-pub fn a11y_content_is_thin(window_title: Option<&str>, ax_text_len: usize, meeting_active: bool) -> bool {
+pub fn a11y_content_is_thin(
+    window_title: Option<&str>,
+    ax_text_len: usize,
+    meeting_active: bool,
+) -> bool {
     if let Some(win) = window_title {
         let win_lower = win.to_lowercase();
-        if CANVAS_APP_PATTERNS.iter().any(|pat| win_lower.contains(pat)) {
+        if CANVAS_APP_PATTERNS
+            .iter()
+            .any(|pat| win_lower.contains(pat))
+        {
             return true;
         }
         if meeting_active
@@ -144,12 +151,24 @@ mod tests {
 
     #[test]
     fn terminals_always_want_ocr() {
-        assert!(wants_ocr("com.github.wez.wezterm", None, false, 5000, false));
+        assert!(wants_ocr(
+            "com.github.wez.wezterm",
+            None,
+            false,
+            5000,
+            false
+        ));
     }
 
     #[test]
     fn rich_ax_skips_ocr() {
-        assert!(!wants_ocr("com.apple.Safari", Some("Inbox"), false, 500, false));
+        assert!(!wants_ocr(
+            "com.apple.Safari",
+            Some("Inbox"),
+            false,
+            500,
+            false
+        ));
     }
 
     #[test]
@@ -165,7 +184,19 @@ mod tests {
 
     #[test]
     fn meeting_relaxes_thin_threshold() {
-        assert!(!wants_ocr("com.apple.Safari", Some("Inbox"), false, 250, true));
-        assert!(wants_ocr("com.apple.Safari", Some("Slide deck"), false, 250, true));
+        assert!(!wants_ocr(
+            "com.apple.Safari",
+            Some("Inbox"),
+            false,
+            250,
+            true
+        ));
+        assert!(wants_ocr(
+            "com.apple.Safari",
+            Some("Slide deck"),
+            false,
+            250,
+            true
+        ));
     }
 }

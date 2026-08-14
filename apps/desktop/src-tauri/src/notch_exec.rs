@@ -16,7 +16,8 @@ pub mod mac {
     use std::sync::Mutex;
 
     use shogun_agents::engine::{
-        ActionId, Disposition, ExecutionEngine, ExecutionObserver, LocalEffector, Outcome, RejectReason,
+        ActionId, Disposition, ExecutionEngine, ExecutionObserver, LocalEffector, Outcome,
+        RejectReason,
     };
     use shogun_core::daemon::Db;
     use shogun_fusion::assemble::ScreenContext;
@@ -94,7 +95,11 @@ pub mod mac {
 
     /// Build the engine for Tauri state (called once in setup).
     pub fn new_engine(db: Db) -> NotchEngine {
-        Mutex::new(ExecutionEngine::new(NotchEffector::new(db), NotchObserver, CONFIRM_TIMEOUT_MS))
+        Mutex::new(ExecutionEngine::new(
+            NotchEffector::new(db),
+            NotchObserver,
+            CONFIRM_TIMEOUT_MS,
+        ))
     }
 
     fn now_ms() -> u64 {
@@ -108,8 +113,14 @@ pub mod mac {
     fn current_screen() -> ScreenContext {
         match frontmost_app() {
             Some(front) => {
-                let title = focused_window(front.pid).and_then(|w| w.title()).unwrap_or_default();
-                ScreenContext { app_bundle_id: front.bundle_id, window_title: title, salient: Vec::new() }
+                let title = focused_window(front.pid)
+                    .and_then(|w| w.title())
+                    .unwrap_or_default();
+                ScreenContext {
+                    app_bundle_id: front.bundle_id,
+                    window_title: title,
+                    salient: Vec::new(),
+                }
             }
             None => ScreenContext::default(),
         }
@@ -165,9 +176,15 @@ pub mod mac {
             return;
         };
         let cache = db.context_actions(current_screen(), None);
-        eprintln!("[selftest] {} context action(s) for the current screen:", cache.actions.len());
+        eprintln!(
+            "[selftest] {} context action(s) for the current screen:",
+            cache.actions.len()
+        );
         for (i, a) in cache.actions.iter().enumerate() {
-            eprintln!("[selftest]   [{i}] {:?} {:?} — {}", a.level, a.action, a.rationale);
+            eprintln!(
+                "[selftest]   [{i}] {:?} {:?} — {}",
+                a.level, a.action, a.rationale
+            );
         }
         match (cache.actions.first(), app.try_state::<NotchEngine>()) {
             (Some(first), Some(engine)) => {
@@ -176,7 +193,9 @@ pub mod mac {
                     eprintln!("[selftest] submitted top action → {:?}", sub.disposition);
                 }
             }
-            (None, _) => eprintln!("[selftest] no gated actions yet (capture more promise/loop text)"),
+            (None, _) => {
+                eprintln!("[selftest] no gated actions yet (capture more promise/loop text)")
+            }
             _ => {}
         }
     }

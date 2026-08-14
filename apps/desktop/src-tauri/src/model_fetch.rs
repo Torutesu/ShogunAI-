@@ -68,4 +68,3 @@ pub fn ensure_turbo(app: &tauri::AppHandle) -> Option<PathBuf> {
         }
     }
 }
-

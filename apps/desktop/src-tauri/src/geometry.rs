@@ -78,7 +78,11 @@ pub mod mac {
         let (is_notch, notch_w, notch_h) = if notch_inset > 0.0 {
             let l = screen.auxiliaryTopLeftArea();
             let r = screen.auxiliaryTopRightArea();
-            (true, f.size.width - l.size.width - r.size.width, notch_inset)
+            (
+                true,
+                f.size.width - l.size.width - r.size.width,
+                notch_inset,
+            )
         } else {
             // Pseudo-notch: 180pt wide, menubar-tall (fallback 24pt), spec §3.2.2.
             (false, 180.0, if menubar_h > 0.0 { menubar_h } else { 24.0 })
@@ -107,7 +111,9 @@ pub mod mac {
         // prefers the internal/primary screen; per-display selection is on-device D-06.
         let screens = NSScreen::screens(mtm);
         let display_count = screens.len() as u32;
-        let screen = screens.firstObject().or_else(|| NSScreen::mainScreen(mtm))?;
+        let screen = screens
+            .firstObject()
+            .or_else(|| NSScreen::mainScreen(mtm))?;
         let f = screen.frame();
         let vf = screen.visibleFrame();
         // These NSScreen accessors are safe fns in objc2-app-kit 0.3.2.
@@ -119,7 +125,11 @@ pub mod mac {
         let (is_notch, notch_w, notch_h) = if notch_inset > 0.0 {
             let l = screen.auxiliaryTopLeftArea();
             let r = screen.auxiliaryTopRightArea();
-            (true, f.size.width - l.size.width - r.size.width, notch_inset)
+            (
+                true,
+                f.size.width - l.size.width - r.size.width,
+                notch_inset,
+            )
         } else {
             // Pseudo-notch: 180pt wide, menubar-tall (fallback 24pt), spec §3.2.2.
             (false, 180.0, if menubar_h > 0.0 { menubar_h } else { 24.0 })

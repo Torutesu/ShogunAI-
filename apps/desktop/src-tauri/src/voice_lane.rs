@@ -95,9 +95,13 @@ fn whisper_model_path(app: &AppHandle) -> Option<std::path::PathBuf> {
     p.exists().then_some(p)
 }
 
-fn trace_sink(app: &AppHandle) -> Option<Arc<dyn shogun_core::llm::traceability::TraceabilitySink>> {
-    app.try_state::<Db>()
-        .map(|s| Arc::new(s.inner().clone().traceability_sink()) as Arc<dyn shogun_core::llm::traceability::TraceabilitySink>)
+fn trace_sink(
+    app: &AppHandle,
+) -> Option<Arc<dyn shogun_core::llm::traceability::TraceabilitySink>> {
+    app.try_state::<Db>().map(|s| {
+        Arc::new(s.inner().clone().traceability_sink())
+            as Arc<dyn shogun_core::llm::traceability::TraceabilitySink>
+    })
 }
 
 fn voice_config() -> DeepgramConfig {
@@ -113,7 +117,12 @@ fn build_deepgram(app: &AppHandle) -> Result<Deepgram, String> {
 
 fn try_open_live(app: &AppHandle) -> Result<DeepgramLive, String> {
     let mut auth = deepgram::resolve_auth()?;
-    DeepgramLive::connect(&voice_config(), auth.as_mut(), LiveMode::Voice, trace_sink(app))
+    DeepgramLive::connect(
+        &voice_config(),
+        auth.as_mut(),
+        LiveMode::Voice,
+        trace_sink(app),
+    )
 }
 
 fn deepgram_configured() -> bool {
@@ -188,15 +197,14 @@ fn transcribe_pcm_whisper(pcm: &[f32]) -> Result<String, String> {
     let mut guard = ASR
         .lock()
         .map_err(|_| "asr cache lock poisoned".to_string())?;
-    let slot = match guard.as_mut() {
-        Some(AsrCache::Whisper(w)) => w,
-        _ => {
-            return Err(
+    let slot =
+        match guard.as_mut() {
+            Some(AsrCache::Whisper(w)) => w,
+            _ => return Err(
                 "Speech model not ready yet — wait a moment after enabling Voice, then try again."
                     .to_string(),
-            )
-        }
-    };
+            ),
+        };
     let segments = catch_unwind(AssertUnwindSafe(|| slot.asr.transcribe(pcm)));
     let segments = match segments {
         Ok(s) => s,

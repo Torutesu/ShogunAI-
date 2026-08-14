@@ -45,7 +45,9 @@ pub mod mac {
             Action::Local(LocalAction::OpenApp { bundle_id }) => format!("Open {bundle_id}"),
             Action::Local(LocalAction::RevealFile { path }) => format!("Reveal {path}"),
             Action::Local(LocalAction::LocalSearch { query }) => format!("Search memory: {query}"),
-            Action::Local(LocalAction::ShowNotification { text }) => format!("Remind: {}", clip(text)),
+            Action::Local(LocalAction::ShowNotification { text }) => {
+                format!("Remind: {}", clip(text))
+            }
             Action::Local(LocalAction::CopyToClipboard { .. }) => "Copy draft".to_string(),
             Action::Local(LocalAction::UpdateState { table, .. }) => format!("Update {table}"),
             Action::Local(LocalAction::SaveDraft { target }) => format!("Draft {target}"),
@@ -65,7 +67,11 @@ pub mod mac {
     }
 
     fn view_of(c: &ActionCandidate) -> ActionView {
-        ActionView { label: label_of(&c.action), level: level_str(c.level).to_string(), rationale: c.rationale.clone() }
+        ActionView {
+            label: label_of(&c.action),
+            level: level_str(c.level).to_string(),
+            rationale: c.rationale.clone(),
+        }
     }
 
     /// Tauri command: assemble the context actions for the current focus and return the button
@@ -74,12 +80,22 @@ pub mod mac {
     pub fn notch_actions(db: tauri::State<'_, Db>) -> Vec<ActionView> {
         let (bundle_id, title) = match frontmost_app() {
             Some(front) => {
-                let title = focused_window(front.pid).and_then(|w| w.title()).unwrap_or_default();
+                let title = focused_window(front.pid)
+                    .and_then(|w| w.title())
+                    .unwrap_or_default();
                 (front.bundle_id, title)
             }
             None => (String::new(), String::new()),
         };
-        let screen = ScreenContext { app_bundle_id: bundle_id, window_title: title, salient: Vec::new() };
-        db.context_actions(screen, None).actions.iter().map(view_of).collect()
+        let screen = ScreenContext {
+            app_bundle_id: bundle_id,
+            window_title: title,
+            salient: Vec::new(),
+        };
+        db.context_actions(screen, None)
+            .actions
+            .iter()
+            .map(view_of)
+            .collect()
     }
 }

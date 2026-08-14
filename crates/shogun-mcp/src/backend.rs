@@ -18,7 +18,10 @@ pub struct ReadItem {
 
 impl ReadItem {
     pub fn new(label: impl Into<String>, confidence: f64) -> Self {
-        Self { label: label.into(), confidence }
+        Self {
+            label: label.into(),
+            confidence,
+        }
     }
 }
 
@@ -74,6 +77,8 @@ mod tests {
 
     #[test]
     fn stub_returns_empty() {
-        assert!(StubBackend.read(Tool::StatePeopleList, &ReadParams::default()).is_empty());
+        assert!(StubBackend
+            .read(Tool::StatePeopleList, &ReadParams::default())
+            .is_empty());
     }
 }

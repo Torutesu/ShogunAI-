@@ -64,11 +64,17 @@ mod tests {
     use crate::scope::Wave;
 
     fn connected() -> ConnState {
-        ConnState::Connected { last_sync_ms: 1_000 }
+        ConnState::Connected {
+            last_sync_ms: 1_000,
+        }
     }
     // Slack is Wave 2, so it must be released for any of this to be reachable.
     fn ctx(conn: ConnState) -> OpContext {
-        OpContext { highest_released: Wave::Two, conn, draft_stop: false }
+        OpContext {
+            highest_released: Wave::Two,
+            conn,
+            draft_stop: false,
+        }
     }
 
     #[test]
@@ -89,27 +95,49 @@ mod tests {
     fn the_fallback_is_never_a_send() {
         // The chosen fallback op must be a non-send in the scope table (invariant 4).
         let op = crate::scope::lookup(Service::Slack, COPY_TO_CLIPBOARD).unwrap();
-        assert!(!op.class.is_external_send(), "the clipboard fallback must never be a send");
+        assert!(
+            !op.class.is_external_send(),
+            "the clipboard fallback must never be a send"
+        );
     }
 
     #[test]
     fn unreleased_slack_denies_either_way() {
         // At Wave 1 Slack isn't rolled out — neither a post nor the fallback is reachable.
-        let ctx1 = OpContext { highest_released: Wave::One, conn: connected(), draft_stop: false };
-        assert_eq!(resolve_post(&ctx1, PostCapability::Approved), SlackDelivery::Denied);
-        assert_eq!(resolve_post(&ctx1, PostCapability::AdminApprovalRequired), SlackDelivery::Denied);
+        let ctx1 = OpContext {
+            highest_released: Wave::One,
+            conn: connected(),
+            draft_stop: false,
+        };
+        assert_eq!(
+            resolve_post(&ctx1, PostCapability::Approved),
+            SlackDelivery::Denied
+        );
+        assert_eq!(
+            resolve_post(&ctx1, PostCapability::AdminApprovalRequired),
+            SlackDelivery::Denied
+        );
     }
 
     #[test]
     fn disconnected_slack_denies() {
-        assert_eq!(resolve_post(&ctx(ConnState::Disconnected), PostCapability::Approved), SlackDelivery::Denied);
+        assert_eq!(
+            resolve_post(&ctx(ConnState::Disconnected), PostCapability::Approved),
+            SlackDelivery::Denied
+        );
     }
 
     #[test]
     fn amber_slack_denies_the_write_fallback() {
         // A needs-reauth Slack serves cached reads only; a clipboard draft is a write-class op, so
         // the user must reauth first rather than silently draft against a stale token.
-        let amber = ConnState::NeedsReauth { reason: ReauthReason::TokenExpired, last_sync_ms: 5 };
-        assert_eq!(resolve_post(&ctx(amber), PostCapability::AdminApprovalRequired), SlackDelivery::Denied);
+        let amber = ConnState::NeedsReauth {
+            reason: ReauthReason::TokenExpired,
+            last_sync_ms: 5,
+        };
+        assert_eq!(
+            resolve_post(&ctx(amber), PostCapability::AdminApprovalRequired),
+            SlackDelivery::Denied
+        );
     }
 }

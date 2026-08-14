@@ -30,7 +30,10 @@ pub enum ConnState {
     Connected { last_sync_ms: i64 },
     /// Amber: needs reauth. Data is stale-but-usable — carries the last sync time so freshness can
     /// be shown (FR-INT-06). `last_sync_ms` is 0 if it never synced.
-    NeedsReauth { reason: ReauthReason, last_sync_ms: i64 },
+    NeedsReauth {
+        reason: ReauthReason,
+        last_sync_ms: i64,
+    },
 }
 
 impl ConnState {
@@ -78,9 +81,9 @@ pub fn next(state: ConnState, event: ConnEvent) -> ConnState {
             last_sync_ms: state.last_sync().unwrap_or(0),
         },
         // Reauth restores Connected, keeping the last sync time (a sync will refresh it).
-        ConnEvent::Reauthed { ts } => {
-            ConnState::Connected { last_sync_ms: state.last_sync().unwrap_or(ts) }
-        }
+        ConnEvent::Reauthed { ts } => ConnState::Connected {
+            last_sync_ms: state.last_sync().unwrap_or(ts),
+        },
     }
 }
 
@@ -107,7 +110,12 @@ impl Default for ConnectionRegistry {
 impl ConnectionRegistry {
     /// A registry with every service disconnected.
     pub fn new() -> Self {
-        Self { states: crate::scope::ALL_SERVICES.iter().map(|&s| (s, ConnState::Disconnected)).collect() }
+        Self {
+            states: crate::scope::ALL_SERVICES
+                .iter()
+                .map(|&s| (s, ConnState::Disconnected))
+                .collect(),
+        }
     }
 
     pub fn state(&self, service: Service) -> ConnState {
@@ -134,7 +142,10 @@ impl ConnectionRegistry {
     /// Disconnect a service (FR-INT-07): delete the token, stop syncing, optionally delete events.
     pub fn disconnect(&mut self, service: Service, delete_events: bool) -> DisconnectOutcome {
         self.set(service, ConnState::Disconnected);
-        DisconnectOutcome { token_deleted: true, events_deleted: delete_events }
+        DisconnectOutcome {
+            token_deleted: true,
+            events_deleted: delete_events,
+        }
     }
 
     /// Data freshness for a service: `now - last_sync` while it has ever synced (FR-INT-06). `None`
@@ -148,7 +159,11 @@ impl ConnectionRegistry {
 
     /// Services currently amber (need reauth) — for the aggregate indicator.
     pub fn amber_services(&self) -> Vec<Service> {
-        self.states.iter().filter(|(_, st)| st.is_amber()).map(|(s, _)| *s).collect()
+        self.states
+            .iter()
+            .filter(|(_, st)| st.is_amber())
+            .map(|(s, _)| *s)
+            .collect()
     }
 }
 
@@ -168,13 +183,22 @@ mod tests {
     fn expiry_goes_amber_keeping_last_sync() {
         let s = ConnState::Connected { last_sync_ms: 250 };
         let s = next(s, ConnEvent::TokenExpired);
-        assert_eq!(s, ConnState::NeedsReauth { reason: ReauthReason::TokenExpired, last_sync_ms: 250 });
+        assert_eq!(
+            s,
+            ConnState::NeedsReauth {
+                reason: ReauthReason::TokenExpired,
+                last_sync_ms: 250
+            }
+        );
         assert!(s.is_amber());
     }
 
     #[test]
     fn reauth_restores_connected() {
-        let s = ConnState::NeedsReauth { reason: ReauthReason::ConnectFailed, last_sync_ms: 250 };
+        let s = ConnState::NeedsReauth {
+            reason: ReauthReason::ConnectFailed,
+            last_sync_ms: 250,
+        };
         let s = next(s, ConnEvent::Reauthed { ts: 900 });
         assert_eq!(s, ConnState::Connected { last_sync_ms: 250 });
         assert!(!s.is_amber());
@@ -189,7 +213,10 @@ mod tests {
         reg.apply(Service::Gmail, ConnEvent::TokenExpired);
         assert!(reg.state(Service::Gmail).is_amber());
         // Calendar is untouched
-        assert_eq!(reg.state(Service::GoogleCalendar), ConnState::Connected { last_sync_ms: 100 });
+        assert_eq!(
+            reg.state(Service::GoogleCalendar),
+            ConnState::Connected { last_sync_ms: 100 }
+        );
         assert_eq!(reg.amber_services(), vec![Service::Gmail]);
     }
 
@@ -215,7 +242,13 @@ mod tests {
         reg.apply(Service::GitHub, ConnEvent::Connected { ts: 100 });
         // keep events (default)
         let out = reg.disconnect(Service::GitHub, false);
-        assert_eq!(out, DisconnectOutcome { token_deleted: true, events_deleted: false });
+        assert_eq!(
+            out,
+            DisconnectOutcome {
+                token_deleted: true,
+                events_deleted: false
+            }
+        );
         assert_eq!(reg.state(Service::GitHub), ConnState::Disconnected);
         // delete events (opt-in)
         reg.apply(Service::GitHub, ConnEvent::Connected { ts: 200 });

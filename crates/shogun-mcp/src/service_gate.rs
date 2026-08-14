@@ -118,13 +118,22 @@ mod tests {
     use crate::connection::ReauthReason;
 
     fn connected() -> ConnState {
-        ConnState::Connected { last_sync_ms: 1_000 }
+        ConnState::Connected {
+            last_sync_ms: 1_000,
+        }
     }
     fn amber() -> ConnState {
-        ConnState::NeedsReauth { reason: ReauthReason::TokenExpired, last_sync_ms: 500 }
+        ConnState::NeedsReauth {
+            reason: ReauthReason::TokenExpired,
+            last_sync_ms: 500,
+        }
     }
     fn ctx(conn: ConnState, draft_stop: bool) -> OpContext {
-        OpContext { highest_released: Wave::One, conn, draft_stop }
+        OpContext {
+            highest_released: Wave::One,
+            conn,
+            draft_stop,
+        }
     }
 
     #[test]
@@ -148,14 +157,21 @@ mod tests {
 
     #[test]
     fn disconnected_denies_everything() {
-        let d = authorize_op(Service::Gmail, "read_sync", &ctx(ConnState::Disconnected, false));
+        let d = authorize_op(
+            Service::Gmail,
+            "read_sync",
+            &ctx(ConnState::Disconnected, false),
+        );
         assert_eq!(d, OpDecision::Denied(DenyReason::NotConnected));
     }
 
     #[test]
     fn amber_serves_reads_but_not_writes() {
         // read on amber → still allowed (cached), a draft write → denied
-        assert_eq!(authorize_op(Service::Gmail, "read_sync", &ctx(amber(), false)), OpDecision::Background);
+        assert_eq!(
+            authorize_op(Service::Gmail, "read_sync", &ctx(amber(), false)),
+            OpDecision::Background
+        );
         assert_eq!(
             authorize_op(Service::Gmail, "draft_create_update", &ctx(amber(), false)),
             OpDecision::Denied(DenyReason::NeedsReauth)
@@ -179,13 +195,24 @@ mod tests {
     #[test]
     fn draft_stop_does_not_block_reads_or_drafts_or_calendar() {
         // draft-stop only blocks the Gmail send; everything else is unaffected.
-        assert_eq!(authorize_op(Service::Gmail, "read_sync", &ctx(connected(), true)), OpDecision::Background);
         assert_eq!(
-            authorize_op(Service::Gmail, "draft_create_update", &ctx(connected(), true)),
+            authorize_op(Service::Gmail, "read_sync", &ctx(connected(), true)),
+            OpDecision::Background
+        );
+        assert_eq!(
+            authorize_op(
+                Service::Gmail,
+                "draft_create_update",
+                &ctx(connected(), true)
+            ),
             OpDecision::RequiresLevel(Level::L2)
         );
         assert_eq!(
-            authorize_op(Service::GoogleCalendar, "event_create", &ctx(connected(), true)),
+            authorize_op(
+                Service::GoogleCalendar,
+                "event_create",
+                &ctx(connected(), true)
+            ),
             OpDecision::RequiresLevel(Level::L3)
         );
     }
@@ -193,7 +220,11 @@ mod tests {
     #[test]
     fn calendar_event_is_l3() {
         assert_eq!(
-            authorize_op(Service::GoogleCalendar, "event_create", &ctx(connected(), false)),
+            authorize_op(
+                Service::GoogleCalendar,
+                "event_create",
+                &ctx(connected(), false)
+            ),
             OpDecision::RequiresLevel(Level::L3)
         );
     }
@@ -207,7 +238,9 @@ mod tests {
                 let d = authorize_op(service, op.name, &ctx(connected(), false));
                 if op.class == OpClass::ExternalSend {
                     match d {
-                        OpDecision::RequiresLevel(l) => assert_eq!(l, Level::L3, "{} send below L3", op.name),
+                        OpDecision::RequiresLevel(l) => {
+                            assert_eq!(l, Level::L3, "{} send below L3", op.name)
+                        }
                         OpDecision::RequiresComposio | OpDecision::Denied(_) => {}
                         OpDecision::Background => panic!("send {} auto-ran (invariant 4)", op.name),
                     }
@@ -220,7 +253,10 @@ mod tests {
     fn traceability_required_for_writes_not_reads() {
         assert!(requires_traceability(Service::Gmail, "send"));
         assert!(requires_traceability(Service::Gmail, "draft_create_update"));
-        assert!(requires_traceability(Service::GoogleCalendar, "event_create"));
+        assert!(requires_traceability(
+            Service::GoogleCalendar,
+            "event_create"
+        ));
         assert!(!requires_traceability(Service::Gmail, "read_sync"));
     }
 }

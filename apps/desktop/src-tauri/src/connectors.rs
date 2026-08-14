@@ -17,20 +17,20 @@ pub mod mac {
     use std::sync::{Arc, Mutex, TryLockError};
     use std::time::Duration;
 
-    use tauri::Manager;
     use shogun_core::composio_read::ComposioReadRpc;
     use shogun_core::composio_send::HttpComposioApi;
     use shogun_core::daemon::Db;
-    use shogun_core::mcp_http::{HttpMcpRpc, HttpTokenExchange};
     use shogun_core::llm::traceability::{Route, TraceRecord, TraceabilitySink};
+    use shogun_core::mcp_http::{HttpMcpRpc, HttpTokenExchange};
+    use shogun_integrations::keychain_store::SERVICE as KEYCHAIN_SERVICE_NAME;
     use shogun_integrations::oauth::AuthConfig;
     use shogun_integrations::runtime::{ConnectorRuntime, DEFAULT_SYNC_INTERVAL_MS};
     use shogun_integrations::token::ManagedTokenProvider;
-    use shogun_integrations::keychain_store::SERVICE as KEYCHAIN_SERVICE_NAME;
+    use shogun_integrations::DispatchRpc;
     use shogun_integrations::KeychainTokenStore;
     use shogun_integrations::RemoteMcpTransport;
-    use shogun_integrations::DispatchRpc;
     use shogun_mcp::scope::{from_source, Wave};
+    use tauri::Manager;
 
     use crate::approvals::mac::{composio_api_key, load_composio_policy};
 
@@ -47,14 +47,21 @@ pub mod mac {
     /// The runtime owned by the app (behind a Mutex; the poller and the commands share it).
     pub struct ConnectorState(pub Arc<Mutex<Runtime>>);
 
-    fn with_runtime<R>(state: &Arc<Mutex<Runtime>>, f: impl FnOnce(&mut Runtime) -> R) -> Result<R, String> {
+    fn with_runtime<R>(
+        state: &Arc<Mutex<Runtime>>,
+        f: impl FnOnce(&mut Runtime) -> R,
+    ) -> Result<R, String> {
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         loop {
             match state.try_lock() {
                 Ok(mut guard) => return Ok(f(&mut guard)),
                 Err(TryLockError::Poisoned(_)) => return Err("runtime lock poisoned".into()),
-                Err(TryLockError::WouldBlock) if std::time::Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
-                Err(TryLockError::WouldBlock) => return Err("runtime busy; retry connector operation".into()),
+                Err(TryLockError::WouldBlock) if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(10))
+                }
+                Err(TryLockError::WouldBlock) => {
+                    return Err("runtime busy; retry connector operation".into())
+                }
             }
         }
     }
@@ -73,7 +80,9 @@ pub mod mac {
             let p = load_composio_policy(app);
             if !p.user_id.trim().is_empty() {
                 p.user_id.clone()
-            } else { String::new() }
+            } else {
+                String::new()
+            }
         };
         let api = HttpComposioApi::new(api_key)?;
         let composio = ComposioReadRpc::new(api, user_id);
@@ -92,18 +101,32 @@ pub mod mac {
         service: shogun_mcp::scope::Service,
         redirect_uri: Option<String>,
     ) -> Option<AuthConfig> {
-        if !matches!(service, shogun_mcp::scope::Service::GoogleCalendar | shogun_mcp::scope::Service::GoogleDrive) {
+        if !matches!(
+            service,
+            shogun_mcp::scope::Service::GoogleCalendar | shogun_mcp::scope::Service::GoogleDrive
+        ) {
             return None;
         }
         let client_id = shogun_integrations::keychain_store::get_generic_secret(
             shogun_integrations::keychain_store::GOOGLE_OAUTH_CLIENT_ID_ACCOUNT,
-        ).ok().and_then(|bytes| String::from_utf8(bytes).ok())?;
-        if client_id.trim().is_empty() { return None; }
+        )
+        .ok()
+        .and_then(|bytes| String::from_utf8(bytes).ok())?;
+        if client_id.trim().is_empty() {
+            return None;
+        }
         let client_secret = shogun_integrations::keychain_store::get_generic_secret(
             shogun_integrations::keychain_store::GOOGLE_OAUTH_CLIENT_SECRET_ACCOUNT,
-        ).ok().and_then(|bytes| String::from_utf8(bytes).ok()).filter(|s| !s.trim().is_empty());
+        )
+        .ok()
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+        .filter(|s| !s.trim().is_empty());
         let redirect = redirect_uri.unwrap_or_else(|| "http://127.0.0.1:0/callback".to_string());
-        Some(AuthConfig::google(client_id.trim(), client_secret, redirect))
+        Some(AuthConfig::google(
+            client_id.trim(),
+            client_secret,
+            redirect,
+        ))
     }
 
     /// Rebuild the connector runtime from the current credentials and swap it under the lock.
@@ -116,7 +139,10 @@ pub mod mac {
         draft_stop: bool,
     ) -> Result<(), String> {
         let new_runtime = build_runtime(app, draft_stop)?;
-        let mut rt = state.0.lock().map_err(|_| "runtime lock poisoned".to_string())?;
+        let mut rt = state
+            .0
+            .lock()
+            .map_err(|_| "runtime lock poisoned".to_string())?;
         *rt = new_runtime;
         eprintln!("[connectors] gmail runtime rebuilt with updated credentials");
         Ok(())
@@ -128,7 +154,11 @@ pub mod mac {
     /// Skips the sync when `consent_acknowledged` is false in the Composio policy — no data leaves
     /// to a third party without the user's explicit opt-in. Records a traceability entry on each
     /// successful sync to mark the third-party read boundary (FR-TR-03).
-    pub fn spawn_sync_poller(state: Arc<Mutex<ConnectorRuntime<Transport>>>, db: Db, app: tauri::AppHandle) {
+    pub fn spawn_sync_poller(
+        state: Arc<Mutex<ConnectorRuntime<Transport>>>,
+        db: Db,
+        app: tauri::AppHandle,
+    ) {
         std::thread::spawn(move || loop {
             std::thread::sleep(Duration::from_secs(15 * 60));
 
@@ -136,10 +166,16 @@ pub mod mac {
             let policy = load_composio_policy(&app);
             let now = db.now_ms();
             let prepared = if let Ok(rt) = state.try_lock() {
-                let due = rt.services_due(now, DEFAULT_SYNC_INTERVAL_MS).into_iter().filter(|svc| {
-                    *svc != shogun_mcp::scope::Service::Gmail || policy.consent_acknowledged
-                }).collect::<Vec<_>>();
-                due.into_iter().map(|svc| (svc, rt.prepare_sync(svc))).collect::<Vec<_>>()
+                let due = rt
+                    .services_due(now, DEFAULT_SYNC_INTERVAL_MS)
+                    .into_iter()
+                    .filter(|svc| {
+                        *svc != shogun_mcp::scope::Service::Gmail || policy.consent_acknowledged
+                    })
+                    .collect::<Vec<_>>();
+                due.into_iter()
+                    .map(|svc| (svc, rt.prepare_sync(svc)))
+                    .collect::<Vec<_>>()
             } else {
                 Vec::new()
             };
@@ -149,34 +185,47 @@ pub mod mac {
                     rt.apply_sync_result(svc, now, &res);
                 }
                 match res {
-                        Ok(rep) => {
-                            eprintln!(
-                                "[connectors] {} synced (+{} new)",
-                                svc.source_str(),
-                                rep.inserted
+                    Ok(rep) => {
+                        eprintln!(
+                            "[connectors] {} synced (+{} new)",
+                            svc.source_str(),
+                            rep.inserted
+                        );
+                        // Record that a third-party (Composio) read happened for this service.
+                        // We record THAT it happened, not what was fetched — body text never
+                        // reaches storage (invariant 3 / FR-TR-03). Empty chunk: zero bytes,
+                        // deterministic digest of the empty string.
+                        let third_party = svc == shogun_mcp::scope::Service::Gmail;
+                        db.traceability_sink().record(TraceRecord::for_chunk(
+                            if third_party {
+                                Route::Composio
+                            } else {
+                                Route::Mcp
+                            },
+                            if third_party {
+                                "gmail_read"
+                            } else {
+                                "integration_read"
+                            },
+                            svc.source_str(),
+                            "",
+                            third_party,
+                        ));
+                        // context_updated（#61）: read-sync 完了を匿名計測。
+                        if let Some(analytics) = app.try_state::<crate::analytics::Analytics>() {
+                            analytics.capture(
+                                "context_updated",
+                                crate::analytics::context_updated_props(
+                                    svc.source_str(),
+                                    rep.inserted as u64,
+                                ),
                             );
-                            // Record that a third-party (Composio) read happened for this service.
-                            // We record THAT it happened, not what was fetched — body text never
-                            // reaches storage (invariant 3 / FR-TR-03). Empty chunk: zero bytes,
-                            // deterministic digest of the empty string.
-                            let third_party = svc == shogun_mcp::scope::Service::Gmail;
-                            db.traceability_sink().record(TraceRecord::for_chunk(
-                                if third_party { Route::Composio } else { Route::Mcp },
-                                if third_party { "gmail_read" } else { "integration_read" },
-                                svc.source_str(), "", third_party,
-                            ));
-                            // context_updated（#61）: read-sync 完了を匿名計測。
-                            if let Some(analytics) = app.try_state::<crate::analytics::Analytics>() {
-                                analytics.capture(
-                                    "context_updated",
-                                    crate::analytics::context_updated_props(svc.source_str(), rep.inserted as u64),
-                                );
-                            }
-                        }
-                        Err(e) => {
-                            eprintln!("[connectors] {} sync failed: {e:?}", svc.source_str());
                         }
                     }
+                    Err(e) => {
+                        eprintln!("[connectors] {} sync failed: {e:?}", svc.source_str());
+                    }
+                }
             }
         });
     }
@@ -190,7 +239,10 @@ pub mod mac {
         db: tauri::State<'_, Db>,
     ) -> Result<Vec<shogun_integrations::ServiceStatus>, String> {
         let now = db.now_ms();
-        let rt = state.0.lock().map_err(|_| "runtime lock poisoned".to_string())?;
+        let rt = state
+            .0
+            .lock()
+            .map_err(|_| "runtime lock poisoned".to_string())?;
         Ok(rt.statuses(now))
     }
 
@@ -225,7 +277,10 @@ pub mod mac {
         app: tauri::AppHandle,
     ) -> Result<(), String> {
         if !service.is_released(Wave::One) {
-            return Err(format!("{} is unreleased at Wave One", service.source_str()));
+            return Err(format!(
+                "{} is unreleased at Wave One",
+                service.source_str()
+            ));
         }
         if service == shogun_mcp::scope::Service::Gmail {
             let policy = load_composio_policy(&app);
@@ -235,7 +290,10 @@ pub mod mac {
             if policy.user_id.trim().is_empty() {
                 return Err("Gmail Composio user ID is not configured".to_string());
             }
-            if composio_api_key().filter(|key| !key.trim().is_empty()).is_none() {
+            if composio_api_key()
+                .filter(|key| !key.trim().is_empty())
+                .is_none()
+            {
                 return Err("Gmail Composio API key is not configured".to_string());
             }
             runtime
@@ -245,13 +303,21 @@ pub mod mac {
         } else {
             let listener = std::net::TcpListener::bind(("127.0.0.1", 0))
                 .map_err(|_| "OAuth loopback bind failed".to_string())?;
-            let port = listener.local_addr().map_err(|_| "OAuth loopback address failed".to_string())?.port();
-            let cfg = google_oauth_config(service, Some(format!("http://127.0.0.1:{port}/callback")))
-                .ok_or_else(|| "Google OAuth client configuration is missing".to_string())?;
+            let port = listener
+                .local_addr()
+                .map_err(|_| "OAuth loopback address failed".to_string())?
+                .port();
+            let cfg =
+                google_oauth_config(service, Some(format!("http://127.0.0.1:{port}/callback")))
+                    .ok_or_else(|| "Google OAuth client configuration is missing".to_string())?;
             let endpoint = shogun_integrations::endpoints::endpoint(service)
                 .ok_or_else(|| "official MCP endpoint is unavailable".to_string())?;
             let tokens = shogun_integrations::oauth_flow::run_loopback_flow(
-                &cfg, endpoint.scopes, &listener, shogun_integrations::token::system_now_ms(), &HttpTokenExchange::new()?
+                &cfg,
+                endpoint.scopes,
+                &listener,
+                shogun_integrations::token::system_now_ms(),
+                &HttpTokenExchange::new()?,
             )?;
             let store = KeychainTokenStore::new(KEYCHAIN_SERVICE_NAME);
             shogun_integrations::TokenStore::save(&store, service, &tokens)?;
@@ -261,12 +327,16 @@ pub mod mac {
                     let _ = shogun_integrations::TokenStore::delete(&store, service);
                     return Err("runtime lock poisoned".to_string());
                 }
-            }.capability_transport(service);
+            }
+            .capability_transport(service);
             if let Err(error) = capability_transport.validate_capabilities(service) {
                 let _ = shogun_integrations::TokenStore::delete(&store, service);
                 return Err(error);
             }
-            runtime.lock().map_err(|_| "runtime lock poisoned".to_string())?.mark_connected(service, now_ms);
+            runtime
+                .lock()
+                .map_err(|_| "runtime lock poisoned".to_string())?
+                .mark_connected(service, now_ms);
         }
         Ok(())
     }
@@ -282,7 +352,9 @@ pub mod mac {
         app: tauri::AppHandle,
     ) -> Result<u64, String> {
         let svc = from_source(&service).ok_or_else(|| format!("unknown service: {service}"))?;
-        if svc == shogun_mcp::scope::Service::Gmail && !load_composio_policy(&app).consent_acknowledged {
+        if svc == shogun_mcp::scope::Service::Gmail
+            && !load_composio_policy(&app).consent_acknowledged
+        {
             return Err("Gmail Composio consent is required".into());
         }
         let prepared = with_runtime(&state.0, |rt| rt.prepare_on_demand(svc, query.clone()))?
@@ -299,9 +371,19 @@ pub mod mac {
                 // the query or fetched body (invariant 3 / FR-TR-03; empty chunk = zero bytes).
                 let third_party = svc == shogun_mcp::scope::Service::Gmail;
                 db.traceability_sink().record(TraceRecord::for_chunk(
-                    if third_party { Route::Composio } else { Route::Mcp },
-                    if third_party { "gmail_read" } else { "integration_read" },
-                    svc.source_str(), "", third_party,
+                    if third_party {
+                        Route::Composio
+                    } else {
+                        Route::Mcp
+                    },
+                    if third_party {
+                        "gmail_read"
+                    } else {
+                        "integration_read"
+                    },
+                    svc.source_str(),
+                    "",
+                    third_party,
                 ));
                 Ok(report.inserted as u64)
             }

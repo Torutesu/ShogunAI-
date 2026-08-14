@@ -54,7 +54,11 @@ pub mod mac {
 
     impl Default for ComposioPolicy {
         fn default() -> Self {
-            Self { draft_stop: true, consent_acknowledged: false, user_id: String::new() }
+            Self {
+                draft_stop: true,
+                consent_acknowledged: false,
+                user_id: String::new(),
+            }
         }
     }
 
@@ -102,12 +106,20 @@ pub mod mac {
     }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    enum ComposioPreflight { NoConsent, DraftOnly, Live }
+    enum ComposioPreflight {
+        NoConsent,
+        DraftOnly,
+        Live,
+    }
 
     fn composio_preflight(policy: &ComposioPolicy) -> ComposioPreflight {
-        if !policy.consent_acknowledged { ComposioPreflight::NoConsent }
-        else if policy.draft_stop { ComposioPreflight::DraftOnly }
-        else { ComposioPreflight::Live }
+        if !policy.consent_acknowledged {
+            ComposioPreflight::NoConsent
+        } else if policy.draft_stop {
+            ComposioPreflight::DraftOnly
+        } else {
+            ComposioPreflight::Live
+        }
     }
 
     /// The shared L3 approval queue (the same one an agent / MCP enqueues into and the UI drains).
@@ -121,7 +133,11 @@ pub mod mac {
 
     impl Default for ApprovalQueueState {
         fn default() -> Self {
-            Self { queue: Mutex::new(ApprovalQueue::new()), path: None, load_error: None }
+            Self {
+                queue: Mutex::new(ApprovalQueue::new()),
+                path: None,
+                load_error: None,
+            }
         }
     }
 
@@ -131,23 +147,33 @@ pub mod mac {
                 Ok(queue) => (queue, None),
                 Err(error) => (ApprovalQueue::new(), Some(error)),
             };
-            Self { queue: Mutex::new(queue), path: Some(path), load_error }
+            Self {
+                queue: Mutex::new(queue),
+                path: Some(path),
+                load_error,
+            }
         }
 
         /// Reload from the shared file (MCP may have enqueued), run `f`, persist.
-        fn with_synced_queue<R>(&self, f: impl FnOnce(&mut ApprovalQueue) -> R) -> Result<R, String> {
+        fn with_synced_queue<R>(
+            &self,
+            f: impl FnOnce(&mut ApprovalQueue) -> R,
+        ) -> Result<R, String> {
             if let Some(error) = &self.load_error {
                 return Err(error.clone());
             } else {
-            let mut guard = self.queue.lock().map_err(|_| "approval queue poisoned".to_string())?;
-            if let Some(path) = &self.path {
-                let out = shogun_mcp::approval_store::with_queue(path, f)?;
-                *guard = shogun_mcp::approval_store::load_queue(path)?;
-                return Ok(out);
+                let mut guard = self
+                    .queue
+                    .lock()
+                    .map_err(|_| "approval queue poisoned".to_string())?;
+                if let Some(path) = &self.path {
+                    let out = shogun_mcp::approval_store::with_queue(path, f)?;
+                    *guard = shogun_mcp::approval_store::load_queue(path)?;
+                    return Ok(out);
+                }
+                let out = f(&mut guard);
+                Ok(out)
             }
-            let out = f(&mut guard);
-            Ok(out)
-        }
         }
     }
 
@@ -171,14 +197,25 @@ pub mod mac {
     /// Build a [`ProposedSend`] from UI/agent input. Email → Composio (§6.10); everything else →
     /// direct first-layer. The action/preview/route construction is centralized in
     /// `shogun_agents::producer`.
-    fn proposed(kind: &str, destination: &str, subject: &str, body: &str, start_time: Option<String>, end_time: Option<String>, calendar_id: Option<String>) -> Result<ProposedSend, String> {
+    fn proposed(
+        kind: &str,
+        destination: &str,
+        subject: &str,
+        body: &str,
+        start_time: Option<String>,
+        end_time: Option<String>,
+        calendar_id: Option<String>,
+    ) -> Result<ProposedSend, String> {
         Ok(match kind {
             "email" => ProposedSend::Email {
                 to: destination.to_string(),
                 subject: subject.to_string(),
                 body: body.to_string(),
             },
-            "slack" => ProposedSend::SlackPost { channel: destination.to_string(), body: body.to_string() },
+            "slack" => ProposedSend::SlackPost {
+                channel: destination.to_string(),
+                body: body.to_string(),
+            },
             "calendar" => ProposedSend::CalendarEvent {
                 title: destination.to_string(),
                 start_time: start_time.ok_or("calendar startTime is required")?,
@@ -186,7 +223,10 @@ pub mod mac {
                 calendar_id,
                 description: body.to_string(),
             },
-            "github" => ProposedSend::IssueComment { target: destination.to_string(), body: body.to_string() },
+            "github" => ProposedSend::IssueComment {
+                target: destination.to_string(),
+                body: body.to_string(),
+            },
             other => return Err(format!("unknown send kind: {other}")),
         })
     }
@@ -205,7 +245,15 @@ pub mod mac {
         state: tauri::State<'_, ApprovalQueueState>,
         db: tauri::State<'_, Db>,
     ) -> Result<u64, String> {
-        let proposal = proposed(&kind, &destination, &subject, &body, start_time, end_time, calendar_id)?;
+        let proposal = proposed(
+            &kind,
+            &destination,
+            &subject,
+            &body,
+            start_time,
+            end_time,
+            calendar_id,
+        )?;
         let now = db.now_ms().max(0) as u64;
         state.with_synced_queue(|q| propose(q, &proposal, Origin::Human, now).0)
     }
@@ -231,9 +279,12 @@ pub mod mac {
         );
         // Draft through the same BYOK Agent-lane client as inline drafts (invariant 5). Traceability
         // is recorded by the client at the egress point.
-        let agent = crate::inline_source::mac::build_agent(&db)
-            .ok_or_else(|| "No key yet — add your provider key in Settings to draft replies.".to_string())?;
-        let body = agent.complete(&prompt).map_err(|e| format!("draft failed: {e:?}"))?;
+        let agent = crate::inline_source::mac::build_agent(&db).ok_or_else(|| {
+            "No key yet — add your provider key in Settings to draft replies.".to_string()
+        })?;
+        let body = agent
+            .complete(&prompt)
+            .map_err(|e| format!("draft failed: {e:?}"))?;
 
         let proposal = proposed(&kind, &destination, &subject, &body, None, None, None)?;
         let now = db.now_ms().max(0) as u64;
@@ -265,12 +316,17 @@ pub mod mac {
 
     /// Reject a pending send.
     #[tauri::command]
-    pub fn reject_send(id: u64, state: tauri::State<'_, ApprovalQueueState>) -> Result<String, String> {
+    pub fn reject_send(
+        id: u64,
+        state: tauri::State<'_, ApprovalQueueState>,
+    ) -> Result<String, String> {
         use shogun_agents::approval::RejectCause;
-        state.with_synced_queue(|q| match q.reject(ApprovalId(id), RejectCause::UserRejected) {
-            Decision::Rejected(_) => "rejected".into(),
-            other => format!("{other:?}"),
-        })
+        state.with_synced_queue(
+            |q| match q.reject(ApprovalId(id), RejectCause::UserRejected) {
+                Decision::Rejected(_) => "rejected".into(),
+                other => format!("{other:?}"),
+            },
+        )
     }
 
     /// Confirm a pending send via the dedicated button (FR-AG-03) and execute it. Enter-key intent
@@ -294,7 +350,9 @@ pub mod mac {
         // Confirm + dequeue under the queue lock, then drop it before executing (execution locks the
         // connector runtime, a different lock — keep the two lock scopes disjoint).
         let confirmed = {
-            match state.with_synced_queue(|q| q.confirm(ApprovalId(id), ConfirmIntent::DedicatedButton, now))? {
+            match state.with_synced_queue(|q| {
+                q.confirm(ApprovalId(id), ConfirmIntent::DedicatedButton, now)
+            })? {
                 Decision::Confirmed(cs) => cs,
                 Decision::RequiresDedicatedButton => return Ok("requires_button".into()),
                 Decision::StillPending => return Ok("pending".into()),
@@ -307,61 +365,73 @@ pub mod mac {
         // Only Composio (email) sends are gated — first-layer sends bypass this entirely.
         use shogun_integrations::send_bridge::{route_send, SendRoute};
         let outcome: Result<String, String> = (|| {
-        let outcome = if matches!(route_send(&confirmed.action), SendRoute::Composio) {
-            let policy = load_composio_policy(&app);
-            if composio_preflight(&policy) == ComposioPreflight::NoConsent {
-                // No consent means no Composio/draft call at all. Record content-free failure.
-                "send_failed: composio consent required".into()
-            } else if composio_preflight(&policy) == ComposioPreflight::DraftOnly {
-                // Consent exists, draft-stop blocks live send, so draft fallback is allowed.
-                let sink = db.traceability_sink();
-                match save_gmail_draft(&connectors.0, &sink, &confirmed.action, &confirmed.preview.full_body) {
-                    Ok(()) => {
-                        "draft_saved: composio send is off (opt-in required)".into()
+            let outcome = if matches!(route_send(&confirmed.action), SendRoute::Composio) {
+                let policy = load_composio_policy(&app);
+                if composio_preflight(&policy) == ComposioPreflight::NoConsent {
+                    // No consent means no Composio/draft call at all. Record content-free failure.
+                    "send_failed: composio consent required".into()
+                } else if composio_preflight(&policy) == ComposioPreflight::DraftOnly {
+                    // Consent exists, draft-stop blocks live send, so draft fallback is allowed.
+                    let sink = db.traceability_sink();
+                    match save_gmail_draft(
+                        &connectors.0,
+                        &sink,
+                        &confirmed.action,
+                        &confirmed.preview.full_body,
+                    ) {
+                        Ok(()) => "draft_saved: composio send is off (opt-in required)".into(),
+                        Err(e) => {
+                            format!("send_failed: composio send is off (opt-in required); draft error: {e}")
+                        }
                     }
-                    Err(e) => {
-                        format!("send_failed: composio send is off (opt-in required); draft error: {e}")
+                } else {
+                    // Gate is open — require the Composio API key before proceeding.
+                    let composio_key = composio_api_key()
+                        .filter(|k| !k.trim().is_empty())
+                        .ok_or_else(|| {
+                            "Composio key not set — add it in settings to send".to_string()
+                        })?;
+                    let composio_user = {
+                        let p = load_composio_policy(&app);
+                        if !p.user_id.trim().is_empty() {
+                            p.user_id
+                        } else {
+                            String::new()
+                        }
+                    };
+                    let composio = ComposioSendTransport::new(
+                        HttpComposioApi::new(composio_key)?,
+                        composio_user,
+                    );
+                    let runtime = connectors.0.clone();
+                    let first_layer = FirstLayerSendTransport::new(&connectors.0);
+                    let draft_runtime = runtime.clone();
+                    let draft_sink = db.traceability_sink();
+                    let routed = RoutedSendTransport::new(
+                        composio,
+                        first_layer,
+                        Box::new(move |action, body| {
+                            save_gmail_draft(&draft_runtime, &draft_sink, action, body)
+                        }),
+                    );
+                    match execute_send(&confirmed, &routed, &db.traceability_sink()) {
+                        SendExecOutcome::Sent => "sent".into(),
+                        SendExecOutcome::Failed(e) => format!("send_failed:{e}"),
                     }
                 }
-            } else {
-            // Gate is open — require the Composio API key before proceeding.
-            let composio_key = composio_api_key()
-                .filter(|k| !k.trim().is_empty())
-                .ok_or_else(|| "Composio key not set — add it in settings to send".to_string())?;
-            let composio_user = {
-                let p = load_composio_policy(&app);
-                if !p.user_id.trim().is_empty() {
-                    p.user_id
-                } else { String::new() }
-            };
-            let composio = ComposioSendTransport::new(HttpComposioApi::new(composio_key)?, composio_user);
-            let runtime = connectors.0.clone();
-            let first_layer = FirstLayerSendTransport::new(&connectors.0);
-            let draft_runtime = runtime.clone();
-            let draft_sink = db.traceability_sink();
-            let routed = RoutedSendTransport::new(
-                composio,
-                first_layer,
-                Box::new(move |action, body| save_gmail_draft(&draft_runtime, &draft_sink, action, body)),
-            );
-            match execute_send(&confirmed, &routed, &db.traceability_sink()) {
-                SendExecOutcome::Sent => "sent".into(),
-                SendExecOutcome::Failed(e) => format!("send_failed:{e}"),
-            }
-            }
 
-        // --- First-layer send (Slack / calendar / GitHub): no Composio gate, no Composio key ----
-        // We confirmed above (the `SendRoute::Composio` branch returned early) that this action is
-        // NOT an email send, so `FirstLayerSendTransport` alone is the right executor — no Composio
-        // client or key is needed or consulted.
-        } else {
-        let first_layer = FirstLayerSendTransport::new(&connectors.0);
-        match execute_send(&confirmed, &first_layer, &db.traceability_sink()) {
-            SendExecOutcome::Sent => "sent".into(),
-            SendExecOutcome::Failed(e) => format!("send_failed:{e}"),
-        }
-        };
-        Ok(outcome)
+            // --- First-layer send (Slack / calendar / GitHub): no Composio gate, no Composio key ----
+            // We confirmed above (the `SendRoute::Composio` branch returned early) that this action is
+            // NOT an email send, so `FirstLayerSendTransport` alone is the right executor — no Composio
+            // client or key is needed or consulted.
+            } else {
+                let first_layer = FirstLayerSendTransport::new(&connectors.0);
+                match execute_send(&confirmed, &first_layer, &db.traceability_sink()) {
+                    SendExecOutcome::Sent => "sent".into(),
+                    SendExecOutcome::Failed(e) => format!("send_failed:{e}"),
+                }
+            };
+            Ok(outcome)
         })();
         let status = if outcome.as_deref().unwrap_or("").starts_with("sent") {
             shogun_agents::approval::ApprovalStatus::Sent
@@ -371,7 +441,9 @@ pub mod mac {
             shogun_agents::approval::ApprovalStatus::SendFailed
         };
         let marked = state.with_synced_queue(|q| q.mark_status(ApprovalId(id), status, now))?;
-        if !marked { return Err("approval status transition rejected".into()); }
+        if !marked {
+            return Err("approval status transition rejected".into());
+        }
         Ok(outcome.unwrap_or_else(|error| format!("send_failed:{error}")))
     }
 
@@ -392,8 +464,14 @@ pub mod mac {
         // `to`/`subject`/`body` to Composio field names (`recipient_email`/`subject`/`body`).
         let args = json!({ "to": to, "subject": subject, "body": mail_body });
         let ticket = {
-            let rt = runtime.lock().map_err(|_| "runtime lock poisoned".to_string())?;
-            rt.prepare_write(shogun_mcp::scope::Service::Gmail, "draft_create_update", args)?
+            let rt = runtime
+                .lock()
+                .map_err(|_| "runtime lock poisoned".to_string())?;
+            rt.prepare_write(
+                shogun_mcp::scope::Service::Gmail,
+                "draft_create_update",
+                args,
+            )?
         };
         ticket.run().map(|_| ())?;
         // Record traceability only on success: the draft body just left the device via Composio.
@@ -440,7 +518,7 @@ pub mod mac {
             return Err("key looks too short — check you pasted the full Composio API key".into());
         }
         keychain_store::set_generic_secret(COMPOSIO_KEY_ACCOUNT, key.as_bytes())
-        .map_err(|e| e.to_string())?;
+            .map_err(|e| e.to_string())?;
         eprintln!("[composio] api key saved to Keychain");
         // Rebuild the live runtime so the new key is used immediately.
         let policy = load_composio_policy(&app);
@@ -474,12 +552,19 @@ pub mod mac {
 
     /// Return a new policy with `user_id` set to `id`, preserving all other fields.
     fn with_user_id(p: ComposioPolicy, id: &str) -> ComposioPolicy {
-        ComposioPolicy { user_id: id.to_string(), ..p }
+        ComposioPolicy {
+            user_id: id.to_string(),
+            ..p
+        }
     }
 
     /// Return a new policy with `draft_stop` and `consent_acknowledged` updated, preserving `user_id`.
     fn with_flags(p: ComposioPolicy, draft_stop: bool, consent: bool) -> ComposioPolicy {
-        ComposioPolicy { draft_stop, consent_acknowledged: consent, ..p }
+        ComposioPolicy {
+            draft_stop,
+            consent_acknowledged: consent,
+            ..p
+        }
     }
 
     /// Persist the Composio opt-in policy to `<app-data>/composio.json`.
@@ -523,8 +608,7 @@ pub mod mac {
         let draft_stop = policy.draft_stop;
         save_composio_policy(&app, with_user_id(policy, &trimmed))?;
         // Rebuild the live runtime so the new user_id is used immediately.
-        if let Err(e) =
-            crate::connectors::mac::rebuild_gmail_runtime(&connectors, &app, draft_stop)
+        if let Err(e) = crate::connectors::mac::rebuild_gmail_runtime(&connectors, &app, draft_stop)
         {
             eprintln!("[connectors] runtime rebuild after user_id save skipped: {e}");
         }
@@ -558,12 +642,22 @@ pub mod mac {
                 // Last 4 chars only, char-safe. A key too short to have 4 chars is masked
                 // entirely rather than echoed — never return the whole secret (invariant 7).
                 let n = k.chars().count();
-                let last4 = if n >= 4 { k.chars().skip(n - 4).collect() } else { "····".to_string() };
+                let last4 = if n >= 4 {
+                    k.chars().skip(n - 4).collect()
+                } else {
+                    "····".to_string()
+                };
                 (true, last4)
             }
             _ => (false, String::new()),
         };
-        ComposioSettingsView { has_key, key_last4, draft_stop: policy.draft_stop, consent_acknowledged: policy.consent_acknowledged, user_id }
+        ComposioSettingsView {
+            has_key,
+            key_last4,
+            draft_stop: policy.draft_stop,
+            consent_acknowledged: policy.consent_acknowledged,
+            user_id,
+        }
     }
 
     #[derive(serde::Serialize)]
@@ -574,10 +668,16 @@ pub mod mac {
 
     fn google_oauth_settings_view() -> GoogleOAuthSettingsView {
         GoogleOAuthSettingsView {
-            has_client_id: keychain_store::get_generic_secret(keychain_store::GOOGLE_OAUTH_CLIENT_ID_ACCOUNT)
-                .ok().is_some_and(|v| !v.is_empty()),
-            has_client_secret: keychain_store::get_generic_secret(keychain_store::GOOGLE_OAUTH_CLIENT_SECRET_ACCOUNT)
-                .ok().is_some_and(|v| !v.is_empty()),
+            has_client_id: keychain_store::get_generic_secret(
+                keychain_store::GOOGLE_OAUTH_CLIENT_ID_ACCOUNT,
+            )
+            .ok()
+            .is_some_and(|v| !v.is_empty()),
+            has_client_secret: keychain_store::get_generic_secret(
+                keychain_store::GOOGLE_OAUTH_CLIENT_SECRET_ACCOUNT,
+            )
+            .ok()
+            .is_some_and(|v| !v.is_empty()),
         }
     }
 
@@ -608,17 +708,36 @@ pub mod mac {
         fn capture() -> Self {
             Self {
                 client_id: saved_oauth_value(keychain_store::GOOGLE_OAUTH_CLIENT_ID_ACCOUNT),
-                client_secret: saved_oauth_value(keychain_store::GOOGLE_OAUTH_CLIENT_SECRET_ACCOUNT),
-                calendar_tokens: keychain_store::get_generic_secret(&KeychainTokenStore::token_account(shogun_mcp::scope::Service::GoogleCalendar)).ok(),
-                drive_tokens: keychain_store::get_generic_secret(&KeychainTokenStore::token_account(shogun_mcp::scope::Service::GoogleDrive)).ok(),
+                client_secret: saved_oauth_value(
+                    keychain_store::GOOGLE_OAUTH_CLIENT_SECRET_ACCOUNT,
+                ),
+                calendar_tokens: keychain_store::get_generic_secret(
+                    &KeychainTokenStore::token_account(shogun_mcp::scope::Service::GoogleCalendar),
+                )
+                .ok(),
+                drive_tokens: keychain_store::get_generic_secret(
+                    &KeychainTokenStore::token_account(shogun_mcp::scope::Service::GoogleDrive),
+                )
+                .ok(),
             }
         }
 
         fn restore(&self) -> bool {
-            let ok_oauth = restore_oauth_value(keychain_store::GOOGLE_OAUTH_CLIENT_ID_ACCOUNT, self.client_id.as_deref())
-                && restore_oauth_value(keychain_store::GOOGLE_OAUTH_CLIENT_SECRET_ACCOUNT, self.client_secret.as_deref());
-            let ok_calendar = restore_oauth_value(&KeychainTokenStore::token_account(shogun_mcp::scope::Service::GoogleCalendar), self.calendar_tokens.as_deref());
-            let ok_drive = restore_oauth_value(&KeychainTokenStore::token_account(shogun_mcp::scope::Service::GoogleDrive), self.drive_tokens.as_deref());
+            let ok_oauth = restore_oauth_value(
+                keychain_store::GOOGLE_OAUTH_CLIENT_ID_ACCOUNT,
+                self.client_id.as_deref(),
+            ) && restore_oauth_value(
+                keychain_store::GOOGLE_OAUTH_CLIENT_SECRET_ACCOUNT,
+                self.client_secret.as_deref(),
+            );
+            let ok_calendar = restore_oauth_value(
+                &KeychainTokenStore::token_account(shogun_mcp::scope::Service::GoogleCalendar),
+                self.calendar_tokens.as_deref(),
+            );
+            let ok_drive = restore_oauth_value(
+                &KeychainTokenStore::token_account(shogun_mcp::scope::Service::GoogleDrive),
+                self.drive_tokens.as_deref(),
+            );
             ok_oauth && ok_calendar && ok_drive
         }
     }
@@ -626,10 +745,16 @@ pub mod mac {
     fn disconnect_google_services(state: &ConnectorState) -> Result<(), String> {
         let store = shogun_integrations::KeychainTokenStore::new(keychain_store::SERVICE);
         // Token deletion precedes state transition. Caller owns rollback snapshot.
-        for service in [shogun_mcp::scope::Service::GoogleCalendar, shogun_mcp::scope::Service::GoogleDrive] {
+        for service in [
+            shogun_mcp::scope::Service::GoogleCalendar,
+            shogun_mcp::scope::Service::GoogleDrive,
+        ] {
             shogun_integrations::TokenStore::delete(&store, service)?;
         }
-        let mut runtime = state.0.lock().map_err(|_| "runtime lock poisoned".to_string())?;
+        let mut runtime = state
+            .0
+            .lock()
+            .map_err(|_| "runtime lock poisoned".to_string())?;
         runtime.disconnect(shogun_mcp::scope::Service::GoogleCalendar, false);
         runtime.disconnect(shogun_mcp::scope::Service::GoogleDrive, false);
         Ok(())
@@ -642,43 +767,69 @@ pub mod mac {
         state: tauri::State<'_, ConnectorState>,
     ) -> Result<(), String> {
         let client_id = client_id.trim();
-        if client_id.is_empty() { return Err("Google OAuth client ID is required".into()); }
+        if client_id.is_empty() {
+            return Err("Google OAuth client ID is required".into());
+        }
         let snapshot = GoogleOAuthSnapshot::capture();
-        if let Err(_) = keychain_store::set_generic_secret(keychain_store::GOOGLE_OAUTH_CLIENT_ID_ACCOUNT, client_id.as_bytes()) {
+        if let Err(_) = keychain_store::set_generic_secret(
+            keychain_store::GOOGLE_OAUTH_CLIENT_ID_ACCOUNT,
+            client_id.as_bytes(),
+        ) {
             return Err("Google OAuth client ID save failed".into());
         }
         let secret = client_secret.trim();
         let secret_result = if secret.is_empty() {
-            keychain_store::delete_generic_secret(keychain_store::GOOGLE_OAUTH_CLIENT_SECRET_ACCOUNT)
+            keychain_store::delete_generic_secret(
+                keychain_store::GOOGLE_OAUTH_CLIENT_SECRET_ACCOUNT,
+            )
         } else {
-            keychain_store::set_generic_secret(keychain_store::GOOGLE_OAUTH_CLIENT_SECRET_ACCOUNT, secret.as_bytes())
+            keychain_store::set_generic_secret(
+                keychain_store::GOOGLE_OAUTH_CLIENT_SECRET_ACCOUNT,
+                secret.as_bytes(),
+            )
         };
         if secret_result.is_err() {
             let restored = snapshot.restore();
-            if !restored { force_google_disconnected(&state); }
+            if !restored {
+                force_google_disconnected(&state);
+            }
             return Err("Google OAuth client secret save failed".into());
         }
         if let Err(error) = disconnect_google_services(&state) {
-            if !snapshot.restore() { force_google_disconnected(&state); return Err("Google OAuth rollback failed".into()); }
+            if !snapshot.restore() {
+                force_google_disconnected(&state);
+                return Err("Google OAuth rollback failed".into());
+            }
             return Err(error);
         }
         Ok(())
     }
 
     #[tauri::command]
-    pub fn clear_google_oauth_client(state: tauri::State<'_, ConnectorState>) -> Result<(), String> {
+    pub fn clear_google_oauth_client(
+        state: tauri::State<'_, ConnectorState>,
+    ) -> Result<(), String> {
         let snapshot = GoogleOAuthSnapshot::capture();
-        for account in [keychain_store::GOOGLE_OAUTH_CLIENT_ID_ACCOUNT, keychain_store::GOOGLE_OAUTH_CLIENT_SECRET_ACCOUNT] {
+        for account in [
+            keychain_store::GOOGLE_OAUTH_CLIENT_ID_ACCOUNT,
+            keychain_store::GOOGLE_OAUTH_CLIENT_SECRET_ACCOUNT,
+        ] {
             match keychain_store::delete_generic_secret(account) {
                 Ok(()) => {}
                 Err(_) => {
-                    if !snapshot.restore() { force_google_disconnected(&state); return Err("Google OAuth rollback failed".into()); }
+                    if !snapshot.restore() {
+                        force_google_disconnected(&state);
+                        return Err("Google OAuth rollback failed".into());
+                    }
                     return Err("Google OAuth client clear failed".into());
                 }
             }
         }
         if let Err(error) = disconnect_google_services(&state) {
-            if !snapshot.restore() { force_google_disconnected(&state); return Err("Google OAuth rollback failed".into()); }
+            if !snapshot.restore() {
+                force_google_disconnected(&state);
+                return Err("Google OAuth rollback failed".into());
+            }
             return Err(error);
         }
         Ok(())
@@ -701,42 +852,86 @@ pub mod mac {
         fn default_policy_blocks_send() {
             let policy = ComposioPolicy::default();
             assert!(policy.draft_stop, "draft_stop must default ON");
-            assert!(!policy.consent_acknowledged, "consent must default NOT acknowledged");
-            assert!(!composio_send_allowed(policy), "default policy must block the send");
+            assert!(
+                !policy.consent_acknowledged,
+                "consent must default NOT acknowledged"
+            );
+            assert!(
+                !composio_send_allowed(policy),
+                "default policy must block the send"
+            );
         }
 
         #[test]
         fn no_consent_preflight_makes_no_composio_or_draft_call() {
-            let policy = ComposioPolicy { draft_stop: true, consent_acknowledged: false, user_id: String::new() };
+            let policy = ComposioPolicy {
+                draft_stop: true,
+                consent_acknowledged: false,
+                user_id: String::new(),
+            };
             assert_eq!(composio_preflight(&policy), ComposioPreflight::NoConsent);
 
             let mut q = ApprovalQueue::new();
-            let action = SendAction::SendEmail { to: "a@b.com".into() };
-            let id = q.request(action.clone(), Preview::for_send(&action, "body", ApprovalRoute::ViaComposio), Origin::Human, 0);
-            assert!(matches!(q.confirm(id, ConfirmIntent::DedicatedButton, 1), Decision::Confirmed(_)));
+            let action = SendAction::SendEmail {
+                to: "a@b.com".into(),
+            };
+            let id = q.request(
+                action.clone(),
+                Preview::for_send(&action, "body", ApprovalRoute::ViaComposio),
+                Origin::Human,
+                0,
+            );
+            assert!(matches!(
+                q.confirm(id, ConfirmIntent::DedicatedButton, 1),
+                Decision::Confirmed(_)
+            ));
             assert!(q.mark_status(id, shogun_agents::approval::ApprovalStatus::SendFailed, 2));
-            assert_eq!(q.status(id), Some(shogun_agents::approval::ApprovalStatus::SendFailed));
+            assert_eq!(
+                q.status(id),
+                Some(shogun_agents::approval::ApprovalStatus::SendFailed)
+            );
         }
 
         /// consent = true, draft_stop = true → still blocked (draft-stop gate).
         #[test]
         fn consent_true_draftstop_true_blocks_send() {
-            let policy = ComposioPolicy { consent_acknowledged: true, draft_stop: true, user_id: String::new() };
-            assert!(!composio_send_allowed(policy), "draft-stop ON must block even with consent");
+            let policy = ComposioPolicy {
+                consent_acknowledged: true,
+                draft_stop: true,
+                user_id: String::new(),
+            };
+            assert!(
+                !composio_send_allowed(policy),
+                "draft-stop ON must block even with consent"
+            );
         }
 
         /// consent = false, draft_stop = false → blocked (consent gate).
         #[test]
         fn consent_false_draftstop_false_blocks_send() {
-            let policy = ComposioPolicy { consent_acknowledged: false, draft_stop: false, user_id: String::new() };
-            assert!(!composio_send_allowed(policy), "no consent must block even when draft-stop is OFF");
+            let policy = ComposioPolicy {
+                consent_acknowledged: false,
+                draft_stop: false,
+                user_id: String::new(),
+            };
+            assert!(
+                !composio_send_allowed(policy),
+                "no consent must block even when draft-stop is OFF"
+            );
         }
 
         /// consent = true, draft_stop = false → allowed (both gates open).
         #[test]
         fn consent_true_draftstop_false_allows_send() {
-            let policy = ComposioPolicy { consent_acknowledged: true, draft_stop: false, user_id: String::new() };
-            assert!(composio_send_allowed(policy), "consent + draft-stop OFF must allow the send");
+            let policy = ComposioPolicy {
+                consent_acknowledged: true,
+                draft_stop: false,
+                user_id: String::new(),
+            };
+            assert!(
+                composio_send_allowed(policy),
+                "consent + draft-stop OFF must allow the send"
+            );
         }
 
         // ---- policy_is_valid: all 4 combinations ---------------------------------------------
@@ -744,25 +939,37 @@ pub mod mac {
         /// consent=false, draft_stop=false → invalid (only invalid combination).
         #[test]
         fn composio_policy_invalid_no_consent_no_draftstop() {
-            assert!(!policy_is_valid(false, false), "draft_stop=false + consent=false must be invalid");
+            assert!(
+                !policy_is_valid(false, false),
+                "draft_stop=false + consent=false must be invalid"
+            );
         }
 
         /// consent=false, draft_stop=true → valid (draft-stop engaged protects even without consent).
         #[test]
         fn composio_policy_valid_draftstop_on_no_consent() {
-            assert!(policy_is_valid(true, false), "draft_stop=true + consent=false must be valid");
+            assert!(
+                policy_is_valid(true, false),
+                "draft_stop=true + consent=false must be valid"
+            );
         }
 
         /// consent=true, draft_stop=true → valid (consent given, draft-stop still on).
         #[test]
         fn composio_policy_valid_consent_draftstop_on() {
-            assert!(policy_is_valid(true, true), "draft_stop=true + consent=true must be valid");
+            assert!(
+                policy_is_valid(true, true),
+                "draft_stop=true + consent=true must be valid"
+            );
         }
 
         /// consent=true, draft_stop=false → valid (consent given, live send enabled).
         #[test]
         fn composio_policy_valid_consent_draftstop_off() {
-            assert!(policy_is_valid(false, true), "draft_stop=false + consent=true must be valid");
+            assert!(
+                policy_is_valid(false, true),
+                "draft_stop=false + consent=true must be valid"
+            );
         }
 
         // ---- user_id field: serde defaults and helper functions -----------------------------
@@ -776,7 +983,11 @@ pub mod mac {
 
         #[test]
         fn round_trip_all_fields() {
-            let original = ComposioPolicy { draft_stop: false, consent_acknowledged: true, user_id: "test-user-123".to_string() };
+            let original = ComposioPolicy {
+                draft_stop: false,
+                consent_acknowledged: true,
+                user_id: "test-user-123".to_string(),
+            };
             let json = serde_json::to_string(&original).expect("serialize");
             let loaded: ComposioPolicy = serde_json::from_str(&json).expect("deserialize");
             assert!(!loaded.draft_stop);
@@ -786,7 +997,11 @@ pub mod mac {
 
         #[test]
         fn with_user_id_preserves_flags() {
-            let p = ComposioPolicy { draft_stop: false, consent_acknowledged: true, user_id: String::new() };
+            let p = ComposioPolicy {
+                draft_stop: false,
+                consent_acknowledged: true,
+                user_id: String::new(),
+            };
             let updated = with_user_id(p, "new-user");
             assert_eq!(updated.user_id, "new-user");
             assert!(!updated.draft_stop);
@@ -795,7 +1010,11 @@ pub mod mac {
 
         #[test]
         fn with_flags_preserves_user_id() {
-            let p = ComposioPolicy { draft_stop: true, consent_acknowledged: false, user_id: "preserved-user".to_string() };
+            let p = ComposioPolicy {
+                draft_stop: true,
+                consent_acknowledged: false,
+                user_id: "preserved-user".to_string(),
+            };
             let updated = with_flags(p, false, true);
             assert_eq!(updated.user_id, "preserved-user");
             assert!(!updated.draft_stop);

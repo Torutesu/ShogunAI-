@@ -138,7 +138,11 @@ fn to_gray_bt601(image: &DynamicImage) -> Vec<u8> {
 fn morph_3x3<const MAX: bool>(src: &[u8], w: usize, h: usize) -> Vec<u8> {
     #[inline(always)]
     fn op<const MAX: bool>(a: u8, b: u8) -> u8 {
-        if MAX { a.max(b) } else { a.min(b) }
+        if MAX {
+            a.max(b)
+        } else {
+            a.min(b)
+        }
     }
     let mut horiz = vec![0u8; w * h];
     for y in 0..h {

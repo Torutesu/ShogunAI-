@@ -19,12 +19,17 @@ fn default_enabled() -> bool {
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { enabled: default_enabled() }
+        Self {
+            enabled: default_enabled(),
+        }
     }
 }
 
 pub fn settings_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
-    app.path().app_data_dir().ok().map(|d| d.join("launch_at_login.json"))
+    app.path()
+        .app_data_dir()
+        .ok()
+        .map(|d| d.join("launch_at_login.json"))
 }
 
 pub fn load_settings(app: &tauri::AppHandle) -> Settings {
@@ -75,12 +80,16 @@ pub mod mac {
     /// they do not respawn a process the user just quit.
     pub fn apply_os_state(app: &tauri::AppHandle, enabled: bool) -> Result<(), String> {
         let mgr = app.autolaunch();
-        let os_enabled = mgr.is_enabled().map_err(|e| format!("autostart status: {e}"))?;
+        let os_enabled = mgr
+            .is_enabled()
+            .map_err(|e| format!("autostart status: {e}"))?;
         if enabled && !os_enabled {
-            mgr.enable().map_err(|e| format!("enable launch at login: {e}"))?;
+            mgr.enable()
+                .map_err(|e| format!("enable launch at login: {e}"))?;
             eprintln!("[launch] login item enabled");
         } else if !enabled && os_enabled {
-            mgr.disable().map_err(|e| format!("disable launch at login: {e}"))?;
+            mgr.disable()
+                .map_err(|e| format!("disable launch at login: {e}"))?;
             eprintln!("[launch] login item disabled");
         }
         Ok(())
@@ -100,7 +109,9 @@ pub mod mac {
         };
 
         if prefs.enabled == os_enabled {
-            return Settings { enabled: os_enabled };
+            return Settings {
+                enabled: os_enabled,
+            };
         }
 
         eprintln!(
@@ -167,7 +178,10 @@ pub mod mac {
     }
 
     #[tauri::command]
-    pub fn set_launch_at_login_enabled(_enabled: bool, _app: tauri::AppHandle) -> Result<(), String> {
+    pub fn set_launch_at_login_enabled(
+        _enabled: bool,
+        _app: tauri::AppHandle,
+    ) -> Result<(), String> {
         Ok(())
     }
 }

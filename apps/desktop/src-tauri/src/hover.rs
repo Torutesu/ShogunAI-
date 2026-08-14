@@ -127,7 +127,9 @@ mod mac {
         let ctx = unsafe { &*(user as *const TapCtx) };
 
         // System disabled the tap (slow callback / user input): surface + re-enable.
-        if etype == CGEventType::TapDisabledByTimeout || etype == CGEventType::TapDisabledByUserInput {
+        if etype == CGEventType::TapDisabledByTimeout
+            || etype == CGEventType::TapDisabledByUserInput
+        {
             let _ = ctx.tx.send(TapEvent::Status { active: false });
             let port = ctx.tap_port.load(Ordering::Acquire) as *const CFMachPort;
             if !port.is_null() {
@@ -150,13 +152,16 @@ mod mac {
             let loc = unsafe { CGEvent::location(Some(event.as_ref())) };
             let (top_y, mid_x) = display_top_and_mid_cg(loc.x, loc.y);
             let half_w = hover_band_w_cg() / 2.0;
-            let inside = (loc.y - top_y) <= hover_band_h_cg()
-                && (loc.x - mid_x).abs() <= half_w;
+            let inside = (loc.y - top_y) <= hover_band_h_cg() && (loc.x - mid_x).abs() <= half_w;
             // Early reject: outside the notch/panel silhouette AND already known-outside → zero
             // further work. One edge sample passes on band exit so HoverTracker sees the leave.
             if inside || ctx.in_band.get() {
                 ctx.in_band.set(inside);
-                let _ = ctx.tx.send(TapEvent::Moved { x: loc.x, y: loc.y, buttons: ctx.buttons.get() });
+                let _ = ctx.tx.send(TapEvent::Moved {
+                    x: loc.x,
+                    y: loc.y,
+                    buttons: ctx.buttons.get(),
+                });
             }
         }
         event.as_ptr()
@@ -202,7 +207,9 @@ mod mac {
                 };
                 // Stash the port for in-callback re-enabling. `tap` (CFRetained) stays
                 // alive on this stack frame for the whole run loop.
-                (*ctx).tap_port.store(&*tap as *const CFMachPort as *mut c_void, Ordering::Release);
+                (*ctx)
+                    .tap_port
+                    .store(&*tap as *const CFMachPort as *mut c_void, Ordering::Release);
 
                 let Some(source) = CFMachPort::new_run_loop_source(None, Some(&tap), 0) else {
                     return;

@@ -39,7 +39,8 @@ pub mod mac {
 
     /// The exact System Settings deep link for Privacy › Accessibility. The scheme is stable across
     /// macOS 14/15; if Apple ever renames the pane, `open` still lands the user in Settings.
-    const AX_SETTINGS_URL: &str = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
+    const AX_SETTINGS_URL: &str =
+        "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
 
     /// Persisted first-run disposition. The *outcome* only — never captured content, never the
     /// user's text. Absent file = never onboarded.
@@ -63,11 +64,16 @@ pub mod mac {
     }
 
     fn state_path(app: &AppHandle) -> Option<PathBuf> {
-        app.path().app_data_dir().ok().map(|d| d.join("onboarding.json"))
+        app.path()
+            .app_data_dir()
+            .ok()
+            .map(|d| d.join("onboarding.json"))
     }
 
     fn load_disposition(app: &AppHandle) -> Disposition {
-        let Some(path) = state_path(app) else { return Disposition::default() };
+        let Some(path) = state_path(app) else {
+            return Disposition::default();
+        };
         // A missing or unreadable file is simply "never onboarded" — never a hard error: this is a
         // guide screen, not a data-integrity surface.
         std::fs::read_to_string(path)

@@ -60,10 +60,20 @@ impl AppState {
         approvals: Arc<Mutex<ApprovalQueue>>,
         clock: Clock,
     ) -> Self {
-        Self { tokens, backend, approvals, clock, metrics: None, approvals_path: None }
+        Self {
+            tokens,
+            backend,
+            approvals,
+            clock,
+            metrics: None,
+            approvals_path: None,
+        }
     }
 
-    pub fn with_approvals_path(mut self, path: PathBuf) -> Self { self.approvals_path = Some(path); self }
+    pub fn with_approvals_path(mut self, path: PathBuf) -> Self {
+        self.approvals_path = Some(path);
+        self
+    }
 
     /// Attach the live SLO metrics source served at `GET /v1/metrics`. Without it, the endpoint
     /// returns an empty (all-unmeasured) snapshot.
@@ -87,10 +97,16 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
         _ => None,
     };
     let path = req.uri().path().to_string();
-    let token = rest::bearer(req.headers().get(AUTHORIZATION).and_then(|v| v.to_str().ok()));
+    let token = rest::bearer(
+        req.headers()
+            .get(AUTHORIZATION)
+            .and_then(|v| v.to_str().ok()),
+    );
     // Parse the query string: `?include_low` (FR-API-06 opt-in), `?q=<search>`, visual-recall window.
     let raw_query = req.uri().query().unwrap_or("");
-    let include_low = raw_query.split('&').any(|kv| kv == "include_low" || kv.starts_with("include_low="));
+    let include_low = raw_query
+        .split('&')
+        .any(|kv| kv == "include_low" || kv.starts_with("include_low="));
     let query = raw_query
         .split('&')
         .find_map(|kv| kv.strip_prefix("q="))
@@ -128,30 +144,56 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
                 // actions.execute needs the shared approval queue (L3 sends enqueue there).
                 Routed::Action => {
                     if let Some(path) = &state.approvals_path {
-                        match crate::approval_store::with_queue(path, |queue| rest::act(rreq.body.as_deref(), (state.clock)(), queue)) {
+                        match crate::approval_store::with_queue(path, |queue| {
+                            rest::act(rreq.body.as_deref(), (state.clock)(), queue)
+                        }) {
                             Ok(result) => result,
-                            Err(error) => (500, format!(r#"{{"error":"approval_store","message":{}}}"#, serde_json::json!(error))),
+                            Err(error) => (
+                                500,
+                                format!(
+                                    r#"{{"error":"approval_store","message":{}}}"#,
+                                    serde_json::json!(error)
+                                ),
+                            ),
                         }
-                    } else { match state.approvals.lock() {
-                        Ok(mut queue) => rest::act(rreq.body.as_deref(), (state.clock)(), &mut queue),
-                        Err(_) => (500, r#"{"error":"internal"}"#.to_string()),
-                    }}
-                },
+                    } else {
+                        match state.approvals.lock() {
+                            Ok(mut queue) => {
+                                rest::act(rreq.body.as_deref(), (state.clock)(), &mut queue)
+                            }
+                            Err(_) => (500, r#"{"error":"internal"}"#.to_string()),
+                        }
+                    }
+                }
                 Routed::ApprovalPoll { id } => match state.approvals.lock() {
                     Ok(mut queue) => {
                         if let Some(path) = &state.approvals_path {
-                            match crate::approval_store::with_queue(path, |queue| rest::poll_approval(id, queue, (state.clock)())) {
+                            match crate::approval_store::with_queue(path, |queue| {
+                                rest::poll_approval(id, queue, (state.clock)())
+                            }) {
                                 Ok(body) => (200, body),
-                                Err(error) => (500, format!(r#"{{"error":"approval_store","message":{}}}"#, serde_json::json!(error))),
+                                Err(error) => (
+                                    500,
+                                    format!(
+                                        r#"{{"error":"approval_store","message":{}}}"#,
+                                        serde_json::json!(error)
+                                    ),
+                                ),
                             }
-                        } else { (200, rest::poll_approval(id, &mut queue, (state.clock)())) }
+                        } else {
+                            (200, rest::poll_approval(id, &mut queue, (state.clock)()))
+                        }
                     }
                     Err(_) => (500, r#"{"error":"internal"}"#.to_string()),
                 },
                 // metrics come from the injected live source (empty snapshot if none).
                 Routed::Metrics => (
                     200,
-                    state.metrics.as_ref().map(|m| m.snapshot_json()).unwrap_or_else(|| r#"{"metrics":[]}"#.to_string()),
+                    state
+                        .metrics
+                        .as_ref()
+                        .map(|m| m.snapshot_json())
+                        .unwrap_or_else(|| r#"{"metrics":[]}"#.to_string()),
                 ),
                 // reads/writes/status/errors go through the backend renderer.
                 _ => rest::respond_with(&rreq, &state.tokens, state.backend.as_ref()),
@@ -231,17 +273,28 @@ mod tests {
 
     async fn raw_get(addr: std::net::SocketAddr, path: &str, auth: Option<&str>) -> String {
         let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
-        let auth_line = auth.map(|t| format!("Authorization: Bearer {t}\r\n")).unwrap_or_default();
-        let request = format!("GET {path} HTTP/1.1\r\nHost: localhost\r\n{auth_line}Connection: close\r\n\r\n");
+        let auth_line = auth
+            .map(|t| format!("Authorization: Bearer {t}\r\n"))
+            .unwrap_or_default();
+        let request = format!(
+            "GET {path} HTTP/1.1\r\nHost: localhost\r\n{auth_line}Connection: close\r\n\r\n"
+        );
         stream.write_all(request.as_bytes()).await.unwrap();
         let mut buf = Vec::new();
         stream.read_to_end(&mut buf).await.unwrap();
         String::from_utf8_lossy(&buf).into_owned()
     }
 
-    async fn raw_post(addr: std::net::SocketAddr, path: &str, auth: Option<&str>, body: &str) -> String {
+    async fn raw_post(
+        addr: std::net::SocketAddr,
+        path: &str,
+        auth: Option<&str>,
+        body: &str,
+    ) -> String {
         let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
-        let auth_line = auth.map(|t| format!("Authorization: Bearer {t}\r\n")).unwrap_or_default();
+        let auth_line = auth
+            .map(|t| format!("Authorization: Bearer {t}\r\n"))
+            .unwrap_or_default();
         let request = format!(
             "POST {path} HTTP/1.1\r\nHost: localhost\r\n{auth_line}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
             body.len()
@@ -320,7 +373,10 @@ mod tests {
         let addr = spawn_server_with(tokens, Arc::new(Fake)).await;
         let resp = raw_get(addr, "/v1/state/commitments", Some("t")).await;
         assert!(resp.contains("200"), "got: {resp}");
-        assert!(resp.contains("ship the report"), "real backend data missing: {resp}");
+        assert!(
+            resp.contains("ship the report"),
+            "real backend data missing: {resp}"
+        );
     }
 
     #[tokio::test]
@@ -348,7 +404,9 @@ mod tests {
         }
         let mut tokens = TokenRegistry::new();
         tokens.issue("t");
-        let backend = Arc::new(Recorder { last: Mutex::new(None) });
+        let backend = Arc::new(Recorder {
+            last: Mutex::new(None),
+        });
         let addr = spawn_server_with(tokens, backend.clone()).await;
 
         let resp = raw_post(addr, "/v1/memory/notes", Some("t"), "buy milk").await;
@@ -368,7 +426,13 @@ mod tests {
         let addr = spawn_server(tokens).await;
 
         // a local action is authorized immediately (200)
-        let resp = raw_post(addr, "/v1/actions/execute", Some("t"), r#"{"kind":"local_search","query":"x"}"#).await;
+        let resp = raw_post(
+            addr,
+            "/v1/actions/execute",
+            Some("t"),
+            r#"{"kind":"local_search","query":"x"}"#,
+        )
+        .await;
         assert!(resp.contains("200"), "got: {resp}");
         assert!(resp.contains("\"executed\":\"local\""));
 
@@ -385,23 +449,51 @@ mod tests {
         assert!(resp.contains("\"approval_id\":"));
 
         // no token → 401
-        let resp = raw_post(addr, "/v1/actions/execute", None, r#"{"kind":"local_search","query":"x"}"#).await;
+        let resp = raw_post(
+            addr,
+            "/v1/actions/execute",
+            None,
+            r#"{"kind":"local_search","query":"x"}"#,
+        )
+        .await;
         assert!(resp.contains("401"), "got: {resp}");
     }
 
     #[tokio::test]
     async fn rest_uses_shared_file_ledger_for_poll() {
-        let path = std::env::temp_dir().join(format!("shogun-rest-shared-{}.json", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("shogun-rest-shared-{}.json", std::process::id()));
         let _ = std::fs::remove_file(&path);
-        let send = shogun_agents::permission::SendAction::SendEmail { to: "a@b.com".into() };
+        let send = shogun_agents::permission::SendAction::SendEmail {
+            to: "a@b.com".into(),
+        };
         let id = crate::approval_store::with_queue(&path, |q| {
-            q.request(send.clone(), shogun_agents::approval::Preview::for_send(&send, "body", shogun_agents::approval::Route::ViaComposio), shogun_agents::approval::Origin::AiApi, 1)
-        }).unwrap();
-        let mut tokens = TokenRegistry::new(); tokens.issue("t");
+            q.request(
+                send.clone(),
+                shogun_agents::approval::Preview::for_send(
+                    &send,
+                    "body",
+                    shogun_agents::approval::Route::ViaComposio,
+                ),
+                shogun_agents::approval::Origin::AiApi,
+                1,
+            )
+        })
+        .unwrap();
+        let mut tokens = TokenRegistry::new();
+        tokens.issue("t");
         let listener = bind_local(0).await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let state = AppState::new(Arc::new(tokens), Arc::new(crate::backend::StubBackend), Arc::new(Mutex::new(ApprovalQueue::new())), Arc::new(|| 0)).with_approvals_path(path.clone());
-        tokio::spawn(async move { let _ = serve_on(listener, state).await; });
+        let state = AppState::new(
+            Arc::new(tokens),
+            Arc::new(crate::backend::StubBackend),
+            Arc::new(Mutex::new(ApprovalQueue::new())),
+            Arc::new(|| 0),
+        )
+        .with_approvals_path(path.clone());
+        tokio::spawn(async move {
+            let _ = serve_on(listener, state).await;
+        });
         let resp = raw_get(addr, &format!("/v1/actions/poll/{}", id.0), Some("t")).await;
         assert!(resp.contains("\"status\":\"pending\""), "got: {resp}");
         let _ = std::fs::remove_file(&path);
@@ -409,18 +501,45 @@ mod tests {
 
     #[tokio::test]
     async fn rest_poll_expires_and_persists_timeout() {
-        let path = std::env::temp_dir().join(format!("shogun-rest-timeout-{}.json", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("shogun-rest-timeout-{}.json", std::process::id()));
         let _ = std::fs::remove_file(&path);
-        let send = shogun_agents::permission::SendAction::SendEmail { to: "a@b.com".into() };
-        let id = crate::approval_store::with_queue(&path, |q| q.request(send.clone(), shogun_agents::approval::Preview::for_send(&send, "body", shogun_agents::approval::Route::ViaComposio), shogun_agents::approval::Origin::AiApi, 0)).unwrap();
-        let mut tokens = TokenRegistry::new(); tokens.issue("t");
+        let send = shogun_agents::permission::SendAction::SendEmail {
+            to: "a@b.com".into(),
+        };
+        let id = crate::approval_store::with_queue(&path, |q| {
+            q.request(
+                send.clone(),
+                shogun_agents::approval::Preview::for_send(
+                    &send,
+                    "body",
+                    shogun_agents::approval::Route::ViaComposio,
+                ),
+                shogun_agents::approval::Origin::AiApi,
+                0,
+            )
+        })
+        .unwrap();
+        let mut tokens = TokenRegistry::new();
+        tokens.issue("t");
         let listener = bind_local(0).await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let state = AppState::new(Arc::new(tokens), Arc::new(crate::backend::StubBackend), Arc::new(Mutex::new(ApprovalQueue::new())), Arc::new(|| shogun_agents::approval::APPROVAL_TIMEOUT_MS as i64 + 1)).with_approvals_path(path.clone());
-        tokio::spawn(async move { let _ = serve_on(listener, state).await; });
+        let state = AppState::new(
+            Arc::new(tokens),
+            Arc::new(crate::backend::StubBackend),
+            Arc::new(Mutex::new(ApprovalQueue::new())),
+            Arc::new(|| shogun_agents::approval::APPROVAL_TIMEOUT_MS as i64 + 1),
+        )
+        .with_approvals_path(path.clone());
+        tokio::spawn(async move {
+            let _ = serve_on(listener, state).await;
+        });
         let resp = raw_get(addr, &format!("/v1/actions/poll/{}", id.0), Some("t")).await;
         assert!(resp.contains("\"status\":\"timed_out\""), "got: {resp}");
-        assert_eq!(crate::approval_store::load_queue(&path).unwrap().status(id), Some(shogun_agents::approval::ApprovalStatus::TimedOut));
+        assert_eq!(
+            crate::approval_store::load_queue(&path).unwrap().status(id),
+            Some(shogun_agents::approval::ApprovalStatus::TimedOut)
+        );
         let _ = std::fs::remove_file(&path);
     }
 }
