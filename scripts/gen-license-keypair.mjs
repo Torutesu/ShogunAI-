@@ -8,11 +8,12 @@
  *   LICENSE_SIGNING_KEY        — base64(PKCS#8 PEM). SECRET. Set it on the licence API only
  *                                (apps/website env). It never goes in the repo, in the desktop
  *                                app, or in a client bundle.
- *   SHOGUN_LICENSE_PUBKEY      — base64(raw 32-byte Ed25519 public key). NOT secret. Paste it
- *                                into `LICENSE_PUBKEY_B64` in
- *                                crates/shogun-agents/src/license.rs so shipped builds verify
- *                                against it; the same value also works as an env override for
- *                                dev and tests.
+ *   SHOGUN_LICENSE_PUBKEY      — base64(raw 32-byte Ed25519 public key). NOT secret. It goes in
+ *                                three places: `EMBEDDED_PUBLIC_KEY_B64` in
+ *                                crates/shogun-license/src/lib.rs (so shipped builds verify
+ *                                against it), `LICENSE_PUBKEY_B64` on the batch relay
+ *                                (apps/api), and — as `SHOGUN_LICENSE_PUBKEY` — the env
+ *                                override dev, CI and staging run on.
  *
  * Rotation: publish a build carrying the new public key BEFORE switching the signing key, or
  * every already-installed Mac fails verification and falls into the offline-grace window.
