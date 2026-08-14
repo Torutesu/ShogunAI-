@@ -10,9 +10,10 @@
 //! curl -s -H "Authorization: Bearer dev-token" 127.0.0.1:7464/v1/state/commitments
 //! ```
 //!
-//! Config via env: `SHOGUN_DB_PATH` (default `./shogun.db`), `SHOGUN_API_TOKEN` (issues one client
-//! token; without it every call is 401 unless Keychain tokens are loaded), `SHOGUN_API_PORT`
-//! (default 7464, ephemeral fallback if busy), `SHOGUN_MEMORY_API_SETTINGS` (optional).
+//! Config via env: `SHOGUN_DB_PATH` (default `./shogun.db`), `SHOGUN_API_TOKEN` (candidate bearer
+//! against persisted Keychain tokens on macOS; non-macOS keeps env-token issuance for dev/test),
+//! `SHOGUN_API_PORT` (default 7464, ephemeral fallback if busy), `SHOGUN_MEMORY_API_SETTINGS`
+//! (optional).
 //!
 //! Fail closed when Memory API is disabled (`memory_api.json` missing or `enabled: false`).
 //! Soft Pro gate: `enabled` toggle until Stripe WP5.1; trial is Pro-equivalent.
@@ -81,6 +82,9 @@ fn db_backend(db: Db) -> DbBackend {
 
 fn load_token_registry() -> Result<TokenRegistry, String> {
     let mut tokens = TokenRegistry::new();
+    // macOS env token is candidate only. Never let bearer input self-register against Keychain
+    // verifiers. Non-macOS intentionally preserves env-token issuance for dev/test behavior.
+    #[cfg(not(target_os = "macos"))]
     match std::env::var("SHOGUN_API_TOKEN") {
         Ok(t) if !t.is_empty() => tokens.issue(t),
         _ => {}

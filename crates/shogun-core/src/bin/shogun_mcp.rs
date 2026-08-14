@@ -8,7 +8,9 @@
 //! - `SHOGUN_L3_APPROVALS` (optional override for `l3_approvals.json` — shared with desktop Approvals)
 //! - `SHOGUN_API_TOKEN` — **required when any Memory API tokens have been issued** (Settings →
 //!   Issue). If no tokens exist yet, process-trust allows the call when Memory API is enabled
-//!   (dev DX). Fail closed when Memory API is disabled.
+//!   (dev DX). On macOS, env token is only a bearer candidate against persisted Keychain
+//!   verifiers; it is never registered. Non-macOS keeps env-token issuance for dev/test behavior.
+//!   Fail closed when Memory API is disabled.
 //!
 //! Soft Pro gate: `enabled` in `memory_api.json` is the product gate until Stripe WP5.1. Trial is
 //! Pro-equivalent — do not block on a "trial" string alone.
@@ -24,7 +26,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use shogun_core::daemon::Db;
 use shogun_core::db_backend::DbBackend;
 use shogun_mcp::mcp::{serve, McpServer};
-use shogun_mcp::memory_api::{AuthResult, TokenRegistry};
+use shogun_mcp::memory_api::TokenRegistry;
 use shogun_mcp::memory_api_settings::{self, TOKENS_KEYCHAIN_ACCOUNT};
 
 fn now_ms() -> i64 {
@@ -73,6 +75,9 @@ fn load_token_registry() -> Result<TokenRegistry, String> {
     {
         let _ = &mut tokens;
     }
+    // macOS env token is candidate only. Never let bearer input self-register against Keychain
+    // verifiers. Non-macOS intentionally preserves env-token issuance for dev/test behavior.
+    #[cfg(not(target_os = "macos"))]
     if let Ok(token) = std::env::var("SHOGUN_API_TOKEN") {
         if !token.is_empty() {
             tokens.issue(token);
@@ -81,7 +86,7 @@ fn load_token_registry() -> Result<TokenRegistry, String> {
     Ok(tokens)
 }
 
-/// Fail closed on disabled Memory API. If tokens exist, require `SHOGUN_API_TOKEN` to match one.
+/// Fail closed on disabled Memory API. If tokens exist, require env bearer to match one.
 fn gate_or_exit(db_path: &str) {
     let path = memory_api_settings::resolve_settings_path(db_path);
     if let Err(msg) = memory_api_settings::require_enabled(&path) {
@@ -100,7 +105,7 @@ fn gate_or_exit(db_path: &str) {
         return;
     }
     match std::env::var("SHOGUN_API_TOKEN") {
-        Ok(t) if matches!(tokens.authenticate(Some(&t)), AuthResult::Granted) => {}
+        Ok(t) if tokens.authenticate_process(Some(&t)) => {}
         Ok(_) => {
             eprintln!(
                 "SHOGUN_API_TOKEN does not match any issued Memory API token. Re-issue in Settings or fix the env."
@@ -130,7 +135,16 @@ fn main() -> std::io::Result<()> {
     backend =
         backend.with_memory_api_settings_path(memory_api_settings::resolve_settings_path(&db_path));
     let approvals_path = shogun_mcp::approval_store::resolve_store_path(&db_path);
-    let server = McpServer::new(backend, now_ms).with_approvals_path(approvals_path);
+    let heartbeat_path = shogun_mcp::desktop_heartbeat::resolve_path(&db_path);
+    let server = McpServer::new(backend, now_ms)
+        .with_approvals_path(approvals_path)
+        .with_desktop_running_check(move || {
+            shogun_mcp::desktop_heartbeat::is_fresh(
+                &heartbeat_path,
+                now_ms(),
+                shogun_mcp::desktop_heartbeat::MAX_AGE_MS,
+            )
+        });
 
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();

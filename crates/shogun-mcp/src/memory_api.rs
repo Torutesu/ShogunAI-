@@ -224,6 +224,13 @@ impl TokenRegistry {
         }
     }
 
+    /// Authenticate process startup. Empty registry preserves dev/process trust; once a persisted
+    /// token exists, an env bearer must match it. This is distinct from per-call auth, where no
+    /// token is always denied.
+    pub fn authenticate_process(&self, token: Option<&str>) -> bool {
+        self.is_empty() || matches!(self.authenticate(token), AuthResult::Granted)
+    }
+
     #[cfg(test)]
     fn last_scan_count(&self) -> usize {
         self.last_scan_count.load(Ordering::Relaxed)
@@ -362,6 +369,19 @@ mod tests {
         );
         assert_eq!(reg.authenticate(Some("first")), AuthResult::Granted);
         assert_eq!(reg.last_scan_count(), 2);
+    }
+
+    #[test]
+    fn process_auth_requires_persisted_bearer_but_keeps_empty_registry_trust() {
+        let mut reg = TokenRegistry::new();
+        assert!(reg.authenticate_process(None));
+
+        let verifier = crate::memory_api_settings::token_verifier("correct-token");
+        reg.issue_verifier(&verifier).unwrap();
+        assert!(!reg.authenticate_process(Some("wrong-token")));
+        assert!(reg.authenticate_process(Some("correct-token")));
+        assert!(!reg.authenticate_process(Some(&verifier)));
+        assert!(!reg.authenticate_process(None));
     }
 
     #[test]
