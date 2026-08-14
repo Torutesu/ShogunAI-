@@ -4380,6 +4380,7 @@ dependencies = [
  "sqlite-vec",
  "thiserror 1.0.69",
  "tokenizers",
+ "twox-hash",
  "zerocopy 0.7.35",
 ]
 

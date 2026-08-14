@@ -160,10 +160,15 @@ where
     let (from_ts, to_ts) = input_range(db.last_consolidated_to(), now_ms, DEFAULT_LOOKBACK_MS);
     match decide(conditions) {
         RunDecision::Full => {
-            // The one model call — only for a Full run, only over this window.
-            let events = db.events_in_range(from_ts, to_ts);
-            let classified = classify_via_batch(batch_client, &events, max_polls, sleep).await?;
-            let pc = PrecomputedClassifier::new(classified);
+            // The one model call — only for a Full run, only over this window, and only over the
+            // window's CLOUD half. Meeting text (`local_only`) never reaches the relay: its
+            // consent covers live transcription, not nightly classification (A-2). It still gets
+            // classified — by the same local rules the degraded cycle runs — so a commitment made
+            // in a call lands in state either way, at local confidence instead of batch.
+            let window = db.events_in_range_partitioned(from_ts, to_ts);
+            let classified = classify_via_batch(batch_client, &window.cloud, max_polls, sleep).await?;
+            let local = LocalRuleClassifier.classify(&window.local_only);
+            let pc = PrecomputedClassifier::new(classified.into_iter().chain(local).collect());
             let summarizer = LocalExtractiveSummarizer;
             let runner = DbDreamRunner::new(db, &pc, &summarizer, now_ms);
             let report = run_cycle(db, &runner, cycle_id, CycleKind::Full, from_ts, to_ts);
@@ -398,5 +403,96 @@ mod tests {
             display_id: None,
             window_bounds: None,
         }
+    }
+
+    /// A [`MockTransport`](crate::llm::transport::MockTransport) the test keeps a handle to after
+    /// the client takes ownership, so the requests the lane actually sent can be inspected.
+    struct SharedTransport(std::sync::Arc<crate::llm::transport::MockTransport>);
+    impl crate::llm::transport::HttpTransport for SharedTransport {
+        fn send(
+            &self,
+            req: crate::llm::transport::HttpRequest,
+        ) -> impl std::future::Future<
+            Output = Result<crate::llm::transport::HttpResponse, crate::llm::transport::TransportError>,
+        > + Send {
+            self.0.send(req)
+        }
+    }
+
+    #[tokio::test]
+    async fn a_full_run_never_sends_meeting_text_to_the_batch_lane() {
+        // The A-2 regression (docs/meeting-text-on-the-search-spine.md): a window holding both a
+        // screen capture and an indexed meeting transcript classifies BOTH — but only the capture
+        // crosses the wire. This drives the real submit path and reads back what the transport
+        // was actually given, so a future rewiring of the window read cannot quietly widen the
+        // egress.
+        use crate::llm::anthropic::{AnthropicBatchClient, AnthropicConfig};
+        use crate::llm::traceability::RecordingSink;
+        use crate::llm::transport::{HttpResponse, MockTransport};
+        use crate::llm::{Secret, SelectKkKey};
+
+        let now = 100 * 24 * 60 * 60 * 1000;
+        let db = db_at(now);
+        let (capture_id, _) = db.capture(&super_ev(now - 1000, "the deck discussion", "h1")).unwrap();
+        // A meeting on the spine, exactly as index_session writes it. "I will send the budget"
+        // trips the same local commitment rules inline capture uses.
+        db.capture(&shogun_memory::event_log::NewEvent {
+            source: "meeting",
+            kind: "transcript",
+            ..super_ev(now - 900, "Me: I will send the budget tomorrow", "h2")
+        })
+        .unwrap();
+
+        let transport = std::sync::Arc::new(MockTransport::new([
+            HttpResponse { status: 200, body: r#"{"id":"b","processing_status":"ended"}"#.into() },
+            HttpResponse {
+                status: 200,
+                body: format!(
+                    r#"{{"custom_id":"{capture_id}","result":{{"type":"succeeded","message":{{"content":[{{"type":"text","text":"{{\"commitments\":[{{\"direction\":\"mine\",\"description\":\"send the deck\"}}],\"open_loops\":[]}}"}}]}}}}}}"#
+                ),
+            },
+        ]));
+        let client = AnthropicBatchClient::new(
+            SharedTransport(transport.clone()),
+            RecordingSink::new(),
+            SelectKkKey::new(Secret::new("kk-123456")),
+            AnthropicConfig::new("claude-x"),
+        );
+        let idle = RunConditions {
+            within_window: true,
+            window_elapsed: false,
+            idle_ms: IDLE_THRESHOLD_MS,
+            screen_locked: false,
+            power_connected: true,
+            battery_pct: 100,
+            full_run_done_today: false,
+        };
+        let out = run_batch_cycle(&db, &client, &idle, "c1", now, 3, || async {}).await.unwrap();
+        assert!(matches!(out, GatedRun::Ran { cycle: CycleKind::Full, .. }));
+
+        // The wire carried the capture and NOT the meeting — checked on the raw request bodies.
+        let sent = transport.sent();
+        assert!(!sent.is_empty(), "the batch submit must have gone out");
+        for req in &sent {
+            let body = req.body.as_deref().unwrap_or("");
+            assert!(
+                !body.contains("send the budget"),
+                "meeting text reached the batch lane: {}",
+                req.url
+            );
+        }
+        assert!(
+            sent.iter().any(|r| r.body.as_deref().unwrap_or("").contains("deck discussion")),
+            "the capture half must still be classified in the cloud"
+        );
+
+        // …and the meeting commitment still landed in state, through the LOCAL rules.
+        let commitments = db.commitments_due(now + 7 * 24 * 60 * 60 * 1000);
+        let descriptions: Vec<&str> =
+            commitments.iter().map(|c| c.description.as_str()).collect();
+        assert!(
+            descriptions.iter().any(|d| d.contains("send the budget")),
+            "the meeting's commitment must still be extracted locally: {descriptions:?}"
+        );
     }
 }

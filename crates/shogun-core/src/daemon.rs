@@ -460,12 +460,11 @@ impl Db {
         Some((id, touched, ids))
     }
 
-    /// The canonical content hash (xxhash64, hex) used across capture and notes.
+    /// The canonical content hash used across capture and notes. Delegates to the event log's
+    /// own definition — the dedup key belongs to the log it locks, and two definitions would
+    /// eventually stop colliding.
     fn content_hash(text: &str) -> String {
-        use std::hash::Hasher;
-        let mut h = twox_hash::XxHash64::with_seed(0);
-        h.write(text.as_bytes());
-        format!("{:016x}", h.finish())
+        shogun_memory::event_log::content_hash(text)
     }
 
     /// Capture a window body with near-duplicate collapse (FR-CAP-03): if `ev.content` is ≥98%
@@ -687,19 +686,44 @@ impl Db {
     }
 
     /// Close a meeting interval. Idempotent — the first close wins (FR-MT-11).
+    ///
+    /// Closing also puts the finished meeting on the searchable spine (FR-MT-14,
+    /// `meeting_index::index_session`): the transcript is final exactly now, and a close that
+    /// skipped indexing would leave a meeting the user can read back but never find. Indexing is
+    /// best-effort — the close itself must never fail because search maintenance did.
     pub fn close_meeting(&self, id: i64) -> bool {
         let now = self.now_ms();
-        self.conn
-            .lock()
-            .ok()
-            .is_some_and(|conn| shogun_memory::session::close(&conn, id, now).is_ok())
+        self.conn.lock().ok().is_some_and(|conn| {
+            let closed = shogun_memory::session::close(&conn, id, now).is_ok();
+            if closed {
+                let _ = shogun_memory::meeting_index::index_session(&conn, id);
+            }
+            closed
+        })
     }
 
     /// Save the note typed during a meeting (FR-MT-10).
+    ///
+    /// A note is often flushed (blur / debounce) moments after auto-wrap already closed the
+    /// session, and users edit notes from the Recap afterwards — so if the session has ended,
+    /// the index row is refreshed here (`index_session` replaces a changed note's row). While
+    /// the session is still open, indexing waits for the close: half-typed notes do not belong
+    /// in search.
     pub fn save_meeting_note(&self, session_id: i64, body: &str) -> bool {
         let now = self.now_ms();
         self.conn.lock().ok().is_some_and(|conn| {
-            shogun_memory::session_notes::save(&conn, session_id, body, now).is_ok()
+            let saved =
+                shogun_memory::session_notes::save(&conn, session_id, body, now).is_ok();
+            if saved {
+                let ended = shogun_memory::session::get(&conn, session_id)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|s| s.ended_at.is_some());
+                if ended {
+                    let _ = shogun_memory::meeting_index::index_session(&conn, session_id);
+                }
+            }
+            saved
         })
     }
 
@@ -1534,6 +1558,20 @@ impl Db {
     /// Events in `[from_ts, to_ts)` — the window a Consolidation job classifies (FR-DC-03).
     pub fn events_in_range(&self, from_ts: i64, to_ts: i64) -> Vec<event_log::EventText> {
         self.conn.lock().ok().and_then(|c| event_log::events_in_range(&c, from_ts, to_ts).ok()).unwrap_or_default()
+    }
+
+    /// The same window split by destination: `cloud` may go to the Batch lane, `local_only`
+    /// (meeting text) is classified on-device (A-2, `docs/meeting-text-on-the-search-spine.md`).
+    pub fn events_in_range_partitioned(
+        &self,
+        from_ts: i64,
+        to_ts: i64,
+    ) -> event_log::PartitionedEvents {
+        self.conn
+            .lock()
+            .ok()
+            .and_then(|c| event_log::events_in_range_partitioned(&c, from_ts, to_ts).ok())
+            .unwrap_or_default()
     }
 
     /// Threads whose last activity is in `[from_ts, to_ts]` — the window a Compression job
@@ -4434,6 +4472,43 @@ mod tests {
             db.meeting_recap(id).unwrap().notes.as_deref(),
             Some("- discussed the roadmap")
         );
+    }
+
+    #[test]
+    fn closing_a_meeting_puts_it_on_the_search_spine() {
+        // FR-MT-14 at the Db seam: after close, the transcript is reachable through the SAME
+        // search everything else uses, attributed to a meeting.
+        let db = Db::open_in_memory(clock(5_000)).unwrap();
+        let id = db.open_meeting(Some("Weekly sync"), Some("us.zoom.xos"), 0.35, "{}").unwrap();
+        db.append_transcript(
+            id,
+            1_100,
+            shogun_memory::transcript_segments::Speaker::Other,
+            "the vendor renewal was settled",
+            0.9,
+        );
+
+        assert!(db.search("vendor renewal", 10).is_empty(), "not findable while still open");
+        assert!(db.close_meeting(id));
+
+        let hits = db.search("vendor renewal", 10);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].source, "meeting");
+    }
+
+    #[test]
+    fn a_note_flushed_after_close_still_reaches_search() {
+        // The blur/debounce path: auto-wrap closed the session an instant before the webview
+        // flushed the note. The save must refresh the index, or the note the user most wants
+        // kept is the one line of the meeting that can never be found.
+        let db = Db::open_in_memory(clock(5_000)).unwrap();
+        let id = db.open_meeting(Some("1:1"), None, 0.35, "{}").unwrap();
+        db.close_meeting(id);
+
+        assert!(db.save_meeting_note(id, "follow up on the budget line"));
+        let hits = db.search("budget line", 10);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].source, "meeting");
     }
 
     #[test]

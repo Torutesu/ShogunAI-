@@ -24,6 +24,18 @@ pub struct NewEvent<'a> {
     pub window_bounds: Option<&'a str>,
 }
 
+/// The canonical content hash (xxhash64, hex) — the dedup key every writer must agree on.
+///
+/// It lives here rather than in each writer because it *is* the dedup contract: two callers
+/// hashing the same text differently would not collide, and the near-duplicate collapse
+/// (FR-CAP-03) would silently stop collapsing. One function, one definition.
+pub fn content_hash(text: &str) -> String {
+    use std::hash::Hasher;
+    let mut h = twox_hash::XxHash64::with_seed(0);
+    h.write(text.as_bytes());
+    format!("{:016x}", h.finish())
+}
+
 /// Append a new event row unconditionally. Returns the new row id. `last_seen_at` starts equal
 /// to `ts`.
 ///
@@ -245,6 +257,10 @@ pub struct EventText {
 /// List events whose `ts` is in `[from_ts, to_ts)`, oldest first — the day's window a Dream Cycle
 /// consolidation job consumes (FR-DC-03). The half-open range matches the `job_runs` input range so
 /// re-running a job over the same window is deterministic.
+///
+/// **Local reads only.** Anything that leaves the device goes through
+/// [`events_in_range_partitioned`], whose `cloud` half is source-filtered — this function returns
+/// every source, including the ones that must never reach the Batch lane.
 pub fn events_in_range(
     conn: &Connection,
     from_ts: i64,
@@ -257,6 +273,64 @@ pub fn events_in_range(
         Ok(EventText { id: r.get(0)?, content: r.get(1)? })
     })?;
     rows.collect()
+}
+
+/// Sources whose text stays on the device: search, Fusion and *local* extraction may read them,
+/// the Batch lane may not (A-2 decision, `docs/meeting-text-on-the-search-spine.md`).
+///
+/// `meeting` is here because its consent story is different from capture's. The Deepgram opt-in
+/// covers live transcription (process-only); it does not cover shipping the finished transcript
+/// to the relay every night for classification. A source added later with the same shape — text
+/// whose disclosure named a narrower use than "nightly cloud classification" — belongs on this
+/// list too.
+pub const BATCH_EXCLUDED_SOURCES: &[&str] = &["meeting"];
+
+/// An event text cleared for the Batch lane. The type is the proof: only
+/// [`events_in_range_partitioned`] constructs it (enforced by
+/// `scripts/check-batch-source-filter.py`), so `build_batch_items` demanding `&[BatchEventText]`
+/// means an unfiltered window *cannot compile* its way to the relay.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BatchEventText {
+    pub id: i64,
+    pub content: String,
+}
+
+/// One window, split by where its text is allowed to go.
+#[derive(Debug, Clone, Default)]
+pub struct PartitionedEvents {
+    /// May be sent to the Batch/Select-KK lane for classification.
+    pub cloud: Vec<BatchEventText>,
+    /// Device-only sources ([`BATCH_EXCLUDED_SOURCES`]): still classified, but by the local
+    /// rule extractor — never a model call.
+    pub local_only: Vec<EventText>,
+}
+
+/// The Dream Cycle's window read: everything in `[from_ts, to_ts)`, partitioned into what the
+/// Batch lane may see and what stays local.
+///
+/// One query and a total split — every event lands in exactly one half, so an excluded source is
+/// visibly routed to the local classifier rather than silently dropped from the night's work.
+pub fn events_in_range_partitioned(
+    conn: &Connection,
+    from_ts: i64,
+    to_ts: i64,
+) -> Result<PartitionedEvents, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT id, content, source FROM event_log WHERE ts >= ?1 AND ts < ?2 ORDER BY ts, id",
+    )?;
+    let mut rows = stmt.query(params![from_ts, to_ts])?;
+    let mut out = PartitionedEvents::default();
+    while let Some(row) = rows.next()? {
+        let id: i64 = row.get(0)?;
+        let content: String = row.get(1)?;
+        let source: String = row.get(2)?;
+        if BATCH_EXCLUDED_SOURCES.contains(&source.as_str()) {
+            out.local_only.push(EventText { id, content });
+        } else {
+            out.cloud.push(BatchEventText { id, content });
+        }
+    }
+    Ok(out)
 }
 
 /// Count events in `[from_ts, to_ts)` — the size of a Dream Cycle input window (FR-DC-06), without
@@ -302,6 +376,37 @@ mod tests {
             display_id: Some(1),
             window_bounds: None,
         }
+    }
+
+    #[test]
+    fn the_partition_routes_meeting_text_away_from_the_cloud_half() {
+        // The A-2 invariant in one test: a window with capture and meeting text splits totally,
+        // and the meeting rows land in local_only — never in the half the relay sees.
+        let conn = crate::open_in_memory().unwrap();
+        insert(&conn, &ev("on screen", "h1", 100, 0)).unwrap();
+        insert(
+            &conn,
+            &NewEvent { source: "meeting", ..ev("Me: said in a call", "h2", 200, 0) },
+        )
+        .unwrap();
+        insert(&conn, &ev("more screen", "h3", 300, 0)).unwrap();
+
+        let w = events_in_range_partitioned(&conn, 0, 1_000).unwrap();
+        assert_eq!(w.cloud.len(), 2);
+        assert_eq!(w.local_only.len(), 1);
+        assert!(w.cloud.iter().all(|e| !e.content.contains("said in a call")));
+        assert_eq!(w.local_only[0].content, "Me: said in a call");
+        // total: nothing silently dropped
+        assert_eq!(w.cloud.len() + w.local_only.len(), events_in_range(&conn, 0, 1_000).unwrap().len());
+    }
+
+    #[test]
+    fn an_empty_exclusion_free_window_is_all_cloud() {
+        let conn = crate::open_in_memory().unwrap();
+        insert(&conn, &ev("a", "ha", 1, 0)).unwrap();
+        let w = events_in_range_partitioned(&conn, 0, 10).unwrap();
+        assert_eq!(w.cloud.len(), 1);
+        assert!(w.local_only.is_empty());
     }
 
     #[test]

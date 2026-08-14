@@ -1,8 +1,36 @@
 # 会議テキストを検索の背骨に載せるか（FR-MT-14 設計判断）
 
 - **起票**: 2026-08-13（監査 Phase 5-4）
-- **状態**: **オーナー判断待ち。実装していない**
+- **状態**: **案A-2 で決定（オーナー承認 2026-08-14）・実装済み**
 - **関連**: FR-MT-14 / FR-MTUX-02 / FR-MEM-23 / 不変条件3・5 / `docs/audits/2026-08-13.md` §8
+
+## 0. 実装記録（2026-08-14）
+
+§6 の作業リストどおり、ただし2点は書いた案より強い形になった:
+
+1. **除外は関数の分離ではなく型で持つ。** `events_in_range_for_batch` という「正しい方を呼ぶ」
+   関数ではなく、`event_log::events_in_range_partitioned` が窓を `cloud: Vec<BatchEventText>` /
+   `local_only: Vec<EventText>` に**全量分割**して返す。`build_batch_items` /
+   `classify_via_batch` は `BatchEventText` を要求するので、未フィルタの窓は**コンパイルが通らない**。
+   分割が全量なのは「除外＝黙って夜の処理から消える」を防ぐため — 会議イベントは
+   `local_only` として Full 実行でも `LocalRuleClassifier`（ローカル抽出）に必ず渡る
+2. **`index_session` は編集安全。** ノートは auto-wrap 後に flush・編集されるため
+   （`save_meeting_note` の `last_session_id` フォールバック）、「クローズ時に1回」では足りない。
+   kind ごとにハッシュの違う旧行（vec / cold の影ごと）を先に落としてから書くので、
+   編集は置換、空into消滅、再文字起こし（WS9）も同じ経路で安全。§6-7 の「呼び出し側の契約」は
+   不要になった
+3. 索引タイミング: `Db::close_meeting`（クローズ成立時、best-effort）＋
+   `Db::save_meeting_note`（**セッション終了後のみ**。開いている間は書きかけをsearchに入れない）
+4. `search_meetings` は**残す**。recap（生成要約、`meeting_recaps`）は背骨に載らないので、
+   recap優先で会議を引く context assembly の会議スロットはこの経路が引き続き担う。
+   背骨が拾うのは transcript / note の原文
+5. ガード: `scripts/check-batch-source-filter.py`（CI組込み・self-test付き）。
+   (a) `BatchEventText` の生成が producer 以外の非テストコードに現れないこと、
+   (b) `BATCH_EXCLUDED_SOURCES` が `'meeting'` を含み partition が参照していること、
+   (c) パイプライン署名が `EventText` に戻っていないこと
+6. 回帰テスト: `a_full_run_never_sends_meeting_text_to_the_batch_lane`（schedule.rs）が
+   実際の submit 経路を駆動し、**transport が受け取った生のリクエストボディ**に会議本文が
+   無いこと・capture は届くこと・会議のコミットメントはローカル抽出で state に入ることを固定
 
 取り込まなかった `shogunai-core-features` ブランチに `meeting_index.rs` があり、会議テキストを
 `event_log` に流し込む設計が実装済みだった。**これは「検索を1本足す」話ではなく、会議の全文が
