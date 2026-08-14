@@ -415,6 +415,45 @@ impl Db {
             .collect()
     }
 
+    /// Recent durable activity for Memory API context snapshots.
+    ///
+    /// `memory.get_context` has no query, so hybrid search cannot choose evidence. Use a small,
+    /// newest-first tail across durable activity sources instead. Exact duplicate excerpts are
+    /// collapsed because AX capture and screen OCR often observe the same window.
+    pub(crate) fn recent_context_previews(
+        &self,
+        limit: usize,
+        excerpt_chars: usize,
+    ) -> Vec<(String, shogun_memory::event_log::RecentEventPreview)> {
+        use std::collections::HashSet;
+
+        const SOURCES: [&str; 6] = ["capture", "screen_ocr", "ai_session", "meeting", "gmail", "gcal"];
+
+        let Some(conn) = self.conn.lock().ok() else { return Vec::new() };
+        let mut previews = Vec::new();
+        for source in SOURCES {
+            let Ok(rows) = shogun_memory::event_log::recent_previews_by_source(
+                &conn,
+                source,
+                limit,
+                excerpt_chars,
+            ) else {
+                continue;
+            };
+            previews.extend(rows.into_iter().map(|row| (source.to_string(), row)));
+        }
+        drop(conn);
+
+        previews.sort_by(|(_, a), (_, b)| b.ts.cmp(&a.ts).then_with(|| b.id.cmp(&a.id)));
+        let mut seen = HashSet::new();
+        previews.retain(|(_, row)| {
+            let normalized = row.excerpt.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase();
+            !normalized.is_empty() && seen.insert(normalized)
+        });
+        previews.truncate(limit);
+        previews
+    }
+
     /// Recent capture bodies `(hash, content)` newest-first, for the near-dup collapse.
     #[allow(dead_code)]
     fn recent_capture_bodies(&self, limit: usize) -> Vec<(String, String)> {

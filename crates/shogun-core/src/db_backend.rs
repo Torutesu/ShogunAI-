@@ -24,6 +24,10 @@ const SEARCH_LIMIT: usize = 20;
 const FRAME_SEARCH_LIMIT: usize = 20;
 /// OCR excerpt length for frame search / status previews.
 const FRAME_EXCERPT_CHARS: usize = 200;
+/// Recent durable activity included in query-free `memory.get_context` snapshots.
+const CONTEXT_ACTIVITY_LIMIT: usize = 8;
+/// Per-activity text cap keeps the snapshot compact even when a captured window is huge.
+const CONTEXT_ACTIVITY_EXCERPT_CHARS: usize = 320;
 /// Confidence assigned to a captured event in search results: events are ground truth, not inferred
 /// state, so they always pass the confidence gate (they are not "possibly").
 const EVENT_CONFIDENCE: f64 = 1.0;
@@ -103,6 +107,21 @@ impl DbBackend {
         }
         for note in self.db.recent_user_notes(8) {
             items.push(ReadItem::new(format!("note: {note}"), EVENT_CONFIDENCE));
+        }
+        for (source, event) in self
+            .db
+            .recent_context_previews(CONTEXT_ACTIVITY_LIMIT, CONTEXT_ACTIVITY_EXCERPT_CHARS)
+        {
+            let location = event
+                .window_title
+                .filter(|title| !title.trim().is_empty())
+                .or(event.app_bundle_id)
+                .map(|value| format!(", {value}"))
+                .unwrap_or_default();
+            items.push(ReadItem::new(
+                format!("recent activity [{source}{location}]: {}", event.excerpt),
+                EVENT_CONFIDENCE,
+            ));
         }
         items
     }
@@ -629,6 +648,32 @@ mod tests {
         assert!(items.len() >= 2, "expected disclaimer + note, got {items:?}");
         assert!(items.iter().any(|i| i.label.contains("launch checklist")), "{items:?}");
         assert!(items.iter().any(|i| i.label.contains("AX Notch")), "{items:?}");
+    }
+
+    #[test]
+    fn get_context_includes_recent_durable_activity() {
+        let db = Db::open_in_memory(Arc::new(|| 2)).unwrap();
+        db.capture(&shogun_memory::event_log::NewEvent {
+            ts: 2,
+            source: "capture",
+            kind: "text",
+            app_bundle_id: Some("com.example.browser"),
+            window_title: Some("Roadmap"),
+            content: "quarterly roadmap review has three open decisions",
+            content_hash: "roadmap-context",
+            dwell_ms: 0,
+            display_id: None,
+            window_bounds: None,
+        })
+        .unwrap();
+        let backend = DbBackend::new(db);
+
+        let items = backend.read(Tool::MemoryGetContext, &params());
+
+        assert!(items.iter().any(|item| {
+            item.label.contains("recent activity [capture, Roadmap]")
+                && item.label.contains("three open decisions")
+        }), "{items:?}");
     }
 
     #[test]
