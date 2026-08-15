@@ -46,6 +46,9 @@ pub mod dreamcycle;
 pub mod inline;
 pub mod llm;
 pub mod log_redact;
+/// Whether the memory store is answering (issue #121) — the fault classes and the live degraded
+/// signal that keep "nothing is remembered" apart from "the memory database failed".
+pub mod memory_health;
 /// The second-layer (Composio) Gmail-send executor + its HTTP client (allowlisted egress, FR-TR-03).
 #[cfg(feature = "net")]
 pub mod composio_send;

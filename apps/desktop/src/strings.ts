@@ -119,6 +119,9 @@ export const STRINGS = {
     // does in the panel clears them, so unlike the ⌥-tap lines above they stay until fixed. Each
     // says which capability is off, because "something is wrong" is not actionable.
     healthNoMemory: "Memory is off — capture and search unavailable",
+    // Issue #121: the store opened but stopped answering. Says "unreadable", never "empty" —
+    // the whole point is that the user must not read a failure as an honest blank.
+    healthMemoryDegraded: "Memory isn't responding — what's shown may be incomplete",
     healthNoAccess: "Grant Accessibility to use drafting and capture",
     healthNoModel: "Search is text-only until the local model is installed",
     healthFix: "Fix",
@@ -138,6 +141,9 @@ export const STRINGS = {
     searchAria: "Search memory",
     searchPlaceholder: "Search your memory…",
     searchOpen: "Search memory (/)",
+    // Issue #121: a store failure is not "no matches" — saying so would tell the user their
+    // memory is empty when it is merely unreachable.
+    searchUnavailable: "Memory is unavailable right now — this isn't an empty result.",
     searchEmpty: "No matches yet.",
     searchHint: "Enter copies the top match · Esc closes",
     searchCopied: "Copied",

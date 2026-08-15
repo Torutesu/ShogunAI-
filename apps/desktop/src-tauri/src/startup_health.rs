@@ -53,16 +53,43 @@ pub mod mac {
         pub accessibility: bool,
         /// `false` = hybrid search is unavailable and results are lexical only.
         pub embedding_model: bool,
+        /// The store opened at boot but the **last** operation against it failed (issue #121).
+        /// Live and self-clearing, like `accessibility`: the next successful read lifts it.
+        pub memory_degraded: bool,
+        /// Which class of failure, when degraded (`"lock_poisoned"` / `"query"`). A tag, never a
+        /// driver message — nothing from a row can reach the webview through this.
+        pub memory_fault: Option<&'static str>,
+        /// Store failures since launch. Monotonic, so a store that keeps failing and recovering
+        /// is still visible at a moment when `memory_degraded` happens to be false.
+        pub memory_faults_total: u64,
     }
 
     /// Tauri command: the panel asks on mount and again whenever it expands.
+    ///
+    /// `Db` is looked up optionally: the shell deliberately keeps running when the memory store
+    /// cannot be opened at all (that case is already `memory_db_error`), and declaring it as a
+    /// `State` parameter would turn the health query itself into an error there — blanking the
+    /// one screen whose job is to explain what is broken.
     #[tauri::command]
-    pub fn startup_health() -> StartupHealth {
+    pub fn startup_health(app: tauri::AppHandle) -> StartupHealth {
+        use tauri::Manager;
         let boot = BOOT.lock().ok().and_then(|g| g.clone()).unwrap_or_default();
+        let memory = app
+            .try_state::<shogun_core::daemon::Db>()
+            .map(|db| db.memory_health())
+            .unwrap_or(shogun_core::memory_health::MemoryHealthSnapshot {
+                degraded: false,
+                fault: None,
+                faults_total: 0,
+                last_fault_ms: None,
+            });
         StartupHealth {
             memory_db_error: boot.memory_db_error,
             accessibility: crate::axcache::ax_trusted_silent(),
             embedding_model: boot.embedding_model,
+            memory_degraded: memory.degraded,
+            memory_fault: memory.fault.map(|f| f.as_str()),
+            memory_faults_total: memory.faults_total,
         }
     }
 

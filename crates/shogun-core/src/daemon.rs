@@ -12,7 +12,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use shogun_memory::event_log::{self, NewEvent};
 use shogun_memory::lessons;
 use shogun_memory::state::{self, NewCommitment, NewOpenLoop, NewPerson, NewProject, Provenance};
@@ -24,6 +24,7 @@ use shogun_fusion::block::{BlockRef, ContextBlock, ScoreInputs, SourceKind};
 use shogun_fusion::budget::TokenEstimator;
 
 use crate::capture::dedup::{decide_hash, Recent};
+use crate::memory_health::{FaultClass, MemoryFault, MemoryResult};
 use crate::db_sink::DbTraceabilitySink;
 use crate::dreamcycle::plan::{remaining, CycleKind, JobKind, JobRun, JobState, DEGRADED_SEQUENCE};
 
@@ -351,12 +352,164 @@ pub struct Db {
     /// The internal event bus, when wired (design §2.2 / E-49). `None` keeps every publish a
     /// no-op, so a `Db` opened without the daemon composition behaves exactly as before.
     bus: Option<crate::bus::Bus>,
+    /// Whether the store is answering (issue #121). Shared by every clone, because a failure the
+    /// capture thread hits is the same failure the panel has to report.
+    health: Arc<crate::memory_health::MemoryHealth>,
 }
 
 impl Db {
     /// Wrap an already-open, migrated connection.
     pub fn new(conn: Connection, clock: Clock) -> Self {
-        Self { conn: Arc::new(Mutex::new(conn)), clock, embedder: None, compression_config: None, bus: None }
+        Self {
+            conn: Arc::new(Mutex::new(conn)),
+            clock,
+            embedder: None,
+            compression_config: None,
+            bus: None,
+            health: Arc::new(crate::memory_health::MemoryHealth::new()),
+        }
+    }
+
+    /// The live memory-health signal (issue #121): what the last store operation did, and how
+    /// many have failed since launch. The shell polls this for the notch's degraded indicator.
+    pub fn memory_health(&self) -> crate::memory_health::MemoryHealthSnapshot {
+        self.health.snapshot()
+    }
+
+    /// Record a failure against the health signal and say so in the log — **operation name and
+    /// failure class only**, never a row, a query, or captured text (コード規約).
+    fn note_fault(&self, op: &'static str, fault: MemoryFault, class: &'static str) {
+        self.health.record_fault(fault, self.now_ms());
+        crate::elog!("[memory] {op} failed: {class}");
+    }
+
+    /// Run `f` against the shared connection, recording what happened in the health signal.
+    ///
+    /// This is the seam issue #121 asks for: a lock failure and a query failure come back as
+    /// distinct [`MemoryFault`]s instead of collapsing into the same empty value a genuinely
+    /// empty table produces. Callers that legitimately cannot act on a failure still swallow the
+    /// `Err` — but the failure is now recorded and visible, rather than silent.
+    fn with_conn<T, E: FaultClass>(
+        &self,
+        op: &'static str,
+        f: impl FnOnce(&Connection) -> Result<T, E>,
+    ) -> MemoryResult<T> {
+        let guard = match self.conn.lock() {
+            Ok(g) => g,
+            Err(_) => {
+                self.note_fault(op, MemoryFault::LockPoisoned, "lock_poisoned");
+                return Err(MemoryFault::LockPoisoned);
+            }
+        };
+        match f(&guard) {
+            Ok(v) => {
+                self.health.record_success();
+                Ok(v)
+            }
+            Err(e) => {
+                self.note_fault(op, MemoryFault::Query, e.fault_class());
+                Err(MemoryFault::Query)
+            }
+        }
+    }
+
+    /// [`Self::with_conn`] for the writes that need `&mut Connection` (transactions).
+    fn with_conn_mut<T, E: FaultClass>(
+        &self,
+        op: &'static str,
+        f: impl FnOnce(&mut Connection) -> Result<T, E>,
+    ) -> MemoryResult<T> {
+        let mut guard = match self.conn.lock() {
+            Ok(g) => g,
+            Err(_) => {
+                self.note_fault(op, MemoryFault::LockPoisoned, "lock_poisoned");
+                return Err(MemoryFault::LockPoisoned);
+            }
+        };
+        match f(&mut guard) {
+            Ok(v) => {
+                self.health.record_success();
+                Ok(v)
+            }
+            Err(e) => {
+                self.note_fault(op, MemoryFault::Query, e.fault_class());
+                Err(MemoryFault::Query)
+            }
+        }
+    }
+
+    /// [`Self::with_conn`] for helpers that return a plain value rather than a `Result` — the
+    /// lock is still the part that can fail, and it is still recorded.
+    fn read_conn<T>(&self, op: &'static str, f: impl FnOnce(&Connection) -> T) -> MemoryResult<T> {
+        self.with_conn(op, |c| Ok::<T, String>(f(c)))
+    }
+
+    /// Take the lock for a body that must hold the guard across a loop, recording a poisoned lock
+    /// before giving up. The closure helpers cannot express those bodies (the guard outlives any
+    /// single statement), but the failure still has to be visible rather than an early `return`
+    /// into a default value.
+    fn lock_or_note(&self, op: &'static str) -> Option<std::sync::MutexGuard<'_, Connection>> {
+        match self.conn.lock() {
+            Ok(g) => Some(g),
+            Err(_) => {
+                self.note_fault(op, MemoryFault::LockPoisoned, "lock_poisoned");
+                None
+            }
+        }
+    }
+
+    /// [`Self::with_conn`] for the public APIs that already report a reason to their caller.
+    ///
+    /// Those signatures predate the health signal and are the shape issue #121 wants everywhere —
+    /// they never turned a failure into a success. The reason reaches the caller unchanged; the
+    /// only new behaviour is that the failure now also registers as degraded memory.
+    fn with_conn_reported<T>(
+        &self,
+        op: &'static str,
+        f: impl FnOnce(&Connection) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let guard = match self.conn.lock() {
+            Ok(g) => g,
+            Err(_) => {
+                self.note_fault(op, MemoryFault::LockPoisoned, "lock_poisoned");
+                return Err(format!("memory DB unavailable ({op}): lock poisoned"));
+            }
+        };
+        match f(&guard) {
+            Ok(v) => {
+                self.health.record_success();
+                Ok(v)
+            }
+            Err(e) => {
+                self.note_fault(op, MemoryFault::Query, "error");
+                Err(e)
+            }
+        }
+    }
+
+    /// [`Self::with_conn_reported`] for the writes that need `&mut Connection`.
+    fn with_conn_mut_reported<T>(
+        &self,
+        op: &'static str,
+        f: impl FnOnce(&mut Connection) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let mut guard = match self.conn.lock() {
+            Ok(g) => g,
+            Err(_) => {
+                self.note_fault(op, MemoryFault::LockPoisoned, "lock_poisoned");
+                return Err(format!("memory DB unavailable ({op}): lock poisoned"));
+            }
+        };
+        match f(&mut guard) {
+            Ok(v) => {
+                self.health.record_success();
+                Ok(v)
+            }
+            Err(e) => {
+                self.note_fault(op, MemoryFault::Query, "error");
+                Err(e)
+            }
+        }
     }
 
     /// Attach the internal event bus (design §2.2). Same handoff pattern as [`Self::with_embedder`]:
@@ -398,8 +551,10 @@ impl Db {
     /// embedded.
     pub fn embed_pending(&self, limit: usize) -> usize {
         let Some(e) = self.embedder.as_deref() else { return 0 };
-        let Ok(mut conn) = self.conn.lock() else { return 0 };
-        shogun_memory::embed_job::embed_all_pending(&mut conn, e, limit).unwrap_or(0)
+        self.with_conn_mut("embed.pending", |conn| {
+            shogun_memory::embed_job::embed_all_pending(conn, e, limit)
+        })
+        .unwrap_or(0)
     }
 
     /// Open the on-disk database (runs migrations) and wrap it.
@@ -435,8 +590,17 @@ impl Db {
 
     /// Record a captured event (capture → memory, FR-CAP-03 dedup-touch). Swallows storage errors
     /// so the capture daemon never crashes on a write hiccup; returns `(id, touched)` on success.
+    ///
+    /// Swallowed, but no longer silent (issue #121): a failed write marks memory degraded, which
+    /// is what turns the notch indicator amber instead of letting capture quietly stop recording.
     pub fn capture(&self, ev: &NewEvent<'_>) -> Option<(i64, bool)> {
-        self.conn.lock().ok().and_then(|c| event_log::insert_or_touch(&c, ev).ok())
+        self.try_capture(ev).ok()
+    }
+
+    /// [`Self::capture`] with the failure kept (issue #121) — for callers that must tell a
+    /// rejected write from a successful one.
+    pub fn try_capture(&self, ev: &NewEvent<'_>) -> MemoryResult<(i64, bool)> {
+        self.with_conn("capture", |c| event_log::insert_or_touch(c, ev))
     }
 
     /// Capture an event, then — only if it was newly inserted (not a dedup-touch) — run the
@@ -453,10 +617,11 @@ impl Db {
         }
         let candidates = shogun_memory::extract::extract(ev.content);
         let now = self.now_ms();
-        let ids = {
-            let mut g = self.conn.lock().ok()?;
-            shogun_memory::extract::persist_candidates(&mut g, id, &candidates, ev.ts, now).unwrap_or_default()
-        };
+        let ids = self
+            .with_conn_mut("extract.persist_candidates", |c| {
+                shogun_memory::extract::persist_candidates(c, id, &candidates, ev.ts, now)
+            })
+            .unwrap_or_default();
         Some((id, touched, ids))
     }
 
@@ -486,19 +651,13 @@ impl Db {
 
     /// Recent event bodies for one `source`, newest-first — used by near-dup collapse (FR-CAP-03).
     fn recent_source_bodies(&self, source: &str, limit: usize) -> Vec<(String, String)> {
-        self.conn
-            .lock()
-            .ok()
-            .and_then(|c| event_log::recent_source_bodies(&c, source, limit).ok())
+        self.with_conn("event_log.recent_source_bodies", |c| event_log::recent_source_bodies(c, source, limit))
             .unwrap_or_default()
     }
 
     /// Recent capture bodies `(hash, content)` newest-first for one app, for the near-dup collapse.
     fn recent_capture_bodies(&self, app_bundle_id: Option<&str>, limit: usize) -> Vec<(String, String)> {
-        self.conn
-            .lock()
-            .ok()
-            .and_then(|c| event_log::recent_capture_bodies(&c, app_bundle_id, limit).ok())
+        self.with_conn("event_log.recent_capture_bodies", |c| event_log::recent_capture_bodies(c, app_bundle_id, limit))
             .unwrap_or_default()
     }
 
@@ -557,10 +716,11 @@ impl Db {
         }
         let candidates = shogun_memory::extract::extract(text);
         let now = self.now_ms();
-        let ids = {
-            let mut g = self.conn.lock().ok()?;
-            shogun_memory::extract::persist_candidates(&mut g, id, &candidates, ev.ts, now).unwrap_or_default()
-        };
+        let ids = self
+            .with_conn_mut("extract.persist_candidates", |c| {
+                shogun_memory::extract::persist_candidates(c, id, &candidates, ev.ts, now)
+            })
+            .unwrap_or_default();
         Some((id, touched, ids))
     }
 
@@ -589,9 +749,12 @@ impl Db {
         // tiny vec beats a map.
         let mut synced: Vec<(&'static str, u64)> = Vec::new();
         {
-            let Ok(mut guard) = self.conn.lock() else {
+            let Some(mut guard) = self.lock_or_note("ingest.items") else {
                 return IngestSummary::default();
             };
+            // Rejected writes are counted, not logged per item: a batch that fails wholesale
+            // would otherwise write one log line per row. One line, and the health signal.
+            let mut rejected = 0usize;
             for it in items {
                 let hash = Self::content_hash(&it.body);
                 let ev = NewEvent {
@@ -607,6 +770,7 @@ impl Db {
                     window_bounds: None,
                 };
                 let Ok((id, touched)) = event_log::insert_or_touch(&guard, &ev) else {
+                    rejected += 1;
                     continue;
                 };
                 summary.processed += 1;
@@ -626,6 +790,13 @@ impl Db {
                             .unwrap_or_default();
                     summary.candidates += ids.len();
                 }
+            }
+            drop(guard);
+            if rejected > 0 {
+                self.note_fault("ingest.items", MemoryFault::Query, "write_rejected");
+                crate::elog!("[memory] ingest.items rejected {rejected} of {} item(s)", summary.processed + rejected);
+            } else {
+                self.health.record_success();
             }
         }
         // Publish after the DB lock is released. Non-blocking (AR-07); carries only the source tag
@@ -660,9 +831,9 @@ impl Db {
     /// Open a meeting interval (FR-MT-05). The macOS adapter has no database access of its own —
     /// every write goes through `Db`, keeping the data tier in the core (invariant 1).
     pub fn open_meeting(&self, title: Option<&str>, app_bundle_id: Option<&str>, confidence: f64, provenance: &str) -> Option<i64> {
-        let conn = self.conn.lock().ok()?;
+        self.with_conn("meeting.open", |conn| {
         shogun_memory::session::open(
-            &conn,
+            conn,
             &shogun_memory::session::NewSession {
                 kind: "meeting",
                 started_at: self.now_ms(),
@@ -673,16 +844,17 @@ impl Db {
                 provenance,
             },
         )
+        })
         .ok()
     }
 
     /// Attach an already-recorded event to a session (FR-MT-05). Best-effort: the event is durable
     /// whether or not it attaches, so a lock/write failure is swallowed. Returns whether it stuck.
     pub fn attach_event_to_meeting(&self, session_id: i64, event_id: i64) -> bool {
-        self.conn
-            .lock()
-            .ok()
-            .is_some_and(|conn| shogun_memory::session::attach_event(&conn, session_id, event_id).is_ok())
+        self.with_conn("meeting.attach_event", |conn| {
+            shogun_memory::session::attach_event(conn, session_id, event_id)
+        })
+        .is_ok()
     }
 
     /// Close a meeting interval. Idempotent — the first close wins (FR-MT-11).
@@ -693,13 +865,14 @@ impl Db {
     /// best-effort — the close itself must never fail because search maintenance did.
     pub fn close_meeting(&self, id: i64) -> bool {
         let now = self.now_ms();
-        self.conn.lock().ok().is_some_and(|conn| {
-            let closed = shogun_memory::session::close(&conn, id, now).is_ok();
-            if closed {
-                let _ = shogun_memory::meeting_index::index_session(&conn, id);
-            }
-            closed
+        self.with_conn("meeting.close", |conn| {
+            shogun_memory::session::close(conn, id, now)?;
+            // Search maintenance is best-effort on purpose: the close itself has already stuck,
+            // and failing it here would re-open a meeting the user ended.
+            let _ = shogun_memory::meeting_index::index_session(conn, id);
+            Ok::<(), rusqlite::Error>(())
         })
+        .is_ok()
     }
 
     /// Save the note typed during a meeting (FR-MT-10).
@@ -711,20 +884,18 @@ impl Db {
     /// in search.
     pub fn save_meeting_note(&self, session_id: i64, body: &str) -> bool {
         let now = self.now_ms();
-        self.conn.lock().ok().is_some_and(|conn| {
-            let saved =
-                shogun_memory::session_notes::save(&conn, session_id, body, now).is_ok();
-            if saved {
-                let ended = shogun_memory::session::get(&conn, session_id)
-                    .ok()
-                    .flatten()
-                    .is_some_and(|s| s.ended_at.is_some());
-                if ended {
-                    let _ = shogun_memory::meeting_index::index_session(&conn, session_id);
-                }
+        self.with_conn("meeting.save_note", |conn| {
+            shogun_memory::session_notes::save(conn, session_id, body, now)?;
+            let ended = shogun_memory::session::get(conn, session_id)
+                .ok()
+                .flatten()
+                .is_some_and(|s| s.ended_at.is_some());
+            if ended {
+                let _ = shogun_memory::meeting_index::index_session(conn, session_id);
             }
-            saved
+            Ok::<(), rusqlite::Error>(())
         })
+        .is_ok()
     }
 
     /// Store the model-generated Recap for a meeting interval (MT4, FR-MT-19). Upsert on
@@ -740,9 +911,9 @@ impl Db {
         model: &str,
     ) -> bool {
         let now = self.now_ms();
-        self.conn.lock().ok().is_some_and(|conn| {
+        self.with_conn("meeting.save_recap", |conn| {
             shogun_memory::meeting_recaps::save(
-                &conn,
+                conn,
                 session_id,
                 summary,
                 decisions_json,
@@ -750,42 +921,42 @@ impl Db {
                 model,
                 now,
             )
-            .is_ok()
         })
+        .is_ok()
     }
 
     /// The transcript of a meeting interval as `(speaker, text)` in time order (MT4 input). Drops
     /// the ts/confidence columns the Recap builder does not need. Empty when the interval has no
     /// transcript (audio degraded to notes-only) or on a DB error.
     pub fn transcript_for_recap(&self, session_id: i64) -> Vec<(Option<String>, String)> {
-        self.conn
-            .lock()
-            .ok()
-            .and_then(|conn| shogun_memory::transcript_segments::for_session(&conn, session_id).ok())
-            .unwrap_or_default()
-            .into_iter()
-            .map(|(_ts, speaker, text, _confidence)| (speaker, text))
-            .collect()
+        self.with_conn("meeting.transcript_for_recap", |conn| {
+            shogun_memory::transcript_segments::for_session(conn, session_id)
+        })
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(_ts, speaker, text, _confidence)| (speaker, text))
+        .collect()
     }
 
     /// Full transcript lines for the post-meeting viewer (FR-MT-10): `(ts, speaker, text)` in time
     /// order. Empty when the interval has no transcript or on a DB error.
     pub fn meeting_transcript(&self, session_id: i64) -> Vec<(i64, Option<String>, String)> {
-        self.conn
-            .lock()
-            .ok()
-            .and_then(|conn| shogun_memory::transcript_segments::for_session(&conn, session_id).ok())
-            .unwrap_or_default()
-            .into_iter()
-            .map(|(ts, speaker, text, _confidence)| (ts, speaker, text))
-            .collect()
+        self.with_conn("meeting.transcript", |conn| {
+            shogun_memory::transcript_segments::for_session(conn, session_id)
+        })
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(ts, speaker, text, _confidence)| (ts, speaker, text))
+        .collect()
     }
 
     /// The note typed during a meeting interval (FR-MT-10), if any. `None` covers both "no note"
-    /// and a DB error — the Recap builder treats both the same (nothing to add from notes).
+    /// and a DB error — the Recap builder treats both the same (nothing to add from notes), and
+    /// the failure itself is recorded in the health signal rather than lost (issue #121).
     pub fn meeting_note(&self, session_id: i64) -> Option<String> {
-        let conn = self.conn.lock().ok()?;
-        shogun_memory::session_notes::get(&conn, session_id).ok().flatten()
+        self.with_conn("meeting.note", |conn| shogun_memory::session_notes::get(conn, session_id))
+            .ok()
+            .flatten()
     }
 
     /// Append one transcribed line to a meeting interval (FR-MT-13). The text is redacted inside the
@@ -799,14 +970,14 @@ impl Db {
         confidence: f64,
     ) -> bool {
         let now = self.now_ms();
-        self.conn.lock().ok().is_some_and(|conn| {
+        self.with_conn("meeting.append_transcript", |conn| {
             shogun_memory::transcript_segments::append(
-                &conn,
+                conn,
                 &shogun_memory::transcript_segments::NewSegment { session_id, ts, speaker, text, confidence },
                 now,
             )
-            .is_ok()
         })
+        .is_ok()
     }
 
     /// Close intervals left open by a previous run (crash, force-quit, power cut).
@@ -817,7 +988,8 @@ impl Db {
     /// idea when the meeting actually ended, and inventing a duration that spans the time the
     /// machine was off would be a worse answer than a zero-length interval.
     pub fn close_abandoned_meetings(&self, started_before_ms: i64) -> usize {
-        let Ok(conn) = self.conn.lock() else { return 0 };
+        let now = self.now_ms();
+        self.read_conn("meeting.close_abandoned", |conn| {
         // Ids first, then close, then index: a crash-abandoned meeting still holds whatever
         // transcript and note it captured, and closing is the moment that text goes on the search
         // spine (FR-MT-14) — the bulk UPDATE alone would leave these the only meetings the user
@@ -833,21 +1005,23 @@ impl Db {
             .execute(
                 "UPDATE sessions SET ended_at = started_at, updated_at = ?1
                   WHERE ended_at IS NULL AND started_at < ?2",
-                rusqlite::params![self.now_ms(), started_before_ms],
+                rusqlite::params![now, started_before_ms],
             )
             .unwrap_or(0);
         for id in ids {
-            let _ = shogun_memory::meeting_index::index_session(&conn, id);
+            let _ = shogun_memory::meeting_index::index_session(conn, id);
         }
         closed
+        })
+        .unwrap_or(0)
     }
 
     /// The degraded Recap for an interval (FR-MT-19): what can be said locally, with no model and
     /// no network. `None` only when the interval does not exist.
     pub fn meeting_recap(&self, session_id: i64) -> Option<crate::meeting::recap::Recap> {
-        let conn = self.conn.lock().ok()?;
-        let session = shogun_memory::session::get(&conn, session_id).ok().flatten()?;
-        let notes = shogun_memory::session_notes::get(&conn, session_id).ok().flatten();
+        self.read_conn("meeting.recap", |conn| {
+        let session = shogun_memory::session::get(conn, session_id).ok().flatten()?;
+        let notes = shogun_memory::session_notes::get(conn, session_id).ok().flatten();
         // How much this Recap had to work with. Counted rather than estimated — it is the honest
         // answer to "is anything actually being captured in meetings?" (context health).
         let captured: i64 = conn
@@ -858,6 +1032,9 @@ impl Db {
             )
             .unwrap_or(0);
         Some(crate::meeting::recap::degraded(&session, notes, captured as usize))
+        })
+        .ok()
+        .flatten()
     }
 
     /// The stored (model-generated) minutes for an interval (MT4, FR-MT-19), if they exist yet.
@@ -868,8 +1045,9 @@ impl Db {
     /// event. The two structured columns come back as raw JSON strings — the wiring layer
     /// deserializes them (never panicking on a bad column).
     pub fn meeting_recap_full(&self, session_id: i64) -> Option<shogun_memory::meeting_recaps::StoredRecap> {
-        let conn = self.conn.lock().ok()?;
-        shogun_memory::meeting_recaps::get(&conn, session_id).ok().flatten()
+        self.with_conn("meeting.recap_full", |c| shogun_memory::meeting_recaps::get(c, session_id))
+            .ok()
+            .flatten()
     }
 
     /// Confidence-gated memory lines for the inline draft prompt ([`crate::inline::compose_inline`]):
@@ -887,12 +1065,23 @@ impl Db {
         &self,
         limit: usize,
     ) -> Vec<(String, shogun_fusion::block::StateTable, i64)> {
+        self.try_inline_memory_with_refs(limit).unwrap_or_default()
+    }
+
+    /// [`Self::inline_memory_with_refs`] with the failure kept (issue #121).
+    ///
+    /// The grounding path is where an unreported failure does the most damage: an empty fact list
+    /// reads to the model as "this user owes nothing and is waiting on nothing", and it will say
+    /// so confidently. A caller that can tell the two apart can hedge instead.
+    fn try_inline_memory_with_refs(
+        &self,
+        limit: usize,
+    ) -> MemoryResult<Vec<(String, shogun_fusion::block::StateTable, i64)>> {
         use shogun_fusion::block::StateTable;
         use shogun_fusion::confidence::{treat_fact, Treatment};
-        let Ok(conn) = self.conn.lock() else { return Vec::new() };
-        let commitments = state::list_commitments(&conn).unwrap_or_default();
-        let open_loops = state::list_open_loops(&conn).unwrap_or_default();
-        drop(conn);
+        let (commitments, open_loops) = self.with_conn("state.for_grounding", |conn| {
+            Ok::<_, rusqlite::Error>((state::list_commitments(conn)?, state::list_open_loops(conn)?))
+        })?;
 
         let mut out: Vec<(String, StateTable, i64)> = Vec::new();
         for c in commitments {
@@ -922,7 +1111,7 @@ impl Db {
             }
         }
         out.truncate(limit);
-        out
+        Ok(out)
     }
 
     /// Ingest turns recovered from an AI coding-tool session log (Phase R4).
@@ -940,7 +1129,7 @@ impl Db {
         turns: &[shogun_memory::ai_session::SessionTurn],
     ) -> IngestSummary {
         let now = self.now_ms();
-        let Ok(mut guard) = self.conn.lock() else {
+        let Some(mut guard) = self.lock_or_note("ingest.ai_session") else {
             return IngestSummary::default();
         };
         let mut summary = IngestSummary::default();
@@ -998,7 +1187,7 @@ impl Db {
         let started = std::time::Instant::now();
         let facts = self.inline_memory(6);
         let (title, turns) = {
-            let Ok(conn) = self.conn.lock() else {
+            let Some(conn) = self.lock_or_note("reply_context.build") else {
                 return ReplyContext { thread_key: thread_key.to_string(), ..Default::default() };
             };
             let title = shogun_memory::thread::recent(&conn, 50)
@@ -1049,8 +1238,7 @@ impl Db {
 
     /// event log 上の gmail スレッド候補 `(thread_key, title)`。融合リンカの入力。
     pub fn gmail_thread_candidates(&self, limit: usize) -> Vec<(String, String)> {
-        let Ok(conn) = self.conn.lock() else { return Vec::new() };
-        shogun_memory::thread::recent(&conn, limit)
+        self.with_conn("thread.recent", |conn| shogun_memory::thread::recent(conn, limit))
             .unwrap_or_default()
             .into_iter()
             .filter(|t| t.thread_key.starts_with("gmail:"))
@@ -1094,10 +1282,11 @@ impl Db {
     pub fn resolve_referent(&self, query: &str, on_screen: Option<&str>) -> ReferentOutcome {
         use shogun_memory::thread;
         let now = self.now_ms();
-        let Ok(conn) = self.conn.lock() else {
+        let Some(conn) = self.lock_or_note("referent.resolve") else {
             return ReferentOutcome::default();
         };
         let Ok(threads) = thread::recent(&conn, 20) else {
+            self.note_fault("referent.resolve", MemoryFault::Query, "query");
             return ReferentOutcome::default();
         };
         let loops = thread::open_loop_counts(&conn).unwrap_or_default();
@@ -1143,10 +1332,7 @@ impl Db {
         if query.trim().is_empty() {
             return Vec::new();
         }
-        self.conn
-            .lock()
-            .ok()
-            .and_then(|c| shogun_memory::search::search_meetings(&c, query, limit).ok())
+        self.with_conn("search.search_meetings", |c| shogun_memory::search::search_meetings(c, query, limit))
             .unwrap_or_default()
     }
 
@@ -1469,9 +1655,9 @@ impl Db {
         assemble_ms: i64,
     ) {
         let query_hash = Self::content_hash(query);
-        if let Ok(conn) = self.conn.lock() {
-            let _ = shogun_memory::compression_metrics::insert(
-                &conn,
+        let _ = self.with_conn("compression_metrics.insert", |conn| {
+            shogun_memory::compression_metrics::insert(
+                conn,
                 &shogun_memory::compression_metrics::MetricRow {
                     ts: self.now_ms(),
                     query_hash,
@@ -1481,8 +1667,8 @@ impl Db {
                     compress_ms,
                     assemble_ms,
                 },
-            );
-        }
+            )
+        });
     }
 
     /// A traceability sink that writes through this same handle (the LLM egress records here).
@@ -1505,10 +1691,7 @@ impl Db {
 
     /// Read traceability rows for the viewer (FR-TR-02). Empty on any read failure.
     pub fn trace_rows(&self, filter: &Filter) -> Vec<TraceRow> {
-        self.conn
-            .lock()
-            .ok()
-            .and_then(|c| shogun_memory::traceability::list(&c, filter).ok())
+        self.with_conn("traceability.list", |c| shogun_memory::traceability::list(c, filter))
             .unwrap_or_default()
     }
 
@@ -1520,21 +1703,22 @@ impl Db {
     /// Export all user data as JSON (FR-SET-07). Local only — never a network send. `None` on a
     /// read failure.
     pub fn export_json(&self) -> Option<String> {
-        self.conn.lock().ok().and_then(|c| shogun_memory::maintenance::export_json(&c).ok())
+        self.with_conn("maintenance.export_json", shogun_memory::maintenance::export_json).ok()
     }
 
     /// Delete all user data, keeping the schema (FR-SET-07). Returns the per-table deletion report,
     /// or `None` on failure (the transaction leaves the DB untouched).
     pub fn delete_all(&self) -> Option<shogun_memory::maintenance::DeleteReport> {
-        let mut g = self.conn.lock().ok()?;
-        shogun_memory::maintenance::delete_all(&mut g).ok()
+        self.with_conn_mut("maintenance.delete_all", shogun_memory::maintenance::delete_all).ok()
     }
 
     /// Delete user data at or after `cutoff_ts` (unix ms), sweeping orphaned state (FR-SET-07 /
     /// #28). `None` on failure (the transaction leaves the DB untouched).
     pub fn delete_since(&self, cutoff_ts: i64) -> Option<shogun_memory::maintenance::DeleteReport> {
-        let mut g = self.conn.lock().ok()?;
-        shogun_memory::maintenance::delete_since(&mut g, cutoff_ts).ok()
+        self.with_conn_mut("maintenance.delete_since", |c| {
+            shogun_memory::maintenance::delete_since(c, cutoff_ts)
+        })
+        .ok()
     }
 
     // -------------------------------------------------------------- state writes (deliberate)
@@ -1544,26 +1728,25 @@ impl Db {
 
     /// Insert a person with provenance (FR-ST-02).
     pub fn insert_person(&self, p: &NewPerson<'_>, provenance: &[Provenance]) -> Option<i64> {
-        let mut g = self.conn.lock().ok()?;
-        state::insert_person(&mut g, p, provenance).ok()
+        self.with_conn_mut("state.insert_person", |c| state::insert_person(c, p, provenance)).ok()
     }
 
     /// Insert a project with provenance.
     pub fn insert_project(&self, p: &NewProject<'_>, provenance: &[Provenance]) -> Option<i64> {
-        let mut g = self.conn.lock().ok()?;
-        state::insert_project(&mut g, p, provenance).ok()
+        self.with_conn_mut("state.insert_project", |c| state::insert_project(c, p, provenance)).ok()
     }
 
     /// Insert a commitment with provenance.
     pub fn insert_commitment(&self, c: &NewCommitment<'_>, provenance: &[Provenance]) -> Option<i64> {
-        let mut g = self.conn.lock().ok()?;
-        state::insert_commitment(&mut g, c, provenance).ok()
+        self.with_conn_mut("state.insert_commitment", |conn| {
+            state::insert_commitment(conn, c, provenance)
+        })
+        .ok()
     }
 
     /// Insert an open loop with provenance.
     pub fn insert_open_loop(&self, l: &NewOpenLoop<'_>, provenance: &[Provenance]) -> Option<i64> {
-        let mut g = self.conn.lock().ok()?;
-        state::insert_open_loop(&mut g, l, provenance).ok()
+        self.with_conn_mut("state.insert_open_loop", |c| state::insert_open_loop(c, l, provenance)).ok()
     }
 
     // -------------------------------------------------------------- Dream Cycle job effects
@@ -1573,7 +1756,8 @@ impl Db {
 
     /// Events in `[from_ts, to_ts)` — the window a Consolidation job classifies (FR-DC-03).
     pub fn events_in_range(&self, from_ts: i64, to_ts: i64) -> Vec<event_log::EventText> {
-        self.conn.lock().ok().and_then(|c| event_log::events_in_range(&c, from_ts, to_ts).ok()).unwrap_or_default()
+        self.with_conn("events.in_range", |c| event_log::events_in_range(c, from_ts, to_ts))
+            .unwrap_or_default()
     }
 
     /// The same window split by destination: `cloud` may go to the Batch lane, `local_only`
@@ -1583,31 +1767,24 @@ impl Db {
         from_ts: i64,
         to_ts: i64,
     ) -> event_log::PartitionedEvents {
-        self.conn
-            .lock()
-            .ok()
-            .and_then(|c| event_log::events_in_range_partitioned(&c, from_ts, to_ts).ok())
-            .unwrap_or_default()
+        self.with_conn("events.in_range_partitioned", |c| {
+            event_log::events_in_range_partitioned(c, from_ts, to_ts)
+        })
+        .unwrap_or_default()
     }
 
     /// Threads whose last activity is in `[from_ts, to_ts]` — the window a Compression job
     /// summarises (Issue #63). Empty on a lock/read failure so a hiccup fails the job (leaving the
     /// cycle resumable) rather than crashing the daemon.
     pub fn active_threads_between(&self, from_ts: i64, to_ts: i64) -> Vec<shogun_memory::thread::ThreadRow> {
-        self.conn
-            .lock()
-            .ok()
-            .and_then(|c| shogun_memory::thread::active_between(&c, from_ts, to_ts).ok())
+        self.with_conn("thread.active_between", |c| shogun_memory::thread::active_between(c, from_ts, to_ts))
             .unwrap_or_default()
     }
 
     /// Every event body in one thread, oldest first — the material the Compression summariser reads
     /// (Issue #63). Empty on a lock/read failure.
     pub fn thread_event_texts(&self, thread_key: &str) -> Vec<event_log::EventText> {
-        self.conn
-            .lock()
-            .ok()
-            .and_then(|c| shogun_memory::thread::event_texts(&c, thread_key).ok())
+        self.with_conn("thread.event_texts", |c| shogun_memory::thread::event_texts(c, thread_key))
             .unwrap_or_default()
     }
 
@@ -1615,15 +1792,17 @@ impl Db {
     /// a hiccup fails the job, not the daemon. Uses the daemon clock for `updated_at`.
     pub fn set_thread_summary(&self, thread_key: &str, summary: &str) {
         let now = self.now_ms();
-        if let Ok(c) = self.conn.lock() {
-            let _ = shogun_memory::thread::set_summary(&c, thread_key, summary, now);
-        }
+        let _ = self.with_conn("thread.set_summary", |c| {
+            shogun_memory::thread::set_summary(c, thread_key, summary, now)
+        });
     }
 
     /// Read back a thread's summary (`None` when unset, absent, or on a read failure) — the
     /// Compression job's effect is verified through this, since `ThreadRow` does not carry it.
     pub fn thread_summary(&self, thread_key: &str) -> Option<String> {
-        self.conn.lock().ok().and_then(|c| shogun_memory::thread::get_summary(&c, thread_key).ok().flatten())
+        self.with_conn("thread.get_summary", |c| shogun_memory::thread::get_summary(c, thread_key))
+            .ok()
+            .flatten()
     }
 
     /// Sessions whose `started_at` is in `[from_ts, to_ts]` — the window a Compression job
@@ -1631,20 +1810,16 @@ impl Db {
     /// a lock/read failure so a hiccup fails the job (leaving the cycle resumable) rather than
     /// crashing the daemon.
     pub fn active_sessions_between(&self, from_ts: i64, to_ts: i64) -> Vec<i64> {
-        self.conn
-            .lock()
-            .ok()
-            .and_then(|c| shogun_memory::session::active_between(&c, from_ts, to_ts).ok())
-            .unwrap_or_default()
+        self.with_conn("session.active_between", |c| {
+            shogun_memory::session::active_between(c, from_ts, to_ts)
+        })
+        .unwrap_or_default()
     }
 
     /// Every event body attached to one session, oldest first — the material the Compression
     /// summariser reads (Issue #63). Empty on a lock/read failure.
     pub fn session_event_texts(&self, session_id: i64) -> Vec<event_log::EventText> {
-        self.conn
-            .lock()
-            .ok()
-            .and_then(|c| shogun_memory::session::event_texts(&c, session_id).ok())
+        self.with_conn("session.event_texts", |c| shogun_memory::session::event_texts(c, session_id))
             .unwrap_or_default()
     }
 
@@ -1652,23 +1827,22 @@ impl Db {
     /// a hiccup fails the job, not the daemon. Uses the daemon clock for `updated_at`.
     pub fn set_session_summary(&self, session_id: i64, summary: &str) {
         let now = self.now_ms();
-        if let Ok(c) = self.conn.lock() {
-            let _ = shogun_memory::session::set_summary(&c, session_id, summary, now);
-        }
+        let _ = self.with_conn("session.set_summary", |c| {
+            shogun_memory::session::set_summary(c, session_id, summary, now)
+        });
     }
 
     /// Read back a session's summary (`None` when unset, absent, or on a read failure).
     pub fn session_summary(&self, session_id: i64) -> Option<String> {
-        self.conn.lock().ok().and_then(|c| shogun_memory::session::get_summary(&c, session_id).ok().flatten())
+        self.with_conn("session.get_summary", |c| shogun_memory::session::get_summary(c, session_id))
+            .ok()
+            .flatten()
     }
 
     /// The DISTINCT sessions owning the given events — the query-time consume path (Issue #63).
     /// Empty on a lock/read failure or empty input.
     pub fn session_ids_for_events(&self, event_ids: &[i64]) -> Vec<i64> {
-        self.conn
-            .lock()
-            .ok()
-            .and_then(|c| shogun_memory::session::session_ids_for_events(&c, event_ids).ok())
+        self.with_conn("session.session_ids_for_events", |c| shogun_memory::session::session_ids_for_events(c, event_ids))
             .unwrap_or_default()
     }
 
@@ -1677,10 +1851,7 @@ impl Db {
     /// per-session [`Self::session_summary`] N+1 on the consume path. Empty on a lock/read failure
     /// or empty input.
     pub fn session_summaries_for(&self, ids: &[i64]) -> Vec<(i64, String, Option<String>)> {
-        self.conn
-            .lock()
-            .ok()
-            .and_then(|c| shogun_memory::session::summaries_for_sessions(&c, ids).ok())
+        self.with_conn("session.summaries_for_sessions", |c| shogun_memory::session::summaries_for_sessions(c, ids))
             .unwrap_or_default()
     }
 
@@ -1690,54 +1861,39 @@ impl Db {
     /// numerator (spec §D2). Zero on a read failure so a locked DB degrades to "nothing seen"
     /// rather than taking the window down.
     pub fn hours_covered(&self, from_ts: i64, to_ts: i64) -> i64 {
-        self.conn
-            .lock()
-            .ok()
-            .and_then(|c| event_log::hours_covered(&c, from_ts, to_ts).ok())
+        self.with_conn("event_log.hours_covered", |c| event_log::hours_covered(c, from_ts, to_ts))
             .unwrap_or(0)
     }
 
     /// Events recorded in `[from_ts, to_ts)` — the first number in the Yield funnel.
     pub fn events_count(&self, from_ts: i64, to_ts: i64) -> i64 {
-        self.conn
-            .lock()
-            .ok()
-            .and_then(|c| event_log::count_in_range(&c, from_ts, to_ts).ok())
+        self.with_conn("event_log.count_in_range", |c| event_log::count_in_range(c, from_ts, to_ts))
             .unwrap_or(0)
     }
 
     pub fn existing_state_descriptions(&self) -> std::collections::HashSet<String> {
-        let mut set = std::collections::HashSet::new();
-        if let Ok(c) = self.conn.lock() {
-            if let Ok(rows) = state::list_commitments(&c) {
-                set.extend(rows.into_iter().map(|r| r.description));
-            }
-            if let Ok(rows) = state::list_open_loops(&c) {
-                set.extend(rows.into_iter().map(|r| r.description));
-            }
-        }
-        set
+        self.with_conn("state.existing_descriptions", |c| {
+            let mut set = std::collections::HashSet::new();
+            set.extend(state::list_commitments(c)?.into_iter().map(|r| r.description));
+            set.extend(state::list_open_loops(c)?.into_iter().map(|r| r.description));
+            Ok::<_, rusqlite::Error>(set)
+        })
+        .unwrap_or_default()
     }
 
     /// Persist extracted candidates linked to `event_id` (FR-ST-02). Returns the new row ids.
     pub fn persist_candidates(&self, event_id: i64, candidates: &[shogun_memory::extract::Candidate]) -> Vec<i64> {
         let now = self.now_ms();
-        self.conn
-            .lock()
-            .ok()
-            .and_then(|mut g| {
-                shogun_memory::extract::persist_candidates(&mut g, event_id, candidates, now, now).ok()
-            })
-            .unwrap_or_default()
+        self.with_conn_mut("extract.persist_candidates", |c| {
+            shogun_memory::extract::persist_candidates(c, event_id, candidates, now, now)
+        })
+        .unwrap_or_default()
     }
 
     /// Recompute overdue status + open-loop staleness from `now` (FR-ST-21). Returns
     /// `(commitments_flagged, loops_touched)`; `(0,0)` on a lock/write failure.
     pub fn recompute_overdue_and_staleness(&self, now_ms: i64) -> (usize, usize) {
-        self.conn
-            .lock()
-            .ok()
-            .and_then(|mut g| shogun_memory::recompute::recompute_overdue_and_staleness(&mut g, now_ms).ok())
+        self.with_conn_mut("recompute.recompute_overdue_and_staleness", |g| shogun_memory::recompute::recompute_overdue_and_staleness(g, now_ms))
             .unwrap_or((0, 0))
     }
 
@@ -1745,10 +1901,7 @@ impl Db {
     /// Raise confidence for state rows with several independent evidence events
     /// ([`shogun_memory::recompute::corroborate`]). Part of the local maintenance pass.
     pub fn corroborate(&self) -> usize {
-        self.conn
-            .lock()
-            .ok()
-            .and_then(|mut g| shogun_memory::recompute::corroborate(&mut g).ok())
+        self.with_conn_mut("recompute.corroborate", shogun_memory::recompute::corroborate)
             .unwrap_or(0)
     }
 
@@ -1770,8 +1923,10 @@ impl Db {
         event_id: i64,
     ) -> Option<shogun_memory::identity::Observed> {
         let now = self.now_ms();
-        let mut guard = self.conn.lock().ok()?;
-        shogun_memory::identity::observe(&mut guard, incoming, seen_name, event_id, now).ok()
+        self.with_conn_mut("identity.observe", |c| {
+            shogun_memory::identity::observe(c, incoming, seen_name, event_id, now)
+        })
+        .ok()
     }
 
     /// The maintenance that needs no model call.
@@ -1794,12 +1949,8 @@ impl Db {
         // The detailed pass reports WHICH commitments flipped open→overdue right now, so the
         // caller can notify each exactly once (C-3; the flip itself is the dedup watermark).
         let (newly_overdue, stale) = self
-            .conn
-            .lock()
-            .ok()
-            .and_then(|mut g| {
-                shogun_memory::recompute::recompute_overdue_and_staleness_detailed(&mut g, now_ms)
-                    .ok()
+            .with_conn_mut("recompute.overdue_and_staleness_detailed", |c| {
+                shogun_memory::recompute::recompute_overdue_and_staleness_detailed(c, now_ms)
             })
             .unwrap_or_default();
         let overdue = newly_overdue.len();
@@ -1807,26 +1958,22 @@ impl Db {
     }
 
     pub fn decay_confidence(&self, now_ms: i64, half_life_ms: i64) -> usize {
-        self.conn
-            .lock()
-            .ok()
-            .and_then(|mut g| shogun_memory::recompute::decay_confidence(&mut g, now_ms, half_life_ms).ok())
+        self.with_conn_mut("recompute.decay_confidence", |g| shogun_memory::recompute::decay_confidence(g, now_ms, half_life_ms))
             .unwrap_or(0)
     }
 
     /// The high-water mark of already-consolidated events (max `input_to_ts` of completed
     /// consolidations) — the scheduler's next window starts here (FR-DC-04). `None` before any cycle.
     pub fn last_consolidated_to(&self) -> Option<i64> {
-        self.conn.lock().ok().and_then(|c| shogun_memory::jobs::last_consolidated_to(&c).ok()).flatten()
+        self.with_conn("jobs.last_consolidated_to", shogun_memory::jobs::last_consolidated_to)
+            .ok()
+            .flatten()
     }
 
     /// Demote Warm embeddings older than `cutoff_ms` to the int8 Cold tier (FR-MEM-04). Returns the
     /// number moved.
     pub fn demote_cold(&self, cutoff_ms: i64) -> usize {
-        self.conn
-            .lock()
-            .ok()
-            .and_then(|mut g| shogun_memory::cold::demote_older_than(&mut g, cutoff_ms).ok())
+        self.with_conn_mut("cold.demote_older_than", |g| shogun_memory::cold::demote_older_than(g, cutoff_ms))
             .unwrap_or(0)
     }
 
@@ -1853,7 +2000,7 @@ impl Db {
         // Resolved rows must not compete for the four action slots: a commitment the user ticked
         // off, or a loop they closed, is finished work — proposing it again is the panel telling
         // the user their click didn't count (every other read path filters the same way).
-        for c in self.conn.lock().ok().and_then(|c| state::list_commitments(&c).ok()).unwrap_or_default() {
+        for c in self.commitment_rows() {
             if !matches!(c.status.as_str(), "open" | "overdue") {
                 continue;
             }
@@ -1866,7 +2013,7 @@ impl Db {
                 confidence: c.confidence,
             });
         }
-        for l in self.conn.lock().ok().and_then(|c| state::list_open_loops(&c).ok()).unwrap_or_default() {
+        for l in self.open_loop_rows() {
             if l.status != "open" {
                 continue;
             }
@@ -1914,8 +2061,15 @@ impl Db {
     /// the panel stops feeding drafts, chat memory, counts, and the Morning Brief — not just the
     /// panel view.
     pub fn commitments_due(&self, now_ms: i64) -> Vec<CommitmentDue> {
-        let rows = self.conn.lock().ok().and_then(|c| state::list_commitments(&c).ok()).unwrap_or_default();
-        rows.into_iter()
+        self.try_commitments_due(now_ms).unwrap_or_default()
+    }
+
+    /// [`Self::commitments_due`] with the failure kept (issue #121). A caller that shows a count
+    /// or feeds an answer must not read a dead store as "you owe nobody anything".
+    pub fn try_commitments_due(&self, now_ms: i64) -> MemoryResult<Vec<CommitmentDue>> {
+        let rows = self.try_commitment_rows()?;
+        Ok(rows
+            .into_iter()
             .filter(|r| r.status != "done" && r.status != "cancelled")
             .map(|r| CommitmentDue {
                 overdue: r.status == "overdue" || r.due_at.is_some_and(|d| d < now_ms),
@@ -1924,79 +2078,108 @@ impl Db {
                 confidence: r.confidence,
                 provenance_event_id: r.first_event_id.unwrap_or(0),
             })
-            .collect()
+            .collect())
     }
 
     /// People rows (Memory API `state.people.list`).
     pub fn people(&self) -> Vec<state::PersonRow> {
-        self.conn.lock().ok().and_then(|c| state::list_people(&c).ok()).unwrap_or_default()
+        self.try_people().unwrap_or_default()
+    }
+
+    /// [`Self::people`] with the failure kept (issue #121).
+    pub fn try_people(&self) -> MemoryResult<Vec<state::PersonRow>> {
+        self.with_conn("state.people.list", state::list_people)
     }
 
     /// One person by id (`state.people.get`).
     pub fn person(&self, id: i64) -> Option<state::PersonRow> {
-        self.conn.lock().ok().and_then(|c| state::get_person(&c, id).ok()).flatten()
+        self.with_conn("state.people.get", |c| state::get_person(c, id)).ok().flatten()
     }
 
     /// Project rows (`state.projects.list`).
     pub fn projects(&self) -> Vec<state::ProjectRow> {
-        self.conn.lock().ok().and_then(|c| state::list_projects(&c).ok()).unwrap_or_default()
+        self.try_projects().unwrap_or_default()
+    }
+
+    /// [`Self::projects`] with the failure kept (issue #121).
+    pub fn try_projects(&self) -> MemoryResult<Vec<state::ProjectRow>> {
+        self.with_conn("state.projects.list", state::list_projects)
     }
 
     /// One project by id (`state.projects.get`).
     pub fn project(&self, id: i64) -> Option<state::ProjectRow> {
-        self.conn.lock().ok().and_then(|c| state::get_project(&c, id).ok()).flatten()
+        self.with_conn("state.projects.get", |c| state::get_project(c, id)).ok().flatten()
     }
 
     /// One commitment by id (`state.commitments.get`).
     pub fn commitment(&self, id: i64) -> Option<state::CommitmentRow> {
-        self.conn.lock().ok().and_then(|c| state::get_commitment(&c, id).ok()).flatten()
+        self.with_conn("state.commitments.get", |c| state::get_commitment(c, id)).ok().flatten()
     }
 
     /// All commitment rows with ids (panel list — the UI needs the id to resolve a row).
     pub fn commitment_rows(&self) -> Vec<state::CommitmentRow> {
-        self.conn.lock().ok().and_then(|c| state::list_commitments(&c).ok()).unwrap_or_default()
+        self.try_commitment_rows().unwrap_or_default()
+    }
+
+    /// [`Self::commitment_rows`] with the failure kept (issue #121).
+    pub fn try_commitment_rows(&self) -> MemoryResult<Vec<state::CommitmentRow>> {
+        self.with_conn("state.commitments.list", state::list_commitments)
     }
 
     /// All open-loop rows with ids (panel list).
     pub fn open_loop_rows(&self) -> Vec<state::OpenLoopRow> {
-        self.conn.lock().ok().and_then(|c| state::list_open_loops(&c).ok()).unwrap_or_default()
+        self.try_open_loop_rows().unwrap_or_default()
+    }
+
+    /// [`Self::open_loop_rows`] with the failure kept (issue #121).
+    pub fn try_open_loop_rows(&self) -> MemoryResult<Vec<state::OpenLoopRow>> {
+        self.with_conn("state.open_loops.list", state::list_open_loops)
     }
 
     /// Mark a commitment done (user resolved it from the panel). `true` if a row changed.
     pub fn resolve_commitment(&self, id: i64) -> bool {
         let now = self.now_ms();
-        self.conn
-            .lock()
-            .ok()
-            .and_then(|c| state::set_commitment_status(&c, id, state::CommitmentStatus::Done, now).ok())
-            .is_some_and(|n| n > 0)
+        self.with_conn("state.commitments.resolve", |c| {
+            state::set_commitment_status(c, id, state::CommitmentStatus::Done, now)
+        })
+        .is_ok_and(|n| n > 0)
     }
 
     /// Close an open loop (user resolved it from the panel). `true` if a row changed.
     pub fn resolve_open_loop(&self, id: i64) -> bool {
         let now = self.now_ms();
-        self.conn
-            .lock()
-            .ok()
-            .and_then(|c| state::close_open_loop(&c, id, now).ok())
-            .is_some_and(|n| n > 0)
+        self.with_conn("state.open_loops.close", |c| state::close_open_loop(c, id, now))
+            .is_ok_and(|n| n > 0)
     }
 
     /// Delete all extracted state (commitments + open loops + their provenance). Event log,
     /// people, and projects are untouched. `true` on success.
     pub fn clear_state(&self) -> bool {
-        self.conn.lock().ok().and_then(|mut c| state::clear_state(&mut c).ok()).is_some()
+        self.with_conn_mut("state.clear", state::clear_state).is_ok()
     }
 
     /// One open loop by id (`state.open_loops.get`).
     pub fn open_loop(&self, id: i64) -> Option<state::OpenLoopRow> {
-        self.conn.lock().ok().and_then(|c| state::get_open_loop(&c, id).ok()).flatten()
+        self.with_conn("state.open_loops.get", |c| state::get_open_loop(c, id)).ok().flatten()
     }
 
     /// Hybrid/FTS search over the event log (`memory.search`). Empty on an empty query or failure.
     pub fn search(&self, query: &str, limit: usize) -> Vec<shogun_memory::search::SearchHit> {
+        self.try_search(query, limit).unwrap_or_default()
+    }
+
+    /// [`Self::search`] with the failure kept (issue #121).
+    ///
+    /// This is the distinction the search box exists on: "nothing matched" is an answer the user
+    /// can act on, and "the store did not answer" is not. Handing back an empty list for both
+    /// tells them their memory is empty when it is merely unreachable.
+    pub fn try_search(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> MemoryResult<Vec<shogun_memory::search::SearchHit>> {
         if query.trim().is_empty() {
-            return Vec::new();
+            return Ok(Vec::new());
         }
         // With a model loaded this is hybrid (lexical + semantic, fused by RRF); without one it
         // degrades to lexical, which still answers — it just cannot match a paraphrase.
@@ -2008,14 +2191,9 @@ impl Db {
         // unbounded bm25 ranking costs in proportion to how much of the log matches, which on
         // device already reached the 500ms search budget at 40k events.
         let now = self.now_ms();
-        self.conn
-            .lock()
-            .ok()
-            .and_then(|c| {
-                shogun_memory::search::search_warm_first(&c, query, query_vec.as_deref(), now, limit)
-                    .ok()
-            })
-            .unwrap_or_default()
+        self.with_conn("memory.search", |c| {
+            shogun_memory::search::search_warm_first(c, query, query_vec.as_deref(), now, limit)
+        })
     }
 
     /// FTS search scoped to one event-log `source` (visual recall uses `screen_ocr`).
@@ -2028,16 +2206,13 @@ impl Db {
         if query.trim().is_empty() {
             return Vec::new();
         }
-        self.conn
-            .lock()
-            .ok()
-            .and_then(|c| {
-                let ids = shogun_memory::search::fts_search_source(&c, query, source, limit).ok()?;
-                let ranked: Vec<(i64, f64)> =
-                    ids.into_iter().enumerate().map(|(i, id)| (id, 1.0 / (i as f64 + 1.0))).collect();
-                shogun_memory::search::hydrate(&c, &ranked).ok()
-            })
-            .unwrap_or_default()
+        self.with_conn("memory.search_source", |c| {
+            let ids = shogun_memory::search::fts_search_source(c, query, source, limit)?;
+            let ranked: Vec<(i64, f64)> =
+                ids.into_iter().enumerate().map(|(i, id)| (id, 1.0 / (i as f64 + 1.0))).collect();
+            shogun_memory::search::hydrate(c, &ranked)
+        })
+        .unwrap_or_default()
     }
 
     /// Recent on-device screen OCR previews for settings / Full UI (text only, no pixels).
@@ -2046,25 +2221,20 @@ impl Db {
         limit: usize,
         excerpt_chars: usize,
     ) -> Vec<shogun_memory::event_log::RecentEventPreview> {
-        self.conn
-            .lock()
-            .ok()
-            .and_then(|c| {
-                shogun_memory::event_log::recent_previews_by_source(&c, "screen_ocr", limit, excerpt_chars)
-                    .ok()
-            })
-            .unwrap_or_default()
+        self.with_conn("screen_ocr.previews", |c| {
+            shogun_memory::event_log::recent_previews_by_source(c, "screen_ocr", limit, excerpt_chars)
+        })
+        .unwrap_or_default()
     }
 
     /// How many `screen_ocr` events landed in the last 24 hours.
     pub fn screen_ocr_count_24h(&self) -> i64 {
         let now = self.now_ms();
         let since = now - 24 * 60 * 60 * 1000;
-        self.conn
-            .lock()
-            .ok()
-            .and_then(|c| shogun_memory::event_log::count_source_in_range(&c, "screen_ocr", since, now).ok())
-            .unwrap_or(0)
+        self.with_conn("screen_ocr.count_24h", |c| {
+            shogun_memory::event_log::count_source_in_range(c, "screen_ocr", since, now)
+        })
+        .unwrap_or(0)
     }
 
     /// Persist a compressed JPEG from visual-recall OCR, linked to its `screen_ocr` event.
@@ -2083,12 +2253,9 @@ impl Db {
         jpeg: &[u8],
     ) -> Option<i64> {
         let now = self.now_ms();
-        self.conn
-            .lock()
-            .ok()
-            .and_then(|c| {
+        self.with_conn("screen_frames.insert", |c| {
                 shogun_memory::screen_frames::insert(
-                    &c,
+                    c,
                     &shogun_memory::screen_frames::NewFrame {
                         created_at_ms: now,
                         event_id,
@@ -2100,8 +2267,8 @@ impl Db {
                         jpeg,
                     },
                 )
-                .ok()
             })
+            .ok()
     }
 
     /// Sweep the visual-recall frame cache: expire past the 72-hour window, then evict oldest-first
@@ -2113,46 +2280,42 @@ impl Db {
     pub fn purge_screen_frames(&self) -> Result<usize, String> {
         use shogun_memory::retention::Policy;
         let now = self.now_ms();
-        let mut conn = self
-            .conn
-            .lock()
-            .map_err(|_| "memory DB lock poisoned during frame purge".to_string())?;
-        let items = shogun_memory::screen_frames::retention_items(&conn)
-            .map_err(|e| format!("read frame retention items: {e}"))?;
-        let sweep = Policy::frames().sweep(&items, now);
-        shogun_memory::screen_frames::delete_ids(&mut conn, &sweep.all())
-            .map_err(|e| format!("purge screen frames: {e}"))
+        self.with_conn_mut_reported("screen_frames.purge_expired", |conn| {
+            let items = shogun_memory::screen_frames::retention_items(conn)
+                .map_err(|e| format!("read frame retention items: {e}"))?;
+            let sweep = Policy::frames().sweep(&items, now);
+            shogun_memory::screen_frames::delete_ids(conn, &sweep.all())
+                .map_err(|e| format!("purge screen frames: {e}"))
+        })
+
     }
 
     /// Drop auto-capture frames only (passive OCR). User-initiated shots are kept.
     pub fn purge_auto_screen_frames(&self) -> Result<usize, String> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|_| "memory DB lock poisoned during frame purge".to_string())?;
-        shogun_memory::screen_frames::purge_auto_only(&conn)
-            .map_err(|e| format!("purge automatic screen frames: {e}"))
+        self.with_conn_reported("screen_frames.purge_auto", |conn| {
+            shogun_memory::screen_frames::purge_auto_only(conn)
+                .map_err(|e| format!("purge automatic screen frames: {e}"))
+        })
+
     }
 
     /// Delete one stored frame and its linked OCR event when no other frame references it.
     pub fn delete_screen_frame(&self, frame_id: i64) -> Result<bool, String> {
-        let mut conn = self
-            .conn
-            .lock()
-            .map_err(|_| "memory DB lock poisoned during frame delete".to_string())?;
-        shogun_memory::screen_frames::delete_by_id(&mut conn, frame_id)
-            .map_err(|e| format!("delete screen frame: {e}"))
+        self.with_conn_mut_reported("screen_frames.delete_by_id", |conn| {
+            shogun_memory::screen_frames::delete_by_id(conn, frame_id)
+                .map_err(|e| format!("delete screen frame: {e}"))
+        })
+
     }
 
     /// Persist refreshed OCR text for a screen frame's linked event (visual recall re-scan).
     pub fn update_event_ocr_text(&self, event_id: i64, text: &str) -> Result<bool, String> {
         let hash = Self::content_hash(text);
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|_| "memory DB lock poisoned during OCR update".to_string())?;
-        shogun_memory::event_log::update_content_and_hash(&conn, event_id, text, &hash)
-            .map_err(|e| format!("update event OCR text: {e}"))
+        self.with_conn_reported("event_log.update_ocr_text", |conn| {
+            shogun_memory::event_log::update_content_and_hash(conn, event_id, text, &hash)
+                .map_err(|e| format!("update event OCR text: {e}"))
+        })
+
     }
 
     /// List frames in the retention window for UI timeline (newest first).
@@ -2164,10 +2327,7 @@ impl Db {
 
     /// Frame-cache stats for settings (count / oldest / bytes — no pixels).
     pub fn screen_frame_stats(&self) -> shogun_memory::screen_frames::FrameStats {
-        self.conn
-            .lock()
-            .ok()
-            .and_then(|c| shogun_memory::screen_frames::stats(&c).ok())
+        self.with_conn("screen_frames.stats", shogun_memory::screen_frames::stats)
             .unwrap_or_default()
     }
 
@@ -2190,15 +2350,11 @@ impl Db {
         limit: usize,
         excerpt_chars: usize,
     ) -> Vec<ScreenFrameRef> {
-        self.conn
-            .lock()
-            .ok()
-            .and_then(|c| {
-                shogun_memory::screen_frames::search_for_recall(&c, query, from_ms, to_ms, limit, excerpt_chars)
-                    .ok()
-            })
-            .unwrap_or_default()
-            .into_iter()
+        self.with_conn("screen_frames.search_for_recall", |c| {
+            shogun_memory::screen_frames::search_for_recall(c, query, from_ms, to_ms, limit, excerpt_chars)
+        })
+        .unwrap_or_default()
+        .into_iter()
             .map(|h| ScreenFrameRef {
                 frame_id: h.frame_id,
                 event_id: h.event_id,
@@ -2216,18 +2372,14 @@ impl Db {
 
     /// Count stored frames whose `created_at_ms` lies in `[from_ms, to_ms]`.
     pub fn screen_frames_count_in_range(&self, from_ms: i64, to_ms: i64) -> i64 {
-        self.conn
-            .lock()
-            .ok()
-            .and_then(|c| {
-                c.query_row(
-                    "SELECT count(*) FROM screen_frames WHERE created_at_ms >= ?1 AND created_at_ms <= ?2",
-                    rusqlite::params![from_ms, to_ms],
-                    |r| r.get(0),
-                )
-                .ok()
-            })
-            .unwrap_or(0)
+        self.with_conn("screen_frames.count_in_range", |c| {
+            c.query_row(
+                "SELECT count(*) FROM screen_frames WHERE created_at_ms >= ?1 AND created_at_ms <= ?2",
+                rusqlite::params![from_ms, to_ms],
+                |r| r.get(0),
+            )
+        })
+        .unwrap_or(0)
     }
 
     /// Latest stored frame metadata (no JPEG bytes).
@@ -2241,12 +2393,8 @@ impl Db {
         let local_days = local_day_bounds(now);
         let (from_ms, to_ms) =
             shogun_memory::search::visual_recall_window(query, now, local_days);
-        self.conn
-            .lock()
-            .ok()
-            .and_then(|c| {
-                shogun_memory::screen_frames::search_for_recall(&c, query, from_ms, to_ms, limit, excerpt_chars)
-                    .ok()
+        self.with_conn("screen_frames.search_for_recall", |c| {
+                shogun_memory::screen_frames::search_for_recall(c, query, from_ms, to_ms, limit, excerpt_chars)
             })
             .unwrap_or_default()
             .into_iter()
@@ -2266,10 +2414,7 @@ impl Db {
     }
 
     fn frame_ids_for_events(&self, event_ids: &[i64]) -> std::collections::HashMap<i64, i64> {
-        self.conn
-            .lock()
-            .ok()
-            .and_then(|c| shogun_memory::screen_frames::frame_ids_for_events(&c, event_ids).ok())
+        self.with_conn("screen_frames.frame_ids_for_events", |c| shogun_memory::screen_frames::frame_ids_for_events(c, event_ids))
             .unwrap_or_default()
     }
 
@@ -2278,19 +2423,15 @@ impl Db {
         &self,
         frame_id: i64,
     ) -> Option<shogun_memory::screen_frames::FrameSummary> {
-        self.conn
-            .lock()
+        self.with_conn("screen_frames.get_summary_by_id", |c| shogun_memory::screen_frames::get_summary_by_id(c, frame_id))
             .ok()
-            .and_then(|c| shogun_memory::screen_frames::get_summary_by_id(&c, frame_id).ok())
             .flatten()
     }
 
     /// Fetch one stored frame by id (JPEG bytes + metadata). Local-only; never leaves device.
     pub fn get_screen_frame(&self, frame_id: i64) -> Option<shogun_memory::screen_frames::FrameRecord> {
-        self.conn
-            .lock()
+        self.with_conn("screen_frames.get_by_id", |c| shogun_memory::screen_frames::get_by_id(c, frame_id))
             .ok()
-            .and_then(|c| shogun_memory::screen_frames::get_by_id(&c, frame_id).ok())
             .flatten()
     }
 
@@ -2301,17 +2442,14 @@ impl Db {
         to_ms: i64,
         limit: usize,
     ) -> Vec<shogun_memory::screen_frames::FrameSummary> {
-        self.conn
-            .lock()
-            .ok()
-            .and_then(|c| shogun_memory::screen_frames::list_in_range(&c, from_ms, to_ms, limit).ok())
+        self.with_conn("screen_frames.list_in_range", |c| shogun_memory::screen_frames::list_in_range(c, from_ms, to_ms, limit))
             .unwrap_or_default()
     }
 
     /// Open loops as Fusion/Brief input (stalest first; the Brief caps the count). Closed loops
     /// are excluded so resolving one from the panel removes it everywhere (memory, counts, Brief).
     pub fn open_loops(&self) -> Vec<OpenLoopItem> {
-        let rows = self.conn.lock().ok().and_then(|c| state::list_open_loops(&c).ok()).unwrap_or_default();
+        let rows = self.open_loop_rows();
         rows.into_iter()
             .filter(|r| r.status != "closed")
             .map(|r| OpenLoopItem {
@@ -2359,19 +2497,16 @@ impl Db {
         // counts and the day's lists come from different instants, and the Wrap would then show
         // "3 done" beside a still-open list that already dropped one of them.
         let (outcome, active_commitments, active_loops, opened_today, all_commitments) = self
-            .conn
-            .lock()
-            .ok()
-            .map(|c| {
+            .read_conn("state.evening_wrap_window", |c| {
                 let decisions =
-                    shogun_memory::lessons::decision_counts_since(&c, day_start_ms).unwrap_or((0, 0));
+                    shogun_memory::lessons::decision_counts_since(c, day_start_ms).unwrap_or((0, 0));
                 let outcome = WrapOutcome {
                     commitments_done: u32::try_from(
-                        state::count_commitments_done_since(&c, day_start_ms).unwrap_or(0),
+                        state::count_commitments_done_since(c, day_start_ms).unwrap_or(0),
                     )
                     .unwrap_or(0),
                     loops_closed: u32::try_from(
-                        state::count_open_loops_closed_since(&c, day_start_ms).unwrap_or(0),
+                        state::count_open_loops_closed_since(c, day_start_ms).unwrap_or(0),
                     )
                     .unwrap_or(0),
                     actions_decided: u32::try_from(decisions.0).unwrap_or(0),
@@ -2379,10 +2514,10 @@ impl Db {
                 };
                 (
                     outcome,
-                    state::list_commitments_active_since(&c, day_start_ms).unwrap_or_default(),
-                    state::list_open_loops_active_since(&c, day_start_ms).unwrap_or_default(),
-                    state::list_open_loops_opened_since(&c, day_start_ms).unwrap_or_default(),
-                    state::list_commitments(&c).unwrap_or_default(),
+                    state::list_commitments_active_since(c, day_start_ms).unwrap_or_default(),
+                    state::list_open_loops_active_since(c, day_start_ms).unwrap_or_default(),
+                    state::list_open_loops_opened_since(c, day_start_ms).unwrap_or_default(),
+                    state::list_commitments(c).unwrap_or_default(),
                 )
             })
             .unwrap_or_default();
@@ -2428,16 +2563,16 @@ impl Db {
     /// report the night as failed and stay resumable.
     pub fn save_brief(&self, date: &str, payload_json: &str, generated: bool) -> Option<bool> {
         let now = self.now_ms();
-        self.conn
-            .lock()
-            .ok()
-            .and_then(|c| shogun_memory::briefs::upsert_brief(&c, date, payload_json, generated, now).ok())
+        self.with_conn("briefs.upsert_brief", |c| {
+            shogun_memory::briefs::upsert_brief(c, date, payload_json, generated, now)
+        })
+        .ok()
     }
 
     /// The persisted brief for `date` (`None` when the nightly job hasn't written one — the caller
     /// falls back to [`Self::local_morning_brief`], FR-MB-04).
     pub fn brief_for(&self, date: &str) -> Option<shogun_memory::briefs::StoredBrief> {
-        self.conn.lock().ok().and_then(|c| shogun_memory::briefs::get_brief(&c, date).ok().flatten())
+        self.with_conn("briefs.get", |c| shogun_memory::briefs::get_brief(c, date)).ok().flatten()
     }
 
     /// Where one event came from: its `source` plus, for captured events, the app it was captured
@@ -2445,14 +2580,16 @@ impl Db {
     /// the source, and a capture event's `app_bundle_id` is the app the chip re-opens. Metadata
     /// only — the event's content never rides along.
     pub fn event_source(&self, event_id: i64) -> Option<(String, Option<String>)> {
-        self.conn.lock().ok().and_then(|c| {
+        self.with_conn("events.source", |c| {
             c.query_row(
                 "SELECT source, app_bundle_id FROM event_log WHERE id = ?1",
                 [event_id],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
-            .ok()
+            .optional()
         })
+        .ok()
+        .flatten()
     }
 
     // -------------------------------------------------------------- L5 lessons (Plan D-4/D-5/D-6)
@@ -2463,27 +2600,23 @@ impl Db {
 
     /// The distillation watermark: highest `feedback_events.id` already consumed (0 = none).
     pub fn lesson_distill_watermark(&self) -> i64 {
-        self.conn.lock().ok().and_then(|c| lessons::distill_watermark(&c).ok()).unwrap_or(0)
+        self.with_conn("lessons.distill_watermark", lessons::distill_watermark).unwrap_or(0)
     }
 
     /// Advance the distillation watermark (monotonic). Returns false on a write failure so the
     /// job can report the night as failed and stay resumable.
     pub fn set_lesson_distill_watermark(&self, last_processed_feedback_id: i64) -> bool {
-        self.conn
-            .lock()
-            .ok()
-            .map(|c| lessons::set_distill_watermark(&c, last_processed_feedback_id).is_ok())
-            .unwrap_or(false)
+        self.with_conn("lessons.set_distill_watermark", |c| {
+            lessons::set_distill_watermark(c, last_processed_feedback_id)
+        })
+        .is_ok()
     }
 
     /// Unprocessed feedback (id strictly above the watermark), oldest first — the distillation
     /// job's input. Local-only data: the rows carry the user's before/after text, so this must
     /// never feed a log or an egress path.
     pub fn feedback_after(&self, after_id: i64) -> Vec<lessons::FeedbackRow> {
-        self.conn
-            .lock()
-            .ok()
-            .and_then(|c| lessons::list_feedback_after(&c, after_id).ok())
+        self.with_conn("lessons.list_feedback_after", |c| lessons::list_feedback_after(c, after_id))
             .unwrap_or_default()
     }
 
@@ -2494,20 +2627,21 @@ impl Db {
         scope: lessons::LessonScope,
         f: &lessons::NewFeedback<'_>,
     ) -> Option<i64> {
-        self.conn.lock().ok().and_then(|c| lessons::record_feedback(&c, kind, scope, f).ok())
+        self.with_conn("lessons.record_feedback", |c| lessons::record_feedback(c, kind, scope, f)).ok()
     }
 
     /// Insert-or-merge a distilled lesson with its evidence ids (provenance mandatory).
     /// `None` on a lock/write failure (the job reports failure without echoing any text).
     pub fn upsert_lesson(&self, candidate: &lessons::LessonCandidate, now_ms: i64) -> Option<i64> {
-        let mut conn = self.conn.lock().ok()?;
-        lessons::upsert_lesson(&mut conn, candidate, &candidate.evidence, now_ms).ok()
+        self.with_conn_mut("lessons.upsert", |c| {
+            lessons::upsert_lesson(c, candidate, &candidate.evidence, now_ms)
+        })
+        .ok()
     }
 
     /// Run the lesson lifecycle pass (decay, contradiction, floor, cap) at `now_ms`.
     pub fn decay_lessons(&self, now_ms: i64) -> Option<lessons::LifecycleOutcome> {
-        let mut conn = self.conn.lock().ok()?;
-        lessons::decay_and_deactivate(&mut conn, now_ms).ok()
+        self.with_conn_mut("lessons.decay", |c| lessons::decay_and_deactivate(c, now_ms)).ok()
     }
 
     /// The lessons eligible for injection right now (active, at/above the Low-band floor,
@@ -2517,27 +2651,21 @@ impl Db {
         scopes: &[lessons::ScopeFilter<'_>],
         top_k: usize,
     ) -> Vec<lessons::Lesson> {
-        self.conn
-            .lock()
-            .ok()
-            .and_then(|c| lessons::active_lessons(&c, scopes, top_k).ok())
+        self.with_conn("lessons.active_lessons", |c| lessons::active_lessons(c, scopes, top_k))
             .unwrap_or_default()
     }
 
     /// Every lesson row, sleeping included — the Learned UI / `lessons.list` supply. Instructions
     /// and bookkeeping only; never `feedback_events` text.
     pub fn lessons_all(&self) -> Vec<lessons::Lesson> {
-        self.conn.lock().ok().and_then(|c| lessons::list_lessons(&c).ok()).unwrap_or_default()
+        self.with_conn("lessons.list", lessons::list_lessons).unwrap_or_default()
     }
 
     /// Flip one lesson's active switch (`lessons.set_active`). `false` when the row is missing or
     /// the write failed.
     pub fn set_lesson_active(&self, lesson_id: i64, active: bool) -> bool {
         let now = self.now_ms();
-        self.conn
-            .lock()
-            .ok()
-            .and_then(|c| lessons::set_lesson_active(&c, lesson_id, active, now).ok())
+        self.with_conn("lessons.set_lesson_active", |c| lessons::set_lesson_active(c, lesson_id, active, now))
             .unwrap_or(false)
     }
 
@@ -2546,11 +2674,13 @@ impl Db {
     pub fn lesson_counters(&self) -> Option<crate::metrics::LessonCounters> {
         const WEEK_MS: i64 = 7 * 24 * 60 * 60 * 1000;
         let now = self.now_ms();
-        let conn = self.conn.lock().ok()?;
-        Some(crate::metrics::LessonCounters {
-            active_lessons: lessons::count_active_lessons(&conn).ok()?,
-            feedback_events_last_7d: lessons::count_feedback_since(&conn, now - WEEK_MS).ok()?,
+        self.with_conn("lessons.counters", |conn| {
+            Ok::<_, rusqlite::Error>(crate::metrics::LessonCounters {
+                active_lessons: lessons::count_active_lessons(conn)?,
+                feedback_events_last_7d: lessons::count_feedback_since(conn, now - WEEK_MS)?,
+            })
         })
+        .ok()
     }
 
     /// The active lessons relevant to the current screen (this app + global scope), mapped into
@@ -2604,12 +2734,9 @@ impl Db {
         input_to_ts: i64,
     ) -> bool {
         let now = self.now_ms();
-        self.conn
-            .lock()
-            .ok()
-            .map(|c| {
+        self.read_conn("jobs.upsert", |c| {
                 shogun_memory::jobs::upsert(
-                    &c,
+                    c,
                     cycle_id,
                     job_kind_str(kind),
                     job_state_str(state),
@@ -2624,11 +2751,7 @@ impl Db {
 
     /// The persisted job runs for a cycle, as [`JobRun`]s (unrecognised rows are skipped).
     pub fn cycle_runs(&self, cycle_id: &str) -> Vec<JobRun> {
-        let rows = self
-            .conn
-            .lock()
-            .ok()
-            .and_then(|c| shogun_memory::jobs::list_by_cycle(&c, cycle_id).ok())
+        let rows = self.with_conn("jobs.list_by_cycle", |c| shogun_memory::jobs::list_by_cycle(c, cycle_id))
             .unwrap_or_default();
         rows.into_iter()
             .filter_map(|r| {
@@ -2651,11 +2774,7 @@ impl Db {
     /// The most recent `limit` nights, newest first, reconstructed from the job ledger (FR-DC-04).
     /// This is what survives a relaunch: no run reports itself, the ledger is the record.
     pub fn recent_cycles(&self, limit: usize) -> Vec<crate::dreamcycle::run::CycleOutcome> {
-        let cycles = self
-            .conn
-            .lock()
-            .ok()
-            .and_then(|c| shogun_memory::jobs::recent_cycles(&c, limit).ok())
+        let cycles = self.with_conn("jobs.recent_cycles", |c| shogun_memory::jobs::recent_cycles(c, limit))
             .unwrap_or_default();
 
         cycles
@@ -2715,14 +2834,11 @@ impl Db {
         let last = recent.into_iter().next();
         let (events_processed, state_changes, chunks_sent) = match &last {
             Some(c) => self
-                .conn
-                .lock()
-                .ok()
-                .map(|conn| {
+                .read_conn("dream.summary_counts", |conn| {
                     (
-                        event_log::count_in_range(&conn, c.input_from_ts, c.input_to_ts).unwrap_or(0),
-                        state::count_changed_since(&conn, c.started_at).unwrap_or(0),
-                        shogun_memory::traceability::count_since(&conn, c.started_at).unwrap_or(0),
+                        event_log::count_in_range(conn, c.input_from_ts, c.input_to_ts).unwrap_or(0),
+                        state::count_changed_since(conn, c.started_at).unwrap_or(0),
+                        shogun_memory::traceability::count_since(conn, c.started_at).unwrap_or(0),
                     )
                 })
                 .unwrap_or((0, 0, 0)),
@@ -2756,14 +2872,11 @@ impl Db {
         run_ended_ms: i64,
     ) -> crate::dreamcycle::run::DreamRunSummary {
         let (events_processed, state_changes, chunks_sent) = self
-            .conn
-            .lock()
-            .ok()
-            .map(|c| {
+            .read_conn("dream.run_summary_counts", |c| {
                 (
-                    event_log::count_in_range(&c, input_from_ts, input_to_ts).unwrap_or(0),
-                    state::count_changed_since(&c, run_started_ms).unwrap_or(0),
-                    shogun_memory::traceability::count_since(&c, run_started_ms).unwrap_or(0),
+                    event_log::count_in_range(c, input_from_ts, input_to_ts).unwrap_or(0),
+                    state::count_changed_since(c, run_started_ms).unwrap_or(0),
+                    shogun_memory::traceability::count_since(c, run_started_ms).unwrap_or(0),
                 )
             })
             .unwrap_or((0, 0, 0));
@@ -3047,6 +3160,104 @@ mod tests {
             display_id: Some(1),
             window_bounds: None,
         }
+    }
+
+    // ---------------------------------------------------------------- memory health (issue #121)
+    // The three outcomes a memory read can have — nothing stored, the query refused, the lock
+    // poisoned — used to be one empty vector. These pin them apart, and pin the recovery.
+
+    /// Break the store the way a corrupt file or a bad migration would: the table the read needs
+    /// is gone, so SQLite refuses the statement while the connection itself is fine.
+    fn drop_table(db: &Db, table: &str) {
+        let conn = db.conn.lock().unwrap();
+        conn.execute_batch(&format!("DROP TABLE IF EXISTS {table}")).unwrap();
+    }
+
+    /// Poison the connection mutex the way a panic inside a locked section would.
+    fn poison_lock(db: &Db) {
+        let conn = db.conn.clone();
+        let _ = std::thread::spawn(move || {
+            let _g = conn.lock().unwrap();
+            panic!("poisoning the memory lock on purpose");
+        })
+        .join();
+        assert!(db.conn.lock().is_err(), "the fixture must actually poison the lock");
+    }
+
+    #[test]
+    fn an_empty_store_is_not_a_failure() {
+        let db = Db::open_in_memory(clock(1_000)).unwrap();
+        assert_eq!(db.try_search("anything", 10).unwrap(), Vec::new());
+        assert_eq!(db.try_commitment_rows().unwrap().len(), 0);
+        let h = db.memory_health();
+        assert!(!h.degraded, "no rows is an answer, not a fault");
+        assert_eq!(h.faults_total, 0);
+    }
+
+    #[test]
+    fn a_query_failure_is_reported_instead_of_looking_empty() {
+        let db = Db::open_in_memory(clock(1_000)).unwrap();
+        db.capture(&ev("the budget review notes", "h1", 900)).unwrap();
+        // Sanity: the same call answers before the break.
+        assert!(!db.try_search("budget", 10).unwrap().is_empty());
+
+        drop_table(&db, "event_log");
+        let err = db.try_search("budget", 10).unwrap_err();
+        assert_eq!(err, MemoryFault::Query, "a refused statement is not an empty result");
+        // The lossy wrapper still returns a vec, but the store is now visibly degraded — which is
+        // the whole point: the caller that cannot act on the error is no longer the only one told.
+        assert_eq!(db.search("budget", 10), Vec::new());
+        let h = db.memory_health();
+        assert!(h.degraded);
+        assert_eq!(h.fault, Some(MemoryFault::Query));
+        assert!(h.faults_total >= 2);
+        assert_eq!(h.last_fault_ms, Some(1_000));
+    }
+
+    #[test]
+    fn a_poisoned_lock_is_distinguishable_from_a_query_failure() {
+        let db = Db::open_in_memory(clock(1_000)).unwrap();
+        poison_lock(&db);
+        assert_eq!(db.try_search("anything", 10).unwrap_err(), MemoryFault::LockPoisoned);
+        assert_eq!(db.try_commitment_rows().unwrap_err(), MemoryFault::LockPoisoned);
+        assert_eq!(db.memory_health().fault, Some(MemoryFault::LockPoisoned));
+    }
+
+    #[test]
+    fn state_reads_do_not_report_a_dead_store_as_nothing_owed() {
+        let db = Db::open_in_memory(clock(1_000)).unwrap();
+        drop_table(&db, "commitments");
+        // "You owe nothing today" is the answer this must never invent.
+        assert_eq!(db.try_commitments_due(1_000).unwrap_err(), MemoryFault::Query);
+        assert!(db.memory_health().degraded);
+        // …and the fault is per operation, not a blanket verdict: an intact table still answers,
+        // which is exactly what makes the recovery rule below meaningful.
+        assert_eq!(db.try_people().unwrap(), Vec::new());
+    }
+
+    #[test]
+    fn the_degraded_state_lifts_once_the_store_answers_again() {
+        // Recovery without a relaunch (the issue's acceptance criterion): a transient failure
+        // must not leave the warning stuck on forever.
+        let db = Db::open_in_memory(clock(1_000)).unwrap();
+        drop_table(&db, "people");
+        assert!(db.try_people().is_err());
+        assert!(db.memory_health().degraded);
+
+        // A different read against an intact table is a successful operation.
+        assert!(db.try_commitment_rows().is_ok());
+        let h = db.memory_health();
+        assert!(!h.degraded, "a success clears the degraded state");
+        assert_eq!(h.faults_total, 1, "…without erasing that it happened");
+    }
+
+    #[test]
+    fn a_capture_write_failure_marks_memory_degraded() {
+        let db = Db::open_in_memory(clock(1_000)).unwrap();
+        drop_table(&db, "event_log");
+        assert_eq!(db.try_capture(&ev("text", "h1", 1)).unwrap_err(), MemoryFault::Query);
+        assert!(db.capture(&ev("text", "h2", 2)).is_none());
+        assert!(db.memory_health().degraded, "capture that silently stops recording must show");
     }
 
     #[test]

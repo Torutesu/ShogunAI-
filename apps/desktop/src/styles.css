@@ -1067,6 +1067,11 @@ body {
   color: var(--faint);
   padding: 0 2px;
 }
+/* A store failure, not an empty result (issue #121): it has to read differently from
+   "no matches", or the distinction the command now makes dies at the last pixel. */
+.search__empty.is-warn {
+  color: var(--warn);
+}
 
 /* composer — a rounded input card: source chip on top, field, then a bar with the model pill
    (left) and draft/send tools (right). */
