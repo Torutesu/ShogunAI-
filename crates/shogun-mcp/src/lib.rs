@@ -25,6 +25,9 @@ pub mod plan_source;
 pub mod rest;
 pub mod scope;
 pub mod service_gate;
+/// What the model may see: the LLM-facing tool catalog + the "Connected services" prompt block
+/// (issue #81, `docs/mcp/01-architecture.md` §5).
+pub mod tool_catalog;
 pub mod slack;
 pub mod sync;
 /// Visual recall structured API helpers (Memory API symmetry).
