@@ -370,3 +370,120 @@ fn the_llm_tool_surface_never_exposes_an_external_send() {
     }
     assert!(offered_anything, "the sweep must actually offer tools somewhere, or it proves nothing");
 }
+
+/// The conversation loop's edge (issue #81 step 2): whatever the model asks for, and whatever the
+/// state, the only thing that can reach a service through the loop is a read.
+///
+/// The previous test proves the model is never *offered* a send. This one proves it cannot get one
+/// by asking anyway — the loop resolves every name through the catalog and the gate before a
+/// runner is touched, so a hallucinated or stale tool name is refused rather than executed.
+#[test]
+fn the_conversation_loop_can_only_reach_read_operations() {
+    use serde_json::{json, Value};
+    use shogun_mcp::connection::{ConnState, ReauthReason};
+    use shogun_mcp::scope::{lookup, OpClass, Wave};
+    use shogun_mcp::tool_catalog::{ServiceState, ToolContext};
+    use shogun_mcp::tool_loop::{
+        run_read_loop, LoopLimits, ModelTurn, ModelTurnSource, ReadToolRunner, ToolResult,
+        ToolRunError, ToolUse,
+    };
+
+    /// Asks for every name we can think of — published tools, every scope op name in the table
+    /// (including sends), and pure inventions — then answers.
+    struct AsksForEverything {
+        asked: bool,
+    }
+    impl ModelTurnSource for AsksForEverything {
+        fn next_turn(&mut self, _r: &[ToolResult]) -> Result<ModelTurn, String> {
+            if self.asked {
+                return Ok(ModelTurn::Final("done".into()));
+            }
+            self.asked = true;
+            let mut uses: Vec<ToolUse> = Vec::new();
+            let mut push = |name: String| {
+                uses.push(ToolUse { id: format!("t{}", uses.len()), name, input: json!({}) })
+            };
+            for service in ALL_SERVICES {
+                for op in shogun_mcp::scope::scope(*service).ops {
+                    push(op.name.to_string());
+                }
+            }
+            for invented in ["send_email", "delete_everything", "create_event", "post_message"] {
+                push(invented.to_string());
+            }
+            for published in [
+                "list_calendar_events",
+                "check_calendar_availability",
+                "search_mail",
+                "get_mail_thread",
+                "list_recent_drive_files",
+                "read_drive_file",
+            ] {
+                push(published.to_string());
+            }
+            Ok(ModelTurn::ToolUses(uses))
+        }
+    }
+
+    /// Records everything that got through to "a service".
+    struct Recorder {
+        reached: Vec<(Service, &'static str)>,
+    }
+    impl ReadToolRunner for Recorder {
+        fn run(
+            &mut self,
+            service: Service,
+            scope_op: &'static str,
+            _input: &Value,
+            _timeout_ms: u64,
+        ) -> Result<String, ToolRunError> {
+            self.reached.push((service, scope_op));
+            Ok(String::new())
+        }
+    }
+
+    let states = [
+        ConnState::Connected { last_sync_ms: 0 },
+        ConnState::NeedsReauth { reason: ReauthReason::TokenExpired, last_sync_ms: 0 },
+        ConnState::Disconnected,
+    ];
+    let plans = [
+        entitlements(Plan::Pro, 0),
+        entitlements(Plan::Standard, 0),
+        entitlements(Plan::Trial { started_at_ms: Some(0) }, TRIAL_DURATION_MS + 1),
+    ];
+
+    let mut reached_anything = false;
+    for wave in [Wave::One, Wave::Two, Wave::Three] {
+        for draft_stop in [true, false] {
+            for plan in plans {
+                for conn in states {
+                    let services: Vec<ServiceState> = ALL_SERVICES
+                        .iter()
+                        .copied()
+                        .map(|service| ServiceState { service, conn })
+                        .collect();
+                    let ctx = ToolContext { highest_released: wave, draft_stop, plan };
+                    let mut runner = Recorder { reached: Vec::new() };
+                    // A model that asks for everything, including sends, by name.
+                    let _ = run_read_loop(
+                        &mut AsksForEverything { asked: false },
+                        &mut runner,
+                        &services,
+                        &ctx,
+                        LoopLimits::default(),
+                    );
+                    for (service, op) in &runner.reached {
+                        reached_anything = true;
+                        assert_eq!(
+                            lookup(*service, op).map(|o| o.class),
+                            Some(OpClass::Read),
+                            "the loop let {op} on {service:?} reach a service",
+                        );
+                    }
+                }
+            }
+        }
+    }
+    assert!(reached_anything, "the sweep must actually reach a service, or it proves nothing");
+}
