@@ -1,7 +1,7 @@
 // The meeting overlay: its own small floating window (Issue #7). Rust parks the offer card
 // top-right and the in-meeting control pill bottom-center above the Meet mic bar. Draggable.
 
-import { useCallback, useEffect, useRef, useState, type JSX } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type JSX } from "react";
 import { flushSync } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -35,6 +35,7 @@ import {
   type Minutes,
   type TranscriptLine,
 } from "./meeting/transforms";
+import { WaveBars } from "./meeting/WaveBars";
 
 /** Must match `Params::default().offer_grace_ms` in shogun-core meeting statemachine. */
 const OFFER_GRACE_MS = 10_000;
@@ -337,11 +338,15 @@ export function MeetingOverlay(): JSX.Element | null {
   const overlaySizeRef = useRef(defaultPanelSize(surface));
   /** Gate bar :hover until pointer moves — avoids false active look when window spawns under cursor. */
   const [barHoverReady, setBarHoverReady] = useState(false);
-  const [audioLevel, setAudioLevel] = useState(0);
+
+  // Transcript transforms are memoized at the top (hooks cannot live in the render branches
+  // below): #122 — an hour-long meeting reflows these on every render otherwise, and renders
+  // arrive with every live line.
+  const liveTurns = useMemo(() => groupTurns([...liveLines, ...liveInterims]), [liveLines, liveInterims]);
+  const timelineSteps = useMemo(() => buildTimeline(liveLines), [liveLines]);
+  const recapTurns = useMemo(() => groupTurns(transcript), [transcript]);
   const liveScrollRef = useRef<HTMLDivElement>(null);
   const liveSnapshotRef = useRef<TranscriptLine[]>([]);
-  const audioPeakRef = useRef(0);
-  const audioHasRealLevelRef = useRef(false);
   const offerProgressRef = useRef<HTMLDivElement>(null);
   const offerDeadlineRef = useRef(0);
   const prevMeetingStateRef = useRef<MeetingView["state"] | null>(null);
@@ -661,36 +666,6 @@ export function MeetingOverlay(): JSX.Element | null {
   }, [view?.state]);
 
   useEffect(() => {
-    if (view?.state !== "recording" || effectivePaused) {
-      audioHasRealLevelRef.current = false;
-      setAudioLevel(0);
-      return;
-    }
-    const off = listen<{ rms: number }>("meeting_level", (e) => {
-      audioHasRealLevelRef.current = true;
-      const rms = e.payload.rms;
-      audioPeakRef.current = Math.max(audioPeakRef.current * 0.85, rms);
-      const norm = audioPeakRef.current > 0 ? Math.min(1, rms / audioPeakRef.current) : 0;
-      setAudioLevel(norm);
-    });
-    let raf = 0;
-    const t0 = performance.now();
-    const pulse = (now: number): void => {
-      if (!audioHasRealLevelRef.current) {
-        const phase = (now - t0) / 1000;
-        const wave = 0.22 + 0.55 * (0.5 + 0.5 * Math.sin(phase * 3.1));
-        setAudioLevel(wave);
-      }
-      raf = window.requestAnimationFrame(pulse);
-    };
-    raf = window.requestAnimationFrame(pulse);
-    return () => {
-      window.cancelAnimationFrame(raf);
-      void off.then((f) => f());
-    };
-  }, [view?.state, effectivePaused]);
-
-  useEffect(() => {
     if (view?.state !== "offered") return;
     const onKey = (e: KeyboardEvent): void => {
       if (e.key !== "Escape") return;
@@ -911,7 +886,6 @@ export function MeetingOverlay(): JSX.Element | null {
 
   if (view.state === "recording") {
     const translating = settings.meeting_mode !== "transcription";
-    const liveTurns = groupTurns([...liveLines, ...liveInterims]);
 
     const langPicker = (
       field: "source" | "target" | "my" | "other",
@@ -953,7 +927,6 @@ export function MeetingOverlay(): JSX.Element | null {
       setLangOpen(null);
     };
 
-    const timelineSteps = buildTimeline(liveLines);
     const onPanelResize = (w: number, h: number): void => {
       overlaySizeRef.current = { w, h };
       call("meeting_set_overlay_size", { width: w, height: h, label: winLabel });
@@ -1354,11 +1327,6 @@ export function MeetingOverlay(): JSX.Element | null {
     ) : null;
 
     const paused = effectivePaused;
-    const waveHeights = [0.35, 0.85, 0.55, 0.95, 0.45].map((base, i) => {
-      const wobble = 0.15 * Math.sin(audioLevel * 12 + i * 1.7);
-      return Math.max(0.18, Math.min(1, base * (0.35 + audioLevel * 0.9) + wobble));
-    });
-
     const controlBar = (
       <div
         className={`ov__bar-wrap${barHoverReady ? " ov__bar--hover-ready" : ""}`}
@@ -1482,15 +1450,7 @@ export function MeetingOverlay(): JSX.Element | null {
           onClick={handleTogglePause}
         >
           {/* Both glyphs stay mounted so pause↔resume morphs (no hard cut). */}
-          <span className="ov__wave-glyph ov__wave-glyph--bars" aria-hidden>
-            {waveHeights.map((h, i) => (
-              <span
-                key={i}
-                className="ov__wave-bar"
-                style={{ ["--h" as string]: `${Math.round(h * 100)}%` }}
-              />
-            ))}
-          </span>
+          <WaveBars active={view.state === "recording" && !paused} />
           <span className="ov__wave-glyph ov__wave-glyph--play" aria-hidden>
             <svg
               className="ov__wave-play"
@@ -1758,7 +1718,7 @@ export function MeetingOverlay(): JSX.Element | null {
   }
 
   const minutesReady = minutes != null && minutesHasContent(minutes);
-  const turns = groupTurns(transcript);
+  const turns = recapTurns;
   const hasTranscript = turns.length > 0;
   const showMinutesPending = hasTranscript && !minutesReady && !minutesNeedsKey;
   const showMinutesNeedsKey = hasTranscript && !minutesReady && minutesNeedsKey;
