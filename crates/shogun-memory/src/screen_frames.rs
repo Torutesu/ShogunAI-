@@ -1,13 +1,10 @@
 //! Short-lived JPEG frames from visual-recall OCR (issue #106, 2026-08-02).
 //!
 //! Frames live in the encrypted memory DB as BLOBs, linked to their `screen_ocr` event row.
-//! A background purge drops anything older than [`RETENTION_MS`] (72 h rolling).
+//! A background purge drops anything older than the user-selected rolling window.
 
 use rusqlite::{params, Connection};
 use rusqlite::OptionalExtension;
-
-/// Rolling retention for OCR capture frames (72 hours).
-pub const RETENTION_MS: i64 = 72 * 60 * 60 * 1000;
 
 /// OCR text shorter than this triggers `needs_rescan` on recall hits.
 pub const THIN_OCR_CHARS: usize = 100;
@@ -332,6 +329,20 @@ pub fn stats(conn: &Connection) -> Result<FrameStats, rusqlite::Error> {
     )
 }
 
+/// Total compressed image bytes stored in an inclusive time window.
+pub fn bytes_in_range(
+    conn: &Connection,
+    from_ms: i64,
+    to_ms: i64,
+) -> Result<i64, rusqlite::Error> {
+    conn.query_row(
+        "SELECT coalesce(sum(length(bytes)), 0) FROM screen_frames
+         WHERE created_at_ms >= ?1 AND created_at_ms <= ?2",
+        params![from_ms, to_ms],
+        |r| r.get(0),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -382,6 +393,8 @@ mod tests {
         assert_eq!(s.count, 1);
         assert_eq!(s.oldest_ms, Some(1_000));
         assert_eq!(s.total_bytes, 4);
+        assert_eq!(bytes_in_range(&conn, 500, 1_500).unwrap(), 4);
+        assert_eq!(bytes_in_range(&conn, 1_001, 2_000).unwrap(), 0);
     }
 
     #[test]

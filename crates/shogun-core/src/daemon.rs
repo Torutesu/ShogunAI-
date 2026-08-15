@@ -66,7 +66,7 @@ pub struct Evidence {
     pub source: String,
     pub title: Option<String>,
     pub excerpt: String,
-    /// Linked `screen_frames` row when a JPEG is stored for this evidence (≤72 h).
+    /// Linked `screen_frames` row when a JPEG is stored for this evidence (rolling retention).
     pub frame_id: Option<i64>,
 }
 
@@ -483,7 +483,7 @@ impl Db {
 
     /// Ingest on-device screen OCR text (issue #107). Source is `screen_ocr`; only the extracted
     /// string + provenance reach this method. Optional JPEG frames are stored separately via
-    /// [`store_screen_frame`] (72 h retention — explicit invariant-2 exception, 2026-08-02).
+    /// [`store_screen_frame`] (rolling retention — explicit invariant-2 exception, 2026-08-02).
     pub fn ingest_screen_ocr(
         &self,
         bundle_id: Option<&str>,
@@ -1908,7 +1908,7 @@ impl Db {
     /// Persist a compressed JPEG from visual-recall OCR, linked to its `screen_ocr` event.
     ///
     /// Explicit exception to invariant 2 (user decision 2026-08-02): frames are local-only,
-    /// encrypted at rest with the memory DB, and purged after 72 h — not audio, not forever.
+    /// encrypted at rest with the memory DB, and purged after the selected retention window.
     pub fn store_screen_frame(
         &self,
         event_id: i64,
@@ -1942,8 +1942,8 @@ impl Db {
     }
 
     /// Drop visual-recall frames older than the rolling retention window.
-    pub fn purge_screen_frames(&self) -> Result<usize, String> {
-        let cutoff = self.now_ms() - shogun_memory::screen_frames::RETENTION_MS;
+    pub fn purge_screen_frames(&self, retention_ms: i64) -> Result<usize, String> {
+        let cutoff = self.now_ms().saturating_sub(retention_ms);
         let conn = self
             .conn
             .lock()
@@ -1984,9 +1984,13 @@ impl Db {
     }
 
     /// List frames in the retention window for UI timeline (newest first).
-    pub fn list_screen_frames(&self, limit: usize) -> Vec<shogun_memory::screen_frames::FrameSummary> {
+    pub fn list_screen_frames(
+        &self,
+        retention_ms: i64,
+        limit: usize,
+    ) -> Vec<shogun_memory::screen_frames::FrameSummary> {
         let now = self.now_ms();
-        let from = now - shogun_memory::screen_frames::RETENTION_MS;
+        let from = now.saturating_sub(retention_ms);
         self.screen_frames_in_range(from, now, limit)
     }
 
@@ -2058,6 +2062,15 @@ impl Db {
             .unwrap_or(0)
     }
 
+    /// Compressed frame bytes stored in `[from_ms, to_ms]` (no pixel payload loaded).
+    pub fn screen_frames_bytes_in_range(&self, from_ms: i64, to_ms: i64) -> i64 {
+        self.conn
+            .lock()
+            .ok()
+            .and_then(|c| shogun_memory::screen_frames::bytes_in_range(&c, from_ms, to_ms).ok())
+            .unwrap_or(0)
+    }
+
     /// Latest stored frame metadata (no JPEG bytes).
     pub fn latest_screen_frame_summary(&self) -> Option<shogun_memory::screen_frames::FrameSummary> {
         let now = self.now_ms();
@@ -2067,8 +2080,13 @@ impl Db {
     fn recall_screen_frames(&self, query: &str, limit: usize, excerpt_chars: usize) -> Vec<ScreenFrameRef> {
         let now = self.now_ms();
         let local_days = local_day_bounds(now);
-        let (from_ms, to_ms) =
-            shogun_memory::search::visual_recall_window(query, now, local_days);
+        let max_retention_ms = 7 * 24 * 60 * 60 * 1000;
+        let (from_ms, to_ms) = shogun_memory::search::visual_recall_window(
+            query,
+            now,
+            local_days,
+            max_retention_ms,
+        );
         self.conn
             .lock()
             .ok()

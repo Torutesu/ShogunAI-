@@ -201,7 +201,10 @@ impl<B: MemoryBackend> McpServer<B> {
                         .to_string()
                 } else if matches!(
                     tool,
-                    Tool::VisualRecallSetEnabled | Tool::VisualRecallDeleteFrame | Tool::ProfileSet
+                    Tool::VisualRecallSetEnabled
+                        | Tool::VisualRecallSetRetention
+                        | Tool::VisualRecallDeleteFrame
+                        | Tool::ProfileSet
                 ) {
                     args.to_string()
                 } else {
@@ -383,6 +386,10 @@ fn tool_descriptor(tool: Tool, codex_names: bool) -> Value {
         ),
         Tool::VisualRecallStatus => ("Visual recall status (enabled, frame stats, recent OCR)", json!({})),
         Tool::VisualRecallSetEnabled => ("Enable or disable visual recall (L1)", json!({ "enabled": { "type": "boolean" } })),
+        Tool::VisualRecallSetRetention => (
+            "Set saved-screen retention in days (L1)",
+            json!({ "retention_days": { "type": "integer", "enum": [1, 3, 5, 7] } }),
+        ),
         Tool::VisualRecallSearchFrames => (
             "Search stored screen frames by OCR text",
             json!({

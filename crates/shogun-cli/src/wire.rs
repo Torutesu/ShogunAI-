@@ -62,6 +62,10 @@ pub fn to_call(command: &Command, include_low: bool) -> Option<HttpCall> {
             VisualRecallCommand::Status => get("/v1/visual_recall/status".to_string()),
             VisualRecallCommand::Enable => post("/v1/visual_recall/enabled".into(), r#"{"enabled":true}"#.to_string()),
             VisualRecallCommand::Disable => post("/v1/visual_recall/enabled".into(), r#"{"enabled":false}"#.to_string()),
+            VisualRecallCommand::SetRetention { days } => post(
+                "/v1/visual_recall/retention".into(),
+                format!(r#"{{"retention_days":{days}}}"#),
+            ),
             VisualRecallCommand::Search { query, from_ms, to_ms } => {
                 let mut path = format!("/v1/visual_recall/frames/search?q={}", encode(query));
                 if let Some(f) = from_ms {

@@ -250,6 +250,7 @@ function ScrubBar(props: {
 
 function VisualRecallBrowse(): JSX.Element {
   const [frames, setFrames] = useState<FrameListItem[]>([]);
+  const [retentionDays, setRetentionDays] = useState(3);
   const [idx, setIdx] = useState(0);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewMeta, setPreviewMeta] = useState<FrameImage | null>(null);
@@ -280,6 +281,9 @@ function VisualRecallBrowse(): JSX.Element {
 
   useEffect(() => {
     refreshFrames();
+    void invoke<{ retention_days: number }>("get_visual_recall_settings")
+      .then((settings) => setRetentionDays(settings.retention_days))
+      .catch(() => undefined);
     const id = window.setInterval(refreshFrames, 12_000);
     return () => window.clearInterval(id);
   }, []);
@@ -343,7 +347,7 @@ function VisualRecallBrowse(): JSX.Element {
       <header className="vr-chrome" onPointerDown={beginDrag}>
         <div className="vr-chrome__title">
           <span className="vr-chrome__name">{t.visualRecallSection}</span>
-          <span className="vr-chrome__sub">{t.visualRecallTimeline}</span>
+          <span className="vr-chrome__sub">{t.visualRecallTimeline(retentionDays)}</span>
         </div>
         <div className="vr-chrome__actions" data-no-drag>
           {frames.length > 0 ? (

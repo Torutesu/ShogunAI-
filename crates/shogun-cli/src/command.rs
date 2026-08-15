@@ -54,6 +54,7 @@ pub enum VisualRecallCommand {
     Status,
     Enable,
     Disable,
+    SetRetention { days: u8 },
     Search { query: String, from_ms: Option<i64>, to_ms: Option<i64> },
     FrameGet { id: i64 },
     FrameRescan { id: i64 },
@@ -82,6 +83,7 @@ impl Command {
             Command::VisualRecall(VisualRecallCommand::Status) => Tool::VisualRecallStatus,
             Command::VisualRecall(VisualRecallCommand::Enable) => Tool::VisualRecallSetEnabled,
             Command::VisualRecall(VisualRecallCommand::Disable) => Tool::VisualRecallSetEnabled,
+            Command::VisualRecall(VisualRecallCommand::SetRetention { .. }) => Tool::VisualRecallSetRetention,
             Command::VisualRecall(VisualRecallCommand::Search { .. }) => Tool::VisualRecallSearchFrames,
             Command::VisualRecall(VisualRecallCommand::FrameGet { .. }) => Tool::VisualRecallGetFrame,
             Command::VisualRecall(VisualRecallCommand::FrameRescan { .. }) => Tool::VisualRecallRescanFrame,
@@ -116,6 +118,7 @@ COMMANDS:
     visual-recall status      Visual recall status + frame stats
     visual-recall enable      Turn visual recall on (L1)
     visual-recall disable     Turn passive recall off + purge auto frames (L1)
+    visual-recall retention <1|3|5|7>      Set saved-screen lifetime (L1)
     visual-recall search <q> [--from-ms N] [--to-ms N]  Search stored screen frames
     visual-recall frame get <id>           Frame metadata + OCR text
     visual-recall frame rescan <id>        Re-OCR stored JPEG

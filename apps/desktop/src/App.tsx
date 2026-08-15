@@ -2020,9 +2020,12 @@ function LaunchAtLoginSection(): JSX.Element {
 
 function VisualRecallSection(): JSX.Element {
   const [on, setOn] = useState(false);
+  const [retentionDays, setRetentionDays] = useState(3);
   const [busy, setBusy] = useState(false);
   type RecallStatus = {
     enabled: boolean;
+    retention_days: number;
+    estimated_daily_bytes: number;
     events_24h: number;
     frames_count: number;
     recent: {
@@ -2038,14 +2041,20 @@ function VisualRecallSection(): JSX.Element {
   const refreshStatus = (): void => {
     if (!IN_TAURI) return;
     void invoke<RecallStatus>("get_visual_recall_status")
-      .then(setStatus)
+      .then((next) => {
+        setStatus(next);
+        setRetentionDays(next.retention_days);
+      })
       .catch(() => undefined);
   };
 
   useEffect(() => {
     if (!IN_TAURI) return;
-    void invoke<{ enabled: boolean }>("get_visual_recall_settings")
-      .then((s) => setOn(s.enabled))
+    void invoke<{ enabled: boolean; retention_days: number }>("get_visual_recall_settings")
+      .then((s) => {
+        setOn(s.enabled);
+        setRetentionDays(s.retention_days);
+      })
       .catch(() => undefined);
     refreshStatus();
     const id = window.setInterval(refreshStatus, 12_000);
@@ -2063,6 +2072,23 @@ function VisualRecallSection(): JSX.Element {
       .then(() => refreshStatus())
       .catch(() => setOn(!next))
       .finally(() => setBusy(false));
+  };
+
+  const changeRetention = (days: number): void => {
+    const previous = retentionDays;
+    setRetentionDays(days);
+    if (!IN_TAURI) return;
+    setBusy(true);
+    void invoke("set_visual_recall_retention", { retentionDays: days })
+      .then(() => refreshStatus())
+      .catch(() => setRetentionDays(previous))
+      .finally(() => setBusy(false));
+  };
+
+  const formatStorage = (bytes: number): string => {
+    if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+    if (bytes < 1024 * 1024 * 1024) return `${Math.round(bytes / (1024 * 1024))} MB`;
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
   };
 
   const openBrowse = (): void => {
@@ -2107,13 +2133,40 @@ function VisualRecallSection(): JSX.Element {
         </button>
       </div>
       <div className="set__hint">{t.visualRecallHint}</div>
+      <div className="set__label vr-retention__label" id="seg-visual-recall-retention">
+        {t.visualRecallRetention}
+      </div>
+      <div className="vr-retention" role="radiogroup" aria-labelledby="seg-visual-recall-retention">
+        {[1, 3, 5, 7].map((days) => {
+          const estimatedBytes = (status?.estimated_daily_bytes ?? 0) * days;
+          return (
+            <button
+              key={days}
+              type="button"
+              role="radio"
+              aria-checked={retentionDays === days}
+              disabled={busy}
+              className={`vr-retention__opt${retentionDays === days ? " is-on" : ""}`}
+              onClick={() => changeRetention(days)}
+            >
+              <span className="vr-retention__days">{days === 7 ? "1 week" : `${days} day${days === 1 ? "" : "s"}`}</span>
+              <span className="vr-retention__size">
+                {estimatedBytes > 0
+                  ? t.visualRecallRetentionEstimate(formatStorage(estimatedBytes))
+                  : t.visualRecallRetentionPending}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      <div className="set__hint set__hint--quiet">{t.visualRecallStorageBasis}</div>
       <button type="button" className="vr-launch" onClick={openBrowse}>
         <span className="vr-launch__glyph" aria-hidden="true">
           <IconMaximize2 size={16} />
         </span>
         <span className="vr-launch__body">
           <span className="vr-launch__title">{t.visualRecallBrowse}</span>
-          <span className="vr-launch__sub">{t.visualRecallBrowseSub}</span>
+          <span className="vr-launch__sub">{t.visualRecallBrowseSub(retentionDays)}</span>
         </span>
         {status && status.frames_count > 0 ? (
           <span className="vr-launch__badge">{status.frames_count}</span>

@@ -274,11 +274,12 @@ pub fn visual_recall_window(
     query: &str,
     now_ms: i64,
     local_days: LocalDayBounds,
+    retention_ms: i64,
 ) -> (i64, i64) {
     if let Some(win) = query_time_window(query, now_ms, local_days) {
         return win;
     }
-    (now_ms - crate::screen_frames::RETENTION_MS, now_ms)
+    (now_ms.saturating_sub(retention_ms), now_ms)
 }
 
 /// FTS over one `event_log.source` tag (e.g. `screen_ocr` for visual recall).

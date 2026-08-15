@@ -2,10 +2,22 @@
 //!
 //! When enabled, the macOS adapter may capture a focused window into RAM, run on-device OCR
 //! (Apple Vision), persist text + provenance, and optionally retain compressed JPEG frames
-//! for ≤72 h (`screen_frames` — explicit invariant-2 exception, user decision 2026-08-02).
+//! for a user-selected rolling window (`screen_frames` — explicit invariant-2 exception).
 //! Default is **off**.
 
 use std::path::Path;
+
+pub const DEFAULT_RETENTION_DAYS: u8 = 3;
+pub const RETENTION_DAY_OPTIONS: [u8; 4] = [1, 3, 5, 7];
+pub const DAY_MS: i64 = 24 * 60 * 60 * 1000;
+
+fn default_retention_days() -> u8 {
+    DEFAULT_RETENTION_DAYS
+}
+
+pub fn valid_retention_days(days: u8) -> bool {
+    RETENTION_DAY_OPTIONS.contains(&days)
+}
 
 /// Persisted visual-recall preference. Default off; serde defaults keep partial files safe.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -13,11 +25,30 @@ pub struct Settings {
     /// Master switch. Off means no screen pixels are read and no OCR runs.
     #[serde(default)]
     pub enabled: bool,
+    /// Rolling lifetime for saved Visual Recall frames.
+    #[serde(default = "default_retention_days")]
+    pub retention_days: u8,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { enabled: false }
+        Self {
+            enabled: false,
+            retention_days: DEFAULT_RETENTION_DAYS,
+        }
+    }
+}
+
+impl Settings {
+    pub fn retention_ms(&self) -> i64 {
+        i64::from(self.retention_days) * DAY_MS
+    }
+
+    fn sanitized(mut self) -> Self {
+        if !valid_retention_days(self.retention_days) {
+            self.retention_days = DEFAULT_RETENTION_DAYS;
+        }
+        self
     }
 }
 
@@ -25,8 +56,9 @@ impl Default for Settings {
 pub fn load_settings(path: &Path) -> Settings {
     std::fs::read_to_string(path)
         .ok()
-        .and_then(|text| serde_json::from_str(&text).ok())
+        .and_then(|text| serde_json::from_str::<Settings>(&text).ok())
         .unwrap_or_default()
+        .sanitized()
 }
 
 /// Persist settings to `path` (creates parent dirs when possible).
@@ -116,11 +148,33 @@ mod tests {
     #[test]
     fn default_is_off() {
         assert!(!Settings::default().enabled);
+        assert_eq!(Settings::default().retention_days, 3);
     }
 
     #[test]
     fn absent_json_field_reads_as_off() {
         let s: Settings = serde_json::from_str("{}").unwrap();
         assert!(!s.enabled);
+        assert_eq!(s.retention_days, 3);
+    }
+
+    #[test]
+    fn invalid_retention_on_disk_falls_back_to_three_days() {
+        let settings: Settings =
+            serde_json::from_str(r#"{"enabled":true,"retention_days":30}"#).unwrap();
+        let settings = settings.sanitized();
+        assert!(settings.enabled);
+        assert_eq!(settings.retention_days, DEFAULT_RETENTION_DAYS);
+    }
+
+    #[test]
+    fn every_retention_preset_has_expected_milliseconds() {
+        for days in RETENTION_DAY_OPTIONS {
+            let settings = Settings {
+                enabled: false,
+                retention_days: days,
+            };
+            assert_eq!(settings.retention_ms(), i64::from(days) * DAY_MS);
+        }
     }
 }

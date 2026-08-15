@@ -2,7 +2,7 @@
 //!
 //! Capture + OCR path mirrored from Screenpipe (`screenpipe-screen` + `screenpipe-capture`):
 //! CGWindow capture → RAM `DynamicImage` → text-region gate → Apple Vision on crop → text.
-//! On fresh Vision success the caller may persist a compressed JPEG (72 h local retention —
+//! On fresh Vision success the caller may persist a compressed JPEG (selected local retention —
 //! explicit invariant-2 exception, user decision 2026-08-02). No cloud upload.
 //! Reference: https://github.com/screenpipe/screenpipe
 

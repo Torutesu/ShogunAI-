@@ -165,6 +165,11 @@ fn parse_visual_recall(rest: &[String]) -> Result<Command, CliError> {
         Some("status") => Ok(Command::VisualRecall(VisualRecallCommand::Status)),
         Some("enable") => Ok(Command::VisualRecall(VisualRecallCommand::Enable)),
         Some("disable") => Ok(Command::VisualRecall(VisualRecallCommand::Disable)),
+        Some("retention") => {
+            let value = rest.get(1).ok_or(CliError::MissingArgument("<1|3|5|7>"))?;
+            let days = value.parse().map_err(|_| CliError::BadId(value.clone()))?;
+            Ok(Command::VisualRecall(VisualRecallCommand::SetRetention { days }))
+        }
         Some("search") => {
             let mut from_ms = None;
             let mut to_ms = None;

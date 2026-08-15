@@ -11,7 +11,7 @@
 //! layered on later to reduce latency without changing this composition.
 //!
 //! Invariant 2: AX text is the default path; optional visual recall (issue #107) may OCR the
-//! focused window in RAM — text + provenance persisted; compressed JPEG frames retained ≤72 h
+//! focused window in RAM — text + provenance persisted; compressed JPEG frames use selected retention
 //! when Visual recall is on (explicit exception, user decision 2026-08-02).
 //!
 //! `capture_once` is part of the public surface (the main-thread-timer driver alternative in the
@@ -271,7 +271,7 @@ mod mac {
                 // Store JPEG only on a fresh OCR event (not dedup touch, not cache replay).
                 if !touched {
                     if let Some(frame) = result.frame {
-                        // Explicit invariant-2 exception: local encrypted BLOB, 72 h purge.
+                        // Explicit invariant-2 exception: local encrypted BLOB, rolling purge.
                         if let Some(frame_id) = db.store_screen_frame(
                             id,
                             Some(bundle_id),
@@ -334,11 +334,10 @@ mod mac {
                 Instant::now() - Duration::from_millis(FRAME_PURGE_INTERVAL_MS);
             #[cfg(feature = "visual-recall-ocr")]
             {
-                match db.purge_screen_frames() {
+                let settings = crate::visual_recall::mac::refresh_settings(&visual_recall);
+                match db.purge_screen_frames(settings.retention_ms()) {
                     Ok(removed) if removed > 0 => {
-                        eprintln!(
-                            "[screen_ocr] startup purge removed {removed} frame(s) older than 72 h"
-                        );
+                        eprintln!("[screen_ocr] startup purge removed {removed} expired frame(s)");
                     }
                     Ok(_) => {}
                     Err(e) => eprintln!("[screen_ocr] startup retention purge failed: {e}"),
@@ -346,12 +345,13 @@ mod mac {
             }
             loop {
                 // Retention is independent of capture permissions and policy locks. Revoking
-                // Accessibility access must never leave saved JPEGs beyond 72 hours.
+                // Accessibility access must never leave JPEGs beyond selected retention.
                 #[cfg(feature = "visual-recall-ocr")]
                 if last_frame_purge.elapsed().as_millis() as u64 >= FRAME_PURGE_INTERVAL_MS {
-                    match db.purge_screen_frames() {
+                    let settings = crate::visual_recall::mac::refresh_settings(&visual_recall);
+                    match db.purge_screen_frames(settings.retention_ms()) {
                         Ok(removed) if removed > 0 => {
-                            eprintln!("[screen_ocr] purged {removed} frame(s) older than 72 h");
+                            eprintln!("[screen_ocr] purged {removed} expired frame(s)");
                         }
                         Ok(_) => {}
                         Err(e) => eprintln!("[screen_ocr] retention purge failed: {e}"),

@@ -275,23 +275,28 @@ export const STRINGS = {
     deepgramAsrPlaceholder: "Paste Deepgram API key…",
     visualRecallSection: "Visual recall",
     visualRecallHint:
-      "Passive OCR reads the focused window when accessibility text is thin. Saved frames stay on this Mac for up to 72 hours, then purge automatically.",
+      "Passive OCR reads the focused window when accessibility text is thin. Saved frames stay only on this Mac, then purge automatically.",
     visualRecallOn: "On",
     visualRecallOff: "Off",
     visualRecallDisclosure:
-      "Requires Screen Recording for the focused window. Compressed JPEGs and OCR text stay local in memory for up to 72 hours — nothing is uploaded.",
+      "Requires Screen Recording for the focused window. Compressed JPEGs use your selected retention; OCR memory stays local — nothing is uploaded.",
     visualRecallStatusOff: "Off — passive OCR paused. You can still save a screen manually.",
     visualRecallStatusIdle:
       "On — waiting for a window that needs OCR (canvas apps, terminals, or thin accessibility text).",
     visualRecallStatusLive: (n: number, app: string, window: string) =>
       `On — last read ${n} chars from ${app}${window ? ` · ${window}` : ""}.`,
-    visualRecallTimeline: "Saved screens (72 h)",
+    visualRecallTimeline: (days: number) => `Saved screens (${days === 1 ? "1 day" : `${days} days`})`,
     visualRecallTimelineEmpty: "No saved screens yet — turn on Visual recall to start the local timeline.",
     visualRecallDeleteFrame: "Delete",
     visualRecallDeleteConfirm: "Remove this screen?",
     visualRecallDeleteCancel: "Cancel",
     visualRecallBrowse: "Browse saved screens",
-    visualRecallBrowseSub: "Open the 72 h timeline on this Mac",
+    visualRecallBrowseSub: (days: number) =>
+      `Open the ${days === 1 ? "1-day" : `${days}-day`} timeline on this Mac`,
+    visualRecallRetention: "Keep saved screens",
+    visualRecallRetentionEstimate: (storage: string) => `About ${storage}`,
+    visualRecallRetentionPending: "Learning usage",
+    visualRecallStorageBasis: "Storage estimates use your last 24 hours of captures.",
     visualRecallScrubHint: "Scrub through saved screens",
     visualRecallShowText: "Show text",
     visualRecallHideText: "Hide text",
@@ -306,7 +311,8 @@ export const STRINGS = {
     visualRecallJumpToDay: "Jump to day",
     visualRecallNoFramesThatDay: "No screens on this day",
     visualRecallSearchEmpty: "No screens match your search",
-    visualRecallRetentionNote: "Screens purge automatically after 72 hours.",
+    visualRecallRetentionNote: (days: number) =>
+      `Screens purge automatically after ${days === 1 ? "1 day" : `${days} days`}.`,
     visualRecallFrameMeta: (when: string, app: string, window: string) =>
       `${when} · ${app}${window ? ` · ${window}` : ""}`,
     // FR-MT-03 disclosure (2026-08-05): Deepgram Nova-3 processes audio for STT only; MIP opt-out;

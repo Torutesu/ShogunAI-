@@ -33,6 +33,7 @@ pub enum Tool {
     ActionsExecute,
     VisualRecallStatus,
     VisualRecallSetEnabled,
+    VisualRecallSetRetention,
     VisualRecallSearchFrames,
     VisualRecallGetFrame,
     VisualRecallRescanFrame,
@@ -60,6 +61,7 @@ pub const ALL_TOOLS: &[Tool] = &[
     Tool::ActionsExecute,
     Tool::VisualRecallStatus,
     Tool::VisualRecallSetEnabled,
+    Tool::VisualRecallSetRetention,
     Tool::VisualRecallSearchFrames,
     Tool::VisualRecallGetFrame,
     Tool::VisualRecallRescanFrame,
@@ -87,6 +89,7 @@ impl Tool {
             Tool::ActionsExecute => "actions.execute",
             Tool::VisualRecallStatus => "visual_recall.status",
             Tool::VisualRecallSetEnabled => "visual_recall.set_enabled",
+            Tool::VisualRecallSetRetention => "visual_recall.set_retention",
             Tool::VisualRecallSearchFrames => "visual_recall.search_frames",
             Tool::VisualRecallGetFrame => "visual_recall.get_frame",
             Tool::VisualRecallRescanFrame => "visual_recall.rescan_frame",
@@ -134,7 +137,7 @@ pub fn tool_level(tool: Tool) -> ApiLevel {
         // append a user note to the event log — local, reversible.
         Tool::MemoryAppendNote => ApiLevel::Write(Level::L1),
         // visual recall master switch — same as Settings toggle (L1, local).
-        Tool::VisualRecallSetEnabled => ApiLevel::Write(Level::L1),
+        Tool::VisualRecallSetEnabled | Tool::VisualRecallSetRetention => ApiLevel::Write(Level::L1),
         // Deleting a local frame is an L1 write.
         Tool::VisualRecallDeleteFrame => ApiLevel::Write(Level::L1),
         // user-owned profile prefs text — explicit set, like Unabyss store (L1).
@@ -326,6 +329,7 @@ mod tests {
                         Tool::MemoryAppendNote
                             | Tool::StateProposeUpdate
                             | Tool::VisualRecallSetEnabled
+                            | Tool::VisualRecallSetRetention
                             | Tool::VisualRecallDeleteFrame
                             | Tool::ProfileSet
                     ))
