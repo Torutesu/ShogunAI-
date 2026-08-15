@@ -1,6 +1,12 @@
 # 朝・夜のサマリー配達体験（Issue #10）
 
 - **決定日**: 2026-08-15（オーナー確定: 通知=notchのみ / 朝=初回操作時・夜=固定時刻 / 夜=notchカード / Charm一言・サウンドcue・API対称を含む）
+- **UI レビュー反映（同日 v2/v3、モック: claude.ai/code/artifact/c48602d9）**:
+  - **Full view リンクは置かない** — Full UI に依存しない設計思想。カードは notch 内で完結
+  - ヘッダは「Morning brief」ではなく**挨拶**（`Good morning` / `Good evening`＋日付）
+  - カードは**ノッチが開く**表現（黒→ガラスのグラデでノッチから注がれる。浮遊パネルにしない）
+  - **各行にデータソースへのディープリンク チップ**（Mail スレッド / Notion ページ / Slack メッセージ / Calendar 予定）。provenance イベントが URL を持てば直接、無ければアプリへフォーカス
+  - ハンドル通知の**赤丸は廃止**。到着は確定ロゴ（兜マーク、`Logo.tsx` と同一ジオメトリ）＋ブランドブルーのソフトグロー。⚔ 絵文字はロゴに置換
 - **状態**: 設計確定・実装未着手
 - **関連**: FR-MB-01..06（Morning Brief）/ FR-EB-01..03（Evening Wrap）/ Issue #41（Charm）/ 不変条件 5・6
 
@@ -24,12 +30,12 @@
 
 ### 3.1 ハンドル通知（閉じた notch）
 
-既存 `noticeLine` 系に `summary` トーンを追加。表示は `⚔ Morning brief ready` / `⚔ Evening wrap ready`（英語・絵文字は⚔のみ）。クリック→展開で該当カードが最前面に開く。既読になるまで保持。到着時に控えめなサウンド cue（既存 `Cue` 基盤に `SummaryReady` を追加。quiet hours 尊重）。
+既存 `noticeLine` 系に `summary` トーンを追加。表示は兜マーク＋`Good morning` / `Good evening`（ロゴは `Logo.tsx` の `MarkFacets` を流用）。赤丸ではなくブランドブルーのソフトグローで気配を出す。クリック→ノッチが開いて該当カード。既読になるまで保持。到着時に控えめなサウンド cue（`SummaryReady`、quiet hours 尊重）。
 
 ### 3.2 Morning カード（notch パネル内・既存 Today ビューの流用＋Charm 行）
 
 ```
-⚔ Morning brief                    [Open full view]
+(兜) Good morning            Fri, Aug 15
 今日の強みの一言（Charm line、生成時のみ・後述）
 Today          カレンダー ≤3（Updated マーク=FR-MB-06）
 Commitments due ≤5（possibly ハーフトーン=FR-MB-05）
@@ -39,7 +45,7 @@ Open loops      ≤5
 ### 3.3 Evening カード（新規）
 
 ```
-⚔ Evening wrap
+(兜) Good evening            Fri, Aug 15
 Today: {commitments_done} done · {loops_closed} loops closed
        · {actions_adopted}/{actions_decided} actions adopted
 Still open      ≤5（overdue→期日→staleness 順）
@@ -47,7 +53,7 @@ Tomorrow first  カレンダー ≤3 ＋ 明日期日 commitments
 Loose ends      ≤5
 ```
 
-すべての行は provenance（根拠イベント）参照付き。**生成プロースは無い**（FR-EB-02: Wrap は決定的集計のみ）。
+すべての行は provenance（根拠イベント）参照付きで、**右端にソースチップ**（Mail / Notion / Slack / Calendar）を置きワンクリックで元データへ飛ぶ。**生成プロースは無い**（FR-EB-02: Wrap は決定的集計のみ）。
 
 ### 3.4 設定
 
