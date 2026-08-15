@@ -4,6 +4,13 @@ import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { uiLog } from "./uiLog";
+import {
+  SummaryCard,
+  SummaryMark,
+  type DailySettings,
+  type SummaryState as DailySummary,
+  type SummaryWhich,
+} from "./daily";
 
 // Explicit window drag on mouse-down. data-tauri-drag-region proved unreliable on device, so call
 // startDragging() directly. Ignore drags that start on an interactive control (button/input).
@@ -399,6 +406,12 @@ export function App(): JSX.Element {
   const openRef = useRef(true);
   const [status, setStatus] = useState<Status | null>(IN_TAURI ? null : MOCK_STATUS);
   const [state, setState] = useState<StateView>(IN_TAURI ? { commitments: [], open_loops: [] } : MOCK_STATE);
+  // Daily summaries (issue #10): the delivery judgement, polled with the rest of the status
+  // (the poll itself is the "user is here" activity signal), and the card currently open.
+  // The open card keeps its own (which, date) so a dismissal after midnight still marks the
+  // day it was delivered for.
+  const [summary, setSummary] = useState<DailySummary | null>(null);
+  const [summaryOpen, setSummaryOpen] = useState<{ which: SummaryWhich; date: string } | null>(null);
   const [ctxApp, setCtxApp] = useState<string>("");
   const [msgs, setMsgs] = useState<Msg[]>(() => loadJson<Msg[]>("shogun.msgs", []));
   const [input, setInput] = useState("");
@@ -785,6 +798,11 @@ export function App(): JSX.Element {
     void invoke<boolean>("get_notch_status_visible")
       .then(setShowStatusInNotch)
       .catch(() => undefined);
+    // The delivery judgement (issue #10). Each poll is a live "user is here" moment — the Rust
+    // side decides morning/evening/nothing and cues at most once per delivered card.
+    void invoke<DailySummary>("summary_state")
+      .then(setSummary)
+      .catch(() => undefined);
   }, []);
 
   useEffect(() => {
@@ -793,6 +811,20 @@ export function App(): JSX.Element {
     const id = setInterval(refreshState, 3000);
     return () => clearInterval(id);
   }, [refreshState]);
+
+  // The notch opens onto a due summary (issue #10): only on the transition into open, so a
+  // dismissed card never re-hijacks a panel that is already in use. Refs for the judgement —
+  // this must fire on the open edge, not re-run on every poll.
+  const summaryRef = useRef(summary);
+  summaryRef.current = summary;
+  const wasOpenForSummary = useRef(false);
+  useEffect(() => {
+    const s = summaryRef.current;
+    if (open && !wasOpenForSummary.current && s?.due && !showSettings && !showHub) {
+      setSummaryOpen({ which: s.due, date: s.date });
+    }
+    wasOpenForSummary.current = open;
+  }, [open, showSettings, showHub]);
 
   useEffect(() => {
     if (!IN_TAURI) return;
@@ -926,6 +958,9 @@ export function App(): JSX.Element {
     const cur = showSettings ? setSize : showHub ? hubSize : chatSize;
     setShowSettings(false);
     setShowHub(false);
+    // A collapsed card is done: it was marked seen on open, so the next expand goes back to
+    // chat rather than re-presenting a summary the user already walked away from.
+    setSummaryOpen(null);
     applyMorphScale(cur.w, cur.h);
     setCollapsing(true);
     setNotchSm((s) => (s === "idle" || s === "hidden" ? s : "collapsing"));
@@ -1219,6 +1254,11 @@ export function App(): JSX.Element {
       ? { text: healthLine.text, tone: "warn" as const, fix: healthLine.fix }
       : null;
 
+  // A due summary greets from the collapsed handle (issue #10): the confirmed mark plus
+  // "Good morning" and a soft brand glow — presence, not alarm. Warnings and ⌥-tap results
+  // outrank it; the greeting keeps until the card is opened or the day moves on.
+  const summaryDue = summary?.due ?? null;
+
   const runFix = (fix: "settings" | "accessibility" | null): void => {
     if (fix === "accessibility") {
       void invoke("open_accessibility_settings")
@@ -1276,6 +1316,8 @@ export function App(): JSX.Element {
     meeting?.elapsed_ms,
     meeting?.countdown_ms,
     voice?.phase,
+    // The greeting swaps the handle's text (issue #10), so its width changes with it.
+    summary?.due,
   ]);
 
   const meetingLive =
@@ -1310,7 +1352,9 @@ export function App(): JSX.Element {
     </div>
   ) : (
     <button
-      className={`handle${hideIdleChin ? " handle--hiding" : ""}`}
+      className={`handle${hideIdleChin ? " handle--hiding" : ""}${
+        !hideIdleChin && !noticeLine && summaryDue ? " handle--summary" : ""
+      }`}
       ref={handleRef}
       type="button"
       onClick={() => expand()}
@@ -1325,6 +1369,11 @@ export function App(): JSX.Element {
             <span className={`handle__live inline--${noticeLine.tone}`}>
               <span className={`inline__dot inline__dot--${noticeLine.tone}`} />
               {noticeLine.text}
+            </span>
+          ) : summaryDue ? (
+            <span className="handle__live handle__greet">
+              <SummaryMark className="handle__greetmark" />
+              {summaryDue === "morning" ? t.goodMorning : t.goodEvening}
             </span>
           ) : (
             <span className="handle__live">
@@ -1535,7 +1584,15 @@ export function App(): JSX.Element {
 
             {showSearch ? <SearchBox onClose={() => setShowSearch(false)} /> : null}
 
-            {showHub ? (
+            {summaryOpen ? (
+              // The delivered summary owns the panel until dismissed (issue #10). Opening it IS
+              // the read receipt (the card marks itself seen on mount); Done returns to chat.
+              <SummaryCard
+                which={summaryOpen.which}
+                date={summaryOpen.date}
+                onClose={() => setSummaryOpen(null)}
+              />
+            ) : showHub ? (
               <Hub />
             ) : (
               <>
@@ -2736,6 +2793,80 @@ const timeToMin = (v: string): number => {
   if (!Number.isFinite(h) || !Number.isFinite(m)) return 0;
   return Math.min(23 * 60 + 59, Math.max(0, h * 60 + m));
 };
+
+/** Daily summaries (issue #10): morning/evening switches + the evening threshold. Writes return
+ *  what Rust actually stored (same contract as the sound settings), so a rejected value never
+ *  leaves the UI and the daemon quietly disagreeing. */
+function DailySummariesSection(): JSX.Element {
+  const [s, setS] = useState<DailySettings>({
+    morning_enabled: true,
+    evening_enabled: true,
+    evening_hour: 17,
+    evening_minute: 30,
+  });
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!IN_TAURI) return;
+    void invoke<DailySettings>("get_daily_summary_settings")
+      .then(setS)
+      .catch(() => undefined);
+  }, []);
+
+  const write = (next: DailySettings): void => {
+    setS(next);
+    if (!IN_TAURI) return;
+    setBusy(true);
+    void invoke<DailySettings>("set_daily_summary_settings", { settings: next })
+      .then(setS)
+      .catch(() => undefined)
+      .finally(() => setBusy(false));
+  };
+
+  const pad = (n: number): string => String(n).padStart(2, "0");
+
+  return (
+    <section className="set">
+      <div className="set__label">{t.dsSection}</div>
+      <div className="set__hint">{t.dsHint}</div>
+      <label className="set__row">
+        <input
+          type="checkbox"
+          checked={s.morning_enabled}
+          disabled={busy}
+          onChange={(e) => write({ ...s, morning_enabled: e.target.checked })}
+        />
+        <span>{t.dsMorning}</span>
+      </label>
+      <label className="set__row">
+        <input
+          type="checkbox"
+          checked={s.evening_enabled}
+          disabled={busy}
+          onChange={(e) => write({ ...s, evening_enabled: e.target.checked })}
+        />
+        <span>{t.dsEvening}</span>
+      </label>
+      {s.evening_enabled ? (
+        <div className="set__row">
+          <label>
+            {t.dsEveningFrom}{" "}
+            <input
+              type="time"
+              value={`${pad(s.evening_hour)}:${pad(s.evening_minute)}`}
+              disabled={busy}
+              onChange={(e) => {
+                const m = /^(\d{1,2}):(\d{2})$/.exec(e.target.value);
+                if (!m) return;
+                write({ ...s, evening_hour: Number(m[1]), evening_minute: Number(m[2]) });
+              }}
+            />
+          </label>
+        </div>
+      ) : null}
+    </section>
+  );
+}
 
 function SoundSection(): JSX.Element {
   const [s, setS] = useState<SoundSettings>(SOUND_DEFAULTS);
@@ -4421,6 +4552,7 @@ function Settings(props: {
         <VisualRecallSection />
         <VoiceSection />
         <SoundSection />
+        <DailySummariesSection />
         <ConnectionsSection />
         <ComposioSection />
         <AiSessionsSection />

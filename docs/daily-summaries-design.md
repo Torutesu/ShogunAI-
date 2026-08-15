@@ -32,6 +32,8 @@
 
 既存 `noticeLine` 系に `summary` トーンを追加。表示は兜マーク＋`Good morning` / `Good evening`（ロゴは `Logo.tsx` の `MarkFacets` を流用）。赤丸ではなくブランドブルーのソフトグローで気配を出す。クリック→ノッチが開いて該当カード。既読になるまで保持。到着時に控えめなサウンド cue（`SummaryReady`、quiet hours 尊重）。
 
+**cue の在席ゲート（2026-08-15 実装決定）**: 判定はポーリングで走るが、cue は「直近 60 秒以内にグローバル入力があった」ときだけ鳴らす（`daily_summaries::LAST_GLOBAL_INPUT_MS`。既存の tap-to-draft グローバルモニタと panel の `interact` が刻む）。不在中に閾値を過ぎても cue は保留され、戻ってきた最初のアクティビティで鳴る — §2 の「割り込まず、そこにいる最初の瞬間に」を音にも適用する。notice のグロー自体は即時に灯る（不在中は誰も見ていないので害がない）。
+
 ### 3.2 Morning カード（notch パネル内・既存 Today ビューの流用＋Charm 行）
 
 ```
@@ -72,9 +74,9 @@ Settings に「Daily summaries」セクション: Morning ON/OFF、Evening ON/OF
 
 ## 6. 実装順
 
-1. **M1**: `daily_delivery` 純粋ロジック＋`daily_summaries.json`＋Tauri コマンド（`evening_wrap` / `summary_state` / `mark_summary_seen` / 設定 get/set）
-2. **M2**: ハンドル notice＋Evening カード＋Morning カード導線＋Settings セクション＋`SummaryReady` cue
-3. **M3**: `charm_line`（MorningBrief ジョブ拡張＋payload マイグレーション不要=JSON 内）＋`memory.get_wrap` 3面
+1. **M1**: `daily_delivery` 純粋ロジック＋`daily_summaries.json`＋Tauri コマンド（`evening_wrap` / `summary_state` / `mark_summary_seen` / 設定 get/set）— **済 2026-08-15**（＋`morning_card` / `open_summary_source` を M2 で追加）
+2. **M2**: ハンドル notice＋Evening カード＋Morning カード導線＋Settings セクション＋`SummaryReady` cue — **済 2026-08-15**（`daily.tsx` カード、ソースチップ=接続サービス名 or キャプチャ元アプリ名、チップクリックで `open_summary_source`。イベントに URL カラムは無いため v1 はアプリ/サービスの前面化。`BriefPayload.charm_line` フィールドも serde default で先行追加済み）
+3. **M3**: `charm_line` の生成（MorningBrief ジョブ拡張）＋`memory.get_wrap` 3面
 4. 受入: 純粋ロジックのテスト（境界3種）、wrap コマンドの統合テスト、デスクトップは vitest でカード描画＋既読遷移
 
 ## 7. やらないこと

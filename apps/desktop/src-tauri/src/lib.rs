@@ -371,6 +371,8 @@ pub fn run() {
         daily_summaries::mac::get_daily_summary_settings,
         daily_summaries::mac::set_daily_summary_settings,
         daily_summaries::mac::evening_wrap,
+        daily_summaries::mac::morning_card,
+        daily_summaries::mac::open_summary_source,
         user_config_watch::get_user_config_status,
         user_config_watch::open_shougun_md,
         user_config_watch::regenerate_shougun_md,
@@ -1963,7 +1965,18 @@ fn watch_option_tap(app: &tauri::App) {
 
     // SAFETY: main thread (setup); monitors and blocks are intentionally leaked (app lifetime).
     unsafe {
-        let disarm_block = block2::RcBlock::new(move |_ev: *mut AnyObject| poison());
+        let disarm_block = block2::RcBlock::new(move |_ev: *mut AnyObject| {
+            // Any global key/mouse event doubles as the "user is here" stamp the daily-summary
+            // cue gates on (issue #10) — global monitors never see our own panel's events, so
+            // `interact` stamps those separately.
+            crate::daily_summaries::note_global_input(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as i64)
+                    .unwrap_or(0),
+            );
+            poison();
+        });
         let key_mon: *mut AnyObject = msg_send![
             class!(NSEvent),
             addGlobalMonitorForEventsMatchingMask: MASK_KEY_DOWN,

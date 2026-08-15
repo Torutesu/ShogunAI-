@@ -11,6 +11,21 @@ use serde::{Deserialize, Serialize};
 use shogun_core::daily_delivery::{SeenState, Settings};
 use tauri::Manager;
 
+/// Last global user input (unix ms), stamped by the shell's global event monitors and the
+/// panel's own `interact` reports. The delivery judgement runs on a poll, but §2 promises the
+/// summary lands at the user's first *activity* — this is how the cue knows someone is actually
+/// there, instead of chiming into an empty room at midnight or 17:30 sharp.
+pub static LAST_GLOBAL_INPUT_MS: std::sync::atomic::AtomicI64 =
+    std::sync::atomic::AtomicI64::new(0);
+
+pub fn note_global_input(now_ms: i64) {
+    LAST_GLOBAL_INPUT_MS.store(now_ms, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// How recent the last input must be for the user to count as present. Generous on purpose:
+/// reading counts as being there, and a missed cue costs more than one played a minute late.
+pub const PRESENCE_WINDOW_MS: i64 = 60_000;
+
 /// The persisted file: settings and seen-state flattened into one object, exactly the shape
 /// documented in docs/daily-summaries-design.md §2 (`morning_seen_date`, `evening_seen_date`,
 /// `evening_hour`, `evening_minute`, `morning_enabled`, `evening_enabled`).
@@ -80,8 +95,12 @@ pub struct WrapLine {
     pub text: String,
     /// FR-MB-05: medium-confidence items carry the hedge; the card renders them half-toned.
     pub possibly: bool,
-    /// Provenance event id — the deep-link chip resolves its source from this.
+    /// Provenance event id — `open_summary_source` re-opens the data source from this.
     pub provenance_event_id: i64,
+    /// Deep-link chip label ("Mail", "Calendar", the captured app's name…), resolved from the
+    /// provenance event's source here so the webview draws it verbatim (invariant 1). Absent when
+    /// the source has no destination worth offering.
+    pub source: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -106,6 +125,20 @@ pub struct WrapView {
     pub tomorrow_calendar: Vec<WrapCalendarLine>,
     pub tomorrow_commitments: Vec<WrapLine>,
     pub loose_ends: Vec<WrapLine>,
+}
+
+/// The Morning card: the persisted nightly brief when one exists, the degraded local assembly
+/// when it doesn't (FR-MB-04 — the morning is never an error screen).
+#[derive(Serialize)]
+pub struct MorningView {
+    /// Whether generated prose backs `what_happened` (false = extractive degradation).
+    pub generated: bool,
+    /// The nightly Charm line (issue #10 M3 fills it; absent until then and on degraded days).
+    pub charm_line: Option<String>,
+    pub today: Vec<WrapCalendarLine>,
+    pub commitments_due: Vec<WrapLine>,
+    pub open_loops: Vec<WrapLine>,
+    pub what_happened: Vec<String>,
 }
 
 #[cfg(target_os = "macos")]
@@ -148,13 +181,49 @@ pub mod mac {
         format!("{h:02}:{m:02}")
     }
 
-    fn brief_item(i: &shogun_fusion::brief::BriefItem) -> WrapLine {
+    /// Chip label for a provenance source. Connector sources get the service's own name (the
+    /// user connected it by that name — this is their data's address, not marketing copy);
+    /// captured events get the app they were captured in. `None` = no destination worth a chip.
+    fn chip_label(source: &str, app_bundle_id: Option<&str>) -> Option<String> {
+        Some(match source {
+            "gmail" => "Mail".to_string(),
+            "gcal" => "Calendar".to_string(),
+            "slack" => "Slack".to_string(),
+            "notion" => "Notion".to_string(),
+            "github" => "GitHub".to_string(),
+            "linear" => "Linear".to_string(),
+            "meeting" => "Meeting".to_string(),
+            "capture" | "screen_ocr" => {
+                // "com.apple.Safari" → "Safari". Coarse but honest; a wrong-looking label here
+                // beats a lookup table that goes stale.
+                app_bundle_id?.rsplit('.').next().filter(|s| !s.is_empty())?.to_string()
+            }
+            _ => return None,
+        })
+    }
+
+    fn chip_for(db: Option<&Db>, event_id: i64) -> Option<String> {
+        let (source, bundle) = db?.event_source(event_id)?;
+        chip_label(&source, bundle.as_deref())
+    }
+
+    fn wrap_line(db: Option<&Db>, text: &str, possibly: bool, event_id: i64) -> WrapLine {
         WrapLine {
-            text: i.text.clone(),
-            possibly: i.possibly,
-            provenance_event_id: i.provenance_event_id,
+            text: text.to_string(),
+            possibly,
+            provenance_event_id: event_id,
+            source: chip_for(db, event_id),
         }
     }
+
+    fn brief_item(db: Option<&Db>, i: &shogun_fusion::brief::BriefItem) -> WrapLine {
+        wrap_line(db, &i.text, i.possibly, i.provenance_event_id)
+    }
+
+    /// One `SummaryReady` cue per delivered card: the judgement fires on every poll, the sound
+    /// must not. Process-local on purpose — a relaunch may re-cue an unseen card, which is the
+    /// lesser wrong (silence would mean a crash eats the day's only signal).
+    static CUED: std::sync::Mutex<Option<(String, &'static str)>> = std::sync::Mutex::new(None);
 
     /// The delivery judgement, made at the moment of the call (the webview calls this on
     /// activity/paint — the call itself is the "user is here" signal, §2).
@@ -169,14 +238,26 @@ pub mod mac {
             &stored.settings,
             &stored.seen,
         );
-        SummaryState {
-            due: which.map(|w| match w {
-                Which::Morning => "morning",
-                Which::Evening => "evening",
-            }),
-            date,
-            settings: stored.settings,
+        let due_str = which.map(|w| match w {
+            Which::Morning => "morning",
+            Which::Evening => "evening",
+        });
+        if let Some(w) = due_str {
+            // Cue only while the user is demonstrably present (recent global input) — otherwise
+            // leave CUED unset so the chime happens when they actually arrive, not into an empty
+            // room the second the threshold passes.
+            let last_input = LAST_GLOBAL_INPUT_MS.load(std::sync::atomic::Ordering::Relaxed);
+            let present = last_input > 0 && now.saturating_sub(last_input) <= PRESENCE_WINDOW_MS;
+            if present {
+                if let Ok(mut cued) = CUED.lock() {
+                    if cued.as_ref().map(|(d, c)| (d.as_str(), *c)) != Some((date.as_str(), w)) {
+                        *cued = Some((date.clone(), w));
+                        crate::sound::mac::play(shogun_core::sound::Cue::SummaryReady);
+                    }
+                }
+            }
         }
+        SummaryState { due: due_str, date, settings: stored.settings }
     }
 
     /// The card was opened: advance that side's seen-date so it doesn't re-deliver today.
@@ -199,12 +280,17 @@ pub mod mac {
 
     /// Persist new settings, keeping the seen-dates untouched — moving the evening time must not
     /// clear today's "already delivered" (the pure logic's no-redeliver rule depends on it).
+    /// Returns what was actually stored (same contract as the sound settings writes).
     #[tauri::command]
-    pub fn set_daily_summary_settings(settings: Settings, app: tauri::AppHandle) -> Result<(), String> {
+    pub fn set_daily_summary_settings(
+        settings: Settings,
+        app: tauri::AppHandle,
+    ) -> Result<Settings, String> {
         validate(&settings)?;
         let mut stored = load(&app);
         stored.settings = settings;
-        save(&app, &stored)
+        save(&app, &stored)?;
+        Ok(stored.settings)
     }
 
     /// Assemble the Evening card content: `Db::evening_wrap` over today's local window —
@@ -221,6 +307,7 @@ pub mod mac {
         // Calendar lines flow in from the connector lane; until that plumbing exists the section
         // comes back empty rather than invented (same honesty rule as fullui::today).
         let wrap = db.evening_wrap(Vec::new(), day_start, now, tomorrow_end);
+        let d = Some(&*db);
         Ok(WrapView {
             outcome: WrapOutcomeView {
                 commitments_done: wrap.outcome.commitments_done,
@@ -228,7 +315,7 @@ pub mod mac {
                 actions_decided: wrap.outcome.actions_decided,
                 actions_adopted: wrap.outcome.actions_adopted,
             },
-            still_open: wrap.still_open.iter().map(brief_item).collect(),
+            still_open: wrap.still_open.iter().map(|i| brief_item(d, i)).collect(),
             tomorrow_calendar: wrap
                 .tomorrow_calendar
                 .iter()
@@ -238,9 +325,102 @@ pub mod mac {
                     updated: c.updated,
                 })
                 .collect(),
-            tomorrow_commitments: wrap.tomorrow_commitments.iter().map(brief_item).collect(),
-            loose_ends: wrap.loose_ends.iter().map(brief_item).collect(),
+            tomorrow_commitments: wrap.tomorrow_commitments.iter().map(|i| brief_item(d, i)).collect(),
+            loose_ends: wrap.loose_ends.iter().map(|i| brief_item(d, i)).collect(),
         })
+    }
+
+    /// Assemble the Morning card: the persisted nightly brief for today when one exists
+    /// (a read — immediate and offline-stable), else the degraded live assembly (FR-MB-04).
+    #[tauri::command]
+    pub fn morning_card(app: tauri::AppHandle) -> Result<MorningView, String> {
+        let Some(db) = app.try_state::<Db>() else {
+            return Err("Capture isn't running — the memory store couldn't be opened, so there's \
+                        nothing to show yet."
+                .to_string());
+        };
+        let now = db.now_ms();
+        let date = shogun_core::daemon::local_date_string(now);
+        let d = Some(&*db);
+
+        if let Some(row) = db.brief_for(&date) {
+            if let Ok(p) = serde_json::from_str::<shogun_memory::briefs::BriefPayload>(&row.payload)
+            {
+                let line = |l: &shogun_memory::briefs::BriefLine| {
+                    wrap_line(d, &l.text, l.possibly, l.provenance_event_id)
+                };
+                return Ok(MorningView {
+                    generated: row.generated,
+                    charm_line: p.charm_line.clone(),
+                    today: p
+                        .today
+                        .iter()
+                        .map(|s| WrapCalendarLine {
+                            time: clock(s.start_ms),
+                            title: s.title.clone(),
+                            updated: s.updated,
+                        })
+                        .collect(),
+                    commitments_due: p.commitments_due.iter().map(line).collect(),
+                    open_loops: p.open_loops.iter().map(line).collect(),
+                    what_happened: p.what_happened.clone(),
+                });
+            }
+            // An unreadable payload falls through to the degraded assembly — the morning must
+            // never be an error screen (FR-MB-04).
+        }
+        let brief = db.local_morning_brief(Vec::new(), now);
+        Ok(MorningView {
+            generated: false,
+            charm_line: None,
+            today: Vec::new(),
+            commitments_due: brief.commitments_due.iter().map(|i| brief_item(d, i)).collect(),
+            open_loops: brief.open_loops.iter().map(|i| brief_item(d, i)).collect(),
+            what_happened: Vec::new(),
+        })
+    }
+
+    /// Re-open a summary line's data source (the card's deep-link chip, issue #10): a captured
+    /// event re-opens the app it was captured in; a connector event opens the service. Metadata
+    /// only — nothing about the event's content leaves this process (opening a fixed URL carries
+    /// no user data).
+    #[tauri::command]
+    pub fn open_summary_source(event_id: i64, app: tauri::AppHandle) -> Result<(), String> {
+        let Some(db) = app.try_state::<Db>() else {
+            return Err("memory store unavailable".to_string());
+        };
+        let Some((source, bundle)) = db.event_source(event_id) else {
+            return Err("no provenance for this line".to_string());
+        };
+        match source.as_str() {
+            "capture" | "screen_ocr" => {
+                let bundle = bundle.ok_or("the captured event has no app to open")?;
+                crate::notch_exec::mac::open_app(&bundle)
+            }
+            // Fixed service fronts — never a per-item URL (events don't carry one yet; the
+            // design doc's "URL if provenance has one" upgrades this when they do).
+            "gmail" => open_in_browser("https://mail.google.com"),
+            "gcal" => open_in_browser("https://calendar.google.com"),
+            "slack" => crate::notch_exec::mac::open_app("com.tinyspeck.slackmacgap")
+                .or_else(|_| open_in_browser("https://app.slack.com")),
+            "notion" => crate::notch_exec::mac::open_app("notion.id")
+                .or_else(|_| open_in_browser("https://www.notion.so")),
+            "github" => open_in_browser("https://github.com"),
+            "linear" => open_in_browser("https://linear.app"),
+            other => Err(format!("no destination for source {other}")),
+        }
+    }
+
+    /// Same guarded `open` as billing's: https-only, fixed URLs from the match above.
+    fn open_in_browser(url: &str) -> Result<(), String> {
+        if !url.starts_with("https://") {
+            return Err("refusing to open a non-https URL".into());
+        }
+        std::process::Command::new("open")
+            .arg(url)
+            .status()
+            .map_err(|e| format!("open failed: {e}"))?;
+        Ok(())
     }
 }
 
@@ -268,15 +448,29 @@ pub mod mac {
     }
 
     #[tauri::command]
-    pub fn set_daily_summary_settings(settings: Settings, app: tauri::AppHandle) -> Result<(), String> {
+    pub fn set_daily_summary_settings(
+        settings: Settings,
+        app: tauri::AppHandle,
+    ) -> Result<Settings, String> {
         validate(&settings)?;
         let mut stored = load(&app);
         stored.settings = settings;
-        save(&app, &stored)
+        save(&app, &stored)?;
+        Ok(stored.settings)
     }
 
     #[tauri::command]
     pub fn evening_wrap(_app: tauri::AppHandle) -> Result<WrapView, String> {
+        Err("macOS only".to_string())
+    }
+
+    #[tauri::command]
+    pub fn morning_card(_app: tauri::AppHandle) -> Result<MorningView, String> {
+        Err("macOS only".to_string())
+    }
+
+    #[tauri::command]
+    pub fn open_summary_source(_event_id: i64, _app: tauri::AppHandle) -> Result<(), String> {
         Err("macOS only".to_string())
     }
 }
