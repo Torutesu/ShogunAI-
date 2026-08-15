@@ -1,0 +1,9 @@
+# Memory MCP SDD progress
+
+Baseline: `cargo test -p shogun-agents -p shogun-mcp` green (141 unit/invariant tests, 0 failures) on 2026-08-13.
+Task 0: baseline checked; known full-workspace `audio_probe` signature issue deferred to integration task.
+Task 1: complete (commits e6fee6d..1fb7a5c, final review clean; durable L3 poll/lock/consent safety).
+Task 7/8: complete locally (uncommitted; final Luna Medium review approved). Gmail stays Composio-only; Calendar/Drive use official MCP with Keychain OAuth, token refresh, live tools/list schema checks, out-of-lock network tickets, bounded HTTP, and Wave-1 refusals.
+Calendar actions: start/end/calendar/description survive MCP/REST, durable approval storage, dedicated L3 confirmation, and create_event arguments. Legacy rows without times are dropped individually; remote JSON-RPC/SSE and isError failures remain content-free.
+Validation: shogun-agents 36, shogun-core 313, shogun-integrations 65, shogun-mcp 116 + invariant4 4, desktop cargo check, and desktop TypeScript typecheck all pass. Full workspace still has the pre-existing audio_probe trait-signature blocker.
+Issue 118 Option context: complete (commits ebb20cb..545d573; final Luna Medium review approved). Draft tone follows active app, same-window AX text changes refresh the prewarmed context, captured prompt data is escaped, and unusable/excluded capture clears stale context. Validation: shogun-core 319, focused desktop cache tests 3, focused inline tests 14, desktop cargo check, rustfmt check on touched files, and git diff check pass.
