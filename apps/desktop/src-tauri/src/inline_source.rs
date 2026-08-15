@@ -572,6 +572,24 @@ pub mod mac {
                 InlineAgent::Subscription(client) => client.complete(prompt),
             }
         }
+
+        /// #123: the role-capable providers carry the trust boundary as real roles; the
+        /// subscription CLI cannot (one prompt argument), so it inherits the trait's fenced
+        /// fallback rather than a silent flat concatenation.
+        fn complete_split(&self, system: &str, user: &str) -> Result<String, LlmError> {
+            match self {
+                InlineAgent::Mock(m) => m.complete_split(system, user),
+                InlineAgent::Anthropic { rt, client } => {
+                    rt.block_on(client.complete_split(system, user))
+                }
+                InlineAgent::OpenAiCompat { rt, client } => {
+                    rt.block_on(client.complete_split(system, user))
+                }
+                InlineAgent::Subscription(client) => {
+                    client.complete(&shogun_core::llm::fence_untrusted(system, user))
+                }
+            }
+        }
     }
 
     /// Read the ACTIVE provider's BYOK key from the Keychain (invariant 7 — never a

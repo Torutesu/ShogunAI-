@@ -72,63 +72,73 @@ pub enum InlineOutcome {
     InsertFailed(String),
 }
 
-/// Build the Agent-lane prompt from the caret context + relevant memory (already confidence-gated by
-/// the caller — FR-ST-20). Pure: this is the piece that turns "what's on screen + what I remember"
-/// into an instruction to write the best continuation, asking for *only* the text to insert.
+/// Build the Agent-lane prompt from the caret context + relevant memory (already confidence-gated
+/// by the caller — FR-ST-20), with the trust boundary explicit (#123): the returned `(system,
+/// user)` pair keeps OUR drafting contract and the user's directives on the instruction side, and
+/// everything captured — app name, field label, memory facts, the text around the caret — on the
+/// data side. A flat concatenation let a malicious page write "ignore the above and…" straight
+/// into the instruction stream; role separation puts the model's instruction-following weight on
+/// our half, and the fenced fallback (for backends without roles) at least names the boundary.
 /// `directives` is the rendered user-config block (empty string when no config is set).
-pub fn build_prompt(ctx: &CursorContext, memory: &[String], directives: &str) -> String {
-    let mut p = String::new();
-    p.push_str("You are writing directly in the user's active app");
-    if !ctx.app.trim().is_empty() {
-        p.push_str(" (");
-        p.push_str(ctx.app.trim());
-        if !ctx.field_label.trim().is_empty() {
-            p.push_str(" — ");
-            p.push_str(ctx.field_label.trim());
-        }
-        p.push(')');
-    }
-    p.push_str(". Continue the text at the cursor in the user's own voice. ");
-    p.push_str("Output only the text to insert at the cursor — no preamble, no quotation marks, no sign-off unless the context clearly calls for one.\n");
+pub fn build_split_prompt(
+    ctx: &CursorContext,
+    memory: &[String],
+    directives: &str,
+) -> (String, String) {
+    let mut system = String::new();
+    system.push_str("You are writing directly in the user's active app, named in the context. ");
+    system.push_str("Continue the text at the cursor in the user's own voice. ");
+    system.push_str("Output only the text to insert at the cursor — no preamble, no quotation marks, no sign-off unless the context clearly calls for one.\n");
     // The output is pasted at the caret sight-unseen, so anything that is not draftable text is a
     // defect: a clarifying question ("what is the subject?") or a meta-note ("I need more context")
     // lands in the user's document as if it were the draft. A capable model, given thin context,
     // will reach for exactly those — so the ban has to be explicit and the fallback stated: commit
     // to the most plausible draft instead of asking. Underspecified is the normal case here, not an
     // error to report.
-    p.push_str("Never ask a question, request more detail, or explain yourself. If the context is thin, write the most plausible draft you can from what is given and commit to it. Your entire reply is inserted verbatim at the cursor.\n");
+    system.push_str("Never ask a question, request more detail, or explain yourself. If the context is thin, write the most plausible draft you can from what is given and commit to it. Your entire reply is inserted verbatim at the cursor.\n");
 
     // Directives go AFTER the insert-only / no-preamble constraints on purpose: user
     // directives flavor voice and content, but must not relax the "insert only the text"
     // contract stated above. Do not move this block above those constraints.
     if !directives.trim().is_empty() {
-        p.push('\n');
-        p.push_str(directives.trim());
-        p.push('\n');
+        system.push('\n');
+        system.push_str(directives.trim());
+        system.push('\n');
+    }
+
+    let mut user = String::new();
+    if !ctx.app.trim().is_empty() {
+        user.push_str("Active app: ");
+        user.push_str(ctx.app.trim());
+        if !ctx.field_label.trim().is_empty() {
+            user.push_str(" — ");
+            user.push_str(ctx.field_label.trim());
+        }
+        user.push('\n');
     }
 
     let facts: Vec<&str> = memory.iter().map(|m| m.trim()).filter(|m| !m.is_empty()).collect();
     if !facts.is_empty() {
-        p.push_str("\nWhat the user has in view and remembers:\n");
+        user.push_str("\nWhat the user has in view and remembers:\n");
         for m in facts {
-            p.push_str("- ");
-            p.push_str(m);
-            p.push('\n');
+            user.push_str("- ");
+            user.push_str(m);
+            user.push('\n');
         }
     }
 
     if ctx.before.trim().is_empty() && ctx.after.trim().is_empty() {
         // Drafting into an EMPTY field — the most common real case (a fresh reply, a blank doc).
-        p.push_str("\nThe field is currently empty — write the opening that best fits the app, the field, and what the user is working on.");
+        user.push_str("\nThe field is currently empty — write the opening that best fits the app, the field, and what the user is working on.");
     } else {
-        p.push_str("\nText before the cursor:\n");
-        p.push_str(&ctx.before);
+        user.push_str("\nText before the cursor:\n");
+        user.push_str(&ctx.before);
         if !ctx.after.trim().is_empty() {
-            p.push_str("\n\nText after the cursor:\n");
-            p.push_str(&ctx.after);
+            user.push_str("\n\nText after the cursor:\n");
+            user.push_str(&ctx.after);
         }
     }
-    p
+    (system, user)
 }
 
 /// The full composition: read the caret context, and if there is one, build the prompt, generate on
@@ -153,8 +163,8 @@ where
     // NOTE: an EMPTY context is still a context — a focused empty field ("write the first line of
     // this reply") is the most common draft. The reader returning Some already means a real,
     // writable field is focused; only reader None is NoContext.
-    let prompt = build_prompt(&ctx, memory, directives);
-    let text = match agent.complete(&prompt) {
+    let (system, user) = build_split_prompt(&ctx, memory, directives);
+    let text = match agent.complete_split(&system, &user) {
         Ok(t) => t,
         Err(e @ crate::llm::LlmError::Unauthorized(..)) => return InlineOutcome::KeyRejected(e.to_string()),
         Err(e) => return InlineOutcome::GenerationFailed(e.to_string()),
@@ -212,27 +222,32 @@ mod tests {
     }
 
     #[test]
-    fn prompt_includes_field_memory_and_surrounding_text() {
-        let p = build_prompt(&ctx(), &["you owe Alice the deck (Fri)".into(), "legal sign-off pending".into()], "");
-        assert!(p.contains("Mail — Re: Q3 roadmap"), "app + field label grounds the prompt: {p}");
-        assert!(p.contains("Output only the text to insert"), "asks for insertion text only");
-        assert!(p.contains("Never ask a question"), "forbids the meta-question failure mode");
-        assert!(p.contains("- you owe Alice the deck (Fri)"), "memory facts are included");
-        assert!(p.contains("Hi Alice,"), "the text before the cursor is included");
+    fn prompt_splits_instructions_from_captured_context() {
+        // The #123 boundary: everything captured lands on the UNTRUSTED side, everything
+        // instructing on OURS — a page that says "ignore the above" is data, not a directive.
+        let (system, user) =
+            build_split_prompt(&ctx(), &["you owe Alice the deck (Fri)".into(), "legal sign-off pending".into()], "");
+        assert!(system.contains("Output only the text to insert"), "asks for insertion text only");
+        assert!(system.contains("Never ask a question"), "forbids the meta-question failure mode");
+        assert!(user.contains("Mail — Re: Q3 roadmap"), "app + field label grounds the context: {user}");
+        assert!(user.contains("- you owe Alice the deck (Fri)"), "memory facts are included");
+        assert!(user.contains("Hi Alice,"), "the text before the cursor is included");
+        assert!(!system.contains("Hi Alice,"), "captured text must never reach the instruction half");
+        assert!(!system.contains("Mail — Re: Q3 roadmap"), "app/field are captured strings too");
     }
 
     #[test]
     fn empty_memory_omits_the_memory_section() {
-        let p = build_prompt(&ctx(), &[], "");
-        assert!(!p.contains("What the user has in view"), "no memory ⇒ no memory section");
+        let (_, user) = build_split_prompt(&ctx(), &[], "");
+        assert!(!user.contains("What the user has in view"), "no memory ⇒ no memory section");
     }
 
     #[test]
     fn after_text_is_included_only_when_present() {
         let mut c = ctx();
         c.after = "Best,\nJordan".into();
-        let p = build_prompt(&c, &[], "");
-        assert!(p.contains("Text after the cursor:\nBest,\nJordan"));
+        let (_, user) = build_split_prompt(&c, &[], "");
+        assert!(user.contains("Text after the cursor:\nBest,\nJordan"));
     }
 
     #[test]
@@ -280,16 +295,17 @@ mod tests {
     }
 
     #[test]
-    fn build_prompt_includes_directives_when_present() {
+    fn directives_ride_on_the_instruction_side() {
         let c = ctx();
-        let p = build_prompt(&c, &[], "User Directives:\n- be terse\n");
-        assert!(p.contains("be terse"));
+        let (system, user) = build_split_prompt(&c, &[], "User Directives:\n- be terse\n");
+        assert!(system.contains("be terse"), "directives are the user's own instructions");
+        assert!(!user.contains("be terse"));
     }
 
     #[test]
     fn build_prompt_omits_directives_when_empty() {
         let c = ctx();
-        let p = build_prompt(&c, &[], "");
-        assert!(!p.contains("User Directives"));
+        let (system, _) = build_split_prompt(&c, &[], "");
+        assert!(!system.contains("User Directives"));
     }
 }
