@@ -84,12 +84,10 @@ pub struct GeometryParams {
 
 impl Default for GeometryParams {
     fn default() -> Self {
-        // enter_lr / enter_bottom: 2pt pad only — hit must hug visible notch silhouette
-        // (not bleed into empty menu-bar left/right/below). Spec Appendix A started at 8/4;
-        // product feedback: that external catch zone felt "outside the notch".
+        // Idle entry is exactly the hardware notch. Hysteresis applies only after entry.
         Self {
-            enter_lr: 2.0,
-            enter_bottom: 2.0,
+            enter_lr: 0.0,
+            enter_bottom: 0.0,
             stay_hysteresis: 2.0,
             exp_margin: 16.0,
             expanded_w: 400.0,
@@ -296,14 +294,13 @@ mod tests {
     }
 
     #[test]
-    fn r_enter_expands_sides_bottom_and_top_overshoot() {
+    fn r_enter_matches_notch_except_unreachable_top_overshoot() {
         let s = internal_screen();
         let idle = idle_rect(s, 200.0, 32.0);
         let r = regions(s, idle, GeometryParams::default());
-        // left/right +2, bottom +2, top +TOP_EDGE_OVERSHOOT (pinned-cursor admission).
-        assert_eq!(r.r_enter.x, idle.x - 2.0);
-        assert_eq!(r.r_enter.max_x(), idle.max_x() + 2.0);
-        assert_eq!(r.r_enter.y, idle.y - 2.0);
+        assert_eq!(r.r_enter.x, idle.x);
+        assert_eq!(r.r_enter.max_x(), idle.max_x());
+        assert_eq!(r.r_enter.y, idle.y);
         assert_eq!(r.r_enter.max_y(), idle.max_y() + TOP_EDGE_OVERSHOOT);
     }
 

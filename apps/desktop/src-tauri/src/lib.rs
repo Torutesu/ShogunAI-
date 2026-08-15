@@ -202,6 +202,10 @@ pub fn run() {
             notch_exec::mac::run_notch_action,
             notch_exec::mac::confirm_notch_action,
             inline_source::mac::inline_at_cursor,
+            inline_source::mac::scribe_open,
+            inline_source::mac::scribe_submit,
+            inline_source::mac::scribe_close,
+            inline_source::mac::scribe_cancel,
             inline_source::mac::shogun_status,
             inline_source::mac::shogun_state,
             inline_source::mac::shogun_chat,
@@ -445,15 +449,18 @@ fn setup_macos(app: &tauri::App) {
     // T-07/T-08: mouse tap → integrated engine + measurement streams.
     let (tx, rx) = std::sync::mpsc::channel::<hover::TapEvent>();
     hover::start(tx);
-    // Idle early-reject zone = notch silhouette + 2pt pad (not a full menu-bar strip).
+    // Idle early-reject zone = exact hardware-notch rectangle.
     {
         use geometry::GeometryParams;
         let p = GeometryParams::default();
-        hover::set_hover_band_cg(g.idle.h + p.enter_bottom, g.idle.w + 2.0 * p.enter_lr);
+        hover::set_hover_band_cg(
+            g.activation.h + p.enter_bottom,
+            g.activation.w + 2.0 * p.enter_lr,
+        );
         eprintln!(
             "[spike] hover band Idle: {:.0}×{:.0} (visible idle {:.0}×{:.0})",
-            g.idle.w + 2.0 * p.enter_lr,
-            g.idle.h + p.enter_bottom,
+            g.activation.w + 2.0 * p.enter_lr,
+            g.activation.h + p.enter_bottom,
             g.idle.w,
             g.idle.h
         );
@@ -468,12 +475,19 @@ fn setup_macos(app: &tauri::App) {
             is_notch: g.is_notch,
             display_count: g.display_count,
             screen: g.screen,
-            idle: g.idle,
+            idle_hit: g.activation,
             // Every display's own notch geometry, so hovering the notch on a second monitor is
             // hit-tested against that monitor rather than against the primary's coordinates.
             per_display: geometry::mac::read_all(mtm)
                 .into_iter()
-                .map(|d| (d.screen, d.regions, d.screen.max_y() - d.menubar_h, d.idle))
+                .map(|d| {
+                    (
+                        d.screen,
+                        d.regions,
+                        d.screen.max_y() - d.menubar_h,
+                        d.activation,
+                    )
+                })
                 .collect(),
         },
         rx,
@@ -492,7 +506,10 @@ fn setup_macos(app: &tauri::App) {
 
     // T-11/T-12 sanity: Accessibility trust + one focused-window walk through the tested
     // policy. Event-driven focus subscription is on-device work (runbook D-03/D-05).
-    eprintln!("[spike] accessibility trusted: {}", axcache::ax_trusted_silent());
+    eprintln!(
+        "[spike] accessibility trusted: {}",
+        axcache::ax_trusted_silent()
+    );
     // Issue #46: on a fresh install (or a re-permission after an update) the app is running but
     // inert — nothing captures, ⌥-tap and hover taps are refused. Show the branded guide instead of
     // leaving the user in a silent dead end. Gated on the SILENT trust check + persisted
@@ -940,7 +957,8 @@ fn build_panel_window(handle: &tauri::AppHandle) {
         .always_on_top(true)
         // Native shadow under the bezel reads as a floating gap (boring.notch: hasShadow=false).
         .shadow(false)
-        .inner_size(640.0, 300.0)
+        // Start at the hardware-notch weld. React may grow this after a deliberate open.
+        .inner_size(180.0, 32.0)
         .visible(false)
         .focused(false)
         .title_bar_style(tauri::TitleBarStyle::Overlay);
@@ -1661,6 +1679,129 @@ pub(crate) fn float_on_all_spaces(win: &tauri::WebviewWindow) {
     }
 }
 
+mod right_option_tap {
+    use std::time::{Duration, Instant};
+
+    pub const DOUBLE_TAP_WINDOW: Duration = Duration::from_millis(300);
+    /// Give the second flagsChanged callback time to cancel an exact-boundary tap. This does not
+    /// widen acceptance: State still accepts only taps at or below 300 ms.
+    pub const DISPATCH_GRACE: Duration = Duration::from_millis(20);
+
+    #[derive(Debug, PartialEq, Eq)]
+    pub enum CleanTapAction {
+        QueueDraft {
+            generation: u64,
+            superseded_draft: Option<u64>,
+        },
+        StartScribe,
+    }
+
+    #[derive(Default)]
+    pub struct State {
+        pending_draft: Option<(Instant, u64)>,
+        next_generation: u64,
+    }
+
+    impl State {
+        pub fn cancel_pending(&mut self) {
+            self.pending_draft = None;
+        }
+
+        pub fn clean_tap(&mut self, now: Instant) -> CleanTapAction {
+            if let Some((first, _)) = self.pending_draft {
+                if now.saturating_duration_since(first) <= DOUBLE_TAP_WINDOW {
+                    self.pending_draft = None;
+                    return CleanTapAction::StartScribe;
+                }
+            }
+
+            let superseded_draft = self.pending_draft.take().map(|(_, generation)| generation);
+            self.next_generation = self.next_generation.wrapping_add(1);
+            let generation = self.next_generation;
+            self.pending_draft = Some((now, generation));
+            CleanTapAction::QueueDraft {
+                generation,
+                superseded_draft,
+            }
+        }
+
+        pub fn take_due_draft(&mut self, now: Instant) -> Option<u64> {
+            let due = self.pending_draft.filter(|(started, _)| {
+                now.saturating_duration_since(*started) >= DOUBLE_TAP_WINDOW
+            });
+            if due.is_some() {
+                self.pending_draft = None;
+            }
+            due.map(|(_, generation)| generation)
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::{CleanTapAction, State, DOUBLE_TAP_WINDOW};
+        use std::time::{Duration, Instant};
+
+        #[test]
+        fn second_clean_tap_at_exact_window_starts_scribe() {
+            let start = Instant::now();
+            let mut state = State::default();
+            assert_eq!(
+                state.clean_tap(start),
+                CleanTapAction::QueueDraft {
+                    generation: 1,
+                    superseded_draft: None,
+                }
+            );
+            assert_eq!(
+                state.clean_tap(start + DOUBLE_TAP_WINDOW),
+                CleanTapAction::StartScribe
+            );
+            assert_eq!(state.take_due_draft(start + DOUBLE_TAP_WINDOW), None);
+        }
+
+        #[test]
+        fn first_tap_becomes_due_at_300ms() {
+            let start = Instant::now();
+            let mut state = State::default();
+            state.clean_tap(start);
+            assert_eq!(
+                state.take_due_draft(start + Duration::from_millis(299)),
+                None
+            );
+            assert_eq!(state.take_due_draft(start + DOUBLE_TAP_WINDOW), Some(1));
+        }
+
+        #[test]
+        fn late_second_tap_preserves_old_draft_and_queues_new_one() {
+            let start = Instant::now();
+            let mut state = State::default();
+            state.clean_tap(start);
+            assert_eq!(
+                state.clean_tap(start + DOUBLE_TAP_WINDOW + Duration::from_nanos(1)),
+                CleanTapAction::QueueDraft {
+                    generation: 2,
+                    superseded_draft: Some(1),
+                }
+            );
+        }
+
+        #[test]
+        fn poisoned_second_tap_cancels_pending_draft() {
+            let start = Instant::now();
+            let mut state = State::default();
+            state.clean_tap(start);
+            state.cancel_pending();
+            assert_eq!(
+                state.clean_tap(start + Duration::from_millis(10)),
+                CleanTapAction::QueueDraft {
+                    generation: 2,
+                    superseded_draft: None,
+                }
+            );
+        }
+    }
+}
+
 /// TAP right ⌥ (Option) alone → draft at the cursor. Semantics of a "tap": right Option goes down with no
 /// other modifier, no other key is pressed while it is held, and it is released within 500ms.
 /// That keeps every normal Option use intact — ⌥J summon, ⌥-arrow word nav, ⌥+letter special
@@ -1672,7 +1813,7 @@ fn watch_option_tap(app: &tauri::App) {
     use objc2::runtime::AnyObject;
     use objc2::{class, msg_send};
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
     use std::time::Instant;
 
     // State machine for a clean "Option tap":
@@ -1708,15 +1849,72 @@ fn watch_option_tap(app: &tauri::App) {
     const RIGHT_OPTION_KEY_CODE: u16 = 61;
     const MAX_TAP_MS: u128 = 500;
 
+    let tap_state = Arc::new(Mutex::new(right_option_tap::State::default()));
+
+    fn dispatch_draft(handle: &tauri::AppHandle) {
+        use tauri::Manager;
+        if let Some(db) = handle.try_state::<shogun_core::daemon::Db>() {
+            let warm = handle
+                .try_state::<shogun_core::daemon::ReplyContextCache>()
+                .and_then(|c| c.current());
+            inline_source::mac::run_inline_at_cursor(db.inner().clone(), warm, handle.clone());
+        }
+    }
+
+    fn queue_draft(
+        handle: tauri::AppHandle,
+        state: Arc<Mutex<right_option_tap::State>>,
+        generation: u64,
+    ) {
+        std::thread::spawn(move || {
+            std::thread::sleep(
+                right_option_tap::DOUBLE_TAP_WINDOW + right_option_tap::DISPATCH_GRACE,
+            );
+            let due = state
+                .lock()
+                .ok()
+                .and_then(|mut state| state.take_due_draft(Instant::now()))
+                == Some(generation);
+            if due {
+                eprintln!("[shell] right ⌥ tap — draft at cursor");
+                dispatch_draft(&handle);
+            }
+        });
+    }
+
+    fn start_scribe(handle: &tauri::AppHandle) {
+        use tauri::Manager;
+
+        let Some(db) = handle.try_state::<shogun_core::daemon::Db>() else {
+            eprintln!("[shell] Scribe open skipped: database unavailable");
+            return;
+        };
+        let warm = handle
+            .try_state::<shogun_core::daemon::ReplyContextCache>()
+            .and_then(|cache| cache.current());
+        // Capture AX target before this process focuses its own panel. Frontend receives only the
+        // resulting content-free lifecycle event.
+        if let Err(error) =
+            inline_source::mac::open_scribe(db.inner().clone(), warm, handle.clone())
+        {
+            eprintln!("[shell] Scribe open failed: {error}");
+        }
+    }
+
     /// Any non-Option input during the hold kills the tap until Option is released.
-    fn poison() {
+    fn poison(state: &Arc<Mutex<right_option_tap::State>>) {
         POISONED.store(true, Ordering::Relaxed);
         ARMED.store(false, Ordering::Relaxed);
+        if let Ok(mut state) = state.lock() {
+            state.cancel_pending();
+        }
     }
 
     // SAFETY: main thread (setup); monitors and blocks are intentionally leaked (app lifetime).
     unsafe {
-        let disarm_block = block2::RcBlock::new(move |_ev: *mut AnyObject| poison());
+        let tap_state_for_poison = tap_state.clone();
+        let disarm_block =
+            block2::RcBlock::new(move |_ev: *mut AnyObject| poison(&tap_state_for_poison));
         let key_mon: *mut AnyObject = msg_send![
             class!(NSEvent),
             addGlobalMonitorForEventsMatchingMask: MASK_KEY_DOWN,
@@ -1730,6 +1928,7 @@ fn watch_option_tap(app: &tauri::App) {
         std::mem::forget(disarm_block);
 
         let handle = app.handle().clone();
+        let tap_state_for_flags = tap_state.clone();
         let flags_block = block2::RcBlock::new(move |ev: *mut AnyObject| {
             if ev.is_null() {
                 return;
@@ -1742,18 +1941,18 @@ fn watch_option_tap(app: &tauri::App) {
 
             if others_down {
                 // A second modifier is part of this chord — poison for the rest of the hold.
-                poison();
+                poison(&tap_state_for_flags);
                 return;
             }
             if key_code != RIGHT_OPTION_KEY_CODE && ARMED.load(Ordering::Relaxed) {
                 // Pressing or releasing left Option during a right-Option hold is still a chord.
-                poison();
+                poison(&tap_state_for_flags);
                 return;
             }
             if option_down && !opt_prev {
                 if key_code != RIGHT_OPTION_KEY_CODE {
                     // Left Option is ordinary keyboard input, never SHOGUN's refine trigger.
-                    poison();
+                    poison(&tap_state_for_flags);
                     if let Ok(mut g) = DOWN_AT.lock() {
                         *g = None;
                     }
@@ -1779,19 +1978,26 @@ fn watch_option_tap(app: &tauri::App) {
                     && !poisoned
                     && held.is_some_and(|h| h <= MAX_TAP_MS)
                 {
-                    eprintln!("[shell] right ⌥ tap — draft at cursor");
-                    use tauri::Manager;
-                    if let Some(db) = handle.try_state::<shogun_core::daemon::Db>() {
-                        // The ⌥-tap is the fastest path in the product: read the pack the focus
-                        // path already built rather than assembling anything now.
-                        let warm = handle
-                            .try_state::<shogun_core::daemon::ReplyContextCache>()
-                            .and_then(|c| c.current());
-                        inline_source::mac::run_inline_at_cursor(
-                            db.inner().clone(),
-                            warm,
-                            handle.clone(),
-                        );
+                    let action = tap_state_for_flags
+                        .lock()
+                        .ok()
+                        .map(|mut state| state.clean_tap(Instant::now()));
+                    match action {
+                        Some(right_option_tap::CleanTapAction::StartScribe) => {
+                            eprintln!("[shell] right ⌥ double-tap — Scribe Mode");
+                            start_scribe(&handle);
+                        }
+                        Some(right_option_tap::CleanTapAction::QueueDraft {
+                            generation,
+                            superseded_draft,
+                        }) => {
+                            if superseded_draft.is_some() {
+                                eprintln!("[shell] right ⌥ tap — draft at cursor");
+                                dispatch_draft(&handle);
+                            }
+                            queue_draft(handle.clone(), tap_state_for_flags.clone(), generation);
+                        }
+                        None => {}
                     }
                 }
             }

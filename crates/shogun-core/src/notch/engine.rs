@@ -464,10 +464,9 @@ mod tests {
     }
 
     #[test]
-    fn welded_hide_floors_hover_band_and_chin_hit() {
-        // Visual welded hide is 180×32; Idle silhouette is notch_w × (notch_h + content drop).
+    fn welded_hide_floors_hover_band_to_hardware_notch() {
         let screen = Rect::new(0.0, 0.0, 1512.0, 982.0);
-        let idle_h = 32.0 + 44.0;
+        let idle_h = 32.0;
         let idle = idle_rect(screen, 180.0, idle_h);
         let regs = regions(screen, idle, GeometryParams::default());
         let menubar_min_y = screen.max_y() - 24.0;
@@ -489,11 +488,11 @@ mod tests {
         // 180×32 welded hide: 180 > 179 must not trigger open-band width (212pt).
         assert!((band_w - (idle.w + 2.0 * p.enter_lr)).abs() < 1.0);
 
-        // Lower chin: inside full Idle rect but below the 32pt visual panel.
+        // A point below the hardware notch must not begin hover intent.
         let cx = idle.mid_x();
-        let chin_ns_y = idle.y + 20.0;
-        let (gx, gy) = cg(cx, chin_ns_y, 982.0);
+        let below_notch_y = idle.y - 1.0;
+        let (gx, gy) = cg(cx, below_notch_y, 982.0);
         let out = e.on_input(EngineInput::MouseCg { x: gx, y: gy, t_ms: 100, buttons: 0 });
-        assert!(out.iter().any(|o| matches!(o, EngineOutput::WebviewState(State::HoverIntent))));
+        assert!(!out.iter().any(|o| matches!(o, EngineOutput::WebviewState(State::HoverIntent))));
     }
 }

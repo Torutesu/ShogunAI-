@@ -20,6 +20,13 @@ export const STRINGS = {
     // composer
     ask: "Ask ShogunAI…",
     draftTitle: "Draft where you're typing (tap ⌥)",
+    scribeTitle: "Edit at your cursor",
+    scribeLabel: "Edit instruction",
+    scribePlaceholder: "Tell Shogun what to change…",
+    scribeHint: "Press Enter to apply · Esc to close",
+    scribeSubmit: "Apply edit",
+    scribeProcessing: "Applying…",
+    scribeError: "Couldn’t apply edit",
     // ⌥-tap feedback. Every one of these used to look the same from the outside — nothing —
     // which made a rejected key and a broken shortcut indistinguishable.
     inlineDrafting: "Drafting…",

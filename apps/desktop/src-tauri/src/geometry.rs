@@ -29,8 +29,10 @@ pub mod mac {
         pub notch_w: f64,
         pub notch_h: f64,
         pub menubar_h: f64,
-        /// Idle hit/visual rect (notch_h + content drop on real-notch machines).
+        /// Visible idle rect (notch height plus content drop on real-notch machines).
         pub idle: Rect,
+        /// Exact hardware-notch rectangle used to begin hover.
+        pub activation: Rect,
         pub regions: Regions,
         /// Height of `NSScreen.screens[0]` — the primary display that anchors the CG
         /// global coordinate space. This, NOT the panel screen's height, is the
@@ -91,7 +93,8 @@ pub mod mac {
         // Real-notch: Idle hit/visual height = silicon cutout + content drop below it.
         let idle_h = idle_height(notch_h, is_notch);
         let idle = idle_rect(screen_rect, notch_w, idle_h);
-        let regs = regions(screen_rect, idle, GeometryParams::default());
+        let activation = idle_rect(screen_rect, notch_w, notch_h);
+        let regs = regions(screen_rect, activation, GeometryParams::default());
         ScreenGeometry {
             is_notch,
             screen: screen_rect,
@@ -99,6 +102,7 @@ pub mod mac {
             notch_h,
             menubar_h,
             idle,
+            activation,
             regions: regs,
             primary_height,
             display_count,
@@ -137,7 +141,8 @@ pub mod mac {
 
         let idle_h = idle_height(notch_h, is_notch);
         let idle = idle_rect(screen_rect, notch_w, idle_h);
-        let regs = regions(screen_rect, idle, GeometryParams::default());
+        let activation = idle_rect(screen_rect, notch_w, notch_h);
+        let regs = regions(screen_rect, activation, GeometryParams::default());
         Some(ScreenGeometry {
             is_notch,
             screen: screen_rect,
@@ -145,6 +150,7 @@ pub mod mac {
             notch_h,
             menubar_h,
             idle,
+            activation,
             regions: regs,
             primary_height: f.size.height,
             display_count,

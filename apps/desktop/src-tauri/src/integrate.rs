@@ -143,8 +143,8 @@ pub mod mac {
         pub is_notch: bool,
         pub display_count: u32,
         pub screen: crate::geometry::Rect,
-        pub idle: crate::geometry::Rect,
-        /// One entry per attached display: screen rect, regions, menubar floor, idle rect.
+        pub idle_hit: crate::geometry::Rect,
+        /// One entry per attached display: screen rect, regions, menubar floor, idle hit rect.
         /// The engine hit-tests against whichever of these the pointer is inside, so the notch
         /// works on a second monitor instead of only where the panel happens to live.
         pub per_display: Vec<(crate::geometry::Rect, Regions, f64, crate::geometry::Rect)>,
@@ -301,7 +301,7 @@ pub mod mac {
                 HoverParams::default(),
                 Params::default(),
                 geo.screen,
-                geo.idle,
+                geo.idle_hit,
             );
             let timers = TimerSvc::spawn(ev_tx);
             let mut prev_state = State::Idle;
