@@ -32,6 +32,8 @@ pub mod capture;
 /// first shogun-core → shogun-memory edge).
 #[cfg(feature = "db")]
 pub mod daemon;
+/// 朝・夜サマリーの配達判定（Issue #10）— 純粋ロジック、シェルが時計と状態を供給する。
+pub mod daily_delivery;
 /// The daemon's Memory API data backend — implements shogun-mcp's `MemoryBackend` over `Db`
 /// (feature `db`).
 #[cfg(feature = "db")]
