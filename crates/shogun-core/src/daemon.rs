@@ -3252,6 +3252,25 @@ mod tests {
     }
 
     #[test]
+    fn an_ordinary_missing_row_is_not_a_fault() {
+        // The failure mode this guards against is a warning that is always on: every `get` for a
+        // row that simply does not exist would light "memory isn't responding" if a miss were
+        // treated as a query error. The memory helpers map a missing row to `Ok(None)` — this
+        // pins that they keep doing so through the health seam.
+        let db = Db::open_in_memory(clock(1_000)).unwrap();
+        assert_eq!(db.person(404), None);
+        assert_eq!(db.commitment(404), None);
+        assert_eq!(db.open_loop(404), None);
+        assert_eq!(db.meeting_note(404), None);
+        assert_eq!(db.meeting_recap_full(404), None);
+        assert_eq!(db.brief_for("2026-08-15"), None);
+        assert_eq!(db.event_source(404), None);
+        let h = db.memory_health();
+        assert!(!h.degraded, "a miss is an answer");
+        assert_eq!(h.faults_total, 0);
+    }
+
+    #[test]
     fn a_capture_write_failure_marks_memory_degraded() {
         let db = Db::open_in_memory(clock(1_000)).unwrap();
         drop_table(&db, "event_log");
