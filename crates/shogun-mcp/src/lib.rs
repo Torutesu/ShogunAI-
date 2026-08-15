@@ -28,6 +28,8 @@ pub mod service_gate;
 /// What the model may see: the LLM-facing tool catalog + the "Connected services" prompt block
 /// (issue #81, `docs/mcp/01-architecture.md` §5).
 pub mod tool_catalog;
+/// The read-tool conversation loop (issue #81 step 2): resolve → gate → run → tool_result.
+pub mod tool_loop;
 pub mod slack;
 pub mod sync;
 /// Visual recall structured API helpers (Memory API symmetry).

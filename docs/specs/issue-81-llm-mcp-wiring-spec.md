@@ -102,7 +102,15 @@ user message
    - **フィルタは `service_gate::authorize_op` を再利用**する（条件を書き写さない）。定義集合が「ゲートが許す集合の部分集合」であることが構造的に保証され、両者がドリフトしない
    - **本 PR は read 系のみ**を載せる。write/send をルーティング（step 3）より先に定義へ載せることは不変条件4が禁じる事故そのもの。`tests/invariant4.rs` に「wave × plan × conn の全組み合わせで、載るツールは必ず `OpClass::Read`」を追加
    - Gmail の3開示同意は呼び出し側が `ConnState::Disconnected` に畳んで渡す（未同意 = 未接続扱い）。同意判定を読み手ごとに書き直さないための単一決定点
-2. `feat(agents): 会話ループ（read 系のみ、mock transport）`
+2. `feat(agents): 会話ループ（read 系のみ、mock transport）` — **済 2026-08-15**（`shogun-mcp/src/tool_loop.rs`）
+
+   実装時に確定した設計判断:
+   - **配置は `shogun-agents` ではなく `shogun-mcp`**。依存が `shogun-mcp → shogun-agents` の一方向であり、ループはゲート・カタログ・権限モデルを同時に見る必要があるため、`shogun-agents` に置くと循環する。`tests/invariant4.rs` を shogun-mcp に置いてあるのと同じ理由
+   - **同期 + シーム駆動**。`ModelTurnSource` と `ReadToolRunner` の2トレイトだけに依存する純粋なオーケストレーションなので、予算・拒否・タイムアウト・停止性のすべてが Linux でランタイム無しにテストできる。async 境界は Dream Cycle と同じくシェル側（`rt.block_on`）に置く
+   - **停止性はループの性質**として保証する。ツール予算だけでは停止しない（予算切れ後もモデルがツールを要求し続けられる）ため、モデルターン数の backstop（`MAX_TOOL_USES + 3`）を別に持つ
+   - **拒否は予算を消費しない**。拒否はサービス往復を発生させていないので、混乱したモデルがデータに到達する前にターンを使い切ることを防ぐ
+   - **失敗結果を捏造しない**。タイムアウト・トランスポート失敗はいずれも `is_error: true` の tool_result として返す（モデルがそれを土台に回答を組み立てるのを防ぐ）
+   - 未記述サービスは `Disconnected` 扱い（absent ≠ permissive）
 3. `feat(agents): write/send 系の L1-L3 ルーティング + invariant4 テスト拡張`
 4. `feat(core): traceability Route::Mcp + UI イベント発火`
 5. `test(e2e): 実機 Calendar 結線検証`（#80 完了後）
