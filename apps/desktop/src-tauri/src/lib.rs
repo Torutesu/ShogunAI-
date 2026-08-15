@@ -16,6 +16,7 @@ pub mod axcache;
 mod model_fetch;
 mod capture_source;
 mod connectors;
+mod daily_summaries;
 #[cfg(all(target_os = "macos", feature = "visual-recall-ocr"))]
 mod screen_ocr;
 mod startup_health;
@@ -364,6 +365,12 @@ pub fn run() {
         voice_session::mac::set_voice_enabled,
         voice_session::mac::voice_dismiss,
         voice_session::mac::voice_force_end,
+        // Daily summaries (issue #10): delivery judgement + seen-state + the Evening card data.
+        daily_summaries::mac::summary_state,
+        daily_summaries::mac::mark_summary_seen,
+        daily_summaries::mac::get_daily_summary_settings,
+        daily_summaries::mac::set_daily_summary_settings,
+        daily_summaries::mac::evening_wrap,
         user_config_watch::get_user_config_status,
         user_config_watch::open_shougun_md,
         user_config_watch::regenerate_shougun_md,
