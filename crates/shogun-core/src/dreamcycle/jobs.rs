@@ -59,6 +59,26 @@ pub trait Summarizer {
     fn is_generative(&self) -> bool {
         false
     }
+
+    /// One Charm line for the morning greeting (issue #10, docs/daily-summaries-design.md §4):
+    /// today's calendar headlines seen through the user's own `# Charm` strengths. The default is
+    /// `None` — only a generative (Batch-lane) summariser may write one, so a degraded night
+    /// omits the line entirely rather than faking encouragement (honest degradation, FR-MB-04).
+    fn charm_line(&self, _req: &CharmRequest<'_>) -> Option<String> {
+        None
+    }
+}
+
+/// Input for [`Summarizer::charm_line`]. `ng_patterns` MUST reach the generation prompt as
+/// exclusions (`NGCharmPatterns`, §4) — the user listed the compliments they never want.
+#[derive(Debug, Clone, Copy)]
+pub struct CharmRequest<'a> {
+    /// Today's calendar-equivalent titles (the brief's "Today" section, already assembled).
+    pub calendar_titles: &'a [String],
+    /// `Charm.CoreStrengths` from `Shougun.md` — non-empty by the caller's gate.
+    pub core_strengths: &'a [String],
+    /// `Charm.NGCharmPatterns` — phrasings the line must avoid.
+    pub ng_patterns: &'a [String],
 }
 
 /// The always-available, network-free summariser (the Linux-test default): pull each event's lead
@@ -118,11 +138,22 @@ pub struct DbDreamRunner<'a, C: Classifier, S: Summarizer> {
     classifier: &'a C,
     summarizer: &'a S,
     now_ms: i64,
+    /// The user's `# Charm` section (issue #10), when it parsed and the caller chose to supply
+    /// it. `None` (the default) turns the morning charm line off — the brief simply omits it.
+    charm: Option<crate::user_config::Charm>,
 }
 
 impl<'a, C: Classifier, S: Summarizer> DbDreamRunner<'a, C, S> {
     pub fn new(db: &'a Db, classifier: &'a C, summarizer: &'a S, now_ms: i64) -> Self {
-        Self { db, classifier, summarizer, now_ms }
+        Self { db, classifier, summarizer, now_ms, charm: None }
+    }
+
+    /// Supply the parsed `# Charm` config for the MorningBrief job. The on-device scheduler reads
+    /// `Shougun.md` and passes it here; tests inject fixtures. Left unset, the charm line stays
+    /// absent regardless of the summariser.
+    pub fn with_charm(mut self, charm: Option<crate::user_config::Charm>) -> Self {
+        self.charm = charm;
+        self
     }
 
     /// Compression (Full only): summarise each thread active in the window and fill
@@ -289,7 +320,18 @@ impl<'a, C: Classifier, S: Summarizer> DbDreamRunner<'a, C, S> {
         // Suggested actions are Fusion's runtime concern (the panel ranks them against the live
         // screen); the nightly brief persists none rather than freezing stale ones overnight.
         let brief = assemble_brief(calendar, &due, &self.db.open_loops(), what_happened, Vec::new());
-        let payload = payload_from_brief(&date, &brief);
+        let mut payload = payload_from_brief(&date, &brief);
+        // The Charm line (issue #10, §4): only when `# Charm` was supplied with real strengths,
+        // and only from a summariser that can actually generate (the trait default is None, so an
+        // extractive night omits the line — honest degradation, never canned encouragement).
+        if let Some(charm) = self.charm.as_ref().filter(|c| !c.core_strengths.is_empty()) {
+            let titles: Vec<String> = payload.today.iter().map(|s| s.title.clone()).collect();
+            payload.charm_line = self.summarizer.charm_line(&CharmRequest {
+                calendar_titles: &titles,
+                core_strengths: &charm.core_strengths,
+                ng_patterns: &charm.ng_charm_patterns,
+            });
+        }
         let json = serde_json::to_string(&payload).map_err(|e| format!("brief serialize: {e}"))?;
         self.db
             .save_brief(&date, &json, self.summarizer.is_generative())
@@ -939,6 +981,100 @@ mod tests {
         assert!(row.generated, "a Batch-backed summariser marks the brief generated");
         let payload: shogun_memory::briefs::BriefPayload = serde_json::from_str(&row.payload).unwrap();
         assert_eq!(payload.what_happened, vec!["A generated recap of the day.".to_string()]);
+    }
+
+    /// A stand-in for the on-device Batch summariser that also writes the Charm line, echoing
+    /// its inputs so the test can pin what reached the seam.
+    struct CharmCapable;
+    impl Summarizer for CharmCapable {
+        fn summarize(&self, _: &[EventText]) -> Option<String> {
+            Some("A generated recap.".into())
+        }
+        fn is_generative(&self) -> bool {
+            true
+        }
+        fn charm_line(&self, req: &CharmRequest<'_>) -> Option<String> {
+            Some(format!(
+                "strengths={} titles={} ng={}",
+                req.core_strengths.len(),
+                req.calendar_titles.len(),
+                req.ng_patterns.len()
+            ))
+        }
+    }
+
+    fn charm_fixture() -> crate::user_config::Charm {
+        crate::user_config::Charm {
+            core_strengths: vec!["turning chaos into a roadmap".into()],
+            ng_charm_patterns: vec!["hustle praise".into()],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_charm_capable_night_with_charm_config_persists_the_line() {
+        // Midday, not midnight: the overdue fixture's due time (now − 5s) must land on TODAY's
+        // calendar day so the brief's "Today" section gives the charm seam a title to see.
+        let now = 100 * 24 * 60 * 60 * 1000 + 12 * 60 * 60 * 1000;
+        let db = db_at(now);
+        overdue_commitment(&db, "send the deck", now);
+
+        let clf = LocalRuleClassifier;
+        let sum = CharmCapable;
+        let runner = DbDreamRunner::new(&db, &clf, &sum, now).with_charm(Some(charm_fixture()));
+        runner.run(JobKind::MorningBrief, now - 86_400_000, now).unwrap();
+
+        let row = db.brief_for(&crate::daemon::local_date_string(now)).unwrap();
+        let payload: shogun_memory::briefs::BriefPayload = serde_json::from_str(&row.payload).unwrap();
+        // The due-today commitment doubles as a calendar line, so the seam saw 1 title.
+        assert_eq!(payload.charm_line.as_deref(), Some("strengths=1 titles=1 ng=1"));
+    }
+
+    #[test]
+    fn no_charm_config_means_no_line_even_from_a_generative_summarizer() {
+        let now = 100 * 24 * 60 * 60 * 1000;
+        let db = db_at(now);
+        overdue_commitment(&db, "send the deck", now);
+
+        let clf = LocalRuleClassifier;
+        let sum = CharmCapable;
+        // No `# Charm` supplied at all, and separately: supplied but with empty strengths.
+        let runner = DbDreamRunner::new(&db, &clf, &sum, now);
+        runner.run(JobKind::MorningBrief, now - 86_400_000, now).unwrap();
+        let payload: shogun_memory::briefs::BriefPayload = serde_json::from_str(
+            &db.brief_for(&crate::daemon::local_date_string(now)).unwrap().payload,
+        )
+        .unwrap();
+        assert_eq!(payload.charm_line, None, "no config → no line");
+
+        let empty = crate::user_config::Charm::default();
+        let runner = DbDreamRunner::new(&db, &clf, &sum, now).with_charm(Some(empty));
+        runner.run(JobKind::MorningBrief, now - 86_400_000, now).unwrap();
+        let payload: shogun_memory::briefs::BriefPayload = serde_json::from_str(
+            &db.brief_for(&crate::daemon::local_date_string(now)).unwrap().payload,
+        )
+        .unwrap();
+        assert_eq!(payload.charm_line, None, "empty CoreStrengths → no line");
+    }
+
+    #[test]
+    fn an_extractive_night_omits_the_charm_line_even_with_config() {
+        // Honest degradation (FR-MB-04): the default trait impl returns None, so a night that
+        // fell back to the extractive summariser never fakes encouragement.
+        let now = 100 * 24 * 60 * 60 * 1000;
+        let db = db_at(now);
+        overdue_commitment(&db, "send the deck", now);
+
+        let clf = LocalRuleClassifier;
+        let sum = LocalExtractiveSummarizer;
+        let runner = DbDreamRunner::new(&db, &clf, &sum, now).with_charm(Some(charm_fixture()));
+        runner.run(JobKind::MorningBrief, now - 86_400_000, now).unwrap();
+
+        let payload: shogun_memory::briefs::BriefPayload = serde_json::from_str(
+            &db.brief_for(&crate::daemon::local_date_string(now)).unwrap().payload,
+        )
+        .unwrap();
+        assert_eq!(payload.charm_line, None);
     }
 
     #[test]

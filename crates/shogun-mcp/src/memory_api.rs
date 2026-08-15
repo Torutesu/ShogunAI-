@@ -17,6 +17,10 @@ pub enum Tool {
     MemorySearch,
     MemoryGetContext,
     MemoryGetContextPack,
+    /// Today's Evening Wrap (issue #10, §6.17): the same deterministic aggregation the notch card
+    /// shows — outcome counts, still-open, tomorrow, loose ends. A read; the confidence gate is
+    /// applied by the assembler (fusion) exactly as for the card (invariant 6).
+    MemoryGetWrap,
     StatePeopleList,
     StatePeopleGet,
     StateProjectsList,
@@ -49,6 +53,7 @@ pub const ALL_TOOLS: &[Tool] = &[
     Tool::MemorySearch,
     Tool::MemoryGetContext,
     Tool::MemoryGetContextPack,
+    Tool::MemoryGetWrap,
     Tool::StatePeopleList,
     Tool::StatePeopleGet,
     Tool::StateProjectsList,
@@ -78,6 +83,7 @@ impl Tool {
             Tool::MemorySearch => "memory.search",
             Tool::MemoryGetContext => "memory.get_context",
             Tool::MemoryGetContextPack => "memory.get_context_pack",
+            Tool::MemoryGetWrap => "memory.get_wrap",
             Tool::StatePeopleList => "state.people.list",
             Tool::StatePeopleGet => "state.people.get",
             Tool::StateProjectsList => "state.projects.list",
@@ -124,6 +130,7 @@ pub fn tool_level(tool: Tool) -> ApiLevel {
         Tool::MemorySearch
         | Tool::MemoryGetContext
         | Tool::MemoryGetContextPack
+        | Tool::MemoryGetWrap
         | Tool::StatePeopleList
         | Tool::StatePeopleGet
         | Tool::StateProjectsList
@@ -270,7 +277,7 @@ mod tests {
         for &t in ALL_TOOLS {
             let _ = tool_level(t); // exhaustive match means this cannot be undefined
         }
-        assert_eq!(ALL_TOOLS.len(), 23);
+        assert_eq!(ALL_TOOLS.len(), 24);
     }
 
     #[test]
@@ -295,6 +302,7 @@ mod tests {
                     Tool::MemorySearch
                         | Tool::MemoryGetContext
                         | Tool::MemoryGetContextPack
+                        | Tool::MemoryGetWrap
                         | Tool::StatePeopleList
                         | Tool::StatePeopleGet
                         | Tool::StateProjectsList

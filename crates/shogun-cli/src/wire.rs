@@ -56,6 +56,7 @@ pub fn to_call(command: &Command, include_low: bool) -> Option<HttpCall> {
         Command::Propose { description } => post("/v1/state/proposals".into(), description.clone()),
         // `run` carries the action JSON spec (e.g. '{"kind":"local_search","query":"x"}').
         Command::Run { agent } => post("/v1/actions/execute".into(), agent.clone()),
+        Command::Wrap => get("/v1/memory/wrap".to_string()),
         Command::Onboarding => get("/v1/device/onboarding".to_string()),
         Command::Lessons(cmd) => match cmd {
             LessonsCommand::List => get("/v1/lessons".to_string()),
@@ -109,6 +110,11 @@ mod tests {
             "/v1/state/commitments/7"
         );
         assert_eq!(to_call(&Command::OpenLoops(ListOrGet::List), false).unwrap().path, "/v1/state/open_loops");
+        // Issue #10: `shogun wrap` reads the same endpoint the notch card's data comes from.
+        assert_eq!(
+            to_call(&Command::Wrap, false).unwrap(),
+            HttpCall { method: "GET", path: "/v1/memory/wrap".into(), body: None }
+        );
     }
 
     #[test]

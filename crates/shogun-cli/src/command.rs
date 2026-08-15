@@ -42,6 +42,8 @@ pub enum Command {
     Propose { description: String },
     /// `shogun run <agent>` → launch a preset agent (level follows the action).
     Run { agent: String },
+    /// `shogun wrap` → today's Evening Wrap (issue #10, invariant 6 — the notch card as a read).
+    Wrap,
     /// `shogun onboarding` → this device's onboarding / first-run setup state (issue #6).
     Onboarding,
     /// `shogun api status` → report the running REST port (FR-API-01).
@@ -97,6 +99,7 @@ impl Command {
             Command::Note { .. } => Tool::MemoryAppendNote,
             Command::Propose { .. } => Tool::StateProposeUpdate,
             Command::Run { .. } => Tool::ActionsExecute,
+            Command::Wrap => Tool::MemoryGetWrap,
             Command::Onboarding => Tool::DeviceOnboardingGet,
             Command::Lessons(LessonsCommand::List) => Tool::LessonsList,
             Command::Lessons(LessonsCommand::Enable { .. })
@@ -131,6 +134,7 @@ COMMANDS:
     note <text>               Append a user note            (L1)
     propose <description>     Propose a state change        (L2)
     run <agent>               Launch a preset agent         (level follows action)
+    wrap                      Today's Evening Wrap (outcome, still open, tomorrow)
     onboarding                This device's first-run setup state
     api status                Show the running REST port
     metrics                   In-product SLO snapshot + lesson counters

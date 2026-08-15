@@ -209,6 +209,11 @@ fn tool_descriptor(tool: Tool) -> Value {
              as the in-app chat.",
             json!({ "query": { "type": "string" } }),
         ),
+        Tool::MemoryGetWrap => (
+            "Today's Evening Wrap (deterministic day aggregation): outcome counts, still-open \
+             items, tomorrow's first items, loose ends — the same content as the notch card",
+            json!({}),
+        ),
         Tool::DeviceOnboardingGet => ("This device's onboarding / first-run setup state", json!({})),
         Tool::StatePeopleGet
         | Tool::StateProjectsGet

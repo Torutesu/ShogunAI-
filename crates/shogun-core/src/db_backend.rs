@@ -240,6 +240,41 @@ impl DbBackend {
             .collect();
         json!({ "lessons": lessons }).to_string()
     }
+
+    /// `memory.get_wrap` (issue #10, invariant 6): today's Evening Wrap as JSON — the same
+    /// `Db::evening_wrap` aggregation the notch card draws, so the API face and the human face
+    /// cannot disagree. Deterministic local aggregation only; the confidence gate is the
+    /// assembler's (fusion), identical to the card's.
+    fn evening_wrap_json(&self) -> String {
+        let now = self.db.now_ms();
+        let (day_start, tomorrow_end) = crate::daemon::local_wrap_window(now);
+        let wrap = self.db.evening_wrap(Vec::new(), day_start, now, tomorrow_end);
+        let line = |i: &shogun_fusion::brief::BriefItem| {
+            json!({
+                "text": i.text,
+                "possibly": i.possibly,
+                "provenance_event_id": i.provenance_event_id,
+            })
+        };
+        json!({
+            "date": crate::daemon::local_date_string(now),
+            "outcome": {
+                "commitments_done": wrap.outcome.commitments_done,
+                "loops_closed": wrap.outcome.loops_closed,
+                "actions_decided": wrap.outcome.actions_decided,
+                "actions_adopted": wrap.outcome.actions_adopted,
+            },
+            "still_open": wrap.still_open.iter().map(line).collect::<Vec<_>>(),
+            "tomorrow_calendar": wrap
+                .tomorrow_calendar
+                .iter()
+                .map(|c| json!({ "start_ms": c.start_ms, "title": c.title, "updated": c.updated }))
+                .collect::<Vec<_>>(),
+            "tomorrow_commitments": wrap.tomorrow_commitments.iter().map(line).collect::<Vec<_>>(),
+            "loose_ends": wrap.loose_ends.iter().map(line).collect::<Vec<_>>(),
+        })
+        .to_string()
+    }
 }
 
 impl MemoryBackend for DbBackend {
@@ -330,9 +365,11 @@ impl MemoryBackend for DbBackend {
             // its live value is deferred to a shared-store follow-up.
             Tool::DeviceOnboardingGet => Vec::new(),
 
-            // Structured reads (visual recall, lessons.list) use [`Self::read_structured`]; the
-            // rest are not read tools (write / action) — never routed here.
-            Tool::LessonsList
+            // Structured reads (visual recall, lessons.list, memory.get_wrap) use
+            // [`Self::read_structured`]; the rest are not read tools (write / action) — never
+            // routed here.
+            Tool::MemoryGetWrap
+            | Tool::LessonsList
             | Tool::LessonsSetActive
             | Tool::VisualRecallStatus
             | Tool::VisualRecallSearchFrames
@@ -353,6 +390,7 @@ impl MemoryBackend for DbBackend {
             Tool::VisualRecallGetFrame => self.visual_recall_get_frame_json(params),
             Tool::VisualRecallRescanFrame => self.visual_recall_rescan_json(params),
             Tool::LessonsList => self.lessons_json(),
+            Tool::MemoryGetWrap => self.evening_wrap_json(),
             _ => return None,
         })
     }
@@ -687,6 +725,23 @@ mod tests {
         let candidates = distill(&db.feedback_after(0));
         assert_eq!(candidates.len(), 1);
         db.upsert_lesson(&candidates[0], 100).unwrap()
+    }
+
+    #[test]
+    fn get_wrap_is_structured_and_carries_the_wrap_shape() {
+        // Issue #10 (invariant 6): the API face serves the same evening_wrap aggregation the
+        // card draws. Shape only here — the aggregation itself is pinned by the daemon's test.
+        let db = Db::open_in_memory(Arc::new(|| 72_000_000)).unwrap();
+        let backend = DbBackend::new(db);
+        let json = backend.read_structured(Tool::MemoryGetWrap, &params()).expect("structured");
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(v["date"].as_str().is_some_and(|d| d.len() == 10), "local date key");
+        assert_eq!(v["outcome"]["commitments_done"], 0);
+        assert!(v["still_open"].as_array().is_some());
+        assert!(v["tomorrow_calendar"].as_array().is_some());
+        assert!(v["loose_ends"].as_array().is_some());
+        // And the plain-read face has nothing for it (structured-only tool).
+        assert!(backend.read(Tool::MemoryGetWrap, &params()).is_empty());
     }
 
     #[test]
