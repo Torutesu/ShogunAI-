@@ -33,3 +33,18 @@ run cargo test -p shogun-mcp --features server
 run cargo test -p shogun-core --features daemon-server --bin shogun-api
 
 echo "feature matrix: OK"
+
+# The one surface no local command can reach. A shared enum gaining a variant breaks exhaustive
+# matches in the macOS shell, and macos-14 CI is the only thing that compiles it — so when the
+# diff touches one of these types, the sites below have to be read by eye before pushing.
+SHARED_ENUMS='SendAction|LocalAction|Action::|ConnState|OpDecision|DenyReason|MemoryFault'
+if git diff --name-only "${1:-origin/main}"...HEAD 2>/dev/null | grep -q '^crates/'; then
+    if git diff -U0 "${1:-origin/main}"...HEAD -- crates/ 2>/dev/null |
+        grep -qE "^\+.*(enum (SendAction|LocalAction|ConnState|OpDecision|DenyReason|MemoryFault)|^\+    [A-Z][A-Za-z]* \{)"; then
+        echo
+        echo "NOTE: this diff may add a variant to a shared enum. The macOS shell is not compiled"
+        echo "      by anything above — check these sites by eye (each must be exhaustive or have"
+        echo "      a catch-all):"
+        grep -rnE "$SHARED_ENUMS" apps/desktop/src-tauri/src/ | grep -E "match |if let |matches!" || true
+    fi
+fi
