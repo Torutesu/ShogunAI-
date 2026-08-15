@@ -360,7 +360,11 @@ mod mac {
                 }
 
                 if !ax_trusted_silent() {
-                    invalidate_reply_context(reply_cache.as_ref(), &mut warm_for, &mut last_capture);
+                    invalidate_reply_context(
+                        reply_cache.as_ref(),
+                        &mut warm_for,
+                        &mut last_capture,
+                    );
                     std::thread::sleep(interval);
                     continue;
                 }
@@ -369,95 +373,91 @@ mod mac {
                 // A poisoned lock means capture stops rather than ignoring exclusions.
                 let Ok(current) = policy.lock() else {
                     eprintln!("[capture] exclusion policy unreadable — pausing capture");
-                    invalidate_reply_context(reply_cache.as_ref(), &mut warm_for, &mut last_capture);
+                    invalidate_reply_context(
+                        reply_cache.as_ref(),
+                        &mut warm_for,
+                        &mut last_capture,
+                    );
                     std::thread::sleep(interval);
                     continue;
                 };
-                    let visual = crate::visual_recall::mac::refresh_settings(&visual_recall);
-                    let ax_outcome = capture_once(&db, &current, dwell_ms);
-                    if let Some(CaptureOutcome::Excluded(_)) = ax_outcome.as_ref() {
-                        // Excluded windows are never OCR'd either.
-                    } else if visual.enabled {
-                        if let Some(front) = frontmost_app() {
-                            let title = focused_window(front.pid).and_then(|w| w.title());
-                            if current
-                                .is_excluded(&front.bundle_id, title.as_deref())
-                                .is_none()
+                let visual = crate::visual_recall::mac::refresh_settings(&visual_recall);
+                let ax_outcome = capture_once(&db, &current, dwell_ms);
+                if let Some(CaptureOutcome::Excluded(_)) = ax_outcome.as_ref() {
+                    // Excluded windows are never OCR'd either.
+                } else if visual.enabled {
+                    if let Some(front) = frontmost_app() {
+                        let title = focused_window(front.pid).and_then(|w| w.title());
+                        if current
+                            .is_excluded(&front.bundle_id, title.as_deref())
+                            .is_none()
+                        {
+                            #[cfg(feature = "visual-recall-ocr")]
                             {
-                                #[cfg(feature = "visual-recall-ocr")]
-                                {
-                                    let ax_empty =
-                                        matches!(ax_outcome, Some(CaptureOutcome::Empty) | None);
-                                    let ax_text_len = match ax_outcome.as_ref() {
-                                        Some(CaptureOutcome::Captured { text, .. }) => text.len(),
-                                        _ => 0,
-                                    };
-                                    maybe_screen_ocr(
-                                        &db,
-                                        &visual,
-                                        front.pid,
-                                        &front.bundle_id,
-                                        title.as_deref(),
-                                        dwell_ms,
-                                        ax_empty,
-                                        ax_text_len,
-                                        &mut ocr_poll_gate,
-                                        &mut recall_pipeline,
-                                    );
-                                }
+                                let ax_empty =
+                                    matches!(ax_outcome, Some(CaptureOutcome::Empty) | None);
+                                let ax_text_len = match ax_outcome.as_ref() {
+                                    Some(CaptureOutcome::Captured { text, .. }) => text.len(),
+                                    _ => 0,
+                                };
+                                maybe_screen_ocr(
+                                    &db,
+                                    &visual,
+                                    front.pid,
+                                    &front.bundle_id,
+                                    title.as_deref(),
+                                    dwell_ms,
+                                    ax_empty,
+                                    ax_text_len,
+                                    &mut ocr_poll_gate,
+                                    &mut recall_pipeline,
+                                );
                             }
                         }
                     }
-                    drop(current);
+                }
+                drop(current);
 
-                    // Pre-assemble the reply context for whatever the user is now looking at, so
-                    // pressing the draft button only starts generation (SLO: offer in 150ms —
-                    // collecting on the press is what that budget forbids). Rebuilt only when the
-                    // focused thread or captured AX text changes, so a steady poll costs nothing.
-                    if let Some(cache) = reply_cache.as_ref() {
-                        if !capture_outcome_is_usable(ax_outcome.as_ref()) {
-                            invalidate_reply_context(
-                                Some(cache),
-                                &mut warm_for,
-                                &mut last_capture,
-                            );
-                        } else if let Some((key, win_title)) = focused_thread_key_and_title() {
-                            if reply_context_needs_refresh(
-                                warm_for.as_deref(),
-                                last_capture.as_ref(),
+                // Pre-assemble the reply context for whatever the user is now looking at, so
+                // pressing the draft button only starts generation (SLO: offer in 150ms —
+                // collecting on the press is what that budget forbids). Rebuilt only when the
+                // focused thread or captured AX text changes, so a steady poll costs nothing.
+                if let Some(cache) = reply_cache.as_ref() {
+                    if !capture_outcome_is_usable(ax_outcome.as_ref()) {
+                        invalidate_reply_context(Some(cache), &mut warm_for, &mut last_capture);
+                    } else if let Some((key, win_title)) = focused_thread_key_and_title() {
+                        if reply_context_needs_refresh(
+                            warm_for.as_deref(),
+                            last_capture.as_ref(),
+                            &key,
+                            ax_outcome.as_ref(),
+                        ) {
+                            // Use the fusion path: if the on-screen window maps to a fetched
+                            // Gmail thread, the context comes from the full email body
+                            // (PayloadSource::Fetched); otherwise it falls back to the
+                            // captured on-screen fragment (PayloadSource::OnScreenOnly).
+                            let ctx = db.build_reply_context_for_screen(
                                 &key,
-                                ax_outcome.as_ref(),
-                            ) {
-                                // Use the fusion path: if the on-screen window maps to a fetched
-                                // Gmail thread, the context comes from the full email body
-                                // (PayloadSource::Fetched); otherwise it falls back to the
-                                // captured on-screen fragment (PayloadSource::OnScreenOnly).
-                                let ctx = db.build_reply_context_for_screen(
-                                    &key,
-                                    win_title.as_deref().unwrap_or(""),
-                                );
-                                eprintln!(
-                                    "[capture] reply context warmed for {} in {}ms ({} turn(s))",
-                                    key,
-                                    ctx.build_ms,
-                                    ctx.turns.len()
-                                );
-                                cache.put(ctx);
-                                warm_for = Some(key.clone());
-                            }
-                            if let Some(fingerprint) = capture_fingerprint(&key, ax_outcome.as_ref()) {
-                                last_capture = Some(fingerprint);
-                            } else if warm_for.as_deref() != Some(key.as_str()) {
-                                last_capture = None;
-                            }
-                        } else {
-                            invalidate_reply_context(
-                                Some(cache),
-                                &mut warm_for,
-                                &mut last_capture,
+                                win_title.as_deref().unwrap_or(""),
                             );
+                            eprintln!(
+                                "[capture] reply context warmed for {} in {}ms ({} turn(s))",
+                                key,
+                                ctx.build_ms,
+                                ctx.turns.len()
+                            );
+                            cache.put(ctx);
+                            warm_for = Some(key.clone());
                         }
+                        if let Some(fingerprint) = capture_fingerprint(&key, ax_outcome.as_ref()) {
+                            last_capture = Some(fingerprint);
+                        } else if warm_for.as_deref() != Some(key.as_str()) {
+                            last_capture = None;
+                        }
+                    } else {
+                        invalidate_reply_context(Some(cache), &mut warm_for, &mut last_capture);
                     }
+                }
                 std::thread::sleep(interval);
             }
         })
@@ -544,11 +544,7 @@ mod mac {
                 let mut last_capture = capture_fingerprint("sensitive", Some(&captured("secret")));
 
                 assert!(!capture_outcome_is_usable(outcome.as_ref()));
-                invalidate_reply_context(
-                    Some(&cache),
-                    &mut warm_for,
-                    &mut last_capture,
-                );
+                invalidate_reply_context(Some(&cache), &mut warm_for, &mut last_capture);
 
                 assert!(cache.current().is_none());
                 assert!(warm_for.is_none());
