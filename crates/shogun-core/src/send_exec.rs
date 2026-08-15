@@ -54,8 +54,13 @@ fn purpose_for(action: &SendAction) -> &'static str {
     match action {
         SendAction::SendEmail { .. } => "integration.send_email",
         SendAction::PostMessage { .. } => "integration.post_message",
+        SendAction::AddReaction { .. } => "integration.add_reaction",
         SendAction::CreateCalendarEvent { .. } => "integration.create_calendar_event",
+        SendAction::UpdateCalendarEvent { .. } => "integration.update_calendar_event",
         SendAction::PostComment { .. } => "integration.post_comment",
+        SendAction::CreateDocument { .. } => "integration.create_document",
+        SendAction::UpdateDocument { .. } => "integration.update_document",
+        SendAction::ChangeIssueStatus { .. } => "integration.change_issue_status",
     }
 }
 
