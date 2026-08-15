@@ -9,6 +9,23 @@
 import "@testing-library/jest-dom/vitest";
 import { vi } from "vitest";
 
+// Modules feature-detect Tauri via `__TAURI_INTERNALS__ in window` at import time. Tests mock the
+// whole IPC surface below, so they run as "inside Tauri" — otherwise every IN_TAURI guard would
+// silently skip the code the test exists to drive.
+Object.defineProperty(window, "__TAURI_INTERNALS__", { value: {}, configurable: true });
+
+// jsdom has no ResizeObserver; the scrubber uses one to track its viewport width. Defined as a
+// plain global (not vi.stubGlobal) so a test calling vi.unstubAllGlobals() cannot remove it.
+class NoopResizeObserver {
+  observe(): void {}
+  unobserve(): void {}
+  disconnect(): void {}
+}
+Object.defineProperty(globalThis, "ResizeObserver", {
+  value: NoopResizeObserver,
+  configurable: true,
+});
+
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(async (cmd: string) => {
     throw new Error(`unmocked Tauri invoke in test: ${cmd}`);
