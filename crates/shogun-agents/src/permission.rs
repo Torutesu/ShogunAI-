@@ -38,16 +38,36 @@ pub enum LocalAction {
 }
 
 /// Actions that leave the device. By CLAUDE.md invariant 4 these are **always L3**.
+///
+/// The set is deliberately total over the scope table's `ExternalSend` rows
+/// (`shogun_mcp::scope`): every operation that can leave the device has a variant here, so the
+/// routing from a service operation to an action is a derivation rather than a match with a
+/// silent fallback. An operation with no representation would have to be special-cased at the
+/// call site, and a special case in this particular map is how invariant 4 gets lost.
+///
+/// The variants describe *what the user is about to have happen*, not which vendor does it —
+/// the confirmation UI reads these, and "post a message to #eng" is the sentence a person can
+/// approve, while "slack.post_message" is not.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SendAction {
     /// Send an email (via Composio, opt-in — §6.10).
     SendEmail { to: String },
     /// Post a message to a chat service (Slack, …).
     PostMessage { channel: String },
+    /// React to someone's message (an emoji is still visible to everyone in the channel).
+    AddReaction { target: String },
     /// Create a calendar event.
     CreateCalendarEvent { title: String },
+    /// Change or cancel an existing calendar event — visible to every attendee.
+    UpdateCalendarEvent { title: String },
     /// Post a comment / review on an issue/PR (GitHub, Linear, …).
     PostComment { target: String },
+    /// Create a document, page or file in a service (Drive, Notion, …).
+    CreateDocument { title: String },
+    /// Change an existing document or page in a service.
+    UpdateDocument { title: String },
+    /// Move an issue to another state (Linear, …) — visible to the whole team.
+    ChangeIssueStatus { target: String },
 }
 
 /// An agent action: either on-device or an external send.

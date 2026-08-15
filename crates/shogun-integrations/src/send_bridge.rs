@@ -39,6 +39,21 @@ pub fn route_send(action: &SendAction) -> SendRoute {
         SendAction::PostComment { .. } => {
             SendRoute::FirstLayer { service: Service::GitHub, op: "issue_create_or_comment" }
         }
+        SendAction::AddReaction { .. } => {
+            SendRoute::FirstLayer { service: Service::Slack, op: "reaction" }
+        }
+        SendAction::UpdateCalendarEvent { .. } => {
+            SendRoute::FirstLayer { service: Service::GoogleCalendar, op: "event_update_delete" }
+        }
+        SendAction::CreateDocument { .. } => {
+            SendRoute::FirstLayer { service: Service::GoogleDrive, op: "file_create" }
+        }
+        SendAction::UpdateDocument { .. } => {
+            SendRoute::FirstLayer { service: Service::Notion, op: "page_update" }
+        }
+        SendAction::ChangeIssueStatus { .. } => {
+            SendRoute::FirstLayer { service: Service::Linear, op: "status_change" }
+        }
     }
 }
 
@@ -53,6 +68,13 @@ pub fn args_for_send(action: &SendAction, body: &str) -> Value {
             json!({ "summary": title, "description": body })
         }
         SendAction::PostComment { target } => json!({ "target": target, "body": body }),
+        SendAction::AddReaction { target } => json!({ "target": target, "name": body }),
+        SendAction::UpdateCalendarEvent { title } => {
+            json!({ "summary": title, "description": body })
+        }
+        SendAction::CreateDocument { title } => json!({ "name": title, "content": body }),
+        SendAction::UpdateDocument { title } => json!({ "title": title, "content": body }),
+        SendAction::ChangeIssueStatus { target } => json!({ "id": target, "state": body }),
     }
 }
 
@@ -68,6 +90,11 @@ mod tests {
             SendAction::PostMessage { channel: "#general".into() },
             SendAction::CreateCalendarEvent { title: "Sync".into() },
             SendAction::PostComment { target: "pr#12".into() },
+            SendAction::AddReaction { target: "msg#1".into() },
+            SendAction::UpdateCalendarEvent { title: "Sync".into() },
+            SendAction::CreateDocument { title: "Notes".into() },
+            SendAction::UpdateDocument { title: "Spec".into() },
+            SendAction::ChangeIssueStatus { target: "ENG-1".into() },
         ]
     }
 
@@ -102,5 +129,81 @@ mod tests {
         let v = args_for_send(&c, "agenda");
         assert_eq!(v["summary"], "Sync");
         assert_eq!(v["description"], "agenda");
+    }
+
+    /// Every proposal the model can make must execute against the service it was made for.
+    ///
+    /// The forward map (a tool the model calls → a [`SendAction`]) lives in
+    /// `shogun_mcp::tool_catalog`; the reverse map (an approved action → the service that
+    /// performs it) is [`route_send`] here. They are written independently, and one variant can
+    /// only route to one service — so if two services ever shared a variant, an approved Linear
+    /// comment would be posted to GitHub. This test is what keeps that from being wired: a
+    /// published proposal whose round trip does not return to its own service fails here.
+    #[test]
+    fn every_published_proposal_round_trips_to_its_own_service() {
+        use shogun_mcp::tool_catalog::{proposed_action, ToolKind};
+        use shogun_mcp::scope::ALL_SERVICES;
+
+        let input = serde_json::json!({
+            "to": "a@b.com", "title": "t", "channel": "#c", "target": "x", "body": "b"
+        });
+
+        let mut checked = 0;
+        for service in ALL_SERVICES {
+            for op in scope::scope(*service).ops {
+                // Find the published proposal for this row, if any.
+                let Some(entry) = published_proposal_for(*service, op.name) else { continue };
+                let Some(action) = proposed_action(entry, &input) else {
+                    panic!("{} publishes a proposal that builds no action", entry.name)
+                };
+                let shogun_agents::permission::Action::Send(send) = action else {
+                    panic!("{} built a non-send action", entry.name)
+                };
+                checked += 1;
+                match route_send(&send) {
+                    SendRoute::FirstLayer { service: routed_service, op: routed_op } => assert_eq!(
+                        (routed_service, routed_op),
+                        (*service, op.name),
+                        "{} would execute against the wrong service",
+                        entry.name,
+                    ),
+                    // Gmail send is deliberately not a first-layer op; Composio is its only route.
+                    SendRoute::Composio => assert_eq!(
+                        (*service, op.name),
+                        (Service::Gmail, "send"),
+                        "{} routed to Composio but is not the Gmail send",
+                        entry.name,
+                    ),
+                }
+                assert_eq!(entry.kind, ToolKind::Propose);
+            }
+        }
+        assert!(checked >= 5, "the sweep must actually check proposals, got {checked}");
+    }
+
+    /// The published proposal entry for a scope row, if the catalog has one.
+    fn published_proposal_for(
+        service: Service,
+        op_name: &str,
+    ) -> Option<&'static shogun_mcp::tool_catalog::ToolEntry> {
+        use shogun_mcp::tool_catalog::{catalog_entry, ToolKind};
+        // The catalog has no iterator by design (its contents are an implementation detail), so
+        // the names are listed here — and the count is asserted by the caller, so a proposal added
+        // without being added here shows up as a coverage drop rather than passing silently.
+        const PUBLISHED: &[&str] = &[
+            "propose_send_email",
+            "propose_calendar_event",
+            "propose_calendar_event_change",
+            "propose_drive_document",
+            "propose_chat_message",
+            "propose_chat_reaction",
+            "propose_issue_comment",
+            "propose_doc_change",
+            "propose_issue_status_change",
+        ];
+        PUBLISHED
+            .iter()
+            .filter_map(|n| catalog_entry(n))
+            .find(|e| e.service == service && e.scope_op == op_name && e.kind == ToolKind::Propose)
     }
 }

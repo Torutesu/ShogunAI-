@@ -14,10 +14,22 @@
 //!    see is a subset of the set the gate would allow. Not being able to call it is the first
 //!    line of defence (§5-1); the gate is the second, and it is the one that actually holds.
 //!
-//! Scope of *this* module: read operations only. Writes and sends have to travel through the
-//! L1/L2/L3 engine (invariant 4), and that routing is the next step of #81 — publishing a send
-//! tool before the routing exists would be precisely the hazard the invariant is about. A test
-//! pins that no [`OpClass::ExternalSend`] can ever reach the tools array.
+//! Two kinds of tool are published. A [`ToolKind::Read`] runs and returns data. A
+//! [`ToolKind::Propose`] **never runs here**: it maps to a [`SendAction`], which is L3 by
+//! construction, so calling it can only ever produce a proposal the user has to approve
+//! (invariant 4). The model is told exactly that, so it does not report a send as done.
+//!
+//! Not every row of the permission table is publishable yet, and the gaps are deliberate:
+//!
+//! - `ServiceStateChange` rows (the Gmail draft/label writes) have **no [`Action`] to map to** —
+//!   `LocalAction` is on-device only and `SendAction` leaves the device irreversibly, and a
+//!   reversible write *to a service* is neither. Inventing a third category is a change to the
+//!   permission model, not to this catalog, so those stay unpublished.
+//! - Two sends collide on one `SendAction` variant (Linear's issue comment with GitHub's, Notion's
+//!   page create with Drive's). [`shogun_integrations::send_bridge::route_send`] maps a variant to
+//!   exactly one service, so publishing both would let an approved Linear comment execute against
+//!   GitHub. The colliding half stays unpublished until the variant can name its service — a
+//!   round-trip test in shogun-integrations holds this line.
 
 use serde_json::{json, Value};
 
@@ -25,6 +37,16 @@ use crate::connection::ConnState;
 use crate::scope::{self, OpClass, Service, Wave};
 use crate::service_gate::{authorize_op, OpContext};
 use shogun_agents::entitlement::Entitlements;
+use shogun_agents::permission::{Action, SendAction};
+
+/// What happens when the model calls a tool.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolKind {
+    /// Runs immediately and returns data.
+    Read,
+    /// Never runs here: it becomes a proposal the user has to approve (invariant 4).
+    Propose,
+}
 
 /// One tool as the model sees it: a hub operation name, a role-level description, and the JSON
 /// Schema for its input. Bound to the `(service, scope op)` the gate will authorize.
@@ -40,6 +62,8 @@ pub struct ToolEntry {
     /// distinction between the first and second layer — that disclosure belongs to the UI, not
     /// to the model's judgement (§5-1).
     pub description: &'static str,
+    /// Whether calling it reads, or proposes something the user must approve.
+    pub kind: ToolKind,
 }
 
 /// The catalog. Read operations only, in the order they are offered.
@@ -50,6 +74,7 @@ const CATALOG: &[ToolEntry] = &[
         scope_op: "read_sync",
         description: "List the user's calendar events in a time range. Use this for questions \
                       about their schedule, what a meeting is, or who is attending.",
+        kind: ToolKind::Read,
     },
     ToolEntry {
         name: "check_calendar_availability",
@@ -57,6 +82,7 @@ const CATALOG: &[ToolEntry] = &[
         scope_op: "free_busy",
         description: "Find when the user is free or busy in a time range. Use this before \
                       proposing a time, never to list what a meeting is about.",
+        kind: ToolKind::Read,
     },
     ToolEntry {
         name: "search_mail",
@@ -64,6 +90,7 @@ const CATALOG: &[ToolEntry] = &[
         scope_op: "read_sync",
         description: "Search the user's mail for threads matching a query. Use this for \
                       questions about conversations, requests, or what someone is waiting on.",
+        kind: ToolKind::Read,
     },
     ToolEntry {
         name: "get_mail_thread",
@@ -71,42 +98,119 @@ const CATALOG: &[ToolEntry] = &[
         scope_op: "read_on_demand",
         description: "Read one mail thread in full by its id, when a search result is not enough \
                       to answer.",
+        kind: ToolKind::Read,
     },
     ToolEntry {
         name: "list_recent_drive_files",
         service: Service::GoogleDrive,
         scope_op: "read_sync",
         description: "List the user's recently touched documents and files.",
+        kind: ToolKind::Read,
     },
     ToolEntry {
         name: "read_drive_file",
         service: Service::GoogleDrive,
         scope_op: "read_on_demand",
         description: "Read the contents of one document or file by its id.",
+        kind: ToolKind::Read,
     },
     ToolEntry {
         name: "search_chat_messages",
         service: Service::Slack,
         scope_op: "read_sync",
         description: "Search the user's chat messages for a query.",
+        kind: ToolKind::Read,
     },
     ToolEntry {
         name: "search_docs",
         service: Service::Notion,
         scope_op: "read_sync",
         description: "Search the user's notes and documents for a query.",
+        kind: ToolKind::Read,
     },
     ToolEntry {
         name: "search_code_issues",
         service: Service::GitHub,
         scope_op: "read_sync",
         description: "Search the user's code issues and pull requests for a query.",
+        kind: ToolKind::Read,
     },
     ToolEntry {
         name: "list_tracker_issues",
         service: Service::Linear,
         scope_op: "read_sync",
         description: "List issues from the user's issue tracker.",
+        kind: ToolKind::Read,
+    },
+    // ---- proposals. Calling one of these asks the user; it never performs anything. ----------
+    ToolEntry {
+        name: "propose_send_email",
+        service: Service::Gmail,
+        scope_op: "send",
+        description: "Propose sending an email. This does not send: it asks the user to approve \
+                      the message first. Say that you have prepared it for their approval.",
+        kind: ToolKind::Propose,
+    },
+    ToolEntry {
+        name: "propose_calendar_event",
+        service: Service::GoogleCalendar,
+        scope_op: "event_create",
+        description: "Propose creating a calendar event. This does not create it: the user \
+                      approves it first.",
+        kind: ToolKind::Propose,
+    },
+    ToolEntry {
+        name: "propose_calendar_event_change",
+        service: Service::GoogleCalendar,
+        scope_op: "event_update_delete",
+        description: "Propose changing or cancelling an existing calendar event. Every attendee \
+                      sees the change, so the user approves it first.",
+        kind: ToolKind::Propose,
+    },
+    ToolEntry {
+        name: "propose_drive_document",
+        service: Service::GoogleDrive,
+        scope_op: "file_create",
+        description: "Propose creating a document or file. The user approves it first.",
+        kind: ToolKind::Propose,
+    },
+    ToolEntry {
+        name: "propose_chat_message",
+        service: Service::Slack,
+        scope_op: "post_message",
+        description: "Propose posting a message to a channel. This does not post: the user \
+                      approves it first.",
+        kind: ToolKind::Propose,
+    },
+    ToolEntry {
+        name: "propose_chat_reaction",
+        service: Service::Slack,
+        scope_op: "reaction",
+        description: "Propose reacting to a message. Everyone in the channel can see a reaction, \
+                      so the user approves it first.",
+        kind: ToolKind::Propose,
+    },
+    ToolEntry {
+        name: "propose_issue_comment",
+        service: Service::GitHub,
+        scope_op: "issue_create_or_comment",
+        description: "Propose commenting on an issue or pull request. The user approves it first.",
+        kind: ToolKind::Propose,
+    },
+    ToolEntry {
+        name: "propose_doc_change",
+        service: Service::Notion,
+        scope_op: "page_update",
+        description: "Propose changing a page in the user's notes. The user approves it first.",
+        kind: ToolKind::Propose,
+    },
+    ToolEntry {
+        name: "propose_issue_status_change",
+        service: Service::Linear,
+        scope_op: "status_change",
+        description: "Propose moving an issue to another state. The whole team sees the change, \
+                      so the user approves it first.",
+        kind: ToolKind::Propose,
     },
 ];
 
@@ -203,9 +307,72 @@ fn input_schema(name: &str) -> Value {
         "search_docs" => query_schema("What to look for in the user's notes and documents."),
         "search_code_issues" => query_schema("What to look for — repository, label, or topic."),
         "list_tracker_issues" => query_schema("What to look for — project, assignee, or state."),
+        // ---- proposals. Every one takes the addressing field plus the full content, because
+        // ---- the approval preview shows the user exactly what would go out (FR-AG-03).
+        "propose_send_email" => addressed_schema("to", "The recipient's email address."),
+        "propose_calendar_event" => addressed_schema("title", "The event's title."),
+        "propose_calendar_event_change" => {
+            addressed_schema("title", "The title of the event to change.")
+        }
+        "propose_drive_document" => addressed_schema("title", "The document's name."),
+        "propose_chat_message" => addressed_schema("channel", "The channel to post to."),
+        "propose_chat_reaction" => addressed_schema("target", "The message to react to."),
+        "propose_issue_comment" => addressed_schema("target", "The issue or pull request."),
+        "propose_doc_change" => addressed_schema("title", "The page to change."),
+        "propose_issue_status_change" => addressed_schema("target", "The issue to move."),
         // Unreachable for a catalog entry: `every_entry_has_a_schema` pins the two together.
         _ => json!({ "type": "object", "properties": {} }),
     }
+}
+
+/// A proposal's input: where it goes, and the full content the user will approve.
+fn addressed_schema(field: &'static str, hint: &'static str) -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            field: { "type": "string", "description": hint },
+            "body": {
+                "type": "string",
+                "description": "The full content. The user sees this exactly as written before \
+                                approving, so write it as the finished thing, not a summary."
+            }
+        },
+        "required": [field, "body"]
+    })
+}
+
+/// The action a proposal tool stands for, built from the model's input.
+///
+/// Returns `None` when the entry is not a proposal, or the input is missing its addressing field
+/// — a proposal with no destination is not something a user could meaningfully approve, and
+/// inventing one would put an unintended recipient in front of the confirm button.
+pub fn proposed_action(entry: &ToolEntry, input: &Value) -> Option<Action> {
+    if entry.kind != ToolKind::Propose {
+        return None;
+    }
+    let field = |name: &str| -> Option<String> {
+        input.get(name).and_then(|v| v.as_str()).map(str::to_string).filter(|s| !s.trim().is_empty())
+    };
+    let send = match entry.name {
+        "propose_send_email" => SendAction::SendEmail { to: field("to")? },
+        "propose_calendar_event" => SendAction::CreateCalendarEvent { title: field("title")? },
+        "propose_calendar_event_change" => {
+            SendAction::UpdateCalendarEvent { title: field("title")? }
+        }
+        "propose_drive_document" => SendAction::CreateDocument { title: field("title")? },
+        "propose_chat_message" => SendAction::PostMessage { channel: field("channel")? },
+        "propose_chat_reaction" => SendAction::AddReaction { target: field("target")? },
+        "propose_issue_comment" => SendAction::PostComment { target: field("target")? },
+        "propose_doc_change" => SendAction::UpdateDocument { title: field("title")? },
+        "propose_issue_status_change" => SendAction::ChangeIssueStatus { target: field("target")? },
+        _ => return None,
+    };
+    Some(Action::Send(send))
+}
+
+/// The content the user will see in the approval preview, verbatim.
+pub fn proposed_body(input: &Value) -> String {
+    input.get("body").and_then(|v| v.as_str()).unwrap_or_default().to_string()
 }
 
 /// The role a service plays, in the words the block and the descriptions use. Deliberately not
@@ -267,9 +434,15 @@ pub struct ServiceState {
 
 /// Whether this entry may be offered to the model right now.
 fn offerable(entry: &ToolEntry, conn: ConnState, ctx: &ToolContext) -> bool {
-    // Reads only (see the module note): a write or send in the tools array without the L1/L2/L3
-    // routing behind it is exactly what invariant 4 forbids.
-    if scope::lookup(entry.service, entry.scope_op).map(|o| o.class) != Some(OpClass::Read) {
+    // The entry's kind and the permission table's class must agree, or the tool would be
+    // published under the wrong promise: a read that actually sends, or a proposal that quietly
+    // runs. Disagreement drops the tool rather than guessing which side is right.
+    let class = scope::lookup(entry.service, entry.scope_op).map(|o| o.class);
+    let consistent = match entry.kind {
+        ToolKind::Read => class == Some(OpClass::Read),
+        ToolKind::Propose => class.is_some_and(OpClass::is_external_send),
+    };
+    if !consistent {
         return false;
     }
     // An amber service still serves cached reads, and the gate says so — deliberately reusing the
@@ -387,6 +560,7 @@ mod tests {
     use super::*;
     use crate::connection::ReauthReason;
     use shogun_agents::entitlement::{entitlements, Plan};
+    use shogun_agents::permission::Level;
 
     /// Real plan values, not hand-assembled ones: the point of the plan filter is that it agrees
     /// with the entitlement table, and a fixture that invents its own would not test that.
@@ -428,15 +602,58 @@ mod tests {
     }
 
     #[test]
-    fn every_catalog_entry_is_a_read() {
+    fn every_catalog_entry_matches_its_permission_class() {
+        // The kind is the promise made to the model ("this returns data" / "this only asks").
+        // The permission table is the truth. They must agree row by row, or a tool is published
+        // under a promise it cannot keep.
         for e in CATALOG {
             let class = scope::lookup(e.service, e.scope_op).map(|o| o.class);
-            assert_eq!(class, Some(OpClass::Read), "{} is not a read operation", e.name);
+            match e.kind {
+                ToolKind::Read => {
+                    assert_eq!(class, Some(OpClass::Read), "{} promises a read", e.name)
+                }
+                ToolKind::Propose => assert!(
+                    class.is_some_and(OpClass::is_external_send),
+                    "{} promises a proposal but is not an external send",
+                    e.name
+                ),
+            }
         }
     }
 
     #[test]
-    fn no_external_send_can_ever_reach_the_tools_array() {
+    fn every_proposal_builds_an_l3_action_and_no_read_builds_any() {
+        // The whole point of a proposal tool: what it produces is L3, so it cannot auto-run.
+        for e in CATALOG {
+            let input = json!({
+                "to": "a@b.com", "title": "t", "channel": "#c", "target": "x", "body": "b"
+            });
+            match e.kind {
+                ToolKind::Propose => {
+                    let action = proposed_action(e, &input)
+                        .unwrap_or_else(|| panic!("{} has no action", e.name));
+                    assert!(action.is_external_send(), "{} is not a send", e.name);
+                    assert_eq!(action.required_level(), Level::L3, "{} is not L3", e.name);
+                }
+                ToolKind::Read => {
+                    assert!(proposed_action(e, &input).is_none(), "{} builds an action", e.name)
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_proposal_without_a_destination_builds_nothing() {
+        // An approval prompt needs to say who it goes to. Defaulting the recipient would put an
+        // address the user never chose in front of the confirm button.
+        let entry = catalog_entry("propose_send_email").unwrap();
+        assert!(proposed_action(entry, &json!({ "body": "hi" })).is_none());
+        assert!(proposed_action(entry, &json!({ "to": "  ", "body": "hi" })).is_none());
+        assert!(proposed_action(entry, &json!({ "to": "a@b.com", "body": "hi" })).is_some());
+    }
+
+    #[test]
+    fn no_send_is_ever_published_as_a_read() {
         // Invariant 4 at the model's edge: whatever the connection/plan state, the array holds
         // only ops the table classifies as reads. Checked against every service at once.
         let all: Vec<ServiceState> = scope::ALL_SERVICES.iter().copied().map(connected).collect();
@@ -450,7 +667,13 @@ mod tests {
         for name in names(&tools) {
             let entry = CATALOG.iter().find(|e| e.name == name).expect("catalog entry");
             let class = scope::lookup(entry.service, entry.scope_op).map(|o| o.class);
-            assert_eq!(class, Some(OpClass::Read), "{name} would let the model send");
+            if class.is_some_and(OpClass::is_external_send) {
+                assert_eq!(
+                    entry.kind,
+                    ToolKind::Propose,
+                    "{name} is a send published as if it returned data",
+                );
+            }
         }
     }
 
@@ -504,7 +727,15 @@ mod tests {
     #[test]
     fn only_connected_services_are_offered() {
         let tools = tool_definitions(&[connected(Service::GoogleCalendar)], &ctx());
-        assert_eq!(names(&tools), vec!["list_calendar_events", "check_calendar_availability"]);
+        assert_eq!(
+            names(&tools),
+            vec![
+                "list_calendar_events",
+                "check_calendar_availability",
+                "propose_calendar_event",
+                "propose_calendar_event_change",
+            ]
+        );
     }
 
     #[test]

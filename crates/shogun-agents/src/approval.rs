@@ -83,8 +83,15 @@ fn describe(action: &SendAction) -> (&'static str, String) {
     match action {
         SendAction::SendEmail { to } => ("Send email", to.clone()),
         SendAction::PostMessage { channel } => ("Post message", channel.clone()),
+        SendAction::AddReaction { target } => ("Add reaction", target.clone()),
         SendAction::CreateCalendarEvent { title } => ("Create calendar event", title.clone()),
+        // Named as a change rather than an update: the attendees are the ones who find out, and
+        // "Update event" reads like an edit to a private note.
+        SendAction::UpdateCalendarEvent { title } => ("Change calendar event", title.clone()),
         SendAction::PostComment { target } => ("Post comment", target.clone()),
+        SendAction::CreateDocument { title } => ("Create document", title.clone()),
+        SendAction::UpdateDocument { title } => ("Change document", title.clone()),
+        SendAction::ChangeIssueStatus { target } => ("Change issue status", target.clone()),
     }
 }
 

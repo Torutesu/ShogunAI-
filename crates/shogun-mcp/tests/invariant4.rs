@@ -308,10 +308,10 @@ fn no_send_path_bypasses_entitlement_or_l3_gates() {
 /// same `service_gate`, so this asserts the composition rather than the filter alone: for every
 /// combination of state, every offered tool is a `Read` in the permission table.
 #[test]
-fn the_llm_tool_surface_never_exposes_an_external_send() {
+fn the_llm_tool_surface_only_exposes_a_send_as_a_proposal() {
     use shogun_mcp::connection::{ConnState, ReauthReason};
     use shogun_mcp::scope::{lookup, OpClass, Wave};
-    use shogun_mcp::tool_catalog::{tool_definitions, ServiceState, ToolContext};
+    use shogun_mcp::tool_catalog::{proposed_action, tool_definitions, ServiceState, ToolContext, ToolKind};
 
     let states = [
         ConnState::Disconnected,
@@ -342,11 +342,34 @@ fn the_llm_tool_surface_never_exposes_an_external_send() {
                         let name = tool["name"].as_str().expect("tool name");
                         let entry = shogun_mcp::tool_catalog::catalog_entry(name)
                             .expect("every offered tool is a catalog entry");
-                        assert_eq!(
-                            lookup(entry.service, entry.scope_op).map(|o| o.class),
-                            Some(OpClass::Read),
-                            "tool {name} would let the model reach a non-read operation",
-                        );
+                        let class = lookup(entry.service, entry.scope_op).map(|o| o.class);
+                        match entry.kind {
+                            // A read must be a read in the table: no send may be published as if
+                            // it returned data.
+                            ToolKind::Read => assert_eq!(
+                                class,
+                                Some(OpClass::Read),
+                                "tool {name} is published as a read but is not one",
+                            ),
+                            // A proposal must produce an L3 action — the thing that makes it
+                            // impossible to auto-run (invariant 4).
+                            ToolKind::Propose => {
+                                assert!(
+                                    class.is_some_and(OpClass::is_external_send),
+                                    "tool {name} proposes something that is not an external send",
+                                );
+                                let action = proposed_action(
+                                    entry,
+                                    &serde_json::json!({
+                                        "to": "a@b.com", "title": "t", "channel": "#c",
+                                        "target": "x", "body": "b"
+                                    }),
+                                )
+                                .expect("a proposal tool must build an action");
+                                assert!(action.is_external_send(), "{name} is not a send");
+                                assert_eq!(action.required_level(), Level::L3, "{name} is not L3");
+                            }
+                        }
                         // And the gate agrees it is allowed — the array is a subset of what the
                         // gate would permit, never a superset.
                         assert!(
@@ -384,8 +407,8 @@ fn the_conversation_loop_can_only_reach_read_operations() {
     use shogun_mcp::scope::{lookup, OpClass, Wave};
     use shogun_mcp::tool_catalog::{ServiceState, ToolContext};
     use shogun_mcp::tool_loop::{
-        run_read_loop, LoopLimits, ModelTurn, ModelTurnSource, ReadToolRunner, ToolResult,
-        ToolRunError, ToolUse,
+        run_read_loop, LoopLimits, ModelTurn, ModelTurnSource, ProposalSink, ReadToolRunner,
+        ToolResult, ToolRunError, ToolUse,
     };
 
     /// Asks for every name we can think of — published tools, every scope op name in the table
@@ -429,6 +452,18 @@ fn the_conversation_loop_can_only_reach_read_operations() {
     struct Recorder {
         reached: Vec<(Service, &'static str)>,
     }
+
+    /// Records every action that reached the approval queue. Nothing here executes.
+    #[derive(Default)]
+    struct Proposals {
+        queued: Vec<Action>,
+    }
+    impl ProposalSink for Proposals {
+        fn propose(&mut self, action: Action, _body: &str) -> Result<(), String> {
+            self.queued.push(action);
+            Ok(())
+        }
+    }
     impl ReadToolRunner for Recorder {
         fn run(
             &mut self,
@@ -465,14 +500,21 @@ fn the_conversation_loop_can_only_reach_read_operations() {
                         .collect();
                     let ctx = ToolContext { highest_released: wave, draft_stop, plan };
                     let mut runner = Recorder { reached: Vec::new() };
+                    let mut proposals = Proposals::default();
                     // A model that asks for everything, including sends, by name.
                     let _ = run_read_loop(
                         &mut AsksForEverything { asked: false },
                         &mut runner,
+                        &mut proposals,
                         &services,
                         &ctx,
                         LoopLimits::default(),
                     );
+                    // Anything that became a proposal is a send, is L3, and was never executed.
+                    for action in &proposals.queued {
+                        assert!(action.is_external_send(), "a non-send was queued: {action:?}");
+                        assert_eq!(action.required_level(), Level::L3, "{action:?} is not L3");
+                    }
                     for (service, op) in &runner.reached {
                         reached_anything = true;
                         assert_eq!(
