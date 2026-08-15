@@ -123,6 +123,11 @@ jobs:
       # fresh runner (harmless if unused by the current entry).
       - run: pnpm --filter @shogun-ai/tokens build
       - run: pnpm --filter @shogun-ai/desktop typecheck
+      # The real frontend gates (#119): ESLint with the React Hooks rules (rules-of-hooks is a
+      # hard error; the Hooks-v6 analyses are warnings until #120/#122 clear the backlog), and
+      # Vitest with Tauri IPC mocked at the module boundary — no live webview on a runner.
+      - run: pnpm --filter @shogun-ai/desktop lint
+      - run: pnpm --filter @shogun-ai/desktop test
       - run: pnpm --filter @shogun-ai/desktop build:vite
 
   api:
