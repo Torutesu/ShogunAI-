@@ -13,7 +13,7 @@
 //!
 //! **What being on the spine does NOT mean** (the A-2 decision, 2026-08-14,
 //! `docs/meeting-text-on-the-search-spine.md`): rows with [`SOURCE`] never reach the Batch lane.
-//! `event_log::events_in_range_for_batch` excludes them by construction, so search, Fusion,
+//! `event_log::events_in_range_partitioned` excludes them by construction, so search, Fusion,
 //! the context pack and *local* extraction all see meetings — and the nightly cloud
 //! classification does not. The Deepgram consent covers live transcription only; shipping the
 //! finished transcript to the relay every night would be a second, undisclosed egress
@@ -23,11 +23,15 @@
 //! final — and again whenever the note changes afterwards, because a note is often flushed
 //! (blur / debounce) moments *after* auto-wrap closed the session.
 //!
-//! **Changed text replaces its row.** [`index_session`] first drops any previously indexed row of
-//! the same kind whose content hash no longer matches (and its vector/cold shadows), then
-//! inserts. So re-running with identical text is a dedup touch, an edited note replaces the
-//! note's row, and a future re-transcription (WS9) replaces the transcript's — the stale version
-//! never lingers in search beside the current one.
+//! **Changed text replaces its row — in place.** [`index_session`] updates an existing row of the
+//! same kind through `event_log::update_content_and_hash` rather than delete-and-reinsert:
+//! nightly extraction links `state_provenance` rows to meeting events (a commitment made in a
+//! call cites the transcript), and deleting the event would either trip the FK or orphan the
+//! evidence behind a state row. An update keeps that provenance honestly valid — the evidence is
+//! still "this meeting", now in its edited form — while the stale embedding is dropped so the
+//! embed job re-embeds the new text. Only a body that *disappeared* (a note cleared to empty)
+//! deletes its row, and then the provenance rows go with it: evidence that no longer exists must
+//! not keep vouching for state.
 
 use rusqlite::Connection;
 
@@ -81,28 +85,50 @@ fn transcript_body(
     Ok(Some(body))
 }
 
-/// Drop this session's indexed rows of `kind` whose content hash is not `keep_hash` — the stale
-/// versions an edit leaves behind. Vector and cold-embedding shadows are keyed on the event id and
-/// have no delete trigger, so they go explicitly; the FTS mirror follows via the AD trigger.
-fn drop_stale(
+/// This session's already-indexed rows of `kind`: `(event_id, content_hash)`, oldest first.
+fn indexed_rows(
     conn: &Connection,
     session_id: i64,
     kind: &str,
-    keep_hash: Option<&str>,
-) -> Result<(), rusqlite::Error> {
+) -> Result<Vec<(i64, String)>, rusqlite::Error> {
     let mut stmt = conn.prepare(
-        "SELECT id FROM event_log
+        "SELECT id, content_hash FROM event_log
          WHERE session_id = ?1 AND source = ?2 AND kind = ?3
-           AND (?4 IS NULL OR content_hash != ?4)",
+         ORDER BY id",
     )?;
-    let stale: Vec<i64> = stmt
-        .query_map(rusqlite::params![session_id, SOURCE, kind, keep_hash], |r| r.get(0))?
-        .collect::<Result<_, _>>()?;
-    for id in stale {
-        conn.execute("DELETE FROM event_vec WHERE rowid = ?1", [id])?;
-        conn.execute("DELETE FROM cold_embeddings WHERE event_id = ?1", [id])?;
-        conn.execute("DELETE FROM event_log WHERE id = ?1", [id])?;
-    }
+    let rows = stmt
+        .query_map(rusqlite::params![session_id, SOURCE, kind], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })?;
+    rows.collect()
+}
+
+/// Delete one indexed row for good: the provenance rows citing it first (`state_provenance`
+/// carries an FK to `event_log`, and evidence that no longer exists must not keep vouching for
+/// state), then the embedding shadows (keyed on the event id, no delete trigger), then the row
+/// (the FTS mirror follows via the AD trigger).
+fn remove_row(conn: &Connection, event_id: i64) -> Result<(), rusqlite::Error> {
+    conn.execute("DELETE FROM state_provenance WHERE event_id = ?1", [event_id])?;
+    conn.execute("DELETE FROM event_vec WHERE rowid = ?1", [event_id])?;
+    conn.execute("DELETE FROM cold_embeddings WHERE event_id = ?1", [event_id])?;
+    conn.execute("DELETE FROM event_log WHERE id = ?1", [event_id])?;
+    Ok(())
+}
+
+/// Rewrite an indexed row with edited text. In place, not delete-and-reinsert: nightly extraction
+/// links `state_provenance` to meeting events, and dropping the row would either trip that FK or
+/// orphan the evidence behind a state row — while the update keeps it honestly valid (the
+/// evidence is still this meeting, in its edited form). The stale embedding is removed so the
+/// embed job re-embeds the new text; the FTS mirror follows via the AU trigger.
+fn rewrite_row(
+    conn: &Connection,
+    event_id: i64,
+    body: &str,
+    hash: &str,
+) -> Result<(), rusqlite::Error> {
+    crate::event_log::update_content_and_hash(conn, event_id, body, hash)?;
+    conn.execute("DELETE FROM event_vec WHERE rowid = ?1", [event_id])?;
+    conn.execute("DELETE FROM cold_embeddings WHERE event_id = ?1", [event_id])?;
     Ok(())
 }
 
@@ -128,31 +154,54 @@ pub fn index_session(conn: &Connection, session_id: i64) -> Result<Indexed, rusq
         ("transcript", transcript_body(conn, session_id)?),
         ("note", crate::session_notes::get(conn, session_id)?),
     ] {
+        let existing = indexed_rows(conn, session_id, kind)?;
         let Some(body) = body.filter(|b| !b.trim().is_empty()) else {
-            drop_stale(conn, session_id, kind, None)?;
+            for (id, _) in existing {
+                remove_row(conn, id)?;
+            }
             continue;
         };
         let hash = crate::event_log::content_hash(&body);
-        // An edit replaces its row: the old version must not stay findable beside the new one.
-        drop_stale(conn, session_id, kind, Some(&hash))?;
-        let (event_id, _is_new) = insert_or_touch(
-            conn,
-            &NewEvent {
-                // The meeting's own time, not the moment of indexing: a search for what was said
-                // last Tuesday must find it under last Tuesday.
-                ts: session.started_at,
-                source: SOURCE,
-                kind,
-                app_bundle_id: app,
-                window_title: title,
-                content: &body,
-                content_hash: &hash,
-                dwell_ms: 0,
-                display_id: None,
-                window_bounds: None,
-            },
-        )?;
-        crate::session::attach_event(conn, session_id, event_id)?;
+
+        // Converge on exactly one row per kind: the first existing row is kept (rewritten if the
+        // text changed); any extras are defensive cleanup — index_session itself never creates a
+        // second one.
+        let mut kept = None;
+        for (id, existing_hash) in existing {
+            if kept.is_none() {
+                if existing_hash != hash {
+                    rewrite_row(conn, id, &body, &hash)?;
+                }
+                kept = Some(id);
+            } else {
+                remove_row(conn, id)?;
+            }
+        }
+
+        let event_id = match kept {
+            Some(id) => id,
+            None => {
+                let (id, _is_new) = insert_or_touch(
+                    conn,
+                    &NewEvent {
+                        // The meeting's own time, not the moment of indexing: a search for what
+                        // was said last Tuesday must find it under last Tuesday.
+                        ts: session.started_at,
+                        source: SOURCE,
+                        kind,
+                        app_bundle_id: app,
+                        window_title: title,
+                        content: &body,
+                        content_hash: &hash,
+                        dwell_ms: 0,
+                        display_id: None,
+                        window_bounds: None,
+                    },
+                )?;
+                crate::session::attach_event(conn, session_id, id)?;
+                id
+            }
+        };
         match kind {
             "transcript" => out.transcript_event_id = Some(event_id),
             _ => out.note_event_id = Some(event_id),
@@ -331,8 +380,8 @@ mod tests {
 
         crate::session_notes::save(&conn, id, "final version of the note", 3_000).unwrap();
         let second = index_session(&conn, id).unwrap();
-        // Row *identity* is not the property (SQLite may reuse the freed rowid) — content is.
-        assert!(first.note_event_id.is_some() && second.note_event_id.is_some());
+        // The edit rewrites the SAME row (provenance stability), so the id must not change.
+        assert_eq!(first.note_event_id, second.note_event_id);
 
         let n: i64 = conn
             .query_row(
@@ -357,6 +406,88 @@ mod tests {
         let after = index_session(&conn, id).unwrap();
         assert!(after.note_event_id.is_none());
         assert!(crate::search::search(&conn, "temporary thought", 10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn an_edit_survives_extraction_having_cited_the_event() {
+        // The FK case: the nightly cycle extracted a commitment from the transcript and wrote a
+        // state_provenance row citing the meeting event. A later re-index (edited note flushes
+        // re-run index_session for every kind) must neither fail on the FK nor orphan the
+        // evidence — the rewrite keeps the row, so the citation stays valid.
+        use crate::state::{CommitmentDirection, CommitmentStatus, NewCommitment, Provenance};
+        let mut conn = crate::open_in_memory().unwrap();
+        let id = session(&conn, "Weekly sync");
+        say(&conn, id, Speaker::Me, "I will send the budget", 1_100);
+        crate::session_notes::save(&conn, id, "note v1", 2_000).unwrap();
+        let first = index_session(&conn, id).unwrap();
+        let transcript_event = first.transcript_event_id.unwrap();
+
+        // extraction cites the transcript event
+        crate::state::insert_commitment(
+            &mut conn,
+            &NewCommitment {
+                direction: CommitmentDirection::Mine,
+                counterparty_id: None,
+                description: "send the budget",
+                due_at: None,
+                status: CommitmentStatus::Open,
+                project_id: None,
+                confidence: 0.4,
+                now: 2_500,
+            },
+            &[Provenance::new(transcript_event)],
+        )
+        .unwrap();
+
+        // the late note edit re-runs the whole index — including the transcript's converge pass
+        crate::session_notes::save(&conn, id, "note v2", 3_000).unwrap();
+        let second = index_session(&conn, id).expect("re-index must not trip the provenance FK");
+        assert_eq!(second.transcript_event_id, Some(transcript_event));
+        assert_eq!(crate::search::search(&conn, "note v2", 10).unwrap().len(), 1);
+
+        // the citation is intact
+        let cites: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM state_provenance WHERE event_id = ?1",
+                [transcript_event],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(cites, 1, "provenance must survive a re-index");
+    }
+
+    #[test]
+    fn a_cleared_note_with_a_citation_removes_the_citation_too() {
+        // Deleting the note deletes its evidence; provenance rows citing it must go rather than
+        // dangle (FK) — the state row stays, but it no longer claims this note as its source.
+        use crate::state::{NewOpenLoop, OpenLoopKind, Provenance};
+        let mut conn = crate::open_in_memory().unwrap();
+        let id = session(&conn, "Meeting");
+        crate::session_notes::save(&conn, id, "chase the vendor", 2_000).unwrap();
+        let first = index_session(&conn, id).unwrap();
+        let note_event = first.note_event_id.unwrap();
+        crate::state::insert_open_loop(
+            &mut conn,
+            &NewOpenLoop {
+                kind: OpenLoopKind::FollowUp,
+                description: "chase the vendor",
+                counterparty_id: None,
+                project_id: None,
+                opened_at: 2_100,
+                confidence: 0.4,
+                now: 2_100,
+            },
+            &[Provenance::new(note_event)],
+        )
+        .unwrap();
+
+        crate::session_notes::save(&conn, id, "", 3_000).unwrap();
+        index_session(&conn, id).expect("clearing a cited note must not trip the FK");
+        assert!(crate::search::search(&conn, "chase the vendor", 10).unwrap().is_empty());
+        let cites: i64 = conn
+            .query_row("SELECT count(*) FROM state_provenance WHERE event_id = ?1", [note_event], |r| r.get(0))
+            .unwrap();
+        assert_eq!(cites, 0);
     }
 
     #[test]

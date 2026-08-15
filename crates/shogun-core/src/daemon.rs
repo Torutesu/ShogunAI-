@@ -818,12 +818,28 @@ impl Db {
     /// machine was off would be a worse answer than a zero-length interval.
     pub fn close_abandoned_meetings(&self, started_before_ms: i64) -> usize {
         let Ok(conn) = self.conn.lock() else { return 0 };
-        conn.execute(
-            "UPDATE sessions SET ended_at = started_at, updated_at = ?1
-              WHERE ended_at IS NULL AND started_at < ?2",
-            rusqlite::params![self.now_ms(), started_before_ms],
-        )
-        .unwrap_or(0)
+        // Ids first, then close, then index: a crash-abandoned meeting still holds whatever
+        // transcript and note it captured, and closing is the moment that text goes on the search
+        // spine (FR-MT-14) — the bulk UPDATE alone would leave these the only meetings the user
+        // can read back but never find. Indexing is best-effort, same as `close_meeting`.
+        let ids: Vec<i64> = conn
+            .prepare("SELECT id FROM sessions WHERE ended_at IS NULL AND started_at < ?1")
+            .and_then(|mut s| {
+                s.query_map([started_before_ms], |r| r.get(0))
+                    .and_then(|rows| rows.collect())
+            })
+            .unwrap_or_default();
+        let closed = conn
+            .execute(
+                "UPDATE sessions SET ended_at = started_at, updated_at = ?1
+                  WHERE ended_at IS NULL AND started_at < ?2",
+                rusqlite::params![self.now_ms(), started_before_ms],
+            )
+            .unwrap_or(0);
+        for id in ids {
+            let _ = shogun_memory::meeting_index::index_session(&conn, id);
+        }
+        closed
     }
 
     /// The degraded Recap for an interval (FR-MT-19): what can be said locally, with no model and
@@ -4492,6 +4508,27 @@ mod tests {
         assert!(db.close_meeting(id));
 
         let hits = db.search("vendor renewal", 10);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].source, "meeting");
+    }
+
+    #[test]
+    fn an_abandoned_meeting_reaches_search_when_swept() {
+        // Crash / sleep: the session was never closed by the state machine. The startup sweep
+        // closes it — and the transcript it captured must land on the spine then, or these become
+        // the only meetings the user can read back but never find.
+        let db = Db::open_in_memory(clock(5_000)).unwrap();
+        let id = db.open_meeting(Some("Interrupted sync"), Some("us.zoom.xos"), 0.35, "{}").unwrap();
+        db.append_transcript(
+            id,
+            1_100,
+            shogun_memory::transcript_segments::Speaker::Other,
+            "we agreed on the migration window",
+            0.9,
+        );
+
+        assert_eq!(db.close_abandoned_meetings(i64::MAX), 1);
+        let hits = db.search("migration window", 10);
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].source, "meeting");
     }
