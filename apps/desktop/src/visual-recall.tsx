@@ -87,7 +87,7 @@ function beginDrag(e: React.PointerEvent): void {
  * Present-center scrub: fixed playhead at viewport middle = selected time.
  * Track uses fixed px/frame so history runs off-window to the left; drag/scroll pans under center.
  */
-function ScrubBar(props: {
+export function ScrubBar(props: {
   frames: FrameListItem[];
   value: number;
   label: string;
@@ -118,6 +118,29 @@ function ScrubBar(props: {
 
   const clampIdx = (n: number): number => Math.min(max, Math.max(0, Math.round(n)));
 
+  // rAF batching (#120): drag and wheel fire faster than frames, and every onChange re-renders
+  // the browse window AND (debounced) queues an image load. Only the last position within a frame
+  // can ever be seen, so continuous paths park the target here and one callback per frame
+  // delivers it. Taps and arrow keys are discrete and stay synchronous.
+  const pendingIdx = useRef<number | null>(null);
+  const rafId = useRef<number | null>(null);
+  const scheduleChange = (next: number): void => {
+    pendingIdx.current = next;
+    if (rafId.current == null) {
+      rafId.current = window.requestAnimationFrame(() => {
+        rafId.current = null;
+        const v = pendingIdx.current;
+        pendingIdx.current = null;
+        if (v != null) onChange(v);
+      });
+    }
+  };
+  useEffect(() => {
+    return () => {
+      if (rafId.current != null) window.cancelAnimationFrame(rafId.current);
+    };
+  }, []);
+
   /** Visual: left = older, right = newer. Fixed center playhead; rail pans underneath. */
   const seekFromClientX = (clientX: number, baseIdx: number): void => {
     const el = viewportRef.current;
@@ -141,7 +164,7 @@ function ScrubBar(props: {
     if (!d.moved && Math.abs(dx) < 3) return;
     d.moved = true;
     // Drag right → rail follows finger → older under playhead (natural left-to-right pan).
-    onChange(clampIdx(d.startIdx - dx / PX_PER_FRAME));
+    scheduleChange(clampIdx(d.startIdx - dx / PX_PER_FRAME));
   };
 
   const onPointerUp = (e: React.PointerEvent<HTMLDivElement>): void => {
@@ -160,8 +183,11 @@ function ScrubBar(props: {
     const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
     if (delta === 0) return;
     e.preventDefault();
-    // Scroll right (pos delta) → newer under playhead (left-to-right timeline feel).
-    onChange(clampIdx(value + delta / PX_PER_FRAME));
+    // Scroll right (pos delta) → newer under playhead (left-to-right timeline feel). The base is
+    // the PENDING value when one exists — wheel is incremental, and two ticks inside one frame
+    // must accumulate rather than both add to the same stale prop.
+    const base = pendingIdx.current ?? value;
+    scheduleChange(clampIdx(base + delta / PX_PER_FRAME));
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>): void => {
@@ -248,7 +274,7 @@ function ScrubBar(props: {
   );
 }
 
-function VisualRecallBrowse(): JSX.Element {
+export function VisualRecallBrowse(): JSX.Element {
   const [frames, setFrames] = useState<FrameListItem[]>([]);
   const [idx, setIdx] = useState(0);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -289,31 +315,39 @@ function VisualRecallBrowse(): JSX.Element {
     setDeleteArmed(false);
   }, [idx]);
 
+  // Keyed on the selected frame's ID, not the frames array (#120): the 12s list refresh builds a
+  // new array every time, and depending on array identity reloaded (IPC + JPEG decode) an image
+  // that had not changed.
+  const selectedFrameId = frames[idx]?.id ?? null;
   useEffect(() => {
-    if (!IN_TAURI || frames.length === 0) {
+    if (!IN_TAURI || selectedFrameId == null) {
       setPreviewUrl(null);
       setPreviewMeta(null);
       return;
     }
-    const frame = frames[idx];
-    if (!frame) return;
     let cancelled = false;
-    void invoke<FrameImage>("get_screen_frame_image", { frameId: frame.id })
-      .then((img) => {
-        if (cancelled) return;
-        setPreviewMeta(img);
-        setPreviewUrl(`data:image/jpeg;base64,${img.jpeg_base64}`);
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setPreviewUrl(null);
-          setPreviewMeta(null);
-        }
-      });
+    // Debounced (#120): scrubbing crosses many frames, and each crossed index used to issue its
+    // own get_screen_frame_image + base64 decode — work whose result was discarded a frame later.
+    // The load waits for the position to settle; a crossed frame never even sends the IPC.
+    const timer = window.setTimeout(() => {
+      void invoke<FrameImage>("get_screen_frame_image", { frameId: selectedFrameId })
+        .then((img) => {
+          if (cancelled) return;
+          setPreviewMeta(img);
+          setPreviewUrl(`data:image/jpeg;base64,${img.jpeg_base64}`);
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setPreviewUrl(null);
+            setPreviewMeta(null);
+          }
+        });
+    }, 120);
     return () => {
       cancelled = true;
+      window.clearTimeout(timer);
     };
-  }, [frames, idx]);
+  }, [selectedFrameId]);
 
   const deleteCurrent = (): void => {
     if (!IN_TAURI || frames.length === 0) return;

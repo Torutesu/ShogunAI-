@@ -450,6 +450,10 @@ export function App(): JSX.Element {
   /** Last `voice_level` timestamp — failsafe ends stuck recording after release + quiet. */
   const lastVoiceLevelAt = useRef(0);
   const voiceReleaseWatch = useRef<number | null>(null);
+  // #120: these timers are OWNED — each new event clears its predecessor before arming, so a
+  // stale timeout can never dismiss the state that replaced the one it was armed for.
+  const inlineHideTimer = useRef<number | null>(null);
+  const voiceToastTimer = useRef<number | null>(null);
 
   // Open-view size is user-resizable (corner grip) and persists across Rust-driven respawns.
   // Chat and Settings share one frame — toggling settings must not jump to a separate stored size.
@@ -564,13 +568,22 @@ export function App(): JSX.Element {
     offs.push(
       listen<InlineStatus>("inline", (e) => {
         setInline(e.payload);
+        // A new phase supersedes whatever hide was pending — without this, the fade armed for a
+        // finished draft fires into the NEXT draft's `drafting` spinner and blanks it (#120).
+        if (inlineHideTimer.current != null) {
+          window.clearTimeout(inlineHideTimer.current);
+          inlineHideTimer.current = null;
+        }
         // `drafting` holds until the outcome replaces it — a spinner that timed itself out would
         // claim the draft had finished when it hadn't. A missing or rejected key is not an outcome
         // either: nothing clears it but a trip to settings, and timing it out after two seconds is
         // how a 401 came to look identical to a shortcut that simply does not fire. Those stay up
         // until the next tap replaces them.
         if (e.payload.phase !== "drafting" && !STICKY_INLINE_PHASES.has(e.payload.phase)) {
-          window.setTimeout(() => setInline(null), INLINE_HOLD_MS);
+          inlineHideTimer.current = window.setTimeout(() => {
+            inlineHideTimer.current = null;
+            setInline(null);
+          }, INLINE_HOLD_MS);
         }
       }),
     );
@@ -626,7 +639,13 @@ export function App(): JSX.Element {
     offs.push(
       listen<{ message: string }>("voice_toast", (e) => {
         setVoiceToast(e.payload.message);
-        window.setTimeout(() => setVoiceToast(null), 2200);
+        // Owned + superseding (#120): a short toast armed earlier must not dismiss a longer
+        // error that replaced it.
+        if (voiceToastTimer.current != null) window.clearTimeout(voiceToastTimer.current);
+        voiceToastTimer.current = window.setTimeout(() => {
+          voiceToastTimer.current = null;
+          setVoiceToast(null);
+        }, 2200);
       }),
     );
     // Release signal from Rust: if UI still shows recording after 500ms with no levels, force end.
@@ -648,7 +667,11 @@ export function App(): JSX.Element {
           }
           const quietMs = performance.now() - lastVoiceLevelAt.current;
           const waited = performance.now() - started;
-          if (waited >= 500 && quietMs >= 500) {
+          // Absolute lifetime (#120): the release already happened, so the recording MUST end.
+          // Waiting for 500ms of quiet is a nicety for trailing audio — a level stream that never
+          // goes quiet would otherwise keep this interval alive forever with the UI stuck on
+          // "recording". After 8s, end it regardless.
+          if ((waited >= 500 && quietMs >= 500) || waited >= 8_000) {
             if (voiceReleaseWatch.current != null) {
               window.clearInterval(voiceReleaseWatch.current);
               voiceReleaseWatch.current = null;
@@ -739,6 +762,14 @@ export function App(): JSX.Element {
         window.clearInterval(voiceReleaseWatch.current);
         voiceReleaseWatch.current = null;
       }
+      if (inlineHideTimer.current != null) {
+        window.clearTimeout(inlineHideTimer.current);
+        inlineHideTimer.current = null;
+      }
+      if (voiceToastTimer.current != null) {
+        window.clearTimeout(voiceToastTimer.current);
+        voiceToastTimer.current = null;
+      }
       offs.forEach((p) => void p.then((off) => off()));
     };
   }, []);
@@ -768,7 +799,11 @@ export function App(): JSX.Element {
     let unlisten: (() => void) | undefined;
     void listen<{ message: string }>("voice_error", (e) => {
       setVoiceToast(e.payload.message);
-      window.setTimeout(() => setVoiceToast(null), 4000);
+      if (voiceToastTimer.current != null) window.clearTimeout(voiceToastTimer.current);
+      voiceToastTimer.current = window.setTimeout(() => {
+        voiceToastTimer.current = null;
+        setVoiceToast(null);
+      }, 4000);
     }).then((fn) => {
       unlisten = fn;
     });
