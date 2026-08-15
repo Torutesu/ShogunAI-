@@ -38,10 +38,22 @@ pub mod mac {
 
     /// Tauri command: hybrid search over the event log for the panel's search box. Empty query →
     /// empty list (the Db guards this too). `limit` is clamped to [`MAX_RESULTS`].
+    ///
+    /// A store failure comes back as an **error**, not an empty list (issue #121): "nothing
+    /// matched" is an answer the user can act on, and telling them that when the memory database
+    /// is unreachable is the one wrong thing this command can do. The reason names the failure
+    /// class only — no driver message, no row.
     #[tauri::command]
-    pub fn search_memory(query: String, limit: Option<usize>, db: tauri::State<'_, Db>) -> Vec<SearchHitView> {
+    pub fn search_memory(
+        query: String,
+        limit: Option<usize>,
+        db: tauri::State<'_, Db>,
+    ) -> Result<Vec<SearchHitView>, String> {
         let limit = limit.unwrap_or(8).min(MAX_RESULTS);
-        db.search(&query, limit)
+        let hits = db.try_search(&query, limit).map_err(|fault| {
+            format!("Memory is unavailable right now ({}) — this isn't an empty result.", fault.as_str())
+        })?;
+        Ok(hits
             .into_iter()
             .map(|hit| SearchHitView {
                 event_id: hit.event_id,
@@ -50,6 +62,6 @@ pub mod mac {
                 app: hit.app_bundle_id.unwrap_or_default(),
                 excerpt: shogun_memory::search::excerpt(&hit.content, &query, EXCERPT_CHARS),
             })
-            .collect()
+            .collect())
     }
 }

@@ -135,6 +135,13 @@ interface StartupHealth {
   accessibility: boolean;
   /** false = hybrid search unavailable, results are lexical only. */
   embedding_model: boolean;
+  /** The store opened but its last operation failed (issue #121). Self-clearing on the next
+   *  successful read, so this is a live signal rather than a boot fact. */
+  memory_degraded: boolean;
+  /** Failure class when degraded ("lock_poisoned" / "query") — a tag, never a driver message. */
+  memory_fault: string | null;
+  /** Store failures since launch; monotonic, so repeated flapping stays visible. */
+  memory_faults_total: number;
 }
 
 /** Hold-to-talk voice dialogue (#44). Rust owns lifecycle; notch expands on `voice_state`. */
@@ -1242,6 +1249,10 @@ export function App(): JSX.Element {
   const healthLine = ((): { text: string; fix: "settings" | "accessibility" | null } | null => {
     if (!health) return null;
     if (health.memory_db_error) return { text: t.healthNoMemory, fix: "settings" };
+    // The store opened but is not answering (issue #121). Ranked right under "no memory at all"
+    // because the consequence is the same — what SHOGUN knows is unreadable — and silence here
+    // is what makes an empty answer look like an honest one.
+    if (health.memory_degraded) return { text: t.healthMemoryDegraded, fix: null };
     if (!health.accessibility) return { text: t.healthNoAccess, fix: "accessibility" };
     if (!health.embedding_model) return { text: t.healthNoModel, fix: null };
     return null;
@@ -1873,9 +1884,12 @@ function ActionsRow({
 /** In-panel memory search (Plan B-6 / E-10b). Debounced hybrid search over the event log via
  *  `search_memory`; Enter copies the top match, Esc clears then closes. Records SLO-04 per query
  *  (committed → results drawn) through the same `record_ui_slo` path as the actions row. */
-function SearchBox({ onClose }: { onClose: () => void }): JSX.Element {
+export function SearchBox({ onClose }: { onClose: () => void }): JSX.Element {
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<SearchHitView[]>([]);
+  /// A store failure, not an empty result (issue #121). Held apart from `hits` because the two
+  /// mean opposite things: "nothing matched" is an answer, "memory is unavailable" is not.
+  const [failed, setFailed] = useState(false);
   const [copied, setCopied] = useState<number | null>(null);
   const inputEl = useRef<HTMLInputElement>(null);
   /// Monotonic query token: a slow early response must never overwrite a newer query's rows.
@@ -1901,6 +1915,7 @@ function SearchBox({ onClose }: { onClose: () => void }): JSX.Element {
       void invoke<SearchHitView[]>("search_memory", { query: q, limit: 8 })
         .then((r) => {
           if (mine !== seq.current) return;
+          setFailed(false);
           setHits(r);
           // SLO-04: query committed → results drawn (double-rAF, as everywhere).
           requestAnimationFrame(() =>
@@ -1911,7 +1926,13 @@ function SearchBox({ onClose }: { onClose: () => void }): JSX.Element {
             ),
           );
         })
-        .catch(() => setHits([]));
+        .catch(() => {
+          if (mine !== seq.current) return;
+          // Rust rejected the read: say the memory is unavailable rather than drawing the same
+          // "no matches" the user gets when their memory genuinely holds nothing.
+          setHits([]);
+          setFailed(true);
+        });
     }, 150);
     return () => window.clearTimeout(id);
   }, [query]);
@@ -1952,7 +1973,9 @@ function SearchBox({ onClose }: { onClose: () => void }): JSX.Element {
         }}
       />
       {query.trim() ? (
-        hits.length === 0 ? (
+        failed ? (
+          <div className="search__empty is-warn">{t.searchUnavailable}</div>
+        ) : hits.length === 0 ? (
           <div className="search__empty">{t.searchEmpty}</div>
         ) : (
           <div className="search__results">
