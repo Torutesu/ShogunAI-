@@ -182,6 +182,9 @@ pub fn classify_call(name: &str, services: &[ServiceState], ctx: &ToolContext) -
         // A service the caller did not describe is not connected. Absent means absent — never a
         // permissive default.
         .unwrap_or(ConnState::Disconnected);
+    // Matched on the deny arm rather than on the allow arms: a decision variant added later is
+    // then allowed-by-default *only* if it is genuinely not a denial, and no arm of this match
+    // can panic — the model drives this path, and a panic here would take the app with it.
     match authorize_op(
         entry.service,
         entry.scope_op,
@@ -192,12 +195,10 @@ pub fn classify_call(name: &str, services: &[ServiceState], ctx: &ToolContext) -
             plan: ctx.plan,
         },
     ) {
-        d if d.is_allowed() => {
-            CallVerdict::Read { service: entry.service, scope_op: entry.scope_op }
+        crate::service_gate::OpDecision::Denied(reason) => {
+            CallVerdict::Refused(Refusal::Denied(reason))
         }
-        crate::service_gate::OpDecision::Denied(reason) => CallVerdict::Refused(Refusal::Denied(reason)),
-        // `is_allowed()` covered every non-denied decision above.
-        _ => unreachable!("a non-denied decision is allowed"),
+        _ => CallVerdict::Read { service: entry.service, scope_op: entry.scope_op },
     }
 }
 
