@@ -139,6 +139,7 @@ fn parse_command(positionals: &[String], no_screen: bool) -> Result<Command, Cli
             }),
         },
         "metrics" => Ok(Command::Metrics),
+        "wrap" => Ok(Command::Wrap),
         "onboarding" => Ok(Command::Onboarding),
         "lessons" => parse_lessons(rest),
         "visual-recall" => parse_visual_recall(rest),

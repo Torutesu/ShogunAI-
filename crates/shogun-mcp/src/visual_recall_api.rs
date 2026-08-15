@@ -15,6 +15,7 @@ pub fn is_structured_read(tool: Tool) -> bool {
             | Tool::VisualRecallGetFrame
             | Tool::VisualRecallRescanFrame
             | Tool::LessonsList
+            | Tool::MemoryGetWrap
     )
 }
 

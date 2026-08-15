@@ -170,6 +170,9 @@ where
             let local = LocalRuleClassifier.classify(&window.local_only);
             let pc = PrecomputedClassifier::new(classified.into_iter().chain(local).collect());
             let summarizer = LocalExtractiveSummarizer;
+            // Charm (issue #10) stays unset here on purpose: the extractive summariser cannot
+            // write the line (trait default None). The Batch abstractive summariser PR adds
+            // `.with_charm(...)` from the parsed Shougun.md alongside its Summarizer impl.
             let runner = DbDreamRunner::new(db, &pc, &summarizer, now_ms);
             let report = run_cycle(db, &runner, cycle_id, CycleKind::Full, from_ts, to_ts);
             Ok(GatedRun::Ran { cycle: CycleKind::Full, report })

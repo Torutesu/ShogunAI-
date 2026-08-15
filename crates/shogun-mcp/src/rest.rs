@@ -112,6 +112,10 @@ fn resolve(method: Method, path: &str) -> Result<Routed, RouteMiss> {
         ["v1", "memory", "context_pack"] => {
             method_is(method, Method::Get, Routed::Read { tool: Tool::MemoryGetContextPack, id: None })
         }
+        // Issue #10 (invariant 6): the Evening Wrap the notch card shows, as a read.
+        ["v1", "memory", "wrap"] => {
+            method_is(method, Method::Get, Routed::Read { tool: Tool::MemoryGetWrap, id: None })
+        }
         ["v1", "device", "onboarding"] => {
             method_is(method, Method::Get, Routed::Read { tool: Tool::DeviceOnboardingGet, id: None })
         }
@@ -762,6 +766,17 @@ mod tests {
             route(&req(Method::Post, "/v1/visual_recall/frames/delete", Some("t")), &reg(), &ent()),
             Routed::Write { tool: Tool::VisualRecallDeleteFrame, level: Level::L1 }
         );
+    }
+
+    #[test]
+    fn the_wrap_endpoint_resolves_as_a_read() {
+        // Issue #10 (invariant 6): the Evening Wrap is a plain authorized GET, like every read.
+        assert_eq!(
+            route(&req(Method::Get, "/v1/memory/wrap", Some("t")), &reg(), &ent()),
+            Routed::Read { tool: Tool::MemoryGetWrap, id: None }
+        );
+        assert_eq!(route(&req(Method::Post, "/v1/memory/wrap", Some("t")), &reg(), &ent()), Routed::MethodNotAllowed);
+        assert_eq!(route(&req(Method::Get, "/v1/memory/wrap", None), &reg(), &ent()), Routed::Unauthorized);
     }
 
     #[test]

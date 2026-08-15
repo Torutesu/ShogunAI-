@@ -76,7 +76,7 @@ Settings に「Daily summaries」セクション: Morning ON/OFF、Evening ON/OF
 
 1. **M1**: `daily_delivery` 純粋ロジック＋`daily_summaries.json`＋Tauri コマンド（`evening_wrap` / `summary_state` / `mark_summary_seen` / 設定 get/set）— **済 2026-08-15**（＋`morning_card` / `open_summary_source` を M2 で追加）
 2. **M2**: ハンドル notice＋Evening カード＋Morning カード導線＋Settings セクション＋`SummaryReady` cue — **済 2026-08-15**（`daily.tsx` カード、ソースチップ=接続サービス名 or キャプチャ元アプリ名、チップクリックで `open_summary_source`。イベントに URL カラムは無いため v1 はアプリ/サービスの前面化。`BriefPayload.charm_line` フィールドも serde default で先行追加済み）
-3. **M3**: `charm_line` の生成（MorningBrief ジョブ拡張）＋`memory.get_wrap` 3面
+3. **M3**: `charm_line` の生成（MorningBrief ジョブ拡張）＋`memory.get_wrap` 3面 — **済 2026-08-15**。charm は `Summarizer::charm_line(CharmRequest)` シーム（既定 None=劣化夜は行ごと省略。`DbDreamRunner::with_charm` で `# Charm` を注入。Batch abstractive summarizer 実装 PR が実生成を担う）。wrap は `Tool::MemoryGetWrap` = `memory.get_wrap` / `GET /v1/memory/wrap` / `shogun wrap` の3面対称（structured read、`db_backend::evening_wrap_json` が カードと同じ `Db::evening_wrap` を配る）
 4. 受入: 純粋ロジックのテスト（境界3種）、wrap コマンドの統合テスト、デスクトップは vitest でカード描画＋既読遷移
 
 ## 7. やらないこと
