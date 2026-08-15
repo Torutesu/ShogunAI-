@@ -18,12 +18,14 @@ Implemented instant app-aware Option-key drafting in `crates/shogun-core/src/inl
 - Added adversarial coverage placing the closing delimiter in app, field label, text before/after the cursor, and memory; only the real closing marker remains in the generated prompt.
 - Updated desktop capture preassembly to fingerprint captured AX text per focus key. Same-window content changes rebuild `ReplyContext`; unchanged content skips rebuild. Option release still performs no retrieval.
 - Added desktop helper tests proving same-key changed content refreshes and same-key unchanged content does not.
+- Added `ReplyContextCache::clear()` and centralized capture invalidation. Excluded, empty, unavailable, no-window, app-self, Accessibility-untrusted, and policy-lock-failure paths now clear the warm pack and reset fingerprint state, preventing prior sensitive content from reaching BYOK.
+- Added cache-clear and desktop invalidation tests for excluded, empty, and unavailable outcomes.
 
 ## Validation
 
 - `cargo test -p shogun-core inline::tests`: 14 passed (including delimiter adversary).
-- `cargo test -p shogun-core`: 319 passed.
-- `cargo check -p shogun-desktop-spike`: passed after capture refresh change.
+- `cargo test -p shogun-core`: 319 passed after cache invalidation change.
+- `cargo check -p shogun-desktop-spike`: passed after cache invalidation change.
 - `git diff --check`: passed.
 
 The Rust commands emit existing unrelated warnings (`unused_unsafe`, unused imports, dead code, and naming warnings); no new warning was introduced by this change.

@@ -205,6 +205,13 @@ impl ReplyContextCache {
         }
     }
 
+    /// Drop warm context when the capture source can no longer vouch for the focused surface.
+    pub fn clear(&self) {
+        if let Ok(mut g) = self.inner.lock() {
+            *g = None;
+        }
+    }
+
     /// The warm pack for `thread_key`, if that is the one currently held.
     pub fn get(&self, thread_key: &str) -> Option<ReplyContext> {
         let g = self.inner.lock().ok()?;
@@ -2818,6 +2825,17 @@ mod tests {
             "a different thread is a miss — never serve the wrong thread's context"
         );
         assert_eq!(cache.current().map(|c| c.thread_key), Some(key));
+    }
+
+    #[test]
+    fn clearing_the_reply_context_cache_removes_current_context() {
+        let cache = ReplyContextCache::new();
+        cache.put(ReplyContext { thread_key: "sensitive".into(), ..ReplyContext::default() });
+        assert!(cache.current().is_some());
+
+        cache.clear();
+
+        assert!(cache.current().is_none());
     }
 
     /// "How's that going?" with one obvious candidate resolves to it.

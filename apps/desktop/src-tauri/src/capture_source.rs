@@ -142,6 +142,22 @@ mod mac {
         last_capture != Some(&current_capture)
     }
 
+    fn capture_outcome_is_usable(outcome: Option<&CaptureOutcome>) -> bool {
+        matches!(outcome, Some(CaptureOutcome::Captured { .. }))
+    }
+
+    fn invalidate_reply_context(
+        cache: Option<&shogun_core::daemon::ReplyContextCache>,
+        warm_for: &mut Option<String>,
+        last_capture: &mut Option<CaptureFingerprint>,
+    ) {
+        if let Some(cache) = cache {
+            cache.clear();
+        }
+        *warm_for = None;
+        *last_capture = None;
+    }
+
     /// Capture the current focus into memory once. Reads the frontmost app, builds the focused
     /// window's `AxNode`, runs the exclusion→walk composition (250 ms budget), and — on a real
     /// capture — persists it via `Db::ingest_capture` (collapse + extract). `dwell_ms` is credited
@@ -343,15 +359,20 @@ mod mac {
                     last_frame_purge = Instant::now();
                 }
 
-                if ax_trusted_silent() {
-                    // Re-read the policy each tick: excluding an app is usually a reaction to
-                    // what is on screen right now, so it must take effect now, not next launch.
-                    // A poisoned lock means capture stops rather than ignoring exclusions.
-                    let Ok(current) = policy.lock() else {
-                        eprintln!("[capture] exclusion policy unreadable — pausing capture");
-                        std::thread::sleep(interval);
-                        continue;
-                    };
+                if !ax_trusted_silent() {
+                    invalidate_reply_context(reply_cache.as_ref(), &mut warm_for, &mut last_capture);
+                    std::thread::sleep(interval);
+                    continue;
+                }
+                // Re-read the policy each tick: excluding an app is usually a reaction to
+                // what is on screen right now, so it must take effect now, not next launch.
+                // A poisoned lock means capture stops rather than ignoring exclusions.
+                let Ok(current) = policy.lock() else {
+                    eprintln!("[capture] exclusion policy unreadable — pausing capture");
+                    invalidate_reply_context(reply_cache.as_ref(), &mut warm_for, &mut last_capture);
+                    std::thread::sleep(interval);
+                    continue;
+                };
                     let visual = crate::visual_recall::mac::refresh_settings(&visual_recall);
                     let ax_outcome = capture_once(&db, &current, dwell_ms);
                     if let Some(CaptureOutcome::Excluded(_)) = ax_outcome.as_ref() {
@@ -394,7 +415,13 @@ mod mac {
                     // collecting on the press is what that budget forbids). Rebuilt only when the
                     // focused thread or captured AX text changes, so a steady poll costs nothing.
                     if let Some(cache) = reply_cache.as_ref() {
-                        if let Some((key, win_title)) = focused_thread_key_and_title() {
+                        if !capture_outcome_is_usable(ax_outcome.as_ref()) {
+                            invalidate_reply_context(
+                                Some(cache),
+                                &mut warm_for,
+                                &mut last_capture,
+                            );
+                        } else if let Some((key, win_title)) = focused_thread_key_and_title() {
                             if reply_context_needs_refresh(
                                 warm_for.as_deref(),
                                 last_capture.as_ref(),
@@ -423,9 +450,14 @@ mod mac {
                             } else if warm_for.as_deref() != Some(key.as_str()) {
                                 last_capture = None;
                             }
+                        } else {
+                            invalidate_reply_context(
+                                Some(cache),
+                                &mut warm_for,
+                                &mut last_capture,
+                            );
                         }
                     }
-                }
                 std::thread::sleep(interval);
             }
         })
@@ -490,6 +522,38 @@ mod mac {
                 "same-window",
                 Some(&current),
             ));
+        }
+
+        #[test]
+        fn excluded_empty_and_unavailable_capture_invalidate_warm_context() {
+            let outcomes = [
+                Some(CaptureOutcome::Excluded(
+                    shogun_core::capture::exclusion::ExclusionReason::UserApp,
+                )),
+                Some(CaptureOutcome::Empty),
+                None,
+            ];
+
+            for outcome in outcomes {
+                let cache = shogun_core::daemon::ReplyContextCache::new();
+                cache.put(shogun_core::daemon::ReplyContext {
+                    thread_key: "sensitive".into(),
+                    ..shogun_core::daemon::ReplyContext::default()
+                });
+                let mut warm_for = Some("sensitive".to_string());
+                let mut last_capture = capture_fingerprint("sensitive", Some(&captured("secret")));
+
+                assert!(!capture_outcome_is_usable(outcome.as_ref()));
+                invalidate_reply_context(
+                    Some(&cache),
+                    &mut warm_for,
+                    &mut last_capture,
+                );
+
+                assert!(cache.current().is_none());
+                assert!(warm_for.is_none());
+                assert!(last_capture.is_none());
+            }
         }
     }
 }
