@@ -45,8 +45,10 @@ pub enum Category {
 /// Every sound the product can make. Deliberately short: each addition costs a file, a policy
 /// question and a chance to annoy someone every day.
 ///
-/// There is intentionally no cue for L1 execution, sync progress, indexing, Dream Cycle or
-/// Morning Brief (design doc §4 "anti-categories" and rule S3).
+/// There is intentionally no cue for L1 execution, sync progress, indexing or the Dream Cycle
+/// (design doc §4 "anti-categories" and rule S3). The daily summaries are the one recorded
+/// exception (issue #10, owner decision 2026-08-15): `SummaryReady` marks the morning/evening
+/// card arriving, and being `Ready`-tier it stays opt-in (Pref::Full) and quiet-hours-gated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Cue {
     /// The notch was summoned by hotkey.
@@ -69,6 +71,8 @@ pub enum Cue {
     ModelReady,
     /// A connector finished authenticating (the landing point when they come back from a browser).
     ConnectorLinked,
+    /// A daily summary card (morning / evening) arrived in the notch (issue #10).
+    SummaryReady,
     /// Onboarding completed. Once in the life of an install.
     OnboardingComplete,
     /// The app launched. Silent unless the user turned the startup sound on (D1).
@@ -79,7 +83,9 @@ impl Cue {
     pub fn category(self) -> Category {
         match self {
             Cue::Summon | Cue::VoiceStart | Cue::VoiceEnd => Category::Ack,
-            Cue::RecapReady | Cue::ModelReady | Cue::ConnectorLinked => Category::Ready,
+            Cue::RecapReady | Cue::ModelReady | Cue::ConnectorLinked | Cue::SummaryReady => {
+                Category::Ready
+            }
             Cue::ApprovalPending | Cue::MeetingOffered => Category::Ask,
             Cue::VoiceFailed | Cue::CaptureStopped => Category::Fail,
             Cue::OnboardingComplete | Cue::AppLaunched => Category::Signature,
@@ -96,7 +102,7 @@ impl Cue {
             Cue::Summon | Cue::VoiceStart => "ack-open",
             // The same motion inverted, so the pair is audibly a pair.
             Cue::VoiceEnd => "ack-close",
-            Cue::RecapReady | Cue::ModelReady | Cue::ConnectorLinked => "ready",
+            Cue::RecapReady | Cue::ModelReady | Cue::ConnectorLinked | Cue::SummaryReady => "ready",
             Cue::ApprovalPending | Cue::MeetingOffered => "ask",
             Cue::VoiceFailed | Cue::CaptureStopped => "fail",
             Cue::OnboardingComplete | Cue::AppLaunched => "signature",
@@ -116,13 +122,14 @@ impl Cue {
             Cue::CaptureStopped => "capture_stopped",
             Cue::ModelReady => "model_ready",
             Cue::ConnectorLinked => "connector_linked",
+            Cue::SummaryReady => "summary_ready",
             Cue::OnboardingComplete => "onboarding_complete",
             Cue::AppLaunched => "app_launched",
         }
     }
 
     /// Every cue, for the preview list in Settings and for exhaustiveness in tests.
-    pub const ALL: [Cue; 12] = [
+    pub const ALL: [Cue; 13] = [
         Cue::Summon,
         Cue::VoiceStart,
         Cue::VoiceEnd,
@@ -133,6 +140,7 @@ impl Cue {
         Cue::CaptureStopped,
         Cue::ModelReady,
         Cue::ConnectorLinked,
+        Cue::SummaryReady,
         Cue::OnboardingComplete,
         Cue::AppLaunched,
     ];

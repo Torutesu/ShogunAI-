@@ -63,6 +63,12 @@ pub struct BriefPayload {
     pub what_happened: Vec<String>,
     /// Suggested actions (≤3), permission-level-tagged.
     pub suggested_actions: Vec<BriefActionLine>,
+    /// One Charm line for the morning greeting (issue #10): written nightly by the MorningBrief
+    /// job from the user's `# Charm` directives, on the Batch lane. `None` when no directives
+    /// exist or the night degraded — the card simply omits the line. `serde(default)` keeps every
+    /// already-stored payload readable (JSON-internal field, no migration).
+    #[serde(default)]
+    pub charm_line: Option<String>,
 }
 
 /// A `briefs` row as stored, plus the derived `updated` flag.
@@ -191,6 +197,7 @@ mod tests {
             open_loops: vec![],
             what_happened: vec![],
             suggested_actions: vec![],
+            charm_line: None,
         })
         .unwrap()
     }
@@ -286,9 +293,20 @@ mod tests {
             open_loops: vec![],
             what_happened: vec!["shipped the report".into()],
             suggested_actions: vec![BriefActionLine { label: "prep the standup".into(), level: "L2".into() }],
+            charm_line: Some("your knack for order is the lever today".into()),
         };
         let json = serde_json::to_string(&p).unwrap();
         let back: BriefPayload = serde_json::from_str(&json).unwrap();
         assert_eq!(back, p);
+    }
+
+    #[test]
+    fn payloads_stored_before_charm_existed_still_parse() {
+        // Every brief row written before issue #10 lacks the field; reading one back must not
+        // become a parse error that silently downgrades the morning to the degraded brief.
+        let old = r#"{"date":"2026-08-01","today":[],"commitments_due":[],"open_loops":[],
+                      "what_happened":[],"suggested_actions":[]}"#;
+        let p: BriefPayload = serde_json::from_str(old).unwrap();
+        assert_eq!(p.charm_line, None);
     }
 }

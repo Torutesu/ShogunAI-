@@ -819,6 +819,14 @@ pub mod mac {
     #[tauri::command]
     pub fn interact(kind: String, shared: tauri::State<'_, Arc<Shared>>) {
         eprintln!("[spike] cmd interact kind={kind}");
+        // In-panel input never reaches the global monitors (they only see other apps' events),
+        // so the daily-summary presence stamp (issue #10) is taken here too.
+        crate::daily_summaries::note_global_input(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or(0),
+        );
         if let Ok(mut sess) = shared.session.lock() {
             if let Some(d) = sess.as_mut() {
                 match kind.as_str() {

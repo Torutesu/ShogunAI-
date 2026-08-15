@@ -2440,6 +2440,21 @@ impl Db {
         self.conn.lock().ok().and_then(|c| shogun_memory::briefs::get_brief(&c, date).ok().flatten())
     }
 
+    /// Where one event came from: its `source` plus, for captured events, the app it was captured
+    /// in. This is the daily-summary card's deep-link data (issue #10): the chip label comes from
+    /// the source, and a capture event's `app_bundle_id` is the app the chip re-opens. Metadata
+    /// only — the event's content never rides along.
+    pub fn event_source(&self, event_id: i64) -> Option<(String, Option<String>)> {
+        self.conn.lock().ok().and_then(|c| {
+            c.query_row(
+                "SELECT source, app_bundle_id FROM event_log WHERE id = ?1",
+                [event_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .ok()
+        })
+    }
+
     // -------------------------------------------------------------- L5 lessons (Plan D-4/D-5/D-6)
     // Db wrappers over `shogun_memory::lessons`, next to the brief wrappers: the
     // LessonDistillation Dream job, Context Fusion injection, and the Memory API lessons tools
@@ -3032,6 +3047,17 @@ mod tests {
             display_id: Some(1),
             window_bounds: None,
         }
+    }
+
+    #[test]
+    fn event_source_returns_origin_metadata_only() {
+        let db = Db::open_in_memory(clock(10)).unwrap();
+        let (id, _) = db.capture(&ev("some captured text", "h1", 1)).unwrap();
+        assert_eq!(
+            db.event_source(id),
+            Some(("capture".to_string(), Some("com.apple.Safari".to_string())))
+        );
+        assert_eq!(db.event_source(id + 999), None, "unknown id is None, not an error");
     }
 
     #[test]

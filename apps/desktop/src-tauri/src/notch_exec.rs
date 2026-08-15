@@ -86,8 +86,9 @@ pub mod mac {
     }
 
     /// Bring an app to the foreground by bundle id via `NSWorkspace` (macOS-only; same raw
-    /// `msg_send!` style as the workspace watchers in `lib.rs`).
-    fn open_app(bundle_id: &str) -> Result<(), String> {
+    /// `msg_send!` style as the workspace watchers in `lib.rs`). `pub(crate)`: the daily-summary
+    /// source chips (issue #10) re-open a captured event's app through the same seam.
+    pub(crate) fn open_app(bundle_id: &str) -> Result<(), String> {
         // SAFETY: sharedWorkspace and both returned URLs are get-rule/autoreleased — nothing to
         // release; the NSString outlives the call that borrows it.
         unsafe {
