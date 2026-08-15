@@ -167,10 +167,19 @@ pub mod mac {
         match action {
             SendAction::SendEmail { to } => (LessonScope::Person, Some(to.as_str()), "send_email"),
             SendAction::PostMessage { .. } => (LessonScope::Global, None, "post_message"),
+            SendAction::AddReaction { .. } => (LessonScope::Global, None, "add_reaction"),
             SendAction::CreateCalendarEvent { .. } => {
                 (LessonScope::Global, None, "create_calendar_event")
             }
+            SendAction::UpdateCalendarEvent { .. } => {
+                (LessonScope::Global, None, "update_calendar_event")
+            }
             SendAction::PostComment { .. } => (LessonScope::Global, None, "post_comment"),
+            SendAction::CreateDocument { .. } => (LessonScope::Global, None, "create_document"),
+            SendAction::UpdateDocument { .. } => (LessonScope::Global, None, "update_document"),
+            SendAction::ChangeIssueStatus { .. } => {
+                (LessonScope::Global, None, "change_issue_status")
+            }
         }
     }
 
