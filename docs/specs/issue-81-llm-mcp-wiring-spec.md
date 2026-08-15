@@ -111,6 +111,13 @@ user message
    - **拒否は予算を消費しない**。拒否はサービス往復を発生させていないので、混乱したモデルがデータに到達する前にターンを使い切ることを防ぐ
    - **失敗結果を捏造しない**。タイムアウト・トランスポート失敗はいずれも `is_error: true` の tool_result として返す（モデルがそれを土台に回答を組み立てるのを防ぐ）
    - 未記述サービスは `Disconnected` 扱い（absent ≠ permissive）
-3. `feat(agents): write/send 系の L1-L3 ルーティング + invariant4 テスト拡張`
+3. `feat(agents): write/send 系の L1-L3 ルーティング + invariant4 テスト拡張` — **済 2026-08-15**（`tool_catalog` の `ToolKind::Propose` ＋ `tool_loop` の `ProposalSink`）
+
+   実装時に確定した設計判断:
+   - **送信ツールは「提案ツール」として公開する**（`propose_send_email` 等）。呼んでも実行されず、L3 の `SendAction` として承認キューへ入るだけ。`tool_result` は `is_error: true` で「まだ送っていない・ユーザーの承認待ち」と明示する（モデルが送信済みとして報告するのを防ぐ）
+   - **`SendAction` を権限表の `ExternalSend` 全行に対して全域化**（`AddReaction` / `UpdateCalendarEvent` / `CreateDocument` / `UpdateDocument` / `ChangeIssueStatus` を追加）。variant によらず `Action::Send(_) => L3` なので不変条件4は弱まらない。承認 UI の `describe()` が網羅 match なので、新しい送信は人間可読の要約を書かないとコンパイルが通らない
+   - **`ServiceStateChange` 行（Gmail の draft/label）は未公開**。`LocalAction`（端末内のみ）でも `SendAction`（不可逆に端末外）でもない第三のカテゴリで、これを足すのは権限モデルの変更であってカタログの変更ではない。別 Issue 相当
+   - **Action variant が衝突する送信は片方だけ公開**。`route_send` は variant → 1サービスなので、Linear のコメントと GitHub のコメントを両方公開すると承認済み Linear コメントが GitHub に飛ぶ。`shogun-integrations` に **round-trip 整合性テスト**（公開中の提案は必ず自分のサービスに戻る）を置き、この線を守る。Notion の page create / Linear の issue comment は variant がサービスを名乗れるようになるまで未公開
+   - **提案と読み取りは同一のツール予算**を共有する
 4. `feat(core): traceability Route::Mcp + UI イベント発火`
 5. `test(e2e): 実機 Calendar 結線検証`（#80 完了後）

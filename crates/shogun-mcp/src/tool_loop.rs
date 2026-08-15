@@ -1,14 +1,15 @@
-//! The read-tool conversation loop (issue #81 step 2, spec §4-3).
+//! The tool conversation loop (issue #81 steps 2–3, spec §4-3).
 //!
 //! Between the model asking for a tool and a service answering sits exactly one decision point,
 //! and this is it: every `tool_use` is resolved through the catalog, judged by
 //! [`crate::service_gate::authorize_op`], and only then handed to a runner. Nothing else can
 //! reach a service on the model's behalf.
 //!
-//! **Reads only.** A tool the catalog does not publish as a read is refused here rather than
-//! executed, and the refusal says so honestly instead of inventing a result — a fabricated
-//! `tool_result` is worse than an error, because the model will build an answer on it. Writes and
-//! sends route through the L1/L2/L3 engine, which is step 3.
+//! **Reads run; sends only ever become proposals.** A read is executed and its data returned. A
+//! [`ToolKind::Propose`] tool never performs anything here: it becomes an L3 [`Action`] handed to
+//! the approval sink, and the model is told plainly that it is waiting for the user. Nothing in
+//! this loop can execute a send, and no result is ever fabricated — a made-up `tool_result` is
+//! worse than an error, because the model builds an answer on it.
 //!
 //! **Synchronous and seam-driven.** The loop is pure orchestration over two traits, so the whole
 //! of it — budgets, refusals, timeouts, termination — is testable on Linux with no runtime and no
@@ -24,7 +25,8 @@ use serde_json::Value;
 use crate::connection::ConnState;
 use crate::scope::{self, OpClass, Service};
 use crate::service_gate::{authorize_op, DenyReason, OpContext};
-use crate::tool_catalog::{catalog_entry, ServiceState, ToolContext};
+use crate::tool_catalog::{catalog_entry, proposed_action, proposed_body, ServiceState, ToolContext, ToolKind};
+use shogun_agents::permission::Action;
 
 /// Tool calls allowed in one turn (spec §4-3). Past this the model is asked to answer with what
 /// it has: an unbounded loop is both a cost leak and a way for a confused model to never finish.
@@ -110,6 +112,14 @@ pub trait ReadToolRunner {
     ) -> Result<String, ToolRunError>;
 }
 
+/// Where a proposal goes. The implementation is the L3 approval queue; this loop only hands the
+/// action over and reports back, so there is no code path here that could execute one.
+pub trait ProposalSink {
+    /// Queue `action` for the user's approval, with the content they will see verbatim.
+    /// `Err` means it could not even be queued — never that it was performed.
+    fn propose(&mut self, action: Action, body: &str) -> Result<(), String>;
+}
+
 /// Why a tool call was refused before it reached a runner.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Refusal {
@@ -117,9 +127,12 @@ pub enum Refusal {
     UnknownTool,
     /// Published, but the gate says no right now.
     Denied(DenyReason),
-    /// Published but not a read. Unreachable while the catalog holds reads only; kept as a hard
-    /// stop so a future catalog row cannot make this loop execute a write.
-    NotARead,
+    /// Published, allowed, but the input did not describe a destination — an approval prompt with
+    /// no recipient is not something a user could meaningfully confirm.
+    NoDestination,
+    /// The catalog's kind and the permission table disagree about this row. Refused rather than
+    /// resolved: guessing which side is right is how a send gets executed as if it were a read.
+    Inconsistent,
 }
 
 impl Refusal {
@@ -149,9 +162,10 @@ impl Refusal {
             Refusal::Denied(DenyReason::DraftStop) => {
                 "Sending is switched off; only drafts are possible."
             }
-            Refusal::NotARead => {
-                "That action needs the user's approval and cannot be run from here."
+            Refusal::NoDestination => {
+                "Say who or what this is for — an approval needs a destination."
             }
+            Refusal::Inconsistent => "That operation is not available.",
         }
     }
 }
@@ -161,19 +175,32 @@ impl Refusal {
 pub enum CallVerdict {
     /// Allowed: run this `(service, scope op)` as a read.
     Read { service: Service, scope_op: &'static str },
+    /// Allowed as a *proposal*: hand this action to the approval sink. It is L3 by construction,
+    /// so nothing here can execute it.
+    Propose { action: Action, body: String },
     Refused(Refusal),
 }
 
 /// Resolve and authorize one tool call. Pure — no execution, no I/O — so every branch is
 /// reachable in a test.
-pub fn classify_call(name: &str, services: &[ServiceState], ctx: &ToolContext) -> CallVerdict {
+pub fn classify_call(
+    name: &str,
+    input: &Value,
+    services: &[ServiceState],
+    ctx: &ToolContext,
+) -> CallVerdict {
     let Some(entry) = catalog_entry(name) else {
         return CallVerdict::Refused(Refusal::UnknownTool);
     };
-    // A catalog row that is not a read must never be executed here, whatever the gate says about
-    // it — the approval engine owns those (invariant 4).
-    if scope::lookup(entry.service, entry.scope_op).map(|o| o.class) != Some(OpClass::Read) {
-        return CallVerdict::Refused(Refusal::NotARead);
+    // The catalog's promise and the permission table must agree before anything else is
+    // considered. A row where they disagree is refused, never reconciled.
+    let class = scope::lookup(entry.service, entry.scope_op).map(|o| o.class);
+    let consistent = match entry.kind {
+        ToolKind::Read => class == Some(OpClass::Read),
+        ToolKind::Propose => class.is_some_and(OpClass::is_external_send),
+    };
+    if !consistent {
+        return CallVerdict::Refused(Refusal::Inconsistent);
     }
     let conn = services
         .iter()
@@ -198,7 +225,13 @@ pub fn classify_call(name: &str, services: &[ServiceState], ctx: &ToolContext) -
         crate::service_gate::OpDecision::Denied(reason) => {
             CallVerdict::Refused(Refusal::Denied(reason))
         }
-        _ => CallVerdict::Read { service: entry.service, scope_op: entry.scope_op },
+        _ => match entry.kind {
+            ToolKind::Read => CallVerdict::Read { service: entry.service, scope_op: entry.scope_op },
+            ToolKind::Propose => match proposed_action(entry, input) {
+                Some(action) => CallVerdict::Propose { action, body: proposed_body(input) },
+                None => CallVerdict::Refused(Refusal::NoDestination),
+            },
+        },
     }
 }
 
@@ -211,6 +244,8 @@ pub struct LoopOutcome {
     /// service round-trip, and charging for it would let a confused model exhaust the turn
     /// without ever reaching data).
     pub executed: u32,
+    /// Actions queued for the user's approval. None of them ran.
+    pub proposed: u32,
     /// The tool budget ran out and the model was asked to answer with what it had.
     pub hit_tool_budget: bool,
 }
@@ -219,27 +254,29 @@ pub struct LoopOutcome {
 ///
 /// Errors are reserved for the conversation itself failing — a tool failing is a `tool_result`,
 /// not the end of the turn.
-pub fn run_read_loop<M: ModelTurnSource, R: ReadToolRunner>(
+pub fn run_read_loop<M: ModelTurnSource, R: ReadToolRunner, P: ProposalSink>(
     model: &mut M,
     runner: &mut R,
+    sink: &mut P,
     services: &[ServiceState],
     ctx: &ToolContext,
     limits: LoopLimits,
 ) -> Result<LoopOutcome, String> {
     let mut results: Vec<ToolResult> = Vec::new();
     let mut executed = 0u32;
+    let mut proposed = 0u32;
     let mut hit_tool_budget = false;
 
     for _ in 0..MAX_MODEL_TURNS {
         match model.next_turn(&results)? {
             ModelTurn::Final(answer) => {
-                return Ok(LoopOutcome { answer, executed, hit_tool_budget })
+                return Ok(LoopOutcome { answer, executed, proposed, hit_tool_budget })
             }
             ModelTurn::ToolUses(uses) => {
                 results = uses
                     .into_iter()
                     .map(|use_| {
-                        if executed >= limits.max_tool_uses {
+                        if executed + proposed >= limits.max_tool_uses {
                             hit_tool_budget = true;
                             return ToolResult {
                                 id: use_.id,
@@ -249,12 +286,36 @@ pub fn run_read_loop<M: ModelTurnSource, R: ReadToolRunner>(
                                 is_error: true,
                             };
                         }
-                        match classify_call(&use_.name, services, ctx) {
+                        match classify_call(&use_.name, &use_.input, services, ctx) {
                             CallVerdict::Refused(r) => ToolResult {
                                 id: use_.id,
                                 content: r.model_message().to_string(),
                                 is_error: true,
                             },
+                            // A proposal is not a result. It is flagged as an error so the model
+                            // cannot report the send as done, and the text says what actually
+                            // happened: it is waiting for the user.
+                            CallVerdict::Propose { action, body } => {
+                                proposed += 1;
+                                match sink.propose(action, &body) {
+                                    Ok(()) => ToolResult {
+                                        id: use_.id,
+                                        content: "Prepared and waiting for the user's approval. \
+                                                  Nothing has been sent. Tell them it is ready to \
+                                                  approve."
+                                            .to_string(),
+                                        is_error: true,
+                                    },
+                                    Err(why) => ToolResult {
+                                        id: use_.id,
+                                        content: format!(
+                                            "That could not be prepared ({why}). Nothing has been \
+                                             sent."
+                                        ),
+                                        is_error: true,
+                                    },
+                                }
+                            }
                             CallVerdict::Read { service, scope_op } => {
                                 executed += 1;
                                 match runner.run(service, scope_op, &use_.input, limits.tool_timeout_ms) {
@@ -358,6 +419,23 @@ mod tests {
         }
     }
 
+    /// Records everything queued for approval, and can refuse.
+    #[derive(Default)]
+    struct RecordingSink {
+        queued: Vec<(Action, String)>,
+        refuse: Option<String>,
+    }
+
+    impl ProposalSink for RecordingSink {
+        fn propose(&mut self, action: Action, body: &str) -> Result<(), String> {
+            if let Some(why) = &self.refuse {
+                return Err(why.clone());
+            }
+            self.queued.push((action, body.to_string()));
+            Ok(())
+        }
+    }
+
     /// A model that asks for one tool forever — the termination backstop's test subject.
     struct NeverSettles;
     impl ModelTurnSource for NeverSettles {
@@ -370,7 +448,7 @@ mod tests {
 
     #[test]
     fn a_published_tool_on_a_connected_service_is_allowed() {
-        let v = classify_call("list_calendar_events", &[connected(Service::GoogleCalendar)], &ctx());
+        let v = classify_call("list_calendar_events", &json!({}), &[connected(Service::GoogleCalendar)], &ctx());
         assert_eq!(
             v,
             CallVerdict::Read { service: Service::GoogleCalendar, scope_op: "read_sync" }
@@ -379,14 +457,14 @@ mod tests {
 
     #[test]
     fn a_hallucinated_tool_is_refused_without_touching_a_service() {
-        let v = classify_call("delete_everything", &[connected(Service::GoogleCalendar)], &ctx());
+        let v = classify_call("delete_everything", &json!({}), &[connected(Service::GoogleCalendar)], &ctx());
         assert_eq!(v, CallVerdict::Refused(Refusal::UnknownTool));
     }
 
     #[test]
     fn a_service_the_caller_did_not_describe_counts_as_disconnected() {
         // Absent must never mean permitted: the loop is handed the state it is allowed to trust.
-        let v = classify_call("list_calendar_events", &[], &ctx());
+        let v = classify_call("list_calendar_events", &json!({}), &[], &ctx());
         assert_eq!(v, CallVerdict::Refused(Refusal::Denied(DenyReason::NotConnected)));
     }
 
@@ -394,6 +472,7 @@ mod tests {
     fn the_gate_reason_survives_to_the_model_without_leaking_internals() {
         let v = classify_call(
             "list_calendar_events",
+            &json!({}),
             &[ServiceState { service: Service::GoogleCalendar, conn: ConnState::Disconnected }],
             &ctx(),
         );
@@ -410,7 +489,8 @@ mod tests {
         // Each variant must be answerable; a silent refusal would let the model assume success.
         let reasons = [
             Refusal::UnknownTool,
-            Refusal::NotARead,
+            Refusal::NoDestination,
+            Refusal::Inconsistent,
             Refusal::Denied(DenyReason::NotConnected),
             Refusal::Denied(DenyReason::NeedsReauth),
             Refusal::Denied(DenyReason::PlanNotEntitled),
@@ -436,6 +516,7 @@ mod tests {
         let out = run_read_loop(
             &mut model,
             &mut runner,
+            &mut RecordingSink::default(),
             &[connected(Service::GoogleCalendar)],
             &ctx(),
             LoopLimits::default(),
@@ -469,6 +550,7 @@ mod tests {
         let out = run_read_loop(
             &mut model,
             &mut runner,
+            &mut RecordingSink::default(),
             &[connected(Service::GoogleCalendar)],
             &ctx(),
             LoopLimits::default(),
@@ -490,6 +572,7 @@ mod tests {
         let out = run_read_loop(
             &mut model,
             &mut runner,
+            &mut RecordingSink::default(),
             &[connected(Service::GoogleCalendar)],
             &ctx(),
             LoopLimits::default(),
@@ -511,6 +594,7 @@ mod tests {
         run_read_loop(
             &mut model,
             &mut runner,
+            &mut RecordingSink::default(),
             &[connected(Service::GoogleCalendar)],
             &ctx(),
             LoopLimits::default(),
@@ -534,6 +618,7 @@ mod tests {
         let out = run_read_loop(
             &mut model,
             &mut runner,
+            &mut RecordingSink::default(),
             &[connected(Service::GoogleCalendar)],
             &ctx(),
             limits,
@@ -554,6 +639,7 @@ mod tests {
         let err = run_read_loop(
             &mut NeverSettles,
             &mut runner,
+            &mut RecordingSink::default(),
             &[connected(Service::GoogleCalendar)],
             &ctx(),
             LoopLimits::default(),
@@ -578,6 +664,7 @@ mod tests {
         run_read_loop(
             &mut model,
             &mut runner,
+            &mut RecordingSink::default(),
             &[connected(Service::GoogleCalendar)],
             &ctx(),
             LoopLimits::default(),
@@ -594,11 +681,162 @@ mod tests {
         assert_eq!(ids, vec!["t1", "t2"], "results come back against their own ids, in order");
     }
 
+    // ---- proposals ---------------------------------------------------------------------------
+
+    #[test]
+    fn a_send_becomes_a_proposal_and_is_never_executed() {
+        let mut model = ScriptedModel::new(vec![
+            ModelTurn::ToolUses(vec![ToolUse {
+                id: "p1".into(),
+                name: "propose_calendar_event".into(),
+                input: json!({ "title": "Vendor sync", "body": "Tuesday 3pm with Acme" }),
+            }]),
+            ModelTurn::Final("I've prepared it for you to approve.".into()),
+        ]);
+        let mut runner = RecordingRunner::ok();
+        let mut sink = RecordingSink::default();
+        let out = run_read_loop(
+            &mut model,
+            &mut runner,
+            &mut sink,
+            &[connected(Service::GoogleCalendar)],
+            &ctx(),
+            LoopLimits::default(),
+        )
+        .unwrap();
+
+        assert!(runner.calls.is_empty(), "a proposal must never reach the read runner");
+        assert_eq!(out.executed, 0);
+        assert_eq!(out.proposed, 1);
+        assert_eq!(
+            sink.queued,
+            vec![(
+                Action::Send(shogun_agents::permission::SendAction::CreateCalendarEvent {
+                    title: "Vendor sync".into()
+                }),
+                "Tuesday 3pm with Acme".to_string()
+            )]
+        );
+        // The model is told it is waiting, and told as an error so it cannot report it as done.
+        let result = &model.seen[1][0];
+        assert!(result.is_error);
+        assert!(result.content.contains("Nothing has been sent"));
+    }
+
+    #[test]
+    fn a_proposal_the_queue_refuses_is_still_not_a_send() {
+        let mut model = ScriptedModel::new(vec![
+            ModelTurn::ToolUses(vec![ToolUse {
+                id: "p1".into(),
+                name: "propose_calendar_event".into(),
+                input: json!({ "title": "Sync", "body": "b" }),
+            }]),
+            ModelTurn::Final("I couldn't prepare it.".into()),
+        ]);
+        let mut runner = RecordingRunner::ok();
+        let mut sink = RecordingSink { queued: Vec::new(), refuse: Some("queue full".into()) };
+        run_read_loop(
+            &mut model,
+            &mut runner,
+            &mut sink,
+            &[connected(Service::GoogleCalendar)],
+            &ctx(),
+            LoopLimits::default(),
+        )
+        .unwrap();
+        let result = &model.seen[1][0];
+        assert!(result.is_error);
+        assert!(result.content.contains("Nothing has been sent"));
+        assert!(runner.calls.is_empty());
+    }
+
+    #[test]
+    fn a_proposal_without_a_destination_is_refused_before_the_queue() {
+        let mut model = ScriptedModel::new(vec![
+            ModelTurn::ToolUses(vec![ToolUse {
+                id: "p1".into(),
+                name: "propose_send_email".into(),
+                input: json!({ "body": "hello" }),
+            }]),
+            ModelTurn::Final("Who should I send it to?".into()),
+        ]);
+        let mut runner = RecordingRunner::ok();
+        let mut sink = RecordingSink::default();
+        // Gmail connected, draft-stop OFF so the gate itself would allow the send.
+        let ctx = ToolContext {
+            highest_released: Wave::One,
+            draft_stop: false,
+            plan: entitlements(Plan::Pro, 0),
+        };
+        run_read_loop(
+            &mut model,
+            &mut runner,
+            &mut sink,
+            &[connected(Service::Gmail)],
+            &ctx,
+            LoopLimits::default(),
+        )
+        .unwrap();
+        assert!(sink.queued.is_empty(), "an approval with no recipient must not be queued");
+        assert!(model.seen[1][0].content.contains("destination"));
+    }
+
+    #[test]
+    fn draft_stop_blocks_the_email_proposal_at_the_gate() {
+        // §6.10: with draft-stop on (the default), Gmail send is refused — the model cannot even
+        // queue it for approval.
+        let v = classify_call(
+            "propose_send_email",
+            &json!({ "to": "a@b.com", "body": "hi" }),
+            &[connected(Service::Gmail)],
+            &ctx(),
+        );
+        assert_eq!(v, CallVerdict::Refused(Refusal::Denied(DenyReason::DraftStop)));
+    }
+
+    #[test]
+    fn proposals_and_reads_share_one_budget() {
+        let limits = LoopLimits { max_tool_uses: 2, tool_timeout_ms: TOOL_TIMEOUT_MS };
+        let mut model = ScriptedModel::new(vec![
+            ModelTurn::ToolUses(vec![use_("r1", "list_calendar_events")]),
+            ModelTurn::ToolUses(vec![ToolUse {
+                id: "p1".into(),
+                name: "propose_calendar_event".into(),
+                input: json!({ "title": "t", "body": "b" }),
+            }]),
+            ModelTurn::ToolUses(vec![use_("r2", "list_calendar_events")]),
+            ModelTurn::Final("done".into()),
+        ]);
+        let mut runner = RecordingRunner::ok();
+        let mut sink = RecordingSink::default();
+        let out = run_read_loop(
+            &mut model,
+            &mut runner,
+            &mut sink,
+            &[connected(Service::GoogleCalendar)],
+            &ctx(),
+            limits,
+        )
+        .unwrap();
+        assert_eq!(out.executed, 1);
+        assert_eq!(out.proposed, 1);
+        assert!(out.hit_tool_budget, "the third call is over the shared ceiling");
+        assert_eq!(runner.calls.len(), 1);
+    }
+
     #[test]
     fn an_answer_with_no_tools_at_all_is_a_normal_turn() {
         let mut model = ScriptedModel::new(vec![ModelTurn::Final("Nothing to look up.".into())]);
         let mut runner = RecordingRunner::ok();
-        let out = run_read_loop(&mut model, &mut runner, &[], &ctx(), LoopLimits::default()).unwrap();
+        let out = run_read_loop(
+            &mut model,
+            &mut runner,
+            &mut RecordingSink::default(),
+            &[],
+            &ctx(),
+            LoopLimits::default(),
+        )
+        .unwrap();
         assert_eq!(out.executed, 0);
         assert!(runner.calls.is_empty());
         assert_eq!(out.answer, "Nothing to look up.");
