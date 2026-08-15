@@ -14,12 +14,16 @@ Implemented instant app-aware Option-key drafting in `crates/shogun-core/src/inl
 - Preserved insertion-only output rules: no preamble, quotation marks, analysis, or meta text; response inserts verbatim.
 - Left Option watcher semantics, immediate `drafting` acknowledgement, warm cache path, bounded fallback, and local AX-only capture unchanged.
 - Added focused classifier and prompt-contract tests.
+- Fixed prompt-boundary injection risk by escaping `<`, `>`, and `&` in every untrusted app, field, visible-text, and memory value before serialization inside the context block.
+- Added adversarial coverage placing the closing delimiter in app, field label, text before/after the cursor, and memory; only the real closing marker remains in the generated prompt.
+- Updated desktop capture preassembly to fingerprint captured AX text per focus key. Same-window content changes rebuild `ReplyContext`; unchanged content skips rebuild. Option release still performs no retrieval.
+- Added desktop helper tests proving same-key changed content refreshes and same-key unchanged content does not.
 
 ## Validation
 
-- `cargo test -p shogun-core inline::tests`: 13 passed.
-- `cargo test -p shogun-core`: 318 passed.
-- `cargo check -p shogun-desktop-spike`: passed.
+- `cargo test -p shogun-core inline::tests`: 14 passed (including delimiter adversary).
+- `cargo test -p shogun-core`: 319 passed.
+- `cargo check -p shogun-desktop-spike`: passed after capture refresh change.
 - `git diff --check`: passed.
 
 The Rust commands emit existing unrelated warnings (`unused_unsafe`, unused imports, dead code, and naming warnings); no new warning was introduced by this change.
@@ -34,3 +38,7 @@ An initial package-name probe used `cargo check -p shogun-desktop`, which correc
 ## Review notes
 
 Classifier matching is intentionally small and deterministic. Unknown surfaces do not force formality; visible text remains the tone source. Context is still bounded by the existing `ReplyContext`/memory limits, and the Option release path performs no new broad retrieval.
+
+## Follow-up audit fix
+
+The original fixed XML-like delimiter was unsafe because captured text could contain the literal closing marker. The boundary writer now encodes angle brackets and ampersands as `\\u003c`, `\\u003e`, and `\\u0026`, so captured content cannot terminate the block. The capture poller also no longer treats a stable window key as stable content: it hashes each captured AX text and rebuilds only on a changed hash or focus key.

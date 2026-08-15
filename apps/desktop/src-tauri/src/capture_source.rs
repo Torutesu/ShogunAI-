@@ -31,6 +31,8 @@ pub const WALK_BUDGET_MS: u64 = 250;
 
 #[cfg(target_os = "macos")]
 mod mac {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
     use std::time::{Duration, Instant};
 
     use shogun_core::capture::exclusion::ExclusionPolicy;
@@ -104,6 +106,40 @@ mod mac {
 
     fn focus_key(bundle_id: &str, title: Option<&str>) -> String {
         format!("{bundle_id}\0{}", title.unwrap_or(""))
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct CaptureFingerprint {
+        focus_key: String,
+        text_hash: u64,
+    }
+
+    fn capture_fingerprint(
+        focus_key: &str,
+        outcome: Option<&CaptureOutcome>,
+    ) -> Option<CaptureFingerprint> {
+        let text = outcome?.text()?;
+        let mut hasher = DefaultHasher::new();
+        text.hash(&mut hasher);
+        Some(CaptureFingerprint {
+            focus_key: focus_key.to_string(),
+            text_hash: hasher.finish(),
+        })
+    }
+
+    fn reply_context_needs_refresh(
+        warm_for: Option<&str>,
+        last_capture: Option<&CaptureFingerprint>,
+        focus_key: &str,
+        outcome: Option<&CaptureOutcome>,
+    ) -> bool {
+        if warm_for != Some(focus_key) {
+            return true;
+        }
+        let Some(current_capture) = capture_fingerprint(focus_key, outcome) else {
+            return false;
+        };
+        last_capture != Some(&current_capture)
     }
 
     /// Capture the current focus into memory once. Reads the frontmost app, builds the focused
@@ -272,6 +308,7 @@ mod mac {
         let dwell_ms = interval.as_millis() as i64;
         std::thread::spawn(move || {
             let mut warm_for: Option<String> = None;
+            let mut last_capture: Option<CaptureFingerprint> = None;
             #[cfg(feature = "visual-recall-ocr")]
             let mut ocr_poll_gate = OcrPollGate::new();
             #[cfg(feature = "visual-recall-ocr")]
@@ -355,10 +392,15 @@ mod mac {
                     // Pre-assemble the reply context for whatever the user is now looking at, so
                     // pressing the draft button only starts generation (SLO: offer in 150ms —
                     // collecting on the press is what that budget forbids). Rebuilt only when the
-                    // focused thread actually changes, so a steady poll costs nothing.
+                    // focused thread or captured AX text changes, so a steady poll costs nothing.
                     if let Some(cache) = reply_cache.as_ref() {
                         if let Some((key, win_title)) = focused_thread_key_and_title() {
-                            if warm_for.as_deref() != Some(key.as_str()) {
+                            if reply_context_needs_refresh(
+                                warm_for.as_deref(),
+                                last_capture.as_ref(),
+                                &key,
+                                ax_outcome.as_ref(),
+                            ) {
                                 // Use the fusion path: if the on-screen window maps to a fetched
                                 // Gmail thread, the context comes from the full email body
                                 // (PayloadSource::Fetched); otherwise it falls back to the
@@ -374,7 +416,12 @@ mod mac {
                                     ctx.turns.len()
                                 );
                                 cache.put(ctx);
-                                warm_for = Some(key);
+                                warm_for = Some(key.clone());
+                            }
+                            if let Some(fingerprint) = capture_fingerprint(&key, ax_outcome.as_ref()) {
+                                last_capture = Some(fingerprint);
+                            } else if warm_for.as_deref() != Some(key.as_str()) {
+                                last_capture = None;
                             }
                         }
                     }
@@ -397,5 +444,52 @@ mod mac {
             title.as_deref(),
         )?;
         Some((key, title))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use shogun_core::capture::walk_policy::WalkResult;
+
+        fn captured(text: &str) -> CaptureOutcome {
+            CaptureOutcome::Captured {
+                text: text.to_string(),
+                walk: WalkResult {
+                    text: text.to_string(),
+                    text_bytes: text.len(),
+                    elements_visited: 1,
+                    depth_reached: 0,
+                    truncated: false,
+                    partial: false,
+                },
+            }
+        }
+
+        #[test]
+        fn same_focus_key_changed_capture_refreshes_reply_context() {
+            let first = captured("old message");
+            let last = capture_fingerprint("same-window", Some(&first));
+            let current = captured("new message");
+
+            assert!(reply_context_needs_refresh(
+                Some("same-window"),
+                last.as_ref(),
+                "same-window",
+                Some(&current),
+            ));
+        }
+
+        #[test]
+        fn same_focus_key_same_capture_does_not_refresh_reply_context() {
+            let current = captured("unchanged message");
+            let last = capture_fingerprint("same-window", Some(&current));
+
+            assert!(!reply_context_needs_refresh(
+                Some("same-window"),
+                last.as_ref(),
+                "same-window",
+                Some(&current),
+            ));
+        }
     }
 }
