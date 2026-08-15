@@ -313,7 +313,7 @@ function emphasize(text: string, query: string): JSX.Element {
     parts.push(<b key={key++}>{text.slice(at, at + needle.length)}</b>);
     from = at + needle.length;
   }
-  parts.push(<span key={key++}>{text.slice(from)}</span>);
+  parts.push(<span key={key}>{text.slice(from)}</span>);
   return <>{parts}</>;
 }
 
