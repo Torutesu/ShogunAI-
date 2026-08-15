@@ -299,3 +299,74 @@ fn no_send_path_bypasses_entitlement_or_l3_gates() {
     );
     assert_eq!(Action::Send(action).required_level(), Level::L3, "entitled send is still L3");
 }
+
+/// The model's edge (issue #81): whatever the connection, wave and plan state, the tools array
+/// handed to Claude can never contain an operation that leaves the device.
+///
+/// This is the newest way the invariant could be broken — not by a gate that says yes, but by a
+/// *definition* the model can call before any gate is consulted. The catalog filters through the
+/// same `service_gate`, so this asserts the composition rather than the filter alone: for every
+/// combination of state, every offered tool is a `Read` in the permission table.
+#[test]
+fn the_llm_tool_surface_never_exposes_an_external_send() {
+    use shogun_mcp::connection::{ConnState, ReauthReason};
+    use shogun_mcp::scope::{lookup, OpClass, Wave};
+    use shogun_mcp::tool_catalog::{tool_definitions, ServiceState, ToolContext};
+
+    let states = [
+        ConnState::Disconnected,
+        ConnState::Connected { last_sync_ms: 0 },
+        ConnState::NeedsReauth { reason: ReauthReason::TokenExpired, last_sync_ms: 0 },
+    ];
+    let plans = [
+        entitlements(Plan::Pro, 0),
+        entitlements(Plan::Standard, 0),
+        entitlements(Plan::Trial { started_at_ms: Some(0) }, 0),
+        // Expired trial: the locked posture.
+        entitlements(Plan::Trial { started_at_ms: Some(0) }, TRIAL_DURATION_MS + 1),
+    ];
+
+    let mut offered_anything = false;
+    for wave in [Wave::One, Wave::Two, Wave::Three] {
+        for draft_stop in [true, false] {
+            for plan in plans {
+                for conn in states {
+                    let services: Vec<ServiceState> = ALL_SERVICES
+                        .iter()
+                        .copied()
+                        .map(|service| ServiceState { service, conn })
+                        .collect();
+                    let ctx = ToolContext { highest_released: wave, draft_stop, plan };
+                    for tool in tool_definitions(&services, &ctx) {
+                        offered_anything = true;
+                        let name = tool["name"].as_str().expect("tool name");
+                        let entry = shogun_mcp::tool_catalog::catalog_entry(name)
+                            .expect("every offered tool is a catalog entry");
+                        assert_eq!(
+                            lookup(entry.service, entry.scope_op).map(|o| o.class),
+                            Some(OpClass::Read),
+                            "tool {name} would let the model reach a non-read operation",
+                        );
+                        // And the gate agrees it is allowed — the array is a subset of what the
+                        // gate would permit, never a superset.
+                        assert!(
+                            shogun_mcp::service_gate::authorize_op(
+                                entry.service,
+                                entry.scope_op,
+                                &shogun_mcp::service_gate::OpContext {
+                                    highest_released: wave,
+                                    conn,
+                                    draft_stop,
+                                    plan,
+                                },
+                            )
+                            .is_allowed(),
+                            "tool {name} was offered but the gate denies it",
+                        );
+                    }
+                }
+            }
+        }
+    }
+    assert!(offered_anything, "the sweep must actually offer tools somewhere, or it proves nothing");
+}

@@ -95,7 +95,13 @@ user message
 
 ## 8. 実装ステップ（PR 分割案）
 
-1. `feat(llm): tools 配列生成 + Connected services ブロック生成`（純ロジック、Linux テスト）
+1. `feat(llm): tools 配列生成 + Connected services ブロック生成`（純ロジック、Linux テスト） — **済 2026-08-15**（`shogun-mcp/src/tool_catalog.rs`）
+
+   実装時に確定した設計判断:
+   - **権限表は変更しない**。ハブ操作名 → `(Service, scope op)` の束縛で足り、calendar のライブ読み取りは既存の `read_sync` 行（`toolmap.rs` で `list_events` に解決済み）が担う。表に無い操作を新設せずに済んだ
+   - **フィルタは `service_gate::authorize_op` を再利用**する（条件を書き写さない）。定義集合が「ゲートが許す集合の部分集合」であることが構造的に保証され、両者がドリフトしない
+   - **本 PR は read 系のみ**を載せる。write/send をルーティング（step 3）より先に定義へ載せることは不変条件4が禁じる事故そのもの。`tests/invariant4.rs` に「wave × plan × conn の全組み合わせで、載るツールは必ず `OpClass::Read`」を追加
+   - Gmail の3開示同意は呼び出し側が `ConnState::Disconnected` に畳んで渡す（未同意 = 未接続扱い）。同意判定を読み手ごとに書き直さないための単一決定点
 2. `feat(agents): 会話ループ（read 系のみ、mock transport）`
 3. `feat(agents): write/send 系の L1-L3 ルーティング + invariant4 テスト拡張`
 4. `feat(core): traceability Route::Mcp + UI イベント発火`
