@@ -14,13 +14,15 @@
 #[cfg(target_os = "macos")]
 pub mod mac {
     use accessibility_sys::{
-        kAXErrorSuccess, kAXFocusedUIElementAttribute, kAXSelectedTextAttribute, kAXTitleAttribute,
-        kAXValueAttribute, AXUIElementCopyAttributeValue, AXUIElementCreateSystemWide,
-        AXUIElementRef, AXUIElementSetAttributeValue, AXUIElementSetMessagingTimeout,
+        kAXErrorSuccess, kAXFocusedUIElementAttribute, kAXSelectedTextAttribute,
+        kAXSelectedTextRangeAttribute, kAXTitleAttribute, kAXValueAttribute, kAXValueTypeCFRange,
+        AXUIElementCopyAttributeValue, AXUIElementCreateSystemWide, AXUIElementRef,
+        AXUIElementSetAttributeValue, AXUIElementSetMessagingTimeout, AXValueCreate,
+        AXValueGetTypeID, AXValueGetValue,
     };
     use core_foundation::base::TCFType;
     use core_foundation::string::CFString;
-    use core_foundation_sys::base::{CFGetTypeID, CFRelease, CFTypeRef};
+    use core_foundation_sys::base::{CFGetTypeID, CFRange, CFRelease, CFTypeRef};
     use core_foundation_sys::string::{CFStringGetTypeID, CFStringRef};
 
     use shogun_core::daemon::{ContextPack, Db};
@@ -117,6 +119,17 @@ pub mod mac {
     /// Cached "does the active provider have a key" — the 3s status poll must not hit the Keychain
     /// every tick. Refreshed on init and on every key/provider change.
     static HAS_KEY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+    struct PendingRewrite {
+        original_value: String,
+        selected_text: String,
+    }
+
+    /// Selection prepared by [`AxCursorReader`] and consumed by [`AxTextInserter`]. Inline
+    /// generation runs off the UI thread, so the inserter must prove the field stayed unchanged
+    /// before replacing anything.
+    static PENDING_REWRITE: std::sync::Mutex<Option<PendingRewrite>> = std::sync::Mutex::new(None);
+
 
     /// The active provider rejected its key (HTTP 401/403). Sticky until the key or the provider
     /// changes, because the failure is silent everywhere else: a ⌥-tap that 401s inserts nothing,
@@ -252,6 +265,130 @@ pub mod mac {
         }
     }
 
+    unsafe fn copy_range(el: AXUIElementRef, name: &str) -> Option<CFRange> {
+        let cf_name = CFString::new(name);
+        let mut value: CFTypeRef = std::ptr::null();
+        let err =
+            unsafe { AXUIElementCopyAttributeValue(el, cf_name.as_concrete_TypeRef(), &mut value) };
+        if err != kAXErrorSuccess || value.is_null() {
+            return None;
+        }
+        let mut range = CFRange::init(0, 0);
+        let is_range = unsafe { CFGetTypeID(value) == AXValueGetTypeID() }
+            && unsafe {
+                AXValueGetValue(
+                    value.cast_mut().cast(),
+                    kAXValueTypeCFRange,
+                    (&mut range as *mut CFRange).cast(),
+                )
+            };
+        unsafe { CFRelease(value) };
+        is_range.then_some(range)
+    }
+
+    unsafe fn set_range(el: AXUIElementRef, range: CFRange) -> bool {
+        let value =
+            unsafe { AXValueCreate(kAXValueTypeCFRange, (&range as *const CFRange).cast()) };
+        if value.is_null() {
+            return false;
+        }
+        let attr = CFString::new(kAXSelectedTextRangeAttribute);
+        let err =
+            unsafe { AXUIElementSetAttributeValue(el, attr.as_concrete_TypeRef(), value.cast()) };
+        unsafe { CFRelease(value.cast()) };
+        err == kAXErrorSuccess
+    }
+
+    /// AX text ranges use UTF-16 code-unit offsets. Select an existing highlight, or the current
+    /// paragraph when the caret is collapsed. Returns target plus fixed surrounding text.
+    fn rewrite_target(value: &str, selection: CFRange) -> Option<(CFRange, String, String)> {
+        let units: Vec<u16> = value.encode_utf16().collect();
+        let location = usize::try_from(selection.location).ok()?;
+        let length = usize::try_from(selection.length).ok()?;
+        let selected_end = location.checked_add(length)?;
+        if selected_end > units.len() {
+            return None;
+        }
+
+        let (start, end) = if length > 0 {
+            (location, selected_end)
+        } else {
+            let start = units[..location]
+                .iter()
+                .rposition(|unit| *unit == u16::from(b'\n'))
+                .map_or(0, |index| index + 1);
+            let end = units[location..]
+                .iter()
+                .position(|unit| *unit == u16::from(b'\n'))
+                .map_or(units.len(), |offset| location + offset);
+            (start, end)
+        };
+        let target = String::from_utf16(&units[start..end]).ok()?;
+        let prefix = String::from_utf16(&units[..start]).ok()?;
+        let suffix = String::from_utf16(&units[end..]).ok()?;
+        let surrounding = if prefix.is_empty() && suffix.is_empty() {
+            String::new()
+        } else {
+            format!("before target:\n{prefix}\n\nafter target:\n{suffix}")
+        };
+        Some((
+            CFRange::init(start.try_into().ok()?, (end - start).try_into().ok()?),
+            target,
+            surrounding,
+        ))
+    }
+
+    #[cfg(test)]
+    mod rewrite_target_tests {
+        use super::*;
+
+        #[test]
+        fn explicit_selection_is_the_only_rewrite_target() {
+            let (_, target, surrounding) =
+                rewrite_target("prefix can you join? suffix", CFRange::init(7, 13))
+                    .expect("valid AX range");
+
+            assert_eq!(target, "can you join?");
+            assert!(surrounding.contains("prefix ") && surrounding.contains(" suffix"));
+        }
+
+        #[test]
+        fn collapsed_caret_selects_current_paragraph_using_utf16_offsets() {
+            let text = "first\ncan you send 日本語?\nlast";
+            let caret = "first\ncan you send 日本".encode_utf16().count();
+
+            let (range, target, _) = rewrite_target(
+                text,
+                CFRange::init(caret.try_into().expect("test offset fits"), 0),
+            )
+            .expect("valid AX range");
+
+            assert_eq!(target, "can you send 日本語?");
+            assert_eq!(range.length as usize, target.encode_utf16().count());
+        }
+
+        #[test]
+        fn collapsed_caret_on_empty_line_keeps_an_insertion_point() {
+            let text = "before\n\nafter";
+            let caret = "before\n".encode_utf16().count();
+
+            let (range, target, _) = rewrite_target(
+                text,
+                CFRange::init(caret.try_into().expect("test offset fits"), 0),
+            )
+            .expect("valid AX range");
+
+            assert!(target.is_empty());
+            assert_eq!(range.location as usize, caret);
+            assert_eq!(range.length, 0);
+        }
+
+        #[test]
+        fn invalid_ax_range_is_rejected() {
+            assert!(rewrite_target("short", CFRange::init(99, 1)).is_none());
+        }
+    }
+
     /// Copy the focused UI element (create rule → caller releases).
     unsafe fn focused_element() -> Option<AXUIElementRef> {
         let sys = unsafe { AXUIElementCreateSystemWide() };
@@ -383,13 +520,15 @@ pub mod mac {
         false
     }
 
-    /// Reads the focused field's text (AX). v1 treats the whole value as the text *before* the caret
-    /// (drafting at the end of a field is the common case); precise caret splitting via
-    /// `kAXSelectedTextRangeAttribute` is a device refinement. Never a screenshot (invariant 2).
+    /// Reads and selects the rewrite target: current selection when present, otherwise current
+    /// paragraph. The prepared range is later verified before replacement. Never a screenshot.
     pub struct AxCursorReader;
 
     impl CursorReader for AxCursorReader {
         fn read(&self) -> Option<CursorContext> {
+            if let Ok(mut pending) = PENDING_REWRITE.lock() {
+                *pending = None;
+            }
             // SAFETY: focused_element returns a live +1 element we release before returning.
             let el = unsafe { focused_element() }?;
             // The presence of the AXValue ATTRIBUTE is the "this is a text-carrying field" signal —
@@ -398,15 +537,29 @@ pub mod mac {
             // all (a button, an icon) yields None.
             let value = unsafe { copy_string(el, kAXValueAttribute) };
             let field_label = unsafe { copy_string(el, kAXTitleAttribute) }.unwrap_or_default();
+            let selection = unsafe { copy_range(el, kAXSelectedTextRangeAttribute) };
+            let prepared = value.as_deref().zip(selection).and_then(|(value, range)| {
+                let (target_range, target, surrounding) = rewrite_target(value, range)?;
+                unsafe { set_range(el, target_range) }.then_some((target, surrounding))
+            });
             unsafe { CFRelease(el as CFTypeRef) };
+            let (target, surrounding) = prepared?;
+            if let Ok(mut pending) = PENDING_REWRITE.lock() {
+                *pending = Some(PendingRewrite {
+                    original_value: value?,
+                    selected_text: target.clone(),
+                });
+            } else {
+                return None;
+            }
             let app = crate::display::frontmost_app()
                 .map(|f| f.bundle_id)
                 .unwrap_or_default();
-            value.map(|before| CursorContext {
+            Some(CursorContext {
                 app,
                 field_label,
-                before,
-                after: String::new(),
+                before: target,
+                after: surrounding,
             })
         }
     }
@@ -425,6 +578,18 @@ pub mod mac {
         fn insert(&self, text: &str) -> Result<(), String> {
             let el = unsafe { focused_element() }.ok_or_else(|| "no focused field".to_string())?;
             let before = unsafe { copy_string(el, kAXValueAttribute) };
+            let selected = unsafe { copy_string(el, kAXSelectedTextAttribute) }.unwrap_or_default();
+            let pending = PENDING_REWRITE
+                .lock()
+                .map_err(|_| "rewrite target unavailable".to_string())?
+                .take()
+                .ok_or_else(|| "rewrite target unavailable".to_string())?;
+            if before.as_deref() != Some(pending.original_value.as_str())
+                || selected != pending.selected_text
+            {
+                unsafe { CFRelease(el as CFTypeRef) };
+                return Err("focused rewrite target changed".into());
+            }
             let cf_attr = CFString::new(kAXSelectedTextAttribute);
             let cf_text = CFString::new(text);
             // SAFETY: el is a live element; attr + value are valid CFStrings.
