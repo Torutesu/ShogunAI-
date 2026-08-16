@@ -1,0 +1,28 @@
+<!-- Source of truth for the menu-bar icon. `tray-icon.png` (22x22) and `tray-icon@2x.png` (44x44)
+     are generated from this file — see the regeneration command in apps/desktop/README.md.
+
+     Same mark as icon.svg, apps/desktop/src/Logo.tsx and the marketing site's Logo.tsx: one
+     brand, one mark. Only the left half is authored; the right is that mirrored, so the two
+     sides cannot drift apart.
+
+     Black, not brand blue, and deliberately: lib.rs installs this with `icon_as_template(true)`,
+     which makes macOS read ONLY the alpha channel and paint the shape itself — black in light
+     mode, white in dark, dimmed when the menu bar is inactive. A coloured template image loses
+     its colour and gains nothing.
+
+     The mark is 957x614, wider than it is tall, so width is what the box constrains: it sits in a
+     1054-unit square (48.5 units of margin each side ≈ 1px at 22x22) and is centred vertically at
+     (1054 - 614) / 2 = 220. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1054 1054" width="1054" height="1054"
+     role="img" aria-label="ShogunAI">
+  <g transform="translate(48.5 220)" fill="#000000">
+    <path d="M296 254 L469 0 L469 525 Z"/>
+    <path d="M0 101 L276 264 L446 524 L176 390 Z"/>
+    <path d="M62 613 L171 413 L331 493 Z"/>
+    <g transform="translate(957,0) scale(-1,1)">
+      <path d="M296 254 L469 0 L469 525 Z"/>
+      <path d="M0 101 L276 264 L446 524 L176 390 Z"/>
+      <path d="M62 613 L171 413 L331 493 Z"/>
+    </g>
+  </g>
+</svg>
