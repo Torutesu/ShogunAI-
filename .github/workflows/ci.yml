@@ -66,6 +66,11 @@ jobs:
         run: |
           cargo clippy -p shogun-core --features db --all-targets
           cargo test -p shogun-core --features db
+      # The send effector (shogun-core feature `exec`) is off by default, and until now nothing
+      # in CI built it — the one lane that actually performs an external send was verified only
+      # by scripts/check-feature-matrix.sh, which runs on a developer's machine or not at all.
+      - name: shogun-core exec (clippy)
+        run: cargo clippy -p shogun-core --features exec --all-targets
       # The REST listener (shogun-mcp feature `server` → axum) is off by default so the pure
       # routing layer tests without a runtime; verify the axum adapter compiles, lints, and its
       # over-the-socket tests pass.
