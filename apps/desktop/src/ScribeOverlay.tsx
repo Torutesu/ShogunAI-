@@ -50,9 +50,8 @@ export function ScribeOverlay(): JSX.Element {
         setError("");
         focusEditBox();
       } else if (payload.phase === "failed" || payload.phase === "no_key") {
-        const submitted = pendingInstruction.current;
         pendingInstruction.current = "";
-        if (submitted) setInstruction(submitted);
+        setInstruction("");
         setPhase("error");
         setError(payload.detail || t.scribeError);
         focusEditBox();

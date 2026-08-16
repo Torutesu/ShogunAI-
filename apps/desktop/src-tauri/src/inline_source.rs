@@ -157,12 +157,16 @@ pub mod mac {
         original_value: String,
         target_range: CFRange,
         selected_text: String,
+        observed_range: Option<CFRange>,
+        observed_selected_text: String,
         selection_verified: bool,
     }
 
     struct ScribeInsertResult {
         expected_value: String,
         replacement_range: CFRange,
+        observed_range: Option<CFRange>,
+        observed_selected_text: String,
         selection_verified: bool,
     }
 
@@ -1114,6 +1118,8 @@ pub mod mac {
         }
         let value = unsafe { copy_string(el, kAXValueAttribute) };
         let selection = unsafe { copy_range(el, kAXSelectedTextRangeAttribute) };
+        let observed_selected_text =
+            unsafe { copy_string(el, kAXSelectedTextAttribute) }.unwrap_or_default();
         let Some(value) = value else {
             unsafe { CFRelease(el as CFTypeRef) };
             return None;
@@ -1129,10 +1135,6 @@ pub mod mac {
             unsafe { CFRelease(el as CFTypeRef) };
             return None;
         };
-        if selection.is_some() && !unsafe { set_range(el, target_range) } {
-            unsafe { CFRelease(el as CFTypeRef) };
-            return None;
-        }
         let front_app = crate::display::frontmost_app();
         let pid = front_app.as_ref().map(|app| app.pid).unwrap_or_default();
         let app = front_app.map(|app| app.bundle_id).unwrap_or_default();
@@ -1155,7 +1157,10 @@ pub mod mac {
                 original_value: value,
                 target_range,
                 selected_text: selected_text.clone(),
-                selection_verified: selection.is_some(),
+                observed_range: selection,
+                observed_selected_text: observed_selected_text.clone(),
+                selection_verified: selection == Some(target_range)
+                    && observed_selected_text == selected_text,
             },
             CursorContext {
                 app,
@@ -1189,9 +1194,7 @@ pub mod mac {
         if current.as_deref() != Some(target.original_value.as_str()) {
             return Err("captured target changed".into());
         }
-        if target.selection_verified
-            && (current_range != Some(target.target_range) || selected != target.selected_text)
-        {
+        if current_range != target.observed_range || selected != target.observed_selected_text {
             return Err("captured target selection changed".into());
         }
         let Some((expected, replacement_range)) =
@@ -1199,14 +1202,22 @@ pub mod mac {
         else {
             return Err("captured target range invalid".into());
         };
+        restore_scribe_target_focus(target);
+        let selection_prepared = target.selection_verified
+            || (unsafe { set_range(target.element, target.target_range) }
+                && unsafe {
+                    selection_matches(target.element, target.target_range, &target.selected_text)
+                });
         if scribe_prefers_keyboard_delivery(&target.bundle_id) {
-            restore_scribe_target_focus(target);
-            if unsafe { type_text_to_pid(text, target.pid) }.is_err()
-                || !unsafe { value_matches(target.element, &expected) }
-            {
-                return Err("Scribe target did not accept keyboard text".into());
+            if !selection_prepared {
+                return Err("Scribe could not prepare replacement range".into());
             }
-        } else if target.selection_verified {
+            unsafe { type_text_to_pid(text, target.pid) }?;
+            // Browser/Electron editors can render PID-targeted keyboard input immediately while
+            // their AXValue mirror stays stale or empty. Event delivery uses the app's real input
+            // path, so stale AX readback must not turn a visible insertion into a UI error.
+            let _value_verified = unsafe { value_matches(target.element, &expected) };
+        } else if selection_prepared {
             let attr = CFString::new(kAXSelectedTextAttribute);
             let value = CFString::new(text);
             let err = unsafe {
@@ -1254,9 +1265,14 @@ pub mod mac {
         // UI spinning after text had already landed.
         let selection_verified = unsafe { set_range(target.element, replacement_range) }
             && unsafe { selection_matches(target.element, replacement_range, text) };
+        let observed_range = unsafe { copy_range(target.element, kAXSelectedTextRangeAttribute) };
+        let observed_selected_text =
+            unsafe { copy_string(target.element, kAXSelectedTextAttribute) }.unwrap_or_default();
         Ok(ScribeInsertResult {
             expected_value: expected,
             replacement_range,
+            observed_range,
+            observed_selected_text,
             selection_verified,
         })
     }
@@ -1888,6 +1904,8 @@ pub mod mac {
                         // target verification still rejects changes made outside Scribe.
                         if let Some(target) = session.target.as_mut() {
                             target.target_range = inserted.replacement_range;
+                            target.observed_range = inserted.observed_range;
+                            target.observed_selected_text = inserted.observed_selected_text;
                             target.selection_verified = inserted.selection_verified;
                             refresh_scribe_snapshot(
                                 &mut target.original_value,
@@ -1910,7 +1928,8 @@ pub mod mac {
                             false
                         }
                     }
-                    Err(_) => {
+                    Err(error) => {
+                        eprintln!("[scribe] insert failed: {error}");
                         session.busy = false;
                         session.phase = "failed";
                         session.chars = 0;
@@ -1994,7 +2013,9 @@ pub mod mac {
                 focused.as_CFTypeRef(),
             )
         };
-        let _ = unsafe { set_range(target.element, target.target_range) };
+        if let Some(range) = target.observed_range {
+            let _ = unsafe { set_range(target.element, range) };
+        }
     }
 
     fn close_scribe(
