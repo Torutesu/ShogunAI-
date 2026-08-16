@@ -170,3 +170,9 @@ jobs:
       - run: pnpm --filter @shogun-ai/desktop build:vite
       - name: clippy the macOS shell (warnings deny via workspace lints)
         run: cargo clippy -p shogun-desktop-spike --all-targets
+      # The Linux job runs `--exclude shogun-desktop-spike`, so this is the only place the macOS
+      # shell's unit tests can run at all. Without this step they compile here (clippy --all-targets
+      # builds them) and then never execute — which is how a test that had never once passed sat
+      # green for two weeks. The build is already warm from the step above.
+      - name: test the macOS shell
+        run: cargo test -p shogun-desktop-spike --lib

@@ -165,7 +165,24 @@ mod tests {
 
     #[test]
     fn meeting_relaxes_thin_threshold() {
-        assert!(!wants_ocr("com.apple.Safari", Some("Inbox"), false, 250, true));
-        assert!(wants_ocr("com.apple.Safari", Some("Slide deck"), false, 250, true));
+        // The relaxation itself: same window, same AX text, meeting the only variable. 250 chars
+        // clears the everyday bar of 100 but not the meeting bar of 400, so a meeting — and only a
+        // meeting — makes this window thin enough to OCR (runbook §visual-recall: 本文 100 文字未満、
+        // 会議中は 400 文字未満).
+        assert!(!wants_ocr("com.apple.Safari", Some("Inbox"), false, 250, false));
+        assert!(wants_ocr("com.apple.Safari", Some("Inbox"), false, 250, true));
+        // The relaxed bar is still a bar — a meeting does not mean OCR everything.
+        assert!(!wants_ocr("com.apple.Safari", Some("Inbox"), false, 500, true));
+    }
+
+    #[test]
+    fn meeting_titles_trigger_ocr_over_a_full_ax_buffer() {
+        // The title rule has to carry its own weight: at 500 chars the length rule says "not thin",
+        // so if these pass it is because the title matched. Screen-shared slides are exactly the
+        // case where a healthy AX buffer describes the app rather than the content on screen.
+        assert!(wants_ocr("com.apple.Safari", Some("Slide deck"), false, 500, true));
+        assert!(wants_ocr("com.apple.Safari", Some("Q3 presentation"), false, 500, true));
+        // Outside a meeting the same titles are ordinary windows.
+        assert!(!wants_ocr("com.apple.Safari", Some("Slide deck"), false, 500, false));
     }
 }
