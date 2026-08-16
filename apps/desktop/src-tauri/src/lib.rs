@@ -513,7 +513,7 @@ fn setup_macos(app: &tauri::App) {
                                 })
                                 .build(app);
                             match built {
-                                Ok(_tray) => eprintln!("[shell] menu-bar tray installed (S mark)"),
+                                Ok(_tray) => eprintln!("[shell] menu-bar tray installed"),
                                 Err(e) => eprintln!("[shell] tray install failed: {e}"),
                             }
                         }
