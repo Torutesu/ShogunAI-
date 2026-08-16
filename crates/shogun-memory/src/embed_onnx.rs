@@ -59,18 +59,24 @@ const RUNTIME_DIRS: &[&str] = &[
 ];
 
 /// Where packaging puts the runtime *inside* a shipped `.app`, given the running executable at
-/// `Contents/MacOS/<bin>`: `Contents/Frameworks` first (the conventional home for a bundled
-/// dylib), then `Contents/Resources` (where Tauri's `bundle.resources` lands things).
+/// `Contents/MacOS/<bin>`.
 ///
 /// This is what makes a downloaded build work on a Mac with no Homebrew: `RUNTIME_DIRS` below is
 /// entirely developer-machine paths, so without this a shipped app searches four directories that
 /// a normal user does not have and falls back to lexical search — with the model sitting right
 /// there in its own bundle.
+///
+/// Three locations, because Tauri's `bundle.resources` decides the layout and the two forms of
+/// that setting disagree: the map form (`{"onnxruntime/lib…": "./"}`) flattens to `Resources/`,
+/// the list form preserves `onnxruntime/`. `Frameworks/` is the conventional home if packaging
+/// ever moves it there. Accepting all three costs two `exists` calls and means a packaging change
+/// cannot silently turn semantic search off again.
 fn bundled_runtime_dirs(exe: Option<&Path>) -> Vec<PathBuf> {
     let Some(contents) = exe.and_then(Path::parent).and_then(Path::parent) else {
         return Vec::new();
     };
-    vec![contents.join("Frameworks"), contents.join("Resources")]
+    let resources = contents.join("Resources");
+    vec![contents.join("Frameworks"), resources.join("onnxruntime"), resources]
 }
 
 /// Decide which runtime library to load. Pure: `exists` and the executable path are injected so
@@ -363,7 +369,9 @@ mod tests {
         let exe = PathBuf::from("/Applications/ShogunAI.app/Contents/MacOS/shogun-desktop-spike");
         let contents = Path::new("/Applications/ShogunAI.app/Contents");
 
-        for dir in ["Frameworks", "Resources"] {
+        // All three layouts `bundle.resources` can produce — the list form keeps `onnxruntime/`,
+        // the map form flattens into `Resources/`, and `Frameworks/` is the conventional home.
+        for dir in ["Frameworks", "Resources/onnxruntime", "Resources"] {
             let want = contents.join(dir).join(RUNTIME_LIB);
             assert_eq!(
                 resolve_runtime(None, Some(&exe), |p| p == want).as_deref(),

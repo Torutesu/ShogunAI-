@@ -172,17 +172,36 @@ jobs:
           set -euo pipefail
           APP="$(ls -d target/release/bundle/macos/*.app)"
           RES="$APP/Contents/Resources"
-          DYLIB="$RES/libonnxruntime.dylib"
           MODEL="$RES/models/multilingual-e5-small/model.onnx"
           TOKENIZER="$RES/models/multilingual-e5-small/tokenizer.json"
 
-          for f in "$DYLIB" "$MODEL" "$TOKENIZER"; do
+          # Print the layout BEFORE asserting anything. `bundle.resources` decides where these
+          # land, its two forms disagree about nesting, and a bare "missing" error sent the last
+          # round-trip guessing. Whatever breaks next, this says where the files actually went.
+          echo "--- Contents/Resources"
+          find "$RES" -maxdepth 3 \( -name '*.dylib' -o -name '*.onnx' -o -name '*.json' \) -print0 |
+            xargs -0 -r ls -lh
+
+          # The dylib is accepted wherever packaging put it, matching the search order in
+          # embed_onnx.rs bundled_runtime_dirs(); the model paths are fixed by
+          # lib.rs embedding_model_paths() and have no such latitude.
+          DYLIB=""
+          for cand in "$APP/Contents/Frameworks/libonnxruntime.dylib" \
+                      "$RES/onnxruntime/libonnxruntime.dylib" \
+                      "$RES/libonnxruntime.dylib"; do
+            [ -f "$cand" ] && { DYLIB="$cand"; break; }
+          done
+          [ -n "$DYLIB" ] || {
+            echo "::error::libonnxruntime.dylib is not in the bundle — semantic search would be off in this build"
+            exit 1
+          }
+          for f in "$MODEL" "$TOKENIZER"; do
             test -f "$f" || {
               echo "::error::missing from the bundle: ${f#"$APP/"} — semantic search would be off in this build"
               exit 1
             }
           done
-          ls -lh "$DYLIB" "$MODEL" "$TOKENIZER"
+          echo "runtime: ${DYLIB#"$APP/"}"
 
           codesign --force --sign "$APPLE_SIGNING_IDENTITY" --timestamp --options runtime "$DYLIB"
           codesign --force --sign "$APPLE_SIGNING_IDENTITY" --timestamp --options runtime \

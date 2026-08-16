@@ -24,11 +24,11 @@
   "bundle": {
     "active": true,
     "targets": ["app"],
-    "resources": {
-      "models/multilingual-e5-small/model.onnx": "models/multilingual-e5-small/",
-      "models/multilingual-e5-small/tokenizer.json": "models/multilingual-e5-small/",
-      "onnxruntime/libonnxruntime.dylib": "./"
-    },
+    "resources": [
+      "models/multilingual-e5-small/model.onnx",
+      "models/multilingual-e5-small/tokenizer.json",
+      "onnxruntime/libonnxruntime.dylib"
+    ],
     "icon": [
       "icons/icon-32.png",
       "icons/icon-128.png",
