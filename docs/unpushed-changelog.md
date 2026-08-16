@@ -1,14 +1,14 @@
-# Unpushed changes
+# Changelog
 
-- Option-key drafts now adapt tone and wording to the active app and screen context.
-- Inline context refreshes before generation and treats captured screen content as untrusted prompt data.
-- Stale inline context is invalidated before it can affect later generations.
-- Option-context code is consistently formatted.
-- Completed option-context work is recorded in project documentation.
-- Inline rewriting only changes the focused text target.
-- Visual Recall retention is user-configurable, with storage estimates for each preset.
-- Scribe mode supports fast double-Option activation while notch activation stays tightly scoped.
-- Scribe editing state now completes cleanly, restores focus, and closes correctly.
-- Scribe can compose into empty editable fields.
-- Scribe preserves source text while generation runs and clears completed edit requests safely.
-- Voice dictation now inserts at the captured caret without selecting, replacing, or rewriting existing text.
+- Pressing Option now creates writing that matches the app being used and what is visible on screen.
+- Screen context is refreshed before every response, and on-screen text cannot secretly instruct the AI.
+- Old screen context is cleared so it cannot affect a new response.
+- Cleaned up the Option-key feature code to make it easier to maintain.
+- Updated project documentation to show which Option-key improvements are complete.
+- Rewriting only changes the text the user is currently working on.
+- Users can choose how long Visual Recall data is kept and see an estimated storage cost for each option.
+- Quickly pressing Option twice opens Scribe mode, while the notch only activates when the pointer is directly over it.
+- Scribe now finishes reliably, returns the cursor to the right place, and closes correctly.
+- Scribe now works when the selected text box is empty.
+- Scribe keeps the user's original text visible while generating and clears completed requests correctly.
+- Voice dictation adds new words at the cursor without selecting, deleting, or replacing existing text.
