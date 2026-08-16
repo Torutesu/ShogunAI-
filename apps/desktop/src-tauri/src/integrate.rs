@@ -818,7 +818,13 @@ pub mod mac {
     /// `boot` is the webview-alive ping (no tally, no engine input).
     #[tauri::command]
     pub fn interact(kind: String, shared: tauri::State<'_, Arc<Shared>>) {
-        eprintln!("[spike] cmd interact kind={kind}");
+        // Only the lifecycle ping is worth a line. The tallied kinds arrive at input rate — a
+        // trackpad scroll alone produced ~150 consecutive "kind=scroll" lines in one on-device
+        // session, burying every other log — and the session counters below are already their
+        // record, so printing each one adds noise and nothing else.
+        if kind == "boot" {
+            eprintln!("[spike] cmd interact kind={kind}");
+        }
         // In-panel input never reaches the global monitors (they only see other apps' events),
         // so the daily-summary presence stamp (issue #10) is taken here too.
         crate::daily_summaries::note_global_input(

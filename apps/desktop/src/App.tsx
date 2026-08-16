@@ -3844,8 +3844,12 @@ function CastlePositionSection(): JSX.Element {
       .catch(() => undefined);
   }, []);
 
+  // Re-picking the spot the panel is ALREADY set to is not a no-op: `set_castle_position` is the
+  // only thing that clears a drag override (issue #21), so clicking the current spot is how the
+  // user says "put it back where I told you". An early return on `next === pos` made that
+  // unreachable — a panel dragged away from a Notch castle could only be re-docked by choosing a
+  // different spot and then choosing Notch again, and reported as "のっちに来てない" (issue #134).
   const choose = (next: CastlePos): void => {
-    if (next === pos) return;
     const prev = pos;
     setPos(next); // optimistic — the move should feel instant
     if (IN_TAURI)

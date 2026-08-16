@@ -69,8 +69,20 @@ pub fn apply_activation_policy(visible: bool) {
             eprintln!("[shell] NSApplication nil — activation policy unchanged");
             return;
         }
-        let ok: bool = msg_send![ns_app, setActivationPolicy: policy];
-        eprintln!("[shell] activation policy = {label} ok={ok}");
+        let _: bool = msg_send![ns_app, setActivationPolicy: policy];
+        // Report the policy that is actually in effect, not the setter's return value.
+        // `setActivationPolicy:` answers NO when the app is *already* in the requested policy,
+        // which is the ordinary case at launch — so the old line printed "ok=false" on every
+        // healthy start and read as a failure that was reported from device twice.
+        let effective: isize = msg_send![ns_app, activationPolicy];
+        if effective == policy {
+            eprintln!("[shell] activation policy = {label}");
+        } else {
+            eprintln!(
+                "[shell] activation policy NOT applied — wanted {label}, still {}",
+                if effective == 0 { "Regular" } else { "Accessory" }
+            );
+        }
     }
 }
 
