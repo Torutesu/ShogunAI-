@@ -62,6 +62,9 @@ pub struct ServiceStatus {
     pub last_sync_ms: Option<i64>,
     /// Whether a first-layer official MCP endpoint exists for this service today.
     pub has_endpoint: bool,
+    /// Access range of the first-layer connection (`read` / `read_draft` / `read_write`), derived
+    /// from the scope table so the badge cannot drift from what the service is actually allowed.
+    pub access: &'static str,
 }
 
 /// Owns per-service connection state and drives sync/write over a transport. Generic over the
@@ -109,6 +112,21 @@ impl<T> ConnectorRuntime<T> {
         self.registry.apply(service, ConnEvent::Connected { ts: now_ms });
     }
 
+    /// Rehydrate a service the app already holds durable credentials for (FR-INT-03).
+    ///
+    /// The registry lives in memory and starts empty, but a connection does not end when the
+    /// process does — the token sits in the Keychain across relaunches. Without this the panel
+    /// reports "Not connected" for a service that is connected, and — worse, because it is silent —
+    /// [`Self::services_due`] skips it, so the 15-minute read-sync never runs again until the user
+    /// redoes the whole browser OAuth flow.
+    ///
+    /// Restores with no last-sync time on purpose: the state is "connected, never synced this
+    /// process", which makes the service due on the next tick instead of idling out one more
+    /// interval, and shows no freshness rather than a fabricated one.
+    pub fn restore_connected(&mut self, service: Service) {
+        self.registry.apply(service, ConnEvent::Connected { ts: 0 });
+    }
+
     /// Record that a service's token expired / was revoked (amber).
     pub fn mark_token_expired(&mut self, service: Service) {
         self.registry.apply(service, ConnEvent::TokenExpired);
@@ -150,6 +168,7 @@ impl<T> ConnectorRuntime<T> {
                     state,
                     last_sync_ms: self.registry.freshness_ms(service, now_ms).map(|f| now_ms - f),
                     has_endpoint: crate::endpoints::has_endpoint(service),
+                    access: shogun_mcp::scope::access_scope(service).as_str(),
                 }
             })
             .collect()
@@ -409,6 +428,30 @@ mod tests {
         let err = rt.sync_service(Service::Gmail, 200, &sink).unwrap_err();
         assert!(matches!(err, SyncFailure::Denied(_)));
         assert_eq!(rt.registry().state(Service::Gmail), ConnState::Disconnected);
+    }
+
+    #[test]
+    fn a_restored_connection_shows_connected_and_syncs_on_the_next_tick() {
+        // The relaunch case: the Keychain still holds the token, so the runtime is told to restore.
+        let mut rt = runtime(vec![], None);
+        rt.restore_connected(Service::GoogleCalendar);
+
+        let cal = rt.statuses(50_000).into_iter().find(|s| s.source == "gcal").unwrap();
+        assert_eq!(cal.state, ConnUi::Connected, "a restored service must not read as disconnected");
+        assert_eq!(cal.last_sync_ms, None, "nothing synced this process — don't invent a time");
+
+        // The part that actually loses data if it regresses: restored services must be due, or the
+        // read-sync stays dead for the whole session.
+        assert!(rt.services_due(50_000, DEFAULT_SYNC_INTERVAL_MS).contains(&Service::GoogleCalendar));
+    }
+
+    #[test]
+    fn an_unrestored_runtime_starts_disconnected() {
+        // The other half of the guard: restore must be something the caller opts into per service
+        // (it means "we hold a credential"), never a blanket default that shows every service green.
+        let rt = runtime(vec![], None);
+        assert!(rt.statuses(50_000).iter().all(|s| s.state != ConnUi::Connected));
+        assert!(rt.services_due(50_000, DEFAULT_SYNC_INTERVAL_MS).is_empty());
     }
 
     #[test]

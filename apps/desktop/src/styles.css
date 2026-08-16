@@ -2330,6 +2330,37 @@ kbd {
 .conn__state.is-warn {
   color: var(--warn);
 }
+/* Third-party route (Gmail → Composio). Sits beside the name permanently, quiet but never hidden —
+   the point is that the row cannot be mistaken for a direct connection. */
+.conn__third {
+  margin-left: 6px;
+  font-size: var(--fs-xs);
+  font-weight: 400;
+  color: var(--faint);
+}
+/* Access range, derived from the Rust scope table. Right-aligned before the action so the eye can
+   run down the column and compare what each service is allowed to do. */
+.conn__access {
+  flex: none;
+  font-size: var(--fs-xs);
+  color: var(--faint);
+  white-space: nowrap;
+}
+/* Disconnect confirmation. Takes the full row width below the controls rather than floating, so
+   the sentence stays attached to the service it names. */
+.conn__confirm {
+  flex-basis: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 8px;
+  font-size: var(--fs-xs);
+  color: var(--ink);
+}
+.conn__confirm > span {
+  margin-right: auto;
+}
 .conn__btn:hover:not(:disabled) {
   background: var(--accent);
   color: var(--accent-ink);

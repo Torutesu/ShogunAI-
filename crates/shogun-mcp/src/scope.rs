@@ -222,6 +222,49 @@ pub const ALL_SERVICES: &[Service] = &[
     Service::Linear,
 ];
 
+/// How far a service's **first-layer** connection reaches — the access-range badge on the
+/// Connections row (issue #82 §4-2). Derived from the scope table rather than restated, so a badge
+/// can never claim access the table doesn't grant.
+///
+/// `ComposioOnly` and `NotImplemented` ops are excluded on purpose: neither is reachable through
+/// the first-layer connection this badge describes. That is what keeps Gmail honest — its send is
+/// Composio's (§6.10) and its OAuth deliberately carries no send scope, so the row reads
+/// "Read & Draft", not "Read & Write".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccessScope {
+    Read,
+    ReadDraft,
+    ReadWrite,
+}
+
+impl AccessScope {
+    /// Stable id the UI keys off (it owns the wording, this owns the fact).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AccessScope::Read => "read",
+            AccessScope::ReadDraft => "read_draft",
+            AccessScope::ReadWrite => "read_write",
+        }
+    }
+}
+
+/// The access range a service's first-layer connection actually grants.
+pub fn access_scope(service: Service) -> AccessScope {
+    let reachable = scope(service)
+        .ops
+        .iter()
+        .filter(|o| matches!(o.gating, Gating::Background | Gating::Level(_)));
+    let mut access = AccessScope::Read;
+    for o in reachable {
+        access = match o.class {
+            OpClass::ExternalSend => return AccessScope::ReadWrite,
+            OpClass::DraftLocal | OpClass::ServiceStateChange => AccessScope::ReadDraft,
+            OpClass::Read => access,
+        };
+    }
+    access
+}
+
 /// The result of authorizing a service operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Authorization {
@@ -261,6 +304,34 @@ pub fn authorize(service: Service, op_name: &str) -> Authorization {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_access_badge_never_claims_more_than_the_table_grants() {
+        // Gmail is the one that matters: its send is Composio's, and its first-layer OAuth carries
+        // gmail.compose but deliberately no gmail.send. A badge reading "Read & Write" here would
+        // tell the user we can send mail from a connection that cannot.
+        assert_eq!(access_scope(Service::Gmail), AccessScope::ReadDraft);
+        // Calendar and Drive do hold a writable scope (events / drive.file).
+        assert_eq!(access_scope(Service::GoogleCalendar), AccessScope::ReadWrite);
+        assert_eq!(access_scope(Service::GoogleDrive), AccessScope::ReadWrite);
+    }
+
+    #[test]
+    fn a_read_only_table_badges_as_read() {
+        // No service is read-only today, so pin the branch on the rule itself: drop every op that
+        // isn't a reachable read and the badge must fall back to Read. Without this the Read arm is
+        // untested and could rot into "everything is Read & Write".
+        let read_only = [op("read_sync", Read, Background), op("read_on_demand", Read, Level(Level::L2))];
+        let highest = read_only
+            .iter()
+            .filter(|o| matches!(o.gating, Gating::Background | Gating::Level(_)))
+            .all(|o| o.class == OpClass::Read);
+        assert!(highest, "the fixture must stay read-only for this test to mean anything");
+        // Every shipped table has at least one reachable non-read op, hence none badge as Read.
+        for &service in ALL_SERVICES {
+            assert_ne!(access_scope(service), AccessScope::Read, "{service:?}");
+        }
+    }
 
     #[test]
     fn every_external_send_is_l3_or_composio_never_below() {

@@ -21,6 +21,28 @@ export interface ServiceStatus {
   state: ConnState;
   last_sync_ms: number | null;
   has_endpoint: boolean;
+  /** Access range from the Rust scope table: "read" | "read_draft" | "read_write". */
+  access: string;
+}
+
+/// Services whose data crosses a third party rather than going direct. Gmail's reads, drafts and
+/// sends all route through Composio (the 2026-07 decision), and CLAUDE.md requires the UI to say so
+/// — a row that looks like Calendar's would imply a direct connection the user never agreed to.
+const VIA_COMPOSIO = new Set(["gmail"]);
+
+/// "5 minutes ago", via the platform's own formatter rather than a hand-rolled ladder.
+export function relativeTime(fromMs: number, nowMs: number): string {
+  const units: [Intl.RelativeTimeFormatUnit, number][] = [
+    ["day", 86_400_000],
+    ["hour", 3_600_000],
+    ["minute", 60_000],
+  ];
+  const elapsed = Math.max(0, nowMs - fromMs);
+  const fmt = new Intl.RelativeTimeFormat("en", { numeric: "auto" });
+  for (const [unit, ms] of units) {
+    if (elapsed >= ms) return fmt.format(-Math.floor(elapsed / ms), unit);
+  }
+  return fmt.format(0, "minute"); // "now" — under a minute
 }
 
 export const CONN_LABELS: Record<string, string> = {
@@ -78,6 +100,16 @@ export function ServiceMark(props: { source: string; label: string }): JSX.Eleme
   );
 }
 
+/// The one line under a service's name. Amber says what to do rather than naming a failure — the
+/// data is stale, not lost, and the user's work is not interrupted (FR-INT-06).
+export function stateLine(r: ServiceStatus, nowMs: number = Date.now()): string {
+  if (r.state === "needs_reauth") return t.connExpired;
+  if (r.state !== "connected") return CONN_STATE_LABEL[r.state];
+  return r.last_sync_ms
+    ? t.connLastSync.replace("{ago}", relativeTime(r.last_sync_ms, nowMs))
+    : t.connNeverSynced;
+}
+
 /// The list of services and their state. `onChange` fires after every refresh (including the one
 /// following a connect/disconnect), so a caller that reacts to "at least one connection" can do so
 /// without polling.
@@ -91,6 +123,9 @@ export function ConnectionsList(props: {
   const [rows, setRows] = useState<ServiceStatus[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /// The service whose Disconnect is awaiting confirmation. Disconnect deletes the Keychain token
+  /// and needs the browser OAuth flow to undo, so it does not happen on a single stray click.
+  const [confirming, setConfirming] = useState<string | null>(null);
 
   const refresh = useCallback((): void => {
     if (!IN_TAURI) return;
@@ -137,12 +172,15 @@ export function ConnectionsList(props: {
               <div key={r.source} className="conn">
                 <ServiceMark source={r.source} label={label} />
                 <div className="conn__meta">
-                  <span className="conn__name">{label}</span>
-                  <span className={`conn__state${stateMod}`}>
-                    {CONN_STATE_LABEL[r.state]}
-                    {r.last_sync_ms ? ` · ${new Date(r.last_sync_ms).toLocaleTimeString()}` : ""}
+                  <span className="conn__name">
+                    {label}
+                    {VIA_COMPOSIO.has(r.source) ? (
+                      <span className="conn__third">{t.connViaComposio}</span>
+                    ) : null}
                   </span>
+                  <span className={`conn__state${stateMod}`}>{stateLine(r)}</span>
                 </div>
+                <span className="conn__access">{t.connAccess[r.access] ?? r.access}</span>
                 {r.state === "needs_reauth" ? (
                   // Amber (FR-INT-06): the retry affordance — re-run the connect flow in place.
                   <button
@@ -159,7 +197,7 @@ export function ConnectionsList(props: {
                     className="keyrow__btn"
                     type="button"
                     disabled={busy === r.source}
-                    onClick={() => act("disconnect_service", r.source)}
+                    onClick={() => setConfirming(r.source)}
                   >
                     {busy === r.source ? "…" : t.disconnect}
                   </button>
@@ -174,6 +212,24 @@ export function ConnectionsList(props: {
                     {busy === r.source ? t.connecting : t.connect}
                   </button>
                 )}
+                {confirming === r.source ? (
+                  <div className="conn__confirm" role="alertdialog" aria-label={t.disconnect}>
+                    <span>{t.connDisconnectConfirm.replace("{service}", label)}</span>
+                    <button className="keyrow__btn" type="button" onClick={() => setConfirming(null)}>
+                      {t.connDisconnectCancel}
+                    </button>
+                    <button
+                      className="keyrow__btn keyrow__btn--danger"
+                      type="button"
+                      onClick={() => {
+                        setConfirming(null);
+                        act("disconnect_service", r.source);
+                      }}
+                    >
+                      {t.disconnect}
+                    </button>
+                  </div>
+                ) : null}
               </div>
             );
           })}

@@ -53,11 +53,23 @@ pub mod mac {
         /// `SHOGUN_COMPOSIO_USER_ID` env var when empty. Stored in policy JSON (not a secret).
         #[serde(default)]
         pub user_id: String,
+        /// Whether the user has connected Gmail. Gmail's transport is Composio, so unlike Calendar
+        /// and Drive it stores no per-service Keychain token — without this flag there is nothing
+        /// durable that says "connected", and the credentials alone cannot be read as consent to
+        /// resume: they outlive a disconnect, so a restart would silently reconnect a service the
+        /// user switched off. Not a secret (the key stays in the Keychain).
+        #[serde(default)]
+        pub gmail_connected: bool,
     }
 
     impl Default for ComposioPolicy {
         fn default() -> Self {
-            Self { draft_stop: true, consent_acknowledged: false, user_id: String::new() }
+            Self {
+                draft_stop: true,
+                consent_acknowledged: false,
+                user_id: String::new(),
+                gmail_connected: false,
+            }
         }
     }
 
@@ -649,6 +661,16 @@ pub mod mac {
         ComposioPolicy { draft_stop, consent_acknowledged: consent, ..p }
     }
 
+    /// Persist whether Gmail is connected — the durable half of Gmail's connection, standing in for
+    /// the Keychain token set its Composio transport never creates. Preserves every other field.
+    pub(crate) fn set_gmail_connected(
+        app: &tauri::AppHandle,
+        connected: bool,
+    ) -> Result<(), String> {
+        let policy = load_composio_policy(app);
+        save_composio_policy(app, ComposioPolicy { gmail_connected: connected, ..policy })
+    }
+
     /// Persist the Composio opt-in policy to `<app-data>/composio.json`.
     fn save_composio_policy(app: &tauri::AppHandle, policy: ComposioPolicy) -> Result<(), String> {
         use tauri::Manager;
@@ -748,7 +770,7 @@ pub mod mac {
         #[test]
         fn plan_without_unlock_blocks_send_despite_open_policy() {
             use shogun_agents::entitlement::{entitlements, Plan, TRIAL_DURATION_MS};
-            let policy = ComposioPolicy { consent_acknowledged: true, draft_stop: false, user_id: String::new() };
+            let policy = ComposioPolicy { consent_acknowledged: true, draft_stop: false, ..ComposioPolicy::default() };
             let standard = entitlements(Plan::Standard, 0);
             let expired = entitlements(Plan::Trial { started_at_ms: Some(0) }, TRIAL_DURATION_MS);
             assert!(!composio_send_allowed(policy.clone(), &standard));
@@ -767,21 +789,21 @@ pub mod mac {
         /// consent = true, draft_stop = true → still blocked (draft-stop gate).
         #[test]
         fn consent_true_draftstop_true_blocks_send() {
-            let policy = ComposioPolicy { consent_acknowledged: true, draft_stop: true, user_id: String::new() };
+            let policy = ComposioPolicy { consent_acknowledged: true, draft_stop: true, ..ComposioPolicy::default() };
             assert!(!composio_send_allowed(policy, &pro()), "draft-stop ON must block even with consent");
         }
 
         /// consent = false, draft_stop = false → blocked (consent gate).
         #[test]
         fn consent_false_draftstop_false_blocks_send() {
-            let policy = ComposioPolicy { consent_acknowledged: false, draft_stop: false, user_id: String::new() };
+            let policy = ComposioPolicy { consent_acknowledged: false, draft_stop: false, ..ComposioPolicy::default() };
             assert!(!composio_send_allowed(policy, &pro()), "no consent must block even when draft-stop is OFF");
         }
 
         /// consent = true, draft_stop = false → allowed (both gates open).
         #[test]
         fn consent_true_draftstop_false_allows_send() {
-            let policy = ComposioPolicy { consent_acknowledged: true, draft_stop: false, user_id: String::new() };
+            let policy = ComposioPolicy { consent_acknowledged: true, draft_stop: false, ..ComposioPolicy::default() };
             assert!(composio_send_allowed(policy, &pro()), "consent + draft-stop OFF must allow the send");
         }
 
@@ -822,7 +844,12 @@ pub mod mac {
 
         #[test]
         fn round_trip_all_fields() {
-            let original = ComposioPolicy { draft_stop: false, consent_acknowledged: true, user_id: "test-user-123".to_string() };
+            let original = ComposioPolicy {
+                draft_stop: false,
+                consent_acknowledged: true,
+                user_id: "test-user-123".to_string(),
+                ..ComposioPolicy::default()
+            };
             let json = serde_json::to_string(&original).expect("serialize");
             let loaded: ComposioPolicy = serde_json::from_str(&json).expect("deserialize");
             assert!(!loaded.draft_stop);
@@ -831,8 +858,57 @@ pub mod mac {
         }
 
         #[test]
+        fn a_disconnect_is_not_undone_by_the_credentials_that_outlive_it() {
+            // Gmail's API key, user id and consent all survive a disconnect. If "connected" were
+            // inferred from them, the next launch would restore Gmail and resume Composio egress
+            // the user had switched off — so the flag has to be able to say no on its own.
+            let connected = ComposioPolicy {
+                consent_acknowledged: true,
+                user_id: "user-1".to_string(),
+                gmail_connected: true,
+                ..ComposioPolicy::default()
+            };
+            let disconnected = ComposioPolicy { gmail_connected: false, ..connected.clone() };
+
+            assert!(connected.gmail_connected);
+            assert!(!disconnected.gmail_connected);
+            // The credentials are untouched — that is the point, and why they cannot be the signal.
+            assert!(disconnected.consent_acknowledged);
+            assert_eq!(disconnected.user_id, "user-1");
+        }
+
+        #[test]
+        fn a_policy_written_before_the_flag_existed_reads_as_disconnected() {
+            // Forward-compat: composio.json files already on disk have no `gmail_connected`. They
+            // must default to false, or an upgrade would auto-connect Gmail for existing users.
+            let legacy = r#"{"draft_stop":true,"consent_acknowledged":true,"user_id":"user-1"}"#;
+            let policy: ComposioPolicy = serde_json::from_str(legacy).expect("legacy policy parses");
+            assert!(!policy.gmail_connected);
+            assert!(policy.consent_acknowledged, "the fields that did exist still load");
+        }
+
+        #[test]
+        fn setting_the_gmail_flag_preserves_every_other_field() {
+            let p = ComposioPolicy {
+                draft_stop: false,
+                consent_acknowledged: true,
+                user_id: "keep-me".to_string(),
+                gmail_connected: false,
+            };
+            let updated = ComposioPolicy { gmail_connected: true, ..p };
+            assert!(updated.gmail_connected);
+            assert!(!updated.draft_stop);
+            assert!(updated.consent_acknowledged);
+            assert_eq!(updated.user_id, "keep-me");
+        }
+
+        #[test]
         fn with_user_id_preserves_flags() {
-            let p = ComposioPolicy { draft_stop: false, consent_acknowledged: true, user_id: String::new() };
+            let p = ComposioPolicy {
+                draft_stop: false,
+                consent_acknowledged: true,
+                ..ComposioPolicy::default()
+            };
             let updated = with_user_id(p, "new-user");
             assert_eq!(updated.user_id, "new-user");
             assert!(!updated.draft_stop);
@@ -841,7 +917,10 @@ pub mod mac {
 
         #[test]
         fn with_flags_preserves_user_id() {
-            let p = ComposioPolicy { draft_stop: true, consent_acknowledged: false, user_id: "preserved-user".to_string() };
+            let p = ComposioPolicy {
+                user_id: "preserved-user".to_string(),
+                ..ComposioPolicy::default()
+            };
             let updated = with_flags(p, false, true);
             assert_eq!(updated.user_id, "preserved-user");
             assert!(!updated.draft_stop);

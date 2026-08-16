@@ -171,6 +171,23 @@ export const STRINGS = {
     connecting: "Connecting…",
     reconnect: "Reconnect",
     disconnect: "Disconnect",
+    // Access range, keyed by the scope table's own answer (crates/shogun-mcp/src/scope.rs). The
+    // wording lives here; the fact lives there.
+    connAccess: {
+      read: "Read",
+      read_draft: "Read & Draft",
+      read_write: "Read & Write",
+    } as Record<string, string>,
+    // Amber is a resumable interruption, not a failure — say what to do, don't sound the alarm.
+    connExpired: "Session expired — reconnect to resume sync",
+    connNeverSynced: "Waiting for first sync",
+    connLastSync: "Last sync {ago}",
+    // Disconnect is destructive (the Keychain token goes) and one click away, so it is confirmed.
+    connDisconnectConfirm: "Disconnect {service}? ShogunAI will stop syncing and forget its access.",
+    connDisconnectCancel: "Keep connected",
+    // Gmail's whole path — reads included — crosses Composio (CLAUDE.md 連携実装ルール). The row
+    // says so permanently rather than letting it read as a direct connection.
+    connViaComposio: "via Composio, a third-party service",
     // AI coding-tool transcripts (opt-in source)
     aiSessions: "AI sessions",
     aiSessionsHint:

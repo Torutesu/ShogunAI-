@@ -151,7 +151,41 @@ pub mod mac {
             first_layer: build_first_layer_rpc(),
         };
         let transport = RemoteMcpTransport::new(rpc);
-        Ok(ConnectorRuntime::new(transport, Wave::One, draft_stop))
+        let mut runtime = ConnectorRuntime::new(transport, Wave::One, draft_stop);
+        restore_connections(&mut runtime, app);
+        Ok(runtime)
+    }
+
+    /// Whether the durable credential for a service is still present — the only honest answer to
+    /// "is this connected?" after a relaunch, since the registry itself is in-memory.
+    ///
+    /// Gmail has no per-service token set (its Composio path stores none), so its credential is the
+    /// same trio `connect_service` verifies: API key + user id + consent. Everything else is a
+    /// Keychain token set (invariant 7).
+    fn credential_present(app: &tauri::AppHandle, svc: Service) -> bool {
+        match svc {
+            // Credentials alone are not a connection: the API key, user id and consent all survive
+            // a disconnect, so Gmail additionally requires the flag `disconnect_service` clears.
+            // Without that conjunction a relaunch would resume third-party egress the user stopped.
+            Service::Gmail => {
+                load_composio_policy(app).gmail_connected && verify_gmail_composio(app).is_ok()
+            }
+            _ => KeychainTokenStore::new(KEYCHAIN_SERVICE).load(svc).is_some(),
+        }
+    }
+
+    /// Restore every service we still hold a credential for.
+    ///
+    /// Runs on each runtime build — app start *and* [`rebuild_gmail_runtime`], which swaps in a
+    /// whole new runtime and would otherwise drop Calendar's and Drive's connection state every
+    /// time the user edits a Composio setting.
+    fn restore_connections(runtime: &mut Runtime, app: &tauri::AppHandle) {
+        for &svc in shogun_mcp::scope::ALL_SERVICES {
+            if transport_serves(svc) && credential_present(app, svc) {
+                runtime.restore_connected(svc);
+                eprintln!("[connectors] {} restored from stored credentials", svc.source_str());
+            }
+        }
     }
 
     /// Rebuild the connector runtime from the current credentials and swap it under the lock.
@@ -364,6 +398,8 @@ pub mod mac {
                 rt.lock()
                     .map_err(|_| "runtime lock poisoned".to_string())?
                     .mark_connected(svc, now);
+                // The durable half — what the Keychain token set is for the other services.
+                crate::approvals::mac::set_gmail_connected(&app, true)?;
                 eprintln!("[connectors] connected gmail (Composio transport)");
                 // The landing point when the user comes back from a browser and is looking
                 // elsewhere (#49).
@@ -447,12 +483,21 @@ pub mod mac {
     #[tauri::command]
     pub fn disconnect_service(
         service: String,
+        app: tauri::AppHandle,
         state: tauri::State<'_, ConnectorState>,
     ) -> Result<(), String> {
         let svc = from_source(&service).ok_or_else(|| format!("unknown service: {service}"))?;
         if let Err(e) = KeychainTokenStore::new(KEYCHAIN_SERVICE).delete(svc) {
             // Not-found is the common case for services that never stored a token set.
             eprintln!("[connectors] {service} token delete skipped: {e}");
+        }
+        // Gmail has no token to delete, so clearing its flag is what makes the disconnect durable.
+        // Best-effort: a failed write must not leave the in-memory state connected, and the next
+        // launch still gates on consent, which the user can revoke outright.
+        if svc == Service::Gmail {
+            if let Err(e) = crate::approvals::mac::set_gmail_connected(&app, false) {
+                eprintln!("[connectors] gmail disconnect flag not persisted: {e}");
+            }
         }
         state.0.lock().map_err(|_| "runtime lock poisoned".to_string())?.disconnect(svc, false);
         eprintln!("[connectors] disconnected {service}");
