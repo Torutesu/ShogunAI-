@@ -125,7 +125,10 @@ pub mod mac {
     static HAS_KEY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
     struct PendingRewrite {
-        original_value: String,
+        pid: i32,
+        original_value: Option<String>,
+        target_range: CFRange,
+        selected_range: Option<CFRange>,
         selected_text: String,
     }
 
@@ -133,6 +136,16 @@ pub mod mac {
     /// generation runs off the UI thread, so the inserter must prove the field stayed unchanged
     /// before replacing anything.
     static PENDING_REWRITE: std::sync::Mutex<Option<PendingRewrite>> = std::sync::Mutex::new(None);
+    static INLINE_BUSY: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+
+    struct InlineBusyGuard;
+
+    impl Drop for InlineBusyGuard {
+        fn drop(&mut self) {
+            INLINE_BUSY.store(false, std::sync::atomic::Ordering::Release);
+        }
+    }
 
     /// One Scribe session owns one captured AX target. The pointer is a retained CF object and is
     /// used only by the session worker; keeping it avoids writing into whichever field the user
@@ -447,6 +460,59 @@ pub mod mac {
         ))
     }
 
+    /// Empty AX fields often omit `AXSelectedTextRange` until their first character exists. A
+    /// focused field with a readable empty value still has an unambiguous insertion point at 0.
+    fn rewrite_target_with_optional_selection(
+        value: &str,
+        selection: Option<CFRange>,
+    ) -> Option<(CFRange, String, String)> {
+        match selection {
+            Some(range) => rewrite_target(value, range),
+            None if value.is_empty() => Some((CFRange::init(0, 0), String::new(), String::new())),
+            None => None,
+        }
+    }
+
+    /// Web-backed empty composers can expose an editable role while omitting both `AXValue` and
+    /// `AXSelectedTextRange`. Accept only the unambiguous empty case; never reinterpret a generic
+    /// focused element or an unreadable non-empty selection as a draft target.
+    fn is_unreadable_empty_editor(
+        role: Option<&str>,
+        selection: Option<CFRange>,
+        selected_text: &str,
+    ) -> bool {
+        let editable_role = matches!(
+            role,
+            Some("AXTextArea" | "AXTextField" | "AXSearchField" | "AXComboBox")
+        );
+        let empty_caret =
+            selection.map_or(true, |range| range.location == 0 && range.length == 0);
+        editable_role && empty_caret && selected_text.is_empty()
+    }
+
+    /// Empty insertion points are already selected by definition. Some web editors expose the
+    /// zero range but reject setting it back, so only non-empty targets require an AX range write.
+    fn selection_is_already_prepared(value: &str, target: CFRange) -> bool {
+        value.is_empty() && target.location == 0 && target.length == 0
+    }
+
+    fn prefers_keyboard_delivery(bundle_id: &str) -> bool {
+        matches!(
+            bundle_id,
+            "com.openai.codex"
+                | "com.openai.chat"
+                | "com.google.Chrome"
+                | "com.tinyspeck.slackmacgap"
+                | "com.hnc.Discord"
+                | "notion.id"
+        )
+    }
+
+    fn tail_chars(text: &str, max_chars: usize) -> String {
+        let count = text.chars().count();
+        text.chars().skip(count.saturating_sub(max_chars)).collect()
+    }
+
     /// Replace an AX UTF-16 range without slicing Rust strings at byte offsets. Returns exact
     /// replacement value and range, so Scribe can reselect generated text for the next edit.
     fn replace_utf16_range(
@@ -562,6 +628,41 @@ pub mod mac {
             assert!(target.is_empty());
             assert_eq!(range.location as usize, caret);
             assert_eq!(range.length, 0);
+        }
+
+        #[test]
+        fn empty_field_without_ax_selection_range_keeps_an_insertion_point() {
+            let (range, target, surrounding) =
+                rewrite_target_with_optional_selection("", None).expect("focused empty field");
+
+            assert_eq!(range, CFRange::init(0, 0));
+            assert!(target.is_empty());
+            assert!(surrounding.is_empty());
+        }
+
+        #[test]
+        fn unreadable_empty_text_area_is_a_valid_editor() {
+            assert!(is_unreadable_empty_editor(Some("AXTextArea"), None, ""));
+        }
+
+        #[test]
+        fn unreadable_non_text_element_is_not_an_editor() {
+            assert!(!is_unreadable_empty_editor(Some("AXButton"), None, ""));
+        }
+
+        #[test]
+        fn empty_zero_range_does_not_require_ax_selection_write() {
+            assert!(selection_is_already_prepared("", CFRange::init(0, 0)));
+        }
+
+        #[test]
+        fn codex_uses_real_keyboard_delivery() {
+            assert!(prefers_keyboard_delivery("com.openai.codex"));
+        }
+
+        #[test]
+        fn focused_context_tail_preserves_unicode_boundaries() {
+            assert_eq!(tail_chars("a😀bc", 3), "😀bc");
         }
 
         #[test]
@@ -803,48 +904,89 @@ pub mod mac {
     /// Reads and selects the rewrite target: current selection when present, otherwise current
     /// paragraph. The prepared range is later verified before replacement. Never a screenshot.
     pub struct AxCursorReader;
+    struct ContextualAxCursorReader;
+
+    fn read_cursor_context(include_window_context: bool) -> Option<CursorContext> {
+        if let Ok(mut pending) = PENDING_REWRITE.lock() {
+            *pending = None;
+        }
+        // SAFETY: focused_element returns a live +1 element we release before returning.
+        let el = unsafe { focused_element() }?;
+        // The presence of the AXValue ATTRIBUTE is the "this is a text-carrying field" signal —
+        // Some("") is a focused EMPTY field (the most common draft target: a fresh reply, a
+        // blank doc) and must produce a context. Only an element with no value attribute at
+        // all (a button, an icon) yields None.
+        if unsafe { is_secure_text_field(el) } {
+            unsafe { CFRelease(el as CFTypeRef) };
+            return None;
+        }
+        let role = unsafe { copy_string(el, kAXRoleAttribute) };
+        let value = unsafe { copy_string(el, kAXValueAttribute) };
+        let field_label = unsafe { copy_string(el, kAXTitleAttribute) }.unwrap_or_default();
+        let selection = unsafe { copy_range(el, kAXSelectedTextRangeAttribute) };
+        let selected_text =
+            unsafe { copy_string(el, kAXSelectedTextAttribute) }.unwrap_or_default();
+        let readable_or_empty = value.as_deref().or_else(|| {
+            is_unreadable_empty_editor(role.as_deref(), selection, &selected_text).then_some("")
+        });
+        let prepared = readable_or_empty.and_then(|value| {
+            let (target_range, target, surrounding) =
+                rewrite_target_with_optional_selection(value, selection)?;
+            // A missing range on an empty field is normal. There is nothing to select; the
+            // focused caret is already the insertion point. Existing ranges must remain
+            // writable so a delayed result cannot replace an unintended paragraph.
+            (selection.is_none()
+                || selection_is_already_prepared(value, target_range)
+                || unsafe { set_range(el, target_range) })
+                .then_some((target_range, target, surrounding))
+        });
+        unsafe { CFRelease(el as CFTypeRef) };
+        let (target_range, target, mut surrounding) = prepared?;
+        let front_app = crate::display::frontmost_app();
+        let pid = front_app.as_ref().map(|app| app.pid).unwrap_or_default();
+        if include_window_context
+            && target.trim().is_empty()
+            && surrounding.trim().is_empty()
+            && pid > 0
+        {
+            if let Some(window) = crate::axcache::snapshot(pid, 150)
+                .filter(|window| !window.text.trim().is_empty())
+            {
+                surrounding = format!(
+                    "focused window context around the empty composer:\n{}",
+                    tail_chars(&window.text, 12_000)
+                );
+            }
+        }
+        if let Ok(mut pending) = PENDING_REWRITE.lock() {
+            *pending = Some(PendingRewrite {
+                pid,
+                original_value: value,
+                target_range,
+                selected_range: selection,
+                selected_text: target.clone(),
+            });
+        } else {
+            return None;
+        }
+        let app = front_app.map(|front| front.bundle_id).unwrap_or_default();
+        Some(CursorContext {
+            app,
+            field_label,
+            before: target,
+            after: surrounding,
+        })
+    }
 
     impl CursorReader for AxCursorReader {
         fn read(&self) -> Option<CursorContext> {
-            if let Ok(mut pending) = PENDING_REWRITE.lock() {
-                *pending = None;
-            }
-            // SAFETY: focused_element returns a live +1 element we release before returning.
-            let el = unsafe { focused_element() }?;
-            // The presence of the AXValue ATTRIBUTE is the "this is a text-carrying field" signal —
-            // Some("") is a focused EMPTY field (the most common draft target: a fresh reply, a
-            // blank doc) and must produce a context. Only an element with no value attribute at
-            // all (a button, an icon) yields None.
-            if unsafe { is_secure_text_field(el) } {
-                unsafe { CFRelease(el as CFTypeRef) };
-                return None;
-            }
-            let value = unsafe { copy_string(el, kAXValueAttribute) };
-            let field_label = unsafe { copy_string(el, kAXTitleAttribute) }.unwrap_or_default();
-            let selection = unsafe { copy_range(el, kAXSelectedTextRangeAttribute) };
-            let prepared = value.as_deref().zip(selection).and_then(|(value, range)| {
-                let (target_range, target, surrounding) = rewrite_target(value, range)?;
-                unsafe { set_range(el, target_range) }.then_some((target, surrounding))
-            });
-            unsafe { CFRelease(el as CFTypeRef) };
-            let (target, surrounding) = prepared?;
-            if let Ok(mut pending) = PENDING_REWRITE.lock() {
-                *pending = Some(PendingRewrite {
-                    original_value: value?,
-                    selected_text: target.clone(),
-                });
-            } else {
-                return None;
-            }
-            let app = crate::display::frontmost_app()
-                .map(|f| f.bundle_id)
-                .unwrap_or_default();
-            Some(CursorContext {
-                app,
-                field_label,
-                before: target,
-                after: surrounding,
-            })
+            read_cursor_context(false)
+        }
+    }
+
+    impl CursorReader for ContextualAxCursorReader {
+        fn read(&self) -> Option<CursorContext> {
+            read_cursor_context(true)
         }
     }
 
@@ -862,20 +1004,61 @@ pub mod mac {
         fn insert(&self, text: &str) -> Result<(), String> {
             let el = unsafe { focused_element() }.ok_or_else(|| "no focused field".to_string())?;
             let before = unsafe { copy_string(el, kAXValueAttribute) };
+            let current_range = unsafe { copy_range(el, kAXSelectedTextRangeAttribute) };
             let selected = unsafe { copy_string(el, kAXSelectedTextAttribute) }.unwrap_or_default();
+            let front_app = crate::display::frontmost_app();
+            let bundle_id = front_app
+                .as_ref()
+                .map(|app| app.bundle_id.as_str())
+                .unwrap_or_default();
             let pending = PENDING_REWRITE
                 .lock()
                 .map_err(|_| "rewrite target unavailable".to_string())?
                 .take()
                 .ok_or_else(|| "rewrite target unavailable".to_string())?;
-            if before.as_deref() != Some(pending.original_value.as_str())
+            if before.as_ref() != pending.original_value.as_ref()
+                || front_app.as_ref().map(|app| app.pid) != Some(pending.pid)
+                || pending
+                    .selected_range
+                    .is_some_and(|range| current_range != Some(range))
                 || selected != pending.selected_text
             {
                 unsafe { CFRelease(el as CFTypeRef) };
                 return Err("focused rewrite target changed".into());
             }
+
+            // An editable web composer with no AXValue cannot verify an AXSelectedText write;
+            // several apps report success while applying nothing. Paste is the only dependable
+            // insertion path for this exact case.
+            if before.is_none() {
+                let app = crate::display::frontmost_app()
+                    .map(|f| f.bundle_id)
+                    .unwrap_or_default();
+                eprintln!("[inline] {app} empty AX editor has no value — inserting by paste");
+                let pasted = unsafe { paste_at_cursor(text, el, None) };
+                unsafe { CFRelease(el as CFTypeRef) };
+                return pasted.map_err(|error| format!("{app}: {error}"));
+            }
             let cf_attr = CFString::new(kAXSelectedTextAttribute);
             let cf_text = CFString::new(text);
+            let expected = pending
+                .original_value
+                .as_deref()
+                .and_then(|original| replace_utf16_range(original, pending.target_range, text))
+                .map(|(value, _)| value);
+            if prefers_keyboard_delivery(bundle_id) {
+                let Some(expected) = expected.as_deref() else {
+                    unsafe { CFRelease(el as CFTypeRef) };
+                    return Err("keyboard target cannot be verified".into());
+                };
+                let typed = unsafe { type_text_to_pid(text, pending.pid) };
+                let landed = typed.is_ok() && unsafe { value_matches(el, expected) };
+                unsafe { CFRelease(el as CFTypeRef) };
+                if landed {
+                    return Ok(());
+                }
+                return Err("target app did not accept keyboard text".into());
+            }
             // SAFETY: el is a live element; attr + value are valid CFStrings.
             let err = unsafe {
                 AXUIElementSetAttributeValue(
@@ -884,22 +1067,32 @@ pub mod mac {
                     cf_text.as_concrete_TypeRef() as CFTypeRef,
                 )
             };
-            if err != kAXErrorSuccess {
-                unsafe { CFRelease(el as CFTypeRef) };
-                return Err(format!("AX set selected text failed: {err}"));
+            if err == kAXErrorSuccess && unsafe { value_changed(el, before.as_deref()) } {
+                if expected
+                    .as_deref()
+                    .map_or(true, |expected| unsafe { value_matches(el, expected) })
+                {
+                    unsafe { CFRelease(el as CFTypeRef) };
+                    return Ok(());
+                }
             }
-            if unsafe { value_changed(el, before.as_deref()) } {
-                unsafe { CFRelease(el as CFTypeRef) };
-                return Ok(());
+            // Browser/Electron editors often mutate their AX mirror without updating visible UI.
+            // Target their real keyboard event path and require exact AX readback afterward.
+            if let Some(expected) = expected.as_deref() {
+                if unsafe { type_text_to_pid(text, pending.pid) }.is_ok()
+                    && unsafe { value_matches(el, expected) }
+                {
+                    unsafe { CFRelease(el as CFTypeRef) };
+                    return Ok(());
+                }
             }
-            // The app took the message and ignored it. Measured on device: Chrome and the terminal
-            // both do this, and they are not exotic targets — AXSelectedText is honoured by little
-            // beyond native NSTextView/NSTextField. Fall back to the mechanism that works
-            // everywhere, because it is the one the user would have used: paste.
+            // Many web fields either reject AXSelectedText or accept and ignore it, especially
+            // before their first character exists. Fall back to the mechanism the user would use:
+            // paste into the already-focused caret or selection.
             let app = crate::display::frontmost_app()
                 .map(|f| f.bundle_id)
                 .unwrap_or_default();
-            eprintln!("[inline] {app} ignored the AX write — falling back to paste");
+            eprintln!("[inline] {app} AX write unavailable ({err}) — falling back to paste");
             let pasted = unsafe { paste_at_cursor(text, el, before.as_deref()) };
             unsafe { CFRelease(el as CFTypeRef) };
             match pasted {
@@ -1323,6 +1516,26 @@ pub mod mac {
         warm: Option<shogun_core::daemon::ReplyContext>,
         app: tauri::AppHandle,
     ) {
+        if INLINE_BUSY
+            .compare_exchange(
+                false,
+                true,
+                std::sync::atomic::Ordering::AcqRel,
+                std::sync::atomic::Ordering::Acquire,
+            )
+            .is_err()
+        {
+            push_inline(
+                &app,
+                InlineStatus {
+                    phase: "failed",
+                    chars: 0,
+                    detail: Some("draft already running".into()),
+                },
+            );
+            return;
+        }
+        let busy_guard = InlineBusyGuard;
         // Emitted before the thread starts so the pill reacts to the press itself, not to the
         // generation finishing — the whole point is that the tap feels answered immediately.
         push_inline(
@@ -1334,6 +1547,7 @@ pub mod mac {
             },
         );
         std::thread::spawn(move || {
+            let _busy_guard = busy_guard;
             let memory = match warm {
                 Some(ctx) if !ctx.is_empty() => {
                     eprintln!(
@@ -1358,7 +1572,11 @@ pub mod mac {
                 );
                 return;
             };
-            let outcome = compose_inline(&AxCursorReader, &agent, &AxTextInserter, &memory);
+            let outcome = if memory.is_empty() {
+                compose_inline(&ContextualAxCursorReader, &agent, &AxTextInserter, &memory)
+            } else {
+                compose_inline(&AxCursorReader, &agent, &AxTextInserter, &memory)
+            };
             match &outcome {
                 InlineOutcome::Inserted { chars } => {
                     eprintln!("[inline] inserted {chars} chars at the cursor");
