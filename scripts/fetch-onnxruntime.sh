@@ -37,11 +37,32 @@ tar -xzf "$tmp/$ARCHIVE" -C "$tmp"
 
 # The archive ships libonnxruntime.<version>.dylib plus a symlink. Copy the real file under the
 # plain name the loader looks for: a symlink would dangle once the bundle is signed and moved.
-real="$(find "$tmp" -name "libonnxruntime.${VERSION}.dylib" -type f | head -1)"
+#
+# `-not -path '*.dSYM/*'` is load-bearing. The archive contains TWO files with this exact name:
+#
+#   lib/libonnxruntime.1.22.0.dylib                                        (33MB, the library)
+#   lib/libonnxruntime.1.22.0.dylib.dSYM/Contents/Resources/DWARF/…same…   (71MB, debug symbols)
+#
+# `find … | head -1` picks whichever the filesystem hands back first, which differed between a
+# local run and the CI runner. The runner got the dSYM, it signed and notarized without complaint,
+# and the app died at dlopen with "unloadable mach-o file type 10" — MH_DSYM.
+real="$(find "$tmp" -path '*/lib/*' -name "libonnxruntime.${VERSION}.dylib" -type f \
+  -not -path '*.dSYM/*' | head -1)"
 if [ -z "$real" ]; then
   echo "error: libonnxruntime.${VERSION}.dylib not found inside $ARCHIVE" >&2
   exit 1
 fi
 cp "$real" "$DEST/libonnxruntime.dylib"
+
+# Assert what we actually copied. The Mach-O header's filetype field is at byte offset 12,
+# little-endian: MH_DYLIB is 6, MH_DSYM is 10. Nothing downstream catches the difference —
+# codesign signs a dSYM happily and notarization accepts it — so this is the only place the
+# mistake can be caught before a user's Mac catches it.
+filetype="$(od -An -t u4 -j 12 -N 4 "$DEST/libonnxruntime.dylib" | tr -d ' ')"
+if [ "$filetype" != "6" ]; then
+  echo "error: $DEST/libonnxruntime.dylib is not a loadable dylib (Mach-O filetype $filetype, want 6=MH_DYLIB)" >&2
+  rm -f "$DEST/libonnxruntime.dylib"
+  exit 1
+fi
 
 echo "ONNX Runtime ready: $DEST/libonnxruntime.dylib"

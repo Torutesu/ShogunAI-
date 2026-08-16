@@ -203,6 +203,17 @@ jobs:
           done
           echo "runtime: ${DYLIB#"$APP/"}"
 
+          # The runtime must be a LOADABLE library, not the debug-symbol file of the same name that
+          # ships beside it (Mach-O filetype at byte 12: 6=MH_DYLIB, 10=MH_DSYM). A previous build
+          # bundled the dSYM, and every check downstream of here passed it — codesign signed it,
+          # notarization accepted it, Gatekeeper cleared it — until dlopen refused it on a user's
+          # Mac. fetch-onnxruntime.sh asserts this too; it is repeated on what actually ships.
+          filetype="$(od -An -t u4 -j 12 -N 4 "$DYLIB" | tr -d ' ')"
+          [ "$filetype" = "6" ] || {
+            echo "::error::bundled runtime is Mach-O filetype $filetype, not 6 (MH_DYLIB) — it will not dlopen"
+            exit 1
+          }
+
           codesign --force --sign "$APPLE_SIGNING_IDENTITY" --timestamp --options runtime "$DYLIB"
           codesign --force --sign "$APPLE_SIGNING_IDENTITY" --timestamp --options runtime \
             --entitlements apps/desktop/src-tauri/entitlements.plist "$APP"
