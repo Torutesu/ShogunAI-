@@ -13,7 +13,8 @@ import numpy as np
 from PIL import Image
 
 REPO = Path(__file__).resolve().parents[1]
-SOURCE = REPO / "logo.png"
+BRAND = REPO / "assets" / "brand"
+SOURCE = BRAND / "logo.png"
 FILL_HEX = "#004BFC"
 FILL_RGB = (0, 75, 252)
 NUM_SHARDS = 6
@@ -207,7 +208,7 @@ def main() -> None:
     shards = segment_shards(blue)
     view_box = bounds(shards)
 
-    root_svg = REPO / "logo.svg"
+    root_svg = BRAND / "logo.svg"
     mark_svg = REPO / "apps/desktop/src-tauri/icons/logo-mark.svg"
     template_svg = REPO / "apps/desktop/src-tauri/icons/logo-mark-template.svg"
     tray_1x = REPO / "apps/desktop/src-tauri/icons/tray-icon.png"
