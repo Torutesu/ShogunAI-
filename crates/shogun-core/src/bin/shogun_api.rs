@@ -19,7 +19,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use shogun_agents::approval::ApprovalQueue;
 use shogun_core::daemon::{Clock, Db};
 use shogun_core::db_backend::DbBackend;
-use shogun_core::metrics::{render_snapshots_json_with_lessons, SloRegistry};
+use shogun_core::metrics::{render_snapshots_json_with_lessons_and_harness, SloRegistry};
 use shogun_mcp::memory_api::TokenRegistry;
 use shogun_mcp::server::{bind_local, serve_on, AppState, MetricsSource, DEFAULT_PORT};
 
@@ -27,7 +27,8 @@ use shogun_mcp::server::{bind_local, serve_on, AppState, MetricsSource, DEFAULT_
 /// registry the runtime records into; here it starts empty, so every SLO reads as unmeasured until
 /// the notch runtime populates it (silence ≠ success, spec §4.5). The D-6 lesson counters
 /// (active lessons, feedback in the last 7 days) come from the DB; an unreadable DB renders
-/// `lessons.measured:false` in the same convention.
+/// `lessons.measured:false` in the same convention. H1 harness counters (compression + tool loop)
+/// ride next to them: unmeasured until an assemble or loop has run; never prompt text.
 struct RegistryMetrics {
     registry: Arc<Mutex<SloRegistry>>,
     db: Db,
@@ -36,10 +37,13 @@ struct RegistryMetrics {
 impl MetricsSource for RegistryMetrics {
     fn snapshot_json(&self) -> String {
         let lessons = self.db.lesson_counters();
+        let harness = self.db.harness_counters();
         self.registry
             .lock()
-            .map(|r| render_snapshots_json_with_lessons(&r.snapshot_all(), lessons))
-            .unwrap_or_else(|_| r#"{"metrics":[],"lessons":{"measured":false}}"#.to_string())
+            .map(|r| render_snapshots_json_with_lessons_and_harness(&r.snapshot_all(), lessons, harness))
+            .unwrap_or_else(|_| {
+                r#"{"metrics":[],"lessons":{"measured":false},"harness":{"measured":false}}"#.to_string()
+            })
     }
 }
 
@@ -181,6 +185,11 @@ mod tests {
         assert!(
             r.body.contains(r#""lessons":{"active_lessons":0,"feedback_events_last_7d":0,"measured":true}"#),
             "lesson counters missing: {}",
+            r.body
+        );
+        assert!(
+            r.body.contains(r#""harness":{"measured":false}"#),
+            "unmeasured harness must not read as zeros: {}",
             r.body
         );
 

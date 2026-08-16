@@ -297,6 +297,45 @@ pub struct LessonCounters {
     pub feedback_events_last_7d: i64,
 }
 
+/// Last-assemble compression snapshot for `shogun metrics` / `GET /v1/metrics`. Counts only —
+/// never query text, never prompt body.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CompressionHarness {
+    pub enabled: bool,
+    pub pre_tokens: u64,
+    pub post_tokens: u64,
+    pub dropped: u64,
+}
+
+/// Last tool-loop snapshot. `uses` is executed reads; refusals never spend the tool budget.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ToolLoopHarness {
+    pub uses: u32,
+    pub refusals: u32,
+    pub proposes: u32,
+    pub timeouts: u32,
+}
+
+/// Harness counters riding next to `lessons` on the SLO JSON face. Either sub-block may be
+/// unknown independently; a process that has never assembled or looped reports the whole
+/// object as `measured:false` rather than a fabricated zero.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct HarnessCounters {
+    pub compression: Option<CompressionHarness>,
+    pub tool_loop: Option<ToolLoopHarness>,
+}
+
+impl HarnessCounters {
+    /// `None` when nothing has been observed — the renderer flags that as unmeasured.
+    pub fn measured(self) -> Option<Self> {
+        if self.compression.is_none() && self.tool_loop.is_none() {
+            None
+        } else {
+            Some(self)
+        }
+    }
+}
+
 /// Render SLO snapshots as the JSON both `shogun metrics` and the Advanced UI read (NFR-SLO-00).
 /// Hand-rolled (no serde dep in this ungated module). An unmeasured SLO reports `measured:false`
 /// and `pass:false` — silence is never success (spec §4.5).
@@ -307,18 +346,68 @@ pub fn render_snapshots_json(snapshots: &[SloSnapshot]) -> String {
 /// [`render_snapshots_json`] plus the D-6 `lessons` block. `None` (counters not computable —
 /// no DB behind this process, or a read failure) renders `"lessons":{"measured":false}` in the
 /// crate's convention: an unmeasured value is flagged, never fabricated as zero.
+///
+/// Always includes a `harness` object: unmeasured until compression or a tool loop has run.
 pub fn render_snapshots_json_with_lessons(
     snapshots: &[SloSnapshot],
     lessons: Option<LessonCounters>,
 ) -> String {
-    let lessons_json = match lessons {
+    render_snapshots_json_with_lessons_and_harness(snapshots, lessons, None)
+}
+
+/// [`render_snapshots_json_with_lessons`] plus the H1 `harness` block (compression + tool loop).
+pub fn render_snapshots_json_with_lessons_and_harness(
+    snapshots: &[SloSnapshot],
+    lessons: Option<LessonCounters>,
+    harness: Option<HarnessCounters>,
+) -> String {
+    format!(
+        r#"{{"metrics":[{}],"lessons":{},"harness":{}}}"#,
+        slo_items(snapshots).join(","),
+        lessons_json(lessons),
+        harness_json(harness),
+    )
+}
+
+fn lessons_json(lessons: Option<LessonCounters>) -> String {
+    match lessons {
         Some(c) => format!(
             r#"{{"active_lessons":{},"feedback_events_last_7d":{},"measured":true}}"#,
             c.active_lessons, c.feedback_events_last_7d
         ),
         None => r#"{"measured":false}"#.to_string(),
-    };
-    format!(r#"{{"metrics":[{}],"lessons":{}}}"#, slo_items(snapshots).join(","), lessons_json)
+    }
+}
+
+fn harness_json(harness: Option<HarnessCounters>) -> String {
+    match harness.and_then(HarnessCounters::measured) {
+        None => r#"{"measured":false}"#.to_string(),
+        Some(h) => format!(
+            r#"{{"measured":true,"compression":{},"tool_loop":{}}}"#,
+            compression_json(h.compression),
+            tool_loop_json(h.tool_loop),
+        ),
+    }
+}
+
+fn compression_json(snap: Option<CompressionHarness>) -> String {
+    match snap {
+        Some(c) => format!(
+            r#"{{"pre_tokens":{},"post_tokens":{},"dropped":{},"enabled":{},"measured":true}}"#,
+            c.pre_tokens, c.post_tokens, c.dropped, c.enabled
+        ),
+        None => r#"{"measured":false}"#.to_string(),
+    }
+}
+
+fn tool_loop_json(snap: Option<ToolLoopHarness>) -> String {
+    match snap {
+        Some(t) => format!(
+            r#"{{"uses":{},"refusals":{},"proposes":{},"timeouts":{},"measured":true}}"#,
+            t.uses, t.refusals, t.proposes, t.timeouts
+        ),
+        None => r#"{"measured":false}"#.to_string(),
+    }
 }
 
 fn slo_items(snapshots: &[SloSnapshot]) -> Vec<String> {
@@ -515,5 +604,68 @@ mod tests {
         let json = render_snapshots_json_with_lessons(&snaps, None);
         assert!(json.contains(r#""lessons":{"measured":false}"#), "{json}");
         assert!(!json.contains("active_lessons"), "{json}");
+        // harness rides on the same face; unknown is flagged, never a fabricated zero
+        assert!(json.contains(r#""harness":{"measured":false}"#), "{json}");
+        assert!(!json.contains("pre_tokens"), "{json}");
+        assert!(!json.contains("\"uses\":"), "{json}");
+    }
+
+    #[test]
+    fn harness_counters_render_measured_or_flagged_unmeasured() {
+        let snaps = SloRegistry::new().snapshot_all();
+        let json = render_snapshots_json_with_lessons_and_harness(&snaps, None, None);
+        assert!(json.contains(r#""harness":{"measured":false}"#), "{json}");
+        assert!(!json.contains("pre_tokens"), "{json}");
+
+        let json = render_snapshots_json_with_lessons_and_harness(
+            &snaps,
+            None,
+            Some(HarnessCounters {
+                compression: Some(CompressionHarness {
+                    enabled: true,
+                    pre_tokens: 200,
+                    post_tokens: 80,
+                    dropped: 3,
+                }),
+                tool_loop: None,
+            }),
+        );
+        assert!(json.contains(r#""harness":{"measured":true"#), "{json}");
+        assert!(
+            json.contains(r#""compression":{"pre_tokens":200,"post_tokens":80,"dropped":3,"enabled":true,"measured":true}"#),
+            "{json}"
+        );
+        assert!(json.contains(r#""tool_loop":{"measured":false}"#), "{json}");
+        assert!(!json.contains("\"uses\":"), "{json}");
+
+        let json = render_snapshots_json_with_lessons_and_harness(
+            &snaps,
+            None,
+            Some(HarnessCounters {
+                compression: None,
+                tool_loop: Some(ToolLoopHarness { uses: 2, refusals: 1, proposes: 1, timeouts: 0 }),
+            }),
+        );
+        assert!(
+            json.contains(r#""tool_loop":{"uses":2,"refusals":1,"proposes":1,"timeouts":0,"measured":true}"#),
+            "{json}"
+        );
+        assert!(json.contains(r#""compression":{"measured":false}"#), "{json}");
+        // counts only — never a place for prompt / query text
+        assert!(!json.contains("tool_use"), "{json}");
+        assert!(!json.contains("prompt"), "{json}");
+    }
+
+    #[test]
+    fn empty_harness_counters_render_as_unmeasured_not_zeros() {
+        let snaps = SloRegistry::new().snapshot_all();
+        let json = render_snapshots_json_with_lessons_and_harness(
+            &snaps,
+            None,
+            Some(HarnessCounters::default()),
+        );
+        assert!(json.contains(r#""harness":{"measured":false}"#), "{json}");
+        assert!(!json.contains("pre_tokens"), "{json}");
+        assert!(!json.contains("\"uses\":0"), "{json}");
     }
 }
