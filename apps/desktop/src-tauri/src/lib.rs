@@ -159,9 +159,14 @@ static IDLE_WELD: std::sync::Mutex<Option<IdleWeld>> = std::sync::Mutex::new(Non
 ///
 /// `None` before geometry is read (or if it could not be), which the webview answers with its own
 /// conservative literal — the panel is still usable, it just may not sit flush with the cutout.
+/// NOT `pub`, like every other command declared at this crate root (`set_panel_size`,
+/// `start_panel_drag`). `#[tauri::command]` emits both a `macro_rules! __cmd__<name>` and a
+/// `pub use` of it; at the crate root there is no parent module for that re-export to land in, so
+/// the two collide (E0255) and the macOS shell stops compiling. The `pub fn` commands in this
+/// tree all live inside a submodule, where the re-export has somewhere to go.
 #[cfg(target_os = "macos")]
 #[tauri::command]
-pub fn idle_weld() -> Option<IdleWeld> {
+fn idle_weld() -> Option<IdleWeld> {
     IDLE_WELD.lock().ok().and_then(|g| *g)
 }
 
