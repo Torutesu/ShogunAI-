@@ -15,7 +15,11 @@ build/
 # Spike metrics output (JSONL); never commit captured/derived data
 /apps/desktop/src-tauri/gen/
 *.jsonl
+# Bundle payload fetched at build time by `pnpm bundle:assets` (apps/desktop): the ~470MB local
+# embedding model and the ~33MB ONNX Runtime. Build input, never committed — see
+# docs/embedding-model-setup.md.
 models/
+apps/desktop/src-tauri/onnxruntime/
 legacy/screenpipe-ref/
 
 # Local research notes (not for repo)

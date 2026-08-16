@@ -153,6 +153,42 @@ jobs:
           SHOGUN_POSTHOG_KEY: ${{ secrets.SHOGUN_POSTHOG_KEY }}
         run: pnpm --filter @shogun-ai/desktop build
 
+      # The bundle now carries the local embedding model and the ONNX Runtime (tauri.conf.json
+      # `bundle.resources`, fetched by the beforeBuildCommand). Two things follow.
+      #
+      # First, assert they are actually in there. Every build before this one shipped without them
+      # and degraded to lexical search — correct behaviour for a missing model, which is exactly
+      # why nothing ever failed and nobody noticed. A silent feature loss needs a loud check.
+      #
+      # Second, sign the dylib. Nested Mach-O must carry its own signature under hardened runtime
+      # or AMFI refuses to load it, and the app would fall back to lexical search on a user's Mac
+      # after passing every check here. Signing it breaks the bundle's seal, so the .app is
+      # re-signed on top — with the same entitlements file the bundler used, or the re-sign would
+      # quietly drop them.
+      - name: verify + sign the bundled model and runtime
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          set -euo pipefail
+          APP="$(ls -d target/release/bundle/macos/*.app)"
+          RES="$APP/Contents/Resources"
+          DYLIB="$RES/libonnxruntime.dylib"
+          MODEL="$RES/models/multilingual-e5-small/model.onnx"
+          TOKENIZER="$RES/models/multilingual-e5-small/tokenizer.json"
+
+          for f in "$DYLIB" "$MODEL" "$TOKENIZER"; do
+            test -f "$f" || {
+              echo "::error::missing from the bundle: ${f#"$APP/"} — semantic search would be off in this build"
+              exit 1
+            }
+          done
+          ls -lh "$DYLIB" "$MODEL" "$TOKENIZER"
+
+          codesign --force --sign "$APPLE_SIGNING_IDENTITY" --timestamp --options runtime "$DYLIB"
+          codesign --force --sign "$APPLE_SIGNING_IDENTITY" --timestamp --options runtime \
+            --entitlements apps/desktop/src-tauri/entitlements.plist "$APP"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+
       - name: notarize app, build dmg, notarize dmg
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
