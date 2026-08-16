@@ -7,6 +7,7 @@
   "scripts": {
     "dev:vite": "vite",
     "build:vite": "tsc --noEmit && vite build",
+    "bundle:assets": "bash ../../scripts/fetch-embedding-model.sh src-tauri/models/multilingual-e5-small && bash ../../scripts/fetch-onnxruntime.sh src-tauri/onnxruntime",
     "typecheck": "tsc --noEmit",
     "tauri": "tauri",
     "dev": "tauri dev",
