@@ -71,6 +71,7 @@ pub(crate) const OVERLAY_LEVEL: isize = 24 + 3;
 pub(crate) const FULL_UI_LABEL: &str = "fullui";
 /// Window label for the Visual recall browse UI (saved screen timeline).
 pub(crate) const VISUAL_RECALL_LABEL: &str = "visual-recall";
+const SCRIBE_LABEL: &str = "scribe";
 /// Full UI window size, in LOGICAL points. The minimum is the spec §D floor — below it the
 /// sidebar plus a three-card health row stops fitting.
 const FULL_UI_W: f64 = 1200.0;
@@ -81,6 +82,9 @@ const VISUAL_RECALL_W: f64 = 720.0;
 const VISUAL_RECALL_H: f64 = 640.0;
 const VISUAL_RECALL_MIN_W: f64 = 480.0;
 const VISUAL_RECALL_MIN_H: f64 = 400.0;
+const SCRIBE_MIN_W: f64 = 360.0;
+const SCRIBE_MAX_W: f64 = 640.0;
+const SCRIBE_H: f64 = 64.0;
 /// Open notch panel resize ceiling — must match `PANEL_MAX_SCREEN_FRAC` in App.tsx.
 const PANEL_MAX_SCREEN_FRAC: f64 = 0.75;
 
@@ -204,6 +208,7 @@ pub fn run() {
             inline_source::mac::inline_at_cursor,
             inline_source::mac::scribe_open,
             inline_source::mac::scribe_submit,
+            inline_source::mac::scribe_status,
             inline_source::mac::scribe_close,
             inline_source::mac::scribe_cancel,
             inline_source::mac::shogun_status,
@@ -982,6 +987,57 @@ fn build_panel_window(handle: &tauri::AppHandle) {
         }
         Err(e) => eprintln!("[shell] panel window build failed: {e}"),
     }
+}
+
+/// Scribe belongs to the field being edited, not to the notch. Build a focused, one-line overlay
+/// above the AX field captured before this process takes focus. The notch remains untouched.
+#[cfg(target_os = "macos")]
+fn build_scribe_window(
+    handle: &tauri::AppHandle,
+    opened: inline_source::mac::ScribeOpenResult,
+) -> Result<(), String> {
+    use tauri::Manager;
+
+    if let Some(existing) = handle.get_webview_window(SCRIBE_LABEL) {
+        let _ = existing.close();
+    }
+    let width = opened
+        .anchor
+        .map(|anchor| anchor.width.clamp(SCRIBE_MIN_W, SCRIBE_MAX_W))
+        .unwrap_or(520.0);
+    let url = format!("index.html?view=scribe&session={}", opened.session_id);
+    let mut builder = tauri::WebviewWindowBuilder::new(
+        handle,
+        SCRIBE_LABEL,
+        tauri::WebviewUrl::App(url.into()),
+    )
+    .title("ShogunAI Scribe")
+    .transparent(true)
+    .decorations(false)
+    .resizable(false)
+    .always_on_top(true)
+    .shadow(false)
+    .skip_taskbar(true)
+    .inner_size(width, SCRIBE_H)
+    .visible(false)
+    .focused(true);
+
+    if let Some(anchor) = opened.anchor {
+        let x = anchor.x + (anchor.width - width) / 2.0;
+        let above = anchor.y - SCRIBE_H - 8.0;
+        let y = if above >= 4.0 {
+            above
+        } else {
+            anchor.y + anchor.height + 8.0
+        };
+        builder = builder.position(x.max(4.0), y.max(4.0));
+    }
+
+    let window = builder.build().map_err(|error| error.to_string())?;
+    window.show().map_err(|error| error.to_string())?;
+    window.set_focus().map_err(|error| error.to_string())?;
+    eprintln!("[shell] Scribe field overlay opened");
+    Ok(())
 }
 
 /// The Full UI window (spec §D) — Today, Context Health, Sources, Memory, Activity, Traceability.
@@ -1894,11 +1950,32 @@ fn watch_option_tap(app: &tauri::App) {
             .and_then(|cache| cache.current());
         // Capture AX target before this process focuses its own panel. Frontend receives only the
         // resulting content-free lifecycle event.
-        if let Err(error) =
-            inline_source::mac::open_scribe(db.inner().clone(), warm, handle.clone())
-        {
-            eprintln!("[shell] Scribe open failed: {error}");
+        match inline_source::mac::open_scribe(db.inner().clone(), warm, handle.clone()) {
+            Ok(opened) => {
+                let session_id = opened.session_id;
+                if let Err(error) = build_scribe_window(handle, opened) {
+                    let _ = inline_source::mac::scribe_cancel(session_id, handle.clone());
+                    eprintln!("[shell] Scribe overlay failed: {error}");
+                }
+            }
+            Err(error) => {
+                eprintln!("[shell] Scribe open failed: {error}");
+            }
         }
+    }
+
+    fn dismiss_scribe(handle: &tauri::AppHandle) -> bool {
+        use tauri::Manager;
+
+        let Some(session_id) = inline_source::mac::active_scribe_session_id() else {
+            return false;
+        };
+        let _ = inline_source::mac::scribe_close(session_id, handle.clone());
+        if let Some(window) = handle.get_webview_window(SCRIBE_LABEL) {
+            let _ = window.close();
+        }
+        eprintln!("[shell] Scribe closed by Escape");
+        true
     }
 
     /// Any non-Option input during the hold kills the tap until Option is released.
@@ -1913,12 +1990,35 @@ fn watch_option_tap(app: &tauri::App) {
     // SAFETY: main thread (setup); monitors and blocks are intentionally leaked (app lifetime).
     unsafe {
         let tap_state_for_poison = tap_state.clone();
-        let disarm_block =
-            block2::RcBlock::new(move |_ev: *mut AnyObject| poison(&tap_state_for_poison));
+        let handle_for_global_keys = app.handle().clone();
+        let disarm_block = block2::RcBlock::new(move |ev: *mut AnyObject| {
+            if !ev.is_null() {
+                let key_code: u16 = msg_send![ev, keyCode];
+                if key_code == 53 && dismiss_scribe(&handle_for_global_keys) {
+                    return;
+                }
+            }
+            poison(&tap_state_for_poison);
+        });
         let key_mon: *mut AnyObject = msg_send![
             class!(NSEvent),
             addGlobalMonitorForEventsMatchingMask: MASK_KEY_DOWN,
             handler: &*disarm_block
+        ];
+        let handle_for_local_keys = app.handle().clone();
+        let local_key_block = block2::RcBlock::new(move |ev: *mut AnyObject| -> *mut AnyObject {
+            if !ev.is_null() {
+                let key_code: u16 = msg_send![ev, keyCode];
+                if key_code == 53 {
+                    let _ = dismiss_scribe(&handle_for_local_keys);
+                }
+            }
+            ev
+        });
+        let local_key_mon: *mut AnyObject = msg_send![
+            class!(NSEvent),
+            addLocalMonitorForEventsMatchingMask: MASK_KEY_DOWN,
+            handler: &*local_key_block
         ];
         let mouse_mon: *mut AnyObject = msg_send![
             class!(NSEvent),
@@ -1926,6 +2026,7 @@ fn watch_option_tap(app: &tauri::App) {
             handler: &*disarm_block
         ];
         std::mem::forget(disarm_block);
+        std::mem::forget(local_key_block);
 
         let handle = app.handle().clone();
         let tap_state_for_flags = tap_state.clone();
@@ -2009,7 +2110,7 @@ fn watch_option_tap(app: &tauri::App) {
         ];
         std::mem::forget(flags_block);
 
-        if key_mon.is_null() || mouse_mon.is_null() || flags_mon.is_null() {
+        if key_mon.is_null() || local_key_mon.is_null() || mouse_mon.is_null() || flags_mon.is_null() {
             eprintln!("[shell] ⌥-tap monitor failed to install (accessibility permission?)");
         } else {
             eprintln!("[shell] right ⌥ tap-to-draft installed (<0.5s, no other input)");

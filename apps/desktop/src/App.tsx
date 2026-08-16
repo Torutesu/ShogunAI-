@@ -106,13 +106,6 @@ interface VoiceView {
   level: number;
 }
 
-interface ScribeEvent {
-  session_id: number;
-  phase: "opened" | "processing" | "inserted" | "failed" | "closed" | "cancelled" | "no_key";
-  chars: number;
-  detail: string | null;
-}
-
 interface LevelEvent {
   rms: number;
 }
@@ -326,17 +319,6 @@ export function App(): JSX.Element {
     error: "",
     level: 0,
   });
-  const [scribeOpen, setScribeOpen] = useState(false);
-  const [scribeSessionId, setScribeSessionId] = useState<number | null>(null);
-  const [scribeInstruction, setScribeInstruction] = useState("");
-  const [scribePhase, setScribePhase] = useState<"idle" | "processing" | "error">("idle");
-  const [scribeError, setScribeError] = useState("");
-  const scribeInputRef = useRef<HTMLInputElement | null>(null);
-  const scribeOpenRef = useRef(false);
-  const scribeSessionIdRef = useRef<number | null>(null);
-  const scribeCloseSentRef = useRef(false);
-  scribeOpenRef.current = scribeOpen;
-  scribeSessionIdRef.current = scribeSessionId;
   const voicePeak = useRef(0);
   /** `voice_level` is also the mic-capture heartbeat: even silence emits zero-RMS frames. */
   const lastVoiceLevelAt = useRef(0);
@@ -430,39 +412,6 @@ export function App(): JSX.Element {
     void invoke("interact", { kind: "boot" });
     const offs: Array<Promise<() => void>> = [];
     offs.push(listen<ContextPayload>("context", (e) => setCtxApp(e.payload.bundle_id || e.payload.title_masked || "")));
-    offs.push(listen<ScribeEvent>("scribe", (e) => {
-      const event = e.payload;
-      if (event.phase === "opened") {
-        setScribeSessionId(event.session_id);
-        scribeSessionIdRef.current = event.session_id;
-        scribeCloseSentRef.current = false;
-        setScribeOpen(true);
-        setScribeInstruction("");
-        setScribePhase("idle");
-        setScribeError("");
-        expandRef.current();
-        window.requestAnimationFrame(() => scribeInputRef.current?.focus());
-        return;
-      }
-      if (event.session_id !== scribeSessionIdRef.current) return;
-      if (event.phase === "processing") {
-        setScribePhase("processing");
-      } else if (event.phase === "inserted") {
-        setScribeInstruction("");
-        setScribePhase("idle");
-        setScribeError("");
-        window.requestAnimationFrame(() => scribeInputRef.current?.focus());
-      } else if (event.phase === "failed" || event.phase === "no_key") {
-        setScribePhase("error");
-        setScribeError(event.detail || t.scribeError);
-      } else if (event.phase === "closed" || event.phase === "cancelled") {
-        setScribeOpen(false);
-        setScribeSessionId(null);
-        scribeSessionIdRef.current = null;
-        setScribePhase("idle");
-        beginCollapseRef.current();
-      }
-    }));
     // The pill is push-driven: Rust owns the lifecycle, the webview never decides that a meeting
     // has started (FR-MT-07). The first read covers a webview reload mid-meeting.
     offs.push(listen<MeetingView>("meeting", (e) => setMeeting(e.payload)));
@@ -621,7 +570,6 @@ export function App(): JSX.Element {
           // Withdraw on the same rule as the pointer-leave path: pinned stays, work in progress
           // stays, everything else follows your attention.
           if (pinnedRef.current) return;
-          if (scribeOpenRef.current) return;
           if (inputRef.current.trim().length > 0 || thinkingRef.current) return;
           if (voiceRef.current.phase === "recording" || voiceRef.current.phase === "processing") return;
           beginCollapseRef.current();
@@ -636,19 +584,6 @@ export function App(): JSX.Element {
     // Overlay spec: Escape closes the overlay (it stays hidden until summoned again).
     const onEsc = (e: KeyboardEvent): void => {
       if (e.key !== "Escape") return;
-      if (scribeOpenRef.current) {
-        e.preventDefault();
-        e.stopPropagation();
-        const sessionId = scribeSessionIdRef.current;
-        if (sessionId == null || scribeCloseSentRef.current) return;
-        scribeCloseSentRef.current = true;
-        setScribeOpen(false);
-        setScribeSessionId(null);
-        setScribePhase("idle");
-        beginCollapseRef.current();
-        void invoke("scribe_close", { sessionId }).catch(() => undefined);
-        return;
-      }
       void invoke("hide_panel").catch(() => undefined);
     };
     window.addEventListener("keydown", onEsc);
@@ -732,7 +667,6 @@ export function App(): JSX.Element {
       leaveTimer.current = null;
       // Never collapse over work in progress: a focused composer, a half-written question, or an
       // answer still arriving all mean the panel is in use even though the cursor wandered off.
-      if (scribeOpenRef.current) return;
       const composerHasFocus = document.activeElement?.classList.contains("composer__input") ?? false;
       if (composerHasFocus || inputRef.current.trim().length > 0 || thinkingRef.current) return;
       if (voiceRef.current.phase === "recording" || voiceRef.current.phase === "processing") return;
@@ -857,20 +791,6 @@ export function App(): JSX.Element {
       .then((r) => finish(r?.text || t.noAnswer, r?.citations))
       .catch((e) => finish(`${t.answerFailed}: ${e}`));
   }, [input, thinking, status]);
-
-  const submitScribe = useCallback((): void => {
-    const instruction = scribeInstruction.trim();
-    if (!instruction || scribePhase === "processing") return;
-    setScribePhase("processing");
-    setScribeError("");
-    const sessionId = scribeSessionIdRef.current;
-    if (sessionId == null) return;
-    void invoke("scribe_submit", { sessionId, instruction })
-      .catch((error) => {
-        setScribePhase("error");
-        setScribeError(typeof error === "string" ? error : t.scribeError);
-      });
-  }, [scribeInstruction, scribePhase]);
 
   // Fix the history boundary on first render, before anything is appended this session.
   if (historyMark.current === null) historyMark.current = msgs.length;
@@ -1030,43 +950,7 @@ export function App(): JSX.Element {
         aria-hidden={!open || collapsing || (expanding && !open)}
       >
         <div className="panel__body">
-        {scribeOpen ? (
-          <div className="scribe" role="dialog" aria-labelledby="scribe-title">
-            <div className="scribe__eyebrow" id="scribe-title">{t.scribeTitle}</div>
-            <div className={`scribe__field${scribePhase === "error" ? " is-error" : ""}`}>
-              <input
-                ref={scribeInputRef}
-                className="scribe__input"
-                aria-label={t.scribeLabel}
-                placeholder={t.scribePlaceholder}
-                value={scribeInstruction}
-                disabled={scribePhase === "processing"}
-                onChange={(e) => {
-                  setScribeInstruction(e.target.value);
-                  if (scribePhase === "error") setScribePhase("idle");
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    submitScribe();
-                  }
-                }}
-              />
-              <button
-                className="scribe__submit"
-                type="button"
-                aria-label={scribePhase === "processing" ? t.scribeProcessing : t.scribeSubmit}
-                disabled={!scribeInstruction.trim() || scribePhase === "processing"}
-                onClick={submitScribe}
-              >
-                {scribePhase === "processing" ? <span className="scribe__spinner" aria-hidden="true" /> : "↑"}
-              </button>
-            </div>
-            <div className="scribe__status" role="status" aria-live="polite">
-              {scribePhase === "processing" ? t.scribeProcessing : scribePhase === "error" ? scribeError : t.scribeHint}
-            </div>
-          </div>
-        ) : showSettings ? (
+        {showSettings ? (
           <Settings
             appearance={appearance}
             setAppearance={setAppearance}

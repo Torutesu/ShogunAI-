@@ -17,9 +17,12 @@ pub mod mac {
         AXUIElementCopyAttributeValue, AXUIElementCreateSystemWide, AXUIElementRef,
         AXUIElementSetAttributeValue, AXUIElementSetMessagingTimeout, AXValueCreate,
         AXValueGetTypeID, AXValueGetValue, kAXErrorSuccess, kAXFocusedUIElementAttribute,
-        kAXRoleAttribute, kAXSelectedTextAttribute, kAXSelectedTextRangeAttribute,
-        kAXTitleAttribute, kAXValueAttribute, kAXValueTypeCFRange,
+        kAXFocusedAttribute, kAXPositionAttribute, kAXRoleAttribute, kAXSelectedTextAttribute,
+        kAXSelectedTextRangeAttribute, kAXSizeAttribute, kAXTitleAttribute, kAXValueAttribute,
+        kAXValueTypeCFRange, kAXValueTypeCGPoint, kAXValueTypeCGSize,
     };
+    use core_foundation::boolean::CFBoolean;
+    use core_graphics::geometry::{CGPoint, CGSize};
     use core_foundation::base::TCFType;
     use core_foundation::string::CFString;
     use core_foundation_sys::base::{CFGetTypeID, CFRange, CFRelease, CFTypeRef};
@@ -136,9 +139,18 @@ pub mod mac {
     /// happened to focus while the Scribe prompt was open.
     struct ScribeTarget {
         element: AXUIElementRef,
+        pid: i32,
+        bundle_id: String,
         original_value: String,
         target_range: CFRange,
         selected_text: String,
+        selection_verified: bool,
+    }
+
+    struct ScribeInsertResult {
+        expected_value: String,
+        replacement_range: CFRange,
+        selection_verified: bool,
     }
 
     // AXUIElementRef is a retained CoreFoundation object. Scribe serializes all access through
@@ -161,10 +173,26 @@ pub mod mac {
         memory: Vec<String>,
         busy: bool,
         active: bool,
+        phase: &'static str,
+        chars: usize,
+        detail: Option<&'static str>,
     }
 
     static SCRIBE_SESSION: std::sync::Mutex<Option<ScribeSession>> = std::sync::Mutex::new(None);
     static NEXT_SCRIBE_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+    #[derive(Clone, Copy)]
+    pub struct ScribeAnchor {
+        pub x: f64,
+        pub y: f64,
+        pub width: f64,
+        pub height: f64,
+    }
+
+    pub struct ScribeOpenResult {
+        pub session_id: u64,
+        pub anchor: Option<ScribeAnchor>,
+    }
 
     /// The active provider rejected its key (HTTP 401/403). Sticky until the key or the provider
     /// changes, because the failure is silent everywhere else: a ⌥-tap that 401s inserts nothing,
@@ -319,6 +347,48 @@ pub mod mac {
             };
         unsafe { CFRelease(value) };
         is_range.then_some(range)
+    }
+
+    unsafe fn copy_point(el: AXUIElementRef, name: &str) -> Option<CGPoint> {
+        let cf_name = CFString::new(name);
+        let mut value: CFTypeRef = std::ptr::null();
+        let err =
+            unsafe { AXUIElementCopyAttributeValue(el, cf_name.as_concrete_TypeRef(), &mut value) };
+        if err != kAXErrorSuccess || value.is_null() {
+            return None;
+        }
+        let mut point = CGPoint::new(0.0, 0.0);
+        let is_point = unsafe { CFGetTypeID(value) == AXValueGetTypeID() }
+            && unsafe {
+                AXValueGetValue(
+                    value.cast_mut().cast(),
+                    kAXValueTypeCGPoint,
+                    (&mut point as *mut CGPoint).cast(),
+                )
+            };
+        unsafe { CFRelease(value) };
+        is_point.then_some(point)
+    }
+
+    unsafe fn copy_size(el: AXUIElementRef, name: &str) -> Option<CGSize> {
+        let cf_name = CFString::new(name);
+        let mut value: CFTypeRef = std::ptr::null();
+        let err =
+            unsafe { AXUIElementCopyAttributeValue(el, cf_name.as_concrete_TypeRef(), &mut value) };
+        if err != kAXErrorSuccess || value.is_null() {
+            return None;
+        }
+        let mut size = CGSize::new(0.0, 0.0);
+        let is_size = unsafe { CFGetTypeID(value) == AXValueGetTypeID() }
+            && unsafe {
+                AXValueGetValue(
+                    value.cast_mut().cast(),
+                    kAXValueTypeCGSize,
+                    (&mut size as *mut CGSize).cast(),
+                )
+            };
+        unsafe { CFRelease(value) };
+        is_size.then_some(size)
     }
 
     unsafe fn is_secure_text_field(el: AXUIElementRef) -> bool {
@@ -593,6 +663,44 @@ pub mod mac {
         ) -> *mut std::ffi::c_void;
         fn CGEventSetFlags(event: *mut std::ffi::c_void, flags: u64);
         fn CGEventPost(tap: u32, event: *mut std::ffi::c_void);
+        fn CGEventKeyboardSetUnicodeString(
+            event: *mut std::ffi::c_void,
+            string_length: usize,
+            unicode_string: *const u16,
+        );
+        fn CGEventPostToPid(pid: i32, event: *mut std::ffi::c_void);
+    }
+
+    /// Deliver text through the target app's real keyboard path without touching the clipboard.
+    /// Small Unicode bursts avoid key-layout assumptions and keep browser editors responsive.
+    unsafe fn type_text_to_pid(text: &str, pid: i32) -> Result<(), String> {
+        if pid <= 0 {
+            return Err("target process unavailable".into());
+        }
+        let characters: Vec<char> = text.chars().collect();
+        for chunk in characters.chunks(32) {
+            let units: Vec<u16> = chunk.iter().collect::<String>().encode_utf16().collect();
+            let down = unsafe { CGEventCreateKeyboardEvent(std::ptr::null(), 0, true) };
+            let up = unsafe { CGEventCreateKeyboardEvent(std::ptr::null(), 0, false) };
+            if down.is_null() || up.is_null() {
+                if !down.is_null() {
+                    unsafe { CFRelease(down as CFTypeRef) };
+                }
+                if !up.is_null() {
+                    unsafe { CFRelease(up as CFTypeRef) };
+                }
+                return Err("could not create text events".into());
+            }
+            unsafe {
+                CGEventKeyboardSetUnicodeString(down, units.len(), units.as_ptr());
+                CGEventPostToPid(pid, down);
+                CGEventPostToPid(pid, up);
+                CFRelease(down as CFTypeRef);
+                CFRelease(up as CFTypeRef);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(3));
+        }
+        Ok(())
     }
 
     /// Insert `text` by putting it on the pasteboard and synthesising ⌘V, then putting the user's
@@ -805,7 +913,7 @@ pub mod mac {
 
     /// Capture Scribe's editable target once. Secure text fields are never read, even if their
     /// AX value happens to be exposed by an application.
-    fn capture_scribe_target() -> Option<(ScribeTarget, CursorContext)> {
+    fn capture_scribe_target() -> Option<(ScribeTarget, CursorContext, Option<ScribeAnchor>)> {
         let el = unsafe { focused_element() }?;
         if unsafe { is_secure_text_field(el) } {
             unsafe { CFRelease(el as CFTypeRef) };
@@ -817,29 +925,44 @@ pub mod mac {
             unsafe { CFRelease(el as CFTypeRef) };
             return None;
         };
-        let Some(selection) = selection else {
+        let prepared = match selection {
+            Some(range) => rewrite_target(&value, range),
+            None if value.is_empty() => {
+                Some((CFRange::init(0, 0), String::new(), String::new()))
+            }
+            None => None,
+        };
+        let Some((target_range, selected_text, surrounding)) = prepared else {
             unsafe { CFRelease(el as CFTypeRef) };
             return None;
         };
-        let Some((target_range, selected_text, surrounding)) = rewrite_target(&value, selection)
-        else {
-            unsafe { CFRelease(el as CFTypeRef) };
-            return None;
-        };
-        if !unsafe { set_range(el, target_range) } {
+        if selection.is_some() && !unsafe { set_range(el, target_range) } {
             unsafe { CFRelease(el as CFTypeRef) };
             return None;
         }
-        let app = crate::display::frontmost_app()
-            .map(|f| f.bundle_id)
-            .unwrap_or_default();
+        let front_app = crate::display::frontmost_app();
+        let pid = front_app.as_ref().map(|app| app.pid).unwrap_or_default();
+        let app = front_app.map(|app| app.bundle_id).unwrap_or_default();
         let field_label = unsafe { copy_string(el, kAXTitleAttribute) }.unwrap_or_default();
+        let anchor = unsafe {
+            copy_point(el, kAXPositionAttribute)
+                .zip(copy_size(el, kAXSizeAttribute))
+                .map(|(position, size)| ScribeAnchor {
+                    x: position.x,
+                    y: position.y,
+                    width: size.width,
+                    height: size.height,
+                })
+        };
         Some((
             ScribeTarget {
                 element: el,
+                pid,
+                bundle_id: app.clone(),
                 original_value: value,
                 target_range,
                 selected_text: selected_text.clone(),
+                selection_verified: selection.is_some(),
             },
             CursorContext {
                 app,
@@ -847,82 +970,119 @@ pub mod mac {
                 before: selected_text,
                 after: surrounding,
             },
+            anchor,
         ))
     }
 
     /// Insert into captured target, not current focus. Re-read both value and selection first so
     /// a changed document or caret cannot receive a stale generated result.
-    fn insert_scribe(target: &ScribeTarget, text: &str) -> Result<CFRange, String> {
+    fn scribe_prefers_keyboard_delivery(bundle_id: &str) -> bool {
+        matches!(
+            bundle_id,
+            "com.openai.codex"
+                | "com.openai.chat"
+                | "com.google.Chrome"
+                | "com.tinyspeck.slackmacgap"
+                | "com.hnc.Discord"
+                | "notion.id"
+        )
+    }
+
+    fn insert_scribe(target: &ScribeTarget, text: &str) -> Result<ScribeInsertResult, String> {
         let current = unsafe { copy_string(target.element, kAXValueAttribute) };
         let current_range = unsafe { copy_range(target.element, kAXSelectedTextRangeAttribute) };
         let selected =
             unsafe { copy_string(target.element, kAXSelectedTextAttribute) }.unwrap_or_default();
-        if current.as_deref() != Some(target.original_value.as_str())
-            || current_range != Some(target.target_range)
-            || selected != target.selected_text
-        {
+        if current.as_deref() != Some(target.original_value.as_str()) {
             return Err("captured target changed".into());
+        }
+        if target.selection_verified
+            && (current_range != Some(target.target_range) || selected != target.selected_text)
+        {
+            return Err("captured target selection changed".into());
         }
         let Some((expected, replacement_range)) =
             replace_utf16_range(&target.original_value, target.target_range, text)
         else {
             return Err("captured target range invalid".into());
         };
-        let attr = CFString::new(kAXSelectedTextAttribute);
-        let value = CFString::new(text);
-        let err = unsafe {
-            AXUIElementSetAttributeValue(
-                target.element,
-                attr.as_concrete_TypeRef(),
-                value.as_concrete_TypeRef() as CFTypeRef,
-            )
-        };
-        if err != kAXErrorSuccess {
-            return Err(format!("AX set selected text failed: {err}"));
-        }
-        if !unsafe { value_matches(target.element, &expected) } {
-            // Browser/Electron AX often returns success while ignoring AXSelectedText. Set the
-            // complete retained target value instead; never paste into current focus.
-            let current = unsafe { copy_string(target.element, kAXValueAttribute) };
-            let current_range =
-                unsafe { copy_range(target.element, kAXSelectedTextRangeAttribute) };
-            let selected = unsafe { copy_string(target.element, kAXSelectedTextAttribute) }
-                .unwrap_or_default();
-            match full_value_fallback_decision(
-                current.as_deref(),
-                current_range,
-                &selected,
-                &target.original_value,
-                target.target_range,
-                &target.selected_text,
-                &expected,
-            ) {
-                FullValueFallbackDecision::AlreadyLanded => {}
-                FullValueFallbackDecision::Abort => {
-                    return Err("Scribe target changed before fallback".into());
-                }
-                FullValueFallbackDecision::SafeToWrite => {
-                    let attr = CFString::new(kAXValueAttribute);
-                    let full_value = CFString::new(&expected);
-                    let err = unsafe {
-                        AXUIElementSetAttributeValue(
-                            target.element,
-                            attr.as_concrete_TypeRef(),
-                            full_value.as_concrete_TypeRef() as CFTypeRef,
-                        )
-                    };
-                    if err != kAXErrorSuccess
-                        || !unsafe { value_matches(target.element, &expected) }
-                    {
-                        return Err("Scribe target did not accept replacement".into());
+        if scribe_prefers_keyboard_delivery(&target.bundle_id) {
+            restore_scribe_target_focus(target);
+            if unsafe { type_text_to_pid(text, target.pid) }.is_err()
+                || !unsafe { value_matches(target.element, &expected) }
+            {
+                return Err("Scribe target did not accept keyboard text".into());
+            }
+        } else if target.selection_verified {
+            let attr = CFString::new(kAXSelectedTextAttribute);
+            let value = CFString::new(text);
+            let err = unsafe {
+                AXUIElementSetAttributeValue(
+                    target.element,
+                    attr.as_concrete_TypeRef(),
+                    value.as_concrete_TypeRef() as CFTypeRef,
+                )
+            };
+            if err == kAXErrorSuccess && unsafe { value_matches(target.element, &expected) } {
+                // Landed through the narrow selected-text write.
+            } else {
+                // Browser/Electron AX often returns success while ignoring AXSelectedText. Set the
+                // complete retained target value instead; never paste into current focus.
+                let current = unsafe { copy_string(target.element, kAXValueAttribute) };
+                let current_range =
+                    unsafe { copy_range(target.element, kAXSelectedTextRangeAttribute) };
+                let selected = unsafe { copy_string(target.element, kAXSelectedTextAttribute) }
+                    .unwrap_or_default();
+                match full_value_fallback_decision(
+                    current.as_deref(),
+                    current_range,
+                    &selected,
+                    &target.original_value,
+                    target.target_range,
+                    &target.selected_text,
+                    &expected,
+                ) {
+                    FullValueFallbackDecision::AlreadyLanded => {}
+                    FullValueFallbackDecision::Abort => {
+                        return Err("Scribe target changed before fallback".into());
+                    }
+                    FullValueFallbackDecision::SafeToWrite => {
+                        set_full_value_verified(target.element, &expected)?;
                     }
                 }
             }
+        } else {
+            // Some empty web composers expose a value but no AX selection. Session still owns the
+            // exact captured value/range, so a verified full-value replacement is deterministic.
+            set_full_value_verified(target.element, &expected)?;
         }
-        if !unsafe { set_range(target.element, replacement_range) } {
-            return Err("Scribe could not select replacement".into());
+        // Selection support is optional state, not insertion success. Several Electron/web fields
+        // accept the replacement but reject AXSelectedTextRange; treating that as failure left the
+        // UI spinning after text had already landed.
+        let selection_verified = unsafe { set_range(target.element, replacement_range) }
+            && unsafe { selection_matches(target.element, replacement_range, text) };
+        Ok(ScribeInsertResult {
+            expected_value: expected,
+            replacement_range,
+            selection_verified,
+        })
+    }
+
+    fn set_full_value_verified(el: AXUIElementRef, expected: &str) -> Result<(), String> {
+        let attr = CFString::new(kAXValueAttribute);
+        let full_value = CFString::new(expected);
+        let err = unsafe {
+            AXUIElementSetAttributeValue(
+                el,
+                attr.as_concrete_TypeRef(),
+                full_value.as_concrete_TypeRef() as CFTypeRef,
+            )
+        };
+        if err == kAXErrorSuccess && unsafe { value_matches(el, expected) } {
+            Ok(())
+        } else {
+            Err("Scribe target did not accept replacement".into())
         }
-        Ok(replacement_range)
     }
 
     /// Read AXValue until it matches expected, allowing browser run loops to apply writes.
@@ -936,21 +1096,28 @@ pub mod mac {
         false
     }
 
+    unsafe fn selection_matches(el: AXUIElementRef, expected: CFRange, text: &str) -> bool {
+        for _ in 0..4 {
+            let range = unsafe { copy_range(el, kAXSelectedTextRangeAttribute) };
+            let selected = unsafe { copy_string(el, kAXSelectedTextAttribute) };
+            if range == Some(expected) && selected.as_deref() == Some(text) {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(30));
+        }
+        false
+    }
+
     fn refresh_scribe_snapshot(
         original_value: &mut String,
         selected_text: &mut String,
         context_before: &mut String,
-        value: Option<String>,
-        selected: Option<String>,
+        expected_value: String,
         generated: &str,
-    ) -> bool {
-        let (Some(value), Some(selected)) = (value, selected) else {
-            return false;
-        };
-        *original_value = value;
-        *selected_text = selected;
+    ) {
+        *original_value = expected_value;
+        *selected_text = generated.to_string();
         *context_before = generated.to_string();
-        true
     }
 
     // ---- BYOK Agent-lane client (Keychain → real, else nothing) -----------------------------
@@ -1277,15 +1444,26 @@ pub mod mac {
 
     fn push_scribe(app: &tauri::AppHandle, event: ScribeEvent) {
         use tauri::Emitter;
-        let _ = app.emit("scribe", event);
+        if let Err(error) = app.emit_to("scribe", "scribe", event) {
+            eprintln!("[scribe] status delivery failed: {error}");
+        }
     }
 
-    fn finish_scribe_worker(session_id: u64, generation: u64) {
+    fn finish_scribe_worker(
+        session_id: u64,
+        generation: u64,
+        phase: &'static str,
+        chars: usize,
+        detail: Option<&'static str>,
+    ) {
         if let Ok(mut sessions) = SCRIBE_SESSION.lock() {
             if let Some(session) = sessions.as_mut().filter(|session| {
                 session.id == session_id && (session.generation == generation || !session.active)
             }) {
                 session.busy = false;
+                session.phase = phase;
+                session.chars = chars;
+                session.detail = detail;
                 if !session.active {
                     session.target.take();
                 }
@@ -1299,8 +1477,8 @@ pub mod mac {
         db: Db,
         warm: Option<ReplyContext>,
         app: tauri::AppHandle,
-    ) -> Result<u64, String> {
-        let (target, context) =
+    ) -> Result<ScribeOpenResult, String> {
+        let (target, context, anchor) =
             capture_scribe_target().ok_or_else(|| "no editable target".to_string())?;
         let memory = warm
             .filter(|ctx| !ctx.is_empty())
@@ -1324,6 +1502,9 @@ pub mod mac {
             memory,
             busy: false,
             active: true,
+            phase: "opened",
+            chars: 0,
+            detail: None,
         });
         drop(sessions);
         push_scribe(
@@ -1335,7 +1516,10 @@ pub mod mac {
                 detail: None,
             },
         );
-        Ok(id)
+        Ok(ScribeOpenResult {
+            session_id: id,
+            anchor,
+        })
     }
 
     #[tauri::command]
@@ -1344,7 +1528,7 @@ pub mod mac {
         reply: tauri::State<'_, shogun_core::daemon::ReplyContextCache>,
         app: tauri::AppHandle,
     ) -> Result<u64, String> {
-        open_scribe(db.inner().clone(), reply.current(), app)
+        open_scribe(db.inner().clone(), reply.current(), app).map(|result| result.session_id)
     }
 
     /// Submit one typed Scribe instruction. Session stays alive after success for another edit.
@@ -1371,6 +1555,9 @@ pub mod mac {
             }
             session.busy = true;
             session.generation = session.generation.wrapping_add(1);
+            session.phase = "processing";
+            session.chars = 0;
+            session.detail = None;
             (
                 session.generation,
                 session.context.clone(),
@@ -1389,7 +1576,7 @@ pub mod mac {
         let db = db.inner().clone();
         std::thread::spawn(move || {
             let Some(agent) = build_agent(&db) else {
-                finish_scribe_worker(session_id, generation);
+                finish_scribe_worker(session_id, generation, "no_key", 0, None);
                 push_scribe(
                     &app,
                     ScribeEvent {
@@ -1409,7 +1596,13 @@ pub mod mac {
             let generated = match agent.complete(&prompt) {
                 Ok(text) if !text.trim().is_empty() => text,
                 Ok(_) => {
-                    finish_scribe_worker(session_id, generation);
+                    finish_scribe_worker(
+                        session_id,
+                        generation,
+                        "failed",
+                        0,
+                        Some("empty response"),
+                    );
                     push_scribe(
                         &app,
                         ScribeEvent {
@@ -1422,7 +1615,13 @@ pub mod mac {
                     return;
                 }
                 Err(_) => {
-                    finish_scribe_worker(session_id, generation);
+                    finish_scribe_worker(
+                        session_id,
+                        generation,
+                        "failed",
+                        0,
+                        Some("generation failed"),
+                    );
                     push_scribe(
                         &app,
                         ScribeEvent {
@@ -1446,43 +1645,58 @@ pub mod mac {
                     session.active && session.id == session_id && session.generation == generation
                 }) else {
                     drop(sessions);
-                    finish_scribe_worker(session_id, generation);
+                    finish_scribe_worker(session_id, generation, "cancelled", 0, None);
                     return;
                 };
                 let Some(target) = session.target.as_ref() else {
                     session.busy = false;
+                    session.phase = "failed";
+                    session.chars = 0;
+                    session.detail = Some("target changed or insert failed");
+                    push_scribe(
+                        &app,
+                        ScribeEvent {
+                            session_id,
+                            phase: "failed",
+                            chars: 0,
+                            detail: Some("target changed or insert failed"),
+                        },
+                    );
                     return;
                 };
                 match insert_scribe(target, &generated) {
-                    Ok(replacement_range) => {
+                    Ok(inserted) => {
                         // Keep session alive. Next instruction edits latest generated text, while
                         // target verification still rejects changes made outside Scribe.
-                        let refreshed = session.target.as_mut().is_some_and(|target| {
-                            target.target_range = replacement_range;
-                            let value = unsafe { copy_string(target.element, kAXValueAttribute) };
-                            let selected =
-                                unsafe { copy_string(target.element, kAXSelectedTextAttribute) };
+                        if let Some(target) = session.target.as_mut() {
+                            target.target_range = inserted.replacement_range;
+                            target.selection_verified = inserted.selection_verified;
                             refresh_scribe_snapshot(
                                 &mut target.original_value,
                                 &mut target.selected_text,
                                 &mut session.context.before,
-                                value,
-                                selected,
+                                inserted.expected_value,
                                 &generated,
-                            )
-                        });
-                        if refreshed {
+                            );
                             session.busy = false;
+                            session.phase = "inserted";
+                            session.chars = chars;
+                            session.detail = None;
                             true
                         } else {
-                            session.target.take();
                             session.active = false;
                             session.busy = false;
+                            session.phase = "failed";
+                            session.chars = 0;
+                            session.detail = Some("target changed or insert failed");
                             false
                         }
                     }
                     Err(_) => {
                         session.busy = false;
+                        session.phase = "failed";
+                        session.chars = 0;
+                        session.detail = Some("target changed or insert failed");
                         false
                     }
                 }
@@ -1500,6 +1714,12 @@ pub mod mac {
                     },
                 },
             );
+            if outcome {
+                use tauri::Manager;
+                if let Some(window) = app.get_webview_window("scribe") {
+                    let _ = window.set_focus();
+                }
+            }
         });
         Ok(())
     }
@@ -1514,46 +1734,49 @@ pub mod mac {
             let mut selected = "first".to_string();
             let mut before = "first".to_string();
 
-            assert!(refresh_scribe_snapshot(
+            refresh_scribe_snapshot(
                 &mut original,
                 &mut selected,
                 &mut before,
-                Some("second".into()),
-                Some("second".into()),
-                "second"
-            ));
-            assert!(refresh_scribe_snapshot(
+                "second".into(),
+                "second",
+            );
+            refresh_scribe_snapshot(
                 &mut original,
                 &mut selected,
                 &mut before,
-                Some("third".into()),
-                Some("third".into()),
-                "third"
-            ));
+                "third".into(),
+                "third",
+            );
             assert_eq!(
                 (original, selected, before),
                 ("third".into(), "third".into(), "third".into())
             );
         }
+    }
 
-        #[test]
-        fn missing_selection_invalidates_refresh() {
-            let mut original = "first".to_string();
-            let mut selected = "first".to_string();
-            let mut before = "first".to_string();
-            assert!(!refresh_scribe_snapshot(
-                &mut original,
-                &mut selected,
-                &mut before,
-                Some("second".into()),
-                None,
-                "second"
-            ));
-            assert_eq!(
-                (original, selected, before),
-                ("first".into(), "first".into(), "first".into())
-            );
+    fn restore_scribe_target_focus(target: &ScribeTarget) {
+        use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication};
+
+        if target.pid > 0 {
+            if let Some(application) =
+                NSRunningApplication::runningApplicationWithProcessIdentifier(target.pid)
+            {
+                let _ = application.activateWithOptions(NSApplicationActivationOptions::empty());
+            }
         }
+        // Browser/Electron activation and AX focus propagation are asynchronous.
+        std::thread::sleep(std::time::Duration::from_millis(35));
+        let attr = CFString::new(kAXFocusedAttribute);
+        let focused = CFBoolean::true_value();
+        let _ = unsafe {
+            AXUIElementSetAttributeValue(
+                target.element,
+                attr.as_concrete_TypeRef(),
+                focused.as_CFTypeRef(),
+            )
+        };
+        let _ = unsafe { set_range(target.element, target.target_range) };
     }
 
     fn close_scribe(
@@ -1568,6 +1791,9 @@ pub mod mac {
             .as_mut()
             .filter(|session| session.id == session_id && session.active)
             .ok_or_else(|| "scribe session closed".to_string())?;
+        if let Some(target) = session.target.as_ref() {
+            restore_scribe_target_focus(target);
+        }
         session.active = false;
         session.generation = session.generation.wrapping_add(1);
         if !session.busy {
@@ -1584,6 +1810,32 @@ pub mod mac {
             },
         );
         Ok(())
+    }
+
+    pub fn active_scribe_session_id() -> Option<u64> {
+        SCRIBE_SESSION.lock().ok().and_then(|sessions| {
+            sessions
+                .as_ref()
+                .filter(|session| session.active)
+                .map(|session| session.id)
+        })
+    }
+
+    #[tauri::command]
+    pub fn scribe_status(session_id: u64) -> Result<ScribeEvent, String> {
+        let sessions = SCRIBE_SESSION
+            .lock()
+            .map_err(|_| "scribe unavailable".to_string())?;
+        let session = sessions
+            .as_ref()
+            .filter(|session| session.id == session_id)
+            .ok_or_else(|| "scribe session closed".to_string())?;
+        Ok(ScribeEvent {
+            session_id,
+            phase: session.phase,
+            chars: session.chars,
+            detail: session.detail,
+        })
     }
 
     #[tauri::command]

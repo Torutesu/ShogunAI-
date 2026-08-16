@@ -881,38 +881,28 @@ body {
 .composer__input::placeholder {
   color: var(--faint);
 }
-.scribe {
-  flex: 1;
-  min-height: 0;
-  padding: 18px 16px 14px;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 8px;
+.scribe-float {
+  width: 100%;
+  height: 100%;
+  padding: 6px;
+  background: transparent;
 }
-.scribe__eyebrow {
-  color: var(--muted);
-  font-size: var(--fs-sm);
-  font-weight: 600;
-}
-.scribe__field {
+.scribe-float__field {
+  width: 100%;
+  height: 100%;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 9px 8px 12px;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--r-lg);
-  background: var(--fill);
-  transition: border-color var(--sp), box-shadow var(--sp);
+  padding: 7px 8px 7px 14px;
+  border: none;
+  border-radius: 18px;
+  background: var(--shell);
+  box-shadow: none;
 }
-.scribe__field:focus-within {
-  border-color: color-mix(in srgb, var(--accent) 60%, var(--line-strong));
-  box-shadow: 0 0 0 3px var(--accent-soft);
+.scribe-float__field.is-error {
+  background: color-mix(in srgb, var(--danger) 8%, var(--shell));
 }
-.scribe__field.is-error {
-  border-color: color-mix(in srgb, var(--danger) 65%, var(--line-strong));
-}
-.scribe__input {
+.scribe-float__input {
   min-width: 0;
   flex: 1;
   border: 0;
@@ -922,8 +912,9 @@ body {
   font: inherit;
   font-size: var(--fs-lg);
 }
-.scribe__input::placeholder { color: var(--faint); }
-.scribe__submit {
+.scribe-float__input::placeholder { color: rgba(255, 255, 255, 0.28); }
+:root[data-appearance="light"] .scribe-float__input::placeholder { color: rgba(0, 0, 0, 0.32); }
+.scribe-float__submit {
   width: 30px;
   height: 30px;
   flex: none;
@@ -937,9 +928,9 @@ body {
   font-size: 18px;
   cursor: pointer;
 }
-.scribe__submit:not(:disabled):hover { background: var(--accent); color: var(--accent-ink); }
-.scribe__submit:disabled { color: var(--faint); cursor: default; }
-.scribe__spinner {
+.scribe-float__submit:not(:disabled):hover { background: var(--accent); color: var(--accent-ink); }
+.scribe-float__submit:disabled { color: var(--faint); cursor: default; }
+.scribe-float__spinner {
   width: 14px;
   height: 14px;
   border: 2px solid color-mix(in srgb, var(--ink) 28%, transparent);
@@ -948,12 +939,6 @@ body {
   animation: scribe-spin 700ms linear infinite;
 }
 @keyframes scribe-spin { to { transform: rotate(360deg); } }
-.scribe__status {
-  min-height: 16px;
-  color: var(--muted);
-  font-size: var(--fs-xs);
-}
-.scribe__field.is-error + .scribe__status { color: var(--danger); }
 .composer__bar {
   display: flex;
   align-items: center;
@@ -2206,7 +2191,7 @@ kbd {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .scribe__spinner { animation: none; }
+  .scribe-float__spinner { animation: none; }
   * {
     transition: none !important;
     animation: none !important;
