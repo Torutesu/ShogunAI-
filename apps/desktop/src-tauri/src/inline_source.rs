@@ -157,16 +157,12 @@ pub mod mac {
         target_range: CFRange,
         selected_text: String,
         observed_range: Option<CFRange>,
-        observed_selected_text: String,
-        selection_verified: bool,
     }
 
     struct ScribeInsertResult {
         expected_value: String,
         replacement_range: CFRange,
         observed_range: Option<CFRange>,
-        observed_selected_text: String,
-        selection_verified: bool,
     }
 
     /// Read-only caret snapshot owned by one voice-dictation session. Unlike inline rewrite,
@@ -676,6 +672,14 @@ pub mod mac {
         #[test]
         fn empty_zero_range_does_not_require_ax_selection_write() {
             assert!(selection_is_already_prepared("", CFRange::init(0, 0)));
+        }
+
+        #[test]
+        fn existing_text_requires_fresh_selection_after_scribe_takes_focus() {
+            assert!(!selection_is_already_prepared(
+                "existing text",
+                CFRange::init(0, 13)
+            ));
         }
 
         #[test]
@@ -1237,8 +1241,6 @@ pub mod mac {
         }
         let value = unsafe { copy_string(el, kAXValueAttribute) };
         let selection = unsafe { copy_range(el, kAXSelectedTextRangeAttribute) };
-        let observed_selected_text =
-            unsafe { copy_string(el, kAXSelectedTextAttribute) }.unwrap_or_default();
         let Some(value) = value else {
             unsafe { CFRelease(el as CFTypeRef) };
             return None;
@@ -1275,9 +1277,6 @@ pub mod mac {
                 target_range,
                 selected_text: selected_text.clone(),
                 observed_range: selection,
-                observed_selected_text: observed_selected_text.clone(),
-                selection_verified: selection == Some(target_range)
-                    && observed_selected_text == selected_text,
             },
             CursorContext {
                 app,
@@ -1305,14 +1304,8 @@ pub mod mac {
 
     fn insert_scribe(target: &ScribeTarget, text: &str) -> Result<ScribeInsertResult, String> {
         let current = unsafe { copy_string(target.element, kAXValueAttribute) };
-        let current_range = unsafe { copy_range(target.element, kAXSelectedTextRangeAttribute) };
-        let selected =
-            unsafe { copy_string(target.element, kAXSelectedTextAttribute) }.unwrap_or_default();
         if current.as_deref() != Some(target.original_value.as_str()) {
             return Err("captured target changed".into());
-        }
-        if current_range != target.observed_range || selected != target.observed_selected_text {
-            return Err("captured target selection changed".into());
         }
         let Some((expected, replacement_range)) =
             replace_utf16_range(&target.original_value, target.target_range, text)
@@ -1320,11 +1313,19 @@ pub mod mac {
             return Err("captured target range invalid".into());
         };
         restore_scribe_target_focus(target);
-        let selection_prepared = target.selection_verified
-            || (unsafe { set_range(target.element, target.target_range) }
-                && unsafe {
-                    selection_matches(target.element, target.target_range, &target.selected_text)
-                });
+        // Opening Scribe necessarily moves focus and selection into SHOGUN's own input. The
+        // original text value is the stale-write guard; its old selection is not stable state.
+        // Always prepare the captured rewrite range again after restoring target focus.
+        let selection_prepared =
+            selection_is_already_prepared(&target.original_value, target.target_range)
+                || (unsafe { set_range(target.element, target.target_range) }
+                    && unsafe {
+                        selection_matches(
+                            target.element,
+                            target.target_range,
+                            &target.selected_text,
+                        )
+                    });
         if scribe_prefers_keyboard_delivery(&target.bundle_id) {
             if !selection_prepared {
                 return Err("Scribe could not prepare replacement range".into());
@@ -1380,17 +1381,13 @@ pub mod mac {
         // Selection support is optional state, not insertion success. Several Electron/web fields
         // accept the replacement but reject AXSelectedTextRange; treating that as failure left the
         // UI spinning after text had already landed.
-        let selection_verified = unsafe { set_range(target.element, replacement_range) }
+        let _selection_restored = unsafe { set_range(target.element, replacement_range) }
             && unsafe { selection_matches(target.element, replacement_range, text) };
         let observed_range = unsafe { copy_range(target.element, kAXSelectedTextRangeAttribute) };
-        let observed_selected_text =
-            unsafe { copy_string(target.element, kAXSelectedTextAttribute) }.unwrap_or_default();
         Ok(ScribeInsertResult {
             expected_value: expected,
             replacement_range,
             observed_range,
-            observed_selected_text,
-            selection_verified,
         })
     }
 
@@ -2022,8 +2019,6 @@ pub mod mac {
                         if let Some(target) = session.target.as_mut() {
                             target.target_range = inserted.replacement_range;
                             target.observed_range = inserted.observed_range;
-                            target.observed_selected_text = inserted.observed_selected_text;
-                            target.selection_verified = inserted.selection_verified;
                             refresh_scribe_snapshot(
                                 &mut target.original_value,
                                 &mut target.selected_text,
