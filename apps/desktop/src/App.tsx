@@ -229,11 +229,28 @@ const H_SETTINGS = 460; // taller default so setting groups fit; body scrolls; c
 const H_HUB = 560; // the in-panel hub draws the overview panes (cards, tables); give them room
 const MIN_W = 460;
 const MIN_H = 240;
-// Collapsed floor + hard cap = hardware/pseudo notch width (~180). Wider Idle chrome (260–280)
-// hung into empty menu-bar space and felt like an oversized hitbox outside the notch.
+// Collapsed floor + hard cap = hardware/pseudo notch width. Wider Idle chrome (260–280) hung into
+// empty menu-bar space and felt like an oversized hitbox outside the notch.
+//
+// 180 is only the FALLBACK, as the name says. The notch is not one size — it is measured per
+// machine and per display, and Rust already does that (`idle_weld`). Using the literal
+// unconditionally made the pill 40pt narrower than a 220pt notch, so it stopped welding into the
+// cutout and read as a slab floating under the menu bar (issue #134).
 const W_HANDLE_FALLBACK = 180;
 /** Quiet hiding Idle — hardware-notch-sized weld when frontmost is self / unknown. */
 const W_HIDE = 180;
+
+/** The measured notch silhouette, once Rust has answered. `null` until then / on failure. */
+interface IdleWeld {
+  is_notch: boolean;
+  w: number;
+  h: number;
+}
+let measuredWeld: IdleWeld | null = null;
+/** Idle weld width: the measured notch when we have one, else the conservative literal. */
+function weldWidth(fallback: number): number {
+  return measuredWeld ? Math.round(measuredWeld.w) : fallback;
+}
 
 interface Size {
   w: number;
@@ -503,7 +520,7 @@ export function App(): JSX.Element {
       const isHub = opts?.hub ?? showHub;
       // Collapsed: a provisional pill-sized window; the measuring effect below tightens it to the
       // pill's real bounds so the transparent remainder never eats clicks.
-      if (!isOpen) void applyPanelSize(W_HANDLE_FALLBACK, H_HANDLE);
+      if (!isOpen) void applyPanelSize(weldWidth(W_HANDLE_FALLBACK), H_HANDLE);
       else if (isSettings) void applyPanelSize(setSize.w, setSize.h);
       else if (isHub) void applyPanelSize(hubSize.w, hubSize.h);
       else void applyPanelSize(chatSize.w, chatSize.h);
@@ -576,6 +593,17 @@ export function App(): JSX.Element {
     if (!IN_TAURI) return;
     sizeForViewRef.current({ open: true });
     void invoke("interact", { kind: "boot" });
+    // Ask how wide the cutout actually is before the pill has to weld into it. Cached in a module
+    // variable rather than state on purpose: the sizing effects read it synchronously while
+    // measuring, and a re-render for a value that never changes after boot would fight them.
+    void invoke<IdleWeld | null>("idle_weld")
+      .then((weld) => {
+        if (weld && weld.w > 0 && weld.h > 0) {
+          measuredWeld = weld;
+          sizeForViewRef.current({});
+        }
+      })
+      .catch(() => undefined);
     const offs: Array<Promise<() => void>> = [];
     offs.push(listen<ContextPayload>("context", (e) => setCtxApp(e.payload.bundle_id || e.payload.title_masked || "")));
     // The pill is push-driven: Rust owns the lifecycle, the webview never decides that a meeting
@@ -1308,7 +1336,7 @@ export function App(): JSX.Element {
     // Hiding Idle uses the same weld (W_HIDE × H_DEAD).
     // Height floors at H_HANDLE so a short content pill never leaves air under the notch.
     const hiding = el.classList.contains("handle--hiding");
-    const notchW = hiding ? W_HIDE : W_HANDLE_FALLBACK;
+    const notchW = weldWidth(hiding ? W_HIDE : W_HANDLE_FALLBACK);
     const minH = hiding ? H_DEAD : H_HANDLE;
     void applyPanelSize(
       notchW,

@@ -138,6 +138,33 @@ fn current_drag_override() -> Option<shogun_core::notch::geometry::DragOffset> {
     DRAG_OVERRIDE.lock().ok().and_then(|g| *g)
 }
 
+/// The measured Idle weld — the notch silhouette the collapsed pill must match.
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy, serde::Serialize)]
+pub struct IdleWeld {
+    /// `false` on a notch-less Mac or an external display, where the pseudo-notch is used instead.
+    pub is_notch: bool,
+    pub w: f64,
+    pub h: f64,
+}
+
+/// Written once during `setup` from the measured geometry, read by the webview on mount. A
+/// module-level cell rather than Tauri state for the same reason `startup_health` uses one: the
+/// write happens inside `setup` around several `app.manage` calls, and this sidesteps any question
+/// about when the state becomes available.
+#[cfg(target_os = "macos")]
+static IDLE_WELD: std::sync::Mutex<Option<IdleWeld>> = std::sync::Mutex::new(None);
+
+/// Tauri command: the notch silhouette the collapsed pill welds into.
+///
+/// `None` before geometry is read (or if it could not be), which the webview answers with its own
+/// conservative literal — the panel is still usable, it just may not sit flush with the cutout.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+pub fn idle_weld() -> Option<IdleWeld> {
+    IDLE_WELD.lock().ok().and_then(|g| *g)
+}
+
 /// (main thread) Where the panel rests on `screen`: the user's dragged spot when one exists
 /// (issue #21), else the Castle Position dock (issue #20; Notch welds under the hardware notch).
 /// Both paths clamp on-screen, so a display change can only pull the panel back on screen.
@@ -334,6 +361,8 @@ pub fn run() {
         // and the accessibility-changed watcher are the #46 assets, kept.
         entitlement::mac::entitlement_status,
         // Stripe billing (issue #8). Status/activation are local; checkout and the portal open
+        // The measured notch silhouette the collapsed pill welds into (issue #134).
+        idle_weld,
         // Stripe-hosted pages in the system browser — no card UI in this app (FR-BIL-07).
         billing::mac::billing_status,
         billing::mac::billing_activate,
@@ -540,6 +569,13 @@ fn setup_macos(app: &tauri::App) {
         "[spike] geometry: notch={} notch_w={:.1} notch_h={:.1} menubar_h={:.1} screen={:.0}x{:.0} primary_h={:.0} displays={}",
         g.is_notch, g.notch_w, g.notch_h, g.menubar_h, g.screen.w, g.screen.h, g.primary_height, g.display_count
     );
+    // Hand the measured weld to the webview. It sizes the collapsed pill to the notch silhouette
+    // and had no way to ask how wide that is, so it used a literal 180 — right for the machine it
+    // was written on, 40pt too narrow on a 220pt notch, which is how the pill stopped welding and
+    // started reading as a slab hanging off-centre under the menu bar (issue #134).
+    if let Ok(mut w) = IDLE_WELD.lock() {
+        *w = Some(IdleWeld { is_notch: g.is_notch, w: g.idle.w, h: g.idle.h });
+    }
 
     // Pin the panel INTO the notch band. Tauri's set_position is clamped below the menu bar
     // (observed: the top edge sat 39pt down — "under the notch" never actually happened), so set
