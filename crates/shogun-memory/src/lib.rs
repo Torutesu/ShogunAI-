@@ -79,8 +79,89 @@ fn apply_pragmas(conn: &Connection, wal: bool) -> Result<(), rusqlite::Error> {
     Ok(())
 }
 
+/// Apply migrations that were skipped because a *later* version was recorded first.
+///
+/// refinery refuses to open a database where a migration on the filesystem carries a version
+/// below the highest applied one and was never applied (`Kind::MissingVersion`), and the refusal
+/// is total: the store does not open, so capture, search and ⌥-tap drafting are all dead while
+/// the only visible symptom is one stderr line. No user can cause this — it takes two migrations
+/// authored out of order, which is exactly what happened on 2026-08-09, when `V16__lessons`
+/// landed 51 seconds before `V15__briefs`. Every database migrated in that window records V16
+/// and no V15, and every build since refuses to open it.
+///
+/// Memory lives for years (CLAUDE.md), so an authoring slip must not be able to end one. The
+/// stragglers are applied here in version order, each in its own transaction, recorded with the
+/// embedded migration's own name and checksum so refinery's consistency check passes on the next
+/// open rather than tripping on a forged row.
+///
+/// Returns the versions repaired, so the caller can say out loud that this database was healed
+/// rather than opened clean.
+fn repair_skipped_migrations(conn: &mut Connection) -> Result<Vec<u32>, MemoryError> {
+    use rusqlite::OptionalExtension;
+
+    // A fresh database has no history table: nothing was skipped, and every later query here
+    // would fail on a table that is about to be created by the runner itself.
+    let has_history = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'refinery_schema_history'",
+            [],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+    if !has_history {
+        return Ok(Vec::new());
+    }
+
+    let applied: Vec<u32> = {
+        let mut stmt = conn.prepare("SELECT version FROM refinery_schema_history")?;
+        let rows = stmt.query_map([], |r| r.get::<_, u32>(0))?;
+        rows.collect::<Result<Vec<u32>, _>>()?
+    };
+    // An empty history is the same "nothing to repair" case as no table at all.
+    let Some(&current) = applied.iter().max() else {
+        return Ok(Vec::new());
+    };
+
+    // The same predicate refinery aborts on: on the filesystem, not applied, and not above the
+    // current version (anything above is ordinary pending work the runner will apply itself).
+    let mut skipped: Vec<refinery::Migration> = embedded::runner()
+        .get_migrations()
+        .iter()
+        .filter(|m| m.version() <= current && !applied.contains(&m.version()))
+        .cloned()
+        .collect();
+    skipped.sort_by_key(|m| m.version());
+
+    let mut repaired = Vec::new();
+    for migration in skipped {
+        // A migration with no SQL body cannot be replayed. Skip it rather than record a history
+        // row for something that never ran — a truthful failure beats a forged success.
+        let Some(sql) = migration.sql() else { continue };
+        let tx = conn.transaction()?;
+        tx.execute_batch(sql)?;
+        // `applied_on` is written by SQLite so this needs no clock dependency; the format is the
+        // RFC 3339 refinery parses back on every subsequent open.
+        tx.execute(
+            "INSERT INTO refinery_schema_history (version, name, applied_on, checksum) \
+             VALUES (?1, ?2, strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now'), ?3)",
+            rusqlite::params![migration.version(), migration.name(), migration.checksum().to_string()],
+        )?;
+        tx.commit()?;
+        repaired.push(migration.version());
+    }
+    Ok(repaired)
+}
+
 /// Run migrations to the latest version, then a quick integrity check (NFR-REL-01).
 fn migrate_and_check(conn: &mut Connection) -> Result<(), MemoryError> {
+    let repaired = repair_skipped_migrations(conn)?;
+    if !repaired.is_empty() {
+        // Loud on purpose. This is a schema history that should never have existed, and the line
+        // is the only record that the store was healed instead of opened clean. Version numbers
+        // only — nothing from a row reaches this.
+        eprintln!("[memory] repaired out-of-order migration history — applied skipped {repaired:?}");
+    }
     embedded::runner().run(conn)?;
     let status: String = conn.query_row("PRAGMA quick_check", [], |r| r.get(0))?;
     if status != "ok" {
@@ -374,6 +455,58 @@ mod tests {
             assert_eq!(mode.to_lowercase(), "wal");
         }
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// The 2026-08-09 authoring slip, pinned: `V16__lessons` was committed 51 seconds before
+    /// `V15__briefs`, so a database migrated in that window records V16 and never V15. refinery
+    /// answers that with a hard error and the whole store stops opening — capture, search and
+    /// drafting all die on a mistake no user made. The repair must reopen it.
+    #[test]
+    fn a_skipped_migration_is_repaired_instead_of_bricking_the_store() {
+        // `open_in_memory` would migrate on the way out; this test needs to drive the migration
+        // steps by hand, so it does that function's other half — vec0 — itself.
+        vector::register_extension();
+        let mut conn = Connection::open_in_memory().unwrap();
+        migrate_and_check(&mut conn).unwrap();
+
+        // Reproduce the broken history exactly: V15 never applied, everything above it recorded.
+        conn.execute("DELETE FROM refinery_schema_history WHERE version = 15", []).unwrap();
+        conn.execute_batch("DROP TABLE briefs;").unwrap();
+
+        // Left to itself, refinery refuses this database outright — that is the bug being fixed.
+        assert!(
+            embedded::runner().run(&mut conn).is_err(),
+            "refinery must still reject the skipped version, or this test proves nothing"
+        );
+
+        // The repair replays the straggler, and the normal open path then completes.
+        migrate_and_check(&mut conn).unwrap();
+        let recorded: i64 = conn
+            .query_row("SELECT COUNT(*) FROM refinery_schema_history WHERE version = 15", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(recorded, 1, "the repaired migration must be recorded once");
+        // The table the migration exists to create is back, and the schema is whole again.
+        assert!(table_names(&conn).contains(&"briefs".to_string()));
+        assert_eq!(schema_version(&conn).unwrap(), Some(LATEST_SCHEMA_VERSION));
+
+        // And the healed database opens again with no further repair — the history it wrote has
+        // to satisfy refinery's own name/checksum check, not merely silence this run.
+        migrate_and_check(&mut conn).unwrap();
+        assert!(repair_skipped_migrations(&mut conn).unwrap().is_empty());
+    }
+
+    /// The repair must be inert on every healthy database: a fresh store and a fully-migrated one
+    /// both have nothing to replay, and a repair that fired here would be rewriting real history.
+    #[test]
+    fn repair_is_a_no_op_on_a_healthy_database() {
+        vector::register_extension();
+        let mut fresh = Connection::open_in_memory().unwrap();
+        assert!(repair_skipped_migrations(&mut fresh).unwrap().is_empty(), "no history table yet");
+
+        migrate_and_check(&mut fresh).unwrap();
+        assert!(repair_skipped_migrations(&mut fresh).unwrap().is_empty(), "nothing was skipped");
     }
 
     #[test]
