@@ -9,10 +9,9 @@ pub mod mac {
     use std::sync::Mutex;
 
     use serde::Serialize;
-    use shogun_core::inline::TextInserter;
     use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
 
-    use crate::inline_source::mac::AxTextInserter;
+    use crate::inline_source::mac::{self as inline_source, DictationTarget};
     use crate::voice_lane::{self, TranscriptOutcome};
 
     const WINDOW_LABEL: &str = "voice";
@@ -38,6 +37,9 @@ pub mod mac {
         /// True while the released clip is being transcribed and delivered. A second hold is
         /// ignored until this clears so sessions cannot race or surface a misleading ASR error.
         processing: bool,
+        /// Caret captured before recording starts. Dictation inserts here without rewriting
+        /// surrounding text, even if focus changes while ASR processes.
+        target: Option<DictationTarget>,
     }
 
     static LANE: Mutex<Option<Lane>> = Mutex::new(None);
@@ -128,17 +130,12 @@ pub mod mac {
         }
     }
 
-    /// Dictation output: focused field via AX (+ ⌘V fallback inside AxTextInserter), else clipboard.
-    fn deliver_dictation(app: &AppHandle, transcript: &str) {
-        use crate::inline_source::mac::AxCursorReader;
-        use shogun_core::inline::CursorReader;
-
-        // Only inject when an editable text-carrying field is focused (same signal as inline draft).
-        let has_field = AxCursorReader.read().is_some();
-        if has_field {
-            match AxTextInserter.insert(transcript) {
+    /// Dictation output: captured caret/selection, never paragraph rewrite; else clipboard.
+    fn deliver_dictation(app: &AppHandle, transcript: &str, target: Option<DictationTarget>) {
+        if let Some(target) = target {
+            match inline_source::insert_dictation(&target, transcript) {
                 Ok(()) => {
-                    eprintln!("[voice] dictation pasted into focused field");
+                    eprintln!("[voice] dictation inserted at captured caret");
                     emit_state(app, "idle", Some(transcript.to_string()), None);
                     return;
                 }
@@ -179,6 +176,7 @@ pub mod mac {
                 audio: None,
                 ui_recording: false,
                 processing: false,
+                target: None,
             });
         }
         if settings.enabled {
@@ -231,6 +229,7 @@ pub mod mac {
             }
         }
 
+        let target = inline_source::capture_dictation_target();
         let handle = match voice_lane::start(&app) {
             Ok(h) => h,
             Err(e) => {
@@ -258,6 +257,7 @@ pub mod mac {
             return true;
         }
         lane.audio = Some(handle);
+        lane.target = target;
         lane.ui_recording = true;
         let _ = SESSION.fetch_add(1, AtomicOrdering::SeqCst);
         emit_state(&app, "recording", None, None);
@@ -288,7 +288,7 @@ pub mod mac {
     ///
     /// ASR runs on a dedicated thread so the voice-hold worker is never blocked.
     pub fn on_hold_end(app: AppHandle) {
-        let audio = {
+        let (audio, target) = {
             let mut lane = match LANE.lock() {
                 Ok(g) => g,
                 Err(_) => return,
@@ -301,9 +301,10 @@ pub mod mac {
             match lane.audio.take() {
                 Some(handle) => {
                     lane.processing = true;
-                    handle
+                    (handle, lane.target.take())
                 }
                 None => {
+                    lane.target = None;
                     if was_recording {
                         emit_state(&app, "idle", None, None);
                     }
@@ -344,7 +345,7 @@ pub mod mac {
 
                 emit_state(&app, "processing", Some(transcript.clone()), None);
                 // Dictation-first: no chat call on this path.
-                deliver_dictation(&app, &transcript);
+                deliver_dictation(&app, &transcript, target);
                 set_processing(false);
             })
             .ok();

@@ -14,30 +14,30 @@
 #[cfg(target_os = "macos")]
 pub mod mac {
     use accessibility_sys::{
-        AXUIElementCopyAttributeValue, AXUIElementCreateSystemWide, AXUIElementRef,
-        AXUIElementSetAttributeValue, AXUIElementSetMessagingTimeout, AXValueCreate,
-        AXValueGetTypeID, AXValueGetValue, kAXErrorSuccess, kAXFocusedUIElementAttribute,
-        kAXFocusedAttribute, kAXPositionAttribute, kAXRoleAttribute, kAXSelectedTextAttribute,
-        kAXSelectedTextRangeAttribute, kAXSizeAttribute, kAXTitleAttribute, kAXValueAttribute,
-        kAXValueTypeCFRange, kAXValueTypeCGPoint, kAXValueTypeCGSize,
+        kAXErrorSuccess, kAXFocusedAttribute, kAXFocusedUIElementAttribute, kAXPositionAttribute,
+        kAXRoleAttribute, kAXSelectedTextAttribute, kAXSelectedTextRangeAttribute,
+        kAXSizeAttribute, kAXTitleAttribute, kAXValueAttribute, kAXValueTypeCFRange,
+        kAXValueTypeCGPoint, kAXValueTypeCGSize, AXUIElementCopyAttributeValue,
+        AXUIElementCreateSystemWide, AXUIElementRef, AXUIElementSetAttributeValue,
+        AXUIElementSetMessagingTimeout, AXValueCreate, AXValueGetTypeID, AXValueGetValue,
     };
-    use core_foundation::boolean::CFBoolean;
-    use core_graphics::geometry::{CGPoint, CGSize};
     use core_foundation::base::TCFType;
+    use core_foundation::boolean::CFBoolean;
     use core_foundation::string::CFString;
     use core_foundation_sys::base::{CFGetTypeID, CFRange, CFRelease, CFTypeRef};
     use core_foundation_sys::string::{CFStringGetTypeID, CFStringRef};
+    use core_graphics::geometry::{CGPoint, CGSize};
 
     use shogun_core::daemon::{ContextPack, Db, ReplyContext};
     use shogun_core::db_sink::DbTraceabilitySink;
     use shogun_core::inline::{
-        CursorContext, CursorReader, InlineOutcome, ScribeEditRequest, TextInserter,
-        build_scribe_edit_prompt, compose_inline,
+        build_scribe_edit_prompt, compose_inline, CursorContext, CursorReader, InlineOutcome,
+        ScribeEditRequest, TextInserter,
     };
     use shogun_core::llm::anthropic::{AnthropicAgentClient, AnthropicConfig};
     use shogun_core::llm::openai_compat::{
-        GEMINI_BASE_URL, OPENAI_BASE_URL, OPENROUTER_BASE_URL, OpenAiCompatAgentClient,
-        OpenAiCompatConfig,
+        OpenAiCompatAgentClient, OpenAiCompatConfig, GEMINI_BASE_URL, OPENAI_BASE_URL,
+        OPENROUTER_BASE_URL,
     };
     use shogun_core::llm::transport::ReqwestTransport;
     use shogun_core::llm::{AgentClient, ByokKey, LlmError, MockAgentClient, Secret};
@@ -136,8 +136,7 @@ pub mod mac {
     /// generation runs off the UI thread, so the inserter must prove the field stayed unchanged
     /// before replacing anything.
     static PENDING_REWRITE: std::sync::Mutex<Option<PendingRewrite>> = std::sync::Mutex::new(None);
-    static INLINE_BUSY: std::sync::atomic::AtomicBool =
-        std::sync::atomic::AtomicBool::new(false);
+    static INLINE_BUSY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
     struct InlineBusyGuard;
 
@@ -168,6 +167,27 @@ pub mod mac {
         observed_range: Option<CFRange>,
         observed_selected_text: String,
         selection_verified: bool,
+    }
+
+    /// Read-only caret snapshot owned by one voice-dictation session. Unlike inline rewrite,
+    /// dictation never expands a caret into a paragraph-sized replacement range.
+    pub struct DictationTarget {
+        element: AXUIElementRef,
+        pid: i32,
+        bundle_id: String,
+        original_value: Option<String>,
+        selected_range: Option<CFRange>,
+        selected_text: String,
+    }
+
+    unsafe impl Send for DictationTarget {}
+
+    impl Drop for DictationTarget {
+        fn drop(&mut self) {
+            if !self.element.is_null() {
+                unsafe { CFRelease(self.element as CFTypeRef) };
+            }
+        }
     }
 
     // AXUIElementRef is a retained CoreFoundation object. Scribe serializes all access through
@@ -489,8 +509,7 @@ pub mod mac {
             role,
             Some("AXTextArea" | "AXTextField" | "AXSearchField" | "AXComboBox")
         );
-        let empty_caret =
-            selection.map_or(true, |range| range.location == 0 && range.length == 0);
+        let empty_caret = selection.map_or(true, |range| range.location == 0 && range.length == 0);
         editable_role && empty_caret && selected_text.is_empty()
     }
 
@@ -942,7 +961,7 @@ pub mod mac {
             (selection.is_none()
                 || selection_is_already_prepared(value, target_range)
                 || unsafe { set_range(el, target_range) })
-                .then_some((target_range, target, surrounding))
+            .then_some((target_range, target, surrounding))
         });
         unsafe { CFRelease(el as CFTypeRef) };
         let (target_range, target, mut surrounding) = prepared?;
@@ -953,8 +972,8 @@ pub mod mac {
             && surrounding.trim().is_empty()
             && pid > 0
         {
-            if let Some(window) = crate::axcache::snapshot(pid, 150)
-                .filter(|window| !window.text.trim().is_empty())
+            if let Some(window) =
+                crate::axcache::snapshot(pid, 150).filter(|window| !window.text.trim().is_empty())
             {
                 surrounding = format!(
                     "focused window context around the empty composer:\n{}",
@@ -1108,6 +1127,106 @@ pub mod mac {
         }
     }
 
+    /// Capture voice insertion point without selecting or changing source text.
+    pub fn capture_dictation_target() -> Option<DictationTarget> {
+        let element = unsafe { focused_element() }?;
+        if unsafe { is_secure_text_field(element) } {
+            unsafe { CFRelease(element as CFTypeRef) };
+            return None;
+        }
+        let role = unsafe { copy_string(element, kAXRoleAttribute) };
+        let original_value = unsafe { copy_string(element, kAXValueAttribute) };
+        let editable = original_value.is_some()
+            || matches!(
+                role.as_deref(),
+                Some("AXTextArea" | "AXTextField" | "AXSearchField" | "AXComboBox")
+            );
+        if !editable {
+            unsafe { CFRelease(element as CFTypeRef) };
+            return None;
+        }
+        let front_app = crate::display::frontmost_app();
+        let pid = front_app.as_ref().map(|app| app.pid).unwrap_or_default();
+        if pid <= 0 {
+            unsafe { CFRelease(element as CFTypeRef) };
+            return None;
+        }
+        Some(DictationTarget {
+            element,
+            pid,
+            bundle_id: front_app.map(|app| app.bundle_id).unwrap_or_default(),
+            original_value,
+            selected_range: unsafe { copy_range(element, kAXSelectedTextRangeAttribute) },
+            selected_text: unsafe { copy_string(element, kAXSelectedTextAttribute) }
+                .unwrap_or_default(),
+        })
+    }
+
+    /// Insert voice transcript at captured caret/selection. Never prepares a paragraph rewrite.
+    pub fn insert_dictation(target: &DictationTarget, text: &str) -> Result<(), String> {
+        let current_value = unsafe { copy_string(target.element, kAXValueAttribute) };
+        let current_range = unsafe { copy_range(target.element, kAXSelectedTextRangeAttribute) };
+        let current_selected =
+            unsafe { copy_string(target.element, kAXSelectedTextAttribute) }.unwrap_or_default();
+        if current_value != target.original_value
+            || target
+                .selected_range
+                .is_some_and(|range| current_range != Some(range))
+            || current_selected != target.selected_text
+        {
+            return Err("captured dictation target changed".into());
+        }
+
+        use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication};
+        if let Some(application) =
+            NSRunningApplication::runningApplicationWithProcessIdentifier(target.pid)
+        {
+            let _ = application.activateWithOptions(NSApplicationActivationOptions::empty());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(35));
+        let focus_attr = CFString::new(kAXFocusedAttribute);
+        let focused = CFBoolean::true_value();
+        let _ = unsafe {
+            AXUIElementSetAttributeValue(
+                target.element,
+                focus_attr.as_concrete_TypeRef(),
+                focused.as_CFTypeRef(),
+            )
+        };
+        if let Some(range) = target.selected_range {
+            let _ = unsafe { set_range(target.element, range) };
+        }
+
+        if prefers_keyboard_delivery(&target.bundle_id) {
+            return unsafe { type_text_to_pid(text, target.pid) };
+        }
+
+        let expected = target
+            .original_value
+            .as_deref()
+            .zip(target.selected_range)
+            .and_then(|(value, range)| replace_utf16_range(value, range, text))
+            .map(|(value, _)| value);
+        let attr = CFString::new(kAXSelectedTextAttribute);
+        let value = CFString::new(text);
+        let error = unsafe {
+            AXUIElementSetAttributeValue(
+                target.element,
+                attr.as_concrete_TypeRef(),
+                value.as_concrete_TypeRef() as CFTypeRef,
+            )
+        };
+        if error == kAXErrorSuccess
+            && expected.as_deref().map_or_else(
+                || unsafe { value_changed(target.element, current_value.as_deref()) },
+                |expected| unsafe { value_matches(target.element, expected) },
+            )
+        {
+            return Ok(());
+        }
+        unsafe { paste_at_cursor(text, target.element, current_value.as_deref()) }
+    }
+
     /// Capture Scribe's editable target once. Secure text fields are never read, even if their
     /// AX value happens to be exposed by an application.
     fn capture_scribe_target() -> Option<(ScribeTarget, CursorContext, Option<ScribeAnchor>)> {
@@ -1126,9 +1245,7 @@ pub mod mac {
         };
         let prepared = match selection {
             Some(range) => rewrite_target(&value, range),
-            None if value.is_empty() => {
-                Some((CFRange::init(0, 0), String::new(), String::new()))
-            }
+            None if value.is_empty() => Some((CFRange::init(0, 0), String::new(), String::new())),
             None => None,
         };
         let Some((target_range, selected_text, surrounding)) = prepared else {
