@@ -275,6 +275,9 @@ pub fn run() {
             voice_session::mac::set_voice_enabled,
             voice_session::mac::voice_dismiss,
             voice_session::mac::voice_force_end,
+            voice_session::mac::get_voice_edit_settings,
+            voice_session::mac::set_voice_edit_key,
+            voice_session::mac::clear_voice_edit_key,
         ]);
 
     // NOTE: the visible surface is a NATIVE NSPanel hosting the webview's content view
@@ -424,13 +427,14 @@ fn setup_macos(app: &tauri::App) {
         eprintln!("[spike] setup not on main thread — engine not started");
         return;
     };
-    let Some(g) = geometry::read_primary(mtm) else {
+    let display_geometries = geometry::mac::read_all(mtm);
+    let Some(g) = display_geometries.first() else {
         eprintln!("[spike] no screen — engine not started");
         return;
     };
     eprintln!(
-        "[spike] geometry: notch={} notch_w={:.1} notch_h={:.1} menubar_h={:.1} screen={:.0}x{:.0} primary_h={:.0} displays={}",
-        g.is_notch, g.notch_w, g.notch_h, g.menubar_h, g.screen.w, g.screen.h, g.primary_height, g.display_count
+        "[spike] geometry: notch={} notch_w={:.1} notch_h={:.1} menubar_h={:.1} screen={:.0}x{:.0} displays={}",
+        g.is_notch, g.notch_w, g.notch_h, g.menubar_h, g.screen.w, g.screen.h, g.display_count
     );
 
     // Pin the panel INTO the notch band. Tauri's set_position is clamped below the menu bar
@@ -476,22 +480,27 @@ fn setup_macos(app: &tauri::App) {
         integrate::StartGeometry {
             regions: g.regions,
             menubar_min_y,
-            primary_height: g.primary_height,
+            coordinate_space: shogun_core::notch::engine::DisplayCoordinateSpace::new(
+                g.cg_screen,
+                g.screen,
+            ),
             is_notch: g.is_notch,
             display_count: g.display_count,
             screen: g.screen,
             idle_hit: g.activation,
             // Every display's own notch geometry, so hovering the notch on a second monitor is
             // hit-tested against that monitor rather than against the primary's coordinates.
-            per_display: geometry::mac::read_all(mtm)
+            per_display: display_geometries
                 .into_iter()
-                .map(|d| {
-                    (
+                .map(|d| integrate::DisplayGeometry {
+                    screen: d.screen,
+                    regions: d.regions,
+                    menubar_min_y: d.screen.max_y() - d.menubar_h,
+                    idle_hit: d.activation,
+                    coordinate_space: shogun_core::notch::engine::DisplayCoordinateSpace::new(
+                        d.cg_screen,
                         d.screen,
-                        d.regions,
-                        d.screen.max_y() - d.menubar_h,
-                        d.activation,
-                    )
+                    ),
                 })
                 .collect(),
         },
@@ -891,6 +900,63 @@ unsafe fn pin_top_centre(ptr: *mut objc2::runtime::AnyObject) {
 #[cfg(target_os = "macos")]
 static REASSERT_AT: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
 
+/// AppKit's visibility and Space membership do not prove that the WindowServer is rendering the
+/// panel. A cold launch can report both while its compositor surface is absent; only a panel that
+/// is visible, on the active Space, and drawn is safe to leave unreordered.
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy)]
+struct PanelPresentation {
+    visible: bool,
+    on_active_space: bool,
+    drawn: bool,
+}
+
+#[cfg(target_os = "macos")]
+fn panel_needs_reorder(presentation: PanelPresentation) -> bool {
+    !presentation.visible || !presentation.on_active_space || !presentation.drawn
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod panel_recovery_tests {
+    use super::{panel_needs_reorder, PanelPresentation};
+
+    #[test]
+    fn compositor_absence_requires_recovery_even_when_window_is_visible_on_active_space() {
+        assert!(panel_needs_reorder(PanelPresentation {
+            visible: true,
+            on_active_space: true,
+            drawn: false,
+        }));
+    }
+
+    #[test]
+    fn invisible_panel_requires_recovery() {
+        assert!(panel_needs_reorder(PanelPresentation {
+            visible: false,
+            on_active_space: true,
+            drawn: true,
+        }));
+    }
+
+    #[test]
+    fn panel_off_active_space_requires_recovery() {
+        assert!(panel_needs_reorder(PanelPresentation {
+            visible: true,
+            on_active_space: false,
+            drawn: true,
+        }));
+    }
+
+    #[test]
+    fn drawn_panel_on_active_space_does_not_reorder() {
+        assert!(!panel_needs_reorder(PanelPresentation {
+            visible: true,
+            on_active_space: true,
+            drawn: true,
+        }));
+    }
+}
+
 #[cfg(target_os = "macos")]
 fn reassert_panel(handle: &tauri::AppHandle, why: &'static str) {
     use objc2::msg_send;
@@ -903,17 +969,39 @@ fn reassert_panel(handle: &tauri::AppHandle, why: &'static str) {
     let Some(ptr) = overlay_ptr(handle) else {
         return;
     };
-    // SAFETY: all call sites run on the main thread (workspace notifications and the
-    // state-logger's run_on_main_thread closure); live NSWindow/NSPanel; pure AppKit
-    // property and ordering calls.
+    // SAFETY: every caller marshals here through `run_on_main_thread`; `ptr` is a live
+    // NSWindow/NSPanel, and these are pure AppKit property and ordering calls.
     unsafe {
         let want = PANEL_BEHAVIOR.load(std::sync::atomic::Ordering::Relaxed);
-        let _: () = msg_send![ptr, setCollectionBehavior: want];
-        let _: () = msg_send![ptr, setLevel: OVERLAY_LEVEL];
+        let behavior: usize = msg_send![ptr, collectionBehavior];
+        let level: isize = msg_send![ptr, level];
+        let hides_on_deactivate: bool = msg_send![ptr, hidesOnDeactivate];
+        let can_hide: bool = msg_send![ptr, canHide];
+        // Tao may restore properties from its original NSWindow after native panel adoption.
+        // Repair only drifted flags: these writes preserve nonactivating panel semantics and do
+        // not reorder, flash, or make SHOGUN active.
+        if behavior != want {
+            let _: () = msg_send![ptr, setCollectionBehavior: want];
+        }
+        if level != OVERLAY_LEVEL {
+            let _: () = msg_send![ptr, setLevel: OVERLAY_LEVEL];
+        }
+        if hides_on_deactivate {
+            let _: () = msg_send![ptr, setHidesOnDeactivate: false];
+        }
+        if can_hide {
+            let _: () = msg_send![ptr, setCanHide: false];
+        }
         let visible: bool = msg_send![ptr, isVisible];
-        let on_active: bool = msg_send![ptr, isOnActiveSpace];
-        if visible && on_active {
-            return; // genuinely on screen here — leave it alone
+        let on_active_space: bool = msg_send![ptr, isOnActiveSpace];
+        let occlusion: usize = msg_send![ptr, occlusionState];
+        let presentation = PanelPresentation {
+            visible,
+            on_active_space,
+            drawn: occlusion & (1 << 1) != 0,
+        };
+        if !panel_needs_reorder(presentation) {
+            return; // compositor confirms the panel is already usable here
         }
         // Debounce lightly: one app switch fires several notifications back-to-back;
         // one re-order per burst is enough (and avoids fighting the Space animation).
@@ -1227,7 +1315,7 @@ fn report_panel_health(app: &tauri::AppHandle) {
                 return;
             };
             // SAFETY: main thread, live window; getters only.
-            unsafe {
+            let presentation = unsafe {
                 let visible: bool = msg_send![ptr, isVisible];
                 // Bit 1 of occlusionState is the compositor's own verdict: actually drawn.
                 let occ: usize = msg_send![ptr, occlusionState];
@@ -1271,6 +1359,17 @@ fn report_panel_health(app: &tauri::AppHandle) {
                 } else {
                     eprintln!("[shell] health: drawing normally at the frame above.");
                 }
+                PanelPresentation {
+                    visible,
+                    on_active_space: on_active,
+                    drawn,
+                }
+            };
+            // This delayed check is intentionally launch-driven, not focus-driven. It catches a
+            // native panel that has all of AppKit's happy-path bits but never reached the
+            // compositor, without activating SHOGUN or waiting for the user to click elsewhere.
+            if panel_needs_reorder(presentation) {
+                reassert_panel(&h2, "cold-launch-health");
             }
         });
     });
@@ -1568,7 +1667,15 @@ fn watch_space_changes(app: &tauri::App) {
             let handle = app.handle().clone();
             let name = NSString::from_str(name_str);
             let block = block2::RcBlock::new(move |_notif: *mut AnyObject| {
-                reassert_panel(&handle, why);
+                // `queue:nil` delivers on the notification's posting thread, which is not
+                // guaranteed to be AppKit's main thread. Native window access must stay there.
+                let main_handle = handle.clone();
+                if handle
+                    .run_on_main_thread(move || reassert_panel(&main_handle, why))
+                    .is_err()
+                {
+                    eprintln!("[shell] {why}: could not schedule panel reassert on main thread");
+                }
             });
             let nil_obj: *mut AnyObject = std::ptr::null_mut();
             let _obs: *mut AnyObject = msg_send![nc, addObserverForName: &*name, object: nil_obj, queue: nil_obj, usingBlock: &*block];
@@ -1621,17 +1728,41 @@ fn spawn_panel_state_logger(app: &tauri::App) {
                 // silently demoting the overlay. Re-assert only when wrong; a pure property write
                 // with no re-ordering, so it cannot flicker or steal focus.
                 let want = PANEL_BEHAVIOR.load(std::sync::atomic::Ordering::Relaxed);
-                if level != OVERLAY_LEVEL || behavior & want != want {
+                let hides_on_deactivate: bool = msg_send![ptr, hidesOnDeactivate];
+                let can_hide: bool = msg_send![ptr, canHide];
+                if behavior != want {
                     let _: () = msg_send![ptr, setCollectionBehavior: want];
-                    let _: () = msg_send![ptr, setLevel: OVERLAY_LEVEL];
-                    eprintln!("[panelstate] healed: level {level}→{OVERLAY_LEVEL} behavior {behavior}→{want}");
                 }
+                if level != OVERLAY_LEVEL {
+                    let _: () = msg_send![ptr, setLevel: OVERLAY_LEVEL];
+                }
+                if hides_on_deactivate {
+                    let _: () = msg_send![ptr, setHidesOnDeactivate: false];
+                }
+                if can_hide {
+                    let _: () = msg_send![ptr, setCanHide: false];
+                }
+                if behavior != want
+                    || level != OVERLAY_LEVEL
+                    || hides_on_deactivate
+                    || can_hide
+                {
+                    eprintln!(
+                        "[panelstate] healed: level {level}→{OVERLAY_LEVEL} behavior {behavior}→{want} \
+                         hidesOnDeactivate {hides_on_deactivate}→false canHide {can_hide}→false"
+                    );
+                }
+                let healthy = !panel_needs_reorder(PanelPresentation {
+                    visible,
+                    on_active_space: on_active,
+                    drawn,
+                });
                 (
                     format!(
                         "visible={visible} drawn={drawn} onActiveSpace={on_active} behavior={behavior} level={level} alpha={alpha:.2} appActive={app_active} origin=({:.0},{:.0})",
                         frame.origin.x, frame.origin.y
                     ),
-                    visible && on_active,
+                    healthy,
                 )
             };
             if debug {
@@ -1759,10 +1890,6 @@ mod right_option_tap {
     }
 
     impl State {
-        pub fn cancel_pending(&mut self) {
-            self.pending_draft = None;
-        }
-
         pub fn clean_tap(&mut self, now: Instant) -> CleanTapAction {
             if let Some((first, _)) = self.pending_draft {
                 if now.saturating_duration_since(first) <= DOUBLE_TAP_WINDOW {
@@ -1842,18 +1969,12 @@ mod right_option_tap {
         }
 
         #[test]
-        fn poisoned_second_tap_cancels_pending_draft() {
+        fn unrelated_input_after_release_does_not_cancel_pending_draft() {
             let start = Instant::now();
             let mut state = State::default();
             state.clean_tap(start);
-            state.cancel_pending();
-            assert_eq!(
-                state.clean_tap(start + Duration::from_millis(10)),
-                CleanTapAction::QueueDraft {
-                    generation: 2,
-                    superseded_draft: None,
-                }
-            );
+
+            assert_eq!(state.take_due_draft(start + DOUBLE_TAP_WINDOW), Some(1));
         }
     }
 }
@@ -1978,18 +2099,16 @@ fn watch_option_tap(app: &tauri::App) {
         true
     }
 
-    /// Any non-Option input during the hold kills the tap until Option is released.
-    fn poison(state: &Arc<Mutex<right_option_tap::State>>) {
+    /// Any non-Option input during the hold kills that hold until Option is released. It must not
+    /// clear a draft queued by an earlier valid release: global monitors also receive ordinary
+    /// typing and mouse movement during the 300ms double-tap window.
+    fn poison() {
         POISONED.store(true, Ordering::Relaxed);
         ARMED.store(false, Ordering::Relaxed);
-        if let Ok(mut state) = state.lock() {
-            state.cancel_pending();
-        }
     }
 
     // SAFETY: main thread (setup); monitors and blocks are intentionally leaked (app lifetime).
     unsafe {
-        let tap_state_for_poison = tap_state.clone();
         let handle_for_global_keys = app.handle().clone();
         let disarm_block = block2::RcBlock::new(move |ev: *mut AnyObject| {
             if !ev.is_null() {
@@ -1998,7 +2117,7 @@ fn watch_option_tap(app: &tauri::App) {
                     return;
                 }
             }
-            poison(&tap_state_for_poison);
+            poison();
         });
         let key_mon: *mut AnyObject = msg_send![
             class!(NSEvent),
@@ -2042,18 +2161,18 @@ fn watch_option_tap(app: &tauri::App) {
 
             if others_down {
                 // A second modifier is part of this chord — poison for the rest of the hold.
-                poison(&tap_state_for_flags);
+                poison();
                 return;
             }
             if key_code != RIGHT_OPTION_KEY_CODE && ARMED.load(Ordering::Relaxed) {
                 // Pressing or releasing left Option during a right-Option hold is still a chord.
-                poison(&tap_state_for_flags);
+                poison();
                 return;
             }
             if option_down && !opt_prev {
                 if key_code != RIGHT_OPTION_KEY_CODE {
                     // Left Option is ordinary keyboard input, never SHOGUN's refine trigger.
-                    poison(&tap_state_for_flags);
+                    poison();
                     if let Ok(mut g) = DOWN_AT.lock() {
                         *g = None;
                     }

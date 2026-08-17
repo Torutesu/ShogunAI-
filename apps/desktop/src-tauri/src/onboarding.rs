@@ -138,8 +138,14 @@ pub mod mac {
     pub fn onboarding_finish(app: AppHandle, action: String) {
         let mut d = load_disposition(&app);
         match action.as_str() {
-            "completed" => d.completed = true,
-            "skipped" => d.skipped = true,
+            "completed" => {
+                d.completed = true;
+                d.skipped = false;
+            }
+            "skipped" => {
+                d.completed = false;
+                d.skipped = true;
+            }
             other => {
                 eprintln!("[onboarding] finish ignored unknown action={other}");
                 return;
@@ -267,9 +273,13 @@ pub mod mac {
         eprintln!("[onboarding] floating over all spaces (behavior={BEHAVIOR} level={LEVEL})");
     }
 
-    /// Whether the first-run guide should appear at launch: Accessibility is missing AND the user
-    /// has neither completed nor deliberately skipped it. Once granted, `completed` is irrelevant —
-    /// a trusted process never sees the guide.
+    fn should_prompt_for_accessibility(trusted: bool, disposition: Disposition) -> bool {
+        !trusted && (!disposition.skipped || disposition.completed)
+    }
+
+    /// Whether the guide should appear at launch. A previous completion means permission once
+    /// worked; if live trust later disappears after an app update/re-sign, show the repair path
+    /// again. A deliberate skip remains respected until the user grants permission elsewhere.
     pub fn should_show_onboarding(app: &AppHandle) -> bool {
         // Escape hatch for QA/preview: force the guide even on an already-trusted machine, so the
         // screen can be reviewed without revoking real Accessibility permission. Harmless in
@@ -277,10 +287,53 @@ pub mod mac {
         if std::env::var("SHOGUN_FORCE_ONBOARDING").is_ok() {
             return true;
         }
-        if axcache::ax_trusted_silent() {
-            return false;
-        }
         let d = load_disposition(app);
-        !d.completed && !d.skipped
+        should_prompt_for_accessibility(axcache::ax_trusted_silent(), d)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::{should_prompt_for_accessibility, Disposition};
+
+        #[test]
+        fn prompts_when_permission_was_never_decided() {
+            assert!(should_prompt_for_accessibility(
+                false,
+                Disposition::default()
+            ));
+        }
+
+        #[test]
+        fn prompts_when_previously_completed_permission_is_lost() {
+            assert!(should_prompt_for_accessibility(
+                false,
+                Disposition {
+                    completed: true,
+                    skipped: false,
+                }
+            ));
+        }
+
+        #[test]
+        fn respects_deliberate_skip_while_permission_is_missing() {
+            assert!(!should_prompt_for_accessibility(
+                false,
+                Disposition {
+                    completed: false,
+                    skipped: true,
+                }
+            ));
+        }
+
+        #[test]
+        fn never_prompts_while_permission_is_live() {
+            assert!(!should_prompt_for_accessibility(
+                true,
+                Disposition {
+                    completed: true,
+                    skipped: false,
+                }
+            ));
+        }
     }
 }

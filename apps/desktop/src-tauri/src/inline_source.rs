@@ -515,6 +515,12 @@ pub mod mac {
         value.is_empty() && target.location == 0 && target.length == 0
     }
 
+    /// Once the reader expands a collapsed caret to the paragraph rewrite target, verification
+    /// must remember that prepared range—not the stale caret range observed before the AX write.
+    fn prepared_selection_range(observed: Option<CFRange>, target: CFRange) -> Option<CFRange> {
+        observed.map(|_| target)
+    }
+
     fn prefers_keyboard_delivery(bundle_id: &str) -> bool {
         matches!(
             bundle_id,
@@ -672,6 +678,14 @@ pub mod mac {
         #[test]
         fn empty_zero_range_does_not_require_ax_selection_write() {
             assert!(selection_is_already_prepared("", CFRange::init(0, 0)));
+        }
+
+        #[test]
+        fn collapsed_caret_verifies_the_prepared_paragraph_range() {
+            let caret = CFRange::init(18, 0);
+            let paragraph = CFRange::init(0, 42);
+
+            assert_eq!(prepared_selection_range(Some(caret), paragraph), Some(paragraph));
         }
 
         #[test]
@@ -990,7 +1004,7 @@ pub mod mac {
                 pid,
                 original_value: value,
                 target_range,
-                selected_range: selection,
+                selected_range: prepared_selection_range(selection, target_range),
                 selected_text: target.clone(),
             });
         } else {
@@ -1579,11 +1593,12 @@ pub mod mac {
                             "gemini" => GEMINI_BASE_URL,
                             _ => OPENAI_BASE_URL,
                         };
+                        let config = OpenAiCompatConfig::new(base, model);
                         let client = OpenAiCompatAgentClient::new(
                             transport,
                             db.traceability_sink(),
                             byok,
-                            OpenAiCompatConfig::new(base, model),
+                            config,
                         );
                         Some(InlineAgent::OpenAiCompat { rt, client })
                     }

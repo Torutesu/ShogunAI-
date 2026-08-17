@@ -66,3 +66,5 @@ pub mod notch;
 #[cfg(feature = "exec")]
 pub mod send_exec;
 pub mod traceview;
+/// Conservative, local-only correction of explicit voice vocabulary aliases.
+pub mod voice_dictionary;

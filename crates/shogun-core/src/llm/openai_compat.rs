@@ -25,6 +25,8 @@ pub const OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 /// this client rather than a fourth provider implementation (ADR-002: one abstraction, not one
 /// client per vendor).
 pub const GEMINI_BASE_URL: &str = "https://generativelanguage.googleapis.com/v1beta/openai";
+/// Groq's OpenAI-compatible surface.
+pub const GROQ_BASE_URL: &str = "https://api.groq.com/openai/v1";
 
 /// Connection + model settings. Like [`super::anthropic::AnthropicConfig`], the model id is a
 /// configurable string the caller supplies — never guessed here.
@@ -38,6 +40,10 @@ pub struct OpenAiCompatConfig {
     pub model: String,
     /// `max_tokens` for the request.
     pub max_tokens: u32,
+    /// Optional reasoning effort for reasoning-capable models such as GPT-OSS.
+    pub reasoning_effort: Option<String>,
+    /// Whether the provider should include its reasoning field in the response.
+    pub include_reasoning: Option<bool>,
 }
 
 impl OpenAiCompatConfig {
@@ -47,11 +53,27 @@ impl OpenAiCompatConfig {
         while base_url.ends_with('/') {
             base_url.pop();
         }
-        Self { base_url, model: model.into(), max_tokens: 1024 }
+        Self {
+            base_url,
+            model: model.into(),
+            max_tokens: 1024,
+            reasoning_effort: None,
+            include_reasoning: None,
+        }
     }
 
     pub fn with_max_tokens(mut self, max_tokens: u32) -> Self {
         self.max_tokens = max_tokens;
+        self
+    }
+
+    pub fn with_reasoning_effort(mut self, effort: impl Into<String>) -> Self {
+        self.reasoning_effort = Some(effort.into());
+        self
+    }
+
+    pub fn with_include_reasoning(mut self, include: bool) -> Self {
+        self.include_reasoning = Some(include);
         self
     }
 
@@ -76,11 +98,17 @@ pub fn build_chat_request(
     key: &Secret,
     prompt: &str,
 ) -> Result<HttpRequest, LlmError> {
-    let body = json!({
+    let mut body = json!({
         "model": cfg.model,
         "max_tokens": cfg.max_tokens,
         "messages": [{ "role": "user", "content": prompt }],
     });
+    if let Some(effort) = &cfg.reasoning_effort {
+        body["reasoning_effort"] = Value::String(effort.clone());
+    }
+    if let Some(include) = cfg.include_reasoning {
+        body["include_reasoning"] = Value::Bool(include);
+    }
     Ok(HttpRequest::new(
         Method::Post,
         format!("{}/chat/completions", cfg.base_url),

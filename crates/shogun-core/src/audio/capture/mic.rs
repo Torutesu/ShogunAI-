@@ -50,7 +50,11 @@ impl Mic {
         });
 
         match ready_rx.recv() {
-            Ok(Ok(())) => Ok(Mic { rx, stop, thread: Some(thread) }),
+            Ok(Ok(())) => Ok(Mic {
+                rx,
+                stop,
+                thread: Some(thread),
+            }),
             Ok(Err(e)) => Err(e),
             Err(_) => Err("mic capture thread exited before reporting readiness".into()),
         }
@@ -59,25 +63,88 @@ impl Mic {
 
 /// Build and start the default input stream, sending resampled 16 kHz mono frames on `sample_tx`.
 /// Must run on the thread that will keep the returned stream alive (`Stream` is `!Send`).
-fn build_stream(sample_tx: std::sync::mpsc::Sender<Vec<f32>>) -> Result<cpal::Stream, String> {
-    let host = cpal::default_host();
-    let device = host.default_input_device().ok_or("no input device")?;
-    let config = device.default_input_config().map_err(|e| e.to_string())?;
-    let in_rate = config.sample_rate().0;
-    let channels = config.channels();
-    let err_fn = |e| eprintln!("[meeting] mic stream error: {e}");
-    let stream = device
+fn push_resampled<T>(
+    data: &[T],
+    channels: u16,
+    input_rate: u32,
+    sample_tx: &std::sync::mpsc::Sender<Vec<f32>>,
+) where
+    T: cpal::Sample,
+    f32: cpal::FromSample<T>,
+{
+    let samples: Vec<f32> = data.iter().copied().map(cpal::Sample::to_sample).collect();
+    let mono = resample::to_mono(&samples, channels);
+    let f16k = resample::to_16k_mono(&mono, input_rate);
+    let _ = sample_tx.send(f16k);
+}
+
+fn build_stream_for<T>(
+    device: &cpal::Device,
+    config: &cpal::StreamConfig,
+    channels: u16,
+    input_rate: u32,
+    sample_tx: std::sync::mpsc::Sender<Vec<f32>>,
+) -> Result<cpal::Stream, String>
+where
+    T: cpal::SizedSample,
+    f32: cpal::FromSample<T>,
+{
+    let err_fn = |e| eprintln!("[voice] mic stream error: {e}");
+    device
         .build_input_stream(
-            &config.into(),
-            move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                let mono = resample::to_mono(data, channels);
-                let f16k = resample::to_16k_mono(&mono, in_rate);
-                let _ = sample_tx.send(f16k);
+            config,
+            move |data: &[T], _: &cpal::InputCallbackInfo| {
+                push_resampled(data, channels, input_rate, &sample_tx);
             },
             err_fn,
             None,
         )
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())
+}
+
+fn build_stream(sample_tx: std::sync::mpsc::Sender<Vec<f32>>) -> Result<cpal::Stream, String> {
+    let host = cpal::default_host();
+    let device = host.default_input_device().ok_or("no input device")?;
+    let supported = device.default_input_config().map_err(|e| e.to_string())?;
+    let input_rate = supported.sample_rate().0;
+    let channels = supported.channels();
+    let config = supported.config();
+    let stream = match supported.sample_format() {
+        cpal::SampleFormat::F32 => {
+            build_stream_for::<f32>(&device, &config, channels, input_rate, sample_tx)
+        }
+        cpal::SampleFormat::F64 => {
+            build_stream_for::<f64>(&device, &config, channels, input_rate, sample_tx)
+        }
+        cpal::SampleFormat::I8 => {
+            build_stream_for::<i8>(&device, &config, channels, input_rate, sample_tx)
+        }
+        cpal::SampleFormat::I16 => {
+            build_stream_for::<i16>(&device, &config, channels, input_rate, sample_tx)
+        }
+        cpal::SampleFormat::I24 => {
+            build_stream_for::<cpal::I24>(&device, &config, channels, input_rate, sample_tx)
+        }
+        cpal::SampleFormat::I32 => {
+            build_stream_for::<i32>(&device, &config, channels, input_rate, sample_tx)
+        }
+        cpal::SampleFormat::I64 => {
+            build_stream_for::<i64>(&device, &config, channels, input_rate, sample_tx)
+        }
+        cpal::SampleFormat::U8 => {
+            build_stream_for::<u8>(&device, &config, channels, input_rate, sample_tx)
+        }
+        cpal::SampleFormat::U16 => {
+            build_stream_for::<u16>(&device, &config, channels, input_rate, sample_tx)
+        }
+        cpal::SampleFormat::U32 => {
+            build_stream_for::<u32>(&device, &config, channels, input_rate, sample_tx)
+        }
+        cpal::SampleFormat::U64 => {
+            build_stream_for::<u64>(&device, &config, channels, input_rate, sample_tx)
+        }
+        other => return Err(format!("unsupported microphone sample format: {other}")),
+    }?;
     stream.play().map_err(|e| e.to_string())?;
     Ok(stream)
 }
@@ -85,7 +152,10 @@ fn build_stream(sample_tx: std::sync::mpsc::Sender<Vec<f32>>) -> Result<cpal::St
 impl AudioSource for Mic {
     fn try_recv(&mut self) -> Option<Frame> {
         match self.rx.try_recv() {
-            Ok(samples) => Some(Frame { speaker: Speaker::Me, samples }),
+            Ok(samples) => Some(Frame {
+                speaker: Speaker::Me,
+                samples,
+            }),
             Err(TryRecvError::Empty | TryRecvError::Disconnected) => None,
         }
     }
@@ -101,5 +171,18 @@ impl AudioSource for Mic {
 impl Drop for Mic {
     fn drop(&mut self) {
         self.stop();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn push_resampled_accepts_i16_samples() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        push_resampled(&[0_i16; 160], 1, 16_000, &tx);
+
+        assert_eq!(rx.recv().map(|samples| samples.len()), Ok(160));
     }
 }

@@ -68,7 +68,7 @@ shogun-mcp = { path = "../../../crates/shogun-mcp" }
 objc2 = "0.6"
 block2 = "0.6" # ObjC blocks for NSWorkspace notification observers (space-change watcher)
 objc2-app-kit = { version = "0.3", features = [
-    "NSResponder", "NSWindow", "NSView", "NSPanel", "NSScreen",
+    "NSResponder", "NSWindow", "NSView", "NSPanel", "NSScreen", "NSGraphics",
     "NSWorkspace", "NSRunningApplication", "libc",
 ] }
 objc2-foundation = { version = "0.3", features = [

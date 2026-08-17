@@ -8,10 +8,38 @@
 //! becomes T5" rule and stale-timer suppression — means the integration is unit-tested off
 //! device; the macOS adapter only sources events and applies outputs.
 
-use crate::notch::geometry::{cg_to_ns, GeometryParams, Point, Rect, Regions};
+use crate::notch::geometry::{GeometryParams, Point, Rect, Regions};
 use crate::notch::hover::{HoverParams, HoverSignal, HoverTracker};
 use crate::notch::statemachine::{Effect, Input, Params, State, StateMachine, Timer};
 use std::collections::HashSet;
+
+/// Relationship between one physical display's CoreGraphics and AppKit coordinate spaces.
+///
+/// CoreGraphics positions are top-left/y-down within `cg`; AppKit positions are
+/// bottom-left/y-up within `ns`. Keeping both rectangles avoids applying a primary-display
+/// height to monitors above, below, or offset from it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DisplayCoordinateSpace {
+    cg: Rect,
+    ns: Rect,
+}
+
+impl DisplayCoordinateSpace {
+    pub fn new(cg: Rect, ns: Rect) -> Self {
+        Self { cg, ns }
+    }
+
+    pub fn contains_cg(&self, point: Point) -> bool {
+        self.cg.contains(point)
+    }
+
+    pub fn cg_to_ns(&self, point: Point) -> Point {
+        Point::new(
+            self.ns.x + (point.x - self.cg.x),
+            self.ns.y + self.ns.h - (point.y - self.cg.y),
+        )
+    }
+}
 
 /// Events fed into the engine by the macOS adapter.
 #[derive(Clone, Copy, Debug)]
@@ -74,8 +102,8 @@ pub enum EngineOutput {
 pub struct NotchEngine {
     hover: HoverTracker,
     sm: StateMachine,
-    /// Primary-display height for CG→NS normalisation (spec §3.4.7).
-    primary_height: f64,
+    /// Current display's CoreGraphics↔AppKit relationship.
+    coordinate_space: DisplayCoordinateSpace,
     /// Menubar band floor (NS y) — kept so `set_panel_hit_size` can re-apply regions.
     menubar_min_y: f64,
     /// Screen + Idle rects for rebuilding `r_exp` on open/resize.
@@ -112,7 +140,7 @@ impl NotchEngine {
     pub fn new(
         regions: Regions,
         menubar_min_y: f64,
-        primary_height: f64,
+        coordinate_space: DisplayCoordinateSpace,
         hover_params: HoverParams,
         sm_params: Params,
         screen: Rect,
@@ -121,7 +149,7 @@ impl NotchEngine {
         Self {
             hover: HoverTracker::new(regions, menubar_min_y, hover_params),
             sm: StateMachine::new(sm_params),
-            primary_height,
+            coordinate_space,
             menubar_min_y,
             screen,
             idle,
@@ -136,19 +164,16 @@ impl NotchEngine {
     }
 
     /// Update regions after a display change (spec §3.7.2).
-    pub fn set_regions(
-        &mut self,
-        regions: Regions,
-        menubar_min_y: f64,
-        primary_height: f64,
-        screen: Rect,
-        idle: Rect,
-    ) {
+    pub fn set_regions(&mut self, regions: Regions, menubar_min_y: f64, screen: Rect, idle: Rect) {
         self.hover.set_regions(regions, menubar_min_y);
         self.menubar_min_y = menubar_min_y;
-        self.primary_height = primary_height;
         self.screen = screen;
         self.idle = idle;
+    }
+
+    /// Switch to a display's actual CoreGraphics/AppKit relationship after its regions are set.
+    pub fn set_coordinate_space(&mut self, coordinate_space: DisplayCoordinateSpace) {
+        self.coordinate_space = coordinate_space;
     }
 
     /// Replace `r_exp` with the live NSPanel size (open / resize). Leave-grace covers full panel.
@@ -210,13 +235,13 @@ impl NotchEngine {
         let mut out = Vec::new();
         match input {
             EngineInput::MouseCg { x, y, t_ms, buttons } => {
-                let ns = cg_to_ns(Point::new(x, y), self.primary_height);
+                let ns = self.coordinate_space.cg_to_ns(Point::new(x, y));
                 for sig in self.hover.on_move(ns, t_ms, buttons) {
                     self.route_hover(sig, &mut out);
                 }
             }
             EngineInput::ButtonDownCg { x, y, t_ms } => {
-                let ns = cg_to_ns(Point::new(x, y), self.primary_height);
+                let ns = self.coordinate_space.cg_to_ns(Point::new(x, y));
                 self.hover.on_button_down(ns, t_ms);
                 // A button press during HoverIntent cancels it (T1 note / menubar intent).
                 self.apply_sm(Input::ButtonDown, &mut out);
@@ -339,7 +364,7 @@ mod tests {
             NotchEngine::new(
                 regs,
                 menubar_min_y,
-                982.0,
+                DisplayCoordinateSpace::new(screen, screen),
                 HoverParams::default(),
                 Params::default(),
                 screen,
@@ -473,7 +498,7 @@ mod tests {
         let mut e = NotchEngine::new(
             regs,
             menubar_min_y,
-            982.0,
+            DisplayCoordinateSpace::new(screen, screen),
             HoverParams::default(),
             Params::default(),
             screen,
@@ -494,5 +519,65 @@ mod tests {
         let (gx, gy) = cg(cx, below_notch_y, 982.0);
         let out = e.on_input(EngineInput::MouseCg { x: gx, y: gy, t_ms: 100, buttons: 0 });
         assert!(!out.iter().any(|o| matches!(o, EngineOutput::WebviewState(State::HoverIntent))));
+    }
+
+    #[test]
+    fn display_coordinate_spaces_open_notches_on_offset_monitors() {
+        let primary = Rect::new(0.0, 0.0, 1512.0, 982.0);
+        let cases = [
+            // Secondary right, taller than primary.
+            (
+                Rect::new(1512.0, 0.0, 1920.0, 1080.0),
+                Rect::new(1512.0, -98.0, 1920.0, 1080.0),
+            ),
+            // Secondary left with a negative AppKit origin.
+            (
+                Rect::new(-1280.0, 0.0, 1280.0, 1024.0),
+                Rect::new(-1280.0, -42.0, 1280.0, 1024.0),
+            ),
+            // Secondary above primary: negative CoreGraphics origin.
+            (
+                Rect::new(0.0, -900.0, 1440.0, 900.0),
+                Rect::new(0.0, 982.0, 1440.0, 900.0),
+            ),
+            // Secondary below primary: positive CoreGraphics origin.
+            (
+                Rect::new(0.0, 982.0, 1680.0, 1050.0),
+                Rect::new(0.0, -1050.0, 1680.0, 1050.0),
+            ),
+        ];
+
+        for (cg_screen, ns_screen) in cases {
+            let idle = idle_rect(ns_screen, 180.0, 24.0);
+            let regs = regions(ns_screen, idle, GeometryParams::default());
+            let mut engine = NotchEngine::new(
+                regions(
+                    primary,
+                    idle_rect(primary, 200.0, 32.0),
+                    GeometryParams::default(),
+                ),
+                primary.max_y() - 24.0,
+                DisplayCoordinateSpace::new(primary, primary),
+                HoverParams::default(),
+                Params::default(),
+                primary,
+                idle_rect(primary, 200.0, 32.0),
+            );
+            engine.set_regions(regs, ns_screen.max_y() - 24.0, ns_screen, idle);
+            engine.set_coordinate_space(DisplayCoordinateSpace::new(cg_screen, ns_screen));
+
+            let ns_point = Point::new(regs.r_enter.mid_x(), regs.r_enter.y + regs.r_enter.h / 2.0);
+            let cg_point = Point::new(
+                cg_screen.x + (ns_point.x - ns_screen.x),
+                cg_screen.y + ns_screen.max_y() - ns_point.y,
+            );
+            let out = engine.on_input(EngineInput::MouseCg {
+                x: cg_point.x,
+                y: cg_point.y,
+                t_ms: 100,
+                buttons: 0,
+            });
+            assert!(out.contains(&EngineOutput::WebviewState(State::HoverIntent)));
+        }
     }
 }

@@ -268,6 +268,15 @@ fn flush_chunk(live: &mut DeepgramLive, pending: &mut Vec<f32>) {
     pending.clear();
 }
 
+/// Ask macOS for microphone access as soon as the user enables dictation, rather than waiting
+/// until the first hidden shortcut hold. The stream is immediately dropped; no audio is retained
+/// or sent during this permission probe.
+pub fn request_microphone_access() -> Result<(), String> {
+    let mut mic = Mic::open().map_err(|e| format!("microphone unavailable: {e}"))?;
+    mic.stop();
+    Ok(())
+}
+
 /// Open the mic and start streaming (live WS) or filling a RAM ring (HTTP/Whisper fallback).
 ///
 /// Does **not** load Whisper here — preload / release keeps hold-start fast. Live WS opens on the
@@ -298,8 +307,16 @@ pub fn start(app: &AppHandle) -> Result<Handle, String> {
         let mut ring = Ring::new();
         let mut pending: Vec<f32> = Vec::with_capacity(LIVE_CHUNK_SAMPLES);
 
-        while !stop_flag.load(Ordering::Relaxed) {
+        // Keep a short capture tail after key release. CoreAudio can still have the final
+        // phoneme queued when the global shortcut reports release; stopping at that exact instant
+        // clips end-of-sentence words. Audio remains RAM-only and Ring stays capped at 30 seconds.
+        let mut release_deadline = None;
+        loop {
             if let Some(frame) = mic.try_recv() {
+                // Retain the same bounded RAM clip while live streaming. If the live socket
+                // fails during finalization, HTTP gets the whole utterance instead of only the
+                // chunks captured after the failure.
+                ring.push(&frame.samples);
                 let level = rms(&frame.samples);
                 let _ = app_handle.emit("voice_level", LevelEvent { rms: level });
                 if live.is_some() {
@@ -309,8 +326,6 @@ pub fn start(app: &AppHandle) -> Result<Handle, String> {
                         if let Some(ref mut session) = live {
                             if let Err(e) = session.push_pcm(&chunk) {
                                 eprintln!("[voice] live push failed ({e}); switching to ring");
-                                ring.push(&chunk);
-                                ring.push(&pending);
                                 pending.clear();
                                 // Drop session → CloseStream; remaining audio goes to HTTP path.
                                 let _ = live.take();
@@ -318,10 +333,16 @@ pub fn start(app: &AppHandle) -> Result<Handle, String> {
                             }
                         }
                     }
-                } else {
-                    ring.push(&frame.samples);
                 }
             } else {
+                if stop_flag.load(Ordering::Relaxed) {
+                    let deadline = release_deadline.get_or_insert_with(|| {
+                        std::time::Instant::now() + Duration::from_millis(120)
+                    });
+                    if std::time::Instant::now() >= *deadline {
+                        break;
+                    }
+                }
                 std::thread::sleep(Duration::from_millis(10));
             }
         }

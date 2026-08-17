@@ -450,7 +450,14 @@ fn live_session_loop(
         match socket.read() {
             Ok(Message::Text(text)) => {
                 if let Some(r) = parse_live_message(&text) {
+                    // `speech_final` after our CloseStream is Deepgram's acknowledgement that
+                    // all words before key release are finalized. Keeping the socket alive for
+                    // the generic grace timeout made every dictation feel five seconds slow.
+                    let close_complete = closing && r.is_final && r.speech_final;
                     if result_tx.send(r).is_err() {
+                        break;
+                    }
+                    if close_complete {
                         break;
                     }
                 }

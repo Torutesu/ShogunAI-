@@ -114,6 +114,7 @@ const VOICE_W_RESPONSE = 480;
 const VOICE_H_RESPONSE = 280;
 const VOICE_W_RECORD_COLLAPSED = 240;
 const VOICE_LEVEL_STALE_MS = 1_200;
+const VOICE_ERROR_DISMISS_MS = 4_000;
 
 function voicePanelSize(phase: VoiceView["phase"]): Size {
   switch (phase) {
@@ -324,6 +325,7 @@ export function App(): JSX.Element {
   const lastVoiceLevelAt = useRef(0);
   const voiceReleaseWatch = useRef<number | null>(null);
   const voiceMicWatch = useRef<number | null>(null);
+  const voiceErrorDismiss = useRef<number | null>(null);
 
   // Open-view size is user-resizable (corner grip) and persists across Rust-driven respawns.
   // Chat and Settings share one frame — toggling settings must not jump to a separate stored size.
@@ -438,6 +440,10 @@ export function App(): JSX.Element {
         "voice_state",
         (e) => {
           const p = e.payload.phase;
+          if (p !== "error" && voiceErrorDismiss.current != null) {
+            window.clearTimeout(voiceErrorDismiss.current);
+            voiceErrorDismiss.current = null;
+          }
           setVoice((cur) => ({
             ...cur,
             phase: p,
@@ -498,8 +504,30 @@ export function App(): JSX.Element {
           } else if (p === "idle") {
             // Dictation done — always collapse; do not leave recording chrome stuck open.
             beginCollapseRef.current();
-          } else if (p === "error" && !pinnedRef.current) {
-            beginCollapseRef.current();
+          } else if (p === "error") {
+            // Keep failures visible briefly, then release the notch. An error is not live voice
+            // activity and must never make the global shortcut appear dead.
+            setOpen(true);
+            setShowSettings(false);
+            const sz = voicePanelSize(p);
+            void applyPanelSize(sz.w, sz.h);
+            if (voiceErrorDismiss.current != null) window.clearTimeout(voiceErrorDismiss.current);
+            voiceErrorDismiss.current = window.setTimeout(() => {
+              voiceErrorDismiss.current = null;
+              if (voiceRef.current.phase === "error") {
+                void invoke("voice_dismiss").catch(() => {
+                  // IPC failure must not keep Voice active forever. Re-check so a newer recording
+                  // or response is never erased by this older error timer.
+                  if (voiceRef.current.phase !== "error") return;
+                  setVoice((current) =>
+                    current.phase === "error"
+                      ? { ...current, phase: "idle", transcript: "", response: "", error: "", level: 0 }
+                      : current,
+                  );
+                  beginCollapseRef.current();
+                });
+              }
+            }, VOICE_ERROR_DISMISS_MS);
           } else if (p === "response") {
             setOpen(true);
             setShowSettings(false);
@@ -597,6 +625,10 @@ export function App(): JSX.Element {
         window.clearInterval(voiceMicWatch.current);
         voiceMicWatch.current = null;
       }
+      if (voiceErrorDismiss.current != null) {
+        window.clearTimeout(voiceErrorDismiss.current);
+        voiceErrorDismiss.current = null;
+      }
       offs.forEach((p) => void p.then((off) => off()));
     };
   }, []);
@@ -658,7 +690,7 @@ export function App(): JSX.Element {
   pinnedRef.current = pinned;
   const voiceRef = useRef(voice);
   voiceRef.current = voice;
-  const voiceActive = voice.phase !== "idle" && voice.phase !== "error";
+  const voiceActive = voice.phase !== "idle";
 
   const onPanelLeave = useCallback((): void => {
     if (pinned) return;
@@ -1260,6 +1292,18 @@ function VoicePanel({
           </div>
         </>
       ) : null}
+
+      {view.phase === "error" ? (
+        <>
+          <div className="voice-panel__kicker">{t.voiceError}</div>
+          <div className="voice-panel__response">{view.error || t.voiceError}</div>
+          <div className="voice-panel__acts">
+            <button type="button" className="voice-panel__btn voice-panel__btn--primary" onClick={onDismiss}>
+              {t.voiceClose}
+            </button>
+          </div>
+        </>
+      ) : null}
     </div>
   );
 }
@@ -1652,11 +1696,18 @@ function DreamSection(): JSX.Element {
 function VoiceSection(): JSX.Element {
   const [on, setOn] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [edit, setEdit] = useState({ model: "openai/gpt-oss-120b", has_key: false });
+  const [editKeyInput, setEditKeyInput] = useState("");
+  const [editBusy, setEditBusy] = useState(false);
+  const [editMsg, setEditMsg] = useState("");
 
   useEffect(() => {
     if (!IN_TAURI) return;
     void invoke<{ enabled: boolean }>("get_voice_settings")
       .then((s) => setOn(s.enabled))
+      .catch(() => undefined);
+    void invoke<{ model: string; has_key: boolean }>("get_voice_edit_settings")
+      .then(setEdit)
       .catch(() => undefined);
   }, []);
 
@@ -1697,6 +1748,77 @@ function VoiceSection(): JSX.Element {
         >
           {t.voiceOn}
         </button>
+      </div>
+      <div className="set__stack set__stack--key">
+        <div className="set__label">{t.voiceEditModel}</div>
+        <div className="set__hint set__hint--quiet">{edit.model}</div>
+        <div className={`set__status${edit.has_key ? " is-ok" : ""}`}>
+          {edit.has_key ? t.voiceEditKeyPresent : t.voiceEditKeyAbsent}
+        </div>
+        <div className="set__sublabel">{t.voiceEditKey}</div>
+        <p className="set__hint set__hint--quiet">{t.voiceEditKeyHint}</p>
+        {editMsg ? <p className="set__hint is-err">{editMsg}</p> : null}
+        <div className="keyrow">
+          <input
+            className="keyrow__input"
+            type="password"
+            placeholder={t.voiceEditKeyPlaceholder}
+            value={editKeyInput}
+            autoComplete="off"
+            onChange={(e) => {
+              setEditKeyInput(e.target.value);
+              setEditMsg("");
+            }}
+            onFocus={() => {
+              if (IN_TAURI) void invoke("focus_field", { focused: true }).catch(() => undefined);
+            }}
+            onKeyDown={(e) => {
+              if (e.key !== "Enter" || !editKeyInput.trim() || editBusy) return;
+              setEditBusy(true);
+              void invoke("set_voice_edit_key", { key: editKeyInput.trim() })
+                .then(() => {
+                  setEdit((current) => ({ ...current, has_key: true }));
+                  setEditKeyInput("");
+                })
+                .catch((err) => setEditMsg(String(err)))
+                .finally(() => setEditBusy(false));
+            }}
+          />
+          <button
+            className="keyrow__btn keyrow__btn--go"
+            type="button"
+            disabled={!editKeyInput.trim() || editBusy}
+            onClick={() => {
+              setEditBusy(true);
+              void invoke("set_voice_edit_key", { key: editKeyInput.trim() })
+                .then(() => {
+                  setEdit((current) => ({ ...current, has_key: true }));
+                  setEditKeyInput("");
+                })
+                .catch((err) => setEditMsg(String(err)))
+                .finally(() => setEditBusy(false));
+            }}
+          >
+            {t.keySave}
+          </button>
+          {edit.has_key ? (
+            <button
+              className="keyrow__btn keyrow__btn--quiet"
+              type="button"
+              disabled={editBusy}
+              onClick={() => {
+                setEditBusy(true);
+                void invoke("clear_voice_edit_key")
+                  .then(() => setEdit((current) => ({ ...current, has_key: false })))
+                  .catch((err) => setEditMsg(String(err)))
+                  .finally(() => setEditBusy(false));
+              }}
+            >
+              {t.keyRemove}
+            </button>
+          ) : null}
+        </div>
+        <p className="set__hint set__hint--quiet">{t.voiceEditModelHint}</p>
       </div>
     </section>
   );
@@ -3058,12 +3180,23 @@ function Settings(props: {
   onDone: () => void;
   onCleared: () => void;
 }): JSX.Element {
-  const { appearance, setAppearance, hasKey, keyRejected, stateCount, onDone, onCleared } = props;
+  const {
+    appearance,
+    setAppearance,
+    showStatusInNotch,
+    setShowStatusInNotch,
+    hasKey,
+    keyRejected,
+    stateCount,
+    onDone,
+    onCleared,
+  } = props;
   // Clearing extracted state is destructive and context is foundational, so it is a deliberate
   // two-step: reveal a typed confirmation, and only a matching "CLEAR" enables the delete.
   const [confirming, setConfirming] = useState(false);
   const [confirmText, setConfirmText] = useState("");
   const [cleared, setCleared] = useState(false);
+  const [notchStatusBusy, setNotchStatusBusy] = useState(false);
   const canClear = confirmText.trim().toUpperCase() === "CLEAR";
   const clearMemory = (): void => {
     if (!IN_TAURI || !canClear) return;
@@ -3075,6 +3208,15 @@ function Settings(props: {
         onCleared();
       })
       .catch(() => undefined);
+  };
+  const setNotchStatus = (visible: boolean): void => {
+    const previous = showStatusInNotch;
+    setShowStatusInNotch(visible);
+    if (!IN_TAURI) return;
+    setNotchStatusBusy(true);
+    void invoke("set_notch_status_visible", { visible })
+      .catch(() => setShowStatusInNotch(previous))
+      .finally(() => setNotchStatusBusy(false));
   };
   const [binds, setBinds] = useState<Record<string, string>>(DEFAULT_BINDS);
   const [recording, setRecording] = useState<string | null>(null);
@@ -3231,6 +3373,32 @@ function Settings(props: {
         </section>
         <DockVisibleSection />
         <CastlePositionSection />
+        <section className="set">
+          <div className="set__label" id="seg-notch-status">{t.notchStatus}</div>
+          <div className="seg" role="radiogroup" aria-labelledby="seg-notch-status">
+            <button
+              type="button"
+              role="radio"
+              aria-checked={showStatusInNotch}
+              disabled={notchStatusBusy}
+              className={`seg__opt${showStatusInNotch ? " is-on" : ""}`}
+              onClick={() => setNotchStatus(true)}
+            >
+              {t.notchStatusShow}
+            </button>
+            <button
+              type="button"
+              role="radio"
+              aria-checked={!showStatusInNotch}
+              disabled={notchStatusBusy}
+              className={`seg__opt${!showStatusInNotch ? " is-on" : ""}`}
+              onClick={() => setNotchStatus(false)}
+            >
+              {t.notchStatusHide}
+            </button>
+          </div>
+          <p className="set__hint">{t.notchStatusHint}</p>
+        </section>
         <section className="set">
           <div className="set__label">{t.shortcuts}</div>
           {/* Draft is a fixed ⌥-tap trigger (a bare modifier can't be a global shortcut), shown
