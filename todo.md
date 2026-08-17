@@ -7,6 +7,7 @@
 
 ## Desktop app — Priority fixes
 
+- [ ] **[P1] Multi-desktop responsiveness and automatic display switching** — keep the notch/panel responsive across Spaces and monitor changes, automatically follow the active/appropriate display, and make manual display switching easy when multiple desktops are in use. Issue details: [`docs/multi-desktop-auto-switching-issue.md`](docs/multi-desktop-auto-switching-issue.md).
 - [ ] **[P1] Managed voice transcript editor** — add a dedicated fast cloud edit lane after Deepgram for filler/false-start cleanup and destination-aware formatting, with strict preservation validation, processing lock, consent/traceability, and silent raw fallback. Full implementation spec: [`docs/voice-edit-model-implementation.md`](docs/voice-edit-model-implementation.md).
 - [ ] **[P0] Meeting overlay performance + live summaries** — remove 60 fps React rerenders, memoize transcript transforms, make 22 s live-summary scheduling survive incoming speech, and rAF-throttle resize IPC.
 - [ ] **[P0] Real frontend quality gates** — add Vitest, React Testing Library, ESLint/React Hooks checks, desktop `test`/`lint` scripts, and CI enforcement; cover meeting scheduling, transcript transforms, timers, visual recall, and resize batching without requiring live Tauri.
