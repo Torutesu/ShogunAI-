@@ -330,10 +330,10 @@ pub fn set_summary(
     now_ms: i64,
 ) -> Result<(), rusqlite::Error> {
     use rusqlite::params;
-    let redacted = crate::redact::redact(summary);
+    let redacted = crate::sanitize::persist_body(summary);
     conn.execute(
         "UPDATE threads SET summary = ?1, updated_at = ?2 WHERE thread_key = ?3",
-        params![redacted.as_ref(), now_ms, thread_key],
+        params![redacted.text.as_ref(), now_ms, thread_key],
     )?;
     Ok(())
 }

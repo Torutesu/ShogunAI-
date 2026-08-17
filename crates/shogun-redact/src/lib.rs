@@ -20,6 +20,13 @@
 //! Pure and dependency-free: hand-rolled scanning rather than a regex engine, so it is exhaustively
 //! testable and adds nothing to the build. Lives in its own crate so it can be shared without
 //! pulling in rusqlite/sqlcipher (which shogun-memory carries).
+//!
+//! [`strip_hidden`] is the sibling on the same write path: hidden format / bidi / noncharacters
+//! are removed *before* [`redact`] so a secret split by ZWSP still matches, and so those runes
+//! never land in `event_log.content`.
+
+pub mod hidden;
+pub use hidden::{is_hidden, strip_hidden, HiddenStrip};
 
 /// What replaces a matched secret. Fixed-width so the shape of the surrounding text survives.
 const MASK: &str = "[redacted]";

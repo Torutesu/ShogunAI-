@@ -38,14 +38,23 @@ pub fn save(
     model: &str,
     now: i64,
 ) -> Result<(), rusqlite::Error> {
-    let redacted = crate::redact::redact(summary);
+    let summary = crate::sanitize::persist_body(summary);
+    let decisions = crate::sanitize::persist_hidden(decisions_json);
+    let next_actions = crate::sanitize::persist_hidden(next_actions_json);
     conn.execute(
         "INSERT INTO meeting_recaps
            (session_id, summary, decisions, next_actions, model, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)
          ON CONFLICT (session_id) DO UPDATE SET
            summary = ?2, decisions = ?3, next_actions = ?4, model = ?5, created_at = ?6",
-        params![session_id, redacted.as_ref(), decisions_json, next_actions_json, model, now],
+        params![
+            session_id,
+            summary.text.as_ref(),
+            decisions.text.as_ref(),
+            next_actions.text.as_ref(),
+            model,
+            now
+        ],
     )?;
     Ok(())
 }

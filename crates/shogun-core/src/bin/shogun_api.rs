@@ -19,7 +19,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use shogun_agents::approval::ApprovalQueue;
 use shogun_core::daemon::{Clock, Db};
 use shogun_core::db_backend::DbBackend;
-use shogun_core::metrics::{render_snapshots_json_with_lessons_and_harness, SloRegistry};
+use shogun_core::metrics::{
+    render_snapshots_json_with_lessons_harness_and_sanitizer, SanitizerCounters, SloRegistry,
+};
 use shogun_mcp::memory_api::TokenRegistry;
 use shogun_mcp::server::{bind_local, serve_on, AppState, MetricsSource, DEFAULT_PORT};
 
@@ -38,11 +40,24 @@ impl MetricsSource for RegistryMetrics {
     fn snapshot_json(&self) -> String {
         let lessons = self.db.lesson_counters();
         let harness = self.db.harness_counters();
+        let snap = shogun_memory::sanitize::snapshot();
+        let sanitizer = SanitizerCounters {
+            events_stripped: snap.events_stripped,
+            chars_removed: snap.chars_removed,
+        };
         self.registry
             .lock()
-            .map(|r| render_snapshots_json_with_lessons_and_harness(&r.snapshot_all(), lessons, harness))
+            .map(|r| {
+                render_snapshots_json_with_lessons_harness_and_sanitizer(
+                    &r.snapshot_all(),
+                    lessons,
+                    harness,
+                    sanitizer,
+                )
+            })
             .unwrap_or_else(|_| {
-                r#"{"metrics":[],"lessons":{"measured":false},"harness":{"measured":false}}"#.to_string()
+                r#"{"metrics":[],"lessons":{"measured":false},"harness":{"measured":false},"sanitizer":{"events_stripped":0,"chars_removed":0}}"#
+                    .to_string()
             })
     }
 }
@@ -190,6 +205,11 @@ mod tests {
         assert!(
             r.body.contains(r#""harness":{"measured":false}"#),
             "unmeasured harness must not read as zeros: {}",
+            r.body
+        );
+        assert!(
+            r.body.contains(r#""sanitizer":{"events_stripped":"#),
+            "sanitizer counts missing: {}",
             r.body
         );
 

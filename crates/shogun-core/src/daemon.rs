@@ -619,7 +619,7 @@ impl Db {
         if touched {
             return Some((id, touched, Vec::new()));
         }
-        let candidates = shogun_memory::extract::extract(ev.content);
+        let candidates = shogun_memory::extract::extract_untrusted(ev.content);
         let now = self.now_ms();
         let ids = self
             .with_conn_mut("extract.persist_candidates", |c| {
@@ -648,7 +648,9 @@ impl Db {
         };
         let recent_refs: Vec<Recent<'_>> =
             recents.iter().map(|(h, c)| Recent { content_hash: h, content: c }).collect();
-        let decision = decide_hash(ev.content, &recent_refs, Self::content_hash);
+        // Collapse against the stored (stripped) form, not the camouflaged bytes.
+        let visible = shogun_redact::strip_hidden(ev.content);
+        let decision = decide_hash(visible.text.as_ref(), &recent_refs, Self::content_hash);
         let collapsed = NewEvent { content_hash: decision.hash(), ..ev.clone() };
         self.capture(&collapsed)
     }
@@ -718,7 +720,7 @@ impl Db {
         if touched {
             return Some((id, touched, Vec::new()));
         }
-        let candidates = shogun_memory::extract::extract(text);
+        let candidates = shogun_memory::extract::extract_untrusted(text);
         let now = self.now_ms();
         let ids = self
             .with_conn_mut("extract.persist_candidates", |c| {
@@ -787,7 +789,7 @@ impl Db {
                     None => synced.push((it.source, 1)),
                 }
                 // A newly-ingested item is extracted for commitments / open loops, linked to it.
-                let candidates = shogun_memory::extract::extract(&it.body);
+                let candidates = shogun_memory::extract::extract_untrusted(&it.body);
                 if !candidates.is_empty() {
                     let ids =
                         shogun_memory::extract::persist_candidates(&mut guard, id, &candidates, it.ts_ms, now)
@@ -1166,7 +1168,7 @@ impl Db {
                 continue;
             }
             summary.newly_inserted += 1;
-            let candidates = shogun_memory::extract::extract(&t.text);
+            let candidates = shogun_memory::extract::extract_untrusted(&t.text);
             if !candidates.is_empty() {
                 let ids =
                     shogun_memory::extract::persist_candidates(&mut guard, id, &candidates, t.ts_ms, now)

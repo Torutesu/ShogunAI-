@@ -176,10 +176,10 @@ pub fn set_summary(
     summary: &str,
     now_ms: i64,
 ) -> Result<(), rusqlite::Error> {
-    let redacted = crate::redact::redact(summary);
+    let redacted = crate::sanitize::persist_body(summary);
     conn.execute(
         "UPDATE sessions SET summary = ?1, updated_at = ?2 WHERE id = ?3",
-        params![redacted.as_ref(), now_ms, session_id],
+        params![redacted.text.as_ref(), now_ms, session_id],
     )?;
     Ok(())
 }

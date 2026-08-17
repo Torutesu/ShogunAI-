@@ -343,16 +343,30 @@ pub fn render_snapshots_json(snapshots: &[SloSnapshot]) -> String {
     format!(r#"{{"metrics":[{}]}}"#, slo_items(snapshots).join(","))
 }
 
+/// Hidden-format sanitizer counts (memory-poisoning P2). Zeros are a real measurement — every
+/// persist goes through the strip. Never the captured text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct SanitizerCounters {
+    pub events_stripped: u64,
+    pub chars_removed: u64,
+}
+
 /// [`render_snapshots_json`] plus the D-6 `lessons` block. `None` (counters not computable —
 /// no DB behind this process, or a read failure) renders `"lessons":{"measured":false}` in the
 /// crate's convention: an unmeasured value is flagged, never fabricated as zero.
 ///
 /// Always includes a `harness` object: unmeasured until compression or a tool loop has run.
+/// Always includes a `sanitizer` object (counts since process start; zeros are a real measurement).
 pub fn render_snapshots_json_with_lessons(
     snapshots: &[SloSnapshot],
     lessons: Option<LessonCounters>,
 ) -> String {
-    render_snapshots_json_with_lessons_and_harness(snapshots, lessons, None)
+    render_snapshots_json_with_lessons_harness_and_sanitizer(
+        snapshots,
+        lessons,
+        None,
+        SanitizerCounters::default(),
+    )
 }
 
 /// [`render_snapshots_json_with_lessons`] plus the H1 `harness` block (compression + tool loop).
@@ -361,11 +375,36 @@ pub fn render_snapshots_json_with_lessons_and_harness(
     lessons: Option<LessonCounters>,
     harness: Option<HarnessCounters>,
 ) -> String {
+    render_snapshots_json_with_lessons_harness_and_sanitizer(
+        snapshots,
+        lessons,
+        harness,
+        SanitizerCounters::default(),
+    )
+}
+
+/// [`render_snapshots_json_with_lessons`] plus live sanitizer counters from the persist path.
+pub fn render_snapshots_json_with_lessons_and_sanitizer(
+    snapshots: &[SloSnapshot],
+    lessons: Option<LessonCounters>,
+    sanitizer: SanitizerCounters,
+) -> String {
+    render_snapshots_json_with_lessons_harness_and_sanitizer(snapshots, lessons, None, sanitizer)
+}
+
+/// Full metrics face: SLOs + lessons + harness + sanitizer. Never captured text.
+pub fn render_snapshots_json_with_lessons_harness_and_sanitizer(
+    snapshots: &[SloSnapshot],
+    lessons: Option<LessonCounters>,
+    harness: Option<HarnessCounters>,
+    sanitizer: SanitizerCounters,
+) -> String {
     format!(
-        r#"{{"metrics":[{}],"lessons":{},"harness":{}}}"#,
+        r#"{{"metrics":[{}],"lessons":{},"harness":{},"sanitizer":{}}}"#,
         slo_items(snapshots).join(","),
         lessons_json(lessons),
         harness_json(harness),
+        sanitizer_json(sanitizer),
     )
 }
 
@@ -408,6 +447,13 @@ fn tool_loop_json(snap: Option<ToolLoopHarness>) -> String {
         ),
         None => r#"{"measured":false}"#.to_string(),
     }
+}
+
+fn sanitizer_json(s: SanitizerCounters) -> String {
+    format!(
+        r#"{{"events_stripped":{},"chars_removed":{}}}"#,
+        s.events_stripped, s.chars_removed
+    )
 }
 
 fn slo_items(snapshots: &[SloSnapshot]) -> Vec<String> {
@@ -608,6 +654,11 @@ mod tests {
         assert!(json.contains(r#""harness":{"measured":false}"#), "{json}");
         assert!(!json.contains("pre_tokens"), "{json}");
         assert!(!json.contains("\"uses\":"), "{json}");
+        // sanitizer zeros are a real measurement (every persist goes through the strip)
+        assert!(
+            json.contains(r#""sanitizer":{"events_stripped":0,"chars_removed":0}"#),
+            "{json}"
+        );
     }
 
     #[test]
@@ -632,7 +683,7 @@ mod tests {
         );
         assert!(json.contains(r#""harness":{"measured":true"#), "{json}");
         assert!(
-            json.contains(r#""compression":{"pre_tokens":200,"post_tokens":80,"dropped":3,"enabled":true,"measured":true}"#),
+            json.contains(r#"{"pre_tokens":200,"post_tokens":80,"dropped":3,"enabled":true,"measured":true}"#),
             "{json}"
         );
         assert!(json.contains(r#""tool_loop":{"measured":false}"#), "{json}");
@@ -667,5 +718,17 @@ mod tests {
         assert!(json.contains(r#""harness":{"measured":false}"#), "{json}");
         assert!(!json.contains("pre_tokens"), "{json}");
         assert!(!json.contains("\"uses\":0"), "{json}");
+    }
+
+    #[test]
+    fn sanitizer_counters_render_live_counts_never_text() {
+        let snaps = SloRegistry::new().snapshot_all();
+        let json = render_snapshots_json_with_lessons_and_sanitizer(
+            &snaps,
+            None,
+            SanitizerCounters { events_stripped: 4, chars_removed: 11 },
+        );
+        assert!(json.contains(r#""sanitizer":{"events_stripped":4,"chars_removed":11}"#), "{json}");
+        assert!(!json.to_lowercase().contains("ignore previous"), "{json}");
     }
 }

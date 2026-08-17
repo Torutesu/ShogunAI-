@@ -201,6 +201,14 @@ fn contains_any(haystack: &str, cues: &[&str]) -> bool {
     cues.iter().any(|c| haystack.contains(c))
 }
 
+/// Extract from untrusted ingress: hidden format characters are stripped first so a ZWSP inside
+/// "I'll send" cannot hide the promise cue, and the candidates match what [`crate::event_log`]
+/// actually stores. Secret masking is [`crate::sanitize::persist_body`] at persist time.
+pub fn extract_untrusted(text: &str) -> Vec<Candidate> {
+    let stripped = shogun_redact::strip_hidden(text);
+    extract(stripped.text.as_ref())
+}
+
 /// Extract candidate commitments / open loops from one block of captured text using local rules
 /// only. A segment yields at most one candidate: a commitment if a promise cue matches, otherwise
 /// an open loop if an open-loop cue matches, otherwise nothing.
@@ -268,33 +276,39 @@ pub fn persist_candidates(
     let mut ids = Vec::with_capacity(candidates.len());
     for c in candidates {
         let id = match c {
-            Candidate::Commitment { direction, description, confidence } => insert_commitment(
-                conn,
-                &NewCommitment {
-                    direction: *direction,
-                    counterparty_id: None,
-                    description,
-                    due_at: None,
-                    status: CommitmentStatus::Open,
-                    project_id: None,
-                    confidence: *confidence,
-                    now,
-                },
-                &prov,
-            )?,
-            Candidate::OpenLoop { kind, description, confidence } => insert_open_loop(
-                conn,
-                &NewOpenLoop {
-                    kind: *kind,
-                    description,
-                    counterparty_id: None,
-                    project_id: None,
-                    opened_at: evidence_ts,
-                    confidence: *confidence,
-                    now,
-                },
-                &prov,
-            )?,
+            Candidate::Commitment { direction, description, confidence } => {
+                let desc = crate::sanitize::persist_body(description);
+                insert_commitment(
+                    conn,
+                    &NewCommitment {
+                        direction: *direction,
+                        counterparty_id: None,
+                        description: desc.text.as_ref(),
+                        due_at: None,
+                        status: CommitmentStatus::Open,
+                        project_id: None,
+                        confidence: *confidence,
+                        now,
+                    },
+                    &prov,
+                )?
+            }
+            Candidate::OpenLoop { kind, description, confidence } => {
+                let desc = crate::sanitize::persist_body(description);
+                insert_open_loop(
+                    conn,
+                    &NewOpenLoop {
+                        kind: *kind,
+                        description: desc.text.as_ref(),
+                        counterparty_id: None,
+                        project_id: None,
+                        opened_at: evidence_ts,
+                        confidence: *confidence,
+                        now,
+                    },
+                    &prov,
+                )?
+            }
         };
         ids.push(id);
     }
@@ -434,6 +448,21 @@ mod tests {
             }
             other => panic!("expected a commitment, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn zwsp_inside_a_promise_cue_is_visible_to_untrusted_extract() {
+        let hidden = "I\u{200B}'ll send the report by Friday.";
+        assert!(
+            extract(hidden).is_empty(),
+            "raw extract must not see a cue split by ZWSP: {:?}",
+            extract(hidden)
+        );
+        let cands = extract_untrusted(hidden);
+        assert!(
+            matches!(cands.first(), Some(Candidate::Commitment { direction: CommitmentDirection::Mine, .. })),
+            "stripped extract must recover the promise: {cands:?}"
+        );
     }
 
     #[test]

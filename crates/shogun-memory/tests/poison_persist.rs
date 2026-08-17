@@ -123,7 +123,20 @@ fn persisted_candidates_stay_below_medium() {
         let hash = event_log::content_hash(f.body);
         let ts = (i as i64) + 1;
         let event_id = event_log::insert(&conn, &event(f.body, &hash, ts)).unwrap();
-        let cands = extract::extract(f.body);
+        let stored: String = conn
+            .query_row(
+                "SELECT content FROM event_log WHERE id = ?1",
+                [event_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            shogun_memory::sanitize::persist_body(&stored).hidden_removed,
+            0,
+            "{}: stored event_log.content still has hidden runes",
+            f.name
+        );
+        let cands = extract::extract_untrusted(f.body);
         extract::persist_candidates(&mut conn, event_id, &cands, ts, ts).unwrap();
     }
 
