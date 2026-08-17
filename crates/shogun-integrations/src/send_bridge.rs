@@ -131,6 +131,21 @@ mod tests {
         assert_eq!(v["description"], "agenda");
     }
 
+    /// The catalog's proposal tools, by name. The catalog has no iterator by design (its contents
+    /// are an implementation detail), so the names are listed here — and
+    /// `the_published_list_is_exactly_the_catalogs_proposal_set` pins this list to the catalog in
+    /// both directions, so a proposal added there without being added here fails that test rather
+    /// than slipping past the round-trip sweep unchecked.
+    const PUBLISHED: &[&str] = &[
+        "propose_send_email",
+        "propose_calendar_event",
+        "propose_calendar_event_change",
+        "propose_drive_document",
+        "propose_chat_message",
+        "propose_issue_comment",
+        "propose_doc_change",
+    ];
+
     /// Every proposal the model can make must execute against the service it was made for.
     ///
     /// The forward map (a tool the model calls → a [`SendAction`]) lives in
@@ -148,7 +163,7 @@ mod tests {
             "to": "a@b.com", "title": "t", "channel": "#c", "target": "x", "body": "b"
         });
 
-        let mut checked = 0;
+        let mut covered: Vec<&str> = Vec::new();
         for service in ALL_SERVICES {
             for op in scope::scope(*service).ops {
                 // Find the published proposal for this row, if any.
@@ -159,7 +174,7 @@ mod tests {
                 let shogun_agents::permission::Action::Send(send) = action else {
                     panic!("{} built a non-send action", entry.name)
                 };
-                checked += 1;
+                covered.push(entry.name);
                 match route_send(&send) {
                     SendRoute::FirstLayer { service: routed_service, op: routed_op } => assert_eq!(
                         (routed_service, routed_op),
@@ -178,7 +193,51 @@ mod tests {
                 assert_eq!(entry.kind, ToolKind::Propose);
             }
         }
-        assert!(checked >= 5, "the sweep must actually check proposals, got {checked}");
+        // Every listed proposal was actually swept — a stale name, or one whose scope row went
+        // away, would otherwise shrink the sweep silently.
+        for name in PUBLISHED {
+            assert!(covered.contains(name), "{name} was never reached by the sweep");
+        }
+    }
+
+    /// The other half of the coverage guard: [`PUBLISHED`] is a hand-list, so it can drift from
+    /// the catalog — and a catalog proposal missing from it would skip the round-trip sweep
+    /// entirely. This derives the actually-published proposal set from `tool_definitions` under
+    /// the widest context (everything connected, every wave released, full plan, draft-stop off)
+    /// and pins the two sets to each other.
+    #[test]
+    fn the_published_list_is_exactly_the_catalogs_proposal_set() {
+        use shogun_agents::entitlement::{entitlements, Plan};
+        use shogun_mcp::connection::ConnState;
+        use shogun_mcp::scope::{Wave, ALL_SERVICES};
+        use shogun_mcp::tool_catalog::{
+            catalog_entry, tool_definitions, ServiceState, ToolContext, ToolKind,
+        };
+
+        let services: Vec<ServiceState> = ALL_SERVICES
+            .iter()
+            .map(|s| ServiceState { service: *s, conn: ConnState::Connected { last_sync_ms: 0 } })
+            .collect();
+        let ctx = ToolContext {
+            highest_released: Wave::Three,
+            draft_stop: false,
+            plan: entitlements(Plan::Pro, 0),
+        };
+        let offered: Vec<String> = tool_definitions(&services, &ctx)
+            .iter()
+            .filter_map(|t| t["name"].as_str().map(str::to_string))
+            .filter(|n| catalog_entry(n).is_some_and(|e| e.kind == ToolKind::Propose))
+            .collect();
+        for name in PUBLISHED {
+            assert!(offered.iter().any(|o| o == name), "{name} is listed but never published");
+        }
+        for name in &offered {
+            assert!(
+                PUBLISHED.contains(&name.as_str()),
+                "{name} is published but missing from PUBLISHED — the round-trip sweep never \
+                 checked it"
+            );
+        }
     }
 
     /// The published proposal entry for a scope row, if the catalog has one.
@@ -187,20 +246,6 @@ mod tests {
         op_name: &str,
     ) -> Option<&'static shogun_mcp::tool_catalog::ToolEntry> {
         use shogun_mcp::tool_catalog::{catalog_entry, ToolKind};
-        // The catalog has no iterator by design (its contents are an implementation detail), so
-        // the names are listed here — and the count is asserted by the caller, so a proposal added
-        // without being added here shows up as a coverage drop rather than passing silently.
-        const PUBLISHED: &[&str] = &[
-            "propose_send_email",
-            "propose_calendar_event",
-            "propose_calendar_event_change",
-            "propose_drive_document",
-            "propose_chat_message",
-            "propose_chat_reaction",
-            "propose_issue_comment",
-            "propose_doc_change",
-            "propose_issue_status_change",
-        ];
         PUBLISHED
             .iter()
             .filter_map(|n| catalog_entry(n))
