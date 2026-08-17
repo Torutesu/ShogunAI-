@@ -221,34 +221,6 @@ fn hex_nibble(b: u8) -> Option<u8> {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::normalize_select_kk_key;
-
-    #[test]
-    fn select_kk_accepts_plain_key() {
-        assert_eq!(
-            normalize_select_kk_key("sk-ant-api03-abc"),
-            Some("sk-ant-api03-abc".into())
-        );
-    }
-
-    #[test]
-    fn select_kk_decodes_hex_mistake() {
-        // "sk-ant-api03-test-key-value" hex-encoded (devs sometimes store like the DB key)
-        let hex = "736b2d616e742d61706930332d746573742d6b65792d76616c7565";
-        assert_eq!(
-            normalize_select_kk_key(hex),
-            Some("sk-ant-api03-test-key-value".into())
-        );
-    }
-
-    #[test]
-    fn select_kk_rejects_garbage() {
-        assert!(normalize_select_kk_key("not-a-key").is_none());
-    }
-}
-
 fn read_from_keychain(service: &str, account: &str) -> Result<Vec<u8>> {
     let query = query_dict(service, account, true);
     let mut ret: CFTypeRef = std::ptr::null();
@@ -320,4 +292,32 @@ fn query_dict(service: &str, account: &str, return_data: bool) -> CFDictionary<C
         ));
     }
     CFDictionary::from_CFType_pairs(&attrs)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_select_kk_key;
+
+    #[test]
+    fn select_kk_accepts_plain_key() {
+        assert_eq!(
+            normalize_select_kk_key("sk-ant-api03-abc"),
+            Some("sk-ant-api03-abc".into())
+        );
+    }
+
+    #[test]
+    fn select_kk_decodes_hex_mistake() {
+        // "sk-ant-api03-test-key-value" hex-encoded (devs sometimes store like the DB key)
+        let hex = "736b2d616e742d61706930332d746573742d6b65792d76616c7565";
+        assert_eq!(
+            normalize_select_kk_key(hex),
+            Some("sk-ant-api03-test-key-value".into())
+        );
+    }
+
+    #[test]
+    fn select_kk_rejects_garbage() {
+        assert!(normalize_select_kk_key("not-a-key").is_none());
+    }
 }
