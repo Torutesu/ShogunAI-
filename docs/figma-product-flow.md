@@ -36,8 +36,13 @@
 `Mac / Desktop 14″` コンポーネント（1512×982、ノッチ 200×32、メニューバー 38）のインスタンスの上に描かれている。
 
 ### 0 · Foundations — tokens & components
-`Brand / Kabuto` / `Mac / Desktop 14″` の2コンポーネントと、トークン一覧ボード。
+`Brand / Kabuto` / `Mac / Desktop 14″` / `Mac / Desktop 14″ Light` の3コンポーネントと、トークン一覧ボード。
 ローカル variable collection `SHOGUN Tokens`（色17 / 数値17）も同じ値で登録済み。
+
+**実素材（2026-08-17 追加）**: 壁紙は本物の **macOS Sequoia** 公式壁紙（Dark / Light、6K原本を
+image fill で取り込み）。メニューバーの Appleロゴ、Dock の Slack ピンホイール・Notion キューブ・
+Linear マークは実ロゴ SVG/PNG。Finder / Mail / Calendar / Terminal / ゴミ箱は実アイコンに忠実な
+ベクター再現。Dock・壁紙は shell コンポーネント側にあるため、**全フレームに自動反映**される。
 
 ### 1 · Download & install（4）
 
@@ -119,6 +124,19 @@ Deepgram 開示（`meetingDisclosure`）は 5.1・5.5・5.8・7.7 の4面に載�
 | 7.5 Approvals | `approvals*`（L3キュー）/ `composio*`（draft-stop） |
 | 7.6 Plan & billing | `plan*`（Standard $49 / Pro $99 年額・7日フルトライアル） |
 | 7.7 summaries · meetings · sounds | `ds*` / `meeting*` / `sound*` |
+
+### 8 · Light appearance（5）
+`styles.css` の `:root[data-appearance="light"]` トークン（glass `#FCFDFF.94` / shell `#F7F8FB` /
+ink `#1B1D22` / accent `#2F6FED` / live `#1F9E3C` / warn `#A4560A`）で、代表5面をライトで再現:
+回答＋出典 / Morning brief / Settings（Connections）/ オンボーディング / idle chin＋peek。
+**idle chin は両アピアランスで不透明黒**（ベゼルとして読める必要があり、ベゼルにテーマは無い）——
+8.5 はその設計事実を1枚にしたもの。
+
+### 9 · Concept — Liquid Glass（3）
+**仕様ではなく探索。** パネルを「レンズ」として扱う未来コンセプト:
+Figma の実 background blur ＋ スペキュラエッジ（inner shadow ハイライト）＋ 不透明シートなし。
+9.1 パネル全体 / 9.2 朝のブリーフを奥行きつきガラス積層で / 9.3 会議 HUD（黒カプセル廃止、
+キャプションは屈折ストリップ）。採用するなら SLO（ブラー負荷）と可読性の実測が先。
 
 ---
 
