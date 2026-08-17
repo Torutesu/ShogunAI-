@@ -36,12 +36,12 @@ pub const MAX_TOOL_USES: u32 = 8;
 /// never the end of the conversation.
 pub const TOOL_TIMEOUT_MS: u64 = 10_000;
 
-/// How many model turns may pass before the loop gives up regardless of the tool budget.
-///
-/// The tool budget alone does not terminate anything: a model that keeps asking for tools after
-/// the budget is spent would be handed "budget spent" forever. This is the backstop that makes
-/// termination a property of the loop rather than a hope about the model.
-const MAX_MODEL_TURNS: u32 = MAX_TOOL_USES + 3;
+/// Byte ceiling for one tool result handed back to the model (spec §7: a large mail thread or
+/// file must not blow the context window mid-loop, and the loop can carry a full tool budget of
+/// results at once). An oversized result is cut and the model is told it can narrow the query,
+/// rather than being handed a silently shortened answer to build on.
+// ponytail: flat 16 KiB truncation on a char boundary; proper normalization/compression is #63.
+pub const MAX_TOOL_RESULT_BYTES: usize = 16 * 1024;
 
 #[derive(Debug, Clone, Copy)]
 pub struct LoopLimits {
@@ -130,6 +130,10 @@ pub enum Refusal {
     /// Published, allowed, but the input did not describe a destination — an approval prompt with
     /// no recipient is not something a user could meaningfully confirm.
     NoDestination,
+    /// Published, allowed, addressed — but there is no content. The approval preview shows the
+    /// body verbatim (FR-AG-03), so an empty one is as unconfirmable as a missing recipient, and
+    /// letting it through would put a blank send in front of the confirm button.
+    NoContent,
     /// The catalog's kind and the permission table disagree about this row. Refused rather than
     /// resolved: guessing which side is right is how a send gets executed as if it were a read.
     Inconsistent,
@@ -164,6 +168,9 @@ impl Refusal {
             }
             Refusal::NoDestination => {
                 "Say who or what this is for — an approval needs a destination."
+            }
+            Refusal::NoContent => {
+                "Write the full content first — the user approves exactly what you write."
             }
             Refusal::Inconsistent => "That operation is not available.",
         }
@@ -228,7 +235,16 @@ pub fn classify_call(
         _ => match entry.kind {
             ToolKind::Read => CallVerdict::Read { service: entry.service, scope_op: entry.scope_op },
             ToolKind::Propose => match proposed_action(entry, input) {
-                Some(action) => CallVerdict::Propose { action, body: proposed_body(input) },
+                Some(action) => {
+                    // The schema requires `body`, and the guard mirrors the destination's: an
+                    // approval the user cannot read is as unconfirmable as one with no recipient.
+                    let body = proposed_body(input);
+                    if body.trim().is_empty() {
+                        CallVerdict::Refused(Refusal::NoContent)
+                    } else {
+                        CallVerdict::Propose { action, body }
+                    }
+                }
                 None => CallVerdict::Refused(Refusal::NoDestination),
             },
         },
@@ -267,7 +283,13 @@ pub fn run_read_loop<M: ModelTurnSource, R: ReadToolRunner, P: ProposalSink>(
     let mut proposed = 0u32;
     let mut hit_tool_budget = false;
 
-    for _ in 0..MAX_MODEL_TURNS {
+    // The tool budget alone does not terminate anything: a model that keeps asking for tools
+    // after the budget is spent would be handed "budget spent" forever. A few turns past the
+    // caller's actual budget — not the default const, or a raised budget punishes a well-behaved
+    // model — is the backstop that makes termination a property of the loop rather than a hope
+    // about the model.
+    let max_model_turns = limits.max_tool_uses.saturating_add(3);
+    for _ in 0..max_model_turns {
         match model.next_turn(&results)? {
             ModelTurn::Final(answer) => {
                 return Ok(LoopOutcome { answer, executed, proposed, hit_tool_budget })
@@ -294,18 +316,23 @@ pub fn run_read_loop<M: ModelTurnSource, R: ReadToolRunner, P: ProposalSink>(
                             },
                             // A proposal is not a result. It is flagged as an error so the model
                             // cannot report the send as done, and the text says what actually
-                            // happened: it is waiting for the user.
+                            // happened: it is waiting for the user. Only a queued proposal counts
+                            // — a failed enqueue put nothing in front of the user, so it must not
+                            // be reported as waiting, and it spends no budget (same rule as
+                            // refusals above).
                             CallVerdict::Propose { action, body } => {
-                                proposed += 1;
                                 match sink.propose(action, &body) {
-                                    Ok(()) => ToolResult {
-                                        id: use_.id,
-                                        content: "Prepared and waiting for the user's approval. \
-                                                  Nothing has been sent. Tell them it is ready to \
-                                                  approve."
-                                            .to_string(),
-                                        is_error: true,
-                                    },
+                                    Ok(()) => {
+                                        proposed += 1;
+                                        ToolResult {
+                                            id: use_.id,
+                                            content: "Prepared and waiting for the user's \
+                                                      approval. Nothing has been sent. Tell them \
+                                                      it is ready to approve."
+                                                .to_string(),
+                                            is_error: true,
+                                        }
+                                    }
                                     Err(why) => ToolResult {
                                         id: use_.id,
                                         content: format!(
@@ -319,9 +346,11 @@ pub fn run_read_loop<M: ModelTurnSource, R: ReadToolRunner, P: ProposalSink>(
                             CallVerdict::Read { service, scope_op } => {
                                 executed += 1;
                                 match runner.run(service, scope_op, &use_.input, limits.tool_timeout_ms) {
-                                    Ok(content) => {
-                                        ToolResult { id: use_.id, content, is_error: false }
-                                    }
+                                    Ok(content) => ToolResult {
+                                        id: use_.id,
+                                        content: truncate_result(content),
+                                        is_error: false,
+                                    },
                                     // A failure keeps the conversation alive: the model is told
                                     // this one call did not answer, and can try another way.
                                     Err(ToolRunError::Timeout) => ToolResult {
@@ -342,8 +371,33 @@ pub fn run_read_loop<M: ModelTurnSource, R: ReadToolRunner, P: ProposalSink>(
             }
         }
     }
-    // The model never settled. Ending the turn beats spinning: the caller shows what it has.
-    Err("the model kept asking for tools without answering".to_string())
+    // The model never settled. Ending the turn beats spinning: the caller shows what it has —
+    // and anything already queued for approval is named, because a give-up that discards the
+    // count would leave the user with pending approvals nobody told them about.
+    Err(if proposed > 0 {
+        format!(
+            "the model kept asking for tools without answering; {proposed} proposed action(s) \
+             are already waiting for the user's approval"
+        )
+    } else {
+        "the model kept asking for tools without answering".to_string()
+    })
+}
+
+/// Cut an oversized result at [`MAX_TOOL_RESULT_BYTES`], always on a char boundary — this product
+/// carries Japanese text, and a byte-index slice would panic mid-codepoint — with a marker that
+/// tells the model the result was cut and it can narrow the query.
+fn truncate_result(mut content: String) -> String {
+    if content.len() <= MAX_TOOL_RESULT_BYTES {
+        return content;
+    }
+    let mut end = MAX_TOOL_RESULT_BYTES;
+    while !content.is_char_boundary(end) {
+        end -= 1;
+    }
+    content.truncate(end);
+    content.push_str("\n[Result truncated. Narrow the query to see the rest.]");
+    content
 }
 
 #[cfg(test)]
@@ -490,6 +544,7 @@ mod tests {
         let reasons = [
             Refusal::UnknownTool,
             Refusal::NoDestination,
+            Refusal::NoContent,
             Refusal::Inconsistent,
             Refusal::Denied(DenyReason::NotConnected),
             Refusal::Denied(DenyReason::NeedsReauth),
@@ -735,7 +790,7 @@ mod tests {
         ]);
         let mut runner = RecordingRunner::ok();
         let mut sink = RecordingSink { queued: Vec::new(), refuse: Some("queue full".into()) };
-        run_read_loop(
+        let out = run_read_loop(
             &mut model,
             &mut runner,
             &mut sink,
@@ -748,6 +803,9 @@ mod tests {
         assert!(result.is_error);
         assert!(result.content.contains("Nothing has been sent"));
         assert!(runner.calls.is_empty());
+        // Nothing reached the queue, so nothing may be reported as waiting: a caller rendering
+        // "1 action waiting" from this count would send the user to an empty queue.
+        assert_eq!(out.proposed, 0);
     }
 
     #[test]
@@ -779,6 +837,49 @@ mod tests {
         .unwrap();
         assert!(sink.queued.is_empty(), "an approval with no recipient must not be queued");
         assert!(model.seen[1][0].content.contains("destination"));
+    }
+
+    #[test]
+    fn a_proposal_without_content_is_refused_before_the_queue() {
+        // `body` is required by the schema; a model omitting it is off-spec. The same argument as
+        // the destination guard: an approval showing nothing is not something a user could
+        // meaningfully confirm, so it must never reach the queue.
+        let mut model = ScriptedModel::new(vec![
+            ModelTurn::ToolUses(vec![ToolUse {
+                id: "p1".into(),
+                name: "propose_calendar_event".into(),
+                input: json!({ "title": "Vendor sync", "body": "   " }),
+            }]),
+            ModelTurn::Final("Let me write it out first.".into()),
+        ]);
+        let mut runner = RecordingRunner::ok();
+        let mut sink = RecordingSink::default();
+        run_read_loop(
+            &mut model,
+            &mut runner,
+            &mut sink,
+            &[connected(Service::GoogleCalendar)],
+            &ctx(),
+            LoopLimits::default(),
+        )
+        .unwrap();
+        assert!(sink.queued.is_empty(), "an approval with no content must not be queued");
+        // A body that is absent entirely is the same refusal as a blank one.
+        assert_eq!(
+            classify_call(
+                "propose_calendar_event",
+                &json!({ "title": "t" }),
+                &[connected(Service::GoogleCalendar)],
+                &ctx(),
+            ),
+            CallVerdict::Refused(Refusal::NoContent)
+        );
+        let result = &model.seen[1][0];
+        assert!(result.is_error);
+        assert!(result.content.contains("content"), "{}", result.content);
+        for leak in ["Composio", "MCP", "gate", "scope", "route", "transport", "plan"] {
+            assert!(!result.content.contains(leak), "refusal leaks {leak}: {}", result.content);
+        }
     }
 
     #[test]
@@ -822,6 +923,95 @@ mod tests {
         assert_eq!(out.proposed, 1);
         assert!(out.hit_tool_budget, "the third call is over the shared ceiling");
         assert_eq!(runner.calls.len(), 1);
+    }
+
+    #[test]
+    fn a_raised_tool_budget_raises_the_termination_backstop_with_it() {
+        // The backstop derives from the caller's actual limit, not the default const: a caller
+        // raising the budget must not get "never answered" from a model that answers the moment
+        // its budget is spent.
+        let limits = LoopLimits { max_tool_uses: 20, tool_timeout_ms: TOOL_TIMEOUT_MS };
+        let mut turns: Vec<ModelTurn> = (0..20)
+            .map(|i| ModelTurn::ToolUses(vec![use_(&format!("t{i}"), "list_calendar_events")]))
+            .collect();
+        turns.push(ModelTurn::Final("done".into()));
+        let mut model = ScriptedModel::new(turns);
+        let mut runner = RecordingRunner::ok();
+        let out = run_read_loop(
+            &mut model,
+            &mut runner,
+            &mut RecordingSink::default(),
+            &[connected(Service::GoogleCalendar)],
+            &ctx(),
+            limits,
+        )
+        .unwrap();
+        assert_eq!(out.executed, 20, "the raised budget is honoured in full");
+        assert_eq!(out.answer, "done");
+        assert!(!out.hit_tool_budget);
+    }
+
+    /// A model that proposes forever — the give-up path with approvals already queued.
+    struct NeverSettlesProposing;
+    impl ModelTurnSource for NeverSettlesProposing {
+        fn next_turn(&mut self, _results: &[ToolResult]) -> Result<ModelTurn, String> {
+            Ok(ModelTurn::ToolUses(vec![ToolUse {
+                id: "p".into(),
+                name: "propose_calendar_event".into(),
+                input: json!({ "title": "t", "body": "b" }),
+            }]))
+        }
+    }
+
+    #[test]
+    fn the_give_up_path_names_the_proposals_it_leaves_queued() {
+        // The give-up discards the turn, but the queued proposals are real: the error must say
+        // they are waiting, or the user ends up with pending approvals nobody told them about.
+        let mut sink = RecordingSink::default();
+        let err = run_read_loop(
+            &mut NeverSettlesProposing,
+            &mut RecordingRunner::ok(),
+            &mut sink,
+            &[connected(Service::GoogleCalendar)],
+            &ctx(),
+            LoopLimits::default(),
+        )
+        .unwrap_err();
+        assert!(err.contains("without answering"));
+        assert_eq!(sink.queued.len() as u32, MAX_TOOL_USES, "the budget bounded the queueing");
+        assert!(err.contains(&sink.queued.len().to_string()), "the count is missing: {err}");
+    }
+
+    #[test]
+    fn an_oversized_multibyte_result_is_truncated_on_a_char_boundary() {
+        // Japanese text is 3 bytes per char, so the raw ceiling lands mid-codepoint: the cut must
+        // land on a boundary or the string is corrupt (and a byte slice would panic).
+        let big = "あ".repeat(MAX_TOOL_RESULT_BYTES); // 3× the ceiling in bytes
+        let mut model = ScriptedModel::new(vec![
+            ModelTurn::ToolUses(vec![use_("t1", "list_calendar_events")]),
+            ModelTurn::Final("done".into()),
+        ]);
+        let mut runner = RecordingRunner { calls: Vec::new(), answer: Ok(big) };
+        run_read_loop(
+            &mut model,
+            &mut runner,
+            &mut RecordingSink::default(),
+            &[connected(Service::GoogleCalendar)],
+            &ctx(),
+            LoopLimits::default(),
+        )
+        .unwrap();
+        let result = &model.seen[1][0];
+        assert!(!result.is_error, "truncation is not a failure");
+        assert!(result.content.len() < MAX_TOOL_RESULT_BYTES + 100, "not actually truncated");
+        assert!(result.content.contains("truncated"), "the model must be told it was cut");
+        let body = result.content.split('\n').next().unwrap_or_default();
+        assert!(!body.is_empty() && body.chars().all(|c| c == 'あ'), "the cut corrupted the text");
+    }
+
+    #[test]
+    fn a_result_under_the_ceiling_is_passed_through_untouched() {
+        assert_eq!(truncate_result("2 events tomorrow".into()), "2 events tomorrow");
     }
 
     #[test]

@@ -71,7 +71,7 @@ export const STRINGS = {
     obConnectBody:
       "First-layer connections talk to each service from this Mac. Read-only to begin with — you can add sending later, once you trust it.",
     obDraftStop: "Drafts only",
-    obDraftStopBody: "Write replies and leave them in drafts. Nothing is ever sent for you.",
+    obDraftStopBody: "Write replies and leave them in drafts. Nothing is sent without your approval.",
     obDraftStopLocked: "Turning this off needs your consent first — that lives in Settings.",
     obConnectSkip: "You can connect these later in Settings.",
 
