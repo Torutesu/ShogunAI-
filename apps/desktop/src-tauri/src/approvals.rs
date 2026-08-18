@@ -420,7 +420,7 @@ pub mod mac {
     /// human approved the *edited* text — and is recorded as the L5 `edit_before_approve` signal
     /// (Plan D-2). Callers that pass nothing get the unchanged flow (`approve_unchanged`).
     #[tauri::command]
-    pub fn confirm_send(
+    pub async fn confirm_send(
         id: u64,
         edited_body: Option<String>,
         state: tauri::State<'_, ApprovalQueueState>,
@@ -428,24 +428,45 @@ pub mod mac {
         db: tauri::State<'_, Db>,
         app: tauri::AppHandle,
     ) -> Result<String, String> {
+        // Executes a Composio HTTP send / first-layer MCP write — network I/O. A sync command
+        // runs on the AppKit main thread, so a slow send froze the notch, the hover engine and
+        // every window until the request finished. spawn_blocking, same as `draft_reply`.
+        let queue = state.0.clone();
+        let runtime = connectors.0.clone();
+        let db = db.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            confirm_send_blocking(id, edited_body, &queue, &runtime, &db, &app)
+        })
+        .await
+        .map_err(|e| format!("confirm task failed: {e}"))?
+    }
+
+    fn confirm_send_blocking(
+        id: u64,
+        edited_body: Option<String>,
+        queue: &Arc<Mutex<ApprovalQueue>>,
+        runtime: &Arc<Mutex<Runtime>>,
+        db: &Db,
+        app: &tauri::AppHandle,
+    ) -> Result<String, String> {
         let now = db.now_ms().max(0) as u64;
         // Plan gate FIRST (issue #97), before the confirm dequeues anything: executing any L3 send
         // is agent execution — Pro / active trial only. Checked core-side on every confirm so a
         // trial expiring while a send sits in the queue still blocks it. The item stays pending
         // (it can be confirmed after an upgrade, until the 10-minute window expires it).
-        let ent = crate::entitlement::mac::current(&app);
+        let ent = crate::entitlement::mac::current(app);
         if !ent.agent_execution {
             return Ok("plan_required".into());
         }
         // Keep the runtime's WP-F double gate honest too: it re-checks authorize_op (which now
         // includes the plan) before any first-layer write executes.
-        if let Ok(mut rt) = connectors.0.lock() {
+        if let Ok(mut rt) = runtime.lock() {
             rt.set_plan(ent);
         }
         // Confirm + dequeue under the queue lock, then drop it before executing (execution locks the
         // connector runtime, a different lock — keep the two lock scopes disjoint).
         let confirmed = {
-            let mut q = state.0.lock().map_err(|_| "approval queue poisoned".to_string())?;
+            let mut q = queue.lock().map_err(|_| "approval queue poisoned".to_string())?;
             match q.confirm(ApprovalId(id), ConfirmIntent::DedicatedButton, now) {
                 Decision::Confirmed(cs) => cs,
                 Decision::RequiresDedicatedButton => return Ok("requires_button".into()),
@@ -491,13 +512,13 @@ pub mod mac {
         // Only Composio (email) sends are gated — first-layer sends bypass this entirely.
         use shogun_integrations::send_bridge::{route_send, SendRoute};
         if matches!(route_send(&confirmed.action), SendRoute::Composio) {
-            let policy = load_composio_policy(&app);
+            let policy = load_composio_policy(app);
             if !composio_send_allowed(policy, &ent) {
                 // Gate is closed: save a draft instead of sending. Body/recipient are NOT logged
                 // (invariant 7). The draft_fallback is the authoritative path for this so we reuse
                 // it directly.
                 let sink = db.traceability_sink();
-                match save_gmail_draft(&connectors.0, &sink, &confirmed.action, &confirmed.preview.full_body) {
+                match save_gmail_draft(runtime, &sink, &confirmed.action, &confirmed.preview.full_body) {
                     Ok(()) => {
                         return Ok("draft_saved: composio send is off (opt-in required)".into());
                     }
@@ -511,7 +532,7 @@ pub mod mac {
                 .filter(|k| !k.trim().is_empty())
                 .ok_or_else(|| "Composio key not set — add it in settings to send".to_string())?;
             let composio_user = {
-                let p = load_composio_policy(&app);
+                let p = load_composio_policy(app);
                 if !p.user_id.trim().is_empty() {
                     p.user_id
                 } else {
@@ -519,8 +540,7 @@ pub mod mac {
                 }
             };
             let composio = ComposioSendTransport::new(HttpComposioApi::new(composio_key)?, composio_user);
-            let runtime = connectors.0.clone();
-            let first_layer = FirstLayerSendTransport::new(&connectors.0);
+            let first_layer = FirstLayerSendTransport::new(runtime);
             let draft_runtime = runtime.clone();
             let draft_sink = db.traceability_sink();
             let routed = RoutedSendTransport::new(
@@ -538,7 +558,7 @@ pub mod mac {
         // We confirmed above (the `SendRoute::Composio` branch returned early) that this action is
         // NOT an email send, so `FirstLayerSendTransport` alone is the right executor — no Composio
         // client or key is needed or consulted.
-        let first_layer = FirstLayerSendTransport::new(&connectors.0);
+        let first_layer = FirstLayerSendTransport::new(runtime);
         match execute_send(&confirmed, &first_layer, &db.traceability_sink()) {
             SendExecOutcome::Sent => Ok("sent".into()),
             SendExecOutcome::Failed(e) => Ok(format!("failed:{e}")),

@@ -201,37 +201,57 @@ pub mod mac {
 
             let consent = load_composio_policy(&app).consent_acknowledged;
             let now = db.now_ms();
-            if let Ok(mut rt) = state.lock() {
-                // Plan gate (issue #97): refresh the entitlements before each tick so the service
-                // gate sees the current plan — an expired trial stops the read-sync (first-layer
-                // reads are Standard-and-up; expired has no active plan).
-                rt.set_plan(crate::entitlement::mac::current(&app));
-                for svc in rt.services_due(now, DEFAULT_SYNC_INTERVAL_MS) {
-                    // Gate: a Gmail sync sends the user_id to Composio (third party) — skip it
-                    // until the user has granted Composio consent. Other services are direct.
-                    if svc == Service::Gmail && !consent {
-                        eprintln!("[connectors] gmail sync skipped — Composio consent not granted");
-                        continue;
-                    }
-                    match rt.sync_service(svc, now, &db) {
-                        Ok(rep) => {
-                            eprintln!(
-                                "[connectors] {} synced (+{} new)",
-                                svc.source_str(),
-                                rep.inserted
+            // Snapshot what's due under a short lock, then re-acquire per service. The runtime
+            // mutex is shared with confirm_send / connectors_list / full_ui_view — several of
+            // them on the main thread — and holding it across the whole burst froze an L3
+            // confirmation behind every slow sync. Per-service acquisition bounds the wait to
+            // one service's fetch instead of the burst; the snapshot may go slightly stale
+            // between services, which only risks one redundant (freshness-gated) sync.
+            let due: Vec<Service> = match state.lock() {
+                Ok(mut rt) => {
+                    // Plan gate (issue #97): refresh the entitlements before each tick so the
+                    // service gate sees the current plan — an expired trial stops the read-sync
+                    // (first-layer reads are Standard-and-up; expired has no active plan).
+                    rt.set_plan(crate::entitlement::mac::current(&app));
+                    rt.services_due(now, DEFAULT_SYNC_INTERVAL_MS)
+                }
+                Err(_) => continue,
+            };
+            for svc in due {
+                // Gate: a Gmail sync sends the user_id to Composio (third party) — skip it
+                // until the user has granted Composio consent. Other services are direct.
+                if svc == Service::Gmail && !consent {
+                    eprintln!("[connectors] gmail sync skipped — Composio consent not granted");
+                    continue;
+                }
+                let outcome = match state.lock() {
+                    Ok(mut rt) => rt.sync_service(svc, now, &db),
+                    Err(_) => continue,
+                };
+                // Trace whenever the request actually left the device — success OR transport
+                // failure (a 5xx / expired key still carried the user_id across the boundary).
+                // Only a gate denial (Denied) means nothing egressed and nothing is recorded.
+                match outcome {
+                    Ok(rep) => {
+                        eprintln!(
+                            "[connectors] {} synced (+{} new)",
+                            svc.source_str(),
+                            rep.inserted
+                        );
+                        record_read_trace(&db, svc);
+                        // context_updated（#61）: read-sync 完了を匿名計測。
+                        if let Some(analytics) = app.try_state::<crate::analytics::Analytics>() {
+                            analytics.capture(
+                                "context_updated",
+                                crate::analytics::context_updated_props(svc.source_str(), rep.inserted as u64),
                             );
+                        }
+                    }
+                    Err(e) => {
+                        if matches!(e, shogun_mcp::sync::SyncFailure::Transport(_)) {
                             record_read_trace(&db, svc);
-                            // context_updated（#61）: read-sync 完了を匿名計測。
-                            if let Some(analytics) = app.try_state::<crate::analytics::Analytics>() {
-                                analytics.capture(
-                                    "context_updated",
-                                    crate::analytics::context_updated_props(svc.source_str(), rep.inserted as u64),
-                                );
-                            }
                         }
-                        Err(e) => {
-                            eprintln!("[connectors] {} sync failed: {e:?}", svc.source_str());
-                        }
+                        eprintln!("[connectors] {} sync failed: {e:?}", svc.source_str());
                     }
                 }
             }
@@ -406,14 +426,32 @@ pub mod mac {
     /// On-demand read of a specific item (§6.9 read_on_demand, L2): fetch it now and ingest into
     /// memory. Returns how many new items were ingested.
     #[tauri::command]
-    pub fn fetch_on_demand(
+    pub async fn fetch_on_demand(
         service: String,
         query: String,
         app: tauri::AppHandle,
         state: tauri::State<'_, ConnectorState>,
         db: tauri::State<'_, Db>,
     ) -> Result<u64, String> {
-        let svc = from_source(&service).ok_or_else(|| format!("unknown service: {service}"))?;
+        // A network fetch — a sync command would run it on the AppKit main thread and freeze the
+        // panel for the duration of a slow service. spawn_blocking, same as `draft_reply`.
+        let runtime = state.0.clone();
+        let db = db.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            fetch_on_demand_blocking(&service, &query, &app, &runtime, &db)
+        })
+        .await
+        .map_err(|e| format!("fetch task failed: {e}"))?
+    }
+
+    fn fetch_on_demand_blocking(
+        service: &str,
+        query: &str,
+        app: &tauri::AppHandle,
+        state: &Arc<Mutex<Runtime>>,
+        db: &Db,
+    ) -> Result<u64, String> {
+        let svc = from_source(service).ok_or_else(|| format!("unknown service: {service}"))?;
         if !transport_serves(svc) {
             return Err(format!("{service} is not available yet"));
         }
@@ -421,22 +459,29 @@ pub mod mac {
         // on-demand fetch sends the user_id + query to Composio (third party) exactly like a poll
         // does, so it must be impossible without the user's explicit Composio consent. First-layer
         // direct reads (Calendar/Drive) cross no third party and need no Composio consent.
-        if svc == Service::Gmail && !load_composio_policy(&app).consent_acknowledged {
+        if svc == Service::Gmail && !load_composio_policy(app).consent_acknowledged {
             return Err("Composio consent has not been granted".into());
         }
-        let mut rt = state.0.lock().map_err(|_| "runtime lock poisoned".to_string())?;
+        let mut rt = state.lock().map_err(|_| "runtime lock poisoned".to_string())?;
         // Plan gate (issue #97): refresh entitlements so the service gate sees the current plan
         // (reads are Standard-and-up; an expired trial is denied).
-        rt.set_plan(crate::entitlement::mac::current(&app));
-        match rt.fetch_on_demand(svc, &query, &*db) {
+        rt.set_plan(crate::entitlement::mac::current(app));
+        // Trace whenever the request actually left the device — success OR transport failure
+        // (a 5xx still carried the user_id + query across the Composio boundary; tracing only
+        // on Ok hid that egress from the traceability screen). A gate denial (Denied) means
+        // nothing egressed and records nothing. We record THAT a read happened, never the query
+        // or fetched body (invariant 3 / FR-TR-03).
+        match rt.fetch_on_demand(svc, query, db) {
             Ok(report) => {
-                // The same read-egress boundary the sync poller records — an on-demand fetch must
-                // be just as visible in the traceability screen. We record THAT a read happened,
-                // never the query or fetched body (invariant 3 / FR-TR-03; empty chunk).
-                record_read_trace(&db, svc);
+                record_read_trace(db, svc);
                 Ok(report.inserted as u64)
             }
-            Err(e) => Err(format!("{e:?}")),
+            Err(e) => {
+                if matches!(e, shogun_mcp::sync::SyncFailure::Transport(_)) {
+                    record_read_trace(db, svc);
+                }
+                Err(format!("{e:?}"))
+            }
         }
     }
 

@@ -716,16 +716,23 @@ pub mod mac {
     /// also the only honest check available: the alternative is reading the delegate's credential
     /// file, which SHOGUN does not do.
     #[tauri::command]
-    pub fn verify_subscription_delegate(id: String) -> Result<DelegateInfo, String> {
-        let d = Delegate::parse(&id).ok_or_else(|| format!("unknown delegate: {id}"))?;
-        let state = subscription::verify(&ProcessRunner, d);
-        eprintln!("[inline] verified {} → {}", d.id(), state.tag());
-        // A successful verify clears a stale "credential rejected" pill for the active provider.
-        if state.is_usable() && current_settings().provider == d.id() {
-            KEY_REJECTED.store(false, std::sync::atomic::Ordering::Relaxed);
-            HAS_KEY.store(true, std::sync::atomic::Ordering::Relaxed);
-        }
-        Ok(delegate_info(d, &state))
+    pub async fn verify_subscription_delegate(id: String) -> Result<DelegateInfo, String> {
+        // Runs a full completion through the vendor CLI subprocess — seconds of wall time. A sync
+        // command executes on the AppKit main thread, so "Test connection" froze the whole UI
+        // for the duration. spawn_blocking, same as `draft_reply`.
+        tauri::async_runtime::spawn_blocking(move || {
+            let d = Delegate::parse(&id).ok_or_else(|| format!("unknown delegate: {id}"))?;
+            let state = subscription::verify(&ProcessRunner, d);
+            eprintln!("[inline] verified {} → {}", d.id(), state.tag());
+            // A successful verify clears a stale "credential rejected" pill for the active provider.
+            if state.is_usable() && current_settings().provider == d.id() {
+                KEY_REJECTED.store(false, std::sync::atomic::Ordering::Relaxed);
+                HAS_KEY.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+            Ok(delegate_info(d, &state))
+        })
+        .await
+        .map_err(|e| format!("verify task failed: {e}"))?
     }
 
     /// Opt-in echo mock, for exercising the AX read→insert loop on device without a key.

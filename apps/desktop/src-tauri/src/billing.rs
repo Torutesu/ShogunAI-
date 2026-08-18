@@ -339,37 +339,52 @@ pub mod mac {
     /// subscription, must leave whatever was already on this Mac exactly as it was. The key
     /// reaches the Keychain only after the server has accepted it.
     #[tauri::command]
-    pub fn billing_activate(app: AppHandle, license_key: String) -> BillingView {
+    pub async fn billing_activate(app: AppHandle, license_key: String) -> BillingView {
+        // Verifies against the licence API — network I/O. A sync command runs on the AppKit main
+        // thread, so activation froze the panel and every window for the round-trip.
+        let fallback = app.clone();
+        tauri::async_runtime::spawn_blocking(move || billing_activate_blocking(&app, &license_key))
+            .await
+            .unwrap_or_else(|e| view(&fallback, Some(format!("activation task failed: {e}"))))
+    }
+
+    fn billing_activate_blocking(app: &AppHandle, license_key: &str) -> BillingView {
         let key = license_key.trim().to_string();
         if key.is_empty() {
-            return view(&app, Some("enter your licence key".into()));
+            return view(app, Some("enter your licence key".into()));
         }
-        match check(&app, &key) {
+        match check(app, &key) {
             Ok(Outcome::Entitled(snap)) => {
                 if let Err(e) = keychain_store::set_generic_secret(LICENSE_KEY_ACCOUNT, key.as_bytes())
                 {
-                    return view(&app, Some(format!("could not store the licence: {e}")));
+                    return view(app, Some(format!("could not store the licence: {e}")));
                 }
-                match write_snapshot(&app, &snap) {
-                    Ok(()) => view(&app, None),
-                    Err(e) => view(&app, Some(e)),
+                match write_snapshot(app, &snap) {
+                    Ok(()) => view(app, None),
+                    Err(e) => view(app, Some(e)),
                 }
             }
-            Ok(other) => view(&app, Some(other.message())),
-            Err(e) => view(&app, Some(e)),
+            Ok(other) => view(app, Some(other.message())),
+            Err(e) => view(app, Some(e)),
         }
     }
 
     /// Re-verify now (the Refresh button, and the 24h timer).
     #[tauri::command]
-    pub fn billing_refresh(app: AppHandle) -> BillingView {
-        let Some(key) = stored_license_key() else {
-            return view(&app, Some("no licence on this Mac".into()));
-        };
-        match reverify(&app, &key) {
-            Ok(()) => view(&app, None),
-            Err(e) => view(&app, Some(e)),
-        }
+    pub async fn billing_refresh(app: AppHandle) -> BillingView {
+        // Same as `billing_activate`: licence-API round-trip, off the main thread.
+        let fallback = app.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            let Some(key) = stored_license_key() else {
+                return view(&app, Some("no licence on this Mac".into()));
+            };
+            match reverify(&app, &key) {
+                Ok(()) => view(&app, None),
+                Err(e) => view(&app, Some(e)),
+            }
+        })
+        .await
+        .unwrap_or_else(|e| view(&fallback, Some(format!("refresh task failed: {e}"))))
     }
 
     /// Remove the licence from this Mac (moving to another machine). Local memory is untouched —
@@ -386,27 +401,37 @@ pub mod mac {
     /// The app sends the plan *name*; the Price ID stays on the server (issue #8 セキュリティ), and
     /// the card form is Stripe's, in the browser — never in this window.
     #[tauri::command]
-    pub fn billing_open_checkout(
+    pub async fn billing_open_checkout(
         plan: String,
         interval: String,
         app: AppHandle,
     ) -> Result<String, String> {
-        record_billing_egress(&app, "stripe_checkout");
-        let url = license_client::checkout_url(&api_origin(), &plan, &interval)
-            .map_err(|e| e.message())?;
-        open_in_browser(&url)?;
-        Ok(url)
+        // `checkout_url` asks the licence API for the session URL — network, off the main thread.
+        tauri::async_runtime::spawn_blocking(move || {
+            record_billing_egress(&app, "stripe_checkout");
+            let url = license_client::checkout_url(&api_origin(), &plan, &interval)
+                .map_err(|e| e.message())?;
+            open_in_browser(&url)?;
+            Ok(url)
+        })
+        .await
+        .map_err(|e| format!("checkout task failed: {e}"))?
     }
 
     /// Open the Stripe Customer Portal — cancellation, plan changes and card updates all live
     /// there (issue #8: 90%+ of billing ops off our plate).
     #[tauri::command]
-    pub fn billing_open_portal(app: AppHandle) -> Result<String, String> {
-        let key = stored_license_key().ok_or_else(|| "no licence on this Mac".to_string())?;
-        record_billing_egress(&app, "stripe_portal");
-        let url = license_client::portal_url(&api_origin(), &key).map_err(|e| e.message())?;
-        open_in_browser(&url)?;
-        Ok(url)
+    pub async fn billing_open_portal(app: AppHandle) -> Result<String, String> {
+        // `portal_url` asks the licence API for the session URL — network, off the main thread.
+        tauri::async_runtime::spawn_blocking(move || {
+            let key = stored_license_key().ok_or_else(|| "no licence on this Mac".to_string())?;
+            record_billing_egress(&app, "stripe_portal");
+            let url = license_client::portal_url(&api_origin(), &key).map_err(|e| e.message())?;
+            open_in_browser(&url)?;
+            Ok(url)
+        })
+        .await
+        .map_err(|e| format!("portal task failed: {e}"))?
     }
 
     fn open_in_browser(url: &str) -> Result<(), String> {
