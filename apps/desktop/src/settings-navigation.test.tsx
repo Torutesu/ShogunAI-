@@ -2,7 +2,11 @@ import { useState } from "react";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { SettingsSectionNav, type SettingsSectionId } from "./App";
+import {
+  SettingsSectionNav,
+  shouldMountSettingsSection,
+  type SettingsSectionId,
+} from "./App";
 
 afterEach(cleanup);
 
@@ -12,6 +16,12 @@ function Harness(): JSX.Element {
 }
 
 describe("settings section navigation", () => {
+  it("mounts only the active section so opening Settings does not load every page", () => {
+    expect(shouldMountSettingsSection("general", "general")).toBe(true);
+    expect(shouldMountSettingsSection("general", "memory")).toBe(false);
+    expect(shouldMountSettingsSection("voice", "voice")).toBe(true);
+  });
+
   it("shows focused pages instead of one undifferentiated settings list", () => {
     render(<Harness />);
 

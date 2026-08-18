@@ -1498,24 +1498,10 @@ body {
   border-bottom: 1px solid var(--line);
   border-radius: 0;
   padding: 18px 2px 16px;
-  animation: set-reveal var(--set-motion) both;
 }
 .set:last-child {
   border-bottom: none;
   padding-bottom: 12px;
-}
-.settings__slot > .set {
-  animation-delay: 20ms;
-}
-@keyframes set-reveal {
-  from {
-    opacity: 0;
-    transform: translateY(5px);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
 }
 .set__label {
   font-size: 10px;

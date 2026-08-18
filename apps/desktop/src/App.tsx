@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
@@ -4881,6 +4881,17 @@ export type SettingsSectionId =
   | "controls"
   | "privacy";
 
+const SettingsActiveSectionContext = createContext<SettingsSectionId>("general");
+
+/** Hidden settings sections stay unmounted. Besides avoiding wasted React work, this prevents
+ *  every section from starting its Keychain/database/backend reads when Settings first opens. */
+export function shouldMountSettingsSection(
+  active: SettingsSectionId,
+  section: SettingsSectionId,
+): boolean {
+  return active === section;
+}
+
 type SettingsSectionMeta = {
   id: SettingsSectionId;
   label: string;
@@ -4975,7 +4986,9 @@ function SettingsSlot({
 }: {
   section: SettingsSectionId;
   children: JSX.Element;
-}): JSX.Element {
+}): JSX.Element | null {
+  const activeSection = useContext(SettingsActiveSectionContext);
+  if (!shouldMountSettingsSection(activeSection, section)) return null;
   return <div className={`settings__slot settings__slot--${section}`}>{children}</div>;
 }
 
@@ -5097,7 +5110,9 @@ function Settings(props: {
       .then((b) => setBinds({ ...DEFAULT_BINDS, ...b }))
       .catch(() => undefined);
   }, []);
-  useEffect(refresh, [refresh]);
+  useEffect(() => {
+    if (activeSection === "controls") refresh();
+  }, [activeSection, refresh]);
 
   // Capture the new combo at the WINDOW level (capture phase). Relying on the recording button's
   // own focus proved fragile on device — clicks landed but keystrokes never did, so rebinding
@@ -5214,6 +5229,7 @@ function Settings(props: {
             <h2>{activeSectionMeta.label}</h2>
             <p>{activeSectionMeta.description}</p>
           </div>
+          <SettingsActiveSectionContext.Provider value={activeSection}>
           <div className="settings__section-body">
         <SettingsSlot section="general"><ApprovalsSection /></SettingsSlot>
         {/* Plan state first: when a trial has ended, everything below it is locked, and the
@@ -5446,6 +5462,7 @@ function Settings(props: {
         </section>
         </SettingsSlot>
           </div>
+          </SettingsActiveSectionContext.Provider>
         </main>
       </div>
     </div>
