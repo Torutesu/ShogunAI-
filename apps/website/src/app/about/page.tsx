@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { PageHeader, PageShell } from '@/components/PageShell';
 import { Card } from '@/components/ui/card';
 import { getI18n } from '@/i18n/server';
+import { isLocale } from '@/i18n/config';
 
 export const dynamic = 'force-dynamic';
 
@@ -11,10 +12,14 @@ export const metadata: Metadata = {
   alternates: { canonical: '/about' },
 };
 
-export default async function AboutPage() {
-  const { t } = await getI18n();
+export default async function AboutPage({ searchParams }: { searchParams: Promise<{ _locale?: string }> }) {
+  const requested = (await searchParams)._locale;
+  const localeOverride = isLocale(requested) ? requested : undefined;
+  const { t } = await getI18n(localeOverride);
+  // Only the /[locale]/about entry point pins a locale, so only it gets prefixed
+  // nav links; the un-prefixed route keeps resolving the visitor's locale itself.
   return (
-    <PageShell>
+    <PageShell locale={localeOverride}>
       <PageHeader eyebrow={t.about.eyebrow} title={t.about.title} sub={t.about.sub} />
 
       <section className="py-[clamp(48px,7vw,88px)]">
