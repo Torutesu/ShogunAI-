@@ -159,10 +159,9 @@ interface StateView {
 const IN_TAURI =
   typeof window !== "undefined" && ("__TAURI_INTERNALS__" in window || "__TAURI__" in window);
 
-// Window sizing. Collapsed = just the handle strip. Open (chat) starts as a wide short bar; the
-// Settings view opens much taller so its stacked sections fit without feeling clipped. Both open
-// views are user-resizable via the corner grip, and each remembers its own size across the
-// Rust-driven respawns.
+// Window sizing. Collapsed = just the handle strip. Chat and Settings are two faces of one panel,
+// so switching between them must preserve the exact user-resized frame. The overview hub keeps a
+// separate larger size because it is a distinct workspace.
 const W = 560;
 const H_OPEN = 360;
 /** Hardware notch cutout (safeAreaInsets.top). Welded black fills this — labels do not. */
@@ -194,7 +193,6 @@ const STICKY_INLINE_PHASES = new Set<InlineStatus["phase"]>(["no_key", "key_reje
  *  would only ever punish that path. Waiting is no longer the only option anyway: Stop is live for
  *  the whole turn. */
 const CHAT_SILENCE_MS = 90_000;
-const H_SETTINGS = 460; // taller default so setting groups fit; body scrolls; clamped to screen
 const H_HUB = 560; // the in-panel hub draws the overview panes (cards, tables); give them room
 const MIN_W = 460;
 const MIN_H = 240;
@@ -204,9 +202,16 @@ const W_HANDLE_FALLBACK = 180;
 /** Quiet hiding Idle — hardware-notch-sized weld when frontmost is self / unknown. */
 const W_HIDE = 180;
 
-interface Size {
+export interface Size {
   w: number;
   h: number;
+}
+
+export type OpenPanelView = "chat" | "settings" | "hub";
+
+/** Chat and Settings share one frame. Only Overview owns a separate remembered workspace size. */
+export function panelSizeForView(view: OpenPanelView, chatSize: Size, hubSize: Size): Size {
+  return view === "hub" ? hubSize : chatSize;
 }
 
 // Hard ceiling: panel cannot exceed ¾ of the display the webview is on. `window.screen` tracks the
@@ -452,17 +457,12 @@ export function App(): JSX.Element {
     const s = loadJson<Size>("shogun.size.chat", { w: W, h: H_OPEN });
     return clampSize(s.w, s.h);
   });
-  const [setSize, setSetSize] = useState<Size>(() => {
-    const s = loadJson<Size>("shogun.size.settings", { w: W, h: H_SETTINGS });
-    return clampSize(s.w, s.h);
-  });
   const [hubSize, setHubSize] = useState<Size>(() => {
     const s = loadJson<Size>("shogun.size.hub", { w: W, h: H_HUB });
     return clampSize(s.w, s.h);
   });
   useEffect(() => saveJson("shogun.pinned", pinned), [pinned]);
   useEffect(() => saveJson("shogun.size.chat", chatSize), [chatSize]);
-  useEffect(() => saveJson("shogun.size.settings", setSize), [setSize]);
   useEffect(() => saveJson("shogun.size.hub", hubSize), [hubSize]);
 
   // Size the window to match collapsed vs expanded. Pass explicit `open` when a state setter in the
@@ -475,11 +475,13 @@ export function App(): JSX.Element {
       // Collapsed: a provisional pill-sized window; the measuring effect below tightens it to the
       // pill's real bounds so the transparent remainder never eats clicks.
       if (!isOpen) void applyPanelSize(W_HANDLE_FALLBACK, H_HANDLE);
-      else if (isSettings) void applyPanelSize(setSize.w, setSize.h);
-      else if (isHub) void applyPanelSize(hubSize.w, hubSize.h);
-      else void applyPanelSize(chatSize.w, chatSize.h);
+      else {
+        const view: OpenPanelView = isSettings ? "settings" : isHub ? "hub" : "chat";
+        const size = panelSizeForView(view, chatSize, hubSize);
+        void applyPanelSize(size.w, size.h);
+      }
     },
-    [open, showSettings, showHub, chatSize, setSize, hubSize],
+    [open, showSettings, showHub, chatSize, hubSize],
   );
   // The boot/summon listeners live in a run-once effect; a ref keeps them calling the LATEST sizer
   // instead of a stale closure captured at mount.
@@ -488,8 +490,8 @@ export function App(): JSX.Element {
 
   // Live resize from the corner grip. During the drag we only resize the native panel (the webview
   // reflows via CSS — no React state churn), rAF-throttled so we don't flood the IPC bridge. The
-  // per-view size is committed to state (and persisted) once on release. Always castle-centre
-  // anchor so width grows/shrinks symmetrically under the notch.
+  // shared Chat/Settings size (or separate Overview size) is committed once on release. Always
+  // castle-centre anchor so width grows/shrinks symmetrically under the notch.
   const liveSize = useRef<Size | null>(null);
   const raf = useRef<number | null>(null);
   const onResizeLive = useCallback((w: number, h: number): void => {
@@ -512,10 +514,9 @@ export function App(): JSX.Element {
     liveSize.current = null;
     if (!s) return;
     void applyPanelSize(s.w, s.h, "center");
-    if (showSettings) setSetSize(s);
-    else if (showHub) setHubSize(s);
+    if (showHub) setHubSize(s);
     else setChatSize(s);
-  }, [showSettings, showHub]);
+  }, [showHub]);
   // Active agent provider, shown on the composer's model pill (mirrors Settings → Model).
   const [provider, setProvider] = useState<string>("anthropic");
   const threadRef = useRef<HTMLDivElement>(null);
@@ -999,11 +1000,15 @@ export function App(): JSX.Element {
       setNotchSm("idle");
       return;
     }
-    // Morph from the size the panel is ACTUALLY at (settings/hub have their own), and clear the
-    // view flags here so every collapse path — pointer-leave, Rust idle/hidden, voice — converges
-    // on the same reset; a stale showHub would otherwise re-open the hub at chat size (see
-    // expand()).
-    const cur = showSettings ? setSize : showHub ? hubSize : chatSize;
+    // Morph from the size the panel is ACTUALLY at (Overview has its own; Settings shares Chat),
+    // and clear the view flags here so every collapse path — pointer-leave, Rust idle/hidden,
+    // voice — converges on the same reset; a stale showHub would otherwise re-open the hub at chat
+    // size (see expand()).
+    const cur = panelSizeForView(
+      showSettings ? "settings" : showHub ? "hub" : "chat",
+      chatSize,
+      hubSize,
+    );
     setShowSettings(false);
     setShowHub(false);
     // A collapsed card is done: it was marked seen on open, so the next expand goes back to
@@ -1019,7 +1024,7 @@ export function App(): JSX.Element {
       setNotchSm("idle");
       sizeForViewRef.current({ open: false });
     }, COLLAPSE_ANIM_MS);
-  }, [applyMorphScale, chatSize, setSize, hubSize, showSettings, showHub]);
+  }, [applyMorphScale, chatSize, hubSize, showSettings, showHub]);
   beginCollapseRef.current = beginCollapse;
 
   const collapse = (): void => {
@@ -1041,9 +1046,13 @@ export function App(): JSX.Element {
     }
     setCollapsing(false);
     setNotchSm("expanded");
-    // The view flags survive a deliberate open (hotkey while settings were up), so open at THAT
-    // view's size — a chat-sized settings panel clips its groups.
-    const cur = showSettings ? setSize : showHub ? hubSize : chatSize;
+    // View flags survive a deliberate open. Settings reuses the user's Chat frame; Overview
+    // restores its separate workspace frame.
+    const cur = panelSizeForView(
+      showSettings ? "settings" : showHub ? "hub" : "chat",
+      chatSize,
+      hubSize,
+    );
     applyMorphScale(cur.w, cur.h);
     // 1) Grow NSPanel to full frame. 2) Pose visible shell at Idle scale. 3) Flip to Expanded
     // so transform actually transitions (resize+class same tick kills the morph).
@@ -1063,7 +1072,7 @@ export function App(): JSX.Element {
         }, OPEN_ANIM_MS);
       });
     })();
-  }, [applyMorphScale, chatSize, setSize, hubSize, showSettings, showHub]);
+  }, [applyMorphScale, chatSize, hubSize, showSettings, showHub]);
   expandRef.current = expand;
 
   useEffect(
@@ -1774,7 +1783,11 @@ export function App(): JSX.Element {
         )}
         </div>
         <ResizeGrip
-          current={() => (showSettings ? setSize : showHub ? hubSize : chatSize)}
+          current={() => panelSizeForView(
+            showSettings ? "settings" : showHub ? "hub" : "chat",
+            chatSize,
+            hubSize,
+          )}
           onResize={onResizeLive}
           onCommit={onResizeCommit}
         />
