@@ -71,7 +71,7 @@ shogun-license = { path = "../../../crates/shogun-license" }
 objc2 = "0.6"
 block2 = "0.6" # ObjC blocks for NSWorkspace notification observers (space-change watcher)
 objc2-app-kit = { version = "0.3", features = [
-    "NSResponder", "NSWindow", "NSView", "NSPanel", "NSScreen",
+    "NSResponder", "NSWindow", "NSView", "NSPanel", "NSScreen", "NSGraphics",
     "NSWorkspace", "NSRunningApplication", "libc",
     # UI cue playback (#49). NSSound plays the embedded WAVs through the normal output at the
     # app's volume — the alert-sound path would take the volume control away from the user.
