@@ -408,9 +408,13 @@ mod mac {
                                     &key,
                                     win_title.as_deref().unwrap_or(""),
                                 );
+                                // key_len, not the key: the thread key embeds the window title,
+                                // which is captured user content (mail subjects, document names)
+                                // and must not reach the log — same rule as the meeting driver's
+                                // title_len (コード規約).
                                 eprintln!(
-                                    "[capture] reply context warmed for {} in {}ms ({} turn(s))",
-                                    key,
+                                    "[capture] reply context warmed (key_len {}) in {}ms ({} turn(s))",
+                                    key.len(),
                                     ctx.build_ms,
                                     ctx.turns.len()
                                 );

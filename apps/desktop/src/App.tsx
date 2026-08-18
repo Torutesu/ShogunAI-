@@ -1812,7 +1812,13 @@ function ActionsRow({
     }
     setBusy(idx);
     setConfirm(null);
-    void invoke<string>("run_notch_action", { index: idx })
+    // The rendered label/level ride along so Rust can refuse a click whose slot was re-ranked
+    // to a different action between paint and press (the staleness guard).
+    void invoke<string>("run_notch_action", {
+      index: idx,
+      expectedLabel: a.label,
+      expectedLevel: a.level,
+    })
       .then((r) => {
         if (r === "executed") flash(`${t.actionDone} — ${a.label}`, "ok");
         else if (r.startsWith("confirm:")) setConfirm({ idx, id: Number(r.slice("confirm:".length)) });
@@ -1820,7 +1826,7 @@ function ActionsRow({
           flash(t.actionQueued, "ok");
           onQueued();
         } else if (r === "rejected") flash(t.actionRejected, "warn");
-        else if (r === "no-action") flash(t.actionGone, "warn");
+        else if (r === "no-action" || r === "stale") flash(t.actionGone, "warn");
         else flash(t.actionFailed, "warn");
       })
       .catch(() => flash(t.actionFailed, "warn"))

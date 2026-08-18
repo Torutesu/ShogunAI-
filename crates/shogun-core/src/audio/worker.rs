@@ -22,6 +22,20 @@ pub trait SegmentSink {
         confidence: f64,
         translation: Option<&str>,
     );
+
+    /// Observed input level: the RMS of one consumed frame. Default no-op — the meeting
+    /// overlay's waveform meter is the only consumer; test sinks and dictation ignore it.
+    /// Level is derived and dropped with the frame; no waveform is retained (invariant 2).
+    fn level(&mut self, _rms: f32) {}
+}
+
+/// RMS of one frame, for [`SegmentSink::level`].
+fn frame_rms(samples: &[f32]) -> f32 {
+    if samples.is_empty() {
+        return 0.0;
+    }
+    let sum: f32 = samples.iter().map(|s| s * s).sum();
+    (sum / samples.len() as f32).sqrt()
 }
 
 pub struct Worker<S: AudioSource, T: Transcriber> {
@@ -99,6 +113,7 @@ impl<S: AudioSource, T: Transcriber> Worker<S, T> {
         let mut consumed = 0;
         while let Some(Frame { speaker, samples }) = self.source.try_recv() {
             consumed += 1;
+            sink.level(frame_rms(&samples));
             let vad = match speaker {
                 Speaker::Me => &mut self.vad_me,
                 Speaker::Other => &mut self.vad_other,

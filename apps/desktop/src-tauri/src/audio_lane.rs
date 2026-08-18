@@ -77,9 +77,42 @@ struct DbSink {
     /// When true, JA→EN is Select KK (Deepgram has no whisper translate). When false, whisper may
     /// own that lane in-process.
     select_kk_owns_en: bool,
+    /// Last `meeting_level` emit, for throttling (frames arrive far faster than the meter paints).
+    last_level_emit_ms: i64,
+}
+
+/// Payload of the `meeting_level` event the recording pill's waveform listens for.
+#[derive(Clone, serde::Serialize)]
+struct LevelEvent {
+    rms: f32,
+}
+
+/// RMS of one frame — the level the pill's bars render (mirrors voice_lane's meter).
+fn frame_rms(samples: &[f32]) -> f32 {
+    if samples.is_empty() {
+        return 0.0;
+    }
+    let sum: f32 = samples.iter().map(|s| s * s).sum();
+    (sum / samples.len() as f32).sqrt()
 }
 
 impl DbSink {
+    /// Push one input-level sample to the recording pill's waveform (`meeting_level`). The
+    /// listener existed with no emitter — the bars only ever ran their CSS idle pulse, defeating
+    /// the "is it hearing me" affordance. Throttled to ~20Hz: each emit crosses the IPC boundary
+    /// and the meter repaints no faster. The level is a single scalar; no audio is retained.
+    fn emit_level(&mut self, rms: f32) {
+        let now = now_ms();
+        if now - self.last_level_emit_ms < 50 {
+            return;
+        }
+        self.last_level_emit_ms = now;
+        if !crate::meeting::mac::live_emit_allowed(self.session_id) {
+            return;
+        }
+        let _ = self.app.emit("meeting_level", LevelEvent { rms });
+    }
+
     fn emit_line(
         &mut self,
         speaker: Speaker,
@@ -156,6 +189,10 @@ impl SegmentSink for DbSink {
         translation: Option<&str>,
     ) {
         self.emit_line(u.speaker, u.started_at, text, confidence, translation, false);
+    }
+
+    fn level(&mut self, rms: f32) {
+        self.emit_level(rms);
     }
 }
 
@@ -375,6 +412,7 @@ fn run_live_loop(
         let mut got = false;
         while let Some(frame) = source.try_recv() {
             got = true;
+            sink.emit_level(frame_rms(&frame.samples));
             match frame.speaker {
                 Speaker::Me => {
                     if let Err(e) = push_stream_pcm(&mut me, &mut me_buf, &frame.samples) {
@@ -491,6 +529,7 @@ pub fn start(
                 app: app.clone(),
                 settings: settings.clone(),
                 select_kk_owns_en: true,
+                last_level_emit_ms: 0,
             };
             match try_open_live_pair(&db, language, has_tap) {
                 Ok((me, other)) => {
@@ -542,6 +581,7 @@ pub fn start(
                 app: app.clone(),
                 settings,
                 select_kk_owns_en: false,
+                last_level_emit_ms: 0,
             };
             let join = std::thread::spawn(move || {
                 run_worker_loop(worker, &mut sink, stop_flag, last_audio_flag);

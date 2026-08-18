@@ -255,6 +255,8 @@ pub mod mac {
     #[tauri::command]
     pub fn run_notch_action(
         index: usize,
+        expected_label: Option<String>,
+        expected_level: Option<String>,
         db: tauri::State<'_, Db>,
         engine: tauri::State<'_, NotchEngine>,
         analytics: tauri::State<'_, crate::analytics::Analytics>,
@@ -264,6 +266,18 @@ pub mod mac {
         let Some(cand) = cache.actions.get(index) else {
             return "no-action".to_string();
         };
+        // Staleness guard: the list is re-assembled here, and the capture poller re-ranks it every
+        // couple of seconds — index N can be a DIFFERENT action than the button the user read. An
+        // L1 candidate landing in the clicked slot would auto-execute something never shown.
+        // The panel passes the label/level it rendered; a mismatch refuses instead of executing.
+        if expected_label.is_some() || expected_level.is_some() {
+            let shown = crate::notch_actions::mac::view_of(cand);
+            let label_ok = expected_label.as_deref().map_or(true, |l| l == shown.label);
+            let level_ok = expected_level.as_deref().map_or(true, |l| l == shown.level);
+            if !label_ok || !level_ok {
+                return "stale".to_string();
+            }
+        }
         let level = format!("{:?}", cand.level);
         // Plan gate (issue #97): resolved core-side per click; the engine rejects when the plan
         // has no agent execution (Standard / expired trial).

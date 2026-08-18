@@ -66,7 +66,9 @@ pub mod mac {
         }
     }
 
-    fn view_of(c: &ActionCandidate) -> ActionView {
+    /// pub(crate): `run_notch_action` re-projects the clicked candidate through the SAME view to
+    /// verify it still matches what the panel displayed (the staleness guard).
+    pub(crate) fn view_of(c: &ActionCandidate) -> ActionView {
         ActionView { label: label_of(&c.action), level: level_str(c.level).to_string(), rationale: c.rationale.clone() }
     }
 

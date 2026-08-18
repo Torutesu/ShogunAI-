@@ -61,8 +61,18 @@ mod mac {
         RATE_LIMIT_UNTIL_MS.store(now_ms() + RATE_LIMIT_COOLDOWN_MS, Ordering::Release);
     }
 
+    /// The raw Select KK key — **debug builds only**, mirroring dream.rs / meeting_recap.rs: a
+    /// shipped binary carrying the operator's key can be extracted, spend caps become
+    /// unenforceable, and invariant 5 scopes this credential to the Batch lane. The relay has no
+    /// live-Messages endpoint yet, so release reports the honest needs-key state instead of
+    /// spending the raw company key per subtitle from the user's machine.
+    #[cfg(debug_assertions)]
     fn select_kk_key() -> Option<String> {
         keychain_store::get_select_kk_key()
+    }
+    #[cfg(not(debug_assertions))]
+    fn select_kk_key() -> Option<String> {
+        None
     }
 
     fn system_prompt(target: MeetingLanguage) -> &'static str {
