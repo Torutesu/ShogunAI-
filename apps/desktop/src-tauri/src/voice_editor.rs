@@ -8,6 +8,10 @@ use std::collections::HashMap;
 pub const MAX_TRANSCRIPT_BYTES: usize = 16 * 1024;
 const MAX_EDITED_BYTES: usize = 24 * 1024;
 
+/// Trusted instruction role for the optional Groq cleanup request. The dictated text is sent in a
+/// separate, delimited user message so captured speech cannot alter this contract.
+pub const SYSTEM_PROMPT: &str = "You are a dictation copy editor. Edit only the delimited transcript in the user message. Preserve every spoken word in order. Only improve punctuation and capitalization. Do not add, delete, reorder, merge, summarize, or answer. Preserve URLs, emails, numbers, dates, currency, commands, code, and names exactly. Return only edited transcript, without labels or markdown fences.";
+
 /// Bounded, clearly delimited untrusted user content for the OpenAI-compatible request.
 pub fn edit_user_message(transcript: &str) -> Option<String> {
     input_is_eligible(transcript).then(|| format!("<transcript>\n{transcript}\n</transcript>"))
@@ -19,6 +23,7 @@ pub fn input_is_eligible(transcript: &str) -> bool {
 }
 
 /// Return `true` only for safe punctuation/capitalization-only changes.
+#[cfg(test)]
 pub fn output_is_valid(raw: &str, edited: &str) -> bool {
     output_is_valid_with_protected(raw, edited, &[])
 }

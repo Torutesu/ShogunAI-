@@ -7,6 +7,7 @@
 pub mod mac {
     use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
     use std::sync::{Arc, Mutex};
+    use std::time::Duration;
 
     use accessibility_sys::{
         kAXEnabledAttribute, kAXErrorSuccess, kAXFocusedUIElementAttribute, kAXIsEditableAttribute,
@@ -26,12 +27,19 @@ pub mod mac {
     use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
 
     use crate::voice_lane::{self, TranscriptOutcome};
+    use shogun_core::daemon::Db;
+    use shogun_core::llm::openai_compat::{
+        OpenAiCompatAgentClient, OpenAiCompatConfig, GROQ_BASE_URL,
+    };
+    use shogun_core::llm::transport::ReqwestTransport;
+    use shogun_core::llm::{ByokKey, Secret};
     use shogun_integrations::keychain_store;
 
     const WINDOW_LABEL: &str = "voice";
     const VOICE_EDIT_KEY_ACCOUNT: &str = "voice-edit-groq-byok";
     const LEGACY_GROQ_KEY_ACCOUNT: &str = "groq-byok";
     const VOICE_EDIT_MODEL: &str = "openai/gpt-oss-120b";
+    const VOICE_EDIT_TIMEOUT: Duration = Duration::from_millis(1500);
 
     #[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
     pub struct Settings {
@@ -220,6 +228,80 @@ pub mod mac {
             let _ = keychain_store::set_generic_secret(VOICE_EDIT_KEY_ACCOUNT, key.as_bytes());
         }
         legacy
+    }
+
+    /// Dictation cleanup runs in the background and must never trigger a Keychain dialog. The
+    /// interactive settings path above warms or migrates the value when the user connects it.
+    fn voice_edit_key_non_interactive() -> Option<String> {
+        keychain_store::get_generic_secret_non_interactive(VOICE_EDIT_KEY_ACCOUNT)
+            .ok()
+            .and_then(decode_voice_edit_key)
+            .or_else(|| {
+                keychain_store::get_generic_secret_non_interactive(LEGACY_GROQ_KEY_ACCOUNT)
+                    .ok()
+                    .and_then(decode_voice_edit_key)
+            })
+    }
+
+    fn block_on_timeout<F>(
+        runtime: &tokio::runtime::Runtime,
+        duration: Duration,
+        future: F,
+    ) -> Result<F::Output, tokio::time::error::Elapsed>
+    where
+        F: std::future::Future,
+    {
+        runtime.block_on(async move { tokio::time::timeout(duration, future).await })
+    }
+
+    fn voice_edit_config() -> OpenAiCompatConfig {
+        OpenAiCompatConfig::new(GROQ_BASE_URL, VOICE_EDIT_MODEL)
+            .with_max_tokens(512)
+            .with_reasoning_effort("low")
+            .with_include_reasoning(false)
+    }
+
+    fn dictionary_edit_candidate(
+        transcript: &str,
+    ) -> shogun_core::voice_dictionary::DictionaryCorrection {
+        shogun_core::voice_dictionary::VoiceDictionary::with_defaults().correct(
+            transcript,
+            &shogun_core::voice_dictionary::DictionaryContext::default(),
+        )
+    }
+
+    /// Optional, bounded BYOK cleanup. Every failure returns `None`, so the caller keeps the raw
+    /// ASR transcript. The trace sink records the Groq egress without logging transcript content.
+    fn edit_dictation(transcript: &str, protected_terms: &[String], db: &Db) -> Option<String> {
+        let key = voice_edit_key_non_interactive()?;
+        let user = crate::voice_editor::edit_user_message(transcript)?;
+        let transport = ReqwestTransport::new().ok()?;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .ok()?;
+        let client = OpenAiCompatAgentClient::new(
+            transport,
+            db.traceability_sink(),
+            ByokKey::new(Secret::new(key)),
+            voice_edit_config(),
+        );
+        match block_on_timeout(
+            &runtime,
+            VOICE_EDIT_TIMEOUT,
+            client.complete_split(crate::voice_editor::SYSTEM_PROMPT, &user),
+        ) {
+            Ok(Ok(edited))
+                if crate::voice_editor::output_is_valid_with_protected(
+                    transcript,
+                    &edited,
+                    protected_terms,
+                ) =>
+            {
+                Some(edited.trim().to_string())
+            }
+            _ => None,
+        }
     }
 
     /// Leave transcript on the general pasteboard (no restore — user wants the text).
@@ -961,6 +1043,24 @@ pub mod mac {
                         return true;
                     }
                     crate::sound::mac::play(shogun_core::sound::Cue::VoiceEnd);
+                    // The local exact-alias pass only prepares a candidate for the optional editor;
+                    // if Groq is unavailable, slow, or returns unsafe output, delivery keeps the
+                    // original ASR text exactly. Cancellation during the request wins before any
+                    // AX or clipboard mutation.
+                    let correction = dictionary_edit_candidate(&transcript);
+                    let transcript = worker_app
+                        .try_state::<Db>()
+                        .and_then(|db| {
+                            edit_dictation(
+                                &correction.text,
+                                &correction.protected_terms,
+                                db.inner(),
+                            )
+                        })
+                        .unwrap_or(transcript);
+                    if !session_is_processing(session) {
+                        return true;
+                    }
                     let Some(outcome) =
                         deliver_dictation(session, target.as_deref(), &delivery, &transcript)
                     else {
@@ -1368,6 +1468,41 @@ pub mod mac {
             assert!(received.recv_timeout(Duration::from_millis(20)).is_err());
             drop(guard);
             assert!(received.recv_timeout(Duration::from_secs(1)).is_ok());
+        }
+
+        #[test]
+        fn voice_edit_config_targets_groq_oss_without_reasoning_output() {
+            let config = voice_edit_config();
+            assert_eq!(config.base_url, GROQ_BASE_URL);
+            assert_eq!(config.model, VOICE_EDIT_MODEL);
+            assert_eq!(config.reasoning_effort.as_deref(), Some("low"));
+            assert_eq!(config.include_reasoning, Some(false));
+        }
+
+        #[test]
+        fn dictionary_candidate_preserves_built_in_aliases_for_editing() {
+            let correction = dictionary_edit_candidate("open shogun ai with g rock");
+            assert_eq!(correction.text, "open ShogunAI with Groq");
+            assert_eq!(correction.protected_terms, vec!["ShogunAI", "Groq"]);
+        }
+
+        #[test]
+        fn formatter_timeout_helper_completes_a_ready_future() {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("test runtime");
+            let result = block_on_timeout(&runtime, Duration::from_millis(10), async { 7 });
+            assert_eq!(result.ok(), Some(7));
+        }
+
+        #[test]
+        fn cancelled_session_after_edit_cannot_enter_delivery() {
+            let active = Some(TestSession {
+                id: 12,
+                phase: TestPhase::Finishing,
+            });
+            assert!(!generation_is_processing(active, 12));
         }
 
         #[test]
