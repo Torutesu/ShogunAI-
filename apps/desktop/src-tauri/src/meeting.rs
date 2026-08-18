@@ -422,6 +422,7 @@ pub mod mac {
     pub fn on_focus(
         app: &tauri::AppHandle,
         bundle_id: &str,
+        process_name: Option<&str>,
         window_title: Option<&str>,
         page_url: Option<&str>,
         mic_open: bool,
@@ -433,12 +434,17 @@ pub mod mac {
         // Computed before the mic observation because the watch needs to know whether the open
         // device has an explanation in front of it — see `MicObservation::meeting_context`.
         let url_hint = page_url.and_then(detect::host_hint);
-        let bundle_hint = detect::bundle_hint(bundle_id);
+        // Bundle ids are authoritative. A missing/unknown id may fall back to the app process
+        // name or a product-specific title, but those are Weak only and still need the mic.
+        // Neither fallback treats arbitrary "meeting" text as evidence (detect.rs tests lock it).
+        let surface_hint = detect::bundle_hint(bundle_id)
+            .or_else(|| process_name.and_then(detect::process_hint))
+            .or_else(|| window_title.and_then(detect::title_hint));
         let has_meet_url = url_hint == Some(detect::MeetingHint::Strong);
-        let has_strong_bundle = bundle_hint == Some(detect::MeetingHint::Strong);
+        let has_strong_bundle = surface_hint == Some(detect::MeetingHint::Strong);
         // Weak surfaces (Teams, Webex — Plan A-2): one corroborating vote in the detector, never
         // an opener, so they ride in the ctx rather than in `meeting_app_frontmost`.
-        let has_weak_meeting_signal = bundle_hint == Some(detect::MeetingHint::Weak)
+        let has_weak_meeting_signal = surface_hint == Some(detect::MeetingHint::Weak)
             || url_hint == Some(detect::MeetingHint::Weak);
         // Slack huddles (Plan A-4): same bundle id as ordinary Slack, so the hint reads the
         // window title plus the capture poller's most recent AX text for Slack.
@@ -774,7 +780,10 @@ pub mod mac {
     ];
 
     fn is_browser(bundle_id: &str) -> bool {
-        BROWSER_BUNDLE_IDS.contains(&bundle_id)
+        let bundle_id = bundle_id.trim();
+        BROWSER_BUNDLE_IDS
+            .iter()
+            .any(|known| bundle_id.eq_ignore_ascii_case(known))
     }
 
     /// The lane's current state, for the diagnostic line. Never blocks: a state read that waited
@@ -859,6 +868,7 @@ pub mod mac {
                 on_focus(
                     &app,
                     &front.bundle_id,
+                    Some(&front.name),
                     Some(&title),
                     url.as_deref(),
                     crate::mic::input_in_use(),

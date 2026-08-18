@@ -68,17 +68,26 @@ const STRONG_MEETING_BUNDLES: &[&str] = &["us.zoom.xos"];
 
 /// Bundle ids of resident apps that *can* hold meetings but mostly hold chat (Plan A-2). Teams
 /// and Webex stay open all day; frontmost alone must never raise the offer to listen.
-const WEAK_MEETING_BUNDLES: &[&str] =
-    &["com.microsoft.teams2", "com.microsoft.teams", "Cisco-Systems.Spark"];
+const WEAK_MEETING_BUNDLES: &[&str] = &[
+    "com.microsoft.teams2",
+    "com.microsoft.teams",
+    "com.microsoft.teams.work",
+    "cisco-systems.spark",
+];
 
-/// Hosts that mean "a meeting is open in the browser" (FR-MT-04). `app.zoom.us` is the Zoom Web
-/// client (Plan A-1) — the join page shares the host, but a join page becomes a call within
-/// seconds, so Strong does no harm; the marketing site lives on `zoom.us` and does not match.
-const STRONG_MEETING_HOSTS: &[&str] = &["meet.google.com", "app.zoom.us"];
+/// Hosts that mean "a meeting is open in the browser" (FR-MT-04). Zoom is handled separately:
+/// `zoom.us` hosts both meetings and marketing/account pages, so only meeting routes match.
+const STRONG_MEETING_HOSTS: &[&str] = &["meet.google.com"];
 
-/// Hosts where a meeting *may* be open but chat, calendars and admin pages share the address
-/// (Plan A-2). One corroborating vote, like the weak bundles.
-const WEAK_MEETING_HOSTS: &[&str] = &["teams.microsoft.com", "teams.live.com"];
+/// Teams hosts where chat, calendars and meeting pages share the address. A host is not enough:
+/// only known join/call routes become a Weak signal, then still need corroboration.
+const TEAMS_HOSTS: &[&str] = &[
+    "teams.microsoft.com",
+    "teams.live.com",
+    "teams.cloud.microsoft",
+    "teams.microsoft.us",
+    "dod.teams.microsoft.us",
+];
 
 /// Weak host *suffixes*: Webex parks every tenant on its own subdomain (`acme.webex.com`), and
 /// the admin console shares them — suffix-matched like [`is_media_host`], Weak like Teams.
@@ -90,9 +99,35 @@ pub const SLACK_BUNDLE_ID: &str = "com.tinyspeck.slackmacgap";
 
 /// How strongly a frontmost bundle id says "meeting", if at all (FR-MT-04, Plan A-0).
 pub fn bundle_hint(bundle_id: &str) -> Option<MeetingHint> {
-    if STRONG_MEETING_BUNDLES.contains(&bundle_id) {
+    let bundle_id = normalize_identifier(bundle_id);
+    if STRONG_MEETING_BUNDLES.contains(&bundle_id.as_str()) {
         Some(MeetingHint::Strong)
-    } else if WEAK_MEETING_BUNDLES.contains(&bundle_id) {
+    } else if WEAK_MEETING_BUNDLES.contains(&bundle_id.as_str()) {
+        Some(MeetingHint::Weak)
+    } else {
+        None
+    }
+}
+
+/// A process/app name fallback when macOS does not expose a bundle id. It is deliberately Weak:
+/// names are less authoritative than signed bundle ids, so even Zoom still needs the microphone
+/// or another corroborating signal before an offer appears.
+pub fn process_hint(process_name: &str) -> Option<MeetingHint> {
+    match normalize_identifier(process_name).as_str() {
+        "zoom" | "zoom workplace" | "microsoft teams" | "teams" => Some(MeetingHint::Weak),
+        _ => None,
+    }
+}
+
+/// A product-specific title fallback for AX URL gaps. Generic words such as "meeting" are
+/// intentionally not signals: titles are user content, and a document called "meeting notes"
+/// must never trigger an offer. Like [`process_hint`], titles are Weak evidence only.
+pub fn title_hint(title: &str) -> Option<MeetingHint> {
+    let title = normalize_identifier(title);
+    if ["zoom meeting", "zoom workplace", "google meet", "microsoft teams", "teams meeting"]
+        .iter()
+        .any(|marker| title.contains(marker))
+    {
         Some(MeetingHint::Weak)
     } else {
         None
@@ -108,7 +143,10 @@ pub fn host_hint(url: &str) -> Option<MeetingHint> {
     if STRONG_MEETING_HOSTS.iter().any(|h| host == *h) {
         return Some(MeetingHint::Strong);
     }
-    if WEAK_MEETING_HOSTS.iter().any(|h| host == *h)
+    if is_zoom_web_meeting_url(url, &host) {
+        return Some(MeetingHint::Strong);
+    }
+    if is_teams_web_meeting_url(url, &host)
         || host_matches_suffix(&host, WEAK_MEETING_HOST_SUFFIXES)
     {
         return Some(MeetingHint::Weak);
@@ -116,10 +154,60 @@ pub fn host_hint(url: &str) -> Option<MeetingHint> {
     None
 }
 
+/// Zoom Web meeting routes. Zoom serves marketing, account and support pages from the same
+/// registrable domain, so host-only matching would cause false offers. `j/<id>` is a join link;
+/// `wc/<id>` is the browser client. Regional Zoom hosts (`us02web.zoom.us`, etc.) are accepted
+/// only for those routes.
+fn is_zoom_web_meeting_url(url: &str, host: &str) -> bool {
+    if !host_matches_suffix(host, &["zoom.us"]) {
+        return false;
+    }
+    let Some(path) = path_of(url) else {
+        return false;
+    };
+    let mut segments = path.split('/').filter(|segment| !segment.is_empty());
+    let Some(route) = segments.next() else {
+        return false;
+    };
+    let Some(meeting_or_client) = segments.next() else {
+        return false;
+    };
+    !meeting_or_client.is_empty()
+        && (route.eq_ignore_ascii_case("j") || route.eq_ignore_ascii_case("wc"))
+}
+
+/// Teams Web has resident chat on the same domains. Match only known meeting-entry routes
+/// instead of treating a Teams channel, calendar or admin page as a meeting. These remain Weak
+/// evidence because a join page can be open before the user has joined.
+fn is_teams_web_meeting_url(url: &str, host: &str) -> bool {
+    if !TEAMS_HOSTS.iter().any(|known| host == *known) {
+        return false;
+    }
+    let Some(path) = path_of(url) else {
+        return false;
+    };
+    let mut segments = path.split('/').filter(|segment| !segment.is_empty());
+    match (segments.next(), segments.next()) {
+        (Some(first), Some(second))
+            if first.eq_ignore_ascii_case("l") && second.eq_ignore_ascii_case("meetup-join") =>
+        {
+            true
+        }
+        (Some(first), Some(second)) if first.eq_ignore_ascii_case("meet") && !second.is_empty() => {
+            true
+        }
+        _ => false,
+    }
+}
+
 /// Exact-or-subdomain host match: `acme.webex.com` matches the suffix `webex.com`;
 /// `evilwebex.com` does not. Shared by the media and Webex tables.
 fn host_matches_suffix(host: &str, suffixes: &[&str]) -> bool {
     suffixes.iter().any(|suffix| host == *suffix || host.ends_with(&format!(".{suffix}")))
+}
+
+fn normalize_identifier(value: &str) -> String {
+    value.trim().to_ascii_lowercase()
 }
 
 /// Whether the bundle id is any known meeting app, Strong or Weak. Thin compatibility wrapper
@@ -337,13 +425,22 @@ pub fn host_from_url(url: &str) -> Option<String> {
 }
 
 fn host_of(url: &str) -> Option<String> {
-    let rest = url.split_once("://")?.1;
+    let rest = url.trim().split_once("://")?.1;
     let authority = rest.split(['/', '?', '#']).next()?;
     // `user@host` — the host is what follows the last '@', so `evil.test@meet.google.com` cannot
     // masquerade as the host by sitting in the userinfo.
     let host = authority.rsplit('@').next()?;
     let host = host.split(':').next()?;
+    let host = host.trim_end_matches('.');
     (!host.is_empty()).then(|| host.to_ascii_lowercase())
+}
+
+/// Path component without a query/fragment. URLs without a path return `None` so a bare Zoom or
+/// Teams host cannot accidentally become a meeting signal.
+fn path_of(url: &str) -> Option<&str> {
+    let rest = url.trim().split_once("://")?.1;
+    let (_, path_and_more) = rest.split_once('/')?;
+    Some(path_and_more.split(['?', '#']).next().unwrap_or_default())
 }
 
 /// How much each signal contributes. ② and ③ are the ones that can open an interval; ① only
@@ -610,8 +707,7 @@ pub fn browser_meeting_page_present(page_url: Option<&str>, window_title: Option
         }
     }
     if let Some(title) = window_title {
-        let lower = title.to_ascii_lowercase();
-        if lower.contains("meet") || lower.contains("zoom") {
+        if title_hint(title).is_some() {
             return true;
         }
         // PiP / AX gaps: an unreadable URL with a media title is still in-call, not "left".
@@ -1103,6 +1199,57 @@ mod tests {
         assert!(!is_meeting_url("https://meet.google.com.evil.test/x"));
         assert!(!is_meeting_url("https://notmeet.google.com/x"));
         assert!(!is_meeting_url("https://example.test/?u=meet.google.com"));
+    }
+
+    #[test]
+    fn meeting_surface_matrix_normalizes_supported_variants() {
+        for (bundle, expected) in [
+            ("us.zoom.xos", Some(MeetingHint::Strong)),
+            (" US.ZOOM.XOS ", Some(MeetingHint::Strong)),
+            ("com.microsoft.teams2", Some(MeetingHint::Weak)),
+            ("COM.MICROSOFT.TEAMS", Some(MeetingHint::Weak)),
+            ("com.microsoft.teams.work", Some(MeetingHint::Weak)),
+            ("com.apple.Safari", None),
+        ] {
+            assert_eq!(bundle_hint(bundle), expected, "bundle {bundle}");
+        }
+
+        for (url, expected) in [
+            ("https://MEET.GOOGLE.COM./abc-defg-hij", Some(MeetingHint::Strong)),
+            ("https://zoom.us/j/123456789", Some(MeetingHint::Strong)),
+            ("https://us02web.zoom.us/j/123456789", Some(MeetingHint::Strong)),
+            ("https://app.zoom.us/wc/123456789/join", Some(MeetingHint::Strong)),
+            ("https://teams.microsoft.com/l/meetup-join/19%3ameeting", Some(MeetingHint::Weak)),
+            ("https://teams.cloud.microsoft/meet/abc", Some(MeetingHint::Weak)),
+            ("https://teams.microsoft.us/meet/abc", Some(MeetingHint::Weak)),
+            ("https://zoom.us/pricing", None),
+            ("https://app.zoom.us/account", None),
+            ("https://us02web.zoom.us/", None),
+            ("https://teams.microsoft.com/_#/conversations/General", None),
+            ("https://teams.live.com/calendar", None),
+            ("https://teams.microsoft.com.evil.test/l/meetup-join/abc", None),
+            ("https://zoom.us.evil.test/j/123456789", None),
+        ] {
+            assert_eq!(host_hint(url), expected, "url {url}");
+        }
+
+        for (process, expected) in [
+            (" Zoom Workplace ", Some(MeetingHint::Weak)),
+            ("MICROSOFT TEAMS", Some(MeetingHint::Weak)),
+            ("Meeting Helper", None),
+        ] {
+            assert_eq!(process_hint(process), expected, "process {process}");
+        }
+
+        for (title, expected) in [
+            ("Weekly sync | Zoom Meeting", Some(MeetingHint::Weak)),
+            ("abc-defg-hij - Google Meet", Some(MeetingHint::Weak)),
+            ("Team standup | Microsoft Teams", Some(MeetingHint::Weak)),
+            ("Meeting notes - Google Docs", None),
+            ("Meet the team - Company wiki", None),
+        ] {
+            assert_eq!(title_hint(title), expected, "title {title}");
+        }
     }
 
     // ── Plan A: tiered (Strong/Weak) detection ─────────────────────────────────────────────
