@@ -14,7 +14,7 @@ use super::jobs::{
     classify_via_batch, Classifier, DbDreamRunner, LocalExtractiveSummarizer, LocalRuleClassifier,
     PrecomputedClassifier,
 };
-use super::plan::CycleKind;
+use super::plan::{CycleKind, JobKind};
 use super::run::{decide_and_run, run_cycle, GatedRun};
 
 /// The event-time window `[from_ts, to_ts)` a cycle should consume: from the high-water mark of the
@@ -81,11 +81,16 @@ pub fn window_position(hour: u32, start_hour: u32, end_hour: u32) -> WindowPosit
 /// The cycle id (`YYYYMMDD`) for the *night* this instant belongs to — the ledger key that makes
 /// "a full cycle already ran tonight" answerable (FR-DC-01, FR-DC-04).
 ///
-/// With a window that wraps midnight, 01:00 belongs to the night that started the previous evening,
-/// so it must not get a fresh id — otherwise the cycle would restart halfway through.
+/// With a window that wraps midnight, every hour before the window's start belongs to the night
+/// that started the previous evening: 01:00 is that night still in progress (a fresh id there
+/// would restart the cycle halfway through), and 12:00 is the elapsed daytime gap *after* it — a
+/// degraded catch-up fired there must record its ledger rows under the elapsed night's id, never
+/// under the id tonight's full run will derive. Sharing tonight's id would let the catch-up's
+/// StateUpdate/ConfidenceRecalc rows pre-mark tonight's jobs done ([`remaining`](super::plan)
+/// skips by job kind alone), so the freshly consolidated state would get no overdue/decay pass.
 pub fn cycle_id(unix_secs: i64, gmt_offset_secs: i32, start_hour: u32, end_hour: u32) -> String {
     let local = local_time(unix_secs, gmt_offset_secs);
-    let belongs_to_previous_day = start_hour > end_hour && local.hour < end_hour;
+    let belongs_to_previous_day = start_hour > end_hour && local.hour < start_hour;
     let at = if belongs_to_previous_day { unix_secs - 86_400 } else { unix_secs };
     format!("{:08}", local_time(at, gmt_offset_secs).yyyymmdd)
 }
@@ -160,15 +165,28 @@ where
     let (from_ts, to_ts) = input_range(db.last_consolidated_to(), now_ms, DEFAULT_LOOKBACK_MS);
     match decide(conditions) {
         RunDecision::Full => {
-            // The one model call — only for a Full run, only over this window, and only over the
-            // window's CLOUD half. Meeting text (`local_only`) never reaches the relay: its
-            // consent covers live transcription, not nightly classification (A-2). It still gets
-            // classified — by the same local rules the degraded cycle runs — so a commitment made
-            // in a call lands in state either way, at local confidence instead of batch.
-            let window = db.events_in_range_partitioned(from_ts, to_ts);
-            let classified = classify_via_batch(batch_client, &window.cloud, max_polls, sleep).await?;
-            let local = LocalRuleClassifier.classify(&window.local_only);
-            let pc = PrecomputedClassifier::new(classified.into_iter().chain(local).collect());
+            // The one model call — only for a Full run, only when the ledger says Consolidation
+            // still has to run for this cycle, only over this window, and only over the window's
+            // CLOUD half. The ledger check is the crash-resume egress guard: a resumed cycle
+            // whose Consolidation is already `Done` skips the job, so its classifier is never
+            // consulted — paying the Batch lane then would send the window's captured text to
+            // the cloud only to discard the results. Meeting text (`local_only`) never reaches
+            // the relay: its consent covers live transcription, not nightly classification
+            // (A-2). It still gets classified — by the same local rules the degraded cycle runs
+            // — so a commitment made in a call lands in state either way, at local confidence
+            // instead of batch.
+            let needs_consolidation =
+                db.resume(cycle_id, CycleKind::Full).contains(&JobKind::Consolidation);
+            let classified = if needs_consolidation {
+                let window = db.events_in_range_partitioned(from_ts, to_ts);
+                let cloud =
+                    classify_via_batch(batch_client, &window.cloud, max_polls, sleep).await?;
+                let local = LocalRuleClassifier.classify(&window.local_only);
+                cloud.into_iter().chain(local).collect()
+            } else {
+                Vec::new()
+            };
+            let pc = PrecomputedClassifier::new(classified);
             let summarizer = LocalExtractiveSummarizer;
             // Charm (issue #10) stays unset here on purpose: the extractive summariser cannot
             // write the line (trait default None). The Batch abstractive summariser PR adds
@@ -260,6 +278,76 @@ mod tests {
         // the daytime gap is the elapsed case; the pre-window evening is not
         assert!(at(4).elapsed && at(12).elapsed);
         assert!(!at(0).elapsed, "inside the window is never also elapsed");
+    }
+
+    #[test]
+    fn a_daytime_catch_up_derives_the_elapsed_nights_id_not_tonights() {
+        // Window 22:00–04:00. Noon sits in the elapsed gap after the night that started the
+        // previous evening; tonight's 22:30 full run needs a fresh ledger key. If both derived
+        // the same id, the catch-up's StateUpdate/ConfidenceRecalc rows would pre-mark tonight's
+        // jobs done (`remaining` skips by job kind alone).
+        let noon = 1_784_980_800; // 2026-07-25T12:00:00Z
+        let tonight = 1_785_018_600; // 2026-07-25T22:30:00Z
+        assert_eq!(cycle_id(noon, 0, 22, 4), "20260724", "the gap belongs to the elapsed night");
+        assert_eq!(cycle_id(tonight, 0, 22, 4), "20260725", "tonight starts a new cycle");
+    }
+
+    #[test]
+    fn a_full_cycle_after_a_daytime_catch_up_still_runs_every_job() {
+        use crate::dreamcycle::plan::FULL_SEQUENCE;
+
+        // Wrapping window 22:00–04:00: a degraded catch-up at noon and tonight's full run must
+        // land in different ledgers, so the full run still gets its own StateUpdate and
+        // ConfidenceRecalc pass over the freshly consolidated state.
+        let noon_secs: i64 = 1_784_980_800; // 2026-07-25T12:00:00Z
+        let night_secs: i64 = 1_785_018_600; // 2026-07-25T22:30:00Z
+        let deg_id = cycle_id(noon_secs, 0, 22, 4);
+        let full_id = cycle_id(night_secs, 0, 22, 4);
+
+        let now = night_secs * 1000;
+        let db = db_at(now);
+        db.capture(&super_ev(noon_secs * 1000 - 1000, "I'll send the report.", "h1")).unwrap();
+        let clf = LocalRuleClassifier;
+        let sched = DreamScheduler::new(&db, &clf);
+
+        // Noon: window elapsed without a full run → degraded catch-up under its own id.
+        let elapsed = RunConditions {
+            within_window: false,
+            window_elapsed: true,
+            idle_ms: IDLE_THRESHOLD_MS,
+            screen_locked: false,
+            power_connected: true,
+            battery_pct: 100,
+            full_run_done_today: false,
+        };
+        match sched.tick(&elapsed, &deg_id, noon_secs * 1000) {
+            GatedRun::Ran { cycle: crate::dreamcycle::plan::CycleKind::Degraded, report } => {
+                assert!(report.is_complete());
+            }
+            other => panic!("expected a degraded run, got {other:?}"),
+        }
+
+        // Tonight: the full sequence must run in its entirety — the catch-up's ledger rows must
+        // not satisfy any of tonight's jobs.
+        let idle = RunConditions {
+            within_window: true,
+            window_elapsed: false,
+            idle_ms: IDLE_THRESHOLD_MS,
+            screen_locked: false,
+            power_connected: true,
+            battery_pct: 100,
+            full_run_done_today: false,
+        };
+        match sched.tick(&idle, &full_id, now) {
+            GatedRun::Ran { cycle: crate::dreamcycle::plan::CycleKind::Full, report } => {
+                assert_eq!(
+                    report.completed,
+                    FULL_SEQUENCE.to_vec(),
+                    "tonight's full cycle must run every job, including the state pass"
+                );
+            }
+            other => panic!("expected a full run, got {other:?}"),
+        }
     }
 
     #[test]
@@ -391,6 +479,59 @@ mod tests {
         };
         let out = run_batch_cycle(&db, &client, &active, "c1", now, 3, || async {}).await.unwrap();
         assert!(matches!(out, GatedRun::Skipped(_)));
+    }
+
+    #[tokio::test]
+    async fn a_resumed_cycle_with_consolidation_done_never_calls_the_batch_lane() {
+        // Crash-resume egress guard: tonight's cycle already completed Consolidation, then the
+        // process died. On resume the ledger skips Consolidation and the classifier is never
+        // consulted — so the Batch lane must not be paid (and the window's captured text must
+        // not cross the wire) just to throw the results away.
+        use crate::dreamcycle::plan::{JobKind, JobState};
+        use crate::llm::anthropic::{AnthropicBatchClient, AnthropicConfig};
+        use crate::llm::traceability::RecordingSink;
+        use crate::llm::transport::MockTransport;
+        use crate::llm::{Secret, SelectKkKey};
+
+        let now = 100 * 24 * 60 * 60 * 1000;
+        let db = db_at(now);
+        // captured text inside the resumed window — the text an unguarded resume would re-send
+        db.capture(&super_ev(now - 100, "the deck discussion", "h1")).unwrap();
+        // the previous run of THIS cycle finished Consolidation before the crash
+        assert!(db.record_job("c1", JobKind::Consolidation, JobState::Done, 0, now - 500));
+
+        // no responses queued — any request against the lane fails the run
+        let transport = std::sync::Arc::new(MockTransport::new([]));
+        let client = AnthropicBatchClient::new(
+            SharedTransport(transport.clone()),
+            RecordingSink::new(),
+            SelectKkKey::new(Secret::new("kk-123456")),
+            AnthropicConfig::new("claude-x"),
+        );
+        let idle = RunConditions {
+            within_window: true,
+            window_elapsed: false,
+            idle_ms: IDLE_THRESHOLD_MS,
+            screen_locked: false,
+            power_connected: true,
+            battery_pct: 100,
+            full_run_done_today: false,
+        };
+        let out = run_batch_cycle(&db, &client, &idle, "c1", now, 3, || async {}).await.unwrap();
+        match out {
+            GatedRun::Ran { cycle: CycleKind::Full, report } => {
+                assert!(report.is_complete(), "the resumed remainder must finish: {report:?}");
+                assert!(
+                    !report.completed.contains(&JobKind::Consolidation),
+                    "Consolidation was already done and must not re-run"
+                );
+            }
+            other => panic!("expected a resumed full run, got {other:?}"),
+        }
+        assert!(
+            transport.sent().is_empty(),
+            "no request may reach the Batch lane when Consolidation is already done"
+        );
     }
 
     fn super_ev<'a>(ts: i64, content: &'a str, hash: &'a str) -> shogun_memory::event_log::NewEvent<'a> {
