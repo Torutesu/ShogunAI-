@@ -26,8 +26,12 @@ pub mod mac {
     use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
 
     use crate::voice_lane::{self, TranscriptOutcome};
+    use shogun_integrations::keychain_store;
 
     const WINDOW_LABEL: &str = "voice";
+    const VOICE_EDIT_KEY_ACCOUNT: &str = "voice-edit-groq-byok";
+    const LEGACY_GROQ_KEY_ACCOUNT: &str = "groq-byok";
+    const VOICE_EDIT_MODEL: &str = "openai/gpt-oss-120b";
 
     #[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
     pub struct Settings {
@@ -73,6 +77,12 @@ pub mod mac {
     #[derive(Clone, Serialize)]
     pub struct VoiceToastEvent {
         pub message: String,
+    }
+
+    #[derive(Clone, Serialize)]
+    pub struct VoiceEditSettingsView {
+        pub model: &'static str,
+        pub has_key: bool,
     }
 
     /// Monotonic session id so old ASR workers cannot affect a later hold.
@@ -186,6 +196,30 @@ pub mod mac {
     fn emit_toast(app: &AppHandle, message: impl Into<String>) {
         let message = message.into();
         let _ = app.emit("voice_toast", VoiceToastEvent { message });
+    }
+
+    fn decode_voice_edit_key(bytes: Vec<u8>) -> Option<String> {
+        String::from_utf8(bytes)
+            .ok()
+            .map(|key| key.trim().to_string())
+            .filter(|key| !key.is_empty())
+    }
+
+    fn voice_edit_key() -> Option<String> {
+        if let Some(key) = keychain_store::get_generic_secret(VOICE_EDIT_KEY_ACCOUNT)
+            .ok()
+            .and_then(decode_voice_edit_key)
+        {
+            return Some(key);
+        }
+        let legacy = keychain_store::get_generic_secret(LEGACY_GROQ_KEY_ACCOUNT)
+            .ok()
+            .and_then(decode_voice_edit_key);
+        if let Some(key) = legacy.as_deref() {
+            // Settings is an explicit interactive path, so its one-time migration may prompt.
+            let _ = keychain_store::set_generic_secret(VOICE_EDIT_KEY_ACCOUNT, key.as_bytes());
+        }
+        legacy
     }
 
     /// Leave transcript on the general pasteboard (no restore — user wants the text).
@@ -979,6 +1013,33 @@ pub mod mac {
             .ok()
             .and_then(|g| g.as_ref().map(|l| l.settings.clone()))
             .unwrap_or_default()
+    }
+
+    #[tauri::command]
+    pub fn get_voice_edit_settings() -> VoiceEditSettingsView {
+        VoiceEditSettingsView {
+            model: VOICE_EDIT_MODEL,
+            has_key: voice_edit_key().is_some(),
+        }
+    }
+
+    #[tauri::command]
+    pub fn set_voice_edit_key(key: String) -> Result<(), String> {
+        let key = key.trim();
+        if key.is_empty() {
+            return Err("key is empty".into());
+        }
+        keychain_store::set_generic_secret(VOICE_EDIT_KEY_ACCOUNT, key.as_bytes())
+            .map_err(|error| error.to_string())
+    }
+
+    #[tauri::command]
+    pub fn clear_voice_edit_key() -> Result<(), String> {
+        match keychain_store::delete_generic_secret(VOICE_EDIT_KEY_ACCOUNT) {
+            Ok(()) => Ok(()),
+            Err(error) if error.code() == -25300 /* errSecItemNotFound */ => Ok(()),
+            Err(error) => Err(error.to_string()),
+        }
     }
 
     #[tauri::command]

@@ -57,6 +57,7 @@ mod sound;
 mod visual_recall;
 #[cfg(target_os = "macos")]
 mod voice_lane;
+mod voice_editor;
 #[cfg(target_os = "macos")]
 mod voice_session;
 #[cfg(target_os = "macos")]
@@ -379,6 +380,9 @@ pub fn run() {
         voice_session::mac::set_voice_enabled,
         voice_session::mac::voice_dismiss,
         voice_session::mac::voice_force_end,
+        voice_session::mac::get_voice_edit_settings,
+        voice_session::mac::set_voice_edit_key,
+        voice_session::mac::clear_voice_edit_key,
         // Daily summaries (issue #10): delivery judgement + seen-state + the Evening card data.
         daily_summaries::mac::summary_state,
         daily_summaries::mac::mark_summary_seen,

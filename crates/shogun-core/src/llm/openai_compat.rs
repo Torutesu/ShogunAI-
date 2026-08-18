@@ -25,6 +25,8 @@ pub const OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 /// this client rather than a fourth provider implementation (ADR-002: one abstraction, not one
 /// client per vendor).
 pub const GEMINI_BASE_URL: &str = "https://generativelanguage.googleapis.com/v1beta/openai";
+/// Groq's OpenAI-compatible surface.
+pub const GROQ_BASE_URL: &str = "https://api.groq.com/openai/v1";
 
 /// Connection + model settings. Like [`super::anthropic::AnthropicConfig`], the model id is a
 /// configurable string the caller supplies — never guessed here.
@@ -38,6 +40,10 @@ pub struct OpenAiCompatConfig {
     pub model: String,
     /// `max_tokens` for the request.
     pub max_tokens: u32,
+    /// Optional reasoning budget for providers that support it.
+    pub reasoning_effort: Option<String>,
+    /// Whether the provider should return its reasoning alongside the completion.
+    pub include_reasoning: Option<bool>,
 }
 
 impl OpenAiCompatConfig {
@@ -47,11 +53,29 @@ impl OpenAiCompatConfig {
         while base_url.ends_with('/') {
             base_url.pop();
         }
-        Self { base_url, model: model.into(), max_tokens: 1024 }
+        Self {
+            base_url,
+            model: model.into(),
+            max_tokens: 1024,
+            reasoning_effort: None,
+            include_reasoning: None,
+        }
     }
 
     pub fn with_max_tokens(mut self, max_tokens: u32) -> Self {
         self.max_tokens = max_tokens;
+        self
+    }
+
+    /// Set a provider reasoning budget when the selected model supports it.
+    pub fn with_reasoning_effort(mut self, effort: impl Into<String>) -> Self {
+        self.reasoning_effort = Some(effort.into());
+        self
+    }
+
+    /// Request whether the provider should return its reasoning payload.
+    pub fn with_include_reasoning(mut self, include: bool) -> Self {
+        self.include_reasoning = Some(include);
         self
     }
 
@@ -106,6 +130,12 @@ pub fn build_chat_exchange(
     });
     if stream {
         body["stream"] = Value::Bool(true);
+    }
+    if let Some(effort) = &cfg.reasoning_effort {
+        body["reasoning_effort"] = Value::String(effort.clone());
+    }
+    if let Some(include) = cfg.include_reasoning {
+        body["include_reasoning"] = Value::Bool(include);
     }
     Ok(HttpRequest::new(
         Method::Post,
@@ -264,6 +294,30 @@ mod tests {
         assert_eq!(body["model"], "openai/gpt-4o-mini");
         assert_eq!(body["messages"][0]["content"], "write hi");
         assert!(body.get("stream").is_none(), "非ストリーミング要求に stream を付けない");
+    }
+
+    #[test]
+    fn default_config_omits_provider_reasoning_controls() {
+        let req = build_chat_request(&cfg(), &Secret::new("sk-or-123"), "write hi", false).unwrap();
+        let body: Value = serde_json::from_str(req.body.as_deref().unwrap()).unwrap();
+        assert!(body.get("reasoning_effort").is_none());
+        assert!(body.get("include_reasoning").is_none());
+    }
+
+    #[test]
+    fn groq_reasoning_controls_are_serialized() {
+        let cfg = OpenAiCompatConfig::new(GROQ_BASE_URL, "openai/gpt-oss-120b")
+            .with_max_tokens(512)
+            .with_reasoning_effort("low")
+            .with_include_reasoning(false);
+        let req = build_chat_exchange(&cfg, &Secret::new("gsk-test"), Some("edit"), "text", false)
+            .unwrap();
+        let body: Value = serde_json::from_str(req.body.as_deref().unwrap()).unwrap();
+        assert_eq!(body["model"], "openai/gpt-oss-120b");
+        assert_eq!(body["reasoning_effort"], "low");
+        assert_eq!(body["include_reasoning"], false);
+        assert_eq!(body["messages"][0]["role"], "system");
+        assert_eq!(body["messages"][1]["role"], "user");
     }
 
     /// ストリーミングで変わるのは `stream: true` の1フィールドだけ — モデルもプロンプトも
