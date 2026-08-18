@@ -1088,11 +1088,12 @@ export function App(): JSX.Element {
   // registered once at mount, so a captured value would be frozen at the first turn forever.
 
   /// The turn ids we hand to Rust. Client-minted so a delta can never arrive for an id the panel
-  /// doesn't recognise yet. Seeded with the load time, NOT 0: the Rust side keeps the last
-  /// cancelled turn id for the process lifetime, while this counter would restart on every
-  /// webview respawn (routine when moving Spaces) — a fresh turn colliding with a previously
-  /// cancelled id would have its answer silently swallowed.
-  const turnSeq = useRef(Date.now());
+  /// doesn't recognise yet. Seeded with the load time on first use, NOT 0: the Rust side keeps
+  /// the last cancelled turn id for the process lifetime, while this counter would restart on
+  /// every webview respawn (routine when moving Spaces) — a fresh turn colliding with a
+  /// previously cancelled id would have its answer silently swallowed. (Seeding happens in the
+  /// submit handler: `Date.now()` during render is an impure call the hooks lint forbids.)
+  const turnSeq = useRef(0);
   /// The turn currently being written, or null. Deltas for any other id are stale — a stopped or
   /// timed-out turn whose provider hadn't noticed yet — and are dropped.
   const liveTurn = useRef<number | null>(null);
@@ -1208,6 +1209,8 @@ export function App(): JSX.Element {
 
     // The turn id is minted here, not by Rust: the first token can beat the command's own reply,
     // and a panel that doesn't yet know the id would have to buffer deltas it can't place.
+    // First use seeds the counter with the load time (see the ref's doc).
+    if (turnSeq.current === 0) turnSeq.current = Date.now();
     const turn = ++turnSeq.current;
     liveTurn.current = turn;
 

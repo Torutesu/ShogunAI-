@@ -484,7 +484,7 @@ pub mod mac {
         let confirmed = match edited_body.filter(|b| *b != confirmed.preview.full_body) {
             Some(final_body) => {
                 record_approval_feedback(
-                    &db,
+                    db,
                     FeedbackKind::EditBeforeApprove,
                     &confirmed.action,
                     Some(&confirmed.preview.full_body),
@@ -498,7 +498,7 @@ pub mod mac {
             }
             None => {
                 record_approval_feedback(
-                    &db,
+                    db,
                     FeedbackKind::ApproveUnchanged,
                     &confirmed.action,
                     None,
