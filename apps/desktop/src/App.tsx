@@ -21,7 +21,8 @@ import {
   IconHistory,
   IconMaximize2,
   IconMinimize,
-  IconNotification,
+  IconPin,
+  IconPinOff,
   IconSettings,
 } from "./utilityIcons";
 import {
@@ -1541,7 +1542,7 @@ export function App(): JSX.Element {
                   aria-pressed={pinned}
                   onClick={() => setPinned((v) => !v)}
                 >
-                  <IconBrain />
+                  {pinned ? <IconPin /> : <IconPinOff />}
                 </button>
                 {/* Only offered when there is a backlog to open — an always-present control for an
                     empty history is a button that does nothing most of the time. */}
@@ -1567,7 +1568,7 @@ export function App(): JSX.Element {
                   aria-pressed={showSearch}
                   onClick={() => setShowSearch((v) => !v)}
                 >
-                  ⌕
+                  <IconBrain />
                 </button>
                 {/* The brief, health, memory and run log open HERE, as the in-panel hub — the
                     notch is where things finish; a separate window would defeat that. Only
@@ -1580,7 +1581,13 @@ export function App(): JSX.Element {
                   aria-pressed={showHub}
                   onClick={toggleHub}
                 >
-                  <IconNotification size={15} />
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                       stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="4" y="4" width="7" height="7" rx="1.5" />
+                    <rect x="13" y="4" width="7" height="7" rx="1.5" />
+                    <rect x="4" y="13" width="7" height="7" rx="1.5" />
+                    <rect x="13" y="13" width="7" height="7" rx="1.5" />
+                  </svg>
                 </button>
                 <button className="icon" type="button" title={t.settings} aria-label={t.settings} onClick={openSettings}>
                   <IconSettings />
