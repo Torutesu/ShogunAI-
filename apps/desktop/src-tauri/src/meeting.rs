@@ -194,17 +194,6 @@ use shogun_core::meeting::gate::OfferGate;
                 }
             }
         }
-        // An interval left open by a crash, a force-quit or a power cut would otherwise stay
-        // `ended_at IS NULL` forever, and `active()` assumes at most one open row. Close it at
-        // its last known moment rather than pretending it is still running.
-        if let Some(db) = app.try_state::<shogun_core::daemon::Db>() {
-            // Boot cutoff: only rows from BEFORE this run are abandoned (a later call must never
-            // catch a meeting this run just opened).
-            let closed = db.close_abandoned_meetings(now_ms());
-            if closed > 0 {
-                eprintln!("[meeting] closed {closed} interval(s) left open by a previous run");
-            }
-        }
         // Built here because `init` runs in Tauri's setup, on the main thread.
         match build_overlay(app) {
             Some(_) => eprintln!("[meeting] overlay window ready (hidden)"),
@@ -216,6 +205,20 @@ use shogun_core::meeting::gate::OfferGate;
         );
         if let Ok(mut g) = LANE.lock() {
             *g = Some(lane);
+        }
+    }
+
+    /// Close meeting rows left open by a crash, force-quit or power cut — they would otherwise
+    /// stay `ended_at IS NULL` forever, and `active()` assumes at most one open row.
+    ///
+    /// Takes the DB directly and must be called from the setup branch that opens it: `init` runs
+    /// BEFORE the DB is managed (deliberately — the meeting lane must work without capture), so
+    /// reading `try_state::<Db>()` there always found nothing and the cleanup never executed.
+    /// The boot-time cutoff means only rows from before this run are treated as abandoned.
+    pub fn close_abandoned(db: &shogun_core::daemon::Db) {
+        let closed = db.close_abandoned_meetings(now_ms());
+        if closed > 0 {
+            eprintln!("[meeting] closed {closed} interval(s) left open by a previous run");
         }
     }
 
@@ -289,11 +292,34 @@ use shogun_core::meeting::gate::OfferGate;
                         if let Ok(mut live) = lane.live_settings.write() {
                             *live = lane.settings.clone();
                         }
-                        lane.audio = crate::audio_lane::start(
-                            app,
-                            id,
-                            lane.live_settings.clone(),
-                        );
+                        // Off-thread, adopted after LANE is released: `audio_lane::start` opens
+                        // the mic/tap and performs Deepgram WS handshakes or a Whisper model
+                        // load (possibly a download) — seconds of wall time. `apply` always runs
+                        // with LANE held, and `meeting_start` runs it on the AppKit main thread,
+                        // so starting inline froze every meeting command, the 1s driver tick and
+                        // the whole UI for the handshake. Same worker + guarded adoption as the
+                        // resume path in `meeting_toggle_pause` (see the race notes there).
+                        let app2 = app.clone();
+                        let live = lane.live_settings.clone();
+                        std::thread::spawn(move || {
+                            let mut handle = crate::audio_lane::start(&app2, id, live);
+                            if let Ok(mut g) = LANE.lock() {
+                                if let Some(lane) = g.as_mut() {
+                                    if lane.machine.state() == State::Recording
+                                        && !lane.paused
+                                        && lane.session_id == Some(id)
+                                        && lane.audio.is_none()
+                                    {
+                                        lane.audio = handle.take();
+                                        return;
+                                    }
+                                }
+                            }
+                            // The meeting moved on (stopped, paused, or a new session) while the
+                            // devices were opening — stop what this worker started, or the lane
+                            // would keep streaming with no owner.
+                            finish_audio_stop(handle);
+                        });
                     }
                 }
                 Effect::StopAudio => {

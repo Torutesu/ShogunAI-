@@ -670,6 +670,9 @@ fn setup_macos(app: &tauri::App) {
         Ok(db) => {
             // Share the handle: Tauri state (notch_actions / execution) + the capture poller.
             app.manage(db.clone());
+            // Close meeting rows a previous run left open. Here and not in `meeting::mac::init`:
+            // init runs before this branch, where the Db state does not exist yet.
+            meeting::mac::close_abandoned(&db);
             app.manage(notch_exec::mac::new_engine(db.clone()));
             // The reply-context cache is filled by the capture poller (focus path) and read by
             // the draft command, so a press never collects context.
