@@ -1,7 +1,11 @@
 # Deploying the ShogunAI website to Cloudflare
 
-> **Automated:** pushing to the branch runs `.github/workflows/deploy.yml`
-> (install → migrate → build → deploy). The manual steps below are a fallback.
+> **Automated:** pushing to **main** runs `.github/workflows/deploy.yml`
+> (install → migrate → build → deploy). main is the only branch that deploys to
+> production — ship LP changes through a PR into main. A manual
+> `workflow_dispatch` on another ref stops at a guard step unless you tick
+> `allow_non_main`, which is there for emergencies only. The manual steps below
+> are a fallback.
 
 The site is Next.js 16 (App Router, SSR + Node.js-runtime API routes) talking to
 **Supabase Postgres** via `postgres.js`. Cloudflare can't run Next SSR natively, so

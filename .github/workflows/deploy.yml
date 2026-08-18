@@ -16,15 +16,26 @@ name: Deploy website (Cloudflare)
 # ships the top-level `shogunai-website` worker instead, which no domain points
 # at — so it looks green while production stays unchanged. Deploy `--env
 # preview` until the domain is moved back to the top-level worker.
+#
+# main is the only source of production deploys. Feature branches used to
+# deploy too, which meant whichever branch pushed last decided what
+# shogunaios.com served — a branch missing a feature would silently take it
+# off production. Ship through a PR into main instead. The dispatch override
+# below exists for emergencies and has to be asked for explicitly.
 on:
   push:
-    branches: [main, codex/ui-lp-polish, claude/shogunai-ui-lp-lisvsd]
+    branches: [main]
     paths:
       - 'apps/website/**'
       - 'packages/**'
       - 'pnpm-lock.yaml'
       - '.github/workflows/deploy.yml'
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      allow_non_main:
+        description: 'Deploy this ref even though it is not main (emergency only)'
+        type: boolean
+        default: false
 
 concurrency:
   group: deploy-website
@@ -34,6 +45,12 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
+      - name: Refuse to deploy a ref that is not main
+        if: github.ref != 'refs/heads/main' && inputs.allow_non_main != true
+        run: |
+          echo "::error::Production deploys come from main. Merge the change, or re-run this workflow with allow_non_main checked."
+          exit 1
+
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
         with:
