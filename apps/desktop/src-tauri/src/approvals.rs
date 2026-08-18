@@ -113,15 +113,32 @@ pub mod mac {
         sender.send_capability(ent).is_some()
     }
 
-    /// The ONE shared L3 approval queue (B-3 / E-08): created once at startup and managed in
+    /// Desktop view of the durable, cross-process L3 queue. The file lock serializes MCP, REST,
+    /// and desktop writers; the local mutex only preserves compatibility for legacy producers.
     /// Tauri state. Every producer (an agent, `submit_send`, a future in-app API/MCP face — which
     /// would receive a clone of this same `Arc`) enqueues here, and the settings `ApprovalsSection`
     /// is the single drain. No other `ApprovalQueue` may be constructed in this app.
-    pub struct ApprovalQueueState(pub Arc<Mutex<ApprovalQueue>>);
+    #[derive(Clone)]
+    pub struct ApprovalQueueState(pub Arc<Mutex<ApprovalQueue>>, pub std::path::PathBuf);
 
     impl Default for ApprovalQueueState {
         fn default() -> Self {
-            Self(Arc::new(Mutex::new(ApprovalQueue::new())))
+            Self(
+                Arc::new(Mutex::new(ApprovalQueue::new())),
+                std::path::PathBuf::from(shogun_mcp::approval_store::STORE_FILE),
+            )
+        }
+    }
+
+    impl ApprovalQueueState {
+        pub fn at(path: std::path::PathBuf) -> Self {
+            Self(Arc::new(Mutex::new(ApprovalQueue::new())), path)
+        }
+        pub(crate) fn change<R>(
+            &self,
+            change: impl FnOnce(&mut ApprovalQueue) -> R,
+        ) -> Result<R, String> {
+            shogun_mcp::approval_store::with_queue(&self.1, change)
         }
     }
 
@@ -251,13 +268,7 @@ pub mod mac {
     ) -> Result<u64, String> {
         let proposal = proposed(&kind, &destination, &subject, &body)?;
         let now = db.now_ms().max(0) as u64;
-        let id = {
-            let mut q = state
-                .0
-                .lock()
-                .map_err(|_| "approval queue poisoned".to_string())?;
-            propose(&mut q, &proposal, ApprovalOrigin::Ui, now).0
-        };
+        let id = { state.change(|q| propose(q, &proposal, ApprovalOrigin::Ui, now).0)? };
         // Something is waiting on a human decision — the first reason cues exist at all (#49).
         crate::sound::mac::play(shogun_core::sound::Cue::ApprovalPending);
         Ok(id)
@@ -287,7 +298,7 @@ pub mod mac {
     /// mislabelling the badge exists to prevent (shogun-mcp already tags Api/Mcp correctly).
     pub(crate) fn draft_and_enqueue(
         req: Draft<'_>,
-        queue: &Arc<Mutex<ApprovalQueue>>,
+        queue: &ApprovalQueueState,
         db: &Db,
         directives: &str,
         origin: ApprovalOrigin,
@@ -322,12 +333,7 @@ pub mod mac {
 
         let proposal = proposed(kind, destination, subject, &body)?;
         let now = db.now_ms().max(0) as u64;
-        let id = {
-            let mut q = queue
-                .lock()
-                .map_err(|_| "approval queue poisoned".to_string())?;
-            propose(&mut q, &proposal, origin, now).0
-        };
+        let id = { queue.change(|q| propose(q, &proposal, origin, now).0)? };
         // A draft the user did not watch being written is exactly the case that needs telling (#49).
         crate::sound::mac::play(shogun_core::sound::Cue::ApprovalPending);
         Ok(id)
@@ -350,7 +356,7 @@ pub mod mac {
     ) -> Result<u64, String> {
         // draft_and_enqueue blocks on an LLM round-trip (its contract says "callers off the UI
         // thread only") — a sync command would freeze the whole AppKit main thread for it.
-        let queue = state.0.clone();
+        let queue = state.inner().clone();
         let db = db.inner().clone();
         let directives = user_cfg.directives();
         tauri::async_runtime::spawn_blocking(move || {
@@ -378,30 +384,26 @@ pub mod mac {
         db: tauri::State<'_, Db>,
     ) -> Result<Vec<ApprovalView>, String> {
         let now = db.now_ms().max(0) as u64;
-        let mut q = state
-            .0
-            .lock()
-            .map_err(|_| "approval queue poisoned".to_string())?;
-        q.expire_due(now);
-        let views = q
-            .pending_ids()
-            .into_iter()
-            .filter_map(|id| q.preview(id).map(|p| (id, p, q.origin(id))))
-            .map(|(id, p, origin)| ApprovalView {
-                id: id.0,
-                op_type: p.op_type,
-                destination: p.destination.clone(),
-                full_body: p.full_body.clone(),
-                route: route_str(p.route),
-                // Every pending entry has an origin; default defensively rather than dropping the row.
-                // "unknown", never "ui": the badge exists to tell the human WHICH face asked to
-                // send something, and defaulting an unattributable request to "you did this" is
-                // the wrong direction for a security disclosure. It should read stranger, not
-                // safer.
-                origin: origin.map_or("unknown", ApprovalOrigin::as_str),
-            })
-            .collect();
-        Ok(views)
+        state.change(|q| {
+            q.expire_due(now);
+            q.pending_ids()
+                .into_iter()
+                .filter_map(|id| q.preview(id).map(|p| (id, p.clone(), q.origin(id))))
+                .map(|(id, p, origin)| ApprovalView {
+                    id: id.0,
+                    op_type: p.op_type,
+                    destination: p.destination,
+                    full_body: p.full_body,
+                    route: route_str(p.route),
+                    // Every pending entry has an origin; default defensively rather than dropping the row.
+                    // "unknown", never "ui": the badge exists to tell the human WHICH face asked to
+                    // send something, and defaulting an unattributable request to "you did this" is
+                    // the wrong direction for a security disclosure. It should read stranger, not
+                    // safer.
+                    origin: origin.map_or("unknown", ApprovalOrigin::as_str),
+                })
+                .collect()
+        })
     }
 
     /// Reject a pending send. Records the L5 `reject` signal (Plan D-2) — fire-and-forget, after
@@ -412,17 +414,18 @@ pub mod mac {
         state: tauri::State<'_, ApprovalQueueState>,
         db: tauri::State<'_, Db>,
     ) -> Result<String, String> {
-        let mut q = state
-            .0
-            .lock()
-            .map_err(|_| "approval queue poisoned".to_string())?;
         use shogun_agents::approval::RejectCause;
-        // Snapshot action + proposed body before the reject dequeues them (feedback input only).
-        let snapshot = q
-            .action(ApprovalId(id))
-            .cloned()
-            .and_then(|a| q.preview(ApprovalId(id)).map(|p| (a, p.full_body.clone())));
-        match q.reject(ApprovalId(id), RejectCause::UserRejected) {
+        let (decision, snapshot) = state.change(|q| {
+            let snapshot = q
+                .action(ApprovalId(id))
+                .cloned()
+                .and_then(|a| q.preview(ApprovalId(id)).map(|p| (a, p.full_body.clone())));
+            (
+                q.reject(ApprovalId(id), RejectCause::UserRejected),
+                snapshot,
+            )
+        })?;
+        match decision {
             Decision::Rejected(_) => {
                 if let Some((action, proposed_body)) = snapshot {
                     record_approval_feedback(
@@ -482,11 +485,9 @@ pub mod mac {
         // Confirm + dequeue under the queue lock, then drop it before executing (execution locks the
         // connector runtime, a different lock — keep the two lock scopes disjoint).
         let confirmed = {
-            let mut q = state
-                .0
-                .lock()
-                .map_err(|_| "approval queue poisoned".to_string())?;
-            match q.confirm(ApprovalId(id), ConfirmIntent::DedicatedButton, now) {
+            match state
+                .change(|q| q.confirm(ApprovalId(id), ConfirmIntent::DedicatedButton, now))?
+            {
                 Decision::Confirmed(cs) => cs,
                 Decision::RequiresDedicatedButton => return Ok("requires_button".into()),
                 Decision::StillPending => return Ok("pending".into()),
@@ -548,6 +549,13 @@ pub mod mac {
                     &confirmed.preview.full_body,
                 ) {
                     Ok(()) => {
+                        let _ = state.change(|q| {
+                            q.mark_status(
+                                ApprovalId(id),
+                                shogun_agents::approval::ApprovalStatus::DraftSaved,
+                                now,
+                            )
+                        });
                         return Ok("draft_saved: composio send is off (opt-in required)".into());
                     }
                     Err(e) => {
@@ -581,8 +589,26 @@ pub mod mac {
                 }),
             );
             return match execute_send(&confirmed, &routed, &db.traceability_sink()) {
-                SendExecOutcome::Sent => Ok("sent".into()),
-                SendExecOutcome::Failed(e) => Ok(format!("failed:{e}")),
+                SendExecOutcome::Sent => {
+                    let _ = state.change(|q| {
+                        q.mark_status(
+                            ApprovalId(id),
+                            shogun_agents::approval::ApprovalStatus::Sent,
+                            now,
+                        )
+                    });
+                    Ok("sent".into())
+                }
+                SendExecOutcome::Failed(e) => {
+                    let _ = state.change(|q| {
+                        q.mark_status(
+                            ApprovalId(id),
+                            shogun_agents::approval::ApprovalStatus::SendFailed,
+                            now,
+                        )
+                    });
+                    Ok(format!("failed:{e}"))
+                }
             };
         }
 
@@ -592,8 +618,26 @@ pub mod mac {
         // client or key is needed or consulted.
         let first_layer = FirstLayerSendTransport::new(&connectors.0);
         match execute_send(&confirmed, &first_layer, &db.traceability_sink()) {
-            SendExecOutcome::Sent => Ok("sent".into()),
-            SendExecOutcome::Failed(e) => Ok(format!("failed:{e}")),
+            SendExecOutcome::Sent => {
+                let _ = state.change(|q| {
+                    q.mark_status(
+                        ApprovalId(id),
+                        shogun_agents::approval::ApprovalStatus::Sent,
+                        now,
+                    )
+                });
+                Ok("sent".into())
+            }
+            SendExecOutcome::Failed(e) => {
+                let _ = state.change(|q| {
+                    q.mark_status(
+                        ApprovalId(id),
+                        shogun_agents::approval::ApprovalStatus::SendFailed,
+                        now,
+                    )
+                });
+                Ok(format!("failed:{e}"))
+            }
         }
     }
 

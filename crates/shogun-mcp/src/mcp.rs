@@ -11,6 +11,7 @@
 //! is for the REST/HTTP face, FR-API-03). Levels still apply: an external send routes to the
 //! shared approval queue and returns pending, never running without a UI confirm (FR-API-04).
 
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
@@ -39,6 +40,9 @@ pub struct McpServer<B: MemoryBackend> {
     clock: Box<dyn Fn() -> i64 + Send + Sync>,
     entitlements: Box<dyn Fn() -> Entitlements + Send + Sync>,
     surface: rest::ApprovalSurface,
+    approvals_path: Option<PathBuf>,
+    /// Standalone processes enqueue L3 only while the desktop writer is live.
+    desktop_running: Box<dyn Fn() -> bool + Send + Sync>,
 }
 
 impl<B: MemoryBackend> McpServer<B> {
@@ -56,6 +60,8 @@ impl<B: MemoryBackend> McpServer<B> {
             // Headless by default: the standalone stdio binary has no confirm UI, and defaulting
             // the other way would silently strand every L3 send a caller submits.
             surface: rest::ApprovalSurface::Absent,
+            approvals_path: None,
+            desktop_running: Box::new(|| false),
         }
     }
 
@@ -63,6 +69,23 @@ impl<B: MemoryBackend> McpServer<B> {
     #[must_use]
     pub fn with_approval_surface(mut self, surface: rest::ApprovalSurface) -> Self {
         self.surface = surface;
+        self
+    }
+
+    /// Use durable queue shared with desktop. A corrupt store is not treated as empty.
+    #[must_use]
+    pub fn with_approvals_path(mut self, path: PathBuf) -> Self {
+        self.approvals_path = Some(path);
+        self
+    }
+
+    /// Require a live desktop confirmation surface for headless L3 requests.
+    #[must_use]
+    pub fn with_desktop_running_check(
+        mut self,
+        check: impl Fn() -> bool + Send + Sync + 'static,
+    ) -> Self {
+        self.desktop_running = Box::new(check);
         self
     }
 
@@ -121,6 +144,21 @@ impl<B: MemoryBackend> McpServer<B> {
             .get("name")
             .and_then(Value::as_str)
             .unwrap_or_default();
+        if name == "actions.status" {
+            let Some(approval_id) = params
+                .get("arguments")
+                .and_then(|value| value.get("approval_id"))
+                .and_then(Value::as_u64)
+                .filter(|id| *id > 0)
+            else {
+                return error(id, -32602, "missing approval_id");
+            };
+            let text = self.poll_action(approval_id);
+            return result(
+                id,
+                json!({ "content": [{ "type": "text", "text": text }], "isError": false }),
+            );
+        }
         let Some(tool) = Tool::from_wire(name) else {
             return error(id, -32602, "unknown tool");
         };
@@ -172,19 +210,7 @@ impl<B: MemoryBackend> McpServer<B> {
                 // The arguments ARE the action spec; route through the shared act() + approval queue.
                 let body = args.to_string();
                 let now = (self.clock)();
-                match self.approvals.lock() {
-                    Ok(mut queue) => {
-                        rest::act(
-                            Some(&body),
-                            now,
-                            &mut queue,
-                            ApprovalOrigin::Mcp,
-                            self.surface,
-                        )
-                        .1
-                    }
-                    Err(_) => return error(id, -32000, "internal"),
-                }
+                self.execute_action(&body, now)
             }
         };
 
@@ -193,6 +219,52 @@ impl<B: MemoryBackend> McpServer<B> {
             id,
             json!({ "content": [{ "type": "text", "text": text }], "isError": false }),
         )
+    }
+
+    fn execute_action(&self, body: &str, now: i64) -> String {
+        if let Some(path) = &self.approvals_path {
+            if !(self.desktop_running)() {
+                return r#"{"error":"desktop_unavailable","detail":"start SHOGUN to review L3 sends"}"#.to_string();
+            }
+            return crate::approval_store::with_queue(path, |queue| {
+                rest::act(
+                    Some(body),
+                    now,
+                    queue,
+                    ApprovalOrigin::Mcp,
+                    rest::ApprovalSurface::Present,
+                )
+                .1
+            })
+            .unwrap_or_else(|_| r#"{"error":"approval_store"}"#.to_string());
+        }
+        match self.approvals.lock() {
+            Ok(mut queue) => {
+                rest::act(
+                    Some(body),
+                    now,
+                    &mut queue,
+                    ApprovalOrigin::Mcp,
+                    self.surface,
+                )
+                .1
+            }
+            Err(_) => r#"{"error":"internal"}"#.to_string(),
+        }
+    }
+
+    fn poll_action(&self, approval_id: u64) -> String {
+        let now = (self.clock)();
+        if let Some(path) = &self.approvals_path {
+            return crate::approval_store::with_queue(path, |queue| {
+                rest::poll_approval(approval_id, queue, now)
+            })
+            .unwrap_or_else(|_| r#"{"error":"approval_store"}"#.to_string());
+        }
+        match self.approvals.lock() {
+            Ok(mut queue) => rest::poll_approval(approval_id, &mut queue, now),
+            Err(_) => r#"{"error":"internal"}"#.to_string(),
+        }
     }
 }
 
@@ -275,6 +347,7 @@ fn tool_descriptor(tool: Tool) -> Value {
             "Run an action; external sends require L3 confirmation",
             json!({ "kind": { "type": "string" } }),
         ),
+        Tool::ActionsStatus => ("Poll an L3 approval outcome", json!({ "approval_id": { "type": "integer", "minimum": 1 } })),
         Tool::VisualRecallStatus => ("Visual recall status (enabled, frame stats, recent OCR)", json!({})),
         Tool::VisualRecallSetEnabled => ("Enable or disable visual recall (L1)", json!({ "enabled": { "type": "boolean" } })),
         Tool::VisualRecallSearchFrames => (

@@ -113,8 +113,17 @@ fn main() -> std::io::Result<()> {
     let approvals = Arc::new(std::sync::Mutex::new(
         shogun_agents::approval::ApprovalQueue::new(),
     ));
+    let approvals_path = shogun_mcp::approval_store::resolve_store_path(&db_path);
+    let heartbeat_path = shogun_mcp::desktop_heartbeat::resolve_path(&db_path);
     let server = McpServer::new(backend, approvals, now_ms, move || {
         plan_source.resolve(u64::try_from(now_ms()).unwrap_or(0))
+    })
+    .with_approvals_path(approvals_path)
+    .with_desktop_running_check(move || {
+        shogun_mcp::desktop_heartbeat::fresh(
+            &heartbeat_path,
+            shogun_mcp::desktop_heartbeat::now_ms(),
+        )
     });
 
     let stdin = std::io::stdin();

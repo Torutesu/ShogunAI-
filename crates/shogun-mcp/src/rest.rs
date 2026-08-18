@@ -10,7 +10,9 @@
 //! Auth (FR-API-03): every tool endpoint requires a valid token — reads included; only the
 //! unauthenticated `/v1/status` discovery endpoint is exempt.
 
-use shogun_agents::approval::{ApprovalOrigin, ApprovalQueue, Preview, Route};
+use shogun_agents::approval::{
+    ApprovalId, ApprovalOrigin, ApprovalQueue, ApprovalStatus, Preview, Route,
+};
 use shogun_agents::entitlement::Entitlements;
 use shogun_agents::permission::{Action, Level, LocalAction, SendAction};
 
@@ -63,6 +65,8 @@ pub enum Routed {
     Write { tool: Tool, level: Level },
     /// `actions.execute` (200 local / 202 pending for an L3 send — decided by the backend body).
     Action,
+    /// Body-free L3 outcome by approval id.
+    ApprovalStatus { id: u64 },
     /// The unauthenticated status/discovery endpoint (200).
     Status,
     /// In-product SLO metrics (200) — `shogun metrics` / Advanced UI (NFR-SLO-00). Open like
@@ -250,6 +254,10 @@ fn resolve(method: Method, path: &str) -> Result<Routed, RouteMiss> {
             },
         ),
         ["v1", "actions", "execute"] => method_is(method, Method::Post, Routed::Action),
+        ["v1", "actions", "status", id] => match id.parse::<u64>() {
+            Ok(id) if id > 0 => method_is(method, Method::Get, Routed::ApprovalStatus { id }),
+            _ => Err(RouteMiss::NotFound),
+        },
         // state list: /v1/state/<noun>
         ["v1", "state", noun] => match state_tool(noun, false) {
             Some(tool) => method_is(method, Method::Get, Routed::Read { tool, id: None }),
@@ -310,10 +318,27 @@ pub fn status_code(routed: &Routed) -> u16 {
         Routed::PlanLocked => 403,
         Routed::NotFound => 404,
         Routed::MethodNotAllowed => 405,
-        Routed::Read { .. } | Routed::Status | Routed::Metrics => 200,
+        Routed::Read { .. } | Routed::ApprovalStatus { .. } | Routed::Status | Routed::Metrics => {
+            200
+        }
         // A write is accepted (L2 still confirms in the Notch); an action may be pending.
         Routed::Write { .. } | Routed::Action => 202,
     }
+}
+
+/// Expire stale pending work then expose only id and status; previews never leave this path.
+pub fn poll_approval(id: u64, approvals: &mut ApprovalQueue, now_ms: i64) -> String {
+    approvals.expire_due(u64::try_from(now_ms).unwrap_or(0));
+    let status = match approvals.status(ApprovalId(id)) {
+        Some(ApprovalStatus::Pending) => "pending",
+        Some(ApprovalStatus::Rejected) => "rejected",
+        Some(ApprovalStatus::TimedOut) => "timed_out",
+        Some(ApprovalStatus::Sent) => "sent",
+        Some(ApprovalStatus::SendFailed) => "send_failed",
+        Some(ApprovalStatus::DraftSaved) => "draft_saved",
+        None => "unknown",
+    };
+    format!(r#"{{"approval_id":{id},"status":"{status}"}}"#)
 }
 
 /// The stable wire name of a tool (delegates to the shared name).
@@ -377,6 +402,7 @@ pub fn body_for(routed: &Routed) -> String {
             )
         }
         Routed::Action => r#"{"tool":"actions.execute","status":"routed"}"#.to_string(),
+        Routed::ApprovalStatus { id } => format!(r#"{{"approval_id":{id},"status":"routed"}}"#),
     }
 }
 

@@ -343,7 +343,7 @@ pub mod mac {
             eprintln!("[exec] draft reply: no approval queue in state");
             return false;
         };
-        let queue = queue.0.clone();
+        let queue = queue.inner().clone();
         let directives = app
             .try_state::<crate::user_config_watch::UserConfigState>()
             .map(|s| s.directives())

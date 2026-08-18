@@ -2914,7 +2914,22 @@ fn install_connectors(app: &tauri::AppHandle, db: Option<shogun_core::daemon::Db
     // The ONE shared L3 approval queue (B-3 / E-08): created unconditionally at startup, before
     // the connector runtime, so every producer and the confirm UI always resolve the same managed
     // queue — even when the connector runtime fails to start.
-    app.manage(approvals::mac::ApprovalQueueState::default());
+    let approval_path = app
+        .path()
+        .app_data_dir()
+        .map(memory_data_dir)
+        .map(|dir| dir.join(shogun_mcp::approval_store::STORE_FILE))
+        .unwrap_or_else(|_| std::path::PathBuf::from(shogun_mcp::approval_store::STORE_FILE));
+    let heartbeat_path = approval_path.with_file_name(shogun_mcp::desktop_heartbeat::FILE_NAME);
+    app.manage(approvals::mac::ApprovalQueueState::at(approval_path));
+    // Headless MCP/REST sends require this fresh writer; a stopped desktop naturally fails closed.
+    std::thread::spawn(move || loop {
+        let _ = shogun_mcp::desktop_heartbeat::write(
+            &heartbeat_path,
+            shogun_mcp::desktop_heartbeat::now_ms(),
+        );
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    });
     // Draft-stop is seeded from the persisted ComposioPolicy (composio.json) — the single source
     // the settings/onboarding toggle and the L3 send gate read. Absent/unreadable policy defaults
     // to draft_stop = true (invariant 4 fail-safe, see ComposioPolicy).

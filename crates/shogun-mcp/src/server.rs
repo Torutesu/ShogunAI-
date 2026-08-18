@@ -9,6 +9,7 @@
 //! enabled). The default port is 7464; if it is busy the listener falls back to an ephemeral port
 //! (FR-API-01) whose value the caller reads from [`tokio::net::TcpListener::local_addr`].
 
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use axum::body::Body;
@@ -55,6 +56,8 @@ pub struct AppState {
     metrics: Option<Arc<dyn MetricsSource>>,
     entitlements: EntitlementProvider,
     surface: rest::ApprovalSurface,
+    approvals_path: Option<PathBuf>,
+    desktop_running: Arc<dyn Fn() -> bool + Send + Sync>,
 }
 
 impl AppState {
@@ -78,6 +81,8 @@ impl AppState {
             // Headless by default — see `McpServer::new`. The composition root that owns a
             // confirm UI opts in with `with_approval_surface`.
             surface: rest::ApprovalSurface::Absent,
+            approvals_path: None,
+            desktop_running: Arc::new(|| false),
         }
     }
 
@@ -85,6 +90,21 @@ impl AppState {
     #[must_use]
     pub fn with_approval_surface(mut self, surface: rest::ApprovalSurface) -> Self {
         self.surface = surface;
+        self
+    }
+
+    #[must_use]
+    pub fn with_approvals_path(mut self, path: PathBuf) -> Self {
+        self.approvals_path = Some(path);
+        self
+    }
+
+    #[must_use]
+    pub fn with_desktop_running_check(
+        mut self,
+        check: impl Fn() -> bool + Send + Sync + 'static,
+    ) -> Self {
+        self.desktop_running = Arc::new(check);
         self
     }
 
@@ -125,7 +145,11 @@ fn host_is_loopback(host: Option<&str>) -> bool {
 }
 
 async fn handle(State(state): State<AppState>, req: Request) -> Response {
-    if !host_is_loopback(req.headers().get(axum::http::header::HOST).and_then(|v| v.to_str().ok())) {
+    if !host_is_loopback(
+        req.headers()
+            .get(axum::http::header::HOST)
+            .and_then(|v| v.to_str().ok()),
+    ) {
         return render(403, r#"{"error":"forbidden_host"}"#.to_string());
     }
     let method = match *req.method() {
@@ -134,10 +158,16 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
         _ => None,
     };
     let path = req.uri().path().to_string();
-    let token = rest::bearer(req.headers().get(AUTHORIZATION).and_then(|v| v.to_str().ok()));
+    let token = rest::bearer(
+        req.headers()
+            .get(AUTHORIZATION)
+            .and_then(|v| v.to_str().ok()),
+    );
     // Parse the query string: `?include_low` (FR-API-06 opt-in), `?q=<search>`, visual-recall window.
     let raw_query = req.uri().query().unwrap_or("");
-    let include_low = raw_query.split('&').any(|kv| kv == "include_low" || kv.starts_with("include_low="));
+    let include_low = raw_query
+        .split('&')
+        .any(|kv| kv == "include_low" || kv.starts_with("include_low="));
     let query = raw_query
         .split('&')
         .find_map(|kv| kv.strip_prefix("q="))
@@ -176,20 +206,62 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
             let ent = (state.entitlements)();
             match rest::route(&rreq, &state.tokens, &ent) {
                 // actions.execute needs the shared approval queue (L3 sends enqueue there).
-                Routed::Action => match state.approvals.lock() {
-                    Ok(mut queue) => rest::act(
-                        rreq.body.as_deref(),
-                        (state.clock)(),
-                        &mut queue,
-                        shogun_agents::approval::ApprovalOrigin::Api,
-                        state.surface,
-                    ),
-                    Err(_) => (500, r#"{"error":"internal"}"#.to_string()),
-                },
+                Routed::Action => {
+                    if let Some(path) = &state.approvals_path {
+                        if !(state.desktop_running)() {
+                            (503, r#"{"error":"desktop_unavailable"}"#.to_string())
+                        } else {
+                            match crate::approval_store::with_queue(path, |queue| {
+                                rest::act(
+                                    rreq.body.as_deref(),
+                                    (state.clock)(),
+                                    queue,
+                                    shogun_agents::approval::ApprovalOrigin::Api,
+                                    rest::ApprovalSurface::Present,
+                                )
+                            }) {
+                                Ok(result) => result,
+                                Err(_) => (500, r#"{"error":"approval_store"}"#.to_string()),
+                            }
+                        }
+                    } else {
+                        match state.approvals.lock() {
+                            Ok(mut queue) => rest::act(
+                                rreq.body.as_deref(),
+                                (state.clock)(),
+                                &mut queue,
+                                shogun_agents::approval::ApprovalOrigin::Api,
+                                state.surface,
+                            ),
+                            Err(_) => (500, r#"{"error":"internal"}"#.to_string()),
+                        }
+                    }
+                }
+                Routed::ApprovalStatus { id } => {
+                    if let Some(path) = &state.approvals_path {
+                        match crate::approval_store::with_queue(path, |queue| {
+                            rest::poll_approval(id, queue, (state.clock)())
+                        }) {
+                            Ok(body) => (200, body),
+                            Err(_) => (500, r#"{"error":"approval_store"}"#.to_string()),
+                        }
+                    } else {
+                        match state.approvals.lock() {
+                            Ok(mut queue) => {
+                                (200, rest::poll_approval(id, &mut queue, (state.clock)()))
+                            }
+                            Err(_) => (500, r#"{"error":"internal"}"#.to_string()),
+                        }
+                    }
+                }
                 // metrics come from the injected live source (empty snapshot if none).
                 Routed::Metrics => (
                     200,
-                    state.metrics.as_ref().map(|m| m.snapshot_json()).unwrap_or_else(|| r#"{"metrics":[]}"#.to_string()),
+                    state
+                        .metrics
+                        .as_ref()
+                        .map(|m| m.snapshot_json())
+                        .unwrap_or_else(|| r#"{"metrics":[]}"#.to_string()),
                 ),
                 // reads/writes/status/errors go through the backend renderer.
                 _ => rest::respond_with(&rreq, &state.tokens, &ent, state.backend.as_ref()),
@@ -274,8 +346,12 @@ mod tests {
 
     async fn raw_get(addr: std::net::SocketAddr, path: &str, auth: Option<&str>) -> String {
         let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
-        let auth_line = auth.map(|t| format!("Authorization: Bearer {t}\r\n")).unwrap_or_default();
-        let request = format!("GET {path} HTTP/1.1\r\nHost: localhost\r\n{auth_line}Connection: close\r\n\r\n");
+        let auth_line = auth
+            .map(|t| format!("Authorization: Bearer {t}\r\n"))
+            .unwrap_or_default();
+        let request = format!(
+            "GET {path} HTTP/1.1\r\nHost: localhost\r\n{auth_line}Connection: close\r\n\r\n"
+        );
         stream.write_all(request.as_bytes()).await.unwrap();
         let mut buf = Vec::new();
         stream.read_to_end(&mut buf).await.unwrap();
@@ -285,17 +361,23 @@ mod tests {
     /// GET with an arbitrary `Host:` header — what a DNS-rebound page's request looks like.
     async fn raw_get_with_host(addr: std::net::SocketAddr, path: &str, host: &str) -> String {
         let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
-        let request =
-            format!("GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n");
+        let request = format!("GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n");
         stream.write_all(request.as_bytes()).await.unwrap();
         let mut buf = Vec::new();
         stream.read_to_end(&mut buf).await.unwrap();
         String::from_utf8_lossy(&buf).into_owned()
     }
 
-    async fn raw_post(addr: std::net::SocketAddr, path: &str, auth: Option<&str>, body: &str) -> String {
+    async fn raw_post(
+        addr: std::net::SocketAddr,
+        path: &str,
+        auth: Option<&str>,
+        body: &str,
+    ) -> String {
         let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
-        let auth_line = auth.map(|t| format!("Authorization: Bearer {t}\r\n")).unwrap_or_default();
+        let auth_line = auth
+            .map(|t| format!("Authorization: Bearer {t}\r\n"))
+            .unwrap_or_default();
         let request = format!(
             "POST {path} HTTP/1.1\r\nHost: localhost\r\n{auth_line}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
             body.len()
@@ -404,7 +486,10 @@ mod tests {
         let addr = spawn_server_with(tokens, Arc::new(Fake)).await;
         let resp = raw_get(addr, "/v1/state/commitments", Some("t")).await;
         assert!(resp.contains("200"), "got: {resp}");
-        assert!(resp.contains("ship the report"), "real backend data missing: {resp}");
+        assert!(
+            resp.contains("ship the report"),
+            "real backend data missing: {resp}"
+        );
     }
 
     #[tokio::test]
@@ -432,7 +517,9 @@ mod tests {
         }
         let mut tokens = TokenRegistry::new();
         tokens.issue("t");
-        let backend = Arc::new(Recorder { last: Mutex::new(None) });
+        let backend = Arc::new(Recorder {
+            last: Mutex::new(None),
+        });
         let addr = spawn_server_with(tokens, backend.clone()).await;
 
         let resp = raw_post(addr, "/v1/memory/notes", Some("t"), "buy milk").await;
@@ -459,7 +546,8 @@ mod tests {
         assert!(rebound.contains("forbidden_host"), "got: {rebound}");
 
         // The real local caller is unaffected, including with an explicit port.
-        let ok = raw_get_with_host(addr, "/v1/metrics", &format!("127.0.0.1:{}", addr.port())).await;
+        let ok =
+            raw_get_with_host(addr, "/v1/metrics", &format!("127.0.0.1:{}", addr.port())).await;
         assert!(ok.contains("200"), "got: {ok}");
         let ok_name = raw_get_with_host(addr, "/v1/status", "localhost").await;
         assert!(ok_name.contains("200"), "got: {ok_name}");
@@ -484,7 +572,13 @@ mod tests {
         let addr = spawn_server(tokens).await;
 
         // a local action is authorized immediately (200)
-        let resp = raw_post(addr, "/v1/actions/execute", Some("t"), r#"{"kind":"local_search","query":"x"}"#).await;
+        let resp = raw_post(
+            addr,
+            "/v1/actions/execute",
+            Some("t"),
+            r#"{"kind":"local_search","query":"x"}"#,
+        )
+        .await;
         assert!(resp.contains("200"), "got: {resp}");
         assert!(resp.contains("\"executed\":\"local\""));
 
@@ -501,7 +595,13 @@ mod tests {
         assert!(resp.contains("\"approval_id\":"));
 
         // no token → 401
-        let resp = raw_post(addr, "/v1/actions/execute", None, r#"{"kind":"local_search","query":"x"}"#).await;
+        let resp = raw_post(
+            addr,
+            "/v1/actions/execute",
+            None,
+            r#"{"kind":"local_search","query":"x"}"#,
+        )
+        .await;
         assert!(resp.contains("401"), "got: {resp}");
     }
 }

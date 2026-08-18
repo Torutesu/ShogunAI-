@@ -150,11 +150,20 @@ async fn main() -> std::io::Result<()> {
     // every request so a trial expiring while the server runs locks the next call.
     let plan_source = shogun_mcp::plan_source::FilePlanSource::from_env();
     let plan_clock = clock.clone();
+    let approvals_path = shogun_mcp::approval_store::resolve_store_path(&db_path);
+    let heartbeat_path = shogun_mcp::desktop_heartbeat::resolve_path(&db_path);
     let state = AppState::new(Arc::new(tokens), backend, approvals, clock)
         .with_metrics(metrics)
         .with_entitlements(Arc::new(move || {
             plan_source.resolve(u64::try_from((plan_clock)()).unwrap_or(0))
-        }));
+        }))
+        .with_approvals_path(approvals_path)
+        .with_desktop_running_check(move || {
+            shogun_mcp::desktop_heartbeat::fresh(
+                &heartbeat_path,
+                shogun_mcp::desktop_heartbeat::now_ms(),
+            )
+        });
 
     let listener = bind_local(port).await?;
     let addr = listener.local_addr()?;

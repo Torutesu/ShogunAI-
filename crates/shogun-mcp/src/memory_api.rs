@@ -34,6 +34,8 @@ pub enum Tool {
     MemoryAppendNote,
     StateProposeUpdate,
     ActionsExecute,
+    /// Poll a body-free L3 approval outcome.
+    ActionsStatus,
     /// The device's onboarding / first-run setup state (issue #6). A read: an agent needs to know
     /// how far this device is configured, symmetrically with the human UI (invariant 6).
     DeviceOnboardingGet,
@@ -69,6 +71,7 @@ pub const ALL_TOOLS: &[Tool] = &[
     Tool::MemoryAppendNote,
     Tool::StateProposeUpdate,
     Tool::ActionsExecute,
+    Tool::ActionsStatus,
     Tool::DeviceOnboardingGet,
     Tool::LessonsList,
     Tool::LessonsSetActive,
@@ -101,6 +104,7 @@ impl Tool {
             Tool::MemoryAppendNote => "memory.append_note",
             Tool::StateProposeUpdate => "state.propose_update",
             Tool::ActionsExecute => "actions.execute",
+            Tool::ActionsStatus => "actions.status",
             Tool::DeviceOnboardingGet => "device.onboarding.get",
             Tool::LessonsList => "lessons.list",
             Tool::LessonsSetActive => "lessons.set_active",
@@ -167,6 +171,7 @@ pub fn tool_level(tool: Tool) -> ApiLevel {
         Tool::StateProposeUpdate => ApiLevel::Write(Level::L2),
         // launch a preset agent — level follows the action it runs.
         Tool::ActionsExecute => ApiLevel::PerAction,
+        Tool::ActionsStatus => ApiLevel::Read,
     }
 }
 
@@ -323,7 +328,7 @@ mod tests {
         for &t in ALL_TOOLS {
             let _ = tool_level(t); // exhaustive match means this cannot be undefined
         }
-        assert_eq!(ALL_TOOLS.len(), 26);
+        assert_eq!(ALL_TOOLS.len(), 27);
     }
 
     #[test]
@@ -370,6 +375,7 @@ mod tests {
                         | Tool::VisualRecallGetFrame
                         | Tool::VisualRecallRescanFrame
                         | Tool::ProfileWhoami
+                        | Tool::ActionsStatus
                 )),
                 ApiLevel::Write(_) => {
                     assert!(matches!(
