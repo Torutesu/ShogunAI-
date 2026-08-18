@@ -15,6 +15,13 @@ into a structured local timeline. It is designed around searchable context,
 not a screenshot archive. Capture can be paused, sources can be excluded, and
 local memory can be removed.
 
+Capture itself reads text through the macOS accessibility layer, so no image is
+written by default. Visual recall is the single documented exception and is off
+until a user enables it: with it on, and only where a window yields no text at
+all, a compressed frame is held in the encrypted local database for at most 72
+hours and then deleted automatically. Frames are never uploaded, there is no
+playback timeline, and audio is out of scope of the exception.
+
 ### Contextual recall
 
 Users ask in natural language about people, projects, decisions, documents,
