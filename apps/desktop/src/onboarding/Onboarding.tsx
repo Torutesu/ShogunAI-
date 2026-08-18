@@ -117,6 +117,7 @@ export function Onboarding(): JSX.Element {
 
   const idx = Math.max(0, state ? STEPS.indexOf(state.step) : 0);
   const step = state ? STEPS[idx] : "welcome";
+  const isAccessibilityRepair = state?.accessibility_repair === true;
 
   // Track each step view once per arrival.
   const lastTracked = useRef<string | null>(null);
@@ -168,7 +169,7 @@ export function Onboarding(): JSX.Element {
 
   const finish = useCallback((): void => {
     if (!state) return;
-    const record = { ...state, completed: true };
+    const record = { ...state, completed: true, step: "ready" as const, accessibility_repair: false };
     setState(record);
     // The completing write is the flow's single exit: Rust stamps the trial (once, ever) and
     // closes this window.
@@ -180,8 +181,14 @@ export function Onboarding(): JSX.Element {
   // Per-step footer. `skip` is offered only where skipping leaves a working product — never on
   // the steps that are pure explanation, where there is nothing to skip.
   const last = idx === STEPS.length - 1;
-  const primaryLabel = step === "welcome" ? t.obWelcomeStart : last ? t.obReadyStart : t.obNext;
-  const canSkip = (step === "permission" && !granted) || step === "plan" || step === "connect";
+  const primaryLabel = isAccessibilityRepair
+    ? t.obReadyStart
+    : step === "welcome"
+      ? t.obWelcomeStart
+      : last
+        ? t.obReadyStart
+        : t.obNext;
+  const canSkip = !isAccessibilityRepair && ((step === "permission" && !granted) || step === "plan" || step === "connect");
 
   return (
     <div className="onb">
@@ -191,14 +198,18 @@ export function Onboarding(): JSX.Element {
             <span className="onb-mark">⚔</span>
             {o.brand}
           </span>
-          <div className="ob-prog" role="presentation">
-            {STEPS.map((s, i) => (
-              <span key={s} className={`ob-seg${i <= idx ? " is-done" : ""}`} />
-            ))}
-          </div>
-          <span className="ob-count">
-            {t.obStep.replace("{n}", String(idx + 1)).replace("{total}", String(STEPS.length))}
-          </span>
+          {!isAccessibilityRepair ? (
+            <>
+              <div className="ob-prog" role="presentation">
+                {STEPS.map((s, i) => (
+                  <span key={s} className={`ob-seg${i <= idx ? " is-done" : ""}`} />
+                ))}
+              </div>
+              <span className="ob-count">
+                {t.obStep.replace("{n}", String(idx + 1)).replace("{total}", String(STEPS.length))}
+              </span>
+            </>
+          ) : null}
         </header>
 
         <div className="onb-body ob-body" key={step}>
@@ -211,7 +222,7 @@ export function Onboarding(): JSX.Element {
         </div>
 
         <footer className="ob-foot">
-          {idx > 0 ? (
+          {idx > 0 && !isAccessibilityRepair ? (
             <button className="onb-btn ghost" type="button" onClick={() => go(-1)}>
               {t.obBack}
             </button>
@@ -224,7 +235,12 @@ export function Onboarding(): JSX.Element {
                 {t.obSkip}
               </button>
             ) : null}
-            <button className="onb-btn primary" type="button" onClick={last ? finish : () => go(1)}>
+            <button
+              className="onb-btn primary"
+              type="button"
+              disabled={isAccessibilityRepair && !granted}
+              onClick={isAccessibilityRepair || last ? finish : () => go(1)}
+            >
               {primaryLabel}
             </button>
           </div>

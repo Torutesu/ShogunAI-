@@ -53,6 +53,15 @@ pub mod state {
         /// must not restart the clock. Local-only, not a secret, so no Keychain.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub trial_started_at: Option<i64>,
+        /// True when the user explicitly continued past the Accessibility step without granting
+        /// it. This is distinct from completing onboarding after granting permission: only the
+        /// latter should reopen a repair prompt if macOS later revokes trust.
+        #[serde(default)]
+        pub accessibility_skipped: bool,
+        /// A response-only hint for the webview. It is calculated from live AX trust rather than
+        /// persisted: a completed setup with lost trust opens directly at the repair card.
+        #[serde(default)]
+        pub accessibility_repair: bool,
     }
 
     impl Default for OnboardingState {
@@ -62,6 +71,8 @@ pub mod state {
                 step: first_step(),
                 plan: None,
                 trial_started_at: None,
+                accessibility_skipped: false,
+                accessibility_repair: false,
             }
         }
     }
@@ -95,7 +106,15 @@ pub mod state {
             step,
             plan,
             trial_started_at,
+            accessibility_skipped: prev.accessibility_skipped,
+            accessibility_repair: false,
         }
+    }
+
+    /// Whether a completed setup needs its focused Accessibility repair card. A user who
+    /// deliberately skipped permission is not re-prompted merely because trust is absent.
+    pub fn needs_accessibility_repair(trusted: bool, state: &OnboardingState) -> bool {
+        state.completed && !trusted && !state.accessibility_skipped
     }
 
     /// On-disk format, versioned like `shortcuts.json` so a future default change can migrate once.
@@ -144,6 +163,8 @@ pub mod state {
                 step: "ready".into(),
                 plan: None,
                 trial_started_at: None,
+                accessibility_skipped: legacy.skipped,
+                accessibility_repair: false,
             };
         }
         OnboardingState::default()
@@ -160,6 +181,8 @@ pub mod state {
                 step: "ready".into(),
                 plan: None,
                 trial_started_at: trial,
+                accessibility_skipped: false,
+                accessibility_repair: false,
             }
         }
 
@@ -215,6 +238,20 @@ pub mod state {
                 assert!(s.completed, "{legacy} must migrate to completed");
                 assert_eq!(s.trial_started_at, None, "no fabricated trial stamp");
             }
+        }
+
+        #[test]
+        fn legacy_skip_stays_out_of_accessibility_repair() {
+            let state = parse(r#"{"skipped":true}"#);
+            assert!(state.accessibility_skipped);
+            assert!(!needs_accessibility_repair(false, &state));
+        }
+
+        #[test]
+        fn completed_setup_repairs_lost_accessibility_trust() {
+            let state = done(Some(42));
+            assert!(needs_accessibility_repair(false, &state));
+            assert!(!needs_accessibility_repair(true, &state));
         }
 
         #[test]
@@ -317,10 +354,15 @@ pub mod mac {
     /// when available; falls back to disk so a call racing setup still answers honestly.
     #[tauri::command]
     pub fn onboarding_state(app: AppHandle) -> OnboardingState {
-        match app.try_state::<Store>() {
+        let mut state = match app.try_state::<Store>() {
             Some(store) => store.0.lock().map(|g| g.clone()).unwrap_or_default(),
             None => load(&app),
+        };
+        if state::needs_accessibility_repair(axcache::ax_trusted_silent(), &state) {
+            state.step = "permission".into();
+            state.accessibility_repair = true;
         }
+        state
     }
 
     /// Whole-record write — the flow has one writer, so a partial update would let a resumed
@@ -339,7 +381,16 @@ pub mod mac {
         store: tauri::State<'_, Store>,
     ) -> Result<(), String> {
         let prev = store.0.lock().map(|g| g.clone()).unwrap_or_default();
-        let next = state::apply(&prev, step, plan, completed, now_unix());
+        let mut next = state::apply(&prev, step.clone(), plan, completed, now_unix());
+        let trusted = axcache::ax_trusted_silent();
+        if trusted {
+            // A later successful grant supersedes an earlier "not now" choice, so a future
+            // re-sign/revoke can surface the repair card again.
+            next.accessibility_skipped = false;
+        } else if !prev.completed && prev.step == "permission" && step != "permission" {
+            // Moving beyond the permission card while still untrusted is an explicit deferment.
+            next.accessibility_skipped = true;
+        }
         save(&app, &next)?;
         let newly_completed = next.completed && !prev.completed;
         if let Ok(mut g) = store.0.lock() {
@@ -521,17 +572,16 @@ pub mod mac {
         eprintln!("[onboarding] floating over all spaces (behavior={BEHAVIOR} level={LEVEL})");
     }
 
-    /// Whether the first-run flow should appear at launch: simply "not completed yet". Unlike the
-    /// #46 guide this is NOT gated on Accessibility trust — the flow is about more than the one
-    /// permission, and its permission step renders a green already-granted card when trust exists.
-    /// A quit mid-flow resumes at the persisted step. Legacy #46 completed/skipped devices migrate
-    /// to completed and are never re-trapped (see `state::parse`).
+    /// Whether to open onboarding. First-run resumes normally. A completed setup whose live
+    /// Accessibility trust was later lost opens only its repair card; explicit deferrals remain
+    /// respected. Legacy #46 completion/skip migrations preserve that distinction.
     pub fn should_show_onboarding(app: &AppHandle) -> bool {
         // Escape hatch for QA/preview: force the flow even on a completed machine, so the screens
         // can be reviewed without wiping app data. Harmless in production (nobody sets it).
         if std::env::var("SHOGUN_FORCE_ONBOARDING").is_ok() {
             return true;
         }
-        !load(app).completed
+        let state = load(app);
+        !state.completed || state::needs_accessibility_repair(axcache::ax_trusted_silent(), &state)
     }
 }

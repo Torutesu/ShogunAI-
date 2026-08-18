@@ -43,6 +43,8 @@ export interface OnboardingState {
   /** Which plan the user said they wanted. Billing is a separate flow; this only decides whether
    *  onboarding asks for a key. Real entitlement gating is a Rust-core follow-up. */
   plan: "standard" | "pro" | null;
+  /** Present only when macOS trust was lost after setup. The UI then shows only the repair card. */
+  accessibility_repair?: boolean;
 }
 
 /** A category of thing SHOGUN never reads. Rust owns the list — the UI must not hardcode it,
