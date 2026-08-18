@@ -1,6 +1,6 @@
 //! Voice hold-to-talk session: overlay, settings, mic lifecycle, dictation output (#44).
 //!
-//! On release: Deepgram Nova-3 (when configured) or Whisper fallback → inject into focused field (AX), else clipboard → idle.
+//! On release: Deepgram Nova-3 (when configured) or Whisper fallback → insert at the captured caret, else clipboard → idle.
 //! Chat response is deferred; this path is dictation-first per product ask.
 
 #[cfg(target_os = "macos")]
@@ -42,6 +42,17 @@ pub mod mac {
     const VOICE_EDIT_MODEL: &str = "openai/gpt-oss-120b";
     const VOICE_EDIT_TIMEOUT: Duration = Duration::from_millis(1500);
 
+    #[link(name = "CoreGraphics", kind = "framework")]
+    extern "C" {
+        fn CGEventCreateKeyboardEvent(
+            source: *const std::ffi::c_void,
+            keycode: u16,
+            key_down: bool,
+        ) -> *mut std::ffi::c_void;
+        fn CGEventSetFlags(event: *mut std::ffi::c_void, flags: u64);
+        fn CGEventPost(tap: u32, event: *mut std::ffi::c_void);
+    }
+
     #[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
     pub struct Settings {
         #[serde(default)]
@@ -79,16 +90,6 @@ pub mod mac {
     }
 
     #[derive(Clone, Serialize)]
-    pub struct VoiceErrorEvent {
-        pub message: String,
-    }
-
-    #[derive(Clone, Serialize)]
-    pub struct VoiceToastEvent {
-        pub message: String,
-    }
-
-    #[derive(Clone, Serialize)]
     pub struct VoiceEditSettingsView {
         pub model: &'static str,
         pub has_key: bool,
@@ -108,6 +109,7 @@ pub mod mac {
         role: String,
         original_value: String,
         caret: CFRange,
+        direct_ax_writable: bool,
         operation: Mutex<()>,
     }
 
@@ -190,21 +192,10 @@ pub mod mac {
 
     fn emit_error(app: &AppHandle, message: impl Into<String>) {
         let msg = message.into();
-        let _ = app.emit(
-            "voice_error",
-            VoiceErrorEvent {
-                message: msg.clone(),
-            },
-        );
         emit_state(app, "error", None, Some(msg));
         // Push-to-talk failing quietly is the worst outcome: the user held a key, said something,
         // and nothing happened (#49, push-to-talk design §5).
         crate::sound::mac::play(shogun_core::sound::Cue::VoiceFailed);
-    }
-
-    fn emit_toast(app: &AppHandle, message: impl Into<String>) {
-        let message = message.into();
-        let _ = app.emit("voice_toast", VoiceToastEvent { message });
     }
 
     fn decode_voice_edit_key(bytes: Vec<u8>) -> Option<String> {
@@ -399,6 +390,16 @@ pub mod mac {
         enabled == Some(true) && editable == Some(true) && settable
     }
 
+    /// Web editors commonly omit `AXIsEditable` and selected-text settability even though they
+    /// expose a stable text value and caret. That is enough to retain a safe keyboard-paste target;
+    /// an explicit disabled/non-editable value still fails closed.
+    fn paste_target_attributes(role: &str, enabled: Option<bool>, editable: Option<bool>) -> bool {
+        editable_role(role)
+            && !secure_role(role)
+            && enabled != Some(false)
+            && editable != Some(false)
+    }
+
     unsafe fn copy_range(element: AXUIElementRef) -> Option<CFRange> {
         let attribute = CFString::new(kAXSelectedTextRangeAttribute);
         let mut value: CFTypeRef = std::ptr::null();
@@ -451,7 +452,9 @@ pub mod mac {
     fn capture_dictation_target() -> Result<DictationTarget, &'static str> {
         let element = unsafe { focused_element() }.ok_or("no editable text field is focused")?;
         let role = unsafe { copy_string(element, kAXRoleAttribute) }.unwrap_or_default();
-        if !editable_role(&role) || secure_role(&role) || !unsafe { target_is_writable(element) } {
+        let enabled = unsafe { copy_bool(element, kAXEnabledAttribute) };
+        let editable = unsafe { copy_bool(element, kAXIsEditableAttribute) };
+        if !paste_target_attributes(&role, enabled, editable) {
             unsafe { CFRelease(element.cast()) };
             return Err("place the caret in an editable text field before dictating");
         }
@@ -482,6 +485,9 @@ pub mod mac {
             role,
             original_value: value,
             caret,
+            direct_ax_writable: writable_attributes(enabled, editable, unsafe {
+                selected_text_is_settable(element)
+            }),
             operation: Mutex::new(()),
         })
     }
@@ -533,6 +539,87 @@ pub mod mac {
         false
     }
 
+    fn paste_target_state_matches(
+        target: &DictationTarget,
+        role: Option<&str>,
+        value: Option<&str>,
+        caret: Option<CFRange>,
+        focused: bool,
+        enabled: Option<bool>,
+        editable: Option<bool>,
+    ) -> bool {
+        focused
+            && role == Some(target.role.as_str())
+            && paste_target_attributes(&target.role, enabled, editable)
+            && value == Some(target.original_value.as_str())
+            && caret == Some(target.caret)
+    }
+
+    /// Paste into the retained target, then restore the user's text clipboard. Caller has already
+    /// proven this exact field/value/caret still owns focus and claimed the delivery fence.
+    unsafe fn paste_text_at_target(
+        target: &DictationTarget,
+        transcript: &str,
+        expected: &str,
+    ) -> Result<(), String> {
+        use objc2::runtime::AnyObject;
+        use objc2::{class, msg_send};
+        use objc2_foundation::NSString;
+
+        const KVK_ANSI_V: u16 = 0x09;
+        const FLAG_COMMAND: u64 = 1 << 20;
+        const HID_EVENT_TAP: u32 = 0;
+
+        let pasteboard: *mut AnyObject =
+            unsafe { msg_send![class!(NSPasteboard), generalPasteboard] };
+        if pasteboard.is_null() {
+            return Err("no pasteboard".into());
+        }
+        let utf8 = NSString::from_str("public.utf8-plain-text");
+        let saved: *mut AnyObject = unsafe { msg_send![pasteboard, stringForType: &*utf8] };
+        let saved = if saved.is_null() {
+            None
+        } else {
+            let value: *const NSString = saved.cast();
+            Some(unsafe { &*value }.to_string())
+        };
+        let restore = || unsafe {
+            let _: isize = msg_send![pasteboard, clearContents];
+            if let Some(previous) = &saved {
+                let previous = NSString::from_str(previous);
+                let _: bool = msg_send![pasteboard, setString: &*previous, forType: &*utf8];
+            }
+        };
+
+        let ours = NSString::from_str(transcript);
+        let _: isize = unsafe { msg_send![pasteboard, clearContents] };
+        let wrote: bool = unsafe { msg_send![pasteboard, setString: &*ours, forType: &*utf8] };
+        if !wrote {
+            restore();
+            return Err("could not write the pasteboard".into());
+        }
+
+        for key_down in [true, false] {
+            let event =
+                unsafe { CGEventCreateKeyboardEvent(std::ptr::null(), KVK_ANSI_V, key_down) };
+            if event.is_null() {
+                restore();
+                return Err("could not synthesise the paste".into());
+            }
+            unsafe {
+                CGEventSetFlags(event, FLAG_COMMAND);
+                CGEventPost(HID_EVENT_TAP, event);
+                CFRelease(event.cast());
+            }
+        }
+
+        let landed = unsafe { value_matches(target.element, expected) };
+        restore();
+        landed
+            .then_some(())
+            .ok_or_else(|| "the paste did not change the captured field".into())
+    }
+
     fn target_state_matches(
         target: &DictationTarget,
         role: Option<&str>,
@@ -555,6 +642,64 @@ pub mod mac {
         UnsafeBeforeClaim,
         UnsafeAfterClaim,
         Inserted,
+    }
+
+    enum PasteAttempt {
+        Cancelled,
+        UnsafeBeforeClaim,
+        FailedAfterClaim(String),
+        Inserted,
+    }
+
+    fn paste_at_captured_caret(
+        session: u64,
+        target: &DictationTarget,
+        delivery_state: &AtomicU8,
+        transcript: &str,
+    ) -> PasteAttempt {
+        let Ok(_operation) = target.operation.lock() else {
+            return PasteAttempt::UnsafeBeforeClaim;
+        };
+        let mut pid = 0i32;
+        if unsafe { AXUIElementGetPid(target.element, &mut pid) } != kAXErrorSuccess
+            || pid != target.pid
+            || crate::display::frontmost_app().map(|app| app.pid) != Some(target.pid)
+            || !paste_target_state_matches(
+                target,
+                unsafe { copy_string(target.element, kAXRoleAttribute) }.as_deref(),
+                unsafe { copy_string(target.element, kAXValueAttribute) }.as_deref(),
+                unsafe { copy_range(target.element) },
+                same_focused_element(target),
+                unsafe { copy_bool(target.element, kAXEnabledAttribute) },
+                unsafe { copy_bool(target.element, kAXIsEditableAttribute) },
+            )
+        {
+            return PasteAttempt::UnsafeBeforeClaim;
+        }
+        let Some(expected) = expected_insert(&target.original_value, target.caret, transcript)
+        else {
+            return PasteAttempt::UnsafeBeforeClaim;
+        };
+        if !session_is_processing(session) {
+            return PasteAttempt::Cancelled;
+        }
+        if delivery_state
+            .compare_exchange(
+                DELIVERY_READY,
+                DELIVERY_WRITING,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_err()
+        {
+            return PasteAttempt::Cancelled;
+        }
+        // Validation and the session fence are adjacent to the first clipboard mutation. A focus,
+        // value, caret, or cancellation change before this claim leaves the external app untouched.
+        match unsafe { paste_text_at_target(target, transcript, &expected) } {
+            Ok(()) => PasteAttempt::Inserted,
+            Err(error) => PasteAttempt::FailedAfterClaim(error),
+        }
     }
 
     /// Directly inserts only into the retained field. Failure intentionally has no paste fallback.
@@ -794,6 +939,28 @@ pub mod mac {
     ) -> Option<DeliveryOutcome> {
         let _delivery_operation = delivery.operation.lock().ok()?;
         match target {
+            Some(target) if !target.direct_ax_writable => {
+                match paste_at_captured_caret(session, target, &delivery.state, transcript) {
+                    PasteAttempt::Inserted => {
+                        let _delivery = DeliveryGuard {
+                            state: &delivery.state,
+                        };
+                        Some(DeliveryOutcome::Inserted)
+                    }
+                    PasteAttempt::FailedAfterClaim(error) => {
+                        eprintln!("[voice] guarded paste failed: {error}; keeping transcript on clipboard");
+                        let _delivery = DeliveryGuard {
+                            state: &delivery.state,
+                        };
+                        Some(copy_claimed(transcript))
+                    }
+                    PasteAttempt::UnsafeBeforeClaim => {
+                        let _delivery = claim_clipboard_delivery(session, delivery)?;
+                        Some(copy_claimed(transcript))
+                    }
+                    PasteAttempt::Cancelled => None,
+                }
+            }
             Some(target) => {
                 match insert_at_captured_caret(session, target, &delivery.state, transcript) {
                     InsertAttempt::Inserted => {
@@ -891,9 +1058,16 @@ pub mod mac {
             Some(SessionPhase::Processing | SessionPhase::Finishing) => return false,
             None => {}
         }
-        // A missing or selected caret is still a useful recording: deliver its transcript to the
-        // clipboard, never by replacing the current selection.
-        let target = capture_dictation_target().ok().map(Arc::new);
+        // A missing or selected caret is still a useful recording: keep its transcript on the
+        // clipboard, never replace a selection. Web editors that omit optional AX writability
+        // attributes retain a guarded target and receive a verified keyboard paste instead.
+        let target = match capture_dictation_target() {
+            Ok(target) => Some(Arc::new(target)),
+            Err(reason) => {
+                eprintln!("[voice] no safe insertion target: {reason}");
+                None
+            }
+        };
         // Reserve the lane before opening the mic. Processing remains an owned state, so a
         // second hold can never open a fresh microphone while an older ASR worker is live.
         let session = {
@@ -1083,13 +1257,11 @@ pub mod mac {
                     match outcome {
                         DeliveryOutcome::Inserted => {
                             let _ = complete_terminal(session, SessionPhase::Processing, || {
-                                emit_toast(&worker_app, "Pasted");
                                 emit_state(&worker_app, "idle", Some(transcript), None);
                             });
                         }
                         DeliveryOutcome::Copied => {
                             let _ = complete_terminal(session, SessionPhase::Processing, || {
-                                emit_toast(&worker_app, "Copied to clipboard");
                                 emit_state(&worker_app, "idle", Some(transcript), None);
                             });
                         }
@@ -1316,6 +1488,7 @@ pub mod mac {
                 role: "AXTextField".into(),
                 original_value: "before".into(),
                 caret: CFRange::init(3, 0),
+                direct_ax_writable: true,
                 operation: Mutex::new(()),
             }
         }
@@ -1380,6 +1553,27 @@ pub mod mac {
             assert!(!writable_attributes(Some(true), None, true));
             assert!(!writable_attributes(Some(true), Some(false), true));
             assert!(!writable_attributes(Some(true), Some(true), false));
+        }
+
+        #[test]
+        fn web_editor_without_optional_ax_flags_keeps_a_guarded_paste_target() {
+            assert!(paste_target_attributes("AXTextArea", Some(true), None));
+            assert!(paste_target_attributes("AXTextField", None, None));
+            assert!(!paste_target_attributes(
+                "AXSecureTextField",
+                Some(true),
+                Some(true)
+            ));
+            assert!(!paste_target_attributes(
+                "AXTextArea",
+                Some(false),
+                Some(true)
+            ));
+            assert!(!paste_target_attributes(
+                "AXTextArea",
+                Some(true),
+                Some(false)
+            ));
         }
 
         #[test]

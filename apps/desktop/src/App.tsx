@@ -432,7 +432,6 @@ export function App(): JSX.Element {
   /// The in-panel hub (Today / Health / Sources / Memory / Activity / Trace). Everything routine
   /// finishes inside the notch — only meetings and Visual Recall get their own surfaces.
   const [showHub, setShowHub] = useState(false);
-  const [voiceToast, setVoiceToast] = useState<string | null>(null);
   const [voice, setVoice] = useState<VoiceView>({
     phase: "idle",
     transcript: "",
@@ -449,7 +448,6 @@ export function App(): JSX.Element {
   // #120: these timers are OWNED — each new event clears its predecessor before arming, so a
   // stale timeout can never dismiss the state that replaced the one it was armed for.
   const inlineHideTimer = useRef<number | null>(null);
-  const voiceToastTimer = useRef<number | null>(null);
 
   // Open-view size is user-resizable (corner grip) and persists across Rust-driven respawns.
   // Chat and Settings share one frame — toggling settings must not jump to a separate stored size.
@@ -690,18 +688,6 @@ export function App(): JSX.Element {
         setVoice((cur) => (cur.phase === "recording" ? { ...cur, level: norm } : cur));
       }),
     );
-    offs.push(
-      listen<{ message: string }>("voice_toast", (e) => {
-        setVoiceToast(e.payload.message);
-        // Owned + superseding (#120): a short toast armed earlier must not dismiss a longer
-        // error that replaced it.
-        if (voiceToastTimer.current != null) window.clearTimeout(voiceToastTimer.current);
-        voiceToastTimer.current = window.setTimeout(() => {
-          voiceToastTimer.current = null;
-          setVoiceToast(null);
-        }, 2200);
-      }),
-    );
     // Release signal from Rust: if UI still shows recording after 500ms with no levels, force end.
     offs.push(
       listen("voice_hold_released", () => {
@@ -828,10 +814,6 @@ export function App(): JSX.Element {
         window.clearTimeout(inlineHideTimer.current);
         inlineHideTimer.current = null;
       }
-      if (voiceToastTimer.current != null) {
-        window.clearTimeout(voiceToastTimer.current);
-        voiceToastTimer.current = null;
-      }
       offs.forEach((p) => void p.then((off) => off()));
     };
   }, []);
@@ -874,24 +856,6 @@ export function App(): JSX.Element {
     }
     wasOpenForSummary.current = open;
   }, [open, showSettings, showHub]);
-
-  useEffect(() => {
-    if (!IN_TAURI) return;
-    let unlisten: (() => void) | undefined;
-    void listen<{ message: string }>("voice_error", (e) => {
-      setVoiceToast(e.payload.message);
-      if (voiceToastTimer.current != null) window.clearTimeout(voiceToastTimer.current);
-      voiceToastTimer.current = window.setTimeout(() => {
-        voiceToastTimer.current = null;
-        setVoiceToast(null);
-      }, 4000);
-    }).then((fn) => {
-      unlisten = fn;
-    });
-    return () => {
-      unlisten?.();
-    };
-  }, []);
 
   // `/` opens the memory search (B-6) — a reach-anywhere shortcut, but never while typing:
   // a slash in the composer (or any field) is text, not a command.
@@ -1455,7 +1419,6 @@ export function App(): JSX.Element {
   // Panel always mounted (playbook P0 pre-mount). Idle face mounts only when fully Idle.
   return (
     <div ref={stageRef} className={`stage notch-shell ${shellMode}`}>
-      {voiceToast ? <div className="voice-toast">{voiceToast}</div> : null}
       {showIdleFace ? (
         <div className="notch-idle" aria-hidden={open || collapsing || expanding}>
           {idleChin}

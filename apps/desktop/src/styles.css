@@ -5043,22 +5043,6 @@ body.full-window {
   font-weight: 600;
   background: var(--fill-strong);
 }
-.voice-toast {
-  position: fixed;
-  top: 8px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 20;
-  max-width: 90%;
-  padding: 8px 12px;
-  border-radius: var(--r-pill);
-  background: rgba(20, 20, 24, 0.92);
-  border: 1px solid var(--line);
-  color: var(--ink);
-  font-size: var(--fs-xs);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
-}
-
 /* ---- Meeting: reusable drag / resize ---- */
 .drag-handle-6dot {
   display: inline-flex;
