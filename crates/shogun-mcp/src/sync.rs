@@ -10,9 +10,11 @@
 //!
 //! The gate is the same [`crate::service_gate::authorize_op`] every operation goes through: a sync
 //! only proceeds when `read_sync` resolves to [`OpDecision::Background`] (released + connected, or
-//! amber serving cached reads). An unreleased / disconnected service can never sync. A read carries
-//! no user data off the device, so — consistent with [`crate::service_gate::requires_traceability`]
-//! (false for reads) — sync writes no traceability row; only writes/sends egress and trace.
+//! amber serving cached reads). An unreleased / disconnected service can never sync. A direct
+//! first-layer read carries no user data off the device and writes no traceability row — but a
+//! read that crosses a third-party boundary (Gmail via Composio, the 2026-07 decision) must be
+//! traced by its executor (digest/flag only): consult
+//! [`crate::service_gate::requires_traceability`], which is the oracle for both cases.
 
 use crate::scope::Service;
 use crate::service_gate::{authorize_op, DenyReason, OpContext, OpDecision};

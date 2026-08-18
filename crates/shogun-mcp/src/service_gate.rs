@@ -127,13 +127,17 @@ pub fn authorize_op(service: Service, op_name: &str, ctx: &OpContext) -> OpDecis
 }
 
 /// Whether an *allowed* operation constitutes an egress that must be recorded in the traceability
-/// log (invariant 3): any external send, or a service write that leaves the device. Reads and
-/// device-local drafts do not egress. The executor calls this to decide whether to trace.
+/// log (invariant 3): any external send, or a service write that leaves the device. First-layer
+/// reads do not egress user data and are untraced — with one exception: **Gmail reads route
+/// through Composio** (the 2026-07 all-Composio decision), so the request crosses a third-party
+/// boundary and the recorded decision requires read egress to be traced too (digest/flag only,
+/// never content). The executor calls this to decide whether to trace.
 pub fn requires_traceability(service: Service, op_name: &str) -> bool {
-    matches!(
-        scope::lookup(service, op_name).map(|o| o.class),
-        Some(OpClass::ExternalSend | OpClass::ServiceStateChange)
-    )
+    match scope::lookup(service, op_name).map(|o| o.class) {
+        Some(OpClass::ExternalSend | OpClass::ServiceStateChange) => true,
+        Some(OpClass::Read) => service == Service::Gmail,
+        _ => false,
+    }
 }
 
 #[cfg(test)]
@@ -304,10 +308,15 @@ mod tests {
     }
 
     #[test]
-    fn traceability_required_for_writes_not_reads() {
+    fn traceability_required_for_writes_and_third_party_reads() {
         assert!(requires_traceability(Service::Gmail, "send"));
         assert!(requires_traceability(Service::Gmail, "draft_create_update"));
         assert!(requires_traceability(Service::GoogleCalendar, "event_create"));
-        assert!(!requires_traceability(Service::Gmail, "read_sync"));
+        // Gmail reads route through Composio (third-party boundary): the 2026-07 decision
+        // requires the read egress itself to be recorded — the oracle must say so, or a future
+        // executor honouring it will silently skip the mandated disclosure.
+        assert!(requires_traceability(Service::Gmail, "read_sync"));
+        // Direct first-layer reads carry no user data off the device and stay untraced.
+        assert!(!requires_traceability(Service::GoogleCalendar, "read_sync"));
     }
 }
