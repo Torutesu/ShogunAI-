@@ -167,6 +167,10 @@ export const STRINGS = {
     connectionsHint: "First-layer integrations connect directly to each service. Data stays on your device.",
     connectionsEmpty: "Loading services…",
     connectionsUnavailable: "Not available yet",
+    connStateConnected: "Connected",
+    connStateNeedsReauth: "Needs reauth",
+    connStateDisconnected: "Not connected",
+    connStateComingSoon: "Coming soon",
     connect: "Connect",
     connecting: "Connecting…",
     reconnect: "Reconnect",
@@ -332,6 +336,7 @@ export const STRINGS = {
     keySave: "Save",
     keyRemove: "Remove",
     keySaved: "Saved to your Keychain — answers are live.",
+    keySaveFailed: "Couldn't save the key to your Keychain — try again.",
     // ── Plan & billing (issue #8) ────────────────────────────────────────────
     // This is the ShogunAI subscription — not to be confused with `sub*` below, which is the
     // assistant plan a user already pays someone else for (Issue #110).
@@ -697,6 +702,8 @@ export const FULL_UI = {
     lockedNeedsKey: "Drafting runs on your own key — that comes with Pro.",
     schedule: "Schedule",
     prep: "Prep",
+    notWiredYet: "Coming soon — run it from the SHOGUN panel for now.",
+    panelSettingsPointer: "SHOGUN panel ⚙︎",
     // sources
     connectedServices: "Connected services",
     sourcesHint: "Each one connects directly. Scope is what ShogunAI is allowed to read.",

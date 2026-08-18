@@ -399,6 +399,7 @@ function Plan(props: { state: OnboardingState; onChange: (s: OnboardingState) =>
   const { state, onChange } = props;
   const [key, setKey] = useState("");
   const [saved, setSaved] = useState(false);
+  const [saveErr, setSaveErr] = useState(false);
   const plan = state.plan;
 
   const pick = (p: "standard" | "pro"): void => {
@@ -417,12 +418,15 @@ function Plan(props: { state: OnboardingState; onChange: (s: OnboardingState) =>
     }
     // v1 BYOK is Anthropic-first (CLAUDE.md); the provider picker lives in Settings. The key goes
     // to the Keychain and nowhere else (invariant 7).
+    setSaveErr(false);
     void invoke("set_byok_key", { provider: "anthropic", key: k })
       .then(() => {
         setSaved(true);
         setKey("");
       })
-      .catch(() => undefined);
+      // A failed Keychain write must not look like a Save that did nothing — the key the user
+      // pasted was NOT stored, and silently keeping the form identical says otherwise.
+      .catch(() => setSaveErr(true));
   };
 
   return (
@@ -460,7 +464,9 @@ function Plan(props: { state: OnboardingState; onChange: (s: OnboardingState) =>
       {plan === "pro" ? (
         <div className="ob-fact">
           <div className="ob-fact-t">{t.obKeyTitle}</div>
-          <div className="ob-fact-b">{saved ? t.keySaved : t.obKeyBody}</div>
+          <div className="ob-fact-b">
+            {saved ? t.keySaved : saveErr ? t.keySaveFailed : t.obKeyBody}
+          </div>
           {!saved ? (
             <div className="ob-keyrow">
               <input

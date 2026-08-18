@@ -33,11 +33,12 @@ export const CONN_LABELS: Record<string, string> = {
   linear: "Linear",
 };
 
+// From the catalog, not literals: user-facing copy lives in strings.ts (i18n-ready, コード規約).
 export const CONN_STATE_LABEL: Record<ConnState, string> = {
-  connected: "Connected",
-  needs_reauth: "Needs reauth",
-  disconnected: "Not connected",
-  coming_soon: "Coming soon",
+  connected: t.connStateConnected,
+  needs_reauth: t.connStateNeedsReauth,
+  disconnected: t.connStateDisconnected,
+  coming_soon: t.connStateComingSoon,
 };
 
 // Brand marks, inlined from simple-icons at build time (see scripts/generate-service-icons.mjs).

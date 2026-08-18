@@ -123,7 +123,7 @@ export function Health({ v, onNav }: { v: HealthView; onNav: (p: PaneId) => void
             (c.fix.target === "settings" ? (
               // Capture rules / search window live in the panel's Settings, not in this window —
               // a plain pointer, not a button that would go nowhere.
-              <span className="frow__d">{c.fix.label} — SHOGUN panel ⚙︎</span>
+              <span className="frow__d">{c.fix.label} — {tf.panelSettingsPointer}</span>
             ) : (
               <button type="button" className="hcard__fix" onClick={() => onNav(c.fix!.target as PaneId)}>
                 {c.fix.label} →
@@ -218,7 +218,9 @@ export function Today({ v }: { v: TodayView }): JSX.Element {
                     {a.label}
                   </span>
                 ) : (
-                  <button key={a.id} type="button" className="fbtn">
+                  // Disabled until wired to a command: an enabled button whose click does
+                  // nothing is indistinguishable from a hang.
+                  <button key={a.id} type="button" className="fbtn" disabled title={tf.notWiredYet}>
                     {a.label}
                   </button>
                 ),
@@ -245,7 +247,8 @@ export function Today({ v }: { v: TodayView }): JSX.Element {
               </span>
             </div>
             <div className="frow__trail">
-              <button type="button" className="fbtn">
+              {/* Disabled until wired (see the suggested-actions note). */}
+              <button type="button" className="fbtn" disabled title={tf.notWiredYet}>
                 {tf.prep}
               </button>
             </div>
@@ -344,10 +347,11 @@ export function Memory({ v }: { v: MemoryView }): JSX.Element {
                 <span className="frow__d">{m.detail}</span>
               </div>
               <div className="frow__trail">
-                <button type="button" className="fbtn">
+                {/* Disabled until wired (see the suggested-actions note). */}
+                <button type="button" className="fbtn" disabled title={tf.notWiredYet}>
                   {tf.keepSeparate}
                 </button>
-                <button type="button" className="fbtn fbtn--go">
+                <button type="button" className="fbtn fbtn--go" disabled title={tf.notWiredYet}>
                   {tf.merge}
                 </button>
               </div>

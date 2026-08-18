@@ -467,6 +467,11 @@ export function App(): JSX.Element {
     level: 0,
   });
   const voicePeak = useRef(0);
+  /// voice_level rAF coalescing (see the listener): latest normalized level + the pending frame.
+  const pendingVoiceLevel = useRef(0);
+  const voiceLevelRaf = useRef<number | null>(null);
+  /// Last size handed to applyPanelSize for the collapsed pill (dedup — see the measure effect).
+  const lastPillSize = useRef<{ w: number; h: number } | null>(null);
   /** Last `voice_level` timestamp — failsafe ends stuck recording after release + quiet. */
   const lastVoiceLevelAt = useRef(0);
   const voiceReleaseWatch = useRef<number | null>(null);
@@ -575,7 +580,7 @@ export function App(): JSX.Element {
   useEffect(() => {
     if (!IN_TAURI) return;
     sizeForViewRef.current({ open: true });
-    void invoke("interact", { kind: "boot" });
+    void invoke("interact", { kind: "boot" }).catch(() => undefined);
     const offs: Array<Promise<() => void>> = [];
     offs.push(listen<ContextPayload>("context", (e) => setCtxApp(e.payload.bundle_id || e.payload.title_masked || "")));
     // The pill is push-driven: Rust owns the lifecycle, the webview never decides that a meeting
@@ -653,7 +658,19 @@ export function App(): JSX.Element {
         voicePeak.current = Math.max(voicePeak.current * 0.85, rms);
         const norm = voicePeak.current > 0 ? Math.min(1, rms / voicePeak.current) : 0;
         lastVoiceLevelAt.current = performance.now();
-        setVoice((cur) => (cur.phase === "recording" ? { ...cur, level: norm } : cur));
+        // rAF-coalesced: events arrive at mic-frame rate (tens of Hz) and each setState
+        // re-renders this 4,700-line component — the exact antipattern WaveBars documents.
+        // One state write per painted frame is all the meter can show anyway.
+        pendingVoiceLevel.current = norm;
+        if (voiceLevelRaf.current == null) {
+          voiceLevelRaf.current = requestAnimationFrame(() => {
+            voiceLevelRaf.current = null;
+            const n = pendingVoiceLevel.current;
+            setVoice((cur) =>
+              cur.phase === "recording" && cur.level !== n ? { ...cur, level: n } : cur,
+            );
+          });
+        }
       }),
     );
     offs.push(
@@ -746,7 +763,9 @@ export function App(): JSX.Element {
     );
     offs.push(
       listen<ClockSyncPayload>("clock_sync", (e) =>
-        void invoke("clock_sync_ack", { seq: e.payload.seq, jsPerfMs: performance.now() }),
+        void invoke("clock_sync_ack", { seq: e.payload.seq, jsPerfMs: performance.now() }).catch(
+          () => undefined,
+        ),
       ),
     );
     // Overlay spec: Escape closes the overlay (it stays hidden until summoned again).
@@ -919,10 +938,16 @@ export function App(): JSX.Element {
     cancelAutoCollapse();
     leaveTimer.current = window.setTimeout(() => {
       leaveTimer.current = null;
-      // Never collapse over work in progress: a focused composer, a half-written question, or an
-      // answer still arriving all mean the panel is in use even though the cursor wandered off.
-      const composerHasFocus = document.activeElement?.classList.contains("composer__input") ?? false;
-      if (composerHasFocus || inputRef.current.trim().length > 0 || thinkingRef.current) return;
+      // Never collapse over work in progress: ANY focused editable in the panel — the composer,
+      // the memory-search box, a Settings key field, a DELETE confirmation — means the panel is
+      // in use even though the cursor wandered off. Collapsing mid-paste of an API key (and
+      // closing Settings with it) loses the user's text, so the guard covers every editable,
+      // not just the composer.
+      const active = document.activeElement;
+      const editableHasFocus =
+        active instanceof HTMLElement &&
+        (active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.isContentEditable);
+      if (editableHasFocus || inputRef.current.trim().length > 0 || thinkingRef.current) return;
       if (voiceRef.current.phase === "recording" || voiceRef.current.phase === "processing") return;
       beginCollapseRef.current();
     }, AUTO_COLLAPSE_MS);
@@ -1300,7 +1325,12 @@ export function App(): JSX.Element {
   // (an invisible dead zone across the top-left of the screen). Re-measured whenever the pill's
   // content — and therefore its width — changes.
   useEffect(() => {
-    if (open) return;
+    if (open) {
+      // Expanded panel owns the window size; forget the pill size so re-collapsing always
+      // re-applies it (an equal-size skip below must never suppress that restore).
+      lastPillSize.current = null;
+      return;
+    }
     // Whichever of the two is on screen: the ordinary handle, or the meeting pill standing in
     // for it.
     const el = handleRef.current ?? pillRef.current;
@@ -1313,10 +1343,14 @@ export function App(): JSX.Element {
     const hiding = el.classList.contains("handle--hiding");
     const notchW = hiding ? W_HIDE : W_HANDLE_FALLBACK;
     const minH = hiding ? H_DEAD : H_HANDLE;
-    void applyPanelSize(
-      notchW,
-      Math.max(minH, Math.ceil(r.height)),
-    );
+    const w = notchW;
+    const h = Math.max(minH, Math.ceil(r.height));
+    // Skip identical re-applies: this effect re-runs on every 1Hz elapsed_ms tick during a
+    // collapsed recording (the pill uses tabular figures precisely so ticking seconds don't
+    // reflow), and each applyPanelSize is a webview→Rust→AppKit round trip.
+    if (lastPillSize.current?.w === w && lastPillSize.current?.h === h) return;
+    lastPillSize.current = { w, h };
+    void applyPanelSize(w, h);
   }, [
     open,
     live,

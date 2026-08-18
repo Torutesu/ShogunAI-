@@ -18,11 +18,6 @@ interface LevelEvent {
   rms: number;
 }
 
-interface VoiceResponseEvent {
-  text: string;
-  transcript: string;
-}
-
 interface VoiceErrorEvent {
   message: string;
 }
@@ -66,12 +61,8 @@ export function VoiceOverlay(): JSX.Element {
       setLevel(norm);
     }).then((u) => unsubs.push(u));
 
-    void listen<VoiceResponseEvent>("voice_response", (e) => {
-      setTranscript(e.payload.transcript);
-      setResponse(e.payload.text);
-      setPhase("response");
-    }).then((u) => unsubs.push(u));
-
+    // (No `voice_response` listener: Rust never emits that event — the response arrives through
+    // `voice_state` with phase "response" above.)
     void listen<VoiceErrorEvent>("voice_error", (e) => {
       setError(e.payload.message);
       setPhase("error");

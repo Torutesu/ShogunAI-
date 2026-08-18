@@ -13,6 +13,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { FullUi } from "./fullui/FullUi";
 import { SAMPLE_VIEW, SAMPLE_VIEW_STANDARD } from "./fullui/sample";
 import type { FullUiView } from "./fullui/types";
+import { t } from "./strings";
 import "./styles.css";
 
 const IN_TAURI = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -62,7 +63,7 @@ function Root(): JSX.Element {
 
   // Say what went wrong rather than silently falling back to fixture data — a window quietly
   // showing invented numbers is the one failure mode this screen must not have.
-  if (failed) return <div className="full-boot">Couldn't read your context — {failed}</div>;
+  if (failed) return <div className="full-boot">{t.hubFailed} — {failed}</div>;
   if (!view) return <div className="full-boot" />;
   return <FullUi view={view} />;
 }

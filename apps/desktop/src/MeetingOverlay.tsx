@@ -1548,10 +1548,14 @@ export function MeetingOverlay(): JSX.Element | null {
                 onClick={() => {
                   const text = liveTurns.map((turn) => turn.text).join("\n");
                   if (!text.trim()) return;
-                  void navigator.clipboard.writeText(text).then(() => {
-                    setCopyFlash(true);
-                    window.setTimeout(() => setCopyFlash(false), 1200);
-                  });
+                  void navigator.clipboard
+                    .writeText(text)
+                    .then(() => {
+                      setCopyFlash(true);
+                      window.setTimeout(() => setCopyFlash(false), 1200);
+                    })
+                    // A denied clipboard is an unhandled rejection otherwise; no flash = not copied.
+                    .catch(() => undefined);
                 }}
               >
                 <IconCopy className="ov__icon" />
