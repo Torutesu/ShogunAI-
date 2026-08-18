@@ -272,6 +272,14 @@ fn flush_chunk(live: &mut DeepgramLive, pending: &mut Vec<f32>) {
     pending.clear();
 }
 
+/// Ask macOS for microphone access while the user is visibly enabling Voice. The stream is
+/// stopped immediately; no captured samples are retained, persisted, or sent to an ASR provider.
+pub fn request_microphone_access() -> Result<(), String> {
+    let mut mic = Mic::open().map_err(|e| format!("microphone unavailable: {e}"))?;
+    mic.stop();
+    Ok(())
+}
+
 /// Open the mic and start streaming (live WS) or filling a RAM ring (HTTP/Whisper fallback).
 ///
 /// Does **not** load Whisper here — preload / release keeps hold-start fast. Live WS opens on the

@@ -833,6 +833,15 @@ pub mod mac {
         });
     }
 
+    /// Prompt for microphone access from the explicit Settings action, never from the UI thread.
+    /// The probe opens and immediately stops a local stream; it does not retain or send audio.
+    fn request_microphone_access_bg() {
+        std::thread::spawn(|| match voice_lane::request_microphone_access() {
+            Ok(()) => eprintln!("[voice] microphone access ready"),
+            Err(error) => eprintln!("[voice] microphone access unavailable: {error}"),
+        });
+    }
+
     pub fn init(app: &AppHandle) {
         let settings = load_settings(app);
         let enabled_log = settings.enabled;
@@ -1172,6 +1181,7 @@ pub mod mac {
         save_settings(&app, &settings.settings);
         if enabled {
             preload_asr_bg(&app);
+            request_microphone_access_bg();
         }
         if !enabled {
             drop(lane);
