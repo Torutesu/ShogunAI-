@@ -133,5 +133,5 @@ Source branch: `mikel/meeting-recap-transcript` at `0083ec9`
 ## 12. Delivery
 
 - [x] Commit in coherent Conventional Commit batches.
-- [ ] Push `codex/full-integration`.
-- [ ] Open PR to `main` with scope, skipped superseded work, test evidence, Mac evidence, risk notes, and rollback guidance.
+- [x] Push `codex/full-integration`.
+- [x] Open PR to `main` with adapted/superseded work, test evidence, Mac evidence, risk notes, and rollback guidance.
