@@ -51,7 +51,7 @@ const en = {
     eyebrow: 'FAQ',
     title: 'Questions, answered.',
     items: [
-      ['Is ShogunAI private?', 'Yes. Your memory is captured and stored on your device by default. Nothing is copied to the cloud unless you explicitly enable it. ShogunAI is not a folder of screenshots — it turns your work context into something you can search and use. The one exception is visual recall, which is off until you turn it on: it keeps a frame locally for at most 72 hours, only where a window yields no text.'],
+      ['Is ShogunAI private?', 'Yes. Your memory is captured and stored on your device by default. Nothing is copied to the cloud unless you explicitly enable it. ShogunAI is not a folder of screenshots — it turns your work context into something you can search and use. The one exception is visual recall, which is off until you turn it on: encrypted frames stay local for the finite retention period you choose, only where a window yields no text.'],
       ['Does ShogunAI work on macOS only?', 'Yes. ShogunAI uses native macOS capabilities to capture and organize work context locally.'],
       ['Can I use my own AI models and API keys?', 'Yes. ShogunAI supports BYOK, so you choose the model provider, manage your own keys, and set your own usage limits. When you ask a model to process information, only the relevant data is sent to the provider you selected.'],
       ['How is ShogunAI different from a meeting recorder or notes app?', 'It connects the context of your whole workday instead of recording one meeting or storing one note. ShogunAI helps you find what matters, summarize it, draft the next step, and act on it.'],
