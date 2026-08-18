@@ -21,6 +21,9 @@ server = ["dep:axum", "dep:tokio"]
 
 [dependencies]
 shogun-agents = { path = "../shogun-agents" }
+# Prompt fence for untrusted tool_result bodies (same contract as Agent drafts / Batch chunks).
+# shogun-core cannot be a dep here (core --features db/net--> mcp).
+shogun-redact = { path = "../shogun-redact" }
 # The Memory API applies the same confidence rule as UI reads (FR-API-06); reuse the single
 # implementation in shogun-fusion rather than re-deriving the bands. One-way: mcp → fusion.
 shogun-fusion = { path = "../shogun-fusion" }

@@ -24,9 +24,16 @@
 //! [`strip_hidden`] is the sibling on the same write path: hidden format / bidi / noncharacters
 //! are removed *before* [`redact`] so a secret split by ZWSP still matches, and so those runes
 //! never land in `event_log.content`.
+//!
+//! [`fence_untrusted`] is the prompt-side sibling: untrusted text is wrapped so a model cannot
+//! treat it as instructions (Agent drafts, Batch Classify / Summarize, tool_result).
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 pub mod hidden;
 pub use hidden::{is_hidden, strip_hidden, HiddenStrip};
+
+pub mod fence;
+pub use fence::fence_untrusted;
 
 /// What replaces a matched secret. Fixed-width so the shape of the surrounding text survives.
 const MASK: &str = "[redacted]";

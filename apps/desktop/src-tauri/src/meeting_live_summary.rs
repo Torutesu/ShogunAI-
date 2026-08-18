@@ -132,8 +132,9 @@ pub fn meeting_request_live_summary(app: tauri::AppHandle, transcript: String) -
                 .with_temperature(0.2),
             SUMMARY_PURPOSE,
         );
-        let user = format!(
-            "Meeting transcript so far (speakers labeled when known):\n\n{trimmed}\n\nSummarize the meeting up to this point."
+        let user = shogun_core::llm::fence_untrusted(
+            "Meeting transcript so far (speakers labeled when known). Summarize the meeting up to this point.",
+            &trimmed,
         );
         match rt.block_on(client.complete_with_system(Some(SYSTEM), &user)) {
             Ok(text) => {
