@@ -353,11 +353,22 @@ pub fn with_queue<R>(
 ) -> Result<R, String> {
     let _lock = acquire_lock(path)?;
     let mut queue = load_queue(path)?;
-    // A process died after dedicated confirmation. Never report success without an outcome.
-    queue.recover_in_flight(now_ms());
     let output = change(&mut queue);
     save_unlocked(path, &queue)?;
     Ok(output)
+}
+
+/// Resolve work left in flight by a previous desktop process.
+///
+/// This is deliberately separate from [`with_queue`]. An in-flight row can belong to a send that
+/// is still running outside the file lock, so ordinary reads, polls, and post-send writes must not
+/// mistake live work for a crash. The desktop calls this once when it becomes the queue executor.
+pub fn recover_in_flight(path: &Path, recovered_ms: u64) -> Result<Vec<ApprovalId>, String> {
+    let _lock = acquire_lock(path)?;
+    let mut queue = load_queue(path)?;
+    let recovered = queue.recover_in_flight(recovered_ms);
+    save_unlocked(path, &queue)?;
+    Ok(recovered)
 }
 pub fn now_ms() -> u64 {
     SystemTime::now()
@@ -414,6 +425,51 @@ mod tests {
         assert!(!fs::read_to_string(&path).unwrap().contains("private"));
         let _ = fs::remove_file(path);
     }
+
+    #[test]
+    fn polling_live_in_flight_work_cannot_force_failure() {
+        let path = path();
+        let send = SendAction::PostMessage {
+            channel: "x".into(),
+        };
+        let id = with_queue(&path, |q| {
+            q.try_request(
+                send.clone(),
+                Preview::for_send(&send, "private", Route::DirectMcp),
+                ApprovalOrigin::Api,
+                1,
+            )
+        })
+        .unwrap()
+        .unwrap();
+
+        with_queue(&path, |q| {
+            assert!(matches!(
+                q.confirm(
+                    id,
+                    shogun_agents::approval::ConfirmIntent::DedicatedButton,
+                    2
+                ),
+                shogun_agents::approval::Decision::Confirmed(_)
+            ));
+        })
+        .unwrap();
+
+        with_queue(&path, |q| {
+            assert_eq!(q.status(id), Some(ApprovalStatus::Pending));
+        })
+        .unwrap();
+
+        with_queue(&path, |q| {
+            assert!(q.mark_status(id, ApprovalStatus::Sent, 3));
+        })
+        .unwrap();
+        assert_eq!(
+            load_queue(&path).unwrap().status(id),
+            Some(ApprovalStatus::Sent)
+        );
+        let _ = fs::remove_file(path);
+    }
     #[test]
     fn rejects_invalid_or_duplicate_wire() {
         let path = path();
@@ -444,7 +500,7 @@ mod tests {
             id
         })
         .unwrap();
-        with_queue(&path, |_| ()).unwrap();
+        assert_eq!(recover_in_flight(&path, 3).unwrap(), vec![id]);
         assert_eq!(
             load_queue(&path).unwrap().status(id),
             Some(ApprovalStatus::SendFailed)

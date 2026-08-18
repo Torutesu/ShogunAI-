@@ -3048,6 +3048,19 @@ fn install_connectors(app: &tauri::AppHandle, db: Option<shogun_core::daemon::Db
         .map(|dir| dir.join(shogun_mcp::approval_store::STORE_FILE))
         .unwrap_or_else(|_| std::path::PathBuf::from(shogun_mcp::approval_store::STORE_FILE));
     let heartbeat_path = approval_path.with_file_name(shogun_mcp::desktop_heartbeat::FILE_NAME);
+    // Only the desktop executes confirmed sends. Recover rows left in flight by its previous
+    // process once at startup; ordinary queue transactions must never fail live work mid-send.
+    match shogun_mcp::approval_store::recover_in_flight(
+        &approval_path,
+        shogun_mcp::approval_store::now_ms(),
+    ) {
+        Ok(recovered) if !recovered.is_empty() => eprintln!(
+            "[approvals] recovered {} interrupted send(s) as failed",
+            recovered.len()
+        ),
+        Ok(_) => {}
+        Err(error) => eprintln!("[approvals] startup recovery failed: {error}"),
+    }
     app.manage(approvals::mac::ApprovalQueueState::at(approval_path));
     // Headless MCP/REST sends require this fresh writer; a stopped desktop naturally fails closed.
     std::thread::spawn(move || loop {
