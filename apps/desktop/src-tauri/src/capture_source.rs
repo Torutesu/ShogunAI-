@@ -31,6 +31,8 @@ pub const WALK_BUDGET_MS: u64 = 250;
 
 #[cfg(target_os = "macos")]
 mod mac {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
     use std::time::{Duration, Instant};
 
     use shogun_core::capture::exclusion::ExclusionPolicy;
@@ -42,9 +44,9 @@ mod mac {
     use super::{DEFAULT_POLL_MS, WALK_BUDGET_MS};
     use crate::axcache::{ax_trusted_silent, focused_window};
     use crate::display::frontmost_app;
-    use crate::visual_recall::mac::SharedSettings;
     #[cfg(feature = "visual-recall-ocr")]
     use crate::screen_ocr::{self, MIN_OCR_INTERVAL_MS};
+    use crate::visual_recall::mac::SharedSettings;
     #[cfg(feature = "visual-recall-ocr")]
     use crate::visual_recall::pipeline::{self, RecallPipeline};
 
@@ -61,7 +63,10 @@ mod mac {
     #[cfg(feature = "visual-recall-ocr")]
     impl OcrPollGate {
         fn new() -> Self {
-            Self { last_focus_key: None, last_ocr_at: None }
+            Self {
+                last_focus_key: None,
+                last_ocr_at: None,
+            }
         }
 
         #[allow(clippy::too_many_arguments)] // one gate, one call site; a params struct adds nothing
@@ -79,7 +84,13 @@ mod mac {
             if focus_changed {
                 return true;
             }
-            if !pipeline::wants_ocr(bundle_id, window_title, ax_empty, ax_text_len, meeting_active) {
+            if !pipeline::wants_ocr(
+                bundle_id,
+                window_title,
+                ax_empty,
+                ax_text_len,
+                meeting_active,
+            ) {
                 return false;
             }
             match self.last_ocr_at {
@@ -96,6 +107,56 @@ mod mac {
 
     fn focus_key(bundle_id: &str, title: Option<&str>) -> String {
         format!("{bundle_id}\0{}", title.unwrap_or(""))
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct CaptureFingerprint {
+        focus_key: String,
+        text_hash: u64,
+    }
+
+    fn capture_fingerprint(
+        focus_key: &str,
+        outcome: Option<&CaptureOutcome>,
+    ) -> Option<CaptureFingerprint> {
+        let text = outcome?.text()?;
+        let mut hasher = DefaultHasher::new();
+        text.hash(&mut hasher);
+        Some(CaptureFingerprint {
+            focus_key: focus_key.to_string(),
+            text_hash: hasher.finish(),
+        })
+    }
+
+    fn reply_context_needs_refresh(
+        warm_for: Option<&str>,
+        last_capture: Option<&CaptureFingerprint>,
+        focus_key: &str,
+        outcome: Option<&CaptureOutcome>,
+    ) -> bool {
+        if warm_for != Some(focus_key) {
+            return true;
+        }
+        let Some(current_capture) = capture_fingerprint(focus_key, outcome) else {
+            return false;
+        };
+        last_capture != Some(&current_capture)
+    }
+
+    fn capture_outcome_is_usable(outcome: Option<&CaptureOutcome>) -> bool {
+        matches!(outcome, Some(CaptureOutcome::Captured { .. }))
+    }
+
+    fn invalidate_reply_context(
+        cache: Option<&shogun_core::daemon::ReplyContextCache>,
+        warm_for: &mut Option<String>,
+        last_capture: &mut Option<CaptureFingerprint>,
+    ) {
+        if let Some(cache) = cache {
+            cache.clear();
+        }
+        *warm_for = None;
+        *last_capture = None;
     }
 
     // ── Slack AX snippets for huddle detection (Plan A-4) ──────────────────────────────────
@@ -151,11 +212,11 @@ mod mac {
     /// `huddle_hint` instead of walking the AX tree a second time. Empty when Slack was not
     /// captured recently (not frontmost, excluded, untrusted, or the buffer went stale).
     pub fn latest_slack_ax_snippets() -> Vec<String> {
-        let Ok(g) = SLACK_AX_SNIPPETS.lock() else { return Vec::new() };
+        let Ok(g) = SLACK_AX_SNIPPETS.lock() else {
+            return Vec::new();
+        };
         match g.as_ref() {
-            Some((at, snippets))
-                if at.elapsed().as_millis() as u64 <= SLACK_SNIPPET_FRESH_MS =>
-            {
+            Some((at, snippets)) if at.elapsed().as_millis() as u64 <= SLACK_SNIPPET_FRESH_MS => {
                 snippets.clone()
             }
             _ => Vec::new(),
@@ -167,7 +228,11 @@ mod mac {
     /// capture — persists it via `Db::ingest_capture` (collapse + extract). `dwell_ms` is credited
     /// to the event (accumulates on a near-dup touch). Returns the outcome, or `None` if there is no
     /// frontmost app / focused window.
-    pub fn capture_once(db: &Db, policy: &ExclusionPolicy, dwell_ms: i64) -> Option<CaptureOutcome> {
+    pub fn capture_once(
+        db: &Db,
+        policy: &ExclusionPolicy,
+        dwell_ms: i64,
+    ) -> Option<CaptureOutcome> {
         let front = frontmost_app()?;
         // Never capture / ingest our own process as focus — memory would store "reading itself".
         if crate::display::is_own_app(&front.bundle_id, &front.name) {
@@ -175,7 +240,10 @@ mod mac {
         }
         let root = focused_window(front.pid)?;
         let title = root.title();
-        let focus = Focus { bundle_id: &front.bundle_id, window_title: title.as_deref() };
+        let focus = Focus {
+            bundle_id: &front.bundle_id,
+            window_title: title.as_deref(),
+        };
 
         let start = Instant::now();
         let outcome = capture_focus(policy, &focus, &root, Limits::default(), || {
@@ -186,7 +254,10 @@ mod mac {
         // Never logs captured text (only its length) — telemetry must not contain user content.
         match &outcome {
             CaptureOutcome::Excluded(reason) => {
-                eprintln!("[capture] excluded {} ({:?}) — no walk", front.bundle_id, reason);
+                eprintln!(
+                    "[capture] excluded {} ({:?}) — no walk",
+                    front.bundle_id, reason
+                );
             }
             CaptureOutcome::Empty => {}
             CaptureOutcome::Captured { text, .. } => {
@@ -296,7 +367,10 @@ mod mac {
                     cands.len(),
                 );
             }
-            None => eprintln!("[screen_ocr] {} — DB write skipped (digest={digest:#x})", bundle_id),
+            None => eprintln!(
+                "[screen_ocr] {} — DB write skipped (digest={digest:#x})",
+                bundle_id
+            ),
         }
         poll_gate.mark(key, now);
     }
@@ -319,17 +393,21 @@ mod mac {
         let dwell_ms = interval.as_millis() as i64;
         std::thread::spawn(move || {
             let mut warm_for: Option<String> = None;
+            let mut last_capture: Option<CaptureFingerprint> = None;
             #[cfg(feature = "visual-recall-ocr")]
             let mut ocr_poll_gate = OcrPollGate::new();
             #[cfg(feature = "visual-recall-ocr")]
             let mut recall_pipeline = RecallPipeline::new();
             #[cfg(feature = "visual-recall-ocr")]
-            let mut last_frame_purge = Instant::now() - Duration::from_millis(FRAME_PURGE_INTERVAL_MS);
+            let mut last_frame_purge =
+                Instant::now() - Duration::from_millis(FRAME_PURGE_INTERVAL_MS);
             #[cfg(feature = "visual-recall-ocr")]
             {
                 match db.purge_screen_frames() {
                     Ok(removed) if removed > 0 => {
-                        eprintln!("[screen_ocr] startup purge removed {removed} frame(s) older than 72 h");
+                        eprintln!(
+                            "[screen_ocr] startup purge removed {removed} frame(s) older than 72 h"
+                        );
                     }
                     Ok(_) => {}
                     Err(e) => eprintln!("[screen_ocr] startup retention purge failed: {e}"),
@@ -353,74 +431,103 @@ mod mac {
                 // This is a background poll. Prompting here would re-open the macOS
                 // Accessibility alert every two seconds until the user responds; explicit
                 // permission requests remain owned by onboarding and the diagnostics action.
-                if ax_trusted_silent() {
-                    // Re-read the policy each tick: excluding an app is usually a reaction to
-                    // what is on screen right now, so it must take effect now, not next launch.
-                    // A poisoned lock means capture stops rather than ignoring exclusions.
-                    let Ok(current) = policy.lock() else {
-                        eprintln!("[capture] exclusion policy unreadable — pausing capture");
-                        std::thread::sleep(interval);
-                        continue;
-                    };
-                    let visual = crate::visual_recall::mac::refresh_settings(&visual_recall);
-                    let ax_outcome = capture_once(&db, &current, dwell_ms);
-                    if let Some(CaptureOutcome::Excluded(_)) = ax_outcome.as_ref() {
-                        // Excluded windows are never OCR'd either.
-                    } else if visual.enabled {
-                        if let Some(front) = frontmost_app() {
-                            let title = focused_window(front.pid).and_then(|w| w.title());
-                            if current.is_excluded(&front.bundle_id, title.as_deref()).is_none() {
-                                #[cfg(feature = "visual-recall-ocr")]
-                                {
-                                    let ax_empty =
-                                        matches!(ax_outcome, Some(CaptureOutcome::Empty) | None);
-                                    let ax_text_len = match ax_outcome.as_ref() {
-                                        Some(CaptureOutcome::Captured { text, .. }) => text.len(),
-                                        _ => 0,
-                                    };
-                                    maybe_screen_ocr(
-                                        &db,
-                                        &visual,
-                                        front.pid,
-                                        &front.bundle_id,
-                                        title.as_deref(),
-                                        dwell_ms,
-                                        ax_empty,
-                                        ax_text_len,
-                                        &mut ocr_poll_gate,
-                                        &mut recall_pipeline,
-                                    );
-                                }
+                if !ax_trusted_silent() {
+                    invalidate_reply_context(
+                        reply_cache.as_ref(),
+                        &mut warm_for,
+                        &mut last_capture,
+                    );
+                    std::thread::sleep(interval);
+                    continue;
+                }
+                // Re-read the policy each tick: excluding an app is usually a reaction to
+                // what is on screen right now, so it must take effect now, not next launch.
+                // A poisoned lock means capture stops rather than ignoring exclusions.
+                let Ok(current) = policy.lock() else {
+                    eprintln!("[capture] exclusion policy unreadable — pausing capture");
+                    invalidate_reply_context(
+                        reply_cache.as_ref(),
+                        &mut warm_for,
+                        &mut last_capture,
+                    );
+                    std::thread::sleep(interval);
+                    continue;
+                };
+                let visual = crate::visual_recall::mac::refresh_settings(&visual_recall);
+                let ax_outcome = capture_once(&db, &current, dwell_ms);
+                if let Some(CaptureOutcome::Excluded(_)) = ax_outcome.as_ref() {
+                    // Excluded windows are never OCR'd either.
+                } else if visual.enabled {
+                    if let Some(front) = frontmost_app() {
+                        let title = focused_window(front.pid).and_then(|w| w.title());
+                        if current
+                            .is_excluded(&front.bundle_id, title.as_deref())
+                            .is_none()
+                        {
+                            #[cfg(feature = "visual-recall-ocr")]
+                            {
+                                let ax_empty =
+                                    matches!(ax_outcome, Some(CaptureOutcome::Empty) | None);
+                                let ax_text_len = match ax_outcome.as_ref() {
+                                    Some(CaptureOutcome::Captured { text, .. }) => text.len(),
+                                    _ => 0,
+                                };
+                                maybe_screen_ocr(
+                                    &db,
+                                    &visual,
+                                    front.pid,
+                                    &front.bundle_id,
+                                    title.as_deref(),
+                                    dwell_ms,
+                                    ax_empty,
+                                    ax_text_len,
+                                    &mut ocr_poll_gate,
+                                    &mut recall_pipeline,
+                                );
                             }
                         }
                     }
-                    drop(current);
+                }
+                drop(current);
 
-                    // Pre-assemble the reply context for whatever the user is now looking at, so
-                    // pressing the draft button only starts generation (SLO: offer in 150ms —
-                    // collecting on the press is what that budget forbids). Rebuilt only when the
-                    // focused thread actually changes, so a steady poll costs nothing.
-                    if let Some(cache) = reply_cache.as_ref() {
-                        if let Some((key, win_title)) = focused_thread_key_and_title() {
-                            if warm_for.as_deref() != Some(key.as_str()) {
-                                // Use the fusion path: if the on-screen window maps to a fetched
-                                // Gmail thread, the context comes from the full email body
-                                // (PayloadSource::Fetched); otherwise it falls back to the
-                                // captured on-screen fragment (PayloadSource::OnScreenOnly).
-                                let ctx = db.build_reply_context_for_screen(
-                                    &key,
-                                    win_title.as_deref().unwrap_or(""),
-                                );
-                                eprintln!(
-                                    "[capture] reply context warmed for {} in {}ms ({} turn(s))",
-                                    key,
-                                    ctx.build_ms,
-                                    ctx.turns.len()
-                                );
-                                cache.put(ctx);
-                                warm_for = Some(key);
-                            }
+                // Pre-assemble the reply context for whatever the user is now looking at, so
+                // pressing the draft button only starts generation (SLO: offer in 150ms —
+                // collecting on the press is what that budget forbids). Rebuilt only when the
+                // focused thread or captured AX text changes, so a steady poll costs nothing.
+                if let Some(cache) = reply_cache.as_ref() {
+                    if !capture_outcome_is_usable(ax_outcome.as_ref()) {
+                        invalidate_reply_context(Some(cache), &mut warm_for, &mut last_capture);
+                    } else if let Some((key, win_title)) = focused_thread_key_and_title() {
+                        if reply_context_needs_refresh(
+                            warm_for.as_deref(),
+                            last_capture.as_ref(),
+                            &key,
+                            ax_outcome.as_ref(),
+                        ) {
+                            // Use the fusion path: if the on-screen window maps to a fetched
+                            // Gmail thread, the context comes from the full email body
+                            // (PayloadSource::Fetched); otherwise it falls back to the
+                            // captured on-screen fragment (PayloadSource::OnScreenOnly).
+                            let ctx = db.build_reply_context_for_screen(
+                                &key,
+                                win_title.as_deref().unwrap_or(""),
+                            );
+                            eprintln!(
+                                "[capture] reply context warmed for {} in {}ms ({} turn(s))",
+                                key,
+                                ctx.build_ms,
+                                ctx.turns.len()
+                            );
+                            cache.put(ctx);
+                            warm_for = Some(key.clone());
                         }
+                        if let Some(fingerprint) = capture_fingerprint(&key, ax_outcome.as_ref()) {
+                            last_capture = Some(fingerprint);
+                        } else {
+                            invalidate_reply_context(Some(cache), &mut warm_for, &mut last_capture);
+                        }
+                    } else {
+                        invalidate_reply_context(Some(cache), &mut warm_for, &mut last_capture);
                     }
                 }
                 std::thread::sleep(interval);
@@ -434,7 +541,88 @@ mod mac {
     fn focused_thread_key_and_title() -> Option<(String, Option<String>)> {
         let front = frontmost_app()?;
         let title = focused_window(front.pid)?.title();
-        let key = shogun_memory::thread::thread_key("capture", None, Some(&front.bundle_id), title.as_deref())?;
+        let key = shogun_memory::thread::thread_key(
+            "capture",
+            None,
+            Some(&front.bundle_id),
+            title.as_deref(),
+        )?;
         Some((key, title))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use shogun_core::capture::walk_policy::WalkResult;
+
+        fn captured(text: &str) -> CaptureOutcome {
+            CaptureOutcome::Captured {
+                text: text.to_string(),
+                walk: WalkResult {
+                    text: text.to_string(),
+                    text_bytes: text.len(),
+                    elements_visited: 1,
+                    depth_reached: 0,
+                    truncated: false,
+                    partial: false,
+                },
+            }
+        }
+
+        #[test]
+        fn same_focus_key_changed_capture_refreshes_reply_context() {
+            let first = captured("old message");
+            let last = capture_fingerprint("same-window", Some(&first));
+            let current = captured("new message");
+
+            assert!(reply_context_needs_refresh(
+                Some("same-window"),
+                last.as_ref(),
+                "same-window",
+                Some(&current),
+            ));
+        }
+
+        #[test]
+        fn same_focus_key_same_capture_does_not_refresh_reply_context() {
+            let current = captured("unchanged message");
+            let last = capture_fingerprint("same-window", Some(&current));
+
+            assert!(!reply_context_needs_refresh(
+                Some("same-window"),
+                last.as_ref(),
+                "same-window",
+                Some(&current),
+            ));
+        }
+
+        #[test]
+        fn excluded_empty_and_unavailable_capture_invalidate_warm_context() {
+            let outcomes = [
+                Some(CaptureOutcome::Excluded(
+                    shogun_core::capture::exclusion::ExclusionReason::UserApp,
+                )),
+                Some(CaptureOutcome::Empty),
+                None,
+            ];
+
+            for outcome in outcomes {
+                let cache = shogun_core::daemon::ReplyContextCache::new();
+                cache.put(shogun_core::daemon::ReplyContext {
+                    thread_key: "sensitive".into(),
+                    ..shogun_core::daemon::ReplyContext::default()
+                });
+                let mut warm_for = Some("sensitive".to_string());
+                let mut last_capture = capture_fingerprint("sensitive", Some(&captured("secret")));
+
+                assert!(!capture_outcome_is_usable(outcome.as_ref()));
+                invalidate_reply_context(Some(&cache), &mut warm_for, &mut last_capture);
+
+                assert!(cache.current().is_none());
+                assert!(warm_for.is_none());
+                assert!(last_capture.is_none());
+            }
+            assert!(capture_outcome_is_usable(Some(&captured("usable"))));
+        }
     }
 }
