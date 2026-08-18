@@ -157,6 +157,21 @@ export const STRINGS = {
     approvalsBadge: (n: number): string => `${n} waiting for your approval`,
     // settings
     settings: "Settings",
+    settingsGeneral: "General",
+    settingsGeneralHint: "Plan, approvals, startup, and appearance.",
+    settingsMemory: "Memory",
+    settingsMemorySectionHint: "Capture, recall, local access, and nightly review.",
+    settingsVoice: "Voice",
+    settingsVoiceHint: "Dictation, meetings, sound, and daily summaries.",
+    settingsConnections: "Connections",
+    settingsConnectionsHint: "Services, accounts, and local activity sources.",
+    settingsIntelligence: "Intelligence",
+    settingsIntelligenceHint: "Models, subscriptions, and personalization.",
+    settingsControls: "Controls",
+    settingsControlsHint: "Shortcuts, notch placement, and visibility.",
+    settingsPrivacy: "Privacy",
+    settingsPrivacyHint: "Keys, data boundaries, and memory reset.",
+    settingsSectionNav: "Settings sections",
     // Earlier conversations. Kept out of the way by default: the panel is for asking something
     // now, not for reading back a transcript.
     history: "Earlier messages",

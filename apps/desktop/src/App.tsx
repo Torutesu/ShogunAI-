@@ -4896,6 +4896,113 @@ export function NotchStatusSection({
   );
 }
 
+export type SettingsSectionId =
+  | "general"
+  | "memory"
+  | "voice"
+  | "connections"
+  | "intelligence"
+  | "controls"
+  | "privacy";
+
+type SettingsSectionMeta = {
+  id: SettingsSectionId;
+  label: string;
+  description: string;
+};
+
+const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
+  { id: "general", label: t.settingsGeneral, description: t.settingsGeneralHint },
+  { id: "memory", label: t.settingsMemory, description: t.settingsMemorySectionHint },
+  { id: "voice", label: t.settingsVoice, description: t.settingsVoiceHint },
+  { id: "connections", label: t.settingsConnections, description: t.settingsConnectionsHint },
+  { id: "intelligence", label: t.settingsIntelligence, description: t.settingsIntelligenceHint },
+  { id: "controls", label: t.settingsControls, description: t.settingsControlsHint },
+  { id: "privacy", label: t.settingsPrivacy, description: t.settingsPrivacyHint },
+];
+
+function SettingsSectionIcon({ section }: { section: SettingsSectionId }): JSX.Element {
+  const common = {
+    width: 17,
+    height: 17,
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: 1.7,
+    strokeLinecap: "round" as const,
+    strokeLinejoin: "round" as const,
+    "aria-hidden": true,
+  };
+  if (section === "general") return <svg {...common}><path d="M4 7h10M18 7h2M4 17h2M10 17h10" /><circle cx="16" cy="7" r="2" /><circle cx="8" cy="17" r="2" /></svg>;
+  if (section === "memory") return <IconBrain size={17} />;
+  if (section === "voice") return <svg {...common}><path d="M4 13v-2M8 17V7M12 20V4M16 16V8M20 13v-2" /></svg>;
+  if (section === "connections") return <svg {...common}><circle cx="6" cy="12" r="2.5" /><circle cx="18" cy="6" r="2.5" /><circle cx="18" cy="18" r="2.5" /><path d="m8.3 10.9 7.4-3.8M8.3 13.1l7.4 3.8" /></svg>;
+  if (section === "intelligence") return <svg {...common}><path d="m12 3 1.4 4.1L17.5 8.5l-4.1 1.4L12 14l-1.4-4.1-4.1-1.4 4.1-1.4L12 3Z" /><path d="m18 14 .8 2.2L21 17l-2.2.8L18 20l-.8-2.2L15 17l2.2-.8L18 14Z" /></svg>;
+  if (section === "controls") return <svg {...common}><rect x="3.5" y="5" width="17" height="14" rx="3" /><path d="M7 10h2M15 10h2M8 14h8" /></svg>;
+  return <svg {...common}><path d="M12 3 5 6v5c0 4.6 2.8 8.1 7 10 4.2-1.9 7-5.4 7-10V6l-7-3Z" /><path d="M9.5 12.2 11 13.7l3.7-3.7" /></svg>;
+}
+
+export function SettingsSectionNav({
+  active,
+  onChange,
+}: {
+  active: SettingsSectionId;
+  onChange: (section: SettingsSectionId) => void;
+}): JSX.Element {
+  return (
+    <nav
+      className="settings__nav"
+      aria-label={t.settingsSectionNav}
+      role="tablist"
+      aria-orientation="vertical"
+      onKeyDown={(event) => {
+        if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+        event.preventDefault();
+        const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
+        const current = Math.max(0, SETTINGS_SECTIONS.findIndex((section) => section.id === active));
+        const next = event.key === "Home"
+          ? 0
+          : event.key === "End"
+            ? SETTINGS_SECTIONS.length - 1
+            : (current + (event.key === "ArrowDown" ? 1 : -1) + SETTINGS_SECTIONS.length) % SETTINGS_SECTIONS.length;
+        const section = SETTINGS_SECTIONS[next];
+        if (!section) return;
+        onChange(section.id);
+        buttons[next]?.focus();
+      }}
+    >
+      <div className="settings__nav-mark" aria-hidden="true">S</div>
+      {SETTINGS_SECTIONS.map((section) => (
+        <button
+          key={section.id}
+          id={`settings-tab-${section.id}`}
+          className={`settings__nav-item${active === section.id ? " is-active" : ""}`}
+          type="button"
+          role="tab"
+          aria-selected={active === section.id}
+          aria-controls={`settings-panel-${section.id}`}
+          tabIndex={active === section.id ? 0 : -1}
+          title={section.description}
+          onClick={() => onChange(section.id)}
+        >
+          <span className="settings__nav-icon"><SettingsSectionIcon section={section.id} /></span>
+          <span>{section.label}</span>
+        </button>
+      ))}
+    </nav>
+  );
+}
+
+function SettingsSlot({
+  section,
+  children,
+}: {
+  section: SettingsSectionId;
+  children: JSX.Element;
+}): JSX.Element {
+  return <div className={`settings__slot settings__slot--${section}`}>{children}</div>;
+}
+
 function Settings(props: {
   appearance: Appearance;
   setAppearance: (a: Appearance) => void;
@@ -4919,6 +5026,13 @@ function Settings(props: {
     onDone,
     onCleared,
   } = props;
+  const [activeSection, setActiveSection] = useState<SettingsSectionId>("general");
+  const settingsContentRef = useRef<HTMLElement>(null);
+  const activeSectionMeta = SETTINGS_SECTIONS.find((section) => section.id === activeSection) ?? SETTINGS_SECTIONS[0];
+  const selectSection = (section: SettingsSectionId): void => {
+    setActiveSection(section);
+    settingsContentRef.current?.scrollTo({ top: 0, behavior: "auto" });
+  };
   // Clearing extracted state is destructive and context is foundational, so it is a deliberate
   // two-step: reveal a typed confirmation, and only a matching "CLEAR" enables the delete.
   const [confirming, setConfirming] = useState(false);
@@ -5109,26 +5223,43 @@ function Settings(props: {
         </button>
       </header>
       <div className="settings__body">
-        <ApprovalsSection />
+        <SettingsSectionNav active={activeSection} onChange={selectSection} />
+        <main
+          ref={settingsContentRef}
+          className="settings__content"
+          data-active={activeSection}
+          id={`settings-panel-${activeSection}`}
+          role="tabpanel"
+          aria-labelledby={`settings-tab-${activeSection}`}
+          tabIndex={0}
+        >
+          <div className="settings__section-head">
+            <span className="settings__section-kicker">{t.settings}</span>
+            <h2>{activeSectionMeta.label}</h2>
+            <p>{activeSectionMeta.description}</p>
+          </div>
+          <div className="settings__section-body">
+        <SettingsSlot section="general"><ApprovalsSection /></SettingsSlot>
         {/* Plan state first: when a trial has ended, everything below it is locked, and the
             reason has to be the first thing on screen rather than a discovery. */}
-        <PlanBillingSection />
+        <SettingsSlot section="general"><PlanBillingSection /></SettingsSlot>
         {/* Near the top on purpose. Meeting notes ships off and only ever turns on because
             someone found this switch — burying an opt-in below six connectors is how a feature
             stays permanently off (FR-MT-01). */}
-        <MeetingSection />
-        <LaunchAtLoginSection />
-        <VisualRecallSection />
-        <MemoryApiSection />
-        <VoiceSection />
-        <SoundSection />
-        <DailySummariesSection />
-        <ConnectionsSection />
-        <GoogleOAuthSection />
-        <ComposioSection />
-        <AiSessionsSection />
-        <DreamSection />
-        <PersonalizationSection />
+        <SettingsSlot section="voice"><MeetingSection /></SettingsSlot>
+        <SettingsSlot section="general"><LaunchAtLoginSection /></SettingsSlot>
+        <SettingsSlot section="memory"><VisualRecallSection /></SettingsSlot>
+        <SettingsSlot section="memory"><MemoryApiSection /></SettingsSlot>
+        <SettingsSlot section="voice"><VoiceSection /></SettingsSlot>
+        <SettingsSlot section="voice"><SoundSection /></SettingsSlot>
+        <SettingsSlot section="voice"><DailySummariesSection /></SettingsSlot>
+        <SettingsSlot section="connections"><ConnectionsSection /></SettingsSlot>
+        <SettingsSlot section="connections"><GoogleOAuthSection /></SettingsSlot>
+        <SettingsSlot section="connections"><ComposioSection /></SettingsSlot>
+        <SettingsSlot section="connections"><AiSessionsSection /></SettingsSlot>
+        <SettingsSlot section="memory"><DreamSection /></SettingsSlot>
+        <SettingsSlot section="intelligence"><PersonalizationSection /></SettingsSlot>
+        <SettingsSlot section="general">
         <section className="set">
           <div className="set__label" id="seg-appearance">{t.appearance}</div>
           <div className="seg" role="radiogroup" aria-labelledby="seg-appearance">
@@ -5146,9 +5277,11 @@ function Settings(props: {
             ))}
           </div>
         </section>
-        <DockVisibleSection />
-        <CastlePositionSection />
-        <NotchStatusSection visible={showStatusInNotch} onVisibleChange={setShowStatusInNotch} />
+        </SettingsSlot>
+        <SettingsSlot section="controls"><DockVisibleSection /></SettingsSlot>
+        <SettingsSlot section="controls"><CastlePositionSection /></SettingsSlot>
+        <SettingsSlot section="controls"><NotchStatusSection visible={showStatusInNotch} onVisibleChange={setShowStatusInNotch} /></SettingsSlot>
+        <SettingsSlot section="controls">
         <section className="set">
           <div className="set__label">{t.shortcuts}</div>
           {SHORTCUT_ROWS.map(({ action, label }) => (
@@ -5187,9 +5320,11 @@ function Settings(props: {
           {keyErr ? <div className="set__hint is-err">{keyErr}</div> : null}
           <p className="set__hint set__hint--quiet">{t.shortcutHint}</p>
         </section>
+        </SettingsSlot>
         {/* Subscription first, API key second. The order is the point: most people arriving here
             already pay for an assistant, and asking them for a metered key before offering the
             plan they hold is what makes them close the window. */}
+        <SettingsSlot section="intelligence">
         <section className="set">
           <div className="set__label">{t.subTitle}</div>
           <div className="set__hint">{t.subHint}</div>
@@ -5265,6 +5400,8 @@ function Settings(props: {
           ) : null}
           {subMsg ? <div className="set__hint is-err">{subMsg}</div> : null}
         </section>
+        </SettingsSlot>
+        <SettingsSlot section="privacy">
         <PrivacySecuritySection
           hasKey={hasKey}
           keyRejected={keyRejected}
@@ -5272,6 +5409,8 @@ function Settings(props: {
           provider={provider}
           onApplyLlm={(p, m) => applyLlm(p, m)}
         />
+        </SettingsSlot>
+        <SettingsSlot section="privacy">
         <section className="set">
           <div className="set__label">{t.memory}</div>
           <div className="set__hint">{t.memoryHint}</div>
@@ -5329,6 +5468,9 @@ function Settings(props: {
             </div>
           )}
         </section>
+        </SettingsSlot>
+          </div>
+        </main>
       </div>
     </div>
   );
