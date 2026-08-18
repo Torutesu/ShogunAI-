@@ -182,6 +182,14 @@ fn resolve(method: Method, path: &str) -> Result<Routed, RouteMiss> {
                 level: Level::L1,
             },
         ),
+        ["v1", "visual_recall", "retention"] => method_is(
+            method,
+            Method::Post,
+            Routed::Write {
+                tool: Tool::VisualRecallSetRetention,
+                level: Level::L1,
+            },
+        ),
         ["v1", "visual_recall", "frames", "search"] => method_is(
             method,
             Method::Get,
@@ -1147,6 +1155,17 @@ mod tests {
             ),
             Routed::Write {
                 tool: Tool::VisualRecallSetEnabled,
+                level: Level::L1
+            }
+        );
+        assert_eq!(
+            route(
+                &req(Method::Post, "/v1/visual_recall/retention", Some("t")),
+                &reg(),
+                &ent()
+            ),
+            Routed::Write {
+                tool: Tool::VisualRecallSetRetention,
                 level: Level::L1
             }
         );

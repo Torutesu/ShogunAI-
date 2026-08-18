@@ -12,7 +12,7 @@
 | 2 | `fix(integrations): open Keychain ACLs so dev rebuilds keep Always Allow` | `keychain_store.rs` ＋ `scripts/codesign-desktop-dev.sh` |
 | 3 | `feat(desktop): ship visual recall OCR with search and settings surfacing` | CGWindow capture → Vision OCR → 検索 |
 | 4 | `fix(desktop): meeting overlay click-through via pointer hit-testing` | `meeting_overlay_set_interactive` |
-| 5 | `feat(memory): add screen_frames table with 72h retention` | V12 マイグレーション |
+| 5 | `feat(memory): add screen_frames table with finite retention` | V12 マイグレーション |
 | 6 | `feat(desktop): store JPEG frames and expose visual recall APIs` | JPEG 保存・recall API |
 | 7 | `fix(desktop): harden meeting overlay, keychain, and DB startup` | DB 破損時の隔離起動 |
 | 8 | `fix(memory): correct yesterday window test expectations` | （Linux 済。実機確認不要） |
@@ -203,7 +203,7 @@ printf 'garbage' > ~/Library/Application\ Support/com.syogun.shogunai/memory.db
 
 ---
 
-## 4. 差分 #3/#5/#6 — Visual recall（OCR ＋ JPEG 72h）
+## 4. 差分 #3/#5/#6 — Visual recall（OCR ＋ 暗号化JPEGの有限保持）
 
 ### 4.1 既定 OFF → ON
 
@@ -245,11 +245,11 @@ Visual recall のフレームは **クエリが「画面/時間」を訊いて�
 
 パネルのチャット/検索に上の「引かれる例」を入れて、**画面由来の証跡（`source = screen_ocr`）** が返ることを確認。フレームの再 OCR は `rescan_screen_frame`。
 
-### 4.5 72h 保持と自動削除
+### 4.5 選択した保持期間と自動削除
 
 - purge は **起動 30 分後から 30 分間隔**（`FRAME_PURGE_INTERVAL_MS`）で走る。削除が起きた時だけログ:
   ```
-  [screen_ocr] purged N frame(s) older than 72 h
+  [screen_ocr] purged N expired frame(s)
   ```
 - 短時間の検証では発火しないので、**古いフレームを差し込んで**確かめる:
   ```
@@ -257,9 +257,7 @@ Visual recall のフレームは **クエリが「画面/時間」を訊いて�
   ```
   → 次の purge 窓（最長 30 分）で消えること。
 
-> ⚠️ **実機で必ず確認したい既知の穴**: purge ループは `visual.enabled` が true の間だけ回る（`capture_source.rs:302`）。**Visual recall を Off に戻すと、既に保存済みの JPEG は 72h を過ぎても消えない**（Off の間は purge も走らず、Off 時の即時パージも無い）。
-> 手順: フレームを数枚溜める → Off にする → 上の SQL で `created_at_ms` を 4 日前にする → 30 分以上待つ → 行が**残っていれば穴が再現**。
-> CLAUDE.md の invariant-2 例外は「期限切れは自動削除する」を条件にしているので、再現したら Off 時の即時パージ（または enabled に依らない purge）を入れる必要がある。
+保持期間は設定の 1〜7 日スライダー、または Custom（1〜3650 日）で変更する。変更時に期限切れ行は即時削除され、以後は Visual Recall が Off でも定期 purge が走る。2 GB に達すると既存行を早期削除せず、新規キャプチャを明示的に一時停止することも確認する。
 
 ---
 

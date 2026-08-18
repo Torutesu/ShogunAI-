@@ -1,7 +1,7 @@
 -- Visual recall frame cache (issue #106, user decision 2026-08-02).
 --
 -- Explicit exception to invariant 2: when Visual recall is on, compressed JPEG frames from the
--- OCR capture path are retained locally for ≤72 hours, then purged. No audio, no cloud upload.
+-- OCR capture path use finite user-selected age retention, then purge. No audio or cloud upload.
 -- Text + provenance still live in event_log (`source = screen_ocr`); this table holds pixels only.
 
 CREATE TABLE screen_frames (

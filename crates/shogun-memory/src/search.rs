@@ -274,11 +274,12 @@ pub fn visual_recall_window(
     query: &str,
     now_ms: i64,
     local_days: LocalDayBounds,
+    retention_ms: i64,
 ) -> (i64, i64) {
-    if let Some(win) = query_time_window(query, now_ms, local_days) {
-        return win;
-    }
-    (now_ms - crate::screen_frames::RETENTION_MS, now_ms)
+    let retention_start = now_ms.saturating_sub(retention_ms.max(0));
+    let (from_ms, to_ms) =
+        query_time_window(query, now_ms, local_days).unwrap_or((retention_start, now_ms));
+    (from_ms.max(retention_start), to_ms.min(now_ms))
 }
 
 /// FTS over one `event_log.source` tag (e.g. `screen_ocr` for visual recall).
@@ -1415,6 +1416,23 @@ mod warm_window_tests {
     }
 
     #[test]
+    fn visual_recall_window_never_exceeds_selected_retention() {
+        let now = 3 * 86_400_000;
+        let days = LocalDayBounds {
+            yesterday_start_ms: 0,
+            today_start_ms: 2 * 86_400_000,
+        };
+        assert_eq!(
+            visual_recall_window("what was on my screen yesterday", now, days, 86_400_000),
+            (2 * 86_400_000, 2 * 86_400_000)
+        );
+        assert_eq!(
+            visual_recall_window("show my screen", now, days, 2 * 86_400_000),
+            (86_400_000, now)
+        );
+    }
+
+    #[test]
     fn fts_search_source_scopes_to_one_tag() {
         let conn = crate::open_in_memory().unwrap();
         add(&conn, "quarterly roadmap slide text", "ocr1", 1_000);
@@ -1663,4 +1681,3 @@ mod cold_search_tests {
         assert!(search_cold_partitions(&conn, &[], (0, 100), 6, 10).unwrap().ids.is_empty());
     }
 }
-

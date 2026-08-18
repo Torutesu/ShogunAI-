@@ -98,6 +98,10 @@ pub fn to_call(command: &Command, include_low: bool) -> Option<HttpCall> {
                 "/v1/visual_recall/enabled".into(),
                 r#"{"enabled":false}"#.to_string(),
             ),
+            VisualRecallCommand::Retention { days } => post(
+                "/v1/visual_recall/retention".into(),
+                format!(r#"{{"days":{days}}}"#),
+            ),
             VisualRecallCommand::Search {
                 query,
                 from_ms,
@@ -257,6 +261,22 @@ mod tests {
                 .body
                 .as_deref(),
             Some(r#"{"id":7,"active":false}"#)
+        );
+    }
+
+    #[test]
+    fn visual_recall_retention_calls_the_symmetric_endpoint() {
+        assert_eq!(
+            to_call(
+                &Command::VisualRecall(VisualRecallCommand::Retention { days: 30 }),
+                false,
+            )
+            .unwrap(),
+            HttpCall {
+                method: "POST",
+                path: "/v1/visual_recall/retention".into(),
+                body: Some(r#"{"days":30}"#.into()),
+            }
         );
     }
 

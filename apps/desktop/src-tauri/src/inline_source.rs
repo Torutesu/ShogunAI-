@@ -1290,7 +1290,7 @@ pub mod mac {
             }
         }
         if !ctx.screen_frames.is_empty() {
-            p.push_str("\nStored screen captures (JPEG, ≤72 h, linked to OCR events):\n");
+            p.push_str("\nStored screen captures (encrypted JPEG, selected finite retention, linked to OCR events):\n");
             for f in &ctx.screen_frames {
                 p.push_str("- [screen frame ");
                 p.push_str(&f.frame_id.to_string());

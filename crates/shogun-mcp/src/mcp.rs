@@ -350,6 +350,10 @@ fn tool_descriptor(tool: Tool) -> Value {
         Tool::ActionsStatus => ("Poll an L3 approval outcome", json!({ "approval_id": { "type": "integer", "minimum": 1 } })),
         Tool::VisualRecallStatus => ("Visual recall status (enabled, frame stats, recent OCR)", json!({})),
         Tool::VisualRecallSetEnabled => ("Enable or disable visual recall (L1)", json!({ "enabled": { "type": "boolean" } })),
+        Tool::VisualRecallSetRetention => (
+            "Set finite encrypted-frame retention in days (L1)",
+            json!({ "days": { "type": "integer", "minimum": 1, "maximum": 3650 } }),
+        ),
         Tool::VisualRecallSearchFrames => (
             "Search stored screen frames by OCR text",
             json!({

@@ -25,7 +25,7 @@ export const STRINGS = {
       "SHOGUN reads the text of the window you're working in, through macOS Accessibility. That's it.",
     obReadsKeep1Title: "No screenshots by default.",
     obReadsKeep1Body:
-      "Screen reading is text only. Images exist only if you turn on Visual recall — compressed frames, encrypted, on this Mac, auto-deleted within 72 hours.",
+      "Screen reading is text only. Images exist only if you turn on Visual recall — compressed, encrypted on this Mac, and auto-deleted at the age you choose.",
     obReadsKeep2Title: "Your work stays on this Mac.",
     obReadsKeep2Body:
       "Raw captures never leave the device. Only small processed chunks go out for indexing, and every one is logged where you can read it.",
@@ -526,23 +526,33 @@ export const STRINGS = {
     deepgramAsrPlaceholder: "Paste the speech provider API key…",
     visualRecallSection: "Visual recall",
     visualRecallHint:
-      "Passive OCR reads the focused window when accessibility text is thin. Saved frames stay on this Mac for up to 72 hours, then purge automatically.",
+      "Passive OCR reads the focused window when accessibility text is thin. Saved frames stay encrypted on this Mac, then purge at your selected age.",
     visualRecallOn: "On",
     visualRecallOff: "Off",
     visualRecallDisclosure:
-      "Requires Screen Recording for the focused window. Compressed JPEGs and OCR text stay local in memory for up to 72 hours — nothing is uploaded.",
+      "Requires Screen Recording for the focused window. Compressed JPEGs stay in the encrypted memory database; nothing is uploaded. Automatic age deletion is always on.",
+    visualRecallRetention: "Keep saved screens",
+    visualRecallRetentionDays: (days: number) => `${days} day${days === 1 ? "" : "s"}`,
+    visualRecallRetentionCustom: "Custom",
+    visualRecallRetentionCustomHint: "Choose 1–3,650 days. Longer retention uses more disk.",
+    visualRecallRetentionApply: "Apply",
+    visualRecallStoragePending: "Storage estimate appears after at least two saved screens.",
+    visualRecallStorageEstimate: (current: string, projected: string, days: number) =>
+      `${current} used now · about ${projected} over ${days} day${days === 1 ? "" : "s"}, based on the last 24 hours.`,
+    visualRecallStoragePaused: (limit: string) =>
+      `New capture paused at ${limit}. Existing screens stay until their selected age expires.`,
     visualRecallStatusOff: "Off — passive OCR paused. You can still save a screen manually.",
     visualRecallStatusIdle:
       "On — waiting for a window that needs OCR (canvas apps, terminals, or thin accessibility text).",
     visualRecallStatusLive: (n: number, app: string, window: string) =>
       `On — last read ${n} chars from ${app}${window ? ` · ${window}` : ""}.`,
-    visualRecallTimeline: "Saved screens (72 h)",
+    visualRecallTimeline: "Saved screens",
     visualRecallTimelineEmpty: "No saved screens yet — turn on Visual recall to start the local timeline.",
     visualRecallDeleteFrame: "Delete",
     visualRecallDeleteConfirm: "Remove this screen?",
     visualRecallDeleteCancel: "Cancel",
     visualRecallBrowse: "Browse saved screens",
-    visualRecallBrowseSub: "Open the 72 h timeline on this Mac",
+    visualRecallBrowseSub: "Open the encrypted local timeline",
     visualRecallScrubHint: "Scrub through saved screens",
     visualRecallShowText: "Show text",
     visualRecallHideText: "Hide text",
@@ -666,7 +676,7 @@ export const STRINGS = {
       ],
       wontTitle: "What it never does",
       wontItems: [
-        "Reads text only — images only with Visual recall on (encrypted, ≤72h, on-device).",
+        "Reads text only — images only with Visual recall on (encrypted, finite retention, on-device).",
         "Never logs your keystrokes.",
         "Never sends your screen off this Mac.",
       ],

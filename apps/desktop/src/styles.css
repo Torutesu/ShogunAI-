@@ -1801,7 +1801,78 @@ body {
   overflow: hidden;
 }
 
-/* Notch settings — open the separate browse window. */
+/* Visual Recall retention + separate browse window. */
+.vr-retention {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel) 82%, transparent);
+}
+.vr-retention__head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: var(--fs-sm);
+  color: var(--muted);
+}
+.vr-retention__head strong {
+  color: var(--ink);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.vr-retention__range {
+  width: 100%;
+  margin: 12px 0 2px;
+  accent-color: var(--accent);
+}
+.vr-retention__ticks {
+  display: flex;
+  justify-content: space-between;
+  padding: 0 2px;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+.vr-retention__custom {
+  margin-top: 10px;
+  padding: 5px 9px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+.vr-retention__custom.is-on {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.vr-retention__custom-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+.vr-retention__custom-row input {
+  min-width: 0;
+  flex: 1;
+  padding: 7px 8px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--ink);
+  font: inherit;
+}
+.vr-retention__custom-row button {
+  border: 1px solid var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font: inherit;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  cursor: pointer;
+}
+.vr-retention .set__hint {
+  margin-top: 8px;
+}
 .vr-launch {
   display: flex;
   align-items: center;

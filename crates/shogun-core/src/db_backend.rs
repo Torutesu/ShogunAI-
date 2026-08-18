@@ -15,7 +15,9 @@ use shogun_mcp::memory_api_settings::{
     validate_profile, Settings as MemoryApiSettings,
 };
 
-use crate::capture::visual_recall::{load_settings, save_settings, Settings};
+use crate::capture::visual_recall::{
+    load_settings, save_settings, RetentionPolicy, Settings, DAY_MS,
+};
 use crate::daemon::{local_day_bounds, Db};
 
 /// Max search hits returned by `memory.search` over the API.
@@ -84,6 +86,17 @@ impl DbBackend {
             return Err("visual_recall settings path not configured".to_string());
         };
         save_settings(path, settings)
+    }
+
+    /// Enforce age expiry on every API face, including processes without the desktop poller.
+    fn enforce_vr_retention(&self) -> Result<i64, String> {
+        let retention_ms = self
+            .load_vr_settings()
+            .retention
+            .retain_ms()
+            .unwrap_or(3 * DAY_MS);
+        self.db.purge_screen_frames(retention_ms)?;
+        Ok(retention_ms)
     }
 
     fn load_memory_api_settings(&self) -> MemoryApiSettings {
@@ -200,13 +213,19 @@ impl DbBackend {
     }
 
     fn visual_recall_status_json(&self) -> String {
-        let enabled = self.load_vr_settings().enabled;
+        let settings = self.load_vr_settings();
+        let _ = self.enforce_vr_retention();
         let now = self.db.now_ms();
-        let ms_24h = 24 * 60 * 60 * 1000;
-        let ms_72h = shogun_memory::screen_frames::RETENTION_MS;
+        let retention_ms = settings.retention.retain_ms().unwrap_or(3 * DAY_MS);
         let frame_stats = self.db.screen_frame_stats();
-        let frames_24h = self.db.screen_frames_count_in_range(now - ms_24h, now);
-        let frames_72h = self.db.screen_frames_count_in_range(now - ms_72h, now);
+        let frames_24h = self.db.screen_frames_count_in_range(now.saturating_sub(DAY_MS), now);
+        let frames_retained = self
+            .db
+            .screen_frames_count_in_range(now.saturating_sub(retention_ms), now);
+        let estimated_daily_bytes = (frames_24h >= 2)
+            .then(|| self.db.screen_frame_bytes_in_range(now.saturating_sub(DAY_MS), now));
+        let projected_retention_bytes = estimated_daily_bytes
+            .and_then(|bytes| bytes.checked_mul(i64::from(settings.retention.days())));
         let recent: Vec<_> = self
             .db
             .screen_ocr_previews(5, 140)
@@ -237,13 +256,18 @@ impl DbBackend {
             })
         });
         json!({
-            "enabled": enabled,
+            "enabled": settings.enabled,
+            "retention_days": settings.retention.days(),
             "events_24h": self.db.screen_ocr_count_24h(),
             "frames_count": frame_stats.count,
             "frames_24h": frames_24h,
-            "frames_72h": frames_72h,
+            "frames_retained": frames_retained,
             "frames_oldest_ms": frame_stats.oldest_ms,
             "frames_bytes": frame_stats.total_bytes,
+            "estimated_daily_bytes": estimated_daily_bytes,
+            "projected_retention_bytes": projected_retention_bytes,
+            "capture_paused_storage": self.db.screen_frame_capture_paused(),
+            "capture_storage_limit_bytes": shogun_memory::retention::FRAME_CAPTURE_MAX_BYTES,
             "last_capture": last_capture,
             "recent": recent,
         })
@@ -253,16 +277,24 @@ impl DbBackend {
     fn visual_recall_search_json(&self, params: &ReadParams) -> String {
         let query = params.query.as_deref().unwrap_or("");
         let now = self.db.now_ms();
+        let retention_ms = self.enforce_vr_retention().unwrap_or_else(|_| {
+            self.load_vr_settings()
+                .retention
+                .retain_ms()
+                .unwrap_or(3 * DAY_MS)
+        });
+        let retention_start = now.saturating_sub(retention_ms);
         let local_days = local_day_bounds(now);
-        let (from_ms, to_ms) = match (params.from_ms, params.to_ms) {
+        let (requested_from, requested_to) = match (params.from_ms, params.to_ms) {
             (Some(f), Some(t)) => (f, t),
             (Some(f), None) => (f, now),
             (None, Some(t)) => (0, t),
-            (None, None) if query.trim().is_empty() => {
-                (now - shogun_memory::screen_frames::RETENTION_MS, now)
+            (None, None) => {
+                shogun_memory::search::visual_recall_window(query, now, local_days, retention_ms)
             }
-            (None, None) => shogun_memory::search::visual_recall_window(query, now, local_days),
         };
+        let from_ms = requested_from.max(retention_start);
+        let to_ms = requested_to.min(now);
         let hits = self.db.search_screen_frames_window(
             query,
             from_ms,
@@ -297,6 +329,9 @@ impl DbBackend {
     }
 
     fn visual_recall_get_frame_json(&self, params: &ReadParams) -> String {
+        if self.enforce_vr_retention().is_err() {
+            return r#"{"error":"retention_check_failed"}"#.to_string();
+        }
         let Some(frame_id) = params.id else {
             return r#"{"error":"missing_frame_id"}"#.to_string();
         };
@@ -322,6 +357,9 @@ impl DbBackend {
     }
 
     fn visual_recall_rescan_json(&self, params: &ReadParams) -> String {
+        if self.enforce_vr_retention().is_err() {
+            return r#"{"error":"retention_check_failed"}"#.to_string();
+        }
         let Some(frame_id) = params.id else {
             return r#"{"error":"missing_frame_id"}"#.to_string();
         };
@@ -532,11 +570,13 @@ impl MemoryBackend for DbBackend {
             | Tool::VisualRecallGetFrame
             | Tool::VisualRecallRescanFrame
             | Tool::VisualRecallSetEnabled
+            | Tool::VisualRecallSetRetention
             | Tool::VisualRecallDeleteFrame
             | Tool::MemoryAppendNote
             | Tool::ProfileSet
             | Tool::StateProposeUpdate
-            | Tool::ActionsExecute => Vec::new(),
+            | Tool::ActionsExecute
+            | Tool::ActionsStatus => Vec::new(),
         }
     }
 
@@ -591,6 +631,14 @@ impl MemoryBackend for DbBackend {
                 }
                 Ok(None)
             }
+            Tool::VisualRecallSetRetention => {
+                let retention = parse_retention_body(body)?;
+                let mut settings = self.load_vr_settings();
+                settings.retention = retention;
+                self.save_vr_settings(&settings)?;
+                self.db.purge_screen_frames(retention.retain_ms()?)?;
+                Ok(None)
+            }
             Tool::VisualRecallDeleteFrame => {
                 let id = parse_id_body(body)?;
                 if self.db.delete_screen_frame(id)? {
@@ -639,6 +687,34 @@ fn parse_enabled_body(body: &str) -> Result<bool, String> {
         .ok_or_else(|| "expected {\"enabled\":bool}".to_string())
 }
 
+fn parse_retention_body(body: &str) -> Result<RetentionPolicy, String> {
+    if let Ok(days) = body.trim().parse::<u32>() {
+        return RetentionPolicy::try_days(days);
+    }
+    let value: serde_json::Value = serde_json::from_str(body)
+        .map_err(|_| "expected retention days between 1 and 3650".to_string())?;
+    let candidates = [
+        value.get("days"),
+        value.get("retention_days"),
+        value.get("retention").and_then(|retention| retention.get("days")),
+    ];
+    let mut parsed = Vec::new();
+    for candidate in candidates.into_iter().flatten() {
+        let days = candidate
+            .as_u64()
+            .and_then(|days| u32::try_from(days).ok())
+            .ok_or_else(|| "expected retention days between 1 and 3650".to_string())?;
+        parsed.push(days);
+    }
+    let Some(&days) = parsed.first() else {
+        return Err("expected retention days between 1 and 3650".to_string());
+    };
+    if parsed.iter().any(|candidate| *candidate != days) {
+        return Err("conflicting retention day values".to_string());
+    }
+    RetentionPolicy::try_days(days)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -681,7 +757,13 @@ mod tests {
     }
 
     fn backend_with_settings(db: Db) -> DbBackend {
-        let dir = std::env::temp_dir().join(format!("shogun_vr_test_{}", std::process::id()));
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT_DIR: AtomicU64 = AtomicU64::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "shogun_vr_test_{}_{}",
+            std::process::id(),
+            NEXT_DIR.fetch_add(1, Ordering::Relaxed)
+        ));
         let _ = std::fs::create_dir_all(&dir);
         DbBackend::new(db).with_visual_recall_settings_path(dir.join("visual_recall.json"))
     }
@@ -999,6 +1081,91 @@ mod tests {
             .read_structured(Tool::VisualRecallStatus, &params())
             .expect("status");
         assert!(status2.contains("\"enabled\":true"));
+    }
+
+    #[test]
+    fn retention_write_validates_boundaries_and_purges_immediately_by_age() {
+        use std::sync::atomic::{AtomicI64, Ordering};
+
+        let clock = Arc::new(AtomicI64::new(0));
+        let clock_for_db = clock.clone();
+        let db = Db::open_in_memory(Arc::new(move || clock_for_db.load(Ordering::SeqCst))).unwrap();
+        let (old_event, _) = db.capture(&ev("old-frame")).unwrap();
+        assert!(db
+            .store_screen_frame(old_event, None, None, None, 10, 10, b"old")
+            .is_some());
+
+        clock.store(2 * DAY_MS, Ordering::SeqCst);
+        let (recent_event, _) = db.capture(&ev("recent-frame")).unwrap();
+        assert!(db
+            .store_screen_frame(recent_event, None, None, None, 10, 10, b"recent")
+            .is_some());
+        assert_eq!(db.screen_frame_stats().count, 2);
+
+        let backend = backend_with_settings(db.clone());
+        assert!(backend
+            .write(Tool::VisualRecallSetRetention, r#"{"days":1}"#)
+            .is_ok());
+        assert_eq!(db.screen_frame_stats().count, 1);
+        let status = backend
+            .read_structured(Tool::VisualRecallStatus, &params())
+            .expect("status");
+        assert!(status.contains("\"retention_days\":1"));
+
+        for invalid in [r#"{"days":0}"#, r#"{"days":3651}"#, r#"{"days":"forever"}"#] {
+            assert!(backend.write(Tool::VisualRecallSetRetention, invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn retention_parser_accepts_legacy_and_nested_shapes() {
+        assert_eq!(parse_retention_body("7").unwrap().days(), 7);
+        assert_eq!(
+            parse_retention_body(r#"{"retention_days":14}"#)
+                .unwrap()
+                .days(),
+            14
+        );
+        assert_eq!(
+            parse_retention_body(r#"{"retention":{"days":30}}"#)
+                .unwrap()
+                .days(),
+            30
+        );
+        assert_eq!(
+            parse_retention_body(r#"{"days":7,"retention_days":7}"#)
+                .unwrap()
+                .days(),
+            7
+        );
+        assert!(parse_retention_body(r#"{"days":7,"retention_days":14}"#).is_err());
+    }
+
+    #[test]
+    fn expired_frame_id_is_unavailable_without_desktop_poller() {
+        use std::sync::atomic::{AtomicI64, Ordering};
+
+        let clock = Arc::new(AtomicI64::new(0));
+        let clock_for_db = clock.clone();
+        let db = Db::open_in_memory(Arc::new(move || clock_for_db.load(Ordering::SeqCst))).unwrap();
+        let (event_id, _) = db.capture(&ev("lazy-expiry")).unwrap();
+        let frame_id = db
+            .store_screen_frame(event_id, None, None, None, 10, 10, b"jpeg")
+            .expect("stored frame");
+        let backend = backend_with_settings(db.clone());
+
+        clock.store(4 * DAY_MS, Ordering::SeqCst);
+        let result = backend
+            .read_structured(
+                Tool::VisualRecallGetFrame,
+                &ReadParams {
+                    id: Some(frame_id),
+                    ..ReadParams::default()
+                },
+            )
+            .expect("structured result");
+        assert!(result.contains("not_found"));
+        assert_eq!(db.screen_frame_stats().count, 0);
     }
 
     /// Seed a distilled lesson via the real feedback → distill → upsert path. The draft bodies

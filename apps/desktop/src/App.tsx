@@ -3524,13 +3524,32 @@ function LaunchAtLoginSection(): JSX.Element {
   );
 }
 
-function VisualRecallSection(): JSX.Element {
+export function formatStorageBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  const value = bytes / 1024 ** index;
+  return `${value >= 10 || index === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[index]}`;
+}
+
+export function VisualRecallSection(): JSX.Element {
   const [on, setOn] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [retentionDays, setRetentionDays] = useState(3);
+  const [customMode, setCustomMode] = useState(false);
+  const [customDays, setCustomDays] = useState("8");
+  const [error, setError] = useState("");
+  type RecallSettings = { enabled: boolean; retention: { days: number } };
   type RecallStatus = {
     enabled: boolean;
+    retention_days: number;
     events_24h: number;
     frames_count: number;
+    frames_bytes: number;
+    estimated_daily_bytes: number | null;
+    projected_retention_bytes: number | null;
+    capture_paused_storage: boolean;
+    capture_storage_limit_bytes: number;
     recent: {
       ts: number;
       app: string | null;
@@ -3550,8 +3569,13 @@ function VisualRecallSection(): JSX.Element {
 
   useEffect(() => {
     if (!IN_TAURI) return;
-    void invoke<{ enabled: boolean }>("get_visual_recall_settings")
-      .then((s) => setOn(s.enabled))
+    void invoke<RecallSettings>("get_visual_recall_settings")
+      .then((s) => {
+        setOn(s.enabled);
+        setRetentionDays(s.retention.days);
+        setCustomMode(s.retention.days > 7);
+        if (s.retention.days > 7) setCustomDays(String(s.retention.days));
+      })
       .catch(() => undefined);
     refreshStatus();
     const id = window.setInterval(refreshStatus, 12_000);
@@ -3568,6 +3592,28 @@ function VisualRecallSection(): JSX.Element {
     void invoke("set_visual_recall_enabled", { enabled: next })
       .then(() => refreshStatus())
       .catch(() => setOn(!next))
+      .finally(() => setBusy(false));
+  };
+
+  const saveRetention = (days: number): void => {
+    if (!Number.isInteger(days) || days < 1 || days > 3650) {
+      setError(t.visualRecallRetentionCustomHint);
+      return;
+    }
+    const previous = retentionDays;
+    setRetentionDays(days);
+    setError("");
+    if (!IN_TAURI) return;
+    setBusy(true);
+    void invoke<RecallSettings>("set_visual_recall_retention", { days })
+      .then((settings) => {
+        setRetentionDays(settings.retention.days);
+        refreshStatus();
+      })
+      .catch((reason: unknown) => {
+        setRetentionDays(previous);
+        setError(String(reason));
+      })
       .finally(() => setBusy(false));
   };
 
@@ -3613,6 +3659,76 @@ function VisualRecallSection(): JSX.Element {
         </button>
       </div>
       <div className="set__hint">{t.visualRecallHint}</div>
+      <div className="vr-retention">
+        <div className="vr-retention__head">
+          <span>{t.visualRecallRetention}</span>
+          <strong>{t.visualRecallRetentionDays(retentionDays)}</strong>
+        </div>
+        <input
+          className="vr-retention__range"
+          type="range"
+          min="1"
+          max="7"
+          step="1"
+          value={Math.min(retentionDays, 7)}
+          disabled={busy}
+          aria-label={t.visualRecallRetention}
+          onChange={(event) => {
+            setCustomMode(false);
+            saveRetention(Number(event.currentTarget.value));
+          }}
+        />
+        <div className="vr-retention__ticks" aria-hidden="true">
+          {[1, 2, 3, 4, 5, 6, 7].map((days) => <span key={days}>{days}</span>)}
+        </div>
+        <button
+          type="button"
+          className={`vr-retention__custom${customMode ? " is-on" : ""}`}
+          disabled={busy}
+          onClick={() => setCustomMode(true)}
+        >
+          {t.visualRecallRetentionCustom}
+        </button>
+        {customMode ? (
+          <div className="vr-retention__custom-row">
+            <input
+              type="number"
+              min="1"
+              max="3650"
+              inputMode="numeric"
+              value={customDays}
+              disabled={busy}
+              aria-label={t.visualRecallRetentionCustom}
+              onChange={(event) => setCustomDays(event.currentTarget.value)}
+            />
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => saveRetention(Number(customDays))}
+            >
+              {t.visualRecallRetentionApply}
+            </button>
+          </div>
+        ) : null}
+        {customMode ? <div className="set__hint">{t.visualRecallRetentionCustomHint}</div> : null}
+        {status?.projected_retention_bytes != null ? (
+          <div className="set__hint set__hint--quiet">
+            {t.visualRecallStorageEstimate(
+              formatStorageBytes(status.frames_bytes),
+              formatStorageBytes(status.projected_retention_bytes),
+              retentionDays,
+            )}
+          </div>
+        ) : (
+          <div className="set__hint set__hint--quiet">{t.visualRecallStoragePending}</div>
+        )}
+        {status?.capture_paused_storage ? (
+          <div className="set__hint is-warn">
+            {t.visualRecallStoragePaused(formatStorageBytes(status.capture_storage_limit_bytes))}
+          </div>
+        ) : null}
+        {error ? <div className="set__hint is-err">{error}</div> : null}
+      </div>
       <button type="button" className="vr-launch" onClick={openBrowse}>
         <span className="vr-launch__glyph" aria-hidden="true">
           <IconMaximize2 size={16} />

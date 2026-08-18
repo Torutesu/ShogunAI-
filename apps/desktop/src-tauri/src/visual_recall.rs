@@ -1,6 +1,6 @@
 //! Visual recall settings + Tauri commands (issue #106/#107).
 //!
-//! Opt-in passive screen OCR (default off). Saved frames use the same 72 h JPEG retention.
+//! Opt-in passive screen OCR (default off). Saved frames use user-selected finite retention.
 //!
 //! Memory API / MCP / CLI symmetry via shogun-mcp tools + DbBackend (invariant 6).
 
@@ -15,7 +15,7 @@ pub mod text_regions;
 pub mod mac {
     use std::sync::{Mutex, RwLock};
 
-    use shogun_core::capture::visual_recall::Settings;
+    use shogun_core::capture::visual_recall::{RetentionPolicy, Settings, DAY_MS};
     use tauri::Manager;
 
     pub type SharedSettings = std::sync::Arc<RwLock<Settings>>;
@@ -85,6 +85,13 @@ pub mod mac {
             .unwrap_or_default()
     }
 
+    fn current_retention_ms() -> i64 {
+        get_visual_recall_settings()
+            .retention
+            .retain_ms()
+            .unwrap_or(3 * DAY_MS)
+    }
+
     #[tauri::command]
     pub fn set_visual_recall_enabled(
         enabled: bool,
@@ -113,7 +120,7 @@ pub mod mac {
         let mut live = shared.write().map_err(|_| "busy".to_string())?;
         *live = candidate;
         if !enabled {
-            // Passive OCR off: drop auto frames only; user-initiated shots stay until 72 h purge.
+            // Passive OCR off: drop auto frames only; user shots stay until selected age expiry.
             let removed = db.purge_auto_screen_frames()?;
             if removed > 0 {
                 eprintln!("[visual_recall] disabled — purged {removed} auto frame(s)");
@@ -124,6 +131,36 @@ pub mod mac {
             if enabled { "enabled" } else { "off" }
         );
         Ok(())
+    }
+
+    #[tauri::command]
+    pub fn set_visual_recall_retention(
+        days: u32,
+        app: tauri::AppHandle,
+        db: tauri::State<'_, shogun_core::daemon::Db>,
+    ) -> Result<Settings, String> {
+        let retention = RetentionPolicy::try_days(days)?;
+        let candidate = {
+            let lane = LANE.lock().map_err(|_| "busy".to_string())?;
+            let shared = lane.as_ref().ok_or_else(|| "not ready".to_string())?;
+            let current = shared.read().map_err(|_| "busy".to_string())?;
+            let mut candidate = current.clone();
+            candidate.retention = retention;
+            candidate
+        };
+        save(&app, &candidate)?;
+        {
+            let lane = LANE.lock().map_err(|_| "busy".to_string())?;
+            let shared = lane.as_ref().ok_or_else(|| "not ready".to_string())?;
+            *shared.write().map_err(|_| "busy".to_string())? = candidate.clone();
+        }
+        let removed = db.purge_screen_frames(retention.retain_ms()?)?;
+        if removed > 0 {
+            eprintln!(
+                "[visual_recall] retention set to {days} day(s) — purged {removed} expired frame(s)"
+            );
+        }
+        Ok(candidate)
     }
 
     #[derive(serde::Serialize)]
@@ -140,10 +177,15 @@ pub mod mac {
     #[derive(serde::Serialize)]
     pub struct VisualRecallStatus {
         pub enabled: bool,
+        pub retention_days: u32,
         pub events_24h: i64,
         pub frames_count: i64,
         pub frames_oldest_ms: Option<i64>,
         pub frames_bytes: i64,
+        pub estimated_daily_bytes: Option<i64>,
+        pub projected_retention_bytes: Option<i64>,
+        pub capture_paused_storage: bool,
+        pub capture_storage_limit_bytes: i64,
         pub recent: Vec<VisualRecallSnippet>,
     }
 
@@ -152,8 +194,16 @@ pub mod mac {
         db: tauri::State<'_, shogun_core::daemon::Db>,
     ) -> VisualRecallStatus {
         const PREVIEW_CHARS: usize = 140;
-        let enabled = get_visual_recall_settings().enabled;
+        let settings = get_visual_recall_settings();
+        let _ = db.purge_screen_frames(current_retention_ms());
         let frame_stats = db.screen_frame_stats();
+        let now_ms = db.now_ms();
+        let recent_frame_count = db.screen_frames_count_in_range(now_ms.saturating_sub(DAY_MS), now_ms);
+        let estimated_daily_bytes = (recent_frame_count >= 2)
+            .then(|| db.screen_frame_bytes_in_range(now_ms.saturating_sub(DAY_MS), now_ms));
+        let projected_retention_bytes = estimated_daily_bytes.and_then(|bytes| {
+            bytes.checked_mul(i64::from(settings.retention.days()))
+        });
         let recent = db
             .screen_ocr_previews(5, PREVIEW_CHARS)
             .into_iter()
@@ -168,11 +218,16 @@ pub mod mac {
             })
             .collect();
         VisualRecallStatus {
-            enabled,
+            enabled: settings.enabled,
+            retention_days: settings.retention.days(),
             events_24h: db.screen_ocr_count_24h(),
             frames_count: frame_stats.count,
             frames_oldest_ms: frame_stats.oldest_ms,
             frames_bytes: frame_stats.total_bytes,
+            estimated_daily_bytes,
+            projected_retention_bytes,
+            capture_paused_storage: db.screen_frame_capture_paused(),
+            capture_storage_limit_bytes: shogun_memory::retention::FRAME_CAPTURE_MAX_BYTES,
             recent,
         }
     }
@@ -195,7 +250,11 @@ pub mod mac {
     pub fn list_screen_frames(db: tauri::State<'_, shogun_core::daemon::Db>) -> Vec<FrameListItem> {
         const LIMIT: usize = 200;
         const EXCERPT: usize = 160;
-        db.list_screen_frames(LIMIT)
+        let retention_ms = current_retention_ms();
+        if db.purge_screen_frames(retention_ms).is_err() {
+            return Vec::new();
+        }
+        db.list_screen_frames(retention_ms, LIMIT)
             .into_iter()
             .map(|s| FrameListItem {
                 id: s.id,
@@ -231,6 +290,7 @@ pub mod mac {
         frame_id: i64,
         db: tauri::State<'_, shogun_core::daemon::Db>,
     ) -> Result<FrameImage, String> {
+        db.purge_screen_frames(current_retention_ms())?;
         let rec = db
             .get_screen_frame(frame_id)
             .ok_or_else(|| "not found".to_string())?;

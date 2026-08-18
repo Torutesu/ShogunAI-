@@ -46,6 +46,7 @@ pub enum Tool {
     LessonsSetActive,
     VisualRecallStatus,
     VisualRecallSetEnabled,
+    VisualRecallSetRetention,
     VisualRecallSearchFrames,
     VisualRecallGetFrame,
     VisualRecallRescanFrame,
@@ -77,6 +78,7 @@ pub const ALL_TOOLS: &[Tool] = &[
     Tool::LessonsSetActive,
     Tool::VisualRecallStatus,
     Tool::VisualRecallSetEnabled,
+    Tool::VisualRecallSetRetention,
     Tool::VisualRecallSearchFrames,
     Tool::VisualRecallGetFrame,
     Tool::VisualRecallRescanFrame,
@@ -110,6 +112,7 @@ impl Tool {
             Tool::LessonsSetActive => "lessons.set_active",
             Tool::VisualRecallStatus => "visual_recall.status",
             Tool::VisualRecallSetEnabled => "visual_recall.set_enabled",
+            Tool::VisualRecallSetRetention => "visual_recall.set_retention",
             Tool::VisualRecallSearchFrames => "visual_recall.search_frames",
             Tool::VisualRecallGetFrame => "visual_recall.get_frame",
             Tool::VisualRecallRescanFrame => "visual_recall.rescan_frame",
@@ -164,6 +167,8 @@ pub fn tool_level(tool: Tool) -> ApiLevel {
         Tool::LessonsSetActive => ApiLevel::Write(Level::L1),
         // visual recall master switch — same as Settings toggle (L1, local).
         Tool::VisualRecallSetEnabled => ApiLevel::Write(Level::L1),
+        // finite encrypted-frame retention — same as the Settings control (L1, local).
+        Tool::VisualRecallSetRetention => ApiLevel::Write(Level::L1),
         // Deleting a local frame is an L1 write.
         Tool::VisualRecallDeleteFrame => ApiLevel::Write(Level::L1),
         Tool::ProfileSet => ApiLevel::Write(Level::L1),
@@ -328,7 +333,7 @@ mod tests {
         for &t in ALL_TOOLS {
             let _ = tool_level(t); // exhaustive match means this cannot be undefined
         }
-        assert_eq!(ALL_TOOLS.len(), 27);
+        assert_eq!(ALL_TOOLS.len(), 28);
     }
 
     #[test]
@@ -384,6 +389,7 @@ mod tests {
                             | Tool::StateProposeUpdate
                             | Tool::LessonsSetActive
                             | Tool::VisualRecallSetEnabled
+                            | Tool::VisualRecallSetRetention
                             | Tool::VisualRecallDeleteFrame
                             | Tool::ProfileSet
                     ))

@@ -3,7 +3,7 @@
 
 The product's whole privacy claim rests on this: screen capture is Accessibility text, meetings
 keep the transcript and not the waveform, and the two documented exceptions are narrow —
-- 2026-08-02: OCR keyframes live as compressed JPEG in the ENCRYPTED memory DB for at most 72h
+- OCR keyframes live as compressed JPEG in the ENCRYPTED memory DB for finite selected retention
   (`screen_frames`), never as files;
 - 2026-08-05: meeting ASR streams audio to Deepgram for live transcription, process-only, and
   SHOGUN itself never writes the waveform anywhere.
@@ -133,7 +133,7 @@ def main():
             print(f"  - {path}:{line}: {text}")
         print(
             "\nSHOGUN does not create screenshot, recording or audio files. OCR keyframes belong in "
-            "the encrypted memory DB (`screen_frames`, 72h); meeting audio is process-only on its way "
+            "the encrypted memory DB (`screen_frames`, finite age retention); meeting audio is process-only on its way "
             "to the ASR socket. If a site is genuinely unrelated, add it to ALLOWLIST here with a "
             "decision record."
         )

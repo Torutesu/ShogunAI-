@@ -282,6 +282,7 @@ pub fn run() {
             meeting::mac::meeting_set_overlay_size,
             visual_recall::mac::get_visual_recall_settings,
             visual_recall::mac::set_visual_recall_enabled,
+            visual_recall::mac::set_visual_recall_retention,
             visual_recall::mac::get_visual_recall_status,
             visual_recall::mac::list_screen_frames,
             visual_recall::mac::get_screen_frame_image,

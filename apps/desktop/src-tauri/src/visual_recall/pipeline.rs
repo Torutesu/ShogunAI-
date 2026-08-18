@@ -2,7 +2,7 @@
 //!
 //! Flow: CGWindow capture (RAM) → text-region detect → pixel-signature gate →
 //! Apple Vision on union crop → text + provenance. On fresh Vision success the caller may
-//! persist a compressed JPEG (72 h, see `screen_frames`) before dropping pixels.
+//! persist a compressed JPEG (selected finite retention, see `screen_frames`) before dropping pixels.
 
 use image::DynamicImage;
 use image::GenericImageView;

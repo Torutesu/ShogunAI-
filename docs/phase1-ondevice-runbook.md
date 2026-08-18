@@ -4,7 +4,7 @@
 上位文書: `docs/phase1-implementation-plan.md`（計画）/ `docs/requirements-v1.0.md`（正本）。
 前身: `docs/phase0-on-device-runbook.md`（Phase 0 の4つの問い）、`docs/ondevice-ax-capture-runbook.md`（キャプチャ単体）。本書はそれ以降に積んだ全スタックを一枚にまとめ直したもの。
 
-追補: Visual recall（画面OCR＋JPEG 72h）と会議オーバーレイ（3モード／live translate／クリックスルー）の差分確認は `docs/ondevice-runbook-visual-recall-and-meeting.md`。**画面収録・マイクという新しい TCC 権限**が必要なので、それらを触る場合は先にそちらの §1 を読むこと。
+追補: Visual recall（画面OCR＋暗号化JPEGの有限保持）と会議オーバーレイ（3モード／live translate／クリックスルー）の差分確認は `docs/ondevice-runbook-visual-recall-and-meeting.md`。**画面収録・マイクという新しい TCC 権限**が必要なので、それらを触る場合は先にそちらの §1 を読むこと。
 
 ---
 

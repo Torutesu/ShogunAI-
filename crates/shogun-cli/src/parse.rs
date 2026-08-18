@@ -25,6 +25,8 @@ pub enum CliError {
     MissingArgument(&'static str),
     /// An id argument wasn't an integer.
     BadId(String),
+    /// Visual Recall retention is finite and bounded.
+    BadRetention(String),
     /// The subcommand isn't recognised.
     UnknownCommand(String),
     /// A recognised subcommand got a sub-argument it doesn't understand.
@@ -37,6 +39,9 @@ impl CliError {
             CliError::MissingFlagValue(f) => format!("flag `{f}` needs a value"),
             CliError::MissingArgument(a) => format!("missing argument: {a}"),
             CliError::BadId(s) => format!("invalid id: `{s}` (expected an integer)"),
+            CliError::BadRetention(s) => {
+                format!("invalid retention: `{s}` (expected 1–3650 days)")
+            }
             CliError::UnknownCommand(c) => format!("unknown command: `{c}` (try `shogun help`)"),
             CliError::UnknownSubcommand { command, got } => {
                 format!("unknown `{command}` subcommand: `{got}` (expected list|get)")
@@ -233,6 +238,15 @@ fn parse_visual_recall(rest: &[String]) -> Result<Command, CliError> {
         Some("status") => Ok(Command::VisualRecall(VisualRecallCommand::Status)),
         Some("enable") => Ok(Command::VisualRecall(VisualRecallCommand::Enable)),
         Some("disable") => Ok(Command::VisualRecall(VisualRecallCommand::Disable)),
+        Some("retention") => {
+            let raw = rest.get(1).ok_or(CliError::MissingArgument("<days>"))?;
+            let days = raw
+                .parse::<u32>()
+                .ok()
+                .filter(|days| (1..=3_650).contains(days))
+                .ok_or_else(|| CliError::BadRetention(raw.clone()))?;
+            Ok(Command::VisualRecall(VisualRecallCommand::Retention { days }))
+        }
         Some("search") => {
             let mut from_ms = None;
             let mut to_ms = None;
@@ -477,6 +491,23 @@ mod tests {
                 got: "delete".into()
             })
         );
+    }
+
+    #[test]
+    fn visual_recall_retention_is_finite_and_bounded() {
+        use crate::command::VisualRecallCommand;
+        assert_eq!(
+            parse(&v(&["visual-recall", "retention", "14"]))
+                .unwrap()
+                .command,
+            Command::VisualRecall(VisualRecallCommand::Retention { days: 14 })
+        );
+        for invalid in ["0", "3651", "forever", "-1"] {
+            assert_eq!(
+                parse(&v(&["visual-recall", "retention", invalid])),
+                Err(CliError::BadRetention(invalid.into()))
+            );
+        }
     }
 
     #[test]

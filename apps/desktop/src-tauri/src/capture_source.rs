@@ -11,8 +11,8 @@
 //! layered on later to reduce latency without changing this composition.
 //!
 //! Invariant 2: AX text is the default path; optional visual recall (issue #107) may OCR the
-//! focused window in RAM — text + provenance persisted; compressed JPEG frames retained ≤72 h
-//! when Visual recall is on (explicit exception, user decision 2026-08-02).
+//! focused window in RAM — text + provenance persisted; compressed JPEG frames use the user's
+//! finite retention setting when Visual Recall is on (explicit exception, user decision).
 //!
 //! `capture_once` is part of the public surface (the main-thread-timer driver alternative in the
 //! runbook uses it directly); it is `allow(unused_imports)` because the default driver only calls
@@ -340,7 +340,7 @@ mod mac {
                 // Store JPEG only on a fresh OCR event (not dedup touch, not cache replay).
                 if !touched {
                     if let Some(frame) = result.frame {
-                        // Explicit invariant-2 exception: local encrypted BLOB, 72 h purge.
+                        // Explicit invariant-2 exception: local encrypted BLOB, finite age purge.
                         if let Some(frame_id) = db.store_screen_frame(
                             id,
                             Some(bundle_id),
@@ -355,6 +355,10 @@ mod mac {
                                 frame.width,
                                 frame.height,
                                 frame.jpeg.len(),
+                            );
+                        } else if db.screen_frame_capture_paused() {
+                            eprintln!(
+                                "[screen_ocr] frame capture paused at encrypted storage limit"
                             );
                         }
                     }
@@ -403,10 +407,15 @@ mod mac {
                 Instant::now() - Duration::from_millis(FRAME_PURGE_INTERVAL_MS);
             #[cfg(feature = "visual-recall-ocr")]
             {
-                match db.purge_screen_frames() {
+                let current = crate::visual_recall::mac::refresh_settings(&visual_recall);
+                let retention_ms = current.retention.retain_ms().unwrap_or(
+                    i64::from(shogun_core::capture::visual_recall::DEFAULT_RETENTION_DAYS)
+                        * shogun_core::capture::visual_recall::DAY_MS,
+                );
+                match db.purge_screen_frames(retention_ms) {
                     Ok(removed) if removed > 0 => {
                         eprintln!(
-                            "[screen_ocr] startup purge removed {removed} frame(s) older than 72 h"
+                            "[screen_ocr] startup purge removed {removed} expired frame(s)"
                         );
                     }
                     Ok(_) => {}
@@ -415,12 +424,17 @@ mod mac {
             }
             loop {
                 // Retention is independent of capture permissions and policy locks. Revoking
-                // Accessibility access must never leave saved JPEGs beyond 72 hours.
+                // Accessibility access must never leave saved JPEGs beyond selected retention.
                 #[cfg(feature = "visual-recall-ocr")]
                 if last_frame_purge.elapsed().as_millis() as u64 >= FRAME_PURGE_INTERVAL_MS {
-                    match db.purge_screen_frames() {
+                    let current = crate::visual_recall::mac::refresh_settings(&visual_recall);
+                    let retention_ms = current.retention.retain_ms().unwrap_or(
+                        i64::from(shogun_core::capture::visual_recall::DEFAULT_RETENTION_DAYS)
+                            * shogun_core::capture::visual_recall::DAY_MS,
+                    );
+                    match db.purge_screen_frames(retention_ms) {
                         Ok(removed) if removed > 0 => {
-                            eprintln!("[screen_ocr] purged {removed} frame(s) older than 72 h");
+                            eprintln!("[screen_ocr] purged {removed} expired frame(s)");
                         }
                         Ok(_) => {}
                         Err(e) => eprintln!("[screen_ocr] retention purge failed: {e}"),
