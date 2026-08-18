@@ -1096,6 +1096,63 @@ unsafe fn pin_top_centre(ptr: *mut objc2::runtime::AnyObject) {
 #[cfg(target_os = "macos")]
 static REASSERT_AT: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
 
+/// AppKit's visibility and Space membership do not prove that the WindowServer is rendering the
+/// panel. A cold launch can report both while its compositor surface is absent; only a panel that
+/// is visible, on the active Space, and drawn is safe to leave unreordered.
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy)]
+struct PanelPresentation {
+    visible: bool,
+    on_active_space: bool,
+    drawn: bool,
+}
+
+#[cfg(target_os = "macos")]
+fn panel_needs_reorder(presentation: PanelPresentation) -> bool {
+    !presentation.visible || !presentation.on_active_space || !presentation.drawn
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod panel_recovery_tests {
+    use super::{panel_needs_reorder, PanelPresentation};
+
+    #[test]
+    fn undrawn_panel_needs_reorder_even_when_visible_on_active_space() {
+        assert!(panel_needs_reorder(PanelPresentation {
+            visible: true,
+            on_active_space: true,
+            drawn: false,
+        }));
+    }
+
+    #[test]
+    fn invisible_panel_needs_reorder() {
+        assert!(panel_needs_reorder(PanelPresentation {
+            visible: false,
+            on_active_space: true,
+            drawn: true,
+        }));
+    }
+
+    #[test]
+    fn panel_off_active_space_needs_reorder() {
+        assert!(panel_needs_reorder(PanelPresentation {
+            visible: true,
+            on_active_space: false,
+            drawn: true,
+        }));
+    }
+
+    #[test]
+    fn drawn_visible_panel_on_active_space_is_healthy() {
+        assert!(!panel_needs_reorder(PanelPresentation {
+            visible: true,
+            on_active_space: true,
+            drawn: true,
+        }));
+    }
+}
+
 #[cfg(target_os = "macos")]
 fn reassert_panel(handle: &tauri::AppHandle, why: &'static str) {
     use objc2::msg_send;
@@ -1108,16 +1165,35 @@ fn reassert_panel(handle: &tauri::AppHandle, why: &'static str) {
     let Some(ptr) = overlay_ptr(handle) else {
         return;
     };
-    // SAFETY: all call sites run on the main thread (workspace notifications and the
-    // state-logger's run_on_main_thread closure); live NSWindow/NSPanel; pure AppKit
-    // property and ordering calls.
+    // SAFETY: all call sites marshal through `run_on_main_thread`; live NSWindow/NSPanel; pure
+    // AppKit property and ordering calls.
     unsafe {
         let want = PANEL_BEHAVIOR.load(std::sync::atomic::Ordering::Relaxed);
-        let _: () = msg_send![ptr, setCollectionBehavior: want];
-        let _: () = msg_send![ptr, setLevel: OVERLAY_LEVEL];
+        let behavior: usize = msg_send![ptr, collectionBehavior];
+        let level: isize = msg_send![ptr, level];
+        let hides_on_deactivate: bool = msg_send![ptr, hidesOnDeactivate];
+        let can_hide: bool = msg_send![ptr, canHide];
+        if behavior != want {
+            let _: () = msg_send![ptr, setCollectionBehavior: want];
+        }
+        if level != OVERLAY_LEVEL {
+            let _: () = msg_send![ptr, setLevel: OVERLAY_LEVEL];
+        }
+        if hides_on_deactivate {
+            let _: () = msg_send![ptr, setHidesOnDeactivate: false];
+        }
+        if can_hide {
+            let _: () = msg_send![ptr, setCanHide: false];
+        }
         let visible: bool = msg_send![ptr, isVisible];
-        let on_active: bool = msg_send![ptr, isOnActiveSpace];
-        if visible && on_active {
+        let on_active_space: bool = msg_send![ptr, isOnActiveSpace];
+        let occlusion: usize = msg_send![ptr, occlusionState];
+        let drawn = occlusion & (1 << 1) != 0;
+        if !panel_needs_reorder(PanelPresentation {
+            visible,
+            on_active_space,
+            drawn,
+        }) {
             return; // genuinely on screen here — leave it alone
         }
         // Debounce lightly: one app switch fires several notifications back-to-back;
@@ -1428,7 +1504,7 @@ fn report_panel_health(app: &tauri::AppHandle) {
                 return;
             };
             // SAFETY: main thread, live window; getters only.
-            unsafe {
+            let presentation = unsafe {
                 let visible: bool = msg_send![ptr, isVisible];
                 // Bit 1 of occlusionState is the compositor's own verdict: actually drawn.
                 let occ: usize = msg_send![ptr, occlusionState];
@@ -1472,6 +1548,14 @@ fn report_panel_health(app: &tauri::AppHandle) {
                 } else {
                     eprintln!("[shell] health: drawing normally at the frame above.");
                 }
+                PanelPresentation {
+                    visible,
+                    on_active_space: on_active,
+                    drawn,
+                }
+            };
+            if panel_needs_reorder(presentation) {
+                reassert_panel(&h2, "cold-launch-health");
             }
         });
     });
@@ -1861,7 +1945,13 @@ fn watch_space_changes(app: &tauri::App) {
             let handle = app.handle().clone();
             let name = NSString::from_str(name_str);
             let block = block2::RcBlock::new(move |_notif: *mut AnyObject| {
-                reassert_panel(&handle, why);
+                let main_handle = handle.clone();
+                if handle
+                    .run_on_main_thread(move || reassert_panel(&main_handle, why))
+                    .is_err()
+                {
+                    eprintln!("[shell] {why}: could not schedule panel reassert on main thread");
+                }
             });
             let nil_obj: *mut AnyObject = std::ptr::null_mut();
             let _obs: *mut AnyObject = msg_send![nc, addObserverForName: &*name, object: nil_obj, queue: nil_obj, usingBlock: &*block];
@@ -1901,6 +1991,8 @@ fn spawn_panel_state_logger(app: &tauri::App) {
                 let on_active: bool = msg_send![ptr, isOnActiveSpace];
                 let behavior: usize = msg_send![ptr, collectionBehavior];
                 let level: isize = msg_send![ptr, level];
+                let hides_on_deactivate: bool = msg_send![ptr, hidesOnDeactivate];
+                let can_hide: bool = msg_send![ptr, canHide];
                 let frame: NSRect = msg_send![ptr, frame];
                 // The compositor's OWN verdict: bit 1 of occlusionState = actually drawn on screen.
                 // visible=true + occluded=true is the smoking gun for "window fine, pixels absent".
@@ -1914,17 +2006,38 @@ fn spawn_panel_state_logger(app: &tauri::App) {
                 // silently demoting the overlay. Re-assert only when wrong; a pure property write
                 // with no re-ordering, so it cannot flicker or steal focus.
                 let want = PANEL_BEHAVIOR.load(std::sync::atomic::Ordering::Relaxed);
-                if level != OVERLAY_LEVEL || behavior & want != want {
+                if behavior != want {
                     let _: () = msg_send![ptr, setCollectionBehavior: want];
+                }
+                if level != OVERLAY_LEVEL {
                     let _: () = msg_send![ptr, setLevel: OVERLAY_LEVEL];
-                    eprintln!("[panelstate] healed: level {level}→{OVERLAY_LEVEL} behavior {behavior}→{want}");
+                }
+                if hides_on_deactivate {
+                    let _: () = msg_send![ptr, setHidesOnDeactivate: false];
+                }
+                if can_hide {
+                    let _: () = msg_send![ptr, setCanHide: false];
+                }
+                if behavior != want
+                    || level != OVERLAY_LEVEL
+                    || hides_on_deactivate
+                    || can_hide
+                {
+                    eprintln!(
+                        "[panelstate] healed: level {level}→{OVERLAY_LEVEL} behavior {behavior}→{want} \
+                         hidesOnDeactivate {hides_on_deactivate}→false canHide {can_hide}→false"
+                    );
                 }
                 (
                     format!(
                         "visible={visible} drawn={drawn} onActiveSpace={on_active} behavior={behavior} level={level} alpha={alpha:.2} appActive={app_active} origin=({:.0},{:.0})",
                         frame.origin.x, frame.origin.y
                     ),
-                    visible && on_active,
+                    !panel_needs_reorder(PanelPresentation {
+                        visible,
+                        on_active_space: on_active,
+                        drawn,
+                    }),
                 )
             };
             if debug {
