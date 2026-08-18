@@ -225,10 +225,10 @@ html[data-theme='dark'] .waitlist-form-default button {
  * headline as artwork below it. There is always slack at this height, so bias
  * the content above centre and let the castle and the figure breathe. Shorter
  * screens keep the centred split, where every pixel is already spoken for. */
-@media (min-height: 1100px) {
+@media (min-height: 1150px) {
   .hero-shell {
     justify-content: flex-start;
-    padding-top: 12vh;
+    padding-top: 9vh;
   }
 }
 
@@ -421,11 +421,7 @@ html[data-theme='dark'] .theme-light-badge {
 
   .hero-badges > div > div,
   .hero-badges > div > a > div {
-    min-height: 76px !important;
-  }
-
-  .hero-participant-count {
-    display: none;
+    min-height: 68px !important;
   }
 }
 
@@ -456,6 +452,16 @@ html[data-theme='dark'] .theme-light-badge {
   }
 }
 
+/* The waitlist row is avatars + a sentence + the live count. Under 880px of
+ * height it wraps to two lines, which costs the logo rows their place in the
+ * first view. The count is the harder proof, so the sentence gives way — it
+ * never hides the number, which is what people came for. */
+@media (min-width: 1024px) and (max-height: 920px) {
+  .hero-waitlist-proof {
+    display: none;
+  }
+}
+
 /* 1024-wide landscape tablets get the desktop grid but very little height, so
  * they need a shorter product shot than the 1040px rule gives them. */
 @media (min-width: 1024px) and (max-width: 1180px) and (max-height: 820px) {
@@ -479,7 +485,7 @@ html[data-theme='dark'] .theme-light-badge {
 
   .hero-badges > div > div,
   .hero-badges > div > a > div {
-    min-height: 64px !important;
+    min-height: 56px !important;
   }
 
   .hero-title {
@@ -489,8 +495,12 @@ html[data-theme='dark'] .theme-light-badge {
 
   .hero-subtitle {
     margin-top: 8px;
-    font-size: 15px;
+    font-size: 14px;
     line-height: 1.5;
+  }
+
+  .hero-participants {
+    margin-top: 12px;
   }
 }
 
