@@ -79,6 +79,8 @@ pub fn redact(text: &str) -> std::borrow::Cow<'_, str> {
     }
     let mut out = String::with_capacity(text.len());
     let mut i = 0usize;
+    // The character emitted just before position `i`, for the boundary check below.
+    let mut prev: Option<char> = None;
     while i < text.len() {
         if !text.is_char_boundary(i) {
             // Never split a codepoint: copy the byte through and move on.
@@ -88,13 +90,24 @@ pub fn redact(text: &str) -> std::borrow::Cow<'_, str> {
         }
         let rest = &text[i..];
 
-        // 1. A known issuer prefix: mask the prefix and the value that follows it.
-        if let Some(p) = ISSUER_PREFIXES.iter().find(|p| rest.starts_with(**p)) {
-            let value_len = run_len(&rest[p.len()..]);
-            if p.len() + value_len >= MIN_SECRET_LEN {
-                out.push_str(MASK);
-                i += p.len() + value_len;
-                continue;
+        // 1. A known issuer prefix: mask the prefix and the value that follows it — but only at a
+        //    token boundary. Without it, `sk-` matches inside "risk-assessment" / "task-manager"
+        //    and mangles ordinary hyphenated prose, the exact corruption this module promises to
+        //    avoid. A real key never sits mid-token: what precedes it is whitespace, punctuation,
+        //    a quote, or the start of the text — never another token character. Only an ASCII
+        //    alphanumeric blocks: `KEY=sk-…` and `"sk-…` are real key positions, and letters are
+        //    what "risk-"/"task-" put before the prefix.
+        let at_boundary = prev.map_or(true, |c| !c.is_ascii_alphanumeric());
+        if at_boundary {
+            if let Some(p) = ISSUER_PREFIXES.iter().find(|p| rest.starts_with(**p)) {
+                let value = &rest[p.len()..];
+                let value_len = run_len(value);
+                if p.len() + value_len >= MIN_SECRET_LEN && issuer_shape_ok(p, value, value_len) {
+                    out.push_str(MASK);
+                    i += p.len() + value_len;
+                    prev = None;
+                    continue;
+                }
             }
         }
 
@@ -103,15 +116,36 @@ pub fn redact(text: &str) -> std::borrow::Cow<'_, str> {
             out.push_str(&rest[..consumed.label_end]);
             out.push_str(MASK);
             i += consumed.total;
+            prev = None;
             continue;
         }
 
         // Not a match: copy this character.
-        let ch_len = rest.chars().next().map(char::len_utf8).unwrap_or(1);
+        let ch = rest.chars().next();
+        let ch_len = ch.map(char::len_utf8).unwrap_or(1);
         out.push_str(&rest[..ch_len]);
+        prev = ch;
         i += ch_len;
     }
     std::borrow::Cow::Owned(out)
+}
+
+/// Extra shape requirements for the issuer prefixes that collide with ordinary prose. `value` is
+/// the text after the prefix; its leading `value_len` bytes are the run of secret-ish characters
+/// (always ASCII, so byte indexing is char-safe).
+fn issuer_shape_ok(prefix: &str, value: &str, value_len: usize) -> bool {
+    match prefix {
+        // AWS access key ids are exactly the prefix + 16 uppercase alphanumerics. "ASIA" also
+        // opens ordinary words ("ASIA-Pacific"), so the shape is what disambiguates.
+        "AKIA" | "ASIA" => {
+            value_len >= 16
+                && value[..16].bytes().all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
+        }
+        // SendGrid keys are `SG.<22 chars>.<43 chars>` — ~66 characters after the prefix. "SG."
+        // also opens hostnames ("SG.example.com"), which are far shorter than any real key.
+        "SG." => value_len >= 60,
+        _ => true,
+    }
 }
 
 /// Redact for the **log / error-report path** (design decision ②). In addition to the DB
@@ -297,6 +331,31 @@ mod tests {
         assert_eq!(r("use AKIAIOSFODNN7EXAMPLE now"), "use [redacted] now");
         assert_eq!(r("xoxb-123456789012-abcdefghijkl"), "[redacted]");
         assert_eq!(r("GOCSPX-abcdefghijklmnopqrst"), "[redacted]");
+    }
+
+    #[test]
+    fn issuer_prefixes_inside_ordinary_words_are_not_matched() {
+        // `sk-` must not fire mid-token: "risk-", "task-", "desk-" are ordinary prose.
+        assert_eq!(r("risk-assessment-review-notes"), "risk-assessment-review-notes");
+        assert_eq!(r("the task-management-notes doc"), "the task-management-notes doc");
+        assert_eq!(r("desk-organization-tips"), "desk-organization-tips");
+        // "ASIA" / "SG." open ordinary words and hostnames; shape keeps them intact.
+        assert_eq!(r("ASIA-Pacific-Region revenue is up"), "ASIA-Pacific-Region revenue is up");
+        assert_eq!(r("Visit SG.example.com for details"), "Visit SG.example.com for details");
+        assert_eq!(r("ASIAN markets closed higher"), "ASIAN markets closed higher");
+    }
+
+    #[test]
+    fn real_keys_still_masked_after_boundary_and_shape_checks() {
+        // At the start, after whitespace, and after punctuation — all boundaries.
+        assert_eq!(r("sk-proj-abcdefghijklmnop"), "[redacted]");
+        assert_eq!(r("(sk-abcdefghijklmnop)"), "([redacted])");
+        assert_eq!(r("key=sk-ant-api03-abcdefghijklmnop"), "key=[redacted]");
+        // AWS temporary key: ASIA + 16 uppercase alphanumerics.
+        assert_eq!(r("use ASIAJ4X7EXAMPLE9AB01 now"), "use [redacted] now");
+        // SendGrid: SG.<22>.<43>.
+        let sg = format!("SG.{}.{}", "a".repeat(22), "B".repeat(43));
+        assert_eq!(r(&format!("mail key {sg} end")), "mail key [redacted] end");
     }
 
     #[test]
