@@ -5,14 +5,25 @@
 
 #[cfg(target_os = "macos")]
 pub mod mac {
-    use std::sync::Mutex;
-    use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+    use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    use accessibility_sys::{
+        kAXErrorSuccess, kAXFocusedAttribute, kAXFocusedUIElementAttribute, kAXRoleAttribute,
+        kAXSelectedTextAttribute, kAXSelectedTextRangeAttribute, kAXValueAttribute,
+        kAXValueTypeCFRange, AXUIElementCopyAttributeValue, AXUIElementCreateSystemWide,
+        AXUIElementGetPid, AXUIElementRef, AXUIElementSetAttributeValue,
+        AXUIElementSetMessagingTimeout, AXValueCreate, AXValueGetTypeID, AXValueGetValue,
+    };
+    use core_foundation::base::TCFType;
+    use core_foundation::boolean::CFBoolean;
+    use core_foundation::string::CFString;
+    use core_foundation_sys::base::{CFEqual, CFGetTypeID, CFRange, CFRelease, CFTypeRef};
+    use core_foundation_sys::string::{CFStringGetTypeID, CFStringRef};
 
     use serde::Serialize;
-    use shogun_core::inline::TextInserter;
     use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
 
-    use crate::inline_source::mac::AxTextInserter;
     use crate::voice_lane::{self, TranscriptOutcome};
 
     const WINDOW_LABEL: &str = "voice";
@@ -23,12 +34,25 @@ pub mod mac {
         pub enabled: bool,
     }
 
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum SessionPhase {
+        Opening,
+        Recording,
+        Processing,
+        Finishing,
+    }
+
+    struct ActiveSession {
+        id: u64,
+        phase: SessionPhase,
+        audio: Option<voice_lane::Handle>,
+        target: Option<Arc<DictationTarget>>,
+        delivery_state: Arc<AtomicU8>,
+    }
+
     struct Lane {
         settings: Settings,
-        audio: Option<voice_lane::Handle>,
-        /// True between successful hold-start and hold-end — used to idle-out a stuck UI if
-        /// release arrives with no audio handle (should be rare after the ordered worker).
-        ui_recording: bool,
+        active: Option<ActiveSession>,
     }
 
     static LANE: Mutex<Option<Lane>> = Mutex::new(None);
@@ -50,8 +74,55 @@ pub mod mac {
         pub message: String,
     }
 
-    /// Monotonic session id so a late ASR thread cannot clobber a newer hold.
-    static SESSION: AtomicU64 = AtomicU64::new(0);
+    /// Monotonic session id so old ASR workers cannot affect a later hold.
+    static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
+
+    const DELIVERY_READY: u8 = 0;
+    const DELIVERY_WRITING: u8 = 1;
+    const DELIVERY_CANCELLED: u8 = 2;
+    const DELIVERY_DONE: u8 = 3;
+
+    struct DictationTarget {
+        element: AXUIElementRef,
+        pid: i32,
+        role: String,
+        original_value: String,
+        caret: CFRange,
+        operation: Mutex<()>,
+    }
+
+    // SAFETY: the retained AX element is only accessed while `operation` is held. The atomic
+    // state linearizes cancellation against the first AX mutation.
+    unsafe impl Send for DictationTarget {}
+    unsafe impl Sync for DictationTarget {}
+
+    impl Drop for DictationTarget {
+        fn drop(&mut self) {
+            if !self.element.is_null() {
+                unsafe { CFRelease(self.element.cast()) };
+            }
+        }
+    }
+
+    struct DeliveryGuard<'a> {
+        state: &'a AtomicU8,
+    }
+
+    impl Drop for DeliveryGuard<'_> {
+        fn drop(&mut self) {
+            self.state.store(DELIVERY_DONE, Ordering::Release);
+        }
+    }
+
+    struct SessionCleanup {
+        session: u64,
+    }
+
+    impl Drop for SessionCleanup {
+        fn drop(&mut self) {
+            abandon_session(self.session);
+        }
+    }
 
     fn settings_path(app: &AppHandle) -> Option<std::path::PathBuf> {
         app.path().app_data_dir().ok().map(|d| d.join("voice.json"))
@@ -76,16 +147,30 @@ pub mod mac {
         }
     }
 
-    fn emit_state(app: &AppHandle, phase: &'static str, transcript: Option<String>, response: Option<String>) {
+    fn emit_state(
+        app: &AppHandle,
+        phase: &'static str,
+        transcript: Option<String>,
+        response: Option<String>,
+    ) {
         let _ = app.emit(
             "voice_state",
-            VoiceStateEvent { phase, transcript, response },
+            VoiceStateEvent {
+                phase,
+                transcript,
+                response,
+            },
         );
     }
 
     fn emit_error(app: &AppHandle, message: impl Into<String>) {
         let msg = message.into();
-        let _ = app.emit("voice_error", VoiceErrorEvent { message: msg.clone() });
+        let _ = app.emit(
+            "voice_error",
+            VoiceErrorEvent {
+                message: msg.clone(),
+            },
+        );
         emit_state(app, "error", None, Some(msg));
         // Push-to-talk failing quietly is the worst outcome: the user held a key, said something,
         // and nothing happened (#49, push-to-talk design §5).
@@ -118,35 +203,393 @@ pub mod mac {
         }
     }
 
-    /// Dictation output: focused field via AX (+ ⌘V fallback inside AxTextInserter), else clipboard.
-    fn deliver_dictation(app: &AppHandle, transcript: &str) {
-        use crate::inline_source::mac::AxCursorReader;
-        use shogun_core::inline::CursorReader;
+    fn editable_role(role: &str) -> bool {
+        matches!(
+            role,
+            "AXTextArea" | "AXTextField" | "AXSearchField" | "AXComboBox"
+        )
+    }
 
-        // Only inject when an editable text-carrying field is focused (same signal as inline draft).
-        let has_field = AxCursorReader.read().is_some();
-        if has_field {
-            match AxTextInserter.insert(transcript) {
-                Ok(()) => {
-                    eprintln!("[voice] dictation pasted into focused field");
-                    emit_toast(app, "Pasted");
-                    emit_state(app, "idle", Some(transcript.to_string()), None);
-                    return;
-                }
-                Err(e) => {
-                    eprintln!("[voice] dictation inject failed ({e}) — clipboard");
-                }
-            }
-        } else {
-            eprintln!("[voice] no injectable field — clipboard");
+    fn secure_role(role: &str) -> bool {
+        role == "AXSecureTextField"
+    }
+
+    unsafe fn copy_string(element: AXUIElementRef, name: &str) -> Option<String> {
+        let attribute = CFString::new(name);
+        let mut value: CFTypeRef = std::ptr::null();
+        let error = unsafe {
+            AXUIElementCopyAttributeValue(element, attribute.as_concrete_TypeRef(), &mut value)
+        };
+        if error != kAXErrorSuccess || value.is_null() {
+            return None;
         }
-
-        match copy_to_clipboard(transcript) {
-            Ok(()) => {
-                emit_toast(app, "Copied to clipboard");
-                emit_state(app, "idle", Some(transcript.to_string()), None);
+        unsafe {
+            if CFGetTypeID(value) == CFStringGetTypeID() {
+                Some(CFString::wrap_under_create_rule(value as CFStringRef).to_string())
+            } else {
+                CFRelease(value);
+                None
             }
-            Err(ce) => emit_error(app, format!("Could not paste or copy: {ce}")),
+        }
+    }
+
+    unsafe fn copy_range(element: AXUIElementRef) -> Option<CFRange> {
+        let attribute = CFString::new(kAXSelectedTextRangeAttribute);
+        let mut value: CFTypeRef = std::ptr::null();
+        let error = unsafe {
+            AXUIElementCopyAttributeValue(element, attribute.as_concrete_TypeRef(), &mut value)
+        };
+        if error != kAXErrorSuccess || value.is_null() {
+            return None;
+        }
+        let mut range = CFRange::init(0, 0);
+        let valid = unsafe { CFGetTypeID(value) == AXValueGetTypeID() }
+            && unsafe {
+                AXValueGetValue(
+                    value.cast_mut().cast(),
+                    kAXValueTypeCFRange,
+                    (&mut range as *mut CFRange).cast(),
+                )
+            };
+        unsafe { CFRelease(value) };
+        valid.then_some(range)
+    }
+
+    unsafe fn focused_element() -> Option<AXUIElementRef> {
+        let system = unsafe { AXUIElementCreateSystemWide() };
+        if system.is_null() {
+            return None;
+        }
+        unsafe { AXUIElementSetMessagingTimeout(system, 0.25) };
+        let attribute = CFString::new(kAXFocusedUIElementAttribute);
+        let mut value: CFTypeRef = std::ptr::null();
+        let error = unsafe {
+            AXUIElementCopyAttributeValue(system, attribute.as_concrete_TypeRef(), &mut value)
+        };
+        unsafe { CFRelease(system.cast()) };
+        if error != kAXErrorSuccess || value.is_null() {
+            return None;
+        }
+        let element = value.cast_mut().cast();
+        unsafe { AXUIElementSetMessagingTimeout(element, 0.25) };
+        Some(element)
+    }
+
+    fn valid_collapsed_caret(value: &str, range: CFRange) -> bool {
+        let Ok(location) = usize::try_from(range.location) else {
+            return false;
+        };
+        range.length == 0 && location <= value.encode_utf16().count()
+    }
+
+    fn capture_dictation_target() -> Result<DictationTarget, &'static str> {
+        let element = unsafe { focused_element() }.ok_or("no editable text field is focused")?;
+        let role = unsafe { copy_string(element, kAXRoleAttribute) }.unwrap_or_default();
+        if !editable_role(&role) || secure_role(&role) {
+            unsafe { CFRelease(element.cast()) };
+            return Err("place the caret in an editable text field before dictating");
+        }
+        let Some(value) = (unsafe { copy_string(element, kAXValueAttribute) }) else {
+            unsafe { CFRelease(element.cast()) };
+            return Err("the focused text field cannot be verified");
+        };
+        let Some(caret) = (unsafe { copy_range(element) }) else {
+            unsafe { CFRelease(element.cast()) };
+            return Err("place a single caret before dictating");
+        };
+        if !valid_collapsed_caret(&value, caret) {
+            unsafe { CFRelease(element.cast()) };
+            return Err("dictation only inserts at a single caret; clear the selection first");
+        }
+        let mut pid = 0i32;
+        if unsafe { AXUIElementGetPid(element, &mut pid) } != kAXErrorSuccess || pid <= 0 {
+            unsafe { CFRelease(element.cast()) };
+            return Err("the focused text field identity cannot be verified");
+        }
+        if crate::display::frontmost_app().map(|app| app.pid) != Some(pid) {
+            unsafe { CFRelease(element.cast()) };
+            return Err("the focused application changed before dictation started");
+        }
+        Ok(DictationTarget {
+            element,
+            pid,
+            role,
+            original_value: value,
+            caret,
+            operation: Mutex::new(()),
+        })
+    }
+
+    unsafe fn set_caret(element: AXUIElementRef, caret: CFRange) -> bool {
+        let value =
+            unsafe { AXValueCreate(kAXValueTypeCFRange, (&caret as *const CFRange).cast()) };
+        if value.is_null() {
+            return false;
+        }
+        let attribute = CFString::new(kAXSelectedTextRangeAttribute);
+        let result = unsafe {
+            AXUIElementSetAttributeValue(element, attribute.as_concrete_TypeRef(), value.cast())
+        };
+        unsafe { CFRelease(value.cast()) };
+        result == kAXErrorSuccess
+    }
+
+    fn same_focused_element(target: &DictationTarget) -> bool {
+        let Some(focused) = (unsafe { focused_element() }) else {
+            return false;
+        };
+        let same = unsafe { CFEqual(focused.cast(), target.element.cast()) };
+        unsafe { CFRelease(focused.cast()) };
+        same != 0
+    }
+
+    fn restore_target_focus(target: &DictationTarget) -> Result<(), String> {
+        use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication};
+
+        let application = NSRunningApplication::runningApplicationWithProcessIdentifier(target.pid)
+            .ok_or_else(|| "source app unavailable".to_string())?;
+        let _ = application.activateWithOptions(NSApplicationActivationOptions::empty());
+        std::thread::sleep(std::time::Duration::from_millis(35));
+        let attribute = CFString::new(kAXFocusedAttribute);
+        let focused = CFBoolean::true_value();
+        let result = unsafe {
+            AXUIElementSetAttributeValue(
+                target.element,
+                attribute.as_concrete_TypeRef(),
+                focused.as_CFTypeRef(),
+            )
+        };
+        if result != kAXErrorSuccess || !same_focused_element(target) {
+            return Err("captured field could not be focused".into());
+        }
+        Ok(())
+    }
+
+    fn expected_insert(value: &str, caret: CFRange, transcript: &str) -> Option<String> {
+        let units: Vec<u16> = value.encode_utf16().collect();
+        let location = usize::try_from(caret.location).ok()?;
+        if caret.length != 0 || location > units.len() {
+            return None;
+        }
+        let transcript_units: Vec<u16> = transcript.encode_utf16().collect();
+        let mut inserted = Vec::with_capacity(units.len() + transcript_units.len());
+        inserted.extend_from_slice(&units[..location]);
+        inserted.extend_from_slice(&transcript_units);
+        inserted.extend_from_slice(&units[location..]);
+        String::from_utf16(&inserted).ok()
+    }
+
+    unsafe fn value_matches(element: AXUIElementRef, expected: &str) -> bool {
+        for _ in 0..4 {
+            if unsafe { copy_string(element, kAXValueAttribute) }.as_deref() == Some(expected) {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(30));
+        }
+        false
+    }
+
+    fn target_state_matches(
+        target: &DictationTarget,
+        role: Option<&str>,
+        value: Option<&str>,
+        caret: Option<CFRange>,
+        focused: bool,
+    ) -> bool {
+        focused
+            && role == Some(target.role.as_str())
+            && editable_role(&target.role)
+            && !secure_role(&target.role)
+            && value == Some(target.original_value.as_str())
+            && caret == Some(target.caret)
+    }
+
+    /// Directly inserts only into the retained field. Failure intentionally has no paste fallback.
+    fn insert_at_captured_caret(target: &DictationTarget, transcript: &str) -> Result<(), String> {
+        let _operation = target
+            .operation
+            .lock()
+            .map_err(|_| "captured target unavailable".to_string())?;
+        let mut pid = 0i32;
+        if unsafe { AXUIElementGetPid(target.element, &mut pid) } != kAXErrorSuccess
+            || pid != target.pid
+        {
+            return Err("captured target identity changed".into());
+        }
+        if !target_state_matches(
+            target,
+            unsafe { copy_string(target.element, kAXRoleAttribute) }.as_deref(),
+            unsafe { copy_string(target.element, kAXValueAttribute) }.as_deref(),
+            unsafe { copy_range(target.element) },
+            true,
+        ) {
+            return Err("captured target changed".into());
+        }
+        restore_target_focus(target)?;
+        if !target_state_matches(
+            target,
+            unsafe { copy_string(target.element, kAXRoleAttribute) }.as_deref(),
+            unsafe { copy_string(target.element, kAXValueAttribute) }.as_deref(),
+            unsafe { copy_range(target.element) },
+            same_focused_element(target),
+        ) {
+            return Err("captured target changed while restoring focus".into());
+        }
+        if !unsafe { set_caret(target.element, target.caret) }
+            || unsafe { copy_range(target.element) } != Some(target.caret)
+        {
+            return Err("captured caret could not be verified".into());
+        }
+        let expected = expected_insert(&target.original_value, target.caret, transcript)
+            .ok_or_else(|| "captured caret is invalid".to_string())?;
+        let attribute = CFString::new(kAXSelectedTextAttribute);
+        let value = CFString::new(transcript);
+        let _result = unsafe {
+            AXUIElementSetAttributeValue(
+                target.element,
+                attribute.as_concrete_TypeRef(),
+                value.as_concrete_TypeRef().cast(),
+            )
+        };
+        if !unsafe { value_matches(target.element, &expected) } {
+            return Err("captured target did not accept dictation".into());
+        }
+        Ok(())
+    }
+
+    fn session_is_processing(session: u64) -> bool {
+        let Ok(lane) = LANE.lock() else {
+            return false;
+        };
+        lane.as_ref()
+            .and_then(|lane| lane.active.as_ref())
+            .is_some_and(|active| active.id == session && active.phase == SessionPhase::Processing)
+    }
+
+    fn claim_terminal(session: u64, expected: SessionPhase) -> bool {
+        let Ok(mut lane) = LANE.lock() else {
+            return false;
+        };
+        let Some(lane) = lane.as_mut() else {
+            return false;
+        };
+        if lane
+            .active
+            .as_ref()
+            .is_some_and(|active| active.id == session && active.phase == expected)
+        {
+            if let Some(active) = lane.active.as_mut() {
+                active.phase = SessionPhase::Finishing;
+            }
+            true
+        } else {
+            false
+        }
+    }
+
+    fn clear_terminal(session: u64) {
+        let Ok(mut lane) = LANE.lock() else {
+            return;
+        };
+        let Some(lane) = lane.as_mut() else {
+            return;
+        };
+        if lane
+            .active
+            .as_ref()
+            .is_some_and(|active| active.id == session && active.phase == SessionPhase::Finishing)
+        {
+            lane.active = None;
+        }
+    }
+
+    fn abandon_session(session: u64) {
+        let Ok(mut lane) = LANE.lock() else {
+            return;
+        };
+        let Some(lane) = lane.as_mut() else {
+            return;
+        };
+        if lane
+            .active
+            .as_ref()
+            .is_some_and(|active| active.id == session)
+        {
+            lane.active = None;
+        }
+    }
+
+    fn complete_terminal<F>(session: u64, expected: SessionPhase, emit: F) -> bool
+    where
+        F: FnOnce(),
+    {
+        if !claim_terminal(session, expected) {
+            return false;
+        }
+        emit();
+        clear_terminal(session);
+        true
+    }
+
+    fn cancel_active_session() -> Option<voice_lane::Handle> {
+        let Ok(mut lane) = LANE.lock() else {
+            return None;
+        };
+        let Some(lane) = lane.as_mut() else {
+            return None;
+        };
+        lane.active.take().and_then(|mut active| {
+            let _ = active.delivery_state.compare_exchange(
+                DELIVERY_READY,
+                DELIVERY_CANCELLED,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            );
+            active.audio.take()
+        })
+    }
+
+    fn stop_cancelled_audio(audio: voice_lane::Handle) {
+        let _ = std::thread::Builder::new()
+            .name("voice-cancel".into())
+            .spawn(move || {
+                let _ = voice_lane::stop(audio);
+            });
+    }
+
+    enum DeliveryOutcome {
+        Inserted,
+        Copied,
+        CopyFailed(String),
+    }
+
+    fn claim_delivery(session: u64, delivery_state: &AtomicU8) -> Option<DeliveryGuard<'_>> {
+        if !session_is_processing(session) {
+            return None;
+        }
+        if delivery_state
+            .compare_exchange(
+                DELIVERY_READY,
+                DELIVERY_WRITING,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_err()
+        {
+            return None;
+        }
+        Some(DeliveryGuard {
+            state: delivery_state,
+        })
+    }
+
+    fn deliver_dictation(target: Option<&DictationTarget>, transcript: &str) -> DeliveryOutcome {
+        match target.map(|target| insert_at_captured_caret(target, transcript)) {
+            Some(Ok(())) => DeliveryOutcome::Inserted,
+            Some(Err(_)) | None => match copy_to_clipboard(transcript) {
+                Ok(()) => DeliveryOutcome::Copied,
+                Err(error) => DeliveryOutcome::CopyFailed(error),
+            },
         }
     }
 
@@ -168,8 +611,7 @@ pub mod mac {
         if let Ok(mut lane) = LANE.lock() {
             *lane = Some(Lane {
                 settings: settings.clone(),
-                audio: None,
-                ui_recording: false,
+                active: None,
             });
         }
         if settings.enabled {
@@ -177,7 +619,11 @@ pub mod mac {
         }
         eprintln!(
             "[voice] dialogue {}",
-            if enabled_log { "enabled" } else { "off (beta default)" }
+            if enabled_log {
+                "enabled"
+            } else {
+                "off (beta default)"
+            }
         );
     }
 
@@ -198,8 +644,21 @@ pub mod mac {
             );
             return false;
         }
-        // Do not hold LANE across mic open — keep the lock short so settings IPC cannot stall.
-        {
+        let existing_phase = LANE.lock().ok().and_then(|lane| {
+            lane.as_ref()
+                .and_then(|lane| lane.active.as_ref().map(|active| active.phase))
+        });
+        match existing_phase {
+            Some(SessionPhase::Recording | SessionPhase::Opening) => return true,
+            Some(SessionPhase::Processing | SessionPhase::Finishing) => return false,
+            None => {}
+        }
+        // A missing or selected caret is still a useful recording: deliver its transcript to the
+        // clipboard, never by replacing the current selection.
+        let target = capture_dictation_target().ok().map(Arc::new);
+        // Reserve the lane before opening the mic. Processing remains an owned state, so a
+        // second hold can never open a fresh microphone while an older ASR worker is live.
+        let session = {
             let mut lane = match LANE.lock() {
                 Ok(g) => g,
                 Err(_) => return false,
@@ -207,12 +666,21 @@ pub mod mac {
             let Some(lane) = lane.as_mut() else {
                 return false;
             };
-            if lane.audio.is_some() {
-                // Already live — treat as success so the release path still runs.
-                lane.ui_recording = true;
-                return true;
+            match lane.active.as_ref().map(|active| active.phase) {
+                Some(SessionPhase::Recording | SessionPhase::Opening) => return true,
+                Some(SessionPhase::Processing | SessionPhase::Finishing) => return false,
+                None => {}
             }
-        }
+            let id = NEXT_SESSION.fetch_add(1, Ordering::Relaxed);
+            lane.active = Some(ActiveSession {
+                id,
+                phase: SessionPhase::Opening,
+                audio: None,
+                target,
+                delivery_state: Arc::new(AtomicU8::new(DELIVERY_READY)),
+            });
+            id
+        };
 
         // BEFORE the mic opens, deliberately (#49 §5). Our own capture cannot pick up a cue that
         // has already played, and meeting recording blocks this path entirely — so the only thing
@@ -222,7 +690,7 @@ pub mod mac {
         let handle = match voice_lane::start(&app) {
             Ok(h) => h,
             Err(e) => {
-                emit_error(&app, e);
+                let _ = complete_terminal(session, SessionPhase::Opening, || emit_error(&app, e));
                 return false;
             }
         };
@@ -239,15 +707,16 @@ pub mod mac {
             let _ = voice_lane::stop(handle);
             return false;
         };
-        if lane.audio.is_some() {
-            // Race: another start won. Drop this handle.
+        let Some(active) = lane.active.as_mut() else {
             let _ = voice_lane::stop(handle);
-            lane.ui_recording = true;
-            return true;
+            return false;
+        };
+        if active.id != session || active.phase != SessionPhase::Opening {
+            let _ = voice_lane::stop(handle);
+            return false;
         }
-        lane.audio = Some(handle);
-        lane.ui_recording = true;
-        let _ = SESSION.fetch_add(1, AtomicOrdering::SeqCst);
+        active.audio = Some(handle);
+        active.phase = SessionPhase::Recording;
         emit_state(&app, "recording", None, None);
         eprintln!("[voice] hold start — mic open");
         true
@@ -255,10 +724,12 @@ pub mod mac {
 
     /// True when a hold is still live (mic handle or UI recording flag). Used by the release failsafe.
     pub fn is_ui_recording() -> bool {
-        LANE.lock()
-            .ok()
-            .and_then(|g| g.as_ref().map(|l| l.ui_recording || l.audio.is_some()))
-            .unwrap_or(false)
+        let Ok(lane) = LANE.lock() else {
+            return false;
+        };
+        lane.as_ref()
+            .and_then(|lane| lane.active.as_ref())
+            .is_some_and(|active| active.phase == SessionPhase::Recording)
     }
 
     /// If still recording 500ms after a release signal, force `on_hold_end` again. Returns true when
@@ -276,7 +747,7 @@ pub mod mac {
     ///
     /// ASR runs on a dedicated thread so the voice-hold worker is never blocked.
     pub fn on_hold_end(app: AppHandle) {
-        let audio = {
+        let (session, audio, target, delivery_state) = {
             let mut lane = match LANE.lock() {
                 Ok(g) => g,
                 Err(_) => return,
@@ -284,17 +755,24 @@ pub mod mac {
             let Some(lane) = lane.as_mut() else {
                 return;
             };
-            let was_recording = lane.ui_recording || lane.audio.is_some();
-            lane.ui_recording = false;
-            match lane.audio.take() {
-                Some(handle) => handle,
-                None => {
-                    if was_recording {
-                        emit_state(&app, "idle", None, None);
-                    }
-                    return;
-                }
+            let Some(active) = lane.active.as_mut() else {
+                return;
+            };
+            if active.phase != SessionPhase::Recording {
+                return;
             }
+            let Some(audio) = active.audio.take() else {
+                lane.active = None;
+                emit_state(&app, "idle", None, None);
+                return;
+            };
+            active.phase = SessionPhase::Processing;
+            (
+                active.id,
+                audio,
+                active.target.clone(),
+                Arc::clone(&active.delivery_state),
+            )
         };
 
         // Signal release to the frontend before ASR so a stuck recording chrome can failsafe.
@@ -303,38 +781,75 @@ pub mod mac {
         emit_state(&app, "processing", None, None);
         eprintln!("[voice] hold end — transcribing (dictation)");
 
-        let session = SESSION.load(AtomicOrdering::SeqCst);
-        std::thread::Builder::new()
+        let shared_audio = Arc::new(Mutex::new(Some(audio)));
+        let worker_audio = Arc::clone(&shared_audio);
+        let worker_app = app.clone();
+        let spawned = std::thread::Builder::new()
             .name("voice-asr".into())
             .spawn(move || {
-                // Cue after `stop`, so our own mic is already closed and cannot hear its own end
-                // cue — and only on success: a failure plays its own sound from `emit_error`, and
-                // two cues back to back would say less than either one alone (#49).
-                let transcript = match voice_lane::stop(audio) {
-                    TranscriptOutcome::Ok(t) => {
-                        crate::sound::mac::play(shogun_core::sound::Cue::VoiceEnd);
-                        t
-                    }
-                    TranscriptOutcome::Empty => {
-                        emit_error(&app, "Didn't catch that — try again.");
+                let _cleanup = SessionCleanup { session };
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let Some(audio) = worker_audio.lock().ok().and_then(|mut audio| audio.take())
+                    else {
                         return;
-                    }
-                    TranscriptOutcome::Err(e) => {
-                        emit_error(&app, e);
+                    };
+                    // Cue after `stop`, so our own mic is already closed and cannot hear its own end
+                    // cue — and only on success: a failure plays its own sound from `emit_error`, and
+                    // two cues back to back would say less than either one alone (#49).
+                    let transcript = match voice_lane::stop(audio) {
+                        TranscriptOutcome::Ok(t) => t,
+                        TranscriptOutcome::Empty => {
+                            let _ = complete_terminal(session, SessionPhase::Processing, || {
+                                emit_error(&worker_app, "Didn't catch that — try again.")
+                            });
+                            return;
+                        }
+                        TranscriptOutcome::Err(e) => {
+                            let _ = complete_terminal(session, SessionPhase::Processing, || {
+                                emit_error(&worker_app, e)
+                            });
+                            return;
+                        }
+                    };
+
+                    let Some(_delivery) = claim_delivery(session, &delivery_state) else {
                         return;
+                    };
+                    crate::sound::mac::play(shogun_core::sound::Cue::VoiceEnd);
+                    emit_state(&worker_app, "processing", Some(transcript.clone()), None);
+                    match deliver_dictation(target.as_deref(), &transcript) {
+                        DeliveryOutcome::Inserted => {
+                            let _ = complete_terminal(session, SessionPhase::Processing, || {
+                                emit_toast(&worker_app, "Pasted");
+                                emit_state(&worker_app, "idle", Some(transcript), None);
+                            });
+                        }
+                        DeliveryOutcome::Copied => {
+                            let _ = complete_terminal(session, SessionPhase::Processing, || {
+                                emit_toast(&worker_app, "Copied to clipboard");
+                                emit_state(&worker_app, "idle", Some(transcript), None);
+                            });
+                        }
+                        DeliveryOutcome::CopyFailed(error) => {
+                            let _ = complete_terminal(session, SessionPhase::Processing, || {
+                                emit_error(
+                                    &worker_app,
+                                    format!("Could not copy dictation: {error}"),
+                                );
+                            });
+                        }
                     }
-                };
-
-                if SESSION.load(AtomicOrdering::SeqCst) != session {
-                    eprintln!("[voice] discard stale transcript (newer hold started)");
-                    return;
-                }
-
-                emit_state(&app, "processing", Some(transcript.clone()), None);
-                // Dictation-first: no chat call on this path.
-                deliver_dictation(&app, &transcript);
-            })
-            .ok();
+                }));
+            });
+        if spawned.is_err() {
+            let audio = shared_audio.lock().ok().and_then(|mut audio| audio.take());
+            if let Some(audio) = audio {
+                let _ = voice_lane::stop(audio);
+            }
+            let _ = complete_terminal(session, SessionPhase::Processing, || {
+                emit_error(&app, "Voice transcription could not start.")
+            });
+        }
     }
 
     #[tauri::command]
@@ -347,12 +862,23 @@ pub mod mac {
 
     #[tauri::command]
     pub fn set_voice_enabled(enabled: bool, app: AppHandle) -> Result<(), String> {
-        let mut lane = LANE.lock().map_err(|_| "voice lane lock poisoned".to_string())?;
+        let mut lane = LANE
+            .lock()
+            .map_err(|_| "voice lane lock poisoned".to_string())?;
         let settings = lane.as_mut().ok_or("voice not initialized")?;
         settings.settings.enabled = enabled;
         save_settings(&app, &settings.settings);
         if enabled {
             preload_asr_bg(&app);
+        }
+        if !enabled {
+            drop(lane);
+            if let Some(audio) = cancel_active_session() {
+                stop_cancelled_audio(audio);
+            }
+            emit_state(&app, "idle", None, None);
+            eprintln!("[voice] enabled={enabled}");
+            return Ok(());
         }
         eprintln!("[voice] enabled={enabled}");
         Ok(())
@@ -360,6 +886,9 @@ pub mod mac {
 
     #[tauri::command]
     pub fn voice_dismiss(app: AppHandle) {
+        if let Some(audio) = cancel_active_session() {
+            stop_cancelled_audio(audio);
+        }
         emit_state(&app, "idle", None, None);
     }
 
@@ -410,6 +939,176 @@ pub mod mac {
             let _: () = msg_send![ptr, setCanHide: true];
             let _: () = msg_send![ptr, setMovableByWindowBackground: false];
             let _: () = msg_send![ptr, setIgnoresMouseEvents: false];
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+        enum TestPhase {
+            Recording,
+            Processing,
+            Finishing,
+        }
+
+        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+        struct TestSession {
+            id: u64,
+            phase: TestPhase,
+        }
+
+        fn begin_processing(active: &mut Option<TestSession>, id: u64) -> bool {
+            let Some(session) = active.as_mut() else {
+                return false;
+            };
+            if session.id != id || session.phase != TestPhase::Recording {
+                return false;
+            }
+            session.phase = TestPhase::Processing;
+            true
+        }
+
+        fn claim_terminal(active: &mut Option<TestSession>, id: u64) -> bool {
+            let Some(session) = active.as_mut() else {
+                return false;
+            };
+            if session.id != id || session.phase != TestPhase::Processing {
+                return false;
+            }
+            session.phase = TestPhase::Finishing;
+            true
+        }
+
+        fn clear_terminal(active: &mut Option<TestSession>, id: u64) {
+            if active
+                .is_some_and(|session| session.id == id && session.phase == TestPhase::Finishing)
+            {
+                *active = None;
+            }
+        }
+
+        fn can_start(active: Option<TestSession>) -> bool {
+            active.is_none()
+        }
+
+        fn target_for_test() -> DictationTarget {
+            DictationTarget {
+                element: std::ptr::null_mut(),
+                pid: 1,
+                role: "AXTextField".into(),
+                original_value: "before".into(),
+                caret: CFRange::init(3, 0),
+                operation: Mutex::new(()),
+            }
+        }
+
+        #[test]
+        fn collapsed_caret_is_required_for_dictation_capture() {
+            assert!(valid_collapsed_caret("hello", CFRange::init(2, 0)));
+            assert!(!valid_collapsed_caret("hello", CFRange::init(2, 1)));
+            assert!(!valid_collapsed_caret("hello", CFRange::init(9, 0)));
+        }
+
+        #[test]
+        fn dictation_insert_preserves_adjacent_utf16_text() {
+            let caret = CFRange::init(1, 0);
+            assert_eq!(
+                expected_insert("a🙂b", caret, " hello"),
+                Some("a hello🙂b".into())
+            );
+        }
+
+        #[test]
+        fn changed_value_focus_or_secure_role_never_passes_target_verification() {
+            let target = target_for_test();
+            assert!(!target_state_matches(
+                &target,
+                Some("AXTextField"),
+                Some("changed"),
+                Some(CFRange::init(3, 0)),
+                true,
+            ));
+            assert!(!target_state_matches(
+                &target,
+                Some("AXSecureTextField"),
+                Some("before"),
+                Some(CFRange::init(3, 0)),
+                true,
+            ));
+            assert!(!target_state_matches(
+                &target,
+                Some("AXTextField"),
+                Some("before"),
+                Some(CFRange::init(3, 0)),
+                false,
+            ));
+        }
+
+        #[test]
+        fn processing_session_blocks_a_second_hold() {
+            let mut active = Some(TestSession {
+                id: 7,
+                phase: TestPhase::Recording,
+            });
+            assert!(begin_processing(&mut active, 7));
+            assert_eq!(
+                active,
+                Some(TestSession {
+                    id: 7,
+                    phase: TestPhase::Processing
+                })
+            );
+            assert!(!can_start(active));
+        }
+
+        #[test]
+        fn stale_terminal_cannot_unlock_a_newer_session() {
+            let mut active = Some(TestSession {
+                id: 8,
+                phase: TestPhase::Processing,
+            });
+            assert!(!claim_terminal(&mut active, 7));
+            clear_terminal(&mut active, 7);
+            assert_eq!(
+                active,
+                Some(TestSession {
+                    id: 8,
+                    phase: TestPhase::Processing
+                })
+            );
+        }
+
+        #[test]
+        fn terminal_claim_blocks_reentry_until_its_event_is_emitted() {
+            let mut active = Some(TestSession {
+                id: 9,
+                phase: TestPhase::Processing,
+            });
+            assert!(claim_terminal(&mut active, 9));
+            assert_eq!(
+                active,
+                Some(TestSession {
+                    id: 9,
+                    phase: TestPhase::Finishing
+                })
+            );
+            clear_terminal(&mut active, 9);
+            assert_eq!(active, None);
+        }
+
+        #[test]
+        fn cancelled_delivery_gate_never_claims_a_write() {
+            let gate = AtomicU8::new(DELIVERY_CANCELLED);
+            assert!(gate
+                .compare_exchange(
+                    DELIVERY_READY,
+                    DELIVERY_WRITING,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                )
+                .is_err());
         }
     }
 }
