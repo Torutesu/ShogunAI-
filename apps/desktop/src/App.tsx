@@ -145,7 +145,7 @@ interface StartupHealth {
 }
 
 /** Hold-to-talk voice dialogue (#44). Rust owns lifecycle; notch expands on `voice_state`. */
-interface VoiceView {
+export interface VoiceView {
   phase: "idle" | "recording" | "processing" | "response" | "error";
   transcript: string;
   response: string;
@@ -157,19 +157,14 @@ interface LevelEvent {
   rms: number;
 }
 
-const VOICE_W_RECORD = 360;
-const VOICE_H_RECORD = 100;
-const VOICE_W_PROCESS = 400;
-const VOICE_H_PROCESS = 140;
 const VOICE_W_RESPONSE = 480;
 const VOICE_H_RESPONSE = 280;
+const VOICE_W_RECORD_COLLAPSED = 240;
+const VOICE_LEVEL_STALE_MS = 1_200;
+const VOICE_ERROR_DISMISS_MS = 4_000;
 
 function voicePanelSize(phase: VoiceView["phase"]): Size {
   switch (phase) {
-    case "recording":
-      return { w: VOICE_W_RECORD, h: VOICE_H_RECORD };
-    case "processing":
-      return { w: VOICE_W_PROCESS, h: VOICE_H_PROCESS };
     case "response":
       return { w: VOICE_W_RESPONSE, h: VOICE_H_RESPONSE };
     default:
@@ -470,6 +465,8 @@ export function App(): JSX.Element {
   /** Last `voice_level` timestamp — failsafe ends stuck recording after release + quiet. */
   const lastVoiceLevelAt = useRef(0);
   const voiceReleaseWatch = useRef<number | null>(null);
+  const voiceMicWatch = useRef<number | null>(null);
+  const voiceErrorDismiss = useRef<number | null>(null);
   // #120: these timers are OWNED — each new event clears its predecessor before arming, so a
   // stale timeout can never dismiss the state that replaced the one it was armed for.
   const inlineHideTimer = useRef<number | null>(null);
@@ -619,6 +616,10 @@ export function App(): JSX.Element {
         "voice_state",
         (e) => {
           const p = e.payload.phase;
+          if (p !== "error" && voiceErrorDismiss.current != null) {
+            window.clearTimeout(voiceErrorDismiss.current);
+            voiceErrorDismiss.current = null;
+          }
           setVoice((cur) => ({
             ...cur,
             phase: p,
@@ -627,17 +628,75 @@ export function App(): JSX.Element {
             error: p === "error" ? e.payload.response ?? cur.error : p === "idle" ? "" : cur.error,
             level: p === "recording" ? cur.level : 0,
           }));
-          if (p === "recording") voicePeak.current = 0;
-          if (p === "recording" || p === "processing") {
+          if (p !== "recording" && voiceMicWatch.current != null) {
+            window.clearInterval(voiceMicWatch.current);
+            voiceMicWatch.current = null;
+          }
+          if (p === "recording") {
+            voicePeak.current = 0;
+            lastVoiceLevelAt.current = performance.now();
+            if (voiceMicWatch.current != null) window.clearInterval(voiceMicWatch.current);
+            // The audio lane emits a frame even for silence. If frames stop, close this session
+            // so a live indicator cannot claim capture is still running.
+            voiceMicWatch.current = window.setInterval(() => {
+              if (voiceRef.current.phase !== "recording") return;
+              if (performance.now() - lastVoiceLevelAt.current < VOICE_LEVEL_STALE_MS) return;
+              if (voiceMicWatch.current != null) {
+                window.clearInterval(voiceMicWatch.current);
+                voiceMicWatch.current = null;
+              }
+              void invoke("voice_force_end").catch(() => undefined);
+            }, 250);
+            if (collapseTimer.current != null) {
+              window.clearTimeout(collapseTimer.current);
+              collapseTimer.current = null;
+            }
+            if (expandTimer.current != null) {
+              window.clearTimeout(expandTimer.current);
+              expandTimer.current = null;
+            }
+            setOpen(false);
+            setExpanding(false);
+            setCollapsing(false);
+            setNotchSm("idle");
+            void applyPanelSize(VOICE_W_RECORD_COLLAPSED, H_DEAD);
+          } else if (p === "processing") {
+            if (collapseTimer.current != null) {
+              window.clearTimeout(collapseTimer.current);
+              collapseTimer.current = null;
+            }
+            if (expandTimer.current != null) {
+              window.clearTimeout(expandTimer.current);
+              expandTimer.current = null;
+            }
+            setShowSettings(false);
+            setOpen(false);
+            setExpanding(false);
+            setCollapsing(false);
+            setNotchSm("idle");
+            void applyPanelSize(VOICE_W_RECORD_COLLAPSED, H_DEAD);
+          } else if (p === "idle") {
+            // Dictation done — always collapse; do not leave recording chrome stuck open.
+            beginCollapseRef.current();
+          } else if (p === "error") {
             setOpen(true);
             setShowSettings(false);
             const sz = voicePanelSize(p);
             void applyPanelSize(sz.w, sz.h);
-          } else if (p === "idle") {
-            // Dictation done — always collapse; do not leave recording chrome stuck open.
-            beginCollapseRef.current();
-          } else if (p === "error" && !pinnedRef.current) {
-            beginCollapseRef.current();
+            if (voiceErrorDismiss.current != null) window.clearTimeout(voiceErrorDismiss.current);
+            voiceErrorDismiss.current = window.setTimeout(() => {
+              voiceErrorDismiss.current = null;
+              if (voiceRef.current.phase !== "error") return;
+              void invoke("voice_dismiss").catch(() => {
+                if (voiceRef.current.phase !== "error") return;
+                setVoice((current) =>
+                  current.phase === "error"
+                    ? { ...current, phase: "idle", transcript: "", response: "", error: "", level: 0 }
+                    : current,
+                );
+                beginCollapseRef.current();
+              });
+            }, VOICE_ERROR_DISMISS_MS);
           } else if (p === "response") {
             setOpen(true);
             setShowSettings(false);
@@ -782,6 +841,14 @@ export function App(): JSX.Element {
         window.clearInterval(voiceReleaseWatch.current);
         voiceReleaseWatch.current = null;
       }
+      if (voiceMicWatch.current != null) {
+        window.clearInterval(voiceMicWatch.current);
+        voiceMicWatch.current = null;
+      }
+      if (voiceErrorDismiss.current != null) {
+        window.clearTimeout(voiceErrorDismiss.current);
+        voiceErrorDismiss.current = null;
+      }
       if (inlineHideTimer.current != null) {
         window.clearTimeout(inlineHideTimer.current);
         inlineHideTimer.current = null;
@@ -912,7 +979,7 @@ export function App(): JSX.Element {
   pinnedRef.current = pinned;
   const voiceRef = useRef(voice);
   voiceRef.current = voice;
-  const voiceActive = voice.phase !== "idle" && voice.phase !== "error";
+  const voiceActive = voice.phase !== "idle";
 
   const onPanelLeave = useCallback((): void => {
     if (pinned) return;
@@ -1308,8 +1375,9 @@ export function App(): JSX.Element {
     // Hiding Idle uses the same weld (W_HIDE × H_DEAD).
     // Height floors at H_HANDLE so a short content pill never leaves air under the notch.
     const hiding = el.classList.contains("handle--hiding");
-    const notchW = hiding ? W_HIDE : W_HANDLE_FALLBACK;
-    const minH = hiding ? H_DEAD : H_HANDLE;
+    const voiceActivity = el.querySelector(".vpill") !== null;
+    const notchW = voiceActivity ? VOICE_W_RECORD_COLLAPSED : hiding ? W_HIDE : W_HANDLE_FALLBACK;
+    const minH = voiceActivity || hiding ? H_DEAD : H_HANDLE;
     void applyPanelSize(
       notchW,
       Math.max(minH, Math.ceil(r.height)),
@@ -1327,6 +1395,7 @@ export function App(): JSX.Element {
     meeting?.elapsed_ms,
     meeting?.countdown_ms,
     voice?.phase,
+    voice?.level,
     // The greeting swaps the handle's text (issue #10), so its width changes with it.
     summary?.due,
   ]);
@@ -1359,7 +1428,11 @@ export function App(): JSX.Element {
     </div>
   ) : voiceLive?.phase === "recording" ? (
     <div ref={pillRef}>
-      <VoicePill view={voiceLive} />
+      <VoicePill />
+    </div>
+  ) : voiceLive?.phase === "processing" ? (
+    <div ref={pillRef}>
+      <VoiceProcessingPill />
     </div>
   ) : (
     <button
@@ -2128,20 +2201,44 @@ function Hub(): JSX.Element {
 }
 
 /** Collapsed notch pill while hold-to-talk is active (#44). */
-function VoicePill({ view }: { view: VoiceView }): JSX.Element {
+export function VoicePill(): JSX.Element {
+  const [scales, setScales] = useState<number[]>([0.35, 0.35, 0.35, 0.35]);
+
+  useEffect(() => {
+    const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ?? false;
+    if (reduceMotion) return;
+    const timer = window.setInterval(() => {
+      setScales(Array.from({ length: 4 }, () => 0.35 + Math.random() * 0.65));
+    }, 300);
+    return () => window.clearInterval(timer);
+  }, []);
+
   return (
-    <div className="vpill">
-      <span className="vpill__dot" aria-hidden />
-      <span className="vpill__label">{t.voiceListening}</span>
-      <span className="vpill__meter" aria-hidden>
-        <span className="vpill__meter-fill" style={{ width: `${Math.round(view.level * 100)}%` }} />
+    <div className="vpill" role="status" aria-label={t.voiceListening}>
+      <span className="vpill__visualizer" aria-hidden>
+        {scales.map((scale, index) => (
+          <span
+            className="vpill__bar"
+            key={index}
+            style={{ transform: `scaleY(${scale})` }}
+          />
+        ))}
       </span>
     </div>
   );
 }
 
+/** Same compact notch slot, visibly processing rather than recording. */
+export function VoiceProcessingPill(): JSX.Element {
+  return (
+    <div className="vpill" role="status" aria-label={t.voiceProcessing}>
+      <span className="vpill__loader" aria-hidden />
+    </div>
+  );
+}
+
 /** Expanded notch surface for voice dialogue (#44). */
-function VoicePanel({
+export function VoicePanel({
   view,
   onDismiss,
 }: {
@@ -2183,6 +2280,18 @@ function VoicePanel({
             <button type="button" className="voice-panel__btn" onClick={copyResponse}>
               {t.voiceCopy}
             </button>
+            <button type="button" className="voice-panel__btn voice-panel__btn--primary" onClick={onDismiss}>
+              {t.voiceClose}
+            </button>
+          </div>
+        </>
+      ) : null}
+
+      {view.phase === "error" ? (
+        <>
+          <div className="voice-panel__kicker">{t.voiceError}</div>
+          <div className="voice-panel__response">{view.error || t.voiceError}</div>
+          <div className="voice-panel__acts">
             <button type="button" className="voice-panel__btn voice-panel__btn--primary" onClick={onDismiss}>
               {t.voiceClose}
             </button>
@@ -2740,14 +2849,21 @@ function DreamSection(): JSX.Element {
 }
 
 /** Hold-to-talk dictation (#44). Beta, off by default; transcript goes to focused field or clipboard. */
-function VoiceSection(): JSX.Element {
+export function VoiceSection(): JSX.Element {
   const [on, setOn] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [edit, setEdit] = useState({ model: "openai/gpt-oss-120b", has_key: false });
+  const [editKeyInput, setEditKeyInput] = useState("");
+  const [editBusy, setEditBusy] = useState(false);
+  const [editMsg, setEditMsg] = useState("");
 
   useEffect(() => {
     if (!IN_TAURI) return;
     void invoke<{ enabled: boolean }>("get_voice_settings")
       .then((s) => setOn(s.enabled))
+      .catch(() => undefined);
+    void invoke<{ model: string; has_key: boolean }>("get_voice_edit_settings")
+      .then(setEdit)
       .catch(() => undefined);
   }, []);
 
@@ -2761,6 +2877,28 @@ function VoiceSection(): JSX.Element {
     void invoke("set_voice_enabled", { enabled: next })
       .catch(() => setOn(!next))
       .finally(() => setBusy(false));
+  };
+
+  const saveEditKey = (): void => {
+    const key = editKeyInput.trim();
+    if (!key || editBusy) return;
+    setEditBusy(true);
+    void invoke("set_voice_edit_key", { key })
+      .then(() => {
+        setEdit((current) => ({ ...current, has_key: true }));
+        setEditKeyInput("");
+      })
+      .catch((err: unknown) => setEditMsg(String(err)))
+      .finally(() => setEditBusy(false));
+  };
+
+  const clearEditKey = (): void => {
+    if (editBusy) return;
+    setEditBusy(true);
+    void invoke("clear_voice_edit_key")
+      .then(() => setEdit((current) => ({ ...current, has_key: false })))
+      .catch((err: unknown) => setEditMsg(String(err)))
+      .finally(() => setEditBusy(false));
   };
 
   return (
@@ -2788,6 +2926,56 @@ function VoiceSection(): JSX.Element {
         >
           {t.voiceOn}
         </button>
+      </div>
+      <div className="set__stack set__stack--key">
+        <div className="set__label">{t.voiceEditModel}</div>
+        <div className="set__hint set__hint--quiet">{edit.model}</div>
+        <div className={`set__status${edit.has_key ? " is-ok" : ""}`}>
+          {edit.has_key ? t.voiceEditKeyPresent : t.voiceEditKeyAbsent}
+        </div>
+        <div className="set__sublabel">{t.voiceEditKey}</div>
+        <p className="set__hint set__hint--quiet">{t.voiceEditKeyHint}</p>
+        {editMsg ? <p className="set__hint is-err">{editMsg}</p> : null}
+        <div className="keyrow">
+          <input
+            className="keyrow__input"
+            type="password"
+            placeholder={t.voiceEditKeyPlaceholder}
+            value={editKeyInput}
+            autoComplete="off"
+            onChange={(e) => {
+              setEditKeyInput(e.target.value);
+              setEditMsg("");
+            }}
+            onFocus={() => {
+              if (IN_TAURI) void invoke("focus_field", { focused: true }).catch(() => undefined);
+            }}
+            onKeyDown={(e) => {
+              if (e.key !== "Enter") return;
+              e.preventDefault();
+              saveEditKey();
+            }}
+          />
+          <button
+            className="keyrow__btn keyrow__btn--go"
+            type="button"
+            disabled={!editKeyInput.trim() || editBusy}
+            onClick={saveEditKey}
+          >
+            {t.keySave}
+          </button>
+          {edit.has_key ? (
+            <button
+              className="keyrow__btn keyrow__btn--quiet"
+              type="button"
+              disabled={editBusy}
+              onClick={clearEditKey}
+            >
+              {t.keyRemove}
+            </button>
+          ) : null}
+        </div>
+        <p className="set__hint set__hint--quiet">{t.voiceEditModelHint}</p>
       </div>
     </section>
   );
@@ -4360,6 +4548,55 @@ function PrivacySecuritySection(props: {
   );
 }
 
+export function NotchStatusSection({
+  visible,
+  onVisibleChange,
+}: {
+  visible: boolean;
+  onVisibleChange: (visible: boolean) => void;
+}): JSX.Element {
+  const [busy, setBusy] = useState(false);
+
+  const setNotchStatus = (next: boolean): void => {
+    const previous = visible;
+    onVisibleChange(next);
+    if (!IN_TAURI) return;
+    setBusy(true);
+    void invoke("set_notch_status_visible", { visible: next })
+      .catch(() => onVisibleChange(previous))
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <section className="set">
+      <div className="set__label" id="seg-notch-status">{t.notchStatus}</div>
+      <div className="seg" role="radiogroup" aria-labelledby="seg-notch-status">
+        <button
+          type="button"
+          role="radio"
+          aria-checked={visible}
+          disabled={busy}
+          className={`seg__opt${visible ? " is-on" : ""}`}
+          onClick={() => setNotchStatus(true)}
+        >
+          {t.notchStatusShow}
+        </button>
+        <button
+          type="button"
+          role="radio"
+          aria-checked={!visible}
+          disabled={busy}
+          className={`seg__opt${!visible ? " is-on" : ""}`}
+          onClick={() => setNotchStatus(false)}
+        >
+          {t.notchStatusHide}
+        </button>
+      </div>
+      <p className="set__hint">{t.notchStatusHint}</p>
+    </section>
+  );
+}
+
 function Settings(props: {
   appearance: Appearance;
   setAppearance: (a: Appearance) => void;
@@ -4372,7 +4609,17 @@ function Settings(props: {
   onDone: () => void;
   onCleared: () => void;
 }): JSX.Element {
-  const { appearance, setAppearance, hasKey, keyRejected, stateCount, onDone, onCleared } = props;
+  const {
+    appearance,
+    setAppearance,
+    showStatusInNotch,
+    setShowStatusInNotch,
+    hasKey,
+    keyRejected,
+    stateCount,
+    onDone,
+    onCleared,
+  } = props;
   // Clearing extracted state is destructive and context is foundational, so it is a deliberate
   // two-step: reveal a typed confirmation, and only a matching "CLEAR" enables the delete.
   const [confirming, setConfirming] = useState(false);
@@ -4600,6 +4847,7 @@ function Settings(props: {
         </section>
         <DockVisibleSection />
         <CastlePositionSection />
+        <NotchStatusSection visible={showStatusInNotch} onVisibleChange={setShowStatusInNotch} />
         <section className="set">
           <div className="set__label">{t.shortcuts}</div>
           {SHORTCUT_ROWS.map(({ action, label }) => (
