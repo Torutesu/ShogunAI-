@@ -48,11 +48,16 @@ export class HttpError extends Error {
 }
 
 /**
- * Read and parse a JSON body with a hard size cap. Throws HttpError with
- * 'payload_too_large' over the cap and 'bad_request' for non-object roots
- * or invalid JSON. Streams so we never buffer more than the cap.
+ * Read a request body into memory under a hard size cap. Throws HttpError with
+ * 'payload_too_large' over the cap and 'bad_request' when there is no body at all.
+ *
+ * The declared Content-Length is only a cheap early exit: it is client-supplied and
+ * a chunked upload omits it entirely, so the streaming counter is the real control —
+ * we abort mid-stream and never hold more than the cap. Every public POST body must
+ * come through here, whatever its content type; a parser that buffers for us
+ * (`Request.formData()`) has no ceiling of its own.
  */
-export async function readJsonObject(req: Request): Promise<Record<string, unknown>> {
+export async function readCappedBody(req: Request): Promise<Buffer> {
   const declared = req.headers.get('content-length');
   if (declared && Number(declared) > MAX_BODY_BYTES) throw new HttpError('payload_too_large');
 
@@ -71,8 +76,16 @@ export async function readJsonObject(req: Request): Promise<Record<string, unkno
     }
     chunks.push(value);
   }
+  return Buffer.concat(chunks);
+}
 
-  const text = Buffer.concat(chunks).toString('utf8').trim();
+/**
+ * Read and parse a JSON body with a hard size cap. Throws HttpError with
+ * 'payload_too_large' over the cap and 'bad_request' for non-object roots
+ * or invalid JSON. Streams so we never buffer more than the cap.
+ */
+export async function readJsonObject(req: Request): Promise<Record<string, unknown>> {
+  const text = (await readCappedBody(req)).toString('utf8').trim();
   if (!text) return {};
 
   let parsed: unknown;
