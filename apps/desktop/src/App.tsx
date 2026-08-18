@@ -16,12 +16,12 @@ import { AnalyticsToggle } from "./AnalyticsToggle";
 import { ConnectionsList } from "./connections";
 import { comboChips, DEFAULT_BINDS } from "./keys";
 import {
+  IconBrain,
   IconClose,
   IconHistory,
   IconMaximize2,
   IconMinimize,
-  IconPin,
-  IconPinOff,
+  IconNotification,
   IconSettings,
 } from "./utilityIcons";
 import {
@@ -1541,7 +1541,7 @@ export function App(): JSX.Element {
                   aria-pressed={pinned}
                   onClick={() => setPinned((v) => !v)}
                 >
-                  {pinned ? <IconPin /> : <IconPinOff />}
+                  <IconBrain />
                 </button>
                 {/* Only offered when there is a backlog to open — an always-present control for an
                     empty history is a button that does nothing most of the time. */}
@@ -1580,13 +1580,7 @@ export function App(): JSX.Element {
                   aria-pressed={showHub}
                   onClick={toggleHub}
                 >
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                       stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
-                    <rect x="4" y="4" width="7" height="7" rx="1.5" />
-                    <rect x="13" y="4" width="7" height="7" rx="1.5" />
-                    <rect x="4" y="13" width="7" height="7" rx="1.5" />
-                    <rect x="13" y="13" width="7" height="7" rx="1.5" />
-                  </svg>
+                  <IconNotification size={15} />
                 </button>
                 <button className="icon" type="button" title={t.settings} aria-label={t.settings} onClick={openSettings}>
                   <IconSettings />
