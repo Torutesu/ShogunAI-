@@ -3749,6 +3749,121 @@ function PersonalizationSection(): JSX.Element {
   );
 }
 
+// ---- Google first-layer OAuth settings -----------------------------------------------------------
+
+interface GoogleOAuthSettingsView {
+  has_client_id: boolean;
+  has_client_secret: boolean;
+}
+
+export function GoogleOAuthSection(): JSX.Element {
+  const [settings, setSettings] = useState<GoogleOAuthSettingsView>({
+    has_client_id: false,
+    has_client_secret: false,
+  });
+  const [clientId, setClientId] = useState("");
+  const [clientSecret, setClientSecret] = useState("");
+  const [err, setErr] = useState("");
+
+  const refresh = useCallback((): void => {
+    if (!IN_TAURI) return;
+    void invoke<GoogleOAuthSettingsView>("google_oauth_settings")
+      .then((next) => {
+        setSettings(next);
+        setErr("");
+      })
+      .catch((error) => setErr(String(error)));
+  }, []);
+
+  useEffect(refresh, [refresh]);
+
+  const save = (): void => {
+    const id = clientId.trim();
+    if (!id) return;
+    if (!IN_TAURI) {
+      setSettings({ has_client_id: true, has_client_secret: Boolean(clientSecret.trim()) });
+      setClientId("");
+      setClientSecret("");
+      return;
+    }
+    void invoke("set_google_oauth_client", { clientId: id, clientSecret: clientSecret.trim() })
+      .then(() => {
+        setClientId("");
+        setClientSecret("");
+        refresh();
+      })
+      .catch((error) => setErr(String(error)));
+  };
+
+  const clear = (): void => {
+    if (!IN_TAURI) {
+      setSettings({ has_client_id: false, has_client_secret: false });
+      return;
+    }
+    void invoke("clear_google_oauth_client")
+      .then(refresh)
+      .catch((error) => setErr(String(error)));
+  };
+
+  const focusField = (focused: boolean): void => {
+    if (IN_TAURI) void invoke("focus_field", { focused }).catch(() => undefined);
+  };
+
+  return (
+    <section className="set">
+      <div className="set__label">{t.googleOAuthTitle}</div>
+      <div className="set__hint">{t.googleOAuthHint}</div>
+      {err ? <div className="set__hint is-err">{err}</div> : null}
+      <div className={`set__hint${settings.has_client_id ? " is-ok" : ""}`}>
+        {settings.has_client_id ? t.googleOAuthConfigured : t.googleOAuthMissing}
+      </div>
+      {settings.has_client_id ? (
+        <div className="set__hint">
+          {settings.has_client_secret ? t.googleOAuthSecretPresent : t.googleOAuthSecretOptional}
+        </div>
+      ) : null}
+      <div className="keyrow">
+        <input
+          className="keyrow__input"
+          type="text"
+          placeholder={t.googleOAuthClientId}
+          value={clientId}
+          autoComplete="off"
+          onChange={(event) => setClientId(event.target.value)}
+          onFocus={() => focusField(true)}
+          onBlur={() => focusField(false)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") save();
+          }}
+        />
+        <button className="keyrow__btn" type="button" onClick={save} disabled={!clientId.trim()}>
+          {t.googleOAuthSave}
+        </button>
+        {settings.has_client_id ? (
+          <button className="keyrow__btn" type="button" onClick={clear}>
+            {t.googleOAuthClear}
+          </button>
+        ) : null}
+      </div>
+      <div className="keyrow">
+        <input
+          className="keyrow__input"
+          type="password"
+          placeholder={t.googleOAuthClientSecret}
+          value={clientSecret}
+          autoComplete="off"
+          onChange={(event) => setClientSecret(event.target.value)}
+          onFocus={() => focusField(true)}
+          onBlur={() => focusField(false)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") save();
+          }}
+        />
+      </div>
+    </section>
+  );
+}
+
 // ---- Composio sending settings (opt-in, FR-C2-02 / FR-C2-03) -----------------------------------
 
 interface ComposioSettingsView {
@@ -4824,6 +4939,7 @@ function Settings(props: {
         <SoundSection />
         <DailySummariesSection />
         <ConnectionsSection />
+        <GoogleOAuthSection />
         <ComposioSection />
         <AiSessionsSection />
         <DreamSection />

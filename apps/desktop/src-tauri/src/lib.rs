@@ -326,6 +326,9 @@ pub fn run() {
         connectors::mac::connect_service,
         connectors::mac::disconnect_service,
         connectors::mac::fetch_on_demand,
+        connectors::mac::google_oauth_settings,
+        connectors::mac::set_google_oauth_client,
+        connectors::mac::clear_google_oauth_client,
         approvals::mac::submit_send,
         approvals::mac::draft_reply,
         approvals::mac::list_approvals,
@@ -480,6 +483,8 @@ fn setup_macos(app: &tauri::App) {
         "select-kk-batch",
         "composio-api-key",
         "deepgram-asr",
+        "google-oauth-client-id",
+        "google-oauth-client-secret",
     ]);
 
     // Agent-lane provider settings (provider + model; key stays in the Keychain). MUST load

@@ -7,6 +7,7 @@ import {
   VoicePill,
   VoiceProcessingPill,
   VoiceSection,
+  GoogleOAuthSection,
   type VoiceView,
 } from "./App";
 
@@ -68,6 +69,37 @@ describe("dictation cleanup settings", () => {
       expect(vi.mocked(invoke)).toHaveBeenCalledWith("set_voice_edit_key", { key: "gsk_test" });
     });
     expect(screen.getByText("Connected — cleanup is on.")).toBeTruthy();
+  });
+});
+
+describe("Google OAuth connector settings", () => {
+  it("saves client credentials without reading them back into the UI", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "google_oauth_settings") {
+        return { has_client_id: false, has_client_secret: false };
+      }
+      if (command === "set_google_oauth_client" || command === "focus_field") return undefined;
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    render(<GoogleOAuthSection />);
+    await screen.findByText(/No saved client/i);
+    fireEvent.change(screen.getByPlaceholderText("Google OAuth client ID"), {
+      target: { value: "desktop-client-id" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("Google OAuth client secret (optional)"), {
+      target: { value: "desktop-client-secret" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save client" }));
+
+    await waitFor(() => {
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith("set_google_oauth_client", {
+        clientId: "desktop-client-id",
+        clientSecret: "desktop-client-secret",
+      });
+    });
+    expect(screen.queryByDisplayValue("desktop-client-secret")).toBeNull();
   });
 });
 

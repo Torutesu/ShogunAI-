@@ -23,24 +23,29 @@ pub mod mac {
     use std::time::Duration;
 
     use serde_json::Value;
-    use tauri::Manager;
     use shogun_core::composio_read::ComposioReadRpc;
     use shogun_core::composio_send::HttpComposioApi;
     use shogun_core::daemon::Db;
     use shogun_core::llm::traceability::{Route, TraceRecord, TraceabilitySink};
     use shogun_core::mcp_http::{HttpMcpRpc, HttpTokenExchange};
     use shogun_integrations::connect::{self, ConnectError};
+    use shogun_integrations::keychain_store;
     use shogun_integrations::oauth_flow;
     use shogun_integrations::rpc::McpRpc;
     use shogun_integrations::runtime::{ConnectorRuntime, DEFAULT_SYNC_INTERVAL_MS};
     use shogun_integrations::token::{ConfigSelector, ManagedTokenProvider, TokenStore};
     use shogun_integrations::{AuthConfig, KeychainTokenStore, RemoteMcpTransport};
     use shogun_mcp::scope::{from_source, Service, Wave};
+    use tauri::Manager;
 
     use crate::approvals::mac::{composio_api_key, load_composio_policy};
 
     /// Same Keychain "service" field used across all SHOGUN secrets.
     const KEYCHAIN_SERVICE: &str = "com.selectkk.shogun";
+    /// Keychain accounts for the user-provided Google Desktop OAuth client. The client secret is
+    /// optional for PKCE, but when supplied it is still a secret and must never leave Keychain.
+    const GOOGLE_OAUTH_CLIENT_ID_ACCOUNT: &str = "google-oauth-client-id";
+    const GOOGLE_OAUTH_CLIENT_SECRET_ACCOUNT: &str = "google-oauth-client-secret";
 
     /// How long the interactive OAuth connect waits for the browser redirect before giving up.
     const CONNECT_TIMEOUT: Duration = Duration::from_secs(300);
@@ -57,7 +62,12 @@ pub mod mac {
     }
 
     impl McpRpc for RoutedReadRpc {
-        fn call_tool(&self, service: Service, tool: &str, arguments: Value) -> Result<Value, String> {
+        fn call_tool(
+            &self,
+            service: Service,
+            tool: &str,
+            arguments: Value,
+        ) -> Result<Value, String> {
             if service == Service::Gmail {
                 return self.composio.call_tool(service, tool, arguments);
             }
@@ -79,26 +89,55 @@ pub mod mac {
     /// The runtime owned by the app (behind a Mutex; the poller and the commands share it).
     pub struct ConnectorState(pub Arc<Mutex<Runtime>>);
 
-    /// The Google OAuth client from the environment (docs/oauth-client-setup.md §1-6), or a typed,
-    /// actionable error when it is absent. Never logs the values.
-    fn google_client_from_env(service: Service) -> Result<(String, Option<String>), ConnectError> {
-        let id = std::env::var(connect::GOOGLE_CLIENT_ID_ENV)
+    fn nonempty(value: String) -> Option<String> {
+        let value = value.trim();
+        (!value.is_empty()).then(|| value.to_string())
+    }
+
+    /// Prefer one complete Keychain client over the developer-only environment fallback. Never mix
+    /// the two sources: rotating the saved client must not accidentally pair it with an old shell
+    /// secret. This is pure so the precedence rule stays testable without macOS Keychain access.
+    fn select_google_client(
+        keychain_id: Option<String>,
+        keychain_secret: Option<String>,
+        env_id: Option<String>,
+        env_secret: Option<String>,
+    ) -> Option<(String, Option<String>)> {
+        keychain_id
+            .map(|id| (id, keychain_secret))
+            .or_else(|| env_id.map(|id| (id, env_secret)))
+    }
+
+    /// Google OAuth config from Keychain first, then the development environment fallback. Values
+    /// are intentionally never logged or returned to the webview.
+    fn google_client_config(service: Service) -> Result<(String, Option<String>), ConnectError> {
+        let keychain_id = keychain_store::get_generic_secret(GOOGLE_OAUTH_CLIENT_ID_ACCOUNT)
             .ok()
-            .map(|v| v.trim().to_string())
-            .filter(|v| !v.is_empty())
-            .ok_or_else(|| ConnectError::MissingClientConfig { service: service.source_str() })?;
-        let secret = std::env::var(connect::GOOGLE_CLIENT_SECRET_ENV)
+            .and_then(|value| String::from_utf8(value).ok())
+            .and_then(nonempty);
+        let keychain_secret =
+            keychain_store::get_generic_secret(GOOGLE_OAUTH_CLIENT_SECRET_ACCOUNT)
+                .ok()
+                .and_then(|value| String::from_utf8(value).ok())
+                .and_then(nonempty);
+        let env_id = std::env::var(connect::GOOGLE_CLIENT_ID_ENV)
             .ok()
-            .map(|v| v.trim().to_string())
-            .filter(|v| !v.is_empty());
-        Ok((id, secret))
+            .and_then(nonempty);
+        let env_secret = std::env::var(connect::GOOGLE_CLIENT_SECRET_ENV)
+            .ok()
+            .and_then(nonempty);
+        select_google_client(keychain_id, keychain_secret, env_id, env_secret).ok_or_else(|| {
+            ConnectError::MissingClientConfig {
+                service: service.source_str(),
+            }
+        })
     }
 
     /// Build the first-layer MCP client, if a Google OAuth client is configured. Tokens come from
     /// the Keychain and auto-refresh via the Google token endpoint; the redirect URI placeholder is
     /// never used by a refresh (only the interactive connect binds a real loopback port).
     fn build_first_layer_rpc() -> Option<HttpMcpRpc<FirstLayerTokens>> {
-        let (id, secret) = google_client_from_env(Service::GoogleCalendar).ok()?;
+        let (id, secret) = google_client_config(Service::GoogleCalendar).ok()?;
         let cfg = AuthConfig::google(id, secret, "http://127.0.0.1/callback");
         let selector: ConfigSelector = Box::new(move |svc| match svc {
             // Google services share the one Google OAuth client; refresh never crosses vendors.
@@ -164,9 +203,173 @@ pub mod mac {
         draft_stop: bool,
     ) -> Result<(), String> {
         let new_runtime = build_runtime(app, draft_stop)?;
-        let mut rt = state.0.lock().map_err(|_| "runtime lock poisoned".to_string())?;
+        let mut rt = state
+            .0
+            .lock()
+            .map_err(|_| "runtime lock poisoned".to_string())?;
         *rt = new_runtime;
         eprintln!("[connectors] gmail runtime rebuilt with updated credentials");
+        Ok(())
+    }
+
+    fn read_keychain_secret(account: &str) -> Option<Vec<u8>> {
+        keychain_store::get_generic_secret(account).ok()
+    }
+
+    fn delete_keychain_secret_if_present(account: &str) -> Result<(), String> {
+        match keychain_store::delete_generic_secret(account) {
+            Ok(()) => Ok(()),
+            Err(error) if error.code() == -25300 /* errSecItemNotFound */ => Ok(()),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    /// Restore one Keychain entry after a later write/delete failed. Values stay opaque bytes so
+    /// this helper can never accidentally decode or log an OAuth secret or token.
+    fn restore_keychain_secret(account: &str, previous: Option<&[u8]>) -> Result<(), String> {
+        match previous {
+            Some(value) => keychain_store::set_generic_secret(account, value)
+                .map_err(|error| error.to_string()),
+            None => delete_keychain_secret_if_present(account),
+        }
+    }
+
+    fn google_token_account(service: Service) -> String {
+        format!("{}-tokenset", service.source_str())
+    }
+
+    /// Credential rotation invalidates Calendar and Drive grants. Deleting the token entries and
+    /// replacing the runtime happens together while its lock is held, so no request can refresh a
+    /// token under a now-invalid OAuth client. If a Keychain delete fails, restore all token entries
+    /// changed so far and leave the old runtime in place.
+    fn rebuild_for_google_oauth_change(
+        state: &ConnectorState,
+        app: &tauri::AppHandle,
+    ) -> Result<(), String> {
+        let draft_stop = load_composio_policy(app).draft_stop;
+        let replacement = build_runtime(app, draft_stop)?;
+        let services = [Service::GoogleCalendar, Service::GoogleDrive];
+        let snapshots = services.map(|service| {
+            let account = google_token_account(service);
+            let value = read_keychain_secret(&account);
+            (account, value)
+        });
+
+        let mut runtime = state
+            .0
+            .lock()
+            .map_err(|_| "runtime lock poisoned".to_string())?;
+        for (account, _) in &snapshots {
+            if let Err(error) = delete_keychain_secret_if_present(account) {
+                for (changed_account, previous) in &snapshots {
+                    if changed_account == account {
+                        break;
+                    }
+                    let _ = restore_keychain_secret(changed_account, previous.as_deref());
+                }
+                return Err(format!("could not clear old Google authorization: {error}"));
+            }
+        }
+        *runtime = replacement;
+        eprintln!("[connectors] Google OAuth client changed; Calendar and Drive disconnected");
+        Ok(())
+    }
+
+    /// Presence-only view for Settings. Client values are never sent across IPC, including the
+    /// nominally-public client id, because it identifies the user's configured OAuth application.
+    #[derive(serde::Serialize)]
+    pub struct GoogleOAuthSettingsView {
+        pub has_client_id: bool,
+        pub has_client_secret: bool,
+    }
+
+    #[tauri::command]
+    pub fn google_oauth_settings() -> GoogleOAuthSettingsView {
+        GoogleOAuthSettingsView {
+            has_client_id: read_keychain_secret(GOOGLE_OAUTH_CLIENT_ID_ACCOUNT)
+                .and_then(|value| String::from_utf8(value).ok())
+                .and_then(nonempty)
+                .is_some(),
+            has_client_secret: read_keychain_secret(GOOGLE_OAUTH_CLIENT_SECRET_ACCOUNT)
+                .and_then(|value| String::from_utf8(value).ok())
+                .and_then(nonempty)
+                .is_some(),
+        }
+    }
+
+    /// Save a Google Desktop OAuth client in Keychain. A blank secret preserves an existing
+    /// optional secret; use Clear to remove the complete client. The paired writes are transactional:
+    /// if either one fails, both accounts return to their previous values.
+    #[tauri::command]
+    pub fn set_google_oauth_client(
+        client_id: String,
+        client_secret: String,
+        state: tauri::State<'_, ConnectorState>,
+        app: tauri::AppHandle,
+    ) -> Result<(), String> {
+        let client_id =
+            nonempty(client_id).ok_or_else(|| "Google OAuth client ID is required".to_string())?;
+        let client_secret = nonempty(client_secret);
+        let previous_id = read_keychain_secret(GOOGLE_OAUTH_CLIENT_ID_ACCOUNT);
+        let previous_secret = read_keychain_secret(GOOGLE_OAUTH_CLIENT_SECRET_ACCOUNT);
+        let changed = previous_id.as_deref() != Some(client_id.as_bytes())
+            || client_secret
+                .as_deref()
+                .is_some_and(|secret| previous_secret.as_deref() != Some(secret.as_bytes()));
+
+        keychain_store::set_generic_secret(GOOGLE_OAUTH_CLIENT_ID_ACCOUNT, client_id.as_bytes())
+            .map_err(|error| error.to_string())?;
+        if let Some(secret) = &client_secret {
+            if let Err(error) = keychain_store::set_generic_secret(
+                GOOGLE_OAUTH_CLIENT_SECRET_ACCOUNT,
+                secret.as_bytes(),
+            ) {
+                let _ =
+                    restore_keychain_secret(GOOGLE_OAUTH_CLIENT_ID_ACCOUNT, previous_id.as_deref());
+                return Err(error.to_string());
+            }
+        }
+
+        if !changed {
+            return Ok(());
+        }
+        if let Err(error) = rebuild_for_google_oauth_change(&state, &app) {
+            let _ = restore_keychain_secret(GOOGLE_OAUTH_CLIENT_ID_ACCOUNT, previous_id.as_deref());
+            let _ = restore_keychain_secret(
+                GOOGLE_OAUTH_CLIENT_SECRET_ACCOUNT,
+                previous_secret.as_deref(),
+            );
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    /// Remove the Keychain-backed Google client. Environment variables remain the documented
+    /// developer fallback, but Calendar and Drive grants are always revoked because their client
+    /// selection may have changed.
+    #[tauri::command]
+    pub fn clear_google_oauth_client(
+        state: tauri::State<'_, ConnectorState>,
+        app: tauri::AppHandle,
+    ) -> Result<(), String> {
+        let previous_id = read_keychain_secret(GOOGLE_OAUTH_CLIENT_ID_ACCOUNT);
+        let previous_secret = read_keychain_secret(GOOGLE_OAUTH_CLIENT_SECRET_ACCOUNT);
+        delete_keychain_secret_if_present(GOOGLE_OAUTH_CLIENT_ID_ACCOUNT)?;
+        if let Err(error) = delete_keychain_secret_if_present(GOOGLE_OAUTH_CLIENT_SECRET_ACCOUNT) {
+            let _ = restore_keychain_secret(GOOGLE_OAUTH_CLIENT_ID_ACCOUNT, previous_id.as_deref());
+            return Err(error);
+        }
+        if previous_id.is_none() && previous_secret.is_none() {
+            return Ok(());
+        }
+        if let Err(error) = rebuild_for_google_oauth_change(&state, &app) {
+            let _ = restore_keychain_secret(GOOGLE_OAUTH_CLIENT_ID_ACCOUNT, previous_id.as_deref());
+            let _ = restore_keychain_secret(
+                GOOGLE_OAUTH_CLIENT_SECRET_ACCOUNT,
+                previous_secret.as_deref(),
+            );
+            return Err(error);
+        }
         Ok(())
     }
 
@@ -195,7 +398,11 @@ pub mod mac {
     /// without the user's explicit opt-in, while first-layer direct reads (Calendar/Drive) are not
     /// third-party and keep syncing. Records a traceability entry on each successful sync
     /// (FR-TR-03).
-    pub fn spawn_sync_poller(state: Arc<Mutex<ConnectorRuntime<Transport>>>, db: Db, app: tauri::AppHandle) {
+    pub fn spawn_sync_poller(
+        state: Arc<Mutex<ConnectorRuntime<Transport>>>,
+        db: Db,
+        app: tauri::AppHandle,
+    ) {
         std::thread::spawn(move || loop {
             std::thread::sleep(Duration::from_secs(15 * 60));
 
@@ -222,10 +429,14 @@ pub mod mac {
                             );
                             record_read_trace(&db, svc);
                             // context_updated（#61）: read-sync 完了を匿名計測。
-                            if let Some(analytics) = app.try_state::<crate::analytics::Analytics>() {
+                            if let Some(analytics) = app.try_state::<crate::analytics::Analytics>()
+                            {
                                 analytics.capture(
                                     "context_updated",
-                                    crate::analytics::context_updated_props(svc.source_str(), rep.inserted as u64),
+                                    crate::analytics::context_updated_props(
+                                        svc.source_str(),
+                                        rep.inserted as u64,
+                                    ),
                                 );
                             }
                         }
@@ -245,9 +456,8 @@ pub mod mac {
     /// verification switch — docs/connector-summary-and-live-checklist.md §4). Everything else is
     /// "Coming soon" rather than a Connect button that can only end in a false amber.
     fn transport_serves(svc: Service) -> bool {
-        let extra = connect::parse_wave1_read_optin(
-            std::env::var(connect::WAVE1_READ_ENV).ok().as_deref(),
-        );
+        let extra =
+            connect::parse_wave1_read_optin(std::env::var(connect::WAVE1_READ_ENV).ok().as_deref());
         connect::transport_serves(svc, &extra)
     }
 
@@ -258,7 +468,10 @@ pub mod mac {
         db: tauri::State<'_, Db>,
     ) -> Result<Vec<shogun_integrations::ServiceStatus>, String> {
         let now = db.now_ms();
-        let rt = state.0.lock().map_err(|_| "runtime lock poisoned".to_string())?;
+        let rt = state
+            .0
+            .lock()
+            .map_err(|_| "runtime lock poisoned".to_string())?;
         let mut rows = rt.statuses(now);
         for row in &mut rows {
             // Released by wave, but not reachable through the wired transport → "Coming soon",
@@ -274,7 +487,10 @@ pub mod mac {
     /// credential verification, not OAuth — the 2026-07 decision routes all Gmail I/O through
     /// Composio, so there is no Google token to obtain. Each missing piece is an actionable error.
     fn verify_gmail_composio(app: &tauri::AppHandle) -> Result<(), String> {
-        if composio_api_key().map(|k| k.trim().is_empty()).unwrap_or(true) {
+        if composio_api_key()
+            .map(|k| k.trim().is_empty())
+            .unwrap_or(true)
+        {
             return Err(
                 "Composio API key is not configured — add it in Settings, then retry Connect."
                     .to_string(),
@@ -306,9 +522,10 @@ pub mod mac {
     /// failure is a typed [`ConnectError`]. Nothing is marked connected here — the caller does that
     /// only after this returns Ok, so there is never a half-connected state.
     fn run_google_connect(svc: Service, now_ms: i64) -> Result<(), ConnectError> {
-        let (client_id, client_secret) = google_client_from_env(svc)?;
-        let endpoint = shogun_integrations::endpoints::endpoint(svc)
-            .ok_or_else(|| ConnectError::Internal(format!("{} has no MCP endpoint", svc.source_str())))?;
+        let (client_id, client_secret) = google_client_config(svc)?;
+        let endpoint = shogun_integrations::endpoints::endpoint(svc).ok_or_else(|| {
+            ConnectError::Internal(format!("{} has no MCP endpoint", svc.source_str()))
+        })?;
         let listener = TcpListener::bind(("127.0.0.1", 0))
             .map_err(|e| ConnectError::ListenerBind(e.to_string()))?;
         let port = listener
@@ -424,7 +641,10 @@ pub mod mac {
         if svc == Service::Gmail && !load_composio_policy(&app).consent_acknowledged {
             return Err("Composio consent has not been granted".into());
         }
-        let mut rt = state.0.lock().map_err(|_| "runtime lock poisoned".to_string())?;
+        let mut rt = state
+            .0
+            .lock()
+            .map_err(|_| "runtime lock poisoned".to_string())?;
         // Plan gate (issue #97): refresh entitlements so the service gate sees the current plan
         // (reads are Standard-and-up; an expired trial is denied).
         rt.set_plan(crate::entitlement::mac::current(&app));
@@ -454,8 +674,54 @@ pub mod mac {
             // Not-found is the common case for services that never stored a token set.
             eprintln!("[connectors] {service} token delete skipped: {e}");
         }
-        state.0.lock().map_err(|_| "runtime lock poisoned".to_string())?.disconnect(svc, false);
+        state
+            .0
+            .lock()
+            .map_err(|_| "runtime lock poisoned".to_string())?
+            .disconnect(svc, false);
         eprintln!("[connectors] disconnected {service}");
         Ok(())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::{nonempty, select_google_client};
+
+        #[test]
+        fn google_client_prefers_complete_keychain_source() {
+            let selected = select_google_client(
+                Some("saved-id".to_string()),
+                Some("saved-secret".to_string()),
+                Some("env-id".to_string()),
+                Some("env-secret".to_string()),
+            );
+            assert_eq!(
+                selected,
+                Some(("saved-id".to_string(), Some("saved-secret".to_string())))
+            );
+        }
+
+        #[test]
+        fn google_client_uses_environment_only_when_keychain_id_is_absent() {
+            let selected = select_google_client(
+                None,
+                Some("orphaned-secret".to_string()),
+                Some("env-id".to_string()),
+                Some("env-secret".to_string()),
+            );
+            assert_eq!(
+                selected,
+                Some(("env-id".to_string(), Some("env-secret".to_string())))
+            );
+        }
+
+        #[test]
+        fn blank_google_oauth_values_are_not_credentials() {
+            assert_eq!(nonempty("  \n\t ".to_string()), None);
+            assert_eq!(
+                nonempty("  saved-id  ".to_string()),
+                Some("saved-id".to_string())
+            );
+        }
     }
 }
