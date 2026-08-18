@@ -165,7 +165,25 @@ mod tests {
 
     #[test]
     fn meeting_relaxes_thin_threshold() {
-        assert!(!wants_ocr("com.apple.Safari", Some("Inbox"), false, 250, true));
-        assert!(wants_ocr("com.apple.Safari", Some("Slide deck"), false, 250, true));
+        // Keep the window and AX text fixed: a meeting alone raises the thin
+        // threshold from 100 to 400 characters.
+        assert!(!wants_ocr("com.apple.Safari", Some("Inbox"), false, 250, false));
+        assert!(wants_ocr("com.apple.Safari", Some("Inbox"), false, 250, true));
+        // The higher threshold is still bounded; it does not OCR every meeting window.
+        assert!(!wants_ocr("com.apple.Safari", Some("Inbox"), false, 500, true));
+    }
+
+    #[test]
+    fn meeting_titles_trigger_ocr_over_a_full_ax_buffer() {
+        // At 500 chars the length rule is false, proving the title rule itself triggers OCR.
+        assert!(wants_ocr("com.apple.Safari", Some("Slide deck"), false, 500, true));
+        assert!(wants_ocr(
+            "com.apple.Safari",
+            Some("Q3 presentation"),
+            false,
+            500,
+            true
+        ));
+        assert!(!wants_ocr("com.apple.Safari", Some("Slide deck"), false, 500, false));
     }
 }
