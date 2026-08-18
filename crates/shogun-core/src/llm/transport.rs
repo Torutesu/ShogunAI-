@@ -320,6 +320,13 @@ impl HttpTransport for ReqwestTransport {
                 Method::Post => reqwest::Method::POST,
             };
             let mut rb = client.request(method, &req.url);
+            // Total deadline for the NON-streaming path only (the client itself carries just a
+            // connect timeout, for the streaming SSE path's sake — see `build_client`). Without
+            // it, a server that accepts the connection and then goes silent parks this future
+            // forever: a hung Batch submit/poll leaves the Dream Cycle job `Running` all night
+            // with no error path ever firing. 300s is generous for the largest Batch results
+            // download while still bounded.
+            rb = rb.timeout(std::time::Duration::from_secs(300));
             for (k, v) in &req.headers {
                 rb = rb.header(k, v);
             }
