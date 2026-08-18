@@ -172,9 +172,13 @@ pub fn delete_all(conn: &mut Connection) -> Result<DeleteReport, rusqlite::Error
     let threads = tx.execute("DELETE FROM threads", [])?;
     let people = tx.execute("DELETE FROM people", [])?;
     let projects = tx.execute("DELETE FROM projects", [])?;
-    // embeddings (Warm vec0 + Cold int8) then the event log (its AD trigger clears event_fts)
+    // embeddings (Warm vec0 + Cold int8) then the event log (its AD trigger clears event_fts).
+    // Visual-recall frames reference event_log (V12, no ON DELETE) — with foreign_keys=ON they
+    // must go before the events, or one stored frame FK-fails the whole "delete everything"
+    // transaction (the same trap the sessions comment below spells out).
     tx.execute("DELETE FROM event_vec", [])?;
     tx.execute("DELETE FROM cold_embeddings", [])?;
+    let screen_frames = tx.execute("DELETE FROM screen_frames", [])?;
     let events = tx.execute("DELETE FROM event_log", [])?;
     // Everything that references sessions with no ON DELETE CASCADE must go before the sessions
     // themselves, or with foreign_keys=ON the delete FK-fails and rolls back. Meeting notes
@@ -187,7 +191,6 @@ pub fn delete_all(conn: &mut Connection) -> Result<DeleteReport, rusqlite::Error
     // everything" deletes nothing (FR-SET-07).
     let transcript_segments = tx.execute("DELETE FROM transcript_segments", [])?;
     let meeting_recaps = tx.execute("DELETE FROM meeting_recaps", [])?;
-    let screen_frames = tx.execute("DELETE FROM screen_frames", [])?;
     // Sessions hold the meeting's title, summary and decisions — user data. event_log also
     // references sessions, and it was already cleared above, so sessions can go now (FR-SET-07,
     // FR-MT-05).
@@ -199,6 +202,10 @@ pub fn delete_all(conn: &mut Connection) -> Result<DeleteReport, rusqlite::Error
     tx.execute("DELETE FROM lesson_provenance", [])?;
     let lessons = tx.execute("DELETE FROM lessons", [])?;
     let feedback_events = tx.execute("DELETE FROM feedback_events", [])?;
+    // feedback_events has no AUTOINCREMENT, so after the table empties new rows reuse rowids from
+    // 1 — while the distillation watermark (deliberately monotonic, lessons.rs) would keep its old
+    // high value and skip every post-wipe feedback row forever. Rewind it with the data.
+    tx.execute("UPDATE lesson_distill_meta SET last_processed_feedback_id = 0 WHERE id = 1", [])?;
     let briefs = tx.execute("DELETE FROM briefs", [])?;
     tx.execute("DELETE FROM job_runs", [])?;
     // Query-hash metrics carry no content, but they are still records of the user's activity.
@@ -295,6 +302,16 @@ pub fn delete_since(conn: &mut Connection, cutoff_ts: i64) -> Result<DeleteRepor
         [cutoff_ts],
     )?;
     let feedback_events = tx.execute("DELETE FROM feedback_events WHERE ts_ms >= ?1", [cutoff_ts])?;
+    // Deleting the newest feedback rows frees their rowids for reuse (no AUTOINCREMENT); clamp the
+    // monotonic distillation watermark to what actually survives, or reused ids would be skipped.
+    tx.execute(
+        "UPDATE lesson_distill_meta
+         SET last_processed_feedback_id = MIN(
+             last_processed_feedback_id,
+             (SELECT COALESCE(MAX(id), 0) FROM feedback_events))
+         WHERE id = 1",
+        [],
+    )?;
     let lessons = tx.execute(
         "DELETE FROM lessons WHERE id NOT IN (SELECT lesson_id FROM lesson_provenance)",
         [],
@@ -530,6 +547,126 @@ mod tests {
             let n: i64 = conn.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0)).unwrap();
             assert_eq!(n, 0, "{table} should be empty after delete_all");
         }
+    }
+
+    #[test]
+    fn delete_all_survives_a_stored_visual_recall_frame() {
+        // Same trap as the sessions regression above, on the V12 table: screen_frames.event_id
+        // references event_log with no ON DELETE, so deleting events before frames FK-fails the
+        // whole transaction — anyone with Visual recall ON could not delete their data.
+        let mut conn = crate::open_in_memory().unwrap();
+        seed(&mut conn);
+        let event_id: i64 = conn.query_row("SELECT id FROM event_log LIMIT 1", [], |r| r.get(0)).unwrap();
+        crate::screen_frames::insert(
+            &conn,
+            &crate::screen_frames::NewFrame {
+                created_at_ms: 1_000,
+                event_id,
+                app_bundle_id: Some("com.apple.Safari"),
+                window_title: Some("Inbox"),
+                display_id: None,
+                width: 4,
+                height: 4,
+                jpeg: &[0xFF, 0xD8, 0xFF, 0xD9],
+            },
+        )
+        .unwrap();
+
+        let report = delete_all(&mut conn).expect("delete_all must not trip the screen_frames FK");
+        assert_eq!(report.screen_frames, 1);
+        for table in ["screen_frames", "event_log"] {
+            let n: i64 = conn.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0)).unwrap();
+            assert_eq!(n, 0, "{table} should be empty after delete_all");
+        }
+    }
+
+    #[test]
+    fn delete_all_rewinds_the_distill_watermark_so_new_feedback_is_seen() {
+        // feedback_events has no AUTOINCREMENT: after a wipe, rowids restart at 1 while the
+        // monotonic watermark kept its old high value — every post-wipe feedback row would sit
+        // below it and LessonDistillation would silently process nothing.
+        let mut conn = crate::open_in_memory().unwrap();
+        let fb = crate::lessons::NewFeedback {
+            ts_ms: 1_000,
+            action_kind: None,
+            scope_ref: None,
+            before_text: None,
+            after_text: None,
+            surface: None,
+            rank: None,
+            context_app: None,
+            latency_ms: None,
+        };
+        let id = crate::lessons::record_feedback(
+            &conn,
+            crate::lessons::FeedbackKind::Reject,
+            crate::lessons::LessonScope::Global,
+            &fb,
+        )
+        .unwrap();
+        crate::lessons::set_distill_watermark(&conn, id).unwrap();
+
+        delete_all(&mut conn).unwrap();
+
+        assert_eq!(crate::lessons::distill_watermark(&conn).unwrap(), 0);
+        let new_id = crate::lessons::record_feedback(
+            &conn,
+            crate::lessons::FeedbackKind::Reject,
+            crate::lessons::LessonScope::Global,
+            &crate::lessons::NewFeedback { ts_ms: 2_000, ..fb },
+        )
+        .unwrap();
+        let unseen = crate::lessons::list_feedback_after(
+            &conn,
+            crate::lessons::distill_watermark(&conn).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            unseen.iter().map(|r| r.id).collect::<Vec<_>>(),
+            vec![new_id],
+            "post-wipe feedback must be visible to distillation"
+        );
+    }
+
+    #[test]
+    fn delete_since_clamps_the_distill_watermark_to_surviving_feedback() {
+        // Deleting the newest feedback rows frees their rowids for reuse; a watermark above
+        // MAX(id) would skip the reused ids forever.
+        let mut conn = crate::open_in_memory().unwrap();
+        let fb = crate::lessons::NewFeedback {
+            ts_ms: 1_000,
+            action_kind: None,
+            scope_ref: None,
+            before_text: None,
+            after_text: None,
+            surface: None,
+            rank: None,
+            context_app: None,
+            latency_ms: None,
+        };
+        let keep = crate::lessons::record_feedback(
+            &conn,
+            crate::lessons::FeedbackKind::Reject,
+            crate::lessons::LessonScope::Global,
+            &fb,
+        )
+        .unwrap();
+        let doomed = crate::lessons::record_feedback(
+            &conn,
+            crate::lessons::FeedbackKind::Reject,
+            crate::lessons::LessonScope::Global,
+            &crate::lessons::NewFeedback { ts_ms: 5_000, ..fb },
+        )
+        .unwrap();
+        crate::lessons::set_distill_watermark(&conn, doomed).unwrap();
+
+        delete_since(&mut conn, 5_000).unwrap();
+
+        assert_eq!(
+            crate::lessons::distill_watermark(&conn).unwrap(),
+            keep,
+            "watermark must fall back to the newest surviving feedback id"
+        );
     }
 
     #[test]
