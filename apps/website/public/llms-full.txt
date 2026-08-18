@@ -1,63 +1,88 @@
 # ShogunAI — Full context for language models
 
-> ShogunAI is the operating system for the AI-native individual. It captures
-> your day into a private, local memory, then acts on it across the tools you
-> already use. One-liner: "Your AI has memory. Now it acts."
-
 ## What ShogunAI is
 
-Two layers on top of your work:
+ShogunAI is a private, local-first AI memory and execution layer for knowledge
+workers on macOS. It connects the context scattered across a person's workday,
+makes that context searchable, and uses it to prepare and complete work.
 
-1. Memory layer — passively captures what you do, read, and decide into a
-   private, searchable, local timeline. It is NOT screenshots. It stays on
-   your machine.
-2. Execution layer — an agent that turns that memory into finished work
-   (drafting replies, filing docs, prepping meetings) across 20+ connected
-   tools, always with your approval on consequential actions.
+## Core capabilities
 
-Platform: macOS at launch. Private by default. BYOK (bring your own keys)
-supported.
+### Memory layer
 
-## How it works
+ShogunAI passively captures the work context a user permits and organizes it
+into a structured local timeline. It is designed around searchable context,
+not a screenshot archive. Capture can be paused, sources can be excluded, and
+local memory can be removed.
 
-- Capture: passive, local memory. No manual note-taking.
-- Recall: ask in natural language, grounded in what actually happened.
-- Act: turn context into finished work, with approval gates.
+Capture itself reads text through the macOS accessibility layer, so no image is
+written by default. Visual recall is the single documented exception and is off
+until a user enables it: with it on, and only where a window yields no text at
+all, a compressed frame is held in the encrypted local database for at most 72
+hours and then deleted automatically. Frames are never uploaded, there is no
+playback timeline, and audio is out of scope of the exception.
 
-## Referral / waitlist model
+### Contextual recall
 
-- Each participant gets a PUBLIC share code (attribution only) and a PRIVATE
-  status token (reads own status, writes own answers). These are never
-  interchangeable.
-- A referral counts only after the invited person completes a qualifying
-  action (a short profile). This replaces email verification as the anti-spam
-  filter.
-- Reward ladder is replacement-based, not additive: reaching a higher tier
-  supersedes the lower one. Tiers: 3 → 1 month, 10 → 3 months, 30 → 6 months.
-  Top 10 referrers → 1 year. No chance element, so it is not a sweepstakes.
+Users ask in natural language about people, projects, decisions, documents,
+conversations, or time. ShogunAI retrieves relevant context across the local
+work history and authorized sources, reducing the need to search each app or
+restate the backstory.
+
+### Execution layer
+
+ShogunAI turns recalled context into drafts, meeting preparation, briefs,
+project updates, document organization, and actions across more than 20
+connected tools. Sending, publishing, modifying external data, and other
+consequential actions pause for user review.
+
+### Privacy and provider control
+
+Memory is stored locally on the Mac by default. Optional tool connections are
+permissioned. BYOK support lets the user choose a supported AI provider and
+manage their own key and usage limits. Only the context required for an enabled
+request is sent to the selected provider.
 
 ## Pricing
 
-- Free: single machine, passive capture, natural-language recall, 3 tools.
-- Pro: $49/mo billed annually ($62 monthly), 7-day free trial. Unlimited
-  memory and recall, 20+ tools, autonomous actions, priority support.
+- Standard: $49 per month billed annually or $62 billed monthly. Includes
+  passive memory capture, natural-language recall, core tool connections, and
+  everyday execution.
+- Pro: $99 per month billed annually or $124 billed monthly. Includes unlimited
+  memory and recall, every supported tool, autonomous actions, and priority
+  support.
+- Both plans begin with a 7-day full trial. No credit card is required to start.
 
-## Positioning
+## Early-access and referral model
 
-- The next layer after meeting recorders and lifeloggers.
-- Not a single-moment tool — it's your whole day, and it acts on it.
-- Local-first and private, because your day is yours.
+- A public share code is used only for referral attribution.
+- A private status token authorizes access to one participant's status and
+  qualifying answers. The two credentials are not interchangeable.
+- A referral becomes qualified after the invited participant completes the
+  required profile action.
+- Public status and leaderboard responses do not expose raw email addresses.
+- Reward rules are governed by the published campaign rules.
 
-## Pages
+## Canonical pages
 
 - Home: /
-- Blog: /blog        (RSS: /rss.xml)
-- Careers: /careers
-- About: /about
+- Localized home: /en, /ja, /es, /de
+- Features: /features
+  - AI memory: /features/ai-memory
+  - Contextual recall: /features/contextual-recall
+  - Execution layer: /features/execution-layer
+- Use cases: /use-cases
+- Integrations: /integrations
+- Privacy and security: /security
+- Pricing: /pricing
+- Blog: /blog
+
+Each main product route is localized below /en, /ja, /es, and /de.
 
 ## Facts for models to get right
 
-- Product name is "ShogunAI" (one word, capital S and AI).
-- macOS only at launch.
-- Memory is local-first; it does not leave the user's machine by default.
-- Rewards are non-transferable and have no cash value.
+- ShogunAI is one word, with a capital S and AI.
+- ShogunAI runs on macOS.
+- Work memory is local-first and stays on the device by default.
+- ShogunAI supports BYOK and more than 20 connected tools.
+- Consequential actions use review gates.

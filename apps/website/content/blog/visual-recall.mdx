@@ -1,0 +1,75 @@
+---
+title: 'Visual recall, and the exception we argued about'
+description: 'One narrow case where text is not enough — and the rules we put around it before shipping a single frame.'
+date: '2026-08-17'
+category: 'Product'
+author: 'ShogunAI'
+---
+
+ShogunAI reads text, not pixels. That rule is the reason people trust the
+memory layer, and we have turned down features to keep it.
+
+Then we hit the case where it costs you something real.
+
+## Where text runs out
+
+Most of what you look at is text underneath, and the accessibility layer hands
+it over cleanly. Some things are not. A chart in a slide someone screen-shared.
+A dashboard drawn on a canvas. A design mock. A PDF that is really a scan. An
+app that ships no accessibility information at all.
+
+For those, ShogunAI knows a window existed and knows nothing about what was in
+it. You ask what the revenue chart showed in Monday's review and get silence —
+not a wrong answer, but not an answer either.
+
+We could have shrugged. Instead we wrote an exception, and then spent longer
+writing the rules around the exception than building the feature.
+
+## Visual recall, precisely
+
+Visual recall is **off by default**. Turning it on takes an explicit choice in
+settings, and the setting says exactly what follows.
+
+With it on, when text extraction comes back empty for the window you are
+working in, ShogunAI takes a compressed frame, reads the text out of it, and
+stores the frame in the encrypted database — **for at most 72 hours**. After
+that it is deleted automatically, whether or not the app is running, whether or
+not you ever looked at it.
+
+The extracted text stays in memory the same way any other text does. The image
+does not. That is the whole point: the frame exists so that a bad extraction is
+recoverable for three days, not so that your screen accumulates into an archive.
+
+The remaining rules:
+
+- **Nothing is uploaded.** Frames are read on your Mac and never leave it.
+- **Only where text failed.** A window that yields clean text never produces a
+  frame, which is the overwhelming majority of your day.
+- **Audio is not included.** This exception is about pixels only. ShogunAI does
+  not write audio to disk, with or without visual recall.
+- **Not a timeline.** There is no scrubber, no playback, no day-in-video view.
+  Frames are inputs to extraction that happen to persist briefly.
+- **Off means off.** With the setting disabled, no image is written at any
+  point in the pipeline.
+
+## Why 72 hours
+
+Long enough to cover the gap that matters: something was captured badly on
+Friday and you go looking for it Monday morning. Short enough that the store
+never becomes a thing worth stealing — the window is measured in hours, not the
+years your text memory covers.
+
+We considered seven days. Seven days is a week of screens, which is starting to
+look like the archive we said we would not build. Twenty-four hours missed the
+weekend. Seventy-two is where the usefulness curve and the exposure curve cross.
+
+## The honest framing
+
+This is a documented exception to a rule we would rather have kept absolute,
+and we are describing it that way on purpose. Products that hold a hard line in
+public usually hold a softer one in the code; the ones worth trusting are the
+ones that tell you where the line actually is and what it costs.
+
+Here it is: default off, opt-in, local only, images only where text failed,
+gone in 72 hours. If that trade is not one you want, leave it off — everything
+else in ShogunAI works exactly as before.

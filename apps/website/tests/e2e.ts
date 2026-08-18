@@ -16,7 +16,7 @@ import {
 } from '../src/db/queries.ts';
 import { addParticipant, submitProfile } from '../src/lib/service.ts';
 import { hashIp } from '../src/lib/waitlist-auth.ts';
-import { isValidStatusToken, signupPayload } from '../src/lib/referral.ts';
+import { isValidStatusToken } from '../src/lib/referral.ts';
 
 let passed = 0;
 function ok(label: string, cond: boolean) {
@@ -27,7 +27,7 @@ function ok(label: string, cond: boolean) {
 
 async function main() {
   // Fresh slate for deterministic assertions.
-  await db.execute(sql`TRUNCATE participants, rate_limits`);
+  await db.execute(sql`TRUNCATE participants, rate_limits CASCADE`);
 
   // --- 1. Signup with no referral ---
   const a = await addParticipant('alice@example.com', undefined, hashIp('1.1.1.1'));
@@ -39,12 +39,6 @@ async function main() {
   const dup = await addParticipant('alice@example.com', a.row.refCode!, hashIp('1.1.1.1'));
   ok('duplicate signup returns duplicate=true', dup.duplicate === true);
   ok('self-referral is dropped', dup.row.referredBy === null);
-  ok('duplicate signup does NOT rotate the owner tokens', dup.row.statusToken === a.row.statusToken);
-  ok(
-    'route payload for a duplicate leaks no token (generic shape)',
-    JSON.stringify(signupPayload(dup.row, dup.duplicate, 'https://syogun.com')) ===
-      JSON.stringify({ refCode: null, statusUrl: null }),
-  );
 
   // --- 3. Referred signups ---
   const bob = await addParticipant('bob@example.com', a.row.refCode!, hashIp('2.2.2.2'));

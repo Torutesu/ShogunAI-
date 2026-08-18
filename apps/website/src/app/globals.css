@@ -1,73 +1,57 @@
 @import 'tailwindcss';
 
 /* =====================================================================
-   ShogunAI — Aside Skyglass, theme-aware (light + dark + system).
-   Semantic tokens flip per theme; components style through the tokens.
+   ShogunAI — electric blue / ink, theme-aware (light + dark + system).
+   The product mark's official blue (#004CFC) is the visual anchor.
    ===================================================================== */
 :root {
   --bg: #ffffff;
   --surface: #ffffff;
-  --cloud: #f7fdff; /* subtle fill */
-  --ink: #090b0c; /* primary text + strong controls */
+  --cloud: #f5f8ff; /* subtle cool fill */
+  --ink: #0b1220; /* primary text + strong controls */
   --on-ink: #fafafa; /* text on ink-colored surfaces */
   --muted: #5f6b73;
   --faint: #9aa3a9;
   --border: #e5e7eb;
-  --sky: #97e5ff;
-  --sky-soft: #d8f6ff; /* accent tint fill */
-  --accent: #00a6f4;
-  --accent-strong: #0089cf;
+  --sky: #a9bdff;
+  --sky-soft: #e8eeff; /* accent tint fill */
+  --accent: #004cfc; /* official ShogunAI mark blue */
+  --accent-strong: #0038c7;
+  --cta-start: #c79a4f;
+  --cta-end: #efd6a2;
+  --cta-ink: #1e1508;
   --danger: #ef4444;
   --band: #090b0c; /* always-dark section */
   --band-ink: #ffffff;
   --orb-blend: multiply;
   --orb-opacity: 0.55;
-  --hairline: rgba(9, 11, 12, 0.06);
+  --hairline: rgba(11, 18, 32, 0.07);
+  --gridline: rgba(11, 18, 32, 0.06);
 }
 
 :root[data-theme='dark'] {
   --bg: #090b0d;
   --surface: #14181b;
-  --cloud: #10151a;
+  --cloud: #10182a;
   --ink: #eef2f4;
   --on-ink: #090b0d;
   --muted: #97a3ac;
   --faint: #6b7780;
   --border: #262d33;
-  --sky: #2a7ba3;
-  --sky-soft: #103245;
-  --accent: #38bdf8;
-  --accent-strong: #7dd3fc;
+  --sky: #5273df;
+  --sky-soft: #172653;
+  --accent: #6f8fff;
+  --accent-strong: #9db2ff;
+  --cta-start: #c79a4f;
+  --cta-end: #efd6a2;
+  --cta-ink: #1e1508;
   --danger: #f87171;
-  --band: #05070a;
+  --band: #060b18;
   --band-ink: #ffffff;
   --orb-blend: screen;
   --orb-opacity: 0.4;
   --hairline: rgba(255, 255, 255, 0.06);
-}
-
-/* System preference when the user hasn't explicitly chosen */
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) {
-    --bg: #090b0d;
-    --surface: #14181b;
-    --cloud: #10151a;
-    --ink: #eef2f4;
-    --on-ink: #090b0d;
-    --muted: #97a3ac;
-    --faint: #6b7780;
-    --border: #262d33;
-    --sky: #2a7ba3;
-    --sky-soft: #103245;
-    --accent: #38bdf8;
-    --accent-strong: #7dd3fc;
-    --danger: #f87171;
-    --band: #05070a;
-    --band-ink: #ffffff;
-    --orb-blend: screen;
-    --orb-opacity: 0.4;
-    --hairline: rgba(255, 255, 255, 0.06);
-  }
+  --gridline: rgba(255, 255, 255, 0.05);
 }
 
 @theme inline {
@@ -87,8 +71,8 @@
   --color-band: var(--band);
   --color-band-ink: var(--band-ink);
 
-  --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system, sans-serif;
-  --font-display: var(--font-geist-sans), var(--font-inter), ui-sans-serif, sans-serif;
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-display: var(--font-geist-sans), ui-sans-serif, sans-serif;
   --font-mono: var(--font-geist-mono), ui-monospace, 'SF Mono', monospace;
 
   --radius-xl: 16px;
@@ -97,12 +81,13 @@
   --shadow-float: 0 12px 40px var(--hairline), 0 2px 8px var(--hairline);
 
   --ease-out-soft: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-out-strong: cubic-bezier(0.23, 1, 0.32, 1);
 }
 
 @layer base {
   html {
     scroll-behavior: smooth;
-    color-scheme: light dark;
+    color-scheme: light;
   }
   body {
     background: var(--bg);
@@ -126,11 +111,71 @@
   }
 }
 
+html[data-theme='dark'] {
+  color-scheme: dark;
+}
+
+/* Marketing sections use a few editorial light surfaces by design. Keep
+ * those surfaces legible and coherent when the site theme is dark. */
+html[data-theme='dark'] .theme-soft-section {
+  background: #0e141d !important;
+}
+html[data-theme='dark'] .theme-light-panel {
+  border-color: var(--border) !important;
+  background: var(--surface) !important;
+  box-shadow: 0 22px 70px rgba(0, 0, 0, 0.24) !important;
+}
+html[data-theme='dark'] .theme-light-panel .bg-white\/72,
+html[data-theme='dark'] .theme-light-panel .bg-white\/80,
+html[data-theme='dark'] .theme-light-panel .bg-white\/84,
+html[data-theme='dark'] .theme-light-panel .bg-white\/88 {
+  background: color-mix(in srgb, var(--cloud) 86%, transparent) !important;
+}
+html[data-theme='dark'] .theme-light-panel .border-white\/60,
+html[data-theme='dark'] .theme-light-panel .border-white\/70,
+html[data-theme='dark'] .theme-light-panel .border-white\/75 {
+  border-color: var(--border) !important;
+}
+html[data-theme='dark'] .theme-light-panel .text-\[\#0d5c77\],
+html[data-theme='dark'] .theme-light-panel .text-\[\#294c59\],
+html[data-theme='dark'] .theme-light-panel .text-\[\#6d8793\] {
+  color: var(--ink) !important;
+}
+html[data-theme='dark'] .privacy-security-item {
+  border-color: var(--border) !important;
+  background: color-mix(in srgb, var(--cloud) 90%, transparent) !important;
+  color: var(--ink) !important;
+}
+html[data-theme='dark'] .theme-surface-card {
+  border-color: var(--border) !important;
+  background: var(--surface) !important;
+  color: var(--ink) !important;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.22) !important;
+}
+html[data-theme='dark'] .theme-dark-panel {
+  border-color: var(--border) !important;
+  background: #0d1420 !important;
+}
+html[data-theme='dark'] .waitlist-form-default {
+  border-color: var(--border) !important;
+  background: var(--surface) !important;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.22) !important;
+}
+html[data-theme='dark'] .waitlist-form-default input {
+  border-color: var(--border) !important;
+  background: var(--cloud) !important;
+  color: var(--ink) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04) !important;
+}
+html[data-theme='dark'] .waitlist-form-default button {
+  border-color: rgba(111, 143, 255, 0.3) !important;
+}
+
 @utility container-x {
   width: 100%;
-  max-width: 1140px;
+  max-width: 1280px;
   margin-inline: auto;
-  padding-inline: 24px;
+  padding-inline: clamp(20px, 2.5vw, 32px);
 }
 
 /* Interactive lift — appears interactive, moves on hover */
@@ -140,9 +185,411 @@
     box-shadow 0.25s var(--ease-out-soft),
     border-color 0.25s var(--ease-out-soft);
 }
-.lift:hover {
-  transform: translateY(-3px);
-  box-shadow: var(--shadow-float);
+@media (hover: hover) and (pointer: fine) {
+  .lift:hover {
+    transform: translateY(-3px);
+    box-shadow: var(--shadow-float);
+  }
+}
+
+.hero-shell::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -5;
+  pointer-events: none;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.1) 0%, rgba(255, 255, 255, 0.02) 64%, rgba(247, 247, 248, 0.34) 100%);
+}
+
+.hero-shell {
+  min-height: calc(100svh - 4rem);
+  background: #f7f5f0 url('/optimized/shogunai-hero-kyoto-v3.jpg') center bottom / 100% auto no-repeat;
+}
+
+@media (min-width: 701px) {
+  .hero-shell {
+    background-position: center calc(100% + 96px);
+  }
+}
+
+.hero-overlay {
+  background:
+    radial-gradient(circle at 50% 16%, rgba(255, 255, 255, 0.92), transparent 42%),
+    radial-gradient(circle at 12% 32%, rgba(0, 76, 252, 0.08), transparent 28%),
+    linear-gradient(180deg, rgba(245, 248, 255, 0.42), rgba(245, 248, 255, 0.06) 62%, rgba(232, 238, 255, 0.62));
+}
+
+@media (max-width: 700px) {
+  .hero-shell {
+    min-height: 0;
+    background-size: auto 420px;
+    background-position: center bottom;
+  }
+}
+
+@media (min-width: 701px) and (max-width: 1023px) {
+  .hero-shell {
+    background-size: auto 560px;
+    background-position: center bottom;
+  }
+}
+
+/* The first view has its own art direction in dark mode. Keep the generated
+ * light artwork out of this theme and use a dedicated deep-navy atmosphere. */
+html[data-theme='dark'] .hero-shell {
+  background-color: #060d1c;
+  background-image:
+    radial-gradient(80% 70% at 12% 12%, rgba(48, 79, 173, 0.28), transparent 64%),
+    radial-gradient(65% 70% at 86% 24%, rgba(37, 66, 145, 0.2), transparent 64%),
+    linear-gradient(180deg, #0d1a3a 0%, #091633 48%, #050c1e 100%);
+  background-position: center;
+  background-size: cover;
+  background-repeat: no-repeat;
+}
+
+html[data-theme='dark'] .hero-shell::after {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.025) 0%, transparent 54%, rgba(0, 0, 0, 0.2) 100%);
+}
+
+html[data-theme='dark'] .hero-overlay {
+  background:
+    radial-gradient(circle at 48% 12%, rgba(76, 112, 230, 0.2), transparent 38%),
+    radial-gradient(circle at 10% 34%, rgba(0, 76, 252, 0.18), transparent 30%),
+    radial-gradient(circle at 88% 42%, rgba(66, 112, 255, 0.1), transparent 28%),
+    linear-gradient(180deg, rgba(8, 17, 38, 0.26), rgba(4, 10, 23, 0.72));
+}
+
+html[data-theme='dark'] .hero-title {
+  color: #f4f7ff;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.04), 0 16px 48px rgba(0, 0, 0, 0.24);
+}
+
+html[data-theme='dark'] .hero-accent {
+  background-image: linear-gradient(110deg, #b4c5ff 0%, #7194ff 44%, #4d73e7 100%);
+}
+
+html[data-theme='dark'] .hero-subtitle {
+  color: #b8c5dc !important;
+}
+
+html[data-theme='dark'] .hero-participants > span {
+  color: #aebbd1 !important;
+}
+
+html[data-theme='dark'] .hero-shell .waitlist-form-default {
+  border-color: rgba(151, 174, 239, 0.2) !important;
+  background: linear-gradient(180deg, rgba(20, 33, 61, 0.86), rgba(10, 20, 41, 0.9)) !important;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.34), inset 0 1px 0 rgba(255, 255, 255, 0.05) !important;
+}
+
+html[data-theme='dark'] .hero-shell .waitlist-form-default input {
+  border-color: rgba(151, 174, 239, 0.18) !important;
+  background: rgba(5, 12, 25, 0.82) !important;
+  color: #f4f7ff !important;
+}
+
+html[data-theme='dark'] .hero-shell .waitlist-form-default input::placeholder {
+  color: #8291a9 !important;
+}
+
+html[data-theme='dark'] .hero-participant-count {
+  border-color: rgba(255, 255, 255, 0.12) !important;
+  background: rgba(10, 22, 45, 0.68) !important;
+  color: #dce5f7;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.05) !important;
+}
+
+@media (min-width: 701px) {
+  html[data-theme='dark'] .hero-shell {
+    background-position: center;
+  }
+}
+
+@media (max-width: 700px) {
+  html[data-theme='dark'] .hero-shell {
+    background-position: center;
+    background-size: cover;
+  }
+}
+
+@media (min-width: 701px) and (max-width: 1023px) {
+  html[data-theme='dark'] .hero-shell {
+    background-position: center;
+    background-size: cover;
+  }
+}
+
+html[data-theme='dark'] .theme-light-badge {
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.22);
+}
+
+.hero-haze {
+  background:
+    radial-gradient(40% 30% at 50% 18%, rgba(255, 255, 255, 0.22), transparent 70%),
+    radial-gradient(55% 44% at 15% 42%, rgba(255, 255, 255, 0.12), transparent 72%),
+    radial-gradient(52% 40% at 84% 34%, rgba(255, 255, 255, 0.14), transparent 72%);
+}
+
+.hero-grid {
+  background-image:
+    linear-gradient(to right, var(--gridline) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--gridline) 1px, transparent 1px);
+  background-size: 36px 36px;
+  opacity: 0.16;
+  mask-image: linear-gradient(90deg, rgba(0, 0, 0, 0.32), transparent 64%);
+}
+
+.hero-accent {
+  background: linear-gradient(110deg, #0038c7 0%, #004cfc 48%, #5273df 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.hero-title {
+  color: #0b1b43;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.2);
+}
+
+.hero-demo-shell {
+  animation: hero-demo-float 7s ease-in-out infinite;
+}
+
+.hero-demo-scale {
+  transform-origin: top right;
+}
+
+@media (min-width: 1024px) and (max-height: 760px) {
+  .hero-demo-frame {
+    height: 500px;
+  }
+
+  .hero-demo-scale {
+    width: 111.111%;
+    transform: scale(0.9);
+  }
+}
+
+/* Keep the first moving logo row in the initial 16:9 viewport. The hero stays
+ * spacious on taller displays and only compacts its vertical rhythm when the
+ * available height is limited. */
+@media (min-width: 1024px) and (max-height: 950px) {
+  .hero-layout {
+    padding-top: 24px;
+  }
+
+  .hero-demo-frame {
+    height: 500px;
+  }
+
+  .hero-demo-scale {
+    width: 111.111%;
+    transform: scale(0.9);
+  }
+
+  .hero-badges {
+    margin-top: 16px;
+  }
+
+  .hero-badges > div > div,
+  .hero-badges > div > a > div {
+    min-height: 76px !important;
+  }
+
+  .hero-participant-count {
+    display: none;
+  }
+}
+
+/* Keep the full desktop hero—including its proof badges—inside shorter
+ * laptop/tablet viewports without changing the spacious wide layout. */
+@media (min-width: 701px) and (max-width: 1100px) and (max-height: 820px) {
+  .hero-demo-frame {
+    height: 500px;
+  }
+
+  .hero-demo-scale {
+    width: 111.111%;
+    transform: scale(0.9);
+  }
+}
+
+.hero-avatar {
+  border: 2px solid rgba(255, 255, 255, 0.95);
+  box-shadow: 0 4px 14px rgba(43, 108, 138, 0.16);
+  object-position: center 28%;
+}
+
+.hero-avatar-stack {
+  padding-left: 2px;
+}
+
+:is(html, main)[lang='ja'] .hero-title,
+:is(html, main)[lang='ja'] .action-title,
+:is(html, main)[lang='ja'] .how-title,
+:is(html, main)[lang='ja'] .usecases-title,
+:is(html, main)[lang='ja'] .memory-title,
+:is(html, main)[lang='ja'] .pricing-title,
+:is(html, main)[lang='ja'] .faq-title {
+  font-size: clamp(28px, 5.1vw, 40px);
+  line-height: 1.16;
+  letter-spacing: -0.035em;
+}
+
+:is(html, main)[lang='ja'] .cta-title {
+  font-size: clamp(30px, 5.4vw, 50px);
+  line-height: 1.06;
+  letter-spacing: -0.035em;
+}
+
+:is(html, main)[lang='ja'] .hero-subtitle,
+:is(html, main)[lang='ja'] .usecases-sub,
+:is(html, main)[lang='ja'] .cta-sub {
+  font-size: clamp(16px, 2.2vw, 18px);
+  line-height: 1.82;
+}
+
+:is(html, main)[lang='ja'] .privacy-title {
+  font-size: clamp(28px, 5.1vw, 42px);
+  line-height: 1.14;
+  letter-spacing: -0.035em;
+}
+
+:is(html, main)[lang='ja'] .testimonials-title {
+  max-width: 16ch;
+  font-size: clamp(30px, 7.5vw, 46px);
+  line-height: 1.12;
+  letter-spacing: -0.04em;
+}
+
+:is(html, main)[lang='ja'] .privacy-body,
+:is(html, main)[lang='ja'] .how-step-body,
+:is(html, main)[lang='ja'] .privacy-point-body,
+:is(html, main)[lang='ja'] .memory-body,
+:is(html, main)[lang='ja'] .action-body,
+:is(html, main)[lang='ja'] .pricing-sub,
+:is(html, main)[lang='ja'] .testimonial-sub {
+  line-height: 1.78;
+}
+
+.hero-device {
+  transform-origin: center top;
+}
+
+.hero-cloud {
+  position: absolute;
+  z-index: -10;
+  pointer-events: none;
+  border-radius: 999px;
+  background:
+    radial-gradient(circle at 50% 55%, rgba(255, 255, 255, 0.96) 0%, rgba(250, 255, 255, 0.92) 40%, rgba(255, 255, 255, 0.55) 66%, rgba(255, 255, 255, 0) 100%);
+  filter: blur(24px);
+  opacity: 0.95;
+}
+
+.hero-cloud::before,
+.hero-cloud::after {
+  content: '';
+  position: absolute;
+  border-radius: 999px;
+  background: inherit;
+}
+
+.hero-cloud--left {
+  top: 4.5rem;
+  left: 3%;
+  height: 11rem;
+  width: 18rem;
+  animation: cloud-drift 26s ease-in-out infinite;
+}
+
+.hero-cloud--left::before {
+  left: 12%;
+  top: -24%;
+  height: 6.8rem;
+  width: 7.6rem;
+}
+
+.hero-cloud--left::after {
+  right: 14%;
+  top: -15%;
+  height: 8rem;
+  width: 8.5rem;
+}
+
+.hero-cloud--right {
+  top: 1.25rem;
+  right: -1%;
+  height: 21rem;
+  width: 29rem;
+  filter: blur(30px);
+  animation: cloud-drift 34s ease-in-out infinite reverse;
+}
+
+.hero-cloud--right::before {
+  left: 16%;
+  top: -22%;
+  height: 12rem;
+  width: 12rem;
+}
+
+.hero-cloud--right::after {
+  right: 11%;
+  top: -16%;
+  height: 13.2rem;
+  width: 12.5rem;
+}
+
+.hero-cloud--bottom {
+  bottom: 9rem;
+  left: 34%;
+  height: 14rem;
+  width: 24rem;
+  opacity: 0.82;
+  filter: blur(28px);
+  animation: cloud-drift 30s ease-in-out infinite;
+}
+
+.hero-cloud--bottom::before {
+  left: 8%;
+  top: -26%;
+  height: 8.6rem;
+  width: 9.2rem;
+}
+
+.hero-cloud--bottom::after {
+  right: 10%;
+  top: -14%;
+  height: 7.4rem;
+  width: 8rem;
+}
+
+.hero-cloud--far {
+  right: -4%;
+  bottom: 8%;
+  height: 10rem;
+  width: 18rem;
+  opacity: 0.74;
+  filter: blur(26px);
+  animation: cloud-drift 38s ease-in-out infinite reverse;
+}
+
+.hero-cloud--far::before {
+  left: 10%;
+  top: -18%;
+  height: 6rem;
+  width: 7rem;
+}
+
+.hero-cloud--far::after {
+  right: 14%;
+  top: -10%;
+  height: 5.6rem;
+  width: 6.8rem;
 }
 
 /* --- Animations --- */
@@ -160,17 +607,35 @@
     transform: translateY(-10px);
   }
 }
+@keyframes cloud-drift {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+  50% {
+    transform: translate3d(16px, -8px, 0);
+  }
+}
+@keyframes hero-demo-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-7px);
+  }
+}
 @keyframes marquee {
   from {
     transform: translateX(0);
   }
   to {
-    transform: translateX(-50%);
+    transform: translateX(-33.333333%);
   }
 }
 @keyframes marquee-rev {
   from {
-    transform: translateX(-50%);
+    transform: translateX(-33.333333%);
   }
   to {
     transform: translateX(0);
@@ -179,6 +644,60 @@
 @keyframes shimmer {
   to {
     background-position: 200% 0;
+  }
+}
+/* --- Campaign bar: flowing gradient + periodic light sweep + spark pulse --- */
+.campaign-bar {
+  background: linear-gradient(
+    100deg,
+    var(--color-sky-soft) 0%,
+    var(--color-cloud) 25%,
+    var(--color-sky-soft) 50%,
+    var(--color-cloud) 75%,
+    var(--color-sky-soft) 100%
+  );
+  background-size: 200% 100%;
+  animation: campaign-flow 9s linear infinite;
+}
+.campaign-shine {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    100deg,
+    transparent 40%,
+    rgba(255, 255, 255, 0.65) 50%,
+    transparent 60%
+  );
+  transform: translateX(-100%);
+  animation: campaign-shine 5.5s ease-in-out infinite;
+}
+.campaign-spark {
+  animation: campaign-spark 2.4s ease-in-out infinite;
+}
+@keyframes campaign-flow {
+  to {
+    background-position: 200% 0;
+  }
+}
+@keyframes campaign-shine {
+  0% {
+    transform: translateX(-100%);
+  }
+  55%,
+  100% {
+    transform: translateX(100%);
+  }
+}
+@keyframes campaign-spark {
+  0%,
+  100% {
+    opacity: 0.7;
+    transform: scale(1) rotate(0deg);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.25) rotate(12deg);
   }
 }
 @keyframes logo-pop {
@@ -233,7 +752,7 @@
 .marquee-track {
   display: flex;
   width: max-content;
-  animation: marquee 32s linear infinite;
+  animation: marquee 52s linear infinite;
 }
 .marquee-track.rev {
   animation-name: marquee-rev;
@@ -249,10 +768,69 @@
 @media (prefers-reduced-motion: reduce) {
   .orb,
   .animate-floaty,
-  .marquee-track {
+  .marquee-track,
+  .hero-demo-shell,
+  .campaign-bar,
+  .campaign-shine,
+  .campaign-spark {
     animation: none;
+  }
+  .campaign-shine {
+    display: none;
   }
   .lift:hover {
     transform: none;
   }
+}
+
+/* --- Design-studio custom cursor (desktop / fine-pointer only) --- */
+@media (pointer: fine) {
+  html.has-cursor,
+  html.has-cursor a,
+  html.has-cursor button,
+  html.has-cursor [role='button'],
+  html.has-cursor input,
+  html.has-cursor textarea,
+  html.has-cursor select,
+  html.has-cursor label,
+  html.has-cursor summary {
+    cursor: none;
+  }
+}
+.cursor-dot,
+.cursor-ring {
+  position: fixed;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+  z-index: 9999;
+  border-radius: 9999px;
+  opacity: 0;
+  will-change: transform;
+  mix-blend-mode: difference;
+}
+.cursor-dot {
+  width: 6px;
+  height: 6px;
+  background: #ffffff;
+  transition: opacity 0.25s var(--ease-out-soft);
+}
+.cursor-ring {
+  width: 26px;
+  height: 26px;
+  border: 1.5px solid #ffffff;
+  transition:
+    width 0.22s var(--ease-out-soft),
+    height 0.22s var(--ease-out-soft),
+    background-color 0.22s var(--ease-out-soft),
+    opacity 0.25s var(--ease-out-soft);
+}
+.cursor-ring.is-hover {
+  width: 42px;
+  height: 42px;
+  background: rgba(255, 255, 255, 0.12);
+}
+.cursor-ring.is-down {
+  width: 20px;
+  height: 20px;
 }

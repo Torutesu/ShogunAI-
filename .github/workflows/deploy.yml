@@ -1,0 +1,81 @@
+name: Deploy website (Cloudflare)
+
+# Deterministic push-to-deploy via GitHub Actions (more reliable for this
+# monorepo than the Cloudflare dashboard's build settings). On every push to
+# the branch it: installs → migrates the DB (if DATABASE_URL is set) →
+# builds the OpenNext Worker → deploys to Cloudflare.
+#
+# One-time setup — add these repo secrets (Settings → Secrets → Actions):
+#   CLOUDFLARE_API_TOKEN   (required)  "Edit Cloudflare Workers" token
+#   CLOUDFLARE_ACCOUNT_ID  (required)  your account id
+#   DATABASE_URL           (optional)  Supabase URL — enables auto-migrate
+#
+# shogunaios.com is a custom domain of the `preview` environment in
+# wrangler.jsonc (worker `shogunai-website-codex-preview`), which is also where
+# the D1 binding and WAITLIST_ALLOWED_ORIGINS live. A bare `wrangler deploy`
+# ships the top-level `shogunai-website` worker instead, which no domain points
+# at — so it looks green while production stays unchanged. Deploy `--env
+# preview` until the domain is moved back to the top-level worker.
+#
+# main is the only source of production deploys. Feature branches used to
+# deploy too, which meant whichever branch pushed last decided what
+# shogunaios.com served — a branch missing a feature would silently take it
+# off production. Ship through a PR into main instead. The dispatch override
+# below exists for emergencies and has to be asked for explicitly.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/website/**'
+      - 'packages/**'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/deploy.yml'
+  workflow_dispatch:
+    inputs:
+      allow_non_main:
+        description: 'Deploy this ref even though it is not main (emergency only)'
+        type: boolean
+        default: false
+
+concurrency:
+  group: deploy-website
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Refuse to deploy a ref that is not main
+        if: github.ref != 'refs/heads/main' && inputs.allow_non_main != true
+        run: |
+          echo "::error::Production deploys come from main. Merge the change, or re-run this workflow with allow_non_main checked."
+          exit 1
+
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: Migrate database (idempotent, if configured)
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          if [ -n "$DATABASE_URL" ]; then
+            pnpm --filter @shogun-ai/website db:migrate
+          else
+            echo "DATABASE_URL not set — skipping migrate"
+          fi
+
+      - name: Build OpenNext worker
+        run: pnpm --filter @shogun-ai/website cf:build
+
+      - name: Deploy to Cloudflare
+        run: pnpm --filter @shogun-ai/website exec wrangler deploy --env preview
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

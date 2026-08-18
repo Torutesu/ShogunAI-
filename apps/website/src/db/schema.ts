@@ -1,4 +1,14 @@
-import { boolean, index, integer, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import {
+  boolean,
+  index,
+  integer,
+  pgTable,
+  primaryKey,
+  text,
+  timestamp,
+  unique,
+  uuid,
+} from 'drizzle-orm/pg-core';
 
 /**
  * Waitlist participants. Each row carries the two-token invariant:
@@ -26,6 +36,13 @@ export const participants = pgTable(
     // public handle used on the leaderboard (never the email)
     nickname: text('nickname'),
 
+    // gamification (SHOGUN waitlist points spec)
+    joinPosition: integer('join_position'), // 1-based signup order
+    xHandle: text('x_handle'), // OPTIONAL. lowercased, no @. only holders get social points
+
+    // which plan the user intended when they signed up (e.g. "Pro · annual"); analytics only
+    plan: text('plan'),
+
     // qualifying action = a short profile: answer1=why, answer2=company, answer3=challenge
     answer1: text('answer_1'),
     answer2: text('answer_2'),
@@ -35,8 +52,53 @@ export const participants = pgTable(
     index('participants_ref_code_idx').on(t.refCode),
     index('participants_status_token_idx').on(t.statusToken),
     index('participants_referred_by_idx').on(t.referredBy),
+    unique('participants_x_handle_key').on(t.xHandle),
   ],
 );
+
+/**
+ * Append-only, idempotent points ledger (SHOGUN waitlist spec §3.4).
+ * Rank = SUM(points) desc, join_position asc. Every award is deduped by
+ * (entry_id, action_type, source_ref); source_ref is '' for one-shot actions
+ * (form / follows) and the referred entry id / quote tweet id otherwise.
+ */
+export const pointsLedger = pgTable(
+  'points_ledger',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    entryId: uuid('entry_id')
+      .notNull()
+      .references(() => participants.id, { onDelete: 'cascade' }),
+    actionType: text('action_type').notNull(), // referral | quote | follow_product | follow_founder | form
+    points: integer('points').notNull(),
+    sourceRef: text('source_ref').notNull().default(''),
+    awardedAt: timestamp('awarded_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    unique('points_ledger_dedup').on(t.entryId, t.actionType, t.sourceRef),
+    index('points_ledger_entry_idx').on(t.entryId),
+  ],
+);
+
+/** Snapshot of a monitored account's followers (product / founder). */
+export const xFollowerSnapshot = pgTable(
+  'x_follower_snapshot',
+  {
+    account: text('account').notNull(), // which account this snapshot is OF
+    handle: text('handle').notNull(), // a follower handle (lowercased)
+    snapshotAt: timestamp('snapshot_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.account, t.handle, t.snapshotAt] })],
+);
+
+/** Snapshot of quote-tweets on the launch post. */
+export const xQuoteSnapshot = pgTable('x_quote_snapshot', {
+  tweetId: text('tweet_id').notNull(), // the launch tweet being quoted
+  authorHandle: text('author_handle').notNull(), // quoting author (lowercased)
+  quoteTweetId: text('quote_tweet_id').notNull(), // the quote tweet id
+  text: text('text').notNull().default(''),
+  snapshotAt: timestamp('snapshot_at', { withTimezone: true }).notNull().defaultNow(),
+});
 
 /**
  * DB-backed fixed-window rate limiter store. Keyed by "bucket:identifier"
@@ -48,17 +110,11 @@ export const rateLimits = pgTable('rate_limits', {
   count: integer('count').notNull().default(0),
 });
 
-/**
- * Billing (issue #8). Three tables, one job each:
- *
- *   billing_customers  — the 1:1 map between a human (email) and a Stripe customer.
- *   subscriptions      — a mirror of the Stripe subscription, kept current by the webhook. This
- *                        is what "誰がいつまで使えるのか" is answered from, without calling Stripe.
- *   licenses           — the credential the desktop app presents. One per subscription.
- *
- * NFR-PRV-04: the server holds account / billing / licence state only. No capture content, no
- * memory content, ever.
- */
+export type Participant = typeof participants.$inferSelect;
+export type NewParticipant = typeof participants.$inferInsert;
+export type PointsRow = typeof pointsLedger.$inferSelect;
+export type NewPointsRow = typeof pointsLedger.$inferInsert;
+
 export const billingCustomers = pgTable(
   'billing_customers',
   {
@@ -131,8 +187,6 @@ export const stripeEvents = pgTable('stripe_events', {
   receivedAt: timestamp('received_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
-export type Participant = typeof participants.$inferSelect;
-export type NewParticipant = typeof participants.$inferInsert;
 export type BillingCustomer = typeof billingCustomers.$inferSelect;
 export type Subscription = typeof subscriptions.$inferSelect;
 export type License = typeof licenses.$inferSelect;

@@ -1,0 +1,45 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "shogunai-website",
+  "main": ".open-next/worker.js",
+  "compatibility_date": "2025-03-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+  "observability": {
+    "enabled": true
+  },
+  "env": {
+    "preview": {
+      "name": "shogunai-website-codex-preview",
+      "vars": {
+        "WAITLIST_ALLOWED_ORIGINS": "https://shogunaios.com,https://www.shogunaios.com"
+      },
+      "d1_databases": [
+        {
+          "binding": "WAITLIST_METRICS",
+          "database_name": "shogunai-waitlist-metrics",
+          "database_id": "02a3448d-ec1c-4c47-8b3e-8d61c01851d2"
+        }
+      ],
+      "routes": [
+        {
+          "pattern": "shogunaios.com",
+          "custom_domain": true
+        },
+        {
+          "pattern": "www.shogunaios.com",
+          "custom_domain": true
+        }
+      ]
+    }
+  }
+  // Secrets (set in the Cloudflare dashboard or `wrangler secret put`):
+  //   DATABASE_URL        — Supabase connection string (session pooler).
+  //                         Set this on every Worker that should show the
+  //                         live waitlist count and accept registrations.
+  // For lower DB latency from Workers, bind Cloudflare Hyperdrive to Supabase
+  // and point DATABASE_URL at the Hyperdrive connection string. See DEPLOY.md.
+}

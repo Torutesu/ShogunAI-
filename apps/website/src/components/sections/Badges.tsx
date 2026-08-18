@@ -1,35 +1,142 @@
+import Image from 'next/image';
 import type { Dictionary } from '@/i18n/dictionaries';
 
-/**
- * Authority / credibility lockups shown directly below the hero form.
- * YC-backed · Product Hunt (Coming soon) · Hackathon win. Localized via dict.
- */
-const TONE: Record<string, string> = {
-  yc: '#f5610f',
-  ph: '#da552f',
-  award: '#0089cf',
-};
+const BRANDFETCH_CLIENT_ID = process.env.NEXT_PUBLIC_BRANDFETCH_CLIENT_ID?.trim() ?? '';
+const BRAND_LOGOS = [
+  { name: 'OpenAI', domain: 'openai.com', width: 116 },
+  { name: 'Anthropic', domain: 'anthropic.com', width: 140 },
+  { name: 'NVIDIA', domain: 'nvidia.com', width: 132 },
+  { name: 'Notion', domain: 'notion.so', width: 112 },
+  { name: 'Vercel', domain: 'vercel.com', width: 118 },
+] as const;
+
+function AwardBanner({
+  src,
+  alt,
+  width,
+  height,
+  sizes,
+  priority,
+  scaleClassName = '',
+  href,
+  linkLabel,
+  surfaceClassName = '',
+}: {
+  src: string;
+  alt: string;
+  width: number;
+  height: number;
+  sizes: string;
+  priority?: boolean;
+  scaleClassName?: string;
+  href?: string;
+  linkLabel?: string;
+  surfaceClassName?: string;
+}) {
+  const banner = (
+      <div className={`relative flex h-[46px] w-full items-center justify-center sm:h-[72px] ${surfaceClassName}`}>
+        <Image
+          src={src}
+          alt={alt}
+          width={width}
+          height={height}
+          sizes={sizes}
+          priority={priority}
+          className={`h-full w-full object-contain ${scaleClassName}`}
+        />
+      </div>
+  );
+
+  const content = <div className="flex min-h-[68px] items-center justify-center sm:min-h-[94px]">{banner}</div>;
+
+  return href ? (
+    <a href={href} target="_blank" rel="noreferrer" aria-label={linkLabel ?? alt} className="block rounded-[18px] transition-transform hover:-translate-y-0.5">
+      {content}
+    </a>
+  ) : content;
+}
+
+function ProductHuntBadge() {
+  return (
+    <div className="flex min-h-[68px] items-center justify-center sm:min-h-[94px]">
+      <a
+        href="https://www.producthunt.com/products/shogunai/reviews/new?utm_source=badge-product_review&utm_medium=badge&utm_source=badge-shogunai"
+        target="_blank"
+        rel="noreferrer"
+        aria-label="Review ShogunAI on Product Hunt"
+        className="flex items-center justify-center rounded-[18px] transition-transform hover:-translate-y-0.5"
+      >
+        <img
+          src="/product-hunt-review.svg"
+          alt="ShogunAI - Personal AGI | Product Hunt"
+          width={250}
+          height={54}
+          className="h-auto w-full max-w-[280px]"
+        />
+      </a>
+    </div>
+  );
+}
+
+function brandfetchLogoUrl(domain: string) {
+  if (!BRANDFETCH_CLIENT_ID) return null;
+  return `https://cdn.brandfetch.io/${domain}/theme/dark/logo.svg?c=${encodeURIComponent(BRANDFETCH_CLIENT_ID)}`;
+}
+
+function BrandfetchLogoStrip() {
+  if (!BRANDFETCH_CLIENT_ID) return null;
+
+  return (
+    <div className="col-span-full mt-1 rounded-[24px] border border-white/50 bg-white/42 px-4 py-4 shadow-[0_18px_50px_rgba(0,67,101,0.08)] backdrop-blur-md sm:px-5">
+      <p className="text-center text-[11px] font-semibold uppercase tracking-[0.12em] text-[#2b6173]">Works with the tools you already use</p>
+      <div className="mt-4 flex flex-wrap items-center justify-center gap-x-7 gap-y-4 sm:gap-x-9">
+        {BRAND_LOGOS.map((logo) => {
+          const src = brandfetchLogoUrl(logo.domain);
+          if (!src) return null;
+          return (
+            <img
+              key={logo.domain}
+              src={src}
+              alt={`${logo.name} logo`}
+              width={logo.width}
+              height={32}
+              loading="lazy"
+              className="h-7 w-auto opacity-78 grayscale transition duration-300 hover:opacity-100 hover:grayscale-0"
+            />
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 export function Badges({ t }: { t: Dictionary }) {
+  const ph = t.authority.items.find((b) => b.tone === 'ph');
+
   return (
-    <div className="mt-9 flex flex-wrap items-center justify-center gap-3">
-      {t.authority.items.map((b) => (
-        <div
-          key={b.brand + b.top}
-          className="group/lk lift flex items-center gap-2.5 rounded-xl border border-border bg-surface/80 px-3.5 py-2 shadow-[var(--shadow-card)] backdrop-blur hover:border-accent/40"
-        >
-          <span
-            className="flex size-8 items-center justify-center rounded-md text-[15px] font-bold text-white transition-transform duration-300 group-hover/lk:scale-110"
-            style={{ background: TONE[b.tone] ?? '#0089cf' }}
-          >
-            {b.mark}
-          </span>
-          <span className="text-left leading-tight">
-            <span className="block text-[10px] font-medium uppercase tracking-wide text-muted">{b.top}</span>
-            <span className="block text-sm font-semibold text-ink">{b.brand}</span>
-          </span>
-        </div>
-      ))}
+    <div className="mx-auto grid w-full max-w-[1260px] grid-cols-3 items-center gap-6 sm:gap-10 lg:gap-16">
+      <AwardBanner
+        src="/optimized/yc-rfs-hackathon-2026.png"
+        alt="Winner of YC RFS Hackathon 2026, presented by Transpose"
+        width={2055}
+        height={765}
+        sizes="(max-width: 1024px) 92vw, 420px"
+        priority
+        scaleClassName="sm:scale-[1.55]"
+        href="https://x.com/toruai/status/2082832405514395962?s=20"
+        linkLabel="Open the YC RFS Hackathon 2026 win announcement on X"
+      />
+      {ph ? <ProductHuntBadge /> : <div />}
+      <AwardBanner
+        src="/badges/nvidia-inception-program.png"
+        alt="NVIDIA Inception Program member badge"
+        width={1221}
+        height={662}
+        sizes="(max-width: 1024px) 92vw, 420px"
+        scaleClassName="sm:scale-[1.5]"
+        surfaceClassName="theme-light-badge"
+      />
+      <BrandfetchLogoStrip />
     </div>
   );
 }

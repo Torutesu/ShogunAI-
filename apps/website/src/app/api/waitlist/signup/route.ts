@@ -1,31 +1,44 @@
 import { HttpError, fail, ok, readJsonObject } from '@/lib/http';
-import { rateLimit } from '@/lib/rate-limit';
-import { isValidEmail, signupPayload } from '@/lib/referral';
+import { isValidEmail } from '@/lib/referral';
 import { addParticipant } from '@/lib/service';
 import { clientIp, hashIp, isAuthorizedOrigin, isHoneypotTripped } from '@/lib/waitlist-auth';
-import { getPostHogClient } from '@/lib/posthog-server';
+import { consumeSignupAttempt, incrementParticipantCount, saveWaitlistEmail } from '@/lib/waitlist-metrics';
 
 export const runtime = 'nodejs';
 
-const APP_ORIGIN = process.env.NEXT_PUBLIC_APP_ORIGIN ?? 'http://localhost:3000';
+async function readSignupBody(req: Request): Promise<Record<string, unknown>> {
+  const contentType = req.headers.get('content-type') ?? '';
+  if (contentType.includes('application/x-www-form-urlencoded') || contentType.includes('multipart/form-data')) {
+    const form = await req.formData();
+    return {
+      email: form.get('email'),
+      company_url: form.get('company_url'),
+    };
+  }
+  return readJsonObject(req);
+}
 
 /**
  * POST /api/waitlist/signup
- * Create a participant row, accept an optional `ref` code.
- * Auth: origin allowlist (+ rate limit + honeypot) OR webhook secret.
- * Returns { ok, refCode, statusUrl } — both null for duplicate signups, which
- * must never echo the existing row's private statusToken (§6.8).
+ * Create a participant row for the email-only waitlist.
+ * Auth: origin allowlist, rate limit, and honeypot.
  */
 export async function POST(req: Request) {
   if (!isAuthorizedOrigin(req)) return fail('forbidden');
 
   const ip = clientIp(req);
-  const rl = await rateLimit('signup', ip, { limit: 5, windowSec: 60 });
-  if (!rl.allowed) return fail('rate_limited');
+  const ipHash = hashIp(ip);
+  try {
+    if (await consumeSignupAttempt(ipHash) > 5) return fail('rate_limited');
+  } catch (error) {
+    // Fail closed: never expose the signup endpoint without its abuse guard.
+    console.error('signup rate-limit error:', error);
+    return fail('server_error');
+  }
 
   let body: Record<string, unknown>;
   try {
-    body = await readJsonObject(req);
+    body = await readSignupBody(req);
   } catch (e) {
     if (e instanceof HttpError) return fail(e.code);
     return fail('bad_request');
@@ -36,31 +49,30 @@ export async function POST(req: Request) {
   if (isHoneypotTripped(body)) return ok({ refCode: null, statusUrl: null });
 
   if (!isValidEmail(body.email)) return fail('bad_request');
-  const ref = typeof body.ref === 'string' ? body.ref : undefined;
-
+  const email = String(body.email).trim().toLowerCase();
   try {
-    const { row, duplicate } = await addParticipant(body.email, ref, hashIp(ip));
-
-    // Analytics only for a FRESH signup: a duplicate is indistinguishable from the honeypot
-    // path in the response, and must not emit an identify/capture for a row the caller does
-    // not own (see docs/fixes/2026-07-30-waitlist-security-fix.md).
-    const posthog = getPostHogClient();
-    if (posthog && !duplicate && row.refCode) {
-      posthog.identify({ distinctId: row.refCode });
-      posthog.capture({
-        distinctId: row.refCode,
-        event: 'waitlist_signed_up',
-        properties: { has_ref_code: !!ref },
-      });
-      await posthog.flush();
-    }
-
-    // Duplicates get the same generic success as the honeypot path: the
-    // owner keeps their original status link (tokens are NOT rotated), and
-    // a third party who knows the email learns nothing they can use.
-    return ok(signupPayload(row, duplicate, APP_ORIGIN));
+    // Cloudflare Workers can occasionally hang while opening the external
+    // Postgres connection. Give it a short window, then capture the email in
+    // private D1 so the public waitlist remains available.
+    const result = await Promise.race([
+      addParticipant(email, undefined, ipHash),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('postgres signup timeout')), 4000)),
+    ]);
+    // Metrics must never make a successful email signup fail. D1 stores only
+    // the public counter, while the email itself remains in Supabase.
+    if (!result.duplicate) await incrementParticipantCount().catch((error) => console.error('count increment error:', error));
+    // Return the same successful shape for new and duplicate emails. This
+    // avoids turning the endpoint into an email-enumeration oracle.
+    return ok({});
   } catch (e) {
-    console.error('signup error:', e);
-    return fail('server_error');
+    console.error('signup error; using D1 capture fallback:', e);
+    try {
+      const inserted = await saveWaitlistEmail(email);
+      if (inserted) await incrementParticipantCount().catch((error) => console.error('count increment error:', error));
+      return ok({});
+    } catch (fallbackError) {
+      console.error('D1 signup fallback error:', fallbackError);
+      return fail('server_error');
+    }
   }
 }

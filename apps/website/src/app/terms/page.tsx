@@ -11,6 +11,6 @@ export const metadata: Metadata = {
 };
 
 export default async function TermsPage() {
-  const { t } = await getI18n();
-  return <LegalPage t={t} title={t.legalPage.termsTitle} />;
+  const { locale, t } = await getI18n();
+  return <LegalPage t={t} locale={locale} title={t.legalPage.termsTitle} />;
 }
