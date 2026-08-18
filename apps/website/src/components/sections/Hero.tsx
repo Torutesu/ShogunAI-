@@ -75,7 +75,7 @@ export function Hero({ t, participantCount }: { t: Dictionary; participantCount:
                     +
                   </span>
                 </div>
-                <span className="text-xs font-medium text-[#4b5d7d]">{localeCopy.waitlistProof}</span>
+                <span className="hero-waitlist-proof text-xs font-medium text-[#4b5d7d]">{localeCopy.waitlistProof}</span>
                 <ParticipantCount initialCount={participantCount} suffix={t.scarcity.joinedSuffix} />
               </div>
               <div className="mx-auto mt-7 max-w-[620px] lg:mx-0">
