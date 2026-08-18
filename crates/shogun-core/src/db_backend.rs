@@ -28,6 +28,9 @@ const PACK_EXCERPT_CHARS: usize = 300;
 /// Confidence assigned to a captured event in search results: events are ground truth, not inferred
 /// state, so they always pass the confidence gate (they are not "possibly").
 const EVENT_CONFIDENCE: f64 = 1.0;
+/// Linked-event source tag of an auto-captured (passive OCR) frame — the kind Visual recall's
+/// switch governs. Manual shots carry `user_screenshot` and are not gated by the switch.
+const AUTO_FRAME_SOURCE: &str = "screen_ocr";
 
 /// A [`MemoryBackend`] backed by the daemon's DB handle.
 pub struct DbBackend {
@@ -61,6 +64,15 @@ impl DbBackend {
             return Err("visual_recall settings path not configured".to_string());
         };
         save_settings(path, settings)
+    }
+
+    /// Whether a stored frame may be read through the API right now. Manual shots
+    /// (`user_screenshot`) were each an explicit user act and stay readable; auto captures
+    /// (`screen_ocr`) exist only under Visual recall's switch, so with the switch off they are
+    /// invisible — the MemoryGetContextPack note promises get_frame "answers to Visual recall's
+    /// on/off state", and search/rescan must not route around the same switch.
+    fn frame_readable(&self, source: &str) -> bool {
+        source != AUTO_FRAME_SOURCE || self.load_vr_settings().enabled
     }
 
     fn visual_recall_status_json(&self) -> String {
@@ -128,8 +140,13 @@ impl DbBackend {
             }
         };
         let hits = self.db.search_screen_frames_window(query, from_ms, to_ms, FRAME_SEARCH_LIMIT, FRAME_EXCERPT_CHARS);
+        // Auto frames are only searchable while Visual recall is on (see `frame_readable`) —
+        // stored leftovers (e.g. a failed disable purge) must not stay reachable. One settings
+        // read for the whole result, not one per hit.
+        let auto_readable = self.load_vr_settings().enabled;
         let frames: Vec<_> = hits
             .iter()
+            .filter(|f| auto_readable || f.source != AUTO_FRAME_SOURCE)
             .map(|f| {
                 json!({
                     "frame_id": f.frame_id,
@@ -161,6 +178,9 @@ impl DbBackend {
         let Some(s) = self.db.get_screen_frame_summary(frame_id) else {
             return json!({ "error": "not_found", "frame_id": frame_id }).to_string();
         };
+        if !self.frame_readable(&s.source) {
+            return json!({ "error": "visual_recall_disabled", "frame_id": frame_id }).to_string();
+        }
         let needs_rescan =
             s.ocr_text.trim().len() < shogun_memory::screen_frames::THIN_OCR_CHARS;
         json!({
@@ -187,6 +207,9 @@ impl DbBackend {
         let Some(rec) = self.db.get_screen_frame(frame_id) else {
             return json!({ "error": "not_found", "frame_id": frame_id }).to_string();
         };
+        if !self.frame_readable(&rec.summary.source) {
+            return json!({ "error": "visual_recall_disabled", "frame_id": frame_id }).to_string();
+        }
         match crate::capture::visual_recall::ocr_jpeg_bytes(&rec.jpeg) {
             Some(text) => {
                 let updated = match self.db.update_event_ocr_text(rec.summary.event_id, &text) {
@@ -416,15 +439,18 @@ impl MemoryBackend for DbBackend {
             }
             Tool::VisualRecallSetEnabled => {
                 let enabled = parse_enabled_body(body)?;
-                let mut settings = self.load_vr_settings();
-                settings.enabled = enabled;
-                self.save_vr_settings(&settings)?;
+                // Purge BEFORE persisting the switch: if the purge fails the setting must stay
+                // "enabled" — the honest description of a store still holding auto frames. The
+                // reverse order left enabled:false on disk with the frames retained.
                 if !enabled {
                     let removed = self.db.purge_auto_screen_frames()?;
                     if removed > 0 {
                         eprintln!("[visual_recall] disabled via API — purged {removed} auto frame(s)");
                     }
                 }
+                let mut settings = self.load_vr_settings();
+                settings.enabled = enabled;
+                self.save_vr_settings(&settings)?;
                 Ok(None)
             }
             Tool::VisualRecallDeleteFrame => {
@@ -515,9 +541,14 @@ mod tests {
     }
 
     fn backend_with_settings(db: Db) -> DbBackend {
+        // One settings file per call: tests run in parallel in one process, and a shared file
+        // would let one test's enable/disable race another's assertions.
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let dir = std::env::temp_dir().join(format!("shogun_vr_test_{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
-        DbBackend::new(db).with_visual_recall_settings_path(dir.join("visual_recall.json"))
+        DbBackend::new(db)
+            .with_visual_recall_settings_path(dir.join(format!("visual_recall_{seq}.json")))
     }
 
     fn params() -> ReadParams {
@@ -694,6 +725,74 @@ mod tests {
         assert!(backend.write(Tool::VisualRecallSetEnabled, r#"{"enabled":true}"#).is_ok());
         let status2 = backend.read_structured(Tool::VisualRecallStatus, &params()).expect("status");
         assert!(status2.contains("\"enabled\":true"));
+    }
+
+    /// Seed one stored frame linked to an event of `source` (`screen_ocr` = auto capture,
+    /// `user_screenshot` = explicit user shot). Returns the frame id.
+    fn seed_frame(db: &Db, source: &'static str, content: &str, hash: &str) -> i64 {
+        let (event_id, _) = db
+            .capture(&shogun_memory::event_log::NewEvent {
+                ts: 4_000,
+                source,
+                kind: "text",
+                app_bundle_id: Some("com.apple.Safari"),
+                window_title: Some("Inbox"),
+                content,
+                content_hash: hash,
+                dwell_ms: 0,
+                display_id: None,
+                window_bounds: None,
+            })
+            .unwrap();
+        db.store_screen_frame(event_id, Some("com.apple.Safari"), Some("Inbox"), None, 10, 10, b"jpeg")
+            .expect("frame stored")
+    }
+
+    #[test]
+    fn disabled_visual_recall_hides_auto_frames_from_every_read() {
+        // The switch governs auto captures end to end: with it off, stored `screen_ocr` frames
+        // (e.g. leftovers of a failed disable purge) are unreachable through get/search/rescan,
+        // while a user's explicit screenshots stay readable — they were each their own consent.
+        let db = Db::open_in_memory(Arc::new(|| 5_000)).unwrap();
+        let auto = seed_frame(&db, "screen_ocr", "the quarterly dashboard", "vr1");
+        let manual = seed_frame(&db, "user_screenshot", "a saved receipt", "vr2");
+        let backend = backend_with_settings(db);
+        // settings default to disabled
+
+        let got = backend.read_structured(Tool::VisualRecallGetFrame, &get(auto)).expect("json");
+        assert!(got.contains("visual_recall_disabled"), "{got}");
+        assert!(!got.contains("dashboard"), "auto OCR text must not leak: {got}");
+        let got = backend.read_structured(Tool::VisualRecallGetFrame, &get(manual)).expect("json");
+        assert!(got.contains("receipt"), "manual shots stay readable: {got}");
+
+        let search = backend.read_structured(Tool::VisualRecallSearchFrames, &params()).expect("json");
+        assert!(!search.contains(&format!("\"frame_id\":{auto}")), "auto frame surfaced: {search}");
+        assert!(search.contains(&format!("\"frame_id\":{manual}")), "{search}");
+
+        let rescan = backend.read_structured(Tool::VisualRecallRescanFrame, &get(auto)).expect("json");
+        assert!(rescan.contains("visual_recall_disabled"), "{rescan}");
+
+        // Switched on, the auto frame is served again.
+        assert!(backend.write(Tool::VisualRecallSetEnabled, r#"{"enabled":true}"#).is_ok());
+        let got = backend.read_structured(Tool::VisualRecallGetFrame, &get(auto)).expect("json");
+        assert!(got.contains("dashboard"), "{got}");
+        let search = backend.read_structured(Tool::VisualRecallSearchFrames, &params()).expect("json");
+        assert!(search.contains(&format!("\"frame_id\":{auto}")), "{search}");
+    }
+
+    #[test]
+    fn disabling_purges_auto_frames_but_keeps_user_screenshots() {
+        let db = Db::open_in_memory(Arc::new(|| 5_000)).unwrap();
+        let auto = seed_frame(&db, "screen_ocr", "the quarterly dashboard", "vr1");
+        let manual = seed_frame(&db, "user_screenshot", "a saved receipt", "vr2");
+        let backend = backend_with_settings(db.clone());
+        assert!(backend.write(Tool::VisualRecallSetEnabled, r#"{"enabled":true}"#).is_ok());
+
+        assert!(backend.write(Tool::VisualRecallSetEnabled, r#"{"enabled":false}"#).is_ok());
+        assert!(db.get_screen_frame_summary(auto).is_none(), "auto frames are purged on disable");
+        assert!(db.get_screen_frame_summary(manual).is_some(), "user shots survive");
+        let status = backend.read_structured(Tool::VisualRecallStatus, &params()).expect("status");
+        assert!(status.contains("\"enabled\":false"));
     }
 
     /// Seed a distilled lesson via the real feedback → distill → upsert path. The draft bodies

@@ -80,15 +80,22 @@ pub struct LocalNow<'a> {
 /// - 朝と夜が同時に成立する場合（夜設定時刻後に初めて Mac を開いた日）は **Evening を優先**
 ///   — 一日の終わりに朝の予定表を出しても仕事は終わっている。Morning はその日の既読扱いにする
 ///   かは呼び出し側の自由だが、既定では触らず、翌日に自然リセットされる
+/// - その日が夜フェーズに入ったら（夜設定時刻を過ぎた、または夜がもう既読）、未読の Morning は
+///   **その日は出さない** — 22時に朝の予定表を配るのは配達ではなく誤配。翌日に自然リセットされる
 pub fn due(now: LocalNow<'_>, settings: &Settings, seen: &SeenState) -> Option<Which> {
+    let past_evening_time = (now.hour, now.minute) >= (settings.evening_hour, settings.evening_minute);
     let evening_due = settings.evening_enabled
         && seen.evening_seen_date.as_deref() != Some(now.date)
-        && (now.hour, now.minute) >= (settings.evening_hour, settings.evening_minute);
+        && past_evening_time;
     if evening_due {
         return Some(Which::Evening);
     }
-    let morning_due =
-        settings.morning_enabled && seen.morning_seen_date.as_deref() != Some(now.date);
+    // 夜フェーズ: 夜の時刻を過ぎたか、その日の夜カードが既読（時刻設定を過去へ動かした日も含む）。
+    let evening_phase =
+        past_evening_time || seen.evening_seen_date.as_deref() == Some(now.date);
+    let morning_due = settings.morning_enabled
+        && seen.morning_seen_date.as_deref() != Some(now.date)
+        && !evening_phase;
     if morning_due {
         return Some(Which::Morning);
     }
@@ -142,6 +149,28 @@ mod tests {
         let s = Settings::default();
         let seen = SeenState::default();
         assert_eq!(due(now("2026-08-15", 19, 0), &s, &seen), Some(Which::Evening));
+    }
+
+    #[test]
+    fn a_seen_evening_suppresses_the_unseen_morning_for_the_rest_of_the_day() {
+        // 夜カード既読後の 22:00（朝を一度も見ていない日）: 朝の予定表を夜に配らない。
+        let s = Settings::default();
+        let mut seen = SeenState::default();
+        mark_seen(&mut seen, Which::Evening, "2026-08-15");
+        assert_eq!(due(now("2026-08-15", 22, 0), &s, &seen), None);
+        // 翌朝は自然リセットで普通に Morning
+        assert_eq!(due(now("2026-08-16", 8, 0), &s, &seen), Some(Which::Morning));
+    }
+
+    #[test]
+    fn past_the_evening_time_an_unseen_morning_no_longer_fires() {
+        // 夜側を無効にしていても、夜フェーズに入った日の朝カードはもう出さない —
+        // 一日の締めの時間に朝の予定表だけが残って配られる経路を塞ぐ。
+        let s = Settings { evening_enabled: false, ..Settings::default() };
+        let seen = SeenState::default();
+        assert_eq!(due(now("2026-08-15", 9, 0), &s, &seen), Some(Which::Morning), "朝はまだ朝");
+        assert_eq!(due(now("2026-08-15", 17, 30), &s, &seen), None, "夜時刻ちょうどから抑制");
+        assert_eq!(due(now("2026-08-15", 22, 0), &s, &seen), None);
     }
 
     #[test]

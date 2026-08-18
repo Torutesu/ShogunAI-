@@ -198,6 +198,12 @@ impl ReplyContext {
 #[derive(Clone, Default)]
 pub struct ReplyContextCache {
     inner: Arc<Mutex<Option<ReplyContext>>>,
+    /// Bumped by every [`Self::invalidate`]. A focus-path rebuild that started before a sync can
+    /// finish after the invalidation — without this counter its `put` would land the pre-sync
+    /// pack on top of the cleared slot, resurrecting exactly the staleness the invalidation
+    /// removed. Builds snapshot the generation when they start ([`Self::build_generation`]) and
+    /// store through [`Self::put_built`], which drops any pack from an older generation.
+    generation: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl ReplyContextCache {
@@ -205,11 +211,50 @@ impl ReplyContextCache {
         Self::default()
     }
 
-    /// Replace the warm pack (called off the focus path).
+    /// Replace the warm pack (called off the focus path). Unconditional — for builds that cannot
+    /// race an invalidation (tests, synchronous warm-ups). The focus path goes through
+    /// [`Self::build_for_screen`] so its packs pass the generation gate.
     pub fn put(&self, ctx: ReplyContext) {
         if let Ok(mut g) = self.inner.lock() {
             *g = Some(ctx);
         }
+    }
+
+    /// The invalidation generation to snapshot at build start (see [`Self::put_built`]).
+    pub fn build_generation(&self) -> u64 {
+        self.generation.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// Store a pack whose build started under `generation` — unless an invalidation has landed
+    /// since that snapshot, in which case the pack predates memory's current state and is
+    /// dropped (the next `get` stays an honest miss until a post-sync build lands). Returns
+    /// whether the pack was kept.
+    pub fn put_built(&self, ctx: ReplyContext, generation: u64) -> bool {
+        if let Ok(mut g) = self.inner.lock() {
+            // Compared under the same lock `invalidate` clears under, so a concurrent
+            // invalidation either bumped before this check (pack dropped) or clears after the
+            // store (pack removed) — the stale pack can never survive.
+            if self.generation.load(std::sync::atomic::Ordering::Acquire) == generation {
+                *g = Some(ctx);
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Build the reply context for the focused screen and store it through the generation gate.
+    /// The snapshot is taken here, before the build starts, so the caller (the desktop focus
+    /// path) cannot accidentally hold a pack across an invalidation and `put` it stale.
+    pub fn build_for_screen(
+        &self,
+        db: &Db,
+        on_screen_thread_key: &str,
+        on_screen_title: &str,
+    ) -> ReplyContext {
+        let generation = self.build_generation();
+        let ctx = db.build_reply_context_for_screen(on_screen_thread_key, on_screen_title);
+        self.put_built(ctx.clone(), generation);
+        ctx
     }
 
     /// The warm pack for `thread_key`, if that is the one currently held.
@@ -225,9 +270,12 @@ impl ReplyContextCache {
 
     /// Drop the warm pack: something changed underneath it (an integration sync landed new items),
     /// so whatever was assembled before is stale. The next `get` is an honest miss until the focus
-    /// path re-assembles via [`Self::put`] — invalidation never rebuilds inline, because building
-    /// on the press path is exactly what this cache exists to prevent.
+    /// path re-assembles via [`Self::build_for_screen`] — invalidation never rebuilds inline,
+    /// because building on the press path is exactly what this cache exists to prevent.
     pub fn invalidate(&self) {
+        // Bump BEFORE clearing: an in-flight build that snapshotted the old generation must find
+        // the new one by the time the slot is empty, or its stale pack would refill it.
+        self.generation.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         if let Ok(mut g) = self.inner.lock() {
             *g = None;
         }
@@ -998,7 +1046,9 @@ impl Db {
     /// machine was off would be a worse answer than a zero-length interval.
     pub fn close_abandoned_meetings(&self, started_before_ms: i64) -> usize {
         let now = self.now_ms();
-        self.read_conn("meeting.close_abandoned", |conn| {
+        // Query/UPDATE failures propagate through `with_conn` so they register as faults
+        // (issue #121) — swallowed into a default they would read as "0 abandoned, all well".
+        self.with_conn("meeting.close_abandoned", |conn| -> Result<usize, rusqlite::Error> {
         // Ids first, then close, then index: a crash-abandoned meeting still holds whatever
         // transcript and note it captured, and closing is the moment that text goes on the search
         // spine (FR-MT-14) — the bulk UPDATE alone would leave these the only meetings the user
@@ -1008,19 +1058,16 @@ impl Db {
             .and_then(|mut s| {
                 s.query_map([started_before_ms], |r| r.get(0))
                     .and_then(|rows| rows.collect())
-            })
-            .unwrap_or_default();
-        let closed = conn
-            .execute(
-                "UPDATE sessions SET ended_at = started_at, updated_at = ?1
-                  WHERE ended_at IS NULL AND started_at < ?2",
-                rusqlite::params![now, started_before_ms],
-            )
-            .unwrap_or(0);
+            })?;
+        let closed = conn.execute(
+            "UPDATE sessions SET ended_at = started_at, updated_at = ?1
+              WHERE ended_at IS NULL AND started_at < ?2",
+            rusqlite::params![now, started_before_ms],
+        )?;
         for id in ids {
             let _ = shogun_memory::meeting_index::index_session(conn, id);
         }
-        closed
+        Ok(closed)
         })
         .unwrap_or(0)
     }
@@ -1142,6 +1189,10 @@ impl Db {
             return IngestSummary::default();
         };
         let mut summary = IngestSummary::default();
+        // Rejected writes are counted, not logged per turn — one line and the health signal,
+        // same as `ingest_integration`: a silent `continue` recorded neither fault nor success,
+        // so a wholesale write failure looked like a healthy empty import.
+        let mut rejected = 0usize;
         for t in turns {
             // The session id is the thread; hashing it with the turn keeps two identical messages
             // in different sessions distinct.
@@ -1164,6 +1215,7 @@ impl Db {
             let Ok((id, touched)) =
                 event_log::insert_or_touch_with_thread(&guard, &ev, Some(&t.session_id))
             else {
+                rejected += 1;
                 continue;
             };
             summary.processed += 1;
@@ -1178,6 +1230,16 @@ impl Db {
                         .unwrap_or_default();
                 summary.candidates += ids.len();
             }
+        }
+        drop(guard);
+        if rejected > 0 {
+            self.note_fault("ingest.ai_session", MemoryFault::Query, "write_rejected");
+            crate::elog!(
+                "[memory] ingest.ai_session rejected {rejected} of {} turn(s)",
+                summary.processed + rejected
+            );
+        } else {
+            self.health.record_success();
         }
         summary
     }
@@ -2743,7 +2805,9 @@ impl Db {
         input_to_ts: i64,
     ) -> bool {
         let now = self.now_ms();
-        self.read_conn("jobs.upsert", |c| {
+        // The real Result goes through `with_conn` so a failed ledger write registers as a fault
+        // (issue #121) — wrapped in a blanket Ok it would count as a store SUCCESS.
+        self.with_conn("jobs.upsert", |c| {
                 shogun_memory::jobs::upsert(
                     c,
                     cycle_id,
@@ -2753,9 +2817,8 @@ impl Db {
                     input_to_ts,
                     now,
                 )
-                .is_ok()
             })
-            .unwrap_or(false)
+            .is_ok()
     }
 
     /// The persisted job runs for a cycle, as [`JobRun`]s (unrecognised rows are skipped).
@@ -2831,9 +2894,16 @@ impl Db {
         let recent = self.recent_cycles(nights.max(1));
         // Only full cycles carry Batch work, so only they can fail the Batch lane. A degraded
         // catch-up night is not evidence either way and must not reset an amber indicator.
+        //
+        // Tonight's cycle mid-run is not evidence either: until the last job lands the ledger
+        // reads "incomplete", which is the same shape as a failed night — counting it would
+        // flicker the indicator amber every night while the cycle works. With no `Failed` job
+        // recorded it is not-yet-attempted, not failed; an actual job failure tonight still
+        // counts immediately.
         let outcomes: Vec<bool> = recent
             .iter()
             .filter(|c| c.kind == CycleKind::Full)
+            .filter(|c| !(c.cycle_id == tonight_cycle_id && !c.succeeded && c.jobs_failed == 0))
             .map(|c| c.succeeded)
             .collect();
         let full_run_done_today = recent
@@ -3297,6 +3367,50 @@ mod tests {
         assert_eq!(db.try_capture(&ev("text", "h1", 1)).unwrap_err(), MemoryFault::Query);
         assert!(db.capture(&ev("text", "h2", 2)).is_none());
         assert!(db.memory_health().degraded, "capture that silently stops recording must show");
+    }
+
+    #[test]
+    fn a_failed_dream_ledger_write_is_a_fault_not_a_recorded_success() {
+        // FR-DC-04 resume depends on this ledger; a refused upsert routed through a blanket-Ok
+        // read wrapper used to count as a store SUCCESS in the health signal.
+        let db = Db::open_in_memory(clock(1_000)).unwrap();
+        drop_table(&db, "job_runs");
+        assert!(!db.record_job("20260724", JobKind::Consolidation, JobState::Done, 0, 100));
+        assert!(db.memory_health().degraded, "a failed ledger write must register as a fault");
+    }
+
+    #[test]
+    fn a_failed_abandoned_meeting_sweep_is_a_fault_not_zero_closed() {
+        let db = Db::open_in_memory(clock(1_000)).unwrap();
+        drop_table(&db, "sessions");
+        // "0 abandoned" from a dead table is not an answer — the failure must be visible.
+        assert_eq!(db.close_abandoned_meetings(1_000), 0);
+        assert!(db.memory_health().degraded);
+    }
+
+    #[test]
+    fn a_failed_ai_session_ingest_is_a_fault_not_an_empty_import() {
+        use shogun_memory::ai_session::{Role, SessionTurn};
+        let db = Db::open_in_memory(clock(1_000)).unwrap();
+        let turns = [SessionTurn {
+            session_id: "sess-1".into(),
+            role: Role::User,
+            ts_ms: 10,
+            text: "I'll ship the fix".into(),
+            cwd: None,
+        }];
+        drop_table(&db, "event_log");
+        let s = db.ingest_ai_session(&turns);
+        assert_eq!(s.processed, 0, "nothing landed");
+        assert!(
+            db.memory_health().degraded,
+            "rejected turns must register, mirroring ingest_integration"
+        );
+
+        // …and a clean import records a success (which also lifts the degraded state).
+        let db = Db::open_in_memory(clock(1_000)).unwrap();
+        assert_eq!(db.ingest_ai_session(&turns).newly_inserted, 1);
+        assert!(!db.memory_health().degraded);
     }
 
     #[test]
@@ -4288,6 +4402,38 @@ mod tests {
         assert!(cache.get(&key).is_some(), "fresh after re-assembly");
     }
 
+    /// The stale-pack race: a focus-path rebuild that STARTED before a sync finishes after the
+    /// invalidation. Its pack describes pre-sync memory, so the generation gate must drop it —
+    /// otherwise the `put` would land last and resurrect exactly what the invalidation cleared.
+    #[test]
+    fn a_pack_built_before_an_invalidation_cannot_land_after_it() {
+        let db = Db::open_in_memory(clock(10_000)).unwrap();
+        let cache = ReplyContextCache::new();
+        db.capture(&NewEvent { window_title: Some("Alpha"), ..ev("alpha notes", "h1", 100) })
+            .unwrap();
+        let key =
+            shogun_memory::thread::thread_key("capture", None, Some("com.apple.Safari"), Some("Alpha"))
+                .unwrap();
+
+        // A build starts (snapshots the generation), the sync invalidates mid-build…
+        let generation = cache.build_generation();
+        let stale = db.build_reply_context(&key);
+        cache.invalidate();
+        // …so the late put is refused and the cache stays an honest miss.
+        assert!(!cache.put_built(stale, generation), "pre-sync pack must lose the race");
+        assert!(cache.current().is_none(), "the stale pack must not refill the cleared slot");
+
+        // A build started after the invalidation lands normally.
+        let generation = cache.build_generation();
+        assert!(cache.put_built(db.build_reply_context(&key), generation));
+        assert!(cache.get(&key).is_some(), "post-sync build serves");
+
+        // And the composed focus-path entry point stores through the same gate.
+        cache.invalidate();
+        let ctx = cache.build_for_screen(&db, &key, "Alpha");
+        assert_eq!(ctx.thread_key, cache.get(&key).expect("warm").thread_key);
+    }
+
     /// The subscription is tick-driven, not a spin: pumping a quiet bus does no work and returns
     /// at once (`try_recv` is non-blocking), so an idle daemon burns nothing between ticks.
     #[test]
@@ -4695,6 +4841,44 @@ mod tests {
         let status = db.dream_status("20260724", 7);
         assert_eq!(status.indicator, crate::dreamcycle::health::Indicator::Normal);
         assert!(status.full_run_done_today, "tonight's full cycle completed");
+    }
+
+    /// Tonight's cycle mid-run reads as "incomplete" in the ledger — the same shape as a failed
+    /// night — so without the in-progress exclusion the indicator would flicker Amber every night
+    /// between the first job landing and the last. Not-yet-attempted is not failed.
+    #[test]
+    fn a_cycle_still_running_tonight_does_not_flicker_the_indicator_amber() {
+        let (clock, now) = ticking_clock();
+        let db = Db::open_in_memory(clock).unwrap();
+        let set = |t: i64| now.store(t, std::sync::atomic::Ordering::Relaxed);
+
+        // last night completed fully; tonight is two jobs in, none failed
+        for kind in crate::dreamcycle::plan::FULL_SEQUENCE {
+            set(1_000);
+            db.record_job("20260723", *kind, JobState::Done, 0, 100);
+        }
+        set(9_000);
+        db.record_job("20260724", JobKind::Consolidation, JobState::Done, 100, 200);
+        db.record_job("20260724", JobKind::Compression, JobState::Running, 100, 200);
+
+        let status = db.dream_status("20260724", 7);
+        assert_eq!(
+            status.indicator,
+            crate::dreamcycle::health::Indicator::Normal,
+            "a mid-run cycle is not-yet-attempted, not a failed night"
+        );
+        assert!(!status.full_run_done_today, "…but it is not done yet either");
+
+        // The exclusion is only for the running night: a job actually failing tonight counts
+        // immediately (the amber the indicator exists for).
+        db.record_job("20260724", JobKind::Compression, JobState::Failed, 100, 200);
+        let status = db.dream_status("20260724", 7);
+        assert_eq!(status.indicator, crate::dreamcycle::health::Indicator::Amber);
+
+        // And an older incomplete cycle (a night that never finished) still counts as failed —
+        // only tonight's id gets the in-progress reading.
+        let status = db.dream_status("20260725", 7);
+        assert_eq!(status.indicator, crate::dreamcycle::health::Indicator::Amber);
     }
 
     /// A degraded catch-up does no Batch work, so it is not evidence about the Batch lane either

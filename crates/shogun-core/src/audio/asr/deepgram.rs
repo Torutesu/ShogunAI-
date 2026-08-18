@@ -13,6 +13,7 @@
 //!
 //! Always sends `mip_opt_out=true`. Waveform never written to disk by SHOGUN.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
@@ -28,6 +29,11 @@ const DEFAULT_MODEL: &str = "nova-3";
 const LIVE_ENDPOINTING_MS: u32 = 300;
 /// ~100 ms of 16 kHz mono before flushing a WS binary frame.
 pub const LIVE_CHUNK_SAMPLES: usize = (SAMPLE_RATE as usize) / 10;
+/// Most linear16 bytes allowed to sit queued for the WS thread: 30 seconds of 16 kHz mono
+/// (2 bytes/sample) — the same wall [`crate::audio::ring::MAX_SECONDS`] puts on captured PCM.
+/// Without it a stalled socket turns "keep what the network hasn't caught up on" into "keep
+/// everything" (~32 KB/s of RAM, unbounded); once full, new audio is dropped and counted.
+pub const LIVE_QUEUE_MAX_BYTES: usize = 30 * 2 * (SAMPLE_RATE as usize);
 
 /// How the client obtains an Authorization header value (`Token …` or `Bearer …`).
 pub trait DeepgramAuth: Send {
@@ -256,6 +262,7 @@ impl Deepgram {
         if !config.mip_opt_out {
             return Err("Deepgram mip_opt_out must be true (company policy)".into());
         }
+        check_listen_endpoint(&config.listen_endpoint)?;
         let client = reqwest::blocking::Client::builder()
             .timeout(Duration::from_secs(60))
             .build()
@@ -308,6 +315,12 @@ pub struct DeepgramLive {
     result_rx: Receiver<LiveResult>,
     join: Option<JoinHandle<()>>,
     pcm_bytes: usize,
+    /// Linear16 bytes currently queued for the WS thread (incremented in [`Self::push_pcm`],
+    /// decremented by the thread as it consumes) — the [`LIVE_QUEUE_MAX_BYTES`] backpressure gauge.
+    queued_bytes: Arc<AtomicUsize>,
+    /// Bytes dropped in the current full-queue burst; nonzero means the "queue full" line has
+    /// already been logged for this burst (one line per burst, not per chunk).
+    dropped_bytes: usize,
     purpose: String,
     /// Required, for the same reason as [`Deepgram::trace`].
     trace: Arc<dyn TraceabilitySink>,
@@ -327,6 +340,7 @@ impl DeepgramLive {
         if !config.mip_opt_out {
             return Err("Deepgram mip_opt_out must be true (company policy)".into());
         }
+        check_listen_endpoint(&config.listen_endpoint)?;
         let url = live_listen_url(config, mode);
         let authorization = auth
             .authorization_header()
@@ -335,11 +349,13 @@ impl DeepgramLive {
         let (cmd_tx, cmd_rx) = mpsc::channel::<LiveCmd>();
         let (result_tx, result_rx) = mpsc::channel::<LiveResult>();
         let purpose = config.purpose.clone();
+        let queued_bytes = Arc::new(AtomicUsize::new(0));
+        let thread_queued = queued_bytes.clone();
 
         let join = thread::Builder::new()
             .name("deepgram-live".into())
             .spawn(move || {
-                if let Err(e) = live_session_loop(&url, &authorization, cmd_rx, result_tx) {
+                if let Err(e) = live_session_loop(&url, &authorization, cmd_rx, result_tx, &thread_queued) {
                     eprintln!("[asr] deepgram live session ended: {e}");
                 }
             })
@@ -350,6 +366,8 @@ impl DeepgramLive {
             result_rx,
             join: Some(join),
             pcm_bytes: 0,
+            queued_bytes,
+            dropped_bytes: 0,
             purpose,
             trace,
             traced: false,
@@ -357,15 +375,52 @@ impl DeepgramLive {
     }
 
     /// Queue linear16 PCM (non-blocking for the caller beyond a short channel send).
+    ///
+    /// Bounded like the capture [`Ring`](crate::audio::ring::Ring): once [`LIVE_QUEUE_MAX_BYTES`]
+    /// (30 s) sit unconsumed — a stalled socket, a wedged WS thread — new audio is dropped rather
+    /// than queued. A gap in the transcript is honest; unbounded RAM growth is not. Dropped bytes
+    /// never count toward `pcm_bytes`, so the egress record stays what actually left the device.
     pub fn push_pcm(&mut self, pcm: &[f32]) -> Result<(), String> {
         if pcm.is_empty() {
             return Ok(());
         }
         let bytes = f32_to_linear16(pcm);
-        self.pcm_bytes = self.pcm_bytes.saturating_add(bytes.len());
-        self.cmd_tx
-            .send(LiveCmd::Audio(bytes))
-            .map_err(|_| "deepgram live session closed".to_string())
+        if self
+            .queued_bytes
+            .load(Ordering::Acquire)
+            .saturating_add(bytes.len())
+            > LIVE_QUEUE_MAX_BYTES
+        {
+            if self.dropped_bytes == 0 {
+                eprintln!(
+                    "[asr] deepgram live queue full ({}s of audio unsent) — dropping new audio until the socket drains",
+                    LIVE_QUEUE_MAX_BYTES / (2 * SAMPLE_RATE as usize)
+                );
+            }
+            self.dropped_bytes = self.dropped_bytes.saturating_add(bytes.len());
+            return Ok(());
+        }
+        if self.dropped_bytes > 0 {
+            eprintln!(
+                "[asr] deepgram live queue drained — dropped {} byte(s) of audio during the stall",
+                self.dropped_bytes
+            );
+            self.dropped_bytes = 0;
+        }
+        let len = bytes.len();
+        self.queued_bytes.fetch_add(len, Ordering::AcqRel);
+        match self.cmd_tx.send(LiveCmd::Audio(bytes)) {
+            Ok(()) => {
+                self.pcm_bytes = self.pcm_bytes.saturating_add(len);
+                Ok(())
+            }
+            Err(_) => {
+                // Never entered the queue (and never streamed): keep the gauge and the egress
+                // byte count in step with what the thread actually consumes.
+                self.queued_bytes.fetch_sub(len, Ordering::AcqRel);
+                Err("deepgram live session closed".to_string())
+            }
+        }
     }
 
     /// Non-blocking drain of one transcript event.
@@ -455,6 +510,7 @@ fn live_session_loop(
     authorization: &str,
     cmd_rx: Receiver<LiveCmd>,
     result_tx: Sender<LiveResult>,
+    queued_bytes: &AtomicUsize,
 ) -> Result<(), String> {
     use tungstenite::client::IntoClientRequest;
     use tungstenite::http::header::{AUTHORIZATION, HeaderValue};
@@ -477,6 +533,9 @@ fn live_session_loop(
         // Outbound audio / CloseStream first so we never starve sends behind reads.
         match cmd_rx.try_recv() {
             Ok(LiveCmd::Audio(bytes)) => {
+                // Consumed either way (sent or discarded while closing) — the push side's
+                // backpressure gauge tracks what still sits in the channel.
+                queued_bytes.fetch_sub(bytes.len(), std::sync::atomic::Ordering::AcqRel);
                 if !closing {
                     socket
                         .send(Message::Binary(bytes))
@@ -530,6 +589,8 @@ fn live_session_loop(
                     // Idle: wait briefly for the next PCM chunk instead of busy-spinning.
                     match cmd_rx.recv_timeout(Duration::from_millis(5)) {
                         Ok(LiveCmd::Audio(bytes)) => {
+                            queued_bytes
+                                .fetch_sub(bytes.len(), std::sync::atomic::Ordering::AcqRel);
                             socket
                                 .send(Message::Binary(bytes))
                                 .map_err(|e| format!("deepgram live send audio: {e}"))?;
@@ -662,6 +723,36 @@ pub fn live_listen_url(config: &DeepgramConfig, mode: LiveMode) -> String {
         }
     }
     url
+}
+
+/// Refuse a listen endpoint that would carry meeting audio and the Authorization header in
+/// cleartext. Same rule as the mint URL check in [`EphemeralTokenAuth::with_license_source`]:
+/// TLS (`https://` / `wss://`) anywhere; plain `http://` / `ws://` only to the local host (mock
+/// servers in tests and local dev never leave the machine). A schemeless endpoint is fine —
+/// [`https_to_wss`] defaults it to `wss://`.
+fn check_listen_endpoint(endpoint: &str) -> Result<(), String> {
+    if endpoint.starts_with("http://") || endpoint.starts_with("ws://") {
+        let rest = endpoint.split("://").nth(1).unwrap_or("");
+        if !is_local_host(rest) {
+            return Err(format!(
+                "Deepgram listen endpoint must be https:// or wss:// (plain {} is allowed only \
+                 for localhost)",
+                endpoint.split("://").next().unwrap_or("http")
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Whether the authority at the head of `rest` (scheme already stripped) is the local host.
+fn is_local_host(rest: &str) -> bool {
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host = if let Some(bracketed) = authority.strip_prefix('[') {
+        bracketed.split(']').next().unwrap_or("")
+    } else {
+        authority.split(':').next().unwrap_or("")
+    };
+    host.eq_ignore_ascii_case("localhost") || host == "127.0.0.1" || host == "::1"
 }
 
 fn https_to_wss(endpoint: &str) -> String {
@@ -910,6 +1001,89 @@ mod tests {
         assert!(!url.contains("endpointing=300"));
         assert!(url.contains("mip_opt_out=true"));
         assert!(url.contains("smart_format=true"));
+    }
+
+    #[test]
+    fn cleartext_listen_endpoints_are_refused_except_localhost() {
+        // Meeting audio + the Authorization header ride this endpoint; a plain-http override
+        // (misconfig, hostile env) would put both on the wire in the clear.
+        for bad in ["http://mock.example/v1/listen", "ws://mock.example/v1/listen"] {
+            let cfg = DeepgramConfig { listen_endpoint: bad.into(), ..DeepgramConfig::default() };
+            let err = match Deepgram::new(cfg, Box::new(DebugEnvKeyAuth), Arc::new(RecordingSink::new())) {
+                Ok(_) => panic!("cleartext endpoint should be refused: {bad}"),
+                Err(e) => e,
+            };
+            assert!(err.contains("https"), "{err}");
+        }
+        // Local mock servers (tests, dev) never leave the machine and stay usable.
+        for ok in [
+            "http://localhost:8080/v1/listen",
+            "http://127.0.0.1:9999/v1/listen",
+            "ws://[::1]:9999/v1/listen",
+            "https://api.deepgram.com/v1/listen",
+            "wss://api.deepgram.com/v1/listen",
+        ] {
+            let cfg = DeepgramConfig { listen_endpoint: ok.into(), ..DeepgramConfig::default() };
+            assert!(
+                Deepgram::new(cfg, Box::new(DebugEnvKeyAuth), Arc::new(RecordingSink::new())).is_ok(),
+                "{ok} should be accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn live_connect_refuses_cleartext_remote_endpoints() {
+        // Checked before auth is even consulted — the header must never be minted for a
+        // connection that would leak it.
+        let cfg = DeepgramConfig {
+            listen_endpoint: "http://mock.example/v1/listen".into(),
+            ..DeepgramConfig::default()
+        };
+        let mut auth = DebugEnvKeyAuth;
+        let err = match DeepgramLive::connect(&cfg, &mut auth, LiveMode::Meeting, Arc::new(RecordingSink::new())) {
+            Ok(_) => panic!("cleartext live endpoint should be refused"),
+            Err(e) => e,
+        };
+        assert!(err.contains("https"), "{err}");
+    }
+
+    #[test]
+    fn a_stalled_live_queue_drops_new_audio_at_the_30s_wall() {
+        // A live handle wired to channels nobody drains — the "stalled WS thread" case. The
+        // queue must stop at the Ring-style 30-second wall instead of growing ~32 KB/s forever.
+        let (cmd_tx, cmd_rx) = mpsc::channel();
+        let (_result_tx, result_rx) = mpsc::channel();
+        let mut live = DeepgramLive {
+            cmd_tx,
+            result_rx,
+            join: None,
+            pcm_bytes: 0,
+            queued_bytes: Arc::new(AtomicUsize::new(0)),
+            dropped_bytes: 0,
+            purpose: "meeting_asr".into(),
+            trace: Arc::new(RecordingSink::new()),
+            traced: true, // synthetic session: nothing streamed, no egress record on drop
+        };
+        // 31 one-second chunks against a 30-second cap: the 31st hits the wall and is dropped.
+        let second = vec![0.0f32; SAMPLE_RATE as usize];
+        for _ in 0..31 {
+            live.push_pcm(&second).expect("push");
+        }
+        assert_eq!(live.queued_bytes.load(Ordering::Acquire), LIVE_QUEUE_MAX_BYTES);
+        assert_eq!(
+            live.pcm_bytes, LIVE_QUEUE_MAX_BYTES,
+            "dropped audio never counts as egressed"
+        );
+        assert!(live.dropped_bytes > 0, "the overflow chunk was counted, not queued");
+        // The WS thread consuming a chunk makes room, and recovery resets the burst counter.
+        match cmd_rx.try_recv() {
+            Ok(LiveCmd::Audio(bytes)) => {
+                live.queued_bytes.fetch_sub(bytes.len(), Ordering::AcqRel);
+            }
+            _ => panic!("a queued audio chunk was expected"),
+        }
+        live.push_pcm(&second).expect("push after drain");
+        assert_eq!(live.dropped_bytes, 0, "recovery ends the drop burst");
     }
 
     #[test]

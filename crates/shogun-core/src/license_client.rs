@@ -95,6 +95,29 @@ pub fn verify_url(origin: &str) -> String {
     format!("{}/api/license/verify", origin.trim_end_matches('/'))
 }
 
+/// Refuse to put the licence key on a cleartext wire. Same rule as the Deepgram mint's
+/// https-only check: TLS everywhere, plain `http://` only to the local host (a dev server via
+/// `SHOGUN_LICENSE_API=http://localhost:3000` never leaves the machine). Anything else — an
+/// overridden origin pointing at a remote plain-http host — is a misconfiguration that would
+/// publish a bearer credential, so the request must never be built.
+fn check_cleartext_origin(url: &str) -> Result<(), VerifyError> {
+    let Some(rest) = url.strip_prefix("http://") else {
+        return Ok(());
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host = if let Some(bracketed) = authority.strip_prefix('[') {
+        bracketed.split(']').next().unwrap_or("")
+    } else {
+        authority.split(':').next().unwrap_or("")
+    };
+    if host.eq_ignore_ascii_case("localhost") || host == "127.0.0.1" || host == "::1" {
+        return Ok(());
+    }
+    Err(VerifyError::Network(
+        "refusing plain-http licence origin (https required except for localhost)".to_string(),
+    ))
+}
+
 /// POST the verification. Blocking, with a short timeout: this runs at launch and on a 24h timer,
 /// and it must never be able to hold a startup path open.
 pub fn verify(
@@ -103,6 +126,7 @@ pub fn verify(
     device_id: &str,
     app_version: &str,
 ) -> Result<VerifyResponse, VerifyError> {
+    check_cleartext_origin(origin)?;
     let client = reqwest::blocking::Client::builder()
         .user_agent("shogun/1.0")
         .timeout(Duration::from_secs(15))
@@ -155,6 +179,7 @@ pub fn portal_url(origin: &str, license_key: &str) -> Result<String, VerifyError
 
 /// Shared shape of the two "give me a hosted Stripe URL" calls.
 fn post_for_url(url: &str, body: &serde_json::Value) -> Result<String, VerifyError> {
+    check_cleartext_origin(url)?;
     let client = reqwest::blocking::Client::builder()
         .user_agent("shogun/1.0")
         .timeout(Duration::from_secs(20))
@@ -283,6 +308,27 @@ mod tests {
             parse_url_response(&serde_json::json!({ "ok": false, "error": "billing_not_configured" })),
             Err(VerifyError::Server("billing_not_configured".to_string()))
         );
+    }
+
+    #[test]
+    fn cleartext_origins_are_refused_except_localhost() {
+        // The licence key is a bearer credential: a plain-http SHOGUN_LICENSE_API override to a
+        // remote host must be refused before any request is built. Localhost stays allowed —
+        // the dev origin pinned by `builds_the_endpoint_without_doubling_slashes`.
+        assert!(check_cleartext_origin("https://syogun.com").is_ok());
+        assert!(check_cleartext_origin("http://localhost:3000").is_ok());
+        assert!(check_cleartext_origin("http://127.0.0.1:3000/api/stripe/portal").is_ok());
+        assert!(check_cleartext_origin("http://[::1]:3000").is_ok());
+        assert!(check_cleartext_origin("http://staging.example.com").is_err());
+        assert!(check_cleartext_origin("http://localhost.evil.example").is_err());
+
+        // …and the public entry points refuse without touching the network (no server, instant).
+        let err = verify("http://staging.example.com", "shogun-KEY", "dev", "1.0")
+            .expect_err("plain-http remote origin must be refused");
+        assert!(err.message().contains("https"), "{}", err.message());
+        let err = portal_url("http://staging.example.com", "shogun-KEY")
+            .expect_err("plain-http remote origin must be refused");
+        assert!(err.message().contains("https"), "{}", err.message());
     }
 
     #[test]

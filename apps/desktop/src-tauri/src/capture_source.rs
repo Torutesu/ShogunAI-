@@ -404,7 +404,10 @@ mod mac {
                                 // Gmail thread, the context comes from the full email body
                                 // (PayloadSource::Fetched); otherwise it falls back to the
                                 // captured on-screen fragment (PayloadSource::OnScreenOnly).
-                                let ctx = db.build_reply_context_for_screen(
+                                // Built through the cache so the pack passes the invalidation
+                                // generation gate (a sync landing mid-build must win).
+                                let ctx = cache.build_for_screen(
+                                    &db,
                                     &key,
                                     win_title.as_deref().unwrap_or(""),
                                 );
@@ -418,7 +421,6 @@ mod mac {
                                     ctx.build_ms,
                                     ctx.turns.len()
                                 );
-                                cache.put(ctx);
                                 warm_for = Some(key);
                             }
                         }
