@@ -7,7 +7,7 @@ Source branch: `mikel/meeting-recap-transcript` at `0083ec9`
 
 - [x] Preserve original checkout, stash, and uncommitted onboarding work.
 - [x] Rebuild on current `main`; adapt the 43 source commits to the diverged current architecture.
-- [ ] Make `mikel/meeting-recap-transcript` an ancestor of the integration branch so every source commit is retained in PR history.
+- [x] Make `mikel/meeting-recap-transcript` an ancestor of the integration branch so every source commit is retained in PR history.
 - [x] Maintain an explicit disposition for every source commit; adapt conflicts to current `main`, never silently exclude them.
 - [x] Keep current `main` security, privacy, entitlement, L3 approval, MCP, connector, and meeting behavior; change Visual Recall retention only per explicit user direction.
 - [x] No audio files, transcript logs, raw captured text logs, plaintext secrets, or unconfirmed external sends.
