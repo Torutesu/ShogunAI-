@@ -18,7 +18,10 @@ pub struct UserConfigState {
 impl UserConfigState {
     /// 現在の設定から directives 文字列を得る。
     pub fn directives(&self) -> String {
-        self.cfg.read().map(|c| render_directives(&c)).unwrap_or_default()
+        self.cfg
+            .read()
+            .map(|c| render_directives(&c))
+            .unwrap_or_default()
     }
 }
 
@@ -80,7 +83,11 @@ pub struct SectionErrorDto {
 
 impl From<SectionError> for SectionErrorDto {
     fn from(e: SectionError) -> Self {
-        SectionErrorDto { section: e.section, line: e.line, message: e.message }
+        SectionErrorDto {
+            section: e.section,
+            line: e.line,
+            message: e.message,
+        }
     }
 }
 
@@ -102,7 +109,13 @@ pub fn get_user_config_status() -> Result<UserConfigStatus, String> {
         let ok = r.ok;
         (r, ok)
     } else {
-        (ParseReport { ok: true, section_errors: vec![] }, true)
+        (
+            ParseReport {
+                ok: true,
+                section_errors: vec![],
+            },
+            true,
+        )
     };
     Ok(UserConfigStatus {
         exists,
@@ -125,9 +138,7 @@ pub fn open_shougun_md() -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn regenerate_shougun_md(
-    state: tauri::State<'_, UserConfigState>,
-) -> Result<(), String> {
+pub fn regenerate_shougun_md(state: tauri::State<'_, UserConfigState>) -> Result<(), String> {
     let path = resolved_path()?;
     let sample = shogun_core::user_config::sample_markdown();
     std::fs::write(&path, &sample).map_err(|e| e.to_string())?;

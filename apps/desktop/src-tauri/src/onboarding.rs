@@ -57,7 +57,12 @@ pub mod state {
 
     impl Default for OnboardingState {
         fn default() -> Self {
-            Self { completed: false, step: first_step(), plan: None, trial_started_at: None }
+            Self {
+                completed: false,
+                step: first_step(),
+                plan: None,
+                trial_started_at: None,
+            }
         }
     }
 
@@ -78,9 +83,19 @@ pub mod state {
         // completed=false, and losing the stamp would hand a fresh 7 days); otherwise the first
         // write that completes onboarding stamps it.
         let trial_started_at =
-            prev.trial_started_at.or(if completed { Some(now_unix) } else { None });
-        let step = if STEPS.contains(&step.as_str()) { step } else { first_step() };
-        OnboardingState { completed, step, plan, trial_started_at }
+            prev.trial_started_at
+                .or(if completed { Some(now_unix) } else { None });
+        let step = if STEPS.contains(&step.as_str()) {
+            step
+        } else {
+            first_step()
+        };
+        OnboardingState {
+            completed,
+            step,
+            plan,
+            trial_started_at,
+        }
     }
 
     /// On-disk format, versioned like `shortcuts.json` so a future default change can migrate once.
@@ -204,7 +219,12 @@ pub mod state {
 
         #[test]
         fn parse_treats_garbage_and_untouched_legacy_as_first_run() {
-            for text in ["", "not json", r#"{"completed":false,"skipped":false}"#, "{}"] {
+            for text in [
+                "",
+                "not json",
+                r#"{"completed":false,"skipped":false}"#,
+                "{}",
+            ] {
                 assert_eq!(parse(text), OnboardingState::default(), "{text:?}");
             }
         }
@@ -212,7 +232,10 @@ pub mod state {
         #[test]
         fn roundtrip_through_the_versioned_file() {
             let s = done(Some(42));
-            let file = OnboardingFile { version: ONBOARDING_VERSION, state: s.clone() };
+            let file = OnboardingFile {
+                version: ONBOARDING_VERSION,
+                state: s.clone(),
+            };
             let json = serde_json::to_string(&file).unwrap();
             assert_eq!(parse(&json), s);
         }
@@ -245,14 +268,21 @@ pub mod mac {
     pub struct Store(pub Mutex<OnboardingState>);
 
     fn config_path(app: &AppHandle) -> Option<PathBuf> {
-        app.path().app_data_dir().ok().map(|d| d.join("onboarding.json"))
+        app.path()
+            .app_data_dir()
+            .ok()
+            .map(|d| d.join("onboarding.json"))
     }
 
     /// Load persisted state, migrating the legacy #46 disposition and defaulting to first-run when
     /// the file is absent or unreadable (see [`state::parse`]).
     pub fn load(app: &AppHandle) -> OnboardingState {
-        let Some(p) = config_path(app) else { return OnboardingState::default() };
-        let Ok(text) = std::fs::read_to_string(p) else { return OnboardingState::default() };
+        let Some(p) = config_path(app) else {
+            return OnboardingState::default();
+        };
+        let Ok(text) = std::fs::read_to_string(p) else {
+            return OnboardingState::default();
+        };
         state::parse(&text)
     }
 
@@ -261,7 +291,10 @@ pub mod mac {
         if let Some(dir) = p.parent() {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
-        let file = OnboardingFile { version: ONBOARDING_VERSION, state: s.clone() };
+        let file = OnboardingFile {
+            version: ONBOARDING_VERSION,
+            state: s.clone(),
+        };
         let json = serde_json::to_string_pretty(&file).map_err(|e| e.to_string())?;
         std::fs::write(&p, json).map_err(|e| format!("onboarding save failed: {e}"))
     }

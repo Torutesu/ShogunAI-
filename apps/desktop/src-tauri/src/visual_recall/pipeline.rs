@@ -36,10 +36,17 @@ pub fn app_prefers_ocr(bundle_or_app: &str) -> bool {
 }
 
 /// AX tree returned text but likely missed canvas/GPU document body (Screenpipe thin heuristic).
-pub fn a11y_content_is_thin(window_title: Option<&str>, ax_text_len: usize, meeting_active: bool) -> bool {
+pub fn a11y_content_is_thin(
+    window_title: Option<&str>,
+    ax_text_len: usize,
+    meeting_active: bool,
+) -> bool {
     if let Some(win) = window_title {
         let win_lower = win.to_lowercase();
-        if CANVAS_APP_PATTERNS.iter().any(|pat| win_lower.contains(pat)) {
+        if CANVAS_APP_PATTERNS
+            .iter()
+            .any(|pat| win_lower.contains(pat))
+        {
             return true;
         }
         if meeting_active
@@ -144,12 +151,24 @@ mod tests {
 
     #[test]
     fn terminals_always_want_ocr() {
-        assert!(wants_ocr("com.github.wez.wezterm", None, false, 5000, false));
+        assert!(wants_ocr(
+            "com.github.wez.wezterm",
+            None,
+            false,
+            5000,
+            false
+        ));
     }
 
     #[test]
     fn rich_ax_skips_ocr() {
-        assert!(!wants_ocr("com.apple.Safari", Some("Inbox"), false, 500, false));
+        assert!(!wants_ocr(
+            "com.apple.Safari",
+            Some("Inbox"),
+            false,
+            500,
+            false
+        ));
     }
 
     #[test]
@@ -167,16 +186,40 @@ mod tests {
     fn meeting_relaxes_thin_threshold() {
         // Keep the window and AX text fixed: a meeting alone raises the thin
         // threshold from 100 to 400 characters.
-        assert!(!wants_ocr("com.apple.Safari", Some("Inbox"), false, 250, false));
-        assert!(wants_ocr("com.apple.Safari", Some("Inbox"), false, 250, true));
+        assert!(!wants_ocr(
+            "com.apple.Safari",
+            Some("Inbox"),
+            false,
+            250,
+            false
+        ));
+        assert!(wants_ocr(
+            "com.apple.Safari",
+            Some("Inbox"),
+            false,
+            250,
+            true
+        ));
         // The higher threshold is still bounded; it does not OCR every meeting window.
-        assert!(!wants_ocr("com.apple.Safari", Some("Inbox"), false, 500, true));
+        assert!(!wants_ocr(
+            "com.apple.Safari",
+            Some("Inbox"),
+            false,
+            500,
+            true
+        ));
     }
 
     #[test]
     fn meeting_titles_trigger_ocr_over_a_full_ax_buffer() {
         // At 500 chars the length rule is false, proving the title rule itself triggers OCR.
-        assert!(wants_ocr("com.apple.Safari", Some("Slide deck"), false, 500, true));
+        assert!(wants_ocr(
+            "com.apple.Safari",
+            Some("Slide deck"),
+            false,
+            500,
+            true
+        ));
         assert!(wants_ocr(
             "com.apple.Safari",
             Some("Q3 presentation"),
@@ -184,6 +227,12 @@ mod tests {
             500,
             true
         ));
-        assert!(!wants_ocr("com.apple.Safari", Some("Slide deck"), false, 500, false));
+        assert!(!wants_ocr(
+            "com.apple.Safari",
+            Some("Slide deck"),
+            false,
+            500,
+            false
+        ));
     }
 }

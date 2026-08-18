@@ -16,18 +16,18 @@ use core_graphics::geometry::{CGPoint, CGRect, CGSize};
 use core_graphics::image::CGImage;
 use core_graphics::window::{
     kCGNullWindowID, kCGWindowImageBoundsIgnoreFraming, kCGWindowListExcludeDesktopElements,
-    kCGWindowListOptionIncludingWindow, kCGWindowListOptionOnScreenOnly, CGWindowListCopyWindowInfo,
-    CGWindowListCreateImage,
+    kCGWindowListOptionIncludingWindow, kCGWindowListOptionOnScreenOnly,
+    CGWindowListCopyWindowInfo, CGWindowListCreateImage,
 };
 use foreign_types::ForeignType;
 use image::codecs::jpeg::JpegEncoder;
 use image::{DynamicImage, GenericImageView, ImageBuffer, ImageEncoder};
-use objc2::AnyThread;
 use objc2::runtime::AnyObject;
+use objc2::AnyThread;
 use objc2_core_graphics::CGImage as VisionImage;
 use objc2_foundation::{NSArray, NSDictionary};
 use objc2_vision::{
-    VNImageRequestHandler, VNRecognizedTextObservation, VNRecognizeTextRequest, VNRequest,
+    VNImageRequestHandler, VNRecognizeTextRequest, VNRecognizedTextObservation, VNRequest,
     VNRequestTextRecognitionLevel,
 };
 
@@ -69,7 +69,9 @@ pub fn focused_window_id(pid: i32) -> Option<u32> {
     }
     // SAFETY: list is a valid CFArray from the create rule above.
     let array = unsafe {
-        CFArray::<CFDictionary<CFString, *const std::ffi::c_void>>::wrap_under_create_rule(list as _)
+        CFArray::<CFDictionary<CFString, *const std::ffi::c_void>>::wrap_under_create_rule(
+            list as _,
+        )
     };
     for i in 0..array.len() {
         let dict = array.get(i)?;
@@ -87,7 +89,9 @@ pub fn focused_window_id(pid: i32) -> Option<u32> {
         if layer != 0 {
             continue;
         }
-        let wid = dict.find(kCGWindowNumber()).and_then(|v| cf_number_u32(&v))?;
+        let wid = dict
+            .find(kCGWindowNumber())
+            .and_then(|v| cf_number_u32(&v))?;
         return Some(wid);
     }
     None
@@ -134,10 +138,18 @@ pub fn ocr_focused_window_gated(
     meeting_active: bool,
 ) -> OcrGatedResult {
     let Some((cg, frame)) = capture_focused_window(pid) else {
-        return OcrGatedResult { outcome: pipeline::OcrOutcome::Skipped, frame: None };
+        return OcrGatedResult {
+            outcome: pipeline::OcrOutcome::Skipped,
+            frame: None,
+        };
     };
-    let trigger =
-        pipeline::wants_ocr(bundle_or_app, window_title, ax_empty, ax_text_len, meeting_active);
+    let trigger = pipeline::wants_ocr(
+        bundle_or_app,
+        window_title,
+        ax_empty,
+        ax_text_len,
+        meeting_active,
+    );
     let (outcome, fresh_vision) = pipeline.ocr_gated_window(&frame, app_key, trigger, |_, crop| {
         let rect = CGRect::new(
             &CGPoint::new(f64::from(crop.x), f64::from(crop.y)),
@@ -149,8 +161,15 @@ pub fn ocr_focused_window_gated(
             .map(|p| p.text)
     });
     let store_frame = fresh_vision && matches!(outcome, pipeline::OcrOutcome::Text(_));
-    let jpeg_frame = if store_frame { encode_frame_jpeg(&frame) } else { None };
-    OcrGatedResult { outcome, frame: jpeg_frame }
+    let jpeg_frame = if store_frame {
+        encode_frame_jpeg(&frame)
+    } else {
+        None
+    };
+    OcrGatedResult {
+        outcome,
+        frame: jpeg_frame,
+    }
 }
 
 /// Encode the full captured window as JPEG (quality [`FRAME_JPEG_QUALITY`]).
@@ -167,7 +186,11 @@ pub fn encode_frame_jpeg(frame: &DynamicImage) -> Option<OcrFrame> {
     if buf.is_empty() {
         return None;
     }
-    Some(OcrFrame { jpeg: buf, width, height })
+    Some(OcrFrame {
+        jpeg: buf,
+        width,
+        height,
+    })
 }
 
 /// One Vision pass. Confidence and line count are computed and logged during the pass (see
@@ -361,7 +384,8 @@ mod tests {
 
     #[test]
     fn jpeg_encoder_produces_bytes() {
-        let img = DynamicImage::ImageRgba8(RgbaImage::from_pixel(4, 4, image::Rgba([10, 20, 30, 255])));
+        let img =
+            DynamicImage::ImageRgba8(RgbaImage::from_pixel(4, 4, image::Rgba([10, 20, 30, 255])));
         let frame = encode_frame_jpeg(&img).expect("jpeg");
         assert_eq!(frame.width, 4);
         assert_eq!(frame.height, 4);

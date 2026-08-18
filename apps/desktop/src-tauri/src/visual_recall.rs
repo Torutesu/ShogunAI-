@@ -35,7 +35,10 @@ pub mod mac {
         let disk = SETTINGS_PATH
             .lock()
             .ok()
-            .and_then(|g| g.as_ref().map(|p| shogun_core::capture::visual_recall::load_settings(p)))
+            .and_then(|g| {
+                g.as_ref()
+                    .map(|p| shogun_core::capture::visual_recall::load_settings(p))
+            })
             .unwrap_or_default();
         if let Ok(mut live) = shared.write() {
             *live = disk.clone();
@@ -57,13 +60,19 @@ pub mod mac {
         }
         eprintln!(
             "[visual_recall] screen OCR {}",
-            if settings.enabled { "enabled" } else { "off (default)" }
+            if settings.enabled {
+                "enabled"
+            } else {
+                "off (default)"
+            }
         );
         shared
     }
 
     fn save(app: &tauri::AppHandle, settings: &Settings) -> Result<(), String> {
-        let Some(p) = settings_path(app) else { return Ok(()) };
+        let Some(p) = settings_path(app) else {
+            return Ok(());
+        };
         shogun_core::capture::visual_recall::save_settings(&p, settings)
     }
 
@@ -83,16 +92,24 @@ pub mod mac {
         db: tauri::State<'_, shogun_core::daemon::Db>,
     ) -> Result<(), String> {
         let candidate = {
-            let Ok(g) = LANE.lock() else { return Err("busy".into()) };
-            let Some(shared) = g.as_ref() else { return Err("not ready".into()) };
+            let Ok(g) = LANE.lock() else {
+                return Err("busy".into());
+            };
+            let Some(shared) = g.as_ref() else {
+                return Err("not ready".into());
+            };
             let current = shared.read().map_err(|_| "busy".to_string())?;
             let mut candidate = current.clone();
             candidate.enabled = enabled;
             candidate
         };
         save(&app, &candidate)?;
-        let Ok(g) = LANE.lock() else { return Err("busy".into()) };
-        let Some(shared) = g.as_ref() else { return Err("not ready".into()) };
+        let Ok(g) = LANE.lock() else {
+            return Err("busy".into());
+        };
+        let Some(shared) = g.as_ref() else {
+            return Err("not ready".into());
+        };
         let mut live = shared.write().map_err(|_| "busy".to_string())?;
         *live = candidate;
         if !enabled {
@@ -131,7 +148,9 @@ pub mod mac {
     }
 
     #[tauri::command]
-    pub fn get_visual_recall_status(db: tauri::State<'_, shogun_core::daemon::Db>) -> VisualRecallStatus {
+    pub fn get_visual_recall_status(
+        db: tauri::State<'_, shogun_core::daemon::Db>,
+    ) -> VisualRecallStatus {
         const PREVIEW_CHARS: usize = 140;
         let enabled = get_visual_recall_settings().enabled;
         let frame_stats = db.screen_frame_stats();
@@ -212,7 +231,9 @@ pub mod mac {
         frame_id: i64,
         db: tauri::State<'_, shogun_core::daemon::Db>,
     ) -> Result<FrameImage, String> {
-        let rec = db.get_screen_frame(frame_id).ok_or_else(|| "not found".to_string())?;
+        let rec = db
+            .get_screen_frame(frame_id)
+            .ok_or_else(|| "not found".to_string())?;
         let s = rec.summary;
         Ok(FrameImage {
             id: s.id,
@@ -246,7 +267,8 @@ pub mod mac {
     }
 
     fn base64_encode(bytes: &[u8]) -> String {
-        const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        const TABLE: &[u8; 64] =
+            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
         let mut out = String::new();
         for chunk in bytes.chunks(3) {
             let b0 = chunk[0];

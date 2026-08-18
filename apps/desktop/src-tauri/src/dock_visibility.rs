@@ -87,7 +87,11 @@ pub mod mac {
         apply_activation_policy(settings.visible);
         eprintln!(
             "[dock] effective={} (activation policy applied)",
-            if settings.visible { "visible" } else { "hidden" }
+            if settings.visible {
+                "visible"
+            } else {
+                "hidden"
+            }
         );
     }
 

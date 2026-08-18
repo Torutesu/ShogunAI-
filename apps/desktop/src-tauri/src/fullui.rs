@@ -288,9 +288,11 @@ pub mod mac {
         // as a `State` parameter turned that survivable condition into a raw Tauri error in the
         // window; say what actually happened instead.
         let Some(db) = app.try_state::<Db>() else {
-            return Err("Capture isn't running — the memory store couldn't be opened, so there's \
+            return Err(
+                "Capture isn't running — the memory store couldn't be opened, so there's \
                         nothing to show yet. Check the app log for the reason."
-                .to_string());
+                    .to_string(),
+            );
         };
         let now = db.now_ms();
         let metrics = app.state::<crate::metrics::SloRegister>();
@@ -411,7 +413,11 @@ pub mod mac {
                     time: clock(s.start_ms),
                     // FR-MB-06: the Updated mark travels in the title (the wire type mirrors
                     // types.ts and stays unchanged).
-                    title: if s.updated { format!("{} (updated)", s.title) } else { s.title.clone() },
+                    title: if s.updated {
+                        format!("{} (updated)", s.title)
+                    } else {
+                        s.title.clone()
+                    },
                     detail: String::new(),
                 })
                 .collect(),
@@ -432,24 +438,32 @@ pub mod mac {
             key: "coverage",
             label: "Coverage",
             value: format!("{hours}h / 24h captured"),
-            detail: (hours < 24).then(|| {
-                format!("{} hour(s) with nothing recorded.", 24 - hours)
+            detail: (hours < 24).then(|| format!("{} hour(s) with nothing recorded.", 24 - hours)),
+            fix: Some(FixLink {
+                label: "Open capture rules".to_string(),
+                target: "settings",
             }),
-            fix: Some(FixLink { label: "Open capture rules".to_string(), target: "settings" }),
         });
 
         // Yield — the funnel from raw events to what is actually being tracked. `state_changes`
         // is the nightly cycle's own count of what it promoted; `tracked` is what survives now.
         let d = crate::dream::mac::status_view(db);
         let events = db.events_count(since, now);
-        let tracked = db.commitment_rows().iter().filter(|c| c.status != "done" && c.status != "cancelled").count()
+        let tracked = db
+            .commitment_rows()
+            .iter()
+            .filter(|c| c.status != "done" && c.status != "cancelled")
+            .count()
             + db.open_loop_rows().len();
         cards.push(HealthCard {
             key: "yield",
             label: "Yield",
             value: format!("{events} → {} → {tracked} tracked", d.state_changes),
             detail: Some("events → candidates → tracked, over 24h".to_string()),
-            fix: Some(FixLink { label: "Nightly review".to_string(), target: "activity" }),
+            fix: Some(FixLink {
+                label: "Nightly review".to_string(),
+                target: "activity",
+            }),
         });
 
         // Grounding — the share of answers that cited a source. Absent until an answer exists,
@@ -460,7 +474,10 @@ pub mod mac {
                 label: "Grounding",
                 value: format!("{pct}% of answers cited a source"),
                 detail: Some("This run.".to_string()),
-                fix: Some(FixLink { label: "Widen the search window".to_string(), target: "settings" }),
+                fix: Some(FixLink {
+                    label: "Widen the search window".to_string(),
+                    target: "settings",
+                }),
             });
         }
 
@@ -473,7 +490,10 @@ pub mod mac {
             } else {
                 "Running locally; nothing was sent.".to_string()
             }),
-            fix: Some(FixLink { label: "Open Traceability".to_string(), target: "trace" }),
+            fix: Some(FixLink {
+                label: "Open Traceability".to_string(),
+                target: "trace",
+            }),
         });
 
         HealthView {
@@ -504,7 +524,9 @@ pub mod mac {
         let statuses = match connectors {
             None => Vec::new(),
             Some(c) => {
-                let rt = c.0.lock().map_err(|_| "runtime lock poisoned".to_string())?;
+                let rt =
+                    c.0.lock()
+                        .map_err(|_| "runtime lock poisoned".to_string())?;
                 rt.statuses(now)
             }
         };
@@ -513,9 +535,17 @@ pub mod mac {
             .map(|s| SourceRow {
                 id: s.source.to_string(),
                 name: display_name(s.source).to_string(),
-                mark: display_name(s.source).chars().next().unwrap_or('?').to_string(),
+                mark: display_name(s.source)
+                    .chars()
+                    .next()
+                    .unwrap_or('?')
+                    .to_string(),
                 tint: "var(--accent)",
-                scope: if s.has_endpoint { "read".to_string() } else { "not available yet".to_string() },
+                scope: if s.has_endpoint {
+                    "read".to_string()
+                } else {
+                    "not available yet".to_string()
+                },
                 freshness: freshness(s.last_sync_ms, now),
                 health: match format!("{:?}", s.state).as_str() {
                     x if x.contains("Connected") => "ok",
@@ -532,16 +562,17 @@ pub mod mac {
         // What SHOGUN refuses to read. Sourced from the live policy rather than restated here —
         // a screen claiming "password managers are excluded" while the policy disagreed would be
         // worse than saying nothing at all.
-        let mut exclusions: Vec<ExclusionRow> = shogun_core::capture::exclusion::default_categories()
-            .into_iter()
-            .map(|(title, n)| ExclusionRow {
-                id: title.to_string(),
-                title: title.to_string(),
-                detail: format!("{n} always excluded — this can't be turned off."),
-                locked: true,
-                enabled: true,
-            })
-            .collect();
+        let mut exclusions: Vec<ExclusionRow> =
+            shogun_core::capture::exclusion::default_categories()
+                .into_iter()
+                .map(|(title, n)| ExclusionRow {
+                    id: title.to_string(),
+                    title: title.to_string(),
+                    detail: format!("{n} always excluded — this can't be turned off."),
+                    locked: true,
+                    enabled: true,
+                })
+                .collect();
         // Anything the user layered on top of the defaults.
         if let Some(policy) = crate::exclusions::mac::shared() {
             if let Ok(p) = policy.lock() {
@@ -584,10 +615,7 @@ pub mod mac {
         let (freshness, health) = match latest {
             Some(p) => {
                 let label = freshness(Some(p.ts), now);
-                let scope_hint = p
-                    .app_bundle_id
-                    .as_deref()
-                    .unwrap_or("unknown app");
+                let scope_hint = p.app_bundle_id.as_deref().unwrap_or("unknown app");
                 let detail = format!("{scope_hint} · {} chars", p.content_len);
                 (format!("{label} · {detail}"), "ok")
             }
@@ -636,7 +664,9 @@ pub mod mac {
                 // hold it only long enough to copy the raw previews out — the formatting below
                 // (format!/matches!) then runs with the lock already released.
                 let raw: Vec<_> = {
-                    let q = a.0.lock().map_err(|_| "approval queue lock poisoned".to_string())?;
+                    let q =
+                        a.0.lock()
+                            .map_err(|_| "approval queue lock poisoned".to_string())?;
                     // Clone the preview OUT under the lock (Preview: Clone) so `raw` owns its data —
                     // `preview()` returns a reference into the queue, which cannot outlive the guard
                     // dropped at the end of this block.
@@ -668,7 +698,11 @@ pub mod mac {
             // needs to render "nothing has run", and it must not be faked.
             runs: Vec::new(),
             nightly: NightlyCycle {
-                finished_at: if d.last_ended_at > 0 { clock(d.last_ended_at) } else { "—".to_string() },
+                finished_at: if d.last_ended_at > 0 {
+                    clock(d.last_ended_at)
+                } else {
+                    "—".to_string()
+                },
                 events_read: d.events_processed,
                 updates: d.state_changes,
                 chunks_sent: d.chunks_sent,
@@ -689,7 +723,11 @@ pub mod mac {
             .map(|(i, e)| EgressRow {
                 id: format!("{i}-{}", e.ts),
                 time: clock(e.ts),
-                route: if e.third_party { "third_party" } else { "direct" },
+                route: if e.third_party {
+                    "third_party"
+                } else {
+                    "direct"
+                },
                 purpose: e.purpose.clone(),
                 destination: e.destination.clone(),
                 // Digest only — the body is never logged, which is what makes this screen safe to
@@ -700,7 +738,10 @@ pub mod mac {
             .collect();
         let third_party_count = rows.iter().filter(|r| r.route == "third_party").count();
         let _ = now;
-        TraceView { rows, third_party_count }
+        TraceView {
+            rows,
+            third_party_count,
+        }
     }
 
     fn display_name(source: &str) -> &str {

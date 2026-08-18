@@ -78,7 +78,9 @@ mod mac {
 
     fn batch_credential() -> Option<BatchCredential> {
         use shogun_core::llm::batch_route::{batch_route, BatchRoute, DEV_DIRECT_ENV};
-        use shogun_mcp::plan_source::{billing_json_path, billing_state_of, parse_billing_snapshot};
+        use shogun_mcp::plan_source::{
+            billing_json_path, billing_state_of, parse_billing_snapshot,
+        };
         match batch_route(std::env::var(DEV_DIRECT_ENV).ok().as_deref()) {
             BatchRoute::Relay => {
                 let text = std::fs::read_to_string(billing_json_path()?).ok()?;
@@ -122,15 +124,24 @@ mod mac {
         let has_note = notes.as_deref().map(str::is_empty) == Some(false);
         if transcript.is_empty() && !has_note {
             // Nothing to summarise. The degraded Recap already says what little can be said.
-            eprintln!("[meeting] nothing to summarise for session {session_id}; keeping degraded recap");
+            eprintln!(
+                "[meeting] nothing to summarise for session {session_id}; keeping degraded recap"
+            );
             return;
         }
 
         let lines: Vec<TranscriptLine> = transcript
             .iter()
-            .map(|(speaker, text)| TranscriptLine { speaker: speaker.as_deref(), text })
+            .map(|(speaker, text)| TranscriptLine {
+                speaker: speaker.as_deref(),
+                text,
+            })
             .collect();
-        let prompt = minutes::build_prompt(&lines, notes.as_deref(), language.whisper_code().unwrap_or("en"));
+        let prompt = minutes::build_prompt(
+            &lines,
+            notes.as_deref(),
+            language.whisper_code().unwrap_or("en"),
+        );
 
         // The Batch credential (licence token → relay; dev key → direct in debug). Absent →
         // keep the degraded Recap (invariant 5 / FR-MT-19).
@@ -172,7 +183,9 @@ mod mac {
 
         let (Ok(transport), Ok(rt)) = (
             ReqwestTransport::new(),
-            tokio::runtime::Builder::new_current_thread().enable_all().build(),
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build(),
         ) else {
             eprintln!("[meeting] batch transport/runtime unavailable; keeping degraded recap");
             return None;
@@ -186,37 +199,36 @@ mod mac {
             chunk: prompt,
         }];
 
-        let (run_result, model_label) =
-            match credential {
-                BatchCredential::Relay(token) => {
-                    // Shipping path: the licence token is the bearer; the relay picks the model.
-                    let client = RelayBatchClient::new(
-                        transport,
-                        db.traceability_sink(),
-                        LicenseBearer::new(Secret::new(token)),
-                        RelayConfig::new(ModelClass::Summarize),
-                    );
-                    let r = rt.block_on(client.run(&items, MAX_POLLS, || async {
-                        tokio::time::sleep(POLL_INTERVAL).await
-                    }));
-                    (r, RECAP_RELAY_MODEL_LABEL)
-                }
-                // Dev-only direct path (E-38): the slot holds a raw Anthropic key. The variant
-                // does not exist in a release build, so this arm cannot ship.
-                #[cfg(debug_assertions)]
-                BatchCredential::Direct(key) => {
-                    let client = shogun_core::llm::anthropic::AnthropicBatchClient::new(
-                        transport,
-                        db.traceability_sink(),
-                        shogun_core::llm::SelectKkKey::new(Secret::new(key)),
-                        shogun_core::llm::anthropic::AnthropicConfig::new(RECAP_MODEL),
-                    );
-                    let r = rt.block_on(client.run(&items, MAX_POLLS, || async {
-                        tokio::time::sleep(POLL_INTERVAL).await
-                    }));
-                    (r, RECAP_MODEL)
-                }
-            };
+        let (run_result, model_label) = match credential {
+            BatchCredential::Relay(token) => {
+                // Shipping path: the licence token is the bearer; the relay picks the model.
+                let client = RelayBatchClient::new(
+                    transport,
+                    db.traceability_sink(),
+                    LicenseBearer::new(Secret::new(token)),
+                    RelayConfig::new(ModelClass::Summarize),
+                );
+                let r = rt.block_on(client.run(&items, MAX_POLLS, || async {
+                    tokio::time::sleep(POLL_INTERVAL).await
+                }));
+                (r, RECAP_RELAY_MODEL_LABEL)
+            }
+            // Dev-only direct path (E-38): the slot holds a raw Anthropic key. The variant
+            // does not exist in a release build, so this arm cannot ship.
+            #[cfg(debug_assertions)]
+            BatchCredential::Direct(key) => {
+                let client = shogun_core::llm::anthropic::AnthropicBatchClient::new(
+                    transport,
+                    db.traceability_sink(),
+                    shogun_core::llm::SelectKkKey::new(Secret::new(key)),
+                    shogun_core::llm::anthropic::AnthropicConfig::new(RECAP_MODEL),
+                );
+                let r = rt.block_on(client.run(&items, MAX_POLLS, || async {
+                    tokio::time::sleep(POLL_INTERVAL).await
+                }));
+                (r, RECAP_MODEL)
+            }
+        };
 
         let results = match run_result {
             Ok(r) => r,

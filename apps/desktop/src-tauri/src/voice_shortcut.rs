@@ -340,10 +340,7 @@ fn worker_loop(rx: Receiver<Cmd>) {
                         let mods = current_modifier_flags();
                         if (mods & combo.modifiers) != combo.modifiers {
                             HOLDING.store(false, Ordering::SeqCst);
-                            eprintln!(
-                                "[voice] hold release (mod poll mods={})",
-                                mods_label(mods)
-                            );
+                            eprintln!("[voice] hold release (mod poll mods={})", mods_label(mods));
                             hold_started = None;
                             let app = app.clone();
                             timeout_app = None;

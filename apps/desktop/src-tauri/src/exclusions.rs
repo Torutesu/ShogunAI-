@@ -55,12 +55,19 @@ pub mod mac {
     /// the policy is installed (startup only): an empty step is honest, a fabricated one is not.
     #[tauri::command]
     pub fn exclusion_categories() -> Vec<ExclusionCategory> {
-        let Some(lock) = shared() else { return Vec::new() };
-        let Ok(policy) = lock.lock() else { return Vec::new() };
+        let Some(lock) = shared() else {
+            return Vec::new();
+        };
+        let Ok(policy) = lock.lock() else {
+            return Vec::new();
+        };
         policy
             .category_counts()
             .into_iter()
-            .map(|(id, count)| ExclusionCategory { id: id.to_string(), count })
+            .map(|(id, count)| ExclusionCategory {
+                id: id.to_string(),
+                count,
+            })
             .collect()
     }
 
@@ -74,14 +81,21 @@ pub mod mac {
 
     fn store_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
         use tauri::Manager;
-        app.path().app_data_dir().ok().map(|d| d.join("exclusions.json"))
+        app.path()
+            .app_data_dir()
+            .ok()
+            .map(|d| d.join("exclusions.json"))
     }
 
     /// Load the user's exclusions, layered onto the non-removable defaults.
     pub fn load(app: &tauri::AppHandle) -> ExclusionPolicy {
         let mut policy = ExclusionPolicy::new();
-        let Some(path) = store_path(app) else { return policy };
-        let Ok(text) = std::fs::read_to_string(path) else { return policy };
+        let Some(path) = store_path(app) else {
+            return policy;
+        };
+        let Ok(text) = std::fs::read_to_string(path) else {
+            return policy;
+        };
         if let Ok(apps) = serde_json::from_str::<Vec<String>>(&text) {
             for a in apps {
                 policy.add_app(a);

@@ -38,6 +38,7 @@ pub mod mac {
     const WINDOW_LABEL: &str = "voice";
     const VOICE_EDIT_KEY_ACCOUNT: &str = "voice-edit-groq-byok";
     const LEGACY_GROQ_KEY_ACCOUNT: &str = "groq-byok";
+    const VOICE_EDIT_TRACE_PURPOSE: &str = "voice_dictation_cleanup";
     const VOICE_EDIT_MODEL: &str = "openai/gpt-oss-120b";
     const VOICE_EDIT_TIMEOUT: Duration = Duration::from_millis(1500);
 
@@ -289,7 +290,11 @@ pub mod mac {
         match block_on_timeout(
             &runtime,
             VOICE_EDIT_TIMEOUT,
-            client.complete_split(crate::voice_editor::SYSTEM_PROMPT, &user),
+            client.complete_split_with_purpose(
+                crate::voice_editor::SYSTEM_PROMPT,
+                &user,
+                VOICE_EDIT_TRACE_PURPOSE,
+            ),
         ) {
             Ok(Ok(edited))
                 if crate::voice_editor::output_is_valid_with_protected(
@@ -1135,11 +1140,26 @@ pub mod mac {
 
     #[tauri::command]
     pub fn clear_voice_edit_key() -> Result<(), String> {
-        match keychain_store::delete_generic_secret(VOICE_EDIT_KEY_ACCOUNT) {
-            Ok(()) => Ok(()),
-            Err(error) if error.code() == -25300 /* errSecItemNotFound */ => Ok(()),
-            Err(error) => Err(error.to_string()),
+        clear_voice_edit_accounts(keychain_store::delete_generic_secret, |error| {
+            error.code() == -25300 /* errSecItemNotFound */
+        })
+        .map_err(|error| error.to_string())
+    }
+
+    /// Revoke both account names. Older installs can still have the legacy account, which remains
+    /// a valid background fallback until it is deleted too.
+    fn clear_voice_edit_accounts<E>(
+        mut delete: impl FnMut(&str) -> Result<(), E>,
+        is_not_found: impl Fn(&E) -> bool,
+    ) -> Result<(), E> {
+        for account in [VOICE_EDIT_KEY_ACCOUNT, LEGACY_GROQ_KEY_ACCOUNT] {
+            if let Err(error) = delete(account) {
+                if !is_not_found(&error) {
+                    return Err(error);
+                }
+            }
         }
+        Ok(())
     }
 
     #[tauri::command]
@@ -1494,6 +1514,40 @@ pub mod mac {
                 .expect("test runtime");
             let result = block_on_timeout(&runtime, Duration::from_millis(10), async { 7 });
             assert_eq!(result.ok(), Some(7));
+        }
+
+        #[test]
+        fn clear_voice_edit_accounts_revokes_current_and_legacy_keys() {
+            let mut deleted = Vec::new();
+            clear_voice_edit_accounts(
+                |account| {
+                    deleted.push(account.to_string());
+                    Ok::<_, i32>(())
+                },
+                |_| false,
+            )
+            .expect("both key accounts should delete");
+            assert_eq!(
+                deleted,
+                vec![VOICE_EDIT_KEY_ACCOUNT, LEGACY_GROQ_KEY_ACCOUNT]
+            );
+        }
+
+        #[test]
+        fn clear_voice_edit_accounts_ignores_missing_accounts() {
+            let mut deleted = Vec::new();
+            clear_voice_edit_accounts(
+                |account| {
+                    deleted.push(account.to_string());
+                    Err::<(), _>(-25300)
+                },
+                |error| *error == -25300,
+            )
+            .expect("missing accounts are already revoked");
+            assert_eq!(
+                deleted,
+                vec![VOICE_EDIT_KEY_ACCOUNT, LEGACY_GROQ_KEY_ACCOUNT]
+            );
         }
 
         #[test]

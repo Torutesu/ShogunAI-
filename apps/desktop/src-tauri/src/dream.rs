@@ -99,7 +99,8 @@ pub mod mac {
     /// Milliseconds since the user last touched the machine.
     fn idle_ms() -> u64 {
         // SAFETY: a plain C call with scalar arguments; no pointers cross the boundary.
-        let secs = unsafe { CGEventSourceSecondsSinceLastEventType(HID_SYSTEM_STATE, ANY_INPUT_EVENT) };
+        let secs =
+            unsafe { CGEventSourceSecondsSinceLastEventType(HID_SYSTEM_STATE, ANY_INPUT_EVENT) };
         if secs.is_finite() && secs > 0.0 {
             (secs * 1000.0) as u64
         } else {
@@ -249,7 +250,9 @@ pub mod mac {
             screen_locked: screen_locked(),
             power_connected,
             battery_pct,
-            full_run_done_today: db.dream_status(tonight, HEALTH_WINDOW_NIGHTS).full_run_done_today,
+            full_run_done_today: db
+                .dream_status(tonight, HEALTH_WINDOW_NIGHTS)
+                .full_run_done_today,
         }
     }
 
@@ -265,7 +268,9 @@ pub mod mac {
     /// `billing_state_of`). This — never an Anthropic key — is the relay's bearer credential:
     /// the relay verifies exactly this token server-side (apps/api/src/auth.ts).
     fn relay_license_token() -> Option<String> {
-        use shogun_mcp::plan_source::{billing_json_path, billing_state_of, parse_billing_snapshot};
+        use shogun_mcp::plan_source::{
+            billing_json_path, billing_state_of, parse_billing_snapshot,
+        };
         let text = std::fs::read_to_string(billing_json_path()?).ok()?;
         let snap = parse_billing_snapshot(&text)?;
         let now = std::time::SystemTime::now()
@@ -310,7 +315,12 @@ pub mod mac {
     /// gate outcome is unknowable in that case, which is why it is not a `GatedRun`.
     fn tick_once(db: &Db) -> Result<GatedRun, String> {
         let (secs, off) = now_local();
-        let tonight = cycle_id(secs, off, DEFAULT_WINDOW_START_HOUR, DEFAULT_WINDOW_END_HOUR);
+        let tonight = cycle_id(
+            secs,
+            off,
+            DEFAULT_WINDOW_START_HOUR,
+            DEFAULT_WINDOW_END_HOUR,
+        );
         let cond = conditions(db, &tonight);
         let now_ms = secs * 1000;
 
@@ -339,7 +349,9 @@ pub mod mac {
 
         let (Ok(transport), Ok(rt)) = (
             ReqwestTransport::new(),
-            tokio::runtime::Builder::new_current_thread().enable_all().build(),
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build(),
         ) else {
             eprintln!("[dream] transport/runtime unavailable — running the local lane tonight");
             return Ok(run_local(db, cond, tonight, now_ms));
@@ -419,7 +431,13 @@ pub mod mac {
                 // and what makes the window re-run next night (FR-DC-04).
                 let (from_ts, to_ts) =
                     input_range(db.last_consolidated_to(), now_ms, DEFAULT_LOOKBACK_MS);
-                db.record_job(tonight, JobKind::Consolidation, JobState::Failed, from_ts, to_ts);
+                db.record_job(
+                    tonight,
+                    JobKind::Consolidation,
+                    JobState::Failed,
+                    from_ts,
+                    to_ts,
+                );
                 Err(format!("{e}"))
             }
         }
@@ -505,7 +523,12 @@ pub mod mac {
     /// it without going through the command layer — and without re-deriving tonight's cycle id.
     pub fn status_view(db: &Db) -> DreamStatusView {
         let (secs, off) = now_local();
-        let tonight = cycle_id(secs, off, DEFAULT_WINDOW_START_HOUR, DEFAULT_WINDOW_END_HOUR);
+        let tonight = cycle_id(
+            secs,
+            off,
+            DEFAULT_WINDOW_START_HOUR,
+            DEFAULT_WINDOW_END_HOUR,
+        );
         let s = db.dream_status(&tonight, HEALTH_WINDOW_NIGHTS);
         DreamStatusView {
             indicator: match s.indicator {
@@ -514,10 +537,13 @@ pub mod mac {
                 Indicator::Red => "red",
             },
             batch_lane: keychain_store::select_kk_configured(),
-            last_kind: s
-                .last
-                .as_ref()
-                .map(|c| if c.kind == CycleKind::Full { "full" } else { "degraded" }),
+            last_kind: s.last.as_ref().map(|c| {
+                if c.kind == CycleKind::Full {
+                    "full"
+                } else {
+                    "degraded"
+                }
+            }),
             last_cycle_id: s.last.as_ref().map(|c| c.cycle_id.clone()),
             last_succeeded: s.last.as_ref().is_some_and(|c| c.succeeded),
             last_ended_at: s.last.as_ref().map(|c| c.ended_at).unwrap_or(0),
@@ -565,7 +591,12 @@ pub mod mac {
         // never marks the night's jobs done on the nightly driver's behalf.
         let manual_id = format!(
             "{}-manual",
-            cycle_id(secs, off, DEFAULT_WINDOW_START_HOUR, DEFAULT_WINDOW_END_HOUR)
+            cycle_id(
+                secs,
+                off,
+                DEFAULT_WINDOW_START_HOUR,
+                DEFAULT_WINDOW_END_HOUR
+            )
         );
         let report = shogun_core::dreamcycle::run::run_cycle(
             db,

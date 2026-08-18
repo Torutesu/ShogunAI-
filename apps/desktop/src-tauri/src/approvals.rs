@@ -19,7 +19,6 @@ pub mod mac {
         ApprovalId, ApprovalOrigin, ApprovalQueue, ConfirmIntent, ConfirmedSend, Decision, Preview,
     };
     use shogun_agents::permission::SendAction;
-    use shogun_memory::lessons::{FeedbackKind, LessonScope, NewFeedback, Surface};
     use shogun_agents::producer::{propose, ProposedSend};
     use shogun_core::composio_send::HttpComposioApi;
     use shogun_core::daemon::Db;
@@ -28,6 +27,7 @@ pub mod mac {
         execute_send, ComposioSendTransport, FirstLayerSendTransport, RoutedSendTransport,
         SendExecOutcome,
     };
+    use shogun_memory::lessons::{FeedbackKind, LessonScope, NewFeedback, Surface};
 
     use crate::connectors::mac::{ConnectorState, Runtime};
 
@@ -57,7 +57,11 @@ pub mod mac {
 
     impl Default for ComposioPolicy {
         fn default() -> Self {
-            Self { draft_stop: true, consent_acknowledged: false, user_id: String::new() }
+            Self {
+                draft_stop: true,
+                consent_acknowledged: false,
+                user_id: String::new(),
+            }
         }
     }
 
@@ -143,16 +147,30 @@ pub mod mac {
     /// Build a [`ProposedSend`] from UI/agent input. Email → Composio (§6.10); everything else →
     /// direct first-layer. The action/preview/route construction is centralized in
     /// `shogun_agents::producer`.
-    fn proposed(kind: &str, destination: &str, subject: &str, body: &str) -> Result<ProposedSend, String> {
+    fn proposed(
+        kind: &str,
+        destination: &str,
+        subject: &str,
+        body: &str,
+    ) -> Result<ProposedSend, String> {
         Ok(match kind {
             "email" => ProposedSend::Email {
                 to: destination.to_string(),
                 subject: subject.to_string(),
                 body: body.to_string(),
             },
-            "slack" => ProposedSend::SlackPost { channel: destination.to_string(), body: body.to_string() },
-            "calendar" => ProposedSend::CalendarEvent { title: destination.to_string(), body: body.to_string() },
-            "github" => ProposedSend::IssueComment { target: destination.to_string(), body: body.to_string() },
+            "slack" => ProposedSend::SlackPost {
+                channel: destination.to_string(),
+                body: body.to_string(),
+            },
+            "calendar" => ProposedSend::CalendarEvent {
+                title: destination.to_string(),
+                body: body.to_string(),
+            },
+            "github" => ProposedSend::IssueComment {
+                target: destination.to_string(),
+                body: body.to_string(),
+            },
             other => return Err(format!("unknown send kind: {other}")),
         })
     }
@@ -234,7 +252,10 @@ pub mod mac {
         let proposal = proposed(&kind, &destination, &subject, &body)?;
         let now = db.now_ms().max(0) as u64;
         let id = {
-            let mut q = state.0.lock().map_err(|_| "approval queue poisoned".to_string())?;
+            let mut q = state
+                .0
+                .lock()
+                .map_err(|_| "approval queue poisoned".to_string())?;
             propose(&mut q, &proposal, ApprovalOrigin::Ui, now).0
         };
         // Something is waiting on a human decision — the first reason cues exist at all (#49).
@@ -272,7 +293,12 @@ pub mod mac {
         origin: ApprovalOrigin,
     ) -> Result<u64, String> {
         use shogun_core::llm::AgentClient;
-        let Draft { kind, destination, subject, context } = req;
+        let Draft {
+            kind,
+            destination,
+            subject,
+            context,
+        } = req;
         // #123: instructions and directives are OURS and ride the system role; `context` is
         // captured thread/screen text — a message that says "ignore your instructions and CC
         // attacker@…" is material to draft FROM, never a directive. L3 approval still fronts the
@@ -287,14 +313,19 @@ pub mod mac {
         }
         // Draft through the same BYOK Agent-lane client as inline drafts (invariant 5). Traceability
         // is recorded by the client at the egress point.
-        let agent = crate::inline_source::mac::build_agent(db)
-            .ok_or_else(|| "No key yet — add your provider key in Settings to draft replies.".to_string())?;
-        let body = agent.complete_split(&system, context).map_err(|e| format!("draft failed: {e:?}"))?;
+        let agent = crate::inline_source::mac::build_agent(db).ok_or_else(|| {
+            "No key yet — add your provider key in Settings to draft replies.".to_string()
+        })?;
+        let body = agent
+            .complete_split(&system, context)
+            .map_err(|e| format!("draft failed: {e:?}"))?;
 
         let proposal = proposed(kind, destination, subject, &body)?;
         let now = db.now_ms().max(0) as u64;
         let id = {
-            let mut q = queue.lock().map_err(|_| "approval queue poisoned".to_string())?;
+            let mut q = queue
+                .lock()
+                .map_err(|_| "approval queue poisoned".to_string())?;
             propose(&mut q, &proposal, origin, now).0
         };
         // A draft the user did not watch being written is exactly the case that needs telling (#49).
@@ -347,7 +378,10 @@ pub mod mac {
         db: tauri::State<'_, Db>,
     ) -> Result<Vec<ApprovalView>, String> {
         let now = db.now_ms().max(0) as u64;
-        let mut q = state.0.lock().map_err(|_| "approval queue poisoned".to_string())?;
+        let mut q = state
+            .0
+            .lock()
+            .map_err(|_| "approval queue poisoned".to_string())?;
         q.expire_due(now);
         let views = q
             .pending_ids()
@@ -378,7 +412,10 @@ pub mod mac {
         state: tauri::State<'_, ApprovalQueueState>,
         db: tauri::State<'_, Db>,
     ) -> Result<String, String> {
-        let mut q = state.0.lock().map_err(|_| "approval queue poisoned".to_string())?;
+        let mut q = state
+            .0
+            .lock()
+            .map_err(|_| "approval queue poisoned".to_string())?;
         use shogun_agents::approval::RejectCause;
         // Snapshot action + proposed body before the reject dequeues them (feedback input only).
         let snapshot = q
@@ -445,7 +482,10 @@ pub mod mac {
         // Confirm + dequeue under the queue lock, then drop it before executing (execution locks the
         // connector runtime, a different lock — keep the two lock scopes disjoint).
         let confirmed = {
-            let mut q = state.0.lock().map_err(|_| "approval queue poisoned".to_string())?;
+            let mut q = state
+                .0
+                .lock()
+                .map_err(|_| "approval queue poisoned".to_string())?;
             match q.confirm(ApprovalId(id), ConfirmIntent::DedicatedButton, now) {
                 Decision::Confirmed(cs) => cs,
                 Decision::RequiresDedicatedButton => return Ok("requires_button".into()),
@@ -472,8 +512,12 @@ pub mod mac {
                 // The human approved the edited text, so that is what must send. Rebuild the
                 // preview from the same action + route so the trace, the preview, and the wire
                 // can never disagree (invariant 3).
-                let preview = Preview::for_send(&confirmed.action, final_body, confirmed.preview.route);
-                ConfirmedSend { action: confirmed.action, preview }
+                let preview =
+                    Preview::for_send(&confirmed.action, final_body, confirmed.preview.route);
+                ConfirmedSend {
+                    action: confirmed.action,
+                    preview,
+                }
             }
             None => {
                 record_approval_feedback(
@@ -497,7 +541,12 @@ pub mod mac {
                 // (invariant 7). The draft_fallback is the authoritative path for this so we reuse
                 // it directly.
                 let sink = db.traceability_sink();
-                match save_gmail_draft(&connectors.0, &sink, &confirmed.action, &confirmed.preview.full_body) {
+                match save_gmail_draft(
+                    &connectors.0,
+                    &sink,
+                    &confirmed.action,
+                    &confirmed.preview.full_body,
+                ) {
                     Ok(()) => {
                         return Ok("draft_saved: composio send is off (opt-in required)".into());
                     }
@@ -518,7 +567,8 @@ pub mod mac {
                     std::env::var("SHOGUN_COMPOSIO_USER_ID").unwrap_or_default()
                 }
             };
-            let composio = ComposioSendTransport::new(HttpComposioApi::new(composio_key)?, composio_user);
+            let composio =
+                ComposioSendTransport::new(HttpComposioApi::new(composio_key)?, composio_user);
             let runtime = connectors.0.clone();
             let first_layer = FirstLayerSendTransport::new(&connectors.0);
             let draft_runtime = runtime.clone();
@@ -526,7 +576,9 @@ pub mod mac {
             let routed = RoutedSendTransport::new(
                 composio,
                 first_layer,
-                Box::new(move |action, body| save_gmail_draft(&draft_runtime, &draft_sink, action, body)),
+                Box::new(move |action, body| {
+                    save_gmail_draft(&draft_runtime, &draft_sink, action, body)
+                }),
             );
             return match execute_send(&confirmed, &routed, &db.traceability_sink()) {
                 SendExecOutcome::Sent => Ok("sent".into()),
@@ -561,8 +613,15 @@ pub mod mac {
         // Key names are the arg contract of `create_draft` in `ComposioReadRpc`, which maps
         // `to`/`subject`/`body` to Composio field names (`recipient_email`/`subject`/`body`).
         let args = json!({ "to": to, "subject": subject, "body": mail_body });
-        let rt = runtime.lock().map_err(|_| "runtime lock poisoned".to_string())?;
-        rt.execute_write_owned(shogun_mcp::scope::Service::Gmail, "draft_create_update", args).map(|_| ())?;
+        let rt = runtime
+            .lock()
+            .map_err(|_| "runtime lock poisoned".to_string())?;
+        rt.execute_write_owned(
+            shogun_mcp::scope::Service::Gmail,
+            "draft_create_update",
+            args,
+        )
+        .map(|_| ())?;
         // Record traceability only on success: the draft body just left the device via Composio.
         // Route::Composio = second-layer (third-party relay); third_party = true. Chunk is digested
         // and dropped — body text never reaches storage (G8 / invariant 3).
@@ -607,7 +666,7 @@ pub mod mac {
             return Err("key looks too short — check you pasted the full Composio API key".into());
         }
         keychain_store::set_generic_secret(COMPOSIO_KEY_ACCOUNT, key.as_bytes())
-        .map_err(|e| e.to_string())?;
+            .map_err(|e| e.to_string())?;
         eprintln!("[composio] api key saved to Keychain");
         // Rebuild the live runtime so the new key is used immediately.
         let policy = load_composio_policy(&app);
@@ -641,12 +700,19 @@ pub mod mac {
 
     /// Return a new policy with `user_id` set to `id`, preserving all other fields.
     fn with_user_id(p: ComposioPolicy, id: &str) -> ComposioPolicy {
-        ComposioPolicy { user_id: id.to_string(), ..p }
+        ComposioPolicy {
+            user_id: id.to_string(),
+            ..p
+        }
     }
 
     /// Return a new policy with `draft_stop` and `consent_acknowledged` updated, preserving `user_id`.
     fn with_flags(p: ComposioPolicy, draft_stop: bool, consent: bool) -> ComposioPolicy {
-        ComposioPolicy { draft_stop, consent_acknowledged: consent, ..p }
+        ComposioPolicy {
+            draft_stop,
+            consent_acknowledged: consent,
+            ..p
+        }
     }
 
     /// Persist the Composio opt-in policy to `<app-data>/composio.json`.
@@ -690,8 +756,7 @@ pub mod mac {
         let draft_stop = policy.draft_stop;
         save_composio_policy(&app, with_user_id(policy, &trimmed))?;
         // Rebuild the live runtime so the new user_id is used immediately.
-        if let Err(e) =
-            crate::connectors::mac::rebuild_gmail_runtime(&connectors, &app, draft_stop)
+        if let Err(e) = crate::connectors::mac::rebuild_gmail_runtime(&connectors, &app, draft_stop)
         {
             eprintln!("[connectors] runtime rebuild after user_id save skipped: {e}");
         }
@@ -725,12 +790,22 @@ pub mod mac {
                 // Last 4 chars only, char-safe. A key too short to have 4 chars is masked
                 // entirely rather than echoed — never return the whole secret (invariant 7).
                 let n = k.chars().count();
-                let last4 = if n >= 4 { k.chars().skip(n - 4).collect() } else { "····".to_string() };
+                let last4 = if n >= 4 {
+                    k.chars().skip(n - 4).collect()
+                } else {
+                    "····".to_string()
+                };
                 (true, last4)
             }
             _ => (false, String::new()),
         };
-        ComposioSettingsView { has_key, key_last4, draft_stop: policy.draft_stop, consent_acknowledged: policy.consent_acknowledged, user_id }
+        ComposioSettingsView {
+            has_key,
+            key_last4,
+            draft_stop: policy.draft_stop,
+            consent_acknowledged: policy.consent_acknowledged,
+            user_id,
+        }
     }
 
     #[cfg(test)]
@@ -748,9 +823,18 @@ pub mod mac {
         #[test]
         fn plan_without_unlock_blocks_send_despite_open_policy() {
             use shogun_agents::entitlement::{entitlements, Plan, TRIAL_DURATION_MS};
-            let policy = ComposioPolicy { consent_acknowledged: true, draft_stop: false, user_id: String::new() };
+            let policy = ComposioPolicy {
+                consent_acknowledged: true,
+                draft_stop: false,
+                user_id: String::new(),
+            };
             let standard = entitlements(Plan::Standard, 0);
-            let expired = entitlements(Plan::Trial { started_at_ms: Some(0) }, TRIAL_DURATION_MS);
+            let expired = entitlements(
+                Plan::Trial {
+                    started_at_ms: Some(0),
+                },
+                TRIAL_DURATION_MS,
+            );
             assert!(!composio_send_allowed(policy.clone(), &standard));
             assert!(!composio_send_allowed(policy, &expired));
         }
@@ -760,29 +844,56 @@ pub mod mac {
         fn default_policy_blocks_send() {
             let policy = ComposioPolicy::default();
             assert!(policy.draft_stop, "draft_stop must default ON");
-            assert!(!policy.consent_acknowledged, "consent must default NOT acknowledged");
-            assert!(!composio_send_allowed(policy, &pro()), "default policy must block the send");
+            assert!(
+                !policy.consent_acknowledged,
+                "consent must default NOT acknowledged"
+            );
+            assert!(
+                !composio_send_allowed(policy, &pro()),
+                "default policy must block the send"
+            );
         }
 
         /// consent = true, draft_stop = true → still blocked (draft-stop gate).
         #[test]
         fn consent_true_draftstop_true_blocks_send() {
-            let policy = ComposioPolicy { consent_acknowledged: true, draft_stop: true, user_id: String::new() };
-            assert!(!composio_send_allowed(policy, &pro()), "draft-stop ON must block even with consent");
+            let policy = ComposioPolicy {
+                consent_acknowledged: true,
+                draft_stop: true,
+                user_id: String::new(),
+            };
+            assert!(
+                !composio_send_allowed(policy, &pro()),
+                "draft-stop ON must block even with consent"
+            );
         }
 
         /// consent = false, draft_stop = false → blocked (consent gate).
         #[test]
         fn consent_false_draftstop_false_blocks_send() {
-            let policy = ComposioPolicy { consent_acknowledged: false, draft_stop: false, user_id: String::new() };
-            assert!(!composio_send_allowed(policy, &pro()), "no consent must block even when draft-stop is OFF");
+            let policy = ComposioPolicy {
+                consent_acknowledged: false,
+                draft_stop: false,
+                user_id: String::new(),
+            };
+            assert!(
+                !composio_send_allowed(policy, &pro()),
+                "no consent must block even when draft-stop is OFF"
+            );
         }
 
         /// consent = true, draft_stop = false → allowed (both gates open).
         #[test]
         fn consent_true_draftstop_false_allows_send() {
-            let policy = ComposioPolicy { consent_acknowledged: true, draft_stop: false, user_id: String::new() };
-            assert!(composio_send_allowed(policy, &pro()), "consent + draft-stop OFF must allow the send");
+            let policy = ComposioPolicy {
+                consent_acknowledged: true,
+                draft_stop: false,
+                user_id: String::new(),
+            };
+            assert!(
+                composio_send_allowed(policy, &pro()),
+                "consent + draft-stop OFF must allow the send"
+            );
         }
 
         // ---- policy_is_valid: all 4 combinations ---------------------------------------------
@@ -790,25 +901,37 @@ pub mod mac {
         /// consent=false, draft_stop=false → invalid (only invalid combination).
         #[test]
         fn composio_policy_invalid_no_consent_no_draftstop() {
-            assert!(!policy_is_valid(false, false), "draft_stop=false + consent=false must be invalid");
+            assert!(
+                !policy_is_valid(false, false),
+                "draft_stop=false + consent=false must be invalid"
+            );
         }
 
         /// consent=false, draft_stop=true → valid (draft-stop engaged protects even without consent).
         #[test]
         fn composio_policy_valid_draftstop_on_no_consent() {
-            assert!(policy_is_valid(true, false), "draft_stop=true + consent=false must be valid");
+            assert!(
+                policy_is_valid(true, false),
+                "draft_stop=true + consent=false must be valid"
+            );
         }
 
         /// consent=true, draft_stop=true → valid (consent given, draft-stop still on).
         #[test]
         fn composio_policy_valid_consent_draftstop_on() {
-            assert!(policy_is_valid(true, true), "draft_stop=true + consent=true must be valid");
+            assert!(
+                policy_is_valid(true, true),
+                "draft_stop=true + consent=true must be valid"
+            );
         }
 
         /// consent=true, draft_stop=false → valid (consent given, live send enabled).
         #[test]
         fn composio_policy_valid_consent_draftstop_off() {
-            assert!(policy_is_valid(false, true), "draft_stop=false + consent=true must be valid");
+            assert!(
+                policy_is_valid(false, true),
+                "draft_stop=false + consent=true must be valid"
+            );
         }
 
         // ---- user_id field: serde defaults and helper functions -----------------------------
@@ -822,7 +945,11 @@ pub mod mac {
 
         #[test]
         fn round_trip_all_fields() {
-            let original = ComposioPolicy { draft_stop: false, consent_acknowledged: true, user_id: "test-user-123".to_string() };
+            let original = ComposioPolicy {
+                draft_stop: false,
+                consent_acknowledged: true,
+                user_id: "test-user-123".to_string(),
+            };
             let json = serde_json::to_string(&original).expect("serialize");
             let loaded: ComposioPolicy = serde_json::from_str(&json).expect("deserialize");
             assert!(!loaded.draft_stop);
@@ -832,7 +959,11 @@ pub mod mac {
 
         #[test]
         fn with_user_id_preserves_flags() {
-            let p = ComposioPolicy { draft_stop: false, consent_acknowledged: true, user_id: String::new() };
+            let p = ComposioPolicy {
+                draft_stop: false,
+                consent_acknowledged: true,
+                user_id: String::new(),
+            };
             let updated = with_user_id(p, "new-user");
             assert_eq!(updated.user_id, "new-user");
             assert!(!updated.draft_stop);
@@ -841,7 +972,11 @@ pub mod mac {
 
         #[test]
         fn with_flags_preserves_user_id() {
-            let p = ComposioPolicy { draft_stop: true, consent_acknowledged: false, user_id: "preserved-user".to_string() };
+            let p = ComposioPolicy {
+                draft_stop: true,
+                consent_acknowledged: false,
+                user_id: "preserved-user".to_string(),
+            };
             let updated = with_flags(p, false, true);
             assert_eq!(updated.user_id, "preserved-user");
             assert!(!updated.draft_stop);

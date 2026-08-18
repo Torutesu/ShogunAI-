@@ -39,7 +39,10 @@ pub mod mac {
             let _ = std::fs::create_dir_all(dir);
         }
         std::fs::write(&path, if enabled { "on" } else { "off" }).map_err(|e| e.to_string())?;
-        eprintln!("[ai-sessions] import {}", if enabled { "enabled" } else { "disabled" });
+        eprintln!(
+            "[ai-sessions] import {}",
+            if enabled { "enabled" } else { "disabled" }
+        );
         Ok(enabled)
     }
 
@@ -51,22 +54,31 @@ pub mod mac {
 
     fn settings_path(app: &tauri::AppHandle) -> Option<PathBuf> {
         use tauri::Manager;
-        app.path().app_data_dir().ok().map(|d| d.join("ai-session-import"))
+        app.path()
+            .app_data_dir()
+            .ok()
+            .map(|d| d.join("ai-session-import"))
     }
 
     /// The directories session logs live in. Only Claude Code's layout is known today; the others
     /// are added here as their formats are confirmed rather than guessed at.
     fn log_roots() -> Vec<PathBuf> {
-        let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else { return Vec::new() };
+        let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+            return Vec::new();
+        };
         vec![home.join(".claude/projects")]
     }
 
     /// Every `.jsonl` under `root`, one level of project directories deep.
     fn logs_under(root: &Path) -> Vec<PathBuf> {
         let mut out = Vec::new();
-        let Ok(projects) = std::fs::read_dir(root) else { return out };
+        let Ok(projects) = std::fs::read_dir(root) else {
+            return out;
+        };
         for project in projects.flatten() {
-            let Ok(files) = std::fs::read_dir(project.path()) else { continue };
+            let Ok(files) = std::fs::read_dir(project.path()) else {
+                continue;
+            };
             for f in files.flatten() {
                 let p = f.path();
                 if p.extension().is_some_and(|e| e == "jsonl") {
@@ -83,7 +95,9 @@ pub mod mac {
             eprintln!("[ai-sessions] skipping oversized log: {}", path.display());
             return 0;
         }
-        let Ok(text) = std::fs::read_to_string(path) else { return 0 };
+        let Ok(text) = std::fs::read_to_string(path) else {
+            return 0;
+        };
         let turns: Vec<_> = text
             .lines()
             .filter_map(shogun_memory::ai_session::parse_claude_code_line)

@@ -72,20 +72,29 @@ pub mod mac {
             .and_then(|t| serde_json::from_str::<Settings>(&t).ok())
             .unwrap_or_default();
         if let Ok(mut g) = STATE.lock() {
-            *g = Some(State { settings, last_played: HashMap::new() });
+            *g = Some(State {
+                settings,
+                last_played: HashMap::new(),
+            });
         }
         let _ = app.run_on_main_thread(preload);
         eprintln!(
             "[sound] cues {} (quiet hours {})",
             settings.pref.tag(),
-            if settings.quiet_hours.enabled { "on" } else { "off" }
+            if settings.quiet_hours.enabled {
+                "on"
+            } else {
+                "off"
+            }
         );
     }
 
     /// Build one `NSSound` per asset from the embedded bytes. Main thread only.
     fn preload() {
         PLAYERS.with(|players| {
-            let Ok(mut players) = players.try_borrow_mut() else { return };
+            let Ok(mut players) = players.try_borrow_mut() else {
+                return;
+            };
             if !players.is_empty() {
                 return;
             }
@@ -109,11 +118,17 @@ pub mod mac {
     }
 
     pub fn settings() -> Settings {
-        STATE.lock().ok().and_then(|g| g.as_ref().map(|s| s.settings)).unwrap_or_default()
+        STATE
+            .lock()
+            .ok()
+            .and_then(|g| g.as_ref().map(|s| s.settings))
+            .unwrap_or_default()
     }
 
     fn save(app: &AppHandle, settings: &Settings) -> Result<(), String> {
-        let Some(p) = settings_path(app) else { return Ok(()) };
+        let Some(p) = settings_path(app) else {
+            return Ok(());
+        };
         if let Some(dir) = p.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
@@ -123,7 +138,9 @@ pub mod mac {
 
     fn update(app: &AppHandle, f: impl FnOnce(&mut Settings)) -> Result<Settings, String> {
         let next = {
-            let mut g = STATE.lock().map_err(|_| "sound state unavailable".to_string())?;
+            let mut g = STATE
+                .lock()
+                .map_err(|_| "sound state unavailable".to_string())?;
             let state = g.get_or_insert_with(|| State {
                 settings: Settings::default(),
                 last_played: HashMap::new(),
@@ -250,10 +267,13 @@ pub mod mac {
             (status == NO_ERROR).then_some(value)
         }
 
-        let Some(device) = read_u32(SYSTEM_OBJECT, DEFAULT_OUTPUT_DEVICE).filter(|d| *d != 0) else {
+        let Some(device) = read_u32(SYSTEM_OBJECT, DEFAULT_OUTPUT_DEVICE).filter(|d| *d != 0)
+        else {
             return true;
         };
-        read_u32(device, TRANSPORT_TYPE).map(|t| t == TRANSPORT_BUILTIN).unwrap_or(true)
+        read_u32(device, TRANSPORT_TYPE)
+            .map(|t| t == TRANSPORT_BUILTIN)
+            .unwrap_or(true)
     }
 
     /// Sense the environment for one decision.
@@ -312,7 +332,9 @@ pub mod mac {
     /// Play the asset now. Main thread only.
     fn emit(asset: &'static str) {
         PLAYERS.with(|players| {
-            let Ok(players) = players.try_borrow() else { return };
+            let Ok(players) = players.try_borrow() else {
+                return;
+            };
             let Some(sound) = players.get(asset) else {
                 eprintln!("[sound] asset {asset} not loaded");
                 return;

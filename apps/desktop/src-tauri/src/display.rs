@@ -32,12 +32,16 @@ mod mac {
     /// True when frontmost is SHOGUN itself (or the empty-bundle NSPanel quirk). Must not drive
     /// Idle "reading …" or the context-cache walk — the panel would report reading itself.
     pub fn is_own_app(bundle_id: &str, name: &str) -> bool {
-        if OWN_BUNDLES.iter().any(|b| bundle_id.eq_ignore_ascii_case(b)) {
+        if OWN_BUNDLES
+            .iter()
+            .any(|b| bundle_id.eq_ignore_ascii_case(b))
+        {
             return true;
         }
-        if OWN_NAMES.iter().any(|n| {
-            name.eq_ignore_ascii_case(n) || bundle_id.eq_ignore_ascii_case(n)
-        }) {
+        if OWN_NAMES
+            .iter()
+            .any(|n| name.eq_ignore_ascii_case(n) || bundle_id.eq_ignore_ascii_case(n))
+        {
             return true;
         }
         // Overlay / nonactivating panel often reports an empty bundle id while we are frontmost
@@ -64,7 +68,8 @@ mod mac {
     pub fn is_app_running(bundle_id: &str) -> bool {
         let ws = NSWorkspace::sharedWorkspace();
         ws.runningApplications().iter().any(|app| {
-            app.bundleIdentifier().is_some_and(|id| id.to_string() == bundle_id)
+            app.bundleIdentifier()
+                .is_some_and(|id| id.to_string() == bundle_id)
         })
     }
 
@@ -73,8 +78,18 @@ mod mac {
         let ws = NSWorkspace::sharedWorkspace();
         let app = ws.frontmostApplication()?;
         // NSString → Rust String via Display (lossy UTF-8); default to empty when absent.
-        let bundle_id = app.bundleIdentifier().map(|s| s.to_string()).unwrap_or_default();
-        let name = app.localizedName().map(|s| s.to_string()).unwrap_or_default();
-        Some(FrontApp { pid: app.processIdentifier(), bundle_id, name })
+        let bundle_id = app
+            .bundleIdentifier()
+            .map(|s| s.to_string())
+            .unwrap_or_default();
+        let name = app
+            .localizedName()
+            .map(|s| s.to_string())
+            .unwrap_or_default();
+        Some(FrontApp {
+            pid: app.processIdentifier(),
+            bundle_id,
+            name,
+        })
     }
 }

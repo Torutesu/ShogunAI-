@@ -403,45 +403,50 @@ pub mod mac {
         db: Db,
         app: tauri::AppHandle,
     ) {
-        std::thread::spawn(move || loop {
-            std::thread::sleep(Duration::from_secs(15 * 60));
+        std::thread::spawn(move || {
+            loop {
+                std::thread::sleep(Duration::from_secs(15 * 60));
 
-            let consent = load_composio_policy(&app).consent_acknowledged;
-            let now = db.now_ms();
-            if let Ok(mut rt) = state.lock() {
-                // Plan gate (issue #97): refresh the entitlements before each tick so the service
-                // gate sees the current plan — an expired trial stops the read-sync (first-layer
-                // reads are Standard-and-up; expired has no active plan).
-                rt.set_plan(crate::entitlement::mac::current(&app));
-                for svc in rt.services_due(now, DEFAULT_SYNC_INTERVAL_MS) {
-                    // Gate: a Gmail sync sends the user_id to Composio (third party) — skip it
-                    // until the user has granted Composio consent. Other services are direct.
-                    if svc == Service::Gmail && !consent {
-                        eprintln!("[connectors] gmail sync skipped — Composio consent not granted");
-                        continue;
-                    }
-                    match rt.sync_service(svc, now, &db) {
-                        Ok(rep) => {
+                let consent = load_composio_policy(&app).consent_acknowledged;
+                let now = db.now_ms();
+                if let Ok(mut rt) = state.lock() {
+                    // Plan gate (issue #97): refresh the entitlements before each tick so the service
+                    // gate sees the current plan — an expired trial stops the read-sync (first-layer
+                    // reads are Standard-and-up; expired has no active plan).
+                    rt.set_plan(crate::entitlement::mac::current(&app));
+                    for svc in rt.services_due(now, DEFAULT_SYNC_INTERVAL_MS) {
+                        // Gate: a Gmail sync sends the user_id to Composio (third party) — skip it
+                        // until the user has granted Composio consent. Other services are direct.
+                        if svc == Service::Gmail && !consent {
                             eprintln!(
-                                "[connectors] {} synced (+{} new)",
-                                svc.source_str(),
-                                rep.inserted
+                                "[connectors] gmail sync skipped — Composio consent not granted"
                             );
-                            record_read_trace(&db, svc);
-                            // context_updated（#61）: read-sync 完了を匿名計測。
-                            if let Some(analytics) = app.try_state::<crate::analytics::Analytics>()
-                            {
-                                analytics.capture(
-                                    "context_updated",
-                                    crate::analytics::context_updated_props(
-                                        svc.source_str(),
-                                        rep.inserted as u64,
-                                    ),
-                                );
-                            }
+                            continue;
                         }
-                        Err(e) => {
-                            eprintln!("[connectors] {} sync failed: {e:?}", svc.source_str());
+                        match rt.sync_service(svc, now, &db) {
+                            Ok(rep) => {
+                                eprintln!(
+                                    "[connectors] {} synced (+{} new)",
+                                    svc.source_str(),
+                                    rep.inserted
+                                );
+                                record_read_trace(&db, svc);
+                                // context_updated（#61）: read-sync 完了を匿名計測。
+                                if let Some(analytics) =
+                                    app.try_state::<crate::analytics::Analytics>()
+                                {
+                                    analytics.capture(
+                                        "context_updated",
+                                        crate::analytics::context_updated_props(
+                                            svc.source_str(),
+                                            rep.inserted as u64,
+                                        ),
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("[connectors] {} sync failed: {e:?}", svc.source_str());
+                            }
                         }
                     }
                 }
