@@ -1057,13 +1057,14 @@ export function App(): JSX.Element {
   }, []);
 
   const openSettings = (): void => {
+    // Settings and Chat intentionally share the same native frame. Resizing to the size we already
+    // have still makes AppKit reposition/recompose the NSPanel, producing a visible hitch before
+    // React paints Settings. Keep this transition entirely inside the existing webview.
     setShowSettings(true);
     setShowHub(false);
-    sizeForView({ open: true, settings: true, hub: false });
   };
   const closeSettings = (): void => {
     setShowSettings(false);
-    sizeForView({ open: true, settings: false, hub: false });
   };
   const toggleHub = (): void => {
     const next = !showHub;
