@@ -26,6 +26,8 @@ use shogun_core::audio::ring::Ring;
 use shogun_core::daemon::Db;
 use tauri::{AppHandle, Emitter, Manager};
 
+const POST_RELEASE_CAPTURE_TAIL: Duration = Duration::from_millis(120);
+
 /// Outcome of a single hold-to-talk capture.
 pub enum TranscriptOutcome {
     Ok(String),
@@ -300,8 +302,22 @@ pub fn start(app: &AppHandle) -> Result<Handle, String> {
         let mut ring = Ring::new();
         let mut pending: Vec<f32> = Vec::with_capacity(LIVE_CHUNK_SAMPLES);
 
-        while !stop_flag.load(Ordering::Relaxed) {
+        // CoreAudio can still have the final phoneme queued when the shortcut reports release.
+        // Keep capture in RAM for a short tail so the release does not clip end-of-sentence words.
+        let mut release_deadline = None;
+        loop {
+            let now = std::time::Instant::now();
+            if stop_flag.load(Ordering::Relaxed) {
+                let deadline = release_deadline.get_or_insert(now + POST_RELEASE_CAPTURE_TAIL);
+                if now >= *deadline {
+                    break;
+                }
+            }
+
             if let Some(frame) = mic.try_recv() {
+                // Retain every frame, including audio successfully sent over the live socket.
+                // A final live-WS failure must be able to retry HTTP with the whole utterance.
+                ring.push(&frame.samples);
                 let level = rms(&frame.samples);
                 let _ = app_handle.emit("voice_level", LevelEvent { rms: level });
                 if live.is_some() {
@@ -311,8 +327,6 @@ pub fn start(app: &AppHandle) -> Result<Handle, String> {
                         if let Some(ref mut session) = live {
                             if let Err(e) = session.push_pcm(&chunk) {
                                 eprintln!("[voice] live push failed ({e}); switching to ring");
-                                ring.push(&chunk);
-                                ring.push(&pending);
                                 pending.clear();
                                 // Drop session → CloseStream; remaining audio goes to HTTP path.
                                 let _ = live.take();
@@ -320,8 +334,6 @@ pub fn start(app: &AppHandle) -> Result<Handle, String> {
                             }
                         }
                     }
-                } else {
-                    ring.push(&frame.samples);
                 }
             } else {
                 std::thread::sleep(Duration::from_millis(10));
