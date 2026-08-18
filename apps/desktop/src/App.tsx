@@ -1294,8 +1294,9 @@ export function App(): JSX.Element {
   })();
 
   // A standing condition from boot, if any. Ordered by how much of the product it takes away:
-  // no memory is everything, no Accessibility is every input path, no model is only the search
-  // quality. Only the worst one is shown — a stack of warnings in a notch panel reads as noise.
+  // no memory is everything and no Accessibility is every input path. The optional embedding
+  // model only improves search quality, so lexical-only search must not become a permanent global
+  // warning in the notch.
   const healthLine = ((): { text: string; fix: "settings" | "accessibility" | null } | null => {
     if (!health) return null;
     if (health.memory_db_error) return { text: t.healthNoMemory, fix: "settings" };
@@ -1304,7 +1305,6 @@ export function App(): JSX.Element {
     // is what makes an empty answer look like an honest one.
     if (health.memory_degraded) return { text: t.healthMemoryDegraded, fix: null };
     if (!health.accessibility) return { text: t.healthNoAccess, fix: "accessibility" };
-    if (!health.embedding_model) return { text: t.healthNoModel, fix: null };
     return null;
   })();
 

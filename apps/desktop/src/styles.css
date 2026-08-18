@@ -1,13 +1,10 @@
 /* SHOGUN panel — hangs from the notch. Idle = welded opaque chin; Expanded = soft glass.
    Motion tokens stay inside Idle→Expanded SLO (open ≤120ms, close ≤160ms). Theme-aware; dark default. */
 :root {
-  /* The panel sits on top of whatever you're working on, so it reads as glass rather than as an
-     opaque sheet — but the webview has no real backdrop blur over the desktop, so the tint must
-     carry legibility on its own. Kept mostly opaque; a busy window behind should only ghost
-     through, never compete with the text. Idle chin does NOT use these — opaque black only
-     (welded-to-bezel read). */
-  --glass: rgba(18, 21, 28, 0.86);
-  --glass-2: rgba(28, 32, 41, 0.92);
+  /* Dark mode is OLED black throughout the shell. Contrast comes from hairlines and translucent
+     control fills, not a blue-gray panel tint. */
+  --glass: #000000;
+  --glass-2: #000000;
   --line: rgba(255, 255, 255, 0.11);
   --line-strong: rgba(255, 255, 255, 0.18);
   --ink: #eef1f5;
@@ -66,6 +63,7 @@
   --chin-line: rgba(255, 255, 255, 0.11);
   /* Opaque panel/settings ground under transparent NSPanel (must stay solid). */
   --shell: #000000;
+  --settings-nav-bg: #000000;
   /* Scrollbar tokens — transparent track, ink-tinted thumb (overlay on content edge). */
   --scroll-track: transparent;
   --scroll-thumb: color-mix(in srgb, var(--ink) 26%, transparent);
@@ -77,8 +75,8 @@
    still be dark to avoid a light flash). */
 :root[data-appearance="dark"] {
   color-scheme: dark;
-  --glass: rgba(18, 21, 28, 0.86);
-  --glass-2: rgba(28, 32, 41, 0.92);
+  --glass: #000000;
+  --glass-2: #000000;
   --line: rgba(255, 255, 255, 0.11);
   --line-strong: rgba(255, 255, 255, 0.18);
   --ink: #eef1f5;
@@ -94,6 +92,7 @@
   --fill-strong: rgba(255, 255, 255, 0.12);
   --card: rgba(255, 255, 255, 0.045);
   --shell: #000000;
+  --settings-nav-bg: #000000;
 }
 :root[data-appearance="light"] {
   color-scheme: light;
@@ -114,6 +113,7 @@
   --fill-strong: rgba(0, 0, 0, 0.09);
   --card: rgba(0, 0, 0, 0.035);
   --shell: #f7f8fb;
+  --settings-nav-bg: linear-gradient(180deg, color-mix(in srgb, var(--accent) 7%, var(--shell)) 0%, var(--shell) 55%);
 }
 :root[data-appearance="auto"] {
   color-scheme: light dark;
@@ -137,6 +137,7 @@
     --fill-strong: rgba(0, 0, 0, 0.09);
     --card: rgba(0, 0, 0, 0.035);
     --shell: #f7f8fb;
+    --settings-nav-bg: linear-gradient(180deg, color-mix(in srgb, var(--accent) 7%, var(--shell)) 0%, var(--shell) 55%);
   }
 }
 
@@ -1330,8 +1331,7 @@ body {
   overflow-x: hidden;
   padding: 14px 10px 18px;
   border-right: 1px solid var(--line);
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--accent) 7%, var(--shell)) 0%, var(--shell) 55%);
+  background: var(--settings-nav-bg);
   scrollbar-width: none;
 }
 .settings__nav::-webkit-scrollbar {
