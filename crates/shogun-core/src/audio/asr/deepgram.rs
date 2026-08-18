@@ -311,6 +311,9 @@ pub struct DeepgramLive {
     purpose: String,
     /// Required, for the same reason as [`Deepgram::trace`].
     trace: Arc<dyn TraceabilitySink>,
+    /// Whether the session's egress has been recorded ([`Self::finish_finals`] does it on the
+    /// normal path; [`Drop`] covers abnormal teardown so no streamed audio goes undisclosed).
+    traced: bool,
 }
 
 impl DeepgramLive {
@@ -349,6 +352,7 @@ impl DeepgramLive {
             pcm_bytes: 0,
             purpose,
             trace,
+            traced: false,
         })
     }
 
@@ -412,6 +416,7 @@ impl DeepgramLive {
             let _ = join.join();
         }
         let duration_ms = ((self.pcm_bytes as u64 / 2) * 1000) / u64::from(SAMPLE_RATE);
+        self.traced = true;
         record_asr_egress(
             self.trace.as_ref(),
             &self.purpose,
@@ -433,6 +438,14 @@ impl Drop for DeepgramLive {
         let _ = self.cmd_tx.send(LiveCmd::Close);
         if let Some(join) = self.join.take() {
             let _ = join.join();
+        }
+        // Abnormal teardown (handle dropped without `finish_finals` — caller error path, aborted
+        // meeting, unwinding): the audio already streamed to Deepgram regardless, so the session
+        // must still leave its egress record (invariant 3 / 2026-08-05 ASR exception).
+        if !self.traced && self.pcm_bytes > 0 {
+            self.traced = true;
+            let duration_ms = ((self.pcm_bytes as u64 / 2) * 1000) / u64::from(SAMPLE_RATE);
+            record_asr_egress(self.trace.as_ref(), &self.purpose, self.pcm_bytes, duration_ms);
         }
     }
 }
@@ -692,18 +705,22 @@ impl Deepgram {
             .authorization_header()
             .map_err(|e| format!("deepgram auth failed: {e}"))?;
         let url = self.listen_url();
+        // Record the egress BEFORE the request: the audio has crossed the Deepgram boundary the
+        // moment the body is transmitted, and a 4xx/5xx answer does not un-send it. Tracing only
+        // after the 2xx check would leave a failed call's audio undisclosed — the exact gap the
+        // 2026-08-05 ASR exception requires this log to close (invariant 3).
+        self.record_egress(linear16.len(), duration_ms);
         let resp = self
             .client
             .post(&url)
             .header("Authorization", auth)
             .header("Content-Type", "audio/raw")
-            .body(linear16.clone())
+            .body(linear16)
             .send()
             .map_err(|e| format!("deepgram listen request failed: {e}"))?;
         if !resp.status().is_success() {
             return Err(format!("deepgram listen HTTP {}", resp.status()));
         }
-        self.record_egress(linear16.len(), duration_ms);
         parse_listen_response(resp)
     }
 }

@@ -79,20 +79,25 @@ pub fn trace_for_send(confirmed: &ConfirmedSend) -> TraceRecord {
     )
 }
 
-/// Execute a confirmed L3 send: attempt the transport, and on success record traceability to
-/// `sink` before returning [`SendExecOutcome::Sent`]. On failure nothing is traced (nothing
-/// egressed). This is the single point through which a first-layer send reaches the wire, so every
-/// send that leaves the device leaves a trace (invariant 3 / FR-TR-03).
+/// Execute a confirmed L3 send: record traceability to `sink`, then attempt the transport. This is
+/// the single point through which a first-layer send reaches the wire, so every send that leaves
+/// the device leaves a trace (invariant 3 / FR-TR-03).
+///
+/// The trace is written **before** the transport call — the same rule every LLM client in this
+/// crate applies ("record before the request: that is the true egress point"). A send that fails
+/// at the HTTP layer has already delivered the body to the third party (Composio answering 500
+/// still ingested the email), so tracing only on `Ok` under-reports real egress. The cost is the
+/// opposite corner: a transport that refuses locally (wrong route, poisoned lock) leaves a trace
+/// for bytes that never left. Over-reporting an attempt is the safe direction for a disclosure
+/// log; silently missing a third-party crossing is the failure mode invariant 3 exists to prevent.
 pub fn execute_send<T: SendTransport + ?Sized, S: TraceabilitySink + ?Sized>(
     confirmed: &ConfirmedSend,
     transport: &T,
     sink: &S,
 ) -> SendExecOutcome {
+    sink.record(trace_for_send(confirmed));
     match transport.send(&confirmed.action, &confirmed.preview.full_body) {
-        Ok(()) => {
-            sink.record(trace_for_send(confirmed));
-            SendExecOutcome::Sent
-        }
+        Ok(()) => SendExecOutcome::Sent,
         Err(e) => SendExecOutcome::Failed(e),
     }
 }
@@ -266,12 +271,15 @@ mod tests {
     }
 
     #[test]
-    fn failed_send_traces_nothing() {
+    fn failed_send_is_still_traced() {
+        // The trace is written before the transport call: an HTTP-level failure (Composio 500)
+        // has already delivered the body to the third party, so tracing only on Ok would hide
+        // real egress. Over-reporting a local refusal is the accepted cost (see execute_send).
         let sink = RecordingSink::new();
-        let cs = confirmed(ApprovalRoute::DirectMcp, "body that never left");
+        let cs = confirmed(ApprovalRoute::DirectMcp, "body that may have left");
         let outcome = execute_send(&cs, &Fake { ok: false }, &sink);
         assert_eq!(outcome, SendExecOutcome::Failed("not connected".into()));
-        assert!(sink.records().is_empty(), "nothing egressed, so nothing is traced");
+        assert_eq!(sink.records().len(), 1, "the attempt itself is disclosed");
     }
 
     #[test]
@@ -346,7 +354,7 @@ mod tests {
     }
 
     #[test]
-    fn email_send_is_refused_as_second_layer_and_traces_nothing() {
+    fn email_send_is_refused_as_second_layer_and_never_reaches_the_first_layer() {
         let (rt, executed) = runtime_at(Wave::One, &[Service::Gmail]);
         let transport = FirstLayerSendTransport::new(&rt);
 
@@ -356,7 +364,9 @@ mod tests {
 
         assert!(matches!(out, SendExecOutcome::Failed(ref e) if e.contains("Composio")));
         assert!(executed.borrow().is_none(), "no first-layer write may run for an email send");
-        assert!(sink.records().is_empty(), "nothing egressed → nothing traced");
+        // The attempt is traced (execute_send records before the transport decides); the refusal
+        // means the trace over-reports, which is the accepted direction (see execute_send).
+        assert_eq!(sink.records().len(), 1);
     }
 
     #[test]
@@ -373,7 +383,8 @@ mod tests {
 
         assert!(matches!(out, SendExecOutcome::Failed(_)));
         assert!(executed.borrow().is_none());
-        assert!(sink.records().is_empty());
+        // Traced as an attempt even though the double gate refused it (record-before-send).
+        assert_eq!(sink.records().len(), 1);
     }
 
     // ---- ComposioSendTransport + RoutedSendTransport (WP-D) -----------------------------------
@@ -437,13 +448,17 @@ mod tests {
         let sink = RecordingSink::new();
         let out = execute_send(&cs, &routed, &sink);
 
-        // FR-C2-05: failed send, draft saved, nothing traced (nothing egressed).
+        // FR-C2-05: failed send, draft saved — and the attempt IS traced: the body reached
+        // Composio before the 500 came back, so this is exactly the third-party crossing the
+        // trace log must not miss (record-before-send, see execute_send).
         match out {
             SendExecOutcome::Failed(e) => assert!(e.contains("draft saved"), "got: {e}"),
             other => panic!("expected Failed, got {other:?}"),
         }
         assert!(draft_saved.load(Ordering::SeqCst), "a Gmail draft must be saved on Composio failure");
-        assert!(sink.records().is_empty(), "a failed send traces nothing");
+        let recs = sink.records();
+        assert_eq!(recs.len(), 1, "the failed Composio send still crossed the third-party boundary");
+        assert!(recs[0].third_party);
     }
 
     #[test]
