@@ -9,8 +9,8 @@
     <key>CFBundleDisplayName</key>
     <string>ShogunAI</string>
     <key>NSScreenCaptureUsageDescription</key>
-    <string>SHOGUN reads the focused window only when you turn on Visual recall, runs on-device text recognition, and never saves screenshots.</string>
+    <string>SHOGUN captures the focused window for Visual recall, runs text recognition on device, and keeps encrypted captures only on this Mac for the retention you choose.</string>
     <key>NSMicrophoneUsageDescription</key>
-    <string>SHOGUN uses the microphone for meeting notes and hold-to-talk voice dialogue. Audio stays on your Mac and is never saved to disk.</string>
+    <string>SHOGUN uses the microphone for dictation and meeting notes. Audio is never saved; cloud transcription sends it only to your configured speech provider.</string>
 </dict>
 </plist>

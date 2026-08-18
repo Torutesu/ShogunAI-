@@ -7,9 +7,8 @@
 //
 // Command mapping (kept aligned with src-tauri):
 // - onboarding_state / set_onboarding_state ........ onboarding.rs (Rust-owned progress + trial)
-// - accessibility_status ........................... onboarding.rs (NON-prompting AX check — the
-//   1.5s poll must never reopen the system dialog)
-// - open_accessibility_settings .................... onboarding.rs (one-shot prompt + deep link)
+// - permission_status .............................. onboarding.rs (NON-prompting snapshot)
+// - open/request permission commands ............... onboarding.rs (explicit user actions only)
 // - exclusion_categories ........................... exclusions.rs (live policy, never hardcoded)
 // - composio_settings / set_composio_policy ........ approvals.rs — draft-stop's single source of
 //   truth is ComposioPolicy (composio.json). Onboarding does NOT keep its own copy; turning it
@@ -44,9 +43,24 @@ export interface OnboardingState {
   /** Which plan the user said they wanted. Billing is a separate flow; this only decides whether
    *  onboarding asks for a key. Real entitlement gating is a Rust-core follow-up. */
   plan: "standard" | "pro" | null;
-  /** Present only when macOS trust was lost after setup. The UI then shows only the repair card. */
-  accessibility_repair?: boolean;
+  /** Present only when a required Mac permission was lost after setup. */
+  permissions_repair?: boolean;
 }
+
+/** Side-effect-free status for every capability required by the first-run permission center. */
+export interface PermissionSnapshot {
+  accessibility: boolean;
+  microphone: boolean;
+  screen_recording: boolean;
+  all_granted: boolean;
+}
+
+export const EMPTY_PERMISSIONS: PermissionSnapshot = {
+  accessibility: false,
+  microphone: false,
+  screen_recording: false,
+  all_granted: false,
+};
 
 /** A category of thing SHOGUN never reads. Rust owns the list — the UI must not hardcode it,
  *  because a UI that lists yesterday's exclusions is a lie about today's behaviour. */
@@ -76,19 +90,21 @@ export function getOnboardingState(): Promise<OnboardingState> {
 /** `set_onboarding_state(step, plan, completed)` — a whole-record write; the flow has one writer,
  *  and a partial update would let a resumed session disagree with itself. Rust stamps the trial on
  *  the first completing write and closes the window. */
-export function setOnboardingState(next: OnboardingState): Promise<void> {
-  if (!IN_TAURI) return Promise.resolve();
+export function setOnboardingState(next: OnboardingState): Promise<boolean> {
+  if (!IN_TAURI) return Promise.resolve(true);
   return invoke<void>("set_onboarding_state", {
     step: next.step,
     plan: next.plan,
     completed: next.completed,
-  }).catch(() => undefined);
+  }).then(
+    () => true,
+    () => false,
+  );
 }
 
-/** `accessibility_status() -> bool` — whether this process is trusted for Accessibility. The
- *  NON-prompting check: polling a prompting one would reopen the system dialog every 1.5s. */
-export function axPermission(): Promise<boolean> {
-  return ask<boolean>("accessibility_status", {}, false);
+/** `permission_status() -> PermissionSnapshot` — every check is NON-prompting. */
+export function permissionStatus(): Promise<PermissionSnapshot> {
+  return ask<PermissionSnapshot>("permission_status", {}, EMPTY_PERMISSIONS);
 }
 
 /** `open_accessibility_settings()` — the prompting variant, fired once from the button; also
@@ -96,6 +112,29 @@ export function axPermission(): Promise<boolean> {
 export function requestAxPermission(): Promise<void> {
   if (!IN_TAURI) return Promise.resolve();
   return invoke<void>("open_accessibility_settings").catch(() => undefined);
+}
+
+/** Ask macOS for microphone access, or open the repair pane after a prior denial. */
+export function requestMicrophonePermission(): Promise<void> {
+  if (!IN_TAURI) return Promise.resolve();
+  return invoke<void>("request_microphone_permission").catch(() => undefined);
+}
+
+/** Ask macOS for Screen Recording, or open the repair pane after a prior denial. */
+export function requestScreenRecordingPermission(): Promise<void> {
+  if (!IN_TAURI) return Promise.resolve();
+  return invoke<void>("request_screen_recording_permission").catch(() => undefined);
+}
+
+/** Arm/disarm the native app-bundle drag used by Accessibility and Screen Recording panes. */
+export function armPermissionDrag(): Promise<void> {
+  if (!IN_TAURI) return Promise.resolve();
+  return invoke<void>("arm_permission_app_drag").catch(() => undefined);
+}
+
+export function disarmPermissionDrag(): Promise<void> {
+  if (!IN_TAURI) return Promise.resolve();
+  return invoke<void>("disarm_permission_app_drag").catch(() => undefined);
 }
 
 /** `exclusion_categories() -> ExclusionCategory[]` — read from the live ExclusionPolicy so

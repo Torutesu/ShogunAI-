@@ -46,6 +46,8 @@ mod notch_exec;
 mod notch_status_visibility;
 mod onboarding;
 #[cfg(target_os = "macos")]
+mod permission_drag;
+#[cfg(target_os = "macos")]
 mod recall_shortcut;
 #[cfg(all(target_os = "macos", feature = "visual-recall-ocr"))]
 mod screen_ocr;
@@ -364,10 +366,14 @@ pub fn run() {
             billing::mac::billing_deactivate,
             billing::mac::billing_open_checkout,
             billing::mac::billing_open_portal,
-            onboarding::mac::accessibility_status,
+            onboarding::mac::permission_status,
             onboarding::mac::onboarding_state,
             onboarding::mac::set_onboarding_state,
             onboarding::mac::open_accessibility_settings,
+            onboarding::mac::request_microphone_permission,
+            onboarding::mac::request_screen_recording_permission,
+            permission_drag::arm_permission_app_drag,
+            permission_drag::disarm_permission_app_drag,
             startup_health::mac::startup_health,
             onboarding::mac::onboarding_event,
             exclusions::mac::exclusion_categories,

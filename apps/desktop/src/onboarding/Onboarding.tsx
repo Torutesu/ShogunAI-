@@ -18,19 +18,25 @@ import { count, t } from "../strings";
 import { ConnectionsList } from "../connections";
 import { AnalyticsToggle } from "../AnalyticsToggle";
 import { comboChips, DEFAULT_BINDS } from "../keys";
+import appIconUrl from "../../src-tauri/icons/icon-128.png";
 import {
-  axPermission,
+  armPermissionDrag,
+  disarmPermissionDrag,
+  EMPTY_PERMISSIONS,
   exclusionCategories,
   getDraftStop,
   getOnboardingState,
   IN_TAURI,
+  permissionStatus,
   requestAxPermission,
+  requestMicrophonePermission,
+  requestScreenRecordingPermission,
   setDraftStop,
   setOnboardingState,
   STEPS,
   track,
 } from "./ipc";
-import type { ExclusionCategory, OnboardingState } from "./ipc";
+import type { ExclusionCategory, OnboardingState, PermissionSnapshot } from "./ipc";
 
 type Appearance = "auto" | "light" | "dark";
 
@@ -71,7 +77,7 @@ export function Onboarding(): JSX.Element {
   // null = the persisted state hasn't come back yet — render nothing rather than flash step 1 at
   // someone who was halfway through.
   const [state, setState] = useState<OnboardingState | null>(null);
-  const [granted, setGranted] = useState(false);
+  const [permissions, setPermissions] = useState<PermissionSnapshot>(EMPTY_PERMISSIONS);
   // The app SHOGUN is reading right now — the proof shown the moment permission lands. The
   // "context" event is broadcast by the capture engine to every webview of the app.
   const [liveApp, setLiveApp] = useState("");
@@ -97,10 +103,10 @@ export function Onboarding(): JSX.Element {
     // Hydrate progress and live trust together. The Rust watcher can emit its initial event before
     // WebKit finishes registering listeners, so the bootstrap read must independently establish
     // the correct permission state.
-    void Promise.all([getOnboardingState(), axPermission()]).then(([s, permission]) => {
+    void Promise.all([getOnboardingState(), permissionStatus()]).then(([s, permission]) => {
       if (!alive) return;
       setState(s);
-      setGranted(permission);
+      setPermissions(permission);
       if (!shownLogged.current) {
         shownLogged.current = true;
         track("shown");
@@ -110,7 +116,7 @@ export function Onboarding(): JSX.Element {
     const offs: Array<Promise<() => void>> = [];
     // Pushed by the Rust watcher on every trust edge while this window is open; the poll below
     // backs it up in case a push is missed.
-    offs.push(listen<boolean>("accessibility-changed", (e) => setGranted(e.payload)));
+    offs.push(listen<PermissionSnapshot>("permissions-changed", (e) => setPermissions(e.payload)));
     offs.push(
       listen<{ bundle_id: string; title_masked: string }>("context", (e) =>
         setLiveApp(appName(e.payload.bundle_id)),
@@ -124,7 +130,7 @@ export function Onboarding(): JSX.Element {
 
   const idx = Math.max(0, state ? STEPS.indexOf(state.step) : 0);
   const step = state ? STEPS[idx] : "welcome";
-  const isAccessibilityRepair = state?.accessibility_repair === true;
+  const isPermissionsRepair = state?.permissions_repair === true;
 
   // Track each step view once per arrival.
   const lastTracked = useRef<string | null>(null);
@@ -136,10 +142,7 @@ export function Onboarding(): JSX.Element {
     }
   }, [state, step]);
 
-  // Accessibility is polled HERE, not inside the step, because the footer depends on it: once the
-  // permission is granted there is nothing left to skip, and offering "Skip for now" next to a
-  // green "Granted" reads as a way to undo it. The check is the NON-prompting one (see ipc.ts) —
-  // polling a prompting check would reopen the system dialog every second and a half.
+  // Poll the non-prompting aggregate here because the footer is gated by all three permissions.
   useEffect(() => {
     if (step !== "permission") return;
     let alive = true;
@@ -147,9 +150,9 @@ export function Onboarding(): JSX.Element {
     const tick = (): void => {
       if (checking) return;
       checking = true;
-      void axPermission()
-        .then((ok) => {
-          if (alive) setGranted(ok);
+      void permissionStatus()
+        .then((snapshot) => {
+          if (alive) setPermissions(snapshot);
         })
         .finally(() => {
           checking = false;
@@ -172,45 +175,49 @@ export function Onboarding(): JSX.Element {
 
   // Log the grant exactly once, when it first flips on.
   useEffect(() => {
-    if (granted && !grantedLogged.current) {
+    if (permissions.all_granted && !grantedLogged.current) {
       grantedLogged.current = true;
-      track("ax_granted");
+      track("all_permissions_granted");
     }
-  }, [granted]);
+  }, [permissions.all_granted]);
 
   const go = useCallback(
     (delta: number): void => {
       if (!state) return;
       const next = STEPS[Math.min(STEPS.length - 1, Math.max(0, idx + delta))];
       const record = { ...state, step: next };
-      setState(record);
-      void setOnboardingState(record);
+      void setOnboardingState(record).then((saved) => {
+        if (saved) setState(record);
+      });
     },
     [idx, state],
   );
 
   const finish = useCallback((): void => {
     if (!state) return;
-    const record = { ...state, completed: true, step: "ready" as const, accessibility_repair: false };
-    setState(record);
+    if (!permissions.all_granted) return;
+    const record = { ...state, completed: true, step: "ready" as const, permissions_repair: false };
     // The completing write is the flow's single exit: Rust stamps the trial (once, ever) and
     // closes this window.
-    void setOnboardingState(record);
-  }, [state]);
+    void setOnboardingState(record).then((saved) => {
+      if (saved) setState(record);
+    });
+  }, [permissions.all_granted, state]);
 
   if (!state) return <div className="onb" />;
 
   // Per-step footer. `skip` is offered only where skipping leaves a working product — never on
   // the steps that are pure explanation, where there is nothing to skip.
   const last = idx === STEPS.length - 1;
-  const primaryLabel = isAccessibilityRepair
+  const primaryLabel = isPermissionsRepair
     ? t.obReadyStart
     : step === "welcome"
       ? t.obWelcomeStart
       : last
         ? t.obReadyStart
         : t.obNext;
-  const canSkip = !isAccessibilityRepair && ((step === "permission" && !granted) || step === "plan" || step === "connect");
+  const canSkip = !isPermissionsRepair && (step === "plan" || step === "connect");
+  const permissionsBlocked = step === "permission" && !permissions.all_granted;
 
   return (
     <div className="onb">
@@ -220,7 +227,7 @@ export function Onboarding(): JSX.Element {
             <span className="onb-mark">⚔</span>
             {o.brand}
           </span>
-          {!isAccessibilityRepair ? (
+          {!isPermissionsRepair ? (
             <>
               <div className="ob-prog" role="presentation">
                 {STEPS.map((s, i) => (
@@ -237,14 +244,14 @@ export function Onboarding(): JSX.Element {
         <div className="onb-body ob-body" key={step}>
           {step === "welcome" ? <Welcome /> : null}
           {step === "reads" ? <Reads /> : null}
-          {step === "permission" ? <Permission liveApp={liveApp} granted={granted} /> : null}
+          {step === "permission" ? <Permission liveApp={liveApp} permissions={permissions} /> : null}
           {step === "plan" ? <Plan state={state} onChange={setState} /> : null}
           {step === "connect" ? <Connect /> : null}
           {step === "ready" ? <Ready /> : null}
         </div>
 
         <footer className="ob-foot">
-          {idx > 0 && !isAccessibilityRepair ? (
+          {idx > 0 && !isPermissionsRepair ? (
             <button className="onb-btn ghost" type="button" onClick={() => go(-1)}>
               {t.obBack}
             </button>
@@ -260,8 +267,8 @@ export function Onboarding(): JSX.Element {
             <button
               className="onb-btn primary"
               type="button"
-              disabled={isAccessibilityRepair && !granted}
-              onClick={isAccessibilityRepair || last ? finish : () => go(1)}
+              disabled={permissionsBlocked}
+              onClick={isPermissionsRepair || last ? finish : () => go(1)}
             >
               {primaryLabel}
             </button>
@@ -336,99 +343,132 @@ function Reads(): JSX.Element {
   );
 }
 
-/** The permission step: title/lede from the flow, with the proven #46 guide inside it — the
- *  do/wont columns, the numbered System Settings steps, and the troubleshooting notes that appear
- *  once the user has actually opened Settings. */
-function Permission({ liveApp, granted }: { liveApp: string; granted: boolean }): JSX.Element {
-  const [opened, setOpened] = useState(false);
+type PermissionKind = "accessibility" | "microphone" | "screen";
 
-  if (granted) {
+function PermissionIcon({ kind }: { kind: PermissionKind }): JSX.Element {
+  if (kind === "microphone") {
     return (
-      <section className="obs">
-        <h1 className="onb-title">{t.obPermTitle}</h1>
-        <div className="ob-perm is-on">
-          <div className="ob-perm-state">
-            <CheckIcon />
-            {t.obPermGranted}
-          </div>
-          {/* Proof, not a claim: the app it is reading, right now. */}
-          <div className="ob-perm-proof">{t.obPermProof.replace("{app}", liveApp || t.yourScreen)}</div>
-        </div>
-      </section>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+        <rect x="9" y="3" width="6" height="11" rx="3" />
+        <path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M9 21h6" />
+      </svg>
     );
   }
+  if (kind === "screen") {
+    return (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+        <rect x="3" y="4" width="18" height="13" rx="2" />
+        <path d="M8 21h8M12 17v4" />
+      </svg>
+    );
+  }
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 3l7.5 3.2v5.3c0 4.7-3.2 8.4-7.5 10.2-4.3-1.8-7.5-5.5-7.5-10.2V6.2L12 3z" />
+      <path d="M9 11.8l2.2 2.2L15.2 10" />
+    </svg>
+  );
+}
+
+function PermissionRow(props: {
+  kind: PermissionKind;
+  title: string;
+  detail: string;
+  granted: boolean;
+  onAction: () => void;
+}): JSX.Element {
+  return (
+    <div className={`ob-permission${props.granted ? " is-ready" : ""}`}>
+      <span className="ob-permission-icon"><PermissionIcon kind={props.kind} /></span>
+      <span className="ob-permission-copy">
+        <strong>{props.title}</strong>
+        <span>{props.detail}</span>
+      </span>
+      {props.granted ? (
+        <span className="ob-permission-ready"><CheckIcon />{o.permissionReady}</span>
+      ) : (
+        <button className="onb-btn ob-permission-action" type="button" onClick={props.onAction}>
+          {o.permissionAction}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function PermissionDrag({ label, onOpen }: { label: string; onOpen: () => void }): JSX.Element {
+  return (
+    <div className="ob-drag-helper">
+      <button
+        className="ob-drag-app"
+        type="button"
+        aria-label={o.dragAria.replace("{permission}", label)}
+        onPointerEnter={() => void armPermissionDrag()}
+        onPointerLeave={(event) => {
+          if (event.buttons === 0) void disarmPermissionDrag();
+        }}
+        onPointerDown={(event) => {
+          if (event.button === 0) {
+            track("permission_app_drag_started");
+            void armPermissionDrag();
+          }
+        }}
+        onClick={onOpen}
+      >
+        <img src={appIconUrl} alt="" draggable={false} />
+        <span><strong>{o.dragTitle}</strong><small>{o.dragHint}</small></span>
+        <span className="ob-drag-cue" aria-hidden="true">↗</span>
+      </button>
+      <span className="ob-drag-wait"><span className="onb-spin" />{o.waiting}</span>
+    </div>
+  );
+}
+
+/** PermissionFlow-style center: every required capability is visible together, live, and backed
+ * by native macOS status/request APIs. */
+function Permission({ liveApp, permissions }: { liveApp: string; permissions: PermissionSnapshot }): JSX.Element {
+  const [opened, setOpened] = useState<"accessibility" | "screen" | null>(null);
+  const readyCount = Number(permissions.accessibility) + Number(permissions.microphone) + Number(permissions.screen_recording);
+
+  const openAccessibility = (): void => {
+    setOpened("accessibility");
+    track("accessibility_settings_opened");
+    void requestAxPermission();
+  };
+  const requestMicrophone = (): void => {
+    track("microphone_requested");
+    void requestMicrophonePermission();
+  };
+  const requestScreen = (): void => {
+    setOpened("screen");
+    track("screen_recording_requested");
+    void requestScreenRecordingPermission();
+  };
 
   return (
-    <section className="obs">
-      <h1 className="onb-title">{t.obPermTitle}</h1>
-      <p className="onb-lead">{t.obPermBody}</p>
-
-      <div className="onb-cols">
-        <div className="onb-col">
-          <span className="onb-col-h">{o.doTitle}</span>
-          {o.doItems.map((it) => (
-            <span className="onb-item" key={it}>
-              <CheckIcon />
-              {it}
-            </span>
-          ))}
+    <section className="obs ob-permission-center">
+      <div className="ob-permission-heading">
+        <div>
+          <h1 className="onb-title">{t.obPermTitle}</h1>
+          <p className="onb-lead">{t.obPermBody}</p>
         </div>
-        <div className="onb-col">
-          <span className="onb-col-h">{o.wontTitle}</span>
-          {o.wontItems.map((it) => (
-            <span className="onb-item" key={it}>
-              <ShieldIcon />
-              {it}
-            </span>
-          ))}
-        </div>
+        <span className={`onb-badge${permissions.all_granted ? " ok" : ""}`}>
+          <span className="onb-dot" />
+          {o.readyCount.replace("{n}", String(readyCount))}
+        </span>
       </div>
 
-      <div className="onb-steps">
-        <span className="onb-col-h">{o.stepsTitle}</span>
-        <ol>
-          {o.steps.map((s, i) => (
-            <li key={s}>
-              <span className="onb-num">{i + 1}</span>
-              {s}
-            </li>
-          ))}
-        </ol>
+      <div className="ob-permission-rail" aria-label={o.permissionsLabel}>
+        <PermissionRow kind="accessibility" title={o.accessibilityTitle} detail={o.accessibilityDetail} granted={permissions.accessibility} onAction={openAccessibility} />
+        {opened === "accessibility" && !permissions.accessibility ? <PermissionDrag label={o.accessibilityTitle} onOpen={openAccessibility} /> : null}
+        <PermissionRow kind="microphone" title={o.microphoneTitle} detail={o.microphoneDetail} granted={permissions.microphone} onAction={requestMicrophone} />
+        <PermissionRow kind="screen" title={o.screenTitle} detail={o.screenDetail} granted={permissions.screen_recording} onAction={requestScreen} />
+        {opened === "screen" && !permissions.screen_recording ? <PermissionDrag label={o.screenTitle} onOpen={requestScreen} /> : null}
       </div>
 
-      <div className="ob-perm-cta">
-        <button
-          className="onb-btn primary"
-          type="button"
-          onClick={() => {
-            setOpened(true);
-            track("ax_settings_opened");
-            void requestAxPermission();
-          }}
-        >
-          {opened ? o.ctaAgain : o.cta}
-        </button>
-      </div>
-
-      {opened ? (
-        <div className="onb-trouble">
-          <span className="onb-waiting">
-            <span className="onb-spin" />
-            {o.waiting}
-          </span>
-          <span className="onb-col-h">{o.troubleTitle}</span>
-          <ul>
-            {o.troubleItems.map((it) => (
-              <li key={it}>{it}</li>
-            ))}
-          </ul>
-        </div>
-      ) : (
-        <div className="ob-fact">
-          <div className="ob-fact-t">{t.obPermSkipTitle}</div>
-          <div className="ob-fact-b">{t.obPermSkipBody}</div>
-        </div>
-      )}
+      {permissions.accessibility ? (
+        <div className="ob-perm-proof">{t.obPermProof.replace("{app}", liveApp || t.yourScreen)}</div>
+      ) : null}
+      <div className="ob-permission-note"><ShieldIcon />{o.privacyNote}</div>
     </section>
   );
 }

@@ -45,10 +45,10 @@ export const STRINGS = {
       sensitive_titles: "Windows with sensitive titles",
     } as Record<string, string>,
 
-    obPermTitle: "SHOGUN needs one permission.",
+    obPermTitle: "Give SHOGUN the access it needs.",
     obPermBody:
-      "Accessibility lets it read the text of your active window. macOS will ask you to allow it in System Settings — SHOGUN can't grant it for you.",
-    obPermGranted: "Granted — it's reading",
+      "Three Mac permissions power context, dictation, meetings, and Visual recall. Set them up together; SHOGUN checks quietly and updates here live.",
+    obPermGranted: "All permissions ready",
     obPermProof: "Right now: {app}",
     obPermSkipTitle: "Without it",
     obPermSkipBody:
@@ -679,6 +679,20 @@ export const STRINGS = {
     // block. Brand rules: the only emoji is ⚔, no competitor/stack names, plain language.
     onboarding: {
       brand: "SHOGUN",
+      permissionsLabel: "Required Mac permissions",
+      readyCount: "{n} of 3 ready",
+      permissionReady: "Ready",
+      permissionAction: "Allow",
+      accessibilityTitle: "Accessibility",
+      accessibilityDetail: "Read the active window and insert drafts where you type.",
+      microphoneTitle: "Microphone",
+      microphoneDetail: "Power dictation and meeting capture when you explicitly start them.",
+      screenTitle: "Screen Recording",
+      screenDetail: "Capture the focused window only when Visual recall is enabled.",
+      privacyNote: "Status checks never prompt. SHOGUN asks only after you click Allow.",
+      dragTitle: "Drag ShogunAI into System Settings",
+      dragHint: "Or click this card to reopen the exact privacy pane.",
+      dragAria: "Drag ShogunAI into the {permission} privacy list",
       // guide (permission missing)
       guideTitle: "Let SHOGUN read your screen",
       guideLead:
