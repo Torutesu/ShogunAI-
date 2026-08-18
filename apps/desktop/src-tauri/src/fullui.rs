@@ -298,10 +298,16 @@ pub mod mac {
         let approvals = app.try_state::<crate::approvals::mac::ApprovalQueueState>();
 
         Ok(FullUiView {
-            // Billing isn't wired yet (§6.12). Reporting "pro" would silently unlock gated UI, so
-            // until the licence check exists the window is told it's on trial — the state that
-            // shows everything without claiming the user has paid for it.
-            plan: "trial",
+            // The real plan from the entitlement seam (trial stamp + verified licence token,
+            // issue #97 / #8). The webview's `Plan` type (fullui/types.ts) only knows
+            // "trial" | "standard" | "pro", so an expired trial renders as "trial" here — this
+            // field is display-only and gating stays core-side either way.
+            plan: match crate::entitlement::mac::current(&app).status {
+                shogun_agents::entitlement::PlanStatus::Standard => "standard",
+                shogun_agents::entitlement::PlanStatus::Pro => "pro",
+                shogun_agents::entitlement::PlanStatus::Trial
+                | shogun_agents::entitlement::PlanStatus::TrialExpired => "trial",
+            },
             today: today(&db, now),
             health: health(&db, &metrics, now),
             sources: sources(connectors.as_ref(), &app, &db, now)?,

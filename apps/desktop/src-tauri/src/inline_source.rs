@@ -382,7 +382,15 @@ pub mod mac {
             }
         }
 
-        let landed = unsafe { value_changed(el, before) };
+        // A synthesized ⌘V is processed on the target app's own schedule, which can be well past
+        // the AX write's quick 4 × 30 ms window — so the paste gets a longer one (10 × 50 ms).
+        let landed = unsafe { value_changed(el, before, 10, 50) };
+        if !landed {
+            // The paste may STILL be in flight. Restoring now would race it: a late ⌘V would then
+            // insert the user's OLD clipboard while this command reports failure. Hold the draft
+            // on the pasteboard for a grace period so a late paste inserts the draft instead.
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
         restore();
         if landed {
             Ok(())
@@ -391,20 +399,28 @@ pub mod mac {
         }
     }
 
-    /// Did the field actually change? Re-reads `AXValue` a few times before giving up.
+    /// Did the field actually change? Re-reads `AXValue` up to `attempts` times, `interval_ms`
+    /// apart, before giving up.
     ///
     /// Some apps apply an AX write on their next run-loop turn, so a single immediate read would
     /// call a working insert a failure. A few short retries cost nothing on the success path (the
     /// first read almost always wins) and are the difference between a false negative and a true
-    /// one. A field with no readable value cannot be verified either way — treated as landed, so
-    /// this check can only ever downgrade a claim we could disprove, never invent a failure.
-    unsafe fn value_changed(el: AXUIElementRef, before: Option<&str>) -> bool {
+    /// one. The window is the caller's: the AX write settles fast (4 × 30 ms), while a synthesized
+    /// paste can take the app noticeably longer (10 × 50 ms). A field with no readable value cannot
+    /// be verified either way — treated as landed, so this check can only ever downgrade a claim we
+    /// could disprove, never invent a failure.
+    unsafe fn value_changed(
+        el: AXUIElementRef,
+        before: Option<&str>,
+        attempts: u32,
+        interval_ms: u64,
+    ) -> bool {
         let Some(before) = before else { return true };
-        for _ in 0..4 {
+        for _ in 0..attempts {
             match unsafe { copy_string(el, kAXValueAttribute) } {
                 Some(now) if now != before => return true,
                 None => return true,
-                _ => std::thread::sleep(std::time::Duration::from_millis(30)),
+                _ => std::thread::sleep(std::time::Duration::from_millis(interval_ms)),
             }
         }
         false
@@ -455,7 +471,7 @@ pub mod mac {
                 unsafe { CFRelease(el as CFTypeRef) };
                 return Err(format!("AX set selected text failed: {err}"));
             }
-            if unsafe { value_changed(el, before.as_deref()) } {
+            if unsafe { value_changed(el, before.as_deref(), 4, 30) } {
                 unsafe { CFRelease(el as CFTypeRef) };
                 return Ok(());
             }
@@ -1083,7 +1099,8 @@ pub mod mac {
     /// removes, best-effort, every user secret from the Keychain:
     ///   - all BYOK provider keys (`<provider>-byok`),
     ///   - all OAuth token sets for connected services (`<source>-tokenset`),
-    ///   - the Composio API key (`composio-api-key`).
+    ///   - the Composio API key (`composio-api-key`),
+    ///   - the user-entered Deepgram ASR key (`deepgram-asr`).
     ///
     /// The local DB encryption key (`memory-db-key`) is intentionally KEPT: `delete_all` clears the
     /// rows but leaves the encrypted DB file and schema in place, so deleting its key would brick a
@@ -1105,10 +1122,19 @@ pub mod mac {
         }
         // The Composio API key (reuse the approvals command's not-found-tolerant helper).
         let _ = crate::approvals::mac::clear_composio_key();
+        // The user-entered Deepgram ASR key (meeting live STT — `meeting::mac::set_deepgram_key`).
+        // Best-effort like the deletions above (a missing entry is a no-op), and the store helper
+        // also drops the in-process secret cache so the key does not appear present after this.
+        let _ = shogun_integrations::keychain_store::delete_generic_secret(
+            shogun_integrations::keychain_store::DEEPGRAM_ASR_ACCOUNT,
+        );
+        // The licence key (`license-key`) deliberately SURVIVES this wipe: deactivation is its own
+        // explicit flow (`crate::billing::mac::billing_deactivate`), and deleting the licence here
+        // would silently delicense a Mac whose owner only asked for their data to be gone.
         refresh_has_key();
         eprintln!(
-            "[shell] delete_all_and_account — all user data, BYOK keys, OAuth token sets and the \
-             Composio key removed (DB encryption key kept)"
+            "[shell] delete_all_and_account — all user data, BYOK keys, OAuth token sets, the \
+             Composio key and the Deepgram ASR key removed (DB encryption key and licence kept)"
         );
         serde_json::to_string(&report).map_err(|e| e.to_string())
     }
@@ -1458,6 +1484,12 @@ pub mod mac {
     ) -> Result<(), String> {
         use std::sync::atomic::Ordering;
         use tauri::{Emitter, Manager};
+
+        // The latch outlives the webview: after a respawn the panel's turn counter can land on an
+        // id the previous webview cancelled, and a NEW turn must not inherit that cancellation
+        // (the pump would drop every delta before the first token). Clear a stale latch naming
+        // exactly this turn — any other value belongs to a different turn and is left alone.
+        let _ = CANCELLED_TURN.compare_exchange(turn, 0, Ordering::Relaxed, Ordering::Relaxed);
 
         let db = db.inner().clone();
         let directives = user_cfg.directives();

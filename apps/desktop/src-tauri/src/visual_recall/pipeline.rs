@@ -51,8 +51,13 @@ pub fn a11y_content_is_thin(window_title: Option<&str>, ax_text_len: usize, meet
             return true;
         }
     }
-    let thin_threshold = if meeting_active { 400 } else { 100 };
-    ax_text_len < thin_threshold
+    // Decision (2026-08-18, matching `meeting_shared_screen_patterns_ocr_but_ordinary_windows_dont`):
+    // a meeting makes OCR more eager only for shared-screen-pattern windows — the title branch
+    // above — and does NOT lower the thin bar for ordinary windows. A meeting-wide 400-char bar
+    // would OCR every ordinarily-thin window the user glances at mid-call (mail, chat, notes),
+    // burning CPU on surfaces whose AX text was already sufficient.
+    const THIN_THRESHOLD: usize = 100;
+    ax_text_len < THIN_THRESHOLD
 }
 
 /// Pre-gate OCR triggers from Screenpipe `paired_capture` (minus meeting-only gate).
@@ -164,7 +169,10 @@ mod tests {
     }
 
     #[test]
-    fn meeting_relaxes_thin_threshold() {
+    fn meeting_shared_screen_patterns_ocr_but_ordinary_windows_dont() {
+        // In a meeting, shared-screen-pattern titles OCR eagerly; an ordinary window with
+        // sufficient AX text (250 ≥ the 100-char thin bar) must NOT — the meeting does not
+        // lower the thin bar itself (see `a11y_content_is_thin`).
         assert!(!wants_ocr("com.apple.Safari", Some("Inbox"), false, 250, true));
         assert!(wants_ocr("com.apple.Safari", Some("Slide deck"), false, 250, true));
     }

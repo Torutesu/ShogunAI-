@@ -41,8 +41,12 @@ pub fn new_distinct_id() -> Result<String, String> {
 pub struct Analytics(Option<AnalyticsHandle>);
 
 impl Analytics {
-    pub fn capture(&self, event: &str, props: Props) {
+    pub fn capture(&self, event: &str, mut props: Props) {
         if let Some(h) = &self.0 {
+            // The plan は base props にハンドル生成時の値で焼き込まれるため、その後の
+            // ライセンス変化（trial → pro 等）を反映できない。capture 時に現在のキャッシュ値を
+            // 合流させる（extra が base を上書きする）。値の更新は `refresh_plan`。
+            props.insert("plan".into(), current_plan_label().into());
             h.capture(event, props);
         }
     }
@@ -86,9 +90,36 @@ fn base_props(app: &AppHandle) -> Props {
     let mut p = Props::new();
     p.insert("os".into(), serde_json::Value::from(std::env::consts::OS));
     p.insert("app_version".into(), app.package_info().version.to_string().into());
-    // v1 は課金基盤前のため "trial" 固定（fullui.rs と同じ実態）。
-    p.insert("plan".into(), "trial".into());
+    // plan は実体（entitlement + 検証済みライセンス）から解決したキャッシュ値。
+    // ハンドル生成後の変化は `Analytics::capture` が capture 時に合流させる。
+    p.insert("plan".into(), current_plan_label().into());
     p
+}
+
+/// 現在のプラン文字列（"trial" / "trial_expired" / "standard" / "pro"）のキャッシュ。
+/// イベント毎に entitlement を解決するとホットパスでファイル読み＋署名検証になるため、
+/// 起動時とライセンス状態が変わり得る箇所（`crate::billing`）で `refresh_plan` が更新する。
+static CURRENT_PLAN: std::sync::Mutex<Option<&'static str>> = std::sync::Mutex::new(None);
+
+/// キャッシュ済みプランラベル。未解決なら "trial"（課金配線前と同じ既定値）。
+fn current_plan_label() -> &'static str {
+    CURRENT_PLAN.lock().ok().and_then(|g| *g).unwrap_or("trial")
+}
+
+/// 現在のエンタイトルメントからプランラベルを解決してキャッシュする。
+/// 呼び出し箇所: `init`（起動時）と `crate::billing::mac` のライセンス状態を書き換える各点。
+#[cfg(target_os = "macos")]
+pub fn refresh_plan(app: &AppHandle) {
+    use shogun_agents::entitlement::PlanStatus;
+    let label = match crate::entitlement::mac::current(app).status {
+        PlanStatus::Trial => "trial",
+        PlanStatus::TrialExpired => "trial_expired",
+        PlanStatus::Standard => "standard",
+        PlanStatus::Pro => "pro",
+    };
+    if let Ok(mut g) = CURRENT_PLAN.lock() {
+        *g = Some(label);
+    }
 }
 
 /// コネクタ read-sync 完了 → context_updated のプロパティに変換する純関数。
@@ -133,6 +164,9 @@ const BUILT_IN_POSTHOG_KEY: Option<&str> = option_env!("SHOGUN_POSTHOG_KEY");
 /// 分析を初期化する。キー解決は 実行時 env（ローカル開発の上書き）→ ビルド時埋め込み → 無効。
 /// キーが両方無ければ no-op ラッパを返す（開発ビルドで無害）。
 pub fn init(app: &AppHandle) -> Analytics {
+    // plan キャッシュを実体から初期化（失敗しても "trial" 既定で送信は成立する）。
+    #[cfg(target_os = "macos")]
+    refresh_plan(app);
     let runtime_key = std::env::var("SHOGUN_POSTHOG_KEY").ok();
     let Some(key) =
         shogun_core::analytics::resolve_api_key(runtime_key.as_deref(), BUILT_IN_POSTHOG_KEY)

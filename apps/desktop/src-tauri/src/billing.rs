@@ -95,8 +95,13 @@ pub mod mac {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
         let _guard = WRITE_LOCK.lock();
-        std::fs::write(&path, serialize_billing_snapshot(snap))
-            .map_err(|e| format!("billing state write failed: {e}"))
+        // Atomic write (tmp + rename), same idiom as `daily_summaries::save`: a power cut
+        // mid-write must not corrupt billing.json — a paying user would fall back to trial
+        // rules until the next 24h verification.
+        let tmp = path.with_extension("json.tmp");
+        std::fs::write(&tmp, serialize_billing_snapshot(snap))
+            .map_err(|e| format!("billing state write failed: {e}"))?;
+        std::fs::rename(&tmp, &path).map_err(|e| format!("billing state commit failed: {e}"))
     }
 
     fn clear_snapshot(app: &AppHandle) {
@@ -311,7 +316,7 @@ pub mod mac {
     /// Only an authoritative answer (not entitled / licence gone) clears the cache, and only
     /// "gone" also removes the key.
     fn reverify(app: &AppHandle, license_key: &str) -> Result<(), String> {
-        match check(app, license_key)? {
+        let result = match check(app, license_key)? {
             Outcome::Entitled(snap) => write_snapshot(app, &snap),
             // Authoritative lapse: lock now rather than at the end of the grace window.
             Outcome::NotEntitled(status) => {
@@ -324,7 +329,10 @@ pub mod mac {
                 Err(msg)
             }
             Outcome::Transient(msg) => Err(msg),
-        }
+        };
+        // The plan may just have changed — keep the analytics `plan` property current.
+        crate::analytics::refresh_plan(app);
+        result
     }
 
     /// Current billing state for the settings panel. Never hits the network.
@@ -360,7 +368,11 @@ pub mod mac {
                     return view(app, Some(format!("could not store the licence: {e}")));
                 }
                 match write_snapshot(app, &snap) {
-                    Ok(()) => view(app, None),
+                    Ok(()) => {
+                        // Activation changed the plan — keep the analytics `plan` property current.
+                        crate::analytics::refresh_plan(app);
+                        view(app, None)
+                    }
                     Err(e) => view(app, Some(e)),
                 }
             }
@@ -393,6 +405,8 @@ pub mod mac {
     pub fn billing_deactivate(app: AppHandle) -> BillingView {
         let _ = keychain_store::delete_generic_secret(LICENSE_KEY_ACCOUNT);
         clear_snapshot(&app);
+        // Deactivation changed the plan — keep the analytics `plan` property current.
+        crate::analytics::refresh_plan(&app);
         view(&app, None)
     }
 
