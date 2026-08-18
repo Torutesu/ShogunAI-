@@ -1,7 +1,6 @@
 import { ArrowRight, Check, Command, Play, Sparkles } from 'lucide-react';
 import { ParticipantCount } from '@/components/ParticipantCount';
 import { Badges } from '@/components/sections/Badges';
-import { HeroMarqueeRow } from '@/components/sections/Marquee';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { WaitlistForm } from '@/components/WaitlistForm';
@@ -144,9 +143,6 @@ export function Hero({ t, participantCount }: { t: Dictionary; participantCount:
             <Badges t={t} />
           </div>
 
-          <div className="order-3 lg:order-4 lg:col-span-2">
-            <HeroMarqueeRow t={t} />
-          </div>
         </div>
       </div>
     </section>

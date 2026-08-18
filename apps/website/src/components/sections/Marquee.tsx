@@ -77,18 +77,20 @@ function Track({ brands, reverse = false }: { brands: readonly (typeof BRAND_LOG
   );
 }
 
-export function HeroMarqueeRow({ t }: { t: Dictionary }) {
+export function Marquee({ t }: { t: Dictionary }) {
   return (
-    <div className="overflow-hidden pt-1.5 sm:pt-2">
-      <div className="mb-1.5 flex items-center gap-5">
-        <p className="shrink-0 text-[11px] font-semibold tracking-[0.08em] text-muted">{t.trust.label}</p>
-        <div className="h-px flex-1 bg-[#8da7ed]/45" />
+    <section aria-label={t.trust.label} className="overflow-hidden pb-10 pt-8 sm:pb-12 sm:pt-10">
+      <div className="container-x">
+        <div className="mb-3 flex items-center gap-5">
+          <p className="shrink-0 text-[11px] font-semibold tracking-[0.08em] text-muted">{t.trust.label}</p>
+          <div className="h-px flex-1 bg-[#8da7ed]/45" />
+        </div>
+        <div className="group/mq marquee-mask overflow-hidden rounded-[20px] border border-black/5 bg-white/60 px-2 py-1 shadow-[0_16px_36px_rgba(19,55,77,0.06)] sm:px-3">
+          <Track brands={BRAND_ROWS[0]} />
+          <div className="mx-2 h-px bg-black/[0.06]" />
+          <Track brands={BRAND_ROWS[1]} reverse />
+        </div>
       </div>
-      <div className="group/mq marquee-mask overflow-hidden rounded-[20px] border border-black/5 bg-white/42 px-2 py-[3px] shadow-[0_16px_36px_rgba(19,55,77,0.06)] backdrop-blur-sm sm:px-3">
-        <Track brands={BRAND_ROWS[0]} />
-        <div className="mx-2 h-px bg-black/[0.06]" />
-        <Track brands={BRAND_ROWS[1]} reverse />
-      </div>
-    </div>
+    </section>
   );
 }
