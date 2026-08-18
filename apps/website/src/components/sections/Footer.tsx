@@ -50,12 +50,12 @@ export async function Footer({ localeOverride }: { localeOverride?: Locale } = {
           </a>
           <p className="mt-3.5 text-xs text-muted">{t.footer.tagline}</p>
         </div>
-        <div className="grid grid-cols-2 gap-x-10 gap-y-8 sm:grid-cols-3 lg:grid-cols-5 lg:gap-x-7 xl:gap-x-10">
+        <div className="grid grid-cols-2 gap-x-10 gap-y-8 sm:grid-cols-3 lg:gap-x-7 xl:grid-cols-5 xl:gap-x-10">
           {cols.map((col) => (
             <div key={col.title} className="flex flex-col gap-3">
-              <div className="text-xs font-medium uppercase tracking-[0.06em] text-muted">{col.title}</div>
+              <div className="text-xs font-medium uppercase tracking-[0.06em] text-muted hyphens-auto break-words">{col.title}</div>
               {col.links.map((l) => (
-                <a key={l.label} href={l.href} className="text-sm text-muted transition-colors hover:text-ink">
+                <a key={l.label} href={l.href} className="text-sm text-muted transition-colors hover:text-ink hyphens-auto break-words">
                   {l.label}
                 </a>
               ))}
