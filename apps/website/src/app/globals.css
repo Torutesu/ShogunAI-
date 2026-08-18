@@ -205,11 +205,30 @@ html[data-theme='dark'] .waitlist-form-default button {
 .hero-shell {
   min-height: calc(100svh - 4rem);
   background: #f7f5f0 url('/optimized/shogunai-hero-kyoto-v3.jpg') center bottom / 100% auto no-repeat;
+  /* The hero is at least a viewport tall, and its content was pinned to the
+   * top of that box: 23px under the nav on every screen, against as much as
+   * 500px of dead space below the logo rows on a tall one. Centring splits the
+   * slack instead. Content taller than the box just grows it, since the height
+   * is a minimum. */
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
 }
 
 @media (min-width: 701px) {
   .hero-shell {
     background-position: center calc(100% + 96px);
+  }
+}
+
+/* On very tall screens an even split leaves as much empty gradient above the
+ * headline as artwork below it. There is always slack at this height, so bias
+ * the content above centre and let the castle and the figure breathe. Shorter
+ * screens keep the centred split, where every pixel is already spoken for. */
+@media (min-height: 1100px) {
+  .hero-shell {
+    justify-content: flex-start;
+    padding-top: 12vh;
   }
 }
 
