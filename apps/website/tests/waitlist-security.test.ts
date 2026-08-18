@@ -1,42 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { generateRefCode, generateStatusToken, signupPayload } from '../src/lib/referral.ts';
 import { isAuthorizedOrigin } from '../src/lib/waitlist-auth.ts';
 
-// --- signupPayload: duplicate signups must never leak the private token ---
-// (docs/fixes/2026-07-30-waitlist-security-fix.md)
-
-const ORIGIN = 'https://syogun.com';
-
-test('duplicate signup payload never contains the existing statusToken', () => {
-  const row = { refCode: generateRefCode(), statusToken: generateStatusToken() };
-  const dup = signupPayload(row, true, ORIGIN);
-  assert.deepEqual(dup, { refCode: null, statusUrl: null });
-  assert.equal(JSON.stringify(dup).includes(row.statusToken), false, 'token must not appear');
-  assert.equal(JSON.stringify(dup).includes(row.refCode), false, 'ref code must not appear');
-});
-
-test('duplicate payload is byte-identical to the honeypot response shape', () => {
-  const row = { refCode: generateRefCode(), statusToken: generateStatusToken() };
-  // The honeypot path returns { refCode: null, statusUrl: null } — duplicates
-  // must be indistinguishable from it.
-  assert.deepEqual(signupPayload(row, true, ORIGIN), { refCode: null, statusUrl: null });
-});
-
-test('fresh signup payload still returns the status link (happy path unchanged)', () => {
-  const row = { refCode: generateRefCode(), statusToken: generateStatusToken() };
-  const fresh = signupPayload(row, false, ORIGIN);
-  assert.equal(fresh.refCode, row.refCode);
-  assert.ok(fresh.statusUrl?.startsWith(`${ORIGIN}/status?code=`));
-  assert.ok(fresh.statusUrl!.includes(row.statusToken), 'owner gets their own token once');
-});
-
-test('rows missing tokens degrade to the generic payload, never a broken URL', () => {
-  assert.deepEqual(signupPayload({ refCode: null, statusToken: null }, false, ORIGIN), {
-    refCode: null,
-    statusUrl: null,
-  });
-});
+// The four signupPayload cases that used to live here are gone with the helper:
+// /api/waitlist/signup now answers `ok({})` for new and duplicate emails alike,
+// so there is no payload left to leak a status token or act as an enumeration
+// oracle. See docs/fixes/2026-07-30-waitlist-security-fix.md for the original.
 
 // --- isAuthorizedOrigin: must fail CLOSED when unconfigured ---
 
@@ -82,11 +51,19 @@ test('empty-string allowlist behaves like unset (fail closed)', () => {
   });
 });
 
-test('unset allowlist still permits SAME-ORIGIN requests (local dev)', () => {
+test('unset allowlist denies even SAME-ORIGIN requests outside development', () => {
   withEnv({ WAITLIST_ALLOWED_ORIGINS: undefined, WAITLIST_WEBHOOK_SECRET: undefined }, () => {
-    const dev = post('http://localhost:3000/api/waitlist/signup', { origin: 'http://localhost:3000' });
-    assert.equal(isAuthorizedOrigin(dev), true);
-    assert.equal(isAuthorizedOrigin(post(SITE, { origin: 'https://syogun.com' })), true);
+    const prev = process.env.NODE_ENV;
+    try {
+      delete process.env.NODE_ENV;
+      assert.equal(isAuthorizedOrigin(post(SITE, { origin: 'https://syogun.com' })), false);
+      process.env.NODE_ENV = 'development';
+      const dev = post('http://localhost:3000/api/waitlist/signup', { origin: 'http://localhost:3000' });
+      assert.equal(isAuthorizedOrigin(dev), true);
+    } finally {
+      if (prev === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = prev;
+    }
   });
 });
 

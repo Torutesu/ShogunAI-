@@ -2,6 +2,9 @@ node_modules/
 .next/
 out/
 build/
+.open-next/
+.wrangler/
+.dev.vars
 .env
 .env.local
 *.log

@@ -53,12 +53,27 @@ export function maskEmail(email: string): string {
   return `${visible}***@***${tld ? '.' + tld : ''}`;
 }
 
-// --- Free-text guard: trims, rejects empties/non-strings, caps length. ---
+// --- Free-text guard: trims, strips control chars, caps length. ---
 export const MAX_ANSWER_LENGTH = 1000;
 export function sanitizeAnswer(value: unknown): string | null {
   if (typeof value !== 'string') return null;
-  const trimmed = value.trim();
+  // Control characters (incl. NUL, CR/LF, ESC) have no place in form answers
+  // and can corrupt logs/CSV exports downstream.
+  // eslint-disable-next-line no-control-regex
+  const trimmed = value.replace(/[\u0000-\u001f\u007f]/g, ' ').trim();
   return trimmed ? trimmed.slice(0, MAX_ANSWER_LENGTH) : null;
+}
+
+/**
+ * Public-display name guard (leaderboard). React escapes on render, but the
+ * nickname also flows into JSON consumed by third parties — strip markup
+ * delimiters outright as defense in depth.
+ */
+export function sanitizeNickname(value: unknown): string | null {
+  const s = sanitizeAnswer(value);
+  if (!s) return null;
+  const cleaned = s.replace(/[<>]/g, '').trim();
+  return cleaned ? cleaned.slice(0, 40) : null;
 }
 
 // --- Strict email validation (spec §6.3). Rejects markup/formula/header chars. ---
@@ -73,7 +88,7 @@ export function isValidEmail(value: unknown): value is string {
  * dangerous lead char with a single quote so spreadsheets treat them as text.
  */
 export function csvSafeCell(value: string): string {
-  return /^[=+\-@\t\r]/.test(value) ? `'${value}` : value;
+  return /^[=+\-@\t\r\n]/.test(value) ? `'${value}` : value;
 }
 
 /**
@@ -94,20 +109,4 @@ export function shareUrl(origin: string, refCode: string): string {
 /** Build the private status-page URL from a status token. */
 export function statusUrl(origin: string, statusToken: string): string {
   return `${origin.replace(/\/$/, '')}/status?code=${encodeURIComponent(statusToken)}`;
-}
-
-/**
- * Build the /api/waitlist/signup response payload. A DUPLICATE signup must
- * return the same generic shape as the honeypot path ({ refCode: null,
- * statusUrl: null }) — echoing the existing row's PRIVATE statusToken would
- * hand the account to anyone who knows the email address.
- * See docs/fixes/2026-07-30-waitlist-security-fix.md.
- */
-export function signupPayload(
-  row: { refCode: string | null; statusToken: string | null },
-  duplicate: boolean,
-  origin: string,
-): { refCode: string | null; statusUrl: string | null } {
-  if (duplicate || !row.refCode || !row.statusToken) return { refCode: null, statusUrl: null };
-  return { refCode: row.refCode, statusUrl: statusUrl(origin, row.statusToken) };
 }

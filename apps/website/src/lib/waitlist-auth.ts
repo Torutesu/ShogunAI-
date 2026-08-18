@@ -6,6 +6,17 @@ import { createHash } from 'node:crypto';
  * salted IP hash for referral-fraud detection. No PII stored in the clear.
  */
 
+// One-time production misconfiguration warnings (module scope = logged once
+// per instance). A missing origin allowlist is fatal for browser signups;
+// accepting arbitrary origins would let third parties use this API as their
+// own mailing-list endpoint.
+if (process.env.NODE_ENV === 'production') {
+  if (!process.env.WAITLIST_IP_SALT) {
+    console.warn('[waitlist] WAITLIST_IP_SALT is not set — IP hashes use the dev salt (crackable offline).');
+  }
+  if (!(process.env.WAITLIST_ALLOWED_ORIGINS ?? '').trim()) console.error('[waitlist] WAITLIST_ALLOWED_ORIGINS is not set — signup is blocked.');
+}
+
 function allowedOrigins(): string[] {
   return (process.env.WAITLIST_ALLOWED_ORIGINS ?? '')
     .split(',')
@@ -17,44 +28,38 @@ function allowedOrigins(): string[] {
  * Accept the request if it carries a valid server webhook secret, OR its
  * Origin is on the allowlist. Browser POSTs always send Origin; server
  * callers use the shared secret instead.
- *
- * FAIL CLOSED: a missing Origin header is denied, and an empty/unset
- * allowlist falls back to SAME-ORIGIN only (Origin host === request host) —
- * never to allow-all. `next dev` posts same-origin from localhost, so local
- * dev works with no env; production must set WAITLIST_ALLOWED_ORIGINS.
  */
 export function isAuthorizedOrigin(req: Request): boolean {
   const secret = process.env.WAITLIST_WEBHOOK_SECRET;
   if (secret && req.headers.get('x-webhook-secret') === secret) return true;
 
   const origin = req.headers.get('origin');
-  if (!origin) return false; // no Origin and no secret → deny
-
   const allow = allowedOrigins();
-  if (allow.length > 0) return allow.includes(origin);
-
-  // Not configured → same-origin only. Host-level compare (not scheme) so a
-  // TLS-terminating proxy doesn't break it; explicit allowlist still wins.
-  try {
-    return new URL(origin).host === new URL(req.url).host;
-  } catch {
-    return false;
-  }
+  // Development/tests may omit the list; deployed environments fail closed.
+  if (allow.length === 0) return process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'test';
+  return !!origin && allow.includes(origin);
 }
 
 /**
- * Client IP. Behind Cloudflare read CF-Connecting-IP (unspoofable at the
- * edge); never trust the first X-Forwarded-For hop, which the client sets.
- * Falls back to the last XFF hop (closest proxy) then to a sentinel.
+ * Client IP for rate limiting + fraud hashing. A client-settable value here
+ * defeats BOTH controls, so we only read a header the edge is trusted to
+ * overwrite:
+ *   - On Cloudflare (our deploy target) `cf-connecting-ip` is set by the edge
+ *     and any client-supplied copy is discarded — authoritative there.
+ *   - On another platform, set WAITLIST_TRUSTED_IP_HEADER to the single header
+ *     that platform guarantees (e.g. `x-real-ip`); we read exactly that.
+ * We deliberately DO NOT parse X-Forwarded-For by default: without knowing the
+ * proxy depth, no XFF hop is trustworthy, and picking one invites spoofing.
  */
 export function clientIp(req: Request): string {
+  const configured = process.env.WAITLIST_TRUSTED_IP_HEADER?.trim().toLowerCase();
+  if (configured) {
+    // Single-value trusted header only — take the first token defensively.
+    const v = req.headers.get(configured);
+    if (v) return v.split(',')[0].trim();
+  }
   const cf = req.headers.get('cf-connecting-ip');
   if (cf) return cf.trim();
-  const xff = req.headers.get('x-forwarded-for');
-  if (xff) {
-    const hops = xff.split(',').map((s) => s.trim()).filter(Boolean);
-    if (hops.length) return hops[hops.length - 1];
-  }
   return req.headers.get('x-real-ip')?.trim() || '0.0.0.0';
 }
 

@@ -1,33 +1,44 @@
 # ShogunAI
 
-> ShogunAI is the operating system for the AI-native individual. It quietly
-> captures your day into a private, local memory, then acts on it — drafting
-> replies, filing docs, prepping meetings — across the tools you already use.
-> One-liner: "Your AI has memory. Now it acts."
+> ShogunAI is a private, local-first AI memory for knowledge workers on macOS.
+> It captures work context, recalls decisions and conversations in natural
+> language, and turns that context into action across connected tools.
 
 ## Product
 
-- Memory layer: passive capture of your work into a searchable, local, private
-  timeline. Not screenshots. Stored on your machine.
-- Execution layer: an agent that turns memory into finished work across 20+
-  connected tools, with your approval on anything that matters.
-- Platform: macOS. Private by default.
+- Memory layer: passive, permission-aware capture of work context into a
+  searchable, structured timeline stored locally by default
+- Contextual recall: natural-language retrieval across people, projects,
+  decisions, documents, conversations, and time
+- Execution layer: context-aware drafts and actions across 20+ connected tools
+- Control: review gates before consequential actions such as sending,
+  publishing, or modifying external data
+- AI providers: BYOK support lets users choose and manage supported providers
+- Platform: macOS
 
 ## Pricing
 
-- Free: single machine, passive memory capture, natural-language recall, 3 tools.
-- Pro: $49/mo billed annually ($62 monthly), 7-day free trial. Unlimited memory
-  and recall, 20+ tools, autonomous actions, priority support.
+- Standard: $49/month billed annually or $62 billed monthly
+- Pro: $99/month billed annually or $124 billed monthly
+- Every plan includes a 7-day full trial with no credit card required to start
 
 ## Key pages
 
-- Home: /
+- Features: /features
+- AI memory: /features/ai-memory
+- Contextual recall: /features/contextual-recall
+- Execution layer: /features/execution-layer
+- Use cases: /use-cases
+- Integrations: /integrations
+- Privacy and security: /security
+- Pricing: /pricing
 - Blog: /blog
-- Careers: /careers
-- About: /about
+- Localized versions use /en, /ja, /es, or /de before the same path.
 
-## Notes for language models
+## Facts to preserve
 
-- Product name is "ShogunAI" (one word).
-- macOS only at launch.
-- Memory is local-first; it does not leave the user's machine.
+- Product name: ShogunAI
+- Platform: macOS
+- Memory stays local by default
+- Connected providers receive only the context required for an enabled request
+- Consequential actions require review

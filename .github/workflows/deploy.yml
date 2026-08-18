@@ -1,0 +1,64 @@
+name: Deploy website (Cloudflare)
+
+# Deterministic push-to-deploy via GitHub Actions (more reliable for this
+# monorepo than the Cloudflare dashboard's build settings). On every push to
+# the branch it: installs → migrates the DB (if DATABASE_URL is set) →
+# builds the OpenNext Worker → deploys to Cloudflare.
+#
+# One-time setup — add these repo secrets (Settings → Secrets → Actions):
+#   CLOUDFLARE_API_TOKEN   (required)  "Edit Cloudflare Workers" token
+#   CLOUDFLARE_ACCOUNT_ID  (required)  your account id
+#   DATABASE_URL           (optional)  Supabase URL — enables auto-migrate
+#
+# shogunaios.com is a custom domain of the `preview` environment in
+# wrangler.jsonc (worker `shogunai-website-codex-preview`), which is also where
+# the D1 binding and WAITLIST_ALLOWED_ORIGINS live. A bare `wrangler deploy`
+# ships the top-level `shogunai-website` worker instead, which no domain points
+# at — so it looks green while production stays unchanged. Deploy `--env
+# preview` until the domain is moved back to the top-level worker.
+on:
+  push:
+    branches: [main, codex/ui-lp-polish, claude/shogunai-ui-lp-lisvsd]
+    paths:
+      - 'apps/website/**'
+      - 'packages/**'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/deploy.yml'
+  workflow_dispatch: {}
+
+concurrency:
+  group: deploy-website
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: Migrate database (idempotent, if configured)
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          if [ -n "$DATABASE_URL" ]; then
+            pnpm --filter @shogun-ai/website db:migrate
+          else
+            echo "DATABASE_URL not set — skipping migrate"
+          fi
+
+      - name: Build OpenNext worker
+        run: pnpm --filter @shogun-ai/website cf:build
+
+      - name: Deploy to Cloudflare
+        run: pnpm --filter @shogun-ai/website exec wrangler deploy --env preview
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

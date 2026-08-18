@@ -1,0 +1,71 @@
+---
+title: 'Meeting notes without the recording'
+description: 'Meetings become part of your memory instead of a folder of audio files — and it is included in every plan, trial included.'
+date: '2026-08-17'
+category: 'Product'
+author: 'ShogunAI'
+---
+
+Meeting recorders solve one hour of your day and forget the other seven. The
+notes land in their own app, in their own silo, disconnected from the work the
+meeting was actually about.
+
+ShogunAI treats a meeting as what it is: a dense hour of the same day the rest
+of the memory layer already covers.
+
+## How it works
+
+ShogunAI notices you are in a meeting — the call app is frontmost, the mic is
+live, the event is on your calendar — and starts a transcript. No bot joins the
+call. Nobody has to be told a recorder is present, because there is no
+recorder. When the meeting ends you get a recap: what was decided, what was
+assigned, what stayed open, and who owes what to whom.
+
+Those outputs are not a separate document. Commitments made in the call become
+open loops in the same tables that track the rest of your week, so the follow-up
+you promised at 15:40 shows up in the morning brief and in the drafted email —
+not in a notes app you would have had to remember to open.
+
+## What is stored, and what is not
+
+**Stored:** the transcript text, who said it, when, and which meeting it came
+from.
+
+**Not stored:** the audio. ShogunAI does not write a recording to disk, does
+not keep a temporary audio file, and does not produce one at any point in the
+pipeline. There is nothing to leak, nothing to accidentally share, nothing to
+subpoena. This is enforced in the build itself, not by remembering to delete
+things afterward.
+
+Language handling matters here, so the transcription is multilingual by
+default. A call that switches between Japanese and English comes back as one
+transcript, not two broken halves.
+
+## The part we will not bury
+
+Live transcription runs through a speech service rather than entirely on your
+Mac. Audio streams to it for the length of the call and is used only to produce
+the text — the account is configured so that nothing spoken in your meetings
+can be used to train or improve anyone's models.
+
+That is a real exception to "your data stays on your machine," and it is the
+reason we are writing it in plain language here instead of in a footnote. The
+app discloses it in the meeting interface, the traceability log records it like
+any other egress, and if you would rather not, meeting notes can stay off
+without affecting anything else.
+
+We picked this trade deliberately. On-device transcription that is fast enough
+to be live, accurate enough to be quoted, and multilingual enough to be useful
+in the meetings our users actually sit in is not there yet on the hardware
+people actually own. When it is, this moves back to the Mac.
+
+## Included in every plan
+
+Meeting notes are in Standard, in Pro, and in the seven-day trial. This is a
+feature you have to feel to evaluate, and a trial that hides it is a trial that
+cannot answer the question you are trying to answer. The only meeting-related
+feature behind Pro is reaching meeting memory from your own AI tools through
+the Memory API.
+
+Recording a meeting is easy. Having the meeting change what your system does
+for the rest of the week is the part worth building.

@@ -12,9 +12,9 @@ export function ThemeToggle() {
   useEffect(() => {
     const root = document.documentElement;
     const stored = root.getAttribute('data-theme') as Theme | null;
-    const initial =
-      stored ??
-      (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+    // The landing page defaults to its light sky palette. Dark mode remains an
+    // explicit visitor choice, rather than inheriting an OS setting mid-layout.
+    const initial = stored ?? 'light';
     setTheme(initial);
   }, []);
 
@@ -34,7 +34,7 @@ export function ThemeToggle() {
       type="button"
       onClick={toggle}
       aria-label="Toggle color theme"
-      className="group flex size-9 items-center justify-center rounded-full border border-border text-muted transition-colors hover:border-ink/25 hover:text-ink"
+      className="group flex size-11 items-center justify-center rounded-full border border-border text-muted transition-colors hover:border-ink/25 hover:text-ink"
     >
       {theme === 'dark' ? (
         <Sun className="size-4 transition-transform duration-500 group-hover:rotate-90" />
