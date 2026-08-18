@@ -68,6 +68,30 @@ fn is_secret_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '+' | '/' | '=' | '~')
 }
 
+/// Characters that mean the position is *inside* an existing word rather than at the start of one.
+///
+/// This is [`is_secret_char`] minus `=`: inside a value `=` only ever occurs as trailing base64
+/// padding, while between values it is the `key=value` separator — so a prefix directly after `=`
+/// begins a fresh value and must still be matched (`key=sk-…`).
+fn continues_word(c: char) -> bool {
+    is_secret_char(c) && c != '='
+}
+
+/// True when byte offset `at` in `text` begins a word: it is the start of the input, or the
+/// character immediately before it cannot continue one.
+///
+/// Issuer prefixes are only meaningful at a word start. Without this guard `sk-` matches inside
+/// "task-management-system" and [`is_secret_char`] accepting `-` then swallows the rest of the
+/// phrase — and redaction is irreversible, since only the masked form is ever stored.
+///
+/// `at` must be a char boundary of `text`; every caller checks that before slicing.
+fn at_word_start(text: &str, at: usize) -> bool {
+    match text[..at].chars().next_back() {
+        None => true,
+        Some(prev) => !continues_word(prev),
+    }
+}
+
 /// Mask recognisable secrets in `text`.
 ///
 /// Returns the input unchanged (no allocation) when nothing matched, which is the common case for
@@ -88,8 +112,13 @@ pub fn redact(text: &str) -> std::borrow::Cow<'_, str> {
         }
         let rest = &text[i..];
 
-        // 1. A known issuer prefix: mask the prefix and the value that follows it.
-        if let Some(p) = ISSUER_PREFIXES.iter().find(|p| rest.starts_with(**p)) {
+        // 1. A known issuer prefix at a word start: mask the prefix and the value that follows it.
+        let issuer = if at_word_start(text, i) {
+            ISSUER_PREFIXES.iter().find(|p| rest.starts_with(**p))
+        } else {
+            None
+        };
+        if let Some(p) = issuer {
             let value_len = run_len(&rest[p.len()..]);
             if p.len() + value_len >= MIN_SECRET_LEN {
                 out.push_str(MASK);
@@ -327,6 +356,41 @@ mod tests {
         // No separator follows, so nothing is masked.
         let s = "tokenising the passwordless flow takes a while honestly";
         assert_eq!(r(s), s);
+    }
+
+    // --- regression: issuer prefixes only count at a word start (locked in) -------------------
+
+    #[test]
+    fn issuer_prefixes_inside_ordinary_words_are_not_matched() {
+        // `sk-` / `SG.` land mid-word constantly, and `-`/`_` being secret chars means a match
+        // there eats the rest of the phrase. Redaction is irreversible: only this form is stored.
+        for s in [
+            "task-management-system",
+            "disk-usage-report",
+            "risk-register-2026",
+            "MSG.STATUS_CODE_INVALID",
+            "brisk-standup-notes",
+            "DIALOG.SG.RETRY_LIMIT",
+            "the task-management-system doc is in the risk-register-2026 folder",
+        ] {
+            assert_eq!(r(s), s, "mid-word issuer prefix must not match: {s}");
+        }
+    }
+
+    #[test]
+    fn issuer_prefixes_at_a_word_start_are_still_masked() {
+        assert_eq!(r("sk-abc123def456ghi789"), "[redacted]");
+        assert_eq!(r("key=sk-abc123def456ghi789"), "key=[redacted]");
+        assert_eq!(r("use sk-abc123def456ghi789 now"), "use [redacted] now");
+        assert_eq!(r("config: sk-abc123def456ghi789"), "config: [redacted]");
+        assert_eq!(r("\"sk-abc123def456ghi789\""), "\"[redacted]\"");
+        assert_eq!(r("(AKIAIOSFODNN7EXAMPLE)"), "([redacted])");
+    }
+
+    #[test]
+    fn a_multibyte_character_before_an_issuer_prefix_is_a_word_boundary() {
+        // Exercises the preceding-char lookup on a non-ASCII boundary.
+        assert_eq!(r("メモsk-abc123def456ghi789"), "メモ[redacted]");
     }
 
     #[test]
