@@ -9,16 +9,17 @@ pub mod mac {
     use std::sync::{Arc, Mutex};
 
     use accessibility_sys::{
-        kAXErrorSuccess, kAXFocusedAttribute, kAXFocusedUIElementAttribute, kAXRoleAttribute,
+        kAXEnabledAttribute, kAXErrorSuccess, kAXFocusedUIElementAttribute, kAXRoleAttribute,
         kAXSelectedTextAttribute, kAXSelectedTextRangeAttribute, kAXValueAttribute,
         kAXValueTypeCFRange, AXUIElementCopyAttributeValue, AXUIElementCreateSystemWide,
-        AXUIElementGetPid, AXUIElementRef, AXUIElementSetAttributeValue,
-        AXUIElementSetMessagingTimeout, AXValueCreate, AXValueGetTypeID, AXValueGetValue,
+        AXUIElementGetPid, AXUIElementIsAttributeSettable, AXUIElementRef,
+        AXUIElementSetAttributeValue, AXUIElementSetMessagingTimeout, AXValueCreate,
+        AXValueGetTypeID, AXValueGetValue,
     };
     use core_foundation::base::TCFType;
-    use core_foundation::boolean::CFBoolean;
     use core_foundation::string::CFString;
     use core_foundation_sys::base::{CFEqual, CFGetTypeID, CFRange, CFRelease, CFTypeRef};
+    use core_foundation_sys::number::{CFBooleanGetTypeID, CFBooleanGetValue, CFBooleanRef};
     use core_foundation_sys::string::{CFStringGetTypeID, CFStringRef};
 
     use serde::Serialize;
@@ -233,6 +234,41 @@ pub mod mac {
         }
     }
 
+    unsafe fn copy_bool(element: AXUIElementRef, name: &str) -> Option<bool> {
+        let attribute = CFString::new(name);
+        let mut value: CFTypeRef = std::ptr::null();
+        let error = unsafe {
+            AXUIElementCopyAttributeValue(element, attribute.as_concrete_TypeRef(), &mut value)
+        };
+        if error != kAXErrorSuccess || value.is_null() {
+            return None;
+        }
+        let result = if unsafe { CFGetTypeID(value) == CFBooleanGetTypeID() } {
+            Some(unsafe { CFBooleanGetValue(value as CFBooleanRef) })
+        } else {
+            None
+        };
+        unsafe { CFRelease(value) };
+        result
+    }
+
+    unsafe fn selected_text_is_settable(element: AXUIElementRef) -> bool {
+        let attribute = CFString::new(kAXSelectedTextAttribute);
+        let mut settable = 0u8;
+        let result = unsafe {
+            AXUIElementIsAttributeSettable(element, attribute.as_concrete_TypeRef(), &mut settable)
+        };
+        result == kAXErrorSuccess && settable != 0
+    }
+
+    unsafe fn target_is_writable(element: AXUIElementRef) -> bool {
+        let enabled = unsafe { copy_bool(element, kAXEnabledAttribute) };
+        let editable = unsafe { copy_bool(element, "AXEditable") };
+        enabled == Some(true)
+            && editable == Some(true)
+            && unsafe { selected_text_is_settable(element) }
+    }
+
     unsafe fn copy_range(element: AXUIElementRef) -> Option<CFRange> {
         let attribute = CFString::new(kAXSelectedTextRangeAttribute);
         let mut value: CFTypeRef = std::ptr::null();
@@ -285,7 +321,7 @@ pub mod mac {
     fn capture_dictation_target() -> Result<DictationTarget, &'static str> {
         let element = unsafe { focused_element() }.ok_or("no editable text field is focused")?;
         let role = unsafe { copy_string(element, kAXRoleAttribute) }.unwrap_or_default();
-        if !editable_role(&role) || secure_role(&role) {
+        if !editable_role(&role) || secure_role(&role) || !unsafe { target_is_writable(element) } {
             unsafe { CFRelease(element.cast()) };
             return Err("place the caret in an editable text field before dictating");
         }
@@ -343,28 +379,6 @@ pub mod mac {
         same != 0
     }
 
-    fn restore_target_focus(target: &DictationTarget) -> Result<(), String> {
-        use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication};
-
-        let application = NSRunningApplication::runningApplicationWithProcessIdentifier(target.pid)
-            .ok_or_else(|| "source app unavailable".to_string())?;
-        let _ = application.activateWithOptions(NSApplicationActivationOptions::empty());
-        std::thread::sleep(std::time::Duration::from_millis(35));
-        let attribute = CFString::new(kAXFocusedAttribute);
-        let focused = CFBoolean::true_value();
-        let result = unsafe {
-            AXUIElementSetAttributeValue(
-                target.element,
-                attribute.as_concrete_TypeRef(),
-                focused.as_CFTypeRef(),
-            )
-        };
-        if result != kAXErrorSuccess || !same_focused_element(target) {
-            return Err("captured field could not be focused".into());
-        }
-        Ok(())
-    }
-
     fn expected_insert(value: &str, caret: CFRange, transcript: &str) -> Option<String> {
         let units: Vec<u16> = value.encode_utf16().collect();
         let location = usize::try_from(caret.location).ok()?;
@@ -395,53 +409,92 @@ pub mod mac {
         value: Option<&str>,
         caret: Option<CFRange>,
         focused: bool,
+        writable: bool,
     ) -> bool {
         focused
             && role == Some(target.role.as_str())
             && editable_role(&target.role)
             && !secure_role(&target.role)
+            && writable
             && value == Some(target.original_value.as_str())
             && caret == Some(target.caret)
     }
 
+    enum InsertAttempt {
+        Cancelled,
+        UnsafeBeforeClaim,
+        UnsafeAfterClaim,
+        Inserted,
+    }
+
     /// Directly inserts only into the retained field. Failure intentionally has no paste fallback.
-    fn insert_at_captured_caret(target: &DictationTarget, transcript: &str) -> Result<(), String> {
+    fn insert_at_captured_caret(
+        session: u64,
+        target: &DictationTarget,
+        delivery_state: &AtomicU8,
+        transcript: &str,
+    ) -> InsertAttempt {
         let _operation = target
             .operation
             .lock()
-            .map_err(|_| "captured target unavailable".to_string())?;
+            .map_err(|_| InsertAttempt::UnsafeBeforeClaim);
+        let Ok(_operation) = _operation else {
+            return InsertAttempt::UnsafeBeforeClaim;
+        };
         let mut pid = 0i32;
         if unsafe { AXUIElementGetPid(target.element, &mut pid) } != kAXErrorSuccess
             || pid != target.pid
         {
-            return Err("captured target identity changed".into());
+            return InsertAttempt::UnsafeBeforeClaim;
         }
-        if !target_state_matches(
-            target,
-            unsafe { copy_string(target.element, kAXRoleAttribute) }.as_deref(),
-            unsafe { copy_string(target.element, kAXValueAttribute) }.as_deref(),
-            unsafe { copy_range(target.element) },
-            true,
-        ) {
-            return Err("captured target changed".into());
-        }
-        restore_target_focus(target)?;
         if !target_state_matches(
             target,
             unsafe { copy_string(target.element, kAXRoleAttribute) }.as_deref(),
             unsafe { copy_string(target.element, kAXValueAttribute) }.as_deref(),
             unsafe { copy_range(target.element) },
             same_focused_element(target),
+            unsafe { target_is_writable(target.element) },
         ) {
-            return Err("captured target changed while restoring focus".into());
+            return InsertAttempt::UnsafeBeforeClaim;
+        }
+        if !session_is_processing(session) {
+            return InsertAttempt::Cancelled;
+        }
+        let claimed = delivery_state
+            .compare_exchange(
+                DELIVERY_READY,
+                DELIVERY_WRITING,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .map_err(|_| InsertAttempt::Cancelled);
+        if claimed.is_err() {
+            return InsertAttempt::Cancelled;
+        }
+        // The gate is deliberately the final step before AX mutation. A dismiss that wins the
+        // READY → CANCELLED race leaves this retained element entirely untouched.
+        if !target_state_matches(
+            target,
+            unsafe { copy_string(target.element, kAXRoleAttribute) }.as_deref(),
+            unsafe { copy_string(target.element, kAXValueAttribute) }.as_deref(),
+            unsafe { copy_range(target.element) },
+            same_focused_element(target),
+            unsafe { target_is_writable(target.element) },
+        ) {
+            return InsertAttempt::UnsafeAfterClaim;
+        }
+        if !session_is_processing(session) {
+            return InsertAttempt::Cancelled;
         }
         if !unsafe { set_caret(target.element, target.caret) }
             || unsafe { copy_range(target.element) } != Some(target.caret)
         {
-            return Err("captured caret could not be verified".into());
+            return InsertAttempt::UnsafeAfterClaim;
         }
-        let expected = expected_insert(&target.original_value, target.caret, transcript)
-            .ok_or_else(|| "captured caret is invalid".to_string())?;
+        let Some(expected) = expected_insert(&target.original_value, target.caret, transcript)
+        else {
+            return InsertAttempt::UnsafeAfterClaim;
+        };
         let attribute = CFString::new(kAXSelectedTextAttribute);
         let value = CFString::new(transcript);
         let _result = unsafe {
@@ -452,9 +505,9 @@ pub mod mac {
             )
         };
         if !unsafe { value_matches(target.element, &expected) } {
-            return Err("captured target did not accept dictation".into());
+            return InsertAttempt::UnsafeAfterClaim;
         }
-        Ok(())
+        InsertAttempt::Inserted
     }
 
     fn session_is_processing(session: u64) -> bool {
@@ -532,29 +585,56 @@ pub mod mac {
     }
 
     fn cancel_active_session() -> Option<voice_lane::Handle> {
-        let Ok(mut lane) = LANE.lock() else {
-            return None;
+        let (audio, target, delivery_state) = {
+            let Ok(mut lane) = LANE.lock() else {
+                return None;
+            };
+            let Some(lane) = lane.as_mut() else {
+                return None;
+            };
+            let Some(mut active) = lane.active.take() else {
+                return None;
+            };
+            (
+                active.audio.take(),
+                active.target.take(),
+                Arc::clone(&active.delivery_state),
+            )
         };
-        let Some(lane) = lane.as_mut() else {
-            return None;
-        };
-        lane.active.take().and_then(|mut active| {
-            let _ = active.delivery_state.compare_exchange(
+        let state = delivery_state.load(Ordering::Acquire);
+        if state == DELIVERY_READY {
+            let _ = delivery_state.compare_exchange(
                 DELIVERY_READY,
                 DELIVERY_CANCELLED,
                 Ordering::AcqRel,
                 Ordering::Acquire,
             );
-            active.audio.take()
-        })
+        }
+        if delivery_state.load(Ordering::Acquire) == DELIVERY_WRITING {
+            if let Some(target) = target {
+                // A writer owns the gate only while it holds `operation`; wait so cancellation
+                // cannot return while a captured-field mutation is still in flight.
+                drop(target.operation.lock());
+            }
+        }
+        audio
     }
 
     fn stop_cancelled_audio(audio: voice_lane::Handle) {
-        let _ = std::thread::Builder::new()
+        let retained = Arc::new(Mutex::new(Some(audio)));
+        let worker = Arc::clone(&retained);
+        let spawned = std::thread::Builder::new()
             .name("voice-cancel".into())
             .spawn(move || {
-                let _ = voice_lane::stop(audio);
+                if let Some(audio) = worker.lock().ok().and_then(|mut audio| audio.take()) {
+                    let _ = voice_lane::stop(audio);
+                }
             });
+        if spawned.is_err() {
+            if let Some(audio) = retained.lock().ok().and_then(|mut audio| audio.take()) {
+                let _ = voice_lane::stop(audio);
+            }
+        }
     }
 
     enum DeliveryOutcome {
@@ -563,7 +643,10 @@ pub mod mac {
         CopyFailed(String),
     }
 
-    fn claim_delivery(session: u64, delivery_state: &AtomicU8) -> Option<DeliveryGuard<'_>> {
+    fn claim_clipboard_delivery(
+        session: u64,
+        delivery_state: &AtomicU8,
+    ) -> Option<DeliveryGuard<'_>> {
         if !session_is_processing(session) {
             return None;
         }
@@ -583,13 +666,45 @@ pub mod mac {
         })
     }
 
-    fn deliver_dictation(target: Option<&DictationTarget>, transcript: &str) -> DeliveryOutcome {
-        match target.map(|target| insert_at_captured_caret(target, transcript)) {
-            Some(Ok(())) => DeliveryOutcome::Inserted,
-            Some(Err(_)) | None => match copy_to_clipboard(transcript) {
-                Ok(()) => DeliveryOutcome::Copied,
-                Err(error) => DeliveryOutcome::CopyFailed(error),
-            },
+    fn copy_claimed(transcript: &str) -> DeliveryOutcome {
+        match copy_to_clipboard(transcript) {
+            Ok(()) => DeliveryOutcome::Copied,
+            Err(error) => DeliveryOutcome::CopyFailed(error),
+        }
+    }
+
+    fn deliver_dictation(
+        session: u64,
+        target: Option<&DictationTarget>,
+        delivery_state: &AtomicU8,
+        transcript: &str,
+    ) -> Option<DeliveryOutcome> {
+        match target {
+            Some(target) => {
+                match insert_at_captured_caret(session, target, delivery_state, transcript) {
+                    InsertAttempt::Inserted => {
+                        let _delivery = DeliveryGuard {
+                            state: delivery_state,
+                        };
+                        Some(DeliveryOutcome::Inserted)
+                    }
+                    InsertAttempt::UnsafeAfterClaim => {
+                        let _delivery = DeliveryGuard {
+                            state: delivery_state,
+                        };
+                        Some(copy_claimed(transcript))
+                    }
+                    InsertAttempt::UnsafeBeforeClaim => {
+                        let _delivery = claim_clipboard_delivery(session, delivery_state)?;
+                        Some(copy_claimed(transcript))
+                    }
+                    InsertAttempt::Cancelled => None,
+                }
+            }
+            None => {
+                let _delivery = claim_clipboard_delivery(session, delivery_state)?;
+                Some(copy_claimed(transcript))
+            }
         }
     }
 
@@ -788,10 +903,10 @@ pub mod mac {
             .name("voice-asr".into())
             .spawn(move || {
                 let _cleanup = SessionCleanup { session };
-                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> bool {
                     let Some(audio) = worker_audio.lock().ok().and_then(|mut audio| audio.take())
                     else {
-                        return;
+                        return false;
                     };
                     // Cue after `stop`, so our own mic is already closed and cannot hear its own end
                     // cue — and only on success: a failure plays its own sound from `emit_error`, and
@@ -802,22 +917,23 @@ pub mod mac {
                             let _ = complete_terminal(session, SessionPhase::Processing, || {
                                 emit_error(&worker_app, "Didn't catch that — try again.")
                             });
-                            return;
+                            return true;
                         }
                         TranscriptOutcome::Err(e) => {
                             let _ = complete_terminal(session, SessionPhase::Processing, || {
                                 emit_error(&worker_app, e)
                             });
-                            return;
+                            return true;
                         }
                     };
 
-                    let Some(_delivery) = claim_delivery(session, &delivery_state) else {
-                        return;
+                    let Some(outcome) =
+                        deliver_dictation(session, target.as_deref(), &delivery_state, &transcript)
+                    else {
+                        return true;
                     };
                     crate::sound::mac::play(shogun_core::sound::Cue::VoiceEnd);
-                    emit_state(&worker_app, "processing", Some(transcript.clone()), None);
-                    match deliver_dictation(target.as_deref(), &transcript) {
+                    match outcome {
                         DeliveryOutcome::Inserted => {
                             let _ = complete_terminal(session, SessionPhase::Processing, || {
                                 emit_toast(&worker_app, "Pasted");
@@ -839,7 +955,13 @@ pub mod mac {
                             });
                         }
                     }
+                    true
                 }));
+                if !matches!(result, Ok(true)) {
+                    let _ = complete_terminal(session, SessionPhase::Processing, || {
+                        emit_error(&worker_app, "Voice transcription failed.")
+                    });
+                }
             });
         if spawned.is_err() {
             let audio = shared_audio.lock().ok().and_then(|mut audio| audio.take());
@@ -1029,6 +1151,7 @@ pub mod mac {
                 Some("changed"),
                 Some(CFRange::init(3, 0)),
                 true,
+                true,
             ));
             assert!(!target_state_matches(
                 &target,
@@ -1036,12 +1159,22 @@ pub mod mac {
                 Some("before"),
                 Some(CFRange::init(3, 0)),
                 true,
+                true,
             ));
             assert!(!target_state_matches(
                 &target,
                 Some("AXTextField"),
                 Some("before"),
                 Some(CFRange::init(3, 0)),
+                false,
+                true,
+            ));
+            assert!(!target_state_matches(
+                &target,
+                Some("AXTextField"),
+                Some("before"),
+                Some(CFRange::init(3, 0)),
+                true,
                 false,
             ));
         }
@@ -1109,6 +1242,52 @@ pub mod mac {
                     Ordering::Acquire,
                 )
                 .is_err());
+        }
+
+        #[test]
+        fn cancellation_after_a_claim_cannot_reopen_the_delivery_gate() {
+            let gate = AtomicU8::new(DELIVERY_READY);
+            assert!(gate
+                .compare_exchange(
+                    DELIVERY_READY,
+                    DELIVERY_WRITING,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                )
+                .is_ok());
+            assert!(gate
+                .compare_exchange(
+                    DELIVERY_READY,
+                    DELIVERY_CANCELLED,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                )
+                .is_err());
+            assert_eq!(gate.load(Ordering::Acquire), DELIVERY_WRITING);
+        }
+
+        #[test]
+        fn terminal_failure_clears_only_its_matching_processing_owner() {
+            let mut active = Some(TestSession {
+                id: 10,
+                phase: TestPhase::Processing,
+            });
+            assert!(claim_terminal(&mut active, 10));
+            clear_terminal(&mut active, 10);
+            assert_eq!(active, None);
+
+            active = Some(TestSession {
+                id: 11,
+                phase: TestPhase::Processing,
+            });
+            assert!(!claim_terminal(&mut active, 10));
+            assert_eq!(
+                active,
+                Some(TestSession {
+                    id: 11,
+                    phase: TestPhase::Processing
+                })
+            );
         }
     }
 }
