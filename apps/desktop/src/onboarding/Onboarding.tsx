@@ -93,8 +93,14 @@ export function Onboarding(): JSX.Element {
   }, []);
 
   useEffect(() => {
-    void getOnboardingState().then((s) => {
+    let alive = true;
+    // Hydrate progress and live trust together. The Rust watcher can emit its initial event before
+    // WebKit finishes registering listeners, so the bootstrap read must independently establish
+    // the correct permission state.
+    void Promise.all([getOnboardingState(), axPermission()]).then(([s, permission]) => {
+      if (!alive) return;
       setState(s);
+      setGranted(permission);
       if (!shownLogged.current) {
         shownLogged.current = true;
         track("shown");
@@ -111,6 +117,7 @@ export function Onboarding(): JSX.Element {
       ),
     );
     return () => {
+      alive = false;
       offs.forEach((p) => void p.then((off) => off()));
     };
   }, []);
@@ -134,19 +141,34 @@ export function Onboarding(): JSX.Element {
   // green "Granted" reads as a way to undo it. The check is the NON-prompting one (see ipc.ts) —
   // polling a prompting check would reopen the system dialog every second and a half.
   useEffect(() => {
-    if (step !== "permission" || granted) return;
+    if (step !== "permission") return;
     let alive = true;
-    const tick = (): void =>
-      void axPermission().then((ok) => {
-        if (alive) setGranted(ok);
-      });
+    let checking = false;
+    const tick = (): void => {
+      if (checking) return;
+      checking = true;
+      void axPermission()
+        .then((ok) => {
+          if (alive) setGranted(ok);
+        })
+        .finally(() => {
+          checking = false;
+        });
+    };
+    const checkWhenVisible = (): void => {
+      if (document.visibilityState === "visible") tick();
+    };
     tick();
     const id = setInterval(tick, 1500);
+    window.addEventListener("focus", tick);
+    document.addEventListener("visibilitychange", checkWhenVisible);
     return () => {
       alive = false;
       clearInterval(id);
+      window.removeEventListener("focus", tick);
+      document.removeEventListener("visibilitychange", checkWhenVisible);
     };
-  }, [step, granted]);
+  }, [step]);
 
   // Log the grant exactly once, when it first flips on.
   useEffect(() => {

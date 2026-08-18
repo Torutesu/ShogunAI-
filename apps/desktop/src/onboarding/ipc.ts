@@ -17,10 +17,11 @@
 // - onboarding_event ............................... onboarding.rs → #91 PostHog adapter, behind
 //   its opt_out gate; names are allowlisted on the Rust side.
 
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 
-export const IN_TAURI =
-  typeof window !== "undefined" && ("__TAURI_INTERNALS__" in window || "__TAURI__" in window);
+// Use Tauri's public runtime detector. Private globals changed across Tauri 2 releases and can be
+// absent even while IPC works, which made the permission guide poll its browser fallback forever.
+export const IN_TAURI = isTauri();
 
 /** Invoke that degrades to a safe, honest fallback outside Tauri (`pnpm dev:vite` in a browser)
  *  or when a command fails — the flow then reads as "not granted / nothing connected", never as
