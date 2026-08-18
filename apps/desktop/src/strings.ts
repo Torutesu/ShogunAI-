@@ -107,6 +107,12 @@ export const STRINGS = {
     noKey: "No key yet — add one in settings for real answers.",
     // composer
     ask: "Ask ShogunAI…",
+    scribeTitle: "Scribe",
+    scribeLabel: "How should this text change?",
+    scribePlaceholder: "Describe the edit…",
+    scribeSubmit: "Apply edit",
+    scribeProcessing: "Applying edit…",
+    scribeError: "Couldn't apply that edit",
     // ⌥-tap feedback. Every one of these used to look the same from the outside — nothing —
     // which made a rejected key and a broken shortcut indistinguishable.
     inlineDrafting: "Drafting…",

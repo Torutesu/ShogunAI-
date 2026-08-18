@@ -50,6 +50,7 @@ mod onboarding;
 #[cfg(target_os = "macos")]
 mod recall_shortcut;
 mod search_ui;
+mod scribe;
 /// UI cue playback and the silence rules around it (#49, docs/sound-design.md).
 #[cfg(target_os = "macos")]
 mod sound;
@@ -81,6 +82,14 @@ pub(crate) const OVERLAY_LEVEL: isize = 24 + 3;
 pub(crate) const FULL_UI_LABEL: &str = "fullui";
 /// Window label for the Visual recall browse UI (saved screen timeline).
 pub(crate) const VISUAL_RECALL_LABEL: &str = "visual-recall";
+#[cfg(target_os = "macos")]
+const SCRIBE_LABEL: &str = "scribe";
+#[cfg(target_os = "macos")]
+const SCRIBE_MIN_W: f64 = 320.0;
+#[cfg(target_os = "macos")]
+const SCRIBE_MAX_W: f64 = 760.0;
+#[cfg(target_os = "macos")]
+const SCRIBE_H: f64 = 56.0;
 /// Full UI window size, in LOGICAL points. The minimum is the spec §D floor — below it the
 /// sidebar plus a three-card health row stops fitting.
 const FULL_UI_W: f64 = 1200.0;
@@ -279,6 +288,11 @@ pub fn run() {
         search_ui::mac::search_memory,
         metrics::record_ui_slo,
         inline_source::mac::inline_at_cursor,
+        scribe::mac::scribe_open,
+        scribe::mac::scribe_submit,
+        scribe::mac::scribe_status,
+        scribe::mac::scribe_close,
+        scribe::mac::scribe_cancel,
         inline_source::mac::shogun_status,
         inline_source::mac::shogun_state,
         inline_source::mac::shogun_chat,
@@ -1129,6 +1143,53 @@ fn build_panel_window(handle: &tauri::AppHandle) {
     }
 }
 
+/// Build Scribe beside the AX field captured before Shogun takes focus. This is a regular focused
+/// window, never the notch's non-activating NSPanel, so the two lifecycles remain independent.
+#[cfg(target_os = "macos")]
+fn build_scribe_window(
+    handle: &tauri::AppHandle,
+    opened: scribe::mac::ScribeOpenResult,
+) -> Result<(), String> {
+    use tauri::Manager;
+
+    if let Some(existing) = handle.get_webview_window(SCRIBE_LABEL) {
+        let _ = existing.close();
+    }
+    let width = opened
+        .anchor
+        .map(|anchor| anchor.width.clamp(SCRIBE_MIN_W, SCRIBE_MAX_W))
+        .unwrap_or(520.0);
+    let url = format!("index.html?view=scribe&session={}", opened.session_id);
+    let mut builder = tauri::WebviewWindowBuilder::new(
+        handle,
+        SCRIBE_LABEL,
+        tauri::WebviewUrl::App(url.into()),
+    )
+    .title("ShogunAI Scribe")
+    .transparent(true)
+    .decorations(false)
+    .resizable(false)
+    .always_on_top(true)
+    .shadow(false)
+    .skip_taskbar(true)
+    .inner_size(width, SCRIBE_H)
+    .visible(false)
+    .focused(true);
+
+    if let Some(anchor) = opened.anchor {
+        let x = anchor.x + (anchor.width - width) / 2.0;
+        let above = anchor.y - SCRIBE_H - 8.0;
+        let y = if above >= 4.0 { above } else { anchor.y + anchor.height + 8.0 };
+        builder = builder.position(x.max(4.0), y.max(4.0));
+    }
+
+    let window = builder.build().map_err(|error| error.to_string())?;
+    window.show().map_err(|error| error.to_string())?;
+    window.set_focus().map_err(|error| error.to_string())?;
+    eprintln!("[shell] Scribe field overlay opened");
+    Ok(())
+}
+
 /// The Full UI window (spec §D) — Today, Context Health, Sources, Memory, Activity, Traceability.
 ///
 /// Deliberately an ORDINARY window, not the overlay: the notch panel is a nonactivating NSPanel
@@ -1906,6 +1967,198 @@ pub(crate) fn run_inline_draft(handle: &tauri::AppHandle) {
     }
 }
 
+#[cfg(target_os = "macos")]
+mod right_option_tap {
+    use std::time::{Duration, Instant};
+
+    pub const DOUBLE_TAP_WINDOW: Duration = Duration::from_millis(300);
+    pub const DISPATCH_GRACE: Duration = Duration::from_millis(20);
+    pub const FLAG_ALT: usize = 1 << 19;
+    pub const RIGHT_OPTION_KEY_CODE: u16 = 61;
+    pub const POISON_EVENT_MASK: usize = (1 << 1)
+        | (1 << 2)
+        | (1 << 3)
+        | (1 << 4)
+        | (1 << 5)
+        | (1 << 6)
+        | (1 << 7)
+        | (1 << 8)
+        | (1 << 9)
+        | (1 << 18) // rotate
+        | (1 << 19) // begin gesture
+        | (1 << 20) // end gesture
+        | (1 << 22) // scroll wheel
+        | (1 << 23) // tablet point
+        | (1 << 24) // tablet proximity
+        | (1 << 25)
+        | (1 << 26)
+        | (1 << 27)
+        | (1 << 29) // gesture
+        | (1 << 30) // magnify
+        | (1 << 31) // swipe
+        | (1usize << 32) // smart magnify
+        | (1usize << 34) // pressure
+        | (1usize << 37); // direct touch
+
+    pub fn tap_flag(combo: &str) -> Option<usize> {
+        match combo.strip_prefix("Tap+")? {
+            "Shift" => Some(1 << 17),
+            "Control" => Some(1 << 18),
+            "Alt" => Some(FLAG_ALT),
+            "Super" => Some(1 << 20),
+            "Fn" => Some(1 << 23),
+            _ => None,
+        }
+    }
+
+    pub fn correct_modifier_key(target: usize, key_code: u16) -> bool {
+        target != FLAG_ALT || key_code == RIGHT_OPTION_KEY_CODE
+    }
+
+    pub fn clean_release(armed: bool, poisoned: bool, correct_key: bool, held_ms: u128) -> bool {
+        armed && !poisoned && correct_key && held_ms <= 500
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    pub enum CleanTapAction {
+        QueueDraft { generation: u64, superseded_draft: Option<u64> },
+        StartScribe,
+    }
+
+    #[derive(Default)]
+    pub struct State {
+        pending_draft: Option<(Instant, u64)>,
+        next_generation: u64,
+    }
+
+    impl State {
+        pub fn clean_tap(&mut self, now: Instant) -> CleanTapAction {
+            if let Some((first, _)) = self.pending_draft {
+                if now.saturating_duration_since(first) <= DOUBLE_TAP_WINDOW {
+                    self.pending_draft = None;
+                    return CleanTapAction::StartScribe;
+                }
+            }
+            let superseded_draft = self.pending_draft.take().map(|(_, generation)| generation);
+            self.next_generation = self.next_generation.wrapping_add(1);
+            let generation = self.next_generation;
+            self.pending_draft = Some((now, generation));
+            CleanTapAction::QueueDraft { generation, superseded_draft }
+        }
+
+        pub fn take_due_draft(&mut self, now: Instant) -> Option<u64> {
+            let due = self.pending_draft.filter(|(started, _)| {
+                now.saturating_duration_since(*started) >= DOUBLE_TAP_WINDOW
+            });
+            if due.is_some() {
+                self.pending_draft = None;
+            }
+            due.map(|(_, generation)| generation)
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn second_tap_at_exact_window_starts_scribe() {
+            let start = Instant::now();
+            let mut state = State::default();
+            assert_eq!(
+                state.clean_tap(start),
+                CleanTapAction::QueueDraft { generation: 1, superseded_draft: None }
+            );
+            assert_eq!(
+                state.clean_tap(start + DOUBLE_TAP_WINDOW),
+                CleanTapAction::StartScribe
+            );
+            assert_eq!(state.take_due_draft(start + DOUBLE_TAP_WINDOW), None);
+        }
+
+        #[test]
+        fn first_tap_is_due_only_after_window() {
+            let start = Instant::now();
+            let mut state = State::default();
+            state.clean_tap(start);
+            assert_eq!(
+                state.take_due_draft(start + Duration::from_millis(299)),
+                None
+            );
+            assert_eq!(state.take_due_draft(start + DOUBLE_TAP_WINDOW), Some(1));
+        }
+
+        #[test]
+        fn late_second_tap_preserves_first_draft() {
+            let start = Instant::now();
+            let mut state = State::default();
+            state.clean_tap(start);
+            assert_eq!(
+                state.clean_tap(start + DOUBLE_TAP_WINDOW + Duration::from_nanos(1)),
+                CleanTapAction::QueueDraft {
+                    generation: 2,
+                    superseded_draft: Some(1)
+                }
+            );
+        }
+
+        #[test]
+        fn only_right_option_is_allowed_for_alt_binding() {
+            assert!(correct_modifier_key(FLAG_ALT, RIGHT_OPTION_KEY_CODE));
+            assert!(!correct_modifier_key(FLAG_ALT, 58));
+            assert!(correct_modifier_key(1 << 17, 56));
+        }
+
+        #[test]
+        fn other_tap_modifiers_work_and_normal_chords_are_inert() {
+            assert_eq!(tap_flag("Tap+Shift"), Some(1 << 17));
+            assert_eq!(tap_flag("Tap+Control"), Some(1 << 18));
+            assert_eq!(tap_flag("Control+Alt+KeyD"), None);
+        }
+
+        #[test]
+        fn poisoned_or_long_hold_never_fires() {
+            assert!(!clean_release(true, true, true, 100));
+            assert!(!clean_release(true, false, true, 501));
+            assert!(!clean_release(true, false, false, 100));
+            assert!(clean_release(true, false, true, 500));
+        }
+
+        #[test]
+        fn every_pointer_scroll_and_gesture_family_poisons_hold() {
+            for bit in [1usize, 2, 3, 4, 5, 6, 7, 8, 9, 18, 19, 20, 22, 23, 24, 25, 26, 27, 29, 30, 31, 32, 34, 37] {
+                assert_ne!(POISON_EVENT_MASK & (1usize << bit), 0, "missing event bit {bit}");
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn start_scribe(handle: &tauri::AppHandle) {
+    use tauri::Manager;
+    let Some(db) = handle.try_state::<shogun_core::daemon::Db>() else {
+        eprintln!("[shell] Scribe open skipped: database unavailable");
+        return;
+    };
+    let warm = handle
+        .try_state::<shogun_core::daemon::ReplyContextCache>()
+        .and_then(|cache| cache.current());
+    let directives = handle
+        .try_state::<user_config_watch::UserConfigState>()
+        .map(|state| state.directives())
+        .unwrap_or_default();
+    match scribe::mac::open_scribe(db.inner().clone(), warm, directives, handle.clone()) {
+        Ok(opened) => {
+            let session_id = opened.session_id;
+            if let Err(error) = build_scribe_window(handle, opened) {
+                let _ = scribe::mac::scribe_cancel(session_id, handle.clone());
+                eprintln!("[shell] Scribe overlay failed: {error}");
+            }
+        }
+        Err(error) => eprintln!("[shell] Scribe open failed: {error}"),
+    }
+}
+
 /// TAP one modifier alone → draft at the cursor (default ⌥; the "draft" binding's "Tap+X" combo
 /// picks the modifier, read live so a rebind applies without reinstalling). Semantics of a "tap":
 /// the modifier goes down with no other modifier, no other key is pressed while it is held, and
@@ -1919,7 +2172,7 @@ fn watch_option_tap(app: &tauri::App) {
     use objc2::runtime::AnyObject;
     use objc2::{class, msg_send};
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
     use std::time::Instant;
 
     // State machine for a clean "Option tap":
@@ -1936,25 +2189,15 @@ fn watch_option_tap(app: &tauri::App) {
     const MASK_KEY_DOWN: usize = 1 << 10; // NSEventMaskKeyDown
     const MASK_FLAGS_CHANGED: usize = 1 << 12; // NSEventMaskFlagsChanged
     // Any mouse/scroll/gesture during the hold also disqualifies (⌥-click, ⌥-drag, ⌥-scroll).
-    const MASK_MOUSE: usize = (1 << 1) | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 5) | (1 << 6)
-        | (1 << 22) | (1 << 25) | (1 << 26) | (1 << 27) | (1 << 29) | (1 << 30) | (1 << 31);
+    const MASK_MOUSE: usize = right_option_tap::POISON_EVENT_MASK;
     // shift | control | option | command | fn — the full standard-modifier set; whichever one the
     // binding targets, all the OTHERS joining the chord disqualifies the tap.
     const FLAG_ALL_MODS: usize = (1 << 17) | (1 << 18) | (1 << 19) | (1 << 20) | (1 << 23);
-    const MAX_TAP_MS: u128 = 500;
-
     /// The NSEvent modifier flag the "draft" binding targets, or None when draft is bound to a
     /// normal chord (the tap watcher is then inert; the plugin dispatches instead).
     fn tap_flag(handle: &tauri::AppHandle) -> Option<usize> {
         let combo = crate::shortcuts::binding(handle, "draft").unwrap_or_else(|| "Tap+Alt".into());
-        match combo.strip_prefix("Tap+")? {
-            "Shift" => Some(1 << 17),
-            "Control" => Some(1 << 18),
-            "Alt" => Some(1 << 19),
-            "Super" => Some(1 << 20),
-            "Fn" => Some(1 << 23),
-            _ => None,
-        }
+        right_option_tap::tap_flag(&combo)
     }
 
     /// Any non-Option input during the hold kills the tap until Option is released.
@@ -1962,6 +2205,29 @@ fn watch_option_tap(app: &tauri::App) {
         POISONED.store(true, Ordering::Relaxed);
         ARMED.store(false, Ordering::Relaxed);
     }
+
+    fn queue_draft(
+        handle: tauri::AppHandle,
+        state: Arc<Mutex<right_option_tap::State>>,
+        generation: u64,
+    ) {
+        std::thread::spawn(move || {
+            std::thread::sleep(
+                right_option_tap::DOUBLE_TAP_WINDOW + right_option_tap::DISPATCH_GRACE,
+            );
+            let due = state
+                .lock()
+                .ok()
+                .and_then(|mut state| state.take_due_draft(Instant::now()))
+                == Some(generation);
+            if due {
+                eprintln!("[shell] right ⌥ tap — draft at cursor");
+                crate::run_inline_draft(&handle);
+            }
+        });
+    }
+
+    let tap_state = Arc::new(Mutex::new(right_option_tap::State::default()));
 
     // SAFETY: main thread (setup); monitors and blocks are intentionally leaked (app lifetime).
     unsafe {
@@ -1990,6 +2256,7 @@ fn watch_option_tap(app: &tauri::App) {
         std::mem::forget(disarm_block);
 
         let handle = app.handle().clone();
+        let state_for_flags = tap_state.clone();
         let flags_block = block2::RcBlock::new(move |ev: *mut AnyObject| {
             if ev.is_null() {
                 return;
@@ -1999,6 +2266,7 @@ fn watch_option_tap(app: &tauri::App) {
                 return;
             };
             let flags: usize = msg_send![ev, modifierFlags];
+            let key_code: u16 = msg_send![ev, keyCode];
             let target_down = flags & target != 0;
             let others_down = flags & (FLAG_ALL_MODS & !target) != 0;
             let was_down = OPT_PREV.swap(target_down, Ordering::Relaxed);
@@ -2009,6 +2277,17 @@ fn watch_option_tap(app: &tauri::App) {
                 return;
             }
             if target_down && !was_down {
+                // The default gesture belongs to right Option only. Left Option remains ordinary
+                // keyboard input and can never draft or open Scribe.
+                if target == right_option_tap::FLAG_ALT
+                    && !right_option_tap::correct_modifier_key(target, key_code)
+                {
+                    poison();
+                    if let Ok(mut down) = DOWN_AT.lock() {
+                        *down = None;
+                    }
+                    return;
+                }
                 // Genuine DOWN edge with nothing else held: start a fresh, clean hold.
                 POISONED.store(false, Ordering::Relaxed);
                 ARMED.store(true, Ordering::Relaxed);
@@ -2020,9 +2299,35 @@ fn watch_option_tap(app: &tauri::App) {
                 let armed = ARMED.swap(false, Ordering::Relaxed);
                 let poisoned = POISONED.swap(false, Ordering::Relaxed);
                 let held = DOWN_AT.lock().ok().and_then(|g| *g).map(|t| t.elapsed().as_millis());
-                if armed && !poisoned && held.is_some_and(|h| h <= MAX_TAP_MS) {
-                    eprintln!("[shell] modifier tap — draft at cursor");
-                    crate::run_inline_draft(&handle);
+                let correct_key = right_option_tap::correct_modifier_key(target, key_code);
+                if held.is_some_and(|milliseconds| {
+                    right_option_tap::clean_release(armed, poisoned, correct_key, milliseconds)
+                }) {
+                    if target != right_option_tap::FLAG_ALT {
+                        eprintln!("[shell] modifier tap — draft at cursor");
+                        crate::run_inline_draft(&handle);
+                        return;
+                    }
+                    let action = state_for_flags
+                        .lock()
+                        .ok()
+                        .map(|mut state| state.clean_tap(Instant::now()));
+                    match action {
+                        Some(right_option_tap::CleanTapAction::StartScribe) => {
+                            eprintln!("[shell] right ⌥ double-tap — Scribe");
+                            start_scribe(&handle);
+                        }
+                        Some(right_option_tap::CleanTapAction::QueueDraft {
+                            generation,
+                            superseded_draft,
+                        }) => {
+                            if superseded_draft.is_some() {
+                                crate::run_inline_draft(&handle);
+                            }
+                            queue_draft(handle.clone(), state_for_flags.clone(), generation);
+                        }
+                        None => {}
+                    }
                 }
             }
         });
@@ -2036,7 +2341,7 @@ fn watch_option_tap(app: &tauri::App) {
         if key_mon.is_null() || mouse_mon.is_null() || flags_mon.is_null() {
             eprintln!("[shell] tap-to-draft monitor failed to install (accessibility permission?)");
         } else {
-            eprintln!("[shell] tap-to-draft installed (default ⌥ alone, <0.5s, no other input; rebindable)");
+            eprintln!("[shell] right ⌥ tap-to-draft/double-tap Scribe installed");
         }
     }
 }
@@ -2817,4 +3122,3 @@ fn attach_embedder(
         }
     }
 }
-

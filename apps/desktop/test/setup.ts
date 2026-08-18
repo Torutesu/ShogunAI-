@@ -44,6 +44,9 @@ vi.mock("@tauri-apps/api/window", () => ({
     setPosition: vi.fn(async () => undefined),
     hide: vi.fn(async () => undefined),
     show: vi.fn(async () => undefined),
+    setFocus: vi.fn(async () => undefined),
+    close: vi.fn(async () => undefined),
+    onCloseRequested: vi.fn(async () => () => undefined),
   })),
 }));
 

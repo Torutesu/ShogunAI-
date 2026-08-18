@@ -4,6 +4,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { App } from "./App";
 import { MeetingOverlay } from "./MeetingOverlay";
 import { VoiceOverlay } from "./VoiceOverlay";
+import { ScribeOverlay } from "./ScribeOverlay";
 import "./styles.css";
 
 // One bundle, many windows. Meeting host + independent opaque panel windows each mount
@@ -42,26 +43,27 @@ if (root) {
   const label = currentLabel();
   const meeting = isMeetingLabel(label);
   const voice = label === "voice";
+  const scribe = label === "scribe";
   // data-window uses the real label so CSS can target host vs each panel surface.
   document.documentElement.setAttribute(
     "data-window",
-    meeting ? label : voice ? "voice" : "main",
+    meeting ? label : voice ? "voice" : scribe ? "scribe" : "main",
   );
   // App sets this for the notch panel itself; the overlays get their own windows and must set it
   // too, or they render dark on a Light setup.
-  if (meeting || voice) document.documentElement.dataset.appearance = loadAppearance();
+  if (meeting || voice || scribe) document.documentElement.dataset.appearance = loadAppearance();
   void import("@tauri-apps/api/core")
     .then(({ invoke }) =>
       invoke("ui_log", {
         msg: `window label=${label || "(unknown)"} → ${
-          meeting ? `meeting overlay (${label})` : voice ? "voice overlay" : "main app"
+          meeting ? `meeting overlay (${label})` : voice ? "voice overlay" : scribe ? "scribe overlay" : "main app"
         }`,
       }),
     )
     .catch(() => undefined);
   ReactDOM.createRoot(root).render(
     <React.StrictMode>
-      {meeting ? <MeetingOverlay /> : voice ? <VoiceOverlay /> : <App />}
+      {meeting ? <MeetingOverlay /> : voice ? <VoiceOverlay /> : scribe ? <ScribeOverlay /> : <App />}
     </React.StrictMode>,
   );
 }
