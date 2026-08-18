@@ -15,14 +15,16 @@
 #![allow(dead_code, unused_imports)]
 
 #[cfg(target_os = "macos")]
-pub use mac::{start, Shared, StartGeometry};
+pub use mac::{start, DisplayGeometry, Shared, StartGeometry};
 
 #[cfg(target_os = "macos")]
 pub mod mac {
     use crate::axcache;
     use crate::geometry::Regions;
     use crate::hover::TapEvent;
-    use shogun_core::notch::engine::{EngineInput, EngineOutput, NotchEngine};
+    use shogun_core::notch::engine::{
+        DisplayCoordinateSpace, EngineInput, EngineOutput, NotchEngine,
+    };
     use shogun_core::notch::hover::HoverParams;
     use shogun_core::notch::statemachine::{Params, State, Timer};
     use spike_harness::clock::{OffsetEstimator, SyncSample};
@@ -139,15 +141,35 @@ pub mod mac {
     pub struct StartGeometry {
         pub regions: Regions,
         pub menubar_min_y: f64,
-        pub primary_height: f64,
+        pub coordinate_space: DisplayCoordinateSpace,
         pub is_notch: bool,
         pub display_count: u32,
         pub screen: crate::geometry::Rect,
-        pub idle: crate::geometry::Rect,
-        /// One entry per attached display: screen rect, regions, menubar floor, idle rect.
+        pub idle_hit: crate::geometry::Rect,
+        /// One entry per attached display, with matching CG/NS coordinate bounds captured from
+        /// the same NSScreen during setup.
         /// The engine hit-tests against whichever of these the pointer is inside, so the notch
         /// works on a second monitor instead of only where the panel happens to live.
-        pub per_display: Vec<(crate::geometry::Rect, Regions, f64, crate::geometry::Rect)>,
+        pub per_display: Vec<DisplayGeometry>,
+    }
+
+    #[derive(Clone, Copy)]
+    pub struct DisplayGeometry {
+        pub screen: crate::geometry::Rect,
+        pub regions: Regions,
+        pub menubar_min_y: f64,
+        pub idle_hit: crate::geometry::Rect,
+        pub coordinate_space: DisplayCoordinateSpace,
+    }
+
+    /// Select the display whose CoreGraphics bounds contain the event-tap point.
+    fn select_display(
+        displays: &[DisplayGeometry],
+        point: crate::geometry::Point,
+    ) -> Option<usize> {
+        displays
+            .iter()
+            .position(|display| display.coordinate_space.contains_cg(point))
     }
 
     // ---------------------------------------------------------------- timers
@@ -290,18 +312,17 @@ pub mod mac {
         geo: StartGeometry,
     ) {
         std::thread::spawn(move || {
-            let per_display = geo.per_display.clone();
             // Which entry the engine is currently configured for, so regions are only swapped on
             // an actual screen change rather than on every mouse move.
             let mut active_display: Option<usize> = None;
             let mut engine = NotchEngine::new(
                 geo.regions,
                 geo.menubar_min_y,
-                geo.primary_height,
+                geo.coordinate_space,
                 HoverParams::default(),
                 Params::default(),
                 geo.screen,
-                geo.idle,
+                geo.idle_hit,
             );
             let timers = TimerSvc::spawn(ev_tx);
             let mut prev_state = State::Idle;
@@ -324,22 +345,19 @@ pub mod mac {
                         // Point the engine at the display the pointer is actually on before it
                         // hit-tests. Cheap: a handful of rect comparisons, and only when the
                         // screen changes does anything get swapped.
-                        if per_display.len() > 1 {
-                            let ns_y = geo.primary_height - y;
-                            if let Some((i, (screen, regs, menubar, idle))) =
-                                per_display.iter().enumerate().find(|(_, (r, _, _, _))| {
-                                    x >= r.x && x <= r.x + r.w && ns_y >= r.y && ns_y <= r.y + r.h
-                                })
-                            {
+                        if geo.per_display.len() > 1 {
+                            let point = crate::geometry::Point::new(x, y);
+                            if let Some(i) = select_display(&geo.per_display, point) {
                                 if active_display != Some(i) {
                                     active_display = Some(i);
+                                    let display = geo.per_display[i];
                                     engine.set_regions(
-                                        *regs,
-                                        *menubar,
-                                        geo.primary_height,
-                                        *screen,
-                                        *idle,
+                                        display.regions,
+                                        display.menubar_min_y,
+                                        display.screen,
+                                        display.idle_hit,
                                     );
+                                    engine.set_coordinate_space(display.coordinate_space);
                                 }
                             }
                         }
@@ -1044,5 +1062,60 @@ pub mod mac {
                 }
             }
         });
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use crate::geometry::{idle_rect, regions, GeometryParams, Rect};
+
+        fn display(cg_screen: Rect, screen: Rect) -> DisplayGeometry {
+            let idle_hit = idle_rect(screen, 180.0, 24.0);
+            DisplayGeometry {
+                screen,
+                regions: regions(screen, idle_hit, GeometryParams::default()),
+                menubar_min_y: screen.max_y() - 24.0,
+                idle_hit,
+                coordinate_space: DisplayCoordinateSpace::new(cg_screen, screen),
+            }
+        }
+
+        #[test]
+        fn selects_regions_by_cg_bounds_and_rejects_gaps() {
+            let displays = [
+                display(
+                    Rect::new(0.0, 0.0, 1512.0, 982.0),
+                    Rect::new(0.0, 0.0, 1512.0, 982.0),
+                ),
+                display(
+                    Rect::new(-1280.0, -900.0, 1280.0, 900.0),
+                    Rect::new(-1280.0, 982.0, 1280.0, 900.0),
+                ),
+                display(
+                    Rect::new(1512.0, 982.0, 1920.0, 1080.0),
+                    Rect::new(1512.0, -1080.0, 1920.0, 1080.0),
+                ),
+            ];
+
+            assert_eq!(
+                select_display(&displays, crate::geometry::Point::new(10.0, 10.0)),
+                Some(0)
+            );
+            assert_eq!(
+                select_display(&displays, crate::geometry::Point::new(-10.0, -10.0)),
+                Some(1)
+            );
+            let lower_right =
+                select_display(&displays, crate::geometry::Point::new(1600.0, 1000.0));
+            assert_eq!(lower_right, Some(2));
+            assert_eq!(
+                displays[lower_right.unwrap_or_default()].screen,
+                Rect::new(1512.0, -1080.0, 1920.0, 1080.0)
+            );
+            assert_eq!(
+                select_display(&displays, crate::geometry::Point::new(1512.0, 500.0)),
+                None
+            );
+        }
     }
 }

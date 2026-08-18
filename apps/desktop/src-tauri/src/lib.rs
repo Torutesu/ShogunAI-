@@ -570,13 +570,14 @@ fn setup_macos(app: &tauri::App) {
         eprintln!("[spike] setup not on main thread — engine not started");
         return;
     };
-    let Some(g) = geometry::read_primary(mtm) else {
+    let display_geometries = geometry::mac::read_all(mtm);
+    let Some(g) = display_geometries.first() else {
         eprintln!("[spike] no screen — engine not started");
         return;
     };
     eprintln!(
-        "[spike] geometry: notch={} notch_w={:.1} notch_h={:.1} menubar_h={:.1} screen={:.0}x{:.0} primary_h={:.0} displays={}",
-        g.is_notch, g.notch_w, g.notch_h, g.menubar_h, g.screen.w, g.screen.h, g.primary_height, g.display_count
+        "[spike] geometry: notch={} notch_w={:.1} notch_h={:.1} menubar_h={:.1} screen={:.0}x{:.0} displays={}",
+        g.is_notch, g.notch_w, g.notch_h, g.menubar_h, g.screen.w, g.screen.h, g.display_count
     );
 
     // Pin the panel INTO the notch band. Tauri's set_position is clamped below the menu bar
@@ -619,16 +620,28 @@ fn setup_macos(app: &tauri::App) {
         integrate::StartGeometry {
             regions: g.regions,
             menubar_min_y,
-            primary_height: g.primary_height,
+            coordinate_space: shogun_core::notch::engine::DisplayCoordinateSpace::new(
+                g.cg_screen,
+                g.screen,
+            ),
             is_notch: g.is_notch,
             display_count: g.display_count,
             screen: g.screen,
-            idle: g.idle,
+            idle_hit: g.activation,
             // Every display's own notch geometry, so hovering the notch on a second monitor is
             // hit-tested against that monitor rather than against the primary's coordinates.
-            per_display: geometry::mac::read_all(mtm)
+            per_display: display_geometries
                 .into_iter()
-                .map(|d| (d.screen, d.regions, d.screen.max_y() - d.menubar_h, d.idle))
+                .map(|d| integrate::DisplayGeometry {
+                    screen: d.screen,
+                    regions: d.regions,
+                    menubar_min_y: d.screen.max_y() - d.menubar_h,
+                    idle_hit: d.activation,
+                    coordinate_space: shogun_core::notch::engine::DisplayCoordinateSpace::new(
+                        d.cg_screen,
+                        d.screen,
+                    ),
+                })
                 .collect(),
         },
         rx,
