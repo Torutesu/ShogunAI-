@@ -9,12 +9,12 @@ pub mod mac {
     use std::sync::{Arc, Mutex};
 
     use accessibility_sys::{
-        kAXEnabledAttribute, kAXErrorSuccess, kAXFocusedUIElementAttribute, kAXRoleAttribute,
-        kAXSelectedTextAttribute, kAXSelectedTextRangeAttribute, kAXValueAttribute,
-        kAXValueTypeCFRange, AXUIElementCopyAttributeValue, AXUIElementCreateSystemWide,
-        AXUIElementGetPid, AXUIElementIsAttributeSettable, AXUIElementRef,
-        AXUIElementSetAttributeValue, AXUIElementSetMessagingTimeout, AXValueCreate,
-        AXValueGetTypeID, AXValueGetValue,
+        kAXEnabledAttribute, kAXErrorSuccess, kAXFocusedUIElementAttribute, kAXIsEditableAttribute,
+        kAXRoleAttribute, kAXSelectedTextAttribute, kAXSelectedTextRangeAttribute,
+        kAXValueAttribute, kAXValueTypeCFRange, AXUIElementCopyAttributeValue,
+        AXUIElementCreateSystemWide, AXUIElementGetPid, AXUIElementIsAttributeSettable,
+        AXUIElementRef, AXUIElementSetAttributeValue, AXUIElementSetMessagingTimeout,
+        AXValueCreate, AXValueGetTypeID, AXValueGetValue,
     };
     use core_foundation::base::TCFType;
     use core_foundation::string::CFString;
@@ -48,7 +48,7 @@ pub mod mac {
         phase: SessionPhase,
         audio: Option<voice_lane::Handle>,
         target: Option<Arc<DictationTarget>>,
-        delivery_state: Arc<AtomicU8>,
+        delivery: Arc<DeliveryFence>,
     }
 
     struct Lane {
@@ -107,6 +107,11 @@ pub mod mac {
 
     struct DeliveryGuard<'a> {
         state: &'a AtomicU8,
+    }
+
+    struct DeliveryFence {
+        state: AtomicU8,
+        operation: Mutex<()>,
     }
 
     impl Drop for DeliveryGuard<'_> {
@@ -263,10 +268,14 @@ pub mod mac {
 
     unsafe fn target_is_writable(element: AXUIElementRef) -> bool {
         let enabled = unsafe { copy_bool(element, kAXEnabledAttribute) };
-        let editable = unsafe { copy_bool(element, "AXEditable") };
-        enabled == Some(true)
-            && editable == Some(true)
-            && unsafe { selected_text_is_settable(element) }
+        let editable = unsafe { copy_bool(element, kAXIsEditableAttribute) };
+        writable_attributes(enabled, editable, unsafe {
+            selected_text_is_settable(element)
+        })
+    }
+
+    fn writable_attributes(enabled: Option<bool>, editable: Option<bool>, settable: bool) -> bool {
+        enabled == Some(true) && editable == Some(true) && settable
     }
 
     unsafe fn copy_range(element: AXUIElementRef) -> Option<CFRange> {
@@ -460,32 +469,19 @@ pub mod mac {
         if !session_is_processing(session) {
             return InsertAttempt::Cancelled;
         }
-        let claimed = delivery_state
+        if delivery_state
             .compare_exchange(
                 DELIVERY_READY,
                 DELIVERY_WRITING,
                 Ordering::AcqRel,
                 Ordering::Acquire,
             )
-            .map_err(|_| InsertAttempt::Cancelled);
-        if claimed.is_err() {
+            .is_err()
+        {
             return InsertAttempt::Cancelled;
         }
-        // The gate is deliberately the final step before AX mutation. A dismiss that wins the
-        // READY → CANCELLED race leaves this retained element entirely untouched.
-        if !target_state_matches(
-            target,
-            unsafe { copy_string(target.element, kAXRoleAttribute) }.as_deref(),
-            unsafe { copy_string(target.element, kAXValueAttribute) }.as_deref(),
-            unsafe { copy_range(target.element) },
-            same_focused_element(target),
-            unsafe { target_is_writable(target.element) },
-        ) {
-            return InsertAttempt::UnsafeAfterClaim;
-        }
-        if !session_is_processing(session) {
-            return InsertAttempt::Cancelled;
-        }
+        // The fresh validation above and this gate are deliberately adjacent to the first AX
+        // mutation. A dismiss that wins READY -> CANCELLED leaves the retained element untouched.
         if !unsafe { set_caret(target.element, target.caret) }
             || unsafe { copy_range(target.element) } != Some(target.caret)
         {
@@ -584,8 +580,22 @@ pub mod mac {
         true
     }
 
+    fn cancel_delivery_fence(delivery: &DeliveryFence) {
+        if delivery.state.load(Ordering::Acquire) == DELIVERY_READY {
+            let _ = delivery.state.compare_exchange(
+                DELIVERY_READY,
+                DELIVERY_CANCELLED,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            );
+        }
+        // This waits both AX writes and clipboard fallback. If cancellation took this lock first,
+        // a queued worker observes CANCELLED before it can perform either side effect.
+        drop(delivery.operation.lock());
+    }
+
     fn cancel_active_session() -> Option<voice_lane::Handle> {
-        let (audio, target, delivery_state) = {
+        let (audio, delivery) = {
             let Ok(mut lane) = LANE.lock() else {
                 return None;
             };
@@ -595,28 +605,9 @@ pub mod mac {
             let Some(mut active) = lane.active.take() else {
                 return None;
             };
-            (
-                active.audio.take(),
-                active.target.take(),
-                Arc::clone(&active.delivery_state),
-            )
+            (active.audio.take(), Arc::clone(&active.delivery))
         };
-        let state = delivery_state.load(Ordering::Acquire);
-        if state == DELIVERY_READY {
-            let _ = delivery_state.compare_exchange(
-                DELIVERY_READY,
-                DELIVERY_CANCELLED,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            );
-        }
-        if delivery_state.load(Ordering::Acquire) == DELIVERY_WRITING {
-            if let Some(target) = target {
-                // A writer owns the gate only while it holds `operation`; wait so cancellation
-                // cannot return while a captured-field mutation is still in flight.
-                drop(target.operation.lock());
-            }
-        }
+        cancel_delivery_fence(&delivery);
         audio
     }
 
@@ -645,12 +636,13 @@ pub mod mac {
 
     fn claim_clipboard_delivery(
         session: u64,
-        delivery_state: &AtomicU8,
+        delivery: &DeliveryFence,
     ) -> Option<DeliveryGuard<'_>> {
         if !session_is_processing(session) {
             return None;
         }
-        if delivery_state
+        if delivery
+            .state
             .compare_exchange(
                 DELIVERY_READY,
                 DELIVERY_WRITING,
@@ -662,7 +654,7 @@ pub mod mac {
             return None;
         }
         Some(DeliveryGuard {
-            state: delivery_state,
+            state: &delivery.state,
         })
     }
 
@@ -676,33 +668,34 @@ pub mod mac {
     fn deliver_dictation(
         session: u64,
         target: Option<&DictationTarget>,
-        delivery_state: &AtomicU8,
+        delivery: &DeliveryFence,
         transcript: &str,
     ) -> Option<DeliveryOutcome> {
+        let _delivery_operation = delivery.operation.lock().ok()?;
         match target {
             Some(target) => {
-                match insert_at_captured_caret(session, target, delivery_state, transcript) {
+                match insert_at_captured_caret(session, target, &delivery.state, transcript) {
                     InsertAttempt::Inserted => {
                         let _delivery = DeliveryGuard {
-                            state: delivery_state,
+                            state: &delivery.state,
                         };
                         Some(DeliveryOutcome::Inserted)
                     }
                     InsertAttempt::UnsafeAfterClaim => {
                         let _delivery = DeliveryGuard {
-                            state: delivery_state,
+                            state: &delivery.state,
                         };
                         Some(copy_claimed(transcript))
                     }
                     InsertAttempt::UnsafeBeforeClaim => {
-                        let _delivery = claim_clipboard_delivery(session, delivery_state)?;
+                        let _delivery = claim_clipboard_delivery(session, delivery)?;
                         Some(copy_claimed(transcript))
                     }
                     InsertAttempt::Cancelled => None,
                 }
             }
             None => {
-                let _delivery = claim_clipboard_delivery(session, delivery_state)?;
+                let _delivery = claim_clipboard_delivery(session, delivery)?;
                 Some(copy_claimed(transcript))
             }
         }
@@ -792,7 +785,10 @@ pub mod mac {
                 phase: SessionPhase::Opening,
                 audio: None,
                 target,
-                delivery_state: Arc::new(AtomicU8::new(DELIVERY_READY)),
+                delivery: Arc::new(DeliveryFence {
+                    state: AtomicU8::new(DELIVERY_READY),
+                    operation: Mutex::new(()),
+                }),
             });
             id
         };
@@ -862,7 +858,7 @@ pub mod mac {
     ///
     /// ASR runs on a dedicated thread so the voice-hold worker is never blocked.
     pub fn on_hold_end(app: AppHandle) {
-        let (session, audio, target, delivery_state) = {
+        let (session, audio, target, delivery) = {
             let mut lane = match LANE.lock() {
                 Ok(g) => g,
                 Err(_) => return,
@@ -886,7 +882,7 @@ pub mod mac {
                 active.id,
                 audio,
                 active.target.clone(),
-                Arc::clone(&active.delivery_state),
+                Arc::clone(&active.delivery),
             )
         };
 
@@ -928,7 +924,7 @@ pub mod mac {
                     };
 
                     let Some(outcome) =
-                        deliver_dictation(session, target.as_deref(), &delivery_state, &transcript)
+                        deliver_dictation(session, target.as_deref(), &delivery, &transcript)
                     else {
                         return true;
                     };
@@ -1180,6 +1176,15 @@ pub mod mac {
         }
 
         #[test]
+        fn writable_target_requires_enabled_editable_and_settable_attributes() {
+            assert!(writable_attributes(Some(true), Some(true), true));
+            assert!(!writable_attributes(None, Some(true), true));
+            assert!(!writable_attributes(Some(true), None, true));
+            assert!(!writable_attributes(Some(true), Some(false), true));
+            assert!(!writable_attributes(Some(true), Some(true), false));
+        }
+
+        #[test]
         fn processing_session_blocks_a_second_hold() {
             let mut active = Some(TestSession {
                 id: 7,
@@ -1267,7 +1272,28 @@ pub mod mac {
         }
 
         #[test]
-        fn terminal_failure_clears_only_its_matching_processing_owner() {
+        fn cancellation_waits_for_shared_fence_for_ax_or_clipboard_delivery() {
+            use std::sync::mpsc;
+            use std::time::Duration;
+
+            let fence = Arc::new(DeliveryFence {
+                state: AtomicU8::new(DELIVERY_WRITING),
+                operation: Mutex::new(()),
+            });
+            let guard = fence.operation.lock().unwrap();
+            let (sent, received) = mpsc::channel();
+            let waiting_fence = Arc::clone(&fence);
+            std::thread::spawn(move || {
+                cancel_delivery_fence(&waiting_fence);
+                let _ = sent.send(());
+            });
+            assert!(received.recv_timeout(Duration::from_millis(20)).is_err());
+            drop(guard);
+            assert!(received.recv_timeout(Duration::from_secs(1)).is_ok());
+        }
+
+        #[test]
+        fn worker_panic_spawn_or_audio_failure_clears_only_its_matching_owner() {
             let mut active = Some(TestSession {
                 id: 10,
                 phase: TestPhase::Processing,
