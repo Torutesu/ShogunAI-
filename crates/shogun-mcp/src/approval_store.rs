@@ -242,6 +242,10 @@ fn queue_from_wire(store: WireStore) -> Result<ApprovalQueue, String> {
 pub fn load_queue(path: &Path) -> Result<ApprovalQueue, String> {
     match fs::metadata(path) {
         Ok(meta) if meta.len() > MAX_STORE_BYTES => return Err("approval store too large".into()),
+        #[cfg(unix)]
+        Ok(meta) if std::os::unix::fs::PermissionsExt::mode(&meta.permissions()) & 0o077 != 0 => {
+            return Err("approval store permissions are not private".into());
+        }
         Ok(_) | Err(_) => {}
     }
     match fs::read_to_string(path) {
