@@ -1063,8 +1063,11 @@ export function App(): JSX.Element {
   // registered once at mount, so a captured value would be frozen at the first turn forever.
 
   /// The turn ids we hand to Rust. Client-minted so a delta can never arrive for an id the panel
-  /// doesn't recognise yet.
-  const turnSeq = useRef(0);
+  /// doesn't recognise yet. Seeded with the load time, NOT 0: the Rust side keeps the last
+  /// cancelled turn id for the process lifetime, while this counter would restart on every
+  /// webview respawn (routine when moving Spaces) — a fresh turn colliding with a previously
+  /// cancelled id would have its answer silently swallowed.
+  const turnSeq = useRef(Date.now());
   /// The turn currently being written, or null. Deltas for any other id are stale — a stopped or
   /// timed-out turn whose provider hadn't noticed yet — and are dropped.
   const liveTurn = useRef<number | null>(null);

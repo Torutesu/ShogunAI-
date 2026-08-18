@@ -4182,8 +4182,11 @@ kbd {
   flex-direction: column;
   /* Opaque, unlike the panel. Transparency earns its place on the overlay — you look PAST that
      one at the work underneath. This is a window you look AT: dense tables, small type, long
-     reading. Anything showing through here is just noise competing with the content. */
-  background: var(--bg);
+     reading. Anything showing through here is just noise competing with the content.
+     `--shell` is the opaque ground token (dark #000 / light #f7f8fb) — there is no `--bg`
+     token, and an undefined var() resolves to transparent, which is exactly the failure this
+     rule exists to prevent. */
+  background: var(--shell);
   color: var(--ink);
   overflow: hidden;
 }
@@ -4599,7 +4602,7 @@ body.full-window {
 }
 :root[data-appearance="light"] .full,
 :root[data-appearance="auto"] .full {
-  background: var(--bg);
+  background: var(--shell);
 }
 
 /* Boot / failure state for the Full UI window, before the core's view arrives. */

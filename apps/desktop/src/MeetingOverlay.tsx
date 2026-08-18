@@ -786,7 +786,9 @@ export function MeetingOverlay(): JSX.Element | null {
   const handleStop = (): void => {
     if (stopping) return;
     setStopping(true);
-    call("meeting_stop");
+    // Not `call()`: a swallowed rejection would leave `stopping` latched while the state stays
+    // "recording" — an End button disabled forever with no way out but restarting.
+    void invoke("meeting_stop").catch(() => setStopping(false));
   };
 
   const handleTogglePause = (): void => {
@@ -1143,8 +1145,14 @@ export function MeetingOverlay(): JSX.Element | null {
           const text = ans.text?.trim() || t.noAnswer;
           setChatMessages((prev) => [...prev, { role: "assistant", text }]);
         })
-        .catch(() => {
-          setChatMessages((prev) => [...prev, { role: "assistant", text: t.meetingChatStub }]);
+        .catch((e: unknown) => {
+          // Only a missing-key failure earns the "add your API key" instruction; telling a user
+          // with a valid key to add one on a transient network error is wrong and trust-eroding.
+          const msg = String(e ?? "").trim();
+          const text = /key/i.test(msg)
+            ? t.meetingChatStub
+            : `${t.answerFailed}${msg ? ` — ${msg}` : ""}`;
+          setChatMessages((prev) => [...prev, { role: "assistant", text }]);
         })
         .finally(() => setChatBusy(false));
     };
