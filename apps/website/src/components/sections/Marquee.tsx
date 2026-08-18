@@ -77,18 +77,28 @@ function Track({ brands, reverse = false }: { brands: readonly (typeof BRAND_LOG
   );
 }
 
-export function HeroMarqueeRow({ t }: { t: Dictionary }) {
+export function Marquee({ t }: { t: Dictionary }) {
   return (
-    <div className="overflow-hidden pt-1.5 sm:pt-2">
-      <div className="mb-1.5 flex items-center gap-5">
-        <p className="shrink-0 text-[11px] font-semibold tracking-[0.08em] text-muted">{t.trust.label}</p>
-        <div className="h-px flex-1 bg-[#8da7ed]/45" />
+    // Its own band: hairlines top and bottom and a surface fill, so the strip
+    // reads as a section between the hero and what follows instead of drifting
+    // into the next one.
+    <section
+      aria-label={t.trust.label}
+      className="marquee-band overflow-hidden border-y border-border bg-surface py-7 sm:py-8"
+    >
+      <div className="container-x">
+        <div className="mb-4 flex items-center gap-5">
+          <p className="shrink-0 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">{t.trust.label}</p>
+          <div className="h-px flex-1 bg-border" />
+        </div>
       </div>
-      <div className="group/mq marquee-mask overflow-hidden rounded-[20px] border border-black/5 bg-white/42 px-2 py-[3px] shadow-[0_16px_36px_rgba(19,55,77,0.06)] backdrop-blur-sm sm:px-3">
+      <div className="group/mq marquee-mask overflow-hidden">
         <Track brands={BRAND_ROWS[0]} />
-        <div className="mx-2 h-px bg-black/[0.06]" />
+        <div className="container-x">
+          <div className="h-px bg-border/70" />
+        </div>
         <Track brands={BRAND_ROWS[1]} reverse />
       </div>
-    </div>
+    </section>
   );
 }
