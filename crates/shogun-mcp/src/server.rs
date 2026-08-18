@@ -28,6 +28,10 @@ use crate::rest::{self, Method, RestRequest, Routed};
 /// The default Memory API port (FR-API-01).
 pub const DEFAULT_PORT: u16 = 7464;
 
+/// The largest request body this face will read. A note or an action spec is kilobytes; anything
+/// past this is refused with 413 rather than truncated (see [`handle`]).
+const MAX_BODY_BYTES: usize = 256 * 1024;
+
 /// An injected millisecond clock (unix ms) — deterministic under test.
 pub type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;
 
@@ -137,7 +141,7 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
     let token = rest::bearer(req.headers().get(AUTHORIZATION).and_then(|v| v.to_str().ok()));
     // Parse the query string: `?include_low` (FR-API-06 opt-in), `?q=<search>`, visual-recall window.
     let raw_query = req.uri().query().unwrap_or("");
-    let include_low = raw_query.split('&').any(|kv| kv == "include_low" || kv.starts_with("include_low="));
+    let include_low = query_flag(raw_query, "include_low");
     let query = raw_query
         .split('&')
         .find_map(|kv| kv.strip_prefix("q="))
@@ -151,12 +155,14 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
         .find_map(|kv| kv.strip_prefix("to_ms="))
         .and_then(|v| v.parse::<i64>().ok());
 
-    // Read the request body (POST writes / actions). Bounded to 256 KiB; empty on read failure.
-    let body = axum::body::to_bytes(req.into_body(), 256 * 1024)
-        .await
-        .ok()
-        .map(|b| String::from_utf8_lossy(&b).into_owned())
-        .filter(|s| !s.is_empty());
+    // Read the request body (POST writes / actions). An over-limit or unreadable body must NOT
+    // collapse into "no body": the write path substitutes "" for a missing body and answers 202
+    // with a row id, so an oversized `shogun note` would be reported as stored while an empty
+    // event was written. Refuse it before routing instead.
+    let body = match axum::body::to_bytes(req.into_body(), MAX_BODY_BYTES).await {
+        Ok(bytes) => Some(String::from_utf8_lossy(&bytes).into_owned()).filter(|s| !s.is_empty()),
+        Err(_) => return render(413, r#"{"error":"payload_too_large"}"#.to_string()),
+    };
 
     let (status, resp_body) = match method {
         None => (405, r#"{"error":"method_not_allowed"}"#.to_string()),
@@ -207,6 +213,25 @@ fn render(status: u16, body: String) -> Response {
         .header(CONTENT_TYPE, "application/json")
         .body(Body::from(body))
         .unwrap_or_default()
+}
+
+/// Read a boolean query flag. Bare presence (`?include_low`) is the opt-in the CLI sends, but an
+/// explicit value is honoured: `=false` / `=0` / `=no` mean OFF. Presence alone would make
+/// `?include_low=false` *enable* low-confidence rows while the MCP face's JSON bool disables them,
+/// and the two faces must agree (invariant 6). Repeats resolve to the last one.
+fn query_flag(raw_query: &str, name: &str) -> bool {
+    let value = raw_query
+        .split('&')
+        .filter_map(|kv| {
+            let rest = kv.strip_prefix(name)?;
+            if rest.is_empty() {
+                Some("")
+            } else {
+                rest.strip_prefix('=')
+            }
+        })
+        .next_back();
+    matches!(value.map(str::to_ascii_lowercase).as_deref(), Some("" | "1" | "true" | "yes"))
 }
 
 /// Minimal `application/x-www-form-urlencoded` value decode: `+` → space, `%XX` → byte. Unknown
@@ -463,6 +488,118 @@ mod tests {
         assert!(ok.contains("200"), "got: {ok}");
         let ok_name = raw_get_with_host(addr, "/v1/status", "localhost").await;
         assert!(ok_name.contains("200"), "got: {ok_name}");
+    }
+
+    #[test]
+    fn query_flag_reads_the_value_not_just_its_presence() {
+        // presence / empty value / affirmative values are ON (the CLI sends the bare form)
+        assert!(query_flag("include_low", "include_low"));
+        assert!(query_flag("include_low=", "include_low"));
+        assert!(query_flag("include_low=1", "include_low"));
+        assert!(query_flag("include_low=true", "include_low"));
+        assert!(query_flag("include_low=TRUE", "include_low"));
+        assert!(query_flag("include_low=yes", "include_low"));
+        assert!(query_flag("q=x&include_low&to_ms=5", "include_low"));
+        // an explicit negative is OFF — presence-only parsing had these all enabling it
+        assert!(!query_flag("include_low=false", "include_low"));
+        assert!(!query_flag("include_low=0", "include_low"));
+        assert!(!query_flag("include_low=no", "include_low"));
+        assert!(!query_flag("q=x&include_low=false", "include_low"));
+        // absent, and no prefix collisions
+        assert!(!query_flag("", "include_low"));
+        assert!(!query_flag("q=include_low", "include_low"));
+        assert!(!query_flag("include_lower=1", "include_low"));
+        // repeats: the last one wins
+        assert!(!query_flag("include_low=true&include_low=false", "include_low"));
+        assert!(query_flag("include_low=false&include_low=true", "include_low"));
+    }
+
+    #[tokio::test]
+    async fn include_low_false_excludes_low_rows_over_the_socket() {
+        use crate::backend::{MemoryBackend, ReadItem};
+        use crate::memory_api::Tool;
+
+        struct Fake;
+        impl MemoryBackend for Fake {
+            fn read(&self, _tool: Tool, _params: &crate::backend::ReadParams) -> Vec<ReadItem> {
+                vec![ReadItem::new("solid", 0.9), ReadItem::new("shaky", 0.3)]
+            }
+        }
+        let mut tokens = TokenRegistry::new();
+        tokens.issue("t");
+        let addr = spawn_server_with(tokens, Arc::new(Fake)).await;
+
+        // `?include_low=false` must mean OFF, matching the MCP face's `"include_low": false`.
+        // (`query_flag` covers the value matrix; this proves the socket path is wired to it.)
+        let resp = raw_get(addr, "/v1/state/people?include_low=false", Some("t")).await;
+        assert!(resp.contains("solid"), "got: {resp}");
+        assert!(!resp.contains("shaky"), "include_low=false must not enable low rows: {resp}");
+
+        // the bare opt-in the CLI sends still works
+        let resp = raw_get(addr, "/v1/state/people?include_low", Some("t")).await;
+        assert!(resp.contains("shaky"), "the bare flag must include low rows: {resp}");
+    }
+
+    #[tokio::test]
+    async fn an_oversized_body_is_413_and_never_becomes_an_empty_write() {
+        use crate::backend::{MemoryBackend, ReadItem, ReadParams, WriteResult};
+        use crate::memory_api::Tool;
+
+        // A body past the cap used to collapse to `None`, which the write path turns into `""` —
+        // a 300 KB `shogun note` answered 202 with a row id while storing an empty event.
+        struct NeverWritten;
+        impl MemoryBackend for NeverWritten {
+            fn read(&self, _t: Tool, _p: &ReadParams) -> Vec<ReadItem> {
+                Vec::new()
+            }
+            fn write(&self, _tool: Tool, body: &str) -> WriteResult {
+                panic!("an over-limit body must never reach the write path (got {} bytes)", body.len());
+            }
+        }
+        let mut tokens = TokenRegistry::new();
+        tokens.issue("t");
+        let state = AppState::new(
+            Arc::new(tokens),
+            Arc::new(NeverWritten),
+            Arc::new(Mutex::new(ApprovalQueue::new())),
+            Arc::new(|| 0),
+        )
+        .with_approval_surface(rest::ApprovalSurface::Present);
+
+        let oversized = "x".repeat(MAX_BODY_BYTES + 1);
+        let req = Request::builder()
+            .method("POST")
+            .uri("/v1/memory/notes")
+            .header(axum::http::header::HOST, "localhost")
+            .header(AUTHORIZATION, "Bearer t")
+            .body(Body::from(oversized))
+            .unwrap();
+        let resp = handle(State(state.clone()), req).await;
+        assert_eq!(resp.status(), 413, "an over-limit body must be refused, not truncated");
+        let bytes = axum::body::to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
+        assert!(String::from_utf8_lossy(&bytes).contains("payload_too_large"));
+
+        // A body under the cap is unaffected.
+        let req = Request::builder()
+            .method("POST")
+            .uri("/v1/actions/execute")
+            .header(axum::http::header::HOST, "localhost")
+            .header(AUTHORIZATION, "Bearer t")
+            .body(Body::from(r#"{"kind":"local_search","query":"budget"}"#))
+            .unwrap();
+        assert_eq!(handle(State(state), req).await.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn a_genuinely_empty_post_body_still_behaves_as_before() {
+        // Only the over-limit case changed: an empty POST to actions.execute is still the 400 that
+        // `rest::act` returns for a missing body.
+        let mut tokens = TokenRegistry::new();
+        tokens.issue("t");
+        let addr = spawn_server(tokens).await;
+        let resp = raw_post(addr, "/v1/actions/execute", Some("t"), "").await;
+        assert!(resp.contains("400"), "got: {resp}");
+        assert!(resp.contains("missing_body"), "got: {resp}");
     }
 
     #[test]
