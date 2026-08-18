@@ -386,17 +386,6 @@ html[data-theme='dark'] .theme-light-badge {
   transform-origin: top left;
 }
 
-@media (min-width: 1024px) and (max-height: 760px) {
-  .hero-demo-frame {
-    height: 380px;
-  }
-
-  .hero-demo-scale {
-    width: 142.857%;
-    transform: scale(0.7);
-  }
-}
-
 /* Keep the first moving logo row in the initial 16:9 viewport. The hero stays
  * spacious on taller displays and only compacts its vertical rhythm when the
  * available height is limited. */
@@ -426,6 +415,20 @@ html[data-theme='dark'] .theme-light-badge {
 
   .hero-participant-count {
     display: none;
+  }
+}
+
+/* Very short desktop windows (e.g. 1440×750) need a more compact shot than the
+ * 1040px rule above gives them. This block must come AFTER that rule: both match
+ * at equal specificity, so source order is what lets 380px win over 460px. */
+@media (min-width: 1024px) and (max-height: 760px) {
+  .hero-demo-frame {
+    height: 380px;
+  }
+
+  .hero-demo-scale {
+    width: 142.857%;
+    transform: scale(0.7);
   }
 }
 

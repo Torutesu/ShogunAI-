@@ -13,12 +13,18 @@ on:
       - "main"
       - "master"
       - "claude/shogunai-ui-lp-lisvsd" # legacy default until `main` is promoted
+    # Mirror deploy.yml's triggers: a lockfile or shared-package bump reaches production via
+    # deploy.yml, so it must not be able to skip this workflow's tests on the way there.
     paths:
       - "apps/website/**"
+      - "packages/**"
+      - "pnpm-lock.yaml"
       - ".github/workflows/website.yml"
   pull_request:
     paths:
       - "apps/website/**"
+      - "packages/**"
+      - "pnpm-lock.yaml"
       - ".github/workflows/website.yml"
 
 # Supersede in-flight runs: a new push/PR-sync cancels the previous run for the same ref.
@@ -61,6 +67,11 @@ jobs:
         run: pnpm --filter @shogun-ai/website typecheck
       - name: unit tests (incl. waitlist security suite)
         run: pnpm --filter @shogun-ai/website test
+      # Build exactly what deploy.yml builds. Typecheck alone misses MDX/frontmatter errors,
+      # route conflicts, and OpenNext-only failures — without this step those merge green and
+      # first explode during the production deploy, leaving main unreleasable.
+      - name: build (OpenNext worker, same as deploy)
+        run: pnpm --filter @shogun-ai/website cf:build
       # E2E: apply the drizzle schema to the fresh service container, then drive
       # signup → attribution → qualification → leaderboard against real Postgres.
       - name: schema push (drizzle-kit push)
