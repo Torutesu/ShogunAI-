@@ -21,6 +21,8 @@ pub mod connection;
 pub mod dispatch;
 pub mod mcp;
 pub mod memory_api;
+/// Memory API opt-in, profile, and hashed bearer-token persistence.
+pub mod memory_api_settings;
 pub mod plan_source;
 pub mod rest;
 pub mod scope;

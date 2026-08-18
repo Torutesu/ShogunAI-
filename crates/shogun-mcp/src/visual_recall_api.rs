@@ -16,6 +16,7 @@ pub fn is_structured_read(tool: Tool) -> bool {
             | Tool::VisualRecallRescanFrame
             | Tool::LessonsList
             | Tool::MemoryGetWrap
+            | Tool::ProfileWhoami
     )
 }
 

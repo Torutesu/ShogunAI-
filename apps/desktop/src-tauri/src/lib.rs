@@ -34,6 +34,8 @@ mod meeting_live_summary;
 mod meeting_recap;
 #[cfg(target_os = "macos")]
 mod meeting_translate;
+#[cfg(target_os = "macos")]
+mod memory_api_settings;
 mod metrics;
 mod mic;
 #[cfg(target_os = "macos")]
@@ -285,6 +287,11 @@ pub fn run() {
             visual_recall::mac::get_screen_frame_image,
             visual_recall::mac::delete_screen_frame,
             visual_recall::mac::open_visual_recall,
+            memory_api_settings::mac::memory_api_settings,
+            memory_api_settings::mac::set_memory_api_enabled,
+            memory_api_settings::mac::set_memory_api_profile,
+            memory_api_settings::mac::issue_memory_api_token,
+            memory_api_settings::mac::revoke_memory_api_token,
             notch_actions::mac::notch_actions,
             notch_exec::mac::run_notch_action,
             notch_exec::mac::confirm_notch_action,

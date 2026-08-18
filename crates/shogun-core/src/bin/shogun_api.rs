@@ -21,6 +21,7 @@ use shogun_core::daemon::{Clock, Db};
 use shogun_core::db_backend::DbBackend;
 use shogun_core::metrics::{render_snapshots_json_with_lessons, SloRegistry};
 use shogun_mcp::memory_api::TokenRegistry;
+use shogun_mcp::memory_api_settings::{self, TOKENS_KEYCHAIN_ACCOUNT};
 use shogun_mcp::server::{bind_local, serve_on, AppState, MetricsSource, DEFAULT_PORT};
 
 /// The live SLO metrics source served at `GET /v1/metrics` (NFR-SLO-00). Wraps the shared
@@ -45,7 +46,10 @@ impl MetricsSource for RegistryMetrics {
 
 /// Build the metrics source for the API process (empty SLO registry + DB-backed lesson counters).
 fn metrics_source(db: Db) -> Arc<dyn MetricsSource> {
-    Arc::new(RegistryMetrics { registry: Arc::new(Mutex::new(SloRegistry::new())), db })
+    Arc::new(RegistryMetrics {
+        registry: Arc::new(Mutex::new(SloRegistry::new())),
+        db,
+    })
 }
 
 /// A real wall-clock in unix ms (never panics; 0 before the epoch).
@@ -75,13 +79,59 @@ fn db_backend(db: Db) -> DbBackend {
     if let Some(path) = visual_recall_settings_path(&db_path) {
         backend = backend.with_visual_recall_settings_path(path);
     }
-    backend
+    backend.with_memory_api_settings_path(memory_api_settings::resolve_settings_path(&db_path))
+}
+
+fn load_token_registry() -> Result<TokenRegistry, String> {
+    let mut tokens = TokenRegistry::new();
+    #[cfg(target_os = "macos")]
+    {
+        let blob = memory_api_settings::load_token_blob_with_migration(
+            || match shogun_integrations::keychain_store::get_generic_secret(
+                TOKENS_KEYCHAIN_ACCOUNT,
+            ) {
+                Ok(bytes) => Ok(Some(bytes)),
+                Err(error) if error.code() == -25300 => Ok(None),
+                Err(_) => Err("could not read Memory API tokens from Keychain".to_string()),
+            },
+            |bytes| {
+                shogun_integrations::keychain_store::set_generic_secret(
+                    TOKENS_KEYCHAIN_ACCOUNT,
+                    bytes,
+                )
+                .map_err(|_| "could not migrate Memory API token verifiers".to_string())
+            },
+        )?;
+        for token in blob.tokens {
+            tokens.issue_verifier(&token.verifier)?;
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    if let Ok(token) = std::env::var("SHOGUN_API_TOKEN") {
+        if !token.is_empty() {
+            tokens.issue(token);
+        }
+    }
+    Ok(tokens)
+}
+
+fn gate_or_exit(db_path: &str) {
+    if let Err(message) =
+        memory_api_settings::require_enabled(&memory_api_settings::resolve_settings_path(db_path))
+    {
+        eprintln!("{message}");
+        std::process::exit(1);
+    }
 }
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
     let db_path = std::env::var("SHOGUN_DB_PATH").unwrap_or_else(|_| "./shogun.db".to_string());
-    let port = std::env::var("SHOGUN_API_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(DEFAULT_PORT);
+    gate_or_exit(&db_path);
+    let port = std::env::var("SHOGUN_API_PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(DEFAULT_PORT);
 
     let clock = wall_clock();
     let db = Db::open_at_path(&db_path, clock.clone())
@@ -89,10 +139,9 @@ async fn main() -> std::io::Result<()> {
     let metrics = metrics_source(db.clone());
     let backend = Arc::new(db_backend(db));
 
-    let mut tokens = TokenRegistry::new();
-    match std::env::var("SHOGUN_API_TOKEN") {
-        Ok(t) if !t.is_empty() => tokens.issue(t),
-        _ => eprintln!("warning: SHOGUN_API_TOKEN not set — every tool call will be 401 (only /v1/status is open)"),
+    let tokens = load_token_registry().map_err(std::io::Error::other)?;
+    if tokens.is_empty() {
+        eprintln!("warning: no Memory API tokens loaded — every tool call will be 401 (only /v1/status is open)");
     }
 
     let approvals = Arc::new(Mutex::new(ApprovalQueue::new()));
@@ -125,7 +174,10 @@ mod tests {
     fn boot_server() -> u16 {
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
             rt.block_on(async move {
                 let db = Db::open_in_memory(wall_clock()).unwrap();
                 let metrics = metrics_source(db.clone());
@@ -133,8 +185,8 @@ mod tests {
                 let mut tokens = TokenRegistry::new();
                 tokens.issue("dev");
                 let approvals = Arc::new(Mutex::new(ApprovalQueue::new()));
-                let state =
-                    AppState::new(Arc::new(tokens), backend, approvals, wall_clock()).with_metrics(metrics);
+                let state = AppState::new(Arc::new(tokens), backend, approvals, wall_clock())
+                    .with_metrics(metrics);
                 let listener = bind_local(0).await.unwrap();
                 let port = listener.local_addr().unwrap().port();
                 tx.send(port).unwrap();
@@ -162,13 +214,31 @@ mod tests {
         assert_eq!(r.status, 401);
 
         // write a note, then search it back — the full write→persist→read loop over the socket
-        let r = request(port, "POST", "/v1/memory/notes", Some("dev"), Some("call Bob about the roadmap")).unwrap();
+        let r = request(
+            port,
+            "POST",
+            "/v1/memory/notes",
+            Some("dev"),
+            Some("call Bob about the roadmap"),
+        )
+        .unwrap();
         assert_eq!(r.status, 202);
         assert!(r.body.contains("\"id\":"));
 
-        let r = request(port, "GET", "/v1/memory/search?q=roadmap", Some("dev"), None).unwrap();
+        let r = request(
+            port,
+            "GET",
+            "/v1/memory/search?q=roadmap",
+            Some("dev"),
+            None,
+        )
+        .unwrap();
         assert_eq!(r.status, 200);
-        assert!(r.body.contains("call Bob about the roadmap"), "search body: {}", r.body);
+        assert!(
+            r.body.contains("call Bob about the roadmap"),
+            "search body: {}",
+            r.body
+        );
 
         // the in-product SLO snapshot is served, open like status (NFR-SLO-00); empty registry ⇒
         // every SLO reads unmeasured, never a false green (spec §4.5).
@@ -176,10 +246,16 @@ mod tests {
         assert_eq!(r.status, 200);
         assert!(r.body.contains("\"metrics\":"), "metrics body: {}", r.body);
         assert!(r.body.contains("NFR-SLO-01"), "metrics body: {}", r.body);
-        assert!(r.body.contains("\"measured\":false"), "unmeasured SLOs must not read as pass: {}", r.body);
+        assert!(
+            r.body.contains("\"measured\":false"),
+            "unmeasured SLOs must not read as pass: {}",
+            r.body
+        );
         // the D-6 lesson counters ride on the same surface: a live DB reports real (zero) counts
         assert!(
-            r.body.contains(r#""lessons":{"active_lessons":0,"feedback_events_last_7d":0,"measured":true}"#),
+            r.body.contains(
+                r#""lessons":{"active_lessons":0,"feedback_events_last_7d":0,"measured":true}"#
+            ),
             "lesson counters missing: {}",
             r.body
         );
@@ -198,6 +274,10 @@ mod tests {
         .unwrap();
         assert_eq!(r.status, 501);
         assert!(r.body.contains("no_approval_surface"), "body: {}", r.body);
-        assert!(!r.body.contains("\"pending\":true"), "must not read as accepted: {}", r.body);
+        assert!(
+            !r.body.contains("\"pending\":true"),
+            "must not read as accepted: {}",
+            r.body
+        );
     }
 }

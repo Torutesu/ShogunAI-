@@ -73,7 +73,10 @@ impl<B: MemoryBackend> McpServer<B> {
             Err(_) => return Some(error(Value::Null, -32700, "parse error")),
         };
         let id = req.get("id").cloned();
-        let method = req.get("method").and_then(Value::as_str).unwrap_or_default();
+        let method = req
+            .get("method")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
 
         match method {
             "initialize" => id.map(|id| result(id, self.initialize())),
@@ -105,12 +108,19 @@ impl<B: MemoryBackend> McpServer<B> {
         // trial-expired device refuses every tool call, reads included. `tools/list` stays
         // answerable (discovering the tool names discloses no memory data).
         if !(self.entitlements)().memory_api {
-            return error(id, -32003, "plan_required: the Memory API needs Pro (or an active trial)");
+            return error(
+                id,
+                -32003,
+                "plan_required: the Memory API needs Pro (or an active trial)",
+            );
         }
         let Some(params) = params else {
             return error(id, -32602, "missing params");
         };
-        let name = params.get("name").and_then(Value::as_str).unwrap_or_default();
+        let name = params
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         let Some(tool) = Tool::from_wire(name) else {
             return error(id, -32602, "unknown tool");
         };
@@ -120,7 +130,10 @@ impl<B: MemoryBackend> McpServer<B> {
             ApiLevel::Read => {
                 let read_params = ReadParams {
                     id: args.get("id").and_then(Value::as_i64),
-                    query: args.get("query").and_then(Value::as_str).map(str::to_string),
+                    query: args
+                        .get("query")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
                     from_ms: args.get("from_ms").and_then(Value::as_i64),
                     to_ms: args.get("to_ms").and_then(Value::as_i64),
                 };
@@ -130,14 +143,20 @@ impl<B: MemoryBackend> McpServer<B> {
                         .map(|json| render_structured(tool, &json))
                         .unwrap_or_else(|| r#"{"error":"unavailable"}"#.to_string())
                 } else {
-                    let include_low = args.get("include_low").and_then(Value::as_bool).unwrap_or(false);
+                    let include_low = args
+                        .get("include_low")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
                     let items = self.backend.read(tool, &read_params);
                     rest::render_reads(tool, &items, include_low)
                 }
             }
             ApiLevel::Write(_) => {
                 let body = if tool == Tool::MemoryAppendNote {
-                    args.get("text").and_then(Value::as_str).unwrap_or_default().to_string()
+                    args.get("text")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string()
                 } else {
                     // VisualRecallSetEnabled / VisualRecallDeleteFrame / StateProposeUpdate /
                     // LessonsSetActive all take the raw JSON args as the body.
@@ -155,7 +174,14 @@ impl<B: MemoryBackend> McpServer<B> {
                 let now = (self.clock)();
                 match self.approvals.lock() {
                     Ok(mut queue) => {
-                        rest::act(Some(&body), now, &mut queue, ApprovalOrigin::Mcp, self.surface).1
+                        rest::act(
+                            Some(&body),
+                            now,
+                            &mut queue,
+                            ApprovalOrigin::Mcp,
+                            self.surface,
+                        )
+                        .1
                     }
                     Err(_) => return error(id, -32000, "internal"),
                 }
@@ -163,7 +189,10 @@ impl<B: MemoryBackend> McpServer<B> {
         };
 
         // MCP tool results are content blocks; we return the tool's JSON as a text block.
-        result(id, json!({ "content": [{ "type": "text", "text": text }], "isError": false }))
+        result(
+            id,
+            json!({ "content": [{ "type": "text", "text": text }], "isError": false }),
+        )
     }
 }
 
@@ -213,6 +242,15 @@ fn tool_descriptor(tool: Tool) -> Value {
             "Today's Evening Wrap (deterministic day aggregation): outcome counts, still-open \
              items, tomorrow's first items, loose ends — the same content as the notch card",
             json!({}),
+        ),
+        Tool::ProfileWhoami => ("Local profile plus a compact work summary", json!({})),
+        Tool::ProfileSet => (
+            "Update local profile preferences (L1)",
+            json!({
+                "display_name": { "type": "string", "maxLength": 4096 },
+                "role": { "type": "string", "maxLength": 4096 },
+                "prefs": { "type": "string", "maxLength": 4096 },
+            }),
         ),
         Tool::DeviceOnboardingGet => ("This device's onboarding / first-run setup state", json!({})),
         Tool::StatePeopleGet
@@ -273,7 +311,11 @@ mod tests {
     impl MemoryBackend for Fake {
         fn read(&self, tool: Tool, _p: &ReadParams) -> Vec<ReadItem> {
             if tool == Tool::StateCommitmentsList {
-                vec![ReadItem::new("ship v1", 0.9), ReadItem::new("maybe refactor", 0.6), ReadItem::new("shaky", 0.3)]
+                vec![
+                    ReadItem::new("ship v1", 0.9),
+                    ReadItem::new("maybe refactor", 0.6),
+                    ReadItem::new("shaky", 0.3),
+                ]
             } else {
                 Vec::new()
             }
@@ -301,13 +343,23 @@ mod tests {
     }
 
     fn server() -> McpServer<Fake> {
-        McpServer::new(Fake, shared_queue(), || 1000, Entitlements::trial_not_started)
+        McpServer::new(
+            Fake,
+            shared_queue(),
+            || 1000,
+            Entitlements::trial_not_started,
+        )
     }
 
     /// A server whose plan does not include the Memory API (issue #97).
     fn locked_server() -> McpServer<Fake> {
         use shogun_agents::entitlement::{entitlements, Plan};
-        McpServer::new(Fake, shared_queue(), || 1000, || entitlements(Plan::Standard, 0))
+        McpServer::new(
+            Fake,
+            shared_queue(),
+            || 1000,
+            || entitlements(Plan::Standard, 0),
+        )
     }
 
     fn call(server: &McpServer<Fake>, line: &str) -> Value {
@@ -316,19 +368,27 @@ mod tests {
 
     #[test]
     fn initialize_reports_protocol_and_server_info() {
-        let v = call(&server(), r#"{"jsonrpc":"2.0","id":1,"method":"initialize"}"#);
+        let v = call(
+            &server(),
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize"}"#,
+        );
         assert_eq!(v["result"]["protocolVersion"], PROTOCOL_VERSION);
         assert_eq!(v["result"]["serverInfo"]["name"], "shogun-memory");
     }
 
     #[test]
     fn notifications_get_no_response() {
-        assert!(server().handle_line(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#).is_none());
+        assert!(server()
+            .handle_line(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#)
+            .is_none());
     }
 
     #[test]
     fn tools_list_exposes_every_tool() {
-        let v = call(&server(), r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#);
+        let v = call(
+            &server(),
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#,
+        );
         let tools = v["result"]["tools"].as_array().unwrap();
         assert_eq!(tools.len(), ALL_TOOLS.len());
         assert!(tools.iter().any(|t| t["name"] == "memory.search"));
@@ -388,8 +448,13 @@ mod tests {
         let shared = shared_queue();
         // Stands in for the desktop hosting this face — the headless default is covered by
         // `send_is_refused_when_no_confirm_ui_can_drain_the_queue`.
-        let s = McpServer::new(Fake, shared.clone(), || 1000, Entitlements::trial_not_started)
-            .with_approval_surface(rest::ApprovalSurface::Present);
+        let s = McpServer::new(
+            Fake,
+            shared.clone(),
+            || 1000,
+            Entitlements::trial_not_started,
+        )
+        .with_approval_surface(rest::ApprovalSurface::Present);
         let v = call(
             &s,
             r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"actions.execute","arguments":{"kind":"send_email","to":"a@b.com","subject":"s","body":"b"}}}"#,
@@ -397,7 +462,10 @@ mod tests {
         let text = v["result"]["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("\"pending\":true"));
         assert!(text.contains("\"approval_id\":"));
-        assert!(text.contains("\"origin\":\"mcp\""), "the pending result labels the MCP face: {text}");
+        assert!(
+            text.contains("\"origin\":\"mcp\""),
+            "the pending result labels the MCP face: {text}"
+        );
         // The send landed in the injected queue — the same one the UI drains (B-3 / E-08).
         let q = shared.lock().unwrap();
         assert_eq!(q.pending_len(), 1);
@@ -419,8 +487,15 @@ mod tests {
             assert_eq!(v["error"]["code"], -32003, "expected plan error for {line}");
         }
         // initialize / tools/list keep working
-        assert!(call(&s, r#"{"jsonrpc":"2.0","id":4,"method":"initialize"}"#)["result"]["protocolVersion"].is_string());
-        assert!(call(&s, r#"{"jsonrpc":"2.0","id":5,"method":"tools/list"}"#)["result"]["tools"].is_array());
+        assert!(
+            call(&s, r#"{"jsonrpc":"2.0","id":4,"method":"initialize"}"#)["result"]
+                ["protocolVersion"]
+                .is_string()
+        );
+        assert!(
+            call(&s, r#"{"jsonrpc":"2.0","id":5,"method":"tools/list"}"#)["result"]["tools"]
+                .is_array()
+        );
     }
 
     #[test]
@@ -430,7 +505,10 @@ mod tests {
             r#"{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"nope","arguments":{}}}"#,
         );
         assert_eq!(v["error"]["code"], -32602);
-        let v = call(&server(), r#"{"jsonrpc":"2.0","id":7,"method":"frobnicate"}"#);
+        let v = call(
+            &server(),
+            r#"{"jsonrpc":"2.0","id":7,"method":"frobnicate"}"#,
+        );
         assert_eq!(v["error"]["code"], -32601);
     }
 

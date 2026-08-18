@@ -3632,6 +3632,101 @@ function VisualRecallSection(): JSX.Element {
   );
 }
 
+interface MemoryApiSettingsView {
+  enabled: boolean;
+  profile: { display_name: string; role: string; prefs: string };
+  tokens: { id: string; name: string; created_at: number }[];
+  gate_note: string;
+}
+
+function MemoryApiSection(): JSX.Element {
+  const [settings, setSettings] = useState<MemoryApiSettingsView>({
+    enabled: false,
+    profile: { display_name: "", role: "", prefs: "" },
+    tokens: [],
+    gate_note: "",
+  });
+  const [name, setName] = useState("");
+  const [role, setRole] = useState("");
+  const [prefs, setPrefs] = useState("");
+  const [tokenName, setTokenName] = useState("");
+  const [issuedToken, setIssuedToken] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const refresh = useCallback((): void => {
+    if (!IN_TAURI) return;
+    void invoke<MemoryApiSettingsView>("memory_api_settings")
+      .then((next) => {
+        setSettings(next);
+        setName(next.profile.display_name);
+        setRole(next.profile.role);
+        setPrefs(next.profile.prefs);
+        setError("");
+      })
+      .catch((reason: unknown) => setError(String(reason)));
+  }, []);
+  useEffect(refresh, [refresh]);
+  const focusField = (focused: boolean): void => {
+    if (IN_TAURI) void invoke("focus_field", { focused }).catch(() => undefined);
+  };
+  const setEnabled = (enabled: boolean): void => {
+    if (!IN_TAURI) { setSettings((current) => ({ ...current, enabled })); return; }
+    setBusy(true);
+    void invoke("set_memory_api_enabled", { enabled })
+      .then(refresh)
+      .catch((reason: unknown) => setError(String(reason)))
+      .finally(() => setBusy(false));
+  };
+  const saveProfile = (): void => {
+    if (!IN_TAURI) return;
+    setBusy(true);
+    void invoke("set_memory_api_profile", { displayName: name, role, prefs })
+      .then(refresh)
+      .catch((reason: unknown) => setError(String(reason)))
+      .finally(() => setBusy(false));
+  };
+  const issueToken = (): void => {
+    const clientName = tokenName.trim();
+    if (!clientName || busy || !IN_TAURI) return;
+    setBusy(true);
+    void invoke<{ token: string }>("issue_memory_api_token", { name: clientName })
+      .then((next) => { setIssuedToken(next.token); setTokenName(""); refresh(); })
+      .catch((reason: unknown) => setError(String(reason)))
+      .finally(() => setBusy(false));
+  };
+  const revoke = (id: string): void => {
+    if (!IN_TAURI || busy) return;
+    setBusy(true);
+    void invoke("revoke_memory_api_token", { id })
+      .then(() => { setIssuedToken(""); refresh(); })
+      .catch((reason: unknown) => setError(String(reason)))
+      .finally(() => setBusy(false));
+  };
+  return (
+    <section className="set">
+      <div className="set__label" id="seg-memory-api">{t.memoryApiTitle}</div>
+      <div className="set__hint">{t.memoryApiHint}</div>
+      {error ? <div className="set__hint is-err">{error}</div> : null}
+      <div className="seg" role="radiogroup" aria-labelledby="seg-memory-api">
+        <button type="button" role="radio" aria-checked={settings.enabled} disabled={busy} className={`seg__opt${settings.enabled ? " is-on" : ""}`} onClick={() => setEnabled(true)}>{t.memoryApiOn}</button>
+        <button type="button" role="radio" aria-checked={!settings.enabled} disabled={busy} className={`seg__opt${!settings.enabled ? " is-on" : ""}`} onClick={() => setEnabled(false)}>{t.memoryApiOff}</button>
+      </div>
+      <div className="set__hint set__hint--quiet">{settings.gate_note}</div>
+      <div className="set__label" style={{ marginTop: 10 }}>{t.memoryApiProfileLabel}</div>
+      <div className="keyrow"><input className="keyrow__input" value={name} placeholder={t.memoryApiDisplayName} maxLength={4096} onChange={(event) => setName(event.target.value)} onFocus={() => focusField(true)} onBlur={() => focusField(false)} /></div>
+      <div className="keyrow" style={{ marginTop: 6 }}><input className="keyrow__input" value={role} placeholder={t.memoryApiRole} maxLength={4096} onChange={(event) => setRole(event.target.value)} onFocus={() => focusField(true)} onBlur={() => focusField(false)} /></div>
+      <div className="set__hint">{t.memoryApiPrefsHint}</div>
+      <textarea className="keyrow__input" style={{ minHeight: 72, resize: "vertical", width: "100%", boxSizing: "border-box" }} value={prefs} placeholder={t.memoryApiPrefsPlaceholder} maxLength={4096} onChange={(event) => setPrefs(event.target.value)} onFocus={() => focusField(true)} onBlur={() => focusField(false)} />
+      <div className="keyrow" style={{ marginTop: 6 }}><button className="keyrow__btn" type="button" disabled={busy} onClick={saveProfile}>{t.memoryApiSaveProfile}</button></div>
+      <div className="set__label" style={{ marginTop: 12 }}>{t.memoryApiTokensLabel}</div>
+      <div className="set__hint">{t.memoryApiTokensHint}</div>
+      {settings.tokens.length === 0 ? <div className="set__hint set__hint--quiet">{t.memoryApiNoTokens}</div> : settings.tokens.map((token) => <div className="keyrow" key={token.id}><span className="set__hint" style={{ flex: 1 }}>{token.name}</span><button className="keyrow__btn" type="button" disabled={busy} onClick={() => revoke(token.id)}>{t.memoryApiRevokeToken}</button></div>)}
+      <div className="keyrow"><input className="keyrow__input" value={tokenName} placeholder={t.memoryApiTokenNamePlaceholder} maxLength={120} autoComplete="off" onChange={(event) => setTokenName(event.target.value)} onFocus={() => focusField(true)} onBlur={() => focusField(false)} onKeyDown={(event) => { if (event.key === "Enter") issueToken(); }} /><button className="keyrow__btn" type="button" disabled={busy || !tokenName.trim()} onClick={issueToken}>{t.memoryApiIssueToken}</button></div>
+      {issuedToken ? <div className="set__hint is-ok">{t.memoryApiTokenIssued}<br /><code style={{ userSelect: "all", wordBreak: "break-all" }}>{issuedToken}</code></div> : null}
+    </section>
+  );
+}
+
 function AiSessionsSection(): JSX.Element {
   const [on, setOn] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -4935,6 +5030,7 @@ function Settings(props: {
         <MeetingSection />
         <LaunchAtLoginSection />
         <VisualRecallSection />
+        <MemoryApiSection />
         <VoiceSection />
         <SoundSection />
         <DailySummariesSection />
