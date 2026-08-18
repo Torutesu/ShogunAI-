@@ -402,10 +402,10 @@ fn json_escape(s: &str) -> String {
     out
 }
 
-/// Route + render **with real data** from `backend`. For a read tool, the backend supplies rows and
-/// this applies the confidence gate (FR-API-06: Low excluded unless `?include_low`, Medium flagged
-/// `possibly`); other decisions render as [`body_for`]. This is what the server calls.
-fn structured_read_status(json: &str) -> u16 {
+/// The HTTP status a structured read's backend JSON maps to: an `{"error":...}` payload is a
+/// failure, not a 200 with an error inside it. Shared with the MCP face, which turns the same
+/// status into its `isError` flag — the two faces must report the same outcome (invariant 6).
+pub fn structured_read_status(json: &str) -> u16 {
     match serde_json::from_str::<serde_json::Value>(json) {
         Ok(v) => {
             let err = v.get("error").and_then(|e| e.as_str());
@@ -419,6 +419,9 @@ fn structured_read_status(json: &str) -> u16 {
     }
 }
 
+/// Route + render **with real data** from `backend`. For a read tool, the backend supplies rows and
+/// this applies the confidence gate (FR-API-06: Low excluded unless `?include_low`, Medium flagged
+/// `possibly`); other decisions render as [`body_for`]. This is what the server calls.
 pub fn respond_with<B: MemoryBackend + ?Sized>(
     req: &RestRequest,
     tokens: &TokenRegistry,

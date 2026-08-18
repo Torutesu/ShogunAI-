@@ -116,7 +116,9 @@ impl<B: MemoryBackend> McpServer<B> {
         };
         let args = params.get("arguments").cloned().unwrap_or(json!({}));
 
-        let text = match tool_level(tool) {
+        // Every arm yields the REST status alongside its body, so this face reports the same
+        // outcome the REST face does (invariant 6) instead of dressing a refusal as a success.
+        let (status, text) = match tool_level(tool) {
             ApiLevel::Read => {
                 let read_params = ReadParams {
                     id: args.get("id").and_then(Value::as_i64),
@@ -125,14 +127,15 @@ impl<B: MemoryBackend> McpServer<B> {
                     to_ms: args.get("to_ms").and_then(Value::as_i64),
                 };
                 if is_structured_read(tool) {
-                    self.backend
+                    let json = self
+                        .backend
                         .read_structured(tool, &read_params)
-                        .map(|json| render_structured(tool, &json))
-                        .unwrap_or_else(|| r#"{"error":"unavailable"}"#.to_string())
+                        .unwrap_or_else(|| r#"{"error":"unavailable"}"#.to_string());
+                    (rest::structured_read_status(&json), render_structured(tool, &json))
                 } else {
                     let include_low = args.get("include_low").and_then(Value::as_bool).unwrap_or(false);
                     let items = self.backend.read(tool, &read_params);
-                    rest::render_reads(tool, &items, include_low)
+                    (200, rest::render_reads(tool, &items, include_low))
                 }
             }
             ApiLevel::Write(_) => {
@@ -144,8 +147,8 @@ impl<B: MemoryBackend> McpServer<B> {
                     args.to_string()
                 };
                 match self.backend.write(tool, &body) {
-                    Ok(Some(row_id)) => format!(r#"{{"accepted":true,"id":{row_id}}}"#),
-                    Ok(None) => r#"{"accepted":true}"#.to_string(),
+                    Ok(Some(row_id)) => (202, format!(r#"{{"accepted":true,"id":{row_id}}}"#)),
+                    Ok(None) => (202, r#"{"accepted":true}"#.to_string()),
                     Err(e) => return error(id, -32000, &e),
                 }
             }
@@ -155,15 +158,21 @@ impl<B: MemoryBackend> McpServer<B> {
                 let now = (self.clock)();
                 match self.approvals.lock() {
                     Ok(mut queue) => {
-                        rest::act(Some(&body), now, &mut queue, ApprovalOrigin::Mcp, self.surface).1
+                        rest::act(Some(&body), now, &mut queue, ApprovalOrigin::Mcp, self.surface)
                     }
                     Err(_) => return error(id, -32000, "internal"),
                 }
             }
         };
 
-        // MCP tool results are content blocks; we return the tool's JSON as a text block.
-        result(id, json!({ "content": [{ "type": "text", "text": text }], "isError": false }))
+        // MCP tool results are content blocks; we return the tool's JSON as a text block. `isError`
+        // is what an MCP client model reads to decide whether the call worked — a 501
+        // `no_approval_surface` or a 400 `bad_action_request` reported as a success would have it
+        // tell the user the send happened.
+        result(
+            id,
+            json!({ "content": [{ "type": "text", "text": text }], "isError": status >= 400 }),
+        )
     }
 }
 
@@ -351,6 +360,7 @@ mod tests {
         assert!(text.contains("ship v1"));
         assert!(text.contains("maybe refactor")); // medium included
         assert!(!text.contains("shaky")); // low excluded by default
+        assert_eq!(v["result"]["isError"], false, "a served read is not an error");
     }
 
     #[test]
@@ -398,11 +408,61 @@ mod tests {
         assert!(text.contains("\"pending\":true"));
         assert!(text.contains("\"approval_id\":"));
         assert!(text.contains("\"origin\":\"mcp\""), "the pending result labels the MCP face: {text}");
+        assert_eq!(v["result"]["isError"], false, "an accepted pending send is not an error");
         // The send landed in the injected queue — the same one the UI drains (B-3 / E-08).
         let q = shared.lock().unwrap();
         assert_eq!(q.pending_len(), 1);
         let id = q.pending_ids()[0];
         assert_eq!(q.origin(id), Some(ApprovalOrigin::Mcp));
+    }
+
+    #[test]
+    fn send_without_a_confirm_surface_is_reported_as_an_error_result() {
+        // The standalone stdio binary is headless (`ApprovalSurface::Absent`), so `act()` answers
+        // 501 no_approval_surface. Reported with isError:false, an MCP client model reads the tool
+        // result as a success and tells the user the mail went out — nothing was even queued.
+        let shared = shared_queue();
+        let s = McpServer::new(Fake, shared.clone(), || 1000, Entitlements::trial_not_started);
+        let v = call(
+            &s,
+            r#"{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"actions.execute","arguments":{"kind":"send_email","to":"a@b.com","subject":"s","body":"b"}}}"#,
+        );
+        assert_eq!(v["result"]["isError"], true, "a 501 refusal must not read as success: {v}");
+        let text = v["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("no_approval_surface"), "{text}");
+        assert_eq!(shared.lock().unwrap().pending_len(), 0, "nothing may be stranded in the queue");
+    }
+
+    #[test]
+    fn a_malformed_action_is_reported_as_an_error_result() {
+        // `act()` 400s on an unparseable action spec; the tool result must say so.
+        let s = McpServer::new(Fake, shared_queue(), || 1000, Entitlements::trial_not_started)
+            .with_approval_surface(rest::ApprovalSurface::Present);
+        let v = call(
+            &s,
+            r#"{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"actions.execute","arguments":{"kind":"nope"}}}"#,
+        );
+        assert_eq!(v["result"]["isError"], true, "{v}");
+        assert!(v["result"]["content"][0]["text"].as_str().unwrap().contains("bad_action_request"));
+    }
+
+    #[test]
+    fn a_structured_read_the_backend_cannot_serve_is_an_error_result() {
+        // Fake only serves lessons.list, so visual_recall.status falls back to the "unavailable"
+        // payload — the REST face answers 400 for it, and this face must agree (invariant 6).
+        let v = call(
+            &server(),
+            r#"{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"visual_recall.status","arguments":{}}}"#,
+        );
+        assert_eq!(v["result"]["isError"], true, "{v}");
+        assert!(v["result"]["content"][0]["text"].as_str().unwrap().contains("unavailable"));
+
+        // A structured read the backend DOES serve stays a success.
+        let ok = call(
+            &server(),
+            r#"{"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"lessons.list","arguments":{}}}"#,
+        );
+        assert_eq!(ok["result"]["isError"], false, "{ok}");
     }
 
     #[test]
