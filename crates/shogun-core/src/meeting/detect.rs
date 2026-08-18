@@ -330,9 +330,14 @@ fn has_strong_opener(ctx: &DetectionCtx<'_>) -> bool {
     ctx.has_meet_url || ctx.has_strong_bundle
 }
 
-/// Browser tab with no readable host — cannot prove Meet is open (PiP, AX gaps).
+/// Browser tab with no readable host — cannot prove a meeting unless another product-specific
+/// Weak signal (for example an exact Zoom/Meet/Teams title) corroborates the sustained mic.
+/// Generic titles never set that signal; PiP/media titles are rejected before this policy runs.
 fn browser_lacks_meeting_proof(ctx: &DetectionCtx<'_>) -> bool {
-    ctx.is_browser && !ctx.has_meet_url && ctx.page_host.map_or(true, str::is_empty)
+    ctx.is_browser
+        && !ctx.has_meet_url
+        && !ctx.has_weak_meeting_signal
+        && ctx.page_host.map_or(true, str::is_empty)
 }
 
 /// Apply FR-MT-04 policy on top of raw signals, then score.
@@ -1074,6 +1079,50 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(evaluate_offer(&signals, &ctx, &OfferPolicy::default()), Decision::Ignore);
+    }
+
+    #[test]
+    fn product_title_with_url_gap_and_sustained_mic_offers() {
+        // Chromium/Safari can deny URL AX while still exposing a product title. The title is only
+        // a Weak vote, so it needs the sustained mic; it restores a real meeting rather than
+        // promoting an arbitrary browser tab to an opener.
+        let title = "abc-defg-hij - Google Meet";
+        assert_eq!(title_hint(title), Some(MeetingHint::Weak));
+        let signals = Signals { mic_in_use: true, ..Default::default() };
+        let ctx = DetectionCtx {
+            is_browser: true,
+            page_host: None,
+            has_weak_meeting_signal: true,
+            window_title: Some(title),
+            ..Default::default()
+        };
+        assert!(matches!(
+            evaluate_offer(&signals, &ctx, &OfferPolicy::default()),
+            Decision::Offer { .. }
+        ));
+    }
+
+    #[test]
+    fn generic_or_media_title_with_url_gap_cannot_offer() {
+        let signals = Signals { mic_in_use: true, ..Default::default() };
+        let generic = DetectionCtx {
+            is_browser: true,
+            page_host: None,
+            window_title: Some("Meeting notes - Google Docs"),
+            ..Default::default()
+        };
+        assert_eq!(title_hint("Meeting notes - Google Docs"), None);
+        assert_eq!(evaluate_offer(&signals, &generic, &OfferPolicy::default()), Decision::Ignore);
+
+        // Suppression wins even if a stale product title had supplied a Weak signal.
+        let media = DetectionCtx {
+            is_browser: true,
+            page_host: None,
+            has_weak_meeting_signal: true,
+            window_title: Some("Picture-in-picture — Google Meet — YouTube"),
+            ..Default::default()
+        };
+        assert_eq!(evaluate_offer(&signals, &media, &OfferPolicy::default()), Decision::Ignore);
     }
 
     #[test]
