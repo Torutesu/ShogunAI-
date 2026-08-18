@@ -104,17 +104,24 @@ impl HashDecision {
 /// Decide the content_hash for `new_content`. If the most-similar recent candidate is at or above
 /// [`NEAR_DUP_THRESHOLD`], reuse that candidate's hash (the event log will dedup-touch, FR-CAP-03);
 /// otherwise compute a fresh hash with `hash_fn`. Ties pick the highest similarity, then the first
-/// candidate in order.
+/// candidate in order — callers pass `recents` newest-first (`ORDER BY id DESC`), so a tie
+/// dedup-touches the *newest* matching event rather than reviving a stale one.
 pub fn decide_hash(
     new_content: &str,
     recents: &[Recent<'_>],
     hash_fn: impl Fn(&str) -> String,
 ) -> HashDecision {
+    // `max_by` would keep the *last* maximal element, i.e. the oldest row, so `last_seen_at` /
+    // `dwell_ms` would pile onto a stale event whenever two candidates score the same (e.g. two
+    // prior bodies that normalize equal, both scoring exactly 1.0). Reduce with a strict `>` so
+    // the incumbent — the earlier, newer candidate — survives a tie. No `partial_cmp`/`unwrap`
+    // needed: a NaN similarity never clears the `>= NEAR_DUP_THRESHOLD` filter, and a strict `>`
+    // against one would keep the incumbent anyway.
     let best = recents
         .iter()
         .map(|r| (r, similarity(new_content, r.content)))
         .filter(|(_, s)| *s >= NEAR_DUP_THRESHOLD)
-        .max_by(|(_, s1), (_, s2)| s1.partial_cmp(s2).unwrap_or(std::cmp::Ordering::Equal));
+        .reduce(|best, cand| if cand.1 > best.1 { cand } else { best });
     match best {
         Some((r, _)) => HashDecision::Duplicate(r.content_hash.to_string()),
         None => HashDecision::Fresh(hash_fn(new_content)),
@@ -188,6 +195,25 @@ mod tests {
         ];
         let decision = decide_hash(&near, &recents, fresh_hash);
         assert_eq!(decision.hash(), "near");
+    }
+
+    #[test]
+    fn tied_candidates_pick_the_first_newest_one() {
+        // `recents` arrives newest-first (ORDER BY id DESC). Two prior bodies that differ only by
+        // whitespace/case normalize equal, so both score exactly 1.0 against the new capture. The
+        // tie must dedup-touch the newest event — otherwise last_seen_at/dwell_ms accumulate on a
+        // stale row.
+        let newest = "Sprint  Planning\tBoard";
+        let oldest = "sprint planning board";
+        let new_content = "SPRINT PLANNING BOARD";
+        assert_eq!(similarity(new_content, newest), similarity(new_content, oldest));
+        let recents = [
+            Recent { content_hash: "newest", content: newest },
+            Recent { content_hash: "oldest", content: oldest },
+        ];
+        let decision = decide_hash(new_content, &recents, fresh_hash);
+        assert!(decision.is_duplicate());
+        assert_eq!(decision.hash(), "newest", "a tie must collapse onto the newest candidate");
     }
 
     #[test]
