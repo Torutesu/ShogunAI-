@@ -810,14 +810,14 @@ html[data-theme='dark'] .theme-light-badge {
   mix-blend-mode: difference;
 }
 .cursor-dot {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
   background: #ffffff;
   transition: opacity 0.25s var(--ease-out-soft);
 }
 .cursor-ring {
-  width: 26px;
-  height: 26px;
+  width: 20px;
+  height: 20px;
   border: 1.5px solid #ffffff;
   transition:
     width 0.22s var(--ease-out-soft),
@@ -826,11 +826,11 @@ html[data-theme='dark'] .theme-light-badge {
     opacity 0.25s var(--ease-out-soft);
 }
 .cursor-ring.is-hover {
-  width: 42px;
-  height: 42px;
+  width: 30px;
+  height: 30px;
   background: rgba(255, 255, 255, 0.12);
 }
 .cursor-ring.is-down {
-  width: 20px;
-  height: 20px;
+  width: 15px;
+  height: 15px;
 }
