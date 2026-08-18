@@ -73,6 +73,11 @@ mod voice_shortcut;
 static PANEL_BEHAVIOR: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new((1 << 0) | (1 << 8));
 
+/// The notch is a docked surface, not a floating utility window. Keep this shared so adoption and
+/// recovery cannot accidentally disagree and re-enable background dragging.
+#[cfg(target_os = "macos")]
+const PANEL_MOVABLE: bool = false;
+
 /// NSMainMenuWindowLevel (24) + 3 — same as boring.notch (`level = .mainMenu + 3`).
 ///
 /// Floating (3) sits UNDER the menu bar. Frame can be flush to `screen.frame.maxY` and Idle
@@ -128,21 +133,14 @@ fn current_castle() -> shogun_core::notch::geometry::CastlePosition {
     )
 }
 
-/// User-dragged override of the Castle Position (issue #21). `Some` after the user drags the
-/// panel (collapsed pill or expanded header); every dock path then resolves through
-/// `resting_origin` instead of `castle_origin`, so summon / reassert / view-switch resizes all
-/// respect the dragged spot. Cleared by `set_castle_position` — picking a castle is the explicit
-/// "go home". Persisted next to the position in `castle.json` so the spot survives restart.
-/// A Mutex (not an atomic) because it is only touched on the main thread and in the rare set
-/// command — never on a latency-critical path without the lock being uncontended.
+/// Legacy user-dragged override. New builds never populate it; `castle::init` clears old persisted
+/// values so every placement path resolves to the selected Castle Position.
 #[cfg(target_os = "macos")]
 static DRAG_OVERRIDE: std::sync::Mutex<Option<shogun_core::notch::geometry::DragOffset>> =
     std::sync::Mutex::new(None);
 
-/// True while OUR code is moving the panel (dock / redock / resize). `setFrameOrigin`/`setFrame:`
-/// post `NSWindowDidMoveNotification` synchronously on the calling (main) thread, and every
-/// programmatic move happens on the main thread, so bracketing them with this flag cleanly
-/// separates them from user drags in the did-move observer (`note_user_move`).
+/// True while our code is moving the panel. Retained as the single movement boundary for the
+/// dock/resize paths even though user-driven panel movement is disabled.
 #[cfg(target_os = "macos")]
 static PROGRAMMATIC_MOVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -179,13 +177,11 @@ unsafe fn resting_dock_origin(
     }
 }
 
-/// Run `f` with `PROGRAMMATIC_MOVE` raised, so the did-move observer ignores moves we made
-/// ourselves. Main thread only (see `PROGRAMMATIC_MOVE`).
+/// Run `f` inside the programmatic-movement boundary. Main thread only.
 ///
 /// The flag is restored through a `Drop` guard that puts back the PREVIOUS value, which buys two
 /// things a plain store-true/store-false could not: a panic inside `f` cannot leave the flag
-/// latched (which would silently kill drag-position memory for the rest of the session), and a
-/// nested call cannot clear it on the inner exit while the outer move is still in flight.
+/// latched, and a nested call cannot clear it on the inner exit while the outer move is active.
 #[cfg(target_os = "macos")]
 fn with_programmatic_move<R>(f: impl FnOnce() -> R) -> R {
     use std::sync::atomic::Ordering;
@@ -328,7 +324,6 @@ pub fn run() {
             castle::get_castle_position,
             castle::set_castle_position,
             set_panel_size,
-            start_panel_drag,
             // First-layer connectors + the L3 send/approval queue, both rendered as sections of the
             // in-panel Settings view (there is no separate settings window).
             fullui::mac::full_ui_view,
@@ -1127,7 +1122,12 @@ fn panel_needs_reorder(presentation: PanelPresentation) -> bool {
 
 #[cfg(all(test, target_os = "macos"))]
 mod panel_recovery_tests {
-    use super::{panel_needs_reorder, PanelPresentation};
+    use super::{panel_needs_reorder, PanelPresentation, PANEL_MOVABLE};
+
+    #[test]
+    fn notch_panel_is_never_user_movable() {
+        assert!(!PANEL_MOVABLE);
+    }
 
     #[test]
     fn undrawn_panel_needs_reorder_even_when_visible_on_active_space() {
@@ -1198,6 +1198,8 @@ fn reassert_panel(handle: &tauri::AppHandle, why: &'static str) {
         if can_hide {
             let _: () = msg_send![ptr, setCanHide: false];
         }
+        let _: () = msg_send![ptr, setMovable: PANEL_MOVABLE];
+        let _: () = msg_send![ptr, setMovableByWindowBackground: PANEL_MOVABLE];
         let visible: bool = msg_send![ptr, isVisible];
         let on_active_space: bool = msg_send![ptr, isOnActiveSpace];
         let occlusion: usize = msg_send![ptr, occlusionState];
@@ -1666,7 +1668,8 @@ fn adopt_native_panel(win: &tauri::WebviewWindow) {
         let _: () = msg_send![panel, setCollectionBehavior: want];
         let _: () = msg_send![panel, setHidesOnDeactivate: false];
         let _: () = msg_send![panel, setCanHide: false];
-        let _: () = msg_send![panel, setMovableByWindowBackground: true];
+        let _: () = msg_send![panel, setMovable: PANEL_MOVABLE];
+        let _: () = msg_send![panel, setMovableByWindowBackground: PANEL_MOVABLE];
         // ORDER: setFloatingPanel BEFORE setLevel. AppKit's floating-panel path resets level to
         // NSFloatingWindowLevel (3); boring.notch sets isFloatingPanel first, then mainMenu+3.
         let _: () = msg_send![panel, setFloatingPanel: true];
@@ -1689,79 +1692,7 @@ fn adopt_native_panel(win: &tauri::WebviewWindow) {
             pf.origin.x, pf.origin.y, pf.size.width, pf.size.height
         );
 
-        // Drag override capture (issue #21): performWindowDragWithEvent: is fully native — no
-        // command and no webview event fires when the user drops the panel, so the only place the
-        // final position surfaces is the window's own did-move notification.
-        watch_user_moves(panel);
     }
-}
-
-/// Subscribe to `NSWindowDidMoveNotification` for the overlay panel (issue #21). Programmatic
-/// moves are bracketed by `PROGRAMMATIC_MOVE` and ignored; whatever remains is the user dragging
-/// the collapsed pill or the expanded header, which becomes the drag override (memory
-/// immediately, `castle.json` debounced). Observer and block are intentionally leaked — the panel
-/// lives for the app's lifetime.
-///
-/// # Safety
-/// `panel` must be the live overlay NSPanel; called on the main thread during adoption.
-#[cfg(target_os = "macos")]
-unsafe fn watch_user_moves(panel: *mut objc2::runtime::AnyObject) {
-    use objc2::runtime::AnyObject;
-    use objc2::{class, msg_send};
-    use objc2_foundation::NSString;
-
-    let nc: *mut AnyObject = msg_send![class!(NSNotificationCenter), defaultCenter];
-    if nc.is_null() {
-        eprintln!("[shell] NSNotificationCenter nil — drag positions will not be remembered");
-        return;
-    }
-    // The block captures the pointer as a plain address: the panel is app-lifetime (never freed),
-    // and an address keeps the closure trivially 'static.
-    let addr = panel as usize;
-    let name = NSString::from_str("NSWindowDidMoveNotification");
-    let block = block2::RcBlock::new(move |_notif: *mut AnyObject| {
-        note_user_move(addr as *mut AnyObject);
-    });
-    let nil_obj: *mut AnyObject = std::ptr::null_mut();
-    // `object: panel` filters delivery to THIS window's moves only.
-    let _obs: *mut AnyObject = msg_send![nc, addObserverForName: &*name, object: panel, queue: nil_obj, usingBlock: &*block];
-    std::mem::forget(block);
-    eprintln!("[shell] user-move watcher installed (drag override, issue #21)");
-}
-
-/// A did-move that our own code did not cause = the user dragged the panel. Record where it sits
-/// relative to its screen's visible frame as the drag override and schedule the debounced save.
-/// Runs on the main thread (AppKit posts the window's did-move synchronously with the move).
-#[cfg(target_os = "macos")]
-fn note_user_move(ptr: *mut objc2::runtime::AnyObject) {
-    use objc2::msg_send;
-    use objc2::runtime::AnyObject;
-    use objc2_foundation::NSRect;
-    use shogun_core::notch::geometry::{drag_offset, Point as GPoint, Rect as GRect};
-
-    if PROGRAMMATIC_MOVE.load(std::sync::atomic::Ordering::Relaxed) {
-        return;
-    }
-    // SAFETY: main thread; `ptr` is the live, app-lifetime overlay panel; getters only.
-    let off = unsafe {
-        let screen: *mut AnyObject = msg_send![ptr, screen];
-        if screen.is_null() {
-            // Mid-drag between displays the window can momentarily have no screen — keep the
-            // previous override rather than recording garbage.
-            return;
-        }
-        let vf: NSRect = msg_send![screen, visibleFrame];
-        let f: NSRect = msg_send![ptr, frame];
-        drag_offset(
-            GRect::new(vf.origin.x, vf.origin.y, vf.size.width, vf.size.height),
-            GPoint::new(f.origin.x, f.origin.y),
-            f.size.height,
-        )
-    };
-    if let Ok(mut g) = DRAG_OVERRIDE.lock() {
-        *g = Some(off);
-    }
-    castle::schedule_save();
 }
 
 /// Resize the visible overlay (native panel or fallback window) — the webview's minimize/expand
@@ -1868,31 +1799,6 @@ fn set_panel_size(app: tauri::AppHandle, width: f64, height: f64, anchor: Option
         // Hover R_exp + CGEventTap band must match the live frame or move-into-panel collapses.
         if let Some(shared) = h.try_state::<std::sync::Arc<integrate::mac::Shared>>() {
             shared.set_panel_hit_size(width, height);
-        }
-    });
-}
-
-/// Begin a native window drag of the overlay from the webview's header mouse-down. The tao
-/// `startDragging` targets the hidden tao window, so the webview calls this instead — it hands
-/// the in-flight mouse event to the native panel.
-#[cfg(target_os = "macos")]
-#[tauri::command]
-fn start_panel_drag(app: tauri::AppHandle) {
-    let h = app.clone();
-    let _ = app.run_on_main_thread(move || {
-        use objc2::runtime::AnyObject;
-        use objc2::{class, msg_send};
-        let Some(ptr) = overlay_ptr(&h) else { return };
-        // SAFETY: main thread; standard AppKit calls.
-        unsafe {
-            let ns_app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
-            if ns_app.is_null() {
-                return;
-            }
-            let ev: *mut AnyObject = msg_send![ns_app, currentEvent];
-            if !ev.is_null() {
-                let _: () = msg_send![ptr, performWindowDragWithEvent: ev];
-            }
         }
     });
 }
@@ -2131,8 +2037,9 @@ pub(crate) fn float_on_all_spaces(win: &tauri::WebviewWindow) {
         let _: () = msg_send![ptr, setHidesOnDeactivate: false];
         // Belt-and-braces: never let the window server hide this window as part of app-hide.
         let _: () = msg_send![ptr, setCanHide: false];
-        // Overlay spec: drag the panel by grabbing anywhere on its background.
-        let _: () = msg_send![ptr, setMovableByWindowBackground: true];
+        // The overlay is anchored to its Castle Position; background mouse-down must not move it.
+        let _: () = msg_send![ptr, setMovable: PANEL_MOVABLE];
+        let _: () = msg_send![ptr, setMovableByWindowBackground: PANEL_MOVABLE];
         // Accessory (background) apps do NOT auto-show their windows — orderFrontRegardless forces
         // the window visible even while the app is inactive.
         let _: () = msg_send![ptr, orderFrontRegardless];
@@ -2868,17 +2775,14 @@ mod shortcuts {
 #[cfg(target_os = "macos")]
 mod castle {
     use super::{current_castle, current_drag_override, redock_to_castle, CASTLE, DRAG_OVERRIDE};
-    use shogun_core::notch::geometry::{CastlePosition, DragOffset};
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use shogun_core::notch::geometry::CastlePosition;
+    use std::sync::atomic::Ordering;
     use std::sync::OnceLock;
     use tauri::Manager;
 
     /// Resolved once in `init` so the did-move observer can persist a dragged spot without an
     /// `AppHandle` (notification blocks only get the NSNotification).
     static CONFIG_PATH: OnceLock<std::path::PathBuf> = OnceLock::new();
-
-    /// True while a debounced drag-save is already scheduled (see `schedule_save`).
-    static SAVE_PENDING: AtomicBool = AtomicBool::new(false);
 
     fn config_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
         app.path()
@@ -2907,10 +2811,8 @@ mod castle {
         drag: Option<DragFile>,
     }
 
-    /// Load the persisted position (and any drag override) into the runtime state. Called once at
-    /// setup. Any failure — missing file, unreadable file, unknown key — leaves the default
-    /// (Notch, no override) in place, which is exactly the original top-centre dock, so a bad
-    /// file can only ever fall back to the known-good spot.
+    /// Load the persisted position into runtime state. Legacy drag overrides are deliberately
+    /// discarded and removed from disk: the notch is a docked surface now.
     pub fn init(app: &tauri::AppHandle) {
         if let Some(p) = config_path(app) {
             let _ = CONFIG_PATH.set(p);
@@ -2922,18 +2824,16 @@ mod castle {
             .unwrap_or_default();
         let pos = CastlePosition::from_key(&file.position).unwrap_or_default();
         CASTLE.store(pos.to_u8(), Ordering::Relaxed);
-        if let (Some(d), Ok(mut g)) = (file.drag, DRAG_OVERRIDE.lock()) {
-            *g = Some(DragOffset { dx: d.dx, dy: d.dy });
+        if let Ok(mut g) = DRAG_OVERRIDE.lock() {
+            *g = None;
         }
-        eprintln!(
-            "[shell] castle position {}{}",
-            pos.key(),
-            if file.drag.is_some() {
-                " (drag override active)"
-            } else {
-                ""
+        if file.drag.is_some() {
+            if let Err(e) = save_now() {
+                eprintln!("[shell] legacy drag override cleanup failed: {e}");
             }
-        );
+            eprintln!("[shell] legacy drag override cleared");
+        }
+        eprintln!("[shell] castle position {}", pos.key());
     }
 
     /// Write the current position + drag override to `castle.json`. Path-less (pre-init /
@@ -2951,24 +2851,6 @@ mod castle {
         };
         let json = serde_json::to_string_pretty(&file).map_err(|e| e.to_string())?;
         std::fs::write(p, json).map_err(|e| format!("save failed: {e}"))
-    }
-
-    /// Persist the drag override soon, coalescing the burst of did-move notifications a live drag
-    /// produces into (at most) one write per 400ms — a trailing debounce, so the LAST position
-    /// always gets written: a move that lands after the flag was cleared schedules a fresh save,
-    /// and one that lands before it is read by the pending save. The thread only exists while a
-    /// drag is being persisted; idle cost is zero (no polling).
-    pub(super) fn schedule_save() {
-        if SAVE_PENDING.swap(true, Ordering::AcqRel) {
-            return;
-        }
-        std::thread::spawn(|| {
-            std::thread::sleep(std::time::Duration::from_millis(400));
-            SAVE_PENDING.store(false, Ordering::Release);
-            if let Err(e) = save_now() {
-                eprintln!("[shell] drag override save failed: {e}");
-            }
-        });
     }
 
     /// The current Castle Position as its wire key, for the Settings UI to preselect.

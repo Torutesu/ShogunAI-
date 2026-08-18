@@ -11,33 +11,6 @@ import {
   type SummaryState as DailySummary,
   type SummaryWhich,
 } from "./daily";
-
-// Explicit window drag on mouse-down. data-tauri-drag-region proved unreliable on device, so call
-// startDragging() directly. Ignore drags that start on an interactive control (button/input).
-function beginDrag(e: React.MouseEvent): void {
-  if (!IN_TAURI || e.button !== 0) return;
-  const el = e.target as HTMLElement;
-  if (el.closest("button, input, a, [data-no-drag]")) return;
-  // The visible surface is a NATIVE NSPanel hosting this webview — drag IT. The tao window is a
-  // hidden shell, so getCurrentWindow().startDragging() would grab the wrong window.
-  void invoke("start_panel_drag").catch(() =>
-    getCurrentWindow()
-      .startDragging()
-      .catch((err) => uiLog(`startDragging failed: ${err}`)),
-  );
-}
-
-// Collapsed state: let the pill be dragged to a new spot (issue #21). The whole strip is one
-// button whose click expands the panel, so we can't use beginDrag (it bails on buttons). Native
-// performWindowDragWithEvent handles the distinction for us: a real drag moves the window and
-// swallows the click, while a stationary press returns and falls through to onClick (expand) —
-// so the pill stays click-to-open AND becomes drag-to-move without a manual threshold. Rust
-// remembers the dropped spot as the resting place until a Castle Position is picked again
-// (docs/fixes/2026-07-30-pill-drag-port-design.md).
-function beginPillDrag(e: React.MouseEvent): void {
-  if (!IN_TAURI || e.button !== 0) return;
-  void invoke("start_panel_drag").catch((err) => uiLog(`start_panel_drag failed: ${err}`));
-}
 import { t, tf } from "./strings";
 import { AnalyticsToggle } from "./AnalyticsToggle";
 import { ConnectionsList } from "./connections";
@@ -1442,7 +1415,6 @@ export function App(): JSX.Element {
       ref={handleRef}
       type="button"
       onClick={() => expand()}
-      onMouseDown={beginPillDrag}
       title={t.openPanel}
       aria-label={t.openPanel}
     >
@@ -1510,7 +1482,7 @@ export function App(): JSX.Element {
           />
         ) : (
           <>
-            <header className="head" onMouseDown={beginDrag}>
+            <header className="head">
               <div className="head__left">
                 {/* The live source sits top-left, in the same spot the collapsed pill occupies, so
                     opening the panel doesn't make the indicator jump to the bottom. App NAME only —

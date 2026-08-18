@@ -239,8 +239,8 @@ body {
   color: var(--chin-ink);
   font: inherit;
   font-family: var(--sys);
-  /* click opens, drag repositions — grab reads as "movable", matching the open panel's header. */
-  cursor: grab;
+  /* The notch stays docked; click opens the panel. */
+  cursor: pointer;
   text-align: left;
   box-sizing: border-box;
 }
@@ -290,9 +290,6 @@ body {
 .handle--hiding .handle__dead {
   height: 100%;
   min-height: 100%;
-}
-.handle:active {
-  cursor: grabbing;
 }
 .handle__live {
   display: inline-flex;
@@ -531,11 +528,8 @@ body {
     var(--shell) var(--notch-dead-h)
   );
   border-bottom: 1px solid var(--line);
-  cursor: grab;
+  cursor: default;
   box-sizing: border-box;
-}
-.head:active {
-  cursor: grabbing;
 }
 :root[data-appearance="light"] .head {
   background: var(--shell);
