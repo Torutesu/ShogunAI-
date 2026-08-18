@@ -923,12 +923,15 @@ pub mod mac {
                         }
                     };
 
+                    if !session_is_processing(session) {
+                        return true;
+                    }
+                    crate::sound::mac::play(shogun_core::sound::Cue::VoiceEnd);
                     let Some(outcome) =
                         deliver_dictation(session, target.as_deref(), &delivery, &transcript)
                     else {
                         return true;
                     };
-                    crate::sound::mac::play(shogun_core::sound::Cue::VoiceEnd);
                     match outcome {
                         DeliveryOutcome::Inserted => {
                             let _ = complete_terminal(session, SessionPhase::Processing, || {
@@ -1111,6 +1114,10 @@ pub mod mac {
             active.is_none()
         }
 
+        fn generation_is_processing(active: Option<TestSession>, id: u64) -> bool {
+            active.is_some_and(|session| session.id == id && session.phase == TestPhase::Processing)
+        }
+
         fn target_for_test() -> DictationTarget {
             DictationTarget {
                 element: std::ptr::null_mut(),
@@ -1216,6 +1223,16 @@ pub mod mac {
                     phase: TestPhase::Processing
                 })
             );
+        }
+
+        #[test]
+        fn stale_generation_is_rejected_before_the_voice_end_cue() {
+            let active = Some(TestSession {
+                id: 8,
+                phase: TestPhase::Processing,
+            });
+            assert!(!generation_is_processing(active, 7));
+            assert!(generation_is_processing(active, 8));
         }
 
         #[test]
