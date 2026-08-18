@@ -212,6 +212,13 @@ impl ReplyContextCache {
         }
     }
 
+    /// Drop warm context when the capture source can no longer vouch for the focused surface.
+    pub fn clear(&self) {
+        if let Ok(mut g) = self.inner.lock() {
+            *g = None;
+        }
+    }
+
     /// The warm pack for `thread_key`, if that is the one currently held.
     pub fn get(&self, thread_key: &str) -> Option<ReplyContext> {
         let g = self.inner.lock().ok()?;
@@ -228,9 +235,7 @@ impl ReplyContextCache {
     /// path re-assembles via [`Self::put`] — invalidation never rebuilds inline, because building
     /// on the press path is exactly what this cache exists to prevent.
     pub fn invalidate(&self) {
-        if let Ok(mut g) = self.inner.lock() {
-            *g = None;
-        }
+        self.clear();
     }
 }
 
@@ -653,6 +658,68 @@ impl Db {
     fn recent_source_bodies(&self, source: &str, limit: usize) -> Vec<(String, String)> {
         self.with_conn("event_log.recent_source_bodies", |c| event_log::recent_source_bodies(c, source, limit))
             .unwrap_or_default()
+    }
+
+    /// Recent user notes (`source = user`), newest-first, for explicit Memory API context reads.
+    pub fn recent_user_notes(&self, limit: usize) -> Vec<String> {
+        self.recent_source_bodies("user", limit)
+            .into_iter()
+            .map(|(_hash, content)| content)
+            .collect()
+    }
+
+    /// Recent durable text activity for explicit Memory API context reads.
+    ///
+    /// Query-free context cannot rank evidence by relevance, so this returns a small newest-first
+    /// tail from the durable text sources that already feed memory. Exact duplicate excerpts are
+    /// collapsed because accessibility capture and screen OCR can observe the same window.
+    pub(crate) fn recent_context_previews(
+        &self,
+        limit: usize,
+        excerpt_chars: usize,
+    ) -> Vec<(String, shogun_memory::event_log::RecentEventPreview)> {
+        use std::collections::HashSet;
+
+        const SOURCES: [&str; 6] = [
+            "capture",
+            "screen_ocr",
+            "ai_session",
+            "meeting",
+            "gmail",
+            "gcal",
+        ];
+
+        if limit == 0 {
+            return Vec::new();
+        }
+
+        self.with_conn("memory.context_previews", |conn| {
+            let mut previews = Vec::with_capacity(SOURCES.len() * limit);
+            for source in SOURCES {
+                let rows = shogun_memory::event_log::recent_previews_by_source(
+                    conn,
+                    source,
+                    limit,
+                    excerpt_chars,
+                )?;
+                previews.extend(rows.into_iter().map(|row| (source.to_string(), row)));
+            }
+
+            previews.sort_by(|(_, a), (_, b)| b.ts.cmp(&a.ts).then_with(|| b.id.cmp(&a.id)));
+            let mut seen = HashSet::new();
+            previews.retain(|(_, row)| {
+                let normalized = row
+                    .excerpt
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    .to_lowercase();
+                !normalized.is_empty() && seen.insert(normalized)
+            });
+            previews.truncate(limit);
+            Ok::<_, rusqlite::Error>(previews)
+        })
+        .unwrap_or_default()
     }
 
     /// Recent capture bodies `(hash, content)` newest-first for one app, for the near-dup collapse.
@@ -3726,6 +3793,20 @@ mod tests {
             "a different thread is a miss — never serve the wrong thread's context"
         );
         assert_eq!(cache.current().map(|c| c.thread_key), Some(key));
+    }
+
+    #[test]
+    fn clearing_the_reply_context_cache_removes_current_context() {
+        let cache = ReplyContextCache::new();
+        cache.put(ReplyContext {
+            thread_key: "sensitive".into(),
+            ..ReplyContext::default()
+        });
+        assert!(cache.current().is_some());
+
+        cache.clear();
+
+        assert!(cache.current().is_none());
     }
 
     /// "How's that going?" with one obvious candidate resolves to it.

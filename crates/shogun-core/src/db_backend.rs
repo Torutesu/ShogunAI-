@@ -20,6 +20,10 @@ const SEARCH_LIMIT: usize = 20;
 const FRAME_SEARCH_LIMIT: usize = 20;
 /// OCR excerpt length for frame search / status previews.
 const FRAME_EXCERPT_CHARS: usize = 200;
+/// Recent durable activity included in query-free `memory.get_context` snapshots.
+const CONTEXT_ACTIVITY_LIMIT: usize = 8;
+/// Per-activity text cap keeps one captured window from consuming the whole snapshot.
+const CONTEXT_ACTIVITY_EXCERPT_CHARS: usize = 320;
 /// Evidence cap for `memory.get_context_pack` (FR-API-08) — matches the chat path's scale so the
 /// pack an external AI receives is the same grounded slice the in-app chat reads.
 const PACK_HITS: usize = 10;
@@ -61,6 +65,44 @@ impl DbBackend {
             return Err("visual_recall settings path not configured".to_string());
         };
         save_settings(path, settings)
+    }
+
+    /// DB-derived context for local agents. Live AX Notch cache is not available to standalone
+    /// Memory API / MCP callers.
+    fn get_context_items(&self) -> Vec<ReadItem> {
+        let mut items = vec![ReadItem::new(
+            "note: live AX Notch context cache is not available to standalone Memory API / MCP; this snapshot is DB-derived only",
+            EVENT_CONFIDENCE,
+        )];
+
+        items.extend(self.db.inline_memory(12).into_iter().map(|fact| {
+            // `inline_memory` already applies the state confidence gate and prefixes medium
+            // confidence facts with `possibly:`.
+            ReadItem::new(format!("fact: {fact}"), EVENT_CONFIDENCE)
+        }));
+        items.extend(
+            self.db
+                .recent_user_notes(8)
+                .into_iter()
+                .map(|note| ReadItem::new(format!("note: {note}"), EVENT_CONFIDENCE)),
+        );
+        items.extend(
+            self.db
+                .recent_context_previews(CONTEXT_ACTIVITY_LIMIT, CONTEXT_ACTIVITY_EXCERPT_CHARS)
+                .into_iter()
+                .map(|(source, event)| {
+                    let title = event.window_title.as_deref().unwrap_or("-");
+                    let app = event.app_bundle_id.as_deref().unwrap_or("-");
+                    ReadItem::new(
+                        format!(
+                            "recent activity event:{} source:{} ts:{} title:{} app:{} :: {}",
+                            event.id, source, event.ts, title, app, event.excerpt
+                        ),
+                        EVENT_CONFIDENCE,
+                    )
+                }),
+        );
+        items
     }
 
     fn visual_recall_status_json(&self) -> String {
@@ -292,8 +334,8 @@ impl MemoryBackend for DbBackend {
                 .into_iter()
                 .map(|hit| ReadItem::new(hit.content, EVENT_CONFIDENCE))
                 .collect(),
-            // `get_context` isn't a persisted read (the cache is RAM-only, AR-10) — empty here.
-            Tool::MemoryGetContext => Vec::new(),
+            // DB-derived work context; live AX Notch cache remains RAM-only and unavailable here.
+            Tool::MemoryGetContext => self.get_context_items(),
 
             // FR-API-08: the grounded context pack for one task/question — the same
             // `Db::assemble_context` the in-app chat uses (invariant 6), flattened to labeled
@@ -646,6 +688,120 @@ mod tests {
 
         // no query → empty (the pack is per-question; there is no "pack of everything").
         assert!(backend.read(Tool::MemoryGetContextPack, &params()).is_empty());
+    }
+
+    #[test]
+    fn get_context_includes_state_and_user_notes() {
+        let db = seed();
+        let backend = DbBackend::new(db.clone());
+        assert!(backend
+            .write(Tool::MemoryAppendNote, "remember the launch checklist")
+            .is_ok());
+
+        let items = backend.read(Tool::MemoryGetContext, &params());
+
+        assert!(items
+            .iter()
+            .any(|item| item.label == "fact: you committed: send the report"));
+        assert!(items
+            .iter()
+            .any(|item| item.label == "note: remember the launch checklist"));
+        assert!(items.iter().any(|item| item.label.contains("AX Notch")));
+    }
+
+    #[test]
+    fn get_context_recent_activity_carries_event_provenance() {
+        let db = Db::open_in_memory(Arc::new(|| 2)).unwrap();
+        let (event_id, _) = db
+            .capture(&shogun_memory::event_log::NewEvent {
+                ts: 2,
+                source: "gmail",
+                kind: "email",
+                app_bundle_id: Some("com.example.mail"),
+                window_title: Some("Roadmap"),
+                content: "quarterly roadmap review has three open decisions",
+                content_hash: "roadmap-context",
+                dwell_ms: 0,
+                display_id: None,
+                window_bounds: None,
+            })
+            .unwrap();
+        let backend = DbBackend::new(db);
+
+        let items = backend.read(Tool::MemoryGetContext, &params());
+
+        assert!(items.iter().any(|item| {
+            item.label.contains(&format!("event:{event_id} source:gmail ts:2"))
+                && item.label.contains("title:Roadmap app:com.example.mail")
+                && item.label.contains("three open decisions")
+        }));
+    }
+
+    #[test]
+    fn get_context_recent_activity_is_bounded_deduplicated_and_allowlisted() {
+        let db = Db::open_in_memory(Arc::new(|| 20)).unwrap();
+        for index in 0..10 {
+            let content = format!("unique recent activity {index}");
+            let hash = format!("recent-{index}");
+            db.capture(&shogun_memory::event_log::NewEvent {
+                ts: index,
+                source: "capture",
+                kind: "text",
+                app_bundle_id: None,
+                window_title: None,
+                content: &content,
+                content_hash: &hash,
+                dwell_ms: 0,
+                display_id: None,
+                window_bounds: None,
+            })
+            .unwrap();
+        }
+        db.capture(&shogun_memory::event_log::NewEvent {
+            ts: 19,
+            source: "screen_ocr",
+            kind: "text",
+            app_bundle_id: None,
+            window_title: None,
+            content: "unique recent activity 9",
+            content_hash: "duplicate-across-source",
+            dwell_ms: 0,
+            display_id: None,
+            window_bounds: None,
+        })
+        .unwrap();
+        db.capture(&shogun_memory::event_log::NewEvent {
+            ts: 20,
+            source: "private_internal",
+            kind: "text",
+            app_bundle_id: None,
+            window_title: None,
+            content: "must stay outside context previews",
+            content_hash: "not-allowlisted",
+            dwell_ms: 0,
+            display_id: None,
+            window_bounds: None,
+        })
+        .unwrap();
+        let backend = DbBackend::new(db);
+
+        let activity: Vec<_> = backend
+            .read(Tool::MemoryGetContext, &params())
+            .into_iter()
+            .filter(|item| item.label.starts_with("recent activity "))
+            .collect();
+
+        assert_eq!(activity.len(), CONTEXT_ACTIVITY_LIMIT);
+        assert_eq!(
+            activity
+                .iter()
+                .filter(|item| item.label.contains("unique recent activity 9"))
+                .count(),
+            1
+        );
+        assert!(!activity
+            .iter()
+            .any(|item| item.label.contains("private_internal")));
     }
 
     #[test]
