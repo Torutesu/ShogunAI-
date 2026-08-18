@@ -40,7 +40,7 @@ mod mac {
     use shogun_core::daemon::Db;
 
     use super::{DEFAULT_POLL_MS, WALK_BUDGET_MS};
-    use crate::axcache::{ax_trusted, focused_window};
+    use crate::axcache::{ax_trusted_silent, focused_window};
     use crate::display::frontmost_app;
     use crate::visual_recall::mac::SharedSettings;
     #[cfg(feature = "visual-recall-ocr")]
@@ -350,7 +350,10 @@ mod mac {
                     last_frame_purge = Instant::now();
                 }
 
-                if ax_trusted() {
+                // This is a background poll. Prompting here would re-open the macOS
+                // Accessibility alert every two seconds until the user responds; explicit
+                // permission requests remain owned by onboarding and the diagnostics action.
+                if ax_trusted_silent() {
                     // Re-read the policy each tick: excluding an app is usually a reaction to
                     // what is on screen right now, so it must take effect now, not next launch.
                     // A poisoned lock means capture stops rather than ignoring exclusions.
