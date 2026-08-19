@@ -1,11 +1,9 @@
 import { useState } from "react";
 import type { JSX } from "react";
-import { Logo } from "../../Logo";
 import { t } from "../../strings";
 import type { OnboardingState, PermissionSnapshot } from "../ipc";
 import { ConnectStage, PlanStage, PrivacyStage } from "./FlowParity";
 import { GateFrame } from "./GateFrame";
-import { MuteButton } from "./MuteButton";
 import { PermissionStage } from "./PermissionStage";
 import { ShortcutPractice } from "./ShortcutPractice";
 
@@ -15,19 +13,20 @@ export function OnboardingExperience(props: {
   surfaceGeneration: number;
   onPersist: (step: OnboardingState["step"], patch?: Partial<OnboardingState>) => Promise<boolean>;
   onFinish: () => Promise<boolean>;
-  onToggleMusic: () => Promise<boolean>;
-  musicPending: boolean;
 }): JSX.Element {
-  const { state, permissions, surfaceGeneration, onPersist, onFinish, onToggleMusic, musicPending } = props;
+  const { state, permissions, surfaceGeneration, onPersist, onFinish } = props;
   const [finishing, setFinishing] = useState(false);
+  const [completionConfirmed, setCompletionConfirmed] = useState(false);
   const step = routeStep(state.step, permissions);
   const finish = (): void => {
     setFinishing(true);
-    void onFinish().then((saved) => { if (!saved) setFinishing(false); });
+    void onFinish().then((saved) => {
+      if (saved) setCompletionConfirmed(true);
+      else setFinishing(false);
+    });
   };
   return (
     <main className="onb-shell" data-step={step}>
-      <header className="onb-header"><Logo size={26} /><span>{t.onboarding.brand}</span><MuteButton muted={state.music_muted} disabled={musicPending} onToggle={onToggleMusic} /></header>
       <div className="onb-layout">
         <div className="onb-copy" key={step}>
           {step === "welcome" ? <Welcome onContinue={() => onPersist("accessibility")} /> : null}
@@ -45,7 +44,7 @@ export function OnboardingExperience(props: {
             </section>
           ) : null}
         </div>
-        <GateFrame complete={step === "gate" && finishing} />
+        <GateFrame complete={step === "gate" && completionConfirmed} />
       </div>
     </main>
   );

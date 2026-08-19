@@ -198,7 +198,7 @@ describe("cinematic onboarding", () => {
     expect(screen.getByRole("heading", { name: "Screen Recording" })).toBeTruthy();
   });
 
-  it("keeps gate frame mounted and renders the supplied gate artwork accessibly", () => {
+  it("keeps the still mounted, removes gate copy, and plays completion video once", () => {
     const { rerender } = render(<GateFrame />);
     const gate = screen.getByTestId("gate-frame");
     const image = screen.getByRole("img", { name: "A wooden gate opening onto an autumn path" });
@@ -207,12 +207,30 @@ describe("cinematic onboarding", () => {
     expect(image.getAttribute("height")).toBe("1536");
     expect(image.classList.contains("onb-gate__image")).toBe(true);
     expect(image.closest(".onb-gate__picture")).toBeTruthy();
+    expect(screen.queryByTestId("gate-opening-video")).toBeNull();
+    expect(screen.queryByText("Gate awaits")).toBeNull();
+    expect(screen.queryByText("Your workspace, within reach.")).toBeNull();
     rerender(<GateFrame complete />);
     expect(screen.getByTestId("gate-frame")).toBe(gate);
     expect(gate.getAttribute("data-complete")).toBe("true");
     expect(gate.classList.contains("onb-gate--frame")).toBe(true);
+    const video = screen.getByTestId("gate-opening-video") as HTMLVideoElement;
+    expect(video.autoplay).toBe(true);
+    expect(video.muted).toBe(true);
+    expect(video.playsInline).toBe(true);
+    expect(video.loop).toBe(false);
+    expect(video.getAttribute("poster")).toContain("gate-autumn-path");
+    expect(video.querySelector("source")?.getAttribute("src")).toContain("gate-opening");
     rerender(<GateFrame variant="full-window" />);
     expect(screen.getByTestId("gate-frame").classList.contains("onb-gate--full-window")).toBe(true);
+  });
+
+  it("keeps the completion gate still under reduced motion", () => {
+    vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: true })));
+    render(<GateFrame complete />);
+    expect(screen.queryByTestId("gate-opening-video")).toBeNull();
+    expect(screen.getByRole("img", { name: "A wooden gate opening onto an autumn path" })).toBeTruthy();
+    vi.unstubAllGlobals();
   });
 
   it("keeps live privacy exclusions and advances only after Rust save", async () => {
@@ -435,6 +453,8 @@ describe("cinematic onboarding", () => {
     const reduced = css.split("\n").find((line) => line.startsWith("@media (prefers-reduced-motion: reduce)")) ?? "";
     const reducedFade = css.split("\n").find((line) => line.startsWith("@keyframes onb-reduced-current-fade")) ?? "";
     expect(css.includes("onb-haze")).toBe(false);
+    expect(css.includes("onb-header")).toBe(false);
+    expect(css.includes("onb-gate__legend")).toBe(false);
     expect(css).not.toMatch(/transition\s*:\s*all/i);
     expect(css).not.toContain("Fraunces Onboarding");
     expect(css).toMatch(/\.onb-cinematic\s*\{[^}]*background:\s*rgba\(/);

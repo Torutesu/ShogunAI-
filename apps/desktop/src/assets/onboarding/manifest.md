@@ -12,6 +12,15 @@ Asset bundle is local-only. No runtime fetches or product-code changes are part 
 - Dimensions: 1,024 × 1,536 pixels; size: 3,437,886 bytes.
 - Transformation: none; copied byte-for-byte.
 
+## Autumn gate opening video
+
+- File: `gate-opening.mp4`
+- Intended use: completion-state onboarding gate animation.
+- Source: generated from the user-supplied autumn gate image using OpenRouter Seedance 2.0 Fast on 2026-08-19.
+- Format: MP4, 6 seconds, 3:4 portrait.
+- SHA-256: `7fab1e0e139b73c716cc2be470bc2c0b04d78cef66ddb47ee98a1d25b8a960a3`.
+- Transformation: none; original generated output copied unchanged.
+
 ## Yoiyami Core Theme
 
 - File: `audio/yoiyami_core_theme.mp3`
