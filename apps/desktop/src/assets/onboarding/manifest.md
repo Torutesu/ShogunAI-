@@ -10,9 +10,9 @@ Asset bundle is local-only. No runtime fetches or product-code changes are part 
 - License: CC0 1.0 Universal (public-domain dedication; no attribution required).
 - Original listing: https://opengameart.org/content/yoiyami-core-theme-%E2%80%93-deep-blue-ambient-piano
 - Original file URL: https://opengameart.org/sites/default/files/yoiyami_core_theme_0.wav
-- Original downloaded file: `yoiyami_core_theme_0.wav`, 45,198,376 bytes; `file` identified RIFF/WAVE Microsoft PCM, 16-bit, stereo, 48,000 Hz.
-- Original SHA-256: `cabef49063f4218c8e005b8958f4e4351de93619375b544c92f17b9cf50c0aa1`
-- Distributable file: 5,639,661 bytes; SHA-256 `8fde4701bb432e51380bd1c50f8f860bcd1e29e30a2554db6ff589ae9edba0ba`.
+- Original downloaded file: `yoiyami_core_theme_0.wav`, 45,112,360 bytes (`Content-Length: 45112360`); `file` identified RIFF/WAVE Microsoft PCM, 16-bit, stereo, 48,000 Hz.
+- Original SHA-256: `613d462f5229568ad98dcbe870036ccdf858f5ae33c63386cace86548809cb60`
+- Distributable file: 5,639,661 bytes; SHA-256 `3d02d67888127350b447b3944759ea203694d80b139dfc12423caee6049efc24`.
 - Transformation: `ffmpeg -hide_banner -y -i yoiyami_core_theme.wav -map_metadata -1 -codec:a libmp3lame -b:a 192k -write_xing 0 yoiyami_core_theme.mp3`.
 - Derived metadata: MPEG Layer III, 192 kbps, 48 kHz, stereo, 234.984 seconds.
 - CC0 evidence: OpenGameArt listing states `License(s): CC0`, identifies Yoiyami as author, and states commercial and non-commercial use; canonical deed: https://creativecommons.org/publicdomain/zero/1.0/.

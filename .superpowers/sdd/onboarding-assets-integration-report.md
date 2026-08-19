@@ -22,9 +22,9 @@ Scope: licensed local assets only. No React, CSS, Rust, package manifest, lockfi
 - Original direct file: https://opengameart.org/sites/default/files/yoiyami_core_theme_0.wav
 - Author: Yoiyami.
 - License: CC0 1.0 Universal. Listing identifies `License(s): CC0` and permits commercial/non-commercial use.
-- Original source file: `yoiyami_core_theme_0.wav`, 45,198,376 bytes.
-- Original SHA-256: `cabef49063f4218c8e005b8958f4e4351de93619375b544c92f17b9cf50c0aa1`.
-- Derived MP3 SHA-256: `8fde4701bb432e51380bd1c50f8f860bcd1e29e30a2554db6ff589ae9edba0ba`.
+- Original source file: `yoiyami_core_theme_0.wav`, 45,112,360 bytes (`Content-Length: 45112360`).
+- Original SHA-256: `613d462f5229568ad98dcbe870036ccdf858f5ae33c63386cace86548809cb60`.
+- Derived MP3: 5,639,661 bytes; SHA-256 `3d02d67888127350b447b3944759ea203694d80b139dfc12423caee6049efc24`.
 - Conversion command:
 
   ```sh
@@ -94,3 +94,28 @@ git diff --check
 
 - OpenGameArt page and CC0 declaration are preserved as provenance, but no separate Content ID/fingerprint clearance was performed.
 - Audio playback wiring is intentionally absent; this task adds assets only.
+
+## Critical provenance correction (2026-08-19)
+
+Review found prior source bytes/hash no longer matched exact official URL. Source was redownloaded once from the same URL, then verified and used for regeneration:
+
+```sh
+curl -fL --retry 2 --dump-header .asset-work-fix/headers.txt --output .asset-work-fix/yoiyami_core_theme_0.wav https://opengameart.org/sites/default/files/yoiyami_core_theme_0.wav
+```
+
+Observed response: `HTTP/2 200`, `content-length: 45112360`, `content-type: application/octet-stream`, `etag: "6927f5a0-2b05c28"`.
+
+```text
+stat: 45112360 bytes
+SHA-256: 613d462f5229568ad98dcbe870036ccdf858f5ae33c63386cace86548809cb60
+file: RIFF (little-endian) data, WAVE audio, Microsoft PCM, 16 bit, stereo 48000 Hz
+ffprobe: pcm_s16le, 48000 Hz, 2 channels, 16-bit, duration 234.959979, format wav
+```
+
+MP3 regenerated directly from that verified WAV:
+
+```sh
+ffmpeg -hide_banner -y -i .asset-work-fix/yoiyami_core_theme_0.wav -map_metadata -1 -codec:a libmp3lame -b:a 192k -write_xing 0 apps/desktop/src/assets/onboarding/audio/yoiyami_core_theme.mp3
+```
+
+Derived verification: `file` reports MPEG Layer III, 192 kbps, 48 kHz stereo; `ffprobe` reports `mp3`, `192000` bit rate, `234.984000` seconds, `5639661` bytes; SHA-256 `3d02d67888127350b447b3944759ea203694d80b139dfc12423caee6049efc24`. `xmllint --noout` for SVG, font `file`/metadata checks, and `git diff --check` also pass after correction.
