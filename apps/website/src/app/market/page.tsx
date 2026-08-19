@@ -1,8 +1,9 @@
 import type { Metadata } from 'next';
 import { ArrowUpRight } from 'lucide-react';
 import { CTA } from '@/components/sections/CTA';
-import { PageShell } from '@/components/PageShell';
+import { PageHeader, PageShell } from '@/components/PageShell';
 import { JsonLd, breadcrumbSchema } from '@/components/seo/JsonLd';
+import { Card } from '@/components/ui/card';
 import { getI18n } from '@/i18n/server';
 import { isLocale } from '@/i18n/config';
 import { localizedAlternates, siteConfig } from '@/lib/site';
@@ -37,13 +38,6 @@ const QUOTES = [
     source: 'Building the Memory Infrastructure for Personalized AI',
     href: 'https://kindredventures.com/announcement/mem0-building-the-memory-infrastructure-for-personalized-ai/',
   },
-] as const;
-
-/** Card surfaces mirror the reference layout: saturated fill, dark ink, no theme flip. */
-const CARD_SKINS = [
-  { bg: 'linear-gradient(158deg,#ffc0a6 0%,#ff9370 46%,#f4663d 100%)', ink: '#2c1105', chip: 'rgba(255,255,255,0.58)' },
-  { bg: 'linear-gradient(158deg,#c9f095 0%,#96de62 46%,#63ba3a 100%)', ink: '#14290a', chip: 'rgba(255,255,255,0.58)' },
-  { bg: 'linear-gradient(158deg,#e9df94 0%,#d2c661 46%,#ab9e36 100%)', ink: '#251f05', chip: 'rgba(255,255,255,0.58)' },
 ] as const;
 
 const SOURCES = [
@@ -203,22 +197,7 @@ export default async function MarketPage({ searchParams }: { searchParams: Promi
         ])}
       />
 
-      {/* Headline + two columns of lead copy */}
-      <header className="border-b border-border bg-[radial-gradient(120%_110%_at_18%_-40%,var(--color-sky-soft)_0%,transparent_62%)]">
-        <div className="container-x py-[clamp(40px,7.5vw,100px)]">
-          <p className="text-xs font-semibold uppercase tracking-[0.08em] text-accent">{c.eyebrow}</p>
-          <h1 className="mt-4 max-w-[1100px] font-display text-[clamp(32px,5.4vw,64px)] font-semibold leading-[1.04] tracking-[-0.03em] text-balance">
-            {c.title}
-          </h1>
-          <div className="mt-8 grid gap-6 md:grid-cols-2 md:gap-12 lg:max-w-[85%]">
-            {c.lead.map((paragraph) => (
-              <p key={paragraph.slice(0, 24)} className="text-[15px] leading-[1.75] text-muted">
-                {paragraph}
-              </p>
-            ))}
-          </div>
-        </div>
-      </header>
+      <PageHeader eyebrow={c.eyebrow} title={c.title} sub={c.lead[0]} />
 
       {/* Quote cards */}
       <section className="py-[clamp(44px,7vw,88px)]">
@@ -227,40 +206,42 @@ export default async function MarketPage({ searchParams }: { searchParams: Promi
             <p className="shrink-0 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">{c.quotesLabel}</p>
             <div className="h-px flex-1 bg-border" />
           </div>
-          <div className="mt-8 grid gap-5 md:grid-cols-2 lg:grid-cols-3">
-            {QUOTES.map((q, index) => {
-              const skin = CARD_SKINS[index];
-              return (
-                <a
-                  key={q.href}
-                  href={q.href}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style={{ background: skin.bg, color: skin.ink }}
-                  className="group flex min-h-[360px] min-w-0 flex-col justify-between rounded-[30px] p-7 transition-transform duration-300 hover:-translate-y-1 sm:p-8"
-                >
-                  <div className="flex items-start justify-between gap-4">
-                    <span className="font-display text-[15px] font-semibold tracking-tight">{q.firm}</span>
-                    <ArrowUpRight className="size-5 shrink-0 opacity-55 transition-opacity group-hover:opacity-100" />
-                  </div>
-                  <blockquote className="mt-10 font-display text-[clamp(20px,1.7vw,25px)] font-medium leading-[1.28] tracking-[-0.01em]">
-                    {c.quotes[index]}
-                  </blockquote>
-                  <div className="mt-8 flex items-center gap-3">
-                    <span
-                      style={{ background: skin.chip }}
-                      className="flex size-11 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold tracking-tight"
-                    >
-                      {q.mark}
-                    </span>
-                    <span className="block min-w-0 flex-1">
-                      <span className="block truncate text-sm font-semibold">{q.name}</span>
-                      <span className="block truncate text-xs opacity-70">{q.source}</span>
-                    </span>
-                  </div>
-                </a>
-              );
-            })}
+          <p className="mt-5 max-w-[76ch] text-[15px] leading-relaxed text-muted">{c.lead[1]}</p>
+          <div className="mt-8 grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+            {QUOTES.map((q, index) => (
+              <Card key={q.href} className="flex flex-col rounded-[26px] p-7">
+                <div className="flex items-start justify-between gap-4">
+                  <span className="flex h-9 items-center rounded-full bg-sky-soft px-3 text-xs font-semibold tracking-tight text-accent">
+                    {q.mark}
+                  </span>
+                  <a
+                    href={q.href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    aria-label={q.source}
+                    className="text-muted transition-colors hover:text-ink"
+                  >
+                    <ArrowUpRight className="size-5" />
+                  </a>
+                </div>
+                <blockquote className="mt-6 font-display text-[19px] font-medium leading-[1.45] tracking-[-0.01em]">
+                  {c.quotes[index]}
+                </blockquote>
+                <div className="mt-auto pt-6">
+                  <div className="h-px w-full bg-border" />
+                  <p className="mt-4 text-sm font-semibold">{q.name}</p>
+                  {q.firm !== q.name && <p className="mt-0.5 text-[13px] text-muted">{q.firm}</p>}
+                  <a
+                    href={q.href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="mt-2 block text-[13px] font-medium text-accent"
+                  >
+                    {q.source}
+                  </a>
+                </div>
+              </Card>
+            ))}
           </div>
           {c.translationNote && <p className="mt-5 text-xs text-faint">{c.translationNote}</p>}
         </div>
