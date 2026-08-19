@@ -5,7 +5,7 @@ Asset bundle is local-only. No runtime fetches or product-code changes are part 
 ## Yoiyami Core Theme
 
 - File: `audio/yoiyami_core_theme.mp3`
-- Intended use: quiet onboarding background music, played locally by the WKWebView.
+- Intended use: quiet onboarding background music, played locally by native AVAudioPlayer.
 - Author: Yoiyami
 - License: CC0 1.0 Universal (public-domain dedication; no attribution required).
 - Original listing: https://opengameart.org/content/yoiyami-core-theme-%E2%80%93-deep-blue-ambient-piano

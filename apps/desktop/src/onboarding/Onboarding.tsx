@@ -9,6 +9,7 @@ import {
   onboardingWindowSurface,
   permissionListenerReady,
   permissionStatus,
+  setOnboardingMusicMuted,
   setOnboardingState,
   track,
 } from "./ipc";
@@ -87,10 +88,17 @@ export function Onboarding(): JSX.Element {
     setState(saved);
     return true;
   }, [permissions.all_effective, state]);
+  const toggleMusic = useCallback(async (): Promise<boolean> => {
+    if (!state) return false;
+    const saved = await setOnboardingMusicMuted(state, !state.music_muted);
+    if (!saved) return false;
+    setState(saved);
+    return true;
+  }, [state]);
 
   if (surface === undefined || !state) return <div className="onb-boot" />;
   if (!surface || surface.surface !== route.surface) return <div className="onb-stale" data-testid="stale-surface" />;
   if (surface.surface === "main") return <CinematicSurface />;
   if (surface.surface === "ambient") return <AmbientSurface />;
-  return <OnboardingExperience state={state} permissions={permissions} surfaceGeneration={surface.generation} onPersist={persist} onFinish={finish} />;
+  return <OnboardingExperience state={state} permissions={permissions} surfaceGeneration={surface.generation} onPersist={persist} onFinish={finish} onToggleMusic={toggleMusic} />;
 }

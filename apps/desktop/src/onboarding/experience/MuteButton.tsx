@@ -1,10 +1,9 @@
 import type { JSX } from "react";
 import { t } from "../../strings";
 
-/** Native audio ownership lands separately. Never pretend a webview toggle controls playback. */
-export function MuteButton({ muted }: { muted: boolean }): JSX.Element {
+export function MuteButton({ muted, onToggle }: { muted: boolean; onToggle: () => Promise<boolean> }): JSX.Element {
   return (
-    <button className="onb-mute" type="button" disabled aria-label={muted ? t.onboarding.unmute : t.onboarding.mute}>
+    <button className="onb-mute" type="button" aria-pressed={muted} aria-label={muted ? t.onboarding.unmute : t.onboarding.mute} onClick={() => void onToggle()}>
       {muted ? t.onboarding.unmute : t.onboarding.mute}
     </button>
   );

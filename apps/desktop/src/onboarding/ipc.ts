@@ -170,6 +170,21 @@ export function setOnboardingState(next: OnboardingState): Promise<OnboardingSta
   );
 }
 
+/** Persist Mute through the same Rust-owned revision gate as onboarding progress. */
+export function setOnboardingMusicMuted(
+  state: OnboardingState,
+  muted: boolean,
+): Promise<OnboardingState | null> {
+  if (!IN_TAURI) return Promise.resolve({ ...state, music_muted: muted, revision: state.revision + 1 });
+  return invoke<OnboardingState>("set_onboarding_music_muted", {
+    expectedRevision: state.revision,
+    muted,
+  }).then(
+    (saved) => ({ ...FIRST_RUN, ...saved }),
+    () => null,
+  );
+}
+
 /** Persist the exact Screen Recording step, then relaunch the packaged app. */
 export function restartOnboarding(state: OnboardingState): Promise<void> {
   if (!IN_TAURI) return Promise.reject(new Error("Restart requires the packaged app"));

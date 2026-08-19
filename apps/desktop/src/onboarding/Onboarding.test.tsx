@@ -105,6 +105,20 @@ describe("cinematic onboarding", () => {
     expect(await screen.findByRole("heading", { name: "Microphone" })).toBeTruthy();
   });
 
+  it("persists Mute through native revision CAS and renders saved state", async () => {
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "onboarding_state") return state("welcome", 4);
+      if (command === "permission_status" || command === "permission_listener_ready") return emptyPermissions;
+      if (command === "set_onboarding_music_muted") return { ...state("welcome", 5), music_muted: true };
+      if (command === "onboarding_event") return undefined;
+      throw new Error(`unexpected command: ${command}`);
+    });
+    render(<Onboarding />);
+    fireEvent.click(await screen.findByRole("button", { name: "Mute" }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("set_onboarding_music_muted", { expectedRevision: 4, muted: true }));
+    expect(screen.getByRole("button", { name: "Unmute" }).getAttribute("aria-pressed")).toBe("true");
+  });
+
   it("keeps Screen Recording on stage when restart fails", async () => {
     vi.mocked(invoke).mockImplementation(async (command) => {
       if (command === "onboarding_state") return state("screen_recording", 4);

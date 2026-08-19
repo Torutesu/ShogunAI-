@@ -45,6 +45,7 @@ mod notch_actions;
 mod notch_exec;
 mod notch_status_visibility;
 mod onboarding;
+mod onboarding_music;
 #[cfg(target_os = "macos")]
 mod onboarding_windows;
 #[cfg(target_os = "macos")]
@@ -376,6 +377,7 @@ pub fn run() {
             onboarding::mac::onboarding_state,
             onboarding::mac::acknowledge_onboarding_restart,
             onboarding::mac::set_onboarding_state,
+            onboarding::mac::set_onboarding_music_muted,
             onboarding::mac::restart_onboarding,
             onboarding::mac::open_accessibility_settings,
             onboarding::mac::request_microphone_permission,
@@ -433,7 +435,15 @@ pub fn run() {
             setup_macos(_app);
             Ok(())
         })
-        .run(tauri::generate_context!())
+        .build(tauri::generate_context!())
+        .map(|app| {
+            app.run(|app, event| {
+                #[cfg(target_os = "macos")]
+                if matches!(event, tauri::RunEvent::Exit) {
+                    onboarding_music::mac::stop(app);
+                }
+            })
+        })
         .unwrap_or_else(|e| {
             // Startup failure: report and exit without a panic (CLAUDE.md: no
             // unwrap/expect outside tests; errors must not take the process down
@@ -684,6 +694,7 @@ fn setup_macos(app: &tauri::App) {
     app.manage(permissions::mac::PermissionRuntime::default());
     permissions::mac::install_activation_observer(app);
     app.manage(onboarding::mac::Store::load(app.handle()));
+    app.manage(onboarding_music::mac::OnboardingMusic::default());
     app.manage(onboarding_windows::mac::OnboardingWindowRuntime::default());
     if onboarding::mac::should_show_onboarding(app.handle()) {
         onboarding::mac::build_onboarding_window(app.handle());

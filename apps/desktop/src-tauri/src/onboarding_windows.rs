@@ -937,6 +937,7 @@ pub mod mac {
             crate::permission_drag::install_monitor(app);
         }
         install_display_observer(app);
+        crate::onboarding_music::mac::start(app, onboarding_state.music_muted);
         Ok(())
     }
 
@@ -1056,6 +1057,7 @@ pub mod mac {
         if let Some(observer) = display_observer {
             remove_display_observer(observer);
         }
+        crate::onboarding_music::mac::stop(app);
     }
 
     pub fn cleanup(app: &AppHandle) {
