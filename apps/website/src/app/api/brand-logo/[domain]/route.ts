@@ -92,6 +92,39 @@ const ALLOWED_DOMAINS = new Set([
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+// Use the official Simple Icons artwork as the unauthenticated fallback. The
+// Google favicon endpoint returns tiny square app icons, which look incorrect
+// in the logo marquee. Domains without a matching Simple Icon still fall back
+// to the published site favicon below.
+const SIMPLE_ICON_SLUGS: Record<string, string> = {
+  'linear.app': 'linear',
+  'vercel.com': 'vercel',
+  'perplexity.ai': 'perplexity',
+  'figma.com': 'figma',
+  'slack.com': 'slack',
+  'google.com': 'google',
+  'notion.so': 'notion',
+  'github.com': 'github',
+  'openai.com': 'openai',
+  'anthropic.com': 'anthropic',
+  'discord.com': 'discord',
+  'dropbox.com': 'dropbox',
+  'asana.com': 'asana',
+  'airbnb.com': 'airbnb',
+  'stripe.com': 'stripe',
+  'ramp.com': 'ramp',
+  'salesforce.com': 'salesforce',
+  'ibm.com': 'ibm',
+  'spacex.com': 'spacex',
+  'instagram.com': 'instagram',
+  'ycombinator.com': 'ycombinator',
+  'nike.com': 'nike',
+  'mit.edu': 'mit',
+  'ucla.edu': 'ucla',
+  'apple.com': 'apple',
+  'cloudflare.com': 'cloudflare',
+};
+
 /**
  * Keeps the Logo.dev token on the Worker while browsers receive only a
  * same-origin image URL. The allowlist prevents this route becoming a proxy.
@@ -113,13 +146,22 @@ export async function GET(_request: Request, context: { params: Promise<{ domain
     // Google serves the site's published favicon when Logo.dev is not
     // configured. The domain is still constrained by the allowlist above, so
     // this remains a closed brand-asset endpoint rather than an open proxy.
-    const upstream =
-      logoDev?.ok && logoDev.body
-        ? logoDev
-        : await fetch(
-            `https://www.google.com/s2/favicons?domain_url=${encodeURIComponent(`https://${domain}`)}&sz=128`,
-            { headers: { Accept: 'image/png,image/*;q=0.8' } },
-          );
+    let upstream = logoDev?.ok && logoDev.body ? logoDev : null;
+
+    if (!upstream) {
+      const slug = SIMPLE_ICON_SLUGS[domain];
+      if (slug) {
+        const simpleIcon = await fetch(`https://cdn.simpleicons.org/${slug}`, {
+          headers: { Accept: 'image/svg+xml,image/*;q=0.8' },
+        });
+        if (simpleIcon.ok && simpleIcon.body) upstream = simpleIcon;
+      }
+    }
+
+    upstream ??= await fetch(
+      `https://www.google.com/s2/favicons?domain_url=${encodeURIComponent(`https://${domain}`)}&sz=128`,
+      { headers: { Accept: 'image/png,image/*;q=0.8' } },
+    );
 
     if (!upstream.ok || !upstream.body) return new Response(null, { status: 404 });
 

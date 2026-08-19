@@ -69,7 +69,7 @@ function Track({ brands, reverse = false }: { brands: readonly (typeof BRAND_LOG
             className="mx-7 inline-flex h-[58px] w-11 shrink-0 items-center justify-center"
             aria-hidden={index >= brands.length}
           >
-            <BrandIcon domain={tool.domain} name={tool.name} size={34} className="size-[34px] rounded-[7px]" />
+            <BrandIcon domain={tool.domain} name={tool.name} size={34} className="size-[34px]" />
           </span>
         );
       })}

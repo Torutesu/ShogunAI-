@@ -150,8 +150,8 @@ const en = {
   },
   pricing: {
     eyebrow: 'Pricing',
-    title: 'Straightforward pricing.',
-    sub: 'Every plan opens with a 7-day full trial.',
+    title: 'One AI work layer for the tools you already use.',
+    sub: 'Bring meetings, browsing, CRM, email, and documents into one shared memory and execution layer — with one simple subscription.',
     billing: {
       monthly: 'Monthly',
       annual: 'Annual',
@@ -496,8 +496,8 @@ const ja: Dictionary = {
   },
   pricing: {
     eyebrow: '料金',
-    title: '明快な料金。',
-    sub: 'どのプランも7日間のフルトライアルから。',
+    title: '使い慣れたツールを、ひとつのAIワークレイヤーに。',
+    sub: '会議、ブラウザ、CRM、メール、ドキュメントを、ひとつの共有メモリと実行レイヤーへ。料金もシンプルにひとつです。',
     billing: {
       monthly: '月払',
       annual: '年払',
@@ -811,8 +811,8 @@ const es: Dictionary = {
   },
   pricing: {
     eyebrow: 'Precios',
-    title: 'Precios claros.',
-    sub: 'Cada plan empieza con una prueba completa de 7 días.',
+    title: 'Una capa de trabajo con IA para las herramientas que ya usas.',
+    sub: 'Reúne reuniones, navegador, CRM, correo y documentos en una memoria y una capa de ejecución compartidas, con una sola suscripción.',
     billing: {
       monthly: 'Mensual',
       annual: 'Anual',
@@ -1126,8 +1126,8 @@ const de: Dictionary = {
   },
   pricing: {
     eyebrow: 'Preise',
-    title: 'Klare Preise.',
-    sub: 'Jeder Plan startet mit einer 7-tägigen Vollversion.',
+    title: 'Eine KI-Arbeitsebene für die Tools, die du bereits nutzt.',
+    sub: 'Meetings, Browser, CRM, E-Mail und Dokumente in einem gemeinsamen Gedächtnis und einer Ausführungsebene — mit einem einfachen Abo.',
     billing: {
       monthly: 'Monatlich',
       annual: 'Jährlich',
