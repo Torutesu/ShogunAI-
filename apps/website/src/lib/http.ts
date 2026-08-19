@@ -71,10 +71,10 @@ export async function readCappedBody(req: Request): Promise<Buffer> {
     if (done) break;
     total += value.byteLength;
     if (total > MAX_BODY_BYTES) {
-      // Node's multipart Request stream can reject asynchronously when cancellation races its
-      // already-closed producer. Releasing the reader drops retained bytes without turning a 413
-      // into an unhandled rejection after the route returns.
-      reader.releaseLock();
+      // Cancellation, not merely releasing the reader lock, tells the source we no longer want
+      // bytes. A source may already have ended while we detected the over-limit chunk, so cleanup
+      // failure must not replace the intended 413.
+      await reader.cancel().catch(() => undefined);
       throw new HttpError('payload_too_large');
     }
     chunks.push(value);

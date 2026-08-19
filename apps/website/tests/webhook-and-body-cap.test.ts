@@ -125,10 +125,22 @@ test('signup parses a normal multipart form through the capped reader', async ()
 });
 
 test('signup rejects an oversized multipart form even without Content-Length', async () => {
-  const form = new FormData();
-  form.set('email', 'person@example.com');
-  form.set('padding', 'x'.repeat(MAX_BODY_BYTES));
-  const req = new Request('https://syogun.com/api/waitlist/signup', { method: 'POST', body: form });
+  let canceled = false;
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new Uint8Array(MAX_BODY_BYTES + 1));
+    },
+    cancel() {
+      canceled = true;
+    },
+  });
+  const req = new Request('https://syogun.com/api/waitlist/signup', {
+    method: 'POST',
+    headers: { 'content-type': 'multipart/form-data; boundary=cap-test' },
+    body,
+    // Node requires this for a streaming request body. It is not sent to the server.
+    duplex: 'half',
+  } as RequestInit);
   assert.equal(
     req.headers.has('content-length'),
     false,
@@ -138,4 +150,5 @@ test('signup rejects an oversized multipart form even without Content-Length', a
     readSignupBody(req),
     (error: unknown) => error instanceof HttpError && error.code === 'payload_too_large',
   );
+  assert.equal(canceled, true, 'over-limit input must be cancelled, not merely unlocked');
 });
