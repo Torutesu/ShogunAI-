@@ -136,28 +136,28 @@ export async function GET(_request: Request, context: { params: Promise<{ domain
   const token = process.env.LOGO_DEV_TOKEN?.trim();
 
   try {
-    const logoDev = token
-      ? await fetch(
-          `https://img.logo.dev/${domain}?token=${encodeURIComponent(token)}&format=png&theme=light&retina=true&fallback=404`,
-          { headers: { Accept: 'image/png,image/*;q=0.8' } },
-        )
-      : null;
-
-    // Google serves the site's published favicon when Logo.dev is not
-    // configured. The domain is still constrained by the allowlist above, so
-    // this remains a closed brand-asset endpoint rather than an open proxy.
-    let upstream = logoDev?.ok && logoDev.body ? logoDev : null;
-
-    if (!upstream) {
-      const slug = SIMPLE_ICON_SLUGS[domain];
-      if (slug) {
-        const simpleIcon = await fetch(`https://cdn.simpleicons.org/${slug}`, {
-          headers: { Accept: 'image/svg+xml,image/*;q=0.8' },
-        });
-        if (simpleIcon.ok && simpleIcon.body) upstream = simpleIcon;
-      }
+    // Prefer the transparent, recognizable brand mark. Logo.dev remains a
+    // useful fallback for brands that are not covered by Simple Icons.
+    let upstream: Response | null = null;
+    const slug = SIMPLE_ICON_SLUGS[domain];
+    if (slug) {
+      const simpleIcon = await fetch(`https://cdn.simpleicons.org/${slug}`, {
+        headers: { Accept: 'image/svg+xml,image/*;q=0.8' },
+      });
+      if (simpleIcon.ok && simpleIcon.body) upstream = simpleIcon;
     }
 
+    if (!upstream && token) {
+      const logoDev = await fetch(
+        `https://img.logo.dev/${domain}?token=${encodeURIComponent(token)}&format=png&theme=light&retina=true&fallback=404`,
+        { headers: { Accept: 'image/png,image/*;q=0.8' } },
+      );
+      if (logoDev.ok && logoDev.body) upstream = logoDev;
+    }
+
+    // Google serves the site's published favicon as the last fallback. The
+    // domain is still constrained by the allowlist, so this remains a closed
+    // brand-asset endpoint rather than an open proxy.
     upstream ??= await fetch(
       `https://www.google.com/s2/favicons?domain_url=${encodeURIComponent(`https://${domain}`)}&sz=128`,
       { headers: { Accept: 'image/png,image/*;q=0.8' } },
