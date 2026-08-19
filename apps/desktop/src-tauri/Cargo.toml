@@ -73,7 +73,8 @@ block2 = "0.6" # ObjC blocks for NSWorkspace notification observers (space-chang
 objc2-app-kit = { version = "0.3", features = [
     "NSResponder", "NSWindow", "NSView", "NSPanel", "NSScreen", "NSGraphics",
     "NSWorkspace", "NSRunningApplication", "NSDragging", "NSDraggingItem",
-    "NSDraggingSession", "NSEvent", "NSImage", "libc",
+    "NSDraggingSession", "NSEvent", "NSImage", "NSPasteboard", "NSColor", "NSFont",
+    "NSImageView", "NSTextField", "NSControl", "NSCell", "libc",
     # UI cue playback (#49). NSSound plays the embedded WAVs through the normal output at the
     # app's volume — the alert-sound path would take the volume control away from the user.
     "NSSound",

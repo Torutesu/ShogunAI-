@@ -802,10 +802,14 @@ pub mod mac {
         }
     }
 
-    fn runtime_bundle_executable(
+    pub(crate) struct RuntimeBundleIdentity {
+        pub(crate) executable: PathBuf,
+        pub(crate) app_bundle: PathBuf,
+    }
+
+    pub(crate) fn runtime_bundle_identity(
         app: &AppHandle,
-        expected_bundle_id: &str,
-    ) -> Result<PathBuf, String> {
+    ) -> Result<RuntimeBundleIdentity, String> {
         use objc2_foundation::NSBundle;
 
         let executable = tauri::process::current_binary(&app.env())
@@ -822,7 +826,7 @@ pub mod mac {
             .map(|value| value.to_string())
             .filter(|value| !value.is_empty())
             .ok_or_else(|| "restart bundle identifier unavailable".to_owned())?;
-        if actual_bundle_id != expected_bundle_id {
+        if actual_bundle_id != app.config().identifier {
             return Err("restart bundle identifier does not match this build".to_owned());
         }
         let bundle_executable = bundle
@@ -835,7 +839,35 @@ pub mod mac {
         if bundle_executable != executable {
             return Err("restart executable does not match the running app bundle".to_owned());
         }
-        Ok(executable)
+        let app_bundle = bundle
+            .bundleURL()
+            .path()
+            .map(|path| PathBuf::from(path.to_string()))
+            .ok_or_else(|| "restart bundle path unavailable".to_owned())?
+            .canonicalize()
+            .map_err(|error| format!("restart bundle identity unavailable: {error}"))?;
+        let executable_bundle = executable
+            .parent()
+            .and_then(Path::parent)
+            .and_then(Path::parent)
+            .ok_or_else(|| "restart requires a packaged macOS app".to_owned())?;
+        if app_bundle != executable_bundle || !app_bundle.is_dir() {
+            return Err("restart bundle does not contain the running executable".to_owned());
+        }
+        Ok(RuntimeBundleIdentity {
+            executable,
+            app_bundle,
+        })
+    }
+
+    fn runtime_bundle_executable(
+        app: &AppHandle,
+        expected_bundle_id: &str,
+    ) -> Result<PathBuf, String> {
+        if expected_bundle_id != app.config().identifier {
+            return Err("restart bundle identifier does not match this build".to_owned());
+        }
+        Ok(runtime_bundle_identity(app)?.executable)
     }
 
     fn restart_marker(
@@ -1015,6 +1047,7 @@ pub mod mac {
 
         crate::scribe::mac::cancel_active_for_restart(&app)?;
         crate::voice_session::mac::cancel_for_restart(&app)?;
+        crate::permission_drag::cleanup(&app, false);
 
         let marker_revision = {
             let mut owner = store
@@ -1104,6 +1137,9 @@ pub mod mac {
         }
         let next = owner.persist(expected_revision, next)?;
         drop(owner);
+        if prev.step != next.step {
+            crate::permission_drag::cleanup(&app, true);
+        }
         let newly_completed = next.completed && !prev.completed;
         if newly_completed {
             eprintln!("[onboarding] completed (plan intent: {:?})", next.plan);
@@ -1123,6 +1159,7 @@ pub mod mac {
         // SHOGUN_FORCE_ONBOARDING QA hatch on an already-completed machine) must still be able to
         // leave through the same door.
         if next.completed {
+            crate::permission_drag::cleanup(&app, true);
             crate::onboarding_windows::mac::cleanup(&app);
         }
         Ok(next)
@@ -1135,33 +1172,33 @@ pub mod mac {
     /// the poll (which uses the silent check).
     #[tauri::command]
     pub fn open_accessibility_settings(app: AppHandle) -> Result<(), String> {
-        crate::onboarding_windows::mac::prepare_for_external_permission_ui(
+        crate::permission_drag::perform_permission_action(
             &app,
             crate::onboarding_windows::ExternalPermissionKind::Accessibility,
-        )?;
-        crate::permissions::mac::request_accessibility(&app)
+            || crate::permissions::mac::request_accessibility(&app),
+        )
     }
 
     /// Ask for microphone access through AVFoundation. macOS only prompts while the state is not
     /// determined; denied/restricted states go straight to the exact repair pane.
     #[tauri::command]
     pub fn request_microphone_permission(app: AppHandle) -> Result<(), String> {
-        crate::onboarding_windows::mac::prepare_for_external_permission_ui(
+        crate::permission_drag::perform_permission_action(
             &app,
             crate::onboarding_windows::ExternalPermissionKind::Microphone,
-        )?;
-        crate::permissions::mac::request_microphone(&app)
+            || crate::permissions::mac::request_microphone(&app),
+        )
     }
 
     /// Request Screen Recording through CoreGraphics. A prior denial cannot prompt again, so the
     /// exact manual repair pane opens when the request does not grant access.
     #[tauri::command]
     pub fn request_screen_recording_permission(app: AppHandle) -> Result<(), String> {
-        crate::onboarding_windows::mac::prepare_for_external_permission_ui(
+        crate::permission_drag::perform_permission_action(
             &app,
             crate::onboarding_windows::ExternalPermissionKind::ScreenRecording,
-        )?;
-        crate::permissions::mac::request_screen_recording(&app)
+            || crate::permissions::mac::request_screen_recording(&app),
+        )
     }
 
     /// A funnel event from the flow. The webview passes a short name; Rust maps it onto an

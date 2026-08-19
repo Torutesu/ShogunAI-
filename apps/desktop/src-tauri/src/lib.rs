@@ -386,6 +386,8 @@ pub fn run() {
             right_option_shortcut::onboarding_shortcut_disarm,
             permission_drag::arm_permission_app_drag,
             permission_drag::disarm_permission_app_drag,
+            permission_drag::show_permission_app_drag_helper,
+            permission_drag::close_permission_app_drag_helper,
             startup_health::mac::startup_health,
             onboarding::mac::onboarding_event,
             exclusions::mac::exclusion_categories,
