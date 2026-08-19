@@ -1,6 +1,6 @@
 'use client';
 
-import { Check } from 'lucide-react';
+import { Check, Globe, Layers, ListChecks, Search, Sparkles, Sunrise, Users, Video, Zap } from 'lucide-react';
 import { useState } from 'react';
 import { Reveal } from '@/components/animations/Reveal';
 import { Badge } from '@/components/ui/badge';
@@ -89,6 +89,59 @@ function Plan({ plan, annual, b, featured }: { plan: PlanData; annual: boolean; 
   );
 }
 
+/** Icons follow the item order in the dictionary; extra items fall back to a neutral mark. */
+const BUNDLE_ICONS = [Video, Search, Layers, Sunrise, Zap, Globe, Users];
+
+function Bundle({ b }: { b: Pricing['bundle'] }) {
+  return (
+    <Reveal className="mt-[clamp(40px,6vw,72px)]">
+      <div className="mx-auto max-w-[980px] rounded-[26px] border border-border bg-cloud/45 p-7 sm:p-9">
+        <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">{b.label}</p>
+        <h3 className="mt-3 max-w-[34ch] font-display text-[clamp(22px,3vw,32px)] font-semibold leading-[1.14] tracking-[-0.02em] text-balance">
+          {b.title}
+        </h3>
+        <p className="mt-3 max-w-[62ch] text-[15px] leading-relaxed text-muted">{b.sub}</p>
+        <ul className="mt-7 grid gap-3 sm:grid-cols-2">
+          {b.items.map((item, index) => {
+            const Icon = BUNDLE_ICONS[index] ?? ListChecks;
+            return (
+              <li
+                key={item.name}
+                className={`flex items-start gap-3.5 rounded-[18px] border border-border bg-surface p-4 ${item.soon ? 'opacity-80' : ''} ${index === b.items.length - 1 && b.items.length % 2 === 1 ? 'sm:col-span-2' : ''}`}
+              >
+                <span
+                  className={`flex size-9 shrink-0 items-center justify-center rounded-xl ${
+                    item.soon ? 'bg-cloud text-muted' : 'bg-sky-soft text-accent'
+                  }`}
+                >
+                  <Icon className="size-4" />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="flex flex-wrap items-center gap-2">
+                    <span className="text-sm font-semibold">{item.name}</span>
+                    <span
+                      className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] ${
+                        item.soon ? 'bg-cloud text-muted' : 'bg-sky-soft text-accent-strong'
+                      }`}
+                    >
+                      {item.soon ? b.nextLabel : b.nowLabel}
+                    </span>
+                  </span>
+                  <span className="mt-1 block text-[13px] leading-relaxed text-muted">{item.note}</span>
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+        <p className="mt-6 flex items-start gap-2.5 text-[13px] leading-relaxed text-muted">
+          <Sparkles className="mt-0.5 size-4 shrink-0 text-accent" />
+          {b.footnote}
+        </p>
+      </div>
+    </Reveal>
+  );
+}
+
 export function Pricing({ pricing, heading, headingLevel = 'h2' }: { pricing: Pricing; heading?: { eyebrow: string; title: string; sub: string }; headingLevel?: 'h1' | 'h2' }) {
   const [annual, setAnnual] = useState(true); // default: annual (recommended)
   const display = heading ?? pricing;
@@ -114,6 +167,7 @@ export function Pricing({ pricing, heading, headingLevel = 'h2' }: { pricing: Pr
             <Plan plan={pricing.pro} annual={annual} b={pricing.billing} featured />
           </Reveal>
         </div>
+        <Bundle b={pricing.bundle} />
       </div>
     </section>
   );
