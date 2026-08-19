@@ -175,6 +175,10 @@ pub fn delete_all(conn: &mut Connection) -> Result<DeleteReport, rusqlite::Error
     // embeddings (Warm vec0 + Cold int8) then the event log (its AD trigger clears event_fts)
     tx.execute("DELETE FROM event_vec", [])?;
     tx.execute("DELETE FROM cold_embeddings", [])?;
+    // Visual-recall frames (V12) reference event_log with no ON DELETE clause, so under
+    // foreign_keys=ON they must go before the events — leaving one behind aborts the whole
+    // transaction and "delete everything" deletes nothing for Visual-recall users (FR-SET-07).
+    let screen_frames = tx.execute("DELETE FROM screen_frames", [])?;
     let events = tx.execute("DELETE FROM event_log", [])?;
     // Everything that references sessions with no ON DELETE CASCADE must go before the sessions
     // themselves, or with foreign_keys=ON the delete FK-fails and rolls back. Meeting notes
@@ -187,7 +191,6 @@ pub fn delete_all(conn: &mut Connection) -> Result<DeleteReport, rusqlite::Error
     // everything" deletes nothing (FR-SET-07).
     let transcript_segments = tx.execute("DELETE FROM transcript_segments", [])?;
     let meeting_recaps = tx.execute("DELETE FROM meeting_recaps", [])?;
-    let screen_frames = tx.execute("DELETE FROM screen_frames", [])?;
     // Sessions hold the meeting's title, summary and decisions — user data. event_log also
     // references sessions, and it was already cleared above, so sessions can go now (FR-SET-07,
     // FR-MT-05).
@@ -527,6 +530,52 @@ mod tests {
         assert_eq!(report.transcript_segments, 1);
         assert_eq!(report.meeting_recaps, 1);
         for table in ["sessions", "transcript_segments", "meeting_recaps", "session_notes"] {
+            let n: i64 = conn.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0)).unwrap();
+            assert_eq!(n, 0, "{table} should be empty after delete_all");
+        }
+    }
+
+    #[test]
+    fn delete_all_survives_a_visual_recall_frame() {
+        // screen_frames.event_id references event_log with no ON DELETE (V12). Deleting the events
+        // first aborted the transaction, so "delete everything" deleted nothing at all for anyone
+        // who had ever turned Visual recall on (FR-SET-07).
+        let mut conn = crate::open_in_memory().unwrap();
+        let e = insert_event(
+            &conn,
+            &NewEvent {
+                ts: 1_000,
+                source: "screen_ocr",
+                kind: "text",
+                app_bundle_id: Some("com.apple.Safari"),
+                window_title: Some("Bank"),
+                content: "account balance",
+                content_hash: "ocr-1",
+                dwell_ms: 0,
+                display_id: None,
+                window_bounds: None,
+            },
+        )
+        .unwrap();
+        crate::screen_frames::insert(
+            &conn,
+            &crate::screen_frames::NewFrame {
+                created_at_ms: 1_000,
+                event_id: e,
+                app_bundle_id: Some("com.apple.Safari"),
+                window_title: Some("Bank"),
+                display_id: None,
+                width: 100,
+                height: 50,
+                jpeg: &[0xff, 0xd8, 0xff, 0xd9],
+            },
+        )
+        .unwrap();
+
+        let report = delete_all(&mut conn).expect("delete_all must not trip the screen_frames FK");
+        assert_eq!(report.events, 1);
+        assert_eq!(report.screen_frames, 1);
+        for table in ["event_log", "screen_frames"] {
             let n: i64 = conn.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0)).unwrap();
             assert_eq!(n, 0, "{table} should be empty after delete_all");
         }
