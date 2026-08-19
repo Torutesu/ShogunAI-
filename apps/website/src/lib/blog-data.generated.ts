@@ -430,7 +430,7 @@ export const BLOG_DATA = [
     "author": "ShogunAI",
     "image": "/images/blog/privacy.png",
     "readingMinutes": 1,
-    "html": "<p>ShogunAI liest Text, keine Pixel. Ein geteiltes Diagramm oder ein eingescanntes PDF liefern aber keinen Text, und dort bleibt das Gedächtnis stumm.</p>\n<p>Visuelle Erinnerung ist standardmäßig aus. Eingeschaltet und nur wenn die Textextraktion leer bleibt, wird ein komprimiertes Einzelbild höchstens 72 Stunden in der verschlüsselten Datenbank gehalten und danach automatisch gelöscht.</p>\n<p>Nichts wird hochgeladen: Einzelbilder werden auf deinem Mac gelesen. Es gibt keine Zeitleiste und keine Wiedergabe, Audio ist von dieser Ausnahme ausgenommen, und ausgeschaltet wird kein Bild geschrieben.</p>"
+    "html": "<p>ShogunAI liest Text, keine Pixel. Ein geteiltes Diagramm oder ein eingescanntes PDF liefern aber keinen Text, und dort bleibt das Gedächtnis stumm.</p>\n<p>Visuelle Erinnerung ist standardmäßig aus. Eingeschaltet und nur wenn die Textextraktion leer bleibt, wird ein komprimiertes Einzelbild für die von dir gewählte endliche Dauer in der verschlüsselten Datenbank gehalten und danach automatisch gelöscht.</p>\n<p>Nichts wird hochgeladen: Einzelbilder werden auf deinem Mac gelesen. Es gibt keine Zeitleiste und keine Wiedergabe, Audio ist von dieser Ausnahme ausgenommen, und ausgeschaltet wird kein Bild geschrieben.</p>"
   },
   {
     "slug": "welcome-to-shogunai",

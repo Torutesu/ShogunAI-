@@ -2,83 +2,14 @@
 title: 'Why local-first'
 description: 'Your day is yours. A short argument for keeping memory on your machine — and what that unlocks.'
 date: '2026-07-17'
-category: 'Ideas'
+category: 'Privacy'
 author: 'ShogunAI'
-image: '/images/blog/privacy.png'
 ---
 
-Local-first is usually sold as a privacy feature. It is one. But if privacy
-were the only argument, most people would trade it away for convenience, the
-way they always have.
+Local-first means the default boundary is the device you use for work. That boundary matters because a personal memory layer can contain decisions, relationships, private documents, and unfinished thoughts that were never meant to become a permanent cloud record.
 
-The better argument is that keeping memory on your machine makes the product
-work better. Privacy is what you get for free once the architecture is right.
+## What local-first unlocks
 
-## Latency you can feel
+Keeping capture and storage on-device reduces unnecessary copies, makes deletion meaningful, and lets people choose when a model provider receives relevant context. It also makes the privacy model easier to explain: local by default, shared by explicit action.
 
-A memory layer is only useful if it is ready before you ask. Open the notch and
-the context should already be assembled — the person you are talking to, the
-project you are in, the threads still open on it.
-
-Our budget for that is 100 milliseconds from idle to expanded, and 150 for the
-actions to appear beside it. You cannot hit those numbers over a network. Not
-because networks are slow in the abstract, but because they are unpredictable:
-the median round trip is fine and the ninety-fifth percentile is a spinner.
-A local index has no ninety-fifth percentile problem. It reads from disk.
-
-The same goes for capture. Context is reassembled every time you switch
-windows, dozens of times an hour. Done locally that is a few hundred
-milliseconds of background work. Done as a round trip it is a running cost in
-latency, bandwidth, and battery, paid all day, for data that never needed to
-leave.
-
-## Cost that does not scale with your day
-
-Embeddings are the clearest case. ShogunAI runs a multilingual embedding model
-on your Mac, so indexing a heavy day and indexing a light one cost the same:
-nothing. There is no per-token meter running against your own memory, which
-means we never have to make the product cheaper by remembering less of you.
-
-A cloud-indexed competitor has to choose. Either they sample your day, or they
-charge for the volume, or they subsidize it with something they get from your
-data. All three are worse products.
-
-## It works on a plane
-
-Search, recall, the daily review, the morning brief — these run without a
-network. What needs the network is generation: drafting a reply, reasoning over
-a hard question, taking an action in a connected tool. Offline, ShogunAI still
-knows your day. It just cannot write the email yet.
-
-That split is deliberate. The layer that must always work is the layer that
-never leaves.
-
-## What actually goes out, and why
-
-Local-first is not a claim that nothing ever leaves the machine. That claim is
-almost always false, and a false absolute is worse than an honest boundary.
-
-Here is the boundary. Raw memory stays. What goes out are the specific chunks
-needed for a specific request you made — the thread to summarize, the context
-for the draft. Connected services see only what that service needs. Every
-egress is written to a traceability log with its purpose, and where a request
-crosses a third party rather than going straight to the model provider, the log
-says third party and the setup asks for consent first.
-
-Two of those crossings exist today, both opt-in, both documented in the product
-rather than buried here: mail moves through an integration provider, and live
-meeting transcription uses a speech service that is contractually barred from
-training on what it hears. We would rather name them than round down to
-"nothing leaves."
-
-## Bring your own everything
-
-Because inference is the only part that has to be remote, you can decide who
-does it. Bring your own API key, or point ShogunAI at the assistant plan you
-already pay for and let it work inside that. Your memory does not care which
-model reads it, and switching providers does not cost you a single day of
-history.
-
-That is the real payoff of local-first. Not a badge on a pricing page —
-independence. The models will keep changing. Your ten years of context should
-not have to move house every time they do.
+Local-first does not mean every optional AI request is offline. When you approve a connected provider, the necessary context may leave the device under that provider’s terms. The important part is that the choice is visible and yours.

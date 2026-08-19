@@ -50,6 +50,7 @@ impl TokenEstimator for HeuristicEstimator {
 }
 
 use crate::block::{BlockRef, ContextBlock};
+use crate::score::source_rank;
 
 /// 予算充填の結果。
 #[derive(Debug, Clone, PartialEq)]
@@ -68,11 +69,17 @@ pub struct FitResult {
 /// 超えない範囲で採用する。超えたブロックは採用せず `dropped` に回す（後続の低スコアで
 /// 予算に収まるものは採用する = best-effort な充填）。
 ///
-/// 不変: 返る `post_tokens <= budget_tokens`。高スコアほど優先採用。provenance は保持。
+/// 不変: 返る `post_tokens <= budget_tokens`。高スコアほど優先採用。同点は
+/// [`crate::score::source_rank`] が高い方（MCP structured > 要約 > state > AX evidence）。
+/// スコアも rank も同じなら入力順を保つ（安定ソート）。provenance は保持。
 pub fn fit_to_budget(mut scored: Vec<(ContextBlock, f64)>, budget_tokens: usize) -> FitResult {
     let pre_tokens: usize = scored.iter().map(|(b, _)| b.tokens).sum();
-    // スコア降順（同点は入力順を保つよう安定ソート）。
-    scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    // スコア降順。同点は source_rank 降順。どちらも同点なら入力順（安定ソート）。
+    scored.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| source_rank(b.0.source_kind).cmp(&source_rank(a.0.source_kind)))
+    });
 
     let mut kept = Vec::new();
     let mut dropped = Vec::new();
@@ -116,11 +123,15 @@ mod tests {
     use crate::block::{BlockRef, ScoreInputs, SourceKind};
 
     fn blk(id: i64, tokens_text: usize) -> ContextBlock {
+        blk_kind(id, tokens_text, SourceKind::Evidence)
+    }
+
+    fn blk_kind(id: i64, tokens_text: usize, kind: SourceKind) -> ContextBlock {
         // tokens は text から算出されるので、ラテン文字を tokens_text*4 個並べて概算調整。
         let est = HeuristicEstimator::default();
         ContextBlock::new(
             BlockRef::Event(id),
-            SourceKind::Evidence,
+            kind,
             "a".repeat(tokens_text * 4),
             ScoreInputs { relevance: 0.5, freshness: 0.5, task_link: 0.0, confidence: 1.0 },
             &est,
@@ -159,6 +170,31 @@ mod tests {
         assert_eq!(r.kept.len(), 2);
         assert_eq!(r.kept[0].id_ref, BlockRef::Event(1));
         assert_eq!(r.kept[1].id_ref, BlockRef::Event(3));
+        assert_eq!(r.dropped, vec![BlockRef::Event(2)]);
+    }
+
+    #[test]
+    fn equal_score_prefers_structured_over_ax_evidence() {
+        // Evidence first in input: without the #35 tie-break, stable score-sort would keep it.
+        let scored = vec![
+            (blk_kind(1, 10, SourceKind::Evidence), 0.5),
+            (blk_kind(2, 10, SourceKind::Structured), 0.5),
+        ];
+        let r = fit_to_budget(scored, 10);
+        assert_eq!(r.kept.len(), 1);
+        assert_eq!(r.kept[0].id_ref, BlockRef::Event(2));
+        assert_eq!(r.dropped, vec![BlockRef::Event(1)]);
+    }
+
+    #[test]
+    fn higher_score_beats_source_rank() {
+        let scored = vec![
+            (blk_kind(1, 10, SourceKind::Evidence), 0.9),
+            (blk_kind(2, 10, SourceKind::Structured), 0.1),
+        ];
+        let r = fit_to_budget(scored, 10);
+        assert_eq!(r.kept.len(), 1);
+        assert_eq!(r.kept[0].id_ref, BlockRef::Event(1));
         assert_eq!(r.dropped, vec![BlockRef::Event(2)]);
     }
 }

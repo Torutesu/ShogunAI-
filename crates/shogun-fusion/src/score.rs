@@ -3,7 +3,7 @@
 //! 初期重みは既存 thread `salience`（lexical .30 / on_screen .20 / recency .25 / pressure .25）
 //! を出発点に、クエリ関連をやや上げた値。計測後に校正する。
 
-use crate::block::ScoreInputs;
+use crate::block::{ScoreInputs, SourceKind};
 
 /// スコア要素の重み。合計は 1.0 に正規化して使う。
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -27,6 +27,23 @@ pub fn score_block(inputs: &ScoreInputs, w: &ScoreWeights) -> f64 {
         + w.fresh * c(inputs.freshness)
         + w.task * c(inputs.task_link)
         + w.conf * c(inputs.confidence)
+}
+
+/// Trust rank for a block's origin (issue #35). Higher wins ties when [`score_block`] is equal.
+///
+/// 1. MCP/API structured facts
+/// 2. session / thread summary (meeting text with provenance)
+/// 3. world-model [`SourceKind::StateFact`]
+/// 4. AX / search [`SourceKind::Evidence`]
+/// 5. everything else (lessons, …)
+pub fn source_rank(kind: SourceKind) -> u8 {
+    match kind {
+        SourceKind::Structured => 4,
+        SourceKind::SessionSummary | SourceKind::ThreadSummary => 3,
+        SourceKind::StateFact => 2,
+        SourceKind::Evidence => 1,
+        SourceKind::Lesson => 0,
+    }
 }
 
 #[cfg(test)]
@@ -58,5 +75,17 @@ mod tests {
         let s = score_block(&inputs(5.0, -1.0, 0.5, 0.5), &w);
         let clamped = score_block(&inputs(1.0, 0.0, 0.5, 0.5), &w);
         assert!((s - clamped).abs() < 1e-9);
+    }
+
+    #[test]
+    fn source_rank_orders_structured_above_ax_evidence() {
+        assert!(source_rank(SourceKind::Structured) > source_rank(SourceKind::SessionSummary));
+        assert_eq!(
+            source_rank(SourceKind::SessionSummary),
+            source_rank(SourceKind::ThreadSummary)
+        );
+        assert!(source_rank(SourceKind::SessionSummary) > source_rank(SourceKind::StateFact));
+        assert!(source_rank(SourceKind::StateFact) > source_rank(SourceKind::Evidence));
+        assert!(source_rank(SourceKind::Evidence) > source_rank(SourceKind::Lesson));
     }
 }

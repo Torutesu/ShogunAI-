@@ -19,7 +19,7 @@ export function LanguageMenu({ current, label }: { current: Locale; label: strin
     setOpen(false);
     document.cookie = `${LOCALE_COOKIE}=${l}; path=/; max-age=31536000; samesite=lax`;
     const segments = pathname.split('/').filter(Boolean);
-    const localizedRoots = new Set(['features', 'use-cases', 'integrations', 'security', 'pricing', 'blog']);
+    const localizedRoots = new Set(['features', 'use-cases', 'integrations', 'security', 'pricing', 'compare', 'blog']);
     const first = segments[0];
     let nextPath = pathname;
     if (first && (locales as readonly string[]).includes(first)) {

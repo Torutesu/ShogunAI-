@@ -4,6 +4,7 @@ import { FAQ } from '@/components/sections/FAQ';
 import { Footer } from '@/components/sections/Footer';
 import { Hero } from '@/components/sections/Hero';
 import { How } from '@/components/sections/How';
+import { Marquee } from '@/components/sections/Marquee';
 import { Memory } from '@/components/sections/Memory';
 import { Nav } from '@/components/sections/Nav';
 import { Pricing } from '@/components/sections/Pricing';
@@ -36,6 +37,7 @@ export default async function Home({ localeOverride }: { localeOverride?: Locale
       </div>
       <main id="top" lang={locale}>
         <Hero t={t} participantCount={participantCount} />
+        <Marquee t={t} />
         <Memory t={t} locale={locale} />
         <Action t={t} locale={locale} />
         <UseCases t={t} locale={locale} />

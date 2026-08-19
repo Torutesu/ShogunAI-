@@ -360,6 +360,9 @@ pub struct Db {
     /// Whether the store is answering (issue #121). Shared by every clone, because a failure the
     /// capture thread hits is the same failure the panel has to report.
     health: Arc<crate::memory_health::MemoryHealth>,
+    /// Last compression / tool-loop snapshot for `shogun metrics` (H1). Shared by clones the same
+    /// way `health` is — desktop assemble and `shogun-api` read the same numbers. Counts only.
+    harness: Arc<Mutex<crate::metrics::HarnessCounters>>,
 }
 
 impl Db {
@@ -372,6 +375,7 @@ impl Db {
             compression_config: None,
             bus: None,
             health: Arc::new(crate::memory_health::MemoryHealth::new()),
+            harness: Arc::new(Mutex::new(crate::metrics::HarnessCounters::default())),
         }
     }
 
@@ -1647,6 +1651,12 @@ impl Db {
             compress_ms,
             compress_ms,
         );
+        self.record_harness_compression(crate::metrics::CompressionHarness {
+            enabled: true,
+            pre_tokens: out.stats.pre_tokens as u64,
+            post_tokens: out.stats.post_tokens as u64,
+            dropped: out.stats.dropped as u64,
+        });
 
         (ContextPack { facts: out_facts, evidence: out_evidence, screen_frames }, out.stats, false)
     }
@@ -1681,6 +1691,12 @@ impl Db {
             elapsed_ms,
             elapsed_ms,
         );
+        self.record_harness_compression(crate::metrics::CompressionHarness {
+            enabled: false,
+            pre_tokens: pre_tokens as u64,
+            post_tokens: pre_tokens as u64,
+            dropped: 0,
+        });
         (ContextPack { facts, evidence, screen_frames }, shogun_fusion::compress::CompressionStats::default(), true)
     }
 
@@ -2780,6 +2796,26 @@ impl Db {
             })
         })
         .ok()
+    }
+
+    fn record_harness_compression(&self, snap: crate::metrics::CompressionHarness) {
+        if let Ok(mut g) = self.harness.lock() {
+            g.compression = Some(snap);
+        }
+    }
+
+    /// Last tool-loop counters for `shogun metrics`. Overwrites the previous snapshot (last loop,
+    /// not a process-lifetime sum). Counts only — never tool names or result text.
+    pub fn record_tool_loop(&self, snap: crate::metrics::ToolLoopHarness) {
+        if let Ok(mut g) = self.harness.lock() {
+            g.tool_loop = Some(snap);
+        }
+    }
+
+    /// H1 counters for `shogun metrics`: last compression assemble and last tool loop, if any.
+    /// `None` when neither has run — rendered as `harness.measured:false`, never fabricated zeros.
+    pub fn harness_counters(&self) -> Option<crate::metrics::HarnessCounters> {
+        self.harness.lock().ok().and_then(|g| (*g).measured())
     }
 
     /// The active lessons relevant to the current screen (this app + global scope), mapped into
@@ -5000,6 +5036,77 @@ mod tests {
             .unwrap();
         assert_ne!(qh, "report"); // 本文は保存しない
         assert_eq!(path, "compressed");
+    }
+
+    #[test]
+    fn harness_counters_unmeasured_until_assemble_or_loop() {
+        use crate::metrics::{
+            render_snapshots_json_with_lessons_and_harness, SloRegistry, ToolLoopHarness,
+        };
+        let db = Db::open_in_memory(clock(1_000)).unwrap();
+        assert!(db.harness_counters().is_none());
+        let json = render_snapshots_json_with_lessons_and_harness(
+            &SloRegistry::new().snapshot_all(),
+            db.lesson_counters(),
+            db.harness_counters(),
+        );
+        assert!(json.contains(r#""harness":{"measured":false}"#), "{json}");
+        assert!(!json.contains("pre_tokens"), "{json}");
+
+        db.record_tool_loop(ToolLoopHarness { uses: 2, refusals: 1, proposes: 0, timeouts: 1 });
+        let snap = db.harness_counters().expect("loop should mark harness measured");
+        assert!(snap.compression.is_none());
+        let loop_snap = snap.tool_loop.expect("tool_loop recorded");
+        assert_eq!(loop_snap.uses, 2);
+        assert_eq!(loop_snap.refusals, 1);
+        assert_eq!(loop_snap.timeouts, 1);
+        let json = render_snapshots_json_with_lessons_and_harness(
+            &SloRegistry::new().snapshot_all(),
+            None,
+            db.harness_counters(),
+        );
+        assert!(json.contains(r#""uses":2"#), "{json}");
+        assert!(json.contains(r#""compression":{"measured":false}"#), "{json}");
+        assert!(!json.contains("prompt"), "{json}");
+
+        // clones share the live snapshot
+        let clone = db.clone();
+        clone.record_tool_loop(ToolLoopHarness { uses: 8, refusals: 0, proposes: 1, timeouts: 0 });
+        let again = db.harness_counters().and_then(|h| h.tool_loop).expect("shared");
+        assert_eq!(again.uses, 8);
+        assert_eq!(again.proposes, 1);
+    }
+
+    #[test]
+    fn assemble_records_compression_harness_without_query_text() {
+        use crate::metrics::render_snapshots_json_with_lessons_and_harness;
+        use shogun_fusion::compress::CompressionConfig;
+        let db = Db::open_in_memory(clock(10_000)).unwrap();
+        for i in 0..4 {
+            db.capture(&ev(
+                "vendor pricing settled at 12k for the renewal report",
+                &format!("h{i}"),
+                100 + i,
+            ))
+            .unwrap();
+        }
+        const SECRET: &str = "SECRET_QUERY_XYZ_harness";
+        let cfg = CompressionConfig { enabled: true, budget_tokens: 80, ..Default::default() };
+        let (_pack, stats, fell_back) = db.assemble_context_compressed(SECRET, 6, 600, &[], &cfg);
+        assert!(!fell_back);
+        let snap = db.harness_counters().expect("assemble should mark compression measured");
+        let c = snap.compression.expect("compression snapshot");
+        assert!(c.enabled);
+        assert_eq!(c.pre_tokens, stats.pre_tokens as u64);
+        assert_eq!(c.post_tokens, stats.post_tokens as u64);
+        assert_eq!(c.dropped, stats.dropped as u64);
+        let json = render_snapshots_json_with_lessons_and_harness(
+            &crate::metrics::SloRegistry::new().snapshot_all(),
+            None,
+            db.harness_counters(),
+        );
+        assert!(!json.contains(SECRET), "query text must stay off the metrics face: {json}");
+        assert!(json.contains("pre_tokens"), "{json}");
     }
 
     #[test]

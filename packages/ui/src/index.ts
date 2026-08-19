@@ -1,5 +1,5 @@
 /**
- * Shared UI primitives. Migrate the shadcn-style components
+ * Shared accessible UI primitives. Move reusable components
  * (Button, Card, Badge, Input) here from apps/website when a second app
  * (e.g. desktop) needs them.
  */
