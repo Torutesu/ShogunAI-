@@ -36,11 +36,26 @@ pub struct DisplaySnapshot {
     pub scale_factor: f64,
 }
 
+/// CSS-coordinate direction from this display's center toward the launch display's center.
+/// X grows right; Y grows down, so AppKit's Y component is intentionally inverted.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct OnboardingMotionVector {
+    pub x: i8,
+    pub y: i8,
+}
+
+impl OnboardingMotionVector {
+    pub const fn new(x: i8, y: i8) -> Self {
+        Self { x, y }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct OnboardingSurface {
     pub surface: OnboardingSurfaceKind,
     pub generation: u64,
     pub display_id: u32,
+    pub motion_vector: OnboardingMotionVector,
     pub label: String,
 }
 
@@ -242,6 +257,7 @@ impl WindowSessionModel {
             surface: OnboardingSurfaceKind::Interactive,
             generation: self.generation,
             display_id: self.launch_display_id,
+            motion_vector: OnboardingMotionVector::default(),
             label: crate::onboarding::mac::ONBOARDING_LABEL.to_owned(),
         });
     }
@@ -333,6 +349,10 @@ fn intro_surfaces(
     launch_display_id: u32,
     displays: &[DisplaySnapshot],
 ) -> Vec<OnboardingSurface> {
+    let launch_display = displays
+        .iter()
+        .find(|display| display.display_id == launch_display_id)
+        .copied();
     displays
         .iter()
         .map(|display| {
@@ -352,10 +372,51 @@ fn intro_surfaces(
                 surface,
                 generation,
                 display_id: display.display_id,
+                motion_vector: launch_display
+                    .filter(|_| surface == OnboardingSurfaceKind::Ambient)
+                    .map_or_else(OnboardingMotionVector::default, |launch| {
+                        motion_vector_toward(*display, launch)
+                    }),
                 label,
             }
         })
         .collect()
+}
+
+fn motion_vector_toward(
+    display: DisplaySnapshot,
+    launch_display: DisplaySnapshot,
+) -> OnboardingMotionVector {
+    let x = direction_component(launch_display.appkit_frame.mid_x() - display.appkit_frame.mid_x());
+    let appkit_y = direction_component(
+        (launch_display.appkit_frame.y + launch_display.appkit_frame.h / 2.0)
+            - (display.appkit_frame.y + display.appkit_frame.h / 2.0),
+    );
+    OnboardingMotionVector::new(x, -appkit_y)
+}
+
+fn direction_component(delta: f64) -> i8 {
+    if delta > 0.0 {
+        1
+    } else if delta < 0.0 {
+        -1
+    } else {
+        0
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn replace_generation_music<T, E>(
+    load_state: impl FnOnce() -> Option<Result<T, E>>,
+    stop: impl FnOnce(),
+    start: impl FnOnce(T),
+) {
+    // The outgoing generation owns its player. Release it before any managed-state lookup can
+    // fail; a successful lookup may then start the replacement generation's player.
+    stop();
+    if let Some(Ok(state)) = load_state() {
+        start(state);
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -370,11 +431,11 @@ pub mod mac {
 
     use super::{
         configure_intro_with_rollback, enforce_external_permission_barrier,
-        full_display_appkit_frame, interactive_appkit_frame, surface_close_should_cleanup,
-        window_policy, DisplaySnapshot, ExternalPermissionKind, ExternalPermissionWindowOps,
-        OnboardingSurface, OnboardingSurfaceKind, WindowLevelPolicy, WindowSessionModel,
-        INTERACTIVE_HEIGHT, INTERACTIVE_MIN_HEIGHT, INTERACTIVE_MIN_WIDTH, INTERACTIVE_WIDTH,
-        INTRO_DURATION,
+        full_display_appkit_frame, interactive_appkit_frame, replace_generation_music,
+        surface_close_should_cleanup, window_policy, DisplaySnapshot, ExternalPermissionKind,
+        ExternalPermissionWindowOps, OnboardingSurface, OnboardingSurfaceKind, WindowLevelPolicy,
+        WindowSessionModel, INTERACTIVE_HEIGHT, INTERACTIVE_MIN_HEIGHT, INTERACTIVE_MIN_WIDTH,
+        INTERACTIVE_WIDTH, INTRO_DURATION,
     };
     use crate::geometry::Point;
 
@@ -1403,16 +1464,19 @@ pub mod mac {
 
     /// A new display/session generation owns a new player. Failed state reads are silent.
     fn restart_music_for_replaced_session(app: &AppHandle) {
-        let Some(store) = app.try_state::<crate::onboarding::mac::Store>() else {
-            return;
-        };
-        let Ok(state) = store.snapshot() else {
-            return;
-        };
-        crate::onboarding_music::mac::start(
-            app,
-            state.music_muted,
-            crate::voice_session::mac::capture_gate().ok(),
+        replace_generation_music(
+            || {
+                app.try_state::<crate::onboarding::mac::Store>()
+                    .map(|store| store.snapshot())
+            },
+            || crate::onboarding_music::mac::stop(app),
+            |state| {
+                crate::onboarding_music::mac::start(
+                    app,
+                    state.music_muted,
+                    crate::voice_session::mac::capture_gate().ok(),
+                );
+            },
         );
     }
 }
@@ -1485,6 +1549,49 @@ mod tests {
     }
 
     #[test]
+    fn ambient_motion_vectors_cover_all_eight_directions() {
+        let launch = display(
+            1,
+            Rect::new(0.0, 0.0, 100.0, 100.0),
+            Rect::new(0.0, 0.0, 100.0, 100.0),
+            2.0,
+        );
+        let cases = [
+            ((-200.0, 200.0), OnboardingMotionVector::new(1, 1)),
+            ((0.0, 200.0), OnboardingMotionVector::new(0, 1)),
+            ((200.0, 200.0), OnboardingMotionVector::new(-1, 1)),
+            ((-200.0, 0.0), OnboardingMotionVector::new(1, 0)),
+            ((200.0, 0.0), OnboardingMotionVector::new(-1, 0)),
+            ((-200.0, -200.0), OnboardingMotionVector::new(1, -1)),
+            ((0.0, -200.0), OnboardingMotionVector::new(0, -1)),
+            ((200.0, -200.0), OnboardingMotionVector::new(-1, -1)),
+        ];
+
+        for ((x, y), expected) in cases {
+            let ambient = display(
+                2,
+                Rect::new(x, y, 100.0, 100.0),
+                Rect::new(x, y, 100.0, 100.0),
+                1.0,
+            );
+            assert_eq!(motion_vector_toward(ambient, launch), expected);
+        }
+    }
+
+    #[test]
+    fn ambient_motion_vector_uses_appkit_centers_across_negative_mixed_layout() {
+        let screens = displays();
+        assert_eq!(
+            motion_vector_toward(screens[1], screens[0]),
+            OnboardingMotionVector::new(1, 1)
+        );
+        assert_eq!(
+            motion_vector_toward(screens[3], screens[0]),
+            OnboardingMotionVector::new(-1, -1)
+        );
+    }
+
+    #[test]
     fn cursor_selection_uses_half_open_edges() {
         let screens = displays();
         assert_eq!(
@@ -1544,6 +1651,51 @@ mod tests {
     }
 
     #[test]
+    fn deadline_returns_every_intro_label_and_stale_generation_is_inert() {
+        let mut session = WindowSessionModel::intro(7, displays(), Point::new(50.0, 50.0), Some(1))
+            .expect("session");
+        let expected = session
+            .surfaces()
+            .iter()
+            .map(|surface| surface.label.clone())
+            .collect::<Vec<_>>();
+
+        assert!(!session.deadline_elapsed(6, INTRO_DURATION));
+        assert_eq!(session.surfaces().len(), expected.len());
+        assert!(session.deadline_elapsed(7, INTRO_DURATION));
+        assert_eq!(session.prepare_for_external_ui(), expected);
+        assert!(session.surfaces().is_empty());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn generation_replacement_stops_music_before_failed_state_lookup() {
+        use std::cell::RefCell;
+
+        let missing_events = RefCell::new(Vec::new());
+        replace_generation_music(
+            || {
+                missing_events.borrow_mut().push("lookup");
+                None::<Result<(), ()>>
+            },
+            || missing_events.borrow_mut().push("stop"),
+            |_| missing_events.borrow_mut().push("start"),
+        );
+        assert_eq!(*missing_events.borrow(), ["stop", "lookup"]);
+
+        let failed_events = RefCell::new(Vec::new());
+        replace_generation_music(
+            || {
+                failed_events.borrow_mut().push("snapshot");
+                Some(Err::<(), _>("unavailable"))
+            },
+            || failed_events.borrow_mut().push("stop"),
+            |_| failed_events.borrow_mut().push("start"),
+        );
+        assert_eq!(*failed_events.borrow(), ["stop", "snapshot"]);
+    }
+
+    #[test]
     fn intro_finish_replaces_all_cinematic_surfaces_with_one_interactive_surface() {
         let mut session = WindowSessionModel::intro(7, displays(), Point::new(50.0, 50.0), Some(1))
             .expect("session");
@@ -1555,6 +1707,7 @@ mod tests {
                 surface: OnboardingSurfaceKind::Interactive,
                 generation: 7,
                 display_id: 1,
+                motion_vector: OnboardingMotionVector::default(),
                 label: crate::onboarding::mac::ONBOARDING_LABEL.to_owned(),
             }]
         );
@@ -1668,15 +1821,16 @@ mod tests {
     fn surface_lookup_rejects_stale_generation() {
         let session = WindowSessionModel::intro(12, displays(), Point::new(50.0, 50.0), Some(1))
             .expect("session");
-        let label = &session.surfaces()[0].label;
+        let ambient = session
+            .surfaces()
+            .iter()
+            .find(|surface| surface.surface == OnboardingSurfaceKind::Ambient)
+            .expect("ambient surface");
+        let label = &ambient.label;
         assert!(session.surface_for_label(label, 11).is_err());
-        assert_eq!(
-            session
-                .surface_for_label(label, 12)
-                .expect("surface")
-                .generation,
-            12
-        );
+        let routed = session.surface_for_label(label, 12).expect("surface");
+        assert_eq!(routed.generation, 12);
+        assert_eq!(routed.motion_vector, OnboardingMotionVector::new(1, 1));
     }
 
     #[test]

@@ -54,7 +54,7 @@ export function Onboarding(): JSX.Element {
     if (IN_TAURI && route.generation !== null) {
       void onboardingWindowSurface(route.generation).then((nativeSurface) => { if (alive) setSurface(nativeSurface); });
     } else {
-      setSurface({ surface: route.surface, generation: route.generation ?? 0, display_id: 0, label: "preview" });
+      setSurface({ surface: route.surface, generation: route.generation ?? 0, display_id: 0, motion_vector: { x: 0, y: 0 }, label: "preview" });
     }
     if (!IN_TAURI) return () => { alive = false; };
     const listeners: Array<Promise<() => void>> = [
@@ -105,6 +105,6 @@ export function Onboarding(): JSX.Element {
   if (surface === undefined || !state) return <div className="onb-boot" />;
   if (!surface || surface.surface !== route.surface) return <div className="onb-stale" data-testid="stale-surface" />;
   if (surface.surface === "main") return <CinematicSurface muted={state.music_muted} musicPending={musicPending} onToggleMusic={toggleMusic} />;
-  if (surface.surface === "ambient") return <AmbientSurface />;
+  if (surface.surface === "ambient") return <AmbientSurface motionVector={surface.motion_vector} />;
   return <OnboardingExperience state={state} permissions={permissions} surfaceGeneration={surface.generation} onPersist={persist} onFinish={finish} onToggleMusic={toggleMusic} musicPending={musicPending} />;
 }

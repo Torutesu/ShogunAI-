@@ -5,8 +5,9 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GateFrame } from "./experience/GateFrame";
+import { AmbientSurface } from "./experience/AmbientSurface";
 import { newestPermissionSnapshot, Onboarding, windowRoute } from "./Onboarding";
-import type { PermissionSnapshot } from "./ipc";
+import type { OnboardingMotionVector, PermissionSnapshot } from "./ipc";
 
 const emptyPermissions: PermissionSnapshot = {
   accessibility: false, microphone: false, screen_recording: false, all_granted: false,
@@ -38,7 +39,7 @@ describe("cinematic onboarding", () => {
     vi.mocked(invoke).mockImplementation(async (command) => {
       if (command === "onboarding_state") return state("welcome");
       if (command === "permission_status" || command === "permission_listener_ready") return emptyPermissions;
-      if (command === "onboarding_window_surface") return { surface: "main", generation: 9, display_id: 1, label: "onboarding-main-9" };
+      if (command === "onboarding_window_surface") return { surface: "main", generation: 9, display_id: 1, motion_vector: { x: 0, y: 0 }, label: "onboarding-main-9" };
       if (command === "onboarding_event") return undefined;
       throw new Error(`unexpected command: ${command}`);
     });
@@ -49,12 +50,26 @@ describe("cinematic onboarding", () => {
     vi.mocked(invoke).mockImplementation(async (command) => {
       if (command === "onboarding_state") return state("welcome");
       if (command === "permission_status" || command === "permission_listener_ready") return emptyPermissions;
-      if (command === "onboarding_window_surface") return { surface: "ambient", generation: 9, display_id: 2, label: "onboarding-ambient-9" };
+      if (command === "onboarding_window_surface") return { surface: "ambient", generation: 9, display_id: 2, motion_vector: { x: 1, y: -1 }, label: "onboarding-ambient-9" };
       if (command === "onboarding_event") return undefined;
       throw new Error(`unexpected command: ${command}`);
     });
     render(<Onboarding />);
-    expect(await screen.findByTestId("ambient-surface")).toBeTruthy();
+    const ambient = await screen.findByTestId("ambient-surface");
+    expect(ambient.getAttribute("data-motion-x")).toBe("1");
+    expect(ambient.getAttribute("data-motion-y")).toBe("-1");
+  });
+
+  it("maps every bounded native motion component onto the ambient surface", () => {
+    const view = render(<AmbientSurface motionVector={{ x: -1, y: 1 }} />);
+    const ambient = screen.getByTestId("ambient-surface");
+    expect(ambient.getAttribute("data-motion-x")).toBe("-1");
+    expect(ambient.getAttribute("data-motion-y")).toBe("1");
+    view.rerender(
+      <AmbientSurface motionVector={{ x: 7, y: -4 } as unknown as OnboardingMotionVector} />,
+    );
+    expect(ambient.getAttribute("data-motion-x")).toBe("1");
+    expect(ambient.getAttribute("data-motion-y")).toBe("-1");
   });
 
   it("rejects stale generation surface mismatch", async () => {
@@ -143,7 +158,7 @@ describe("cinematic onboarding", () => {
     vi.mocked(invoke).mockImplementation(async (command) => {
       if (command === "onboarding_state") return state("welcome", 4);
       if (command === "permission_status" || command === "permission_listener_ready") return emptyPermissions;
-      if (command === "onboarding_window_surface") return { surface: "main", generation: 9, display_id: 1, label: "onboarding-main-9" };
+      if (command === "onboarding_window_surface") return { surface: "main", generation: 9, display_id: 1, motion_vector: { x: 0, y: 0 }, label: "onboarding-main-9" };
       if (command === "set_onboarding_music_muted") return { ...state("welcome", 5), music_muted: true };
       if (command === "onboarding_event") return undefined;
       throw new Error(`unexpected command: ${command}`);
@@ -382,11 +397,22 @@ describe("cinematic onboarding", () => {
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("onboarding_shortcut_ready", { generation: 4, nonce: "nonce", surfaceGeneration: 0 }));
   });
 
-  it("keeps reduced-motion and offscreen haze stop paths in scoped stylesheet", () => {
+  it("keeps cinematic motion compositor-only and reduced motion opacity-only", () => {
     const css = readFileSync(resolve(process.cwd(), "src/onboarding/onboarding.css"), "utf8");
+    const keyframes = css.split("\n").filter((line) => line.startsWith("@keyframes")).join("\n");
+    const reduced = css.split("\n").find((line) => line.startsWith("@media (prefers-reduced-motion: reduce)")) ?? "";
+    const reducedFade = css.split("\n").find((line) => line.startsWith("@keyframes onb-reduced-current-fade")) ?? "";
     expect(css.includes("data-haze-motion=\"true\"")).toBe(true);
-    expect(css.includes("prefers-reduced-motion: reduce")).toBe(true);
-    expect(css.includes(".onb-cinematic__wave, .onb-ambient img, .onb-haze { animation: none;")).toBe(true);
+    expect(css).not.toMatch(/transition\s*:\s*all/i);
+    expect(keyframes).not.toMatch(/\b(width|height|top|right|bottom|left|margin|padding)\s*:/i);
+    expect(reduced).toContain("onb-reduced-current-fade 200ms linear both");
+    expect(reduced).not.toContain("display: none");
+    expect(reduced).not.toContain("onb-wave-inward");
+    expect(reduced).not.toContain("onb-ambient-flow");
+    expect(reducedFade).toMatch(/opacity:/);
+    expect(reducedFade).not.toMatch(/transform:/);
+    const ambientSource = readFileSync(resolve(process.cwd(), "src/onboarding/experience/AmbientSurface.tsx"), "utf8");
+    expect(ambientSource).not.toContain("requestAnimationFrame");
   });
 
   it("renders custom native binding honestly", async () => {

@@ -72,10 +72,16 @@ export interface OnboardingState {
   permissions_repair?: boolean;
 }
 
+export interface OnboardingMotionVector {
+  x: -1 | 0 | 1;
+  y: -1 | 0 | 1;
+}
+
 export interface OnboardingWindowSurface {
   surface: "main" | "ambient" | "interactive";
   generation: number;
   display_id: number;
+  motion_vector: OnboardingMotionVector;
   label: string;
 }
 

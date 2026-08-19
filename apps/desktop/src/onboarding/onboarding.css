@@ -15,6 +15,11 @@ button, input, textarea { font: inherit; }
 .onb-cinematic__wave { position: absolute; width: 220px; opacity: .58; filter: invert(29%) sepia(99%) saturate(4474%) hue-rotate(219deg) brightness(98%) contrast(104%); animation: onb-wave-inward 5s cubic-bezier(.25, 1, .5, 1) both; }
 .onb-cinematic__wave--one { transform: translate3d(-38vw, -14vh, 0) rotate(-12deg); }
 .onb-cinematic__wave--two { transform: translate3d(38vw, 14vh, 0) rotate(168deg); animation-delay: .16s; }
+.onb-ambient { --onb-flow-from-x: 0px; --onb-flow-from-y: 0px; --onb-flow-to-x: 0px; --onb-flow-to-y: 0px; }
+.onb-ambient[data-motion-x="1"] { --onb-flow-from-x: -12px; --onb-flow-to-x: 36px; }
+.onb-ambient[data-motion-x="-1"] { --onb-flow-from-x: 12px; --onb-flow-to-x: -36px; }
+.onb-ambient[data-motion-y="1"] { --onb-flow-from-y: -12px; --onb-flow-to-y: 36px; }
+.onb-ambient[data-motion-y="-1"] { --onb-flow-from-y: 12px; --onb-flow-to-y: -36px; }
 .onb-ambient img { width: 180px; opacity: .48; filter: invert(29%) sepia(99%) saturate(4474%) hue-rotate(219deg) brightness(98%) contrast(104%); animation: onb-ambient-flow 5s linear both; }
 
 .onb-shell { --paper: #fafaf8; --ink: #101114; --quiet: #62676f; --blue: #004cfc; --rule: #e7e8e5; position: relative; min-height: 100vh; overflow: hidden; color: var(--ink); background: var(--paper); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
@@ -52,9 +57,10 @@ button, input, textarea { font: inherit; }
 .onb-haze { position: absolute; width: 420px; height: 300px; border: 1px solid rgba(0, 76, 252, .1); border-radius: 45% 55% 52% 48%; background: rgba(0, 76, 252, .035); pointer-events: none; animation-play-state: paused; }.onb-shell[data-haze-motion="true"] .onb-haze { animation: onb-haze-drift 12s cubic-bezier(.25, 1, .5, 1) infinite alternate; }.onb-haze--one { top: 12%; left: -260px; }.onb-haze--two { right: -270px; bottom: 10%; opacity: .7; animation-delay: -6s; }
 @keyframes onb-wave-inward { 0% { opacity: 0; } 16% { opacity: .58; } 78% { opacity: .45; transform: translate3d(0,0,0) scale(.62); } 100% { opacity: 0; transform: translate3d(0,0,0) scale(.48); } }
 @keyframes onb-mark-arrive { 0%, 62% { opacity: 0; transform: scale(.78); } 78%, 100% { opacity: 1; transform: scale(1); } }
-@keyframes onb-ambient-flow { from { transform: translate3d(-10px, 0, 0) rotate(-5deg); } to { transform: translate3d(10px, 0, 0) rotate(5deg); } }
+@keyframes onb-ambient-flow { 0% { opacity: 0; transform: translate3d(var(--onb-flow-from-x), var(--onb-flow-from-y), 0); } 18% { opacity: .48; } 82% { opacity: .42; transform: translate3d(var(--onb-flow-to-x), var(--onb-flow-to-y), 0); } 100% { opacity: 0; transform: translate3d(var(--onb-flow-to-x), var(--onb-flow-to-y), 0); } }
 @keyframes onb-stage-in { from { opacity: 0; transform: translate3d(0, 8px, 0); } to { opacity: 1; transform: translate3d(0, 0, 0); } }
 @keyframes onb-haze-drift { from { transform: translate3d(-14px, -8px, 0) rotate(-5deg); } to { transform: translate3d(24px, 14px, 0) rotate(7deg); } }
-@media (prefers-reduced-motion: reduce) { .onb-cinematic__wave, .onb-ambient img, .onb-haze { animation: none; }.onb-cinematic__wave, .onb-ambient img { display: none; }.onb-cinematic__mark { animation: onb-reduced-fade 220ms linear both; }.onb-stage { animation: onb-reduced-fade 180ms linear both; } }
+@media (prefers-reduced-motion: reduce) { .onb-cinematic__wave, .onb-ambient img, .onb-haze { animation: none; }.onb-cinematic__wave, .onb-ambient img { transform: none; animation: onb-reduced-current-fade 200ms linear both; }.onb-cinematic__mark { animation: onb-reduced-fade 220ms linear both; }.onb-stage { animation: onb-reduced-fade 180ms linear both; } }
+@keyframes onb-reduced-current-fade { from { opacity: 0; } to { opacity: .48; } }
 @keyframes onb-reduced-fade { from { opacity: 0; } to { opacity: 1; } }
 @media (max-width: 760px) { .onb-layout { grid-template-columns: 1fr; }.onb-gate { min-height: 280px; padding: 34px; border-top: 1px solid var(--rule); border-left: 0; }.onb-gate__media { min-height: 210px; }.onb-copy { padding: 54px 30px; }.onb-stage h1 { font-size: 48px; } }
