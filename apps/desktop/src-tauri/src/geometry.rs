@@ -13,7 +13,7 @@ pub use shogun_core::notch::geometry::{
 };
 
 #[cfg(target_os = "macos")]
-pub use mac::{read_primary, ScreenGeometry};
+pub use mac::{read_main_display_id, read_primary, ScreenGeometry};
 
 #[cfg(target_os = "macos")]
 pub mod mac {
@@ -42,6 +42,8 @@ pub mod mac {
         pub regions: Regions,
         /// Number of attached displays (recorded with each expand-latency sample).
         pub display_count: u32,
+        /// AppKit backing scale for this display.
+        pub scale_factor: f64,
     }
 
     /// Read the main screen (must be called on the main thread — pass the `MainThreadMarker`
@@ -110,7 +112,15 @@ pub mod mac {
             activation,
             regions: regs,
             display_count,
+            scale_factor: screen.backingScaleFactor(),
         })
+    }
+
+    pub fn read_main_display_id(mtm: MainThreadMarker) -> Option<u32> {
+        let display_count = NSScreen::screens(mtm).len() as u32;
+        NSScreen::mainScreen(mtm)
+            .and_then(|screen| geometry_for(&screen, display_count))
+            .map(|geometry| geometry.display_id)
     }
 
     pub fn read_primary(mtm: MainThreadMarker) -> Option<ScreenGeometry> {

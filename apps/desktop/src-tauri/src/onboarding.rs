@@ -537,8 +537,7 @@ pub mod mac {
     };
     use crate::permissions::PermissionSnapshot;
 
-    /// Window label for the onboarding webview. Shared by the builder, the watcher (to detect the
-    /// window closing) and the completion write (to close it).
+    /// Stable label for interactive onboarding. Cinematic surfaces use generation-scoped labels.
     pub const ONBOARDING_LABEL: &str = "onboarding";
 
     fn permission_gate_blocks(
@@ -575,6 +574,32 @@ pub mod mac {
                 path,
                 write_blocked,
             }))
+        }
+
+        pub(crate) fn snapshot(&self) -> Result<OnboardingState, String> {
+            self.0
+                .lock()
+                .map(|owner| owner.current.clone())
+                .map_err(|_| "onboarding state unavailable".to_owned())
+        }
+
+        pub(crate) fn mark_intro_complete(
+            &self,
+            expected_revision: u64,
+        ) -> Result<OnboardingState, String> {
+            let mut owner = self
+                .0
+                .lock()
+                .map_err(|_| "onboarding state unavailable".to_owned())?;
+            if owner.current.intro_complete {
+                return Ok(owner.current.clone());
+            }
+            let mut next = owner.current.clone();
+            next.revision = expected_revision
+                .checked_add(1)
+                .ok_or_else(|| "onboarding revision exhausted".to_owned())?;
+            next.intro_complete = true;
+            owner.persist(expected_revision, next)
         }
     }
 
@@ -1005,6 +1030,7 @@ pub mod mac {
             )?;
             owner.persist(expected_revision, next)?.revision
         };
+        crate::onboarding_windows::mac::cleanup(&app);
         let arguments = std::env::args_os().skip(1).collect::<Vec<_>>();
         let launch = launch_then_exit_with(
             &executable,
@@ -1097,9 +1123,7 @@ pub mod mac {
         // SHOGUN_FORCE_ONBOARDING QA hatch on an already-completed machine) must still be able to
         // leave through the same door.
         if next.completed {
-            if let Some(win) = app.get_webview_window(ONBOARDING_LABEL) {
-                let _ = win.close();
-            }
+            crate::onboarding_windows::mac::cleanup(&app);
         }
         Ok(next)
     }
@@ -1111,6 +1135,10 @@ pub mod mac {
     /// the poll (which uses the silent check).
     #[tauri::command]
     pub fn open_accessibility_settings(app: AppHandle) -> Result<(), String> {
+        crate::onboarding_windows::mac::prepare_for_external_permission_ui(
+            &app,
+            crate::onboarding_windows::ExternalPermissionKind::Accessibility,
+        )?;
         crate::permissions::mac::request_accessibility(&app)
     }
 
@@ -1118,6 +1146,10 @@ pub mod mac {
     /// determined; denied/restricted states go straight to the exact repair pane.
     #[tauri::command]
     pub fn request_microphone_permission(app: AppHandle) -> Result<(), String> {
+        crate::onboarding_windows::mac::prepare_for_external_permission_ui(
+            &app,
+            crate::onboarding_windows::ExternalPermissionKind::Microphone,
+        )?;
         crate::permissions::mac::request_microphone(&app)
     }
 
@@ -1125,6 +1157,10 @@ pub mod mac {
     /// exact manual repair pane opens when the request does not grant access.
     #[tauri::command]
     pub fn request_screen_recording_permission(app: AppHandle) -> Result<(), String> {
+        crate::onboarding_windows::mac::prepare_for_external_permission_ui(
+            &app,
+            crate::onboarding_windows::ExternalPermissionKind::ScreenRecording,
+        )?;
         crate::permissions::mac::request_screen_recording(&app)
     }
 
@@ -1163,89 +1199,11 @@ pub mod mac {
         crate::permissions::mac::start(app)
     }
 
-    /// Build the onboarding window (a plain centered window) and start the permission watcher.
-    /// Idempotent: if the window already exists it is just focused.
+    /// Start or focus the native generation-owned onboarding window session.
     pub fn build_onboarding_window(app: &AppHandle) {
-        if let Some(win) = app.get_webview_window(ONBOARDING_LABEL) {
-            let _ = win.set_focus();
-            return;
+        if let Err(error) = crate::onboarding_windows::mac::start(app) {
+            eprintln!("[onboarding] window session failed: {error}");
         }
-        let builder = tauri::WebviewWindowBuilder::new(
-            app,
-            ONBOARDING_LABEL,
-            tauri::WebviewUrl::App("onboarding.html".into()),
-        )
-        .title("ShogunAI")
-        .inner_size(760.0, 700.0)
-        .min_inner_size(680.0, 620.0)
-        .resizable(false)
-        .center()
-        // SHOGUN runs as an Accessory app (prohibited activation, no Dock icon) so the notch panel
-        // can float over other Spaces. A plain window from such an app builds but never comes
-        // forward — it sits behind whatever is focused and the user never sees the guide (observed
-        // on device). Floating level + an explicit show/focus put it in front without promoting the
-        // whole app to a Regular activation policy (which would flash a Dock icon).
-        .always_on_top(true)
-        .focused(true);
-        match builder.build() {
-            Ok(win) => {
-                eprintln!("[onboarding] window built");
-                let _ = win.show();
-                let _ = win.set_focus();
-                float_over_all_spaces(&win);
-                crate::permission_drag::install_monitor(app);
-                if let Some(generation) = start_watcher(app.clone()) {
-                    let stop_app = app.clone();
-                    win.on_window_event(move |event| {
-                        if matches!(event, tauri::WindowEvent::Destroyed) {
-                            crate::permissions::mac::stop(&stop_app, generation);
-                        }
-                    });
-                }
-            }
-            Err(e) => eprintln!("[onboarding] window build failed: {e}"),
-        }
-    }
-
-    /// Make the onboarding window join every Space and float over full-screen apps — the same
-    /// NSWindow recipe the notch panel uses (`float_on_all_spaces` in lib.rs), applied to the plain
-    /// window directly with NO window-class swap (a swap blanks the wry webview on device). Without
-    /// it the guide is invisible while a full-screen app (e.g. a full-screen video call) is
-    /// frontmost — exactly when a first-run user most needs to see it (observed on device). Main
-    /// thread (setup).
-    fn float_over_all_spaces(win: &tauri::WebviewWindow) {
-        use objc2::msg_send;
-        use objc2::runtime::AnyObject;
-
-        // canJoinAllSpaces (1<<0) | fullScreenAuxiliary (1<<8) = 257. fullScreenAuxiliary is the
-        // bit that lets a non-full-screen window appear over another app's full-screen Space.
-        const BEHAVIOR: usize = (1 << 0) | (1 << 8);
-        const LEVEL: isize = crate::OVERLAY_LEVEL; // mainMenu+3 — notch residency
-
-        let ptr = match win.ns_window() {
-            Ok(p) if !p.is_null() => p as *mut AnyObject,
-            Ok(_) => {
-                eprintln!("[onboarding] ns_window null — cannot float over all spaces");
-                return;
-            }
-            Err(e) => {
-                eprintln!("[onboarding] ns_window unavailable: {e}");
-                return;
-            }
-        };
-
-        // SAFETY: `ptr` is the live NSWindow owned by Tauri, messaged synchronously on the main
-        // thread. Each setter takes a scalar (NSUInteger / NSInteger / BOOL) and returns void.
-        unsafe {
-            let _: () = msg_send![ptr, setCollectionBehavior: BEHAVIOR];
-            let _: () = msg_send![ptr, setLevel: LEVEL];
-            // Accessory app: without this the window is ordered out the moment the app deactivates
-            // (a full-screen app staying frontmost), which is the whole bug.
-            let _: () = msg_send![ptr, setHidesOnDeactivate: false];
-            // Accessory apps don't auto-show their windows; force it visible even while inactive.
-            let _: () = msg_send![ptr, orderFrontRegardless];
-        }
-        eprintln!("[onboarding] floating over all spaces (behavior={BEHAVIOR} level={LEVEL})");
     }
 
     /// Whether to open onboarding. First-run resumes normally. A completed setup that loses any
@@ -1273,7 +1231,7 @@ pub mod mac {
         use super::{
             atomic_save_with, clear_failed_restart_marker, consume_restart_marker,
             launch_then_exit_with, load_and_migrate_path, permission_gate_blocks, restart_marker,
-            unsupported_version_at_path, validate_packaged_executable, StateOwner,
+            unsupported_version_at_path, validate_packaged_executable, StateOwner, Store,
         };
         use crate::onboarding::state::{self, OnboardingState, OnboardingStep};
 
@@ -1308,6 +1266,24 @@ pub mod mac {
             );
             assert!(owner.persist(0, stale).is_err());
             assert_eq!(owner.current.revision, 1);
+            let _ = std::fs::remove_dir_all(path.parent().expect("parent"));
+        }
+
+        #[test]
+        fn intro_completion_uses_store_revision_and_persists_once() {
+            let path = test_path("onboarding.json");
+            let store = Store(std::sync::Mutex::new(StateOwner {
+                current: OnboardingState::default(),
+                path: Some(path.clone()),
+                write_blocked: false,
+            }));
+            let saved = store.mark_intro_complete(0).expect("intro save");
+            assert!(saved.intro_complete);
+            assert_eq!(saved.revision, 1);
+            let same = store.mark_intro_complete(1).expect("idempotent intro save");
+            assert_eq!(same.revision, 1);
+            let loaded = load_and_migrate_path(&path);
+            assert!(loaded.intro_complete);
             let _ = std::fs::remove_dir_all(path.parent().expect("parent"));
         }
 

@@ -72,6 +72,25 @@ export interface OnboardingState {
   permissions_repair?: boolean;
 }
 
+export interface OnboardingWindowSurface {
+  surface: "main" | "ambient" | "interactive";
+  generation: number;
+  display_id: number;
+  label: string;
+}
+
+/** Native-owned surface identity. Query parameters select initial route; this typed answer fences
+ * delayed frontend work to exact window-session generation. */
+export function onboardingWindowSurface(
+  expectedGeneration: number,
+): Promise<OnboardingWindowSurface | null> {
+  return ask<OnboardingWindowSurface | null>(
+    "onboarding_window_surface",
+    { expectedGeneration },
+    null,
+  );
+}
+
 /** Side-effect-free status for every capability required by the first-run permission center. */
 export interface PermissionSnapshot {
   accessibility: boolean;

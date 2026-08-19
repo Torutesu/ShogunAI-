@@ -46,6 +46,8 @@ mod notch_exec;
 mod notch_status_visibility;
 mod onboarding;
 #[cfg(target_os = "macos")]
+mod onboarding_windows;
+#[cfg(target_os = "macos")]
 mod permission_drag;
 mod permissions;
 #[cfg(target_os = "macos")]
@@ -376,6 +378,7 @@ pub fn run() {
             onboarding::mac::open_accessibility_settings,
             onboarding::mac::request_microphone_permission,
             onboarding::mac::request_screen_recording_permission,
+            onboarding_windows::mac::onboarding_window_surface,
             permission_drag::arm_permission_app_drag,
             permission_drag::disarm_permission_app_drag,
             startup_health::mac::startup_health,
@@ -673,6 +676,7 @@ fn setup_macos(app: &tauri::App) {
     app.manage(permissions::mac::PermissionRuntime::default());
     permissions::mac::install_activation_observer(app);
     app.manage(onboarding::mac::Store::load(app.handle()));
+    app.manage(onboarding_windows::mac::OnboardingWindowRuntime::default());
     if onboarding::mac::should_show_onboarding(app.handle()) {
         onboarding::mac::build_onboarding_window(app.handle());
     }
@@ -1701,7 +1705,6 @@ fn adopt_native_panel(win: &tauri::WebviewWindow) {
              frame={:.0},{:.0} {:.0}x{:.0} (want level {OVERLAY_LEVEL}=mainMenu+3)",
             pf.origin.x, pf.origin.y, pf.size.width, pf.size.height
         );
-
     }
 }
 
