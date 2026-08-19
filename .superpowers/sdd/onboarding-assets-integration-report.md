@@ -88,7 +88,7 @@ git diff --check
 
 ## Commit
 
-`6c30ac3` (`chore(desktop): add licensed onboarding assets`). Report content is amended in this commit to record final hash.
+`cb36571736a5572333f399e80deee4d514f39ed6` (`chore(desktop): add licensed onboarding assets`). This is asset commit; report hash correction follows as task documentation commit.
 
 ## Concerns
 
