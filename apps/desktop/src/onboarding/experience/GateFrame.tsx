@@ -13,7 +13,6 @@ export function GateFrame(props: { complete?: boolean; variant?: "frame" | "full
           alt={t.onboarding.gateAlt}
           width="1024"
           height="1536"
-          fetchPriority="high"
         />
       </div>
       <div className="onb-gate__legend">
