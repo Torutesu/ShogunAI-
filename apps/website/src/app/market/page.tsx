@@ -3,9 +3,10 @@ import { ArrowUpRight } from 'lucide-react';
 import { CTA } from '@/components/sections/CTA';
 import { PageHeader, PageShell } from '@/components/PageShell';
 import { JsonLd, breadcrumbSchema } from '@/components/seo/JsonLd';
-import { Card } from '@/components/ui/card';
+import { PostCard } from '@/components/PostCard';
 import { getI18n } from '@/i18n/server';
 import { isLocale } from '@/i18n/config';
+import { getPost } from '@/lib/blog';
 import { localizedAlternates, siteConfig } from '@/lib/site';
 
 export const metadata: Metadata = {
@@ -15,29 +16,15 @@ export const metadata: Metadata = {
   alternates: { canonical: '/en/market', languages: localizedAlternates('/market') },
 };
 
-/** Shared, locale-independent attribution for each quote card. */
-const QUOTES = [
-  {
-    firm: 'Andreessen Horowitz',
-    mark: 'a16z',
-    name: 'Jason Cui & Jennifer Li',
-    source: 'Your Data Agents Need Context',
-    href: 'https://a16z.com/your-data-agents-need-context/',
-  },
-  {
-    firm: 'Emergence Capital',
-    mark: 'EC',
-    name: 'Gordon Ritter',
-    source: 'AI Coaching Networks',
-    href: 'https://www.emcap.com/conviction-areas/ai-coaching-networks',
-  },
-  {
-    firm: 'Kindred Ventures',
-    mark: 'KV',
-    name: 'Kindred Ventures',
-    source: 'Building the Memory Infrastructure for Personalized AI',
-    href: 'https://kindredventures.com/announcement/mem0-building-the-memory-infrastructure-for-personalized-ai/',
-  },
+/**
+ * Our own pieces on this category, newest thinking first. Everything the cards
+ * show (title, description, cover, reading time) comes from the posts
+ * themselves via `getPost`, so editing an article updates this page too.
+ */
+const FEATURED_SLUGS = [
+  'altman-on-forgetting',
+  'garry-tan-own-your-intelligence',
+  'seci-for-the-ai-native-individual',
 ] as const;
 
 const SOURCES = [
@@ -56,14 +43,9 @@ const content = {
     title: 'Memory and context are becoming their own market.',
     lead: [
       'For most of the last two years the bottleneck was the model. It isn’t any more. The funds backing agent infrastructure have converged on a different constraint: an agent is only as useful as the context it can reach, and almost nobody’s context is reachable.',
-      'What follows is public commentary about that category — not an endorsement of ShogunAI. We collect it because outside observers keep describing, in their own words, the two halves of the thing we are building: memory that captures your day, and execution that acts on it.',
+      'So we wrote down our own reading of it. Three pieces: a diagnosis from the CEO holding the most powerful model, a prescription from the president of Y Combinator, and a thirty-year-old theory of knowledge creation that only now has the tooling it always assumed. Each arrives at the same place from a different direction.',
     ],
-    quotesLabel: 'What investors are saying about the category',
-    quotes: [
-      '“A new category of company has emerged that is building context layers from the ground up.”',
-      '“The future of software is driven by human brilliance, with AI in the back seat.”',
-      '“Memory is the engine that makes personalization possible.”',
-    ],
+    featuredLabel: 'Our reading of the category',
     signalsLabel: 'Signals',
     signals: [
       ['$24M', 'Mem0’s Series A', 'Raised to build a dedicated memory layer for AI agents — led by Basis Set, with Kindred, Peak XV, GitHub Fund and Y Combinator.'],
@@ -80,22 +62,16 @@ const content = {
     ],
     readMore: 'Read the full sourced write-up',
     notesLabel: 'On sourcing',
-    notesBody: 'Every quote on this page is taken from a public post or press release by the firm named, and each card links to its source. These are investor theses about where the market is going — opinions about the future, not settled facts — and none of them are statements about ShogunAI.',
-    translationNote: '',
+    notesBody: 'Every quote on this page is taken from a public post or press release by the firm named, and the full list of sources is below. These are investor theses about where the market is going — opinions about the future, not settled facts — and none of them are statements about ShogunAI.',
   },
   ja: {
     eyebrow: '市場',
     title: 'メモリと文脈は、ひとつの市場になりつつある。',
     lead: [
       'この2年ほど、ボトルネックはモデルでした。もうそうではありません。エージェント基盤に出資するファンドの視線は、別の制約に集まっています ── エージェントの有用性は、届く文脈の広さで決まる。そして、ほとんどの人の文脈はどこにも届いていない。',
-      '以下は、そのカテゴリについて公開されている第三者の発言であり、ShogunAI への推薦ではありません。それでもここに並べているのは、外から見た人たちが、私たちの作っているものの両輪 ── 一日を記憶するメモリと、それに基づいて動く実行 ── を、それぞれの言葉で説明し続けているからです。',
+      'そこで、私たち自身の読み方を記事にしました。最も強力なモデルを持つ会社のCEOが下した診断、Y Combinator の社長が出した処方、そして前提としていた道具がようやく揃った30年前の知識創造理論 ── この3本です。どれも違う方向から、同じ場所に着きます。',
     ],
-    quotesLabel: '投資家がこのカテゴリについて語っていること',
-    quotes: [
-      '「文脈レイヤーをゼロから作る、新しいカテゴリの企業が現れている。」',
-      '「ソフトウェアの未来を動かすのは人間の才気であり、AI は後部座席にいる。」',
-      '「パーソナライゼーションを可能にするエンジン、それがメモリだ。」',
-    ],
+    featuredLabel: '私たちのこのカテゴリの読み方',
     signalsLabel: 'シグナル',
     signals: [
       ['$24M', 'Mem0 のシリーズA', 'AIエージェント向けの専用メモリレイヤーを作るための調達。Basis Set がリードし、Kindred、Peak XV、GitHub Fund、Y Combinator が参加。'],
@@ -112,22 +88,16 @@ const content = {
     ],
     readMore: '出典つきの詳しい記事を読む',
     notesLabel: '出典について',
-    notesBody: 'このページの引用はすべて、記載した各社の公開記事やプレスリリースからのもので、各カードから出典に移動できます。いずれも市場の行き先についての投資家の仮説 ── 将来についての意見であって、確定した事実ではありません ── であり、ShogunAI について述べたものではありません。',
-    translationNote: '引用は英語の原文を訳したものです。原文は各カードのリンク先で確認できます。',
+    notesBody: 'このページの引用はすべて、記載した各社の公開記事やプレスリリースからのもので、出典は下にすべて挙げています。いずれも市場の行き先についての投資家の仮説 ── 将来についての意見であって、確定した事実ではありません ── であり、ShogunAI について述べたものではありません。',
   },
   es: {
     eyebrow: 'Mercado',
     title: 'La memoria y el contexto se están convirtiendo en un mercado propio.',
     lead: [
       'Durante casi dos años el cuello de botella fue el modelo. Ya no lo es. Los fondos que financian la infraestructura de agentes han convergido en otra restricción: un agente sirve tanto como el contexto que alcanza, y casi nadie tiene su contexto al alcance.',
-      'Lo que sigue son comentarios públicos sobre esa categoría, no un respaldo a ShogunAI. Los recogemos porque observadores externos describen, con sus propias palabras, las dos mitades de lo que estamos construyendo: memoria que captura tu día y ejecución que actúa sobre ella.',
+      'Así que escribimos nuestra propia lectura. Tres piezas: el diagnóstico del CEO que tiene el modelo más potente, la receta del presidente de Y Combinator y una teoría de creación de conocimiento de hace treinta años que por fin dispone de las herramientas que siempre dio por supuestas. Las tres llegan al mismo sitio por caminos distintos.',
     ],
-    quotesLabel: 'Lo que dicen los inversores sobre la categoría',
-    quotes: [
-      '«Ha surgido una nueva categoría de empresas que construye capas de contexto desde cero.»',
-      '«El futuro del software lo impulsa el talento humano, con la IA en el asiento trasero.»',
-      '«La memoria es el motor que hace posible la personalización.»',
-    ],
+    featuredLabel: 'Nuestra lectura de la categoría',
     signalsLabel: 'Señales',
     signals: [
       ['$24M', 'Serie A de Mem0', 'Levantada para construir una capa de memoria dedicada a agentes de IA — liderada por Basis Set, con Kindred, Peak XV, GitHub Fund e Y Combinator.'],
@@ -144,22 +114,16 @@ const content = {
     ],
     readMore: 'Leer el análisis completo con fuentes',
     notesLabel: 'Sobre las fuentes',
-    notesBody: 'Cada cita procede de una publicación o nota de prensa pública de la firma citada, y cada tarjeta enlaza a su fuente. Son tesis de inversores sobre hacia dónde va el mercado — opiniones sobre el futuro, no hechos establecidos — y ninguna se refiere a ShogunAI.',
-    translationNote: 'Las citas están traducidas del inglés original; el enlace de cada tarjeta lleva al texto original.',
+    notesBody: 'Cada cita procede de una publicación o nota de prensa pública de la firma citada, y la lista completa de fuentes está abajo. Son tesis de inversores sobre hacia dónde va el mercado — opiniones sobre el futuro, no hechos establecidos — y ninguna se refiere a ShogunAI.',
   },
   de: {
     eyebrow: 'Markt',
     title: 'Memory und Kontext werden zu einem eigenen Markt.',
     lead: [
       'Fast zwei Jahre lang war das Modell der Engpass. Das ist vorbei. Die Fonds, die Agenten-Infrastruktur finanzieren, sind sich über eine andere Grenze einig: Ein Agent ist nur so nützlich wie der Kontext, den er erreicht — und kaum jemandes Kontext ist erreichbar.',
-      'Was folgt, sind öffentliche Aussagen über diese Kategorie, keine Empfehlung für ShogunAI. Wir sammeln sie, weil Außenstehende immer wieder in eigenen Worten die zwei Hälften dessen beschreiben, was wir bauen: ein Gedächtnis, das deinen Tag erfasst, und eine Ausführung, die darauf handelt.',
+      'Also haben wir unsere eigene Lesart aufgeschrieben. Drei Texte: die Diagnose des CEO mit dem stärksten Modell, das Rezept des Y-Combinator-Präsidenten und eine dreißig Jahre alte Theorie der Wissensschaffung, die erst jetzt das Werkzeug hat, das sie immer voraussetzte. Alle drei kommen aus verschiedenen Richtungen am selben Punkt an.',
     ],
-    quotesLabel: 'Was Investoren über die Kategorie sagen',
-    quotes: [
-      '„Eine neue Kategorie von Unternehmen ist entstanden, die Kontextebenen von Grund auf baut."',
-      '„Die Zukunft der Software wird von menschlicher Brillanz getrieben, mit der KI auf dem Rücksitz."',
-      '„Memory ist der Motor, der Personalisierung möglich macht."',
-    ],
+    featuredLabel: 'Unsere Lesart der Kategorie',
     signalsLabel: 'Signale',
     signals: [
       ['$24M', 'Series A von Mem0', 'Für eine dedizierte Memory-Ebene für KI-Agenten — angeführt von Basis Set, mit Kindred, Peak XV, GitHub Fund und Y Combinator.'],
@@ -176,8 +140,7 @@ const content = {
     ],
     readMore: 'Die vollständige Analyse mit Quellen lesen',
     notesLabel: 'Zu den Quellen',
-    notesBody: 'Jedes Zitat stammt aus einem öffentlichen Beitrag oder einer Pressemitteilung der genannten Firma; jede Karte verlinkt ihre Quelle. Es sind Investorenthesen über die Richtung des Marktes — Meinungen über die Zukunft, keine gesicherten Fakten — und keine davon handelt von ShogunAI.',
-    translationNote: 'Die Zitate sind aus dem englischen Original übersetzt; der Link jeder Karte führt zum Originaltext.',
+    notesBody: 'Jedes Zitat stammt aus einem öffentlichen Beitrag oder einer Pressemitteilung der genannten Firma; die vollständige Quellenliste steht unten. Es sind Investorenthesen über die Richtung des Marktes — Meinungen über die Zukunft, keine gesicherten Fakten — und keine davon handelt von ShogunAI.',
   },
 } as const;
 
@@ -187,6 +150,7 @@ export default async function MarketPage({ searchParams }: { searchParams: Promi
   const { locale, t } = await getI18n(localeOverride);
   const c = content[locale];
   const prefix = `/${locale}`;
+  const featured = FEATURED_SLUGS.map((slug) => getPost(slug, locale)).filter((post) => post !== null);
 
   return (
     <PageShell locale={locale}>
@@ -199,53 +163,31 @@ export default async function MarketPage({ searchParams }: { searchParams: Promi
 
       <PageHeader eyebrow={c.eyebrow} title={c.title} sub={c.lead[0]} />
 
-      {/* Quote cards */}
-      <section className="py-[clamp(44px,7vw,88px)]">
-        <div className="container-x">
-          <div className="flex items-center gap-5">
-            <p className="shrink-0 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">{c.quotesLabel}</p>
-            <div className="h-px flex-1 bg-border" />
+      {/* Our own writing on this category — the whole card links to the post */}
+      {featured.length > 0 && (
+        <section className="py-[clamp(44px,7vw,88px)]">
+          <div className="container-x">
+            <div className="flex items-center gap-5">
+              <p className="shrink-0 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">{c.featuredLabel}</p>
+              <div className="h-px flex-1 bg-border" />
+            </div>
+            <p className="mt-5 max-w-[76ch] text-[15px] leading-relaxed text-muted">{c.lead[1]}</p>
+            <div className="mt-8 grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+              {featured.map((post) => (
+                <PostCard
+                  key={post.slug}
+                  p={post}
+                  categories={t.blog.categories}
+                  locale={locale}
+                  minRead={t.blog.minRead}
+                  more={t.blog.readMore}
+                  hrefPrefix={prefix}
+                />
+              ))}
+            </div>
           </div>
-          <p className="mt-5 max-w-[76ch] text-[15px] leading-relaxed text-muted">{c.lead[1]}</p>
-          <div className="mt-8 grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-            {QUOTES.map((q, index) => (
-              <Card key={q.href} className="flex flex-col rounded-[26px] p-7">
-                <div className="flex items-start justify-between gap-4">
-                  <span className="flex h-9 items-center rounded-full bg-sky-soft px-3 text-xs font-semibold tracking-tight text-accent">
-                    {q.mark}
-                  </span>
-                  <a
-                    href={q.href}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    aria-label={q.source}
-                    className="text-muted transition-colors hover:text-ink"
-                  >
-                    <ArrowUpRight className="size-5" />
-                  </a>
-                </div>
-                <blockquote className="mt-6 font-display text-[19px] font-medium leading-[1.45] tracking-[-0.01em]">
-                  {c.quotes[index]}
-                </blockquote>
-                <div className="mt-auto pt-6">
-                  <div className="h-px w-full bg-border" />
-                  <p className="mt-4 text-sm font-semibold">{q.name}</p>
-                  {q.firm !== q.name && <p className="mt-0.5 text-[13px] text-muted">{q.firm}</p>}
-                  <a
-                    href={q.href}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="mt-2 block text-[13px] font-medium text-accent"
-                  >
-                    {q.source}
-                  </a>
-                </div>
-              </Card>
-            ))}
-          </div>
-          {c.translationNote && <p className="mt-5 text-xs text-faint">{c.translationNote}</p>}
-        </div>
-      </section>
+        </section>
+      )}
 
       {/* Funding + survey signals */}
       <section className="border-y border-border bg-cloud/45 py-[clamp(44px,7vw,88px)]">
