@@ -598,9 +598,79 @@ pub mod mac {
 
     fn emit(app: &tauri::AppHandle, event: ScribeEvent) {
         use tauri::Emitter;
+        crate::right_option_shortcut::observe_scribe_event(app, &event);
         if let Err(error) = app.emit_to("scribe", "scribe", event) {
             eprintln!("[scribe] status delivery failed: {error}");
         }
+    }
+
+    fn onboarding_seed_fields_match(
+        target_pid: i32,
+        process_pid: i32,
+        original_value: &str,
+        selected_text: &str,
+        target_range: CFRange,
+        context_before: &str,
+        seeded_text: &str,
+    ) -> bool {
+        target_pid == process_pid
+            && original_value == seeded_text
+            && selected_text == seeded_text
+            && target_range.location == 0
+            && usize::try_from(target_range.length).ok() == Some(seeded_text.encode_utf16().count())
+            && context_before == seeded_text
+    }
+
+    /// Prove the double-tap captured this process's exact seeded textarea and its full selection.
+    /// Text never leaves this native check; onboarding events contain only session/outcome ids.
+    pub(crate) fn onboarding_source_matches(session_id: u64, seeded_text: &str) -> bool {
+        let Ok(sessions) = SESSION.lock() else {
+            return false;
+        };
+        let Some(session) = sessions
+            .as_ref()
+            .filter(|session| session.active && session.id == session_id)
+        else {
+            return false;
+        };
+        let Some(target) = session.target.as_ref() else {
+            return false;
+        };
+        let Ok(snapshot) = target.snapshot.lock() else {
+            return false;
+        };
+        onboarding_seed_fields_match(
+            target.pid,
+            std::process::id() as i32,
+            &snapshot.original_value,
+            &snapshot.selected_text,
+            snapshot.target_range,
+            &session.context.before,
+            seeded_text,
+        )
+    }
+
+    /// Re-read the retained AX element after insertion. This catches a controlled webview render
+    /// overwriting the native commit before onboarding treats Scribe as complete.
+    pub(crate) fn onboarding_insert_readback_matches(session_id: u64) -> bool {
+        let Ok(sessions) = SESSION.lock() else {
+            return false;
+        };
+        let Some(session) = sessions.as_ref().filter(|session| {
+            session.active && session.id == session_id && session.phase == "inserted"
+        }) else {
+            return false;
+        };
+        let Some(target) = session.target.as_ref() else {
+            return false;
+        };
+        let Ok(snapshot) = target.snapshot.lock() else {
+            return false;
+        };
+        target.pid == std::process::id() as i32
+            && snapshot.original_value == session.context.before
+            && unsafe { copy_string(target.element, kAXValueAttribute) }.as_deref()
+                == Some(snapshot.original_value.as_str())
     }
 
     fn memory_for(db: &Db, warm: Option<ReplyContext>) -> Vec<String> {
@@ -1039,6 +1109,38 @@ pub mod mac {
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        #[test]
+        fn onboarding_seed_accepts_own_process_and_full_utf16_selection() {
+            let seed = "rough 😀 note";
+            let full_range = CFRange::init(0, seed.encode_utf16().count() as isize);
+            assert!(onboarding_seed_fields_match(
+                42, 42, seed, seed, full_range, seed, seed
+            ));
+        }
+
+        #[test]
+        fn onboarding_seed_rejects_foreign_process() {
+            let seed = "rough 😀 note";
+            let full_range = CFRange::init(0, seed.encode_utf16().count() as isize);
+            assert!(!onboarding_seed_fields_match(
+                7, 42, seed, seed, full_range, seed, seed
+            ));
+        }
+
+        #[test]
+        fn onboarding_seed_uses_utf16_selection_length() {
+            let seed = "rough 😀 note";
+            assert!(!onboarding_seed_fields_match(
+                42,
+                42,
+                seed,
+                seed,
+                CFRange::init(0, seed.chars().count() as isize),
+                seed,
+                seed,
+            ));
+        }
 
         #[test]
         fn utf16_replacement_handles_non_bmp_text() {
