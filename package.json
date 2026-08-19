@@ -9,6 +9,7 @@
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
+    "desktop:onboarding:qa": "bash scripts/dev_onboarding_qa.sh",
     "web:dev": "pnpm --filter @shogun-ai/website dev",
     "web:build": "pnpm --filter @shogun-ai/website build"
   },

@@ -119,7 +119,7 @@ Live checklist, updated after reviewed commits:
 - [ ] Gate-opening video and final gate assets — deferred until assets are supplied
 - [ ] Signed packaged one/two/three-display TCC qualification — deferred for now
 
-Testing note: launch with `SHOGUN_FORCE_ONBOARDING=1` while onboarding is under active QA. Remove the forced environment variable before release validation; persisted production completion behavior remains unchanged.
+Testing note: run `pnpm desktop:onboarding:qa` while onboarding is under active QA. Each manual QA launch resets Accessibility, Microphone, and Screen Recording, then forces onboarding. An onboarding-triggered Restart bypasses the wrapper so a newly granted Screen Recording permission survives. Normal and release launch behavior remains unchanged.
 
 Each task receives a fresh implementer, task-scoped review, and fix loop before the next task starts.
 
