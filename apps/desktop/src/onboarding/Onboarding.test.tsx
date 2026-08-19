@@ -119,6 +119,25 @@ describe("cinematic onboarding", () => {
     expect(screen.getByRole("button", { name: "Unmute" }).getAttribute("aria-pressed")).toBe("true");
   });
 
+  it("serializes Mute clicks while the native CAS is pending", async () => {
+    let resolveMute: ((saved: ReturnType<typeof state>) => void) | undefined;
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "onboarding_state") return state("welcome", 4);
+      if (command === "permission_status" || command === "permission_listener_ready") return emptyPermissions;
+      if (command === "set_onboarding_music_muted") return new Promise<ReturnType<typeof state>>((resolve) => { resolveMute = resolve; });
+      if (command === "onboarding_event") return undefined;
+      throw new Error(`unexpected command: ${command}`);
+    });
+    render(<Onboarding />);
+    const mute = await screen.findByRole("button", { name: "Mute" });
+    fireEvent.click(mute);
+    expect((mute as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(mute);
+    expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === "set_onboarding_music_muted")).toHaveLength(1);
+    resolveMute?.({ ...state("welcome", 5), music_muted: true });
+    expect((await screen.findByRole("button", { name: "Unmute" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
   it("keeps native Mute available during the cinematic surface", async () => {
     window.history.replaceState({}, "", "/onboarding.html?surface=main&generation=9");
     vi.mocked(invoke).mockImplementation(async (command) => {

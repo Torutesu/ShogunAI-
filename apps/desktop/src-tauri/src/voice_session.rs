@@ -993,21 +993,49 @@ pub mod mac {
         Ok(audio)
     }
 
-    fn stop_cancelled_audio(audio: voice_lane::Handle) {
+    fn stop_cancelled_audio(app: &AppHandle, audio: voice_lane::Handle) {
         let retained = Arc::new(Mutex::new(Some(audio)));
         let worker = Arc::clone(&retained);
+        let worker_app = app.clone();
         let spawned = std::thread::Builder::new()
             .name("voice-cancel".into())
             .spawn(move || {
                 if let Some(audio) = worker.lock().ok().and_then(|mut audio| audio.take()) {
-                    let _ = voice_lane::stop(audio);
+                    stop_then_resume_music(
+                        || {
+                            let _ = voice_lane::stop(audio);
+                        },
+                        || {
+                            let _ = crate::onboarding_music::mac::voice_capture_changed(
+                                &worker_app,
+                                Some(false),
+                            );
+                        },
+                    );
                 }
             });
         if spawned.is_err() {
             if let Some(audio) = retained.lock().ok().and_then(|mut audio| audio.take()) {
-                let _ = voice_lane::stop(audio);
+                stop_then_resume_music(
+                    || {
+                        let _ = voice_lane::stop(audio);
+                    },
+                    || {
+                        let _ =
+                            crate::onboarding_music::mac::voice_capture_changed(app, Some(false));
+                    },
+                );
             }
         }
+    }
+
+    fn stop_then_resume_music(stop: impl FnOnce(), resume_music: impl FnOnce()) {
+        stop();
+        resume_music();
+    }
+
+    fn music_pause_confirmed(result: Result<(), ()>) -> bool {
+        result.is_ok()
     }
 
     enum DeliveryOutcome {
@@ -1240,13 +1268,21 @@ pub mod mac {
             id
         };
         // This happens while the lane is reserved, before any cue or mic can start.
-        crate::onboarding_music::mac::voice_capture_changed(&app, Some(true));
+        if !music_pause_confirmed(crate::onboarding_music::mac::voice_capture_changed(
+            &app,
+            Some(true),
+        )) {
+            abandon_session(session);
+            let _ = crate::onboarding_music::mac::voice_capture_changed(&app, Some(false));
+            emit_error(&app, "Voice could not safely pause onboarding audio.");
+            return false;
+        }
 
         if register_onboarding_dictation_session(&app, session, target.as_deref())
             == OnboardingTargetRegistration::Rejected
         {
             abandon_session(session);
-            crate::onboarding_music::mac::voice_capture_changed(&app, Some(false));
+            let _ = crate::onboarding_music::mac::voice_capture_changed(&app, Some(false));
             return false;
         }
 
@@ -1266,7 +1302,7 @@ pub mod mac {
                         crate::right_option_shortcut::DictationDemoOutcome::Failed,
                     );
                 });
-                crate::onboarding_music::mac::voice_capture_changed(&app, Some(false));
+                let _ = crate::onboarding_music::mac::voice_capture_changed(&app, Some(false));
                 return false;
             }
         };
@@ -1276,23 +1312,23 @@ pub mod mac {
             Err(_) => {
                 // Lane gone — stop the mic we just opened.
                 let _ = voice_lane::stop(handle);
-                crate::onboarding_music::mac::voice_capture_changed(&app, Some(false));
+                let _ = crate::onboarding_music::mac::voice_capture_changed(&app, Some(false));
                 return false;
             }
         };
         let Some(lane) = lane.as_mut() else {
             let _ = voice_lane::stop(handle);
-            crate::onboarding_music::mac::voice_capture_changed(&app, Some(false));
+            let _ = crate::onboarding_music::mac::voice_capture_changed(&app, Some(false));
             return false;
         };
         let Some(active) = lane.active.as_mut() else {
             let _ = voice_lane::stop(handle);
-            crate::onboarding_music::mac::voice_capture_changed(&app, Some(false));
+            let _ = crate::onboarding_music::mac::voice_capture_changed(&app, Some(false));
             return false;
         };
         if active.id != session || active.phase != SessionPhase::Opening {
             let _ = voice_lane::stop(handle);
-            crate::onboarding_music::mac::voice_capture_changed(&app, Some(false));
+            let _ = crate::onboarding_music::mac::voice_capture_changed(&app, Some(false));
             return false;
         }
         active.audio = Some(handle);
@@ -1344,7 +1380,7 @@ pub mod mac {
             let Some(audio) = active.audio.take() else {
                 lane.active = None;
                 emit_state(&app, "idle", None, None);
-                crate::onboarding_music::mac::voice_capture_changed(&app, Some(false));
+                let _ = crate::onboarding_music::mac::voice_capture_changed(&app, Some(false));
                 return;
             };
             active.phase = SessionPhase::Processing;
@@ -1378,7 +1414,10 @@ pub mod mac {
                     // cue — and only on success: a failure plays its own sound from `emit_error`, and
                     // two cues back to back would say less than either one alone (#49).
                     let stopped = voice_lane::stop(audio);
-                    crate::onboarding_music::mac::voice_capture_changed(&worker_app, Some(false));
+                    let _ = crate::onboarding_music::mac::voice_capture_changed(
+                        &worker_app,
+                        Some(false),
+                    );
                     let transcript = match stopped {
                         TranscriptOutcome::Ok(t) => t,
                         TranscriptOutcome::Empty => {
@@ -1485,7 +1524,7 @@ pub mod mac {
             let audio = shared_audio.lock().ok().and_then(|mut audio| audio.take());
             if let Some(audio) = audio {
                 let _ = voice_lane::stop(audio);
-                crate::onboarding_music::mac::voice_capture_changed(&app, Some(false));
+                let _ = crate::onboarding_music::mac::voice_capture_changed(&app, Some(false));
             }
             let _ = complete_terminal(session, SessionPhase::Processing, || {
                 emit_error(&app, "Voice transcription could not start.");
@@ -1563,7 +1602,7 @@ pub mod mac {
         if !enabled {
             drop(lane);
             if let Some(audio) = cancel_active_session(&app)? {
-                stop_cancelled_audio(audio);
+                stop_cancelled_audio(&app, audio);
             }
             emit_state(&app, "idle", None, None);
             eprintln!("[voice] enabled={enabled}");
@@ -1580,7 +1619,7 @@ pub mod mac {
 
     pub fn cancel_for_restart(app: &AppHandle) -> Result<(), String> {
         if let Some(audio) = cancel_active_session(app)? {
-            stop_cancelled_audio(audio);
+            stop_cancelled_audio(app, audio);
         }
         emit_state(&app, "idle", None, None);
         Ok(())
@@ -1797,6 +1836,22 @@ pub mod mac {
                 onboarding_outcome_for_delivery(&DeliveryOutcome::Inserted),
                 crate::right_option_shortcut::DictationDemoOutcome::Inserted
             );
+        }
+
+        #[test]
+        fn cancelled_audio_resumes_music_only_after_stop() {
+            let events = std::sync::Mutex::new(Vec::new());
+            stop_then_resume_music(
+                || events.lock().expect("events").push("stop"),
+                || events.lock().expect("events").push("resume"),
+            );
+            assert_eq!(*events.lock().expect("events"), ["stop", "resume"]);
+        }
+
+        #[test]
+        fn main_thread_pause_timeout_or_failure_aborts_voice_start() {
+            assert!(!music_pause_confirmed(Err(())));
+            assert!(music_pause_confirmed(Ok(())));
         }
 
         #[test]

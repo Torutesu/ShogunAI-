@@ -31,3 +31,12 @@
 - Mute pauses before the Store CAS/persistence response; a failed CAS restores the prior native state. `Retained<AnyObject>` now has explicit typed main-thread ownership, not a hidden `usize`.
 
 Additional checks: 7 `onboarding_music` Rust tests (poison fail-closed, generation replacement, one player, fixed fade completion), mute CAS test, TypeScript check, and 38 onboarding Vitest cases.
+
+## Second review-fix evidence
+
+- Fade steps are state-owned: mute or voice pause consumes no step; unmute resumes remaining steps and lands exactly at 0.40. A muted launch starts the same full fade only once it is unmuted.
+- Mute CAS and native side effect now share the Store serialization lock. Competing same-revision requests leave the last native action equal to persisted `music_muted`; UI disables Mute while the request is pending.
+- Cancel, disable, dismiss, and restart stop paths call the explicit voice-clear hook only after `voice_lane::stop` returns. Voice start waits for a synchronous native pause confirmation; queue failure or timeout aborts before cue/mic open.
+- Display generation replacement now releases old music before Store lookup; unavailable Store/snapshot cannot strand an old player.
+
+Second-wave checks: 9 music controller tests, competing CAS test, voice cancellation and pause-timeout tests, Cargo check, TSC, and 40 onboarding Vitest cases.

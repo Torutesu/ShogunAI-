@@ -39,6 +39,7 @@ export function Onboarding(): JSX.Element {
   const [state, setState] = useState<OnboardingState | null>(null);
   const [permissions, setPermissions] = useState<PermissionSnapshot>(EMPTY_PERMISSIONS);
   const [surface, setSurface] = useState<OnboardingWindowSurface | null | undefined>(undefined);
+  const [musicPending, setMusicPending] = useState(false);
   const restartAckRevision = useRef<number | null>(null);
   const route = windowRoute();
 
@@ -89,16 +90,21 @@ export function Onboarding(): JSX.Element {
     return true;
   }, [permissions.all_effective, state]);
   const toggleMusic = useCallback(async (): Promise<boolean> => {
-    if (!state) return false;
-    const saved = await setOnboardingMusicMuted(state, !state.music_muted);
-    if (!saved) return false;
-    setState(saved);
-    return true;
-  }, [state]);
+    if (!state || musicPending) return false;
+    setMusicPending(true);
+    try {
+      const saved = await setOnboardingMusicMuted(state, !state.music_muted);
+      if (!saved) return false;
+      setState(saved);
+      return true;
+    } finally {
+      setMusicPending(false);
+    }
+  }, [musicPending, state]);
 
   if (surface === undefined || !state) return <div className="onb-boot" />;
   if (!surface || surface.surface !== route.surface) return <div className="onb-stale" data-testid="stale-surface" />;
-  if (surface.surface === "main") return <CinematicSurface muted={state.music_muted} onToggleMusic={toggleMusic} />;
+  if (surface.surface === "main") return <CinematicSurface muted={state.music_muted} musicPending={musicPending} onToggleMusic={toggleMusic} />;
   if (surface.surface === "ambient") return <AmbientSurface />;
-  return <OnboardingExperience state={state} permissions={permissions} surfaceGeneration={surface.generation} onPersist={persist} onFinish={finish} onToggleMusic={toggleMusic} />;
+  return <OnboardingExperience state={state} permissions={permissions} surfaceGeneration={surface.generation} onPersist={persist} onFinish={finish} onToggleMusic={toggleMusic} musicPending={musicPending} />;
 }

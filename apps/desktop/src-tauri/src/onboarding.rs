@@ -602,15 +602,28 @@ pub mod mac {
             owner.persist(expected_revision, next)
         }
 
-        pub(crate) fn set_music_muted(
+        pub(crate) fn set_music_muted_and_apply(
             &self,
             expected_revision: u64,
             muted: bool,
+            apply: impl FnOnce(bool),
         ) -> Result<OnboardingState, String> {
             let mut owner = self
                 .0
                 .lock()
                 .map_err(|_| "onboarding state unavailable".to_owned())?;
+            let saved = Self::set_music_muted_locked(&mut owner, expected_revision, muted)?;
+            // Keep native playback ordered with the serial Store mutation. A stale caller cannot
+            // apply an older mute result after a newer CAS has persisted.
+            apply(saved.music_muted);
+            Ok(saved)
+        }
+
+        fn set_music_muted_locked(
+            owner: &mut StateOwner,
+            expected_revision: u64,
+            muted: bool,
+        ) -> Result<OnboardingState, String> {
             if owner.current.revision != expected_revision {
                 return Err(format!(
                     "stale onboarding revision: expected {expected_revision}, current {}",
@@ -626,23 +639,6 @@ pub mod mac {
                 .ok_or_else(|| "onboarding revision exhausted".to_owned())?;
             next.music_muted = muted;
             owner.persist(expected_revision, next)
-        }
-
-        pub(crate) fn music_muted_at_revision(
-            &self,
-            expected_revision: u64,
-        ) -> Result<bool, String> {
-            let owner = self
-                .0
-                .lock()
-                .map_err(|_| "onboarding state unavailable".to_owned())?;
-            if owner.current.revision != expected_revision {
-                return Err(format!(
-                    "stale onboarding revision: expected {expected_revision}, current {}",
-                    owner.current.revision
-                ));
-            }
-            Ok(owner.current.music_muted)
         }
     }
 
@@ -946,7 +942,7 @@ pub mod mac {
         Ok(next)
     }
 
-    /// Pause first when muting, then persist through Store's revision CAS.
+    /// Persist through one Store CAS, then make native playback match the saved state exactly.
     #[tauri::command]
     pub fn set_onboarding_music_muted(
         expected_revision: u64,
@@ -954,23 +950,9 @@ pub mod mac {
         app: AppHandle,
         store: tauri::State<'_, Store>,
     ) -> Result<OnboardingState, String> {
-        let was_muted = store.music_muted_at_revision(expected_revision)?;
-        if muted && !was_muted {
-            crate::onboarding_music::mac::set_muted(&app, true);
-        }
-        let saved = match store.set_music_muted(expected_revision, muted) {
-            Ok(saved) => saved,
-            Err(error) => {
-                if muted && !was_muted {
-                    crate::onboarding_music::mac::set_muted(&app, false);
-                }
-                return Err(error);
-            }
-        };
-        if !muted || was_muted {
-            crate::onboarding_music::mac::set_muted(&app, saved.music_muted);
-        }
-        Ok(saved)
+        store.set_music_muted_and_apply(expected_revision, muted, |saved_muted| {
+            crate::onboarding_music::mac::set_muted(&app, saved_muted);
+        })
     }
 
     fn consume_restart_marker(
@@ -1402,13 +1384,40 @@ pub mod mac {
                 path: Some(path.clone()),
                 write_blocked: false,
             }));
-            let muted = store.set_music_muted(0, true).expect("mute save");
+            let muted = store
+                .set_music_muted_and_apply(0, true, |_| {})
+                .expect("mute save");
             assert!(muted.music_muted);
             assert_eq!(muted.revision, 1);
-            assert!(store.music_muted_at_revision(1).expect("saved mute state"));
-            assert!(store.set_music_muted(0, false).is_err());
+            assert!(store.set_music_muted_and_apply(0, false, |_| {}).is_err());
             let reloaded = load_and_migrate_path(&path);
             assert!(reloaded.music_muted);
+            let _ = std::fs::remove_dir_all(path.parent().expect("parent"));
+        }
+
+        #[test]
+        fn competing_same_revision_mute_cas_leaves_native_action_matching_saved_state() {
+            let path = test_path("onboarding.json");
+            let store = std::sync::Arc::new(Store(std::sync::Mutex::new(StateOwner {
+                current: OnboardingState::default(),
+                path: Some(path.clone()),
+                write_blocked: false,
+            })));
+            let actions = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            std::thread::scope(|scope| {
+                for muted in [true, false] {
+                    let store = std::sync::Arc::clone(&store);
+                    let actions = std::sync::Arc::clone(&actions);
+                    scope.spawn(move || {
+                        let _ = store.set_music_muted_and_apply(0, muted, |saved| {
+                            actions.lock().expect("actions").push(saved);
+                        });
+                    });
+                }
+            });
+            let saved = store.snapshot().expect("saved state");
+            assert!(saved.music_muted);
+            assert_eq!(actions.lock().expect("actions").last(), Some(&true));
             let _ = std::fs::remove_dir_all(path.parent().expect("parent"));
         }
 
