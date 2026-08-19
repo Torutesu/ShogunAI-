@@ -35,11 +35,8 @@
     "next": "^16.2.10",
     "next-mdx-remote": "^5.0.0",
     "postgres": "^3.4.5",
-    "posthog-js": "^1.408.1",
-    "posthog-node": "^5.46.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "stripe": "^22.4.0",
     "tailwind-merge": "^2.6.0"
   },
   "devDependencies": {

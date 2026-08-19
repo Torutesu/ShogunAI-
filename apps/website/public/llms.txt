@@ -32,6 +32,7 @@
 - Integrations: /integrations
 - Privacy and security: /security
 - Pricing: /pricing
+- Comparisons: /compare
 - Blog: /blog
 - Localized versions use /en, /ja, /es, or /de before the same path.
 
@@ -40,9 +41,5 @@
 - Product name: ShogunAI
 - Platform: macOS
 - Memory stays local by default
-- Capture reads text through the macOS accessibility layer; no image is stored by default
-- Visual recall is opt-in and off until enabled: only where a window yields no text, a
-  compressed frame is kept locally in the encrypted database for at most 72 hours, then
-  deleted automatically. Frames are never uploaded, and audio is out of scope
 - Connected providers receive only the context required for an enabled request
 - Consequential actions require review

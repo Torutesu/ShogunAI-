@@ -8,8 +8,11 @@ export default function sitemap(): MetadataRoute.Sitemap {
   const staticRoutes = [
     ['', '2026-08-12'],
     ['/blog', '2026-08-12'],
-    ['/blog/category/ideas', '2026-08-17'],
-    ['/blog/category/product', '2026-08-17'],
+    ['/blog/category/ai-memory', '2026-08-12'],
+    ['/blog/category/work-context', '2026-08-12'],
+    ['/blog/category/comparisons', '2026-08-12'],
+    ['/blog/category/privacy', '2026-08-12'],
+    ['/blog/category/product', '2026-08-12'],
     ['/careers', '2026-07-19'],
     ['/about', '2026-07-19'],
     ['/privacy', '2026-07-19'],
@@ -20,6 +23,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
     ['/integrations', '2026-08-15'],
     ['/security', '2026-08-15'],
     ['/pricing', '2026-08-15'],
+    ['/compare', '2026-08-15'],
     ...featurePages.map((page) => [`/features/${page.slug}`, '2026-08-15']),
     ...useCasePages.map((page) => [`/use-cases/${page.slug}`, '2026-08-15']),
   ].map(([path, lastModified]) => ({
@@ -38,7 +42,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
     })),
   );
 
-  const localizedRoutes = ['', '/blog', '/blog/category/ideas', '/blog/category/product']
+  const localizedRoutes = ['', '/blog', '/blog/category/ai-memory', '/blog/category/work-context', '/blog/category/comparisons', '/blog/category/privacy', '/blog/category/product']
     .flatMap((path) => siteConfig.locales.map((locale) => ({
       url: `${base}/${locale}${path}`,
       lastModified: new Date('2026-08-13'),
@@ -52,6 +56,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
     '/integrations',
     '/security',
     '/pricing',
+    '/compare',
     ...featurePages.map((page) => `/features/${page.slug}`),
     ...useCasePages.map((page) => `/use-cases/${page.slug}`),
   ].flatMap((path) => siteConfig.locales.map((locale) => ({

@@ -4,79 +4,16 @@ description: 'Memory is table stakes. Acting on it — across the tools you alre
 date: '2026-07-18'
 category: 'Product'
 author: 'ShogunAI'
-image: '/images/blog/work-context.png'
 ---
 
-Ask most memory products a question and you get a good answer. Then you close
-the window and do the work by hand. The memory was real; the leverage was not.
+Memory is useful only when it reduces the work that follows. The execution layer turns recalled context into a draft, plan, update, or approved tool action while keeping consequential steps visible to the person in control.
 
-The execution layer is the part that closes that gap. ShogunAI reads its own
-memory of your day, notices what it left open, and finishes it — in the tools
-you already use, under rules you can see.
+## From context to action
 
-## Three levels of autonomy
+First, ShogunAI retrieves the relevant decisions, preferences, and source material. It then prepares the next step in the tool where the work belongs. Sending, publishing, changing, or deleting something stays behind an approval gate.
 
-Every action ShogunAI can take is classified before it runs, and the
-classification decides who approves it. There are three levels, and the
-boundaries between them are not tunable by clever prompting.
+## Why approval matters
 
-**Level 1 — it just happens.** Reversible, local, invisible-if-right work.
-Filing a document, tagging a thread, updating an open loop, assembling the
-context for the meeting starting in ten minutes. Nothing at this level is
-visible to another human, and anything at this level can be undone.
+Automation should remove repetition without removing judgment. A good execution layer shows the evidence behind a suggestion, makes the proposed change inspectable, and lets you pause or edit before anything consequential happens.
 
-**Level 2 — it prepares, you glance.** The reply is drafted, the summary is
-written, the update is composed. It sits there finished. You read it, edit it
-if you want, and move on.
-
-**Level 3 — it stops and asks.** Anything another person will see. Sending
-mail, posting a message, creating an event on someone's calendar, writing into
-a shared workspace. These never run on their own, no matter how confident the
-model is or how routine the action looks.
-
-The rule underneath is one sentence: **nothing that leaves your machine for
-another human is ever automatic.** That is a structural property of how actions
-are routed, not a setting we hope you configured correctly. Even when you drive
-ShogunAI through its API instead of its interface, the same classifier and the
-same gates apply — an agent calling in from outside gets no privileges your own
-click would not have.
-
-## Twenty-plus tools, one context
-
-Actions reach your tools through their own APIs, using credentials you granted
-directly and that live in the system keychain. Mail, calendar, chat, docs,
-issue trackers, notes. The integrations are ordinary; what is not ordinary is
-what the agent knows when it uses them.
-
-A generic assistant writing your follow-up knows the thread. ShogunAI writes it
-knowing you promised the deck on Tuesday, that the version you actually shipped
-was v3, that the person you are writing to pushed back on pricing last month,
-and that the thing you both agreed to revisit is still open. Same integration,
-completely different output — because the context was assembled before you
-asked, not after.
-
-## Open loops are the unit of work
-
-Underneath the actions is a small set of state tables the system maintains
-about your work: the people you deal with, the projects you are in, the
-commitments you have made, and the loops still open. Each row carries a link
-to the events that produced it and a confidence score.
-
-That confidence number does real work. A low-confidence belief never gets
-stated as a fact in something you send. It surfaces as a question — "you may
-still owe Mika the revised numbers" — instead of quietly hardening into a
-sentence in an email you are about to approve. Systems that skip this step are
-the ones that hallucinate with your name in the signature.
-
-## What you can check afterward
-
-Every action writes a record: what ran, at which level, on what evidence,
-what left the machine and where it went. The traceability view is not a
-compliance checkbox. It is the thing that makes level 1 acceptable at all —
-automatic behavior you can audit after the fact is a different proposition from
-automatic behavior you have to trust in advance.
-
-The execution layer is included in Pro, running on your own model credentials
-or the assistant plan you already pay for. Memory, recall, and the daily review
-are Standard. Both start with a seven-day full trial, which is the honest way
-to find out whether an agent that knows your week is worth having.
+The result is a shorter path from “what did we decide?” to “the next step is ready.”

@@ -81,70 +81,7 @@ async function main() {
     )
   `;
 
-  // Additive only. Rollback = `DROP TABLE stripe_events, licenses, subscriptions,
-  // billing_customers;` — nothing outside billing references these tables, and the waitlist
-  // engine keeps working without them.
-  await sql`
-    CREATE TABLE IF NOT EXISTS billing_customers (
-      id                 uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-      email              text NOT NULL UNIQUE,
-      stripe_customer_id text NOT NULL UNIQUE,
-      created_at         timestamptz NOT NULL DEFAULT now()
-    )
-  `;
-  await sql`CREATE INDEX IF NOT EXISTS billing_customers_stripe_idx ON billing_customers (stripe_customer_id)`;
-
-  await sql`
-    CREATE TABLE IF NOT EXISTS subscriptions (
-      id                     uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-      stripe_subscription_id text NOT NULL UNIQUE,
-      stripe_customer_id     text NOT NULL,
-      stripe_price_id        text,
-      plan                   text,
-      interval               text,
-      status                 text NOT NULL,
-      current_period_start   timestamptz,
-      current_period_end     timestamptz,
-      cancel_at              timestamptz,
-      canceled_at            timestamptz,
-      cancel_at_period_end   boolean NOT NULL DEFAULT false,
-      trial_end              timestamptz,
-      updated_at             timestamptz NOT NULL DEFAULT now()
-    )
-  `;
-  await sql`CREATE INDEX IF NOT EXISTS subscriptions_customer_idx ON subscriptions (stripe_customer_id)`;
-  await sql`CREATE INDEX IF NOT EXISTS subscriptions_status_idx   ON subscriptions (status)`;
-
-  await sql`
-    CREATE TABLE IF NOT EXISTS licenses (
-      id                     uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-      license_key            text NOT NULL UNIQUE,
-      stripe_customer_id     text NOT NULL,
-      stripe_subscription_id text NOT NULL UNIQUE,
-      email                  text,
-      last_device_id         text,
-      last_app_version       text,
-      last_verified_at       timestamptz,
-      device_count           integer NOT NULL DEFAULT 0,
-      revoked_at             timestamptz,
-      created_at             timestamptz NOT NULL DEFAULT now()
-    )
-  `;
-  await sql`CREATE INDEX IF NOT EXISTS licenses_subscription_idx ON licenses (stripe_subscription_id)`;
-  await sql`CREATE INDEX IF NOT EXISTS licenses_customer_idx     ON licenses (stripe_customer_id)`;
-
-  await sql`
-    CREATE TABLE IF NOT EXISTS stripe_events (
-      id          text PRIMARY KEY,
-      type        text NOT NULL,
-      received_at timestamptz NOT NULL DEFAULT now()
-    )
-  `;
-
-  console.log(
-    'migrated: participants, rate_limits, points_ledger, x_follower_snapshot, x_quote_snapshot, ' +
-      'billing_customers, subscriptions, licenses, stripe_events',
-  );
+  console.log('migrated: participants, rate_limits, points_ledger, x_follower_snapshot, x_quote_snapshot');
   await sql.end();
 }
 
