@@ -606,39 +606,49 @@ pub mod mac {
             &self,
             expected_revision: u64,
             muted: bool,
-            apply: impl FnOnce(bool),
+            mut apply: impl FnMut(bool) -> Result<(), String>,
         ) -> Result<OnboardingState, String> {
             let mut owner = self
                 .0
                 .lock()
                 .map_err(|_| "onboarding state unavailable".to_owned())?;
-            let saved = Self::set_music_muted_locked(&mut owner, expected_revision, muted)?;
-            // Keep native playback ordered with the serial Store mutation. A stale caller cannot
-            // apply an older mute result after a newer CAS has persisted.
-            apply(saved.music_muted);
-            Ok(saved)
+            let previous = owner.current.clone();
+            let next = Self::next_music_muted_state(&previous, expected_revision, muted)?;
+            // Native application is inside the Store lock. If AppKit cannot apply it, state was
+            // never persisted; if persistence then fails, restore the previous native state.
+            apply(next.music_muted)?;
+            if next.revision == previous.revision {
+                return Ok(previous);
+            }
+            match owner.persist(expected_revision, next) {
+                Ok(saved) => Ok(saved),
+                Err(error) => {
+                    let _ = apply(previous.music_muted);
+                    Err(error)
+                }
+            }
         }
 
-        fn set_music_muted_locked(
-            owner: &mut StateOwner,
+        fn next_music_muted_state(
+            current: &OnboardingState,
             expected_revision: u64,
             muted: bool,
         ) -> Result<OnboardingState, String> {
-            if owner.current.revision != expected_revision {
+            if current.revision != expected_revision {
                 return Err(format!(
                     "stale onboarding revision: expected {expected_revision}, current {}",
-                    owner.current.revision
+                    current.revision
                 ));
             }
-            if owner.current.music_muted == muted {
-                return Ok(owner.current.clone());
+            if current.music_muted == muted {
+                return Ok(current.clone());
             }
-            let mut next = owner.current.clone();
+            let mut next = current.clone();
             next.revision = expected_revision
                 .checked_add(1)
                 .ok_or_else(|| "onboarding revision exhausted".to_owned())?;
             next.music_muted = muted;
-            owner.persist(expected_revision, next)
+            Ok(next)
         }
     }
 
@@ -951,7 +961,7 @@ pub mod mac {
         store: tauri::State<'_, Store>,
     ) -> Result<OnboardingState, String> {
         store.set_music_muted_and_apply(expected_revision, muted, |saved_muted| {
-            crate::onboarding_music::mac::set_muted(&app, saved_muted);
+            crate::onboarding_music::mac::set_muted(&app, saved_muted)
         })
     }
 
@@ -1385,11 +1395,13 @@ pub mod mac {
                 write_blocked: false,
             }));
             let muted = store
-                .set_music_muted_and_apply(0, true, |_| {})
+                .set_music_muted_and_apply(0, true, |_| Ok(()))
                 .expect("mute save");
             assert!(muted.music_muted);
             assert_eq!(muted.revision, 1);
-            assert!(store.set_music_muted_and_apply(0, false, |_| {}).is_err());
+            assert!(store
+                .set_music_muted_and_apply(0, false, |_| Ok(()))
+                .is_err());
             let reloaded = load_and_migrate_path(&path);
             assert!(reloaded.music_muted);
             let _ = std::fs::remove_dir_all(path.parent().expect("parent"));
@@ -1411,6 +1423,7 @@ pub mod mac {
                     scope.spawn(move || {
                         let _ = store.set_music_muted_and_apply(0, muted, |saved| {
                             actions.lock().expect("actions").push(saved);
+                            Ok(())
                         });
                     });
                 }
@@ -1419,6 +1432,47 @@ pub mod mac {
             assert!(saved.music_muted);
             assert_eq!(actions.lock().expect("actions").last(), Some(&true));
             let _ = std::fs::remove_dir_all(path.parent().expect("parent"));
+        }
+
+        #[test]
+        fn native_mute_apply_failure_does_not_persist_an_audible_target() {
+            let path = test_path("onboarding.json");
+            let store = Store(std::sync::Mutex::new(StateOwner {
+                current: OnboardingState::default(),
+                path: Some(path.clone()),
+                write_blocked: false,
+            }));
+            let result = store.set_music_muted_and_apply(0, true, |_| {
+                Err("main-thread queue timed out".to_owned())
+            });
+            assert!(result.is_err());
+            let saved = store.snapshot().expect("saved state");
+            assert!(!saved.music_muted);
+            assert_eq!(saved.revision, 0);
+            let _ = std::fs::remove_dir_all(path.parent().expect("parent"));
+        }
+
+        #[test]
+        fn persistence_failure_restores_the_previous_native_mute_state() {
+            let blocked_parent = test_path("blocked-parent");
+            std::fs::create_dir_all(blocked_parent.parent().expect("parent"))
+                .expect("create parent");
+            std::fs::write(&blocked_parent, b"not a directory").expect("block parent");
+            let store = Store(std::sync::Mutex::new(StateOwner {
+                current: OnboardingState::default(),
+                path: Some(blocked_parent.join("onboarding.json")),
+                write_blocked: false,
+            }));
+            let actions = std::sync::Mutex::new(Vec::new());
+            let result = store.set_music_muted_and_apply(0, true, |muted| {
+                actions.lock().expect("actions").push(muted);
+                Ok(())
+            });
+            assert!(result.is_err());
+            assert_eq!(*actions.lock().expect("actions"), [true, false]);
+            assert!(!store.snapshot().expect("saved state").music_muted);
+            let _ = std::fs::remove_file(&blocked_parent);
+            let _ = std::fs::remove_dir_all(blocked_parent.parent().expect("parent"));
         }
 
         #[test]

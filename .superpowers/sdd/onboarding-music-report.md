@@ -40,3 +40,11 @@ Additional checks: 7 `onboarding_music` Rust tests (poison fail-closed, generati
 - Display generation replacement now releases old music before Store lookup; unavailable Store/snapshot cannot strand an old player.
 
 Second-wave checks: 9 music controller tests, competing CAS test, voice cancellation and pause-timeout tests, Cargo check, TSC, and 40 onboarding Vitest cases.
+
+## Final review-fix evidence
+
+- `set_muted` now returns an error when AppKit main-thread queueing or its synchronous acknowledgement fails. The command applies native state while holding the Store serialization lock and never returns a saved mute state before that acknowledgement.
+- Native apply failure leaves Store state untouched. A later persistence failure restores the previous native mute state before returning its error.
+- One controller-owned fade-scheduler claim fences rapid Mute/Unmute. A stopping callback clears only its own generation; exactly one replacement scheduler can claim the unfinished fade.
+
+Final checks: 10 music tests, native-apply failure and persistence-rollback CAS tests, full voice-session tests, Cargo check, rustfmt, and diff check. Primary-checkout TypeScript check could not resolve its pre-existing `vitest`/`@testing-library/react` packages; no dependencies were changed.

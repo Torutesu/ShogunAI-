@@ -24,6 +24,7 @@ pub struct MusicController {
     muted: bool,
     fade_step: u8,
     voice_capture: bool,
+    fade_scheduler: Option<u64>,
 }
 
 impl MusicController {
@@ -32,6 +33,7 @@ impl MusicController {
         self.active = true;
         self.muted = muted;
         self.fade_step = 0;
+        self.fade_scheduler = None;
         // A poisoned voice lane is a hot-mic safety failure, never proof that capture is idle.
         self.voice_capture = voice_capture.unwrap_or(true);
         MusicStart {
@@ -51,6 +53,18 @@ impl MusicController {
     }
     pub fn should_schedule_fade(&self) -> bool {
         self.fade_pending() && self.audible()
+    }
+    pub fn claim_fade_scheduler(&mut self) -> Option<u64> {
+        if self.should_schedule_fade() && self.fade_scheduler.is_none() {
+            self.fade_scheduler = Some(self.generation);
+            return Some(self.generation);
+        }
+        None
+    }
+    pub fn finish_fade_scheduler(&mut self, generation: u64) {
+        if self.fade_scheduler == Some(generation) {
+            self.fade_scheduler = None;
+        }
     }
     #[cfg(test)]
     pub fn player_count(&self) -> usize {
@@ -101,6 +115,7 @@ impl MusicController {
         self.active = false;
         self.fade_step = FADE_STEPS;
         self.voice_capture = false;
+        self.fade_scheduler = None;
         self.generation = self.generation.wrapping_add(1);
         true
     }
@@ -236,23 +251,31 @@ pub mod mac {
                 set_volume(&player.0, volume);
             }
         }
-        state.controller.should_schedule_fade()
+        let continue_fade = state.controller.should_schedule_fade();
+        if !continue_fade {
+            state.controller.finish_fade_scheduler(generation);
+        }
+        continue_fade
     }
 
-    fn apply_playback_action(state: &mut RuntimeState, action: PlaybackAction) {
+    fn apply_playback_action(state: &mut RuntimeState, action: PlaybackAction) -> Result<(), ()> {
         let Some(player) = state.player.as_ref() else {
-            return;
+            return Ok(());
         };
         match action {
-            PlaybackAction::Pause => pause(&player.0),
+            PlaybackAction::Pause => {
+                pause(&player.0);
+                Ok(())
+            }
             PlaybackAction::Play if !play(&player.0) => {
                 let generation = state.controller.generation();
                 state.controller.playback_failed(generation);
                 if let Some(player) = take_player(state) {
                     stop_player(player);
                 }
+                Err(())
             }
-            PlaybackAction::Play => {}
+            PlaybackAction::Play => Ok(()),
         }
     }
 
@@ -273,10 +296,10 @@ pub mod mac {
             return;
         };
         state.player = Some(MainThreadPlayer(player));
-        let schedule = state.controller.should_schedule_fade();
+        let schedule = state.controller.claim_fade_scheduler();
         drop(state);
-        if schedule {
-            schedule_fade(app.clone(), start.generation);
+        if let Some(generation) = schedule {
+            schedule_fade(app.clone(), generation);
         }
     }
 
@@ -289,15 +312,12 @@ pub mod mac {
         };
         let mut state = runtime.0.lock().map_err(|_| ())?;
         if let Some(action) = state.controller.set_voice_capture(voice_capture) {
-            apply_playback_action(&mut state, action);
+            apply_playback_action(&mut state, action)?;
         }
         if voice_capture.unwrap_or(true) && state.controller.audible() {
             return Err(());
         }
-        Ok(state
-            .controller
-            .should_schedule_fade()
-            .then_some(state.controller.generation()))
+        Ok(state.controller.claim_fade_scheduler())
     }
 
     /// Voice owns capture truth. `None` means its mutex is poisoned and therefore pauses music.
@@ -327,30 +347,29 @@ pub mod mac {
         Ok(())
     }
 
-    /// Apply already-persisted Mute state on AppKit's main thread.
-    fn set_muted_main(app: &AppHandle, muted: bool) -> Option<u64> {
+    /// Apply persisted Mute state on AppKit's main thread.
+    fn set_muted_main(app: &AppHandle, muted: bool) -> Result<Option<u64>, String> {
         let Some(runtime) = app.try_state::<OnboardingMusic>() else {
-            return None;
+            return Ok(None);
         };
-        let Ok(mut state) = runtime.0.lock() else {
-            return None;
-        };
+        let mut state = runtime
+            .0
+            .lock()
+            .map_err(|_| "onboarding music unavailable".to_owned())?;
         if let Some(action) = state.controller.set_muted(muted) {
-            apply_playback_action(&mut state, action);
+            apply_playback_action(&mut state, action)
+                .map_err(|_| "onboarding music playback unavailable".to_owned())?;
         }
-        state
-            .controller
-            .should_schedule_fade()
-            .then_some(state.controller.generation())
+        Ok(state.controller.claim_fade_scheduler())
     }
 
-    /// Apply already-persisted Mute state; state persistence belongs to onboarding Store.
-    pub fn set_muted(app: &AppHandle, muted: bool) {
+    /// Apply Mute state synchronously. A caller never receives success before AppKit applies it.
+    pub fn set_muted(app: &AppHandle, muted: bool) -> Result<(), String> {
         if MainThreadMarker::new().is_some() {
-            if let Some(generation) = set_muted_main(app, muted) {
+            if let Some(generation) = set_muted_main(app, muted)? {
                 schedule_fade(app.clone(), generation);
             }
-            return;
+            return Ok(());
         }
         let (sender, receiver) = std::sync::mpsc::sync_channel(1);
         let callback_app = app.clone();
@@ -358,12 +377,17 @@ pub mod mac {
             .run_on_main_thread(move || {
                 let _ = sender.send(set_muted_main(&callback_app, muted));
             })
-            .is_ok()
+            .is_err()
         {
-            if let Ok(Some(generation)) = receiver.recv_timeout(Duration::from_secs(1)) {
-                schedule_fade(app.clone(), generation);
-            }
+            return Err("onboarding music main-thread queue unavailable".to_owned());
         }
+        let generation = receiver
+            .recv_timeout(Duration::from_secs(1))
+            .map_err(|_| "onboarding music main-thread queue timed out".to_owned())??;
+        if let Some(generation) = generation {
+            schedule_fade(app.clone(), generation);
+        }
+        Ok(())
     }
 
     /// Idempotent cleanup for completion, close, restart, replacement, and app exit.
@@ -469,6 +493,20 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(volumes.len(), usize::from(FADE_STEPS));
         assert_eq!(volumes.last().copied(), Some(SETTLED_VOLUME));
+    }
+    #[test]
+    fn rapid_mute_unmute_keeps_one_claimed_fade_scheduler() {
+        let mut controller = MusicController::default();
+        let start = controller.start(false, Some(false));
+        assert_eq!(controller.claim_fade_scheduler(), Some(start.generation));
+        assert_eq!(controller.set_muted(true), Some(PlaybackAction::Pause));
+        assert_eq!(controller.claim_fade_scheduler(), None);
+        assert_eq!(controller.set_muted(false), Some(PlaybackAction::Play));
+        // The in-flight scheduler owns this generation until its stopped callback clears it.
+        assert_eq!(controller.claim_fade_scheduler(), None);
+        controller.finish_fade_scheduler(start.generation);
+        assert_eq!(controller.claim_fade_scheduler(), Some(start.generation));
+        assert_eq!(controller.claim_fade_scheduler(), None);
     }
     #[test]
     fn stop_invalidates_delayed_work_and_releases_player_ownership() {
