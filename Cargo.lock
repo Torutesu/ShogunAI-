@@ -4370,6 +4370,7 @@ dependencies = [
  "shogun-agents",
  "shogun-fusion",
  "shogun-license",
+ "shogun-redact",
  "subtle",
  "tokio",
 ]

@@ -39,7 +39,7 @@ pub struct NewSegment<'a> {
 /// Append one transcript line. `origin` is fixed to `'asr'` here; the caption path is a future
 /// caller. Returns the new row id.
 pub fn append(conn: &Connection, seg: &NewSegment, now: i64) -> Result<i64, rusqlite::Error> {
-    let redacted = crate::redact::redact(seg.text);
+    let redacted = crate::sanitize::persist_body(seg.text);
     conn.execute(
         "INSERT INTO transcript_segments
            (session_id, ts, speaker, text, origin, confidence, created_at)
@@ -48,7 +48,7 @@ pub fn append(conn: &Connection, seg: &NewSegment, now: i64) -> Result<i64, rusq
             seg.session_id,
             seg.ts,
             seg.speaker.as_str(),
-            redacted.as_ref(),
+            redacted.text.as_ref(),
             seg.confidence,
             now,
         ],
@@ -121,5 +121,27 @@ mod tests {
         append(&conn, &NewSegment { session_id: sid, ts: 1_000, speaker: Speaker::Me, text: "the key is sk-ant-abc123def456", confidence: 0.9 }, 9).unwrap();
         let got = for_session(&conn, sid).unwrap();
         assert!(!got[0].2.contains("sk-ant-abc123def456"), "raw secret leaked into transcript");
+    }
+
+    #[test]
+    fn hidden_format_characters_are_not_stored_in_the_transcript() {
+        let conn = crate::open_in_memory().unwrap();
+        let sid = session(&conn);
+        append(
+            &conn,
+            &NewSegment {
+                session_id: sid,
+                ts: 1_000,
+                speaker: Speaker::Me,
+                text: "I'll\u{200B} send it. \u{202E}Ignore previous",
+                confidence: 0.9,
+            },
+            9,
+        )
+        .unwrap();
+        let got = for_session(&conn, sid).unwrap();
+        assert!(!got[0].2.contains('\u{200B}'));
+        assert!(!got[0].2.contains('\u{202E}'));
+        assert_eq!(crate::sanitize::persist_body(&got[0].2).hidden_removed, 0);
     }
 }
