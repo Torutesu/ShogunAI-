@@ -4,6 +4,47 @@ const START_VOLUME: f32 = 0.50;
 const SETTLED_VOLUME: f32 = 0.40;
 const FADE_STEPS: u8 = 10;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FadeScheduler {
+    generation: u64,
+    lease: u64,
+}
+
+#[derive(Debug, Default)]
+pub struct MuteApplyGate(std::sync::atomic::AtomicU8);
+
+impl MuteApplyGate {
+    const PENDING: u8 = 0;
+    const APPLYING: u8 = 1;
+    const CANCELLED: u8 = 2;
+    const COMPLETE: u8 = 3;
+
+    pub fn claim(&self) -> bool {
+        self.0
+            .compare_exchange(
+                Self::PENDING,
+                Self::APPLYING,
+                std::sync::atomic::Ordering::AcqRel,
+                std::sync::atomic::Ordering::Acquire,
+            )
+            .is_ok()
+    }
+    pub fn cancel_pending(&self) -> bool {
+        self.0
+            .compare_exchange(
+                Self::PENDING,
+                Self::CANCELLED,
+                std::sync::atomic::Ordering::AcqRel,
+                std::sync::atomic::Ordering::Acquire,
+            )
+            .is_ok()
+    }
+    pub fn finish(&self) {
+        self.0
+            .store(Self::COMPLETE, std::sync::atomic::Ordering::Release);
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MusicStart {
     pub generation: u64,
@@ -24,7 +65,8 @@ pub struct MusicController {
     muted: bool,
     fade_step: u8,
     voice_capture: bool,
-    fade_scheduler: Option<u64>,
+    fade_scheduler: Option<FadeScheduler>,
+    next_fade_lease: u64,
 }
 
 impl MusicController {
@@ -54,15 +96,23 @@ impl MusicController {
     pub fn should_schedule_fade(&self) -> bool {
         self.fade_pending() && self.audible()
     }
-    pub fn claim_fade_scheduler(&mut self) -> Option<u64> {
+    pub fn claim_fade_scheduler(&mut self) -> Option<FadeScheduler> {
         if self.should_schedule_fade() && self.fade_scheduler.is_none() {
-            self.fade_scheduler = Some(self.generation);
-            return Some(self.generation);
+            self.next_fade_lease = self.next_fade_lease.wrapping_add(1);
+            let scheduler = FadeScheduler {
+                generation: self.generation,
+                lease: self.next_fade_lease,
+            };
+            self.fade_scheduler = Some(scheduler);
+            return Some(scheduler);
         }
         None
     }
-    pub fn finish_fade_scheduler(&mut self, generation: u64) {
-        if self.fade_scheduler == Some(generation) {
+    pub fn owns_fade_scheduler(&self, scheduler: FadeScheduler) -> bool {
+        self.fade_scheduler == Some(scheduler)
+    }
+    pub fn finish_fade_scheduler(&mut self, scheduler: FadeScheduler) {
+        if self.fade_scheduler == Some(scheduler) {
             self.fade_scheduler = None;
         }
     }
@@ -137,12 +187,12 @@ fn playback_transition(was_audible: bool, audible: bool) -> Option<PlaybackActio
 
 #[cfg(target_os = "macos")]
 pub mod mac {
-    use super::{MusicController, PlaybackAction};
+    use super::{FadeScheduler, MusicController, MuteApplyGate, PlaybackAction};
     use objc2::rc::Retained;
     use objc2::runtime::AnyObject;
     use objc2::{class, msg_send, MainThreadMarker};
     use objc2_foundation::NSData;
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
     use std::time::Duration;
     use tauri::{AppHandle, Manager};
 
@@ -214,20 +264,22 @@ pub mod mac {
         }
     }
 
-    fn schedule_fade(app: AppHandle, generation: u64) {
+    fn schedule_fade(app: AppHandle, scheduler: FadeScheduler) {
         std::thread::spawn(move || loop {
             std::thread::sleep(FADE_INTERVAL);
             let callback_app = app.clone();
             let (sender, receiver) = std::sync::mpsc::sync_channel(1);
             if app
                 .run_on_main_thread(move || {
-                    let _ = sender.send(apply_fade_tick(&callback_app, generation));
+                    let _ = sender.send(apply_fade_tick(&callback_app, scheduler));
                 })
                 .is_err()
             {
+                release_fade_scheduler(&app, scheduler);
                 return;
             }
             let Ok(continue_fade) = receiver.recv_timeout(Duration::from_secs(1)) else {
+                release_fade_scheduler(&app, scheduler);
                 return;
             };
             if !continue_fade {
@@ -236,24 +288,37 @@ pub mod mac {
         });
     }
 
-    fn apply_fade_tick(app: &AppHandle, generation: u64) -> bool {
+    fn release_fade_scheduler(app: &AppHandle, scheduler: FadeScheduler) {
+        let Some(runtime) = app.try_state::<OnboardingMusic>() else {
+            return;
+        };
+        // Only controller bookkeeping happens off-main. AVAudioPlayer remains main-thread-only.
+        if let Ok(mut state) = runtime.0.lock() {
+            state.controller.finish_fade_scheduler(scheduler);
+        };
+    }
+
+    fn apply_fade_tick(app: &AppHandle, scheduler: FadeScheduler) -> bool {
         let Some(runtime) = app.try_state::<OnboardingMusic>() else {
             return false;
         };
         let Ok(mut state) = runtime.0.lock() else {
             return false;
         };
-        if !state.controller.active() || state.controller.generation() != generation {
+        if !state.controller.active()
+            || state.controller.generation() != scheduler.generation
+            || !state.controller.owns_fade_scheduler(scheduler)
+        {
             return false;
         }
-        if let Some(volume) = state.controller.fade_tick(generation) {
+        if let Some(volume) = state.controller.fade_tick(scheduler.generation) {
             if let Some(player) = state.player.as_ref() {
                 set_volume(&player.0, volume);
             }
         }
         let continue_fade = state.controller.should_schedule_fade();
         if !continue_fade {
-            state.controller.finish_fade_scheduler(generation);
+            state.controller.finish_fade_scheduler(scheduler);
         }
         continue_fade
     }
@@ -298,15 +363,15 @@ pub mod mac {
         state.player = Some(MainThreadPlayer(player));
         let schedule = state.controller.claim_fade_scheduler();
         drop(state);
-        if let Some(generation) = schedule {
-            schedule_fade(app.clone(), generation);
+        if let Some(scheduler) = schedule {
+            schedule_fade(app.clone(), scheduler);
         }
     }
 
     fn voice_capture_changed_main(
         app: &AppHandle,
         voice_capture: Option<bool>,
-    ) -> Result<Option<u64>, ()> {
+    ) -> Result<Option<FadeScheduler>, ()> {
         let Some(runtime) = app.try_state::<OnboardingMusic>() else {
             return Ok(None);
         };
@@ -323,8 +388,8 @@ pub mod mac {
     /// Voice owns capture truth. `None` means its mutex is poisoned and therefore pauses music.
     pub fn voice_capture_changed(app: &AppHandle, voice_capture: Option<bool>) -> Result<(), ()> {
         if MainThreadMarker::new().is_some() {
-            if let Some(generation) = voice_capture_changed_main(app, voice_capture)? {
-                schedule_fade(app.clone(), generation);
+            if let Some(scheduler) = voice_capture_changed_main(app, voice_capture)? {
+                schedule_fade(app.clone(), scheduler);
             }
             return Ok(());
         }
@@ -338,17 +403,17 @@ pub mod mac {
         {
             return Err(());
         }
-        let generation = receiver
+        let scheduler = receiver
             .recv_timeout(Duration::from_secs(1))
             .map_err(|_| ())??;
-        if let Some(generation) = generation {
-            schedule_fade(app.clone(), generation);
+        if let Some(scheduler) = scheduler {
+            schedule_fade(app.clone(), scheduler);
         }
         Ok(())
     }
 
     /// Apply persisted Mute state on AppKit's main thread.
-    fn set_muted_main(app: &AppHandle, muted: bool) -> Result<Option<u64>, String> {
+    fn set_muted_main(app: &AppHandle, muted: bool) -> Result<Option<FadeScheduler>, String> {
         let Some(runtime) = app.try_state::<OnboardingMusic>() else {
             return Ok(None);
         };
@@ -366,26 +431,43 @@ pub mod mac {
     /// Apply Mute state synchronously. A caller never receives success before AppKit applies it.
     pub fn set_muted(app: &AppHandle, muted: bool) -> Result<(), String> {
         if MainThreadMarker::new().is_some() {
-            if let Some(generation) = set_muted_main(app, muted)? {
-                schedule_fade(app.clone(), generation);
+            if let Some(scheduler) = set_muted_main(app, muted)? {
+                schedule_fade(app.clone(), scheduler);
             }
             return Ok(());
         }
         let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        let gate = Arc::new(MuteApplyGate::default());
+        let callback_gate = Arc::clone(&gate);
         let callback_app = app.clone();
         if app
             .run_on_main_thread(move || {
-                let _ = sender.send(set_muted_main(&callback_app, muted));
+                if !callback_gate.claim() {
+                    let _ = sender.send(Err("onboarding music mute request cancelled".to_owned()));
+                    return;
+                }
+                let result = set_muted_main(&callback_app, muted);
+                callback_gate.finish();
+                let _ = sender.send(result);
             })
             .is_err()
         {
             return Err("onboarding music main-thread queue unavailable".to_owned());
         }
-        let generation = receiver
-            .recv_timeout(Duration::from_secs(1))
-            .map_err(|_| "onboarding music main-thread queue timed out".to_owned())??;
-        if let Some(generation) = generation {
-            schedule_fade(app.clone(), generation);
+        let scheduler = match receiver.recv_timeout(Duration::from_secs(1)) {
+            Ok(result) => result?,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) if gate.cancel_pending() => {
+                return Err("onboarding music main-thread queue timed out".to_owned());
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => receiver
+                .recv()
+                .map_err(|_| "onboarding music main-thread acknowledgement lost".to_owned())??,
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                return Err("onboarding music main-thread acknowledgement lost".to_owned());
+            }
+        };
+        if let Some(scheduler) = scheduler {
+            schedule_fade(app.clone(), scheduler);
         }
         Ok(())
     }
@@ -426,7 +508,9 @@ pub mod mac {
 
 #[cfg(test)]
 mod tests {
-    use super::{MusicController, PlaybackAction, FADE_STEPS, SETTLED_VOLUME, START_VOLUME};
+    use super::{
+        MusicController, MuteApplyGate, PlaybackAction, FADE_STEPS, SETTLED_VOLUME, START_VOLUME,
+    };
     #[test]
     fn fade_starts_at_half_then_settles_monotonically_at_forty_percent() {
         let mut controller = MusicController::default();
@@ -498,15 +582,49 @@ mod tests {
     fn rapid_mute_unmute_keeps_one_claimed_fade_scheduler() {
         let mut controller = MusicController::default();
         let start = controller.start(false, Some(false));
-        assert_eq!(controller.claim_fade_scheduler(), Some(start.generation));
+        let first = controller.claim_fade_scheduler().expect("first scheduler");
+        assert_eq!(first.generation, start.generation);
         assert_eq!(controller.set_muted(true), Some(PlaybackAction::Pause));
         assert_eq!(controller.claim_fade_scheduler(), None);
         assert_eq!(controller.set_muted(false), Some(PlaybackAction::Play));
         // The in-flight scheduler owns this generation until its stopped callback clears it.
         assert_eq!(controller.claim_fade_scheduler(), None);
-        controller.finish_fade_scheduler(start.generation);
-        assert_eq!(controller.claim_fade_scheduler(), Some(start.generation));
+        controller.finish_fade_scheduler(first);
+        let replacement = controller
+            .claim_fade_scheduler()
+            .expect("replacement scheduler");
+        assert_eq!(replacement.generation, start.generation);
+        // A late timeout callback from the first scheduler cannot release the new lease.
+        controller.finish_fade_scheduler(first);
         assert_eq!(controller.claim_fade_scheduler(), None);
+    }
+    #[test]
+    fn timed_out_mute_request_cancels_before_a_late_main_callback_can_apply() {
+        let gate = MuteApplyGate::default();
+        assert!(gate.cancel_pending());
+        assert!(!gate.claim());
+    }
+    #[test]
+    fn claimed_mute_request_forces_caller_to_wait_for_acknowledgement() {
+        let gate = MuteApplyGate::default();
+        assert!(gate.claim());
+        assert!(!gate.cancel_pending());
+        gate.finish();
+    }
+    #[test]
+    fn fade_queue_failure_or_ack_timeout_releases_only_its_own_lease() {
+        let mut controller = MusicController::default();
+        controller.start(false, Some(false));
+        let first = controller.claim_fade_scheduler().expect("first scheduler");
+        // Queue failure releases first so a later Unmute can claim again.
+        controller.finish_fade_scheduler(first);
+        let second = controller.claim_fade_scheduler().expect("second scheduler");
+        // A late first callback is stale and cannot clear second.
+        controller.finish_fade_scheduler(first);
+        assert_eq!(controller.claim_fade_scheduler(), None);
+        // Ack timeout releases second, then a later retry can claim a fresh lease.
+        controller.finish_fade_scheduler(second);
+        assert!(controller.claim_fade_scheduler().is_some());
     }
     #[test]
     fn stop_invalidates_delayed_work_and_releases_player_ownership() {

@@ -622,10 +622,12 @@ pub mod mac {
             }
             match owner.persist(expected_revision, next) {
                 Ok(saved) => Ok(saved),
-                Err(error) => {
-                    let _ = apply(previous.music_muted);
-                    Err(error)
-                }
+                Err(error) => match apply(previous.music_muted) {
+                    Ok(()) => Err(error),
+                    Err(rollback_error) => Err(format!(
+                        "{error}; onboarding music rollback failed: {rollback_error}"
+                    )),
+                },
             }
         }
 
@@ -1470,6 +1472,33 @@ pub mod mac {
             });
             assert!(result.is_err());
             assert_eq!(*actions.lock().expect("actions"), [true, false]);
+            assert!(!store.snapshot().expect("saved state").music_muted);
+            let _ = std::fs::remove_file(&blocked_parent);
+            let _ = std::fs::remove_dir_all(blocked_parent.parent().expect("parent"));
+        }
+
+        #[test]
+        fn persistence_and_native_rollback_failures_are_both_reported() {
+            let blocked_parent = test_path("blocked-rollback-parent");
+            std::fs::create_dir_all(blocked_parent.parent().expect("parent"))
+                .expect("create parent");
+            std::fs::write(&blocked_parent, b"not a directory").expect("block parent");
+            let store = Store(std::sync::Mutex::new(StateOwner {
+                current: OnboardingState::default(),
+                path: Some(blocked_parent.join("onboarding.json")),
+                write_blocked: false,
+            }));
+            let error = store
+                .set_music_muted_and_apply(0, true, |muted| {
+                    if muted {
+                        Ok(())
+                    } else {
+                        Err("main-thread queue unavailable".to_owned())
+                    }
+                })
+                .expect_err("persistence and rollback failure");
+            assert!(error.contains("onboarding directory create failed"));
+            assert!(error.contains("rollback failed: main-thread queue unavailable"));
             assert!(!store.snapshot().expect("saved state").music_muted);
             let _ = std::fs::remove_file(&blocked_parent);
             let _ = std::fs::remove_dir_all(blocked_parent.parent().expect("parent"));

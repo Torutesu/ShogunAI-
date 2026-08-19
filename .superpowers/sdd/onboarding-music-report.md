@@ -48,3 +48,11 @@ Second-wave checks: 9 music controller tests, competing CAS test, voice cancella
 - One controller-owned fade-scheduler claim fences rapid Mute/Unmute. A stopping callback clears only its own generation; exactly one replacement scheduler can claim the unfinished fade.
 
 Final checks: 10 music tests, native-apply failure and persistence-rollback CAS tests, full voice-session tests, Cargo check, rustfmt, and diff check. Primary-checkout TypeScript check could not resolve its pre-existing `vitest`/`@testing-library/react` packages; no dependencies were changed.
+
+## Source-blocker final evidence
+
+- An off-main Mute request now has a cancellable gate. Timeout cancels only a request still pending; once the main thread has claimed it, the caller waits for the acknowledgement instead of returning while a late callback can mutate native playback.
+- Rollback errors are no longer discarded: persistence plus native-rollback failure returns one combined error. Native apply failure still leaves Store untouched.
+- Fade scheduling uses a generation-plus-lease token. Queue failure and acknowledgement timeout release only that lease; a late callback cannot clear a newer scheduler for the same onboarding generation.
+
+Source-blocker checks: 13 music tests (late mute callback and fade queue/timeout lease recovery), rollback-combined-error test, Cargo check, rustfmt, and diff check.
