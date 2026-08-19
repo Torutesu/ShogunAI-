@@ -273,7 +273,7 @@ impl ApprovalQueue {
             .chain(queue.in_flight.iter().copied())
         {
             if id.0 >= queue.next_id {
-                queue.next_id = id.0.checked_add(1).unwrap_or(u64::MAX);
+                queue.next_id = id.0.saturating_add(1);
             }
         }
         queue.trim_terminal();
