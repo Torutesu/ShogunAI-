@@ -749,6 +749,11 @@ pub fn active_lessons(
     scopes: &[ScopeFilter<'_>],
     top_k: usize,
 ) -> Result<Vec<Lesson>, rusqlite::Error> {
+    // "at most `top_k`" includes zero: the cap below is only checked after a push, so without this
+    // a `top_k` of 0 would never be hit and every lesson would be injected.
+    if top_k == 0 {
+        return Ok(Vec::new());
+    }
     let mut stmt = conn.prepare(
         "SELECT id, kind, scope, scope_ref, instruction, confidence, evidence_count,
                 active, created_at, updated_at, last_evidence_at
@@ -1444,6 +1449,39 @@ mod tests {
         )
         .unwrap();
         assert_eq!(any_app.iter().map(|l| l.id).collect::<Vec<_>>(), vec![mail]);
+    }
+
+    #[test]
+    fn active_lessons_with_a_top_k_of_zero_returns_nothing() {
+        // The contract is "at most top_k", zero included. The cap is only tested after a push, so
+        // a zero could never be reached and the caller got every lesson — the exact opposite of
+        // what it asked for.
+        let mut conn = crate::open_in_memory().unwrap();
+        let instructions = ["first lesson", "second lesson", "third lesson"];
+        for (i, instruction) in instructions.into_iter().enumerate() {
+            let evidence: Vec<i64> = (0..3i64)
+                .map(|j| {
+                    record_feedback(
+                        &conn,
+                        FeedbackKind::EditBeforeApprove,
+                        LessonScope::Global,
+                        &NewFeedback { ts_ms: i as i64 * 10 + j, ..Default::default() },
+                    )
+                    .unwrap()
+                })
+                .collect();
+            let candidate = LessonCandidate {
+                kind: LessonKind::Style,
+                scope: LessonScope::Global,
+                scope_ref: None,
+                instruction: instruction.into(),
+                evidence: vec![],
+            };
+            upsert_lesson(&mut conn, &candidate, &evidence, 100).unwrap();
+        }
+
+        assert_eq!(active_lessons(&conn, &[], 3).unwrap().len(), 3, "all three are injectable");
+        assert!(active_lessons(&conn, &[], 0).unwrap().is_empty(), "top_k = 0 means none");
     }
 
     // ------------------------------------------------ helpers
