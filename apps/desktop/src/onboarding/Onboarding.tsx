@@ -92,5 +92,5 @@ export function Onboarding(): JSX.Element {
   if (!surface || surface.surface !== route.surface) return <div className="onb-stale" data-testid="stale-surface" />;
   if (surface.surface === "main") return <CinematicSurface />;
   if (surface.surface === "ambient") return <AmbientSurface />;
-  return <OnboardingExperience state={state} permissions={permissions} onPersist={persist} onFinish={finish} />;
+  return <OnboardingExperience state={state} permissions={permissions} surfaceGeneration={surface.generation} onPersist={persist} onFinish={finish} />;
 }

@@ -1,5 +1,8 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GateFrame } from "./experience/GateFrame";
 import { newestPermissionSnapshot, Onboarding, windowRoute } from "./Onboarding";
@@ -123,6 +126,64 @@ describe("cinematic onboarding", () => {
     expect(screen.getByTestId("gate-frame")).toBe(gate);
     expect(gate.getAttribute("data-complete")).toBe("true");
     expect(gate.classList.contains("onb-gate--frame")).toBe(true);
+    rerender(<GateFrame variant="full-window" />);
+    expect(screen.getByTestId("gate-frame").classList.contains("onb-gate--full-window")).toBe(true);
+  });
+
+  it("keeps live privacy exclusions and advances only after Rust save", async () => {
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "onboarding_state") return state("privacy", 8);
+      if (command === "permission_status" || command === "permission_listener_ready") return emptyPermissions;
+      if (command === "exclusion_categories") return [{ id: "terminals", count: 5 }];
+      if (command === "set_onboarding_state") return state("plan", 9);
+      if (command === "onboarding_event") return undefined;
+      throw new Error(`unexpected command: ${command}`);
+    });
+    render(<Onboarding />);
+    expect(await screen.findByText("Never read at all")).toBeTruthy();
+    expect(screen.getByText("Terminals")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("set_onboarding_state", { expectedRevision: 8, step: "plan", plan: null, completed: false }));
+  });
+
+  it("keeps Pro Keychain entry, pressed plan semantics, and plan skip", async () => {
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "onboarding_state") return { ...state("plan", 8), plan: "pro" };
+      if (command === "permission_status" || command === "permission_listener_ready") return emptyPermissions;
+      if (command === "set_byok_key") return undefined;
+      if (command === "set_onboarding_state") return state("connect", 9);
+      if (command === "onboarding_event") return undefined;
+      throw new Error(`unexpected command: ${command}`);
+    });
+    render(<Onboarding />);
+    const pro = await screen.findByRole("button", { name: /Pro/ });
+    expect(pro.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.change(screen.getByDisplayValue(""), { target: { value: "secret" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("set_byok_key", { provider: "anthropic", key: "secret" }));
+    fireEvent.click(screen.getByRole("button", { name: "Skip for now" }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("set_onboarding_state", { expectedRevision: 8, step: "connect", plan: "pro", completed: false }));
+  });
+
+  it("keeps draft-stop fail-safe, analytics, connection, and connect skip", async () => {
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "onboarding_state") return state("connect", 8);
+      if (command === "permission_status" || command === "permission_listener_ready") return emptyPermissions;
+      if (command === "composio_settings") return { draft_stop: true, consent_acknowledged: false };
+      if (command === "set_composio_policy") throw new Error("consent required");
+      if (command === "analytics_get_opt_out") return false;
+      if (command === "connectors_list") return [];
+      if (command === "set_onboarding_state") return state("gate", 9);
+      if (command === "onboarding_event") return undefined;
+      throw new Error(`unexpected command: ${command}`);
+    });
+    render(<Onboarding />);
+    const toggle = await screen.findByRole("checkbox", { name: /Drafts only/ });
+    fireEvent.click(toggle);
+    expect(await screen.findByText("Turning this off needs your consent first — that lives in Settings.")).toBeTruthy();
+    expect(screen.getByText("Share anonymous usage metrics to help improve SHOGUN")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Skip for now" }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("set_onboarding_state", { expectedRevision: 8, step: "gate", plan: null, completed: false }));
   });
 
   it("does not turn browser key events into shortcut success", async () => {
@@ -135,6 +196,32 @@ describe("cinematic onboarding", () => {
     expect(invoke).not.toHaveBeenCalledWith("set_onboarding_state", expect.anything());
   });
 
+  it("advances practice only from matching native shortcut proof", async () => {
+    let handler!: (event: { payload: { generation: number; nonce: string; stage: "right_option"; session_id: number | null; outcome: "single_tap" } }) => void;
+    vi.mocked(listen).mockImplementation(async (_event, callback) => { handler = callback as typeof handler; return () => undefined; });
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "onboarding_state") return state("right_option", 8);
+      if (command === "permission_status" || command === "permission_listener_ready") return emptyPermissions;
+      if (command === "onboarding_shortcut_arm") return { generation: 4, nonce: "nonce", stage: "right_option", binding: "Tap+Alt" };
+      if (command === "onboarding_shortcut_ready" || command === "onboarding_event" || command === "get_shortcuts") return command === "get_shortcuts" ? {} : undefined;
+      if (command === "set_onboarding_state") return state("scribe_demo", 9);
+      throw new Error(`unexpected command: ${command}`);
+    });
+    render(<Onboarding />);
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("onboarding_shortcut_arm", { expectedRevision: 8, step: "right_option" }));
+    handler({ payload: { generation: 4, nonce: "wrong", stage: "right_option", session_id: null, outcome: "single_tap" } });
+    expect(invoke).not.toHaveBeenCalledWith("set_onboarding_state", expect.anything());
+    handler({ payload: { generation: 4, nonce: "nonce", stage: "right_option", session_id: null, outcome: "single_tap" } });
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("set_onboarding_state", { expectedRevision: 8, step: "scribe_demo", plan: null, completed: false }));
+  });
+
+  it("keeps reduced-motion and offscreen haze stop paths in scoped stylesheet", () => {
+    const css = readFileSync(resolve(process.cwd(), "src/onboarding/onboarding.css"), "utf8");
+    expect(css.includes("data-haze-motion=\"true\"")).toBe(true);
+    expect(css.includes("prefers-reduced-motion: reduce")).toBe(true);
+    expect(css.includes(".onb-cinematic__wave, .onb-ambient img, .onb-haze { animation: none;")).toBe(true);
+  });
+
   it("renders custom native binding honestly", async () => {
     vi.mocked(invoke).mockImplementation(async (command) => {
       if (command === "onboarding_state") return state("right_option");
@@ -145,5 +232,6 @@ describe("cinematic onboarding", () => {
     });
     render(<Onboarding />);
     expect(await screen.findByText("R")).toBeTruthy();
+    expect(screen.getByText("Use ⌃ + ⇧ + R once to prepare a draft where your cursor is.")).toBeTruthy();
   });
 });

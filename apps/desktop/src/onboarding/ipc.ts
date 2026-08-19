@@ -240,6 +240,35 @@ export function getShortcuts(): Promise<Record<string, string>> {
   return ask<Record<string, string>>("get_shortcuts", {}, {});
 }
 
+export type OnboardingShortcutStage = "right_option" | "scribe_demo" | "dictation_demo";
+export type OnboardingShortcutArm = {
+  generation: number;
+  nonce: string;
+  stage: OnboardingShortcutStage;
+  binding: string;
+  seeded_text?: string | null;
+};
+export type OnboardingShortcutEvent = {
+  generation: number;
+  nonce: string;
+  stage: OnboardingShortcutStage;
+  session_id: number | null;
+  outcome: "single_tap" | "scribe_opened" | "scribe_inserted" | "no_key" | "failed" | "cancelled" | "stale";
+};
+
+/** Native tutorial coordinator owns proof. Browser key events can never complete practice. */
+export function onboardingShortcutArm(expectedRevision: number, step: OnboardingShortcutStage): Promise<OnboardingShortcutArm | null> {
+  return ask<OnboardingShortcutArm | null>("onboarding_shortcut_arm", { expectedRevision, step }, null);
+}
+export function onboardingShortcutReady(generation: number, nonce: string, surfaceGeneration: number): Promise<void> {
+  if (!IN_TAURI) return Promise.resolve();
+  return invoke<void>("onboarding_shortcut_ready", { generation, nonce, surfaceGeneration }).catch(() => undefined);
+}
+export function onboardingShortcutDisarm(generation: number, nonce: string): Promise<void> {
+  if (!IN_TAURI) return Promise.resolve();
+  return invoke<void>("onboarding_shortcut_disarm", { generation, nonce }).catch(() => undefined);
+}
+
 /** `exclusion_categories() -> ExclusionCategory[]` — read from the live ExclusionPolicy so
  *  onboarding shows what is actually enforced. Fallback mirrors the built-in defaults for the
  *  browser preview only; on device an empty answer stays empty (honest). */
