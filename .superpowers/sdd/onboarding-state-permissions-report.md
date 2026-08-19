@@ -94,15 +94,24 @@ Review-fix validation:
 - A matching relaunched bundle consumes the marker only after Screen Recording is effective. A
   wrong bundle, wrong step, missing grant, stale revision, cancellation failure, or persistence
   failure never requests restart and never clears the recovery marker.
+- Restart identity uses Tauri's symlink-safe current-binary resolver, canonicalizes the path,
+  verifies a real `.app/Contents/MacOS` file, and requires runtime `NSBundle` identifier and
+  executable URL to match the compiled app and resolved executable.
+- State reads preserve the marker. The frontend acknowledges it only in a post-render effect for
+  the exact saved Screen Recording step and only when current-process native access is effective.
+- Files with a present unsupported or malformed version tag are read-only; later mutations cannot
+  silently overwrite them as version 2.
 - Added a typed frontend restart wrapper and registered the Tauri command. Visual button wiring is
   intentionally owned by the upcoming experience UI task.
 
 Restart validation:
 
-- `cargo test -p shogun-desktop-spike onboarding --lib --offline`: 29 passed.
+- `cargo test -p shogun-desktop-spike onboarding --lib --offline`: 30 passed.
 - `cargo test -p shogun-desktop-spike scribe --lib --offline`: 11 passed.
 - `cargo check -p shogun-desktop-spike --lib --offline`: passed.
 - `apps/desktop/node_modules/.bin/tsc --noEmit -p apps/desktop/tsconfig.json`: passed.
+- `apps/desktop/node_modules/.bin/vitest run src/onboarding/Onboarding.test.tsx` from
+  `apps/desktop`: 5 passed.
 - `rustfmt` on touched Rust files and `git diff --check`: passed.
 - Injected launcher tests prove spawn failure does not exit the current process, successful spawn
   precedes exit, and a failed launch durably clears its pending marker while leaving the store

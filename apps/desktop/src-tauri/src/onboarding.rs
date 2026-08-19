@@ -556,6 +556,7 @@ pub mod mac {
     struct StateOwner {
         current: OnboardingState,
         path: Option<PathBuf>,
+        write_blocked: bool,
     }
 
     /// One serialized owner holds validation, mutation, persistence, and managed state update.
@@ -564,11 +565,16 @@ pub mod mac {
     impl Store {
         pub fn load(app: &AppHandle) -> Self {
             let path = config_path(app);
+            let write_blocked = path.as_deref().is_some_and(unsupported_version_at_path);
             let current = path
                 .as_deref()
                 .map(load_and_migrate_path)
                 .unwrap_or_default();
-            Self(Mutex::new(StateOwner { current, path }))
+            Self(Mutex::new(StateOwner {
+                current,
+                path,
+                write_blocked,
+            }))
         }
     }
 
@@ -599,6 +605,18 @@ pub mod mac {
             }
         }
         parsed
+    }
+
+    fn unsupported_version_at_path(path: &Path) -> bool {
+        std::fs::read_to_string(path)
+            .ok()
+            .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+            .and_then(|value| value.get("version").cloned())
+            .is_some_and(|version| match version.as_u64() {
+                Some(1) => false,
+                Some(version) if version == u64::from(ONBOARDING_VERSION) => false,
+                _ => true,
+            })
     }
 
     #[cfg(test)]
@@ -694,6 +712,9 @@ pub mod mac {
             next: OnboardingState,
             rename: impl FnOnce(&Path, &Path) -> std::io::Result<()>,
         ) -> Result<OnboardingState, String> {
+            if self.write_blocked {
+                return Err("onboarding state was written by a newer app version".to_owned());
+            }
             if self.current.revision != expected_revision {
                 return Err(format!(
                     "stale onboarding revision: expected {expected_revision}, current {}",
@@ -754,6 +775,42 @@ pub mod mac {
         } else {
             Err("restart requires a packaged macOS app".to_owned())
         }
+    }
+
+    fn runtime_bundle_executable(
+        app: &AppHandle,
+        expected_bundle_id: &str,
+    ) -> Result<PathBuf, String> {
+        use objc2_foundation::NSBundle;
+
+        let executable = tauri::process::current_binary(&app.env())
+            .map_err(|error| format!("restart executable unavailable: {error}"))?
+            .canonicalize()
+            .map_err(|error| format!("restart executable identity unavailable: {error}"))?;
+        validate_packaged_executable(&executable)?;
+        if !executable.is_file() {
+            return Err("restart executable is not a file".to_owned());
+        }
+        let bundle = NSBundle::mainBundle();
+        let actual_bundle_id = bundle
+            .bundleIdentifier()
+            .map(|value| value.to_string())
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| "restart bundle identifier unavailable".to_owned())?;
+        if actual_bundle_id != expected_bundle_id {
+            return Err("restart bundle identifier does not match this build".to_owned());
+        }
+        let bundle_executable = bundle
+            .executableURL()
+            .and_then(|url| url.path())
+            .map(|path| PathBuf::from(path.to_string()))
+            .ok_or_else(|| "restart bundle executable unavailable".to_owned())?
+            .canonicalize()
+            .map_err(|error| format!("restart bundle executable identity unavailable: {error}"))?;
+        if bundle_executable != executable {
+            return Err("restart executable does not match the running app bundle".to_owned());
+        }
+        Ok(executable)
     }
 
     fn restart_marker(
@@ -852,22 +909,11 @@ pub mod mac {
     pub fn onboarding_state(app: AppHandle) -> OnboardingState {
         let permissions = crate::permissions::mac::status(&app);
         let mut state = match app.try_state::<Store>() {
-            Some(store) => match store.0.lock() {
-                Ok(mut owner) => {
-                    if let Some(next) = consume_restart_marker(
-                        &owner.current,
-                        &app.config().identifier,
-                        permissions.screen_recording,
-                    ) {
-                        let expected_revision = owner.current.revision;
-                        if let Err(error) = owner.persist(expected_revision, next) {
-                            eprintln!("[onboarding] restart marker clear failed: {error}");
-                        }
-                    }
-                    owner.current.clone()
-                }
-                Err(_) => OnboardingState::default(),
-            },
+            Some(store) => store
+                .0
+                .lock()
+                .map(|owner| owner.current.clone())
+                .unwrap_or_default(),
             None => load(&app),
         };
         let needs_repair = state::needs_permissions_repair(
@@ -883,6 +929,39 @@ pub mod mac {
         state
     }
 
+    /// Called only after the relaunched frontend has rendered the exact saved step. Reading state
+    /// alone cannot consume the marker because that would lose recovery context before the user
+    /// sees it. Fresh native permission truth remains the final gate.
+    #[tauri::command]
+    pub fn acknowledge_onboarding_restart(
+        expected_revision: u64,
+        step: OnboardingStep,
+        app: AppHandle,
+        store: tauri::State<'_, Store>,
+    ) -> Result<OnboardingState, String> {
+        let permissions = crate::permissions::mac::status(&app);
+        let mut owner = store
+            .0
+            .lock()
+            .map_err(|_| "onboarding state unavailable".to_owned())?;
+        if owner.current.revision != expected_revision {
+            return Err(format!(
+                "stale onboarding revision: expected {expected_revision}, current {}",
+                owner.current.revision
+            ));
+        }
+        if owner.current.step != step {
+            return Err("restart acknowledgement does not match the rendered step".to_owned());
+        }
+        let next = consume_restart_marker(
+            &owner.current,
+            &app.config().identifier,
+            permissions.screen_recording,
+        )
+        .ok_or_else(|| "restart still requires matching Screen Recording access".to_owned())?;
+        owner.persist(expected_revision, next)
+    }
+
     /// Persist exact resume context, fence active text/audio delivery, then ask Tauri to relaunch
     /// the signed app bundle. Development binaries are intentionally rejected: macOS permission
     /// identity is bundle/code-signature scoped and restarting a loose executable would test the
@@ -894,8 +973,7 @@ pub mod mac {
         app: AppHandle,
         store: tauri::State<'_, Store>,
     ) -> Result<(), String> {
-        let executable = std::env::current_exe()
-            .map_err(|error| format!("restart executable unavailable: {error}"))?;
+        let executable = runtime_bundle_executable(&app, &app.config().identifier)?;
         {
             let owner = store
                 .0
@@ -1195,7 +1273,7 @@ pub mod mac {
         use super::{
             atomic_save_with, clear_failed_restart_marker, consume_restart_marker,
             launch_then_exit_with, load_and_migrate_path, permission_gate_blocks, restart_marker,
-            validate_packaged_executable, StateOwner,
+            unsupported_version_at_path, validate_packaged_executable, StateOwner,
         };
         use crate::onboarding::state::{self, OnboardingState, OnboardingStep};
 
@@ -1215,6 +1293,7 @@ pub mod mac {
             let mut owner = StateOwner {
                 current: OnboardingState::default(),
                 path: Some(path.clone()),
+                write_blocked: false,
             };
             let next = state::apply(&owner.current, OnboardingStep::Welcome, None, false, 0);
             let saved = owner.persist(0, next).expect("first save");
@@ -1241,6 +1320,7 @@ pub mod mac {
             let mut owner = StateOwner {
                 current: original.clone(),
                 path: Some(path.clone()),
+                write_blocked: false,
             };
             let next = state::apply(&original, OnboardingStep::Reads, None, false, 0);
             let result = owner.persist_with(0, next, |_from, _to| {
@@ -1284,7 +1364,32 @@ pub mod mac {
                 std::fs::read_to_string(&path).expect("future remains"),
                 future
             );
+            assert!(unsupported_version_at_path(&path));
+            let mut owner = StateOwner {
+                current: OnboardingState::default(),
+                path: Some(path.clone()),
+                write_blocked: true,
+            };
+            let next = state::apply(&owner.current, OnboardingStep::Welcome, None, false, 0);
+            assert!(owner.persist(0, next).is_err());
+            assert_eq!(
+                std::fs::read_to_string(&path).expect("future still remains"),
+                future
+            );
             let _ = std::fs::remove_dir_all(path.parent().expect("parent"));
+        }
+
+        #[test]
+        fn malformed_versioned_state_is_read_only() {
+            for version in [r#""3""#, "null", "-1"] {
+                let path = test_path("onboarding.json");
+                std::fs::create_dir_all(path.parent().expect("parent")).expect("create test dir");
+                let record = format!(r#"{{"version":{version},"state":{{"step":"ready"}}}}"#);
+                std::fs::write(&path, &record).expect("seed malformed version");
+                assert!(unsupported_version_at_path(&path));
+                assert_eq!(std::fs::read_to_string(&path).expect("unchanged"), record);
+                let _ = std::fs::remove_dir_all(path.parent().expect("parent"));
+            }
         }
 
         #[test]
@@ -1464,6 +1569,7 @@ pub mod mac {
                     ..OnboardingState::default()
                 },
                 path: Some(path.clone()),
+                write_blocked: false,
             };
             owner.persist(0, current).expect("persist marker");
             clear_failed_restart_marker(&mut owner, 1).expect("clear marker");

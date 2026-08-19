@@ -20,6 +20,7 @@ import { AnalyticsToggle } from "../AnalyticsToggle";
 import { comboChips, DEFAULT_BINDS } from "../keys";
 import appIconUrl from "../../src-tauri/icons/icon-128.png";
 import {
+  acknowledgeOnboardingRestart,
   armPermissionDrag,
   disarmPermissionDrag,
   EMPTY_PERMISSIONS,
@@ -85,6 +86,7 @@ export function Onboarding(): JSX.Element {
   const [liveApp, setLiveApp] = useState("");
   const shownLogged = useRef(false);
   const grantedLogged = useRef(false);
+  const restartAckRevision = useRef<number | null>(null);
 
   // Theme: shared with the notch window through same-origin localStorage. The value is stored
   // JSON-encoded (App.tsx saveJson), so it must be parsed — reading it raw yields `"dark"` with
@@ -162,6 +164,28 @@ export function Onboarding(): JSX.Element {
       track("all_permissions_granted");
     }
   }, [permissions.all_granted]);
+
+  // Effects run after React commits the saved semantic step. Only then may Rust consume the
+  // restart marker, and only when the relaunched process proves Screen Recording is effective.
+  useEffect(() => {
+    if (
+      !state?.restart_pending ||
+      state.step !== state.restart_pending.step ||
+      state.step !== "screen_recording" ||
+      !permissions.screen_recording ||
+      restartAckRevision.current === state.revision
+    ) {
+      return;
+    }
+    restartAckRevision.current = state.revision;
+    void acknowledgeOnboardingRestart(state).then((saved) => {
+      if (saved) {
+        setState(saved);
+      } else {
+        restartAckRevision.current = null;
+      }
+    });
+  }, [permissions.screen_recording, state]);
 
   const go = useCallback(
     (delta: number): void => {

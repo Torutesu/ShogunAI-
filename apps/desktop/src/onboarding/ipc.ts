@@ -160,6 +160,20 @@ export function restartOnboarding(state: OnboardingState): Promise<void> {
   });
 }
 
+/** Clear a restart marker only after this exact step has rendered and native access is effective. */
+export function acknowledgeOnboardingRestart(
+  state: OnboardingState,
+): Promise<OnboardingState | null> {
+  if (!IN_TAURI) return Promise.resolve({ ...state, restart_pending: null });
+  return invoke<OnboardingState>("acknowledge_onboarding_restart", {
+    expectedRevision: state.revision,
+    step: state.step,
+  }).then(
+    (saved) => ({ ...FIRST_RUN, ...saved }),
+    () => null,
+  );
+}
+
 /** `permission_status() -> PermissionSnapshot` — every check is NON-prompting. */
 export function permissionStatus(): Promise<PermissionSnapshot> {
   return ask<PermissionSnapshot>("permission_status", {}, EMPTY_PERMISSIONS);

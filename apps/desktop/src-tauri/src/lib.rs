@@ -370,6 +370,7 @@ pub fn run() {
             onboarding::mac::permission_status,
             onboarding::mac::permission_listener_ready,
             onboarding::mac::onboarding_state,
+            onboarding::mac::acknowledge_onboarding_restart,
             onboarding::mac::set_onboarding_state,
             onboarding::mac::restart_onboarding,
             onboarding::mac::open_accessibility_settings,

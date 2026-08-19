@@ -111,6 +111,52 @@ describe("unified permission onboarding", () => {
     expect(screen.queryByRole("button")).toBeNull();
     expect(invoke).not.toHaveBeenCalledWith("set_onboarding_state", expect.anything());
   });
+
+  it("acknowledges a restart marker only after its exact step renders with effective access", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "onboarding_state") {
+        return {
+          completed: false,
+          step: "screen_recording",
+          plan: null,
+          revision: 4,
+          restart_pending: {
+            reason: "screen_recording",
+            bundle_id: "com.syogun.shogunai",
+            step: "screen_recording",
+          },
+        };
+      }
+      if (command === "permission_status" || command === "permission_listener_ready") {
+        return {
+          ...EMPTY_PERMISSION_RESULT,
+          screen_recording: true,
+          screen_recording_state: "granted",
+        };
+      }
+      if (command === "acknowledge_onboarding_restart") {
+        return {
+          completed: false,
+          step: "screen_recording",
+          plan: null,
+          revision: 5,
+          restart_pending: null,
+        };
+      }
+      if (command === "onboarding_event") return undefined;
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    render(<Onboarding />);
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("acknowledge_onboarding_restart", {
+        expectedRevision: 4,
+        step: "screen_recording",
+      });
+    });
+  });
 });
 
 const EMPTY_PERMISSION_RESULT = {

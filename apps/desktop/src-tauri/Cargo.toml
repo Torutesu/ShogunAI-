@@ -79,7 +79,7 @@ objc2-app-kit = { version = "0.3", features = [
     "NSSound",
 ] }
 objc2-foundation = { version = "0.3", features = [
-    "NSString", "NSArray", "NSDictionary", "NSGeometry", "NSNotification", "NSURL",
+    "NSString", "NSArray", "NSDictionary", "NSGeometry", "NSNotification", "NSURL", "NSBundle",
     # The cue WAVs are compiled in and handed to NSSound as NSData (#49).
     "NSData",
 ] }
