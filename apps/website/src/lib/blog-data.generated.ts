@@ -49,6 +49,30 @@ export const BLOG_DATA = [
     "html": "<p>AI memory tools help knowledge workers recover the decisions, conversations, documents, and preferences that normally disappear between apps and work sessions. The most useful tools do more than store notes: they make work context searchable when you need it.</p>\n<h2>What makes an AI memory tool useful?</h2>\n<p>Look for four capabilities:</p>\n<ul>\n<li><strong>Automatic capture:</strong> less manual organization and fewer forgotten details.</li>\n<li><strong>Cross-tool recall:</strong> search across the places where work already happens.</li>\n<li><strong>Source-aware answers:</strong> see where an answer came from and verify it.</li>\n<li><strong>Privacy controls:</strong> understand where memory is stored and how it is used.</li>\n</ul>\n<h2>ShogunAI</h2>\n<p>ShogunAI is designed as a private memory layer for daily work. It connects the context around your work, makes it searchable in natural language, and helps turn recalled context into the next action.</p>\n<p>It is a strong fit for founders, product managers, researchers, designers, and engineers who move between conversations, documents, and decisions throughout the day.</p>\n<h2>Notion</h2>\n<p>Notion is a flexible workspace for documents, wikis, projects, and databases. It works especially well when a team is willing to deliberately create and maintain a shared knowledge base.</p>\n<p>It is less focused on passively capturing the full context of a person&#x27;s working day.</p>\n<h2>Mem</h2>\n<p>Mem is built around personal notes and recall. It can be useful for people who already capture ideas and want an AI-assisted way to find them later.</p>\n<p>The key distinction is whether you want a note-taking system or a broader memory layer across your working context.</p>\n<h2>How to choose</h2>\n<p>Choose the tool that matches how your information is created. If your knowledge mostly lives in curated pages, a workspace may be enough. If it is scattered across conversations, email, documents, and decisions, an AI memory layer can reduce the cost of reconstructing context.</p>\n<h2>Frequently asked questions</h2>\n<h3>Is an AI memory tool the same as a note-taking app?</h3>\n<p>No. Note-taking apps depend on information being intentionally written down. AI memory tools aim to make more of your existing work context available for later recall.</p>\n<h3>What should I check before connecting work data?</h3>\n<p>Check storage location, retention, model providers, export and deletion controls, and whether your data is used for training.</p>\n<h3>Where does ShogunAI fit?</h3>\n<p>ShogunAI is for people who want work context to remain useful after the original conversation or document is no longer open. <a href=\"/#memory\">See how ShogunAI memory works</a>.</p>"
   },
   {
+    "slug": "bring-your-plan-not-just-your-keys",
+    "locale": "ja",
+    "title": "APIキーではなく、いま契約しているプランで動かす",
+    "description": "Pro に API キーは不要になりました。すでに払っているアシスタントのサブスクリプションの中で、エージェントの処理を動かせます。",
+    "date": "2026-08-17",
+    "category": "Product",
+    "author": "ShogunAI",
+    "image": "/images/blog/comparisons.png",
+    "readingMinutes": 1,
+    "html": "<p>これまで実行レイヤーを使うには API キーを貼り付ける必要がありました。エンジニアには当たり前の作業でも、それ以外の人には奇妙な要求です。2つ目の請求関係、訪ねるべきコンソール、勘で決める上限額 ── すでに月額で払っているモデルを使うために、そのすべてが要ります。</p>\n<p>そこで既定を変えました。<strong>Pro は、いま持っているアシスタントのプランの上で動きます。</strong> API キーも引き続き使えますし、その方が適している人もいます。ただし、参加の条件ではなくなりました。</p>\n<h2>仕組み</h2>\n<p>主要なアシスタントのサブスクリプションを利用していて、その公式のコマンドラインツールがインストール済み・サインイン済みであれば、ShogunAI はそれを通じてエージェントの処理を実行できます。設定画面で一度だけ、明示的にオプトインします。以降、下書きも推論もツール操作も、すでに支払っているプランの枠内で行われ、追加のトークン課金は発生しません。</p>\n<p>やらないこと、そしてこれからもやらないことが2つあります。</p>\n<ul>\n<li><strong>ほかのアプリの資格情報ストアを読みません。</strong> 別アプリの Keychain エントリや設定ファイルを漁ることはしません。ShogunAI はターミナルで自分が実行するのと同じ形でベンダーのツールを起動し、認証はそのツール自身が扱います。</li>\n<li><strong>誰かのコンシューマ向けサインインを自前で実装しません。</strong> すべてのリクエストはベンダー公式のクライアントを通り、その規約のもと、そのレート制限の中で動きます。アカウントを守れる形はこれだけです。</li>\n</ul>\n<p>ツールが未インストールかサインインしていない場合は、ShogunAI がその旨を伝え、キーによる方式にフォールバックします。</p>\n<h2>2つのレーンを分けたままにする理由</h2>\n<p>ShogunAI には、あなたの資格情報に一切触れないもう一種類のモデル処理があります。インデックス作成、分類、夜間のレビュー、そして朝のブリーフです。これらはバッチで動き、こちら側の基盤で実行され、サブスクリプション料金に含まれます。Standard がキーなしで動くのはこのためです。</p>\n<p>レーンを分けているのは経理上の都合ではありません。バッチ処理は本質的に大量で、それを個人の月次の枠に向ければ数日で使い切ってしまいます。残るのは、プランが更新されるまで動かないエージェントです。だから分離は仕様として強制されています。まとまった量の処理はこちらの容量が、あなたが名指しで頼んだ処理はあなたの資格情報が担当します。</p>\n<h2>価格の見え方が変わること</h2>\n<p>Pro は年額契約で月あたり99ドルです。この変更の前は、正直な実質価格にはその上に乗る API 利用料が含まれていました。よく使う人にとっては誤差では済まない額です。いまは、多くの人にとって表示価格がそのまま実質価格になります。モデルへの支出は、すでに決めていたものだからです。</p>\n<p>Standard は月49ドルで、資格情報は一切不要です。キャプチャ、想起、検索、ノッチ、文脈を読むための連携、夜間のレビュー、朝のブリーフが含まれます。どちらのプランも7日間のフルトライアルから始まります。</p>\n<h2>その下にある考え方</h2>\n<p>これはローカルファーストと同じ主張を、ひとつ上のレイヤーで言っているだけです。あなたの記憶が特定のベンダーに縛られるべきでないなら、推論も同じです。いま持っているプランを持ち込み、より良いものが出たら乗り換え、その間に積み上げた文脈は1日分も失わない。</p>"
+  },
+  {
+    "slug": "bring-your-plan-not-just-your-keys",
+    "locale": "en",
+    "title": "Bring your plan, not just your keys",
+    "description": "Pro no longer requires an API key. ShogunAI can run its agent work inside the assistant subscription you already pay for.",
+    "date": "2026-08-17",
+    "category": "Product",
+    "author": "ShogunAI",
+    "image": "/images/blog/comparisons.png",
+    "readingMinutes": 3,
+    "html": "<p>Until now, using the execution layer meant pasting an API key. That is a fine\nask for engineers and a strange one for everybody else — a second billing\nrelationship, a console to visit, a spending limit to guess at, all to use a\nmodel you are already paying a monthly subscription for.</p>\n<p>So we changed the default. <strong>Pro now runs on the assistant plan you already\nhave.</strong> An API key still works, and for some people it is the better option.\nIt is no longer the price of entry.</p>\n<h2>How it works</h2>\n<p>If you already use one of the major assistant subscriptions and have its\nofficial command-line tool installed and signed in, ShogunAI can run agent work\nthrough it. You opt in explicitly, once, in settings. From then on drafting,\nreasoning, and tool use happen inside the plan you are already paying for, at\nno additional per-token cost to you.</p>\n<p>Two things we do not do, and will not:</p>\n<ul>\n<li><strong>We do not read other applications&#x27; credential stores.</strong> No rummaging\nthrough another app&#x27;s keychain entries or config files. ShogunAI launches the\nvendor&#x27;s own tool, the way you would in a terminal, and that tool handles its\nown authentication.</li>\n<li><strong>We do not reimplement anyone&#x27;s consumer sign-in.</strong> Every request runs\nthrough the vendor&#x27;s official client, under their terms, with their rate\nlimits. That is the only version of this that is safe for your account.</li>\n</ul>\n<p>If the tool is not installed or not signed in, ShogunAI says so and falls back\nto a key.</p>\n<h2>Why the two lanes stay separate</h2>\n<p>There is a second kind of model work in ShogunAI that never touches your\ncredentials: indexing, classification, the nightly review, and the morning\nbrief. That work is batched, runs on our infrastructure, and is covered by your\nsubscription. It is the reason Standard needs no key at all.</p>\n<p>Keeping the lanes separate is not bookkeeping. Batch work is high-volume by\nnature, and pointing it at a personal monthly allowance would burn through the\nallowance in days — leaving your agent dead until the plan resets. So the split\nis enforced: our capacity does the bulk work, your credentials do the work you\nasked for by name.</p>\n<h2>What this changes about the price</h2>\n<p>Pro is $99 a month billed annually. Before this change, the honest sticker\nprice included whatever your API usage came to on top — which for heavy users\nwas not a rounding error. Now, for most people, it is the sticker price, and\nthe model spend is one you had already decided to make.</p>\n<p>Standard is $49 and needs no credentials at all: capture, recall, search, the\nnotch, connected tools for reading context, the nightly review, and the morning\nbrief. Both plans start with a seven-day full trial.</p>\n<h2>The point underneath</h2>\n<p>This is the same argument as local-first, one layer up. Your memory should not\nbe locked to a vendor, and neither should your inference. Bring the plan you\nalready have, swap it later when a better one exists, and keep every day of\ncontext you have accumulated in the meantime.</p>"
+  },
+  {
     "slug": "how-to-search-slack-gmail-notion",
     "locale": "ja",
     "title": "Slack・Gmail・Notionを横断して検索する方法",
@@ -95,6 +119,42 @@ export const BLOG_DATA = [
     "image": "/images/blog/ai-memory.png",
     "readingMinutes": 4,
     "html": "<p>The most interesting bet in AI right now isn&#x27;t a bigger model. It&#x27;s the layer\n<em>underneath</em> the agent — the memory and context that lets it act like a teammate\ninstead of a chatbot. We went looking for what serious investors and technical\nleaders have actually said, on the record, about this space. Below is a sourced\nsummary — every claim links to a primary source where we could find one.</p>\n<blockquote>\n<p>Note on sourcing: many of these are investor blogs and company press releases.\nThey accurately represent what the investor <em>said</em>, but they are self-interested\nprimary sources — theses, not proven market facts.</p>\n</blockquote>\n<h2>1. The &quot;context layer&quot; is becoming a category</h2>\n<p>Andreessen Horowitz has been the loudest voice here. In <em>Your Data Agents Need\nContext</em>, partners Jason Cui and Jennifer Li argue that data and analytics agents\nare &quot;essentially useless without the right context,&quot; and that a new layer — a\nsuperset of the semantic layer covering canonical entities, identity resolution,\ngovernance, and tribal knowledge — is emerging as its own company category.</p>\n<blockquote>\n<p>&quot;a new category of company has emerged that is building context layers from the\nground up&quot;</p>\n</blockquote>\n<p>In a16z&#x27;s <em>Big Ideas 2026</em>, the same theme shows up as &quot;the context problem,&quot; and\nJennifer Li frames &quot;data entropy&quot; — the decay of freshness, structure, and truth in\nenterprise data — as the thing that quietly breaks AI workloads. Alex Immerman adds\na human–agent collaboration angle: counterparty AIs negotiate within parameters and\nescalate asymmetries to a human, whose markup then trains the system for the whole\nfirm.</p>\n<ul>\n<li><a href=\"https://a16z.com/your-data-agents-need-context/\">Your Data Agents Need Context — a16z</a></li>\n<li><a href=\"https://a16z.com/newsletter/big-ideas-2026-part-1/\">Big Ideas 2026, Part 1 — a16z</a></li>\n</ul>\n<h2>2. The durable moat is the learning loop, not the model</h2>\n<p>Emergence Capital&#x27;s Gordon Ritter makes the sharpest version of the &quot;human-augmenting\nAI&quot; thesis. His view: the durable competitive layer in enterprise AI isn&#x27;t the\nfoundation model — it&#x27;s the proprietary learning loop built on top of it, seeded by\na company&#x27;s own people&#x27;s judgment. Emergence calls this &quot;Coaching Networks&quot;:\nsoftware that watches how your best people work and coaches everyone else in real\ntime.</p>\n<blockquote>\n<p>&quot;The future of software is driven by human brilliance, with AI in the back seat.&quot;</p>\n</blockquote>\n<p>The same fund backed Genspark&#x27;s $275M Series B, framing the shift as &quot;model-centric\ntools to outcome-centric systems&quot; built on &quot;an architecture that captures and applies\ncontext at every step.&quot;</p>\n<ul>\n<li><a href=\"https://www.emcap.com/conviction-areas/ai-coaching-networks\">AI Coaching Networks — Emergence Capital</a></li>\n<li><a href=\"https://www.emcap.com/thoughts/the-thesis-that-waited-a-decade\">The Thesis That Waited a Decade — Emergence</a></li>\n<li><a href=\"https://www.emcap.com/thoughts/genspark-the-ultimate-system-of-context\">Genspark: The Ultimate System of Context — Emergence</a></li>\n</ul>\n<h2>3. Memory is being funded as core infrastructure</h2>\n<p>If context is the enterprise story, <strong>memory</strong> is the agent-infrastructure story.\nMem0 raised a $24M Series A (led by Basis Set Ventures, seed led by Kindred Ventures,\nwith Peak XV, GitHub Fund, and Y Combinator) to build exactly this.</p>\n<blockquote>\n<p>&quot;Every agentic application needs memory, just as every application needs a database.\nWe&#x27;re using this funding to become the default memory layer for AI agents.&quot;\n— Taranjeet Singh, CEO, Mem0</p>\n</blockquote>\n<p>Kindred Ventures put the reason plainly: the move from AI&#x27;s experimental phase to its\ncommercial era &quot;hinges on personalization,&quot; and &quot;memory is the engine that makes\npersonalization possible.&quot;</p>\n<ul>\n<li><a href=\"https://www.prnewswire.com/news-releases/mem0-raises-24m-series-a-to-build-memory-layer-for-ai-agents-302597157.html\">Mem0 raises $24M Series A — PR Newswire</a></li>\n<li><a href=\"https://kindredventures.com/announcement/mem0-building-the-memory-infrastructure-for-personalized-ai/\">Mem0: Building the Memory Infrastructure for Personalized AI — Kindred Ventures</a></li>\n</ul>\n<h2>4. Agents as coworkers, not bots</h2>\n<p>The framing that matters most for products like ShogunAI is the shift from\n&quot;assistant&quot; to &quot;teammate.&quot; Coworker.ai raised a $13M seed (led by ex-Google SVP Jeff\nHuber at Triatomic Capital) on precisely this idea:</p>\n<blockquote>\n<p>&quot;The deep organizational context means it&#x27;s able to go far beyond surface-level\nanswers to make it much more of an active teammate than an assistant.&quot;</p>\n</blockquote>\n<p>Ando — backed by Index Ventures, Accel, and Emergence — is rebuilding team messaging\nso that &quot;humans and agents share the channel,&quot; giving agents &quot;the tools and context\nthey need&quot; to feel &quot;more like coworkers than bots.&quot;</p>\n<p>And it&#x27;s not just founders talking their book: in a global MIT Sloan Management\nReview / BCG executive survey, <strong>76% of respondents said they view agentic AI as more\nlike a coworker than a tool.</strong> (Worth noting: that measures executive <em>perception</em>,\nnot agent capability.)</p>\n<ul>\n<li><a href=\"https://www.prnewswire.com/news-releases/coworkerai-launches-the-first-ai-agent-with-deep-company-context-backed-by-13m-seed-round-302459262.html\">Coworker.ai launches with deep company context — PR Newswire</a></li>\n<li><a href=\"https://www.indexventures.com/companies/ando/\">Ando — Index Ventures</a></li>\n<li><a href=\"https://sloanreview.mit.edu/projects/the-emerging-agentic-enterprise-how-leaders-must-navigate-a-new-age-of-ai/\">The Emerging Agentic Enterprise — MIT SMR / BCG</a></li>\n</ul>\n<h2>5. The prize is the labor budget</h2>\n<p>Wing Venture Capital&#x27;s Tanay Jaipuria zooms out to the market size. Because agents go\nafter <em>labor</em> budgets rather than software budgets, he argues the opportunity is &quot;at\nleast an order of magnitude larger than software spend.&quot;</p>\n<ul>\n<li><a href=\"https://www.wing.vc/content/the-rise-of-the-agentic-workforce\">The Rise of the Agentic Workforce — Wing VC</a></li>\n</ul>\n<h2>Where this leaves us</h2>\n<p>Two theses are converging:</p>\n<ol>\n<li><strong>Memory and context are the new infrastructure layer.</strong> (Mem0, Kindred, a16z)</li>\n<li><strong>Agents become valuable when they act like coworkers — and that requires deep\ncontext.</strong> (Emergence, Coworker.ai, Ando, Wing, MIT/BCG)</li>\n</ol>\n<p>ShogunAI sits at the intersection: <strong>memory that captures your day, and execution\nthat acts on it.</strong> The investors above are, in effect, describing the two halves of\nthe same product — and betting real money that both are inevitable.</p>\n<p><em>This piece is a working draft. Sources were verified against primary material where\navailable; investor theses are opinions about the future, not settled facts.</em></p>"
+  },
+  {
+    "slug": "meeting-notes-without-the-recording",
+    "locale": "ja",
+    "title": "録音しない会議ノート",
+    "description": "会議が音声ファイルのフォルダではなく、記憶の一部になる。トライアルを含むすべてのプランで使えます。",
+    "date": "2026-08-17",
+    "category": "Product",
+    "author": "ShogunAI",
+    "image": "/images/blog/product.png",
+    "readingMinutes": 1,
+    "html": "<p>会議レコーダーは一日のうち1時間を解決し、残りの7時間を忘れます。ノートは専用のアプリの中、専用のサイロに残り、その会議が本来扱っていた仕事とは切り離されたままです。</p>\n<p>ShogunAI は会議をそのままのものとして扱います ── メモリーレイヤーがすでにカバーしている「同じ一日」の、密度の高い1時間として。</p>\n<h2>どう動くか</h2>\n<p>通話アプリが最前面にあり、マイクが動いていて、カレンダーに予定がある。そうした手がかりから ShogunAI は会議中であることを認識し、文字起こしを始めます。ボットは参加しません。「レコーダーがいます」と断る必要もありません。レコーダーが存在しないからです。会議が終わると、何が決まり、誰に何が割り当てられ、何が未決のまま残ったのかが要約として返ってきます。</p>\n<p>これらは独立したドキュメントではありません。通話の中で交わされた約束は、あなたの一週間を追っているのと同じテーブルにオープンループとして入ります。15時40分に口約束した follow-up が、翌朝のブリーフにも、下書きされたメールにも現れます。開くのを覚えていなければならないノートアプリの中ではなく。</p>\n<h2>保存するもの、しないもの</h2>\n<p><strong>保存する:</strong> 文字起こしのテキスト、誰が話したか、いつか、どの会議のものか。</p>\n<p><strong>保存しない:</strong> 音声。ShogunAI は録音をディスクに書きません。一時的な音声ファイルも作りません。パイプラインのどの段階でも生成しません。漏れるものがなく、誤って共有するものがなく、差し押さえられるものもありません。これは「あとで消すのを忘れない」という運用ではなく、ビルドそのもので担保されています。</p>\n<p>言語の扱いも重要なので、文字起こしは既定で多言語対応です。日本語と英語が混ざる打ち合わせも、壊れた2つの断片ではなく、ひとつの文字起こしとして返ってきます。</p>\n<h2>隠さずに書いておくこと</h2>\n<p>ライブの文字起こしは、Mac 上だけで完結せず音声認識サービスを経由します。音声は通話のあいだストリーミングされ、テキストを生成する目的にのみ使われます。会議で話された内容が誰かのモデルの学習や改善に使われないよう、アカウント側で設定しています。</p>\n<p>これは「データは端末から出ない」に対する実際の例外です。だからこそ脚注ではなく、平易な言葉でここに書いています。アプリは会議のUI上でこれを開示し、トレーサビリティのログはほかの外部送信と同じようにこれを記録します。望まないなら、会議ノートだけをオフにできます。ほかの機能には影響しません。</p>\n<p>この取引は意図して選びました。ライブで使えるだけの速さ、引用できるだけの正確さ、実際の会議で役に立つだけの多言語性 ── この3つを満たすオンデバイスの文字起こしは、人々が実際に持っているハードウェアではまだ実現できていません。実現したときには、Mac 上に戻します。</p>\n<h2>すべてのプランに含まれます</h2>\n<p>会議ノートは Standard にも Pro にも、7日間のトライアルにも含まれます。これは体験しないと評価できない機能で、それを隠したトライアルは、ユーザーが答えを出そうとしている問いに答えられません。Pro に限定されるのは、Memory API から自分の AI ツール経由で会議の記憶を参照する部分だけです。</p>\n<p>会議を録音するのは簡単です。その会議が、その週の残りであなたのシステムの動きを変えること ── 作る価値があるのはそちらです。</p>"
+  },
+  {
+    "slug": "meeting-notes-without-the-recording",
+    "locale": "en",
+    "title": "Meeting notes without the recording",
+    "description": "Meetings become part of your memory instead of a folder of audio files — and it is included in every plan, trial included.",
+    "date": "2026-08-17",
+    "category": "Product",
+    "author": "ShogunAI",
+    "image": "/images/blog/product.png",
+    "readingMinutes": 3,
+    "html": "<p>Meeting recorders solve one hour of your day and forget the other seven. The\nnotes land in their own app, in their own silo, disconnected from the work the\nmeeting was actually about.</p>\n<p>ShogunAI treats a meeting as what it is: a dense hour of the same day the rest\nof the memory layer already covers.</p>\n<h2>How it works</h2>\n<p>ShogunAI notices you are in a meeting — the call app is frontmost, the mic is\nlive, the event is on your calendar — and starts a transcript. No bot joins the\ncall. Nobody has to be told a recorder is present, because there is no\nrecorder. When the meeting ends you get a recap: what was decided, what was\nassigned, what stayed open, and who owes what to whom.</p>\n<p>Those outputs are not a separate document. Commitments made in the call become\nopen loops in the same tables that track the rest of your week, so the follow-up\nyou promised at 15:40 shows up in the morning brief and in the drafted email —\nnot in a notes app you would have had to remember to open.</p>\n<h2>What is stored, and what is not</h2>\n<p><strong>Stored:</strong> the transcript text, who said it, when, and which meeting it came\nfrom.</p>\n<p><strong>Not stored:</strong> the audio. ShogunAI does not write a recording to disk, does\nnot keep a temporary audio file, and does not produce one at any point in the\npipeline. There is nothing to leak, nothing to accidentally share, nothing to\nsubpoena. This is enforced in the build itself, not by remembering to delete\nthings afterward.</p>\n<p>Language handling matters here, so the transcription is multilingual by\ndefault. A call that switches between Japanese and English comes back as one\ntranscript, not two broken halves.</p>\n<h2>The part we will not bury</h2>\n<p>Live transcription runs through a speech service rather than entirely on your\nMac. Audio streams to it for the length of the call and is used only to produce\nthe text — the account is configured so that nothing spoken in your meetings\ncan be used to train or improve anyone&#x27;s models.</p>\n<p>That is a real exception to &quot;your data stays on your machine,&quot; and it is the\nreason we are writing it in plain language here instead of in a footnote. The\napp discloses it in the meeting interface, the traceability log records it like\nany other egress, and if you would rather not, meeting notes can stay off\nwithout affecting anything else.</p>\n<p>We picked this trade deliberately. On-device transcription that is fast enough\nto be live, accurate enough to be quoted, and multilingual enough to be useful\nin the meetings our users actually sit in is not there yet on the hardware\npeople actually own. When it is, this moves back to the Mac.</p>\n<h2>Included in every plan</h2>\n<p>Meeting notes are in Standard, in Pro, and in the seven-day trial. This is a\nfeature you have to feel to evaluate, and a trial that hides it is a trial that\ncannot answer the question you are trying to answer. The only meeting-related\nfeature behind Pro is reaching meeting memory from your own AI tools through\nthe Memory API.</p>\n<p>Recording a meeting is easy. Having the meeting change what your system does\nfor the rest of the week is the part worth building.</p>"
+  },
+  {
+    "slug": "passive-memory-not-screenshots",
+    "locale": "ja",
+    "title": "スクリーンショットではなく、受動的な記憶",
+    "description": "画面を監視フィードに変えることなく、一日のプライベートでローカルな記憶を作る方法。",
+    "date": "2026-07-15",
+    "category": "Ideas",
+    "author": "ShogunAI",
+    "image": "/images/blog/ai-memory.png",
+    "readingMinutes": 1,
+    "html": "<p>ソフトウェアに一日の記憶を持たせる分かりやすい方法は、画面を録画することです。数秒おきにフレームを撮り、文字認識にかけ、フレームを保存し、あとから検索する。それは動きます。そして、間違った取引です。</p>\n<p>フレームのアーカイブは、あなたが見たすべてのコピーです。それがディスク上に、ファイルにアクセスできるどのプロセスからも読め、どのビューアでも再生できる形で置かれます。4秒だけ開いたパスワードマネージャも、別タブの検査結果も、同僚が共有した給与のスプレッドシートも、そこに含まれます。それを残すと決めたのはあなたではありません。レコーダーが代わりに決めたのです。</p>\n<p>ShogunAI は画面を録画しません。</p>\n<p>記録された例外がひとつだけあります。それもレコーダーではありません。既定でオフの「ビジュアルリコール」は、\nテキストが一切取得できなかったウィンドウにかぎってフレームを1枚取得し、72時間で削除します。そのルールは\n<a href=\"/blog/visual-recall\">ビジュアルリコールと、私たちが議論した例外</a>に書きました。</p>\n<h2>代わりに何を読むのか</h2>\n<p>macOS はすでに、画面上にあるものの構造化された記述を公開しています ── スクリーンリーダーが使うアクセシビリティのレイヤーです。ウィンドウのタイトル、見出し、フォーカスしている文書の本文、読んでいるメッセージ、入力しているフィールド。支援技術が使うのと同じインターフェースで、返ってくるのはピクセルではなくテキストと構造です。</p>\n<p>ShogunAI が読むのはそれです。結果は、画像から復元したどんなものより小さく、正確で、役に立ちます。</p>\n<ul>\n<li><strong>認識エラーがない。</strong> テキストはテキストのまま届きます。ピクセルから推測するものがないので、6週間後の記憶が黙って間違っていることもありません。</li>\n<li><strong>構造が保たれる。</strong> 文書のタイトルと、人からのメッセージと、コード中のコメントの違いを ShogunAI は理解します。アクセシビリティツリーがどれがどれかを示しているからです。</li>\n<li><strong>安い。</strong> フォーカスが切り替わるたびにテキストツリーを読むコストは、画像をエンコードして認識するコストのごく一部です。ファンが静かで、バッテリーが保つのはこのためです。</li>\n</ul>\n<h2>キャプチャは判断であって、垂れ流しではない</h2>\n<p>受動的であることは、無差別であることを意味しません。キャプチャには範囲があります。実際に作業しているアプリとウィンドウに追随し、止めろと言われたところで止まります。</p>\n<p>プライベートウィンドウ、パスワードフィールド、除外に指定したアプリは、決して読まれません。一時停止はノッチのワンクリックで、停止中は何もメモリに入りません。これらの除外は、何かが書き込まれる前に適用されます。保存済みのデータに対するフィルタとしてではありません。この違いは重要です。後者の約束は、フィルタにバグがあった瞬間に壊れるからです。</p>\n<h2>実際に保存されるもの</h2>\n<p>3つです。テキスト、どこから来たか、いつか。すべてのエントリは、それを生んだイベントへのリンクを保持します。だからこそ ShogunAI は、根拠のない自信たっぷりの一文ではなく、「火曜の14:20、設計ドキュメントの中でそう決めています」と答えられます。</p>\n<p>メモリは古さで層に分かれています。直近1日は即座に想起できるようメモリ上に、直近1か月は詳細のまま検索でき、それより古いものは圧縮して長期に保持します。今朝のことは会話の速度で、前四半期のことは四半期分の生テキストを抱え込むことなく答えられます。</p>\n<h2>実際によく聞かれること</h2>\n<p>「ほかの人が読めますか?」 あなたの Mac の中の、暗号化されたデータベースにあります。既定でどこにも同期されません。誰かが差し押さえたり、侵害したり、こっそり学習に使ったりできるサーバー側のコピーは存在しません。</p>\n<p>「何か外に出ますか?」 名前のついた理由がある場合には出ます ── 返信を下書きするためのモデル呼び出し、あなたが明示的に接続したサービス。そのひとつひとつが、開いて確認できるトレーサビリティのログに記録されます。何が出て、何のために出て、途中で第三者を経由したかどうか。もしあなたの内容を誰かを経由させて送るなら、ログにそう書かれ、設定時に先に同意を求めます。</p>\n<p>「残したくないものは?」 削除は機能します。エントリを消すと、検索からも、階層化された保存からも、次のアクションのために組み立てられる文脈からも消えます。</p>\n<p>その下にある原則は単純です。あなたの一日は、しまい込むための動画ではありません。自分が何をしたかについての事実の集合であり、その事実を ── そしてその事実だけを ── 知っているシステムのほうが、役に立つうえに、はるかに信頼しやすいのです。</p>"
   },
   {
     "slug": "passive-memory-not-screenshots",
@@ -182,6 +242,18 @@ export const BLOG_DATA = [
   },
   {
     "slug": "the-execution-layer",
+    "locale": "ja",
+    "title": "実行レイヤー",
+    "description": "記憶できるのは前提条件。すでに使っているツールの中でそれに基づいて動くことが、製品の本体です。",
+    "date": "2026-07-18",
+    "category": "Product",
+    "author": "ShogunAI",
+    "image": "/images/blog/work-context.png",
+    "readingMinutes": 1,
+    "html": "<p>たいていのメモリ製品に質問すれば、良い答えが返ってきます。そのあとウィンドウを閉じて、仕事は手でやります。記憶は本物でした。レバレッジはありませんでした。</p>\n<p>実行レイヤーは、その隙間を埋める部分です。ShogunAI は自分が持つ一日の記憶を読み、開いたままになっているものに気づき、それを片付けます。あなたがすでに使っているツールの中で、目に見えるルールのもとで。</p>\n<h2>自律性の3段階</h2>\n<p>ShogunAI が取りうるすべてのアクションは、実行前に分類されます。そしてその分類が、誰が承認するかを決めます。段階は3つあり、その境界は巧妙なプロンプトで動かせるものではありません。</p>\n<p><strong>レベル1 ── そのまま実行される。</strong> 取り消せて、ローカルに閉じ、正しければ気づかれもしない処理。文書の整理、スレッドへのタグ付け、オープンループの更新、10分後に始まる会議のための文脈の組み立て。この段階のものはほかの誰の目にも触れず、すべて元に戻せます。</p>\n<p><strong>レベル2 ── 準備され、あなたが目を通す。</strong> 返信は下書きされ、要約は書かれ、更新文は用意されています。完成した状態でそこに置かれます。読んで、必要なら直して、先へ進みます。</p>\n<p><strong>レベル3 ── 止まって尋ねる。</strong> ほかの人の目に触れるものすべて。メールの送信、メッセージの投稿、誰かのカレンダーへの予定作成、共有ワークスペースへの書き込み。モデルがどれだけ自信を持っていても、どれだけ定型的に見えても、これらが自動で走ることはありません。</p>\n<p>その下にある原則は一文です。<strong>端末を離れてほかの人に届くものが、自動で実行されることはない。</strong> これは、あなたが正しく設定してくれていることを願う設定項目ではなく、アクションの経路そのものの構造的な性質です。インターフェースではなく API を通じて ShogunAI を動かす場合も、同じ分類器と同じ関門が適用されます。外部から呼び出すエージェントに、あなた自身のクリック以上の権限はありません。</p>\n<h2>20を超えるツール、ひとつの文脈</h2>\n<p>アクションは各ツールの API を通じて到達します。使うのはあなたが直接付与した資格情報で、それはシステムのキーチェーンに保管されます。メール、カレンダー、チャット、ドキュメント、課題管理、ノート。連携そのものはありふれています。ありふれていないのは、エージェントがそれを使うときに何を知っているかです。</p>\n<p>汎用のアシスタントがあなたの follow-up を書くとき、知っているのはそのスレッドだけです。ShogunAI は、火曜に資料を出すと約束したこと、実際に共有したのは v3 だったこと、宛先の相手が先月に価格の点で難色を示したこと、二人で見直すと合意した件がまだ開いていることを知ったうえで書きます。同じ連携、まったく違う出力 ── 文脈が、尋ねられたあとではなく、尋ねられる前に組み上がっているからです。</p>\n<h2>仕事の単位はオープンループ</h2>\n<p>アクションの下には、システムがあなたの仕事について保持している小さな状態テーブルの集合があります。付き合いのある人、関わっているプロジェクト、交わした約束、そしてまだ開いているループ。各行は、それを生んだイベントへのリンクと、確信度のスコアを持っています。</p>\n<p>この確信度は実際に仕事をしています。確信度の低い推定は、あなたが送るものの中で事実として述べられることはありません。「ミカに修正した数字をまだ返していない可能性があります」という問いとして表に出るのであって、承認しようとしているメールの一文へと静かに固まったりはしません。この工程を省いたシステムが、あなたの署名入りで幻覚を見るのです。</p>\n<h2>あとから確認できること</h2>\n<p>すべてのアクションは記録を残します。何が、どのレベルで、どんな根拠に基づいて実行され、何が端末を出てどこへ行ったのか。トレーサビリティの画面はコンプライアンスのチェックボックスではありません。そもそもレベル1を許容できるものにしているのがこれです。事後に監査できる自動処理と、事前に信じるしかない自動処理は、まったく別の提案です。</p>\n<p>実行レイヤーは Pro に含まれ、あなた自身のモデル資格情報か、すでに払っているアシスタントのプランの上で動きます。メモリ、想起、日次のレビューは Standard です。どちらも7日間のフルトライアルから始まります。あなたの一週間を知っているエージェントに価値があるかどうかを確かめる、正直な方法です。</p>"
+  },
+  {
+    "slug": "the-execution-layer",
     "locale": "en",
     "title": "The execution layer",
     "description": "Memory is table stakes. Acting on it — across the tools you already use — is the product.",
@@ -191,6 +263,42 @@ export const BLOG_DATA = [
     "image": "/images/blog/product.png",
     "readingMinutes": 1,
     "html": "<p>Memory is useful only when it reduces the work that follows. The execution layer turns recalled context into a draft, plan, update, or approved tool action while keeping consequential steps visible to the person in control.</p>\n<h2>From context to action</h2>\n<p>First, ShogunAI retrieves the relevant decisions, preferences, and source material. It then prepares the next step in the tool where the work belongs. Sending, publishing, changing, or deleting something stays behind an approval gate.</p>\n<h2>Why approval matters</h2>\n<p>Automation should remove repetition without removing judgment. A good execution layer shows the evidence behind a suggestion, makes the proposed change inspectable, and lets you pause or edit before anything consequential happens.</p>\n<p>The result is a shorter path from “what did we decide?” to “the next step is ready.”</p>"
+  },
+  {
+    "slug": "visual-recall",
+    "locale": "ja",
+    "title": "ビジュアルリコールと、私たちが議論した例外",
+    "description": "テキストだけでは足りない狭いケースと、フレームを1枚でも保存する前に決めたルール。",
+    "date": "2026-08-17",
+    "category": "Product",
+    "author": "ShogunAI",
+    "image": "/images/blog/privacy.png",
+    "readingMinutes": 1,
+    "html": "<p>ShogunAI が読むのはピクセルではなくテキストです。この原則がメモリーレイヤーの信頼を支えていて、そのために見送った機能もあります。</p>\n<p>けれど、その原則が実際にユーザーの損になるケースに行き当たりました。</p>\n<h2>テキストが届かないところ</h2>\n<p>画面に映るもののほとんどは、内部的にはテキストです。アクセシビリティのレイヤーがそれをきれいに渡してくれます。しかし、そうでないものもあります。画面共有されたスライドのグラフ。キャンバスに描画されたダッシュボード。デザインのモック。スキャンされただけのPDF。アクセシビリティ情報を一切提供しないアプリ。</p>\n<p>こうした対象について、ShogunAI は「そのウィンドウがあった」ことは分かっても、中身は何も分かりません。月曜のレビューで見た売上のグラフについて尋ねても、返ってくるのは沈黙です。間違った答えではありませんが、答えでもありません。</p>\n<p>そこで例外を書くことにし、機能そのものを作るより、その例外を囲うルールを書くことに長い時間を使いました。</p>\n<h2>ビジュアルリコールの正確な仕様</h2>\n<p>ビジュアルリコールは<strong>既定でオフ</strong>です。有効にするには設定で明示的に選ぶ必要があり、その設定には何が起きるかがそのまま書いてあります。</p>\n<p>オンのとき、作業中のウィンドウからテキストが取得できなかった場合にかぎり、ShogunAI は圧縮したフレームを取得し、そこからテキストを読み取り、暗号化されたデータベースに<strong>最大72時間だけ</strong>保持します。それを過ぎると、アプリが起動しているかどうかにも、あなたが見たかどうかにも関係なく、自動的に削除されます。</p>\n<p>抽出されたテキストは、ほかのテキストと同じようにメモリに残ります。画像は残りません。フレームが存在する理由は、抽出の失敗を3日間だけ取り戻せるようにするためであって、画面をアーカイブとして積み上げるためではありません。</p>\n<p>残りのルール:</p>\n<ul>\n<li><strong>アップロードしない。</strong> フレームは Mac 上で読み取られ、外には出ません。</li>\n<li><strong>テキストが取れなかったときだけ。</strong> きれいにテキストが取れるウィンドウ ── 一日の大半 ── ではフレームは生成されません。</li>\n<li><strong>音声は対象外。</strong> この例外はピクセルだけの話です。ビジュアルリコールの有無にかかわらず、ShogunAI は音声をディスクに書きません。</li>\n<li><strong>タイムラインではない。</strong> シークバーも再生も「一日を動画で見る」ビューもありません。フレームは短期間だけ残る抽出の入力です。</li>\n<li><strong>オフはオフ。</strong> 無効なら、パイプラインのどの段階でも画像は書き込まれません。</li>\n</ul>\n<h2>なぜ72時間なのか</h2>\n<p>意味のある穴を埋めるには十分な長さです ── 金曜にうまく取得できなかったものを、月曜の朝に探しにいく。そして、その保管庫が盗む価値のあるものにならない程度には短い。テキストのメモリが年単位で残るのに対し、こちらは時間単位です。</p>\n<p>7日間も検討しました。7日は「1週間分の画面」であり、作らないと言ったアーカイブに近づき始めます。24時間では週末をまたげません。72時間は、有用性の曲線と露出の曲線が交差する場所です。</p>\n<h2>正直な言い方</h2>\n<p>これは、本当は絶対のまま保ちたかったルールに対する、記録された例外です。そう書いているのは意図的です。公の場で強い線を主張する製品ほど、コードの中ではもっと緩い線を引いているものです。信頼に足るのは、線が実際にどこにあり、それが何を犠牲にしているかを言う製品のほうです。</p>\n<p>ここに書いておきます。既定オフ、明示的なオプトイン、ローカルのみ、テキストが取れなかったときだけ、72時間で消える。この取引が望ましくないなら、オフのままにしてください。ShogunAI のそれ以外の部分は、これまでどおり動きます。</p>"
+  },
+  {
+    "slug": "visual-recall",
+    "locale": "en",
+    "title": "Visual recall, and the exception we argued about",
+    "description": "One narrow case where text is not enough — and the rules we put around it before shipping a single frame.",
+    "date": "2026-08-17",
+    "category": "Product",
+    "author": "ShogunAI",
+    "image": "/images/blog/privacy.png",
+    "readingMinutes": 3,
+    "html": "<p>ShogunAI reads text, not pixels. That rule is the reason people trust the\nmemory layer, and we have turned down features to keep it.</p>\n<p>Then we hit the case where it costs you something real.</p>\n<h2>Where text runs out</h2>\n<p>Most of what you look at is text underneath, and the accessibility layer hands\nit over cleanly. Some things are not. A chart in a slide someone screen-shared.\nA dashboard drawn on a canvas. A design mock. A PDF that is really a scan. An\napp that ships no accessibility information at all.</p>\n<p>For those, ShogunAI knows a window existed and knows nothing about what was in\nit. You ask what the revenue chart showed in Monday&#x27;s review and get silence —\nnot a wrong answer, but not an answer either.</p>\n<p>We could have shrugged. Instead we wrote an exception, and then spent longer\nwriting the rules around the exception than building the feature.</p>\n<h2>Visual recall, precisely</h2>\n<p>Visual recall is <strong>off by default</strong>. Turning it on takes an explicit choice in\nsettings, and the setting says exactly what follows.</p>\n<p>With it on, when text extraction comes back empty for the window you are\nworking in, ShogunAI takes a compressed frame, reads the text out of it, and\nstores the frame in the encrypted database — <strong>for at most 72 hours</strong>. After\nthat it is deleted automatically, whether or not the app is running, whether or\nnot you ever looked at it.</p>\n<p>The extracted text stays in memory the same way any other text does. The image\ndoes not. That is the whole point: the frame exists so that a bad extraction is\nrecoverable for three days, not so that your screen accumulates into an archive.</p>\n<p>The remaining rules:</p>\n<ul>\n<li><strong>Nothing is uploaded.</strong> Frames are read on your Mac and never leave it.</li>\n<li><strong>Only where text failed.</strong> A window that yields clean text never produces a\nframe, which is the overwhelming majority of your day.</li>\n<li><strong>Audio is not included.</strong> This exception is about pixels only. ShogunAI does\nnot write audio to disk, with or without visual recall.</li>\n<li><strong>Not a timeline.</strong> There is no scrubber, no playback, no day-in-video view.\nFrames are inputs to extraction that happen to persist briefly.</li>\n<li><strong>Off means off.</strong> With the setting disabled, no image is written at any\npoint in the pipeline.</li>\n</ul>\n<h2>Why 72 hours</h2>\n<p>Long enough to cover the gap that matters: something was captured badly on\nFriday and you go looking for it Monday morning. Short enough that the store\nnever becomes a thing worth stealing — the window is measured in hours, not the\nyears your text memory covers.</p>\n<p>We considered seven days. Seven days is a week of screens, which is starting to\nlook like the archive we said we would not build. Twenty-four hours missed the\nweekend. Seventy-two is where the usefulness curve and the exposure curve cross.</p>\n<h2>The honest framing</h2>\n<p>This is a documented exception to a rule we would rather have kept absolute,\nand we are describing it that way on purpose. Products that hold a hard line in\npublic usually hold a softer one in the code; the ones worth trusting are the\nones that tell you where the line actually is and what it costs.</p>\n<p>Here it is: default off, opt-in, local only, images only where text failed,\ngone in 72 hours. If that trade is not one you want, leave it off — everything\nelse in ShogunAI works exactly as before.</p>"
+  },
+  {
+    "slug": "welcome-to-shogunai",
+    "locale": "ja",
+    "title": "ShogunAI へようこそ",
+    "description": "AI ネイティブな個人のための OS を作る理由 ── 一日を記憶するメモリと、それに基づいて動く実行レイヤー。",
+    "date": "2026-07-10",
+    "category": "Ideas",
+    "author": "ShogunAI",
+    "image": "/images/blog/product.png",
+    "readingMinutes": 1,
+    "html": "<p>いま使っているアシスタントは、会話のたびにゼロから始まります。あなたは文脈を貼り直します。プロジェクトを、関係者を、火曜に下した判断を、もう一度説明します。そして出てきた答えをコピーして、結局は自分で仕事をします。</p>\n<p>それはアシスタントではありません。とても弁の立つ白紙です。</p>\n<p>ShogunAI は、AI ネイティブな個人のためのオペレーティングシステムです。レイヤーは2つあり、要点は2つ目のほうにあります。</p>\n<h2>メモリーレイヤー</h2>\n<p>ShogunAI は、あなたが働いているあいだに、あなたの仕事のモデルを作ります。自分で維持しなければならないノートのフォルダではありません。何を読み、何を書き、何を決めたのか ── その動き続ける全体像を、バックグラウンドで受動的に組み立て、あなたの Mac に保存します。</p>\n<p>テキストの取得には、macOS がすでにスクリーンリーダー向けに公開しているアクセシビリティのレイヤーを使います。画面録画ではありません。フォルダに溜まるスクリーンショットも、動画のタイムラインも、音声ファイルもありません。保存されるのはテキストと、その出どころです。</p>\n<p>この区別が設計のすべてで、それについては<a href=\"/blog/passive-memory-not-screenshots\">スクリーンショットではなく、受動的な記憶</a>に詳しく書きました。</p>\n<h2>実行レイヤー</h2>\n<p>質問に答えるだけのメモリは、行儀のいい検索ボックスです。一日に何があったかを知る理由は、そこで開いたままになっているものを片付けるためです。</p>\n<p>そこで ShogunAI は自分の記憶を読み、仕事をします。送ると言った follow-up を下書きし、1時間後の打ち合わせのブリーフを用意し、出しそびれていたものを提出する。各ツールにはそれぞれの API を通じて到達し、端末の外に出るもの ── 送信されるメール、投稿されるメッセージ、作成される予定 ── は、必ずあなたの明示的な承認の前で止まります。</p>\n<p>その関門がどこに置かれているかは<a href=\"/blog/the-execution-layer\">実行レイヤー</a>に書きました。</p>\n<h2>なぜ両方を、なぜ今</h2>\n<p>3つのことが、ほぼ同時に本当になりました。モデルは、現実の雑然とした文脈を要約するだけでなく、それに基づいて動けるだけの水準になりました。ツール側には共通のプロトコル層ができ、20個の個別実装なしに20個のツールへ到達できるようになりました。そしてノートPCは、キャプチャとインデックスと検索をローカルで回しても気づかれない程度に速くなりました。</p>\n<p>2007年、iPhone は電話とカメラとブラウザと音楽プレイヤーを1台に畳み込みました。メモリと実行とデータ主権は、いまその瞬間を迎えています。今日はそれぞれ別の製品として売られています。本来はひとつのシステムに属するものです。</p>\n<h2>やらないこと</h2>\n<p>何かを出荷する前に言っておく価値のある制約があります。あとから静かに手放されがちなのは、たいていこの部分だからです。</p>\n<ul>\n<li><strong>スクリーンショットも録画もしない。</strong> ピクセルと波形ではなく、テキストと出どころ。唯一の狭い例外はオプトインかつ期限付きで、<a href=\"/blog/visual-recall\">ここで説明しています</a>。</li>\n<li><strong>既定はあなたの端末。</strong> 記憶はローカルに置きます。外に出るものは、名前のついた理由があって出ます。どの理由だったかはログが教えます。</li>\n<li><strong>勝手に送信するものはない。</strong> 自動で行われるのは、取り消せてローカルに閉じた処理だけです。ほかの人の目に触れるものは、あなたを待ちます。</li>\n<li><strong>データで賄う無料プランを作らない。</strong> すべてのプランが有料で、7日間のフルトライアルから始まります。あなたが顧客である ── 上の3つを本当に守れる関係は、それだけです。</li>\n</ul>\n<p>ShogunAI は macOS でプライベートベータ中です。あなたの一日が、あなた以外の誰も持っていない文脈で埋まっているなら、これはあなたのために作られました。</p>"
   },
   {
     "slug": "welcome-to-shogunai",
@@ -203,6 +311,18 @@ export const BLOG_DATA = [
     "image": "/images/blog/product.png",
     "readingMinutes": 1,
     "html": "<p>The useful part of work is rarely in one document. It lives across conversations, browser tabs, decisions, and half-finished drafts. ShogunAI gives that context a durable home so you can return to it without rebuilding the story from scratch.</p>\n<h2>A personal operating layer</h2>\n<p>ShogunAI remembers the day, helps you find the relevant thread, and prepares the next step across the tools you already use. It is designed for people who move between product, research, code, customers, and operations without wanting to maintain a second manual log of everything.</p>\n<h2>Built around control</h2>\n<p>Local-first storage, explicit provider choices, and approval before consequential actions are product principles. The assistant should feel continuous, but your data and decisions should remain yours.</p>"
+  },
+  {
+    "slug": "why-local-first",
+    "locale": "ja",
+    "title": "なぜローカルファーストなのか",
+    "description": "あなたの一日はあなたのもの。記憶を自分の端末に置くことの短い論証と、そこから開くもの。",
+    "date": "2026-07-17",
+    "category": "Ideas",
+    "author": "ShogunAI",
+    "image": "/images/blog/privacy.png",
+    "readingMinutes": 1,
+    "html": "<p>ローカルファーストはたいていプライバシー機能として売られます。確かにそうです。けれど、もし論拠がプライバシーだけなら、ほとんどの人はこれまでどおり利便性と引き換えに手放すでしょう。</p>\n<p>もっと良い論拠はこうです。記憶を自分の端末に置くと、製品としてよく動くようになる。アーキテクチャが正しければ、プライバシーはおまけとして付いてきます。</p>\n<h2>体感できるレイテンシ</h2>\n<p>メモリーレイヤーが役に立つのは、尋ねる前に用意ができているときだけです。ノッチを開いた時点で、文脈は組み上がっているべきです ── 話している相手、いま関わっているプロジェクト、そこで開いたままのスレッド。</p>\n<p>その予算は、アイドルから展開まで100ミリ秒、隣にアクションが出るまで150ミリ秒です。この数字はネットワーク越しには出せません。ネットワークが抽象的に遅いからではなく、予測できないからです。往復の中央値は問題なくても、95パーセンタイルはスピナーになります。ローカルのインデックスに95パーセンタイル問題はありません。ディスクから読むだけです。</p>\n<p>キャプチャも同じです。文脈はウィンドウを切り替えるたび、1時間に何十回も組み直されます。ローカルで行えば数百ミリ秒のバックグラウンド処理です。往復にすれば、レイテンシと帯域とバッテリーの継続的なコストを一日中払い続けることになります。そもそも外に出る必要のなかったデータのために。</p>\n<h2>一日の濃さでコストが変わらない</h2>\n<p>いちばん分かりやすいのは埋め込みです。ShogunAI は多言語の埋め込みモデルをあなたの Mac で動かします。だから濃い一日をインデックスしても、薄い一日をインデックスしても、コストは同じ ── ゼロです。あなた自身の記憶に対してトークン単位のメーターが回らない。つまり私たちは、「あなたのことを覚える量を減らして製品を安くする」必要が一度もありません。</p>\n<p>クラウドでインデックスする製品は選ばなければなりません。一日をサンプリングするか、量に応じて課金するか、データから得る何かで補填するか。3つとも、より悪い製品です。</p>\n<h2>飛行機の中でも動く</h2>\n<p>検索、想起、日次のレビュー、朝のブリーフ ── これらはネットワークなしで動きます。ネットワークが要るのは生成です。返信を書く、難しい問いを考える、接続したツールで操作する。オフラインでも ShogunAI はあなたの一日を知っています。ただ、まだメールは書けないというだけです。</p>\n<p>この切り分けは意図的です。常に動かなければならないレイヤーは、決して外に出ないレイヤーです。</p>\n<h2>実際に外に出るもの、その理由</h2>\n<p>ローカルファーストは、「端末から何ひとつ出ない」という主張ではありません。その主張はほぼ常に嘘で、嘘の絶対値は正直な境界線より質が悪い。</p>\n<p>境界線はここです。生の記憶は残ります。外に出るのは、あなたが出した特定の要求に必要な特定のかたまりだけ ── 要約するスレッド、下書きのための文脈。接続したサービスが見るのは、そのサービスに必要な分だけです。すべての外部送信は目的とともにトレーサビリティのログに記録され、モデル提供者へ直接ではなく第三者を経由する場合には、ログに「第三者経由」と書かれ、設定時に先に同意を求めます。</p>\n<p>その越境は現在2つあり、どちらもオプトインで、ここに埋めるのではなく製品の中で開示しています。メールは連携プロバイダを経由すること、そして会議のライブ文字起こしは、聞いた内容を学習に使わないことを契約で禁じた音声サービスを使うことです。「何も出ません」と切り上げるより、名前を挙げるほうを選びます。</p>\n<h2>何もかも持ち込みでいい</h2>\n<p>リモートである必要があるのが推論だけなら、それを誰にやらせるかはあなたが決められます。自分の API キーを持ち込んでもいいし、すでに払っているアシスタントのプランを ShogunAI に指定して、その枠内で動かしてもいい。あなたの記憶は、どのモデルがそれを読むかを気にしません。提供者を乗り換えても、履歴は1日も失われません。</p>\n<p>それがローカルファーストの本当の見返りです。価格ページのバッジではなく、独立性です。モデルはこれからも変わり続けます。あなたの10年分の文脈が、そのたびに引っ越す必要はありません。</p>"
   },
   {
     "slug": "why-local-first",
@@ -314,18 +434,6 @@ export const BLOG_DATA = [
   },
   {
     "slug": "passive-memory-not-screenshots",
-    "locale": "ja",
-    "title": "スクリーンショットではなく、受動的な記憶",
-    "description": "監視フィードにせず、仕事の文脈をプライベートに取り戻す方法を解説します。",
-    "date": "2026-07-15",
-    "category": "Privacy",
-    "author": "ShogunAI",
-    "image": "/images/blog/privacy.png",
-    "readingMinutes": 1,
-    "html": "<p>スクリーンショットは文脈の粗い代理です。何が重要だったか、何が変わったか、次に何をすべきかまでは説明しません。</p>\n<p>有用な受動的記憶は、端末内を基本に、検索、削除、一時停止、権限の境界を明確にします。</p>"
-  },
-  {
-    "slug": "passive-memory-not-screenshots",
     "locale": "es",
     "title": "Memoria pasiva, no capturas",
     "description": "Cómo recuperar contexto privado sin convertir tu pantalla en un sistema de vigilancia.",
@@ -422,18 +530,6 @@ export const BLOG_DATA = [
   },
   {
     "slug": "the-execution-layer",
-    "locale": "ja",
-    "title": "実行レイヤーとは何か",
-    "description": "記憶した文脈を、承認可能な仕事の次の一歩へ変える仕組みです。",
-    "date": "2026-07-18",
-    "category": "Product",
-    "author": "ShogunAI",
-    "image": "/images/blog/product.png",
-    "readingMinutes": 1,
-    "html": "<p>メモリは、次の仕事を減らして初めて価値になります。ShogunAIは決定や好みを取得し、下書き、計画、更新、ツール操作を準備します。</p>\n<p>送信、公開、変更、削除などの重要操作は、根拠を確認してから承認できるようにします。</p>"
-  },
-  {
-    "slug": "the-execution-layer",
     "locale": "es",
     "title": "La capa de ejecución",
     "description": "Cómo la memoria se convierte en trabajo terminado con aprobación humana.",
@@ -458,18 +554,6 @@ export const BLOG_DATA = [
   },
   {
     "slug": "welcome-to-shogunai",
-    "locale": "ja",
-    "title": "ShogunAIへようこそ",
-    "description": "一日の記憶と、それに基づく実行を一つの個人向けOSとして考える理由です。",
-    "date": "2026-07-10",
-    "category": "Product",
-    "author": "ShogunAI",
-    "image": "/images/blog/product.png",
-    "readingMinutes": 1,
-    "html": "<p>仕事の価値ある文脈は、一つの文書ではなく会話、ブラウザ、決定、途中の下書きに分散しています。</p>\n<p>ShogunAIはその背景を取り戻し、次の一歩を準備します。ローカル優先、明示的なプロバイダ選択、重要操作の承認を原則にします。</p>"
-  },
-  {
-    "slug": "welcome-to-shogunai",
     "locale": "es",
     "title": "Te damos la bienvenida a ShogunAI",
     "description": "Por qué construimos un sistema operativo para la persona AI-native.",
@@ -491,18 +575,6 @@ export const BLOG_DATA = [
     "image": "/images/blog/product.png",
     "readingMinutes": 1,
     "html": "<p>Wichtiger Kontext liegt zwischen Gesprächen, Tabs, Entscheidungen und Entwürfen. ShogunAI macht ihn wieder auffindbar.</p>\n<p>Local-first Datenschutz, Anbieterwahl und Freigabe wichtiger Aktionen sind Produktprinzipien.</p>"
-  },
-  {
-    "slug": "why-local-first",
-    "locale": "ja",
-    "title": "なぜローカルファーストなのか",
-    "description": "仕事の記憶を自分の端末に置く意味と、そこから生まれる選択肢を説明します。",
-    "date": "2026-07-17",
-    "category": "Privacy",
-    "author": "ShogunAI",
-    "image": "/images/blog/privacy.png",
-    "readingMinutes": 1,
-    "html": "<p>個人のメモリには、決定、人間関係、資料、未完成の考えが含まれます。必要のないクラウドコピーを作らないことが重要です。</p>\n<p>端末内の保存を基本にすると、削除が意味を持ち、AIプロバイダへ共有するタイミングを自分で選べます。</p>"
   },
   {
     "slug": "why-local-first",
