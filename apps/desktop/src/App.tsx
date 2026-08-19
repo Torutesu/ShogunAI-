@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
@@ -11,38 +11,12 @@ import {
   type SummaryState as DailySummary,
   type SummaryWhich,
 } from "./daily";
-
-// Explicit window drag on mouse-down. data-tauri-drag-region proved unreliable on device, so call
-// startDragging() directly. Ignore drags that start on an interactive control (button/input).
-function beginDrag(e: React.MouseEvent): void {
-  if (!IN_TAURI || e.button !== 0) return;
-  const el = e.target as HTMLElement;
-  if (el.closest("button, input, a, [data-no-drag]")) return;
-  // The visible surface is a NATIVE NSPanel hosting this webview — drag IT. The tao window is a
-  // hidden shell, so getCurrentWindow().startDragging() would grab the wrong window.
-  void invoke("start_panel_drag").catch(() =>
-    getCurrentWindow()
-      .startDragging()
-      .catch((err) => uiLog(`startDragging failed: ${err}`)),
-  );
-}
-
-// Collapsed state: let the pill be dragged to a new spot (issue #21). The whole strip is one
-// button whose click expands the panel, so we can't use beginDrag (it bails on buttons). Native
-// performWindowDragWithEvent handles the distinction for us: a real drag moves the window and
-// swallows the click, while a stationary press returns and falls through to onClick (expand) —
-// so the pill stays click-to-open AND becomes drag-to-move without a manual threshold. Rust
-// remembers the dropped spot as the resting place until a Castle Position is picked again
-// (docs/fixes/2026-07-30-pill-drag-port-design.md).
-function beginPillDrag(e: React.MouseEvent): void {
-  if (!IN_TAURI || e.button !== 0) return;
-  void invoke("start_panel_drag").catch((err) => uiLog(`start_panel_drag failed: ${err}`));
-}
 import { t, tf } from "./strings";
 import { AnalyticsToggle } from "./AnalyticsToggle";
 import { ConnectionsList } from "./connections";
 import { comboChips, DEFAULT_BINDS } from "./keys";
 import {
+  IconBrain,
   IconClose,
   IconHistory,
   IconMaximize2,
@@ -145,7 +119,7 @@ interface StartupHealth {
 }
 
 /** Hold-to-talk voice dialogue (#44). Rust owns lifecycle; notch expands on `voice_state`. */
-interface VoiceView {
+export interface VoiceView {
   phase: "idle" | "recording" | "processing" | "response" | "error";
   transcript: string;
   response: string;
@@ -157,19 +131,14 @@ interface LevelEvent {
   rms: number;
 }
 
-const VOICE_W_RECORD = 360;
-const VOICE_H_RECORD = 100;
-const VOICE_W_PROCESS = 400;
-const VOICE_H_PROCESS = 140;
 const VOICE_W_RESPONSE = 480;
 const VOICE_H_RESPONSE = 280;
+const VOICE_W_RECORD_COLLAPSED = 240;
+const VOICE_LEVEL_STALE_MS = 1_200;
+const VOICE_ERROR_DISMISS_MS = 4_000;
 
 function voicePanelSize(phase: VoiceView["phase"]): Size {
   switch (phase) {
-    case "recording":
-      return { w: VOICE_W_RECORD, h: VOICE_H_RECORD };
-    case "processing":
-      return { w: VOICE_W_PROCESS, h: VOICE_H_PROCESS };
     case "response":
       return { w: VOICE_W_RESPONSE, h: VOICE_H_RESPONSE };
     default:
@@ -190,10 +159,9 @@ interface StateView {
 const IN_TAURI =
   typeof window !== "undefined" && ("__TAURI_INTERNALS__" in window || "__TAURI__" in window);
 
-// Window sizing. Collapsed = just the handle strip. Open (chat) starts as a wide short bar; the
-// Settings view opens much taller so its stacked sections fit without feeling clipped. Both open
-// views are user-resizable via the corner grip, and each remembers its own size across the
-// Rust-driven respawns.
+// Window sizing. Collapsed = just the handle strip. Chat and Settings are two faces of one panel,
+// so switching between them must preserve the exact user-resized frame. The overview hub keeps a
+// separate larger size because it is a distinct workspace.
 const W = 560;
 const H_OPEN = 360;
 /** Hardware notch cutout (safeAreaInsets.top). Welded black fills this — labels do not. */
@@ -225,7 +193,6 @@ const STICKY_INLINE_PHASES = new Set<InlineStatus["phase"]>(["no_key", "key_reje
  *  would only ever punish that path. Waiting is no longer the only option anyway: Stop is live for
  *  the whole turn. */
 const CHAT_SILENCE_MS = 90_000;
-const H_SETTINGS = 460; // taller default so setting groups fit; body scrolls; clamped to screen
 const H_HUB = 560; // the in-panel hub draws the overview panes (cards, tables); give them room
 const MIN_W = 460;
 const MIN_H = 240;
@@ -235,9 +202,16 @@ const W_HANDLE_FALLBACK = 180;
 /** Quiet hiding Idle — hardware-notch-sized weld when frontmost is self / unknown. */
 const W_HIDE = 180;
 
-interface Size {
+export interface Size {
   w: number;
   h: number;
+}
+
+export type OpenPanelView = "chat" | "settings" | "hub";
+
+/** Chat and Settings share one frame. Only Overview owns a separate remembered workspace size. */
+export function panelSizeForView(view: OpenPanelView, chatSize: Size, hubSize: Size): Size {
+  return view === "hub" ? hubSize : chatSize;
 }
 
 // Hard ceiling: panel cannot exceed ¾ of the display the webview is on. `window.screen` tracks the
@@ -458,7 +432,6 @@ export function App(): JSX.Element {
   /// The in-panel hub (Today / Health / Sources / Memory / Activity / Trace). Everything routine
   /// finishes inside the notch — only meetings and Visual Recall get their own surfaces.
   const [showHub, setShowHub] = useState(false);
-  const [voiceToast, setVoiceToast] = useState<string | null>(null);
   const [voice, setVoice] = useState<VoiceView>({
     phase: "idle",
     transcript: "",
@@ -470,19 +443,16 @@ export function App(): JSX.Element {
   /** Last `voice_level` timestamp — failsafe ends stuck recording after release + quiet. */
   const lastVoiceLevelAt = useRef(0);
   const voiceReleaseWatch = useRef<number | null>(null);
+  const voiceMicWatch = useRef<number | null>(null);
+  const voiceErrorDismiss = useRef<number | null>(null);
   // #120: these timers are OWNED — each new event clears its predecessor before arming, so a
   // stale timeout can never dismiss the state that replaced the one it was armed for.
   const inlineHideTimer = useRef<number | null>(null);
-  const voiceToastTimer = useRef<number | null>(null);
 
   // Open-view size is user-resizable (corner grip) and persists across Rust-driven respawns.
   // Chat and Settings share one frame — toggling settings must not jump to a separate stored size.
   const [chatSize, setChatSize] = useState<Size>(() => {
     const s = loadJson<Size>("shogun.size.chat", { w: W, h: H_OPEN });
-    return clampSize(s.w, s.h);
-  });
-  const [setSize, setSetSize] = useState<Size>(() => {
-    const s = loadJson<Size>("shogun.size.settings", { w: W, h: H_SETTINGS });
     return clampSize(s.w, s.h);
   });
   const [hubSize, setHubSize] = useState<Size>(() => {
@@ -491,7 +461,6 @@ export function App(): JSX.Element {
   });
   useEffect(() => saveJson("shogun.pinned", pinned), [pinned]);
   useEffect(() => saveJson("shogun.size.chat", chatSize), [chatSize]);
-  useEffect(() => saveJson("shogun.size.settings", setSize), [setSize]);
   useEffect(() => saveJson("shogun.size.hub", hubSize), [hubSize]);
 
   // Size the window to match collapsed vs expanded. Pass explicit `open` when a state setter in the
@@ -504,11 +473,13 @@ export function App(): JSX.Element {
       // Collapsed: a provisional pill-sized window; the measuring effect below tightens it to the
       // pill's real bounds so the transparent remainder never eats clicks.
       if (!isOpen) void applyPanelSize(W_HANDLE_FALLBACK, H_HANDLE);
-      else if (isSettings) void applyPanelSize(setSize.w, setSize.h);
-      else if (isHub) void applyPanelSize(hubSize.w, hubSize.h);
-      else void applyPanelSize(chatSize.w, chatSize.h);
+      else {
+        const view: OpenPanelView = isSettings ? "settings" : isHub ? "hub" : "chat";
+        const size = panelSizeForView(view, chatSize, hubSize);
+        void applyPanelSize(size.w, size.h);
+      }
     },
-    [open, showSettings, showHub, chatSize, setSize, hubSize],
+    [open, showSettings, showHub, chatSize, hubSize],
   );
   // The boot/summon listeners live in a run-once effect; a ref keeps them calling the LATEST sizer
   // instead of a stale closure captured at mount.
@@ -517,8 +488,8 @@ export function App(): JSX.Element {
 
   // Live resize from the corner grip. During the drag we only resize the native panel (the webview
   // reflows via CSS — no React state churn), rAF-throttled so we don't flood the IPC bridge. The
-  // per-view size is committed to state (and persisted) once on release. Always castle-centre
-  // anchor so width grows/shrinks symmetrically under the notch.
+  // shared Chat/Settings size (or separate Overview size) is committed once on release. Always
+  // castle-centre anchor so width grows/shrinks symmetrically under the notch.
   const liveSize = useRef<Size | null>(null);
   const raf = useRef<number | null>(null);
   const onResizeLive = useCallback((w: number, h: number): void => {
@@ -541,10 +512,9 @@ export function App(): JSX.Element {
     liveSize.current = null;
     if (!s) return;
     void applyPanelSize(s.w, s.h, "center");
-    if (showSettings) setSetSize(s);
-    else if (showHub) setHubSize(s);
+    if (showHub) setHubSize(s);
     else setChatSize(s);
-  }, [showSettings, showHub]);
+  }, [showHub]);
   // Active agent provider, shown on the composer's model pill (mirrors Settings → Model).
   const [provider, setProvider] = useState<string>("anthropic");
   const threadRef = useRef<HTMLDivElement>(null);
@@ -619,6 +589,10 @@ export function App(): JSX.Element {
         "voice_state",
         (e) => {
           const p = e.payload.phase;
+          if (p !== "error" && voiceErrorDismiss.current != null) {
+            window.clearTimeout(voiceErrorDismiss.current);
+            voiceErrorDismiss.current = null;
+          }
           setVoice((cur) => ({
             ...cur,
             phase: p,
@@ -627,17 +601,75 @@ export function App(): JSX.Element {
             error: p === "error" ? e.payload.response ?? cur.error : p === "idle" ? "" : cur.error,
             level: p === "recording" ? cur.level : 0,
           }));
-          if (p === "recording") voicePeak.current = 0;
-          if (p === "recording" || p === "processing") {
+          if (p !== "recording" && voiceMicWatch.current != null) {
+            window.clearInterval(voiceMicWatch.current);
+            voiceMicWatch.current = null;
+          }
+          if (p === "recording") {
+            voicePeak.current = 0;
+            lastVoiceLevelAt.current = performance.now();
+            if (voiceMicWatch.current != null) window.clearInterval(voiceMicWatch.current);
+            // The audio lane emits a frame even for silence. If frames stop, close this session
+            // so a live indicator cannot claim capture is still running.
+            voiceMicWatch.current = window.setInterval(() => {
+              if (voiceRef.current.phase !== "recording") return;
+              if (performance.now() - lastVoiceLevelAt.current < VOICE_LEVEL_STALE_MS) return;
+              if (voiceMicWatch.current != null) {
+                window.clearInterval(voiceMicWatch.current);
+                voiceMicWatch.current = null;
+              }
+              void invoke("voice_force_end").catch(() => undefined);
+            }, 250);
+            if (collapseTimer.current != null) {
+              window.clearTimeout(collapseTimer.current);
+              collapseTimer.current = null;
+            }
+            if (expandTimer.current != null) {
+              window.clearTimeout(expandTimer.current);
+              expandTimer.current = null;
+            }
+            setOpen(false);
+            setExpanding(false);
+            setCollapsing(false);
+            setNotchSm("idle");
+            void applyPanelSize(VOICE_W_RECORD_COLLAPSED, H_DEAD);
+          } else if (p === "processing") {
+            if (collapseTimer.current != null) {
+              window.clearTimeout(collapseTimer.current);
+              collapseTimer.current = null;
+            }
+            if (expandTimer.current != null) {
+              window.clearTimeout(expandTimer.current);
+              expandTimer.current = null;
+            }
+            setShowSettings(false);
+            setOpen(false);
+            setExpanding(false);
+            setCollapsing(false);
+            setNotchSm("idle");
+            void applyPanelSize(VOICE_W_RECORD_COLLAPSED, H_DEAD);
+          } else if (p === "idle") {
+            // Dictation done — always collapse; do not leave recording chrome stuck open.
+            beginCollapseRef.current();
+          } else if (p === "error") {
             setOpen(true);
             setShowSettings(false);
             const sz = voicePanelSize(p);
             void applyPanelSize(sz.w, sz.h);
-          } else if (p === "idle") {
-            // Dictation done — always collapse; do not leave recording chrome stuck open.
-            beginCollapseRef.current();
-          } else if (p === "error" && !pinnedRef.current) {
-            beginCollapseRef.current();
+            if (voiceErrorDismiss.current != null) window.clearTimeout(voiceErrorDismiss.current);
+            voiceErrorDismiss.current = window.setTimeout(() => {
+              voiceErrorDismiss.current = null;
+              if (voiceRef.current.phase !== "error") return;
+              void invoke("voice_dismiss").catch(() => {
+                if (voiceRef.current.phase !== "error") return;
+                setVoice((current) =>
+                  current.phase === "error"
+                    ? { ...current, phase: "idle", transcript: "", response: "", error: "", level: 0 }
+                    : current,
+                );
+                beginCollapseRef.current();
+              });
+            }, VOICE_ERROR_DISMISS_MS);
           } else if (p === "response") {
             setOpen(true);
             setShowSettings(false);
@@ -654,18 +686,6 @@ export function App(): JSX.Element {
         const norm = voicePeak.current > 0 ? Math.min(1, rms / voicePeak.current) : 0;
         lastVoiceLevelAt.current = performance.now();
         setVoice((cur) => (cur.phase === "recording" ? { ...cur, level: norm } : cur));
-      }),
-    );
-    offs.push(
-      listen<{ message: string }>("voice_toast", (e) => {
-        setVoiceToast(e.payload.message);
-        // Owned + superseding (#120): a short toast armed earlier must not dismiss a longer
-        // error that replaced it.
-        if (voiceToastTimer.current != null) window.clearTimeout(voiceToastTimer.current);
-        voiceToastTimer.current = window.setTimeout(() => {
-          voiceToastTimer.current = null;
-          setVoiceToast(null);
-        }, 2200);
       }),
     );
     // Release signal from Rust: if UI still shows recording after 500ms with no levels, force end.
@@ -782,13 +802,17 @@ export function App(): JSX.Element {
         window.clearInterval(voiceReleaseWatch.current);
         voiceReleaseWatch.current = null;
       }
+      if (voiceMicWatch.current != null) {
+        window.clearInterval(voiceMicWatch.current);
+        voiceMicWatch.current = null;
+      }
+      if (voiceErrorDismiss.current != null) {
+        window.clearTimeout(voiceErrorDismiss.current);
+        voiceErrorDismiss.current = null;
+      }
       if (inlineHideTimer.current != null) {
         window.clearTimeout(inlineHideTimer.current);
         inlineHideTimer.current = null;
-      }
-      if (voiceToastTimer.current != null) {
-        window.clearTimeout(voiceToastTimer.current);
-        voiceToastTimer.current = null;
       }
       offs.forEach((p) => void p.then((off) => off()));
     };
@@ -832,24 +856,6 @@ export function App(): JSX.Element {
     }
     wasOpenForSummary.current = open;
   }, [open, showSettings, showHub]);
-
-  useEffect(() => {
-    if (!IN_TAURI) return;
-    let unlisten: (() => void) | undefined;
-    void listen<{ message: string }>("voice_error", (e) => {
-      setVoiceToast(e.payload.message);
-      if (voiceToastTimer.current != null) window.clearTimeout(voiceToastTimer.current);
-      voiceToastTimer.current = window.setTimeout(() => {
-        voiceToastTimer.current = null;
-        setVoiceToast(null);
-      }, 4000);
-    }).then((fn) => {
-      unlisten = fn;
-    });
-    return () => {
-      unlisten?.();
-    };
-  }, []);
 
   // `/` opens the memory search (B-6) — a reach-anywhere shortcut, but never while typing:
   // a slash in the composer (or any field) is text, not a command.
@@ -912,7 +918,7 @@ export function App(): JSX.Element {
   pinnedRef.current = pinned;
   const voiceRef = useRef(voice);
   voiceRef.current = voice;
-  const voiceActive = voice.phase !== "idle" && voice.phase !== "error";
+  const voiceActive = voice.phase !== "idle";
 
   const onPanelLeave = useCallback((): void => {
     if (pinned) return;
@@ -958,11 +964,15 @@ export function App(): JSX.Element {
       setNotchSm("idle");
       return;
     }
-    // Morph from the size the panel is ACTUALLY at (settings/hub have their own), and clear the
-    // view flags here so every collapse path — pointer-leave, Rust idle/hidden, voice — converges
-    // on the same reset; a stale showHub would otherwise re-open the hub at chat size (see
-    // expand()).
-    const cur = showSettings ? setSize : showHub ? hubSize : chatSize;
+    // Morph from the size the panel is ACTUALLY at (Overview has its own; Settings shares Chat),
+    // and clear the view flags here so every collapse path — pointer-leave, Rust idle/hidden,
+    // voice — converges on the same reset; a stale showHub would otherwise re-open the hub at chat
+    // size (see expand()).
+    const cur = panelSizeForView(
+      showSettings ? "settings" : showHub ? "hub" : "chat",
+      chatSize,
+      hubSize,
+    );
     setShowSettings(false);
     setShowHub(false);
     // A collapsed card is done: it was marked seen on open, so the next expand goes back to
@@ -978,7 +988,7 @@ export function App(): JSX.Element {
       setNotchSm("idle");
       sizeForViewRef.current({ open: false });
     }, COLLAPSE_ANIM_MS);
-  }, [applyMorphScale, chatSize, setSize, hubSize, showSettings, showHub]);
+  }, [applyMorphScale, chatSize, hubSize, showSettings, showHub]);
   beginCollapseRef.current = beginCollapse;
 
   const collapse = (): void => {
@@ -1000,9 +1010,13 @@ export function App(): JSX.Element {
     }
     setCollapsing(false);
     setNotchSm("expanded");
-    // The view flags survive a deliberate open (hotkey while settings were up), so open at THAT
-    // view's size — a chat-sized settings panel clips its groups.
-    const cur = showSettings ? setSize : showHub ? hubSize : chatSize;
+    // View flags survive a deliberate open. Settings reuses the user's Chat frame; Overview
+    // restores its separate workspace frame.
+    const cur = panelSizeForView(
+      showSettings ? "settings" : showHub ? "hub" : "chat",
+      chatSize,
+      hubSize,
+    );
     applyMorphScale(cur.w, cur.h);
     // 1) Grow NSPanel to full frame. 2) Pose visible shell at Idle scale. 3) Flip to Expanded
     // so transform actually transitions (resize+class same tick kills the morph).
@@ -1022,7 +1036,7 @@ export function App(): JSX.Element {
         }, OPEN_ANIM_MS);
       });
     })();
-  }, [applyMorphScale, chatSize, setSize, hubSize, showSettings, showHub]);
+  }, [applyMorphScale, chatSize, hubSize, showSettings, showHub]);
   expandRef.current = expand;
 
   useEffect(
@@ -1043,13 +1057,14 @@ export function App(): JSX.Element {
   }, []);
 
   const openSettings = (): void => {
+    // Settings and Chat intentionally share the same native frame. Resizing to the size we already
+    // have still makes AppKit reposition/recompose the NSPanel, producing a visible hitch before
+    // React paints Settings. Keep this transition entirely inside the existing webview.
     setShowSettings(true);
     setShowHub(false);
-    sizeForView({ open: true, settings: true, hub: false });
   };
   const closeSettings = (): void => {
     setShowSettings(false);
-    sizeForView({ open: true, settings: false, hub: false });
   };
   const toggleHub = (): void => {
     const next = !showHub;
@@ -1244,8 +1259,9 @@ export function App(): JSX.Element {
   })();
 
   // A standing condition from boot, if any. Ordered by how much of the product it takes away:
-  // no memory is everything, no Accessibility is every input path, no model is only the search
-  // quality. Only the worst one is shown — a stack of warnings in a notch panel reads as noise.
+  // no memory is everything and no Accessibility is every input path. The optional embedding
+  // model only improves search quality, so lexical-only search must not become a permanent global
+  // warning in the notch.
   const healthLine = ((): { text: string; fix: "settings" | "accessibility" | null } | null => {
     if (!health) return null;
     if (health.memory_db_error) return { text: t.healthNoMemory, fix: "settings" };
@@ -1254,7 +1270,6 @@ export function App(): JSX.Element {
     // is what makes an empty answer look like an honest one.
     if (health.memory_degraded) return { text: t.healthMemoryDegraded, fix: null };
     if (!health.accessibility) return { text: t.healthNoAccess, fix: "accessibility" };
-    if (!health.embedding_model) return { text: t.healthNoModel, fix: null };
     return null;
   })();
 
@@ -1308,8 +1323,9 @@ export function App(): JSX.Element {
     // Hiding Idle uses the same weld (W_HIDE × H_DEAD).
     // Height floors at H_HANDLE so a short content pill never leaves air under the notch.
     const hiding = el.classList.contains("handle--hiding");
-    const notchW = hiding ? W_HIDE : W_HANDLE_FALLBACK;
-    const minH = hiding ? H_DEAD : H_HANDLE;
+    const voiceActivity = el.querySelector(".vpill") !== null;
+    const notchW = voiceActivity ? VOICE_W_RECORD_COLLAPSED : hiding ? W_HIDE : W_HANDLE_FALLBACK;
+    const minH = voiceActivity || hiding ? H_DEAD : H_HANDLE;
     void applyPanelSize(
       notchW,
       Math.max(minH, Math.ceil(r.height)),
@@ -1327,6 +1343,7 @@ export function App(): JSX.Element {
     meeting?.elapsed_ms,
     meeting?.countdown_ms,
     voice?.phase,
+    voice?.level,
     // The greeting swaps the handle's text (issue #10), so its width changes with it.
     summary?.due,
   ]);
@@ -1359,7 +1376,11 @@ export function App(): JSX.Element {
     </div>
   ) : voiceLive?.phase === "recording" ? (
     <div ref={pillRef}>
-      <VoicePill view={voiceLive} />
+      <VoicePill />
+    </div>
+  ) : voiceLive?.phase === "processing" ? (
+    <div ref={pillRef}>
+      <VoiceProcessingPill />
     </div>
   ) : (
     <button
@@ -1369,7 +1390,6 @@ export function App(): JSX.Element {
       ref={handleRef}
       type="button"
       onClick={() => expand()}
-      onMouseDown={beginPillDrag}
       title={t.openPanel}
       aria-label={t.openPanel}
     >
@@ -1400,7 +1420,6 @@ export function App(): JSX.Element {
   // Panel always mounted (playbook P0 pre-mount). Idle face mounts only when fully Idle.
   return (
     <div ref={stageRef} className={`stage notch-shell ${shellMode}`}>
-      {voiceToast ? <div className="voice-toast">{voiceToast}</div> : null}
       {showIdleFace ? (
         <div className="notch-idle" aria-hidden={open || collapsing || expanding}>
           {idleChin}
@@ -1437,7 +1456,7 @@ export function App(): JSX.Element {
           />
         ) : (
           <>
-            <header className="head" onMouseDown={beginDrag}>
+            <header className="head">
               <div className="head__left">
                 {/* The live source sits top-left, in the same spot the collapsed pill occupies, so
                     opening the panel doesn't make the indicator jump to the bottom. App NAME only —
@@ -1522,7 +1541,7 @@ export function App(): JSX.Element {
                   aria-pressed={showSearch}
                   onClick={() => setShowSearch((v) => !v)}
                 >
-                  ⌕
+                  <IconBrain />
                 </button>
                 {/* The brief, health, memory and run log open HERE, as the in-panel hub — the
                     notch is where things finish; a separate window would defeat that. Only
@@ -1728,7 +1747,11 @@ export function App(): JSX.Element {
         )}
         </div>
         <ResizeGrip
-          current={() => (showSettings ? setSize : showHub ? hubSize : chatSize)}
+          current={() => panelSizeForView(
+            showSettings ? "settings" : showHub ? "hub" : "chat",
+            chatSize,
+            hubSize,
+          )}
           onResize={onResizeLive}
           onCommit={onResizeCommit}
         />
@@ -2128,20 +2151,44 @@ function Hub(): JSX.Element {
 }
 
 /** Collapsed notch pill while hold-to-talk is active (#44). */
-function VoicePill({ view }: { view: VoiceView }): JSX.Element {
+export function VoicePill(): JSX.Element {
+  const [scales, setScales] = useState<number[]>([0.35, 0.35, 0.35, 0.35]);
+
+  useEffect(() => {
+    const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ?? false;
+    if (reduceMotion) return;
+    const timer = window.setInterval(() => {
+      setScales(Array.from({ length: 4 }, () => 0.35 + Math.random() * 0.65));
+    }, 300);
+    return () => window.clearInterval(timer);
+  }, []);
+
   return (
-    <div className="vpill">
-      <span className="vpill__dot" aria-hidden />
-      <span className="vpill__label">{t.voiceListening}</span>
-      <span className="vpill__meter" aria-hidden>
-        <span className="vpill__meter-fill" style={{ width: `${Math.round(view.level * 100)}%` }} />
+    <div className="vpill" role="status" aria-label={t.voiceListening}>
+      <span className="vpill__visualizer" aria-hidden>
+        {scales.map((scale, index) => (
+          <span
+            className="vpill__bar"
+            key={index}
+            style={{ transform: `scaleY(${scale})` }}
+          />
+        ))}
       </span>
     </div>
   );
 }
 
+/** Same compact notch slot, visibly processing rather than recording. */
+export function VoiceProcessingPill(): JSX.Element {
+  return (
+    <div className="vpill" role="status" aria-label={t.voiceProcessing}>
+      <span className="vpill__loader" aria-hidden />
+    </div>
+  );
+}
+
 /** Expanded notch surface for voice dialogue (#44). */
-function VoicePanel({
+export function VoicePanel({
   view,
   onDismiss,
 }: {
@@ -2183,6 +2230,18 @@ function VoicePanel({
             <button type="button" className="voice-panel__btn" onClick={copyResponse}>
               {t.voiceCopy}
             </button>
+            <button type="button" className="voice-panel__btn voice-panel__btn--primary" onClick={onDismiss}>
+              {t.voiceClose}
+            </button>
+          </div>
+        </>
+      ) : null}
+
+      {view.phase === "error" ? (
+        <>
+          <div className="voice-panel__kicker">{t.voiceError}</div>
+          <div className="voice-panel__response">{view.error || t.voiceError}</div>
+          <div className="voice-panel__acts">
             <button type="button" className="voice-panel__btn voice-panel__btn--primary" onClick={onDismiss}>
               {t.voiceClose}
             </button>
@@ -2740,14 +2799,21 @@ function DreamSection(): JSX.Element {
 }
 
 /** Hold-to-talk dictation (#44). Beta, off by default; transcript goes to focused field or clipboard. */
-function VoiceSection(): JSX.Element {
+export function VoiceSection(): JSX.Element {
   const [on, setOn] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [edit, setEdit] = useState({ model: "openai/gpt-oss-120b", has_key: false });
+  const [editKeyInput, setEditKeyInput] = useState("");
+  const [editBusy, setEditBusy] = useState(false);
+  const [editMsg, setEditMsg] = useState("");
 
   useEffect(() => {
     if (!IN_TAURI) return;
     void invoke<{ enabled: boolean }>("get_voice_settings")
       .then((s) => setOn(s.enabled))
+      .catch(() => undefined);
+    void invoke<{ model: string; has_key: boolean }>("get_voice_edit_settings")
+      .then(setEdit)
       .catch(() => undefined);
   }, []);
 
@@ -2761,6 +2827,28 @@ function VoiceSection(): JSX.Element {
     void invoke("set_voice_enabled", { enabled: next })
       .catch(() => setOn(!next))
       .finally(() => setBusy(false));
+  };
+
+  const saveEditKey = (): void => {
+    const key = editKeyInput.trim();
+    if (!key || editBusy) return;
+    setEditBusy(true);
+    void invoke("set_voice_edit_key", { key })
+      .then(() => {
+        setEdit((current) => ({ ...current, has_key: true }));
+        setEditKeyInput("");
+      })
+      .catch((err: unknown) => setEditMsg(String(err)))
+      .finally(() => setEditBusy(false));
+  };
+
+  const clearEditKey = (): void => {
+    if (editBusy) return;
+    setEditBusy(true);
+    void invoke("clear_voice_edit_key")
+      .then(() => setEdit((current) => ({ ...current, has_key: false })))
+      .catch((err: unknown) => setEditMsg(String(err)))
+      .finally(() => setEditBusy(false));
   };
 
   return (
@@ -2788,6 +2876,56 @@ function VoiceSection(): JSX.Element {
         >
           {t.voiceOn}
         </button>
+      </div>
+      <div className="set__stack set__stack--key">
+        <div className="set__label">{t.voiceEditModel}</div>
+        <div className="set__hint set__hint--quiet">{edit.model}</div>
+        <div className={`set__status${edit.has_key ? " is-ok" : ""}`}>
+          {edit.has_key ? t.voiceEditKeyPresent : t.voiceEditKeyAbsent}
+        </div>
+        <div className="set__sublabel">{t.voiceEditKey}</div>
+        <p className="set__hint set__hint--quiet">{t.voiceEditKeyHint}</p>
+        {editMsg ? <p className="set__hint is-err">{editMsg}</p> : null}
+        <div className="keyrow">
+          <input
+            className="keyrow__input"
+            type="password"
+            placeholder={t.voiceEditKeyPlaceholder}
+            value={editKeyInput}
+            autoComplete="off"
+            onChange={(e) => {
+              setEditKeyInput(e.target.value);
+              setEditMsg("");
+            }}
+            onFocus={() => {
+              if (IN_TAURI) void invoke("focus_field", { focused: true }).catch(() => undefined);
+            }}
+            onKeyDown={(e) => {
+              if (e.key !== "Enter") return;
+              e.preventDefault();
+              saveEditKey();
+            }}
+          />
+          <button
+            className="keyrow__btn keyrow__btn--go"
+            type="button"
+            disabled={!editKeyInput.trim() || editBusy}
+            onClick={saveEditKey}
+          >
+            {t.keySave}
+          </button>
+          {edit.has_key ? (
+            <button
+              className="keyrow__btn keyrow__btn--quiet"
+              type="button"
+              disabled={editBusy}
+              onClick={clearEditKey}
+            >
+              {t.keyRemove}
+            </button>
+          ) : null}
+        </div>
+        <p className="set__hint set__hint--quiet">{t.voiceEditModelHint}</p>
       </div>
     </section>
   );
@@ -3336,13 +3474,32 @@ function LaunchAtLoginSection(): JSX.Element {
   );
 }
 
-function VisualRecallSection(): JSX.Element {
+export function formatStorageBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  const value = bytes / 1024 ** index;
+  return `${value >= 10 || index === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[index]}`;
+}
+
+export function VisualRecallSection(): JSX.Element {
   const [on, setOn] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [retentionDays, setRetentionDays] = useState(3);
+  const [customMode, setCustomMode] = useState(false);
+  const [customDays, setCustomDays] = useState("8");
+  const [error, setError] = useState("");
+  type RecallSettings = { enabled: boolean; retention: { days: number } };
   type RecallStatus = {
     enabled: boolean;
+    retention_days: number;
     events_24h: number;
     frames_count: number;
+    frames_bytes: number;
+    estimated_daily_bytes: number | null;
+    projected_retention_bytes: number | null;
+    capture_paused_storage: boolean;
+    capture_storage_limit_bytes: number;
     recent: {
       ts: number;
       app: string | null;
@@ -3362,8 +3519,13 @@ function VisualRecallSection(): JSX.Element {
 
   useEffect(() => {
     if (!IN_TAURI) return;
-    void invoke<{ enabled: boolean }>("get_visual_recall_settings")
-      .then((s) => setOn(s.enabled))
+    void invoke<RecallSettings>("get_visual_recall_settings")
+      .then((s) => {
+        setOn(s.enabled);
+        setRetentionDays(s.retention.days);
+        setCustomMode(s.retention.days > 7);
+        if (s.retention.days > 7) setCustomDays(String(s.retention.days));
+      })
       .catch(() => undefined);
     refreshStatus();
     const id = window.setInterval(refreshStatus, 12_000);
@@ -3380,6 +3542,28 @@ function VisualRecallSection(): JSX.Element {
     void invoke("set_visual_recall_enabled", { enabled: next })
       .then(() => refreshStatus())
       .catch(() => setOn(!next))
+      .finally(() => setBusy(false));
+  };
+
+  const saveRetention = (days: number): void => {
+    if (!Number.isInteger(days) || days < 1 || days > 3650) {
+      setError(t.visualRecallRetentionCustomHint);
+      return;
+    }
+    const previous = retentionDays;
+    setRetentionDays(days);
+    setError("");
+    if (!IN_TAURI) return;
+    setBusy(true);
+    void invoke<RecallSettings>("set_visual_recall_retention", { days })
+      .then((settings) => {
+        setRetentionDays(settings.retention.days);
+        refreshStatus();
+      })
+      .catch((reason: unknown) => {
+        setRetentionDays(previous);
+        setError(String(reason));
+      })
       .finally(() => setBusy(false));
   };
 
@@ -3425,6 +3609,76 @@ function VisualRecallSection(): JSX.Element {
         </button>
       </div>
       <div className="set__hint">{t.visualRecallHint}</div>
+      <div className="vr-retention">
+        <div className="vr-retention__head">
+          <span>{t.visualRecallRetention}</span>
+          <strong>{t.visualRecallRetentionDays(retentionDays)}</strong>
+        </div>
+        <input
+          className="vr-retention__range"
+          type="range"
+          min="1"
+          max="7"
+          step="1"
+          value={Math.min(retentionDays, 7)}
+          disabled={busy}
+          aria-label={t.visualRecallRetention}
+          onChange={(event) => {
+            setCustomMode(false);
+            saveRetention(Number(event.currentTarget.value));
+          }}
+        />
+        <div className="vr-retention__ticks" aria-hidden="true">
+          {[1, 2, 3, 4, 5, 6, 7].map((days) => <span key={days}>{days}</span>)}
+        </div>
+        <button
+          type="button"
+          className={`vr-retention__custom${customMode ? " is-on" : ""}`}
+          disabled={busy}
+          onClick={() => setCustomMode(true)}
+        >
+          {t.visualRecallRetentionCustom}
+        </button>
+        {customMode ? (
+          <div className="vr-retention__custom-row">
+            <input
+              type="number"
+              min="1"
+              max="3650"
+              inputMode="numeric"
+              value={customDays}
+              disabled={busy}
+              aria-label={t.visualRecallRetentionCustom}
+              onChange={(event) => setCustomDays(event.currentTarget.value)}
+            />
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => saveRetention(Number(customDays))}
+            >
+              {t.visualRecallRetentionApply}
+            </button>
+          </div>
+        ) : null}
+        {customMode ? <div className="set__hint">{t.visualRecallRetentionCustomHint}</div> : null}
+        {status?.projected_retention_bytes != null ? (
+          <div className="set__hint set__hint--quiet">
+            {t.visualRecallStorageEstimate(
+              formatStorageBytes(status.frames_bytes),
+              formatStorageBytes(status.projected_retention_bytes),
+              retentionDays,
+            )}
+          </div>
+        ) : (
+          <div className="set__hint set__hint--quiet">{t.visualRecallStoragePending}</div>
+        )}
+        {status?.capture_paused_storage ? (
+          <div className="set__hint is-warn">
+            {t.visualRecallStoragePaused(formatStorageBytes(status.capture_storage_limit_bytes))}
+          </div>
+        ) : null}
+        {error ? <div className="set__hint is-err">{error}</div> : null}
+      </div>
       <button type="button" className="vr-launch" onClick={openBrowse}>
         <span className="vr-launch__glyph" aria-hidden="true">
           <IconMaximize2 size={16} />
@@ -3440,6 +3694,101 @@ function VisualRecallSection(): JSX.Element {
       </button>
       <div className="set__hint set__hint--quiet">{statusLine}</div>
       <div className="set__hint set__hint--quiet">{t.visualRecallDisclosure}</div>
+    </section>
+  );
+}
+
+interface MemoryApiSettingsView {
+  enabled: boolean;
+  profile: { display_name: string; role: string; prefs: string };
+  tokens: { id: string; name: string; created_at: number }[];
+  gate_note: string;
+}
+
+function MemoryApiSection(): JSX.Element {
+  const [settings, setSettings] = useState<MemoryApiSettingsView>({
+    enabled: false,
+    profile: { display_name: "", role: "", prefs: "" },
+    tokens: [],
+    gate_note: "",
+  });
+  const [name, setName] = useState("");
+  const [role, setRole] = useState("");
+  const [prefs, setPrefs] = useState("");
+  const [tokenName, setTokenName] = useState("");
+  const [issuedToken, setIssuedToken] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const refresh = useCallback((): void => {
+    if (!IN_TAURI) return;
+    void invoke<MemoryApiSettingsView>("memory_api_settings")
+      .then((next) => {
+        setSettings(next);
+        setName(next.profile.display_name);
+        setRole(next.profile.role);
+        setPrefs(next.profile.prefs);
+        setError("");
+      })
+      .catch((reason: unknown) => setError(String(reason)));
+  }, []);
+  useEffect(refresh, [refresh]);
+  const focusField = (focused: boolean): void => {
+    if (IN_TAURI) void invoke("focus_field", { focused }).catch(() => undefined);
+  };
+  const setEnabled = (enabled: boolean): void => {
+    if (!IN_TAURI) { setSettings((current) => ({ ...current, enabled })); return; }
+    setBusy(true);
+    void invoke("set_memory_api_enabled", { enabled })
+      .then(refresh)
+      .catch((reason: unknown) => setError(String(reason)))
+      .finally(() => setBusy(false));
+  };
+  const saveProfile = (): void => {
+    if (!IN_TAURI) return;
+    setBusy(true);
+    void invoke("set_memory_api_profile", { displayName: name, role, prefs })
+      .then(refresh)
+      .catch((reason: unknown) => setError(String(reason)))
+      .finally(() => setBusy(false));
+  };
+  const issueToken = (): void => {
+    const clientName = tokenName.trim();
+    if (!clientName || busy || !IN_TAURI) return;
+    setBusy(true);
+    void invoke<{ token: string }>("issue_memory_api_token", { name: clientName })
+      .then((next) => { setIssuedToken(next.token); setTokenName(""); refresh(); })
+      .catch((reason: unknown) => setError(String(reason)))
+      .finally(() => setBusy(false));
+  };
+  const revoke = (id: string): void => {
+    if (!IN_TAURI || busy) return;
+    setBusy(true);
+    void invoke("revoke_memory_api_token", { id })
+      .then(() => { setIssuedToken(""); refresh(); })
+      .catch((reason: unknown) => setError(String(reason)))
+      .finally(() => setBusy(false));
+  };
+  return (
+    <section className="set">
+      <div className="set__label" id="seg-memory-api">{t.memoryApiTitle}</div>
+      <div className="set__hint">{t.memoryApiHint}</div>
+      {error ? <div className="set__hint is-err">{error}</div> : null}
+      <div className="seg" role="radiogroup" aria-labelledby="seg-memory-api">
+        <button type="button" role="radio" aria-checked={settings.enabled} disabled={busy} className={`seg__opt${settings.enabled ? " is-on" : ""}`} onClick={() => setEnabled(true)}>{t.memoryApiOn}</button>
+        <button type="button" role="radio" aria-checked={!settings.enabled} disabled={busy} className={`seg__opt${!settings.enabled ? " is-on" : ""}`} onClick={() => setEnabled(false)}>{t.memoryApiOff}</button>
+      </div>
+      <div className="set__hint set__hint--quiet">{settings.gate_note}</div>
+      <div className="set__label" style={{ marginTop: 10 }}>{t.memoryApiProfileLabel}</div>
+      <div className="keyrow"><input className="keyrow__input" value={name} placeholder={t.memoryApiDisplayName} maxLength={4096} onChange={(event) => setName(event.target.value)} onFocus={() => focusField(true)} onBlur={() => focusField(false)} /></div>
+      <div className="keyrow" style={{ marginTop: 6 }}><input className="keyrow__input" value={role} placeholder={t.memoryApiRole} maxLength={4096} onChange={(event) => setRole(event.target.value)} onFocus={() => focusField(true)} onBlur={() => focusField(false)} /></div>
+      <div className="set__hint">{t.memoryApiPrefsHint}</div>
+      <textarea className="keyrow__input" style={{ minHeight: 72, resize: "vertical", width: "100%", boxSizing: "border-box" }} value={prefs} placeholder={t.memoryApiPrefsPlaceholder} maxLength={4096} onChange={(event) => setPrefs(event.target.value)} onFocus={() => focusField(true)} onBlur={() => focusField(false)} />
+      <div className="keyrow" style={{ marginTop: 6 }}><button className="keyrow__btn" type="button" disabled={busy} onClick={saveProfile}>{t.memoryApiSaveProfile}</button></div>
+      <div className="set__label" style={{ marginTop: 12 }}>{t.memoryApiTokensLabel}</div>
+      <div className="set__hint">{t.memoryApiTokensHint}</div>
+      {settings.tokens.length === 0 ? <div className="set__hint set__hint--quiet">{t.memoryApiNoTokens}</div> : settings.tokens.map((token) => <div className="keyrow" key={token.id}><span className="set__hint" style={{ flex: 1 }}>{token.name}</span><button className="keyrow__btn" type="button" disabled={busy} onClick={() => revoke(token.id)}>{t.memoryApiRevokeToken}</button></div>)}
+      <div className="keyrow"><input className="keyrow__input" value={tokenName} placeholder={t.memoryApiTokenNamePlaceholder} maxLength={120} autoComplete="off" onChange={(event) => setTokenName(event.target.value)} onFocus={() => focusField(true)} onBlur={() => focusField(false)} onKeyDown={(event) => { if (event.key === "Enter") issueToken(); }} /><button className="keyrow__btn" type="button" disabled={busy || !tokenName.trim()} onClick={issueToken}>{t.memoryApiIssueToken}</button></div>
+      {issuedToken ? <div className="set__hint is-ok">{t.memoryApiTokenIssued}<br /><code style={{ userSelect: "all", wordBreak: "break-all" }}>{issuedToken}</code></div> : null}
     </section>
   );
 }
@@ -3557,6 +3906,121 @@ function PersonalizationSection(): JSX.Element {
           {err ? <div className="set__hint is-err">{err}</div> : null}
         </>
       ) : null}
+    </section>
+  );
+}
+
+// ---- Google first-layer OAuth settings -----------------------------------------------------------
+
+interface GoogleOAuthSettingsView {
+  has_client_id: boolean;
+  has_client_secret: boolean;
+}
+
+export function GoogleOAuthSection(): JSX.Element {
+  const [settings, setSettings] = useState<GoogleOAuthSettingsView>({
+    has_client_id: false,
+    has_client_secret: false,
+  });
+  const [clientId, setClientId] = useState("");
+  const [clientSecret, setClientSecret] = useState("");
+  const [err, setErr] = useState("");
+
+  const refresh = useCallback((): void => {
+    if (!IN_TAURI) return;
+    void invoke<GoogleOAuthSettingsView>("google_oauth_settings")
+      .then((next) => {
+        setSettings(next);
+        setErr("");
+      })
+      .catch((error) => setErr(String(error)));
+  }, []);
+
+  useEffect(refresh, [refresh]);
+
+  const save = (): void => {
+    const id = clientId.trim();
+    if (!id) return;
+    if (!IN_TAURI) {
+      setSettings({ has_client_id: true, has_client_secret: Boolean(clientSecret.trim()) });
+      setClientId("");
+      setClientSecret("");
+      return;
+    }
+    void invoke("set_google_oauth_client", { clientId: id, clientSecret: clientSecret.trim() })
+      .then(() => {
+        setClientId("");
+        setClientSecret("");
+        refresh();
+      })
+      .catch((error) => setErr(String(error)));
+  };
+
+  const clear = (): void => {
+    if (!IN_TAURI) {
+      setSettings({ has_client_id: false, has_client_secret: false });
+      return;
+    }
+    void invoke("clear_google_oauth_client")
+      .then(refresh)
+      .catch((error) => setErr(String(error)));
+  };
+
+  const focusField = (focused: boolean): void => {
+    if (IN_TAURI) void invoke("focus_field", { focused }).catch(() => undefined);
+  };
+
+  return (
+    <section className="set">
+      <div className="set__label">{t.googleOAuthTitle}</div>
+      <div className="set__hint">{t.googleOAuthHint}</div>
+      {err ? <div className="set__hint is-err">{err}</div> : null}
+      <div className={`set__hint${settings.has_client_id ? " is-ok" : ""}`}>
+        {settings.has_client_id ? t.googleOAuthConfigured : t.googleOAuthMissing}
+      </div>
+      {settings.has_client_id ? (
+        <div className="set__hint">
+          {settings.has_client_secret ? t.googleOAuthSecretPresent : t.googleOAuthSecretOptional}
+        </div>
+      ) : null}
+      <div className="keyrow">
+        <input
+          className="keyrow__input"
+          type="text"
+          placeholder={t.googleOAuthClientId}
+          value={clientId}
+          autoComplete="off"
+          onChange={(event) => setClientId(event.target.value)}
+          onFocus={() => focusField(true)}
+          onBlur={() => focusField(false)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") save();
+          }}
+        />
+        <button className="keyrow__btn" type="button" onClick={save} disabled={!clientId.trim()}>
+          {t.googleOAuthSave}
+        </button>
+        {settings.has_client_id ? (
+          <button className="keyrow__btn" type="button" onClick={clear}>
+            {t.googleOAuthClear}
+          </button>
+        ) : null}
+      </div>
+      <div className="keyrow">
+        <input
+          className="keyrow__input"
+          type="password"
+          placeholder={t.googleOAuthClientSecret}
+          value={clientSecret}
+          autoComplete="off"
+          onChange={(event) => setClientSecret(event.target.value)}
+          onFocus={() => focusField(true)}
+          onBlur={() => focusField(false)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") save();
+          }}
+        />
+      </div>
     </section>
   );
 }
@@ -4360,6 +4824,175 @@ function PrivacySecuritySection(props: {
   );
 }
 
+export function NotchStatusSection({
+  visible,
+  onVisibleChange,
+}: {
+  visible: boolean;
+  onVisibleChange: (visible: boolean) => void;
+}): JSX.Element {
+  const [busy, setBusy] = useState(false);
+
+  const setNotchStatus = (next: boolean): void => {
+    const previous = visible;
+    onVisibleChange(next);
+    if (!IN_TAURI) return;
+    setBusy(true);
+    void invoke("set_notch_status_visible", { visible: next })
+      .catch(() => onVisibleChange(previous))
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <section className="set">
+      <div className="set__label" id="seg-notch-status">{t.notchStatus}</div>
+      <div className="seg" role="radiogroup" aria-labelledby="seg-notch-status">
+        <button
+          type="button"
+          role="radio"
+          aria-checked={visible}
+          disabled={busy}
+          className={`seg__opt${visible ? " is-on" : ""}`}
+          onClick={() => setNotchStatus(true)}
+        >
+          {t.notchStatusShow}
+        </button>
+        <button
+          type="button"
+          role="radio"
+          aria-checked={!visible}
+          disabled={busy}
+          className={`seg__opt${!visible ? " is-on" : ""}`}
+          onClick={() => setNotchStatus(false)}
+        >
+          {t.notchStatusHide}
+        </button>
+      </div>
+      <p className="set__hint">{t.notchStatusHint}</p>
+    </section>
+  );
+}
+
+export type SettingsSectionId =
+  | "general"
+  | "memory"
+  | "voice"
+  | "connections"
+  | "intelligence"
+  | "controls"
+  | "privacy";
+
+const SettingsActiveSectionContext = createContext<SettingsSectionId>("general");
+
+/** Hidden settings sections stay unmounted. Besides avoiding wasted React work, this prevents
+ *  every section from starting its Keychain/database/backend reads when Settings first opens. */
+export function shouldMountSettingsSection(
+  active: SettingsSectionId,
+  section: SettingsSectionId,
+): boolean {
+  return active === section;
+}
+
+type SettingsSectionMeta = {
+  id: SettingsSectionId;
+  label: string;
+  description: string;
+};
+
+const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
+  { id: "general", label: t.settingsGeneral, description: t.settingsGeneralHint },
+  { id: "memory", label: t.settingsMemory, description: t.settingsMemorySectionHint },
+  { id: "voice", label: t.settingsVoice, description: t.settingsVoiceHint },
+  { id: "connections", label: t.settingsConnections, description: t.settingsConnectionsHint },
+  { id: "intelligence", label: t.settingsIntelligence, description: t.settingsIntelligenceHint },
+  { id: "controls", label: t.settingsControls, description: t.settingsControlsHint },
+  { id: "privacy", label: t.settingsPrivacy, description: t.settingsPrivacyHint },
+];
+
+function SettingsSectionIcon({ section }: { section: SettingsSectionId }): JSX.Element {
+  const common = {
+    width: 17,
+    height: 17,
+    viewBox: "0 0 24 24",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: 1.7,
+    strokeLinecap: "round" as const,
+    strokeLinejoin: "round" as const,
+    "aria-hidden": true,
+  };
+  if (section === "general") return <svg {...common}><path d="M4 7h10M18 7h2M4 17h2M10 17h10" /><circle cx="16" cy="7" r="2" /><circle cx="8" cy="17" r="2" /></svg>;
+  if (section === "memory") return <IconBrain size={17} />;
+  if (section === "voice") return <svg {...common}><path d="M4 13v-2M8 17V7M12 20V4M16 16V8M20 13v-2" /></svg>;
+  if (section === "connections") return <svg {...common}><circle cx="6" cy="12" r="2.5" /><circle cx="18" cy="6" r="2.5" /><circle cx="18" cy="18" r="2.5" /><path d="m8.3 10.9 7.4-3.8M8.3 13.1l7.4 3.8" /></svg>;
+  if (section === "intelligence") return <svg {...common}><path d="m12 3 1.4 4.1L17.5 8.5l-4.1 1.4L12 14l-1.4-4.1-4.1-1.4 4.1-1.4L12 3Z" /><path d="m18 14 .8 2.2L21 17l-2.2.8L18 20l-.8-2.2L15 17l2.2-.8L18 14Z" /></svg>;
+  if (section === "controls") return <svg {...common}><rect x="3.5" y="5" width="17" height="14" rx="3" /><path d="M7 10h2M15 10h2M8 14h8" /></svg>;
+  return <svg {...common}><path d="M12 3 5 6v5c0 4.6 2.8 8.1 7 10 4.2-1.9 7-5.4 7-10V6l-7-3Z" /><path d="M9.5 12.2 11 13.7l3.7-3.7" /></svg>;
+}
+
+export function SettingsSectionNav({
+  active,
+  onChange,
+}: {
+  active: SettingsSectionId;
+  onChange: (section: SettingsSectionId) => void;
+}): JSX.Element {
+  return (
+    <nav
+      className="settings__nav"
+      aria-label={t.settingsSectionNav}
+      role="tablist"
+      aria-orientation="vertical"
+      onKeyDown={(event) => {
+        if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+        event.preventDefault();
+        const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
+        const current = Math.max(0, SETTINGS_SECTIONS.findIndex((section) => section.id === active));
+        const next = event.key === "Home"
+          ? 0
+          : event.key === "End"
+            ? SETTINGS_SECTIONS.length - 1
+            : (current + (event.key === "ArrowDown" ? 1 : -1) + SETTINGS_SECTIONS.length) % SETTINGS_SECTIONS.length;
+        const section = SETTINGS_SECTIONS[next];
+        if (!section) return;
+        onChange(section.id);
+        buttons[next]?.focus();
+      }}
+    >
+      <div className="settings__nav-mark" aria-hidden="true">S</div>
+      {SETTINGS_SECTIONS.map((section) => (
+        <button
+          key={section.id}
+          id={`settings-tab-${section.id}`}
+          className={`settings__nav-item${active === section.id ? " is-active" : ""}`}
+          type="button"
+          role="tab"
+          aria-selected={active === section.id}
+          aria-controls={`settings-panel-${section.id}`}
+          tabIndex={active === section.id ? 0 : -1}
+          title={section.description}
+          onClick={() => onChange(section.id)}
+        >
+          <span className="settings__nav-icon"><SettingsSectionIcon section={section.id} /></span>
+          <span>{section.label}</span>
+        </button>
+      ))}
+    </nav>
+  );
+}
+
+function SettingsSlot({
+  section,
+  children,
+}: {
+  section: SettingsSectionId;
+  children: JSX.Element;
+}): JSX.Element | null {
+  const activeSection = useContext(SettingsActiveSectionContext);
+  if (!shouldMountSettingsSection(activeSection, section)) return null;
+  return <div className={`settings__slot settings__slot--${section}`}>{children}</div>;
+}
+
 function Settings(props: {
   appearance: Appearance;
   setAppearance: (a: Appearance) => void;
@@ -4372,7 +5005,24 @@ function Settings(props: {
   onDone: () => void;
   onCleared: () => void;
 }): JSX.Element {
-  const { appearance, setAppearance, hasKey, keyRejected, stateCount, onDone, onCleared } = props;
+  const {
+    appearance,
+    setAppearance,
+    showStatusInNotch,
+    setShowStatusInNotch,
+    hasKey,
+    keyRejected,
+    stateCount,
+    onDone,
+    onCleared,
+  } = props;
+  const [activeSection, setActiveSection] = useState<SettingsSectionId>("general");
+  const settingsContentRef = useRef<HTMLElement>(null);
+  const activeSectionMeta = SETTINGS_SECTIONS.find((section) => section.id === activeSection) ?? SETTINGS_SECTIONS[0];
+  const selectSection = (section: SettingsSectionId): void => {
+    setActiveSection(section);
+    settingsContentRef.current?.scrollTo({ top: 0, behavior: "auto" });
+  };
   // Clearing extracted state is destructive and context is foundational, so it is a deliberate
   // two-step: reveal a typed confirmation, and only a matching "CLEAR" enables the delete.
   const [confirming, setConfirming] = useState(false);
@@ -4461,7 +5111,9 @@ function Settings(props: {
       .then((b) => setBinds({ ...DEFAULT_BINDS, ...b }))
       .catch(() => undefined);
   }, []);
-  useEffect(refresh, [refresh]);
+  useEffect(() => {
+    if (activeSection === "controls") refresh();
+  }, [activeSection, refresh]);
 
   // Capture the new combo at the WINDOW level (capture phase). Relying on the recording button's
   // own focus proved fragile on device — clicks landed but keystrokes never did, so rebinding
@@ -4563,24 +5215,44 @@ function Settings(props: {
         </button>
       </header>
       <div className="settings__body">
-        <ApprovalsSection />
+        <SettingsSectionNav active={activeSection} onChange={selectSection} />
+        <main
+          ref={settingsContentRef}
+          className="settings__content"
+          data-active={activeSection}
+          id={`settings-panel-${activeSection}`}
+          role="tabpanel"
+          aria-labelledby={`settings-tab-${activeSection}`}
+          tabIndex={0}
+        >
+          <div className="settings__section-head">
+            <span className="settings__section-kicker">{t.settings}</span>
+            <h2>{activeSectionMeta.label}</h2>
+            <p>{activeSectionMeta.description}</p>
+          </div>
+          <SettingsActiveSectionContext.Provider value={activeSection}>
+          <div className="settings__section-body">
+        <SettingsSlot section="general"><ApprovalsSection /></SettingsSlot>
         {/* Plan state first: when a trial has ended, everything below it is locked, and the
             reason has to be the first thing on screen rather than a discovery. */}
-        <PlanBillingSection />
+        <SettingsSlot section="general"><PlanBillingSection /></SettingsSlot>
         {/* Near the top on purpose. Meeting notes ships off and only ever turns on because
             someone found this switch — burying an opt-in below six connectors is how a feature
             stays permanently off (FR-MT-01). */}
-        <MeetingSection />
-        <LaunchAtLoginSection />
-        <VisualRecallSection />
-        <VoiceSection />
-        <SoundSection />
-        <DailySummariesSection />
-        <ConnectionsSection />
-        <ComposioSection />
-        <AiSessionsSection />
-        <DreamSection />
-        <PersonalizationSection />
+        <SettingsSlot section="voice"><MeetingSection /></SettingsSlot>
+        <SettingsSlot section="general"><LaunchAtLoginSection /></SettingsSlot>
+        <SettingsSlot section="memory"><VisualRecallSection /></SettingsSlot>
+        <SettingsSlot section="memory"><MemoryApiSection /></SettingsSlot>
+        <SettingsSlot section="voice"><VoiceSection /></SettingsSlot>
+        <SettingsSlot section="voice"><SoundSection /></SettingsSlot>
+        <SettingsSlot section="voice"><DailySummariesSection /></SettingsSlot>
+        <SettingsSlot section="connections"><ConnectionsSection /></SettingsSlot>
+        <SettingsSlot section="connections"><GoogleOAuthSection /></SettingsSlot>
+        <SettingsSlot section="connections"><ComposioSection /></SettingsSlot>
+        <SettingsSlot section="connections"><AiSessionsSection /></SettingsSlot>
+        <SettingsSlot section="memory"><DreamSection /></SettingsSlot>
+        <SettingsSlot section="intelligence"><PersonalizationSection /></SettingsSlot>
+        <SettingsSlot section="general">
         <section className="set">
           <div className="set__label" id="seg-appearance">{t.appearance}</div>
           <div className="seg" role="radiogroup" aria-labelledby="seg-appearance">
@@ -4598,8 +5270,11 @@ function Settings(props: {
             ))}
           </div>
         </section>
-        <DockVisibleSection />
-        <CastlePositionSection />
+        </SettingsSlot>
+        <SettingsSlot section="controls"><DockVisibleSection /></SettingsSlot>
+        <SettingsSlot section="controls"><CastlePositionSection /></SettingsSlot>
+        <SettingsSlot section="controls"><NotchStatusSection visible={showStatusInNotch} onVisibleChange={setShowStatusInNotch} /></SettingsSlot>
+        <SettingsSlot section="controls">
         <section className="set">
           <div className="set__label">{t.shortcuts}</div>
           {SHORTCUT_ROWS.map(({ action, label }) => (
@@ -4638,9 +5313,11 @@ function Settings(props: {
           {keyErr ? <div className="set__hint is-err">{keyErr}</div> : null}
           <p className="set__hint set__hint--quiet">{t.shortcutHint}</p>
         </section>
+        </SettingsSlot>
         {/* Subscription first, API key second. The order is the point: most people arriving here
             already pay for an assistant, and asking them for a metered key before offering the
             plan they hold is what makes them close the window. */}
+        <SettingsSlot section="intelligence">
         <section className="set">
           <div className="set__label">{t.subTitle}</div>
           <div className="set__hint">{t.subHint}</div>
@@ -4716,6 +5393,8 @@ function Settings(props: {
           ) : null}
           {subMsg ? <div className="set__hint is-err">{subMsg}</div> : null}
         </section>
+        </SettingsSlot>
+        <SettingsSlot section="privacy">
         <PrivacySecuritySection
           hasKey={hasKey}
           keyRejected={keyRejected}
@@ -4723,6 +5402,8 @@ function Settings(props: {
           provider={provider}
           onApplyLlm={(p, m) => applyLlm(p, m)}
         />
+        </SettingsSlot>
+        <SettingsSlot section="privacy">
         <section className="set">
           <div className="set__label">{t.memory}</div>
           <div className="set__hint">{t.memoryHint}</div>
@@ -4780,6 +5461,10 @@ function Settings(props: {
             </div>
           )}
         </section>
+        </SettingsSlot>
+          </div>
+          </SettingsActiveSectionContext.Provider>
+        </main>
       </div>
     </div>
   );

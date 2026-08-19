@@ -68,7 +68,7 @@ pub struct Evidence {
     pub source: String,
     pub title: Option<String>,
     pub excerpt: String,
-    /// Linked `screen_frames` row when a JPEG is stored for this evidence (≤72 h).
+    /// Linked `screen_frames` row when a finite-retention encrypted JPEG is stored.
     pub frame_id: Option<i64>,
 }
 
@@ -212,6 +212,13 @@ impl ReplyContextCache {
         }
     }
 
+    /// Drop warm context when the capture source can no longer vouch for the focused surface.
+    pub fn clear(&self) {
+        if let Ok(mut g) = self.inner.lock() {
+            *g = None;
+        }
+    }
+
     /// The warm pack for `thread_key`, if that is the one currently held.
     pub fn get(&self, thread_key: &str) -> Option<ReplyContext> {
         let g = self.inner.lock().ok()?;
@@ -228,9 +235,7 @@ impl ReplyContextCache {
     /// path re-assembles via [`Self::put`] — invalidation never rebuilds inline, because building
     /// on the press path is exactly what this cache exists to prevent.
     pub fn invalidate(&self) {
-        if let Ok(mut g) = self.inner.lock() {
-            *g = None;
-        }
+        self.clear();
     }
 }
 
@@ -659,6 +664,68 @@ impl Db {
             .unwrap_or_default()
     }
 
+    /// Recent user notes (`source = user`), newest-first, for explicit Memory API context reads.
+    pub fn recent_user_notes(&self, limit: usize) -> Vec<String> {
+        self.recent_source_bodies("user", limit)
+            .into_iter()
+            .map(|(_hash, content)| content)
+            .collect()
+    }
+
+    /// Recent durable text activity for explicit Memory API context reads.
+    ///
+    /// Query-free context cannot rank evidence by relevance, so this returns a small newest-first
+    /// tail from the durable text sources that already feed memory. Exact duplicate excerpts are
+    /// collapsed because accessibility capture and screen OCR can observe the same window.
+    pub(crate) fn recent_context_previews(
+        &self,
+        limit: usize,
+        excerpt_chars: usize,
+    ) -> Vec<(String, shogun_memory::event_log::RecentEventPreview)> {
+        use std::collections::HashSet;
+
+        const SOURCES: [&str; 6] = [
+            "capture",
+            "screen_ocr",
+            "ai_session",
+            "meeting",
+            "gmail",
+            "gcal",
+        ];
+
+        if limit == 0 {
+            return Vec::new();
+        }
+
+        self.with_conn("memory.context_previews", |conn| {
+            let mut previews = Vec::with_capacity(SOURCES.len() * limit);
+            for source in SOURCES {
+                let rows = shogun_memory::event_log::recent_previews_by_source(
+                    conn,
+                    source,
+                    limit,
+                    excerpt_chars,
+                )?;
+                previews.extend(rows.into_iter().map(|row| (source.to_string(), row)));
+            }
+
+            previews.sort_by(|(_, a), (_, b)| b.ts.cmp(&a.ts).then_with(|| b.id.cmp(&a.id)));
+            let mut seen = HashSet::new();
+            previews.retain(|(_, row)| {
+                let normalized = row
+                    .excerpt
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    .to_lowercase();
+                !normalized.is_empty() && seen.insert(normalized)
+            });
+            previews.truncate(limit);
+            Ok::<_, rusqlite::Error>(previews)
+        })
+        .unwrap_or_default()
+    }
+
     /// Recent capture bodies `(hash, content)` newest-first for one app, for the near-dup collapse.
     fn recent_capture_bodies(&self, app_bundle_id: Option<&str>, limit: usize) -> Vec<(String, String)> {
         self.with_conn("event_log.recent_capture_bodies", |c| event_log::recent_capture_bodies(c, app_bundle_id, limit))
@@ -681,7 +748,7 @@ impl Db {
 
     /// Ingest on-device screen OCR text (issue #107). Source is `screen_ocr`; only the extracted
     /// string + provenance reach this method. Optional JPEG frames are stored separately via
-    /// [`store_screen_frame`] (72 h retention — explicit invariant-2 exception, 2026-08-02).
+    /// [`store_screen_frame`] (finite age retention — explicit invariant-2 exception).
     pub fn ingest_screen_ocr(
         &self,
         bundle_id: Option<&str>,
@@ -2256,7 +2323,7 @@ impl Db {
     /// Persist a compressed JPEG from visual-recall OCR, linked to its `screen_ocr` event.
     ///
     /// Explicit exception to invariant 2 (user decision 2026-08-02): frames are local-only,
-    /// encrypted at rest with the memory DB, and purged after 72 h — not audio, not forever.
+    /// encrypted at rest with the memory DB, and purged after the selected finite duration.
     #[allow(clippy::too_many_arguments)] // frame metadata is one row; a params struct adds nothing
     pub fn store_screen_frame(
         &self,
@@ -2270,6 +2337,10 @@ impl Db {
     ) -> Option<i64> {
         let now = self.now_ms();
         self.with_conn("screen_frames.insert", |c| {
+                let current_bytes = shogun_memory::screen_frames::stats(c)?.total_bytes;
+                if !shogun_memory::retention::capture_allowed(current_bytes) {
+                    return Ok(None);
+                }
                 shogun_memory::screen_frames::insert(
                     c,
                     &shogun_memory::screen_frames::NewFrame {
@@ -2283,23 +2354,26 @@ impl Db {
                         jpeg,
                     },
                 )
+                .map(Some)
             })
             .ok()
+            .flatten()
     }
 
-    /// Sweep the visual-recall frame cache: expire past the 72-hour window, then evict oldest-first
-    /// until the cache is back under its byte ceiling (`retention::Policy::frames`).
-    ///
-    /// Age alone bounds nothing — 72 hours of a busy screen is not a fixed size — so a heavy few
-    /// days could grow the memory DB without limit while every frame was still "within the window
-    /// we promised". The budget half is what makes the cache's footprint answerable.
-    pub fn purge_screen_frames(&self) -> Result<usize, String> {
+    /// Whether automatic capture is paused at the encrypted frame-store ceiling.
+    pub fn screen_frame_capture_paused(&self) -> bool {
+        self.screen_frame_stats().total_bytes >= shogun_memory::retention::FRAME_CAPTURE_MAX_BYTES
+    }
+
+    /// Expire encrypted frames past the selected finite duration. No byte-budget deletion occurs;
+    /// new capture pauses at the storage ceiling instead.
+    pub fn purge_screen_frames(&self, retention_ms: i64) -> Result<usize, String> {
         use shogun_memory::retention::Policy;
         let now = self.now_ms();
         self.with_conn_mut_reported("screen_frames.purge_expired", |conn| {
             let items = shogun_memory::screen_frames::retention_items(conn)
                 .map_err(|e| format!("read frame retention items: {e}"))?;
-            let sweep = Policy::frames().sweep(&items, now);
+            let sweep = Policy::frames(retention_ms).sweep(&items, now);
             shogun_memory::screen_frames::delete_ids(conn, &sweep.all())
                 .map_err(|e| format!("purge screen frames: {e}"))
         })
@@ -2335,9 +2409,13 @@ impl Db {
     }
 
     /// List frames in the retention window for UI timeline (newest first).
-    pub fn list_screen_frames(&self, limit: usize) -> Vec<shogun_memory::screen_frames::FrameSummary> {
+    pub fn list_screen_frames(
+        &self,
+        retention_ms: i64,
+        limit: usize,
+    ) -> Vec<shogun_memory::screen_frames::FrameSummary> {
         let now = self.now_ms();
-        let from = now - shogun_memory::screen_frames::RETENTION_MS;
+        let from = now.saturating_sub(retention_ms.max(0));
         self.screen_frames_in_range(from, now, limit)
     }
 
@@ -2347,14 +2425,23 @@ impl Db {
             .unwrap_or_default()
     }
 
+    /// Stored encrypted JPEG bytes in a time window, used only for aggregate storage estimates.
+    pub fn screen_frame_bytes_in_range(&self, from_ms: i64, to_ms: i64) -> i64 {
+        self.with_conn("screen_frames.bytes_in_range", |conn| {
+            shogun_memory::screen_frames::bytes_in_range(conn, from_ms, to_ms)
+        })
+        .unwrap_or(0)
+    }
+
     /// Search stored screen frames for a visual-recall question (metadata + OCR excerpt).
     pub fn search_screen_frames(
         &self,
         query: &str,
+        retention_ms: i64,
         limit: usize,
         excerpt_chars: usize,
     ) -> Vec<ScreenFrameRef> {
-        self.recall_screen_frames(query, limit, excerpt_chars)
+        self.recall_screen_frames_with_retention(query, retention_ms, limit, excerpt_chars)
     }
 
     /// Search stored frames in an explicit time window (Memory API / MCP).
@@ -2405,10 +2492,22 @@ impl Db {
     }
 
     fn recall_screen_frames(&self, query: &str, limit: usize, excerpt_chars: usize) -> Vec<ScreenFrameRef> {
+        let retention_ms = i64::from(crate::capture::visual_recall::MAX_CUSTOM_RETENTION_DAYS)
+            .saturating_mul(crate::capture::visual_recall::DAY_MS);
+        self.recall_screen_frames_with_retention(query, retention_ms, limit, excerpt_chars)
+    }
+
+    fn recall_screen_frames_with_retention(
+        &self,
+        query: &str,
+        retention_ms: i64,
+        limit: usize,
+        excerpt_chars: usize,
+    ) -> Vec<ScreenFrameRef> {
         let now = self.now_ms();
         let local_days = local_day_bounds(now);
         let (from_ms, to_ms) =
-            shogun_memory::search::visual_recall_window(query, now, local_days);
+            shogun_memory::search::visual_recall_window(query, now, local_days, retention_ms);
         self.with_conn("screen_frames.search_for_recall", |c| {
                 shogun_memory::screen_frames::search_for_recall(c, query, from_ms, to_ms, limit, excerpt_chars)
             })
@@ -3762,6 +3861,20 @@ mod tests {
             "a different thread is a miss — never serve the wrong thread's context"
         );
         assert_eq!(cache.current().map(|c| c.thread_key), Some(key));
+    }
+
+    #[test]
+    fn clearing_the_reply_context_cache_removes_current_context() {
+        let cache = ReplyContextCache::new();
+        cache.put(ReplyContext {
+            thread_key: "sensitive".into(),
+            ..ReplyContext::default()
+        });
+        assert!(cache.current().is_some());
+
+        cache.clear();
+
+        assert!(cache.current().is_none());
     }
 
     /// "How's that going?" with one obvious candidate resolves to it.

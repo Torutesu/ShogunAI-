@@ -490,7 +490,11 @@ fn live_session_loop(
         match socket.read() {
             Ok(Message::Text(text)) => {
                 if let Some(r) = parse_live_message(&text) {
+                    let close_complete = close_is_complete(closing, &r);
                     if result_tx.send(r).is_err() {
+                        break;
+                    }
+                    if close_complete {
                         break;
                     }
                 }
@@ -547,6 +551,12 @@ fn live_session_loop(
 
     let _ = socket.close(None);
     Ok(())
+}
+
+/// A `speech_final` final ends the bounded post-CloseStream grace period only after we sent
+/// CloseStream. Earlier finals remain normal streaming results, not permission to truncate audio.
+fn close_is_complete(closing: bool, result: &LiveResult) -> bool {
+    closing && result.is_final && result.speech_final
 }
 
 fn set_live_read_timeout(stream: &mut tungstenite::stream::MaybeTlsStream<std::net::TcpStream>, dur: Duration) {
@@ -921,6 +931,34 @@ mod tests {
         assert!(r.is_final);
         assert!(r.speech_final);
         assert!((r.confidence - 0.98).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn close_completion_requires_close_and_speech_final() {
+        let interim = LiveResult {
+            text: "hello".into(),
+            is_final: false,
+            speech_final: false,
+            confidence: 0.9,
+        };
+        let non_speech_final = LiveResult {
+            text: "hello".into(),
+            is_final: true,
+            speech_final: false,
+            confidence: 0.9,
+        };
+        let speech_final = LiveResult {
+            text: "hello".into(),
+            is_final: true,
+            speech_final: true,
+            confidence: 0.9,
+        };
+
+        assert!(!close_is_complete(false, &interim));
+        assert!(!close_is_complete(true, &interim));
+        assert!(!close_is_complete(false, &speech_final));
+        assert!(!close_is_complete(true, &non_speech_final));
+        assert!(close_is_complete(true, &speech_final));
     }
 
     #[test]

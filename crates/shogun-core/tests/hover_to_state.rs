@@ -4,7 +4,7 @@
 //! the off-device stand-in for the expand flow — it exercises the modules together under the
 //! two-level open model (spec §6.1.1) rather than in isolation.
 
-use shogun_core::notch::engine::{EngineInput, EngineOutput, NotchEngine};
+use shogun_core::notch::engine::{DisplayCoordinateSpace, EngineInput, EngineOutput, NotchEngine};
 use shogun_core::notch::geometry::{idle_rect, regions, GeometryParams, Rect, Regions};
 use shogun_core::notch::hover::HoverParams;
 use shogun_core::notch::statemachine::{Params, State, Timer};
@@ -19,7 +19,7 @@ fn engine() -> (NotchEngine, Regions, f64) {
         NotchEngine::new(
             regs,
             menubar_min_y,
-            primary_h,
+            DisplayCoordinateSpace::new(screen, screen),
             HoverParams::default(),
             Params::default(),
             screen,

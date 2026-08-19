@@ -15,14 +15,16 @@
 #![allow(dead_code, unused_imports)]
 
 #[cfg(target_os = "macos")]
-pub use mac::{start, Shared, StartGeometry};
+pub use mac::{start, DisplayGeometry, Shared, StartGeometry};
 
 #[cfg(target_os = "macos")]
 pub mod mac {
     use crate::axcache;
     use crate::geometry::Regions;
     use crate::hover::TapEvent;
-    use shogun_core::notch::engine::{EngineInput, EngineOutput, NotchEngine};
+    use shogun_core::notch::engine::{
+        DisplayCoordinateSpace, EngineInput, EngineOutput, NotchEngine,
+    };
     use shogun_core::notch::hover::HoverParams;
     use shogun_core::notch::statemachine::{Params, State, Timer};
     use spike_harness::clock::{OffsetEstimator, SyncSample};
@@ -74,7 +76,10 @@ pub mod mac {
         Timer(Timer, u64),
         Input(EngineInput),
         /// Live NSPanel size — rebuilds `r_exp` + CGEventTap band so leave-grace covers the panel.
-        PanelSize { w: f64, h: f64 },
+        PanelSize {
+            w: f64,
+            h: f64,
+        },
     }
 
     /// An open preview/expanded session (spec §4.2.4). Opened when the preview (Hover) first
@@ -136,21 +141,45 @@ pub mod mac {
     pub struct StartGeometry {
         pub regions: Regions,
         pub menubar_min_y: f64,
-        pub primary_height: f64,
+        pub coordinate_space: DisplayCoordinateSpace,
         pub is_notch: bool,
         pub display_count: u32,
         pub screen: crate::geometry::Rect,
-        pub idle: crate::geometry::Rect,
-        /// One entry per attached display: screen rect, regions, menubar floor, idle rect.
+        pub idle_hit: crate::geometry::Rect,
+        /// One entry per attached display, with matching CG/NS coordinate bounds captured from
+        /// the same NSScreen during setup.
         /// The engine hit-tests against whichever of these the pointer is inside, so the notch
         /// works on a second monitor instead of only where the panel happens to live.
-        pub per_display: Vec<(crate::geometry::Rect, Regions, f64, crate::geometry::Rect)>,
+        pub per_display: Vec<DisplayGeometry>,
+    }
+
+    #[derive(Clone, Copy)]
+    pub struct DisplayGeometry {
+        pub screen: crate::geometry::Rect,
+        pub regions: Regions,
+        pub menubar_min_y: f64,
+        pub idle_hit: crate::geometry::Rect,
+        pub coordinate_space: DisplayCoordinateSpace,
+    }
+
+    /// Select the display whose CoreGraphics bounds contain the event-tap point.
+    fn select_display(
+        displays: &[DisplayGeometry],
+        point: crate::geometry::Point,
+    ) -> Option<usize> {
+        displays
+            .iter()
+            .position(|display| display.coordinate_space.contains_cg(point))
     }
 
     // ---------------------------------------------------------------- timers
 
-    const TIMERS: [Timer; 4] =
-        [Timer::Dwell, Timer::HoverExit, Timer::ExpandedIdle, Timer::CollapseAnim];
+    const TIMERS: [Timer; 4] = [
+        Timer::Dwell,
+        Timer::HoverExit,
+        Timer::ExpandedIdle,
+        Timer::CollapseAnim,
+    ];
 
     fn tidx(t: Timer) -> usize {
         match t {
@@ -212,7 +241,11 @@ pub mod mac {
 
         fn schedule(&self, t: Timer, ms: u64) {
             let gen = self.gens[tidx(t)].fetch_add(1, Ordering::SeqCst) + 1;
-            let _ = self.cmd_tx.send(ArmCmd { timer: t, gen, fire_at: Instant::now() + Duration::from_millis(ms) });
+            let _ = self.cmd_tx.send(ArmCmd {
+                timer: t,
+                gen,
+                fire_at: Instant::now() + Duration::from_millis(ms),
+            });
         }
 
         fn cancel(&self, t: Timer) {
@@ -279,18 +312,17 @@ pub mod mac {
         geo: StartGeometry,
     ) {
         std::thread::spawn(move || {
-            let per_display = geo.per_display.clone();
             // Which entry the engine is currently configured for, so regions are only swapped on
             // an actual screen change rather than on every mouse move.
             let mut active_display: Option<usize> = None;
             let mut engine = NotchEngine::new(
                 geo.regions,
                 geo.menubar_min_y,
-                geo.primary_height,
+                geo.coordinate_space,
                 HoverParams::default(),
                 Params::default(),
                 geo.screen,
-                geo.idle,
+                geo.idle_hit,
             );
             let timers = TimerSvc::spawn(ev_tx);
             let mut prev_state = State::Idle;
@@ -313,33 +345,37 @@ pub mod mac {
                         // Point the engine at the display the pointer is actually on before it
                         // hit-tests. Cheap: a handful of rect comparisons, and only when the
                         // screen changes does anything get swapped.
-                        if per_display.len() > 1 {
-                            let ns_y = geo.primary_height - y;
-                            if let Some((i, (screen, regs, menubar, idle))) = per_display
-                                .iter()
-                                .enumerate()
-                                .find(|(_, (r, _, _, _))| {
-                                    x >= r.x && x <= r.x + r.w && ns_y >= r.y && ns_y <= r.y + r.h
-                                })
-                            {
+                        if geo.per_display.len() > 1 {
+                            let point = crate::geometry::Point::new(x, y);
+                            if let Some(i) = select_display(&geo.per_display, point) {
                                 if active_display != Some(i) {
                                     active_display = Some(i);
+                                    let display = geo.per_display[i];
                                     engine.set_regions(
-                                        *regs,
-                                        *menubar,
-                                        geo.primary_height,
-                                        *screen,
-                                        *idle,
+                                        display.regions,
+                                        display.menubar_min_y,
+                                        display.screen,
+                                        display.idle_hit,
                                     );
+                                    engine.set_coordinate_space(display.coordinate_space);
                                 }
                             }
                         }
-                        EngineInput::MouseCg { x, y, t_ms: shared.clock.elapsed_ns() / 1_000_000, buttons }
+                        EngineInput::MouseCg {
+                            x,
+                            y,
+                            t_ms: shared.clock.elapsed_ns() / 1_000_000,
+                            buttons,
+                        }
                     }
-                    Ev::Tap(TapEvent::Down { x, y }) => {
-                        EngineInput::ButtonDownCg { x, y, t_ms: shared.clock.elapsed_ns() / 1_000_000 }
-                    }
-                    Ev::Tap(TapEvent::Up) => EngineInput::ButtonUp { t_ms: shared.clock.elapsed_ns() / 1_000_000 },
+                    Ev::Tap(TapEvent::Down { x, y }) => EngineInput::ButtonDownCg {
+                        x,
+                        y,
+                        t_ms: shared.clock.elapsed_ns() / 1_000_000,
+                    },
+                    Ev::Tap(TapEvent::Up) => EngineInput::ButtonUp {
+                        t_ms: shared.clock.elapsed_ns() / 1_000_000,
+                    },
                     Ev::Timer(t, gen) => {
                         if !timers.is_current(t, gen) {
                             continue; // stale fire (cancelled/rescheduled since) — drop
@@ -350,7 +386,9 @@ pub mod mac {
                         if t == Timer::CollapseAnim {
                             // The webview failed to report anim_done within 400ms —
                             // hang suspicion, recorded per spec §3.3 T6.
-                            shared.recorder.record(Body::AnimTimeout { state: "collapsing".into() });
+                            shared.recorder.record(Body::AnimTimeout {
+                                state: "collapsing".into(),
+                            });
                         }
                         EngineInput::TimerFired(t)
                     }
@@ -382,12 +420,20 @@ pub mod mac {
                 if matches!(s, State::Hover | State::Expanded) {
                     crate::move_panel_to_cursor_screen(app);
                 }
-                let _ = app.emit("state", StatePayload { state: s.tag(), t0_mono_ns: shared.clock.elapsed_ns() });
-                shared.recorder.record(Body::StateTransition(StateTransition {
-                    from: prev_state.tag().to_string(),
-                    to: s.tag().to_string(),
-                    trigger: "sm".to_string(),
-                }));
+                let _ = app.emit(
+                    "state",
+                    StatePayload {
+                        state: s.tag(),
+                        t0_mono_ns: shared.clock.elapsed_ns(),
+                    },
+                );
+                shared
+                    .recorder
+                    .record(Body::StateTransition(StateTransition {
+                        from: prev_state.tag().to_string(),
+                        to: s.tag().to_string(),
+                        trigger: "sm".to_string(),
+                    }));
                 if let Ok(mut g) = shared.engine_state.lock() {
                     *g = s.tag();
                 }
@@ -439,13 +485,17 @@ pub mod mac {
                 // (the visible panel open). The webview reports its paint against this.
                 let t0 = shared.clock.elapsed_ns();
                 shared.last_commit_ns.store(t0, Ordering::SeqCst);
-                shared.recorder.record(Body::ExpandCommit { t0_mono_ns: t0 });
+                shared
+                    .recorder
+                    .record(Body::ExpandCommit { t0_mono_ns: t0 });
             }
             EngineOutput::ExpandCommit => {
                 // `t0` for the full-expand latency (→Expanded), i.e. NFR-SLO-01. The dedicated
                 // SLO-01 histogram is WP1.4; for now record the marker for traceability.
                 let t0 = shared.clock.elapsed_ns();
-                shared.recorder.record(Body::ExpandCommit { t0_mono_ns: t0 });
+                shared
+                    .recorder
+                    .record(Body::ExpandCommit { t0_mono_ns: t0 });
             }
             EngineOutput::OpenFullUi => {
                 // An ordinary window, not the overlay — see build_full_ui_window for why.
@@ -477,11 +527,19 @@ pub mod mac {
             return;
         };
         let duration_ms = (shared.clock.elapsed_ns().saturating_sub(d.opened_mono_ns)) / 1_000_000;
-        let interactions = Interactions { clicks: d.clicks, keys: d.keys, scrolls: d.scrolls };
+        let interactions = Interactions {
+            clicks: d.clicks,
+            keys: d.keys,
+            scrolls: d.scrolls,
+        };
         // A promoted session (the user clicked/hotkeyed to the full panel) is a deliberate
         // open, never a false positive — regardless of duration or later interaction.
         let auto_fp = !d.promoted && d.clicks + d.keys + d.scrolls == 0 && duration_ms < 1500;
-        let reason = shared.collapse_reason.lock().map(|g| *g).unwrap_or("timeout");
+        let reason = shared
+            .collapse_reason
+            .lock()
+            .map(|g| *g)
+            .unwrap_or("timeout");
         use spike_harness::record::CloseReason;
         let close_reason = match reason {
             "esc" => CloseReason::Esc,
@@ -517,7 +575,13 @@ pub mod mac {
                     if let Ok(mut m) = shared.sync_sent.lock() {
                         m.insert(seq, send_ns);
                     }
-                    let _ = app.emit("clock_sync", ClockSyncPayload { seq, rust_mono_ns: send_ns });
+                    let _ = app.emit(
+                        "clock_sync",
+                        ClockSyncPayload {
+                            seq,
+                            rust_mono_ns: send_ns,
+                        },
+                    );
                     seq += 1;
                     std::thread::sleep(Duration::from_millis(200));
                 }
@@ -533,9 +597,13 @@ pub mod mac {
             let mut avg = MovingAverage::new(12);
             loop {
                 std::thread::sleep(Duration::from_secs(5));
-                let Ok(usage) = read_process_usage() else { continue };
+                let Ok(usage) = read_process_usage() else {
+                    continue;
+                };
                 let wall_ns = shared.clock.elapsed_ns();
-                let Some(pct) = meter.sample(usage.cpu_ns, wall_ns) else { continue };
+                let Some(pct) = meter.sample(usage.cpu_ns, wall_ns) else {
+                    continue;
+                };
                 let one_min = avg.push(pct);
                 if let Ok(mut g) = shared.cpu_1min.lock() {
                     *g = one_min;
@@ -556,11 +624,18 @@ pub mod mac {
         let shared = shared.clone();
         std::thread::spawn(move || loop {
             std::thread::sleep(Duration::from_secs(60));
-            let state = shared.engine_state.lock().map(|g| *g).unwrap_or("?").to_string();
+            let state = shared
+                .engine_state
+                .lock()
+                .map(|g| *g)
+                .unwrap_or("?")
+                .to_string();
             let cpu = shared.cpu_1min.lock().ok().and_then(|g| *g).unwrap_or(0.0);
             let uptime_s = shared.clock.elapsed_ns() / 1_000_000_000;
             let ax_calls = crate::axcache::ax_call_count();
-            let rss_mb = read_process_usage().map(|u| u.rss_bytes as f64 / (1024.0 * 1024.0)).unwrap_or(0.0);
+            let rss_mb = read_process_usage()
+                .map(|u| u.rss_bytes as f64 / (1024.0 * 1024.0))
+                .unwrap_or(0.0);
             let recorder = shared.recorder.clone();
             let app2 = app.clone();
             let _ = app.run_on_main_thread(move || {
@@ -615,18 +690,31 @@ pub mod mac {
             loop {
                 std::thread::sleep(POLL);
                 ticks_since_refresh += 1;
-                let Some(front) = crate::display::frontmost_app() else { continue };
+                let Some(front) = crate::display::frontmost_app() else {
+                    continue;
+                };
                 let pid_changed = Some(front.pid) != last_pid;
                 if !pid_changed && ticks_since_refresh < REFRESH_TICKS {
                     continue;
                 }
                 last_pid = Some(front.pid);
                 ticks_since_refresh = 0;
-                let trigger = if pid_changed { CacheTrigger::AppSwitch } else { CacheTrigger::WindowSwitch };
+                let trigger = if pid_changed {
+                    CacheTrigger::AppSwitch
+                } else {
+                    CacheTrigger::WindowSwitch
+                };
 
-                let empty_ok_walk =
-                    walk_and_publish(&app, &shared, front.pid, &front.bundle_id, &front.name, trigger, &mut last_digest)
-                        .is_some_and(|r| r.text_bytes == 0 && !r.partial && !r.truncated);
+                let empty_ok_walk = walk_and_publish(
+                    &app,
+                    &shared,
+                    front.pid,
+                    &front.bundle_id,
+                    &front.name,
+                    trigger,
+                    &mut last_digest,
+                )
+                .is_some_and(|r| r.text_bytes == 0 && !r.partial && !r.truncated);
                 // Many browsers (Chrome/Safari/etc.) build their AX tree lazily on first
                 // query, so a snapshot right after switching TO the app can land before it
                 // exists — the walk succeeds but finds nothing (not partial/truncated, so
@@ -636,7 +724,15 @@ pub mod mac {
                 if empty_ok_walk {
                     std::thread::sleep(Duration::from_millis(500));
                     if crate::display::frontmost_app().map(|f| f.pid) == Some(front.pid) {
-                        walk_and_publish(&app, &shared, front.pid, &front.bundle_id, &front.name, trigger, &mut last_digest);
+                        walk_and_publish(
+                            &app,
+                            &shared,
+                            front.pid,
+                            &front.bundle_id,
+                            &front.name,
+                            trigger,
+                            &mut last_digest,
+                        );
                     }
                 }
             }
@@ -730,18 +826,21 @@ pub mod mac {
             *g = Some(payload.clone());
         }
         let _ = app.emit("context", payload);
-        app.state::<crate::metrics::SloRegister>().record_cache_update_ms(latency_ms);
-        shared.recorder.record(Body::CacheUpdate(CacheUpdate::from_text(
-            latency_ms,
-            trigger,
-            bundle_id,
-            &result.text,
-            result.elements_visited,
-            result.depth_reached,
-            result.partial,
-            result.truncated,
-            false,
-        )));
+        app.state::<crate::metrics::SloRegister>()
+            .record_cache_update_ms(latency_ms);
+        shared
+            .recorder
+            .record(Body::CacheUpdate(CacheUpdate::from_text(
+                latency_ms,
+                trigger,
+                bundle_id,
+                &result.text,
+                result.elements_visited,
+                result.depth_reached,
+                result.partial,
+                result.truncated,
+                false,
+            )));
         Some(result)
     }
 
@@ -749,7 +848,8 @@ pub mod mac {
         // ~/Library/Application Support/com.syogun.shogunai/metrics/ (spec §4.4; the
         // recorder appends YYYYMMDD.jsonl with UTC daily rotation).
         let base = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-        let dir = PathBuf::from(base).join("Library/Application Support/com.syogun.shogunai/metrics");
+        let dir =
+            PathBuf::from(base).join("Library/Application Support/com.syogun.shogunai/metrics");
         let _ = std::fs::create_dir_all(&dir);
         dir
     }
@@ -763,7 +863,12 @@ pub mod mac {
     /// (Idle→Hover) — the visible panel appearance the Phase 0 p95 refers to. The dedicated
     /// full-expand (SLO-01) and preview vs expand split are WP1.4.
     #[tauri::command]
-    pub fn painted(state: String, t1_perf_ms: f64, shared: tauri::State<'_, Arc<Shared>>, app: AppHandle) {
+    pub fn painted(
+        state: String,
+        t1_perf_ms: f64,
+        shared: tauri::State<'_, Arc<Shared>>,
+        app: AppHandle,
+    ) {
         eprintln!("[spike] cmd painted state={state} t1={t1_perf_ms:.1}");
         if state != "hover" {
             return;
@@ -781,7 +886,12 @@ pub mod mac {
             return;
         }
         let t1_js_ns = (t1_perf_ms * 1e6) as u64;
-        let Some(t1_ns) = shared.offset.lock().ok().and_then(|o| o.js_to_rust_ns(t1_js_ns)) else {
+        let Some(t1_ns) = shared
+            .offset
+            .lock()
+            .ok()
+            .and_then(|o| o.js_to_rust_ns(t1_js_ns))
+        else {
             // Offset not calibrated yet — the commit is already consumed above, so this
             // early sample is simply dropped (an unbiased latency needs the offset) rather
             // than left to bias a later paint.
@@ -796,7 +906,9 @@ pub mod mac {
         // stays honest. The ceiling is 50× the 100ms SLO, so a genuine regression is still
         // recorded as a FAIL rather than hidden.
         if latency_ms > 5000.0 {
-            eprintln!("[spike] dropping implausible expand latency {latency_ms:.0}ms (orphaned pair)");
+            eprintln!(
+                "[spike] dropping implausible expand latency {latency_ms:.0}ms (orphaned pair)"
+            );
             return;
         }
         // Same sample, kept in memory for the Full UI's health pane. The recorder above drains to
@@ -808,7 +920,11 @@ pub mod mac {
             // wired on-device (runbook D-02); until then they mirror latency.
             total_perceived_ms: latency_ms,
             hover_enter_offset_ms: 0.0,
-            mode: if shared.is_notch { Mode::Notch } else { Mode::Pseudo },
+            mode: if shared.is_notch {
+                Mode::Notch
+            } else {
+                Mode::Pseudo
+            },
             fullscreen: false,
             display_count: shared.display_count,
         }));
@@ -906,7 +1022,12 @@ pub mod mac {
     pub fn clock_sync_ack(seq: u32, js_perf_ms: f64, shared: tauri::State<'_, Arc<Shared>>) {
         eprintln!("[spike] cmd clock_sync_ack seq={seq}");
         let recv_ns = shared.clock.elapsed_ns();
-        let Some(send_ns) = shared.sync_sent.lock().ok().and_then(|mut m| m.remove(&seq)) else {
+        let Some(send_ns) = shared
+            .sync_sent
+            .lock()
+            .ok()
+            .and_then(|mut m| m.remove(&seq))
+        else {
             return;
         };
         if let Ok(mut o) = shared.offset.lock() {
@@ -941,5 +1062,60 @@ pub mod mac {
                 }
             }
         });
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use crate::geometry::{idle_rect, regions, GeometryParams, Rect};
+
+        fn display(cg_screen: Rect, screen: Rect) -> DisplayGeometry {
+            let idle_hit = idle_rect(screen, 180.0, 24.0);
+            DisplayGeometry {
+                screen,
+                regions: regions(screen, idle_hit, GeometryParams::default()),
+                menubar_min_y: screen.max_y() - 24.0,
+                idle_hit,
+                coordinate_space: DisplayCoordinateSpace::new(cg_screen, screen),
+            }
+        }
+
+        #[test]
+        fn selects_regions_by_cg_bounds_and_rejects_gaps() {
+            let displays = [
+                display(
+                    Rect::new(0.0, 0.0, 1512.0, 982.0),
+                    Rect::new(0.0, 0.0, 1512.0, 982.0),
+                ),
+                display(
+                    Rect::new(-1280.0, -900.0, 1280.0, 900.0),
+                    Rect::new(-1280.0, 982.0, 1280.0, 900.0),
+                ),
+                display(
+                    Rect::new(1512.0, 982.0, 1920.0, 1080.0),
+                    Rect::new(1512.0, -1080.0, 1920.0, 1080.0),
+                ),
+            ];
+
+            assert_eq!(
+                select_display(&displays, crate::geometry::Point::new(10.0, 10.0)),
+                Some(0)
+            );
+            assert_eq!(
+                select_display(&displays, crate::geometry::Point::new(-10.0, -10.0)),
+                Some(1)
+            );
+            let lower_right =
+                select_display(&displays, crate::geometry::Point::new(1600.0, 1000.0));
+            assert_eq!(lower_right, Some(2));
+            assert_eq!(
+                displays[lower_right.unwrap_or_default()].screen,
+                Rect::new(1512.0, -1080.0, 1920.0, 1080.0)
+            );
+            assert_eq!(
+                select_display(&displays, crate::geometry::Point::new(1512.0, 500.0)),
+                None
+            );
+        }
     }
 }

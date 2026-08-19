@@ -15,25 +15,29 @@
 /// direct shogun-agents dependency.
 pub use shogun_agents::entitlement;
 
+pub mod approval_store;
 pub mod backend;
 pub mod composio;
 pub mod connection;
+pub mod desktop_heartbeat;
 pub mod dispatch;
 pub mod mcp;
 pub mod memory_api;
+/// Memory API opt-in, profile, and hashed bearer-token persistence.
+pub mod memory_api_settings;
 pub mod plan_source;
 pub mod rest;
 pub mod scope;
+/// The REST listener (feature `server`): a localhost-bound axum adapter over [`rest`].
+#[cfg(feature = "server")]
+pub mod server;
 pub mod service_gate;
+pub mod slack;
+pub mod sync;
 /// What the model may see: the LLM-facing tool catalog + the "Connected services" prompt block
 /// (issue #81, `docs/mcp/01-architecture.md` §5).
 pub mod tool_catalog;
 /// The read-tool conversation loop (issue #81 step 2): resolve → gate → run → tool_result.
 pub mod tool_loop;
-pub mod slack;
-pub mod sync;
 /// Visual recall structured API helpers (Memory API symmetry).
 pub mod visual_recall_api;
-/// The REST listener (feature `server`): a localhost-bound axum adapter over [`rest`].
-#[cfg(feature = "server")]
-pub mod server;

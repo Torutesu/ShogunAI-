@@ -79,4 +79,6 @@ pub mod send_exec;
 /// plays anything (Issue #49, `docs/sound-design.md`).
 pub mod sound;
 pub mod traceview;
+/// Conservative local correction for built-in and explicitly configured voice aliases.
+pub mod voice_dictionary;
 pub mod user_config;

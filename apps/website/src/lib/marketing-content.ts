@@ -22,7 +22,7 @@ export const featurePages: readonly MarketingDetail[] = [
     intro: 'The useful part of work is rarely in one document. It lives across conversations, browser tabs, decisions, and half-finished drafts. ShogunAI gives that context a durable home so you can return to it later without rebuilding the story from scratch.',
     highlights: [
       { title: 'Local-first by default', body: 'Your work memory is designed to remain on your device by default. You choose when a connected provider receives relevant context.' },
-      { title: 'Context, not a screenshot archive', body: 'ShogunAI is built around structured, searchable work context rather than a folder of images you must inspect manually.' },
+      { title: 'Context, not a screenshot archive', body: 'ShogunAI is built around structured, searchable work context rather than a folder of images you must inspect manually. Optional visual recall is the narrow exception: opt-in, encrypted locally, and automatically expired after the finite duration you choose.' },
       { title: 'Passive capture', body: 'Build useful memory while you work, without turning every decision into a note-taking task.' },
     ],
     steps: [
@@ -32,7 +32,7 @@ export const featurePages: readonly MarketingDetail[] = [
     ],
     outcomes: ['Remember why a decision was made', 'Find the source behind a detail', 'Resume interrupted work faster', 'Keep sensitive context local by default'],
     faq: [
-      ['Does ShogunAI store screenshots?', 'No. ShogunAI is designed to build structured, searchable work context rather than a screenshot archive.'],
+      ['Does ShogunAI store screenshots?', 'Not by default: capture reads text through the macOS accessibility layer, and no image is written. The one exception is visual recall, which you turn on yourself. With it on, and only where a window yields no text at all, a compressed frame is kept in the encrypted local database for the finite duration you choose, then deleted automatically. Frames never leave your Mac.'],
       ['Where is memory stored?', 'Memory is local-first and remains on your Mac by default. Optional connected services may receive only the context required for the action you approve.'],
       ['Do I need to write notes manually?', 'No. Passive capture is designed to reduce manual note-taking, while still letting you add or remove context intentionally.'],
     ],

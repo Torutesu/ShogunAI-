@@ -31,7 +31,9 @@ use shogun_core::audio::capture::{AudioSource, MultiSource};
 use shogun_core::audio::worker::{SegmentSink, Worker};
 use shogun_core::audio::{Speaker, Utterance};
 use shogun_core::daemon::Db;
-use shogun_core::meeting::settings::{AsrBackend, AsrModel, MeetingLanguage, MeetingMode, Settings};
+use shogun_core::meeting::settings::{
+    AsrBackend, AsrModel, MeetingLanguage, MeetingMode, Settings,
+};
 use tauri::{Emitter, Manager};
 
 /// A running audio lane. Dropping the handle without `stop` would leak the thread, so the machine
@@ -148,14 +150,15 @@ impl DbSink {
 }
 
 impl SegmentSink for DbSink {
-    fn emit(
-        &mut self,
-        u: &Utterance,
-        text: &str,
-        confidence: f64,
-        translation: Option<&str>,
-    ) {
-        self.emit_line(u.speaker, u.started_at, text, confidence, translation, false);
+    fn emit(&mut self, u: &Utterance, text: &str, confidence: f64, translation: Option<&str>) {
+        self.emit_line(
+            u.speaker,
+            u.started_at,
+            text,
+            confidence,
+            translation,
+            false,
+        );
     }
 }
 
@@ -191,7 +194,11 @@ fn whisper_model_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
             return Some(p);
         }
     }
-    let p = app.path().resource_dir().ok()?.join("models/whisper-small.gguf");
+    let p = app
+        .path()
+        .resource_dir()
+        .ok()?
+        .join("models/whisper-small.gguf");
     p.exists().then_some(p)
 }
 
@@ -264,14 +271,23 @@ fn try_open_live_pair(
     let other = if dual {
         // Fresh auth header (cached inside the auth impl).
         let mut auth2 = deepgram::resolve_auth()?;
-        Some(DeepgramLive::connect(&cfg, auth2.as_mut(), LiveMode::Meeting, trace)?)
+        Some(DeepgramLive::connect(
+            &cfg,
+            auth2.as_mut(),
+            LiveMode::Meeting,
+            trace,
+        )?)
     } else {
         None
     };
     Ok((me, other))
 }
 
-fn build_whisper(app: &tauri::AppHandle, model: AsrModel, language: MeetingLanguage) -> Option<Whisper> {
+fn build_whisper(
+    app: &tauri::AppHandle,
+    model: AsrModel,
+    language: MeetingLanguage,
+) -> Option<Whisper> {
     let Some(model_path) = select_model_path(app, model) else {
         eprintln!("[meeting] no whisper model bundled; notes only");
         return None;
@@ -522,7 +538,9 @@ pub fn start(
                     let join = std::thread::spawn(move || {
                         run_worker_loop(worker, &mut sink, stop_flag, last_audio_flag);
                     });
-                    eprintln!("[meeting] audio lane started for session {session_id} (HTTP fallback)");
+                    eprintln!(
+                        "[meeting] audio lane started for session {session_id} (HTTP fallback)"
+                    );
                     Some(Handle {
                         stop,
                         join: Some(join),

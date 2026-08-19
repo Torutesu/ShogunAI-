@@ -18,7 +18,9 @@ fn encode(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
         match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
             other => out.push_str(&format!("%{other:02X}")),
         }
     }
@@ -35,11 +37,23 @@ fn state_path(noun: &str, which: &ListOrGet) -> String {
 /// The HTTP call for a command, or `None` for a purely local command (`help`). `include_low` adds
 /// the read opt-in query.
 pub fn to_call(command: &Command, include_low: bool) -> Option<HttpCall> {
-    let get = |path: String| HttpCall { method: "GET", path, body: None };
-    let post = |path: String, body: String| HttpCall { method: "POST", path, body: Some(body) };
+    let get = |path: String| HttpCall {
+        method: "GET",
+        path,
+        body: None,
+    };
+    let post = |path: String, body: String| HttpCall {
+        method: "POST",
+        path,
+        body: Some(body),
+    };
     let low = |mut path: String| {
         if include_low {
-            path.push_str(if path.contains('?') { "&include_low" } else { "?include_low" });
+            path.push_str(if path.contains('?') {
+                "&include_low"
+            } else {
+                "?include_low"
+            });
         }
         path
     };
@@ -56,24 +70,43 @@ pub fn to_call(command: &Command, include_low: bool) -> Option<HttpCall> {
         Command::Propose { description } => post("/v1/state/proposals".into(), description.clone()),
         // `run` carries the action JSON spec (e.g. '{"kind":"local_search","query":"x"}').
         Command::Run { agent } => post("/v1/actions/execute".into(), agent.clone()),
+        Command::ActionsPoll { approval_id } => get(format!("/v1/actions/status/{approval_id}")),
         Command::Wrap => get("/v1/memory/wrap".to_string()),
         Command::Onboarding => get("/v1/device/onboarding".to_string()),
         Command::Lessons(cmd) => match cmd {
             LessonsCommand::List => get("/v1/lessons".to_string()),
-            LessonsCommand::Enable { id } => {
-                post("/v1/lessons/active".into(), format!(r#"{{"id":{id},"active":true}}"#))
-            }
-            LessonsCommand::Disable { id } => {
-                post("/v1/lessons/active".into(), format!(r#"{{"id":{id},"active":false}}"#))
-            }
+            LessonsCommand::Enable { id } => post(
+                "/v1/lessons/active".into(),
+                format!(r#"{{"id":{id},"active":true}}"#),
+            ),
+            LessonsCommand::Disable { id } => post(
+                "/v1/lessons/active".into(),
+                format!(r#"{{"id":{id},"active":false}}"#),
+            ),
         },
         Command::ApiStatus => get("/v1/status".to_string()),
         Command::Metrics => get("/v1/metrics".to_string()),
+        Command::Whoami => get("/v1/profile/whoami".to_string()),
+        Command::ProfileSet { body } => post("/v1/profile".into(), body.clone()),
         Command::VisualRecall(cmd) => match cmd {
             VisualRecallCommand::Status => get("/v1/visual_recall/status".to_string()),
-            VisualRecallCommand::Enable => post("/v1/visual_recall/enabled".into(), r#"{"enabled":true}"#.to_string()),
-            VisualRecallCommand::Disable => post("/v1/visual_recall/enabled".into(), r#"{"enabled":false}"#.to_string()),
-            VisualRecallCommand::Search { query, from_ms, to_ms } => {
+            VisualRecallCommand::Enable => post(
+                "/v1/visual_recall/enabled".into(),
+                r#"{"enabled":true}"#.to_string(),
+            ),
+            VisualRecallCommand::Disable => post(
+                "/v1/visual_recall/enabled".into(),
+                r#"{"enabled":false}"#.to_string(),
+            ),
+            VisualRecallCommand::Retention { days } => post(
+                "/v1/visual_recall/retention".into(),
+                format!(r#"{{"days":{days}}}"#),
+            ),
+            VisualRecallCommand::Search {
+                query,
+                from_ms,
+                to_ms,
+            } => {
                 let mut path = format!("/v1/visual_recall/frames/search?q={}", encode(query));
                 if let Some(f) = from_ms {
                     path.push_str(&format!("&from_ms={f}"));
@@ -84,12 +117,14 @@ pub fn to_call(command: &Command, include_low: bool) -> Option<HttpCall> {
                 get(low(path))
             }
             VisualRecallCommand::FrameGet { id } => get(format!("/v1/visual_recall/frames/{id}")),
-            VisualRecallCommand::FrameRescan { id } => {
-                post(format!("/v1/visual_recall/frames/{id}/rescan"), String::new())
-            }
-            VisualRecallCommand::FrameDelete { id } => {
-                post("/v1/visual_recall/frames/delete".into(), format!(r#"{{"id":{id}}}"#))
-            }
+            VisualRecallCommand::FrameRescan { id } => post(
+                format!("/v1/visual_recall/frames/{id}/rescan"),
+                String::new(),
+            ),
+            VisualRecallCommand::FrameDelete { id } => post(
+                "/v1/visual_recall/frames/delete".into(),
+                format!(r#"{{"id":{id}}}"#),
+            ),
         },
         Command::Help | Command::Config { .. } => return None,
     })
@@ -103,56 +138,114 @@ mod tests {
     fn reads_are_gets_with_the_right_paths() {
         assert_eq!(
             to_call(&Command::People(ListOrGet::List), false).unwrap(),
-            HttpCall { method: "GET", path: "/v1/state/people".into(), body: None }
+            HttpCall {
+                method: "GET",
+                path: "/v1/state/people".into(),
+                body: None
+            }
         );
         assert_eq!(
-            to_call(&Command::Commitments(ListOrGet::Get { id: 7 }), false).unwrap().path,
+            to_call(&Command::Commitments(ListOrGet::Get { id: 7 }), false)
+                .unwrap()
+                .path,
             "/v1/state/commitments/7"
         );
-        assert_eq!(to_call(&Command::OpenLoops(ListOrGet::List), false).unwrap().path, "/v1/state/open_loops");
+        assert_eq!(
+            to_call(&Command::OpenLoops(ListOrGet::List), false)
+                .unwrap()
+                .path,
+            "/v1/state/open_loops"
+        );
         // Issue #10: `shogun wrap` reads the same endpoint the notch card's data comes from.
         assert_eq!(
             to_call(&Command::Wrap, false).unwrap(),
-            HttpCall { method: "GET", path: "/v1/memory/wrap".into(), body: None }
+            HttpCall {
+                method: "GET",
+                path: "/v1/memory/wrap".into(),
+                body: None
+            }
         );
     }
 
     #[test]
     fn search_encodes_the_query() {
-        let call = to_call(&Command::Search { query: "budget review".into() }, false).unwrap();
+        let call = to_call(
+            &Command::Search {
+                query: "budget review".into(),
+            },
+            false,
+        )
+        .unwrap();
         assert_eq!(call.path, "/v1/memory/search?q=budget%20review");
     }
 
     #[test]
     fn include_low_is_appended_correctly() {
         // no existing query → ?include_low
-        assert_eq!(to_call(&Command::People(ListOrGet::List), true).unwrap().path, "/v1/state/people?include_low");
+        assert_eq!(
+            to_call(&Command::People(ListOrGet::List), true)
+                .unwrap()
+                .path,
+            "/v1/state/people?include_low"
+        );
         // existing query → &include_low
-        let s = to_call(&Command::Search { query: "x".into() }, true).unwrap().path;
+        let s = to_call(&Command::Search { query: "x".into() }, true)
+            .unwrap()
+            .path;
         assert_eq!(s, "/v1/memory/search?q=x&include_low");
     }
 
     #[test]
     fn writes_and_actions_are_posts_with_bodies() {
         assert_eq!(
-            to_call(&Command::Note { text: "call Bob".into() }, false).unwrap(),
-            HttpCall { method: "POST", path: "/v1/memory/notes".into(), body: Some("call Bob".into()) }
+            to_call(
+                &Command::Note {
+                    text: "call Bob".into()
+                },
+                false
+            )
+            .unwrap(),
+            HttpCall {
+                method: "POST",
+                path: "/v1/memory/notes".into(),
+                body: Some("call Bob".into())
+            }
         );
         assert_eq!(
-            to_call(&Command::Propose { description: "add a commitment".into() }, false).unwrap().path,
+            to_call(
+                &Command::Propose {
+                    description: "add a commitment".into()
+                },
+                false
+            )
+            .unwrap()
+            .path,
             "/v1/state/proposals"
         );
-        let run = to_call(&Command::Run { agent: r#"{"kind":"local_search","query":"x"}"#.into() }, false).unwrap();
+        let run = to_call(
+            &Command::Run {
+                agent: r#"{"kind":"local_search","query":"x"}"#.into(),
+            },
+            false,
+        )
+        .unwrap();
         assert_eq!(run.method, "POST");
         assert_eq!(run.path, "/v1/actions/execute");
-        assert_eq!(run.body.as_deref(), Some(r#"{"kind":"local_search","query":"x"}"#));
+        assert_eq!(
+            run.body.as_deref(),
+            Some(r#"{"kind":"local_search","query":"x"}"#)
+        );
     }
 
     #[test]
     fn lessons_calls_match_the_rest_contract() {
         assert_eq!(
             to_call(&Command::Lessons(LessonsCommand::List), false).unwrap(),
-            HttpCall { method: "GET", path: "/v1/lessons".into(), body: None }
+            HttpCall {
+                method: "GET",
+                path: "/v1/lessons".into(),
+                body: None
+            }
         );
         assert_eq!(
             to_call(&Command::Lessons(LessonsCommand::Enable { id: 7 }), false).unwrap(),
@@ -163,14 +256,52 @@ mod tests {
             }
         );
         assert_eq!(
-            to_call(&Command::Lessons(LessonsCommand::Disable { id: 7 }), false).unwrap().body.as_deref(),
+            to_call(&Command::Lessons(LessonsCommand::Disable { id: 7 }), false)
+                .unwrap()
+                .body
+                .as_deref(),
             Some(r#"{"id":7,"active":false}"#)
         );
     }
 
     #[test]
+    fn visual_recall_retention_calls_the_symmetric_endpoint() {
+        assert_eq!(
+            to_call(
+                &Command::VisualRecall(VisualRecallCommand::Retention { days: 30 }),
+                false,
+            )
+            .unwrap(),
+            HttpCall {
+                method: "POST",
+                path: "/v1/visual_recall/retention".into(),
+                body: Some(r#"{"days":30}"#.into()),
+            }
+        );
+    }
+
+    #[test]
     fn api_status_is_a_get_and_help_has_no_call() {
-        assert_eq!(to_call(&Command::ApiStatus, false).unwrap().path, "/v1/status");
+        assert_eq!(
+            to_call(&Command::ApiStatus, false).unwrap().path,
+            "/v1/status"
+        );
         assert!(to_call(&Command::Help, false).is_none());
+        assert_eq!(
+            to_call(&Command::Whoami, false).unwrap().path,
+            "/v1/profile/whoami"
+        );
+        assert_eq!(
+            to_call(
+                &Command::ProfileSet {
+                    body: r#"{"role":"PM"}"#.into()
+                },
+                false
+            )
+            .unwrap()
+            .body
+            .as_deref(),
+            Some(r#"{"role":"PM"}"#)
+        );
     }
 }

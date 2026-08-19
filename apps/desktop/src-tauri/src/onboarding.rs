@@ -7,12 +7,11 @@
 //! - `onboarding_state` / `set_onboarding_state` — Rust-owned progress, persisted to
 //!   `app_data/onboarding.json`. The trial is stamped ONCE, at the first write that flips
 //!   `completed` to true, and never restarts (see [`state::apply`]).
-//! - `accessibility_status` — the NON-prompting trust check the permission step polls (a prompting
-//!   check would reopen the system dialog on every poll).
-//! - `open_accessibility_settings` — the one-shot prompting check + System Settings deep link,
-//!   fired only from the button.
-//! - a silent watcher emits `accessibility-changed` on every edge while the window is open, so the
-//!   permission card flips to green the instant the toggle goes on.
+//! - `permission_status` — NON-prompting Accessibility, Microphone, and Screen Recording checks.
+//! - explicit request commands — prompts or opens the exact System Settings pane only after a
+//!   click. Background checks never prompt.
+//! - a silent watcher emits `permissions-changed` on every edge while the window is open, so all
+//!   three permission lanes update immediately.
 //! - `onboarding_event` — funnel measurement through the PostHog adapter (#91), behind its
 //!   `opt_out` gate, names allowlisted in Rust; step ids only, never content (invariant 3).
 //!
@@ -53,11 +52,27 @@ pub mod state {
         /// must not restart the clock. Local-only, not a secret, so no Keychain.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub trial_started_at: Option<i64>,
+        /// True when the user explicitly continued past the Accessibility step without granting
+        /// it. This is distinct from completing onboarding after granting permission: only the
+        /// latter should reopen a repair prompt if macOS later revokes trust.
+        #[serde(default)]
+        pub accessibility_skipped: bool,
+        /// A response-only hint for the webview. It is calculated from live permission status;
+        /// the alias reads state written by the earlier Accessibility-only repair flow.
+        #[serde(default, alias = "accessibility_repair")]
+        pub permissions_repair: bool,
     }
 
     impl Default for OnboardingState {
         fn default() -> Self {
-            Self { completed: false, step: first_step(), plan: None, trial_started_at: None }
+            Self {
+                completed: false,
+                step: first_step(),
+                plan: None,
+                trial_started_at: None,
+                accessibility_skipped: false,
+                permissions_repair: false,
+            }
         }
     }
 
@@ -78,9 +93,27 @@ pub mod state {
         // completed=false, and losing the stamp would hand a fresh 7 days); otherwise the first
         // write that completes onboarding stamps it.
         let trial_started_at =
-            prev.trial_started_at.or(if completed { Some(now_unix) } else { None });
-        let step = if STEPS.contains(&step.as_str()) { step } else { first_step() };
-        OnboardingState { completed, step, plan, trial_started_at }
+            prev.trial_started_at
+                .or(if completed { Some(now_unix) } else { None });
+        let step = if STEPS.contains(&step.as_str()) {
+            step
+        } else {
+            first_step()
+        };
+        OnboardingState {
+            completed,
+            step,
+            plan,
+            trial_started_at,
+            accessibility_skipped: prev.accessibility_skipped,
+            permissions_repair: false,
+        }
+    }
+
+    /// Whether a completed setup needs its focused permissions repair card. The legacy skip bit is
+    /// retained for migrated installs that explicitly deferred the old Accessibility-only guide.
+    pub fn needs_permissions_repair(all_granted: bool, state: &OnboardingState) -> bool {
+        state.completed && !all_granted && !state.accessibility_skipped
     }
 
     /// On-disk format, versioned like `shortcuts.json` so a future default change can migrate once.
@@ -129,6 +162,8 @@ pub mod state {
                 step: "ready".into(),
                 plan: None,
                 trial_started_at: None,
+                accessibility_skipped: legacy.skipped,
+                permissions_repair: false,
             };
         }
         OnboardingState::default()
@@ -145,6 +180,8 @@ pub mod state {
                 step: "ready".into(),
                 plan: None,
                 trial_started_at: trial,
+                accessibility_skipped: false,
+                permissions_repair: false,
             }
         }
 
@@ -203,8 +240,27 @@ pub mod state {
         }
 
         #[test]
+        fn legacy_skip_stays_out_of_accessibility_repair() {
+            let state = parse(r#"{"skipped":true}"#);
+            assert!(state.accessibility_skipped);
+            assert!(!needs_permissions_repair(false, &state));
+        }
+
+        #[test]
+        fn completed_setup_repairs_lost_accessibility_trust() {
+            let state = done(Some(42));
+            assert!(needs_permissions_repair(false, &state));
+            assert!(!needs_permissions_repair(true, &state));
+        }
+
+        #[test]
         fn parse_treats_garbage_and_untouched_legacy_as_first_run() {
-            for text in ["", "not json", r#"{"completed":false,"skipped":false}"#, "{}"] {
+            for text in [
+                "",
+                "not json",
+                r#"{"completed":false,"skipped":false}"#,
+                "{}",
+            ] {
                 assert_eq!(parse(text), OnboardingState::default(), "{text:?}");
             }
         }
@@ -212,7 +268,10 @@ pub mod state {
         #[test]
         fn roundtrip_through_the_versioned_file() {
             let s = done(Some(42));
-            let file = OnboardingFile { version: ONBOARDING_VERSION, state: s.clone() };
+            let file = OnboardingFile {
+                version: ONBOARDING_VERSION,
+                state: s.clone(),
+            };
             let json = serde_json::to_string(&file).unwrap();
             assert_eq!(parse(&json), s);
         }
@@ -239,20 +298,61 @@ pub mod mac {
     /// macOS 14/15; if Apple ever renames the pane, `open` still lands the user in Settings.
     const AX_SETTINGS_URL: &str =
         "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
+    const MICROPHONE_SETTINGS_URL: &str =
+        "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone";
+    const SCREEN_RECORDING_SETTINGS_URL: &str =
+        "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture";
+
+    /// One honest view of every capability onboarding requires. Status checks are side-effect
+    /// free; only the separate request commands may prompt or open System Settings.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+    pub struct PermissionSnapshot {
+        accessibility: bool,
+        microphone: bool,
+        screen_recording: bool,
+        all_granted: bool,
+    }
+
+    impl PermissionSnapshot {
+        fn new(accessibility: bool, microphone: bool, screen_recording: bool) -> Self {
+            Self {
+                accessibility,
+                microphone,
+                screen_recording,
+                all_granted: accessibility && microphone && screen_recording,
+            }
+        }
+    }
+
+    fn permission_gate_blocks(
+        previous_step: &str,
+        next_step: &str,
+        completed: bool,
+        all_granted: bool,
+    ) -> bool {
+        !all_granted && (completed || (previous_step == "permission" && next_step != "permission"))
+    }
 
     /// In-memory copy of the persisted state, managed so reads answer without touching disk on
     /// every panel launch.
     pub struct Store(pub Mutex<OnboardingState>);
 
     fn config_path(app: &AppHandle) -> Option<PathBuf> {
-        app.path().app_data_dir().ok().map(|d| d.join("onboarding.json"))
+        app.path()
+            .app_data_dir()
+            .ok()
+            .map(|d| d.join("onboarding.json"))
     }
 
     /// Load persisted state, migrating the legacy #46 disposition and defaulting to first-run when
     /// the file is absent or unreadable (see [`state::parse`]).
     pub fn load(app: &AppHandle) -> OnboardingState {
-        let Some(p) = config_path(app) else { return OnboardingState::default() };
-        let Ok(text) = std::fs::read_to_string(p) else { return OnboardingState::default() };
+        let Some(p) = config_path(app) else {
+            return OnboardingState::default();
+        };
+        let Ok(text) = std::fs::read_to_string(p) else {
+            return OnboardingState::default();
+        };
         state::parse(&text)
     }
 
@@ -261,7 +361,10 @@ pub mod mac {
         if let Some(dir) = p.parent() {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
-        let file = OnboardingFile { version: ONBOARDING_VERSION, state: s.clone() };
+        let file = OnboardingFile {
+            version: ONBOARDING_VERSION,
+            state: s.clone(),
+        };
         let json = serde_json::to_string_pretty(&file).map_err(|e| e.to_string())?;
         std::fs::write(&p, json).map_err(|e| format!("onboarding save failed: {e}"))
     }
@@ -273,21 +376,47 @@ pub mod mac {
             .unwrap_or(0)
     }
 
-    /// Live Accessibility trust, without the system prompt. The permission step polls this as a
-    /// fallback to the pushed `accessibility-changed` event.
+    fn microphone_authorized() -> bool {
+        use objc2_av_foundation::{AVAuthorizationStatus, AVCaptureDevice, AVMediaTypeAudio};
+
+        // SAFETY: AVMediaTypeAudio exists on every supported macOS release and is the only media
+        // type passed to this API.
+        let Some(media_type) = (unsafe { AVMediaTypeAudio }) else {
+            return false;
+        };
+        (unsafe { AVCaptureDevice::authorizationStatusForMediaType(media_type) })
+            == AVAuthorizationStatus::Authorized
+    }
+
+    fn permission_snapshot() -> PermissionSnapshot {
+        use objc2_core_graphics::CGPreflightScreenCaptureAccess;
+
+        PermissionSnapshot::new(
+            axcache::ax_trusted_silent(),
+            microphone_authorized(),
+            CGPreflightScreenCaptureAccess(),
+        )
+    }
+
+    /// Live status for all required permissions. This command never prompts and is safe to poll.
     #[tauri::command]
-    pub fn accessibility_status() -> bool {
-        axcache::ax_trusted_silent()
+    pub fn permission_status() -> PermissionSnapshot {
+        permission_snapshot()
     }
 
     /// Current onboarding state for the flow (invariant 1: Rust owns it). Reads the managed copy
     /// when available; falls back to disk so a call racing setup still answers honestly.
     #[tauri::command]
     pub fn onboarding_state(app: AppHandle) -> OnboardingState {
-        match app.try_state::<Store>() {
+        let mut state = match app.try_state::<Store>() {
             Some(store) => store.0.lock().map(|g| g.clone()).unwrap_or_default(),
             None => load(&app),
+        };
+        if state::needs_permissions_repair(permission_snapshot().all_granted, &state) {
+            state.step = "permission".into();
+            state.permissions_repair = true;
         }
+        state
     }
 
     /// Whole-record write — the flow has one writer, so a partial update would let a resumed
@@ -306,7 +435,19 @@ pub mod mac {
         store: tauri::State<'_, Store>,
     ) -> Result<(), String> {
         let prev = store.0.lock().map(|g| g.clone()).unwrap_or_default();
-        let next = state::apply(&prev, step, plan, completed, now_unix());
+        let permissions = permission_snapshot();
+        if permission_gate_blocks(&prev.step, &step, completed, permissions.all_granted) {
+            return Err(
+                "Accessibility, Microphone, and Screen Recording are required to continue"
+                    .to_owned(),
+            );
+        }
+        let mut next = state::apply(&prev, step.clone(), plan, completed, now_unix());
+        if permissions.all_granted {
+            // A later successful grant supersedes an earlier "not now" choice, so a future
+            // re-sign/revoke can surface the repair card again.
+            next.accessibility_skipped = false;
+        }
         save(&app, &next)?;
         let newly_completed = next.completed && !prev.completed;
         if let Ok(mut g) = store.0.lock() {
@@ -347,12 +488,67 @@ pub mod mac {
         // Register SHOGUN in the AX list (get rule; may also surface the OS alert — harmless here,
         // the user is explicitly asking to grant).
         let _ = axcache::ax_trusted();
-        std::process::Command::new("open")
-            .arg(AX_SETTINGS_URL)
+        open_privacy_settings(AX_SETTINGS_URL, "Accessibility")
+    }
+
+    fn open_privacy_settings(url: &str, label: &str) -> Result<(), String> {
+        let status = std::process::Command::new("open")
+            .arg(url)
             .status()
-            .map_err(|e| format!("open failed: {e}"))?;
-        eprintln!("[onboarding] opened System Settings › Accessibility");
+            .map_err(|error| format!("open failed: {error}"))?;
+        if !status.success() {
+            return Err(format!("System Settings exited with {status}"));
+        }
+        eprintln!("[onboarding] opened System Settings > {label}");
         Ok(())
+    }
+
+    /// Ask for microphone access through AVFoundation. macOS only prompts while the state is not
+    /// determined; denied/restricted states go straight to the exact repair pane.
+    #[tauri::command]
+    pub fn request_microphone_permission() -> Result<(), String> {
+        use objc2_av_foundation::{AVAuthorizationStatus, AVCaptureDevice, AVMediaTypeAudio};
+
+        // SAFETY: see `microphone_authorized`.
+        let media_type = (unsafe { AVMediaTypeAudio })
+            .ok_or_else(|| "AVFoundation audio media type unavailable".to_owned())?;
+        let status = unsafe { AVCaptureDevice::authorizationStatusForMediaType(media_type) };
+        match status {
+            AVAuthorizationStatus::Authorized => Ok(()),
+            AVAuthorizationStatus::NotDetermined => {
+                let completion = block2::RcBlock::new(|granted: objc2::runtime::Bool| {
+                    eprintln!(
+                        "[onboarding] microphone permission granted={}",
+                        granted.as_bool()
+                    );
+                });
+                // SAFETY: the audio media type and completion block match AVFoundation's API;
+                // AVFoundation copies the block before invoking it on an arbitrary queue.
+                unsafe {
+                    AVCaptureDevice::requestAccessForMediaType_completionHandler(
+                        media_type,
+                        &completion,
+                    );
+                }
+                Ok(())
+            }
+            AVAuthorizationStatus::Denied | AVAuthorizationStatus::Restricted => {
+                open_privacy_settings(MICROPHONE_SETTINGS_URL, "Microphone")
+            }
+            _ => Err("unknown microphone authorization state".to_owned()),
+        }
+    }
+
+    /// Request Screen Recording through CoreGraphics. A prior denial cannot prompt again, so the
+    /// exact manual repair pane opens when the request does not grant access.
+    #[tauri::command]
+    pub fn request_screen_recording_permission() -> Result<(), String> {
+        use objc2_core_graphics::{CGPreflightScreenCaptureAccess, CGRequestScreenCaptureAccess};
+
+        if CGPreflightScreenCaptureAccess() || CGRequestScreenCaptureAccess() {
+            return Ok(());
+        }
+        open_privacy_settings(SCREEN_RECORDING_SETTINGS_URL, "Screen Recording")
     }
 
     /// A funnel event from the flow. The webview passes a short name; Rust maps it onto an
@@ -365,8 +561,11 @@ pub mod mac {
         let (event, step): (&str, Option<&str>) = match name.as_str() {
             "shown" => ("onboarding_shown", None),
             s if state::STEPS.contains(&s) => ("onboarding_step_viewed", Some(s)),
-            "ax_settings_opened" => ("onboarding_ax_settings_opened", None),
-            "ax_granted" => ("onboarding_ax_granted", None),
+            "accessibility_settings_opened" => ("onboarding_accessibility_settings_opened", None),
+            "microphone_requested" => ("onboarding_microphone_requested", None),
+            "screen_recording_requested" => ("onboarding_screen_recording_requested", None),
+            "permission_app_drag_started" => ("onboarding_permission_app_drag_started", None),
+            "all_permissions_granted" => ("onboarding_all_permissions_granted", None),
             other => {
                 eprintln!("[onboarding] event ignored (not allowlisted): {other}");
                 return;
@@ -381,28 +580,28 @@ pub mod mac {
         }
     }
 
-    /// Poll AX trust while the onboarding window is open and emit `accessibility-changed` (a bool)
-    /// on every edge. Stops the moment the window is gone. Uses the SILENT check, so this
-    /// background loop can never put up the system prompt. Idempotent — a second call is a no-op
-    /// while one watcher is live.
+    /// Poll all required permissions while onboarding is open and emit a snapshot on every edge.
+    /// Every status API is non-prompting. Idempotent while one watcher is live.
     pub fn start_watcher(app: AppHandle) {
         static RUNNING: AtomicBool = AtomicBool::new(false);
         if RUNNING.swap(true, Ordering::SeqCst) {
             return;
         }
         std::thread::spawn(move || {
-            let mut last = axcache::ax_trusted_silent();
-            // Emit once up front so a window that opens already-granted (re-permission after an
-            // update) renders its granted state without waiting for an edge.
-            let _ = app.emit("accessibility-changed", last);
+            let mut last = permission_snapshot();
+            // Emit once up front so a window that opens during a repair renders without waiting.
+            let _ = app.emit("permissions-changed", last);
             loop {
                 if app.get_webview_window(ONBOARDING_LABEL).is_none() {
                     break;
                 }
-                let now = axcache::ax_trusted_silent();
+                let now = permission_snapshot();
                 if now != last {
-                    eprintln!("[onboarding] accessibility {last} -> {now}");
-                    let _ = app.emit("accessibility-changed", now);
+                    eprintln!(
+                        "[onboarding] permissions accessibility={} microphone={} screen_recording={}",
+                        now.accessibility, now.microphone, now.screen_recording
+                    );
+                    let _ = app.emit("permissions-changed", now);
                     last = now;
                 }
                 std::thread::sleep(Duration::from_millis(800));
@@ -424,8 +623,8 @@ pub mod mac {
             tauri::WebviewUrl::App("onboarding.html".into()),
         )
         .title("ShogunAI")
-        .inner_size(720.0, 640.0)
-        .min_inner_size(640.0, 560.0)
+        .inner_size(760.0, 700.0)
+        .min_inner_size(680.0, 620.0)
         .resizable(false)
         .center()
         // SHOGUN runs as an Accessory app (prohibited activation, no Dock icon) so the notch panel
@@ -441,6 +640,7 @@ pub mod mac {
                 let _ = win.show();
                 let _ = win.set_focus();
                 float_over_all_spaces(&win);
+                crate::permission_drag::install_monitor(app);
                 start_watcher(app.clone());
             }
             Err(e) => eprintln!("[onboarding] window build failed: {e}"),
@@ -488,17 +688,36 @@ pub mod mac {
         eprintln!("[onboarding] floating over all spaces (behavior={BEHAVIOR} level={LEVEL})");
     }
 
-    /// Whether the first-run flow should appear at launch: simply "not completed yet". Unlike the
-    /// #46 guide this is NOT gated on Accessibility trust — the flow is about more than the one
-    /// permission, and its permission step renders a green already-granted card when trust exists.
-    /// A quit mid-flow resumes at the persisted step. Legacy #46 completed/skipped devices migrate
-    /// to completed and are never re-trapped (see `state::parse`).
+    /// Whether to open onboarding. First-run resumes normally. A completed setup that loses any
+    /// required permission opens the focused repair card; legacy explicit deferrals remain
+    /// respected.
     pub fn should_show_onboarding(app: &AppHandle) -> bool {
         // Escape hatch for QA/preview: force the flow even on a completed machine, so the screens
         // can be reviewed without wiping app data. Harmless in production (nobody sets it).
         if std::env::var("SHOGUN_FORCE_ONBOARDING").is_ok() {
             return true;
         }
-        !load(app).completed
+        let state = load(app);
+        !state.completed
+            || state::needs_permissions_repair(permission_snapshot().all_granted, &state)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::{permission_gate_blocks, PermissionSnapshot};
+
+        #[test]
+        fn snapshot_requires_every_permission() {
+            assert!(PermissionSnapshot::new(true, true, true).all_granted);
+            assert!(!PermissionSnapshot::new(true, false, true).all_granted);
+        }
+
+        #[test]
+        fn permission_step_cannot_be_bypassed() {
+            assert!(permission_gate_blocks("permission", "plan", false, false));
+            assert!(permission_gate_blocks("ready", "ready", true, false));
+            assert!(!permission_gate_blocks("permission", "plan", false, true));
+            assert!(!permission_gate_blocks("welcome", "reads", false, false));
+        }
     }
 }

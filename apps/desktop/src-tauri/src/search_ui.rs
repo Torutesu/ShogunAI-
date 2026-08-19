@@ -51,7 +51,10 @@ pub mod mac {
     ) -> Result<Vec<SearchHitView>, String> {
         let limit = limit.unwrap_or(8).min(MAX_RESULTS);
         let hits = db.try_search(&query, limit).map_err(|fault| {
-            format!("Memory is unavailable right now ({}) — this isn't an empty result.", fault.as_str())
+            format!(
+                "Memory is unavailable right now ({}) — this isn't an empty result.",
+                fault.as_str()
+            )
         })?;
         Ok(hits
             .into_iter()

@@ -33,13 +33,14 @@ settings, and the setting says exactly what follows.
 
 With it on, when text extraction comes back empty for the window you are
 working in, ShogunAI takes a compressed frame, reads the text out of it, and
-stores the frame in the encrypted database — **for at most 72 hours**. After
-that it is deleted automatically, whether or not the app is running, whether or
-not you ever looked at it.
+stores the frame in the encrypted database for a **finite duration you choose**.
+Settings offers one through seven days plus a bounded custom duration. Three
+days remains the default for existing installs. At the selected age, the frame
+is deleted automatically whether or not you ever opened it.
 
 The extracted text stays in memory the same way any other text does. The image
-does not. That is the whole point: the frame exists so that a bad extraction is
-recoverable for three days, not so that your screen accumulates into an archive.
+does not. That is the whole point: the frame exists so a bad extraction is
+recoverable for the period you deliberately selected, not forever.
 
 The remaining rules:
 
@@ -48,21 +49,19 @@ The remaining rules:
   frame, which is the overwhelming majority of your day.
 - **Audio is not included.** This exception is about pixels only. ShogunAI does
   not write audio to disk, with or without visual recall.
-- **Not a timeline.** There is no scrubber, no playback, no day-in-video view.
-  Frames are inputs to extraction that happen to persist briefly.
+- **A local, finite timeline.** You can inspect or delete saved screens during
+  their retention window. There is no cloud copy or permanent recording.
 - **Off means off.** With the setting disabled, no image is written at any
   point in the pipeline.
 
-## Why 72 hours
+## Why retention is a choice
 
-Long enough to cover the gap that matters: something was captured badly on
-Friday and you go looking for it Monday morning. Short enough that the store
-never becomes a thing worth stealing — the window is measured in hours, not the
-years your text memory covers.
-
-We considered seven days. Seven days is a week of screens, which is starting to
-look like the archive we said we would not build. Twenty-four hours missed the
-weekend. Seventy-two is where the usefulness curve and the exposure curve cross.
+Different work needs different windows. A day may be enough for routine recall;
+a week covers a full project cycle; a bounded custom duration supports longer
+work without pretending storage is free. Settings shows current encrypted
+storage and projects the selected period from recent capture volume. Automatic
+age deletion is always enabled. If the encrypted frame store reaches its safety
+ceiling, new capture pauses instead of silently deleting retained frames early.
 
 ## The honest framing
 
@@ -71,6 +70,6 @@ and we are describing it that way on purpose. Products that hold a hard line in
 public usually hold a softer one in the code; the ones worth trusting are the
 ones that tell you where the line actually is and what it costs.
 
-Here it is: default off, opt-in, local only, images only where text failed,
-gone in 72 hours. If that trade is not one you want, leave it off — everything
-else in ShogunAI works exactly as before.
+Here it is: default off, opt-in, local only, images only where text failed, and
+automatic deletion at the finite age you selected. If that trade is not one you
+want, leave it off — everything else in ShogunAI works exactly as before.

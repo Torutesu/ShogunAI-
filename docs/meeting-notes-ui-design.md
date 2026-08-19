@@ -329,6 +329,20 @@ Google Meet は**アクティブページの URL** で検知する（`axcache::b
 URL 取得は**ブラウザのバンドルIDに限って**呼ぶ（毎秒の AX 往復を、答えの出ない
 アプリで払わないため）。
 
+現在の検知表（いずれも Meeting notes が On のときだけ評価する）:
+
+| Surface | Recognized variants | Evidence tier |
+|---|---|---|
+| Zoom native | `us.zoom.xos` | Strong: frontmost alone can offer |
+| Zoom web | `*.zoom.us/j/<id>` / `*.zoom.us/wc/<client>`（`app.zoom.us` と regional hosts を含む） | Strong: meeting routes only; pricing/account pages excluded |
+| Google Meet | exact `meet.google.com` host | Strong |
+| Teams native | `com.microsoft.teams2`, `com.microsoft.teams`, `com.microsoft.teams.work` | Weak: sustained mic/control evidence required |
+| Teams web | exact Teams hosts on `/l/meetup-join/...` or `/meet/...` routes | Weak: chat/calendar pages excluded; sustained mic/control evidence required |
+
+Bundle/process/title values are trim/case normalized. Process names and product-specific titles are
+Weak fallbacks only; generic text such as “meeting notes” is never a signal. URL matching uses
+exact labels or safe suffixes plus routes, so lookalike domains cannot create a recording offer.
+
 ---
 
 ## 8. 未決事項

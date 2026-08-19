@@ -304,6 +304,12 @@
 .onb-btn:active {
   transform: translateY(1px);
 }
+.onb-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+  filter: saturate(0.35);
+  transform: none;
+}
 .onb-btn.primary {
   background: var(--accent);
   border-color: transparent;
@@ -485,7 +491,171 @@
   color: var(--faint);
 }
 
-/* permission — one card whose whole job is to change state in front of you */
+/* PermissionFlow-style permission center: one live rail, all required capabilities together. */
+.ob-permission-center {
+  gap: 18px;
+}
+.ob-permission-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+}
+.ob-permission-heading .onb-lead {
+  max-width: 48ch;
+}
+.ob-permission-heading .onb-badge {
+  flex: none;
+  margin-top: 4px;
+}
+.ob-permission-rail {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ob-permission-rail::before {
+  content: "";
+  position: absolute;
+  top: 36px;
+  bottom: 36px;
+  left: 28px;
+  width: 1px;
+  background: linear-gradient(var(--line-strong), var(--accent), var(--line-strong));
+  opacity: 0.5;
+}
+.ob-permission {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  min-height: 76px;
+  padding: 10px 12px 10px 0;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: color-mix(in srgb, var(--card) 92%, transparent);
+  transition: border-color 180ms var(--sp), background 180ms var(--sp);
+}
+.ob-permission.is-ready {
+  border-color: color-mix(in srgb, var(--live) 32%, var(--line));
+  background: color-mix(in srgb, var(--onb-live-soft) 72%, var(--card));
+}
+.ob-permission-icon {
+  width: 56px;
+  height: 52px;
+  display: grid;
+  place-items: center;
+  color: var(--accent);
+}
+.ob-permission-icon svg {
+  width: 24px;
+  height: 24px;
+}
+.ob-permission.is-ready .ob-permission-icon {
+  color: var(--live);
+}
+.ob-permission-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.ob-permission-copy strong {
+  font-size: var(--fs-lg);
+  color: var(--ink);
+}
+.ob-permission-copy > span {
+  font-size: var(--fs-sm);
+  line-height: 1.4;
+  color: var(--muted);
+}
+.ob-permission-action {
+  margin-left: 0;
+  min-width: 82px;
+  padding: 8px 14px;
+  background: var(--accent);
+  border-color: transparent;
+  color: var(--accent-ink);
+}
+.ob-permission-ready {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: var(--r-pill);
+  background: var(--onb-live-soft);
+  color: var(--live);
+  font-size: var(--fs-sm);
+  font-weight: 650;
+}
+.ob-drag-helper {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 8px 4px 70px;
+  animation: onb-rise 180ms var(--sp) both;
+}
+.ob-drag-app {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 11px;
+  border: 1px dashed color-mix(in srgb, var(--accent) 55%, var(--line));
+  border-radius: var(--r-md);
+  background: var(--onb-soft);
+  color: var(--ink);
+  text-align: left;
+  font: inherit;
+  cursor: grab;
+}
+.ob-drag-app:active {
+  cursor: grabbing;
+}
+.ob-drag-app img {
+  width: 38px;
+  height: 38px;
+  border-radius: 9px;
+  pointer-events: none;
+}
+.ob-drag-app > span:not(.ob-drag-cue) {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.ob-drag-app strong {
+  font-size: var(--fs-sm);
+}
+.ob-drag-app small {
+  color: var(--muted);
+  font-size: var(--fs-xs);
+}
+.ob-drag-cue {
+  color: var(--accent);
+  font-size: var(--fs-xl);
+}
+.ob-drag-wait {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--faint);
+  font-size: var(--fs-xs);
+}
+.ob-permission-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--faint);
+  font-size: var(--fs-sm);
+}
+
+/* Legacy one-permission success card retained for migrations and snapshots. */
 .ob-perm {
   display: flex;
   flex-direction: column;
@@ -633,5 +803,30 @@
   }
   .onb-spin {
     animation-duration: 1.6s;
+  }
+}
+
+@media (max-width: 700px) {
+  .ob-permission-heading {
+    flex-direction: column;
+    gap: 10px;
+  }
+  .ob-permission {
+    grid-template-columns: 48px minmax(0, 1fr);
+    padding-right: 10px;
+  }
+  .ob-permission-icon {
+    width: 48px;
+  }
+  .ob-permission-action,
+  .ob-permission-ready {
+    grid-column: 2;
+    justify-self: start;
+  }
+  .ob-drag-helper {
+    padding-left: 56px;
+  }
+  .ob-drag-wait {
+    display: none;
   }
 }
