@@ -60,21 +60,12 @@ pub struct Profile {
     pub prefs: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Settings {
     #[serde(default)]
     pub enabled: bool,
     #[serde(default)]
     pub profile: Profile,
-}
-
-impl Default for Settings {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            profile: Profile::default(),
-        }
-    }
 }
 
 /// A Keychain token record. `secret` exists only while migrating a legacy blob or immediately

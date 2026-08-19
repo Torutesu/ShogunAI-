@@ -283,6 +283,7 @@ fn acquire_lock(path: &Path) -> Result<StoreLock, String> {
         .read(true)
         .write(true)
         .create(true)
+        .truncate(false)
         .open(lock_path(path))
         .map_err(|_| "cannot lock approval store".to_string())?;
     #[cfg(unix)]

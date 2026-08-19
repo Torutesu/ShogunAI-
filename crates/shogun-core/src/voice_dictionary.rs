@@ -107,7 +107,7 @@ impl VoiceDictionary {
                         .iter()
                         .filter_map(|alias| {
                             let alias_tokens = normalized_tokens(alias);
-                            (alias_tokens.len() > 0
+                            (!alias_tokens.is_empty()
                                 && index + alias_tokens.len() <= tokens.len()
                                 && tokens[index..index + alias_tokens.len()]
                                     .iter()

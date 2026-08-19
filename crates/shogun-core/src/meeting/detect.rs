@@ -180,7 +180,7 @@ fn is_zoom_web_meeting_url(url: &str, host: &str) -> bool {
 /// instead of treating a Teams channel, calendar or admin page as a meeting. These remain Weak
 /// evidence because a join page can be open before the user has joined.
 fn is_teams_web_meeting_url(url: &str, host: &str) -> bool {
-    if !TEAMS_HOSTS.iter().any(|known| host == *known) {
+    if !TEAMS_HOSTS.contains(&host) {
         return false;
     }
     let Some(path) = path_of(url) else {

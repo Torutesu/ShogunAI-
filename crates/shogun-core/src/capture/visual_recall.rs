@@ -57,21 +57,12 @@ impl RetentionPolicy {
 }
 
 /// Persisted visual-recall preference. Default off; serde defaults keep partial files safe.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
 pub struct Settings {
     /// Master switch. Off means no screen pixels are read and no OCR runs.
     pub enabled: bool,
     /// Automatic age expiry for JPEG rows. This can never represent an unbounded duration.
     pub retention: RetentionPolicy,
-}
-
-impl Default for Settings {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            retention: RetentionPolicy::default(),
-        }
-    }
 }
 
 impl<'de> serde::Deserialize<'de> for Settings {

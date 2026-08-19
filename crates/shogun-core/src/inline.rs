@@ -474,7 +474,7 @@ fn is_single_proper_name(word: &str) -> bool {
 fn is_non_latin_word(word: &str) -> bool {
     word.chars().count() > 1
         && word.chars().all(char::is_alphabetic)
-        && word.chars().any(|character| !character.is_ascii())
+        && !word.is_ascii()
 }
 
 fn is_likely_sentence_lead(word: &str) -> bool {
