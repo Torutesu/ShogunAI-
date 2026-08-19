@@ -46,6 +46,13 @@ type Appearance = "auto" | "light" | "dark";
 // The #46 permission copy block — reused verbatim as the heart of the permission step.
 const o = t.onboarding;
 
+export function newestPermissionSnapshot(
+  current: PermissionSnapshot,
+  incoming: PermissionSnapshot,
+): PermissionSnapshot {
+  return (incoming.revision ?? 0) >= (current.revision ?? 0) ? incoming : current;
+}
+
 function appName(bundle: string): string {
   if (!bundle) return t.yourScreen;
   const seg = bundle.split(".").pop() || bundle;
@@ -110,7 +117,7 @@ export function Onboarding(): JSX.Element {
     void Promise.all([getOnboardingState(), permissionStatus()]).then(([s, permission]) => {
       if (!alive) return;
       setState(s);
-      setPermissions(permission);
+      setPermissions((current) => newestPermissionSnapshot(current, permission));
       if (!shownLogged.current) {
         shownLogged.current = true;
         track("shown");
@@ -121,11 +128,15 @@ export function Onboarding(): JSX.Element {
     // Pushed by the native coordinator on initial status, permission edges, request completion,
     // and application activation. Bootstrap read above covers listener registration races.
     offs.push(
-      listen<PermissionSnapshot>("permissions-changed", (e) => setPermissions(e.payload)).then(
+      listen<PermissionSnapshot>("permissions-changed", (e) =>
+        setPermissions((current) => newestPermissionSnapshot(current, e.payload)),
+      ).then(
         (off) => {
           if (alive) {
             void permissionListenerReady().then((snapshot) => {
-              if (alive && snapshot) setPermissions(snapshot);
+              if (alive && snapshot) {
+                setPermissions((current) => newestPermissionSnapshot(current, snapshot));
+              }
             });
           }
           return off;

@@ -101,17 +101,22 @@ Review-fix validation:
   the exact saved Screen Recording step and only when current-process native access is effective.
 - Files with a present unsupported or malformed version tag are read-only; later mutations cannot
   silently overwrite them as version 2.
+- Native permission revision assignment and event submission now share the coordinator critical
+  section. The frontend independently keeps the highest observed revision, so a delayed bootstrap
+  response or listener handoff cannot regress visible permission state.
+- Restart uses fallible Scribe and voice cancellation boundaries. A poisoned voice lane now aborts
+  restart instead of being misread as an idle session.
 - Added a typed frontend restart wrapper and registered the Tauri command. Visual button wiring is
   intentionally owned by the upcoming experience UI task.
 
 Restart validation:
 
 - `cargo test -p shogun-desktop-spike onboarding --lib --offline`: 30 passed.
-- `cargo test -p shogun-desktop-spike scribe --lib --offline`: 11 passed.
+- `cargo test -p shogun-desktop-spike voice_session --lib --offline`: 19 passed.
 - `cargo check -p shogun-desktop-spike --lib --offline`: passed.
 - `apps/desktop/node_modules/.bin/tsc --noEmit -p apps/desktop/tsconfig.json`: passed.
 - `apps/desktop/node_modules/.bin/vitest run src/onboarding/Onboarding.test.tsx` from
-  `apps/desktop`: 5 passed.
+  `apps/desktop`: 6 passed.
 - `rustfmt` on touched Rust files and `git diff --check`: passed.
 - Injected launcher tests prove spawn failure does not exit the current process, successful spawn
   precedes exit, and a failed launch durably clears its pending marker while leaving the store

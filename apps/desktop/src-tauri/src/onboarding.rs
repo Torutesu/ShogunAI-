@@ -989,7 +989,7 @@ pub mod mac {
         }
 
         crate::scribe::mac::cancel_active_for_restart(&app)?;
-        crate::voice_session::mac::voice_dismiss(app.clone());
+        crate::voice_session::mac::cancel_for_restart(&app)?;
 
         let marker_revision = {
             let mut owner = store

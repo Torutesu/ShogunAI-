@@ -389,6 +389,8 @@ pub mod mac {
         }
     }
 
+    /// Call while holding `PermissionRuntime`'s coordinator mutex. Revision assignment and event
+    /// submission must share one serialized section or a delayed producer can emit N after N+1.
     fn emit_edge(app: &AppHandle, edge: Option<PermissionSnapshot>) {
         if let Some(snapshot) = edge {
             let _ = app.emit("permissions-changed", snapshot);
@@ -429,7 +431,6 @@ pub mod mac {
             }
             let edge = coordinator.poll(generation);
             let emit = coordinator.events_enabled();
-            drop(coordinator);
             if emit {
                 emit_edge(&app, edge);
             }
@@ -455,7 +456,6 @@ pub mod mac {
         };
         let latest = coordinator.status().0;
         let initial = coordinator.listener_ready();
-        drop(coordinator);
         emit_edge(app, initial);
         latest
     }
@@ -469,7 +469,6 @@ pub mod mac {
         };
         let edge = coordinator.request_finished(screen_request);
         let emit = coordinator.events_enabled();
-        drop(coordinator);
         if emit {
             emit_edge(app, edge);
         }
@@ -542,7 +541,6 @@ pub mod mac {
                 };
                 let edge = coordinator.activation_refresh();
                 let emit = coordinator.events_enabled();
-                drop(coordinator);
                 if emit {
                     emit_edge(&handle, edge);
                 }

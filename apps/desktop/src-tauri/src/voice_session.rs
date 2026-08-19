@@ -860,17 +860,21 @@ pub mod mac {
         drop(delivery.operation.lock());
     }
 
-    fn cancel_active_session() -> Option<voice_lane::Handle> {
+    fn cancel_active_session() -> Result<Option<voice_lane::Handle>, String> {
         let (audio, delivery) = {
-            let Ok(mut lane) = LANE.lock() else {
-                return None;
+            let mut lane = LANE
+                .lock()
+                .map_err(|_| "voice lane lock poisoned".to_owned())?;
+            let Some(lane) = lane.as_mut() else {
+                return Ok(None);
             };
-            let lane = lane.as_mut()?;
-            let mut active = lane.active.take()?;
+            let Some(mut active) = lane.active.take() else {
+                return Ok(None);
+            };
             (active.audio.take(), Arc::clone(&active.delivery))
         };
         cancel_delivery_fence(&delivery);
-        audio
+        Ok(audio)
     }
 
     fn stop_cancelled_audio(audio: voice_lane::Handle) {
@@ -1353,7 +1357,7 @@ pub mod mac {
         }
         if !enabled {
             drop(lane);
-            if let Some(audio) = cancel_active_session() {
+            if let Some(audio) = cancel_active_session()? {
                 stop_cancelled_audio(audio);
             }
             emit_state(&app, "idle", None, None);
@@ -1365,11 +1369,16 @@ pub mod mac {
     }
 
     #[tauri::command]
-    pub fn voice_dismiss(app: AppHandle) {
-        if let Some(audio) = cancel_active_session() {
+    pub fn voice_dismiss(app: AppHandle) -> Result<(), String> {
+        cancel_for_restart(&app)
+    }
+
+    pub fn cancel_for_restart(app: &AppHandle) -> Result<(), String> {
+        if let Some(audio) = cancel_active_session()? {
             stop_cancelled_audio(audio);
         }
         emit_state(&app, "idle", None, None);
+        Ok(())
     }
 
     /// Frontend failsafe: force-end a hold that stayed in recording after release.

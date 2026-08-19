@@ -1,7 +1,8 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { Onboarding } from "./Onboarding";
+import { newestPermissionSnapshot, Onboarding } from "./Onboarding";
+import type { PermissionSnapshot } from "./ipc";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -10,6 +11,17 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("unified permission onboarding", () => {
+  it("never regresses permission state to an older native revision", () => {
+    const newer: PermissionSnapshot = {
+      ...EMPTY_PERMISSION_RESULT,
+      revision: 8,
+      accessibility: true,
+    };
+    const older: PermissionSnapshot = { ...EMPTY_PERMISSION_RESULT, revision: 7 };
+    expect(newestPermissionSnapshot(newer, older)).toBe(newer);
+    expect(newestPermissionSnapshot(older, newer)).toBe(newer);
+  });
+
   it("hydrates all live permissions instead of waiting for an event emitted before WebKit subscribed", async () => {
     const { invoke } = await import("@tauri-apps/api/core");
     vi.mocked(invoke).mockImplementation(async (command) => {
@@ -159,7 +171,7 @@ describe("unified permission onboarding", () => {
   });
 });
 
-const EMPTY_PERMISSION_RESULT = {
+const EMPTY_PERMISSION_RESULT: PermissionSnapshot = {
   accessibility: false,
   microphone: false,
   screen_recording: false,
