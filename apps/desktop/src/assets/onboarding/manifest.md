@@ -1,0 +1,56 @@
+# Shogun onboarding assets
+
+Asset bundle is local-only. No runtime fetches or product-code changes are part of this task.
+
+## Yoiyami Core Theme
+
+- File: `audio/yoiyami_core_theme.mp3`
+- Intended use: quiet onboarding background music, played locally by the WKWebView.
+- Author: Yoiyami
+- License: CC0 1.0 Universal (public-domain dedication; no attribution required).
+- Original listing: https://opengameart.org/content/yoiyami-core-theme-%E2%80%93-deep-blue-ambient-piano
+- Original file URL: https://opengameart.org/sites/default/files/yoiyami_core_theme_0.wav
+- Original downloaded file: `yoiyami_core_theme_0.wav`, 45,198,376 bytes; `file` identified RIFF/WAVE Microsoft PCM, 16-bit, stereo, 48,000 Hz.
+- Original SHA-256: `cabef49063f4218c8e005b8958f4e4351de93619375b544c92f17b9cf50c0aa1`
+- Distributable file: 5,639,661 bytes; SHA-256 `8fde4701bb432e51380bd1c50f8f860bcd1e29e30a2554db6ff589ae9edba0ba`.
+- Transformation: `ffmpeg -hide_banner -y -i yoiyami_core_theme.wav -map_metadata -1 -codec:a libmp3lame -b:a 192k -write_xing 0 yoiyami_core_theme.mp3`.
+- Derived metadata: MPEG Layer III, 192 kbps, 48 kHz, stereo, 234.984 seconds.
+- CC0 evidence: OpenGameArt listing states `License(s): CC0`, identifies Yoiyami as author, and states commercial and non-commercial use; canonical deed: https://creativecommons.org/publicdomain/zero/1.0/.
+- Original WAV is intentionally not bundled; only derived distributable MP3 remains.
+
+## Lucide `waves`
+
+- File: `icons/waves.svg`
+- Intended use: decorative wave mark in onboarding.
+- Author: Lucide contributors; portions held by Cole Bemis as Feather lineage.
+- License: ISC License; full text in `licenses/ISC.txt`.
+- Upstream tag: `v0.265.0`, pinned commit `9fb4b0b161fc256d2333f91812a927f2ed6f84c0`.
+- Direct source: https://raw.githubusercontent.com/lucide-icons/lucide/v0.265.0/icons/waves.svg
+- Pinned source view: https://github.com/lucide-icons/lucide/blob/9fb4b0b161fc256d2333f91812a927f2ed6f84c0/icons/waves.svg
+- License source: https://raw.githubusercontent.com/lucide-icons/lucide/9fb4b0b161fc256d2333f91812a927f2ed6f84c0/LICENSE
+- SHA-256: `de9e88a68ae884808e0852595e50cebd84b1a49b67ffecc8c7a888c629ab5b38`.
+- Transformation: none. Upstream SVG geometry and attributes retained byte-for-byte; `stroke="currentColor"` allows host UI color inheritance.
+
+## Fraunces variable font
+
+- File: `fonts/Fraunces[SOFT,WONK,opsz,wght].woff2`
+- Intended use: display heading typography in onboarding.
+- Author: The Fraunces Project Authors / Undercase Type.
+- License: SIL Open Font License 1.1; full text in `licenses/OFL-1.1.txt`.
+- Upstream release: `1.000`, pinned commit `0bf87f6`.
+- Official release archive: https://github.com/undercasetype/Fraunces/releases/download/1.000/UnderCaseType_Fraunces_1.000.zip
+- Release archive SHA-256: `8d8b81dfaeb89433f5c908e1d8d0a4b202bd627bd80d4cd5ff56f311fdcad19f`.
+- Extracted source path: `Fonts - Web/Fraunces[SOFT,WONK,opsz,wght].woff2`.
+- Pinned source tree: https://github.com/undercasetype/Fraunces/tree/0bf87f6
+- License source: https://raw.githubusercontent.com/undercasetype/Fraunces/0bf87f6/OFL.txt
+- SHA-256: `25e420d8c154303e08322ea77f08997c4aade75653ef18425772ada5abacd0ce`.
+- Size: 195,068 bytes; `file` identified WOFF2, TrueType flavor, version 1.0.
+- Transformation: none; official release WOFF2 copied unchanged.
+
+## Verification
+
+- `file` checked audio, SVG, and WOFF2 containers.
+- `ffprobe` checked original WAV and derived MP3 codecs, channels, sample rates, bitrate, duration, and size.
+- `xmllint --noout icons/waves.svg` parsed SVG successfully.
+- SVG inspection confirmed one 24×24 root and three upstream wave paths.
+- Font metadata/container checked with `file`; the same official release's sibling variable TTF was inspected with `ttx` and reports family `Fraunces`, version `1.000`, and axes `opsz`, `wght`, `SOFT`, and `WONK`.
