@@ -447,7 +447,9 @@ pub fn onboarding_shortcut_arm(
     let supports_demo = match stage {
         DemoStage::RightOption => tap_flag(&binding).is_some(),
         DemoStage::ScribeDemo => supports_scribe,
-        DemoStage::DictationDemo => crate::voice_shortcut::binding_supported(&binding),
+        DemoStage::DictationDemo => {
+            crate::voice_shortcut::binding_supported_for_onboarding(&binding)
+        }
     };
     Ok(DemoArm {
         generation,
@@ -496,7 +498,7 @@ pub fn onboarding_shortcut_ready(
             return Err("Scribe practice requires the Right Option binding".to_owned());
         }
         DemoStage::DictationDemo => {
-            if !crate::voice_shortcut::binding_supported(&prepared.binding) {
+            if !crate::voice_shortcut::binding_supported_for_onboarding(&prepared.binding) {
                 return Err("current dictation binding is not supported".to_owned());
             }
             if !crate::voice_session::mac::get_voice_settings().enabled {

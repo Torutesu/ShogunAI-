@@ -197,8 +197,9 @@ fn parse_combo(combo: &str) -> Option<Combo> {
     })
 }
 
-pub(crate) fn binding_supported(combo: &str) -> bool {
-    parse_combo(combo).is_some()
+/// Textarea practice must not let the shortcut's letter reach the field before native capture.
+pub(crate) fn binding_supported_for_onboarding(combo: &str) -> bool {
+    parse_combo(combo).is_some_and(|combo| combo.modifiers & (FLAG_CONTROL | FLAG_COMMAND) != 0)
 }
 
 fn default_combo() -> Combo {
@@ -670,8 +671,9 @@ pub fn install(app: &tauri::AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::{
-        global_monitor_action, shortcut_modifier_flags_from_cg, GlobalMonitorAction,
-        GlobalMonitorState, FLAG_COMMAND, FLAG_CONTROL, FLAG_FUNCTION, FLAG_OPTION, FLAG_SHIFT,
+        binding_supported_for_onboarding, global_monitor_action, shortcut_modifier_flags_from_cg,
+        GlobalMonitorAction, GlobalMonitorState, FLAG_COMMAND, FLAG_CONTROL, FLAG_FUNCTION,
+        FLAG_OPTION, FLAG_SHIFT,
     };
 
     #[test]
@@ -736,5 +738,14 @@ mod tests {
             global_monitor_action(true, GlobalMonitorState::default()),
             GlobalMonitorAction::InstallMissing
         );
+    }
+
+    #[test]
+    fn onboarding_rejects_text_producing_voice_chords() {
+        assert!(!binding_supported_for_onboarding("Shift+KeyD"));
+        assert!(!binding_supported_for_onboarding("Alt+KeyD"));
+        assert!(binding_supported_for_onboarding("Control+Shift+KeyD"));
+        assert!(binding_supported_for_onboarding("Super+Shift+KeyD"));
+        assert!(binding_supported_for_onboarding("Control+Alt+KeyV"));
     }
 }

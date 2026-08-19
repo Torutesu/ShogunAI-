@@ -1012,8 +1012,25 @@ pub mod mac {
 
     enum DeliveryOutcome {
         Inserted,
+        Pasted,
         Copied,
         CopyFailed(String),
+    }
+
+    fn onboarding_outcome_for_delivery(
+        outcome: &DeliveryOutcome,
+    ) -> crate::right_option_shortcut::DictationDemoOutcome {
+        match outcome {
+            DeliveryOutcome::Inserted => {
+                crate::right_option_shortcut::DictationDemoOutcome::Inserted
+            }
+            DeliveryOutcome::Pasted | DeliveryOutcome::Copied => {
+                crate::right_option_shortcut::DictationDemoOutcome::Copied
+            }
+            DeliveryOutcome::CopyFailed(_) => {
+                crate::right_option_shortcut::DictationDemoOutcome::Failed
+            }
+        }
     }
 
     fn claim_clipboard_delivery(
@@ -1061,7 +1078,7 @@ pub mod mac {
                         let _delivery = DeliveryGuard {
                             state: &delivery.state,
                         };
-                        Some(DeliveryOutcome::Inserted)
+                        Some(DeliveryOutcome::Pasted)
                     }
                     PasteAttempt::FailedAfterClaim(error) => {
                         eprintln!("[voice] guarded paste failed: {error}; keeping transcript on clipboard");
@@ -1415,6 +1432,7 @@ pub mod mac {
                     else {
                         return true;
                     };
+                    let onboarding_outcome = onboarding_outcome_for_delivery(&outcome);
                     match outcome {
                         DeliveryOutcome::Inserted => {
                             let _ = complete_terminal(session, SessionPhase::Processing, || {
@@ -1422,17 +1440,17 @@ pub mod mac {
                                 observe_onboarding_dictation_outcome(
                                     &worker_app,
                                     session,
-                                    crate::right_option_shortcut::DictationDemoOutcome::Inserted,
+                                    onboarding_outcome,
                                 );
                             });
                         }
-                        DeliveryOutcome::Copied => {
+                        DeliveryOutcome::Pasted | DeliveryOutcome::Copied => {
                             let _ = complete_terminal(session, SessionPhase::Processing, || {
                                 emit_state(&worker_app, "idle", Some(transcript), None);
                                 observe_onboarding_dictation_outcome(
                                     &worker_app,
                                     session,
-                                    crate::right_option_shortcut::DictationDemoOutcome::Copied,
+                                    onboarding_outcome,
                                 );
                             });
                         }
@@ -1767,6 +1785,18 @@ pub mod mac {
                 Some(true),
                 Some(false)
             ));
+        }
+
+        #[test]
+        fn onboarding_treats_verified_keyboard_paste_as_retry() {
+            assert_eq!(
+                onboarding_outcome_for_delivery(&DeliveryOutcome::Pasted),
+                crate::right_option_shortcut::DictationDemoOutcome::Copied
+            );
+            assert_eq!(
+                onboarding_outcome_for_delivery(&DeliveryOutcome::Inserted),
+                crate::right_option_shortcut::DictationDemoOutcome::Inserted
+            );
         }
 
         #[test]

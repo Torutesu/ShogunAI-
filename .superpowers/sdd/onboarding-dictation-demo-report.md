@@ -29,3 +29,13 @@ Date: 2026-08-19
 ## Device-only qualification
 
 - Signed packaged-app test remains required for live WebKit AX identity/readback, real microphone/ASR, local/global custom chord delivery, Accessibility revoke/regrant, and clipboard fallback.
+
+## Reviewer P1 fix evidence
+
+- Split delivery proof into direct AX `Inserted` and keyboard-paste `Pasted`. Only direct AX insertion can emit `dictation_inserted`; verified paste and clipboard delivery both emit `dictation_copied` and stay retry.
+- Onboarding now accepts voice bindings only when Control or Command makes the letter non-text-producing. Shift-only, Option-only, and other text-producing chords render unsupported and require an explicit default-restoration click.
+- Failing-first tests covered both regressions, then passed with the native fixes.
+- `right_option_shortcut::tests`: 15 passed.
+- `voice_session`: 20 passed.
+- `voice_shortcut`: 8 passed.
+- `onboarding`: 63 passed.
