@@ -479,6 +479,12 @@ fn setup_macos(app: &tauri::App) {
     // every earlier NSPanel test self-hid on deactivate. Default = the full recipe;
     // SHOGUN_NO_NOTCH=1 keeps the plain window as a fallback.
     use std::sync::atomic::Ordering;
+    // Suppress the resident notch before it can be first ordered front. Onboarding owns this
+    // lifecycle; otherwise the notch flashes over its introductory dimmer during app launch.
+    let onboarding_pending = onboarding::mac::should_show_onboarding(app.handle());
+    if onboarding_pending {
+        onboarding_windows::mac::set_notch_suppressed(app.handle(), true);
+    }
     if std::env::var("SHOGUN_NO_NOTCH").is_ok() {
         PANEL_BEHAVIOR.store((1 << 1) | (1 << 4) | (1 << 8), Ordering::Relaxed); // 274 move-to-active
         eprintln!("[shell] plain window fallback (SHOGUN_NO_NOTCH=1) — desktop-space only");
@@ -502,7 +508,9 @@ fn setup_macos(app: &tauri::App) {
             if std::env::var("SHOGUN_NO_NOTCH").is_err() {
                 adopt_native_panel(&win);
             } else {
-                let _ = win.show();
+                if !onboarding_pending {
+                    let _ = win.show();
+                }
                 float_on_all_spaces(&win);
             }
         }
@@ -696,7 +704,7 @@ fn setup_macos(app: &tauri::App) {
     app.manage(onboarding::mac::Store::load(app.handle()));
     app.manage(onboarding_music::mac::OnboardingMusic::default());
     app.manage(onboarding_windows::mac::OnboardingWindowRuntime::default());
-    if onboarding::mac::should_show_onboarding(app.handle()) {
+    if onboarding_pending {
         onboarding::mac::build_onboarding_window(app.handle());
     }
     // Whatever happens to be focused when SHOGUN launches gets no special exemption — launching
@@ -1015,6 +1023,9 @@ pub(crate) fn move_panel_to_cursor_screen(app: &tauri::AppHandle) {
 /// be summoned to the second screen. All NSWindow access on the main thread.
 #[cfg(target_os = "macos")]
 fn toggle_panel(handle: &tauri::AppHandle) {
+    if onboarding_windows::mac::notch_is_suppressed() {
+        return;
+    }
     let h = handle.clone();
     let _ = handle.run_on_main_thread(move || {
         use objc2::msg_send;
@@ -1205,7 +1216,9 @@ fn reassert_panel(handle: &tauri::AppHandle, why: &'static str) {
     use objc2::runtime::AnyObject;
     // Overlay spec: a panel the USER hid (toggle / Esc / tray) stays hidden — residency must not
     // fight a deliberate hide.
-    if USER_HIDDEN.load(std::sync::atomic::Ordering::Relaxed) {
+    if USER_HIDDEN.load(std::sync::atomic::Ordering::Relaxed)
+        || onboarding_windows::mac::notch_is_suppressed()
+    {
         return;
     }
     let Some(ptr) = overlay_ptr(handle) else {
@@ -1304,7 +1317,9 @@ fn build_panel_window(handle: &tauri::AppHandle) {
                 // structure the overlays that work on this machine use.
                 adopt_native_panel(&win);
             } else {
-                let _ = win.show();
+                if !onboarding_windows::mac::notch_is_suppressed() {
+                    let _ = win.show();
+                }
                 float_on_all_spaces(&win);
             }
             if let Some(ptr) = overlay_ptr(handle) {
@@ -1713,7 +1728,9 @@ fn adopt_native_panel(win: &tauri::WebviewWindow) {
 
         NATIVE_PANEL.store(panel, std::sync::atomic::Ordering::Release);
         reposition_to_cursor_screen(panel);
-        let _: () = msg_send![panel, orderFrontRegardless];
+        if !onboarding_windows::mac::notch_is_suppressed() {
+            let _: () = msg_send![panel, orderFrontRegardless];
+        }
 
         let got: usize = msg_send![panel, collectionBehavior];
         let lvl: isize = msg_send![panel, level];
@@ -1839,6 +1856,9 @@ fn set_panel_size(app: tauri::AppHandle, width: f64, height: f64, anchor: Option
 /// cursor's display, then orderOut+orderFrontRegardless re-adds it to the current Space.
 #[cfg(target_os = "macos")]
 fn summon_to_active_space(app: &tauri::AppHandle) {
+    if onboarding_windows::mac::notch_is_suppressed() {
+        return;
+    }
     use objc2::msg_send;
     use objc2::runtime::AnyObject;
     USER_HIDDEN.store(false, std::sync::atomic::Ordering::Relaxed);
@@ -2073,8 +2093,11 @@ pub(crate) fn float_on_all_spaces(win: &tauri::WebviewWindow) {
         let _: () = msg_send![ptr, setMovable: PANEL_MOVABLE];
         let _: () = msg_send![ptr, setMovableByWindowBackground: PANEL_MOVABLE];
         // Accessory (background) apps do NOT auto-show their windows — orderFrontRegardless forces
-        // the window visible even while the app is inactive.
-        let _: () = msg_send![ptr, orderFrontRegardless];
+        // the window visible even while the app is inactive. Onboarding holds this panel out until
+        // its own lifecycle has closed.
+        if !onboarding_windows::mac::notch_is_suppressed() {
+            let _: () = msg_send![ptr, orderFrontRegardless];
+        }
         let got: usize = msg_send![ptr, collectionBehavior];
         let lvl: isize = msg_send![ptr, level];
         let hides: bool = msg_send![ptr, hidesOnDeactivate];

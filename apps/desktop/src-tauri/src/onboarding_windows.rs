@@ -11,12 +11,12 @@ const INTERACTIVE_WIDTH: f64 = 1120.0;
 const INTERACTIVE_HEIGHT: f64 = 720.0;
 const INTERACTIVE_MIN_WIDTH: f64 = 900.0;
 const INTERACTIVE_MIN_HEIGHT: f64 = 620.0;
+const INTERACTIVE_EDGE_INSET: f64 = 16.0;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OnboardingSurfaceKind {
     Main,
-    Ambient,
     Interactive,
 }
 
@@ -42,12 +42,6 @@ pub struct DisplaySnapshot {
 pub struct OnboardingMotionVector {
     pub x: i8,
     pub y: i8,
-}
-
-impl OnboardingMotionVector {
-    pub const fn new(x: i8, y: i8) -> Self {
-        Self { x, y }
-    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -78,6 +72,18 @@ pub struct WindowPolicy {
     pub ignores_mouse_events: bool,
     pub can_become_key_or_main: bool,
     pub current_space_only: bool,
+    pub resizable: bool,
+    pub transparent: bool,
+    pub overlay_titlebar: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct InteractiveWindowLayout {
+    pub frame: Rect,
+    pub min_width: f64,
+    pub min_height: f64,
+    pub max_width: f64,
+    pub max_height: f64,
 }
 
 trait ExternalPermissionWindowOps {
@@ -152,21 +158,21 @@ pub fn window_policy(surface: OnboardingSurfaceKind) -> WindowPolicy {
     match surface {
         OnboardingSurfaceKind::Main => WindowPolicy {
             level: WindowLevelPolicy::Overlay,
-            ignores_mouse_events: false,
-            can_become_key_or_main: true,
-            current_space_only: false,
-        },
-        OnboardingSurfaceKind::Ambient => WindowPolicy {
-            level: WindowLevelPolicy::Overlay,
             ignores_mouse_events: true,
             can_become_key_or_main: false,
-            current_space_only: false,
+            current_space_only: true,
+            resizable: false,
+            transparent: true,
+            overlay_titlebar: true,
         },
         OnboardingSurfaceKind::Interactive => WindowPolicy {
             level: WindowLevelPolicy::Normal,
             ignores_mouse_events: false,
             can_become_key_or_main: true,
             current_space_only: true,
+            resizable: true,
+            transparent: true,
+            overlay_titlebar: true,
         },
     }
 }
@@ -175,14 +181,30 @@ pub fn full_display_appkit_frame(display: DisplaySnapshot) -> Rect {
     display.appkit_frame
 }
 
-pub fn interactive_appkit_frame(display: DisplaySnapshot) -> Rect {
+pub fn interactive_window_layout(display: DisplaySnapshot) -> InteractiveWindowLayout {
     let frame = display.appkit_frame;
-    Rect::new(
-        (frame.x + (frame.w - INTERACTIVE_WIDTH) / 2.0).max(frame.x),
-        (frame.y + (frame.h - INTERACTIVE_HEIGHT) / 2.0).max(frame.y),
-        INTERACTIVE_WIDTH.min(frame.w),
-        INTERACTIVE_HEIGHT.min(frame.h),
-    )
+    let width = if frame.w >= INTERACTIVE_WIDTH + 2.0 * INTERACTIVE_EDGE_INSET {
+        INTERACTIVE_WIDTH
+    } else {
+        (frame.w - 2.0 * INTERACTIVE_EDGE_INSET).max(1.0)
+    };
+    let height = if frame.h >= INTERACTIVE_HEIGHT + 2.0 * INTERACTIVE_EDGE_INSET {
+        INTERACTIVE_HEIGHT
+    } else {
+        (frame.h - 2.0 * INTERACTIVE_EDGE_INSET).max(1.0)
+    };
+    InteractiveWindowLayout {
+        frame: Rect::new(
+            frame.x + (frame.w - width) / 2.0,
+            frame.y + (frame.h - height) / 2.0,
+            width,
+            height,
+        ),
+        min_width: INTERACTIVE_MIN_WIDTH.min(width),
+        min_height: INTERACTIVE_MIN_HEIGHT.min(height),
+        max_width: width,
+        max_height: height,
+    }
 }
 
 impl WindowSessionModel {
@@ -214,6 +236,11 @@ impl WindowSessionModel {
 
     pub fn intro_active(&self) -> bool {
         self.phase == SessionPhase::Intro
+    }
+
+    #[cfg(test)]
+    pub fn notch_is_suppressed(&self) -> bool {
+        self.phase != SessionPhase::Closed
     }
 
     pub fn surfaces(&self) -> &[OnboardingSurface] {
@@ -322,10 +349,7 @@ impl WindowSessionModel {
     pub fn prepare_for_external_ui(&mut self) -> Vec<String> {
         let mut closed = Vec::new();
         self.owned.retain(|surface| {
-            let intro = matches!(
-                surface.surface,
-                OnboardingSurfaceKind::Main | OnboardingSurfaceKind::Ambient
-            );
+            let intro = surface.surface == OnboardingSurfaceKind::Main;
             if intro {
                 closed.push(surface.label.clone());
             }
@@ -349,60 +373,18 @@ fn intro_surfaces(
     launch_display_id: u32,
     displays: &[DisplaySnapshot],
 ) -> Vec<OnboardingSurface> {
-    let launch_display = displays
-        .iter()
-        .find(|display| display.display_id == launch_display_id)
-        .copied();
     displays
         .iter()
-        .map(|display| {
-            let surface = if display.display_id == launch_display_id {
-                OnboardingSurfaceKind::Main
-            } else {
-                OnboardingSurfaceKind::Ambient
-            };
-            let label = match surface {
-                OnboardingSurfaceKind::Main => format!("onboarding-main-{generation}"),
-                OnboardingSurfaceKind::Ambient => {
-                    format!("onboarding-ambient-{generation}-{}", display.display_id)
-                }
-                OnboardingSurfaceKind::Interactive => unreachable!(),
-            };
-            OnboardingSurface {
-                surface,
-                generation,
-                display_id: display.display_id,
-                motion_vector: launch_display
-                    .filter(|_| surface == OnboardingSurfaceKind::Ambient)
-                    .map_or_else(OnboardingMotionVector::default, |launch| {
-                        motion_vector_toward(*display, launch)
-                    }),
-                label,
-            }
+        .find(|display| display.display_id == launch_display_id)
+        .map(|display| OnboardingSurface {
+            surface: OnboardingSurfaceKind::Main,
+            generation,
+            display_id: display.display_id,
+            motion_vector: OnboardingMotionVector::default(),
+            label: format!("onboarding-main-{generation}"),
         })
+        .into_iter()
         .collect()
-}
-
-fn motion_vector_toward(
-    display: DisplaySnapshot,
-    launch_display: DisplaySnapshot,
-) -> OnboardingMotionVector {
-    let x = direction_component(launch_display.appkit_frame.mid_x() - display.appkit_frame.mid_x());
-    let appkit_y = direction_component(
-        (launch_display.appkit_frame.y + launch_display.appkit_frame.h / 2.0)
-            - (display.appkit_frame.y + display.appkit_frame.h / 2.0),
-    );
-    OnboardingMotionVector::new(x, -appkit_y)
-}
-
-fn direction_component(delta: f64) -> i8 {
-    if delta > 0.0 {
-        1
-    } else if delta < 0.0 {
-        -1
-    } else {
-        0
-    }
 }
 
 #[cfg(target_os = "macos")]
@@ -422,6 +404,7 @@ fn replace_generation_music<T, E>(
 #[cfg(target_os = "macos")]
 pub mod mac {
     use std::collections::HashMap;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{mpsc, Mutex, OnceLock};
     use std::time::{Duration, Instant};
 
@@ -431,11 +414,10 @@ pub mod mac {
 
     use super::{
         configure_intro_with_rollback, enforce_external_permission_barrier,
-        full_display_appkit_frame, interactive_appkit_frame, replace_generation_music,
+        full_display_appkit_frame, interactive_window_layout, replace_generation_music,
         surface_close_should_cleanup, window_policy, DisplaySnapshot, ExternalPermissionKind,
         ExternalPermissionWindowOps, OnboardingSurface, OnboardingSurfaceKind, WindowLevelPolicy,
-        WindowSessionModel, INTERACTIVE_HEIGHT, INTERACTIVE_MIN_HEIGHT, INTERACTIVE_MIN_WIDTH,
-        INTERACTIVE_WIDTH, INTRO_DURATION,
+        WindowSessionModel, INTRO_DURATION,
     };
     use crate::geometry::Point;
 
@@ -443,6 +425,45 @@ pub mod mac {
     const CURRENT_SPACE_BEHAVIOR: usize = 0;
     const NORMAL_WINDOW_LEVEL: isize = 0;
     const NONACTIVATING_PANEL_STYLE: usize = 1 << 7;
+    const INTRO_DIMMER_INITIALIZATION_SCRIPT: &str = r#"
+        (() => {
+          const style = document.createElement('style');
+          style.textContent = `
+            html, body, #root { background: transparent !important; }
+            .onb-cinematic {
+              background: rgba(0, 0, 0, 0.58) !important;
+            }
+            .onb-cinematic > * { display: none !important; }
+          `;
+          (document.head || document.documentElement).appendChild(style);
+        })();
+    "#;
+
+    static NOTCH_SUPPRESSED: AtomicBool = AtomicBool::new(false);
+
+    pub(crate) fn notch_is_suppressed() -> bool {
+        NOTCH_SUPPRESSED.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn set_notch_suppressed(app: &AppHandle, suppressed: bool) {
+        use objc2::msg_send;
+        use objc2::runtime::AnyObject;
+
+        NOTCH_SUPPRESSED.store(suppressed, Ordering::Release);
+        let Some(ptr) = crate::overlay_ptr(app) else {
+            return;
+        };
+        let nil: *mut AnyObject = std::ptr::null_mut();
+        // SAFETY: onboarding setup/teardown runs on AppKit's main thread and targets the live
+        // notch panel. While onboarding owns the screen, no path may order this panel front.
+        unsafe {
+            if suppressed {
+                let _: () = msg_send![ptr, orderOut: nil];
+            } else {
+                let _: () = msg_send![ptr, orderFrontRegardless];
+            }
+        }
+    }
 
     fn ambient_panels() -> &'static Mutex<HashMap<String, usize>> {
         static PANELS: OnceLock<Mutex<HashMap<String, usize>>> = OnceLock::new();
@@ -519,7 +540,6 @@ pub mod mac {
     fn surface_route(surface: &OnboardingSurface) -> String {
         let kind = match surface.surface {
             OnboardingSurfaceKind::Main => "main",
-            OnboardingSurfaceKind::Ambient => "ambient",
             OnboardingSurfaceKind::Interactive => "interactive",
         };
         format!(
@@ -534,7 +554,8 @@ pub mod mac {
         display: &DisplaySnapshot,
     ) -> Result<tauri::WebviewWindow, String> {
         let frame = full_display_appkit_frame(*display);
-        let window = tauri::WebviewWindowBuilder::new(
+        let policy = window_policy(surface.surface);
+        let mut builder = tauri::WebviewWindowBuilder::new(
             app,
             &surface.label,
             tauri::WebviewUrl::App(surface_route(surface).into()),
@@ -542,13 +563,20 @@ pub mod mac {
         .title("ShogunAI")
         .visible(false)
         .focused(false)
+        .transparent(policy.transparent)
         .decorations(false)
-        .resizable(false)
+        .resizable(policy.resizable)
         .skip_taskbar(true)
         .always_on_top(true)
+        .shadow(false)
         .inner_size(frame.w, frame.h)
-        .build()
-        .map_err(|error| format!("{} build failed: {error}", surface.label))?;
+        .initialization_script(INTRO_DIMMER_INITIALIZATION_SCRIPT);
+        if policy.overlay_titlebar {
+            builder = builder.title_bar_style(tauri::TitleBarStyle::Overlay);
+        }
+        let window = builder
+            .build()
+            .map_err(|error| format!("{} build failed: {error}", surface.label))?;
         configure_intro_with_rollback(
             || configure_intro_window(&window, surface, display),
             || {
@@ -581,7 +609,7 @@ pub mod mac {
 
     fn adopt_ambient_panel(
         window: &tauri::WebviewWindow,
-        label: &str,
+        surface: &OnboardingSurface,
         display: &DisplaySnapshot,
     ) -> Result<*mut objc2::runtime::AnyObject, String> {
         use objc2::runtime::AnyObject;
@@ -608,8 +636,19 @@ pub mod mac {
                 return Err("ambient NSPanel creation failed".to_owned());
             }
             let _: () = msg_send![panel, setReleasedWhenClosed: false];
-            let _: () = msg_send![panel, setIgnoresMouseEvents: true];
-            let _: () = msg_send![panel, setCollectionBehavior: ALL_SPACES_BEHAVIOR];
+            let _: () = msg_send![panel, setOpaque: false];
+            let clear: *mut AnyObject = msg_send![class!(NSColor), clearColor];
+            let _: () = msg_send![panel, setBackgroundColor: clear];
+            let _: () = msg_send![panel, setHasShadow: false];
+            let _: () = msg_send![panel, setAnimationBehavior: 2isize];
+            let policy = window_policy(surface.surface);
+            let behavior = if policy.current_space_only {
+                CURRENT_SPACE_BEHAVIOR
+            } else {
+                ALL_SPACES_BEHAVIOR
+            };
+            let _: () = msg_send![panel, setIgnoresMouseEvents: policy.ignores_mouse_events];
+            let _: () = msg_send![panel, setCollectionBehavior: behavior];
             let _: () = msg_send![panel, setHidesOnDeactivate: false];
             let _: () = msg_send![panel, setLevel: crate::OVERLAY_LEVEL];
             let can_key: bool = msg_send![panel, canBecomeKeyWindow];
@@ -628,7 +667,7 @@ pub mod mac {
             let _: () = msg_send![content, release];
             panel
         };
-        panels.insert(label.to_owned(), panel as usize);
+        panels.insert(surface.label.clone(), panel as usize);
         Ok(panel)
     }
 
@@ -683,8 +722,8 @@ pub mod mac {
         if ptr.is_null() {
             return Err("native intro window unavailable".to_owned());
         }
-        if surface.surface == OnboardingSurfaceKind::Ambient {
-            let _ = adopt_ambient_panel(window, &surface.label, display)?;
+        if surface.surface == OnboardingSurfaceKind::Main {
+            let _ = adopt_ambient_panel(window, surface, display)?;
             return Ok(());
         }
         let policy = window_policy(surface.surface);
@@ -723,7 +762,9 @@ pub mod mac {
         surface: &OnboardingSurface,
         display: &DisplaySnapshot,
     ) -> Result<tauri::WebviewWindow, String> {
-        let window = tauri::WebviewWindowBuilder::new(
+        let layout = interactive_window_layout(*display);
+        let policy = window_policy(OnboardingSurfaceKind::Interactive);
+        let mut builder = tauri::WebviewWindowBuilder::new(
             app,
             &surface.label,
             tauri::WebviewUrl::App(surface_route(surface).into()),
@@ -731,12 +772,18 @@ pub mod mac {
         .title("ShogunAI")
         .visible(false)
         .focused(false)
-        .resizable(true)
+        .transparent(policy.transparent)
+        .resizable(policy.resizable)
         .always_on_top(false)
-        .inner_size(INTERACTIVE_WIDTH, INTERACTIVE_HEIGHT)
-        .min_inner_size(INTERACTIVE_MIN_WIDTH, INTERACTIVE_MIN_HEIGHT)
-        .build()
-        .map_err(|error| format!("interactive onboarding build failed: {error}"))?;
+        .inner_size(layout.frame.w, layout.frame.h)
+        .min_inner_size(layout.min_width, layout.min_height)
+        .max_inner_size(layout.max_width, layout.max_height);
+        if policy.overlay_titlebar {
+            builder = builder.title_bar_style(tauri::TitleBarStyle::Overlay);
+        }
+        let window = builder
+            .build()
+            .map_err(|error| format!("interactive onboarding build failed: {error}"))?;
         configure_interactive_window(&window, Some(display))?;
         Ok(window)
     }
@@ -771,13 +818,15 @@ pub mod mac {
         // SAFETY: caller runs on AppKit's main thread with Tauri's live NSWindow.
         unsafe {
             if let Some(display) = display {
-                let frame = ns_rect(interactive_appkit_frame(*display));
+                let frame = ns_rect(interactive_window_layout(*display).frame);
                 let _: () = msg_send![ptr, setFrame: frame, display: false];
             }
             let _: () = msg_send![ptr, setIgnoresMouseEvents: policy.ignores_mouse_events];
             let _: () = msg_send![ptr, setLevel: level];
             let _: () = msg_send![ptr, setCollectionBehavior: collection_behavior];
             let _: () = msg_send![ptr, setHidesOnDeactivate: false];
+            let _: () = msg_send![ptr, setTitleVisibility: 1isize];
+            let _: () = msg_send![ptr, setTitlebarAppearsTransparent: true];
         }
         Ok(())
     }
@@ -876,6 +925,15 @@ pub mod mac {
     }
 
     pub fn start(app: &AppHandle) -> Result<(), String> {
+        set_notch_suppressed(app, true);
+        let result = start_inner(app);
+        if result.is_err() {
+            set_notch_suppressed(app, false);
+        }
+        result
+    }
+
+    fn start_inner(app: &AppHandle) -> Result<(), String> {
         let mtm = MainThreadMarker::new()
             .ok_or_else(|| "onboarding window session must start on main thread".to_owned())?;
         let runtime = app
@@ -944,9 +1002,7 @@ pub mod mac {
                 }
             };
             let window_result = match surface.surface {
-                OnboardingSurfaceKind::Main | OnboardingSurfaceKind::Ambient => {
-                    build_intro_window(app, surface, display)
-                }
+                OnboardingSurfaceKind::Main => build_intro_window(app, surface, display),
                 OnboardingSurfaceKind::Interactive => {
                     build_interactive_window(app, surface, display)
                 }
@@ -1122,6 +1178,7 @@ pub mod mac {
         if let Some(observer) = display_observer {
             remove_display_observer(observer);
         }
+        set_notch_suppressed(app, false);
         crate::onboarding_music::mac::stop(app);
     }
 
@@ -1163,12 +1220,7 @@ pub mod mac {
                 .model
                 .surfaces()
                 .iter()
-                .filter(|surface| {
-                    matches!(
-                        surface.surface,
-                        OnboardingSurfaceKind::Main | OnboardingSurfaceKind::Ambient
-                    )
-                })
+                .filter(|surface| surface.surface == OnboardingSurfaceKind::Main)
                 .map(|surface| surface.label.clone())
                 .collect::<Vec<_>>();
             let interactive = session
@@ -1549,49 +1601,6 @@ mod tests {
     }
 
     #[test]
-    fn ambient_motion_vectors_cover_all_eight_directions() {
-        let launch = display(
-            1,
-            Rect::new(0.0, 0.0, 100.0, 100.0),
-            Rect::new(0.0, 0.0, 100.0, 100.0),
-            2.0,
-        );
-        let cases = [
-            ((-200.0, 200.0), OnboardingMotionVector::new(1, 1)),
-            ((0.0, 200.0), OnboardingMotionVector::new(0, 1)),
-            ((200.0, 200.0), OnboardingMotionVector::new(-1, 1)),
-            ((-200.0, 0.0), OnboardingMotionVector::new(1, 0)),
-            ((200.0, 0.0), OnboardingMotionVector::new(-1, 0)),
-            ((-200.0, -200.0), OnboardingMotionVector::new(1, -1)),
-            ((0.0, -200.0), OnboardingMotionVector::new(0, -1)),
-            ((200.0, -200.0), OnboardingMotionVector::new(-1, -1)),
-        ];
-
-        for ((x, y), expected) in cases {
-            let ambient = display(
-                2,
-                Rect::new(x, y, 100.0, 100.0),
-                Rect::new(x, y, 100.0, 100.0),
-                1.0,
-            );
-            assert_eq!(motion_vector_toward(ambient, launch), expected);
-        }
-    }
-
-    #[test]
-    fn ambient_motion_vector_uses_appkit_centers_across_negative_mixed_layout() {
-        let screens = displays();
-        assert_eq!(
-            motion_vector_toward(screens[1], screens[0]),
-            OnboardingMotionVector::new(1, 1)
-        );
-        assert_eq!(
-            motion_vector_toward(screens[3], screens[0]),
-            OnboardingMotionVector::new(-1, -1)
-        );
-    }
-
-    #[test]
     fn cursor_selection_uses_half_open_edges() {
         let screens = displays();
         assert_eq!(
@@ -1629,8 +1638,76 @@ mod tests {
             screens[1].appkit_frame
         );
         assert_eq!(
-            interactive_appkit_frame(screens[2]),
-            Rect::new(80.0, 982.0, 1120.0, 720.0)
+            interactive_window_layout(screens[2]).frame,
+            Rect::new(80.0, 998.0, 1120.0, 688.0)
+        );
+    }
+
+    #[test]
+    fn intro_owns_only_the_cursor_display_overlay() {
+        let session = WindowSessionModel::intro(5, displays(), Point::new(-1.0, 500.0), Some(1))
+            .expect("session");
+
+        assert_eq!(
+            session.surfaces(),
+            &[OnboardingSurface {
+                surface: OnboardingSurfaceKind::Main,
+                generation: 5,
+                display_id: 2,
+                motion_vector: OnboardingMotionVector::default(),
+                label: "onboarding-main-5".to_owned(),
+            }]
+        );
+    }
+
+    #[test]
+    fn interactive_layout_clamps_target_and_resize_limits_to_small_display() {
+        let small = display(
+            7,
+            Rect::new(100.0, 40.0, 800.0, 500.0),
+            Rect::new(100.0, 40.0, 800.0, 500.0),
+            2.0,
+        );
+
+        assert_eq!(
+            interactive_window_layout(small),
+            InteractiveWindowLayout {
+                frame: Rect::new(116.0, 56.0, 768.0, 468.0),
+                min_width: 768.0,
+                min_height: 468.0,
+                max_width: 768.0,
+                max_height: 468.0,
+            }
+        );
+    }
+
+    #[test]
+    fn intro_and_interactive_policies_are_nonactivating_and_titlebar_clean() {
+        assert_eq!(
+            (
+                window_policy(OnboardingSurfaceKind::Main),
+                window_policy(OnboardingSurfaceKind::Interactive),
+            ),
+            (
+                WindowPolicy {
+                    level: WindowLevelPolicy::Overlay,
+                    ignores_mouse_events: true,
+                    can_become_key_or_main: false,
+                    current_space_only: true,
+                    resizable: false,
+                    transparent: true,
+                    overlay_titlebar: true,
+                },
+                WindowPolicy {
+                    level: WindowLevelPolicy::Normal,
+                    ignores_mouse_events: false,
+                    can_become_key_or_main: true,
+                    current_space_only: true,
+                    resizable: true,
+                    transparent: true,
+                    overlay_titlebar: true,
+                },
+            )
         );
     }
 
@@ -1648,6 +1725,19 @@ mod tests {
         assert!(!session.deadline_elapsed(7, INTRO_DURATION - Duration::from_nanos(1)));
         assert!(session.deadline_elapsed(7, INTRO_DURATION));
         assert!(!session.deadline_elapsed(7, INTRO_DURATION + Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn notch_stays_suppressed_until_onboarding_lifecycle_closes() {
+        let mut session = WindowSessionModel::intro(7, displays(), Point::new(50.0, 50.0), Some(1))
+            .expect("session");
+        assert!(session.notch_is_suppressed());
+
+        session.finish_intro();
+        assert!(session.notch_is_suppressed());
+
+        let _ = session.cleanup();
+        assert!(!session.notch_is_suppressed());
     }
 
     #[test]
@@ -1718,7 +1808,7 @@ mod tests {
         let mut session = WindowSessionModel::intro(9, displays(), Point::new(50.0, 50.0), Some(1))
             .expect("session");
         let labels = session.cleanup();
-        assert_eq!(labels.len(), 4);
+        assert_eq!(labels.len(), 1);
         assert!(session.cleanup().is_empty());
         assert!(!session.deadline_elapsed(9, INTRO_DURATION));
     }
@@ -1737,7 +1827,7 @@ mod tests {
             .expect("rebuild");
         assert_eq!(
             (old.len(), session.generation(), session.launch_display_id()),
-            (4, 3, 2)
+            (1, 3, 2)
         );
     }
 
@@ -1757,11 +1847,11 @@ mod tests {
     }
 
     #[test]
-    fn interactive_and_ambient_policies_are_safe() {
+    fn interactive_and_intro_policies_are_safe() {
         assert_eq!(
             (
                 window_policy(OnboardingSurfaceKind::Interactive),
-                window_policy(OnboardingSurfaceKind::Ambient),
+                window_policy(OnboardingSurfaceKind::Main),
             ),
             (
                 WindowPolicy {
@@ -1769,12 +1859,18 @@ mod tests {
                     ignores_mouse_events: false,
                     can_become_key_or_main: true,
                     current_space_only: true,
+                    resizable: true,
+                    transparent: true,
+                    overlay_titlebar: true,
                 },
                 WindowPolicy {
                     level: WindowLevelPolicy::Overlay,
                     ignores_mouse_events: true,
                     can_become_key_or_main: false,
-                    current_space_only: false,
+                    current_space_only: true,
+                    resizable: false,
+                    transparent: true,
+                    overlay_titlebar: true,
                 },
             )
         );
@@ -1785,7 +1881,7 @@ mod tests {
         let mut session = WindowSessionModel::intro(4, displays(), Point::new(50.0, 50.0), Some(1))
             .expect("session");
         let closed = session.prepare_for_external_ui();
-        assert_eq!(closed.len(), 4);
+        assert_eq!(closed.len(), 1);
         assert!(session.surfaces().is_empty());
     }
 
@@ -1821,16 +1917,16 @@ mod tests {
     fn surface_lookup_rejects_stale_generation() {
         let session = WindowSessionModel::intro(12, displays(), Point::new(50.0, 50.0), Some(1))
             .expect("session");
-        let ambient = session
+        let main = session
             .surfaces()
             .iter()
-            .find(|surface| surface.surface == OnboardingSurfaceKind::Ambient)
-            .expect("ambient surface");
-        let label = &ambient.label;
+            .find(|surface| surface.surface == OnboardingSurfaceKind::Main)
+            .expect("main surface");
+        let label = &main.label;
         assert!(session.surface_for_label(label, 11).is_err());
         let routed = session.surface_for_label(label, 12).expect("surface");
         assert_eq!(routed.generation, 12);
-        assert_eq!(routed.motion_vector, OnboardingMotionVector::new(1, 1));
+        assert_eq!(routed.motion_vector, OnboardingMotionVector::default());
     }
 
     #[test]
