@@ -544,6 +544,24 @@ pub fn act(
                         .to_string(),
                 );
             }
+            // Refuse rows the persisted store would reject on load (empty/oversized destination,
+            // oversized body, MAX_PENDING) — otherwise one bad enqueue writes a file every later
+            // `load_queue` refuses, bricking the shared queue for every face.
+            match crate::approval_store::validate_enqueue(approvals, &preview) {
+                Err(crate::approval_store::EnqueueRefusal::Invalid(detail)) => {
+                    return (
+                        400,
+                        format!(
+                            r#"{{"error":"bad_action_request","detail":"{}"}}"#,
+                            json_escape(detail)
+                        ),
+                    );
+                }
+                Err(crate::approval_store::EnqueueRefusal::QueueFull) => {
+                    return (429, r#"{"error":"approval_queue_full"}"#.to_string());
+                }
+                Ok(()) => {}
+            }
             let now = u64::try_from(now_ms).unwrap_or(0);
             let id = approvals.request(send, preview, origin, now);
             (
@@ -1097,6 +1115,63 @@ mod tests {
             .0,
             400
         );
+    }
+
+    #[test]
+    fn act_refuses_rows_the_persisted_store_would_reject_on_load() {
+        // Empty destination: the load-time row check (`action_from_wire`) rejects it, so an
+        // enqueue that accepted it would brick the persisted store for every face.
+        let mut q = ApprovalQueue::new();
+        let (s, b) = act(
+            Some(r#"{"kind":"post_message","channel":"","body":"x"}"#),
+            0,
+            &mut q,
+            ApprovalOrigin::Api,
+            ApprovalSurface::Present,
+        );
+        assert_eq!(s, 400);
+        assert!(b.contains("bad_action_request"));
+        assert_eq!(q.pending_len(), 0);
+
+        // Oversized body (> 256 KiB) is refused for the same reason.
+        let big = "x".repeat(256 * 1024 + 1);
+        let (s, _) = act(
+            Some(&format!(
+                r#"{{"kind":"post_message","channel":"c","body":"{big}"}}"#
+            )),
+            0,
+            &mut q,
+            ApprovalOrigin::Api,
+            ApprovalSurface::Present,
+        );
+        assert_eq!(s, 400);
+        assert_eq!(q.pending_len(), 0);
+    }
+
+    #[test]
+    fn act_refuses_enqueue_beyond_max_pending() {
+        let mut q = ApprovalQueue::new();
+        let body = r#"{"kind":"post_message","channel":"c","body":"x"}"#;
+        for _ in 0..64 {
+            let (s, _) = act(
+                Some(body),
+                0,
+                &mut q,
+                ApprovalOrigin::Api,
+                ApprovalSurface::Present,
+            );
+            assert_eq!(s, 202);
+        }
+        let (s, b) = act(
+            Some(body),
+            0,
+            &mut q,
+            ApprovalOrigin::Api,
+            ApprovalSurface::Present,
+        );
+        assert_eq!(s, 429);
+        assert!(b.contains("approval_queue_full"));
+        assert_eq!(q.pending_len(), 64, "the 65th enqueue must not be stored");
     }
 
     #[test]

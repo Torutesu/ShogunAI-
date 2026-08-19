@@ -348,6 +348,31 @@ fn save_unlocked(path: &Path, queue: &ApprovalQueue) -> Result<(), String> {
     }
     Ok(())
 }
+/// Why [`validate_enqueue`] refused a send.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EnqueueRefusal {
+    /// The request itself is malformed (empty or oversized destination, oversized body).
+    Invalid(&'static str),
+    /// The store already holds `MAX_PENDING` unresolved sends; retry after some resolve.
+    QueueFull,
+}
+
+/// Enqueue-side twin of the load-time row checks. `load_queue` rejects a store whose rows break
+/// these limits, so an enqueue that skips them persists a file every later load refuses — one bad
+/// request would brick the whole queue for every face. Callers must validate before `try_request`.
+pub fn validate_enqueue(queue: &ApprovalQueue, preview: &Preview) -> Result<(), EnqueueRefusal> {
+    if preview.destination.trim().is_empty() || preview.destination.len() > MAX_DESTINATION_BYTES {
+        return Err(EnqueueRefusal::Invalid("invalid approval destination"));
+    }
+    if preview.full_body.len() > MAX_BODY_BYTES {
+        return Err(EnqueueRefusal::Invalid("approval body too large"));
+    }
+    if queue.pending_len() >= MAX_PENDING {
+        return Err(EnqueueRefusal::QueueFull);
+    }
+    Ok(())
+}
+
 pub fn with_queue<R>(
     path: &Path,
     change: impl FnOnce(&mut ApprovalQueue) -> R,
