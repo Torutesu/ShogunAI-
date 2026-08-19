@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { Onboarding } from "./Onboarding";
@@ -66,4 +66,43 @@ describe("unified permission onboarding", () => {
     expect((screen.getByRole("button", { name: "Continue" }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.queryByRole("button", { name: "Skip for now" })).toBeNull();
   });
+
+  it("passes revision and stays on current step when Rust rejects a stale write", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "onboarding_state") {
+        return { completed: false, step: "welcome", plan: null, revision: 7 };
+      }
+      if (command === "permission_status") return { ...EMPTY_PERMISSION_RESULT };
+      if (command === "onboarding_event") return undefined;
+      if (command === "set_onboarding_state") throw new Error("stale onboarding revision");
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    render(<Onboarding />);
+    fireEvent.click(await screen.findByRole("button", { name: "Set up SHOGUN" }));
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("set_onboarding_state", {
+        expectedRevision: 7,
+        step: "reads",
+        plan: null,
+        completed: false,
+      });
+    });
+    expect(screen.getByText("SHOGUN lives in the notch.")).toBeTruthy();
+  });
 });
+
+const EMPTY_PERMISSION_RESULT = {
+  accessibility: false,
+  microphone: false,
+  screen_recording: false,
+  all_granted: false,
+  accessibility_state: "not_granted",
+  microphone_state: "not_determined",
+  screen_recording_state: "not_granted",
+  all_effective: false,
+  reason: null,
+  revision: 1,
+};

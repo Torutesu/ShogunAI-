@@ -29,18 +29,92 @@ pub mod state {
     /// `apps/desktop/src/onboarding/ipc.ts` — that file is the contract's single list.
     pub const STEPS: [&str; 6] = ["welcome", "reads", "permission", "plan", "connect", "ready"];
 
-    fn first_step() -> String {
-        "welcome".into()
+    #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum OnboardingStep {
+        Intro,
+        #[default]
+        Welcome,
+        Reads,
+        Permission,
+        Accessibility,
+        Microphone,
+        ScreenRecording,
+        RightOption,
+        ScribeDemo,
+        DictationDemo,
+        Privacy,
+        Plan,
+        Connect,
+        Gate,
+        Ready,
     }
 
-    #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+    impl OnboardingStep {
+        #[cfg(test)]
+        pub const fn as_str(self) -> &'static str {
+            match self {
+                Self::Intro => "intro",
+                Self::Welcome => "welcome",
+                Self::Reads => "reads",
+                Self::Permission => "permission",
+                Self::Accessibility => "accessibility",
+                Self::Microphone => "microphone",
+                Self::ScreenRecording => "screen_recording",
+                Self::RightOption => "right_option",
+                Self::ScribeDemo => "scribe_demo",
+                Self::DictationDemo => "dictation_demo",
+                Self::Privacy => "privacy",
+                Self::Plan => "plan",
+                Self::Connect => "connect",
+                Self::Gate => "gate",
+                Self::Ready => "ready",
+            }
+        }
+
+        fn from_v1(value: &str) -> Option<Self> {
+            match value {
+                "welcome" => Some(Self::Welcome),
+                "reads" => Some(Self::Reads),
+                "permission" => Some(Self::Permission),
+                "plan" => Some(Self::Plan),
+                "connect" => Some(Self::Connect),
+                "ready" => Some(Self::Ready),
+                _ => None,
+            }
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum RestartReason {
+        ScreenRecording,
+    }
+
+    #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+    pub struct RestartPending {
+        pub reason: RestartReason,
+        pub bundle_id: String,
+        pub step: OnboardingStep,
+    }
+
+    #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
     pub struct OnboardingState {
         /// True once the user finished (or explicitly skipped to the end).
         #[serde(default)]
         pub completed: bool,
         /// Furthest step reached, so a quit mid-flow resumes there.
-        #[serde(default = "first_step")]
-        pub step: String,
+        #[serde(default)]
+        pub step: OnboardingStep,
+        /// Compare-and-set revision. Every successful persisted mutation increments exactly once.
+        #[serde(default)]
+        pub revision: u64,
+        #[serde(default)]
+        pub intro_complete: bool,
+        #[serde(default)]
+        pub music_muted: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub restart_pending: Option<RestartPending>,
         /// Which plan the user said they wanted ("standard" | "pro"). Billing is a separate flow;
         /// this only records the intent (plan gating itself lives in the Rust core, not here —
         /// and does not exist yet: follow-up, see module docs).
@@ -63,19 +137,6 @@ pub mod state {
         pub permissions_repair: bool,
     }
 
-    impl Default for OnboardingState {
-        fn default() -> Self {
-            Self {
-                completed: false,
-                step: first_step(),
-                plan: None,
-                trial_started_at: None,
-                accessibility_skipped: false,
-                permissions_repair: false,
-            }
-        }
-    }
-
     /// Fold a whole-record write from the flow into the next persisted state. Pure so the
     /// trial-start stamp is testable without a real clock — `now_unix` is injected.
     ///
@@ -84,7 +145,7 @@ pub mod state {
     /// sends.
     pub fn apply(
         prev: &OnboardingState,
-        step: String,
+        step: OnboardingStep,
         plan: Option<String>,
         completed: bool,
         now_unix: i64,
@@ -95,14 +156,13 @@ pub mod state {
         let trial_started_at =
             prev.trial_started_at
                 .or(if completed { Some(now_unix) } else { None });
-        let step = if STEPS.contains(&step.as_str()) {
-            step
-        } else {
-            first_step()
-        };
         OnboardingState {
             completed,
             step,
+            revision: prev.revision.saturating_add(1),
+            intro_complete: prev.intro_complete,
+            music_muted: prev.music_muted,
+            restart_pending: prev.restart_pending.clone(),
             plan,
             trial_started_at,
             accessibility_skipped: prev.accessibility_skipped,
@@ -112,8 +172,16 @@ pub mod state {
 
     /// Whether a completed setup needs its focused permissions repair card. The legacy skip bit is
     /// retained for migrated installs that explicitly deferred the old Accessibility-only guide.
-    pub fn needs_permissions_repair(all_granted: bool, state: &OnboardingState) -> bool {
-        state.completed && !all_granted && !state.accessibility_skipped
+    pub fn needs_permissions_repair(
+        accessibility: bool,
+        microphone: bool,
+        screen_recording: bool,
+        state: &OnboardingState,
+    ) -> bool {
+        state.completed
+            && ((!accessibility && !state.accessibility_skipped)
+                || !microphone
+                || !screen_recording)
     }
 
     /// On-disk format, versioned like `shortcuts.json` so a future default change can migrate once.
@@ -125,7 +193,35 @@ pub mod state {
         pub state: OnboardingState,
     }
 
-    pub const ONBOARDING_VERSION: u32 = 1;
+    pub const ONBOARDING_VERSION: u32 = 2;
+
+    #[derive(Deserialize, Default)]
+    struct OnboardingFileV1 {
+        #[serde(default)]
+        version: u32,
+        #[serde(default)]
+        state: OnboardingStateV1,
+    }
+
+    #[derive(Deserialize, Default)]
+    struct OnboardingStateV1 {
+        #[serde(default)]
+        completed: bool,
+        #[serde(default = "v1_first_step")]
+        step: String,
+        #[serde(default)]
+        plan: Option<String>,
+        #[serde(default)]
+        trial_started_at: Option<i64>,
+        #[serde(default)]
+        accessibility_skipped: bool,
+        #[serde(default, alias = "accessibility_repair")]
+        permissions_repair: bool,
+    }
+
+    fn v1_first_step() -> String {
+        "welcome".to_owned()
+    }
 
     /// The issue-#46 guide's disposition file, which lived at the same path. Its two flags meant
     /// "reached the AX-granted success screen" / "chose later".
@@ -151,15 +247,38 @@ pub mod state {
             // The legacy file has no `version` field, which deserializes as 0 with a default
             // (first-run!) state — so version 0 falls through to the legacy branch instead of
             // silently discarding the old disposition.
-            if file.version >= 1 {
+            if file.version >= ONBOARDING_VERSION {
                 return file.state;
+            }
+        }
+        if let Ok(file) = serde_json::from_str::<OnboardingFileV1>(text) {
+            if file.version == 1 {
+                let Some(step) = OnboardingStep::from_v1(&file.state.step) else {
+                    return OnboardingState::default();
+                };
+                return OnboardingState {
+                    completed: file.state.completed,
+                    step,
+                    revision: 0,
+                    intro_complete: false,
+                    music_muted: false,
+                    restart_pending: None,
+                    plan: file.state.plan,
+                    trial_started_at: file.state.trial_started_at,
+                    accessibility_skipped: file.state.accessibility_skipped,
+                    permissions_repair: file.state.permissions_repair,
+                };
             }
         }
         let legacy = serde_json::from_str::<LegacyDisposition>(text).unwrap_or_default();
         if legacy.completed || legacy.skipped {
             return OnboardingState {
                 completed: true,
-                step: "ready".into(),
+                step: OnboardingStep::Ready,
+                revision: 0,
+                intro_complete: false,
+                music_muted: false,
+                restart_pending: None,
                 plan: None,
                 trial_started_at: None,
                 accessibility_skipped: legacy.skipped,
@@ -174,49 +293,131 @@ pub mod state {
     mod tests {
         use super::*;
 
+        #[test]
+        fn v1_steps_migrate_without_losing_legacy_fields() {
+            for step in STEPS {
+                let json = format!(
+                    r#"{{"version":1,"state":{{"completed":true,"step":"{step}","plan":"pro","trial_started_at":42,"accessibility_skipped":true,"permissions_repair":true}}}}"#
+                );
+                let state = parse(&json);
+                assert_eq!(state.step.as_str(), step);
+                assert!(state.completed);
+                assert_eq!(state.plan.as_deref(), Some("pro"));
+                assert_eq!(state.trial_started_at, Some(42));
+                assert!(state.accessibility_skipped);
+                assert!(state.permissions_repair);
+            }
+        }
+
+        #[test]
+        fn v1_records_receive_v2_defaults_and_roundtrip() {
+            let state = parse(r#"{"version":1,"state":{"step":"plan"}}"#);
+            assert_eq!(state.revision, 0);
+            assert!(!state.intro_complete);
+            assert!(!state.music_muted);
+            assert_eq!(state.restart_pending, None);
+
+            let file = OnboardingFile {
+                version: ONBOARDING_VERSION,
+                state: state.clone(),
+            };
+            let json = serde_json::to_string(&file).unwrap();
+            assert_eq!(parse(&json), state);
+        }
+
+        #[test]
+        fn unknown_external_step_fails_safe() {
+            assert!(serde_json::from_str::<OnboardingStep>(r#""surprise""#).is_err());
+            let state = parse(r#"{"version":2,"state":{"step":"surprise"}}"#);
+            assert_eq!(state, OnboardingState::default());
+        }
+
+        #[test]
+        fn restart_marker_roundtrip_preserves_exact_step_and_identity() {
+            let state = OnboardingState {
+                step: OnboardingStep::ScreenRecording,
+                restart_pending: Some(RestartPending {
+                    reason: RestartReason::ScreenRecording,
+                    bundle_id: "com.test.app".to_owned(),
+                    step: OnboardingStep::ScreenRecording,
+                }),
+                ..OnboardingState::default()
+            };
+            let json = serde_json::to_string(&OnboardingFile {
+                version: ONBOARDING_VERSION,
+                state,
+            })
+            .expect("serialize restart marker");
+            let state = parse(&json);
+            assert_eq!(
+                state.restart_pending.as_ref().map(|marker| marker.step),
+                Some(OnboardingStep::ScreenRecording)
+            );
+            assert_eq!(
+                state
+                    .restart_pending
+                    .as_ref()
+                    .map(|marker| marker.bundle_id.as_str()),
+                Some("com.test.app")
+            );
+        }
+
         fn done(trial: Option<i64>) -> OnboardingState {
             OnboardingState {
                 completed: true,
-                step: "ready".into(),
+                step: OnboardingStep::Ready,
                 plan: None,
                 trial_started_at: trial,
                 accessibility_skipped: false,
                 permissions_repair: false,
+                ..OnboardingState::default()
             }
         }
 
         #[test]
         fn stamps_trial_at_first_completion() {
             let prev = OnboardingState::default();
-            let next = apply(&prev, "ready".into(), Some("pro".into()), true, 1000);
+            let next = apply(&prev, OnboardingStep::Ready, Some("pro".into()), true, 1000);
             assert_eq!(next.trial_started_at, Some(1000));
         }
 
         #[test]
         fn no_trial_before_completion() {
             let prev = OnboardingState::default();
-            let next = apply(&prev, "plan".into(), None, false, 1000);
+            let next = apply(&prev, OnboardingStep::Plan, None, false, 1000);
             assert_eq!(next.trial_started_at, None);
         }
 
         #[test]
         fn completion_is_idempotent() {
             // A second write with completed=true must not re-stamp a later time.
-            let next = apply(&done(Some(1000)), "ready".into(), None, true, 2000);
+            let next = apply(&done(Some(1000)), OnboardingStep::Ready, None, true, 2000);
             assert_eq!(next.trial_started_at, Some(1000));
         }
 
         #[test]
         fn reopening_from_settings_keeps_the_trial() {
             // Settings re-runs onboarding by setting completed=false; the clock must not restart.
-            let next = apply(&done(Some(1000)), "welcome".into(), None, false, 2000);
+            let next = apply(
+                &done(Some(1000)),
+                OnboardingStep::Welcome,
+                None,
+                false,
+                2000,
+            );
             assert_eq!(next.trial_started_at, Some(1000));
         }
 
         #[test]
-        fn unknown_step_falls_back_to_welcome() {
-            let next = apply(&OnboardingState::default(), "bogus".into(), None, false, 0);
-            assert_eq!(next.step, "welcome");
+        fn every_successful_apply_increments_revision_once() {
+            let next = apply(
+                &OnboardingState::default(),
+                OnboardingStep::Welcome,
+                None,
+                false,
+                0,
+            );
+            assert_eq!(next.revision, 1);
         }
 
         #[test]
@@ -224,7 +425,7 @@ pub mod state {
             let json = r#"{"version":1,"state":{"completed":false,"step":"plan","plan":"pro"}}"#;
             let s = parse(json);
             assert!(!s.completed);
-            assert_eq!(s.step, "plan");
+            assert_eq!(s.step, OnboardingStep::Plan);
             assert_eq!(s.plan.as_deref(), Some("pro"));
         }
 
@@ -243,14 +444,16 @@ pub mod state {
         fn legacy_skip_stays_out_of_accessibility_repair() {
             let state = parse(r#"{"skipped":true}"#);
             assert!(state.accessibility_skipped);
-            assert!(!needs_permissions_repair(false, &state));
+            assert!(!needs_permissions_repair(false, true, true, &state));
+            assert!(needs_permissions_repair(false, false, true, &state));
+            assert!(needs_permissions_repair(false, true, false, &state));
         }
 
         #[test]
         fn completed_setup_repairs_lost_accessibility_trust() {
             let state = done(Some(42));
-            assert!(needs_permissions_repair(false, &state));
-            assert!(!needs_permissions_repair(true, &state));
+            assert!(needs_permissions_repair(false, true, true, &state));
+            assert!(!needs_permissions_repair(true, true, true, &state));
         }
 
         #[test]
@@ -280,62 +483,49 @@ pub mod state {
 
 #[cfg(target_os = "macos")]
 pub mod mac {
-    use std::path::PathBuf;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::fs::OpenOptions;
+    use std::io::Write;
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::Mutex;
-    use std::time::Duration;
 
-    use tauri::{AppHandle, Emitter, Manager};
+    use tauri::{AppHandle, Manager};
 
-    use super::state::{self, OnboardingFile, OnboardingState, ONBOARDING_VERSION};
-    use crate::axcache;
+    use super::state::{self, OnboardingFile, OnboardingState, OnboardingStep, ONBOARDING_VERSION};
+    use crate::permissions::PermissionSnapshot;
 
     /// Window label for the onboarding webview. Shared by the builder, the watcher (to detect the
     /// window closing) and the completion write (to close it).
     pub const ONBOARDING_LABEL: &str = "onboarding";
 
-    /// The exact System Settings deep link for Privacy › Accessibility. The scheme is stable across
-    /// macOS 14/15; if Apple ever renames the pane, `open` still lands the user in Settings.
-    const AX_SETTINGS_URL: &str =
-        "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
-    const MICROPHONE_SETTINGS_URL: &str =
-        "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone";
-    const SCREEN_RECORDING_SETTINGS_URL: &str =
-        "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture";
-
-    /// One honest view of every capability onboarding requires. Status checks are side-effect
-    /// free; only the separate request commands may prompt or open System Settings.
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
-    pub struct PermissionSnapshot {
-        accessibility: bool,
-        microphone: bool,
-        screen_recording: bool,
-        all_granted: bool,
+    fn permission_gate_blocks(
+        previous_step: OnboardingStep,
+        next_step: OnboardingStep,
+        completed: bool,
+        all_effective: bool,
+    ) -> bool {
+        !all_effective
+            && (completed
+                || (previous_step == OnboardingStep::Permission
+                    && next_step != OnboardingStep::Permission))
     }
 
-    impl PermissionSnapshot {
-        fn new(accessibility: bool, microphone: bool, screen_recording: bool) -> Self {
-            Self {
-                accessibility,
-                microphone,
-                screen_recording,
-                all_granted: accessibility && microphone && screen_recording,
-            }
+    struct StateOwner {
+        current: OnboardingState,
+        path: Option<PathBuf>,
+    }
+
+    /// One serialized owner holds validation, mutation, persistence, and managed state update.
+    pub struct Store(Mutex<StateOwner>);
+
+    impl Store {
+        pub fn load(app: &AppHandle) -> Self {
+            Self(Mutex::new(StateOwner {
+                current: load(app),
+                path: config_path(app),
+            }))
         }
     }
-
-    fn permission_gate_blocks(
-        previous_step: &str,
-        next_step: &str,
-        completed: bool,
-        all_granted: bool,
-    ) -> bool {
-        !all_granted && (completed || (previous_step == "permission" && next_step != "permission"))
-    }
-
-    /// In-memory copy of the persisted state, managed so reads answer without touching disk on
-    /// every panel launch.
-    pub struct Store(pub Mutex<OnboardingState>);
 
     fn config_path(app: &AppHandle) -> Option<PathBuf> {
         app.path()
@@ -356,17 +546,89 @@ pub mod mac {
         state::parse(&text)
     }
 
-    fn save(app: &AppHandle, s: &OnboardingState) -> Result<(), String> {
-        let p = config_path(app).ok_or_else(|| "no app data dir".to_string())?;
-        if let Some(dir) = p.parent() {
-            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-        }
+    static TEMP_NONCE: AtomicU64 = AtomicU64::new(1);
+
+    fn serialized(s: &OnboardingState) -> Result<Vec<u8>, String> {
         let file = OnboardingFile {
             version: ONBOARDING_VERSION,
             state: s.clone(),
         };
-        let json = serde_json::to_string_pretty(&file).map_err(|e| e.to_string())?;
-        std::fs::write(&p, json).map_err(|e| format!("onboarding save failed: {e}"))
+        serde_json::to_vec_pretty(&file).map_err(|error| error.to_string())
+    }
+
+    fn atomic_save_with_rename(
+        path: &Path,
+        state: &OnboardingState,
+        rename: impl FnOnce(&Path, &Path) -> std::io::Result<()>,
+    ) -> Result<(), String> {
+        let parent = path
+            .parent()
+            .ok_or_else(|| "onboarding path has no parent".to_owned())?;
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("onboarding directory create failed: {error}"))?;
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| "onboarding path has no file name".to_owned())?;
+        let nonce = TEMP_NONCE.fetch_add(1, Ordering::Relaxed);
+        let temp = parent.join(format!(".{name}.{}.{}.tmp", std::process::id(), nonce));
+        let result = (|| {
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temp)
+                .map_err(|error| format!("onboarding temp create failed: {error}"))?;
+            file.write_all(&serialized(state)?)
+                .map_err(|error| format!("onboarding temp write failed: {error}"))?;
+            file.sync_all()
+                .map_err(|error| format!("onboarding temp sync failed: {error}"))?;
+            rename(&temp, path)
+                .map_err(|error| format!("onboarding atomic rename failed: {error}"))?;
+            Ok(())
+        })();
+        if result.is_err() {
+            let _ = std::fs::remove_file(&temp);
+        }
+        result
+    }
+
+    impl StateOwner {
+        fn persist_with(
+            &mut self,
+            expected_revision: u64,
+            next: OnboardingState,
+            rename: impl FnOnce(&Path, &Path) -> std::io::Result<()>,
+        ) -> Result<OnboardingState, String> {
+            if self.current.revision != expected_revision {
+                return Err(format!(
+                    "stale onboarding revision: expected {expected_revision}, current {}",
+                    self.current.revision
+                ));
+            }
+            let next_revision = expected_revision
+                .checked_add(1)
+                .ok_or_else(|| "onboarding revision exhausted".to_owned())?;
+            if next.revision != next_revision {
+                return Err("onboarding mutation must increment revision exactly once".to_owned());
+            }
+            let path = self
+                .path
+                .as_deref()
+                .ok_or_else(|| "no app data dir".to_owned())?;
+            atomic_save_with_rename(path, &next, rename)?;
+            self.current = next.clone();
+            Ok(next)
+        }
+
+        fn persist(
+            &mut self,
+            expected_revision: u64,
+            next: OnboardingState,
+        ) -> Result<OnboardingState, String> {
+            self.persist_with(expected_revision, next, |from, to| {
+                std::fs::rename(from, to)
+            })
+        }
     }
 
     fn now_unix() -> i64 {
@@ -376,32 +638,10 @@ pub mod mac {
             .unwrap_or(0)
     }
 
-    fn microphone_authorized() -> bool {
-        use objc2_av_foundation::{AVAuthorizationStatus, AVCaptureDevice, AVMediaTypeAudio};
-
-        // SAFETY: AVMediaTypeAudio exists on every supported macOS release and is the only media
-        // type passed to this API.
-        let Some(media_type) = (unsafe { AVMediaTypeAudio }) else {
-            return false;
-        };
-        (unsafe { AVCaptureDevice::authorizationStatusForMediaType(media_type) })
-            == AVAuthorizationStatus::Authorized
-    }
-
-    fn permission_snapshot() -> PermissionSnapshot {
-        use objc2_core_graphics::CGPreflightScreenCaptureAccess;
-
-        PermissionSnapshot::new(
-            axcache::ax_trusted_silent(),
-            microphone_authorized(),
-            CGPreflightScreenCaptureAccess(),
-        )
-    }
-
     /// Live status for all required permissions. This command never prompts and is safe to poll.
     #[tauri::command]
-    pub fn permission_status() -> PermissionSnapshot {
-        permission_snapshot()
+    pub fn permission_status(app: AppHandle) -> PermissionSnapshot {
+        crate::permissions::mac::status(&app)
     }
 
     /// Current onboarding state for the flow (invariant 1: Rust owns it). Reads the managed copy
@@ -409,12 +649,23 @@ pub mod mac {
     #[tauri::command]
     pub fn onboarding_state(app: AppHandle) -> OnboardingState {
         let mut state = match app.try_state::<Store>() {
-            Some(store) => store.0.lock().map(|g| g.clone()).unwrap_or_default(),
+            Some(store) => store
+                .0
+                .lock()
+                .map(|owner| owner.current.clone())
+                .unwrap_or_default(),
             None => load(&app),
         };
-        if state::needs_permissions_repair(permission_snapshot().all_granted, &state) {
-            state.step = "permission".into();
-            state.permissions_repair = true;
+        let permissions = crate::permissions::mac::status(&app);
+        let needs_repair = state::needs_permissions_repair(
+            permissions.accessibility,
+            permissions.microphone,
+            permissions.screen_recording,
+            &state,
+        );
+        state.permissions_repair = needs_repair;
+        if needs_repair {
+            state.step = OnboardingStep::Permission;
         }
         state
     }
@@ -428,31 +679,45 @@ pub mod mac {
     /// surface; serving this live value there is a shared-store follow-up (design doc §4.4).
     #[tauri::command]
     pub fn set_onboarding_state(
-        step: String,
+        expected_revision: u64,
+        step: OnboardingStep,
         plan: Option<String>,
         completed: bool,
         app: AppHandle,
         store: tauri::State<'_, Store>,
-    ) -> Result<(), String> {
-        let prev = store.0.lock().map(|g| g.clone()).unwrap_or_default();
-        let permissions = permission_snapshot();
-        if permission_gate_blocks(&prev.step, &step, completed, permissions.all_granted) {
+    ) -> Result<OnboardingState, String> {
+        let mut owner = store
+            .0
+            .lock()
+            .map_err(|_| "onboarding state unavailable".to_owned())?;
+        if owner.current.revision != expected_revision {
+            return Err(format!(
+                "stale onboarding revision: expected {expected_revision}, current {}",
+                owner.current.revision
+            ));
+        }
+        let permissions = crate::permissions::mac::status(&app);
+        if permission_gate_blocks(
+            owner.current.step,
+            step,
+            completed,
+            permissions.all_effective,
+        ) {
             return Err(
                 "Accessibility, Microphone, and Screen Recording are required to continue"
                     .to_owned(),
             );
         }
-        let mut next = state::apply(&prev, step.clone(), plan, completed, now_unix());
-        if permissions.all_granted {
+        let prev = owner.current.clone();
+        let mut next = state::apply(&prev, step, plan, completed, now_unix());
+        if permissions.all_effective {
             // A later successful grant supersedes an earlier "not now" choice, so a future
             // re-sign/revoke can surface the repair card again.
             next.accessibility_skipped = false;
         }
-        save(&app, &next)?;
+        let next = owner.persist(expected_revision, next)?;
+        drop(owner);
         let newly_completed = next.completed && !prev.completed;
-        if let Ok(mut g) = store.0.lock() {
-            *g = next.clone();
-        }
         if newly_completed {
             eprintln!("[onboarding] completed (plan intent: {:?})", next.plan);
             // The one sound SHOGUN makes about itself, once in the life of an install (#49 §6.2).
@@ -475,7 +740,7 @@ pub mod mac {
                 let _ = win.close();
             }
         }
-        Ok(())
+        Ok(next)
     }
 
     /// Open System Settings at Privacy › Accessibility. First calls the *prompting* trust check:
@@ -484,71 +749,22 @@ pub mod mac {
     /// the step instructions have nothing to point at). Fired once, from the button — never from
     /// the poll (which uses the silent check).
     #[tauri::command]
-    pub fn open_accessibility_settings() -> Result<(), String> {
-        // Register SHOGUN in the AX list (get rule; may also surface the OS alert — harmless here,
-        // the user is explicitly asking to grant).
-        let _ = axcache::ax_trusted();
-        open_privacy_settings(AX_SETTINGS_URL, "Accessibility")
-    }
-
-    fn open_privacy_settings(url: &str, label: &str) -> Result<(), String> {
-        let status = std::process::Command::new("open")
-            .arg(url)
-            .status()
-            .map_err(|error| format!("open failed: {error}"))?;
-        if !status.success() {
-            return Err(format!("System Settings exited with {status}"));
-        }
-        eprintln!("[onboarding] opened System Settings > {label}");
-        Ok(())
+    pub fn open_accessibility_settings(app: AppHandle) -> Result<(), String> {
+        crate::permissions::mac::request_accessibility(&app)
     }
 
     /// Ask for microphone access through AVFoundation. macOS only prompts while the state is not
     /// determined; denied/restricted states go straight to the exact repair pane.
     #[tauri::command]
-    pub fn request_microphone_permission() -> Result<(), String> {
-        use objc2_av_foundation::{AVAuthorizationStatus, AVCaptureDevice, AVMediaTypeAudio};
-
-        // SAFETY: see `microphone_authorized`.
-        let media_type = (unsafe { AVMediaTypeAudio })
-            .ok_or_else(|| "AVFoundation audio media type unavailable".to_owned())?;
-        let status = unsafe { AVCaptureDevice::authorizationStatusForMediaType(media_type) };
-        match status {
-            AVAuthorizationStatus::Authorized => Ok(()),
-            AVAuthorizationStatus::NotDetermined => {
-                let completion = block2::RcBlock::new(|granted: objc2::runtime::Bool| {
-                    eprintln!(
-                        "[onboarding] microphone permission granted={}",
-                        granted.as_bool()
-                    );
-                });
-                // SAFETY: the audio media type and completion block match AVFoundation's API;
-                // AVFoundation copies the block before invoking it on an arbitrary queue.
-                unsafe {
-                    AVCaptureDevice::requestAccessForMediaType_completionHandler(
-                        media_type,
-                        &completion,
-                    );
-                }
-                Ok(())
-            }
-            AVAuthorizationStatus::Denied | AVAuthorizationStatus::Restricted => {
-                open_privacy_settings(MICROPHONE_SETTINGS_URL, "Microphone")
-            }
-            _ => Err("unknown microphone authorization state".to_owned()),
-        }
+    pub fn request_microphone_permission(app: AppHandle) -> Result<(), String> {
+        crate::permissions::mac::request_microphone(&app)
     }
 
     /// Request Screen Recording through CoreGraphics. A prior denial cannot prompt again, so the
     /// exact manual repair pane opens when the request does not grant access.
     #[tauri::command]
-    pub fn request_screen_recording_permission() -> Result<(), String> {
-        use objc2_core_graphics::{CGPreflightScreenCaptureAccess, CGRequestScreenCaptureAccess};
-
-        if CGPreflightScreenCaptureAccess() || CGRequestScreenCaptureAccess() {
-            return Ok(());
-        }
-        open_privacy_settings(SCREEN_RECORDING_SETTINGS_URL, "Screen Recording")
+    pub fn request_screen_recording_permission(app: AppHandle) -> Result<(), String> {
+        crate::permissions::mac::request_screen_recording(&app)
     }
 
     /// A funnel event from the flow. The webview passes a short name; Rust maps it onto an
@@ -583,31 +799,7 @@ pub mod mac {
     /// Poll all required permissions while onboarding is open and emit a snapshot on every edge.
     /// Every status API is non-prompting. Idempotent while one watcher is live.
     pub fn start_watcher(app: AppHandle) {
-        static RUNNING: AtomicBool = AtomicBool::new(false);
-        if RUNNING.swap(true, Ordering::SeqCst) {
-            return;
-        }
-        std::thread::spawn(move || {
-            let mut last = permission_snapshot();
-            // Emit once up front so a window that opens during a repair renders without waiting.
-            let _ = app.emit("permissions-changed", last);
-            loop {
-                if app.get_webview_window(ONBOARDING_LABEL).is_none() {
-                    break;
-                }
-                let now = permission_snapshot();
-                if now != last {
-                    eprintln!(
-                        "[onboarding] permissions accessibility={} microphone={} screen_recording={}",
-                        now.accessibility, now.microphone, now.screen_recording
-                    );
-                    let _ = app.emit("permissions-changed", now);
-                    last = now;
-                }
-                std::thread::sleep(Duration::from_millis(800));
-            }
-            RUNNING.store(false, Ordering::SeqCst);
-        });
+        crate::permissions::mac::start(app);
     }
 
     /// Build the onboarding window (a plain centered window) and start the permission watcher.
@@ -698,26 +890,103 @@ pub mod mac {
             return true;
         }
         let state = load(app);
+        let permissions = crate::permissions::mac::status(app);
         !state.completed
-            || state::needs_permissions_repair(permission_snapshot().all_granted, &state)
+            || state::needs_permissions_repair(
+                permissions.accessibility,
+                permissions.microphone,
+                permissions.screen_recording,
+                &state,
+            )
     }
 
     #[cfg(test)]
     mod tests {
-        use super::{permission_gate_blocks, PermissionSnapshot};
+        use super::{permission_gate_blocks, StateOwner};
+        use crate::onboarding::state::{self, OnboardingState, OnboardingStep};
+
+        fn test_path(name: &str) -> std::path::PathBuf {
+            let nonce = super::TEMP_NONCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            std::env::temp_dir()
+                .join(format!(
+                    "shogun-onboarding-test-{}-{nonce}",
+                    std::process::id()
+                ))
+                .join(name)
+        }
 
         #[test]
-        fn snapshot_requires_every_permission() {
-            assert!(PermissionSnapshot::new(true, true, true).all_granted);
-            assert!(!PermissionSnapshot::new(true, false, true).all_granted);
+        fn stale_revision_is_rejected_and_success_increments_once() {
+            let path = test_path("onboarding.json");
+            let mut owner = StateOwner {
+                current: OnboardingState::default(),
+                path: Some(path.clone()),
+            };
+            let next = state::apply(&owner.current, OnboardingStep::Welcome, None, false, 0);
+            let saved = owner.persist(0, next).expect("first save");
+            assert_eq!(saved.revision, 1);
+
+            let stale = state::apply(
+                &OnboardingState::default(),
+                OnboardingStep::Reads,
+                None,
+                false,
+                0,
+            );
+            assert!(owner.persist(0, stale).is_err());
+            assert_eq!(owner.current.revision, 1);
+            let _ = std::fs::remove_dir_all(path.parent().expect("parent"));
+        }
+
+        #[test]
+        fn failed_atomic_rename_preserves_destination_and_managed_state() {
+            let path = test_path("onboarding.json");
+            std::fs::create_dir_all(path.parent().expect("parent")).expect("create test dir");
+            std::fs::write(&path, b"last-good").expect("seed destination");
+            let original = OnboardingState::default();
+            let mut owner = StateOwner {
+                current: original.clone(),
+                path: Some(path.clone()),
+            };
+            let next = state::apply(&original, OnboardingStep::Reads, None, false, 0);
+            let result = owner.persist_with(0, next, |_from, _to| {
+                Err(std::io::Error::other("injected rename failure"))
+            });
+            assert!(result.is_err());
+            assert_eq!(owner.current, original);
+            assert_eq!(
+                std::fs::read(&path).expect("read destination"),
+                b"last-good"
+            );
+            let _ = std::fs::remove_dir_all(path.parent().expect("parent"));
         }
 
         #[test]
         fn permission_step_cannot_be_bypassed() {
-            assert!(permission_gate_blocks("permission", "plan", false, false));
-            assert!(permission_gate_blocks("ready", "ready", true, false));
-            assert!(!permission_gate_blocks("permission", "plan", false, true));
-            assert!(!permission_gate_blocks("welcome", "reads", false, false));
+            assert!(permission_gate_blocks(
+                OnboardingStep::Permission,
+                OnboardingStep::Plan,
+                false,
+                false
+            ));
+            assert!(permission_gate_blocks(
+                OnboardingStep::Ready,
+                OnboardingStep::Ready,
+                true,
+                false
+            ));
+            assert!(!permission_gate_blocks(
+                OnboardingStep::Permission,
+                OnboardingStep::Plan,
+                false,
+                true
+            ));
+            assert!(!permission_gate_blocks(
+                OnboardingStep::Welcome,
+                OnboardingStep::Reads,
+                false,
+                false
+            ));
         }
     }
 }

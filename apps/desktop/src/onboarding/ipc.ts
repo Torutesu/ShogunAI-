@@ -40,6 +40,15 @@ export interface OnboardingState {
   completed: boolean;
   /** The furthest step reached, so quitting mid-flow resumes there. */
   step: StepId;
+  /** Compare-and-set revision returned by Rust. */
+  revision: number;
+  intro_complete: boolean;
+  music_muted: boolean;
+  restart_pending?: {
+    reason: "screen_recording";
+    bundle_id: string;
+    step: string;
+  } | null;
   /** Which plan the user said they wanted. Billing is a separate flow; this only decides whether
    *  onboarding asks for a key. Real entitlement gating is a Rust-core follow-up. */
   plan: "standard" | "pro" | null;
@@ -53,6 +62,12 @@ export interface PermissionSnapshot {
   microphone: boolean;
   screen_recording: boolean;
   all_granted: boolean;
+  accessibility_state: "granted" | "not_granted";
+  microphone_state: "not_determined" | "denied" | "restricted" | "granted";
+  screen_recording_state: "not_granted" | "granted" | "restart_required";
+  all_effective: boolean;
+  reason: "screen_recording_restart_required" | null;
+  revision: number;
 }
 
 export const EMPTY_PERMISSIONS: PermissionSnapshot = {
@@ -60,6 +75,12 @@ export const EMPTY_PERMISSIONS: PermissionSnapshot = {
   microphone: false,
   screen_recording: false,
   all_granted: false,
+  accessibility_state: "not_granted",
+  microphone_state: "not_determined",
+  screen_recording_state: "not_granted",
+  all_effective: false,
+  reason: null,
+  revision: 0,
 };
 
 /** A category of thing SHOGUN never reads. Rust owns the list — the UI must not hardcode it,
@@ -71,7 +92,15 @@ export interface ExclusionCategory {
   count: number;
 }
 
-const FIRST_RUN: OnboardingState = { completed: false, step: "welcome", plan: null };
+const FIRST_RUN: OnboardingState = {
+  completed: false,
+  step: "welcome",
+  revision: 0,
+  intro_complete: false,
+  music_muted: false,
+  restart_pending: null,
+  plan: null,
+};
 
 /** `onboarding_state() -> OnboardingState`
  *
@@ -90,15 +119,16 @@ export function getOnboardingState(): Promise<OnboardingState> {
 /** `set_onboarding_state(step, plan, completed)` — a whole-record write; the flow has one writer,
  *  and a partial update would let a resumed session disagree with itself. Rust stamps the trial on
  *  the first completing write and closes the window. */
-export function setOnboardingState(next: OnboardingState): Promise<boolean> {
-  if (!IN_TAURI) return Promise.resolve(true);
-  return invoke<void>("set_onboarding_state", {
+export function setOnboardingState(next: OnboardingState): Promise<OnboardingState | null> {
+  if (!IN_TAURI) return Promise.resolve({ ...next, revision: next.revision + 1 });
+  return invoke<OnboardingState>("set_onboarding_state", {
+    expectedRevision: next.revision,
     step: next.step,
     plan: next.plan,
     completed: next.completed,
   }).then(
-    () => true,
-    () => false,
+    (saved) => ({ ...FIRST_RUN, ...saved }),
+    () => null,
   );
 }
 

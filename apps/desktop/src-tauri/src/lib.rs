@@ -47,6 +47,7 @@ mod notch_status_visibility;
 mod onboarding;
 #[cfg(target_os = "macos")]
 mod permission_drag;
+mod permissions;
 #[cfg(target_os = "macos")]
 mod recall_shortcut;
 #[cfg(all(target_os = "macos", feature = "visual-recall-ocr"))]
@@ -666,9 +667,9 @@ fn setup_macos(app: &tauri::App) {
     // once here (migrating any legacy #46 disposition file in place) so the read command answers
     // without hitting disk. The flow shows until it has been completed once; a quit mid-flow
     // resumes at the persisted step, and a legacy completed/skipped device is never re-trapped.
-    app.manage(onboarding::mac::Store(std::sync::Mutex::new(
-        onboarding::mac::load(app.handle()),
-    )));
+    app.manage(permissions::mac::PermissionRuntime::default());
+    permissions::mac::install_activation_observer(app);
+    app.manage(onboarding::mac::Store::load(app.handle()));
     if onboarding::mac::should_show_onboarding(app.handle()) {
         onboarding::mac::build_onboarding_window(app.handle());
     }

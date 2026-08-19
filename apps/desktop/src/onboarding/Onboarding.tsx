@@ -114,8 +114,8 @@ export function Onboarding(): JSX.Element {
     });
     if (!IN_TAURI) return;
     const offs: Array<Promise<() => void>> = [];
-    // Pushed by the Rust watcher on every trust edge while this window is open; the poll below
-    // backs it up in case a push is missed.
+    // Pushed by the native coordinator on initial status, permission edges, request completion,
+    // and application activation. Bootstrap read above covers listener registration races.
     offs.push(listen<PermissionSnapshot>("permissions-changed", (e) => setPermissions(e.payload)));
     offs.push(
       listen<{ bundle_id: string; title_masked: string }>("context", (e) =>
@@ -142,37 +142,6 @@ export function Onboarding(): JSX.Element {
     }
   }, [state, step]);
 
-  // Poll the non-prompting aggregate here because the footer is gated by all three permissions.
-  useEffect(() => {
-    if (step !== "permission") return;
-    let alive = true;
-    let checking = false;
-    const tick = (): void => {
-      if (checking) return;
-      checking = true;
-      void permissionStatus()
-        .then((snapshot) => {
-          if (alive) setPermissions(snapshot);
-        })
-        .finally(() => {
-          checking = false;
-        });
-    };
-    const checkWhenVisible = (): void => {
-      if (document.visibilityState === "visible") tick();
-    };
-    tick();
-    const id = setInterval(tick, 1500);
-    window.addEventListener("focus", tick);
-    document.addEventListener("visibilitychange", checkWhenVisible);
-    return () => {
-      alive = false;
-      clearInterval(id);
-      window.removeEventListener("focus", tick);
-      document.removeEventListener("visibilitychange", checkWhenVisible);
-    };
-  }, [step]);
-
   // Log the grant exactly once, when it first flips on.
   useEffect(() => {
     if (permissions.all_granted && !grantedLogged.current) {
@@ -187,7 +156,7 @@ export function Onboarding(): JSX.Element {
       const next = STEPS[Math.min(STEPS.length - 1, Math.max(0, idx + delta))];
       const record = { ...state, step: next };
       void setOnboardingState(record).then((saved) => {
-        if (saved) setState(record);
+        if (saved) setState(saved);
       });
     },
     [idx, state],
@@ -200,7 +169,7 @@ export function Onboarding(): JSX.Element {
     // The completing write is the flow's single exit: Rust stamps the trial (once, ever) and
     // closes this window.
     void setOnboardingState(record).then((saved) => {
-      if (saved) setState(record);
+      if (saved) setState(saved);
     });
   }, [permissions.all_granted, state]);
 
@@ -481,8 +450,9 @@ function Plan(props: { state: OnboardingState; onChange: (s: OnboardingState) =>
 
   const pick = (p: "standard" | "pro"): void => {
     const next = { ...state, plan: p };
-    onChange(next);
-    void setOnboardingState(next);
+    void setOnboardingState(next).then((saved) => {
+      if (saved) onChange(saved);
+    });
   };
 
   const saveKey = (): void => {
