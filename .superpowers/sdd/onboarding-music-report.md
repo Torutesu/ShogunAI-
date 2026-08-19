@@ -21,3 +21,13 @@
 ## Device qualification remaining
 
 - Signed packaged-app check: initial 0.50 to 0.40 fade, persistent Mute across relaunch, Settings mode continuity, voice pause/resume, user close, completion, restart, and multi-display session replacement.
+
+## Review-fix evidence
+
+- Cinematic `main` surface now has the same native Mute action as interactive onboarding; reduced-motion CSS hides only decorative motion, never the control.
+- A reserved voice session synchronously pauses native music before any cue or microphone open. Music resumes only after the authoritative `voice_lane::stop` returns. Poisoned voice state is `None` and fails closed to paused.
+- Fade work is exactly ten 90ms callbacks; no steady-state polling exists after 0.40. Voice state is event-driven.
+- Display/session replacement stops and releases the old `AVAudioPlayer` before creating one replacement player; stale fade generations cannot affect it.
+- Mute pauses before the Store CAS/persistence response; a failed CAS restores the prior native state. `Retained<AnyObject>` now has explicit typed main-thread ownership, not a hidden `usize`.
+
+Additional checks: 7 `onboarding_music` Rust tests (poison fail-closed, generation replacement, one player, fixed fade completion), mute CAS test, TypeScript check, and 38 onboarding Vitest cases.

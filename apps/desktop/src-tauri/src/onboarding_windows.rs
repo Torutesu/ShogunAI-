@@ -937,7 +937,11 @@ pub mod mac {
             crate::permission_drag::install_monitor(app);
         }
         install_display_observer(app);
-        crate::onboarding_music::mac::start(app, onboarding_state.music_muted);
+        crate::onboarding_music::mac::start(
+            app,
+            onboarding_state.music_muted,
+            crate::voice_session::mac::capture_gate().ok(),
+        );
         Ok(())
     }
 
@@ -1334,6 +1338,7 @@ pub mod mac {
                     }
                     session.model = candidate;
                 }
+                restart_music_for_replaced_session(app);
                 destroy_labels(app, &old_labels);
                 if let Some(started_at) = started_at {
                     schedule_deadline(app.clone(), new_generation, started_at);
@@ -1365,6 +1370,7 @@ pub mod mac {
                 }
                 session.model = candidate;
             }
+            restart_music_for_replaced_session(app);
             destroy_labels(app, &old_labels);
             show_intro_windows(&windows)?;
             if let Some(started_at) = started_at {
@@ -1393,6 +1399,21 @@ pub mod mac {
             }
         }
         Ok(())
+    }
+
+    /// A new display/session generation owns a new player. Failed state reads are silent.
+    fn restart_music_for_replaced_session(app: &AppHandle) {
+        let Some(store) = app.try_state::<crate::onboarding::mac::Store>() else {
+            return;
+        };
+        let Ok(state) = store.snapshot() else {
+            return;
+        };
+        crate::onboarding_music::mac::start(
+            app,
+            state.music_muted,
+            crate::voice_session::mac::capture_gate().ok(),
+        );
     }
 }
 

@@ -119,6 +119,23 @@ describe("cinematic onboarding", () => {
     expect(screen.getByRole("button", { name: "Unmute" }).getAttribute("aria-pressed")).toBe("true");
   });
 
+  it("keeps native Mute available during the cinematic surface", async () => {
+    window.history.replaceState({}, "", "/onboarding.html?surface=main&generation=9");
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "onboarding_state") return state("welcome", 4);
+      if (command === "permission_status" || command === "permission_listener_ready") return emptyPermissions;
+      if (command === "onboarding_window_surface") return { surface: "main", generation: 9, display_id: 1, label: "onboarding-main-9" };
+      if (command === "set_onboarding_music_muted") return { ...state("welcome", 5), music_muted: true };
+      if (command === "onboarding_event") return undefined;
+      throw new Error(`unexpected command: ${command}`);
+    });
+    render(<Onboarding />);
+    expect(await screen.findByTestId("cinematic-surface")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Mute" }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("set_onboarding_music_muted", { expectedRevision: 4, muted: true }));
+    expect(screen.getByRole("button", { name: "Unmute" })).toBeTruthy();
+  });
+
   it("keeps Screen Recording on stage when restart fails", async () => {
     vi.mocked(invoke).mockImplementation(async (command) => {
       if (command === "onboarding_state") return state("screen_recording", 4);

@@ -627,6 +627,23 @@ pub mod mac {
             next.music_muted = muted;
             owner.persist(expected_revision, next)
         }
+
+        pub(crate) fn music_muted_at_revision(
+            &self,
+            expected_revision: u64,
+        ) -> Result<bool, String> {
+            let owner = self
+                .0
+                .lock()
+                .map_err(|_| "onboarding state unavailable".to_owned())?;
+            if owner.current.revision != expected_revision {
+                return Err(format!(
+                    "stale onboarding revision: expected {expected_revision}, current {}",
+                    owner.current.revision
+                ));
+            }
+            Ok(owner.current.music_muted)
+        }
     }
 
     fn config_path(app: &AppHandle) -> Option<PathBuf> {
@@ -929,7 +946,7 @@ pub mod mac {
         Ok(next)
     }
 
-    /// Persist Mute through Store's revision CAS before touching native playback.
+    /// Pause first when muting, then persist through Store's revision CAS.
     #[tauri::command]
     pub fn set_onboarding_music_muted(
         expected_revision: u64,
@@ -937,8 +954,22 @@ pub mod mac {
         app: AppHandle,
         store: tauri::State<'_, Store>,
     ) -> Result<OnboardingState, String> {
-        let saved = store.set_music_muted(expected_revision, muted)?;
-        crate::onboarding_music::mac::set_muted(&app, saved.music_muted);
+        let was_muted = store.music_muted_at_revision(expected_revision)?;
+        if muted && !was_muted {
+            crate::onboarding_music::mac::set_muted(&app, true);
+        }
+        let saved = match store.set_music_muted(expected_revision, muted) {
+            Ok(saved) => saved,
+            Err(error) => {
+                if muted && !was_muted {
+                    crate::onboarding_music::mac::set_muted(&app, false);
+                }
+                return Err(error);
+            }
+        };
+        if !muted || was_muted {
+            crate::onboarding_music::mac::set_muted(&app, saved.music_muted);
+        }
         Ok(saved)
     }
 
@@ -1374,6 +1405,7 @@ pub mod mac {
             let muted = store.set_music_muted(0, true).expect("mute save");
             assert!(muted.music_muted);
             assert_eq!(muted.revision, 1);
+            assert!(store.music_muted_at_revision(1).expect("saved mute state"));
             assert!(store.set_music_muted(0, false).is_err());
             let reloaded = load_and_migrate_path(&path);
             assert!(reloaded.music_muted);

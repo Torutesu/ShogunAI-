@@ -8,6 +8,13 @@ const FADE_STEPS: u8 = 10;
 pub struct MusicStart {
     pub generation: u64,
     pub volume: f32,
+    pub should_play: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PlaybackAction {
+    Pause,
+    Play,
 }
 
 #[derive(Debug, Default)]
@@ -16,19 +23,21 @@ pub struct MusicController {
     active: bool,
     muted: bool,
     fade_step: u8,
-    paused_for_voice: bool,
+    voice_capture: bool,
 }
 
 impl MusicController {
-    pub fn start(&mut self, muted: bool) -> MusicStart {
+    pub fn start(&mut self, muted: bool, voice_capture: Option<bool>) -> MusicStart {
         self.generation = self.generation.wrapping_add(1);
         self.active = true;
         self.muted = muted;
         self.fade_step = 0;
-        self.paused_for_voice = false;
+        // A poisoned voice lane is a hot-mic safety failure, never proof that capture is idle.
+        self.voice_capture = voice_capture.unwrap_or(true);
         MusicStart {
             generation: self.generation,
             volume: START_VOLUME,
+            should_play: self.audible(),
         }
     }
     pub fn generation(&self) -> u64 {
@@ -41,12 +50,16 @@ impl MusicController {
     pub fn player_count(&self) -> usize {
         usize::from(self.active)
     }
-    pub fn set_muted(&mut self, muted: bool) -> bool {
+    fn audible(&self) -> bool {
+        self.active && !self.muted && !self.voice_capture
+    }
+    pub fn set_muted(&mut self, muted: bool) -> Option<PlaybackAction> {
         if !self.active || self.muted == muted {
-            return false;
+            return None;
         }
+        let was_audible = self.audible();
         self.muted = muted;
-        true
+        playback_transition(was_audible, self.audible())
     }
     pub fn fade_tick(&mut self, generation: u64) -> Option<f32> {
         if !self.active
@@ -63,12 +76,17 @@ impl MusicController {
                     / f32::from(FADE_STEPS),
         )
     }
-    pub fn set_voice_capture(&mut self, active: bool) -> bool {
-        if !self.active || self.muted || self.paused_for_voice == active {
-            return false;
+    pub fn set_voice_capture(&mut self, voice_capture: Option<bool>) -> Option<PlaybackAction> {
+        if !self.active {
+            return None;
         }
-        self.paused_for_voice = active;
-        true
+        let voice_capture = voice_capture.unwrap_or(true);
+        if self.voice_capture == voice_capture {
+            return None;
+        }
+        let was_audible = self.audible();
+        self.voice_capture = voice_capture;
+        playback_transition(was_audible, self.audible())
     }
     pub fn stop(&mut self) -> bool {
         if !self.active {
@@ -76,7 +94,7 @@ impl MusicController {
         }
         self.active = false;
         self.fade_step = FADE_STEPS;
-        self.paused_for_voice = false;
+        self.voice_capture = false;
         self.generation = self.generation.wrapping_add(1);
         true
     }
@@ -88,9 +106,17 @@ impl MusicController {
     }
 }
 
+fn playback_transition(was_audible: bool, audible: bool) -> Option<PlaybackAction> {
+    match (was_audible, audible) {
+        (true, false) => Some(PlaybackAction::Pause),
+        (false, true) => Some(PlaybackAction::Play),
+        _ => None,
+    }
+}
+
 #[cfg(target_os = "macos")]
 pub mod mac {
-    use super::MusicController;
+    use super::{MusicController, PlaybackAction, FADE_STEPS};
     use objc2::rc::Retained;
     use objc2::runtime::AnyObject;
     use objc2::{class, msg_send, MainThreadMarker};
@@ -103,9 +129,16 @@ pub mod mac {
     const MUSIC_BYTES: &[u8] =
         include_bytes!("../../src/assets/onboarding/audio/yoiyami_core_theme.mp3");
 
+    /// `AVAudioPlayer` is only created, read, and released from AppKit's main thread.
+    /// Tauri requires managed state to be Send, so this wrapper documents that boundary
+    /// without erasing ownership into an integer pointer.
+    struct MainThreadPlayer(Retained<AnyObject>);
+    // SAFETY: every access is routed through `run_on_main_thread` or a main-thread caller.
+    unsafe impl Send for MainThreadPlayer {}
+
     struct RuntimeState {
         controller: MusicController,
-        player: Option<usize>,
+        player: Option<MainThreadPlayer>,
     }
     impl Default for RuntimeState {
         fn default() -> Self {
@@ -123,9 +156,7 @@ pub mod mac {
     }
 
     fn take_player(state: &mut RuntimeState) -> Option<Retained<AnyObject>> {
-        let pointer = state.player.take()? as *mut AnyObject;
-        // SAFETY: player entries originate from `Retained::into_raw` and are consumed once.
-        unsafe { Retained::from_raw(pointer) }
+        state.player.take().map(|player| player.0)
     }
     fn stop_player(player: Retained<AnyObject>) {
         unsafe {
@@ -162,60 +193,59 @@ pub mod mac {
         }
     }
 
-    fn schedule_player_monitor(app: AppHandle, generation: u64) {
-        std::thread::spawn(move || loop {
-            std::thread::sleep(FADE_INTERVAL);
-            let callback_app = app.clone();
-            let (sender, receiver) = std::sync::mpsc::sync_channel(1);
-            if app
-                .run_on_main_thread(move || {
-                    let _ = sender.send(apply_tick(&callback_app, generation));
-                })
-                .is_err()
-            {
-                return;
-            }
-            if receiver.recv().unwrap_or(false) == false {
-                return;
+    fn schedule_fade(app: AppHandle, generation: u64) {
+        std::thread::spawn(move || {
+            for _ in 0..FADE_STEPS {
+                std::thread::sleep(FADE_INTERVAL);
+                let callback_app = app.clone();
+                if app
+                    .run_on_main_thread(move || {
+                        apply_fade_tick(&callback_app, generation);
+                    })
+                    .is_err()
+                {
+                    return;
+                }
             }
         });
     }
 
-    fn apply_tick(app: &AppHandle, generation: u64) -> bool {
+    fn apply_fade_tick(app: &AppHandle, generation: u64) {
         let Some(runtime) = app.try_state::<OnboardingMusic>() else {
-            return false;
+            return;
         };
-        let voice_active = crate::voice_session::mac::capture_active();
         let Ok(mut state) = runtime.0.lock() else {
-            return false;
+            return;
         };
         if !state.controller.active() || state.controller.generation() != generation {
-            return false;
-        }
-        if state.controller.set_voice_capture(voice_active) {
-            if let Some(pointer) = state.player {
-                let player = unsafe { &*(pointer as *const AnyObject) };
-                if voice_active {
-                    pause(player);
-                } else if !play(player) {
-                    state.controller.playback_failed(generation);
-                    if let Some(player) = take_player(&mut state) {
-                        stop_player(player);
-                    }
-                    return false;
-                }
-            }
+            return;
         }
         if let Some(volume) = state.controller.fade_tick(generation) {
-            if let Some(pointer) = state.player {
-                set_volume(unsafe { &*(pointer as *const AnyObject) }, volume);
+            if let Some(player) = state.player.as_ref() {
+                set_volume(&player.0, volume);
             }
         }
-        true
+    }
+
+    fn apply_playback_action(state: &mut RuntimeState, action: PlaybackAction) {
+        let Some(player) = state.player.as_ref() else {
+            return;
+        };
+        match action {
+            PlaybackAction::Pause => pause(&player.0),
+            PlaybackAction::Play if !play(&player.0) => {
+                let generation = state.controller.generation();
+                state.controller.playback_failed(generation);
+                if let Some(player) = take_player(state) {
+                    stop_player(player);
+                }
+            }
+            PlaybackAction::Play => {}
+        }
     }
 
     /// Start one looping AVAudioPlayer. Decoder failures are silent and never block onboarding.
-    pub fn start(app: &AppHandle, muted: bool) {
+    pub fn start(app: &AppHandle, muted: bool, voice_capture: Option<bool>) {
         let Some(runtime) = app.try_state::<OnboardingMusic>() else {
             return;
         };
@@ -225,18 +255,45 @@ pub mod mac {
         if let Some(player) = take_player(&mut state) {
             stop_player(player);
         }
-        let start = state.controller.start(muted);
-        let voice_active = crate::voice_session::mac::capture_active();
-        if voice_active {
-            state.controller.set_voice_capture(true);
-        }
-        let Some(player) = create_player(start.volume, !muted && !voice_active) else {
+        let start = state.controller.start(muted, voice_capture);
+        let Some(player) = create_player(start.volume, start.should_play) else {
             state.controller.playback_failed(start.generation);
             return;
         };
-        state.player = Some(Retained::into_raw(player) as usize);
+        state.player = Some(MainThreadPlayer(player));
         drop(state);
-        schedule_player_monitor(app.clone(), start.generation);
+        schedule_fade(app.clone(), start.generation);
+    }
+
+    fn voice_capture_changed_main(app: &AppHandle, voice_capture: Option<bool>) {
+        let Some(runtime) = app.try_state::<OnboardingMusic>() else {
+            return;
+        };
+        let Ok(mut state) = runtime.0.lock() else {
+            return;
+        };
+        if let Some(action) = state.controller.set_voice_capture(voice_capture) {
+            apply_playback_action(&mut state, action);
+        }
+    }
+
+    /// Voice owns capture truth. `None` means its mutex is poisoned and therefore pauses music.
+    pub fn voice_capture_changed(app: &AppHandle, voice_capture: Option<bool>) {
+        if MainThreadMarker::new().is_some() {
+            voice_capture_changed_main(app, voice_capture);
+            return;
+        }
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        let callback_app = app.clone();
+        if app
+            .run_on_main_thread(move || {
+                voice_capture_changed_main(&callback_app, voice_capture);
+                let _ = sender.send(());
+            })
+            .is_ok()
+        {
+            let _ = receiver.recv_timeout(Duration::from_secs(1));
+        }
     }
 
     /// Apply already-persisted Mute state on AppKit's main thread.
@@ -247,21 +304,8 @@ pub mod mac {
         let Ok(mut state) = runtime.0.lock() else {
             return;
         };
-        if !state.controller.set_muted(muted) {
-            return;
-        }
-        let Some(pointer) = state.player else {
-            return;
-        };
-        let player = unsafe { &*(pointer as *const AnyObject) };
-        if muted {
-            pause(player);
-        } else if !crate::voice_session::mac::capture_active() && !play(player) {
-            let generation = state.controller.generation();
-            state.controller.playback_failed(generation);
-            if let Some(player) = take_player(&mut state) {
-                stop_player(player);
-            }
+        if let Some(action) = state.controller.set_muted(muted) {
+            apply_playback_action(&mut state, action);
         }
     }
 
@@ -320,47 +364,51 @@ pub mod mac {
 
 #[cfg(test)]
 mod tests {
-    use super::{MusicController, SETTLED_VOLUME, START_VOLUME};
+    use super::{MusicController, PlaybackAction, SETTLED_VOLUME, START_VOLUME};
     #[test]
     fn fade_starts_at_half_then_settles_monotonically_at_forty_percent() {
         let mut controller = MusicController::default();
-        let start = controller.start(false);
+        let start = controller.start(false, Some(false));
         let volumes = (0..10)
             .filter_map(|_| controller.fade_tick(start.generation))
             .collect::<Vec<_>>();
         assert_eq!(start.volume, START_VOLUME);
+        assert_eq!(volumes.len(), 10);
         assert_eq!(volumes.last().copied(), Some(SETTLED_VOLUME));
         assert!(volumes.windows(2).all(|pair| pair[0] >= pair[1]));
+        assert_eq!(controller.fade_tick(start.generation), None);
     }
     #[test]
     fn stale_fade_generation_cannot_touch_replacement_player() {
         let mut controller = MusicController::default();
-        let first = controller.start(false);
-        let second = controller.start(false);
+        let first = controller.start(false, Some(false));
+        let second = controller.start(false, Some(false));
         assert_eq!(controller.fade_tick(first.generation), None);
         assert!(controller.fade_tick(second.generation).is_some());
     }
     #[test]
-    fn replacement_keeps_one_logical_player() {
+    fn display_generation_replacement_stops_old_player_and_keeps_one_logical_player() {
         let mut controller = MusicController::default();
-        controller.start(false);
-        controller.start(false);
+        let first = controller.start(false, Some(false));
+        let replacement = controller.start(false, Some(false));
         assert_eq!(controller.player_count(), 1);
+        assert_eq!(controller.fade_tick(first.generation), None);
+        assert!(replacement.should_play);
     }
 
     #[test]
     fn mute_is_immediate_and_unmute_keeps_the_existing_player() {
         let mut controller = MusicController::default();
-        let start = controller.start(false);
-        assert!(controller.set_muted(true));
+        let start = controller.start(false, Some(false));
+        assert_eq!(controller.set_muted(true), Some(PlaybackAction::Pause));
         assert_eq!(controller.fade_tick(start.generation), None);
-        assert!(controller.set_muted(false));
+        assert_eq!(controller.set_muted(false), Some(PlaybackAction::Play));
         assert_eq!(controller.player_count(), 1);
     }
     #[test]
     fn stop_invalidates_delayed_work_and_releases_player_ownership() {
         let mut controller = MusicController::default();
-        let start = controller.start(false);
+        let start = controller.start(false, Some(false));
         assert!(controller.stop());
         assert_eq!(controller.player_count(), 0);
         assert_eq!(controller.fade_tick(start.generation), None);
@@ -368,11 +416,26 @@ mod tests {
     #[test]
     fn playback_failure_is_nonblocking_and_stale_failure_is_ignored() {
         let mut controller = MusicController::default();
-        let first = controller.start(false);
-        let second = controller.start(false);
+        let first = controller.start(false, Some(false));
+        let second = controller.start(false, Some(false));
         assert!(!controller.playback_failed(first.generation));
         assert!(controller.active());
         assert!(controller.playback_failed(second.generation));
         assert!(!controller.active());
+    }
+
+    #[test]
+    fn poisoned_voice_state_fails_closed_and_explicit_capture_transitions_pause_music() {
+        let mut controller = MusicController::default();
+        let start = controller.start(false, None);
+        assert!(!start.should_play);
+        assert_eq!(
+            controller.set_voice_capture(Some(false)),
+            Some(PlaybackAction::Play)
+        );
+        assert_eq!(
+            controller.set_voice_capture(Some(true)),
+            Some(PlaybackAction::Pause)
+        );
     }
 }

@@ -1149,13 +1149,13 @@ pub mod mac {
     }
 
     /// Authoritative local capture phase for onboarding audio safety.
-    pub(crate) fn capture_active() -> bool {
-        let Ok(lane) = LANE.lock() else {
-            return false;
-        };
-        lane.as_ref()
+    /// A poisoned lane is unknown, not idle; callers must fail closed.
+    pub(crate) fn capture_gate() -> Result<bool, ()> {
+        let lane = LANE.lock().map_err(|_| ())?;
+        Ok(lane
+            .as_ref()
             .and_then(|lane| lane.active.as_ref().map(|active| active.phase))
-            .is_some_and(|phase| matches!(phase, SessionPhase::Opening | SessionPhase::Recording))
+            .is_some_and(|phase| matches!(phase, SessionPhase::Opening | SessionPhase::Recording)))
     }
 
     /// Begin hold-to-talk capture. Returns `true` when the mic lane is live (UI shows recording).
@@ -1222,11 +1222,14 @@ pub mod mac {
             });
             id
         };
+        // This happens while the lane is reserved, before any cue or mic can start.
+        crate::onboarding_music::mac::voice_capture_changed(&app, Some(true));
 
         if register_onboarding_dictation_session(&app, session, target.as_deref())
             == OnboardingTargetRegistration::Rejected
         {
             abandon_session(session);
+            crate::onboarding_music::mac::voice_capture_changed(&app, Some(false));
             return false;
         }
 
@@ -1246,6 +1249,7 @@ pub mod mac {
                         crate::right_option_shortcut::DictationDemoOutcome::Failed,
                     );
                 });
+                crate::onboarding_music::mac::voice_capture_changed(&app, Some(false));
                 return false;
             }
         };
@@ -1255,19 +1259,23 @@ pub mod mac {
             Err(_) => {
                 // Lane gone — stop the mic we just opened.
                 let _ = voice_lane::stop(handle);
+                crate::onboarding_music::mac::voice_capture_changed(&app, Some(false));
                 return false;
             }
         };
         let Some(lane) = lane.as_mut() else {
             let _ = voice_lane::stop(handle);
+            crate::onboarding_music::mac::voice_capture_changed(&app, Some(false));
             return false;
         };
         let Some(active) = lane.active.as_mut() else {
             let _ = voice_lane::stop(handle);
+            crate::onboarding_music::mac::voice_capture_changed(&app, Some(false));
             return false;
         };
         if active.id != session || active.phase != SessionPhase::Opening {
             let _ = voice_lane::stop(handle);
+            crate::onboarding_music::mac::voice_capture_changed(&app, Some(false));
             return false;
         }
         active.audio = Some(handle);
@@ -1319,6 +1327,7 @@ pub mod mac {
             let Some(audio) = active.audio.take() else {
                 lane.active = None;
                 emit_state(&app, "idle", None, None);
+                crate::onboarding_music::mac::voice_capture_changed(&app, Some(false));
                 return;
             };
             active.phase = SessionPhase::Processing;
@@ -1351,7 +1360,9 @@ pub mod mac {
                     // Cue after `stop`, so our own mic is already closed and cannot hear its own end
                     // cue — and only on success: a failure plays its own sound from `emit_error`, and
                     // two cues back to back would say less than either one alone (#49).
-                    let transcript = match voice_lane::stop(audio) {
+                    let stopped = voice_lane::stop(audio);
+                    crate::onboarding_music::mac::voice_capture_changed(&worker_app, Some(false));
+                    let transcript = match stopped {
                         TranscriptOutcome::Ok(t) => t,
                         TranscriptOutcome::Empty => {
                             let _ = complete_terminal(session, SessionPhase::Processing, || {
@@ -1456,6 +1467,7 @@ pub mod mac {
             let audio = shared_audio.lock().ok().and_then(|mut audio| audio.take());
             if let Some(audio) = audio {
                 let _ = voice_lane::stop(audio);
+                crate::onboarding_music::mac::voice_capture_changed(&app, Some(false));
             }
             let _ = complete_terminal(session, SessionPhase::Processing, || {
                 emit_error(&app, "Voice transcription could not start.");
