@@ -531,7 +531,10 @@ pub mod mac {
 
     use tauri::{AppHandle, Manager};
 
-    use super::state::{self, OnboardingFile, OnboardingState, OnboardingStep, ONBOARDING_VERSION};
+    use super::state::{
+        self, OnboardingFile, OnboardingState, OnboardingStep, RestartPending, RestartReason,
+        ONBOARDING_VERSION,
+    };
     use crate::permissions::PermissionSnapshot;
 
     /// Window label for the onboarding webview. Shared by the builder, the watcher (to detect the
@@ -730,6 +733,81 @@ pub mod mac {
             .unwrap_or(0)
     }
 
+    fn validate_packaged_executable(path: &Path) -> Result<(), String> {
+        let macos = path
+            .parent()
+            .ok_or_else(|| "restart requires a packaged macOS app".to_owned())?;
+        let contents = macos
+            .parent()
+            .ok_or_else(|| "restart requires a packaged macOS app".to_owned())?;
+        let app_bundle = contents
+            .parent()
+            .ok_or_else(|| "restart requires a packaged macOS app".to_owned())?;
+        let valid = macos.file_name().is_some_and(|name| name == "MacOS")
+            && contents.file_name().is_some_and(|name| name == "Contents")
+            && app_bundle
+                .extension()
+                .is_some_and(|extension| extension == "app")
+            && path.file_name().is_some();
+        if valid {
+            Ok(())
+        } else {
+            Err("restart requires a packaged macOS app".to_owned())
+        }
+    }
+
+    fn restart_marker(
+        current: &OnboardingState,
+        expected_revision: u64,
+        step: OnboardingStep,
+        bundle_id: &str,
+        executable: &Path,
+    ) -> Result<OnboardingState, String> {
+        if current.revision != expected_revision {
+            return Err(format!(
+                "stale onboarding revision: expected {expected_revision}, current {}",
+                current.revision
+            ));
+        }
+        if step != OnboardingStep::ScreenRecording || current.step != step {
+            return Err("restart is only available on the active Screen Recording step".to_owned());
+        }
+        if bundle_id.trim().is_empty() {
+            return Err("restart requires a bundle identifier".to_owned());
+        }
+        validate_packaged_executable(executable)?;
+        let mut next = current.clone();
+        next.revision = current
+            .revision
+            .checked_add(1)
+            .ok_or_else(|| "onboarding revision exhausted".to_owned())?;
+        next.restart_pending = Some(RestartPending {
+            reason: RestartReason::ScreenRecording,
+            bundle_id: bundle_id.to_owned(),
+            step,
+        });
+        Ok(next)
+    }
+
+    fn consume_restart_marker(
+        current: &OnboardingState,
+        bundle_id: &str,
+        screen_recording: bool,
+    ) -> Option<OnboardingState> {
+        let marker = current.restart_pending.as_ref()?;
+        let matches = marker.reason == RestartReason::ScreenRecording
+            && marker.bundle_id == bundle_id
+            && marker.step == current.step
+            && screen_recording;
+        if !matches {
+            return None;
+        }
+        let mut next = current.clone();
+        next.revision = current.revision.checked_add(1)?;
+        next.restart_pending = None;
+        Some(next)
+    }
+
     /// Live status for all required permissions. This command never prompts and is safe to poll.
     #[tauri::command]
     pub fn permission_status(app: AppHandle) -> PermissionSnapshot {
@@ -745,15 +823,26 @@ pub mod mac {
     /// when available; falls back to disk so a call racing setup still answers honestly.
     #[tauri::command]
     pub fn onboarding_state(app: AppHandle) -> OnboardingState {
+        let permissions = crate::permissions::mac::status(&app);
         let mut state = match app.try_state::<Store>() {
-            Some(store) => store
-                .0
-                .lock()
-                .map(|owner| owner.current.clone())
-                .unwrap_or_default(),
+            Some(store) => match store.0.lock() {
+                Ok(mut owner) => {
+                    if let Some(next) = consume_restart_marker(
+                        &owner.current,
+                        &app.config().identifier,
+                        permissions.screen_recording,
+                    ) {
+                        let expected_revision = owner.current.revision;
+                        if let Err(error) = owner.persist(expected_revision, next) {
+                            eprintln!("[onboarding] restart marker clear failed: {error}");
+                        }
+                    }
+                    owner.current.clone()
+                }
+                Err(_) => OnboardingState::default(),
+            },
             None => load(&app),
         };
-        let permissions = crate::permissions::mac::status(&app);
         let needs_repair = state::needs_permissions_repair(
             permissions.accessibility,
             permissions.microphone,
@@ -765,6 +854,54 @@ pub mod mac {
             state.step = OnboardingStep::Permission;
         }
         state
+    }
+
+    /// Persist exact resume context, fence active text/audio delivery, then ask Tauri to relaunch
+    /// the signed app bundle. Development binaries are intentionally rejected: macOS permission
+    /// identity is bundle/code-signature scoped and restarting a loose executable would test the
+    /// wrong identity.
+    #[tauri::command]
+    pub fn restart_onboarding(
+        expected_revision: u64,
+        step: OnboardingStep,
+        app: AppHandle,
+        store: tauri::State<'_, Store>,
+    ) -> Result<(), String> {
+        let executable = std::env::current_exe()
+            .map_err(|error| format!("restart executable unavailable: {error}"))?;
+        {
+            let owner = store
+                .0
+                .lock()
+                .map_err(|_| "onboarding state unavailable".to_owned())?;
+            let _ = restart_marker(
+                &owner.current,
+                expected_revision,
+                step,
+                &app.config().identifier,
+                &executable,
+            )?;
+        }
+
+        crate::scribe::mac::cancel_active_for_restart(&app)?;
+        crate::voice_session::mac::voice_dismiss(app.clone());
+
+        {
+            let mut owner = store
+                .0
+                .lock()
+                .map_err(|_| "onboarding state unavailable".to_owned())?;
+            let next = restart_marker(
+                &owner.current,
+                expected_revision,
+                step,
+                &app.config().identifier,
+                &executable,
+            )?;
+            owner.persist(expected_revision, next)?;
+        }
+        app.request_restart();
+        Ok(())
     }
 
     /// Whole-record write — the flow has one writer, so a partial update would let a resumed
@@ -1006,7 +1143,10 @@ pub mod mac {
 
     #[cfg(test)]
     mod tests {
-        use super::{atomic_save_with, load_and_migrate_path, permission_gate_blocks, StateOwner};
+        use super::{
+            atomic_save_with, consume_restart_marker, load_and_migrate_path,
+            permission_gate_blocks, restart_marker, validate_packaged_executable, StateOwner,
+        };
         use crate::onboarding::state::{self, OnboardingState, OnboardingStep};
 
         fn test_path(name: &str) -> std::path::PathBuf {
@@ -1143,6 +1283,80 @@ pub mod mac {
                 false,
                 false
             ));
+        }
+
+        #[test]
+        fn restart_requires_current_screen_step_and_revision() {
+            let current = OnboardingState {
+                step: OnboardingStep::ScreenRecording,
+                revision: 7,
+                ..OnboardingState::default()
+            };
+            let executable =
+                std::path::Path::new("/Applications/ShogunAI.app/Contents/MacOS/ShogunAI");
+            assert!(
+                restart_marker(&current, 6, current.step, "com.shogun.ai", executable).is_err()
+            );
+            assert!(restart_marker(
+                &current,
+                7,
+                OnboardingStep::Microphone,
+                "com.shogun.ai",
+                executable
+            )
+            .is_err());
+        }
+
+        #[test]
+        fn restart_marker_preserves_exact_identity_and_step() {
+            let current = OnboardingState {
+                step: OnboardingStep::ScreenRecording,
+                revision: 2,
+                ..OnboardingState::default()
+            };
+            let next = restart_marker(
+                &current,
+                2,
+                OnboardingStep::ScreenRecording,
+                "com.shogun.ai",
+                std::path::Path::new("/Applications/ShogunAI.app/Contents/MacOS/ShogunAI"),
+            )
+            .expect("valid restart marker");
+            let marker = next.restart_pending.expect("marker");
+            assert_eq!(next.revision, 3);
+            assert_eq!(marker.bundle_id, "com.shogun.ai");
+            assert_eq!(marker.step, OnboardingStep::ScreenRecording);
+        }
+
+        #[test]
+        fn restart_rejects_loose_executable() {
+            assert!(validate_packaged_executable(std::path::Path::new("/tmp/shogun")).is_err());
+            assert!(validate_packaged_executable(std::path::Path::new(
+                "/Applications/ShogunAI.app/Contents/MacOS/ShogunAI"
+            ))
+            .is_ok());
+        }
+
+        #[test]
+        fn restart_marker_consumes_only_after_matching_grant() {
+            let current = restart_marker(
+                &OnboardingState {
+                    step: OnboardingStep::ScreenRecording,
+                    revision: 0,
+                    ..OnboardingState::default()
+                },
+                0,
+                OnboardingStep::ScreenRecording,
+                "com.shogun.ai",
+                std::path::Path::new("/Applications/ShogunAI.app/Contents/MacOS/ShogunAI"),
+            )
+            .expect("marker");
+            assert!(consume_restart_marker(&current, "wrong.bundle", true).is_none());
+            assert!(consume_restart_marker(&current, "com.shogun.ai", false).is_none());
+            let consumed = consume_restart_marker(&current, "com.shogun.ai", true)
+                .expect("matching marker consumed");
+            assert!(consumed.restart_pending.is_none());
+            assert_eq!(consumed.revision, 2);
         }
     }
 }

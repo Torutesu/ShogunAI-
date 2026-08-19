@@ -51,10 +51,6 @@ Date: 2026-08-19
 
 ## Concerns
 
-- Native restart command, exact packaged relaunch, voice/Scribe cancellation, marker consumption,
-  launcher-failure rollback, and relaunch tests are not implemented. Safety review rejected the
-  process-spawn/exit patch. Typed persisted restart schema and round-trip coverage are present;
-  no fake or partial restart command was added.
 - Signed packaged-app/device qualification remains required for real TCC transitions,
   application activation, Screen Recording restart-required behavior, denial/repair, and revoke.
 
@@ -85,5 +81,24 @@ Review-fix validation:
 - `apps/desktop/node_modules/.bin/vitest run src/onboarding/Onboarding.test.tsx`: 4 passed.
 - `rustfmt --check ...` and `git diff --check`: passed.
 
-Remaining concern: C1 restart flow intentionally unchanged in this follow-up; root integration owns
-that work under direct authorization.
+## Restart completion evidence
+
+- Added a packaged-app-only `restart_onboarding` command using Tauri's supported restart request.
+  Loose development executables fail closed because they do not share the installed app's TCC
+  identity.
+- Restart validates the current revision and exact Screen Recording step, fences/cancels active
+  Scribe and voice work, then atomically persists the bundle identity and resume step before the
+  restart request.
+- A matching relaunched bundle consumes the marker only after Screen Recording is effective. A
+  wrong bundle, wrong step, missing grant, stale revision, cancellation failure, or persistence
+  failure never requests restart and never clears the recovery marker.
+- Added a typed frontend restart wrapper and registered the Tauri command. Visual button wiring is
+  intentionally owned by the upcoming experience UI task.
+
+Restart validation:
+
+- `cargo test -p shogun-desktop-spike onboarding --lib --offline`: 26 passed.
+- `cargo test -p shogun-desktop-spike scribe --lib --offline`: 11 passed.
+- `cargo check -p shogun-desktop-spike --lib --offline`: passed.
+- `apps/desktop/node_modules/.bin/tsc --noEmit -p apps/desktop/tsconfig.json`: passed.
+- `rustfmt` on touched Rust files and `git diff --check`: passed.

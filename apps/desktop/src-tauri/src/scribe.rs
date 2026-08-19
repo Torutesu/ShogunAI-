@@ -1021,6 +1021,21 @@ pub mod mac {
         close_session(session_id, &app, "cancelled")
     }
 
+    /// Cancel the one process-wide Scribe session before a controlled app restart. This uses the
+    /// same commit fence as the user-facing cancel command, so a restart cannot race an AX write.
+    pub fn cancel_active_for_restart(app: &tauri::AppHandle) -> Result<(), String> {
+        let session_id = SESSION
+            .lock()
+            .map_err(|_| "scribe unavailable".to_string())?
+            .as_ref()
+            .filter(|session| session.active)
+            .map(|session| session.id);
+        let Some(session_id) = session_id else {
+            return Ok(());
+        };
+        close_session(session_id, app, "cancelled")
+    }
+
     #[cfg(test)]
     mod tests {
         use super::*;

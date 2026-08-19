@@ -151,6 +151,15 @@ export function setOnboardingState(next: OnboardingState): Promise<OnboardingSta
   );
 }
 
+/** Persist the exact Screen Recording step, then relaunch the packaged app. */
+export function restartOnboarding(state: OnboardingState): Promise<void> {
+  if (!IN_TAURI) return Promise.reject(new Error("Restart requires the packaged app"));
+  return invoke<void>("restart_onboarding", {
+    expectedRevision: state.revision,
+    step: state.step,
+  });
+}
+
 /** `permission_status() -> PermissionSnapshot` — every check is NON-prompting. */
 export function permissionStatus(): Promise<PermissionSnapshot> {
   return ask<PermissionSnapshot>("permission_status", {}, EMPTY_PERMISSIONS);

@@ -371,6 +371,7 @@ pub fn run() {
             onboarding::mac::permission_listener_ready,
             onboarding::mac::onboarding_state,
             onboarding::mac::set_onboarding_state,
+            onboarding::mac::restart_onboarding,
             onboarding::mac::open_accessibility_settings,
             onboarding::mac::request_microphone_permission,
             onboarding::mac::request_screen_recording_permission,
