@@ -16,7 +16,9 @@ async function readSignupBody(req: Request): Promise<Record<string, unknown>> {
     // platform parser — same cap, same 413, and multipart still parses because the original
     // Content-Type (boundary included) rides along.
     const bytes = await readCappedBody(req);
-    const form = await new Response(bytes, { headers: { 'content-type': contentType } }).formData();
+    // Copy into a plain Uint8Array: BodyInit rejects Node's Buffer<ArrayBufferLike>
+    // under TS 5.7's generic typed arrays, and the body is capped at 8 KB anyway.
+    const form = await new Response(new Uint8Array(bytes), { headers: { 'content-type': contentType } }).formData();
     return {
       email: form.get('email'),
       company_url: form.get('company_url'),
