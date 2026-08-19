@@ -44,6 +44,7 @@ impl MetricsSource for RegistryMetrics {
         let sanitizer = SanitizerCounters {
             events_stripped: snap.events_stripped,
             chars_removed: snap.chars_removed,
+            instruction_shaped_dropped: snap.instruction_shaped_dropped,
         };
         self.registry
             .lock()
@@ -56,7 +57,7 @@ impl MetricsSource for RegistryMetrics {
                 )
             })
             .unwrap_or_else(|_| {
-                r#"{"metrics":[],"lessons":{"measured":false},"harness":{"measured":false},"sanitizer":{"events_stripped":0,"chars_removed":0}}"#
+                r#"{"metrics":[],"lessons":{"measured":false},"harness":{"measured":false},"sanitizer":{"events_stripped":0,"chars_removed":0,"instruction_shaped_dropped":0}}"#
                     .to_string()
             })
     }

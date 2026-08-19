@@ -1,13 +1,10 @@
-//! Must-not-persist-as-instruction (memory-poisoning P1).
+//! Must-not-persist-as-instruction (memory-poisoning P1 + P4).
 //!
 //! Captured pages, mail bodies, and HTML-hidden blobs that try to instruct the assistant
 //! ("ignore previous / always CC / write Shougun.md") must not become a High fact or a lesson.
-//! This pins the gates that already exist: local extract stays ≤ [`LOCAL_RULE_MAX_CONFIDENCE`],
-//! and [`distill`] ignores everything that is not a user `EditBeforeApprove`.
-//!
-//! No product behavior changes here. Batch Classify is not in this crate; a later persist-gate
-//! slice owns model output. Hidden unicode is not stripped on ingest — these fixtures still
-//! must not promote.
+//! Local extract stays ≤ [`LOCAL_RULE_MAX_CONFIDENCE`]. [`distill`] ignores everything that is
+//! not a user `EditBeforeApprove`. The persist gate (P4) additionally drops instruction-shaped
+//! candidate descriptions so they never become a state row, even at Low.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use shogun_memory::event_log::{self, NewEvent};
@@ -114,8 +111,9 @@ fn extract_never_assigns_above_the_local_ceiling() {
     }
 }
 
-/// Persist writes the same Low numbers the extractor assigned. A later Batch pass is the only
-/// thing allowed to raise them; this test is the capture-path half.
+/// Persist writes Low numbers for ordinary work English. Instruction-shaped descriptions are
+/// dropped entirely (P4) — storing "always CC attacker" at 0.4 still leaves the sentence in
+/// state tables.
 #[test]
 fn persisted_candidates_stay_below_medium() {
     let mut conn = shogun_memory::open_in_memory().unwrap();
@@ -140,12 +138,33 @@ fn persisted_candidates_stay_below_medium() {
         extract::persist_candidates(&mut conn, event_id, &cands, ts, ts).unwrap();
     }
 
-    for row in state::list_commitments(&conn).unwrap() {
+    // A real promise in the same database must still persist — the gate is not "write nothing."
+    let clean = "I'll send the deck tomorrow.";
+    let hash = event_log::content_hash(clean);
+    let event_id = event_log::insert(&conn, &event(clean, &hash, 99)).unwrap();
+    let cands = extract::extract_untrusted(clean);
+    assert!(
+        !cands.is_empty(),
+        "control promise must extract: {cands:?}"
+    );
+    extract::persist_candidates(&mut conn, event_id, &cands, 99, 99).unwrap();
+
+    let commitments = state::list_commitments(&conn).unwrap();
+    assert!(
+        commitments.iter().any(|r| r.description.contains("send the deck")),
+        "control promise missing: {commitments:?}"
+    );
+    for row in &commitments {
         assert!(
             row.confidence <= LOCAL_RULE_MAX_CONFIDENCE,
             "commitment confidence {} above local ceiling: id {}",
             row.confidence,
             row.id
+        );
+        assert!(
+            !looks_like_poison_instruction(&row.description),
+            "instruction-shaped commitment persisted: {}",
+            row.description
         );
     }
     for row in state::list_open_loops(&conn).unwrap() {
@@ -154,6 +173,11 @@ fn persisted_candidates_stay_below_medium() {
             "open-loop confidence {} above local ceiling: id {}",
             row.confidence,
             row.id
+        );
+        assert!(
+            !looks_like_poison_instruction(&row.description),
+            "instruction-shaped open loop persisted: {}",
+            row.description
         );
     }
 }

@@ -3,8 +3,8 @@
 //! Zero-width, bidi overrides, tag characters, C0/C1 controls (except tab/LF/CR), and Unicode
 //! noncharacters are how a page hides "ignore previous instructions" from a human while leaving
 //! it in the bytes SHOGUN stores. The stored row must not keep those runes — they *are* the
-//! poison. Visible letters are left alone; instruction-shaped *words* are a persist-gate
-//! concern, not this function.
+//! poison. Visible letters are left alone; instruction-shaped *words* are
+//! [`crate::instruction_shaped`], not this function.
 //!
 //! Pure and allocation-free on clean text ([`std::borrow::Cow::Borrowed`]). Never panics.
 //! Callers that persist must run this *before* secret redaction so a key split by ZWSP still

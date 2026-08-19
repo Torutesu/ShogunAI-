@@ -343,12 +343,13 @@ pub fn render_snapshots_json(snapshots: &[SloSnapshot]) -> String {
     format!(r#"{{"metrics":[{}]}}"#, slo_items(snapshots).join(","))
 }
 
-/// Hidden-format sanitizer counts (memory-poisoning P2). Zeros are a real measurement — every
-/// persist goes through the strip. Never the captured text.
+/// Hidden-format sanitizer counts (memory-poisoning P2) plus persist-gate drops (P4).
+/// Zeros are a real measurement — every persist goes through the strip. Never the captured text.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct SanitizerCounters {
     pub events_stripped: u64,
     pub chars_removed: u64,
+    pub instruction_shaped_dropped: u64,
 }
 
 /// [`render_snapshots_json`] plus the D-6 `lessons` block. `None` (counters not computable —
@@ -451,8 +452,8 @@ fn tool_loop_json(snap: Option<ToolLoopHarness>) -> String {
 
 fn sanitizer_json(s: SanitizerCounters) -> String {
     format!(
-        r#"{{"events_stripped":{},"chars_removed":{}}}"#,
-        s.events_stripped, s.chars_removed
+        r#"{{"events_stripped":{},"chars_removed":{},"instruction_shaped_dropped":{}}}"#,
+        s.events_stripped, s.chars_removed, s.instruction_shaped_dropped
     )
 }
 
@@ -656,7 +657,7 @@ mod tests {
         assert!(!json.contains("\"uses\":"), "{json}");
         // sanitizer zeros are a real measurement (every persist goes through the strip)
         assert!(
-            json.contains(r#""sanitizer":{"events_stripped":0,"chars_removed":0}"#),
+            json.contains(r#""sanitizer":{"events_stripped":0,"chars_removed":0,"instruction_shaped_dropped":0}"#),
             "{json}"
         );
     }
@@ -726,9 +727,16 @@ mod tests {
         let json = render_snapshots_json_with_lessons_and_sanitizer(
             &snaps,
             None,
-            SanitizerCounters { events_stripped: 4, chars_removed: 11 },
+            SanitizerCounters {
+                events_stripped: 4,
+                chars_removed: 11,
+                instruction_shaped_dropped: 2,
+            },
         );
-        assert!(json.contains(r#""sanitizer":{"events_stripped":4,"chars_removed":11}"#), "{json}");
+        assert!(
+            json.contains(r#""sanitizer":{"events_stripped":4,"chars_removed":11,"instruction_shaped_dropped":2}"#),
+            "{json}"
+        );
         assert!(!json.to_lowercase().contains("ignore previous"), "{json}");
     }
 }
