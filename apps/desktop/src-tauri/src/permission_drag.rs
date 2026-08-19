@@ -293,6 +293,21 @@ define_class!(
     unsafe impl NSObjectProtocol for PermissionDragView {}
 
     impl PermissionDragView {
+        #[unsafe(method(hitTest:))]
+        fn hit_test(&self, point: NSPoint) -> *mut NSView {
+            let bounds = self.bounds();
+            if point.x < bounds.origin.x
+                || point.x > bounds.origin.x + bounds.size.width
+                || point.y < bounds.origin.y
+                || point.y > bounds.origin.y + bounds.size.height
+            {
+                return std::ptr::null_mut();
+            }
+            // AppKit does not take ownership of hit-test results. Return this live superclass
+            // pointer so icon/label subviews cannot consume its drag gesture.
+            self as *const Self as *mut NSView
+        }
+
         #[unsafe(method(mouseDown:))]
         fn mouse_down(&self, event: &NSEvent) {
             let point = self.convertPoint_fromView(event.locationInWindow(), None);
@@ -624,6 +639,17 @@ impl NativeController {
             restore_application(session.previous_application);
         }
     }
+
+    fn cleanup_generation(&mut self, generation: u64, restore_previous: bool) -> bool {
+        if !is_current_generation(
+            self.session.as_ref().map(|session| session.generation),
+            generation,
+        ) {
+            return false;
+        }
+        self.cleanup(restore_previous);
+        true
+    }
 }
 
 thread_local! {
@@ -724,7 +750,9 @@ fn start_settings_tracker(app: AppHandle, generation: u64, cancel: Arc<AtomicBoo
             if app
                 .run_on_main_thread(move || {
                     if handle.get_webview_window(ONBOARDING_LABEL).is_none() {
-                        CONTROLLER.with(|controller| controller.borrow_mut().cleanup(true));
+                        CONTROLLER.with(|controller| {
+                            controller.borrow_mut().cleanup_generation(generation, true);
+                        });
                     } else {
                         CONTROLLER
                             .with(|controller| controller.borrow_mut().track_settings(generation));
@@ -877,7 +905,18 @@ fn helper_frame(settings: CGRect) -> NSRect {
             (settings_x - HELPER_WIDTH - HELPER_GAP, settings_y)
         }
     };
+    let x = clamp_helper_axis(x, screen.screen.x, screen.screen.w, HELPER_WIDTH);
+    let y = clamp_helper_axis(y, screen.screen.y, screen.screen.h, HELPER_HEIGHT);
     NSRect::new(NSPoint::new(x, y), NSSize::new(HELPER_WIDTH, HELPER_HEIGHT))
+}
+
+fn clamp_helper_axis(origin: f64, screen_origin: f64, screen_size: f64, helper_size: f64) -> f64 {
+    let maximum = (screen_origin + screen_size - helper_size).max(screen_origin);
+    origin.clamp(screen_origin, maximum)
+}
+
+fn is_current_generation(active_generation: Option<u64>, candidate: u64) -> bool {
+    active_generation == Some(candidate)
 }
 
 #[cfg(test)]
@@ -900,8 +939,9 @@ fn app_bundle_from_executable(executable: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::{
-        app_bundle_from_executable, execute_external_action_with, payload_kind, DragCandidate,
-        DragHelperModel, DragHelperPhase, PayloadKind, PermissionHelperKind, PASTEBOARD_TYPES,
+        app_bundle_from_executable, clamp_helper_axis, execute_external_action_with,
+        is_current_generation, payload_kind, DragCandidate, DragHelperModel, DragHelperPhase,
+        PayloadKind, PermissionHelperKind, PASTEBOARD_TYPES,
     };
     use std::cell::RefCell;
     use std::path::{Path, PathBuf};
@@ -1035,6 +1075,18 @@ mod tests {
 
         assert!(model.cleanup(generation));
         assert!(!model.cleanup(generation));
+    }
+
+    #[test]
+    fn helper_frame_clamps_left_fallback_to_its_screen() {
+        assert_eq!(clamp_helper_axis(-25.0, 0.0, 1440.0, 390.0), 0.0);
+        assert_eq!(clamp_helper_axis(1_200.0, 0.0, 1440.0, 390.0), 1_050.0);
+    }
+
+    #[test]
+    fn stale_tracker_cannot_clean_replacement_generation() {
+        assert!(!is_current_generation(Some(9), 8));
+        assert!(is_current_generation(Some(9), 9));
     }
 
     #[test]
