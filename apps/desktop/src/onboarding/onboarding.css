@@ -26,6 +26,9 @@ button, label, input { touch-action: manipulation; -webkit-tap-highlight-color: 
 .onb-cinematic .onb-mute { position: absolute; z-index: 3; top: max(20px, env(safe-area-inset-top)); right: max(26px, env(safe-area-inset-right)); margin: 0; color: rgba(255,255,255,.72); }
 .onb-cinematic .onb-mute:hover:not(:disabled) { color: #fff; }
 .onb-mute:focus-visible { outline: 2px solid color-mix(in srgb, var(--blue, #2e6bd3) 62%, white); outline-offset: 4px; }
+.onb-floating-mute { position: absolute; z-index: 4; top: max(10px, env(safe-area-inset-top)); right: max(16px, env(safe-area-inset-right)); }
+.onb-floating-mute .onb-mute { margin: 0; padding-inline: 10px; border-radius: 6px; background: rgba(20, 13, 10, .38); color: #fff; text-shadow: 0 1px 8px rgba(0,0,0,.7); }
+.onb-floating-mute .onb-mute:hover:not(:disabled) { background: rgba(20, 13, 10, .58); color: #fff; }
 
 .onb-layout { position: relative; z-index: 1; display: grid; grid-template-columns: minmax(0, 58fr) minmax(300px, 42fr); width: 100%; min-width: 0; min-height: 0; overflow: hidden; }
 .onb-copy { display: flex; min-width: 0; min-height: 0; align-items: center; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding: clamp(36px, 7vh, 76px) clamp(38px, 6vw, 92px); }

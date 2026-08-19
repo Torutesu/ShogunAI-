@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { JSX } from "react";
 import { t } from "../../strings";
 import type { OnboardingState, PermissionSnapshot } from "../ipc";
 import { ConnectStage, PlanStage, PrivacyStage } from "./FlowParity";
 import { GateFrame } from "./GateFrame";
+import { MuteButton } from "./MuteButton";
 import { PermissionStage } from "./PermissionStage";
 import { ShortcutPractice } from "./ShortcutPractice";
 
@@ -13,18 +14,37 @@ export function OnboardingExperience(props: {
   surfaceGeneration: number;
   onPersist: (step: OnboardingState["step"], patch?: Partial<OnboardingState>) => Promise<boolean>;
   onFinish: () => Promise<boolean>;
+  onToggleMusic: () => Promise<boolean>;
+  musicPending: boolean;
 }): JSX.Element {
-  const { state, permissions, surfaceGeneration, onPersist, onFinish } = props;
+  const { state, permissions, surfaceGeneration, onPersist, onFinish, onToggleMusic, musicPending } = props;
   const [finishing, setFinishing] = useState(false);
-  const [completionConfirmed, setCompletionConfirmed] = useState(false);
+  const [gatePlaying, setGatePlaying] = useState(false);
+  const finishStarted = useRef(false);
   const step = routeStep(state.step, permissions);
-  const finish = (): void => {
-    setFinishing(true);
+  const finishOnce = useCallback((): void => {
+    if (finishStarted.current) return;
+    finishStarted.current = true;
     void onFinish().then((saved) => {
-      if (saved) setCompletionConfirmed(true);
-      else setFinishing(false);
+      if (!saved) {
+        finishStarted.current = false;
+        setGatePlaying(false);
+        setFinishing(false);
+      }
     });
+  }, [onFinish]);
+  const finish = (): void => {
+    if (finishing) return;
+    setFinishing(true);
+    const reducedMotion = typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
+    if (reducedMotion) finishOnce();
+    else setGatePlaying(true);
   };
+  useEffect(() => {
+    if (!gatePlaying) return;
+    const fallback = window.setTimeout(finishOnce, 7000);
+    return () => window.clearTimeout(fallback);
+  }, [finishOnce, gatePlaying]);
   return (
     <main className="onb-shell" data-step={step}>
       <div className="onb-layout">
@@ -44,8 +64,9 @@ export function OnboardingExperience(props: {
             </section>
           ) : null}
         </div>
-        <GateFrame complete={step === "gate" && completionConfirmed} />
+        <GateFrame complete={step === "gate" && gatePlaying} onEnded={finishOnce} onError={finishOnce} />
       </div>
+      <div className="onb-floating-mute"><MuteButton muted={state.music_muted} disabled={musicPending} onToggle={onToggleMusic} /></div>
     </main>
   );
 }

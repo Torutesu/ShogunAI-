@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GateFrame } from "./experience/GateFrame";
+import { OnboardingExperience } from "./experience/OnboardingExperience";
 import { AmbientSurface } from "./experience/AmbientSurface";
 import { newestPermissionSnapshot, Onboarding, windowRoute } from "./Onboarding";
 import type { OnboardingMotionVector, PermissionSnapshot } from "./ipc";
@@ -230,6 +231,38 @@ describe("cinematic onboarding", () => {
     render(<GateFrame complete />);
     expect(screen.queryByTestId("gate-opening-video")).toBeNull();
     expect(screen.getByRole("img", { name: "A wooden gate opening onto an autumn path" })).toBeTruthy();
+    vi.unstubAllGlobals();
+  });
+
+  it("plays the gate before saving completion and retains floating Mute", async () => {
+    const onFinish = vi.fn(async () => true);
+    render(<OnboardingExperience state={{ ...state("gate"), step: "gate" }} permissions={{ ...emptyPermissions, all_effective: true }} surfaceGeneration={1} onPersist={vi.fn(async () => true)} onFinish={onFinish} onToggleMusic={vi.fn(async () => true)} musicPending={false} />);
+    expect(document.querySelector(".onb-header")).toBeNull();
+    expect(screen.getByRole("button", { name: "Mute" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    expect(onFinish).not.toHaveBeenCalled();
+    fireEvent.ended(screen.getByTestId("gate-opening-video"));
+    await waitFor(() => expect(onFinish).toHaveBeenCalledTimes(1));
+    fireEvent.error(screen.getByTestId("gate-opening-video"));
+    expect(onFinish).toHaveBeenCalledTimes(1);
+  });
+
+  it("finishes safely on gate playback error", async () => {
+    const onFinish = vi.fn(async () => true);
+    render(<OnboardingExperience state={{ ...state("gate"), step: "gate" }} permissions={{ ...emptyPermissions, all_effective: true }} surfaceGeneration={1} onPersist={vi.fn(async () => true)} onFinish={onFinish} onToggleMusic={vi.fn(async () => true)} musicPending={false} />);
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    expect(onFinish).not.toHaveBeenCalled();
+    fireEvent.error(screen.getByTestId("gate-opening-video"));
+    await waitFor(() => expect(onFinish).toHaveBeenCalledTimes(1));
+  });
+
+  it("skips gate playback and finishes immediately under reduced motion", async () => {
+    vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: true })));
+    const onFinish = vi.fn(async () => true);
+    render(<OnboardingExperience state={{ ...state("gate"), step: "gate" }} permissions={{ ...emptyPermissions, all_effective: true }} surfaceGeneration={1} onPersist={vi.fn(async () => true)} onFinish={onFinish} onToggleMusic={vi.fn(async () => true)} musicPending={false} />);
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    await waitFor(() => expect(onFinish).toHaveBeenCalledTimes(1));
+    expect(screen.queryByTestId("gate-opening-video")).toBeNull();
     vi.unstubAllGlobals();
   });
 
