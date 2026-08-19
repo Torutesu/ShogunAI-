@@ -155,16 +155,42 @@ pub fn update_content_and_hash(
     Ok(n > 0)
 }
 
-/// The most recent `(content_hash, content)` pairs for near-dup collapse (FR-CAP-03), scoped to
-/// one `source` so OCR re-reads do not collapse against AX captures and vice versa.
-pub fn recent_source_bodies(
+/// Sources whose events carry app attribution (`app_bundle_id` / `window_title`), so their
+/// near-dup collapse must be scoped to one app as well as one source.
+///
+/// A ≥98%-similar body seen in a *different* app is a different capture: collapsing onto it makes
+/// the touch reuse the other app's row, and the new capture's app/window attribution is silently
+/// lost — the second app never becomes an event at all. A source belongs on this list as soon as
+/// it starts writing `app_bundle_id`.
+pub const APP_SCOPED_SOURCES: &[&str] = &["capture", "screen_ocr"];
+
+/// The recent `(content_hash, content)` pairs a new event's near-dup collapse (FR-CAP-03) may
+/// compare against, newest-first.
+///
+/// The single entry point on purpose: scoping is the log's decision, not the caller's. Always
+/// scoped to one `source` (so OCR re-reads do not collapse against AX captures and vice versa),
+/// and additionally to `app_bundle_id` for [`APP_SCOPED_SOURCES`] — a caller cannot pick the
+/// unscoped variant for an app-bearing source by mistake.
+pub fn recent_bodies_for_collapse(
+    conn: &Connection,
+    source: &str,
+    app_bundle_id: Option<&str>,
+    limit: usize,
+) -> Result<Vec<(String, String)>, rusqlite::Error> {
+    if APP_SCOPED_SOURCES.contains(&source) {
+        recent_app_scoped_bodies(conn, source, app_bundle_id, limit)
+    } else {
+        recent_source_bodies(conn, source, limit)
+    }
+}
+
+/// Recent bodies from one `source`, with no app predicate — for sources whose events carry no app
+/// attribution to scope by.
+fn recent_source_bodies(
     conn: &Connection,
     source: &str,
     limit: usize,
 ) -> Result<Vec<(String, String)>, rusqlite::Error> {
-    // Scoped to one app: a ≥98%-similar body seen in a *different* app must stay a separate
-    // event, or the touch reuses the other app's row and the new capture's app/window attribution
-    // is silently lost (`IS` so a NULL bundle id still matches only other NULL rows).
     let mut stmt = conn.prepare(
         "SELECT content_hash, content FROM event_log
          WHERE source = ?1 ORDER BY id DESC LIMIT ?2",
@@ -173,20 +199,21 @@ pub fn recent_source_bodies(
     rows.collect()
 }
 
-/// [`recent_source_bodies`] for `source = 'capture'`, additionally scoped to ONE app: a
-/// ≥98%-similar body in a different app is a different capture, and collapsing onto it would
-/// silently reassign the new capture to the other app's row. `IS` (not `=`) so a NULL bundle id
-/// matches only NULL.
-pub fn recent_capture_bodies(
+/// Recent bodies from one `source` AND one app — see [`APP_SCOPED_SOURCES`] for why the app
+/// predicate is load-bearing. `IS` (not `=`) so a NULL bundle id matches only NULL: an unattributed
+/// capture collapses onto other unattributed ones, never onto a named app's row.
+fn recent_app_scoped_bodies(
     conn: &Connection,
+    source: &str,
     app_bundle_id: Option<&str>,
     limit: usize,
 ) -> Result<Vec<(String, String)>, rusqlite::Error> {
     let mut stmt = conn.prepare(
         "SELECT content_hash, content FROM event_log
-         WHERE source = 'capture' AND app_bundle_id IS ?1 ORDER BY id DESC LIMIT ?2",
+         WHERE source = ?1 AND app_bundle_id IS ?2 ORDER BY id DESC LIMIT ?3",
     )?;
-    let rows = stmt.query_map(params![app_bundle_id, limit as i64], |r| Ok((r.get(0)?, r.get(1)?)))?;
+    let rows = stmt
+        .query_map(params![source, app_bundle_id, limit as i64], |r| Ok((r.get(0)?, r.get(1)?)))?;
     rows.collect()
 }
 
@@ -450,7 +477,7 @@ mod tests {
     }
 
     #[test]
-    fn recent_capture_bodies_is_newest_first_and_capture_scoped() {
+    fn capture_collapse_candidates_are_newest_first_and_source_scoped() {
         let conn = crate::open_in_memory().unwrap();
         insert(&conn, &ev("first", "h1", 1, 0)).unwrap();
         insert(&conn, &ev("second", "h2", 2, 0)).unwrap();
@@ -459,13 +486,14 @@ mod tests {
         note.source = "user";
         insert(&conn, &note).unwrap();
 
-        let got = recent_capture_bodies(&conn, Some("com.apple.Safari"), 8).unwrap();
+        let got =
+            recent_bodies_for_collapse(&conn, "capture", Some("com.apple.Safari"), 8).unwrap();
         assert_eq!(got.iter().map(|(_, c)| c.as_str()).collect::<Vec<_>>(), vec!["second", "first"]);
         assert_eq!(got[0].0, "h2");
     }
 
     #[test]
-    fn recent_capture_bodies_is_scoped_to_one_app() {
+    fn capture_collapse_candidates_are_scoped_to_one_app() {
         // The near-dup collapse must only compare against the SAME app's recent bodies: a
         // ≥98%-similar body in a different app is a different capture, and collapsing onto it
         // would silently reassign the new capture to the other app's row.
@@ -475,13 +503,52 @@ mod tests {
         other_app.app_bundle_id = Some("com.apple.Mail");
         insert(&conn, &other_app).unwrap();
 
-        let safari = recent_capture_bodies(&conn, Some("com.apple.Safari"), 8).unwrap();
+        let safari =
+            recent_bodies_for_collapse(&conn, "capture", Some("com.apple.Safari"), 8).unwrap();
         assert_eq!(safari.len(), 1);
         assert_eq!(safari[0].1, "shared body");
-        let mail = recent_capture_bodies(&conn, Some("com.apple.Mail"), 8).unwrap();
+        let mail = recent_bodies_for_collapse(&conn, "capture", Some("com.apple.Mail"), 8).unwrap();
         assert_eq!(mail.len(), 1);
         assert_eq!(mail[0].1, "other app body");
-        assert!(recent_capture_bodies(&conn, None, 8).unwrap().is_empty(), "NULL matches only NULL");
+        assert!(
+            recent_bodies_for_collapse(&conn, "capture", None, 8).unwrap().is_empty(),
+            "NULL matches only NULL"
+        );
+    }
+
+    #[test]
+    fn screen_ocr_collapse_candidates_are_app_scoped_too() {
+        // screen_ocr carries app_bundle_id exactly like capture does, so it must get the same app
+        // predicate: "Loading…" in Safari and in Mail are two events, not one.
+        let conn = crate::open_in_memory().unwrap();
+        let mut safari = ev("Loading…", "h1", 1, 0);
+        safari.source = "screen_ocr";
+        insert(&conn, &safari).unwrap();
+        let mut mail = ev("Loading…", "h2", 2, 0);
+        mail.source = "screen_ocr";
+        mail.app_bundle_id = Some("com.apple.Mail");
+        insert(&conn, &mail).unwrap();
+
+        let got =
+            recent_bodies_for_collapse(&conn, "screen_ocr", Some("com.apple.Safari"), 8).unwrap();
+        assert_eq!(got.len(), 1, "Mail's OCR body must not be a Safari collapse candidate");
+        assert_eq!(got[0].0, "h1");
+    }
+
+    #[test]
+    fn an_app_less_source_still_compares_against_its_whole_source() {
+        // The unscoped variant is for sources with no app to scope by: passing an app id must not
+        // filter their rows away (they are all NULL-app), and other sources stay excluded.
+        let conn = crate::open_in_memory().unwrap();
+        let mut note = ev("a note", "h1", 1, 0);
+        note.source = "user";
+        note.app_bundle_id = None;
+        insert(&conn, &note).unwrap();
+        insert(&conn, &ev("a capture", "h2", 2, 0)).unwrap();
+
+        let got = recent_bodies_for_collapse(&conn, "user", Some("com.apple.Safari"), 8).unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].1, "a note");
     }
 
     #[test]
