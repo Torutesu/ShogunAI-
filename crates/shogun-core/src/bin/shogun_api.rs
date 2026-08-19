@@ -21,7 +21,9 @@ use shogun_core::daemon::{Clock, Db};
 use shogun_core::db_backend::DbBackend;
 use shogun_core::metrics::{render_snapshots_json_with_lessons, SloRegistry};
 use shogun_mcp::memory_api::TokenRegistry;
-use shogun_mcp::memory_api_settings::{self, TOKENS_KEYCHAIN_ACCOUNT};
+use shogun_mcp::memory_api_settings;
+#[cfg(target_os = "macos")]
+use shogun_mcp::memory_api_settings::TOKENS_KEYCHAIN_ACCOUNT;
 use shogun_mcp::server::{bind_local, serve_on, AppState, MetricsSource, DEFAULT_PORT};
 
 /// The live SLO metrics source served at `GET /v1/metrics` (NFR-SLO-00). Wraps the shared

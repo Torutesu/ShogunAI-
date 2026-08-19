@@ -18,7 +18,9 @@ use shogun_core::daemon::Db;
 use shogun_core::db_backend::DbBackend;
 use shogun_mcp::mcp::{serve, McpServer};
 use shogun_mcp::memory_api::TokenRegistry;
-use shogun_mcp::memory_api_settings::{self, TOKENS_KEYCHAIN_ACCOUNT};
+use shogun_mcp::memory_api_settings;
+#[cfg(target_os = "macos")]
+use shogun_mcp::memory_api_settings::TOKENS_KEYCHAIN_ACCOUNT;
 
 fn now_ms() -> i64 {
     SystemTime::now()
