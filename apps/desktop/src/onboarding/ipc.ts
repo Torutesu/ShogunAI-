@@ -246,6 +246,9 @@ export type OnboardingShortcutArm = {
   nonce: string;
   stage: OnboardingShortcutStage;
   binding: string;
+  supports_demo: boolean;
+  supports_scribe: boolean;
+  voice_enabled: boolean;
   seeded_text?: string | null;
 };
 export type OnboardingShortcutEvent = {
@@ -253,7 +256,7 @@ export type OnboardingShortcutEvent = {
   nonce: string;
   stage: OnboardingShortcutStage;
   session_id: number | null;
-  outcome: "single_tap" | "scribe_opened" | "scribe_inserted" | "no_key" | "failed" | "cancelled" | "stale";
+  outcome: "single_tap" | "scribe_opened" | "scribe_inserted" | "dictation_inserted" | "dictation_copied" | "no_key" | "failed" | "cancelled" | "stale";
 };
 
 /** Native tutorial coordinator owns proof. Browser key events can never complete practice. */
@@ -267,6 +270,16 @@ export function onboardingShortcutReady(generation: number, nonce: string, surfa
 export function onboardingShortcutDisarm(generation: number, nonce: string): Promise<void> {
   if (!IN_TAURI) return Promise.resolve();
   return invoke<void>("onboarding_shortcut_disarm", { generation, nonce }).catch(() => undefined);
+}
+
+export function restoreOnboardingShortcut(action: "draft" | "voice", combo: string): Promise<boolean> {
+  if (!IN_TAURI) return Promise.resolve(false);
+  return invoke<void>("set_shortcut", { action, combo }).then(() => true).catch(() => false);
+}
+
+export function enableOnboardingDictation(): Promise<boolean> {
+  if (!IN_TAURI) return Promise.resolve(false);
+  return invoke<void>("set_voice_enabled", { enabled: true }).then(() => true).catch(() => false);
 }
 
 /** `exclusion_categories() -> ExclusionCategory[]` — read from the live ExclusionPolicy so

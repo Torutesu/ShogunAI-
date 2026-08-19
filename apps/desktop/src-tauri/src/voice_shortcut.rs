@@ -197,6 +197,10 @@ fn parse_combo(combo: &str) -> Option<Combo> {
     })
 }
 
+pub(crate) fn binding_supported(combo: &str) -> bool {
+    parse_combo(combo).is_some()
+}
+
 fn default_combo() -> Combo {
     // Hardcoded Control+Alt+V — parse cannot fail.
     Combo {

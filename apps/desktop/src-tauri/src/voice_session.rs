@@ -113,6 +113,22 @@ pub mod mac {
         operation: Mutex<()>,
     }
 
+    struct OnboardingDictationTarget {
+        generation: u64,
+        nonce: String,
+        target: Arc<DictationTarget>,
+        session_id: Option<u64>,
+    }
+
+    static ONBOARDING_DICTATION_TARGET: Mutex<Option<OnboardingDictationTarget>> = Mutex::new(None);
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum OnboardingTargetRegistration {
+        NotArmed,
+        Matched,
+        Rejected,
+    }
+
     // SAFETY: the retained AX element is only accessed while `operation` is held. The atomic
     // state linearizes cancellation against the first AX mutation.
     unsafe impl Send for DictationTarget {}
@@ -515,6 +531,101 @@ pub mod mac {
         same != 0
     }
 
+    fn same_dictation_target(expected: &DictationTarget, actual: &DictationTarget) -> bool {
+        expected.pid == actual.pid
+            && expected.role == actual.role
+            && expected.original_value == actual.original_value
+            && expected.caret == actual.caret
+            && unsafe { CFEqual(expected.element.cast(), actual.element.cast()) } != 0
+    }
+
+    /// Capture exact app-owned textarea through production target/caret validation before arming.
+    pub fn prepare_onboarding_dictation_target(generation: u64, nonce: &str) -> Result<(), String> {
+        let target = Arc::new(capture_dictation_target().map_err(str::to_owned)?);
+        if target.pid != std::process::id() as i32 {
+            return Err("dictation practice field is not owned by SHOGUN".to_owned());
+        }
+        let mut proof = ONBOARDING_DICTATION_TARGET
+            .lock()
+            .map_err(|_| "dictation practice target unavailable".to_owned())?;
+        *proof = Some(OnboardingDictationTarget {
+            generation,
+            nonce: nonce.to_owned(),
+            target,
+            session_id: None,
+        });
+        Ok(())
+    }
+
+    pub fn disarm_onboarding_dictation_target(generation: u64, nonce: &str) {
+        if let Ok(mut proof) = ONBOARDING_DICTATION_TARGET.lock() {
+            if proof
+                .as_ref()
+                .is_some_and(|proof| proof.generation == generation && proof.nonce == nonce)
+            {
+                *proof = None;
+            }
+        }
+    }
+
+    fn register_onboarding_dictation_session(
+        app: &AppHandle,
+        session_id: u64,
+        target: Option<&DictationTarget>,
+    ) -> OnboardingTargetRegistration {
+        let identity = ONBOARDING_DICTATION_TARGET
+            .lock()
+            .ok()
+            .and_then(|mut slot| {
+                let proof = slot.as_mut()?;
+                if proof.session_id.is_some()
+                    || !target.is_some_and(|target| same_dictation_target(&proof.target, target))
+                {
+                    return Some((proof.generation, proof.nonce.clone(), false));
+                }
+                proof.session_id = Some(session_id);
+                Some((proof.generation, proof.nonce.clone(), true))
+            });
+        let Some((generation, nonce, target_matches)) = identity else {
+            return OnboardingTargetRegistration::NotArmed;
+        };
+        if target_matches
+            && crate::right_option_shortcut::bind_dictation_session(
+                app, generation, &nonce, session_id,
+            )
+        {
+            OnboardingTargetRegistration::Matched
+        } else {
+            disarm_onboarding_dictation_target(generation, &nonce);
+            crate::right_option_shortcut::reject_dictation_target(app, generation, &nonce);
+            OnboardingTargetRegistration::Rejected
+        }
+    }
+
+    fn observe_onboarding_dictation_outcome(
+        app: &AppHandle,
+        session_id: u64,
+        outcome: crate::right_option_shortcut::DictationDemoOutcome,
+    ) {
+        let matches = ONBOARDING_DICTATION_TARGET
+            .lock()
+            .ok()
+            .is_some_and(|mut proof| {
+                if proof
+                    .as_ref()
+                    .is_some_and(|proof| proof.session_id == Some(session_id))
+                {
+                    proof.take();
+                    true
+                } else {
+                    false
+                }
+            });
+        if matches {
+            crate::right_option_shortcut::observe_dictation_outcome(app, session_id, outcome);
+        }
+    }
+
     fn expected_insert(value: &str, caret: CFRange, transcript: &str) -> Option<String> {
         let units: Vec<u16> = value.encode_utf16().collect();
         let location = usize::try_from(caret.location).ok()?;
@@ -860,8 +971,8 @@ pub mod mac {
         drop(delivery.operation.lock());
     }
 
-    fn cancel_active_session() -> Result<Option<voice_lane::Handle>, String> {
-        let (audio, delivery) = {
+    fn cancel_active_session(app: &AppHandle) -> Result<Option<voice_lane::Handle>, String> {
+        let (session, audio, delivery) = {
             let mut lane = LANE
                 .lock()
                 .map_err(|_| "voice lane lock poisoned".to_owned())?;
@@ -871,9 +982,14 @@ pub mod mac {
             let Some(mut active) = lane.active.take() else {
                 return Ok(None);
             };
-            (active.audio.take(), Arc::clone(&active.delivery))
+            (active.id, active.audio.take(), Arc::clone(&active.delivery))
         };
         cancel_delivery_fence(&delivery);
+        observe_onboarding_dictation_outcome(
+            app,
+            session,
+            crate::right_option_shortcut::DictationDemoOutcome::Cancelled,
+        );
         Ok(audio)
     }
 
@@ -1032,6 +1148,16 @@ pub mod mac {
         );
     }
 
+    /// Authoritative local capture phase for onboarding audio safety.
+    pub(crate) fn capture_active() -> bool {
+        let Ok(lane) = LANE.lock() else {
+            return false;
+        };
+        lane.as_ref()
+            .and_then(|lane| lane.active.as_ref().map(|active| active.phase))
+            .is_some_and(|phase| matches!(phase, SessionPhase::Opening | SessionPhase::Recording))
+    }
+
     /// Begin hold-to-talk capture. Returns `true` when the mic lane is live (UI shows recording).
     pub fn on_hold_start(app: AppHandle) -> bool {
         let enabled = LANE
@@ -1088,7 +1214,7 @@ pub mod mac {
                 id,
                 phase: SessionPhase::Opening,
                 audio: None,
-                target,
+                target: target.clone(),
                 delivery: Arc::new(DeliveryFence {
                     state: AtomicU8::new(DELIVERY_READY),
                     operation: Mutex::new(()),
@@ -1096,6 +1222,13 @@ pub mod mac {
             });
             id
         };
+
+        if register_onboarding_dictation_session(&app, session, target.as_deref())
+            == OnboardingTargetRegistration::Rejected
+        {
+            abandon_session(session);
+            return false;
+        }
 
         // BEFORE the mic opens, deliberately (#49 §5). Our own capture cannot pick up a cue that
         // has already played, and meeting recording blocks this path entirely — so the only thing
@@ -1105,7 +1238,14 @@ pub mod mac {
         let handle = match voice_lane::start(&app) {
             Ok(h) => h,
             Err(e) => {
-                let _ = complete_terminal(session, SessionPhase::Opening, || emit_error(&app, e));
+                let _ = complete_terminal(session, SessionPhase::Opening, || {
+                    emit_error(&app, e);
+                    observe_onboarding_dictation_outcome(
+                        &app,
+                        session,
+                        crate::right_option_shortcut::DictationDemoOutcome::Failed,
+                    );
+                });
                 return false;
             }
         };
@@ -1215,13 +1355,23 @@ pub mod mac {
                         TranscriptOutcome::Ok(t) => t,
                         TranscriptOutcome::Empty => {
                             let _ = complete_terminal(session, SessionPhase::Processing, || {
-                                emit_error(&worker_app, "Didn't catch that — try again.")
+                                emit_error(&worker_app, "Didn't catch that — try again.");
+                                observe_onboarding_dictation_outcome(
+                                    &worker_app,
+                                    session,
+                                    crate::right_option_shortcut::DictationDemoOutcome::Failed,
+                                );
                             });
                             return true;
                         }
                         TranscriptOutcome::Err(e) => {
                             let _ = complete_terminal(session, SessionPhase::Processing, || {
-                                emit_error(&worker_app, e)
+                                emit_error(&worker_app, e);
+                                observe_onboarding_dictation_outcome(
+                                    &worker_app,
+                                    session,
+                                    crate::right_option_shortcut::DictationDemoOutcome::Failed,
+                                );
                             });
                             return true;
                         }
@@ -1258,11 +1408,21 @@ pub mod mac {
                         DeliveryOutcome::Inserted => {
                             let _ = complete_terminal(session, SessionPhase::Processing, || {
                                 emit_state(&worker_app, "idle", Some(transcript), None);
+                                observe_onboarding_dictation_outcome(
+                                    &worker_app,
+                                    session,
+                                    crate::right_option_shortcut::DictationDemoOutcome::Inserted,
+                                );
                             });
                         }
                         DeliveryOutcome::Copied => {
                             let _ = complete_terminal(session, SessionPhase::Processing, || {
                                 emit_state(&worker_app, "idle", Some(transcript), None);
+                                observe_onboarding_dictation_outcome(
+                                    &worker_app,
+                                    session,
+                                    crate::right_option_shortcut::DictationDemoOutcome::Copied,
+                                );
                             });
                         }
                         DeliveryOutcome::CopyFailed(error) => {
@@ -1271,6 +1431,11 @@ pub mod mac {
                                     &worker_app,
                                     format!("Could not copy dictation: {error}"),
                                 );
+                                observe_onboarding_dictation_outcome(
+                                    &worker_app,
+                                    session,
+                                    crate::right_option_shortcut::DictationDemoOutcome::Failed,
+                                );
                             });
                         }
                     }
@@ -1278,7 +1443,12 @@ pub mod mac {
                 }));
                 if !matches!(result, Ok(true)) {
                     let _ = complete_terminal(session, SessionPhase::Processing, || {
-                        emit_error(&worker_app, "Voice transcription failed.")
+                        emit_error(&worker_app, "Voice transcription failed.");
+                        observe_onboarding_dictation_outcome(
+                            &worker_app,
+                            session,
+                            crate::right_option_shortcut::DictationDemoOutcome::Failed,
+                        );
                     });
                 }
             });
@@ -1288,7 +1458,12 @@ pub mod mac {
                 let _ = voice_lane::stop(audio);
             }
             let _ = complete_terminal(session, SessionPhase::Processing, || {
-                emit_error(&app, "Voice transcription could not start.")
+                emit_error(&app, "Voice transcription could not start.");
+                observe_onboarding_dictation_outcome(
+                    &app,
+                    session,
+                    crate::right_option_shortcut::DictationDemoOutcome::Failed,
+                );
             });
         }
     }
@@ -1357,7 +1532,7 @@ pub mod mac {
         }
         if !enabled {
             drop(lane);
-            if let Some(audio) = cancel_active_session()? {
+            if let Some(audio) = cancel_active_session(&app)? {
                 stop_cancelled_audio(audio);
             }
             emit_state(&app, "idle", None, None);
@@ -1374,7 +1549,7 @@ pub mod mac {
     }
 
     pub fn cancel_for_restart(app: &AppHandle) -> Result<(), String> {
-        if let Some(audio) = cancel_active_session()? {
+        if let Some(audio) = cancel_active_session(app)? {
             stop_cancelled_audio(audio);
         }
         emit_state(&app, "idle", None, None);

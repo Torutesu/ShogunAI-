@@ -210,6 +210,88 @@ describe("cinematic onboarding", () => {
     expect(invoke).not.toHaveBeenCalledWith("set_onboarding_state", expect.anything());
   });
 
+  it("advances dictation only from matching inserted delivery", async () => {
+    let handler!: (event: { payload: { generation: number; nonce: string; stage: "dictation_demo"; session_id: number | null; outcome: string } }) => void;
+    vi.mocked(listen).mockImplementation(async (_event, callback) => { handler = callback as typeof handler; return () => undefined; });
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "onboarding_state") return state("dictation_demo", 8);
+      if (command === "permission_status" || command === "permission_listener_ready") return emptyPermissions;
+      if (command === "onboarding_shortcut_arm") return { generation: 7, nonce: "voice", stage: "dictation_demo", binding: "Control+Shift+KeyD", supports_demo: true, voice_enabled: true };
+      if (command === "onboarding_shortcut_ready" || command === "onboarding_event") return undefined;
+      if (command === "get_shortcuts") return { voice: "Control+Shift+KeyD" };
+      if (command === "set_onboarding_state") return state("plan", 9);
+      throw new Error(`unexpected command: ${command}`);
+    });
+    render(<Onboarding />);
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("onboarding_shortcut_ready", { generation: 7, nonce: "voice", surfaceGeneration: 0 }));
+    handler({ payload: { generation: 7, nonce: "voice", stage: "dictation_demo", session_id: 12, outcome: "dictation_copied" } });
+    expect(invoke).not.toHaveBeenCalledWith("set_onboarding_state", expect.anything());
+    handler({ payload: { generation: 7, nonce: "wrong", stage: "dictation_demo", session_id: 12, outcome: "dictation_inserted" } });
+    expect(invoke).not.toHaveBeenCalledWith("set_onboarding_state", expect.anything());
+    handler({ payload: { generation: 7, nonce: "voice", stage: "dictation_demo", session_id: 12, outcome: "dictation_inserted" } });
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("set_onboarding_state", { expectedRevision: 8, step: "plan", plan: null, completed: false }));
+  });
+
+  it("restores unsupported Scribe binding only after explicit click", async () => {
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "onboarding_state") return state("scribe_demo", 8);
+      if (command === "permission_status" || command === "permission_listener_ready") return emptyPermissions;
+      if (command === "onboarding_shortcut_arm") return { generation: 4, nonce: "scribe", stage: "scribe_demo", binding: "Control+Shift+KeyR", supports_demo: false, supports_scribe: false };
+      if (command === "onboarding_shortcut_disarm" || command === "onboarding_event") return undefined;
+      if (command === "set_shortcut") return undefined;
+      if (command === "get_shortcuts") return { draft: "Control+Shift+KeyR" };
+      throw new Error(`unexpected command: ${command}`);
+    });
+    render(<Onboarding />);
+    const restore = await screen.findByRole("button", { name: "Restore Right Option" });
+    expect(invoke).not.toHaveBeenCalledWith("set_shortcut", expect.anything());
+    fireEvent.click(restore);
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("set_shortcut", { action: "draft", combo: "Tap+Alt" }));
+  });
+
+  it("keeps native Scribe field content and Try Again performs disarm plus re-arm", async () => {
+    let handler!: (event: { payload: { generation: number; nonce: string; stage: "scribe_demo"; session_id: number | null; outcome: "cancelled" } }) => void;
+    let armCount = 0;
+    vi.mocked(listen).mockImplementation(async (_event, callback) => { handler = callback as typeof handler; return () => undefined; });
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "onboarding_state") return state("scribe_demo", 8);
+      if (command === "permission_status" || command === "permission_listener_ready") return emptyPermissions;
+      if (command === "onboarding_shortcut_arm") {
+        armCount += 1;
+        return { generation: armCount, nonce: `scribe-${armCount}`, stage: "scribe_demo", binding: "Tap+Alt", supports_demo: true, supports_scribe: true };
+      }
+      if (command === "onboarding_shortcut_ready" || command === "onboarding_shortcut_disarm" || command === "onboarding_event") return undefined;
+      if (command === "get_shortcuts") return { draft: "Tap+Alt" };
+      throw new Error(`unexpected command: ${command}`);
+    });
+    render(<Onboarding />);
+    const field = await screen.findByRole("textbox", { name: "Sample email" }) as HTMLTextAreaElement;
+    fireEvent.change(field, { target: { value: "native AX result" } });
+    handler({ payload: { generation: 1, nonce: "scribe-1", stage: "scribe_demo", session_id: 4, outcome: "cancelled" } });
+    expect(await screen.findByText("That attempt did not land in this field. Try again.")).toBeTruthy();
+    expect(field.value).toBe("native AX result");
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("onboarding_shortcut_disarm", { generation: 1, nonce: "scribe-1" }));
+    await waitFor(() => expect(armCount).toBe(2));
+  });
+
+  it("disarms a scope whose arm resolves after unmount", async () => {
+    let resolveArm!: (value: unknown) => void;
+    vi.mocked(invoke).mockImplementation((command) => {
+      if (command === "onboarding_state") return Promise.resolve(state("right_option", 8));
+      if (command === "permission_status" || command === "permission_listener_ready") return Promise.resolve(emptyPermissions);
+      if (command === "onboarding_shortcut_arm") return new Promise((resolve) => { resolveArm = resolve; });
+      if (command === "onboarding_shortcut_disarm" || command === "onboarding_event") return Promise.resolve(undefined);
+      if (command === "get_shortcuts") return Promise.resolve({});
+      return Promise.reject(new Error(`unexpected command: ${command}`));
+    });
+    const view = render(<Onboarding />);
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("onboarding_shortcut_arm", { expectedRevision: 8, step: "right_option" }));
+    view.unmount();
+    resolveArm({ generation: 9, nonce: "late", stage: "right_option", binding: "Tap+Alt", supports_demo: true, supports_scribe: true });
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("onboarding_shortcut_disarm", { generation: 9, nonce: "late" }));
+  });
+
   it("advances practice only from matching native shortcut proof", async () => {
     let handler!: (event: { payload: { generation: number; nonce: string; stage: "right_option"; session_id: number | null; outcome: "single_tap" } }) => void;
     vi.mocked(listen).mockImplementation(async (_event, callback) => { handler = callback as typeof handler; return () => undefined; });
