@@ -427,6 +427,7 @@ export function App(): JSX.Element {
   /// anything above it is history rather than part of what you're doing now.
   const historyMark = useRef<number | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [settingsEntrySection, setSettingsEntrySection] = useState<SettingsSectionId>("general");
   /** Idle chin: reading/app/due vs quiet welded hide. Persisted in app data (Rust). */
   const [showStatusInNotch, setShowStatusInNotch] = useState(true);
   /// The in-panel hub (Today / Health / Sources / Memory / Activity / Trace). Everything routine
@@ -548,6 +549,14 @@ export function App(): JSX.Element {
     void invoke("interact", { kind: "boot" });
     const offs: Array<Promise<() => void>> = [];
     offs.push(listen<ContextPayload>("context", (e) => setCtxApp(e.payload.bundle_id || e.payload.title_masked || "")));
+    offs.push(listen<{ section: SettingsSectionId }>("open-onboarding-settings", (e) => {
+      if (e.payload.section !== "connections") return;
+      setSettingsEntrySection("connections");
+      setShowHub(false);
+      setShowSettings(true);
+      setOpen(true);
+      sizeForViewRef.current({ open: true, settings: true });
+    }));
     // The pill is push-driven: Rust owns the lifecycle, the webview never decides that a meeting
     // has started (FR-MT-07). The first read covers a webview reload mid-meeting.
     offs.push(listen<MeetingView>("meeting", (e) => setMeeting(e.payload)));
@@ -1060,6 +1069,7 @@ export function App(): JSX.Element {
     // Settings and Chat intentionally share the same native frame. Resizing to the size we already
     // have still makes AppKit reposition/recompose the NSPanel, producing a visible hitch before
     // React paints Settings. Keep this transition entirely inside the existing webview.
+    setSettingsEntrySection("general");
     setShowSettings(true);
     setShowHub(false);
   };
@@ -1434,6 +1444,7 @@ export function App(): JSX.Element {
         <div className="panel__body">
         {showSettings ? (
           <Settings
+            initialSection={settingsEntrySection}
             appearance={appearance}
             setAppearance={setAppearance}
             showStatusInNotch={showStatusInNotch}
@@ -4994,6 +5005,7 @@ function SettingsSlot({
 }
 
 function Settings(props: {
+  initialSection: SettingsSectionId;
   appearance: Appearance;
   setAppearance: (a: Appearance) => void;
   showStatusInNotch: boolean;
@@ -5006,6 +5018,7 @@ function Settings(props: {
   onCleared: () => void;
 }): JSX.Element {
   const {
+    initialSection,
     appearance,
     setAppearance,
     showStatusInNotch,
@@ -5016,7 +5029,7 @@ function Settings(props: {
     onDone,
     onCleared,
   } = props;
-  const [activeSection, setActiveSection] = useState<SettingsSectionId>("general");
+  const [activeSection, setActiveSection] = useState<SettingsSectionId>(initialSection);
   const settingsContentRef = useRef<HTMLElement>(null);
   const activeSectionMeta = SETTINGS_SECTIONS.find((section) => section.id === activeSection) ?? SETTINGS_SECTIONS[0];
   const selectSection = (section: SettingsSectionId): void => {

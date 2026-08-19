@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -257,6 +257,7 @@ describe("cinematic onboarding", () => {
       if (command === "composio_settings") return { draft_stop: true, consent_acknowledged: false };
       if (command === "analytics_get_opt_out") return false;
       if (command === "analytics_set_opt_out") return undefined;
+      if (command === "hotkey") return undefined;
       if (command === "connectors_list") return [];
       if (command === "set_onboarding_state") return state("gate", 9);
       if (command === "onboarding_event") return undefined;
@@ -266,6 +267,9 @@ describe("cinematic onboarding", () => {
     expect(await screen.findByRole("status", { name: /Drafts only/ })).toBeTruthy();
     expect(screen.queryByRole("checkbox", { name: /Drafts only/ })).toBeNull();
     expect(screen.getByText("Turning this off needs your consent first — that lives in Settings.")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Open Settings" }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("hotkey"));
+    expect(emit).toHaveBeenCalledWith("open-onboarding-settings", { section: "connections" });
     const analytics = await screen.findByRole("checkbox", { name: /Share anonymous usage metrics/ });
     expect((analytics as HTMLInputElement).checked).toBe(true);
     fireEvent.click(analytics);
@@ -276,6 +280,21 @@ describe("cinematic onboarding", () => {
     expect((analytics as HTMLInputElement).checked).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Skip for now" }));
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("set_onboarding_state", { expectedRevision: 8, step: "gate", plan: null, completed: false }));
+  });
+
+  it("keeps analytics visibly off when its persisted state cannot be read", async () => {
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "onboarding_state") return state("connect", 8);
+      if (command === "permission_status" || command === "permission_listener_ready") return emptyPermissions;
+      if (command === "analytics_get_opt_out") throw new Error("unavailable");
+      if (command === "connectors_list") return [];
+      if (command === "onboarding_event") return undefined;
+      throw new Error(`unexpected command: ${command}`);
+    });
+    render(<Onboarding />);
+    const analytics = await screen.findByRole("checkbox", { name: /Share anonymous usage metrics/ });
+    expect((analytics as HTMLInputElement).checked).toBe(false);
+    expect(screen.getByRole("status", { name: "Usage settings are unavailable. Sharing remains off." })).toBeTruthy();
   });
 
   it("does not turn browser key events into shortcut success", async () => {
@@ -421,6 +440,9 @@ describe("cinematic onboarding", () => {
     expect(css).toMatch(/\.onb-cinematic\s*\{[^}]*background:\s*rgba\(/);
     expect(css).toMatch(/\.onb-layout\s*\{[^}]*min-height:\s*0/);
     expect(css).toMatch(/@media \(max-width:\s*760px\)/);
+    expect(css).toContain("onb-wave-inward 760ms");
+    expect(css).toContain("onb-mark-arrive 520ms");
+    expect(css).not.toMatch(/onb-(?:button|mute|drag)[^}]*min-height:\s*(?:3[0-9]|4[0-3])px/);
     expect(keyframes).not.toMatch(/\b(width|height|top|right|bottom|left|margin|padding)\s*:/i);
     expect(reduced).toContain("onb-reduced-current-fade 200ms linear both");
     expect(reduced).not.toContain("display: none");

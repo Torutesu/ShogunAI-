@@ -17,10 +17,23 @@
 //   its opt_out gate; names are allowlisted on the Rust side.
 
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { emit } from "@tauri-apps/api/event";
 
 // Use Tauri's public runtime detector. Private globals changed across Tauri 2 releases and can be
 // absent even while IPC works, which made the permission guide poll its browser fallback forever.
 export const IN_TAURI = isTauri();
+
+/** Bring forward SHOGUN's existing panel and route its frontend to Connections settings. */
+export async function openOnboardingSettings(): Promise<boolean> {
+  if (!IN_TAURI) return false;
+  try {
+    await invoke("hotkey");
+    await emit("open-onboarding-settings", { section: "connections" });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 /** Invoke that degrades to a safe, honest fallback outside Tauri (`pnpm dev:vite` in a browser)
  *  or when a command fails — the flow then reads as "not granted / nothing connected", never as

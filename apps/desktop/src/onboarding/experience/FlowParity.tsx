@@ -4,7 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { AnalyticsToggle } from "../../AnalyticsToggle";
 import { ConnectionsList } from "../../connections";
 import { count, t } from "../../strings";
-import { exclusionCategories, IN_TAURI } from "../ipc";
+import { exclusionCategories, IN_TAURI, openOnboardingSettings } from "../ipc";
 import type { ExclusionCategory, OnboardingState } from "../ipc";
 
 type Persist = (step: OnboardingState["step"], patch?: Partial<OnboardingState>) => Promise<boolean>;
@@ -64,7 +64,7 @@ export function ConnectStage({ onPersist }: { onPersist: Persist }): JSX.Element
       <p className="onb-eyebrow">{t.onboarding.connectStep}</p><h1>{t.obConnectTitle}</h1><p className="onb-lead">{t.obConnectBody}</p>
       <div className="onb-draft-stop" role="status" aria-label={`${t.obDraftStop}, ${t.obDraftStopStatus}`}>
         <span className="onb-draft-stop__lock" aria-hidden="true">{t.obDraftStopStatus}</span>
-        <span><strong>{t.obDraftStop}</strong><small>{t.obDraftStopBody}</small><small className="onb-locked">{t.obDraftStopLocked}</small></span>
+        <span><strong>{t.obDraftStop}</strong><small>{t.obDraftStopBody}</small><small className="onb-locked">{t.obDraftStopLocked}</small><button className="onb-inline-action" type="button" onClick={() => void openOnboardingSettings()}>{t.onboarding.openSettings}</button></span>
       </div>
       <div className="onb-connections"><ConnectionsList connectableOnly /></div><div className="onb-analytics"><AnalyticsToggle /></div><p className="onb-note">{t.obConnectSkip}</p>
       <div className="onb-actions"><button className="onb-button onb-button--quiet" type="button" onClick={() => void onPersist("gate")}>{t.obSkip}</button><button className="onb-button onb-button--primary" type="button" onClick={() => void onPersist("gate")}>{t.onboarding.continue}</button></div>

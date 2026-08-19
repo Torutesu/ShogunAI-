@@ -170,6 +170,16 @@ body {
   outline-offset: 2px;
 }
 
+.analytics-toggle {
+  display: flex;
+  min-height: 44px;
+  align-items: flex-start;
+  gap: 10px;
+  cursor: pointer;
+}
+.analytics-toggle > span { min-width: 0; }
+.analytics-toggle__status { display: block; margin-top: 4px; }
+
 .stage {
   height: 100%;
   display: flex;

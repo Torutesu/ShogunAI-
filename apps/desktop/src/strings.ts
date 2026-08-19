@@ -90,6 +90,7 @@ export const STRINGS = {
     analyticsToggleLabel: "Share anonymous usage metrics to help improve SHOGUN",
     analyticsToggleDetail:
       "Event names and timings only — never your content, screen text, or API keys.",
+    analyticsToggleUnavailable: "Usage settings are unavailable. Sharing remains off.",
     // Settings › Privacy — the toggle's permanent home (issue #99); onboarding shows it once,
     // this section is where a set-up user changes their mind later.
     privacy: "Privacy",
