@@ -6,7 +6,7 @@ import type { PostMeta } from '@/lib/blog';
 
 // Canonical category keys (post.category is stored in English); display labels
 // come from the dictionary and line up by index with these.
-const KEYS = ['All', 'AI Memory', 'Work Context', 'Comparisons', 'Privacy', 'Product'];
+const KEYS = ['All', 'Ideas', 'Product'];
 
 function categoryLabel(category: string, labels: string[]) {
   const index = KEYS.indexOf(category);
@@ -50,7 +50,7 @@ function PostCard({ p, categories, locale, minRead, more, hrefPrefix }: { p: Pos
   return (
     <a href={`${hrefPrefix}/blog/${p.slug}`} className="group block h-full">
       <article className="lift flex h-full flex-col overflow-hidden rounded-2xl border border-border bg-surface">
-        <Cover className="aspect-[3/2]" image={p.image} alt={p.title} />
+        <Cover className="h-40" image={p.image} alt={p.title} />
         <div className="flex flex-1 flex-col p-5">
           <div className="mb-3 flex items-center gap-2">
             <Cat label={categoryLabel(p.category, categories)} />
@@ -117,7 +117,7 @@ export function BlogFilter({
       {featured && (
         <a href={`${hrefPrefix}/blog/${featured.slug}`} className="group mb-14 block">
           <article className="grid items-center gap-8 md:grid-cols-2">
-            <Cover className="aspect-[3/2] rounded-2xl border border-border" image={featured.image} alt={featured.title} />
+            <Cover className="aspect-[16/10] rounded-2xl border border-border" image={featured.image} alt={featured.title} />
             <div>
               <Cat label={categoryLabel(featured.category, categories)} solid />
               <h2 className="mt-4 font-display text-[clamp(22px,5vw,34px)] font-semibold leading-tight tracking-tight text-balance transition-colors group-hover:text-accent-strong">

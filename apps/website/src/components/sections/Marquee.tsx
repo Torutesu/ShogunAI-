@@ -66,10 +66,10 @@ function Track({ brands, reverse = false }: { brands: readonly (typeof BRAND_LOG
         return (
           <span
             key={`${tool.domain}-${index}`}
-            className="mx-7 inline-flex h-[58px] w-11 shrink-0 items-center justify-center"
+            className="mx-6 inline-flex h-[42px] w-10 shrink-0 items-center justify-center sm:mx-7"
             aria-hidden={index >= brands.length}
           >
-            <BrandIcon domain={tool.domain} name={tool.name} size={34} className="size-[34px]" />
+            <BrandIcon domain={tool.domain} name={tool.name} size={30} className="size-[30px] rounded-[7px]" />
           </span>
         );
       })}
@@ -79,24 +79,26 @@ function Track({ brands, reverse = false }: { brands: readonly (typeof BRAND_LOG
 
 export function Marquee({ t }: { t: Dictionary }) {
   return (
-    <section aria-label={t.trust.label} className="overflow-hidden pb-7 pt-2 sm:pb-8 sm:pt-3">
-      <div className="group/mq marquee-mask overflow-hidden border-y border-black/5 bg-white/24 px-2 py-2 shadow-[0_18px_40px_rgba(19,55,77,0.04)] sm:px-3">
+    // Its own band: hairlines top and bottom and a surface fill, so the strip
+    // reads as a section between the hero and what follows instead of drifting
+    // into the next one.
+    <section
+      aria-label={t.trust.label}
+      className="marquee-band overflow-hidden border-y border-border bg-surface py-7 sm:py-8"
+    >
+      <div className="container-x">
+        <div className="mb-4 flex items-center gap-5">
+          <p className="shrink-0 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">{t.trust.label}</p>
+          <div className="h-px flex-1 bg-border" />
+        </div>
+      </div>
+      <div className="group/mq marquee-mask overflow-hidden">
+        <Track brands={BRAND_ROWS[0]} />
+        <div className="container-x">
+          <div className="h-px bg-border/70" />
+        </div>
         <Track brands={BRAND_ROWS[1]} reverse />
       </div>
     </section>
-  );
-}
-
-export function HeroMarqueeRow({ t }: { t: Dictionary }) {
-  return (
-    <div className="overflow-hidden pt-2 sm:pt-3">
-      <div className="mb-2.5 flex items-center gap-5">
-        <p className="shrink-0 text-[11px] font-semibold tracking-[0.08em] text-muted">{t.trust.label}</p>
-        <div className="h-px flex-1 bg-[#8da7ed]/45" />
-      </div>
-      <div className="group/mq marquee-mask overflow-hidden rounded-[20px] border border-black/5 bg-white/42 px-2 py-1.5 shadow-[0_16px_36px_rgba(19,55,77,0.06)] backdrop-blur-sm sm:px-3">
-        <Track brands={BRAND_ROWS[0]} />
-      </div>
-    </div>
   );
 }

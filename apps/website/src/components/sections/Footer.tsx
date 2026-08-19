@@ -6,10 +6,10 @@ export async function Footer({ localeOverride }: { localeOverride?: Locale } = {
   const { locale, t } = await getI18n(localeOverride);
   const prefix = localeOverride ? `/${localeOverride}` : '';
   const labels = {
-    en: { features: 'Features', memory: 'AI memory', recall: 'Contextual recall', execution: 'Execution layer', useCases: 'Use cases', founders: 'For founders', product: 'Product & engineering', consultants: 'For consultants', resources: 'Resources', integrations: 'Integrations', security: 'Privacy & security', compare: 'Compare' },
-    ja: { features: '機能', memory: 'AIメモリ', recall: '文脈検索', execution: '実行レイヤー', useCases: '活用事例', founders: '創業者向け', product: 'プロダクト・開発向け', consultants: 'コンサルタント向け', resources: 'リソース', integrations: '連携', security: 'プライバシーと安全性', compare: '比較' },
-    es: { features: 'Funciones', memory: 'Memoria de IA', recall: 'Recuperación contextual', execution: 'Capa de ejecución', useCases: 'Casos de uso', founders: 'Para fundadores', product: 'Producto e ingeniería', consultants: 'Para consultores', resources: 'Recursos', integrations: 'Integraciones', security: 'Privacidad y seguridad', compare: 'Comparar' },
-    de: { features: 'Funktionen', memory: 'KI-Gedächtnis', recall: 'Kontextsuche', execution: 'Ausführungsebene', useCases: 'Anwendungsfälle', founders: 'Für Gründer', product: 'Produkt & Entwicklung', consultants: 'Für Berater', resources: 'Ressourcen', integrations: 'Integrationen', security: 'Datenschutz & Sicherheit', compare: 'Vergleichen' },
+    en: { features: 'Features', memory: 'AI memory', recall: 'Contextual recall', execution: 'Execution layer', useCases: 'Use cases', founders: 'For founders', product: 'Product & engineering', consultants: 'For consultants', resources: 'Resources', integrations: 'Integrations', security: 'Privacy & security' },
+    ja: { features: '機能', memory: 'AIメモリ', recall: '文脈検索', execution: '実行レイヤー', useCases: '活用事例', founders: '創業者向け', product: 'プロダクト・開発向け', consultants: 'コンサルタント向け', resources: 'リソース', integrations: '連携', security: 'プライバシーと安全性' },
+    es: { features: 'Funciones', memory: 'Memoria de IA', recall: 'Recuperación contextual', execution: 'Capa de ejecución', useCases: 'Casos de uso', founders: 'Para fundadores', product: 'Producto e ingeniería', consultants: 'Para consultores', resources: 'Recursos', integrations: 'Integraciones', security: 'Privacidad y seguridad' },
+    de: { features: 'Funktionen', memory: 'KI-Gedächtnis', recall: 'Kontextsuche', execution: 'Ausführungsebene', useCases: 'Anwendungsfälle', founders: 'Für Gründer', product: 'Produkt & Entwicklung', consultants: 'Für Berater', resources: 'Ressourcen', integrations: 'Integrationen', security: 'Datenschutz & Sicherheit' },
   }[locale];
   const cols = [
     {
@@ -22,7 +22,7 @@ export async function Footer({ localeOverride }: { localeOverride?: Locale } = {
       ],
     },
     { title: labels.useCases, links: [{ href: `${prefix}/use-cases/founders`, label: labels.founders }, { href: `${prefix}/use-cases/product-engineering`, label: labels.product }, { href: `${prefix}/use-cases/consultants`, label: labels.consultants }] },
-    { title: labels.resources, links: [{ href: `${prefix}/integrations`, label: labels.integrations }, { href: `${prefix}/security`, label: labels.security }, { href: `${prefix}/compare`, label: labels.compare }, { href: `${prefix}/blog`, label: t.footer.company.blog }] },
+    { title: labels.resources, links: [{ href: `${prefix}/integrations`, label: labels.integrations }, { href: `${prefix}/security`, label: labels.security }, { href: `${prefix}/blog`, label: t.footer.company.blog }] },
     {
       title: t.footer.company.title,
       links: [
@@ -50,12 +50,12 @@ export async function Footer({ localeOverride }: { localeOverride?: Locale } = {
           </a>
           <p className="mt-3.5 text-xs text-muted">{t.footer.tagline}</p>
         </div>
-        <div className="grid grid-cols-2 gap-x-10 gap-y-8 sm:grid-cols-3 lg:grid-cols-5 lg:gap-x-7 xl:gap-x-10">
+        <div className="grid grid-cols-2 gap-x-10 gap-y-8 sm:grid-cols-3 lg:gap-x-7 xl:grid-cols-5 xl:gap-x-10">
           {cols.map((col) => (
             <div key={col.title} className="flex flex-col gap-3">
-              <div className="text-xs font-medium uppercase tracking-[0.06em] text-muted">{col.title}</div>
+              <div className="text-xs font-medium uppercase tracking-[0.06em] text-muted hyphens-auto break-words">{col.title}</div>
               {col.links.map((l) => (
-                <a key={l.label} href={l.href} className="text-sm text-muted transition-colors hover:text-ink">
+                <a key={l.label} href={l.href} className="text-sm text-muted transition-colors hover:text-ink hyphens-auto break-words">
                   {l.label}
                 </a>
               ))}

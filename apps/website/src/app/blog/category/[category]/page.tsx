@@ -8,7 +8,6 @@ import { BLOG_CATEGORY_SLUGS, BLOG_TOPIC_LABEL, getBlogCategoryCopy, isBlogCateg
 import { getI18n } from '@/i18n/server';
 import { siteConfig } from '@/lib/site';
 import { isLocale } from '@/i18n/config';
-import { BlogInsights } from '@/components/BlogInsights';
 
 export function generateStaticParams() {
   return BLOG_CATEGORY_SLUGS.map((category) => ({ category }));
@@ -66,19 +65,16 @@ async function BlogCategory({ params, searchParams }: { params: Promise<{ catego
       <PageHeader eyebrow={BLOG_TOPIC_LABEL[locale]} title={content.title} sub={content.description} />
       <section className="py-[clamp(40px,6vw,72px)]">
         <div className="container-x">
-          <div className="grid gap-10 lg:grid-cols-[250px_minmax(0,1fr)] lg:items-start lg:gap-14">
-            <BlogInsights locale={locale} />
-            <BlogFilter
-              posts={posts}
-              categories={t.blog.categories}
-              locale={locale}
-              minRead={t.blog.minRead}
-              more={t.blog.readMore}
-              empty={t.blog.empty}
-              filterLabel={t.blog.filterLabel}
-              hrefPrefix={prefix}
-            />
-          </div>
+          <BlogFilter
+            posts={posts}
+            categories={t.blog.categories}
+            locale={locale}
+            minRead={t.blog.minRead}
+            more={t.blog.readMore}
+            empty={t.blog.empty}
+            filterLabel={t.blog.filterLabel}
+            hrefPrefix={prefix}
+          />
         </div>
       </section>
     </PageShell>

@@ -1,7 +1,11 @@
 # Deploying the ShogunAI website to Cloudflare
 
-> **Automated:** pushing to the branch runs `.github/workflows/deploy.yml`
-> (install → migrate → build → deploy). The manual steps below are a fallback.
+> **Automated:** pushing to **main** runs `.github/workflows/deploy.yml`
+> (install → migrate → build → deploy). main is the only branch that deploys to
+> production — ship LP changes through a PR into main. A manual
+> `workflow_dispatch` on another ref stops at a guard step unless you tick
+> `allow_non_main`, which is there for emergencies only. The manual steps below
+> are a fallback.
 
 The site is Next.js 16 (App Router, SSR + Node.js-runtime API routes) talking to
 **Supabase Postgres** via `postgres.js`. Cloudflare can't run Next SSR natively, so
@@ -51,14 +55,22 @@ Build):
 | Setting | Value |
 | --- | --- |
 | **Build command** | `pnpm --filter @shogun-ai/website cf:build` |
-| **Deploy command** | `pnpm --filter @shogun-ai/website exec wrangler deploy` |
+| **Deploy command** | `pnpm --filter @shogun-ai/website exec wrangler deploy --env preview` |
 | **Root directory** | leave as repo root (the `--filter` handles the rest) |
+
+> `--env preview` is load-bearing: `shogunaios.com` and `www.shogunaios.com` are
+> custom domains of the `preview` environment in `wrangler.jsonc` (worker
+> `shogunai-website-codex-preview`), which also holds the D1 binding and
+> `WAITLIST_ALLOWED_ORIGINS`. A bare `wrangler deploy` ships the top-level
+> `shogunai-website` worker, which no domain routes to — the deploy succeeds and
+> production does not change. Drop the flag only after moving the domains back
+> to the top-level worker.
 
 > Do **not** use `pnpm run build` (that only runs `next build`, so `.open-next/worker.js`
 > is never produced) and do **not** use a bare `npx wrangler deploy` from the root.
 >
 > Alternative: set **Root directory = `apps/website`**, then build `pnpm cf:build` and
-> deploy `npx wrangler deploy`. Both approaches are equivalent.
+> deploy `npx wrangler deploy --env preview`. Both approaches are equivalent.
 
 Both commands were validated locally: `cf:build` produces `.open-next/worker.js`, and
 `wrangler deploy --dry-run` packages a ~2.5 MB (gzip) Worker with the `ASSETS` binding.
@@ -106,5 +118,9 @@ DATABASE_URL=... pnpm --filter @shogun-ai/website db:migrate
 ## Deploy to production
 
 ```bash
-pnpm --filter @shogun-ai/website cf:deploy
+pnpm --filter @shogun-ai/website cf:build
+pnpm --filter @shogun-ai/website exec wrangler deploy --env preview
 ```
+
+`cf:deploy` builds and deploys in one step but targets the default environment,
+so it does not touch the domain-owning worker — use the two commands above.

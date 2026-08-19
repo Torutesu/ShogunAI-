@@ -65,7 +65,7 @@ async function BlogPost({ params, searchParams }: { params: Promise<{ slug: stri
   const relatedPosts = getAllPosts(locale).filter((candidate) => candidate.slug !== post.slug).slice(0, 3);
   const hrefPrefix = `/${locale}`;
   const categoryLabel = (category: string) => {
-    const keys = ['AI Memory', 'Work Context', 'Comparisons', 'Privacy', 'Product'];
+    const keys = ['Ideas', 'Product'];
     const index = keys.indexOf(category);
     return index >= 0 ? t.blog.categories[index + 1] : category;
   };
@@ -123,7 +123,7 @@ async function BlogPost({ params, searchParams }: { params: Promise<{ slug: stri
           </h1>
           <p className="mt-4 text-[17px] leading-relaxed text-muted">{post.description}</p>
 
-          <div className="relative mt-8 aspect-[3/2] overflow-hidden rounded-2xl border border-border bg-cloud">
+          <div className="relative mt-8 aspect-[16/9] overflow-hidden rounded-2xl border border-border bg-cloud">
             <Image src={post.image} alt={post.title} fill sizes="(max-width: 720px) 100vw, 720px" className="object-cover" priority />
           </div>
 

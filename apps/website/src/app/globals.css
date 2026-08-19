@@ -205,11 +205,30 @@ html[data-theme='dark'] .waitlist-form-default button {
 .hero-shell {
   min-height: calc(100svh - 4rem);
   background: #f7f5f0 url('/optimized/shogunai-hero-kyoto-v3.jpg') center bottom / 100% auto no-repeat;
+  /* The hero is at least a viewport tall, and its content was pinned to the
+   * top of that box: 23px under the nav on every screen, against as much as
+   * 500px of dead space below the logo rows on a tall one. Centring splits the
+   * slack instead. Content taller than the box just grows it, since the height
+   * is a minimum. */
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
 }
 
 @media (min-width: 701px) {
   .hero-shell {
     background-position: center calc(100% + 96px);
+  }
+}
+
+/* On very tall screens an even split leaves as much empty gradient above the
+ * headline as artwork below it. There is always slack at this height, so bias
+ * the content above centre and let the castle and the figure breathe. Shorter
+ * screens keep the centred split, where every pixel is already spoken for. */
+@media (min-height: 1150px) {
+  .hero-shell {
+    justify-content: flex-start;
+    padding-top: 9vh;
   }
 }
 
@@ -360,26 +379,31 @@ html[data-theme='dark'] .theme-light-badge {
 }
 
 .hero-demo-scale {
-  transform-origin: top right;
+  /* Width is 1/scale, so the painted box is exactly the frame's width — but
+   * only if the anchored edge is the one that starts inside the frame. With
+   * `top right` the untransformed right edge sat past the container and the
+   * shot bled off-screen on narrower laptops. */
+  transform-origin: top left;
 }
 
 @media (min-width: 1024px) and (max-height: 760px) {
   .hero-demo-frame {
-    height: 500px;
+    height: 380px;
   }
 
   .hero-demo-scale {
-    width: 111.111%;
-    transform: scale(0.9);
+    width: 142.857%;
+    transform: scale(0.7);
   }
 }
 
 /* Keep the first moving logo row in the initial 16:9 viewport. The hero stays
  * spacious on taller displays and only compacts its vertical rhythm when the
  * available height is limited. */
-@media (min-width: 1024px) and (max-height: 950px) {
+@media (min-width: 1024px) and (max-height: 1040px) {
   .hero-layout {
-    padding-top: 24px;
+    padding-top: 20px;
+    padding-bottom: 8px;
   }
 
   .hero-demo-frame {
@@ -392,16 +416,12 @@ html[data-theme='dark'] .theme-light-badge {
   }
 
   .hero-badges {
-    margin-top: 16px;
+    margin-top: 18px;
   }
 
   .hero-badges > div > div,
   .hero-badges > div > a > div {
-    min-height: 76px !important;
-  }
-
-  .hero-participant-count {
-    display: none;
+    min-height: 68px !important;
   }
 }
 
@@ -415,6 +435,90 @@ html[data-theme='dark'] .theme-light-badge {
   .hero-demo-scale {
     width: 111.111%;
     transform: scale(0.9);
+  }
+}
+
+/* 13"-class laptops: tighten the headline block so both logo rows stay in the
+ * first view. The type stays large; only the vertical rhythm gives. */
+@media (min-width: 1024px) and (max-height: 880px) {
+  .hero-title {
+    margin-top: 18px;
+  }
+
+  .hero-subtitle {
+    margin-top: 18px;
+  }
+}
+
+/* 768-tall laptops: the hero alone still has to fit, so trim what the taller
+ * bands hand back. */
+@media (min-width: 1024px) and (max-height: 820px) {
+  .hero-layout {
+    padding-top: 14px;
+    padding-bottom: 4px;
+  }
+
+  .hero-demo-frame {
+    height: 430px;
+  }
+
+  .hero-demo-scale {
+    width: 125%;
+    transform: scale(0.8);
+  }
+
+  .hero-badges {
+    margin-top: 10px;
+  }
+
+  .hero-title {
+    margin-top: 10px;
+  }
+
+  .hero-subtitle {
+    margin-top: 10px;
+  }
+}
+
+/* 1024-wide landscape tablets get the desktop grid but very little height, so
+ * they need a shorter product shot than the 1040px rule gives them. */
+@media (min-width: 1024px) and (max-width: 1180px) and (max-height: 820px) {
+  .hero-layout {
+    padding-top: 14px;
+    padding-bottom: 4px;
+  }
+
+  .hero-demo-frame {
+    height: 372px;
+  }
+
+  .hero-demo-scale {
+    width: 133.333%;
+    transform: scale(0.75);
+  }
+
+  .hero-badges {
+    margin-top: 10px;
+  }
+
+  .hero-badges > div > div,
+  .hero-badges > div > a > div {
+    min-height: 56px !important;
+  }
+
+  .hero-title {
+    font-size: clamp(34px, 4.2vw, 46px);
+    margin-top: 8px;
+  }
+
+  .hero-subtitle {
+    margin-top: 8px;
+    font-size: 14px;
+    line-height: 1.5;
+  }
+
+  .hero-participants {
+    margin-top: 12px;
   }
 }
 
@@ -810,14 +914,14 @@ html[data-theme='dark'] .theme-light-badge {
   mix-blend-mode: difference;
 }
 .cursor-dot {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
   background: #ffffff;
   transition: opacity 0.25s var(--ease-out-soft);
 }
 .cursor-ring {
-  width: 26px;
-  height: 26px;
+  width: 20px;
+  height: 20px;
   border: 1.5px solid #ffffff;
   transition:
     width 0.22s var(--ease-out-soft),
@@ -826,11 +930,11 @@ html[data-theme='dark'] .theme-light-badge {
     opacity 0.25s var(--ease-out-soft);
 }
 .cursor-ring.is-hover {
-  width: 42px;
-  height: 42px;
+  width: 30px;
+  height: 30px;
   background: rgba(255, 255, 255, 0.12);
 }
 .cursor-ring.is-down {
-  width: 20px;
-  height: 20px;
+  width: 15px;
+  height: 15px;
 }
