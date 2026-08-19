@@ -74,10 +74,10 @@ fn load_token_registry() -> Result<TokenRegistry, String> {
 }
 
 fn gate_or_exit(db_path: &str) {
-    if let Err(message) =
-        memory_api_settings::require_enabled(&memory_api_settings::resolve_settings_path(db_path))
+    if memory_api_settings::require_enabled(&memory_api_settings::resolve_settings_path(db_path))
+        .is_err()
     {
-        eprintln!("{message}");
+        eprintln!("Memory API is disabled. Enable it in SHOGUN Settings > Memory API.");
         std::process::exit(1);
     }
     match load_token_registry() {
