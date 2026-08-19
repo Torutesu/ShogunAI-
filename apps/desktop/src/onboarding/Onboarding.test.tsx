@@ -128,7 +128,7 @@ describe("cinematic onboarding", () => {
     });
     render(<Onboarding />);
     fireEvent.click(await screen.findByRole("button", { name: "Restart SHOGUN" }));
-    await waitFor(() => expect(invoke).toHaveBeenCalledWith("restart_onboarding"));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("restart_onboarding", { expectedRevision: 4, step: "screen_recording" }));
     expect(screen.queryByText("Restart did not begin. Keep this window open and try again.")).toBeNull();
     expect(screen.getByRole("heading", { name: "Screen Recording" })).toBeTruthy();
   });
@@ -274,16 +274,16 @@ describe("cinematic onboarding", () => {
   it.each([
     ["intro", "Make room for your work."],
     ["welcome", "Make room for your work."],
-    ["reads", "Your work stays yours."],
-    ["privacy", "Your work stays yours."],
+    ["reads", "What it reads, and what it never keeps."],
+    ["privacy", "What it reads, and what it never keeps."],
     ["accessibility", "Accessibility"],
     ["microphone", "Microphone"],
     ["screen_recording", "Screen Recording"],
     ["right_option", "Find Right Option."],
     ["scribe_demo", "Make a rough note clean."],
     ["dictation_demo", "Speak into the field."],
-    ["plan", "Choose a starting point."],
-    ["connect", "Connect what helps."],
+    ["plan", "Seven days of everything."],
+    ["connect", "Connect what you work in."],
     ["gate", "Setup is ready."],
     ["ready", "Setup is ready."],
   ])("hydrates semantic %s state without a welcome flash", async (step, heading) => {
