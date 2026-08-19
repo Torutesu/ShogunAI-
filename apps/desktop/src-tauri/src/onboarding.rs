@@ -808,6 +808,33 @@ pub mod mac {
         Some(next)
     }
 
+    fn launch_then_exit_with(
+        executable: &Path,
+        arguments: &[std::ffi::OsString],
+        spawn: impl FnOnce(&Path, &[std::ffi::OsString]) -> std::io::Result<()>,
+        exit: impl FnOnce(),
+    ) -> Result<(), String> {
+        spawn(executable, arguments).map_err(|error| format!("restart launch failed: {error}"))?;
+        exit();
+        Ok(())
+    }
+
+    fn clear_failed_restart_marker(
+        owner: &mut StateOwner,
+        marker_revision: u64,
+    ) -> Result<(), String> {
+        if owner.current.revision != marker_revision || owner.current.restart_pending.is_none() {
+            return Ok(());
+        }
+        let mut next = owner.current.clone();
+        next.revision = marker_revision
+            .checked_add(1)
+            .ok_or_else(|| "onboarding revision exhausted".to_owned())?;
+        next.restart_pending = None;
+        owner.persist(marker_revision, next)?;
+        Ok(())
+    }
+
     /// Live status for all required permissions. This command never prompts and is safe to poll.
     #[tauri::command]
     pub fn permission_status(app: AppHandle) -> PermissionSnapshot {
@@ -886,7 +913,7 @@ pub mod mac {
         crate::scribe::mac::cancel_active_for_restart(&app)?;
         crate::voice_session::mac::voice_dismiss(app.clone());
 
-        {
+        let marker_revision = {
             let mut owner = store
                 .0
                 .lock()
@@ -898,9 +925,31 @@ pub mod mac {
                 &app.config().identifier,
                 &executable,
             )?;
-            owner.persist(expected_revision, next)?;
+            owner.persist(expected_revision, next)?.revision
+        };
+        let arguments = std::env::args_os().skip(1).collect::<Vec<_>>();
+        let launch = launch_then_exit_with(
+            &executable,
+            &arguments,
+            |path, args| {
+                std::process::Command::new(path)
+                    .args(args)
+                    .spawn()
+                    .map(|_| ())
+            },
+            || app.exit(0),
+        );
+        if let Err(launch_error) = launch {
+            let rollback = store
+                .0
+                .lock()
+                .map_err(|_| "onboarding state unavailable after restart failure".to_owned())
+                .and_then(|mut owner| clear_failed_restart_marker(&mut owner, marker_revision));
+            return match rollback {
+                Ok(()) => Err(launch_error),
+                Err(rollback_error) => Err(format!("{launch_error}; {rollback_error}")),
+            };
         }
-        app.request_restart();
         Ok(())
     }
 
@@ -1144,8 +1193,9 @@ pub mod mac {
     #[cfg(test)]
     mod tests {
         use super::{
-            atomic_save_with, consume_restart_marker, load_and_migrate_path,
-            permission_gate_blocks, restart_marker, validate_packaged_executable, StateOwner,
+            atomic_save_with, clear_failed_restart_marker, consume_restart_marker,
+            launch_then_exit_with, load_and_migrate_path, permission_gate_blocks, restart_marker,
+            validate_packaged_executable, StateOwner,
         };
         use crate::onboarding::state::{self, OnboardingState, OnboardingStep};
 
@@ -1357,6 +1407,71 @@ pub mod mac {
                 .expect("matching marker consumed");
             assert!(consumed.restart_pending.is_none());
             assert_eq!(consumed.revision, 2);
+        }
+
+        #[test]
+        fn restart_launch_failure_does_not_exit_current_process() {
+            let exited = std::cell::Cell::new(false);
+            let result = launch_then_exit_with(
+                std::path::Path::new("/Applications/ShogunAI.app/Contents/MacOS/ShogunAI"),
+                &[],
+                |_path, _args| Err(std::io::Error::other("injected spawn failure")),
+                || exited.set(true),
+            );
+            assert!(result.is_err());
+            assert!(!exited.get());
+        }
+
+        #[test]
+        fn restart_exits_only_after_successful_spawn() {
+            let spawned = std::cell::Cell::new(false);
+            let exited = std::cell::Cell::new(false);
+            launch_then_exit_with(
+                std::path::Path::new("/Applications/ShogunAI.app/Contents/MacOS/ShogunAI"),
+                &[std::ffi::OsString::from("--test")],
+                |_path, args| {
+                    assert_eq!(args, [std::ffi::OsString::from("--test")]);
+                    spawned.set(true);
+                    Ok(())
+                },
+                || {
+                    assert!(spawned.get());
+                    exited.set(true);
+                },
+            )
+            .expect("launch succeeds");
+            assert!(exited.get());
+        }
+
+        #[test]
+        fn failed_restart_clears_persisted_marker_and_keeps_store_usable() {
+            let path = test_path("onboarding.json");
+            let current = restart_marker(
+                &OnboardingState {
+                    step: OnboardingStep::ScreenRecording,
+                    revision: 0,
+                    ..OnboardingState::default()
+                },
+                0,
+                OnboardingStep::ScreenRecording,
+                "com.shogun.ai",
+                std::path::Path::new("/Applications/ShogunAI.app/Contents/MacOS/ShogunAI"),
+            )
+            .expect("marker");
+            let mut owner = StateOwner {
+                current: OnboardingState {
+                    step: OnboardingStep::ScreenRecording,
+                    ..OnboardingState::default()
+                },
+                path: Some(path.clone()),
+            };
+            owner.persist(0, current).expect("persist marker");
+            clear_failed_restart_marker(&mut owner, 1).expect("clear marker");
+            assert_eq!(owner.current.revision, 2);
+            assert!(owner.current.restart_pending.is_none());
+            let disk = load_and_migrate_path(&path);
+            assert_eq!(disk, owner.current);
+            let _ = std::fs::remove_dir_all(path.parent().expect("parent"));
         }
     }
 }

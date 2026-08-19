@@ -83,9 +83,11 @@ Review-fix validation:
 
 ## Restart completion evidence
 
-- Added a packaged-app-only `restart_onboarding` command using Tauri's supported restart request.
-  Loose development executables fail closed because they do not share the installed app's TCC
-  identity.
+- Added a packaged-app-only `restart_onboarding` command. Loose development executables fail
+  closed because they do not share the installed app's TCC identity. Tauri 2.11's convenience
+  restart was intentionally replaced at the final boundary because it exits even when spawning
+  the replacement fails; the command launches the already-validated current bundle executable,
+  preserves process arguments, and requests clean app exit only after spawn succeeds.
 - Restart validates the current revision and exact Screen Recording step, fences/cancels active
   Scribe and voice work, then atomically persists the bundle identity and resume step before the
   restart request.
@@ -97,8 +99,11 @@ Review-fix validation:
 
 Restart validation:
 
-- `cargo test -p shogun-desktop-spike onboarding --lib --offline`: 26 passed.
+- `cargo test -p shogun-desktop-spike onboarding --lib --offline`: 29 passed.
 - `cargo test -p shogun-desktop-spike scribe --lib --offline`: 11 passed.
 - `cargo check -p shogun-desktop-spike --lib --offline`: passed.
 - `apps/desktop/node_modules/.bin/tsc --noEmit -p apps/desktop/tsconfig.json`: passed.
 - `rustfmt` on touched Rust files and `git diff --check`: passed.
+- Injected launcher tests prove spawn failure does not exit the current process, successful spawn
+  precedes exit, and a failed launch durably clears its pending marker while leaving the store
+  usable.
