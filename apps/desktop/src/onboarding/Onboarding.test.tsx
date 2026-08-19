@@ -119,6 +119,20 @@ describe("cinematic onboarding", () => {
     expect(screen.getByRole("heading", { name: "Screen Recording" })).toBeTruthy();
   });
 
+  it("keeps Screen Recording on stage when restart begins", async () => {
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "onboarding_state") return state("screen_recording", 4);
+      if (command === "permission_status" || command === "permission_listener_ready") return { ...emptyPermissions, screen_recording_state: "restart_required" };
+      if (command === "restart_onboarding" || command === "onboarding_event") return undefined;
+      throw new Error(`unexpected command: ${command}`);
+    });
+    render(<Onboarding />);
+    fireEvent.click(await screen.findByRole("button", { name: "Restart SHOGUN" }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("restart_onboarding"));
+    expect(screen.queryByText("Restart did not begin. Keep this window open and try again.")).toBeNull();
+    expect(screen.getByRole("heading", { name: "Screen Recording" })).toBeTruthy();
+  });
+
   it("keeps gate frame mounted and leaves full-window API unreachable", () => {
     const { rerender } = render(<GateFrame />);
     const gate = screen.getByTestId("gate-frame");
@@ -158,7 +172,7 @@ describe("cinematic onboarding", () => {
     render(<Onboarding />);
     const pro = await screen.findByRole("button", { name: /Pro/ });
     expect(pro.getAttribute("aria-pressed")).toBe("true");
-    fireEvent.change(screen.getByDisplayValue(""), { target: { value: "secret" } });
+    fireEvent.change(screen.getByLabelText("Your key"), { target: { value: "secret" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("set_byok_key", { provider: "anthropic", key: "secret" }));
     fireEvent.click(screen.getByRole("button", { name: "Skip for now" }));
@@ -215,6 +229,27 @@ describe("cinematic onboarding", () => {
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("set_onboarding_state", { expectedRevision: 8, step: "scribe_demo", plan: null, completed: false }));
   });
 
+  it("waits for the native shortcut listener before arming or readying", async () => {
+    let resolveShortcutListener!: (off: () => void) => void;
+    vi.mocked(listen).mockImplementation((event) => event === "onboarding-shortcut"
+      ? new Promise<() => void>((resolveListener) => { resolveShortcutListener = resolveListener; })
+      : Promise.resolve(() => undefined));
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "onboarding_state") return state("right_option", 8);
+      if (command === "permission_status" || command === "permission_listener_ready") return emptyPermissions;
+      if (command === "onboarding_shortcut_arm") return { generation: 4, nonce: "nonce", stage: "right_option", binding: "AltRight" };
+      if (command === "onboarding_shortcut_ready" || command === "onboarding_event" || command === "get_shortcuts") return command === "get_shortcuts" ? {} : undefined;
+      throw new Error(`unexpected command: ${command}`);
+    });
+    render(<Onboarding />);
+    expect(await screen.findByRole("heading", { name: "Find Right Option." })).toBeTruthy();
+    expect(invoke).not.toHaveBeenCalledWith("onboarding_shortcut_arm", expect.anything());
+    expect(invoke).not.toHaveBeenCalledWith("onboarding_shortcut_ready", expect.anything());
+    resolveShortcutListener(() => undefined);
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("onboarding_shortcut_arm", { expectedRevision: 8, step: "right_option" }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("onboarding_shortcut_ready", { generation: 4, nonce: "nonce", surfaceGeneration: 0 }));
+  });
+
   it("keeps reduced-motion and offscreen haze stop paths in scoped stylesheet", () => {
     const css = readFileSync(resolve(process.cwd(), "src/onboarding/onboarding.css"), "utf8");
     expect(css.includes("data-haze-motion=\"true\"")).toBe(true);
@@ -232,6 +267,29 @@ describe("cinematic onboarding", () => {
     });
     render(<Onboarding />);
     expect(await screen.findByText("R")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Use ⌃ + ⇧ + R." })).toBeTruthy();
     expect(screen.getByText("Use ⌃ + ⇧ + R once to prepare a draft where your cursor is.")).toBeTruthy();
+  });
+
+  it.each([
+    ["intro", "Make room for your work."],
+    ["welcome", "Make room for your work."],
+    ["reads", "Your work stays yours."],
+    ["privacy", "Your work stays yours."],
+    ["accessibility", "Accessibility"],
+    ["microphone", "Microphone"],
+    ["screen_recording", "Screen Recording"],
+    ["right_option", "Find Right Option."],
+    ["scribe_demo", "Make a rough note clean."],
+    ["dictation_demo", "Speak into the field."],
+    ["plan", "Choose a starting point."],
+    ["connect", "Connect what helps."],
+    ["gate", "Setup is ready."],
+    ["ready", "Setup is ready."],
+  ])("hydrates semantic %s state without a welcome flash", async (step, heading) => {
+    mockNative(step);
+    render(<Onboarding />);
+    expect(await screen.findByRole("heading", { name: heading })).toBeTruthy();
+    if (heading !== "Make room for your work.") expect(screen.queryByRole("heading", { name: "Make room for your work." })).toBeNull();
   });
 });
