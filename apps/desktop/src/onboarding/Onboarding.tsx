@@ -27,6 +27,8 @@ import {
   getDraftStop,
   getOnboardingState,
   IN_TAURI,
+  isCurrentStep,
+  permissionListenerReady,
   permissionStatus,
   requestAxPermission,
   requestMicrophonePermission,
@@ -116,7 +118,18 @@ export function Onboarding(): JSX.Element {
     const offs: Array<Promise<() => void>> = [];
     // Pushed by the native coordinator on initial status, permission edges, request completion,
     // and application activation. Bootstrap read above covers listener registration races.
-    offs.push(listen<PermissionSnapshot>("permissions-changed", (e) => setPermissions(e.payload)));
+    offs.push(
+      listen<PermissionSnapshot>("permissions-changed", (e) => setPermissions(e.payload)).then(
+        (off) => {
+          if (alive) {
+            void permissionListenerReady().then((snapshot) => {
+              if (alive && snapshot) setPermissions(snapshot);
+            });
+          }
+          return off;
+        },
+      ),
+    );
     offs.push(
       listen<{ bundle_id: string; title_masked: string }>("context", (e) =>
         setLiveApp(appName(e.payload.bundle_id)),
@@ -128,14 +141,14 @@ export function Onboarding(): JSX.Element {
     };
   }, []);
 
-  const idx = Math.max(0, state ? STEPS.indexOf(state.step) : 0);
-  const step = state ? STEPS[idx] : "welcome";
+  const step = state && isCurrentStep(state.step) ? state.step : null;
+  const idx = step ? STEPS.indexOf(step) : -1;
   const isPermissionsRepair = state?.permissions_repair === true;
 
   // Track each step view once per arrival.
   const lastTracked = useRef<string | null>(null);
   useEffect(() => {
-    if (!state) return;
+    if (!state || !step) return;
     if (lastTracked.current !== step) {
       lastTracked.current = step;
       track(step);
@@ -152,14 +165,14 @@ export function Onboarding(): JSX.Element {
 
   const go = useCallback(
     (delta: number): void => {
-      if (!state) return;
+      if (!state || !step || idx < 0) return;
       const next = STEPS[Math.min(STEPS.length - 1, Math.max(0, idx + delta))];
       const record = { ...state, step: next };
       void setOnboardingState(record).then((saved) => {
         if (saved) setState(saved);
       });
     },
-    [idx, state],
+    [idx, state, step],
   );
 
   const finish = useCallback((): void => {
@@ -173,7 +186,7 @@ export function Onboarding(): JSX.Element {
     });
   }, [permissions.all_granted, state]);
 
-  if (!state) return <div className="onb" />;
+  if (!state || !step) return <div className="onb" />;
 
   // Per-step footer. `skip` is offered only where skipping leaves a working product — never on
   // the steps that are pure explanation, where there is nothing to skip.

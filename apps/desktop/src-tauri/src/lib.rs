@@ -368,6 +368,7 @@ pub fn run() {
             billing::mac::billing_open_checkout,
             billing::mac::billing_open_portal,
             onboarding::mac::permission_status,
+            onboarding::mac::permission_listener_ready,
             onboarding::mac::onboarding_state,
             onboarding::mac::set_onboarding_state,
             onboarding::mac::open_accessibility_settings,

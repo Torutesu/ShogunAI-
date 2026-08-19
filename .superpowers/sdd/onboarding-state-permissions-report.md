@@ -57,3 +57,33 @@ Date: 2026-08-19
   no fake or partial restart command was added.
 - Signed packaged-app/device qualification remains required for real TCC transitions,
   application activation, Screen Recording restart-required behavior, denial/repair, and revoke.
+
+## Review-fix evidence (`fix(onboarding): close permission coordinator gaps`)
+
+- I1: application activation now refreshes app-lifetime coordinator even after UI polling stops;
+  stopped onboarding generation no longer blocks revoke/regrant detection.
+- I2: Screen Recording distinguishes prompt-granted restart requirement from Settings-opened
+  repair pending. Effective access clears repair state; later revoke returns honest not-granted.
+- I3: onboarding window destruction explicitly stops its generation. Poll worker checks generation,
+  never window labels. Frontend resolves event listener, then invokes listener-ready handshake;
+  native side emits one bounded initial snapshot after readiness while bootstrap IPC remains truth.
+- I4: `Store::load` atomically rewrites supported v1/legacy records as v2 immediately. Failed
+  migration keeps original destination and migrated managed state.
+- M1: parser accepts exactly versions 1 and 2. Future/malformed versioned files fail safe and are
+  never rewritten.
+- M2: frontend recognizes all current semantic Rust step tags. Future-stage records render inertly;
+  navigation cannot overwrite them with legacy steps.
+- M3: same-directory temp names now use 128-bit OS randomness and retry eight `create_new`
+  collisions. Injected stale-name test proves retry without overwriting stale temp.
+
+Review-fix validation:
+
+- `cargo test -p shogun-desktop-spike onboarding --lib --offline`: 22 passed.
+- `cargo test -p shogun-desktop-spike permissions::tests --lib --offline`: 4 passed.
+- `cargo check -p shogun-desktop-spike --lib`: passed.
+- `apps/desktop/node_modules/.bin/tsc --noEmit --pretty false`: passed.
+- `apps/desktop/node_modules/.bin/vitest run src/onboarding/Onboarding.test.tsx`: 4 passed.
+- `rustfmt --check ...` and `git diff --check`: passed.
+
+Remaining concern: C1 restart flow intentionally unchanged in this follow-up; root integration owns
+that work under direct authorization.

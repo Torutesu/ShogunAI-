@@ -30,6 +30,14 @@ pub enum ScreenRecordingState {
 #[serde(rename_all = "snake_case")]
 pub enum PermissionReason {
     ScreenRecordingRestartRequired,
+    ScreenRecordingSettingsRepairPending,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ScreenRequestResult {
+    AlreadyEffective,
+    PromptGranted,
+    SettingsOpened,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -43,7 +51,7 @@ pub trait PermissionProvider: Send + Sync + 'static {
     fn status(&self) -> RawPermissionStatus;
     fn request_accessibility(&self) -> Result<(), String>;
     fn request_microphone(&self, finished: Box<dyn FnOnce() + Send>) -> Result<(), String>;
-    fn request_screen_recording(&self) -> Result<bool, String>;
+    fn request_screen_recording(&self) -> Result<ScreenRequestResult, String>;
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -83,8 +91,16 @@ pub struct PermissionCoordinator<P> {
     latest: PermissionSnapshot,
     initialized: bool,
     active: bool,
+    listener_ready: bool,
     generation: u64,
-    screen_restart_required: bool,
+    screen_repair: ScreenRepair,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ScreenRepair {
+    None,
+    RestartRequired,
+    SettingsPending,
 }
 
 impl<P: PermissionProvider> PermissionCoordinator<P> {
@@ -94,8 +110,9 @@ impl<P: PermissionProvider> PermissionCoordinator<P> {
             latest: PermissionSnapshot::default(),
             initialized: false,
             active: false,
+            listener_ready: false,
             generation: 0,
-            screen_restart_required: false,
+            screen_repair: ScreenRepair::None,
         }
     }
 
@@ -106,12 +123,12 @@ impl<P: PermissionProvider> PermissionCoordinator<P> {
         } else {
             AccessibilityState::NotGranted
         };
-        let screen_recording_state = if raw.screen_recording_effective {
-            ScreenRecordingState::Granted
-        } else if self.screen_restart_required {
-            ScreenRecordingState::RestartRequired
-        } else {
-            ScreenRecordingState::NotGranted
+        let screen_recording_state = match (raw.screen_recording_effective, self.screen_repair) {
+            (true, _) => ScreenRecordingState::Granted,
+            (false, ScreenRepair::RestartRequired) => ScreenRecordingState::RestartRequired,
+            (false, ScreenRepair::None | ScreenRepair::SettingsPending) => {
+                ScreenRecordingState::NotGranted
+            }
         };
         let accessibility = accessibility_state == AccessibilityState::Granted;
         let microphone = raw.microphone == MicrophoneState::Granted;
@@ -126,8 +143,17 @@ impl<P: PermissionProvider> PermissionCoordinator<P> {
             microphone_state: raw.microphone,
             screen_recording_state,
             all_effective,
-            reason: (screen_recording_state == ScreenRecordingState::RestartRequired)
-                .then_some(PermissionReason::ScreenRecordingRestartRequired),
+            reason: match self.screen_repair {
+                ScreenRepair::RestartRequired if !raw.screen_recording_effective => {
+                    Some(PermissionReason::ScreenRecordingRestartRequired)
+                }
+                ScreenRepair::SettingsPending if !raw.screen_recording_effective => {
+                    Some(PermissionReason::ScreenRecordingSettingsRepairPending)
+                }
+                ScreenRepair::None
+                | ScreenRepair::RestartRequired
+                | ScreenRepair::SettingsPending => None,
+            },
             revision: self.latest.revision,
         }
     }
@@ -135,7 +161,7 @@ impl<P: PermissionProvider> PermissionCoordinator<P> {
     fn refresh(&mut self) -> Option<PermissionSnapshot> {
         let mut sampled = self.sampled();
         if sampled.screen_recording_effective() {
-            self.screen_restart_required = false;
+            self.screen_repair = ScreenRepair::None;
             sampled.screen_recording_state = ScreenRecordingState::Granted;
             sampled.reason = None;
         }
@@ -155,21 +181,39 @@ impl<P: PermissionProvider> PermissionCoordinator<P> {
         (self.latest, edge)
     }
 
-    pub fn start(&mut self) -> (u64, Option<PermissionSnapshot>) {
+    pub fn start(&mut self) -> (u64, bool) {
         if self.active {
-            return (self.generation, None);
+            return (self.generation, false);
         }
         self.generation = self.generation.wrapping_add(1);
         self.active = true;
-        let edge = self.refresh();
-        (self.generation, edge.or(Some(self.latest)))
+        self.listener_ready = false;
+        let _ = self.refresh();
+        (self.generation, true)
+    }
+
+    pub fn listener_ready(&mut self) -> Option<PermissionSnapshot> {
+        if !self.active || self.listener_ready {
+            return None;
+        }
+        self.listener_ready = true;
+        Some(self.latest)
     }
 
     pub fn stop(&mut self, generation: u64) {
         if self.active && self.generation == generation {
             self.active = false;
+            self.listener_ready = false;
             self.generation = self.generation.wrapping_add(1);
         }
+    }
+
+    pub fn generation_active(&self, generation: u64) -> bool {
+        self.active && self.generation == generation
+    }
+
+    pub fn events_enabled(&self) -> bool {
+        !self.active || self.listener_ready
     }
 
     pub fn poll(&mut self, generation: u64) -> Option<PermissionSnapshot> {
@@ -179,15 +223,19 @@ impl<P: PermissionProvider> PermissionCoordinator<P> {
     }
 
     pub fn activation_refresh(&mut self) -> Option<PermissionSnapshot> {
-        self.active.then(|| self.refresh()).flatten()
+        self.refresh()
     }
 
     pub fn request_finished(
         &mut self,
-        screen_request_granted: Option<bool>,
+        screen_request: Option<ScreenRequestResult>,
     ) -> Option<PermissionSnapshot> {
-        if screen_request_granted == Some(true) {
-            self.screen_restart_required = true;
+        if let Some(screen_request) = screen_request {
+            self.screen_repair = match screen_request {
+                ScreenRequestResult::AlreadyEffective => ScreenRepair::None,
+                ScreenRequestResult::PromptGranted => ScreenRepair::RestartRequired,
+                ScreenRequestResult::SettingsOpened => ScreenRepair::SettingsPending,
+            };
         }
         self.refresh()
     }
@@ -218,7 +266,7 @@ pub mod mac {
 
     use super::{
         MicrophoneState, PermissionCoordinator, PermissionProvider, PermissionSnapshot,
-        RawPermissionStatus,
+        RawPermissionStatus, ScreenRequestResult,
     };
     use crate::axcache;
 
@@ -311,19 +359,23 @@ pub mod mac {
             }
         }
 
-        fn request_screen_recording(&self) -> Result<bool, String> {
+        fn request_screen_recording(&self) -> Result<ScreenRequestResult, String> {
             use objc2_core_graphics::{
                 CGPreflightScreenCaptureAccess, CGRequestScreenCaptureAccess,
             };
 
             if CGPreflightScreenCaptureAccess() {
-                return Ok(true);
+                return Ok(ScreenRequestResult::AlreadyEffective);
             }
             let granted = CGRequestScreenCaptureAccess();
             if !granted {
                 open_privacy_settings(SCREEN_RECORDING_SETTINGS_URL, "Screen Recording")?;
             }
-            Ok(granted)
+            Ok(if granted {
+                ScreenRequestResult::PromptGranted
+            } else {
+                ScreenRequestResult::SettingsOpened
+            })
         }
     }
 
@@ -351,25 +403,19 @@ pub mod mac {
         let Ok(mut coordinator) = runtime.0.lock() else {
             return PermissionSnapshot::default();
         };
-        let (snapshot, edge) = coordinator.status();
-        drop(coordinator);
-        emit_edge(app, edge);
-        snapshot
+        coordinator.status().0
     }
 
-    pub fn start(app: AppHandle) {
-        let Some(runtime) = app.try_state::<PermissionRuntime>() else {
-            return;
-        };
+    pub fn start(app: AppHandle) -> Option<u64> {
+        let runtime = app.try_state::<PermissionRuntime>()?;
         let Ok(mut coordinator) = runtime.0.lock() else {
-            return;
+            return None;
         };
-        let (generation, initial) = coordinator.start();
+        let (generation, started) = coordinator.start();
         drop(coordinator);
-        let Some(initial) = initial else {
-            return;
-        };
-        let _ = app.emit("permissions-changed", initial);
+        if !started {
+            return Some(generation);
+        }
         std::thread::spawn(move || loop {
             std::thread::sleep(Duration::from_millis(500));
             let Some(runtime) = app.try_state::<PermissionRuntime>() else {
@@ -378,29 +424,55 @@ pub mod mac {
             let Ok(mut coordinator) = runtime.0.lock() else {
                 return;
             };
-            if app
-                .get_webview_window(crate::onboarding::mac::ONBOARDING_LABEL)
-                .is_none()
-            {
-                coordinator.stop(generation);
+            if !coordinator.generation_active(generation) {
                 return;
             }
             let edge = coordinator.poll(generation);
+            let emit = coordinator.events_enabled();
             drop(coordinator);
-            emit_edge(&app, edge);
+            if emit {
+                emit_edge(&app, edge);
+            }
         });
+        Some(generation)
     }
 
-    fn request_finished(app: &AppHandle, screen_request_granted: Option<bool>) {
+    pub fn stop(app: &AppHandle, generation: u64) {
+        let Some(runtime) = app.try_state::<PermissionRuntime>() else {
+            return;
+        };
+        if let Ok(mut coordinator) = runtime.0.lock() {
+            coordinator.stop(generation);
+        };
+    }
+
+    pub fn listener_ready(app: &AppHandle) -> PermissionSnapshot {
+        let Some(runtime) = app.try_state::<PermissionRuntime>() else {
+            return PermissionSnapshot::default();
+        };
+        let Ok(mut coordinator) = runtime.0.lock() else {
+            return PermissionSnapshot::default();
+        };
+        let latest = coordinator.status().0;
+        let initial = coordinator.listener_ready();
+        drop(coordinator);
+        emit_edge(app, initial);
+        latest
+    }
+
+    fn request_finished(app: &AppHandle, screen_request: Option<ScreenRequestResult>) {
         let Some(runtime) = app.try_state::<PermissionRuntime>() else {
             return;
         };
         let Ok(mut coordinator) = runtime.0.lock() else {
             return;
         };
-        let edge = coordinator.request_finished(screen_request_granted);
+        let edge = coordinator.request_finished(screen_request);
+        let emit = coordinator.events_enabled();
         drop(coordinator);
-        emit_edge(app, edge);
+        if emit {
+            emit_edge(app, edge);
+        }
     }
 
     pub fn request_accessibility(app: &AppHandle) -> Result<(), String> {
@@ -439,8 +511,8 @@ pub mod mac {
             .lock()
             .map_err(|_| "permission coordinator unavailable".to_owned())?
             .provider();
-        let granted = provider.request_screen_recording()?;
-        request_finished(app, Some(granted));
+        let result = provider.request_screen_recording()?;
+        request_finished(app, Some(result));
         Ok(())
     }
 
@@ -469,8 +541,11 @@ pub mod mac {
                     return;
                 };
                 let edge = coordinator.activation_refresh();
+                let emit = coordinator.events_enabled();
                 drop(coordinator);
-                emit_edge(&handle, edge);
+                if emit {
+                    emit_edge(&handle, edge);
+                }
             });
             let nil: *mut AnyObject = std::ptr::null_mut();
             let _observer: *mut AnyObject = msg_send![center, addObserverForName: &*name, object: nil, queue: nil, usingBlock: &*block];
@@ -523,9 +598,9 @@ mod tests {
             Ok(())
         }
 
-        fn request_screen_recording(&self) -> Result<bool, String> {
+        fn request_screen_recording(&self) -> Result<ScreenRequestResult, String> {
             self.request_calls.fetch_add(1, Ordering::Relaxed);
-            Ok(true)
+            Ok(ScreenRequestResult::PromptGranted)
         }
     }
 
@@ -549,11 +624,15 @@ mod tests {
     }
 
     #[test]
-    fn initial_edge_once_request_activation_and_generation_cancellation() {
+    fn listener_ready_initial_edge_once_and_generation_cancellation() {
         let provider = ProviderDouble::new(denied());
         let mut coordinator = PermissionCoordinator::new(provider);
-        let (generation, initial) = coordinator.start();
-        assert_eq!(initial.expect("initial").revision, 1);
+        let (generation, started) = coordinator.start();
+        assert!(started);
+        assert!(!coordinator.events_enabled());
+        assert_eq!(coordinator.listener_ready().expect("initial").revision, 1);
+        assert!(coordinator.events_enabled());
+        assert!(coordinator.listener_ready().is_none());
         assert!(coordinator.poll(generation).is_none());
 
         coordinator.provider().set(RawPermissionStatus {
@@ -589,8 +668,16 @@ mod tests {
         );
 
         coordinator.stop(generation);
+        assert!(coordinator.events_enabled());
         coordinator.provider().set(denied());
         assert!(coordinator.poll(generation).is_none());
+        assert_eq!(
+            coordinator
+                .activation_refresh()
+                .expect("app lifetime activation edge")
+                .revision,
+            5
+        );
     }
 
     #[test]
@@ -603,12 +690,58 @@ mod tests {
         let mut coordinator = PermissionCoordinator::new(provider);
         let _ = coordinator.status();
         let edge = coordinator
-            .request_finished(Some(true))
+            .request_finished(Some(ScreenRequestResult::PromptGranted))
             .expect("restart edge");
         assert_eq!(
             edge.screen_recording_state,
             ScreenRecordingState::RestartRequired
         );
         assert!(!edge.all_effective);
+    }
+
+    #[test]
+    fn settings_repair_reason_is_honest_and_later_revoke_is_not_restart_required() {
+        let provider = ProviderDouble::new(RawPermissionStatus {
+            accessibility: true,
+            microphone: MicrophoneState::Granted,
+            screen_recording_effective: false,
+        });
+        let mut coordinator = PermissionCoordinator::new(provider);
+        let _ = coordinator.status();
+        let repair = coordinator
+            .request_finished(Some(ScreenRequestResult::SettingsOpened))
+            .expect("settings repair edge");
+        assert_eq!(
+            repair.screen_recording_state,
+            ScreenRecordingState::NotGranted
+        );
+        assert_eq!(
+            repair.reason,
+            Some(PermissionReason::ScreenRecordingSettingsRepairPending)
+        );
+
+        coordinator.provider().set(RawPermissionStatus {
+            accessibility: true,
+            microphone: MicrophoneState::Granted,
+            screen_recording_effective: true,
+        });
+        assert_eq!(
+            coordinator
+                .activation_refresh()
+                .expect("effective edge")
+                .screen_recording_state,
+            ScreenRecordingState::Granted
+        );
+        coordinator.provider().set(RawPermissionStatus {
+            accessibility: true,
+            microphone: MicrophoneState::Granted,
+            screen_recording_effective: false,
+        });
+        let revoked = coordinator.activation_refresh().expect("revoke edge");
+        assert_eq!(
+            revoked.screen_recording_state,
+            ScreenRecordingState::NotGranted
+        );
+        assert_eq!(revoked.reason, None);
     }
 }

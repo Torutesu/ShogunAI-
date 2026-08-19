@@ -243,11 +243,21 @@ pub mod state {
     /// Anything unreadable is first-run (`Default`) — this is a guide, not a data-integrity
     /// surface.
     pub fn parse(text: &str) -> OnboardingState {
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(text) {
+            if let Some(version) = value.get("version") {
+                let supported = version.as_u64().is_some_and(|version| {
+                    version == 1 || version == u64::from(ONBOARDING_VERSION)
+                });
+                if !supported {
+                    return OnboardingState::default();
+                }
+            }
+        }
         if let Ok(file) = serde_json::from_str::<OnboardingFile>(text) {
             // The legacy file has no `version` field, which deserializes as 0 with a default
             // (first-run!) state — so version 0 falls through to the legacy branch instead of
             // silently discarding the old disposition.
-            if file.version >= ONBOARDING_VERSION {
+            if file.version == ONBOARDING_VERSION {
                 return file.state;
             }
         }
@@ -286,6 +296,21 @@ pub mod state {
             };
         }
         OnboardingState::default()
+    }
+
+    pub fn migration_needed(text: &str) -> bool {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
+            return false;
+        };
+        match value.get("version").and_then(serde_json::Value::as_u64) {
+            Some(1) => serde_json::from_value::<OnboardingFileV1>(value)
+                .ok()
+                .and_then(|file| OnboardingStep::from_v1(&file.state.step))
+                .is_some(),
+            Some(_) => false,
+            None => serde_json::from_value::<LegacyDisposition>(value)
+                .is_ok_and(|legacy| legacy.completed || legacy.skipped),
+        }
     }
 
     #[cfg(test)]
@@ -330,6 +355,20 @@ pub mod state {
             assert!(serde_json::from_str::<OnboardingStep>(r#""surprise""#).is_err());
             let state = parse(r#"{"version":2,"state":{"step":"surprise"}}"#);
             assert_eq!(state, OnboardingState::default());
+        }
+
+        #[test]
+        fn future_file_version_is_rejected_without_downgrade() {
+            for json in [
+                r#"{"version":3,"state":{"step":"ready","completed":true}}"#,
+                r#"{"version":3,"completed":true}"#,
+                r#"{"version":"3","completed":true}"#,
+            ] {
+                assert_eq!(parse(json), OnboardingState::default());
+            }
+            assert!(!migration_needed(
+                r#"{"version":3,"state":{"step":"ready","completed":true}}"#
+            ));
         }
 
         #[test]
@@ -486,7 +525,8 @@ pub mod mac {
     use std::fs::OpenOptions;
     use std::io::Write;
     use std::path::{Path, PathBuf};
-    use std::sync::atomic::{AtomicU64, Ordering};
+    #[cfg(test)]
+    use std::sync::atomic::AtomicU64;
     use std::sync::Mutex;
 
     use tauri::{AppHandle, Manager};
@@ -520,10 +560,12 @@ pub mod mac {
 
     impl Store {
         pub fn load(app: &AppHandle) -> Self {
-            Self(Mutex::new(StateOwner {
-                current: load(app),
-                path: config_path(app),
-            }))
+            let path = config_path(app);
+            let current = path
+                .as_deref()
+                .map(load_and_migrate_path)
+                .unwrap_or_default();
+            Self(Mutex::new(StateOwner { current, path }))
         }
     }
 
@@ -540,12 +582,23 @@ pub mod mac {
         let Some(p) = config_path(app) else {
             return OnboardingState::default();
         };
-        let Ok(text) = std::fs::read_to_string(p) else {
-            return OnboardingState::default();
-        };
-        state::parse(&text)
+        load_and_migrate_path(&p)
     }
 
+    fn load_and_migrate_path(path: &Path) -> OnboardingState {
+        let Ok(text) = std::fs::read_to_string(path) else {
+            return OnboardingState::default();
+        };
+        let parsed = state::parse(&text);
+        if state::migration_needed(&text) {
+            if let Err(error) = atomic_save(path, &parsed) {
+                eprintln!("[onboarding] v2 migration save failed: {error}");
+            }
+        }
+        parsed
+    }
+
+    #[cfg(test)]
     static TEMP_NONCE: AtomicU64 = AtomicU64::new(1);
 
     fn serialized(s: &OnboardingState) -> Result<Vec<u8>, String> {
@@ -556,9 +609,24 @@ pub mod mac {
         serde_json::to_vec_pretty(&file).map_err(|error| error.to_string())
     }
 
-    fn atomic_save_with_rename(
+    fn random_temp_suffix() -> Result<String, String> {
+        use std::fmt::Write as _;
+
+        let mut bytes = [0_u8; 16];
+        getrandom::getrandom(&mut bytes)
+            .map_err(|error| format!("onboarding temp randomness failed: {error}"))?;
+        let mut suffix = String::with_capacity(bytes.len() * 2);
+        for byte in bytes {
+            write!(&mut suffix, "{byte:02x}")
+                .map_err(|_| "onboarding temp name formatting failed".to_owned())?;
+        }
+        Ok(suffix)
+    }
+
+    fn atomic_save_with(
         path: &Path,
         state: &OnboardingState,
+        mut next_suffix: impl FnMut() -> Result<String, String>,
         rename: impl FnOnce(&Path, &Path) -> std::io::Result<()>,
     ) -> Result<(), String> {
         let parent = path
@@ -570,15 +638,27 @@ pub mod mac {
             .file_name()
             .and_then(|name| name.to_str())
             .ok_or_else(|| "onboarding path has no file name".to_owned())?;
-        let nonce = TEMP_NONCE.fetch_add(1, Ordering::Relaxed);
-        let temp = parent.join(format!(".{name}.{}.{}.tmp", std::process::id(), nonce));
+        let bytes = serialized(state)?;
+        let mut opened = None;
+        for _ in 0..8 {
+            let suffix = next_suffix()?;
+            let temp = parent.join(format!(".{name}.{suffix}.tmp"));
+            match OpenOptions::new().write(true).create_new(true).open(&temp) {
+                Ok(file) => {
+                    opened = Some((temp, file));
+                    break;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => {
+                    return Err(format!("onboarding temp create failed: {error}"));
+                }
+            }
+        }
+        let Some((temp, mut file)) = opened else {
+            return Err("onboarding temp create failed after collision retries".to_owned());
+        };
         let result = (|| {
-            let mut file = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&temp)
-                .map_err(|error| format!("onboarding temp create failed: {error}"))?;
-            file.write_all(&serialized(state)?)
+            file.write_all(&bytes)
                 .map_err(|error| format!("onboarding temp write failed: {error}"))?;
             file.sync_all()
                 .map_err(|error| format!("onboarding temp sync failed: {error}"))?;
@@ -590,6 +670,18 @@ pub mod mac {
             let _ = std::fs::remove_file(&temp);
         }
         result
+    }
+
+    fn atomic_save_with_rename(
+        path: &Path,
+        state: &OnboardingState,
+        rename: impl FnOnce(&Path, &Path) -> std::io::Result<()>,
+    ) -> Result<(), String> {
+        atomic_save_with(path, state, random_temp_suffix, rename)
+    }
+
+    fn atomic_save(path: &Path, state: &OnboardingState) -> Result<(), String> {
+        atomic_save_with_rename(path, state, |from, to| std::fs::rename(from, to))
     }
 
     impl StateOwner {
@@ -642,6 +734,11 @@ pub mod mac {
     #[tauri::command]
     pub fn permission_status(app: AppHandle) -> PermissionSnapshot {
         crate::permissions::mac::status(&app)
+    }
+
+    #[tauri::command]
+    pub fn permission_listener_ready(app: AppHandle) -> PermissionSnapshot {
+        crate::permissions::mac::listener_ready(&app)
     }
 
     /// Current onboarding state for the flow (invariant 1: Rust owns it). Reads the managed copy
@@ -798,8 +895,8 @@ pub mod mac {
 
     /// Poll all required permissions while onboarding is open and emit a snapshot on every edge.
     /// Every status API is non-prompting. Idempotent while one watcher is live.
-    pub fn start_watcher(app: AppHandle) {
-        crate::permissions::mac::start(app);
+    pub fn start_watcher(app: AppHandle) -> Option<u64> {
+        crate::permissions::mac::start(app)
     }
 
     /// Build the onboarding window (a plain centered window) and start the permission watcher.
@@ -833,7 +930,14 @@ pub mod mac {
                 let _ = win.set_focus();
                 float_over_all_spaces(&win);
                 crate::permission_drag::install_monitor(app);
-                start_watcher(app.clone());
+                if let Some(generation) = start_watcher(app.clone()) {
+                    let stop_app = app.clone();
+                    win.on_window_event(move |event| {
+                        if matches!(event, tauri::WindowEvent::Destroyed) {
+                            crate::permissions::mac::stop(&stop_app, generation);
+                        }
+                    });
+                }
             }
             Err(e) => eprintln!("[onboarding] window build failed: {e}"),
         }
@@ -902,7 +1006,7 @@ pub mod mac {
 
     #[cfg(test)]
     mod tests {
-        use super::{permission_gate_blocks, StateOwner};
+        use super::{atomic_save_with, load_and_migrate_path, permission_gate_blocks, StateOwner};
         use crate::onboarding::state::{self, OnboardingState, OnboardingStep};
 
         fn test_path(name: &str) -> std::path::PathBuf {
@@ -959,6 +1063,58 @@ pub mod mac {
                 b"last-good"
             );
             let _ = std::fs::remove_dir_all(path.parent().expect("parent"));
+        }
+
+        #[test]
+        fn store_load_durably_migrates_v1_to_v2() {
+            let path = test_path("onboarding.json");
+            std::fs::create_dir_all(path.parent().expect("parent")).expect("create test dir");
+            std::fs::write(
+                &path,
+                r#"{"version":1,"state":{"step":"plan","plan":"pro","trial_started_at":42}}"#,
+            )
+            .expect("seed v1");
+            let state = load_and_migrate_path(&path);
+            assert_eq!(state.step, OnboardingStep::Plan);
+            let written: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&path).expect("read migrated file"))
+                    .expect("parse migrated file");
+            assert_eq!(written["version"], 2);
+            let _ = std::fs::remove_dir_all(path.parent().expect("parent"));
+        }
+
+        #[test]
+        fn store_load_rejects_future_version_without_rewriting_it() {
+            let path = test_path("onboarding.json");
+            std::fs::create_dir_all(path.parent().expect("parent")).expect("create test dir");
+            let future = r#"{"version":3,"state":{"step":"ready","completed":true,"future":42}}"#;
+            std::fs::write(&path, future).expect("seed future file");
+            assert_eq!(load_and_migrate_path(&path), OnboardingState::default());
+            assert_eq!(
+                std::fs::read_to_string(&path).expect("future remains"),
+                future
+            );
+            let _ = std::fs::remove_dir_all(path.parent().expect("parent"));
+        }
+
+        #[test]
+        fn atomic_save_retries_stale_temp_name_collision() {
+            let path = test_path("onboarding.json");
+            let parent = path.parent().expect("parent");
+            std::fs::create_dir_all(parent).expect("create test dir");
+            let stale = parent.join(".onboarding.json.collision.tmp");
+            std::fs::write(&stale, b"stale").expect("seed collision");
+            let mut suffixes = ["collision", "fresh"].into_iter();
+            atomic_save_with(
+                &path,
+                &OnboardingState::default(),
+                || Ok(suffixes.next().expect("retry suffix").to_owned()),
+                |from, to| std::fs::rename(from, to),
+            )
+            .expect("save after collision");
+            assert_eq!(std::fs::read(stale).expect("stale remains"), b"stale");
+            assert!(path.exists());
+            let _ = std::fs::remove_dir_all(parent);
         }
 
         #[test]

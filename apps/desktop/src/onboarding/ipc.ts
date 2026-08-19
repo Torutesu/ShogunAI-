@@ -33,13 +33,29 @@ function ask<T>(cmd: string, args: Record<string, unknown>, fallback: T): Promis
 /** Where the user got to. Persisted by Rust so a quit mid-flow resumes, not restarts. */
 export type StepId = "welcome" | "reads" | "permission" | "plan" | "connect" | "ready";
 
+export type SemanticStepId =
+  | StepId
+  | "intro"
+  | "accessibility"
+  | "microphone"
+  | "screen_recording"
+  | "right_option"
+  | "scribe_demo"
+  | "dictation_demo"
+  | "privacy"
+  | "gate";
+
 export const STEPS: StepId[] = ["welcome", "reads", "permission", "plan", "connect", "ready"];
+
+export function isCurrentStep(step: SemanticStepId): step is StepId {
+  return (STEPS as SemanticStepId[]).includes(step);
+}
 
 export interface OnboardingState {
   /** True once the user has finished (or explicitly skipped to the end). */
   completed: boolean;
   /** The furthest step reached, so quitting mid-flow resumes there. */
-  step: StepId;
+  step: SemanticStepId;
   /** Compare-and-set revision returned by Rust. */
   revision: number;
   intro_complete: boolean;
@@ -47,7 +63,7 @@ export interface OnboardingState {
   restart_pending?: {
     reason: "screen_recording";
     bundle_id: string;
-    step: string;
+    step: SemanticStepId;
   } | null;
   /** Which plan the user said they wanted. Billing is a separate flow; this only decides whether
    *  onboarding asks for a key. Real entitlement gating is a Rust-core follow-up. */
@@ -66,7 +82,10 @@ export interface PermissionSnapshot {
   microphone_state: "not_determined" | "denied" | "restricted" | "granted";
   screen_recording_state: "not_granted" | "granted" | "restart_required";
   all_effective: boolean;
-  reason: "screen_recording_restart_required" | null;
+  reason:
+    | "screen_recording_restart_required"
+    | "screen_recording_settings_repair_pending"
+    | null;
   revision: number;
 }
 
@@ -135,6 +154,13 @@ export function setOnboardingState(next: OnboardingState): Promise<OnboardingSta
 /** `permission_status() -> PermissionSnapshot` — every check is NON-prompting. */
 export function permissionStatus(): Promise<PermissionSnapshot> {
   return ask<PermissionSnapshot>("permission_status", {}, EMPTY_PERMISSIONS);
+}
+
+/** Listener-ready handshake. Rust emits one initial snapshot only after this command follows a
+ * resolved `listen`, while `permissionStatus` remains authoritative bootstrap. */
+export function permissionListenerReady(): Promise<PermissionSnapshot | null> {
+  if (!IN_TAURI) return Promise.resolve(null);
+  return invoke<PermissionSnapshot>("permission_listener_ready").catch(() => null);
 }
 
 /** `open_accessibility_settings()` — the prompting variant, fired once from the button; also

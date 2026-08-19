@@ -21,7 +21,7 @@ describe("unified permission onboarding", () => {
           permissions_repair: true,
         };
       }
-      if (command === "permission_status") {
+      if (command === "permission_status" || command === "permission_listener_ready") {
         return {
           accessibility: true,
           microphone: true,
@@ -38,6 +38,7 @@ describe("unified permission onboarding", () => {
     expect(await screen.findByText("3 of 3 ready")).toBeTruthy();
     expect(screen.getAllByText("Ready")).toHaveLength(3);
     expect(screen.queryByText("Waiting for permission…")).toBeNull();
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("permission_listener_ready"));
   });
 
   it("shows every required permission together and blocks continue until all are ready", async () => {
@@ -91,6 +92,24 @@ describe("unified permission onboarding", () => {
       });
     });
     expect(screen.getByText("SHOGUN lives in the notch.")).toBeTruthy();
+  });
+
+  it("does not downgrade or overwrite a future semantic step", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "onboarding_state") {
+        return { completed: false, step: "screen_recording", plan: null, revision: 9 };
+      }
+      if (command === "permission_status") return { ...EMPTY_PERMISSION_RESULT };
+      if (command === "onboarding_event") return undefined;
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    render(<Onboarding />);
+
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("onboarding_state"));
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(invoke).not.toHaveBeenCalledWith("set_onboarding_state", expect.anything());
   });
 });
 
