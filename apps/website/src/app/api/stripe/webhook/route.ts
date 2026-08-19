@@ -40,6 +40,29 @@ const HANDLED = new Set([
   'invoice.payment_failed',
 ]);
 
+/** Injectable boundary for route-level tests; production uses the imported services below. */
+type WebhookDeps = {
+  stripe: typeof stripe;
+  stripeSecretKey: typeof stripeSecretKey;
+  webhookSecret: typeof webhookSecret;
+  claimStripeEvent: typeof claimStripeEvent;
+  ensureLicense: typeof ensureLicense;
+  linkCustomer: typeof linkCustomer;
+  releaseStripeEvent: typeof releaseStripeEvent;
+  upsertSubscription: typeof upsertSubscription;
+};
+
+const defaultWebhookDeps: WebhookDeps = {
+  stripe,
+  stripeSecretKey,
+  webhookSecret,
+  claimStripeEvent,
+  ensureLicense,
+  linkCustomer,
+  releaseStripeEvent,
+  upsertSubscription,
+};
+
 /**
  * Mirror one subscription (by id, freshly read) into our tables.
  *
@@ -51,19 +74,19 @@ const HANDLED = new Set([
  * leaves the row cancelled; throwing instead would 500 on every retry and pin a stale `active`
  * row in place for the whole retry window — the one outcome this route exists to prevent.
  */
-async function syncSubscription(subId: string, terminalFallback?: StripeSubscriptionLike): Promise<void> {
+async function syncSubscription(deps: WebhookDeps, subId: string, terminalFallback?: StripeSubscriptionLike): Promise<void> {
   let sub: StripeSubscriptionLike;
   try {
-    sub = (await stripe().subscriptions.retrieve(subId)) as unknown as StripeSubscriptionLike;
+    sub = (await deps.stripe().subscriptions.retrieve(subId)) as unknown as StripeSubscriptionLike;
   } catch (e) {
     if (!terminalFallback) throw e;
     console.error('webhook: subscription re-read failed, applying terminal payload:', subId, e);
     sub = terminalFallback;
   }
-  await upsertSubscription(toSubscriptionRecord(sub));
+  await deps.upsertSubscription(toSubscriptionRecord(sub));
 }
 
-async function onCheckoutCompleted(session: Stripe.Checkout.Session): Promise<void> {
+async function onCheckoutCompleted(deps: WebhookDeps, session: Stripe.Checkout.Session): Promise<void> {
   const subId = typeof session.subscription === 'string' ? session.subscription : session.subscription?.id;
   const customerId = typeof session.customer === 'string' ? session.customer : session.customer?.id;
   if (!subId || !customerId) return; // one-off payment — nothing to license
@@ -73,10 +96,10 @@ async function onCheckoutCompleted(session: Stripe.Checkout.Session): Promise<vo
     session.customer_email?.trim().toLowerCase() ??
     null;
 
-  await syncSubscription(subId);
-  if (email) await linkCustomer(email, customerId);
+  await syncSubscription(deps, subId);
+  if (email) await deps.linkCustomer(email, customerId);
 
-  const license = await ensureLicense({
+  const license = await deps.ensureLicense({
     licenseKey: generateLicenseKey(),
     stripeCustomerId: customerId,
     stripeSubscriptionId: subId,
@@ -85,7 +108,7 @@ async function onCheckoutCompleted(session: Stripe.Checkout.Session): Promise<vo
 
   // Stash the licence id on the Stripe objects so support can go from a Stripe dashboard row to
   // a licence without a DB query. The key itself is NEVER written to Stripe metadata.
-  await stripe()
+  await deps.stripe()
     .subscriptions.update(subId, { metadata: { shogun_license_id: license.id } })
     .catch(() => undefined);
 
@@ -97,9 +120,9 @@ async function onCheckoutCompleted(session: Stripe.Checkout.Session): Promise<vo
   });
 }
 
-export async function POST(req: Request) {
-  const secret = webhookSecret();
-  if (!secret || !stripeSecretKey()) {
+async function handleWebhook(req: Request, deps: WebhookDeps) {
+  const secret = deps.webhookSecret();
+  if (!secret || !deps.stripeSecretKey()) {
     console.error('webhook: billing not configured');
     return NextResponse.json({ ok: false, error: 'server_error' }, { status: 500 });
   }
@@ -110,7 +133,7 @@ export async function POST(req: Request) {
   const raw = await req.text();
   let event: Stripe.Event;
   try {
-    event = await stripe().webhooks.constructEventAsync(raw, signature, secret);
+    event = await deps.stripe().webhooks.constructEventAsync(raw, signature, secret);
   } catch (e) {
     console.error('webhook: signature verification failed:', e instanceof Error ? e.message : e);
     return NextResponse.json({ ok: false, error: 'bad_request' }, { status: 400 });
@@ -119,13 +142,13 @@ export async function POST(req: Request) {
   if (!HANDLED.has(event.type)) return NextResponse.json({ ok: true, ignored: event.type });
 
   try {
-    if (!(await claimStripeEvent(event.id, event.type))) {
+    if (!(await deps.claimStripeEvent(event.id, event.type))) {
       return NextResponse.json({ ok: true, duplicate: true });
     }
 
     switch (event.type) {
       case 'checkout.session.completed':
-        await onCheckoutCompleted(event.data.object);
+        await onCheckoutCompleted(deps, event.data.object);
         break;
 
       case 'customer.subscription.created':
@@ -138,6 +161,7 @@ export async function POST(req: Request) {
         // status `canceled`, so `deleted` still persists the terminal state.
         const snapshot = event.data.object as unknown as StripeSubscriptionLike;
         await syncSubscription(
+          deps,
           snapshot.id,
           event.type === 'customer.subscription.deleted' ? snapshot : undefined,
         );
@@ -154,7 +178,7 @@ export async function POST(req: Request) {
         };
         const ref = invoice.subscription ?? invoice.parent?.subscription_details?.subscription ?? null;
         const subId = typeof ref === 'string' ? ref : (ref?.id ?? null);
-        if (subId) await syncSubscription(subId);
+        if (subId) await syncSubscription(deps, subId);
         break;
       }
     }
@@ -163,8 +187,18 @@ export async function POST(req: Request) {
   } catch (e) {
     // 500 → Stripe retries with backoff, which is what we want for a transient DB failure.
     // Release the claim first, or the retry would be swallowed as a duplicate.
-    await releaseStripeEvent(event.id).catch(() => undefined);
+    await deps.releaseStripeEvent(event.id).catch(() => undefined);
     console.error('webhook handler error:', event.type, e);
     return NextResponse.json({ ok: false, error: 'server_error' }, { status: 500 });
   }
+}
+
+/** Build the webhook handler with optional test doubles for its external boundaries. */
+export function makeWebhookHandler(overrides: Partial<WebhookDeps> = {}) {
+  const deps: WebhookDeps = { ...defaultWebhookDeps, ...overrides };
+  return (req: Request) => handleWebhook(req, deps);
+}
+
+export async function POST(req: Request) {
+  return handleWebhook(req, defaultWebhookDeps);
 }

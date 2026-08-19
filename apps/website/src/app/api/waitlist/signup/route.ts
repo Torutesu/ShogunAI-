@@ -6,7 +6,8 @@ import { consumeSignupAttempt, incrementParticipantCount, saveWaitlistEmail } fr
 
 export const runtime = 'nodejs';
 
-async function readSignupBody(req: Request): Promise<Record<string, unknown>> {
+/** Parse either supported signup encoding under the shared public-body cap. */
+export async function readSignupBody(req: Request): Promise<Record<string, unknown>> {
   const contentType = req.headers.get('content-type') ?? '';
   if (contentType.includes('application/x-www-form-urlencoded') || contentType.includes('multipart/form-data')) {
     // `req.formData()` buffers the whole body with no ceiling of its own, so the no-JS form
