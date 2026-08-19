@@ -48,7 +48,7 @@ const content = {
       ],
       [
         'Most of the commentary is written from the fund’s side of the table: a category forming, a budget moving. We read it from the desk. If context is the constraint, the fix has to sit where the work already happens — on your machine, inside your day — and it cannot ask you to keep a second set of notes to feed it.',
-        'So we wrote down our own reading of it. Three pieces: a diagnosis from the CEO holding the most powerful model, a prescription from the president of Y Combinator, and a thirty-year-old theory of knowledge creation that only now has the tooling it always assumed. Each arrives at the same place from a different direction.',
+        'What changes when the context is reachable isn’t the chat window. It’s the morning: the thread you would have reread arrives as what you owe and to whom, the promise you made on Thursday comes back before anyone has to ask, and work that used to open with twenty minutes of reconstruction opens with a decision.',
       ],
     ],
     featuredLabel: 'Our reading of the category',
@@ -80,7 +80,7 @@ const content = {
       ],
       [
         '市場の論評の多くは、テーブルの向こう側 ── ファンドの席から書かれています。カテゴリが立ち上がり、予算が動く、という語り方です。私たちは机の側から読みます。制約が文脈なら、直し方は仕事がすでに起きている場所、つまりあなたの端末の中、あなたの一日の中に置くしかない。そのために二つ目のノートを取らせるようでは、意味がありません。',
-        'そこで、私たち自身の読み方を記事にしました。最も強力なモデルを持つ会社のCEOが下した診断、Y Combinator の社長が出した処方、そして前提としていた道具がようやく揃った30年前の知識創造理論 ── この3本です。どれも違う方向から、同じ場所に着きます。',
+        '文脈が届くようになって変わるのは、チャット画面ではありません。朝です。読み返すはずだったスレッドは「誰に何を負っているか」の形で先に届き、木曜に自分がした約束は、相手が催促する前に戻ってくる。20分の思い出し作業から始まっていた仕事が、判断から始まります。',
       ],
     ],
     featuredLabel: '私たちのこのカテゴリの読み方',
@@ -112,7 +112,7 @@ const content = {
       ],
       [
         'Casi todo el comentario está escrito desde el lado del fondo: una categoría que se forma, un presupuesto que se mueve. Nosotros lo leemos desde el escritorio. Si la restricción es el contexto, la solución tiene que estar donde ya ocurre el trabajo — en tu equipo, dentro de tu día — y no puede pedirte que lleves un segundo cuaderno para alimentarla.',
-        'Así que escribimos nuestra propia lectura. Tres piezas: el diagnóstico del CEO que tiene el modelo más potente, la receta del presidente de Y Combinator y una teoría de creación de conocimiento de hace treinta años que por fin dispone de las herramientas que siempre dio por supuestas. Las tres llegan al mismo sitio por caminos distintos.',
+        'Lo que cambia cuando el contexto es alcanzable no es la ventana de chat. Es la mañana: el hilo que habrías releído llega ya como qué debes y a quién, la promesa que hiciste el jueves vuelve antes de que nadie tenga que pedirla, y el trabajo que empezaba con veinte minutos de reconstrucción empieza con una decisión.',
       ],
     ],
     featuredLabel: 'Nuestra lectura de la categoría',
@@ -144,7 +144,7 @@ const content = {
       ],
       [
         'Die meisten Kommentare sind von der Fondsseite des Tisches geschrieben: eine Kategorie entsteht, ein Budget verschiebt sich. Wir lesen sie vom Schreibtisch aus. Wenn der Kontext die Grenze ist, muss die Lösung dort sitzen, wo die Arbeit ohnehin passiert — auf deinem Gerät, in deinem Tag — und sie darf dich nicht zwingen, ein zweites Notizbuch zu führen.',
-        'Also haben wir unsere eigene Lesart aufgeschrieben. Drei Texte: die Diagnose des CEO mit dem stärksten Modell, das Rezept des Y-Combinator-Präsidenten und eine dreißig Jahre alte Theorie der Wissensschaffung, die erst jetzt das Werkzeug hat, das sie immer voraussetzte. Alle drei kommen aus verschiedenen Richtungen am selben Punkt an.',
+        'Was sich ändert, wenn der Kontext erreichbar ist, ist nicht das Chatfenster. Es ist der Morgen: Der Thread, den du noch einmal gelesen hättest, kommt als das an, was du wem schuldest; das Versprechen von Donnerstag kommt zurück, bevor jemand nachfragen muss; und Arbeit, die mit zwanzig Minuten Rekonstruktion begann, beginnt mit einer Entscheidung.',
       ],
     ],
     featuredLabel: 'Unsere Lesart der Kategorie',
