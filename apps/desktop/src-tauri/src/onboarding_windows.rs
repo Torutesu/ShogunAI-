@@ -9,8 +9,8 @@ use crate::geometry::{Point, Rect};
 pub const INTRO_DURATION: Duration = Duration::from_secs(5);
 const INTERACTIVE_WIDTH: f64 = 1120.0;
 const INTERACTIVE_HEIGHT: f64 = 720.0;
-const INTERACTIVE_MIN_WIDTH: f64 = 900.0;
-const INTERACTIVE_MIN_HEIGHT: f64 = 620.0;
+const INTERACTIVE_MIN_WIDTH: f64 = 680.0;
+const INTERACTIVE_MIN_HEIGHT: f64 = 520.0;
 const INTERACTIVE_EDGE_INSET: f64 = 16.0;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -32,6 +32,7 @@ pub enum ExternalPermissionKind {
 pub struct DisplaySnapshot {
     pub display_id: u32,
     pub appkit_frame: Rect,
+    pub visible_appkit_frame: Rect,
     pub cg_frame: Rect,
     pub scale_factor: f64,
 }
@@ -84,6 +85,20 @@ pub struct InteractiveWindowLayout {
     pub min_height: f64,
     pub max_width: f64,
     pub max_height: f64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum NotchOrder {
+    Out,
+    Front,
+}
+
+fn notch_order_for_suppression(suppressed: bool) -> NotchOrder {
+    if suppressed {
+        NotchOrder::Out
+    } else {
+        NotchOrder::Front
+    }
 }
 
 trait ExternalPermissionWindowOps {
@@ -182,28 +197,22 @@ pub fn full_display_appkit_frame(display: DisplaySnapshot) -> Rect {
 }
 
 pub fn interactive_window_layout(display: DisplaySnapshot) -> InteractiveWindowLayout {
-    let frame = display.appkit_frame;
-    let width = if frame.w >= INTERACTIVE_WIDTH + 2.0 * INTERACTIVE_EDGE_INSET {
-        INTERACTIVE_WIDTH
-    } else {
-        (frame.w - 2.0 * INTERACTIVE_EDGE_INSET).max(1.0)
-    };
-    let height = if frame.h >= INTERACTIVE_HEIGHT + 2.0 * INTERACTIVE_EDGE_INSET {
-        INTERACTIVE_HEIGHT
-    } else {
-        (frame.h - 2.0 * INTERACTIVE_EDGE_INSET).max(1.0)
-    };
+    let visible = display.visible_appkit_frame;
+    let max_width = (visible.w - 2.0 * INTERACTIVE_EDGE_INSET).max(1.0);
+    let max_height = (visible.h - 2.0 * INTERACTIVE_EDGE_INSET).max(1.0);
+    let width = INTERACTIVE_WIDTH.min(max_width);
+    let height = INTERACTIVE_HEIGHT.min(max_height);
     InteractiveWindowLayout {
         frame: Rect::new(
-            frame.x + (frame.w - width) / 2.0,
-            frame.y + (frame.h - height) / 2.0,
+            visible.x + (visible.w - width) / 2.0,
+            visible.y + (visible.h - height) / 2.0,
             width,
             height,
         ),
         min_width: INTERACTIVE_MIN_WIDTH.min(width),
         min_height: INTERACTIVE_MIN_HEIGHT.min(height),
-        max_width: width,
-        max_height: height,
+        max_width,
+        max_height,
     }
 }
 
@@ -230,6 +239,7 @@ impl WindowSessionModel {
         self.generation
     }
 
+    #[cfg(test)]
     pub fn launch_display_id(&self) -> u32 {
         self.launch_display_id
     }
@@ -414,10 +424,10 @@ pub mod mac {
 
     use super::{
         configure_intro_with_rollback, enforce_external_permission_barrier,
-        full_display_appkit_frame, interactive_window_layout, replace_generation_music,
-        surface_close_should_cleanup, window_policy, DisplaySnapshot, ExternalPermissionKind,
-        ExternalPermissionWindowOps, OnboardingSurface, OnboardingSurfaceKind, WindowLevelPolicy,
-        WindowSessionModel, INTRO_DURATION,
+        full_display_appkit_frame, interactive_window_layout, notch_order_for_suppression,
+        replace_generation_music, surface_close_should_cleanup, window_policy, DisplaySnapshot,
+        ExternalPermissionKind, ExternalPermissionWindowOps, NotchOrder, OnboardingSurface,
+        OnboardingSurfaceKind, WindowLevelPolicy, WindowSessionModel, INTRO_DURATION,
     };
     use crate::geometry::Point;
 
@@ -425,7 +435,7 @@ pub mod mac {
     const CURRENT_SPACE_BEHAVIOR: usize = 0;
     const NORMAL_WINDOW_LEVEL: isize = 0;
     const NONACTIVATING_PANEL_STYLE: usize = 1 << 7;
-    const INTRO_DIMMER_INITIALIZATION_SCRIPT: &str = r#"
+    pub(super) const INTRO_DIMMER_INITIALIZATION_SCRIPT: &str = r#"
         (() => {
           const style = document.createElement('style');
           style.textContent = `
@@ -433,7 +443,6 @@ pub mod mac {
             .onb-cinematic {
               background: rgba(0, 0, 0, 0.58) !important;
             }
-            .onb-cinematic > * { display: none !important; }
           `;
           (document.head || document.documentElement).appendChild(style);
         })();
@@ -457,10 +466,13 @@ pub mod mac {
         // SAFETY: onboarding setup/teardown runs on AppKit's main thread and targets the live
         // notch panel. While onboarding owns the screen, no path may order this panel front.
         unsafe {
-            if suppressed {
-                let _: () = msg_send![ptr, orderOut: nil];
-            } else {
-                let _: () = msg_send![ptr, orderFrontRegardless];
+            match notch_order_for_suppression(suppressed) {
+                NotchOrder::Out => {
+                    let _: () = msg_send![ptr, orderOut: nil];
+                }
+                NotchOrder::Front => {
+                    let _: () = msg_send![ptr, orderFrontRegardless];
+                }
             }
         }
     }
@@ -516,6 +528,7 @@ pub mod mac {
             .map(|geometry| DisplaySnapshot {
                 display_id: geometry.display_id,
                 appkit_frame: geometry.screen,
+                visible_appkit_frame: geometry.visible_screen,
                 cg_frame: geometry.cg_screen,
                 scale_factor: geometry.scale_factor,
             })
@@ -815,10 +828,25 @@ pub mod mac {
         } else {
             ALL_SPACES_BEHAVIOR
         };
+        let layout = display.copied().map(interactive_window_layout);
+        if let Some(layout) = layout {
+            window
+                .set_min_size(Some(tauri::LogicalSize::new(
+                    layout.min_width,
+                    layout.min_height,
+                )))
+                .map_err(|error| format!("interactive minimum size update failed: {error}"))?;
+            window
+                .set_max_size(Some(tauri::LogicalSize::new(
+                    layout.max_width,
+                    layout.max_height,
+                )))
+                .map_err(|error| format!("interactive maximum size update failed: {error}"))?;
+        }
         // SAFETY: caller runs on AppKit's main thread with Tauri's live NSWindow.
         unsafe {
-            if let Some(display) = display {
-                let frame = ns_rect(interactive_window_layout(*display).frame);
+            if let Some(layout) = layout {
+                let frame = ns_rect(layout.frame);
                 let _: () = msg_send![ptr, setFrame: frame, display: false];
             }
             let _: () = msg_send![ptr, setIgnoresMouseEvents: policy.ignores_mouse_events];
@@ -1398,14 +1426,7 @@ pub mod mac {
             .try_state::<OnboardingWindowRuntime>()
             .ok_or_else(|| "onboarding window runtime unavailable".to_owned())?;
 
-        let (
-            old_generation,
-            old_launch,
-            phase_has_intro,
-            started_at,
-            external_permission_ui,
-            candidate,
-        ) = {
+        let (old_generation, phase_has_intro, started_at, external_permission_ui, candidate) = {
             let state = runtime
                 .0
                 .lock()
@@ -1415,7 +1436,6 @@ pub mod mac {
             };
             (
                 session.model.generation(),
-                session.model.launch_display_id(),
                 session.model.intro_active(),
                 session.started_at,
                 session.external_permission_ui.is_some(),
@@ -1492,15 +1512,13 @@ pub mod mac {
             return Ok(());
         }
 
-        if candidate.launch_display_id() != old_launch {
-            let surface = candidate
-                .surfaces()
-                .first()
-                .ok_or_else(|| "interactive onboarding surface missing".to_owned())?;
-            let display = display_for(&displays, surface)?;
-            if let Some(window) = app.get_webview_window(&surface.label) {
-                configure_interactive_window(&window, Some(display))?;
-            }
+        let surface = candidate
+            .surfaces()
+            .first()
+            .ok_or_else(|| "interactive onboarding surface missing".to_owned())?;
+        let display = display_for(&displays, surface)?;
+        if let Some(window) = app.get_webview_window(&surface.label) {
+            configure_interactive_window(&window, Some(display))?;
         }
         let mut state = runtime
             .0
@@ -1546,8 +1564,23 @@ mod tests {
         DisplaySnapshot {
             display_id,
             appkit_frame,
+            visible_appkit_frame: appkit_frame,
             cg_frame,
             scale_factor,
+        }
+    }
+
+    fn display_with_visible(
+        display_id: u32,
+        appkit_frame: Rect,
+        visible_appkit_frame: Rect,
+    ) -> DisplaySnapshot {
+        DisplaySnapshot {
+            display_id,
+            appkit_frame,
+            visible_appkit_frame,
+            cg_frame: appkit_frame,
+            scale_factor: 2.0,
         }
     }
 
@@ -1673,7 +1706,7 @@ mod tests {
             interactive_window_layout(small),
             InteractiveWindowLayout {
                 frame: Rect::new(116.0, 56.0, 768.0, 468.0),
-                min_width: 768.0,
+                min_width: 680.0,
                 min_height: 468.0,
                 max_width: 768.0,
                 max_height: 468.0,
@@ -1682,7 +1715,77 @@ mod tests {
     }
 
     #[test]
-    fn intro_and_interactive_policies_are_nonactivating_and_titlebar_clean() {
+    fn interactive_layout_uses_visible_frame_clear_of_menu_bar_and_dock() {
+        let screen = display_with_visible(
+            7,
+            Rect::new(0.0, 0.0, 1512.0, 982.0),
+            Rect::new(0.0, 48.0, 1512.0, 900.0),
+        );
+
+        assert_eq!(
+            interactive_window_layout(screen),
+            InteractiveWindowLayout {
+                frame: Rect::new(196.0, 138.0, 1120.0, 720.0),
+                min_width: 680.0,
+                min_height: 520.0,
+                max_width: 1480.0,
+                max_height: 868.0,
+            }
+        );
+    }
+
+    #[test]
+    fn interactive_layout_allows_growth_above_target_on_large_display() {
+        let screen = display_with_visible(
+            8,
+            Rect::new(0.0, 0.0, 2000.0, 1200.0),
+            Rect::new(0.0, 0.0, 2000.0, 1200.0),
+        );
+        let layout = interactive_window_layout(screen);
+
+        assert_eq!((layout.frame.w, layout.frame.h), (1120.0, 720.0));
+        assert_eq!((layout.max_width, layout.max_height), (1968.0, 1168.0));
+    }
+
+    #[test]
+    fn interactive_minimum_allows_css_compact_breakpoint() {
+        let screen = display_with_visible(
+            8,
+            Rect::new(0.0, 0.0, 1512.0, 982.0),
+            Rect::new(0.0, 48.0, 1512.0, 900.0),
+        );
+        let layout = interactive_window_layout(screen);
+
+        assert!(layout.min_width < 760.0);
+        assert!(layout.min_height < 620.0);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn injected_intro_style_keeps_cinematic_art_and_mute_visible() {
+        let script = mac::INTRO_DIMMER_INITIALIZATION_SCRIPT;
+
+        assert!(script.contains("background: rgba(0, 0, 0, 0.58)"));
+        assert!(!script.contains(".onb-cinematic > *"));
+        assert!(!script.contains("display: none"));
+    }
+
+    #[test]
+    fn interactive_layout_preserves_negative_visible_frame_coordinates() {
+        let screen = display_with_visible(
+            9,
+            Rect::new(-1920.0, 0.0, 1920.0, 1080.0),
+            Rect::new(-1920.0, 40.0, 1920.0, 1010.0),
+        );
+
+        assert_eq!(
+            interactive_window_layout(screen).frame,
+            Rect::new(-1520.0, 185.0, 1120.0, 720.0)
+        );
+    }
+
+    #[test]
+    fn window_policies_request_transparency_and_overlay_titlebar() {
         assert_eq!(
             (
                 window_policy(OnboardingSurfaceKind::Main),
@@ -1738,6 +1841,12 @@ mod tests {
 
         let _ = session.cleanup();
         assert!(!session.notch_is_suppressed());
+    }
+
+    #[test]
+    fn notch_suppression_orders_panel_out_then_front_on_restore() {
+        assert_eq!(notch_order_for_suppression(true), NotchOrder::Out);
+        assert_eq!(notch_order_for_suppression(false), NotchOrder::Front);
     }
 
     #[test]

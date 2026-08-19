@@ -31,6 +31,8 @@ pub mod mac {
         /// Physical display bounds in CoreGraphics's top-left/y-down coordinates.
         pub cg_screen: Rect,
         pub is_notch: bool,
+        /// Work area in AppKit coordinates, excluding menu bar and Dock.
+        pub visible_screen: Rect,
         pub screen: Rect,
         pub notch_w: f64,
         pub notch_h: f64,
@@ -72,6 +74,7 @@ pub mod mac {
         let notch_inset = screen.safeAreaInsets().top;
 
         let screen_rect = Rect::new(f.origin.x, f.origin.y, f.size.width, f.size.height);
+        let visible_screen = Rect::new(vf.origin.x, vf.origin.y, vf.size.width, vf.size.height);
         let screen_number_key = NSString::from_str("NSScreenNumber");
         let display_id = screen
             .deviceDescription()
@@ -104,6 +107,7 @@ pub mod mac {
             display_id,
             cg_screen,
             is_notch,
+            visible_screen,
             screen: screen_rect,
             notch_w,
             notch_h,
