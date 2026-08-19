@@ -235,6 +235,11 @@ export function disarmPermissionDrag(): Promise<void> {
   return invoke<void>("disarm_permission_app_drag").catch(() => undefined);
 }
 
+/** Live bindings are Rust-owned. Practice UI may render them, never infer a default as proof. */
+export function getShortcuts(): Promise<Record<string, string>> {
+  return ask<Record<string, string>>("get_shortcuts", {}, {});
+}
+
 /** `exclusion_categories() -> ExclusionCategory[]` — read from the live ExclusionPolicy so
  *  onboarding shows what is actually enforced. Fallback mirrors the built-in defaults for the
  *  browser preview only; on device an empty answer stays empty (honest). */
