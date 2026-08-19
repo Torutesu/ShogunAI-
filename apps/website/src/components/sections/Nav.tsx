@@ -12,10 +12,10 @@ export async function Nav({ localeOverride }: { localeOverride?: Locale } = {}) 
   const { locale, t } = await getI18n(localeOverride);
   const prefix = localeOverride ? `/${localeOverride}` : '';
   const labels = {
-    en: { overview: 'Overview', recall: 'Contextual recall', useCases: 'Use cases', useCasesOverview: 'All use cases', founders: 'For founders', product: 'For product & engineering', consultants: 'For consultants', integrations: 'Integrations' },
-    ja: { overview: '機能一覧', recall: '文脈検索', useCases: '活用事例', useCasesOverview: '活用事例一覧', founders: '創業者向け', product: 'プロダクト・開発向け', consultants: 'コンサルタント向け', integrations: '連携' },
-    es: { overview: 'Resumen', recall: 'Recuperación contextual', useCases: 'Casos de uso', useCasesOverview: 'Todos los casos', founders: 'Para fundadores', product: 'Para producto e ingeniería', consultants: 'Para consultores', integrations: 'Integraciones' },
-    de: { overview: 'Übersicht', recall: 'Kontextsuche', useCases: 'Anwendungsfälle', useCasesOverview: 'Alle Anwendungsfälle', founders: 'Für Gründer', product: 'Für Produkt & Entwicklung', consultants: 'Für Berater', integrations: 'Integrationen' },
+    en: { overview: 'Overview', recall: 'Contextual recall', useCases: 'Use cases', useCasesOverview: 'All use cases', founders: 'For founders', product: 'For product & engineering', consultants: 'For consultants', integrations: 'Integrations', market: 'Market' },
+    ja: { overview: '機能一覧', recall: '文脈検索', useCases: '活用事例', useCasesOverview: '活用事例一覧', founders: '創業者向け', product: 'プロダクト・開発向け', consultants: 'コンサルタント向け', integrations: '連携', market: '市場' },
+    es: { overview: 'Resumen', recall: 'Recuperación contextual', useCases: 'Casos de uso', useCasesOverview: 'Todos los casos', founders: 'Para fundadores', product: 'Para producto e ingeniería', consultants: 'Para consultores', integrations: 'Integraciones', market: 'Mercado' },
+    de: { overview: 'Übersicht', recall: 'Kontextsuche', useCases: 'Anwendungsfälle', useCasesOverview: 'Alle Anwendungsfälle', founders: 'Für Gründer', product: 'Für Produkt & Entwicklung', consultants: 'Für Berater', integrations: 'Integrationen', market: 'Markt' },
   }[locale];
 
   const features = [
@@ -33,6 +33,7 @@ export async function Nav({ localeOverride }: { localeOverride?: Locale } = {}) 
   const primary = [
     { href: `${prefix}/integrations`, label: labels.integrations },
     { href: `${prefix}/pricing`, label: t.nav.pricing },
+    { href: `${prefix}/market`, label: labels.market },
     { href: `${prefix}/blog`, label: t.nav.blog },
   ];
   const menuLabel = locale === 'ja' ? 'メニュー' : locale === 'es' ? 'Menú' : locale === 'de' ? 'Menü' : 'Menu';
