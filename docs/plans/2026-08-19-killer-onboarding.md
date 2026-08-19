@@ -102,20 +102,24 @@ Live checklist, updated after reviewed commits:
 - [x] Atomic semantic state, migration, CAS revisions, and crash-safe persistence
 - [x] One native permission coordinator with typed status and monotonic frontend delivery
 - [x] Packaged restart with exact-step resume, runtime identity checks, and safe voice/Scribe fences
-- [ ] Cursor-display window session and exact five-second lifecycle (in progress)
+- [x] Cursor-display window session and exact five-second lifecycle
   - [x] Pure generation/session model and multi-display tests
   - [x] AppKit logical-coordinate placement for mixed-DPI/negative display layouts
-  - [ ] True nonactivating ambient panels and teardown
-  - [ ] Owned display observer and main-thread cleanup
-  - [ ] Intro/interactive close handling, external-UI reconfiguration, and stale-generation IPC
-  - [ ] Full validation, independent review pass, and commit
-- [ ] PermissionFlow drag parity and external Settings helper
-- [ ] White onboarding shell, fixed gate frame, cinematic, haze, and reduced motion
-- [ ] Native single/double Right Option demonstration path
-- [ ] Dictation session identity and verified insertion outcome demonstration
-- [ ] Native music, 50-to-40 percent fade, persistent Mute, and cleanup
-- [ ] Integration tests and motion/design review
-- [ ] Signed packaged one/two/three-display TCC qualification
+  - [x] True nonactivating ambient panels and teardown
+  - [x] Owned display observer and main-thread cleanup
+  - [x] Intro/interactive close handling, external-UI reconfiguration, and stale-generation IPC
+  - [x] Full validation, independent review pass, and commit
+- [x] PermissionFlow drag parity and external Settings helper
+- [x] White onboarding shell, fixed gate frame, cinematic, haze, and reduced motion
+- [x] Native single/double Right Option demonstration path
+- [x] Dictation session identity and verified insertion outcome demonstration
+- [x] Native music, 50-to-40 percent fade, persistent Mute, and cleanup
+- [x] Task-scoped integration tests and motion/design review
+- [ ] Whole-branch integration tests and final review
+- [ ] Gate-opening video and final gate assets — deferred until assets are supplied
+- [ ] Signed packaged one/two/three-display TCC qualification — deferred for now
+
+Testing note: launch with `SHOGUN_FORCE_ONBOARDING=1` while onboarding is under active QA. Remove the forced environment variable before release validation; persisted production completion behavior remains unchanged.
 
 Each task receives a fresh implementer, task-scoped review, and fix loop before the next task starts.
 
