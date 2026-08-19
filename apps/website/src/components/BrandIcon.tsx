@@ -21,7 +21,7 @@ const LOCAL_BRAND_ICONS: Record<string, string> = {
 export function BrandIcon({ domain, name, size = 24, className = '' }: BrandIconProps) {
   return (
     <img
-      src={LOCAL_BRAND_ICONS[domain] ?? `/api/brand-logo/${domain}`}
+      src={LOCAL_BRAND_ICONS[domain] ?? `/api/brand-logo-v2/${domain}`}
       alt={`${name} logo`}
       width={size}
       height={size}
