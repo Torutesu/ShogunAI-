@@ -865,12 +865,8 @@ pub mod mac {
             let Ok(mut lane) = LANE.lock() else {
                 return None;
             };
-            let Some(lane) = lane.as_mut() else {
-                return None;
-            };
-            let Some(mut active) = lane.active.take() else {
-                return None;
-            };
+            let lane = lane.as_mut()?;
+            let mut active = lane.active.take()?;
             (active.audio.take(), Arc::clone(&active.delivery))
         };
         cancel_delivery_fence(&delivery);
@@ -1427,6 +1423,7 @@ pub mod mac {
     }
 
     #[cfg(test)]
+    #[allow(clippy::unwrap_used, clippy::expect_used)]
     mod tests {
         use super::*;
 

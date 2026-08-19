@@ -1132,7 +1132,7 @@ mod panel_recovery_tests {
 
     #[test]
     fn notch_panel_is_never_user_movable() {
-        assert!(!PANEL_MOVABLE);
+        const { assert!(!PANEL_MOVABLE) };
     }
 
     #[test]
