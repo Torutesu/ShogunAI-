@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import { ArrowUpRight } from 'lucide-react';
 import { CTA } from '@/components/sections/CTA';
-import { PageHeader, PageShell } from '@/components/PageShell';
+import { PageShell } from '@/components/PageShell';
 import { JsonLd, breadcrumbSchema } from '@/components/seo/JsonLd';
 import { PostCard } from '@/components/PostCard';
 import { getI18n } from '@/i18n/server';
@@ -41,9 +41,15 @@ const content = {
   en: {
     eyebrow: 'Market',
     title: 'Memory and context are becoming their own market.',
-    lead: [
-      'For most of the last two years the bottleneck was the model. It isn’t any more. The funds backing agent infrastructure have converged on a different constraint: an agent is only as useful as the context it can reach, and almost nobody’s context is reachable.',
-      'So we wrote down our own reading of it. Three pieces: a diagnosis from the CEO holding the most powerful model, a prescription from the president of Y Combinator, and a thirty-year-old theory of knowledge creation that only now has the tooling it always assumed. Each arrives at the same place from a different direction.',
+    intro: [
+      [
+        'For most of the last two years the bottleneck was the model. It isn’t any more. The funds backing agent infrastructure have converged on a different constraint: an agent is only as useful as the context it can reach, and almost nobody’s context is reachable.',
+        'The context isn’t missing. It is in the windows you had open on Tuesday, in the thread where the decision was actually made, in the meeting where someone promised a date. None of it is written down anywhere an agent can read, so every agent starts each morning from zero and asks you to explain your own job again. The money below is chasing that gap, not a better model.',
+      ],
+      [
+        'Most of the commentary is written from the fund’s side of the table: a category forming, a budget moving. We read it from the desk. If context is the constraint, the fix has to sit where the work already happens — on your machine, inside your day — and it cannot ask you to keep a second set of notes to feed it.',
+        'So we wrote down our own reading of it. Three pieces: a diagnosis from the CEO holding the most powerful model, a prescription from the president of Y Combinator, and a thirty-year-old theory of knowledge creation that only now has the tooling it always assumed. Each arrives at the same place from a different direction.',
+      ],
     ],
     featuredLabel: 'Our reading of the category',
     signalsLabel: 'Signals',
@@ -67,9 +73,15 @@ const content = {
   ja: {
     eyebrow: '市場',
     title: 'メモリと文脈は、ひとつの市場になりつつある。',
-    lead: [
-      'この2年ほど、ボトルネックはモデルでした。もうそうではありません。エージェント基盤に出資するファンドの視線は、別の制約に集まっています ── エージェントの有用性は、届く文脈の広さで決まる。そして、ほとんどの人の文脈はどこにも届いていない。',
-      'そこで、私たち自身の読み方を記事にしました。最も強力なモデルを持つ会社のCEOが下した診断、Y Combinator の社長が出した処方、そして前提としていた道具がようやく揃った30年前の知識創造理論 ── この3本です。どれも違う方向から、同じ場所に着きます。',
+    intro: [
+      [
+        'この2年ほど、ボトルネックはモデルでした。もうそうではありません。エージェント基盤に出資するファンドの視線は、別の制約に集まっています ── エージェントの有用性は、届く文脈の広さで決まる。そして、ほとんどの人の文脈はどこにも届いていない。',
+        '文脈が存在しないわけではありません。火曜日に開いていたウィンドウの中に、実際に決定が下されたスレッドの中に、誰かが期日を口にした会議の中にあります。ただ、エージェントが読める場所には一行も書かれていない。だから毎朝ゼロから始まり、あなたは自分の仕事を毎回説明し直すことになります。下に並ぶ資金が追っているのは、この欠落であってモデルの性能ではありません。',
+      ],
+      [
+        '市場の論評の多くは、テーブルの向こう側 ── ファンドの席から書かれています。カテゴリが立ち上がり、予算が動く、という語り方です。私たちは机の側から読みます。制約が文脈なら、直し方は仕事がすでに起きている場所、つまりあなたの端末の中、あなたの一日の中に置くしかない。そのために二つ目のノートを取らせるようでは、意味がありません。',
+        'そこで、私たち自身の読み方を記事にしました。最も強力なモデルを持つ会社のCEOが下した診断、Y Combinator の社長が出した処方、そして前提としていた道具がようやく揃った30年前の知識創造理論 ── この3本です。どれも違う方向から、同じ場所に着きます。',
+      ],
     ],
     featuredLabel: '私たちのこのカテゴリの読み方',
     signalsLabel: 'シグナル',
@@ -93,9 +105,15 @@ const content = {
   es: {
     eyebrow: 'Mercado',
     title: 'La memoria y el contexto se están convirtiendo en un mercado propio.',
-    lead: [
-      'Durante casi dos años el cuello de botella fue el modelo. Ya no lo es. Los fondos que financian la infraestructura de agentes han convergido en otra restricción: un agente sirve tanto como el contexto que alcanza, y casi nadie tiene su contexto al alcance.',
-      'Así que escribimos nuestra propia lectura. Tres piezas: el diagnóstico del CEO que tiene el modelo más potente, la receta del presidente de Y Combinator y una teoría de creación de conocimiento de hace treinta años que por fin dispone de las herramientas que siempre dio por supuestas. Las tres llegan al mismo sitio por caminos distintos.',
+    intro: [
+      [
+        'Durante casi dos años el cuello de botella fue el modelo. Ya no lo es. Los fondos que financian la infraestructura de agentes han convergido en otra restricción: un agente sirve tanto como el contexto que alcanza, y casi nadie tiene su contexto al alcance.',
+        'El contexto no falta. Está en las ventanas que tenías abiertas el martes, en el hilo donde de verdad se tomó la decisión, en la reunión donde alguien prometió una fecha. Nada de eso está escrito en un sitio que un agente pueda leer, así que cada agente empieza cada mañana desde cero y te pide que le expliques otra vez tu propio trabajo. El dinero que aparece más abajo persigue ese hueco, no un modelo mejor.',
+      ],
+      [
+        'Casi todo el comentario está escrito desde el lado del fondo: una categoría que se forma, un presupuesto que se mueve. Nosotros lo leemos desde el escritorio. Si la restricción es el contexto, la solución tiene que estar donde ya ocurre el trabajo — en tu equipo, dentro de tu día — y no puede pedirte que lleves un segundo cuaderno para alimentarla.',
+        'Así que escribimos nuestra propia lectura. Tres piezas: el diagnóstico del CEO que tiene el modelo más potente, la receta del presidente de Y Combinator y una teoría de creación de conocimiento de hace treinta años que por fin dispone de las herramientas que siempre dio por supuestas. Las tres llegan al mismo sitio por caminos distintos.',
+      ],
     ],
     featuredLabel: 'Nuestra lectura de la categoría',
     signalsLabel: 'Señales',
@@ -119,9 +137,15 @@ const content = {
   de: {
     eyebrow: 'Markt',
     title: 'Memory und Kontext werden zu einem eigenen Markt.',
-    lead: [
-      'Fast zwei Jahre lang war das Modell der Engpass. Das ist vorbei. Die Fonds, die Agenten-Infrastruktur finanzieren, sind sich über eine andere Grenze einig: Ein Agent ist nur so nützlich wie der Kontext, den er erreicht — und kaum jemandes Kontext ist erreichbar.',
-      'Also haben wir unsere eigene Lesart aufgeschrieben. Drei Texte: die Diagnose des CEO mit dem stärksten Modell, das Rezept des Y-Combinator-Präsidenten und eine dreißig Jahre alte Theorie der Wissensschaffung, die erst jetzt das Werkzeug hat, das sie immer voraussetzte. Alle drei kommen aus verschiedenen Richtungen am selben Punkt an.',
+    intro: [
+      [
+        'Fast zwei Jahre lang war das Modell der Engpass. Das ist vorbei. Die Fonds, die Agenten-Infrastruktur finanzieren, sind sich über eine andere Grenze einig: Ein Agent ist nur so nützlich wie der Kontext, den er erreicht — und kaum jemandes Kontext ist erreichbar.',
+        'Der Kontext fehlt nicht. Er steckt in den Fenstern, die am Dienstag offen waren, im Thread, in dem die Entscheidung wirklich fiel, im Meeting, in dem jemand einen Termin zusagte. Nichts davon steht an einer Stelle, die ein Agent lesen kann. Also fängt jeder Agent jeden Morgen bei null an und lässt dich deine eigene Arbeit noch einmal erklären. Das Geld weiter unten jagt diese Lücke, nicht ein besseres Modell.',
+      ],
+      [
+        'Die meisten Kommentare sind von der Fondsseite des Tisches geschrieben: eine Kategorie entsteht, ein Budget verschiebt sich. Wir lesen sie vom Schreibtisch aus. Wenn der Kontext die Grenze ist, muss die Lösung dort sitzen, wo die Arbeit ohnehin passiert — auf deinem Gerät, in deinem Tag — und sie darf dich nicht zwingen, ein zweites Notizbuch zu führen.',
+        'Also haben wir unsere eigene Lesart aufgeschrieben. Drei Texte: die Diagnose des CEO mit dem stärksten Modell, das Rezept des Y-Combinator-Präsidenten und eine dreißig Jahre alte Theorie der Wissensschaffung, die erst jetzt das Werkzeug hat, das sie immer voraussetzte. Alle drei kommen aus verschiedenen Richtungen am selben Punkt an.',
+      ],
     ],
     featuredLabel: 'Unsere Lesart der Kategorie',
     signalsLabel: 'Signale',
@@ -161,7 +185,26 @@ export default async function MarketPage({ searchParams }: { searchParams: Promi
         ])}
       />
 
-      <PageHeader eyebrow={c.eyebrow} title={c.title} sub={c.lead[0]} />
+      {/* Left-aligned opener: the headline, then the argument in two columns */}
+      <header className="border-b border-border bg-[radial-gradient(120%_100%_at_50%_-40%,var(--color-sky-soft)_0%,transparent_60%)]">
+        <div className="container-x py-[clamp(34px,7.5vw,92px)]">
+          <p className="text-xs font-semibold uppercase tracking-[0.08em] text-accent">{c.eyebrow}</p>
+          <h1 className="mt-3.5 max-w-[20ch] font-display text-[clamp(32px,5.2vw,58px)] font-semibold leading-[1.06] tracking-[-0.02em]">
+            {c.title}
+          </h1>
+          <div className="mt-10 grid gap-x-14 gap-y-6 md:grid-cols-2">
+            {c.intro.map((column, i) => (
+              <div key={i} className="space-y-4">
+                {column.map((paragraph) => (
+                  <p key={paragraph} className="max-w-[54ch] text-[16px] leading-relaxed text-muted">
+                    {paragraph}
+                  </p>
+                ))}
+              </div>
+            ))}
+          </div>
+        </div>
+      </header>
 
       {/* Our own writing on this category — the whole card links to the post */}
       {featured.length > 0 && (
@@ -171,8 +214,7 @@ export default async function MarketPage({ searchParams }: { searchParams: Promi
               <p className="shrink-0 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">{c.featuredLabel}</p>
               <div className="h-px flex-1 bg-border" />
             </div>
-            <p className="mt-5 max-w-[76ch] text-[15px] leading-relaxed text-muted">{c.lead[1]}</p>
-            <div className="mt-8 grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+            <div className="mt-7 grid gap-6 md:grid-cols-2 lg:grid-cols-3">
               {featured.map((post) => (
                 <PostCard
                   key={post.slug}
