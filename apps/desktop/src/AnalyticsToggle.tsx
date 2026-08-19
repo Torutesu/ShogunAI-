@@ -6,6 +6,7 @@ import { t } from "./strings";
 export function AnalyticsToggle() {
   const [optOut, setOptOut] = useState(false);
   const [ready, setReady] = useState(false);
+  const [pending, setPending] = useState(false);
 
   useEffect(() => {
     invoke<boolean>("analytics_get_opt_out")
@@ -14,21 +15,24 @@ export function AnalyticsToggle() {
       .finally(() => setReady(true));
   }, []);
 
-  async function toggle() {
-    const next = !optOut;
-    setOptOut(next);
+  async function toggle(enabled: boolean) {
+    const nextOptOut = !enabled;
+    setOptOut(nextOptOut);
+    setPending(true);
     try {
-      await invoke("analytics_set_opt_out", { optOut: next });
+      await invoke("analytics_set_opt_out", { optOut: nextOptOut });
     } catch {
-      setOptOut(!next); // revert on failure
+      setOptOut(!nextOptOut); // revert on failure
+    } finally {
+      setPending(false);
     }
   }
 
   if (!ready) return null;
 
   return (
-    <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
-      <input type="checkbox" checked={!optOut} onChange={toggle} />
+    <label className="analytics-toggle" style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
+      <input type="checkbox" name="anonymous-usage-metrics" checked={!optOut} disabled={pending} onChange={(event) => void toggle(event.target.checked)} />
       <span>
         {t.analyticsToggleLabel}
         <br />

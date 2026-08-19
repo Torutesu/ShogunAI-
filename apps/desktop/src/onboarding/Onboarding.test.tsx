@@ -198,9 +198,15 @@ describe("cinematic onboarding", () => {
     expect(screen.getByRole("heading", { name: "Screen Recording" })).toBeTruthy();
   });
 
-  it("keeps gate frame mounted and leaves full-window API unreachable", () => {
+  it("keeps gate frame mounted and renders the supplied gate artwork accessibly", () => {
     const { rerender } = render(<GateFrame />);
     const gate = screen.getByTestId("gate-frame");
+    const image = screen.getByRole("img", { name: "A wooden gate opening onto an autumn path" });
+    expect(image.getAttribute("src")).toContain("gate-autumn-path");
+    expect(image.getAttribute("width")).toBe("1024");
+    expect(image.getAttribute("height")).toBe("1536");
+    expect(image.classList.contains("onb-gate__image")).toBe(true);
+    expect(image.closest(".onb-gate__picture")).toBeTruthy();
     rerender(<GateFrame complete />);
     expect(screen.getByTestId("gate-frame")).toBe(gate);
     expect(gate.getAttribute("data-complete")).toBe("true");
@@ -244,23 +250,30 @@ describe("cinematic onboarding", () => {
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("set_onboarding_state", { expectedRevision: 8, step: "connect", plan: "pro", completed: false }));
   });
 
-  it("keeps draft-stop fail-safe, analytics, connection, and connect skip", async () => {
+  it("shows draft-stop as locked status and persists analytics in both directions", async () => {
     vi.mocked(invoke).mockImplementation(async (command) => {
       if (command === "onboarding_state") return state("connect", 8);
       if (command === "permission_status" || command === "permission_listener_ready") return emptyPermissions;
       if (command === "composio_settings") return { draft_stop: true, consent_acknowledged: false };
-      if (command === "set_composio_policy") throw new Error("consent required");
       if (command === "analytics_get_opt_out") return false;
+      if (command === "analytics_set_opt_out") return undefined;
       if (command === "connectors_list") return [];
       if (command === "set_onboarding_state") return state("gate", 9);
       if (command === "onboarding_event") return undefined;
       throw new Error(`unexpected command: ${command}`);
     });
     render(<Onboarding />);
-    const toggle = await screen.findByRole("checkbox", { name: /Drafts only/ });
-    fireEvent.click(toggle);
-    expect(await screen.findByText("Turning this off needs your consent first — that lives in Settings.")).toBeTruthy();
-    expect(screen.getByText("Share anonymous usage metrics to help improve SHOGUN")).toBeTruthy();
+    expect(await screen.findByRole("status", { name: /Drafts only/ })).toBeTruthy();
+    expect(screen.queryByRole("checkbox", { name: /Drafts only/ })).toBeNull();
+    expect(screen.getByText("Turning this off needs your consent first — that lives in Settings.")).toBeTruthy();
+    const analytics = await screen.findByRole("checkbox", { name: /Share anonymous usage metrics/ });
+    expect((analytics as HTMLInputElement).checked).toBe(true);
+    fireEvent.click(analytics);
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("analytics_set_opt_out", { optOut: true }));
+    expect((analytics as HTMLInputElement).checked).toBe(false);
+    fireEvent.click(analytics);
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("analytics_set_opt_out", { optOut: false }));
+    expect((analytics as HTMLInputElement).checked).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Skip for now" }));
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("set_onboarding_state", { expectedRevision: 8, step: "gate", plan: null, completed: false }));
   });
@@ -402,8 +415,12 @@ describe("cinematic onboarding", () => {
     const keyframes = css.split("\n").filter((line) => line.startsWith("@keyframes")).join("\n");
     const reduced = css.split("\n").find((line) => line.startsWith("@media (prefers-reduced-motion: reduce)")) ?? "";
     const reducedFade = css.split("\n").find((line) => line.startsWith("@keyframes onb-reduced-current-fade")) ?? "";
-    expect(css.includes("data-haze-motion=\"true\"")).toBe(true);
+    expect(css.includes("onb-haze")).toBe(false);
     expect(css).not.toMatch(/transition\s*:\s*all/i);
+    expect(css).not.toContain("Fraunces Onboarding");
+    expect(css).toMatch(/\.onb-cinematic\s*\{[^}]*background:\s*rgba\(/);
+    expect(css).toMatch(/\.onb-layout\s*\{[^}]*min-height:\s*0/);
+    expect(css).toMatch(/@media \(max-width:\s*760px\)/);
     expect(keyframes).not.toMatch(/\b(width|height|top|right|bottom|left|margin|padding)\s*:/i);
     expect(reduced).toContain("onb-reduced-current-fade 200ms linear both");
     expect(reduced).not.toContain("display: none");

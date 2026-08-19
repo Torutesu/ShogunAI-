@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import type { JSX } from "react";
 import { Logo } from "../../Logo";
 import { t } from "../../strings";
@@ -20,26 +20,13 @@ export function OnboardingExperience(props: {
 }): JSX.Element {
   const { state, permissions, surfaceGeneration, onPersist, onFinish, onToggleMusic, musicPending } = props;
   const [finishing, setFinishing] = useState(false);
-  const shellRef = useRef<HTMLElement | null>(null);
   const step = routeStep(state.step, permissions);
-  useEffect(() => {
-    const shell = shellRef.current;
-    if (!shell) return;
-    const update = (): void => { shell.dataset.hazeMotion = document.hidden ? "false" : "true"; };
-    update();
-    document.addEventListener("visibilitychange", update);
-    const observer = typeof IntersectionObserver === "undefined" ? null : new IntersectionObserver(([entry]) => { shell.dataset.hazeMotion = entry.isIntersecting && !document.hidden ? "true" : "false"; });
-    observer?.observe(shell);
-    return () => { document.removeEventListener("visibilitychange", update); observer?.disconnect(); };
-  }, []);
   const finish = (): void => {
     setFinishing(true);
     void onFinish().then((saved) => { if (!saved) setFinishing(false); });
   };
   return (
-    <main className="onb-shell" data-step={step} data-haze-motion="true" ref={shellRef}>
-      <div className="onb-haze onb-haze--one" aria-hidden="true" />
-      <div className="onb-haze onb-haze--two" aria-hidden="true" />
+    <main className="onb-shell" data-step={step}>
       <header className="onb-header"><Logo size={26} /><span>{t.onboarding.brand}</span><MuteButton muted={state.music_muted} disabled={musicPending} onToggle={onToggleMusic} /></header>
       <div className="onb-layout">
         <div className="onb-copy" key={step}>

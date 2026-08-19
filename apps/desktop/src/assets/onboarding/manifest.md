@@ -2,6 +2,16 @@
 
 Asset bundle is local-only. No runtime fetches or product-code changes are part of this task.
 
+## Autumn gate image
+
+- File: `gate-autumn-path.png`
+- Intended use: meaningful gate artwork in onboarding's responsive right-side frame.
+- Source: image supplied directly by user on 2026-08-19 as `ChatGPT Image Aug 19, 2026, 02_38_14 PM.png`.
+- Original local source: `/Users/anantsinghal/Downloads/ChatGPT Image Aug 19, 2026, 02_38_14 PM.png`.
+- Original and bundled SHA-256: `2ebfb14beb9fc89fc37e8ada4602c630a1756107e74b2b79292f46c5e2a7ee20`.
+- Dimensions: 1,024 × 1,536 pixels; size: 3,437,886 bytes.
+- Transformation: none; copied byte-for-byte.
+
 ## Yoiyami Core Theme
 
 - File: `audio/yoiyami_core_theme.mp3`

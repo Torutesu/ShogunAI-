@@ -71,6 +71,7 @@ export const STRINGS = {
     obConnectBody:
       "First-layer connections talk to each service from this Mac. Read-only to begin with — you can add sending later, once you trust it.",
     obDraftStop: "Drafts only",
+    obDraftStopStatus: "Locked for setup",
     obDraftStopBody: "Write replies and leave them in drafts. Nothing is ever sent for you.",
     obDraftStopLocked: "Turning this off needs your consent first — that lives in Settings.",
     obConnectSkip: "You can connect these later in Settings.",
@@ -736,6 +737,7 @@ export const STRINGS = {
       gateWaiting: "Gate awaits",
       gateOpen: "Gate open",
       gateDetail: "Your workspace, within reach.",
+      gateAlt: "A wooden gate opening onto an autumn path",
       mute: "Mute",
       unmute: "Unmute",
       permissionsLabel: "Required Mac permissions",
