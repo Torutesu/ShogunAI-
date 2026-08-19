@@ -32,6 +32,7 @@
 - Integrations: /integrations
 - Privacy and security: /security
 - Pricing: /pricing
+- Market (sourced investor commentary on the memory and context layer): /market
 - Blog: /blog
 - Localized versions use /en, /ja, /es, or /de before the same path.
 

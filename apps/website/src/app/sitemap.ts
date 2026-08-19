@@ -20,6 +20,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
     ['/integrations', '2026-08-15'],
     ['/security', '2026-08-15'],
     ['/pricing', '2026-08-15'],
+    ['/market', '2026-08-19'],
     ...featurePages.map((page) => [`/features/${page.slug}`, '2026-08-15']),
     ...useCasePages.map((page) => [`/use-cases/${page.slug}`, '2026-08-15']),
   ].map(([path, lastModified]) => ({
@@ -52,6 +53,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
     '/integrations',
     '/security',
     '/pricing',
+    '/market',
     ...featurePages.map((page) => `/features/${page.slug}`),
     ...useCasePages.map((page) => `/use-cases/${page.slug}`),
   ].flatMap((path) => siteConfig.locales.map((locale) => ({
