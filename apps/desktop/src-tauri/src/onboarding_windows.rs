@@ -77,6 +77,17 @@ fn enforce_external_permission_barrier(
     operations.lower_interactive_window()
 }
 
+fn configure_intro_with_rollback(
+    configure: impl FnOnce() -> Result<(), String>,
+    rollback: impl FnOnce(),
+) -> Result<(), String> {
+    if let Err(error) = configure() {
+        rollback();
+        return Err(error);
+    }
+    Ok(())
+}
+
 fn surface_close_should_cleanup(
     model: &WindowSessionModel,
     generation: u64,
@@ -358,11 +369,12 @@ pub mod mac {
     use tauri::{AppHandle, Manager};
 
     use super::{
-        enforce_external_permission_barrier, full_display_appkit_frame, interactive_appkit_frame,
-        surface_close_should_cleanup, window_policy, DisplaySnapshot, ExternalPermissionKind,
-        ExternalPermissionWindowOps, OnboardingSurface, OnboardingSurfaceKind, WindowLevelPolicy,
-        WindowSessionModel, INTERACTIVE_HEIGHT, INTERACTIVE_MIN_HEIGHT, INTERACTIVE_MIN_WIDTH,
-        INTERACTIVE_WIDTH, INTRO_DURATION,
+        configure_intro_with_rollback, enforce_external_permission_barrier,
+        full_display_appkit_frame, interactive_appkit_frame, surface_close_should_cleanup,
+        window_policy, DisplaySnapshot, ExternalPermissionKind, ExternalPermissionWindowOps,
+        OnboardingSurface, OnboardingSurfaceKind, WindowLevelPolicy, WindowSessionModel,
+        INTERACTIVE_HEIGHT, INTERACTIVE_MIN_HEIGHT, INTERACTIVE_MIN_WIDTH, INTERACTIVE_WIDTH,
+        INTRO_DURATION,
     };
     use crate::geometry::Point;
 
@@ -476,11 +488,13 @@ pub mod mac {
         .inner_size(frame.w, frame.h)
         .build()
         .map_err(|error| format!("{} build failed: {error}", surface.label))?;
-        if let Err(error) = configure_intro_window(&window, surface, display) {
-            dismantle_ambient_panel(&window);
-            let _ = window.destroy();
-            return Err(error);
-        }
+        configure_intro_with_rollback(
+            || configure_intro_window(&window, surface, display),
+            || {
+                dismantle_ambient_panel(&window);
+                let _ = window.destroy();
+            },
+        )?;
         Ok(window)
     }
 
@@ -1665,5 +1679,16 @@ mod tests {
             operations.0,
             vec!["close_intro", "lower_interactive", "permission_request"]
         );
+    }
+
+    #[test]
+    fn intro_configuration_failure_rolls_back_current_host() {
+        let rolled_back = std::cell::Cell::new(false);
+        let result = configure_intro_with_rollback(
+            || Err("injected configuration failure".to_owned()),
+            || rolled_back.set(true),
+        );
+        assert!(result.is_err());
+        assert!(rolled_back.get());
     }
 }
