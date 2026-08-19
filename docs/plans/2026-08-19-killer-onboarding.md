@@ -94,15 +94,28 @@ One native AVAudioPlayer owns the bundled CC0 track. It starts once per active o
 
 ## Delivery tasks
 
-1. Licensed assets and provenance
-2. Atomic semantic state and permission coordinator
-3. Safe cursor-display window session and five-second lifecycle
-4. PermissionFlow drag parity and external Settings helper
-5. White onboarding shell, gate frame, cinematic, haze, and reduced-motion behavior
-6. Native single/double Right Option demonstration path
-7. Dictation session identity and delivery outcome demonstration path
-8. Native music, persistent Mute, and cleanup
-9. Integration tests, motion review, and signed-device qualification checklist
+Live checklist, updated after reviewed commits:
+
+- [x] Isolated `codex-mikel/onboarding` from fetched `codex/full-integration`
+- [x] UI, native, and asset audits
+- [x] Licensed waves, Fraunces, ambient music, checksums, and provenance
+- [x] Atomic semantic state, migration, CAS revisions, and crash-safe persistence
+- [x] One native permission coordinator with typed status and monotonic frontend delivery
+- [x] Packaged restart with exact-step resume, runtime identity checks, and safe voice/Scribe fences
+- [ ] Cursor-display window session and exact five-second lifecycle (in progress)
+  - [x] Pure generation/session model and multi-display tests
+  - [x] AppKit logical-coordinate placement for mixed-DPI/negative display layouts
+  - [ ] True nonactivating ambient panels and teardown
+  - [ ] Owned display observer and main-thread cleanup
+  - [ ] Intro/interactive close handling, external-UI reconfiguration, and stale-generation IPC
+  - [ ] Full validation, independent review pass, and commit
+- [ ] PermissionFlow drag parity and external Settings helper
+- [ ] White onboarding shell, fixed gate frame, cinematic, haze, and reduced motion
+- [ ] Native single/double Right Option demonstration path
+- [ ] Dictation session identity and verified insertion outcome demonstration
+- [ ] Native music, 50-to-40 percent fade, persistent Mute, and cleanup
+- [ ] Integration tests and motion/design review
+- [ ] Signed packaged one/two/three-display TCC qualification
 
 Each task receives a fresh implementer, task-scoped review, and fix loop before the next task starts.
 
