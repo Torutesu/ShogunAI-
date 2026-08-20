@@ -1,4 +1,4 @@
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, gt, isNull, sql } from 'drizzle-orm';
 
 import { db } from './index';
 import {
@@ -10,7 +10,7 @@ import {
   type Subscription,
 } from './schema';
 import type { SubscriptionRecord } from '@/lib/billing';
-import { canonicalLicenseKey } from '@/lib/license';
+import { canonicalLicenseKey, claimNonceHash } from '@/lib/license';
 
 /**
  * Billing data layer (issue #8). Every write is an upsert keyed on the Stripe id, because
@@ -103,6 +103,9 @@ export async function ensureLicense(args: {
   stripeCustomerId: string;
   stripeSubscriptionId: string;
   email: string | null;
+  /** SHA-256 of the buying Mac's claim nonce, when Checkout carried one. */
+  claimNonceHash?: string | null;
+  claimExpiresAt?: Date | null;
 }): Promise<License> {
   await db
     .insert(licenses)
@@ -111,6 +114,8 @@ export async function ensureLicense(args: {
       stripeCustomerId: args.stripeCustomerId,
       stripeSubscriptionId: args.stripeSubscriptionId,
       email: args.email,
+      claimNonceHash: args.claimNonceHash ?? null,
+      claimExpiresAt: args.claimExpiresAt ?? null,
     })
     .onConflictDoNothing({ target: licenses.stripeSubscriptionId });
 
@@ -122,6 +127,29 @@ export async function ensureLicense(args: {
   const row = rows[0];
   if (!row) throw new Error('license upsert did not produce a row');
   return row;
+}
+
+/**
+ * Redeem a claim nonce: hand back the licence key exactly once, then destroy the capability.
+ *
+ * One statement on purpose. Clearing `claim_nonce_hash` inside the same UPDATE that matches on it
+ * makes redemption atomic — two concurrent polls cannot both come back with a key, and a replayed
+ * request finds nothing. `null` covers every failure the caller is allowed to distinguish:
+ * unknown nonce, already redeemed, expired, revoked licence.
+ */
+export async function redeemClaimNonce(nonce: string, now: Date): Promise<string | null> {
+  const rows = await db
+    .update(licenses)
+    .set({ claimNonceHash: null, claimExpiresAt: null })
+    .where(
+      and(
+        eq(licenses.claimNonceHash, claimNonceHash(nonce)),
+        gt(licenses.claimExpiresAt, now),
+        isNull(licenses.revokedAt),
+      ),
+    )
+    .returning({ licenseKey: licenses.licenseKey });
+  return rows[0]?.licenseKey ?? null;
 }
 
 export async function findLicenseByKey(rawKey: string): Promise<License | null> {

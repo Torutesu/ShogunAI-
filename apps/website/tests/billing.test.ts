@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { generateKeyPairSync, verify as cryptoVerify } from 'node:crypto';
+import { generateKeyPairSync, randomBytes, verify as cryptoVerify } from 'node:crypto';
 import { test } from 'node:test';
 
 import {
@@ -10,9 +10,12 @@ import {
   type StripeSubscriptionLike,
 } from '../src/lib/billing.ts';
 import {
+  CLAIM_TTL_MS,
   buildTokenPayload,
   canonicalLicenseKey,
+  claimNonceHash,
   generateLicenseKey,
+  isValidClaimNonce,
   isValidDeviceId,
   isValidLicenseKey,
   licenseKeyFingerprint,
@@ -281,4 +284,44 @@ test('the token carries the plan gate and nothing about the person', () => {
   ]);
   assert.ok(payload.exp > payload.iat, 'a token must expire');
   assert.equal(payload.grace_days, 14);
+});
+
+// ── claim nonces ──────────────────────────────────────────────────────────────
+
+test('a claim nonce must be long and opaque, so it cannot be guessed or smuggled', () => {
+  const good = randomBytes(32).toString('base64url');
+  assert.equal(isValidClaimNonce(good), true);
+  assert.equal(good.length >= 32, true, 'a 256-bit nonce clears the floor');
+
+  for (const bad of [
+    '',
+    'short',
+    'a'.repeat(31),
+    'a'.repeat(129),
+    `${'a'.repeat(31)}/`, // not URL-safe: would have to be escaped into Stripe metadata
+    `${'a'.repeat(31)}+`,
+    `${'a'.repeat(31)} `,
+    'a'.repeat(20) + '\n' + 'a'.repeat(20),
+    null,
+    undefined,
+    12345,
+    { toString: () => 'a'.repeat(40) },
+  ]) {
+    assert.equal(isValidClaimNonce(bad), false, `rejects ${JSON.stringify(String(bad))}`);
+  }
+});
+
+test('what we store is the hash, never the nonce itself', () => {
+  const nonce = randomBytes(32).toString('base64url');
+  const hash = claimNonceHash(nonce);
+
+  assert.equal(/^[0-9a-f]{64}$/.test(hash), true, 'sha-256 hex');
+  assert.equal(hash.includes(nonce), false, 'the capability is not recoverable from the row');
+  assert.equal(claimNonceHash(nonce), hash, 'stable, so lookup works');
+  assert.notEqual(claimNonceHash(randomBytes(32).toString('base64url')), hash);
+});
+
+test('the claim window is bounded — an abandoned checkout is not a standing capability', () => {
+  assert.equal(CLAIM_TTL_MS > 0, true);
+  assert.equal(CLAIM_TTL_MS <= 24 * 3600 * 1000, true, 'hours, not days');
 });

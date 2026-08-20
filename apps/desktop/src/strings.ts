@@ -418,8 +418,12 @@ export const STRINGS = {
     planBuyProMonth: "Pro — $124/mo",
     planManage: "Manage subscription",
     planRefresh: "Refresh",
+    // The claim path (below) activates this Mac by itself after a purchase, so the key field is
+    // the fallback: a Mac that was not the one that bought, or an app that was quit mid-purchase.
+    planClaiming: "Waiting for your purchase — this Mac activates itself when it completes.",
     planActivateTitle: "Have a licence key?",
-    planActivateHint: "Paste the key from your purchase confirmation to activate this Mac.",
+    planActivateHint:
+      "Only needed if you bought on another Mac, or reinstalled. Paste the key from your purchase confirmation.",
     planActivatePlaceholder: "shogun-XXXX-XXXX-XXXX-XXXX",
     planActivate: "Activate",
     planActivating: "Activating…",

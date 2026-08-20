@@ -2486,6 +2486,9 @@ function PlanBillingSection(): JSX.Element {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   const [choosing, setChoosing] = useState(false);
+  // Set once Checkout opens: the core is polling for the licence this Mac just bought, so the
+  // buyer has nothing to copy. Cleared by the `billing-changed` event the claim emits.
+  const [claiming, setClaiming] = useState(false);
 
   const refresh = useCallback((): void => {
     if (!IN_TAURI) return;
@@ -2493,6 +2496,21 @@ function PlanBillingSection(): JSX.Element {
     void invoke<BillingView>("billing_status").then(setBilling).catch(() => undefined);
   }, []);
   useEffect(refresh, [refresh]);
+
+  // The claim runs on a background thread in the core and can land minutes after the button was
+  // pressed, so the panel is told rather than polling for it.
+  useEffect(() => {
+    if (!IN_TAURI) return;
+    const un = listen<BillingView>("billing-changed", (e) => {
+      setClaiming(false);
+      setBilling(e.payload);
+      setMsg(e.payload.error ?? "");
+      void invoke<EntitlementView>("entitlement_status").then(setEnt).catch(() => undefined);
+    });
+    return () => {
+      void un.then((f) => f()).catch(() => undefined);
+    };
+  }, []);
 
   const activate = (): void => {
     if (!IN_TAURI || !keyInput.trim()) return;
@@ -2599,7 +2617,10 @@ function PlanBillingSection(): JSX.Element {
               className="keyrow__btn"
               type="button"
               disabled={busy}
-              onClick={() => call("billing_open_checkout", { plan: c.plan, interval: c.interval })}
+              onClick={() => {
+                setClaiming(true);
+                call("billing_open_checkout", { plan: c.plan, interval: c.interval });
+              }}
             >
               {c.label}
             </button>
@@ -2625,6 +2646,7 @@ function PlanBillingSection(): JSX.Element {
         </>
       ) : (
         <>
+          {claiming ? <div className="set__hint">{t.planClaiming}</div> : null}
           <div className="set__hint">{t.planActivateTitle}</div>
           <div className="set__hint">{t.planActivateHint}</div>
           <div className="keyrow">
