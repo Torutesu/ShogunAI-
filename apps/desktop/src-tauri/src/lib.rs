@@ -694,7 +694,13 @@ fn setup_macos(app: &tauri::App) {
 
     // T-11/T-12 sanity: Accessibility trust + one focused-window walk through the tested
     // policy. Event-driven focus subscription is on-device work (runbook D-03/D-05).
-    eprintln!("[spike] accessibility trusted: {}", axcache::ax_trusted());
+    // Startup must only observe TCC state. The prompting check is reserved for the explicit
+    // Accessibility action inside onboarding; otherwise macOS interrupts the cinematic before
+    // the permission explanation is visible.
+    eprintln!(
+        "[spike] accessibility trusted: {}",
+        axcache::ax_trusted_silent()
+    );
     // Issue #6: first-run onboarding, Rust-owned state (invariant 1). The managed copy is loaded
     // once here (migrating any legacy #46 disposition file in place) so the read command answers
     // without hitting disk. The flow shows until it has been completed once; a quit mid-flow

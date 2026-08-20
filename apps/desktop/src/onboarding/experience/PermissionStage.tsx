@@ -42,7 +42,7 @@ export function PermissionStage(props: {
   const { kind, permissions, state, onPersist } = props;
   const [requested, setRequested] = useState(false);
   const [restartFailed, setRestartFailed] = useState(false);
-  const advanced = useRef(false);
+  const advanced = useRef<PermissionStageKind | null>(null);
   const copy = permissionCopy[kind];
   const granted = kind === "accessibility"
     ? permissions.accessibility
@@ -53,12 +53,12 @@ export function PermissionStage(props: {
   const next = kind === "accessibility" ? "microphone" : kind === "microphone" ? "screen_recording" : "right_option";
 
   useEffect(() => {
-    if (!granted || advanced.current) return;
-    advanced.current = true;
+    if (!granted || advanced.current === kind) return;
+    advanced.current = kind;
     void onPersist(next).then((saved) => {
-      if (!saved) advanced.current = false;
+      if (!saved && advanced.current === kind) advanced.current = null;
     });
-  }, [granted, next, onPersist]);
+  }, [granted, kind, next, onPersist]);
 
   const request = (): void => {
     setRequested(true);

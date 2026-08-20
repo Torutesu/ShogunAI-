@@ -53,6 +53,25 @@ export function OnboardingExperience(props: {
     const fallback = window.setTimeout(finishOnce, 7000);
     return () => window.clearTimeout(fallback);
   }, [finishOnce, gatePlaying]);
+  useEffect(() => {
+    const navigateFromKeyboard = (event: KeyboardEvent): void => {
+      if (event.defaultPrevented || event.repeat || event.isComposing || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || transitionPhase === "exit") return;
+      const target = event.target instanceof Element ? event.target : null;
+      if (target?.closest("button, input, textarea, select, a[href], [contenteditable='true']")) return;
+      const selector = event.key === "Enter"
+        ? ".onb-button--next:not(:disabled)"
+        : event.key === "Backspace"
+          ? ".onb-button--back:not(:disabled)"
+          : null;
+      if (!selector) return;
+      const button = document.querySelector<HTMLButtonElement>(selector);
+      if (!button) return;
+      event.preventDefault();
+      button.click();
+    };
+    window.addEventListener("keydown", navigateFromKeyboard);
+    return () => window.removeEventListener("keydown", navigateFromKeyboard);
+  }, [transitionPhase]);
   if (step === "welcome") {
     return (
       <main className="onb-shell onb-shell--welcome" data-step={step} data-transition={transitionPhase}>

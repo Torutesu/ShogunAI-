@@ -26,10 +26,10 @@ export function OverviewStage({ onBack, onContinue }: { onBack: () => Promise<bo
         </ul>
       </div>
       <nav className="onb-overview__actions" aria-label={t.onboarding.overviewNavigation}>
-        <button className="onb-button onb-button--back" type="button" onClick={() => void onBack()}>
+        <button className="onb-button onb-button--back" type="button" aria-keyshortcuts="Backspace" onClick={() => void onBack()}>
           <span aria-hidden="true">←</span>{t.onboarding.back}
         </button>
-        <button className="onb-button onb-button--next" type="button" onClick={() => void onContinue()}>
+        <button className="onb-button onb-button--next" type="button" aria-keyshortcuts="Enter" onClick={() => void onContinue()}>
           {t.onboarding.next}<span aria-hidden="true">↵</span>
         </button>
       </nav>

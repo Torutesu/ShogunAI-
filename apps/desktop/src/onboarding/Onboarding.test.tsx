@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GateFrame } from "./experience/GateFrame";
 import { OnboardingExperience } from "./experience/OnboardingExperience";
 import { AmbientSurface } from "./experience/AmbientSurface";
+import { PermissionStage } from "./experience/PermissionStage";
 import { newestPermissionSnapshot, Onboarding, windowRoute } from "./Onboarding";
 import type { OnboardingMotionVector, PermissionSnapshot } from "./ipc";
 
@@ -158,6 +159,18 @@ describe("cinematic onboarding", () => {
     expect(onPersist).toHaveBeenNthCalledWith(2, "theme");
   });
 
+  it("uses Enter and Backspace for visible navigation", () => {
+    const onPersist = vi.fn(async () => true);
+    render(<OnboardingExperience state={{ ...state("reads"), step: "reads" }} permissions={emptyPermissions} surfaceGeneration={1} onPersist={onPersist} onFinish={vi.fn(async () => true)} onToggleMusic={vi.fn(async () => true)} musicPending={false} />);
+
+    expect(screen.getByRole("button", { name: "Next" }).getAttribute("aria-keyshortcuts")).toBe("Enter");
+    expect(screen.getByRole("button", { name: "Back" }).getAttribute("aria-keyshortcuts")).toBe("Backspace");
+    fireEvent.keyDown(window, { key: "Enter" });
+    fireEvent.keyDown(window, { key: "Backspace" });
+    expect(onPersist).toHaveBeenNthCalledWith(1, "theme");
+    expect(onPersist).toHaveBeenNthCalledWith(2, "welcome");
+  });
+
   it("keeps one shell and gate through an 800ms dissolve and resolve", async () => {
     vi.useFakeTimers();
     try {
@@ -233,6 +246,31 @@ describe("cinematic onboarding", () => {
     render(<Onboarding />);
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("set_onboarding_state", { expectedRevision: 4, step: "microphone", plan: null, completed: false }));
     expect(await screen.findByRole("heading", { name: "Microphone" })).toBeTruthy();
+  });
+
+  it("advances each granted permission when the shared stage changes", async () => {
+    const onPersist = vi.fn(async () => true);
+    const accessibilityGranted: PermissionSnapshot = { ...emptyPermissions, accessibility: true };
+    const view = render(
+      <PermissionStage
+        kind="accessibility"
+        permissions={accessibilityGranted}
+        state={{ ...state("accessibility"), step: "accessibility" }}
+        onPersist={onPersist}
+      />,
+    );
+    await waitFor(() => expect(onPersist).toHaveBeenCalledWith("microphone"));
+
+    view.rerender(
+      <PermissionStage
+        kind="microphone"
+        permissions={{ ...accessibilityGranted, microphone: true, microphone_state: "granted" }}
+        state={{ ...state("microphone", 2), step: "microphone" }}
+        onPersist={onPersist}
+      />,
+    );
+    await waitFor(() => expect(onPersist).toHaveBeenCalledWith("screen_recording"));
+    expect(onPersist).toHaveBeenCalledTimes(2);
   });
 
   it("persists Mute through native revision CAS and renders saved state", async () => {
@@ -614,9 +652,11 @@ describe("cinematic onboarding", () => {
     expect(css).toContain("--onb-text-button-default-size: 13px");
     expect(css).toMatch(/\.onb-cinematic\s*\{[^}]*background:\s*rgba\(1, 3, 5, \.58\)/);
     expect(css).toMatch(/\.onb-layout\s*\{[^}]*grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\)/);
+    expect(css).toMatch(/\.onb-shell:not\(\.onb-shell--welcome\) \.onb-floating-mute\s*\{[^}]*right:\s*calc\(50% \+ max\(16px, env\(safe-area-inset-right\)\)\)/);
     expect(css).toMatch(/@media \(max-width:\s*760px\)/);
     expect(css).toContain("onb-light-orbit 9.2s");
-    expect(css).toContain("onb-window-bloom 9.2s");
+    expect(css).toMatch(/\.onb-cinematic__bloom\s*\{[^}]*display:\s*none/);
+    expect(css).not.toContain("onb-window-bloom 9.2s");
     expect(css).toContain("onb-window-form 9.2s");
     expect(css).toContain("rgba(195,95,60,.58)");
     expect(css).toContain("rgba(95,143,168,.42)");
@@ -641,6 +681,10 @@ describe("cinematic onboarding", () => {
     expect(css).toMatch(/\.onb-cinematic__window\s*\{[^}]*width:\s*min\(1197px, calc\(100vw - 32px\)\)[^}]*height:\s*min\(751px, calc\(100vh - 32px\)\)[^}]*border-radius:\s*22px/);
     expect(css).toMatch(/\.onb-signin__haze\s*\{[^}]*rgba\(195,95,60,\.18\)[^}]*rgba\(95,143,168,\.14\)/);
     expect(css).toMatch(/\.onb-signin__button\[data-processing="true"\]\s*\{[^}]*background:\s*#aaa6a3/);
+    expect(css).toMatch(/\.onb-eyebrow\s*\{[^}]*font-family:\s*var\(--onb-font-ui\)[^}]*text-transform:\s*none/);
+    expect(css).toMatch(/\.onb-button\s*\{[^}]*border:\s*0[^}]*border-radius:\s*8px/);
+    expect(css).toMatch(/\.onb-button--next\s*\{[^}]*background:\s*#0b0a0a[^}]*color:\s*#fff/);
+    expect(css).toMatch(/\.onb-button--back:hover:not\(:disabled\)\s*\{[^}]*background:\s*#eeeae6/);
     expect(css).toMatch(/data-transition="exit"\] \.onb-copy[^}]*240ms/);
     expect(css).toMatch(/data-transition="enter"\]::before[^}]*560ms/);
     expect(css).toMatch(/data-transition="exit"\] \.onb-gate[^}]*onb-gate-dissolve-out/);
