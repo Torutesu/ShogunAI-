@@ -2085,7 +2085,7 @@ pub(crate) fn run_inline_draft(handle: &tauri::AppHandle) {
         let db = db.inner();
         let directives = handle
             .try_state::<user_config_watch::UserConfigState>()
-            .map(|s| s.directives_for_generation(db))
+            .map(|s| s.directives_for_frontmost_app(db))
             .unwrap_or_default();
         inline_source::mac::run_inline_at_cursor(
             db.clone(),
@@ -2290,7 +2290,7 @@ fn start_scribe(handle: &tauri::AppHandle) {
         .and_then(|cache| cache.current());
     let directives = handle
         .try_state::<user_config_watch::UserConfigState>()
-        .map(|state| state.directives_for_generation(db.inner()))
+        .map(|state| state.directives_for_frontmost_app(db.inner()))
         .unwrap_or_default();
     match scribe::mac::open_scribe(db.inner().clone(), warm, directives, handle.clone()) {
         Ok(opened) => {

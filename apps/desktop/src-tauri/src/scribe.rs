@@ -682,7 +682,7 @@ pub mod mac {
         open_scribe(
             db.inner().clone(),
             reply.current(),
-            user_cfg.directives_for_generation(db.inner()),
+            user_cfg.directives_for_frontmost_app(db.inner()),
             app,
         )
         .map(|opened| opened.session_id)

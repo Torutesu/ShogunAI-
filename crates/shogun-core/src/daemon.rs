@@ -100,6 +100,15 @@ pub struct ContextPack {
     pub screen_frames: Vec<ScreenFrameRef>,
 }
 
+/// The stable identifiers known for one generation request. Global lessons always apply; scoped
+/// lessons apply only when their matching identifier is present here.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GenerationContext<'a> {
+    pub app_bundle_id: Option<&'a str>,
+    pub person_id: Option<&'a str>,
+    pub project_id: Option<&'a str>,
+}
+
 /// How much of a thread a reply context carries. Enough to answer in the conversation's own
 /// terms, bounded so assembly stays inside the pre-press budget.
 const REPLY_TURNS: usize = 12;
@@ -2852,12 +2861,28 @@ impl Db {
             .collect()
     }
 
-    /// The active lessons mapped into the directive-render view (D-5a): the desktop joins these
-    /// into the Shougun.md system-prompt block via
-    /// [`crate::user_config::render_directives_with_lessons`]. Unscoped call sites (the standing
-    /// prompt has no focused app) take every scope, top-k strongest.
-    pub fn learned_lessons(&self, top_k: usize) -> Vec<crate::user_config::LearnedLesson> {
-        self.active_lessons(&[], top_k)
+    /// Active, scope-matching lessons mapped into the directive-render view (D-5a). The desktop
+    /// joins these into the Shougun.md system-prompt block via
+    /// [`crate::user_config::render_directives_with_lessons`].
+    pub fn learned_lessons(
+        &self,
+        context: GenerationContext<'_>,
+        top_k: usize,
+    ) -> Vec<crate::user_config::LearnedLesson> {
+        use lessons::{LessonScope, ScopeFilter};
+
+        let mut scopes = vec![ScopeFilter { scope: LessonScope::Global, scope_ref: None }];
+        if let Some(app_bundle_id) = context.app_bundle_id.filter(|id| !id.is_empty()) {
+            scopes.push(ScopeFilter { scope: LessonScope::App, scope_ref: Some(app_bundle_id) });
+        }
+        if let Some(person_id) = context.person_id.filter(|id| !id.is_empty()) {
+            scopes.push(ScopeFilter { scope: LessonScope::Person, scope_ref: Some(person_id) });
+        }
+        if let Some(project_id) = context.project_id.filter(|id| !id.is_empty()) {
+            scopes.push(ScopeFilter { scope: LessonScope::Project, scope_ref: Some(project_id) });
+        }
+
+        self.active_lessons(&scopes, top_k)
             .into_iter()
             .map(|l| crate::user_config::LearnedLesson {
                 instruction: l.instruction,
@@ -2867,8 +2892,15 @@ impl Db {
     }
 
     /// File directives plus active lessons — the standing generation prompt (issue #104 / Plan D-5a).
-    pub fn generation_directives(&self, cfg: &crate::user_config::ShougunConfig) -> String {
-        crate::user_config::render_directives_with_lessons(cfg, &self.learned_lessons(LESSON_TOP_K))
+    pub fn generation_directives(
+        &self,
+        cfg: &crate::user_config::ShougunConfig,
+        context: GenerationContext<'_>,
+    ) -> String {
+        crate::user_config::render_directives_with_lessons(
+            cfg,
+            &self.learned_lessons(context, LESSON_TOP_K),
+        )
     }
 
     // -------------------------------------------------------------- Dream Cycle job ledger (FR-DC-04)
@@ -4802,7 +4834,10 @@ mod tests {
         assert_eq!(candidates.len(), 1);
         db.upsert_lesson(&candidates[0], 100).expect("lesson persists");
 
-        let text = db.generation_directives(&crate::user_config::ShougunConfig::default());
+        let text = db.generation_directives(
+            &crate::user_config::ShougunConfig::default(),
+            GenerationContext::default(),
+        );
         assert!(text.contains("## Learned (auto)"), "{text}");
         assert!(text.contains("Best, Taro"), "the distilled closing-line rule is injected");
         assert!(!text.contains(SECRET), "feedback bodies never ride the prompt");
@@ -4810,6 +4845,68 @@ mod tests {
             text.contains("never change which actions need confirmation"),
             "permission disclaimer stays in the learned section: {text}"
         );
+    }
+
+    #[test]
+    fn generation_directives_only_include_lessons_matching_generation_context() {
+        use shogun_memory::lessons::{FeedbackKind, LessonCandidate, LessonKind, LessonScope, NewFeedback};
+
+        let db = Db::open_in_memory(clock(1)).unwrap();
+        let seed = |scope: LessonScope, scope_ref: Option<&str>, instruction: &str| {
+            let evidence = (0..3)
+                .map(|ts_ms| {
+                    db.record_feedback(
+                        FeedbackKind::EditBeforeApprove,
+                        scope,
+                        &NewFeedback {
+                            ts_ms,
+                            scope_ref,
+                            action_kind: Some("draft_reply"),
+                            ..Default::default()
+                        },
+                    )
+                    .expect("feedback persists")
+                })
+                .collect();
+            db.upsert_lesson(
+                &LessonCandidate {
+                    kind: LessonKind::Style,
+                    scope,
+                    scope_ref: scope_ref.map(str::to_owned),
+                    instruction: instruction.to_owned(),
+                    evidence,
+                },
+                100,
+            )
+            .expect("lesson persists");
+        };
+        seed(LessonScope::Global, None, "GLOBAL_LESSON");
+        seed(LessonScope::App, Some("com.apple.Mail"), "MAIL_ONLY_LESSON");
+        seed(LessonScope::Person, Some("alice@example.com"), "ALICE_ONLY_LESSON");
+
+        let cfg = crate::user_config::ShougunConfig::default();
+        let slack = db.generation_directives(
+            &cfg,
+            GenerationContext {
+                app_bundle_id: Some("com.tinyspeck.slackmacgap"),
+                ..Default::default()
+            },
+        );
+        assert!(slack.contains("GLOBAL_LESSON"), "{slack}");
+        assert!(!slack.contains("MAIL_ONLY_LESSON"), "{slack}");
+        assert!(!slack.contains("ALICE_ONLY_LESSON"), "{slack}");
+
+        let mail_to_alice = db.generation_directives(
+            &cfg,
+            GenerationContext {
+                app_bundle_id: Some("com.apple.Mail"),
+                person_id: Some("alice@example.com"),
+                ..Default::default()
+            },
+        );
+        assert!(mail_to_alice.contains("GLOBAL_LESSON"), "{mail_to_alice}");
+        assert!(mail_to_alice.contains("MAIL_ONLY_LESSON"), "{mail_to_alice}");
+        assert!(mail_to_alice.contains("ALICE_ONLY_LESSON"), "{mail_to_alice}");
     }
 
     #[test]

@@ -1043,7 +1043,7 @@ pub mod mac {
             db.inner().clone(),
             reply.current(),
             app,
-            user_cfg.directives_for_generation(db.inner()),
+            user_cfg.directives_for_frontmost_app(db.inner()),
         );
         "started"
     }
@@ -1527,7 +1527,7 @@ pub mod mac {
     ) -> Result<ChatAnswer, String> {
         use tauri::Manager;
         let db = db.inner().clone();
-        let directives = user_cfg.directives_for_generation(&db);
+        let directives = user_cfg.directives_for_generation(&db, Default::default());
         let started = std::time::Instant::now();
         let answered =
             tokio::task::spawn_blocking(move || chat_blocking(&db, &message, &directives))
@@ -1616,7 +1616,7 @@ pub mod mac {
         use tauri::{Emitter, Manager};
 
         let db = db.inner().clone();
-        let directives = user_cfg.directives_for_generation(&db);
+        let directives = user_cfg.directives_for_generation(&db, Default::default());
         let started = std::time::Instant::now();
 
         // Retrieval and generation both block; neither may run on a tokio worker.

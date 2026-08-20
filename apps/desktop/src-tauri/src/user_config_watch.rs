@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 #[cfg(target_os = "macos")]
-use shogun_core::daemon::Db;
+use shogun_core::daemon::{Db, GenerationContext};
 use shogun_core::user_config::{
     default_path, load_or_create, load_report, ParseReport, SectionError, ShougunConfig,
 };
@@ -19,11 +19,25 @@ pub struct UserConfigState {
 impl UserConfigState {
     /// Standing prompt for drafts and chat: Shougun.md plus active lessons (issue #104).
     #[cfg(target_os = "macos")]
-    pub fn directives_for_generation(&self, db: &Db) -> String {
+    pub fn directives_for_generation(&self, db: &Db, context: GenerationContext<'_>) -> String {
         self.cfg
             .read()
-            .map(|c| db.generation_directives(&c))
+            .map(|c| db.generation_directives(&c, context))
             .unwrap_or_default()
+    }
+
+    /// Directives for a cursor-bound action. SHOGUN's own panel is not a user-app scope.
+    #[cfg(target_os = "macos")]
+    pub fn directives_for_frontmost_app(&self, db: &Db) -> String {
+        let front = crate::display::frontmost_app()
+            .filter(|app| !crate::display::is_own_app(&app.bundle_id, &app.name));
+        self.directives_for_generation(
+            db,
+            GenerationContext {
+                app_bundle_id: front.as_ref().map(|app| app.bundle_id.as_str()),
+                ..Default::default()
+            },
+        )
     }
 }
 
