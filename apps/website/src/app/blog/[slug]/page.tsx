@@ -128,7 +128,7 @@ async function BlogPost({ params, searchParams }: { params: Promise<{ slug: stri
           </div>
 
           <div
-            className="mt-10 text-[17px] leading-[1.75] text-ink [&_blockquote]:my-6 [&_blockquote]:border-l-2 [&_blockquote]:border-accent [&_blockquote]:pl-4 [&_blockquote]:text-muted [&_code]:rounded [&_code]:bg-cloud [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[0.9em] [&_h2]:mt-10 [&_h2]:font-display [&_h2]:text-2xl [&_h2]:font-semibold [&_h3]:mt-8 [&_h3]:font-display [&_h3]:text-xl [&_h3]:font-semibold [&_li]:my-1 [&_p]:mt-5 [&_pre]:mt-5 [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:border [&_pre]:border-border [&_pre]:bg-cloud [&_pre]:p-4 [&_ul]:mt-5 [&_ul]:list-disc [&_ul]:pl-5"
+            className="mt-10 text-[17px] leading-[1.75] text-ink [&_blockquote]:my-6 [&_blockquote]:border-l-2 [&_blockquote]:border-accent [&_blockquote]:pl-4 [&_blockquote]:text-muted [&_code]:rounded [&_code]:bg-cloud [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[0.9em] [&_h2]:mt-10 [&_h2]:font-display [&_h2]:text-2xl [&_h2]:font-semibold [&_h3]:mt-8 [&_h3]:font-display [&_h3]:text-xl [&_h3]:font-semibold [&_img]:mx-auto [&_img]:my-8 [&_img]:w-full [&_img]:max-w-[420px] [&_img]:rounded-xl [&_img]:border [&_img]:border-border [&_li]:my-1 [&_p]:mt-5 [&_pre]:mt-5 [&_pre]:overflow-x-auto [&_pre]:rounded-lg [&_pre]:border [&_pre]:border-border [&_pre]:bg-cloud [&_pre]:p-4 [&_ul]:mt-5 [&_ul]:list-disc [&_ul]:pl-5"
             dangerouslySetInnerHTML={{ __html: post.html }}
           />
 
