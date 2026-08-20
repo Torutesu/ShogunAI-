@@ -116,6 +116,8 @@ const COMPRESS_BUDGET_MS: u64 = 50;
 // 一望できるようにし、thread/session の対称性を型で担保する。数値は従来と同一。
 //
 /// 検索 evidence: relevance は呼び出し側の検索スコア由来なので EVIDENCE_RELEVANCE を上書きする。
+/// `confidence` on this constant is unused — [`evidence_score_inputs`] fills it from
+/// [`shogun_fusion::trust::query_time_confidence`].
 const EVIDENCE_RELEVANCE: f64 = 0.7;
 
 /// How many learned lessons ride into one context assembly / generation prompt (Plan D-5's
@@ -1534,11 +1536,7 @@ impl Db {
             ));
         }
 
-        ranked.sort_by(|a, b| {
-            b.0.partial_cmp(&a.0)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then(b.1.ts.cmp(&a.1.ts))
-        });
+        ranked.sort_by(cmp_ranked_evidence);
         let evidence = ranked
             .into_iter()
             .map(|(_, e)| e)
@@ -3130,7 +3128,7 @@ fn evidence_to_blocks(evidence: &[Evidence], relevance: f64, est: &dyn TokenEsti
                     BlockRef::Event(e.event_id),
                     SourceKind::Structured,
                     calendar_fact_text(e),
-                    ScoreInputs { relevance, ..EVIDENCE_SCORE },
+                    evidence_score_inputs(SourceKind::Structured, relevance),
                     est,
                 ));
             }
@@ -3138,12 +3136,37 @@ fn evidence_to_blocks(evidence: &[Evidence], relevance: f64, est: &dyn TokenEsti
                 BlockRef::Event(e.event_id),
                 SourceKind::Evidence,
                 e.excerpt.clone(),
-                ScoreInputs { relevance, ..EVIDENCE_SCORE },
+                evidence_score_inputs(SourceKind::Evidence, relevance),
                 est,
             ));
             blocks
         })
         .collect()
+}
+
+fn evidence_score_inputs(kind: SourceKind, relevance: f64) -> ScoreInputs {
+    ScoreInputs {
+        relevance,
+        freshness: EVIDENCE_SCORE.freshness,
+        task_link: EVIDENCE_SCORE.task_link,
+        confidence: shogun_fusion::trust::query_time_confidence(kind),
+    }
+}
+
+/// Equal FTS scores: calendar metadata outranks AX / mail (issue #35 raw pack).
+fn cmp_ranked_evidence(a: &(f64, Evidence), b: &(f64, Evidence)) -> std::cmp::Ordering {
+    b.0.partial_cmp(&a.0)
+        .unwrap_or(std::cmp::Ordering::Equal)
+        .then(evidence_source_rank(&b.1.source).cmp(&evidence_source_rank(&a.1.source)))
+        .then(b.1.ts.cmp(&a.1.ts))
+}
+
+fn evidence_source_rank(source: &str) -> u8 {
+    if is_calendar_source(source) {
+        shogun_fusion::score::source_rank(SourceKind::Structured)
+    } else {
+        shogun_fusion::score::source_rank(SourceKind::Evidence)
+    }
 }
 
 fn is_calendar_source(source: &str) -> bool {
@@ -5096,6 +5119,10 @@ mod tests {
         assert_eq!(blocks[0].id_ref, BlockRef::Event(7));
         assert_eq!(blocks[0].source_kind, SourceKind::Evidence);
         assert!(blocks[0].tokens > 0);
+        assert!(
+            (blocks[0].score_inputs.confidence - shogun_fusion::trust::EVIDENCE_TRUST_PRIOR).abs()
+                < 1e-9
+        );
     }
 
     #[test]
@@ -5139,6 +5166,18 @@ mod tests {
         assert_eq!(blocks[2].source_kind, SourceKind::Evidence);
         assert_eq!(blocks[2].text, excerpt);
         assert_eq!(blocks[3].source_kind, SourceKind::Evidence);
+        assert!(
+            (blocks[1].score_inputs.confidence - shogun_fusion::trust::STRUCTURED_TRUST_PRIOR).abs()
+                < 1e-9
+        );
+        for i in [0, 2, 3] {
+            assert!(
+                (blocks[i].score_inputs.confidence - shogun_fusion::trust::EVIDENCE_TRUST_PRIOR)
+                    .abs()
+                    < 1e-9,
+                "quoted block {i} must not look like a verified fact"
+            );
+        }
     }
 
     #[test]
@@ -5166,12 +5205,76 @@ mod tests {
             },
         ];
         let blocks = evidence_to_blocks(&ev, 0.7, &HeuristicEstimator::default());
+        let w = shogun_fusion::score::ScoreWeights::default();
+        let cal = blocks
+            .iter()
+            .find(|b| b.source_kind == SourceKind::Structured)
+            .unwrap();
+        let ax = blocks
+            .iter()
+            .find(|b| matches!(b.id_ref, BlockRef::Event(1)))
+            .unwrap();
+        assert!(
+            shogun_fusion::score::score_block(&cal.score_inputs, &w)
+                > shogun_fusion::score::score_block(&ax.score_inputs, &w),
+            "trust prior must move calendar metadata above AX, not only the tie-break"
+        );
         let cfg = CompressionConfig { enabled: true, budget_tokens: 110, ..Default::default() };
         let out = compress(Candidates { blocks }, &cfg);
         assert_eq!(out.blocks.len(), 1);
         assert_eq!(out.blocks[0].id_ref, BlockRef::Event(2));
         assert_eq!(out.blocks[0].source_kind, SourceKind::Structured);
         assert!(out.blocks[0].text.contains("Title: Standup"));
+    }
+
+    #[test]
+    fn equal_search_score_calendar_ranks_above_ax_and_mail() {
+        let hit = |id, source: &str| {
+            (
+                0.8_f64,
+                Evidence {
+                    event_id: id,
+                    ts: 100,
+                    source: source.into(),
+                    title: None,
+                    excerpt: "same".into(),
+                    frame_id: None,
+                },
+            )
+        };
+        let mut ranked = [hit(1, "capture"), hit(2, "gcal"), hit(3, "gmail")];
+        ranked.sort_by(cmp_ranked_evidence);
+        assert_eq!(ranked[0].1.source, "gcal");
+    }
+
+    #[test]
+    fn higher_search_score_still_beats_calendar_source_rank() {
+        let mut ranked = [
+            (
+                0.9,
+                Evidence {
+                    event_id: 1,
+                    ts: 100,
+                    source: "capture".into(),
+                    title: None,
+                    excerpt: "ax".into(),
+                    frame_id: None,
+                },
+            ),
+            (
+                0.5,
+                Evidence {
+                    event_id: 2,
+                    ts: 100,
+                    source: "gcal".into(),
+                    title: Some("Standup".into()),
+                    excerpt: "notes".into(),
+                    frame_id: None,
+                },
+            ),
+        ];
+        ranked.sort_by(cmp_ranked_evidence);
+        assert_eq!(ranked[0].1.source, "capture");
     }
 
     #[test]

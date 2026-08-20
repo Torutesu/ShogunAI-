@@ -50,7 +50,8 @@ pub struct ScoreInputs {
     pub freshness: f64,
     /// タスク紐づき圧（open_loops/project 由来、salience.pressure 相当）。
     pub task_link: f64,
-    /// 確信度（state 由来。evidence/summary は 1.0）。
+    /// 確信度。[`crate::trust::effective_confidence`] on search hits; High-band 0.9 on gated
+    /// state facts. Quoted evidence is no longer a fake `1.0`.
     pub confidence: f64,
 }
 
