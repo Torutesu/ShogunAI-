@@ -72,13 +72,21 @@ pub enum BillingState {
 
 /// Resolve the effective plan from the trial stamp and the billing state. Billing wins: an active
 /// subscription overrides the trial clock entirely (a paying user is never "expired").
+///
+/// `Lapsed` with **no** trial stamp resolves to an already-expired trial, not a fresh one: a
+/// lapsed subscription proves onboarding happened long ago, so a missing/corrupt stamp there is
+/// lost state, and "nothing known = full trial" would let deleting onboarding.json re-grant full
+/// Pro to a cancelled account forever. Only `Unknown` (genuinely pre-onboarding/pre-purchase)
+/// keeps the trial-not-started default.
 pub fn resolve_plan(trial_started_at_ms: Option<u64>, billing: BillingState) -> Plan {
     match billing {
         BillingState::Active(PaidPlan::Pro) => Plan::Pro,
         BillingState::Active(PaidPlan::Standard) => Plan::Standard,
-        BillingState::Unknown | BillingState::Lapsed => {
-            Plan::Trial { started_at_ms: trial_started_at_ms }
-        }
+        BillingState::Unknown => Plan::Trial { started_at_ms: trial_started_at_ms },
+        BillingState::Lapsed => Plan::Trial {
+            // Stamp 0 = epoch: expired at any real clock reading.
+            started_at_ms: Some(trial_started_at_ms.unwrap_or(0)),
+        },
     }
 }
 
@@ -303,6 +311,25 @@ mod tests {
         assert_eq!(
             at(resolve_plan(stamp, BillingState::Lapsed), expired_now).status,
             PlanStatus::TrialExpired
+        );
+    }
+
+    #[test]
+    fn lapsed_without_a_trial_stamp_is_expired_not_full_pro() {
+        // A lapsed subscriber whose onboarding.json is missing/corrupt (stamp = None) must not
+        // resolve to an eternal not-yet-started trial with full Pro entitlements. Any real wall
+        // clock is far past epoch + 7 days; 2026-01-01 in unix ms stands in for one here.
+        let real_now = 1_767_225_600_000;
+        let e = at(resolve_plan(None, BillingState::Lapsed), real_now);
+        assert_eq!(e.status, PlanStatus::TrialExpired);
+        assert!(!e.agent_execution && !e.memory_api && !e.composio_send_unlock);
+        assert!(!e.first_layer_reads && !e.background_intelligence);
+        // the local posture survives, as for every expired state
+        assert!(e.local_capture && e.local_search);
+        // pre-onboarding default is unchanged: Unknown + no stamp = active trial
+        assert_eq!(
+            at(resolve_plan(None, BillingState::Unknown), real_now).status,
+            PlanStatus::Trial
         );
     }
 
