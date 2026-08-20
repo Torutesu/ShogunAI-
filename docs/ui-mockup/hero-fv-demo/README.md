@@ -2,7 +2,7 @@
 
 LP のファーストビューに貼る動画素材を作るための、**操作できる**デモ。
 Figma の `11 · Hero / FV` フレームを HTML に起こしたもので、静止画ではなく
-「ノッチが開いて、押したら送信が終わる」までを実際に触れる。
+⌥ドラフト送信・朝夕ブリーフ・会議翻訳・検索を15秒ループで流し、実際に触れる。
 
 - 公開 Artifact: <https://claude.ai/code/artifact/cfe0b7e5-24ca-453c-87fd-3794e616f15e>
 - ローカルで開く: `python3 build.py` → `index.html` をブラウザで開く
@@ -15,37 +15,42 @@ Figma の `11 · Hero / FV` フレームを HTML に起こしたもので、静�
 | `index.src.html` | **正本。** 編集はここだけ。壁紙は `__WALL__` プレースホルダ |
 | `build.py` | 壁紙を data URI で埋め込んで `index.html` を吐く |
 | `index.html` | 生成物（自己完結・外部リクエストなし）。直接編集しない |
-| `wallpaper.jpg` | Sand Harbor, Lake Tahoe。Wikimedia Commons (CC BY-SA 4.0) を FV 比率にクロップ・縮小 |
+| `wallpaper.jpg` | 本物の macOS Sequoia Light 標準壁紙（6K 原本を FV 比率にクロップ・縮小） |
+| `shogun-fv-loop.mp4` | **完成品のループ動画**（16.5s / 1512×982 / H.264）。LP にそのまま貼れる |
 
 Artifact は単一ファイル・外部ホスト禁止（Google Fonts のみ可）なので、写真は
 sibling asset ではなく data URI で入れている。`index.html` は生成物なので、
 文言や演出を直すときは必ず `index.src.html` を直して `build.py` を回す。
 
-## 5つのビート
+## 6シーン・15秒ループ（2026-08-20 改訂）
 
-シーケンスはそのまま製品の主張になっている。レール中央のビート名をクリックすると
-その瞬間に飛べる（録画で特定カットだけ撮り直すとき用）。
+FV 用に「機能をテンポよく」へ再構成。壁紙は**本物の macOS Sequoia 標準壁紙**、
+Dock はオーナーの実際の並び（スクショから再現、実行中インジケータ・Settings のバッジ含む）。
 
-| # | ビート | 何を見せているか |
-|---|---|---|
-| 01 | Idle | ノッチは黒いチン。`reading Mail` と件数だけ。通知ではない |
-| 02 | Brief lands | 兜マークとブランドブルーのグロー。**赤丸を出さない**（`docs/daily-summaries-design.md` §3.1） |
-| 03 | Opens | パネルがノッチから注がれる。夜間レビューの既了分が L1 で並び、`1,204` はカウントアップ |
-| 04 | You confirm | L3 が「送信中」へ。**押すまで何も出ていない**ことがこの1拍で分かる |
-| 05 | Sent | 行が緑に変わり、`1 message left this device · logged in Traceability` が降りてくる |
+| # | シーン | 尺 | 何を見せているか |
+|---|---|---|---|
+| 01 | Morning brief | 3.0s | idle → 兜グロー → パネルが開き夜間レビューの既了分（`1,204` カウントアップ） |
+| 02 | ⌥ Draft → Send | 4.0s | Mail の返信に ⌥ キーキャップが光り、ドラフトがタイプされ、L3 確認 → ✓ Sent + Traceability トースト |
+| 03 | Live translation | 2.5s | 会議キャプション EN→JA がリアルタイムに流れる（黒カプセル＋波形） |
+| 04 | Memory search | 2.0s | `/` 検索に `vendor renewal`、Mail/Meeting/Slack 横断の結果が即答 |
+| 05 | Evening wrap | 2.5s | Good evening、3 done · 2 loops · 1/2 adopted のカウント |
+| 06 | Mark | 1.0s | 暗転＋兜＋"Your AI has memory. Now it acts." — **ループの継ぎ目はこの暗転の中** |
 
-タイミングは実装の実値を使っている（展開 100ms / 収納 140ms / 内容 72ms、
-`styles.css` の `--notch-open` 系）。演出のために速くも遅くもしていない。
+パネルの展開 100ms / 収納 140ms は `styles.css` の実値のまま。
 
 ## 録画のしかた
 
-1. Artifact を開く（既定で **Auto-loop** が走っている）
-2. `C` を押す → **Clean mode**。操作レールとヒントが消え、暗い部屋にMacだけが残る
-3. `100%` を押すと 1512×982 の等倍になる。等倍で撮るとピクセルが眠くならない
-4. 画面収録の範囲は **ステージの矩形だけ**にする。レールはステージの外にあるので、
-   矩形さえ合わせれば操作UIは絶対に写り込まない
-5. 1ループは約 14 秒。`Space` で頭から採り直せる
-6. FV が 16:9 の場合は **16:9 guide** を出して、切れる上下を確認してから撮る
+**完成品が同梱してある**: `shogun-fv-loop.mp4`（16.5s / 1512×982 / H.264 / 約240KB、
+継ぎ目なしループ）。LP にはこれをそのまま `<video autoplay muted loop playsinline>` で貼れる。
+
+自分で撮り直す場合:
+
+1. Artifact を開く（既定で **Auto-loop**）。`C` → Clean mode、`100%` → 等倍
+2. 収録範囲は**ステージの矩形だけ**（レールは外にあるので写り込まない）
+3. 1ループ 15 秒。継ぎ目を隠すなら **Mark の暗転中に開始・終了**する
+4. ヘッドレス再録するなら `?capture=1` を付けると 1512×982 ぴったりの
+   ステージのみ表示になる（Playwright の recordVideo で撮ったのが同梱 mp4）
+5. FV が 16:9 なら **16:9 guide** で切れる上下を先に確認
 
 | キー | |
 |---|---|
