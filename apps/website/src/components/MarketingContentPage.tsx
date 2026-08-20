@@ -122,7 +122,16 @@ export function MarketingContentPage({
     return (
       <PageShell locale={locale}>
         {structuredData}
-        <UseCaseMarketingPage page={page} locale={locale} />
+        <UseCaseMarketingPage
+          page={page}
+          locale={locale}
+          t={t}
+          section={section}
+          sectionLabel={sectionLabel}
+          exploreLabel={copy.explore}
+          exploreSub={copy.exploreSub}
+          overviewLabel={copy.overview}
+        />
       </PageShell>
     );
   }

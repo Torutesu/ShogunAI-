@@ -10,6 +10,9 @@ import {
   Video,
   X,
 } from 'lucide-react';
+import { CTA } from '@/components/sections/CTA';
+import { Button } from '@/components/ui/button';
+import type { Dictionary } from '@/i18n/dictionaries';
 import type { Locale } from '@/i18n/config';
 import type { MarketingDetail } from '@/lib/marketing-content';
 
@@ -45,14 +48,11 @@ type UseCaseCopy = {
   visual: VisualCopy;
   faqEyebrow: string;
   faqTitle: string;
-  finalTitle: string;
-  finalBody: string;
-  finalCta: string;
 };
 
 const consultantsCopyByLocale: Record<Locale, UseCaseCopy> = {
   en: {
-    heroEyebrow: 'AI-powered client work',
+    heroEyebrow: 'Built for client work',
     heroTitle: 'Every client context, in one',
     heroAccent: 'private memory',
     heroCta: 'Get early access',
@@ -75,7 +75,7 @@ const consultantsCopyByLocale: Record<Locale, UseCaseCopy> = {
       'Draft follow-ups and review them before they leave',
       'Keep memory local by default and control what is shared',
     ],
-    featuresEyebrow: 'AI for the complete client workflow',
+    featuresEyebrow: 'From memory to delivery',
     featuresTitle: 'From scattered signals to client-ready work',
     featuresBody:
       'ShogunAI connects the context behind each client, prepares the next conversation, and helps finish the follow-through.',
@@ -94,12 +94,9 @@ const consultantsCopyByLocale: Record<Locale, UseCaseCopy> = {
     },
     faqEyebrow: 'Questions, answered',
     faqTitle: 'Clear answers before client context enters the workflow',
-    finalTitle: 'Manage more clients without losing the thread',
-    finalBody: 'Keep every conversation, commitment, and next step connected—then turn that context into work.',
-    finalCta: 'Get early access',
   },
   ja: {
-    heroEyebrow: 'AIで進める顧客業務',
+    heroEyebrow: '顧客業務のために',
     heroTitle: 'すべての顧客文脈を、ひとつの',
     heroAccent: 'プライベートな記憶へ',
     heroCta: '早期アクセスを申し込む',
@@ -121,7 +118,7 @@ const consultantsCopyByLocale: Record<Locale, UseCaseCopy> = {
       'フォローを下書きし、外部へ出る前に確認する',
       '記憶を既定でローカルに保ち、共有範囲を管理する',
     ],
-    featuresEyebrow: '顧客業務全体を支えるAI',
+    featuresEyebrow: '記憶から成果物へ',
     featuresTitle: '散らばった兆しを、顧客に届ける仕事へ',
     featuresBody: '顧客ごとの経緯をつなぎ、次の会話を準備し、その後のフォローまで同じ文脈で進めます。',
     visual: {
@@ -139,12 +136,9 @@ const consultantsCopyByLocale: Record<Locale, UseCaseCopy> = {
     },
     faqEyebrow: 'よくある質問',
     faqTitle: '顧客の文脈を扱う前に知っておきたいこと',
-    finalTitle: '顧客を増やしても、経緯を見失わない',
-    finalBody: '会話、約束、次のアクションをひとつの文脈につなぎ、そのまま仕事へ変えます。',
-    finalCta: '早期アクセスを申し込む',
   },
   es: {
-    heroEyebrow: 'Trabajo con clientes impulsado por IA',
+    heroEyebrow: 'Hecho para el trabajo con clientes',
     heroTitle: 'Todo el contexto de tus clientes, en una',
     heroAccent: 'memoria privada',
     heroCta: 'Solicitar acceso anticipado',
@@ -167,7 +161,7 @@ const consultantsCopyByLocale: Record<Locale, UseCaseCopy> = {
       'Redactar seguimientos y revisarlos antes de enviarlos',
       'Mantener la memoria en local y controlar lo que se comparte',
     ],
-    featuresEyebrow: 'IA para todo el flujo de clientes',
+    featuresEyebrow: 'De la memoria a la entrega',
     featuresTitle: 'De señales dispersas a trabajo listo para el cliente',
     featuresBody:
       'ShogunAI conecta el contexto de cada cliente, prepara la siguiente conversación y ayuda a completar el seguimiento.',
@@ -186,12 +180,9 @@ const consultantsCopyByLocale: Record<Locale, UseCaseCopy> = {
     },
     faqEyebrow: 'Preguntas frecuentes',
     faqTitle: 'Respuestas claras antes de incorporar contexto de clientes',
-    finalTitle: 'Gestiona más clientes sin perder el hilo',
-    finalBody: 'Conecta conversaciones, compromisos y próximos pasos, y convierte ese contexto en trabajo terminado.',
-    finalCta: 'Solicitar acceso anticipado',
   },
   de: {
-    heroEyebrow: 'KI-gestützte Kundenarbeit',
+    heroEyebrow: 'Für Kundenarbeit entwickelt',
     heroTitle: 'Jeder Kundenkontext in einem',
     heroAccent: 'privaten Gedächtnis',
     heroCta: 'Frühzugang anfragen',
@@ -214,7 +205,7 @@ const consultantsCopyByLocale: Record<Locale, UseCaseCopy> = {
       'Follow-ups entwerfen und vor dem Versand prüfen',
       'Gedächtnis standardmäßig lokal halten und Freigaben steuern',
     ],
-    featuresEyebrow: 'KI für den gesamten Kundenworkflow',
+    featuresEyebrow: 'Vom Gedächtnis zur Lieferung',
     featuresTitle: 'Von verstreuten Signalen zu kundenfertiger Arbeit',
     featuresBody:
       'ShogunAI verbindet den Kontext jedes Kunden, bereitet das nächste Gespräch vor und unterstützt das Follow-up.',
@@ -233,17 +224,13 @@ const consultantsCopyByLocale: Record<Locale, UseCaseCopy> = {
     },
     faqEyebrow: 'Häufige Fragen',
     faqTitle: 'Klare Antworten, bevor Kundenkontext in den Workflow gelangt',
-    finalTitle: 'Mehr Kunden betreuen, ohne den Faden zu verlieren',
-    finalBody:
-      'Verbinde Gespräche, Zusagen und nächste Schritte und verwandle diesen Kontext direkt in erledigte Arbeit.',
-    finalCta: 'Frühzugang anfragen',
   },
 };
 
 const foundersCopyByLocale: Record<Locale, UseCaseCopy> = {
   en: {
     ...consultantsCopyByLocale.en,
-    heroEyebrow: 'AI-powered company context',
+    heroEyebrow: 'Built for founders',
     heroTitle: 'Every company decision, in one',
     heroAccent: 'private memory',
     comparisonTitle: 'Company context is fragmented. Lead with the full picture.',
@@ -263,7 +250,7 @@ const foundersCopyByLocale: Record<Locale, UseCaseCopy> = {
       'Recover the reasoning behind a decision before making the next one',
       'Draft updates and review them before they leave your control',
     ],
-    featuresEyebrow: 'AI for the founder operating system',
+    featuresEyebrow: 'From memory to the next decision',
     featuresTitle: 'From daily signals to decision-ready work',
     featuresBody:
       'ShogunAI connects the context behind the company, prepares the next high-stakes conversation, and helps close the loop afterward.',
@@ -281,12 +268,10 @@ const foundersCopyByLocale: Record<Locale, UseCaseCopy> = {
       approved: 'Approved',
     },
     faqTitle: 'Clear answers before company context enters memory',
-    finalTitle: 'Keep the company moving without losing the why',
-    finalBody: 'Connect decisions, commitments, and updates, then turn the company story into the next action.',
   },
   ja: {
     ...consultantsCopyByLocale.ja,
-    heroEyebrow: 'AIでつなぐ経営の文脈',
+    heroEyebrow: '創業者のために',
     heroTitle: 'すべての経営判断を、ひとつの',
     heroAccent: 'プライベートな記憶へ',
     comparisonTitle: '分散した会社の文脈を、次の判断につなぐ。',
@@ -306,7 +291,7 @@ const foundersCopyByLocale: Record<Locale, UseCaseCopy> = {
       '次の判断前に、過去の理由と前提を取り戻す',
       '更新を下書きし、外部へ出る前に確認する',
     ],
-    featuresEyebrow: '創業者の経営業務を支えるAI',
+    featuresEyebrow: '記憶から、次の判断へ',
     featuresTitle: '日々の兆しを、判断できる仕事へ',
     featuresBody: '会社を形づくる経緯をつなぎ、重要な会話を準備し、その後のフォローまで同じ文脈で進めます。',
     visual: {
@@ -323,12 +308,10 @@ const foundersCopyByLocale: Record<Locale, UseCaseCopy> = {
       approved: '承認済み',
     },
     faqTitle: '会社の文脈を記憶する前に知っておきたいこと',
-    finalTitle: '会社を前へ進めても、判断理由を見失わない',
-    finalBody: '判断、約束、更新をひとつの文脈につなぎ、会社の経緯を次のアクションへ変えます。',
   },
   es: {
     ...consultantsCopyByLocale.es,
-    heroEyebrow: 'Contexto empresarial impulsado por IA',
+    heroEyebrow: 'Hecho para fundadores',
     heroTitle: 'Cada decisión de la empresa, en una',
     heroAccent: 'memoria privada',
     comparisonTitle: 'El contexto de la empresa está fragmentado. Lidera con la imagen completa.',
@@ -348,7 +331,7 @@ const foundersCopyByLocale: Record<Locale, UseCaseCopy> = {
       'Recuperar las razones de una decisión antes de tomar la siguiente',
       'Redactar actualizaciones y revisarlas antes de compartirlas',
     ],
-    featuresEyebrow: 'IA para el sistema operativo del fundador',
+    featuresEyebrow: 'De la memoria a la siguiente decisión',
     featuresTitle: 'De señales diarias a trabajo listo para decidir',
     featuresBody:
       'ShogunAI conecta el contexto de la empresa, prepara las conversaciones importantes y ayuda a cerrar el seguimiento.',
@@ -366,13 +349,10 @@ const foundersCopyByLocale: Record<Locale, UseCaseCopy> = {
       approved: 'Aprobado',
     },
     faqTitle: 'Respuestas claras antes de incorporar contexto empresarial',
-    finalTitle: 'Haz avanzar la empresa sin perder el porqué',
-    finalBody:
-      'Conecta decisiones, compromisos y actualizaciones, y convierte la historia de la empresa en la siguiente acción.',
   },
   de: {
     ...consultantsCopyByLocale.de,
-    heroEyebrow: 'KI-gestützter Unternehmenskontext',
+    heroEyebrow: 'Für Gründer entwickelt',
     heroTitle: 'Jede Unternehmensentscheidung in einem',
     heroAccent: 'privaten Gedächtnis',
     comparisonTitle: 'Unternehmenskontext ist fragmentiert. Führe mit dem Gesamtbild.',
@@ -392,7 +372,7 @@ const foundersCopyByLocale: Record<Locale, UseCaseCopy> = {
       'Vor der nächsten Entscheidung die bisherigen Gründe zurückholen',
       'Updates entwerfen und vor dem Teilen prüfen',
     ],
-    featuresEyebrow: 'KI für das Betriebssystem von Gründern',
+    featuresEyebrow: 'Vom Gedächtnis zur nächsten Entscheidung',
     featuresTitle: 'Von täglichen Signalen zu entscheidungsreifer Arbeit',
     featuresBody:
       'ShogunAI verbindet den Unternehmenskontext, bereitet wichtige Gespräche vor und unterstützt das anschließende Follow-up.',
@@ -410,16 +390,13 @@ const foundersCopyByLocale: Record<Locale, UseCaseCopy> = {
       approved: 'Freigegeben',
     },
     faqTitle: 'Klare Antworten, bevor Unternehmenskontext gespeichert wird',
-    finalTitle: 'Das Unternehmen voranbringen, ohne das Warum zu verlieren',
-    finalBody:
-      'Verbinde Entscheidungen, Zusagen und Updates und mache aus der Unternehmensgeschichte den nächsten Schritt.',
   },
 };
 
 const productEngineeringCopyByLocale: Record<Locale, UseCaseCopy> = {
   en: {
     ...consultantsCopyByLocale.en,
-    heroEyebrow: 'AI-powered product work',
+    heroEyebrow: 'Built for product work',
     heroTitle: 'Every product decision, in one',
     heroAccent: 'private memory',
     comparisonTitle: 'Product work is fragmented. Connect decision to delivery.',
@@ -439,7 +416,7 @@ const productEngineeringCopyByLocale: Record<Locale, UseCaseCopy> = {
       'Prepare briefs and handoffs from context you already have',
       'Draft updates and review consequential actions before they run',
     ],
-    featuresEyebrow: 'AI across the product lifecycle',
+    featuresEyebrow: 'From memory to shipped work',
     featuresTitle: 'From scattered decisions to delivery-ready context',
     featuresBody:
       'ShogunAI preserves the reasoning behind the work, prepares the next handoff, and helps turn project context into a reviewed artifact.',
@@ -457,13 +434,10 @@ const productEngineeringCopyByLocale: Record<Locale, UseCaseCopy> = {
       approved: 'Approved',
     },
     faqTitle: 'Clear answers before product context enters the workflow',
-    finalTitle: 'Ship the next version without losing the decisions behind it',
-    finalBody:
-      'Connect evidence, trade-offs, and implementation history, then turn that context into the next artifact.',
   },
   ja: {
     ...consultantsCopyByLocale.ja,
-    heroEyebrow: 'AIでつなぐプロダクト業務',
+    heroEyebrow: 'プロダクト業務のために',
     heroTitle: 'すべてのプロダクト判断を、ひとつの',
     heroAccent: 'プライベートな記憶へ',
     comparisonTitle: '分断したプロダクト業務を、判断から提供までつなぐ。',
@@ -482,7 +456,7 @@ const productEngineeringCopyByLocale: Record<Locale, UseCaseCopy> = {
       '既存の文脈から仕様書や引き継ぎを準備する',
       '更新を下書きし、重要操作は実行前に確認する',
     ],
-    featuresEyebrow: 'プロダクトライフサイクルを支えるAI',
+    featuresEyebrow: '記憶から、出荷まで',
     featuresTitle: '散らばった判断を、提供できる文脈へ',
     featuresBody: '仕事の背景にある理由を残し、次の引き継ぎを準備し、プロジェクト文脈を確認可能な成果物へ変えます。',
     visual: {
@@ -499,12 +473,10 @@ const productEngineeringCopyByLocale: Record<Locale, UseCaseCopy> = {
       approved: '承認済み',
     },
     faqTitle: 'プロダクトの文脈を扱う前に知っておきたいこと',
-    finalTitle: '判断理由を失わずに、次のバージョンを届ける',
-    finalBody: '顧客の根拠、トレードオフ、実装履歴をつなぎ、その文脈を次の成果物へ変えます。',
   },
   es: {
     ...consultantsCopyByLocale.es,
-    heroEyebrow: 'Trabajo de producto impulsado por IA',
+    heroEyebrow: 'Hecho para el trabajo de producto',
     heroTitle: 'Cada decisión de producto, en una',
     heroAccent: 'memoria privada',
     comparisonTitle: 'El trabajo de producto está fragmentado. Conecta decisión y entrega.',
@@ -524,7 +496,7 @@ const productEngineeringCopyByLocale: Record<Locale, UseCaseCopy> = {
       'Preparar briefings y traspasos con el contexto existente',
       'Redactar actualizaciones y revisar acciones importantes antes de ejecutarlas',
     ],
-    featuresEyebrow: 'IA para todo el ciclo de producto',
+    featuresEyebrow: 'De la memoria al trabajo entregado',
     featuresTitle: 'De decisiones dispersas a contexto listo para entregar',
     featuresBody:
       'ShogunAI conserva las razones, prepara el siguiente traspaso y convierte el contexto del proyecto en un artefacto revisado.',
@@ -542,13 +514,10 @@ const productEngineeringCopyByLocale: Record<Locale, UseCaseCopy> = {
       approved: 'Aprobado',
     },
     faqTitle: 'Respuestas claras antes de incorporar contexto de producto',
-    finalTitle: 'Entrega la siguiente versión sin perder las decisiones anteriores',
-    finalBody:
-      'Conecta evidencia, compromisos e historial de implementación y convierte ese contexto en el siguiente artefacto.',
   },
   de: {
     ...consultantsCopyByLocale.de,
-    heroEyebrow: 'KI-gestützte Produktarbeit',
+    heroEyebrow: 'Für Produktarbeit entwickelt',
     heroTitle: 'Jede Produktentscheidung in einem',
     heroAccent: 'privaten Gedächtnis',
     comparisonTitle: 'Produktarbeit ist fragmentiert. Verbinde Entscheidung und Auslieferung.',
@@ -568,7 +537,7 @@ const productEngineeringCopyByLocale: Record<Locale, UseCaseCopy> = {
       'Briefings und Übergaben aus vorhandenem Kontext vorbereiten',
       'Updates entwerfen und folgenreiche Aktionen vor der Ausführung prüfen',
     ],
-    featuresEyebrow: 'KI über den gesamten Produktlebenszyklus',
+    featuresEyebrow: 'Vom Gedächtnis zur ausgelieferten Arbeit',
     featuresTitle: 'Von verstreuten Entscheidungen zu lieferbereitem Kontext',
     featuresBody:
       'ShogunAI bewahrt die Gründe hinter der Arbeit, bereitet die nächste Übergabe vor und macht aus Projektkontext ein geprüftes Artefakt.',
@@ -586,8 +555,6 @@ const productEngineeringCopyByLocale: Record<Locale, UseCaseCopy> = {
       approved: 'Freigegeben',
     },
     faqTitle: 'Klare Antworten, bevor Produktkontext in den Workflow gelangt',
-    finalTitle: 'Die nächste Version liefern, ohne frühere Entscheidungen zu verlieren',
-    finalBody: 'Verbinde Signale, Abwägungen und Umsetzungshistorie und mache daraus das nächste Artefakt.',
   },
 };
 
@@ -602,13 +569,13 @@ type UseCaseSlug = keyof typeof copyBySlug;
 
 function MemoryVisual({ copy }: { copy: VisualCopy }) {
   const sources = [
-    { label: copy.email, Icon: Mail, color: 'text-[#72a6ff]' },
-    { label: copy.meeting, Icon: Video, color: 'text-[#bf7bff]' },
-    { label: copy.proposal, Icon: FileText, color: 'text-[#ff85c2]' },
+    { label: copy.email, Icon: Mail, color: 'text-[#7fa6ff]' },
+    { label: copy.meeting, Icon: Video, color: 'text-[#a9bdff]' },
+    { label: copy.proposal, Icon: FileText, color: 'text-[#d6e0ff]' },
   ];
   return (
     <div className="relative flex h-[250px] items-center justify-center overflow-hidden rounded-[20px] bg-[#090a0f] p-5 text-white">
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_55%,rgba(115,73,255,0.38),transparent_38%)]" />
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_55%,rgba(0,76,252,0.36),transparent_38%)]" />
       <div className="relative flex w-full items-center justify-between gap-2">
         {sources.map(({ label, Icon, color }) => (
           <div key={label} className="flex min-w-0 flex-1 flex-col items-center gap-2">
@@ -619,7 +586,7 @@ function MemoryVisual({ copy }: { copy: VisualCopy }) {
           </div>
         ))}
       </div>
-      <div className="absolute top-1/2 left-1/2 flex size-[104px] -translate-x-1/2 -translate-y-1/2 flex-col items-center justify-center rounded-full border border-[#b991ff]/45 bg-[radial-gradient(circle,#733cff,#321d69)] shadow-[0_0_54px_rgba(130,73,255,0.48)]">
+      <div className="absolute top-1/2 left-1/2 flex size-[104px] -translate-x-1/2 -translate-y-1/2 flex-col items-center justify-center rounded-full border border-[#8fb0ff]/45 bg-[radial-gradient(circle,#2c62ff,#0d1f5c)] shadow-[0_0_54px_rgba(0,76,252,0.45)]">
         <Sparkles className="size-6" aria-hidden="true" />
         <span className="mt-1 max-w-[80px] text-center text-[11px] leading-tight font-semibold">{copy.memory}</span>
       </div>
@@ -631,20 +598,20 @@ function BriefVisual({ copy }: { copy: VisualCopy }) {
   return (
     <div className="h-[250px] overflow-hidden rounded-[20px] bg-[#090a0f] p-5 text-white">
       <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.06] px-3 py-3">
-        <Search className="size-4 shrink-0 text-[#b985ff]" aria-hidden="true" />
+        <Search className="size-4 shrink-0 text-[#8fb0ff]" aria-hidden="true" />
         <span className="truncate text-[11px] text-white/60">{copy.ask}</span>
-        <Sparkles className="ml-auto size-4 shrink-0 text-[#ff75d1]" aria-hidden="true" />
+        <Sparkles className="ml-auto size-4 shrink-0 text-[#a9bdff]" aria-hidden="true" />
       </div>
       <div className="mt-4 grid gap-2">
         {[copy.decisions, copy.commitments].map((label, index) => (
           <div key={label} className="flex items-center gap-3 rounded-xl border border-white/8 bg-white/[0.035] p-3">
-            <span className={`size-2 rounded-full ${index === 0 ? 'bg-[#7965ff]' : 'bg-[#45c978]'}`} />
+            <span className={`size-2 rounded-full ${index === 0 ? 'bg-[#4a7bff]' : 'bg-[#45c978]'}`} />
             <span className="text-[11px] text-white/70">{label}</span>
             <span className="ml-auto h-1.5 w-12 rounded-full bg-white/10" />
           </div>
         ))}
       </div>
-      <div className="mt-4 flex items-center gap-2 rounded-xl bg-[linear-gradient(110deg,#5b35d9,#b03da2)] px-4 py-3 text-[12px] font-semibold shadow-[0_14px_35px_rgba(106,56,218,0.3)]">
+      <div className="mt-4 flex items-center gap-2 rounded-xl bg-[linear-gradient(110deg,#1e46c8,#004cfc)] px-4 py-3 text-[12px] font-semibold shadow-[0_14px_35px_rgba(0,60,200,0.3)]">
         <Check className="size-4" aria-hidden="true" />
         {copy.brief}
       </div>
@@ -657,7 +624,7 @@ function FollowUpVisual({ copy }: { copy: VisualCopy }) {
     <div className="h-[250px] overflow-hidden rounded-[20px] bg-[#090a0f] p-5 text-white">
       <div className="rounded-2xl border border-white/10 bg-white/[0.045] p-4">
         <div className="flex items-center gap-3">
-          <span className="flex size-9 items-center justify-center rounded-xl bg-[#6438d8]">
+          <span className="flex size-9 items-center justify-center rounded-xl bg-[#2c56e8]">
             <Send className="size-4" aria-hidden="true" />
           </span>
           <div className="min-w-0">
@@ -688,7 +655,25 @@ export function isProductLedUseCase(slug: string): slug is UseCaseSlug {
   return slug in copyBySlug;
 }
 
-export function UseCaseMarketingPage({ page, locale }: { page: MarketingDetail; locale: Locale }) {
+export function UseCaseMarketingPage({
+  page,
+  locale,
+  t,
+  section,
+  sectionLabel,
+  exploreLabel,
+  exploreSub,
+  overviewLabel,
+}: {
+  page: MarketingDetail;
+  locale: Locale;
+  t: Dictionary;
+  section: string;
+  sectionLabel: string;
+  exploreLabel: string;
+  exploreSub: string;
+  overviewLabel: string;
+}) {
   if (!isProductLedUseCase(page.slug)) return null;
 
   const copy = copyBySlug[page.slug][locale];
@@ -699,28 +684,24 @@ export function UseCaseMarketingPage({ page, locale }: { page: MarketingDetail; 
     <div className="bg-bg overflow-hidden">
       <header className="border-border bg-bg relative border-b py-[clamp(68px,8vw,118px)]">
         <div
-          className="absolute inset-x-0 top-0 h-[420px] bg-[radial-gradient(ellipse_at_70%_0%,rgba(110,82,255,0.12),transparent_55%)]"
+          className="absolute inset-x-0 top-0 h-[420px] bg-[radial-gradient(ellipse_at_70%_0%,rgba(0,76,252,0.10),transparent_55%)]"
           aria-hidden="true"
         />
         <div className="container-x relative">
           <div className="max-w-[900px]">
-            <p className="text-xs font-semibold tracking-[0.15em] text-[#6758ff] uppercase">{copy.heroEyebrow}</p>
-            <h1 className="text-ink mt-6 max-w-[19ch] font-sans text-[clamp(44px,5.4vw,72px)] leading-[1.02] font-semibold tracking-[-0.055em] text-balance">
-              {copy.heroTitle}{' '}
-              <span className="inline-block bg-[linear-gradient(95deg,#25252b_5%,#8b8b94_65%,#b0b0b8)] bg-clip-text text-transparent [html[data-theme='dark']_&]:bg-[linear-gradient(95deg,#ffffff_5%,#a8a8b5_75%)] [html[data-theme='dark']_&]:bg-clip-text">
-                {copy.heroAccent}
-              </span>
+            <p className="text-accent text-xs font-semibold tracking-[0.08em] uppercase">{copy.heroEyebrow}</p>
+            <h1 className="font-display text-ink mt-5 max-w-[24ch] text-[clamp(30px,4.5vw,48px)] leading-[1.08] font-semibold tracking-[-0.02em] text-balance">
+              {copy.heroTitle} <span className="text-accent">{copy.heroAccent}</span>
             </h1>
             <p className="text-muted mt-7 max-w-[640px] text-[clamp(17px,1.55vw,21px)] leading-[1.6]">
               {page.description}
             </p>
-            <Link
-              href={homeCta}
-              className="bg-ink text-bg mt-8 inline-flex min-h-14 items-center justify-center gap-3 rounded-[14px] px-7 text-[15px] font-semibold shadow-[0_14px_32px_rgba(18,18,23,0.16)] transition-transform hover:-translate-y-0.5 focus-visible:ring-2 focus-visible:ring-[#6758ff] focus-visible:ring-offset-4 focus-visible:outline-none"
-            >
-              {copy.heroCta}
-              <ArrowRight className="size-4" />
-            </Link>
+            <Button asChild className="mt-8">
+              <Link href={homeCta}>
+                {copy.heroCta}
+                <ArrowRight className="size-4" />
+              </Link>
+            </Button>
             <ul className="mt-7 flex flex-wrap gap-x-5 gap-y-2">
               {copy.proof.map((item) => (
                 <li key={item} className="text-muted flex items-center gap-2 text-[12px] font-medium">
@@ -736,8 +717,8 @@ export function UseCaseMarketingPage({ page, locale }: { page: MarketingDetail; 
       <section className="py-[clamp(72px,9vw,126px)]">
         <div className="container-x">
           <div className="mx-auto max-w-[940px] text-center">
-            <p className="text-xs font-semibold tracking-[0.15em] text-[#6758ff] uppercase">{copy.comparisonEyebrow}</p>
-            <h2 className="text-ink mt-5 font-sans text-[clamp(38px,5.3vw,68px)] leading-[1] font-semibold tracking-[-0.06em] text-balance">
+            <p className="text-accent text-xs font-semibold tracking-[0.08em] uppercase">{copy.comparisonEyebrow}</p>
+            <h2 className="font-display text-ink mt-3 text-[clamp(26px,4vw,40px)] leading-tight font-semibold text-balance">
               {copy.comparisonTitle}
             </h2>
             <p className="text-muted mx-auto mt-6 max-w-[760px] text-[clamp(16px,1.35vw,19px)] leading-[1.65]">
@@ -746,7 +727,7 @@ export function UseCaseMarketingPage({ page, locale }: { page: MarketingDetail; 
           </div>
           <div className="theme-light-panel border-border bg-surface mt-14 grid overflow-hidden rounded-[26px] border lg:grid-cols-2">
             <article className="lg:border-border p-[clamp(28px,4.5vw,58px)] lg:border-r">
-              <h3 className="text-muted text-[clamp(25px,2.7vw,36px)] font-semibold tracking-[-0.035em]">
+              <h3 className="font-display text-muted text-[clamp(20px,2vw,26px)] leading-tight font-semibold">
                 {copy.oldTitle}
               </h3>
               <ul className="mt-8 grid gap-5">
@@ -761,8 +742,8 @@ export function UseCaseMarketingPage({ page, locale }: { page: MarketingDetail; 
                 ))}
               </ul>
             </article>
-            <article className="theme-soft-section bg-[#f7f4ff] p-[clamp(28px,4.5vw,58px)]">
-              <h3 className="text-ink text-[clamp(25px,2.7vw,36px)] font-semibold tracking-[-0.035em]">
+            <article className="bg-sky-soft p-[clamp(28px,4.5vw,58px)]">
+              <h3 className="font-display text-ink text-[clamp(20px,2vw,26px)] leading-tight font-semibold">
                 {copy.newTitle}
               </h3>
               <ul className="mt-8 grid gap-5">
@@ -776,13 +757,12 @@ export function UseCaseMarketingPage({ page, locale }: { page: MarketingDetail; 
                   </li>
                 ))}
               </ul>
-              <Link
-                href={homeCta}
-                className="bg-ink text-bg mt-9 inline-flex items-center gap-2 rounded-xl px-5 py-3 text-sm font-semibold"
-              >
-                {copy.heroCta}
-                <ArrowRight className="size-4" />
-              </Link>
+              <Button asChild size="sm" className="mt-9">
+                <Link href={homeCta}>
+                  {copy.heroCta}
+                  <ArrowRight className="size-4" />
+                </Link>
+              </Button>
             </article>
           </div>
         </div>
@@ -791,8 +771,8 @@ export function UseCaseMarketingPage({ page, locale }: { page: MarketingDetail; 
       <section className="border-border bg-cloud/35 border-y py-[clamp(72px,9vw,122px)]">
         <div className="container-x">
           <div className="mx-auto max-w-[920px] text-center">
-            <p className="text-xs font-semibold tracking-[0.15em] text-[#6758ff] uppercase">{copy.featuresEyebrow}</p>
-            <h2 className="text-ink mt-5 font-sans text-[clamp(38px,5.2vw,66px)] leading-[1] font-semibold tracking-[-0.06em] text-balance">
+            <p className="text-accent text-xs font-semibold tracking-[0.08em] uppercase">{copy.featuresEyebrow}</p>
+            <h2 className="font-display text-ink mt-3 text-[clamp(26px,4vw,40px)] leading-tight font-semibold text-balance">
               {copy.featuresTitle}
             </h2>
             <p className="text-muted mx-auto mt-6 max-w-[760px] text-[clamp(16px,1.35vw,19px)] leading-[1.65]">
@@ -809,7 +789,7 @@ export function UseCaseMarketingPage({ page, locale }: { page: MarketingDetail; 
                 >
                   <Visual copy={copy.visual} />
                   <div className="px-2 pt-7 pb-3">
-                    <h3 className="text-ink text-[clamp(22px,2vw,29px)] leading-[1.08] font-semibold tracking-[-0.04em]">
+                    <h3 className="font-display text-ink text-[clamp(20px,2vw,26px)] leading-tight font-semibold text-balance">
                       {step.title}
                     </h3>
                     <p className="text-muted mt-4 text-[15px] leading-[1.65]">{step.body}</p>
@@ -823,10 +803,10 @@ export function UseCaseMarketingPage({ page, locale }: { page: MarketingDetail; 
 
       <section className="border-border bg-cloud/45 border-y py-[clamp(64px,8vw,104px)]">
         <div className="container-x max-w-[860px]">
-          <p className="text-center text-xs font-semibold tracking-[0.15em] text-[#6758ff] uppercase">
+          <p className="text-center text-accent text-xs font-semibold tracking-[0.08em] uppercase">
             {copy.faqEyebrow}
           </p>
-          <h2 className="text-ink mx-auto mt-5 max-w-[17ch] text-center font-sans text-[clamp(36px,4.5vw,56px)] leading-[1.02] font-semibold tracking-[-0.055em] text-balance">
+          <h2 className="font-display text-ink mx-auto mt-3 max-w-[24ch] text-center text-[clamp(26px,4vw,40px)] leading-tight font-semibold text-balance">
             {copy.faqTitle}
           </h2>
           <div className="mt-10 grid gap-3">
@@ -845,28 +825,23 @@ export function UseCaseMarketingPage({ page, locale }: { page: MarketingDetail; 
         </div>
       </section>
 
-      <section className="py-[clamp(64px,8vw,112px)]">
-        <div className="container-x">
-          <div className="relative flex min-h-[480px] items-center justify-center overflow-hidden rounded-[30px] bg-[url('/optimized/shogunai-hero-kyoto-v3.jpg')] bg-cover bg-center px-6 py-16 text-center text-white sm:min-h-[540px]">
-            <div className="absolute inset-0 bg-[linear-gradient(115deg,rgba(3,18,37,0.8),rgba(62,34,118,0.48)_55%,rgba(4,16,31,0.74))]" />
-            <div className="relative mx-auto max-w-[900px]">
-              <h2 className="font-sans text-[clamp(42px,6vw,74px)] leading-[0.97] font-semibold tracking-[-0.065em] text-balance">
-                {copy.finalTitle}
-              </h2>
-              <p className="mx-auto mt-7 max-w-[680px] text-[clamp(17px,1.7vw,21px)] leading-[1.6] text-white/85">
-                {copy.finalBody}
-              </p>
-              <Link
-                href={homeCta}
-                className="mt-9 inline-flex min-h-14 items-center justify-center gap-3 rounded-[14px] bg-white px-8 text-[15px] font-semibold text-[#07131f] transition-transform hover:-translate-y-0.5 focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-4 focus-visible:ring-offset-[#08354f] focus-visible:outline-none"
-              >
-                {copy.finalCta}
-                <ArrowRight className="size-4" />
-              </Link>
-            </div>
+      <section className="py-14">
+        <div className="container-x border-border bg-surface flex flex-col items-center justify-between gap-5 rounded-[24px] border p-7 text-center shadow-[var(--shadow-card)] sm:flex-row sm:text-left">
+          <div>
+            <p className="font-display text-xl font-semibold">
+              {exploreLabel} {sectionLabel}
+            </p>
+            <p className="text-muted mt-1 text-sm">{exploreSub}</p>
           </div>
+          <Button asChild variant="secondary">
+            <Link href={`/${locale}/${section}`}>
+              {overviewLabel} <ArrowRight className="size-4" />
+            </Link>
+          </Button>
         </div>
       </section>
+
+      <CTA t={t} />
     </div>
   );
 }
