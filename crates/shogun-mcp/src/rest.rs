@@ -37,6 +37,11 @@ pub struct RestRequest {
     pub from_ms: Option<i64>,
     /// `?to_ms=` — visual-recall frame search window end.
     pub to_ms: Option<i64>,
+    /// `?for_generation` — lessons.list standing-prompt lookup (issue #104).
+    pub for_generation: bool,
+    pub app_bundle_id: Option<String>,
+    pub person_id: Option<String>,
+    pub project_id: Option<String>,
 }
 
 /// The routing decision. The server turns this into an HTTP response, running the backend for the

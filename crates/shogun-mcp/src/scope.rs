@@ -69,6 +69,13 @@ impl Service {
             Service::Linear => "linear",
         }
     }
+
+    /// Whether the service has trusted structured metadata. Issue #35: calendar title / time /
+    /// local event ID rank above AX / search evidence, while its description stays prose and skips
+    /// local-rule extraction. Mail, chat, and document bodies remain prose even through MCP.
+    pub fn is_structured_fact(self) -> bool {
+        matches!(self, Service::GoogleCalendar)
+    }
 }
 
 /// What an operation does — this fixes the gating it is allowed to have.
@@ -373,6 +380,18 @@ mod tests {
         assert_eq!(uniq.len(), tags.len(), "source tags must be unique: {tags:?}");
         assert_eq!(Service::Gmail.source_str(), "gmail");
         assert_eq!(Service::GoogleCalendar.source_str(), "gcal");
+    }
+
+    #[test]
+    fn calendar_is_the_only_structured_fact_source() {
+        assert!(Service::GoogleCalendar.is_structured_fact());
+        for s in ALL_SERVICES.iter().copied().filter(|s| *s != Service::GoogleCalendar) {
+            assert!(
+                !s.is_structured_fact(),
+                "{} is prose (mail/chat/docs), not a structured fact",
+                s.source_str()
+            );
+        }
     }
 
     #[test]

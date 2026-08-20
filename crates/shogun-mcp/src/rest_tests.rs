@@ -23,6 +23,10 @@ fn req(method: Method, path: &str, token: Option<&str>) -> RestRequest {
         body: None,
         from_ms: None,
         to_ms: None,
+        for_generation: false,
+        app_bundle_id: None,
+        person_id: None,
+        project_id: None,
     }
 }
 

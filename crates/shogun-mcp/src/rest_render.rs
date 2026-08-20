@@ -169,6 +169,10 @@ pub fn respond_with<B: MemoryBackend + ?Sized>(
                 query: req.query.clone(),
                 from_ms: req.from_ms,
                 to_ms: req.to_ms,
+                for_generation: req.for_generation,
+                app_bundle_id: req.app_bundle_id.clone(),
+                person_id: req.person_id.clone(),
+                project_id: req.project_id.clone(),
             };
             if is_structured_read(tool) {
                 let json = backend

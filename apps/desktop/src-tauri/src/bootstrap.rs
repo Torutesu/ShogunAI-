@@ -194,6 +194,8 @@ pub fn run() {
             user_config_watch::get_user_config_status,
             user_config_watch::open_shougun_md,
             user_config_watch::regenerate_shougun_md,
+            user_config_watch::list_learned_lessons,
+            user_config_watch::set_learned_lesson_active,
         ]);
 
     // NOTE: the visible surface is a NATIVE NSPanel hosting the webview's content view

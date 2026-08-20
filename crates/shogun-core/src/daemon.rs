@@ -118,16 +118,56 @@ mod context_assembly {
     ) -> Vec<ContextBlock> {
         evidence
             .iter()
-            .map(|e| {
-                ContextBlock::new(
+            .flat_map(|e| {
+                let mut blocks = Vec::with_capacity(usize::from(is_calendar_source(&e.source)) + 1);
+                if is_calendar_source(&e.source) {
+                    blocks.push(ContextBlock::new(
+                        BlockRef::Event(e.event_id),
+                        SourceKind::Structured,
+                        calendar_fact_text(e),
+                        evidence_score_inputs(SourceKind::Structured, relevance),
+                        est,
+                    ));
+                }
+                blocks.push(ContextBlock::new(
                     BlockRef::Event(e.event_id),
                     SourceKind::Evidence,
                     e.excerpt.clone(),
-                    ScoreInputs { relevance, ..EVIDENCE_SCORE },
+                    evidence_score_inputs(SourceKind::Evidence, relevance),
                     est,
-                )
+                ));
+                blocks
             })
             .collect()
+    }
+
+    /// Query-time confidence: the source trust prior replaces the old fake `1.0` on quoted hits.
+    fn evidence_score_inputs(kind: SourceKind, relevance: f64) -> ScoreInputs {
+        ScoreInputs {
+            relevance,
+            freshness: EVIDENCE_SCORE.freshness,
+            task_link: EVIDENCE_SCORE.task_link,
+            confidence: shogun_fusion::trust::query_time_confidence(kind),
+        }
+    }
+
+    pub(super) fn is_calendar_source(source: &str) -> bool {
+        matches!(
+            shogun_mcp::scope::from_source(source),
+            Some(shogun_mcp::scope::Service::GoogleCalendar)
+        )
+    }
+
+    fn calendar_fact_text(evidence: &Evidence) -> String {
+        let title = evidence
+            .title
+            .as_deref()
+            .filter(|title| !title.is_empty())
+            .unwrap_or("Untitled event");
+        format!(
+            "Calendar event\nTitle: {title}\nTimestamp (unix ms): {}\nEvent ID: {}",
+            evidence.ts, evidence.event_id
+        )
     }
 
     /// Normalize confidence-gated state facts into compressed context blocks.
@@ -210,6 +250,33 @@ const RECENT_DEDUP_WINDOW: usize = 8;
 /// `inline_memory` に渡す fact 上限。`assemble_context` と `assemble_context_compressed` の
 /// 両パスで一致させ、fact の一貫性を保つ。
 const FACT_LIMIT: usize = 8;
+
+/// The stable identifiers known for one generation request. Global lessons always apply; scoped
+/// lessons apply only when their matching identifier is present here.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GenerationContext<'a> {
+    pub app_bundle_id: Option<&'a str>,
+    pub person_id: Option<&'a str>,
+    pub project_id: Option<&'a str>,
+}
+
+impl<'a> GenerationContext<'a> {
+    /// Global always; app / person / project only when that identifier is present.
+    pub fn lesson_scopes(self) -> Vec<shogun_memory::lessons::ScopeFilter<'a>> {
+        use shogun_memory::lessons::{LessonScope, ScopeFilter};
+        let mut scopes = vec![ScopeFilter { scope: LessonScope::Global, scope_ref: None }];
+        if let Some(app_bundle_id) = self.app_bundle_id.filter(|id| !id.is_empty()) {
+            scopes.push(ScopeFilter { scope: LessonScope::App, scope_ref: Some(app_bundle_id) });
+        }
+        if let Some(person_id) = self.person_id.filter(|id| !id.is_empty()) {
+            scopes.push(ScopeFilter { scope: LessonScope::Person, scope_ref: Some(person_id) });
+        }
+        if let Some(project_id) = self.project_id.filter(|id| !id.is_empty()) {
+            scopes.push(ScopeFilter { scope: LessonScope::Project, scope_ref: Some(project_id) });
+        }
+        scopes
+    }
+}
 
 /// How much of a thread a reply context carries. Enough to answer in the conversation's own
 /// terms, bounded so assembly stays inside the pre-press budget.
@@ -884,10 +951,12 @@ impl Db {
     /// (FR-CAP-03): re-syncing the same item touches `last_seen_at` rather than duplicating it.
     ///
     /// On a **new** insert (not a dedup-touch) the first-stage local-rule extraction (WP2.7) runs
-    /// over the item body, so a commitment or open-loop stated in an email/message flows into the
-    /// state tables just as one captured on screen does — each candidate is low-confidence
-    /// (≤ [`shogun_memory::extract::LOCAL_RULE_MAX_CONFIDENCE`]) and linked to the ingested event
-    /// (FR-ST-02). Extraction is skipped on a touch so a re-sync never multiplies candidates.
+    /// over **prose** bodies (mail, chat, docs), so a commitment stated in an email flows into the
+    /// state tables at low confidence (≤ [`shogun_memory::extract::LOCAL_RULE_MAX_CONFIDENCE`])
+    /// linked to the ingested event (FR-ST-02). Calendar metadata (title / timestamp / event ID)
+    /// is emitted later as [`SourceKind::Structured`], while its description remains evidence;
+    /// neither should become a guessed 0.4 speech act. Extraction is skipped on a touch so a re-sync never
+    /// multiplies candidates.
     ///
     /// The caller ([`crate::service_gate`]) has already authorized the sync; this method only
     /// persists. On completion, a batch that inserted ≥ 1 **new** item publishes
@@ -935,13 +1004,20 @@ impl Db {
                     Some((_, n)) => *n += 1,
                     None => synced.push((it.source, 1)),
                 }
-                // A newly-ingested item is extracted for commitments / open loops, linked to it.
-                let candidates = shogun_memory::extract::extract_untrusted(&it.body);
-                if !candidates.is_empty() {
-                    let ids =
-                        shogun_memory::extract::persist_candidates(&mut guard, id, &candidates, it.ts_ms, now)
-                            .unwrap_or_default();
-                    summary.candidates += ids.len();
+                // Calendar descriptions stay searchable evidence, not speech acts (issue #35).
+                if extracts_untrusted_body(it.source) {
+                    let candidates = shogun_memory::extract::extract_untrusted(&it.body);
+                    if !candidates.is_empty() {
+                        let ids = shogun_memory::extract::persist_candidates(
+                            &mut guard,
+                            id,
+                            &candidates,
+                            it.ts_ms,
+                            now,
+                        )
+                        .unwrap_or_default();
+                        summary.candidates += ids.len();
+                    }
                 }
             }
             drop(guard);
@@ -1596,11 +1672,7 @@ impl Db {
             ));
         }
 
-        ranked.sort_by(|a, b| {
-            b.0.partial_cmp(&a.0)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then(b.1.ts.cmp(&a.1.ts))
-        });
+        ranked.sort_by(cmp_ranked_evidence);
         let evidence = ranked
             .into_iter()
             .map(|(_, e)| e)
@@ -1682,6 +1754,10 @@ impl Db {
         for b in &out.blocks {
             match b.id_ref {
                 shogun_fusion::block::BlockRef::Event(id) => {
+                    if b.source_kind == SourceKind::Structured {
+                        out_facts.push(b.text.clone());
+                        continue;
+                    }
                     let (ts, source, title, frame_id) = ev_by_id
                         .get(&id)
                         .map(|e| (e.ts, e.source.clone(), e.title.clone(), e.frame_id))
@@ -2914,6 +2990,16 @@ impl Db {
             Ok::<_, rusqlite::Error>(crate::metrics::LessonCounters {
                 active_lessons: lessons::count_active_lessons(conn)?,
                 feedback_events_last_7d: lessons::count_feedback_since(conn, now - WEEK_MS)?,
+                edit_before_approve_last_7d: lessons::count_feedback_kind_since(
+                    conn,
+                    lessons::FeedbackKind::EditBeforeApprove,
+                    now - WEEK_MS,
+                )?,
+                approve_unchanged_last_7d: lessons::count_feedback_kind_since(
+                    conn,
+                    lessons::FeedbackKind::ApproveUnchanged,
+                    now - WEEK_MS,
+                )?,
             })
         })
         .ok()
@@ -2961,18 +3047,33 @@ impl Db {
             .collect()
     }
 
-    /// The active lessons mapped into the directive-render view (D-5a): the desktop joins these
-    /// into the Shougun.md system-prompt block via
-    /// [`crate::user_config::render_directives_with_lessons`]. Unscoped call sites (the standing
-    /// prompt has no focused app) take every scope, top-k strongest.
-    pub fn learned_lessons(&self, top_k: usize) -> Vec<crate::user_config::LearnedLesson> {
-        self.active_lessons(&[], top_k)
+    /// Active, scope-matching lessons mapped into the directive-render view (D-5a). The desktop
+    /// joins these into the Shougun.md system-prompt block via
+    /// [`crate::user_config::render_directives_with_lessons`].
+    pub fn learned_lessons(
+        &self,
+        context: GenerationContext<'_>,
+        top_k: usize,
+    ) -> Vec<crate::user_config::LearnedLesson> {
+        self.active_lessons(&context.lesson_scopes(), top_k)
             .into_iter()
             .map(|l| crate::user_config::LearnedLesson {
                 instruction: l.instruction,
                 confidence: l.confidence,
             })
             .collect()
+    }
+
+    /// File directives plus active lessons — the standing generation prompt (issue #104 / Plan D-5a).
+    pub fn generation_directives(
+        &self,
+        cfg: &crate::user_config::ShougunConfig,
+        context: GenerationContext<'_>,
+    ) -> String {
+        crate::user_config::render_directives_with_lessons(
+            cfg,
+            &self.learned_lessons(context, LESSON_TOP_K),
+        )
     }
 
     // -------------------------------------------------------------- Dream Cycle job ledger (FR-DC-04)
@@ -3178,14 +3279,36 @@ fn screen_relevance(screen: &shogun_fusion::assemble::ScreenContext, subject: &s
     context_assembly::screen_relevance(screen, subject, summary)
 }
 
-/// 検索 evidence を圧縮ブロックへ正規化する。evidence は「実際に見たもの」なので
-/// confidence=1.0、relevance は呼び出し側が渡す検索スコア由来の値。
+/// 検索 evidence を圧縮ブロックへ正規化する。relevance は呼び出し側が渡す検索スコア由来。
+/// Calendar metadata is a structured fact; its description remains untrusted searchable evidence.
 fn evidence_to_blocks(
     evidence: &[Evidence],
     relevance: f64,
     est: &dyn shogun_fusion::budget::TokenEstimator,
 ) -> Vec<shogun_fusion::block::ContextBlock> {
     context_assembly::evidence_to_blocks(evidence, relevance, est)
+}
+
+/// Equal FTS scores: calendar metadata outranks AX / mail (issue #35 raw pack).
+fn cmp_ranked_evidence(a: &(f64, Evidence), b: &(f64, Evidence)) -> std::cmp::Ordering {
+    b.0.partial_cmp(&a.0)
+        .unwrap_or(std::cmp::Ordering::Equal)
+        .then(evidence_source_rank(&b.1.source).cmp(&evidence_source_rank(&a.1.source)))
+        .then(b.1.ts.cmp(&a.1.ts))
+}
+
+fn evidence_source_rank(source: &str) -> u8 {
+    if context_assembly::is_calendar_source(source) {
+        shogun_fusion::score::source_rank(SourceKind::Structured)
+    } else {
+        shogun_fusion::score::source_rank(SourceKind::Evidence)
+    }
+}
+
+/// Local-rule extraction is for speech-act prose (mail, chat, docs, AX). Structured-fact
+/// sources skip it so a calendar description cannot become a 0.4 "possibly" commitment.
+fn extracts_untrusted_body(source: &str) -> bool {
+    !matches!(shogun_mcp::scope::from_source(source), Some(svc) if svc.is_structured_fact())
 }
 
 /// confidence ゲートを通した facts を圧縮ブロックへ正規化する。facts は既に
@@ -4367,6 +4490,30 @@ mod tests {
     }
 
     #[test]
+    fn ingested_calendar_event_is_searchable_and_does_not_extract_speech_acts() {
+        use shogun_mcp::sync::IngestItem;
+        let db = Db::open_in_memory(clock(1)).unwrap();
+        // A calendar description can contain "I'll send…" — that is not a user promise. Issue #35:
+        // structured facts skip the untrusted extractor.
+        let items = vec![IngestItem {
+            source: "gcal",
+            kind: "calendar_event",
+            title: "Standup".into(),
+            body: "Daily standup. I'll send the deck after.".into(),
+            ts_ms: 100,
+        }];
+        let summary = db.ingest_integration(&items);
+        assert_eq!(summary.newly_inserted, 1);
+        assert_eq!(summary.candidates, 0, "calendar descriptions are not speech-act extract");
+        assert!(
+            db.commitments_due(1_000).is_empty(),
+            "a calendar row must not become a possibly-commitment"
+        );
+        let hits = db.search("standup", 10);
+        assert!(hits.iter().any(|h| h.source == "gcal"), "the event stays searchable");
+    }
+
+    #[test]
     fn re_syncing_the_same_item_touches_not_duplicates() {
         use shogun_mcp::sync::IngestItem;
         let db = Db::open_in_memory(clock(1)).unwrap();
@@ -4815,6 +4962,110 @@ mod tests {
     }
 
     #[test]
+    fn generation_directives_include_active_lessons_not_feedback_text() {
+        use shogun_memory::lessons::{distill, FeedbackKind, LessonScope, NewFeedback};
+
+        let db = Db::open_in_memory(clock(1)).unwrap();
+        const SECRET: &str = "SECRET_FEEDBACK_BODY_q1";
+        for i in 0..3 {
+            let before = format!(
+                "Hi team,\nA longer draft body about the {SECRET} quarterly numbers, line {i}.\nMore detail follows in the tracker.\nBest, Taro"
+            );
+            let after = format!(
+                "Hi team,\nA longer draft body about the {SECRET} quarterly numbers, line {i}.\nMore detail follows in the tracker."
+            );
+            db.record_feedback(
+                FeedbackKind::EditBeforeApprove,
+                LessonScope::Global,
+                &NewFeedback {
+                    ts_ms: i,
+                    action_kind: Some("draft_reply"),
+                    before_text: Some(&before),
+                    after_text: Some(&after),
+                    ..Default::default()
+                },
+            );
+        }
+        let candidates = distill(&db.feedback_after(0));
+        assert_eq!(candidates.len(), 1);
+        db.upsert_lesson(&candidates[0], 100).expect("lesson persists");
+
+        let text = db.generation_directives(
+            &crate::user_config::ShougunConfig::default(),
+            GenerationContext::default(),
+        );
+        assert!(text.contains("## Learned (auto)"), "{text}");
+        assert!(text.contains("Best, Taro"), "the distilled closing-line rule is injected");
+        assert!(!text.contains(SECRET), "feedback bodies never ride the prompt");
+        assert!(
+            text.contains("never change which actions need confirmation"),
+            "permission disclaimer stays in the learned section: {text}"
+        );
+    }
+
+    #[test]
+    fn generation_directives_only_include_lessons_matching_generation_context() {
+        use shogun_memory::lessons::{FeedbackKind, LessonCandidate, LessonKind, LessonScope, NewFeedback};
+
+        let db = Db::open_in_memory(clock(1)).unwrap();
+        let seed = |scope: LessonScope, scope_ref: Option<&str>, instruction: &str| {
+            let evidence = (0..3)
+                .map(|ts_ms| {
+                    db.record_feedback(
+                        FeedbackKind::EditBeforeApprove,
+                        scope,
+                        &NewFeedback {
+                            ts_ms,
+                            scope_ref,
+                            action_kind: Some("draft_reply"),
+                            ..Default::default()
+                        },
+                    )
+                    .expect("feedback persists")
+                })
+                .collect();
+            db.upsert_lesson(
+                &LessonCandidate {
+                    kind: LessonKind::Style,
+                    scope,
+                    scope_ref: scope_ref.map(str::to_owned),
+                    instruction: instruction.to_owned(),
+                    evidence,
+                },
+                100,
+            )
+            .expect("lesson persists");
+        };
+        seed(LessonScope::Global, None, "GLOBAL_LESSON");
+        seed(LessonScope::App, Some("com.apple.Mail"), "MAIL_ONLY_LESSON");
+        seed(LessonScope::Person, Some("alice@example.com"), "ALICE_ONLY_LESSON");
+
+        let cfg = crate::user_config::ShougunConfig::default();
+        let slack = db.generation_directives(
+            &cfg,
+            GenerationContext {
+                app_bundle_id: Some("com.tinyspeck.slackmacgap"),
+                ..Default::default()
+            },
+        );
+        assert!(slack.contains("GLOBAL_LESSON"), "{slack}");
+        assert!(!slack.contains("MAIL_ONLY_LESSON"), "{slack}");
+        assert!(!slack.contains("ALICE_ONLY_LESSON"), "{slack}");
+
+        let mail_to_alice = db.generation_directives(
+            &cfg,
+            GenerationContext {
+                app_bundle_id: Some("com.apple.Mail"),
+                person_id: Some("alice@example.com"),
+                ..Default::default()
+            },
+        );
+        assert!(mail_to_alice.contains("GLOBAL_LESSON"), "{mail_to_alice}");
+        assert!(mail_to_alice.contains("MAIL_ONLY_LESSON"), "{mail_to_alice}");
+        assert!(mail_to_alice.contains("ALICE_ONLY_LESSON"), "{mail_to_alice}");
+    }
+
+    #[test]
     fn dream_cycle_resume_skips_done_jobs_from_the_db() {
         let db = Db::open_in_memory(clock(1)).unwrap();
         let cycle = "20260720";
@@ -5078,6 +5329,197 @@ mod tests {
         assert_eq!(blocks[0].id_ref, BlockRef::Event(7));
         assert_eq!(blocks[0].source_kind, SourceKind::Evidence);
         assert!(blocks[0].tokens > 0);
+        assert!(
+            (blocks[0].score_inputs.confidence - shogun_fusion::trust::EVIDENCE_TRUST_PRIOR).abs()
+                < 1e-9
+        );
+    }
+
+    #[test]
+    fn evidence_to_blocks_keeps_calendar_metadata_structured_and_description_as_evidence() {
+        use shogun_fusion::block::SourceKind;
+        use shogun_fusion::budget::HeuristicEstimator;
+        let excerpt = "standup with the platform team";
+        let ev = vec![
+            Evidence {
+                event_id: 1,
+                ts: 100,
+                source: "capture".into(),
+                title: None,
+                excerpt: excerpt.into(),
+                frame_id: None,
+            },
+            Evidence {
+                event_id: 2,
+                ts: 100,
+                source: "gcal".into(),
+                title: Some("Standup".into()),
+                excerpt: excerpt.into(),
+                frame_id: None,
+            },
+            Evidence {
+                event_id: 3,
+                ts: 100,
+                source: "gmail".into(),
+                title: None,
+                excerpt: excerpt.into(),
+                frame_id: None,
+            },
+        ];
+        let blocks = evidence_to_blocks(&ev, 0.7, &HeuristicEstimator::default());
+        assert_eq!(blocks.len(), 4);
+        assert_eq!(blocks[0].source_kind, SourceKind::Evidence);
+        assert_eq!(blocks[1].source_kind, SourceKind::Structured);
+        assert!(blocks[1].text.contains("Title: Standup"));
+        assert!(blocks[1].text.contains("Timestamp (unix ms): 100"));
+        assert!(blocks[1].text.contains("Event ID: 2"));
+        assert_eq!(blocks[2].source_kind, SourceKind::Evidence);
+        assert_eq!(blocks[2].text, excerpt);
+        assert_eq!(blocks[3].source_kind, SourceKind::Evidence);
+        assert!(
+            (blocks[1].score_inputs.confidence - shogun_fusion::trust::STRUCTURED_TRUST_PRIOR).abs()
+                < 1e-9
+        );
+        for i in [0, 2, 3] {
+            assert!(
+                (blocks[i].score_inputs.confidence - shogun_fusion::trust::EVIDENCE_TRUST_PRIOR)
+                    .abs()
+                    < 1e-9,
+                "quoted block {i} must not look like a verified fact"
+            );
+        }
+    }
+
+    #[test]
+    fn equal_score_calendar_block_beats_ax_when_budget_fits_one() {
+        use shogun_fusion::block::{BlockRef, SourceKind};
+        use shogun_fusion::budget::HeuristicEstimator;
+        use shogun_fusion::compress::{compress, Candidates, CompressionConfig};
+        let excerpt = "a".repeat(400);
+        let ev = vec![
+            Evidence {
+                event_id: 1,
+                ts: 100,
+                source: "capture".into(),
+                title: None,
+                excerpt: excerpt.clone(),
+                frame_id: None,
+            },
+            Evidence {
+                event_id: 2,
+                ts: 100,
+                source: "gcal".into(),
+                title: Some("Standup".into()),
+                excerpt,
+                frame_id: None,
+            },
+        ];
+        let blocks = evidence_to_blocks(&ev, 0.7, &HeuristicEstimator::default());
+        let w = shogun_fusion::score::ScoreWeights::default();
+        let cal = blocks
+            .iter()
+            .find(|b| b.source_kind == SourceKind::Structured)
+            .unwrap();
+        let ax = blocks
+            .iter()
+            .find(|b| matches!(b.id_ref, BlockRef::Event(1)))
+            .unwrap();
+        assert!(
+            shogun_fusion::score::score_block(&cal.score_inputs, &w)
+                > shogun_fusion::score::score_block(&ax.score_inputs, &w),
+            "trust prior must move calendar metadata above AX, not only the tie-break"
+        );
+        let cfg = CompressionConfig { enabled: true, budget_tokens: 110, ..Default::default() };
+        let out = compress(Candidates { blocks }, &cfg);
+        assert_eq!(out.blocks.len(), 1);
+        assert_eq!(out.blocks[0].id_ref, BlockRef::Event(2));
+        assert_eq!(out.blocks[0].source_kind, SourceKind::Structured);
+        assert!(out.blocks[0].text.contains("Title: Standup"));
+    }
+
+    #[test]
+    fn equal_search_score_calendar_ranks_above_ax_and_mail() {
+        let hit = |id, source: &str| {
+            (
+                0.8_f64,
+                Evidence {
+                    event_id: id,
+                    ts: 100,
+                    source: source.into(),
+                    title: None,
+                    excerpt: "same".into(),
+                    frame_id: None,
+                },
+            )
+        };
+        let mut ranked = [hit(1, "capture"), hit(2, "gcal"), hit(3, "gmail")];
+        ranked.sort_by(cmp_ranked_evidence);
+        assert_eq!(ranked[0].1.source, "gcal");
+    }
+
+    #[test]
+    fn higher_search_score_still_beats_calendar_source_rank() {
+        let mut ranked = [
+            (
+                0.9,
+                Evidence {
+                    event_id: 1,
+                    ts: 100,
+                    source: "capture".into(),
+                    title: None,
+                    excerpt: "ax".into(),
+                    frame_id: None,
+                },
+            ),
+            (
+                0.5,
+                Evidence {
+                    event_id: 2,
+                    ts: 100,
+                    source: "gcal".into(),
+                    title: Some("Standup".into()),
+                    excerpt: "notes".into(),
+                    frame_id: None,
+                },
+            ),
+        ];
+        ranked.sort_by(cmp_ranked_evidence);
+        assert_eq!(ranked[0].1.source, "capture");
+    }
+
+    #[test]
+    fn compressed_calendar_metadata_is_a_fact_and_description_stays_evidence() {
+        use shogun_fusion::compress::CompressionConfig;
+        use shogun_mcp::sync::IngestItem;
+
+        let db = Db::open_in_memory(clock(1_000)).unwrap();
+        db.ingest_integration(&[IngestItem {
+            source: "gcal",
+            kind: "calendar_event",
+            title: "Roadmap review".into(),
+            body: "Discuss the launch plan and open risks.".into(),
+            ts_ms: 500,
+        }]);
+        let cfg = CompressionConfig {
+            enabled: true,
+            budget_tokens: 1_000,
+            ..Default::default()
+        };
+
+        let (pack, _stats, fell_back) =
+            db.assemble_context_compressed("launch plan", 6, 600, &[], &cfg);
+
+        assert!(!fell_back);
+        assert!(
+            pack.facts.iter().any(|fact| fact.contains("Title: Roadmap review")),
+            "calendar metadata must be trusted: {:?}",
+            pack.facts
+        );
+        assert!(
+            pack.evidence.iter().any(|evidence| evidence.excerpt.contains("open risks")),
+            "calendar description must remain available as evidence: {:?}",
+            pack.evidence
+        );
     }
 
     #[test]

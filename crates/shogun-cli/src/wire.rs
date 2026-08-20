@@ -3,7 +3,7 @@
 //! contract; the server's half is `shogun_mcp::rest`.
 
 use crate::command::{
-    Command, LessonsCommand, ListOrGet, VisualRecallCommand, VoiceDictionaryCommand,
+    Command, LessonsCommand, LessonsList, ListOrGet, VisualRecallCommand, VoiceDictionaryCommand,
 };
 
 /// An HTTP call: method + path (query folded in) + optional body.
@@ -27,6 +27,27 @@ fn encode(s: &str) -> String {
         }
     }
     out
+}
+
+fn lessons_list_path(opts: &LessonsList) -> String {
+    let mut q = Vec::new();
+    if opts.for_generation {
+        q.push("for_generation=true".to_string());
+    }
+    if let Some(v) = &opts.app_bundle_id {
+        q.push(format!("app_bundle_id={}", encode(v)));
+    }
+    if let Some(v) = &opts.person_id {
+        q.push(format!("person_id={}", encode(v)));
+    }
+    if let Some(v) = &opts.project_id {
+        q.push(format!("project_id={}", encode(v)));
+    }
+    if q.is_empty() {
+        "/v1/lessons".to_string()
+    } else {
+        format!("/v1/lessons?{}", q.join("&"))
+    }
 }
 
 fn state_path(noun: &str, which: &ListOrGet) -> String {
@@ -76,7 +97,7 @@ pub fn to_call(command: &Command, include_low: bool) -> Option<HttpCall> {
         Command::Wrap => get("/v1/memory/wrap".to_string()),
         Command::Onboarding => get("/v1/device/onboarding".to_string()),
         Command::Lessons(cmd) => match cmd {
-            LessonsCommand::List => get("/v1/lessons".to_string()),
+            LessonsCommand::List(opts) => get(lessons_list_path(opts)),
             LessonsCommand::Enable { id } => post(
                 "/v1/lessons/active".into(),
                 format!(r#"{{"id":{id},"active":true}}"#),
@@ -255,12 +276,29 @@ mod tests {
     #[test]
     fn lessons_calls_match_the_rest_contract() {
         assert_eq!(
-            to_call(&Command::Lessons(LessonsCommand::List), false).unwrap(),
+            to_call(
+                &Command::Lessons(LessonsCommand::List(LessonsList::default())),
+                false
+            )
+            .unwrap(),
             HttpCall {
                 method: "GET",
                 path: "/v1/lessons".into(),
                 body: None
             }
+        );
+        assert_eq!(
+            to_call(
+                &Command::Lessons(LessonsCommand::List(LessonsList {
+                    for_generation: true,
+                    person_id: Some("alice@example.com".into()),
+                    ..LessonsList::default()
+                })),
+                false
+            )
+            .unwrap()
+            .path,
+            "/v1/lessons?for_generation=true&person_id=alice%40example.com"
         );
         assert_eq!(
             to_call(&Command::Lessons(LessonsCommand::Enable { id: 7 }), false).unwrap(),

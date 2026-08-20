@@ -285,7 +285,7 @@ mod tests {
         // the D-6 lesson counters ride on the same surface: a live DB reports real (zero) counts
         assert!(
             r.body.contains(
-                r#""lessons":{"active_lessons":0,"feedback_events_last_7d":0,"measured":true}"#
+                r#""lessons":{"active_lessons":0,"feedback_events_last_7d":0,"edit_before_approve_last_7d":0,"approve_unchanged_last_7d":0,"lesson_hit_rate":{"measured":false},"measured":true}"#
             ),
             "lesson counters missing: {}",
             r.body

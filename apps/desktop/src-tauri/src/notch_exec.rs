@@ -344,11 +344,20 @@ pub mod mac {
             return false;
         };
         let queue = queue.inner().clone();
+        let screen = current_screen();
         let directives = app
             .try_state::<crate::user_config_watch::UserConfigState>()
-            .map(|s| s.directives())
+            .map(|s| {
+                s.directives_for_generation(
+                    &db,
+                    shogun_core::daemon::GenerationContext {
+                        app_bundle_id: Some(&screen.app_bundle_id),
+                        person_id: Some(&to),
+                        ..Default::default()
+                    },
+                )
+            })
             .unwrap_or_default();
-        let screen = current_screen();
         std::thread::spawn(move || {
             // Ground the draft in the open loop plus what is on screen (same inputs the candidate
             // was scored from). The subject seed doubles as the draft's subject line.

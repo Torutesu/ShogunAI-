@@ -85,10 +85,20 @@ pub enum Command {
     },
 }
 
+/// Filters for `lessons list`. Default is the Settings/management list (every row).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct LessonsList {
+    /// Standing-prompt lookup: active Global lessons, plus any ids below.
+    pub for_generation: bool,
+    pub app_bundle_id: Option<String>,
+    pub person_id: Option<String>,
+    pub project_id: Option<String>,
+}
+
 /// Lessons subcommands (invariant 6: same list + toggle the Learned UI offers).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LessonsCommand {
-    List,
+    List(LessonsList),
     Enable { id: i64 },
     Disable { id: i64 },
 }
@@ -148,7 +158,7 @@ impl Command {
             Command::ActionsPoll { .. } => return None,
             Command::Wrap => Tool::MemoryGetWrap,
             Command::Onboarding => Tool::DeviceOnboardingGet,
-            Command::Lessons(LessonsCommand::List) => Tool::LessonsList,
+            Command::Lessons(LessonsCommand::List(_)) => Tool::LessonsList,
             Command::Lessons(LessonsCommand::Enable { .. })
             | Command::Lessons(LessonsCommand::Disable { .. }) => Tool::LessonsSetActive,
             Command::VisualRecall(VisualRecallCommand::Status) => Tool::VisualRecallStatus,
@@ -211,7 +221,8 @@ COMMANDS:
     onboarding                This device's first-run setup state
     api status                Show the running REST port
     metrics                   In-product SLO snapshot + lesson counters
-    lessons list              Learned lessons (instruction, confidence, active)
+    lessons list [--for-generation] [--app ID] [--person ID] [--project ID]
+                              All lessons (Settings). --for-generation = lookup
     lessons enable <id>       Switch a learned lesson on  (L1)
     lessons disable <id>      Switch a learned lesson off (L1)
     visual-recall status      Visual recall status + frame stats
@@ -297,7 +308,7 @@ mod tests {
         use shogun_agents::permission::Level;
         use shogun_mcp::memory_api::{tool_level, ApiLevel};
         assert_eq!(
-            Command::Lessons(LessonsCommand::List).tool(),
+            Command::Lessons(LessonsCommand::List(LessonsList::default())).tool(),
             Some(Tool::LessonsList)
         );
         assert_eq!(tool_level(Tool::LessonsList), ApiLevel::Read);
