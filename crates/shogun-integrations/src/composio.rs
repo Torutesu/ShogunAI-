@@ -45,12 +45,19 @@ pub fn parse_execute_response(resp: &Value) -> Result<(), String> {
     // so the nested envelope must be checked too — reporting an unflagged failure as Ok() here
     // marks an email delivered (and writes a traceability row) for a send that never happened.
     let data = resp.get("data");
-    match flag_of(resp).or_else(|| data.and_then(flag_of)) {
+    // A top-level `error` with no top-level flag is a failure the platform already declared:
+    // never let a nested `data.success` overturn it, or a rate-limited send is reported delivered.
+    let flag = match flag_of(resp) {
+        Some(top) => Some(top),
+        None if has_error(resp) => Some(false),
+        None => data.and_then(flag_of),
+    };
+    match flag {
         Some(true) => Ok(()),
         Some(false) => Err("composio tool reported failure".to_string()),
-        // No explicit flag: treat an `error` at either level as failure, else assume success.
+        // No explicit flag: treat a nested `error` as failure, else assume success.
         None => {
-            if has_error(resp) || data.is_some_and(has_error) {
+            if data.is_some_and(has_error) {
                 Err("composio tool returned an error".to_string())
             } else {
                 Ok(())
@@ -93,6 +100,25 @@ mod tests {
         // An explicit top-level success still wins over incidental nested fields.
         assert!(parse_execute_response(
             &json!({ "successful": true, "data": { "error": null } })
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn a_top_level_error_is_not_overturned_by_a_nested_success() {
+        // The platform declared the call failed; a nested envelope flag must not flip it to
+        // "delivered" (that writes a traceability row for an egress that never happened).
+        assert!(parse_execute_response(
+            &json!({ "error": "rate_limited", "data": { "success": true } })
+        )
+        .is_err());
+        assert!(parse_execute_response(
+            &json!({ "error": "invalid_grant", "data": { "successful": true, "id": "m1" } })
+        )
+        .is_err());
+        // A null top-level error is not an error, so the nested flag still decides.
+        assert!(parse_execute_response(
+            &json!({ "error": null, "data": { "successful": true } })
         )
         .is_ok());
     }
