@@ -63,10 +63,15 @@ const nextConfig = {
         ],
       },
       {
-        // The app demo is a document we frame into the features page. It needs to
-        // be frameable by this origin and nothing else, so the deny-everything
-        // defaults above are narrowed here rather than site-wide: same-origin
+        // The app demo is a document we frame into the features page, so the
+        // deny-everything defaults above are narrowed for it: same-origin
         // ancestors only, and still no framing *from* it.
+        //
+        // Note this only binds where Next serves the response. On Cloudflare the
+        // file is served straight from static assets and arrives with neither
+        // header — so in production the demo is framable by any origin. That is
+        // acceptable for what it is (a static page of sample data, no auth, no
+        // form, no action) but it is not the guarantee this block reads like.
         source: '/app-demo/:path*',
         headers: [
           { key: 'X-Frame-Options', value: 'SAMEORIGIN' },
