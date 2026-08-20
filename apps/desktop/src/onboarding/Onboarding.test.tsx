@@ -114,7 +114,7 @@ describe("cinematic onboarding", () => {
       expect(onPersist).not.toHaveBeenCalled();
 
       await vi.advanceTimersByTimeAsync(900);
-      expect(onPersist).toHaveBeenCalledWith("accessibility");
+      expect(onPersist).toHaveBeenCalledWith("reads");
     } finally {
       vi.useRealTimers();
     }
@@ -127,6 +127,20 @@ describe("cinematic onboarding", () => {
     expect(mute.getAttribute("data-muted")).toBe("false");
     expect(mute.querySelector(".onb-mute__icon")).toBeTruthy();
     expect(mute.textContent).toBe("");
+  });
+
+  it("slides into the Shogun overview with honest Back and Next navigation", () => {
+    const onPersist = vi.fn(async () => true);
+    render(<OnboardingExperience state={{ ...state("reads"), step: "reads" }} permissions={emptyPermissions} surfaceGeneration={1} onPersist={onPersist} onFinish={vi.fn(async () => true)} onToggleMusic={vi.fn(async () => true)} musicPending={false} />);
+
+    expect(screen.getByRole("heading", { name: "Welcome to Shogun" })).toBeTruthy();
+    expect(screen.getByTestId("gate-frame")).toBeTruthy();
+    expect(screen.getByText("Dictate directly into any text field.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Mute" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    expect(onPersist).toHaveBeenNthCalledWith(1, "welcome");
+    expect(onPersist).toHaveBeenNthCalledWith(2, "accessibility");
   });
 
   it("shows exactly current permission and persists only after native grant", async () => {
@@ -545,6 +559,9 @@ describe("cinematic onboarding", () => {
     expect(experienceSource).not.toMatch(/Shotbase/i);
     expect(css).toMatch(/\.onb-signin__haze\s*\{[^}]*rgba\(195,95,60,\.18\)[^}]*rgba\(95,143,168,\.14\)/);
     expect(css).toMatch(/\.onb-signin__button\[data-processing="true"\]\s*\{[^}]*background:\s*#aaa6a3/);
+    expect(css).toContain("onb-gate-slide-in 520ms cubic-bezier(.25, 1, .5, 1)");
+    expect(css).toMatch(/@keyframes onb-gate-slide-in\s*\{[^}]*transform:\s*translate3d\(100%, 0, 0\)/);
+    expect(reduced).toContain("onb-reduced-fade 200ms linear both");
     expect(css).not.toMatch(/onb-(?:button|mute|drag)[^}]*min-height:\s*(?:3[0-9]|4[0-3])px/);
     expect(keyframes).not.toMatch(/\b(width|height|top|right|bottom|left|margin|padding)\s*:/i);
     expect(reduced).toContain("onb-reduced-current-fade 200ms linear both");
@@ -577,7 +594,7 @@ describe("cinematic onboarding", () => {
   it.each([
     ["intro", "Welcome to Shogun"],
     ["welcome", "Welcome to Shogun"],
-    ["reads", "What it reads, and what it never keeps."],
+    ["reads", "Welcome to Shogun"],
     ["privacy", "What it reads, and what it never keeps."],
     ["accessibility", "Accessibility"],
     ["microphone", "Microphone"],

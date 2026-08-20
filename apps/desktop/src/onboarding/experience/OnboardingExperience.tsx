@@ -6,6 +6,7 @@ import type { OnboardingState, PermissionSnapshot } from "../ipc";
 import { ConnectStage, PlanStage, PrivacyStage } from "./FlowParity";
 import { GateFrame } from "./GateFrame";
 import { MuteButton } from "./MuteButton";
+import { OverviewStage } from "./OverviewStage";
 import { PermissionStage } from "./PermissionStage";
 import { ShortcutPractice } from "./ShortcutPractice";
 
@@ -49,7 +50,7 @@ export function OnboardingExperience(props: {
   if (step === "welcome") {
     return (
       <main className="onb-shell onb-shell--welcome" data-step={step}>
-        <Welcome onContinue={() => onPersist("accessibility")} />
+        <Welcome onContinue={() => onPersist("reads")} />
         <div className="onb-floating-mute"><MuteButton muted={state.music_muted} disabled={musicPending} onToggle={onToggleMusic} /></div>
       </main>
     );
@@ -57,7 +58,8 @@ export function OnboardingExperience(props: {
   return (
     <main className="onb-shell" data-step={step}>
       <div className="onb-layout">
-        <div className="onb-copy" key={step}>
+        <div className={`onb-copy${step === "overview" ? " onb-copy--overview" : ""}`} key={step}>
+          {step === "overview" ? <OverviewStage onBack={() => onPersist("welcome")} onContinue={() => onPersist("accessibility")} /> : null}
           {step === "privacy" ? <PrivacyStage onContinue={() => onPersist("plan")} /> : null}
           {step === "accessibility" || step === "microphone" || step === "screen_recording" ? (
             <PermissionStage kind={step} permissions={permissions} state={state} onPersist={onPersist} />
@@ -79,9 +81,10 @@ export function OnboardingExperience(props: {
   );
 }
 
-function routeStep(step: OnboardingState["step"], p: PermissionSnapshot): "welcome" | "privacy" | "accessibility" | "microphone" | "screen_recording" | "right_option" | "scribe_demo" | "dictation_demo" | "plan" | "connect" | "gate" {
+function routeStep(step: OnboardingState["step"], p: PermissionSnapshot): "welcome" | "overview" | "privacy" | "accessibility" | "microphone" | "screen_recording" | "right_option" | "scribe_demo" | "dictation_demo" | "plan" | "connect" | "gate" {
   if (step === "intro" || step === "welcome") return "welcome";
-  if (step === "reads" || step === "privacy") return "privacy";
+  if (step === "reads") return "overview";
+  if (step === "privacy") return "privacy";
   if (step === "permission") return !p.accessibility ? "accessibility" : !p.microphone ? "microphone" : !p.screen_recording ? "screen_recording" : "right_option";
   if (step === "accessibility") return "accessibility";
   if (step === "microphone" || step === "screen_recording" || step === "right_option" || step === "scribe_demo" || step === "dictation_demo" || step === "plan" || step === "connect" || step === "gate") return step;
