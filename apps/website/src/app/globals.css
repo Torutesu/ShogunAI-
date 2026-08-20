@@ -212,7 +212,13 @@ html[data-theme='dark'] .waitlist-form-default button {
    * is a minimum. */
   display: flex;
   flex-direction: column;
+  /* Bias the content above centre. An even split left up to 118px of empty
+   * gradient between the nav and the badge — a grey band with nothing in it.
+   * Padding at the foot moves the centring point up without pushing the badge
+   * row down into the dense part of the artwork, which is what pinning the
+   * content to flex-start did. */
   justify-content: center;
+  padding-bottom: clamp(48px, 11vh, 150px);
 }
 
 @media (min-width: 701px) {
@@ -228,7 +234,7 @@ html[data-theme='dark'] .waitlist-form-default button {
 @media (min-height: 1150px) {
   .hero-shell {
     justify-content: flex-start;
-    padding-top: 9vh;
+    padding-top: 5vh;
   }
 }
 
