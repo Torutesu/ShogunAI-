@@ -28,7 +28,7 @@ export function Hero({ t, participantCount }: { t: Dictionary; participantCount:
 
       <div className="hero-layout container-x py-6 sm:py-7 lg:pb-4 lg:pt-6">
         <div className="grid min-h-0 items-center gap-x-10 gap-y-3 lg:grid-cols-[minmax(0,0.96fr)_minmax(460px,0.82fr)] lg:gap-y-0">
-          <div className="order-1 max-w-[670px] text-center lg:text-left">
+          <div className="order-1 min-w-0 max-w-[670px] text-center lg:text-left">
           <div>
             <div>
               <Badge dot>{t.hero.badge}</Badge>
@@ -85,7 +85,7 @@ export function Hero({ t, participantCount }: { t: Dictionary; participantCount:
           </div>
           </div>
 
-          <div className="hero-demo-frame order-4 w-full max-w-[1320px] lg:order-2 lg:justify-self-end">
+          <div className="hero-demo-frame order-4 w-full min-w-0 max-w-[1320px] lg:order-2 lg:justify-self-end">
             <div className="hero-demo-scale w-full">
               {/* The notch panel itself, running its own mock fixture outside Tauri —
                 * the real surface, not a drawing of it. */}
