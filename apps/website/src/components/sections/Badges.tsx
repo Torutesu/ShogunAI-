@@ -49,7 +49,7 @@ function AwardBanner({
     </div>
   );
 
-  const content = <div className={`flex h-[56px] items-center justify-center sm:h-[78px] ${widthClassName}`}>{banner}</div>;
+  const content = <div className={`flex h-[64px] items-center justify-center sm:h-[96px] ${widthClassName}`}>{banner}</div>;
 
   return href ? (
     <a href={href} target="_blank" rel="noreferrer" aria-label={linkLabel ?? alt} className="block h-full rounded-[18px] transition-transform hover:-translate-y-0.5">
@@ -60,7 +60,7 @@ function AwardBanner({
 
 function ProductHuntBadge() {
   return (
-    <div className="flex h-[56px] items-center justify-center sm:h-[78px]">
+    <div className="flex h-[64px] items-center justify-center sm:h-[96px]">
       <a
         href="https://www.producthunt.com/products/shogunai/reviews/new?utm_source=badge-product_review&utm_medium=badge&utm_source=badge-shogunai"
         target="_blank"
@@ -73,7 +73,7 @@ function ProductHuntBadge() {
           alt="ShogunAI - Personal AGI | Product Hunt"
           width={250}
           height={54}
-          className="h-full w-auto max-w-[220px] object-contain sm:max-w-[292px]"
+          className="h-full w-auto max-w-[248px] object-contain sm:max-w-[352px]"
         />
       </a>
     </div>
@@ -116,7 +116,7 @@ export function Badges({ t }: { t: Dictionary }) {
   const ph = t.authority.items.find((b) => b.tone === 'ph');
 
   return (
-    <div className="mx-auto grid w-full max-w-[880px] grid-cols-3 items-center justify-items-center gap-x-6 gap-y-6 sm:gap-x-10">
+    <div className="mx-auto grid w-full max-w-[1000px] grid-cols-3 items-center justify-items-center gap-x-6 gap-y-6 sm:gap-x-12">
       <AwardBanner
         src="/optimized/yc-rfs-hackathon-2026.png"
         alt="Winner of YC RFS Hackathon 2026, presented by Transpose"
@@ -124,7 +124,7 @@ export function Badges({ t }: { t: Dictionary }) {
         height={765}
         sizes="(max-width: 1024px) 92vw, 420px"
         priority
-        widthClassName="w-full max-w-[230px] sm:max-w-[300px]"
+        widthClassName="w-full max-w-[260px] sm:max-w-[360px]"
         href="https://x.com/toruai/status/2082832405514395962?s=20"
         linkLabel="Open the YC RFS Hackathon 2026 win announcement on X"
       />
@@ -135,7 +135,7 @@ export function Badges({ t }: { t: Dictionary }) {
         width={1221}
         height={662}
         sizes="(max-width: 1024px) 92vw, 420px"
-        widthClassName="w-full max-w-[164px] sm:max-w-[214px]"
+        widthClassName="w-full max-w-[190px] sm:max-w-[262px]"
         surfaceClassName="theme-light-badge"
       />
       <BrandfetchLogoStrip />

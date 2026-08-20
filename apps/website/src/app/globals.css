@@ -203,7 +203,12 @@ html[data-theme='dark'] .waitlist-form-default button {
 }
 
 .hero-shell {
-  min-height: calc(100svh - 4rem);
+  /* Capped, then centred. A full-viewport box left far more slack than the
+   * content needed, and wherever that slack went it looked wrong: split evenly
+   * it opened a grey band under the nav, pushed to the foot it left the badges
+   * stranded above a huge stretch of artwork. A shorter box has little slack to
+   * place, so an even split reads as even margins. */
+  min-height: min(calc(100svh - 4rem), 800px);
   background: #f7f5f0 url('/optimized/shogunai-hero-kyoto-v3.jpg') center bottom / 100% auto no-repeat;
   /* The hero is at least a viewport tall, and its content was pinned to the
    * top of that box: 23px under the nav on every screen, against as much as
@@ -212,10 +217,7 @@ html[data-theme='dark'] .waitlist-form-default button {
    * is a minimum. */
   display: flex;
   flex-direction: column;
-  /* Start the content at the top. Centring inside a full-viewport box left a
-   * band of empty gradient under the nav — grey, tall, and carrying nothing.
-   * The slack belongs at the foot, where the artwork uses it. */
-  justify-content: flex-start;
+  justify-content: center;
 }
 
 @media (min-width: 701px) {
