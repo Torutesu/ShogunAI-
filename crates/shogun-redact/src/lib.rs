@@ -109,13 +109,28 @@ pub fn redact(text: &str) -> std::borrow::Cow<'_, str> {
         }
         let rest = &text[i..];
 
-        // 1. A known issuer prefix: mask the prefix and the value that follows it.
-        if let Some(p) = ISSUER_PREFIXES.iter().find(|p| rest.starts_with(**p)) {
-            let value_len = run_len(&rest[p.len()..]);
-            if p.len() + value_len >= MIN_SECRET_LEN {
-                out.push_str(MASK);
-                i += p.len() + value_len;
-                continue;
+        // 1. A known issuer prefix: mask the prefix and the value that follows it. Only at a
+        //    token boundary — the "sk-" inside "task-management" is prose, not a key.
+        let at_token_boundary =
+            i == 0 || !text[..i].chars().next_back().map(is_secret_char).unwrap_or(false);
+        if at_token_boundary {
+            if let Some(p) = ISSUER_PREFIXES.iter().find(|p| rest.starts_with(**p)) {
+                let tail = &rest[p.len()..];
+                // AWS access key ids are strictly uppercase alphanumeric after the prefix; a
+                // hyphenated heading like "ASIA-PACIFIC-2026" must not read as a credential.
+                let value_len = if *p == "AKIA" || *p == "ASIA" {
+                    tail.char_indices()
+                        .find(|(_, c)| !c.is_ascii_alphanumeric())
+                        .map(|(idx, _)| idx)
+                        .unwrap_or(tail.len())
+                } else {
+                    run_len(tail)
+                };
+                if p.len() + value_len >= MIN_SECRET_LEN {
+                    out.push_str(MASK);
+                    i += p.len() + value_len;
+                    continue;
+                }
             }
         }
 
@@ -341,6 +356,23 @@ mod tests {
         assert_eq!(r("the token: abc"), "the token: abc");
         assert_eq!(r("password: TODO"), "password: TODO");
         assert_eq!(r("sk-short"), "sk-short");
+    }
+
+    #[test]
+    fn issuer_prefixes_inside_ordinary_words_are_not_matched() {
+        // "sk-", "SG.", "ASIA" and friends appear mid-word in real prose constantly; matching
+        // them there shreds captured text permanently (the DB only holds the masked form).
+        for s in [
+            "task-management-workflow is due Friday",
+            "the disk-cleanup-scheduled-job ran overnight",
+            "MSG.Sent.Confirmation.Number.1234567890",
+            "ASIA-PACIFIC-2026-PLANNING notes from the offsite",
+            "kiosk-mode-restart-required on the demo box",
+        ] {
+            assert_eq!(r(s), s, "prose must survive redaction untouched");
+        }
+        // Still masked when the prefix starts its own token.
+        assert_eq!(r("key sk-abcdefghijklmnop here"), "key [redacted] here");
     }
 
     #[test]
