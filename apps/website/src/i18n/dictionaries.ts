@@ -108,7 +108,7 @@ const en = {
       { name: 'Capture', items: [
         { k: 'Text through the accessibility layer', v: 'The focused window\u2019s app, title, and visible text, read the way a screen reader reads it.', r: 'Excluded apps, private windows and password fields are never read. Pause stops it entirely.' },
         { k: 'Visual recall', v: 'A compressed screenshot, only where text capture returns nothing at all.', r: 'Off until you turn it on. Encrypted on the Mac, deleted automatically at the retention age you pick.' },
-        { k: 'Meeting audio', v: 'Processed for the transcript while the meeting runs.', r: 'Never written to disk or a temp file. Only the transcript persists.' },
+        { k: 'Meeting audio', v: 'Streamed to a speech service for live transcription while the meeting runs, and never used to train anyone\u2019s models.', r: 'Never written to disk or a temp file. Only the transcript persists, and the traceability log records the egress.' },
       ] },
       { name: 'Recall', items: [
         { k: 'One question across every tool', v: 'Mail, chat, docs and calendar answered from a single search.', r: 'Every hit carries its source and time, so an answer can be checked rather than trusted.' },
@@ -573,7 +573,7 @@ const ja: Dictionary = {
       { name: 'キャプチャ', items: [
         { k: 'アクセシビリティ経由のテキスト', v: 'フォーカス中のウィンドウのアプリ名・タイトル・可視テキストを、スクリーンリーダーと同じ読み方で取得します。', r: '除外アプリ、プライベートウィンドウ、パスワード欄は読みません。一時停止で完全に止まります。' },
         { k: 'ビジュアルリコール', v: 'テキストが一切取れなかったウィンドウにかぎり、圧縮したスクリーンショットを取得します。', r: '既定オフ。Mac 上で暗号化し、選んだ保持期間で自動削除します。' },
-        { k: '会議の音声', v: '会議中に、文字起こしのためだけに処理します。', r: 'ディスクにも一時ファイルにも書きません。残るのは文字起こしだけです。' },
+        { k: '会議の音声', v: '会議中、ライブ文字起こしのために音声認識サービスへ送ります。学習や改善には使われません。', r: 'ディスクにも一時ファイルにも書きません。残るのは文字起こしだけで、外部送信はトレーサビリティのログに記録されます。' },
       ] },
       { name: '想起', items: [
         { k: 'ツール横断の検索', v: 'メール、チャット、ドキュメント、カレンダーを一度の問いで。', r: 'ヒットごとに出どころと時刻が付きます。信じるのではなく確かめられます。' },
@@ -1035,7 +1035,7 @@ const es: Dictionary = {
       { name: 'Captura', items: [
         { k: 'Text through the accessibility layer', v: 'The focused window\u2019s app, title, and visible text, read the way a screen reader reads it.', r: 'Excluded apps, private windows and password fields are never read. Pause stops it entirely.' },
         { k: 'Visual recall', v: 'A compressed screenshot, only where text capture returns nothing at all.', r: 'Off until you turn it on. Encrypted on the Mac, deleted automatically at the retention age you pick.' },
-        { k: 'Meeting audio', v: 'Processed for the transcript while the meeting runs.', r: 'Never written to disk or a temp file. Only the transcript persists.' },
+        { k: 'Meeting audio', v: 'Streamed to a speech service for live transcription while the meeting runs, and never used to train anyone\u2019s models.', r: 'Never written to disk or a temp file. Only the transcript persists, and the traceability log records the egress.' },
       ] },
       { name: 'Recuperación', items: [
         { k: 'One question across every tool', v: 'Mail, chat, docs and calendar answered from a single search.', r: 'Every hit carries its source and time, so an answer can be checked rather than trusted.' },
@@ -1469,7 +1469,7 @@ const de: Dictionary = {
       { name: 'Erfassung', items: [
         { k: 'Text through the accessibility layer', v: 'The focused window\u2019s app, title, and visible text, read the way a screen reader reads it.', r: 'Excluded apps, private windows and password fields are never read. Pause stops it entirely.' },
         { k: 'Visual recall', v: 'A compressed screenshot, only where text capture returns nothing at all.', r: 'Off until you turn it on. Encrypted on the Mac, deleted automatically at the retention age you pick.' },
-        { k: 'Meeting audio', v: 'Processed for the transcript while the meeting runs.', r: 'Never written to disk or a temp file. Only the transcript persists.' },
+        { k: 'Meeting audio', v: 'Streamed to a speech service for live transcription while the meeting runs, and never used to train anyone\u2019s models.', r: 'Never written to disk or a temp file. Only the transcript persists, and the traceability log records the egress.' },
       ] },
       { name: 'Abruf', items: [
         { k: 'One question across every tool', v: 'Mail, chat, docs and calendar answered from a single search.', r: 'Every hit carries its source and time, so an answer can be checked rather than trusted.' },

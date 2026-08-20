@@ -34,7 +34,7 @@ export const featurePages: readonly MarketingDetail[] = [
     outcomes: ['Recover the reasoning behind a decision weeks later', 'Find the source of a number instead of re-deriving it', 'Return to interrupted work without rebuilding the story', 'Keep sensitive context on the device by default'],
     faq: [
       ['Does ShogunAI take screenshots?', 'Only where text capture returns nothing, and only if you switch visual recall on — it is off by default. Those screenshots stay encrypted on your Mac, can be viewed or deleted at any time, and are deleted automatically at the retention age you pick. Everywhere else, capture is text through the accessibility layer and no image is written.'],
-      ['Is meeting audio stored?', 'No. Audio is processed for the transcript while a meeting runs and is never written to disk or a temp file. What persists is the transcript text and where it came from.'],
+      ['Is meeting audio stored?', 'No. Audio streams to a speech service for live transcription while a meeting runs, is never used to train anyone\u2019s models, and is never written to disk or a temp file. What persists is the transcript text and where it came from, and the traceability log records the egress.'],
       ['Where does memory live?', 'In an encrypted database on your Mac. There is no server-side copy of your day to seize, breach, or quietly train on. What leaves the device is the specific slice a request needs, logged with its purpose.'],
       ['Does a heavy day cost more?', 'No. Embeddings run locally, so indexing is free whatever the volume, and recall works offline.'],
     ],
