@@ -1,6 +1,12 @@
 import { ArrowRight, Check } from 'lucide-react';
 import { Reveal } from '@/components/animations/Reveal';
 import { Button } from '@/components/ui/button';
+import {
+  CompareSlider,
+  CompareSliderAfter,
+  CompareSliderBefore,
+  CompareSliderHandle,
+} from '@/components/ui/compare-slider';
 import type { Dictionary } from '@/i18n/dictionaries';
 import type { Locale } from '@/i18n/config';
 
@@ -17,26 +23,43 @@ export function Action({ t, locale }: { t: Dictionary; locale: Locale }) {
             <p className="rounded-[16px] bg-cloud px-4 py-3 text-center text-[13px] font-medium leading-relaxed text-ink">
               {a.comparePrompt}
             </p>
-            <div className="mt-3 grid gap-3 sm:grid-cols-2">
-              <div className="flex flex-col rounded-[18px] border border-border bg-[linear-gradient(180deg,rgba(255,255,255,0.98),rgba(247,249,253,0.98))] p-4">
-                <span className="text-[11px] font-semibold uppercase tracking-[0.06em] text-muted">{a.stepNoticeK}</span>
-                <p className="mt-2 text-[13px] leading-relaxed text-muted">{a.stepNoticeV}</p>
-                <div className="mt-auto pt-4">
-                  <div className="h-px w-full bg-border" />
-                  <span className="mt-3 block text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">{a.compareLeftFootK}</span>
-                  <p className="mt-1 text-[12px] leading-relaxed text-muted">{a.compareLeftFootV}</p>
+            {/* Before/After are clip slots, not chronology: `After` paints the left of
+              * the wipe. The generic assistant goes there so the drag reveals ShogunAI
+              * from the right, which is the direction the copy reads in. */}
+            <CompareSlider
+              defaultValue={52}
+              aria-label={a.compareAria}
+              className="mt-3 h-[300px] rounded-[18px] border border-border sm:h-[280px]"
+            >
+              <CompareSliderAfter>
+                <div className="h-full w-full bg-[linear-gradient(180deg,rgba(255,255,255,0.98),rgba(247,249,253,0.98))]">
+                  <div className="flex h-full w-[47%] flex-col p-4">
+                  <span className="text-[11px] font-semibold uppercase tracking-[0.06em] text-muted">{a.stepNoticeK}</span>
+                  <p className="mt-2 text-[13px] leading-relaxed text-muted">{a.stepNoticeV}</p>
+                  <div className="mt-auto pt-4">
+                    <div className="h-px w-full bg-border" />
+                    <span className="mt-3 block text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">{a.compareLeftFootK}</span>
+                    <p className="mt-1 text-[12px] leading-relaxed text-muted">{a.compareLeftFootV}</p>
+                    </div>
+                  </div>
                 </div>
-              </div>
-              <div className="flex flex-col rounded-[18px] border border-[#9bb4ff] bg-[linear-gradient(180deg,#f5f7ff_0%,#e8eeff_100%)] p-4 shadow-[0_18px_44px_rgba(0,76,252,0.12)]">
-                <span className="text-[11px] font-semibold uppercase tracking-[0.06em] text-accent">{a.stepActK}</span>
-                <p className="mt-2 text-[13px] font-medium leading-relaxed text-ink">{a.stepActV}</p>
-                <div className="mt-auto pt-4">
-                  <div className="h-px w-full bg-[#9bb4ff]/50" />
-                  <span className="mt-3 block text-[10px] font-semibold uppercase tracking-[0.08em] text-accent">{a.stepConfirmK}</span>
-                  <p className="mt-1 text-[12px] font-medium leading-relaxed text-ink">{a.stepConfirmV}</p>
+              </CompareSliderAfter>
+              <CompareSliderBefore>
+                <div className="h-full w-full bg-[linear-gradient(180deg,#f5f7ff_0%,#e8eeff_100%)]">
+                  <div className="ml-auto flex h-full w-[47%] flex-col p-4">
+                  <span className="text-[11px] font-semibold uppercase tracking-[0.06em] text-accent">{a.stepActK}</span>
+                  <p className="mt-2 text-[13px] font-medium leading-relaxed text-ink">{a.stepActV}</p>
+                  <div className="mt-auto pt-4">
+                    <div className="h-px w-full bg-[#9bb4ff]/50" />
+                    <span className="mt-3 block text-[10px] font-semibold uppercase tracking-[0.08em] text-accent">{a.stepConfirmK}</span>
+                    <p className="mt-1 text-[12px] font-medium leading-relaxed text-ink">{a.stepConfirmV}</p>
+                    </div>
+                  </div>
                 </div>
-              </div>
-            </div>
+              </CompareSliderBefore>
+              <CompareSliderHandle />
+            </CompareSlider>
+            <p className="mt-3 text-center text-[11px] text-faint">{a.compareHint}</p>
           </div>
         </Reveal>
 
