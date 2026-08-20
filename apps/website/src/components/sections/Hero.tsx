@@ -89,11 +89,7 @@ export function Hero({ t, participantCount }: { t: Dictionary; participantCount:
             <div className="hero-demo-scale w-full">
               {/* The notch panel itself, running its own mock fixture outside Tauri —
                 * the real surface, not a drawing of it. */}
-              <AppFrame
-                src="/app-demo/panel.html"
-                title="ShogunAI"
-                className="h-[430px] overflow-hidden rounded-[26px] border border-white/60 shadow-[0_35px_90px_rgba(0,38,142,0.28)] sm:h-[470px]"
-              />
+              <AppFrame src="/app-demo/panel.html" title="ShogunAI" device="mac" className="w-full" />
             </div>
           </div>
 
