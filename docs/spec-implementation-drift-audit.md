@@ -41,7 +41,7 @@
 | 19 | **音声のクラウド送信範囲** | CLAUDE.md 2026-08-05 例外は「**Meeting notes の既定 ASR**」に限定して Deepgram を許可 | **音声入力（hold-to-talk, Issue #44）も Deepgram live WS を第一経路にしている**（`apps/desktop/src-tauri/src/voice_lane.rs`。Whisper はフォールバック）。ディスクには書かないが、**会議以外の音声も外部へ出ている**。例外の文言がこの経路を含んでいない | **要判断**（§2-D） |
 | 20 | **音声入力（push-to-talk）** | requirements v1.0 に**記述ゼロ**（"PTT" / "音声入力" とも 0 件） | 実装済み。ショートカット長押し中だけマイクを開き、離した瞬間に文字起こし＋文脈結合＋応答（`voice_lane.rs` / `voice_shortcut.rs` / `voice_session.rs` / `VoiceOverlay.tsx`）。設計は `docs/push-to-talk-voice-design.md` | docs更新（要件化） |
 | 21 | **Scribe（その場書き換え）** | requirements v1.0 に**記述ゼロ** | 実装済み。任意アプリの編集可能フィールドを AX で掴み、指示に沿って**その場で書き換える**（`apps/desktop/src-tauri/src/scribe.rs` / `ScribeOverlay.tsx`）。保護スパンの保存検証つき | docs更新（要件化） |
-| 22 | **feature-status.csv の網羅性** | 「機能単位の状況はこれを正とする」と本監査 §1 で位置付けた | 音声入力・Scribe・Visual recall の**行が存在しない**（Meeting のエラー行のみ）。最終更新は 2026-08-05 | docs更新（行を追加するまで「正」と呼べない） |
+| 22 | **feature-status.csv の網羅性** | 「機能単位の状況はこれを正とする」と本監査 §1 で位置付けた | 音声入力・Scribe・Visual recall の**行が存在しなかった**（最終更新 2026-08-05） | ✅ docs更新済（11行追加。テスト実測値は未取得のため空欄） |
 | 23 | **設計だけで未着手のもの** | — | Evening Wrap / 朝夜サマリー配達（`docs/daily-summaries-design.md`「設計確定・実装未着手」）、Skills（`docs/skills-concept-and-ui-design.md`「設計提案・未着手」）。**外向けコピーで語ってはいけない範囲** | 記録のみ |
 
 **結論**: 「一日をテキストで記憶する。画像は保存しない」という説明は、**2026-08-02 の Visual recall と 2026-07-30 の音声入力が入った時点で古い**。外向けの説明はこの監査の内容に合わせて書き直した（`docs/product-hunt-launch.md` §1）。
@@ -92,6 +92,9 @@
 
 - `CLAUDE.md`: 開発フェーズの現在地、crate構成（10 crate）、`apps/api` の位置付け、DB暗号化（SQLCipher）、Gmail 決定の未実施注記、Wave 1 への Drive 追加。
 - `docs/requirements-v1.0.md`: ステータス／最終更新、本書の位置付け（Phase 0ゲートの記述）、§5.1 crate構成、FR-INT-03（Wave 1）、FR-API-01/02/03、FR-BIL-08、NFR-SEC-01、NFR-TEL-01、ADR-002、ADR-003。各所に `【2026-08-20 実装反映】` の印を付けた。
+- `docs/requirements-v1.0.md`（第2巡）: **§6.17 音声入力 / Push-to-Talk（FR-PTT-01〜08）と §6.18 Scribe（FR-SCR-01〜07）を新設**——どちらも先行実装された機能の事後要件化。あわせて FR-CAP-01 / NFR-PRV-01 / FR-OB-02 / §3.1 スコープ表 / §9.2 リスク表の Visual recall 記述を「保持期間はユーザー選択（既定3日・上限3,650日）」へ更新し、用語集に Visual recall / 音声入力 / Scribe を追加、未決事項に OPEN-10〜12（保持上限・ASR例外の範囲・両機能のプラン帰属）を追加した。
+- `CLAUDE.md`（第2巡）: 不変条件2の Visual recall 例外に**実装の保持期間**と「72時間は上限として機能していない」旨を明記。2026-08-05 の ASR 例外に**音声入力も同じクラウド live STT を使う**ことを追記（どちらも判断待ちの印つき）。
+- `docs/feature-status.csv`: Visual recall（2行）・音声入力（4行）・Scribe（5行）の**計11行を追加**。旧台帳には行自体が無かった。テスト実測は未取得のため結果列は空にしてある。
 - `README.md`: desktop / api / website の現況。
 
 ## 4. 残っている整理タスク（コード側。この監査では触っていない）

@@ -78,6 +78,17 @@ US-DT-14,Desktop,Full UI 6 panes,partial,none,"fullui.rs, FullUi.tsx","E-15,E-43
 US-DT-15,Desktop,Onboarding accessibility flow,implemented,none,"onboarding.rs, Onboarding.tsx","E-46,E-47",fail,fixed,pass,"2026-08-05: suites green (memory 216 / core 429+ / agents 33 / mcp 102 / integrations 52 / cli 30, tsc clean)"
 US-DT-16,Desktop,Analytics opt-out,partial,unit,"analytics.rs, AnalyticsToggle.tsx","E-47,E-48",fail,partially fixed,pass (fixed items); E-48 documented,"2026-08-05: suites green (memory 216 / core 429+ / agents 33 / mcp 102 / integrations 52 / cli 30, tsc clean)"
 US-DT-17,Desktop,SLO instrumentation wiring,partial,unit (module),"metrics.rs, integrate.rs",E-12,fail,fixed,pass,"2026-08-05: suites green (memory 216 / core 429+ / agents 33 / mcp 102 / integrations 52 / cli 30, tsc clean)"
+US-VR-01,Visual recall,"Opt-in OCR frames (default off, encrypted screen_frames)",implemented,unit,"capture/visual_recall.rs, memory/screen_frames.rs",,,,,"2026-08-20 追加（旧台帳に行が無かった）。保持期間は既定3日・プリセット1-7日・カスタム上限3650日。テスト実測は未取得"
+US-VR-02,Visual recall,User-selected retention + automatic expiry purge,implemented,unit,capture/visual_recall.rs,,,,,"2026-08-20 追加。CLAUDE.md の「最大72時間」と不一致（OPEN-10）"
+US-PTT-01,Voice,Hold-to-talk mic lifecycle (press/release serialized),implemented,unit,"voice_shortcut.rs, voice_session.rs",,,,,"2026-08-20 追加。Issue #44 / docs/push-to-talk-voice-design.md"
+US-PTT-02,Voice,"Live STT with fallback (cloud WS -> batch -> on-device)",implemented,unit,voice_lane.rs,,,,,"2026-08-20 追加。音声はディスク・DBへ書かない"
+US-PTT-03,Voice,Egress traceability required before capture (purpose=voice_dictation),implemented,unit,voice_lane.rs,,,,,"2026-08-20 追加。シンク不在時は実行停止"
+US-PTT-04,Voice,Caret insert with clipboard fallback,implemented,unit,voice_session.rs,,,,,"2026-08-20 追加"
+US-SCR-01,Scribe,Capture editable AX target before overlay takes focus,implemented,unit,scribe.rs,,,,,"2026-08-20 追加"
+US-SCR-02,Scribe,"Write only if target, value and UTF-16 range unchanged",implemented,unit,scribe.rs,,,,,"2026-08-20 追加"
+US-SCR-03,Scribe,Protected-span preservation validator (discard unsafe output),implemented,unit,"inline.rs, scribe.rs",,,,,"2026-08-20 追加"
+US-SCR-04,Scribe,Captured context passed as untrusted role (injection defense),implemented,unit,inline.rs,,,,,"2026-08-20 追加"
+US-SCR-05,Scribe,Explicit no_key / failed / cancelled phases surfaced to UI,implemented,unit,"scribe.rs, ScribeOverlay.tsx",,,,,"2026-08-20 追加"
 
 Error ID,Severity,Area,Summary,Code refs,Decision,Fix status,Retest
 E-01,Critical,Memory,delete_all fails entirely (FK: transcript_segments/meeting_recaps not deleted) - nothing gets wiped for users with meetings,"maintenance.rs:78-101, V9/V10 migrations",fix now,fixed,pass (new regression test: delete_all_survives_a_meeting_with_transcript_and_recap)
