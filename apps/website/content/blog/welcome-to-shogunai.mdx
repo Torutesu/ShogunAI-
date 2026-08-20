@@ -23,12 +23,20 @@ have to maintain — a running picture of what you read, wrote, and decided,
 assembled passively in the background and stored on your Mac.
 
 It captures text through the accessibility layer macOS already exposes to
-screen readers. It is not a screen recorder. There are no screenshots sitting
-in a folder, no video timeline, no audio files. What gets stored is text and
-where it came from.
+screen readers. It is not a screen recorder: there is no rolling video of your
+day, no frame taken every few seconds, no audio file. What gets stored is
+text and where it came from.
+
+There is one narrow exception, and it is off until you turn it on. Some
+windows hand over no text at all — a chart in a shared slide, a dashboard
+drawn on a canvas, a PDF that is really a scan. With visual recall enabled,
+those windows — and only those — produce a compressed screenshot, which stays
+encrypted on your Mac for a retention period you choose and is deleted
+automatically when it reaches that age.
 
 That distinction is the whole design, and we wrote more about it in
-[Passive memory, not screenshots](/blog/passive-memory-not-screenshots).
+[Passive memory, not screenshots](/blog/passive-memory-not-screenshots) and
+[Visual recall, and the exception we argued about](/blog/visual-recall).
 
 ## The execution layer
 
@@ -62,9 +70,12 @@ system.
 Some constraints are worth stating before we ship anything, because they are
 the parts that get quietly traded away later:
 
-- **No screenshots, no recordings.** Text and provenance, not pixels and
-  waveforms. The one narrow exception is opt-in and time-boxed, and we
-  [explain it here](/blog/visual-recall).
+- **Text and provenance, not a recording of your day.** Capture reads text
+  rather than pixels, and no audio file is written at any point. Where a
+  window yields no text at all, visual recall fills the gap — off by default,
+  opt-in, never uploaded, and deleted at a retention age you choose. We
+  [wrote out every rule around it](/blog/visual-recall) rather than leave it
+  in a footnote.
 - **Your machine is the default.** Memory lives locally. What goes out goes
   out for a named reason, and the log tells you which reason.
 - **Nothing sends itself.** Automatic actions are the reversible, local ones.

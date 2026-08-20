@@ -21,7 +21,7 @@ const jaFeatures: readonly MarketingDetail[] = [
     outcomes: ['数週間後に、判断の理由まで思い出せる', '数字の根拠を、導き直さずに見つけられる', '中断した仕事に、経緯を組み立て直さずに戻れる', '機微な文脈を既定で端末内に保てる'],
     faq: [
       ['ShogunAI はスクリーンショットを撮りますか?', 'テキストが取れなかった画面にかぎり、かつビジュアルリコールを自分でオンにした場合だけ撮ります ── 既定はオフです。撮ったものは Mac 上で暗号化され、いつでも閲覧・削除でき、選んだ保持期間で自動削除されます。それ以外の場面ではアクセシビリティ経由のテキストのみで、画像は書き込みません。'],
-      ['会議の音声は保存されますか?', 'いいえ。会議中に文字起こしのためだけに処理し、ディスクにも一時ファイルにも書きません。残るのは文字起こしテキストとその出どころだけです。'],
+      ['会議の音声は保存されますか?', 'いいえ。会議中はライブ文字起こしのために音声認識サービスへ送りますが、学習や改善には使われず、ディスクにも一時ファイルにも書きません。残るのは文字起こしテキストとその出どころだけで、この外部送信はトレーサビリティのログに記録されます。'],
       ['記憶はどこにありますか?', 'あなたの Mac の暗号化されたデータベースの中です。差し押さえたり、侵害したり、こっそり学習に使えるサーバー側のコピーは存在しません。外に出るのは、その依頼に必要な範囲だけで、目的とともに記録されます。'],
       ['濃い一日はコストが上がりますか?', 'いいえ。埋め込みは端末上で動くので、量に関係なくインデックスは無料で、想起はオフラインでも動きます。'],
     ],
@@ -165,7 +165,7 @@ const esFeatures: readonly MarketingDetail[] = [
     outcomes: ['Recuperar el razonamiento de una decisión semanas después', 'Encontrar el origen de una cifra en vez de rehacerla', 'Volver al trabajo interrumpido sin reconstruir la historia', 'Mantener el contexto sensible en el dispositivo por defecto'],
     faq: [
       ['¿ShogunAI hace capturas de pantalla?', 'Solo donde la captura de texto no devuelve nada, y solo si activas el recuerdo visual: viene desactivado. Esas capturas quedan cifradas en tu Mac, puedes verlas o borrarlas cuando quieras, y se eliminan solas al cumplir el periodo que elijas. En el resto de los casos la captura es texto por la capa de accesibilidad y no se escribe ninguna imagen.'],
-      ['¿Se guarda el audio de las reuniones?', 'No. El audio se procesa para la transcripción mientras la reunión ocurre y nunca se escribe en disco ni en un archivo temporal. Lo que persiste es el texto de la transcripción y su origen.'],
+      ['¿Se guarda el audio de las reuniones?', 'No. El audio se transmite a un servicio de voz para transcribir en directo mientras la reunión ocurre, nunca se usa para entrenar modelos de nadie y nunca se escribe en disco ni en un archivo temporal. Lo que persiste es el texto de la transcripción y su origen, y el registro de trazabilidad deja constancia de ese envío.'],
       ['¿Dónde vive la memoria?', 'En una base de datos cifrada en tu Mac. No existe una copia de tu día en un servidor que embargar, filtrar o usar para entrenar en silencio. Lo que sale es la porción concreta que necesita una petición, registrada con su propósito.'],
       ['¿Un día intenso cuesta más?', 'No. Los embeddings corren en local, así que indexar es gratis sea cual sea el volumen, y la recuperación funciona sin conexión.'],
     ],
@@ -249,7 +249,7 @@ const deFeatures: readonly MarketingDetail[] = [
     outcomes: ['Wochen später die Begründung einer Entscheidung wiederfinden', 'Die Quelle einer Zahl finden, statt sie neu herzuleiten', 'Zu unterbrochener Arbeit zurückkehren, ohne die Geschichte neu zu bauen', 'Sensiblen Kontext standardmäßig auf dem Gerät behalten'],
     faq: [
       ['Macht ShogunAI Screenshots?', 'Nur dort, wo die Texterfassung nichts liefert, und nur wenn du Visual Recall einschaltest — standardmäßig ist es aus. Diese Screenshots bleiben verschlüsselt auf deinem Mac, du kannst sie jederzeit ansehen oder löschen, und sie verschwinden automatisch bei der gewählten Aufbewahrungsdauer. Überall sonst ist die Erfassung Text über die Bedienungshilfen, und es wird kein Bild geschrieben.'],
-      ['Wird Meeting-Audio gespeichert?', 'Nein. Audio wird während des Meetings für das Transkript verarbeitet und nie auf die Festplatte oder in eine temporäre Datei geschrieben. Bestehen bleibt der Transkripttext und seine Herkunft.'],
+      ['Wird Meeting-Audio gespeichert?', 'Nein. Audio wird während des Meetings zur Live-Transkription an einen Sprachdienst gestreamt, nie zum Training von Modellen verwendet und nie auf die Festplatte oder in eine temporäre Datei geschrieben. Bestehen bleibt der Transkripttext und seine Herkunft, und das Nachvollziehbarkeits-Protokoll hält diesen Versand fest.'],
       ['Wo liegt das Gedächtnis?', 'In einer verschlüsselten Datenbank auf deinem Mac. Es gibt keine serverseitige Kopie deines Tages, die man beschlagnahmen, abgreifen oder still zum Training nutzen könnte. Hinaus geht nur der Ausschnitt, den eine Anfrage braucht — mit seinem Zweck protokolliert.'],
       ['Kostet ein dichter Tag mehr?', 'Nein. Embeddings laufen lokal, das Indexieren ist unabhängig vom Volumen kostenlos, und der Abruf funktioniert offline.'],
     ],
