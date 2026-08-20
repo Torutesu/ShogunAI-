@@ -2996,7 +2996,6 @@ export function VoiceSection(): JSX.Element {
             <div className="mic-picker__popover-head">
               <span>{t.voiceMicrophonePickerTitle}</span>
               <span className="mic-picker__popover-actions">
-                <span>{microphones.length + 1}</span>
                 <button
                   className="mic-picker__close"
                   type="button"

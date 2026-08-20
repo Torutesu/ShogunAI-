@@ -2555,9 +2555,6 @@ kbd {
   align-items: center;
   gap: 7px;
 }
-.mic-picker__popover-actions > span {
-  font-variant-numeric: tabular-nums;
-}
 .mic-picker__close {
   width: 24px;
   height: 24px;
