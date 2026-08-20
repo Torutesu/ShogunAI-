@@ -50,6 +50,7 @@ export function OnboardingExperience(props: {
   if (step === "welcome") {
     return (
       <main className="onb-shell onb-shell--welcome" data-step={step}>
+        <WindowDragRegion />
         <Welcome onContinue={() => onPersist("reads")} />
         <div className="onb-floating-mute"><MuteButton muted={state.music_muted} disabled={musicPending} onToggle={onToggleMusic} /></div>
       </main>
@@ -57,6 +58,7 @@ export function OnboardingExperience(props: {
   }
   return (
     <main className="onb-shell" data-step={step}>
+      <WindowDragRegion />
       <div className="onb-layout">
         <div className={`onb-copy${step === "overview" ? " onb-copy--overview" : ""}`} key={step}>
           {step === "overview" ? <OverviewStage onBack={() => onPersist("welcome")} onContinue={() => onPersist("accessibility")} /> : null}
@@ -79,6 +81,10 @@ export function OnboardingExperience(props: {
       <div className="onb-floating-mute"><MuteButton muted={state.music_muted} disabled={musicPending} onToggle={onToggleMusic} /></div>
     </main>
   );
+}
+
+function WindowDragRegion(): JSX.Element {
+  return <div className="onb-window-drag-region" data-tauri-drag-region aria-hidden="true" />;
 }
 
 function routeStep(step: OnboardingState["step"], p: PermissionSnapshot): "welcome" | "overview" | "privacy" | "accessibility" | "microphone" | "screen_recording" | "right_option" | "scribe_demo" | "dictation_demo" | "plan" | "connect" | "gate" {

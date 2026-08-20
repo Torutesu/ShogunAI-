@@ -7,8 +7,8 @@ use serde::Serialize;
 use crate::geometry::{Point, Rect};
 
 pub const INTRO_DURATION: Duration = Duration::from_secs(4);
-const INTERACTIVE_WIDTH: f64 = 1260.0;
-const INTERACTIVE_HEIGHT: f64 = 790.0;
+const INTERACTIVE_WIDTH: f64 = 1197.0;
+const INTERACTIVE_HEIGHT: f64 = 751.0;
 const INTERACTIVE_MIN_WIDTH: f64 = 680.0;
 const INTERACTIVE_MIN_HEIGHT: f64 = 520.0;
 const INTERACTIVE_EDGE_INSET: f64 = 16.0;
@@ -80,6 +80,8 @@ pub struct WindowPolicy {
     pub resizable: bool,
     pub transparent: bool,
     pub overlay_titlebar: bool,
+    pub movable: bool,
+    pub movable_by_background: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -215,6 +217,8 @@ pub fn window_policy(surface: OnboardingSurfaceKind) -> WindowPolicy {
             resizable: false,
             transparent: true,
             overlay_titlebar: true,
+            movable: false,
+            movable_by_background: false,
         },
         OnboardingSurfaceKind::Interactive => WindowPolicy {
             level: WindowLevelPolicy::Normal,
@@ -224,6 +228,8 @@ pub fn window_policy(surface: OnboardingSurfaceKind) -> WindowPolicy {
             resizable: true,
             transparent: true,
             overlay_titlebar: true,
+            movable: true,
+            movable_by_background: true,
         },
     }
 }
@@ -893,6 +899,8 @@ pub mod mac {
             let _: () = msg_send![ptr, setHidesOnDeactivate: false];
             let _: () = msg_send![ptr, setTitleVisibility: 1isize];
             let _: () = msg_send![ptr, setTitlebarAppearsTransparent: true];
+            let _: () = msg_send![ptr, setMovable: policy.movable];
+            let _: () = msg_send![ptr, setMovableByWindowBackground: policy.movable_by_background];
             let close_button: *mut AnyObject = msg_send![ptr, standardWindowButton: 0isize];
             if !close_button.is_null() {
                 let _: () = msg_send![close_button, setHidden: false];
@@ -1755,7 +1763,7 @@ mod tests {
         );
         assert_eq!(
             interactive_window_layout(screens[2]).frame,
-            Rect::new(16.0, 998.0, 1248.0, 688.0)
+            Rect::new(41.5, 998.0, 1197.0, 688.0)
         );
     }
 
@@ -1808,7 +1816,7 @@ mod tests {
         assert_eq!(
             interactive_window_layout(screen),
             InteractiveWindowLayout {
-                frame: Rect::new(126.0, 103.0, 1260.0, 790.0),
+                frame: Rect::new(157.5, 122.5, 1197.0, 751.0),
                 min_width: 680.0,
                 min_height: 520.0,
                 max_width: 1480.0,
@@ -1826,7 +1834,7 @@ mod tests {
         );
         let layout = interactive_window_layout(screen);
 
-        assert_eq!((layout.frame.w, layout.frame.h), (1260.0, 790.0));
+        assert_eq!((layout.frame.w, layout.frame.h), (1197.0, 751.0));
         assert_eq!((layout.max_width, layout.max_height), (1968.0, 1168.0));
     }
 
@@ -1863,7 +1871,7 @@ mod tests {
 
         assert_eq!(
             interactive_window_layout(screen).frame,
-            Rect::new(-1590.0, 150.0, 1260.0, 790.0)
+            Rect::new(-1558.5, 169.5, 1197.0, 751.0)
         );
     }
 
@@ -1883,6 +1891,8 @@ mod tests {
                     resizable: false,
                     transparent: true,
                     overlay_titlebar: true,
+                    movable: false,
+                    movable_by_background: false,
                 },
                 WindowPolicy {
                     level: WindowLevelPolicy::Normal,
@@ -1892,6 +1902,8 @@ mod tests {
                     resizable: true,
                     transparent: true,
                     overlay_titlebar: true,
+                    movable: true,
+                    movable_by_background: true,
                 },
             )
         );
@@ -1931,7 +1943,7 @@ mod tests {
         let reduced = interactive_reveal(layout, true);
 
         assert_eq!(motion.final_frame, layout.frame);
-        let expected = Rect::new(163.8, 126.7, 1184.4, 742.6);
+        let expected = Rect::new(193.41, 145.03, 1125.18, 705.94);
         assert!((motion.initial_frame.x - expected.x).abs() < f64::EPSILON * 512.0);
         assert!((motion.initial_frame.y - expected.y).abs() < f64::EPSILON * 512.0);
         assert!((motion.initial_frame.w - expected.w).abs() < f64::EPSILON * 8192.0);
@@ -2082,6 +2094,8 @@ mod tests {
                     resizable: true,
                     transparent: true,
                     overlay_titlebar: true,
+                    movable: true,
+                    movable_by_background: true,
                 },
                 WindowPolicy {
                     level: WindowLevelPolicy::Overlay,
@@ -2091,6 +2105,8 @@ mod tests {
                     resizable: false,
                     transparent: true,
                     overlay_titlebar: true,
+                    movable: false,
+                    movable_by_background: false,
                 },
             )
         );

@@ -127,6 +127,7 @@ describe("cinematic onboarding", () => {
     expect(mute.getAttribute("data-muted")).toBe("false");
     expect(mute.querySelector(".onb-mute__icon")).toBeTruthy();
     expect(mute.textContent).toBe("");
+    expect(document.querySelector("[data-tauri-drag-region]")).toBeTruthy();
   });
 
   it("slides into the Shogun overview with honest Back and Next navigation", () => {

@@ -70,6 +70,7 @@ button, label, input { touch-action: manipulation; -webkit-tap-highlight-color: 
 .onb-mute:active:not(:disabled) { transform: scale(.96); }
 .onb-floating-mute { position: absolute; z-index: 4; top: max(12px, env(safe-area-inset-top)); right: max(16px, env(safe-area-inset-right)); }
 .onb-floating-mute .onb-mute { margin: 0; box-shadow: 0 8px 24px rgba(20,14,11,.13); }
+.onb-window-drag-region { position: absolute; z-index: 3; top: 0; right: 72px; left: 72px; height: 44px; }
 
 .onb-shell--welcome { display: block; background: #fff; }
 .onb-signin { position: relative; display: grid; width: 100%; height: 100%; min-width: 0; min-height: 0; place-items: center; overflow: hidden; background: #fff; }
