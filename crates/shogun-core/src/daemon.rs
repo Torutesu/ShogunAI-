@@ -109,6 +109,24 @@ pub struct GenerationContext<'a> {
     pub project_id: Option<&'a str>,
 }
 
+impl<'a> GenerationContext<'a> {
+    /// Global always; app / person / project only when that identifier is present.
+    pub fn lesson_scopes(self) -> Vec<shogun_memory::lessons::ScopeFilter<'a>> {
+        use shogun_memory::lessons::{LessonScope, ScopeFilter};
+        let mut scopes = vec![ScopeFilter { scope: LessonScope::Global, scope_ref: None }];
+        if let Some(app_bundle_id) = self.app_bundle_id.filter(|id| !id.is_empty()) {
+            scopes.push(ScopeFilter { scope: LessonScope::App, scope_ref: Some(app_bundle_id) });
+        }
+        if let Some(person_id) = self.person_id.filter(|id| !id.is_empty()) {
+            scopes.push(ScopeFilter { scope: LessonScope::Person, scope_ref: Some(person_id) });
+        }
+        if let Some(project_id) = self.project_id.filter(|id| !id.is_empty()) {
+            scopes.push(ScopeFilter { scope: LessonScope::Project, scope_ref: Some(project_id) });
+        }
+        scopes
+    }
+}
+
 /// How much of a thread a reply context carries. Enough to answer in the conversation's own
 /// terms, bounded so assembly stays inside the pre-press budget.
 const REPLY_TURNS: usize = 12;
@@ -2869,20 +2887,7 @@ impl Db {
         context: GenerationContext<'_>,
         top_k: usize,
     ) -> Vec<crate::user_config::LearnedLesson> {
-        use lessons::{LessonScope, ScopeFilter};
-
-        let mut scopes = vec![ScopeFilter { scope: LessonScope::Global, scope_ref: None }];
-        if let Some(app_bundle_id) = context.app_bundle_id.filter(|id| !id.is_empty()) {
-            scopes.push(ScopeFilter { scope: LessonScope::App, scope_ref: Some(app_bundle_id) });
-        }
-        if let Some(person_id) = context.person_id.filter(|id| !id.is_empty()) {
-            scopes.push(ScopeFilter { scope: LessonScope::Person, scope_ref: Some(person_id) });
-        }
-        if let Some(project_id) = context.project_id.filter(|id| !id.is_empty()) {
-            scopes.push(ScopeFilter { scope: LessonScope::Project, scope_ref: Some(project_id) });
-        }
-
-        self.active_lessons(&scopes, top_k)
+        self.active_lessons(&context.lesson_scopes(), top_k)
             .into_iter()
             .map(|l| crate::user_config::LearnedLesson {
                 instruction: l.instruction,

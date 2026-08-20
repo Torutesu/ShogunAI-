@@ -209,7 +209,7 @@ fn parse_command(positionals: &[String], no_screen: bool) -> Result<Command, Cli
 }
 
 fn parse_lessons(rest: &[String]) -> Result<Command, CliError> {
-    use crate::command::LessonsCommand;
+    use crate::command::{LessonsCommand, LessonsList};
     let id_arg = |rest: &[String]| -> Result<i64, CliError> {
         let id_str = rest.get(1).ok_or(CliError::MissingArgument("<id>"))?;
         id_str
@@ -217,7 +217,10 @@ fn parse_lessons(rest: &[String]) -> Result<Command, CliError> {
             .map_err(|_| CliError::BadId(id_str.clone()))
     };
     match rest.first().map(String::as_str) {
-        None | Some("list") => Ok(Command::Lessons(LessonsCommand::List)),
+        None => Ok(Command::Lessons(LessonsCommand::List(
+            LessonsList::default(),
+        ))),
+        Some("list") => parse_lessons_list(&rest[1..]),
         Some("enable") => Ok(Command::Lessons(LessonsCommand::Enable {
             id: id_arg(rest)?,
         })),
@@ -229,6 +232,48 @@ fn parse_lessons(rest: &[String]) -> Result<Command, CliError> {
             got: other.to_string(),
         }),
     }
+}
+
+fn parse_lessons_list(flags: &[String]) -> Result<Command, CliError> {
+    use crate::command::{LessonsCommand, LessonsList};
+    let mut opts = LessonsList::default();
+    let mut i = 0;
+    while i < flags.len() {
+        match flags[i].as_str() {
+            "--for-generation" => {
+                opts.for_generation = true;
+                i += 1;
+            }
+            "--app" => {
+                let v = flags
+                    .get(i + 1)
+                    .ok_or(CliError::MissingFlagValue("--app"))?;
+                opts.app_bundle_id = Some(v.clone());
+                i += 2;
+            }
+            "--person" => {
+                let v = flags
+                    .get(i + 1)
+                    .ok_or(CliError::MissingFlagValue("--person"))?;
+                opts.person_id = Some(v.clone());
+                i += 2;
+            }
+            "--project" => {
+                let v = flags
+                    .get(i + 1)
+                    .ok_or(CliError::MissingFlagValue("--project"))?;
+                opts.project_id = Some(v.clone());
+                i += 2;
+            }
+            other => {
+                return Err(CliError::UnknownSubcommand {
+                    command: "lessons list",
+                    got: other.to_string(),
+                })
+            }
+        }
+    }
+    Ok(Command::Lessons(LessonsCommand::List(opts)))
 }
 
 fn parse_visual_recall(rest: &[String]) -> Result<Command, CliError> {
@@ -459,14 +504,14 @@ mod tests {
 
     #[test]
     fn lessons_grammar_parses_list_enable_disable() {
-        use crate::command::LessonsCommand;
+        use crate::command::{LessonsCommand, LessonsList};
         assert_eq!(
             parse(&v(&["lessons"])).unwrap().command,
-            Command::Lessons(LessonsCommand::List)
+            Command::Lessons(LessonsCommand::List(LessonsList::default()))
         );
         assert_eq!(
             parse(&v(&["lessons", "list"])).unwrap().command,
-            Command::Lessons(LessonsCommand::List)
+            Command::Lessons(LessonsCommand::List(LessonsList::default()))
         );
         assert_eq!(
             parse(&v(&["lessons", "enable", "7"])).unwrap().command,
@@ -475,6 +520,22 @@ mod tests {
         assert_eq!(
             parse(&v(&["lessons", "disable", "7"])).unwrap().command,
             Command::Lessons(LessonsCommand::Disable { id: 7 })
+        );
+        assert_eq!(
+            parse(&v(&[
+                "lessons",
+                "list",
+                "--for-generation",
+                "--person",
+                "alice@example.com",
+            ]))
+            .unwrap()
+            .command,
+            Command::Lessons(LessonsCommand::List(LessonsList {
+                for_generation: true,
+                person_id: Some("alice@example.com".into()),
+                ..LessonsList::default()
+            }))
         );
         assert_eq!(
             parse(&v(&["lessons", "enable"])),

@@ -174,6 +174,19 @@ impl<B: MemoryBackend> McpServer<B> {
                         .map(str::to_string),
                     from_ms: args.get("from_ms").and_then(Value::as_i64),
                     to_ms: args.get("to_ms").and_then(Value::as_i64),
+                    for_generation: args
+                        .get("for_generation")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
+                    app_bundle_id: args
+                        .get("app_bundle_id")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                    person_id: args.get("person_id").and_then(Value::as_str).map(str::to_string),
+                    project_id: args
+                        .get("project_id")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
                 };
                 if is_structured_read(tool) {
                     self.backend
@@ -334,8 +347,15 @@ fn tool_descriptor(tool: Tool) -> Value {
         | Tool::StateCommitmentsList
         | Tool::StateOpenLoopsList => ("List state records", json!({ "include_low": { "type": "boolean" } })),
         Tool::LessonsList => (
-            "List learned lessons (id, kind, scope, instruction, confidence, evidence count, active)",
-            json!({}),
+            "List learned lessons. Omit filters for the Settings/management list. Pass \
+for_generation (and optional app_bundle_id / person_id / project_id) for standing-prompt lookup — \
+person lessons do not apply to unrelated drafts.",
+            json!({
+                "for_generation": { "type": "boolean" },
+                "app_bundle_id": { "type": "string" },
+                "person_id": { "type": "string" },
+                "project_id": { "type": "string" },
+            }),
         ),
         Tool::LessonsSetActive => (
             "Switch a learned lesson on or off (L1)",
