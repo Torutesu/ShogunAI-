@@ -246,8 +246,11 @@ fn email_span(emitted: &str, after_at: &str) -> Option<(usize, usize)> {
         .find(|(_, c)| !(c.is_ascii_alphanumeric() || matches!(c, '.' | '-')))
         .map(|(idx, _)| idx)
         .unwrap_or(after_at.len());
-    let domain = &after_at[..domain_len];
-    if domain_len == 0 || !domain.contains('.') || domain.ends_with('.') {
+    // A trailing '.' or '-' is sentence punctuation, not part of the domain ("…example.com.").
+    // Trim it off and mask the address; rejecting here would leave the email in the log verbatim.
+    let domain = after_at[..domain_len].trim_end_matches(['.', '-']);
+    let domain_len = domain.len();
+    if domain_len == 0 || !domain.contains('.') {
         return None;
     }
     Some((local_len, domain_len))
@@ -408,6 +411,14 @@ mod tests {
     fn log_redactor_masks_emails() {
         assert_eq!(rl("user alice@example.com logged in"), "user [redacted] logged in");
         assert_eq!(rl("to: bob.smith+tag@sub.example.co.jp done"), "to: [redacted] done");
+    }
+
+    #[test]
+    fn log_redactor_masks_an_email_at_the_end_of_a_sentence() {
+        // The sentence period was previously absorbed into the domain, failed the
+        // ends_with('.') check, and the whole address survived into the log.
+        assert_eq!(rl("Sent to alice@example.com."), "Sent to [redacted].");
+        assert_eq!(rl("failed for bob@sub.example.co.jp. Retrying"), "failed for [redacted]. Retrying");
     }
 
     #[test]
