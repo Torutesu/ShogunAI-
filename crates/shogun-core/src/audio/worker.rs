@@ -95,7 +95,7 @@ impl<S: AudioSource, T: Transcriber> Worker<S, T> {
     /// Drain all currently-available frames, transcribing any utterances they complete. Returns the
     /// number of frames consumed (0 means idle). Non-blocking.
     pub fn poll(&mut self, now: i64, sink: &mut dyn SegmentSink) -> usize {
-        self.now = now;
+        self.set_clock(now);
         let mut consumed = 0;
         while let Some(Frame { speaker, samples }) = self.source.try_recv() {
             consumed += 1;
@@ -119,9 +119,19 @@ impl<S: AudioSource, T: Transcriber> Worker<S, T> {
         self.asr
     }
 
+    /// Advance the driver clock. The line offset only disambiguates utterances within one clock
+    /// reading — without the reset it grew for the Worker's whole life, stamping late-meeting
+    /// lines seconds ahead of the wall clock (and onto the search spine out of order).
+    fn set_clock(&mut self, now: i64) {
+        if now != self.now {
+            self.line_seq = 0;
+        }
+        self.now = now;
+    }
+
     /// Stop capture and flush the final utterance on each speaker before the buffers are dropped.
     pub fn stop(&mut self, now: i64, sink: &mut dyn SegmentSink) {
-        self.now = now;
+        self.set_clock(now);
         self.source.stop();
         if let Some(cut) = self.vad_me.flush() {
             self.transcribe_cut(Speaker::Me, cut, sink);
@@ -197,6 +207,33 @@ mod tests {
         assert_eq!(sink.lines.len(), 0);
         w.stop(2_000, &mut sink); // flush emits the buffered utterance
         assert_eq!(sink.lines.len(), 1);
+    }
+
+    struct TsSink {
+        stamps: Vec<i64>,
+    }
+    impl SegmentSink for TsSink {
+        fn emit(&mut self, u: &Utterance, _t: &str, _c: f64, _tr: Option<&str>) {
+            self.stamps.push(u.started_at);
+        }
+    }
+
+    #[test]
+    fn line_offset_resets_when_the_clock_advances() {
+        // The per-line offset only disambiguates within one clock reading. It must not
+        // accumulate for the worker's lifetime and stamp late lines ahead of the wall clock.
+        let frames = vec![
+            Frame { speaker: Speaker::Me, samples: tone(SAMPLE_RATE as usize) },
+            Frame { speaker: Speaker::Me, samples: vec![0.0; SAMPLE_RATE as usize] },
+            Frame { speaker: Speaker::Me, samples: tone(SAMPLE_RATE as usize) },
+            Frame { speaker: Speaker::Me, samples: vec![0.0; SAMPLE_RATE as usize] },
+            Frame { speaker: Speaker::Me, samples: tone(SAMPLE_RATE as usize) },
+        ];
+        let mut w = Worker::new(FakeSource::new(frames), FakeTranscriber::default());
+        let mut sink = TsSink { stamps: Vec::new() };
+        w.poll(1_000, &mut sink); // two utterances in one poll → 1_000, 1_001
+        w.stop(2_000, &mut sink); // flush at a later clock → exactly 2_000, not 2_002
+        assert_eq!(sink.stamps, vec![1_000, 1_001, 2_000]);
     }
 
     #[test]
