@@ -7,8 +7,6 @@
 //! macOS-only (`security-framework`) and — unlike the network transport — NOT behind the `live`
 //! feature: it has no network dependency, so it type-checks for the Apple target without a TLS/C
 //! toolchain.
-#![cfg(target_os = "macos")]
-
 use shogun_mcp::scope::Service;
 
 use crate::keychain_store;

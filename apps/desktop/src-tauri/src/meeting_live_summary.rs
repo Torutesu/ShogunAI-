@@ -4,8 +4,6 @@
 //! and not a heuristic paste of the transcript. The FE only requests a refresh after enough
 //! spoken context has landed; this module refuses thin payloads and rate-limits in-flight work.
 
-#![cfg(target_os = "macos")]
-
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 

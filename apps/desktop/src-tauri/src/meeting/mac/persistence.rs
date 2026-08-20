@@ -76,7 +76,6 @@ pub(super) fn save(app: &tauri::AppHandle, settings: &Settings) -> Result<(), St
 /// capture thread **after** releasing `LANE`: `StopAudio` can block on a whisper flush, and
 /// holding the lane lock while the audio thread emits live lines can deadlock the main thread
 /// on `meeting_status` / other lane commands.
-
 fn slack_huddle_hint(bundle_id: &str, window_title: Option<&str>) -> bool {
     if bundle_id != detect::SLACK_BUNDLE_ID {
         return false;

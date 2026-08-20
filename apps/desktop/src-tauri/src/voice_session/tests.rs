@@ -87,7 +87,10 @@ fn cancellation_waits_for_shared_fence_for_ax_or_clipboard_delivery() {
         state: AtomicU8::new(DELIVERY_WRITING),
         operation: Mutex::new(()),
     });
-    let guard = fence.operation.lock().unwrap();
+    let guard = fence
+        .operation
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let (sent, received) = mpsc::channel();
     let waiting_fence = Arc::clone(&fence);
     std::thread::spawn(move || {

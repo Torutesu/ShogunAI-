@@ -66,297 +66,294 @@ mod excerpt_tests {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use crate::event_log::{insert, NewEvent};
-    use crate::search::*;
-    use rusqlite::Connection;
+use crate::event_log::{insert, NewEvent};
+use crate::search::*;
+use rusqlite::Connection;
 
-    fn add(conn: &Connection, content: &str, source: &str, hash: &str) -> i64 {
-        insert(
-            conn,
-            &NewEvent {
-                ts: 1,
-                source,
-                kind: "text",
-                app_bundle_id: Some("com.apple.Safari"),
-                window_title: Some("t"),
-                content,
-                content_hash: hash,
-                dwell_ms: 0,
-                display_id: None,
-                window_bounds: None,
-            },
-        )
+fn add(conn: &Connection, content: &str, source: &str, hash: &str) -> i64 {
+    insert(
+        conn,
+        &NewEvent {
+            ts: 1,
+            source,
+            kind: "text",
+            app_bundle_id: Some("com.apple.Safari"),
+            window_title: Some("t"),
+            content,
+            content_hash: hash,
+            dwell_ms: 0,
+            display_id: None,
+            window_bounds: None,
+        },
+    )
+    .unwrap()
+}
+
+#[test]
+fn rrf_ranks_items_appearing_high_in_multiple_lists_first() {
+    // id 7 is rank 1 in one list and rank 2 in the other → should win.
+    let a = [7, 3, 9];
+    let b = [5, 7, 1];
+    let fused = reciprocal_rank_fusion(&[&a, &b], 60.0);
+    assert_eq!(fused[0].0, 7);
+}
+
+#[test]
+fn rrf_is_deterministic_on_ties() {
+    let a = [1, 2];
+    let b = [2, 1];
+    // 1 and 2 have identical fused scores; tie-break picks the smaller id first.
+    let fused = reciprocal_rank_fusion(&[&a, &b], 60.0);
+    assert_eq!(
+        fused.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+        vec![1, 2]
+    );
+}
+
+#[test]
+fn rrf_empty_is_empty() {
+    assert!(reciprocal_rank_fusion(&[], 60.0).is_empty());
+    assert!(reciprocal_rank_fusion(&[&[]], 60.0).is_empty());
+}
+
+#[test]
+fn fts_search_finds_and_orders() {
+    let conn = crate::open_in_memory().unwrap();
+    add(&conn, "the annual budget spreadsheet", "capture", "h1");
+    add(&conn, "unrelated lunch plans", "capture", "h2");
+    let ids = fts_search(&conn, "budget", 10).unwrap();
+    assert_eq!(ids.len(), 1);
+}
+
+#[test]
+fn empty_query_returns_nothing() {
+    let conn = crate::open_in_memory().unwrap();
+    add(&conn, "anything", "capture", "h1");
+    assert!(fts_search(&conn, "   ", 10).unwrap().is_empty());
+    assert!(search(&conn, "", 10).unwrap().is_empty());
+}
+
+#[test]
+fn query_with_quotes_does_not_break() {
+    let conn = crate::open_in_memory().unwrap();
+    add(&conn, "he said \"ship it\" today", "capture", "h1");
+    // A query containing a double quote must not be parsed as an FTS operator / must not error.
+    let hits = search(&conn, "ship", 10).unwrap();
+    assert_eq!(hits.len(), 1);
+    let none = search(&conn, "\"", 10);
+    assert!(none.is_ok());
+}
+
+#[test]
+fn search_hydrates_with_source_attribution() {
+    let conn = crate::open_in_memory().unwrap();
+    add(&conn, "quarterly review notes", "gmail", "h1");
+    let hits = search(&conn, "quarterly", 10).unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].source, "gmail"); // FR-MEM-23 attribution
+    assert!(hits[0].content.contains("quarterly"));
+}
+
+#[test]
+fn search_meetings_finds_recap_by_query_term() {
+    use crate::meeting_recaps;
+    use crate::session::{open, NewSession};
+
+    let conn = crate::open_in_memory().unwrap();
+    let sid = open(
+        &conn,
+        &NewSession {
+            kind: "meeting",
+            started_at: 5_000,
+            title: Some("Vendor pricing sync"),
+            app_bundle_id: Some("us.zoom.xos"),
+            calendar_occurrence_id: None,
+            confidence: 0.8,
+            provenance: "{}",
+        },
+    )
+    .unwrap();
+    meeting_recaps::save(
+        &conn,
+        sid,
+        "Discussed renewal pricing and the 12k quote.",
+        r#"["Approve the vendor renewal"]"#,
+        r#"[{"text":"email procurement","owner":"Alice"}]"#,
+        "claude-batch",
+        6_000,
+    )
+    .unwrap();
+
+    let hits = search_meetings(&conn, "vendor pricing", 5).unwrap();
+    assert_eq!(hits.len(), 1, "recap matched by query: {hits:?}");
+    assert!(hits[0].content.contains("12k"));
+    assert_eq!(hits[0].title.as_deref(), Some("Vendor pricing sync"));
+}
+
+#[test]
+fn search_meetings_prefers_the_relevant_session_not_the_latest() {
+    use crate::meeting_recaps;
+    use crate::session::{open, NewSession};
+
+    let conn = crate::open_in_memory().unwrap();
+    let old = open(
+        &conn,
+        &NewSession {
+            kind: "meeting",
+            started_at: 1_000,
+            title: Some("Design review"),
+            app_bundle_id: None,
+            calendar_occurrence_id: None,
+            confidence: 0.8,
+            provenance: "{}",
+        },
+    )
+    .unwrap();
+    let recent = open(
+        &conn,
+        &NewSession {
+            kind: "meeting",
+            started_at: 9_000,
+            title: Some("Daily standup"),
+            app_bundle_id: None,
+            calendar_occurrence_id: None,
+            confidence: 0.8,
+            provenance: "{}",
+        },
+    )
+    .unwrap();
+    meeting_recaps::save(
+        &conn,
+        old,
+        "Roadmap and launch timeline for Phoenix.",
+        "[]",
+        "[]",
+        "m",
+        2_000,
+    )
+    .unwrap();
+    meeting_recaps::save(
+        &conn,
+        recent,
+        "Nothing blocking today.",
+        "[]",
+        "[]",
+        "m",
+        10_000,
+    )
+    .unwrap();
+
+    let hits = search_meetings(&conn, "Phoenix launch", 5).unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(
+        hits[0].session_id, old,
+        "older but relevant meeting wins over latest"
+    );
+}
+
+#[test]
+fn search_meetings_finds_transcript_when_recap_is_missing() {
+    use crate::session::{open, NewSession};
+    use crate::transcript_segments::{append, NewSegment, Speaker};
+
+    let conn = crate::open_in_memory().unwrap();
+    let sid = open(
+        &conn,
+        &NewSession {
+            kind: "meeting",
+            started_at: 3_000,
+            title: Some("Budget call"),
+            app_bundle_id: None,
+            calendar_occurrence_id: None,
+            confidence: 0.8,
+            provenance: "{}",
+        },
+    )
+    .unwrap();
+    append(
+        &conn,
+        &NewSegment {
+            session_id: sid,
+            ts: 3_100,
+            speaker: Speaker::Other,
+            text: "We agreed to cap infrastructure spend at forty thousand.",
+            confidence: 0.9,
+        },
+        3_200,
+    )
+    .unwrap();
+
+    let hits = search_meetings(&conn, "infrastructure spend", 5).unwrap();
+    assert_eq!(hits.len(), 1);
+    assert!(hits[0].content.contains("forty thousand"));
+}
+
+#[test]
+fn search_meetings_returns_nothing_for_unrelated_queries() {
+    use crate::meeting_recaps;
+    use crate::session::{open, NewSession};
+
+    let conn = crate::open_in_memory().unwrap();
+    let sid = open(
+        &conn,
+        &NewSession {
+            kind: "meeting",
+            started_at: 1_000,
+            title: Some("Weekly sync"),
+            app_bundle_id: None,
+            calendar_occurrence_id: None,
+            confidence: 0.8,
+            provenance: "{}",
+        },
+    )
+    .unwrap();
+    meeting_recaps::save(
+        &conn,
+        sid,
+        "Discussed hiring plans.",
+        "[]",
+        "[]",
+        "m",
+        2_000,
+    )
+    .unwrap();
+
+    assert!(search_meetings(&conn, "vendor migration", 5)
         .unwrap()
-    }
+        .is_empty());
+}
 
-    #[test]
-    fn rrf_ranks_items_appearing_high_in_multiple_lists_first() {
-        // id 7 is rank 1 in one list and rank 2 in the other → should win.
-        let a = [7, 3, 9];
-        let b = [5, 7, 1];
-        let fused = reciprocal_rank_fusion(&[&a, &b], 60.0);
-        assert_eq!(fused[0].0, 7);
-    }
+#[test]
+fn hybrid_search_finds_semantic_match_fts_would_miss() {
+    use crate::embed::{Embedder, MockEmbedder, E5_SMALL_DIM};
+    let conn = crate::open_in_memory().unwrap();
+    let m = MockEmbedder::new(E5_SMALL_DIM);
 
-    #[test]
-    fn rrf_is_deterministic_on_ties() {
-        let a = [1, 2];
-        let b = [2, 1];
-        // 1 and 2 have identical fused scores; tie-break picks the smaller id first.
-        let fused = reciprocal_rank_fusion(&[&a, &b], 60.0);
-        assert_eq!(
-            fused.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
-            vec![1, 2]
-        );
-    }
+    // A doc that shares tokens with the query but NOT the exact FTS term.
+    let id = add(
+        &conn,
+        "the budget review meeting is on friday",
+        "gmail",
+        "h1",
+    );
+    let v = m
+        .embed_passages(&["the budget review meeting is on friday"])
+        .unwrap()[0]
+        .clone();
+    crate::vector::upsert(&conn, id, &v).unwrap();
 
-    #[test]
-    fn rrf_empty_is_empty() {
-        assert!(reciprocal_rank_fusion(&[], 60.0).is_empty());
-        assert!(reciprocal_rank_fusion(&[&[]], 60.0).is_empty());
-    }
-
-    #[test]
-    fn fts_search_finds_and_orders() {
-        let conn = crate::open_in_memory().unwrap();
-        add(&conn, "the annual budget spreadsheet", "capture", "h1");
-        add(&conn, "unrelated lunch plans", "capture", "h2");
-        let ids = fts_search(&conn, "budget", 10).unwrap();
-        assert_eq!(ids.len(), 1);
-    }
-
-    #[test]
-    fn empty_query_returns_nothing() {
-        let conn = crate::open_in_memory().unwrap();
-        add(&conn, "anything", "capture", "h1");
-        assert!(fts_search(&conn, "   ", 10).unwrap().is_empty());
-        assert!(search(&conn, "", 10).unwrap().is_empty());
-    }
-
-    #[test]
-    fn query_with_quotes_does_not_break() {
-        let conn = crate::open_in_memory().unwrap();
-        add(&conn, "he said \"ship it\" today", "capture", "h1");
-        // A query containing a double quote must not be parsed as an FTS operator / must not error.
-        let hits = search(&conn, "ship", 10).unwrap();
-        assert_eq!(hits.len(), 1);
-        let none = search(&conn, "\"", 10);
-        assert!(none.is_ok());
-    }
-
-    #[test]
-    fn search_hydrates_with_source_attribution() {
-        let conn = crate::open_in_memory().unwrap();
-        add(&conn, "quarterly review notes", "gmail", "h1");
-        let hits = search(&conn, "quarterly", 10).unwrap();
-        assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].source, "gmail"); // FR-MEM-23 attribution
-        assert!(hits[0].content.contains("quarterly"));
-    }
-
-    #[test]
-    fn search_meetings_finds_recap_by_query_term() {
-        use crate::meeting_recaps;
-        use crate::session::{open, NewSession};
-
-        let conn = crate::open_in_memory().unwrap();
-        let sid = open(
-            &conn,
-            &NewSession {
-                kind: "meeting",
-                started_at: 5_000,
-                title: Some("Vendor pricing sync"),
-                app_bundle_id: Some("us.zoom.xos"),
-                calendar_occurrence_id: None,
-                confidence: 0.8,
-                provenance: "{}",
-            },
-        )
-        .unwrap();
-        meeting_recaps::save(
-            &conn,
-            sid,
-            "Discussed renewal pricing and the 12k quote.",
-            r#"["Approve the vendor renewal"]"#,
-            r#"[{"text":"email procurement","owner":"Alice"}]"#,
-            "claude-batch",
-            6_000,
-        )
-        .unwrap();
-
-        let hits = search_meetings(&conn, "vendor pricing", 5).unwrap();
-        assert_eq!(hits.len(), 1, "recap matched by query: {hits:?}");
-        assert!(hits[0].content.contains("12k"));
-        assert_eq!(hits[0].title.as_deref(), Some("Vendor pricing sync"));
-    }
-
-    #[test]
-    fn search_meetings_prefers_the_relevant_session_not_the_latest() {
-        use crate::meeting_recaps;
-        use crate::session::{open, NewSession};
-
-        let conn = crate::open_in_memory().unwrap();
-        let old = open(
-            &conn,
-            &NewSession {
-                kind: "meeting",
-                started_at: 1_000,
-                title: Some("Design review"),
-                app_bundle_id: None,
-                calendar_occurrence_id: None,
-                confidence: 0.8,
-                provenance: "{}",
-            },
-        )
-        .unwrap();
-        let recent = open(
-            &conn,
-            &NewSession {
-                kind: "meeting",
-                started_at: 9_000,
-                title: Some("Daily standup"),
-                app_bundle_id: None,
-                calendar_occurrence_id: None,
-                confidence: 0.8,
-                provenance: "{}",
-            },
-        )
-        .unwrap();
-        meeting_recaps::save(
-            &conn,
-            old,
-            "Roadmap and launch timeline for Phoenix.",
-            "[]",
-            "[]",
-            "m",
-            2_000,
-        )
-        .unwrap();
-        meeting_recaps::save(
-            &conn,
-            recent,
-            "Nothing blocking today.",
-            "[]",
-            "[]",
-            "m",
-            10_000,
-        )
-        .unwrap();
-
-        let hits = search_meetings(&conn, "Phoenix launch", 5).unwrap();
-        assert_eq!(hits.len(), 1);
-        assert_eq!(
-            hits[0].session_id, old,
-            "older but relevant meeting wins over latest"
-        );
-    }
-
-    #[test]
-    fn search_meetings_finds_transcript_when_recap_is_missing() {
-        use crate::session::{open, NewSession};
-        use crate::transcript_segments::{append, NewSegment, Speaker};
-
-        let conn = crate::open_in_memory().unwrap();
-        let sid = open(
-            &conn,
-            &NewSession {
-                kind: "meeting",
-                started_at: 3_000,
-                title: Some("Budget call"),
-                app_bundle_id: None,
-                calendar_occurrence_id: None,
-                confidence: 0.8,
-                provenance: "{}",
-            },
-        )
-        .unwrap();
-        append(
-            &conn,
-            &NewSegment {
-                session_id: sid,
-                ts: 3_100,
-                speaker: Speaker::Other,
-                text: "We agreed to cap infrastructure spend at forty thousand.",
-                confidence: 0.9,
-            },
-            3_200,
-        )
-        .unwrap();
-
-        let hits = search_meetings(&conn, "infrastructure spend", 5).unwrap();
-        assert_eq!(hits.len(), 1);
-        assert!(hits[0].content.contains("forty thousand"));
-    }
-
-    #[test]
-    fn search_meetings_returns_nothing_for_unrelated_queries() {
-        use crate::meeting_recaps;
-        use crate::session::{open, NewSession};
-
-        let conn = crate::open_in_memory().unwrap();
-        let sid = open(
-            &conn,
-            &NewSession {
-                kind: "meeting",
-                started_at: 1_000,
-                title: Some("Weekly sync"),
-                app_bundle_id: None,
-                calendar_occurrence_id: None,
-                confidence: 0.8,
-                provenance: "{}",
-            },
-        )
-        .unwrap();
-        meeting_recaps::save(
-            &conn,
-            sid,
-            "Discussed hiring plans.",
-            "[]",
-            "[]",
-            "m",
-            2_000,
-        )
-        .unwrap();
-
-        assert!(search_meetings(&conn, "vendor migration", 5)
-            .unwrap()
-            .is_empty());
-    }
-
-    #[test]
-    fn hybrid_search_finds_semantic_match_fts_would_miss() {
-        use crate::embed::{Embedder, MockEmbedder, E5_SMALL_DIM};
-        let conn = crate::open_in_memory().unwrap();
-        let m = MockEmbedder::new(E5_SMALL_DIM);
-
-        // A doc that shares tokens with the query but NOT the exact FTS term.
-        let id = add(
-            &conn,
-            "the budget review meeting is on friday",
-            "gmail",
-            "h1",
-        );
-        let v = m
-            .embed_passages(&["the budget review meeting is on friday"])
-            .unwrap()[0]
-            .clone();
-        crate::vector::upsert(&conn, id, &v).unwrap();
-
-        // Query term "standup" isn't in the doc (FTS finds nothing), but the embedding overlaps
-        // on "review"/"meeting" so the vector list surfaces it — hybrid fusion returns it.
-        let q = m.embed_query("review meeting standup").unwrap();
-        let fts_only = search(&conn, "standup", 10).unwrap();
-        assert!(fts_only.is_empty(), "FTS alone should miss it");
-        let hybrid = search_hybrid(&conn, "standup", Some(&q), 10).unwrap();
-        assert_eq!(
-            hybrid.len(),
-            1,
-            "the vector half should surface the semantic match"
-        );
-        assert_eq!(hybrid[0].event_id, id);
-    }
+    // Query term "standup" isn't in the doc (FTS finds nothing), but the embedding overlaps
+    // on "review"/"meeting" so the vector list surfaces it — hybrid fusion returns it.
+    let q = m.embed_query("review meeting standup").unwrap();
+    let fts_only = search(&conn, "standup", 10).unwrap();
+    assert!(fts_only.is_empty(), "FTS alone should miss it");
+    let hybrid = search_hybrid(&conn, "standup", Some(&q), 10).unwrap();
+    assert_eq!(
+        hybrid.len(),
+        1,
+        "the vector half should surface the semantic match"
+    );
+    assert_eq!(hybrid[0].event_id, id);
 }
 
 /// The retrieval bug this file exists to prevent a repeat of: a question is not a phrase.

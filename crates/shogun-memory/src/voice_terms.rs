@@ -178,19 +178,16 @@ fn normalized_locale(value: Option<&str>) -> Result<Option<String>, rusqlite::Er
     Ok(Some(normalized))
 }
 
-fn validate(
-    input: &NewVoiceTerm,
-) -> Result<
-    (
-        String,
-        Vec<(String, String)>,
-        Option<String>,
-        VoiceTermScope,
-        Option<String>,
-        i32,
-    ),
-    rusqlite::Error,
-> {
+type ValidatedVoiceTerm = (
+    String,
+    Vec<(String, String)>,
+    Option<String>,
+    VoiceTermScope,
+    Option<String>,
+    i32,
+);
+
+fn validate(input: &NewVoiceTerm) -> Result<ValidatedVoiceTerm, rusqlite::Error> {
     let canonical = input.canonical.trim();
     if canonical.is_empty()
         || canonical.chars().count() > 120

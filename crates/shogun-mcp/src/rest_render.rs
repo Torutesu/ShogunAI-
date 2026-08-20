@@ -231,15 +231,13 @@ pub fn respond_with<B: MemoryBackend + ?Sized>(
                     }
                 }
             };
-            return match voice_operation
-                .and_then(|operation| backend.manage_voice_dictionary(operation))
-            {
+            match voice_operation.and_then(|operation| backend.manage_voice_dictionary(operation)) {
                 Ok(value) => (202, render_voice_dictionary(value)),
                 Err(_) => (
                     400,
                     r#"{"error":"voice_dictionary_request_failed"}"#.to_string(),
                 ),
-            };
+            }
         }
         other => (status_code(&other), body_for(&other)),
     }

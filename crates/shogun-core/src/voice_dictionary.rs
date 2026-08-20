@@ -418,9 +418,9 @@ fn context_rank(entry: &DictionaryEntry) -> u8 {
     }
 }
 
-fn choose_candidate<'a>(
-    candidates: Vec<(&'a DictionaryEntry, usize)>,
-) -> Option<(&'a DictionaryEntry, usize)> {
+fn choose_candidate(
+    candidates: Vec<(&DictionaryEntry, usize)>,
+) -> Option<(&DictionaryEntry, usize)> {
     let max_len = candidates.iter().map(|(_, alias_len)| *alias_len).max()?;
     let mut best: Option<(&DictionaryEntry, usize)> = None;
     let mut ambiguous = false;
