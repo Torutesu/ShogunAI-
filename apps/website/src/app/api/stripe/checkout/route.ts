@@ -4,7 +4,7 @@ import { findCustomerByEmail, linkCustomer } from '@/db/billing-queries';
 import { HttpError, fail, readJsonObject } from '@/lib/http';
 import { isInterval, isPlanId, priceIdFor } from '@/lib/pricing';
 import { rateLimit } from '@/lib/rate-limit';
-import { appOrigin, billingReady, checkoutTrialDays, stripe } from '@/lib/stripe';
+import { appOrigin, automaticTaxEnabled, billingReady, checkoutTrialDays, stripe } from '@/lib/stripe';
 import { clientIp } from '@/lib/waitlist-auth';
 import { isValidEmail } from '@/lib/referral';
 
@@ -50,12 +50,27 @@ export async function POST(req: Request) {
     const trialDays = checkoutTrialDays();
     const origin = appOrigin();
 
+    // Tax (STRIPE_AUTOMATIC_TAX). Stripe cannot compute a rate without a country, hence the
+    // required address; `tax_id_collection` lets an EU/UK business supply a VAT number, which
+    // moves that sale to reverse charge instead of us collecting. `customer_update` is only a
+    // legal parameter when the session names an existing customer — passing it alongside
+    // `customer_creation` is an API error, so it rides with `known`.
+    const tax = automaticTaxEnabled()
+      ? {
+          automatic_tax: { enabled: true },
+          billing_address_collection: 'required' as const,
+          tax_id_collection: { enabled: true },
+          ...(known ? { customer_update: { address: 'auto' as const, name: 'auto' as const } } : {}),
+        }
+      : {};
+
     const session = await stripe().checkout.sessions.create({
       mode: 'subscription',
       line_items: [{ price, quantity: 1 }],
       ...(known
         ? { customer: known.stripeCustomerId }
         : { ...(email ? { customer_email: email } : {}), customer_creation: 'always' as const }),
+      ...tax,
       allow_promotion_codes: true,
       client_reference_id: email ?? undefined,
       // The webhook reads these back to attach the subscription to the right plan and buyer.

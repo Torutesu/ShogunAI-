@@ -19,6 +19,7 @@ import {
   signLicenseToken,
 } from '../src/lib/license.ts';
 import { PLANS, formatUsd, planForPriceId, priceIdFor, priceLine } from '../src/lib/pricing.ts';
+import { automaticTaxEnabled, billingReady } from '../src/lib/stripe.ts';
 
 /**
  * Billing unit tests (issue #8). Everything here is the pure layer — no Stripe account, no DB,
@@ -73,6 +74,43 @@ test('an unconfigured price is null, not a fallback', () => {
   delete process.env.STRIPE_PRICE_PRO_MONTHLY;
   assert.equal(priceIdFor('pro', 'monthly'), null);
   setPrices();
+});
+
+// ── configuration gate ────────────────────────────────────────────────────────
+
+test('billing stays closed until every purchasable combination has a price', () => {
+  // The desktop panel offers standard/pro x annual/monthly. A gate that only checked the annual
+  // pair let a buyer pick monthly and get a 503 while annual quietly worked.
+  process.env.STRIPE_SECRET_KEY = 'sk_test_x';
+  setPrices();
+  assert.equal(billingReady(), true);
+
+  for (const missing of [
+    'STRIPE_PRICE_STANDARD_ANNUAL',
+    'STRIPE_PRICE_STANDARD_MONTHLY',
+    'STRIPE_PRICE_PRO_ANNUAL',
+    'STRIPE_PRICE_PRO_MONTHLY',
+  ]) {
+    const saved = process.env[missing];
+    delete process.env[missing];
+    assert.equal(billingReady(), false, `${missing} missing must close billing`);
+    process.env[missing] = saved;
+  }
+
+  delete process.env.STRIPE_SECRET_KEY;
+  assert.equal(billingReady(), false, 'no secret key must close billing');
+});
+
+test('automatic tax is opt-in, so an unconfigured Stripe account cannot break checkout', () => {
+  delete process.env.STRIPE_AUTOMATIC_TAX;
+  assert.equal(automaticTaxEnabled(), false);
+  process.env.STRIPE_AUTOMATIC_TAX = '0';
+  assert.equal(automaticTaxEnabled(), false);
+  process.env.STRIPE_AUTOMATIC_TAX = 'true';
+  assert.equal(automaticTaxEnabled(), false, 'only an explicit 1 turns it on');
+  process.env.STRIPE_AUTOMATIC_TAX = '1';
+  assert.equal(automaticTaxEnabled(), true);
+  delete process.env.STRIPE_AUTOMATIC_TAX;
 });
 
 // ── subscription mapping ──────────────────────────────────────────────────────
