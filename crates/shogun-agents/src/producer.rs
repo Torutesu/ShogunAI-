@@ -50,16 +50,18 @@ impl ProposedSend {
 }
 
 /// Enqueue an agent-drafted send for L3 confirmation. Returns the pending [`ApprovalId`]; the send
-/// runs only after a dedicated-button confirm (the existing confirm → execute path).
+/// runs only after a dedicated-button confirm (the existing confirm → execute path). `Err` only on
+/// approval-id exhaustion — refused rather than panicking, since callers hold the shared queue
+/// lock (a panic there would poison it for the whole app).
 pub fn propose(
     queue: &mut ApprovalQueue,
     proposal: &ProposedSend,
     origin: ApprovalOrigin,
     now_ms: u64,
-) -> ApprovalId {
+) -> Result<ApprovalId, &'static str> {
     let (action, full_body, route) = proposal.parts();
     let preview = Preview::for_send(&action, full_body, route);
-    queue.request(action, preview, origin, now_ms)
+    queue.try_request(action, preview, origin, now_ms)
 }
 
 #[cfg(test)]
@@ -97,7 +99,7 @@ mod tests {
     fn propose_enqueues_an_l3_send_the_confirm_path_can_run() {
         let mut q = ApprovalQueue::new();
         let p = ProposedSend::CalendarEvent { title: "Sync".into(), body: "agenda".into() };
-        let id = propose(&mut q, &p, ApprovalOrigin::Ui, 0);
+        let id = propose(&mut q, &p, ApprovalOrigin::Ui, 0).expect("enqueue");
         assert_eq!(q.pending_len(), 1);
         // it is a normal L3 entry: a dedicated-button confirm yields the ConfirmedSend to execute.
         match q.confirm(id, ConfirmIntent::DedicatedButton, 1000) {

@@ -316,17 +316,6 @@ impl ApprovalQueue {
         Ok(id)
     }
 
-    pub fn request(
-        &mut self,
-        action: SendAction,
-        preview: Preview,
-        origin: ApprovalOrigin,
-        now_ms: u64,
-    ) -> ApprovalId {
-        self.try_request(action, preview, origin, now_ms)
-            .expect("approval id space exhausted")
-    }
-
     fn position(&self, id: ApprovalId) -> Option<usize> {
         self.pending.iter().position(|p| p.id == id)
     }
@@ -480,6 +469,22 @@ impl ApprovalQueue {
             self.terminal
                 .drain(..self.terminal.len() - TERMINAL_RETENTION);
         }
+    }
+}
+
+/// Test-only infallible enqueue. Production paths use [`ApprovalQueue::try_request`]: a panic on
+/// id exhaustion would poison the shared queue mutex (`unwrap`/`expect` are test-only anyway).
+#[cfg(test)]
+impl ApprovalQueue {
+    pub fn request(
+        &mut self,
+        action: SendAction,
+        preview: Preview,
+        origin: ApprovalOrigin,
+        now_ms: u64,
+    ) -> ApprovalId {
+        self.try_request(action, preview, origin, now_ms)
+            .expect("approval id space exhausted")
     }
 }
 
