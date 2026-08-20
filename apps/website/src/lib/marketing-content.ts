@@ -145,16 +145,16 @@ export const useCasePages: readonly MarketingDetail[] = [
     description: 'Keep client-specific context separate, prepare faster, and create follow-ups grounded in the work already completed.',
     intro: 'Client work demands rapid switching between companies, people, terminology, and commitments. ShogunAI helps you recover the right context before a call and turn it into deliverables afterward.',
     highlights: [
-      { title: 'Client recall', body: 'Retrieve prior conversations, constraints, deliverables, and unresolved questions by client or project.' },
-      { title: 'Meeting preparation', body: 'Create a focused briefing from recent work instead of scanning every message and document.' },
-      { title: 'Consistent follow-up', body: 'Draft summaries and next steps grounded in what was actually discussed.' },
+      { title: 'Sales professionals', body: 'Turn pricing feedback from today’s call and technical requirements from last month into a client-ready proposal without rebuilding the context.' },
+      { title: 'Consultants', body: 'Create a project plan from the scope, kickoff feedback, and discovery notes already in your work history.' },
+      { title: 'Account managers', body: 'Recall the last client touchpoint, open request, and owner across your team without digging through every system.' },
     ],
     steps: [
       { title: 'Build private client memory', body: 'Capture the context you need while keeping your personal work layer local-first.' },
       { title: 'Prepare before the call', body: 'Recall recent changes, commitments, and open decisions in one query.' },
       { title: 'Deliver after the call', body: 'Create a clear recap, plan, or client-ready draft and approve it before sending.' },
     ],
-    outcomes: ['Switch clients with less mental overhead', 'Create better meeting briefs', 'Reduce missed commitments', 'Draft recaps and proposals faster'],
+    outcomes: ['End the hunt for client context scattered across inboxes, documents, meetings, and notes', 'Prepare proposals, follow-ups, and reports from context you already have', 'Stay present in client calls while ShogunAI keeps the thread', 'Switch between clients with less mental overhead', 'Keep private client context local by default and control what is shared'],
     faq: [
       ['Can I keep different client contexts separate?', 'ShogunAI is designed around controlled, searchable work context. You decide what is captured and which connected services are authorized.'],
       ['Will it send client emails automatically?', 'Consequential actions use approval gates, so you can review a client-facing message before it is sent.'],
