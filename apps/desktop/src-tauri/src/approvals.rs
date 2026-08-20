@@ -415,13 +415,14 @@ pub mod mac {
         db: tauri::State<'_, Db>,
     ) -> Result<String, String> {
         use shogun_agents::approval::RejectCause;
+        let now = db.now_ms().max(0) as u64;
         let (decision, snapshot) = state.change(|q| {
             let snapshot = q
                 .action(ApprovalId(id))
                 .cloned()
                 .and_then(|a| q.preview(ApprovalId(id)).map(|p| (a, p.full_body.clone())));
             (
-                q.reject(ApprovalId(id), RejectCause::UserRejected),
+                q.reject(ApprovalId(id), RejectCause::UserRejected, now),
                 snapshot,
             )
         })?;

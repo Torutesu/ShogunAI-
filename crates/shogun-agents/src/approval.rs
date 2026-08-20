@@ -362,7 +362,7 @@ impl ApprovalQueue {
     }
 
     /// Explicitly reject a pending request.
-    pub fn reject(&mut self, id: ApprovalId, cause: RejectCause) -> Decision {
+    pub fn reject(&mut self, id: ApprovalId, cause: RejectCause, now_ms: u64) -> Decision {
         match self.position(id) {
             Some(idx) => {
                 self.pending.remove(idx);
@@ -373,7 +373,7 @@ impl ApprovalQueue {
                     } else {
                         ApprovalStatus::Rejected
                     },
-                    0,
+                    now_ms,
                 );
                 Decision::Rejected(cause)
             }
@@ -588,10 +588,14 @@ mod tests {
         let mut q = ApprovalQueue::new();
         let id = q.request(email(), preview(), ApprovalOrigin::Ui, 0);
         assert_eq!(
-            q.reject(id, RejectCause::UserRejected),
+            q.reject(id, RejectCause::UserRejected, 1_234),
             Decision::Rejected(RejectCause::UserRejected)
         );
         assert_eq!(q.pending_len(), 0);
+        // The terminal ledger records when the rejection happened, not epoch 0.
+        let record = q.terminal_records().iter().find(|r| r.id == id).unwrap();
+        assert_eq!(record.status, ApprovalStatus::Rejected);
+        assert_eq!(record.resolved_ms, 1_234);
     }
 
     #[test]

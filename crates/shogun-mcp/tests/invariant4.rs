@@ -177,7 +177,7 @@ fn api_and_mcp_sends_land_in_the_one_shared_queue_with_origins() {
             Decision::Confirmed(cs) if cs.preview.full_body == "Subject: s\n\nmcp draft"
         ));
         assert_eq!(
-            q.reject(api_id, RejectCause::UserRejected),
+            q.reject(api_id, RejectCause::UserRejected, 2_000),
             Decision::Rejected(RejectCause::UserRejected)
         );
         assert_eq!(q.pending_len(), 0, "both resolved through the one queue");
