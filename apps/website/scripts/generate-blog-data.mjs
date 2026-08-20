@@ -17,8 +17,8 @@ const OUTPUT_FILE = join(process.cwd(), 'src', 'lib', 'blog-data.generated.ts');
 const LOCALES = new Set(['en', 'ja', 'es', 'de']);
 // Two tags only: Ideas (the thinking) and Product (how it works).
 const CATEGORY_IMAGES = {
-  Ideas: '/images/blog/ai-memory.png',
-  Product: '/images/blog/product.png',
+  Ideas: '/images/blog/ai-memory.jpg',
+  Product: '/images/blog/product.jpg',
 };
 
 // Every published article gets a real body for every supported locale. These
