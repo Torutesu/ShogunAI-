@@ -110,11 +110,17 @@ pub fn decide_hash(
     recents: &[Recent<'_>],
     hash_fn: impl Fn(&str) -> String,
 ) -> HashDecision {
+    // NOT max_by: that keeps the LAST of equal elements, and recents arrive newest-first — an
+    // exact-tie (two identical recent bodies) would dedup-touch the older row. Keep the first
+    // strictly-greater score so ties resolve to the first candidate, as documented.
     let best = recents
         .iter()
         .map(|r| (r, similarity(new_content, r.content)))
         .filter(|(_, s)| *s >= NEAR_DUP_THRESHOLD)
-        .max_by(|(_, s1), (_, s2)| s1.partial_cmp(s2).unwrap_or(std::cmp::Ordering::Equal));
+        .fold(None::<(&Recent<'_>, f64)>, |acc, (r, s)| match acc {
+            Some((_, best_s)) if s <= best_s => acc,
+            _ => Some((r, s)),
+        });
     match best {
         Some((r, _)) => HashDecision::Duplicate(r.content_hash.to_string()),
         None => HashDecision::Fresh(hash_fn(new_content)),
@@ -128,6 +134,18 @@ mod tests {
     fn fresh_hash(s: &str) -> String {
         // a stand-in stable hash for tests (the daemon injects the real xxhash)
         format!("hash:{}", s.len())
+    }
+
+    #[test]
+    fn an_exact_tie_dedups_to_the_first_candidate() {
+        // recents arrive newest-first; two identical bodies under different hashes must touch
+        // the FIRST (newest) row, not accumulate dwell on the stale one.
+        let recents = [
+            Recent { content_hash: "newest", content: "same body text here" },
+            Recent { content_hash: "older", content: "same body text here" },
+        ];
+        let decision = decide_hash("same body text here", &recents, fresh_hash);
+        assert_eq!(decision, HashDecision::Duplicate("newest".to_string()));
     }
 
     #[test]
