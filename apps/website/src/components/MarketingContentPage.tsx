@@ -1,6 +1,6 @@
 import { ArrowRight, Check, LockKeyhole, Search, Sparkles } from 'lucide-react';
 import { CTA } from '@/components/sections/CTA';
-import { ConsultantsMarketingPage } from '@/components/ConsultantsMarketingPage';
+import { isProductLedUseCase, UseCaseMarketingPage } from '@/components/ConsultantsMarketingPage';
 import { PageHeader, PageShell } from '@/components/PageShell';
 import { JsonLd, breadcrumbSchema } from '@/components/seo/JsonLd';
 import { Button } from '@/components/ui/button';
@@ -93,8 +93,16 @@ export function MarketingContentPage({
     name: page.title,
     description: page.description,
     url: canonical,
-    isPartOf: { '@type': 'WebSite', name: siteConfig.name, url: siteConfig.url },
-    about: { '@type': 'SoftwareApplication', name: siteConfig.name, operatingSystem: 'macOS' },
+    isPartOf: {
+      '@type': 'WebSite',
+      name: siteConfig.name,
+      url: siteConfig.url,
+    },
+    about: {
+      '@type': 'SoftwareApplication',
+      name: siteConfig.name,
+      operatingSystem: 'macOS',
+    },
   };
   const structuredData = (
     <>
@@ -110,11 +118,11 @@ export function MarketingContentPage({
     </>
   );
 
-  if (section === 'use-cases' && page.slug === 'consultants') {
+  if (section === 'use-cases' && isProductLedUseCase(page.slug)) {
     return (
       <PageShell locale={locale}>
         {structuredData}
-        <ConsultantsMarketingPage page={page} locale={locale} />
+        <UseCaseMarketingPage page={page} locale={locale} />
       </PageShell>
     );
   }
@@ -133,19 +141,14 @@ export function MarketingContentPage({
             {page.highlights.map((item, index) => {
               const Icon = icons[index % icons.length];
               return (
-                <article
-                  key={item.title}
-                  className="flex h-full flex-col items-center px-2 text-center"
-                >
+                <article key={item.title} className="flex h-full flex-col items-center px-2 text-center">
                   <span className="text-accent flex size-12 items-center justify-center">
                     <Icon className="size-7" strokeWidth={1.8} />
                   </span>
                   <h2 className="font-display mt-5 text-[clamp(20px,2vw,26px)] leading-tight font-semibold text-balance">
                     {item.title}
                   </h2>
-                  <p className="text-muted mt-4 max-w-[360px] text-[15px] leading-relaxed">
-                    {item.body}
-                  </p>
+                  <p className="text-muted mt-4 max-w-[360px] text-[15px] leading-relaxed">{item.body}</p>
                 </article>
               );
             })}
@@ -159,9 +162,7 @@ export function MarketingContentPage({
             <h2 className="max-w-[11ch] font-[Georgia,'Times_New_Roman','Yu_Mincho','Hiragino_Mincho_ProN',serif] text-[clamp(40px,5vw,68px)] leading-[1.04] font-normal tracking-[-0.045em] text-balance">
               {copy.howTitle}
             </h2>
-            <p className="text-muted mt-7 max-w-[620px] text-[clamp(17px,1.55vw,21px)] leading-[1.65]">
-              {page.intro}
-            </p>
+            <p className="text-muted mt-7 max-w-[620px] text-[clamp(17px,1.55vw,21px)] leading-[1.65]">{page.intro}</p>
           </div>
           <ol className="grid gap-9 lg:pt-1">
             {page.steps.map((step) => (
@@ -170,9 +171,7 @@ export function MarketingContentPage({
                   <Check className="size-[18px]" strokeWidth={2.75} />
                 </span>
                 <div>
-                  <h3 className="text-[clamp(19px,1.8vw,23px)] leading-[1.25] font-semibold">
-                    {step.title}
-                  </h3>
+                  <h3 className="text-[clamp(19px,1.8vw,23px)] leading-[1.25] font-semibold">{step.title}</h3>
                   <p className="text-muted mt-2.5 max-w-[620px] text-[clamp(15px,1.2vw,17px)] leading-[1.55]">
                     {step.body}
                   </p>
@@ -186,9 +185,7 @@ export function MarketingContentPage({
       <section className="py-[clamp(48px,7vw,88px)]">
         <div className="container-x grid gap-10 lg:grid-cols-2 lg:items-center">
           <div>
-            <p className="text-accent text-xs font-semibold tracking-[0.08em] uppercase">
-              {copy.changes}
-            </p>
+            <p className="text-accent text-xs font-semibold tracking-[0.08em] uppercase">{copy.changes}</p>
             <h2 className="font-display mt-3 text-[clamp(26px,4vw,40px)] leading-tight font-semibold">
               {copy.changesTitle}
             </h2>
@@ -211,17 +208,13 @@ export function MarketingContentPage({
 
       <section className="border-border bg-cloud/45 border-y py-[clamp(48px,7vw,88px)]">
         <div className="container-x max-w-[820px]">
-          <p className="text-accent text-center text-xs font-semibold tracking-[0.08em] uppercase">
-            {copy.faq}
-          </p>
-          <h2 className="font-display mt-3 text-center text-[clamp(26px,4vw,40px)] font-semibold">
-            {copy.faqTitle}
-          </h2>
+          <p className="text-accent text-center text-xs font-semibold tracking-[0.08em] uppercase">{copy.faq}</p>
+          <h2 className="font-display mt-3 text-center text-[clamp(26px,4vw,40px)] font-semibold">{copy.faqTitle}</h2>
           <div className="mt-8 grid gap-3">
             {page.faq.map(([question, answer]) => (
               <details
                 key={question}
-                className="group border-border bg-surface rounded-xl border px-5 open:shadow-[var(--shadow-card)]"
+                className="border-border bg-surface group rounded-xl border px-5 open:shadow-[var(--shadow-card)]"
               >
                 <summary className="cursor-pointer list-none py-5 font-semibold [&::-webkit-details-marker]:hidden">
                   {question}
