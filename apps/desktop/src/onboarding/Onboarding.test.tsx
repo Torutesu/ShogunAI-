@@ -490,6 +490,14 @@ describe("cinematic onboarding", () => {
     expect(css.includes("onb-gate__legend")).toBe(false);
     expect(css).not.toMatch(/transition\s*:\s*all/i);
     expect(css).not.toContain("Fraunces Onboarding");
+    expect(css).not.toContain("Avenir Next");
+    expect(css).not.toMatch(/@font-face|\.ttf|\.woff/i);
+    expect(css).toContain('--onb-font-ui: system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text"');
+    expect(css).toContain('--onb-font-rounded: ui-rounded, ".SF NS Rounded", "SF Pro Rounded"');
+    expect(css).toContain('--onb-font-mono: ui-monospace, "SFMono-Regular", "SF Mono"');
+    expect(css).toContain("--onb-text-large-title-size: 26px");
+    expect(css).toContain("--onb-text-body-size: 13px");
+    expect(css).toContain("--onb-text-button-default-size: 13px");
     expect(css).toMatch(/\.onb-cinematic\s*\{[^}]*background:\s*rgba\(/);
     expect(css).toMatch(/\.onb-layout\s*\{[^}]*min-height:\s*0/);
     expect(css).toMatch(/@media \(max-width:\s*760px\)/);
