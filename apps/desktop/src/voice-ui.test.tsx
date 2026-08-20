@@ -47,10 +47,36 @@ describe("compact dictation UI", () => {
 });
 
 describe("dictation cleanup settings", () => {
+  it("lists microphones and persists the selected dictation input", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "get_voice_settings") return { enabled: true, microphone: null };
+      if (command === "get_voice_microphones") return ["Built-in Microphone", "Studio Mic"];
+      if (command === "get_voice_edit_settings") return { model: "openai/gpt-oss-120b", has_key: false };
+      if (command === "set_voice_microphone") return undefined;
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    render(<VoiceSection />);
+    const picker = await screen.findByLabelText("Input microphone");
+    expect(picker.closest(".mic-picker__control")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Refresh" })).toBeTruthy();
+    fireEvent.click(picker);
+    expect(screen.getByRole("dialog", { name: "Choose Input" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /Studio Mic/ }));
+
+    await waitFor(() => {
+      expect(vi.mocked(invoke)).toHaveBeenCalledWith("set_voice_microphone", {
+        microphone: "Studio Mic",
+      });
+    });
+  });
+
   it("stores a Groq key through the dedicated command and explains raw fallback", async () => {
     const { invoke } = await import("@tauri-apps/api/core");
     vi.mocked(invoke).mockImplementation(async (command) => {
       if (command === "get_voice_settings") return { enabled: false };
+      if (command === "get_voice_microphones") return [];
       if (command === "get_voice_edit_settings") return { model: "openai/gpt-oss-120b", has_key: false };
       if (command === "set_voice_edit_key" || command === "focus_field") return undefined;
       throw new Error(`unexpected command: ${command}`);

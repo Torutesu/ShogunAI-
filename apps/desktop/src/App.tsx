@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
-import { flushSync } from "react-dom";
+import { createPortal, flushSync } from "react-dom";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
@@ -2810,20 +2810,62 @@ function DreamSection(): JSX.Element {
 export function VoiceSection(): JSX.Element {
   const [on, setOn] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [microphone, setMicrophone] = useState<string | null>(null);
+  const [microphones, setMicrophones] = useState<string[]>([]);
+  const [microphonesLoading, setMicrophonesLoading] = useState(false);
+  const [microphoneBusy, setMicrophoneBusy] = useState(false);
+  const [microphoneError, setMicrophoneError] = useState("");
+  const [microphoneOpen, setMicrophoneOpen] = useState(false);
+  const microphonePickerRef = useRef<HTMLDivElement>(null);
+  const microphoneModalRef = useRef<HTMLDivElement>(null);
   const [edit, setEdit] = useState({ model: "openai/gpt-oss-120b", has_key: false });
   const [editKeyInput, setEditKeyInput] = useState("");
   const [editBusy, setEditBusy] = useState(false);
   const [editMsg, setEditMsg] = useState("");
 
+  const loadMicrophones = useCallback((): void => {
+    if (!IN_TAURI) return;
+    setMicrophonesLoading(true);
+    setMicrophoneError("");
+    void invoke<string[]>("get_voice_microphones")
+      .then(setMicrophones)
+      .catch(() => setMicrophoneError(t.voiceMicrophoneUnavailable))
+      .finally(() => setMicrophonesLoading(false));
+  }, []);
+
   useEffect(() => {
     if (!IN_TAURI) return;
-    void invoke<{ enabled: boolean }>("get_voice_settings")
-      .then((s) => setOn(s.enabled))
+    void invoke<{ enabled: boolean; microphone?: string | null }>("get_voice_settings")
+      .then((s) => {
+        setOn(s.enabled);
+        setMicrophone(s.microphone ?? null);
+      })
       .catch(() => undefined);
+    loadMicrophones();
     void invoke<{ model: string; has_key: boolean }>("get_voice_edit_settings")
       .then(setEdit)
       .catch(() => undefined);
-  }, []);
+  }, [loadMicrophones]);
+
+  useEffect(() => {
+    if (!microphoneOpen) return;
+    const onPointerDown = (event: PointerEvent): void => {
+      const target = event.target as Node;
+      if (
+        !microphonePickerRef.current?.contains(target)
+        && !microphoneModalRef.current?.contains(target)
+      ) setMicrophoneOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") setMicrophoneOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [microphoneOpen]);
 
   const toggle = (next: boolean): void => {
     if (!IN_TAURI) {
@@ -2835,6 +2877,21 @@ export function VoiceSection(): JSX.Element {
     void invoke("set_voice_enabled", { enabled: next })
       .catch(() => setOn(!next))
       .finally(() => setBusy(false));
+  };
+
+  const selectMicrophone = (next: string): void => {
+    const selected = next || null;
+    const previous = microphone;
+    setMicrophone(selected);
+    setMicrophoneError("");
+    if (!IN_TAURI) return;
+    setMicrophoneBusy(true);
+    void invoke("set_voice_microphone", { microphone: selected })
+      .catch((error: unknown) => {
+        setMicrophone(previous);
+        setMicrophoneError(String(error));
+      })
+      .finally(() => setMicrophoneBusy(false));
   };
 
   const saveEditKey = (): void => {
@@ -2884,6 +2941,116 @@ export function VoiceSection(): JSX.Element {
         >
           {t.voiceOn}
         </button>
+      </div>
+      <div className="mic-picker" ref={microphonePickerRef}>
+        <div className="mic-picker__head">
+          <label className="set__sublabel" htmlFor="voice-microphone">{t.voiceMicrophone}</label>
+          <button
+            className="mic-picker__refresh"
+            type="button"
+            disabled={microphonesLoading || microphoneBusy}
+            onClick={loadMicrophones}
+          >
+            {microphonesLoading ? t.voiceMicrophoneLoading : t.voiceMicrophoneRefresh}
+          </button>
+        </div>
+        <button
+          id="voice-microphone"
+          className={`mic-picker__control${microphoneBusy ? " is-busy" : ""}`}
+          type="button"
+          disabled={microphoneBusy}
+          aria-haspopup="dialog"
+          aria-expanded={microphoneOpen}
+          aria-controls="voice-microphone-popover"
+          aria-describedby="voice-microphone-hint voice-microphone-error"
+          aria-busy={microphoneBusy}
+          onClick={() => setMicrophoneOpen((open) => !open)}
+        >
+          <span className="mic-picker__glyph" aria-hidden="true">
+            <svg viewBox="0 0 16 16" width="16" height="16" fill="none">
+              <rect x="5.25" y="1.5" width="5.5" height="8" rx="2.75" stroke="currentColor" strokeWidth="1.25" />
+              <path d="M3.5 7.75A4.5 4.5 0 0 0 8 12.25a4.5 4.5 0 0 0 4.5-4.5M8 12.25v2.25M5.75 14.5h4.5" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" />
+            </svg>
+          </span>
+          <span className="mic-picker__value">
+            {microphone && !microphones.includes(microphone)
+              ? t.voiceMicrophoneDisconnected(microphone)
+              : microphone ?? t.voiceMicrophoneDefault}
+          </span>
+          <span className="mic-picker__chevron" aria-hidden="true">
+            <svg viewBox="0 0 12 12" width="12" height="12" fill="none">
+              <path d="m3 4.5 3 3 3-3" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </span>
+        </button>
+        {microphoneOpen ? createPortal(
+          <div className="mic-picker__backdrop">
+            <div
+              id="voice-microphone-popover"
+              ref={microphoneModalRef}
+              className="mic-picker__popover"
+              role="dialog"
+              aria-modal="true"
+              aria-label={t.voiceMicrophonePickerTitle}
+            >
+            <div className="mic-picker__popover-head">
+              <span>{t.voiceMicrophonePickerTitle}</span>
+              <span>{microphones.length + 1}</span>
+            </div>
+            <div className="mic-picker__options">
+              <button
+                className={`mic-picker__option${microphone === null ? " is-selected" : ""}`}
+                type="button"
+                onClick={() => {
+                  selectMicrophone("");
+                  setMicrophoneOpen(false);
+                }}
+              >
+                <span className="mic-picker__check" aria-hidden="true">{microphone === null ? "✓" : ""}</span>
+                <span className="mic-picker__option-copy">
+                  <span>{t.voiceMicrophoneDefault}</span>
+                  <small>{t.voiceMicrophoneDefaultHint}</small>
+                </span>
+              </button>
+              {microphone && !microphones.includes(microphone) ? (
+                <button
+                  className="mic-picker__option is-selected is-unavailable"
+                  type="button"
+                  onClick={() => setMicrophoneOpen(false)}
+                >
+                  <span className="mic-picker__check" aria-hidden="true">!</span>
+                  <span className="mic-picker__option-copy">
+                    <span>{microphone}</span>
+                    <small>{t.voiceMicrophoneDisconnectedHint}</small>
+                  </span>
+                </button>
+              ) : null}
+              {microphones.map((name) => (
+                <button
+                  key={name}
+                  className={`mic-picker__option${microphone === name ? " is-selected" : ""}`}
+                  type="button"
+                  onClick={() => {
+                    selectMicrophone(name);
+                    setMicrophoneOpen(false);
+                  }}
+                >
+                  <span className="mic-picker__check" aria-hidden="true">{microphone === name ? "✓" : ""}</span>
+                  <span className="mic-picker__option-copy">
+                    <span>{name}</span>
+                    <small>{t.voiceMicrophoneAvailable}</small>
+                  </span>
+                </button>
+              ))}
+            </div>
+            </div>
+          </div>,
+          document.body,
+        ) : null}
+        <p id="voice-microphone-hint" className="set__hint set__hint--quiet">{t.voiceMicrophoneHint}</p>
+        <p id="voice-microphone-error" className="set__hint is-err" aria-live="polite">
+          {microphoneError}
+        </p>
       </div>
       <div className="set__stack set__stack--key">
         <div className="set__label">{t.voiceEditModel}</div>

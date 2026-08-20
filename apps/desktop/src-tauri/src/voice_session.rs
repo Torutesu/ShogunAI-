@@ -57,6 +57,8 @@ pub mod mac {
     pub struct Settings {
         #[serde(default)]
         pub enabled: bool,
+        #[serde(default)]
+        pub microphone: Option<String>,
     }
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -172,6 +174,10 @@ pub mod mac {
                 eprintln!("[voice] settings save failed: {e}");
             }
         }
+    }
+
+    fn normalize_microphone_selection(microphone: Option<String>) -> Option<String> {
+        microphone.filter(|name| !name.trim().is_empty())
     }
 
     fn emit_state(
@@ -998,10 +1004,12 @@ pub mod mac {
 
     /// Prompt for microphone access from the explicit Settings action, never from the UI thread.
     /// The probe opens and immediately stops a local stream; it does not retain or send audio.
-    fn request_microphone_access_bg() {
-        std::thread::spawn(|| match voice_lane::request_microphone_access() {
-            Ok(()) => eprintln!("[voice] microphone access ready"),
-            Err(error) => eprintln!("[voice] microphone access unavailable: {error}"),
+    fn request_microphone_access_bg(microphone: Option<String>) {
+        std::thread::spawn(move || {
+            match voice_lane::request_microphone_access(microphone.as_deref()) {
+                Ok(()) => eprintln!("[voice] microphone access ready"),
+                Err(error) => eprintln!("[voice] microphone access unavailable: {error}"),
+            }
         });
     }
 
@@ -1030,11 +1038,14 @@ pub mod mac {
 
     /// Begin hold-to-talk capture. Returns `true` when the mic lane is live (UI shows recording).
     pub fn on_hold_start(app: AppHandle) -> bool {
-        let enabled = LANE
+        let (enabled, microphone) = LANE
             .lock()
             .ok()
-            .and_then(|g| g.as_ref().map(|l| l.settings.enabled))
-            .unwrap_or(false);
+            .and_then(|g| {
+                g.as_ref()
+                    .map(|lane| (lane.settings.enabled, lane.settings.microphone.clone()))
+            })
+            .unwrap_or((false, None));
         if !enabled {
             return false;
         }
@@ -1098,7 +1109,7 @@ pub mod mac {
         // left that could hear it is another app's live call, which the hot-mic rule catches.
         crate::sound::mac::play(shogun_core::sound::Cue::VoiceStart);
 
-        let handle = match voice_lane::start(&app) {
+        let handle = match voice_lane::start(&app, microphone.as_deref()) {
             Ok(h) => h,
             Err(e) => {
                 let _ = complete_terminal(session, SessionPhase::Opening, || emit_error(&app, e));
@@ -1298,6 +1309,23 @@ pub mod mac {
     }
 
     #[tauri::command]
+    pub fn get_voice_microphones() -> Result<Vec<String>, String> {
+        shogun_core::audio::capture::mic::input_device_names()
+    }
+
+    #[tauri::command]
+    pub fn set_voice_microphone(microphone: Option<String>, app: AppHandle) -> Result<(), String> {
+        let microphone = normalize_microphone_selection(microphone);
+        let mut lane = LANE
+            .lock()
+            .map_err(|_| "voice lane lock poisoned".to_string())?;
+        let settings = lane.as_mut().ok_or("voice not initialized")?;
+        settings.settings.microphone = microphone;
+        save_settings(&app, &settings.settings);
+        Ok(())
+    }
+
+    #[tauri::command]
     pub fn get_voice_edit_settings() -> VoiceEditSettingsView {
         VoiceEditSettingsView {
             model: VOICE_EDIT_MODEL,
@@ -1349,7 +1377,7 @@ pub mod mac {
         save_settings(&app, &settings.settings);
         if enabled {
             preload_asr_bg(&app);
-            request_microphone_access_bg();
+            request_microphone_access_bg(settings.settings.microphone.clone());
         }
         if !enabled {
             drop(lane);
@@ -1705,6 +1733,16 @@ pub mod mac {
             let correction = dictionary_edit_candidate("open shogun ai with g rock");
             assert_eq!(correction.text, "open ShogunAI with Groq");
             assert_eq!(correction.protected_terms, vec!["ShogunAI", "Groq"]);
+        }
+
+        #[test]
+        fn microphone_selection_treats_empty_names_as_default_input() {
+            assert_eq!(normalize_microphone_selection(None), None);
+            assert_eq!(normalize_microphone_selection(Some("  ".into())), None);
+            assert_eq!(
+                normalize_microphone_selection(Some("Studio Mic".into())),
+                Some("Studio Mic".into())
+            );
         }
 
         #[test]

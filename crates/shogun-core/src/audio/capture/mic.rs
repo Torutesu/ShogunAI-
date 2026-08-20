@@ -23,6 +23,14 @@ impl Mic {
     /// caller degrades to notes-only (meeting.rs), never crashes. Blocks only until the capture
     /// thread has built and started the stream (or reported why it could not).
     pub fn open() -> Result<Self, String> {
+        Self::open_with_device(None)
+    }
+
+    /// Open a named input device, or the current macOS default when no name is selected.
+    /// A missing selected device is an error rather than a silent fallback: changing the input
+    /// source without the user's knowledge is surprising and can capture the wrong microphone.
+    pub fn open_with_device(selected_device: Option<&str>) -> Result<Self, String> {
+        let selected_device = selected_device.map(str::to_owned);
         let (sample_tx, rx) = std::sync::mpsc::channel::<Vec<f32>>();
         // The capture thread reports the outcome of building the stream back here so `open` stays
         // fallible without moving the `!Send` stream across the boundary.
@@ -31,7 +39,7 @@ impl Mic {
         let stop_thread = Arc::clone(&stop);
 
         let thread = std::thread::spawn(move || {
-            let stream = match build_stream(sample_tx) {
+            let stream = match build_stream(sample_tx, selected_device) {
                 Ok(s) => {
                     let _ = ready_tx.send(Ok(()));
                     s
@@ -59,6 +67,21 @@ impl Mic {
             Err(_) => Err("mic capture thread exited before reporting readiness".into()),
         }
     }
+}
+
+/// Return display names for selectable input devices. Names are persisted because CPAL does not
+/// expose a stable cross-platform device identifier; exact matches avoid guessing after a device
+/// is unplugged or renamed.
+pub fn input_device_names() -> Result<Vec<String>, String> {
+    let host = cpal::default_host();
+    let mut names = host
+        .input_devices()
+        .map_err(|error| format!("could not list microphone devices: {error}"))?
+        .filter_map(|device| device.name().ok())
+        .collect::<Vec<_>>();
+    names.sort_unstable();
+    names.dedup();
+    Ok(names)
 }
 
 fn push_resampled<T>(
@@ -100,11 +123,36 @@ where
         .map_err(|e| e.to_string())
 }
 
-/// Build and start the default input stream, sending resampled 16 kHz mono frames on `sample_tx`.
+/// Build and start selected input stream, sending resampled 16 kHz mono frames on `sample_tx`.
 /// Must run on the thread that will keep the returned stream alive (`Stream` is `!Send`).
-fn build_stream(sample_tx: std::sync::mpsc::Sender<Vec<f32>>) -> Result<cpal::Stream, String> {
+fn open_input_device(
+    host: &cpal::Host,
+    selected_device: Option<&str>,
+) -> Result<cpal::Device, String> {
+    let Some(selected_device) = selected_device else {
+        return host
+            .default_input_device()
+            .ok_or_else(|| "no input device".to_string());
+    };
+
+    host.input_devices()
+        .map_err(|error| format!("could not list microphone devices: {error}"))?
+        .find_map(|device| {
+            device
+                .name()
+                .ok()
+                .filter(|name| name == selected_device)
+                .map(|_| device)
+        })
+        .ok_or_else(|| format!("selected microphone is unavailable: {selected_device}"))
+}
+
+fn build_stream(
+    sample_tx: std::sync::mpsc::Sender<Vec<f32>>,
+    selected_device: Option<String>,
+) -> Result<cpal::Stream, String> {
     let host = cpal::default_host();
-    let device = host.default_input_device().ok_or("no input device")?;
+    let device = open_input_device(&host, selected_device.as_deref())?;
     let supported = device.default_input_config().map_err(|e| e.to_string())?;
     let input_rate = supported.sample_rate().0;
     let channels = supported.channels();
