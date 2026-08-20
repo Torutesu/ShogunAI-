@@ -6,6 +6,7 @@ import {
   findByRefCode,
   findByStatusToken,
   insertParticipant,
+  nextJoinPosition,
   updateParticipant,
 } from '@/db/queries';
 import {
@@ -13,7 +14,9 @@ import {
   generateStatusToken,
   isValidRefCode,
   sanitizeAnswer,
+  sanitizeNickname,
 } from './referral';
+import { award, normalizeHandle } from './points';
 
 /**
  * Signup with referral attribution (REFERRAL_ENGINE.md §4.1).
@@ -24,8 +27,11 @@ export async function addParticipant(
   email: string,
   ref?: string,
   ipHash?: string,
+  xHandle?: unknown,
+  plan?: unknown,
 ): Promise<{ row: Participant; duplicate: boolean }> {
   const normalized = email.trim().toLowerCase();
+  const planIntent = typeof plan === 'string' ? plan.trim().slice(0, 40) || null : null;
 
   const existing = await findByEmail(normalized);
   if (existing) {
@@ -34,9 +40,7 @@ export async function addParticipant(
       const refreshed = await findByEmail(normalized);
       return { row: refreshed ?? existing, duplicate: true };
     }
-    // duplicate=true: callers on public routes must NEVER echo this row's
-    // statusToken/statusUrl back — see signupPayload() in referral.ts.
-    return { row: existing, duplicate: true };
+    return { row: existing, duplicate: true }; // returning users still get a statusUrl
   }
 
   let referredBy: string | null = null;
@@ -45,13 +49,34 @@ export async function addParticipant(
     if (referrer && referrer.email !== normalized) referredBy = ref; // no self-referral
   }
 
-  const row = await insertParticipant({
-    email: normalized,
-    refCode: generateRefCode(),
-    statusToken: generateStatusToken(),
-    referredBy,
-    ipHash: ipHash ?? null,
-  });
+  // X handle is optional; only holders are eligible for social points. A
+  // duplicate handle (unique) must not break the entry, so drop it on clash.
+  const handle = normalizeHandle(xHandle);
+  const position = await nextJoinPosition();
+
+  let row: Participant;
+  try {
+    row = await insertParticipant({
+      email: normalized,
+      refCode: generateRefCode(),
+      statusToken: generateStatusToken(),
+      referredBy,
+      ipHash: ipHash ?? null,
+      joinPosition: position,
+      xHandle: handle,
+      plan: planIntent,
+    });
+  } catch {
+    // Most likely the x_handle unique clashed — retry without it.
+    row = await insertParticipant({
+      email: normalized,
+      refCode: generateRefCode(),
+      statusToken: generateStatusToken(),
+      referredBy,
+      ipHash: ipHash ?? null,
+      joinPosition: position,
+    });
+  }
   return { row, duplicate: false };
 }
 
@@ -62,12 +87,24 @@ export async function addParticipant(
  */
 export async function submitProfile(
   statusToken: string,
-  answers: { nickname?: unknown; a1?: unknown; a2?: unknown; a3?: unknown },
+  answers: { nickname?: unknown; a1?: unknown; a2?: unknown; a3?: unknown; xHandle?: unknown },
 ): Promise<{ row: Participant; justQualified: boolean } | null> {
   const row = await findByStatusToken(statusToken);
   if (!row) return null;
 
-  const nickname = sanitizeAnswer(answers.nickname)?.slice(0, 40) ?? null;
+  // Optional X handle (only holders earn social points). STRICTLY set-once:
+  // allowing changes would let an entry cycle through other people's handles
+  // to harvest their social points. A unique clash never fails the save.
+  const handle = normalizeHandle(answers.xHandle);
+  if (handle && !row.xHandle) {
+    try {
+      await updateParticipant(row.id, { xHandle: handle });
+    } catch {
+      /* handle already taken — leave it unset */
+    }
+  }
+
+  const nickname = sanitizeNickname(answers.nickname);
   const a1 = sanitizeAnswer(answers.a1);
   const a2 = sanitizeAnswer(answers.a2);
   const a3 = sanitizeAnswer(answers.a3);
@@ -80,16 +117,30 @@ export async function submitProfile(
   const complete = !!(merged.a1 && merged.a2 && merged.a3);
   const justQualified = complete && !row.qualifiedAt; // fires exactly once
 
-  await updateParticipant(row.id, {
+  const patch = {
     ...(nickname && { nickname }),
     ...(a1 && { answer1: a1 }),
     ...(a2 && { answer2: a2 }),
     ...(a3 && { answer3: a3 }),
     ...(justQualified && { qualifiedAt: new Date() }),
-  });
+  };
+  // An empty patch (e.g. a body with no recognized fields) must be a no-op,
+  // not a 500 — drizzle's .set({}) throws.
+  if (Object.keys(patch).length > 0) await updateParticipant(row.id, patch);
 
-  // → if justQualified && row.referredBy: the referrer's count just moved.
-  //   Fire milestone email / realtime update here (off the request path).
+  // On the one-shot transition to a complete profile:
+  //   • the entry earns the +20 form award, and
+  //   • any referrer's invite becomes "settled" → +100 (spec §3.3). Keyed by
+  //     this entry's id, so a burner can't be re-counted for the same inviter.
+  if (justQualified) {
+    await award(row.id, 'form');
+    if (row.referredBy) {
+      const referrer = await findByRefCode(row.referredBy);
+      if (referrer && referrer.id !== row.id) {
+        await award(referrer.id, 'referral', row.id);
+      }
+    }
+  }
 
   return {
     row: { ...row, ...merged, answer1: merged.a1, answer2: merged.a2, answer3: merged.a3 },

@@ -2,22 +2,87 @@
 title: 'Passive memory, not screenshots'
 description: 'How ShogunAI builds a private, local memory of your day without turning your screen into a surveillance feed.'
 date: '2026-07-15'
-category: 'Blog'
+category: 'Ideas'
 author: 'ShogunAI'
+image: '/images/blog/ai-memory.jpg'
 ---
 
-## This is a placeholder post
+The obvious way to give software a memory of your day is to record your
+screen. Take a frame every few seconds, run text recognition over it, store
+the frames, and search them later. It works, and it is the wrong trade.
 
-Swap in the real article. The structure, metadata, and internal linking
-are already in place for organic search and LLM discovery.
+A frame archive is a copy of everything you ever looked at, sitting on disk in
+a form any process with file access can read and any viewer can play back. It
+holds the password manager you opened for four seconds, the medical result in
+another tab, the salary spreadsheet a colleague shared. You did not decide to
+keep any of that. The recorder decided for you.
 
-### Section
+ShogunAI does not record your screen.
 
-Body copy. Add code blocks, images, and MDX components as needed.
+There is one documented exception, and it is not a recorder either: visual
+recall, which is off until you turn it on, takes a single frame where a window
+yields no text at all and deletes it after 72 hours. The rules around it are
+in [Visual recall, and the exception we argued about](/blog/visual-recall).
 
-```ts
-// example code block
-const memory = capture(day);
-```
+## What it reads instead
 
-Closing paragraph.
+macOS already exposes a structured description of what is on screen — the
+accessibility layer that screen readers use. Window titles, headings, the body
+of the document you have focused, the message you are reading, the field you
+are typing into. It is the same interface an assistive technology uses, and it
+returns text and structure rather than pixels.
+
+That is what ShogunAI reads. The result is smaller, more accurate, and more
+useful than anything recovered from an image:
+
+- **No recognition errors.** Text arrives as text. Nothing is guessed from
+  pixels, so nothing is silently wrong in your memory six weeks later.
+- **Structure survives.** ShogunAI knows the difference between a document
+  title, a message from a person, and a code comment, because the accessibility
+  tree says which is which.
+- **It is cheap.** Reading a text tree on focus change costs a fraction of what
+  encoding and recognizing images costs. That is why your fans stay quiet and
+  your battery lasts.
+
+## Capture is a decision, not a firehose
+
+Passive does not mean indiscriminate. Capture is scoped: it follows the app
+and window you are actually working in, and it stops where you tell it to stop.
+
+Private windows, password fields, and any app you exclude are never read.
+Pausing is one click in the notch, and while it is paused nothing enters
+memory. Those exclusions apply before anything is written, not as a filter
+over data already stored — the difference matters, because the second kind of
+promise breaks the moment there is a bug in the filter.
+
+## What is actually stored
+
+Three things: the text, where it came from, and when. Every entry keeps a link
+back to the event that produced it, which is what lets ShogunAI answer with
+"you decided this on Tuesday at 14:20, in the design doc" instead of a
+confident sentence with no receipts.
+
+Memory is tiered by age. The last day stays in memory for instant recall, the
+last month stays queryable in full detail, and everything older is compressed
+and kept for the long haul. You get answers about this morning at conversational
+speed and answers about last quarter without keeping a quarter of raw text hot.
+
+## The part people actually ask about
+
+"Can someone else read it?" It is on your Mac, in an encrypted database. It is
+not synced anywhere by default. There is no server-side copy of your day for
+someone to subpoena, breach, or quietly train on.
+
+"Does anything leave?" Sometimes, for named reasons — a model call to draft a
+reply, a service you explicitly connected. Every one of those is recorded in a
+traceability log you can open: what left, for what purpose, and whether it
+crossed a third party on the way. If we ever route your content through
+someone else, the log says so and the setup asks first.
+
+"What about the things I would rather not keep?" Delete works. Removing an
+entry removes it from search, from the tiered store, and from the context that
+gets assembled for the next action.
+
+The rule underneath all of it is simple. Your day is not a video to be filed
+away. It is a set of facts about what you did, and a system that knows those
+facts — and only those — is both more useful and much easier to trust.

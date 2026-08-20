@@ -21,6 +21,9 @@ server = ["dep:axum", "dep:tokio"]
 
 [dependencies]
 shogun-agents = { path = "../shogun-agents" }
+# Prompt fence for untrusted tool_result bodies (same contract as Agent drafts / Batch chunks).
+# shogun-core cannot be a dep here (core --features db/net--> mcp).
+shogun-redact = { path = "../shogun-redact" }
 # The Memory API applies the same confidence rule as UI reads (FR-API-06); reuse the single
 # implementation in shogun-fusion rather than re-deriving the bands. One-way: mcp → fusion.
 shogun-fusion = { path = "../shogun-fusion" }
@@ -29,6 +32,10 @@ shogun-fusion = { path = "../shogun-fusion" }
 shogun-license = { path = "../shogun-license" }
 # Parse the actions.execute request body (a small JSON action spec).
 serde_json = "1"
+serde = { version = "1", features = ["derive"] }
+sha2 = "0.10"
+subtle = "2.6"
+libc = "0.2"
 # REST server (feature `server`): localhost-bound axum listener over the pure routing layer.
 axum = { version = "0.8", optional = true }
 tokio = { version = "1", optional = true, features = ["rt-multi-thread", "net", "macros", "io-util"] }

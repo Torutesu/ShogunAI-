@@ -19,15 +19,21 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use shogun_agents::approval::ApprovalQueue;
 use shogun_core::daemon::{Clock, Db};
 use shogun_core::db_backend::DbBackend;
-use shogun_core::metrics::{render_snapshots_json_with_lessons, SloRegistry};
+use shogun_core::metrics::{
+    render_snapshots_json_with_lessons_harness_and_sanitizer, SanitizerCounters, SloRegistry,
+};
 use shogun_mcp::memory_api::TokenRegistry;
+use shogun_mcp::memory_api_settings;
+#[cfg(target_os = "macos")]
+use shogun_mcp::memory_api_settings::TOKENS_KEYCHAIN_ACCOUNT;
 use shogun_mcp::server::{bind_local, serve_on, AppState, MetricsSource, DEFAULT_PORT};
 
 /// The live SLO metrics source served at `GET /v1/metrics` (NFR-SLO-00). Wraps the shared
 /// registry the runtime records into; here it starts empty, so every SLO reads as unmeasured until
 /// the notch runtime populates it (silence ≠ success, spec §4.5). The D-6 lesson counters
 /// (active lessons, feedback in the last 7 days) come from the DB; an unreadable DB renders
-/// `lessons.measured:false` in the same convention.
+/// `lessons.measured:false` in the same convention. H1 harness counters (compression + tool loop)
+/// ride next to them: unmeasured until an assemble or loop has run; never prompt text.
 struct RegistryMetrics {
     registry: Arc<Mutex<SloRegistry>>,
     db: Db,
@@ -36,16 +42,36 @@ struct RegistryMetrics {
 impl MetricsSource for RegistryMetrics {
     fn snapshot_json(&self) -> String {
         let lessons = self.db.lesson_counters();
+        let harness = self.db.harness_counters();
+        let snap = shogun_memory::sanitize::snapshot();
+        let sanitizer = SanitizerCounters {
+            events_stripped: snap.events_stripped,
+            chars_removed: snap.chars_removed,
+            instruction_shaped_dropped: snap.instruction_shaped_dropped,
+        };
         self.registry
             .lock()
-            .map(|r| render_snapshots_json_with_lessons(&r.snapshot_all(), lessons))
-            .unwrap_or_else(|_| r#"{"metrics":[],"lessons":{"measured":false}}"#.to_string())
+            .map(|r| {
+                render_snapshots_json_with_lessons_harness_and_sanitizer(
+                    &r.snapshot_all(),
+                    lessons,
+                    harness,
+                    sanitizer,
+                )
+            })
+            .unwrap_or_else(|_| {
+                r#"{"metrics":[],"lessons":{"measured":false},"harness":{"measured":false},"sanitizer":{"events_stripped":0,"chars_removed":0,"instruction_shaped_dropped":0}}"#
+                    .to_string()
+            })
     }
 }
 
 /// Build the metrics source for the API process (empty SLO registry + DB-backed lesson counters).
 fn metrics_source(db: Db) -> Arc<dyn MetricsSource> {
-    Arc::new(RegistryMetrics { registry: Arc::new(Mutex::new(SloRegistry::new())), db })
+    Arc::new(RegistryMetrics {
+        registry: Arc::new(Mutex::new(SloRegistry::new())),
+        db,
+    })
 }
 
 /// A real wall-clock in unix ms (never panics; 0 before the epoch).
@@ -75,13 +101,59 @@ fn db_backend(db: Db) -> DbBackend {
     if let Some(path) = visual_recall_settings_path(&db_path) {
         backend = backend.with_visual_recall_settings_path(path);
     }
-    backend
+    backend.with_memory_api_settings_path(memory_api_settings::resolve_settings_path(&db_path))
+}
+
+fn load_token_registry() -> Result<TokenRegistry, String> {
+    let mut tokens = TokenRegistry::new();
+    #[cfg(target_os = "macos")]
+    {
+        let blob = memory_api_settings::load_token_blob_with_migration(
+            || match shogun_integrations::keychain_store::get_generic_secret(
+                TOKENS_KEYCHAIN_ACCOUNT,
+            ) {
+                Ok(bytes) => Ok(Some(bytes)),
+                Err(error) if error.code() == -25300 => Ok(None),
+                Err(_) => Err("could not read Memory API tokens from Keychain".to_string()),
+            },
+            |bytes| {
+                shogun_integrations::keychain_store::set_generic_secret(
+                    TOKENS_KEYCHAIN_ACCOUNT,
+                    bytes,
+                )
+                .map_err(|_| "could not migrate Memory API token verifiers".to_string())
+            },
+        )?;
+        for token in blob.tokens {
+            tokens.issue_verifier(&token.verifier)?;
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    if let Ok(token) = std::env::var("SHOGUN_API_TOKEN") {
+        if !token.is_empty() {
+            tokens.issue(token);
+        }
+    }
+    Ok(tokens)
+}
+
+fn gate_or_exit(db_path: &str) {
+    if memory_api_settings::require_enabled(&memory_api_settings::resolve_settings_path(db_path))
+        .is_err()
+    {
+        eprintln!("Memory API is disabled. Enable it in SHOGUN Settings > Memory API.");
+        std::process::exit(1);
+    }
 }
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
     let db_path = std::env::var("SHOGUN_DB_PATH").unwrap_or_else(|_| "./shogun.db".to_string());
-    let port = std::env::var("SHOGUN_API_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(DEFAULT_PORT);
+    gate_or_exit(&db_path);
+    let port = std::env::var("SHOGUN_API_PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(DEFAULT_PORT);
 
     let clock = wall_clock();
     let db = Db::open_at_path(&db_path, clock.clone())
@@ -89,10 +161,9 @@ async fn main() -> std::io::Result<()> {
     let metrics = metrics_source(db.clone());
     let backend = Arc::new(db_backend(db));
 
-    let mut tokens = TokenRegistry::new();
-    match std::env::var("SHOGUN_API_TOKEN") {
-        Ok(t) if !t.is_empty() => tokens.issue(t),
-        _ => eprintln!("warning: SHOGUN_API_TOKEN not set — every tool call will be 401 (only /v1/status is open)"),
+    let tokens = load_token_registry().map_err(std::io::Error::other)?;
+    if tokens.is_empty() {
+        eprintln!("warning: no Memory API tokens loaded — every tool call will be 401 (only /v1/status is open)");
     }
 
     let approvals = Arc::new(Mutex::new(ApprovalQueue::new()));
@@ -101,11 +172,20 @@ async fn main() -> std::io::Result<()> {
     // every request so a trial expiring while the server runs locks the next call.
     let plan_source = shogun_mcp::plan_source::FilePlanSource::from_env();
     let plan_clock = clock.clone();
+    let approvals_path = shogun_mcp::approval_store::resolve_store_path(&db_path);
+    let heartbeat_path = shogun_mcp::desktop_heartbeat::resolve_path(&db_path);
     let state = AppState::new(Arc::new(tokens), backend, approvals, clock)
         .with_metrics(metrics)
         .with_entitlements(Arc::new(move || {
             plan_source.resolve(u64::try_from((plan_clock)()).unwrap_or(0))
-        }));
+        }))
+        .with_approvals_path(approvals_path)
+        .with_desktop_running_check(move || {
+            shogun_mcp::desktop_heartbeat::fresh(
+                &heartbeat_path,
+                shogun_mcp::desktop_heartbeat::now_ms(),
+            )
+        });
 
     let listener = bind_local(port).await?;
     let addr = listener.local_addr()?;
@@ -125,7 +205,10 @@ mod tests {
     fn boot_server() -> u16 {
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
             rt.block_on(async move {
                 let db = Db::open_in_memory(wall_clock()).unwrap();
                 let metrics = metrics_source(db.clone());
@@ -133,8 +216,8 @@ mod tests {
                 let mut tokens = TokenRegistry::new();
                 tokens.issue("dev");
                 let approvals = Arc::new(Mutex::new(ApprovalQueue::new()));
-                let state =
-                    AppState::new(Arc::new(tokens), backend, approvals, wall_clock()).with_metrics(metrics);
+                let state = AppState::new(Arc::new(tokens), backend, approvals, wall_clock())
+                    .with_metrics(metrics);
                 let listener = bind_local(0).await.unwrap();
                 let port = listener.local_addr().unwrap().port();
                 tx.send(port).unwrap();
@@ -162,13 +245,31 @@ mod tests {
         assert_eq!(r.status, 401);
 
         // write a note, then search it back — the full write→persist→read loop over the socket
-        let r = request(port, "POST", "/v1/memory/notes", Some("dev"), Some("call Bob about the roadmap")).unwrap();
+        let r = request(
+            port,
+            "POST",
+            "/v1/memory/notes",
+            Some("dev"),
+            Some("call Bob about the roadmap"),
+        )
+        .unwrap();
         assert_eq!(r.status, 202);
         assert!(r.body.contains("\"id\":"));
 
-        let r = request(port, "GET", "/v1/memory/search?q=roadmap", Some("dev"), None).unwrap();
+        let r = request(
+            port,
+            "GET",
+            "/v1/memory/search?q=roadmap",
+            Some("dev"),
+            None,
+        )
+        .unwrap();
         assert_eq!(r.status, 200);
-        assert!(r.body.contains("call Bob about the roadmap"), "search body: {}", r.body);
+        assert!(
+            r.body.contains("call Bob about the roadmap"),
+            "search body: {}",
+            r.body
+        );
 
         // the in-product SLO snapshot is served, open like status (NFR-SLO-00); empty registry ⇒
         // every SLO reads unmeasured, never a false green (spec §4.5).
@@ -176,11 +277,27 @@ mod tests {
         assert_eq!(r.status, 200);
         assert!(r.body.contains("\"metrics\":"), "metrics body: {}", r.body);
         assert!(r.body.contains("NFR-SLO-01"), "metrics body: {}", r.body);
-        assert!(r.body.contains("\"measured\":false"), "unmeasured SLOs must not read as pass: {}", r.body);
+        assert!(
+            r.body.contains("\"measured\":false"),
+            "unmeasured SLOs must not read as pass: {}",
+            r.body
+        );
         // the D-6 lesson counters ride on the same surface: a live DB reports real (zero) counts
         assert!(
-            r.body.contains(r#""lessons":{"active_lessons":0,"feedback_events_last_7d":0,"measured":true}"#),
+            r.body.contains(
+                r#""lessons":{"active_lessons":0,"feedback_events_last_7d":0,"measured":true}"#
+            ),
             "lesson counters missing: {}",
+            r.body
+        );
+        assert!(
+            r.body.contains(r#""harness":{"measured":false}"#),
+            "unmeasured harness must not read as zeros: {}",
+            r.body
+        );
+        assert!(
+            r.body.contains(r#""sanitizer":{"events_stripped":"#),
+            "sanitizer counts missing: {}",
             r.body
         );
 
@@ -198,6 +315,10 @@ mod tests {
         .unwrap();
         assert_eq!(r.status, 501);
         assert!(r.body.contains("no_approval_surface"), "body: {}", r.body);
-        assert!(!r.body.contains("\"pending\":true"), "must not read as accepted: {}", r.body);
+        assert!(
+            !r.body.contains("\"pending\":true"),
+            "must not read as accepted: {}",
+            r.body
+        );
     }
 }

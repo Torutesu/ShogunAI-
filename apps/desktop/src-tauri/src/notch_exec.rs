@@ -21,7 +21,8 @@ pub mod mac {
     use objc2::{class, msg_send};
     use objc2_foundation::NSString;
     use shogun_agents::engine::{
-        ActionId, Disposition, ExecutionEngine, ExecutionObserver, LocalEffector, Outcome, RejectReason,
+        ActionId, Disposition, ExecutionEngine, ExecutionObserver, LocalEffector, Outcome,
+        RejectReason,
     };
     use shogun_core::daemon::Db;
     use shogun_fusion::assemble::ScreenContext;
@@ -44,8 +45,10 @@ pub mod mac {
         // `defaultUserNotificationCenter` is get-rule (not released). NSString refs stay alive
         // across the calls that borrow them.
         unsafe {
-            let center: *mut AnyObject =
-                msg_send![class!(NSUserNotificationCenter), defaultUserNotificationCenter];
+            let center: *mut AnyObject = msg_send![
+                class!(NSUserNotificationCenter),
+                defaultUserNotificationCenter
+            ];
             if center.is_null() {
                 return Err("no notification center (unbundled process?)".into());
             }
@@ -224,7 +227,11 @@ pub mod mac {
 
     /// Build the engine for Tauri state (called once in setup).
     pub fn new_engine(db: Db) -> NotchEngine {
-        Mutex::new(ExecutionEngine::new(NotchEffector::new(db), NotchObserver, CONFIRM_TIMEOUT_MS))
+        Mutex::new(ExecutionEngine::new(
+            NotchEffector::new(db),
+            NotchObserver,
+            CONFIRM_TIMEOUT_MS,
+        ))
     }
 
     fn now_ms() -> u64 {
@@ -238,13 +245,18 @@ pub mod mac {
     fn current_screen() -> ScreenContext {
         match frontmost_app() {
             Some(front) => {
-                let title = focused_window(front.pid).and_then(|w| w.title()).unwrap_or_default();
-                ScreenContext { app_bundle_id: front.bundle_id, window_title: title, salient: Vec::new() }
+                let title = focused_window(front.pid)
+                    .and_then(|w| w.title())
+                    .unwrap_or_default();
+                ScreenContext {
+                    app_bundle_id: front.bundle_id,
+                    window_title: title,
+                    salient: Vec::new(),
+                }
             }
             None => ScreenContext::default(),
         }
     }
-
 
     /// Tauri command: run the context action at `index` (as shown by `notch_actions`). Re-assembles
     /// the candidates for the current screen and dispatches the Nth. A DraftReply (external
@@ -276,7 +288,12 @@ pub mod mac {
         if let Action::Send(SendAction::SendEmail { to }) = &cand.action {
             let outcome = if !ent.agent_execution {
                 "rejected"
-            } else if spawn_draft_reply(to.clone(), cand.rationale.clone(), db.inner().clone(), &app) {
+            } else if spawn_draft_reply(
+                to.clone(),
+                cand.rationale.clone(),
+                db.inner().clone(),
+                &app,
+            ) {
                 "drafting"
             } else {
                 "failed"
@@ -326,7 +343,7 @@ pub mod mac {
             eprintln!("[exec] draft reply: no approval queue in state");
             return false;
         };
-        let queue = queue.0.clone();
+        let queue = queue.inner().clone();
         let directives = app
             .try_state::<crate::user_config_watch::UserConfigState>()
             .map(|s| s.directives())
@@ -370,7 +387,10 @@ pub mod mac {
             return;
         };
         let cache = db.context_actions(current_screen(), None);
-        eprintln!("[selftest] {} context action(s) for the current screen:", cache.actions.len());
+        eprintln!(
+            "[selftest] {} context action(s) for the current screen:",
+            cache.actions.len()
+        );
         for (i, a) in cache.actions.iter().enumerate() {
             // Level + discriminant only: the Action Debug carries captured text
             // (ShowNotification/CopyToClipboard payloads), and rationale derives from it.
@@ -391,7 +411,9 @@ pub mod mac {
                     eprintln!("[selftest] submitted top action → {:?}", sub.disposition);
                 }
             }
-            (None, _) => eprintln!("[selftest] no gated actions yet (capture more promise/loop text)"),
+            (None, _) => {
+                eprintln!("[selftest] no gated actions yet (capture more promise/loop text)")
+            }
             _ => {}
         }
     }

@@ -25,6 +25,8 @@ pub enum CliError {
     MissingArgument(&'static str),
     /// An id argument wasn't an integer.
     BadId(String),
+    /// Visual Recall retention is finite and bounded.
+    BadRetention(String),
     /// The subcommand isn't recognised.
     UnknownCommand(String),
     /// A recognised subcommand got a sub-argument it doesn't understand.
@@ -37,6 +39,9 @@ impl CliError {
             CliError::MissingFlagValue(f) => format!("flag `{f}` needs a value"),
             CliError::MissingArgument(a) => format!("missing argument: {a}"),
             CliError::BadId(s) => format!("invalid id: `{s}` (expected an integer)"),
+            CliError::BadRetention(s) => {
+                format!("invalid retention: `{s}` (expected 1–3650 days)")
+            }
             CliError::UnknownCommand(c) => format!("unknown command: `{c}` (try `shogun help`)"),
             CliError::UnknownSubcommand { command, got } => {
                 format!("unknown `{command}` subcommand: `{got}` (expected list|get)")
@@ -58,7 +63,9 @@ pub fn parse(args: &[String]) -> Result<Invocation, CliError> {
         let arg = args[i].as_str();
         match arg {
             "--token" => {
-                let v = args.get(i + 1).ok_or(CliError::MissingFlagValue("--token"))?;
+                let v = args
+                    .get(i + 1)
+                    .ok_or(CliError::MissingFlagValue("--token"))?;
                 token = Some(v.clone());
                 i += 2;
             }
@@ -82,7 +89,12 @@ pub fn parse(args: &[String]) -> Result<Invocation, CliError> {
     }
 
     let command = parse_command(&positionals, no_screen)?;
-    Ok(Invocation { command, token, json, include_low })
+    Ok(Invocation {
+        command,
+        token,
+        json,
+        include_low,
+    })
 }
 
 /// A `list` / `get <id>` sub-grammar shared by the state nouns.
@@ -91,10 +103,15 @@ fn parse_list_or_get(command: &'static str, rest: &[String]) -> Result<ListOrGet
         None | Some("list") => Ok(ListOrGet::List),
         Some("get") => {
             let id_str = rest.get(1).ok_or(CliError::MissingArgument("<id>"))?;
-            let id = id_str.parse::<i64>().map_err(|_| CliError::BadId(id_str.clone()))?;
+            let id = id_str
+                .parse::<i64>()
+                .map_err(|_| CliError::BadId(id_str.clone()))?;
             Ok(ListOrGet::Get { id })
         }
-        Some(other) => Err(CliError::UnknownSubcommand { command, got: other.to_string() }),
+        Some(other) => Err(CliError::UnknownSubcommand {
+            command,
+            got: other.to_string(),
+        }),
     }
 }
 
@@ -109,14 +126,19 @@ fn parse_command(positionals: &[String], no_screen: bool) -> Result<Command, Cli
             let query = join(rest).ok_or(CliError::MissingArgument("<query>"))?;
             Ok(Command::Search { query })
         }
-        "context" => Ok(Command::Context { include_screen: !no_screen }),
+        "context" => Ok(Command::Context {
+            include_screen: !no_screen,
+        }),
         "pack" => {
             let query = join(rest).ok_or(CliError::MissingArgument("<query>"))?;
             Ok(Command::Pack { query })
         }
         "people" => Ok(Command::People(parse_list_or_get("people", rest)?)),
         "projects" => Ok(Command::Projects(parse_list_or_get("projects", rest)?)),
-        "commitments" => Ok(Command::Commitments(parse_list_or_get("commitments", rest)?)),
+        "commitments" => Ok(Command::Commitments(parse_list_or_get(
+            "commitments",
+            rest,
+        )?)),
         "open-loops" => Ok(Command::OpenLoops(parse_list_or_get("open-loops", rest)?)),
         "note" => {
             let text = join(rest).ok_or(CliError::MissingArgument("<text>"))?;
@@ -131,6 +153,20 @@ fn parse_command(positionals: &[String], no_screen: bool) -> Result<Command, Cli
             let agent = join(rest).ok_or(CliError::MissingArgument("<action-json>"))?;
             Ok(Command::Run { agent })
         }
+        "actions" => match rest.first().map(String::as_str) {
+            Some("poll") => {
+                let id = rest
+                    .get(1)
+                    .ok_or(CliError::MissingArgument("<approval_id>"))?;
+                Ok(Command::ActionsPoll {
+                    approval_id: id.parse().map_err(|_| CliError::BadId(id.clone()))?,
+                })
+            }
+            other => Err(CliError::UnknownSubcommand {
+                command: "actions",
+                got: other.unwrap_or("").to_string(),
+            }),
+        },
         "api" => match rest.first().map(String::as_str) {
             Some("status") => Ok(Command::ApiStatus),
             other => Err(CliError::UnknownSubcommand {
@@ -139,6 +175,16 @@ fn parse_command(positionals: &[String], no_screen: bool) -> Result<Command, Cli
             }),
         },
         "metrics" => Ok(Command::Metrics),
+        "whoami" => Ok(Command::Whoami),
+        "profile" => match rest.first().map(String::as_str) {
+            Some("set") => Ok(Command::ProfileSet {
+                body: join(&rest[1..]).ok_or(CliError::MissingArgument("<json>"))?,
+            }),
+            other => Err(CliError::UnknownSubcommand {
+                command: "profile",
+                got: other.unwrap_or("").to_string(),
+            }),
+        },
         "wrap" => Ok(Command::Wrap),
         "onboarding" => Ok(Command::Onboarding),
         "lessons" => parse_lessons(rest),
@@ -149,7 +195,10 @@ fn parse_command(positionals: &[String], no_screen: bool) -> Result<Command, Cli
                 Some("show") => ConfigAction::Show,
                 Some("validate") => ConfigAction::Validate,
                 Some(other) => {
-                    return Err(CliError::UnknownSubcommand { command: "config", got: other.to_string() })
+                    return Err(CliError::UnknownSubcommand {
+                        command: "config",
+                        got: other.to_string(),
+                    })
                 }
                 None => return Err(CliError::MissingArgument("path|show|validate")),
             };
@@ -163,13 +212,22 @@ fn parse_lessons(rest: &[String]) -> Result<Command, CliError> {
     use crate::command::LessonsCommand;
     let id_arg = |rest: &[String]| -> Result<i64, CliError> {
         let id_str = rest.get(1).ok_or(CliError::MissingArgument("<id>"))?;
-        id_str.parse::<i64>().map_err(|_| CliError::BadId(id_str.clone()))
+        id_str
+            .parse::<i64>()
+            .map_err(|_| CliError::BadId(id_str.clone()))
     };
     match rest.first().map(String::as_str) {
         None | Some("list") => Ok(Command::Lessons(LessonsCommand::List)),
-        Some("enable") => Ok(Command::Lessons(LessonsCommand::Enable { id: id_arg(rest)? })),
-        Some("disable") => Ok(Command::Lessons(LessonsCommand::Disable { id: id_arg(rest)? })),
-        Some(other) => Err(CliError::UnknownSubcommand { command: "lessons", got: other.to_string() }),
+        Some("enable") => Ok(Command::Lessons(LessonsCommand::Enable {
+            id: id_arg(rest)?,
+        })),
+        Some("disable") => Ok(Command::Lessons(LessonsCommand::Disable {
+            id: id_arg(rest)?,
+        })),
+        Some(other) => Err(CliError::UnknownSubcommand {
+            command: "lessons",
+            got: other.to_string(),
+        }),
     }
 }
 
@@ -180,6 +238,15 @@ fn parse_visual_recall(rest: &[String]) -> Result<Command, CliError> {
         Some("status") => Ok(Command::VisualRecall(VisualRecallCommand::Status)),
         Some("enable") => Ok(Command::VisualRecall(VisualRecallCommand::Enable)),
         Some("disable") => Ok(Command::VisualRecall(VisualRecallCommand::Disable)),
+        Some("retention") => {
+            let raw = rest.get(1).ok_or(CliError::MissingArgument("<days>"))?;
+            let days = raw
+                .parse::<u32>()
+                .ok()
+                .filter(|days| (1..=3_650).contains(days))
+                .ok_or_else(|| CliError::BadRetention(raw.clone()))?;
+            Ok(Command::VisualRecall(VisualRecallCommand::Retention { days }))
+        }
         Some("search") => {
             let mut from_ms = None;
             let mut to_ms = None;
@@ -188,12 +255,16 @@ fn parse_visual_recall(rest: &[String]) -> Result<Command, CliError> {
             while i < rest.len() {
                 match rest[i].as_str() {
                     "--from-ms" => {
-                        let v = rest.get(i + 1).ok_or(CliError::MissingFlagValue("--from-ms"))?;
+                        let v = rest
+                            .get(i + 1)
+                            .ok_or(CliError::MissingFlagValue("--from-ms"))?;
                         from_ms = Some(v.parse().map_err(|_| CliError::BadId(v.clone()))?);
                         i += 2;
                     }
                     "--to-ms" => {
-                        let v = rest.get(i + 1).ok_or(CliError::MissingFlagValue("--to-ms"))?;
+                        let v = rest
+                            .get(i + 1)
+                            .ok_or(CliError::MissingFlagValue("--to-ms"))?;
                         to_ms = Some(v.parse().map_err(|_| CliError::BadId(v.clone()))?);
                         i += 2;
                     }
@@ -213,18 +284,28 @@ fn parse_visual_recall(rest: &[String]) -> Result<Command, CliError> {
         Some("frame") => match rest.get(1).map(String::as_str) {
             Some("get") => {
                 let id_str = rest.get(2).ok_or(CliError::MissingArgument("<id>"))?;
-                let id = id_str.parse().map_err(|_| CliError::BadId(id_str.clone()))?;
+                let id = id_str
+                    .parse()
+                    .map_err(|_| CliError::BadId(id_str.clone()))?;
                 Ok(Command::VisualRecall(VisualRecallCommand::FrameGet { id }))
             }
             Some("rescan") => {
                 let id_str = rest.get(2).ok_or(CliError::MissingArgument("<id>"))?;
-                let id = id_str.parse().map_err(|_| CliError::BadId(id_str.clone()))?;
-                Ok(Command::VisualRecall(VisualRecallCommand::FrameRescan { id }))
+                let id = id_str
+                    .parse()
+                    .map_err(|_| CliError::BadId(id_str.clone()))?;
+                Ok(Command::VisualRecall(VisualRecallCommand::FrameRescan {
+                    id,
+                }))
             }
             Some("delete") => {
                 let id_str = rest.get(2).ok_or(CliError::MissingArgument("<id>"))?;
-                let id = id_str.parse().map_err(|_| CliError::BadId(id_str.clone()))?;
-                Ok(Command::VisualRecall(VisualRecallCommand::FrameDelete { id }))
+                let id = id_str
+                    .parse()
+                    .map_err(|_| CliError::BadId(id_str.clone()))?;
+                Ok(Command::VisualRecall(VisualRecallCommand::FrameDelete {
+                    id,
+                }))
             }
             other => Err(CliError::UnknownSubcommand {
                 command: "visual-recall frame",
@@ -263,12 +344,20 @@ mod tests {
     #[test]
     fn search_joins_multi_word_query() {
         let inv = parse(&v(&["search", "budget", "review"])).unwrap();
-        assert_eq!(inv.command, Command::Search { query: "budget review".into() });
+        assert_eq!(
+            inv.command,
+            Command::Search {
+                query: "budget review".into()
+            }
+        );
     }
 
     #[test]
     fn search_without_query_errors() {
-        assert_eq!(parse(&v(&["search"])), Err(CliError::MissingArgument("<query>")));
+        assert_eq!(
+            parse(&v(&["search"])),
+            Err(CliError::MissingArgument("<query>"))
+        );
     }
 
     #[test]
@@ -281,22 +370,38 @@ mod tests {
 
     #[test]
     fn token_without_value_errors() {
-        assert_eq!(parse(&v(&["search", "x", "--token"])), Err(CliError::MissingFlagValue("--token")));
+        assert_eq!(
+            parse(&v(&["search", "x", "--token"])),
+            Err(CliError::MissingFlagValue("--token"))
+        );
     }
 
     #[test]
     fn context_no_screen_flag() {
-        assert_eq!(parse(&v(&["context"])).unwrap().command, Command::Context { include_screen: true });
+        assert_eq!(
+            parse(&v(&["context"])).unwrap().command,
+            Command::Context {
+                include_screen: true
+            }
+        );
         assert_eq!(
             parse(&v(&["context", "--no-screen"])).unwrap().command,
-            Command::Context { include_screen: false }
+            Command::Context {
+                include_screen: false
+            }
         );
     }
 
     #[test]
     fn state_noun_list_and_get() {
-        assert_eq!(parse(&v(&["people"])).unwrap().command, Command::People(ListOrGet::List));
-        assert_eq!(parse(&v(&["people", "list"])).unwrap().command, Command::People(ListOrGet::List));
+        assert_eq!(
+            parse(&v(&["people"])).unwrap().command,
+            Command::People(ListOrGet::List)
+        );
+        assert_eq!(
+            parse(&v(&["people", "list"])).unwrap().command,
+            Command::People(ListOrGet::List)
+        );
         assert_eq!(
             parse(&v(&["people", "get", "42"])).unwrap().command,
             Command::People(ListOrGet::Get { id: 42 })
@@ -305,27 +410,44 @@ mod tests {
 
     #[test]
     fn get_without_id_errors_and_bad_id_errors() {
-        assert_eq!(parse(&v(&["projects", "get"])), Err(CliError::MissingArgument("<id>")));
-        assert_eq!(parse(&v(&["projects", "get", "x"])), Err(CliError::BadId("x".into())));
+        assert_eq!(
+            parse(&v(&["projects", "get"])),
+            Err(CliError::MissingArgument("<id>"))
+        );
+        assert_eq!(
+            parse(&v(&["projects", "get", "x"])),
+            Err(CliError::BadId("x".into()))
+        );
     }
 
     #[test]
     fn unknown_subcommand_of_state_noun() {
         assert_eq!(
             parse(&v(&["commitments", "delete"])),
-            Err(CliError::UnknownSubcommand { command: "commitments", got: "delete".into() })
+            Err(CliError::UnknownSubcommand {
+                command: "commitments",
+                got: "delete".into()
+            })
         );
     }
 
     #[test]
     fn note_and_propose_join_text() {
         assert_eq!(
-            parse(&v(&["note", "call", "Alice", "tomorrow"])).unwrap().command,
-            Command::Note { text: "call Alice tomorrow".into() }
+            parse(&v(&["note", "call", "Alice", "tomorrow"]))
+                .unwrap()
+                .command,
+            Command::Note {
+                text: "call Alice tomorrow".into()
+            }
         );
         assert_eq!(
-            parse(&v(&["propose", "add", "commitment"])).unwrap().command,
-            Command::Propose { description: "add commitment".into() }
+            parse(&v(&["propose", "add", "commitment"]))
+                .unwrap()
+                .command,
+            Command::Propose {
+                description: "add commitment".into()
+            }
         );
     }
 
@@ -338,8 +460,14 @@ mod tests {
     #[test]
     fn lessons_grammar_parses_list_enable_disable() {
         use crate::command::LessonsCommand;
-        assert_eq!(parse(&v(&["lessons"])).unwrap().command, Command::Lessons(LessonsCommand::List));
-        assert_eq!(parse(&v(&["lessons", "list"])).unwrap().command, Command::Lessons(LessonsCommand::List));
+        assert_eq!(
+            parse(&v(&["lessons"])).unwrap().command,
+            Command::Lessons(LessonsCommand::List)
+        );
+        assert_eq!(
+            parse(&v(&["lessons", "list"])).unwrap().command,
+            Command::Lessons(LessonsCommand::List)
+        );
         assert_eq!(
             parse(&v(&["lessons", "enable", "7"])).unwrap().command,
             Command::Lessons(LessonsCommand::Enable { id: 7 })
@@ -348,43 +476,100 @@ mod tests {
             parse(&v(&["lessons", "disable", "7"])).unwrap().command,
             Command::Lessons(LessonsCommand::Disable { id: 7 })
         );
-        assert_eq!(parse(&v(&["lessons", "enable"])), Err(CliError::MissingArgument("<id>")));
-        assert_eq!(parse(&v(&["lessons", "disable", "x"])), Err(CliError::BadId("x".into())));
+        assert_eq!(
+            parse(&v(&["lessons", "enable"])),
+            Err(CliError::MissingArgument("<id>"))
+        );
+        assert_eq!(
+            parse(&v(&["lessons", "disable", "x"])),
+            Err(CliError::BadId("x".into()))
+        );
         assert_eq!(
             parse(&v(&["lessons", "delete"])),
-            Err(CliError::UnknownSubcommand { command: "lessons", got: "delete".into() })
+            Err(CliError::UnknownSubcommand {
+                command: "lessons",
+                got: "delete".into()
+            })
         );
     }
 
     #[test]
+    fn visual_recall_retention_is_finite_and_bounded() {
+        use crate::command::VisualRecallCommand;
+        assert_eq!(
+            parse(&v(&["visual-recall", "retention", "14"]))
+                .unwrap()
+                .command,
+            Command::VisualRecall(VisualRecallCommand::Retention { days: 14 })
+        );
+        for invalid in ["0", "3651", "forever", "-1"] {
+            assert_eq!(
+                parse(&v(&["visual-recall", "retention", invalid])),
+                Err(CliError::BadRetention(invalid.into()))
+            );
+        }
+    }
+
+    #[test]
     fn api_status_and_unknown() {
-        assert_eq!(parse(&v(&["api", "status"])).unwrap().command, Command::ApiStatus);
-        assert!(matches!(parse(&v(&["api", "whoami"])), Err(CliError::UnknownSubcommand { .. })));
-        assert_eq!(parse(&v(&["frobnicate"])), Err(CliError::UnknownCommand("frobnicate".into())));
+        assert_eq!(
+            parse(&v(&["api", "status"])).unwrap().command,
+            Command::ApiStatus
+        );
+        assert!(matches!(
+            parse(&v(&["api", "whoami"])),
+            Err(CliError::UnknownSubcommand { .. })
+        ));
+        assert_eq!(parse(&v(&["whoami"])).unwrap().command, Command::Whoami);
+        assert_eq!(
+            parse(&v(&["profile", "set", r#"{"role":"PM"}"#]))
+                .unwrap()
+                .command,
+            Command::ProfileSet {
+                body: r#"{"role":"PM"}"#.into()
+            }
+        );
+        assert_eq!(
+            parse(&v(&["frobnicate"])),
+            Err(CliError::UnknownCommand("frobnicate".into()))
+        );
     }
 
     #[test]
     fn run_takes_the_action_json() {
         assert_eq!(
-            parse(&v(&["run", r#"{"kind":"local_search","query":"x"}"#])).unwrap().command,
-            Command::Run { agent: r#"{"kind":"local_search","query":"x"}"#.into() }
+            parse(&v(&["run", r#"{"kind":"local_search","query":"x"}"#]))
+                .unwrap()
+                .command,
+            Command::Run {
+                agent: r#"{"kind":"local_search","query":"x"}"#.into()
+            }
         );
-        assert_eq!(parse(&v(&["run"])), Err(CliError::MissingArgument("<action-json>")));
+        assert_eq!(
+            parse(&v(&["run"])),
+            Err(CliError::MissingArgument("<action-json>"))
+        );
     }
 
     #[test]
     fn parses_config_actions() {
         assert_eq!(
             parse(&v(&["config", "validate"])).unwrap().command,
-            Command::Config { action: ConfigAction::Validate }
+            Command::Config {
+                action: ConfigAction::Validate
+            }
         );
         assert_eq!(
             parse(&v(&["config", "path"])).unwrap().command,
-            Command::Config { action: ConfigAction::Path }
+            Command::Config {
+                action: ConfigAction::Path
+            }
         );
         assert_eq!(
             parse(&v(&["config", "show"])).unwrap().command,
-            Command::Config { action: ConfigAction::Show }
+            Command::Config {
+                action: ConfigAction::Show
+            }
         );
         assert_eq!(
             parse(&v(&["config"])),
@@ -392,7 +577,10 @@ mod tests {
         );
         assert_eq!(
             parse(&v(&["config", "frobnicate"])),
-            Err(CliError::UnknownSubcommand { command: "config", got: "frobnicate".into() })
+            Err(CliError::UnknownSubcommand {
+                command: "config",
+                got: "frobnicate".into()
+            })
         );
     }
 }

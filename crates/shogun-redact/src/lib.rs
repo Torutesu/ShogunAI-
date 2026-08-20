@@ -20,6 +20,27 @@
 //! Pure and dependency-free: hand-rolled scanning rather than a regex engine, so it is exhaustively
 //! testable and adds nothing to the build. Lives in its own crate so it can be shared without
 //! pulling in rusqlite/sqlcipher (which shogun-memory carries).
+//!
+//! [`strip_hidden`] is the sibling on the same write path: hidden format / bidi / noncharacters
+//! are removed *before* [`redact`] so a secret split by ZWSP still matches, and so those runes
+//! never land in `event_log.content`.
+//!
+//! [`fence_untrusted`] is the prompt-side sibling: untrusted text is wrapped so a model cannot
+//! treat it as instructions (Agent drafts, Batch Classify / Summarize, tool_result).
+//!
+//! [`instruction_shaped`] is the persist-gate sibling: classifier / summarizer output that is
+//! an instruction *to the assistant* is dropped before it becomes a state row, day-summary, or
+//! Recap decision. Deterministic. No LLM on this path.
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
+
+pub mod hidden;
+pub use hidden::{is_hidden, strip_hidden, HiddenStrip};
+
+pub mod fence;
+pub use fence::fence_untrusted;
+
+pub mod instruction;
+pub use instruction::{dropped_count, instruction_shaped, reject_instruction_shaped};
 
 /// What replaces a matched secret. Fixed-width so the shape of the surrounding text survives.
 const MASK: &str = "[redacted]";

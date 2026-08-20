@@ -42,6 +42,8 @@ pub enum Command {
     Propose { description: String },
     /// `shogun run <agent>` → launch a preset agent (level follows the action).
     Run { agent: String },
+    /// `shogun actions poll <approval_id>` returns a durable, body-free L3 outcome.
+    ActionsPoll { approval_id: u64 },
     /// `shogun wrap` → today's Evening Wrap (issue #10, invariant 6 — the notch card as a read).
     Wrap,
     /// `shogun onboarding` → this device's onboarding / first-run setup state (issue #6).
@@ -54,6 +56,10 @@ pub enum Command {
     Lessons(LessonsCommand),
     /// `shogun visual-recall status|enable|disable|search|frame get|frame rescan`
     VisualRecall(VisualRecallCommand),
+    /// `shogun whoami` → profile and compact work summary.
+    Whoami,
+    /// `shogun profile set <json>` → local L1 profile update.
+    ProfileSet { body: String },
     /// `shogun help` / no args.
     Help,
     /// `shogun config path|show|validate`
@@ -74,10 +80,21 @@ pub enum VisualRecallCommand {
     Status,
     Enable,
     Disable,
-    Search { query: String, from_ms: Option<i64>, to_ms: Option<i64> },
-    FrameGet { id: i64 },
-    FrameRescan { id: i64 },
-    FrameDelete { id: i64 },
+    Retention { days: u32 },
+    Search {
+        query: String,
+        from_ms: Option<i64>,
+        to_ms: Option<i64>,
+    },
+    FrameGet {
+        id: i64,
+    },
+    FrameRescan {
+        id: i64,
+    },
+    FrameDelete {
+        id: i64,
+    },
 }
 
 impl Command {
@@ -99,6 +116,7 @@ impl Command {
             Command::Note { .. } => Tool::MemoryAppendNote,
             Command::Propose { .. } => Tool::StateProposeUpdate,
             Command::Run { .. } => Tool::ActionsExecute,
+            Command::ActionsPoll { .. } => return None,
             Command::Wrap => Tool::MemoryGetWrap,
             Command::Onboarding => Tool::DeviceOnboardingGet,
             Command::Lessons(LessonsCommand::List) => Tool::LessonsList,
@@ -107,11 +125,26 @@ impl Command {
             Command::VisualRecall(VisualRecallCommand::Status) => Tool::VisualRecallStatus,
             Command::VisualRecall(VisualRecallCommand::Enable) => Tool::VisualRecallSetEnabled,
             Command::VisualRecall(VisualRecallCommand::Disable) => Tool::VisualRecallSetEnabled,
-            Command::VisualRecall(VisualRecallCommand::Search { .. }) => Tool::VisualRecallSearchFrames,
-            Command::VisualRecall(VisualRecallCommand::FrameGet { .. }) => Tool::VisualRecallGetFrame,
-            Command::VisualRecall(VisualRecallCommand::FrameRescan { .. }) => Tool::VisualRecallRescanFrame,
-            Command::VisualRecall(VisualRecallCommand::FrameDelete { .. }) => Tool::VisualRecallDeleteFrame,
-            Command::ApiStatus | Command::Metrics | Command::Help | Command::Config { .. } => return None,
+            Command::VisualRecall(VisualRecallCommand::Retention { .. }) => {
+                Tool::VisualRecallSetRetention
+            }
+            Command::VisualRecall(VisualRecallCommand::Search { .. }) => {
+                Tool::VisualRecallSearchFrames
+            }
+            Command::VisualRecall(VisualRecallCommand::FrameGet { .. }) => {
+                Tool::VisualRecallGetFrame
+            }
+            Command::VisualRecall(VisualRecallCommand::FrameRescan { .. }) => {
+                Tool::VisualRecallRescanFrame
+            }
+            Command::VisualRecall(VisualRecallCommand::FrameDelete { .. }) => {
+                Tool::VisualRecallDeleteFrame
+            }
+            Command::Whoami => Tool::ProfileWhoami,
+            Command::ProfileSet { .. } => Tool::ProfileSet,
+            Command::ApiStatus | Command::Metrics | Command::Help | Command::Config { .. } => {
+                return None
+            }
         })
     }
 }
@@ -134,6 +167,7 @@ COMMANDS:
     note <text>               Append a user note            (L1)
     propose <description>     Propose a state change        (L2)
     run <agent>               Launch a preset agent         (level follows action)
+    actions poll <id>         Poll L3 approval status
     wrap                      Today's Evening Wrap (outcome, still open, tomorrow)
     onboarding                This device's first-run setup state
     api status                Show the running REST port
@@ -144,10 +178,13 @@ COMMANDS:
     visual-recall status      Visual recall status + frame stats
     visual-recall enable      Turn visual recall on (L1)
     visual-recall disable     Turn passive recall off + purge auto frames (L1)
+    visual-recall retention <days>  Keep frames 1–3650 days (L1)
     visual-recall search <q> [--from-ms N] [--to-ms N]  Search stored screen frames
     visual-recall frame get <id>           Frame metadata + OCR text
     visual-recall frame rescan <id>        Re-OCR stored JPEG
     visual-recall frame delete <id>        Delete one stored frame
+    whoami                    Profile + compact work summary
+    profile set <json>        Update profile preferences   (L1)
     config path|show|validate Show the Shougun.md path, parsed config, or validation
     help                      This help
 
@@ -166,7 +203,12 @@ mod tests {
         use shogun_mcp::memory_api::{tool_level, ApiLevel};
         for (cmd, _) in [
             (Command::Search { query: "x".into() }, ()),
-            (Command::Context { include_screen: true }, ()),
+            (
+                Command::Context {
+                    include_screen: true,
+                },
+                (),
+            ),
             (Command::People(ListOrGet::List), ()),
             (Command::Commitments(ListOrGet::Get { id: 1 }), ()),
         ] {
@@ -179,26 +221,45 @@ mod tests {
     fn note_is_l1_propose_is_l2_run_is_per_action() {
         use shogun_agents::permission::Level;
         use shogun_mcp::memory_api::{tool_level, ApiLevel};
-        assert_eq!(tool_level(Command::Note { text: "n".into() }.tool().unwrap()), ApiLevel::Write(Level::L1));
         assert_eq!(
-            tool_level(Command::Propose { description: "p".into() }.tool().unwrap()),
+            tool_level(Command::Note { text: "n".into() }.tool().unwrap()),
+            ApiLevel::Write(Level::L1)
+        );
+        assert_eq!(
+            tool_level(
+                Command::Propose {
+                    description: "p".into()
+                }
+                .tool()
+                .unwrap()
+            ),
             ApiLevel::Write(Level::L2)
         );
-        assert_eq!(tool_level(Command::Run { agent: "a".into() }.tool().unwrap()), ApiLevel::PerAction);
+        assert_eq!(
+            tool_level(Command::Run { agent: "a".into() }.tool().unwrap()),
+            ApiLevel::PerAction
+        );
     }
 
     #[test]
     fn local_commands_have_no_tool() {
         assert!(Command::ApiStatus.tool().is_none());
         assert!(Command::Help.tool().is_none());
-        assert!(Command::Config { action: ConfigAction::Path }.tool().is_none());
+        assert!(Command::Config {
+            action: ConfigAction::Path
+        }
+        .tool()
+        .is_none());
     }
 
     #[test]
     fn lessons_commands_map_to_the_lessons_tools_at_ui_levels() {
         use shogun_agents::permission::Level;
         use shogun_mcp::memory_api::{tool_level, ApiLevel};
-        assert_eq!(Command::Lessons(LessonsCommand::List).tool(), Some(Tool::LessonsList));
+        assert_eq!(
+            Command::Lessons(LessonsCommand::List).tool(),
+            Some(Tool::LessonsList)
+        );
         assert_eq!(tool_level(Tool::LessonsList), ApiLevel::Read);
         for cmd in [
             Command::Lessons(LessonsCommand::Enable { id: 1 }),
@@ -211,7 +272,22 @@ mod tests {
 
     #[test]
     fn get_variants_map_to_get_tools() {
-        assert_eq!(Command::People(ListOrGet::Get { id: 3 }).tool(), Some(Tool::StatePeopleGet));
-        assert_eq!(Command::Projects(ListOrGet::List).tool(), Some(Tool::StateProjectsList));
+        assert_eq!(
+            Command::People(ListOrGet::Get { id: 3 }).tool(),
+            Some(Tool::StatePeopleGet)
+        );
+        assert_eq!(
+            Command::Projects(ListOrGet::List).tool(),
+            Some(Tool::StateProjectsList)
+        );
+    }
+
+    #[test]
+    fn retention_maps_to_l1_tool() {
+        use shogun_agents::permission::Level;
+        use shogun_mcp::memory_api::{tool_level, ApiLevel};
+        let command = Command::VisualRecall(VisualRecallCommand::Retention { days: 30 });
+        assert_eq!(command.tool(), Some(Tool::VisualRecallSetRetention));
+        assert_eq!(tool_level(command.tool().unwrap()), ApiLevel::Write(Level::L1));
     }
 }

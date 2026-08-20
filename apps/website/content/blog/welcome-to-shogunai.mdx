@@ -2,25 +2,76 @@
 title: 'Welcome to ShogunAI'
 description: 'Why we are building an operating system for the AI-native individual — memory that captures your day, execution that acts on it.'
 date: '2026-07-10'
-category: 'Press'
+category: 'Ideas'
 author: 'ShogunAI'
+image: '/images/blog/product.jpg'
 ---
 
-## This is a placeholder post
+Every assistant you use starts each conversation from zero. You paste the
+context back in. You re-explain the project, the people, the decision you made
+on Tuesday. Then you copy the answer out and do the work yourself.
 
-Replace this file with real content. Frontmatter above drives the blog
-index card and the article metadata (title, description, date, category,
-author). Reading time is computed automatically.
+That is not an assistant. That is a very articulate blank page.
 
-### A heading
+ShogunAI is the operating system for the AI-native individual. It has two
+layers, and the second one is the point.
 
-Body copy goes here. MDX means you can drop in components later.
+## The memory layer
 
-- Point one
-- Point two
-- Point three
+ShogunAI builds a model of your work while you work. Not a folder of notes you
+have to maintain — a running picture of what you read, wrote, and decided,
+assembled passively in the background and stored on your Mac.
 
-> A pull quote to break up the page.
+It captures text through the accessibility layer macOS already exposes to
+screen readers. It is not a screen recorder. There are no screenshots sitting
+in a folder, no video timeline, no audio files. What gets stored is text and
+where it came from.
 
-More paragraphs follow. This frame exists so the routing, layout, and SEO
-metadata are wired end-to-end before the words are written.
+That distinction is the whole design, and we wrote more about it in
+[Passive memory, not screenshots](/blog/passive-memory-not-screenshots).
+
+## The execution layer
+
+Memory that only answers questions is a search box with better manners. The
+reason to know what happened in your day is to finish what it left open.
+
+So ShogunAI reads its own memory and does the work: drafts the follow-up you
+said you would send, prepares the brief for the call you have in an hour,
+files the thing you forgot to file. It reaches your tools through their own
+APIs, and anything that leaves your machine — a sent email, a posted message,
+a created event — stops for your explicit approval first.
+
+We wrote about where those gates sit in
+[The execution layer](/blog/the-execution-layer).
+
+## Why both, why now
+
+Three things became true at roughly the same time. Models got good enough to
+act on messy real-world context instead of just summarizing it. Tools grew a
+common protocol layer, so an agent can reach twenty of them without twenty
+bespoke integrations. And laptops got fast enough to run capture, indexing,
+and search locally without you noticing.
+
+In 2007 the iPhone folded the phone, the camera, the browser, and the music
+player into one device. Memory, execution, and data sovereignty are having
+that moment now. They arrive as separate products today. They belong in one
+system.
+
+## What we will not do
+
+Some constraints are worth stating before we ship anything, because they are
+the parts that get quietly traded away later:
+
+- **No screenshots, no recordings.** Text and provenance, not pixels and
+  waveforms. The one narrow exception is opt-in and time-boxed, and we
+  [explain it here](/blog/visual-recall).
+- **Your machine is the default.** Memory lives locally. What goes out goes
+  out for a named reason, and the log tells you which reason.
+- **Nothing sends itself.** Automatic actions are the reversible, local ones.
+  Anything another human will see waits for you.
+- **No free tier funded by your data.** Every plan is a paid plan, starting
+  with a seven-day full trial. You are the customer, which is the only
+  arrangement that keeps the above three honest.
+
+ShogunAI is in private beta on macOS. If your day is full of context that
+nobody but you is holding, it was built for you.

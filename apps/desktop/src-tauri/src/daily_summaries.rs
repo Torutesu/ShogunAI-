@@ -38,7 +38,10 @@ pub struct Stored {
 }
 
 pub fn state_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
-    app.path().app_data_dir().ok().map(|d| d.join("daily_summaries.json"))
+    app.path()
+        .app_data_dir()
+        .ok()
+        .map(|d| d.join("daily_summaries.json"))
 }
 
 pub fn load(app: &tauri::AppHandle) -> Stored {
@@ -196,7 +199,11 @@ pub mod mac {
             "capture" | "screen_ocr" => {
                 // "com.apple.Safari" → "Safari". Coarse but honest; a wrong-looking label here
                 // beats a lookup table that goes stale.
-                app_bundle_id?.rsplit('.').next().filter(|s| !s.is_empty())?.to_string()
+                app_bundle_id?
+                    .rsplit('.')
+                    .next()
+                    .filter(|s| !s.is_empty())?
+                    .to_string()
             }
             _ => return None,
         })
@@ -234,7 +241,11 @@ pub mod mac {
         let date = shogun_core::daemon::local_date_string(now);
         let (hour, minute) = local_hm(now);
         let which = due(
-            LocalNow { date: &date, hour, minute },
+            LocalNow {
+                date: &date,
+                hour,
+                minute,
+            },
             &stored.settings,
             &stored.seen,
         );
@@ -257,12 +268,20 @@ pub mod mac {
                 }
             }
         }
-        SummaryState { due: due_str, date, settings: stored.settings }
+        SummaryState {
+            due: due_str,
+            date,
+            settings: stored.settings,
+        }
     }
 
     /// The card was opened: advance that side's seen-date so it doesn't re-deliver today.
     #[tauri::command]
-    pub fn mark_summary_seen(which: String, date: String, app: tauri::AppHandle) -> Result<(), String> {
+    pub fn mark_summary_seen(
+        which: String,
+        date: String,
+        app: tauri::AppHandle,
+    ) -> Result<(), String> {
         let which = match which.as_str() {
             "morning" => Which::Morning,
             "evening" => Which::Evening,
@@ -298,9 +317,11 @@ pub mod mac {
     #[tauri::command]
     pub fn evening_wrap(app: tauri::AppHandle) -> Result<WrapView, String> {
         let Some(db) = app.try_state::<Db>() else {
-            return Err("Capture isn't running — the memory store couldn't be opened, so there's \
+            return Err(
+                "Capture isn't running — the memory store couldn't be opened, so there's \
                         no day to sum up yet."
-                .to_string());
+                    .to_string(),
+            );
         };
         let now = db.now_ms();
         let (day_start, tomorrow_end) = shogun_core::daemon::local_wrap_window(now);
@@ -325,7 +346,11 @@ pub mod mac {
                     updated: c.updated,
                 })
                 .collect(),
-            tomorrow_commitments: wrap.tomorrow_commitments.iter().map(|i| brief_item(d, i)).collect(),
+            tomorrow_commitments: wrap
+                .tomorrow_commitments
+                .iter()
+                .map(|i| brief_item(d, i))
+                .collect(),
             loose_ends: wrap.loose_ends.iter().map(|i| brief_item(d, i)).collect(),
         })
     }
@@ -335,9 +360,11 @@ pub mod mac {
     #[tauri::command]
     pub fn morning_card(app: tauri::AppHandle) -> Result<MorningView, String> {
         let Some(db) = app.try_state::<Db>() else {
-            return Err("Capture isn't running — the memory store couldn't be opened, so there's \
+            return Err(
+                "Capture isn't running — the memory store couldn't be opened, so there's \
                         nothing to show yet."
-                .to_string());
+                    .to_string(),
+            );
         };
         let now = db.now_ms();
         let date = shogun_core::daemon::local_date_string(now);
@@ -374,7 +401,11 @@ pub mod mac {
             generated: false,
             charm_line: None,
             today: Vec::new(),
-            commitments_due: brief.commitments_due.iter().map(|i| brief_item(d, i)).collect(),
+            commitments_due: brief
+                .commitments_due
+                .iter()
+                .map(|i| brief_item(d, i))
+                .collect(),
             open_loops: brief.open_loops.iter().map(|i| brief_item(d, i)).collect(),
             what_happened: Vec::new(),
         })
@@ -430,7 +461,11 @@ pub mod mac {
 
     #[tauri::command]
     pub fn summary_state(app: tauri::AppHandle) -> SummaryState {
-        SummaryState { due: None, date: String::new(), settings: load(&app).settings }
+        SummaryState {
+            due: None,
+            date: String::new(),
+            settings: load(&app).settings,
+        }
     }
 
     #[tauri::command]
@@ -501,10 +536,14 @@ mod tests {
         let empty: Stored = serde_json::from_str("{}").unwrap();
         assert_eq!(empty, Stored::default());
         let partial: Stored =
-            serde_json::from_str(r#"{"evening_hour":19,"morning_seen_date":"2026-08-15"}"#).unwrap();
+            serde_json::from_str(r#"{"evening_hour":19,"morning_seen_date":"2026-08-15"}"#)
+                .unwrap();
         assert_eq!(partial.settings.evening_hour, 19);
         assert_eq!(partial.settings.evening_minute, 30);
-        assert_eq!(partial.seen.morning_seen_date.as_deref(), Some("2026-08-15"));
+        assert_eq!(
+            partial.seen.morning_seen_date.as_deref(),
+            Some("2026-08-15")
+        );
         assert!(partial.settings.morning_enabled);
     }
 
@@ -524,8 +563,7 @@ mod tests {
         let mut s = Stored::default();
         s.seen.evening_seen_date = Some("2026-08-15".into());
         s.settings.evening_hour = 18;
-        let back: Stored =
-            serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        let back: Stored = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
         assert_eq!(back, s);
     }
 }

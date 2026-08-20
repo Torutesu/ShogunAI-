@@ -71,7 +71,10 @@ fn trim_transcript(raw: &str) -> String {
 
 /// Kick a Live Summary refresh. Returns immediately; result arrives on `meeting_live_summary`.
 #[tauri::command]
-pub fn meeting_request_live_summary(app: tauri::AppHandle, transcript: String) -> Result<(), String> {
+pub fn meeting_request_live_summary(
+    app: tauri::AppHandle,
+    transcript: String,
+) -> Result<(), String> {
     let trimmed = trim_transcript(&transcript);
     let chars = trimmed.chars().count();
     if chars < MIN_CHARS {
@@ -117,7 +120,9 @@ pub fn meeting_request_live_summary(app: tauri::AppHandle, transcript: String) -
         // Returning silently here blocks Live Summary for the rest of the meeting.
         let (Ok(transport), Ok(rt)) = (
             ReqwestTransport::new(),
-            tokio::runtime::Builder::new_current_thread().enable_all().build(),
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build(),
         ) else {
             eprintln!("[meeting] live summary skipped — transport/runtime unavailable");
             let _ = app2.emit("meeting_live_summary_failed", ());
@@ -132,8 +137,9 @@ pub fn meeting_request_live_summary(app: tauri::AppHandle, transcript: String) -
                 .with_temperature(0.2),
             SUMMARY_PURPOSE,
         );
-        let user = format!(
-            "Meeting transcript so far (speakers labeled when known):\n\n{trimmed}\n\nSummarize the meeting up to this point."
+        let user = shogun_core::llm::fence_untrusted(
+            "Meeting transcript so far (speakers labeled when known). Summarize the meeting up to this point.",
+            &trimmed,
         );
         match rt.block_on(client.complete_with_system(Some(SYSTEM), &user)) {
             Ok(text) => {

@@ -1,0 +1,303 @@
+import type { Metadata } from 'next';
+import { ArrowUpRight } from 'lucide-react';
+import { CTA } from '@/components/sections/CTA';
+import { PageShell } from '@/components/PageShell';
+import { JsonLd, breadcrumbSchema } from '@/components/seo/JsonLd';
+import { PostCard } from '@/components/PostCard';
+import { getI18n } from '@/i18n/server';
+import { isLocale } from '@/i18n/config';
+import { getPost } from '@/lib/blog';
+import { localizedAlternates, siteConfig } from '@/lib/site';
+
+export const metadata: Metadata = {
+  title: 'Market — What investors are saying about the memory & context layer',
+  description:
+    'Sourced public commentary from a16z, Emergence Capital, Kindred Ventures, Wing and others on memory, context and agents as coworkers — and where ShogunAI fits.',
+  alternates: { canonical: '/en/market', languages: localizedAlternates('/market') },
+};
+
+/**
+ * Our own pieces on this category, newest thinking first. Everything the cards
+ * show (title, description, cover, reading time) comes from the posts
+ * themselves via `getPost`, so editing an article updates this page too.
+ */
+const FEATURED_SLUGS = [
+  'altman-on-forgetting',
+  'garry-tan-own-your-intelligence',
+  'seci-for-the-ai-native-individual',
+] as const;
+
+const SOURCES = [
+  ['Your Data Agents Need Context — a16z', 'https://a16z.com/your-data-agents-need-context/'],
+  ['AI Coaching Networks — Emergence Capital', 'https://www.emcap.com/conviction-areas/ai-coaching-networks'],
+  ['Genspark: The Ultimate System of Context — Emergence', 'https://www.emcap.com/thoughts/genspark-the-ultimate-system-of-context'],
+  ['Mem0 raises $24M Series A — PR Newswire', 'https://www.prnewswire.com/news-releases/mem0-raises-24m-series-a-to-build-memory-layer-for-ai-agents-302597157.html'],
+  ['Mem0: Building the Memory Infrastructure for Personalized AI — Kindred Ventures', 'https://kindredventures.com/announcement/mem0-building-the-memory-infrastructure-for-personalized-ai/'],
+  ['The Emerging Agentic Enterprise — MIT SMR / BCG', 'https://sloanreview.mit.edu/projects/the-emerging-agentic-enterprise-how-leaders-must-navigate-a-new-age-of-ai/'],
+  ['The Rise of the Agentic Workforce — Wing VC', 'https://www.wing.vc/content/the-rise-of-the-agentic-workforce'],
+] as const;
+
+const content = {
+  en: {
+    eyebrow: 'Market',
+    title: 'Memory and context are becoming their own market.',
+    intro: [
+      [
+        'For most of the last two years the bottleneck was the model. It isn’t any more. The funds backing agent infrastructure have converged on a different constraint: an agent is only as useful as the context it can reach, and almost nobody’s context is reachable.',
+        'The context isn’t missing. It is in the windows you had open on Tuesday, in the thread where the decision was actually made, in the meeting where someone promised a date. None of it is written down anywhere an agent can read, so every agent starts each morning from zero and asks you to explain your own job again. The money below is chasing that gap, not a better model.',
+      ],
+      [
+        'Most of the commentary is written from the fund’s side of the table: a category forming, a budget moving. We read it from the desk. If context is the constraint, the fix has to sit where the work already happens — on your machine, inside your day — and it cannot ask you to keep a second set of notes to feed it.',
+        'What changes when the context is reachable isn’t the chat window. It’s the morning: the thread you would have reread arrives as what you owe and to whom, the promise you made on Thursday comes back before anyone has to ask, and work that used to open with twenty minutes of reconstruction opens with a decision.',
+      ],
+    ],
+    featuredLabel: 'Our reading of the category',
+    signalsLabel: 'Signals',
+    signals: [
+      ['$24M', 'Mem0’s Series A', 'Raised to build a dedicated memory layer for AI agents — led by Basis Set, with Kindred, Peak XV, GitHub Fund and Y Combinator.'],
+      ['$275M', 'Genspark’s Series B', 'Emergence framed it as a move from model-centric tools to outcome-centric systems built on “an architecture that captures and applies context at every step.”'],
+      ['76%', 'see agents as coworkers', 'Of executives surveyed by MIT Sloan Management Review and BCG. It measures perception, not agent capability.'],
+      ['10×', 'the budget in play', 'Wing’s Tanay Jaipuria argues agents go after labor budgets rather than software budgets — “at least an order of magnitude larger than software spend.”'],
+    ],
+    thesisLabel: 'Where we sit',
+    thesisTitle: 'Two theses, one product',
+    thesisBody: 'Read together, the commentary above splits cleanly in two. One half says memory and context are the new infrastructure layer. The other says agents only become valuable when they behave like a coworker — which is impossible without that layer. They are the same claim from two directions.',
+    theses: [
+      ['Memory and context are infrastructure.', 'Not a feature bolted onto a chat window — a durable layer that outlives whichever model you happen to be using this quarter. ShogunAI keeps that layer on your Mac, so switching providers costs you nothing.'],
+      ['Acting on context is the actual product.', 'A memory that only answers questions is a well-behaved search box. The reason to know what happened in your day is to close what it left open — inside the tools you already use, with approval before anything leaves your machine.'],
+    ],
+    readMore: 'Read the full sourced write-up',
+    notesLabel: 'On sourcing',
+    notesBody: 'Every quote on this page is taken from a public post or press release by the firm named, and the full list of sources is below. These are investor theses about where the market is going — opinions about the future, not settled facts — and none of them are statements about ShogunAI.',
+  },
+  ja: {
+    eyebrow: '市場',
+    title: 'メモリと文脈は、ひとつの市場になりつつある。',
+    intro: [
+      [
+        'この2年ほど、ボトルネックはモデルでした。もうそうではありません。エージェント基盤に出資するファンドの視線は、別の制約に集まっています ── エージェントの有用性は、届く文脈の広さで決まる。そして、ほとんどの人の文脈はどこにも届いていない。',
+        '文脈が存在しないわけではありません。火曜日に開いていたウィンドウの中に、実際に決定が下されたスレッドの中に、誰かが期日を口にした会議の中にあります。ただ、エージェントが読める場所には一行も書かれていない。だから毎朝ゼロから始まり、あなたは自分の仕事を毎回説明し直すことになります。下に並ぶ資金が追っているのは、この欠落であってモデルの性能ではありません。',
+      ],
+      [
+        '市場の論評の多くは、テーブルの向こう側 ── ファンドの席から書かれています。カテゴリが立ち上がり、予算が動く、という語り方です。私たちは机の側から読みます。制約が文脈なら、直し方は仕事がすでに起きている場所、つまりあなたの端末の中、あなたの一日の中に置くしかない。そのために二つ目のノートを取らせるようでは、意味がありません。',
+        '文脈が届くようになって変わるのは、チャット画面ではありません。朝です。読み返すはずだったスレッドは「誰に何を負っているか」の形で先に届き、木曜に自分がした約束は、相手が催促する前に戻ってくる。20分の思い出し作業から始まっていた仕事が、判断から始まります。',
+      ],
+    ],
+    featuredLabel: '私たちのこのカテゴリの読み方',
+    signalsLabel: 'シグナル',
+    signals: [
+      ['$24M', 'Mem0 のシリーズA', 'AIエージェント向けの専用メモリレイヤーを作るための調達。Basis Set がリードし、Kindred、Peak XV、GitHub Fund、Y Combinator が参加。'],
+      ['$275M', 'Genspark のシリーズB', 'Emergence はこれを、モデル中心のツールから成果中心のシステムへの移行と位置づけ、「あらゆる段階で文脈を取得し適用するアーキテクチャ」と表現しました。'],
+      ['76%', 'エージェントを「同僚」と見る', 'MIT Sloan Management Review と BCG による経営層調査より。測っているのは認識であって、エージェントの能力ではありません。'],
+      ['10×', '狙っている予算の大きさ', 'Wing の Tanay Jaipuria は、エージェントはソフトウェア予算ではなく人件費の予算を取りにいくため、機会は「ソフトウェア支出より少なくとも一桁大きい」と論じています。'],
+    ],
+    thesisLabel: '私たちの立ち位置',
+    thesisTitle: 'ふたつの仮説、ひとつのプロダクト',
+    thesisBody: '並べて読むと、上の発言はきれいに二分されます。片方は「メモリと文脈が新しい基盤レイヤーだ」と言い、もう片方は「エージェントは同僚のように振る舞ってはじめて価値になる」と言う。後者は、そのレイヤーなしには成立しません。方向が違うだけで、同じ主張です。',
+    theses: [
+      ['メモリと文脈は、インフラである。', 'チャット画面に後付けする機能ではなく、今期たまたま使っているモデルより長く残るレイヤーです。ShogunAI はそれをあなたの Mac に置きます。だから提供者を乗り換えても、失うものはありません。'],
+      ['文脈に基づいて動くことが、製品の本体。', '質問に答えるだけのメモリは、行儀のいい検索ボックスです。一日に何があったかを知る理由は、そこで開いたままのものを片付けるため ── あなたがすでに使っているツールの中で、端末を出るものは必ずあなたの承認を待たせて。'],
+    ],
+    readMore: '出典つきの詳しい記事を読む',
+    notesLabel: '出典について',
+    notesBody: 'このページの引用はすべて、記載した各社の公開記事やプレスリリースからのもので、出典は下にすべて挙げています。いずれも市場の行き先についての投資家の仮説 ── 将来についての意見であって、確定した事実ではありません ── であり、ShogunAI について述べたものではありません。',
+  },
+  es: {
+    eyebrow: 'Mercado',
+    title: 'La memoria y el contexto se están convirtiendo en un mercado propio.',
+    intro: [
+      [
+        'Durante casi dos años el cuello de botella fue el modelo. Ya no lo es. Los fondos que financian la infraestructura de agentes han convergido en otra restricción: un agente sirve tanto como el contexto que alcanza, y casi nadie tiene su contexto al alcance.',
+        'El contexto no falta. Está en las ventanas que tenías abiertas el martes, en el hilo donde de verdad se tomó la decisión, en la reunión donde alguien prometió una fecha. Nada de eso está escrito en un sitio que un agente pueda leer, así que cada agente empieza cada mañana desde cero y te pide que le expliques otra vez tu propio trabajo. El dinero que aparece más abajo persigue ese hueco, no un modelo mejor.',
+      ],
+      [
+        'Casi todo el comentario está escrito desde el lado del fondo: una categoría que se forma, un presupuesto que se mueve. Nosotros lo leemos desde el escritorio. Si la restricción es el contexto, la solución tiene que estar donde ya ocurre el trabajo — en tu equipo, dentro de tu día — y no puede pedirte que lleves un segundo cuaderno para alimentarla.',
+        'Lo que cambia cuando el contexto es alcanzable no es la ventana de chat. Es la mañana: el hilo que habrías releído llega ya como qué debes y a quién, la promesa que hiciste el jueves vuelve antes de que nadie tenga que pedirla, y el trabajo que empezaba con veinte minutos de reconstrucción empieza con una decisión.',
+      ],
+    ],
+    featuredLabel: 'Nuestra lectura de la categoría',
+    signalsLabel: 'Señales',
+    signals: [
+      ['$24M', 'Serie A de Mem0', 'Levantada para construir una capa de memoria dedicada a agentes de IA — liderada por Basis Set, con Kindred, Peak XV, GitHub Fund e Y Combinator.'],
+      ['$275M', 'Serie B de Genspark', 'Emergence lo presentó como el paso de herramientas centradas en el modelo a sistemas centrados en el resultado, sobre «una arquitectura que captura y aplica contexto en cada paso».'],
+      ['76%', 've a los agentes como colegas', 'De los directivos encuestados por MIT Sloan Management Review y BCG. Mide percepción, no capacidad del agente.'],
+      ['10×', 'el presupuesto en juego', 'Tanay Jaipuria, de Wing, sostiene que los agentes van a por presupuestos de personal y no de software: «al menos un orden de magnitud mayor que el gasto en software».'],
+    ],
+    thesisLabel: 'Dónde encajamos',
+    thesisTitle: 'Dos tesis, un producto',
+    thesisBody: 'Leídos juntos, los comentarios anteriores se dividen en dos. Una mitad dice que la memoria y el contexto son la nueva capa de infraestructura. La otra dice que los agentes solo valen cuando se comportan como un colega, algo imposible sin esa capa. Son la misma afirmación desde dos direcciones.',
+    theses: [
+      ['La memoria y el contexto son infraestructura.', 'No una función añadida a una ventana de chat, sino una capa duradera que sobrevive al modelo que uses este trimestre. ShogunAI la mantiene en tu Mac, así que cambiar de proveedor no te cuesta nada.'],
+      ['Actuar sobre el contexto es el producto.', 'Una memoria que solo responde preguntas es un buscador educado. Saber qué pasó en tu día sirve para cerrar lo que quedó abierto, dentro de las herramientas que ya usas y con aprobación antes de que algo salga de tu equipo.'],
+    ],
+    readMore: 'Leer el análisis completo con fuentes',
+    notesLabel: 'Sobre las fuentes',
+    notesBody: 'Cada cita procede de una publicación o nota de prensa pública de la firma citada, y la lista completa de fuentes está abajo. Son tesis de inversores sobre hacia dónde va el mercado — opiniones sobre el futuro, no hechos establecidos — y ninguna se refiere a ShogunAI.',
+  },
+  de: {
+    eyebrow: 'Markt',
+    title: 'Memory und Kontext werden zu einem eigenen Markt.',
+    intro: [
+      [
+        'Fast zwei Jahre lang war das Modell der Engpass. Das ist vorbei. Die Fonds, die Agenten-Infrastruktur finanzieren, sind sich über eine andere Grenze einig: Ein Agent ist nur so nützlich wie der Kontext, den er erreicht — und kaum jemandes Kontext ist erreichbar.',
+        'Der Kontext fehlt nicht. Er steckt in den Fenstern, die am Dienstag offen waren, im Thread, in dem die Entscheidung wirklich fiel, im Meeting, in dem jemand einen Termin zusagte. Nichts davon steht an einer Stelle, die ein Agent lesen kann. Also fängt jeder Agent jeden Morgen bei null an und lässt dich deine eigene Arbeit noch einmal erklären. Das Geld weiter unten jagt diese Lücke, nicht ein besseres Modell.',
+      ],
+      [
+        'Die meisten Kommentare sind von der Fondsseite des Tisches geschrieben: eine Kategorie entsteht, ein Budget verschiebt sich. Wir lesen sie vom Schreibtisch aus. Wenn der Kontext die Grenze ist, muss die Lösung dort sitzen, wo die Arbeit ohnehin passiert — auf deinem Gerät, in deinem Tag — und sie darf dich nicht zwingen, ein zweites Notizbuch zu führen.',
+        'Was sich ändert, wenn der Kontext erreichbar ist, ist nicht das Chatfenster. Es ist der Morgen: Der Thread, den du noch einmal gelesen hättest, kommt als das an, was du wem schuldest; das Versprechen von Donnerstag kommt zurück, bevor jemand nachfragen muss; und Arbeit, die mit zwanzig Minuten Rekonstruktion begann, beginnt mit einer Entscheidung.',
+      ],
+    ],
+    featuredLabel: 'Unsere Lesart der Kategorie',
+    signalsLabel: 'Signale',
+    signals: [
+      ['$24M', 'Series A von Mem0', 'Für eine dedizierte Memory-Ebene für KI-Agenten — angeführt von Basis Set, mit Kindred, Peak XV, GitHub Fund und Y Combinator.'],
+      ['$275M', 'Series B von Genspark', 'Emergence beschrieb den Schritt von modellzentrierten Werkzeugen zu ergebniszentrierten Systemen auf „einer Architektur, die Kontext in jedem Schritt erfasst und anwendet".'],
+      ['76%', 'sehen Agenten als Kollegen', 'Der von MIT Sloan Management Review und BCG befragten Führungskräfte. Gemessen wird Wahrnehmung, nicht Fähigkeit.'],
+      ['10×', 'das Budget, um das es geht', 'Tanay Jaipuria von Wing argumentiert, Agenten zielen auf Personal- statt Softwarebudgets — „mindestens eine Größenordnung größer als Softwareausgaben".'],
+    ],
+    thesisLabel: 'Wo wir stehen',
+    thesisTitle: 'Zwei Thesen, ein Produkt',
+    thesisBody: 'Zusammengelesen zerfallen die Aussagen oben sauber in zwei Teile. Die eine Hälfte sagt: Memory und Kontext sind die neue Infrastrukturebene. Die andere sagt: Agenten werden erst wertvoll, wenn sie sich wie Kollegen verhalten — und das geht ohne diese Ebene nicht. Es ist dieselbe Behauptung aus zwei Richtungen.',
+    theses: [
+      ['Memory und Kontext sind Infrastruktur.', 'Keine Funktion, die an ein Chatfenster geschraubt wird, sondern eine Ebene, die das Modell überdauert, das du gerade zufällig nutzt. ShogunAI hält sie auf deinem Mac — ein Anbieterwechsel kostet dich nichts.'],
+      ['Auf Kontext zu handeln ist das eigentliche Produkt.', 'Ein Gedächtnis, das nur Fragen beantwortet, ist ein wohlerzogenes Suchfeld. Zu wissen, was an deinem Tag passiert ist, dient dazu, das Offene zu schließen — in deinen Werkzeugen, mit Freigabe, bevor etwas dein Gerät verlässt.'],
+    ],
+    readMore: 'Die vollständige Analyse mit Quellen lesen',
+    notesLabel: 'Zu den Quellen',
+    notesBody: 'Jedes Zitat stammt aus einem öffentlichen Beitrag oder einer Pressemitteilung der genannten Firma; die vollständige Quellenliste steht unten. Es sind Investorenthesen über die Richtung des Marktes — Meinungen über die Zukunft, keine gesicherten Fakten — und keine davon handelt von ShogunAI.',
+  },
+} as const;
+
+export default async function MarketPage({ searchParams }: { searchParams: Promise<{ _locale?: string }> }) {
+  const requested = (await searchParams)._locale;
+  const localeOverride = isLocale(requested) ? requested : undefined;
+  const { locale, t } = await getI18n(localeOverride);
+  const c = content[locale];
+  const prefix = `/${locale}`;
+  const featured = FEATURED_SLUGS.map((slug) => getPost(slug, locale)).filter((post) => post !== null);
+
+  return (
+    <PageShell locale={locale}>
+      <JsonLd
+        data={breadcrumbSchema([
+          { name: 'Home', url: `${siteConfig.url}${prefix}` },
+          { name: c.eyebrow, url: `${siteConfig.url}${prefix}/market` },
+        ])}
+      />
+
+      {/* Left-aligned opener: the headline, then the argument in two columns */}
+      <header className="border-b border-border bg-[radial-gradient(120%_100%_at_50%_-40%,var(--color-sky-soft)_0%,transparent_60%)]">
+        <div className="container-x py-[clamp(34px,7.5vw,92px)]">
+          <p className="text-xs font-semibold uppercase tracking-[0.08em] text-accent">{c.eyebrow}</p>
+          <h1 className="mt-3.5 max-w-[20ch] font-display text-[clamp(32px,5.2vw,58px)] font-semibold leading-[1.06] tracking-[-0.02em]">
+            {c.title}
+          </h1>
+          <div className="mt-10 grid gap-x-14 gap-y-6 md:grid-cols-2">
+            {c.intro.map((column, i) => (
+              <div key={i} className="space-y-4">
+                {column.map((paragraph) => (
+                  <p key={paragraph} className="max-w-[54ch] text-[16px] leading-relaxed text-muted">
+                    {paragraph}
+                  </p>
+                ))}
+              </div>
+            ))}
+          </div>
+        </div>
+      </header>
+
+      {/* Our own writing on this category — the whole card links to the post */}
+      {featured.length > 0 && (
+        <section className="py-[clamp(44px,7vw,88px)]">
+          <div className="container-x">
+            <div className="flex items-center gap-5">
+              <p className="shrink-0 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">{c.featuredLabel}</p>
+              <div className="h-px flex-1 bg-border" />
+            </div>
+            <div className="mt-7 grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+              {featured.map((post) => (
+                <PostCard
+                  key={post.slug}
+                  p={post}
+                  categories={t.blog.categories}
+                  locale={locale}
+                  minRead={t.blog.minRead}
+                  more={t.blog.readMore}
+                  hrefPrefix={prefix}
+                />
+              ))}
+            </div>
+          </div>
+        </section>
+      )}
+
+      {/* Funding + survey signals */}
+      <section className="border-y border-border bg-cloud/45 py-[clamp(44px,7vw,88px)]">
+        <div className="container-x">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">{c.signalsLabel}</p>
+          <div className="mt-7 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
+            {c.signals.map(([value, label, body]) => (
+              <div key={label} className="rounded-[22px] border border-border bg-surface p-6">
+                <p className="font-display text-[clamp(28px,3vw,38px)] font-semibold tracking-[-0.02em]">{value}</p>
+                <p className="mt-1 text-sm font-semibold">{label}</p>
+                <p className="mt-3 text-[13px] leading-relaxed text-muted">{body}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* Where ShogunAI sits */}
+      <section className="py-[clamp(44px,7vw,88px)]">
+        <div className="container-x grid gap-10 lg:grid-cols-2">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.08em] text-accent">{c.thesisLabel}</p>
+            <h2 className="mt-3 font-display text-[clamp(26px,4vw,40px)] font-semibold tracking-[-0.02em]">{c.thesisTitle}</h2>
+            <p className="mt-4 text-[16px] leading-relaxed text-muted">{c.thesisBody}</p>
+            <a
+              className="mt-6 inline-flex items-center gap-1.5 text-sm font-semibold text-accent"
+              href={`${prefix}/blog/investors-on-the-memory-and-context-layer`}
+            >
+              {c.readMore}
+              <ArrowUpRight className="size-4" />
+            </a>
+          </div>
+          <div className="grid gap-4 self-start">
+            {c.theses.map(([title, body]) => (
+              <div key={title} className="rounded-[22px] border border-border bg-surface p-6">
+                <h3 className="font-display text-lg font-semibold">{title}</h3>
+                <p className="mt-2.5 text-[15px] leading-relaxed text-muted">{body}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* Sourcing note — the quotes are third-party opinion, never an endorsement */}
+      <section className="pb-[clamp(44px,7vw,88px)]">
+        <div className="container-x">
+          <div className="rounded-[22px] border border-border bg-cloud/45 p-7">
+            <h2 className="text-xs font-semibold uppercase tracking-[0.08em] text-muted">{c.notesLabel}</h2>
+            <p className="mt-3 max-w-[76ch] text-[14px] leading-relaxed text-muted">{c.notesBody}</p>
+            <ul className="mt-5 grid gap-2 sm:grid-cols-2">
+              {SOURCES.map(([label, href]) => (
+                <li key={href}>
+                  <a
+                    href={href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-[13px] text-muted underline decoration-border underline-offset-4 transition-colors hover:text-ink"
+                  >
+                    {label}
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <CTA t={t} />
+    </PageShell>
+  );
+}

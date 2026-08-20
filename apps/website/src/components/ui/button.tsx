@@ -4,18 +4,19 @@ import * as React from 'react';
 import { cn } from '@/lib/utils';
 
 const buttonVariants = cva(
-  'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-full font-medium leading-none transition-all duration-200 ease-[var(--ease-out-soft)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent active:translate-y-px disabled:pointer-events-none disabled:opacity-60',
+  'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-full font-medium leading-none transition-all duration-200 ease-[var(--ease-out-soft)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent active:translate-y-px active:scale-[0.985] disabled:pointer-events-none disabled:opacity-60',
   {
     variants: {
       variant: {
-        primary: 'bg-ink text-on-ink hover:opacity-90 hover:shadow-[var(--shadow-float)]',
-        secondary: 'border border-border bg-transparent text-ink hover:bg-cloud',
+        primary:
+          'border border-[#f1d8a8]/60 bg-[linear-gradient(135deg,var(--cta-start),var(--cta-end))] text-[var(--cta-ink)] shadow-[0_14px_30px_rgba(115,78,20,0.2)] hover:-translate-y-0.5 hover:shadow-[0_18px_34px_rgba(115,78,20,0.28)]',
+        secondary: 'border border-border bg-white/70 text-ink hover:bg-cloud dark:bg-white/5',
         tertiary: 'rounded-none px-0 text-accent hover:text-accent-strong',
         ghost: 'bg-transparent text-ink hover:bg-cloud',
       },
       size: {
         sm: 'h-9 px-4 text-sm',
-        md: 'h-11 px-[22px] text-[15px]',
+        md: 'h-12 px-6 text-[15px]',
         lg: 'h-12 px-7 text-base',
       },
     },

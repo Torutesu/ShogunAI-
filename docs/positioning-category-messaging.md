@@ -26,7 +26,7 @@ ShogunAIはこの分断の反対側に立つ。OSレイヤーで一日全体を�
 
 | # | 層 | 具体 |
 |---|---|---|
-| **L1** | **コンテキスト取得**（Context Acquisition） | 対象ごとに最適な手段を自動選択。API/MCP（外部サービスの構造化データ）／Accessibility API（画面テキスト）／画面OCR（opt-in・暗号化・72h）／会議ASR。すべてローカルのイベントログへ |
+| **L1** | **コンテキスト取得**（Context Acquisition） | 対象ごとに最適な手段を自動選択。API/MCP（外部サービスの構造化データ）／Accessibility API（画面テキスト）／画面OCR（opt-in・暗号化・有限保持）／会議ASR。すべてローカルのイベントログへ |
 | **L2** | **ハーネス＝ワールドモデル**（Context Harness） | 生イベントを「エージェントが装着してすぐ走れる形」へ変換する本体層。状態推定→state tables（people/projects/commitments/open_loops）、全レコードにprovenance+confidence、3層メモリ（Hot/Warm/Cold）、context cacheは常時プリアセンブル。ログの蓄積（memory）と状態モデル（world model）の分かれ目 |
 | **L3** | **アプリ上で実行**（Foreground Execution) | 普段使っているアプリの上でそのまま動く。Notchの1ボタン→ドラフト・予定・ファイリング・フォローアップ。MCP経由でブラウザに閉じない。L1/L2/L3承認モデル、外部送信は必ずL3 |
 | **L4** | **24時間実行**（Always-on Execution） | 寝ている間も動く。Dream Cycle（夜間バッチで今日の生データ→明日のワールドモデル）、Morning Brief、commitments/open_loopsのバックグラウンド追跡。BatchはSelect KKキーで運転 |
@@ -49,7 +49,7 @@ ShogunAIはこの分断の反対側に立つ。OSレイヤーで一日全体を�
 **人間から引き継ぐ設計原則**（システムが人間を超える話とセットで、何を意図的に残すかを言う）:
 
 1. **選択的注意** — 人間は網膜の全ピクセルを保存しない。ShogunAIも録画せず意味のあるテキストだけ拾う。キャプチャ設計＝監視ではなく注意の設計
-2. **忘却は機能** — Hot 24h / Warm 30日 / Cold 圧縮、OCRの72h自動削除は「忘却の実装」。全部残す（録画系）のは人間的でも最適でもない
+2. **忘却は機能** — Hot 24h / Warm 30日 / Cold 圧縮、OCR画像の選択期間後の自動削除は「忘却の実装」。全部残す（録画系）のは人間的でも最適でもない
 3. **確度つきの想起** — 低confidenceを事実として混ぜず「〜の可能性」として弱く渡す。誠実な記憶だけが実行の土台になれる
 
 **投資家向け言い回し**:
@@ -245,7 +245,7 @@ LP・デッキでは固有名を出さず、カテゴリ名で見せる。行の
 
 ### Q2「それはただのRAGでは？」
 
-その通り、検索は簡単でコモディティ。難しいのはその手前の**編集**——何をホットメモリに残し、何を事実へ昇格させ、何を忘れるか。RAGは文書の検索、ShogunAIは状態の推定（provenance＋confidence）。低確度を事実として混ぜない誠実さと、忘却の設計（Hot/Warm/Cold・72h削除）が製品の本体。**検索する価値があるものを作ること、それが製品。**
+その通り、検索は簡単でコモディティ。難しいのはその手前の**編集**——何をホットメモリに残し、何を事実へ昇格させ、何を忘れるか。RAGは文書の検索、ShogunAIは状態の推定（provenance＋confidence）。低確度を事実として混ぜない誠実さと、忘却の設計（Hot/Warm/Cold・選択期間後の画像削除）が製品の本体。**検索する価値があるものを作ること、それが製品。**
 
 > **EN**: Retrieval is easy. Being worth retrieving is the product — deciding what stays hot, what gets promoted to fact, and what gets forgotten.
 

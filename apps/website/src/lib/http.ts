@@ -22,11 +22,20 @@ const STATUS: Record<ErrorCode, number> = {
 };
 
 export function fail(error: ErrorCode, extra?: Record<string, unknown>) {
-  return NextResponse.json({ ok: false, error, ...extra }, { status: STATUS[error] });
+  return NextResponse.json(
+    { ok: false, error, ...extra },
+    { status: STATUS[error], headers: { 'Cache-Control': 'no-store' } },
+  );
 }
 
 export function ok<T extends Record<string, unknown>>(data: T, init?: ResponseInit) {
-  return NextResponse.json({ ok: true, ...data }, init);
+  return NextResponse.json(
+    { ok: true, ...data },
+    {
+      ...init,
+      headers: { 'Cache-Control': 'no-store', ...(init?.headers ?? {}) },
+    },
+  );
 }
 
 /** Max body size for public POSTs (spec §6.5). */

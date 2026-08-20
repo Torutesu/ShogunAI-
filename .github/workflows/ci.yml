@@ -157,7 +157,21 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-      - uses: Swatinem/rust-cache@v2
+      # Official actions/cache, not Swatinem/rust-cache. The macOS job has died in
+      # "Set up job" downloading the third-party tarball (GitHub 429 × 3) before any
+      # of our crates compiled. checkout/rust-toolchain recovered on retry; rust-cache
+      # did not. Cache restore is best-effort — a miss still compiles.
+      - uses: actions/cache@v4
+        continue-on-error: true
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:

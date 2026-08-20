@@ -74,7 +74,13 @@ impl Preview {
     /// they cannot disagree with what will actually run.
     pub fn for_send(action: &SendAction, full_body: impl Into<String>, route: Route) -> Self {
         let (op_type, destination) = describe(action);
-        Self { op_type, destination, full_body: full_body.into(), route, key_kind: KeyKind::Byok }
+        Self {
+            op_type,
+            destination,
+            full_body: full_body.into(),
+            route,
+            key_kind: KeyKind::Byok,
+        }
     }
 }
 
@@ -116,6 +122,25 @@ pub enum ApprovalState {
     Pending,
     Confirmed,
     Rejected(RejectCause),
+}
+
+/// Durable, body-free outcome exposed to every API face.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApprovalStatus {
+    Pending,
+    Rejected,
+    TimedOut,
+    Sent,
+    SendFailed,
+    DraftSaved,
+}
+
+/// Body-free terminal ledger record. Previews remain only while an item is pending.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TerminalRecord {
+    pub id: ApprovalId,
+    pub status: ApprovalStatus,
+    pub resolved_ms: u64,
 }
 
 /// How the user attempted to confirm. Only [`ConfirmIntent::DedicatedButton`] confirms; the Enter
@@ -164,30 +189,142 @@ struct PendingApproval {
     created_ms: u64,
 }
 
+/// Persistable pending approval, used only by the local protected L3 store.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingRecord {
+    pub id: ApprovalId,
+    pub action: SendAction,
+    pub preview: Preview,
+    pub origin: ApprovalOrigin,
+    pub created_ms: u64,
+}
+
 /// The L3 approval queue. Holds pending sends until confirmed, rejected, or timed out.
 #[derive(Default)]
 pub struct ApprovalQueue {
     pending: Vec<PendingApproval>,
+    terminal: Vec<TerminalRecord>,
+    in_flight: Vec<ApprovalId>,
     next_id: u64,
 }
 
+pub const TERMINAL_RETENTION: usize = 256;
+
 impl ApprovalQueue {
     pub fn new() -> Self {
-        Self { pending: Vec::new(), next_id: 1 }
+        Self {
+            pending: Vec::new(),
+            terminal: Vec::new(),
+            in_flight: Vec::new(),
+            next_id: 1,
+        }
     }
 
-    fn alloc_id(&mut self) -> ApprovalId {
+    /// Start a restored queue at a nonzero id; exhausted ids are never reused.
+    pub fn with_next_id(next_id: u64) -> Self {
+        Self {
+            pending: Vec::new(),
+            terminal: Vec::new(),
+            in_flight: Vec::new(),
+            next_id: next_id.max(1),
+        }
+    }
+
+    pub fn export(&self) -> (u64, Vec<PendingRecord>) {
+        (
+            self.next_id,
+            self.pending
+                .iter()
+                .map(|p| PendingRecord {
+                    id: p.id,
+                    action: p.action.clone(),
+                    preview: p.preview.clone(),
+                    origin: p.origin,
+                    created_ms: p.created_ms,
+                })
+                .collect(),
+        )
+    }
+
+    pub fn import_with_terminal(
+        next_id: u64,
+        records: Vec<PendingRecord>,
+        terminal: Vec<TerminalRecord>,
+        in_flight: Vec<ApprovalId>,
+    ) -> Self {
+        let mut queue = Self::with_next_id(next_id);
+        queue.pending = records
+            .into_iter()
+            .map(|r| PendingApproval {
+                id: r.id,
+                action: r.action,
+                preview: r.preview,
+                origin: r.origin,
+                created_ms: r.created_ms,
+            })
+            .collect();
+        queue.terminal = terminal;
+        queue.in_flight = in_flight;
+        for id in queue
+            .pending
+            .iter()
+            .map(|p| p.id)
+            .chain(queue.terminal.iter().map(|r| r.id))
+            .chain(queue.in_flight.iter().copied())
+        {
+            if id.0 >= queue.next_id {
+                queue.next_id = id.0.saturating_add(1);
+            }
+        }
+        queue.trim_terminal();
+        queue
+    }
+
+    pub fn terminal_records(&self) -> &[TerminalRecord] {
+        &self.terminal
+    }
+    pub fn in_flight_ids(&self) -> &[ApprovalId] {
+        &self.in_flight
+    }
+
+    fn alloc_id(&mut self) -> Result<ApprovalId, &'static str> {
+        if self.next_id == u64::MAX {
+            return Err("approval id space exhausted");
+        }
         let id = ApprovalId(self.next_id);
-        self.next_id = self.next_id.wrapping_add(1);
-        id
+        self.next_id += 1;
+        Ok(id)
     }
 
     /// Enqueue a send for L3 approval. Returns the handle; the request starts [`ApprovalState::Pending`]
     /// (an AI-API caller holds this pending result until resolved — FR-AG-04).
-    pub fn request(&mut self, action: SendAction, preview: Preview, origin: ApprovalOrigin, now_ms: u64) -> ApprovalId {
-        let id = self.alloc_id();
-        self.pending.push(PendingApproval { id, action, preview, origin, created_ms: now_ms });
-        id
+    pub fn try_request(
+        &mut self,
+        action: SendAction,
+        preview: Preview,
+        origin: ApprovalOrigin,
+        now_ms: u64,
+    ) -> Result<ApprovalId, &'static str> {
+        let id = self.alloc_id()?;
+        self.pending.push(PendingApproval {
+            id,
+            action,
+            preview,
+            origin,
+            created_ms: now_ms,
+        });
+        Ok(id)
+    }
+
+    pub fn request(
+        &mut self,
+        action: SendAction,
+        preview: Preview,
+        origin: ApprovalOrigin,
+        now_ms: u64,
+    ) -> ApprovalId {
+        self.try_request(action, preview, origin, now_ms)
+            .expect("approval id space exhausted")
     }
 
     fn position(&self, id: ApprovalId) -> Option<usize> {
@@ -213,10 +350,15 @@ impl ApprovalQueue {
         };
         if Self::is_expired(&self.pending[idx], now_ms) {
             self.pending.remove(idx);
+            self.record_terminal(id, ApprovalStatus::TimedOut, now_ms);
             return Decision::Rejected(RejectCause::TimedOut);
         }
         let p = self.pending.remove(idx);
-        Decision::Confirmed(ConfirmedSend { action: p.action, preview: p.preview })
+        self.in_flight.push(id);
+        Decision::Confirmed(ConfirmedSend {
+            action: p.action,
+            preview: p.preview,
+        })
     }
 
     /// Explicitly reject a pending request.
@@ -224,6 +366,15 @@ impl ApprovalQueue {
         match self.position(id) {
             Some(idx) => {
                 self.pending.remove(idx);
+                self.record_terminal(
+                    id,
+                    if cause == RejectCause::TimedOut {
+                        ApprovalStatus::TimedOut
+                    } else {
+                        ApprovalStatus::Rejected
+                    },
+                    0,
+                );
                 Decision::Rejected(cause)
             }
             None => Decision::Unknown,
@@ -238,13 +389,53 @@ impl ApprovalQueue {
         }
     }
 
+    pub fn status(&self, id: ApprovalId) -> Option<ApprovalStatus> {
+        if self.position(id).is_some() || self.in_flight.contains(&id) {
+            return Some(ApprovalStatus::Pending);
+        }
+        self.terminal
+            .iter()
+            .find(|record| record.id == id)
+            .map(|record| record.status)
+    }
+
+    /// Record outcome only after a dedicated confirmation moved an item in flight.
+    pub fn mark_status(
+        &mut self,
+        id: ApprovalId,
+        status: ApprovalStatus,
+        resolved_ms: u64,
+    ) -> bool {
+        if status == ApprovalStatus::Pending || !self.in_flight.contains(&id) {
+            return false;
+        }
+        self.in_flight.retain(|candidate| *candidate != id);
+        self.record_terminal(id, status, resolved_ms);
+        true
+    }
+
+    /// Resolve crash-recovered in-flight items conservatively; never claim a send succeeded.
+    pub fn recover_in_flight(&mut self, now_ms: u64) -> Vec<ApprovalId> {
+        let ids = std::mem::take(&mut self.in_flight);
+        for id in &ids {
+            self.record_terminal(*id, ApprovalStatus::SendFailed, now_ms);
+        }
+        ids
+    }
+
     /// Reject every request past the timeout (FR-AG-04). Returns the timed-out ids. The daemon
     /// calls this on a timer tick.
     pub fn expire_due(&mut self, now_ms: u64) -> Vec<ApprovalId> {
-        let (expired, live): (Vec<PendingApproval>, Vec<PendingApproval>) =
-            self.pending.drain(..).partition(|p| Self::is_expired(p, now_ms));
+        let (expired, live): (Vec<PendingApproval>, Vec<PendingApproval>) = self
+            .pending
+            .drain(..)
+            .partition(|p| Self::is_expired(p, now_ms));
         self.pending = live;
-        expired.iter().map(|p| p.id).collect()
+        let ids: Vec<_> = expired.iter().map(|p| p.id).collect();
+        for id in &ids {
+            self.record_terminal(*id, ApprovalStatus::TimedOut, now_ms);
+        }
+        ids
     }
 
     /// The preview for a pending request (what the confirm UI renders).
@@ -273,6 +464,23 @@ impl ApprovalQueue {
     pub fn pending_ids(&self) -> Vec<ApprovalId> {
         self.pending.iter().map(|p| p.id).collect()
     }
+
+    fn record_terminal(&mut self, id: ApprovalId, status: ApprovalStatus, resolved_ms: u64) {
+        self.terminal.retain(|record| record.id != id);
+        self.terminal.push(TerminalRecord {
+            id,
+            status,
+            resolved_ms,
+        });
+        self.trim_terminal();
+    }
+
+    fn trim_terminal(&mut self) {
+        if self.terminal.len() > TERMINAL_RETENTION {
+            self.terminal
+                .drain(..self.terminal.len() - TERMINAL_RETENTION);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -280,7 +488,9 @@ mod tests {
     use super::*;
 
     fn email() -> SendAction {
-        SendAction::SendEmail { to: "alice@example.com".into() }
+        SendAction::SendEmail {
+            to: "alice@example.com".into(),
+        }
     }
 
     fn preview() -> Preview {
@@ -321,7 +531,10 @@ mod tests {
         let mut q = ApprovalQueue::new();
         let id = q.request(email(), preview(), ApprovalOrigin::Ui, 0);
         // Enter → refused, still pending.
-        assert_eq!(q.confirm(id, ConfirmIntent::EnterKey, 1000), Decision::RequiresDedicatedButton);
+        assert_eq!(
+            q.confirm(id, ConfirmIntent::EnterKey, 1000),
+            Decision::RequiresDedicatedButton
+        );
         assert_eq!(q.poll(id), Decision::StillPending);
         assert_eq!(q.pending_len(), 1);
     }
@@ -332,7 +545,13 @@ mod tests {
         let id = q.request(email(), preview(), ApprovalOrigin::Ui, 0);
         let decision = q.confirm(id, ConfirmIntent::DedicatedButton, 1000);
         // the confirmed decision carries both the action and its preview (for traceability)
-        assert_eq!(decision, Decision::Confirmed(ConfirmedSend { action: email(), preview: preview() }));
+        assert_eq!(
+            decision,
+            Decision::Confirmed(ConfirmedSend {
+                action: email(),
+                preview: preview()
+            })
+        );
         // removed from the queue after resolution
         assert_eq!(q.pending_len(), 0);
         assert_eq!(q.poll(id), Decision::Unknown);
@@ -353,7 +572,7 @@ mod tests {
         let mut q = ApprovalQueue::new();
         let a = q.request(email(), preview(), ApprovalOrigin::Api, 0);
         let b = q.request(email(), preview(), ApprovalOrigin::Ui, APPROVAL_TIMEOUT_MS); // newer
-        // at now = TIMEOUT+1: a is stale, b is fresh
+                                                                                        // at now = TIMEOUT+1: a is stale, b is fresh
         let expired = q.expire_due(APPROVAL_TIMEOUT_MS + 1);
         assert_eq!(expired, vec![a]);
         assert_eq!(q.pending_len(), 1);
@@ -368,14 +587,20 @@ mod tests {
     fn user_reject_removes_the_request() {
         let mut q = ApprovalQueue::new();
         let id = q.request(email(), preview(), ApprovalOrigin::Ui, 0);
-        assert_eq!(q.reject(id, RejectCause::UserRejected), Decision::Rejected(RejectCause::UserRejected));
+        assert_eq!(
+            q.reject(id, RejectCause::UserRejected),
+            Decision::Rejected(RejectCause::UserRejected)
+        );
         assert_eq!(q.pending_len(), 0);
     }
 
     #[test]
     fn confirm_or_poll_unknown_id_is_unknown() {
         let mut q = ApprovalQueue::new();
-        assert_eq!(q.confirm(ApprovalId(42), ConfirmIntent::DedicatedButton, 0), Decision::Unknown);
+        assert_eq!(
+            q.confirm(ApprovalId(42), ConfirmIntent::DedicatedButton, 0),
+            Decision::Unknown
+        );
         assert_eq!(q.poll(ApprovalId(42)), Decision::Unknown);
     }
 
@@ -394,10 +619,18 @@ mod tests {
     #[test]
     fn every_send_variant_can_be_previewed() {
         for a in [
-            SendAction::SendEmail { to: "a@b.com".into() },
-            SendAction::PostMessage { channel: "#eng".into() },
-            SendAction::CreateCalendarEvent { title: "Sync".into() },
-            SendAction::PostComment { target: "org/repo#1".into() },
+            SendAction::SendEmail {
+                to: "a@b.com".into(),
+            },
+            SendAction::PostMessage {
+                channel: "#eng".into(),
+            },
+            SendAction::CreateCalendarEvent {
+                title: "Sync".into(),
+            },
+            SendAction::PostComment {
+                target: "org/repo#1".into(),
+            },
         ] {
             let p = Preview::for_send(&a, "body", Route::DirectMcp);
             assert!(!p.op_type.is_empty());

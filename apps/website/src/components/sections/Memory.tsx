@@ -3,6 +3,7 @@ import { Reveal } from '@/components/animations/Reveal';
 import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
 import type { Dictionary } from '@/i18n/dictionaries';
+import type { Locale } from '@/i18n/config';
 
 function Ticks({ items }: { items: readonly string[] }) {
   return (
@@ -19,19 +20,19 @@ function Ticks({ items }: { items: readonly string[] }) {
   );
 }
 
-export function Memory({ t }: { t: Dictionary }) {
+export function Memory({ t, locale }: { t: Dictionary; locale: Locale }) {
   const m = t.memory;
   return (
     <section id="memory" className="scroll-mt-20 py-[clamp(56px,9vw,112px)]">
       <div className="container-x grid items-center gap-16 md:grid-cols-2">
         <Reveal>
           <p className="text-xs font-semibold uppercase tracking-[0.08em] text-accent">{m.eyebrow}</p>
-          <h2 className="mt-4 font-display text-[clamp(30px,4vw,44px)] font-semibold leading-[1.1] tracking-[-0.015em] text-balance">
+          <h2 className="memory-title mt-4 font-display text-[clamp(24px,5.5vw,44px)] font-semibold leading-[1.1] tracking-[-0.015em] text-balance">
             {m.title}
           </h2>
-          <p className="mt-5 text-[17px] leading-relaxed text-muted">{m.body}</p>
+          <p className="memory-body mt-5 text-[17px] leading-relaxed text-muted">{m.body}</p>
           <Ticks items={m.points} />
-          <a href="#how" className="group inline-flex items-center gap-1.5 text-[15px] font-medium text-accent hover:text-accent-strong">
+          <a href={`/${locale}/features/ai-memory`} className="group inline-flex items-center gap-1.5 text-[15px] font-medium text-accent hover:text-accent-strong">
             {m.cta} <ArrowRight className="size-4 transition-transform duration-300 group-hover:translate-x-1" />
           </a>
         </Reveal>

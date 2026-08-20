@@ -12,48 +12,54 @@ mod audio_lane;
 pub mod axcache;
 // Turbo model fetch resolves the on-device path and delegates the HTTPS download to shogun-core's
 // traced egress (model_asset). On-device only, matching where the audio lane lives.
-#[cfg(target_os = "macos")]
-mod model_fetch;
+mod analytics;
+mod billing;
 mod capture_source;
 mod connectors;
 mod daily_summaries;
-#[cfg(all(target_os = "macos", feature = "visual-recall-ocr"))]
-mod screen_ocr;
-mod startup_health;
 pub mod display;
+mod dock_visibility;
 mod dream;
-mod billing;
 mod entitlement;
 mod exclusions;
 mod fullui;
-mod metrics;
 mod geometry;
 mod hover;
 mod inline_source;
 mod integrate;
-mod dock_visibility;
-mod notch_status_visibility;
 mod launch_at_login;
-mod user_config_watch;
 pub mod meeting;
-mod meeting_recap;
 #[cfg(target_os = "macos")]
 mod meeting_live_summary;
+mod meeting_recap;
 #[cfg(target_os = "macos")]
 mod meeting_translate;
+#[cfg(target_os = "macos")]
+mod memory_api_settings;
+mod metrics;
 mod mic;
-mod analytics;
+#[cfg(target_os = "macos")]
+mod model_fetch;
 mod net_lane;
 mod notch_actions;
 mod notch_exec;
+mod notch_status_visibility;
 mod onboarding;
 #[cfg(target_os = "macos")]
+mod permission_drag;
+#[cfg(target_os = "macos")]
 mod recall_shortcut;
+#[cfg(all(target_os = "macos", feature = "visual-recall-ocr"))]
+mod screen_ocr;
+mod scribe;
 mod search_ui;
 /// UI cue playback and the silence rules around it (#49, docs/sound-design.md).
 #[cfg(target_os = "macos")]
 mod sound;
+mod startup_health;
+mod user_config_watch;
 mod visual_recall;
+mod voice_editor;
 #[cfg(target_os = "macos")]
 mod voice_lane;
 #[cfg(target_os = "macos")]
@@ -69,6 +75,11 @@ mod voice_shortcut;
 static PANEL_BEHAVIOR: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new((1 << 0) | (1 << 8));
 
+/// The notch is a docked surface, not a floating utility window. Keep this shared so adoption and
+/// recovery cannot accidentally disagree and re-enable background dragging.
+#[cfg(target_os = "macos")]
+const PANEL_MOVABLE: bool = false;
+
 /// NSMainMenuWindowLevel (24) + 3 — same as boring.notch (`level = .mainMenu + 3`).
 ///
 /// Floating (3) sits UNDER the menu bar. Frame can be flush to `screen.frame.maxY` and Idle
@@ -81,6 +92,14 @@ pub(crate) const OVERLAY_LEVEL: isize = 24 + 3;
 pub(crate) const FULL_UI_LABEL: &str = "fullui";
 /// Window label for the Visual recall browse UI (saved screen timeline).
 pub(crate) const VISUAL_RECALL_LABEL: &str = "visual-recall";
+#[cfg(target_os = "macos")]
+const SCRIBE_LABEL: &str = "scribe";
+#[cfg(target_os = "macos")]
+const SCRIBE_MIN_W: f64 = 320.0;
+#[cfg(target_os = "macos")]
+const SCRIBE_MAX_W: f64 = 760.0;
+#[cfg(target_os = "macos")]
+const SCRIBE_H: f64 = 56.0;
 /// Full UI window size, in LOGICAL points. The minimum is the spec §D floor — below it the
 /// sidebar plus a three-card health row stops fitting.
 const FULL_UI_W: f64 = 1200.0;
@@ -111,24 +130,19 @@ static CASTLE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0)
 /// The current Castle Position read from the atomic (default `Notch`).
 #[cfg(target_os = "macos")]
 fn current_castle() -> shogun_core::notch::geometry::CastlePosition {
-    shogun_core::notch::geometry::CastlePosition::from_u8(CASTLE.load(std::sync::atomic::Ordering::Relaxed))
+    shogun_core::notch::geometry::CastlePosition::from_u8(
+        CASTLE.load(std::sync::atomic::Ordering::Relaxed),
+    )
 }
 
-/// User-dragged override of the Castle Position (issue #21). `Some` after the user drags the
-/// panel (collapsed pill or expanded header); every dock path then resolves through
-/// `resting_origin` instead of `castle_origin`, so summon / reassert / view-switch resizes all
-/// respect the dragged spot. Cleared by `set_castle_position` — picking a castle is the explicit
-/// "go home". Persisted next to the position in `castle.json` so the spot survives restart.
-/// A Mutex (not an atomic) because it is only touched on the main thread and in the rare set
-/// command — never on a latency-critical path without the lock being uncontended.
+/// Legacy user-dragged override. New builds never populate it; `castle::init` clears old persisted
+/// values so every placement path resolves to the selected Castle Position.
 #[cfg(target_os = "macos")]
 static DRAG_OVERRIDE: std::sync::Mutex<Option<shogun_core::notch::geometry::DragOffset>> =
     std::sync::Mutex::new(None);
 
-/// True while OUR code is moving the panel (dock / redock / resize). `setFrameOrigin`/`setFrame:`
-/// post `NSWindowDidMoveNotification` synchronously on the calling (main) thread, and every
-/// programmatic move happens on the main thread, so bracketing them with this flag cleanly
-/// separates them from user drags in the did-move observer (`note_user_move`).
+/// True while our code is moving the panel. Retained as the single movement boundary for the
+/// dock/resize paths even though user-driven panel movement is disabled.
 #[cfg(target_os = "macos")]
 static PROGRAMMATIC_MOVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -165,13 +179,11 @@ unsafe fn resting_dock_origin(
     }
 }
 
-/// Run `f` with `PROGRAMMATIC_MOVE` raised, so the did-move observer ignores moves we made
-/// ourselves. Main thread only (see `PROGRAMMATIC_MOVE`).
+/// Run `f` inside the programmatic-movement boundary. Main thread only.
 ///
 /// The flag is restored through a `Drop` guard that puts back the PREVIOUS value, which buys two
 /// things a plain store-true/store-false could not: a panic inside `f` cannot leave the flag
-/// latched (which would silently kill drag-position memory for the rest of the session), and a
-/// nested call cannot clear it on the inner exit while the outer move is still in flight.
+/// latched, and a nested call cannot clear it on the inner exit while the outer move is active.
 #[cfg(target_os = "macos")]
 fn with_programmatic_move<R>(f: impl FnOnce() -> R) -> R {
     use std::sync::atomic::Ordering;
@@ -228,155 +240,175 @@ pub fn run() {
         )
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
-        integrate::mac::painted,
-        integrate::mac::interact,
-        integrate::mac::promote,
-        integrate::mac::hotkey,
-        integrate::mac::open_full_ui,
-        integrate::mac::anim_done,
-        integrate::mac::collapse_request,
-        integrate::mac::clock_sync_ack,
-        integrate::mac::focus_field,
-        meeting::mac::meeting_status,
-        meeting::mac::meeting_start,
-        meeting::mac::meeting_not_now,
-        meeting::mac::meeting_stop,
-        meeting::mac::meeting_toggle_pause,
-        meeting::mac::meeting_save_note,
-        meeting::mac::meeting_recap,
-        meeting::mac::meeting_recap_minutes,
-        meeting::mac::meeting_select_kk_configured,
-        #[cfg(target_os = "macos")]
-        meeting_live_summary::meeting_request_live_summary,
-        meeting::mac::get_deepgram_key_status,
-        meeting::mac::set_deepgram_key,
-        meeting::mac::clear_deepgram_key,
-        meeting::mac::get_meeting_transcript,
-        meeting::mac::meeting_exclude_app,
-        meeting::mac::meeting_include_app,
-        meeting::mac::meeting_drag,
-        meeting::mac::meeting_wrapped,
-        meeting::mac::get_meeting_settings,
-        meeting::mac::set_meeting_enabled,
-        meeting::mac::set_meeting_allow_mic_only,
-        meeting::mac::set_meeting_mode,
-        meeting::mac::set_meeting_langs,
-        meeting::mac::meeting_overlay_dismiss,
-        meeting::mac::meeting_set_overlay_panel,
-        meeting::mac::meeting_set_overlay_canvas,
-        meeting::mac::meeting_set_overlay_chat,
-        meeting::mac::meeting_set_overlay_size,
-        visual_recall::mac::get_visual_recall_settings,
-        visual_recall::mac::set_visual_recall_enabled,
-        visual_recall::mac::get_visual_recall_status,
-        visual_recall::mac::list_screen_frames,
-        visual_recall::mac::get_screen_frame_image,
-        visual_recall::mac::delete_screen_frame,
-        visual_recall::mac::open_visual_recall,
-        notch_actions::mac::notch_actions,
-        notch_exec::mac::run_notch_action,
-        notch_exec::mac::confirm_notch_action,
-        search_ui::mac::search_memory,
-        metrics::record_ui_slo,
-        inline_source::mac::inline_at_cursor,
-        inline_source::mac::shogun_status,
-        inline_source::mac::shogun_state,
-        inline_source::mac::shogun_chat,
-        inline_source::mac::shogun_chat_stream,
-        inline_source::mac::shogun_chat_cancel,
-        inline_source::mac::quit_app,
-        inline_source::mac::ui_log,
-        inline_source::mac::set_byok_key,
-        inline_source::mac::clear_byok_key,
-        inline_source::mac::byok_key_last4,
-        inline_source::mac::get_llm_settings,
-        inline_source::mac::set_llm_settings,
-        inline_source::mac::subscription_delegates,
-        inline_source::mac::verify_subscription_delegate,
-        inline_source::mac::resolve_state_item,
-        inline_source::mac::clear_memory,
-        inline_source::mac::delete_data_since,
-        inline_source::mac::delete_all_and_account,
-        shortcuts::get_shortcuts,
-        shortcuts::set_shortcut,
-        shortcuts::hide_panel,
-        castle::get_castle_position,
-        castle::set_castle_position,
-        set_panel_size,
-        start_panel_drag,
-        // First-layer connectors + the L3 send/approval queue, both rendered as sections of the
-        // in-panel Settings view (there is no separate settings window).
-        fullui::mac::full_ui_view,
-        connectors::mac::connectors_list,
-        connectors::mac::connect_service,
-        connectors::mac::disconnect_service,
-        connectors::mac::fetch_on_demand,
-        approvals::mac::submit_send,
-        approvals::mac::draft_reply,
-        approvals::mac::list_approvals,
-        approvals::mac::confirm_send,
-        approvals::mac::reject_send,
-        approvals::mac::set_composio_key,
-        approvals::mac::clear_composio_key,
-        approvals::mac::set_composio_policy,
-        approvals::mac::set_composio_user_id,
-        approvals::mac::composio_settings,
-        ai_sessions::mac::get_ai_session_import,
-        ai_sessions::mac::set_ai_session_import,
-        dream::mac::dream_status,
-        dream::mac::run_dream_now,
-        dream::mac::select_kk_configured,
-        dream::mac::set_select_kk_key,
-        dream::mac::clear_select_kk_key,
-        // First-run onboarding flow (issue #6, superseding the #46 AX guide). Own webview
-        // (onboarding.html), opened by setup_macos until the flow has been completed once.
-        // State is Rust-owned (invariant 1); the AX check split (silent poll / prompting button)
-        // and the accessibility-changed watcher are the #46 assets, kept.
-        entitlement::mac::entitlement_status,
-        // Stripe billing (issue #8). Status/activation are local; checkout and the portal open
-        // Stripe-hosted pages in the system browser — no card UI in this app (FR-BIL-07).
-        billing::mac::billing_status,
-        billing::mac::billing_activate,
-        billing::mac::billing_refresh,
-        billing::mac::billing_deactivate,
-        billing::mac::billing_open_checkout,
-        billing::mac::billing_open_portal,
-        onboarding::mac::accessibility_status,
-        onboarding::mac::onboarding_state,
-        onboarding::mac::set_onboarding_state,
-        onboarding::mac::open_accessibility_settings,
-        startup_health::mac::startup_health,
-        onboarding::mac::onboarding_event,
-        exclusions::mac::exclusion_categories,
-        analytics::analytics_get_opt_out,
-        analytics::analytics_set_opt_out,
-        sound::mac::get_sound_settings,
-        sound::mac::set_sound_pref,
-        sound::mac::set_sound_startup,
-        sound::mac::set_sound_quiet_hours,
-        sound::mac::preview_sound_cue,
-        launch_at_login::mac::get_launch_at_login_settings,
-        launch_at_login::mac::set_launch_at_login_enabled,
-        dock_visibility::mac::get_dock_visible,
-        dock_visibility::mac::set_dock_visible,
-        notch_status_visibility::get_notch_status_visible,
-        notch_status_visibility::set_notch_status_visible,
-        voice_session::mac::get_voice_settings,
-        voice_session::mac::set_voice_enabled,
-        voice_session::mac::voice_dismiss,
-        voice_session::mac::voice_force_end,
-        // Daily summaries (issue #10): delivery judgement + seen-state + the Evening card data.
-        daily_summaries::mac::summary_state,
-        daily_summaries::mac::mark_summary_seen,
-        daily_summaries::mac::get_daily_summary_settings,
-        daily_summaries::mac::set_daily_summary_settings,
-        daily_summaries::mac::evening_wrap,
-        daily_summaries::mac::morning_card,
-        daily_summaries::mac::open_summary_source,
-        user_config_watch::get_user_config_status,
-        user_config_watch::open_shougun_md,
-        user_config_watch::regenerate_shougun_md,
-    ]);
+            integrate::mac::painted,
+            integrate::mac::interact,
+            integrate::mac::promote,
+            integrate::mac::hotkey,
+            integrate::mac::open_full_ui,
+            integrate::mac::anim_done,
+            integrate::mac::collapse_request,
+            integrate::mac::clock_sync_ack,
+            integrate::mac::focus_field,
+            meeting::mac::meeting_status,
+            meeting::mac::meeting_start,
+            meeting::mac::meeting_not_now,
+            meeting::mac::meeting_stop,
+            meeting::mac::meeting_toggle_pause,
+            meeting::mac::meeting_save_note,
+            meeting::mac::meeting_recap,
+            meeting::mac::meeting_recap_minutes,
+            meeting::mac::meeting_select_kk_configured,
+            #[cfg(target_os = "macos")]
+            meeting_live_summary::meeting_request_live_summary,
+            meeting::mac::get_deepgram_key_status,
+            meeting::mac::set_deepgram_key,
+            meeting::mac::clear_deepgram_key,
+            meeting::mac::get_meeting_transcript,
+            meeting::mac::meeting_exclude_app,
+            meeting::mac::meeting_include_app,
+            meeting::mac::meeting_drag,
+            meeting::mac::meeting_wrapped,
+            meeting::mac::get_meeting_settings,
+            meeting::mac::set_meeting_enabled,
+            meeting::mac::set_meeting_allow_mic_only,
+            meeting::mac::set_meeting_mode,
+            meeting::mac::set_meeting_langs,
+            meeting::mac::meeting_overlay_dismiss,
+            meeting::mac::meeting_set_overlay_panel,
+            meeting::mac::meeting_set_overlay_canvas,
+            meeting::mac::meeting_set_overlay_chat,
+            meeting::mac::meeting_set_overlay_size,
+            visual_recall::mac::get_visual_recall_settings,
+            visual_recall::mac::set_visual_recall_enabled,
+            visual_recall::mac::set_visual_recall_retention,
+            visual_recall::mac::get_visual_recall_status,
+            visual_recall::mac::list_screen_frames,
+            visual_recall::mac::get_screen_frame_image,
+            visual_recall::mac::delete_screen_frame,
+            visual_recall::mac::open_visual_recall,
+            memory_api_settings::mac::memory_api_settings,
+            memory_api_settings::mac::set_memory_api_enabled,
+            memory_api_settings::mac::set_memory_api_profile,
+            memory_api_settings::mac::issue_memory_api_token,
+            memory_api_settings::mac::revoke_memory_api_token,
+            notch_actions::mac::notch_actions,
+            notch_exec::mac::run_notch_action,
+            notch_exec::mac::confirm_notch_action,
+            search_ui::mac::search_memory,
+            metrics::record_ui_slo,
+            inline_source::mac::inline_at_cursor,
+            scribe::mac::scribe_open,
+            scribe::mac::scribe_submit,
+            scribe::mac::scribe_status,
+            scribe::mac::scribe_close,
+            scribe::mac::scribe_cancel,
+            inline_source::mac::shogun_status,
+            inline_source::mac::shogun_state,
+            inline_source::mac::shogun_chat,
+            inline_source::mac::shogun_chat_stream,
+            inline_source::mac::shogun_chat_cancel,
+            inline_source::mac::quit_app,
+            inline_source::mac::ui_log,
+            inline_source::mac::set_byok_key,
+            inline_source::mac::clear_byok_key,
+            inline_source::mac::byok_key_last4,
+            inline_source::mac::get_llm_settings,
+            inline_source::mac::set_llm_settings,
+            inline_source::mac::subscription_delegates,
+            inline_source::mac::verify_subscription_delegate,
+            inline_source::mac::resolve_state_item,
+            inline_source::mac::clear_memory,
+            inline_source::mac::delete_data_since,
+            inline_source::mac::delete_all_and_account,
+            shortcuts::get_shortcuts,
+            shortcuts::set_shortcut,
+            shortcuts::hide_panel,
+            castle::get_castle_position,
+            castle::set_castle_position,
+            set_panel_size,
+            // First-layer connectors + the L3 send/approval queue, both rendered as sections of the
+            // in-panel Settings view (there is no separate settings window).
+            fullui::mac::full_ui_view,
+            connectors::mac::connectors_list,
+            connectors::mac::connect_service,
+            connectors::mac::disconnect_service,
+            connectors::mac::fetch_on_demand,
+            connectors::mac::google_oauth_settings,
+            connectors::mac::set_google_oauth_client,
+            connectors::mac::clear_google_oauth_client,
+            approvals::mac::submit_send,
+            approvals::mac::draft_reply,
+            approvals::mac::list_approvals,
+            approvals::mac::confirm_send,
+            approvals::mac::reject_send,
+            approvals::mac::set_composio_key,
+            approvals::mac::clear_composio_key,
+            approvals::mac::set_composio_policy,
+            approvals::mac::set_composio_user_id,
+            approvals::mac::composio_settings,
+            ai_sessions::mac::get_ai_session_import,
+            ai_sessions::mac::set_ai_session_import,
+            dream::mac::dream_status,
+            dream::mac::run_dream_now,
+            dream::mac::select_kk_configured,
+            dream::mac::set_select_kk_key,
+            dream::mac::clear_select_kk_key,
+            // First-run onboarding flow (issue #6, superseding the #46 AX guide). Own webview
+            // (onboarding.html), opened by setup_macos until the flow has been completed once.
+            // State is Rust-owned (invariant 1); the AX check split (silent poll / prompting button)
+            // and the accessibility-changed watcher are the #46 assets, kept.
+            entitlement::mac::entitlement_status,
+            // Stripe billing (issue #8). Status/activation are local; checkout and the portal open
+            // Stripe-hosted pages in the system browser — no card UI in this app (FR-BIL-07).
+            billing::mac::billing_status,
+            billing::mac::billing_activate,
+            billing::mac::billing_refresh,
+            billing::mac::billing_deactivate,
+            billing::mac::billing_open_checkout,
+            billing::mac::billing_open_portal,
+            onboarding::mac::permission_status,
+            onboarding::mac::onboarding_state,
+            onboarding::mac::set_onboarding_state,
+            onboarding::mac::open_accessibility_settings,
+            onboarding::mac::request_microphone_permission,
+            onboarding::mac::request_screen_recording_permission,
+            permission_drag::arm_permission_app_drag,
+            permission_drag::disarm_permission_app_drag,
+            startup_health::mac::startup_health,
+            onboarding::mac::onboarding_event,
+            exclusions::mac::exclusion_categories,
+            analytics::analytics_get_opt_out,
+            analytics::analytics_set_opt_out,
+            sound::mac::get_sound_settings,
+            sound::mac::set_sound_pref,
+            sound::mac::set_sound_startup,
+            sound::mac::set_sound_quiet_hours,
+            sound::mac::preview_sound_cue,
+            launch_at_login::mac::get_launch_at_login_settings,
+            launch_at_login::mac::set_launch_at_login_enabled,
+            dock_visibility::mac::get_dock_visible,
+            dock_visibility::mac::set_dock_visible,
+            notch_status_visibility::get_notch_status_visible,
+            notch_status_visibility::set_notch_status_visible,
+            voice_session::mac::get_voice_settings,
+            voice_session::mac::set_voice_enabled,
+            voice_session::mac::voice_dismiss,
+            voice_session::mac::voice_force_end,
+            voice_session::mac::get_voice_edit_settings,
+            voice_session::mac::set_voice_edit_key,
+            voice_session::mac::clear_voice_edit_key,
+            // Daily summaries (issue #10): delivery judgement + seen-state + the Evening card data.
+            daily_summaries::mac::summary_state,
+            daily_summaries::mac::mark_summary_seen,
+            daily_summaries::mac::get_daily_summary_settings,
+            daily_summaries::mac::set_daily_summary_settings,
+            daily_summaries::mac::evening_wrap,
+            daily_summaries::mac::morning_card,
+            daily_summaries::mac::open_summary_source,
+            user_config_watch::get_user_config_status,
+            user_config_watch::open_shougun_md,
+            user_config_watch::regenerate_shougun_md,
+        ]);
 
     // NOTE: the visible surface is a NATIVE NSPanel hosting the webview's content view
     // (adopt_native_panel). Do not drive the webview from Rust via eval()/on_page_load — wry
@@ -408,7 +440,10 @@ fn setup_macos(app: &tauri::App) {
     // while shortcuts hit the new one — which looks exactly like "quit button dead, drag dead".
     // The PID makes that unambiguous in the log.
     eprintln!("========================================================");
-    eprintln!("[shell] SHOGUN starting — pid {} — build: plain-window/drag/quit", std::process::id());
+    eprintln!(
+        "[shell] SHOGUN starting — pid {} — build: plain-window/drag/quit",
+        std::process::id()
+    );
     eprintln!("========================================================");
 
     // PROVEN by [panelstate]: a Regular app's plain window is REFUSED entry to other apps'
@@ -462,6 +497,8 @@ fn setup_macos(app: &tauri::App) {
         "select-kk-batch",
         "composio-api-key",
         "deepgram-asr",
+        "google-oauth-client-id",
+        "google-oauth-client-secret",
     ]);
 
     // Agent-lane provider settings (provider + model; key stays in the Keychain). MUST load
@@ -496,7 +533,9 @@ fn setup_macos(app: &tauri::App) {
                     // exactly one rule — never panic — and "the menu-bar icon is missing" is a
                     // survivable degradation. Note the failure only skips the TRAY: everything
                     // below in setup (the panel, capture, the DB) still has to run.
-                    match tauri::image::Image::from_bytes(include_bytes!("../icons/tray-icon@2x.png")) {
+                    match tauri::image::Image::from_bytes(include_bytes!(
+                        "../icons/tray-icon@2x.png"
+                    )) {
                         Ok(tray_icon) => {
                             let built = TrayIconBuilder::with_id("shogun-tray")
                                 .menu(&menu)
@@ -532,13 +571,14 @@ fn setup_macos(app: &tauri::App) {
         eprintln!("[spike] setup not on main thread — engine not started");
         return;
     };
-    let Some(g) = geometry::read_primary(mtm) else {
+    let display_geometries = geometry::mac::read_all(mtm);
+    let Some(g) = display_geometries.first() else {
         eprintln!("[spike] no screen — engine not started");
         return;
     };
     eprintln!(
-        "[spike] geometry: notch={} notch_w={:.1} notch_h={:.1} menubar_h={:.1} screen={:.0}x{:.0} primary_h={:.0} displays={}",
-        g.is_notch, g.notch_w, g.notch_h, g.menubar_h, g.screen.w, g.screen.h, g.primary_height, g.display_count
+        "[spike] geometry: notch={} notch_w={:.1} notch_h={:.1} menubar_h={:.1} screen={:.0}x{:.0} displays={}",
+        g.is_notch, g.notch_w, g.notch_h, g.menubar_h, g.screen.w, g.screen.h, g.display_count
     );
 
     // Pin the panel INTO the notch band. Tauri's set_position is clamped below the menu bar
@@ -581,16 +621,28 @@ fn setup_macos(app: &tauri::App) {
         integrate::StartGeometry {
             regions: g.regions,
             menubar_min_y,
-            primary_height: g.primary_height,
+            coordinate_space: shogun_core::notch::engine::DisplayCoordinateSpace::new(
+                g.cg_screen,
+                g.screen,
+            ),
             is_notch: g.is_notch,
             display_count: g.display_count,
             screen: g.screen,
-            idle: g.idle,
+            idle_hit: g.activation,
             // Every display's own notch geometry, so hovering the notch on a second monitor is
             // hit-tested against that monitor rather than against the primary's coordinates.
-            per_display: geometry::mac::read_all(mtm)
+            per_display: display_geometries
                 .into_iter()
-                .map(|d| (d.screen, d.regions, d.screen.max_y() - d.menubar_h, d.idle))
+                .map(|d| integrate::DisplayGeometry {
+                    screen: d.screen,
+                    regions: d.regions,
+                    menubar_min_y: d.screen.max_y() - d.menubar_h,
+                    idle_hit: d.activation,
+                    coordinate_space: shogun_core::notch::engine::DisplayCoordinateSpace::new(
+                        d.cg_screen,
+                        d.screen,
+                    ),
+                })
                 .collect(),
         },
         rx,
@@ -614,9 +666,9 @@ fn setup_macos(app: &tauri::App) {
     // once here (migrating any legacy #46 disposition file in place) so the read command answers
     // without hitting disk. The flow shows until it has been completed once; a quit mid-flow
     // resumes at the persisted step, and a legacy completed/skipped device is never re-trapped.
-    app.manage(onboarding::mac::Store(std::sync::Mutex::new(onboarding::mac::load(
-        app.handle(),
-    ))));
+    app.manage(onboarding::mac::Store(std::sync::Mutex::new(
+        onboarding::mac::load(app.handle()),
+    )));
     if onboarding::mac::should_show_onboarding(app.handle()) {
         onboarding::mac::build_onboarding_window(app.handle());
     }
@@ -629,11 +681,16 @@ fn setup_macos(app: &tauri::App) {
     // reads the same focus a moment later through the same exclusion policy — which is installed
     // above, so this thread cannot outrun it and read something it shouldn't.
     std::thread::spawn(|| {
-        let Some(front) = display::frontmost_app() else { return };
+        let Some(front) = display::frontmost_app() else {
+            return;
+        };
         let pid = front.pid;
         let title = axcache::focused_window(pid).and_then(|w| w.title());
         if exclusions::mac::is_excluded(&front.bundle_id, title.as_deref()) {
-            eprintln!("[spike] ax snapshot skipped — {} is excluded from reading", front.bundle_id);
+            eprintln!(
+                "[spike] ax snapshot skipped — {} is excluded from reading",
+                front.bundle_id
+            );
         } else if let Some(r) = axcache::snapshot(pid, 250) {
             eprintln!(
                 "[spike] ax snapshot: {} bytes, {} elements, depth {}, partial={}",
@@ -683,7 +740,10 @@ fn setup_macos(app: &tauri::App) {
                 None,
                 Some(reply_cache),
             );
-            eprintln!("[spike] capture source started (poll {}ms)", capture_source::DEFAULT_POLL_MS);
+            eprintln!(
+                "[spike] capture source started (poll {}ms)",
+                capture_source::DEFAULT_POLL_MS
+            );
 
             // AI coding-tool transcripts (opt-in): a large share of the work happens there, and
             // the tools' own session logs carry role/time/session id that screen capture cannot.
@@ -789,10 +849,7 @@ unsafe fn clamp_to_castle_dock(
     let dock = castle_dock_frame(screen_r, vis_r, pos);
     let max_x = dock.x + (dock.w - width).max(0.0);
     let max_y = dock.y + (dock.h - height).max(0.0);
-    (
-        x.clamp(dock.x, max_x),
-        y.clamp(dock.y, max_y),
-    )
+    (x.clamp(dock.x, max_x), y.clamp(dock.y, max_y))
 }
 
 /// Clamp a proposed frame into `screen`'s visible frame — the bound for a user-dragged position,
@@ -828,7 +885,11 @@ unsafe fn reposition_to_cursor_screen(ptr: *mut objc2::runtime::AnyObject) {
     use objc2_foundation::{NSPoint, NSRect};
     let mouse: NSPoint = msg_send![class!(NSEvent), mouseLocation];
     let screens: *mut AnyObject = msg_send![class!(NSScreen), screens];
-    let count: usize = if screens.is_null() { 0 } else { msg_send![screens, count] };
+    let count: usize = if screens.is_null() {
+        0
+    } else {
+        msg_send![screens, count]
+    };
     for i in 0..count {
         let s: *mut AnyObject = msg_send![screens, objectAtIndex: i];
         if s.is_null() {
@@ -873,7 +934,11 @@ unsafe fn panel_is_on_cursor_screen(ptr: *mut objc2::runtime::AnyObject) -> bool
     let cx = w.origin.x + w.size.width / 2.0;
     let cy = w.origin.y + w.size.height / 2.0;
     let screens: *mut AnyObject = msg_send![class!(NSScreen), screens];
-    let count: usize = if screens.is_null() { 0 } else { msg_send![screens, count] };
+    let count: usize = if screens.is_null() {
+        0
+    } else {
+        msg_send![screens, count]
+    };
     for i in 0..count {
         let sc: *mut AnyObject = msg_send![screens, objectAtIndex: i];
         if sc.is_null() {
@@ -881,7 +946,10 @@ unsafe fn panel_is_on_cursor_screen(ptr: *mut objc2::runtime::AnyObject) -> bool
         }
         let f: NSRect = msg_send![sc, frame];
         let has = |x: f64, y: f64| {
-            x >= f.origin.x && x <= f.origin.x + f.size.width && y >= f.origin.y && y <= f.origin.y + f.size.height
+            x >= f.origin.x
+                && x <= f.origin.x + f.size.width
+                && y >= f.origin.y
+                && y <= f.origin.y + f.size.height
         };
         if has(mouse.x, mouse.y) {
             return has(cx, cy);
@@ -986,7 +1054,11 @@ unsafe fn pin_top_centre(ptr: *mut objc2::runtime::AnyObject) {
     // Following the cursor is still the right behaviour for the deliberate "come here" action; that
     // is what ⌥J / `summon_to_active_space` does.
     let screens: *mut AnyObject = msg_send![class!(NSScreen), screens];
-    let count: usize = if screens.is_null() { 0 } else { msg_send![screens, count] };
+    let count: usize = if screens.is_null() {
+        0
+    } else {
+        msg_send![screens, count]
+    };
     let mut screen: *mut AnyObject = if count > 0 {
         msg_send![screens, objectAtIndex: 0usize]
     } else {
@@ -1013,7 +1085,11 @@ unsafe fn pin_top_centre(ptr: *mut objc2::runtime::AnyObject) {
     // Which anchor, where it actually landed, and on which screen. With more than one display
     // "I can't see it" is usually "it is on the other one", and that is not answerable without
     // the coordinates.
-    let anchor = if current_drag_override().is_some() { "drag" } else { current_castle().key() };
+    let anchor = if current_drag_override().is_some() {
+        "drag"
+    } else {
+        current_castle().key()
+    };
     let f: NSRect = msg_send![screen, frame];
     eprintln!(
         "[shell] panel docked ({}) at {:.0},{:.0} ({:.0}x{:.0}) on the menu-bar display {:.0},{:.0} {:.0}x{:.0}",
@@ -1034,6 +1110,68 @@ unsafe fn pin_top_centre(ptr: *mut objc2::runtime::AnyObject) {
 #[cfg(target_os = "macos")]
 static REASSERT_AT: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
 
+/// AppKit's visibility and Space membership do not prove that the WindowServer is rendering the
+/// panel. A cold launch can report both while its compositor surface is absent; only a panel that
+/// is visible, on the active Space, and drawn is safe to leave unreordered.
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy)]
+struct PanelPresentation {
+    visible: bool,
+    on_active_space: bool,
+    drawn: bool,
+}
+
+#[cfg(target_os = "macos")]
+fn panel_needs_reorder(presentation: PanelPresentation) -> bool {
+    !presentation.visible || !presentation.on_active_space || !presentation.drawn
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod panel_recovery_tests {
+    use super::{panel_needs_reorder, PanelPresentation, PANEL_MOVABLE};
+
+    #[test]
+    fn notch_panel_is_never_user_movable() {
+        const { assert!(!PANEL_MOVABLE) };
+    }
+
+    #[test]
+    fn undrawn_panel_needs_reorder_even_when_visible_on_active_space() {
+        assert!(panel_needs_reorder(PanelPresentation {
+            visible: true,
+            on_active_space: true,
+            drawn: false,
+        }));
+    }
+
+    #[test]
+    fn invisible_panel_needs_reorder() {
+        assert!(panel_needs_reorder(PanelPresentation {
+            visible: false,
+            on_active_space: true,
+            drawn: true,
+        }));
+    }
+
+    #[test]
+    fn panel_off_active_space_needs_reorder() {
+        assert!(panel_needs_reorder(PanelPresentation {
+            visible: true,
+            on_active_space: false,
+            drawn: true,
+        }));
+    }
+
+    #[test]
+    fn drawn_visible_panel_on_active_space_is_healthy() {
+        assert!(!panel_needs_reorder(PanelPresentation {
+            visible: true,
+            on_active_space: true,
+            drawn: true,
+        }));
+    }
+}
+
 #[cfg(target_os = "macos")]
 fn reassert_panel(handle: &tauri::AppHandle, why: &'static str) {
     use objc2::msg_send;
@@ -1043,17 +1181,40 @@ fn reassert_panel(handle: &tauri::AppHandle, why: &'static str) {
     if USER_HIDDEN.load(std::sync::atomic::Ordering::Relaxed) {
         return;
     }
-    let Some(ptr) = overlay_ptr(handle) else { return };
-    // SAFETY: all call sites run on the main thread (workspace notifications and the
-    // state-logger's run_on_main_thread closure); live NSWindow/NSPanel; pure AppKit
-    // property and ordering calls.
+    let Some(ptr) = overlay_ptr(handle) else {
+        return;
+    };
+    // SAFETY: all call sites marshal through `run_on_main_thread`; live NSWindow/NSPanel; pure
+    // AppKit property and ordering calls.
     unsafe {
         let want = PANEL_BEHAVIOR.load(std::sync::atomic::Ordering::Relaxed);
-        let _: () = msg_send![ptr, setCollectionBehavior: want];
-        let _: () = msg_send![ptr, setLevel: OVERLAY_LEVEL];
+        let behavior: usize = msg_send![ptr, collectionBehavior];
+        let level: isize = msg_send![ptr, level];
+        let hides_on_deactivate: bool = msg_send![ptr, hidesOnDeactivate];
+        let can_hide: bool = msg_send![ptr, canHide];
+        if behavior != want {
+            let _: () = msg_send![ptr, setCollectionBehavior: want];
+        }
+        if level != OVERLAY_LEVEL {
+            let _: () = msg_send![ptr, setLevel: OVERLAY_LEVEL];
+        }
+        if hides_on_deactivate {
+            let _: () = msg_send![ptr, setHidesOnDeactivate: false];
+        }
+        if can_hide {
+            let _: () = msg_send![ptr, setCanHide: false];
+        }
+        let _: () = msg_send![ptr, setMovable: PANEL_MOVABLE];
+        let _: () = msg_send![ptr, setMovableByWindowBackground: PANEL_MOVABLE];
         let visible: bool = msg_send![ptr, isVisible];
-        let on_active: bool = msg_send![ptr, isOnActiveSpace];
-        if visible && on_active {
+        let on_active_space: bool = msg_send![ptr, isOnActiveSpace];
+        let occlusion: usize = msg_send![ptr, occlusionState];
+        let drawn = occlusion & (1 << 1) != 0;
+        if !panel_needs_reorder(PanelPresentation {
+            visible,
+            on_active_space,
+            drawn,
+        }) {
             return; // genuinely on screen here — leave it alone
         }
         // Debounce lightly: one app switch fires several notifications back-to-back;
@@ -1129,6 +1290,54 @@ fn build_panel_window(handle: &tauri::AppHandle) {
     }
 }
 
+/// Build Scribe beside the AX field captured before Shogun takes focus. This is a regular focused
+/// window, never the notch's non-activating NSPanel, so the two lifecycles remain independent.
+#[cfg(target_os = "macos")]
+fn build_scribe_window(
+    handle: &tauri::AppHandle,
+    opened: scribe::mac::ScribeOpenResult,
+) -> Result<(), String> {
+    use tauri::Manager;
+
+    if let Some(existing) = handle.get_webview_window(SCRIBE_LABEL) {
+        let _ = existing.close();
+    }
+    let width = opened
+        .anchor
+        .map(|anchor| anchor.width.clamp(SCRIBE_MIN_W, SCRIBE_MAX_W))
+        .unwrap_or(520.0);
+    let url = format!("index.html?view=scribe&session={}", opened.session_id);
+    let mut builder =
+        tauri::WebviewWindowBuilder::new(handle, SCRIBE_LABEL, tauri::WebviewUrl::App(url.into()))
+            .title("ShogunAI Scribe")
+            .transparent(true)
+            .decorations(false)
+            .resizable(false)
+            .always_on_top(true)
+            .shadow(false)
+            .skip_taskbar(true)
+            .inner_size(width, SCRIBE_H)
+            .visible(false)
+            .focused(true);
+
+    if let Some(anchor) = opened.anchor {
+        let x = anchor.x + (anchor.width - width) / 2.0;
+        let above = anchor.y - SCRIBE_H - 8.0;
+        let y = if above >= 4.0 {
+            above
+        } else {
+            anchor.y + anchor.height + 8.0
+        };
+        builder = builder.position(x.max(4.0), y.max(4.0));
+    }
+
+    let window = builder.build().map_err(|error| error.to_string())?;
+    window.show().map_err(|error| error.to_string())?;
+    window.set_focus().map_err(|error| error.to_string())?;
+    eprintln!("[shell] Scribe field overlay opened");
+    Ok(())
+}
+
 /// The Full UI window (spec §D) — Today, Context Health, Sources, Memory, Activity, Traceability.
 ///
 /// Deliberately an ORDINARY window, not the overlay: the notch panel is a nonactivating NSPanel
@@ -1185,8 +1394,12 @@ pub(crate) fn build_full_ui_window(handle: &tauri::AppHandle) {
 /// Best-effort: if the cursor or monitor can't be resolved we leave the window where Tauri put it
 /// rather than guessing a position.
 fn center_on_cursor_screen(win: &tauri::WebviewWindow) {
-    let Ok(cursor) = win.cursor_position() else { return };
-    let Ok(Some(mon)) = win.monitor_from_point(cursor.x, cursor.y) else { return };
+    let Ok(cursor) = win.cursor_position() else {
+        return;
+    };
+    let Ok(Some(mon)) = win.monitor_from_point(cursor.x, cursor.y) else {
+        return;
+    };
 
     // Work in LOGICAL points, and use the size we asked for rather than reading it back.
     // `outer_size()` right after build returns the pre-scaling size on a Retina display, so
@@ -1237,8 +1450,12 @@ pub(crate) fn build_visual_recall_window(handle: &tauri::AppHandle) {
 }
 
 fn center_visual_recall_on_cursor_screen(win: &tauri::WebviewWindow) {
-    let Ok(cursor) = win.cursor_position() else { return };
-    let Ok(Some(mon)) = win.monitor_from_point(cursor.x, cursor.y) else { return };
+    let Ok(cursor) = win.cursor_position() else {
+        return;
+    };
+    let Ok(Some(mon)) = win.monitor_from_point(cursor.x, cursor.y) else {
+        return;
+    };
     let scale = mon.scale_factor();
     let mp = mon.position().to_logical::<f64>(scale);
     let ms = mon.size().to_logical::<f64>(scale);
@@ -1308,7 +1525,7 @@ fn report_panel_health(app: &tauri::AppHandle) {
                 return;
             };
             // SAFETY: main thread, live window; getters only.
-            unsafe {
+            let presentation = unsafe {
                 let visible: bool = msg_send![ptr, isVisible];
                 // Bit 1 of occlusionState is the compositor's own verdict: actually drawn.
                 let occ: usize = msg_send![ptr, occlusionState];
@@ -1321,7 +1538,11 @@ fn report_panel_health(app: &tauri::AppHandle) {
                     0
                 } else {
                     let subs: *mut AnyObject = msg_send![cv, subviews];
-                    if subs.is_null() { 0 } else { msg_send![subs, count] }
+                    if subs.is_null() {
+                        0
+                    } else {
+                        msg_send![subs, count]
+                    }
                 };
                 eprintln!(
                     "[shell] health: visible={visible} drawn={drawn} alpha={alpha:.2} \
@@ -1348,6 +1569,14 @@ fn report_panel_health(app: &tauri::AppHandle) {
                 } else {
                     eprintln!("[shell] health: drawing normally at the frame above.");
                 }
+                PanelPresentation {
+                    visible,
+                    on_active_space: on_active,
+                    drawn,
+                }
+            };
+            if panel_needs_reorder(presentation) {
+                reassert_panel(&h2, "cold-launch-health");
             }
         });
     });
@@ -1378,8 +1607,7 @@ fn adopt_native_panel(win: &tauri::WebviewWindow) {
         // Earlier: nonactivatingPanel alone (128) — fine for Space behavior, but utility+hud
         // matches the reference panel chrome that actually lives in the notch band.
         let style: usize = (1 << 4) | (1 << 7) | (1 << 13); // utility | nonactivating | hud
-        let panel: *mut AnyObject =
-            msg_send![alloc, initWithContentRect: frame, styleMask: style, backing: 2usize, defer: false];
+        let panel: *mut AnyObject = msg_send![alloc, initWithContentRect: frame, styleMask: style, backing: 2usize, defer: false];
         if panel.is_null() {
             eprintln!("[shell] adopt: NSPanel init failed — falling back to plain window");
             let _ = win.show();
@@ -1419,7 +1647,11 @@ fn adopt_native_panel(win: &tauri::WebviewWindow) {
         // launch, and it costs two message sends.
         let cv_frame: NSRect = msg_send![cv, frame];
         let subs: *mut AnyObject = msg_send![cv, subviews];
-        let n: usize = if subs.is_null() { 0 } else { msg_send![subs, count] };
+        let n: usize = if subs.is_null() {
+            0
+        } else {
+            msg_send![subs, count]
+        };
         eprintln!(
             "[shell] adopt: panel content view {:.0}x{:.0} origin=({:.0},{:.0}) with {n} subview(s){}",
             cv_frame.size.width,
@@ -1442,7 +1674,8 @@ fn adopt_native_panel(win: &tauri::WebviewWindow) {
         let _: () = msg_send![panel, setCollectionBehavior: want];
         let _: () = msg_send![panel, setHidesOnDeactivate: false];
         let _: () = msg_send![panel, setCanHide: false];
-        let _: () = msg_send![panel, setMovableByWindowBackground: true];
+        let _: () = msg_send![panel, setMovable: PANEL_MOVABLE];
+        let _: () = msg_send![panel, setMovableByWindowBackground: PANEL_MOVABLE];
         // ORDER: setFloatingPanel BEFORE setLevel. AppKit's floating-panel path resets level to
         // NSFloatingWindowLevel (3); boring.notch sets isFloatingPanel first, then mainMenu+3.
         let _: () = msg_send![panel, setFloatingPanel: true];
@@ -1465,80 +1698,7 @@ fn adopt_native_panel(win: &tauri::WebviewWindow) {
             pf.origin.x, pf.origin.y, pf.size.width, pf.size.height
         );
 
-        // Drag override capture (issue #21): performWindowDragWithEvent: is fully native — no
-        // command and no webview event fires when the user drops the panel, so the only place the
-        // final position surfaces is the window's own did-move notification.
-        watch_user_moves(panel);
     }
-}
-
-/// Subscribe to `NSWindowDidMoveNotification` for the overlay panel (issue #21). Programmatic
-/// moves are bracketed by `PROGRAMMATIC_MOVE` and ignored; whatever remains is the user dragging
-/// the collapsed pill or the expanded header, which becomes the drag override (memory
-/// immediately, `castle.json` debounced). Observer and block are intentionally leaked — the panel
-/// lives for the app's lifetime.
-///
-/// # Safety
-/// `panel` must be the live overlay NSPanel; called on the main thread during adoption.
-#[cfg(target_os = "macos")]
-unsafe fn watch_user_moves(panel: *mut objc2::runtime::AnyObject) {
-    use objc2::runtime::AnyObject;
-    use objc2::{class, msg_send};
-    use objc2_foundation::NSString;
-
-    let nc: *mut AnyObject = msg_send![class!(NSNotificationCenter), defaultCenter];
-    if nc.is_null() {
-        eprintln!("[shell] NSNotificationCenter nil — drag positions will not be remembered");
-        return;
-    }
-    // The block captures the pointer as a plain address: the panel is app-lifetime (never freed),
-    // and an address keeps the closure trivially 'static.
-    let addr = panel as usize;
-    let name = NSString::from_str("NSWindowDidMoveNotification");
-    let block = block2::RcBlock::new(move |_notif: *mut AnyObject| {
-        note_user_move(addr as *mut AnyObject);
-    });
-    let nil_obj: *mut AnyObject = std::ptr::null_mut();
-    // `object: panel` filters delivery to THIS window's moves only.
-    let _obs: *mut AnyObject =
-        msg_send![nc, addObserverForName: &*name, object: panel, queue: nil_obj, usingBlock: &*block];
-    std::mem::forget(block);
-    eprintln!("[shell] user-move watcher installed (drag override, issue #21)");
-}
-
-/// A did-move that our own code did not cause = the user dragged the panel. Record where it sits
-/// relative to its screen's visible frame as the drag override and schedule the debounced save.
-/// Runs on the main thread (AppKit posts the window's did-move synchronously with the move).
-#[cfg(target_os = "macos")]
-fn note_user_move(ptr: *mut objc2::runtime::AnyObject) {
-    use objc2::msg_send;
-    use objc2::runtime::AnyObject;
-    use objc2_foundation::NSRect;
-    use shogun_core::notch::geometry::{drag_offset, Point as GPoint, Rect as GRect};
-
-    if PROGRAMMATIC_MOVE.load(std::sync::atomic::Ordering::Relaxed) {
-        return;
-    }
-    // SAFETY: main thread; `ptr` is the live, app-lifetime overlay panel; getters only.
-    let off = unsafe {
-        let screen: *mut AnyObject = msg_send![ptr, screen];
-        if screen.is_null() {
-            // Mid-drag between displays the window can momentarily have no screen — keep the
-            // previous override rather than recording garbage.
-            return;
-        }
-        let vf: NSRect = msg_send![screen, visibleFrame];
-        let f: NSRect = msg_send![ptr, frame];
-        drag_offset(
-            GRect::new(vf.origin.x, vf.origin.y, vf.size.width, vf.size.height),
-            GPoint::new(f.origin.x, f.origin.y),
-            f.size.height,
-        )
-    };
-    if let Ok(mut g) = DRAG_OVERRIDE.lock() {
-        *g = Some(off);
-    }
-    castle::schedule_save();
 }
 
 /// Resize the visible overlay (native panel or fallback window) — the webview's minimize/expand
@@ -1557,8 +1717,8 @@ fn set_panel_size(app: tauri::AppHandle, width: f64, height: f64, anchor: Option
     let h = app.clone();
     let _ = app.run_on_main_thread(move || {
         use objc2::msg_send;
-        use objc2_foundation::{NSPoint, NSRect, NSSize};
         use objc2::runtime::AnyObject;
+        use objc2_foundation::{NSPoint, NSRect, NSSize};
         let Some(ptr) = overlay_ptr(&h) else { return };
         // SAFETY: main thread, live NSWindow/NSPanel.
         unsafe {
@@ -1587,7 +1747,10 @@ fn set_panel_size(app: tauri::AppHandle, width: f64, height: f64, anchor: Option
                 (o.x, o.y)
             } else {
                 // No screen (rare): fall back to holding the panel's centre and top edge.
-                (f.origin.x + f.size.width / 2.0 - width / 2.0, f.origin.y + f.size.height - height)
+                (
+                    f.origin.x + f.size.width / 2.0 - width / 2.0,
+                    f.origin.y + f.size.height - height,
+                )
             };
             // Whichever path we took, never hang off the dock frame. A dragged panel is clamped
             // to the VISIBLE frame instead of the castle's dock rect: the castle rect is only a
@@ -1603,7 +1766,10 @@ fn set_panel_size(app: tauri::AppHandle, width: f64, height: f64, anchor: Option
                 x = clamped.0;
                 y = clamped.1;
             }
-            let r = NSRect { origin: NSPoint { x, y }, size: NSSize { width, height } };
+            let r = NSRect {
+                origin: NSPoint { x, y },
+                size: NSSize { width, height },
+            };
             // Bracketed: a resize repositions the frame origin, which posts the same did-move
             // notification a user drag does — without the flag every collapse/expand would be
             // recorded as a drag override.
@@ -1639,31 +1805,6 @@ fn set_panel_size(app: tauri::AppHandle, width: f64, height: f64, anchor: Option
         // Hover R_exp + CGEventTap band must match the live frame or move-into-panel collapses.
         if let Some(shared) = h.try_state::<std::sync::Arc<integrate::mac::Shared>>() {
             shared.set_panel_hit_size(width, height);
-        }
-    });
-}
-
-/// Begin a native window drag of the overlay from the webview's header mouse-down. The tao
-/// `startDragging` targets the hidden tao window, so the webview calls this instead — it hands
-/// the in-flight mouse event to the native panel.
-#[cfg(target_os = "macos")]
-#[tauri::command]
-fn start_panel_drag(app: tauri::AppHandle) {
-    let h = app.clone();
-    let _ = app.run_on_main_thread(move || {
-        use objc2::runtime::AnyObject;
-        use objc2::{class, msg_send};
-        let Some(ptr) = overlay_ptr(&h) else { return };
-        // SAFETY: main thread; standard AppKit calls.
-        unsafe {
-            let ns_app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
-            if ns_app.is_null() {
-                return;
-            }
-            let ev: *mut AnyObject = msg_send![ns_app, currentEvent];
-            if !ev.is_null() {
-                let _: () = msg_send![ptr, performWindowDragWithEvent: ev];
-            }
         }
     });
 }
@@ -1717,17 +1858,28 @@ fn watch_space_changes(app: &tauri::App) {
             return;
         }
         for (name_str, why) in [
-            ("NSWorkspaceActiveSpaceDidChangeNotification", "space-changed"),
-            ("NSWorkspaceDidActivateApplicationNotification", "app-activated"),
+            (
+                "NSWorkspaceActiveSpaceDidChangeNotification",
+                "space-changed",
+            ),
+            (
+                "NSWorkspaceDidActivateApplicationNotification",
+                "app-activated",
+            ),
         ] {
             let handle = app.handle().clone();
             let name = NSString::from_str(name_str);
             let block = block2::RcBlock::new(move |_notif: *mut AnyObject| {
-                reassert_panel(&handle, why);
+                let main_handle = handle.clone();
+                if handle
+                    .run_on_main_thread(move || reassert_panel(&main_handle, why))
+                    .is_err()
+                {
+                    eprintln!("[shell] {why}: could not schedule panel reassert on main thread");
+                }
             });
             let nil_obj: *mut AnyObject = std::ptr::null_mut();
-            let _obs: *mut AnyObject =
-                msg_send![nc, addObserverForName: &*name, object: nil_obj, queue: nil_obj, usingBlock: &*block];
+            let _obs: *mut AnyObject = msg_send![nc, addObserverForName: &*name, object: nil_obj, queue: nil_obj, usingBlock: &*block];
             std::mem::forget(block);
         }
         eprintln!("[shell] space + app-activation watchers installed");
@@ -1764,6 +1916,8 @@ fn spawn_panel_state_logger(app: &tauri::App) {
                 let on_active: bool = msg_send![ptr, isOnActiveSpace];
                 let behavior: usize = msg_send![ptr, collectionBehavior];
                 let level: isize = msg_send![ptr, level];
+                let hides_on_deactivate: bool = msg_send![ptr, hidesOnDeactivate];
+                let can_hide: bool = msg_send![ptr, canHide];
                 let frame: NSRect = msg_send![ptr, frame];
                 // The compositor's OWN verdict: bit 1 of occlusionState = actually drawn on screen.
                 // visible=true + occluded=true is the smoking gun for "window fine, pixels absent".
@@ -1777,17 +1931,38 @@ fn spawn_panel_state_logger(app: &tauri::App) {
                 // silently demoting the overlay. Re-assert only when wrong; a pure property write
                 // with no re-ordering, so it cannot flicker or steal focus.
                 let want = PANEL_BEHAVIOR.load(std::sync::atomic::Ordering::Relaxed);
-                if level != OVERLAY_LEVEL || behavior & want != want {
+                if behavior != want {
                     let _: () = msg_send![ptr, setCollectionBehavior: want];
+                }
+                if level != OVERLAY_LEVEL {
                     let _: () = msg_send![ptr, setLevel: OVERLAY_LEVEL];
-                    eprintln!("[panelstate] healed: level {level}→{OVERLAY_LEVEL} behavior {behavior}→{want}");
+                }
+                if hides_on_deactivate {
+                    let _: () = msg_send![ptr, setHidesOnDeactivate: false];
+                }
+                if can_hide {
+                    let _: () = msg_send![ptr, setCanHide: false];
+                }
+                if behavior != want
+                    || level != OVERLAY_LEVEL
+                    || hides_on_deactivate
+                    || can_hide
+                {
+                    eprintln!(
+                        "[panelstate] healed: level {level}→{OVERLAY_LEVEL} behavior {behavior}→{want} \
+                         hidesOnDeactivate {hides_on_deactivate}→false canHide {can_hide}→false"
+                    );
                 }
                 (
                     format!(
                         "visible={visible} drawn={drawn} onActiveSpace={on_active} behavior={behavior} level={level} alpha={alpha:.2} appActive={app_active} origin=({:.0},{:.0})",
                         frame.origin.x, frame.origin.y
                     ),
-                    visible && on_active,
+                    !panel_needs_reorder(PanelPresentation {
+                        visible,
+                        on_active_space: on_active,
+                        drawn,
+                    }),
                 )
             };
             if debug {
@@ -1868,8 +2043,9 @@ pub(crate) fn float_on_all_spaces(win: &tauri::WebviewWindow) {
         let _: () = msg_send![ptr, setHidesOnDeactivate: false];
         // Belt-and-braces: never let the window server hide this window as part of app-hide.
         let _: () = msg_send![ptr, setCanHide: false];
-        // Overlay spec: drag the panel by grabbing anywhere on its background.
-        let _: () = msg_send![ptr, setMovableByWindowBackground: true];
+        // The overlay is anchored to its Castle Position; background mouse-down must not move it.
+        let _: () = msg_send![ptr, setMovable: PANEL_MOVABLE];
+        let _: () = msg_send![ptr, setMovableByWindowBackground: PANEL_MOVABLE];
         // Accessory (background) apps do NOT auto-show their windows — orderFrontRegardless forces
         // the window visible even while the app is inactive.
         let _: () = msg_send![ptr, orderFrontRegardless];
@@ -1880,7 +2056,11 @@ pub(crate) fn float_on_all_spaces(win: &tauri::WebviewWindow) {
         // swapped NotchPanel for the window server to treat this as a true panel.
         let mask: usize = msg_send![ptr, styleMask];
         let cls: *const objc2::runtime::AnyClass = msg_send![ptr, class];
-        let cls_name = if cls.is_null() { "?" } else { (*cls).name().to_str().unwrap_or("?") };
+        let cls_name = if cls.is_null() {
+            "?"
+        } else {
+            (*cls).name().to_str().unwrap_or("?")
+        };
         eprintln!(
             "[shell] NSWindow behavior set={behavior} readback={got} level={lvl} hidesOnDeactivate={hides} styleMask={mask} class={cls_name}, ordered front"
         );
@@ -1902,7 +2082,220 @@ pub(crate) fn run_inline_draft(handle: &tauri::AppHandle) {
             .try_state::<user_config_watch::UserConfigState>()
             .map(|s| s.directives())
             .unwrap_or_default();
-        inline_source::mac::run_inline_at_cursor(db.inner().clone(), warm, handle.clone(), directives);
+        inline_source::mac::run_inline_at_cursor(
+            db.inner().clone(),
+            warm,
+            handle.clone(),
+            directives,
+        );
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod right_option_tap {
+    use std::time::{Duration, Instant};
+
+    pub const DOUBLE_TAP_WINDOW: Duration = Duration::from_millis(300);
+    pub const DISPATCH_GRACE: Duration = Duration::from_millis(20);
+    pub const FLAG_ALT: usize = 1 << 19;
+    pub const RIGHT_OPTION_KEY_CODE: u16 = 61;
+    pub const POISON_EVENT_MASK: usize = (1 << 1)
+        | (1 << 2)
+        | (1 << 3)
+        | (1 << 4)
+        | (1 << 5)
+        | (1 << 6)
+        | (1 << 7)
+        | (1 << 8)
+        | (1 << 9)
+        | (1 << 18) // rotate
+        | (1 << 19) // begin gesture
+        | (1 << 20) // end gesture
+        | (1 << 22) // scroll wheel
+        | (1 << 23) // tablet point
+        | (1 << 24) // tablet proximity
+        | (1 << 25)
+        | (1 << 26)
+        | (1 << 27)
+        | (1 << 29) // gesture
+        | (1 << 30) // magnify
+        | (1 << 31) // swipe
+        | (1usize << 32) // smart magnify
+        | (1usize << 34) // pressure
+        | (1usize << 37); // direct touch
+
+    pub fn tap_flag(combo: &str) -> Option<usize> {
+        match combo.strip_prefix("Tap+")? {
+            "Shift" => Some(1 << 17),
+            "Control" => Some(1 << 18),
+            "Alt" => Some(FLAG_ALT),
+            "Super" => Some(1 << 20),
+            "Fn" => Some(1 << 23),
+            _ => None,
+        }
+    }
+
+    pub fn correct_modifier_key(target: usize, key_code: u16) -> bool {
+        target != FLAG_ALT || key_code == RIGHT_OPTION_KEY_CODE
+    }
+
+    pub fn clean_release(armed: bool, poisoned: bool, correct_key: bool, held_ms: u128) -> bool {
+        armed && !poisoned && correct_key && held_ms <= 500
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    pub enum CleanTapAction {
+        QueueDraft {
+            generation: u64,
+            superseded_draft: Option<u64>,
+        },
+        StartScribe,
+    }
+
+    #[derive(Default)]
+    pub struct State {
+        pending_draft: Option<(Instant, u64)>,
+        next_generation: u64,
+    }
+
+    impl State {
+        pub fn clean_tap(&mut self, now: Instant) -> CleanTapAction {
+            if let Some((first, _)) = self.pending_draft {
+                if now.saturating_duration_since(first) <= DOUBLE_TAP_WINDOW {
+                    self.pending_draft = None;
+                    return CleanTapAction::StartScribe;
+                }
+            }
+            let superseded_draft = self.pending_draft.take().map(|(_, generation)| generation);
+            self.next_generation = self.next_generation.wrapping_add(1);
+            let generation = self.next_generation;
+            self.pending_draft = Some((now, generation));
+            CleanTapAction::QueueDraft {
+                generation,
+                superseded_draft,
+            }
+        }
+
+        pub fn take_due_draft(&mut self, now: Instant) -> Option<u64> {
+            let due = self.pending_draft.filter(|(started, _)| {
+                now.saturating_duration_since(*started) >= DOUBLE_TAP_WINDOW
+            });
+            if due.is_some() {
+                self.pending_draft = None;
+            }
+            due.map(|(_, generation)| generation)
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn second_tap_at_exact_window_starts_scribe() {
+            let start = Instant::now();
+            let mut state = State::default();
+            assert_eq!(
+                state.clean_tap(start),
+                CleanTapAction::QueueDraft {
+                    generation: 1,
+                    superseded_draft: None
+                }
+            );
+            assert_eq!(
+                state.clean_tap(start + DOUBLE_TAP_WINDOW),
+                CleanTapAction::StartScribe
+            );
+            assert_eq!(state.take_due_draft(start + DOUBLE_TAP_WINDOW), None);
+        }
+
+        #[test]
+        fn first_tap_is_due_only_after_window() {
+            let start = Instant::now();
+            let mut state = State::default();
+            state.clean_tap(start);
+            assert_eq!(
+                state.take_due_draft(start + Duration::from_millis(299)),
+                None
+            );
+            assert_eq!(state.take_due_draft(start + DOUBLE_TAP_WINDOW), Some(1));
+        }
+
+        #[test]
+        fn late_second_tap_preserves_first_draft() {
+            let start = Instant::now();
+            let mut state = State::default();
+            state.clean_tap(start);
+            assert_eq!(
+                state.clean_tap(start + DOUBLE_TAP_WINDOW + Duration::from_nanos(1)),
+                CleanTapAction::QueueDraft {
+                    generation: 2,
+                    superseded_draft: Some(1)
+                }
+            );
+        }
+
+        #[test]
+        fn only_right_option_is_allowed_for_alt_binding() {
+            assert!(correct_modifier_key(FLAG_ALT, RIGHT_OPTION_KEY_CODE));
+            assert!(!correct_modifier_key(FLAG_ALT, 58));
+            assert!(correct_modifier_key(1 << 17, 56));
+        }
+
+        #[test]
+        fn other_tap_modifiers_work_and_normal_chords_are_inert() {
+            assert_eq!(tap_flag("Tap+Shift"), Some(1 << 17));
+            assert_eq!(tap_flag("Tap+Control"), Some(1 << 18));
+            assert_eq!(tap_flag("Control+Alt+KeyD"), None);
+        }
+
+        #[test]
+        fn poisoned_or_long_hold_never_fires() {
+            assert!(!clean_release(true, true, true, 100));
+            assert!(!clean_release(true, false, true, 501));
+            assert!(!clean_release(true, false, false, 100));
+            assert!(clean_release(true, false, true, 500));
+        }
+
+        #[test]
+        fn every_pointer_scroll_and_gesture_family_poisons_hold() {
+            for bit in [
+                1usize, 2, 3, 4, 5, 6, 7, 8, 9, 18, 19, 20, 22, 23, 24, 25, 26, 27, 29, 30, 31, 32,
+                34, 37,
+            ] {
+                assert_ne!(
+                    POISON_EVENT_MASK & (1usize << bit),
+                    0,
+                    "missing event bit {bit}"
+                );
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn start_scribe(handle: &tauri::AppHandle) {
+    use tauri::Manager;
+    let Some(db) = handle.try_state::<shogun_core::daemon::Db>() else {
+        eprintln!("[shell] Scribe open skipped: database unavailable");
+        return;
+    };
+    let warm = handle
+        .try_state::<shogun_core::daemon::ReplyContextCache>()
+        .and_then(|cache| cache.current());
+    let directives = handle
+        .try_state::<user_config_watch::UserConfigState>()
+        .map(|state| state.directives())
+        .unwrap_or_default();
+    match scribe::mac::open_scribe(db.inner().clone(), warm, directives, handle.clone()) {
+        Ok(opened) => {
+            let session_id = opened.session_id;
+            if let Err(error) = build_scribe_window(handle, opened) {
+                let _ = scribe::mac::scribe_cancel(session_id, handle.clone());
+                eprintln!("[shell] Scribe overlay failed: {error}");
+            }
+        }
+        Err(error) => eprintln!("[shell] Scribe open failed: {error}"),
     }
 }
 
@@ -1919,7 +2312,7 @@ fn watch_option_tap(app: &tauri::App) {
     use objc2::runtime::AnyObject;
     use objc2::{class, msg_send};
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
     use std::time::Instant;
 
     // State machine for a clean "Option tap":
@@ -1935,26 +2328,16 @@ fn watch_option_tap(app: &tauri::App) {
 
     const MASK_KEY_DOWN: usize = 1 << 10; // NSEventMaskKeyDown
     const MASK_FLAGS_CHANGED: usize = 1 << 12; // NSEventMaskFlagsChanged
-    // Any mouse/scroll/gesture during the hold also disqualifies (⌥-click, ⌥-drag, ⌥-scroll).
-    const MASK_MOUSE: usize = (1 << 1) | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 5) | (1 << 6)
-        | (1 << 22) | (1 << 25) | (1 << 26) | (1 << 27) | (1 << 29) | (1 << 30) | (1 << 31);
+                                               // Any mouse/scroll/gesture during the hold also disqualifies (⌥-click, ⌥-drag, ⌥-scroll).
+    const MASK_MOUSE: usize = right_option_tap::POISON_EVENT_MASK;
     // shift | control | option | command | fn — the full standard-modifier set; whichever one the
     // binding targets, all the OTHERS joining the chord disqualifies the tap.
     const FLAG_ALL_MODS: usize = (1 << 17) | (1 << 18) | (1 << 19) | (1 << 20) | (1 << 23);
-    const MAX_TAP_MS: u128 = 500;
-
     /// The NSEvent modifier flag the "draft" binding targets, or None when draft is bound to a
     /// normal chord (the tap watcher is then inert; the plugin dispatches instead).
     fn tap_flag(handle: &tauri::AppHandle) -> Option<usize> {
         let combo = crate::shortcuts::binding(handle, "draft").unwrap_or_else(|| "Tap+Alt".into());
-        match combo.strip_prefix("Tap+")? {
-            "Shift" => Some(1 << 17),
-            "Control" => Some(1 << 18),
-            "Alt" => Some(1 << 19),
-            "Super" => Some(1 << 20),
-            "Fn" => Some(1 << 23),
-            _ => None,
-        }
+        right_option_tap::tap_flag(&combo)
     }
 
     /// Any non-Option input during the hold kills the tap until Option is released.
@@ -1962,6 +2345,29 @@ fn watch_option_tap(app: &tauri::App) {
         POISONED.store(true, Ordering::Relaxed);
         ARMED.store(false, Ordering::Relaxed);
     }
+
+    fn queue_draft(
+        handle: tauri::AppHandle,
+        state: Arc<Mutex<right_option_tap::State>>,
+        generation: u64,
+    ) {
+        std::thread::spawn(move || {
+            std::thread::sleep(
+                right_option_tap::DOUBLE_TAP_WINDOW + right_option_tap::DISPATCH_GRACE,
+            );
+            let due = state
+                .lock()
+                .ok()
+                .and_then(|mut state| state.take_due_draft(Instant::now()))
+                == Some(generation);
+            if due {
+                eprintln!("[shell] right ⌥ tap — draft at cursor");
+                crate::run_inline_draft(&handle);
+            }
+        });
+    }
+
+    let tap_state = Arc::new(Mutex::new(right_option_tap::State::default()));
 
     // SAFETY: main thread (setup); monitors and blocks are intentionally leaked (app lifetime).
     unsafe {
@@ -1990,6 +2396,7 @@ fn watch_option_tap(app: &tauri::App) {
         std::mem::forget(disarm_block);
 
         let handle = app.handle().clone();
+        let state_for_flags = tap_state.clone();
         let flags_block = block2::RcBlock::new(move |ev: *mut AnyObject| {
             if ev.is_null() {
                 return;
@@ -1999,6 +2406,7 @@ fn watch_option_tap(app: &tauri::App) {
                 return;
             };
             let flags: usize = msg_send![ev, modifierFlags];
+            let key_code: u16 = msg_send![ev, keyCode];
             let target_down = flags & target != 0;
             let others_down = flags & (FLAG_ALL_MODS & !target) != 0;
             let was_down = OPT_PREV.swap(target_down, Ordering::Relaxed);
@@ -2009,6 +2417,17 @@ fn watch_option_tap(app: &tauri::App) {
                 return;
             }
             if target_down && !was_down {
+                // The default gesture belongs to right Option only. Left Option remains ordinary
+                // keyboard input and can never draft or open Scribe.
+                if target == right_option_tap::FLAG_ALT
+                    && !right_option_tap::correct_modifier_key(target, key_code)
+                {
+                    poison();
+                    if let Ok(mut down) = DOWN_AT.lock() {
+                        *down = None;
+                    }
+                    return;
+                }
                 // Genuine DOWN edge with nothing else held: start a fresh, clean hold.
                 POISONED.store(false, Ordering::Relaxed);
                 ARMED.store(true, Ordering::Relaxed);
@@ -2019,10 +2438,40 @@ fn watch_option_tap(app: &tauri::App) {
                 // UP edge — fire only on a clean, short, un-poisoned tap.
                 let armed = ARMED.swap(false, Ordering::Relaxed);
                 let poisoned = POISONED.swap(false, Ordering::Relaxed);
-                let held = DOWN_AT.lock().ok().and_then(|g| *g).map(|t| t.elapsed().as_millis());
-                if armed && !poisoned && held.is_some_and(|h| h <= MAX_TAP_MS) {
-                    eprintln!("[shell] modifier tap — draft at cursor");
-                    crate::run_inline_draft(&handle);
+                let held = DOWN_AT
+                    .lock()
+                    .ok()
+                    .and_then(|g| *g)
+                    .map(|t| t.elapsed().as_millis());
+                let correct_key = right_option_tap::correct_modifier_key(target, key_code);
+                if held.is_some_and(|milliseconds| {
+                    right_option_tap::clean_release(armed, poisoned, correct_key, milliseconds)
+                }) {
+                    if target != right_option_tap::FLAG_ALT {
+                        eprintln!("[shell] modifier tap — draft at cursor");
+                        crate::run_inline_draft(&handle);
+                        return;
+                    }
+                    let action = state_for_flags
+                        .lock()
+                        .ok()
+                        .map(|mut state| state.clean_tap(Instant::now()));
+                    match action {
+                        Some(right_option_tap::CleanTapAction::StartScribe) => {
+                            eprintln!("[shell] right ⌥ double-tap — Scribe");
+                            start_scribe(&handle);
+                        }
+                        Some(right_option_tap::CleanTapAction::QueueDraft {
+                            generation,
+                            superseded_draft,
+                        }) => {
+                            if superseded_draft.is_some() {
+                                crate::run_inline_draft(&handle);
+                            }
+                            queue_draft(handle.clone(), state_for_flags.clone(), generation);
+                        }
+                        None => {}
+                    }
                 }
             }
         });
@@ -2036,7 +2485,7 @@ fn watch_option_tap(app: &tauri::App) {
         if key_mon.is_null() || mouse_mon.is_null() || flags_mon.is_null() {
             eprintln!("[shell] tap-to-draft monitor failed to install (accessibility permission?)");
         } else {
-            eprintln!("[shell] tap-to-draft installed (default ⌥ alone, <0.5s, no other input; rebindable)");
+            eprintln!("[shell] right ⌥ tap-to-draft/double-tap Scribe installed");
         }
     }
 }
@@ -2047,23 +2496,27 @@ fn watch_option_tap(app: &tauri::App) {
 fn register_expand_shortcut(app: &tauri::App) {
     use std::sync::Arc;
     use tauri::Manager;
-    use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
+    use tauri_plugin_global_shortcut::{
+        Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState,
+    };
 
     // ⌘⇧J: ⌘⇧Space collides with the input-method source switcher on JP keyboards, so the OS
     // consumes it before the handler runs. J is uncontended.
     let expand = Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::KeyJ);
-    let res = app.global_shortcut().on_shortcut(expand, move |app, _sc, event| {
-        // Diagnostic: log every delivery so we can tell the handler fired even if state differs.
-        eprintln!("[spike] shortcut fired: {:?}", event.state());
-        if event.state() == ShortcutState::Pressed {
-            if let Some(shared) = app.try_state::<Arc<integrate::mac::Shared>>() {
-                shared.trigger_hotkey();
+    let res = app
+        .global_shortcut()
+        .on_shortcut(expand, move |app, _sc, event| {
+            // Diagnostic: log every delivery so we can tell the handler fired even if state differs.
+            eprintln!("[spike] shortcut fired: {:?}", event.state());
+            if event.state() == ShortcutState::Pressed {
+                if let Some(shared) = app.try_state::<Arc<integrate::mac::Shared>>() {
+                    shared.trigger_hotkey();
+                }
+                // Also run the UI-independent core self-test so the product path is verifiable even if
+                // the spike's webview panel doesn't render.
+                notch_exec::mac::self_test(app);
             }
-            // Also run the UI-independent core self-test so the product path is verifiable even if
-            // the spike's webview panel doesn't render.
-            notch_exec::mac::self_test(app);
-        }
-    });
+        });
     match res {
         Ok(()) => eprintln!("[spike] ⌘⇧J registered — press it to open the panel"),
         Err(e) => eprintln!("[spike] global shortcut registration failed: {e}"),
@@ -2125,7 +2578,9 @@ mod shortcuts {
     /// (a summon you can trigger by tapping ⇧ alone would fire constantly while typing).
     fn validate_gesture(action: &str, combo: &str) -> Result<(), String> {
         if !matches!(action, "draft" | "recall") {
-            return Err(format!("{action} needs a key chord, not a modifier gesture"));
+            return Err(format!(
+                "{action} needs a key chord, not a modifier gesture"
+            ));
         }
         let ok = match combo.split_once('+') {
             Some(("Tap", m)) => matches!(m, "Alt" | "Control" | "Shift" | "Super" | "Fn"),
@@ -2140,7 +2595,10 @@ mod shortcuts {
     }
 
     fn config_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
-        app.path().app_data_dir().ok().map(|d| d.join("shortcuts.json"))
+        app.path()
+            .app_data_dir()
+            .ok()
+            .map(|d| d.join("shortcuts.json"))
     }
 
     /// On-disk format. `version` lets a default-change migration run ONCE instead of forever —
@@ -2202,7 +2660,10 @@ mod shortcuts {
         if let Some(dir) = p.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-        let file = ShortcutsFile { version: SHORTCUTS_VERSION, binds: binds.clone() };
+        let file = ShortcutsFile {
+            version: SHORTCUTS_VERSION,
+            binds: binds.clone(),
+        };
         match serde_json::to_string_pretty(&file) {
             Ok(json) => {
                 if let Err(e) = std::fs::write(&p, json) {
@@ -2225,7 +2686,11 @@ mod shortcuts {
 
     /// Register `combo` for `action`. The combo string parses via the plugin (invalid combos and
     /// already-taken combos surface as Err — nothing changes in that case).
-    pub fn register_action(app: &tauri::AppHandle, action: &str, combo: &str) -> Result<(), String> {
+    pub fn register_action(
+        app: &tauri::AppHandle,
+        action: &str,
+        combo: &str,
+    ) -> Result<(), String> {
         if action == "voice" {
             // Hold-to-talk is wired through NSEvent monitors, not the global-shortcut plugin.
             return Ok(());
@@ -2316,8 +2781,8 @@ mod shortcuts {
 #[cfg(target_os = "macos")]
 mod castle {
     use super::{current_castle, current_drag_override, redock_to_castle, CASTLE, DRAG_OVERRIDE};
-    use shogun_core::notch::geometry::{CastlePosition, DragOffset};
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use shogun_core::notch::geometry::CastlePosition;
+    use std::sync::atomic::Ordering;
     use std::sync::OnceLock;
     use tauri::Manager;
 
@@ -2325,11 +2790,11 @@ mod castle {
     /// `AppHandle` (notification blocks only get the NSNotification).
     static CONFIG_PATH: OnceLock<std::path::PathBuf> = OnceLock::new();
 
-    /// True while a debounced drag-save is already scheduled (see `schedule_save`).
-    static SAVE_PENDING: AtomicBool = AtomicBool::new(false);
-
     fn config_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
-        app.path().app_data_dir().ok().map(|d| d.join("castle.json"))
+        app.path()
+            .app_data_dir()
+            .ok()
+            .map(|d| d.join("castle.json"))
     }
 
     /// On-disk form of the drag override: visible-frame offsets (`geometry::DragOffset`).
@@ -2352,10 +2817,8 @@ mod castle {
         drag: Option<DragFile>,
     }
 
-    /// Load the persisted position (and any drag override) into the runtime state. Called once at
-    /// setup. Any failure — missing file, unreadable file, unknown key — leaves the default
-    /// (Notch, no override) in place, which is exactly the original top-centre dock, so a bad
-    /// file can only ever fall back to the known-good spot.
+    /// Load the persisted position into runtime state. Legacy drag overrides are deliberately
+    /// discarded and removed from disk: the notch is a docked surface now.
     pub fn init(app: &tauri::AppHandle) {
         if let Some(p) = config_path(app) {
             let _ = CONFIG_PATH.set(p);
@@ -2367,20 +2830,24 @@ mod castle {
             .unwrap_or_default();
         let pos = CastlePosition::from_key(&file.position).unwrap_or_default();
         CASTLE.store(pos.to_u8(), Ordering::Relaxed);
-        if let (Some(d), Ok(mut g)) = (file.drag, DRAG_OVERRIDE.lock()) {
-            *g = Some(DragOffset { dx: d.dx, dy: d.dy });
+        if let Ok(mut g) = DRAG_OVERRIDE.lock() {
+            *g = None;
         }
-        eprintln!(
-            "[shell] castle position {}{}",
-            pos.key(),
-            if file.drag.is_some() { " (drag override active)" } else { "" }
-        );
+        if file.drag.is_some() {
+            if let Err(e) = save_now() {
+                eprintln!("[shell] legacy drag override cleanup failed: {e}");
+            }
+            eprintln!("[shell] legacy drag override cleared");
+        }
+        eprintln!("[shell] castle position {}", pos.key());
     }
 
     /// Write the current position + drag override to `castle.json`. Path-less (pre-init /
     /// portless environments) degrades to a no-op rather than an error.
     fn save_now() -> Result<(), String> {
-        let Some(p) = CONFIG_PATH.get() else { return Ok(()) };
+        let Some(p) = CONFIG_PATH.get() else {
+            return Ok(());
+        };
         if let Some(dir) = p.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
@@ -2390,24 +2857,6 @@ mod castle {
         };
         let json = serde_json::to_string_pretty(&file).map_err(|e| e.to_string())?;
         std::fs::write(p, json).map_err(|e| format!("save failed: {e}"))
-    }
-
-    /// Persist the drag override soon, coalescing the burst of did-move notifications a live drag
-    /// produces into (at most) one write per 400ms — a trailing debounce, so the LAST position
-    /// always gets written: a move that lands after the flag was cleared schedules a fresh save,
-    /// and one that lands before it is read by the pending save. The thread only exists while a
-    /// drag is being persisted; idle cost is zero (no polling).
-    pub(super) fn schedule_save() {
-        if SAVE_PENDING.swap(true, Ordering::AcqRel) {
-            return;
-        }
-        std::thread::spawn(|| {
-            std::thread::sleep(std::time::Duration::from_millis(400));
-            SAVE_PENDING.store(false, Ordering::Release);
-            if let Err(e) = save_now() {
-                eprintln!("[shell] drag override save failed: {e}");
-            }
-        });
     }
 
     /// The current Castle Position as its wire key, for the Settings UI to preselect.
@@ -2430,7 +2879,10 @@ mod castle {
         CASTLE.store(pos.to_u8(), Ordering::Relaxed);
         save_now()?;
         redock_to_castle(&app);
-        eprintln!("[shell] castle position → {} (drag override cleared)", pos.key());
+        eprintln!(
+            "[shell] castle position → {} (drag override cleared)",
+            pos.key()
+        );
         Ok(())
     }
 }
@@ -2477,11 +2929,40 @@ fn install_connectors(app: &tauri::AppHandle, db: Option<shogun_core::daemon::Db
     // The ONE shared L3 approval queue (B-3 / E-08): created unconditionally at startup, before
     // the connector runtime, so every producer and the confirm UI always resolve the same managed
     // queue — even when the connector runtime fails to start.
-    app.manage(approvals::mac::ApprovalQueueState::default());
+    let approval_path = app
+        .path()
+        .app_data_dir()
+        .map(memory_data_dir)
+        .map(|dir| dir.join(shogun_mcp::approval_store::STORE_FILE))
+        .unwrap_or_else(|_| std::path::PathBuf::from(shogun_mcp::approval_store::STORE_FILE));
+    let heartbeat_path = approval_path.with_file_name(shogun_mcp::desktop_heartbeat::FILE_NAME);
+    // Only the desktop executes confirmed sends. Recover rows left in flight by its previous
+    // process once at startup; ordinary queue transactions must never fail live work mid-send.
+    match shogun_mcp::approval_store::recover_in_flight(
+        &approval_path,
+        shogun_mcp::approval_store::now_ms(),
+    ) {
+        Ok(recovered) if !recovered.is_empty() => eprintln!(
+            "[approvals] recovered {} interrupted send(s) as failed",
+            recovered.len()
+        ),
+        Ok(_) => {}
+        Err(error) => eprintln!("[approvals] startup recovery failed: {error}"),
+    }
+    app.manage(approvals::mac::ApprovalQueueState::at(approval_path));
+    // Headless MCP/REST sends require this fresh writer; a stopped desktop naturally fails closed.
+    std::thread::spawn(move || loop {
+        let _ = shogun_mcp::desktop_heartbeat::write(
+            &heartbeat_path,
+            shogun_mcp::desktop_heartbeat::now_ms(),
+        );
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    });
     // Draft-stop is seeded from the persisted ComposioPolicy (composio.json) — the single source
     // the settings/onboarding toggle and the L3 send gate read. Absent/unreadable policy defaults
     // to draft_stop = true (invariant 4 fail-safe, see ComposioPolicy).
-    match connectors::mac::build_runtime(app, approvals::mac::load_composio_policy(app).draft_stop) {
+    match connectors::mac::build_runtime(app, approvals::mac::load_composio_policy(app).draft_stop)
+    {
         Ok(rt) => {
             let shared = std::sync::Arc::new(std::sync::Mutex::new(rt));
             if let Some(db) = db {
@@ -2628,7 +3109,10 @@ fn memory_db(app: &tauri::App) -> Result<shogun_core::daemon::Db, String> {
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let path = dir.join("memory.db");
     eprintln!("[spike] memory DB: {}", path.display());
-    let DbKeyLoad { key, minted: key_minted } = db_key()?;
+    let DbKeyLoad {
+        key,
+        minted: key_minted,
+    } = db_key()?;
 
     if shogun_memory::is_plaintext_db(&path) {
         eprintln!("[spike] existing plaintext memory DB found — encrypting it");
@@ -2712,9 +3196,7 @@ fn spawn_maintenance_job(db: shogun_core::daemon::Db) {
             // which is why they may run directly through the effector.
             for action in shogun_core::daemon::overdue_notifications(&r.newly_overdue) {
                 debug_assert!(action.is_l1_eligible() && !action.is_external_send());
-                if let Err(e) =
-                    shogun_agents::engine::LocalEffector::run(&effector, &action)
-                {
+                if let Err(e) = shogun_agents::engine::LocalEffector::run(&effector, &action) {
                     // The reason only — never the notification text (state summaries stay out
                     // of logs).
                     eprintln!("[maintenance] overdue notification failed: {e}");
@@ -2757,10 +3239,13 @@ fn ensure_ort_dylib(app: &tauri::App) {
     if std::env::var_os("ORT_DYLIB_PATH").is_some() {
         return;
     }
-    let Ok(res) = app.path().resource_dir() else { return };
+    let Ok(res) = app.path().resource_dir() else {
+        return;
+    };
     // Contents/Frameworks is a sibling of Contents/Resources.
     let bundled = [
-        res.parent().map(|c| c.join("Frameworks/libonnxruntime.dylib")),
+        res.parent()
+            .map(|c| c.join("Frameworks/libonnxruntime.dylib")),
         Some(res.join("libonnxruntime.dylib")),
     ];
     if let Some(p) = bundled.into_iter().flatten().find(|p| p.exists()) {
@@ -2777,12 +3262,17 @@ fn ensure_ort_dylib(app: &tauri::App) {
 #[cfg(target_os = "macos")]
 fn embedding_model_paths(app: &tauri::App) -> Option<(std::path::PathBuf, std::path::PathBuf)> {
     use tauri::Manager;
-    if let (Ok(m), Ok(t)) =
-        (std::env::var("SHOGUN_EMBED_MODEL"), std::env::var("SHOGUN_EMBED_TOKENIZER"))
-    {
+    if let (Ok(m), Ok(t)) = (
+        std::env::var("SHOGUN_EMBED_MODEL"),
+        std::env::var("SHOGUN_EMBED_TOKENIZER"),
+    ) {
         return Some((m.into(), t.into()));
     }
-    let dir = app.path().resource_dir().ok()?.join("models/multilingual-e5-small");
+    let dir = app
+        .path()
+        .resource_dir()
+        .ok()?
+        .join("models/multilingual-e5-small");
     let (m, t) = (dir.join("model.onnx"), dir.join("tokenizer.json"));
     (m.exists() && t.exists()).then_some((m, t))
 }
@@ -2817,4 +3307,3 @@ fn attach_embedder(
         }
     }
 }
-

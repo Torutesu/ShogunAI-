@@ -108,7 +108,10 @@ pub mod mac {
 
         #[test]
         fn setters_record_what_the_panel_needs() {
-            let b = Boot { memory_db_error: Some("keychain denied".into()), embedding_model: true };
+            let b = Boot {
+                memory_db_error: Some("keychain denied".into()),
+                embedding_model: true,
+            };
             assert_eq!(b.memory_db_error.as_deref(), Some("keychain denied"));
             assert!(b.embedding_model);
         }

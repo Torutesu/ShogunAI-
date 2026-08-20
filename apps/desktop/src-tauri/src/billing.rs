@@ -81,7 +81,10 @@ pub mod mac {
                 return Some(PathBuf::from(p));
             }
         }
-        app.path().app_data_dir().ok().map(|d| d.join("billing.json"))
+        app.path()
+            .app_data_dir()
+            .ok()
+            .map(|d| d.join("billing.json"))
     }
 
     fn read_snapshot(app: &AppHandle) -> Option<BillingSnapshot> {
@@ -162,7 +165,11 @@ pub mod mac {
     fn view(app: &AppHandle, error: Option<String>) -> BillingView {
         let activated = stored_license_key().is_some();
         let Some(snap) = read_snapshot(app) else {
-            return BillingView { activated, error, ..Default::default() };
+            return BillingView {
+                activated,
+                error,
+                ..Default::default()
+            };
         };
         let Some(key) = public_key() else {
             return BillingView {
@@ -176,7 +183,9 @@ pub mod mac {
             Ok(token) => {
                 let freshness = token.freshness(now_ms());
                 let days_offline = match freshness {
-                    Freshness::Grace { days_offline } => u32::try_from(days_offline).unwrap_or(u32::MAX),
+                    Freshness::Grace { days_offline } => {
+                        u32::try_from(days_offline).unwrap_or(u32::MAX)
+                    }
                     _ => 0,
                 };
                 BillingView {
@@ -246,7 +255,9 @@ pub mod mac {
     /// the payload IS user content and an unrecorded send is the thing to prevent.
     fn record_billing_egress(app: &AppHandle, endpoint: &str) {
         use shogun_core::llm::traceability::{Route, TraceRecord, TraceabilitySink};
-        let Some(db) = app.try_state::<Db>() else { return };
+        let Some(db) = app.try_state::<Db>() else {
+            return;
+        };
         let origin = api_origin();
         let host = origin
             .trim_start_matches("https://")
@@ -346,7 +357,8 @@ pub mod mac {
         }
         match check(&app, &key) {
             Ok(Outcome::Entitled(snap)) => {
-                if let Err(e) = keychain_store::set_generic_secret(LICENSE_KEY_ACCOUNT, key.as_bytes())
+                if let Err(e) =
+                    keychain_store::set_generic_secret(LICENSE_KEY_ACCOUNT, key.as_bytes())
                 {
                     return view(&app, Some(format!("could not store the licence: {e}")));
                 }

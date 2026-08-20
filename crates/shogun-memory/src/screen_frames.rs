@@ -1,13 +1,10 @@
-//! Short-lived JPEG frames from visual-recall OCR (issue #106, 2026-08-02).
+//! Finite-retention JPEG frames from visual-recall OCR (issue #106, 2026-08-02).
 //!
 //! Frames live in the encrypted memory DB as BLOBs, linked to their `screen_ocr` event row.
-//! A background purge drops anything older than [`RETENTION_MS`] (72 h rolling).
+//! A background purge drops anything older than the user's selected duration.
 
 use rusqlite::{params, Connection};
 use rusqlite::OptionalExtension;
-
-/// Rolling retention for OCR capture frames (72 hours).
-pub const RETENTION_MS: i64 = 72 * 60 * 60 * 1000;
 
 /// OCR text shorter than this triggers `needs_rescan` on recall hits.
 pub const THIN_OCR_CHARS: usize = 100;
@@ -360,6 +357,20 @@ pub fn stats(conn: &Connection) -> Result<FrameStats, rusqlite::Error> {
     )
 }
 
+/// Total encrypted JPEG bytes stored in a time window. The JPEG payload never leaves SQLite.
+pub fn bytes_in_range(
+    conn: &Connection,
+    from_ms: i64,
+    to_ms: i64,
+) -> Result<i64, rusqlite::Error> {
+    conn.query_row(
+        "SELECT coalesce(sum(length(bytes)), 0) FROM screen_frames
+         WHERE created_at_ms >= ?1 AND created_at_ms <= ?2",
+        params![from_ms, to_ms],
+        |row| row.get(0),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -413,11 +424,10 @@ mod tests {
     }
 
     #[test]
-    fn a_sweep_expires_by_age_then_evicts_by_bytes() {
+    fn a_sweep_expires_only_by_selected_age() {
         use crate::retention::Policy;
         let mut conn = crate::open_in_memory().unwrap();
-        // Four frames of 4 bytes each. The oldest is past a 1_000 ms window; the ceiling of 8
-        // bytes then still leaves the survivors 4 over.
+        // Four frames of 4 bytes each. Only the oldest is past a 1_000 ms window.
         for (ts, body) in [(100i64, b"aaaa"), (5_000, b"bbbb"), (5_100, b"cccc"), (5_200, b"dddd")] {
             let e = seed_event(&conn, ts, "x");
             seed_frame(&conn, ts, e, body);
@@ -426,16 +436,15 @@ mod tests {
         assert_eq!(items.len(), 4);
         assert!(items.iter().all(|i| i.bytes == 4), "size comes from length(bytes)");
 
-        let sweep = Policy { retain_ms: 1_000, max_bytes: 8 }.sweep(&items, 5_200);
+        let sweep = Policy::frames(1_000).sweep(&items, 5_200);
         assert_eq!(sweep.expired.len(), 1, "the 100 ms frame is past the window");
-        assert_eq!(sweep.over_budget.len(), 1, "12 surviving bytes against an 8-byte ceiling");
 
         let removed = delete_ids(&mut conn, &sweep.all()).unwrap();
-        assert_eq!(removed, 2);
+        assert_eq!(removed, 1);
         let s = stats(&conn).unwrap();
-        assert_eq!(s.count, 2);
-        assert_eq!(s.total_bytes, 8, "back under the ceiling");
-        assert_eq!(s.oldest_ms, Some(5_100), "eviction took the oldest survivor");
+        assert_eq!(s.count, 3);
+        assert_eq!(s.total_bytes, 12, "in-window bytes are never budget-evicted");
+        assert_eq!(s.oldest_ms, Some(5_000));
         // The OCR events all survive. Expiry retires the image, not the memory it produced —
         // the text and its provenance are what SHOGUN keeps (V12's rollback note says the same).
         let events: i64 = conn
@@ -479,6 +488,16 @@ mod tests {
         let listed = list_in_range(&conn, 2_000, 6_000, 10).unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].event_id, e2);
+    }
+
+    #[test]
+    fn bytes_in_range_uses_only_recent_encrypted_frames() {
+        let conn = crate::open_in_memory().unwrap();
+        let e1 = seed_event(&conn, 1_000, "a");
+        let e2 = seed_event(&conn, 5_000, "b");
+        seed_frame(&conn, 1_000, e1, b"old");
+        seed_frame(&conn, 5_000, e2, b"recent");
+        assert_eq!(bytes_in_range(&conn, 2_000, 6_000).unwrap(), 6);
     }
 
     #[test]

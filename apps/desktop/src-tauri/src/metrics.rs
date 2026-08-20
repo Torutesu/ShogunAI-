@@ -132,12 +132,37 @@ impl SloRegister {
     /// window renders them as not-yet-measured.
     pub fn rows(&self) -> Vec<SloSample> {
         vec![
-            row("Panel expand", &self.expand_ms, spike_harness::slo::EXPAND_MS, "100ms"),
-            row("Actions presented", &self.actions_present_ms, spike_harness::slo::ACTION_PRESENT_MS, "150ms"),
-            row("Cache refresh", &self.cache_update_ms, spike_harness::slo::CACHE_UPDATE_MS, "300ms"),
-            row("Local search", &self.local_search_ms, spike_harness::slo::LOCAL_SEARCH_MS, "500ms"),
+            row(
+                "Panel expand",
+                &self.expand_ms,
+                spike_harness::slo::EXPAND_MS,
+                "100ms",
+            ),
+            row(
+                "Actions presented",
+                &self.actions_present_ms,
+                spike_harness::slo::ACTION_PRESENT_MS,
+                "150ms",
+            ),
+            row(
+                "Cache refresh",
+                &self.cache_update_ms,
+                spike_harness::slo::CACHE_UPDATE_MS,
+                "300ms",
+            ),
+            row(
+                "Local search",
+                &self.local_search_ms,
+                spike_harness::slo::LOCAL_SEARCH_MS,
+                "500ms",
+            ),
             row("First token", &self.first_token_ms, 1000.0, "1s"),
-            row("Idle CPU", &self.idle_cpu_pct, spike_harness::slo::IDLE_CPU_PCT, "5%"),
+            row(
+                "Idle CPU",
+                &self.idle_cpu_pct,
+                spike_harness::slo::IDLE_CPU_PCT,
+                "5%",
+            ),
         ]
     }
 }
@@ -225,8 +250,13 @@ mod tests {
         assert_eq!(find("Actions presented"), Some(Some(60.0)));
         assert_eq!(find("Local search"), Some(Some(120.0)));
         // The same samples reach the NFR-SLO-00 registry (measured:true for `shogun metrics`).
-        let Ok(core) = reg.core.lock() else { panic!("core registry lock poisoned") };
-        assert!(core.snapshot(shogun_core::metrics::Slo::ActionsPresented).measured);
+        let Ok(core) = reg.core.lock() else {
+            panic!("core registry lock poisoned")
+        };
+        assert!(
+            core.snapshot(shogun_core::metrics::Slo::ActionsPresented)
+                .measured
+        );
         assert!(core.snapshot(shogun_core::metrics::Slo::Search).measured);
     }
 
@@ -236,7 +266,9 @@ mod tests {
         for i in 0..(WINDOW + 50) {
             reg.record_expand_ms(i as f64);
         }
-        let Ok(r) = reg.expand_ms.lock() else { panic!("metrics lock poisoned") };
+        let Ok(r) = reg.expand_ms.lock() else {
+            panic!("metrics lock poisoned")
+        };
         assert_eq!(r.0.len(), WINDOW);
         // The oldest samples fell off the front.
         assert_eq!(r.0[0], 50.0);

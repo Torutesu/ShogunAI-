@@ -20,7 +20,7 @@ use security_framework::base::Result;
 use security_framework_sys::base::errSecSuccess;
 use security_framework_sys::item::{
     kSecAttrAccount, kSecAttrService, kSecClass, kSecClassGenericPassword, kSecReturnData,
-    kSecValueData,
+    kSecUseAuthenticationUI, kSecUseAuthenticationUISkip, kSecValueData,
 };
 use security_framework_sys::keychain_item::{
     SecItemAdd, SecItemCopyMatching, SecItemDelete, SecItemUpdate,
@@ -57,17 +57,41 @@ pub fn get_generic_secret(account: &str) -> Result<Vec<u8>> {
             return Ok(bytes.clone());
         }
     }
-    match read_from_keychain(SERVICE, account) {
+    match read_from_keychain(SERVICE, account, false) {
         Ok(bytes) => {
             warm_cache(account, &bytes);
             Ok(bytes)
         }
         Err(_) => {
-            let bytes = read_from_keychain(LEGACY_SERVICE, account)?;
+            let bytes = read_from_keychain(LEGACY_SERVICE, account, false)?;
             // Best-effort migration — do not fail the read if rewrite fails.
             if write_to_keychain(SERVICE, account, &bytes).is_ok() {
                 let _ = delete_from_keychain(LEGACY_SERVICE, account);
             }
+            warm_cache(account, &bytes);
+            Ok(bytes)
+        }
+    }
+}
+
+/// Read a secret without allowing macOS to display an authentication dialog.
+///
+/// Background latency-sensitive work uses this path. A locked item fails fast so callers can use
+/// their normal fallback without freezing dictation behind a Keychain prompt.
+pub fn get_generic_secret_non_interactive(account: &str) -> Result<Vec<u8>> {
+    if let Ok(guard) = cache().lock() {
+        if let Some(bytes) = guard.get(account) {
+            return Ok(bytes.clone());
+        }
+    }
+    match read_from_keychain(SERVICE, account, true) {
+        Ok(bytes) => {
+            warm_cache(account, &bytes);
+            Ok(bytes)
+        }
+        Err(_) => {
+            let bytes = read_from_keychain(LEGACY_SERVICE, account, true)?;
+            // Never migrate from a background worker: writes may prompt for Keychain access.
             warm_cache(account, &bytes);
             Ok(bytes)
         }
@@ -249,18 +273,23 @@ mod tests {
     }
 }
 
-fn read_from_keychain(service: &str, account: &str) -> Result<Vec<u8>> {
-    let query = query_dict(service, account, true);
+fn read_from_keychain(
+    service: &str,
+    account: &str,
+    skip_authentication_ui: bool,
+) -> Result<Vec<u8>> {
+    let query = query_dict(service, account, true, skip_authentication_ui);
     let mut ret: CFTypeRef = std::ptr::null();
     cvt(unsafe { SecItemCopyMatching(query.as_concrete_TypeRef(), &mut ret) })?;
-    let data = unsafe { CFData::wrap_under_create_rule(ret as core_foundation_sys::data::CFDataRef) };
+    let data =
+        unsafe { CFData::wrap_under_create_rule(ret as core_foundation_sys::data::CFDataRef) };
     Ok(data.bytes().to_vec())
 }
 
 fn write_to_keychain(service: &str, account: &str, password: &[u8]) -> Result<()> {
     let value = CFData::from_buffer(password);
-    if read_from_keychain(service, account).is_ok() {
-        let query = query_dict(service, account, false);
+    if read_from_keychain(service, account, false).is_ok() {
+        let query = query_dict(service, account, false, false);
         let update = CFDictionary::from_CFType_pairs(&[(
             unsafe { CFString::wrap_under_get_rule(kSecValueData) },
             value.into_CFType(),
@@ -280,7 +309,7 @@ fn write_to_keychain(service: &str, account: &str, password: &[u8]) -> Result<()
 }
 
 fn delete_from_keychain(service: &str, account: &str) -> Result<()> {
-    let query = query_dict(service, account, false);
+    let query = query_dict(service, account, false, false);
     cvt(unsafe { SecItemDelete(query.as_concrete_TypeRef()) })
 }
 
@@ -311,12 +340,23 @@ fn cache() -> &'static Mutex<HashMap<String, Vec<u8>>> {
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn query_dict(service: &str, account: &str, return_data: bool) -> CFDictionary<CFString, core_foundation::base::CFType> {
+fn query_dict(
+    service: &str,
+    account: &str,
+    return_data: bool,
+    skip_authentication_ui: bool,
+) -> CFDictionary<CFString, core_foundation::base::CFType> {
     let mut attrs = base_attrs(service, account);
     if return_data {
         attrs.push((
             unsafe { CFString::wrap_under_get_rule(kSecReturnData) },
             CFBoolean::true_value().into_CFType(),
+        ));
+    }
+    if skip_authentication_ui {
+        attrs.push((
+            unsafe { CFString::wrap_under_get_rule(kSecUseAuthenticationUI) },
+            unsafe { CFString::wrap_under_get_rule(kSecUseAuthenticationUISkip) }.into_CFType(),
         ));
     }
     CFDictionary::from_CFType_pairs(&attrs)

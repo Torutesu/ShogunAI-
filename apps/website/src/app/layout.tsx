@@ -1,15 +1,12 @@
 import { GeistMono } from 'geist/font/mono';
 import { GeistSans } from 'geist/font/sans';
 import type { Metadata } from 'next';
-import { Inter } from 'next/font/google';
-import { LogoDefs } from '@/components/Logo';
+import { CustomCursor } from '@/components/CustomCursor';
 import { ThemeScript } from '@/components/ThemeToggle';
 import { JsonLd, organizationSchema, softwareApplicationSchema, websiteSchema } from '@/components/seo/JsonLd';
 import { getLocale } from '@/i18n/server';
 import { siteConfig } from '@/lib/site';
 import './globals.css';
-
-const inter = Inter({ subsets: ['latin'], variable: '--font-inter', display: 'swap' });
 
 export const metadata: Metadata = {
   metadataBase: new URL(siteConfig.url),
@@ -18,20 +15,47 @@ export const metadata: Metadata = {
     template: `%s · ${siteConfig.name}`,
   },
   description: siteConfig.description,
+  keywords: [
+    'AI memory assistant',
+    'private AI memory',
+    'local-first AI',
+    'AI memory for work',
+    'knowledge worker productivity',
+    'macOS AI assistant',
+    'BYOK AI',
+  ],
   applicationName: siteConfig.name,
-  alternates: { canonical: '/' },
+  alternates: {
+    canonical: '/',
+    languages: {
+      en: '/en',
+      ja: '/ja',
+      es: '/es',
+      de: '/de',
+      'x-default': '/',
+    },
+  },
+  icons: {
+    icon: [
+      // Use the canonical current mark first so browsers do not prefer the legacy PNG.
+      { url: '/product-icon.svg?v=20260815', type: 'image/svg+xml', sizes: 'any' },
+    ],
+    apple: [{ url: '/apple-touch-icon.png?v=20260815', type: 'image/png', sizes: '512x512' }],
+  },
   openGraph: {
     type: 'website',
     siteName: siteConfig.name,
-    title: `${siteConfig.name} — Memory that acts`,
+    title: `${siteConfig.name} — ${siteConfig.tagline}`,
     description: siteConfig.description,
     url: siteConfig.url,
+    images: [{ url: '/og-image.png', width: 1200, height: 630, alt: 'ShogunAI' }],
   },
   twitter: {
     card: 'summary_large_image',
     site: siteConfig.twitter,
-    title: `${siteConfig.name} — Memory that acts`,
+    title: `${siteConfig.name} — ${siteConfig.tagline}`,
     description: siteConfig.description,
+    images: ['/og-image.png'],
   },
   robots: { index: true, follow: true },
 };
@@ -42,7 +66,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
     <html
       lang={locale}
       suppressHydrationWarning
-      className={`${GeistSans.variable} ${GeistMono.variable} ${inter.variable}`}
+      className={`${GeistSans.variable} ${GeistMono.variable}`}
     >
       <head>
         <ThemeScript />
@@ -51,7 +75,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
         <JsonLd data={organizationSchema} />
         <JsonLd data={softwareApplicationSchema} />
         <JsonLd data={websiteSchema} />
-        <LogoDefs />
+        <CustomCursor />
         {children}
       </body>
     </html>

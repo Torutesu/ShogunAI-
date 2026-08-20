@@ -10,8 +10,14 @@ use std::path::{Path, PathBuf};
 use serde_json::json;
 use shogun_mcp::backend::{MemoryBackend, ReadItem, ReadParams, WriteResult};
 use shogun_mcp::memory_api::Tool;
+use shogun_mcp::memory_api_settings::{
+    load_settings as load_memory_api_settings, save_settings as save_memory_api_settings,
+    validate_profile, Settings as MemoryApiSettings,
+};
 
-use crate::capture::visual_recall::{load_settings, save_settings, Settings};
+use crate::capture::visual_recall::{
+    load_settings, save_settings, RetentionPolicy, Settings, DAY_MS,
+};
 use crate::daemon::{local_day_bounds, Db};
 
 /// Max search hits returned by `memory.search` over the API.
@@ -20,6 +26,10 @@ const SEARCH_LIMIT: usize = 20;
 const FRAME_SEARCH_LIMIT: usize = 20;
 /// OCR excerpt length for frame search / status previews.
 const FRAME_EXCERPT_CHARS: usize = 200;
+/// Recent durable activity included in query-free `memory.get_context` snapshots.
+const CONTEXT_ACTIVITY_LIMIT: usize = 8;
+/// Per-activity text cap keeps one captured window from consuming the whole snapshot.
+const CONTEXT_ACTIVITY_EXCERPT_CHARS: usize = 320;
 /// Evidence cap for `memory.get_context_pack` (FR-API-08) — matches the chat path's scale so the
 /// pack an external AI receives is the same grounded slice the in-app chat reads.
 const PACK_HITS: usize = 10;
@@ -33,11 +43,16 @@ const EVENT_CONFIDENCE: f64 = 1.0;
 pub struct DbBackend {
     db: Db,
     visual_recall_settings_path: Option<PathBuf>,
+    memory_api_settings_path: Option<PathBuf>,
 }
 
 impl DbBackend {
     pub fn new(db: Db) -> Self {
-        Self { db, visual_recall_settings_path: None }
+        Self {
+            db,
+            visual_recall_settings_path: None,
+            memory_api_settings_path: None,
+        }
     }
 
     /// Path to `visual_recall.json` (same directory as `memory.db` in the desktop app).
@@ -46,8 +61,18 @@ impl DbBackend {
         self
     }
 
+    /// `memory_api.json`: additional explicit opt-in and local profile data.
+    pub fn with_memory_api_settings_path(mut self, path: PathBuf) -> Self {
+        self.memory_api_settings_path = Some(path);
+        self
+    }
+
     fn visual_recall_settings_path(&self) -> Option<&Path> {
         self.visual_recall_settings_path.as_deref()
+    }
+
+    fn memory_api_settings_path(&self) -> Option<&Path> {
+        self.memory_api_settings_path.as_deref()
     }
 
     fn load_vr_settings(&self) -> Settings {
@@ -63,14 +88,144 @@ impl DbBackend {
         save_settings(path, settings)
     }
 
+    /// Enforce age expiry on every API face, including processes without the desktop poller.
+    fn enforce_vr_retention(&self) -> Result<i64, String> {
+        let retention_ms = self
+            .load_vr_settings()
+            .retention
+            .retain_ms()
+            .unwrap_or(3 * DAY_MS);
+        self.db.purge_screen_frames(retention_ms)?;
+        Ok(retention_ms)
+    }
+
+    fn load_memory_api_settings(&self) -> MemoryApiSettings {
+        self.memory_api_settings_path()
+            .map(load_memory_api_settings)
+            .unwrap_or_default()
+    }
+
+    fn save_memory_api_settings(&self, settings: &MemoryApiSettings) -> Result<(), String> {
+        let Some(path) = self.memory_api_settings_path() else {
+            return Err("memory API settings path not configured".into());
+        };
+        save_memory_api_settings(path, settings)
+    }
+
+    fn whoami_json(&self) -> String {
+        let profile = self.load_memory_api_settings().profile;
+        let people: Vec<_> = self
+            .db
+            .people()
+            .into_iter()
+            .map(|row| row.display_name)
+            .collect();
+        let projects: Vec<_> = self.db.projects().into_iter().map(|row| row.name).collect();
+        let commitments: Vec<_> = self
+            .db
+            .commitments_due(self.db.now_ms())
+            .into_iter()
+            .map(|row| row.description)
+            .collect();
+        let open_loops: Vec<_> = self
+            .db
+            .open_loops()
+            .into_iter()
+            .map(|row| row.description)
+            .collect();
+        json!({
+            "profile": { "display_name": profile.display_name, "role": profile.role, "prefs": profile.prefs },
+            "work": {
+                "people": { "count": people.len(), "names": people },
+                "projects": { "count": projects.len(), "names": projects },
+                "commitments": { "count": commitments.len(), "names": commitments },
+                "open_loops": { "count": open_loops.len(), "names": open_loops },
+            }
+        }).to_string()
+    }
+
+    fn apply_profile_set(&self, body: &str) -> Result<(), String> {
+        let value: serde_json::Value =
+            serde_json::from_str(body).map_err(|_| "expected profile JSON object".to_string())?;
+        let patch = value.get("profile").unwrap_or(&value);
+        let Some(object) = patch.as_object() else {
+            return Err("expected profile JSON object".into());
+        };
+        let mut settings = self.load_memory_api_settings();
+        let field = |key: &str| -> Result<Option<String>, String> {
+            match object.get(key) {
+                Some(value) => value
+                    .as_str()
+                    .map(|text| Some(text.trim().to_string()))
+                    .ok_or_else(|| format!("profile.{key} must be a string")),
+                None => Ok(None),
+            }
+        };
+        if let Some(value) = field("display_name")? {
+            settings.profile.display_name = value;
+        }
+        if let Some(value) = field("role")? {
+            settings.profile.role = value;
+        }
+        if let Some(value) = field("prefs")? {
+            settings.profile.prefs = value;
+        }
+        validate_profile(&settings.profile)?;
+        self.save_memory_api_settings(&settings)
+    }
+
+    /// DB-derived context for local agents. Live AX Notch cache is not available to standalone
+    /// Memory API / MCP callers.
+    fn get_context_items(&self) -> Vec<ReadItem> {
+        let mut items = vec![ReadItem::new(
+            "note: live AX Notch context cache is not available to standalone Memory API / MCP; this snapshot is DB-derived only",
+            EVENT_CONFIDENCE,
+        )];
+
+        items.extend(self.db.inline_memory(12).into_iter().map(|fact| {
+            // `inline_memory` already applies the state confidence gate and prefixes medium
+            // confidence facts with `possibly:`.
+            ReadItem::new(format!("fact: {fact}"), EVENT_CONFIDENCE)
+        }));
+        items.extend(
+            self.db
+                .recent_user_notes(8)
+                .into_iter()
+                .map(|note| ReadItem::new(format!("note: {note}"), EVENT_CONFIDENCE)),
+        );
+        items.extend(
+            self.db
+                .recent_context_previews(CONTEXT_ACTIVITY_LIMIT, CONTEXT_ACTIVITY_EXCERPT_CHARS)
+                .into_iter()
+                .map(|(source, event)| {
+                    let title = event.window_title.as_deref().unwrap_or("-");
+                    let app = event.app_bundle_id.as_deref().unwrap_or("-");
+                    ReadItem::new(
+                        format!(
+                            "recent activity event:{} source:{} ts:{} title:{} app:{} :: {}",
+                            event.id, source, event.ts, title, app, event.excerpt
+                        ),
+                        EVENT_CONFIDENCE,
+                    )
+                }),
+        );
+        items
+    }
+
     fn visual_recall_status_json(&self) -> String {
-        let enabled = self.load_vr_settings().enabled;
+        let settings = self.load_vr_settings();
+        let _ = self.enforce_vr_retention();
         let now = self.db.now_ms();
-        let ms_24h = 24 * 60 * 60 * 1000;
-        let ms_72h = shogun_memory::screen_frames::RETENTION_MS;
+        let retention_ms = settings.retention.retain_ms().unwrap_or(3 * DAY_MS);
         let frame_stats = self.db.screen_frame_stats();
-        let frames_24h = self.db.screen_frames_count_in_range(now - ms_24h, now);
-        let frames_72h = self.db.screen_frames_count_in_range(now - ms_72h, now);
+        let frames_24h = self.db.screen_frames_count_in_range(now.saturating_sub(DAY_MS), now);
+        let frames_retained = self
+            .db
+            .screen_frames_count_in_range(now.saturating_sub(retention_ms), now);
+        let estimated_daily_bytes = (frames_24h >= 2)
+            .then(|| self.db.screen_frame_bytes_in_range(now.saturating_sub(DAY_MS), now));
+        let projected_retention_bytes = estimated_daily_bytes
+            .and_then(|bytes| bytes.checked_mul(i64::from(settings.retention.days())));
         let recent: Vec<_> = self
             .db
             .screen_ocr_previews(5, 140)
@@ -101,13 +256,18 @@ impl DbBackend {
             })
         });
         json!({
-            "enabled": enabled,
+            "enabled": settings.enabled,
+            "retention_days": settings.retention.days(),
             "events_24h": self.db.screen_ocr_count_24h(),
             "frames_count": frame_stats.count,
             "frames_24h": frames_24h,
-            "frames_72h": frames_72h,
+            "frames_retained": frames_retained,
             "frames_oldest_ms": frame_stats.oldest_ms,
             "frames_bytes": frame_stats.total_bytes,
+            "estimated_daily_bytes": estimated_daily_bytes,
+            "projected_retention_bytes": projected_retention_bytes,
+            "capture_paused_storage": self.db.screen_frame_capture_paused(),
+            "capture_storage_limit_bytes": shogun_memory::retention::FRAME_CAPTURE_MAX_BYTES,
             "last_capture": last_capture,
             "recent": recent,
         })
@@ -117,17 +277,31 @@ impl DbBackend {
     fn visual_recall_search_json(&self, params: &ReadParams) -> String {
         let query = params.query.as_deref().unwrap_or("");
         let now = self.db.now_ms();
+        let retention_ms = self.enforce_vr_retention().unwrap_or_else(|_| {
+            self.load_vr_settings()
+                .retention
+                .retain_ms()
+                .unwrap_or(3 * DAY_MS)
+        });
+        let retention_start = now.saturating_sub(retention_ms);
         let local_days = local_day_bounds(now);
-        let (from_ms, to_ms) = match (params.from_ms, params.to_ms) {
+        let (requested_from, requested_to) = match (params.from_ms, params.to_ms) {
             (Some(f), Some(t)) => (f, t),
             (Some(f), None) => (f, now),
             (None, Some(t)) => (0, t),
-            (None, None) if query.trim().is_empty() => (now - shogun_memory::screen_frames::RETENTION_MS, now),
             (None, None) => {
-                shogun_memory::search::visual_recall_window(query, now, local_days)
+                shogun_memory::search::visual_recall_window(query, now, local_days, retention_ms)
             }
         };
-        let hits = self.db.search_screen_frames_window(query, from_ms, to_ms, FRAME_SEARCH_LIMIT, FRAME_EXCERPT_CHARS);
+        let from_ms = requested_from.max(retention_start);
+        let to_ms = requested_to.min(now);
+        let hits = self.db.search_screen_frames_window(
+            query,
+            from_ms,
+            to_ms,
+            FRAME_SEARCH_LIMIT,
+            FRAME_EXCERPT_CHARS,
+        );
         let frames: Vec<_> = hits
             .iter()
             .map(|f| {
@@ -155,14 +329,16 @@ impl DbBackend {
     }
 
     fn visual_recall_get_frame_json(&self, params: &ReadParams) -> String {
+        if self.enforce_vr_retention().is_err() {
+            return r#"{"error":"retention_check_failed"}"#.to_string();
+        }
         let Some(frame_id) = params.id else {
             return r#"{"error":"missing_frame_id"}"#.to_string();
         };
         let Some(s) = self.db.get_screen_frame_summary(frame_id) else {
             return json!({ "error": "not_found", "frame_id": frame_id }).to_string();
         };
-        let needs_rescan =
-            s.ocr_text.trim().len() < shogun_memory::screen_frames::THIN_OCR_CHARS;
+        let needs_rescan = s.ocr_text.trim().len() < shogun_memory::screen_frames::THIN_OCR_CHARS;
         json!({
             "frame_id": s.id,
             "event_id": s.event_id,
@@ -181,6 +357,9 @@ impl DbBackend {
     }
 
     fn visual_recall_rescan_json(&self, params: &ReadParams) -> String {
+        if self.enforce_vr_retention().is_err() {
+            return r#"{"error":"retention_check_failed"}"#.to_string();
+        }
         let Some(frame_id) = params.id else {
             return r#"{"error":"missing_frame_id"}"#.to_string();
         };
@@ -197,7 +376,8 @@ impl DbBackend {
                     }
                 };
                 if !updated {
-                    return json!({ "error": "event_update_failed", "frame_id": frame_id }).to_string();
+                    return json!({ "error": "event_update_failed", "frame_id": frame_id })
+                        .to_string();
                 }
                 let excerpt = shogun_memory::search::excerpt(&text, "", FRAME_EXCERPT_CHARS);
                 json!({
@@ -248,7 +428,9 @@ impl DbBackend {
     fn evening_wrap_json(&self) -> String {
         let now = self.db.now_ms();
         let (day_start, tomorrow_end) = crate::daemon::local_wrap_window(now);
-        let wrap = self.db.evening_wrap(Vec::new(), day_start, now, tomorrow_end);
+        let wrap = self
+            .db
+            .evening_wrap(Vec::new(), day_start, now, tomorrow_end);
         let line = |i: &shogun_fusion::brief::BriefItem| {
             json!({
                 "text": i.text,
@@ -292,8 +474,8 @@ impl MemoryBackend for DbBackend {
                 .into_iter()
                 .map(|hit| ReadItem::new(hit.content, EVENT_CONFIDENCE))
                 .collect(),
-            // `get_context` isn't a persisted read (the cache is RAM-only, AR-10) — empty here.
-            Tool::MemoryGetContext => Vec::new(),
+            // DB-derived work context; live AX Notch cache remains RAM-only and unavailable here.
+            Tool::MemoryGetContext => self.get_context_items(),
 
             // FR-API-08: the grounded context pack for one task/question — the same
             // `Db::assemble_context` the in-app chat uses (invariant 6), flattened to labeled
@@ -311,7 +493,9 @@ impl MemoryBackend for DbBackend {
                 if query.is_empty() {
                     return Vec::new();
                 }
-                let pack = self.db.assemble_context(query, PACK_HITS, PACK_EXCERPT_CHARS);
+                let pack = self
+                    .db
+                    .assemble_context(query, PACK_HITS, PACK_EXCERPT_CHARS);
                 pack.facts
                     .into_iter()
                     .map(|f| ReadItem::new(format!("fact: {f}"), EVENT_CONFIDENCE))
@@ -328,18 +512,24 @@ impl MemoryBackend for DbBackend {
                     .collect()
             }
 
-            Tool::StatePeopleList => {
-                self.db.people().into_iter().map(|p| ReadItem::new(p.display_name, p.confidence)).collect()
-            }
-            Tool::StatePeopleGet => {
-                one(id.and_then(|i| self.db.person(i)), |p| ReadItem::new(p.display_name, p.confidence))
-            }
-            Tool::StateProjectsList => {
-                self.db.projects().into_iter().map(|p| ReadItem::new(p.name, p.confidence)).collect()
-            }
-            Tool::StateProjectsGet => {
-                one(id.and_then(|i| self.db.project(i)), |p| ReadItem::new(p.name, p.confidence))
-            }
+            Tool::StatePeopleList => self
+                .db
+                .people()
+                .into_iter()
+                .map(|p| ReadItem::new(p.display_name, p.confidence))
+                .collect(),
+            Tool::StatePeopleGet => one(id.and_then(|i| self.db.person(i)), |p| {
+                ReadItem::new(p.display_name, p.confidence)
+            }),
+            Tool::StateProjectsList => self
+                .db
+                .projects()
+                .into_iter()
+                .map(|p| ReadItem::new(p.name, p.confidence))
+                .collect(),
+            Tool::StateProjectsGet => one(id.and_then(|i| self.db.project(i)), |p| {
+                ReadItem::new(p.name, p.confidence)
+            }),
             // Commitments/open loops reuse the Fusion supply. `now` from the daemon clock so
             // `overdue` is consistent with the rest of the daemon.
             Tool::StateCommitmentsList => self
@@ -348,15 +538,18 @@ impl MemoryBackend for DbBackend {
                 .into_iter()
                 .map(|c| ReadItem::new(c.description, c.confidence))
                 .collect(),
-            Tool::StateCommitmentsGet => {
-                one(id.and_then(|i| self.db.commitment(i)), |c| ReadItem::new(c.description, c.confidence))
-            }
-            Tool::StateOpenLoopsList => {
-                self.db.open_loops().into_iter().map(|o| ReadItem::new(o.description, o.confidence)).collect()
-            }
-            Tool::StateOpenLoopsGet => {
-                one(id.and_then(|i| self.db.open_loop(i)), |o| ReadItem::new(o.description, o.confidence))
-            }
+            Tool::StateCommitmentsGet => one(id.and_then(|i| self.db.commitment(i)), |c| {
+                ReadItem::new(c.description, c.confidence)
+            }),
+            Tool::StateOpenLoopsList => self
+                .db
+                .open_loops()
+                .into_iter()
+                .map(|o| ReadItem::new(o.description, o.confidence))
+                .collect(),
+            Tool::StateOpenLoopsGet => one(id.and_then(|i| self.db.open_loop(i)), |o| {
+                ReadItem::new(o.description, o.confidence)
+            }),
 
             // Onboarding / first-run state (issue #6) is owned by the desktop layer's app-settings
             // (app_data/onboarding.json), not the daemon DB, so this DB-backed face has no row to
@@ -370,16 +563,20 @@ impl MemoryBackend for DbBackend {
             // routed here.
             Tool::MemoryGetWrap
             | Tool::LessonsList
+            | Tool::ProfileWhoami
             | Tool::LessonsSetActive
             | Tool::VisualRecallStatus
             | Tool::VisualRecallSearchFrames
             | Tool::VisualRecallGetFrame
             | Tool::VisualRecallRescanFrame
             | Tool::VisualRecallSetEnabled
+            | Tool::VisualRecallSetRetention
             | Tool::VisualRecallDeleteFrame
             | Tool::MemoryAppendNote
+            | Tool::ProfileSet
             | Tool::StateProposeUpdate
-            | Tool::ActionsExecute => Vec::new(),
+            | Tool::ActionsExecute
+            | Tool::ActionsStatus => Vec::new(),
         }
     }
 
@@ -391,12 +588,17 @@ impl MemoryBackend for DbBackend {
             Tool::VisualRecallRescanFrame => self.visual_recall_rescan_json(params),
             Tool::LessonsList => self.lessons_json(),
             Tool::MemoryGetWrap => self.evening_wrap_json(),
+            Tool::ProfileWhoami => self.whoami_json(),
             _ => return None,
         })
     }
 
     fn write(&self, tool: Tool, body: &str) -> WriteResult {
         match tool {
+            Tool::ProfileSet => {
+                self.apply_profile_set(body)?;
+                Ok(None)
+            }
             // Persist the note to the event log (L1, reversible).
             Tool::MemoryAppendNote => match self.db.append_note(body) {
                 Some(id) => Ok(Some(id)),
@@ -422,9 +624,19 @@ impl MemoryBackend for DbBackend {
                 if !enabled {
                     let removed = self.db.purge_auto_screen_frames()?;
                     if removed > 0 {
-                        eprintln!("[visual_recall] disabled via API — purged {removed} auto frame(s)");
+                        eprintln!(
+                            "[visual_recall] disabled via API — purged {removed} auto frame(s)"
+                        );
                     }
                 }
+                Ok(None)
+            }
+            Tool::VisualRecallSetRetention => {
+                let retention = parse_retention_body(body)?;
+                let mut settings = self.load_vr_settings();
+                settings.retention = retention;
+                self.save_vr_settings(&settings)?;
+                self.db.purge_screen_frames(retention.retain_ms()?)?;
                 Ok(None)
             }
             Tool::VisualRecallDeleteFrame => {
@@ -445,7 +657,8 @@ fn parse_id_body(body: &str) -> Result<i64, String> {
     if let Ok(id) = body.trim().parse::<i64>() {
         return Ok(id);
     }
-    let v: serde_json::Value = serde_json::from_str(body).map_err(|_| "expected frame id".to_string())?;
+    let v: serde_json::Value =
+        serde_json::from_str(body).map_err(|_| "expected frame id".to_string())?;
     v.get("id")
         .and_then(|x| x.as_i64())
         .ok_or_else(|| "expected {\"id\":number}".to_string())
@@ -467,10 +680,39 @@ fn parse_enabled_body(body: &str) -> Result<bool, String> {
     if body.trim() == "false" {
         return Ok(false);
     }
-    let v: serde_json::Value = serde_json::from_str(body).map_err(|_| "expected {\"enabled\":bool}".to_string())?;
+    let v: serde_json::Value =
+        serde_json::from_str(body).map_err(|_| "expected {\"enabled\":bool}".to_string())?;
     v.get("enabled")
         .and_then(|x| x.as_bool())
         .ok_or_else(|| "expected {\"enabled\":bool}".to_string())
+}
+
+fn parse_retention_body(body: &str) -> Result<RetentionPolicy, String> {
+    if let Ok(days) = body.trim().parse::<u32>() {
+        return RetentionPolicy::try_days(days);
+    }
+    let value: serde_json::Value = serde_json::from_str(body)
+        .map_err(|_| "expected retention days between 1 and 3650".to_string())?;
+    let candidates = [
+        value.get("days"),
+        value.get("retention_days"),
+        value.get("retention").and_then(|retention| retention.get("days")),
+    ];
+    let mut parsed = Vec::new();
+    for candidate in candidates.into_iter().flatten() {
+        let days = candidate
+            .as_u64()
+            .and_then(|days| u32::try_from(days).ok())
+            .ok_or_else(|| "expected retention days between 1 and 3650".to_string())?;
+        parsed.push(days);
+    }
+    let Some(&days) = parsed.first() else {
+        return Err("expected retention days between 1 and 3650".to_string());
+    };
+    if parsed.iter().any(|candidate| *candidate != days) {
+        return Err("conflicting retention day values".to_string());
+    }
+    RetentionPolicy::try_days(days)
 }
 
 #[cfg(test)]
@@ -515,7 +757,13 @@ mod tests {
     }
 
     fn backend_with_settings(db: Db) -> DbBackend {
-        let dir = std::env::temp_dir().join(format!("shogun_vr_test_{}", std::process::id()));
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT_DIR: AtomicU64 = AtomicU64::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "shogun_vr_test_{}_{}",
+            std::process::id(),
+            NEXT_DIR.fetch_add(1, Ordering::Relaxed)
+        ));
         let _ = std::fs::create_dir_all(&dir);
         DbBackend::new(db).with_visual_recall_settings_path(dir.join("visual_recall.json"))
     }
@@ -524,7 +772,12 @@ mod tests {
         ReadParams::default()
     }
     fn get(id: i64) -> ReadParams {
-        ReadParams { id: Some(id), query: None, from_ms: None, to_ms: None }
+        ReadParams {
+            id: Some(id),
+            query: None,
+            from_ms: None,
+            to_ms: None,
+        }
     }
 
     #[test]
@@ -542,7 +795,15 @@ mod tests {
         let db = Db::open_in_memory(Arc::new(|| 1)).unwrap();
         let (e, _) = db.capture(&ev("h1")).unwrap();
         let id = db
-            .insert_person(&NewPerson { display_name: "Alice", confidence: 0.85, now: 1, ..Default::default() }, &[Provenance::new(e)])
+            .insert_person(
+                &NewPerson {
+                    display_name: "Alice",
+                    confidence: 0.85,
+                    now: 1,
+                    ..Default::default()
+                },
+                &[Provenance::new(e)],
+            )
             .unwrap();
         let backend = DbBackend::new(db);
 
@@ -587,7 +848,7 @@ mod tests {
         assert_eq!(hits.len(), 1);
         assert!(hits[0].label.contains("roadmap"));
         assert_eq!(hits[0].confidence, EVENT_CONFIDENCE); // events always pass the gate
-        // empty query → no search
+                                                          // empty query → no search
         assert!(backend.read(Tool::MemorySearch, &params()).is_empty());
     }
 
@@ -635,7 +896,10 @@ mod tests {
             },
         );
         // a fact line and an evidence line, the latter citing its event id + source (provenance).
-        assert!(items.iter().any(|i| i.label.starts_with("fact: ")), "items: {items:?}");
+        assert!(
+            items.iter().any(|i| i.label.starts_with("fact: ")),
+            "items: {items:?}"
+        );
         let evidence = items
             .iter()
             .find(|i| i.label.starts_with("evidence "))
@@ -645,7 +909,124 @@ mod tests {
         assert!(evidence.label.contains("12k"));
 
         // no query → empty (the pack is per-question; there is no "pack of everything").
-        assert!(backend.read(Tool::MemoryGetContextPack, &params()).is_empty());
+        assert!(backend
+            .read(Tool::MemoryGetContextPack, &params())
+            .is_empty());
+    }
+
+    #[test]
+    fn get_context_includes_state_and_user_notes() {
+        let db = seed();
+        let backend = DbBackend::new(db.clone());
+        assert!(backend
+            .write(Tool::MemoryAppendNote, "remember the launch checklist")
+            .is_ok());
+
+        let items = backend.read(Tool::MemoryGetContext, &params());
+
+        assert!(items
+            .iter()
+            .any(|item| item.label == "fact: you committed: send the report"));
+        assert!(items
+            .iter()
+            .any(|item| item.label == "note: remember the launch checklist"));
+        assert!(items.iter().any(|item| item.label.contains("AX Notch")));
+    }
+
+    #[test]
+    fn get_context_recent_activity_carries_event_provenance() {
+        let db = Db::open_in_memory(Arc::new(|| 2)).unwrap();
+        let (event_id, _) = db
+            .capture(&shogun_memory::event_log::NewEvent {
+                ts: 2,
+                source: "gmail",
+                kind: "email",
+                app_bundle_id: Some("com.example.mail"),
+                window_title: Some("Roadmap"),
+                content: "quarterly roadmap review has three open decisions",
+                content_hash: "roadmap-context",
+                dwell_ms: 0,
+                display_id: None,
+                window_bounds: None,
+            })
+            .unwrap();
+        let backend = DbBackend::new(db);
+
+        let items = backend.read(Tool::MemoryGetContext, &params());
+
+        assert!(items.iter().any(|item| {
+            item.label
+                .contains(&format!("event:{event_id} source:gmail ts:2"))
+                && item.label.contains("title:Roadmap app:com.example.mail")
+                && item.label.contains("three open decisions")
+        }));
+    }
+
+    #[test]
+    fn get_context_recent_activity_is_bounded_deduplicated_and_allowlisted() {
+        let db = Db::open_in_memory(Arc::new(|| 20)).unwrap();
+        for index in 0..10 {
+            let content = format!("unique recent activity {index}");
+            let hash = format!("recent-{index}");
+            db.capture(&shogun_memory::event_log::NewEvent {
+                ts: index,
+                source: "capture",
+                kind: "text",
+                app_bundle_id: None,
+                window_title: None,
+                content: &content,
+                content_hash: &hash,
+                dwell_ms: 0,
+                display_id: None,
+                window_bounds: None,
+            })
+            .unwrap();
+        }
+        db.capture(&shogun_memory::event_log::NewEvent {
+            ts: 19,
+            source: "screen_ocr",
+            kind: "text",
+            app_bundle_id: None,
+            window_title: None,
+            content: "unique recent activity 9",
+            content_hash: "duplicate-across-source",
+            dwell_ms: 0,
+            display_id: None,
+            window_bounds: None,
+        })
+        .unwrap();
+        db.capture(&shogun_memory::event_log::NewEvent {
+            ts: 20,
+            source: "private_internal",
+            kind: "text",
+            app_bundle_id: None,
+            window_title: None,
+            content: "must stay outside context previews",
+            content_hash: "not-allowlisted",
+            dwell_ms: 0,
+            display_id: None,
+            window_bounds: None,
+        })
+        .unwrap();
+        let backend = DbBackend::new(db);
+
+        let activity: Vec<_> = backend
+            .read(Tool::MemoryGetContext, &params())
+            .into_iter()
+            .filter(|item| item.label.starts_with("recent activity "))
+            .collect();
+
+        assert_eq!(activity.len(), CONTEXT_ACTIVITY_LIMIT);
+        assert_eq!(
+            activity
+                .iter()
+                .filter(|item| item.label.contains("unique recent activity 9"))
+                .count(),
+            1
+        );
+        assert!(!activity
+            .iter()
+            .any(|item| item.label.contains("private_internal")));
     }
 
     #[test]
@@ -689,11 +1070,102 @@ mod tests {
     fn visual_recall_status_and_set_enabled() {
         let db = Db::open_in_memory(Arc::new(|| 5_000)).unwrap();
         let backend = backend_with_settings(db);
-        let status = backend.read_structured(Tool::VisualRecallStatus, &params()).expect("status");
+        let status = backend
+            .read_structured(Tool::VisualRecallStatus, &params())
+            .expect("status");
         assert!(status.contains("\"enabled\":false"));
-        assert!(backend.write(Tool::VisualRecallSetEnabled, r#"{"enabled":true}"#).is_ok());
-        let status2 = backend.read_structured(Tool::VisualRecallStatus, &params()).expect("status");
+        assert!(backend
+            .write(Tool::VisualRecallSetEnabled, r#"{"enabled":true}"#)
+            .is_ok());
+        let status2 = backend
+            .read_structured(Tool::VisualRecallStatus, &params())
+            .expect("status");
         assert!(status2.contains("\"enabled\":true"));
+    }
+
+    #[test]
+    fn retention_write_validates_boundaries_and_purges_immediately_by_age() {
+        use std::sync::atomic::{AtomicI64, Ordering};
+
+        let clock = Arc::new(AtomicI64::new(0));
+        let clock_for_db = clock.clone();
+        let db = Db::open_in_memory(Arc::new(move || clock_for_db.load(Ordering::SeqCst))).unwrap();
+        let (old_event, _) = db.capture(&ev("old-frame")).unwrap();
+        assert!(db
+            .store_screen_frame(old_event, None, None, None, 10, 10, b"old")
+            .is_some());
+
+        clock.store(2 * DAY_MS, Ordering::SeqCst);
+        let (recent_event, _) = db.capture(&ev("recent-frame")).unwrap();
+        assert!(db
+            .store_screen_frame(recent_event, None, None, None, 10, 10, b"recent")
+            .is_some());
+        assert_eq!(db.screen_frame_stats().count, 2);
+
+        let backend = backend_with_settings(db.clone());
+        assert!(backend
+            .write(Tool::VisualRecallSetRetention, r#"{"days":1}"#)
+            .is_ok());
+        assert_eq!(db.screen_frame_stats().count, 1);
+        let status = backend
+            .read_structured(Tool::VisualRecallStatus, &params())
+            .expect("status");
+        assert!(status.contains("\"retention_days\":1"));
+
+        for invalid in [r#"{"days":0}"#, r#"{"days":3651}"#, r#"{"days":"forever"}"#] {
+            assert!(backend.write(Tool::VisualRecallSetRetention, invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn retention_parser_accepts_legacy_and_nested_shapes() {
+        assert_eq!(parse_retention_body("7").unwrap().days(), 7);
+        assert_eq!(
+            parse_retention_body(r#"{"retention_days":14}"#)
+                .unwrap()
+                .days(),
+            14
+        );
+        assert_eq!(
+            parse_retention_body(r#"{"retention":{"days":30}}"#)
+                .unwrap()
+                .days(),
+            30
+        );
+        assert_eq!(
+            parse_retention_body(r#"{"days":7,"retention_days":7}"#)
+                .unwrap()
+                .days(),
+            7
+        );
+        assert!(parse_retention_body(r#"{"days":7,"retention_days":14}"#).is_err());
+    }
+
+    #[test]
+    fn expired_frame_id_is_unavailable_without_desktop_poller() {
+        use std::sync::atomic::{AtomicI64, Ordering};
+
+        let clock = Arc::new(AtomicI64::new(0));
+        let clock_for_db = clock.clone();
+        let db = Db::open_in_memory(Arc::new(move || clock_for_db.load(Ordering::SeqCst))).unwrap();
+        let (event_id, _) = db.capture(&ev("lazy-expiry")).unwrap();
+        let frame_id = db
+            .store_screen_frame(event_id, None, None, None, 10, 10, b"jpeg")
+            .expect("stored frame");
+        let backend = backend_with_settings(db.clone());
+
+        clock.store(4 * DAY_MS, Ordering::SeqCst);
+        let result = backend
+            .read_structured(
+                Tool::VisualRecallGetFrame,
+                &ReadParams {
+                    id: Some(frame_id),
+                    ..ReadParams::default()
+                },
+            )
+            .expect("structured result");
+        assert!(result.contains("not_found"));
+        assert_eq!(db.screen_frame_stats().count, 0);
     }
 
     /// Seed a distilled lesson via the real feedback → distill → upsert path. The draft bodies
@@ -733,9 +1205,14 @@ mod tests {
         // card draws. Shape only here — the aggregation itself is pinned by the daemon's test.
         let db = Db::open_in_memory(Arc::new(|| 72_000_000)).unwrap();
         let backend = DbBackend::new(db);
-        let json = backend.read_structured(Tool::MemoryGetWrap, &params()).expect("structured");
+        let json = backend
+            .read_structured(Tool::MemoryGetWrap, &params())
+            .expect("structured");
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert!(v["date"].as_str().is_some_and(|d| d.len() == 10), "local date key");
+        assert!(
+            v["date"].as_str().is_some_and(|d| d.len() == 10),
+            "local date key"
+        );
         assert_eq!(v["outcome"]["commitments_done"], 0);
         assert!(v["still_open"].as_array().is_some());
         assert!(v["tomorrow_calendar"].as_array().is_some());
@@ -750,7 +1227,9 @@ mod tests {
         let id = seed_lesson(&db);
         let backend = DbBackend::new(db);
 
-        let json = backend.read_structured(Tool::LessonsList, &params()).expect("structured");
+        let json = backend
+            .read_structured(Tool::LessonsList, &params())
+            .expect("structured");
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
         let row = &v["lessons"][0];
         assert_eq!(row["id"], id);
@@ -762,8 +1241,14 @@ mod tests {
         assert!(row["instruction"].as_str().unwrap().contains("Best, Taro"));
         assert!(row["confidence"].as_f64().unwrap() >= 0.5);
         // The invariant: feedback_events text never leaves the DB through the API.
-        assert!(!json.contains("SECRET_FEEDBACK_BODY_q1"), "feedback text leaked: {json}");
-        assert!(!json.contains("quarterly numbers"), "feedback text leaked: {json}");
+        assert!(
+            !json.contains("SECRET_FEEDBACK_BODY_q1"),
+            "feedback text leaked: {json}"
+        );
+        assert!(
+            !json.contains("quarterly numbers"),
+            "feedback text leaked: {json}"
+        );
     }
 
     #[test]
@@ -774,20 +1259,30 @@ mod tests {
 
         // off…
         assert_eq!(
-            backend.write(Tool::LessonsSetActive, &format!(r#"{{"id":{id},"active":false}}"#)),
+            backend.write(
+                Tool::LessonsSetActive,
+                &format!(r#"{{"id":{id},"active":false}}"#)
+            ),
             Ok(Some(id))
         );
         assert!(!db.lessons_all()[0].active);
         // …and back on
         assert_eq!(
-            backend.write(Tool::LessonsSetActive, &format!(r#"{{"id":{id},"active":true}}"#)),
+            backend.write(
+                Tool::LessonsSetActive,
+                &format!(r#"{{"id":{id},"active":true}}"#)
+            ),
             Ok(Some(id))
         );
         assert!(db.lessons_all()[0].active);
         // unknown id and malformed bodies error, and lessons.list is not a plain read
-        assert!(backend.write(Tool::LessonsSetActive, r#"{"id":9999,"active":false}"#).is_err());
+        assert!(backend
+            .write(Tool::LessonsSetActive, r#"{"id":9999,"active":false}"#)
+            .is_err());
         assert!(backend.write(Tool::LessonsSetActive, "not json").is_err());
-        assert!(backend.write(Tool::LessonsSetActive, r#"{"id":1}"#).is_err());
+        assert!(backend
+            .write(Tool::LessonsSetActive, r#"{"id":1}"#)
+            .is_err());
         assert!(backend.read(Tool::LessonsList, &params()).is_empty());
     }
 
@@ -814,7 +1309,12 @@ mod tests {
         };
 
         // GET /v1/lessons lists the lesson (no feedback text — pinned above per-payload)
-        let (status, body) = respond_with(&req(Method::Get, "/v1/lessons", None), &tokens, &ent, &backend);
+        let (status, body) = respond_with(
+            &req(Method::Get, "/v1/lessons", None),
+            &tokens,
+            &ent,
+            &backend,
+        );
         assert_eq!(status, 200);
         assert!(body.contains("\"tool\":\"lessons.list\""), "{body}");
         assert!(body.contains("Best, Taro"), "{body}");
@@ -822,7 +1322,11 @@ mod tests {
 
         // POST /v1/lessons/active flips it off through the same face
         let (status, body) = respond_with(
-            &req(Method::Post, "/v1/lessons/active", Some(&format!(r#"{{"id":{id},"active":false}}"#))),
+            &req(
+                Method::Post,
+                "/v1/lessons/active",
+                Some(&format!(r#"{{"id":{id},"active":false}}"#)),
+            ),
             &tokens,
             &ent,
             &backend,
@@ -850,11 +1354,19 @@ mod tests {
             from_ms: None,
             to_ms: None,
         };
-        let (status, body) = respond_with(&req, &tokens, &shogun_mcp::entitlement::Entitlements::trial_not_started(), &backend);
+        let (status, body) = respond_with(
+            &req,
+            &tokens,
+            &shogun_mcp::entitlement::Entitlements::trial_not_started(),
+            &backend,
+        );
         assert_eq!(status, 202);
         assert!(body.contains("memory.append_note"));
         assert!(body.contains("\"level\":\"L1\""));
-        assert!(body.contains("\"id\":"), "persisted note id missing: {body}");
+        assert!(
+            body.contains("\"id\":"),
+            "persisted note id missing: {body}"
+        );
     }
 
     #[test]
@@ -875,7 +1387,12 @@ mod tests {
             from_ms: None,
             to_ms: None,
         };
-        let (status, body) = respond_with(&req, &tokens, &shogun_mcp::entitlement::Entitlements::trial_not_started(), &backend);
+        let (status, body) = respond_with(
+            &req,
+            &tokens,
+            &shogun_mcp::entitlement::Entitlements::trial_not_started(),
+            &backend,
+        );
         assert_eq!(status, 200);
         // real DB data rendered through the API layer's confidence-gated JSON
         assert!(body.contains("send the report"), "body: {body}");

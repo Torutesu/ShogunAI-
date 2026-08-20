@@ -1,13 +1,10 @@
 /* SHOGUN panel — hangs from the notch. Idle = welded opaque chin; Expanded = soft glass.
    Motion tokens stay inside Idle→Expanded SLO (open ≤120ms, close ≤160ms). Theme-aware; dark default. */
 :root {
-  /* The panel sits on top of whatever you're working on, so it reads as glass rather than as an
-     opaque sheet — but the webview has no real backdrop blur over the desktop, so the tint must
-     carry legibility on its own. Kept mostly opaque; a busy window behind should only ghost
-     through, never compete with the text. Idle chin does NOT use these — opaque black only
-     (welded-to-bezel read). */
-  --glass: rgba(18, 21, 28, 0.86);
-  --glass-2: rgba(28, 32, 41, 0.92);
+  /* Dark mode is OLED black throughout the shell. Contrast comes from hairlines and translucent
+     control fills, not a blue-gray panel tint. */
+  --glass: #000000;
+  --glass-2: #000000;
   --line: rgba(255, 255, 255, 0.11);
   --line-strong: rgba(255, 255, 255, 0.18);
   --ink: #eef1f5;
@@ -66,6 +63,7 @@
   --chin-line: rgba(255, 255, 255, 0.11);
   /* Opaque panel/settings ground under transparent NSPanel (must stay solid). */
   --shell: #000000;
+  --settings-nav-bg: #000000;
   /* Scrollbar tokens — transparent track, ink-tinted thumb (overlay on content edge). */
   --scroll-track: transparent;
   --scroll-thumb: color-mix(in srgb, var(--ink) 26%, transparent);
@@ -77,8 +75,8 @@
    still be dark to avoid a light flash). */
 :root[data-appearance="dark"] {
   color-scheme: dark;
-  --glass: rgba(18, 21, 28, 0.86);
-  --glass-2: rgba(28, 32, 41, 0.92);
+  --glass: #000000;
+  --glass-2: #000000;
   --line: rgba(255, 255, 255, 0.11);
   --line-strong: rgba(255, 255, 255, 0.18);
   --ink: #eef1f5;
@@ -94,6 +92,7 @@
   --fill-strong: rgba(255, 255, 255, 0.12);
   --card: rgba(255, 255, 255, 0.045);
   --shell: #000000;
+  --settings-nav-bg: #000000;
 }
 :root[data-appearance="light"] {
   color-scheme: light;
@@ -114,6 +113,7 @@
   --fill-strong: rgba(0, 0, 0, 0.09);
   --card: rgba(0, 0, 0, 0.035);
   --shell: #f7f8fb;
+  --settings-nav-bg: linear-gradient(180deg, color-mix(in srgb, var(--accent) 7%, var(--shell)) 0%, var(--shell) 55%);
 }
 :root[data-appearance="auto"] {
   color-scheme: light dark;
@@ -137,6 +137,7 @@
     --fill-strong: rgba(0, 0, 0, 0.09);
     --card: rgba(0, 0, 0, 0.035);
     --shell: #f7f8fb;
+    --settings-nav-bg: linear-gradient(180deg, color-mix(in srgb, var(--accent) 7%, var(--shell)) 0%, var(--shell) 55%);
   }
 }
 
@@ -239,8 +240,8 @@ body {
   color: var(--chin-ink);
   font: inherit;
   font-family: var(--sys);
-  /* click opens, drag repositions — grab reads as "movable", matching the open panel's header. */
-  cursor: grab;
+  /* The notch stays docked; click opens the panel. */
+  cursor: pointer;
   text-align: left;
   box-sizing: border-box;
 }
@@ -290,9 +291,6 @@ body {
 .handle--hiding .handle__dead {
   height: 100%;
   min-height: 100%;
-}
-.handle:active {
-  cursor: grabbing;
 }
 .handle__live {
   display: inline-flex;
@@ -531,11 +529,8 @@ body {
     var(--shell) var(--notch-dead-h)
   );
   border-bottom: 1px solid var(--line);
-  cursor: grab;
+  cursor: default;
   box-sizing: border-box;
-}
-.head:active {
-  cursor: grabbing;
 }
 :root[data-appearance="light"] .head {
   background: var(--shell);
@@ -1131,6 +1126,64 @@ body {
 .composer__input::placeholder {
   color: var(--faint);
 }
+
+.scribe-float {
+  width: 100%;
+  height: 100%;
+  padding: 6px;
+  background: transparent;
+}
+.scribe-float__field {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px 7px 14px;
+  border: none;
+  border-radius: 18px;
+  background: var(--shell);
+}
+.scribe-float__field.is-error {
+  background: color-mix(in srgb, var(--danger) 8%, var(--shell));
+}
+.scribe-float__input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--fs-lg);
+}
+.scribe-float__input::placeholder { color: rgba(255, 255, 255, 0.28); }
+:root[data-appearance="light"] .scribe-float__input::placeholder { color: rgba(0, 0, 0, 0.32); }
+.scribe-float__submit {
+  width: 30px;
+  height: 30px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: var(--fill-strong);
+  color: var(--ink);
+  font: inherit;
+  font-size: 18px;
+  cursor: pointer;
+}
+.scribe-float__submit:not(:disabled):hover { background: var(--accent); color: var(--accent-ink); }
+.scribe-float__submit:disabled { color: var(--faint); cursor: default; }
+.scribe-float__spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid color-mix(in srgb, var(--ink) 28%, transparent);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: scribe-spin 700ms linear infinite;
+}
+@keyframes scribe-spin { to { transform: rotate(360deg); } }
 .composer__bar {
   display: flex;
   align-items: center;
@@ -1267,12 +1320,96 @@ body {
 .settings__body {
   flex: 1;
   min-height: 0;
+  overflow: hidden;
+  display: grid;
+  grid-template-columns: 148px minmax(0, 1fr);
+}
+.settings__nav {
+  position: relative;
+  min-width: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 4px 18px 28px;
+  padding: 14px 10px 18px;
+  border-right: 1px solid var(--line);
+  background: var(--settings-nav-bg);
+  scrollbar-width: none;
+}
+.settings__nav::-webkit-scrollbar {
+  display: none;
+}
+.settings__nav-mark {
+  width: 26px;
+  height: 26px;
+  margin: 0 8px 14px;
+  display: grid;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--accent) 60%, var(--line));
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 760;
+  letter-spacing: 0.04em;
+  box-shadow: inset 0 0 0 3px color-mix(in srgb, var(--accent) 7%, transparent);
+}
+.settings__nav-item {
+  position: relative;
+  width: 100%;
+  min-height: 38px;
   display: flex;
-  flex-direction: column;
-  gap: 0;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 8px 8px 10px;
+  border: 0;
+  background: transparent;
+  color: color-mix(in srgb, var(--ink) 68%, var(--muted));
+  font: inherit;
+  font-family: var(--sys);
+  font-size: 11px;
+  font-weight: 560;
+  text-align: left;
+  cursor: pointer;
+  transition: color 120ms ease, background 120ms ease;
+}
+.settings__nav-item::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 7px;
+  bottom: 7px;
+  width: 2px;
+  background: transparent;
+  box-shadow: none;
+  transition: background 120ms ease, box-shadow 120ms ease;
+}
+.settings__nav-item:hover {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--ink) 5%, transparent);
+}
+.settings__nav-item.is-active {
+  color: var(--ink);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 14%, transparent), transparent 88%);
+}
+.settings__nav-item.is-active::before {
+  background: var(--accent);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--accent) 72%, transparent);
+}
+.settings__nav-item:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+.settings__nav-icon {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  color: color-mix(in srgb, currentColor 88%, var(--accent));
+}
+.settings__content {
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 0 18px 28px;
   scroll-behavior: smooth;
   -webkit-overflow-scrolling: touch;
   /* thin + custom colors forces WKWebView off macOS default overlay white gutter */
@@ -1280,26 +1417,79 @@ body {
   scrollbar-color: var(--scroll-thumb) var(--scroll-track);
   contain: layout style;
 }
-.settings__body::-webkit-scrollbar {
+.settings__content:focus-visible {
+  outline: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  outline-offset: -1px;
+}
+.settings__content::-webkit-scrollbar {
   width: 4px;
   height: 4px;
   -webkit-appearance: none;
   appearance: none;
 }
-.settings__body::-webkit-scrollbar-track {
+.settings__content::-webkit-scrollbar-track {
   background: transparent;
 }
-.settings__body::-webkit-scrollbar-thumb {
+.settings__content::-webkit-scrollbar-thumb {
   background: var(--scroll-thumb);
   border-radius: 0;
   border: none;
   min-height: 24px;
 }
-.settings__body::-webkit-scrollbar-thumb:hover {
+.settings__content::-webkit-scrollbar-thumb:hover {
   background: var(--scroll-thumb-hover);
 }
-.settings__body::-webkit-scrollbar-corner {
+.settings__content::-webkit-scrollbar-corner {
   background: transparent;
+}
+.settings__section-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  margin: 0 -18px;
+  padding: 16px 20px 14px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--shell) 96%, transparent);
+  backdrop-filter: blur(14px);
+}
+.settings__section-kicker {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--accent);
+  font-size: 9px;
+  font-weight: 720;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+}
+.settings__section-head h2 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 18px;
+  font-weight: 680;
+  letter-spacing: -0.035em;
+  line-height: 1.1;
+}
+.settings__section-head p {
+  margin: 5px 0 0;
+  max-width: 42ch;
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.35;
+}
+.settings__section-body {
+  min-height: 100%;
+}
+.settings__slot {
+  display: none;
+}
+.settings__content[data-active="general"] .settings__slot--general,
+.settings__content[data-active="memory"] .settings__slot--memory,
+.settings__content[data-active="voice"] .settings__slot--voice,
+.settings__content[data-active="connections"] .settings__slot--connections,
+.settings__content[data-active="intelligence"] .settings__slot--intelligence,
+.settings__content[data-active="controls"] .settings__slot--controls,
+.settings__content[data-active="privacy"] .settings__slot--privacy {
+  display: contents;
 }
 /* Section = open block + bottom hairline. No fill, no radius, no card chrome. */
 .set {
@@ -1308,30 +1498,10 @@ body {
   border-bottom: 1px solid var(--line);
   border-radius: 0;
   padding: 18px 2px 16px;
-  animation: set-reveal var(--set-motion) both;
 }
 .set:last-child {
   border-bottom: none;
   padding-bottom: 12px;
-}
-.settings__body > .set:nth-child(1) { animation-delay: 0ms; }
-.settings__body > .set:nth-child(2) { animation-delay: 20ms; }
-.settings__body > .set:nth-child(3) { animation-delay: 35ms; }
-.settings__body > .set:nth-child(4) { animation-delay: 50ms; }
-.settings__body > .set:nth-child(5) { animation-delay: 65ms; }
-.settings__body > .set:nth-child(6) { animation-delay: 80ms; }
-.settings__body > .set:nth-child(7) { animation-delay: 95ms; }
-.settings__body > .set:nth-child(8) { animation-delay: 110ms; }
-.settings__body > .set:nth-child(n + 9) { animation-delay: 120ms; }
-@keyframes set-reveal {
-  from {
-    opacity: 0;
-    transform: translateY(5px);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
 }
 .set__label {
   font-size: 10px;
@@ -1743,7 +1913,78 @@ body {
   overflow: hidden;
 }
 
-/* Notch settings — open the separate browse window. */
+/* Visual Recall retention + separate browse window. */
+.vr-retention {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel) 82%, transparent);
+}
+.vr-retention__head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: var(--fs-sm);
+  color: var(--muted);
+}
+.vr-retention__head strong {
+  color: var(--ink);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.vr-retention__range {
+  width: 100%;
+  margin: 12px 0 2px;
+  accent-color: var(--accent);
+}
+.vr-retention__ticks {
+  display: flex;
+  justify-content: space-between;
+  padding: 0 2px;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+.vr-retention__custom {
+  margin-top: 10px;
+  padding: 5px 9px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+.vr-retention__custom.is-on {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.vr-retention__custom-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+.vr-retention__custom-row input {
+  min-width: 0;
+  flex: 1;
+  padding: 7px 8px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--ink);
+  font: inherit;
+}
+.vr-retention__custom-row button {
+  border: 1px solid var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font: inherit;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  cursor: pointer;
+}
+.vr-retention .set__hint {
+  margin-top: 8px;
+}
 .vr-launch {
   display: flex;
   align-items: center;
@@ -2373,12 +2614,41 @@ kbd {
   opacity: 0.95;
 }
 
+@media (max-width: 480px) {
+  .settings__body {
+    grid-template-columns: 54px minmax(0, 1fr);
+  }
+  .settings__nav {
+    padding: 12px 6px 16px;
+  }
+  .settings__nav-mark {
+    margin: 0 auto 12px;
+  }
+  .settings__nav-item {
+    justify-content: center;
+    padding: 8px;
+  }
+  .settings__nav-item > span:last-child {
+    display: none;
+  }
+  .settings__content {
+    padding-right: 14px;
+    padding-left: 14px;
+  }
+  .settings__section-head {
+    margin-right: -14px;
+    margin-left: -14px;
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   * {
     transition: none !important;
     animation: none !important;
   }
-  .settings__body > .set {
+  .settings__slot > .set {
     animation: none !important;
     opacity: 1;
     transform: none;
@@ -2500,25 +2770,22 @@ kbd {
 /* voice pill + panel (#44) — welded Idle chin language, matches handle / meeting pill */
 .vpill {
   position: relative;
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  gap: 8px;
-  height: var(--chin-h);
-  min-height: var(--chin-h);
-  max-height: var(--chin-h);
+  justify-content: flex-end;
+  width: 240px;
+  min-width: 240px;
+  max-width: 240px;
+  height: var(--notch-dead-h);
+  min-height: var(--notch-dead-h);
+  max-height: var(--notch-dead-h);
   margin: 0;
-  padding: var(--notch-dead-h) 8px 0;
-  min-width: 180px;
-  max-width: 180px;
-  width: 180px;
+  padding: 0 14px 0 0;
   background: #000;
   border: none;
-  border-radius: 0 0 var(--r-shell-bot) var(--r-shell-bot);
+  border-radius: 0 0 14px 14px;
   box-shadow: none;
   box-sizing: border-box;
-  color: var(--ink);
-  font-family: var(--sys);
-  font-size: var(--fs-sm);
 }
 .vpill::before {
   content: "";
@@ -2530,35 +2797,35 @@ kbd {
   background: #000;
   pointer-events: none;
 }
-.vpill__dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--accent);
-  flex: none;
-  animation: vpill-pulse 1.2s ease-in-out infinite;
-}
-@keyframes vpill-pulse {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.55; transform: scale(0.92); }
-}
-.vpill__label {
-  color: var(--muted);
-  flex: none;
-}
-.vpill__meter {
-  flex: 1;
-  min-width: 48px;
-  height: 4px;
-  border-radius: var(--r-pill);
-  background: var(--fill);
+.vpill__visualizer {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  width: 16px;
+  height: 14px;
   overflow: hidden;
 }
-.vpill__meter-fill {
-  height: 100%;
-  border-radius: inherit;
-  background: var(--accent);
-  transition: width 80ms linear;
+.vpill__bar {
+  display: block;
+  width: 2px;
+  min-width: 2px;
+  height: 14px;
+  border-radius: 1px;
+  background: linear-gradient(180deg, #d2d2d2 0%, #858585 100%);
+  transform-origin: center;
+  transition: transform 300ms ease-in-out;
+}
+.vpill__loader {
+  width: 14px;
+  height: 14px;
+  border: 2px solid #5c5c5f;
+  border-top-color: #d2d2d2;
+  border-radius: 50%;
+  box-sizing: border-box;
+  animation: vpill-loading 650ms linear infinite;
+}
+@keyframes vpill-loading {
+  to { transform: rotate(360deg); }
 }
 
 .voice-panel {
@@ -4762,22 +5029,6 @@ body.full-window {
   font-weight: 600;
   background: var(--fill-strong);
 }
-.voice-toast {
-  position: fixed;
-  top: 8px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 20;
-  max-width: 90%;
-  padding: 8px 12px;
-  border-radius: var(--r-pill);
-  background: rgba(20, 20, 24, 0.92);
-  border: 1px solid var(--line);
-  color: var(--ink);
-  font-size: var(--fs-xs);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
-}
-
 /* ---- Meeting: reusable drag / resize ---- */
 .drag-handle-6dot {
   display: inline-flex;

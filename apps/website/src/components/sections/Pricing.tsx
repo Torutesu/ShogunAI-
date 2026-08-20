@@ -1,154 +1,173 @@
 'use client';
 
-import { Check } from 'lucide-react';
+import { Check, Globe, Layers, ListChecks, Search, Sparkles, Sunrise, Users, Video, Zap } from 'lucide-react';
 import { useState } from 'react';
-import posthog from 'posthog-js';
 import { Reveal } from '@/components/animations/Reveal';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import type { Dictionary } from '@/i18n/dictionaries';
 
-type PlanData = {
-  name: string;
-  price: string;
-  per: string;
-  desc: string;
-  points: readonly string[];
-  cta: string;
-  badge?: string;
-};
+type Pricing = Dictionary['pricing'];
+type PlanData = { name: string; annual: string; monthly: string; points: readonly string[]; cta: string; badge?: string };
 
-/**
- * Billing is behind a build flag (issue #8). While the product is invite-only the CTA still
- * feeds the waitlist; flip `NEXT_PUBLIC_BILLING_ENABLED=1` and the same button opens Stripe
- * Checkout. One switch, so launch day is a redeploy rather than a code change.
- */
-const BILLING_ENABLED = process.env.NEXT_PUBLIC_BILLING_ENABLED === '1';
-
-function Plan({
-  plan,
-  planId,
-  featured,
+function BillingToggle({
+  annual,
+  onChange,
+  b,
 }: {
-  plan: PlanData;
-  planId: 'standard' | 'pro';
-  featured?: boolean;
+  annual: boolean;
+  onChange: (v: boolean) => void;
+  b: Pricing['billing'];
 }) {
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState('');
+  return (
+    <div role="group" aria-label={b.annualNote} className="relative z-10 mx-auto mb-8 flex w-fit items-center gap-1 rounded-full border border-border bg-cloud p-1 shadow-sm">
+      <button
+        type="button"
+        aria-pressed={!annual}
+        onClick={() => onChange(false)}
+        className={`min-h-11 touch-manipulation rounded-full px-4 py-2 text-sm font-medium transition-colors ${
+          !annual ? 'bg-surface text-ink shadow-[var(--shadow-card)]' : 'text-muted hover:text-ink'
+        }`}
+      >
+        {b.monthly}
+      </button>
+      <button
+        type="button"
+        aria-pressed={annual}
+        onClick={() => onChange(true)}
+        className={`flex min-h-11 touch-manipulation items-center gap-1.5 rounded-full px-4 py-2 text-sm font-medium transition-colors ${
+          annual ? 'bg-surface text-ink shadow-[var(--shadow-card)]' : 'text-muted hover:text-ink'
+        }`}
+      >
+        {b.annual}
+        <span className="rounded-full bg-sky-soft px-1.5 py-0.5 text-[11px] font-semibold text-accent-strong">
+          {b.save}
+        </span>
+      </button>
+    </div>
+  );
+}
 
-  /**
-   * The headline price is the annual one, so that is what this buys. The client sends the plan
-   * name only — the Price ID lives on the server (issue #8 セキュリティ). Monthly billing is
-   * reachable from the app's settings and from the Stripe portal.
-   */
-  const startCheckout = async () => {
-    setBusy(true);
-    setErr('');
-    try {
-      const res = await fetch('/api/stripe/checkout', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ plan: planId, interval: 'annual', source: 'lp' }),
-      });
-      const data: unknown = await res.json();
-      const url = res.ok && typeof data === 'object' && data && 'url' in data ? String(data.url) : '';
-      if (!url) throw new Error('no url');
-      window.location.assign(url);
-    } catch {
-      setBusy(false);
-      setErr('Could not open checkout. Please try again.');
-    }
-  };
-
+function Plan({ plan, annual, b, featured }: { plan: PlanData; annual: boolean; b: Pricing['billing']; featured?: boolean }) {
+  const price = annual ? plan.annual : plan.monthly;
   return (
     <Card
-      className={`lift relative flex flex-col p-7 ${featured ? 'border-accent shadow-[0_12px_40px_rgba(0,166,244,0.14)]' : ''}`}
+      className={`lift relative flex flex-col p-7 ${featured ? 'border-accent shadow-[0_12px_40px_rgba(0,76,252,0.16)]' : ''}`}
     >
       {plan.badge && (
-        <Badge dot className="bg-sky absolute -top-3.5 left-7">
+        <Badge dot className="absolute -top-3.5 left-7 bg-sky">
           {plan.badge}
         </Badge>
       )}
       <div className="font-display text-lg font-semibold">{plan.name}</div>
       <div className="my-2 flex items-baseline gap-1.5">
-        <span className="font-display text-[40px] font-semibold tracking-[-0.02em]">
-          {plan.price}
-        </span>
-        <span className="text-muted">{plan.per}</span>
+        <span className="font-display text-[40px] font-semibold tracking-[-0.02em] tabular-nums">{price}</span>
+        <span className="text-muted">{b.perMonth}</span>
       </div>
-      <p className="text-muted text-sm">{plan.desc}</p>
+      <p className="text-sm text-muted">{annual ? b.annualNote : b.monthlyNote}</p>
       <ul className="my-6 grid gap-3">
         {plan.points.map((p) => (
-          <li key={p} className="text-ink flex items-start gap-3 text-sm">
-            <span className="bg-sky-soft mt-0.5 flex size-[18px] shrink-0 items-center justify-center rounded-full">
-              <Check className="text-accent size-3" strokeWidth={3} />
+          <li key={p} className="flex items-start gap-3 text-sm text-ink">
+            <span className="mt-0.5 flex size-[18px] shrink-0 items-center justify-center rounded-full bg-sky-soft">
+              <Check className="size-3 text-accent" strokeWidth={3} />
             </span>
             {p}
           </li>
         ))}
       </ul>
-      {BILLING_ENABLED ? (
-        <>
-          <Button
-            variant={featured ? 'primary' : 'secondary'}
-            className="mt-auto w-full"
-            disabled={busy}
-            onClick={() => {
-              posthog.capture('pricing_cta_clicked', {
-                plan: plan.name,
-                featured: !!featured,
-                destination: 'checkout',
-              });
-              void startCheckout();
-            }}
-          >
-            {busy ? '…' : plan.cta}
-          </Button>
-          {err && <p className="mt-2 text-center text-sm text-red-500">{err}</p>}
-        </>
-      ) : (
-        <Button
-          asChild
-          variant={featured ? 'primary' : 'secondary'}
-          className="mt-auto w-full"
-          onClick={() =>
-            posthog.capture('pricing_cta_clicked', {
-              plan: plan.name,
-              featured: !!featured,
-              destination: 'waitlist',
-            })
-          }
-        >
-          <a href="#get-started">{plan.cta}</a>
-        </Button>
-      )}
+      <Button
+        variant={featured ? 'primary' : 'secondary'}
+        className="mt-auto w-full"
+        onClick={() => {
+          document.getElementById('get-started')?.scrollIntoView({ behavior: 'smooth' });
+        }}
+      >
+        {plan.cta}
+      </Button>
     </Card>
   );
 }
 
-export function Pricing({ t }: { t: Dictionary }) {
+/** Icons follow the item order in the dictionary; extra items fall back to a neutral mark. */
+const BUNDLE_ICONS = [Video, Search, Layers, Sunrise, Zap, Globe, Users];
+
+function Bundle({ b }: { b: Pricing['bundle'] }) {
   return (
-    <section id="pricing" className="scroll-mt-20 py-[clamp(56px,9vw,112px)]">
+    <Reveal className="mt-[clamp(40px,6vw,72px)]">
+      <div className="mx-auto max-w-[980px] rounded-[26px] border border-border bg-cloud/45 p-7 sm:p-9">
+        <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted">{b.label}</p>
+        <h3 className="mt-3 max-w-[34ch] font-display text-[clamp(22px,3vw,32px)] font-semibold leading-[1.14] tracking-[-0.02em] text-balance">
+          {b.title}
+        </h3>
+        <p className="mt-3 max-w-[62ch] text-[15px] leading-relaxed text-muted">{b.sub}</p>
+        <ul className="mt-7 grid gap-3 sm:grid-cols-2">
+          {b.items.map((item, index) => {
+            const Icon = BUNDLE_ICONS[index] ?? ListChecks;
+            return (
+              <li
+                key={item.name}
+                className={`flex items-start gap-3.5 rounded-[18px] border border-border bg-surface p-4 ${item.soon ? 'opacity-80' : ''} ${index === b.items.length - 1 && b.items.length % 2 === 1 ? 'sm:col-span-2' : ''}`}
+              >
+                <span
+                  className={`flex size-9 shrink-0 items-center justify-center rounded-xl ${
+                    item.soon ? 'bg-cloud text-muted' : 'bg-sky-soft text-accent'
+                  }`}
+                >
+                  <Icon className="size-4" />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="flex flex-wrap items-center gap-2">
+                    <span className="text-sm font-semibold">{item.name}</span>
+                    <span
+                      className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] ${
+                        item.soon ? 'bg-cloud text-muted' : 'bg-sky-soft text-accent-strong'
+                      }`}
+                    >
+                      {item.soon ? b.nextLabel : b.nowLabel}
+                    </span>
+                  </span>
+                  <span className="mt-1 block text-[13px] leading-relaxed text-muted">{item.note}</span>
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+        <p className="mt-6 flex items-start gap-2.5 text-[13px] leading-relaxed text-muted">
+          <Sparkles className="mt-0.5 size-4 shrink-0 text-accent" />
+          {b.footnote}
+        </p>
+      </div>
+    </Reveal>
+  );
+}
+
+export function Pricing({ pricing, heading, headingLevel = 'h2' }: { pricing: Pricing; heading?: { eyebrow: string; title: string; sub: string }; headingLevel?: 'h1' | 'h2' }) {
+  const [annual, setAnnual] = useState(true); // default: annual (recommended)
+  const display = heading ?? pricing;
+  const Heading = headingLevel;
+  return (
+    <section id="pricing" className="relative scroll-mt-24 py-[clamp(48px,7vw,88px)]">
       <div className="container-x">
-        <Reveal className="mx-auto mb-12 max-w-[44ch] text-center">
-          <p className="text-accent text-xs font-semibold tracking-[0.08em] uppercase">
-            {t.pricing.eyebrow}
-          </p>
-          <h2 className="font-display mt-3.5 text-[clamp(30px,4vw,44px)] leading-[1.1] font-semibold tracking-[-0.015em] text-balance">
-            {t.pricing.title}
-          </h2>
-          <p className="text-muted mt-4 text-[17px]">{t.pricing.sub}</p>
+        <Reveal className="mx-auto mb-7 max-w-[48ch] text-center">
+          <p className="text-xs font-semibold uppercase tracking-[0.08em] text-accent">{display.eyebrow}</p>
+          <Heading className="pricing-title mt-3.5 font-display text-[clamp(28px,5.5vw,48px)] font-semibold leading-[1.08] tracking-[-0.02em] text-balance">
+            {display.title}
+          </Heading>
+          <p className="pricing-sub mx-auto mt-4 max-w-[58ch] text-[17px] leading-relaxed text-muted">{display.sub}</p>
+        </Reveal>
+        <Reveal>
+          <BillingToggle annual={annual} onChange={setAnnual} b={pricing.billing} />
         </Reveal>
         <div className="mx-auto grid max-w-[780px] gap-6 md:grid-cols-2">
           <Reveal>
-            <Plan plan={t.pricing.standard} planId="standard" />
+            <Plan plan={pricing.standard} annual={annual} b={pricing.billing} />
           </Reveal>
           <Reveal delay={0.08}>
-            <Plan plan={t.pricing.pro} planId="pro" featured />
+            <Plan plan={pricing.pro} annual={annual} b={pricing.billing} featured />
           </Reveal>
         </div>
+        <Bundle b={pricing.bundle} />
       </div>
     </section>
   );

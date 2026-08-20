@@ -8,8 +8,10 @@
 //!   low included only when explicitly requested — the same [`shogun_fusion::confidence`] bands the
 //!   UI uses.
 
+use sha2::{Digest, Sha256};
 use shogun_agents::permission::Level;
 use shogun_fusion::confidence::{band, Band};
+use subtle::ConstantTimeEq;
 
 /// The v1 Memory API tools (FR-API-02). Symmetric with the UI's corresponding features.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,6 +34,8 @@ pub enum Tool {
     MemoryAppendNote,
     StateProposeUpdate,
     ActionsExecute,
+    /// Poll a body-free L3 approval outcome.
+    ActionsStatus,
     /// The device's onboarding / first-run setup state (issue #6). A read: an agent needs to know
     /// how far this device is configured, symmetrically with the human UI (invariant 6).
     DeviceOnboardingGet,
@@ -42,10 +46,13 @@ pub enum Tool {
     LessonsSetActive,
     VisualRecallStatus,
     VisualRecallSetEnabled,
+    VisualRecallSetRetention,
     VisualRecallSearchFrames,
     VisualRecallGetFrame,
     VisualRecallRescanFrame,
     VisualRecallDeleteFrame,
+    ProfileWhoami,
+    ProfileSet,
 }
 
 /// Every tool, for exhaustive iteration (settings / tests).
@@ -65,15 +72,19 @@ pub const ALL_TOOLS: &[Tool] = &[
     Tool::MemoryAppendNote,
     Tool::StateProposeUpdate,
     Tool::ActionsExecute,
+    Tool::ActionsStatus,
     Tool::DeviceOnboardingGet,
     Tool::LessonsList,
     Tool::LessonsSetActive,
     Tool::VisualRecallStatus,
     Tool::VisualRecallSetEnabled,
+    Tool::VisualRecallSetRetention,
     Tool::VisualRecallSearchFrames,
     Tool::VisualRecallGetFrame,
     Tool::VisualRecallRescanFrame,
     Tool::VisualRecallDeleteFrame,
+    Tool::ProfileWhoami,
+    Tool::ProfileSet,
 ];
 
 impl Tool {
@@ -95,15 +106,19 @@ impl Tool {
             Tool::MemoryAppendNote => "memory.append_note",
             Tool::StateProposeUpdate => "state.propose_update",
             Tool::ActionsExecute => "actions.execute",
+            Tool::ActionsStatus => "actions.status",
             Tool::DeviceOnboardingGet => "device.onboarding.get",
             Tool::LessonsList => "lessons.list",
             Tool::LessonsSetActive => "lessons.set_active",
             Tool::VisualRecallStatus => "visual_recall.status",
             Tool::VisualRecallSetEnabled => "visual_recall.set_enabled",
+            Tool::VisualRecallSetRetention => "visual_recall.set_retention",
             Tool::VisualRecallSearchFrames => "visual_recall.search_frames",
             Tool::VisualRecallGetFrame => "visual_recall.get_frame",
             Tool::VisualRecallRescanFrame => "visual_recall.rescan_frame",
             Tool::VisualRecallDeleteFrame => "visual_recall.delete_frame",
+            Tool::ProfileWhoami => "profile.whoami",
+            Tool::ProfileSet => "profile.set",
         }
     }
 
@@ -144,19 +159,24 @@ pub fn tool_level(tool: Tool) -> ApiLevel {
         | Tool::VisualRecallStatus
         | Tool::VisualRecallSearchFrames
         | Tool::VisualRecallGetFrame
-        | Tool::VisualRecallRescanFrame => ApiLevel::Read,
+        | Tool::VisualRecallRescanFrame
+        | Tool::ProfileWhoami => ApiLevel::Read,
         // append a user note to the event log — local, reversible.
         Tool::MemoryAppendNote => ApiLevel::Write(Level::L1),
         // a lesson's ON/OFF toggle — same as the Learned UI switch (L1, local, reversible).
         Tool::LessonsSetActive => ApiLevel::Write(Level::L1),
         // visual recall master switch — same as Settings toggle (L1, local).
         Tool::VisualRecallSetEnabled => ApiLevel::Write(Level::L1),
+        // finite encrypted-frame retention — same as the Settings control (L1, local).
+        Tool::VisualRecallSetRetention => ApiLevel::Write(Level::L1),
         // Deleting a local frame is an L1 write.
         Tool::VisualRecallDeleteFrame => ApiLevel::Write(Level::L1),
+        Tool::ProfileSet => ApiLevel::Write(Level::L1),
         // propose a state change — one-tap confirm in the Notch.
         Tool::StateProposeUpdate => ApiLevel::Write(Level::L2),
         // launch a preset agent — level follows the action it runs.
         Tool::ActionsExecute => ApiLevel::PerAction,
+        Tool::ActionsStatus => ApiLevel::Read,
     }
 }
 
@@ -175,20 +195,7 @@ pub enum AuthResult {
 /// outside this pure model.
 #[derive(Default)]
 pub struct TokenRegistry {
-    valid: Vec<String>,
-}
-
-/// Constant-time string compare. Runs over the longer of the two so the loop count leaks only a
-/// length (already visible in the header), never where the first difference is.
-fn ct_eq(a: &str, b: &str) -> bool {
-    let (a, b) = (a.as_bytes(), b.as_bytes());
-    let mut diff = (a.len() ^ b.len()) as u8;
-    let n = a.len().max(b.len());
-    for i in 0..n {
-        let (x, y) = (a.get(i).copied().unwrap_or(0), b.get(i).copied().unwrap_or(0));
-        diff |= x ^ y;
-    }
-    diff == 0
+    valid: Vec<[u8; 32]>,
 }
 
 impl TokenRegistry {
@@ -197,26 +204,63 @@ impl TokenRegistry {
     }
 
     /// Issue a token id (Full UI issuance).
-    pub fn issue(&mut self, token_id: impl Into<String>) {
-        self.valid.push(token_id.into());
+    pub fn issue(&mut self, token: impl Into<String>) {
+        self.valid.push(verifier_bytes(&token.into()));
+    }
+
+    /// Registers only a trusted persisted verifier; raw token input cannot self-register.
+    pub fn issue_verifier(&mut self, verifier: &str) -> Result<(), String> {
+        self.valid
+            .push(crate::memory_api_settings::persisted_verifier_bytes(
+                verifier,
+            )?);
+        Ok(())
+    }
+
+    /// Whether no bearer records have been issued.
+    pub fn is_empty(&self) -> bool {
+        self.valid.is_empty()
     }
 
     /// Revoke a token id (Full UI revocation).
-    pub fn revoke(&mut self, token_id: &str) {
-        self.valid.retain(|t| t != token_id);
+    pub fn revoke(&mut self, token: &str) {
+        let digest = verifier_bytes(token);
+        self.valid
+            .retain(|stored| stored.ct_eq(&digest).unwrap_u8() == 0);
     }
 
     /// Authenticate a call. `None` (no token presented) is denied — reads included (FR-API-03).
-    pub fn authenticate(&self, token_id: Option<&str>) -> AuthResult {
-        match token_id {
+    pub fn authenticate(&self, token: Option<&str>) -> AuthResult {
+        match token {
             None => AuthResult::DeniedNoToken,
-            // `ct_eq`, not `==`: string comparison stops at the first differing byte, and over
-            // many attempts that timing describes the token prefix. Loopback-only narrows who can
-            // measure it, not whether the signal exists.
-            Some(t) if self.valid.iter().any(|v| ct_eq(v, t)) => AuthResult::Granted,
+            Some(token)
+                if token.len() <= 512
+                    && !token.starts_with(crate::memory_api_settings::TOKEN_VERIFIER_PREFIX) =>
+            {
+                let digest = verifier_bytes(token);
+                let mut matched = 0u8;
+                for stored in &self.valid {
+                    // Full scan: a caller cannot learn which client record matched.
+                    matched |= stored.ct_eq(&digest).unwrap_u8();
+                }
+                if matched == 1 {
+                    AuthResult::Granted
+                } else {
+                    AuthResult::DeniedInvalidToken
+                }
+            }
             Some(_) => AuthResult::DeniedInvalidToken,
         }
     }
+
+    /// A stdio process remains trusted until a user has issued its first bearer token.
+    pub fn authenticate_process(&self, token: Option<&str>) -> bool {
+        self.is_empty() || matches!(self.authenticate(token), AuthResult::Granted)
+    }
+}
+
+fn verifier_bytes(token: &str) -> [u8; 32] {
+    Sha256::digest(token.as_bytes()).into()
 }
 
 // ---- read confidence rule (FR-API-06) ------------------------------------------------------
@@ -256,8 +300,14 @@ mod tests {
     fn read_tools_are_reads_writes_carry_expected_levels() {
         assert_eq!(tool_level(Tool::MemorySearch), ApiLevel::Read);
         assert_eq!(tool_level(Tool::StatePeopleGet), ApiLevel::Read);
-        assert_eq!(tool_level(Tool::MemoryAppendNote), ApiLevel::Write(Level::L1));
-        assert_eq!(tool_level(Tool::StateProposeUpdate), ApiLevel::Write(Level::L2));
+        assert_eq!(
+            tool_level(Tool::MemoryAppendNote),
+            ApiLevel::Write(Level::L1)
+        );
+        assert_eq!(
+            tool_level(Tool::StateProposeUpdate),
+            ApiLevel::Write(Level::L2)
+        );
         assert_eq!(tool_level(Tool::ActionsExecute), ApiLevel::PerAction);
     }
 
@@ -265,8 +315,14 @@ mod tests {
     fn onboarding_state_is_a_symmetric_read_tool() {
         // Invariant 6 (issue #6): the device's onboarding/first-run state is readable from the
         // agent side, on the same surface as every other read, at Read level.
-        assert_eq!(Tool::from_wire("device.onboarding.get"), Some(Tool::DeviceOnboardingGet));
-        assert_eq!(Tool::DeviceOnboardingGet.wire_name(), "device.onboarding.get");
+        assert_eq!(
+            Tool::from_wire("device.onboarding.get"),
+            Some(Tool::DeviceOnboardingGet)
+        );
+        assert_eq!(
+            Tool::DeviceOnboardingGet.wire_name(),
+            "device.onboarding.get"
+        );
         assert_eq!(tool_level(Tool::DeviceOnboardingGet), ApiLevel::Read);
         assert!(ALL_TOOLS.contains(&Tool::DeviceOnboardingGet));
     }
@@ -277,7 +333,7 @@ mod tests {
         for &t in ALL_TOOLS {
             let _ = tool_level(t); // exhaustive match means this cannot be undefined
         }
-        assert_eq!(ALL_TOOLS.len(), 24);
+        assert_eq!(ALL_TOOLS.len(), 28);
     }
 
     #[test]
@@ -286,9 +342,15 @@ mod tests {
         // surface at the same levels as the human UI. The list is a read; the toggle is L1
         // (local, reversible) — flipping a lesson can never become a send.
         assert_eq!(Tool::from_wire("lessons.list"), Some(Tool::LessonsList));
-        assert_eq!(Tool::from_wire("lessons.set_active"), Some(Tool::LessonsSetActive));
+        assert_eq!(
+            Tool::from_wire("lessons.set_active"),
+            Some(Tool::LessonsSetActive)
+        );
         assert_eq!(tool_level(Tool::LessonsList), ApiLevel::Read);
-        assert_eq!(tool_level(Tool::LessonsSetActive), ApiLevel::Write(Level::L1));
+        assert_eq!(
+            tool_level(Tool::LessonsSetActive),
+            ApiLevel::Write(Level::L1)
+        );
         assert!(ALL_TOOLS.contains(&Tool::LessonsList));
         assert!(ALL_TOOLS.contains(&Tool::LessonsSetActive));
     }
@@ -317,6 +379,8 @@ mod tests {
                         | Tool::VisualRecallSearchFrames
                         | Tool::VisualRecallGetFrame
                         | Tool::VisualRecallRescanFrame
+                        | Tool::ProfileWhoami
+                        | Tool::ActionsStatus
                 )),
                 ApiLevel::Write(_) => {
                     assert!(matches!(
@@ -325,7 +389,9 @@ mod tests {
                             | Tool::StateProposeUpdate
                             | Tool::LessonsSetActive
                             | Tool::VisualRecallSetEnabled
+                            | Tool::VisualRecallSetRetention
                             | Tool::VisualRecallDeleteFrame
+                            | Tool::ProfileSet
                     ))
                 }
                 ApiLevel::PerAction => assert_eq!(t, Tool::ActionsExecute),
@@ -344,18 +410,33 @@ mod tests {
         let mut reg = TokenRegistry::new();
         reg.issue("client-abc");
         assert_eq!(reg.authenticate(Some("client-abc")), AuthResult::Granted);
-        assert_eq!(reg.authenticate(Some("unknown")), AuthResult::DeniedInvalidToken);
+        assert_eq!(
+            reg.authenticate(Some("unknown")),
+            AuthResult::DeniedInvalidToken
+        );
         reg.revoke("client-abc");
-        assert_eq!(reg.authenticate(Some("client-abc")), AuthResult::DeniedInvalidToken);
+        assert_eq!(
+            reg.authenticate(Some("client-abc")),
+            AuthResult::DeniedInvalidToken
+        );
     }
 
     #[test]
     fn read_confidence_rule_matches_ui() {
         // High plain, Medium possibly, Low excluded by default.
-        assert_eq!(read_inclusion(0.9, false), ReadInclusion::Included { possibly: false });
-        assert_eq!(read_inclusion(0.6, false), ReadInclusion::Included { possibly: true });
+        assert_eq!(
+            read_inclusion(0.9, false),
+            ReadInclusion::Included { possibly: false }
+        );
+        assert_eq!(
+            read_inclusion(0.6, false),
+            ReadInclusion::Included { possibly: true }
+        );
         assert_eq!(read_inclusion(0.3, false), ReadInclusion::Excluded);
         // low included only on explicit opt-in, flagged possibly.
-        assert_eq!(read_inclusion(0.3, true), ReadInclusion::Included { possibly: true });
+        assert_eq!(
+            read_inclusion(0.3, true),
+            ReadInclusion::Included { possibly: true }
+        );
     }
 }

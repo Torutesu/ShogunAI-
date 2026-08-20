@@ -68,7 +68,7 @@ pub struct Evidence {
     pub source: String,
     pub title: Option<String>,
     pub excerpt: String,
-    /// Linked `screen_frames` row when a JPEG is stored for this evidence (≤72 h).
+    /// Linked `screen_frames` row when a finite-retention encrypted JPEG is stored.
     pub frame_id: Option<i64>,
 }
 
@@ -212,6 +212,13 @@ impl ReplyContextCache {
         }
     }
 
+    /// Drop warm context when the capture source can no longer vouch for the focused surface.
+    pub fn clear(&self) {
+        if let Ok(mut g) = self.inner.lock() {
+            *g = None;
+        }
+    }
+
     /// The warm pack for `thread_key`, if that is the one currently held.
     pub fn get(&self, thread_key: &str) -> Option<ReplyContext> {
         let g = self.inner.lock().ok()?;
@@ -228,9 +235,7 @@ impl ReplyContextCache {
     /// path re-assembles via [`Self::put`] — invalidation never rebuilds inline, because building
     /// on the press path is exactly what this cache exists to prevent.
     pub fn invalidate(&self) {
-        if let Ok(mut g) = self.inner.lock() {
-            *g = None;
-        }
+        self.clear();
     }
 }
 
@@ -355,6 +360,9 @@ pub struct Db {
     /// Whether the store is answering (issue #121). Shared by every clone, because a failure the
     /// capture thread hits is the same failure the panel has to report.
     health: Arc<crate::memory_health::MemoryHealth>,
+    /// Last compression / tool-loop snapshot for `shogun metrics` (H1). Shared by clones the same
+    /// way `health` is — desktop assemble and `shogun-api` read the same numbers. Counts only.
+    harness: Arc<Mutex<crate::metrics::HarnessCounters>>,
 }
 
 impl Db {
@@ -367,6 +375,7 @@ impl Db {
             compression_config: None,
             bus: None,
             health: Arc::new(crate::memory_health::MemoryHealth::new()),
+            harness: Arc::new(Mutex::new(crate::metrics::HarnessCounters::default())),
         }
     }
 
@@ -615,7 +624,7 @@ impl Db {
         if touched {
             return Some((id, touched, Vec::new()));
         }
-        let candidates = shogun_memory::extract::extract(ev.content);
+        let candidates = shogun_memory::extract::extract_untrusted(ev.content);
         let now = self.now_ms();
         let ids = self
             .with_conn_mut("extract.persist_candidates", |c| {
@@ -644,7 +653,9 @@ impl Db {
         };
         let recent_refs: Vec<Recent<'_>> =
             recents.iter().map(|(h, c)| Recent { content_hash: h, content: c }).collect();
-        let decision = decide_hash(ev.content, &recent_refs, Self::content_hash);
+        // Collapse against the stored (stripped) form, not the camouflaged bytes.
+        let visible = shogun_redact::strip_hidden(ev.content);
+        let decision = decide_hash(visible.text.as_ref(), &recent_refs, Self::content_hash);
         let collapsed = NewEvent { content_hash: decision.hash(), ..ev.clone() };
         self.capture(&collapsed)
     }
@@ -653,6 +664,68 @@ impl Db {
     fn recent_source_bodies(&self, source: &str, limit: usize) -> Vec<(String, String)> {
         self.with_conn("event_log.recent_source_bodies", |c| event_log::recent_source_bodies(c, source, limit))
             .unwrap_or_default()
+    }
+
+    /// Recent user notes (`source = user`), newest-first, for explicit Memory API context reads.
+    pub fn recent_user_notes(&self, limit: usize) -> Vec<String> {
+        self.recent_source_bodies("user", limit)
+            .into_iter()
+            .map(|(_hash, content)| content)
+            .collect()
+    }
+
+    /// Recent durable text activity for explicit Memory API context reads.
+    ///
+    /// Query-free context cannot rank evidence by relevance, so this returns a small newest-first
+    /// tail from the durable text sources that already feed memory. Exact duplicate excerpts are
+    /// collapsed because accessibility capture and screen OCR can observe the same window.
+    pub(crate) fn recent_context_previews(
+        &self,
+        limit: usize,
+        excerpt_chars: usize,
+    ) -> Vec<(String, shogun_memory::event_log::RecentEventPreview)> {
+        use std::collections::HashSet;
+
+        const SOURCES: [&str; 6] = [
+            "capture",
+            "screen_ocr",
+            "ai_session",
+            "meeting",
+            "gmail",
+            "gcal",
+        ];
+
+        if limit == 0 {
+            return Vec::new();
+        }
+
+        self.with_conn("memory.context_previews", |conn| {
+            let mut previews = Vec::with_capacity(SOURCES.len() * limit);
+            for source in SOURCES {
+                let rows = shogun_memory::event_log::recent_previews_by_source(
+                    conn,
+                    source,
+                    limit,
+                    excerpt_chars,
+                )?;
+                previews.extend(rows.into_iter().map(|row| (source.to_string(), row)));
+            }
+
+            previews.sort_by(|(_, a), (_, b)| b.ts.cmp(&a.ts).then_with(|| b.id.cmp(&a.id)));
+            let mut seen = HashSet::new();
+            previews.retain(|(_, row)| {
+                let normalized = row
+                    .excerpt
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    .to_lowercase();
+                !normalized.is_empty() && seen.insert(normalized)
+            });
+            previews.truncate(limit);
+            Ok::<_, rusqlite::Error>(previews)
+        })
+        .unwrap_or_default()
     }
 
     /// Recent capture bodies `(hash, content)` newest-first for one app, for the near-dup collapse.
@@ -677,7 +750,7 @@ impl Db {
 
     /// Ingest on-device screen OCR text (issue #107). Source is `screen_ocr`; only the extracted
     /// string + provenance reach this method. Optional JPEG frames are stored separately via
-    /// [`store_screen_frame`] (72 h retention — explicit invariant-2 exception, 2026-08-02).
+    /// [`store_screen_frame`] (finite age retention — explicit invariant-2 exception).
     pub fn ingest_screen_ocr(
         &self,
         bundle_id: Option<&str>,
@@ -714,7 +787,7 @@ impl Db {
         if touched {
             return Some((id, touched, Vec::new()));
         }
-        let candidates = shogun_memory::extract::extract(text);
+        let candidates = shogun_memory::extract::extract_untrusted(text);
         let now = self.now_ms();
         let ids = self
             .with_conn_mut("extract.persist_candidates", |c| {
@@ -783,7 +856,7 @@ impl Db {
                     None => synced.push((it.source, 1)),
                 }
                 // A newly-ingested item is extracted for commitments / open loops, linked to it.
-                let candidates = shogun_memory::extract::extract(&it.body);
+                let candidates = shogun_memory::extract::extract_untrusted(&it.body);
                 if !candidates.is_empty() {
                     let ids =
                         shogun_memory::extract::persist_candidates(&mut guard, id, &candidates, it.ts_ms, now)
@@ -1162,7 +1235,7 @@ impl Db {
                 continue;
             }
             summary.newly_inserted += 1;
-            let candidates = shogun_memory::extract::extract(&t.text);
+            let candidates = shogun_memory::extract::extract_untrusted(&t.text);
             if !candidates.is_empty() {
                 let ids =
                     shogun_memory::extract::persist_candidates(&mut guard, id, &candidates, t.ts_ms, now)
@@ -1580,6 +1653,12 @@ impl Db {
             compress_ms,
             compress_ms,
         );
+        self.record_harness_compression(crate::metrics::CompressionHarness {
+            enabled: true,
+            pre_tokens: out.stats.pre_tokens as u64,
+            post_tokens: out.stats.post_tokens as u64,
+            dropped: out.stats.dropped as u64,
+        });
 
         (ContextPack { facts: out_facts, evidence: out_evidence, screen_frames }, out.stats, false)
     }
@@ -1614,6 +1693,12 @@ impl Db {
             elapsed_ms,
             elapsed_ms,
         );
+        self.record_harness_compression(crate::metrics::CompressionHarness {
+            enabled: false,
+            pre_tokens: pre_tokens as u64,
+            post_tokens: pre_tokens as u64,
+            dropped: 0,
+        });
         (ContextPack { facts, evidence, screen_frames }, shogun_fusion::compress::CompressionStats::default(), true)
     }
 
@@ -2240,7 +2325,7 @@ impl Db {
     /// Persist a compressed JPEG from visual-recall OCR, linked to its `screen_ocr` event.
     ///
     /// Explicit exception to invariant 2 (user decision 2026-08-02): frames are local-only,
-    /// encrypted at rest with the memory DB, and purged after 72 h — not audio, not forever.
+    /// encrypted at rest with the memory DB, and purged after the selected finite duration.
     #[allow(clippy::too_many_arguments)] // frame metadata is one row; a params struct adds nothing
     pub fn store_screen_frame(
         &self,
@@ -2254,6 +2339,10 @@ impl Db {
     ) -> Option<i64> {
         let now = self.now_ms();
         self.with_conn("screen_frames.insert", |c| {
+                let current_bytes = shogun_memory::screen_frames::stats(c)?.total_bytes;
+                if !shogun_memory::retention::capture_allowed(current_bytes) {
+                    return Ok(None);
+                }
                 shogun_memory::screen_frames::insert(
                     c,
                     &shogun_memory::screen_frames::NewFrame {
@@ -2267,23 +2356,26 @@ impl Db {
                         jpeg,
                     },
                 )
+                .map(Some)
             })
             .ok()
+            .flatten()
     }
 
-    /// Sweep the visual-recall frame cache: expire past the 72-hour window, then evict oldest-first
-    /// until the cache is back under its byte ceiling (`retention::Policy::frames`).
-    ///
-    /// Age alone bounds nothing — 72 hours of a busy screen is not a fixed size — so a heavy few
-    /// days could grow the memory DB without limit while every frame was still "within the window
-    /// we promised". The budget half is what makes the cache's footprint answerable.
-    pub fn purge_screen_frames(&self) -> Result<usize, String> {
+    /// Whether automatic capture is paused at the encrypted frame-store ceiling.
+    pub fn screen_frame_capture_paused(&self) -> bool {
+        self.screen_frame_stats().total_bytes >= shogun_memory::retention::FRAME_CAPTURE_MAX_BYTES
+    }
+
+    /// Expire encrypted frames past the selected finite duration. No byte-budget deletion occurs;
+    /// new capture pauses at the storage ceiling instead.
+    pub fn purge_screen_frames(&self, retention_ms: i64) -> Result<usize, String> {
         use shogun_memory::retention::Policy;
         let now = self.now_ms();
         self.with_conn_mut_reported("screen_frames.purge_expired", |conn| {
             let items = shogun_memory::screen_frames::retention_items(conn)
                 .map_err(|e| format!("read frame retention items: {e}"))?;
-            let sweep = Policy::frames().sweep(&items, now);
+            let sweep = Policy::frames(retention_ms).sweep(&items, now);
             shogun_memory::screen_frames::delete_ids(conn, &sweep.all())
                 .map_err(|e| format!("purge screen frames: {e}"))
         })
@@ -2319,9 +2411,13 @@ impl Db {
     }
 
     /// List frames in the retention window for UI timeline (newest first).
-    pub fn list_screen_frames(&self, limit: usize) -> Vec<shogun_memory::screen_frames::FrameSummary> {
+    pub fn list_screen_frames(
+        &self,
+        retention_ms: i64,
+        limit: usize,
+    ) -> Vec<shogun_memory::screen_frames::FrameSummary> {
         let now = self.now_ms();
-        let from = now - shogun_memory::screen_frames::RETENTION_MS;
+        let from = now.saturating_sub(retention_ms.max(0));
         self.screen_frames_in_range(from, now, limit)
     }
 
@@ -2331,14 +2427,23 @@ impl Db {
             .unwrap_or_default()
     }
 
+    /// Stored encrypted JPEG bytes in a time window, used only for aggregate storage estimates.
+    pub fn screen_frame_bytes_in_range(&self, from_ms: i64, to_ms: i64) -> i64 {
+        self.with_conn("screen_frames.bytes_in_range", |conn| {
+            shogun_memory::screen_frames::bytes_in_range(conn, from_ms, to_ms)
+        })
+        .unwrap_or(0)
+    }
+
     /// Search stored screen frames for a visual-recall question (metadata + OCR excerpt).
     pub fn search_screen_frames(
         &self,
         query: &str,
+        retention_ms: i64,
         limit: usize,
         excerpt_chars: usize,
     ) -> Vec<ScreenFrameRef> {
-        self.recall_screen_frames(query, limit, excerpt_chars)
+        self.recall_screen_frames_with_retention(query, retention_ms, limit, excerpt_chars)
     }
 
     /// Search stored frames in an explicit time window (Memory API / MCP).
@@ -2389,10 +2494,22 @@ impl Db {
     }
 
     fn recall_screen_frames(&self, query: &str, limit: usize, excerpt_chars: usize) -> Vec<ScreenFrameRef> {
+        let retention_ms = i64::from(crate::capture::visual_recall::MAX_CUSTOM_RETENTION_DAYS)
+            .saturating_mul(crate::capture::visual_recall::DAY_MS);
+        self.recall_screen_frames_with_retention(query, retention_ms, limit, excerpt_chars)
+    }
+
+    fn recall_screen_frames_with_retention(
+        &self,
+        query: &str,
+        retention_ms: i64,
+        limit: usize,
+        excerpt_chars: usize,
+    ) -> Vec<ScreenFrameRef> {
         let now = self.now_ms();
         let local_days = local_day_bounds(now);
         let (from_ms, to_ms) =
-            shogun_memory::search::visual_recall_window(query, now, local_days);
+            shogun_memory::search::visual_recall_window(query, now, local_days, retention_ms);
         self.with_conn("screen_frames.search_for_recall", |c| {
                 shogun_memory::screen_frames::search_for_recall(c, query, from_ms, to_ms, limit, excerpt_chars)
             })
@@ -2681,6 +2798,26 @@ impl Db {
             })
         })
         .ok()
+    }
+
+    fn record_harness_compression(&self, snap: crate::metrics::CompressionHarness) {
+        if let Ok(mut g) = self.harness.lock() {
+            g.compression = Some(snap);
+        }
+    }
+
+    /// Last tool-loop counters for `shogun metrics`. Overwrites the previous snapshot (last loop,
+    /// not a process-lifetime sum). Counts only — never tool names or result text.
+    pub fn record_tool_loop(&self, snap: crate::metrics::ToolLoopHarness) {
+        if let Ok(mut g) = self.harness.lock() {
+            g.tool_loop = Some(snap);
+        }
+    }
+
+    /// H1 counters for `shogun metrics`: last compression assemble and last tool loop, if any.
+    /// `None` when neither has run — rendered as `harness.measured:false`, never fabricated zeros.
+    pub fn harness_counters(&self) -> Option<crate::metrics::HarnessCounters> {
+        self.harness.lock().ok().and_then(|g| (*g).measured())
     }
 
     /// The active lessons relevant to the current screen (this app + global scope), mapped into
@@ -3726,6 +3863,20 @@ mod tests {
             "a different thread is a miss — never serve the wrong thread's context"
         );
         assert_eq!(cache.current().map(|c| c.thread_key), Some(key));
+    }
+
+    #[test]
+    fn clearing_the_reply_context_cache_removes_current_context() {
+        let cache = ReplyContextCache::new();
+        cache.put(ReplyContext {
+            thread_key: "sensitive".into(),
+            ..ReplyContext::default()
+        });
+        assert!(cache.current().is_some());
+
+        cache.clear();
+
+        assert!(cache.current().is_none());
     }
 
     /// "How's that going?" with one obvious candidate resolves to it.
@@ -4887,6 +5038,77 @@ mod tests {
             .unwrap();
         assert_ne!(qh, "report"); // 本文は保存しない
         assert_eq!(path, "compressed");
+    }
+
+    #[test]
+    fn harness_counters_unmeasured_until_assemble_or_loop() {
+        use crate::metrics::{
+            render_snapshots_json_with_lessons_and_harness, SloRegistry, ToolLoopHarness,
+        };
+        let db = Db::open_in_memory(clock(1_000)).unwrap();
+        assert!(db.harness_counters().is_none());
+        let json = render_snapshots_json_with_lessons_and_harness(
+            &SloRegistry::new().snapshot_all(),
+            db.lesson_counters(),
+            db.harness_counters(),
+        );
+        assert!(json.contains(r#""harness":{"measured":false}"#), "{json}");
+        assert!(!json.contains("pre_tokens"), "{json}");
+
+        db.record_tool_loop(ToolLoopHarness { uses: 2, refusals: 1, proposes: 0, timeouts: 1 });
+        let snap = db.harness_counters().expect("loop should mark harness measured");
+        assert!(snap.compression.is_none());
+        let loop_snap = snap.tool_loop.expect("tool_loop recorded");
+        assert_eq!(loop_snap.uses, 2);
+        assert_eq!(loop_snap.refusals, 1);
+        assert_eq!(loop_snap.timeouts, 1);
+        let json = render_snapshots_json_with_lessons_and_harness(
+            &SloRegistry::new().snapshot_all(),
+            None,
+            db.harness_counters(),
+        );
+        assert!(json.contains(r#""uses":2"#), "{json}");
+        assert!(json.contains(r#""compression":{"measured":false}"#), "{json}");
+        assert!(!json.contains("prompt"), "{json}");
+
+        // clones share the live snapshot
+        let clone = db.clone();
+        clone.record_tool_loop(ToolLoopHarness { uses: 8, refusals: 0, proposes: 1, timeouts: 0 });
+        let again = db.harness_counters().and_then(|h| h.tool_loop).expect("shared");
+        assert_eq!(again.uses, 8);
+        assert_eq!(again.proposes, 1);
+    }
+
+    #[test]
+    fn assemble_records_compression_harness_without_query_text() {
+        use crate::metrics::render_snapshots_json_with_lessons_and_harness;
+        use shogun_fusion::compress::CompressionConfig;
+        let db = Db::open_in_memory(clock(10_000)).unwrap();
+        for i in 0..4 {
+            db.capture(&ev(
+                "vendor pricing settled at 12k for the renewal report",
+                &format!("h{i}"),
+                100 + i,
+            ))
+            .unwrap();
+        }
+        const SECRET: &str = "SECRET_QUERY_XYZ_harness";
+        let cfg = CompressionConfig { enabled: true, budget_tokens: 80, ..Default::default() };
+        let (_pack, stats, fell_back) = db.assemble_context_compressed(SECRET, 6, 600, &[], &cfg);
+        assert!(!fell_back);
+        let snap = db.harness_counters().expect("assemble should mark compression measured");
+        let c = snap.compression.expect("compression snapshot");
+        assert!(c.enabled);
+        assert_eq!(c.pre_tokens, stats.pre_tokens as u64);
+        assert_eq!(c.post_tokens, stats.post_tokens as u64);
+        assert_eq!(c.dropped, stats.dropped as u64);
+        let json = render_snapshots_json_with_lessons_and_harness(
+            &crate::metrics::SloRegistry::new().snapshot_all(),
+            None,
+            db.harness_counters(),
+        );
+        assert!(!json.contains(SECRET), "query text must stay off the metrics face: {json}");
+        assert!(json.contains("pre_tokens"), "{json}");
     }
 
     #[test]

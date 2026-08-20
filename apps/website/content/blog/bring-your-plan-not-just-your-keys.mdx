@@ -1,0 +1,69 @@
+---
+title: 'Bring your plan, not just your keys'
+description: 'Pro no longer requires an API key. ShogunAI can run its agent work inside the assistant subscription you already pay for.'
+date: '2026-08-17'
+category: 'Product'
+author: 'ShogunAI'
+image: '/images/blog/comparisons.jpg'
+---
+
+Until now, using the execution layer meant pasting an API key. That is a fine
+ask for engineers and a strange one for everybody else — a second billing
+relationship, a console to visit, a spending limit to guess at, all to use a
+model you are already paying a monthly subscription for.
+
+So we changed the default. **Pro now runs on the assistant plan you already
+have.** An API key still works, and for some people it is the better option.
+It is no longer the price of entry.
+
+## How it works
+
+If you already use one of the major assistant subscriptions and have its
+official command-line tool installed and signed in, ShogunAI can run agent work
+through it. You opt in explicitly, once, in settings. From then on drafting,
+reasoning, and tool use happen inside the plan you are already paying for, at
+no additional per-token cost to you.
+
+Two things we do not do, and will not:
+
+- **We do not read other applications' credential stores.** No rummaging
+  through another app's keychain entries or config files. ShogunAI launches the
+  vendor's own tool, the way you would in a terminal, and that tool handles its
+  own authentication.
+- **We do not reimplement anyone's consumer sign-in.** Every request runs
+  through the vendor's official client, under their terms, with their rate
+  limits. That is the only version of this that is safe for your account.
+
+If the tool is not installed or not signed in, ShogunAI says so and falls back
+to a key.
+
+## Why the two lanes stay separate
+
+There is a second kind of model work in ShogunAI that never touches your
+credentials: indexing, classification, the nightly review, and the morning
+brief. That work is batched, runs on our infrastructure, and is covered by your
+subscription. It is the reason Standard needs no key at all.
+
+Keeping the lanes separate is not bookkeeping. Batch work is high-volume by
+nature, and pointing it at a personal monthly allowance would burn through the
+allowance in days — leaving your agent dead until the plan resets. So the split
+is enforced: our capacity does the bulk work, your credentials do the work you
+asked for by name.
+
+## What this changes about the price
+
+Pro is $99 a month billed annually. Before this change, the honest sticker
+price included whatever your API usage came to on top — which for heavy users
+was not a rounding error. Now, for most people, it is the sticker price, and
+the model spend is one you had already decided to make.
+
+Standard is $49 and needs no credentials at all: capture, recall, search, the
+notch, connected tools for reading context, the nightly review, and the morning
+brief. Both plans start with a seven-day full trial.
+
+## The point underneath
+
+This is the same argument as local-first, one layer up. Your memory should not
+be locked to a vendor, and neither should your inference. Bring the plan you
+already have, swap it later when a better one exists, and keep every day of
+context you have accumulated in the meantime.

@@ -36,6 +36,7 @@ pub mod quantize;
 pub mod redact;
 pub mod recompute;
 pub mod retention;
+pub mod sanitize;
 pub mod screen_frames;
 pub mod search;
 pub mod session;

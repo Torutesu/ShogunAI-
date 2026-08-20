@@ -1,35 +1,53 @@
 'use client';
 
 import { Globe } from 'lucide-react';
-import { useRouter } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { useState, useTransition } from 'react';
 import { LOCALE_COOKIE, type Locale, locales, localeNames } from '@/i18n/config';
 import { cn } from '@/lib/utils';
 
-/** Globe-icon language switcher. Opens on hover/focus; 4 languages. */
+/** Globe-icon language switcher. Keeps mobile selection independent from hover state. */
 export function LanguageMenu({ current, label }: { current: Locale; label: string }) {
   const router = useRouter();
+  const pathname = usePathname();
   const [, startTransition] = useTransition();
   const [active, setActive] = useState<Locale>(current);
+  const [open, setOpen] = useState(false);
 
   function pick(l: Locale) {
     setActive(l);
+    setOpen(false);
     document.cookie = `${LOCALE_COOKIE}=${l}; path=/; max-age=31536000; samesite=lax`;
-    startTransition(() => router.refresh());
+    const segments = pathname.split('/').filter(Boolean);
+    const localizedRoots = new Set(['features', 'use-cases', 'integrations', 'security', 'pricing', 'blog']);
+    const first = segments[0];
+    let nextPath = pathname;
+    if (first && (locales as readonly string[]).includes(first)) {
+      nextPath = `/${[l, ...segments.slice(1)].join('/')}`;
+    } else if (pathname === '/') {
+      nextPath = `/${l}`;
+    } else if (first && localizedRoots.has(first)) {
+      nextPath = `/${l}${pathname}`;
+    }
+    startTransition(() => {
+      if (nextPath === pathname) router.refresh();
+      else router.push(nextPath);
+    });
   }
 
   return (
-    <div className="group relative">
+    <div className="relative" onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}>
       <button
         type="button"
         aria-label={label}
         aria-haspopup="menu"
-        className="flex size-9 items-center justify-center rounded-full border border-border text-muted transition-colors hover:border-ink/25 hover:text-ink group-focus-within:text-ink"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+        className="group flex size-11 items-center justify-center rounded-full border border-border text-muted transition-colors hover:border-ink/25 hover:text-ink"
       >
         <Globe className="size-4 transition-transform duration-500 group-hover:rotate-[24deg]" />
       </button>
-      {/* pt-2 bridges the gap so hover doesn't drop */}
-      <div className="invisible absolute right-0 top-full z-50 pt-2 opacity-0 transition-all duration-150 group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100">
+      <div className={`absolute right-0 top-full z-50 pt-2 transition-all duration-150 ${open ? 'visible translate-y-0 opacity-100' : 'invisible -translate-y-1 opacity-0'}`}>
         <div className="min-w-[180px] rounded-2xl border border-border bg-surface p-2 shadow-[var(--shadow-float)]">
           {locales.map((l) => (
             <button

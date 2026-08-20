@@ -92,10 +92,14 @@ mod tests {
     use crate::budget::HeuristicEstimator;
 
     fn blk(id: i64, chars: usize, rel: f64) -> ContextBlock {
+        blk_kind(id, chars, rel, SourceKind::Evidence)
+    }
+
+    fn blk_kind(id: i64, chars: usize, rel: f64, kind: SourceKind) -> ContextBlock {
         let est = HeuristicEstimator::default();
         ContextBlock::new(
             BlockRef::Event(id),
-            SourceKind::Evidence,
+            kind,
             "a".repeat(chars),
             ScoreInputs { relevance: rel, freshness: 0.5, task_link: 0.0, confidence: 1.0 },
             &est,
@@ -120,5 +124,22 @@ mod tests {
         let cfg = CompressionConfig { enabled: true, budget_tokens: 1000, ..Default::default() };
         let out = compress(cands, &cfg);
         assert_eq!(out.refs, vec![BlockRef::Event(1)]);
+    }
+
+    #[test]
+    fn equal_score_mcp_structured_beats_ax_evidence() {
+        let cands = Candidates {
+            blocks: vec![
+                blk_kind(1, 400, 0.5, SourceKind::Evidence),
+                blk_kind(2, 400, 0.5, SourceKind::Structured),
+            ],
+        };
+        // 400 latin ≈ 100 tokens. Budget one block: #35 rank keeps structured.
+        let cfg = CompressionConfig { enabled: true, budget_tokens: 120, ..Default::default() };
+        let out = compress(cands, &cfg);
+        assert_eq!(out.blocks.len(), 1);
+        assert_eq!(out.blocks[0].id_ref, BlockRef::Event(2));
+        assert_eq!(out.blocks[0].source_kind, SourceKind::Structured);
+        assert_eq!(out.stats.dropped, 1);
     }
 }

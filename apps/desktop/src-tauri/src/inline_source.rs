@@ -25,7 +25,9 @@ pub mod mac {
 
     use shogun_core::daemon::{ContextPack, Db};
     use shogun_core::db_sink::DbTraceabilitySink;
-    use shogun_core::inline::{compose_inline, CursorContext, CursorReader, InlineOutcome, TextInserter};
+    use shogun_core::inline::{
+        compose_inline, CursorContext, CursorReader, InlineOutcome, TextInserter,
+    };
     use shogun_core::llm::anthropic::{AnthropicAgentClient, AnthropicConfig};
     use shogun_core::llm::openai_compat::{
         OpenAiCompatAgentClient, OpenAiCompatConfig, GEMINI_BASE_URL, OPENAI_BASE_URL,
@@ -77,7 +79,11 @@ pub mod mac {
 
     impl Default for LlmSettings {
         fn default() -> Self {
-            Self { provider: "anthropic".into(), model: String::new(), subscription_consent: false }
+            Self {
+                provider: "anthropic".into(),
+                model: String::new(),
+                subscription_consent: false,
+            }
         }
     }
 
@@ -171,7 +177,9 @@ pub mod mac {
     fn refresh_has_key() {
         let s = current_settings();
         let present = match delegate_for(&s.provider) {
-            Some(d) => s.subscription_consent && subscription::detect(&ProcessRunner, d).is_installed(),
+            Some(d) => {
+                s.subscription_consent && subscription::detect(&ProcessRunner, d).is_installed()
+            }
             None => keychain_byok(&s.provider).is_some(),
         };
         HAS_KEY.store(present, std::sync::atomic::Ordering::Relaxed);
@@ -196,7 +204,11 @@ pub mod mac {
                 }
             }
         }
-        eprintln!("[inline] agent provider = {} model = {}", s.provider, loggable_model(&effective_model(&s)));
+        eprintln!(
+            "[inline] agent provider = {} model = {}",
+            s.provider,
+            loggable_model(&effective_model(&s))
+        );
         if let Ok(mut g) = LLM_SETTINGS.lock() {
             *g = Some(s);
         }
@@ -204,12 +216,20 @@ pub mod mac {
     }
 
     fn current_settings() -> LlmSettings {
-        LLM_SETTINGS.lock().ok().and_then(|g| g.clone()).unwrap_or_default()
+        LLM_SETTINGS
+            .lock()
+            .ok()
+            .and_then(|g| g.clone())
+            .unwrap_or_default()
     }
 
     fn effective_model(s: &LlmSettings) -> String {
         let m = s.model.trim();
-        if m.is_empty() { default_model(&s.provider).to_string() } else { m.to_string() }
+        if m.is_empty() {
+            default_model(&s.provider).to_string()
+        } else {
+            m.to_string()
+        }
     }
 
     /// Current provider settings for the Settings UI (model echoes the effective default when
@@ -238,7 +258,8 @@ pub mod mac {
         let s = LlmSettings {
             provider,
             model: model.trim().to_string(),
-            subscription_consent: subscription_consent.unwrap_or(current_settings().subscription_consent),
+            subscription_consent: subscription_consent
+                .unwrap_or(current_settings().subscription_consent),
         };
         if let Some(p) = settings_path(&app) {
             if let Some(dir) = p.parent() {
@@ -253,7 +274,11 @@ pub mod mac {
                 Err(e) => return Err(e.to_string()),
             }
         }
-        eprintln!("[inline] agent provider → {} model → {}", s.provider, loggable_model(&effective_model(&s)));
+        eprintln!(
+            "[inline] agent provider → {} model → {}",
+            s.provider,
+            loggable_model(&effective_model(&s))
+        );
         if let Ok(mut g) = LLM_SETTINGS.lock() {
             *g = Some(s);
         }
@@ -275,7 +300,8 @@ pub mod mac {
     unsafe fn copy_string(el: AXUIElementRef, name: &str) -> Option<String> {
         let cf_name = CFString::new(name);
         let mut value: CFTypeRef = std::ptr::null();
-        let err = unsafe { AXUIElementCopyAttributeValue(el, cf_name.as_concrete_TypeRef(), &mut value) };
+        let err =
+            unsafe { AXUIElementCopyAttributeValue(el, cf_name.as_concrete_TypeRef(), &mut value) };
         if err != kAXErrorSuccess || value.is_null() {
             return None;
         }
@@ -298,7 +324,9 @@ pub mod mac {
         unsafe { AXUIElementSetMessagingTimeout(sys, 0.25) };
         let cf_name = CFString::new(kAXFocusedUIElementAttribute);
         let mut value: CFTypeRef = std::ptr::null();
-        let err = unsafe { AXUIElementCopyAttributeValue(sys, cf_name.as_concrete_TypeRef(), &mut value) };
+        let err = unsafe {
+            AXUIElementCopyAttributeValue(sys, cf_name.as_concrete_TypeRef(), &mut value)
+        };
         unsafe { CFRelease(sys as CFTypeRef) };
         if err != kAXErrorSuccess || value.is_null() {
             return None;
@@ -312,7 +340,11 @@ pub mod mac {
     extern "C" {
         // std::ffi::c_void — spelled in full so the extern block needs no import.
         /// Create rule — the caller releases.
-        fn CGEventCreateKeyboardEvent(source: *const std::ffi::c_void, keycode: u16, key_down: bool) -> *mut std::ffi::c_void;
+        fn CGEventCreateKeyboardEvent(
+            source: *const std::ffi::c_void,
+            keycode: u16,
+            key_down: bool,
+        ) -> *mut std::ffi::c_void;
         fn CGEventSetFlags(event: *mut std::ffi::c_void, flags: u64);
         fn CGEventPost(tap: u32, event: *mut std::ffi::c_void);
     }
@@ -328,7 +360,11 @@ pub mod mac {
     /// The clipboard is the user's, not ours, so it is saved and restored. Restoring happens AFTER
     /// the result is verified — put back too early and the paste races with the restore and lands
     /// the old contents instead.
-    unsafe fn paste_at_cursor(text: &str, el: AXUIElementRef, before: Option<&str>) -> Result<(), String> {
+    unsafe fn paste_at_cursor(
+        text: &str,
+        el: AXUIElementRef,
+        before: Option<&str>,
+    ) -> Result<(), String> {
         use objc2::runtime::AnyObject;
         use objc2::{class, msg_send};
         use objc2_foundation::NSString;
@@ -426,8 +462,15 @@ pub mod mac {
             let value = unsafe { copy_string(el, kAXValueAttribute) };
             let field_label = unsafe { copy_string(el, kAXTitleAttribute) }.unwrap_or_default();
             unsafe { CFRelease(el as CFTypeRef) };
-            let app = crate::display::frontmost_app().map(|f| f.bundle_id).unwrap_or_default();
-            value.map(|before| CursorContext { app, field_label, before, after: String::new() })
+            let app = crate::display::frontmost_app()
+                .map(|f| f.bundle_id)
+                .unwrap_or_default();
+            value.map(|before| CursorContext {
+                app,
+                field_label,
+                before,
+                after: String::new(),
+            })
         }
     }
 
@@ -449,7 +492,11 @@ pub mod mac {
             let cf_text = CFString::new(text);
             // SAFETY: el is a live element; attr + value are valid CFStrings.
             let err = unsafe {
-                AXUIElementSetAttributeValue(el, cf_attr.as_concrete_TypeRef(), cf_text.as_concrete_TypeRef() as CFTypeRef)
+                AXUIElementSetAttributeValue(
+                    el,
+                    cf_attr.as_concrete_TypeRef(),
+                    cf_text.as_concrete_TypeRef() as CFTypeRef,
+                )
             };
             if err != kAXErrorSuccess {
                 unsafe { CFRelease(el as CFTypeRef) };
@@ -463,7 +510,9 @@ pub mod mac {
             // both do this, and they are not exotic targets — AXSelectedText is honoured by little
             // beyond native NSTextView/NSTextField. Fall back to the mechanism that works
             // everywhere, because it is the one the user would have used: paste.
-            let app = crate::display::frontmost_app().map(|f| f.bundle_id).unwrap_or_default();
+            let app = crate::display::frontmost_app()
+                .map(|f| f.bundle_id)
+                .unwrap_or_default();
             eprintln!("[inline] {app} ignored the AX write — falling back to paste");
             let pasted = unsafe { paste_at_cursor(text, el, before.as_deref()) };
             unsafe { CFRelease(el as CFTypeRef) };
@@ -544,7 +593,9 @@ pub mod mac {
             });
 
             let streamed = match self {
-                InlineAgent::Anthropic { rt, client } => rt.block_on(client.complete_streaming(prompt, tee)),
+                InlineAgent::Anthropic { rt, client } => {
+                    rt.block_on(client.complete_streaming(prompt, tee))
+                }
                 InlineAgent::OpenAiCompat { rt, client } => {
                     rt.block_on(client.complete_streaming(prompt, tee))
                 }
@@ -617,7 +668,7 @@ pub mod mac {
             return Err("key is empty".into());
         }
         keychain_store::set_generic_secret(keychain_account(&provider), key.as_bytes())
-        .map_err(|e| e.to_string())?;
+            .map_err(|e| e.to_string())?;
         eprintln!("[inline] BYOK key saved to Keychain (provider: {provider})");
         refresh_has_key();
         Ok(())
@@ -701,11 +752,17 @@ pub mod mac {
     #[tauri::command]
     pub fn subscription_delegates() -> Vec<DelegateInfo> {
         let found = subscription::detect_all(&ProcessRunner);
-        let infos: Vec<DelegateInfo> =
-            found.iter().map(|(d, state)| delegate_info(*d, state)).collect();
+        let infos: Vec<DelegateInfo> = found
+            .iter()
+            .map(|(d, state)| delegate_info(*d, state))
+            .collect();
         eprintln!(
             "[inline] subscription delegates: {}",
-            infos.iter().map(|i| format!("{}={}", i.id, i.state)).collect::<Vec<_>>().join(" ")
+            infos
+                .iter()
+                .map(|i| format!("{}={}", i.id, i.state))
+                .collect::<Vec<_>>()
+                .join(" ")
         );
         infos
     }
@@ -754,10 +811,16 @@ pub mod mac {
             if !s.subscription_consent {
                 // The disclosure was never accepted. Running anyway would send the user's text
                 // through a consumer plan they never agreed to use for this.
-                eprintln!("[inline] {} selected but the disclosure is unaccepted — not drafting", d.id());
+                eprintln!(
+                    "[inline] {} selected but the disclosure is unaccepted — not drafting",
+                    d.id()
+                );
                 return None;
             }
-            eprintln!("[inline] live Agent lane — delegating to {} on the user's own plan", d.id());
+            eprintln!(
+                "[inline] live Agent lane — delegating to {} on the user's own plan",
+                d.id()
+            );
             return Some(InlineAgent::Subscription(SubscriptionAgentClient::new(
                 ProcessRunner,
                 db.traceability_sink(),
@@ -768,9 +831,14 @@ pub mod mac {
         let Some(key) = keychain_byok(&s.provider) else {
             if mock_agent_enabled() {
                 eprintln!("[inline] SHOGUN_MOCK_AGENT=1 — echo mock (AX path still runs)");
-                return Some(InlineAgent::Mock(MockAgentClient::new(ByokKey::new(Secret::new("mock")))));
+                return Some(InlineAgent::Mock(MockAgentClient::new(ByokKey::new(
+                    Secret::new("mock"),
+                ))));
             }
-            eprintln!("[inline] no key in Keychain for provider '{}' — not drafting", s.provider);
+            eprintln!(
+                "[inline] no key in Keychain for provider '{}' — not drafting",
+                s.provider
+            );
             return None;
         };
         let model = effective_model(&s);
@@ -780,7 +848,11 @@ pub mod mac {
         match crate::net_lane::lane() {
             Some((transport, rt)) => {
                 let byok = ByokKey::new(Secret::new(key));
-                eprintln!("[inline] live Agent lane — provider {} model {}", s.provider, loggable_model(&model));
+                eprintln!(
+                    "[inline] live Agent lane — provider {} model {}",
+                    s.provider,
+                    loggable_model(&model)
+                );
                 match s.provider.as_str() {
                     "openrouter" | "openai" | "gemini" => {
                         let base = match s.provider.as_str() {
@@ -858,7 +930,14 @@ pub mod mac {
     ) {
         // Emitted before the thread starts so the pill reacts to the press itself, not to the
         // generation finishing — the whole point is that the tap feels answered immediately.
-        push_inline(&app, InlineStatus { phase: "drafting", chars: 0, detail: None });
+        push_inline(
+            &app,
+            InlineStatus {
+                phase: "drafting",
+                chars: 0,
+                detail: None,
+            },
+        );
         std::thread::spawn(move || {
             let memory = match warm {
                 Some(ctx) if !ctx.is_empty() => {
@@ -874,36 +953,79 @@ pub mod mac {
             // No key means no draft AND no write. The caret sits in the user's own document;
             // putting anything there that they did not ask for is worse than doing nothing.
             let Some(agent) = build_agent(&db) else {
-                push_inline(&app, InlineStatus { phase: "no_key", chars: 0, detail: None });
+                push_inline(
+                    &app,
+                    InlineStatus {
+                        phase: "no_key",
+                        chars: 0,
+                        detail: None,
+                    },
+                );
                 return;
             };
-            let outcome = compose_inline(&AxCursorReader, &agent, &AxTextInserter, &memory, &directives);
+            let outcome = compose_inline(
+                &AxCursorReader,
+                &agent,
+                &AxTextInserter,
+                &memory,
+                &directives,
+            );
             match &outcome {
                 InlineOutcome::Inserted { chars } => {
                     eprintln!("[inline] inserted {chars} chars at the cursor");
                     note_key_accepted();
-                    push_inline(&app, InlineStatus { phase: "inserted", chars: *chars, detail: None });
+                    push_inline(
+                        &app,
+                        InlineStatus {
+                            phase: "inserted",
+                            chars: *chars,
+                            detail: None,
+                        },
+                    );
                 }
                 // Nothing gets inserted on a rejected key, so without this the tap is silent and
                 // the reasonable next move is to press it again. Latch it for the status poll.
                 InlineOutcome::KeyRejected(why) => {
                     eprintln!("[inline] {why}");
                     note_key_rejected();
-                    push_inline(&app, InlineStatus { phase: "key_rejected", chars: 0, detail: Some(why.clone()) });
+                    push_inline(
+                        &app,
+                        InlineStatus {
+                            phase: "key_rejected",
+                            chars: 0,
+                            detail: Some(why.clone()),
+                        },
+                    );
                 }
                 InlineOutcome::NoContext => {
                     eprintln!("[inline] no editable field under the caret");
-                    push_inline(&app, InlineStatus { phase: "no_context", chars: 0, detail: None });
+                    push_inline(
+                        &app,
+                        InlineStatus {
+                            phase: "no_context",
+                            chars: 0,
+                            detail: None,
+                        },
+                    );
                 }
                 other => {
                     eprintln!("[inline] {other:?}");
                     // The reason, not the content: these carry provider/AX errors, never the
                     // draft or anything the user typed.
                     let detail = match other {
-                        InlineOutcome::GenerationFailed(e) | InlineOutcome::InsertFailed(e) => Some(e.clone()),
+                        InlineOutcome::GenerationFailed(e) | InlineOutcome::InsertFailed(e) => {
+                            Some(e.clone())
+                        }
                         _ => None,
                     };
-                    push_inline(&app, InlineStatus { phase: "failed", chars: 0, detail });
+                    push_inline(
+                        &app,
+                        InlineStatus {
+                            phase: "failed",
+                            chars: 0,
+                            detail,
+                        },
+                    );
                 }
             }
         });
@@ -917,7 +1039,12 @@ pub mod mac {
         user_cfg: tauri::State<'_, crate::user_config_watch::UserConfigState>,
         app: tauri::AppHandle,
     ) -> &'static str {
-        run_inline_at_cursor(db.inner().clone(), reply.current(), app, user_cfg.directives());
+        run_inline_at_cursor(
+            db.inner().clone(),
+            reply.current(),
+            app,
+            user_cfg.directives(),
+        );
         "started"
     }
 
@@ -1000,7 +1127,11 @@ pub mod mac {
                 let overdue = c.status == "overdue" || c.due_at.is_some_and(|d| d < now);
                 StateItem {
                     id: c.id,
-                    meta: if overdue { "overdue".into() } else { format!("{:.0}% sure", c.confidence * 100.0) },
+                    meta: if overdue {
+                        "overdue".into()
+                    } else {
+                        format!("{:.0}% sure", c.confidence * 100.0)
+                    },
                     text: c.description,
                 }
             })
@@ -1009,9 +1140,16 @@ pub mod mac {
             .open_loop_rows()
             .into_iter()
             .filter(|l| l.status != "closed")
-            .map(|l| StateItem { id: l.id, meta: format!("{}d waiting", l.staleness_days), text: l.description })
+            .map(|l| StateItem {
+                id: l.id,
+                meta: format!("{}d waiting", l.staleness_days),
+                text: l.description,
+            })
             .collect();
-        StateView { commitments, open_loops }
+        StateView {
+            commitments,
+            open_loops,
+        }
     }
 
     /// Resolve a state row the user clicked: `kind` is "commitment" (→ done) or "open_loop"
@@ -1064,9 +1202,13 @@ pub mod mac {
             other => return Err(format!("unknown range: {other}")),
         };
         let cutoff = db.now_ms() - window_ms;
-        let report = db.delete_since(cutoff).ok_or_else(|| "deletion failed".to_string())?;
-        eprintln!("[shell] delete_data_since {range} — events={} people={} commitments={}",
-            report.events, report.people, report.commitments);
+        let report = db
+            .delete_since(cutoff)
+            .ok_or_else(|| "deletion failed".to_string())?;
+        eprintln!(
+            "[shell] delete_data_since {range} — events={} people={} commitments={}",
+            report.events, report.people, report.commitments
+        );
         serde_json::to_string(&report).map_err(|e| e.to_string())
     }
 
@@ -1083,15 +1225,20 @@ pub mod mac {
     /// database the app still needs to open. A missing Keychain entry is a no-op.
     #[tauri::command]
     pub fn delete_all_and_account(db: tauri::State<'_, Db>) -> Result<String, String> {
-        let report = db.delete_all().ok_or_else(|| "deletion failed".to_string())?;
+        let report = db
+            .delete_all()
+            .ok_or_else(|| "deletion failed".to_string())?;
         // BYOK provider keys.
         for provider in BYOK_PROVIDERS {
             let _ = security_framework::passwords::delete_generic_password(
-                shogun_integrations::keychain_store::SERVICE, keychain_account(provider));
+                shogun_integrations::keychain_store::SERVICE,
+                keychain_account(provider),
+            );
         }
         // OAuth token sets for every connectable service (`<source>-tokenset`).
-        let token_store =
-            shogun_integrations::KeychainTokenStore::new(shogun_integrations::keychain_store::SERVICE);
+        let token_store = shogun_integrations::KeychainTokenStore::new(
+            shogun_integrations::keychain_store::SERVICE,
+        );
         for service in shogun_mcp::scope::ALL_SERVICES {
             use shogun_integrations::TokenStore;
             let _ = token_store.delete(*service);
@@ -1128,7 +1275,12 @@ pub mod mac {
              matters (e.g. \"per the Gmail thread\"). If the evidence does not answer the question, \
              say what you do know and what is missing — never invent specifics.\n",
         );
-        let facts: Vec<&str> = ctx.facts.iter().map(|m| m.trim()).filter(|m| !m.is_empty()).collect();
+        let facts: Vec<&str> = ctx
+            .facts
+            .iter()
+            .map(|m| m.trim())
+            .filter(|m| !m.is_empty())
+            .collect();
         if !facts.is_empty() {
             p.push_str("\nWhat you remember about their work:\n");
             for m in facts {
@@ -1138,7 +1290,7 @@ pub mod mac {
             }
         }
         if !ctx.screen_frames.is_empty() {
-            p.push_str("\nStored screen captures (JPEG, ≤72 h, linked to OCR events):\n");
+            p.push_str("\nStored screen captures (encrypted JPEG, selected finite retention, linked to OCR events):\n");
             for f in &ctx.screen_frames {
                 p.push_str("- [screen frame ");
                 p.push_str(&f.frame_id.to_string());
@@ -1189,8 +1341,12 @@ pub mod mac {
             if !frame.needs_rescan {
                 continue;
             }
-            let Some(rec) = db.get_screen_frame(frame.frame_id) else { continue };
-            let Some(text) = crate::screen_ocr::ocr_jpeg_bytes(&rec.jpeg) else { continue };
+            let Some(rec) = db.get_screen_frame(frame.frame_id) else {
+                continue;
+            };
+            let Some(text) = crate::screen_ocr::ocr_jpeg_bytes(&rec.jpeg) else {
+                continue;
+            };
             let excerpt = shogun_memory::search::excerpt(&text, "", 400);
             for ev in &mut ctx.evidence {
                 if ev.frame_id == Some(frame.frame_id) {
@@ -1244,7 +1400,11 @@ pub mod mac {
     fn chat_blocking(db: &Db, message: &str, directives: &str) -> Result<ChatAnswer, String> {
         match chat_plan(db, message, directives)? {
             ChatPlan::Settled(answer) => Ok(answer),
-            ChatPlan::Generate { agent, prompt, citations } => {
+            ChatPlan::Generate {
+                agent,
+                prompt,
+                citations,
+            } => {
                 let text = agent.complete(&prompt).map_err(note_and_render_llm_error)?;
                 note_key_accepted();
                 Ok(ChatAnswer { text, citations })
@@ -1330,7 +1490,9 @@ pub mod mac {
                 citations: Vec::new(),
             }))
         };
-        let Some(agent) = build_agent(db) else { return no_key() };
+        let Some(agent) = build_agent(db) else {
+            return no_key();
+        };
         if !agent.is_live() {
             return no_key();
         }
@@ -1367,9 +1529,10 @@ pub mod mac {
         let db = db.inner().clone();
         let directives = user_cfg.directives();
         let started = std::time::Instant::now();
-        let answered = tokio::task::spawn_blocking(move || chat_blocking(&db, &message, &directives))
-            .await
-            .map_err(|e| e.to_string())?;
+        let answered =
+            tokio::task::spawn_blocking(move || chat_blocking(&db, &message, &directives))
+                .await
+                .map_err(|e| e.to_string())?;
 
         // Grounding (spec §D2) is the share of answers that cited a source, so it can only be
         // counted where answers are produced. Failures aren't counted at all: an answer that never
@@ -1459,7 +1622,14 @@ pub mod mac {
         // Retrieval and generation both block; neither may run on a tokio worker.
         tokio::task::spawn_blocking(move || {
             let emit_done = |citations: Vec<Citation>, error: Option<String>| {
-                let _ = app.emit("chat_done", ChatDone { turn, citations, error });
+                let _ = app.emit(
+                    "chat_done",
+                    ChatDone {
+                        turn,
+                        citations,
+                        error,
+                    },
+                );
             };
 
             let plan = match chat_plan(&db, &message, &directives) {
@@ -1470,10 +1640,20 @@ pub mod mac {
                 // Nothing to generate — send it as one delta so the panel's streaming path is
                 // also its only path.
                 ChatPlan::Settled(answer) => {
-                    let _ = app.emit("chat_delta", ChatDelta { turn, text: answer.text });
+                    let _ = app.emit(
+                        "chat_delta",
+                        ChatDelta {
+                            turn,
+                            text: answer.text,
+                        },
+                    );
                     return emit_done(answer.citations, None);
                 }
-                ChatPlan::Generate { agent, prompt, citations } => (agent, prompt, citations),
+                ChatPlan::Generate {
+                    agent,
+                    prompt,
+                    citations,
+                } => (agent, prompt, citations),
             };
 
             // The deltas land here and go straight out as events. `first` is the number SLO-03
