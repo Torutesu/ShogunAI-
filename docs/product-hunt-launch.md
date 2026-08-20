@@ -11,8 +11,8 @@
 | 項目 | 決定 |
 |---|---|
 | **launch形態** | **アーリーアクセス（ウェイトリスト）**。当日のCTAはメール登録1フィールド |
-| **Tagline** | `It remembers your work then executes.`（37字／上限60。2026-08-20 オーナー確定） |
-| **一言の主張** | 記録して終わらない。**記憶から実行まで**行き、外に出るものは必ずあなたが承認する |
+| **Tagline** | `Your personal AG on your PC. Built to finish real work.`（55字／上限60。2026-08-20 オーナー確定）<br>⚠ 投稿前に2点だけ確認 → §3.1: **AG → AGI**（56字。AG だと語として通じない）／**PC → Mac**（57字。macOS専用なので PC 表記だとWindows勢が流入して弾かれる） |
+| **一言の主張** | **仕事の全域で汎用**（＝personal AGI の定義）に状態を把握し、**実行まで**行く。外に出るものは必ずあなたが承認する |
 | **カテゴリ** | Productivity / Artificial Intelligence / Mac |
 | **推奨日時** | **火曜 00:01 PT**（＝火曜 16:01 JST）。候補: 2026-09-15 / 予備 09-22 |
 | **PH限定オファー** | ①**Wave 1（最初の招待枠）確約** ②**Founding価格ロック**（年額$49を12か月固定） ③Founding Discord |
@@ -80,7 +80,7 @@
 | 使う | 使わない |
 |---|---|
 | memory layer / execution / world model / local-first / approval / early access | AI-powered, revolutionary, game-changing, second brain |
-| "on your Mac" / "nothing leaves without your approval" | "personal AGI"（PHではhype判定。デッキ限定） |
+| "personal AGI"（**タグラインで採用したので使う。ただし first comment の冒頭で必ず定義する** — `positioning §6` の「定義なしの単独使用は禁じ手」を満たすため）／"on your Mac" / "nothing leaves without your approval" | "AGI is here" 型の到達宣言、human-level AGI を匂わせる表現 |
 | macOS accessibility layer, MCP（**first commentとコメント返信のみ**） | tagline / description / ギャラリー字幕に技術名 |
 | 絵文字なし（例外: **⚔** のみ） | 競合の名指し（相手が出したらカテゴリで返す。§6） |
 | "invites start the week of ◯◯"（日付で言う） | "soon" / "very soon" / "in the coming weeks" |
@@ -89,42 +89,82 @@
 
 ## 3. 提出アセット一式
 
-### 3.1 基本情報
+### 3.1 提出フォームの各欄（そのまま貼れる形）
 
-**Name**
+#### Name of the launch（上限40）
 ```
 ShogunAI
 ```
 
-**Tagline（確定・37字／上限60）**
+#### Tagline（上限60）— 確定
 ```
-It remembers your work then executes.
+Your personal AG on your PC. Built to finish real work.
 ```
-> 確定: 2026-08-20（オーナー）。以降、ギャラリー1枚目・first comment・X告知はこの「remembers → executes」の語順に揃える。**言い換えない**（PHページとLPで言い方が違うと別プロダクトに見える）。
->
-> **1文字だけ提案**: `It remembers your work, then executes.`（カンマあり／38字）。読点で一拍置くと "then executes" が結論として立つ。無しでも成立するので好みで決めてよい。
->
-> taglineに "early access" は入れない。availability は description と first comment で開示する。
+55字。**投稿前に2点だけ確認する**（どちらも直しても意味は変わらず、直さないと損をする種類のもの）:
 
-**Description（上限260字）— 採用案（252字・実測）**
-```
-One private memory of your workday on your Mac — screen text, meetings, mail, calendar — turned into finished work: drafts, follow-ups, holds, a morning brief. No screenshots, no recordings, nothing sends without your approval. Invites open in October.
-```
-> tagline が「何をするか」を言い切ったので、descriptionは**繰り返さず中身を出す**役に回す: ①何を記憶するのか（画面テキスト・会議・メール・カレンダー）②何が出てくるのか（下書き・フォローアップ・予定・朝のブリーフ）③何をしないのか（録らない・勝手に送らない）④いつ触れるのか。この4点で260字を使い切る。
+| 箇所 | 提案 | 理由 |
+|---|---|---|
+| `AG` → `AGI` | `Your personal AGI on your PC. Built to finish real work.`（56字） | `AG` は英語で語として通じず、読み手には**タイプミスに見える**。狙って略したとしても伝わらない |
+| `PC` → `Mac` | `Your personal AGI on your Mac. Built to finish real work.`（57字） | 本製品は **macOS 14+ / Apple Silicon 専用**。PH で "PC" と書くと Windows ユーザーが流入し、登録してから弾かれる。コメント欄が「Windows は？」で埋まり、**ウェイトリストの質も落ちる**。"Mac" は短く、正確で、対象を先に絞れる |
 
-**Topics**
+> 両方入れた `Your personal AGI on your Mac. Built to finish real work.`（57字）を推奨。以降の原稿はこの語彙（personal AGI / Mac）で書いてある。**"PC" のまま出す場合は、description と first comment で macOS 専用であることを必ず明示する**（下の原稿はその形になっている）。
+
+#### Description（上限260）— 採用案（258字・実測）
+```
+Personal AGI for your work, on your Mac: it remembers your day — screen text, meetings, mail, calendar — then finishes things. Drafts, follow-ups, holds, a morning brief. No recordings, nothing sends without your approval. macOS 14+, invites open in October.
+```
+> tagline が「何であるか」を言い切ったので、description は**それを具体で裏取りする**役に回す: ①何を記憶するのか ②何が出てくるのか ③何をしないのか ④対象OSと、いつ触れるのか。**macOS 14+ をここに置くのが重要**（tagline が "PC" のままなら尚更。期待値のズレを最短で潰す）。
+
+#### Topics（3つ）
 ```
 Productivity  /  Artificial Intelligence  /  Mac
 ```
+予備: Privacy / Meetings / Note taking / Developer Tools。**Mac は外さない**（対象OSの事前フィルタとして効く）。
 
-**CTA / Links**
-- ボタン文言: `Get early access`
-- Website: `https://syogun.com/?utm_source=producthunt&utm_medium=launch&utm_campaign=ph_launch`
-- 登録フォームへのアンカー（ヒーロー直下）／Privacy & Security ページ／Pricing ページ
+#### Links
+| 欄 | 値 |
+|---|---|
+| Website | `https://syogun.com/?utm_source=producthunt&utm_medium=launch&utm_campaign=ph_launch` |
+| X (Twitter) | ShogunAI の公式アカウント |
+| LinkedIn | 会社ページ（あれば） |
+| 追加リンク | Privacy & Security ページ（コメント返信から直リンクするので必ず用意） |
 
-**Pricing欄**: 「Paid（from $49/mo, annual）· joining early access is free」。**ここを曖昧にしない。**あとから価格を知った人のコメントが一番荒れる。
+#### Platforms / What is it built for
+```
+Mac
+```
+macOS 14 Sonoma 以上、Apple Silicon（arm64）。**Web / iOS / Windows は選ばない。** 選ぶと通知が広く飛んで、対象外のユーザーの失望コメントを自分で呼び込むことになる。
 
----
+#### Pricing（料金タイプ）
+```
+Paid — with a free trial
+```
+表示テキスト:
+```
+Joining early access is free. Plans start at $49/mo billed annually ($62 month-to-month) when invites open, and every plan starts with a full trial.
+```
+**曖昧にしない。**「あとから有料と知った」コメントが一番荒れる。
+
+#### Promo / Deal（PH限定オファー欄）
+```
+Product Hunt: sign up during the launch and you're in invite wave 1, with the founding price locked ($49/mo annual) for your first year. No card, nothing charged to join.
+```
+（中身と実装コストは §4）
+
+#### Makers / Team
+- Maker（本人）: プロフィールに **顔写真・一行bio・X/LinkedIn** を入れてから当日を迎える。空のプロフィールのメイカーは信用されない。
+- bio 案:
+```
+Building ShogunAI — a personal AGI for your work that runs on your Mac. Previously shipped [1行]. Tokyo.
+```
+- チームメンバーは全員 maker に追加しておく（各自のフォロワーへ通知が飛ぶ）。
+
+#### Interactive demo（任意）
+触れないウェイトリスト launch では効果が高いが、**用意できないなら無理に入れない**（作りかけの埋め込みは逆効果）。入れるなら5ステップまで: ノッチを開く → 文脈アクションが並んでいる → 下書き生成 → 承認プレビュー → Morning Brief。
+
+#### Launch date / scheduling
+- **火曜 00:01 PT** に公開されるようスケジュール（§1.3）。前日までに下書きを完成させ、当日朝の編集をゼロにする。
+- 予約投稿後に **プレビューを別ブラウザ（未ログイン）で確認**する。画像の切れ・リンク切れはここでしか見つからない。
 
 ### 3.2 ギャラリー（1270×760、7枚。この順）
 
@@ -132,13 +172,13 @@ Productivity  /  Artificial Intelligence  /  Mac
 
 | # | 内容 | 画面内キャプション（EN） |
 |---|---|---|
-| 1 | ヒーロー: 黒(#080808)にノッチが開いた瞬間のMac上部クローズアップ。goldは1アクセント | **It remembers your work. Then it executes.**（taglineと同じ語順で置く） |
+| 1 | ヒーロー: 黒(#080808)にノッチが開いた瞬間のMac上部クローズアップ。goldは1アクセント | **Personal AGI, scoped to your work.**<br>小さく副題: *It remembers your day. Then it finishes things.* |
 | 2 | **デモ動画**（§3.3）。2枚目に置くと再生率が高い | — |
-| 3 | Recall: 自然文の問いに、根拠（provenance）付きで答えている実画面 | **Ask in plain language. Get answers with receipts.** |
+| 3 | Recall: 自然文の問いに、根拠（provenance）付きで答えている実画面 | **It knows the state of your work — with receipts.** |
 | 4 | 実行: ノッチのボタン1つ → 下書き → **送信前の承認プレビュー** | **Nothing sends until you say send.** |
 | 5 | Morning Brief: 昨夜動いたもの／今日開いているもの | **Overnight it organizes. Morning it briefs you.** |
 | 6 | プライバシー対比図: *Text, on your Mac* vs *No screenshots. No recordings. No audio files.* | **We built it so we can't see your day.** |
-| 7 | **ロードマップ＋招待の期日**（waitlist launch専用の1枚。ここが票を決める） | **Invites start the week of Oct 6. Product Hunt signups go first.** |
+| 7 | **ロードマップ＋招待の期日**（waitlist launch専用の1枚。ここが票を決める） | **Invites start the week of Oct 6. Product Hunt signups go first.**<br>最下部に小さく: *macOS 14+, Apple Silicon.* |
 
 **7枚目の中身**（誠実さの提示。ここで差がつく）:
 - Shipping now（implemented のみ）: passive memory / recall / meeting recap / morning brief / drafts & approvals / Gmail・Calendar・Drive
@@ -163,7 +203,7 @@ Productivity  /  Artificial Intelligence  /  Mac
 | 5 | 33-43 | 会議の自動検知 → 終了後のrecapとフォローアップ下書き | `Meetings end with the next step, not a transcript.` |
 | 6 | 43-53 | 翌朝の Morning Brief | `It works overnight. You wake up briefed.` |
 | 7 | 53-62 | 設定のプライバシー表記（保存しないもの一覧） | `No screenshots. No recordings. No audio files. Ever.` |
-| 8 | 62-70 | ロゴ＋CTA | `ShogunAI — memory that acts. Early access invites start in October.` |
+| 8 | 62-70 | ロゴ＋CTA | `ShogunAI — personal AGI for your work, on your Mac. Invites start in October.` |
 
 > 撮影ルール: ダミーアカウントで撮り、実在の人名・社名・本文を映さない。カーソルは大きめ。ノッチの展開は等速で1回だけ見せる。**倍速編集で速く見せない**（実機性能を疑われたら終わり）。
 
@@ -171,32 +211,34 @@ Productivity  /  Artificial Intelligence  /  Mac
 
 ### 3.4 First comment（公開直後に投稿）— EN原稿
 
-> **1段落目でウェイトリストであることを自分から言う。**あとから発覚するのが最悪。本文は tagline と同じ「remembers → executes」の順で組んである。
+> 構成の意図: ①**冒頭でウェイトリストだと開示**（あとから発覚が最悪） ②**"personal AGI" を即座に定義**（定義なしの単独使用はブランド規約の禁じ手。タグラインで名乗る以上、最初の数行で自分から定義を置く方が強い） ③記憶→実行 ④承認の規律 ⑤オファー ⑥質問3つ。
 
 ```
 Hi Product Hunt ⚔
 
-Straight up, so nobody finds out by clicking: this is early access, not a download link. The Mac app is built and running — everything in the demo is real footage, not a mockup — and we're opening invites in waves so we can fix what breaks for the first hundred people before the next hundred arrive. Signups from today are in wave 1, and the first invites go out the week of Oct 6.
+Two things before anything else. This is early access — invites, not a download link. And "personal AGI" is a phrase people throw around, so here's exactly what I mean by it, up front.
+
+I don't mean human-level anything. I mean general across your work instead of narrow to one task. One memory and one agent that span your mail, calendar, docs, chat, meetings and the text on your screen; that keep the state of your work — people, projects, promises, open loops, each with a source and a confidence level; and that act on that state instead of answering questions about it. Scoped to your work, running on your machine. Today that machine is a Mac: macOS 14+, Apple Silicon.
 
 Why it exists: every time I open an AI tool, I have to explain my own week to it. Who this person is. What we agreed last Tuesday. What I already decided. Intelligence got cheap. Context didn't.
 
-**It remembers.** ShogunAI quietly builds one memory of your workday — the text on your screen, your meetings, and the tools you connect (mail, calendar, docs, chat). It is not a screen recorder: no screenshots, no video, no audio files, ever. Capture runs through the macOS accessibility layer as text, and it stays in an encrypted database on your Mac.
+**It remembers.** ShogunAI quietly builds one memory of your workday — the text on your screen, your meetings, and the tools you connect. It is not a screen recorder: no screenshots, no video, no audio files, ever. Capture runs through the macOS accessibility layer as text, and it stays in an encrypted database on your Mac.
 
-**Then it executes.** That memory isn't a search box. ShogunAI keeps a live model of your work — people, projects, commitments, open loops — and every record carries where it came from and how confident it is. From the notch, one button finishes something: the follow-up drafted with the right history, the meeting recap that already knows the relationship, the calendar hold, the morning brief on what moved overnight.
+**Then it finishes things.** From the notch, one button: the follow-up drafted with the right history, the meeting recap that already knows the relationship, the calendar hold, the morning brief on what moved overnight. Overnight it reprocesses the day into state, so Monday starts with what you owe people rather than a search box.
 
 The rule I won't break: **nothing leaves your Mac without you approving it.** Reads are automatic, sends never are. You see the full body before anything goes out, and every outbound call is traceable in the app.
 
-You bring your own model — your own API key, or the Claude/ChatGPT/Gemini plan you already pay for. Your memory shouldn't be hostage to our margin on tokens.
+You bring your own model — your own API key, or the Claude/ChatGPT/Gemini plan you already pay for. The memory is the asset, and it's yours, on your disk.
 
-**For Product Hunt:** sign up today and you're in wave 1, with the founding price locked ($49/mo annual) for your first year. No card, nothing charged to join.
+**On invites:** we're opening them in waves so we can fix what breaks for the first hundred people before the next hundred arrive. Sign up during this launch and you're in wave 1 — first invites go out the week of Oct 6 — with the founding price locked ($49/mo annual) for your first year. No card, nothing charged to join.
 
 Three things I'd genuinely like from this thread:
 1. If you tried a memory tool before and dropped it — what made you quit? That's more useful to me than feature requests.
 2. Which integration decides whether you'd leave it running for a week?
-3. The privacy questions. Ask the uncomfortable ones here and I'll answer them here, on the record.
+3. The privacy questions, and the "is AGI the right word" ones. Ask them here and I'll answer them here, on the record.
 ```
 
-**ハウスキーピング**: 絵文字は冒頭の **⚔** のみ／競合名ゼロ／`Oct 6` は守れる週に置換してから投稿／`$49/mo annual` は Stripe の表示と一致させる。
+**投稿前の置換**: `Oct 6` は守れる週へ／`$49/mo annual` は Stripe の表示と一致させる／絵文字は冒頭の **⚔** のみ／競合名ゼロ。
 
 ### 3.5 中盤に落とす Maker follow-up
 
@@ -209,6 +251,25 @@ A few people asked how capture works without screenshots, so: we walk the access
 ```
 On invites, so nobody has to guess: wave 1 goes out the week of Oct 6 to everyone who signed up during this launch, sized to a few hundred so we can actually answer every bug report. Wave 2 follows two weeks later. If we slip, I'll post it here rather than quietly moving the date.
 ```
+
+**(c) 予備 — AGI 論争が伸びたときだけ投下する**
+```
+Since the thread got into it: the reason I use "general" rather than "assistant" is that the failure mode of assistants is narrowness, not intelligence. A dictation app can't know who Mika is. A meeting recorder can't know what you promised her last month. Each is excellent inside its own hour and blind outside it. The interesting engineering isn't a smarter answer — it's one state of your work that every one of those moments reads from and writes back to.
+```
+
+---
+
+### 3.6 その他の提出項目（見落としやすい欄）
+
+| 欄 | 書くこと |
+|---|---|
+| **Thumbnail（240×240, GIF可）** | ノッチが開いて閉じる2秒ループ。文字なし。ギャラリー1枚目の縮小版を使い回さない（潰れて読めない） |
+| **Social preview / OGP** | PHがOG画像を生成するが、LP側のOGPも当日までに tagline と揃える。`apps/website` の OGP は `landing-seo-perf` skill の手順で更新 |
+| **X share text（PHの共有ボタン用）** | `ShogunAI is live on Product Hunt ⚔ Personal AGI for your work, on your Mac — it remembers your day, then finishes things. Nothing leaves the machine without your approval.` |
+| **フォロワーへの通知文（PH内）** | 短く1文: `Early access is open — invites start the week of Oct 6, and today's signups go first.` |
+| **First comment の投稿タイミング** | 公開の**直後**。予約投稿にすると数分の空白ができ、その間の質問が無回答で並ぶ |
+| **コメント通知** | メール・Slack へ飛ぶよう当日前に設定。15分以内返信の維持が初動を決める（§5） |
+| **Launch archive 用の説明** | ローンチ後もページは残る。`Invites open in October` のような時限表現は、11月以降に**必ず書き換える**（放置すると古い商品に見える） |
 
 ---
 
@@ -249,6 +310,21 @@ On invites, so nobody has to guess: wave 1 goes out the week of Oct 6 to everyon
 ## 6. コメント返信テンプレ（EN）
 
 > 原則: ①懸念を認める ②構造で答える ③検証できるものへリンクする。
+
+**Q0-a. AGI って言い過ぎでは（最頻出になる想定。最初に用意する）**
+```
+Fair challenge, and I'm not claiming human-level anything. I mean it in a narrow, literal sense: general across your work instead of one narrow task. One memory and one agent that span your mail, calendar, docs, chat, meetings and what's on your screen; that keep the state of it — people, promises, open loops, each with a source and a confidence; and that act on that state instead of answering about it. If there's a better word for that, I'll take it.
+```
+
+**Q0-b. PC って書いてあるけど Mac 専用？**
+```
+Correct, and I should be precise: macOS 14+ on Apple Silicon today. Capture quality is the reason — the macOS accessibility layer lets us read on-screen text cheaply and reliably without recording anything, which is what makes the no-screenshots promise possible. Windows is a not-yet, not a no.
+```
+
+**Q0-c. モデルのラッパーでは**
+```
+The model part is a wrapper — deliberately, you bring your own. What isn't: passive capture at the OS level, a world model of people/projects/commitments/open loops where every record carries its source and a confidence, forgetting by design (24h hot, 30 days warm, then compressed), and an approval gate on anything outbound. Swap the model tomorrow and the memory is still yours, on your disk. That's the asset.
+```
 
 **Q1. ウェイトリストかよ / いつ触れるの**
 ```
@@ -335,9 +411,9 @@ That's a fair hit and I'm not going to argue it. [認める点を1文] Here's wh
 ```
 ShogunAI is live on Product Hunt ⚔
 
-It remembers your work, then executes.
+Personal AGI for your work — and I mean it narrowly: general across your work instead of narrow to one task.
 
-One private memory of your workday on your Mac — no screenshots, no recordings — turned into the follow-up, the recap, the morning brief. Nothing leaves your Mac without your approval.
+It remembers your day on your Mac (no screenshots, no recordings), keeps the state of it, and finishes things. Nothing leaves the machine without your approval.
 
 Early access opens in waves. Signups today are in wave 1 → [link]
 ```
@@ -346,7 +422,9 @@ Early access opens in waves. Signups today are in wave 1 → [link]
 ```
 ShogunAI を Product Hunt に出しました ⚔
 
-Macの中だけで一日の仕事を記憶して、そこから実行まで行くアプリです。スクショも録画も保存しません。会議のあとに残るのは議事録ではなく、次の一手の下書きです。外に出るものは必ず承認を挟みます。
+仕事の全域で汎用に動く、パーソナルAGIです。汎用と言っても人間並みの知能の話ではなく、単機能アプリの対義語としての「全域」です。
+
+Macの中だけで一日を記憶し、人・約束・やりかけの状態を持って、実行まで行きます。スクショも録画も保存しません。外に出るものは必ず承認を挟みます。
 
 招待は順次。今日登録した方は最初の枠に入ります → [link]
 ```
@@ -362,7 +440,7 @@ Here's the actual answer, in the order it matters: [4ツイートで技術規律
 ```
 We opened early access for ShogunAI on Product Hunt today.
 
-Most AI tools ask you to re-explain your own week before they can help. ShogunAI removes that step: it keeps one private memory of your workday on your Mac — text only, never screenshots or recordings — and turns it into finished work: drafted follow-ups, meeting recaps that know the relationship, a morning brief on what moved overnight. Anything that leaves the machine stops for your approval first.
+We call it a personal AGI in a deliberately narrow sense: general across your work rather than narrow to a single task. Most AI tools ask you to re-explain your own week before they can help. ShogunAI removes that step: it keeps one private memory of your workday on your Mac — text only, never screenshots or recordings — and turns it into finished work: drafted follow-ups, meeting recaps that know the relationship, a morning brief on what moved overnight. Anything that leaves the machine stops for your approval first.
 
 macOS 14+, Apple Silicon. Invites roll out in waves starting in October: [link]
 ```
@@ -382,6 +460,8 @@ Body: 「なぜ作ったか」「何を保存しないか」「何がまだで�
 ### Hacker News（Show HN。ウェイトリストは嫌われやすいので、事実で押す）
 ```
 Show HN: ShogunAI – Local-first work memory for macOS that drafts and executes
+
+（HNでは "AGI" を出さない。定義を添えても燃料にしかならないので、タイトル・本文とも機能と規律の言葉で通す）
 
 本文: 技術的事実のみ。accessibility treeのバウンド走査、暗号化ローカルDB、Hot/Warm/Cold、provenance＋confidence、外部送信の承認モデル、BYOK、そして「なぜ今はウェイトリストなのか」を1段落で率直に。マーケ語ゼロ。
 ```
@@ -446,7 +526,9 @@ Show HN: ShogunAI – Local-first work memory for macOS that drafts and executes
 - [ ] ギャラリーで語っている機能が `docs/feature-status.csv` の implemented 範囲内か（将来分は "Coming" 明記）
 - [ ] tagline / description / ギャラリー字幕に技術スタック名が出ていないか
 - [ ] 絵文字は ⚔ のみか
-- [ ] "AI-powered" / "revolutionary" / "second brain" / "personal AGI" 不使用か
+- [ ] "AI-powered" / "revolutionary" / "second brain" 不使用か
+- [ ] **"personal AGI" の定義が first comment の冒頭にあるか**（定義なしの単独使用はブランド規約の禁じ手。タグラインで使う以上、定義は必須）
+- [ ] タグラインの "AG" / "PC" を投稿前に確認したか（§3.1）
 - [ ] 競合の固有名がこちらの原稿に一切ないか
 - [ ] 実行の訴求すべてに**承認（approval）**が併記されているか
 - [ ] gold の面積が5%以下か（全ギャラリー画像）／Kamonの余白1/6
