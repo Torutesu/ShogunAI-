@@ -75,9 +75,16 @@ fn main() -> ExitCode {
     let token = invocation.token.or_else(|| std::env::var("SHOGUN_API_TOKEN").ok().filter(|t| !t.is_empty()));
 
     match http::request(port, call.method, &call.path, token.as_deref(), call.body.as_deref()) {
+        // Status 0 = the daemon closed the socket without a parseable response (crash mid-request,
+        // reset). That is the unreachable-daemon class (exit 3), never success — `status < 400`
+        // used to report it as exit 0 with an empty body.
+        Ok(resp) if resp.status == 0 => {
+            eprintln!("empty or malformed response from the daemon on 127.0.0.1:{port}");
+            ExitCode::from(3)
+        }
         Ok(resp) => {
             println!("{}", resp.body);
-            if resp.status < 400 {
+            if (200..400).contains(&resp.status) {
                 ExitCode::SUCCESS
             } else {
                 ExitCode::FAILURE
