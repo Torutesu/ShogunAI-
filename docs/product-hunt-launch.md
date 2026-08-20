@@ -11,7 +11,7 @@
 | 項目 | 決定 |
 |---|---|
 | **launch形態** | **アーリーアクセス（ウェイトリスト）**。当日のCTAはメール登録1フィールド |
-| **Tagline** | `Local-first memory for your Mac that finishes the work`（54字／上限60） |
+| **Tagline** | `It remembers your work then executes.`（37字／上限60。2026-08-20 オーナー確定） |
 | **一言の主張** | 記録して終わらない。**記憶から実行まで**行き、外に出るものは必ずあなたが承認する |
 | **カテゴリ** | Productivity / Artificial Intelligence / Mac |
 | **推奨日時** | **火曜 00:01 PT**（＝火曜 16:01 JST）。候補: 2026-09-15 / 予備 09-22 |
@@ -96,22 +96,21 @@
 ShogunAI
 ```
 
-**Tagline（上限60字）— 採用案**
+**Tagline（確定・37字／上限60）**
 ```
-Local-first memory for your Mac that finishes the work
+It remembers your work then executes.
 ```
-予備案:
-```
-Private AI memory for your Mac that does the next step        (54)
-The memory layer for your Mac that acts on what it sees       (55)
-Your Mac remembers your work — and finishes it                (48)
-```
-> taglineに "early access" は入れない。availability は description と first comment で開示する（taglineの60字は製品の説明に全部使う）。
+> 確定: 2026-08-20（オーナー）。以降、ギャラリー1枚目・first comment・X告知はこの「remembers → executes」の語順に揃える。**言い換えない**（PHページとLPで言い方が違うと別プロダクトに見える）。
+>
+> **1文字だけ提案**: `It remembers your work, then executes.`（カンマあり／38字）。読点で一拍置くと "then executes" が結論として立つ。無しでも成立するので好みで決めてよい。
+>
+> taglineに "early access" は入れない。availability は description と first comment で開示する。
 
-**Description（上限260字）— 採用案（255字・実測）**
+**Description（上限260字）— 採用案（252字・実測）**
 ```
-ShogunAI turns your workday into one private memory on your Mac — screen text, meetings, mail, calendar — then acts on it: drafts, follow-ups, holds, a morning brief. No screenshots, no recordings, nothing sends without approval. Invites start in October.
+One private memory of your workday on your Mac — screen text, meetings, mail, calendar — turned into finished work: drafts, follow-ups, holds, a morning brief. No screenshots, no recordings, nothing sends without your approval. Invites open in October.
 ```
+> tagline が「何をするか」を言い切ったので、descriptionは**繰り返さず中身を出す**役に回す: ①何を記憶するのか（画面テキスト・会議・メール・カレンダー）②何が出てくるのか（下書き・フォローアップ・予定・朝のブリーフ）③何をしないのか（録らない・勝手に送らない）④いつ触れるのか。この4点で260字を使い切る。
 
 **Topics**
 ```
@@ -133,7 +132,7 @@ Productivity  /  Artificial Intelligence  /  Mac
 
 | # | 内容 | 画面内キャプション（EN） |
 |---|---|---|
-| 1 | ヒーロー: 黒(#080808)にノッチが開いた瞬間のMac上部クローズアップ。goldは1アクセント | **Your Mac already knows. Now it acts.** |
+| 1 | ヒーロー: 黒(#080808)にノッチが開いた瞬間のMac上部クローズアップ。goldは1アクセント | **It remembers your work. Then it executes.**（taglineと同じ語順で置く） |
 | 2 | **デモ動画**（§3.3）。2枚目に置くと再生率が高い | — |
 | 3 | Recall: 自然文の問いに、根拠（provenance）付きで答えている実画面 | **Ask in plain language. Get answers with receipts.** |
 | 4 | 実行: ノッチのボタン1つ → 下書き → **送信前の承認プレビュー** | **Nothing sends until you say send.** |
@@ -172,22 +171,18 @@ Productivity  /  Artificial Intelligence  /  Mac
 
 ### 3.4 First comment（公開直後に投稿）— EN原稿
 
-> **1段落目でウェイトリストであることを自分から言う。**あとから発覚するのが最悪。
+> **1段落目でウェイトリストであることを自分から言う。**あとから発覚するのが最悪。本文は tagline と同じ「remembers → executes」の順で組んである。
 
 ```
 Hi Product Hunt ⚔
 
-Up front: this is early access, not a download link. The Mac app is built and running — everything in the demo is real footage, not a mockup — and we're opening invites in waves so we can fix what breaks for the first hundred people before the next hundred arrive. Product Hunt signups are in wave 1, and the first invites go out the week of Oct 6.
+Straight up, so nobody finds out by clicking: this is early access, not a download link. The Mac app is built and running — everything in the demo is real footage, not a mockup — and we're opening invites in waves so we can fix what breaks for the first hundred people before the next hundred arrive. Signups from today are in wave 1, and the first invites go out the week of Oct 6.
 
-Now, why I built it.
+Why it exists: every time I open an AI tool, I have to explain my own week to it. Who this person is. What we agreed last Tuesday. What I already decided. Intelligence got cheap. Context didn't.
 
-Every time I open an AI tool, I have to explain my own week to it. Who this person is. What we agreed last Tuesday. What I already decided. Intelligence got cheap. Context didn't.
+**It remembers.** ShogunAI quietly builds one memory of your workday — the text on your screen, your meetings, and the tools you connect (mail, calendar, docs, chat). It is not a screen recorder: no screenshots, no video, no audio files, ever. Capture runs through the macOS accessibility layer as text, and it stays in an encrypted database on your Mac.
 
-ShogunAI is a macOS app with two layers.
-
-**Memory.** It quietly builds one memory of your workday — the text on your screen, your meetings, and the tools you connect (mail, calendar, docs, chat). It is not a screen recorder: no screenshots, no video, no audio files, ever. Capture runs through the macOS accessibility layer as text, and it stays in an encrypted database on your Mac.
-
-**Execution.** That memory isn't a search box. ShogunAI keeps a live model of your work — people, projects, commitments, open loops — and every record carries where it came from and how confident it is. From the notch you get one button that finishes something: the follow-up drafted with the right history, the meeting recap that already knows the relationship, the calendar hold, the morning brief on what moved overnight.
+**Then it executes.** That memory isn't a search box. ShogunAI keeps a live model of your work — people, projects, commitments, open loops — and every record carries where it came from and how confident it is. From the notch, one button finishes something: the follow-up drafted with the right history, the meeting recap that already knows the relationship, the calendar hold, the morning brief on what moved overnight.
 
 The rule I won't break: **nothing leaves your Mac without you approving it.** Reads are automatic, sends never are. You see the full body before anything goes out, and every outbound call is traceable in the app.
 
@@ -195,13 +190,13 @@ You bring your own model — your own API key, or the Claude/ChatGPT/Gemini plan
 
 **For Product Hunt:** sign up today and you're in wave 1, with the founding price locked ($49/mo annual) for your first year. No card, nothing charged to join.
 
-What I'd genuinely like from this thread:
+Three things I'd genuinely like from this thread:
 1. If you tried a memory tool before and dropped it — what made you quit? That's more useful to me than feature requests.
 2. Which integration decides whether you'd leave it running for a week?
-3. The privacy questions. Ask the uncomfortable ones here, on the record, and I'll answer them here.
+3. The privacy questions. Ask the uncomfortable ones here and I'll answer them here, on the record.
 ```
 
-**ハウスキーピング**: 絵文字は冒頭の **⚔** のみ／競合名ゼロ／日付（Oct 6の週）は守れる週に置換してから投稿。
+**ハウスキーピング**: 絵文字は冒頭の **⚔** のみ／競合名ゼロ／`Oct 6` は守れる週に置換してから投稿／`$49/mo annual` は Stripe の表示と一致させる。
 
 ### 3.5 中盤に落とす Maker follow-up
 
@@ -340,7 +335,9 @@ That's a fair hit and I'm not going to argue it. [認める点を1文] Here's wh
 ```
 ShogunAI is live on Product Hunt ⚔
 
-A macOS app that keeps one private memory of your workday — no screenshots, no recordings — and then actually finishes things: the follow-up, the recap, the morning brief. Nothing leaves your Mac without your approval.
+It remembers your work, then executes.
+
+One private memory of your workday on your Mac — no screenshots, no recordings — turned into the follow-up, the recap, the morning brief. Nothing leaves your Mac without your approval.
 
 Early access opens in waves. Signups today are in wave 1 → [link]
 ```
