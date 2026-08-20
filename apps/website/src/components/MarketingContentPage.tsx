@@ -71,21 +71,25 @@ export function MarketingContentPage({ page, section, sectionLabel, t, locale }:
         </div>
       </section>
 
-      <section className="border-y border-border bg-cloud/45 py-[clamp(48px,7vw,88px)]">
-        <div className="container-x grid gap-12 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] lg:items-start lg:gap-20">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.08em] text-accent">{copy.how}</p>
-            <h2 className="mt-4 max-w-[12ch] text-balance font-display text-[clamp(32px,4.5vw,56px)] font-semibold leading-[1.08] tracking-[-0.035em]">{copy.howTitle}</h2>
+      <section className="theme-soft-section mx-2 rounded-[28px] bg-[#fbf7ea] sm:mx-4 lg:mx-6">
+        <div className="container-x grid gap-14 py-[clamp(64px,8vw,112px)] lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)] lg:items-start lg:gap-[clamp(72px,8vw,128px)]">
+          <div className="lg:pt-1">
+            <h2 className="max-w-[11ch] text-balance font-[Georgia,'Times_New_Roman','Yu_Mincho','Hiragino_Mincho_ProN',serif] text-[clamp(40px,5vw,68px)] font-normal leading-[1.04] tracking-[-0.045em]">
+              {copy.howTitle}
+            </h2>
+            <p className="mt-7 max-w-[620px] text-[clamp(17px,1.55vw,21px)] leading-[1.65] text-muted">
+              {page.intro}
+            </p>
           </div>
-          <ol className="grid gap-8 lg:pt-1">
+          <ol className="grid gap-9 lg:pt-1">
             {page.steps.map((step) => (
-              <li key={step.title} className="flex items-start gap-4">
-                <span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full bg-accent text-white">
-                  <Check className="size-4" strokeWidth={3} />
+              <li key={step.title} className="flex items-start gap-5">
+                <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full bg-[#4ccd7a] text-[#07130b] shadow-[inset_0_0_0_1px_rgba(0,0,0,0.04)]">
+                  <Check className="size-[18px]" strokeWidth={2.75} />
                 </span>
                 <div>
-                  <h3 className="font-display text-[clamp(18px,2vw,22px)] font-semibold leading-tight">{step.title}</h3>
-                  <p className="mt-2 text-[15px] leading-relaxed text-muted">{step.body}</p>
+                  <h3 className="text-[clamp(19px,1.8vw,23px)] font-semibold leading-[1.25]">{step.title}</h3>
+                  <p className="mt-2.5 max-w-[620px] text-[clamp(15px,1.2vw,17px)] leading-[1.55] text-muted">{step.body}</p>
                 </div>
               </li>
             ))}
