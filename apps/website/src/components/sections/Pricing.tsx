@@ -10,6 +10,42 @@ import type { Dictionary } from '@/i18n/dictionaries';
 
 type Pricing = Dictionary['pricing'];
 type PlanData = { name: string; annual: string; monthly: string; points: readonly string[]; cta: string; badge?: string };
+type PlanId = 'standard' | 'pro';
+
+/**
+ * Send the visitor to Stripe Checkout for this plan × interval.
+ *
+ * The plan *name* goes over the wire, never a Price ID — the server resolves the price so a
+ * tampered request cannot buy Pro at the Standard price (issue #8 セキュリティ). Any failure falls
+ * back to the download section rather than leaving a dead button: an environment with no prices
+ * set answers 503 (`billingReady()`), and a visitor who cannot buy should still get the app.
+ *
+ * Asking the route at click time rather than reading `billingReady()` when the page renders is
+ * deliberate: these pages are statically generated, so a build-time answer would be baked into
+ * the HTML — and on a Workers deploy the environment is not populated at build time at all,
+ * which would leave the LP permanently unable to sell.
+ */
+async function startCheckout(plan: PlanId, interval: 'monthly' | 'annual'): Promise<void> {
+  try {
+    const res = await fetch('/api/stripe/checkout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ plan, interval, source: 'lp' }),
+    });
+    const body: unknown = await res.json();
+    const url =
+      res.ok && typeof body === 'object' && body !== null && 'url' in body
+        ? (body as { url?: unknown }).url
+        : null;
+    if (typeof url === 'string' && url.startsWith('https://')) {
+      window.location.href = url;
+      return;
+    }
+  } catch {
+    // Fall through to the download section.
+  }
+  document.getElementById('get-started')?.scrollIntoView({ behavior: 'smooth' });
+}
 
 function BillingToggle({
   annual,
@@ -49,7 +85,20 @@ function BillingToggle({
   );
 }
 
-function Plan({ plan, annual, b, featured }: { plan: PlanData; annual: boolean; b: Pricing['billing']; featured?: boolean }) {
+function Plan({
+  plan,
+  planId,
+  annual,
+  b,
+  featured,
+}: {
+  plan: PlanData;
+  planId: PlanId;
+  annual: boolean;
+  b: Pricing['billing'];
+  featured?: boolean;
+}) {
+  const [starting, setStarting] = useState(false);
   const price = annual ? plan.annual : plan.monthly;
   return (
     <Card
@@ -79,8 +128,10 @@ function Plan({ plan, annual, b, featured }: { plan: PlanData; annual: boolean; 
       <Button
         variant={featured ? 'primary' : 'secondary'}
         className="mt-auto w-full"
+        disabled={starting}
         onClick={() => {
-          document.getElementById('get-started')?.scrollIntoView({ behavior: 'smooth' });
+          setStarting(true);
+          void startCheckout(planId, annual ? 'annual' : 'monthly').finally(() => setStarting(false));
         }}
       >
         {plan.cta}
@@ -148,10 +199,21 @@ export function Pricing({ pricing, heading, headingLevel = 'h2' }: { pricing: Pr
         </Reveal>
         <div className="mx-auto grid max-w-[780px] gap-6 md:grid-cols-2">
           <Reveal>
-            <Plan plan={pricing.standard} annual={annual} b={pricing.billing} />
+            <Plan
+              plan={pricing.standard}
+              planId="standard"
+              annual={annual}
+              b={pricing.billing}
+            />
           </Reveal>
           <Reveal delay={0.08}>
-            <Plan plan={pricing.pro} annual={annual} b={pricing.billing} featured />
+            <Plan
+              plan={pricing.pro}
+              planId="pro"
+              annual={annual}
+              b={pricing.billing}
+              featured
+            />
           </Reveal>
         </div>
         <Bundle b={pricing.bundle} />
