@@ -109,13 +109,31 @@ pub fn redact(text: &str) -> std::borrow::Cow<'_, str> {
         }
         let rest = &text[i..];
 
-        // 1. A known issuer prefix: mask the prefix and the value that follows it.
-        if let Some(p) = ISSUER_PREFIXES.iter().find(|p| rest.starts_with(**p)) {
-            let value_len = run_len(&rest[p.len()..]);
-            if p.len() + value_len >= MIN_SECRET_LEN {
-                out.push_str(MASK);
-                i += p.len() + value_len;
-                continue;
+        // 1. A known issuer prefix: mask the prefix and the value that follows it. Only at a
+        //    token boundary — the "sk-" inside "task-management" is prose, not a key.
+        //    Only an ALPHANUMERIC neighbour makes it prose: the separators in `is_secret_char`
+        //    (`=`, `/`, `.`, `-`, `_`, `+`) are exactly what precedes a real key in
+        //    `MYVAR=sk-…`, `?k=sk-…`, `/keys/sk-…`, so testing those would un-mask live secrets.
+        let at_token_boundary = i == 0
+            || !text[..i].chars().next_back().map(char::is_alphanumeric).unwrap_or(false);
+        if at_token_boundary {
+            if let Some(p) = ISSUER_PREFIXES.iter().find(|p| rest.starts_with(**p)) {
+                let tail = &rest[p.len()..];
+                // AWS access key ids are strictly uppercase alphanumeric after the prefix; a
+                // hyphenated heading like "ASIA-PACIFIC-2026" must not read as a credential.
+                let value_len = if *p == "AKIA" || *p == "ASIA" {
+                    tail.char_indices()
+                        .find(|(_, c)| !c.is_ascii_alphanumeric())
+                        .map(|(idx, _)| idx)
+                        .unwrap_or(tail.len())
+                } else {
+                    run_len(tail)
+                };
+                if p.len() + value_len >= MIN_SECRET_LEN {
+                    out.push_str(MASK);
+                    i += p.len() + value_len;
+                    continue;
+                }
             }
         }
 
@@ -195,13 +213,16 @@ fn mask_emails_and_urls(text: &str) -> std::borrow::Cow<'_, str> {
 }
 
 /// Length of a `scheme://` prefix at the start of `s`, or `None`.
+///
+/// Scans only the leading alphabetic run (max 10) rather than `find("://")` over the whole tail —
+/// this runs at every byte offset, and a whole-tail search made the scan O(n²) on long text.
 fn url_scheme_len(s: &str) -> Option<usize> {
-    let idx = s.find("://")?;
+    let scheme = s.bytes().take(11).take_while(|b| b.is_ascii_alphabetic()).count();
     // scheme must be short and alphabetic (http, https, ftp, ...) and immediately at the start.
-    if idx == 0 || idx > 10 || !s[..idx].bytes().all(|b| b.is_ascii_alphabetic()) {
+    if scheme == 0 || scheme > 10 || !s[scheme..].starts_with("://") {
         return None;
     }
-    Some(idx + 3)
+    Some(scheme + 3)
 }
 
 /// Length of the URL body (host/path/query) after the scheme. Stops at whitespace or quote.
@@ -231,8 +252,11 @@ fn email_span(emitted: &str, after_at: &str) -> Option<(usize, usize)> {
         .find(|(_, c)| !(c.is_ascii_alphanumeric() || matches!(c, '.' | '-')))
         .map(|(idx, _)| idx)
         .unwrap_or(after_at.len());
-    let domain = &after_at[..domain_len];
-    if domain_len == 0 || !domain.contains('.') || domain.ends_with('.') {
+    // A trailing '.' or '-' is sentence punctuation, not part of the domain ("…example.com.").
+    // Trim it off and mask the address; rejecting here would leave the email in the log verbatim.
+    let domain = after_at[..domain_len].trim_end_matches(['.', '-']);
+    let domain_len = domain.len();
+    if domain_len == 0 || !domain.contains('.') {
         return None;
     }
     Some((local_len, domain_len))
@@ -263,14 +287,25 @@ struct Labelled {
     total: usize,
 }
 
+/// Case-insensitive ASCII prefix test on raw bytes — no allocation. Byte slicing is safe here
+/// because a byte-wise case-insensitive match against an ASCII `prefix` can only succeed on
+/// ASCII bytes.
+fn starts_with_ignore_case(s: &str, prefix: &str) -> bool {
+    s.len() >= prefix.len() && s.as_bytes()[..prefix.len()].eq_ignore_ascii_case(prefix.as_bytes())
+}
+
 /// Match `label` `sep` `value` at the start of `s`, where sep is `:` or `=` with optional spaces
 /// and quotes. Returns `None` unless the value is long enough to be a real credential.
+///
+/// Matches labels byte-wise instead of lowercasing `s`: this is called at every byte offset of
+/// the scan, and `to_ascii_lowercase()` of the whole remaining text allocated O(n) per offset —
+/// O(n²) time AND allocation on the DB persist path for any text that merely contains "token".
 fn match_labelled(s: &str) -> Option<Labelled> {
-    let lower = s.to_ascii_lowercase();
-    let label = LABELS.iter().find(|l| lower.starts_with(**l))?;
+    let label = LABELS.iter().find(|l| starts_with_ignore_case(s, l))?;
     let mut p = label.len();
 
-    // Optional closing quote of a quoted key ("api_key": …) then the separator.
+    // Optional closing quote of a quoted key ("api_key": …) then the separator. Every byte
+    // consumed below is ASCII, so `p` always lands on a char boundary.
     let b = s.as_bytes();
     while p < b.len() && (b[p] == b'"' || b[p] == b'\'' || b[p] == b' ') {
         p += 1;
@@ -284,7 +319,7 @@ fn match_labelled(s: &str) -> Option<Labelled> {
     }
     // `Authorization: Bearer <token>` — keep the scheme, mask the token.
     for scheme in ["bearer ", "basic ", "token "] {
-        if lower[p.min(lower.len())..].starts_with(scheme) {
+        if starts_with_ignore_case(&s[p..], scheme) {
             p += scheme.len();
             break;
         }
@@ -344,6 +379,34 @@ mod tests {
     }
 
     #[test]
+    fn issuer_prefixes_inside_ordinary_words_are_not_matched() {
+        // "sk-", "SG.", "ASIA" and friends appear mid-word in real prose constantly; matching
+        // them there shreds captured text permanently (the DB only holds the masked form).
+        for s in [
+            "task-management-workflow is due Friday",
+            "the disk-cleanup-scheduled-job ran overnight",
+            "MSG.Sent.Confirmation.Number.1234567890",
+            "ASIA-PACIFIC-2026-PLANNING notes from the offsite",
+            "kiosk-mode-restart-required on the demo box",
+        ] {
+            assert_eq!(r(s), s, "prose must survive redaction untouched");
+        }
+        // Still masked when the prefix starts its own token.
+        assert_eq!(r("key sk-abcdefghijklmnop here"), "key [redacted] here");
+    }
+
+    #[test]
+    fn a_secret_after_a_separator_is_still_masked() {
+        // The shapes a key actually arrives in on a captured screen: an env assignment, a query
+        // parameter, a path. The preceding char is a separator, not prose — masking must hold,
+        // or the live key is written verbatim into event_log.
+        assert_eq!(r("export MYVAR=sk-abcdefghijklmnop"), "export MYVAR=[redacted]");
+        assert_eq!(r("https://x.test/v1?k=sk-abcdefghijklmnop"), "https://x.test/v1?k=[redacted]");
+        assert_eq!(r("cat /keys/sk-abcdefghijklmnop"), "cat /keys/[redacted]");
+        assert_eq!(r("(sk-abcdefghijklmnop)"), "([redacted])");
+    }
+
+    #[test]
     fn words_containing_a_label_are_not_treated_as_one() {
         // No separator follows, so nothing is masked.
         let s = "tokenising the passwordless flow takes a while honestly";
@@ -376,6 +439,14 @@ mod tests {
     fn log_redactor_masks_emails() {
         assert_eq!(rl("user alice@example.com logged in"), "user [redacted] logged in");
         assert_eq!(rl("to: bob.smith+tag@sub.example.co.jp done"), "to: [redacted] done");
+    }
+
+    #[test]
+    fn log_redactor_masks_an_email_at_the_end_of_a_sentence() {
+        // The sentence period was previously absorbed into the domain, failed the
+        // ends_with('.') check, and the whole address survived into the log.
+        assert_eq!(rl("Sent to alice@example.com."), "Sent to [redacted].");
+        assert_eq!(rl("failed for bob@sub.example.co.jp. Retrying"), "failed for [redacted]. Retrying");
     }
 
     #[test]

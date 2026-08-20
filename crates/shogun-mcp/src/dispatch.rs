@@ -61,6 +61,9 @@ pub enum ActionOutcome {
     /// An external send (L3) — enqueued for explicit confirmation; the caller holds this pending
     /// id and polls the approval queue. It never completes without a UI confirm (FR-API-04).
     PendingApproval(ApprovalId),
+    /// The approval queue refused the enqueue (id space exhausted — practically unreachable).
+    /// Surfaced as a refusal so no path panics while holding the shared queue lock.
+    Unavailable,
 }
 
 /// The Memory API gate. Borrows the token registry and the shared approval queue (the same queue
@@ -158,8 +161,15 @@ impl<'a> MemoryApi<'a> {
         }
         // ApprovalOrigin::Api — the request came through the Memory API (FR-API-04); the shared
         // queue's listing labels it so the confirm UI shows where it came from (B-3 / E-08).
-        let id = self.approvals.request(send, preview, ApprovalOrigin::Api, now_ms);
-        ActionOutcome::PendingApproval(id)
+        match self
+            .approvals
+            .try_request(send, preview, ApprovalOrigin::Api, now_ms)
+        {
+            Ok(id) => ActionOutcome::PendingApproval(id),
+            // Id exhaustion is practically unreachable, but must refuse, not panic — callers hold
+            // the shared queue lock, and a panic here would poison it for every face.
+            Err(_) => ActionOutcome::Unavailable,
+        }
     }
 }
 

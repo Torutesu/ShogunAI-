@@ -316,17 +316,6 @@ impl ApprovalQueue {
         Ok(id)
     }
 
-    pub fn request(
-        &mut self,
-        action: SendAction,
-        preview: Preview,
-        origin: ApprovalOrigin,
-        now_ms: u64,
-    ) -> ApprovalId {
-        self.try_request(action, preview, origin, now_ms)
-            .expect("approval id space exhausted")
-    }
-
     fn position(&self, id: ApprovalId) -> Option<usize> {
         self.pending.iter().position(|p| p.id == id)
     }
@@ -362,7 +351,7 @@ impl ApprovalQueue {
     }
 
     /// Explicitly reject a pending request.
-    pub fn reject(&mut self, id: ApprovalId, cause: RejectCause) -> Decision {
+    pub fn reject(&mut self, id: ApprovalId, cause: RejectCause, now_ms: u64) -> Decision {
         match self.position(id) {
             Some(idx) => {
                 self.pending.remove(idx);
@@ -373,7 +362,7 @@ impl ApprovalQueue {
                     } else {
                         ApprovalStatus::Rejected
                     },
-                    0,
+                    now_ms,
                 );
                 Decision::Rejected(cause)
             }
@@ -483,6 +472,22 @@ impl ApprovalQueue {
     }
 }
 
+/// Test-only infallible enqueue. Production paths use [`ApprovalQueue::try_request`]: a panic on
+/// id exhaustion would poison the shared queue mutex (`unwrap`/`expect` are test-only anyway).
+#[cfg(test)]
+impl ApprovalQueue {
+    pub fn request(
+        &mut self,
+        action: SendAction,
+        preview: Preview,
+        origin: ApprovalOrigin,
+        now_ms: u64,
+    ) -> ApprovalId {
+        self.try_request(action, preview, origin, now_ms)
+            .expect("approval id space exhausted")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -588,10 +593,14 @@ mod tests {
         let mut q = ApprovalQueue::new();
         let id = q.request(email(), preview(), ApprovalOrigin::Ui, 0);
         assert_eq!(
-            q.reject(id, RejectCause::UserRejected),
+            q.reject(id, RejectCause::UserRejected, 1_234),
             Decision::Rejected(RejectCause::UserRejected)
         );
         assert_eq!(q.pending_len(), 0);
+        // The terminal ledger records when the rejection happened, not epoch 0.
+        let record = q.terminal_records().iter().find(|r| r.id == id).unwrap();
+        assert_eq!(record.status, ApprovalStatus::Rejected);
+        assert_eq!(record.resolved_ms, 1_234);
     }
 
     #[test]

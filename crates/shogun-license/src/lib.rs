@@ -151,7 +151,11 @@ impl LicenseToken {
             return Freshness::Fresh;
         }
         if now_ms < self.grace_deadline_ms() {
-            let offline_ms = now_ms.saturating_sub(exp_ms);
+            // Anchored on `iat`, like the deadline: FR-BIL-09 measures both the 14-day window
+            // and the day-7 amber from the last obtained valid token. Anchoring this on `exp`
+            // made amber arrive one token-lifetime late (a ~24h token: green through day 8,
+            // then only a 6-day warning before the cutoff).
+            let offline_ms = now_ms.saturating_sub(self.issued_at.saturating_mul(1000));
             return Freshness::Grace { days_offline: offline_ms / MS_PER_DAY };
         }
         Freshness::Stale
@@ -402,6 +406,20 @@ mod tests {
         assert!(t.freshness(deadline - 1).is_valid());
         assert_eq!(t.freshness(deadline), Freshness::Stale);
         assert!(!t.freshness(deadline).is_valid());
+    }
+
+    #[test]
+    fn amber_arrives_on_day_7_from_issuance_even_with_a_day_long_token() {
+        // FR-BIL-09: amber from day 7, cutoff at day 14 — both measured from the token. With a
+        // ~24h token, anchoring days_offline on exp instead of iat pushed amber to day 8 and
+        // shrank the warning window to 6 days.
+        let iat = 0;
+        let exp = 24 * 3600; // a one-day token
+        let t = verify(&mint(payload("pro", iat, exp)), &pubkey(), DEVICE).expect("verify");
+        let day7 = 7 * MS_PER_DAY;
+        assert!(t.freshness(day7).is_amber(), "amber exactly at iat + 7d");
+        assert!(!t.freshness(day7 - 1).is_amber(), "still green just before day 7");
+        assert!(t.freshness(day7 - 1).is_valid() && t.freshness(day7).is_valid());
     }
 
     #[test]

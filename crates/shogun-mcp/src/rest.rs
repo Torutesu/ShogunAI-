@@ -563,15 +563,18 @@ pub fn act(
                 Ok(()) => {}
             }
             let now = u64::try_from(now_ms).unwrap_or(0);
-            let id = approvals.request(send, preview, origin, now);
-            (
-                202,
-                format!(
-                    r#"{{"pending":true,"approval_id":{},"level":"L3","origin":"{}"}}"#,
-                    id.0,
-                    origin.as_str()
+            match approvals.try_request(send, preview, origin, now) {
+                Ok(id) => (
+                    202,
+                    format!(
+                        r#"{{"pending":true,"approval_id":{},"level":"L3","origin":"{}"}}"#,
+                        id.0,
+                        origin.as_str()
+                    ),
                 ),
-            )
+                // Id exhaustion: refuse rather than panic while the shared queue lock is held.
+                Err(_) => (503, r#"{"error":"approval_queue_unavailable"}"#.to_string()),
+            }
         }
     }
 }

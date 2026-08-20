@@ -33,7 +33,9 @@ pub enum LocalAction {
     CopyToClipboard { text: String },
     /// Update a local state record (people/projects/…). Local mutation, not an external write.
     UpdateState { table: &'static str, state_id: i64 },
-    /// Save a draft locally (the "draft-stop mode" default for email — never sends).
+    /// Save a draft locally (the "draft-stop mode" default for email — never sends). Persists a
+    /// row, so it is L2 like [`LocalAction::UpdateState`] (and like the preset tables'
+    /// `DraftGenerate`).
     SaveDraft { target: &'static str },
 }
 
@@ -109,10 +111,11 @@ fn local_level(a: &LocalAction) -> Level {
         | LocalAction::RevealFile { .. }
         | LocalAction::LocalSearch { .. }
         | LocalAction::ShowNotification { .. }
-        | LocalAction::CopyToClipboard { .. }
-        | LocalAction::SaveDraft { .. } => Level::L1,
-        // Mutates persisted state → one-tap confirmation.
-        LocalAction::UpdateState { .. } => Level::L2,
+        | LocalAction::CopyToClipboard { .. } => Level::L1,
+        // Mutates persisted state → one-tap confirmation. SaveDraft writes a note row, and the
+        // preset tables mandate DraftGenerate at L2 (OpKind::mandated_level) — keeping it L1 here
+        // let fusion's draft candidates auto-run a persisted write with zero confirmation.
+        LocalAction::UpdateState { .. } | LocalAction::SaveDraft { .. } => Level::L2,
     }
 }
 
@@ -146,7 +149,6 @@ mod tests {
             LocalAction::LocalSearch { query: "budget".into() },
             LocalAction::ShowNotification { text: "hi".into() },
             LocalAction::CopyToClipboard { text: "draft".into() },
-            LocalAction::SaveDraft { target: "gmail" },
         ] {
             let action = Action::Local(a);
             assert_eq!(action.required_level(), Level::L1);
@@ -157,9 +159,16 @@ mod tests {
 
     #[test]
     fn state_mutation_is_l2() {
-        let a = Action::Local(LocalAction::UpdateState { table: "people", state_id: 1 });
-        assert_eq!(a.required_level(), Level::L2);
-        assert!(!a.is_l1_eligible());
+        // Both persisted-write local actions require the one-tap confirm — matching the preset
+        // tables, where DraftGenerate and StateWrite are mandated L2.
+        for a in [
+            LocalAction::UpdateState { table: "people", state_id: 1 },
+            LocalAction::SaveDraft { target: "gmail" },
+        ] {
+            let a = Action::Local(a);
+            assert_eq!(a.required_level(), Level::L2);
+            assert!(!a.is_l1_eligible());
+        }
     }
 
     #[test]

@@ -172,6 +172,10 @@ pub fn delete_all(conn: &mut Connection) -> Result<DeleteReport, rusqlite::Error
     let threads = tx.execute("DELETE FROM threads", [])?;
     let people = tx.execute("DELETE FROM people", [])?;
     let projects = tx.execute("DELETE FROM projects", [])?;
+    // Visual-recall frames reference event_log (V12, no ON DELETE), so they must go before the
+    // event log — with foreign_keys=ON a lingering frame FK-fails the event delete and rolls the
+    // whole "delete everything" back for anyone who ever enabled Visual recall (FR-SET-07).
+    let screen_frames = tx.execute("DELETE FROM screen_frames", [])?;
     // embeddings (Warm vec0 + Cold int8) then the event log (its AD trigger clears event_fts)
     tx.execute("DELETE FROM event_vec", [])?;
     tx.execute("DELETE FROM cold_embeddings", [])?;
@@ -187,7 +191,6 @@ pub fn delete_all(conn: &mut Connection) -> Result<DeleteReport, rusqlite::Error
     // everything" deletes nothing (FR-SET-07).
     let transcript_segments = tx.execute("DELETE FROM transcript_segments", [])?;
     let meeting_recaps = tx.execute("DELETE FROM meeting_recaps", [])?;
-    let screen_frames = tx.execute("DELETE FROM screen_frames", [])?;
     // Sessions hold the meeting's title, summary and decisions — user data. event_log also
     // references sessions, and it was already cleared above, so sessions can go now (FR-SET-07,
     // FR-MT-05).
@@ -199,6 +202,13 @@ pub fn delete_all(conn: &mut Connection) -> Result<DeleteReport, rusqlite::Error
     tx.execute("DELETE FROM lesson_provenance", [])?;
     let lessons = tx.execute("DELETE FROM lessons", [])?;
     let feedback_events = tx.execute("DELETE FROM feedback_events", [])?;
+    // feedback_events.id carries no AUTOINCREMENT, so ids restart at 1 after the wipe. The
+    // distill watermark is monotonic (MAX on advance) and would sit above every future id,
+    // silently ending lesson learning forever — rewind it with the data it indexed.
+    tx.execute(
+        "UPDATE lesson_distill_meta SET last_processed_feedback_id = 0 WHERE id = 1",
+        [],
+    )?;
     let briefs = tx.execute("DELETE FROM briefs", [])?;
     tx.execute("DELETE FROM job_runs", [])?;
     // Query-hash metrics carry no content, but they are still records of the user's activity.
@@ -295,6 +305,17 @@ pub fn delete_since(conn: &mut Connection, cutoff_ts: i64) -> Result<DeleteRepor
         [cutoff_ts],
     )?;
     let feedback_events = tx.execute("DELETE FROM feedback_events WHERE ts_ms >= ?1", [cutoff_ts])?;
+    // The deleted rows are the newest (highest ids), and ids are reused after deletion (no
+    // AUTOINCREMENT). Clamp the monotonic distill watermark down to the highest surviving id so
+    // re-issued ids are not skipped as already-processed.
+    tx.execute(
+        "UPDATE lesson_distill_meta
+             SET last_processed_feedback_id = MIN(
+                 last_processed_feedback_id,
+                 COALESCE((SELECT MAX(id) FROM feedback_events), 0))
+           WHERE id = 1",
+        [],
+    )?;
     let lessons = tx.execute(
         "DELETE FROM lessons WHERE id NOT IN (SELECT lesson_id FROM lesson_provenance)",
         [],
@@ -304,6 +325,32 @@ pub fn delete_since(conn: &mut Connection, cutoff_ts: i64) -> Result<DeleteRepor
     // Orphan sweep: any state row with no surviving provenance is removed (children first).
     let commitments = sweep_orphans(&tx, "commitments")?;
     let open_loops = sweep_orphans(&tx, "open_loops")?;
+    // A SURVIVING commitment/open_loop/thread can still reference a person/project that just
+    // lost its last provenance (their evidence lives in different events). Null those links
+    // before the parent sweep: with foreign_keys=ON and no ON DELETE clause, the sweep would
+    // otherwise FK-fail and roll back the entire deletion.
+    tx.execute(
+        "UPDATE commitments SET counterparty_id = NULL WHERE counterparty_id IN
+             (SELECT id FROM people WHERE id NOT IN
+                 (SELECT state_id FROM state_provenance WHERE state_table='people'))",
+        [],
+    )?;
+    tx.execute(
+        "UPDATE open_loops SET counterparty_id = NULL WHERE counterparty_id IN
+             (SELECT id FROM people WHERE id NOT IN
+                 (SELECT state_id FROM state_provenance WHERE state_table='people'))",
+        [],
+    )?;
+    for table in ["commitments", "open_loops", "threads"] {
+        tx.execute(
+            &format!(
+                "UPDATE {table} SET project_id = NULL WHERE project_id IN
+                     (SELECT id FROM projects WHERE id NOT IN
+                         (SELECT state_id FROM state_provenance WHERE state_table='projects'))"
+            ),
+            [],
+        )?;
+    }
     let people = sweep_orphans(&tx, "people")?;
     let projects = sweep_orphans(&tx, "projects")?;
 
@@ -530,6 +577,147 @@ mod tests {
             let n: i64 = conn.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0)).unwrap();
             assert_eq!(n, 0, "{table} should be empty after delete_all");
         }
+    }
+
+    #[test]
+    fn delete_all_survives_a_visual_recall_frame() {
+        // screen_frames.event_id → event_log with no ON DELETE (V12). Deleting event_log first
+        // FK-failed and rolled the whole transaction back — "delete everything" deleted nothing
+        // for anyone who had ever enabled Visual recall.
+        let mut conn = crate::open_in_memory().unwrap();
+        seed(&mut conn);
+        let event_id: i64 = conn.query_row("SELECT id FROM event_log LIMIT 1", [], |r| r.get(0)).unwrap();
+        crate::screen_frames::insert(
+            &conn,
+            &crate::screen_frames::NewFrame {
+                created_at_ms: 2,
+                event_id,
+                app_bundle_id: Some("com.apple.Mail"),
+                window_title: Some("Inbox"),
+                display_id: None,
+                width: 100,
+                height: 100,
+                jpeg: b"\xff\xd8fake",
+            },
+        )
+        .unwrap();
+
+        let report = delete_all(&mut conn).expect("delete_all must not trip the frame FK");
+        assert_eq!(report.screen_frames, 1);
+        for table in ["screen_frames", "event_log"] {
+            let n: i64 = conn.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0)).unwrap();
+            assert_eq!(n, 0, "{table} should be empty after delete_all");
+        }
+    }
+
+    #[test]
+    fn delete_all_rewinds_the_lesson_distill_watermark() {
+        // feedback ids restart after a wipe (no AUTOINCREMENT); a surviving watermark would sit
+        // above every future id and lesson learning would silently never run again.
+        let mut conn = crate::open_in_memory().unwrap();
+        crate::lessons::set_distill_watermark(&conn, 100).unwrap();
+        delete_all(&mut conn).unwrap();
+        assert_eq!(crate::lessons::distill_watermark(&conn).unwrap(), 0);
+    }
+
+    #[test]
+    fn delete_since_survives_a_surviving_commitment_referencing_an_orphaned_person() {
+        // Alice's only evidence is a RECENT event; the commitment's evidence is an OLD event and
+        // it references Alice. delete_since(recent) orphans Alice while the commitment survives —
+        // the people sweep used to FK-fail on that link and roll back the entire deletion.
+        let mut conn = crate::open_in_memory().unwrap();
+        let old_event = insert_event(
+            &conn,
+            &NewEvent {
+                ts: 1,
+                source: "capture",
+                kind: "text",
+                app_bundle_id: None,
+                window_title: None,
+                content: "old evidence",
+                content_hash: "old1",
+                dwell_ms: 5,
+                display_id: None,
+                window_bounds: None,
+            },
+        )
+        .unwrap();
+        let recent_event = insert_event(
+            &conn,
+            &NewEvent {
+                ts: 1_000,
+                source: "capture",
+                kind: "text",
+                app_bundle_id: None,
+                window_title: None,
+                content: "recent evidence",
+                content_hash: "new1",
+                dwell_ms: 5,
+                display_id: None,
+                window_bounds: None,
+            },
+        )
+        .unwrap();
+        let alice = insert_person(
+            &mut conn,
+            &NewPerson { display_name: "Alice", confidence: 0.9, now: 1_000, ..Default::default() },
+            &[Provenance::new(recent_event)],
+        )
+        .unwrap();
+        insert_commitment(
+            &mut conn,
+            &NewCommitment {
+                direction: CommitmentDirection::Mine,
+                counterparty_id: Some(alice),
+                description: "send Alice the report",
+                due_at: None,
+                status: CommitmentStatus::Open,
+                project_id: None,
+                confidence: 0.8,
+                now: 1,
+            },
+            &[Provenance::new(old_event)],
+        )
+        .unwrap();
+
+        let report = delete_since(&mut conn, 500).expect("delete_since must not trip the people FK");
+        assert_eq!(report.events, 1, "only the recent event goes");
+        assert_eq!(report.people, 1, "Alice lost all her evidence");
+        // The surviving commitment is kept, with its dangling link cleared.
+        let (n, counterparty): (i64, Option<i64>) = conn
+            .query_row("SELECT count(*), counterparty_id FROM commitments", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(n, 1);
+        assert_eq!(counterparty, None);
+    }
+
+    #[test]
+    fn delete_since_clamps_the_lesson_distill_watermark_to_surviving_ids() {
+        use crate::lessons::{record_feedback, FeedbackKind, LessonScope, NewFeedback};
+        let mut conn = crate::open_in_memory().unwrap();
+        let old = record_feedback(
+            &conn,
+            FeedbackKind::Reject,
+            LessonScope::Global,
+            &NewFeedback { ts_ms: 10, ..Default::default() },
+        )
+        .unwrap();
+        let newest = record_feedback(
+            &conn,
+            FeedbackKind::Reject,
+            LessonScope::Global,
+            &NewFeedback { ts_ms: 1_000, ..Default::default() },
+        )
+        .unwrap();
+        crate::lessons::set_distill_watermark(&conn, newest).unwrap();
+
+        delete_since(&mut conn, 500).unwrap();
+
+        // The newest (highest-id) feedback died; its id will be reused. The watermark must fall
+        // back to the highest surviving id so the reissued id is not skipped.
+        assert_eq!(crate::lessons::distill_watermark(&conn).unwrap(), old);
     }
 
     #[test]

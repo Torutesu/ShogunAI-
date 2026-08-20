@@ -268,7 +268,10 @@ pub mod mac {
     ) -> Result<u64, String> {
         let proposal = proposed(&kind, &destination, &subject, &body)?;
         let now = db.now_ms().max(0) as u64;
-        let id = { state.change(|q| propose(q, &proposal, ApprovalOrigin::Ui, now).0)? };
+        let id = {
+            state.change(|q| propose(q, &proposal, ApprovalOrigin::Ui, now).map(|id| id.0))?
+                .map_err(String::from)?
+        };
         // Something is waiting on a human decision — the first reason cues exist at all (#49).
         crate::sound::mac::play(shogun_core::sound::Cue::ApprovalPending);
         Ok(id)
@@ -333,7 +336,10 @@ pub mod mac {
 
         let proposal = proposed(kind, destination, subject, &body)?;
         let now = db.now_ms().max(0) as u64;
-        let id = { queue.change(|q| propose(q, &proposal, origin, now).0)? };
+        let id = {
+            queue.change(|q| propose(q, &proposal, origin, now).map(|id| id.0))?
+                .map_err(String::from)?
+        };
         // A draft the user did not watch being written is exactly the case that needs telling (#49).
         crate::sound::mac::play(shogun_core::sound::Cue::ApprovalPending);
         Ok(id)
@@ -415,13 +421,14 @@ pub mod mac {
         db: tauri::State<'_, Db>,
     ) -> Result<String, String> {
         use shogun_agents::approval::RejectCause;
+        let now = db.now_ms().max(0) as u64;
         let (decision, snapshot) = state.change(|q| {
             let snapshot = q
                 .action(ApprovalId(id))
                 .cloned()
                 .and_then(|a| q.preview(ApprovalId(id)).map(|p| (a, p.full_body.clone())));
             (
-                q.reject(ApprovalId(id), RejectCause::UserRejected),
+                q.reject(ApprovalId(id), RejectCause::UserRejected, now),
                 snapshot,
             )
         })?;

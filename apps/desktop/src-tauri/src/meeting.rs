@@ -2251,7 +2251,13 @@ pub mod mac {
 
     /// Language pair for one-way / two-way translation modes.
     /// Restarts ASR when the resolved `asr_language()` changes (e.g. Auto → Japanese).
-    #[tauri::command]
+    ///
+    /// `rename_all = "snake_case"`: the overlay sends the settings field names verbatim
+    /// (`source_lang`, …). Tauri v2's default argument case is camelCase with NO snake_case
+    /// fallback, so without this every field deserialized to None and the picker wrote the
+    /// existing settings back — the language selection visibly snapped back and translation
+    /// kept running in the old language.
+    #[tauri::command(rename_all = "snake_case")]
     pub fn set_meeting_langs(
         source_lang: Option<MeetingLanguage>,
         target_lang: Option<MeetingLanguage>,

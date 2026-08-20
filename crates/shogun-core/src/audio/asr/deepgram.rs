@@ -511,11 +511,12 @@ fn live_session_loop(
                 if closing {
                     let timed_out = close_since
                         .is_some_and(|t| t.elapsed() > Duration::from_secs(5));
+                    // Grace period after CloseStream — peer should have flushed finals. A
+                    // disconnected command channel (the handle was dropped) also ends the wait:
+                    // nobody is left to consume finals, and spinning out the full 5s grace only
+                    // blocks the caller's join().
                     if timed_out || matches!(cmd_rx.try_recv(), Err(TryRecvError::Disconnected)) {
-                        // Grace period after CloseStream — peer should have flushed finals.
-                        if timed_out {
-                            break;
-                        }
+                        break;
                     }
                 } else {
                     // Idle: wait briefly for the next PCM chunk instead of busy-spinning.

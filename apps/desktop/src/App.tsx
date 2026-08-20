@@ -798,6 +798,11 @@ export function App(): JSX.Element {
     window.addEventListener("wheel", onScroll, { passive: true });
     return () => {
       window.removeEventListener("keydown", onEsc);
+      // All three must come off with onEsc: under StrictMode's mount→unmount→remount the
+      // survivors double every interact() call, inflating the Q4 interaction tally.
+      window.removeEventListener("pointerdown", onClick);
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("wheel", onScroll);
       if (voiceReleaseWatch.current != null) {
         window.clearInterval(voiceReleaseWatch.current);
         voiceReleaseWatch.current = null;
@@ -2456,11 +2461,14 @@ interface BillingView {
   error: string | null;
 }
 
-/** Unix seconds → a date the reader recognises. */
+/** Unix seconds → a date the reader recognises — in THEIR timezone. toISOString is always UTC,
+ * which told anyone west of UTC their subscription ends a day later than it does. */
 function billingDate(secs: number | null): string {
   if (!secs) return "";
   const d = new Date(secs * 1000);
-  return Number.isNaN(d.getTime()) ? "" : d.toISOString().slice(0, 10);
+  return Number.isNaN(d.getTime())
+    ? ""
+    : d.toLocaleDateString(undefined, { year: "numeric", month: "2-digit", day: "2-digit" });
 }
 
 /** The four purchasable combinations. Prices are display copy; the price itself lives server-side. */

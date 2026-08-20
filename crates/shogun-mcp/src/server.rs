@@ -141,7 +141,26 @@ fn host_is_loopback(host: Option<&str>) -> bool {
     let Some(host) = host else { return false };
     let name = host.rsplit_once(':').map_or(host, |(h, _)| h);
     let name = name.trim_start_matches('[').trim_end_matches(']');
-    matches!(name, "127.0.0.1" | "localhost" | "::1" | "0.0.0.0")
+    // "0.0.0.0" is deliberately NOT accepted: no legitimate local caller of a loopback-bound
+    // listener sends it as Host, but it is exactly the host a hostile page uses for the
+    // "0.0.0.0-day" class of localhost-service attacks.
+    matches!(name, "127.0.0.1" | "localhost" | "::1")
+}
+
+/// Does the query string opt into low-confidence read results (`?include_low`, FR-API-06)?
+///
+/// The VALUE matters: `?include_low=false` / `=0` must stay opted OUT — the MCP face parses the
+/// same flag as a real JSON bool, and the three faces must agree. Bare `?include_low` (or a bare
+/// `=`) opts in. Matching is case- and spelling-tolerant on the truthy side because REST clients
+/// build this by hand (Python's `str(True)` gives `include_low=True`); a silently-ignored opt-in
+/// returns 200 with rows missing and no signal to the caller.
+fn include_low_opt_in(raw_query: &str) -> bool {
+    raw_query.split('&').any(|kv| {
+        kv == "include_low"
+            || kv.strip_prefix("include_low=").is_some_and(|v| {
+                matches!(v.to_ascii_lowercase().as_str(), "" | "1" | "true" | "yes" | "on")
+            })
+    })
 }
 
 async fn handle(State(state): State<AppState>, req: Request) -> Response {
@@ -165,9 +184,7 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
     );
     // Parse the query string: `?include_low` (FR-API-06 opt-in), `?q=<search>`, visual-recall window.
     let raw_query = req.uri().query().unwrap_or("");
-    let include_low = raw_query
-        .split('&')
-        .any(|kv| kv == "include_low" || kv.starts_with("include_low="));
+    let include_low = include_low_opt_in(raw_query);
     let query = raw_query
         .split('&')
         .find_map(|kv| kv.strip_prefix("q="))
@@ -554,6 +571,37 @@ mod tests {
     }
 
     #[test]
+    fn include_low_opt_in_is_truthy_value_matching() {
+        // Opted in: bare flag, bare `=`, and the truthy spellings hand-built clients emit.
+        for q in [
+            "include_low",
+            "include_low=",
+            "include_low=1",
+            "include_low=true",
+            "include_low=True",
+            "include_low=TRUE",
+            "include_low=yes",
+            "include_low=on",
+            "q=ship&include_low=True",
+        ] {
+            assert!(include_low_opt_in(q), "expected opt-in for {q:?}");
+        }
+        // Opted out: the explicit falses, an unrecognised value, and a prefix collision.
+        for q in [
+            "",
+            "q=ship",
+            "include_low=false",
+            "include_low=False",
+            "include_low=0",
+            "include_low=maybe",
+            "include_lower=true",
+            "xinclude_low=true",
+        ] {
+            assert!(!include_low_opt_in(q), "expected opt-out for {q:?}");
+        }
+    }
+
+    #[test]
     fn host_header_matching_is_name_only() {
         assert!(host_is_loopback(Some("127.0.0.1")));
         assert!(host_is_loopback(Some("127.0.0.1:7464")));
@@ -561,6 +609,9 @@ mod tests {
         assert!(host_is_loopback(Some("[::1]:7464")));
         assert!(!host_is_loopback(Some("attacker.example")));
         assert!(!host_is_loopback(Some("localhost.attacker.example")));
+        // 0.0.0.0 is the "0.0.0.0-day" bypass host, never a legitimate local caller.
+        assert!(!host_is_loopback(Some("0.0.0.0")));
+        assert!(!host_is_loopback(Some("0.0.0.0:7464")));
         // A missing Host is HTTP/1.1-invalid and is not something a real local caller sends.
         assert!(!host_is_loopback(None));
     }
