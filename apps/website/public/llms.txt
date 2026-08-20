@@ -43,7 +43,9 @@
 - Memory stays local by default
 - Capture reads text through the macOS accessibility layer; no image is stored by default
 - Visual recall is opt-in and off until enabled: only where a window yields no text, a
-  compressed frame is kept locally in the encrypted database for at most 72 hours, then
-  deleted automatically. Frames are never uploaded, and audio is out of scope
+  compressed screenshot is kept locally in the encrypted database for a retention period
+  the user selects (presets of one to seven days plus a bounded custom duration; three
+  days by default), then deleted automatically at that age. Saved frames can be viewed
+  or deleted locally during the window. Frames are never uploaded, and audio is out of scope
 - Connected providers receive only the context required for an enabled request
 - Consequential actions require review

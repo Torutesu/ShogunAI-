@@ -8,12 +8,12 @@ import type { Dictionary } from '@/i18n/dictionaries';
 
 export function Hero({ t, participantCount }: { t: Dictionary; participantCount: number }) {
   const localeCopy = t.nav.langLabel === '言語'
-    ? { waitlistProof: '熱量の高いアーリーアダプターが、すでに参加中', preview: 'ライブ製品', people: 'アーリーアクセス参加者' }
+    ? { waitlistProof: '熱狂中', preview: 'ライブ製品', people: 'アーリーアクセス参加者' }
     : t.nav.langLabel === 'Idioma'
-      ? { waitlistProof: 'Early adopters entusiastas ya están en la lista de espera', preview: 'PRODUCTO EN VIVO', people: 'Participantes del acceso anticipado' }
+      ? { waitlistProof: 'En plena ebullición', preview: 'PRODUCTO EN VIVO', people: 'Participantes del acceso anticipado' }
       : t.nav.langLabel === 'Sprache'
-        ? { waitlistProof: 'Engagierte Early Adopters sind bereits auf der Warteliste', preview: 'LIVE-PRODUKT', people: 'Teilnehmende am Early Access' }
-        : { waitlistProof: 'Driven early adopters are already on the waitlist', preview: 'LIVE PRODUCT', people: 'Early-access participants' };
+        ? { waitlistProof: 'Gerade in vollem Gange', preview: 'LIVE-PRODUKT', people: 'Teilnehmende am Early Access' }
+        : { waitlistProof: 'Buzzing right now', preview: 'LIVE PRODUCT', people: 'Early-access participants' };
   const activity = [
     { label: t.hero.mockRow1, time: '10:42', icon: 'M' },
     { label: t.hero.mockRow2, time: '10:38', icon: 'D' },

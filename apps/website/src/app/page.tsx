@@ -1,4 +1,5 @@
 import { Action } from '@/components/sections/Action';
+import { Capabilities } from '@/components/sections/Capabilities';
 import { CTA } from '@/components/sections/CTA';
 import { FAQ } from '@/components/sections/FAQ';
 import { Footer } from '@/components/sections/Footer';
@@ -38,9 +39,10 @@ export default async function Home({ localeOverride }: { localeOverride?: Locale
       <main id="top" lang={locale}>
         <Hero t={t} participantCount={participantCount} />
         <Marquee t={t} />
-        <Memory t={t} locale={locale} />
         <Action t={t} locale={locale} />
+        <Capabilities t={t} />
         <UseCases t={t} locale={locale} />
+        <Memory t={t} locale={locale} />
         <How t={t} locale={locale} />
         <Privacy t={t} locale={locale} />
         <Pricing pricing={t.pricing} />
