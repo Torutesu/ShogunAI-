@@ -127,14 +127,6 @@ Deepgram 開示（`meetingDisclosure`）は 5.1・5.5・5.8・7.7 の4面に載�
 | 7.8 seven sections + Memory API | `SETTINGS_SECTIONS`（General/Memory/Voice/Connections/Intelligence/Controls/Privacy）+ `memoryApi*`（トークン発行/失効） |
 | 7.9 Voice — dictation cleanup | `voiceEditModel*`（Groq、process-only、フォールバックは生トランスクリプト）+ `notchStatus*` |
 
-### 11 · Hero / FV（1）
-LP のファーストビュー用の1枚（`FV Hero — the morning the work was already done`）。
-フレーム内に注記キャプションを置かない唯一のフレーム（そのまま素材として切り出せる）。
-背景はオーナー指定の Sand Harbor（Lake Tahoe）実写、Dock はオーナー環境を模した広い実アプリ列。
-中身は製品文法のまま: 兜グロー → Good morning + charm 行 → WHILE YOU SLEPT（夜間レビューの
-既了了タスク、L1・"nothing sent"）→ READY FOR YOU（グローする Confirm & send、L3 タグ付き）→
-出典チップ → コンポーザー。「押したら仕事が終わる」瞬間を1枚に固定したもの。
-
 ### 8 · Light appearance（5）
 `styles.css` の `:root[data-appearance="light"]` トークン（glass `#FCFDFF.94` / shell `#F7F8FB` /
 ink `#1B1D22` / accent `#2F6FED` / live `#1F9E3C` / warn `#A4560A`）で、代表5面をライトで再現:
@@ -162,6 +154,14 @@ Figma の実 background blur ＋ スペキュラエッジ（inner shadow ハイ�
 5.5 翻訳キャプション / 5.8 Recap の5枚を同方式で再スキン。背景は**フルスクリーンの Google Meet**
 （メニューバー・Dock なし、ノッチはレターボックスの黒帯内、4タイル・発話者ブルー枠・下部コントロールバー）。
 黒カプセルはガラスになるが **Stop の赤・録音経過時間・provider 開示・Track ゲートは不変**。
+
+### 11 · Hero / FV（1）
+LP のファーストビュー用の1枚（`FV Hero — the morning the work was already done`）。
+フレーム内に注記キャプションを置かない唯一のフレーム（そのまま素材として切り出せる）。
+背景はオーナー指定の Sand Harbor（Lake Tahoe）実写、Dock はオーナー環境を模した広い実アプリ列。
+中身は製品文法のまま: 兜グロー → Good morning + charm 行 → WHILE YOU SLEPT（夜間レビューの
+既了了タスク、L1・"nothing sent"）→ READY FOR YOU（グローする Confirm & send、L3 タグ付き）→
+出典チップ → コンポーザー。「押したら仕事が終わる」瞬間を1枚に固定したもの。
 
 ---
 
