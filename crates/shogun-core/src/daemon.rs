@@ -22,7 +22,6 @@ use shogun_fusion::brief::{assemble_brief, assemble_degraded, CalendarLine, Comm
 use shogun_fusion::assemble::ActionCandidate;
 use shogun_fusion::block::{BlockRef, ContextBlock, ScoreInputs, SourceKind};
 use shogun_fusion::budget::TokenEstimator;
-use shogun_fusion::score::source_rank;
 
 use crate::capture::dedup::{decide_hash, Recent};
 use crate::memory_health::{FaultClass, MemoryFault, MemoryResult};
@@ -807,9 +806,9 @@ impl Db {
     /// On a **new** insert (not a dedup-touch) the first-stage local-rule extraction (WP2.7) runs
     /// over **prose** bodies (mail, chat, docs), so a commitment stated in an email flows into the
     /// state tables at low confidence (≤ [`shogun_memory::extract::LOCAL_RULE_MAX_CONFIDENCE`])
-    /// linked to the ingested event (FR-ST-02). Structured-fact sources (calendar, issue #35)
-    /// skip that pass: the event itself is the fact, searchable as [`SourceKind::Structured`],
-    /// not a speech-act to guess at 0.4. Extraction is skipped on a touch so a re-sync never
+    /// linked to the ingested event (FR-ST-02). Calendar metadata (title / timestamp / event ID)
+    /// is emitted later as [`SourceKind::Structured`], while its description remains evidence;
+    /// neither should become a guessed 0.4 speech act. Extraction is skipped on a touch so a re-sync never
     /// multiplies candidates.
     ///
     /// The caller ([`crate::service_gate`]) has already authorized the sync; this method only
@@ -858,8 +857,7 @@ impl Db {
                     Some((_, n)) => *n += 1,
                     None => synced.push((it.source, 1)),
                 }
-                // Prose sources only. Calendar rows are structured facts — do not run the
-                // speech-act heuristic over the description (issue #35).
+                // Calendar descriptions stay searchable evidence, not speech acts (issue #35).
                 if extracts_untrusted_body(it.source) {
                     let candidates = shogun_memory::extract::extract_untrusted(&it.body);
                     if !candidates.is_empty() {
@@ -1539,10 +1537,6 @@ impl Db {
         ranked.sort_by(|a, b| {
             b.0.partial_cmp(&a.0)
                 .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| {
-                    source_rank(source_kind_for_event_source(&b.1.source))
-                        .cmp(&source_rank(source_kind_for_event_source(&a.1.source)))
-                })
                 .then(b.1.ts.cmp(&a.1.ts))
         });
         let evidence = ranked
@@ -1626,6 +1620,10 @@ impl Db {
         for b in &out.blocks {
             match b.id_ref {
                 shogun_fusion::block::BlockRef::Event(id) => {
+                    if b.source_kind == SourceKind::Structured {
+                        out_facts.push(b.text.clone());
+                        continue;
+                    }
                     let (ts, source, title, frame_id) = ev_by_id
                         .get(&id)
                         .map(|e| (e.ts, e.source.clone(), e.title.clone(), e.frame_id))
@@ -3120,29 +3118,51 @@ fn screen_relevance(screen: &shogun_fusion::assemble::ScreenContext, subject: &s
 }
 
 /// 検索 evidence を圧縮ブロックへ正規化する。relevance は呼び出し側が渡す検索スコア由来。
-/// Source kind follows issue #35: calendar rows are structured facts; AX / mail / OCR stay
-/// evidence (untrusted prose), even when they arrived through MCP.
+/// Calendar metadata is a structured fact; its description remains untrusted searchable evidence.
 fn evidence_to_blocks(evidence: &[Evidence], relevance: f64, est: &dyn TokenEstimator) -> Vec<ContextBlock> {
     evidence
         .iter()
-        .map(|e| {
-            ContextBlock::new(
+        .flat_map(|e| {
+            let mut blocks =
+                Vec::with_capacity(usize::from(is_calendar_source(&e.source)) + 1);
+            if is_calendar_source(&e.source) {
+                blocks.push(ContextBlock::new(
+                    BlockRef::Event(e.event_id),
+                    SourceKind::Structured,
+                    calendar_fact_text(e),
+                    ScoreInputs { relevance, ..EVIDENCE_SCORE },
+                    est,
+                ));
+            }
+            blocks.push(ContextBlock::new(
                 BlockRef::Event(e.event_id),
-                source_kind_for_event_source(&e.source),
+                SourceKind::Evidence,
                 e.excerpt.clone(),
                 ScoreInputs { relevance, ..EVIDENCE_SCORE },
                 est,
-            )
+            ));
+            blocks
         })
         .collect()
 }
 
-/// Map an `event_log.source` tag onto Fusion's trust rank. Unknown / capture / mail → Evidence.
-fn source_kind_for_event_source(source: &str) -> SourceKind {
-    match shogun_mcp::scope::from_source(source) {
-        Some(svc) if svc.is_structured_fact() => SourceKind::Structured,
-        _ => SourceKind::Evidence,
-    }
+fn is_calendar_source(source: &str) -> bool {
+    matches!(
+        shogun_mcp::scope::from_source(source),
+        Some(shogun_mcp::scope::Service::GoogleCalendar)
+    )
+}
+
+fn calendar_fact_text(evidence: &Evidence) -> String {
+    let title = evidence
+        .title
+        .as_deref()
+        .filter(|title| !title.is_empty())
+        .unwrap_or("Untitled event");
+    format!(
+        "Calendar event\nTitle: {title}\nTimestamp (unix ms): {}\nEvent ID: {}",
+        evidence.ts, evidence.event_id
+    )
 }
 
 /// Local-rule extraction is for speech-act prose (mail, chat, docs, AX). Structured-fact
@@ -5079,7 +5099,7 @@ mod tests {
     }
 
     #[test]
-    fn evidence_to_blocks_tags_calendar_structured_and_mail_as_evidence() {
+    fn evidence_to_blocks_keeps_calendar_metadata_structured_and_description_as_evidence() {
         use shogun_fusion::block::SourceKind;
         use shogun_fusion::budget::HeuristicEstimator;
         let excerpt = "standup with the platform team";
@@ -5110,9 +5130,15 @@ mod tests {
             },
         ];
         let blocks = evidence_to_blocks(&ev, 0.7, &HeuristicEstimator::default());
+        assert_eq!(blocks.len(), 4);
         assert_eq!(blocks[0].source_kind, SourceKind::Evidence);
         assert_eq!(blocks[1].source_kind, SourceKind::Structured);
+        assert!(blocks[1].text.contains("Title: Standup"));
+        assert!(blocks[1].text.contains("Timestamp (unix ms): 100"));
+        assert!(blocks[1].text.contains("Event ID: 2"));
         assert_eq!(blocks[2].source_kind, SourceKind::Evidence);
+        assert_eq!(blocks[2].text, excerpt);
+        assert_eq!(blocks[3].source_kind, SourceKind::Evidence);
     }
 
     #[test]
@@ -5140,11 +5166,47 @@ mod tests {
             },
         ];
         let blocks = evidence_to_blocks(&ev, 0.7, &HeuristicEstimator::default());
-        let cfg = CompressionConfig { enabled: true, budget_tokens: 120, ..Default::default() };
+        let cfg = CompressionConfig { enabled: true, budget_tokens: 110, ..Default::default() };
         let out = compress(Candidates { blocks }, &cfg);
         assert_eq!(out.blocks.len(), 1);
         assert_eq!(out.blocks[0].id_ref, BlockRef::Event(2));
         assert_eq!(out.blocks[0].source_kind, SourceKind::Structured);
+        assert!(out.blocks[0].text.contains("Title: Standup"));
+    }
+
+    #[test]
+    fn compressed_calendar_metadata_is_a_fact_and_description_stays_evidence() {
+        use shogun_fusion::compress::CompressionConfig;
+        use shogun_mcp::sync::IngestItem;
+
+        let db = Db::open_in_memory(clock(1_000)).unwrap();
+        db.ingest_integration(&[IngestItem {
+            source: "gcal",
+            kind: "calendar_event",
+            title: "Roadmap review".into(),
+            body: "Discuss the launch plan and open risks.".into(),
+            ts_ms: 500,
+        }]);
+        let cfg = CompressionConfig {
+            enabled: true,
+            budget_tokens: 1_000,
+            ..Default::default()
+        };
+
+        let (pack, _stats, fell_back) =
+            db.assemble_context_compressed("launch plan", 6, 600, &[], &cfg);
+
+        assert!(!fell_back);
+        assert!(
+            pack.facts.iter().any(|fact| fact.contains("Title: Roadmap review")),
+            "calendar metadata must be trusted: {:?}",
+            pack.facts
+        );
+        assert!(
+            pack.evidence.iter().any(|evidence| evidence.excerpt.contains("open risks")),
+            "calendar description must remain available as evidence: {:?}",
+            pack.evidence
+        );
     }
 
     #[test]

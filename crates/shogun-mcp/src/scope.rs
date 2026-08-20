@@ -70,10 +70,9 @@ impl Service {
         }
     }
 
-    /// Whether ingested rows from this service are structured facts (calendar event id / time /
-    /// title), not untrusted prose. Issue #35: these skip local-rule extraction and win
-    /// `source_rank` ties over AX / search evidence. Mail, chat, and document bodies stay prose
-    /// even when they arrived via MCP.
+    /// Whether the service has trusted structured metadata. Issue #35: calendar title / time /
+    /// local event ID rank above AX / search evidence, while its description stays prose and skips
+    /// local-rule extraction. Mail, chat, and document bodies remain prose even through MCP.
     pub fn is_structured_fact(self) -> bool {
         matches!(self, Service::GoogleCalendar)
     }
