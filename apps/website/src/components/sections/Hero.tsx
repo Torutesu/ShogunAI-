@@ -1,7 +1,7 @@
 import { ArrowRight, Check, Command, Play, Sparkles } from 'lucide-react';
 import { ParticipantCount } from '@/components/ParticipantCount';
 import { Badges } from '@/components/sections/Badges';
-import { AppFrame } from '@/components/AppFrame';
+import { HeroDemo } from '@/components/HeroDemo';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { WaitlistForm } from '@/components/WaitlistForm';
@@ -89,7 +89,7 @@ export function Hero({ t, participantCount }: { t: Dictionary; participantCount:
             <div className="hero-demo-scale w-full">
               {/* The notch panel itself, running its own mock fixture outside Tauri —
                 * the real surface, not a drawing of it. */}
-              <AppFrame src="/app-demo/panel.html" title="ShogunAI" device="mac" className="w-full" />
+              <HeroDemo d={t.heroDemo} cta={t.nav.getStarted} live={localeCopy.preview} macos="ShogunAI for macOS" />
             </div>
           </div>
 
