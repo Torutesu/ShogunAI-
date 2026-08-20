@@ -141,7 +141,10 @@ fn host_is_loopback(host: Option<&str>) -> bool {
     let Some(host) = host else { return false };
     let name = host.rsplit_once(':').map_or(host, |(h, _)| h);
     let name = name.trim_start_matches('[').trim_end_matches(']');
-    matches!(name, "127.0.0.1" | "localhost" | "::1" | "0.0.0.0")
+    // "0.0.0.0" is deliberately NOT accepted: no legitimate local caller of a loopback-bound
+    // listener sends it as Host, but it is exactly the host a hostile page uses for the
+    // "0.0.0.0-day" class of localhost-service attacks.
+    matches!(name, "127.0.0.1" | "localhost" | "::1")
 }
 
 async fn handle(State(state): State<AppState>, req: Request) -> Response {
@@ -165,9 +168,12 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
     );
     // Parse the query string: `?include_low` (FR-API-06 opt-in), `?q=<search>`, visual-recall window.
     let raw_query = req.uri().query().unwrap_or("");
-    let include_low = raw_query
-        .split('&')
-        .any(|kv| kv == "include_low" || kv.starts_with("include_low="));
+    // The VALUE matters: `?include_low=false` / `=0` must stay opted OUT (the MCP face parses the
+    // same flag as a real bool — the three faces must agree). Bare `?include_low` (or `=`) opts in.
+    let include_low = raw_query.split('&').any(|kv| {
+        kv == "include_low"
+            || matches!(kv.strip_prefix("include_low="), Some("" | "1" | "true"))
+    });
     let query = raw_query
         .split('&')
         .find_map(|kv| kv.strip_prefix("q="))
@@ -561,6 +567,9 @@ mod tests {
         assert!(host_is_loopback(Some("[::1]:7464")));
         assert!(!host_is_loopback(Some("attacker.example")));
         assert!(!host_is_loopback(Some("localhost.attacker.example")));
+        // 0.0.0.0 is the "0.0.0.0-day" bypass host, never a legitimate local caller.
+        assert!(!host_is_loopback(Some("0.0.0.0")));
+        assert!(!host_is_loopback(Some("0.0.0.0:7464")));
         // A missing Host is HTTP/1.1-invalid and is not something a real local caller sends.
         assert!(!host_is_loopback(None));
     }
