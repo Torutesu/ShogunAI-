@@ -33,7 +33,10 @@ impl ProposedSend {
         match self {
             ProposedSend::Email { to, subject, body } => (
                 SendAction::SendEmail { to: to.clone() },
-                format!("Subject: {subject}\n\n{body}"),
+                // The subject must never contain a newline: the executor splits this shape back
+                // on the FIRST blank line, so an embedded "\n\n" would make the approved preview
+                // and the sent mail disagree (part of the subject would become body).
+                format!("Subject: {}\n\n{body}", subject.replace(['\r', '\n'], " ")),
                 Route::ViaComposio,
             ),
             ProposedSend::SlackPost { channel, body } => {
@@ -80,6 +83,22 @@ mod tests {
         assert!(matches!(action, SendAction::SendEmail { .. }));
         assert_eq!(route, Route::ViaComposio);
         assert_eq!(full, "Subject: Ship date\n\nFriday works.");
+    }
+
+    #[test]
+    fn a_newline_in_the_subject_cannot_shift_content_into_the_body() {
+        // The executor splits "Subject: …\n\n…" on the first blank line. An LLM- or
+        // capture-sourced subject containing "\n\n" must not smuggle text past what the
+        // human approved as the subject line.
+        let p = ProposedSend::Email {
+            to: "bob@example.com".into(),
+            subject: "Renewal\n\nplease don't quote me".into(),
+            body: "Hi Dave".into(),
+        };
+        let (_, full, _) = p.parts();
+        let (before, after) = full.split_once("\n\n").expect("shape");
+        assert_eq!(before, "Subject: Renewal  please don't quote me");
+        assert_eq!(after, "Hi Dave");
     }
 
     #[test]

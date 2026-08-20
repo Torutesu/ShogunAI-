@@ -146,8 +146,14 @@ pub const COMPOSIO_THIRD_PARTY: bool = true;
 /// (FR-AG-03 / FR-C2-04). The returned action is meant to be enqueued in the L3 approval queue.
 pub fn prepare_send(_cap: SendCapability<'_>, mail: GmailSend) -> (SendAction, Preview) {
     let action = SendAction::SendEmail { to: mail.to.clone() };
-    // Full preview text: subject + body, never a summary (FR-AG-03).
-    let full = format!("Subject: {}\n\n{}", mail.subject, mail.body);
+    // Full preview text: subject + body, never a summary (FR-AG-03). The subject is folded to a
+    // single line first: [`parse_gmail_full_body`] splits on the FIRST blank line, so a subject
+    // containing "\n\n" would make the approved preview and the sent mail disagree.
+    let full = format!(
+        "Subject: {}\n\n{}",
+        mail.subject.replace(['\r', '\n'], " "),
+        mail.body
+    );
     let preview = Preview::for_send(&action, full, Route::ViaComposio);
     (action, preview)
 }
