@@ -248,35 +248,42 @@ Personal AGI won't arrive as a better chatbot. It arrives as an agent that knows
 
 ## 4. First comment（公開直後に投稿）
 
-> **設計**: description（同じページの上に出る）と**同じ文を繰り返さない**。あちらが「AGIはチャットボットとしては来ない」と宣言する役なら、こちらは**定義を自分から差し出し、それを守っていることを証拠で示す**役。①定義（人間並みではなく全域） ②なぜ general が要点か ③普通の一日の中で「終わる」とはどういうことか（機能はここで初めて出す＝証拠） ④それを支える構造（状態・根拠・確度） ⑤譲らない規律 ⑥あなたのもの（モデル・データ） ⑦動作環境を正直に ⑧質問3つ ⑨主題で閉じる。**綴りは AGI で統一。**
+> **設計**: ①定義を先に差し出す ②**賭けの中身＝コンテキスト層**（モデルの知能は足りている／文脈が散らばっている） ③**領域の裏付け**（Garry Tan / Sam Altman。同じ層に別々の道から辿り着いている） ④**論点をずらす**——問いは「コンテキストが重要か」ではなく「それがどこに置かれるべきか」 ⑤我々の答え（あなたの手元） ⑥譲らない規律 ⑦個人向けから team / enterprise へ ⑧動作環境 ⑨**質問を4つ投げて議論を起こす**。
+>
+> **技術詳細は書かない。** accessibility 層・OCR・暗号化DB・3層メモリはここでは出さない。聞かれたら §7 の返信テンプレで答える（そのときは具体的に答える）。first comment は**主張の場所**であって、実装の説明の場所ではない。
+>
+> ⚠ **引用の扱い**: Tan / Altman とも**引用符を使わず paraphrase**にしてある。Tan の「leverage is in your context, not the model」は Startup School 2026 の要旨として複数媒体が報じているが、**一次ソース（YC公式動画）で逐語確認はできていない**。逐語で引くなら動画を確認してから。paraphrase のままなら安全。
 
 ### EN
 
 ```
 Hi Product Hunt ⚔
 
-I call ShogunAI a personal AGI, so let me hand you the definition first and let you hold me to it. I don't mean human-level intelligence. I mean general — one agent across the whole of your work rather than narrow to a single task, holding the state of what you're doing, and acting on it.
+A definition first, since the term is doing a lot of work in our tagline. By personal AGI I don't mean human-level intelligence. I mean general across your work rather than narrow to a single task — one agent that spans your whole day, holds the state of it, and acts on that state.
 
-General is the word carrying the weight. Intelligence isn't the scarce part anymore; you can bring your own, and you should. What's scarce is something that spans your entire day instead of one slice of it. A dictation app can't know who Mika is. A meeting recorder can't know what you promised her last month. A chatbot knows whatever you last pasted into it. Each is excellent inside its own hour and blind the moment that hour ends — which is why the finishing always lands back on you.
+Here's the bet underneath it.
 
-So here is what finishing looks like, in the ordinary hours of a working day.
+The models are already smart enough for most of what you do. What they're missing isn't IQ — it's you. Your context is scattered across a dozen tools, and the only thing holding it together is your own memory and your patience. You re-explain the project, paste the thread, remind it who this person is, and then do the last mile by hand anyway. The bottleneck moved, and most products haven't.
 
-You hold a key and talk, and the text arrives where your cursor was, with your work context already applied, so names and projects come out spelled the way you spell them. You select a sentence, say what's wrong with it, and it's rewritten in place, inside whatever app you were already in. A meeting ends and the recap already carries what you promised this person last month, with the follow-up drafted underneath it. You wake up and the first thing you see is what moved overnight and what you still owe people. That isn't four products. It's one agent doing the last mile you would otherwise do by hand.
+I don't think I'm alone in reading it that way. Garry Tan has spent this year telling founders that the leverage sits in your context rather than in the model — same weights, same window, wildly different output depending on what surrounds it. Sam Altman keeps describing where OpenAI is going in nearly the same terms: less chasing raw IQ, more something that understands your whole context and remembers it, with that memory as the durable advantage. When the person who sees the most startups and the person shipping the most-used model arrive at the same layer from opposite directions, the layer is real.
 
-None of it works without what sits underneath: state, not a log. People, projects, commitments, open loops — every record carrying where it came from and how sure it is, so a low-confidence guess never reaches you dressed as a fact. That state is built passively, inside your own machine: by default text rather than pixels, read through the accessibility layer into an encrypted database on your disk. Windows that hand over no text at all are covered by a visual recall you can switch on — encrypted frames, on-device OCR, deleted on the schedule you choose. It ships off.
+Which leaves the question that actually matters: where should that context live?
 
-One rule I won't trade away: reading is automatic, sending never is. Anything addressed to another person stops, shows you the entire body, and waits for you. There is no setting that turns that off — it's the only mistake here you can't take back.
+That's where we answer differently. ShogunAI keeps one state of your work — the people, the projects, the promises, the things still open — assembled from your own day and held inside your own machine rather than in someone else's account. Then it spends that state on finishing things. The reply arrives already drafted, knowing what you promised last month. A meeting ends with the next step instead of a transcript. The morning opens with what moved overnight and what you still owe people. You bring your own model, and you keep the memory either way.
 
-Everything else is yours to choose. Bring your own model: an API key, or the Claude/ChatGPT/Gemini plan you already pay for. The memory is a local database you can export whole, and it's readable over MCP, so your other tools can work from the same context instead of asking you to paste it again.
+One rule I won't trade away: reading is automatic, sending never is. Anything addressed to another person stops and waits for you.
 
-The build that runs today is macOS, 14+ on Apple Silicon. Windows and mobile are being built — this was never meant as a Mac product, the Mac build simply shipped first. Early access is open, joining costs nothing, and the list is per-platform, so tell me which machine you're on.
+Today it's built for one person — you. Team and enterprise plans are on the roadmap, because shared context is worth more than private context, and most of the work that gets stuck is stuck between people. The build that runs today is macOS; Windows and mobile are being built.
 
-Three things I'd rather have than compliments:
-1. You tried something in this space and dropped it. What made you quit?
-2. Which connection decides whether you'd leave this running for a full week?
-3. The uncomfortable privacy questions. Ask them here and I'll answer them here.
+What I'd genuinely like from this thread:
 
-Personal, general, and on your own machine. That's the bet — I'd like to hear where you think it breaks.
+Tell me where the argument breaks. Is context really your bottleneck, or is it something else entirely?
+
+Tell me your version of the problem — the thing you find yourself re-explaining every week.
+
+Tell me which integration would decide it. Name the tool that has to be connected before this is worth having, and it moves up the list.
+
+And tell me honestly: would you leave something like this running for a full week? If not, what stops you?
 ```
 
 ### JA（日本語圏向け。X・note・日本語コメントへの返信で使う）
@@ -284,28 +291,31 @@ Personal, general, and on your own machine. That's the bet — I'd like to hear 
 ```
 Product Hunt に ShogunAI を出しました ⚔
 
-ShogunAI をパーソナルAGIと呼んでいるので、先に定義を差し出しておきます。人間並みの知能という意味ではありません。「全域」という意味です。単機能ではなく仕事の全体にまたがる一つのエージェントがあり、いま何が動いているかという状態を持ち、その状態から動きます。
+先に定義を置きます。タグラインで重い仕事をしている言葉なので。パーソナルAGIと言っても、人間並みの知能という意味ではありません。「全域」という意味です。単機能ではなく一日全体にまたがる一つのエージェントがあり、いま何が動いているかという状態を持ち、その状態から動きます。
 
-重いのは「全域」の方です。知能はもう希少ではありません。自分の契約しているモデルを持ち込めばいいし、そうすべきです。希少なのは、一日の一部ではなく一日全体に届くことの方です。音声入力アプリは、ミカが誰かを知りません。会議ツールは、先月あなたが何を約束したかを知りません。チャットボットは、あなたが最後に貼った分だけを知っています。どれも自分の1時間の中では優秀で、その1時間が終わった瞬間に目が届かなくなる。だから仕上げは、いつもあなたの手に戻ってきます。
+その下にある賭けはこうです。
 
-その「仕上げ」が、普通の一日の中でどう起きるか。
+モデルの知能は、あなたが日々やっていることに対してはもう足りています。足りていないのはIQではなく、あなた自身の文脈です。文脈は十いくつものツールに散らばっていて、それを繋ぎ止めているのはあなたの記憶と根気だけです。プロジェクトを説明し直し、スレッドを貼り、この人が誰かをもう一度伝え、それでも最後の仕上げは手でやる。ボトルネックは移動したのに、プロダクトの多くはまだ動いていません。
 
-キーを長押しして話すと、カーソルがあった場所にテキストが届きます。仕事の文脈が乗っているので、人名もプロジェクト名も、あなたが普段書いている表記で出てきます。一文を選んでどこが気に入らないか言えば、いま開いているアプリの中でその場で書き換わります。会議が終わる頃には、先月その人と交わした約束を踏まえたrecapができていて、その下にフォローアップの下書きが用意されています。朝いちばんに目に入るのは、昨夜動いたものと、まだ返していないものです。これは4つのプロダクトではありません。ひとつのエージェントが、あなたが手でやっていた最後の一区間をやっています。
+こう読んでいるのは私だけではないはずです。Garry Tan は今年、レバレッジはモデルではなくコンテキストの側にあると創業者たちに言い続けています。同じ重み、同じウィンドウでも、周りに何を置くかで出てくるものがまるで変わる、と。Sam Altman が語る OpenAI の行き先もほぼ同じ言葉です。生のIQを追うことから離れ、あなたの文脈の全体を理解して記憶し、その記憶こそが持続的な優位になる、という方向。最も多くのスタートアップを見ている人と、最も使われているモデルを出している人が、反対側から同じ層に辿り着いている。その層は本物です。
 
-どれも、下にあるものがなければ成立しません。ログではなく、状態です。人、プロジェクト、約束、やりかけ。すべてのレコードに、どこから来たかと、どれくらい確かかが付いています。確度の低い推測が事実の顔をして出てくることはありません。その状態は、あなたのマシンの中で受動的に作られます。既定で扱うのは画素ではなくテキストで、OS の accessibility 層を通って、手元の暗号化データベースに入ります。テキストを一切返さない画面は、自分でONにする Visual recall が補います。暗号化したフレームを端末内に置き、オンデバイスのOCRで読み、あなたが決めた期間で自動的に消えます。既定はオフです。
+そうなると、本当に効く問いはひとつ残ります。その文脈は、どこに置かれるべきなのか。
 
-譲らない規則がひとつあります。読み取りは自動、送信は自動になりません。人に宛てたものは必ず止まり、本文を全部見せて、あなたを待ちます。これを切る設定はありません。ここで唯一、取り返しがつかない失敗だからです。
+我々の答えはそこだけ違います。ShogunAI は、仕事の状態をひとつ持ちます。人、プロジェクト、交わした約束、まだ開いたままのもの。それをあなた自身の一日から組み立て、誰かのアカウントの中ではなく、あなたのマシンの中に置きます。そして、その状態を使って終わらせます。返信は、先月の約束を踏まえた下書きとして出てきます。会議のあとに残るのは議事録ではなく次の一手です。朝いちばんに目に入るのは、昨夜動いたものと、まだ返していないものです。モデルはあなたが選び、記憶はどちらにしてもあなたのものです。
 
-それ以外は、あなたが選べます。モデルは自分のAPIキーでも、すでに払っている Claude / ChatGPT / Gemini のプランでも構いません。記憶は丸ごと書き出せるローカルのデータベースで、MCP から読めます。他のツールも同じ文脈から仕事を始められるので、もう一度ペーストする必要はありません。
+譲らない規則がひとつあります。読み取りは自動、送信は自動になりません。人に宛てたものは必ず止まって、あなたを待ちます。
 
-今日動くビルドは macOS 版です（macOS 14 以上 / Apple Silicon）。Windows とモバイルも作っています。Mac のためのプロダクトではなく、Mac版が先に出ただけです。アーリーアクセスの登録は無料で、リストはプラットフォーム別に見ています。どのマシンを使っているか教えてください。
+今は個人のためのプロダクトです。チーム版とエンタープライズ版も予定しています。共有された文脈は個人の文脈より価値が高く、止まっている仕事のほとんどは人と人の間で止まっているからです。今日動くビルドは macOS 版で、Windows とモバイルも作っています。
 
-褒め言葉より欲しいものが3つあります。
-1. この領域のものを一度使ってやめた人。何がきっかけでしたか。
-2. どの連携があれば、1週間つけっぱなしにできますか。
-3. 答えにくいプライバシーの質問。ここで聞いてもらえれば、ここで答えます。
+このスレッドで聞きたいことがあります。
 
-個人のためのもので、全域に効いて、自分のマシンの中にある。これが賭けです。どこが崩れると思うか、聞かせてください。
+この主張のどこが崩れると思いますか。あなたにとってのボトルネックは本当に文脈ですか。それとも別のものですか。
+
+あなた自身の問題の形を教えてください。毎週のように説明し直している、あれのことです。
+
+どの連携が決め手になりますか。これが繋がっていなければ持つ意味がない、というツールの名前を挙げてください。優先順位を上げます。
+
+そして正直なところ、こういうものを1週間つけっぱなしにできますか。できないとしたら、何が引っかかりますか。
 ```
 
 ## 5. 中盤に落とす Maker follow-up
