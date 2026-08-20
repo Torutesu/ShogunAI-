@@ -396,11 +396,14 @@ pub const BATCH_CONFIDENCE: f64 = 0.6;
 /// sit in the instruction role. Sending processed chunks to the Batch lane is the only egress
 /// here (invariant 3: traceability is recorded by `AnthropicBatchClient::submit`).
 pub fn consolidation_prompt(content: &str) -> String {
+    // NOTE: fence_untrusted is a plain function, NOT format! — braces here are literal. Doubled
+    // "{{" would ship escaped braces to the model, whose literal-following output then fails
+    // parse_batch_classification and every finding is silently dropped.
     crate::llm::fence_untrusted(
         "You extract commitments and open loops from a snippet of a user's captured screen text.\n\
          Return ONLY a JSON object (no prose, no code fence) of this exact shape:\n\
-         {{\"commitments\":[{{\"direction\":\"mine|theirs\",\"description\":\"...\"}}],\
-         \"open_loops\":[{{\"kind\":\"reply_needed|waiting_on_them|review_pending|decision_pending|follow_up|other\",\"description\":\"...\"}}]}}\n\
+         {\"commitments\":[{\"direction\":\"mine|theirs\",\"description\":\"...\"}],\
+         \"open_loops\":[{\"kind\":\"reply_needed|waiting_on_them|review_pending|decision_pending|follow_up|other\",\"description\":\"...\"}]}\n\
          A commitment is an explicit promise: direction \"mine\" if the user promised, \"theirs\" if \
          someone promised the user. An open loop is something awaiting action. If there is nothing \
          actionable, return empty arrays.",
