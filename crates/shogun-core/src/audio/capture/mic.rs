@@ -73,10 +73,9 @@ impl Mic {
 /// expose a stable cross-platform device identifier; an exact name match avoids guessing after a
 /// device is unplugged or renamed.
 ///
-/// Names are *not* deduplicated: macOS lets two devices share a name (two identical USB
-/// interfaces, two of the same headset), and collapsing them would hide an input the user owns
-/// while still leaving the selection ambiguous. Duplicates are surfaced as-is, and a selection
-/// that matches more than one device resolves to the first CoreAudio enumerates.
+/// Identical names collapse into one row here. That leaves the selection ambiguous when two
+/// devices share a name, so `find_named_device` refuses to resolve it rather than silently
+/// capturing whichever one CoreAudio enumerated first.
 pub fn input_device_names() -> Result<Vec<String>, String> {
     let host = cpal::default_host();
     let mut names = host
@@ -85,6 +84,7 @@ pub fn input_device_names() -> Result<Vec<String>, String> {
         .filter_map(|device| device.name().ok())
         .collect::<Vec<_>>();
     names.sort_unstable();
+    names.dedup();
     Ok(names)
 }
 

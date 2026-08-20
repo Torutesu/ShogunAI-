@@ -9,8 +9,8 @@ pub mod system_tap;
 
 use super::Speaker;
 
-/// Pick the first device whose name matches `selected`, or report that it is gone. A missing
-/// selection is an error, never a fallback to some other input.
+/// Resolve `selected` to the one device that bears that name. Missing and ambiguous both fail:
+/// neither may quietly resolve to some other input.
 ///
 /// Lives on the seam rather than in `mic` so it compiles — and its tests run — on every platform:
 /// `mic` is behind `audio` + macOS, so anything inside it is invisible to both CI jobs. Generic
@@ -19,11 +19,20 @@ pub fn find_named_device<D>(
     devices: impl Iterator<Item = (String, D)>,
     selected: &str,
 ) -> Result<D, String> {
-    devices
+    // Lazily, and with no panicking call on the capture path: stop as soon as a second match
+    // proves the name ambiguous, rather than collecting every device first.
+    let mut matches = devices
         .filter(|(name, _)| name == selected)
-        .map(|(_, device)| device)
-        .next()
-        .ok_or_else(|| format!("selected microphone is unavailable: {selected}"))
+        .map(|(_, device)| device);
+    let Some(device) = matches.next() else {
+        return Err(format!("selected microphone is unavailable: {selected}"));
+    };
+    if matches.next().is_some() {
+        return Err(format!(
+            "selected microphone name is ambiguous: {selected}; choose a different input"
+        ));
+    }
+    Ok(device)
 }
 
 /// A frame of already-resampled 16 kHz mono audio from one source.
@@ -123,14 +132,14 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_names_resolve_to_the_first_enumerated_device() {
+    fn duplicate_names_are_rejected_instead_of_selecting_arbitrarily() {
         let candidates = vec![
             ("Studio Mic".to_string(), "first"),
             ("Studio Mic".to_string(), "second"),
         ];
-        let picked = find_named_device(candidates.into_iter(), "Studio Mic")
-            .expect("a duplicated name still resolves");
-        assert_eq!(picked, "first");
+        let error = find_named_device(candidates.into_iter(), "Studio Mic")
+            .expect_err("an ambiguous device name must not select an arbitrary microphone");
+        assert!(error.contains("ambiguous"), "error explains the ambiguity: {error}");
     }
 
     #[test]
