@@ -45,7 +45,11 @@ if (!existsSync(join(dist, 'fullui.html'))) {
 
 rmSync(out, { recursive: true, force: true });
 mkdirSync(out, { recursive: true });
+// Two surfaces, both real: the Full UI window for the features page, and the
+// notch panel — the app's signature surface — for the hero. Both fall back to
+// their own mock fixtures outside Tauri.
 cpSync(join(dist, 'fullui.html'), join(out, 'index.html'));
+if (existsSync(join(dist, 'index.html'))) cpSync(join(dist, 'index.html'), join(out, 'panel.html'));
 cpSync(join(dist, 'assets'), join(out, 'assets'), { recursive: true });
 
 const bytes = readdirSync(join(out, 'assets')).length;

@@ -67,6 +67,10 @@ const nextConfig = {
         // deny-everything defaults above are narrowed for it: same-origin
         // ancestors only, and still no framing *from* it.
         //
+        // The demo is linked as /app-demo/index.html rather than /app-demo/: the
+        // directory form 308s under `next start` and 307s on Cloudflare, and only
+        // the explicit file resolves in both.
+        //
         // Note this only binds where Next serves the response. On Cloudflare the
         // file is served straight from static assets and arrives with neither
         // header — so in production the demo is framable by any origin. That is

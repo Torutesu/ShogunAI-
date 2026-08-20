@@ -33,7 +33,7 @@ export function AppDemo({
         <div className="relative bg-[#0b0b0c]">
           {!loaded && <div className="absolute inset-0 animate-pulse bg-[#141416]" aria-hidden="true" />}
           <iframe
-            src="/app-demo/"
+            src="/app-demo/index.html"
             title={title}
             loading="lazy"
             onLoad={() => setLoaded(true)}
@@ -44,7 +44,7 @@ export function AppDemo({
       <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
         <p className="text-[13px] text-muted">{hint}</p>
         <a
-          href="/app-demo/"
+          href="/app-demo/index.html"
           target="_blank"
           rel="noreferrer"
           className="text-[13px] font-semibold text-accent hover:text-accent-strong"
