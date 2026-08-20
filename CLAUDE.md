@@ -1,6 +1,6 @@
 # CLAUDE.md — ShogunAI
 
-SHOGUNのモノレポ。本ファイルはmacOSアプリ本体(`crates/` + `apps/desktop`)の実装時に常に守る運用ルールを記す。要件定義の全文は `docs/requirements-v1.0.md`、ノッチUIスパイク仕様は `docs/notch-ui-prototype-spec.md`、Phase 0の実装指示は `docs/phase0-dev-instructions.md` を参照。詳細で迷ったら docs/ を読むこと。マーケサイト(`apps/website`)は本ファイルの対象外(website配下のREADME/規約に従う)。
+SHOGUNのモノレポ。本ファイルはmacOSアプリ本体(`crates/` + `apps/desktop`)の実装時に常に守る運用ルールを記す。要件定義の全文は `docs/requirements-v1.0.md`、ノッチUIスパイク仕様は `docs/notch-ui-prototype-spec.md`、Phase 0の実装指示は `docs/phase0-dev-instructions.md` を参照。詳細で迷ったら docs/ を読むこと。**文書と実装が食い違って見えたら `docs/spec-implementation-drift-audit.md`（2026-08-20 の突き合わせ結果）を先に見ること。**マーケサイト(`apps/website`)は本ファイルの対象外(website配下のREADME/規約に従う)。
 
 ## プロダクト一言定義
 
@@ -12,7 +12,7 @@ SHOGUNのモノレポ。本ファイルはmacOSアプリ本体(`crates/` + `apps
 2. **画像・音声データを一切保存しない。** 画面キャプチャはAccessibility API経由のテキストのみ。会議の音声は原則オンデバイス処理とし、**SHOGUN 自身は波形をディスク・一時ファイルに書かない**。永続化するのは文字起こしテキストとそのprovenanceのみ。スクリーンショット・録画・音声ファイルを生成するコードを書かない  
    **【2026-08-02 明示的例外】Visual recall が On のとき、OCR 用に取得した画面は圧縮 JPEG として暗号化済みメモリ DB に最大 72 時間だけ保持し、期限切れは自動削除する（`screen_frames` テーブル）。クラウド送信なし・音声対象外・永続タイムラインではない。Visual recall Off では画像も保存しない。**  
    **【2026-08-05 明示的例外｜会議 ASR】Meeting notes の既定 ASR は Deepgram Nova-3 Multilingual（クラウド live STT）。音声はライブ文字起こしのためにのみ外部へ送る（process-only）。常に `mip_opt_out=true`（学習・モデル改善への利用なし）。波形は SHOGUN がディスクへ書かない。会社キーはデスクトップバイナリ／共有 Keychain 秘密に埋め込まず、SHOGUN/Select バックエンドが保持するか短命 JWT（Deepgram `/auth/grant`）を発行する。UI に開示必須。FR-MT-13（オンデバイス ASR）への明示的例外。**
-3. **生データはデバイス外に出さない。** クラウドに出るのは処理用チャンクのみ。送信箇所には必ずトレーサビリティログを実装（明示的例外＝Gmail の Composio 全面経由、および 2026-08-05 の会議 ASR Deepgram ライブ STT。詳細と必須条件は各例外参照）
+3. **生データはデバイス外に出さない。** クラウドに出るのは処理用チャンクのみ。送信箇所には必ずトレーサビリティログを実装（明示的例外＝Gmail 送信の Composio 経由〈全面 Composio 化の決定は未実施。連携実装ルール参照〉、および 2026-08-05 の会議 ASR Deepgram ライブ STT。詳細と必須条件は各例外参照）
 4. **L1（自動実行）に外部送信系アクションを絶対に含めない。** 送信・投稿・カレンダー作成は必ずL3（明示確認）
 5. **キーの分離**: インデックス・分類・Dream Cycle・Morning Brief = Select KKキー（Batch API）／エージェント推論・チャット・ドラフト = ユーザー資格情報（BYOK **または** サブスク委譲。Issue #110）。逆転させない。**サブスク委譲をBatch laneに使わない**（委譲先が使うのは月次の有限クレジット。バッチ量はそれを最速で溶かす作業であり、焼き切るとAgent lane自体が月替わりまで死ぬ）
 6. **人間UIとAI API（MCP/CLI）は完全対称。** 新機能はUIとAPI両方から呼べる形で設計する。AI経由の操作にも同じL1/L2/L3を適用
@@ -24,7 +24,7 @@ SHOGUNのモノレポ。本ファイルはmacOSアプリ本体(`crates/` + `apps
 - **アプリ**: Tauri v2 / Rust backend / React + TypeScript frontend
 - **対応環境**: macOS 14 Sonoma以上 / Apple Silicon (arm64) のみ。ノッチ非搭載Mac・外部ディスプレイはメニューバー中央の擬似ノッチパネルで対応
 - **Notchパネル**: NSPanel（objc2）、`.nonactivatingPanel` + `.canJoinAllSpaces` + `.fullScreenAuxiliary`
-- **DB**: SQLite（rusqlite）+ sqlite-vec、WALモード、FTS5 trigram。マイグレーションはバージョン管理必須（refinery）
+- **DB**: SQLite（rusqlite）+ sqlite-vec、WALモード、FTS5 trigram。**SQLCipherで暗号化**（`bundled-sqlcipher`、接続直後に `PRAGMA key`）。マイグレーションはバージョン管理必須（refinery）
 - **埋め込み**: ローカルONNX多言語embeddingモデル同梱（クラウドembedding API不使用。オフライン動作・追加限界費用ゼロ）
 - **macOSネイティブ**: AXUIElement / NSWorkspace / NSEventグローバルモニタ / security-framework（Keychain）
 - **MCP**: Rust MCP SDK。クライアント（公式リモートMCPへ直接OAuth）とサーバー（Memory API）の両方
@@ -38,16 +38,21 @@ SHOGUNのモノレポ。本ファイルはmacOSアプリ本体(`crates/` + `apps
 
 ```
 crates/
-  shogun-core/      # デーモン: キャプチャ、DB、context cache、イベントバス
-  shogun-memory/    # スキーマ、マイグレーション、3層メモリ、state tables、検索
-  shogun-fusion/    # Context Fusion: f(state, screen_ctx, intent) → action
-  shogun-agents/    # L1/L2/L3実行エンジン、プリセットエージェント
-  shogun-mcp/       # MCPクライアント＋サーバー、REST API
-  shogun-cli/       # shogunコマンド
+  shogun-core/         # デーモン: キャプチャ、DB、context cache、イベントバス、LLMレーン、音声/ASR
+  shogun-memory/       # スキーマ、マイグレーション、3層メモリ、state tables、検索
+  shogun-fusion/       # Context Fusion: f(state, screen_ctx, intent) → action
+  shogun-agents/       # L1/L2/L3実行エンジン、プリセットエージェント
+  shogun-mcp/          # MCPクライアント＋サーバー、REST API、スコープ表、Memory API
+  shogun-integrations/ # 第1層コネクタアダプタ（公式リモートMCP）＋Composio第2層
+  shogun-license/      # ライセンストークンの検証
+  shogun-redact/       # 秘匿値のマスク（書き込み前・ログ前）
+  shogun-cli/          # shogunコマンド
+  spike-harness/       # Phase 0スパイク用ハーネス（製品コードではない）
 apps/
-  desktop/          # Tauriアプリ（Notchパネル、Full UI、設定）
+  desktop/          # Tauriアプリ（Notchパネル、Full UI、設定、会議/音声/Visual recall）
   website/          # マーケサイト（本ファイルの対象外）
-  api/              # スタンドアロンAPI予定地（本ファイルの対象外）
+  api/              # Select KKバックエンド。Batch relay（/v1/batch）＋会議ASRの短命トークン発行。
+                    # 不変条件5のBatchレーンと2026-08-05 ASR例外の実体がここにある（対象外にしない）
 packages/           # TS共有パッケージ（website系）
 docs/               # 要件・仕様・判断記録
 ```
@@ -57,7 +62,7 @@ docs/               # 要件・仕様・判断記録
 - Freeプランなし。7日間フルトライアル（Pro相当）→ Standard / Pro
 - **Standard**: キャプチャ＋メモリ＋検索＋Notch UI＋第1層連携（読み取り）＋Dream Cycle＋Morning Brief。Select KKキーのみで動作（BYOK不要）
 - **Pro**: ＋エージェント実行（L1/L2/L3）＋Memory API（MCP/CLI/REST）＋Composio第2層。**サブスク委譲 または BYOK が必要**（Issue #110。APIキー必須をやめ、既に契約済みのClaude/ChatGPT/Geminiプランで動くことを既定にする。サブスク経路は明示的opt-in同意が前提）
-- **【2026-07-30 決定】Gmail 読み取りは Composio 経由になっても Standard に含める**（Gmail 全面 Composio 化で「第1層読み取り=Standard」の文字通り解釈だと Gmail 読み取りが Pro 落ちし Wave 1 の Standard 価値が崩れるため）。Pro の「Composio第2層」ゲートが意味するのは**送信の解放（draft-stop OFF での実送信）のみ**。読み取りの 3開示 opt-in 同意は全プラン共通で必須
+- **【2026-07-30 決定｜Gmail 全面 Composio 化が実施された場合に効く条件付き決定】Gmail 読み取りは Composio 経由になっても Standard に含める**（Gmail 全面 Composio 化で「第1層読み取り=Standard」の文字通り解釈だと Gmail 読み取りが Pro 落ちし Wave 1 の Standard 価値が崩れるため）。Pro の「Composio第2層」ゲートが意味するのは**送信の解放（draft-stop OFF での実送信）のみ**。読み取りの 3開示 opt-in 同意は全プラン共通で必須
 - プラン判定はRustコア側で行う。webview側のゲーティングだけに頼らない
 - **会議ノート（§6.16 FR-MT群）はトライアル含む全プランで使える。** 使ってみて価値が分かる機能で、トライアル中に体験できなければ課金判断の材料にならない（Memory API経由の参照=FR-MT-22 のみPro）
 - **【解消済み 2026-08-08】** design-system ブランチとの「Free / $0 プラン」分岐は、オーナー判断（**Free廃止・全員課金**、2026-07-26）どおり本ファイルを正としてマージ済み。LP（`apps/website` の pricing）も Standard $49 / Pro $99（年額、7日フルトライアル）へ全ロケール更新済み。Freeプランを再導入する変更を書かない
@@ -86,15 +91,18 @@ docs/               # 要件・仕様・判断記録
 
 ## 開発フェーズ
 
-- **Phase 0（今ここ）**: ノッチUIスパイク。`docs/notch-ui-prototype-spec.md` に完全準拠、実装手順は `docs/phase0-dev-instructions.md`。4つの問い（常駐安定性・展開100ms・cache300ms+CPU5%・ホバー誤発火）に答えるまで本実装を始めない。No-Go時はメニューバー＋パレット方式へ転換
-- **Phase 1（v1）**: Notch UI本実装 → キャプチャ＋メモリ＋state tables → Context Fusion＋L1/L2エージェント → 第1層MCP連携（Wave 1: Gmail+Google Calendar → Wave 2: Slack → Wave 3: Notion+GitHub+Linear）→ 課金＋トライアル
+- **【2026-08-20 現在地】Phase 1 の実装中**（純ロジックは端から端まで実装・テスト済み。残るのは実機（Apple Silicon）でのUI・SLO実測と実アカウント検証）。フェーズ表記の根拠と残タスクは `docs/phase1-findings.md` / `docs/phase1-ondevice-runbook.md`、機能単位の状況は `docs/feature-status.csv` を正とする
+- **Phase 0（完了扱い）**: ノッチUIスパイク（`docs/notch-ui-prototype-spec.md` / `docs/phase0-dev-instructions.md`）。Linuxで判定できる項目は `docs/phase0-findings.md` で決着済み。**4つの問いのうち実機実測（常駐ソーク・展開100ms・cache300ms+CPU5%）はまだ物理ノッチMacで閉じていない**ので、実機検証時にここへ結果を書き戻す
+- **Phase 1（v1）**: Notch UI本実装 → キャプチャ＋メモリ＋state tables → Context Fusion＋L1/L2エージェント → 第1層MCP連携（Wave 1: Gmail+Google Calendar+**Google Drive** → Wave 2: Slack → Wave 3: Notion+GitHub+Linear）→ 課金＋トライアル
 - 会議ノート（検知＋オンデバイスASR＋Recap）はv1へ前倒し（Issue #7 / `docs/meeting-notes-ui-design.md`）。ただし**音声ファイル・録音の保存は恒久的に対象外**（不変条件2）。実装順はM1〜M5（同書§7）
 - v1に含めない: ナレッジグラフ/同期/メタメモリ（v2）、Computer Use/visionOS（Phase 3）。頼まれてもv1スコープに足さず、docs/requirements-v1.0.md のスコープ表を根拠に確認を取る
 
 ## 連携実装ルール
 
 - 第1層 = 公式リモートMCP直結。OAuthはユーザー→サービス直接、トークンはKeychain
-- **【2026-07 決定】Gmail は読み取り・ドラフト・送信のすべてを Composio 経由にする。** 当初は「読み取り/ドラフト＝公式MCP直結、送信のみComposio」だったが、公式リモートMCPが Developer Preview で実接続できない可能性が高く、ユーザー判断で Gmail を全面 Composio に寄せた（認証情報は Composio APIキー＋user id の1組のみ、Google Cloud OAuth 不要）。**代償として受信箱の内容が第三者(Composio)を経由する**ことを明示的に受容した決定であり、以下を必須とする:
+- **【2026-07 決定 / ⚠ 2026-08-20 時点で未実施】Gmail は読み取り・ドラフト・送信のすべてを Composio 経由にする。** 決定の経緯: 公式リモートMCPが Developer Preview で実接続できない可能性が高く、ユーザー判断で Gmail を全面 Composio に寄せた（認証情報は Composio APIキー＋user id の1組のみ、Google Cloud OAuth 不要）。**代償として受信箱の内容が第三者(Composio)を経由する**ことを明示的に受容した決定である
+- **⚠ 現状（2026-08-20 の突き合わせ）**: **実装は当初モデルのまま**——読み取り/ドラフトは公式リモートMCP直結（`gmailmcp.googleapis.com`、scope は `gmail.readonly` + `gmail.compose`）、Composio は**送信のみ**。requirements §6.9/§6.10 と `docs/connector-adapter-plan.md` も当初モデルで書かれている。決定の前提だった「公式MCPに実接続できない」は**実機未検証**。**先に実接続を検証し、繋がれば本決定を撤回（受信箱が第三者を経由しない方が privacy 面でも上位）、繋がらなければ実装を全面 Composio へ寄せる**（手順は `docs/spec-implementation-drift-audit.md` §2-A）
+- Composio を通す範囲には、以下を必須とする:
   - Composio の使用（読み取りを含む）に **opt-in 同意（3開示）を必須**にする。同意なしでは同期も送信も行わない
   - 送信は従来どおり L3、かつ draft-stop（既定ON、同意後のみOFF可）
   - **読み取り egress にもトレーサビリティを記録**（第三者境界。内容は残さずダイジェスト/フラグのみ）

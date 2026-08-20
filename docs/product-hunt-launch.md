@@ -108,7 +108,7 @@ Your Mac remembers your work — and finishes it                (48)
 ```
 > taglineに "early access" は入れない。availability は description と first comment で開示する（taglineの60字は製品の説明に全部使う）。
 
-**Description（上限260字）— 採用案（259字・実測）**
+**Description（上限260字）— 採用案（255字・実測）**
 ```
 ShogunAI turns your workday into one private memory on your Mac — screen text, meetings, mail, calendar — then acts on it: drafts, follow-ups, holds, a morning brief. No screenshots, no recordings, nothing sends without approval. Invites start in October.
 ```

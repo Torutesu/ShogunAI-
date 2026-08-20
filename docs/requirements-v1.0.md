@@ -4,14 +4,16 @@
 |---|---|
 | 文書ID | requirements-v1.0 |
 | 対象プロダクト | SHOGUN (ShogunAI) — macOSアプリ |
-| ステータス | Draft for Phase 1（Phase 0 Go判定待ち） |
-| 最終更新 | 2026-07-19 |
+| ステータス | **Phase 1 実装中**（純ロジックは実装・テスト済み、実機検証が残る。2026-08-20 実装反映） |
+| 最終更新 | 2026-08-20（実装との突き合わせ反映。差分の記録は `docs/spec-implementation-drift-audit.md`） |
 | 上位文書 | `/CLAUDE.md`（運用ルール。本書と矛盾する場合はCLAUDE.mdの絶対不変条件が優先） |
-| 関連文書 | `docs/notch-ui-prototype-spec.md`（ノッチUIスパイク仕様）、`docs/phase0-dev-instructions.md`（Phase 0 開発指示書） |
+| 関連文書 | `docs/notch-ui-prototype-spec.md`（ノッチUIスパイク仕様）、`docs/phase0-dev-instructions.md`（Phase 0 開発指示書）、`docs/spec-implementation-drift-audit.md`（仕様と実装の乖離監査）、`docs/feature-status.csv`（機能単位の実装・テスト状況） |
 
 ## 本書の位置付け（必読）
 
-- 現在の開発フェーズは **Phase 0（ノッチUIスパイク）** である。本書は **Phase 0のGo判定後に始まるPhase 1（v1）実装** の要件を定義する。Phase 0の間、本書の要件を先行実装してはならない。
+- **【2026-08-20 実装反映】** 現在の開発フェーズは **Phase 1（v1）実装中**である。本書のFR/NFRの大半は既に実装されており、「先行実装してはならない」というPhase 0期の制約は**失効している**。**要件の文言（MUST/SHOULD）は受け入れ基準として引き続き有効**であり、実装済みだからといって緩めない。
+- **実装状況の追跡は本書では行わない。** 機能単位の実装・テスト状況は `docs/feature-status.csv`、残タスクは `docs/phase1-findings.md` と `todo.md` を正とする。本書と実装が食い違って見えた場合は `docs/spec-implementation-drift-audit.md` を先に参照する。
+- Phase 0（ノッチUIスパイク）の詳細は `docs/notch-ui-prototype-spec.md` / `docs/phase0-findings.md`。**4つの問いのうち実機実測を要する項目は物理ノッチMacで未決**であり、実機検証で閉じる。
 - Phase 0の詳細仕様（常駐安定性・展開100ms・cache300ms+CPU5%・ホバー誤発火の4つの問い、およびNo-Go時のメニューバー＋パレット方式への転換基準）は `docs/notch-ui-prototype-spec.md` に完全準拠する。本書ではノッチUIスパイクの内容を重複記述しない。
 - 本書の各要件（FR-xx / NFR-xx）は、実装者（人間またはAIエージェント）が**受け入れ基準**として参照できる粒度で書かれている。要件の変更はConventional Commits（`docs:`）でバージョン管理し、CLAUDE.mdの絶対不変条件7項に抵触する変更は行わない。
 - 記法: **MUST** = 必須（違反は受け入れ不可）、**SHOULD** = 強い推奨（逸脱には判断記録が必要）、**MAY** = 任意。
@@ -271,19 +273,24 @@ CLAUDE.mdの絶対不変条件7項と、本書でそれを具体化した要件�
 ├── package.json / pnpm-workspace.yaml / turbo.json   # 既存JSモノレポ
 ├── Cargo.toml                                        # [workspace] 追加
 ├── crates/
-│   ├── shogun-core/      # デーモン: キャプチャ、DB所有、context cache、イベントバス
-│   ├── shogun-memory/    # スキーマ、refineryマイグレーション、3層メモリ、state tables、検索
-│   ├── shogun-fusion/    # Context Fusion: f(state, screen_ctx, intent) → action
-│   ├── shogun-agents/    # L1/L2/L3実行エンジン、プリセットエージェント、LLMプロバイダtrait
-│   ├── shogun-mcp/       # MCPクライアント（第1層）＋MCPサーバー/REST（Memory API）
-│   └── shogun-cli/       # shogunコマンド
+│   ├── shogun-core/         # デーモン: キャプチャ、DB所有、context cache、イベントバス、LLMレーン、音声/ASR
+│   ├── shogun-memory/       # スキーマ、refineryマイグレーション、3層メモリ、state tables、検索
+│   ├── shogun-fusion/       # Context Fusion: f(state, screen_ctx, intent) → action
+│   ├── shogun-agents/       # L1/L2/L3実行エンジン、プリセットエージェント、LLMプロバイダtrait
+│   ├── shogun-mcp/          # MCPクライアント（第1層）＋MCPサーバー/REST（Memory API）＋スコープ表
+│   ├── shogun-integrations/ # 第1層コネクタアダプタ（公式リモートMCP）＋Composio第2層  ★2026-08-20 追記
+│   ├── shogun-license/      # ライセンストークン検証                                    ★同上
+│   ├── shogun-redact/       # 秘匿値マスク（書き込み前・ログ前）                        ★同上
+│   ├── shogun-cli/          # shogunコマンド
+│   └── spike-harness/       # Phase 0スパイク用ハーネス（製品コードではない）           ★同上
 ├── apps/
 │   ├── desktop/          # Tauri v2アプリ（Notchパネル、Full UI、設定）React + TS
+│   ├── api/              # Select KKバックエンド: Batch relay（/v1/batch）＋会議ASRの短命トークン発行 ★同上
 │   └── website/          # 既存
 └── docs/
 ```
 
-**AR-01（MUST）**: 上記のcrate分割・責務配置に従う。crate間の依存方向は `core → memory/fusion/agents/mcp` を集約点とし、循環依存を作らない。
+**AR-01（MUST）**: 上記のcrate分割・責務配置に従う（**【2026-08-20 実装反映】** `shogun-integrations` / `shogun-license` / `shogun-redact` / `spike-harness` および `apps/api` を実装に合わせて追記）。crate間の依存方向は `core → memory/fusion/agents/mcp` を集約点とし、循環依存を作らない。
 
 **AR-02（MUST）**: JSワークスペースとCargoワークスペースのビルドは独立して成立する（`pnpm build` がRustツールチェーン無しで、`cargo build` がNode無しで通る。`apps/desktop` のフルビルドのみ両方を要求してよい）。
 
@@ -788,7 +795,7 @@ provenanceが空のstateレコードをINSERTするコードパスを作らな�
 
 **FR-INT-02（MUST, Std）**: OAuthは**ユーザー→サービス直接**（MCP仕様のOAuth 2.1 Authorization Code + PKCEフロー、システムブラウザで認可）。アクセストークン・リフレッシュトークンは**Keychainのみ**に保存する（CLAUDE.md不変条件7）。トークンをDB・設定ファイル・ログ・webviewに書き出さない。
 
-**FR-INT-03（MUST, Std）**: 段階導入（Wave）: Wave 1 = Gmail + Google Calendar → Wave 2 = Slack → Wave 3 = Notion + GitHub + Linear。各Waveは前Waveの安定（接続成功率95%以上・クラッシュ増加なしを2週間）を確認してから既定で有効化する。未リリースWaveのサービスは設定画面に「Coming soon」として表示してよい。
+**FR-INT-03（MUST, Std）**: 段階導入（Wave）: Wave 1 = Gmail + Google Calendar + **Google Drive** → Wave 2 = Slack → Wave 3 = Notion + GitHub + Linear。**【2026-08-20 実装反映】** Google Drive は 2026-07-23 のプロダクト判断で Wave 1 に追加（公式リモートMCP `drivemcp.googleapis.com` が存在するため第1層の条件を満たす）。**Google Docs / Sheets は独立サービスにせず**、Drive の `read_file_content` 経由で読む。各Waveは前Waveの安定（接続成功率95%以上・クラッシュ増加なしを2週間）を確認してから既定で有効化する。未リリースWaveのサービスは設定画面に「Coming soon」として表示してよい。
 
 **FR-INT-04（MUST, Std）**: 同期方式: 各サービスの読み取りは15分間隔のポーリング（サービス側のレート制限に応じて延長）＋フォーカス文脈に応じたオンデマンド取得（例: Gmailスレッド表示中の該当スレッド取得）。取得データはevent log（`source` = サービス名）へ正規化して格納し、キャプチャ由来イベントと同一の検索・Fusion経路に乗せる。
 
@@ -882,13 +889,13 @@ provenanceが空のstateレコードをINSERTするコードパスを作らな�
 **目的**: SHOGUNのメモリとワールドモデルを、ユーザーが使う他のAIから利用可能にする。**人間UIとAI APIは完全対称**（CLAUDE.md不変条件6）。
 
 **FR-API-01（MUST, Pro）**: 提供面は3つ:
-- **MCPサーバー**（stdio + Streamable HTTP/localhost）: 外部AIエージェント向け
+- **MCPサーバー**（stdio）: 外部AIエージェント向け。**【2026-08-20 実装反映】** **Streamable HTTP/localhost は保留**（悪用面積を絞るため当面 stdio のみ。`todo.md`）。復活させる場合はNFR-SEC-03のバインド・認証要件をそのまま適用する
 - **CLI**（`shogun` コマンド、shogun-cli）: スクリプト・ターミナル向け
 - **REST**（`http://127.0.0.1:7464`、localhostバインドのみ。既定ポート7464は設定で変更可能、使用中の場合は起動時に自動フォールバックし実ポートをCLI `shogun api status` で取得可能にする）: 任意クライアント向け
 
 3面は同一のRust内部API（shogun-core経由）の薄いラッパであり、機能差を作らない。
 
-**FR-API-02（MUST, Pro）**: v1の公開ツール/エンドポイント（最小セット。UIの対応機能と対称）:
+**FR-API-02（MUST, Pro）**: v1の公開ツール/エンドポイント。**【2026-08-20 実装反映】** 下表は**当初の最小セット**であり、実装済みの公開ツールはこれを含む28ツール（wire nameの正は `crates/shogun-mcp/src/memory_api.rs` の `Tool::wire_name`）。表に無い実装済みツール: `memory.get_context_pack` / `memory.get_wrap` / `actions.status` / `device.onboarding.get` / `lessons.list` / `lessons.set_active` / `visual_recall.{status,set_enabled,set_retention,search_frames,get_frame,rescan_frame,delete_frame}` / `profile.whoami` / `profile.set`。**追加ツールも同じ規律に従う**（読み取りはFR-API-06のconfidence規則、書き込みはL1/L2/L3、送信系はL3）:
 
 | ツール | 内容 | レベル |
 |---|---|---|
@@ -903,6 +910,8 @@ provenanceが空のstateレコードをINSERTするコードパスを作らな�
 | `actions.execute` | プリセットエージェントの起動 | 対象操作のレベルに従う（L3操作はFR-AG-04の承認フロー） |
 
 **FR-API-03（MUST, Pro）**: 認証: クライアントごとのAPIトークンを発行（Full UIで発行・失効管理）。トークンはKeychainに保存し、REST/HTTPはlocalhostのみにバインドする。トークンなしの呼び出しは読み取り含め全拒否。
+
+**FR-API-03b（MUST, Pro）**: **【2026-08-20 実装反映】** Memory API は設定の Enable トグル（`memory_api.json`）で**既定オフ・fail-closed**とする（未有効化時は `shogun-mcp` / `shogun-api` が明示エラーで終了する）。**現状このトグルはソフトなProゲート**（トライアル中も有効化できる）であり、Stripe連携完了後にプラン判定と結合してハードゲート化する（`todo.md`）。
 
 **FR-API-04（MUST, Pro）**: AI経由の操作にも同一のL1/L2/L3を適用する（FR-AG-04）。APIからの承認待ち操作は呼び出し元にpending状態と承認要求IDを返し、承認/拒否/タイムアウト（10分）を照会可能にする。
 
@@ -945,7 +954,7 @@ provenanceが空のstateレコードをINSERTするコードパスを作らな�
 
 **FR-BIL-07（MUST）**: 決済はStripe（Checkout + Billing）。アプリ内にカード情報を扱うUIを作らず、システムブラウザでCheckoutを開く。webhook→ライセンスAPI→アプリの反映で60s以内。
 
-**FR-BIL-08（MUST）**: ライセンス検証: アプリはライセンスAPIに対し24時間ごと＋起動時に検証を行い、署名付きライセンストークン（プラン・有効期限を含む）をKeychainに保存する。検証リクエストにキャプチャ内容・メモリ内容を一切含めない（送るのはライセンスID・アプリバージョン・匿名デバイスIDのみ）。
+**FR-BIL-08（MUST）**: ライセンス検証: アプリはライセンスAPIに対し24時間ごと＋起動時に検証を行い、署名付きライセンストークン（プラン・有効期限を含む）を保存する。**【2026-08-20 実装反映】** 保存先は **`billing.json`（app-data、平文）**（CLAUDE.md 2026-08-13 例外）。トークンはEd25519署名済み・device idに束縛・約24時間で失効するため秘密ではなく、CLI/MCP/RESTの3面がKeychainに触れずプラン状態を読めることが設計要件（`shogun_mcp::plan_source`）。**ライセンスキー本体（APIのbearer）はKeychainのみ。**検証リクエストにキャプチャ内容・メモリ内容を一切含めない（送るのはライセンスID・アプリバージョン・匿名デバイスIDのみ）。
 
 **FR-BIL-09（MUST）**: オフライン猶予: ライセンスAPIに到達できない場合、最後に取得した有効トークンから**14日間**は全機能を維持する（インジケータは7日目からアンバー）。14日超過でトライアル満了と同じ制限状態に移行し、オンライン復帰時の検証成功で即時復元する。決済失敗（Stripe側）の場合はStripeのリトライ設定に従い、最終失敗から7日間の猶予後に制限状態へ移行する。
 
@@ -1194,7 +1203,7 @@ CLAUDE.mdのSLO表を計測定義付きで詳細化する。**各SLOの計測コ
 
 ### 7.2 セキュリティ
 
-**NFR-SEC-01（MUST）**: secrets（OAuthトークン・BYOKキー・Composio認証情報・ライセンストークン・APIクライアントトークン）は**macOS Keychain（security-framework）以外に保存しない**。平文ファイル・DB・環境変数・ログ・クラッシュレポートへの書き出しを禁止する（CLAUDE.md不変条件7）。
+**NFR-SEC-01（MUST）**: secrets（OAuthトークン・BYOKキー・Composio認証情報・**ライセンスキー**・APIクライアントトークン）は**macOS Keychain（security-framework）以外に保存しない**。**【2026-08-20 実装反映】** 例外は**署名済みライセンストークン**のみで、これは `billing.json` に置く（FR-BIL-08の理由参照。秘密ではない）。平文ファイル・DB・環境変数・ログ・クラッシュレポートへの書き出しを禁止する（CLAUDE.md不変条件7）。
 
 **NFR-SEC-02（MUST）**: secretsをwebview（JSコンテキスト）に渡さない。BYOK入力はTauri command経由で即Keychainへ書き込み、UIへの読み戻しは末尾4桁のみ。
 
@@ -1244,7 +1253,7 @@ CLAUDE.mdのSLO表を計測定義付きで詳細化する。**各SLOの計測コ
 
 ### 7.7 テレメトリ方針
 
-**NFR-TEL-01（MUST）**: テレメトリは**既定OFF（オプトイン）**。ONの場合も送信してよいのは: 匿名デバイスID、アプリバージョン、機能イベント名とカウント（例: `action_executed{level=l2}`）、SLO統計値（p50/p95）、クラッシュ有無。**キャプチャ内容・state内容・検索クエリ・生成物・送信先情報は送らない**（NFR-PRV-03）。
+**NFR-TEL-01（MUST）**: **【2026-08-20 実装反映】** 匿名プロダクト分析は**オプトアウト方式（既定ON）**の単一系統（PostHog。CLAUDE.md 2026-08-08 統合決定）。永続状態は `analytics.json` の `opt_out` のみで、オンボーディングのトグルと設定画面のPrivacy & Securityカードは同じ状態を読み書きする。旧 `privacy.json` のオプトイン方式は廃止。送信してよいのは: 匿名デバイスID、アプリバージョン、機能イベント名とカウント（例: `action_executed{level=l2}`）、SLO統計値（p50/p95）、クラッシュ有無。**キャプチャ内容・state内容・検索クエリ・生成物・送信先情報は送らない**（NFR-PRV-03）。
 
 **NFR-TEL-02（MUST）**: テレメトリ送信もトレーサビリティログの対象とする（purpose=`telemetry`）。送信項目の一覧を設定画面から閲覧できる。
 
@@ -1320,15 +1329,17 @@ CLAUDE.mdの確定表を転記し、選定理由を付す。**このスタック
 
 ### ADR-002: BYOKはv1でAnthropicのみ。プロバイダ抽象化層（trait）は設けるが実装は1つ
 
-- **状況**: エージェント推論のBYOKを複数プロバイダ対応にするかどうか。
-- **決定**: v1はAnthropicのみ。`LlmProvider` trait（FR-AG-08）で抽象化のみ行い、実装は1つ。
+> **【2026-08-20 実装反映】** **本ADRは更新された。** 現行は **(1) Agent laneの第一選択＝サブスク委譲**（ユーザーが契約済みのベンダー公式CLIをローカルサブプロセスで起動。Issue #110、`crates/shogun-core/src/llm/subscription.rs`）、**(2) BYOKはフォールバックで Anthropic + OpenAI互換の2実装**（`llm/openai_compat.rs`）。trait境界を先に切っておく判断（下記）が正しく働いた結果であり、方針の否定ではない。Batch lane（Select KKキー）がAnthropicである点は不変（不変条件5）。
+
+- **状況（当時）**: エージェント推論のBYOKを複数プロバイダ対応にするかどうか。
+- **決定（当時）**: v1はAnthropicのみ。`LlmProvider` trait（FR-AG-08）で抽象化のみ行い、実装は1つ。
 - **理由**: (1) ツール呼び出し・ストリーミング・プロンプトキャッシュの挙動差を吸収するコストが v1の価値に寄与しない。(2) Select KKキー側（Batch API）がAnthropicであり、プロンプト資産・評価基盤を1系統に集中できる。(3) trait境界だけ正しく切っておけば追加は後から可能。
 - **帰結**: 他プロバイダ希望ユーザーを一部逃す。要望はOPEN項目として計測する。trait境界にAnthropic固有型を漏らさない規律をレビューで維持する。
 
 ### ADR-003: プラン差別化は「機能差」で行い、キー境界と一致させる
 
 - **状況**: Standard/Proの差を使用量制限（クォータ）にするか機能差にするかの選択。
-- **決定**: 機能差で差別化する。Standard = 観測系（キャプチャ・メモリ・検索・Notch UI・第1層読み取り統合・Dream Cycle・Morning Brief）、Pro = 実行系（エージェント実行・チャット・ドラフト・Memory API・Composio）。StandardはSelect KKキーのみで動作しBYOK不要、Proの推論はBYOK必須。
+- **決定**: 機能差で差別化する。Standard = 観測系（キャプチャ・メモリ・検索・Notch UI・第1層読み取り統合・Dream Cycle・Morning Brief）、Pro = 実行系（エージェント実行・チャット・ドラフト・Memory API・Composio）。StandardはSelect KKキーのみで動作しBYOK不要、Proの推論はユーザー資格情報を要する（**【2026-08-20 実装反映】** **サブスク委譲 または BYOK**。当初の「BYOK必須」から更新。Issue #110）。
 - **理由**: (1) プラン境界とキー境界（不変条件5）が完全一致し、実装・原価・説明が単純になる。(2) クォータ制は「使うほど罰される」体験になりプロダクト原則（実行 > 提案）と矛盾する。(3) BYOK必須層をProに限定することで、Standardのオンボーディングからキー取得の摩擦を排除できる。
 - **帰結**: Standardユーザーは実行系に触れない。FR-CF-05のロック表示（最大1件）でアップグレード動機を作るが、広告的体験にはしない。
 
