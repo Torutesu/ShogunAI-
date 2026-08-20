@@ -95,7 +95,38 @@ describe("cinematic onboarding", () => {
     mockNative("microphone");
     render(<Onboarding />);
     expect(await screen.findByRole("heading", { name: "Microphone" })).toBeTruthy();
-    expect(screen.queryByRole("heading", { name: "Make room for your work." })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Welcome to Shogun" })).toBeNull();
+  });
+
+  it("shows the Shogun sign-in placeholder, then advances after its processing state", async () => {
+    vi.useFakeTimers();
+    try {
+      const onPersist = vi.fn(async () => true);
+      render(<OnboardingExperience state={{ ...state("welcome"), step: "welcome" }} permissions={emptyPermissions} surfaceGeneration={1} onPersist={onPersist} onFinish={vi.fn(async () => true)} onToggleMusic={vi.fn(async () => true)} musicPending={false} />);
+
+      expect(screen.getByRole("heading", { name: "Welcome to Shogun" })).toBeTruthy();
+      expect(screen.queryByTestId("gate-frame")).toBeNull();
+      const signIn = screen.getByRole("button", { name: "Sign in via browser" });
+      fireEvent.click(signIn);
+      const processing = screen.getByRole("button", { name: "Signing you in…" });
+      expect(processing.getAttribute("data-processing")).toBe("true");
+      expect((processing as HTMLButtonElement).disabled).toBe(true);
+      expect(onPersist).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(900);
+      expect(onPersist).toHaveBeenCalledWith("accessibility");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("starts onboarding music unmuted and renders an icon-only sound control", () => {
+    render(<OnboardingExperience state={{ ...state("welcome"), step: "welcome" }} permissions={emptyPermissions} surfaceGeneration={1} onPersist={vi.fn(async () => true)} onFinish={vi.fn(async () => true)} onToggleMusic={vi.fn(async () => true)} musicPending={false} />);
+    const mute = screen.getByRole("button", { name: "Mute" });
+    expect(mute.getAttribute("aria-pressed")).toBe("false");
+    expect(mute.getAttribute("data-muted")).toBe("false");
+    expect(mute.querySelector(".onb-mute__icon")).toBeTruthy();
+    expect(mute.textContent).toBe("");
   });
 
   it("shows exactly current permission and persists only after native grant", async () => {
@@ -483,6 +514,7 @@ describe("cinematic onboarding", () => {
   it("keeps cinematic motion compositor-only and reduced motion opacity-only", () => {
     const css = readFileSync(resolve(process.cwd(), "src/onboarding/onboarding.css"), "utf8");
     const cinematicSource = readFileSync(resolve(process.cwd(), "src/onboarding/experience/CinematicSurface.tsx"), "utf8");
+    const experienceSource = readFileSync(resolve(process.cwd(), "src/onboarding/experience/OnboardingExperience.tsx"), "utf8");
     const keyframes = css.split("\n").filter((line) => line.startsWith("@keyframes")).join("\n");
     const reduced = css.split("\n").find((line) => line.startsWith("@media (prefers-reduced-motion: reduce)")) ?? "";
     const reducedFade = css.split("\n").find((line) => line.startsWith("@keyframes onb-reduced-current-fade")) ?? "";
@@ -510,6 +542,9 @@ describe("cinematic onboarding", () => {
     expect(cinematicSource).toContain("onb-cinematic__light--ember");
     expect(cinematicSource).toContain("onb-cinematic__light--glacier");
     expect(cinematicSource).not.toMatch(/Shotbase|wavesUrl|<Logo/);
+    expect(experienceSource).not.toMatch(/Shotbase/i);
+    expect(css).toMatch(/\.onb-signin__haze\s*\{[^}]*rgba\(195,95,60,\.18\)[^}]*rgba\(95,143,168,\.14\)/);
+    expect(css).toMatch(/\.onb-signin__button\[data-processing="true"\]\s*\{[^}]*background:\s*#aaa6a3/);
     expect(css).not.toMatch(/onb-(?:button|mute|drag)[^}]*min-height:\s*(?:3[0-9]|4[0-3])px/);
     expect(keyframes).not.toMatch(/\b(width|height|top|right|bottom|left|margin|padding)\s*:/i);
     expect(reduced).toContain("onb-reduced-current-fade 200ms linear both");
@@ -540,8 +575,8 @@ describe("cinematic onboarding", () => {
   });
 
   it.each([
-    ["intro", "Make room for your work."],
-    ["welcome", "Make room for your work."],
+    ["intro", "Welcome to Shogun"],
+    ["welcome", "Welcome to Shogun"],
     ["reads", "What it reads, and what it never keeps."],
     ["privacy", "What it reads, and what it never keeps."],
     ["accessibility", "Accessibility"],
@@ -558,6 +593,6 @@ describe("cinematic onboarding", () => {
     mockNative(step);
     render(<Onboarding />);
     expect(await screen.findByRole("heading", { name: heading })).toBeTruthy();
-    if (heading !== "Make room for your work.") expect(screen.queryByRole("heading", { name: "Make room for your work." })).toBeNull();
+    if (heading !== "Welcome to Shogun") expect(screen.queryByRole("heading", { name: "Welcome to Shogun" })).toBeNull();
   });
 });

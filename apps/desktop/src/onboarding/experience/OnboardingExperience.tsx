@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { JSX } from "react";
 import { t } from "../../strings";
+import { Logo } from "../../Logo";
 import type { OnboardingState, PermissionSnapshot } from "../ipc";
 import { ConnectStage, PlanStage, PrivacyStage } from "./FlowParity";
 import { GateFrame } from "./GateFrame";
@@ -45,11 +46,18 @@ export function OnboardingExperience(props: {
     const fallback = window.setTimeout(finishOnce, 7000);
     return () => window.clearTimeout(fallback);
   }, [finishOnce, gatePlaying]);
+  if (step === "welcome") {
+    return (
+      <main className="onb-shell onb-shell--welcome" data-step={step}>
+        <Welcome onContinue={() => onPersist("accessibility")} />
+        <div className="onb-floating-mute"><MuteButton muted={state.music_muted} disabled={musicPending} onToggle={onToggleMusic} /></div>
+      </main>
+    );
+  }
   return (
     <main className="onb-shell" data-step={step}>
       <div className="onb-layout">
         <div className="onb-copy" key={step}>
-          {step === "welcome" ? <Welcome onContinue={() => onPersist("accessibility")} /> : null}
           {step === "privacy" ? <PrivacyStage onContinue={() => onPersist("plan")} /> : null}
           {step === "accessibility" || step === "microphone" || step === "screen_recording" ? (
             <PermissionStage kind={step} permissions={permissions} state={state} onPersist={onPersist} />
@@ -81,5 +89,34 @@ function routeStep(step: OnboardingState["step"], p: PermissionSnapshot): "welco
 }
 
 function Welcome({ onContinue }: { onContinue: () => Promise<boolean> }): JSX.Element {
-  return <section className="onb-stage"><p className="onb-eyebrow">{t.onboarding.welcomeStep}</p><h1>{t.onboarding.welcomeTitle}</h1><p className="onb-lead">{t.onboarding.welcomeLead}</p><button className="onb-button onb-button--primary" type="button" onClick={() => void onContinue()}>{t.onboarding.continue}</button></section>;
+  const [signingIn, setSigningIn] = useState(false);
+  const timer = useRef<number | null>(null);
+  useEffect(() => () => {
+    if (timer.current !== null) window.clearTimeout(timer.current);
+  }, []);
+  const signIn = (): void => {
+    if (signingIn) return;
+    setSigningIn(true);
+    timer.current = window.setTimeout(() => {
+      timer.current = null;
+      void onContinue().then((saved) => {
+        if (!saved) setSigningIn(false);
+      });
+    }, 900);
+  };
+  return (
+    <section className="onb-signin" data-testid="signin-welcome">
+      <div className="onb-signin__haze" aria-hidden="true" />
+      <div className="onb-signin__content">
+        <Logo size={94} className="onb-signin__mark" />
+        <h1>{t.onboarding.signInTitle}</h1>
+        <p>{t.onboarding.signInLead}</p>
+        <button className="onb-signin__button" type="button" disabled={signingIn} data-processing={signingIn} aria-busy={signingIn} onClick={signIn}>
+          {signingIn ? <span className="onb-signin__spinner" aria-hidden="true" /> : null}
+          <span className="onb-signin__label">{signingIn ? t.onboarding.signingIn : t.onboarding.signInBrowser}</span>
+          {!signingIn ? <span className="onb-signin__external" aria-hidden="true">↗</span> : null}
+        </button>
+      </div>
+    </section>
+  );
 }

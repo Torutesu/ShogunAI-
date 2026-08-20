@@ -15,6 +15,7 @@ const INTERACTIVE_EDGE_INSET: f64 = 16.0;
 const INTERACTIVE_REVEAL_SCALE: f64 = 0.94;
 const INTERACTIVE_REVEAL_DURATION: Duration = Duration::from_millis(460);
 const INTERACTIVE_REDUCED_REVEAL_DURATION: Duration = Duration::from_millis(200);
+const INTERACTIVE_HIDDEN_WINDOW_BUTTONS: [isize; 3] = [1, 2, 7];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -464,7 +465,7 @@ pub mod mac {
         notch_order_for_suppression, replace_generation_music, surface_close_should_cleanup,
         window_policy, DisplaySnapshot, ExternalPermissionKind, ExternalPermissionWindowOps,
         InteractiveReveal, NotchOrder, OnboardingSurface, OnboardingSurfaceKind, WindowLevelPolicy,
-        WindowSessionModel, INTRO_DURATION,
+        WindowSessionModel, INTERACTIVE_HIDDEN_WINDOW_BUTTONS, INTRO_DURATION,
     };
     use crate::geometry::Point;
 
@@ -892,6 +893,16 @@ pub mod mac {
             let _: () = msg_send![ptr, setHidesOnDeactivate: false];
             let _: () = msg_send![ptr, setTitleVisibility: 1isize];
             let _: () = msg_send![ptr, setTitlebarAppearsTransparent: true];
+            let close_button: *mut AnyObject = msg_send![ptr, standardWindowButton: 0isize];
+            if !close_button.is_null() {
+                let _: () = msg_send![close_button, setHidden: false];
+            }
+            for button_kind in INTERACTIVE_HIDDEN_WINDOW_BUTTONS {
+                let button: *mut AnyObject = msg_send![ptr, standardWindowButton: button_kind];
+                if !button.is_null() {
+                    let _: () = msg_send![button, setHidden: true];
+                }
+            }
         }
         Ok(())
     }
@@ -1884,6 +1895,12 @@ mod tests {
                 },
             )
         );
+    }
+
+    #[test]
+    fn interactive_window_keeps_only_the_native_close_traffic_light() {
+        assert_eq!(INTERACTIVE_HIDDEN_WINDOW_BUTTONS, [1, 2, 7]);
+        assert!(!INTERACTIVE_HIDDEN_WINDOW_BUTTONS.contains(&0));
     }
 
     #[test]
