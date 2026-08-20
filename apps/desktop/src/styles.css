@@ -2422,8 +2422,9 @@ kbd {
 }
 
 /* Voice input source — hardware deserves more presence than a 34px text field. The accent rail
-   and microphone glyph make the selected capture path legible without inventing custom select
-   behavior; the native control still owns keyboard navigation and the options menu. */
+   and microphone glyph make the selected capture path legible at a glance. The trigger is a
+   button, not a <select>: the options live in a portalled modal dialog below, which owns its own
+   focus trap and keyboard handling (see VoiceSection in App.tsx). */
 .mic-picker {
   position: relative;
   margin-top: 13px;
@@ -2479,7 +2480,7 @@ kbd {
   border-color: color-mix(in srgb, var(--accent) 50%, var(--line-strong));
   background: color-mix(in srgb, var(--accent) 7%, transparent);
 }
-.mic-picker__control:focus-within {
+.mic-picker__control:focus-visible {
   border-color: var(--accent);
   box-shadow: 0 0 0 1px var(--accent-soft);
   background: color-mix(in srgb, var(--accent) 8%, transparent);
@@ -2568,9 +2569,11 @@ kbd {
   cursor: pointer;
   transition: background var(--set-motion, 160ms), color var(--set-motion, 160ms);
 }
-.mic-picker__close:hover,
+.mic-picker__close:hover {
+  background: color-mix(in srgb, var(--ink) 9%, transparent);
+  color: var(--ink);
+}
 .mic-picker__close:focus-visible {
-  outline: 0;
   background: color-mix(in srgb, var(--ink) 9%, transparent);
   color: var(--ink);
 }
@@ -2597,10 +2600,12 @@ kbd {
   cursor: pointer;
   transition: background var(--set-motion, 160ms), color var(--set-motion, 160ms);
 }
-.mic-picker__option:hover,
-.mic-picker__option:focus-visible {
-  outline: 0;
+.mic-picker__option:hover {
   background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.mic-picker__option:focus-visible {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  outline-offset: -2px;
 }
 .mic-picker__option.is-selected {
   background: color-mix(in srgb, var(--accent) 8%, transparent);

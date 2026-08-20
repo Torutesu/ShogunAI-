@@ -2813,10 +2813,12 @@ export function VoiceSection(): JSX.Element {
   const [microphone, setMicrophone] = useState<string | null>(null);
   const [microphones, setMicrophones] = useState<string[]>([]);
   const [microphonesLoading, setMicrophonesLoading] = useState(false);
+  // Distinguishes "not enumerated yet / enumeration failed" from "enumerated, device absent".
+  // Without it a working microphone reads as disconnected while the list is still in flight.
+  const [microphonesLoaded, setMicrophonesLoaded] = useState(false);
   const [microphoneBusy, setMicrophoneBusy] = useState(false);
   const [microphoneError, setMicrophoneError] = useState("");
   const [microphoneOpen, setMicrophoneOpen] = useState(false);
-  const microphonePickerRef = useRef<HTMLDivElement>(null);
   const microphoneModalRef = useRef<HTMLDivElement>(null);
   const [edit, setEdit] = useState({ model: "openai/gpt-oss-120b", has_key: false });
   const [editKeyInput, setEditKeyInput] = useState("");
@@ -2828,7 +2830,10 @@ export function VoiceSection(): JSX.Element {
     setMicrophonesLoading(true);
     setMicrophoneError("");
     void invoke<string[]>("get_voice_microphones")
-      .then(setMicrophones)
+      .then((list) => {
+        setMicrophones(list);
+        setMicrophonesLoaded(true);
+      })
       .catch(() => setMicrophoneError(t.voiceMicrophoneUnavailable))
       .finally(() => setMicrophonesLoading(false));
   }, []);
@@ -2847,25 +2852,46 @@ export function VoiceSection(): JSX.Element {
       .catch(() => undefined);
   }, [loadMicrophones]);
 
+  // `aria-modal` tells assistive tech to ignore everything outside the dialog, so focus has to
+  // move in on open, stay inside while it is up, and return to the trigger on close — otherwise
+  // the user is parked on a node their screen reader has just been told to skip. The portal also
+  // renders at the end of <body>, so without the trap Tab would walk the whole settings page.
   useEffect(() => {
     if (!microphoneOpen) return;
-    const onPointerDown = (event: PointerEvent): void => {
-      const target = event.target as Node;
-      if (
-        !microphonePickerRef.current?.contains(target)
-        && !microphoneModalRef.current?.contains(target)
-      ) setMicrophoneOpen(false);
-    };
+    const dialog = microphoneModalRef.current;
+    const trigger = document.activeElement as HTMLElement | null;
+    const focusable = (): HTMLElement[] =>
+      Array.from(dialog?.querySelectorAll<HTMLElement>("button:not([disabled])") ?? []);
+    const selected = dialog?.querySelector<HTMLElement>(".mic-picker__option.is-selected");
+    (selected ?? focusable()[0])?.focus();
+
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === "Escape") setMicrophoneOpen(false);
+      if (event.key === "Escape") {
+        setMicrophoneOpen(false);
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const items = focusable();
+      if (!items.length) return;
+      const edge = event.shiftKey ? items[0] : items[items.length - 1];
+      const wrapTo = event.shiftKey ? items[items.length - 1] : items[0];
+      const active = document.activeElement;
+      if (active === edge || !dialog?.contains(active)) {
+        event.preventDefault();
+        wrapTo.focus();
+      }
     };
-    document.addEventListener("pointerdown", onPointerDown);
     window.addEventListener("keydown", onKeyDown);
     return () => {
-      document.removeEventListener("pointerdown", onPointerDown);
       window.removeEventListener("keydown", onKeyDown);
+      trigger?.focus();
     };
   }, [microphoneOpen]);
+
+  // Only claim a device is gone once enumeration has actually succeeded. A pending or failed
+  // list is not evidence that the user's microphone is unplugged.
+  const microphoneMissing =
+    microphonesLoaded && microphone !== null && !microphones.includes(microphone);
 
   const toggle = (next: boolean): void => {
     if (!IN_TAURI) {
@@ -2889,7 +2915,8 @@ export function VoiceSection(): JSX.Element {
     void invoke("set_voice_microphone", { microphone: selected })
       .catch((error: unknown) => {
         setMicrophone(previous);
-        setMicrophoneError(String(error));
+        setMicrophoneError(t.voiceMicrophoneSaveFailed);
+        console.error("[voice] microphone selection failed", error);
       })
       .finally(() => setMicrophoneBusy(false));
   };
@@ -2942,7 +2969,7 @@ export function VoiceSection(): JSX.Element {
           {t.voiceOn}
         </button>
       </div>
-      <div className="mic-picker" ref={microphonePickerRef}>
+      <div className="mic-picker">
         <div className="mic-picker__head">
           <label className="set__sublabel" htmlFor="voice-microphone">{t.voiceMicrophone}</label>
           <button
@@ -2973,7 +3000,7 @@ export function VoiceSection(): JSX.Element {
             </svg>
           </span>
           <span className="mic-picker__value">
-            {microphone && !microphones.includes(microphone)
+            {microphoneMissing && microphone
               ? t.voiceMicrophoneDisconnected(microphone)
               : microphone ?? t.voiceMicrophoneDefault}
           </span>
@@ -2984,7 +3011,15 @@ export function VoiceSection(): JSX.Element {
           </span>
         </button>
         {microphoneOpen ? createPortal(
-          <div className="mic-picker__backdrop">
+          <div
+            className="mic-picker__backdrop"
+            onClick={(event) => {
+              // Press and release must both land on the backdrop. Closing on pointerdown would
+              // remove it before the click resolved, letting that click through to whatever
+              // control sits underneath — the voice On/Off toggle, in this panel.
+              if (event.target === event.currentTarget) setMicrophoneOpen(false);
+            }}
+          >
             <div
               id="voice-microphone-popover"
               ref={microphoneModalRef}
@@ -3023,7 +3058,7 @@ export function VoiceSection(): JSX.Element {
                   <small>{t.voiceMicrophoneDefaultHint}</small>
                 </span>
               </button>
-              {microphone && !microphones.includes(microphone) ? (
+              {microphoneMissing && microphone ? (
                 <button
                   className="mic-picker__option is-selected is-unavailable"
                   type="button"
@@ -3036,9 +3071,9 @@ export function VoiceSection(): JSX.Element {
                   </span>
                 </button>
               ) : null}
-              {microphones.map((name) => (
+              {microphones.map((name, index) => (
                 <button
-                  key={name}
+                  key={`${name}:${index}`}
                   className={`mic-picker__option${microphone === name ? " is-selected" : ""}`}
                   type="button"
                   onClick={() => {

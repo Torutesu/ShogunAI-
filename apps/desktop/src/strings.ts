@@ -310,6 +310,7 @@ export const STRINGS = {
     voiceMicrophoneHint:
       "Used for your next dictation. If this microphone disconnects, dictation stops instead of switching inputs.",
     voiceMicrophoneUnavailable: "Couldn't load microphones.",
+    voiceMicrophoneSaveFailed: "Couldn't save that microphone. Keeping the previous input.",
     voiceEditModel: "Dictation cleanup",
     voiceEditModelHint:
       "When connected, dictation text is sent to Groq for process-only formatting. If it is unavailable or rejected, ShogunAI inserts the raw transcript.",

@@ -1308,7 +1308,10 @@ pub mod mac {
             .unwrap_or_default()
     }
 
-    #[tauri::command]
+    /// Enumerate selectable inputs off the main thread: CoreAudio walks every device and queries
+    /// each name, which is unbounded and can stall while a device is mid-(dis)connect. The rest of
+    /// this lane keeps mic work off the UI thread for the same reason (`request_microphone_access_bg`).
+    #[tauri::command(async)]
     pub fn get_voice_microphones() -> Result<Vec<String>, String> {
         shogun_core::audio::capture::mic::input_device_names()
     }
