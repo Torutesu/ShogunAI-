@@ -25,7 +25,7 @@ export function Hero({ t, participantCount }: { t: Dictionary; participantCount:
       <div aria-hidden="true" className="hero-overlay absolute inset-0 -z-20" />
       <div aria-hidden="true" className="hero-grid pointer-events-none absolute inset-0 -z-10" />
 
-      <div className="hero-layout container-x py-8 sm:py-10 lg:pb-4 lg:pt-12">
+      <div className="hero-layout container-x py-6 sm:py-7 lg:pb-4 lg:pt-6">
         <div className="grid min-h-0 items-center gap-x-10 gap-y-3 lg:grid-cols-[minmax(0,0.96fr)_minmax(460px,0.82fr)] lg:gap-y-0">
           <div className="order-1 max-w-[670px] text-center lg:text-left">
           <div>
