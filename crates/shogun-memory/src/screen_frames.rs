@@ -320,7 +320,9 @@ pub fn search_for_recall(
 }
 
 fn recall_hit_from_summary(s: &FrameSummary, excerpt_chars: usize) -> FrameRecallHit {
-    let needs_rescan = s.ocr_text.trim().len() < THIN_OCR_CHARS;
+    // Characters, not bytes: 34 chars of Japanese OCR is ~102 UTF-8 bytes, and a byte count
+    // would skip the Vision re-scan exactly where OCR is weakest (CJK screens).
+    let needs_rescan = s.ocr_text.trim().chars().count() < THIN_OCR_CHARS;
     FrameRecallHit {
         frame_id: s.id,
         event_id: s.event_id,
