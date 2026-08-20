@@ -288,8 +288,8 @@ fn budget_lessons(lessons: &[LessonInput]) -> Vec<String> {
 }
 
 /// The generic, always-available actions (FR-CF-04): Save note / Search memory / Extract tasks.
-/// All are device-local (L1), so the fallback panel can never contain a send. The memory search is
-/// seeded from the screen so it is one tap from useful even with no state.
+/// All are device-local (L1/L2), so the fallback panel can never contain a send. The memory
+/// search is seeded from the screen so it is one tap from useful even with no state.
 fn generic_actions(screen: &ScreenContext) -> Vec<ActionCandidate> {
     // Seed the search with the most salient term, else the window title (both device-local).
     let query =
@@ -349,7 +349,7 @@ mod tests {
 
     #[test]
     fn candidates_are_tagged_with_their_permission_level() {
-        // A reply-needed loop → DraftReply (send, L3 — leads via the reply bonus) + SaveDraft (L1).
+        // A reply-needed loop → DraftReply (send, L3 — leads via the reply bonus) + SaveDraft (L2).
         let states = vec![StateCandidate {
             kind: StateKind::OpenLoopReplyNeeded,
             summary: "reply to Dave".into(),
@@ -361,7 +361,8 @@ mod tests {
         assert_eq!(cache.actions.len(), 2);
         assert_eq!(cache.actions[0].level, Level::L3);
         assert_eq!(cache.actions[0].action, Action::Send(SendAction::SendEmail { to: "Dave".into() }));
-        assert_eq!(cache.actions[1].level, Level::L1);
+        // SaveDraft persists a note row → L2 (one-tap confirm), like every persisted write.
+        assert_eq!(cache.actions[1].level, Level::L2);
         assert_eq!(cache.actions[1].action, Action::Local(LocalAction::SaveDraft { target: "reply" }));
         // The only send Fusion produces carries the approval-required level (invariant 4).
         assert!(cache.actions[0].action.is_external_send());
@@ -546,9 +547,10 @@ mod tests {
         assert!(!cache.actions.is_empty(), "the panel must never be empty (FR-CF-04)");
         let rationales: Vec<&str> = cache.actions.iter().map(|a| a.rationale.as_str()).collect();
         assert_eq!(rationales, vec!["Save a note", "Search memory", "Extract tasks"]);
-        // every fallback is device-local — never a send.
+        // every fallback is device-local — never a send. Drafts (persisted writes) are L2;
+        // the search is L1.
         assert!(cache.actions.iter().all(|a| !a.action.is_external_send()));
-        assert!(cache.actions.iter().all(|a| a.level == Level::L1));
+        assert!(cache.actions.iter().all(|a| a.level != Level::L3));
         // the memory search is seeded from the screen's salient term.
         assert!(cache
             .actions
@@ -660,6 +662,6 @@ mod tests {
         let fallback_without = assemble(screen(), &[], "", &Intent::default(), &[]);
         let fallback_with = assemble(screen(), &[], "", &Intent::default(), &hostile);
         assert_eq!(fallback_without.actions, fallback_with.actions);
-        assert!(fallback_with.actions.iter().all(|a| a.level == Level::L1));
+        assert!(fallback_with.actions.iter().all(|a| a.level != Level::L3));
     }
 }
