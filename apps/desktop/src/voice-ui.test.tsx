@@ -90,14 +90,13 @@ describe("dictation cleanup settings", () => {
 
     render(<VoiceSection />);
     fireEvent.change(screen.getByPlaceholderText("Correct spelling"), { target: { value: "ShogunAI" } });
-    fireEvent.change(screen.getByPlaceholderText(/Misheard forms/), { target: { value: "show gun ai, shogun ai" } });
     fireEvent.click(screen.getByRole("button", { name: "Add term" }));
 
     await waitFor(() => {
       expect(vi.mocked(invoke)).toHaveBeenCalledWith("create_voice_dictionary_term", {
         term: {
           canonical: "ShogunAI",
-          aliases: ["show gun ai", "shogun ai"],
+          aliases: [],
           locale: null,
           scope: "global",
           scope_ref: null,
@@ -241,6 +240,7 @@ describe("dictation cleanup settings", () => {
 
     render(<VoiceSection />);
     fireEvent.change(screen.getByPlaceholderText("Correct spelling"), { target: { value: "Figma" } });
+    fireEvent.click(screen.getByText("Language, app, and priority"));
     fireEvent.change(screen.getByLabelText("Language"), { target: { value: "en-US" } });
     fireEvent.change(screen.getByLabelText("Applies in"), { target: { value: "bundle" } });
     fireEvent.change(screen.getByLabelText("Scope identifier"), { target: { value: "com.figma.Desktop" } });

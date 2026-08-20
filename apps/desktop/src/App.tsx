@@ -2817,7 +2817,6 @@ export function VoiceSection(): JSX.Element {
   const [editMsg, setEditMsg] = useState("");
   const [terms, setTerms] = useState<VoiceDictionaryTerm[]>([]);
   const [termInput, setTermInput] = useState("");
-  const [aliasInput, setAliasInput] = useState("");
   const [termLocale, setTermLocale] = useState("");
   const [termScope, setTermScope] = useState<VoiceDictionaryTerm["scope"]>("global");
   const [termScopeRef, setTermScopeRef] = useState("");
@@ -2909,7 +2908,6 @@ export function VoiceSection(): JSX.Element {
 
   const resetTermEditor = (): void => {
     setTermInput("");
-    setAliasInput("");
     setTermLocale("");
     setTermScope("global");
     setTermScopeRef("");
@@ -2921,10 +2919,9 @@ export function VoiceSection(): JSX.Element {
   const saveTerm = (): void => {
     const canonical = termInput.trim();
     if (!canonical || termsBusy) return;
-    const aliases = aliasInput
-      .split(",")
-      .map((alias) => alias.trim())
-      .filter(Boolean);
+    const aliases = editingTerm
+      ? editingTerm.aliases.filter((alias) => alias !== editingTerm.canonical)
+      : [];
     const priority = Number.parseInt(termPriority, 10);
     if (!Number.isSafeInteger(priority)) {
       setTermsMsg(t.voiceVocabularyPriorityInvalid);
@@ -2966,7 +2963,6 @@ export function VoiceSection(): JSX.Element {
     if (termsBusy) return;
     setEditingTerm(term);
     setTermInput(term.canonical);
-    setAliasInput(term.aliases.filter((alias) => alias !== term.canonical).join(", "));
     setTermLocale(term.locale ?? "");
     setTermScope(term.scope);
     setTermScopeRef(term.scope_ref ?? "");
@@ -3071,7 +3067,7 @@ export function VoiceSection(): JSX.Element {
         <p className="set__hint set__hint--quiet">
           {sharePersonalVocabulary ? t.voiceVocabularyEgressOn : t.voiceVocabularyEgressOff}
         </p>
-        <label className="set__hint" style={{ display: "flex", gap: 6, alignItems: "center" }}>
+        <label className="voice-vocab__consent">
           <input
             type="checkbox"
             checked={sharePersonalVocabulary}
@@ -3118,101 +3114,100 @@ export function VoiceSection(): JSX.Element {
           <p className="set__hint set__hint--quiet">{t.voiceVocabularyEmpty}</p>
         )}
         <div className="voice-vocab__form">
-          <input
-            className="keyrow__input"
-            type="text"
-            placeholder={t.voiceVocabularyPlaceholder}
-            value={termInput}
-            autoComplete="off"
-            onChange={(event) => {
-              setTermInput(event.target.value);
-              setTermsMsg("");
-            }}
-            onKeyDown={(event) => {
-              if (event.key !== "Enter") return;
-              event.preventDefault();
-              saveTerm();
-            }}
-          />
-          <input
-            className="keyrow__input"
-            type="text"
-            placeholder={t.voiceVocabularyAliasesPlaceholder}
-            value={aliasInput}
-            autoComplete="off"
-            onChange={(event) => {
-              setAliasInput(event.target.value);
-              setTermsMsg("");
-            }}
-            onKeyDown={(event) => {
-              if (event.key !== "Enter") return;
-              event.preventDefault();
-              saveTerm();
-            }}
-          />
-          <input
-            className="keyrow__input"
-            type="text"
-            aria-label={t.voiceVocabularyLocale}
-            placeholder={t.voiceVocabularyLocalePlaceholder}
-            value={termLocale}
-            autoComplete="off"
-            onChange={(event) => {
-              setTermLocale(event.target.value);
-              setTermsMsg("");
-            }}
-          />
-          <label className="set__hint">
-            {t.voiceVocabularyScope}
-            <select
-              aria-label={t.voiceVocabularyScope}
-              value={termScope}
-              disabled={termsBusy}
-              onChange={(event) => {
-                setTermScope(event.target.value as VoiceDictionaryTerm["scope"]);
-                setTermsMsg("");
-              }}
-            >
-              <option value="global">{t.voiceVocabularyScopeGlobal}</option>
-              <option value="bundle">{t.voiceVocabularyScopeBundle}</option>
-              <option value="surface">{t.voiceVocabularyScopeSurface}</option>
-            </select>
-          </label>
-          {termScope !== "global" ? (
+          <label className="voice-vocab__field">
+            <span>{t.voiceVocabularyTermLabel}</span>
             <input
               className="keyrow__input"
               type="text"
-              aria-label={t.voiceVocabularyScopeRef}
-              placeholder={t.voiceVocabularyScopeRefPlaceholder}
-              value={termScopeRef}
+              placeholder={t.voiceVocabularyPlaceholder}
+              value={termInput}
               autoComplete="off"
               onChange={(event) => {
-                setTermScopeRef(event.target.value);
+                setTermInput(event.target.value);
                 setTermsMsg("");
               }}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter") return;
+                event.preventDefault();
+                saveTerm();
+              }}
             />
-          ) : null}
-          <input
-            className="keyrow__input"
-            type="number"
-            aria-label={t.voiceVocabularyPriority}
-            placeholder={t.voiceVocabularyPriority}
-            value={termPriority}
-            step="1"
-            onChange={(event) => {
-              setTermPriority(event.target.value);
-              setTermsMsg("");
-            }}
-          />
-          <label className="set__hint">
-            <input
-              type="checkbox"
-              checked={termEnabled}
-              disabled={termsBusy}
-              onChange={(event) => setTermEnabled(event.target.checked)}
-            />
-            {t.voiceVocabularyEnabled}
           </label>
+          <details className="voice-vocab__advanced">
+            <summary>{t.voiceVocabularyAdvanced}</summary>
+            <div className="voice-vocab__advanced-grid">
+              <label className="voice-vocab__field">
+                <span>{t.voiceVocabularyLocale}</span>
+                <input
+                  className="keyrow__input"
+                  type="text"
+                  placeholder={t.voiceVocabularyLocalePlaceholder}
+                  value={termLocale}
+                  autoComplete="off"
+                  onChange={(event) => {
+                    setTermLocale(event.target.value);
+                    setTermsMsg("");
+                  }}
+                />
+              </label>
+              <label className="voice-vocab__field">
+                <span>{t.voiceVocabularyScope}</span>
+                <select
+                  aria-label={t.voiceVocabularyScope}
+                  value={termScope}
+                  disabled={termsBusy}
+                  onChange={(event) => {
+                    setTermScope(event.target.value as VoiceDictionaryTerm["scope"]);
+                    setTermsMsg("");
+                  }}
+                >
+                  <option value="global">{t.voiceVocabularyScopeGlobal}</option>
+                  <option value="bundle">{t.voiceVocabularyScopeBundle}</option>
+                  <option value="surface">{t.voiceVocabularyScopeSurface}</option>
+                </select>
+              </label>
+              {termScope !== "global" ? (
+                <label className="voice-vocab__field voice-vocab__field--wide">
+                  <span>{t.voiceVocabularyScopeRef}</span>
+                  <input
+                    className="keyrow__input"
+                    type="text"
+                    placeholder={t.voiceVocabularyScopeRefPlaceholder}
+                    value={termScopeRef}
+                    autoComplete="off"
+                    onChange={(event) => {
+                      setTermScopeRef(event.target.value);
+                      setTermsMsg("");
+                    }}
+                  />
+                </label>
+              ) : null}
+              <label className="voice-vocab__field">
+                <span>{t.voiceVocabularyPriority}</span>
+                <input
+                  className="keyrow__input"
+                  type="number"
+                  aria-label={t.voiceVocabularyPriority}
+                  value={termPriority}
+                  step="1"
+                  onChange={(event) => {
+                    setTermPriority(event.target.value);
+                    setTermsMsg("");
+                  }}
+                />
+              </label>
+              <label className="voice-vocab__enabled">
+                <input
+                  type="checkbox"
+                  checked={termEnabled}
+                  disabled={termsBusy}
+                  onChange={(event) => setTermEnabled(event.target.checked)}
+                />
+                {t.voiceVocabularyEnabled}
+              </label>
+            </div>
+          </details>
+          <div className="voice-vocab__actions">
           <button
             className="keyrow__btn keyrow__btn--go"
             type="button"
@@ -3226,6 +3221,7 @@ export function VoiceSection(): JSX.Element {
               {t.voiceVocabularyCancel}
             </button>
           ) : null}
+          </div>
         </div>
       </div>
     </section>

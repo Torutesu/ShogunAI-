@@ -316,6 +316,8 @@ export const STRINGS = {
     voiceVocabularyEgressConsent:
       "I allow SHOGUN to send eligible personal vocabulary terms to my speech provider as recognition hints.",
     voiceVocabularyEgressSaveError: "Couldn’t save vocabulary sharing. Your choice was not changed.",
+    voiceVocabularyTermLabel: "Use this spelling",
+    voiceVocabularyAdvanced: "Language, app, and priority",
     voiceVocabularyPlaceholder: "Correct spelling",
     voiceVocabularyAliasesPlaceholder: "Misheard forms, separated by commas (optional)",
     voiceVocabularyLocale: "Language",
