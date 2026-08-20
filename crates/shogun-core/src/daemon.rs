@@ -22,6 +22,7 @@ use shogun_fusion::brief::{assemble_brief, assemble_degraded, CalendarLine, Comm
 use shogun_fusion::assemble::ActionCandidate;
 use shogun_fusion::block::{BlockRef, ContextBlock, ScoreInputs, SourceKind};
 use shogun_fusion::budget::TokenEstimator;
+use shogun_fusion::score::source_rank;
 
 use crate::capture::dedup::{decide_hash, Recent};
 use crate::memory_health::{FaultClass, MemoryFault, MemoryResult};
@@ -804,10 +805,12 @@ impl Db {
     /// (FR-CAP-03): re-syncing the same item touches `last_seen_at` rather than duplicating it.
     ///
     /// On a **new** insert (not a dedup-touch) the first-stage local-rule extraction (WP2.7) runs
-    /// over the item body, so a commitment or open-loop stated in an email/message flows into the
-    /// state tables just as one captured on screen does — each candidate is low-confidence
-    /// (≤ [`shogun_memory::extract::LOCAL_RULE_MAX_CONFIDENCE`]) and linked to the ingested event
-    /// (FR-ST-02). Extraction is skipped on a touch so a re-sync never multiplies candidates.
+    /// over **prose** bodies (mail, chat, docs), so a commitment stated in an email flows into the
+    /// state tables at low confidence (≤ [`shogun_memory::extract::LOCAL_RULE_MAX_CONFIDENCE`])
+    /// linked to the ingested event (FR-ST-02). Structured-fact sources (calendar, issue #35)
+    /// skip that pass: the event itself is the fact, searchable as [`SourceKind::Structured`],
+    /// not a speech-act to guess at 0.4. Extraction is skipped on a touch so a re-sync never
+    /// multiplies candidates.
     ///
     /// The caller ([`crate::service_gate`]) has already authorized the sync; this method only
     /// persists. On completion, a batch that inserted ≥ 1 **new** item publishes
@@ -855,13 +858,21 @@ impl Db {
                     Some((_, n)) => *n += 1,
                     None => synced.push((it.source, 1)),
                 }
-                // A newly-ingested item is extracted for commitments / open loops, linked to it.
-                let candidates = shogun_memory::extract::extract_untrusted(&it.body);
-                if !candidates.is_empty() {
-                    let ids =
-                        shogun_memory::extract::persist_candidates(&mut guard, id, &candidates, it.ts_ms, now)
-                            .unwrap_or_default();
-                    summary.candidates += ids.len();
+                // Prose sources only. Calendar rows are structured facts — do not run the
+                // speech-act heuristic over the description (issue #35).
+                if extracts_untrusted_body(it.source) {
+                    let candidates = shogun_memory::extract::extract_untrusted(&it.body);
+                    if !candidates.is_empty() {
+                        let ids = shogun_memory::extract::persist_candidates(
+                            &mut guard,
+                            id,
+                            &candidates,
+                            it.ts_ms,
+                            now,
+                        )
+                        .unwrap_or_default();
+                        summary.candidates += ids.len();
+                    }
                 }
             }
             drop(guard);
@@ -1528,6 +1539,10 @@ impl Db {
         ranked.sort_by(|a, b| {
             b.0.partial_cmp(&a.0)
                 .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| {
+                    source_rank(source_kind_for_event_source(&b.1.source))
+                        .cmp(&source_rank(source_kind_for_event_source(&a.1.source)))
+                })
                 .then(b.1.ts.cmp(&a.1.ts))
         });
         let evidence = ranked
@@ -3104,21 +3119,36 @@ fn screen_relevance(screen: &shogun_fusion::assemble::ScreenContext, subject: &s
     }
 }
 
-/// 検索 evidence を圧縮ブロックへ正規化する。evidence は「実際に見たもの」なので
-/// confidence=1.0、relevance は呼び出し側が渡す検索スコア由来の値。
+/// 検索 evidence を圧縮ブロックへ正規化する。relevance は呼び出し側が渡す検索スコア由来。
+/// Source kind follows issue #35: calendar rows are structured facts; AX / mail / OCR stay
+/// evidence (untrusted prose), even when they arrived through MCP.
 fn evidence_to_blocks(evidence: &[Evidence], relevance: f64, est: &dyn TokenEstimator) -> Vec<ContextBlock> {
     evidence
         .iter()
         .map(|e| {
             ContextBlock::new(
                 BlockRef::Event(e.event_id),
-                SourceKind::Evidence,
+                source_kind_for_event_source(&e.source),
                 e.excerpt.clone(),
                 ScoreInputs { relevance, ..EVIDENCE_SCORE },
                 est,
             )
         })
         .collect()
+}
+
+/// Map an `event_log.source` tag onto Fusion's trust rank. Unknown / capture / mail → Evidence.
+fn source_kind_for_event_source(source: &str) -> SourceKind {
+    match shogun_mcp::scope::from_source(source) {
+        Some(svc) if svc.is_structured_fact() => SourceKind::Structured,
+        _ => SourceKind::Evidence,
+    }
+}
+
+/// Local-rule extraction is for speech-act prose (mail, chat, docs, AX). Structured-fact
+/// sources skip it so a calendar description cannot become a 0.4 "possibly" commitment.
+fn extracts_untrusted_body(source: &str) -> bool {
+    !matches!(shogun_mcp::scope::from_source(source), Some(svc) if svc.is_structured_fact())
 }
 
 /// confidence ゲートを通した facts を圧縮ブロックへ正規化する。facts は既に
@@ -4311,6 +4341,30 @@ mod tests {
     }
 
     #[test]
+    fn ingested_calendar_event_is_searchable_and_does_not_extract_speech_acts() {
+        use shogun_mcp::sync::IngestItem;
+        let db = Db::open_in_memory(clock(1)).unwrap();
+        // A calendar description can contain "I'll send…" — that is not a user promise. Issue #35:
+        // structured facts skip the untrusted extractor.
+        let items = vec![IngestItem {
+            source: "gcal",
+            kind: "calendar_event",
+            title: "Standup".into(),
+            body: "Daily standup. I'll send the deck after.".into(),
+            ts_ms: 100,
+        }];
+        let summary = db.ingest_integration(&items);
+        assert_eq!(summary.newly_inserted, 1);
+        assert_eq!(summary.candidates, 0, "calendar descriptions are not speech-act extract");
+        assert!(
+            db.commitments_due(1_000).is_empty(),
+            "a calendar row must not become a possibly-commitment"
+        );
+        let hits = db.search("standup", 10);
+        assert!(hits.iter().any(|h| h.source == "gcal"), "the event stays searchable");
+    }
+
+    #[test]
     fn re_syncing_the_same_item_touches_not_duplicates() {
         use shogun_mcp::sync::IngestItem;
         let db = Db::open_in_memory(clock(1)).unwrap();
@@ -5022,6 +5076,75 @@ mod tests {
         assert_eq!(blocks[0].id_ref, BlockRef::Event(7));
         assert_eq!(blocks[0].source_kind, SourceKind::Evidence);
         assert!(blocks[0].tokens > 0);
+    }
+
+    #[test]
+    fn evidence_to_blocks_tags_calendar_structured_and_mail_as_evidence() {
+        use shogun_fusion::block::SourceKind;
+        use shogun_fusion::budget::HeuristicEstimator;
+        let excerpt = "standup with the platform team";
+        let ev = vec![
+            Evidence {
+                event_id: 1,
+                ts: 100,
+                source: "capture".into(),
+                title: None,
+                excerpt: excerpt.into(),
+                frame_id: None,
+            },
+            Evidence {
+                event_id: 2,
+                ts: 100,
+                source: "gcal".into(),
+                title: Some("Standup".into()),
+                excerpt: excerpt.into(),
+                frame_id: None,
+            },
+            Evidence {
+                event_id: 3,
+                ts: 100,
+                source: "gmail".into(),
+                title: None,
+                excerpt: excerpt.into(),
+                frame_id: None,
+            },
+        ];
+        let blocks = evidence_to_blocks(&ev, 0.7, &HeuristicEstimator::default());
+        assert_eq!(blocks[0].source_kind, SourceKind::Evidence);
+        assert_eq!(blocks[1].source_kind, SourceKind::Structured);
+        assert_eq!(blocks[2].source_kind, SourceKind::Evidence);
+    }
+
+    #[test]
+    fn equal_score_calendar_block_beats_ax_when_budget_fits_one() {
+        use shogun_fusion::block::{BlockRef, SourceKind};
+        use shogun_fusion::budget::HeuristicEstimator;
+        use shogun_fusion::compress::{compress, Candidates, CompressionConfig};
+        let excerpt = "a".repeat(400);
+        let ev = vec![
+            Evidence {
+                event_id: 1,
+                ts: 100,
+                source: "capture".into(),
+                title: None,
+                excerpt: excerpt.clone(),
+                frame_id: None,
+            },
+            Evidence {
+                event_id: 2,
+                ts: 100,
+                source: "gcal".into(),
+                title: Some("Standup".into()),
+                excerpt,
+                frame_id: None,
+            },
+        ];
+        let blocks = evidence_to_blocks(&ev, 0.7, &HeuristicEstimator::default());
+        let cfg = CompressionConfig { enabled: true, budget_tokens: 120, ..Default::default() };
+        let out = compress(Candidates { blocks }, &cfg);
+        assert_eq!(out.blocks.len(), 1);
+        assert_eq!(out.blocks[0].id_ref, BlockRef::Event(2));
+        assert_eq!(out.blocks[0].source_kind, SourceKind::Structured);
     }
 
     #[test]
