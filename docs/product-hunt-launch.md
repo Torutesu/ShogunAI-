@@ -160,24 +160,30 @@ Your personal AG on your PC. Built to finish real work.
 
 > 語感の補足: 英語の "PC" は Windows 機を指すと読む人が一定数いる。中立に振るなら本文側は `your computer` を使う（tagline は確定どおり `PC` のまま）。本書の原稿はこの使い分けで書いてある。
 
-### 2.2 Description（上限260）
+### 2.2 Description of the launch（上限500）
 
-**採用案（EN・245字）**
+> **上限は500字**（PHの launch description 欄）。260字は tagline 側の制限であって、ここではない。**枠を使い切る。**主題は tagline の一文——パーソナルAGIが、あなたのPCの中で、実務を終わらせる。**機能名（音声入力・Scribe・会議）はここに書かない。**それらは first comment で「だから実務が終わる」の証拠として出す。
+
+**採用案（EN・480字）**
 ```
-A personal AG that lives inside your PC. General across your work, not narrow to one task: it holds the state of what you're doing — people, promises, open loops — and finishes real work with it. Nothing sends without your approval. macOS today.
+Personal AGI won't arrive as a better chatbot. It arrives as an agent that knows the full state of your work — every person, every project, every promise — and acts on it. That is ShogunAI: general across your work rather than narrow to one task, and living inside your PC rather than someone else's cloud. It builds that state as you work, keeps the evidence behind every record, and spends it finishing real work. Reading is automatic. Sending always waits for you. macOS today.
 ```
 
 **JA**
-> あなたのPCの中に住む、パーソナルAG。単機能ではなく仕事の全域で動きます。いま何が動いているのか——人、約束、やりかけ——という状態を持ったまま、そこから実務を終わらせます。送信は必ずあなたの承認を挟みます。今日動くのは macOS 版です。
+> パーソナルAGIは、賢くなったチャットボットとして来るのではありません。あなたの仕事の全状態——人、プロジェクト、交わした約束——を把握して動くエージェントとして来ます。それが ShogunAI です。単機能ではなく仕事の全域で動き、誰かのクラウドではなくあなたのPCの中に住みます。状態はあなたが働いている間に育ち、どのレコードにも根拠が残り、その状態は実務を終わらせるために使われます。読み取りは自動。送信は必ずあなたを待ちます。今日動くのは macOS 版です。
 
-**主題の扱い（重要）**: このローンチの主題は tagline の一文——**「あなたのPCの中のパーソナルAG。実務を終わらせるために作った」**。音声入力も Scribe も会議も、**主題ではなく証拠**として扱う。description で機能名から入らない。機能は first comment の中盤で「だから実務が終わる」の裏付けとして出す。
-
-**"AG" の読み方（原稿全体で統一）**: **G = general（全域）** を主張の芯として使う。知能（I）は誰でも買える時代で、あなたのモデルを持ち込めばいい。希少なのは**あなたの仕事の全域に及ぶこと**の方——という立て方にすると、tagline の略記がそのまま主張になる。
-
-**予備案**
+**予備案（EN・477字。「説明ではなく実行」を明示したい場合）**
 ```
-Your personal AG lives in your PC, not in a tab. General across your work rather than narrow to one task, it holds the state of what you're doing and finishes real work with it. Nothing sends without your approval. macOS today.  (227)
+Personal AGI won't arrive as a better chatbot. It arrives as an agent that knows the full state of your work — every person, every project, every promise — and acts on it. That is ShogunAI, general across your work rather than narrow to one task, and living inside your PC rather than someone else's cloud. It learns that state from your own day, keeps the evidence behind every record, and spends it finishing real work rather than describing it. Sending always waits for you.
 ```
+
+**書き方の規律（この欄に限る）**
+- 1文目で**カテゴリを定義し直す**（「AGIはチャットボットとしては来ない」）。機能の紹介文にしない
+- 2文目で**主題**（全状態を把握して動く）、3文目で**固有名と2つの差別化軸**（general / あなたのPCの中）
+- 4文目で**なぜ成立するか**（状態・根拠）、5〜6文目で**規律**（読み取りは自動、送信は待つ）
+- **"AG" の読み方**: G = general（全域）。知能は買える時代で、希少なのは仕事の全域に届くこと——この立て方を全アセットで統一する
+
+**"AG" のまま出す場合**: tagline は `AG`、本文は `personal AGI` と綴りが割れる。気になるなら description 1文目を `Personal AG won't arrive as a better chatbot.` に変え、first comment の冒頭で **AG = artificial general** と一度だけ明示する（意図した略記に見え、むしろ主張が締まる）。
 
 ### 2.3 その他の欄
 
