@@ -12,7 +12,7 @@
 | 項目 | 内容 |
 |---|---|
 | **Name** | `ShogunAI` |
-| **Tagline** | `Your personal AG on your PC. Built to finish real work.`（55/60。オーナー確定）<br>`AG` → `AGI` だけ投稿前に確認 → §2.1。**PC 表記は維持**（Windows・モバイルも作るため） |
+| **Tagline** | `Your personal AGI on your PC. Built to finish real work.`（56/60。**AGI で統一**）<br>**PC 表記は維持**（Windows・モバイルも作るため） |
 | **launch形態** | アーリーアクセス（メール登録1フィールド）。**招待時期は言わない** |
 | **カテゴリ** | Productivity / Artificial Intelligence / Mac |
 | **日時** | 火曜 00:01 PT ＝ 火曜 16:01 JST |
@@ -139,26 +139,27 @@
 ShogunAI
 ```
 
-**Tagline（55/60・確定）**
+**Tagline（56/60・確定）**
 ```
-Your personal AG on your PC. Built to finish real work.
+Your personal AGI on your PC. Built to finish real work.
 ```
-**JA（LP・X用の対応表現）**: 仕事の全域で動く、あなたのパーソナルAGI。実務を終わらせるために作りました。
+**JA（LP・X用の対応表現）**: あなたのPCの中の、パーソナルAGI。実務を終わらせるために作りました。
 
-投稿前の確認は1点だけ:
+**綴りは `AGI` で全アセット統一**（2026-08-20 オーナー確定）。tagline・description・first comment・返信テンプレ・LP のどこでも `AG` と略さない。略記は読み手にはタイプミスに見え、定義の説明に一往復かかる。
 
-| 箇所 | 提案 | 理由 |
-|---|---|---|
-| `AG` → `AGI` | `Your personal AGI on your PC. Built to finish real work.`（56字） | `AG` は英語で語として通じず、読み手にはタイプミスに見える |
+**`AGI` を名乗る以上の作法**（`positioning §6` の禁じ手を満たすため）:
+- **定義とセットでしか使わない。** first comment の冒頭で「人間並みの知能ではなく、**仕事の全域**という意味」と自分から定義する
+- **到達宣言をしない。** "AGI is here" 型の表現は使わない
+- 主張の芯は **general（全域）** に置く。知能は買える時代で、希少なのは仕事の全域に届くこと——この立て方で通す
 
 **`PC` は維持する。** Windows とモバイルも作る以上、プロダクトを「Macアプリ」として名乗ると自分で天井を作ることになる。ウェイトリストなら、Windows ユーザーの登録は**弾かれる相手ではなく需要データ**になる。
 
-条件は一つだけ: **今日動くOSを本文で明示する。** description・first comment・LPのフォーム直下の3か所に、次の1行を必ず置く。
+条件は一つだけ: **今日動くOSを本文で明示する。** description・first comment・LPのフォーム直下の3か所に置く。
 
 > **EN**: On macOS today. Windows and mobile are in the works.
 > **JA**: 今日動くのは macOS 版です。Windows とモバイルも作っています。
 
-> 語感の補足: 英語の "PC" は Windows 機を指すと読む人が一定数いる。中立に振るなら本文側は `your computer` を使う（tagline は確定どおり `PC` のまま）。本書の原稿はこの使い分けで書いてある。
+> 語感の補足: 英語の "PC" は Windows 機を指すと読む人が一定数いる。中立に振るなら本文側は `your machine` を使う（tagline は確定どおり `PC`）。本書の原稿はこの使い分けで書いてある。
 
 ### 2.2 Description of the launch（上限500）
 
@@ -181,9 +182,7 @@ Personal AGI won't arrive as a better chatbot. It arrives as an agent that knows
 - 1文目で**カテゴリを定義し直す**（「AGIはチャットボットとしては来ない」）。機能の紹介文にしない
 - 2文目で**主題**（全状態を把握して動く）、3文目で**固有名と2つの差別化軸**（general / あなたのPCの中）
 - 4文目で**なぜ成立するか**（状態・根拠）、5〜6文目で**規律**（読み取りは自動、送信は待つ）
-- **"AG" の読み方**: G = general（全域）。知能は買える時代で、希少なのは仕事の全域に届くこと——この立て方を全アセットで統一する
-
-**"AG" のまま出す場合**: tagline は `AG`、本文は `personal AGI` と綴りが割れる。気になるなら description 1文目を `Personal AG won't arrive as a better chatbot.` に変え、first comment の冒頭で **AG = artificial general** と一度だけ明示する（意図した略記に見え、むしろ主張が締まる）。
+- **主張の芯は general（全域）**。知能は買える時代で、希少なのは仕事の全域に届くこと——この立て方を全アセットで統一する
 
 ### 2.3 その他の欄
 
@@ -249,22 +248,22 @@ Personal AGI won't arrive as a better chatbot. It arrives as an agent that knows
 
 ## 4. First comment（公開直後に投稿）
 
-> **設計**: 主題（PCの中のパーソナルAG／実務を終わらせる）を**最初と最後で二度言う**。①主張 ②なぜ "general" が要点か ③「実務が終わる」の具体（＝機能はここで初めて出す。証拠として） ④それを可能にしている構造（状態＋根拠＋確度） ⑤譲らない規律 ⑥あなたのもの（モデル・データ） ⑦動作環境を正直に ⑧質問3つ。**機能から始めない。**
+> **設計**: description（同じページの上に出る）と**同じ文を繰り返さない**。あちらが「AGIはチャットボットとしては来ない」と宣言する役なら、こちらは**定義を自分から差し出し、それを守っていることを証拠で示す**役。①定義（人間並みではなく全域） ②なぜ general が要点か ③普通の一日の中で「終わる」とはどういうことか（機能はここで初めて出す＝証拠） ④それを支える構造（状態・根拠・確度） ⑤譲らない規律 ⑥あなたのもの（モデル・データ） ⑦動作環境を正直に ⑧質問3つ ⑨主題で閉じる。**綴りは AGI で統一。**
 
 ### EN
 
 ```
 Hi Product Hunt ⚔
 
-The claim in the tagline is the whole product, so let me say it plainly. ShogunAI is a personal AG that lives inside your PC — general across your work, rather than narrow to one task — and it exists to finish real work, not to describe it back to you.
+I call ShogunAI a personal AGI, so let me hand you the definition first and let you hold me to it. I don't mean human-level intelligence. I mean general — one agent across the whole of your work rather than narrow to a single task, holding the state of what you're doing, and acting on it.
 
-The word doing the work there is general. Intelligence isn't the scarce part anymore; you can bring your own, and you should. What's scarce is something that spans your whole day instead of one slice of it. A dictation app can't know who Mika is. A meeting recorder can't know what you promised her last month. A chatbot knows whatever you paste. Each is excellent inside its own hour and blind the moment that hour ends, which is why the finishing always falls back to you.
+General is the word carrying the weight. Intelligence isn't the scarce part anymore; you can bring your own, and you should. What's scarce is something that spans your entire day instead of one slice of it. A dictation app can't know who Mika is. A meeting recorder can't know what you promised her last month. A chatbot knows whatever you last pasted into it. Each is excellent inside its own hour and blind the moment that hour ends — which is why the finishing always lands back on you.
 
-So here's what finishing looks like, in the ordinary hours of a working day.
+So here is what finishing looks like, in the ordinary hours of a working day.
 
-You hold a key and talk, and the text lands where your cursor was — with your work context already applied, so names and projects come out spelled the way you spell them. You select a sentence, say what's wrong with it, and it's rewritten in place, in whatever app you're already in. A meeting ends and the recap is already holding what you promised this person last month, with the follow-up drafted underneath it. You wake up and the first thing you see is what moved overnight and what you still owe people. None of that is four products. It's one, doing the last mile you'd otherwise do by hand.
+You hold a key and talk, and the text arrives where your cursor was, with your work context already applied, so names and projects come out spelled the way you spell them. You select a sentence, say what's wrong with it, and it's rewritten in place, inside whatever app you were already in. A meeting ends and the recap already carries what you promised this person last month, with the follow-up drafted underneath it. You wake up and the first thing you see is what moved overnight and what you still owe people. That isn't four products. It's one agent doing the last mile you would otherwise do by hand.
 
-That's only possible because of what sits underneath: state, not a log. People, projects, commitments, open loops — every record carrying where it came from and how sure it is, so a low-confidence guess never reaches you dressed as a fact. It's built passively, inside your machine: by default text rather than pixels, pulled through the accessibility layer into an encrypted database on your own disk. Windows that hand over no text at all are covered by a visual recall you can switch on — encrypted frames, on-device OCR, deleted on the schedule you choose. It ships off.
+None of it works without what sits underneath: state, not a log. People, projects, commitments, open loops — every record carrying where it came from and how sure it is, so a low-confidence guess never reaches you dressed as a fact. That state is built passively, inside your own machine: by default text rather than pixels, read through the accessibility layer into an encrypted database on your disk. Windows that hand over no text at all are covered by a visual recall you can switch on — encrypted frames, on-device OCR, deleted on the schedule you choose. It ships off.
 
 One rule I won't trade away: reading is automatic, sending never is. Anything addressed to another person stops, shows you the entire body, and waits for you. There is no setting that turns that off — it's the only mistake here you can't take back.
 
@@ -285,15 +284,15 @@ Personal, general, and on your own machine. That's the bet — I'd like to hear 
 ```
 Product Hunt に ShogunAI を出しました ⚔
 
-タグラインに書いたことがそのままプロダクトなので、まっすぐ言います。ShogunAI は、あなたのPCの中に住むパーソナルAGです。単機能ではなく仕事の全域で動き、実務を終わらせるために存在します。作業の説明をこちらへ返すためではありません。
+ShogunAI をパーソナルAGIと呼んでいるので、先に定義を差し出しておきます。人間並みの知能という意味ではありません。「全域」という意味です。単機能ではなく仕事の全体にまたがる一つのエージェントがあり、いま何が動いているかという状態を持ち、その状態から動きます。
 
-効いている言葉は「全域」の方です。知能はもう希少ではありません。自分の契約しているモデルを持ち込めばいいし、そうすべきです。希少なのは、一日の一部ではなく一日全体に届くことの方です。音声入力アプリは、ミカが誰かを知りません。会議ツールは、先月あなたが何を約束したかを知りません。チャットボットは、あなたが貼った分だけを知っています。どれも自分の1時間の中では優秀で、その1時間が終わった瞬間に目が届かなくなる。だから最後の仕上げは、いつも人間に戻ってきます。
+重いのは「全域」の方です。知能はもう希少ではありません。自分の契約しているモデルを持ち込めばいいし、そうすべきです。希少なのは、一日の一部ではなく一日全体に届くことの方です。音声入力アプリは、ミカが誰かを知りません。会議ツールは、先月あなたが何を約束したかを知りません。チャットボットは、あなたが最後に貼った分だけを知っています。どれも自分の1時間の中では優秀で、その1時間が終わった瞬間に目が届かなくなる。だから仕上げは、いつもあなたの手に戻ってきます。
 
-その「仕上げ」が、普段の一日の中でどう起きるか。
+その「仕上げ」が、普通の一日の中でどう起きるか。
 
-キーを長押しして話すと、カーソルがあった場所にテキストが着地します。仕事の文脈が乗っているので、人名もプロジェクト名も、あなたが普段書いている表記で出てきます。一文を選んでどこが気に入らないか言えば、いま開いているアプリの中でその場で書き換わります。会議が終わる頃には、先月その人と交わした約束を踏まえたrecapができていて、その下にフォローアップの下書きが用意されています。朝いちばんに目に入るのは、昨夜動いたものと、まだ返していないものです。これは4つのプロダクトではありません。ひとつのプロダクトが、あなたが手でやっていた最後の一区間をやっています。
+キーを長押しして話すと、カーソルがあった場所にテキストが届きます。仕事の文脈が乗っているので、人名もプロジェクト名も、あなたが普段書いている表記で出てきます。一文を選んでどこが気に入らないか言えば、いま開いているアプリの中でその場で書き換わります。会議が終わる頃には、先月その人と交わした約束を踏まえたrecapができていて、その下にフォローアップの下書きが用意されています。朝いちばんに目に入るのは、昨夜動いたものと、まだ返していないものです。これは4つのプロダクトではありません。ひとつのエージェントが、あなたが手でやっていた最後の一区間をやっています。
 
-これが成立するのは、下にあるものがログではなく状態だからです。人、プロジェクト、約束、やりかけ。すべてのレコードに、どこから来たかと、どれくらい確かかが付いています。確度の低い推測が事実の顔をして出てくることはありません。状態は受動的に、あなたのマシンの中で作られます。既定で扱うのは画素ではなくテキストで、OS の accessibility 層を通って、手元の暗号化データベースに入ります。テキストを一切返さない画面は、自分でONにする Visual recall が補います。暗号化したフレームを端末内に置き、オンデバイスのOCRで読み、あなたが決めた期間で自動的に消えます。既定はオフです。
+どれも、下にあるものがなければ成立しません。ログではなく、状態です。人、プロジェクト、約束、やりかけ。すべてのレコードに、どこから来たかと、どれくらい確かかが付いています。確度の低い推測が事実の顔をして出てくることはありません。その状態は、あなたのマシンの中で受動的に作られます。既定で扱うのは画素ではなくテキストで、OS の accessibility 層を通って、手元の暗号化データベースに入ります。テキストを一切返さない画面は、自分でONにする Visual recall が補います。暗号化したフレームを端末内に置き、オンデバイスのOCRで読み、あなたが決めた期間で自動的に消えます。既定はオフです。
 
 譲らない規則がひとつあります。読み取りは自動、送信は自動になりません。人に宛てたものは必ず止まり、本文を全部見せて、あなたを待ちます。これを切る設定はありません。ここで唯一、取り返しがつかない失敗だからです。
 
@@ -543,7 +542,7 @@ Show HN: ShogunAI – Local-first work memory for macOS that drafts and executes
 - [ ] 未実測の性能数値（100ms / CPU 5% 等）を外向けに書いていないか
 - [ ] ギャラリーで語る機能が `docs/feature-status.csv` の implemented 範囲内か（将来分は "Next" と明示）
 - [ ] `personal AGI` の定義が first comment の冒頭にあるか（定義なしの単独使用はブランド規約の禁じ手）
-- [ ] タグラインの `AG` を確認したか（`PC` は維持。§2.1）
+- [ ] 綴りが全アセットで `AGI` に統一されているか（`AG` の略記が残っていないか。`PC` は維持。§2.1）
 - [ ] 「今日動くのは macOS 版／Windows・モバイルは開発中」の2文が description・first comment・LPフォーム直下の3か所にあるか
 - [ ] Windows・モバイルが**今日動くかのような書き方**になっていないか
 - [ ] デモ動画が実ビルドの実画面か（倍速・モック混入なし）
