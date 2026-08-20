@@ -52,7 +52,7 @@ const en = {
     title: 'Questions, answered.',
     items: [
       ['Why call it a personal general intelligence?', 'Because the missing piece was never model quality. A frontier model is already general — it is just not general about you. ShogunAI adds the two things that make any model yours: a memory of your actual work, and the ability to act on it. We do not train a smarter model. We give the ones you already use the context and the hands.'],
-      ['What is captured, and what is stored?', 'Text, where it came from, and when. ShogunAI reads the accessibility layer macOS already exposes to screen readers, so it never takes screenshots or screen recordings. The one exception is visual recall, off until you switch it on: only for a window that yields no text at all, it keeps a compressed frame locally and deletes it automatically when its window expires. Meeting audio is never written to disk — only the transcript is kept.'],
+      ['What is captured, and what is stored?', 'Text, where it came from, and when — and, with visual recall on, screenshots of the windows text capture cannot read. ShogunAI reads the accessibility layer macOS exposes to screen readers first; a compressed screenshot is taken only where that yields nothing. Screenshots stay encrypted on your Mac for a retention period you choose — presets from one to seven days, or a bounded custom duration — and are deleted automatically at that age. You can view or delete them any time before then. Meeting audio is never written to disk — only the transcript is kept.'],
       ['Does anything leave my Mac?', 'Only the specific slice a request needs — the thread you asked to summarize, the context for a draft — never your raw memory. Each one is written to a traceability log with its purpose, and marked when it passes through a third party. You can read that log whenever you want.'],
       ['Do I need an API key?', 'No. ShogunAI can run on the assistant plan you already pay for, inside that plan’s limits. Bringing your own API key is the alternative, not the requirement. Either way you pick the provider, and you can switch it without losing a day of memory.'],
       ['How is this different from a meeting recorder or a notes app?', 'A recorder captures one meeting. A notes app stores what you were disciplined enough to write down. ShogunAI holds the whole working day without you maintaining it — and then does something with it. That last part is the difference that matters: it finishes the work instead of describing it.'],
@@ -62,9 +62,9 @@ const en = {
   memory: {
     eyebrow: 'Memory layer',
     title: 'It learns your work by watching you work.',
-    body: 'ShogunAI reads the text macOS already exposes to screen readers — not pixels. No screenshots, no screen recordings, no folder of images. What it keeps is the text, where it came from, and when, in an encrypted database on your Mac.',
+    body: 'ShogunAI reads the text macOS already exposes to screen readers first — and where a window yields no text, visual recall takes a screenshot and reads that instead. Everything stays in an encrypted database on your Mac: the text, its source, its time, and the screenshots, kept only for a retention period you choose.',
     points: [
-      'Text through the macOS accessibility layer — never screenshots or screen recordings',
+      'Text-first capture through the macOS accessibility layer; visual recall adds screenshots where text fails',
       'Embeddings run on your Mac, so a heavy day costs nothing to index and recall works offline',
       'Every memory carries its source, so you get “Tuesday 14:20, in the design doc” instead of a confident guess',
     ],
@@ -416,7 +416,7 @@ const ja: Dictionary = {
     title: 'よくある質問。',
     items: [
       ['なぜ「あなた専用の汎用知能」と呼ぶのですか?', '足りなかったのはモデルの賢さではないからです。最先端のモデルはすでに汎用です ── ただ、あなたについてだけ汎用ではありません。ShogunAI は、どのモデルもあなたのものにする2つを足します。実際の仕事の記憶と、それに基づいて動く力です。私たちはより賢いモデルを訓練しません。あなたがすでに使っているモデルに、文脈と手を渡します。'],
-      ['何が記録され、何が保存されますか?', 'テキストと、その出どころと、時刻です。ShogunAI は macOS がすでにスクリーンリーダー向けに公開しているアクセシビリティのレイヤーを読むので、スクリーンショットも画面録画も撮りません。例外はひとつ、既定でオフの「ビジュアルリコール」だけです。テキストがまったく取得できなかったウィンドウにかぎり圧縮したフレームをローカルに保持し、期限が来ると自動的に削除します。会議の音声はディスクに書きません。残すのは文字起こしだけです。'],
+      ['何が記録され、何が保存されますか?', 'テキストと、その出どころと、時刻。そしてビジュアルリコールをオンにすれば、テキストが取れなかったウィンドウのスクリーンショットです。ShogunAI はまず macOS のアクセシビリティのレイヤーを読み、そこから何も取れなかった画面だけを圧縮スクリーンショットとして取得します。スクリーンショットは選んだ保持期間（1〜7日のプリセット、または上限つきのカスタム）だけ Mac の中に暗号化して保持され、期限が来ると自動で削除されます。期間中はいつでも自分で閲覧・削除できます。会議の音声はディスクに書きません。残すのは文字起こしだけです。'],
       ['端末の外に出るものはありますか?', 'その依頼に必要な範囲だけです ── 要約を頼んだスレッド、下書きのための文脈。生の記憶が出ることはありません。そのひとつひとつが目的とともにトレーサビリティのログに記録され、第三者を経由した場合はそう明記されます。ログはいつでも読めます。'],
       ['API キーは必要ですか?', 'いいえ。ShogunAI は、あなたがすでに払っているアシスタントのプランの枠内で動かせます。自分の API キーを持ち込むのは代替手段であって、必須条件ではありません。どちらでも提供者を選ぶのはあなたで、乗り換えても記憶は1日も失われません。'],
       ['会議レコーダーやメモアプリとは何が違いますか?', 'レコーダーが捉えるのは1つの会議です。メモアプリに残るのは、あなたが書き留められた分だけです。ShogunAI は、あなたが維持しなくても一日全体を持ちます ── そしてそれを使って動きます。決定的な違いは最後の部分です。説明するのではなく、仕事を終わらせます。'],
@@ -426,9 +426,9 @@ const ja: Dictionary = {
   memory: {
     eyebrow: 'メモリレイヤー',
     title: '働いているところを見て、あなたの仕事を覚える。',
-    body: 'ShogunAI が読むのは、macOS がすでにスクリーンリーダー向けに公開しているテキストです。ピクセルではありません。スクリーンショットも画面録画も、画像の溜まるフォルダもありません。残るのはテキストと、その出どころと、時刻 ── あなたの Mac の暗号化されたデータベースの中に。',
+    body: 'ShogunAI がまず読むのは、macOS がすでにスクリーンリーダー向けに公開しているテキストです。テキストが取れないウィンドウは、ビジュアルリコールがスクリーンショットを撮って読みます。残るのはテキストと出どころと時刻、そしてあなたが決めた期間だけのスクリーンショット ── すべて Mac の暗号化されたデータベースの中に。',
     points: [
-      'macOS のアクセシビリティ経由のテキストだけ ── スクリーンショットも画面録画も撮りません',
+      'まずはアクセシビリティ経由のテキスト。取れない画面はビジュアルリコールのスクリーンショットで補完',
       '埋め込みは Mac 上で動きます。濃い一日をインデックスしても追加費用はゼロ、想起はオフラインでも動きます',
       'すべての記憶が出どころを持ちます。だから「火曜14:20、設計ドキュメントの中で」と答えられます',
     ],
@@ -777,7 +777,7 @@ const es: Dictionary = {
     title: 'Preguntas, respondidas.',
     items: [
       ['¿Por qué llamarlo una inteligencia general propia?', 'Porque lo que faltaba nunca fue la calidad del modelo. Un modelo de frontera ya es general; simplemente no es general sobre ti. ShogunAI añade las dos cosas que hacen tuyo cualquier modelo: una memoria de tu trabajo real y la capacidad de actuar sobre ella. No entrenamos un modelo más listo: damos contexto y manos a los que ya usas.'],
-      ['¿Qué se captura y qué se guarda?', 'Texto, de dónde vino y cuándo. ShogunAI lee la capa de accesibilidad que macOS ya expone a los lectores de pantalla, así que nunca hace capturas ni grabaciones de pantalla. La única excepción es el recuerdo visual, desactivado hasta que tú lo actives: solo para una ventana que no entrega texto alguno, guarda un fotograma comprimido en local y lo borra automáticamente al vencer su plazo. El audio de reuniones nunca se escribe en disco: solo se conserva la transcripción.'],
+      ['¿Qué se captura y qué se guarda?', 'Texto, de dónde vino y cuándo — y, con el recuerdo visual activo, capturas de las ventanas que no entregan texto. ShogunAI lee primero la capa de accesibilidad que macOS expone a los lectores de pantalla; solo donde eso no devuelve nada toma una captura comprimida. Las capturas quedan cifradas en tu Mac durante el periodo de retención que elijas — de uno a siete días, o una duración personalizada acotada — y se borran automáticamente al cumplirlo. Puedes verlas o eliminarlas en cualquier momento antes. El audio de reuniones nunca se escribe en disco: solo se conserva la transcripción.'],
       ['¿Sale algo de mi Mac?', 'Solo la porción concreta que necesita una petición: el hilo que pediste resumir, el contexto de un borrador. Nunca tu memoria en bruto. Cada una queda escrita en un registro de trazabilidad con su propósito, y marcada cuando pasa por un tercero. Puedes leer ese registro cuando quieras.'],
       ['¿Necesito una clave de API?', 'No. ShogunAI puede funcionar con el plan de asistente que ya pagas, dentro de los límites de ese plan. Traer tu propia clave es la alternativa, no el requisito. En ambos casos eliges el proveedor y puedes cambiarlo sin perder un solo día de memoria.'],
       ['¿En qué se diferencia de una grabadora de reuniones o una app de notas?', 'Una grabadora captura una reunión. Una app de notas guarda lo que tuviste la disciplina de escribir. ShogunAI sostiene la jornada entera sin que tú la mantengas, y luego hace algo con ella. Esa última parte es la diferencia que importa: termina el trabajo en vez de describirlo.'],
@@ -787,9 +787,9 @@ const es: Dictionary = {
   memory: {
     eyebrow: 'Capa de memoria',
     title: 'Aprende tu trabajo viéndote trabajar.',
-    body: 'ShogunAI lee el texto que macOS ya expone a los lectores de pantalla, no los píxeles. Sin capturas, sin grabaciones de pantalla, sin una carpeta de imágenes. Lo que guarda es el texto, de dónde vino y cuándo, en una base de datos cifrada en tu Mac.',
+    body: 'ShogunAI lee primero el texto que macOS ya expone a los lectores de pantalla — y donde una ventana no ofrece texto, el recuerdo visual toma una captura y la lee. Todo queda en una base de datos cifrada en tu Mac: el texto, su origen, su momento y las capturas, conservadas solo durante el periodo que elijas.',
     points: [
-      'Texto por la capa de accesibilidad de macOS — nunca capturas ni grabaciones de pantalla',
+      'Primero texto por la capa de accesibilidad de macOS; el recuerdo visual añade capturas donde el texto no llega',
       'Los embeddings corren en tu Mac: indexar un día intenso no cuesta nada y la recuperación funciona sin conexión',
       'Cada recuerdo conserva su fuente, así obtienes “martes 14:20, en el documento de diseño” en vez de una suposición segura de sí misma',
     ],
@@ -1110,7 +1110,7 @@ const de: Dictionary = {
     title: 'Fragen, beantwortet.',
     items: [
       ['Warum nennt ihr das eine eigene allgemeine Intelligenz?', 'Weil das fehlende Stück nie die Modellqualität war. Ein Spitzenmodell ist bereits allgemein — nur nicht allgemein in Bezug auf dich. ShogunAI ergänzt die zwei Dinge, die jedes Modell zu deinem machen: ein Gedächtnis deiner tatsächlichen Arbeit und die Fähigkeit, darauf zu handeln. Wir trainieren kein klügeres Modell. Wir geben denen, die du schon nutzt, Kontext und Hände.'],
-      ['Was wird erfasst, und was wird gespeichert?', 'Text, seine Herkunft und der Zeitpunkt. ShogunAI liest die Bedienungshilfen-Ebene, die macOS Screenreadern ohnehin bereitstellt, und macht deshalb nie Screenshots oder Bildschirmaufnahmen. Die einzige Ausnahme ist Visual Recall, aus, bis du es einschaltest: nur bei einem Fenster, das überhaupt keinen Text liefert, behält es lokal ein komprimiertes Bild und löscht es nach Ablauf automatisch. Meeting-Audio wird nie auf die Festplatte geschrieben — bleiben tut nur das Transkript.'],
+      ['Was wird erfasst, und was wird gespeichert?', 'Text, seine Herkunft und der Zeitpunkt — und mit aktivierter visueller Erinnerung Screenshots der Fenster, die keinen Text liefern. ShogunAI liest zuerst die Bedienungshilfen-Ebene, die macOS Screenreadern bereitstellt; nur wo das nichts ergibt, entsteht ein komprimierter Screenshot. Screenshots bleiben verschlüsselt auf deinem Mac, für die Aufbewahrungsdauer, die du wählst — ein bis sieben Tage oder eine begrenzte eigene Dauer — und werden bei diesem Alter automatisch gelöscht. Vorher kannst du sie jederzeit ansehen oder löschen. Meeting-Audio wird nie auf die Festplatte geschrieben — bleiben tut nur das Transkript.'],
       ['Verlässt irgendetwas meinen Mac?', 'Nur der konkrete Ausschnitt, den eine Anfrage braucht — der Thread, den du zusammenfassen lässt, der Kontext für einen Entwurf. Nie dein rohes Gedächtnis. Jeder dieser Vorgänge wird mit seinem Zweck in ein Nachvollziehbarkeits-Protokoll geschrieben und markiert, wenn er über einen Dritten läuft. Dieses Protokoll kannst du jederzeit lesen.'],
       ['Brauche ich einen API-Schlüssel?', 'Nein. ShogunAI kann mit dem Assistenz-Abo laufen, das du ohnehin bezahlst, innerhalb der Grenzen dieses Plans. Ein eigener API-Schlüssel ist die Alternative, nicht die Voraussetzung. In beiden Fällen wählst du den Anbieter und kannst ihn wechseln, ohne einen Tag Gedächtnis zu verlieren.'],
       ['Wie unterscheidet sich das von einem Meeting-Recorder oder einer Notiz-App?', 'Ein Recorder erfasst ein Meeting. Eine Notiz-App speichert, wozu du diszipliniert genug warst, es aufzuschreiben. ShogunAI hält den ganzen Arbeitstag, ohne dass du ihn pflegst — und macht dann etwas damit. Dieser letzte Teil ist der Unterschied, auf den es ankommt: Es erledigt die Arbeit, statt sie zu beschreiben.'],
@@ -1120,9 +1120,9 @@ const de: Dictionary = {
   memory: {
     eyebrow: 'Memory-Ebene',
     title: 'Sie lernt deine Arbeit, indem sie dir bei der Arbeit zusieht.',
-    body: 'ShogunAI liest den Text, den macOS Screenreadern ohnehin bereitstellt — keine Pixel. Keine Screenshots, keine Bildschirmaufnahmen, kein Ordner voller Bilder. Was bleibt, ist der Text, seine Herkunft und der Zeitpunkt, in einer verschlüsselten Datenbank auf deinem Mac.',
+    body: 'ShogunAI liest zuerst den Text, den macOS Screenreadern ohnehin bereitstellt — und wo ein Fenster keinen Text liefert, macht die visuelle Erinnerung einen Screenshot und liest den. Alles bleibt in einer verschlüsselten Datenbank auf deinem Mac: der Text, seine Herkunft, der Zeitpunkt und die Screenshots — aufbewahrt nur für die Dauer, die du wählst.',
     points: [
-      'Text über die macOS-Bedienungshilfen — niemals Screenshots oder Bildschirmaufnahmen',
+      'Zuerst Text über die macOS-Bedienungshilfen; die visuelle Erinnerung ergänzt Screenshots, wo Text fehlt',
       'Embeddings laufen auf deinem Mac: ein dichter Tag kostet nichts zu indexieren, und der Abruf funktioniert offline',
       'Jede Erinnerung trägt ihre Quelle. Du bekommst „Dienstag 14:20, im Design-Dokument“ statt einer selbstbewussten Vermutung',
     ],
