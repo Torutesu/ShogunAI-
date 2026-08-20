@@ -162,15 +162,21 @@ Your personal AG on your PC. Built to finish real work.
 
 ### 2.2 Description（上限260）
 
-**採用案（EN・251字）**
+**採用案（EN・245字）**
 ```
-Personal AGI for your work, on your PC. Hold a key and talk, or let it read your day — it keeps the state of your work and finishes it: replies, rewrites in place, recaps, holds. Nothing sends without your approval. macOS now, Windows and mobile next.
+Hold a key and talk. Select any sentence and say what's wrong with it. ShogunAI holds the state of your work — people, promises, open loops — and finishes things with it. Nothing sends without your approval. macOS today, Windows and mobile next.
 ```
 
 **JA**
-> 仕事の全域で動くパーソナルAGIを、あなたのPCの中に。キーを長押しして話しても、一日を読ませておいてもいい。仕事の状態を持ったうえで、返信も、その場の書き換えも、recapも、予定の確保も終わらせます。送信は必ずあなたの承認を挟みます。今日動くのは macOS 版で、Windows とモバイルも作っています。
+> キーを長押しして話す。気に入らない一文を選んで、どう直したいか言う。ShogunAI は仕事の状態——人、約束、やりかけ——を持ったまま、そこから先を終わらせます。送信は必ずあなたの承認を挟みます。今日動くのは macOS 版で、Windows とモバイルも作っています。
 
-> 旧版（「テキストで記憶する／スクショは残さない」）は使わない。Visual recall がある以上そのままでは不正確で、しかも音声入力とScribeという一番強い入口を捨てている。
+**書き方の意図**: tagline が「何であるか」を宣言したので、description は**動詞から入る**。抽象語（memory / AI / context）で始めない。1文目と2文目で**触れる動作**を見せ、3文目で初めて仕組みの話をし、4文目で規律、5文目で動作環境。読み手が最初の8語で「自分の手が何をするか」を掴める形にしてある。
+
+**予備案**（トーンを変えたい場合）
+```
+Talk to it, or let it read your day. ShogunAI keeps the state of your work inside your own PC — people, promises, open loops — and finishes it: replies drafted, paragraphs rewritten, meetings recapped. Nothing sends without your approval.  (238)
+```
+> こちらは受け身の入口（読ませておくだけでいい）を先に見せる版。音声を主役にしない代わりに、対象読者が広がる。
 
 ### 2.3 その他の欄
 
@@ -236,89 +242,87 @@ Personal AGI for your work, on your PC. Hold a key and talk, or let it read your
 
 ## 4. First comment（公開直後に投稿）
 
-### EN（原稿）
+> **設計**: ①タグラインの語を自分で定義する（借り物の言葉のまま進めない） ②痛みを最小の形で1つ ③**触れる動作**を3つ、動詞で始める ④それらが何を共有しているか（状態） ⑤譲らない規律を1つ ⑥選べるもの（モデル・データ） ⑦動作環境を正直に ⑧質問3つ。**見出しは太字1行に留め、箇条書きを増やさない**——PHのコメント欄は段落の方が読まれる。
+
+### EN
 
 ```
 Hi Product Hunt ⚔
 
-"Personal AGI" gets thrown around, so let me define it before anything else. I don't mean human-level anything. I mean general across your work instead of narrow to one task: one memory and one agent that span your mail, calendar, docs, chat, meetings and the text on your screen — and that act on what they know instead of answering questions about it.
+Let me define the phrase in my own tagline before I lean on it again. By "personal AGI" I don't mean human-level anything. I mean general across your work rather than narrow to one task: one memory and one agent spanning your mail, calendar, docs, chat, meetings and the text on your screen — holding the state of all of it, and acting on that state instead of answering questions about it.
 
-Here's what that looks like in practice.
+The problem, in its smallest form: every AI tool I open makes me explain my own week to it first. Who this person is. What we agreed on Tuesday. Which decision is already made. Intelligence stopped being the scarce part a while ago. Context never got cheap.
 
-**You talk to it, or you don't.** Hold a shortcut and speak: the text lands where you were typing, with your work context already applied, so names and projects come out right. Select any text in any app and say what to change, and it rewrites in place — no copy, no paste, no second window. Audio is never written to disk or to the database.
+**Hold a key and talk.** The mic is open only while you're holding it. Let go, and the text lands where your cursor was — with your work context already applied, so names and projects come out spelled the way you spell them. Audio is never written to disk or to the database.
 
-**It remembers your day.** By default that's text — what you read, wrote and decided — pulled through the accessibility layer and kept in an encrypted database on your own machine. Some windows give up no text at all, so there's an opt-in visual recall for those: encrypted frames, on your machine, read with on-device OCR, deleted on the schedule you choose. It ships off. Password managers and private browsing are excluded by default, you can exclude anything else, and export and delete-everything are buttons in settings.
+**Select a sentence and say what's wrong with it.** It rewrites in place, in whatever app you're already in. No copy, no paste, no second window. Before it writes, it re-checks that the field, the value and the exact range are still the ones you selected, and it throws away any rewrite that quietly changed a name or a number.
 
-**It keeps the state, not just the log.** People, projects, commitments, open loops — each record carrying where it came from and how confident it is. A low-confidence guess never reaches you dressed as a fact. That's the difference between a search box and something that can act.
+**Or say nothing and let it read your day.** By default it keeps text, not pixels: what you read, wrote and decided, pulled through the accessibility layer into an encrypted database on your own machine. Some windows hand over no text at all, so there's a visual recall you can switch on for those — encrypted frames, on-device OCR, deleted on the schedule you choose. It ships off.
 
-**It finishes things.** Open the notch and the actions are already assembled: the reply drafted with the right history, the meeting recap that knows what you promised this person last month, the calendar hold, the morning brief on what moved overnight. Meetings end with the next step instead of a transcript, and audio is never written to disk — not even a temp file.
+Those three are the same product because they share one thing: state, not a log. People, projects, commitments, open loops — every record carrying where it came from and how sure it is, so a low-confidence guess never reaches you dressed as a fact. That's why the follow-up already knows what you promised last month, why a meeting ends with the next step instead of a transcript, and why the morning opens with what moved overnight and what you still owe people, each line traceable to the evidence underneath it.
 
-**And it stops before it sends.** Reading is automatic. Sending never is. Anything addressed to another human shows you the full body first and waits. There's no setting that lets it send on its own, because that's the one mistake you can't take back.
+One rule I won't trade away: reading is automatic, sending never is. Anything addressed to another person stops, shows you the entire body, and waits for you. There is no setting that turns that off — it's the only mistake here you can't take back.
 
-You bring your own model — your API key, or the Claude/ChatGPT/Gemini plan you already pay for. Your memory isn't locked in our UI either: it's reachable over MCP, so your other AI tools can read the same context.
+Bring your own model: an API key, or the Claude/ChatGPT/Gemini plan you already pay for. The memory stays yours either way. It's a local database you can export whole, and it's readable over MCP, so your other tools can work from the same context instead of asking you to paste it again.
 
-On platforms: the build that runs today is macOS (14+, Apple Silicon). Windows and mobile are being built — this isn't a Mac product, it's a product that happens to have shipped its Mac build first. The list is per-platform, so tell me which machine you're on and it'll shape the order we ship in.
+The build that runs today is macOS, 14+ on Apple Silicon. Windows and mobile are being built — this was never meant as a Mac product, the Mac build simply shipped first. Early access is open, joining costs nothing, and the list is per-platform, so tell me which machine you're on.
 
-Early access is open — joining is free and nothing is charged to join.
-
-Three things I'd genuinely like from this thread:
-1. If you tried a memory tool before and dropped it, what made you quit? That's more useful to me than feature requests.
-2. Which connection decides whether you'd leave it running for a week?
-3. The privacy questions, and the "is AGI the right word" ones. Ask them here and I'll answer them here, on the record.
+Three things I'd rather have than compliments:
+1. You tried a memory tool once and dropped it. What made you quit?
+2. Which connection decides whether you'd leave this running for a full week?
+3. The uncomfortable privacy questions. Ask them here and I'll answer them here.
 ```
 
-### JA（日本語圏向け。Xやnote、日本語コメントへの返信で使う）
+### JA（日本語圏向け。X・note・日本語コメントへの返信で使う）
 
 ```
 Product Hunt に ShogunAI を出しました ⚔
 
-「パーソナルAGI」は使われすぎた言葉なので、先に定義します。人間並みの知能という意味ではありません。単機能アプリの対義語としての「全域」です。メール、カレンダー、ドキュメント、チャット、会議、そして画面上のテキスト——その全部にまたがる一つの記憶と一つのエージェントがあり、知っていることについて答えるのではなく、それを使って動きます。
+自分のタグラインに使った言葉を、先に定義しておきます。「パーソナルAGI」と言っても、人間並みの知能の話ではありません。単機能に対する「全域」という意味です。メール、カレンダー、ドキュメント、チャット、会議、そして画面上のテキスト。その全部にまたがる一つの記憶とエージェントがあり、状態を保ったまま、その状態から動きます。
 
-具体的にはこうなります。
+解きたい問題はごく単純です。AIツールを開くたびに、自分の一週間を説明させられる。この人は誰で、火曜に何を決めて、どれはもう終わった話なのか。知能が希少だった時期はとうに終わりました。安くならなかったのは文脈のほうです。
 
-**話しかけてもいいし、話しかけなくてもいい。** ショートカットを長押しして話すと、打っていた場所にテキストが着地します。仕事の文脈が乗っているので、人名もプロジェクト名も正しい形で出ます。どのアプリの文章でも、選んで「こう直して」と言えばその場で書き換わります。コピーもペーストも別ウィンドウも要りません。音声はディスクにもデータベースにも書きません。
+**キーを長押しして、話す。** マイクが開くのは押している間だけです。離すと、カーソルがあった場所にテキストが着地します。仕事の文脈が乗っているので、人名もプロジェクト名も、あなたが普段書いている表記で出てきます。音声はディスクにもデータベースにも書きません。
 
-**一日を記憶します。** 既定で残すのはテキストです。読んだもの、書いたもの、決めたこと。取得は OS の accessibility 層を通り、あなたのPCの中の暗号化データベースに残ります。テキストを一切返さない画面もあるので、そこだけは Visual recall（自分でONにする機能）で補います。暗号化したまま端末内に置き、オンデバイスのOCRで読み、あなたが決めた期間で自動的に消えます。既定はオフです。パスワード管理アプリとプライベートブラウジングは既定で除外、他も自分で除外でき、書き出しと全削除は設定のボタンです。
+**一文を選んで、どこが気に入らないかを言う。** いま開いているアプリの中で、その場で書き換わります。コピーもペーストも別ウィンドウも要りません。書き込む前に、対象のフィールドも値も選択範囲も選んだときのままであることを確かめ直し、固有名詞や数字が黙って変わっている書き換えは破棄します。
 
-**ログではなく状態を持ちます。** 人、プロジェクト、約束、やりかけ。すべてのレコードに根拠と確度が付いています。確度の低い推測が事実の顔をして出てくることはありません。ここが、検索窓と「動けるもの」の分かれ目です。
+**何も言わずに、一日を読ませておいてもいい。** 既定で残すのはテキストで、画素ではありません。読んだもの、書いたもの、決めたこと。OS の accessibility 層を通って、あなたのPCの中の暗号化データベースに入ります。テキストを一切返さない画面もあるので、そこだけは Visual recall を自分でONにして補えます。暗号化したフレームを端末内に置き、オンデバイスのOCRで読み、あなたが決めた期間で自動的に消えます。既定はオフです。
 
-**そして、終わらせます。** ノッチを開くとアクションはもう組み上がっています。経緯を踏まえた返信の下書き、先月その人と交わした約束を知っているrecap、予定の確保、夜のうちに動いたものをまとめた朝のブリーフ。会議のあとに残るのは議事録ではなく次の一手で、音声はディスクに書きません。一時ファイルも作りません。
+この3つが一つのプロダクトなのは、同じものを共有しているからです。ログではなく、状態。人、プロジェクト、約束、やりかけ。すべてのレコードに、どこから来たかと、どれくらい確かかが付いています。確度の低い推測が事実の顔をして出てくることはありません。だからフォローアップは先月の約束を踏まえた状態で出てきますし、会議のあとに残るのは議事録ではなく次の一手になり、朝は「昨夜動いたもの」と「まだ返していないもの」から始まります。どの行からも、根拠になった出来事へ辿れます。
 
-**送る前に必ず止まります。** 読み取りは自動、送信は自動になりません。人に宛てたものは本文全部を見せて待ちます。勝手に送る設定は用意していません。取り返しがつかない失敗はそこだけだからです。
+譲らない規則がひとつあります。読み取りは自動、送信は自動になりません。人に宛てたものは必ず止まり、本文を全部見せて、あなたを待ちます。これを切る設定はありません。ここで唯一、取り返しがつかない失敗だからです。
 
-モデルはあなたが選びます。自分のAPIキーでも、すでに契約している Claude / ChatGPT / Gemini のプランでも動きます。記憶もこちらのUIに閉じ込めません。MCP経由で開いているので、他のAIツールから同じ文脈を読めます。
+モデルはあなたが選べます。自分のAPIキーでも、すでに払っている Claude / ChatGPT / Gemini のプランでも構いません。どちらでも記憶はあなたのものです。丸ごと書き出せるローカルのデータベースで、MCP から読めるので、他のツールも同じ文脈から仕事を始められます。もう一度ペーストする必要はありません。
 
-動作環境について。今日動くビルドは macOS 版です（macOS 14 以上 / Apple Silicon）。Windows とモバイルも作っています。Macのためのプロダクトではなく、Mac版が先に出ただけです。登録のときにどのマシンを使っているか教えてもらえると、出す順番の判断材料になります。
+今日動くビルドは macOS 版です（macOS 14 以上 / Apple Silicon）。Windows とモバイルも作っています。Mac のためのプロダクトではなく、Mac版が先に出ただけです。アーリーアクセスの登録は無料で、リストはプラットフォーム別に見ています。どのマシンを使っているか教えてください。
 
-アーリーアクセスの登録は無料で、登録時に課金は発生しません。
-
-聞きたいことが3つあります。
-1. 記憶系のツールを使ってやめた経験がある人。何がきっかけでやめましたか。機能要望より、そちらが知りたいです。
+褒め言葉より欲しいものが3つあります。
+1. 記憶系のツールを一度使ってやめた人。何がきっかけでしたか。
 2. どの連携があれば、1週間つけっぱなしにできますか。
-3. プライバシーの質問と、「AGIという言葉は適切か」という指摘。ここで聞いてもらえれば、ここで答えます。
+3. 答えにくいプライバシーの質問。ここで聞いてもらえれば、ここで答えます。
 ```
-
----
 
 ## 5. 中盤に落とす Maker follow-up
 
-**(a) 6時間後 — 技術編（builder票を拾う）**
+投げっぱなしにしない。**一本ごとに違う層へ届ける**——(a) は作る人、(b) は使う人、(c) は疑う人。
 
-> **EN**: A few people asked how the default capture path works, so: we walk the accessibility tree of the focused window and keep text only — bounded walk, near-duplicate collapse, password managers and private browsing excluded by default, secure text fields skipped at the subtree level. Secrets are redacted before anything is written. The database is encrypted on device; hot for 24 hours, warm for 30 days, then compressed. Forgetting is part of the design, not a cleanup job.
+**(a) 6時間後 — 作りの話**
+
+> **EN**: A few of you asked how the default capture path works, so, precisely: we walk the accessibility tree of the focused window and keep text — bounded walk, near-duplicates collapsed into a dwell counter instead of new rows, password managers and private browsing excluded before anything is read, secure fields skipped at the subtree level, secrets redacted ahead of the write. The database is encrypted on device and forgets on a schedule: hot for a day, warm for a month, compressed after that. Forgetting isn't a cleanup job we got around to. It's the feature that makes keeping the rest defensible.
 >
-> **JA**: 既定の取得経路がどうなっているのか、という質問が来たので。フォーカス中のウィンドウのアクセシビリティツリーを範囲を区切って辿り、テキストだけを残します。ほぼ同じ内容は畳み、パスワード管理アプリとプライベートブラウジングは既定で除外、セキュアな入力欄はサブツリーごと飛ばします。秘匿値は書き込む前にマスクします。データベースは端末上で暗号化。24時間はホット、30日はウォーム、その先は圧縮。忘れることは後片付けではなく設計の一部です。
+> **JA**: 既定の取得経路がどうなっているか、という質問が来たので正確に書きます。フォーカス中のウィンドウのアクセシビリティツリーを範囲を区切って辿り、テキストを取ります。ほぼ同じ内容は新しい行を作らず滞在時間として畳み、パスワード管理アプリとプライベートブラウジングは読む前に除外し、セキュアな入力欄はサブツリーごと飛ばし、秘匿値は書き込む前にマスクします。データベースは端末上で暗号化され、決まったリズムで忘れます。1日はホット、1か月はウォーム、その先は圧縮。忘却は後回しにしていた掃除ではありません。残す側を正当化できるのは、これがあるからです。
 
-**(b) 10〜12時間後 — 使い方の実例（滞在時間を伸ばす）**
+**(b) 10〜12時間後 — 使ってみた人の話**
 
-> **EN**: The clearest "aha" from early users isn't recall — it's Monday morning. Overnight the app turns the week into state: who you owe something to, what's gone stale, what got promised in a meeting and never landed anywhere. The brief is three lines and every line links back to the evidence. That's the part people say they can't unsee.
+> **EN**: The moment people describe back to me isn't recall — it's Monday morning. Overnight the week turns into state: who's waiting on you, what's gone stale, which promise was made out loud in a meeting and then landed nowhere. It's a short list, and every line points at the thing it came from. Nobody has ever asked me to make that list longer.
 >
-> **JA**: 最初に効くのは検索ではなく、月曜の朝でした。夜のうちに一週間分が状態へ変わります。誰に何を借りているか、何が古くなったか、会議で約束されたのにどこにも着地していないものは何か。ブリーフは3行で、各行が根拠へリンクします。ここを見たら戻れない、と言われる部分です。
+> **JA**: 使った人が話してくれるのは検索の話ではなく、月曜の朝の話です。夜のうちに一週間が状態に変わります。誰が自分の返事を待っているか、何が古くなったか、会議で口に出したのにどこにも着地しなかった約束はどれか。短いリストで、どの行も出どころを指しています。これを長くしてくれと言われたことは一度もありません。
 
 **(c) 予備 — AGI 論争が伸びたときだけ**
 
-> **EN**: The reason I say "general" rather than "assistant" is that the failure mode of assistants is narrowness, not intelligence. A dictation app can't know who Mika is. A meeting recorder can't know what you promised her last month. Each is excellent inside its own hour and blind outside it. The engineering that matters isn't a smarter answer — it's one state of your work that every one of those moments reads from and writes back to.
+> **EN**: I use "general" instead of "assistant" because the way assistants fail isn't stupidity, it's narrowness. A dictation app can't know who Mika is. A meeting recorder can't know what you promised her last month. Each is excellent inside its own hour and blind the moment it ends. The work worth doing isn't a smarter answer — it's one state of your work that every one of those moments reads from and writes back to.
 >
-> **JA**: 「アシスタント」ではなく「全域」と言うのは、アシスタントの失敗の仕方が知能不足ではなく視野の狭さだからです。音声入力アプリは、ミカが誰かを知りません。会議ツールは、先月あなたが何を約束したかを知りません。どれも自分の1時間の中では優秀で、外側には目が届かない。効くのは賢い回答ではなく、そのすべての瞬間が読み書きする一つの状態です。
+> **JA**: 「アシスタント」ではなく「全域」と言うのは、アシスタントの失敗の仕方が知能不足ではなく視野の狭さだからです。音声入力アプリは、ミカが誰かを知りません。会議ツールは、先月あなたが何を約束したかを知りません。どれも自分の1時間の中では優秀で、その1時間が終わった瞬間に目が届かなくなる。やる価値があるのは賢い回答を作ることではなく、そのすべての瞬間が読み書きする一つの状態を作ることです。
 
 ---
 
@@ -447,22 +451,22 @@ Product Hunt に ShogunAI を出しました ⚔
 > ```
 > ShogunAI is live on Product Hunt ⚔
 >
-> Personal AGI for your work — narrowly: general across your work instead of narrow to one task.
+> Hold a key and talk — the text lands where your cursor was.
+> Select a sentence, say what's wrong with it — it rewrites in place.
+> Say nothing, and it still knows what you promised last month.
 >
-> Hold a key and talk, and the text lands where you were typing. Select any text and say what to change, and it rewrites in place. It remembers your day inside your own machine, keeps the state of your work, and finishes things — nothing sends without your approval.
->
-> On macOS today. Windows and mobile next.
+> One state of your work, inside your own PC. Nothing sends without your approval.
 > ```
 >
 > **JA**
 > ```
 > ShogunAI を Product Hunt に出しました ⚔
 >
-> 仕事の全域で動くパーソナルAGIです。人間並みの知能という意味ではなく、単機能アプリの対義語としての「全域」です。
+> キーを長押しして話すと、カーソルのあった場所にテキストが着地する。
+> 一文を選んで気に入らない点を言うと、その場で書き換わる。
+> 何も言わなくても、先月の約束を覚えている。
 >
-> キーを長押しして話すと、打っていた場所にテキストが着地します。文章を選んで「こう直して」と言えば、その場で書き換わります。PCの中で一日を記憶し、仕事の状態を持って、実行まで行きます。送信は必ず承認を挟みます。
->
-> 今日動くのは macOS 版です。Windows とモバイルも作っています。
+> 仕事の状態がひとつ、あなたのPCの中に。送信は必ず承認を挟みます。
 > ```
 
 ### X（中盤スレッド）
