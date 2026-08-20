@@ -482,6 +482,7 @@ describe("cinematic onboarding", () => {
 
   it("keeps cinematic motion compositor-only and reduced motion opacity-only", () => {
     const css = readFileSync(resolve(process.cwd(), "src/onboarding/onboarding.css"), "utf8");
+    const cinematicSource = readFileSync(resolve(process.cwd(), "src/onboarding/experience/CinematicSurface.tsx"), "utf8");
     const keyframes = css.split("\n").filter((line) => line.startsWith("@keyframes")).join("\n");
     const reduced = css.split("\n").find((line) => line.startsWith("@media (prefers-reduced-motion: reduce)")) ?? "";
     const reducedFade = css.split("\n").find((line) => line.startsWith("@keyframes onb-reduced-current-fade")) ?? "";
@@ -501,13 +502,22 @@ describe("cinematic onboarding", () => {
     expect(css).toMatch(/\.onb-cinematic\s*\{[^}]*background:\s*rgba\(/);
     expect(css).toMatch(/\.onb-layout\s*\{[^}]*min-height:\s*0/);
     expect(css).toMatch(/@media \(max-width:\s*760px\)/);
-    expect(css).toContain("onb-wave-inward 760ms");
-    expect(css).toContain("onb-mark-arrive 520ms");
+    expect(css).toContain("onb-light-gather 4s");
+    expect(css).toContain("onb-white-bloom 4s");
+    expect(css).toContain("rgba(195,95,60,.58)");
+    expect(css).toContain("rgba(95,143,168,.34)");
+    expect(css).not.toMatch(/violet|yellow/i);
+    expect(cinematicSource).toContain("onb-cinematic__light--ember");
+    expect(cinematicSource).toContain("onb-cinematic__light--glacier");
+    expect(cinematicSource).not.toMatch(/Shotbase|wavesUrl|<Logo/);
     expect(css).not.toMatch(/onb-(?:button|mute|drag)[^}]*min-height:\s*(?:3[0-9]|4[0-3])px/);
     expect(keyframes).not.toMatch(/\b(width|height|top|right|bottom|left|margin|padding)\s*:/i);
     expect(reduced).toContain("onb-reduced-current-fade 200ms linear both");
+    expect(reduced).toContain("onb-reduced-light-fade 200ms linear both");
+    expect(reduced).toContain("onb-reduced-bloom-fade 200ms linear both");
     expect(reduced).not.toContain("display: none");
-    expect(reduced).not.toContain("onb-wave-inward");
+    expect(reduced).not.toContain("onb-light-gather");
+    expect(reduced).not.toContain("onb-white-bloom");
     expect(reduced).not.toContain("onb-ambient-flow");
     expect(reducedFade).toMatch(/opacity:/);
     expect(reducedFade).not.toMatch(/transform:/);

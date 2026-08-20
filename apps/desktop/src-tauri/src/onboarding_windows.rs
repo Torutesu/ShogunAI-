@@ -6,12 +6,15 @@ use serde::Serialize;
 
 use crate::geometry::{Point, Rect};
 
-pub const INTRO_DURATION: Duration = Duration::from_secs(5);
-const INTERACTIVE_WIDTH: f64 = 1120.0;
-const INTERACTIVE_HEIGHT: f64 = 720.0;
+pub const INTRO_DURATION: Duration = Duration::from_secs(4);
+const INTERACTIVE_WIDTH: f64 = 1260.0;
+const INTERACTIVE_HEIGHT: f64 = 790.0;
 const INTERACTIVE_MIN_WIDTH: f64 = 680.0;
 const INTERACTIVE_MIN_HEIGHT: f64 = 520.0;
 const INTERACTIVE_EDGE_INSET: f64 = 16.0;
+const INTERACTIVE_REVEAL_SCALE: f64 = 0.94;
+const INTERACTIVE_REVEAL_DURATION: Duration = Duration::from_millis(460);
+const INTERACTIVE_REDUCED_REVEAL_DURATION: Duration = Duration::from_millis(200);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -85,6 +88,38 @@ pub struct InteractiveWindowLayout {
     pub min_height: f64,
     pub max_width: f64,
     pub max_height: f64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct InteractiveReveal {
+    initial_frame: Rect,
+    final_frame: Rect,
+    duration: Duration,
+}
+
+fn interactive_reveal(layout: InteractiveWindowLayout, reduced_motion: bool) -> InteractiveReveal {
+    let final_frame = layout.frame;
+    let initial_frame = if reduced_motion {
+        final_frame
+    } else {
+        let width = final_frame.w * INTERACTIVE_REVEAL_SCALE;
+        let height = final_frame.h * INTERACTIVE_REVEAL_SCALE;
+        Rect::new(
+            final_frame.x + (final_frame.w - width) / 2.0,
+            final_frame.y + (final_frame.h - height) / 2.0,
+            width,
+            height,
+        )
+    };
+    InteractiveReveal {
+        initial_frame,
+        final_frame,
+        duration: if reduced_motion {
+            INTERACTIVE_REDUCED_REVEAL_DURATION
+        } else {
+            INTERACTIVE_REVEAL_DURATION
+        },
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -419,15 +454,17 @@ pub mod mac {
     use std::time::{Duration, Instant};
 
     use objc2::MainThreadMarker;
-    use objc2_app_kit::{NSApplication, NSEvent};
+    use objc2_app_kit::{NSAnimationContext, NSApplication, NSEvent, NSWorkspace};
+    use objc2_quartz_core::CAMediaTimingFunction;
     use tauri::{AppHandle, Manager};
 
     use super::{
         configure_intro_with_rollback, enforce_external_permission_barrier,
-        full_display_appkit_frame, interactive_window_layout, notch_order_for_suppression,
-        replace_generation_music, surface_close_should_cleanup, window_policy, DisplaySnapshot,
-        ExternalPermissionKind, ExternalPermissionWindowOps, NotchOrder, OnboardingSurface,
-        OnboardingSurfaceKind, WindowLevelPolicy, WindowSessionModel, INTRO_DURATION,
+        full_display_appkit_frame, interactive_reveal, interactive_window_layout,
+        notch_order_for_suppression, replace_generation_music, surface_close_should_cleanup,
+        window_policy, DisplaySnapshot, ExternalPermissionKind, ExternalPermissionWindowOps,
+        InteractiveReveal, NotchOrder, OnboardingSurface, OnboardingSurfaceKind, WindowLevelPolicy,
+        WindowSessionModel, INTRO_DURATION,
     };
     use crate::geometry::Point;
 
@@ -441,7 +478,7 @@ pub mod mac {
           style.textContent = `
             html, body, #root { background: transparent !important; }
             .onb-cinematic {
-              background: rgba(0, 0, 0, 0.58) !important;
+              background: rgba(1, 3, 5, 0.88) !important;
             }
           `;
           (document.head || document.documentElement).appendChild(style);
@@ -880,14 +917,11 @@ pub mod mac {
     fn activate_interactive(
         window: &tauri::WebviewWindow,
         mtm: MainThreadMarker,
+        reveal: Option<InteractiveReveal>,
     ) -> Result<(), String> {
         use objc2::msg_send;
         use objc2::runtime::AnyObject;
 
-        window
-            .show()
-            .map_err(|error| format!("interactive onboarding show failed: {error}"))?;
-        NSApplication::sharedApplication(mtm).activate();
         let ptr = window
             .ns_window()
             .map_err(|error| format!("native interactive window unavailable: {error}"))?
@@ -895,10 +929,44 @@ pub mod mac {
         if ptr.is_null() {
             return Err("native interactive window unavailable".to_owned());
         }
+        if let Some(reveal) = reveal {
+            // SAFETY: caller runs on AppKit's main thread with Tauri's live NSWindow. Setting the
+            // initial alpha/frame before ordering front prevents a one-frame flash at full size.
+            unsafe {
+                let initial_frame = ns_rect(reveal.initial_frame);
+                let _: () = msg_send![ptr, setAlphaValue: 0.0f64];
+                let _: () = msg_send![ptr, setFrame: initial_frame, display: true];
+            }
+        }
+        window
+            .show()
+            .map_err(|error| format!("interactive onboarding show failed: {error}"))?;
+        NSApplication::sharedApplication(mtm).activate();
         let nil: *mut AnyObject = std::ptr::null_mut();
         // SAFETY: caller runs on AppKit's main thread with Tauri's live NSWindow.
         unsafe {
             let _: () = msg_send![ptr, makeKeyAndOrderFront: nil];
+        }
+        if let Some(reveal) = reveal {
+            NSAnimationContext::beginGrouping();
+            let context = NSAnimationContext::currentContext();
+            context.setDuration(reveal.duration.as_secs_f64());
+            let timing = CAMediaTimingFunction::functionWithControlPoints(0.22, 1.0, 0.36, 1.0);
+            context.setTimingFunction(Some(&timing));
+            // SAFETY: AppKit's animator proxy receives the same alpha/frame setters as NSWindow.
+            // NSAnimationContext owns interpolation and commits when grouping ends.
+            unsafe {
+                let animator: *mut AnyObject = msg_send![ptr, animator];
+                let final_frame = ns_rect(reveal.final_frame);
+                let _: () = msg_send![animator, setAlphaValue: 1.0f64];
+                let _: () = msg_send![animator, setFrame: final_frame, display: true];
+            }
+            NSAnimationContext::endGrouping();
+        } else {
+            // SAFETY: non-cinematic restores and already-completed onboarding show immediately.
+            unsafe {
+                let _: () = msg_send![ptr, setAlphaValue: 1.0f64];
+            }
         }
         window
             .set_focus()
@@ -980,7 +1048,7 @@ pub mod mac {
                     .find(|surface| surface.surface == OnboardingSurfaceKind::Interactive)
                 {
                     if let Some(window) = app.get_webview_window(&surface.label) {
-                        activate_interactive(&window, mtm)?;
+                        activate_interactive(&window, mtm, None)?;
                     }
                 }
                 return Ok(());
@@ -1078,7 +1146,7 @@ pub mod mac {
                 .first()
                 .ok_or_else(|| "interactive onboarding window missing".to_owned())?;
             attach_surface_cleanup(app, window, &surfaces[0]);
-            activate_interactive(window, mtm)?;
+            activate_interactive(window, mtm, None)?;
             crate::permission_drag::install_monitor(app);
         }
         install_display_observer(app);
@@ -1150,11 +1218,15 @@ pub mod mac {
             (labels, surface, session.model.displays.clone())
         };
 
-        destroy_labels(app, &intro_labels);
         let display = display_for(&displays, &surface)?;
         let window = build_interactive_window(app, &surface, display)?;
         attach_surface_cleanup(app, &window, &surface);
-        activate_interactive(&window, mtm)?;
+        let reduce_motion = NSWorkspace::sharedWorkspace().accessibilityDisplayShouldReduceMotion();
+        let reveal = interactive_reveal(interactive_window_layout(*display), reduce_motion);
+        // Keep the veil alive while WebKit builds the white base. Removing it only after the
+        // replacement exists prevents the real desktop from flashing between the two surfaces.
+        destroy_labels(app, &intro_labels);
+        activate_interactive(&window, mtm, Some(reveal))?;
         crate::permission_drag::install_monitor(app);
         Ok(())
     }
@@ -1672,7 +1744,7 @@ mod tests {
         );
         assert_eq!(
             interactive_window_layout(screens[2]).frame,
-            Rect::new(80.0, 998.0, 1120.0, 688.0)
+            Rect::new(16.0, 998.0, 1248.0, 688.0)
         );
     }
 
@@ -1725,7 +1797,7 @@ mod tests {
         assert_eq!(
             interactive_window_layout(screen),
             InteractiveWindowLayout {
-                frame: Rect::new(196.0, 138.0, 1120.0, 720.0),
+                frame: Rect::new(126.0, 103.0, 1260.0, 790.0),
                 min_width: 680.0,
                 min_height: 520.0,
                 max_width: 1480.0,
@@ -1743,7 +1815,7 @@ mod tests {
         );
         let layout = interactive_window_layout(screen);
 
-        assert_eq!((layout.frame.w, layout.frame.h), (1120.0, 720.0));
+        assert_eq!((layout.frame.w, layout.frame.h), (1260.0, 790.0));
         assert_eq!((layout.max_width, layout.max_height), (1968.0, 1168.0));
     }
 
@@ -1765,7 +1837,7 @@ mod tests {
     fn injected_intro_style_keeps_cinematic_art_and_mute_visible() {
         let script = mac::INTRO_DIMMER_INITIALIZATION_SCRIPT;
 
-        assert!(script.contains("background: rgba(0, 0, 0, 0.58)"));
+        assert!(script.contains("background: rgba(1, 3, 5, 0.88)"));
         assert!(!script.contains(".onb-cinematic > *"));
         assert!(!script.contains("display: none"));
     }
@@ -1780,7 +1852,7 @@ mod tests {
 
         assert_eq!(
             interactive_window_layout(screen).frame,
-            Rect::new(-1520.0, 185.0, 1120.0, 720.0)
+            Rect::new(-1590.0, 150.0, 1260.0, 790.0)
         );
     }
 
@@ -1822,12 +1894,34 @@ mod tests {
     }
 
     #[test]
-    fn five_second_transition_occurs_exactly_once() {
+    fn four_second_transition_occurs_exactly_once() {
         let mut session = WindowSessionModel::intro(7, displays(), Point::new(50.0, 50.0), Some(1))
             .expect("session");
         assert!(!session.deadline_elapsed(7, INTRO_DURATION - Duration::from_nanos(1)));
         assert!(session.deadline_elapsed(7, INTRO_DURATION));
         assert!(!session.deadline_elapsed(7, INTRO_DURATION + Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn interactive_reveal_scales_from_center_and_reduced_motion_only_fades() {
+        let screen = display_with_visible(
+            8,
+            Rect::new(0.0, 0.0, 1512.0, 982.0),
+            Rect::new(0.0, 48.0, 1512.0, 900.0),
+        );
+        let layout = interactive_window_layout(screen);
+        let motion = interactive_reveal(layout, false);
+        let reduced = interactive_reveal(layout, true);
+
+        assert_eq!(motion.final_frame, layout.frame);
+        let expected = Rect::new(163.8, 126.7, 1184.4, 742.6);
+        assert!((motion.initial_frame.x - expected.x).abs() < f64::EPSILON * 512.0);
+        assert!((motion.initial_frame.y - expected.y).abs() < f64::EPSILON * 512.0);
+        assert!((motion.initial_frame.w - expected.w).abs() < f64::EPSILON * 8192.0);
+        assert!((motion.initial_frame.h - expected.h).abs() < f64::EPSILON * 8192.0);
+        assert_eq!(motion.duration, Duration::from_millis(460));
+        assert_eq!(reduced.initial_frame, layout.frame);
+        assert_eq!(reduced.duration, Duration::from_millis(200));
     }
 
     #[test]

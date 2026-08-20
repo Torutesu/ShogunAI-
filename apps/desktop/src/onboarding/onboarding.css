@@ -7,12 +7,14 @@ button, label, input { touch-action: manipulation; -webkit-tap-highlight-color: 
 
 /* Native owns placement. This surface only darkens the existing screen. */
 .onb-cinematic, .onb-ambient { position: relative; display: grid; width: 100%; height: 100%; min-width: 0; min-height: 0; place-items: center; overflow: hidden; }
-.onb-cinematic { isolation: isolate; background: rgba(2, 4, 8, .82); }
+.onb-cinematic { isolation: isolate; background: rgba(1, 3, 5, .88); }
 .onb-ambient { background: rgba(2, 4, 8, .78); --onb-flow-from-x: 0px; --onb-flow-from-y: 0px; --onb-flow-to-x: 0px; --onb-flow-to-y: 0px; }
-.onb-cinematic__mark { position: relative; z-index: 2; color: #2e6bd3; opacity: 0; animation: onb-mark-arrive 520ms cubic-bezier(.22, 1, .36, 1) 220ms both; }
-.onb-cinematic__wave { position: absolute; width: clamp(132px, 16vw, 220px); opacity: .46; filter: invert(39%) sepia(45%) saturate(1942%) hue-rotate(184deg) brightness(82%) contrast(92%); animation: onb-wave-inward 760ms cubic-bezier(.25, 1, .5, 1) both; }
-.onb-cinematic__wave--one { transform: translate3d(-34vw, -12vh, 0) rotate(-10deg); }
-.onb-cinematic__wave--two { transform: translate3d(34vw, 12vh, 0) rotate(170deg); animation-delay: 80ms; }
+.onb-cinematic__light, .onb-cinematic__bloom { position: absolute; pointer-events: none; transform-origin: center; }
+.onb-cinematic__light { width: min(78vw, 1100px); height: min(92vh, 900px); opacity: 0; animation: onb-light-gather 4s cubic-bezier(.25, 1, .5, 1) both; }
+.onb-cinematic__light--ember { margin-left: -32vw; margin-top: 2vh; background: radial-gradient(ellipse at center, rgba(195,95,60,.58) 0%, rgba(168,65,38,.34) 26%, rgba(110,38,28,.16) 48%, transparent 76%); --onb-light-from: translate3d(-12vw, 6vh, 0) scale(.72); --onb-light-mid: translate3d(7vw, 0, 0) scale(1.06); --onb-light-to: translate3d(13vw, -2vh, 0) scale(.9); }
+.onb-cinematic__light--cedar { width: min(66vw, 940px); height: min(78vh, 760px); margin-left: 24vw; margin-top: 8vh; background: radial-gradient(ellipse at center, rgba(233,163,127,.48) 0%, rgba(201,112,76,.25) 30%, rgba(123,57,42,.12) 52%, transparent 78%); animation-duration: 3.91s; animation-delay: 90ms; --onb-light-from: translate3d(12vw, 8vh, 0) scale(.68); --onb-light-mid: translate3d(-5vw, -1vh, 0) scale(1.02); --onb-light-to: translate3d(-12vw, -3vh, 0) scale(.88); }
+.onb-cinematic__light--glacier { width: min(70vw, 980px); height: min(82vh, 800px); margin-left: 38vw; margin-top: -20vh; background: radial-gradient(ellipse at center, rgba(95,143,168,.34) 0%, rgba(58,104,130,.2) 31%, rgba(24,57,76,.1) 52%, transparent 78%); animation-duration: 3.84s; animation-delay: 160ms; --onb-light-from: translate3d(15vw, -8vh, 0) scale(.7); --onb-light-mid: translate3d(-8vw, 4vh, 0) scale(.98); --onb-light-to: translate3d(-17vw, 7vh, 0) scale(.86); }
+.onb-cinematic__bloom { width: min(88vw, 1320px); height: min(94vh, 940px); opacity: 0; background: radial-gradient(ellipse at center, rgba(252,249,244,.92) 0%, rgba(238,231,224,.62) 30%, rgba(207,205,203,.2) 56%, transparent 78%); animation: onb-white-bloom 4s cubic-bezier(.22, 1, .36, 1) both; }
 .onb-ambient[data-motion-x="1"] { --onb-flow-from-x: -12px; --onb-flow-to-x: 36px; }
 .onb-ambient[data-motion-x="-1"] { --onb-flow-from-x: 12px; --onb-flow-to-x: -36px; }
 .onb-ambient[data-motion-y="1"] { --onb-flow-from-y: -12px; --onb-flow-to-y: 36px; }
@@ -145,12 +147,14 @@ button, label, input { touch-action: manipulation; -webkit-tap-highlight-color: 
 .onb-gate__video { position: absolute; inset: 0; display: block; width: 100%; height: 100%; object-fit: cover; object-position: 50% 53%; }
 .onb-gate[data-complete="true"] .onb-gate__image { opacity: .9; transform: scale(1.012); }
 
-@keyframes onb-wave-inward { 0% { opacity: 0; } 18% { opacity: .46; } 78% { opacity: .36; transform: translate3d(0,0,0) scale(.72); } 100% { opacity: 0; transform: translate3d(0,0,0) scale(.66); } }
-@keyframes onb-mark-arrive { 0% { opacity: 0; transform: scale(.9); } 72%, 100% { opacity: 1; transform: scale(1); } }
+@keyframes onb-light-gather { 0% { opacity: 0; transform: var(--onb-light-from); } 14% { opacity: .34; } 68% { opacity: .68; transform: var(--onb-light-mid); } 88% { opacity: .52; } 100% { opacity: .18; transform: var(--onb-light-to); } }
+@keyframes onb-white-bloom { 0%, 66% { opacity: 0; transform: scale(.78); } 82% { opacity: .3; } 100% { opacity: .82; transform: scale(1); } }
 @keyframes onb-ambient-flow { 0% { opacity: 0; transform: translate3d(var(--onb-flow-from-x), var(--onb-flow-from-y), 0); } 18% { opacity: .42; } 82% { opacity: .34; transform: translate3d(var(--onb-flow-to-x), var(--onb-flow-to-y), 0); } 100% { opacity: 0; transform: translate3d(var(--onb-flow-to-x), var(--onb-flow-to-y), 0); } }
 @keyframes onb-stage-in { from { opacity: 0; transform: translate3d(0, 7px, 0); } to { opacity: 1; transform: translate3d(0, 0, 0); } }
-@media (prefers-reduced-motion: reduce) { .onb-cinematic__wave, .onb-ambient img { transform: none; animation: onb-reduced-current-fade 200ms linear both; } .onb-cinematic__mark { animation: onb-reduced-fade 220ms linear both; } .onb-stage { animation: onb-reduced-fade 180ms linear both; } .onb-gate__image { transition: opacity 180ms linear; } }
+@media (prefers-reduced-motion: reduce) { .onb-cinematic__light { transform: none; animation: onb-reduced-light-fade 200ms linear both; } .onb-cinematic__bloom { transform: none; animation: onb-reduced-bloom-fade 200ms linear both; } .onb-ambient img { transform: none; animation: onb-reduced-current-fade 200ms linear both; } .onb-stage { animation: onb-reduced-fade 180ms linear both; } .onb-gate__image { transition: opacity 180ms linear; } }
 @keyframes onb-reduced-current-fade { from { opacity: 0; } to { opacity: .42; } }
+@keyframes onb-reduced-light-fade { from { opacity: 0; } to { opacity: .44; } }
+@keyframes onb-reduced-bloom-fade { from { opacity: 0; } to { opacity: .12; } }
 @keyframes onb-reduced-fade { from { opacity: 0; } to { opacity: 1; } }
 
 @media (max-width: 900px) { .onb-layout { grid-template-columns: minmax(0, 56fr) minmax(260px, 44fr); } .onb-copy { padding-inline: clamp(30px, 5vw, 56px); } }

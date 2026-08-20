@@ -72,6 +72,7 @@ objc2 = "0.6"
 block2 = "0.6" # ObjC blocks for NSWorkspace notification observers (space-change watcher)
 objc2-app-kit = { version = "0.3", features = [
     "NSResponder", "NSWindow", "NSView", "NSPanel", "NSScreen", "NSGraphics",
+    "NSAnimationContext", "NSAccessibility", "block2", "objc2-quartz-core",
     "NSWorkspace", "NSRunningApplication", "NSDragging", "NSDraggingItem",
     "NSDraggingSession", "NSEvent", "NSImage", "NSPasteboard", "NSColor", "NSFont",
     "NSImageView", "NSTextField", "NSControl", "NSCell", "libc",
@@ -79,6 +80,7 @@ objc2-app-kit = { version = "0.3", features = [
     # app's volume — the alert-sound path would take the volume control away from the user.
     "NSSound",
 ] }
+objc2-quartz-core = { version = "0.3", features = ["CAMediaTimingFunction"] }
 objc2-foundation = { version = "0.3", features = [
     "NSString", "NSArray", "NSDictionary", "NSGeometry", "NSNotification", "NSURL", "NSBundle",
     # The cue WAVs are compiled in and handed to NSSound as NSData (#49).
