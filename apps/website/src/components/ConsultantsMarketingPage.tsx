@@ -3,22 +3,16 @@ import {
   ArrowRight,
   Check,
   FileText,
-  KeyRound,
-  LockKeyhole,
   Mail,
-  PauseCircle,
   Search,
   Send,
-  ShieldCheck,
   Sparkles,
   Video,
   X,
 } from 'lucide-react';
-import { AppFrame } from '@/components/AppFrame';
 import type { Locale } from '@/i18n/config';
 import type { MarketingDetail } from '@/lib/marketing-content';
 
-type PrivacyCard = { title: string; body: string };
 type VisualCopy = {
   email: string;
   meeting: string;
@@ -37,7 +31,6 @@ type UseCaseCopy = {
   heroTitle: string;
   heroAccent: string;
   heroCta: string;
-  demoTitle: string;
   proof: readonly [string, string, string];
   comparisonEyebrow: string;
   comparisonTitle: string;
@@ -46,11 +39,6 @@ type UseCaseCopy = {
   newTitle: string;
   oldItems: readonly [string, string, string, string];
   newItems: readonly [string, string, string, string];
-  privacyEyebrow: string;
-  privacyTitle: string;
-  privacyIntro: string;
-  privacyLink: string;
-  privacyCards: readonly [PrivacyCard, PrivacyCard, PrivacyCard, PrivacyCard, PrivacyCard];
   featuresEyebrow: string;
   featuresTitle: string;
   featuresBody: string;
@@ -68,7 +56,6 @@ const consultantsCopyByLocale: Record<Locale, UseCaseCopy> = {
     heroTitle: 'Every client context, in one',
     heroAccent: 'private memory',
     heroCta: 'Get early access',
-    demoTitle: 'ShogunAI private work memory',
     proof: ['Local-first memory', 'Bring your own AI', 'Approval before sending'],
     comparisonEyebrow: 'The ShogunAI way',
     comparisonTitle: 'Client work is fragmented. Let’s reconnect it.',
@@ -87,33 +74,6 @@ const consultantsCopyByLocale: Record<Locale, UseCaseCopy> = {
       'Prepare a briefing from context you already have',
       'Draft follow-ups and review them before they leave',
       'Keep memory local by default and control what is shared',
-    ],
-    privacyEyebrow: 'Privacy & control',
-    privacyTitle: 'Your work context stays under your control',
-    privacyIntro:
-      'ShogunAI is designed around local-first memory and explicit choices about what is captured, shared, or acted on.',
-    privacyLink: 'See our privacy and security approach',
-    privacyCards: [
-      {
-        title: 'Private work memory, local first',
-        body: 'Captured work memory stays on your Mac by default, so your working history does not need a permanent cloud copy.',
-      },
-      {
-        title: 'Pause or remove memory',
-        body: 'Stop capture when needed and remove local memory on your terms.',
-      },
-      {
-        title: 'Never used for training',
-        body: 'Your work context is not used to train our models.',
-      },
-      {
-        title: 'Bring your own provider',
-        body: 'Choose a supported AI provider and manage the relationship with your own key.',
-      },
-      {
-        title: 'Approval before consequence',
-        body: 'Client-facing sends and other consequential actions pause for your review.',
-      },
     ],
     featuresEyebrow: 'AI for the complete client workflow',
     featuresTitle: 'From scattered signals to client-ready work',
@@ -143,7 +103,6 @@ const consultantsCopyByLocale: Record<Locale, UseCaseCopy> = {
     heroTitle: 'すべての顧客文脈を、ひとつの',
     heroAccent: 'プライベートな記憶へ',
     heroCta: '早期アクセスを申し込む',
-    demoTitle: 'ShogunAIのプライベートな仕事の記憶',
     proof: ['ローカルファースト', '利用するAIを選択', '送信前に承認'],
     comparisonEyebrow: 'ShogunAIの進め方',
     comparisonTitle: '分散した顧客業務を、ひとつの流れへ。',
@@ -161,33 +120,6 @@ const consultantsCopyByLocale: Record<Locale, UseCaseCopy> = {
       'すでに持っている文脈から会議ブリーフを準備する',
       'フォローを下書きし、外部へ出る前に確認する',
       '記憶を既定でローカルに保ち、共有範囲を管理する',
-    ],
-    privacyEyebrow: 'プライバシーと管理',
-    privacyTitle: '仕事の文脈を、あなたの管理下に',
-    privacyIntro:
-      'ShogunAIはローカルファーストな記憶を中心に、何を取得し、共有し、実行するかを明示的に選べるよう設計されています。',
-    privacyLink: 'プライバシーと安全性への取り組み',
-    privacyCards: [
-      {
-        title: '仕事の記憶はローカルファースト',
-        body: '取得した仕事の記憶は既定でMac内に保たれ、仕事の履歴を恒久的にクラウドへ複製する必要を減らします。',
-      },
-      {
-        title: 'いつでも停止・削除',
-        body: '必要なときに取得を止め、ローカルの記憶を自分の判断で削除できます。',
-      },
-      {
-        title: '学習には利用しない',
-        body: '仕事の文脈をShogunAIのモデル学習には使用しません。',
-      },
-      {
-        title: '利用するAIを自分で選ぶ',
-        body: '対応するAIプロバイダを選び、自分のAPIキーで関係を管理できます。',
-      },
-      {
-        title: '重要操作は承認してから',
-        body: '顧客への送信など影響のある操作は、確認してから実行されます。',
-      },
     ],
     featuresEyebrow: '顧客業務全体を支えるAI',
     featuresTitle: '散らばった兆しを、顧客に届ける仕事へ',
@@ -216,7 +148,6 @@ const consultantsCopyByLocale: Record<Locale, UseCaseCopy> = {
     heroTitle: 'Todo el contexto de tus clientes, en una',
     heroAccent: 'memoria privada',
     heroCta: 'Solicitar acceso anticipado',
-    demoTitle: 'Memoria privada de trabajo de ShogunAI',
     proof: ['Memoria local-first', 'Elige tu IA', 'Aprobación antes de enviar'],
     comparisonEyebrow: 'La forma ShogunAI',
     comparisonTitle: 'El trabajo con clientes está fragmentado. Volvamos a conectarlo.',
@@ -235,33 +166,6 @@ const consultantsCopyByLocale: Record<Locale, UseCaseCopy> = {
       'Preparar un briefing con el contexto que ya tienes',
       'Redactar seguimientos y revisarlos antes de enviarlos',
       'Mantener la memoria en local y controlar lo que se comparte',
-    ],
-    privacyEyebrow: 'Privacidad y control',
-    privacyTitle: 'El contexto de tu trabajo sigue bajo tu control',
-    privacyIntro:
-      'ShogunAI parte de una memoria local-first y de decisiones explícitas sobre qué se captura, comparte o ejecuta.',
-    privacyLink: 'Ver nuestro enfoque de privacidad y seguridad',
-    privacyCards: [
-      {
-        title: 'Memoria privada, primero en local',
-        body: 'La memoria de trabajo permanece en tu Mac por defecto, sin exigir una copia permanente de tu historial de trabajo en la nube.',
-      },
-      {
-        title: 'Pausa o elimina la memoria',
-        body: 'Detén la captura cuando lo necesites y elimina la memoria local bajo tus condiciones.',
-      },
-      {
-        title: 'Nunca se usa para entrenar',
-        body: 'El contexto de tu trabajo no se utiliza para entrenar nuestros modelos.',
-      },
-      {
-        title: 'Elige tu proveedor',
-        body: 'Escoge un proveedor de IA compatible y gestiona la conexión con tu propia clave.',
-      },
-      {
-        title: 'Aprobación antes de actuar',
-        body: 'Los envíos a clientes y otras acciones relevantes se detienen para que los revises.',
-      },
     ],
     featuresEyebrow: 'IA para todo el flujo de clientes',
     featuresTitle: 'De señales dispersas a trabajo listo para el cliente',
@@ -291,7 +195,6 @@ const consultantsCopyByLocale: Record<Locale, UseCaseCopy> = {
     heroTitle: 'Jeder Kundenkontext in einem',
     heroAccent: 'privaten Gedächtnis',
     heroCta: 'Frühzugang anfragen',
-    demoTitle: 'Privates Arbeitsgedächtnis von ShogunAI',
     proof: ['Local-first-Gedächtnis', 'Eigene KI wählen', 'Freigabe vor dem Senden'],
     comparisonEyebrow: 'Die ShogunAI-Arbeitsweise',
     comparisonTitle: 'Kundenarbeit ist fragmentiert. Verbinden wir sie wieder.',
@@ -310,33 +213,6 @@ const consultantsCopyByLocale: Record<Locale, UseCaseCopy> = {
       'Briefings aus bereits vorhandenem Kontext vorbereiten',
       'Follow-ups entwerfen und vor dem Versand prüfen',
       'Gedächtnis standardmäßig lokal halten und Freigaben steuern',
-    ],
-    privacyEyebrow: 'Datenschutz & Kontrolle',
-    privacyTitle: 'Dein Arbeitskontext bleibt unter deiner Kontrolle',
-    privacyIntro:
-      'ShogunAI setzt auf ein Local-first-Gedächtnis und klare Entscheidungen darüber, was erfasst, geteilt oder ausgeführt wird.',
-    privacyLink: 'Unseren Datenschutz- und Sicherheitsansatz ansehen',
-    privacyCards: [
-      {
-        title: 'Privates Gedächtnis, zuerst lokal',
-        body: 'Erfasster Arbeitskontext bleibt standardmäßig auf deinem Mac, ohne dauerhafte Cloud-Kopie deiner Arbeitshistorie.',
-      },
-      {
-        title: 'Gedächtnis pausieren oder löschen',
-        body: 'Stoppe die Erfassung bei Bedarf und entferne lokale Erinnerungen zu deinen Bedingungen.',
-      },
-      {
-        title: 'Nie für Training verwendet',
-        body: 'Dein Arbeitskontext wird nicht zum Training unserer Modelle verwendet.',
-      },
-      {
-        title: 'Eigenen Anbieter wählen',
-        body: 'Wähle einen unterstützten KI-Anbieter und verwalte die Verbindung mit deinem eigenen Schlüssel.',
-      },
-      {
-        title: 'Freigabe vor der Ausführung',
-        body: 'Kundensendungen und andere folgenreiche Aktionen warten auf deine Prüfung.',
-      },
     ],
     featuresEyebrow: 'KI für den gesamten Kundenworkflow',
     featuresTitle: 'Von verstreuten Signalen zu kundenfertiger Arbeit',
@@ -370,7 +246,6 @@ const foundersCopyByLocale: Record<Locale, UseCaseCopy> = {
     heroEyebrow: 'AI-powered company context',
     heroTitle: 'Every company decision, in one',
     heroAccent: 'private memory',
-    demoTitle: 'ShogunAI private company memory',
     comparisonTitle: 'Company context is fragmented. Lead with the full picture.',
     comparisonBody:
       'Connect product, hiring, customers, fundraising, and operations so the next decision starts from what the company already knows.',
@@ -414,7 +289,6 @@ const foundersCopyByLocale: Record<Locale, UseCaseCopy> = {
     heroEyebrow: 'AIでつなぐ経営の文脈',
     heroTitle: 'すべての経営判断を、ひとつの',
     heroAccent: 'プライベートな記憶へ',
-    demoTitle: 'ShogunAIのプライベートな会社の記憶',
     comparisonTitle: '分散した会社の文脈を、次の判断につなぐ。',
     comparisonBody:
       'プロダクト、採用、顧客、資金調達、業務の経緯をつなぎ、会社がすでに知っていることから次の判断を始めます。',
@@ -457,7 +331,6 @@ const foundersCopyByLocale: Record<Locale, UseCaseCopy> = {
     heroEyebrow: 'Contexto empresarial impulsado por IA',
     heroTitle: 'Cada decisión de la empresa, en una',
     heroAccent: 'memoria privada',
-    demoTitle: 'Memoria empresarial privada de ShogunAI',
     comparisonTitle: 'El contexto de la empresa está fragmentado. Lidera con la imagen completa.',
     comparisonBody:
       'Conecta producto, contratación, clientes, financiación y operaciones para empezar cada decisión con lo que la empresa ya sabe.',
@@ -502,7 +375,6 @@ const foundersCopyByLocale: Record<Locale, UseCaseCopy> = {
     heroEyebrow: 'KI-gestützter Unternehmenskontext',
     heroTitle: 'Jede Unternehmensentscheidung in einem',
     heroAccent: 'privaten Gedächtnis',
-    demoTitle: 'Privates Unternehmensgedächtnis von ShogunAI',
     comparisonTitle: 'Unternehmenskontext ist fragmentiert. Führe mit dem Gesamtbild.',
     comparisonBody:
       'Verbinde Produkt, Recruiting, Kunden, Finanzierung und Betrieb, damit jede Entscheidung mit dem vorhandenen Wissen beginnt.',
@@ -550,7 +422,6 @@ const productEngineeringCopyByLocale: Record<Locale, UseCaseCopy> = {
     heroEyebrow: 'AI-powered product work',
     heroTitle: 'Every product decision, in one',
     heroAccent: 'private memory',
-    demoTitle: 'ShogunAI private product memory',
     comparisonTitle: 'Product work is fragmented. Connect decision to delivery.',
     comparisonBody:
       'Bring customer evidence, discussion, design, and implementation into one private context layer that carries the why forward.',
@@ -595,7 +466,6 @@ const productEngineeringCopyByLocale: Record<Locale, UseCaseCopy> = {
     heroEyebrow: 'AIでつなぐプロダクト業務',
     heroTitle: 'すべてのプロダクト判断を、ひとつの',
     heroAccent: 'プライベートな記憶へ',
-    demoTitle: 'ShogunAIのプライベートなプロダクト記憶',
     comparisonTitle: '分断したプロダクト業務を、判断から提供までつなぐ。',
     comparisonBody: '顧客の声、議論、設計、実装をひとつのプライベートな文脈につなぎ、判断理由を次の工程へ運びます。',
     oldTitle: 'これまでのプロダクト業務',
@@ -637,7 +507,6 @@ const productEngineeringCopyByLocale: Record<Locale, UseCaseCopy> = {
     heroEyebrow: 'Trabajo de producto impulsado por IA',
     heroTitle: 'Cada decisión de producto, en una',
     heroAccent: 'memoria privada',
-    demoTitle: 'Memoria privada de producto de ShogunAI',
     comparisonTitle: 'El trabajo de producto está fragmentado. Conecta decisión y entrega.',
     comparisonBody:
       'Une evidencia de clientes, conversaciones, diseño e implementación en una capa privada que conserva el porqué.',
@@ -682,7 +551,6 @@ const productEngineeringCopyByLocale: Record<Locale, UseCaseCopy> = {
     heroEyebrow: 'KI-gestützte Produktarbeit',
     heroTitle: 'Jede Produktentscheidung in einem',
     heroAccent: 'privaten Gedächtnis',
-    demoTitle: 'Privates Produktgedächtnis von ShogunAI',
     comparisonTitle: 'Produktarbeit ist fragmentiert. Verbinde Entscheidung und Auslieferung.',
     comparisonBody:
       'Führe Kundensignale, Diskussion, Design und Umsetzung in einer privaten Kontextebene zusammen, die das Warum weiterträgt.',
@@ -731,8 +599,6 @@ const copyBySlug = {
 
 type UseCaseSlug = keyof typeof copyBySlug;
 
-const privacyIcons = [LockKeyhole, PauseCircle, ShieldCheck, KeyRound, Check];
-const privacyAccents = ['#6758ff', '#087c62', '#68aef5', '#48c979'];
 
 function MemoryVisual({ copy }: { copy: VisualCopy }) {
   const sources = [
@@ -836,10 +702,10 @@ export function UseCaseMarketingPage({ page, locale }: { page: MarketingDetail; 
           className="absolute inset-x-0 top-0 h-[420px] bg-[radial-gradient(ellipse_at_70%_0%,rgba(110,82,255,0.12),transparent_55%)]"
           aria-hidden="true"
         />
-        <div className="container-x relative grid gap-14 lg:grid-cols-[minmax(0,0.88fr)_minmax(0,1.12fr)] lg:items-center lg:gap-[clamp(56px,6vw,96px)]">
-          <div>
+        <div className="container-x relative">
+          <div className="max-w-[900px]">
             <p className="text-xs font-semibold tracking-[0.15em] text-[#6758ff] uppercase">{copy.heroEyebrow}</p>
-            <h1 className="text-ink mt-6 max-w-[11ch] font-sans text-[clamp(48px,6vw,80px)] leading-[0.96] font-semibold tracking-[-0.065em] text-balance">
+            <h1 className="text-ink mt-6 max-w-[19ch] font-sans text-[clamp(44px,5.4vw,72px)] leading-[1.02] font-semibold tracking-[-0.055em] text-balance">
               {copy.heroTitle}{' '}
               <span className="inline-block bg-[linear-gradient(95deg,#25252b_5%,#8b8b94_65%,#b0b0b8)] bg-clip-text text-transparent [html[data-theme='dark']_&]:bg-[linear-gradient(95deg,#ffffff_5%,#a8a8b5_75%)] [html[data-theme='dark']_&]:bg-clip-text">
                 {copy.heroAccent}
@@ -863,9 +729,6 @@ export function UseCaseMarketingPage({ page, locale }: { page: MarketingDetail; 
                 </li>
               ))}
             </ul>
-          </div>
-          <div className="mx-auto w-full max-w-[760px] lg:max-w-none">
-            <AppFrame src="/app-demo/panel.html" title={copy.demoTitle} device="mac" className="w-full" />
           </div>
         </div>
       </header>
@@ -954,54 +817,6 @@ export function UseCaseMarketingPage({ page, locale }: { page: MarketingDetail; 
                 </article>
               );
             })}
-          </div>
-        </div>
-      </section>
-
-      <section className="py-[clamp(72px,10vw,136px)]">
-        <div className="container-x">
-          <div className="grid gap-10 lg:grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)] lg:items-start lg:gap-16">
-            <div>
-              <p className="text-xs font-semibold tracking-[0.15em] text-[#6758ff] uppercase">{copy.privacyEyebrow}</p>
-              <h2 className="text-ink mt-5 max-w-[12ch] font-sans text-[clamp(42px,5.4vw,72px)] leading-[0.98] font-semibold tracking-[-0.06em] text-balance">
-                {copy.privacyTitle}
-              </h2>
-              <p className="text-muted mt-7 max-w-[620px] text-[clamp(16px,1.4vw,19px)] leading-[1.65]">
-                {copy.privacyIntro}
-              </p>
-              <article className="theme-soft-section mt-10 rounded-[28px] bg-[#f7f4ff] p-[clamp(28px,4vw,54px)]">
-                <LockKeyhole className="text-ink size-14" strokeWidth={1.55} aria-hidden="true" />
-                <h3 className="text-ink mt-8 max-w-[15ch] text-[clamp(30px,3.4vw,48px)] leading-[1.02] font-semibold tracking-[-0.05em] text-balance">
-                  {copy.privacyCards[0].title}
-                </h3>
-                <p className="text-muted mt-5 max-w-[580px] text-[16px] leading-[1.65]">{copy.privacyCards[0].body}</p>
-                <Link
-                  href={`/${locale}/security`}
-                  className="mt-8 inline-flex items-center gap-2 text-sm font-semibold text-[#6758ff] underline decoration-[#6758ff]/30 underline-offset-4 hover:decoration-[#6758ff]"
-                >
-                  {copy.privacyLink}
-                  <ArrowRight className="size-4" />
-                </Link>
-              </article>
-            </div>
-            <div className="grid gap-5 sm:grid-cols-2 lg:pt-10">
-              {copy.privacyCards.slice(1).map((card, index) => {
-                const Icon = privacyIcons[index + 1];
-                return (
-                  <article
-                    key={card.title}
-                    className="theme-light-panel border-border bg-surface relative min-h-[300px] overflow-hidden rounded-[24px] border p-8 sm:min-h-[340px]"
-                  >
-                    <span className="absolute inset-x-0 top-0 h-2" style={{ backgroundColor: privacyAccents[index] }} />
-                    <Icon className="text-ink size-10" strokeWidth={1.7} aria-hidden="true" />
-                    <h3 className="text-ink mt-9 text-[clamp(25px,2.3vw,34px)] leading-[1.04] font-semibold tracking-[-0.045em] text-balance">
-                      {card.title}
-                    </h3>
-                    <p className="text-muted mt-5 text-[15px] leading-[1.65]">{card.body}</p>
-                  </article>
-                );
-              })}
-            </div>
           </div>
         </div>
       </section>
