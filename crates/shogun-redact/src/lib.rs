@@ -111,8 +111,11 @@ pub fn redact(text: &str) -> std::borrow::Cow<'_, str> {
 
         // 1. A known issuer prefix: mask the prefix and the value that follows it. Only at a
         //    token boundary — the "sk-" inside "task-management" is prose, not a key.
-        let at_token_boundary =
-            i == 0 || !text[..i].chars().next_back().map(is_secret_char).unwrap_or(false);
+        //    Only an ALPHANUMERIC neighbour makes it prose: the separators in `is_secret_char`
+        //    (`=`, `/`, `.`, `-`, `_`, `+`) are exactly what precedes a real key in
+        //    `MYVAR=sk-…`, `?k=sk-…`, `/keys/sk-…`, so testing those would un-mask live secrets.
+        let at_token_boundary = i == 0
+            || !text[..i].chars().next_back().map(char::is_alphanumeric).unwrap_or(false);
         if at_token_boundary {
             if let Some(p) = ISSUER_PREFIXES.iter().find(|p| rest.starts_with(**p)) {
                 let tail = &rest[p.len()..];
@@ -390,6 +393,17 @@ mod tests {
         }
         // Still masked when the prefix starts its own token.
         assert_eq!(r("key sk-abcdefghijklmnop here"), "key [redacted] here");
+    }
+
+    #[test]
+    fn a_secret_after_a_separator_is_still_masked() {
+        // The shapes a key actually arrives in on a captured screen: an env assignment, a query
+        // parameter, a path. The preceding char is a separator, not prose — masking must hold,
+        // or the live key is written verbatim into event_log.
+        assert_eq!(r("export MYVAR=sk-abcdefghijklmnop"), "export MYVAR=[redacted]");
+        assert_eq!(r("https://x.test/v1?k=sk-abcdefghijklmnop"), "https://x.test/v1?k=[redacted]");
+        assert_eq!(r("cat /keys/sk-abcdefghijklmnop"), "cat /keys/[redacted]");
+        assert_eq!(r("(sk-abcdefghijklmnop)"), "([redacted])");
     }
 
     #[test]
