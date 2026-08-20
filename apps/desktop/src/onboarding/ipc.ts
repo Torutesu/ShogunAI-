@@ -55,6 +55,7 @@ export type SemanticStepId =
   | "right_option"
   | "scribe_demo"
   | "dictation_demo"
+  | "theme"
   | "privacy"
   | "gate";
 

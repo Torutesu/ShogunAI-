@@ -9,6 +9,7 @@ import { MuteButton } from "./MuteButton";
 import { OverviewStage } from "./OverviewStage";
 import { PermissionStage } from "./PermissionStage";
 import { ShortcutPractice } from "./ShortcutPractice";
+import { ThemeStage } from "./ThemeStage";
 
 export function OnboardingExperience(props: {
   state: OnboardingState;
@@ -60,8 +61,9 @@ export function OnboardingExperience(props: {
     <main className="onb-shell" data-step={step}>
       <WindowDragRegion />
       <div className="onb-layout">
-        <div className={`onb-copy${step === "overview" ? " onb-copy--overview" : ""}`} key={step}>
-          {step === "overview" ? <OverviewStage onBack={() => onPersist("welcome")} onContinue={() => onPersist("accessibility")} /> : null}
+        <div className={`onb-copy${step === "overview" || step === "theme" ? " onb-copy--overview" : ""}`} key={step}>
+          {step === "overview" ? <OverviewStage onBack={() => onPersist("welcome")} onContinue={() => onPersist("theme")} /> : null}
+          {step === "theme" ? <ThemeStage onBack={() => onPersist("reads")} onContinue={() => onPersist("accessibility")} /> : null}
           {step === "privacy" ? <PrivacyStage onContinue={() => onPersist("plan")} /> : null}
           {step === "accessibility" || step === "microphone" || step === "screen_recording" ? (
             <PermissionStage kind={step} permissions={permissions} state={state} onPersist={onPersist} />
@@ -87,9 +89,10 @@ function WindowDragRegion(): JSX.Element {
   return <div className="onb-window-drag-region" data-tauri-drag-region aria-hidden="true" />;
 }
 
-function routeStep(step: OnboardingState["step"], p: PermissionSnapshot): "welcome" | "overview" | "privacy" | "accessibility" | "microphone" | "screen_recording" | "right_option" | "scribe_demo" | "dictation_demo" | "plan" | "connect" | "gate" {
+function routeStep(step: OnboardingState["step"], p: PermissionSnapshot): "welcome" | "overview" | "theme" | "privacy" | "accessibility" | "microphone" | "screen_recording" | "right_option" | "scribe_demo" | "dictation_demo" | "plan" | "connect" | "gate" {
   if (step === "intro" || step === "welcome") return "welcome";
   if (step === "reads") return "overview";
+  if (step === "theme") return "theme";
   if (step === "privacy") return "privacy";
   if (step === "permission") return !p.accessibility ? "accessibility" : !p.microphone ? "microphone" : !p.screen_recording ? "screen_recording" : "right_option";
   if (step === "accessibility") return "accessibility";

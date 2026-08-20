@@ -36,6 +36,7 @@ pub mod state {
         #[default]
         Welcome,
         Reads,
+        Theme,
         Permission,
         Accessibility,
         Microphone,
@@ -57,6 +58,7 @@ pub mod state {
                 Self::Intro => "intro",
                 Self::Welcome => "welcome",
                 Self::Reads => "reads",
+                Self::Theme => "theme",
                 Self::Permission => "permission",
                 Self::Accessibility => "accessibility",
                 Self::Microphone => "microphone",
@@ -355,6 +357,15 @@ pub mod state {
             assert!(serde_json::from_str::<OnboardingStep>(r#""surprise""#).is_err());
             let state = parse(r#"{"version":2,"state":{"step":"surprise"}}"#);
             assert_eq!(state, OnboardingState::default());
+        }
+
+        #[test]
+        fn theme_step_roundtrips_in_current_state() {
+            let json = serde_json::to_string(&OnboardingStep::Theme).unwrap();
+            assert_eq!(
+                serde_json::from_str::<OnboardingStep>(&json).unwrap(),
+                OnboardingStep::Theme
+            );
         }
 
         #[test]

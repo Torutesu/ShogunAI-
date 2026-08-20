@@ -16,8 +16,22 @@ const emptyPermissions: PermissionSnapshot = {
   all_effective: false, reason: null, revision: 1,
 };
 const state = (step: string, revision = 1) => ({ completed: false, step, plan: null, revision, intro_complete: true, music_muted: false });
+const localValues = new Map<string, string>();
+const localStorageMock = {
+  getItem: (key: string) => localValues.get(key) ?? null,
+  setItem: (key: string, value: string) => { localValues.set(key, value); },
+  removeItem: (key: string) => { localValues.delete(key); },
+  clear: () => { localValues.clear(); },
+  key: (index: number) => [...localValues.keys()][index] ?? null,
+  get length() { return localValues.size; },
+};
 
-beforeEach(() => { vi.clearAllMocks(); window.history.replaceState({}, "", "/onboarding.html"); });
+beforeEach(() => {
+  vi.clearAllMocks();
+  localValues.clear();
+  Object.defineProperty(window, "localStorage", { value: localStorageMock, configurable: true });
+  window.history.replaceState({}, "", "/onboarding.html");
+});
 afterEach(cleanup);
 
 function mockNative(initialStep: string, permissions = emptyPermissions): void {
@@ -141,6 +155,21 @@ describe("cinematic onboarding", () => {
     fireEvent.click(screen.getByRole("button", { name: "Back" }));
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
     expect(onPersist).toHaveBeenNthCalledWith(1, "welcome");
+    expect(onPersist).toHaveBeenNthCalledWith(2, "theme");
+  });
+
+  it("persists a real theme choice while keeping gate and navigation", () => {
+    const onPersist = vi.fn(async () => true);
+    render(<OnboardingExperience state={{ ...state("theme"), step: "theme" }} permissions={emptyPermissions} surfaceGeneration={1} onPersist={onPersist} onFinish={vi.fn(async () => true)} onToggleMusic={vi.fn(async () => true)} musicPending={false} />);
+
+    expect(screen.getByTestId("gate-frame")).toBeTruthy();
+    expect(screen.getByRole("radio", { name: "System" }).getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(screen.getByRole("radio", { name: "Dark" }));
+    expect(window.localStorage.getItem("shogun.appearance")).toBe('"dark"');
+    expect(screen.getByRole("radio", { name: "Dark" }).getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    expect(onPersist).toHaveBeenNthCalledWith(1, "reads");
     expect(onPersist).toHaveBeenNthCalledWith(2, "accessibility");
   });
 
@@ -596,6 +625,7 @@ describe("cinematic onboarding", () => {
     ["intro", "Welcome to Shogun"],
     ["welcome", "Welcome to Shogun"],
     ["reads", "Welcome to Shogun"],
+    ["theme", "Choose your theme"],
     ["privacy", "What it reads, and what it never keeps."],
     ["accessibility", "Accessibility"],
     ["microphone", "Microphone"],
