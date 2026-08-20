@@ -1,0 +1,75 @@
+<!doctype html>
+<!--
+  Source of truth for public/og-image.png (the card every share of shogunaios.com renders).
+  Render at exactly 1200x630 and save over public/og-image.png:
+
+    node scripts/generate-og-image.mjs
+
+  Keep the headline in step with siteConfig.tagline in src/lib/site.ts.
+-->
+<meta charset="utf-8" />
+<style>
+  @font-face {
+    font-family: 'Geist';
+    src: url('../node_modules/geist/dist/fonts/geist-sans/Geist-Variable.woff2') format('woff2');
+    font-weight: 100 900;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 1200px; height: 630px; }
+  body {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 100px 80px 0;
+    background: linear-gradient(135deg, #dce5ff 0%, #f5f8ff 46%, #ffffff 100%);
+    font-family: 'Geist', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .mark { position: absolute; top: 68px; right: 78px; }
+  h1 {
+    font-size: 68px;
+    font-weight: 700;
+    line-height: 1.06;
+    letter-spacing: -0.035em;
+    color: #0b1b43;
+  }
+  h1 .accent { color: #004cfc; }
+  p.sub {
+    margin-top: 26px;
+    font-size: 27px;
+    font-weight: 400;
+    letter-spacing: -0.01em;
+    color: #536a9e;
+  }
+  ul.pills { margin-top: 60px; display: flex; gap: 16px; list-style: none; }
+  ul.pills li {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 50px;
+    padding: 0 24px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.78);
+    font-size: 17px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    color: #27427e;
+  }
+  ul.pills .dot { width: 9px; height: 9px; border-radius: 999px; background: #004cfc; }
+</style>
+<svg class="mark" width="186" height="120" viewBox="0 0 957 614" fill="#004CFC" aria-hidden="true">
+  <path d="M296 254 L469 0 L469 525 Z" />
+  <path d="M0 101 L276 264 L446 524 L176 390 Z" />
+  <path d="M62 613 L171 413 L331 493 Z" />
+  <g transform="translate(957,0) scale(-1,1)">
+    <path d="M296 254 L469 0 L469 525 Z" />
+    <path d="M0 101 L276 264 L446 524 L176 390 Z" />
+    <path d="M62 613 L171 413 L331 493 Z" />
+  </g>
+</svg>
+<h1>Your personal AGI<br /><span class="accent">on your PC.</span></h1>
+<p class="sub">Built to finish real work.</p>
+<ul class="pills">
+  <li><span class="dot"></span>486 people have joined</li>
+  <li>First 10,000 only</li>
+</ul>

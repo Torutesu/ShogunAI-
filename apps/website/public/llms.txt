@@ -1,5 +1,7 @@
 # ShogunAI
 
+> Your personal AGI on your PC. Built to finish real work.
+>
 > ShogunAI is a private, local-first AI memory for knowledge workers on macOS.
 > It captures work context, recalls decisions and conversations in natural
 > language, and turns that context into action across connected tools.

@@ -1,7 +1,7 @@
 export const siteConfig = {
   name: 'ShogunAI',
   url: process.env.NEXT_PUBLIC_APP_ORIGIN ?? 'https://shogunaios.com',
-  tagline: 'Private AI memory assistant for work',
+  tagline: 'Your personal AGI on your PC. Built to finish real work.',
   description:
     'ShogunAI is a private, local-first AI memory assistant for macOS that recalls work context and turns decisions into action across your tools.',
   twitter: '@shogunai',
