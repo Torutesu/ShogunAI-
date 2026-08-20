@@ -60,14 +60,14 @@ Linear マークは実ロゴ SVG/PNG。Finder / Mail / Calendar / Terminal / ゴ
 |---|---|---|
 | 2.1 SHOGUN lives in the notch | `welcome` | `obWelcome*` |
 | 2.2 what it reads, what it never keeps | `reads` | `obReads*` / `obNever*` / `obExclusion` |
-| 2.3 the one permission (asking) | `permission` | `obPerm*` / `onboarding.steps` |
+| 2.3 the three permissions (asking) | `permission` | `obPerm*` / `onboarding.accessibility/microphone/screen*`（3権限レール＋ドラッグカード） |
 | 2.4 macOS System Settings — Accessibility | （アプリ外） | `open_accessibility_settings` の着地点 |
-| 2.5 granted, proved on the spot | `permission` | `obPermGranted` / `obPermProof` |
+| 2.5 all permissions ready | `permission` | `obPermGranted`（"All permissions ready"）+ 3×Ready |
 | 2.6 seven days of everything | `plan` | `obPlan*` / `obKey*` |
 | 2.7 connect, drafts-only by default | `connect` | `obConnect*` / `obDraftStop*` |
 | 2.8 you're set | `ready` | `obReady*` / `analyticsToggle*` |
 
-### 3 · The notch, day to day（8）
+### 3 · The notch, day to day（9）
 実装 `apps/desktop/src/App.tsx`。
 
 | フレーム | 実装の該当 |
@@ -80,6 +80,7 @@ Linear マークは実ロゴ SVG/PNG。Finder / Mail / Calendar / Terminal / ゴ
 | 3.6 what it is tracking | `.state__row`（`stateList` / `resolveHint` / `stateEmpty`） |
 | 3.7 press / to search memory | `searchPlaceholder` / `searchHint` |
 | 3.8 L3 never runs without you | `.acts__confirm`（`actionConfirmQ` / `approvalsVia`） |
+| 3.9 Scribe — edit in place | `ScribeOverlay.tsx`（`.scribe-float`、`scribe*` 文言。選択テキストの一行編集バー） |
 
 ### 4 · Daily summaries（3）
 設計 `docs/daily-summaries-design.md`、実装 `apps/desktop/src/daily.tsx`。
@@ -110,8 +111,7 @@ Deepgram 開示（`meetingDisclosure`）は 5.1・5.5・5.8・7.7 の4面に載�
 
 ### 6 · Visual recall（2）
 実装 `apps/desktop/src/visual-recall.tsx`、文言 `visualRecall*`。
-`screen_frames` の 72 時間・暗号化メモリ DB・自動削除という例外条件を、
-タイムライン（6.1）と設定のディスクロージャ（6.2）の両方に出す。
+【2026-08-17 更新】保持期間は固定72時間から**ユーザー選択の日数**（`visualRecallRetention*`、既定7日・age削除自体は常時ON）に変更。6.2 に retention ピッカーとストレージ見積もり行を追加し、6.1/2.2 の "72 h" 文言もすべて追随済み。
 
 ### 7 · Settings & governance（7）
 
@@ -124,6 +124,8 @@ Deepgram 開示（`meetingDisclosure`）は 5.1・5.5・5.8・7.7 の4面に載�
 | 7.5 Approvals | `approvals*`（L3キュー）/ `composio*`（draft-stop） |
 | 7.6 Plan & billing | `plan*`（Standard $49 / Pro $99 年額・7日フルトライアル） |
 | 7.7 summaries · meetings · sounds | `ds*` / `meeting*` / `sound*` |
+| 7.8 seven sections + Memory API | `SETTINGS_SECTIONS`（General/Memory/Voice/Connections/Intelligence/Controls/Privacy）+ `memoryApi*`（トークン発行/失効） |
+| 7.9 Voice — dictation cleanup | `voiceEditModel*`（Groq、process-only、フォールバックは生トランスクリプト）+ `notchStatus*` |
 
 ### 8 · Light appearance（5）
 `styles.css` の `:root[data-appearance="light"]` トークン（glass `#FCFDFF.94` / shell `#F7F8FB` /
