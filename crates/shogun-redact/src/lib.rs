@@ -210,13 +210,16 @@ fn mask_emails_and_urls(text: &str) -> std::borrow::Cow<'_, str> {
 }
 
 /// Length of a `scheme://` prefix at the start of `s`, or `None`.
+///
+/// Scans only the leading alphabetic run (max 10) rather than `find("://")` over the whole tail —
+/// this runs at every byte offset, and a whole-tail search made the scan O(n²) on long text.
 fn url_scheme_len(s: &str) -> Option<usize> {
-    let idx = s.find("://")?;
+    let scheme = s.bytes().take(11).take_while(|b| b.is_ascii_alphabetic()).count();
     // scheme must be short and alphabetic (http, https, ftp, ...) and immediately at the start.
-    if idx == 0 || idx > 10 || !s[..idx].bytes().all(|b| b.is_ascii_alphabetic()) {
+    if scheme == 0 || scheme > 10 || !s[scheme..].starts_with("://") {
         return None;
     }
-    Some(idx + 3)
+    Some(scheme + 3)
 }
 
 /// Length of the URL body (host/path/query) after the scheme. Stops at whitespace or quote.
@@ -281,14 +284,25 @@ struct Labelled {
     total: usize,
 }
 
+/// Case-insensitive ASCII prefix test on raw bytes — no allocation. Byte slicing is safe here
+/// because a byte-wise case-insensitive match against an ASCII `prefix` can only succeed on
+/// ASCII bytes.
+fn starts_with_ignore_case(s: &str, prefix: &str) -> bool {
+    s.len() >= prefix.len() && s.as_bytes()[..prefix.len()].eq_ignore_ascii_case(prefix.as_bytes())
+}
+
 /// Match `label` `sep` `value` at the start of `s`, where sep is `:` or `=` with optional spaces
 /// and quotes. Returns `None` unless the value is long enough to be a real credential.
+///
+/// Matches labels byte-wise instead of lowercasing `s`: this is called at every byte offset of
+/// the scan, and `to_ascii_lowercase()` of the whole remaining text allocated O(n) per offset —
+/// O(n²) time AND allocation on the DB persist path for any text that merely contains "token".
 fn match_labelled(s: &str) -> Option<Labelled> {
-    let lower = s.to_ascii_lowercase();
-    let label = LABELS.iter().find(|l| lower.starts_with(**l))?;
+    let label = LABELS.iter().find(|l| starts_with_ignore_case(s, l))?;
     let mut p = label.len();
 
-    // Optional closing quote of a quoted key ("api_key": …) then the separator.
+    // Optional closing quote of a quoted key ("api_key": …) then the separator. Every byte
+    // consumed below is ASCII, so `p` always lands on a char boundary.
     let b = s.as_bytes();
     while p < b.len() && (b[p] == b'"' || b[p] == b'\'' || b[p] == b' ') {
         p += 1;
@@ -302,7 +316,7 @@ fn match_labelled(s: &str) -> Option<Labelled> {
     }
     // `Authorization: Bearer <token>` — keep the scheme, mask the token.
     for scheme in ["bearer ", "basic ", "token "] {
-        if lower[p.min(lower.len())..].starts_with(scheme) {
+        if starts_with_ignore_case(&s[p..], scheme) {
             p += scheme.len();
             break;
         }
