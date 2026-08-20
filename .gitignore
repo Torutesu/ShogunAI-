@@ -23,3 +23,6 @@ research_super_intern/
 feedback.md
 # Claude agent worktrees (transient)
 .claude/worktrees/
+
+# Stray bytecode from scratch scripts run inside the workspace.
+__pycache__/

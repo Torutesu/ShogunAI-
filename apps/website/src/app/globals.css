@@ -379,8 +379,22 @@ html[data-theme='dark'] .theme-light-badge {
   text-shadow: 0 1px 0 rgba(255, 255, 255, 0.2);
 }
 
+/* The panel used to drift on a 7s loop, which was fine while it was a picture.
+ * It is a control surface now — buttons that never hold still are buttons that
+ * are hard to hit — so it only drifts until the visitor reaches for it. */
 .hero-demo-shell {
   animation: hero-demo-float 7s ease-in-out infinite;
+}
+
+.hero-demo-shell:hover,
+.hero-demo-shell:focus-within {
+  animation-play-state: paused;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero-demo-shell {
+    animation: none;
+  }
 }
 
 .hero-demo-scale {
