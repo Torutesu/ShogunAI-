@@ -73,10 +73,8 @@ impl Mic {
 /// expose a stable cross-platform device identifier; an exact name match avoids guessing after a
 /// device is unplugged or renamed.
 ///
-/// Names are *not* deduplicated: macOS lets two devices share a name (two identical USB
-/// interfaces, two of the same headset), and collapsing them would hide an input the user owns
-/// while still leaving the selection ambiguous. Duplicates are surfaced as-is, and a selection
-/// that matches more than one device resolves to the first CoreAudio enumerates.
+/// CPAL does not expose a stable macOS device identifier. Duplicate names collapse in the picker;
+/// resolving an ambiguous persisted name fails rather than silently capturing a different device.
 pub fn input_device_names() -> Result<Vec<String>, String> {
     let host = cpal::default_host();
     let mut names = host
@@ -85,6 +83,7 @@ pub fn input_device_names() -> Result<Vec<String>, String> {
         .filter_map(|device| device.name().ok())
         .collect::<Vec<_>>();
     names.sort_unstable();
+    names.dedup();
     Ok(names)
 }
 
@@ -127,7 +126,8 @@ where
         .map_err(|e| e.to_string())
 }
 
-/// Pick the first device whose name matches `selected`, or report that it is gone.
+/// Pick the uniquely named device whose name matches `selected`, or report it as unavailable or
+/// ambiguous.
 ///
 /// Split out of `open_input_device` so the branch that must never silently fall back to another
 /// input is testable without real hardware: it is generic over the device type, so a test can
@@ -136,11 +136,17 @@ fn find_named_device<D>(
     devices: impl Iterator<Item = (String, D)>,
     selected: &str,
 ) -> Result<D, String> {
-    devices
+    let mut matches = devices
         .filter(|(name, _)| name == selected)
         .map(|(_, device)| device)
-        .next()
-        .ok_or_else(|| format!("selected microphone is unavailable: {selected}"))
+        .collect::<Vec<_>>();
+    match matches.len() {
+        0 => Err(format!("selected microphone is unavailable: {selected}")),
+        1 => Ok(matches.pop().expect("one matching microphone")),
+        _ => Err(format!(
+            "selected microphone name is ambiguous: {selected}; choose a different input"
+        )),
+    }
 }
 
 /// Resolve the input device to capture from: the named selection, or the current macOS default
@@ -278,13 +284,13 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_names_resolve_to_the_first_enumerated_device() {
+    fn duplicate_names_are_rejected_instead_of_selecting_arbitrarily() {
         let candidates = vec![
             ("Studio Mic".to_string(), "first"),
             ("Studio Mic".to_string(), "second"),
         ];
-        let picked = find_named_device(candidates.into_iter(), "Studio Mic")
-            .expect("a duplicated name still resolves");
-        assert_eq!(picked, "first");
+        let error = find_named_device(candidates.into_iter(), "Studio Mic")
+            .expect_err("an ambiguous device name must not select an arbitrary microphone");
+        assert!(error.contains("ambiguous"), "error explains the ambiguity: {error}");
     }
 }
