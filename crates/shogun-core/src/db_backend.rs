@@ -397,13 +397,27 @@ impl DbBackend {
         }
     }
 
-    /// `lessons.list` (L5, Plan D-5): every lesson row, exactly what the Learned UI lists —
-    /// and nothing more. `feedback_events` text has no path into this payload: the row type
-    /// (`lessons::Lesson`) carries instructions and bookkeeping only.
-    fn lessons_json(&self) -> String {
-        let lessons: Vec<_> = self
-            .db
-            .lessons_all()
+    /// `lessons.list` (L5, Plan D-5): instruction + bookkeeping only — never `feedback_events` text.
+    ///
+    /// Default (no generation filters) is the Settings/management list: every row, including
+    /// sleeping and person-scoped. Pass `for_generation` or a scope id for standing-prompt lookup
+    /// so an Alice email lesson does not leak into unrelated drafts (issue #104).
+    fn lessons_json(&self, params: &ReadParams) -> String {
+        let scoped = params.for_generation
+            || params.app_bundle_id.is_some()
+            || params.person_id.is_some()
+            || params.project_id.is_some();
+        let lessons = if scoped {
+            let ctx = crate::daemon::GenerationContext {
+                app_bundle_id: params.app_bundle_id.as_deref(),
+                person_id: params.person_id.as_deref(),
+                project_id: params.project_id.as_deref(),
+            };
+            self.db.active_lessons(&ctx.lesson_scopes(), 32)
+        } else {
+            self.db.lessons_all()
+        };
+        let lessons: Vec<_> = lessons
             .into_iter()
             .map(|l| {
                 json!({
@@ -586,7 +600,7 @@ impl MemoryBackend for DbBackend {
             Tool::VisualRecallSearchFrames => self.visual_recall_search_json(params),
             Tool::VisualRecallGetFrame => self.visual_recall_get_frame_json(params),
             Tool::VisualRecallRescanFrame => self.visual_recall_rescan_json(params),
-            Tool::LessonsList => self.lessons_json(),
+            Tool::LessonsList => self.lessons_json(params),
             Tool::MemoryGetWrap => self.evening_wrap_json(),
             Tool::ProfileWhoami => self.whoami_json(),
             _ => return None,
@@ -774,9 +788,7 @@ mod tests {
     fn get(id: i64) -> ReadParams {
         ReadParams {
             id: Some(id),
-            query: None,
-            from_ms: None,
-            to_ms: None,
+            ..ReadParams::default()
         }
     }
 
@@ -841,8 +853,7 @@ mod tests {
             &ReadParams {
                 id: None,
                 query: Some("roadmap".into()),
-                from_ms: None,
-                to_ms: None,
+                ..ReadParams::default()
             },
         );
         assert_eq!(hits.len(), 1);
@@ -891,8 +902,7 @@ mod tests {
             &ReadParams {
                 id: None,
                 query: Some("vendor renewal".into()),
-                from_ms: None,
-                to_ms: None,
+                ..ReadParams::default()
             },
         );
         // a fact line and an evidence line, the latter citing its event id + source (provenance).
@@ -1051,8 +1061,7 @@ mod tests {
             &ReadParams {
                 id: None,
                 query: Some("Alice".into()),
-                from_ms: None,
-                to_ms: None,
+                ..ReadParams::default()
             },
         );
         assert_eq!(hits.len(), 1);
@@ -1252,6 +1261,86 @@ mod tests {
     }
 
     #[test]
+    fn lessons_list_for_generation_drops_person_lessons_until_scoped() {
+        use shogun_memory::lessons::{
+            FeedbackKind, LessonCandidate, LessonKind, LessonScope, NewFeedback,
+        };
+
+        let db = Db::open_in_memory(Arc::new(|| 100)).unwrap();
+        let seed = |scope: LessonScope, scope_ref: Option<&str>, instruction: &str| {
+            let evidence = (0..3)
+                .map(|ts_ms| {
+                    db.record_feedback(
+                        FeedbackKind::EditBeforeApprove,
+                        scope,
+                        &NewFeedback {
+                            ts_ms,
+                            scope_ref,
+                            action_kind: Some("draft_reply"),
+                            ..Default::default()
+                        },
+                    )
+                    .expect("feedback")
+                })
+                .collect();
+            db.upsert_lesson(
+                &LessonCandidate {
+                    kind: LessonKind::Style,
+                    scope,
+                    scope_ref: scope_ref.map(str::to_owned),
+                    instruction: instruction.to_owned(),
+                    evidence,
+                },
+                100,
+            )
+            .expect("lesson");
+        };
+        seed(LessonScope::Global, None, "GLOBAL_LESSON");
+        seed(
+            LessonScope::Person,
+            Some("alice@example.com"),
+            "ALICE_ONLY_LESSON",
+        );
+        let backend = DbBackend::new(db);
+
+        let all = backend
+            .read_structured(Tool::LessonsList, &params())
+            .expect("structured");
+        assert!(all.contains("GLOBAL_LESSON"), "{all}");
+        assert!(
+            all.contains("ALICE_ONLY_LESSON"),
+            "management list keeps person rows: {all}"
+        );
+
+        let lookup = backend
+            .read_structured(
+                Tool::LessonsList,
+                &ReadParams {
+                    for_generation: true,
+                    ..ReadParams::default()
+                },
+            )
+            .expect("structured");
+        assert!(lookup.contains("GLOBAL_LESSON"), "{lookup}");
+        assert!(
+            !lookup.contains("ALICE_ONLY_LESSON"),
+            "unscoped generation lookup must not leak person lessons: {lookup}"
+        );
+
+        let alice = backend
+            .read_structured(
+                Tool::LessonsList,
+                &ReadParams {
+                    person_id: Some("alice@example.com".into()),
+                    ..ReadParams::default()
+                },
+            )
+            .expect("structured");
+        assert!(alice.contains("GLOBAL_LESSON"), "{alice}");
+        assert!(alice.contains("ALICE_ONLY_LESSON"), "{alice}");
+    }
+
+    #[test]
     fn lessons_set_active_flips_the_switch_and_rejects_bad_input() {
         let db = Db::open_in_memory(Arc::new(|| 100)).unwrap();
         let id = seed_lesson(&db);
@@ -1306,6 +1395,10 @@ mod tests {
             body: body.map(str::to_string),
             from_ms: None,
             to_ms: None,
+            for_generation: false,
+            app_bundle_id: None,
+            person_id: None,
+            project_id: None,
         };
 
         // GET /v1/lessons lists the lesson (no feedback text — pinned above per-payload)
@@ -1319,6 +1412,32 @@ mod tests {
         assert!(body.contains("\"tool\":\"lessons.list\""), "{body}");
         assert!(body.contains("Best, Taro"), "{body}");
         assert!(!body.contains("SECRET_FEEDBACK_BODY_q1"), "{body}");
+
+        let (status, lookup) = respond_with(
+            &RestRequest {
+                for_generation: true,
+                ..req(Method::Get, "/v1/lessons", None)
+            },
+            &tokens,
+            &ent,
+            &backend,
+        );
+        assert_eq!(status, 200);
+        assert!(
+            !lookup.contains("Best, Taro"),
+            "unscoped generation lookup must drop app lessons: {lookup}"
+        );
+        let (status, scoped) = respond_with(
+            &RestRequest {
+                app_bundle_id: Some("com.apple.Mail".into()),
+                ..req(Method::Get, "/v1/lessons", None)
+            },
+            &tokens,
+            &ent,
+            &backend,
+        );
+        assert_eq!(status, 200);
+        assert!(scoped.contains("Best, Taro"), "{scoped}");
 
         // POST /v1/lessons/active flips it off through the same face
         let (status, body) = respond_with(
@@ -1353,6 +1472,10 @@ mod tests {
             body: Some("ship v1 on friday".into()),
             from_ms: None,
             to_ms: None,
+            for_generation: false,
+            app_bundle_id: None,
+            person_id: None,
+            project_id: None,
         };
         let (status, body) = respond_with(
             &req,
@@ -1386,6 +1509,10 @@ mod tests {
             body: None,
             from_ms: None,
             to_ms: None,
+            for_generation: false,
+            app_bundle_id: None,
+            person_id: None,
+            project_id: None,
         };
         let (status, body) = respond_with(
             &req,

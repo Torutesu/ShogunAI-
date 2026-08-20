@@ -155,12 +155,26 @@ fn host_is_loopback(host: Option<&str>) -> bool {
 /// build this by hand (Python's `str(True)` gives `include_low=True`); a silently-ignored opt-in
 /// returns 200 with rows missing and no signal to the caller.
 fn include_low_opt_in(raw_query: &str) -> bool {
+    query_flag(raw_query, "include_low")
+}
+
+fn query_flag(raw_query: &str, name: &str) -> bool {
+    let prefix = format!("{name}=");
     raw_query.split('&').any(|kv| {
-        kv == "include_low"
-            || kv.strip_prefix("include_low=").is_some_and(|v| {
+        kv == name
+            || kv.strip_prefix(&prefix).is_some_and(|v| {
                 matches!(v.to_ascii_lowercase().as_str(), "" | "1" | "true" | "yes" | "on")
             })
     })
+}
+
+fn query_value(raw_query: &str, name: &str) -> Option<String> {
+    let prefix = format!("{name}=");
+    raw_query
+        .split('&')
+        .find_map(|kv| kv.strip_prefix(&prefix))
+        .map(percent_decode)
+        .filter(|s| !s.is_empty())
 }
 
 async fn handle(State(state): State<AppState>, req: Request) -> Response {
@@ -185,6 +199,7 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
     // Parse the query string: `?include_low` (FR-API-06 opt-in), `?q=<search>`, visual-recall window.
     let raw_query = req.uri().query().unwrap_or("");
     let include_low = include_low_opt_in(raw_query);
+    let for_generation = query_flag(raw_query, "for_generation");
     let query = raw_query
         .split('&')
         .find_map(|kv| kv.strip_prefix("q="))
@@ -197,6 +212,9 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
         .split('&')
         .find_map(|kv| kv.strip_prefix("to_ms="))
         .and_then(|v| v.parse::<i64>().ok());
+    let app_bundle_id = query_value(raw_query, "app_bundle_id");
+    let person_id = query_value(raw_query, "person_id");
+    let project_id = query_value(raw_query, "project_id");
 
     // Read the request body (POST writes / actions). Bounded to 256 KiB; empty on read failure.
     let body = axum::body::to_bytes(req.into_body(), 256 * 1024)
@@ -217,6 +235,10 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
                 body,
                 from_ms,
                 to_ms,
+                for_generation,
+                app_bundle_id,
+                person_id,
+                project_id,
             };
             // Resolve the plan once per request (issue #97) — the provider re-reads its source, so
             // a trial expiring while the server runs locks the next request.
@@ -599,6 +621,19 @@ mod tests {
         ] {
             assert!(!include_low_opt_in(q), "expected opt-out for {q:?}");
         }
+    }
+
+    #[test]
+    fn query_value_percent_decodes_and_skips_empty() {
+        assert_eq!(
+            query_value("person_id=alice%40example.com", "person_id").as_deref(),
+            Some("alice@example.com")
+        );
+        assert_eq!(query_value("person_id=", "person_id"), None);
+        assert_eq!(query_value("q=ship", "person_id"), None);
+        assert!(query_flag("for_generation", "for_generation"));
+        assert!(query_flag("for_generation=true", "for_generation"));
+        assert!(!query_flag("for_generation=false", "for_generation"));
     }
 
     #[test]

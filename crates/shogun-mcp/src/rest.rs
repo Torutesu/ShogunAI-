@@ -43,6 +43,11 @@ pub struct RestRequest {
     pub from_ms: Option<i64>,
     /// `?to_ms=` — visual-recall frame search window end.
     pub to_ms: Option<i64>,
+    /// `?for_generation` — lessons.list standing-prompt lookup (issue #104).
+    pub for_generation: bool,
+    pub app_bundle_id: Option<String>,
+    pub person_id: Option<String>,
+    pub project_id: Option<String>,
 }
 
 /// The routing decision. The server turns this into an HTTP response, running the backend for the
@@ -626,6 +631,10 @@ pub fn respond_with<B: MemoryBackend + ?Sized>(
                 query: req.query.clone(),
                 from_ms: req.from_ms,
                 to_ms: req.to_ms,
+                for_generation: req.for_generation,
+                app_bundle_id: req.app_bundle_id.clone(),
+                person_id: req.person_id.clone(),
+                project_id: req.project_id.clone(),
             };
             if is_structured_read(tool) {
                 let json = backend
@@ -690,6 +699,10 @@ mod tests {
             body: None,
             from_ms: None,
             to_ms: None,
+            for_generation: false,
+            app_bundle_id: None,
+            person_id: None,
+            project_id: None,
         }
     }
 

@@ -358,6 +358,19 @@ pub fn count_feedback_since(conn: &Connection, since_ts_ms: i64) -> Result<i64, 
     })
 }
 
+/// Count one feedback kind at or after `since_ts_ms`. Counts only — no text leaves the table.
+pub fn count_feedback_kind_since(
+    conn: &Connection,
+    kind: FeedbackKind,
+    since_ts_ms: i64,
+) -> Result<i64, rusqlite::Error> {
+    conn.query_row(
+        "SELECT count(*) FROM feedback_events WHERE ts_ms >= ?1 AND kind = ?2",
+        params![since_ts_ms, kind.as_str()],
+        |r| r.get(0),
+    )
+}
+
 /// Decisions on SHOGUN's proposals since `since_ts_ms`, and how many of them adopted the
 /// proposal — the Evening Wrap's "Today's outcome" counts (§6.17, FR-EB-01).
 ///
@@ -1517,6 +1530,14 @@ mod tests {
         assert_eq!(count_feedback_since(&conn, 0).unwrap(), 3);
         assert_eq!(count_feedback_since(&conn, 1_002).unwrap(), 1);
         assert_eq!(count_feedback_since(&conn, 2_000).unwrap(), 0);
+        assert_eq!(
+            count_feedback_kind_since(&conn, FeedbackKind::EditBeforeApprove, 0).unwrap(),
+            3
+        );
+        assert_eq!(
+            count_feedback_kind_since(&conn, FeedbackKind::ApproveUnchanged, 0).unwrap(),
+            0
+        );
     }
 
     #[test]

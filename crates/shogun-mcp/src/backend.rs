@@ -33,6 +33,12 @@ pub struct ReadParams {
     pub from_ms: Option<i64>,
     /// Optional visual-recall time window end (unix ms).
     pub to_ms: Option<i64>,
+    /// Generation lookup (issue #104): active Global lessons, plus any scope ids below.
+    /// Off = management list (Settings / `lessons list`) including sleeping and person rows.
+    pub for_generation: bool,
+    pub app_bundle_id: Option<String>,
+    pub person_id: Option<String>,
+    pub project_id: Option<String>,
 }
 
 /// The result of a write tool (append_note = L1, propose_update = L2). `Some(id)` when a row was

@@ -410,6 +410,8 @@ pub fn run() {
             user_config_watch::get_user_config_status,
             user_config_watch::open_shougun_md,
             user_config_watch::regenerate_shougun_md,
+            user_config_watch::list_learned_lessons,
+            user_config_watch::set_learned_lesson_active,
         ]);
 
     // NOTE: the visible surface is a NATIVE NSPanel hosting the webview's content view
@@ -2080,12 +2082,13 @@ pub(crate) fn run_inline_draft(handle: &tauri::AppHandle) {
         let warm = handle
             .try_state::<shogun_core::daemon::ReplyContextCache>()
             .and_then(|c| c.current());
+        let db = db.inner();
         let directives = handle
             .try_state::<user_config_watch::UserConfigState>()
-            .map(|s| s.directives())
+            .map(|s| s.directives_for_frontmost_app(db))
             .unwrap_or_default();
         inline_source::mac::run_inline_at_cursor(
-            db.inner().clone(),
+            db.clone(),
             warm,
             handle.clone(),
             directives,
@@ -2287,7 +2290,7 @@ fn start_scribe(handle: &tauri::AppHandle) {
         .and_then(|cache| cache.current());
     let directives = handle
         .try_state::<user_config_watch::UserConfigState>()
-        .map(|state| state.directives())
+        .map(|state| state.directives_for_frontmost_app(db.inner()))
         .unwrap_or_default();
     match scribe::mac::open_scribe(db.inner().clone(), warm, directives, handle.clone()) {
         Ok(opened) => {

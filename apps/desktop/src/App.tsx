@@ -4073,16 +4073,34 @@ interface UserConfigStatus {
   errors: { section: string; line: number; message: string }[];
 }
 
+interface LearnedLessonRow {
+  id: number;
+  instruction: string;
+  evidence_count: number;
+  active: boolean;
+}
+
 function PersonalizationSection(): JSX.Element {
   const [status, setStatus] = useState<UserConfigStatus | null>(null);
+  const [lessons, setLessons] = useState<LearnedLessonRow[]>([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
   const refresh = (): void => {
     if (!IN_TAURI) return;
     void invoke<UserConfigStatus>("get_user_config_status").then(setStatus).catch(() => undefined);
+    void invoke<LearnedLessonRow[]>("list_learned_lessons").then(setLessons).catch(() => undefined);
   };
   useEffect(refresh, []);
+
+  const toggleLesson = (id: number, active: boolean): void => {
+    if (!IN_TAURI) return;
+    void invoke<boolean>("set_learned_lesson_active", { id, active })
+      .then(() =>
+        invoke<LearnedLessonRow[]>("list_learned_lessons").then(setLessons).catch(() => undefined),
+      )
+      .catch((e) => setErr(String(e)));
+  };
 
   return (
     <section className="set">
@@ -4127,6 +4145,28 @@ function PersonalizationSection(): JSX.Element {
           {err ? <div className="set__hint is-err">{err}</div> : null}
         </>
       ) : null}
+      <div className="set__label set__label--follow">{t.learnedTitle}</div>
+      <div className="set__hint">{t.learnedHint}</div>
+      {lessons.length === 0 ? (
+        <div className="set__hint">{t.learnedEmpty}</div>
+      ) : (
+        <div className="learned">
+          {lessons.map((row) => (
+            <label className="learned__item" key={row.id}>
+              <input
+                type="checkbox"
+                checked={row.active}
+                aria-label={t.learnedToggle}
+                onChange={(e) => toggleLesson(row.id, e.target.checked)}
+              />
+              <span className="learned__body">
+                <span className="learned__text">{row.instruction}</span>
+                <span className="learned__meta">{t.learnedEvidence(row.evidence_count)}</span>
+              </span>
+            </label>
+          ))}
+        </div>
+      )}
     </section>
   );
 }
