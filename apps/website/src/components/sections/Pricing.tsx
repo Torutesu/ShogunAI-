@@ -1,6 +1,6 @@
 'use client';
 
-import { Check, Globe, Layers, ListChecks, Search, Sparkles, Sunrise, Users, Video, Zap } from 'lucide-react';
+import { Check, Command, Languages, Layers, ListChecks, Search, Sparkles, Sunrise, Video, Zap } from 'lucide-react';
 import { useState } from 'react';
 import { Reveal } from '@/components/animations/Reveal';
 import { Badge } from '@/components/ui/badge';
@@ -90,7 +90,7 @@ function Plan({ plan, annual, b, featured }: { plan: PlanData; annual: boolean; 
 }
 
 /** Icons follow the item order in the dictionary; extra items fall back to a neutral mark. */
-const BUNDLE_ICONS = [Video, Search, Layers, Sunrise, Zap, Globe, Users];
+const BUNDLE_ICONS = [Video, Search, Layers, Sunrise, Zap, Command, Languages];
 
 function Bundle({ b }: { b: Pricing['bundle'] }) {
   return (
@@ -107,26 +107,13 @@ function Bundle({ b }: { b: Pricing['bundle'] }) {
             return (
               <li
                 key={item.name}
-                className={`flex items-start gap-3.5 rounded-[18px] border border-border bg-surface p-4 ${item.soon ? 'opacity-80' : ''} ${index === b.items.length - 1 && b.items.length % 2 === 1 ? 'sm:col-span-2' : ''}`}
+                className={`flex items-start gap-3.5 rounded-[18px] border border-border bg-surface p-4 ${index === b.items.length - 1 && b.items.length % 2 === 1 ? 'sm:col-span-2' : ''}`}
               >
-                <span
-                  className={`flex size-9 shrink-0 items-center justify-center rounded-xl ${
-                    item.soon ? 'bg-cloud text-muted' : 'bg-sky-soft text-accent'
-                  }`}
-                >
+                <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-sky-soft text-accent">
                   <Icon className="size-4" />
                 </span>
                 <span className="min-w-0 flex-1">
-                  <span className="flex flex-wrap items-center gap-2">
-                    <span className="text-sm font-semibold">{item.name}</span>
-                    <span
-                      className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] ${
-                        item.soon ? 'bg-cloud text-muted' : 'bg-sky-soft text-accent-strong'
-                      }`}
-                    >
-                      {item.soon ? b.nextLabel : b.nowLabel}
-                    </span>
-                  </span>
+                  <span className="block text-sm font-semibold">{item.name}</span>
                   <span className="mt-1 block text-[13px] leading-relaxed text-muted">{item.note}</span>
                 </span>
               </li>
