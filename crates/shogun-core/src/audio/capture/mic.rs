@@ -127,22 +127,6 @@ where
         .map_err(|e| e.to_string())
 }
 
-/// Pick the first device whose name matches `selected`, or report that it is gone.
-///
-/// Split out of `open_input_device` so the branch that must never silently fall back to another
-/// input is testable without real hardware: it is generic over the device type, so a test can
-/// hand it plain strings.
-fn find_named_device<D>(
-    devices: impl Iterator<Item = (String, D)>,
-    selected: &str,
-) -> Result<D, String> {
-    devices
-        .filter(|(name, _)| name == selected)
-        .map(|(_, device)| device)
-        .next()
-        .ok_or_else(|| format!("selected microphone is unavailable: {selected}"))
-}
-
 /// Resolve the input device to capture from: the named selection, or the current macOS default
 /// when nothing is selected. A selected-but-missing device is an error rather than a fallback —
 /// switching the input source without the user's knowledge can capture the wrong microphone.
@@ -160,7 +144,7 @@ fn open_input_device(
         .input_devices()
         .map_err(|error| format!("could not list microphone devices: {error}"))?
         .filter_map(|device| device.name().ok().map(|name| (name, device)));
-    find_named_device(devices, selected_device)
+    super::find_named_device(devices, selected_device)
 }
 
 /// Build and start the selected input stream, sending resampled 16 kHz mono frames on `sample_tx`.
@@ -254,37 +238,5 @@ mod tests {
         let samples = rx.recv().expect("resampled samples should be sent");
         assert_eq!(samples.len(), 1);
         assert!((samples[0] - 0.5).abs() < 0.01);
-    }
-
-    fn devices(names: &[&str]) -> Vec<(String, String)> {
-        names.iter().map(|n| ((*n).into(), (*n).into())).collect()
-    }
-
-    #[test]
-    fn missing_selected_device_is_an_error_not_a_fallback() {
-        let error = find_named_device(devices(&["Built-in Microphone"]).into_iter(), "Studio Mic")
-            .expect_err("an unplugged selection must not resolve to another input");
-        assert!(error.contains("Studio Mic"), "error names the device: {error}");
-    }
-
-    #[test]
-    fn selected_device_resolves_by_exact_name() {
-        let picked = find_named_device(
-            devices(&["Built-in Microphone", "Studio Mic"]).into_iter(),
-            "Studio Mic",
-        )
-        .expect("a connected selection resolves");
-        assert_eq!(picked, "Studio Mic");
-    }
-
-    #[test]
-    fn duplicate_names_resolve_to_the_first_enumerated_device() {
-        let candidates = vec![
-            ("Studio Mic".to_string(), "first"),
-            ("Studio Mic".to_string(), "second"),
-        ];
-        let picked = find_named_device(candidates.into_iter(), "Studio Mic")
-            .expect("a duplicated name still resolves");
-        assert_eq!(picked, "first");
     }
 }

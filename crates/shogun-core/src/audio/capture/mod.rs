@@ -9,6 +9,23 @@ pub mod system_tap;
 
 use super::Speaker;
 
+/// Pick the first device whose name matches `selected`, or report that it is gone. A missing
+/// selection is an error, never a fallback to some other input.
+///
+/// Lives on the seam rather than in `mic` so it compiles — and its tests run — on every platform:
+/// `mic` is behind `audio` + macOS, so anything inside it is invisible to both CI jobs. Generic
+/// over the device type so a test can hand it plain strings instead of real hardware.
+pub fn find_named_device<D>(
+    devices: impl Iterator<Item = (String, D)>,
+    selected: &str,
+) -> Result<D, String> {
+    devices
+        .filter(|(name, _)| name == selected)
+        .map(|(_, device)| device)
+        .next()
+        .ok_or_else(|| format!("selected microphone is unavailable: {selected}"))
+}
+
 /// A frame of already-resampled 16 kHz mono audio from one source.
 pub struct Frame {
     pub speaker: Speaker,
@@ -83,6 +100,38 @@ impl AudioSource for FakeSource {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn devices(names: &[&str]) -> Vec<(String, String)> {
+        names.iter().map(|n| ((*n).into(), (*n).into())).collect()
+    }
+
+    #[test]
+    fn missing_selected_device_is_an_error_not_a_fallback() {
+        let error = find_named_device(devices(&["Built-in Microphone"]).into_iter(), "Studio Mic")
+            .expect_err("an unplugged selection must not resolve to another input");
+        assert!(error.contains("Studio Mic"), "error names the device: {error}");
+    }
+
+    #[test]
+    fn selected_device_resolves_by_exact_name() {
+        let picked = find_named_device(
+            devices(&["Built-in Microphone", "Studio Mic"]).into_iter(),
+            "Studio Mic",
+        )
+        .expect("a connected selection resolves");
+        assert_eq!(picked, "Studio Mic");
+    }
+
+    #[test]
+    fn duplicate_names_resolve_to_the_first_enumerated_device() {
+        let candidates = vec![
+            ("Studio Mic".to_string(), "first"),
+            ("Studio Mic".to_string(), "second"),
+        ];
+        let picked = find_named_device(candidates.into_iter(), "Studio Mic")
+            .expect("a duplicated name still resolves");
+        assert_eq!(picked, "first");
+    }
 
     #[test]
     fn fake_yields_frames_then_empty() {
