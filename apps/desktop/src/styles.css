@@ -2421,6 +2421,232 @@ kbd {
   border-color: transparent;
 }
 
+/* Voice input source — hardware deserves more presence than a 34px text field. The accent rail
+   and microphone glyph make the selected capture path legible at a glance. The trigger is a
+   button, not a <select>: the options live in a portalled modal dialog below, which owns its own
+   focus trap and keyboard handling (see VoiceSection in App.tsx). */
+.mic-picker {
+  position: relative;
+  margin-top: 13px;
+  padding: 10px 0 2px;
+  border-top: 1px solid color-mix(in srgb, var(--line) 78%, transparent);
+}
+.mic-picker__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 5px;
+}
+.mic-picker__head .set__sublabel {
+  margin: 0;
+}
+.mic-picker__refresh {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  padding: 4px 0 4px 8px;
+  cursor: pointer;
+  transition: color var(--set-motion, 160ms), opacity var(--set-motion, 160ms);
+}
+.mic-picker__refresh:hover:not(:disabled) {
+  color: var(--accent);
+}
+.mic-picker__refresh:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+.mic-picker__control {
+  position: relative;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) 26px;
+  align-items: center;
+  min-height: 40px;
+  width: 100%;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-left: 2px solid color-mix(in srgb, var(--accent) 74%, var(--line-strong));
+  background: color-mix(in srgb, var(--accent) 4%, transparent);
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--set-motion, 160ms), background var(--set-motion, 160ms), box-shadow var(--set-motion, 160ms), opacity var(--set-motion, 160ms);
+}
+.mic-picker__control:hover {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--line-strong));
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+.mic-picker__control:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-soft);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.mic-picker__control.is-busy {
+  opacity: 0.62;
+}
+.mic-picker__glyph {
+  display: grid;
+  place-items: center;
+  align-self: stretch;
+  color: var(--accent);
+  border-right: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
+}
+.mic-picker__value {
+  display: block;
+  min-width: 0;
+  padding: 0 8px;
+  font-size: var(--fs-sm);
+  font-weight: 570;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mic-picker__chevron {
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  pointer-events: none;
+}
+.mic-picker > .set__hint {
+  margin-top: 6px;
+}
+.mic-picker > .set__hint.is-err:empty {
+  display: none;
+}
+.mic-picker__backdrop {
+  position: fixed;
+  z-index: 1000;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.58);
+}
+.mic-picker__popover {
+  width: min(340px, 100%);
+  max-height: min(300px, calc(100vh - 32px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--shell);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.34), 0 2px 8px rgba(0, 0, 0, 0.22);
+}
+.mic-picker__popover-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 30px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+.mic-picker__popover-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.mic-picker__close {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  margin-right: -5px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background var(--set-motion, 160ms), color var(--set-motion, 160ms);
+}
+.mic-picker__close:hover {
+  background: color-mix(in srgb, var(--ink) 9%, transparent);
+  color: var(--ink);
+}
+.mic-picker__close:focus-visible {
+  background: color-mix(in srgb, var(--ink) 9%, transparent);
+  color: var(--ink);
+}
+.mic-picker__options {
+  min-height: 0;
+  max-height: 240px;
+  padding: 4px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.mic-picker__option {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  align-items: center;
+  width: 100%;
+  min-height: 42px;
+  padding: 5px 8px 5px 5px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--set-motion, 160ms), color var(--set-motion, 160ms);
+}
+.mic-picker__option:hover {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.mic-picker__option:focus-visible {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  outline-offset: -2px;
+}
+.mic-picker__option.is-selected {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.mic-picker__option.is-unavailable {
+  color: var(--muted);
+}
+.mic-picker__check {
+  color: var(--accent);
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  text-align: center;
+}
+.mic-picker__option.is-unavailable .mic-picker__check {
+  color: var(--warn);
+}
+.mic-picker__option-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.mic-picker__option-copy > span {
+  overflow: hidden;
+  color: inherit;
+  font-size: var(--fs-sm);
+  font-weight: 590;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mic-picker__option-copy small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 450;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* approvals (Settings → Approvals) — pending L3 confirmations, full body shown */
 .apprs {
   display: flex;
