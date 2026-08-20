@@ -627,7 +627,7 @@ mod tests {
         // the people sweep used to FK-fail on that link and roll back the entire deletion.
         let mut conn = crate::open_in_memory().unwrap();
         let old_event = insert_event(
-            &mut conn,
+            &conn,
             &NewEvent {
                 ts: 1,
                 source: "capture",
@@ -643,7 +643,7 @@ mod tests {
         )
         .unwrap();
         let recent_event = insert_event(
-            &mut conn,
+            &conn,
             &NewEvent {
                 ts: 1_000,
                 source: "capture",
