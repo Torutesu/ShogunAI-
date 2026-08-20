@@ -94,6 +94,19 @@ const en = {
     stepConfirmK: 'Result',
     stepConfirmV: 'Reply drafted with the file attached, waiting on one approval to send.',
   },
+  capabilities: {
+    eyebrow: 'What it actually does',
+    title: 'Not a chat window. A harness around the work.',
+    sub: 'The concrete things ShogunAI does on your Mac — each with the rule that governs it.',
+    items: [
+      { tag: 'Inline draft', name: 'Press Option. The reply is already written.', body: 'ShogunAI reads the field around your cursor and the memory behind it, then writes the continuation straight at the caret, in the app you are already typing in. Nothing is sent — it is a local write, and you send it yourself.' },
+      { tag: 'Meetings', name: 'Minutes, not a recording.', body: 'When a meeting starts, the transcript is taken; when it ends, the minutes are written — summary, decisions, and the commitments it heard. Next actions arrive as proposals, and one tap files them into your work state. Audio is never written to disk.' },
+      { tag: 'Translation', name: 'Two-way live translation.', body: 'Set the language you speak and the language they speak. Their speech reaches you in yours, yours reaches them in theirs, and what is kept afterwards is text.' },
+      { tag: 'Recall', name: 'One question across every tool.', body: 'Mail, chat, docs and calendar answered from a single search — with the source and the time attached to every hit, so you can check it rather than trust it.' },
+      { tag: 'Daily brief', name: 'A brief before the day starts.', body: 'What moved overnight, what is still open, and what you promised someone. Assembled before you ask for it, not after.' },
+      { tag: 'Execution', name: 'It finishes the work, and stops where it should.', body: 'Drafts, updates and filings run inside the tools you already use. Reversible work runs on its own; anything that reaches another person waits for your approval.' },
+    ],
+  },
   how: {
     eyebrow: 'How it works',
     title: 'Connect once. Every model you use starts from the same memory.',
@@ -458,6 +471,19 @@ const ja: Dictionary = {
     stepConfirmK: '結果',
     stepConfirmV: 'ファイルを添付した返信が下書き済み。あとは承認ひとつで送信。',
   },
+  capabilities: {
+    eyebrow: '具体的に何をするか',
+    title: 'チャット窓ではありません。仕事に噛み合うハーネスです。',
+    sub: 'ShogunAI が Mac の上で実際にやることと、それぞれを縛っているルール。',
+    items: [
+      { tag: 'インライン下書き', name: 'Option を押す。返信はもう書かれている。', body: 'カーソル周りのフィールドと、その背後にある記憶を読んで、いま入力しているアプリのキャレットに直接、続きを書きます。送信はしません ── これは端末内の書き込みで、送るのはあなたです。' },
+      { tag: '会議', name: '録音ではなく、議事録。', body: '会議が始まれば文字起こしを取り、終われば議事録を書きます。要約、決定事項、聞き取った約束。ネクストアクションは提案として出てきて、1タップで仕事の状態に確定します。音声はディスクに書きません。' },
+      { tag: '翻訳', name: '双方向のライブ翻訳。', body: '自分が話す言語と、相手が話す言語を設定します。相手の発話はあなたの言語で、あなたの発話は相手の言語で届き、あとに残るのはテキストです。' },
+      { tag: '想起', name: 'ツールをまたいで、ひとつの問いで。', body: 'メール、チャット、ドキュメント、カレンダーを一度の検索で。ヒットのひとつひとつに出どころと時刻が付くので、信じるのではなく確かめられます。' },
+      { tag: 'デイリーブリーフ', name: '一日が始まる前のブリーフ。', body: '夜のあいだに動いたこと、まだ開いているもの、あなたが誰かに約束したこと。尋ねたあとではなく、尋ねる前に組み上がっています。' },
+      { tag: '実行', name: '仕事を終わらせ、止まるべきところで止まる。', body: '下書き、更新、提出は、あなたがすでに使っているツールの中で走ります。取り消せる処理はそのまま実行し、ほかの人に届くものはあなたの承認を待ちます。' },
+    ],
+  },
   how: {
     eyebrow: '仕組み',
     title: '一度つなぐ。どのモデルも、同じ記憶から始まる。',
@@ -819,6 +845,19 @@ const es: Dictionary = {
     stepConfirmK: 'Resultado',
     stepConfirmV: 'Respuesta redactada con el archivo adjunto, a la espera de una aprobación para enviarse.',
   },
+  capabilities: {
+    eyebrow: 'Qué hace en concreto',
+    title: 'No es una ventana de chat. Es un arnés alrededor del trabajo.',
+    sub: 'Lo que ShogunAI hace en tu Mac, cada cosa con la regla que la gobierna.',
+    items: [
+      { tag: 'Borrador en línea', name: 'Pulsa Option. La respuesta ya está escrita.', body: 'ShogunAI lee el campo alrededor de tu cursor y la memoria que hay detrás, y escribe la continuación directamente en el cursor, dentro de la app en la que ya estás escribiendo. No envía nada: es una escritura local y el envío lo haces tú.' },
+      { tag: 'Reuniones', name: 'Acta, no grabación.', body: 'Cuando empieza la reunión se toma la transcripción; al terminar se escribe el acta: resumen, decisiones y los compromisos que escuchó. Las siguientes acciones llegan como propuestas y un toque las archiva en el estado de tu trabajo. El audio nunca se escribe en disco.' },
+      { tag: 'Traducción', name: 'Traducción en vivo en ambos sentidos.', body: 'Configura el idioma que hablas tú y el que habla la otra persona. Su voz te llega en el tuyo, la tuya le llega en el suyo, y lo que queda después es texto.' },
+      { tag: 'Recuperación', name: 'Una pregunta para todas tus herramientas.', body: 'Correo, chat, documentos y calendario respondidos desde una sola búsqueda, con la fuente y la hora en cada resultado, para que puedas comprobarlo en vez de confiar.' },
+      { tag: 'Resumen diario', name: 'Un resumen antes de que empiece el día.', body: 'Qué se movió de noche, qué sigue abierto y qué le prometiste a alguien. Preparado antes de que lo pidas, no después.' },
+      { tag: 'Ejecución', name: 'Termina el trabajo y se detiene donde debe.', body: 'Borradores, actualizaciones y envíos se ejecutan dentro de tus herramientas. Lo reversible corre solo; lo que llega a otra persona espera tu aprobación.' },
+    ],
+  },
   how: {
     eyebrow: 'Cómo funciona',
     title: 'Conecta una vez. Todos tus modelos parten de la misma memoria.',
@@ -1151,6 +1190,19 @@ const de: Dictionary = {
     stepActV: 'Holte die Entscheidung vom Dienstag, die geteilte v3-Tabelle und Mikas offene Frage.',
     stepConfirmK: 'Ergebnis',
     stepConfirmV: 'Antwort mit angehängter Datei entworfen, wartet auf eine Freigabe zum Senden.',
+  },
+  capabilities: {
+    eyebrow: 'Was es konkret tut',
+    title: 'Kein Chatfenster. Ein Gestell um die Arbeit herum.',
+    sub: 'Was ShogunAI auf deinem Mac tatsächlich tut — jeweils mit der Regel, die es bindet.',
+    items: [
+      { tag: 'Inline-Entwurf', name: 'Option drücken. Die Antwort steht schon.', body: 'ShogunAI liest das Feld um deinen Cursor und das Gedächtnis dahinter und schreibt die Fortsetzung direkt an die Schreibmarke — in der App, in der du ohnehin tippst. Gesendet wird nichts: Es ist ein lokaler Schreibvorgang, senden tust du selbst.' },
+      { tag: 'Meetings', name: 'Protokoll statt Aufnahme.', body: 'Beginnt ein Meeting, entsteht das Transkript; endet es, wird das Protokoll geschrieben — Zusammenfassung, Entscheidungen und die gehörten Zusagen. Nächste Schritte kommen als Vorschläge, ein Tipp überführt sie in den Zustand deiner Arbeit. Audio wird nie auf die Festplatte geschrieben.' },
+      { tag: 'Übersetzung', name: 'Live-Übersetzung in beide Richtungen.', body: 'Stelle ein, welche Sprache du sprichst und welche dein Gegenüber. Seine Rede erreicht dich in deiner, deine ihn in seiner — und was bleibt, ist Text.' },
+      { tag: 'Abruf', name: 'Eine Frage über alle Werkzeuge.', body: 'Mail, Chat, Dokumente und Kalender aus einer einzigen Suche beantwortet — mit Quelle und Zeitpunkt an jedem Treffer, damit du prüfen kannst statt zu vertrauen.' },
+      { tag: 'Tagesbriefing', name: 'Ein Briefing, bevor der Tag beginnt.', body: 'Was über Nacht passiert ist, was offen liegt und was du jemandem zugesagt hast. Fertig, bevor du danach fragst.' },
+      { tag: 'Ausführung', name: 'Es bringt die Arbeit zu Ende und hält an, wo es soll.', body: 'Entwürfe, Updates und Einreichungen laufen in deinen Werkzeugen. Umkehrbares läuft von selbst; alles, was eine andere Person erreicht, wartet auf deine Freigabe.' },
+    ],
   },
   how: {
     eyebrow: 'So funktioniert’s',
