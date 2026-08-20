@@ -12,12 +12,13 @@
 | 項目 | 内容 |
 |---|---|
 | **Name** | `ShogunAI` |
-| **Tagline** | `Your personal AG on your PC. Built to finish real work.`（55/60。オーナー確定）<br>投稿前の確認2点 → §2.1 |
+| **Tagline** | `Your personal AG on your PC. Built to finish real work.`（55/60。オーナー確定）<br>`AG` → `AGI` だけ投稿前に確認 → §2.1。**PC 表記は維持**（Windows・モバイルも作るため） |
 | **launch形態** | アーリーアクセス（メール登録1フィールド）。**招待時期は言わない** |
 | **カテゴリ** | Productivity / Artificial Intelligence / Mac |
 | **日時** | 火曜 00:01 PT ＝ 火曜 16:01 JST |
 | **伝える中身** | §1 の8点。これ以外は足さない |
-| **書かないもの** | 招待の日付・ウェーブ番号・「◯月オープン」／競合の名指し／"AI-powered" "revolutionary" "second brain"／絵文字（⚔ のみ可）／未実測の性能数値 |
+| **プラットフォーム** | プロダクトは**PCの中で動くもの**として語る。**今日動くのは macOS 版**で、Windows とモバイルは開発中。この2つを必ずセットで書く（片方だけだと誤解か機会損失になる） |
+| **書かないもの** | 招待の日付・ウェーブ番号・「◯月オープン」／**Windows・モバイルが今日動くかのような書き方**／競合の名指し／"AI-powered" "revolutionary" "second brain"／絵文字（⚔ のみ可）／未実測の性能数値 |
 
 ---
 
@@ -33,13 +34,13 @@ PHで読まれるのは最初の3行と画像だけ。**この8点以外は当�
 >
 > **JA**: 一日の仕事をテキストとして記憶します。読んだもの、書いたもの、決めたこと。スクリーンショットも録画も音声ファイルも作りません。パスワード管理アプリとプライベートブラウジングは既定で除外、他も自分で除外できます。
 
-### ② データはあなたのMacから出ない
+### ② データはあなたのPCから出ない
 
 **事実**: メモリは端末上の暗号化DB（SQLCipher）。エクスポートと全削除は設定のボタン。モデル呼び出しで外に出るのは、そのリクエストに必要な分だけ。
 
-> **EN**: Your memory lives in an encrypted database on your Mac. Export it or delete all of it from settings — not a support ticket. When a model call happens, only what that request needs leaves, and it's logged in the app.
+> **EN**: Your memory lives in an encrypted database on your own machine. Export it or delete all of it from settings — not a support ticket. When a model call happens, only what that request needs leaves, and it's logged in the app.
 >
-> **JA**: 記憶は端末上の暗号化データベースにあります。書き出しも全削除も設定のボタンひとつで、問い合わせは要りません。モデルを呼ぶときに外へ出るのはそのリクエストに必要な分だけで、送信の記録はアプリに残ります。
+> **JA**: 記憶はあなたのPCの中、暗号化されたデータベースにあります。書き出しも全削除も設定のボタンひとつで、問い合わせは要りません。モデルを呼ぶときに外へ出るのはそのリクエストに必要な分だけで、送信の記録はアプリに残ります。
 
 ### ③ ログではなく「状態」を持つ
 
@@ -89,10 +90,15 @@ PHで読まれるのは最初の3行と画像だけ。**この8点以外は当�
 >
 > **JA**: モデルはあなたが選びます。自分のAPIキーでも、すでに契約している Claude / ChatGPT / Gemini のプランでも動きます。記憶はこちらのUIに閉じ込めません。MCP経由で開いているので、他のAIツールから同じ文脈を読めます。
 
-### 動作環境（毎回セットで言う）
+### 動作環境（毎回セットで言う。片方だけ書かない）
 
-> **EN**: macOS 14+, Apple Silicon.
-> **JA**: macOS 14 以上 / Apple Silicon。
+いま動くものと、これから来るものを**必ず2文で並べる**。前者だけだと「Macアプリ」に閉じ込められ、後者だけだと嘘になる。
+
+> **EN**: On macOS today — macOS 14+, Apple Silicon. Windows and mobile are in the works, and the list is per-platform: tell us which machine you're on.
+>
+> **JA**: 今日動くのは macOS 版です（macOS 14 以上 / Apple Silicon）。Windows とモバイルも作っています。登録のときに、どのマシンを使っているか教えてください。
+
+> 「PC」という言葉の扱い: プロダクトは**PCの中で動くもの**として語る（tagline の通り）。ただし「今日どのOSで動くか」を隠さない。ここを曖昧にすると、Windowsで登録した人が招待時に落胆し、その1件がコメント欄に貼られる。
 
 ### 言わないこと
 
@@ -117,33 +123,41 @@ Your personal AG on your PC. Built to finish real work.
 ```
 **JA（LP・X用の対応表現）**: 仕事の全域で動く、あなたのパーソナルAGI。実務を終わらせるために作りました。
 
-投稿前の確認2点（直しても意味は変わらず、直さないと損をする種類）:
+投稿前の確認は1点だけ:
 
 | 箇所 | 提案 | 理由 |
 |---|---|---|
 | `AG` → `AGI` | `Your personal AGI on your PC. Built to finish real work.`（56字） | `AG` は英語で語として通じず、読み手にはタイプミスに見える |
-| `PC` → `Mac` | `Your personal AGI on your Mac. Built to finish real work.`（57字） | macOS 14+ / Apple Silicon 専用。"PC" だとWindows勢が登録してから弾かれ、コメント欄が「Windows は？」で埋まる |
+
+**`PC` は維持する。** Windows とモバイルも作る以上、プロダクトを「Macアプリ」として名乗ると自分で天井を作ることになる。ウェイトリストなら、Windows ユーザーの登録は**弾かれる相手ではなく需要データ**になる。
+
+条件は一つだけ: **今日動くOSを本文で明示する。** description・first comment・LPのフォーム直下の3か所に、次の1行を必ず置く。
+
+> **EN**: On macOS today. Windows and mobile are in the works.
+> **JA**: 今日動くのは macOS 版です。Windows とモバイルも作っています。
+
+> 語感の補足: 英語の "PC" は Windows 機を指すと読む人が一定数いる。中立に振るなら本文側は `your computer` を使う（tagline は確定どおり `PC` のまま）。本書の原稿はこの使い分けで書いてある。
 
 ### 2.2 Description（上限260）
 
-**採用案（EN・245字）**
+**採用案（EN・253字）**
 ```
-Personal AGI for your work, on your Mac. It remembers your day as text — no screenshots, no recordings — keeps the state of it (people, promises, open loops), and finishes things: replies, recaps, calendar holds. Nothing sends without your approval.
+Personal AGI for your work, on your PC. It remembers your day as text — no screenshots, no recordings — keeps the state of it, and finishes things: replies, recaps, calendar holds. Nothing sends without your approval. macOS now, Windows and mobile next.
 ```
 
 **JA**
-> 仕事の全域で動くパーソナルAGIを、あなたのMacの中に。一日をテキストとして記憶し（スクショも録画も残しません）、人・約束・やりかけの状態を持ち、返信やrecap、予定の確保まで終わらせます。送信は必ずあなたの承認を挟みます。
+> 仕事の全域で動くパーソナルAGIを、あなたのPCの中に。一日をテキストとして記憶し（スクショも録画も残しません）、人・約束・やりかけの状態を持ち、返信やrecap、予定の確保まで終わらせます。送信は必ずあなたの承認を挟みます。今日動くのは macOS 版で、Windows とモバイルも作っています。
 
 ### 2.3 その他の欄
 
 | 欄 | 値 |
 |---|---|
-| **Topics** | Productivity / Artificial Intelligence / Mac（Macは外さない。対象OSの事前フィルタとして効く） |
+| **Topics** | Productivity / Artificial Intelligence / Mac（今日動くビルドがmacOSなので Mac は残す。Windows版が出たら差し替える） |
 | **Links** | Website（`?utm_source=producthunt&utm_medium=launch&utm_campaign=ph_launch`）／X／LinkedIn／Privacy & Security ページ |
-| **Platforms** | **Mac のみ。** Web/iOS/Windows を選ばない（対象外への通知を自分で呼び込むことになる） |
+| **Platforms** | 今日動くもの＝**Mac** を選ぶ。Windows・iOS はビルドが出るまで選ばない（選ぶと「今すぐ使える」と読まれる）。**多プラットフォーム化は本文で言う**——欄で嘘をつかず、コピーで意図を伝える |
 | **Pricing** | `Paid — with a free trial`。表示文 EN: `Joining early access is free. Plans start at $49/mo billed annually ($62 month-to-month), and every plan opens with a full trial.` ／ JA: 「登録は無料です。プランは年額で月あたり$49（月払いは$62）から。どのプランもフルトライアルから始まります」 |
 | **Makers** | 顔写真・一行bio・SNSを埋めてから当日を迎える。チーム全員を maker に追加（各自のフォロワーへ通知が飛ぶ） |
-| **Maker bio** | EN: `Building ShogunAI — a personal AGI for your work that runs on your Mac. Tokyo.` ／ JA: 「ShogunAI を作っています。Macの中で動く、仕事のためのパーソナルAGIです。東京」 |
+| **Maker bio** | EN: `Building ShogunAI — a personal AGI for your work that runs on your own machine. Tokyo.` ／ JA: 「ShogunAI を作っています。あなたのPCの中で動く、仕事のためのパーソナルAGIです。東京」 |
 | **Thumbnail** | 240×240。ノッチが開いて閉じる2秒ループ、文字なし。ギャラリー1枚目の縮小は使わない（潰れる） |
 | **First comment** | 公開**直後**に投稿（§4）。予約にすると空白時間の質問が無回答で並ぶ |
 | **通知設定** | コメント通知をメール/Slackへ。15分以内返信を維持できる体制にしてから公開する |
@@ -158,13 +172,13 @@ Personal AGI for your work, on your Mac. It remembers your day as text — no sc
 
 | # | 内容 | キャプション（EN / JA） |
 |---|---|---|
-| 1 | ヒーロー: 黒(#080808)にノッチが開いた瞬間。goldは1アクセント | **Personal AGI, scoped to your work.** ／ 仕事の全域で動くAGIを、あなたのMacに |
+| 1 | ヒーロー: 黒(#080808)にノッチが開いた瞬間。goldは1アクセント | **Personal AGI, scoped to your work.** ／ 仕事の全域で動くAGIを、あなたのPCの中に |
 | 2 | デモ動画（§3.2） | — |
 | 3 | Recall: 自然文の問いに、根拠付きで答えている実画面 | **It knows the state of your work — with receipts.** ／ 仕事の状態を、根拠付きで把握しています |
 | 4 | 実行: 1ボタン → 下書き → **送信前の承認プレビュー** | **Nothing sends until you say send.** ／ 送信は、あなたが押すまで起きません |
 | 5 | Morning Brief | **Overnight it organizes. Morning it briefs you.** ／ 夜のうちに整理して、朝に渡します |
-| 6 | プライバシー対比図: *Text, on your Mac* ↔ *No screenshots. No recordings. No audio files.* | **We built it so we can't see your day.** ／ こちらから見られない作りにしてあります |
-| 7 | できること一覧＋動作環境 | **What it does today.** ／ いま出来ること（最下部に小さく `macOS 14+, Apple Silicon.`） |
+| 6 | プライバシー対比図: *Text, on your machine* ↔ *No screenshots. No recordings. No audio files.* | **We built it so we can't see your day.** ／ こちらから見られない作りにしてあります |
+| 7 | できること一覧＋動作環境 | **What it does today.** ／ いま出来ること（最下部に小さく `On macOS today. Windows and mobile in the works.`） |
 
 **7枚目の中身**（`docs/feature-status.csv` が implemented の範囲だけ）:
 - Passive memory / recall（EN: Passive memory and recall ／ JA: 受動的な記憶と想起）
@@ -172,6 +186,7 @@ Personal AGI for your work, on your Mac. It remembers your day as text — no sc
 - Morning brief（朝のブリーフ）
 - Drafts, replies, calendar holds — with approval（下書き・返信・予定の確保、承認付き）
 - Connected: Gmail, Google Calendar, Google Drive（接続済み）
+- Runs on macOS today; Windows and mobile in the works（今日は macOS 版。Windows とモバイルも開発中）
 - Next: Slack, then Notion, GitHub, Linear（次に来るもの）
 - Your memory over MCP（MCP経由で他のAIから読める）
 
@@ -184,11 +199,11 @@ Personal AGI for your work, on your Mac. It remembers your day as text — no sc
 | 1 | 0-5 | 普通に仕事している画面 | `You already did the work. Your AI just doesn't know about it.` | 仕事はもう終えている。AIだけが知らない |
 | 2 | 5-13 | ノッチを開く → アクションがもう並んでいる | `Open the notch. The context is already there.` | ノッチを開く。文脈はもう揃っている |
 | 3 | 13-25 | 「Draft the follow-up」→ 経緯を踏まえた下書きがストリーミング | `It knows who they are and what you owe them.` | 相手が誰で、何を借りているかを知っている |
-| 4 | 25-33 | 送信前の全文プレビュー＋承認 | `Nothing leaves your Mac without approval.` | 承認なしにMacから出るものはない |
+| 4 | 25-33 | 送信前の全文プレビュー＋承認 | `Nothing leaves your machine without approval.` | 承認なしにPCから出るものはない |
 | 5 | 33-43 | 会議の検知 → recap＋フォローアップ下書き | `Meetings end with the next step, not a transcript.` | 会議のあとに残るのは、議事録ではなく次の一手 |
 | 6 | 43-53 | 翌朝の Morning Brief | `It works overnight. You wake up briefed.` | 夜のうちに動く。起きたら整理が終わっている |
 | 7 | 53-62 | 設定のプライバシー表記 | `No screenshots. No recordings. No audio files. Ever.` | スクショも録画も音声ファイルも、一切作らない |
-| 8 | 62-70 | ロゴ＋CTA | `ShogunAI — personal AGI for your work. macOS 14+, Apple Silicon.` | ShogunAI — 仕事のためのパーソナルAGI |
+| 8 | 62-70 | ロゴ＋CTA | `ShogunAI — personal AGI for your work. On macOS today; Windows and mobile next.` | ShogunAI — 仕事のためのパーソナルAGI。今日は macOS 版 |
 
 > 撮影ルール: ダミーアカウントで撮り、実在の人名・社名・本文を映さない。**倍速編集しない**（実機性能を疑われる）。ノッチの展開は等速で1回。
 
@@ -205,7 +220,7 @@ Hi Product Hunt ⚔
 
 Here's what that looks like in practice.
 
-**It remembers your day as text.** What you read, wrote and decided. It is not a screen recorder: no screenshots, no video, no audio files, ever. Capture runs through the macOS accessibility layer, and it stays in an encrypted database on your Mac. Password managers and private browsing are excluded by default; you can exclude anything else; export and delete-everything are buttons in settings.
+**It remembers your day as text.** What you read, wrote and decided. It is not a screen recorder: no screenshots, no video, no audio files, ever. Capture runs through the operating system's accessibility layer, and it stays in an encrypted database on your own machine. Password managers and private browsing are excluded by default; you can exclude anything else; export and delete-everything are buttons in settings.
 
 **It keeps the state, not just the log.** People, projects, commitments, open loops — each record carrying where it came from and how confident it is. A low-confidence guess never reaches you dressed as a fact. That's the difference between a search box and something that can act.
 
@@ -215,7 +230,9 @@ Here's what that looks like in practice.
 
 You bring your own model — your API key, or the Claude/ChatGPT/Gemini plan you already pay for. Your memory isn't locked in our UI either: it's reachable over MCP, so your other AI tools can read the same context.
 
-macOS 14+, Apple Silicon. Early access is open — joining is free and nothing is charged to join.
+On platforms: the build that runs today is macOS (14+, Apple Silicon). Windows and mobile are being built — this isn't a Mac product, it's a product that happens to have shipped its Mac build first. The list is per-platform, so tell me which machine you're on and it'll shape the order we ship in.
+
+Early access is open — joining is free and nothing is charged to join.
 
 Three things I'd genuinely like from this thread:
 1. If you tried a memory tool before and dropped it, what made you quit? That's more useful to me than feature requests.
@@ -232,7 +249,7 @@ Product Hunt に ShogunAI を出しました ⚔
 
 具体的にはこうなります。
 
-**一日をテキストとして記憶します。** 読んだもの、書いたもの、決めたこと。画面録画ではありません。スクリーンショットも録画も音声ファイルも、一切作りません。取得は macOS の accessibility 層を通り、データは端末上の暗号化データベースに残ります。パスワード管理アプリとプライベートブラウジングは既定で除外、他も自分で除外できます。書き出しと全削除は設定のボタンです。
+**一日をテキストとして記憶します。** 読んだもの、書いたもの、決めたこと。画面録画ではありません。スクリーンショットも録画も音声ファイルも、一切作りません。取得は OS の accessibility 層を通り、データはあなたのPCの中、暗号化されたデータベースに残ります。パスワード管理アプリとプライベートブラウジングは既定で除外、他も自分で除外できます。書き出しと全削除は設定のボタンです。
 
 **ログではなく状態を持ちます。** 人、プロジェクト、約束、やりかけ。すべてのレコードに根拠と確度が付いています。確度の低い推測が事実の顔をして出てくることはありません。ここが、検索窓と「動けるもの」の分かれ目です。
 
@@ -242,7 +259,9 @@ Product Hunt に ShogunAI を出しました ⚔
 
 モデルはあなたが選びます。自分のAPIキーでも、すでに契約している Claude / ChatGPT / Gemini のプランでも動きます。記憶もこちらのUIに閉じ込めません。MCP経由で開いているので、他のAIツールから同じ文脈を読めます。
 
-macOS 14 以上 / Apple Silicon。アーリーアクセスの登録は無料で、登録時に課金は発生しません。
+動作環境について。今日動くビルドは macOS 版です（macOS 14 以上 / Apple Silicon）。Windows とモバイルも作っています。Macのためのプロダクトではなく、Mac版が先に出ただけです。登録のときにどのマシンを使っているか教えてもらえると、出す順番の判断材料になります。
+
+アーリーアクセスの登録は無料で、登録時に課金は発生しません。
 
 聞きたいことが3つあります。
 1. 記憶系のツールを使ってやめた経験がある人。何がきっかけでやめましたか。機能要望より、そちらが知りたいです。
@@ -303,7 +322,7 @@ macOS 14 以上 / Apple Silicon。アーリーアクセスの登録は無料で�
 > **JA**: 守れない日付を言いたくないので、正直に書きます。順番に開けていて、登録リストがそのまま順番待ちです。登録しておいてもらえれば、順番が来たときにメールを送ります。それまで宣伝メールは送りません。
 
 **Q2. 実物あるの？ デモはモックでは**
-> **EN**: Everything in the video is the real app on a real Mac — no mockups, no speed-up. The reason access is gradual isn't that it doesn't run; it's that capture touches every app you use, and I'd rather fix the first hundred edge cases before inviting the next thousand.
+> **EN**: Everything in the video is the real app on a real machine — no mockups, no speed-up. The reason access is gradual isn't that it doesn't run; it's that capture touches every app you use, and I'd rather fix the first hundred edge cases before inviting the next thousand.
 >
 > **JA**: 動画は全部、実機で動いている実物です。モックも倍速編集もありません。順番に開けているのは動かないからではなく、キャプチャが使っている全アプリに触れる以上、最初の100人分の例外を潰してから次を呼びたいからです。
 
@@ -312,13 +331,13 @@ macOS 14 以上 / Apple Silicon。アーリーアクセスの登録は無料で�
 >
 > **JA**: もっともな指摘で、人間並みの知能を主張してはいません。狭い意味で使っています。単機能に対する「全域」です。メール、カレンダー、ドキュメント、チャット、会議、画面にまたがる一つの記憶とエージェントが、人・約束・やりかけの状態を根拠と確度付きで持ち、その状態から動く。これを指す良い言葉があれば、乗り換えます。
 
-**Q4. PC って書いてあるけど Mac 専用？**
-> **EN**: Correct, and I should be precise: macOS 14+ on Apple Silicon today. Capture quality is the reason — the macOS accessibility layer lets us read on-screen text cheaply and reliably without recording anything, which is what makes the no-screenshots promise possible. Windows is a not-yet, not a no.
+**Q4. Windows は？ / iPhone は？（PC と書いてある以上、必ず来る）**
+> **EN**: The build that runs today is macOS — 14+, Apple Silicon. Windows and mobile are being built; I'm not going to guess at dates here. This was never meant as a Mac product: we started there because the accessibility layer let us read on-screen text reliably without recording anything, which is what makes the no-screenshots promise work. Sign up and tell me which machine you're on — that's the input I'm using to decide what ships next.
 >
-> **JA**: そのとおりで、正確に言うと今は macOS 14 以上・Apple Silicon のみです。理由は取得の質で、macOS の accessibility 層なら録画せずに画面のテキストを軽く確実に読めます。「スクショを撮らない」という約束が成立するのはそのためです。Windows はまだ、であって、やらないという意味ではありません。
+> **JA**: 今日動くビルドは macOS 版です（macOS 14 以上 / Apple Silicon）。Windows とモバイルは開発中で、時期はここでは言いません。もともとMac専用のつもりで作っていません。録画せずに画面のテキストを確実に読める入口がそこにあったので、最初に出ただけです。「スクショを撮らない」という約束はそこで成立しています。登録するときにどのマシンを使っているか教えてください。次に何を出すかの判断材料にします。
 
 **Q5. 監視ツールでは？ 全部見られているのでは**
-> **EN**: It's the first thing I'd ask too. Three structural answers: capture is text only — no screenshots, no video, no audio files; it stays in an encrypted database on your Mac; and you can exclude any app or window title, with password managers and private browsing excluded by default. Full export and delete-everything are buttons in settings, not a support form.
+> **EN**: It's the first thing I'd ask too. Three structural answers: capture is text only — no screenshots, no video, no audio files; it stays in an encrypted database on your own machine; and you can exclude any app or window title, with password managers and private browsing excluded by default. Full export and delete-everything are buttons in settings, not a support form.
 >
 > **JA**: 私も最初に聞きます。構造で3つ答えます。取得するのはテキストだけで、スクショも録画も音声ファイルも作りません。データは端末上の暗号化データベースに留まります。どのアプリもウィンドウタイトルも除外でき、パスワード管理アプリとプライベートブラウジングは既定で除外です。書き出しと全削除は設定のボタンで、問い合わせフォームではありません。
 
@@ -391,7 +410,9 @@ macOS 14 以上 / Apple Silicon。アーリーアクセスの登録は無料で�
 >
 > Personal AGI for your work — narrowly: general across your work instead of narrow to one task.
 >
-> It remembers your day on your Mac as text (no screenshots, no recordings), keeps the state of it, and finishes things. Nothing sends without your approval.
+> It remembers your day inside your own machine as text (no screenshots, no recordings), keeps the state of it, and finishes things. Nothing sends without your approval.
+>
+> On macOS today. Windows and mobile next.
 > ```
 >
 > **JA**
@@ -400,7 +421,9 @@ macOS 14 以上 / Apple Silicon。アーリーアクセスの登録は無料で�
 >
 > 仕事の全域で動くパーソナルAGIです。人間並みの知能という意味ではなく、単機能アプリの対義語としての「全域」です。
 >
-> Macの中で一日をテキストとして記憶し、人・約束・やりかけの状態を持って、実行まで行きます。送信は必ず承認を挟みます。
+> PCの中で一日をテキストとして記憶し、人・約束・やりかけの状態を持って、実行まで行きます。送信は必ず承認を挟みます。
+>
+> 今日動くのは macOS 版です。Windows とモバイルも作っています。
 > ```
 
 ### X（中盤スレッド）
@@ -411,15 +434,15 @@ macOS 14 以上 / Apple Silicon。アーリーアクセスの登録は無料で�
 
 ### LinkedIn
 
-> **EN**: We opened early access for ShogunAI on Product Hunt today. We call it a personal AGI in a deliberately narrow sense: general across your work rather than narrow to a single task. It remembers your workday on your Mac as text — never screenshots or recordings — keeps the state of it (people, projects, commitments, open loops, each with a source and a confidence), and turns that into finished work: drafted replies, meeting recaps that know the relationship, calendar holds, a morning brief. Anything addressed to another person stops for your approval first. macOS 14+, Apple Silicon.
+> **EN**: We opened early access for ShogunAI on Product Hunt today. We call it a personal AGI in a deliberately narrow sense: general across your work rather than narrow to a single task. It remembers your workday inside your own machine as text — never screenshots or recordings — keeps the state of it (people, projects, commitments, open loops, each with a source and a confidence), and turns that into finished work: drafted replies, meeting recaps that know the relationship, calendar holds, a morning brief. Anything addressed to another person stops for your approval first. The macOS build runs today; Windows and mobile are in the works.
 >
-> **JA**: 本日、ShogunAI のアーリーアクセスを Product Hunt で公開しました。パーソナルAGIと呼んでいますが、意味は狭く取っています。単機能ではなく、仕事の全域で動くという意味です。Macの中で一日をテキストとして記憶し（スクショや録画は残しません）、人・プロジェクト・約束・やりかけの状態を根拠と確度付きで持ち、そこから返信の下書き、関係の経緯を踏まえた会議recap、予定の確保、朝のブリーフまで進めます。人に宛てたものは必ず承認を挟みます。macOS 14 以上 / Apple Silicon。
+> **JA**: 本日、ShogunAI のアーリーアクセスを Product Hunt で公開しました。パーソナルAGIと呼んでいますが、意味は狭く取っています。単機能ではなく、仕事の全域で動くという意味です。PCの中で一日をテキストとして記憶し（スクショや録画は残しません）、人・プロジェクト・約束・やりかけの状態を根拠と確度付きで持ち、そこから返信の下書き、関係の経緯を踏まえた会議recap、予定の確保、朝のブリーフまで進めます。人に宛てたものは必ず承認を挟みます。今日動くのは macOS 版で、Windows とモバイルも作っています。
 
 ### Discord / Slack
 
-> **EN**: We're live on PH today ⚔ — ShogunAI, local-first work memory for Mac that drafts and executes instead of just recalling. I'm in the comments all day if you want to grill me on the privacy model: [link]
+> **EN**: We're live on PH today ⚔ — ShogunAI, local-first work memory that drafts and executes instead of just recalling (macOS build today, Windows and mobile in the works). I'm in the comments all day if you want to grill me on the privacy model: [link]
 >
-> **JA**: 本日 PH に出しました ⚔ ShogunAI — 思い出すだけで終わらず、下書きと実行まで行くMac向けのローカルファーストな仕事の記憶です。プライバシー設計を突きたい人向けに、一日コメント欄にいます: [link]
+> **JA**: 本日 PH に出しました ⚔ ShogunAI — 思い出すだけで終わらず、下書きと実行まで行く、ローカルファーストな仕事の記憶です（今日は macOS 版、Windows とモバイルも開発中）。プライバシー設計を突きたい人向けに、一日コメント欄にいます: [link]
 
 ### Show HN（AGIという語は出さない。機能と規律の言葉だけで通す）
 
@@ -454,7 +477,8 @@ Show HN: ShogunAI – Local-first work memory for macOS that drafts and executes
 4. **紹介プログラムの残骸** — API群は404化済みだが辞書に `hero.invitedBy` / `invitedTier` が4言語分残存。動かない特典を期待させない。
 5. **登録動線**（今回の本丸）
    - ヒーロー内にメール1フィールドをスクロールなしで置く
-   - フォーム直下に動作環境の1行: `macOS 14+, Apple Silicon` ／「macOS 14 以上・Apple Silicon」
+   - フォーム直下に1行: `On macOS today. Windows and mobile in the works.` ／「今日動くのは macOS 版です。Windows とモバイルも作っています」
+   - **フォームにプラットフォーム選択（Mac / Windows / Mobile）を足す。** 現状 `waitlist_email_capture` は email と created_at のみで、どのOSの需要が来ているか取れない。Windows・モバイルを作ると決めた以上、**この1フィールドがローンチ当日の最大の収穫になる**（小改修）
    - 送信後の文言を `waitlist.okListed`（"You're on the list."）から、**次に何が起きるかを書いた2〜3行**へ。**日付は書かない**
    - 自動返信メール1通（何が届くか・課金は発生しないこと・解除方法）。ここでも日付を約束しない
 6. **Privacy & Security ページ**を §7 Q5/Q6/Q15 の粒度に整える（コメントから直リンクして即答するため）
@@ -469,7 +493,9 @@ Show HN: ShogunAI – Local-first work memory for macOS that drafts and executes
 - [ ] 未実測の性能数値（100ms / CPU 5% 等）を外向けに書いていないか
 - [ ] ギャラリーで語る機能が `docs/feature-status.csv` の implemented 範囲内か（将来分は "Next" と明示）
 - [ ] `personal AGI` の定義が first comment の冒頭にあるか（定義なしの単独使用はブランド規約の禁じ手）
-- [ ] タグラインの `AG` / `PC` を確認したか（§2.1）
+- [ ] タグラインの `AG` を確認したか（`PC` は維持。§2.1）
+- [ ] 「今日動くのは macOS 版／Windows・モバイルは開発中」の2文が description・first comment・LPフォーム直下の3か所にあるか
+- [ ] Windows・モバイルが**今日動くかのような書き方**になっていないか
 - [ ] デモ動画が実ビルドの実画面か（倍速・モック混入なし）
 - [ ] 絵文字は ⚔ のみか／競合の固有名がゼロか
 - [ ] "AI-powered" / "revolutionary" / "second brain" 不使用か
