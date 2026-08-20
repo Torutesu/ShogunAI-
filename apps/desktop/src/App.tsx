@@ -2995,7 +2995,19 @@ export function VoiceSection(): JSX.Element {
             >
             <div className="mic-picker__popover-head">
               <span>{t.voiceMicrophonePickerTitle}</span>
-              <span>{microphones.length + 1}</span>
+              <span className="mic-picker__popover-actions">
+                <span>{microphones.length + 1}</span>
+                <button
+                  className="mic-picker__close"
+                  type="button"
+                  aria-label={t.voiceMicrophoneClose}
+                  onClick={() => setMicrophoneOpen(false)}
+                >
+                  <svg viewBox="0 0 12 12" width="12" height="12" fill="none" aria-hidden="true">
+                    <path d="m3 3 6 6M9 3 3 9" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" />
+                  </svg>
+                </button>
+              </span>
             </div>
             <div className="mic-picker__options">
               <button

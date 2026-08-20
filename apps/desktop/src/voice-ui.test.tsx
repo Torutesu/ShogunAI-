@@ -63,6 +63,9 @@ describe("dictation cleanup settings", () => {
     expect(screen.getByRole("button", { name: "Refresh" })).toBeTruthy();
     fireEvent.click(picker);
     expect(screen.getByRole("dialog", { name: "Choose Input" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Close microphone picker" }));
+    expect(screen.queryByRole("dialog", { name: "Choose Input" })).toBeNull();
+    fireEvent.click(picker);
     fireEvent.click(screen.getByRole("button", { name: /Studio Mic/ }));
 
     await waitFor(() => {

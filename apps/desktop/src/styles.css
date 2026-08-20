@@ -2550,8 +2550,32 @@ kbd {
   letter-spacing: 0.09em;
   text-transform: uppercase;
 }
-.mic-picker__popover-head span:last-child {
+.mic-picker__popover-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.mic-picker__popover-actions > span {
   font-variant-numeric: tabular-nums;
+}
+.mic-picker__close {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  margin-right: -5px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background var(--set-motion, 160ms), color var(--set-motion, 160ms);
+}
+.mic-picker__close:hover,
+.mic-picker__close:focus-visible {
+  outline: 0;
+  background: color-mix(in srgb, var(--ink) 9%, transparent);
+  color: var(--ink);
 }
 .mic-picker__options {
   min-height: 0;

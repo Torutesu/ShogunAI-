@@ -302,6 +302,7 @@ export const STRINGS = {
     voiceMicrophoneRefresh: "Refresh",
     voiceMicrophoneLoading: "Scanning…",
     voiceMicrophonePickerTitle: "Choose Input",
+    voiceMicrophoneClose: "Close microphone picker",
     voiceMicrophoneDefaultHint: "Uses the current macOS input",
     voiceMicrophoneAvailable: "Available",
     voiceMicrophoneDisconnected: (name: string): string => `${name} — unavailable`,
