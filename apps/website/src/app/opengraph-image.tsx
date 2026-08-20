@@ -49,10 +49,10 @@ export default function OpengraphImage() {
             maxWidth: 900,
           }}
         >
-          The AI that remembers your day — and acts on it.
+          Your personal AGI on your PC.
         </div>
         <div style={{ marginTop: 28, fontSize: 30, color: '#5f6b73' }}>
-          Memory that captures your day. Execution that acts on it.
+          Built to finish real work.
         </div>
       </div>
     ),
