@@ -268,21 +268,19 @@ describe("cinematic onboarding", () => {
     expect((await screen.findByRole("button", { name: "Unmute" }) as HTMLButtonElement).disabled).toBe(false);
   });
 
-  it("keeps native Mute available during the cinematic surface", async () => {
+  it("keeps the cinematic surface free of controls", async () => {
     window.history.replaceState({}, "", "/onboarding.html?surface=main&generation=9");
     vi.mocked(invoke).mockImplementation(async (command) => {
       if (command === "onboarding_state") return state("welcome", 4);
       if (command === "permission_status" || command === "permission_listener_ready") return emptyPermissions;
       if (command === "onboarding_window_surface") return { surface: "main", generation: 9, display_id: 1, motion_vector: { x: 0, y: 0 }, label: "onboarding-main-9" };
-      if (command === "set_onboarding_music_muted") return { ...state("welcome", 5), music_muted: true };
       if (command === "onboarding_event") return undefined;
       throw new Error(`unexpected command: ${command}`);
     });
     render(<Onboarding />);
     expect(await screen.findByTestId("cinematic-surface")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Mute" }));
-    await waitFor(() => expect(invoke).toHaveBeenCalledWith("set_onboarding_music_muted", { expectedRevision: 4, muted: true }));
-    expect(screen.getByRole("button", { name: "Unmute" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Mute" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Unmute" })).toBeNull();
   });
 
   it("keeps Screen Recording on stage when restart fails", async () => {
@@ -614,31 +612,32 @@ describe("cinematic onboarding", () => {
     expect(css).toContain("--onb-text-large-title-size: 26px");
     expect(css).toContain("--onb-text-body-size: 13px");
     expect(css).toContain("--onb-text-button-default-size: 13px");
-    expect(css).toMatch(/\.onb-cinematic\s*\{[^}]*background:\s*rgba\(/);
+    expect(css).toMatch(/\.onb-cinematic\s*\{[^}]*background:\s*rgba\(1, 3, 5, \.58\)/);
     expect(css).toMatch(/\.onb-layout\s*\{[^}]*grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\)/);
     expect(css).toMatch(/@media \(max-width:\s*760px\)/);
     expect(css).toContain("onb-light-orbit 9.2s");
     expect(css).toContain("onb-window-bloom 9.2s");
     expect(css).toContain("onb-window-form 9.2s");
     expect(css).toContain("rgba(195,95,60,.58)");
-    expect(css).toContain("rgba(95,143,168,.34)");
+    expect(css).toContain("rgba(95,143,168,.42)");
     expect(css).not.toMatch(/violet|yellow/i);
     expect(cinematicSource).toContain("onb-cinematic__light--ember");
     expect(cinematicSource).toContain("onb-cinematic__light--glacier");
+    expect(cinematicSource).not.toContain("onb-cinematic__light--cedar");
+    expect(cinematicSource.match(/onb-cinematic__light onb-cinematic__light--/g)).toHaveLength(2);
+    expect(cinematicSource).not.toContain("MuteButton");
     expect(cinematicSource).toContain('data-testid="cinematic-window-form"');
     expect(cinematicSource).not.toMatch(/Shotbase|wavesUrl|<Logo/);
     expect(experienceSource).not.toMatch(/Shotbase/i);
-    expect(css).toMatch(/\.onb-cinematic__light\s*\{[^}]*width:\s*min\(58\.5vw, 825px\)[^}]*height:\s*min\(69vh, 675px\)/);
-    expect(css).toMatch(/\.onb-cinematic__light--cedar\s*\{[^}]*width:\s*min\(49\.5vw, 705px\)[^}]*height:\s*min\(58\.5vh, 570px\)/);
-    expect(css).toMatch(/\.onb-cinematic__light--glacier\s*\{[^}]*width:\s*min\(52\.5vw, 735px\)[^}]*height:\s*min\(61\.5vh, 600px\)/);
-    expect(css).toContain("--onb-light-meet-one");
-    expect(css).toContain("--onb-light-meet-two");
-    expect(css).toContain("--onb-light-meet-three");
-    expect(css).toContain("--onb-light-after-three");
-    expect(css).toMatch(/29%, 35%[^}]*meet-one/);
-    expect(css).toMatch(/51%, 57%[^}]*meet-two/);
-    expect(css).toMatch(/73%, 79%[^}]*meet-three/);
-    expect(css).toMatch(/85%\s*\{[^}]*after-three[\s\S]*92%\s*\{[^}]*final/);
+    expect(css).toMatch(/\.onb-cinematic__light\s*\{[^}]*width:\s*min\(66vw, 930px\)[^}]*height:\s*min\(76vh, 760px\)/);
+    expect(css).toContain("--onb-light-apart");
+    expect(css).toContain("--onb-light-meet");
+    expect(css).toMatch(/25%, 31%[^}]*meet/);
+    expect(css).toMatch(/47%, 53%[^}]*meet/);
+    expect(css).toMatch(/69%, 75%[^}]*meet/);
+    expect(css).toMatch(/83%\s*\{[^}]*apart[\s\S]*91%\s*\{[^}]*final/);
+    expect(css).toContain("translate3d(-13vw, 0, 0)");
+    expect(css).toContain("translate3d(13vw, 0, 0)");
     expect(css).toMatch(/\.onb-cinematic__window\s*\{[^}]*width:\s*min\(1197px, calc\(100vw - 32px\)\)[^}]*height:\s*min\(751px, calc\(100vh - 32px\)\)[^}]*border-radius:\s*22px/);
     expect(css).toMatch(/\.onb-signin__haze\s*\{[^}]*rgba\(195,95,60,\.18\)[^}]*rgba\(95,143,168,\.14\)/);
     expect(css).toMatch(/\.onb-signin__button\[data-processing="true"\]\s*\{[^}]*background:\s*#aaa6a3/);

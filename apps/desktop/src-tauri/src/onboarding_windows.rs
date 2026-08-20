@@ -485,7 +485,7 @@ pub mod mac {
           style.textContent = `
             html, body, #root { background: transparent !important; }
             .onb-cinematic {
-              background: rgba(1, 3, 5, 0.88) !important;
+              background: rgba(1, 3, 5, 0.58) !important;
             }
           `;
           (document.head || document.documentElement).appendChild(style);
@@ -1919,10 +1919,10 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn injected_intro_style_keeps_cinematic_art_and_mute_visible() {
+    fn injected_intro_style_keeps_cinematic_art_visible_over_desktop() {
         let script = mac::INTRO_DIMMER_INITIALIZATION_SCRIPT;
 
-        assert!(script.contains("background: rgba(1, 3, 5, 0.88)"));
+        assert!(script.contains("background: rgba(1, 3, 5, 0.58)"));
         assert!(!script.contains(".onb-cinematic > *"));
         assert!(!script.contains("display: none"));
     }

@@ -104,7 +104,7 @@ export function Onboarding(): JSX.Element {
 
   if (surface === undefined || !state) return <div className="onb-boot" />;
   if (!surface || surface.surface !== route.surface) return <div className="onb-stale" data-testid="stale-surface" />;
-  if (surface.surface === "main") return <CinematicSurface muted={state.music_muted} musicPending={musicPending} onToggleMusic={toggleMusic} />;
+  if (surface.surface === "main") return <CinematicSurface />;
   if (surface.surface === "ambient") return <AmbientSurface motionVector={surface.motion_vector} />;
   return <OnboardingExperience state={state} permissions={permissions} surfaceGeneration={surface.generation} onPersist={persist} onFinish={finish} onToggleMusic={toggleMusic} musicPending={musicPending} />;
 }
