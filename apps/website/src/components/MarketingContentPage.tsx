@@ -3,7 +3,6 @@ import { CTA } from '@/components/sections/CTA';
 import { PageHeader, PageShell } from '@/components/PageShell';
 import { JsonLd, breadcrumbSchema } from '@/components/seo/JsonLd';
 import { Button } from '@/components/ui/button';
-import { Card } from '@/components/ui/card';
 import type { Dictionary } from '@/i18n/dictionaries';
 import type { Locale } from '@/i18n/config';
 import type { MarketingDetail } from '@/lib/marketing-content';
@@ -55,15 +54,17 @@ export function MarketingContentPage({ page, section, sectionLabel, t, locale }:
       <section className="py-[clamp(48px,7vw,88px)]">
         <div className="container-x">
           <p className="mx-auto max-w-[720px] text-center text-[clamp(18px,2.2vw,22px)] leading-relaxed text-muted">{page.intro}</p>
-          <div className="mt-12 grid gap-5 md:grid-cols-3">
+          <div className="mt-14 grid gap-x-10 gap-y-12 md:grid-cols-3">
             {page.highlights.map((item, index) => {
               const Icon = icons[index % icons.length];
               return (
-                <Card key={item.title} className="lift h-full rounded-[24px] p-7">
-                  <span className="flex size-10 items-center justify-center rounded-xl bg-sky-soft text-accent"><Icon className="size-5" /></span>
-                  <h2 className="mt-5 font-display text-xl font-semibold">{item.title}</h2>
-                  <p className="mt-3 text-[15px] leading-relaxed text-muted">{item.body}</p>
-                </Card>
+                <article key={item.title} className="flex h-full flex-col items-center px-2 text-center">
+                  <span className="flex size-12 items-center justify-center text-accent">
+                    <Icon className="size-7" strokeWidth={1.8} />
+                  </span>
+                  <h2 className="mt-5 text-balance font-display text-[clamp(20px,2vw,26px)] font-semibold leading-tight">{item.title}</h2>
+                  <p className="mt-4 max-w-[360px] text-[15px] leading-relaxed text-muted">{item.body}</p>
+                </article>
               );
             })}
           </div>
@@ -71,16 +72,21 @@ export function MarketingContentPage({ page, section, sectionLabel, t, locale }:
       </section>
 
       <section className="border-y border-border bg-cloud/45 py-[clamp(48px,7vw,88px)]">
-        <div className="container-x grid gap-10 lg:grid-cols-[0.8fr_1.2fr] lg:items-start">
+        <div className="container-x grid gap-12 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] lg:items-start lg:gap-20">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.08em] text-accent">{copy.how}</p>
-            <h2 className="mt-3 font-display text-[clamp(26px,4vw,40px)] font-semibold leading-tight">{copy.howTitle}</h2>
+            <h2 className="mt-4 max-w-[12ch] text-balance font-display text-[clamp(32px,4.5vw,56px)] font-semibold leading-[1.08] tracking-[-0.035em]">{copy.howTitle}</h2>
           </div>
-          <ol className="grid gap-4">
-            {page.steps.map((step, index) => (
-              <li key={step.title} className="grid grid-cols-[42px_1fr] gap-4 rounded-[20px] border border-border bg-surface p-5 shadow-[var(--shadow-card)]">
-                <span className="flex size-10 items-center justify-center rounded-full bg-accent font-display text-sm font-semibold text-white">{index + 1}</span>
-                <div><h3 className="font-display text-lg font-semibold">{step.title}</h3><p className="mt-1.5 text-sm leading-relaxed text-muted">{step.body}</p></div>
+          <ol className="grid gap-8 lg:pt-1">
+            {page.steps.map((step) => (
+              <li key={step.title} className="flex items-start gap-4">
+                <span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full bg-accent text-white">
+                  <Check className="size-4" strokeWidth={3} />
+                </span>
+                <div>
+                  <h3 className="font-display text-[clamp(18px,2vw,22px)] font-semibold leading-tight">{step.title}</h3>
+                  <p className="mt-2 text-[15px] leading-relaxed text-muted">{step.body}</p>
+                </div>
               </li>
             ))}
           </ol>
