@@ -14,6 +14,7 @@ use shogun_mcp::memory_api_settings::{
     load_settings as load_memory_api_settings, save_settings as save_memory_api_settings,
     validate_profile, Settings as MemoryApiSettings,
 };
+use shogun_mcp::voice_dictionary_api::{VoiceDictionaryOperation, VoiceDictionaryResult};
 
 use crate::capture::visual_recall::{
     load_settings, save_settings, RetentionPolicy, Settings, DAY_MS,
@@ -218,12 +219,16 @@ impl DbBackend {
         let now = self.db.now_ms();
         let retention_ms = settings.retention.retain_ms().unwrap_or(3 * DAY_MS);
         let frame_stats = self.db.screen_frame_stats();
-        let frames_24h = self.db.screen_frames_count_in_range(now.saturating_sub(DAY_MS), now);
+        let frames_24h = self
+            .db
+            .screen_frames_count_in_range(now.saturating_sub(DAY_MS), now);
         let frames_retained = self
             .db
             .screen_frames_count_in_range(now.saturating_sub(retention_ms), now);
-        let estimated_daily_bytes = (frames_24h >= 2)
-            .then(|| self.db.screen_frame_bytes_in_range(now.saturating_sub(DAY_MS), now));
+        let estimated_daily_bytes = (frames_24h >= 2).then(|| {
+            self.db
+                .screen_frame_bytes_in_range(now.saturating_sub(DAY_MS), now)
+        });
         let projected_retention_bytes = estimated_daily_bytes
             .and_then(|bytes| bytes.checked_mul(i64::from(settings.retention.days())));
         let recent: Vec<_> = self
@@ -460,6 +465,30 @@ impl DbBackend {
 }
 
 impl MemoryBackend for DbBackend {
+    fn manage_voice_dictionary(
+        &self,
+        operation: VoiceDictionaryOperation,
+    ) -> Result<VoiceDictionaryResult, String> {
+        match operation {
+            VoiceDictionaryOperation::List => {
+                self.db.list_voice_terms().map(VoiceDictionaryResult::Terms)
+            }
+            VoiceDictionaryOperation::Create(term) => self
+                .db
+                .create_voice_term(&term)
+                .map(VoiceDictionaryResult::Term),
+            VoiceDictionaryOperation::Update { id, term } => self
+                .db
+                .update_voice_term(id, &term)?
+                .map(VoiceDictionaryResult::Term)
+                .ok_or_else(|| "voice dictionary term not found".to_string()),
+            VoiceDictionaryOperation::Delete { id } => self
+                .db
+                .delete_voice_term(id)
+                .map(VoiceDictionaryResult::Deleted),
+        }
+    }
+
     fn read(&self, tool: Tool, params: &ReadParams) -> Vec<ReadItem> {
         // A single row `Option` → a 0/1-length result (for the `get` variants).
         fn one<T>(row: Option<T>, f: impl Fn(T) -> ReadItem) -> Vec<ReadItem> {
@@ -564,6 +593,10 @@ impl MemoryBackend for DbBackend {
             Tool::MemoryGetWrap
             | Tool::LessonsList
             | Tool::ProfileWhoami
+            | Tool::VoiceDictionaryList
+            | Tool::VoiceDictionaryCreate
+            | Tool::VoiceDictionaryUpdate
+            | Tool::VoiceDictionaryDelete
             | Tool::LessonsSetActive
             | Tool::VisualRecallStatus
             | Tool::VisualRecallSearchFrames
@@ -589,6 +622,7 @@ impl MemoryBackend for DbBackend {
             Tool::LessonsList => self.lessons_json(),
             Tool::MemoryGetWrap => self.evening_wrap_json(),
             Tool::ProfileWhoami => self.whoami_json(),
+            Tool::VoiceDictionaryList => return None,
             _ => return None,
         })
     }
@@ -696,7 +730,9 @@ fn parse_retention_body(body: &str) -> Result<RetentionPolicy, String> {
     let candidates = [
         value.get("days"),
         value.get("retention_days"),
-        value.get("retention").and_then(|retention| retention.get("days")),
+        value
+            .get("retention")
+            .and_then(|retention| retention.get("days")),
     ];
     let mut parsed = Vec::new();
     for candidate in candidates.into_iter().flatten() {
@@ -1113,7 +1149,9 @@ mod tests {
         assert!(status.contains("\"retention_days\":1"));
 
         for invalid in [r#"{"days":0}"#, r#"{"days":3651}"#, r#"{"days":"forever"}"#] {
-            assert!(backend.write(Tool::VisualRecallSetRetention, invalid).is_err());
+            assert!(backend
+                .write(Tool::VisualRecallSetRetention, invalid)
+                .is_err());
         }
     }
 

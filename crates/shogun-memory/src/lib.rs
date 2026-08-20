@@ -46,6 +46,7 @@ pub mod thread;
 pub mod transcript_segments;
 pub mod traceability;
 pub mod vector;
+pub mod voice_terms;
 
 /// refinery embeds the `src/migrations/V*.sql` files at compile time; `migrations::runner()`
 /// applies any not yet recorded in the `refinery_schema_history` table.
@@ -215,7 +216,7 @@ pub fn open_in_memory() -> Result<Connection, MemoryError> {
 /// The highest migration bundled in `src/migrations`. Tests assert against this rather than a
 /// literal so that adding a migration updates one place, not five — and so a *drop* in version
 /// (a migration file lost in a merge) still fails loudly.
-pub const LATEST_SCHEMA_VERSION: u32 = 19;
+pub const LATEST_SCHEMA_VERSION: u32 = 20;
 
 /// The schema version the migrations bring the database to (max applied version), or `None`
 /// if no migrations are recorded.

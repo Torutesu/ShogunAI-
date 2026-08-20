@@ -27,6 +27,7 @@ shogun-redact = { path = "../shogun-redact" }
 # The Memory API applies the same confidence rule as UI reads (FR-API-06); reuse the single
 # implementation in shogun-fusion rather than re-deriving the bands. One-way: mcp → fusion.
 shogun-fusion = { path = "../shogun-fusion" }
+shogun-memory = { path = "../shogun-memory" }
 # Licence-token verification for the billing half of plan resolution (issue #8). One-way: mcp →
 # license → agents.
 shogun-license = { path = "../shogun-license" }

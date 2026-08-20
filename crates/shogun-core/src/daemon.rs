@@ -20,13 +20,187 @@ use shogun_memory::traceability::{Filter, TraceRow};
 use shogun_memory::MemoryError;
 use shogun_fusion::brief::{assemble_brief, assemble_degraded, CalendarLine, CommitmentDue, MorningBrief, OpenLoopItem};
 use shogun_fusion::assemble::ActionCandidate;
-use shogun_fusion::block::{BlockRef, ContextBlock, ScoreInputs, SourceKind};
+use shogun_fusion::block::{BlockRef, ContextBlock, SourceKind};
 use shogun_fusion::budget::TokenEstimator;
 
 use crate::capture::dedup::{decide_hash, Recent};
 use crate::memory_health::{FaultClass, MemoryFault, MemoryResult};
 use crate::db_sink::DbTraceabilitySink;
 use crate::dreamcycle::plan::{remaining, CycleKind, JobKind, JobRun, JobState, DEGRADED_SEQUENCE};
+
+mod ingestion;
+mod maintenance;
+mod meetings;
+mod replies;
+mod search;
+
+pub use ingestion::IngestSummary;
+pub use search::{ContextPack, Evidence, ScreenFrameRef};
+
+mod voice_dictionary_support {
+    use shogun_memory::voice_terms::{self, VoiceTerm};
+
+    pub(super) fn dictionary_entry(term: VoiceTerm) -> crate::voice_dictionary::DictionaryEntry {
+        use crate::voice_dictionary::TermScope;
+
+        let scope = match term.scope {
+            voice_terms::VoiceTermScope::Global => TermScope::Global,
+            voice_terms::VoiceTermScope::Bundle => TermScope::Bundle(term.scope_ref.unwrap_or_default()),
+            voice_terms::VoiceTermScope::Surface => TermScope::Surface(term.scope_ref.unwrap_or_default()),
+        };
+        crate::voice_dictionary::VoiceDictionary::user_entry(
+            term.canonical,
+            term.aliases,
+            term.locale,
+            scope,
+            term.priority,
+            term.enabled,
+        )
+    }
+}
+
+mod context_assembly {
+    use shogun_fusion::block::{BlockRef, ContextBlock, ScoreInputs, SourceKind, StateTable};
+    use shogun_fusion::budget::TokenEstimator;
+
+    use super::Evidence;
+
+    /// 検索 evidence: relevance は呼び出し側の検索スコア由来なので EVIDENCE_RELEVANCE を上書きする。
+    pub(super) const EVIDENCE_RELEVANCE: f64 = 0.7;
+    const EVIDENCE_SCORE: ScoreInputs =
+        ScoreInputs { relevance: EVIDENCE_RELEVANCE, freshness: 0.5, task_link: 0.0, confidence: 1.0 };
+    /// retrieved evidence の属する session の保存済み要約。参照先＝関連度高、要約＝confidence 1.0。
+    pub(super) const SESSION_SUMMARY_SCORE: ScoreInputs =
+        ScoreInputs { relevance: 0.85, freshness: 0.7, task_link: 0.5, confidence: 1.0 };
+    /// 解決済みスレッドの保存済み要約。session と対称、参照先＝関連度高、要約＝confidence 1.0。
+    pub(super) const THREAD_SUMMARY_SCORE: ScoreInputs =
+        ScoreInputs { relevance: 0.9, freshness: 0.7, task_link: 0.5, confidence: 1.0 };
+    /// confidence ゲート済み state fact。現在の作業に紐づく前提でやや高め、confidence は High 相当 0.9。
+    const FACT_SCORE: ScoreInputs =
+        ScoreInputs { relevance: 0.6, freshness: 0.6, task_link: 0.6, confidence: 0.9 };
+
+    /// Map an open-loop `kind` string to the Fusion state kind that selects its action.
+    pub(super) fn open_loop_state_kind(kind: &str) -> shogun_fusion::assemble::StateKind {
+        use shogun_fusion::assemble::StateKind;
+        match kind {
+            "reply_needed" => StateKind::OpenLoopReplyNeeded,
+            "waiting_on_them" => StateKind::OpenLoopWaiting,
+            _ => StateKind::OpenLoopOther,
+        }
+    }
+
+    /// Score a state candidate's relevance to the focused screen (0.0..=1.0).
+    pub(super) fn screen_relevance(
+        screen: &shogun_fusion::assemble::ScreenContext,
+        subject: &str,
+        summary: &str,
+    ) -> f64 {
+        let hay = format!("{} {}", subject.to_lowercase(), summary.to_lowercase());
+        let title = screen.window_title.to_lowercase();
+        let title_hit = !title.is_empty()
+            && title.split_whitespace().any(|w| w.len() >= 4 && hay.contains(w));
+        let salient_hit = screen.salient.iter().any(|s| {
+            let s = s.to_lowercase();
+            !s.is_empty() && hay.contains(&s)
+        });
+        if salient_hit || title_hit {
+            1.0
+        } else {
+            0.4
+        }
+    }
+
+    /// Normalize retrieved evidence into compressed context blocks.
+    pub(super) fn evidence_to_blocks(
+        evidence: &[Evidence],
+        relevance: f64,
+        est: &dyn TokenEstimator,
+    ) -> Vec<ContextBlock> {
+        evidence
+            .iter()
+            .map(|e| {
+                ContextBlock::new(
+                    BlockRef::Event(e.event_id),
+                    SourceKind::Evidence,
+                    e.excerpt.clone(),
+                    ScoreInputs { relevance, ..EVIDENCE_SCORE },
+                    est,
+                )
+            })
+            .collect()
+    }
+
+    /// Normalize confidence-gated state facts into compressed context blocks.
+    pub(super) fn facts_to_blocks(
+        facts: &[(String, StateTable, i64)],
+        est: &dyn TokenEstimator,
+    ) -> Vec<ContextBlock> {
+        facts
+            .iter()
+            .map(|(f, table, id)| {
+                ContextBlock::new(
+                    BlockRef::State { table: *table, id: *id },
+                    SourceKind::StateFact,
+                    f.clone(),
+                    FACT_SCORE,
+                    est,
+                )
+            })
+            .collect()
+    }
+}
+
+mod dream_ledger {
+    use crate::dreamcycle::plan::{JobKind, JobState};
+
+    pub(super) fn job_kind_str(kind: JobKind) -> &'static str {
+        match kind {
+            JobKind::Consolidation => "consolidation",
+            JobKind::Compression => "compression",
+            JobKind::StateUpdate => "state_update",
+            JobKind::ConfidenceRecalc => "confidence_recalc",
+            JobKind::ColdDemotion => "cold_demotion",
+            JobKind::MorningBrief => "morning_brief",
+            JobKind::LessonDistillation => "lesson_distillation",
+        }
+    }
+
+    pub(super) fn parse_job_kind(s: &str) -> Option<JobKind> {
+        Some(match s {
+            "consolidation" => JobKind::Consolidation,
+            "compression" => JobKind::Compression,
+            "state_update" => JobKind::StateUpdate,
+            "confidence_recalc" => JobKind::ConfidenceRecalc,
+            "cold_demotion" => JobKind::ColdDemotion,
+            "morning_brief" => JobKind::MorningBrief,
+            "lesson_distillation" => JobKind::LessonDistillation,
+            _ => return None,
+        })
+    }
+
+    pub(super) fn job_state_str(state: JobState) -> &'static str {
+        match state {
+            JobState::Pending => "pending",
+            JobState::Running => "running",
+            JobState::Done => "done",
+            JobState::Failed => "failed",
+        }
+    }
+
+    pub(super) fn parse_job_state(s: &str) -> Option<JobState> {
+        Some(match s {
+            "pending" => JobState::Pending,
+            "running" => JobState::Running,
+            "done" => JobState::Done,
+            "failed" => JobState::Failed,
+            _ => return None,
+        })
+    }
+}
+
+use context_assembly::{EVIDENCE_RELEVANCE, SESSION_SUMMARY_SCORE, THREAD_SUMMARY_SCORE};
+use shogun_memory::voice_terms::{self, NewVoiceTerm, VoiceTerm};
+use voice_dictionary_support::dictionary_entry;
 
 /// How many recent capture bodies the near-dup collapse (FR-CAP-03) compares against. Bounds the
 /// per-capture comparison cost; window re-reads are near each other in the log, so a small window
@@ -36,69 +210,6 @@ const RECENT_DEDUP_WINDOW: usize = 8;
 /// `inline_memory` に渡す fact 上限。`assemble_context` と `assemble_context_compressed` の
 /// 両パスで一致させ、fact の一貫性を保つ。
 const FACT_LIMIT: usize = 8;
-
-/// The outcome of ingesting a batch of synced integration items ([`Db::ingest_integration`]):
-/// how many were processed, how many were genuinely new (the `IntegrationSynced` bus count), and
-/// how many low-confidence state candidates the new items yielded.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct IngestSummary {
-    pub processed: usize,
-    pub newly_inserted: usize,
-    pub candidates: usize,
-}
-
-/// The first-layer connector runtime ([`shogun_integrations::ConnectorRuntime`]) hands each synced
-/// batch to this sink; the daemon persists it into the event log via [`Db::ingest_integration`].
-/// `newly_inserted` is what an `IntegrationSynced` bus event reports (§6.9). This keeps data gravity
-/// in the core (invariant 1) — the connector crate never touches the DB.
-impl shogun_integrations::IngestSink for Db {
-    fn ingest(&self, items: &[shogun_mcp::sync::IngestItem]) -> usize {
-        self.ingest_integration(items).newly_inserted
-    }
-}
-
-/// One retrieved piece of evidence behind an answer ([`Db::assemble_context`]). Carries its
-/// `event_id` so a generated answer can cite what it was grounded in (provenance is the whole
-/// point of the state/event split) and its `source` so mail is distinguishable from a captured
-/// window (FR-MEM-23).
-#[derive(Debug, Clone, PartialEq)]
-pub struct Evidence {
-    pub event_id: i64,
-    pub ts: i64,
-    pub source: String,
-    pub title: Option<String>,
-    pub excerpt: String,
-    /// Linked `screen_frames` row when a finite-retention encrypted JPEG is stored.
-    pub frame_id: Option<i64>,
-}
-
-/// A stored screen capture available for visual recall (metadata only — bytes via [`Db::get_screen_frame`]).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ScreenFrameRef {
-    pub frame_id: i64,
-    pub event_id: i64,
-    pub ts: i64,
-    pub app_bundle_id: Option<String>,
-    pub window_title: Option<String>,
-    pub width: u32,
-    pub height: u32,
-    pub ocr_excerpt: String,
-    /// Thin stored OCR — caller should re-scan the JPEG (Vision) before answering.
-    pub needs_rescan: bool,
-    /// Linked event source.
-    pub source: String,
-}
-
-/// The grounded context for one question: confidence-gated state facts plus the retrieved
-/// evidence that mentions it. Facts say what SHOGUN believes; evidence says what was actually
-/// seen, and only evidence can answer "what happened with X".
-#[derive(Debug, Clone, PartialEq, Default)]
-pub struct ContextPack {
-    pub facts: Vec<String>,
-    pub evidence: Vec<Evidence>,
-    /// Stored JPEG frames matching a visual-recall question (hook for future vision input).
-    pub screen_frames: Vec<ScreenFrameRef>,
-}
 
 /// How much of a thread a reply context carries. Enough to answer in the conversation's own
 /// terms, bounded so assembly stays inside the pre-press budget.
@@ -110,29 +221,10 @@ const REPLY_RELATED_CHARS: usize = 300;
 /// クエリ時のローカル圧縮に許す時間予算。超えたら raw にフォールバック（SLO +300ms 厳守）。
 const COMPRESS_BUDGET_MS: u64 = 50;
 
-// 圧縮ブロックの relevance/freshness/task_link/confidence 係数（設計 §3.3/§3.4）。
-// 従来は各所にインラインのリテラルで散らばっていた（Issue #63 finding #7）。ここに集約して
-// 由来ごとの相対関係（thread ≥ session ≥ evidence、fact は現在の作業に紐づく前提でやや高め）を
-// 一望できるようにし、thread/session の対称性を型で担保する。数値は従来と同一。
-//
-/// 検索 evidence: relevance は呼び出し側の検索スコア由来なので EVIDENCE_RELEVANCE を上書きする。
-const EVIDENCE_RELEVANCE: f64 = 0.7;
-
 /// How many learned lessons ride into one context assembly / generation prompt (Plan D-5's
 /// default top-k of 5). The token budget in `shogun_fusion::assemble::LESSON_BUDGET_TOKENS`
 /// bounds them again by size.
 const LESSON_TOP_K: usize = 5;
-const EVIDENCE_SCORE: ScoreInputs =
-    ScoreInputs { relevance: EVIDENCE_RELEVANCE, freshness: 0.5, task_link: 0.0, confidence: 1.0 };
-/// retrieved evidence の属する session の保存済み要約。参照先＝関連度高、要約＝confidence 1.0。
-const SESSION_SUMMARY_SCORE: ScoreInputs =
-    ScoreInputs { relevance: 0.85, freshness: 0.7, task_link: 0.5, confidence: 1.0 };
-/// 解決済みスレッドの保存済み要約。session と対称、参照先＝関連度高、要約＝confidence 1.0。
-const THREAD_SUMMARY_SCORE: ScoreInputs =
-    ScoreInputs { relevance: 0.9, freshness: 0.7, task_link: 0.5, confidence: 1.0 };
-/// confidence ゲート済み state fact。現在の作業に紐づく前提でやや高め、confidence は High 相当 0.9。
-const FACT_SCORE: ScoreInputs =
-    ScoreInputs { relevance: 0.6, freshness: 0.6, task_link: 0.6, confidence: 0.9 };
 
 /// ドラフトの本文がどこ由来か。融合の provenance（設計 §3）。
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -297,11 +389,7 @@ pub struct LocalMaintenance {
 pub fn overdue_notifications(
     newly: &[shogun_memory::recompute::NewlyOverdue],
 ) -> Vec<shogun_agents::permission::Action> {
-    use shogun_agents::permission::{Action, LocalAction};
-    newly
-        .iter()
-        .map(|c| Action::Local(LocalAction::ShowNotification { text: format!("Overdue: {}", c.description) }))
-        .collect()
+    maintenance::overdue_notifications(newly)
 }
 
 /// One candidate answer to "which thread is this question about".
@@ -323,15 +411,7 @@ pub struct ReferentOutcome {
 /// Fraction of the thread title's words that appear in the question — the lexical agreement term
 /// of salience. Words of one or two characters are skipped as too common to carry signal.
 fn title_overlap(question_lower: &str, title_lower: &str) -> f64 {
-    let words: Vec<&str> = title_lower
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|w| w.chars().count() > 2)
-        .collect();
-    if words.is_empty() {
-        return 0.0;
-    }
-    let hits = words.iter().filter(|w| question_lower.contains(**w)).count();
-    hits as f64 / words.len() as f64
+    replies::title_overlap(question_lower, title_lower)
 }
 
 /// The shared connection handle. `Connection` is `Send` but not `Sync`, so it lives behind a
@@ -1398,15 +1478,6 @@ impl Db {
     pub fn assemble_context(&self, query: &str, max_hits: usize, excerpt_chars: usize) -> ContextPack {
         let (evidence, screen_frames) = self.assemble_evidence_with_frames(query, max_hits, excerpt_chars);
         ContextPack { facts: self.inline_memory(FACT_LIMIT), evidence, screen_frames }
-    }
-
-    /// Lexical search over meeting recaps and transcripts. Query-relevant, not latest-session.
-    pub fn search_meetings(&self, query: &str, limit: usize) -> Vec<shogun_memory::search::MeetingSearchHit> {
-        if query.trim().is_empty() {
-            return Vec::new();
-        }
-        self.with_conn("search.search_meetings", |c| shogun_memory::search::search_meetings(c, query, limit))
-            .unwrap_or_default()
     }
 
     /// The evidence half of [`Self::assemble_context`]: hybrid-search the query and turn the best
@@ -2709,6 +2780,54 @@ impl Db {
         .flatten()
     }
 
+    // -------------------------------------------------------------- voice dictionary
+
+    /// Snapshot built-ins plus persisted user terms. A storage fault preserves dictation with
+    /// built-ins rather than turning a local DB hiccup into a transcription failure.
+    pub fn voice_dictionary(&self) -> crate::voice_dictionary::VoiceDictionary {
+        let entries = self
+            .with_conn("voice_terms.list_for_dictation", voice_terms::list_voice_terms)
+            .unwrap_or_default()
+            .into_iter()
+            .map(dictionary_entry)
+            .collect();
+        crate::voice_dictionary::VoiceDictionary::with_user_entries(entries)
+    }
+
+    /// Every persisted term, disabled included, for settings and API management.
+    pub fn list_voice_terms(&self) -> Result<Vec<VoiceTerm>, String> {
+        self.with_conn_reported("voice_terms.list", |conn| {
+            voice_terms::list_voice_terms(conn).map_err(|error| error.to_string())
+        })
+            .map_err(|error| format!("voice dictionary list failed: {error}"))
+    }
+
+    /// Create a user-confirmed term and aliases in the encrypted local database.
+    pub fn create_voice_term(&self, input: &NewVoiceTerm) -> Result<VoiceTerm, String> {
+        let now = self.now_ms();
+        self.with_conn_mut_reported("voice_terms.create", |conn| {
+            voice_terms::create_voice_term(conn, input, now).map_err(|error| error.to_string())
+        })
+        .map_err(|error| format!("voice dictionary create failed: {error}"))
+    }
+
+    /// Replace a user term atomically. `Ok(None)` means the requested term no longer exists.
+    pub fn update_voice_term(&self, id: i64, input: &NewVoiceTerm) -> Result<Option<VoiceTerm>, String> {
+        let now = self.now_ms();
+        self.with_conn_mut_reported("voice_terms.update", |conn| {
+            voice_terms::update_voice_term(conn, id, input, now).map_err(|error| error.to_string())
+        })
+        .map_err(|error| format!("voice dictionary update failed: {error}"))
+    }
+
+    /// Remove one user term and its aliases.
+    pub fn delete_voice_term(&self, id: i64) -> Result<bool, String> {
+        self.with_conn_reported("voice_terms.delete", |conn| {
+            voice_terms::delete_voice_term(conn, id).map_err(|error| error.to_string())
+        })
+        .map_err(|error| format!("voice dictionary delete failed: {error}"))
+    }
+
     // -------------------------------------------------------------- L5 lessons (Plan D-4/D-5/D-6)
     // Db wrappers over `shogun_memory::lessons`, next to the brief wrappers: the
     // LessonDistillation Dream job, Context Fusion injection, and the Memory API lessons tools
@@ -3031,94 +3150,42 @@ impl Db {
 
 /// Map a [`JobKind`] to its stored string.
 fn job_kind_str(kind: JobKind) -> &'static str {
-    match kind {
-        JobKind::Consolidation => "consolidation",
-        JobKind::Compression => "compression",
-        JobKind::StateUpdate => "state_update",
-        JobKind::ConfidenceRecalc => "confidence_recalc",
-        JobKind::ColdDemotion => "cold_demotion",
-        JobKind::MorningBrief => "morning_brief",
-        JobKind::LessonDistillation => "lesson_distillation",
-    }
+    dream_ledger::job_kind_str(kind)
 }
 
 fn parse_job_kind(s: &str) -> Option<JobKind> {
-    Some(match s {
-        "consolidation" => JobKind::Consolidation,
-        "compression" => JobKind::Compression,
-        "state_update" => JobKind::StateUpdate,
-        "confidence_recalc" => JobKind::ConfidenceRecalc,
-        "cold_demotion" => JobKind::ColdDemotion,
-        "morning_brief" => JobKind::MorningBrief,
-        "lesson_distillation" => JobKind::LessonDistillation,
-        _ => return None,
-    })
+    dream_ledger::parse_job_kind(s)
 }
 
 fn job_state_str(state: JobState) -> &'static str {
-    match state {
-        JobState::Pending => "pending",
-        JobState::Running => "running",
-        JobState::Done => "done",
-        JobState::Failed => "failed",
-    }
+    dream_ledger::job_state_str(state)
 }
 
 fn parse_job_state(s: &str) -> Option<JobState> {
-    Some(match s {
-        "pending" => JobState::Pending,
-        "running" => JobState::Running,
-        "done" => JobState::Done,
-        "failed" => JobState::Failed,
-        _ => return None,
-    })
+    dream_ledger::parse_job_state(s)
 }
 
 /// Map an open-loop `kind` string to the Fusion [`StateKind`](shogun_fusion::assemble::StateKind)
 /// that selects its action (reply → draft, waiting/other → surface).
 fn open_loop_state_kind(kind: &str) -> shogun_fusion::assemble::StateKind {
-    use shogun_fusion::assemble::StateKind;
-    match kind {
-        "reply_needed" => StateKind::OpenLoopReplyNeeded,
-        "waiting_on_them" => StateKind::OpenLoopWaiting,
-        _ => StateKind::OpenLoopOther,
-    }
+    context_assembly::open_loop_state_kind(kind)
 }
 
 /// Score a state candidate's relevance to the focused screen (0.0..=1.0): a hit when any salient
 /// term, or the window title, overlaps the subject/summary; a small baseline otherwise so unrelated
 /// state can still surface when nothing matches. Cheap (substring, lowercased) — runs per focus.
 fn screen_relevance(screen: &shogun_fusion::assemble::ScreenContext, subject: &str, summary: &str) -> f64 {
-    let hay = format!("{} {}", subject.to_lowercase(), summary.to_lowercase());
-    let title = screen.window_title.to_lowercase();
-    let title_hit = !title.is_empty()
-        && title.split_whitespace().any(|w| w.len() >= 4 && hay.contains(w));
-    let salient_hit = screen.salient.iter().any(|s| {
-        let s = s.to_lowercase();
-        !s.is_empty() && hay.contains(&s)
-    });
-    if salient_hit || title_hit {
-        1.0
-    } else {
-        0.4
-    }
+    context_assembly::screen_relevance(screen, subject, summary)
 }
 
 /// 検索 evidence を圧縮ブロックへ正規化する。evidence は「実際に見たもの」なので
 /// confidence=1.0、relevance は呼び出し側が渡す検索スコア由来の値。
-fn evidence_to_blocks(evidence: &[Evidence], relevance: f64, est: &dyn TokenEstimator) -> Vec<ContextBlock> {
-    evidence
-        .iter()
-        .map(|e| {
-            ContextBlock::new(
-                BlockRef::Event(e.event_id),
-                SourceKind::Evidence,
-                e.excerpt.clone(),
-                ScoreInputs { relevance, ..EVIDENCE_SCORE },
-                est,
-            )
-        })
-        .collect()
+fn evidence_to_blocks(
+    evidence: &[Evidence],
+    relevance: f64,
+    est: &dyn shogun_fusion::budget::TokenEstimator,
+) -> Vec<shogun_fusion::block::ContextBlock> {
+    context_assembly::evidence_to_blocks(evidence, relevance, est)
 }
 
 /// confidence ゲートを通した facts を圧縮ブロックへ正規化する。facts は既に
@@ -3127,20 +3194,9 @@ fn evidence_to_blocks(evidence: &[Evidence], relevance: f64, est: &dyn TokenEsti
 /// relevance はやや高めに固定（state は現在の作業に紐づく前提）、confidence は High 相当として 0.9。
 fn facts_to_blocks(
     facts: &[(String, shogun_fusion::block::StateTable, i64)],
-    est: &dyn TokenEstimator,
-) -> Vec<ContextBlock> {
-    facts
-        .iter()
-        .map(|(f, table, id)| {
-            ContextBlock::new(
-                BlockRef::State { table: *table, id: *id },
-                SourceKind::StateFact,
-                f.clone(),
-                FACT_SCORE,
-                est,
-            )
-        })
-        .collect()
+    est: &dyn shogun_fusion::budget::TokenEstimator,
+) -> Vec<shogun_fusion::block::ContextBlock> {
+    context_assembly::facts_to_blocks(facts, est)
 }
 
 #[cfg(feature = "db")]

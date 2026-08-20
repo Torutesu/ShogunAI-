@@ -269,7 +269,8 @@ pub mod mac {
         let proposal = proposed(&kind, &destination, &subject, &body)?;
         let now = db.now_ms().max(0) as u64;
         let id = {
-            state.change(|q| propose(q, &proposal, ApprovalOrigin::Ui, now).map(|id| id.0))?
+            state
+                .change(|q| propose(q, &proposal, ApprovalOrigin::Ui, now).map(|id| id.0))?
                 .map_err(String::from)?
         };
         // Something is waiting on a human decision — the first reason cues exist at all (#49).
@@ -337,7 +338,8 @@ pub mod mac {
         let proposal = proposed(kind, destination, subject, &body)?;
         let now = db.now_ms().max(0) as u64;
         let id = {
-            queue.change(|q| propose(q, &proposal, origin, now).map(|id| id.0))?
+            queue
+                .change(|q| propose(q, &proposal, origin, now).map(|id| id.0))?
                 .map_err(String::from)?
         };
         // A draft the user did not watch being written is exactly the case that needs telling (#49).

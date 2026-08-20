@@ -8,6 +8,7 @@
 //! not decide inclusion.
 
 use crate::memory_api::Tool;
+use crate::voice_dictionary_api::{VoiceDictionaryOperation, VoiceDictionaryResult};
 
 /// One read result: a display label and its confidence (FR-ST-02). The server filters/flags these.
 #[derive(Debug, Clone, PartialEq)]
@@ -18,7 +19,10 @@ pub struct ReadItem {
 
 impl ReadItem {
     pub fn new(label: impl Into<String>, confidence: f64) -> Self {
-        Self { label: label.into(), confidence }
+        Self {
+            label: label.into(),
+            confidence,
+        }
     }
 }
 
@@ -57,6 +61,14 @@ pub trait MemoryBackend: Send + Sync {
     fn read_structured(&self, _tool: Tool, _params: &ReadParams) -> Option<String> {
         None
     }
+
+    /// Private vocabulary uses a typed contract, never the generic text write channel.
+    fn manage_voice_dictionary(
+        &self,
+        _operation: VoiceDictionaryOperation,
+    ) -> Result<VoiceDictionaryResult, String> {
+        Err("voice dictionary unavailable".to_string())
+    }
 }
 
 /// A backend that returns nothing — the server is runnable/testable before the DB is wired.
@@ -74,6 +86,8 @@ mod tests {
 
     #[test]
     fn stub_returns_empty() {
-        assert!(StubBackend.read(Tool::StatePeopleList, &ReadParams::default()).is_empty());
+        assert!(StubBackend
+            .read(Tool::StatePeopleList, &ReadParams::default())
+            .is_empty());
     }
 }
