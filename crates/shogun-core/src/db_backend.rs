@@ -338,7 +338,7 @@ impl DbBackend {
         let Some(s) = self.db.get_screen_frame_summary(frame_id) else {
             return json!({ "error": "not_found", "frame_id": frame_id }).to_string();
         };
-        let needs_rescan = s.ocr_text.trim().len() < shogun_memory::screen_frames::THIN_OCR_CHARS;
+        let needs_rescan = shogun_memory::screen_frames::needs_rescan(&s.ocr_text);
         json!({
             "frame_id": s.id,
             "event_id": s.event_id,
