@@ -158,6 +158,45 @@ describe("cinematic onboarding", () => {
     expect(onPersist).toHaveBeenNthCalledWith(2, "theme");
   });
 
+  it("keeps one shell and gate through an 800ms dissolve and resolve", async () => {
+    vi.useFakeTimers();
+    try {
+      const base = {
+        permissions: emptyPermissions,
+        surfaceGeneration: 1,
+        onPersist: vi.fn(async () => true),
+        onFinish: vi.fn(async () => true),
+        onToggleMusic: vi.fn(async () => true),
+        musicPending: false,
+      };
+      const view = render(<OnboardingExperience {...base} state={{ ...state("reads"), step: "reads" }} />);
+      const shell = screen.getByRole("main");
+      const gate = screen.getByTestId("gate-frame");
+      await vi.advanceTimersByTimeAsync(560);
+      expect(shell.getAttribute("data-transition")).toBe("idle");
+
+      view.rerender(<OnboardingExperience {...base} state={{ ...state("theme"), step: "theme" }} />);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(screen.getByRole("main")).toBe(shell);
+      expect(screen.getByTestId("gate-frame")).toBe(gate);
+      expect(shell.getAttribute("data-step")).toBe("overview");
+      expect(shell.getAttribute("data-transition")).toBe("exit");
+      expect(screen.getByTestId("gate-frame").getAttribute("data-transition")).toBe("exit");
+
+      await vi.advanceTimersByTimeAsync(239);
+      expect(shell.getAttribute("data-step")).toBe("overview");
+      await vi.advanceTimersByTimeAsync(1);
+      expect(shell.getAttribute("data-step")).toBe("theme");
+      expect(shell.getAttribute("data-transition")).toBe("enter");
+      expect(screen.getByTestId("gate-frame")).toBe(gate);
+
+      await vi.advanceTimersByTimeAsync(560);
+      expect(shell.getAttribute("data-transition")).toBe("idle");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("persists a real theme choice while keeping gate and navigation", () => {
     const onPersist = vi.fn(async () => true);
     render(<OnboardingExperience state={{ ...state("theme"), step: "theme" }} permissions={emptyPermissions} surfaceGeneration={1} onPersist={onPersist} onFinish={vi.fn(async () => true)} onToggleMusic={vi.fn(async () => true)} musicPending={false} />);
@@ -555,13 +594,13 @@ describe("cinematic onboarding", () => {
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("onboarding_shortcut_ready", { generation: 4, nonce: "nonce", surfaceGeneration: 0 }));
   });
 
-  it("keeps cinematic motion compositor-only and reduced motion opacity-only", () => {
+  it("keeps cinematic motion bounded, phased, and compositor-only", () => {
     const css = readFileSync(resolve(process.cwd(), "src/onboarding/onboarding.css"), "utf8");
     const cinematicSource = readFileSync(resolve(process.cwd(), "src/onboarding/experience/CinematicSurface.tsx"), "utf8");
     const experienceSource = readFileSync(resolve(process.cwd(), "src/onboarding/experience/OnboardingExperience.tsx"), "utf8");
     const keyframes = css.split("\n").filter((line) => line.startsWith("@keyframes")).join("\n");
     const reduced = css.split("\n").find((line) => line.startsWith("@media (prefers-reduced-motion: reduce)")) ?? "";
-    const reducedFade = css.split("\n").find((line) => line.startsWith("@keyframes onb-reduced-current-fade")) ?? "";
+    const reducedKeyframes = keyframes.split("\n").filter((line) => line.includes("onb-reduced-")).join("\n");
     expect(css.includes("onb-haze")).toBe(false);
     expect(css.includes("onb-header")).toBe(false);
     expect(css.includes("onb-gate__legend")).toBe(false);
@@ -576,22 +615,39 @@ describe("cinematic onboarding", () => {
     expect(css).toContain("--onb-text-body-size: 13px");
     expect(css).toContain("--onb-text-button-default-size: 13px");
     expect(css).toMatch(/\.onb-cinematic\s*\{[^}]*background:\s*rgba\(/);
-    expect(css).toMatch(/\.onb-layout\s*\{[^}]*min-height:\s*0/);
+    expect(css).toMatch(/\.onb-layout\s*\{[^}]*grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\)/);
     expect(css).toMatch(/@media \(max-width:\s*760px\)/);
-    expect(css).toContain("onb-light-gather 4s");
-    expect(css).toContain("onb-white-bloom 4s");
+    expect(css).toContain("onb-light-orbit 9.2s");
+    expect(css).toContain("onb-window-bloom 9.2s");
+    expect(css).toContain("onb-window-form 9.2s");
     expect(css).toContain("rgba(195,95,60,.58)");
     expect(css).toContain("rgba(95,143,168,.34)");
     expect(css).not.toMatch(/violet|yellow/i);
     expect(cinematicSource).toContain("onb-cinematic__light--ember");
     expect(cinematicSource).toContain("onb-cinematic__light--glacier");
+    expect(cinematicSource).toContain('data-testid="cinematic-window-form"');
     expect(cinematicSource).not.toMatch(/Shotbase|wavesUrl|<Logo/);
     expect(experienceSource).not.toMatch(/Shotbase/i);
+    expect(css).toMatch(/\.onb-cinematic__light\s*\{[^}]*width:\s*min\(58\.5vw, 825px\)[^}]*height:\s*min\(69vh, 675px\)/);
+    expect(css).toMatch(/\.onb-cinematic__light--cedar\s*\{[^}]*width:\s*min\(49\.5vw, 705px\)[^}]*height:\s*min\(58\.5vh, 570px\)/);
+    expect(css).toMatch(/\.onb-cinematic__light--glacier\s*\{[^}]*width:\s*min\(52\.5vw, 735px\)[^}]*height:\s*min\(61\.5vh, 600px\)/);
+    expect(css).toContain("--onb-light-meet-one");
+    expect(css).toContain("--onb-light-meet-two");
+    expect(css).toContain("--onb-light-meet-three");
+    expect(css).toContain("--onb-light-after-three");
+    expect(css).toMatch(/29%, 35%[^}]*meet-one/);
+    expect(css).toMatch(/51%, 57%[^}]*meet-two/);
+    expect(css).toMatch(/73%, 79%[^}]*meet-three/);
+    expect(css).toMatch(/85%\s*\{[^}]*after-three[\s\S]*92%\s*\{[^}]*final/);
+    expect(css).toMatch(/\.onb-cinematic__window\s*\{[^}]*width:\s*min\(1197px, calc\(100vw - 32px\)\)[^}]*height:\s*min\(751px, calc\(100vh - 32px\)\)[^}]*border-radius:\s*22px/);
     expect(css).toMatch(/\.onb-signin__haze\s*\{[^}]*rgba\(195,95,60,\.18\)[^}]*rgba\(95,143,168,\.14\)/);
     expect(css).toMatch(/\.onb-signin__button\[data-processing="true"\]\s*\{[^}]*background:\s*#aaa6a3/);
-    expect(css).toContain("onb-gate-slide-in 520ms cubic-bezier(.25, 1, .5, 1)");
-    expect(css).toMatch(/@keyframes onb-gate-slide-in\s*\{[^}]*transform:\s*translate3d\(100%, 0, 0\)/);
-    expect(reduced).toContain("onb-reduced-fade 200ms linear both");
+    expect(css).toMatch(/data-transition="exit"\] \.onb-copy[^}]*240ms/);
+    expect(css).toMatch(/data-transition="enter"\]::before[^}]*560ms/);
+    expect(css).toMatch(/data-transition="exit"\] \.onb-gate[^}]*onb-gate-dissolve-out/);
+    expect(css).toMatch(/data-transition="enter"\] \.onb-gate[^}]*onb-gate-dissolve-in/);
+    expect(css).toMatch(/@keyframes onb-gate-dissolve-out\s*\{[^}]*opacity:\s*\.62[^}]*blur\(4px\)/);
+    expect(css).toMatch(/@keyframes onb-gate-dissolve-in\s*\{[\s\S]*?from\s*\{[^}]*opacity:\s*\.62[\s\S]*?to\s*\{[^}]*opacity:\s*1/);
     expect(css).not.toMatch(/onb-(?:button|mute|drag)[^}]*min-height:\s*(?:3[0-9]|4[0-3])px/);
     expect(keyframes).not.toMatch(/\b(width|height|top|right|bottom|left|margin|padding)\s*:/i);
     expect(reduced).toContain("onb-reduced-current-fade 200ms linear both");
@@ -601,8 +657,9 @@ describe("cinematic onboarding", () => {
     expect(reduced).not.toContain("onb-light-gather");
     expect(reduced).not.toContain("onb-white-bloom");
     expect(reduced).not.toContain("onb-ambient-flow");
-    expect(reducedFade).toMatch(/opacity:/);
-    expect(reducedFade).not.toMatch(/transform:/);
+    expect(reducedKeyframes).toMatch(/opacity:/);
+    expect(reducedKeyframes).not.toMatch(/transform:|filter:/);
+    expect(reduced).toContain("filter: none; transform: none; animation: onb-reduced-fade");
     const ambientSource = readFileSync(resolve(process.cwd(), "src/onboarding/experience/AmbientSurface.tsx"), "utf8");
     expect(ambientSource).not.toContain("requestAnimationFrame");
   });

@@ -11,6 +11,9 @@ import { PermissionStage } from "./PermissionStage";
 import { ShortcutPractice } from "./ShortcutPractice";
 import { ThemeStage } from "./ThemeStage";
 
+type RoutedStep = "welcome" | "overview" | "theme" | "privacy" | "accessibility" | "microphone" | "screen_recording" | "right_option" | "scribe_demo" | "dictation_demo" | "plan" | "connect" | "gate";
+type TransitionPhase = "idle" | "exit" | "enter";
+
 export function OnboardingExperience(props: {
   state: OnboardingState;
   permissions: PermissionSnapshot;
@@ -24,7 +27,9 @@ export function OnboardingExperience(props: {
   const [finishing, setFinishing] = useState(false);
   const [gatePlaying, setGatePlaying] = useState(false);
   const finishStarted = useRef(false);
-  const step = routeStep(state.step, permissions);
+  const requestedStep = routeStep(state.step, permissions);
+  const { displayedStep: step, previousStep, transitionPhase } = useCinematicStep(requestedStep);
+  const introduceGate = previousStep === "welcome" && step === "overview" && transitionPhase === "enter";
   const finishOnce = useCallback((): void => {
     if (finishStarted.current) return;
     finishStarted.current = true;
@@ -50,7 +55,7 @@ export function OnboardingExperience(props: {
   }, [finishOnce, gatePlaying]);
   if (step === "welcome") {
     return (
-      <main className="onb-shell onb-shell--welcome" data-step={step}>
+      <main className="onb-shell onb-shell--welcome" data-step={step} data-transition={transitionPhase}>
         <WindowDragRegion />
         <Welcome onContinue={() => onPersist("reads")} />
         <div className="onb-floating-mute"><MuteButton muted={state.music_muted} disabled={musicPending} onToggle={onToggleMusic} /></div>
@@ -58,10 +63,10 @@ export function OnboardingExperience(props: {
     );
   }
   return (
-    <main className="onb-shell" data-step={step}>
+    <main className="onb-shell" data-step={step} data-transition={transitionPhase}>
       <WindowDragRegion />
       <div className="onb-layout">
-        <div className={`onb-copy${step === "overview" || step === "theme" ? " onb-copy--overview" : ""}`} key={step}>
+        <div className={`onb-copy${step === "overview" || step === "theme" ? " onb-copy--overview" : ""}`}>
           {step === "overview" ? <OverviewStage onBack={() => onPersist("welcome")} onContinue={() => onPersist("theme")} /> : null}
           {step === "theme" ? <ThemeStage onBack={() => onPersist("reads")} onContinue={() => onPersist("accessibility")} /> : null}
           {step === "privacy" ? <PrivacyStage onContinue={() => onPersist("plan")} /> : null}
@@ -78,18 +83,48 @@ export function OnboardingExperience(props: {
             </section>
           ) : null}
         </div>
-        <GateFrame complete={step === "gate" && gatePlaying} onEnded={finishOnce} onError={finishOnce} />
+        <GateFrame complete={step === "gate" && gatePlaying} initialReveal={introduceGate} transitionPhase={transitionPhase} onEnded={finishOnce} onError={finishOnce} />
       </div>
       <div className="onb-floating-mute"><MuteButton muted={state.music_muted} disabled={musicPending} onToggle={onToggleMusic} /></div>
     </main>
   );
 }
 
+function useCinematicStep(requestedStep: RoutedStep): { displayedStep: RoutedStep; previousStep: RoutedStep | null; transitionPhase: TransitionPhase } {
+  const [displayedStep, setDisplayedStep] = useState<RoutedStep>(requestedStep);
+  const [previousStep, setPreviousStep] = useState<RoutedStep | null>(null);
+  const [transitionPhase, setTransitionPhase] = useState<TransitionPhase>("enter");
+  const latestRequested = useRef(requestedStep);
+
+  useEffect(() => {
+    latestRequested.current = requestedStep;
+    if (requestedStep === displayedStep) return;
+    const timeout = window.setTimeout(() => setTransitionPhase("exit"), 0);
+    return () => window.clearTimeout(timeout);
+  }, [displayedStep, requestedStep]);
+
+  useEffect(() => {
+    if (transitionPhase === "idle") return;
+    const timeout = window.setTimeout(() => {
+      if (transitionPhase === "exit") {
+        setPreviousStep(displayedStep);
+        setDisplayedStep(latestRequested.current);
+        setTransitionPhase("enter");
+      } else {
+        setTransitionPhase("idle");
+      }
+    }, transitionPhase === "exit" ? 240 : 560);
+    return () => window.clearTimeout(timeout);
+  }, [displayedStep, transitionPhase]);
+
+  return { displayedStep, previousStep, transitionPhase };
+}
+
 function WindowDragRegion(): JSX.Element {
   return <div className="onb-window-drag-region" data-tauri-drag-region aria-hidden="true" />;
 }
 
-function routeStep(step: OnboardingState["step"], p: PermissionSnapshot): "welcome" | "overview" | "theme" | "privacy" | "accessibility" | "microphone" | "screen_recording" | "right_option" | "scribe_demo" | "dictation_demo" | "plan" | "connect" | "gate" {
+function routeStep(step: OnboardingState["step"], p: PermissionSnapshot): RoutedStep {
   if (step === "intro" || step === "welcome") return "welcome";
   if (step === "reads") return "overview";
   if (step === "theme") return "theme";

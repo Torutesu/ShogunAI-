@@ -8,6 +8,7 @@ export function CinematicSurface({ muted, musicPending, onToggleMusic }: { muted
       <div className="onb-cinematic__light onb-cinematic__light--cedar" aria-hidden="true" />
       <div className="onb-cinematic__light onb-cinematic__light--glacier" aria-hidden="true" />
       <div className="onb-cinematic__bloom" aria-hidden="true" />
+      <div className="onb-cinematic__window" data-testid="cinematic-window-form" aria-hidden="true" />
       <MuteButton muted={muted} disabled={musicPending} onToggle={onToggleMusic} />
     </main>
   );

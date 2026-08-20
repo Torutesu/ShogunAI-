@@ -6,7 +6,7 @@ use serde::Serialize;
 
 use crate::geometry::{Point, Rect};
 
-pub const INTRO_DURATION: Duration = Duration::from_secs(4);
+pub const INTRO_DURATION: Duration = Duration::from_millis(9_200);
 const INTERACTIVE_WIDTH: f64 = 1197.0;
 const INTERACTIVE_HEIGHT: f64 = 751.0;
 const INTERACTIVE_MIN_WIDTH: f64 = 680.0;
@@ -554,6 +554,9 @@ pub mod mac {
         state_revision: u64,
         permission_generation: Option<u64>,
         external_permission_ui: Option<ExternalPermissionKind>,
+        // The intro panel remains alive during the native crossfade. Keep ownership here so any
+        // concurrent cleanup also removes it before its animation completion runs.
+        fading_intro_labels: Vec<String>,
     }
 
     #[derive(Default)]
@@ -992,6 +995,62 @@ pub mod mac {
             .map_err(|error| format!("interactive onboarding focus failed: {error}"))
     }
 
+    fn finish_intro_handoff(app: &AppHandle, generation: u64, labels: &[String]) {
+        destroy_labels(app, labels);
+        let Some(runtime) = app.try_state::<OnboardingWindowRuntime>() else {
+            return;
+        };
+        let Ok(mut state) = runtime.0.lock() else {
+            return;
+        };
+        let Some(session) = state.session.as_mut() else {
+            return;
+        };
+        if session.model.generation() == generation && session.fading_intro_labels == labels {
+            session.fading_intro_labels.clear();
+        }
+    }
+
+    fn fade_out_intro_windows(
+        app: &AppHandle,
+        generation: u64,
+        labels: &[String],
+        reveal: InteractiveReveal,
+    ) {
+        use objc2::msg_send;
+        use objc2::runtime::AnyObject;
+
+        let panels = labels
+            .iter()
+            .filter_map(|label| ambient_panel(label))
+            .collect::<Vec<_>>();
+        if panels.is_empty() {
+            finish_intro_handoff(app, generation, labels);
+            return;
+        }
+
+        let completion_app = app.clone();
+        let completion_labels = labels.to_vec();
+        let completion = block2::RcBlock::new(move || {
+            finish_intro_handoff(&completion_app, generation, &completion_labels);
+        });
+        NSAnimationContext::beginGrouping();
+        let context = NSAnimationContext::currentContext();
+        context.setDuration(reveal.duration.as_secs_f64());
+        let timing = CAMediaTimingFunction::functionWithControlPoints(0.22, 1.0, 0.36, 1.0);
+        context.setTimingFunction(Some(&timing));
+        context.setCompletionHandler(Some(&completion));
+        // SAFETY: each panel is registered until `finish_intro_handoff` destroys it. Matching
+        // duration and easing keep this fade synchronized with the interactive-window reveal.
+        unsafe {
+            for panel in panels {
+                let animator: *mut AnyObject = msg_send![panel, animator];
+                let _: () = msg_send![animator, setAlphaValue: 0.0f64];
+            }
+        }
+        NSAnimationContext::endGrouping();
+    }
+
     fn destroy_labels(app: &AppHandle, labels: &[String]) {
         for label in labels {
             if let Some(window) = app.get_webview_window(label) {
@@ -1145,6 +1204,7 @@ pub mod mac {
                 state_revision: onboarding_state.revision,
                 permission_generation,
                 external_permission_ui: None,
+                fading_intro_labels: Vec::new(),
             });
         }
 
@@ -1228,6 +1288,7 @@ pub mod mac {
             session.model.finish_intro();
             session.started_at = None;
             session.state_revision = saved.revision;
+            session.fading_intro_labels = labels.clone();
             let surface = session
                 .model
                 .surfaces()
@@ -1242,10 +1303,11 @@ pub mod mac {
         attach_surface_cleanup(app, &window, &surface);
         let reduce_motion = NSWorkspace::sharedWorkspace().accessibilityDisplayShouldReduceMotion();
         let reveal = interactive_reveal(interactive_window_layout(*display), reduce_motion);
-        // Keep the veil alive while WebKit builds the white base. Removing it only after the
-        // replacement exists prevents the real desktop from flashing between the two surfaces.
-        destroy_labels(app, &intro_labels);
         activate_interactive(&window, mtm, Some(reveal))?;
+        // Interactive window begins transparent behind the existing cinematic panel. Fade both
+        // with matching AppKit timing, then destroy the panel from the completion callback: no
+        // desktop or WebKit-white frame can appear between the two surfaces.
+        fade_out_intro_windows(app, generation, &intro_labels, reveal);
         crate::permission_drag::install_monitor(app);
         Ok(())
     }
@@ -1286,7 +1348,11 @@ pub mod mac {
             let (labels, permission_generation) = state
                 .session
                 .take()
-                .map(|mut session| (session.model.cleanup(), session.permission_generation))
+                .map(|mut session| {
+                    let mut labels = session.model.cleanup();
+                    labels.append(&mut session.fading_intro_labels);
+                    (labels, session.permission_generation)
+                })
                 .unwrap_or_default();
             (labels, permission_generation, state.display_observer.take())
         };
@@ -1923,9 +1989,11 @@ mod tests {
     }
 
     #[test]
-    fn four_second_transition_occurs_exactly_once() {
+    fn intro_transition_waits_for_the_full_nine_point_two_seconds() {
         let mut session = WindowSessionModel::intro(7, displays(), Point::new(50.0, 50.0), Some(1))
             .expect("session");
+
+        assert_eq!(INTRO_DURATION, Duration::from_millis(9_200));
         assert!(!session.deadline_elapsed(7, INTRO_DURATION - Duration::from_nanos(1)));
         assert!(session.deadline_elapsed(7, INTRO_DURATION));
         assert!(!session.deadline_elapsed(7, INTRO_DURATION + Duration::from_secs(1)));
