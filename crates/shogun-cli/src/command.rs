@@ -23,11 +23,17 @@ pub enum ConfigAction {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     /// `shogun search <query>` → hybrid memory search.
-    Search { query: String },
+    Search {
+        query: String,
+    },
     /// `shogun context [--no-screen]` → the current context cache.
-    Context { include_screen: bool },
+    Context {
+        include_screen: bool,
+    },
     /// `shogun pack <query>` → the grounded context pack for a task/question (FR-API-08).
-    Pack { query: String },
+    Pack {
+        query: String,
+    },
     /// `shogun people list|get <id>`
     People(ListOrGet),
     /// `shogun projects list|get <id>`
@@ -37,13 +43,21 @@ pub enum Command {
     /// `shogun open-loops list|get <id>`
     OpenLoops(ListOrGet),
     /// `shogun note <text>` → append a user note (L1).
-    Note { text: String },
+    Note {
+        text: String,
+    },
     /// `shogun propose <description>` → propose a state change (L2).
-    Propose { description: String },
+    Propose {
+        description: String,
+    },
     /// `shogun run <agent>` → launch a preset agent (level follows the action).
-    Run { agent: String },
+    Run {
+        agent: String,
+    },
     /// `shogun actions poll <approval_id>` returns a durable, body-free L3 outcome.
-    ActionsPoll { approval_id: u64 },
+    ActionsPoll {
+        approval_id: u64,
+    },
     /// `shogun wrap` → today's Evening Wrap (issue #10, invariant 6 — the notch card as a read).
     Wrap,
     /// `shogun onboarding` → this device's onboarding / first-run setup state (issue #6).
@@ -59,11 +73,16 @@ pub enum Command {
     /// `shogun whoami` → profile and compact work summary.
     Whoami,
     /// `shogun profile set <json>` → local L1 profile update.
-    ProfileSet { body: String },
+    ProfileSet {
+        body: String,
+    },
+    VoiceDictionary(VoiceDictionaryCommand),
     /// `shogun help` / no args.
     Help,
     /// `shogun config path|show|validate`
-    Config { action: ConfigAction },
+    Config {
+        action: ConfigAction,
+    },
 }
 
 /// Filters for `lessons list`. Default is the Settings/management list (every row).
@@ -90,7 +109,9 @@ pub enum VisualRecallCommand {
     Status,
     Enable,
     Disable,
-    Retention { days: u32 },
+    Retention {
+        days: u32,
+    },
     Search {
         query: String,
         from_ms: Option<i64>,
@@ -105,6 +126,14 @@ pub enum VisualRecallCommand {
     FrameDelete {
         id: i64,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VoiceDictionaryCommand {
+    List,
+    Create { term: String },
+    Update { id: i64, term: String },
+    Delete { id: i64 },
 }
 
 impl Command {
@@ -152,6 +181,16 @@ impl Command {
             }
             Command::Whoami => Tool::ProfileWhoami,
             Command::ProfileSet { .. } => Tool::ProfileSet,
+            Command::VoiceDictionary(VoiceDictionaryCommand::List) => Tool::VoiceDictionaryList,
+            Command::VoiceDictionary(VoiceDictionaryCommand::Create { .. }) => {
+                Tool::VoiceDictionaryCreate
+            }
+            Command::VoiceDictionary(VoiceDictionaryCommand::Update { .. }) => {
+                Tool::VoiceDictionaryUpdate
+            }
+            Command::VoiceDictionary(VoiceDictionaryCommand::Delete { .. }) => {
+                Tool::VoiceDictionaryDelete
+            }
             Command::ApiStatus | Command::Metrics | Command::Help | Command::Config { .. } => {
                 return None
             }
@@ -196,6 +235,7 @@ COMMANDS:
     visual-recall frame delete <id>        Delete one stored frame
     whoami                    Profile + compact work summary
     profile set <json>        Update profile preferences   (L1)
+    voice-dictionary list|create|update|delete  Manage local vocabulary (L1 writes)
     config path|show|validate Show the Shougun.md path, parsed config, or validation
     help                      This help
 
@@ -299,6 +339,9 @@ mod tests {
         use shogun_mcp::memory_api::{tool_level, ApiLevel};
         let command = Command::VisualRecall(VisualRecallCommand::Retention { days: 30 });
         assert_eq!(command.tool(), Some(Tool::VisualRecallSetRetention));
-        assert_eq!(tool_level(command.tool().unwrap()), ApiLevel::Write(Level::L1));
+        assert_eq!(
+            tool_level(command.tool().unwrap()),
+            ApiLevel::Write(Level::L1)
+        );
     }
 }

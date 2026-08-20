@@ -28,6 +28,13 @@ const DEFAULT_MODEL: &str = "nova-3";
 const LIVE_ENDPOINTING_MS: u32 = 300;
 /// ~100 ms of 16 kHz mono before flushing a WS binary frame.
 pub const LIVE_CHUNK_SAMPLES: usize = (SAMPLE_RATE as usize) / 10;
+const PUBLIC_PROVIDER_FAILURE: &str = "Speech provider unavailable. Try again.";
+
+/// Provider libraries may include request URLs in errors. URLs carry opt-in keyterms, so no
+/// Deepgram transport detail may reach application logs or the voice UI.
+pub fn public_error(_error: &str) -> String {
+    PUBLIC_PROVIDER_FAILURE.to_string()
+}
 
 /// How the client obtains an Authorization header value (`Token …` or `Bearer …`).
 pub trait DeepgramAuth: Send {
@@ -74,7 +81,12 @@ impl EphemeralTokenAuth {
             .timeout(Duration::from_secs(15))
             .build()
             .map_err(|e| format!("deepgram auth http client: {e}"))?;
-        Ok(Self { token_url, license, client, cached: None })
+        Ok(Self {
+            token_url,
+            license,
+            client,
+            cached: None,
+        })
     }
 }
 
@@ -103,8 +115,7 @@ impl DeepgramAuth for EphemeralTokenAuth {
         if !resp.status().is_success() {
             return Err(format!("asr token fetch HTTP {}", resp.status()));
         }
-        let body: serde_json::Value =
-            resp.json().map_err(|e| format!("asr token JSON: {e}"))?;
+        let body: serde_json::Value = resp.json().map_err(|e| format!("asr token JSON: {e}"))?;
         let token = body
             .get("access_token")
             .and_then(|v| v.as_str())
@@ -179,6 +190,8 @@ pub struct DeepgramConfig {
     pub mip_opt_out: bool,
     /// Traceability `purpose` (e.g. `meeting_asr`, `voice_dictation`).
     pub purpose: String,
+    /// Bounded, explicit vocabulary hints for Nova-3. Only dictation callers populate this.
+    pub keyterms: Vec<String>,
 }
 
 impl Default for DeepgramConfig {
@@ -189,6 +202,7 @@ impl Default for DeepgramConfig {
             language: "multi".into(),
             mip_opt_out: true,
             purpose: "meeting_asr".into(),
+            keyterms: Vec::new(),
         }
     }
 }
@@ -201,6 +215,12 @@ impl DeepgramConfig {
 
     pub fn with_purpose(mut self, purpose: impl Into<String>) -> Self {
         self.purpose = purpose.into();
+        self
+    }
+
+    /// Set vocabulary hints. Invalid, duplicate, and excess values are excluded before URL build.
+    pub fn with_keyterms(mut self, keyterms: impl IntoIterator<Item = String>) -> Self {
+        self.keyterms = bounded_keyterms(keyterms);
         self
     }
 }
@@ -260,7 +280,12 @@ impl Deepgram {
             .timeout(Duration::from_secs(60))
             .build()
             .map_err(|e| format!("deepgram http client: {e}"))?;
-        Ok(Self { config, auth, client, trace })
+        Ok(Self {
+            config,
+            auth,
+            client,
+            trace,
+        })
     }
 
     fn listen_url(&self) -> String {
@@ -268,11 +293,12 @@ impl Deepgram {
     }
 
     fn record_egress(&self, pcm_bytes: usize, duration_ms: u64) {
-        record_asr_egress(
+        record_asr_attempt(
             self.trace.as_ref(),
             &self.config.purpose,
             pcm_bytes,
             duration_ms,
+            !self.config.keyterms.is_empty(),
         );
     }
 }
@@ -307,10 +333,6 @@ pub struct DeepgramLive {
     cmd_tx: Sender<LiveCmd>,
     result_rx: Receiver<LiveResult>,
     join: Option<JoinHandle<()>>,
-    pcm_bytes: usize,
-    purpose: String,
-    /// Required, for the same reason as [`Deepgram::trace`].
-    trace: Arc<dyn TraceabilitySink>,
 }
 
 impl DeepgramLive {
@@ -327,28 +349,36 @@ impl DeepgramLive {
         let url = live_listen_url(config, mode);
         let authorization = auth
             .authorization_header()
-            .map_err(|e| format!("deepgram auth failed: {e}"))?;
+            .map_err(|error| public_error(&format!("deepgram auth failed: {error}")))?;
 
         let (cmd_tx, cmd_rx) = mpsc::channel::<LiveCmd>();
         let (result_tx, result_rx) = mpsc::channel::<LiveResult>();
         let purpose = config.purpose.clone();
+        let has_keyterms = !config.keyterms.is_empty();
+        let trace_for_thread = Arc::clone(&trace);
+        let purpose_for_thread = purpose.clone();
 
         let join = thread::Builder::new()
             .name("deepgram-live".into())
             .spawn(move || {
-                if let Err(e) = live_session_loop(&url, &authorization, cmd_rx, result_tx) {
-                    eprintln!("[asr] deepgram live session ended: {e}");
+                if let Err(_error) = live_session_loop(
+                    &url,
+                    &authorization,
+                    cmd_rx,
+                    result_tx,
+                    trace_for_thread.as_ref(),
+                    &purpose_for_thread,
+                    has_keyterms,
+                ) {
+                    eprintln!("[asr] Deepgram live session ended unexpectedly");
                 }
             })
-            .map_err(|e| format!("deepgram live thread: {e}"))?;
+            .map_err(|error| public_error(&format!("deepgram live thread: {error}")))?;
 
         Ok(Self {
             cmd_tx,
             result_rx,
             join: Some(join),
-            pcm_bytes: 0,
-            purpose,
-            trace,
         })
     }
 
@@ -358,7 +388,6 @@ impl DeepgramLive {
             return Ok(());
         }
         let bytes = f32_to_linear16(pcm);
-        self.pcm_bytes = self.pcm_bytes.saturating_add(bytes.len());
         self.cmd_tx
             .send(LiveCmd::Audio(bytes))
             .map_err(|_| "deepgram live session closed".to_string())
@@ -389,7 +418,10 @@ impl DeepgramLive {
             if remaining.is_zero() {
                 break;
             }
-            match self.result_rx.recv_timeout(remaining.min(Duration::from_millis(200))) {
+            match self
+                .result_rx
+                .recv_timeout(remaining.min(Duration::from_millis(200)))
+            {
                 Ok(r) => {
                     if r.is_final && !r.text.trim().is_empty() {
                         finals.push(r.text.trim().to_string());
@@ -411,13 +443,6 @@ impl DeepgramLive {
         if let Some(join) = self.join.take() {
             let _ = join.join();
         }
-        let duration_ms = ((self.pcm_bytes as u64 / 2) * 1000) / u64::from(SAMPLE_RATE);
-        record_asr_egress(
-            self.trace.as_ref(),
-            &self.purpose,
-            self.pcm_bytes,
-            duration_ms,
-        );
         Ok(finals)
     }
 
@@ -430,6 +455,8 @@ impl DeepgramLive {
 
 impl Drop for DeepgramLive {
     fn drop(&mut self) {
+        // Every audio frame is traced in `send_live_audio` before the socket call, so Drop needs
+        // no success-only aggregate record (and cannot erase a failed or in-flight attempt).
         let _ = self.cmd_tx.send(LiveCmd::Close);
         if let Some(join) = self.join.take() {
             let _ = join.join();
@@ -442,9 +469,12 @@ fn live_session_loop(
     authorization: &str,
     cmd_rx: Receiver<LiveCmd>,
     result_tx: Sender<LiveResult>,
+    trace: &dyn TraceabilitySink,
+    purpose: &str,
+    has_keyterms: bool,
 ) -> Result<(), String> {
     use tungstenite::client::IntoClientRequest;
-    use tungstenite::http::header::{AUTHORIZATION, HeaderValue};
+    use tungstenite::http::header::{HeaderValue, AUTHORIZATION};
     use tungstenite::{connect, Error as WsError, Message};
 
     let mut request = url
@@ -454,7 +484,9 @@ fn live_session_loop(
         .map_err(|e| format!("deepgram live auth header: {e}"))?;
     request.headers_mut().insert(AUTHORIZATION, auth_val);
 
-    let (mut socket, _resp) = connect(request).map_err(|e| format!("deepgram live connect: {e}"))?;
+    record_keyterm_attempt(trace, purpose, has_keyterms);
+    let (mut socket, _resp) =
+        connect(request).map_err(|e| format!("deepgram live connect: {e}"))?;
     set_live_read_timeout(socket.get_mut(), Duration::from_millis(20));
 
     let mut closing = false;
@@ -465,9 +497,11 @@ fn live_session_loop(
         match cmd_rx.try_recv() {
             Ok(LiveCmd::Audio(bytes)) => {
                 if !closing {
-                    socket
-                        .send(Message::Binary(bytes))
-                        .map_err(|e| format!("deepgram live send audio: {e}"))?;
+                    send_live_audio(trace, purpose, bytes, |bytes| {
+                        socket
+                            .send(Message::Binary(bytes))
+                            .map_err(|e| format!("deepgram live send audio: {e}"))
+                    })?;
                 }
             }
             Ok(LiveCmd::Close) => {
@@ -509,8 +543,8 @@ fn live_session_loop(
                     || e.kind() == std::io::ErrorKind::TimedOut =>
             {
                 if closing {
-                    let timed_out = close_since
-                        .is_some_and(|t| t.elapsed() > Duration::from_secs(5));
+                    let timed_out =
+                        close_since.is_some_and(|t| t.elapsed() > Duration::from_secs(5));
                     // Grace period after CloseStream — peer should have flushed finals. A
                     // disconnected command channel (the handle was dropped) also ends the wait:
                     // nobody is left to consume finals, and spinning out the full 5s grace only
@@ -522,9 +556,11 @@ fn live_session_loop(
                     // Idle: wait briefly for the next PCM chunk instead of busy-spinning.
                     match cmd_rx.recv_timeout(Duration::from_millis(5)) {
                         Ok(LiveCmd::Audio(bytes)) => {
-                            socket
-                                .send(Message::Binary(bytes))
-                                .map_err(|e| format!("deepgram live send audio: {e}"))?;
+                            send_live_audio(trace, purpose, bytes, |bytes| {
+                                socket
+                                    .send(Message::Binary(bytes))
+                                    .map_err(|e| format!("deepgram live send audio: {e}"))
+                            })?;
                         }
                         Ok(LiveCmd::Close) => {
                             closing = true;
@@ -560,7 +596,10 @@ fn close_is_complete(closing: bool, result: &LiveResult) -> bool {
     closing && result.is_final && result.speech_final
 }
 
-fn set_live_read_timeout(stream: &mut tungstenite::stream::MaybeTlsStream<std::net::TcpStream>, dur: Duration) {
+fn set_live_read_timeout(
+    stream: &mut tungstenite::stream::MaybeTlsStream<std::net::TcpStream>,
+    dur: Duration,
+) {
     use tungstenite::stream::MaybeTlsStream;
     match stream {
         MaybeTlsStream::Plain(tcp) => {
@@ -595,7 +634,10 @@ fn parse_live_message(text: &str) -> Option<LiveResult> {
         .clamp(0.0, 1.0);
     Some(LiveResult {
         text: transcript.to_string(),
-        is_final: body.get("is_final").and_then(|v| v.as_bool()).unwrap_or(false),
+        is_final: body
+            .get("is_final")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
         speech_final: body
             .get("speech_final")
             .and_then(|v| v.as_bool())
@@ -604,22 +646,55 @@ fn parse_live_message(text: &str) -> Option<LiveResult> {
     })
 }
 
-fn record_asr_egress(
+fn record_asr_attempt(
     sink: &dyn TraceabilitySink,
     purpose: &str,
     pcm_bytes: usize,
     duration_ms: u64,
+    has_keyterms: bool,
 ) {
+    // Record before an external request. A transport failure can still occur after bytes leave
+    // the device, so success-only finalization is not an auditable egress boundary.
     // Digest duration meta only — never the waveform (invariant 2 / G8).
     let meta = format!("duration_ms={duration_ms}");
     sink.record(TraceRecord {
         route: Route::Asr,
+        // Preserve the established purpose names so existing privacy/audit consumers retain
+        // their route taxonomy; this record's pre-send timing defines it as an attempt.
         purpose: purpose.to_string(),
         destination: "api.deepgram.com".into(),
         chunk_bytes: pcm_bytes,
         chunk_xxh64: digest(&meta),
         third_party: true,
     });
+    record_keyterm_attempt(sink, purpose, has_keyterms);
+}
+
+fn record_keyterm_attempt(sink: &dyn TraceabilitySink, purpose: &str, has_keyterms: bool) {
+    if !has_keyterms {
+        return;
+    }
+    // Query hints travel during request construction/handshake. Record that boundary once, with
+    // no hint content, before any audio frame can be sent.
+    sink.record(TraceRecord::for_chunk(
+        Route::Asr,
+        format!("{purpose}_keyterms"),
+        "api.deepgram.com",
+        "",
+        true,
+    ));
+}
+
+fn send_live_audio(
+    sink: &dyn TraceabilitySink,
+    purpose: &str,
+    bytes: Vec<u8>,
+    send: impl FnOnce(Vec<u8>) -> Result<(), String>,
+) -> Result<(), String> {
+    let pcm_bytes = bytes.len();
+    let duration_ms = ((pcm_bytes as u64 / 2) * 1000) / u64::from(SAMPLE_RATE);
+    record_asr_attempt(sink, purpose, pcm_bytes, duration_ms, false);
+    send(bytes)
 }
 
 /// HTTPS batch listen URL (VAD-cut fallback).
@@ -634,6 +709,7 @@ pub fn http_listen_url(config: &DeepgramConfig) -> String {
     if is_dictation_purpose(&config.purpose) {
         url.push_str("&dictation=true");
     }
+    append_keyterms(&mut url, &config.keyterms);
     url
 }
 
@@ -659,6 +735,7 @@ pub fn live_listen_url(config: &DeepgramConfig, mode: LiveMode) -> String {
             url.push_str("&dictation=true&interim_results=false&endpointing=false");
         }
     }
+    append_keyterms(&mut url, &config.keyterms);
     url
 }
 
@@ -677,6 +754,59 @@ fn https_to_wss(endpoint: &str) -> String {
 fn is_dictation_purpose(purpose: &str) -> bool {
     // voice_lane uses `voice_dictation`; match any purpose containing "dictation".
     purpose.contains("dictation")
+}
+
+const MAX_KEYTERM_HINTS: usize = 100;
+const MAX_KEYTERM_CHARS: usize = 120;
+/// Deepgram limits all keyterms in one request to 500 model tokens. Its tokenizer is not exposed,
+/// so UTF-8 byte count is used as a conservative upper bound: a byte-level tokenizer cannot emit
+/// more tokens than input bytes. This intentionally leaves headroom for vendor tokenization.
+const MAX_KEYTERM_TOKENS: usize = 500;
+
+fn normalized_keyterm(value: &str) -> String {
+    value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+fn bounded_keyterms(keyterms: impl IntoIterator<Item = String>) -> Vec<String> {
+    let mut valid = Vec::new();
+    let mut token_upper_bound: usize = 0;
+    for keyterm in keyterms {
+        let keyterm = keyterm.trim();
+        if keyterm.is_empty()
+            || keyterm.chars().count() > MAX_KEYTERM_CHARS
+            || keyterm.chars().any(char::is_control)
+        {
+            continue;
+        }
+        let normalized = normalized_keyterm(keyterm);
+        if normalized.is_empty()
+            || valid
+                .iter()
+                .any(|existing: &String| normalized_keyterm(existing) == normalized)
+        {
+            continue;
+        }
+        let cost = keyterm.len();
+        if valid.len() == MAX_KEYTERM_HINTS
+            || token_upper_bound.saturating_add(cost) > MAX_KEYTERM_TOKENS
+        {
+            continue;
+        }
+        valid.push(keyterm.to_string());
+        token_upper_bound += cost;
+    }
+    valid
+}
+
+fn append_keyterms(url: &mut String, keyterms: &[String]) {
+    for keyterm in keyterms {
+        url.push_str("&keyterm=");
+        url.push_str(&urlencoding_lite(keyterm));
+    }
 }
 
 impl Deepgram {
@@ -701,8 +831,9 @@ impl Deepgram {
         let auth = self
             .auth
             .authorization_header()
-            .map_err(|e| format!("deepgram auth failed: {e}"))?;
+            .map_err(|error| public_error(&format!("deepgram auth failed: {error}")))?;
         let url = self.listen_url();
+        self.record_egress(linear16.len(), duration_ms);
         let resp = self
             .client
             .post(&url)
@@ -710,12 +841,11 @@ impl Deepgram {
             .header("Content-Type", "audio/raw")
             .body(linear16.clone())
             .send()
-            .map_err(|e| format!("deepgram listen request failed: {e}"))?;
+            .map_err(|error| public_error(&format!("deepgram listen request failed: {error}")))?;
         if !resp.status().is_success() {
             return Err(format!("deepgram listen HTTP {}", resp.status()));
         }
-        self.record_egress(linear16.len(), duration_ms);
-        parse_listen_response(resp)
+        parse_listen_response(resp).map_err(|error| public_error(&error))
     }
 }
 
@@ -724,7 +854,7 @@ impl Transcriber for Deepgram {
         match self.listen(pcm) {
             Ok(segs) => segs,
             Err(e) => {
-                eprintln!("[asr] {e}");
+                eprintln!("[asr] {}", public_error(&e));
                 Vec::new()
             }
         }
@@ -747,8 +877,7 @@ fn f32_to_linear16(pcm: &[f32]) -> Vec<u8> {
 }
 
 fn parse_listen_response(resp: reqwest::blocking::Response) -> Result<Vec<Segment>, String> {
-    let body: serde_json::Value =
-        resp.json().map_err(|e| format!("deepgram JSON: {e}"))?;
+    let body: serde_json::Value = resp.json().map_err(|e| format!("deepgram JSON: {e}"))?;
     let alt = body
         .pointer("/results/channels/0/alternatives/0")
         .ok_or_else(|| "deepgram response missing alternatives".to_string())?;
@@ -761,8 +890,14 @@ fn parse_listen_response(resp: reqwest::blocking::Response) -> Result<Vec<Segmen
     if text.is_empty() {
         return Ok(Vec::new());
     }
-    let confidence = alt.get("confidence").and_then(|v| v.as_f64()).unwrap_or(0.9);
-    Ok(vec![Segment { text, confidence: confidence.clamp(0.0, 1.0) }])
+    let confidence = alt
+        .get("confidence")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.9);
+    Ok(vec![Segment {
+        text,
+        confidence: confidence.clamp(0.0, 1.0),
+    }])
 }
 
 /// Minimal query escaping without a new dependency.
@@ -792,8 +927,15 @@ mod tests {
 
     #[test]
     fn rejects_mip_opt_in() {
-        let cfg = DeepgramConfig { mip_opt_out: false, ..DeepgramConfig::default() };
-        let err = match Deepgram::new(cfg, Box::new(DebugEnvKeyAuth), Arc::new(RecordingSink::new())) {
+        let cfg = DeepgramConfig {
+            mip_opt_out: false,
+            ..DeepgramConfig::default()
+        };
+        let err = match Deepgram::new(
+            cfg,
+            Box::new(DebugEnvKeyAuth),
+            Arc::new(RecordingSink::new()),
+        ) {
             Ok(_) => panic!("expected mip_opt_out rejection"),
             Err(e) => e,
         };
@@ -854,8 +996,12 @@ mod tests {
 
     #[test]
     fn meeting_listen_url_has_smart_format_not_dictation() {
-        let d = Deepgram::new(DeepgramConfig::default(), Box::new(DebugEnvKeyAuth), Arc::new(RecordingSink::new()))
-            .expect("build");
+        let d = Deepgram::new(
+            DeepgramConfig::default(),
+            Box::new(DebugEnvKeyAuth),
+            Arc::new(RecordingSink::new()),
+        )
+        .expect("build");
         let url = d.listen_url();
         assert!(url.contains("mip_opt_out=true"));
         assert!(url.contains("smart_format=true"));
@@ -877,6 +1023,83 @@ mod tests {
         assert!(url.contains("smart_format=true"));
         assert!(url.contains("dictation=true"));
         assert!(url.contains("mip_opt_out=true"));
+    }
+
+    #[test]
+    fn voice_urls_encode_bounded_keyterm_hints() {
+        let config = DeepgramConfig::default()
+            .with_purpose("voice_dictation")
+            .with_keyterms([
+                "Shogun AI".into(),
+                "C++".into(),
+                "unsafe&keyterm=injected".into(),
+                " shogun   ai ".into(),
+                "\u{0000}unsafe".into(),
+            ]);
+        let http = http_listen_url(&config);
+        let live = live_listen_url(&config, LiveMode::Voice);
+        for url in [http, live] {
+            assert!(url.contains("keyterm=Shogun%20AI"));
+            assert!(url.contains("keyterm=C%2B%2B"));
+            assert!(url.contains("keyterm=unsafe%26keyterm%3Dinjected"));
+            assert_eq!(url.matches("&keyterm=").count(), 3);
+        }
+    }
+
+    #[test]
+    fn keyterms_enforce_documented_count_and_token_budgets() {
+        let count_limited =
+            DeepgramConfig::default().with_keyterms((0..101).map(|index| format!("t{index:03}")));
+        assert_eq!(count_limited.keyterms.len(), MAX_KEYTERM_HINTS);
+
+        let token_limited =
+            DeepgramConfig::default().with_keyterms((0..6).map(|index| format!("{index:0>100}")));
+        assert_eq!(token_limited.keyterms.len(), 5);
+        assert_eq!(
+            token_limited
+                .keyterms
+                .iter()
+                .map(String::len)
+                .sum::<usize>(),
+            MAX_KEYTERM_TOKENS
+        );
+    }
+
+    #[test]
+    fn keyterm_egress_attempt_has_purpose_without_hint_content() {
+        let sink = RecordingSink::new();
+        record_asr_attempt(&sink, "voice_dictation", 640, 20, true);
+        let records = sink.records();
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].purpose, "voice_dictation");
+        assert_eq!(records[1].purpose, "voice_dictation_keyterms");
+        assert_eq!(records[1].chunk_bytes, 0);
+        assert_eq!(records[1].chunk_xxh64, digest(""));
+        assert!(!format!("{:?}", records[1]).contains("ShogunAI"));
+    }
+
+    #[test]
+    fn failed_live_audio_send_is_traced_before_the_transport_returns() {
+        let sink = RecordingSink::new();
+        let error = send_live_audio(&sink, "voice_dictation", vec![0; 640], |_| {
+            Err("simulated disconnected socket".into())
+        })
+        .expect_err("send failure propagates after trace");
+        assert_eq!(error, "simulated disconnected socket");
+        let records = sink.records();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].purpose, "voice_dictation");
+        assert_eq!(records[0].chunk_bytes, 640);
+    }
+
+    #[test]
+    fn transport_errors_never_expose_keyterms_or_urls() {
+        let raw = "WebSocket connect failed: wss://api.deepgram.com/v1/listen?keyterm=Shogun%20AI";
+        let safe = public_error(raw);
+        assert_eq!(safe, PUBLIC_PROVIDER_FAILURE);
+        assert!(!safe.contains("Shogun"));
+        assert!(!safe.contains("deepgram.com"));
+        assert!(!safe.contains("keyterm"));
     }
 
     #[test]

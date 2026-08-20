@@ -235,7 +235,7 @@ fn clock(ts_ms: i64) -> String {
         if libc::localtime_r(&t, &mut tm).is_null() {
             0
         } else {
-            tm.tm_gmtoff as i64
+            tm.tm_gmtoff
         }
     };
     let secs = ts_ms / 1000 + off_secs;

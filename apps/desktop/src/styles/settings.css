@@ -1,0 +1,1571 @@
+/* settings — open instrument layout: hairlines + type, no gray cards, square everywhere */
+.settings {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--shell);
+  color: var(--ink);
+  --set-motion: 170ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.settings__head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px 11px 16px;
+  background: var(--shell);
+  color: var(--ink);
+  border-bottom: 1px solid var(--line);
+}
+.settings__title {
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+/* Primary exit CTA — solid accent bar, square, reads as intentional close */
+.settings__done {
+  flex: none;
+  font: inherit;
+  font-family: var(--sys);
+  font-size: var(--fs-sm);
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 7px 16px;
+  border: none;
+  border-radius: 0;
+  background: var(--accent);
+  color: var(--accent-ink);
+  cursor: pointer;
+  transition: filter var(--set-motion), transform 120ms ease;
+}
+.settings__done:hover {
+  filter: brightness(1.08);
+}
+.settings__done:active {
+  transform: scale(0.97);
+  filter: brightness(0.96);
+}
+.settings__done:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.settings__body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: grid;
+  grid-template-columns: 148px minmax(0, 1fr);
+}
+.settings__nav {
+  position: relative;
+  min-width: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 14px 10px 18px;
+  border-right: 1px solid var(--line);
+  background: var(--settings-nav-bg);
+  scrollbar-width: none;
+}
+.settings__nav::-webkit-scrollbar {
+  display: none;
+}
+.settings__nav-mark {
+  width: 26px;
+  height: 26px;
+  margin: 0 8px 14px;
+  display: grid;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--accent) 60%, var(--line));
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 760;
+  letter-spacing: 0.04em;
+  box-shadow: inset 0 0 0 3px color-mix(in srgb, var(--accent) 7%, transparent);
+}
+.settings__nav-item {
+  position: relative;
+  width: 100%;
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 8px 8px 10px;
+  border: 0;
+  background: transparent;
+  color: color-mix(in srgb, var(--ink) 68%, var(--muted));
+  font: inherit;
+  font-family: var(--sys);
+  font-size: 11px;
+  font-weight: 560;
+  text-align: left;
+  cursor: pointer;
+  transition: color 120ms ease, background 120ms ease;
+}
+.settings__nav-item::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 7px;
+  bottom: 7px;
+  width: 2px;
+  background: transparent;
+  box-shadow: none;
+  transition: background 120ms ease, box-shadow 120ms ease;
+}
+.settings__nav-item:hover {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--ink) 5%, transparent);
+}
+.settings__nav-item.is-active {
+  color: var(--ink);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 14%, transparent), transparent 88%);
+}
+.settings__nav-item.is-active::before {
+  background: var(--accent);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--accent) 72%, transparent);
+}
+.settings__nav-item:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+.settings__nav-icon {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  color: color-mix(in srgb, currentColor 88%, var(--accent));
+}
+.settings__content {
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 0 18px 28px;
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
+  /* thin + custom colors forces WKWebView off macOS default overlay white gutter */
+  scrollbar-width: thin;
+  scrollbar-color: var(--scroll-thumb) var(--scroll-track);
+  contain: layout style;
+}
+.settings__content:focus-visible {
+  outline: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  outline-offset: -1px;
+}
+.settings__content::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+  -webkit-appearance: none;
+  appearance: none;
+}
+.settings__content::-webkit-scrollbar-track {
+  background: transparent;
+}
+.settings__content::-webkit-scrollbar-thumb {
+  background: var(--scroll-thumb);
+  border-radius: 0;
+  border: none;
+  min-height: 24px;
+}
+.settings__content::-webkit-scrollbar-thumb:hover {
+  background: var(--scroll-thumb-hover);
+}
+.settings__content::-webkit-scrollbar-corner {
+  background: transparent;
+}
+.settings__section-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  margin: 0 -18px;
+  padding: 16px 20px 14px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--shell) 96%, transparent);
+  backdrop-filter: blur(14px);
+}
+.settings__section-kicker {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--accent);
+  font-size: 9px;
+  font-weight: 720;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+}
+.settings__section-head h2 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 18px;
+  font-weight: 680;
+  letter-spacing: -0.035em;
+  line-height: 1.1;
+}
+.settings__section-head p {
+  margin: 5px 0 0;
+  max-width: 42ch;
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.35;
+}
+.settings__section-body {
+  min-height: 100%;
+}
+.settings__slot {
+  display: none;
+}
+.settings__content[data-active="general"] .settings__slot--general,
+.settings__content[data-active="memory"] .settings__slot--memory,
+.settings__content[data-active="voice"] .settings__slot--voice,
+.settings__content[data-active="connections"] .settings__slot--connections,
+.settings__content[data-active="intelligence"] .settings__slot--intelligence,
+.settings__content[data-active="controls"] .settings__slot--controls,
+.settings__content[data-active="privacy"] .settings__slot--privacy {
+  display: contents;
+}
+/* Section = open block + bottom hairline. No fill, no radius, no card chrome. */
+.set {
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  padding: 18px 2px 16px;
+}
+.set:last-child {
+  border-bottom: none;
+  padding-bottom: 12px;
+}
+.set__label {
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--ink) 62%, var(--faint));
+  margin-bottom: 10px;
+}
+.set__sublabel {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: color-mix(in srgb, var(--ink) 78%, var(--muted));
+  margin: 0 0 6px;
+}
+.set__hint {
+  margin: 8px 0 0;
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  color: var(--muted);
+}
+.set__hint.is-ok {
+  color: var(--live);
+}
+/* A quieter hint — disclosures and secondary notes that should read a shade back
+   from a normal hint (meeting disclosure, the PTT restart note). */
+.set__hint--quiet {
+  color: color-mix(in srgb, var(--muted) 82%, transparent);
+  font-size: 11px;
+  line-height: 1.4;
+}
+.set__status {
+  margin: 2px 0 0;
+  font-size: var(--fs-sm);
+  font-weight: 550;
+  line-height: 1.4;
+  color: color-mix(in srgb, var(--ink) 82%, var(--muted));
+}
+.set__status.is-ok {
+  color: var(--live);
+}
+.set__disclosure {
+  margin: 16px 0 0;
+  padding-top: 12px;
+  border-top: 1px solid color-mix(in srgb, var(--line) 75%, transparent);
+  font-size: 11px;
+  line-height: 1.45;
+  color: color-mix(in srgb, var(--muted) 78%, transparent);
+}
+.set__stack {
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.set__stack > .set__hint,
+.set__stack > .set__status,
+.set__stack > p {
+  margin-top: 0;
+}
+.set__stack .keyrow {
+  margin-top: 4px;
+}
+.set__stack--key {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+  gap: 6px;
+}
+.set__stack--key .set__label {
+  margin-bottom: 4px;
+}
+.voice-vocab {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+  gap: 9px;
+}
+.voice-vocab .set__label {
+  margin-bottom: 0;
+}
+.voice-vocab__terms {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+  margin-top: 4px;
+}
+.voice-vocab__term {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 10px 10px 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--line) 86%, var(--accent));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--panel) 92%, var(--accent));
+  color: var(--ink);
+  font-size: var(--fs-md);
+  font-weight: 600;
+}
+.voice-vocab__term.is-disabled {
+  opacity: 0.55;
+}
+.voice-vocab__term button {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 15px;
+  line-height: 14px;
+  cursor: pointer;
+}
+.voice-vocab__term button:first-of-type { margin-left: auto; }
+.voice-vocab__term button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  color: var(--danger);
+}
+.voice-vocab__consent {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 9px 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--line));
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+  color: var(--ink);
+  font-size: var(--fs-sm);
+  line-height: 1.4;
+  cursor: pointer;
+}
+.voice-vocab__consent input { flex: none; margin: 2px 0 0; }
+.voice-vocab__form {
+  display: grid;
+  gap: 10px;
+  margin-top: 5px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--bg) 76%, var(--panel));
+}
+.voice-vocab__field {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-weight: 650;
+  letter-spacing: .025em;
+}
+.voice-vocab__field .keyrow__input,
+.voice-vocab__field select {
+  width: 100%;
+  box-sizing: border-box;
+}
+.voice-vocab__advanced {
+  border-top: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
+  padding-top: 9px;
+}
+.voice-vocab__advanced summary {
+  color: var(--muted);
+  cursor: pointer;
+  font-size: var(--fs-sm);
+  list-style-position: outside;
+}
+.voice-vocab__advanced[open] summary { color: var(--ink); }
+.voice-vocab__advanced-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  padding-top: 10px;
+}
+.voice-vocab__field--wide { grid-column: 1 / -1; }
+.voice-vocab__enabled {
+  align-self: end;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 36px;
+  color: var(--ink);
+  font-size: var(--fs-sm);
+}
+.voice-vocab__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  align-items: center;
+}
+.voice-vocab__actions .keyrow__btn { white-space: nowrap; }
+.mic-picker {
+  display: grid;
+  gap: 6px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+}
+.mic-picker__control {
+  width: 100%;
+  min-height: 38px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 0;
+  background: var(--panel);
+  color: var(--ink);
+  font: inherit;
+}
+.mic-picker__control:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+@media (max-width: 560px) {
+  .voice-vocab__advanced-grid { grid-template-columns: 1fr; }
+}
+/* Label + control on one line (hold-key picker). */
+.set__row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0;
+  cursor: pointer;
+  color: var(--ink);
+}
+.set__row input[type="checkbox"] {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin: 2px 0 0;
+  accent-color: var(--accent);
+}
+.set__row-label {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-sm);
+  font-weight: 550;
+  line-height: 1.35;
+  color: var(--ink);
+}
+.learned {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
+.learned__item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0;
+  cursor: pointer;
+  color: var(--ink);
+}
+.learned__item input[type="checkbox"] {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin: 2px 0 0;
+  accent-color: var(--accent);
+}
+.learned__body {
+  flex: 1;
+  min-width: 0;
+}
+.learned__text {
+  font-size: var(--fs-sm);
+  font-weight: 550;
+  line-height: 1.35;
+}
+.learned__meta {
+  margin-top: 2px;
+  font-size: var(--fs-sm);
+  opacity: 0.7;
+  line-height: 1.3;
+}
+/* Nested set inside a section (legacy) — no second hairline stack. */
+.set .set {
+  border-bottom: none;
+  padding: 10px 0 0;
+  margin-top: 6px;
+  animation: none;
+}
+.set__label--follow {
+  margin-top: 14px;
+}
+/* Settings-scoped: force square corners on nested chrome (inputs, segs, keys, etc.) */
+.settings .seg,
+.settings .seg__opt,
+.settings .keyrow__input,
+.settings .keyrow__btn,
+.settings .keys__btn,
+.settings .keys__rec,
+.settings .appr,
+.settings .appr__body,
+.settings .conn__mark,
+.settings .vr-launch,
+.settings .vr-launch__glyph,
+.settings .castle__screen,
+.settings kbd {
+  border-radius: 0;
+}
+
+/* Visual recall browse window — dedicated timeline + preview (not in notch). */
+.vr-shell {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: #0d0d0f;
+  color: #e8e8ea;
+  overflow: hidden;
+}
+.vr-chrome {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px 10px 72px;
+  border-bottom: 1px solid var(--line, rgba(255, 255, 255, 0.08));
+  -webkit-app-region: drag;
+  app-region: drag;
+  cursor: grab;
+  user-select: none;
+}
+.vr-chrome:active {
+  cursor: grabbing;
+}
+.vr-chrome__title {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.vr-chrome__name {
+  font-size: var(--fs-lg, 15px);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.vr-chrome__sub {
+  font-size: var(--fs-xs, 11px);
+  color: var(--muted, #8a8a90);
+}
+.vr-chrome__actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+.vr-chrome__confirm {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.vr-chrome__confirm-label {
+  font-size: var(--fs-xs, 11px);
+  color: var(--muted, #8a8a90);
+  white-space: nowrap;
+}
+.vr-chrome__btn {
+  padding: 5px 10px;
+  border: 1px solid var(--line, rgba(255, 255, 255, 0.12));
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: var(--fs-sm, 12px);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color var(--sp, 120ms), background var(--sp, 120ms);
+}
+.vr-chrome__btn:hover {
+  border-color: var(--live, #6ee7a0);
+  background: rgba(255, 255, 255, 0.04);
+}
+.vr-chrome__btn--danger:hover {
+  border-color: #f87171;
+  background: rgba(248, 113, 113, 0.08);
+}
+.vr-chrome__btn--icon {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  color: var(--ink-soft, #b8c0cc);
+}
+.vr-chrome__btn--icon:hover {
+  color: var(--ink);
+}
+.vr-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 16px 20px 20px;
+  overflow-y: auto;
+}
+.vr-body__err {
+  color: #f87171;
+  font-size: var(--fs-sm, 12px);
+  margin: 0 0 12px;
+}
+.vr-body__empty {
+  margin: 0;
+  font-size: var(--fs-sm, 12px);
+  color: var(--muted, #8a8a90);
+  line-height: 1.45;
+}
+.vr-stage {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  flex: 1;
+  min-height: 0;
+}
+/* Preview = own framed card. Scrub sits below, outside this border. */
+.vr-stage__preview {
+  margin: 0;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line, rgba(255, 255, 255, 0.08));
+  border-radius: 10px;
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.25);
+}
+.vr-stage__preview--empty {
+  min-height: 200px;
+}
+/* Present-center scrub: fixed playhead, track pans under it, history off-window. */
+.vr-scrub {
+  flex: none;
+  outline: none;
+  margin: 0 -20px;
+  padding: 8px 0 4px;
+  background: #0a0a0c;
+}
+.vr-scrub:focus-visible .vr-scrub__viewport {
+  box-shadow: inset 0 0 0 2px rgba(110, 231, 160, 0.35);
+}
+.vr-scrub__viewport {
+  position: relative;
+  height: 44px;
+  overflow: hidden;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+.vr-scrub__viewport:active {
+  cursor: grabbing;
+}
+.vr-scrub__rail {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  will-change: transform;
+  pointer-events: none;
+}
+.vr-scrub__pad {
+  flex: none;
+  height: 1px;
+}
+.vr-scrub__track {
+  position: relative;
+  flex: none;
+  height: 18px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.06);
+  overflow: visible;
+}
+.vr-scrub__seg {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  border-right: 1px solid rgba(0, 0, 0, 0.28);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  transition: top 80ms ease, bottom 80ms ease, box-shadow 80ms ease;
+}
+.vr-scrub__seg:last-child {
+  border-right: none;
+}
+.vr-scrub__seg--active {
+  top: -3px;
+  bottom: -3px;
+  z-index: 1;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    0 1px 4px rgba(0, 0, 0, 0.35);
+}
+.vr-scrub__seg-mark {
+  display: grid;
+  place-items: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 3px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.4);
+  color: #f4f4f5;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  pointer-events: none;
+}
+.vr-scrub__seg--active .vr-scrub__seg-mark {
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+}
+.vr-scrub__playhead {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  left: 50%;
+  width: 4px;
+  margin-left: -2px;
+  border-radius: 999px;
+  background: #f4f4f5;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35), 0 1px 4px rgba(0, 0, 0, 0.4);
+  pointer-events: none;
+  z-index: 2;
+}
+.vr-scrub__playhead::before {
+  content: none;
+}
+.vr-stage__media {
+  flex: 1;
+  min-height: 200px;
+  max-height: min(62vh, 520px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #0a0a0a;
+  overflow: hidden;
+}
+.vr-stage__img {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  object-position: center;
+}
+.vr-stage__caption {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  font-size: var(--fs-sm, 12px);
+  color: var(--muted, #8a8a90);
+  border-top: 1px solid var(--line, rgba(255, 255, 255, 0.06));
+}
+.vr-stage__app {
+  color: var(--text, #e8e8ea);
+  font-weight: 500;
+}
+.vr-stage__ocr {
+  padding: 0 12px 10px;
+}
+.vr-stage__ocr-toggle {
+  border: none;
+  background: none;
+  color: var(--muted, #8a8a90);
+  font: inherit;
+  font-size: var(--fs-xs, 11px);
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.vr-stage__ocr-toggle:hover {
+  color: var(--text, #e8e8ea);
+}
+.vr-stage__ocr-text {
+  margin: 6px 0 0;
+  font-size: var(--fs-sm, 12px);
+  line-height: 1.4;
+  color: var(--muted, #8a8a90);
+  white-space: pre-wrap;
+  max-height: 3.2em;
+  overflow: hidden;
+}
+
+/* Visual Recall retention + separate browse window. */
+.vr-retention {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel) 82%, transparent);
+}
+.vr-retention__head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: var(--fs-sm);
+  color: var(--muted);
+}
+.vr-retention__head strong {
+  color: var(--ink);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.vr-retention__range {
+  width: 100%;
+  margin: 12px 0 2px;
+  accent-color: var(--accent);
+}
+.vr-retention__ticks {
+  display: flex;
+  justify-content: space-between;
+  padding: 0 2px;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+.vr-retention__custom {
+  margin-top: 10px;
+  padding: 5px 9px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+.vr-retention__custom.is-on {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.vr-retention__custom-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+.vr-retention__custom-row input {
+  min-width: 0;
+  flex: 1;
+  padding: 7px 8px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--ink);
+  font: inherit;
+}
+.vr-retention__custom-row button {
+  border: 1px solid var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font: inherit;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  cursor: pointer;
+}
+.vr-retention .set__hint {
+  margin-top: 8px;
+}
+.vr-launch {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  margin-top: 10px;
+  padding: 11px 0;
+  border: none;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: color var(--set-motion, 160ms), border-color var(--set-motion, 160ms), background var(--set-motion, 160ms);
+}
+.vr-launch:hover {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--line));
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  color: var(--ink);
+}
+.vr-launch:active {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.vr-launch__glyph {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: 0;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--line));
+  background: transparent;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 650;
+}
+.vr-launch__body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.vr-launch__title {
+  font-size: var(--fs-md);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.vr-launch__sub {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  line-height: 1.3;
+}
+.vr-launch__badge {
+  flex: none;
+  min-width: 22px;
+  padding: 2px 7px;
+  border-radius: var(--r-pill);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+.vr-launch__arrow {
+  flex: none;
+  color: var(--muted);
+  font-size: var(--fs-md);
+}
+
+.keys {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-top: 1px solid color-mix(in srgb, var(--line) 55%, transparent);
+}
+.keys:first-of-type {
+  border-top: none;
+  margin-top: 2px;
+  padding-top: 2px;
+}
+.keys__name {
+  font-size: var(--fs-md);
+  font-weight: 550;
+  color: var(--ink);
+  letter-spacing: -0.01em;
+}
+.keys__combo {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  gap: 0;
+  border: none;
+  background: none;
+  padding: 0;
+  font-family: var(--sys);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--ink);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.keys__btn {
+  border: none;
+  background: transparent;
+  padding: 4px 2px;
+  border-radius: 0;
+  cursor: pointer;
+  transition: color var(--set-motion, 160ms), opacity var(--set-motion, 160ms);
+}
+.keys__btn:hover .keys__combo {
+  color: var(--accent);
+}
+.keys__rec {
+  border: none;
+  border-bottom: 1px dashed var(--accent);
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-family: var(--sys);
+  font-size: var(--fs-sm);
+  padding: 4px 2px;
+  border-radius: 0;
+  cursor: text;
+}
+.set__hint.is-err {
+  color: var(--warn);
+}
+/* Degraded-but-working, in the amber sense of the notch indicator: an ended trial, a
+   subscription winding down, a licence running on its offline grace (issue #8 / FR-BIL-09).
+   Same colour as an error but it is a state, not a failure — the copy carries the difference. */
+.set__hint.is-warn {
+  color: var(--warn);
+}
+/* A keyrow whose buttons are a list of choices rather than one action + input. */
+.keyrow--wrap {
+  flex-wrap: wrap;
+}
+/* Segmented control — open hairline track, square selected cell */
+.seg {
+  display: flex;
+  gap: 0;
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 0;
+  padding: 0;
+  overflow: hidden;
+}
+.seg__opt {
+  flex: 1;
+  border: none;
+  border-right: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-family: var(--sys);
+  font-size: var(--fs-sm);
+  padding: 7px 0;
+  border-radius: 0;
+  cursor: pointer;
+  transition: background var(--set-motion, 160ms), color var(--set-motion, 160ms);
+}
+.seg__opt:last-child {
+  border-right: none;
+}
+.seg__opt:hover {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--ink) 4%, transparent);
+}
+.seg__opt.is-on {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--ink);
+  font-weight: 650;
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+/* Castle Position (issue #20) — a little Mac silhouette whose six anchor points are drawn where
+   they actually sit. Edges are thin lines, corners small boxes; the chosen one glows in accent.
+   The picker matches the panel's glass language: soft fills, generous radii, calm accent. */
+.castle {
+  display: flex;
+  justify-content: center;
+  padding: 4px 0 2px;
+}
+.castle__screen {
+  position: relative;
+  width: 100%;
+  max-width: 244px;
+  aspect-ratio: 16 / 10;
+  border: 1px solid var(--line-strong);
+  border-radius: 0;
+  background: transparent;
+}
+/* The physical notch bump at the top-centre, so the silhouette reads as a modern Mac. */
+.castle__screen::before {
+  content: "";
+  position: absolute;
+  top: -1px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 40px;
+  height: 5px;
+  background: var(--line-strong);
+  border-radius: 0 0 4px 4px;
+}
+.castle__spot {
+  position: absolute;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  opacity: 0.5;
+  background: color-mix(in srgb, var(--ink) 34%, transparent);
+  border-radius: var(--r-pill);
+  transition: opacity var(--sp), background var(--sp), box-shadow var(--sp);
+}
+.castle__spot:hover {
+  opacity: 0.85;
+}
+.castle__spot.is-on {
+  opacity: 1;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+/* Notch: a short pill riding the top edge, over the drawn notch. */
+.castle__spot--notch {
+  top: 7px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 34px;
+  height: 7px;
+  border-radius: 0 0 5px 5px;
+}
+/* Left / right edges: thin vertical lines, vertically centred. */
+.castle__spot--left {
+  left: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 6px;
+  height: 42px;
+}
+.castle__spot--right {
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 6px;
+  height: 42px;
+}
+/* Bottom-centre: a thin horizontal line hugging the bottom edge. */
+.castle__spot--bc {
+  bottom: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 48px;
+  height: 6px;
+}
+/* Corners: small rounded boxes. */
+.castle__spot--bl {
+  left: 9px;
+  bottom: 9px;
+  width: 22px;
+  height: 16px;
+  border-radius: 5px;
+}
+.castle__spot--br {
+  right: 9px;
+  bottom: 9px;
+  width: 22px;
+  height: 16px;
+  border-radius: 5px;
+}
+
+.icon--close {
+  color: var(--danger);
+}
+.icon--close:hover {
+  color: color-mix(in srgb, var(--danger) 82%, white);
+  background: color-mix(in srgb, var(--danger) 18%, var(--fill-strong));
+}
+
+kbd {
+  display: inline-grid;
+  place-items: center;
+  min-width: 23px;
+  height: 23px;
+  padding: 0 6px;
+  border-radius: var(--r-xs);
+  background: var(--fill-strong);
+  border: 1px solid var(--line);
+  font-family: var(--sys);
+  font-size: var(--fs-sm);
+  font-weight: 700;
+}
+
+/* Settings — subscription delegation (Issue #110). One card per assistant found on this Mac. */
+.sub {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--fill-strong);
+}
+.sub__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.sub__name {
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  color: var(--ink);
+}
+.sub__plan {
+  font-size: var(--fs-sm);
+  color: var(--muted);
+}
+/* The disclosure bullets. Indented rather than bulleted-and-cramped: this is the text the user
+   has to actually read before opting in, so it gets room. */
+.set__list {
+  margin: 6px 0 0;
+  padding-left: 16px;
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+/* Settings — BYOK key entry (saved straight to the Keychain) */
+.keyrow {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+  align-items: stretch;
+}
+.keyrow__input {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  font-size: var(--fs-sm);
+  padding: 8px 10px;
+  height: 34px;
+  box-sizing: border-box;
+  border-radius: 0;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink);
+  outline: none;
+  transition: border-color var(--set-motion, 160ms), background var(--set-motion, 160ms);
+}
+.keyrow__input:hover {
+  border-color: var(--line-strong);
+}
+.keyrow__input:focus {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+}
+.keyrow__btn {
+  font: inherit;
+  font-size: var(--fs-sm);
+  font-weight: 550;
+  padding: 0 14px;
+  height: 34px;
+  box-sizing: border-box;
+  border-radius: 0;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--set-motion, 160ms), border-color var(--set-motion, 160ms), color var(--set-motion, 160ms);
+}
+.keyrow__btn:hover:not(:disabled) {
+  border-color: var(--line-strong);
+  background: color-mix(in srgb, var(--ink) 5%, transparent);
+}
+.keyrow__btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.keyrow__btn--quiet {
+  color: var(--muted);
+  border-color: transparent;
+  background: transparent;
+}
+.keyrow__btn--quiet:hover:not(:disabled) {
+  color: var(--ink);
+  border-color: transparent;
+  background: color-mix(in srgb, var(--ink) 4%, transparent);
+}
+.keyrow__btn--danger {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--line));
+}
+.keyrow__btn--danger:not(:disabled):hover {
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  border-color: var(--warn);
+}
+.confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+/* Privacy & Security data-use badges — small, calm chips stating the policy facts. */
+.badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 6px 0;
+}
+.badge {
+  font-size: 11px;
+  line-height: 1.4;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  background: color-mix(in srgb, var(--ink) 4%, transparent);
+  white-space: nowrap;
+}
+
+/* Keyrow inputs keep outline:none at rest; restore a clear ring on keyboard focus. The composer
+   input rings via its card's :focus-within, so it isn't listed here. */
+.keyrow__input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-color: transparent;
+}
+
+/* approvals (Settings → Approvals) — pending L3 confirmations, full body shown */
+.apprs {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 8px;
+}
+.appr {
+  border: none;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  padding: 10px 0 2px;
+  background: transparent;
+}
+.appr:first-child {
+  border-top: none;
+  padding-top: 2px;
+}
+.appr__top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.appr__op {
+  font-size: var(--fs-md);
+  font-weight: 660;
+  color: var(--ink);
+}
+.appr__route {
+  font-size: var(--fs-xs);
+  color: var(--faint);
+  text-align: right;
+  min-width: 0;
+}
+/* An approval whose origin could not be attributed. Amber, not faint: "something asked to send
+   this and we cannot say what" is the one row in this list that deserves a second look. */
+.appr__route.is-warn {
+  color: var(--warn);
+  font-weight: 600;
+}
+.appr__body {
+  margin: 8px 0;
+  padding: 9px 0;
+  max-height: 160px;
+  overflow: auto;
+  border-radius: 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink);
+  font-family: var(--sys);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  /* the body is the thing being approved — let the user select and check it */
+  user-select: text;
+  -webkit-user-select: text;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--accent) 40%, transparent) transparent;
+}
+.appr__body::-webkit-scrollbar {
+  width: 4px;
+}
+.appr__body::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--ink) 22%, transparent);
+}
+.appr__acts {
+  display: flex;
+  gap: 6px;
+}
+/* the confirming action carries the accent; reject stays neutral */
+.keyrow__btn--go {
+  background: var(--accent);
+  border-color: transparent;
+  color: var(--accent-ink);
+  font-weight: 650;
+}
+.keyrow__btn--go:hover:not(:disabled) {
+  background: var(--accent);
+  filter: brightness(1.07);
+}
+.keyrow__btn--go:disabled {
+  opacity: 0.45;
+  filter: none;
+}
+.keyrow__btn--go:disabled {
+  opacity: 0.45;
+  filter: none;
+}
+
+/* connections list (Settings → Connections) — one row per first-layer service */
+.conns {
+  display: flex;
+  flex-direction: column;
+  margin-top: 10px;
+}
+.conn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+}
+/* Service mark: square tint chip — scan by color without rounded disc chrome. */
+.conn__mark {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  line-height: 1;
+  color: var(--tint);
+  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--tint) 50%, transparent);
+}
+.conn__meta {
+  flex: 1;
+}
+.conn:first-child {
+  border-top: none;
+  padding-top: 2px;
+}
+.conn__meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.conn__name {
+  font-size: var(--fs-md);
+  color: var(--ink);
+  font-weight: 600;
+}
+.conn__state {
+  font-size: var(--fs-xs);
+  color: var(--faint);
+}
+.conn__state.is-ok {
+  color: var(--live);
+}
+.conn__state.is-warn {
+  color: var(--warn);
+}
+.conn__btn:hover:not(:disabled) {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+.conn__btn:active:not(:disabled) {
+  filter: brightness(0.94);
+}
+.conn__btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.conn__btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.conn__btn--off:hover:not(:disabled) {
+  border-color: var(--danger);
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+}
+
+/* corner resize grip — the only way to stretch the borderless panel (no OS resize edges). Two
+   diagonal ticks in the bottom-right corner; drives set_panel_size from a pointer drag
+   (width expands symmetrically about the notch centre; height grows down). */
+.resizer {
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 14px;
+  height: 14px;
+  z-index: 6;
+  cursor: nwse-resize;
+  touch-action: none;
+  opacity: 0.5;
+  background-image:
+    linear-gradient(135deg, transparent 44%, var(--faint) 44%, var(--faint) 56%, transparent 56%),
+    linear-gradient(135deg, transparent 68%, var(--faint) 68%, var(--faint) 80%, transparent 80%);
+  transition: opacity var(--sp);
+}
+.resizer:hover {
+  opacity: 0.95;
+}
+
+@media (max-width: 480px) {
+  .settings__body {
+    grid-template-columns: 54px minmax(0, 1fr);
+  }
+  .settings__nav {
+    padding: 12px 6px 16px;
+  }
+  .settings__nav-mark {
+    margin: 0 auto 12px;
+  }
+  .settings__nav-item {
+    justify-content: center;
+    padding: 8px;
+  }
+  .settings__nav-item > span:last-child {
+    display: none;
+  }
+  .settings__content {
+    padding-right: 14px;
+    padding-left: 14px;
+  }
+  .settings__section-head {
+    margin-right: -14px;
+    margin-left: -14px;
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+    animation: none !important;
+  }
+  .settings__slot > .set {
+    animation: none !important;
+    opacity: 1;
+    transform: none;
+  }
+}

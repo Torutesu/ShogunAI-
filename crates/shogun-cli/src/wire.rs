@@ -2,7 +2,9 @@
 //! (§6.11). Pure — the actual socket work is [`crate::http`]. This is the CLI's half of the REST
 //! contract; the server's half is `shogun_mcp::rest`.
 
-use crate::command::{Command, LessonsCommand, LessonsList, ListOrGet, VisualRecallCommand};
+use crate::command::{
+    Command, LessonsCommand, LessonsList, ListOrGet, VisualRecallCommand, VoiceDictionaryCommand,
+};
 
 /// An HTTP call: method + path (query folded in) + optional body.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -109,6 +111,19 @@ pub fn to_call(command: &Command, include_low: bool) -> Option<HttpCall> {
         Command::Metrics => get("/v1/metrics".to_string()),
         Command::Whoami => get("/v1/profile/whoami".to_string()),
         Command::ProfileSet { body } => post("/v1/profile".into(), body.clone()),
+        Command::VoiceDictionary(command) => match command {
+            VoiceDictionaryCommand::List => get("/v1/voice_dictionary/terms".to_string()),
+            VoiceDictionaryCommand::Create { term } => {
+                post("/v1/voice_dictionary/terms".to_string(), term.clone())
+            }
+            VoiceDictionaryCommand::Update { id, term } => {
+                post(format!("/v1/voice_dictionary/terms/{id}"), term.clone())
+            }
+            VoiceDictionaryCommand::Delete { id } => post(
+                format!("/v1/voice_dictionary/terms/{id}/delete"),
+                String::new(),
+            ),
+        },
         Command::VisualRecall(cmd) => match cmd {
             VisualRecallCommand::Status => get("/v1/visual_recall/status".to_string()),
             VisualRecallCommand::Enable => post(

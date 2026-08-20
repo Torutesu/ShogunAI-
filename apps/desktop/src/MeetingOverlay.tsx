@@ -7,7 +7,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
-import meetingIcon from "./assets/meeting/shogun_meeting.svg";
 import notesIcon from "./assets/meeting/notes.svg";
 import ccIcon from "./assets/meeting/cc.svg";
 import chatIcon from "./assets/meeting/chat.svg";
@@ -28,73 +27,35 @@ import {
   minutesHasContent,
   modeLabel,
   speakerLabel,
-  translationPatchKey,
-  usableTranslation,
   type MeetingLanguage,
   type MeetingMode,
   type Minutes,
   type TranscriptLine,
 } from "./meeting/transforms";
 import { WaveBars } from "./meeting/WaveBars";
+import { MeetingOffer } from "./meeting/MeetingOffer";
+import { MeetingLiveTranscript } from "./meeting/MeetingLiveTranscript";
+import { MeetingRecap } from "./meeting/MeetingRecap";
+import {
+  type CanvasMode,
+  type CaptionSplit,
+  type CaptionTextSize,
+  type CaptionTextWeight,
+  type ChatMessage,
+  type LiveLineEvent,
+  type MeetingSettings,
+  type MeetingTranscript,
+  type MeetingView,
+  type Recap,
+  type TranslationEvent,
+} from "./meeting/overlayTypes";
+import { useLiveLineBuffer } from "./meeting/useLiveLineBuffer";
+
+export type { MeetingView, Recap } from "./meeting/overlayTypes";
 
 /** Must match `Params::default().offer_grace_ms` in shogun-core meeting statemachine. */
 const OFFER_GRACE_MS = 10_000;
 
-export interface MeetingView {
-  state: "idle" | "offered" | "recording" | "wrapping";
-  enabled: boolean;
-  title: string | null;
-  app_bundle_id: string | null;
-  elapsed_ms: number;
-  countdown_ms: number;
-  /** Capture/ASR paused; meeting session still open (waveform toggle). */
-  paused: boolean;
-}
-
-export interface Recap {
-  title: string;
-  duration_minutes: number | null;
-  notes: string | null;
-  captured_events: number;
-  degraded: boolean;
-}
-
-interface MeetingTranscript {
-  lines: TranscriptLine[];
-  only_blanks: boolean;
-}
-
-interface MeetingSettings {
-  meeting_mode: MeetingMode;
-  source_lang: MeetingLanguage;
-  target_lang: MeetingLanguage;
-  my_lang: MeetingLanguage;
-  other_lang: MeetingLanguage;
-}
-
-interface LiveLineEvent {
-  ts: number;
-  speaker: string | null;
-  text: string;
-  translation?: string | null;
-  interim?: boolean;
-}
-
-interface TranslationEvent {
-  ts: number;
-  speaker?: string | null;
-  translation: string;
-}
-
-type CanvasMode = "live_summary" | "timeline";
-type CaptionTextSize = "s" | "m" | "l";
-type CaptionTextWeight = "light" | "bold";
-type CaptionSplit = "side" | "stack";
-
-interface ChatMessage {
-  role: "user" | "assistant";
-  text: string;
-}
 
 const call = (cmd: string, args?: Record<string, unknown>): void => {
   void invoke(cmd, args).catch(() => undefined);
@@ -163,113 +124,6 @@ function defaultPanelSize(surface: MeetingSurface): { w: number; h: number } {
 const HOST_PILL_SIZE = { w: 320, h: 100 } as const;
 /** Tall enough for mode list + one-way/two-way lang row under More. */
 const HOST_PILL_WITH_MENU_SIZE = { w: 320, h: 280 } as const;
-
-function useLiveLineBuffer(active: boolean): {
-  lines: TranscriptLine[];
-  interims: TranscriptLine[];
-  pushLine: (line: TranscriptLine) => void;
-  upsertInterim: (line: TranscriptLine) => void;
-  patchTranslation: (ts: number, speaker: string | null | undefined, translation: string) => void;
-  snapshot: () => TranscriptLine[];
-} {
-  const [lines, setLines] = useState<TranscriptLine[]>([]);
-  const [interims, setInterims] = useState<TranscriptLine[]>([]);
-  const pendingRef = useRef<TranscriptLine[]>([]);
-  const interimRef = useRef<Map<string, TranscriptLine>>(new Map());
-  const transRef = useRef<Map<string, string>>(new Map());
-  const rafRef = useRef<number | null>(null);
-
-  const flush = useCallback((): void => {
-    rafRef.current = null;
-    const batch = pendingRef.current;
-    const patches = transRef.current;
-    const interimBatch = Array.from(interimRef.current.values());
-    pendingRef.current = [];
-    transRef.current = new Map();
-    if (batch.length === 0 && patches.size === 0 && interimBatch.length === 0) {
-      // Still refresh interims when map was cleared.
-      setInterims(interimBatch);
-      return;
-    }
-    setInterims(interimBatch);
-    if (batch.length === 0 && patches.size === 0) return;
-    setLines((prev) => {
-      let next = batch.length > 0 ? [...prev, ...batch] : prev;
-      if (patches.size > 0) {
-        next = next.map((l) => {
-          const translation = patches.get(translationPatchKey(l.ts, l.speaker));
-          return translation != null ? { ...l, translation } : l;
-        });
-      }
-      return next;
-    });
-  }, []);
-
-  const schedule = useCallback((): void => {
-    if (rafRef.current != null) return;
-    rafRef.current = window.requestAnimationFrame(flush);
-  }, [flush]);
-
-  useEffect(() => {
-    if (active) {
-      setLines([]);
-      setInterims([]);
-      pendingRef.current = [];
-      interimRef.current = new Map();
-      transRef.current = new Map();
-      if (rafRef.current != null) {
-        window.cancelAnimationFrame(rafRef.current);
-        rafRef.current = null;
-      }
-      return;
-    }
-    if (rafRef.current != null) {
-      window.cancelAnimationFrame(rafRef.current);
-      flush();
-    }
-  }, [active, flush]);
-
-  useEffect(
-    () => () => {
-      if (rafRef.current != null) window.cancelAnimationFrame(rafRef.current);
-    },
-    [],
-  );
-
-  const pushLine = useCallback(
-    (line: TranscriptLine) => {
-      interimRef.current.delete(line.speaker ?? "");
-      pendingRef.current.push(line);
-      schedule();
-    },
-    [schedule],
-  );
-
-  const upsertInterim = useCallback(
-    (line: TranscriptLine) => {
-      interimRef.current.set(line.speaker ?? "", line);
-      schedule();
-    },
-    [schedule],
-  );
-
-  const patchTranslation = useCallback(
-    (ts: number, speaker: string | null | undefined, translation: string) => {
-      const usable = usableTranslation(translation);
-      if (!usable) return;
-      transRef.current.set(translationPatchKey(ts, speaker), usable);
-      schedule();
-    },
-    [schedule],
-  );
-
-  const snapshot = useCallback(
-    (): TranscriptLine[] => [...lines, ...pendingRef.current],
-    [lines],
-  );
-
-  return { lines, interims, pushLine, upsertInterim, patchTranslation, snapshot };
-}
 
 const MODES: MeetingMode[] = ["transcription", "one_way", "two_way"];
 const LANGS: MeetingLanguage[] = ["auto", "english", "japanese"];
@@ -827,60 +681,14 @@ export function MeetingOverlay(): JSX.Element | null {
       Math.max(0, Math.min(100, (view.countdown_ms / OFFER_GRACE_MS) * 100)),
     );
     return (
-      <div
-        className="ov-offer"
-        onPointerDown={drag}
-        title={t.meetingDisclosureBrief}
-      >
-        <div className="ov__offer ov__drag">
-          <div className="ov__offer-row">
-            <div className="ov__offer-left">
-              <span className="ov__offer-accent" aria-hidden>
-                {Array.from({ length: 5 }, (_, i) => (
-                  <span key={i} className="ov__offer-dot" />
-                ))}
-              </span>
-              <div className="ov__offer-copy">
-                <div className="ov__offer-title">{t.meetingDetected}</div>
-                <div className="ov__offer-sub">{name}</div>
-              </div>
-            </div>
-            <div className="ov__offer-acts ov__nodrag">
-              <button
-                type="button"
-                className="ov__offer-go"
-                onClick={() => call("meeting_start")}
-              >
-                <img
-                  className="ov__offer-ico"
-                  src={meetingIcon}
-                  alt=""
-                  width={18}
-                  height={18}
-                  draggable={false}
-                />
-                {t.meetingTakeNotes}
-              </button>
-              <button
-                type="button"
-                className="ov__offer-skip"
-                onClick={() => call("meeting_not_now")}
-              >
-                {t.meetingNotNow}
-              </button>
-            </div>
-          </div>
-          <div
-            ref={offerProgressRef}
-            className="ov__offer-progress"
-            role="progressbar"
-            aria-valuemin={0}
-            aria-valuemax={100}
-            aria-valuenow={remainPct}
-            aria-label={t.meetingStarting}
-          />
-        </div>
-      </div>
+      <MeetingOffer
+        name={name}
+        remainPct={remainPct}
+        progressRef={offerProgressRef}
+        onDrag={drag}
+        onStart={() => call("meeting_start")}
+        onDismiss={() => call("meeting_not_now")}
+      />
     );
   }
 
@@ -1206,7 +1014,7 @@ export function MeetingOverlay(): JSX.Element | null {
                 { value: "l" as const, label: t.meetingDisplaySizeL },
               ],
               captionTextSize,
-              setCaptionTextSize,
+              (size) => setCaptionTextSize(size),
             )}
           </div>
           <div className="ov__disp-row">
@@ -1222,7 +1030,7 @@ export function MeetingOverlay(): JSX.Element | null {
                 { value: "bold" as const, label: t.meetingDisplayWeightBold },
               ],
               captionWeight,
-              setCaptionWeight,
+              (weight) => setCaptionWeight(weight),
             )}
           </div>
           {settings.meeting_mode !== "transcription" ? (
@@ -1239,7 +1047,7 @@ export function MeetingOverlay(): JSX.Element | null {
                   { value: "stack" as const, label: t.meetingDisplaySplitStack },
                 ],
                 captionSplit,
-                setCaptionSplit,
+                (split) => setCaptionSplit(split),
               )}
             </div>
           ) : null}
@@ -1608,85 +1416,15 @@ export function MeetingOverlay(): JSX.Element | null {
           </div>
         </header>
 
-        <div
-          className={`ov__livebody ov__nodrag${translating ? " ov__livebody--split" : ""}`}
-          data-no-drag
-          ref={liveScrollRef}
-        >
-          {translateKeyIssue && translating ? (
-            <p className="ov__mdegraded ov__mdegraded--warn">
-              {translateKeyIssue === "invalid"
-                ? t.meetingTranslateKeyInvalid
-                : t.meetingTranslateNeedsKey}
-            </p>
-          ) : null}
-          {liveTurns.length === 0 ? (
-            <p className="ov__liveempty">{t.meetingLiveEmpty}</p>
-          ) : translating && captionSplit === "stack" ? (
-            <div
-              className={`ov__stack${
-                settings.meeting_mode === "one_way" && !showOriginal ? " ov__stack--dst-only" : ""
-              }`}
-            >
-              {liveTurns.map((turn, i) => {
-                const translation = usableTranslation(turn.translation);
-                const hideSrc = settings.meeting_mode === "one_way" && !showOriginal;
-                return (
-                  <div className="ov__stack-turn" key={`stack-${turn.ts}-${i}`}>
-                    {!hideSrc ? <p className="ov__stack-src">{turn.text}</p> : null}
-                    <p
-                      className={`ov__stack-dst${translation ? "" : " is-pending"}`}
-                      aria-busy={!translation}
-                    >
-                      {translation ?? ""}
-                    </p>
-                  </div>
-                );
-              })}
-            </div>
-          ) : translating ? (
-            <div
-              className={`ov__split${
-                settings.meeting_mode === "one_way" && !showOriginal ? " ov__split--dst-only" : ""
-              }`}
-            >
-              {!(settings.meeting_mode === "one_way" && !showOriginal) ? (
-                <div className="ov__split-col ov__split-col--src">
-                  {liveTurns.map((turn, i) => (
-                    <p className="ov__split-line" key={`src-${turn.ts}-${i}`}>
-                      {turn.text}
-                    </p>
-                  ))}
-                </div>
-              ) : null}
-              {!(settings.meeting_mode === "one_way" && !showOriginal) ? (
-                <div className="ov__split-div" aria-hidden />
-              ) : null}
-              <div className="ov__split-col ov__split-col--dst">
-                {liveTurns.map((turn, i) => {
-                  const translation = usableTranslation(turn.translation);
-                  return (
-                    <p
-                      className={`ov__split-line${translation ? "" : " is-pending"}`}
-                      key={`dst-${turn.ts}-${i}`}
-                      aria-busy={!translation}
-                    >
-                      {translation ?? ""}
-                    </p>
-                  );
-                })}
-              </div>
-            </div>
-          ) : (
-            <div className="ov__transcript">
-              {liveTurns.map((turn, i) => (
-                <p className="ov__transcript-line" key={`${turn.ts}-${i}`}>
-                  {turn.text}
-                </p>
-              ))}
-            </div>
-          )}
-        </div>
+        <MeetingLiveTranscript
+          turns={liveTurns}
+          settings={settings}
+          translating={translating}
+          split={captionSplit}
+          showOriginal={showOriginal}
+          translateKeyIssue={translateKeyIssue}
+          scrollRef={liveScrollRef}
+        />
 
         <ResizeCornerHandle
           getSize={() => overlaySizeRef.current}
@@ -1717,129 +1455,16 @@ export function MeetingOverlay(): JSX.Element | null {
     );
   }
 
-  const minutesReady = minutes != null && minutesHasContent(minutes);
-  const turns = recapTurns;
-  const hasTranscript = turns.length > 0;
-  const showMinutesPending = hasTranscript && !minutesReady && !minutesNeedsKey;
-  const showMinutesNeedsKey = hasTranscript && !minutesReady && minutesNeedsKey;
-  const showWrapping = !recap && !minutesReady && !hasTranscript;
-
   return (
-    <div className="ov ov--recap" onPointerDown={drag}>
-      <div className="ov__recap">
-        <header className="ov__rhead">
-          <div className="ov__rhead-main ov__drag" onPointerDown={drag}>
-            <div className="ov__rkicker">{t.meetingRecapTitle}</div>
-            <div className="ov__rtitle">{recap?.title ?? name}</div>
-          </div>
-          <div className="ov__rhead-tools">
-            {recap?.duration_minutes != null ? (
-              <span className="ov__rmin">
-                {recap.duration_minutes} {t.meetingRecapMinutes}
-              </span>
-            ) : null}
-            <DragHandle6Dot
-              className="ov__drag ov__panel-grip"
-              title={t.meetingNotes}
-              onPointerDown={drag}
-            />
-          </div>
-        </header>
-
-        <div className="ov__rbody ov__nodrag">
-          {showWrapping ? (
-            <div className="ov__mstatus">
-              <span className="ov__mstatus-dot" aria-hidden />
-              <p className="ov__mpending">{t.meetingMinutesPending}</p>
-            </div>
-          ) : null}
-
-          {minutesReady ? (
-            <div className="ov__minutes ov__minutes--lead">
-              {minutes?.summary ? (
-                <section className="ov__msec ov__msec--summary">
-                  <div className="ov__mhead">{t.meetingMinutesSummary}</div>
-                  <p className="ov__msummary">{minutes.summary}</p>
-                </section>
-              ) : null}
-              {minutes && minutes.decisions.length > 0 ? (
-                <section className="ov__msec">
-                  <div className="ov__mhead">{t.meetingMinutesDecisions}</div>
-                  <ul className="ov__mlist">
-                    {minutes.decisions.map((d, i) => (
-                      <li key={i}>{d}</li>
-                    ))}
-                  </ul>
-                </section>
-              ) : null}
-              {minutes && minutes.next_actions.length > 0 ? (
-                <section className="ov__msec">
-                  <div className="ov__mhead">{t.meetingMinutesNextActions}</div>
-                  <ul className="ov__mlist ov__mlist--actions">
-                    {minutes.next_actions.map((a, i) => (
-                      <li key={i}>
-                        <span className="ov__maction">{a.text}</span>
-                        {a.owner ? <span className="ov__mowner">{a.owner}</span> : null}
-                      </li>
-                    ))}
-                  </ul>
-                </section>
-              ) : null}
-            </div>
-          ) : null}
-
-          {showMinutesPending ? (
-            <div className="ov__mstatus">
-              <span className="ov__mstatus-dot" aria-hidden />
-              <p className="ov__mpending">{t.meetingMinutesPending}</p>
-            </div>
-          ) : null}
-          {showMinutesNeedsKey ? (
-            <p className="ov__mdegraded">{t.meetingMinutesNeedsKey}</p>
-          ) : null}
-
-          {recap?.notes ? (
-            <section className="ov__notes">
-              <div className="ov__mhead">{t.meetingRecapYourNotes}</div>
-              <pre className="ov__rnotes">{recap.notes}</pre>
-            </section>
-          ) : !minutesReady && !hasTranscript ? (
-            <div className="ov__rempty">{t.meetingRecapNoNotes}</div>
-          ) : null}
-
-          <section className="ov__tsec">
-            <div className="ov__mhead">{t.meetingTranscriptHeading}</div>
-            {hasTranscript ? (
-              <div className="ov__tturns">
-                {turns.map((turn, i) => (
-                  <div className="ov__tturn" key={i}>
-                    <div className="ov__tmeta">
-                      <span className="ov__tspeaker">{turn.speakerLabel}</span>
-                      <span className="ov__ttime">{clock(turn.ts)}</span>
-                    </div>
-                    <p className="ov__ttext">{turn.text}</p>
-                  </div>
-                ))}
-              </div>
-            ) : onlyBlanks ? (
-              <p className="ov__tempty">{t.meetingTranscriptOnlyBlanks}</p>
-            ) : (
-              <p className="ov__tempty">{t.meetingTranscriptEmpty}</p>
-            )}
-          </section>
-        </div>
-
-        <footer className="ov__rfoot ov__nodrag">
-          <p className="ov__disclosure">{t.meetingDisclosureRecap}</p>
-          <button
-            type="button"
-            className="ov__rdone"
-            onClick={() => call("meeting_wrapped")}
-          >
-            {t.meetingRecapDone}
-          </button>
-        </footer>
-      </div>
-    </div>
+    <MeetingRecap
+      name={name}
+      recap={recap}
+      minutes={minutes}
+      turns={recapTurns}
+      onlyBlanks={onlyBlanks}
+      minutesNeedsKey={minutesNeedsKey}
+      onDrag={drag}
+      onWrapped={() => call("meeting_wrapped")}
+    />
   );
 }

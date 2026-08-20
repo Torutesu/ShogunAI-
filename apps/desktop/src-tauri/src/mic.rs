@@ -81,7 +81,11 @@ mod mac {
     }
 
     fn address(selector: u32, scope: u32) -> AudioObjectPropertyAddress {
-        AudioObjectPropertyAddress { selector, scope, element: ELEMENT_MAIN }
+        AudioObjectPropertyAddress {
+            selector,
+            scope,
+            element: ELEMENT_MAIN,
+        }
     }
 
     /// Read a `u32`-sized property, or `None` if CoreAudio declines to answer.
@@ -109,8 +113,9 @@ mod mac {
         let addr = address(DEVICES, SCOPE_GLOBAL);
         let mut size: u32 = 0;
         // SAFETY: `addr` is a live local; the call only writes the byte count into `size`.
-        let status =
-            unsafe { AudioObjectGetPropertyDataSize(SYSTEM_OBJECT, &addr, 0, std::ptr::null(), &mut size) };
+        let status = unsafe {
+            AudioObjectGetPropertyDataSize(SYSTEM_OBJECT, &addr, 0, std::ptr::null(), &mut size)
+        };
         if status != NO_ERROR || size == 0 {
             return Vec::new();
         }
@@ -139,8 +144,9 @@ mod mac {
         let addr = address(STREAM_CONFIGURATION, SCOPE_INPUT);
         let mut size: u32 = 0;
         // SAFETY: as above — size query only.
-        let status =
-            unsafe { AudioObjectGetPropertyDataSize(device, &addr, 0, std::ptr::null(), &mut size) };
+        let status = unsafe {
+            AudioObjectGetPropertyDataSize(device, &addr, 0, std::ptr::null(), &mut size)
+        };
         // An AudioBufferList with no buffers is just its header; anything larger means channels.
         status == NO_ERROR && size as usize > std::mem::size_of::<u32>()
     }

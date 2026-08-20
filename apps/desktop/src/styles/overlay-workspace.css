@@ -1,0 +1,722 @@
+/* ---- AI Canvas (Notes) ---- */
+.ov__canvas {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 12px 14px 14px;
+  background: rgba(6, 6, 8, 0.92);
+  -webkit-backdrop-filter: blur(40px) saturate(1.45);
+  backdrop-filter: blur(40px) saturate(1.45);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 18px;
+  overflow: hidden;
+  clip-path: inset(0 round 18px);
+  -webkit-clip-path: inset(0 round 18px);
+  box-shadow: none;
+  filter: drop-shadow(0 18px 44px rgba(0, 0, 0, 0.4));
+  color: #fff;
+}
+.ov__canvas-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.ov__canvas-titles {
+  min-width: 0;
+  cursor: grab;
+}
+.ov__canvas-title {
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+}
+.ov__canvas-status {
+  margin-top: 4px;
+  font-size: 12px;
+  font-weight: 450;
+  color: rgba(255, 255, 255, 0.55);
+}
+.ov__canvas-tools {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  justify-self: end;
+}
+.ov__canvas-modepick {
+  position: relative;
+}
+.ov__canvas-modebtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  box-sizing: border-box;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 7px;
+  padding: 0 9px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ov__canvas-modebtn:hover,
+.ov__canvas-modebtn[aria-expanded="true"] {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.28);
+}
+.ov__canvas-modemenu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  min-width: 220px;
+  padding: 4px;
+  background: rgba(16, 16, 18, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 14px;
+}
+.ov__canvas-modeopt {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  height: 24px;
+  box-sizing: border-box;
+  text-align: left;
+  font: inherit;
+  font-size: 11px;
+  color: #fff;
+  background: none;
+  border: none;
+  border-radius: 7px;
+  padding: 0 9px;
+  cursor: pointer;
+}
+.ov__canvas-modeopt:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+.ov__canvas-modeopt.is-on {
+  background: rgba(255, 255, 255, 0.1);
+}
+.ov__canvas-modeopt.is-disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.ov__canvas-modeopt-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.ov__canvas-check,
+.ov__canvas-check-spacer {
+  width: 12px;
+  flex: none;
+  font-size: 11px;
+  opacity: 0.9;
+}
+.ov__canvas-tag {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: rgba(255, 255, 255, 0.45);
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  padding: 2px 7px;
+}
+.ov__canvas-ext {
+  font-size: 12px;
+  opacity: 0.55;
+}
+.ov__canvas-menudiv {
+  height: 1px;
+  margin: 4px 6px;
+  background: rgba(255, 255, 255, 0.1);
+}
+.ov__canvas-body {
+  flex: 1;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding-right: 2px;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.ov__canvas-body::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+.ov__canvas-summary {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.45;
+  color: rgba(255, 255, 255, 0.92);
+  white-space: pre-wrap;
+}
+.ov__canvas-empty {
+  margin: 0;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.45);
+}
+.ov__canvas-empty--soft {
+  margin-top: 10px;
+  font-size: 11px;
+}
+.ov__canvas-timeline {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+.ov__canvas-step {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: 10px;
+  min-height: 44px;
+}
+.ov__canvas-step-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 4px;
+}
+.ov__canvas-step-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #3b82f6;
+  flex: none;
+}
+.ov__canvas-step-line {
+  flex: 1;
+  width: 2px;
+  margin-top: 4px;
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  min-height: 18px;
+}
+.ov__canvas-step-meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.ov__canvas-step-label {
+  font-size: 13px;
+  font-weight: 600;
+}
+.ov__canvas-step-time {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.45);
+  flex: none;
+}
+.ov__canvas-step-detail {
+  margin: 4px 0 12px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+/* ---- Captions transcript / split / display prefs ---- */
+.ov__langrow--header {
+  flex: none;
+  justify-content: flex-end;
+}
+.ov__disp-anchor {
+  position: relative;
+}
+.ov__disp {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 40;
+  width: 280px;
+  padding: 14px 14px 12px;
+  background: rgba(8, 8, 10, 0.97);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 14px;
+  color: #fff;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(24px) saturate(1.3);
+  -webkit-backdrop-filter: blur(24px) saturate(1.3);
+}
+.ov__disp-title {
+  font-size: 14px;
+  font-weight: 650;
+  margin-bottom: 12px;
+}
+.ov__disp-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 34px;
+  margin-bottom: 8px;
+}
+.ov__disp-row:last-child {
+  margin-bottom: 0;
+}
+.ov__disp-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.72);
+  min-width: 0;
+}
+.ov__disp-ico {
+  width: 16px;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.55);
+  flex: none;
+}
+.ov__seg {
+  display: inline-flex;
+  align-items: stretch;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 11px;
+  overflow: hidden;
+  flex: none;
+}
+.ov__seg-btn {
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.55);
+  background: transparent;
+  border: none;
+  border-right: 1px solid rgba(255, 255, 255, 0.12);
+  padding: 5px 10px;
+  cursor: pointer;
+  min-width: 28px;
+}
+.ov__seg-btn:last-child {
+  border-right: none;
+}
+.ov__seg-btn.is-on {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.16);
+}
+.ov__toggle {
+  position: relative;
+  width: 42px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.18);
+  cursor: pointer;
+  flex: none;
+  transition: background 140ms ease;
+}
+.ov__toggle.is-on {
+  background: #0a84ff;
+}
+.ov__toggle-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  background: #fff;
+  transition: transform 140ms ease;
+}
+.ov__toggle.is-on .ov__toggle-knob {
+  transform: translateX(18px);
+}
+.ov__transcript {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.ov__transcript-line,
+.ov__split-line {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.5;
+  letter-spacing: -0.01em;
+  color: rgba(255, 255, 255, 0.96);
+  white-space: pre-wrap;
+}
+.ov__split-line.is-pending {
+  min-height: 1.5em;
+  color: transparent;
+}
+.ov__livebody--split {
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+.ov__split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 1px minmax(0, 1fr);
+  gap: 0 16px;
+  min-height: min-content;
+  width: 100%;
+}
+.ov__split--dst-only {
+  grid-template-columns: 1fr;
+}
+.ov__split-div {
+  width: 1px;
+  background: rgba(255, 255, 255, 0.1);
+  align-self: stretch;
+}
+.ov__split-col {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+.ov__split-col--src .ov__split-line {
+  color: rgba(255, 255, 255, 0.58);
+}
+.ov__split-col--dst .ov__split-line {
+  color: rgba(255, 255, 255, 0.96);
+}
+/* Stack = each turn source then translation (not two big blocks). */
+.ov__stack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+  min-height: min-content;
+}
+.ov__stack-turn {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.ov__stack-src,
+.ov__stack-dst {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.5;
+  letter-spacing: -0.01em;
+  white-space: pre-wrap;
+}
+.ov__stack-src {
+  color: rgba(255, 255, 255, 0.48);
+}
+.ov__stack-dst {
+  color: rgba(255, 255, 255, 0.96);
+}
+.ov__stack-dst.is-pending {
+  min-height: 1.45em;
+  color: transparent;
+}
+.ov__stack--dst-only .ov__stack-src {
+  display: none;
+}
+.ov__cap--s .ov__transcript-line,
+.ov__cap--s .ov__split-line,
+.ov__cap--s .ov__stack-src,
+.ov__cap--s .ov__stack-dst {
+  font-size: 14px;
+}
+.ov__cap--m .ov__transcript-line,
+.ov__cap--m .ov__split-line,
+.ov__cap--m .ov__stack-src,
+.ov__cap--m .ov__stack-dst {
+  font-size: 16px;
+}
+.ov__cap--l .ov__transcript-line,
+.ov__cap--l .ov__split-line,
+.ov__cap--l .ov__stack-src,
+.ov__cap--l .ov__stack-dst {
+  font-size: 18px;
+}
+.ov__cap--light .ov__transcript-line,
+.ov__cap--light .ov__split-line,
+.ov__cap--light .ov__stack-src,
+.ov__cap--light .ov__stack-dst {
+  font-weight: 400;
+}
+.ov__cap--bold .ov__transcript-line,
+.ov__cap--bold .ov__split-line,
+.ov__cap--bold .ov__stack-src,
+.ov__cap--bold .ov__stack-dst {
+  font-weight: 650;
+}
+
+/* ---- AI Chat sidebar ---- */
+.ov__chat {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 10px 12px 12px;
+  background: rgba(6, 6, 8, 0.92);
+  -webkit-backdrop-filter: blur(40px) saturate(1.45);
+  backdrop-filter: blur(40px) saturate(1.45);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 18px;
+  overflow: hidden;
+  clip-path: inset(0 round 18px);
+  -webkit-clip-path: inset(0 round 18px);
+  box-shadow: none;
+  filter: drop-shadow(0 18px 44px rgba(0, 0, 0, 0.4));
+  color: #fff;
+}
+.ov__chat-head {
+  display: grid;
+  grid-template-columns: 32px 1fr 32px;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.ov__chat-head .ov__panel-grip {
+  justify-self: center;
+}
+.ov__chat-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-bottom: 4px;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.ov__chat-body::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+.ov__chat-empty {
+  margin: auto 0;
+  text-align: center;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.4);
+}
+.ov__chat-msg {
+  max-width: 92%;
+  padding: 8px 10px;
+  border-radius: 12px;
+  font-size: 13px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+}
+.ov__chat-msg--user {
+  align-self: flex-end;
+  background: rgba(255, 255, 255, 0.12);
+}
+.ov__chat-msg--assistant {
+  align-self: flex-start;
+  background: rgba(255, 255, 255, 0.06);
+}
+.ov__chat-inputwrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 12px 12px 10px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 16px;
+}
+.ov__chat-input {
+  width: 100%;
+  box-sizing: border-box;
+  font: inherit;
+  font-size: 13px;
+  color: #fff;
+  background: transparent;
+  border: none;
+  outline: none;
+  padding: 0;
+}
+.ov__chat-input::placeholder {
+  color: rgba(255, 255, 255, 0.4);
+}
+.ov__chat-trail {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.ov__chat-send {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.ov__chat-send:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.ov__chat-send:not(:disabled):hover {
+  background: rgba(255, 255, 255, 0.24);
+}
+
+/* ── daily summary card (issue #10) ─────────────────────────────────────────
+   The Morning brief / Evening wrap, poured out of the notch. Everything completes here —
+   there is no link out to a full view. Ambers are the mock's charm/updated accents; the
+   greeting mark shares the handle's lifted brand blue. */
+.scard {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px 14px 12px;
+}
+.scard__greet {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 2px;
+}
+.scard__mark {
+  width: 20px;
+  height: 13px;
+  flex: none;
+  color: #2f68ff;
+}
+.scard__greet h2 {
+  margin: 0;
+  font-size: var(--fs-xl);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+}
+.scard__date {
+  margin-left: auto;
+  font-size: var(--fs-xs);
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+.scard__charm {
+  margin: 8px 0 10px;
+  padding: 2px 0 2px 10px;
+  border-left: 2px solid #cfa96b;
+  font-size: var(--fs-md);
+  color: #cfa96b;
+}
+.scard__sec {
+  border-top: 1px solid var(--line);
+  padding: 7px 0 5px;
+}
+.scard__label {
+  margin-bottom: 4px;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.scard__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+  font-size: var(--fs-lg);
+  color: var(--ink);
+}
+.scard__row.is-possibly {
+  color: var(--faint);
+}
+.scard__time {
+  min-width: 40px;
+  font-size: var(--fs-sm);
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+.scard__rowtext {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.scard__pill {
+  flex: none;
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-pill);
+  font-size: var(--fs-xs);
+  color: var(--faint);
+}
+.scard__pill.is-updated {
+  color: #cfa96b;
+}
+.scard__src {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  padding: 1px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-pill);
+  background: var(--fill);
+  font: inherit;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  cursor: pointer;
+}
+.scard__src:hover {
+  color: var(--ink);
+  border-color: var(--line-strong);
+}
+.scard__src::after {
+  content: "↗";
+  font-size: 9px;
+  color: var(--faint);
+}
+.scard__outcome {
+  display: flex;
+  gap: 18px;
+  padding: 2px 0 4px;
+  font-variant-numeric: tabular-nums;
+}
+.scard__cell b {
+  display: block;
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--ink);
+}
+.scard__cell b.is-good {
+  color: var(--live);
+}
+.scard__cell span {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+.scard__empty {
+  padding: 8px 0;
+  font-size: var(--fs-md);
+  color: var(--faint);
+}
+.scard__foot {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 8px;
+}

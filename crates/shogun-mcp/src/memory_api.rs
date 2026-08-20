@@ -53,6 +53,10 @@ pub enum Tool {
     VisualRecallDeleteFrame,
     ProfileWhoami,
     ProfileSet,
+    VoiceDictionaryList,
+    VoiceDictionaryCreate,
+    VoiceDictionaryUpdate,
+    VoiceDictionaryDelete,
 }
 
 /// Every tool, for exhaustive iteration (settings / tests).
@@ -85,6 +89,10 @@ pub const ALL_TOOLS: &[Tool] = &[
     Tool::VisualRecallDeleteFrame,
     Tool::ProfileWhoami,
     Tool::ProfileSet,
+    Tool::VoiceDictionaryList,
+    Tool::VoiceDictionaryCreate,
+    Tool::VoiceDictionaryUpdate,
+    Tool::VoiceDictionaryDelete,
 ];
 
 impl Tool {
@@ -119,6 +127,10 @@ impl Tool {
             Tool::VisualRecallDeleteFrame => "visual_recall.delete_frame",
             Tool::ProfileWhoami => "profile.whoami",
             Tool::ProfileSet => "profile.set",
+            Tool::VoiceDictionaryList => "voice_dictionary.list",
+            Tool::VoiceDictionaryCreate => "voice_dictionary.create",
+            Tool::VoiceDictionaryUpdate => "voice_dictionary.update",
+            Tool::VoiceDictionaryDelete => "voice_dictionary.delete",
         }
     }
 
@@ -161,6 +173,7 @@ pub fn tool_level(tool: Tool) -> ApiLevel {
         | Tool::VisualRecallGetFrame
         | Tool::VisualRecallRescanFrame
         | Tool::ProfileWhoami => ApiLevel::Read,
+        Tool::VoiceDictionaryList => ApiLevel::Read,
         // append a user note to the event log — local, reversible.
         Tool::MemoryAppendNote => ApiLevel::Write(Level::L1),
         // a lesson's ON/OFF toggle — same as the Learned UI switch (L1, local, reversible).
@@ -172,6 +185,9 @@ pub fn tool_level(tool: Tool) -> ApiLevel {
         // Deleting a local frame is an L1 write.
         Tool::VisualRecallDeleteFrame => ApiLevel::Write(Level::L1),
         Tool::ProfileSet => ApiLevel::Write(Level::L1),
+        Tool::VoiceDictionaryCreate | Tool::VoiceDictionaryUpdate | Tool::VoiceDictionaryDelete => {
+            ApiLevel::Write(Level::L1)
+        }
         // propose a state change — one-tap confirm in the Notch.
         Tool::StateProposeUpdate => ApiLevel::Write(Level::L2),
         // launch a preset agent — level follows the action it runs.
@@ -333,7 +349,7 @@ mod tests {
         for &t in ALL_TOOLS {
             let _ = tool_level(t); // exhaustive match means this cannot be undefined
         }
-        assert_eq!(ALL_TOOLS.len(), 28);
+        assert_eq!(ALL_TOOLS.len(), 32);
     }
 
     #[test]
@@ -380,6 +396,7 @@ mod tests {
                         | Tool::VisualRecallGetFrame
                         | Tool::VisualRecallRescanFrame
                         | Tool::ProfileWhoami
+                        | Tool::VoiceDictionaryList
                         | Tool::ActionsStatus
                 )),
                 ApiLevel::Write(_) => {
@@ -392,6 +409,9 @@ mod tests {
                             | Tool::VisualRecallSetRetention
                             | Tool::VisualRecallDeleteFrame
                             | Tool::ProfileSet
+                            | Tool::VoiceDictionaryCreate
+                            | Tool::VoiceDictionaryUpdate
+                            | Tool::VoiceDictionaryDelete
                     ))
                 }
                 ApiLevel::PerAction => assert_eq!(t, Tool::ActionsExecute),

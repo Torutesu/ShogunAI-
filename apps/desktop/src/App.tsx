@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
-import { createPortal, flushSync } from "react-dom";
+import { flushSync } from "react-dom";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
@@ -34,16 +34,25 @@ import {
 } from "./fullui/FullUi";
 import { SAMPLE_VIEW } from "./fullui/sample";
 import type { FullUiView } from "./fullui/types";
+import {
+  formatStorageBytes,
+  panelSizeForView,
+  type Appearance,
+  type Citation,
+  type Msg,
+  type OpenPanelView,
+  type Size,
+  type VoiceView,
+} from "./appShell";
+
+export { formatStorageBytes, panelSizeForView } from "./appShell";
+export type { Size, OpenPanelView, VoiceView } from "./appShell";
 
 // SHOGUN panel. A visible, interactive window that hangs from the notch. Opening/closing is driven
 // by direct clicks in the webview (reliable — no dependency on the CGEventTap hover path or a global
 // hotkey), so it always works as long as the window renders. The Rust engine still feeds live
 // `context` (the app you're reading) and the data lives in Rust (CLAUDE.md invariant 1); the webview
 // owns only presentation. All-spaces/background float (NSPanel) is a separate, gated path.
-
-type Appearance = "auto" | "light" | "dark";
-type Citation = { event_id: number; source: string; title: string | null };
-type Msg = { role: "me" | "shogun"; text: string; citations?: Citation[] };
 
 interface ContextPayload {
   bundle_id: string;
@@ -116,15 +125,6 @@ interface StartupHealth {
   memory_fault: string | null;
   /** Store failures since launch; monotonic, so repeated flapping stays visible. */
   memory_faults_total: number;
-}
-
-/** Hold-to-talk voice dialogue (#44). Rust owns lifecycle; notch expands on `voice_state`. */
-export interface VoiceView {
-  phase: "idle" | "recording" | "processing" | "response" | "error";
-  transcript: string;
-  response: string;
-  error: string;
-  level: number;
 }
 
 interface LevelEvent {
@@ -201,18 +201,6 @@ const MIN_H = 240;
 const W_HANDLE_FALLBACK = 180;
 /** Quiet hiding Idle — hardware-notch-sized weld when frontmost is self / unknown. */
 const W_HIDE = 180;
-
-export interface Size {
-  w: number;
-  h: number;
-}
-
-export type OpenPanelView = "chat" | "settings" | "hub";
-
-/** Chat and Settings share one frame. Only Overview owns a separate remembered workspace size. */
-export function panelSizeForView(view: OpenPanelView, chatSize: Size, hubSize: Size): Size {
-  return view === "hub" ? hubSize : chatSize;
-}
 
 // Hard ceiling: panel cannot exceed ¾ of the display the webview is on. `window.screen` tracks the
 // panel's monitor in Tauri; Rust `set_panel_size` enforces the same cap on the native frame.
@@ -2807,91 +2795,85 @@ function DreamSection(): JSX.Element {
 }
 
 /** Hold-to-talk dictation (#44). Beta, off by default; transcript goes to focused field or clipboard. */
+interface VoiceDictionaryTerm {
+  id: number;
+  canonical: string;
+  aliases: string[];
+  locale: string | null;
+  scope: "global" | "bundle" | "surface";
+  scope_ref: string | null;
+  priority: number;
+  enabled: boolean;
+  provenance: "user";
+}
+
 export function VoiceSection(): JSX.Element {
   const [on, setOn] = useState(false);
+  const [sharePersonalVocabulary, setSharePersonalVocabulary] = useState(false);
   const [busy, setBusy] = useState(false);
   const [microphone, setMicrophone] = useState<string | null>(null);
   const [microphones, setMicrophones] = useState<string[]>([]);
-  const [microphonesLoading, setMicrophonesLoading] = useState(false);
-  // Distinguishes "not enumerated yet / enumeration failed" from "enumerated, device absent".
-  // Without it a working microphone reads as disconnected while the list is still in flight.
   const [microphonesLoaded, setMicrophonesLoaded] = useState(false);
   const [microphoneBusy, setMicrophoneBusy] = useState(false);
   const [microphoneError, setMicrophoneError] = useState("");
-  const [microphoneOpen, setMicrophoneOpen] = useState(false);
-  const microphoneModalRef = useRef<HTMLDivElement>(null);
   const [edit, setEdit] = useState({ model: "openai/gpt-oss-120b", has_key: false });
   const [editKeyInput, setEditKeyInput] = useState("");
   const [editBusy, setEditBusy] = useState(false);
   const [editMsg, setEditMsg] = useState("");
+  const [terms, setTerms] = useState<VoiceDictionaryTerm[]>([]);
+  const [termInput, setTermInput] = useState("");
+  const [termLocale, setTermLocale] = useState("");
+  const [termScope, setTermScope] = useState<VoiceDictionaryTerm["scope"]>("global");
+  const [termScopeRef, setTermScopeRef] = useState("");
+  const [termPriority, setTermPriority] = useState("0");
+  const [termEnabled, setTermEnabled] = useState(true);
+  const [editingTerm, setEditingTerm] = useState<VoiceDictionaryTerm | null>(null);
+  const [termsBusy, setTermsBusy] = useState(false);
+  const [termsMsg, setTermsMsg] = useState("");
+  const [termsLoadState, setTermsLoadState] = useState<"loading" | "ready" | "error">("loading");
+
+  const loadTerms = useCallback((): void => {
+    if (!IN_TAURI) {
+      setTermsLoadState("ready");
+      return;
+    }
+    setTermsLoadState("loading");
+    setTermsMsg("");
+    void invoke<VoiceDictionaryTerm[]>("list_voice_dictionary_terms")
+      .then((loaded) => {
+        setTerms(loaded);
+        setTermsLoadState("ready");
+      })
+      .catch((err: unknown) => {
+        setTermsLoadState("error");
+        setTermsMsg(String(err));
+      });
+  }, []);
 
   const loadMicrophones = useCallback((): void => {
-    if (!IN_TAURI) return;
-    setMicrophonesLoading(true);
-    setMicrophoneError("");
+    if (!IN_TAURI || microphonesLoaded) return;
     void invoke<string[]>("get_voice_microphones")
-      .then((list) => {
-        setMicrophones(list);
+      .then((devices) => {
+        setMicrophones(devices);
         setMicrophonesLoaded(true);
       })
-      .catch(() => setMicrophoneError(t.voiceMicrophoneUnavailable))
-      .finally(() => setMicrophonesLoading(false));
-  }, []);
+      .catch(() => setMicrophoneError(t.voiceMicrophoneUnavailable));
+  }, [microphonesLoaded]);
 
   useEffect(() => {
     if (!IN_TAURI) return;
-    void invoke<{ enabled: boolean; microphone?: string | null }>("get_voice_settings")
+    void invoke<{ enabled: boolean; microphone?: string | null; share_personal_dictionary_with_speech_provider: boolean }>("get_voice_settings")
       .then((s) => {
         setOn(s.enabled);
         setMicrophone(s.microphone ?? null);
+        setSharePersonalVocabulary(s.share_personal_dictionary_with_speech_provider);
       })
       .catch(() => undefined);
-    loadMicrophones();
     void invoke<{ model: string; has_key: boolean }>("get_voice_edit_settings")
       .then(setEdit)
       .catch(() => undefined);
-  }, [loadMicrophones]);
-
-  // `aria-modal` tells assistive tech to ignore everything outside the dialog, so focus has to
-  // move in on open, stay inside while it is up, and return to the trigger on close — otherwise
-  // the user is parked on a node their screen reader has just been told to skip. The portal also
-  // renders at the end of <body>, so without the trap Tab would walk the whole settings page.
-  useEffect(() => {
-    if (!microphoneOpen) return;
-    const dialog = microphoneModalRef.current;
-    const trigger = document.activeElement as HTMLElement | null;
-    const focusable = (): HTMLElement[] =>
-      Array.from(dialog?.querySelectorAll<HTMLElement>("button:not([disabled])") ?? []);
-    const selected = dialog?.querySelector<HTMLElement>(".mic-picker__option.is-selected");
-    (selected ?? focusable()[0])?.focus();
-
-    const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === "Escape") {
-        setMicrophoneOpen(false);
-        return;
-      }
-      if (event.key !== "Tab") return;
-      const items = focusable();
-      if (!items.length) return;
-      const edge = event.shiftKey ? items[0] : items[items.length - 1];
-      const wrapTo = event.shiftKey ? items[items.length - 1] : items[0];
-      const active = document.activeElement;
-      if (active === edge || !dialog?.contains(active)) {
-        event.preventDefault();
-        wrapTo.focus();
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => {
-      window.removeEventListener("keydown", onKeyDown);
-      trigger?.focus();
-    };
-  }, [microphoneOpen]);
-
-  // Only claim a device is gone once enumeration has actually succeeded. A pending or failed
-  // list is not evidence that the user's microphone is unplugged.
-  const microphoneMissing =
-    microphonesLoaded && microphone !== null && !microphones.includes(microphone);
+    loadTerms();
+  }, [loadTerms]);
 
   const toggle = (next: boolean): void => {
     if (!IN_TAURI) {
@@ -2913,12 +2895,24 @@ export function VoiceSection(): JSX.Element {
     if (!IN_TAURI) return;
     setMicrophoneBusy(true);
     void invoke("set_voice_microphone", { microphone: selected })
-      .catch((error: unknown) => {
+      .catch(() => {
         setMicrophone(previous);
         setMicrophoneError(t.voiceMicrophoneSaveFailed);
-        console.error("[voice] microphone selection failed", error);
       })
       .finally(() => setMicrophoneBusy(false));
+  };
+
+  const setPersonalVocabularyEgress = (next: boolean): void => {
+    if (!IN_TAURI) {
+      setSharePersonalVocabulary(next);
+      return;
+    }
+    setBusy(true);
+    setTermsMsg("");
+    void invoke("set_voice_dictionary_egress_consent", { consent: next })
+      .then(() => setSharePersonalVocabulary(next))
+      .catch(() => setTermsMsg(t.voiceVocabularyEgressSaveError))
+      .finally(() => setBusy(false));
   };
 
   const saveEditKey = (): void => {
@@ -2941,6 +2935,84 @@ export function VoiceSection(): JSX.Element {
       .then(() => setEdit((current) => ({ ...current, has_key: false })))
       .catch((err: unknown) => setEditMsg(String(err)))
       .finally(() => setEditBusy(false));
+  };
+
+  const resetTermEditor = (): void => {
+    setTermInput("");
+    setTermLocale("");
+    setTermScope("global");
+    setTermScopeRef("");
+    setTermPriority("0");
+    setTermEnabled(true);
+    setEditingTerm(null);
+  };
+
+  const saveTerm = (): void => {
+    const canonical = termInput.trim();
+    if (!canonical || termsBusy) return;
+    const aliases = editingTerm
+      ? editingTerm.aliases.filter((alias) => alias !== editingTerm.canonical)
+      : [];
+    const priority = Number.parseInt(termPriority, 10);
+    if (!Number.isSafeInteger(priority)) {
+      setTermsMsg(t.voiceVocabularyPriorityInvalid);
+      return;
+    }
+    const scopeRef = termScope === "global" ? null : termScopeRef.trim() || null;
+    if (termScope !== "global" && !scopeRef) {
+      setTermsMsg(t.voiceVocabularyScopeRefRequired);
+      return;
+    }
+    setTermsBusy(true);
+    setTermsMsg("");
+    const term = {
+      canonical,
+      aliases,
+      locale: termLocale.trim() || null,
+      scope: termScope,
+      scope_ref: scopeRef,
+      priority,
+      enabled: termEnabled,
+    };
+    const request = editingTerm
+      ? invoke<VoiceDictionaryTerm>("update_voice_dictionary_term", { id: editingTerm.id, term })
+      : invoke<VoiceDictionaryTerm>("create_voice_dictionary_term", { term });
+    void request
+      .then((term) => {
+        setTerms((current) => {
+          const position = current.findIndex((currentTerm) => currentTerm.id === term.id);
+          if (position === -1) return [...current, term];
+          return current.map((currentTerm) => (currentTerm.id === term.id ? term : currentTerm));
+        });
+        resetTermEditor();
+      })
+      .catch((err: unknown) => setTermsMsg(String(err)))
+      .finally(() => setTermsBusy(false));
+  };
+
+  const editTerm = (term: VoiceDictionaryTerm): void => {
+    if (termsBusy) return;
+    setEditingTerm(term);
+    setTermInput(term.canonical);
+    setTermLocale(term.locale ?? "");
+    setTermScope(term.scope);
+    setTermScopeRef(term.scope_ref ?? "");
+    setTermPriority(String(term.priority));
+    setTermEnabled(term.enabled);
+    setTermsMsg("");
+  };
+
+  const removeTerm = (id: number): void => {
+    if (termsBusy) return;
+    setTermsBusy(true);
+    setTermsMsg("");
+    void invoke<boolean>("delete_voice_dictionary_term", { id })
+      .then((deleted) => {
+        if (deleted) setTerms((current) => current.filter((term) => term.id !== id));
+        if (editingTerm?.id === id) resetTermEditor();
+      })
+      .catch((err: unknown) => setTermsMsg(String(err)))
+      .finally(() => setTermsBusy(false));
   };
 
   return (
@@ -2970,133 +3042,23 @@ export function VoiceSection(): JSX.Element {
         </button>
       </div>
       <div className="mic-picker">
-        <div className="mic-picker__head">
-          <label className="set__sublabel" htmlFor="voice-microphone">{t.voiceMicrophone}</label>
-          <button
-            className="mic-picker__refresh"
-            type="button"
-            disabled={microphonesLoading || microphoneBusy}
-            onClick={loadMicrophones}
-          >
-            {microphonesLoading ? t.voiceMicrophoneLoading : t.voiceMicrophoneRefresh}
-          </button>
-        </div>
-        <button
+        <label className="set__sublabel" htmlFor="voice-microphone">{t.voiceMicrophone}</label>
+        <select
           id="voice-microphone"
-          className={`mic-picker__control${microphoneBusy ? " is-busy" : ""}`}
-          type="button"
+          className="mic-picker__control"
+          value={microphone ?? ""}
           disabled={microphoneBusy}
-          aria-haspopup="dialog"
-          aria-expanded={microphoneOpen}
-          aria-controls="voice-microphone-popover"
-          aria-describedby="voice-microphone-hint voice-microphone-error"
-          aria-busy={microphoneBusy}
-          onClick={() => setMicrophoneOpen((open) => !open)}
+          onFocus={loadMicrophones}
+          onChange={(event) => selectMicrophone(event.target.value)}
         >
-          <span className="mic-picker__glyph" aria-hidden="true">
-            <svg viewBox="0 0 16 16" width="16" height="16" fill="none">
-              <rect x="5.25" y="1.5" width="5.5" height="8" rx="2.75" stroke="currentColor" strokeWidth="1.25" />
-              <path d="M3.5 7.75A4.5 4.5 0 0 0 8 12.25a4.5 4.5 0 0 0 4.5-4.5M8 12.25v2.25M5.75 14.5h4.5" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" />
-            </svg>
-          </span>
-          <span className="mic-picker__value">
-            {microphoneMissing && microphone
-              ? t.voiceMicrophoneDisconnected(microphone)
-              : microphone ?? t.voiceMicrophoneDefault}
-          </span>
-          <span className="mic-picker__chevron" aria-hidden="true">
-            <svg viewBox="0 0 12 12" width="12" height="12" fill="none">
-              <path d="m3 4.5 3 3 3-3" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-          </span>
-        </button>
-        {microphoneOpen ? createPortal(
-          <div
-            className="mic-picker__backdrop"
-            onClick={(event) => {
-              // Press and release must both land on the backdrop. Closing on pointerdown would
-              // remove it before the click resolved, letting that click through to whatever
-              // control sits underneath — the voice On/Off toggle, in this panel.
-              if (event.target === event.currentTarget) setMicrophoneOpen(false);
-            }}
-          >
-            <div
-              id="voice-microphone-popover"
-              ref={microphoneModalRef}
-              className="mic-picker__popover"
-              role="dialog"
-              aria-modal="true"
-              aria-label={t.voiceMicrophonePickerTitle}
-            >
-            <div className="mic-picker__popover-head">
-              <span>{t.voiceMicrophonePickerTitle}</span>
-              <span className="mic-picker__popover-actions">
-                <button
-                  className="mic-picker__close"
-                  type="button"
-                  aria-label={t.voiceMicrophoneClose}
-                  onClick={() => setMicrophoneOpen(false)}
-                >
-                  <svg viewBox="0 0 12 12" width="12" height="12" fill="none" aria-hidden="true">
-                    <path d="m3 3 6 6M9 3 3 9" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" />
-                  </svg>
-                </button>
-              </span>
-            </div>
-            <div className="mic-picker__options">
-              <button
-                className={`mic-picker__option${microphone === null ? " is-selected" : ""}`}
-                type="button"
-                onClick={() => {
-                  selectMicrophone("");
-                  setMicrophoneOpen(false);
-                }}
-              >
-                <span className="mic-picker__check" aria-hidden="true">{microphone === null ? "✓" : ""}</span>
-                <span className="mic-picker__option-copy">
-                  <span>{t.voiceMicrophoneDefault}</span>
-                  <small>{t.voiceMicrophoneDefaultHint}</small>
-                </span>
-              </button>
-              {microphoneMissing && microphone ? (
-                <button
-                  className="mic-picker__option is-selected is-unavailable"
-                  type="button"
-                  onClick={() => setMicrophoneOpen(false)}
-                >
-                  <span className="mic-picker__check" aria-hidden="true">!</span>
-                  <span className="mic-picker__option-copy">
-                    <span>{microphone}</span>
-                    <small>{t.voiceMicrophoneDisconnectedHint}</small>
-                  </span>
-                </button>
-              ) : null}
-              {microphones.map((name, index) => (
-                <button
-                  key={`${name}:${index}`}
-                  className={`mic-picker__option${microphone === name ? " is-selected" : ""}`}
-                  type="button"
-                  onClick={() => {
-                    selectMicrophone(name);
-                    setMicrophoneOpen(false);
-                  }}
-                >
-                  <span className="mic-picker__check" aria-hidden="true">{microphone === name ? "✓" : ""}</span>
-                  <span className="mic-picker__option-copy">
-                    <span>{name}</span>
-                    <small>{t.voiceMicrophoneAvailable}</small>
-                  </span>
-                </button>
-              ))}
-            </div>
-            </div>
-          </div>,
-          document.body,
-        ) : null}
-        <p id="voice-microphone-hint" className="set__hint set__hint--quiet">{t.voiceMicrophoneHint}</p>
-        <p id="voice-microphone-error" className="set__hint is-err" aria-live="polite">
-          {microphoneError}
-        </p>
+          <option value="">{t.voiceMicrophoneDefault}</option>
+          {microphone && !microphones.includes(microphone) ? (
+            <option value={microphone}>{t.voiceMicrophoneDisconnected(microphone)}</option>
+          ) : null}
+          {microphones.map((name) => <option key={name} value={name}>{name}</option>)}
+        </select>
+        <p className="set__hint set__hint--quiet">{t.voiceMicrophoneHint}</p>
+        {microphoneError ? <p className="set__hint is-err">{microphoneError}</p> : null}
       </div>
       <div className="set__stack set__stack--key">
         <div className="set__label">{t.voiceEditModel}</div>
@@ -3147,6 +3109,170 @@ export function VoiceSection(): JSX.Element {
           ) : null}
         </div>
         <p className="set__hint set__hint--quiet">{t.voiceEditModelHint}</p>
+      </div>
+      <div className="set__stack voice-vocab">
+        <div className="set__label">{t.voiceVocabulary}</div>
+        <p className="set__hint set__hint--quiet">{t.voiceVocabularyHint}</p>
+        <div className="set__sublabel">{t.voiceVocabularyEgress}</div>
+        <p className="set__hint set__hint--quiet">
+          {sharePersonalVocabulary ? t.voiceVocabularyEgressOn : t.voiceVocabularyEgressOff}
+        </p>
+        <label className="voice-vocab__consent">
+          <input
+            type="checkbox"
+            checked={sharePersonalVocabulary}
+            disabled={busy}
+            onChange={(event) => setPersonalVocabularyEgress(event.target.checked)}
+          />
+          {t.voiceVocabularyEgressConsent}
+        </label>
+        {termsMsg ? <p className="set__hint is-err">{termsMsg}</p> : null}
+        {termsLoadState === "error" ? (
+          <div className="set__hint is-err">
+            {t.voiceVocabularyLoadError}
+            <button className="keyrow__btn keyrow__btn--quiet" type="button" disabled={termsBusy} onClick={loadTerms}>
+              {t.voiceVocabularyRetry}
+            </button>
+          </div>
+        ) : termsLoadState === "loading" ? (
+          <p className="set__hint set__hint--quiet">{t.voiceVocabularyLoading}</p>
+        ) : terms.length ? (
+          <div className="voice-vocab__terms" aria-label={t.voiceVocabulary}>
+            {terms.map((term) => (
+              <span className={`voice-vocab__term${term.enabled ? "" : " is-disabled"}`} key={term.id}>
+                {term.canonical}
+                <button
+                  type="button"
+                  aria-label={t.voiceVocabularyEditAria(term.canonical)}
+                  disabled={termsBusy}
+                  onClick={() => editTerm(term)}
+                >
+                  {t.voiceVocabularyEdit}
+                </button>
+                <button
+                  type="button"
+                  aria-label={t.voiceVocabularyRemoveAria(term.canonical)}
+                  disabled={termsBusy}
+                  onClick={() => removeTerm(term.id)}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        ) : (
+          <p className="set__hint set__hint--quiet">{t.voiceVocabularyEmpty}</p>
+        )}
+        <div className="voice-vocab__form">
+          <label className="voice-vocab__field">
+            <span>{t.voiceVocabularyTermLabel}</span>
+            <input
+              className="keyrow__input"
+              type="text"
+              placeholder={t.voiceVocabularyPlaceholder}
+              value={termInput}
+              autoComplete="off"
+              onChange={(event) => {
+                setTermInput(event.target.value);
+                setTermsMsg("");
+              }}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter") return;
+                event.preventDefault();
+                saveTerm();
+              }}
+            />
+          </label>
+          <details className="voice-vocab__advanced">
+            <summary>{t.voiceVocabularyAdvanced}</summary>
+            <div className="voice-vocab__advanced-grid">
+              <label className="voice-vocab__field">
+                <span>{t.voiceVocabularyLocale}</span>
+                <input
+                  className="keyrow__input"
+                  type="text"
+                  placeholder={t.voiceVocabularyLocalePlaceholder}
+                  value={termLocale}
+                  autoComplete="off"
+                  onChange={(event) => {
+                    setTermLocale(event.target.value);
+                    setTermsMsg("");
+                  }}
+                />
+              </label>
+              <label className="voice-vocab__field">
+                <span>{t.voiceVocabularyScope}</span>
+                <select
+                  aria-label={t.voiceVocabularyScope}
+                  value={termScope}
+                  disabled={termsBusy}
+                  onChange={(event) => {
+                    setTermScope(event.target.value as VoiceDictionaryTerm["scope"]);
+                    setTermsMsg("");
+                  }}
+                >
+                  <option value="global">{t.voiceVocabularyScopeGlobal}</option>
+                  <option value="bundle">{t.voiceVocabularyScopeBundle}</option>
+                  <option value="surface">{t.voiceVocabularyScopeSurface}</option>
+                </select>
+              </label>
+              {termScope !== "global" ? (
+                <label className="voice-vocab__field voice-vocab__field--wide">
+                  <span>{t.voiceVocabularyScopeRef}</span>
+                  <input
+                    className="keyrow__input"
+                    type="text"
+                    placeholder={t.voiceVocabularyScopeRefPlaceholder}
+                    value={termScopeRef}
+                    autoComplete="off"
+                    onChange={(event) => {
+                      setTermScopeRef(event.target.value);
+                      setTermsMsg("");
+                    }}
+                  />
+                </label>
+              ) : null}
+              <label className="voice-vocab__field">
+                <span>{t.voiceVocabularyPriority}</span>
+                <input
+                  className="keyrow__input"
+                  type="number"
+                  aria-label={t.voiceVocabularyPriority}
+                  value={termPriority}
+                  step="1"
+                  onChange={(event) => {
+                    setTermPriority(event.target.value);
+                    setTermsMsg("");
+                  }}
+                />
+              </label>
+              <label className="voice-vocab__enabled">
+                <input
+                  type="checkbox"
+                  checked={termEnabled}
+                  disabled={termsBusy}
+                  onChange={(event) => setTermEnabled(event.target.checked)}
+                />
+                {t.voiceVocabularyEnabled}
+              </label>
+            </div>
+          </details>
+          <div className="voice-vocab__actions">
+          <button
+            className="keyrow__btn keyrow__btn--go"
+            type="button"
+            disabled={!termInput.trim() || termsBusy}
+            onClick={saveTerm}
+          >
+            {editingTerm ? t.voiceVocabularySave : t.voiceVocabularyAdd}
+          </button>
+          {editingTerm ? (
+            <button className="keyrow__btn keyrow__btn--quiet" type="button" disabled={termsBusy} onClick={resetTermEditor}>
+              {t.voiceVocabularyCancel}
+            </button>
+          ) : null}
+          </div>
+        </div>
       </div>
     </section>
   );
@@ -3693,14 +3819,6 @@ function LaunchAtLoginSection(): JSX.Element {
       <div className="set__hint">{t.launchAtLoginHint}</div>
     </section>
   );
-}
-
-export function formatStorageBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
-  const value = bytes / 1024 ** index;
-  return `${value >= 10 || index === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[index]}`;
 }
 
 export function VisualRecallSection(): JSX.Element {
