@@ -119,6 +119,12 @@ for (const file of files) {
     category: String(data.category ?? 'Product'),
     author: String(data.author ?? 'ShogunAI'),
     image: String(data.image ?? CATEGORY_IMAGES[String(data.category ?? 'Product')] ?? CATEGORY_IMAGES.Product),
+    // Credit line for the cover, when the photo needs one (CC BY: author,
+    // licence, and the fact that it was changed). Empty for our own artwork.
+    imageCredit: String(data.imageCredit ?? ''),
+    imageCreditHref: String(data.imageCreditHref ?? ''),
+    imageLicense: String(data.imageLicense ?? ''),
+    imageLicenseHref: String(data.imageLicenseHref ?? ''),
     readingMinutes: readingMinutes(content),
     html: renderToStaticMarkup(createElement(compiled.default)),
   });

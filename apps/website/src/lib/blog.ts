@@ -9,6 +9,10 @@ export type PostMeta = {
   category: string;
   author: string;
   image: string;
+  imageCredit?: string;
+  imageCreditHref?: string;
+  imageLicense?: string;
+  imageLicenseHref?: string;
   readingMinutes: number;
 };
 
