@@ -20,7 +20,7 @@ use shogun_agents::permission::{Action, Level, LocalAction, SendAction};
 
 use crate::block::{BlockRef, ContextBlock, ScoreInputs, SourceKind};
 use crate::budget::{fit_to_budget, HeuristicEstimator};
-use crate::confidence::{assemble_facts, band, may_inform_action, Band};
+use crate::confidence::{assemble_facts, band, may_inform_action, treat_fact, Band, Treatment};
 
 /// The kind of state record a candidate came from. Fine-grained enough to map deterministically
 /// to a sensible on-device action.
@@ -123,19 +123,23 @@ pub const MAX_ACTIONS: usize = 4;
 /// Map a state candidate to the on-device action it should propose. Everything here is a
 /// [`LocalAction`] (L1/L2), so nothing from this map can auto-run off the device; the one
 /// send-family candidate lives in [`send_action_for`], where the type itself forces L3.
-fn action_for(state: &StateCandidate) -> LocalAction {
+/// `display` is the confidence-treated summary (Medium arrives `possibly:`-prefixed): the
+/// notification text an L1 auto-run puts on screen must go through the same FR-ST-20 gate as the
+/// fact channel — a 0.6-confidence guess auto-fired as an unqualified assertion is exactly what
+/// the gate exists to prevent.
+fn action_for(state: &StateCandidate, display: &str) -> LocalAction {
     match state.kind {
         // Look the entity up in local memory.
         StateKind::Person | StateKind::Project => LocalAction::LocalSearch { query: state.subject.clone() },
         // Nudge about a commitment either direction.
         StateKind::CommitmentMine | StateKind::CommitmentTheirs => {
-            LocalAction::ShowNotification { text: state.summary.clone() }
+            LocalAction::ShowNotification { text: display.to_string() }
         }
         // Draft a reply (draft-stop default — never sends).
         StateKind::OpenLoopReplyNeeded => LocalAction::SaveDraft { target: "reply" },
         // Surface the waiting/other loop.
         StateKind::OpenLoopWaiting | StateKind::OpenLoopOther => {
-            LocalAction::ShowNotification { text: state.summary.clone() }
+            LocalAction::ShowNotification { text: display.to_string() }
         }
     }
 }
@@ -205,9 +209,17 @@ pub fn assemble(
                 score += 0.5;
             }
         }
-        let action = Action::Local(action_for(s));
+        // The same confidence gate the fact channel applies (FR-ST-20): High verbatim, Medium
+        // `possibly:`-prefixed. Both the rationale line and any notification text a candidate
+        // carries use this treated form — never the raw summary of a Medium guess.
+        let display = match treat_fact(&s.summary, s.confidence) {
+            Treatment::Fact(t) | Treatment::Possible(t) => t,
+            // Unreachable: may_inform_action already excluded the Low band above.
+            Treatment::Excluded => continue,
+        };
+        let action = Action::Local(action_for(s, &display));
         let level = action.required_level();
-        scored.push((score, ActionCandidate { action, level, rationale: s.summary.clone() }));
+        scored.push((score, ActionCandidate { action, level, rationale: display.clone() }));
         // B-5 scoring rule: a reply-needed loop also proposes the DraftReply send. The level is
         // DERIVED from the send action (→ L3, invariant 4) — never assigned here.
         if let Some(send) = send_action_for(s) {
@@ -215,7 +227,7 @@ pub fn assemble(
             let level = action.required_level();
             scored.push((
                 score + REPLY_DRAFT_BONUS,
-                ActionCandidate { action, level, rationale: s.summary.clone() },
+                ActionCandidate { action, level, rationale: display.clone() },
             ));
         }
     }
@@ -438,6 +450,42 @@ mod tests {
             );
         }
         assert_eq!(effector.0.get(), 0, "the effector was never handed a send");
+    }
+
+    #[test]
+    fn medium_confidence_candidates_are_surfaced_weakly_never_assertively() {
+        // FR-ST-20 on the ACTION channel: a 0.6-confidence commitment auto-fires an L1
+        // notification; its text and rationale must carry the same weak prefix as the fact list.
+        let states = vec![
+            StateCandidate {
+                kind: StateKind::CommitmentTheirs,
+                summary: "Bob owes you the contract by Friday".into(),
+                subject: "Bob".into(),
+                confidence: 0.6,
+                relevance: 0.9,
+            },
+            StateCandidate {
+                kind: StateKind::CommitmentTheirs,
+                summary: "Ana owes you the review".into(),
+                subject: "Ana".into(),
+                confidence: 0.95,
+                relevance: 0.9,
+            },
+        ];
+        let cache = assemble(screen(), &states, "", &Intent::default(), &[]);
+        let weak = "possibly: Bob owes you the contract by Friday";
+        assert!(cache.actions.iter().any(|a| {
+            a.rationale == weak
+                && a.action == Action::Local(LocalAction::ShowNotification { text: weak.into() })
+        }));
+        // High confidence stays verbatim.
+        assert!(cache.actions.iter().any(|a| {
+            a.rationale == "Ana owes you the review"
+                && a.action
+                    == Action::Local(LocalAction::ShowNotification {
+                        text: "Ana owes you the review".into(),
+                    })
+        }));
     }
 
     #[test]
