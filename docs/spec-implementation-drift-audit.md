@@ -30,6 +30,22 @@
 | 16 | Visual recall（2026-08-02 例外） | CLAUDE.md・requirements とも記載あり | 実装あり（`screen_frames` テーブル、`crates/shogun-core/src/capture/visual_recall.rs`） | 一致 |
 | 17 | 会議ASR（2026-08-05 例外） | CLAUDE.md・requirements FR-MT-13 とも Deepgram 既定に更新済み | 実装あり（`crates/shogun-core/src/audio/asr/deepgram.rs`） | 一致 |
 
+
+## 1.5 追加監査（2026-08-20 第2巡・外向けコピー作成中に発覚）
+
+外向けコピーを書くために「いま何が保存され、何が外に出るか」を洗い直したところ、**要件定義が実装に追いついていない領域**がさらに見つかった。18〜21 は外部への説明文に直結するため、優先度が高い。
+
+| # | 項目 | 文書の記述 | 実装の事実（根拠） | 対応 |
+|---|---|---|---|---|
+| 18 | **Visual recall の保持期間** | CLAUDE.md 不変条件2の例外「圧縮 JPEG として暗号化済みメモリ DB に**最大 72 時間**だけ保持」 | 既定は**3日（=72時間）**だが、**ユーザーが 1〜3,650 日（最長10年）まで設定できる**（`crates/shogun-core/src/capture/visual_recall.rs`: `DEFAULT_RETENTION_DAYS = 3` / `PRESET_RETENTION_DAYS = [1..7]` / `MAX_CUSTOM_RETENTION_DAYS = 3_650`）。「最大72時間」は**もはや上限ではない** | **要判断**（§2-C） |
+| 19 | **音声のクラウド送信範囲** | CLAUDE.md 2026-08-05 例外は「**Meeting notes の既定 ASR**」に限定して Deepgram を許可 | **音声入力（hold-to-talk, Issue #44）も Deepgram live WS を第一経路にしている**（`apps/desktop/src-tauri/src/voice_lane.rs`。Whisper はフォールバック）。ディスクには書かないが、**会議以外の音声も外部へ出ている**。例外の文言がこの経路を含んでいない | **要判断**（§2-D） |
+| 20 | **音声入力（push-to-talk）** | requirements v1.0 に**記述ゼロ**（"PTT" / "音声入力" とも 0 件） | 実装済み。ショートカット長押し中だけマイクを開き、離した瞬間に文字起こし＋文脈結合＋応答（`voice_lane.rs` / `voice_shortcut.rs` / `voice_session.rs` / `VoiceOverlay.tsx`）。設計は `docs/push-to-talk-voice-design.md` | docs更新（要件化） |
+| 21 | **Scribe（その場書き換え）** | requirements v1.0 に**記述ゼロ** | 実装済み。任意アプリの編集可能フィールドを AX で掴み、指示に沿って**その場で書き換える**（`apps/desktop/src-tauri/src/scribe.rs` / `ScribeOverlay.tsx`）。保護スパンの保存検証つき | docs更新（要件化） |
+| 22 | **feature-status.csv の網羅性** | 「機能単位の状況はこれを正とする」と本監査 §1 で位置付けた | 音声入力・Scribe・Visual recall の**行が存在しない**（Meeting のエラー行のみ）。最終更新は 2026-08-05 | docs更新（行を追加するまで「正」と呼べない） |
+| 23 | **設計だけで未着手のもの** | — | Evening Wrap / 朝夜サマリー配達（`docs/daily-summaries-design.md`「設計確定・実装未着手」）、Skills（`docs/skills-concept-and-ui-design.md`「設計提案・未着手」）。**外向けコピーで語ってはいけない範囲** | 記録のみ |
+
+**結論**: 「一日をテキストで記憶する。画像は保存しない」という説明は、**2026-08-02 の Visual recall と 2026-07-30 の音声入力が入った時点で古い**。外向けの説明はこの監査の内容に合わせて書き直した（`docs/product-hunt-launch.md` §1）。
+
 ---
 
 ## 2. オーナー判断が要る項目
@@ -53,6 +69,22 @@
 ### B. requirements の未実装マーキング
 
 `docs/requirements-v1.0.md` は「これから作るもの」として書かれた文書だが、実態は大半が実装済み。**要件の文言（MUST/SHOULD）は受け入れ基準として有効なので書き換えない**方針を取り、実装状況の追跡は `docs/feature-status.csv` に一本化した。requirements 側には位置付けの注記のみ入れている。
+
+
+### C. Visual recall の保持上限（#18）
+
+不変条件2の例外は「最大72時間」と書かれているが、実装はユーザー設定で最長10年まで伸ばせる。**どちらかに寄せる必要がある。**
+
+- **文書を実装に合わせる場合**: 「保持期間はユーザーが選ぶ（既定3日、上限10年）。期限切れは自動削除」と書き換える。プライバシー訴求の強度は下がるので、外向けには「**既定オフ**・端末内・暗号化・期間はあなたが決める・自動削除」の順で言う（そう書いてある）。
+- **実装を文書に合わせる場合**: プリセットを 1〜7 日に限定し、カスタム上限を撤廃する（実装は `MAX_CUSTOM_RETENTION_DAYS` の変更のみで済む）。
+
+**どちらでもよいが、決めるまで外向けに「72時間で消えます」と書かない。**現に消えない設定が存在する。
+
+### D. 音声入力のクラウド ASR（#19）
+
+2026-08-05 の例外は会議 ASR に限定して書かれている。実装では**音声入力（hold-to-talk）も Deepgram を第一経路**にしており、例外の外側にある経路が動いている状態。ディスクへ書かない点と `mip_opt_out` は共通なので、**実務上の危険度は低いが、記録がない**。
+
+**次の一手**: CLAUDE.md 不変条件2の例外文を「Meeting notes の ASR」から「**会議 ASR および音声入力（push-to-talk）の live STT**」へ広げ、UI 開示（設定 → 音声）に同じ文言を出す。この監査では文書を勝手に広げず、判断待ちとして記録に留めた。
 
 ---
 

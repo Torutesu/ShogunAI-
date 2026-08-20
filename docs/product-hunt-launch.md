@@ -22,43 +22,61 @@
 
 ---
 
-## 1. ユーザーに伝えるべき8点
+## 1. ユーザーに伝えるべきこと（実装の現在地に合わせた版）
 
-PHで読まれるのは最初の3行と画像だけ。**この8点以外は当日の武器にしない。**各点に「事実（実装の裏取り）」と「言い方（EN / JA）」を付けてある。
+> **2026-08-20 改訂の理由**: 旧版は「一日をテキストで記憶する／画像は保存しない」を軸に書いていたが、**それは今のプロダクトではない**。音声入力（hold-to-talk）と Scribe（その場書き換え）が入り、Visual recall で画像を持つ経路もできている。**「スクショは一切残しません」は、Visual recall をONにした人にとっては嘘になる。**以下は実装を読み直して書き直したもの（根拠は `docs/spec-implementation-drift-audit.md` §1.5）。
 
-### ① 一日を記憶する。ただし録らない
+### ① 押して、話す。文字になって、そのまま入る
 
-**事実**: 画面上のテキストを macOS の accessibility 層から取る。スクリーンショット・録画・音声ファイルを一切作らない（`CLAUDE.md` 不変条件2）。パスワードマネージャとプライベートブラウジングは既定で除外、セキュアな入力欄はサブツリーごとスキップ。任意のアプリ・ウィンドウタイトルを除外できる。
+**事実**: ショートカットを**長押ししている間だけ**マイクが開く。離した瞬間に文字起こしが着地する。ライブ文字起こしはクラウドの音声認識を第一経路にし、オフライン時はオンデバイスへ落ちる。**音声はディスクにもDBにも書かない**（`voice_lane.rs`）。
 
-> **EN**: It remembers your workday as text — what you read, wrote and decided. No screenshots, no video, no audio files, ever. Password managers and private browsing are excluded by default, and you can exclude anything else.
+> **EN**: Hold a key, talk, let go — the text lands where you were typing. It isn't blind dictation either: it already has your work context, so names and projects come out right. Audio is never written to disk or to the database.
 >
-> **JA**: 一日の仕事をテキストとして記憶します。読んだもの、書いたもの、決めたこと。スクリーンショットも録画も音声ファイルも作りません。パスワード管理アプリとプライベートブラウジングは既定で除外、他も自分で除外できます。
+> **JA**: キーを長押しして話し、離すと、打っていた場所にテキストが着地します。ただの音声入力ではありません。仕事の文脈を持っているので、人名やプロジェクト名が正しい形で出ます。音声はディスクにもデータベースにも書きません。
 
-### ② データはあなたのPCから出ない
+### ② どのアプリの文章でも、選んで言えば書き換わる（Scribe）
 
-**事実**: メモリは端末上の暗号化DB（SQLCipher）。エクスポートと全削除は設定のボタン。モデル呼び出しで外に出るのは、そのリクエストに必要な分だけ。
+**事実**: 任意アプリの編集可能フィールドを Accessibility 経由で掴み、指示どおりに**その場で**書き換える。同一ターゲット・同一値・同一レンジであることを検証してから適用し、保護スパン（固有名詞・数値等）の保存も確認する（`scribe.rs`）。
 
-> **EN**: Your memory lives in an encrypted database on your own machine. Export it or delete all of it from settings — not a support ticket. When a model call happens, only what that request needs leaves, and it's logged in the app.
+> **EN**: Select text in any app, say what you want changed, and it rewrites in place — no copy, no paste, no separate window. It verifies it's editing exactly what you selected before it touches anything.
 >
-> **JA**: 記憶はあなたのPCの中、暗号化されたデータベースにあります。書き出しも全削除も設定のボタンひとつで、問い合わせは要りません。モデルを呼ぶときに外へ出るのはそのリクエストに必要な分だけで、送信の記録はアプリに残ります。
+> **JA**: どのアプリでも、文章を選んで「こう直して」と言えば、その場で書き換わります。コピーもペーストも別ウィンドウも要りません。選んだ場所そのものを編集していることを確認してから触ります。
 
-### ③ ログではなく「状態」を持つ
+### ③ 一日を記憶する（既定はテキスト）
 
-**事実**: state tables（people / projects / commitments / open_loops）。全レコードに**根拠（provenance）と確度（confidence）**が付き、低確度を事実として混ぜない。ここが検索ツールとの分岐点。
+**事実**: 画面上のテキストを OS の accessibility 層から取る。既定では画像・動画・音声ファイルを作らない。パスワードマネージャとプライベートブラウジングは既定で除外、セキュアな入力欄はサブツリーごとスキップ。任意のアプリ・ウィンドウタイトルを除外できる。秘匿値は書き込み前にマスク。
+
+> **EN**: By default it remembers your day as text — what you read, wrote and decided. Not a screen recorder: no video, no audio files. Password managers and private browsing are excluded out of the box, and you can exclude anything else.
+>
+> **JA**: 既定では、一日をテキストとして記憶します。読んだもの、書いたもの、決めたこと。画面録画ではありません。動画も音声ファイルも作りません。パスワード管理アプリとプライベートブラウジングは最初から除外で、他も自分で除外できます。
+
+### ④ テキストが取れない画面は、あなたが許可したときだけ画像で補う（Visual recall）
+
+**事実**: **既定オフ。**ONにすると、AXでテキストが取れない画面（Canvas系UI・画像内の文字）を圧縮JPEGとして**端末内の暗号化DB**に保持し、オンデバイスOCRでテキスト化する。保持期間は**ユーザーが選ぶ**（既定3日）。期限切れは自動削除。クラウドへは送らない。
+
+> **EN**: Some windows give up no text — canvas apps, images, PDFs rendered as pixels. Turn visual recall on and it keeps an encrypted frame of those, on your machine, for a retention window you choose, and reads them with on-device OCR. It ships off. Nothing goes to the cloud, and expired frames delete themselves.
+>
+> **JA**: テキストを一切返さない画面があります。キャンバス系のアプリ、画像、画素として描かれたPDF。Visual recall をONにすると、そういう画面だけを暗号化したまま端末内に保持し、オンデバイスのOCRで読みます。既定はオフです。クラウドには送りません。期限が来たフレームは自動で消えます。
+
+> ⚠ **コピーの注意**: 保持期間は現状**ユーザー設定で最長10年まで伸ばせる**（既定3日）。**「72時間で消えます」と書かない。**上限の扱いは `docs/spec-implementation-drift-audit.md` §2-C で判断待ち。
+
+### ⑤ ログではなく「状態」を持つ
+
+**事実**: state tables（people / projects / commitments / open_loops）。全レコードに根拠（provenance）と確度（confidence）。低確度を事実として混ぜない。
 
 > **EN**: It doesn't just store a log, it keeps the state of your work — people, projects, commitments, open loops. Every record carries where it came from and how confident it is, and a low-confidence guess is never handed to you as a fact.
 >
 > **JA**: ログを溜めるだけでなく、仕事の状態を持ちます。人、プロジェクト、約束、やりかけ。すべてのレコードに根拠と確度が付いていて、確度の低い推測を事実として渡すことはありません。
 
-### ④ ノッチから、1ボタンで仕事が終わる
+### ⑥ ノッチから、1ボタンで仕事が終わる
 
 **事実**: 文脈アクションは常時プリアセンブル（押してから集めない）。返信ドラフト、会議のrecap、予定の確保、ファイリング、フォローアップ。プリセットエージェント7種。
 
-> **EN**: Open the notch and the actions are already there — the reply drafted with the right history, the recap, the calendar hold, the follow-up. It doesn't start thinking when you press the button; the context is assembled before you ask.
+> **EN**: Open the notch and the actions are already there — the reply drafted with the right history, the recap, the calendar hold, the follow-up. It doesn't start thinking when you press the button.
 >
-> **JA**: ノッチを開くと、アクションはもう並んでいます。経緯を踏まえた返信の下書き、会議のrecap、予定の確保、フォローアップ。押してから考え始めるのではなく、聞かれる前に文脈を組み立ててあります。
+> **JA**: ノッチを開くと、アクションはもう並んでいます。経緯を踏まえた返信の下書き、recap、予定の確保、フォローアップ。押してから考え始めることはありません。
 
-### ⑤ 送信は必ずあなたが承認する
+### ⑦ 送信は必ずあなたが承認する
 
 **事実**: 読み取りは自動（L1/L2）、外部送信は例外なくL3。全文プレビューを見てからでないと出ない。draft-stop は既定ON。外部送信は全件トレーサビリティに残る。
 
@@ -66,45 +84,49 @@ PHで読まれるのは最初の3行と画像だけ。**この8点以外は当�
 >
 > **JA**: 読み取りは自動です。送信は自動になりません。人に宛てたもの（メール、チャット、招待）は必ず止まり、本文全部を見せてから確認を取ります。勝手に送る設定は用意していません。
 
-### ⑥ 会議は議事録で終わらない
+### ⑧ 会議は議事録で終わらない
 
 **事実**: 会議の検知、ライブ文字起こし、関係の履歴を踏まえたrecap、交わした約束の追跡。**音声はディスクに書かない**（一時ファイルも作らない）。会議機能は丸ごとオフにできる。
 
 > **EN**: Meetings end with the next step, not a transcript. It knows what you promised this person last month, so the recap comes with the follow-up already drafted. Audio is never written to disk — not even a temp file — and you can leave meetings off entirely.
 >
-> **JA**: 会議が終わったときに残るのは議事録ではなく、次の一手です。先月その人と交わした約束を踏まえてrecapが出て、フォローアップの下書きまで進みます。音声はディスクに書きません（一時ファイルも作りません）。会議機能ごとオフにもできます。
+> **JA**: 会議が終わったときに残るのは議事録ではなく、次の一手です。先月その人と交わした約束を踏まえてrecapが出て、フォローアップの下書きまで進みます。音声はディスクに書きません。一時ファイルも作りません。会議機能ごとオフにもできます。
 
-### ⑦ 夜のうちに整理して、朝に渡す
+### ⑨ 夜のうちに整理して、朝に渡す
 
-**事実**: Dream Cycle（アイドル・ロック中のバッチ）で一日の生データを状態へ。Morning Brief は根拠リンク付きで、材料が薄い日も空にしない。
+**事実**: Dream Cycle（アイドル・ロック中のバッチ）で一日の生データを状態へ。Morning Brief は根拠リンク付き。
 
-> **EN**: Overnight it reprocesses the day into state. In the morning you get three lines: what moved, what's gone stale, and what you owe people — each linking back to the evidence it came from.
+> **EN**: Overnight it reprocesses the day into state. In the morning you get what moved, what's gone stale, and what you owe people — each line linking back to the evidence it came from.
 >
-> **JA**: 夜のうちに一日分を状態へ作り直します。朝に出るのは3行です。動いたもの、古くなったもの、そして誰に何を借りているか。どの行にも根拠へのリンクが付いています。
+> **JA**: 夜のうちに一日分を状態へ作り直します。朝に出るのは、動いたもの、古くなったもの、誰に何を借りているか。どの行にも根拠へのリンクが付いています。
 
-### ⑧ 頭脳はあなたが選ぶ
+### ⑩ 頭脳はあなたが選ぶ／記憶は開いている
 
-**事実**: BYOK（Anthropic / OpenAI互換）またはサブスク委譲（契約済みの Claude / ChatGPT / Gemini プランをローカルCLI経由で使う）。秘密はKeychainのみ。加えてMemory API（MCP / CLI / REST）で他のAIから同じ記憶を読める。
+**事実**: BYOK（Anthropic / OpenAI互換）またはサブスク委譲（契約済みの Claude / ChatGPT / Gemini プランをローカルCLI経由で使う）。秘密はKeychainのみ。Memory API（MCP / CLI / REST）で他のAIから同じ記憶を読める。
 
 > **EN**: Bring your own model — your API key, or the Claude/ChatGPT/Gemini plan you already pay for. And your memory isn't locked in our UI: it's reachable over MCP, so your other AI tools can read the same context.
 >
 > **JA**: モデルはあなたが選びます。自分のAPIキーでも、すでに契約している Claude / ChatGPT / Gemini のプランでも動きます。記憶はこちらのUIに閉じ込めません。MCP経由で開いているので、他のAIツールから同じ文脈を読めます。
 
-### 動作環境（毎回セットで言う。片方だけ書かない）
+### プライバシーの言い方（**この3文で言い切る。単独で「保存しません」と書かない**）
 
-いま動くものと、これから来るものを**必ず2文で並べる**。前者だけだと「Macアプリ」に閉じ込められ、後者だけだと嘘になる。
+> **EN**: By default it keeps text, not pixels. Visual recall is opt-in, stays encrypted on your machine, and deletes itself on the schedule you set. Audio is never written to disk — live transcription runs through a speech provider that is opted out of model training, and what's stored is the text.
+>
+> **JA**: 既定で残すのはテキストで、画素ではありません。Visual recall は自分でONにする機能で、端末内で暗号化されたまま、あなたが決めた期間で自動的に消えます。音声はディスクに書きません。ライブ文字起こしは学習利用をオプトアウトした音声認識を通り、保存されるのはテキストだけです。
+
+### 動作環境（毎回セットで言う。片方だけ書かない）
 
 > **EN**: On macOS today — macOS 14+, Apple Silicon. Windows and mobile are in the works, and the list is per-platform: tell us which machine you're on.
 >
 > **JA**: 今日動くのは macOS 版です（macOS 14 以上 / Apple Silicon）。Windows とモバイルも作っています。登録のときに、どのマシンを使っているか教えてください。
 
-> 「PC」という言葉の扱い: プロダクトは**PCの中で動くもの**として語る（tagline の通り）。ただし「今日どのOSで動くか」を隠さない。ここを曖昧にすると、Windowsで登録した人が招待時に落胆し、その1件がコメント欄に貼られる。
-
 ### 言わないこと
 
-- **未実測の性能数値**（「展開100ms」「CPU 5%」等）。社内SLOであって実機実測が未了。**外向けに数字で約束しない**
-- **招待の時期・順番**（オーナー方針）。聞かれたら §7 Q1 の答え方で返す
-- 未実装機能を実装済みのように言うこと。ギャラリーとコピーで語るのは `docs/feature-status.csv` が implemented の範囲だけ
+- **「スクショは一切保存しません」の単独使用**。Visual recall がある以上、そのまま書くと不正確。上の3文で言う
+- **「72時間で消えます」**。上限は現状ユーザー設定次第（§1-④の注意）
+- **未実装のもの**: Evening Wrap / 朝夜サマリー配達、Skills（どちらも設計のみ・未着手）
+- **招待の日付・ウェーブ番号**（オーナー方針）
+- **未実測の性能数値**（展開100ms・CPU 5% 等。社内SLOであって実機実測が未了）
 
 ---
 
@@ -140,13 +162,15 @@ Your personal AG on your PC. Built to finish real work.
 
 ### 2.2 Description（上限260）
 
-**採用案（EN・253字）**
+**採用案（EN・251字）**
 ```
-Personal AGI for your work, on your PC. It remembers your day as text — no screenshots, no recordings — keeps the state of it, and finishes things: replies, recaps, calendar holds. Nothing sends without your approval. macOS now, Windows and mobile next.
+Personal AGI for your work, on your PC. Hold a key and talk, or let it read your day — it keeps the state of your work and finishes it: replies, rewrites in place, recaps, holds. Nothing sends without your approval. macOS now, Windows and mobile next.
 ```
 
 **JA**
-> 仕事の全域で動くパーソナルAGIを、あなたのPCの中に。一日をテキストとして記憶し（スクショも録画も残しません）、人・約束・やりかけの状態を持ち、返信やrecap、予定の確保まで終わらせます。送信は必ずあなたの承認を挟みます。今日動くのは macOS 版で、Windows とモバイルも作っています。
+> 仕事の全域で動くパーソナルAGIを、あなたのPCの中に。キーを長押しして話しても、一日を読ませておいてもいい。仕事の状態を持ったうえで、返信も、その場の書き換えも、recapも、予定の確保も終わらせます。送信は必ずあなたの承認を挟みます。今日動くのは macOS 版で、Windows とモバイルも作っています。
+
+> 旧版（「テキストで記憶する／スクショは残さない」）は使わない。Visual recall がある以上そのままでは不正確で、しかも音声入力とScribeという一番強い入口を捨てている。
 
 ### 2.3 その他の欄
 
@@ -174,10 +198,11 @@ Personal AGI for your work, on your PC. It remembers your day as text — no scr
 |---|---|---|
 | 1 | ヒーロー: 黒(#080808)にノッチが開いた瞬間。goldは1アクセント | **Personal AGI, scoped to your work.** ／ 仕事の全域で動くAGIを、あなたのPCの中に |
 | 2 | デモ動画（§3.2） | — |
-| 3 | Recall: 自然文の問いに、根拠付きで答えている実画面 | **It knows the state of your work — with receipts.** ／ 仕事の状態を、根拠付きで把握しています |
+| 3 | **音声入力＋Scribe**: キーを押しながら話す → テキストが着地 → 選んで指示 → その場で書き換わる | **Hold. Talk. Done.** ／ 押して、話して、終わり |
+| 3b | Recall: 自然文の問いに、根拠付きで答えている実画面 | **It knows the state of your work — with receipts.** ／ 仕事の状態を、根拠付きで把握しています |
 | 4 | 実行: 1ボタン → 下書き → **送信前の承認プレビュー** | **Nothing sends until you say send.** ／ 送信は、あなたが押すまで起きません |
 | 5 | Morning Brief | **Overnight it organizes. Morning it briefs you.** ／ 夜のうちに整理して、朝に渡します |
-| 6 | プライバシー対比図: *Text, on your machine* ↔ *No screenshots. No recordings. No audio files.* | **We built it so we can't see your day.** ／ こちらから見られない作りにしてあります |
+| 6 | プライバシー図: *Text by default · Visual recall is opt-in, encrypted, auto-deleted · Audio never written to disk* の3行 | **We built it so we can't see your day.** ／ こちらから見られない作りにしてあります |
 | 7 | できること一覧＋動作環境 | **What it does today.** ／ いま出来ること（最下部に小さく `On macOS today. Windows and mobile in the works.`） |
 
 **7枚目の中身**（`docs/feature-status.csv` が implemented の範囲だけ）:
@@ -202,7 +227,7 @@ Personal AGI for your work, on your PC. It remembers your day as text — no scr
 | 4 | 25-33 | 送信前の全文プレビュー＋承認 | `Nothing leaves your machine without approval.` | 承認なしにPCから出るものはない |
 | 5 | 33-43 | 会議の検知 → recap＋フォローアップ下書き | `Meetings end with the next step, not a transcript.` | 会議のあとに残るのは、議事録ではなく次の一手 |
 | 6 | 43-53 | 翌朝の Morning Brief | `It works overnight. You wake up briefed.` | 夜のうちに動く。起きたら整理が終わっている |
-| 7 | 53-62 | 設定のプライバシー表記 | `No screenshots. No recordings. No audio files. Ever.` | スクショも録画も音声ファイルも、一切作らない |
+| 7 | 53-62 | 設定のプライバシー画面（Visual recall のトグルと保持期間が見えている状態） | `Text by default. Visual recall is yours to switch on. Audio never touches disk.` | 既定はテキスト。画像はあなたがONにしたときだけ。音声はディスクに触れない |
 | 8 | 62-70 | ロゴ＋CTA | `ShogunAI — personal AGI for your work. On macOS today; Windows and mobile next.` | ShogunAI — 仕事のためのパーソナルAGI。今日は macOS 版 |
 
 > 撮影ルール: ダミーアカウントで撮り、実在の人名・社名・本文を映さない。**倍速編集しない**（実機性能を疑われる）。ノッチの展開は等速で1回。
@@ -220,7 +245,9 @@ Hi Product Hunt ⚔
 
 Here's what that looks like in practice.
 
-**It remembers your day as text.** What you read, wrote and decided. It is not a screen recorder: no screenshots, no video, no audio files, ever. Capture runs through the operating system's accessibility layer, and it stays in an encrypted database on your own machine. Password managers and private browsing are excluded by default; you can exclude anything else; export and delete-everything are buttons in settings.
+**You talk to it, or you don't.** Hold a shortcut and speak: the text lands where you were typing, with your work context already applied, so names and projects come out right. Select any text in any app and say what to change, and it rewrites in place — no copy, no paste, no second window. Audio is never written to disk or to the database.
+
+**It remembers your day.** By default that's text — what you read, wrote and decided — pulled through the accessibility layer and kept in an encrypted database on your own machine. Some windows give up no text at all, so there's an opt-in visual recall for those: encrypted frames, on your machine, read with on-device OCR, deleted on the schedule you choose. It ships off. Password managers and private browsing are excluded by default, you can exclude anything else, and export and delete-everything are buttons in settings.
 
 **It keeps the state, not just the log.** People, projects, commitments, open loops — each record carrying where it came from and how confident it is. A low-confidence guess never reaches you dressed as a fact. That's the difference between a search box and something that can act.
 
@@ -249,7 +276,9 @@ Product Hunt に ShogunAI を出しました ⚔
 
 具体的にはこうなります。
 
-**一日をテキストとして記憶します。** 読んだもの、書いたもの、決めたこと。画面録画ではありません。スクリーンショットも録画も音声ファイルも、一切作りません。取得は OS の accessibility 層を通り、データはあなたのPCの中、暗号化されたデータベースに残ります。パスワード管理アプリとプライベートブラウジングは既定で除外、他も自分で除外できます。書き出しと全削除は設定のボタンです。
+**話しかけてもいいし、話しかけなくてもいい。** ショートカットを長押しして話すと、打っていた場所にテキストが着地します。仕事の文脈が乗っているので、人名もプロジェクト名も正しい形で出ます。どのアプリの文章でも、選んで「こう直して」と言えばその場で書き換わります。コピーもペーストも別ウィンドウも要りません。音声はディスクにもデータベースにも書きません。
+
+**一日を記憶します。** 既定で残すのはテキストです。読んだもの、書いたもの、決めたこと。取得は OS の accessibility 層を通り、あなたのPCの中の暗号化データベースに残ります。テキストを一切返さない画面もあるので、そこだけは Visual recall（自分でONにする機能）で補います。暗号化したまま端末内に置き、オンデバイスのOCRで読み、あなたが決めた期間で自動的に消えます。既定はオフです。パスワード管理アプリとプライベートブラウジングは既定で除外、他も自分で除外でき、書き出しと全削除は設定のボタンです。
 
 **ログではなく状態を持ちます。** 人、プロジェクト、約束、やりかけ。すべてのレコードに根拠と確度が付いています。確度の低い推測が事実の顔をして出てくることはありません。ここが、検索窓と「動けるもの」の分かれ目です。
 
@@ -275,9 +304,9 @@ Product Hunt に ShogunAI を出しました ⚔
 
 **(a) 6時間後 — 技術編（builder票を拾う）**
 
-> **EN**: A few people asked how capture works without screenshots, so: we walk the accessibility tree of the focused window and keep text only — bounded walk, near-duplicate collapse, password managers and private browsing excluded by default, secure text fields skipped at the subtree level. Secrets are redacted before anything is written. The database is encrypted on device; hot for 24 hours, warm for 30 days, then compressed. Forgetting is part of the design, not a cleanup job.
+> **EN**: A few people asked how the default capture path works, so: we walk the accessibility tree of the focused window and keep text only — bounded walk, near-duplicate collapse, password managers and private browsing excluded by default, secure text fields skipped at the subtree level. Secrets are redacted before anything is written. The database is encrypted on device; hot for 24 hours, warm for 30 days, then compressed. Forgetting is part of the design, not a cleanup job.
 >
-> **JA**: スクショなしでどう取っているのか、という質問が来たので。フォーカス中のウィンドウのアクセシビリティツリーを範囲を区切って辿り、テキストだけを残します。ほぼ同じ内容は畳み、パスワード管理アプリとプライベートブラウジングは既定で除外、セキュアな入力欄はサブツリーごと飛ばします。秘匿値は書き込む前にマスクします。データベースは端末上で暗号化。24時間はホット、30日はウォーム、その先は圧縮。忘れることは後片付けではなく設計の一部です。
+> **JA**: 既定の取得経路がどうなっているのか、という質問が来たので。フォーカス中のウィンドウのアクセシビリティツリーを範囲を区切って辿り、テキストだけを残します。ほぼ同じ内容は畳み、パスワード管理アプリとプライベートブラウジングは既定で除外、セキュアな入力欄はサブツリーごと飛ばします。秘匿値は書き込む前にマスクします。データベースは端末上で暗号化。24時間はホット、30日はウォーム、その先は圧縮。忘れることは後片付けではなく設計の一部です。
 
 **(b) 10〜12時間後 — 使い方の実例（滞在時間を伸ばす）**
 
@@ -332,14 +361,24 @@ Product Hunt に ShogunAI を出しました ⚔
 > **JA**: もっともな指摘で、人間並みの知能を主張してはいません。狭い意味で使っています。単機能に対する「全域」です。メール、カレンダー、ドキュメント、チャット、会議、画面にまたがる一つの記憶とエージェントが、人・約束・やりかけの状態を根拠と確度付きで持ち、その状態から動く。これを指す良い言葉があれば、乗り換えます。
 
 **Q4. Windows は？ / iPhone は？（PC と書いてある以上、必ず来る）**
-> **EN**: The build that runs today is macOS — 14+, Apple Silicon. Windows and mobile are being built; I'm not going to guess at dates here. This was never meant as a Mac product: we started there because the accessibility layer let us read on-screen text reliably without recording anything, which is what makes the no-screenshots promise work. Sign up and tell me which machine you're on — that's the input I'm using to decide what ships next.
+> **EN**: The build that runs today is macOS — 14+, Apple Silicon. Windows and mobile are being built; I'm not going to guess at dates here. This was never meant as a Mac product: we started there because the accessibility layer let us read on-screen text reliably without recording the screen, which is what keeps the default path text-only. Sign up and tell me which machine you're on — that's the input I'm using to decide what ships next.
 >
-> **JA**: 今日動くビルドは macOS 版です（macOS 14 以上 / Apple Silicon）。Windows とモバイルは開発中で、時期はここでは言いません。もともとMac専用のつもりで作っていません。録画せずに画面のテキストを確実に読める入口がそこにあったので、最初に出ただけです。「スクショを撮らない」という約束はそこで成立しています。登録するときにどのマシンを使っているか教えてください。次に何を出すかの判断材料にします。
+> **JA**: 今日動くビルドは macOS 版です（macOS 14 以上 / Apple Silicon）。Windows とモバイルは開発中で、時期はここでは言いません。もともとMac専用のつもりで作っていません。画面を録らずにテキストを確実に読める入口がそこにあったので、最初に出ただけです。既定の取得がテキストだけで済むのはそのためです。登録するときにどのマシンを使っているか教えてください。次に何を出すかの判断材料にします。
 
 **Q5. 監視ツールでは？ 全部見られているのでは**
-> **EN**: It's the first thing I'd ask too. Three structural answers: capture is text only — no screenshots, no video, no audio files; it stays in an encrypted database on your own machine; and you can exclude any app or window title, with password managers and private browsing excluded by default. Full export and delete-everything are buttons in settings, not a support form.
+> **EN**: It's the first thing I'd ask too, and I'd rather be precise than reassuring. The default capture is text, not pixels — no video, no audio files. There's an opt-in visual recall for windows that yield no text: encrypted frames, on your machine, on-device OCR, deleted on the schedule you set, and off until you turn it on. Everything stays in an encrypted database on your machine; you can exclude any app or window title, with password managers and private browsing excluded by default; and export and delete-everything are buttons in settings, not a support form.
 >
-> **JA**: 私も最初に聞きます。構造で3つ答えます。取得するのはテキストだけで、スクショも録画も音声ファイルも作りません。データは端末上の暗号化データベースに留まります。どのアプリもウィンドウタイトルも除外でき、パスワード管理アプリとプライベートブラウジングは既定で除外です。書き出しと全削除は設定のボタンで、問い合わせフォームではありません。
+> **JA**: 私も最初に聞きます。安心させる言い方より、正確な言い方をします。既定で取るのはテキストで、画素ではありません。動画も音声ファイルも作りません。テキストを返さない画面のために Visual recall があり、これは自分でONにする機能です。暗号化したフレームを端末内に置き、オンデバイスのOCRで読み、あなたが決めた期間で自動的に消えます。既定はオフです。データはすべて端末上の暗号化データベースに留まり、どのアプリもウィンドウタイトルも除外でき、パスワード管理アプリとプライベートブラウジングは既定で除外。書き出しと全削除は設定のボタンで、問い合わせフォームではありません。
+
+**Q5-b. Visual recall って結局スクショじゃないの**
+> **EN**: It's frames, and I won't pretend otherwise — that's why it ships off and stays a switch you flip. The difference that matters is where they live and how long: encrypted on your machine, never uploaded, read by on-device OCR, and deleted automatically on the retention you pick. If you never turn it on, no image is ever stored.
+>
+> **JA**: 画像です。そこはごまかしません。だから既定はオフで、あなたが切り替えるものにしてあります。違うのは置き場所と期間です。端末内で暗号化したまま、アップロードはせず、オンデバイスのOCRで読み、あなたが選んだ保持期間で自動的に消えます。ONにしなければ、画像は一枚も保存されません。
+
+**Q5-c. 音声入力の声はどこへ行く**
+> **EN**: Live transcription runs through a cloud speech provider that is opted out of model training, and the audio is never written to disk or to the database — it exists as a stream while you're holding the key. Offline, it falls back to on-device transcription. What gets stored is the text.
+>
+> **JA**: ライブ文字起こしは、学習利用をオプトアウトしたクラウドの音声認識を通ります。音声はディスクにもデータベースにも書きません。キーを押している間だけ流れているものです。オフラインではオンデバイスの文字起こしに落ちます。保存されるのはテキストだけです。
 
 **Q6. でもクラウドに送っているんでしょ**
 > **EN**: Only what a request needs, and only when you ask. Reading is local. When a model call happens, the relevant chunk goes to the provider you chose with your own credentials, and every outbound call is logged in the app. Sends to other people are a separate category: those always stop for your approval with the full body shown first.
@@ -410,7 +449,7 @@ Product Hunt に ShogunAI を出しました ⚔
 >
 > Personal AGI for your work — narrowly: general across your work instead of narrow to one task.
 >
-> It remembers your day inside your own machine as text (no screenshots, no recordings), keeps the state of it, and finishes things. Nothing sends without your approval.
+> Hold a key and talk, and the text lands where you were typing. Select any text and say what to change, and it rewrites in place. It remembers your day inside your own machine, keeps the state of your work, and finishes things — nothing sends without your approval.
 >
 > On macOS today. Windows and mobile next.
 > ```
@@ -421,7 +460,7 @@ Product Hunt に ShogunAI を出しました ⚔
 >
 > 仕事の全域で動くパーソナルAGIです。人間並みの知能という意味ではなく、単機能アプリの対義語としての「全域」です。
 >
-> PCの中で一日をテキストとして記憶し、人・約束・やりかけの状態を持って、実行まで行きます。送信は必ず承認を挟みます。
+> キーを長押しして話すと、打っていた場所にテキストが着地します。文章を選んで「こう直して」と言えば、その場で書き換わります。PCの中で一日を記憶し、仕事の状態を持って、実行まで行きます。送信は必ず承認を挟みます。
 >
 > 今日動くのは macOS 版です。Windows とモバイルも作っています。
 > ```
@@ -434,9 +473,9 @@ Product Hunt に ShogunAI を出しました ⚔
 
 ### LinkedIn
 
-> **EN**: We opened early access for ShogunAI on Product Hunt today. We call it a personal AGI in a deliberately narrow sense: general across your work rather than narrow to a single task. It remembers your workday inside your own machine as text — never screenshots or recordings — keeps the state of it (people, projects, commitments, open loops, each with a source and a confidence), and turns that into finished work: drafted replies, meeting recaps that know the relationship, calendar holds, a morning brief. Anything addressed to another person stops for your approval first. The macOS build runs today; Windows and mobile are in the works.
+> **EN**: We opened early access for ShogunAI on Product Hunt today. We call it a personal AGI in a deliberately narrow sense: general across your work rather than narrow to a single task. It remembers your workday inside your own machine — text by default, with an opt-in visual recall for windows that yield none — keeps the state of it (people, projects, commitments, open loops, each with a source and a confidence), and turns that into finished work: drafted replies, meeting recaps that know the relationship, calendar holds, a morning brief. Anything addressed to another person stops for your approval first. The macOS build runs today; Windows and mobile are in the works.
 >
-> **JA**: 本日、ShogunAI のアーリーアクセスを Product Hunt で公開しました。パーソナルAGIと呼んでいますが、意味は狭く取っています。単機能ではなく、仕事の全域で動くという意味です。PCの中で一日をテキストとして記憶し（スクショや録画は残しません）、人・プロジェクト・約束・やりかけの状態を根拠と確度付きで持ち、そこから返信の下書き、関係の経緯を踏まえた会議recap、予定の確保、朝のブリーフまで進めます。人に宛てたものは必ず承認を挟みます。今日動くのは macOS 版で、Windows とモバイルも作っています。
+> **JA**: 本日、ShogunAI のアーリーアクセスを Product Hunt で公開しました。パーソナルAGIと呼んでいますが、意味は狭く取っています。単機能ではなく、仕事の全域で動くという意味です。PCの中で一日を記憶し（既定で残すのはテキストです）、人・プロジェクト・約束・やりかけの状態を根拠と確度付きで持ち、そこから返信の下書き、関係の経緯を踏まえた会議recap、予定の確保、朝のブリーフまで進めます。人に宛てたものは必ず承認を挟みます。今日動くのは macOS 版で、Windows とモバイルも作っています。
 
 ### Discord / Slack
 
