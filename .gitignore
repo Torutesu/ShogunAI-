@@ -14,6 +14,7 @@ build/
 **/target/
 # Spike metrics output (JSONL); never commit captured/derived data
 /apps/desktop/src-tauri/gen/
+/apps/shell/src-tauri/gen/
 *.jsonl
 models/
 legacy/screenpipe-ref/

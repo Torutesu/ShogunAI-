@@ -1,11 +1,8 @@
 name: ci
 
-# Four jobs: (1) pure crates (shogun-core + spike-harness) — platform-independent, tested
-# and clippy-checked on Linux; (2) desktop frontend typecheck/build; (3) the macOS/arm64
-# shell — compile + clippy only (the on-device MEASUREMENTS need a physical notch Mac);
-# (4) the batch relay (apps/api) — the one process that holds the operator's Anthropic key.
-# Phase 1 (docs/phase1-implementation-plan.md) grows the pure-crate job as shogun-core,
-# shogun-memory, shogun-fusion, etc. come online — all covered by the workspace commands.
+# Five jobs: (1) pure crates — platform-independent, tested and clippy-checked on Linux;
+# (2) desktop + PC-shell frontend typecheck/build; (3) the macOS/arm64 shell — compile + clippy
+# only; (4) the batch relay; (5) the Windows/Linux windowed shell — clippy on windows-latest.
 
 on:
   # Push only fires on the integration branch(es). Feature branches are validated by the
@@ -19,6 +16,7 @@ on:
     paths:
       - "crates/**"
       - "apps/desktop/**"
+      - "apps/shell/**"
       - "apps/api/**"
       - "packages/**"
       - "scripts/**"
@@ -28,6 +26,7 @@ on:
     paths:
       - "crates/**"
       - "apps/desktop/**"
+      - "apps/shell/**"
       - "apps/api/**"
       - "packages/**"
       # The invariant guards live here. Without this filter a PR that weakens a guard — or the
@@ -53,9 +52,10 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       # shogun-core + spike-harness are platform-independent; the macOS shell
-      # (shogun-desktop-spike) only builds on-device, so it is excluded here.
+      # (shogun-desktop-spike) and the Windows/Linux windowed shell (shogun-shell)
+      # need WebKit/WebView2 so they are excluded here.
       - name: clippy (warnings deny via workspace lints)
-        run: cargo clippy --workspace --exclude shogun-desktop-spike --all-targets
+        run: cargo clippy --workspace --exclude shogun-desktop-spike --exclude shogun-shell --all-targets
       # The real HTTPS transport (shogun-core feature `net` → reqwest/rustls) is off by default so
       # the line above stays reqwest-free; verify it compiles+lints on its own.
       - name: clippy shogun-core net transport
@@ -83,7 +83,7 @@ jobs:
       - name: shogun-mcp binary (clippy)
         run: cargo clippy -p shogun-core --features db --bin shogun-mcp
       - name: test
-        run: cargo test --workspace --exclude shogun-desktop-spike
+        run: cargo test --workspace --exclude shogun-desktop-spike --exclude shogun-shell
       # Invariant guards (each self-tests its detector, then checks the real tree/source):
       # - FR-TR-03: only the single traced egress (shogun-core) may depend on an HTTP/WS client.
       # - invariant 7: Secret::expose() only in allowlisted files (no raw-secret leak to log/DB).
@@ -129,6 +129,10 @@ jobs:
       - run: pnpm --filter @shogun-ai/desktop lint
       - run: pnpm --filter @shogun-ai/desktop test
       - run: pnpm --filter @shogun-ai/desktop build:vite
+      - run: pnpm --filter @shogun-ai/shell typecheck
+      - run: pnpm --filter @shogun-ai/shell lint
+      - run: pnpm --filter @shogun-ai/shell test
+      - run: pnpm --filter @shogun-ai/shell build:vite
 
   api:
     name: batch relay (typecheck + test)
@@ -184,3 +188,27 @@ jobs:
       - run: pnpm --filter @shogun-ai/desktop build:vite
       - name: clippy the macOS shell (warnings deny via workspace lints)
         run: cargo clippy -p shogun-desktop-spike --all-targets
+
+  pc-shell:
+    name: Windows shell (clippy + platform secrets)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @shogun-ai/shell build:vite
+      - name: clippy the Windows/Linux shell
+        run: cargo clippy -p shogun-shell --all-targets
+      - name: test platform + shell lib
+        run: |
+          cargo test -p shogun-platform
+          cargo test -p shogun-shell --lib
+

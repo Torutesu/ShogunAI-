@@ -8,8 +8,8 @@
 # That happened on issue #81 step 3 and cost a red CI round trip; running this before pushing
 # turns that into a local failure instead.
 #
-# The macOS shell (shogun-desktop-spike) is excluded everywhere: it only builds on-device, and
-# macos-14 CI remains its only verification.
+# The macOS shell (shogun-desktop-spike) and the Windows/Linux shell (shogun-shell) are
+# excluded everywhere: they need a platform webview, and their CI jobs compile them.
 #
 # Keep in step with .github/workflows/ci.yml — the combinations below mirror its jobs.
 set -euo pipefail
@@ -19,7 +19,7 @@ run() {
     "$@"
 }
 
-run cargo clippy --workspace --exclude shogun-desktop-spike --all-targets
+run cargo clippy --workspace --exclude shogun-desktop-spike --exclude shogun-shell --all-targets
 run cargo clippy -p shogun-core --features net --all-targets
 run cargo clippy -p shogun-core --features db --all-targets
 run cargo clippy -p shogun-core --features exec --all-targets
@@ -27,7 +27,7 @@ run cargo clippy -p shogun-core --features daemon-server --all-targets
 run cargo clippy -p shogun-core --features db --bin shogun-mcp
 run cargo clippy -p shogun-mcp --features server --all-targets
 
-run cargo test --workspace --exclude shogun-desktop-spike
+run cargo test --workspace --exclude shogun-desktop-spike --exclude shogun-shell
 run cargo test -p shogun-core --features db
 run cargo test -p shogun-mcp --features server
 run cargo test -p shogun-core --features daemon-server --bin shogun-api

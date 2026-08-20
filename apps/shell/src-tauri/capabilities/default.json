@@ -1,0 +1,18 @@
+{
+  "identifier": "default",
+  "description": "Main window: IPC for the shell view plus caption-button window controls.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging",
+    "core:window:allow-minimize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-close",
+    "core:window:allow-hide",
+    "core:window:allow-show",
+    "core:window:allow-set-focus",
+    "core:window:allow-is-maximized",
+    "core:window:allow-unminimize",
+    "autostart:default"
+  ]
+}
